@@ -1,0 +1,70 @@
+//EIBMCCR8 JOB MISEIS,EIBMCCR8,CLASS=A,MSGCLASS=X,NOTIFY=&SYSUID,
+//         USER=OPCC
+/*JOBPARM S=S1M2
+//DELETE  EXEC PGM=IEFBR14
+//DEL01    DD DSN=SAP.PBB.CCRIS8.CCR8FTP,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(10,10),RLSE),UNIT=(SYSDA,5)
+//DEL02    DD DSN=SAP.PBB.CCRIS8,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)
+//*
+//CREATE  EXEC PGM=IEFBR14
+//CRT01    DD DSN=SAP.PBB.CCRIS8.CCR8FTP,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920),
+//            SPACE=(CYL,(1,2),RLSE),UNIT=(SYSDA,5)
+//*
+//EIBMCCR8 EXEC SAS609,REGION=6M,WORK='120000,8000'
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//BNM      DD DSN=SAP.PBB.MNILN(0),DISP=SHR
+//RAW1     DD DSN=SAP.PBB.CCRIS2.PROVISIO,DISP=SHR
+//CCRIS    DD DSN=SAP.PBB.CCRIS8,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)
+//*SASLIST  DD SYSOUT=X
+//SYSIN    DD *
+*+--------------------------------------------------------------+
+ |  PROGRAM : DATA WAREHOUSE EXTRACTION PROGRAM                 |
+ |  DATE    : 28.02.2003                                          |
+ |  FUNCTION: CCRIS EXTRACTION                                  |
+ +--------------------------------------------------------------+;
+OPTIONS YEARCUTOFF=1950 NOCENTER NODATE NONUMBER MISSING=0;
+*;
+DATA DATES;
+   SET BNM.REPTDATE;
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+RUN;
+*;
+DATA CCRIS.TABLE8;
+  INFILE RAW1;
+      INPUT @0005 MICR        5.
+            @0013 ACCTNO     10.
+            @0043 NOTENO     10.
+            @0073 RDDMMYY    $8.
+            @0081 CLASSIFI   $1.
+            @0082 ARREARS     3.
+            @0085 CURBAL     17.
+            @0102 INTEREST   17.
+            @0119 OTHERCHG   16.
+            @0135 SECURITY   17.
+            @0152 IISOPBAL   17.
+            @0169 IISSUSP    17.
+            @0186 IISWB      17.
+            @0203 IISWO      17.
+            @0220 IISDANAH   17.
+            @0237 IISPROV    17.
+            @0254 SPOPBAL    17.
+            @0271 SPCHARGE   17.
+            @0288 SPWBAMT    17.
+            @0305 SPWOAMT    17.
+            @0322 SPDANAH    17.
+            @0339 SPPROV     17.;
+*;
+         REPTDT="&RDATE";
+*;
+FILENAME TRANFILE 'SAP.PBB.CCRIS8.CCR8FTP' DISP=OLD;
+PROC CPORT LIBRARY=CCRIS FILE=TRANFILE;
+RUN;
+*;
