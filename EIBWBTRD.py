@@ -1,15 +1,3 @@
-#!/usr/bin/env python3
-# EIBWBTRD.py — Full end-to-end Polars pipeline conversion of SAS job EIBWBTRD / BTRWPBBD
-# Usage: python EIBWBTRD.py --reptdate 2025-04-30
-#
-# Requirements:
-#   pip install polars pyarrow python-dateutil
-#
-# NOTES:
-#  - Edit the INPUT_FILES dictionary: set each key's value to the path of the corresponding parquet file.
-#  - Fill mapping dicts (BTPROD_MAP, BTPRODI_MAP, LOCUSTCD_MAP, SECTCD_MAP, etc.) if you have SAS formats.
-#  - Script is defensive: missing columns are created with safe defaults so the pipeline runs end-to-end.
-
 from __future__ import annotations
 import argparse
 import os
