@@ -2,160 +2,109 @@ import polars as pl
 from pathlib import Path
 from datetime import datetime
 
-# === CONFIG ===
-OUTPUT_DIR = Path("output")
-OUTPUT_DIR.mkdir(exist_ok=True)
+# =========================================================
+# 1. CONFIGURATION
+# =========================================================
+BASE_INPUT = Path("data/input")
+BASE_OUTPUT = Path("data/output")
+BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
 
-def save(df: pl.DataFrame, name: str):
-    """Save dataframe to parquet and csv"""
-    df.write_parquet(OUTPUT_DIR / f"{name}.parquet")
-    df.write_csv(OUTPUT_DIR / f"{name}.csv")
+# Input files (replace with your actual parquet file names)
+REPTDATE_FILE = BASE_INPUT / "LOAN_REPTDATE.parquet"
+IMAST_FILE    = BASE_INPUT / "IMAST.parquet"
+ICRED_FILE    = BASE_INPUT / "ICRED.parquet"
+ISUBA_FILE    = BASE_INPUT / "ISUBA.parquet"
+BNMSUM_FILE   = BASE_INPUT / "BNMSUM.parquet"
+BTRSA_FILE    = BASE_INPUT / "BTRSA.parquet"
 
-# === INPUTS (replace with actual .parquet paths) ===
-loan = pl.read_parquet("input/loan_reptdate.parquet")
-lnhist = pl.read_parquet("input/lnhist.parquet")
-limit = pl.read_parquet("input/limit.parquet")
-olimit = pl.read_parquet("input/olimit.parquet")
-fcyca = pl.read_parquet("input/fcyca.parquet")
-cisln = pl.read_parquet("input/cisln.parquet")
-cisdp = pl.read_parquet("input/cisdp.parquet")
-lnnote = pl.read_parquet("input/lnnote.parquet")
+# =========================================================
+# 2. READ REPTDATE AND CREATE VARIABLES
+# =========================================================
+reptdate_df = pl.read_parquet(REPTDATE_FILE)
+reptdate = reptdate_df["REPTDATE"][0]  # assume single value
+if isinstance(reptdate, str):
+    reptdate = datetime.strptime(reptdate, "%Y-%m-%d")
 
-# --- STEP 1: REPTDATE processing ---
-reptdate = loan.with_columns([
-    pl.col("REPTDATE").cast(pl.Datetime).dt.day().alias("DAY"),
-    pl.col("REPTDATE").cast(pl.Datetime).dt.month().alias("MONTH"),
-    pl.col("REPTDATE").cast(pl.Datetime).dt.year().alias("YEAR"),
-])
+day_val, month_val, year_val = reptdate.day, reptdate.month, reptdate.year
 
-def classify_day(d: int):
-    if d == 8:
-        return ("10","01")
-    elif d == 15:
-        return ("17","09")
-    elif d == 22:
-        return ("24","16")
-    else:
-        return ("02","23")
+if day_val == 8:
+    SDD, WK, WK1 = 1, "1", "4"
+elif day_val == 15:
+    SDD, WK, WK1 = 9, "2", "1"
+elif day_val == 22:
+    SDD, WK, WK1 = 16, "3", "2"
+else:
+    SDD, WK, WK1 = 23, "4", "3"
 
-day_map = reptdate.select("DAY").to_series().apply(lambda d: classify_day(d))
-reptdate = reptdate.with_columns([
-    pl.Series(name="DAYSTR", values=[x[0] for x in day_map]),
-    pl.Series(name="SDD", values=[int(x[1]) for x in day_map])
-])
+MM1 = month_val - 1 if month_val > 1 else 12
+SDATE = datetime(year_val, month_val, SDD)
+STARTDT = datetime(year_val, month_val, 1)
 
-currdate = reptdate.select(
-    (pl.datetime(
-        year=pl.col("YEAR"),
-        month=pl.col("MONTH"),
-        day=pl.col("SDD")
-    )).alias("CURRDATE")
-)
+NOWK, NOWKS, NOWK1 = WK, "4", WK1
+REPTMON, REPTMON1 = f"{month_val:02d}", f"{MM1:02d}"
+REPTYEAR, REPTDAY = str(year_val), f"{day_val:02d}"
+RDATE, TDATE = reptdate.strftime("%d%m%y"), reptdate
 
-RDATE = reptdate["REPTDATE"][0]
-SDATE = datetime(reptdate["YEAR"][0], reptdate["MONTH"][0], 1)
-CDATE = currdate["CURRDATE"][0]
+# =========================================================
+# 3. MAST (Loan Master)
+# =========================================================
+mast = pl.read_parquet(IMAST_FILE)
 
-# --- STEP 2: CISLN subset ---
-cisln = cisln.filter(pl.col("SECCUST")=="901").select(["ACCTNO","INDORG"]).unique()
-
-# --- STEP 3: LNHIST subset ---
-lnhist = (
-    lnhist.filter(
-        (pl.col("TRANCODE")==400) & 
-        (pl.col("RATECHG")!=0) &
-        (pl.col("EFFDATE")>=CDATE) & 
-        (pl.col("EFFDATE")<=RDATE)
-    )
-    .select(["ACCTNO","NOTENO","EFFDATE"])
-    .sort(["ACCTNO","NOTENO","EFFDATE"], descending=[False,False,True])
-    .unique(subset=["ACCTNO","NOTENO"], keep="first")
-)
-
-# --- STEP 4: FCYCA exchange rates ---
-forate = (
-    fcyca.filter(pl.col("REPTDATE")<=RDATE)
-    .sort(["CURCODE","REPTDATE"], descending=[False,True])
-    .unique(subset=["CURCODE"], keep="first")
-)
-
-# --- STEP 5: LNNOTE join with LNHIST ---
-lnnote = (
-    lnnote.with_columns([
-        pl.when((pl.col("ISSUEDT")!=0) & pl.col("ISSUEDT").is_not_null())
-          .then(pl.col("ISSUEDT").cast(pl.Utf8).str.slice(0,8).str.strptime(pl.Date, "%Y%m%d"))
-          .otherwise(None)
-          .alias("ISSDTE")
+mast = (
+    mast.with_columns([
+        pl.when(pl.col("CUSTCODE").is_null() | (pl.col("CUSTCODE") == ""))
+          .then("0000000000").otherwise(pl.col("CUSTCODE")).alias("CUSTCODE"),
+        pl.when(pl.col("SECTOR").is_null() | (pl.col("SECTOR") == ""))
+          .then("0000").otherwise(pl.col("SECTOR")).alias("SECTOR")
     ])
-    .select(["ACCTNO","NOTENO","NTBRCH","CURBAL","DELQCD","ISSDTE","LOANTYPE","CURCODE"])
-    .join(lnhist, on=["ACCTNO","NOTENO"], how="inner")
-    .rename({"NTBRCH":"BRANCH"})
 )
 
-lnnote = lnnote.filter(
-    (pl.col("DELQCD").is_null()) & 
-    (pl.col("ISSDTE") < SDATE) &
-    (pl.col("CURBAL") != 0)
-)
+# =========================================================
+# 4. CREDIT (Loan Credit)
+# =========================================================
+cred = pl.read_parquet(ICRED_FILE)
 
-# --- STEP 6: OUTPUT1 (ROLLOVER accounts) ---
-output1 = lnnote.join(cisln, on="ACCTNO", how="inner").with_columns([
-    (pl.col("CURBAL")*100).alias("CURBAL100"),
-    pl.col("EFFDATE").dt.year().cast(pl.Utf8).alias("EFFDATEYY"),
-    pl.col("EFFDATE").dt.month().cast(pl.Utf8).str.zfill(2).alias("EFFDATEMM"),
-    pl.col("EFFDATE").dt.day().cast(pl.Utf8).str.zfill(2).alias("EFFDATEDD"),
+cred = cred.with_columns([
+    pl.when(pl.col("MATUDTE") < TDATE)
+      .then(pl.lit(1))
+      .otherwise(0).alias("ARREARS")
 ])
 
-save(output1, "rollover")
+# Example: merge with BNMSUM if needed
+bnmsum = pl.read_parquet(BNMSUM_FILE)
+cred = cred.join(bnmsum, on="ACCTNO", how="left")
 
-# --- STEP 7: ODREVIEW (overdraft review merge) ---
-odrev = (
-    limit.filter((pl.col("APPRLIMT")>1) & (pl.col("LMTAMT")>1))
-    .select(["BRANCH","ACCTNO","LMTDESC","LMTID","REVIEWDT","LMTAMT"])
-    .sort(["ACCTNO","LMTID"])
+# =========================================================
+# 5. SUBA (Subaccounts)
+# =========================================================
+suba = pl.read_parquet(ISUBA_FILE)
+
+# Join with BTRSA summaries (example)
+btrsa = pl.read_parquet(BTRSA_FILE)
+suba = suba.join(btrsa, on="ACCTNO", how="left")
+
+# =========================================================
+# 6. OUTPUT DATASETS
+# =========================================================
+# ACCTCRED (account-level credit)
+acctcred = mast.join(cred, on="ACCTNO", how="inner")
+acctcred.write_parquet(BASE_OUTPUT / f"ACCTCRED_{REPTYEAR}{REPTMON}{REPTDAY}.parquet")
+acctcred.write_csv(BASE_OUTPUT / f"ACCTCRED_{REPTYEAR}{REPTMON}{REPTDAY}.csv")
+
+# SUBACRED (subaccount-level credit)
+subacred = suba
+subacred.write_parquet(BASE_OUTPUT / f"SUBACRED_{REPTYEAR}{REPTMON}{REPTDAY}.parquet")
+subacred.write_csv(BASE_OUTPUT / f"SUBACRED_{REPTYEAR}{REPTMON}{REPTDAY}.csv")
+
+# CREDITPO (credit position summary)
+creditpo = (
+    acctcred.groupby("ACCTNO")
+    .agg([
+        pl.sum("OUTSTAND").alias("TOTAL_OUTSTAND"),
+        pl.sum("ARREARS").alias("TOTAL_ARREARS")
+    ])
 )
+creditpo.write_parquet(BASE_OUTPUT / f"CREDITPO_{REPTYEAR}{REPTMON}{REPTDAY}.parquet")
+creditpo.write_csv(BASE_OUTPUT / f"CREDITPO_{REPTYEAR}{REPTMON}{REPTDAY}.csv")
 
-prevodrev = (
-    olimit.filter((pl.col("APPRLIMT")>1) & (pl.col("REVIEWDT")>0))
-    .select(["ACCTNO","LMTID","REVIEWDT"])
-    .rename({"REVIEWDT":"PREVIEWDT"})
-)
-
-odreview = odrev.join(prevodrev, on=["ACCTNO","LMTID"], how="inner")
-
-odreview = odreview.with_columns([
-    pl.when((pl.col("REVIEWDT")>0) & pl.col("REVIEWDT").is_not_null())
-      .then(pl.col("REVIEWDT").cast(pl.Utf8).str.slice(0,8).str.strptime(pl.Date, "%Y%m%d"))
-      .otherwise(None)
-      .alias("REVIEWDT"),
-    pl.when((pl.col("PREVIEWDT")>0) & pl.col("PREVIEWDT").is_not_null())
-      .then(pl.col("PREVIEWDT").cast(pl.Utf8).str.slice(0,8).str.strptime(pl.Date, "%Y%m%d"))
-      .otherwise(None)
-      .alias("PREVIEWDT")
-])
-
-odreview = odreview.filter(pl.col("REVIEWDT") > pl.col("PREVIEWDT"))
-
-# aggregate limits
-odlimit = odreview.groupby(["ACCTNO","LMTDESC"]).agg(pl.sum("LMTAMT").alias("LMTAMT_SUM"))
-
-odreview = odreview.join(odlimit, on=["ACCTNO","LMTDESC"], how="left")
-
-# --- STEP 8: OUTPUT2 (ODREVIEW accounts) ---
-cisdp = cisdp.filter(pl.col("SECCUST")=="901").select(["ACCTNO","INDORG"]).unique()
-
-output2 = odreview.join(cisdp, on="ACCTNO", how="inner").with_columns([
-    (pl.col("LMTAMT_SUM")*100).alias("LMTAMT100"),
-    pl.lit("R").alias("APPLTYPE"),
-    pl.lit(int(RDATE.strftime("%Y%m%d"))).alias("APPLDATE"),
-    pl.when(pl.col("REVIEWDT").is_not_null())
-      .then(pl.col("REVIEWDT").dt.strftime("%Y%m%d"))
-      .otherwise("0").alias("REVDATE"),
-    pl.when(pl.col("PREVIEWDT").is_not_null())
-      .then(pl.col("PREVIEWDT").dt.strftime("%Y%m%d"))
-      .otherwise("0").alias("PREVDATE"),
-])
-
-save(output2, "odreview")
-
-print("✅ Outputs written to", OUTPUT_DIR)
+print(f"✅ Completed EIIWBTCR extraction for {RDATE}")
