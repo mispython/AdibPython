@@ -1,0 +1,327 @@
+//EIBDBTEX JOB MISEIS,EIBWBTEX,MSGCLASS=A,CLASS=A,NOTIFY=&SYSUID        JOB50982
+/*JOBPARM S=S1M1                                                                
+//*                                                                             
+//EIBDBTEX EXEC SAS609                                                          
+//BT        DD DSN=SAP.BT.SASDATA,DISP=SHR                                      
+//BTRSA     DD DSN=SAP.PBB.BTRADE.SASDATA.DAILY(0),DISP=SHR                     
+//FORATE    DD DSN=SAP.PBB.FCYCA,DISP=SHR                                       
+//TFDPD     DD DSN=RBP2.B033.LN.TFS.CBDPD(0),DISP=SHR                           
+//BTRWH     DD DSN=SAP.BT.SASDATA.DAILY(+1),                                    
+//             DISP=(NEW,CATLG,DELETE),                                         
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(10,10),),UNIT=(SYSDA,8)                              
+//*CRFTABL   DD DISP=SHR,DSN=SAP.PBB.BTRADE.CRFTABL                             
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//SASLIST   DD SYSOUT=X                                                         
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS YEARCUTOFF=1940 SORTDEV=3390;                                           
+OPTIONS NONUMBER NODATE NOCENTER;                                               
+DATA BTRWH.REPTDATE (KEEP=REPTDATE);                                            
+  SET BTRSA.REPTDATE;                                                           
+  SELECT(DAY(REPTDATE));                                                        
+    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;                           
+    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;                           
+    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;                           
+    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3'; END;                           
+  END;                                                                          
+  MM = MONTH(REPTDATE);                                                         
+  MM2 = MONTH(REPTDATE) - 1;                                                    
+  IF MM2= 0 THEN MM2 = 12;                                                      
+  IF WK = '1' THEN DO;                                                          
+     MM1 = MM - 1;                                                              
+     IF MM1 = 0 THEN MM1 = 12;                                                  
+  END;                                                                          
+  ELSE MM1 = MM;                                                                
+  SDATE = MDY(MM,1,YEAR(REPTDATE));                                             
+  RPTDT= PUT(REPTDATE, DDMMYY10.);                                              
+  CURMM = SUBSTR(RPTDT,4,2);                                                    
+  CURYY = SUBSTR(RPTDT,9,2);                                                    
+  RDATEX=TRIM(LEFT(CURMM)) || TRIM(LEFT(CURYY));                                
+  CALL SYMPUT('NOWK',PUT(WK,$1.));                                              
+  CALL SYMPUT('NOWK1',PUT(WK1,$1.));                                            
+  CALL SYMPUT('NOWKS',PUT('4',$1.));                                            
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                           
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));                                         
+  CALL SYMPUT('REPTMON2', PUT(MM2, Z2.));                                       
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                 
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                                
+  CALL SYMPUT('RDATE',PUT(REPTDAT1,DDMMYY8.));                                  
+  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));                                     
+  CALL SYMPUT('RDATEX',PUT(RDATEX,$4.));                                        
+RUN;                                                                            
+                                                                                
+%INC PGM(PBBBTFMT,PBBELF);                                                      
+*;                                                                              
+DATA ORIGINAL;                                                                  
+  SET BTRSA.SUBA&REPTYEAR&REPTMON&REPTDAY;                                      
+  IF TRANSREF NE '';                                                            
+  RENAME BTREL=BTREL1;                                                          
+RUN;                                                                            
+PROC SORT DATA=ORIGINAL; BY TRANSREF; RUN;                                      
+*;                                                                              
+DATA CROP;                                                                      
+  SET BTRSA.SUBA&REPTYEAR&REPTMON&REPTDAY;                                      
+  IF TRANSREF NE '';                                                            
+  RENAME BTREL=BTREL2;                                                          
+RUN;                                                                            
+PROC SORT DATA=CROP; BY TRANSREF; RUN;                                          
+*;                                                                              
+PROC SQL;                                                                       
+CREATE TABLE NEW AS SELECT *                                                    
+FROM ORIGINAL O LEFT JOIN CROP C                                                
+ON O.TRANSREF=C.TRANSREF AND                                                    
+      O.BTREL1=C.SUBACCT;                                                       
+QUIT;                                                                           
+*;                                                                              
+PROC SORT DATA=NEW; BY TRANSREF; RUN;                                           
+PROC SORT DATA=CROP(RENAME=(BTREL2=BTREL3))                                     
+   OUT=CROP; BY TRANSREF; RUN;                                                  
+*;                                                                              
+PROC SQL;                                                                       
+CREATE TABLE NEW2 AS SELECT *                                                   
+FROM NEW B LEFT JOIN CROP C                                                     
+ON B.TRANSREF=C.TRANSREF AND                                                    
+      B.BTREL2=C.SUBACCT;                                                       
+QUIT;                                                                           
+*;                                                                              
+PROC SORT DATA=NEW2; BY TRANSREF; RUN;                                          
+PROC SORT DATA=CROP(RENAME=(BTREL3=BTREL4))                                     
+   OUT=CROP; BY TRANSREF; RUN;                                                  
+*;                                                                              
+PROC SQL;                                                                       
+CREATE TABLE NEW3 AS SELECT *                                                   
+FROM NEW2 B LEFT JOIN CROP C                                                    
+ON B.TRANSREF=C.TRANSREF AND                                                    
+      B.BTREL3=C.SUBACCT;                                                       
+QUIT;                                                                           
+*;                                                                              
+PROC SORT DATA=NEW3; BY TRANSREF; RUN;                                          
+*;                                                                              
+DATA LEVELS;                                                                    
+ SET NEW3;                                                                      
+ IF SUBACCT NE '' THEN NUM1=1;                                                  
+   ELSE NUM1=0;                                                                 
+ IF BTREL1 NE '' THEN NUM2=1;                                                   
+   ELSE NUM2=0;                                                                 
+ IF BTREL2 NE '' THEN NUM3=1;                                                   
+   ELSE NUM3=0;                                                                 
+ IF BTREL3 NE '' THEN NUM4=1;                                                   
+   ELSE NUM4=0;                                                                 
+ IF BTREL4 NE '' THEN NUM5=1;                                                   
+   ELSE NUM5=0;                                                                 
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=LEVELS; BY TRANSREF; RUN;                                        
+*;                                                                              
+DATA LEVEL;                                                                     
+ SET LEVELS;                                                                    
+    NOLEVEL=NUM1+NUM2+NUM3+NUM4+NUM5;                                           
+RUN;                                                                            
+PROC RANK DATA=LEVEL OUT=LEVEL2 TIES=LOW DESCENDING; BY TRANSREF;               
+VAR NOLEVEL;                                                                    
+RANKS RANK2;                                                                    
+RUN;                                                                            
+*;                                                                              
+DATA LEVEL2;                                                                    
+  SET LEVEL2;                                                                   
+  RANKING=FLOOR(RANK2);                                                         
+RUN;                                                                            
+*;                                                                              
+                                                                                
+PROC SORT DATA=LEVEL2; BY TRANSREF SUBACCT; RUN;                                
+*;                                                                              
+DATA UNIQUE;                                                                    
+  SET LEVEL2;                                                                   
+  IF RANKING=1;                                                                 
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=UNIQUE;BY TRANSREF SUBACCT; RUN;                                 
+*;                                                                              
+DATA BTRSA;                                                                     
+  MERGE LEVEL2(IN=A) UNIQUE(IN=B);                                              
+  BY TRANSREF SUBACCT;                                                          
+  IF A AND B;                                                                   
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=BTRSA; BY TRANSREF; RUN;                                         
+*;                                                                              
+DATA CRED(DROP=MATUREDX RECTYPE SYSCODE ACCTSTAT);                              
+  SET BTRSA.CRED&REPTYEAR&REPTMON&REPTDAY;                                      
+  MATURED=MATUREDX*1;                                                           
+RUN;                                                                            
+PROC SORT DATA=CRED(RENAME=(MATURED=MATUREDX)); BY TRANSREF; RUN;               
+*;                                                                              
+PROC SQL;                                                                       
+CREATE TABLE NEXT AS SELECT *                                                   
+FROM BTRSA B FULL JOIN CRED C                                                   
+ON B.TRANSREF=C.TRANSREF AND                                                    
+      B.SUBACCT=C.SUBACCT AND B.EXPIRDS=C.MATUREDX;                             
+QUIT;                                                                           
+*;                                                                              
+DATA NEXT;                                                                      
+  SET NEXT;                                                                     
+  IF TRANSREF NE '';                                                            
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=NEXT(DROP=NUM1 NUM2 NUM3 NUM4 NUM5); BY ACCTNOX; RUN;            
+*;                                                                              
+DATA MAST(DROP=FICODE FACILS NAME2 NAME3 NAME4 NAME5 NAME6 POSTCODE             
+BIRTHDTX APPLCODE ACCTNOX ACCTNO1 ACCTNO SETTLED E_INVOICE_IND);                
+  SET BTRSA.MAST&REPTYEAR&REPTMON&REPTDAY;                                      
+RUN;                                                                            
+PROC SORT DATA=MAST; BY ACCTNO2; RUN;                                           
+*;                                                                              
+PROC SQL;                                                                       
+CREATE TABLE NEXT2 AS SELECT *                                                  
+FROM NEXT N FULL JOIN MAST M                                                    
+ON N.ACCTNOX=M.ACCTNO2;                                                         
+QUIT;                                                                           
+PROC SORT DATA=NEXT2; BY ACCTNO2; RUN;                                          
+*;                                                                              
+DATA NEXT2(DROP=ACCTNO2);                                                       
+  SET NEXT2;                                                                    
+  IF TRANSREF NE '';                                                            
+  ACCTNO4=ACCTNO2*1;                                                            
+RUN;                                                                            
+*;                                                                              
+DATA PROV(DROP=CREATTYP FICODE CCRISFAC POSIDATE APPLCODE);                     
+  SET BTRSA.PROV&REPTYEAR&REPTMON&REPTDAY;                                      
+RUN;                                                                            
+PROC SORT DATA=PROV; BY TRANSREX SUBACCT; RUN;                                  
+PROC SORT DATA=NEXT2; BY TRANSREX SUBACCT; RUN;                                 
+*;                                                                              
+PROC SQL;                                                                       
+CREATE TABLE NEXT3 AS SELECT *                                                  
+FROM NEXT2 N FULL JOIN PROV P                                                   
+ON N.TRANSREX=P.TRANSREX AND N.SUBACCT=P.SUBACCT;                               
+QUIT;                                                                           
+*;                                                                              
+PROC SORT DATA=NEXT3(RENAME=(FICODE=BRANCH CREATDS=CREATYYMMDD                  
+ISSDTE=ISSDTEYYMMDD LIMTCURM=APPRLIMT LIMTCURF=APPRLIM2));                      
+BY TRANSREF; RUN;                                                               
+*;                                                                              
+DATA COMPARE(KEEP=TRANSREF IRIA);                                               
+  SET BT.BTRAD&REPTMON2&NOWKS;                                                  
+  TRANSREF=TRANSREX;                                                            
+RUN;                                                                            
+PROC SORT DATA=COMPARE; BY TRANSREF; RUN;                                       
+*;                                                                              
+DATA NEXT3;                                                                     
+  MERGE NEXT3(IN=A) COMPARE;                                                    
+  BY TRANSREF;                                                                  
+  IF A;                                                                         
+RUN;                                                                            
+PROC SORT DATA=NEXT3 NODUPKEY; BY TRANSREF ACCTNOX SUBACCT OUTSTAND;            
+RUN;                                                                            
+*;                                                                              
+DATA BTRWH.BTDTL&REPTYEAR&REPTMON&REPTDAY;                                      
+  SET NEXT3;                                                                    
+  IF TRANSREF NE '';                                                            
+  IF APPRLIM2 EQ . THEN APPRLIM2=0;                                             
+  IF INTRATE EQ . THEN INTRATE=0;                                               
+  IF SPREAD EQ . THEN SPREAD=0;                                                 
+  APPRLIMT = APPRLIM2;                                                          
+  REPTDAT1=TODAY();                                                             
+  RDAY1=DAY(REPTDAT1);                                                          
+  ISSYY = SUBSTR(PUT(ISSDTEYYMMDD,Z6.),1,2);                                    
+  ISSMM = SUBSTR(PUT(ISSDTEYYMMDD,Z6.),3,2);                                    
+  ISSDTX=TRIM(LEFT(ISSMM)) || TRIM(LEFT(ISSYY));                                
+  IF PRINAMT = . THEN PRINAMT = 0;                                              
+  IF DISCNTB=0 OR PRINAMT=0 THEN IRIA=0;                                        
+  ELSE DO;                                                                      
+  IF PRINAMT GT 0 AND LIABCODE NOT IN ('MCF','MFL','MOF') THEN DO;              
+      IRIA = SUM(INTYTD,(-1)*DISCNTB);                                          
+  END;                                                                          
+   ELSE DO;                                                                     
+    IF LIABCODE IN ('MCF','MFL','MOF') THEN DO;                                 
+       IF RDAY1=1 THEN DO;                                                      
+       IRIA = SUM(INTYTD*EXCHRTE,(-1)*DISCNTB);                                 
+       END;                                                                     
+         IF ISSDTX = &RDATEX THEN DO;                                           
+            IRIA = (DISCNTF * EXCHRTE)*(-1);                                    
+         END;                                                                   
+    END;                                                                        
+   END;                                                                         
+  END;                                                                          
+  FACILITY=PUT(LIABCODE,$LIAB.);                                                
+   IF DIRCTIND EQ '' THEN DIRCTIND='I';                                         
+  OUTSTAND = SUM(OUTSTAND,IRIA);                                                
+  PREFIX=SUBSTR(TRANSREF,1,1);                                                  
+  CREATDS = INPUT(PUT(CREATYYMMDD,Z6.),YYMMDD6.);                               
+  ISSDTE = INPUT(PUT(ISSDTEYYMMDD,Z6.),YYMMDD6.);                               
+  MATDATE = INPUT(PUT(MATUREDX,Z6.),YYMMDD6.);                                  
+  IF EXPIRDS NOT IN (.,0) THEN                                                  
+     EXPRDATE = INPUT(PUT(EXPIRDS,Z6.),YYMMDD6.);                               
+  RENAME ACCTNOX=AA;                                                            
+  RENAME ACCTNO4=BB;                                                            
+  RENAME TRANSREF=TF;                                                           
+  RENAME TRANSREX=TX;                                                           
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=BTRWH.BTDTL&REPTYEAR&REPTMON&REPTDAY(DROP=RECTYPE                
+BIRTHDT CCRISFAC CUSTCODX EXPYSDT MATUREDX POSIDATE                             
+RANK2 RANKING REVOLVG SYSCODE TRANSTYP INTRECV DCURBAL ICURBAL                  
+DBALANCE);                                                                      
+BY TF; RUN;                                                                     
+*;                                                                              
+DATA BTRWH.BTDTL&REPTYEAR&REPTMON&REPTDAY(DROP=NAME);                           
+   SET BTRWH.BTDTL&REPTYEAR&REPTMON&REPTDAY(RENAME=(AA=ACCTNO                   
+   BB=ACCTNOX TF=TRANSREX TX=TRANSREF));                                        
+RUN;                                                                            
+PROC SORT DATA=BTRWH.BTDTL&REPTYEAR&REPTMON&REPTDAY OUT=BTDTL;                  
+   BY TRANSREX;                                                                 
+*;                                                                              
+DATA BTDTLDUP;                                                                  
+RETAIN COUNT;                                                                   
+  SET BTDTL;                                                                    
+  BY TRANSREX;                                                                  
+  IF FIRST.TRANSREX THEN DO;                                                    
+  COUNT = 1;                                                                    
+  END;                                                                          
+  ELSE DO;                                                                      
+     COUNT = COUNT + 1;                                                         
+     OUTPUT;                                                                    
+  END;                                                                          
+RUN;                                                                            
+PROC SORT DATA=BTDTLDUP NODUPKEYS; BY TRANSREX;                                 
+DATA BTDTLDUP;                                                                  
+   MERGE BTDTLDUP BTDTL;                                                        
+   BY TRANSREX;                                                                 
+RUN;                                                                            
+                                                                                
+PROC FORMAT LIB=FORATE CNTLOUT=FOFMT;RUN;                                       
+PROC FORMAT CNTLIN=FOFMT;RUN;                                                   
+                                                                                
+DATA TFDPD;                                                                     
+ INFILE TFDPD FIRSTOBS=2;                                                       
+ INPUT @039 ACCTNO         $10.                                                 
+       @057 TRANSREF       $7.                                                  
+       @066 DIA_PAST01_MTH 3.                                                   
+       @069 DIA_PAST02_MTH 3.                                                   
+       @072 DIA_PAST03_MTH 3.                                                   
+       @075 DIA_PAST04_MTH 3.                                                   
+       @078 DIA_PAST05_MTH 3.                                                   
+       @081 DIA_PAST06_MTH 3.                                                   
+       @084 DIA_PAST07_MTH 3.                                                   
+       @087 DIA_PAST08_MTH 3.                                                   
+       @090 DIA_PAST09_MTH 3.                                                   
+       @093 DIA_PAST10_MTH 3.                                                   
+       @096 DIA_PAST11_MTH 3.                                                   
+       @099 DIA_PAST12_MTH 3.                                                   
+       ;                                                                        
+RUN;                                                                            
+PROC SORT DATA=TFDPD; BY ACCTNO TRANSREF; RUN;                                  
+PROC SORT DATA=BTDTLDUP; BY ACCTNO TRANSREF; RUN;                               
+                                                                                
+DATA BTRWH.BTDTL&REPTYEAR&REPTMON&REPTDAY(DROP=COUNT);                          
+  MERGE BTDTLDUP(IN=A) TFDPD;                                                   
+  BY ACCTNO TRANSREF;                                                           
+  IF A;                                                                         
+  IF LIABCODE IN ('FTI','FTL') THEN DO;                                         
+     FORATE   = PUT(FORCURR,$FORATE.);                                          
+     OUTSTAND = (PRINAMT+INTAMT)*FORATE;                                        
+  END;                                                                          
+  IF COUNT = . THEN OUTPUT;                                                     
+  ELSE IF APPRLIMT NE 0 AND OUTSTAND NE 0 THEN OUTPUT;                          
+RUN;                                                                            
