@@ -1,0 +1,197 @@
+//EIVMSTAF JOB MISEIS,EIBMSTAF,MSGCLASS=X,REGION=8M                             
+/*JOBPARM S=S1M2                                                                
+//*%OPC SCAN                                                                    
+//SSS3  SET  RUN='-1'                                                           
+//*%OPC SETFORM OCDATE=(DD)                                                     
+//*%OPC BEGIN ACTION=INCLUDE,                                                   
+//*%OPC COMP=(DD.LT.(8))                                                        
+//SSS3  SET  RUN='0'                                                            
+//*%OPC END ACTION=INCLUDE                                                      
+//*%OPC BEGIN ACTION=NOSCAN                                                     
+//*                                                                             
+//PRINT1   OUTPUT CLASS=R,                                                      
+//         NAME='THE MANAGER PIVB (ATTN: CIK HAMIDAH)',                         
+//         ROOM='25TH FLOOR',                                                   
+//         BUILDING='MENARA PBB',                                               
+//         DEPT='PUBLIC INVESTMENT',                                            
+//         ADDRESS=('MENARA PUBLIC BANK',                                       
+//         '146 JALAN AMPANG','50450 KUALA LUMPUR'),                            
+//         DEST=S1.RMT40                                                        
+//*                                                                             
+//EIBMSTAF EXEC SAS609                                                          
+//LNINTGR  DD DSN=RBP2.B033.LNINTGGS,DISP=SHR                                   
+//SASDATA  DD DSN=SAP.PBB.SASDATA,DISP=SHR                                      
+//MNILN    DD DSN=SAP.PBB.MNILN(&RUN),DISP=SHR                                  
+//SASLIST  DD SYSOUT=(,),OUTPUT=(*.PRINT1)                                      
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS YEARCUTOFF=1950 LS=132 PS=60 NOCENTER;                                  
+                                                                                
+%LET INTGRVAR=(KEEP=LOANTYPE NTBRCH ORGTYPE ACCTNO CURBAL REVERSED              
+                    NOTENO NAME APPRLIMT ISSDTE PAIDIND BLDATE                  
+                    BILPAY PAYAMT INTRATE BLDATE STAFFNO SENDNBL                
+                    ORGBAL LASTTRAN LSTTRNAM LSTTRNCD NOOFAC                    
+                    PAYEFF);                                                    
+                                                                                
+DATA REPTDATE;                                                                  
+   SET MNILN.REPTDATE;                                                          
+   SELECT(DAY(REPTDATE));                                                       
+   WHEN (8)  DO; SDD = 1; WK = '1'; END;                                        
+   WHEN(15)  DO; SDD = 9; WK = '2'; END;                                        
+   WHEN(22)  DO; SDD = 16; WK = '3'; END;                                       
+     OTHERWISE DO; SDD = 23; WK = '4'; END;                                     
+   END;                                                                         
+   CALL SYMPUT('NOWK',PUT(WK,$1.));                                             
+   CALL SYMPUT('STRDAY',SDD);                                                   
+   CALL SYMPUT('RDATE',PUT(REPTDATE, DDMMYY10.));                               
+   CALL SYMPUT('REPTDATE',PUT(REPTDATE,Z5.));                                   
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                             
+   CALL SYMPUT('REPTDAY',DAY(REPTDATE));                                        
+   CALL SYMPUT('REPTMTH',MONTH(REPTDATE));                                      
+   CALL SYMPUT('REPTYEAR',YEAR(REPTDATE));                                      
+RUN;                                                                            
+*;                                                                              
+                                                                                
+****************************************************                            
+*** IMPORT FOR STAFF PAYMENT LIST (INTEGRAL)                                    
+****************************************************;                           
+DATA STAFF&REPTMON&NOWK;                                                        
+  INFILE LNINTGR FIRSTOBS=2;                                                    
+  INPUT @008 ACCTNO    11.                                                      
+        @019 NOTENO     5.                                                      
+        @029 PAYAMT    15.2;                                                    
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=STAFF&REPTMON&NOWK                                               
+     OUT=LNSTAFF; BY ACCTNO NOTENO;                                             
+RUN;                                                                            
+                                                                                
+DATA LNNOTE;                                                                    
+     SET  MNILN.LNNOTE;                                                         
+     IF   LOANTYPE IN (62,70,71,72,73,74,75,76,77,78,106,107,108);              
+PROC SORT; BY ACCTNO COMMNO;                                                    
+*;                                                                              
+DATA LNCOMM;                                                                    
+     SET  MNILN.LNCOMM;                                                         
+PROC SORT; BY ACCTNO COMMNO;                                                    
+RUN;                                                                            
+                                                                                
+DATA LNNOTE;                                                                    
+     MERGE LNNOTE(IN=A) LNCOMM; BY ACCTNO COMMNO;                               
+     IF A;                                                                      
+     IF COMMNO GT 0 THEN                                                        
+        IF REVOVLI = 'N' THEN DO;                                               
+           APPRLIMT = CORGAMT;                                                  
+        END;                                                                    
+        ELSE DO;                                                                
+           APPRLIMT = CCURAMT;                                                  
+        END;                                                                    
+     ELSE DO;                                                                   
+        APPRLIMT = ORGBAL;                                                      
+     END;                                                                       
+RUN;                                                                            
+                                                                                
+DATA LOAN &INTGRVAR;                                                            
+     SET LNNOTE;                                                                
+     LASTTRAN=MDY(INPUT(SUBSTR(PUT(LASTTRAN,Z11.),1,2),2.),                     
+                  INPUT(SUBSTR(PUT(LASTTRAN,Z11.),3,2),2.),                     
+                  INPUT(SUBSTR(PUT(LASTTRAN,Z11.),5,4),4.));                    
+     ISSDTE=MDY(INPUT(SUBSTR(PUT(ISSUEDT,Z11.),1,2),2.),                        
+                INPUT(SUBSTR(PUT(ISSUEDT,Z11.),3,2),2.),                        
+                INPUT(SUBSTR(PUT(ISSUEDT,Z11.),5,4),4.));                       
+     PAYEFF=(INPUT(SUBSTR(PUT(PAYEFFDT,Z11.),10,2),$2.)||'/'||                  
+             INPUT(SUBSTR(PUT(PAYEFFDT,Z11.),8,2),$2.)||'/'||                   
+             INPUT(SUBSTR(PUT(PAYEFFDT,Z11.),3,2),$2.));                        
+     NOOFAC = 1;                                                                
+     /*                                                                         
+     IF ORGTYPE='E' AND BLDATE=.    THEN DELETE;                                
+     IF SENDNBL NE 'D' THEN DELETE;                                             
+     IF MONTH(ISSDTE)=&REPTMON & YEAR(ISSDTE)=&REPTYEAR                         
+        THEN DELETE;                                                            
+     */                                                                         
+     IF ((MONTH(LASTTRAN)=&REPTMON & YEAR(LASTTRAN)=&REPTYEAR) &                
+        LSTTRNCD IN (310,650,652,610,614,615,660)) OR                           
+        (PAIDIND NOT IN ('P','C') OR REVERSED NOT='Y');                         
+     IF ORGTYPE='N'                         THEN OUTPUT;                        
+     IF ORGTYPE='S'                         THEN DELETE;                        
+     IF SENDNBL='D' AND BLDATE > 0          THEN OUTPUT;                        
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=LOAN OUT=LOAN; BY ACCTNO NOTENO;                                 
+RUN;                                                                            
+                                                                                
+****************************************************                            
+*** RPT - EXCEPTION REPORT FOR THE MTH                                          
+****************************************************;                           
+DATA LNEXPT;                                                                    
+     SET LOAN;                                                                  
+     IF CURBAL GT 0;                                                            
+RUN;                                                                            
+                                                                                
+DATA LNRPT3A                                                                    
+     LNRPT3B;                                                                   
+     MERGE LNEXPT(IN=A) LNSTAFF(IN=B); BY ACCTNO NOTENO;                        
+     IF A AND NOT B THEN OUTPUT LNRPT3A;                                        
+     IF B AND NOT A THEN OUTPUT LNRPT3B;                                        
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=LNRPT3A OUT=LNRPT3A; BY LOANTYPE NTBRCH BLDATE;                  
+                                                                                
+PROC REPORT DATA=LNRPT3A NOCENTER SPLIT='*' NOWINDOWS HEADSKIP;                 
+     TITLE  'REPORT ID : EIVMSTAF (PIVB)';                                      
+     TITLE2 'MONTHLY EXCEPTION REPORT FOR STAFF LOAN PAYMENTS                   
+             VIA INTEGRAL AS AT '"&RDATE";                                      
+     COLUMN LOANTYPE NTBRCH ORGTYPE STAFFNO ACCTNO NOTENO                       
+            NAME APPRLIMT PAYAMT PAYEFF BLDATE NOOFAC;                          
+     DEFINE LOANTYPE /GROUP   WIDTH=4 FORMAT=3. 'LOAN*TYPE';                    
+     DEFINE NTBRCH   /GROUP   WIDTH=6 FORMAT=3. 'BRANCH*CODE';                  
+     DEFINE ORGTYPE  /DISPLAY WIDTH=4 'ORG.*TYPE';                              
+     DEFINE STAFFNO  /DISPLAY FORMAT=6. 'EMP.NO';                               
+     DEFINE ACCTNO   /DISPLAY FORMAT=10.'A/C NO';                               
+     DEFINE NOTENO   /DISPLAY FORMAT=5. 'NOTE*NO';                              
+     DEFINE NAME     /DISPLAY WIDTH=24 'NAME';                                  
+     DEFINE APPRLIMT /SUM FORMAT=COMMA15.2                                      
+                      'APPROVED*LIMIT';                                         
+     DEFINE PAYAMT   /SUM FORMAT=COMMA15.2                                      
+                      'PAYMENT*AMOUNT';                                         
+     DEFINE PAYEFF   /DISPLAY WIDTH=9 'PAYMENT*EFF. DATE';                      
+     DEFINE BLDATE   /DISPLAY FORMAT=DDMMYY8. 'BILL*DUE DATE';                  
+     DEFINE NOOFAC   /SUM NOPRINT;                                              
+     BREAK AFTER NTBRCH /SKIP;                                                  
+           COMPUTE AFTER NTBRCH;                                                
+           LINE @008 121*'-';                                                   
+           LINE @017 'NO OF A/C :'                                              
+                @029 NOOFAC.SUM COMMA8.                                         
+                @076 APPRLIMT.SUM COMMA15.2                                     
+                @093 PAYAMT.SUM COMMA15.2;                                      
+           ENDCOMP;                                                             
+     BREAK AFTER LOANTYPE /SKIP;                                                
+           COMPUTE AFTER LOANTYPE;                                              
+           LINE @001 128*'-';                                                   
+           LINE @001 'SUB TOTAL'                                                
+                @017 'NO OF A/C :'                                              
+                @029 NOOFAC.SUM COMMA8.                                         
+                @076 APPRLIMT.SUM COMMA15.2                                     
+                @093 PAYAMT.SUM COMMA15.2;                                      
+           LINE @001 128*'-';                                                   
+           ENDCOMP;                                                             
+     RBREAK AFTER  /SKIP;                                                       
+           COMPUTE AFTER;                                                       
+           LINE @001 128*'-';                                                   
+           LINE @001 'GRAND TOTAL '                                             
+                @017 'NO OF A/C : '                                             
+                @029 NOOFAC.SUM COMMA8.                                         
+                @076 APPRLIMT.SUM COMMA15.2                                     
+                @093 PAYAMT.SUM COMMA15.2;                                      
+           LINE @001 128*'-';                                                   
+           ENDCOMP;                                                             
+ RUN;                                                                           
+    /*                                                                          
+PROC PRINT DATA=LNRPT3B;                                                        
+     TITLE  'REPORT ID : EIVMSTAF (PIVB)';                                      
+     TITLE2 'MONTHLY EXCEPTION REPORT FOR STAFF LOAN PAYMENTS                   
+             VIA INTEGRAL (NOT IN MNI) AS AT '"&RDATE";                         
+RUN;                                                                            
+    */                                                                          
+*;                                                                              
+//*%OPC END   ACTION=NOSCAN                                                     
