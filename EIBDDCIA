@@ -1,0 +1,264 @@
+//EIBDDCIA JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M                     JOB02003
+/*JOBPARM S=S1M1                                                                
+//**********************************************************************        
+//* EXTRACTION OF DCI TRANSACTION AND TRANSFER INTO SAS WH (DAILY)              
+//* ESMR 2015-931 (JKA)                                                         
+//* DATASET : DCID AND DCIMATURED                                               
+//* REMOVED DCIMATURED VIA ESMR 2016-1273                                       
+//**********************************************************************        
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01    DD DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0)),                         
+//            DSN=SAP.PBB.DCIWH.DCIDFTP                                         
+//*                                                                             
+//CREATE  EXEC PGM=IEFBR14                                                      
+//CRT01    DD DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),                            
+//            SPACE=(CYL,(500,200),RLSE),UNIT=(SYSDA,5),                        
+//            DSN=SAP.PBB.DCIWH.DCIDFTP                                         
+//*                                                                             
+//EIBDDCIA EXEC SAS609,OPTIONS='COMPRESS=YES'                                   
+//DPFL     DD DISP=SHR,DSN=RBP2.B033.DP.DAY.DCI(0)                              
+//EQFL     DD DISP=SHR,DSN=SAP.PBB.EQ.DLYDCIA.TXT(0)                            
+//DCI      DD DSN=SAP.PBB.DCIWH.DAILY,DISP=OLD                                  
+//CA       DD DSN=SAP.PBB.CADATAWH.DAILY,DISP=SHR                               
+//SA       DD DSN=SAP.PBB.SADATAWH.DAILY,DISP=SHR                               
+//FCY      DD DSN=SAP.PBB.FCDATAWH,DISP=SHR                                     
+//TEMP     DD DISP=(NEW,DELETE,DELETE),                                         
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(400,200),RLSE),UNIT=(SYSDA,8),                        
+//            DSN=&&DCIWH                                                       
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950;                                           
+                                                                                
+DATA REPTDATE;                                                                  
+  REPTDATE = TODAY()-1;                                                         
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                                
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                                
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                            
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                 
+RUN;                                                                            
+                                                                                
+DATA TXTADATE(DROP=DD MM YY);                                                   
+  INFILE DPFL OBS=1;                                                            
+  INPUT @001 YY          4.                                                     
+        @006 MM          2.                                                     
+        @009 DD          2.;                                                    
+  DPDATE = MDY(MM,DD,YY);                                                       
+RUN;                                                                            
+PROC PRINT; FORMAT DPDATE DATE8. ;RUN;                                          
+                                                                                
+DATA _NULL_;                                                                    
+  SET TXTADATE;                                                                 
+  CALL SYMPUT('DPDATE', PUT(DPDATE, DDMMYY8.));                                 
+RUN;                                                                            
+                                                                                
+DATA TXTBDATE(DROP=DD MM YY);                                                   
+  INFILE EQFL OBS=1;                                                            
+  INPUT @020 DD          2.                                                     
+        @022 MM          2.                                                     
+        @024 YY          4.;                                                    
+  EQDATE = MDY(MM,DD,YY);                                                       
+RUN;                                                                            
+PROC PRINT; FORMAT EQDATE DATE8. ;RUN;                                          
+                                                                                
+DATA _NULL_;                                                                    
+  SET TXTBDATE;                                                                 
+  CALL SYMPUT('EQDATE', PUT(EQDATE, DDMMYY8.));                                 
+RUN;                                                                            
+                                                                                
+%LET DPVAR=(KEEP=TICKETNO NEWIC SALESID CUSTCODE INVCURRAC ALTCURRAC            
+                 ROLLOVER CONVERTIND DEALERID MANAGERID CUSTNAME                
+                 ACCINT);                                                       
+                                                                                
+%LET EQVAR=(KEEP=TICKETNO BRANCH PRODUCT INVCURR ALTCURR CUSTICKETNO            
+                 INVAMT ALTAMT TRADEDT STARTDT FIXINGDT MATDT TENOR             
+                 STRIKERT SPOTRT DCIRT MMRT PREMREC PREMPAID                    
+                 UNWINDCOST NEWDEAL STATUSIND STOPDT);                          
+                                                                                
+%MACRO PROCESS;                                                                 
+  %IF "&DPDATE"="&RDATE" %THEN %DO;                                             
+                                                                                
+    DATA DPST (DROP=TRYY TRMM TRDD STYY STMM STDD                               
+                    FIYY FIMM FIDD MTYY MTMM MTDD);                             
+      INFILE DPFL FIRSTOBS=2;                                                   
+      INPUT @0001 TICKETNO    $7.  /* TICKET NUMBER               */            
+            @0008 BRANCH      $5.  /* BRANCH CODE                 */            
+            @0013 CUSTNAME   $26.  /* CUSTOMER NAME               */            
+            @0039 NEWIC      $20.  /* CUSTOMER IC                 */            
+            @0059 SALESID     $8.  /* SALES PERSONNEL ID/CODE     */            
+            @0067 CUSTCODE     5.  /* FISS CUSTOMER TYPE          */            
+            @0072 INVCURRAC   11.  /* INVESTMENT CURRENCY A/C NO  */            
+            @0083 ALTCURRAC   11.  /* ALTERNATE CURRENCY A/C NO   */            
+            @0094 INVCURR     $3.  /* INVESTMENT CURRENCY         */            
+            @0097 ALTCURR     $3.  /* ALTERNATE CURRENCY          */            
+            @0100 INVAMT      13.2 /* INVESTMENT AMOUNT           */            
+            @0113 TRYY        $4.  /* TRADE DATE                  */            
+            @0118 TRMM        $2.                                               
+            @0121 TRDD        $2.                                               
+            @0123 STYY        $4.  /* START DATE                  */            
+            @0128 STMM        $2.                                               
+            @0131 STDD        $2.                                               
+            @0133 FIYY        $4.  /* FIXING DATE                 */            
+            @0138 FIMM        $2.                                               
+            @0141 FIDD        $2.                                               
+            @0143 MTYY        $4.  /* MATURITY DATE               */            
+            @0148 MTMM        $2.                                               
+            @0151 MTDD        $2.                                               
+            @0153 TENOR        3.  /* TENOR (DAY)                 */            
+            @0156 STRIKERT    13.7 /* STRIKE RATE                 */            
+            @0169 DCIRT        9.6 /* DCI RATE                    */            
+            @0178 ACCINT      15.6 /* DCI INTEREST AMOUNT (ACCRUAL) */          
+            @0193 ROLLOVER    $1.  /* ROLLOVER INDICATOR          */            
+            @0194 CONVERTIND  $1.  /* CONVERT INDICATOR           */            
+            @0195 DEALERID    $8.  /* STAFF ID DEALER (MAKER)     */            
+            @0203 MANAGERID   $8.  /* STAFF ID MANAGER (CHECKER)  */            
+            ;                                                                   
+                                                                                
+  IF (0<CUSTCD<=99) THEN DO;                                                    
+       CUSTCD = CUSTCD;                                                         
+  END;                                                                          
+  ELSE IF (100<=CUSTCD<=999) THEN DO;                                           
+       CUSTCD=INPUT(SUBSTR(PUT(CUSTCD,3.),2,2),2.);                             
+  END;                                                                          
+  ELSE IF (1000<=CUSTCD<=9999) THEN DO;                                         
+       CUSTCD=INPUT(SUBSTR(PUT(CUSTCD,4.),3,2),2.);                             
+  END;                                                                          
+  ELSE IF (10000<=CUSTCD<=99999) THEN DO;                                       
+       CUSTCD=INPUT(SUBSTR(PUT(CUSTCD,5.),4,2),2.);                             
+  END;                                                                          
+                                                                                
+      TRADEDT  = MDY(TRMM,TRDD,TRYY);                                           
+      STARTDT  = MDY(STMM,STDD,STYY);                                           
+      FIXINGDT = MDY(FIMM,FIDD,FIYY);                                           
+      MATDT    = MDY(MTMM,MTDD,MTYY);                                           
+                                                                                
+    RUN;                                                                        
+    PROC SORT DATA=DPST &DPVAR; BY TICKETNO; RUN;                               
+                                                                                
+    DATA EQTN;                                                                  
+      INFILE EQFL FIRSTOBS=2  DELIMITER = '|' DSD MISSOVER;                     
+      INPUT CUSTICKETNO        :   $13.                                         
+            TICKETNO           :   $7.                                          
+            BRANCH             :   $3.                                          
+            CUSTNAME           :   $35.                                         
+            DEALID             :   $10.                                         
+            CUSTYPE            :   $2.                                          
+            RESIDENCE_COUNTRY  :   $2.                                          
+            CUSTOMER_MNEMONIC  :   $6.                                          
+            CUSTOMER_LOC       :   $3.                                          
+            CUSTOMER_TYPE      :   $3.                                          
+            PRODUCT            :   $3.                                          
+            INVCURR            :   $3.                                          
+            ALTCURR            :   $3.                                          
+            INVAMT             :    8.                                          
+            INVAMTRM           :   8.                                           
+            ALTAMT             :    8.                                          
+            TRADEDTX           :   $10.                                         
+            STARTDTX           :   $10.                                         
+            FIXDTX             :   $10.                                         
+            MATDTX             :   $10.                                         
+            STOPDTX            :   $10.                                         
+            TENOR              :    8.                                          
+            STRIKERT           :    8.                                          
+            SPOTRT             :    8.                                          
+            DCIRT              :    8.                                          
+            DCI_DAILY_INT      :    8.                                          
+            DCI_INT_ACCRUED    :    8.                                          
+            ACCINTEQ           :    8.                                          
+            MMRT               :    8.                                          
+            RPTSPOTRT          :    8.                                          
+            PREMREC            :    8.                                          
+            PREMPAID           :    8.                                          
+            PROFIT             :    8.                                          
+            PROFITMYR          :    8.                                          
+            UNWINDCOST         :    8.                                          
+            STATIND            :  $20.                                          
+            NEWDEAL            :   $1.                                          
+            TRAN_TYPE          :   $1.                                          
+            ;                                                                   
+                                                                                
+      TRADEDT  = INPUT(TRADEDTX,YYMMDD10.);                                     
+      STARTDT  = INPUT(STARTDTX,YYMMDD10.);                                     
+      FIXINGDT = INPUT(FIXDTX,YYMMDD10.);                                       
+      MATDT    = INPUT(MATDTX,YYMMDD10.);                                       
+      STOPDT   = INPUT(STOPDTX,YYMMDD10.);                                      
+                                                                                
+      IF ACCINTAMT < 0 THEN ACCINTAMT = ACCINTAMT * (-1);                       
+      IF TOTINTAMT < 0 THEN TOTINTAMT = TOTINTAMT * (-1);                       
+      IF PREMPAID  < 0 THEN PREMPAID  = PREMPAID  * (-1);                       
+                                                                                
+      SELECT(STATIND);                                                          
+         WHEN ('New')         STATUSIND = 'N ';                                 
+         WHEN ('Outstanding') STATUSIND = 'OS';                                 
+         WHEN ('Mature')      STATUSIND = 'M';                                  
+         WHEN ('Premature')   STATUSIND = 'P';                                  
+         WHEN ('Cancelled')   STATUSIND = 'C';                                  
+         OTHERWISE;                                                             
+      END;                                                                      
+                                                                                
+    RUN;                                                                        
+    PROC SORT DATA=EQTN &EQVAR; BY TICKETNO; RUN;                               
+                                                                                
+    DATA DCI.DCID&REPTMON&REPTDAY (DROP=STOPDT);                                
+      MERGE DPST(IN=A) EQTN(IN=B);                                              
+      BY TICKETNO;                                                              
+      IF A AND B;                                                               
+      IF NEWDEAL IN ('O','N') THEN                                              
+         OUTPUT DCI.DCID&REPTMON&REPTDAY;                                       
+    RUN;                                                                        
+                                                                                
+    DATA CA(KEEP=ACCTNO CUSTCODE2 RENAME=(ACCTNO=INVCURRAC2));                  
+      SET CA.CA&REPTYEAR&REPTMON&REPTDAY;                                       
+      CUSTCODE2 = INPUT(CUSTFISS,2.);                                           
+    RUN;                                                                        
+                                                                                
+    DATA SA(KEEP=ACCTNO CUSTCODE2 RENAME=(ACCTNO=INVCURRAC2));                  
+      SET SA.SA&REPTYEAR&REPTMON&REPTDAY;                                       
+      CUSTCODE2 = CUSTCODE;                                                     
+    RUN;                                                                        
+                                                                                
+    DATA FCY(KEEP=ACCTNO CUSTCODE2 RENAME=(ACCTNO=INVCURRAC2));                 
+      SET FCY.FCY&REPTYEAR&REPTMON&REPTDAY;                                     
+      CUSTCODE2 = INPUT(CUSTCD,2.);                                             
+    RUN;                                                                        
+                                                                                
+    DATA DPDATA;                                                                
+      SET SA CA FCY;                                                            
+    RUN;                                                                        
+    PROC SORT DATA=DPDATA; BY INVCURRAC2; RUN;                                  
+    PROC SORT DATA=DCI.DCID&REPTMON&REPTDAY OUT=DCID; BY INVCURRAC; RUN;        
+                                                                                
+    PROC SQL;                                                                   
+      CREATE TABLE DCID2 AS                                                     
+      SELECT *                                                                  
+      FROM DCID A LEFT JOIN DPDATA B ON                                         
+          A.INVCURRAC = B.INVCURRAC2;                                           
+    QUIT;                                                                       
+                                                                                
+    DATA DCI.DCID&REPTMON&REPTDAY(DROP=INVCURRAC2 CUSTCODE2);                   
+      SET DCID2;                                                                
+      IF CUSTCODE2 NE ' ' THEN CUSTCODE = CUSTCODE2;                            
+    RUN;                                                                        
+                                                                                
+    DATA TEMP.DCID&REPTYEAR&REPTMON&REPTDAY;                                    
+      SET DCI.DCID&REPTMON&REPTDAY;                                             
+    RUN;                                                                        
+                                                                                
+    FILENAME TRANFILE 'SAP.PBB.DCIWH.DCIDFTP' DISP=OLD;                         
+    PROC CPORT LIBRARY=TEMP FILE=TRANFILE;                                      
+    RUN;                                                                        
+                                                                                
+  %END;                                                                         
+  %ELSE %DO;                                                                    
+     %IF "&DPDATE" NE "&RDATE" %THEN                                            
+         %PUT THE RBP2.B033.DP.DAY.DCI(0) IS NOT DATED &RDATE;                  
+     %PUT THE JOB IS NOT DONE !!;                                               
+     %DO;                                                                       
+        DATA A;                                                                 
+        ABORT 77;                                                               
+     %END;                                                                      
+  %END;                                                                         
+%MEND;                                                                          
+%PROCESS;                                                                       
+                                                                                
