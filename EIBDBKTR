@@ -1,0 +1,102 @@
+//EIBDBKTR JOB MISEIS,EIBWBKTR,MSGCLASS=A,CLASS=A,NOTIFY=&SYSUID        JOB30156
+//*JOBPARM S=S1M1                                                               
+//*                                                                             
+//* BANKTRADE PROCESSING. DEPENDENCIES.                                         
+//*                       BANK TRADE JOBS (11.00 PM)                            
+//*                       EIBDLNEX (1.00 AM NEXT DAY)                           
+//*                       EIBDBKTR (7.00 AM NEXT DAY)                           
+//*                                                                             
+//EIBDBKTR EXEC SAS609                                                          
+//LOAN      DD DSN=SAP.PBB.MNILN.DAILY(0),DISP=SHR                              
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//*EXTAVDB   DD DISP=SHR,DSN=SAP.PBB.BTRADE.ADB                                 
+//EXTCOMM   DD DISP=SHR,DSN=SAP.PBB.BTRADE.CRFCOMD                              
+//*EXTHIST   DD DISP=SHR,DSN=SAP.PBB.BTRADE.CRFHIST                             
+//EXCREPOS  DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXCREPOS                             
+//EXPROV    DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXPROV                               
+//EXTMAST   DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXTMAST                              
+//EXTMAST2  DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXTMAST2                             
+//EXTSUBAC  DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXTSUBAC                             
+//OBTRSA    DD DSN=SAP.PBB.BTRADE.SASDATA.DAILY(0),DISP=SHR                     
+//BTRSA     DD DSN=SAP.PBB.BTRADE.SASDATA.DAILY(+1),                            
+//             DISP=(NEW,CATLG,DELETE),                                         
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(30,20),RLSE),UNIT=(SYSDA,8)                          
+//OIBTRSA   DD DSN=SAP.PIBB.BTRADE.SASDATA.DAILY(0),DISP=SHR                    
+//IBTRSA    DD DSN=SAP.PIBB.BTRADE.SASDATA.DAILY(+1),                           
+//             DISP=(NEW,CATLG,DELETE),                                         
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(30,20),RLSE),UNIT=(SYSDA,8)                          
+//SASLIST   DD SYSOUT=X                                                         
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 LS=132 PS=60 NOCENTER;                     
+                                                                                
+DATA BTRSA.REPTDATE (KEEP=REPTDATE)                                             
+     IBTRSA.REPTDATE (KEEP=REPTDATE);                                           
+  REPTDATE = TODAY()-1;                                                         
+  PREVDATE=REPTDATE-1;                                                          
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                 
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                              
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                                
+  CALL SYMPUT('PREVMON',PUT(MONTH(PREVDATE),Z2.));                              
+  CALL SYMPUT('PREVDAY',PUT(DAY(PREVDATE),Z2.));                                
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                                  
+RUN;                                                                            
+%GLOBAL REPTMON REPTDAY PREVMON PREVDAY;                                        
+*;                                                                              
+DATA _NULL_;                                                                    
+  INFILE EXTMAST OBS=1;                                                         
+  INPUT @05 REPTDATE YYMMDD8.;                                                  
+  CALL SYMPUT('MAST', PUT(REPTDATE, DDMMYY8.));                                 
+RUN;                                                                            
+*;                                                                              
+DATA _NULL_;                                                                    
+  INFILE EXTSUBAC  OBS=1;                                                       
+  INPUT @05 REPTDATE YYMMDD8.;                                                  
+  CALL SYMPUT('SUBA', PUT(REPTDATE, DDMMYY8.));                                 
+RUN;                                                                            
+*;                                                                              
+DATA _NULL_;                                                                    
+  INFILE EXCREPOS  OBS=1;                                                       
+  INPUT @05 REPTDATE YYMMDD8.;                                                  
+  CALL SYMPUT('CRED', PUT(REPTDATE, DDMMYY8.));                                 
+RUN;                                                                            
+*;                                                                              
+DATA _NULL_;                                                                    
+  INFILE EXPROV    OBS=1;                                                       
+  INPUT @05 REPTDATE YYMMDD8.;                                                  
+  CALL SYMPUT('PROV', PUT(REPTDATE, DDMMYY8.));                                 
+RUN;                                                                            
+*;                                                                              
+DATA _NULL_;                                                                    
+  INFILE EXTCOMM OBS=1;                                                         
+  INPUT @05 REPTDATE YYMMDD8.;                                                  
+  CALL SYMPUT('COMM', PUT(REPTDATE, DDMMYY8.));                                 
+RUN;                                                                            
+                                                                                
+%MACRO PROCESS;                                                                 
+   %IF "&MAST"="&RDATE" AND "&SUBA"="&RDATE" AND                                
+       "&CRED"="&RDATE" AND "&PROV"="&RDATE" AND                                
+       "&COMM"="&RDATE" %THEN %DO;                                              
+      %INC PGM(EIBDBTCC);                                                       
+   %END;                                                                        
+   %ELSE %DO;                                                                   
+      %IF "&MAST" NE "&RDATE" %THEN                                             
+         %PUT BANKTRADE MASTER FILE IS NOT DATED &RDATE;                        
+      %IF "&SUBA" NE "&RDATE" %THEN                                             
+         %PUT BANKTRADE SUBACCT FILE IS NOT DATED &RDATE;                       
+      %IF "&CRED" NE "&RDATE" %THEN                                             
+         %PUT BANKTRADE CREDIT FILE IS NOT DATED &RDATE;                        
+      %IF "&PROV" NE "&RDATE" %THEN                                             
+         %PUT BANKTRADE PROVISION FILE IS NOT DATED &RDATE;                     
+      %IF "&COMM" NE "&RDATE" %THEN                                             
+         %PUT BANKTRADE CRFCOMM FILE IS NOT DATED &RDATE;                       
+      %PUT THE JOB IS NOT DONE !!;                                              
+      %DO;                                                                      
+         DATA A;                                                                
+            ABORT 77;                                                           
+      %END;                                                                     
+   %END;                                                                        
+%MEND;                                                                          
+%PROCESS;                                                                       
