@@ -1,0 +1,60 @@
+//EIBDEGIA JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M                     JOB33290
+/*JOBPARM S=S1M2                                                                
+//*----------------------------------------------------------------             
+//* PROGRAM  : EIBDEGIA                                                         
+//* DESC     : DAILY GIA CLOSING PRICE AT 5 P.M. (SELLING & BUYING)             
+//*            BCRTEJ01 & BCRTEJ02 BY REMITTANCE                                
+//* ESMR     : 2012-0958 (AAB)                                                  
+//*----------------------------------------------------------------             
+//EIBDEGIA  EXEC SAS609                                                         
+//ERATE     DD DSN=RBP2.B033.EBNK.RATES.DATA,DISP=SHR                           
+//MIS       DD DSN=SAP.PBB.DP.SASDATA.EGOLD,DISP=OLD                            
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS YEARCUTOFF=1960 NOCENTER NODATE NONUMBER;                               
+                                                                                
+DATA _NULL_;                                                                    
+   REPTDATE = TODAY();                                                          
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                             
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                               
+   CALL SYMPUT('RDATE',PUT(REPTDATE,8.));                                       
+RUN;                                                                            
+                                                                                
+DATA EFORATE (DROP=DD MM YY);                                                   
+   INFILE ERATE MISSOVER;                                                       
+   INPUT @003 CURCODE  $3.  @;                                                  
+   IF CURCODE EQ 'XAU' THEN DO;                                                 
+      INPUT @001 RECTYPE        $1.                                             
+            @002 BANKNO         $1.                                             
+            @006 YY              4.                                             
+            @010 MM              2.                                             
+            @012 DD              2.                                             
+            @014 SELLRATE       13.7                                            
+            @027 BUYRATE        13.7                                            
+            @040 WITHHOLD       13.7                                            
+            ;                                                                   
+      REPTDATE    = MDY(MM,DD,YY);                                              
+      IF REPTDATE = &RDATE THEN OUTPUT;                                         
+   END;                                                                         
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=EFORATE; BY CURCODE; RUN;                                        
+                                                                                
+%MACRO APPEND;                                                                  
+%IF "&REPTDAY" EQ "01" %THEN %DO;                                               
+    DATA MIS.EFORATE&REPTMON;                                                   
+       SET EFORATE;                                                             
+    RUN;                                                                        
+%END;                                                                           
+%ELSE %DO;                                                                      
+    DATA MIS.EFORATE&REPTMON;                                                   
+       SET MIS.EFORATE&REPTMON;                                                 
+       IF REPTDATE EQ &RDATE THEN DELETE;                                       
+    RUN;                                                                        
+    PROC APPEND DATA=EFORATE                                                    
+                BASE=MIS.EFORATE&REPTMON;                                       
+    RUN;                                                                        
+    PROC SORT DATA=MIS.EFORATE&REPTMON; BY REPTDATE; RUN;                       
+%END;                                                                           
+%MEND APPEND;                                                                   
+%APPEND;                                                                        
