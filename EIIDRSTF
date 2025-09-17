@@ -1,0 +1,135 @@
+//EIIDRSTF JOB SAS,MISEIS,CLASS=A,MSGCLASS=X,NOTIFY=&SYSUID             JOB09751
+//****************************************************************              
+//* DAILY TRANSACTION FOR STAFF ACCOUNT (PIBB)                                  
+//* ESMR  : 2013-1588 (MFM)                                                     
+//****************************************************************              
+//SAS6091  EXEC SAS609                                                          
+//PGM      DD DISP=SHR,DSN=SAP.BNM.PROGRAM                                      
+//LNDLY    DD DISP=SHR,DSN=SAP.PIBB.MNILN.DAILY(0)                              
+//DPDLY    DD DISP=SHR,DSN=SAP.PIBB.MNITB.DAILY(0)                              
+//LNTR     DD DISP=SHR,DSN=SAP.PBB.CRM.LNTRNSAC(0)                              
+//DPTR     DD DISP=SHR,DSN=SAP.PBB.CRM.DPTRNSAC(0)                              
+//CIS      DD DISP=SHR,DSN=RBP2.B033.CIS.CUST.DAILY                             
+//HLTXT    DD DSN=SAP.PIBB.STAFTRAN.HL.DAILY(+1),                               
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=250,BLKSIZE=0),                               
+//            SPACE=(CYL,(50,50),RLSE),UNIT=(SYSDA,5)                           
+//HPTXT    DD DSN=SAP.PIBB.STAFTRAN.HP.DAILY(+1),                               
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=250,BLKSIZE=0),                               
+//            SPACE=(CYL,(50,50),RLSE),UNIT=(SYSDA,5)                           
+//FLTXT    DD DSN=SAP.PIBB.STAFTRAN.FL.DAILY(+1),                               
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=250,BLKSIZE=0),                               
+//            SPACE=(CYL,(50,50),RLSE),UNIT=(SYSDA,5)                           
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,(800))                                      
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,(800))                                      
+//SORTWK03 DD UNIT=SYSDA,SPACE=(CYL,(800))                                      
+//SORTWK04 DD UNIT=SYSDA,SPACE=(CYL,(800))                                      
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950;                                           
+                                                                                
+DATA REPTDATE;                                                                  
+   SET LNDLY.REPTDATE;                                                          
+   SELECT;                                                                      
+      WHEN(1 <= DAY(REPTDATE)<= 8)  DO; WK = '01'; END;                         
+      WHEN(9 <= DAY(REPTDATE)<= 15) DO; WK = '02'; END;                         
+      WHEN(16<= DAY(REPTDATE)<= 22) DO; WK = '03'; END;                         
+      OTHERWISE DO; WK = '04'; END;                                             
+   END;                                                                         
+   CALL SYMPUT('NOWK',PUT(WK,$2.));                                             
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                             
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                               
+   CALL SYMPUT('TDATE',PUT(REPTDATE,DDMMYY10.));                                
+   CALL SYMPUT('RDATE',REPTDATE);                                               
+RUN;                                                                            
+                                                                                
+%INC PGM(PBBLNFMT);                                                             
+                                                                                
+%LET PIVB =(62,70:79,106:108);   /* PIVB PRODUCT CODE */                        
+                                                                                
+*******************************                                                 
+*  STAFF LOANS                *                                                 
+*******************************;                                                
+DATA LNNOTE (KEEP=ACCTNO NOTENO PRODUCT NAME BRANCH PROD);                      
+   SET LNDLY.LNNOTE;                                                            
+   WHERE COSTCTR NE 8044 AND PAIDIND NOT IN ('C','P');                          
+   PROD = PUT(LOANTYPE,SLTYPE.);                                                
+   IF PROD IN ('HL','HP','FL');                                                 
+   IF LOANTYPE IN &PIVB THEN DELETE;                                            
+   IF NTBRCH NE 0 THEN BRANCH = NTBRCH;                                         
+                  ELSE BRANCH = ACCBRCH;                                        
+   RENAME LOANTYPE = PRODUCT;                                                   
+RUN;                                                                            
+PROC SORT; BY ACCTNO NOTENO; RUN;                                               
+                                                                                
+DATA CUST (KEEP=ACCTNO CUSTNAME ICNO);                                          
+   SET CIS.CUSTDLY;                                                             
+   IF PRISEC = '901';                                                           
+   IF ALIAS NE ' ' THEN ICNO = ALIAS;  /* NEW IC */                             
+                   ELSE ICNO = TAXID;  /* OLD IC */                             
+RUN;                                                                            
+PROC SORT; BY ACCTNO; RUN;                                                      
+                                                                                
+DATA LOAN;                                                                      
+   MERGE LNNOTE(IN=A) CUST(IN=B);                                               
+   BY ACCTNO;                                                                   
+   IF A;                                                                        
+   IF CUSTNAME = ' ' THEN CUSTNAME = NAME;                                      
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=LNTR.LNBTRAN&REPTYEAR&REPTMON&NOWK                               
+           OUT=LNTR (KEEP=ACCTNO NOTENO TRANCODE TRANAMT);                      
+   BY ACCTNO NOTENO;                                                            
+   WHERE REPTDATE = &RDATE;                                                     
+RUN;                                                                            
+                                                                                
+DATA LOAN;                                                                      
+   MERGE LOAN(IN=A) LNTR(IN=B);                                                 
+   BY ACCTNO NOTENO;                                                            
+   IF A AND B;                                                                  
+RUN;                                                                            
+PROC SORT; BY ICNO ACCTNO; RUN;                                                 
+                                                                                
+DATA LNHL LNHP LNFL;                                                            
+   SET LOAN;                                                                    
+   IF PROD = 'HL' THEN OUTPUT LNHL;                                             
+   IF PROD = 'HP' THEN OUTPUT LNHP;                                             
+   IF PROD = 'FL' THEN OUTPUT LNFL;                                             
+RUN;                                                                            
+                                                                                
+PROC PRINTTO PRINT=HLTXT NEW;                                                   
+PROC PRINT DATA=LNHL;                                                           
+   TITLE1 'P U B L I C   I S L A M I C   B A N K';                              
+   TITLE2 'DAILY TRANSACTION FOR STAFF''S HOUSING LOAN '                        
+          '( PRODUCT CODE: 4-7 )';                                              
+   TITLE3 'AS AT ' "&TDATE";                                                    
+   FORMAT ICNO $15. CUSTNAME $30. TRANAMT COMMA10.2;                            
+   VAR ICNO CUSTNAME ACCTNO NOTENO PRODUCT BRANCH                               
+       TRANCODE TRANAMT;                                                        
+RUN;                                                                            
+                                                                                
+PROC PRINTTO PRINT=HPTXT NEW;                                                   
+PROC PRINT DATA=LNHP;                                                           
+   TITLE1 'P U B L I C   I S L A M I C   B A N K';                              
+   TITLE2 'DAILY TRANSACTION FOR STAFF''S HIRE PURCHASE '                       
+          '( PRODUCT CODE: 15,20 )';                                            
+   TITLE3 'AS AT ' "&TDATE";                                                    
+   FORMAT ICNO $15. CUSTNAME $30. TRANAMT COMMA10.2;                            
+   VAR ICNO CUSTNAME ACCTNO NOTENO PRODUCT BRANCH                               
+       TRANCODE TRANAMT;                                                        
+RUN;                                                                            
+                                                                                
+PROC PRINTTO PRINT=FLTXT NEW;                                                   
+PROC PRINT DATA=LNFL;                                                           
+   TITLE1 'P U B L I C   I S L A M I C   B A N K';                              
+   TITLE2 'DAILY TRANSACTION FOR STAFF''S FIXED LOAN '                          
+          '( PRODUCT CODE: 25-34,60,61 )';                                      
+   TITLE3 'AS AT ' "&TDATE";                                                    
+   FORMAT ICNO $15. CUSTNAME $30. TRANAMT COMMA10.2;                            
+   VAR ICNO CUSTNAME ACCTNO NOTENO PRODUCT BRANCH                               
+       TRANCODE TRANAMT;                                                        
+RUN;                                                                            
+                                                                                
