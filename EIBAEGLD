@@ -1,0 +1,64 @@
+//EIBAEGLD JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M                             
+//**********************************************************************        
+//* CREATE DAILY DATASET FOR GOLD TRANSACTION IN DP_GOLD FOLDER IN              
+//* SAS DATA WAREHOUSE                                                          
+//* DATASET: GOLDTRANDdd                                                        
+//* ESMR   : 2015-2219 (GOLD MOVEMENT FOR BI-WEEKLY MCM) - ADHOC                
+//**********************************************************************        
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01   DD DSN=SAP.PBB.GOLD.GOLDFTPD,                                         
+//           DISP=(MOD,DELETE,DELETE),                                          
+//           SPACE=(CYL,(0))                                                    
+//*----------------------------------------------------------------             
+//CREATE  EXEC PGM=IEFBR14                                                      
+//CRT01   DD DSN=SAP.PBB.GOLD.GOLDFTPD,                                         
+//           DISP=(NEW,CATLG,DELETE),                                           
+//           DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920),                             
+//           SPACE=(CYL,(10,10),RLSE),UNIT=SYSDA                                
+//*----------------------------------------------------------------             
+//EIBAEGLD  EXEC SAS609                                                         
+//DEPOSIT   DD DSN=SAP.PBB.MNITB.DAILY(0),DISP=SHR                              
+//MIS       DD DSN=SAP.PBB.DP.SASDATA.EGOLD,DISP=SHR                            
+//TEMP      DD DSN=&&TEMP,DISP=(NEW,DELETE,DELETE),                             
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(20,10),RLSE),UNIT=SYSDA                              
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS YEARCUTOFF=1950 NOCENTER;                                               
+                                                                                
+DATA REPTDATE;                                                                  
+   SET DEPOSIT.REPTDATE;                                                        
+   SELECT;                                                                      
+      WHEN( 1<= DAY(REPTDATE)<=  8) CALL SYMPUT('NOWK', PUT('1', $1.));         
+      WHEN( 9<= DAY(REPTDATE)<= 15) CALL SYMPUT('NOWK', PUT('2', $1.));         
+      WHEN(16<= DAY(REPTDATE)<= 22) CALL SYMPUT('NOWK', PUT('3', $1.));         
+      OTHERWISE                     CALL SYMPUT('NOWK', PUT('4', $1.));         
+   END;                                                                         
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                             
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                               
+   CALL SYMPUT('REPTDT',PUT(REPTDATE,8.));                                      
+RUN;                                                                            
+                                                                                
+DATA TEMP.GOLDTRAND&REPTDAY;                                                    
+   SET MIS.GOLDTRAN&REPTMON&NOWK;                                               
+   WHERE REPTDATE = &REPTDT;                                                    
+RUN;                                                                            
+                                                                                
+FILENAME TRANFILE 'SAP.PBB.GOLD.GOLDFTPD' DISP=OLD;                             
+PROC CPORT LIBRARY=TEMP FILE=TRANFILE; RUN;                                     
+//*------------------------------------------------------                       
+//* FTP TO EDW                                                                  
+//*------------------------------------------------------                       
+//RUNSFTP  EXEC COZBATCH                                                        
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(EDW#SFTP)                         
+//           DD *                                                               
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=binary                     
+lzopts linerule=$lr                                                             
+cd /stgsrcsys/host/ftpfiles                                                     
+put //SAP.PBB.GOLD.GOLDFTPD   GOLDFTPD                                          
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text                       
+lzopts linerule=$lr                                                             
+cd /stgsrcsys/host/control                                                      
+put //SAP.CRMS.MONTH.CONTROL   EIBAEGLD.TXT                                     
+EOB                                                                             
+/*                                                                              
