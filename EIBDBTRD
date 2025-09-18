@@ -1,0 +1,688 @@
+//EIBDBTRD JOB MISEIS,EIBDBTRD,COND=(0,LT),CLASS=A,MSGCLASS=X,                  
+//         NOTIFY=&SYSUID                                                       
+//*                                                                             
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01    DD DSN=SAP.PBB.BTDATAWH.DAILY.DBTFTP,                                
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//*                                                                             
+//CREATE  EXEC PGM=IEFBR14                                                      
+//CRT01    DD DSN=SAP.PBB.BTDATAWH.DAILY.DBTFTP,                                
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),                            
+//            SPACE=(CYL,(300,200),RLSE),UNIT=(SYSDA,8)                         
+//*                                                                             
+//EIBDBTRD EXEC SAS609,WORK='24000,12000',REGION=8M                             
+//BNM      DD DSN=SAP.BT.SASDATA.DAILY(0),DISP=OLD                              
+//BNMX     DD DSN=SAP.BT.SASDATA.DAILY(-1),DISP=SHR                             
+//BNMW     DD DSN=SAP.BT.SASDATA,DISP=SHR                                       
+//BTRSA    DD DSN=SAP.PBB.BTRADE.SASDATA.DAILY(0),DISP=SHR                      
+//PBA01    DD DSN=SAP.PBB.PBA.DAILY(0),DISP=SHR                                 
+//MTD      DD DSN=SAP.PBB.MTD.BT.SASDATA,DISP=OLD                               
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                      
+//SASLIST  DD SYSOUT=X                                                          
+//SYSIN    DD *                                                                 
+                                                                                
+ /* SMR/OTHERS    : ESMR 2016-1107                         */                   
+                                                                                
+DATA BNM.REPTDATE (KEEP=REPTDATE);                                              
+  SET BTRSA.REPTDATE;                                                           
+  STARTDTE=INTNX('MONTH',REPTDATE,0,'B');                                       
+  MM = MONTH(REPTDATE);                                                         
+  MM1 = MM - 1;                                                                 
+  IF MM1 = 0 THEN MM1 = 12;                                                     
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                              
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                                
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                                  
+  CALL SYMPUT('TDATE',REPTDATE);                                                
+  CALL SYMPUT('STARTDT',STARTDTE);                                              
+  CALL SYMPUT('NOWK','4');                                                      
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));                                         
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                 
+  CALL SYMPUT('REPTDT',PUT(REPTDATE,YYMMDDN6.));                                
+  CALL SYMPUT('PREVDT',PUT(REPTDATE-1,YYMMDDN6.));                              
+RUN;                                                                            
+OPTIONS YEARCUTOFF=1950 NOCENTER LINESIZE=125 NOERRORABEND;                     
+PROC FORMAT;                                                                    
+  VALUE $VALID                                                                  
+  '00620','00560','00530','00640','00660',                                      
+  '00120','00140','00160','00590','00470',                                      
+  '00490','00440','00420','00340'           = 'N'                               
+   OTHER                                    = 'Y';                              
+                                                                                
+  VALUE $DISBPAY                                                                
+  '00110','00130','00150','00170','00210',                                      
+  '00230','00240','00250','00260','00270',                                      
+  '00280','00510','00540','00600','00800',                                      
+  '00810','00820','00830','00290','00300',                                      
+  '00310'                                   = 'Y'                               
+   OTHER                                    = 'N';                              
+*;                                                                              
+                                                                                
+PROC SORT DATA=BNM.BTDTL&REPTDT; BY ACCTNO; RUN;                                
+PROC SORT DATA=BNM.MAST&REPTDT ; BY ACCTNO; RUN;                                
+DATA BTRADE&REPTDT;                                                             
+  MERGE BNM.BTDTL&REPTDT(IN=A)                                                  
+        BNM.MAST&REPTDT (DROP=INTRECV);                                         
+  BY ACCTNO;                                                                    
+  IF A;                                                                         
+RUN;                                                                            
+                                                                                
+%INC PGM(PBBLNFMT,PBBELF);                                                      
+                                                                                
+%LET LOAN=(KEEP=BRANCH ACCTNO PRODUCT CUSTCD PRODCD LIABCODE                    
+                SECTORCD ORIGMT COLLCD STATECD DISCOUNT_PROCEED                 
+                REMAINMT APPRLIMT FIXFLT CALBASP                                
+                NOTENO NOTETERM EXPRDATE INTRATE INDUSTRIAL_SECTOR_CD           
+                CLOSEDTE INTAMT AMTIND CUSTCODE  CREATDS FISSPURP               
+                SPREAD INTEARN FEEAMT ISSDTE ACCRUAL INTEARN4 REBATE            
+                PAIDIND INTEARN2 INTEARN3 MATDATE SECTOR PURPOSES               
+                SUBACCT TRANSREF GLMNEMO BTREL DIRCTIND                         
+                RETAILID);                                                      
+%LET BTR1=(KEEP=ACCTNO NAME);                                                   
+%LET BT=(DROP= ACCPTCOM BATYPE FCONCEPT IISAMT NPLIND REIMBRID SUBLIMIT         
+               TFCNTR02 TFCNTR05 TFCNTR06 TFCNTR07 TFCNTR08 TFCNTR09            
+               TFCNTR10 TFCNTR11 TFCNTR12 TFDESC02 TFDESC03 TFDESC04            
+               TFID TFINDR06 TFINDR07 TFINDR08 TFINDR09 TFINDR10                
+               TFINDR11 TFINDR12 TOTIISR WORKERID WRITOFF);                     
+%LET BTRAD=(DROP=_FREQ_ _TYPE_ ACCPTCOM ACCRUAL BATYPE CCRICODE                 
+                 CLOSEDTE CRISPURP FCONCEPT FEEAMT IISAMT INTEARN               
+                 INTEARN2 INTEARN3 INTEARN4 NOTENO NOTETERM NPLIND              
+                 PAIDIND PRODUCT REBATE REIMBRID SECTOLD TFCNTR02               
+                 TFCNTR05 TFCNTR06 TFCNTR07 TFCNTR08 TFCNTR09 TFCNTR10          
+                 TFCNTR11 TFCNTR12 TFDESC02 TFDESC03 TFDESC04 TFID              
+                 TFINDR06 TFINDR07 TFINDR08 TFINDR09 TFINDR10 TFINDR11          
+                 TFINDR12 TOTIISR WORKERID WRITOFF);                            
+                                                                                
+DATA BNM.D_BTRAD&REPTDT &LOAN;                                                  
+  LENGTH CUSTCD ORIGMT REMAINMT $2. PRODCD $5.                                  
+         SECTORCD $4. STATECD $1. AMTIND $1. CRISPURP $4.                       
+         SECTOR $4. CUSTCODE 2. PRODUCT 3.;                                     
+  /* EXTRA CONDITION SET INTO THIS PROGRAM, MUST CHANGE IN EXT. */              
+  SET BTRADE&REPTDT;                                                            
+  PRODUCT = 0;                                                                  
+  NOTENO  = 0;                                                                  
+  /*  END   */                                                                  
+  FISSPURP = '0470';                                                            
+  REPTDATE=INPUT("&RDATE", DDMMYY8.);                                           
+  SECTORCD=PUT(SECTOR, $SECTCD.);                                               
+  CUSTCD=PUT(CUSTCODE, LOCUSTCD.);                                              
+  STATECD=PUT(STATE, $STATECD.);                                                
+  IF LIABCODE NE ' ' THEN DO;                                                   
+    IF DIRCTIND EQ 'D' THEN PRODCD=PUT(LIABCODE,$BTPROD.);                      
+    ELSE IF DIRCTIND EQ 'I' THEN PRODCD=PUT(LIABCODE,$BTPRODI.);                
+  END;                                                                          
+  AMTIND = 'D';                                                                 
+  COLLCD=PUT(INPUT(COLLATER,$3.), $COLLCD.);                                    
+  IF EXPRDATE - ISSDTE < 366 THEN ORIGMT = '10';                                
+  ELSE ORIGMT = '20';                                                           
+                                                                                
+  FISSPURP = '0470';                                                            
+  IF CUSTCD NOT IN ('77','78','95','96') AND SECTORCD<'1111' THEN DO;           
+    SELECT(CUSTCD);                                                             
+      WHEN('02','03','04','05','06','11','12','13','17','30','31',              
+           '32','33','34','35','37','38','39','45')                             
+           SECTORCD='8110';                                                     
+      WHEN('40') SECTORCD = '8130';                                             
+      WHEN('79') SECTORCD = '9203';                                             
+      WHEN('71','72','73','74') SECTORCD = '9101';                              
+      OTHERWISE SECTORCD = '9999';                                              
+    END;                                                                        
+  END;                                                                          
+  IF CUSTCD IN ('79','61','62','63','75','57','59','41',                        
+                '42','43','44','46','47','48','49',                             
+                '51','52','53','54')                                            
+     AND SECTORCD IN ('8110','8120','8130') THEN SECTORCD='9999';               
+  IF CUSTCD IN ('02','03','04','05','06','11','12','13','17','30',              
+                '31','32','33','34','35','37','38','39','40','45')              
+  AND SECTORCD NOT IN ('8110','8120','8130') THEN SECTORCD = '8110';            
+  IF CUSTCD IN ('71','72','73','74') AND                                        
+    SUBSTR(SECTORCD,1,2) ^ IN ('91','92','93','94','95','96',                   
+    '97','98','99') THEN SECTORCD = '9101';                                     
+  IF CUSTCD IN ('77','78') AND '1111'<=SECTORCD<='9999' THEN DO;                
+    IF CUSTCD = '77' THEN CUSTCD = '41';                                        
+    ELSE IF CUSTCD = '78' THEN CUSTCD = '44';                                   
+  END;                                                                          
+  /**********************************************/                              
+  /* INCLUDE ALL PAIDIND NE 'P' LOANS           */                              
+  /**********************************************/                              
+  IF REBIND=2 THEN DO;                                                          
+    SELECT;                                                                     
+      WHEN (INTAMT = 0.01) DO;                                                  
+        /*********************************/                                     
+        /* ZERORISED OR WRITTEN OFF A/CS */                                     
+        /*********************************/                                     
+        TEMP = -1 * REBATE; REBATE = TEMP;                                      
+        TEMP = -1 * INTEARN4; INTEARN4 = TEMP;                                  
+        INTAMT = 0; INTEARN = 0; ACCRUAL = 0;                                   
+        INTEARN2 = 0; INTEARN3 = 0;                                             
+      END;                                                                      
+      WHEN (ROUND((REBATE + INTEARN),.01) NE INTAMT OR                          
+        ROUND((INTEARN4 + INTEARN3),.01) NE INTEARN2) DO;                       
+        RMM = MONTH(REPTDATE);                                                  
+        RYY = YEAR(REPTDATE);                                                   
+        IMM = MONTH(ISSDTE);                                                    
+        IYY = YEAR(ISSDTE);                                                     
+        IF DAY(THISDATE) IN (8,15,22) THEN                                      
+          REMAIN = NOTETERM-(((RYY*12)+RMM)-((IYY*12)+IMM));                    
+        ELSE REMAIN = NOTETERM-(((RYY*12)+RMM+1)-((IYY*12)+IMM));               
+        UNEARN1=(REMAIN*(REMAIN+1)*(INTAMT))/(NOTETERM*(NOTETERM+1))    ;       
+        UNEARN2=(REMAIN*(REMAIN+1)*(INTEARN2))/(NOTETERM*(NOTETERM+1    ));     
+        INTAMT = 0; INTEARN = 0; ACCRUAL = 0; REBATE = 0;                       
+        INTEARN2 = 0; INTEARN3 = 0; INTEARN4 = 0;                               
+      END;                                                                      
+      OTHERWISE DO;                                                             
+        REBATE=0; INTEARN4=0;                                                   
+      END;                                                                      
+    END;                                                                        
+  END;                                                                          
+                                                                                
+  IF CUSTCD = 'AA' THEN DO;                                                     
+    IF ORGTYPE='C' OR ORGTYPE='P' OR ORGTYPE='I' THEN CUSTCD='66';              
+    ELSE CUSTCD = '77';                                                         
+  END;                                                                          
+  /********************************************************/                    
+  /* COMPUTE THE REMAINING MATURITY (IN NUMBER OF MONTHS) */                    
+  /********************************************************/                    
+  IF REPTDATE EQ 0 OR EXPRDATE EQ 0 OR EXPRDATE LT REPTDATE                     
+    THEN REMAINMT='51';                                                         
+  ELSE DO;                                                                      
+    LINK COUNTMON;                                                              
+    REMAINMT=PUT(NUMMONTH, LNRMMT.);                                            
+  END;                                                                          
+  OUTPUT;                                                                       
+  /****************************************************/                        
+  /** INCLUDE OUTSTANDING FEE AMOUNT FOR PAID LOANS  **/                        
+  /****************************************************/                        
+  IF PAIDIND = 'P' AND FEEAMT > 0 THEN DO;                                      
+    INTAMT = 0; INTEARN = 0; REBATE = 0;                                        
+    IF REPTDATE EQ 0 OR EXPRDATE EQ 0 OR EXPRDATE LT REPTDATE                   
+      THEN REMAINMT='51';                                                       
+    ELSE DO;                                                                    
+      LINK COUNTMON;                                                            
+      REMAINMT=PUT(NUMMONTH, LNRMMT.);                                          
+    END;                                                                        
+    OUTPUT;                                                                     
+  END;                                                                          
+  /****************************************************/                        
+  /** INCLUDE LOANS WHICH ARE SETTLED EARLY, WITHIN  **/                        
+  /** THE SAME MONTH                                 **/                        
+  /****************************************************/                        
+                                                                                
+  CURMONTH = MONTH(REPTDATE);                                                   
+  CURYEAR  = YEAR(REPTDATE);                                                    
+  LNMONTH = MONTH(CLOSEDTE);                                                    
+  LNYEAR  = YEAR(CLOSEDTE);                                                     
+RETURN;                                                                         
+COUNTMON:                                                                       
+  FOLMONTH=REPTDATE; NUMMONTH=0;                                                
+  DO UNTIL(EXPRDATE <= FOLMONTH);                                               
+     NUMMONTH+1;                                                                
+     NEXTDAY=DAY(REPTDATE);                                                     
+     NEXTMON=MONTH(FOLMONTH)+1;                                                 
+     NEXTYEAR=YEAR(FOLMONTH);                                                   
+     IF NEXTMON > 12 THEN DO;                                                   
+        NEXTMON = NEXTMON-12; NEXTYEAR=NEXTYEAR+1; END;                         
+     IF NEXTDAY IN (29,30,31) AND NEXTMON EQ 2 THEN                             
+        FOLMONTH=MDY(3,1,NEXTYEAR)-1;                                           
+     ELSE IF NEXTDAY EQ 31                                                      
+          AND NEXTMON IN (4,6,9,11) THEN                                        
+              FOLMONTH=MDY(NEXTMON, 30, NEXTYEAR);                              
+     ELSE IF NEXTDAY EQ 30                                                      
+          AND NEXTMON IN (1,3,5,7,8,10,12) THEN                                 
+              FOLMONTH=MDY(NEXTMON, 31, NEXTYEAR);                              
+          ELSE                                                                  
+              FOLMONTH=MDY(NEXTMON, NEXTDAY, NEXTYEAR);                         
+  END;                                                                          
+RETURN;                                                                         
+RUN;                                                                            
+PROC SORT DATA=BTRSA.SUBA&REPTDT OUT=SUBA&REPTDT;                               
+WHERE SINDICAT NE 'S'; BY ACCTNOX;                                              
+RUN;                                                                            
+PROC SORT DATA=BTRSA.MAST&REPTDT OUT=MAST&REPTDT; BY ACCTNOX; RUN;              
+DATA SUBACCT (DROP=ACCTNO RENAME=(ACCTNOX=ACCTNO));                             
+   MERGE SUBA&REPTDT                                                            
+         MAST&REPTDT (KEEP=ACCTNOX TFID);                                       
+   BY ACCTNOX;                                                                  
+RUN;                                                                            
+PROC SORT DATA=SUBACCT OUT=SUBNEW NODUPKEYS;                                    
+  WHERE CREATDS > 0 OR EXPIRDS > 0 ;                                            
+  BY ACCTNO TRANSREF;                                                           
+RUN;                                                                            
+DATA SUBNEW;                                                                    
+   SET SUBNEW (KEEP=ACCTNO TRANSREF CREATDS EXPIRDS                             
+               RENAME=(TRANSREF=TRANSREX));                                     
+  IF CREATDS NOT IN (.,0) THEN ISSDTE=INPUT(PUT(CREATDS,Z6.),YYMMDD6.);         
+  IF EXPIRDS NOT IN (.,0) THEN                                                  
+      EXPRDATE = INPUT(PUT(EXPIRDS,Z6.),YYMMDD6.);                              
+   DROP CREATDS EXPIRDS;                                                        
+   TRANSREF = PUT(SUBSTR(TRANSREX,1,7),$7.);                                    
+RUN;                                                                            
+PROC SORT DATA=BNM.D_BTRAD&REPTDT OUT=D_BTRAD;                                  
+  BY ACCTNO TRANSREF;                                                           
+RUN;                                                                            
+DATA BNM.D_BTRAD&REPTDT;                                                        
+   MERGE D_BTRAD(IN=A) SUBNEW(IN=B);                                            
+   BY ACCTNO TRANSREF;                                                          
+   IF A;                                                                        
+RUN;                                                                            
+ /**********************************************************/                   
+ /** COMPUTE THE RELEASE AMOUNT AND THE APPROVED LIMIT    **/                   
+ /** THEN CALCULATE THE UNDRAWN PORTION                   **/                   
+ /**********************************************************/                   
+DATA BNM.D_BTRAD&REPTDT;                                                        
+    SET BNM.D_BTRAD&REPTDT;                                                     
+  IF DIRCTIND EQ 'D' THEN OUTPUT;                                               
+RUN;                                                                            
+PROC SORT DATA=BNM.D_BTRAD&REPTDT OUT=D_BTRAD;                                  
+   BY ACCTNO;                                                                   
+*;                                                                              
+DATA APPRLIMT(KEEP=ACCTNO APPRLIMT ISSDTE                                       
+              RENAME=(ISSDTE=ISSDTE2));                                         
+   SET BNM.BTMAST&REPTDT;                                                       
+   IF LEVELS = 1;                                                               
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=APPRLIMT; BY ACCTNO; RUN;                                        
+DATA D_BTRAD;                                                                   
+  MERGE D_BTRAD(IN=A) APPRLIMT(KEEP=ACCTNO ISSDTE2);                            
+  BY ACCTNO;                                                                    
+  IF A;                                                                         
+RUN;                                                                            
+PROC SORT DATA=D_BTRAD;                                                         
+   BY ACCTNO TRANSREF;                                                          
+*;                                                                              
+DATA D_BTRAD&REPTDT        (DROP=SECTORX SECTORC ISSDTE2);                      
+   FORMAT SECTOR $4.;                                                           
+   SET D_BTRAD(RENAME=(SECTOR=SECTORC));                                        
+   SECTORX = SECTORC*1;                                                         
+   SECTORZ = PUT(SECTORX,Z4.);                                                  
+   IF ISSDTE2 <'01APR06'D THEN SECTORZZ = PUT(SECTORZ,$RVRSE.);                 
+   IF SECTORZZ NE '    ' THEN SECTORCD = SECTORZZ;                              
+   IF SECTORZZ NE '    ' THEN SECTOR = SECTORZZ;                                
+   ELSE SECTOR = SECTORZ;                                                       
+RUN;                                                                            
+DATA BNM.D_BTRAD&REPTDT (DROP=SECTORX SECTORC);                                 
+   FORMAT SECTOR $4.; LENGTH TRANSREF $10.;                                     
+   SET D_BTRAD&REPTDT(RENAME=(SECTOR=SECTORC));                                 
+   SECTORX = SECTORC*1;                                                         
+   SECTOR = PUT(SECTORX,Z4.);                                                   
+   IF CUSTCD IN ('77','78') AND '1111' <= SECTOR <= '9999' THEN DO;             
+       IF CUSTCD = '77' THEN CUSTCD = '41';                                     
+    IF CUSTCD = '78' THEN CUSTCD = '44';                                        
+   END;                                                                         
+   IF CUSTCD IN ('77','78','95','96') & '0111'<=SECTORCD<='0430' THEN           
+      SECTORCD='0410';                                                          
+   IF CUSTCD NOT IN (                                                           
+   '01','02','03','11','12','20','13','17','30','31','32','33','34',            
+   '35','36','37','38','39','40','45','04','05','06','80','81','82',            
+   '83','84','85','86','87','88','90') AND                                      
+   SECTOR IN ('8110','8120','8130') THEN SECTORCD = '9999';                     
+   IF CUSTCD IN ('77','78','95','96') & '0111'<=SECTOR<='0430' THEN             
+      SECTORCD='0410';                                                          
+  IF CUSTCD NOT IN ('77','78','95','96') AND SECTORCD < '1111' THEN DO;         
+  SELECT(CUSTCD);                                                               
+     WHEN('02','03','04','05','06','11','12','13','17','30','31',               
+          '32','33','34','35','37','38','39','45')                              
+           SECTORCD='8110';                                                     
+     WHEN('40') SECTORCD = '8130';                                              
+     WHEN('79') SECTORCD = '9203';                                              
+     WHEN('71','72','73','74') SECTORCD = '9101';                               
+     OTHERWISE SECTORCD = '9999';                                               
+  END;                                                                          
+  END;                                                                          
+  IF CUSTCD IN ('79','61','62','63','75','57','59','41',                        
+                '42','43','44','46','47','48','49',                             
+                '51','52','53','54')                                            
+     AND SECTORCD IN ('8110','8120','8130') THEN SECTORCD='9999';               
+  IF CUSTCD IN ('02','03','04','05','06','11','12','13','17','30',              
+                '31','32','33','34','35','37','38','39','40','45')              
+  AND SECTORCD NOT IN ('8110','8120','8130') THEN SECTORCD = '8110';            
+  IF CUSTCD IN ('71','72','73','74') AND                                        
+      SUBSTR(SECTORCD,1,2) ^ IN ('91','92','93','94','95','96',                 
+        '97','98','99') THEN SECTORCD = '9101';                                 
+  IF CUSTCD IN ('77','78') AND '1111'<=SECTORCD<='9999' THEN DO;                
+     IF CUSTCD = '77' THEN CUSTCD = '41';                                       
+     ELSE IF CUSTCD = '78' THEN CUSTCD = '44';                                  
+  END;                                                                          
+  IF CUSTCD IN ('01','02','03','11','12','20','13','17','30',                   
+                '31','32','33','34','35','36',                                  
+                '37','38','39','40','45','04','05','06','61',                   
+                '41','42','43','62','44','46','47','63','48',                   
+                '49','51','57','75','59','52','53','54','66',                   
+                '67','68','69') AND CRISPURP IN ('4300','4100') AND             
+                SECTOLD EQ '    ' THEN FISSPURP = '0990';                       
+  IF CUSTCD = '79' THEN DO;                                                     
+     IF CRISPURP IN ('5300','0440','0460','5200','5100') AND                    
+        SECTOLD EQ '    ' THEN FISSPURP = '0990';                               
+     IF SECTORCD NOT IN ('9203','9420','9440') THEN SECTORCD = '9203';          
+  END;                                                                          
+  IF CUSTCD IN ('82','83','84','86','90','91','95','96','98','99') AND          
+     '1000'<=SECTOR<='9999' THEN CUSTCD = '86';                                 
+  IF CUSTCD IN ('77','78','95','96') THEN DO;                                   
+     IF 3000000000<ACCTNO<4000000000 THEN DO;                                   
+        IF (CRISPURP = '    ' AND  CCRICODE = .  AND SECTOLD EQ '    ' )        
+        OR FISSPURP IN ('0390','0440','0470') THEN FISSPURP = '0410';           
+     END;                                                                       
+     ELSE IF PRODUCT IN &HP THEN DO;                                            
+        IF (CRISPURP = '    ' AND  CCRICODE = .  AND SECTOLD EQ '    ' )        
+        OR FISSPURP IN ('0390','0440','0470') THEN FISSPURP = '0212';           
+     END;                                                                       
+     ELSE DO;                                                                   
+        IF (CRISPURP = '    ' AND  CCRICODE = .  AND SECTOLD EQ '    ' )        
+        OR FISSPURP IN ('0390','0440','0470') THEN FISSPURP = '0410';           
+     END;                                                                       
+     IF FISSPURP IN ('0110','0120','0131','0132','0139',                        
+        '0210','0220','0230','0200','0211','0212','0311','0312','0313',         
+        '0314','0315','0316','0321','0322','0323','0324','0325','0326',         
+        '0327','0328','0329','0410','0420','0430','0990') THEN                  
+        SECTORCD = '9700';                                                      
+  END;                                                                          
+  IF PRODCD = '34111' & FISSPURP NOT IN ('0211','0212','0200','0210',           
+  '0390','0430')                                                                
+  THEN FISSPURP = '0212';                                                       
+  IF INDUSTRIAL_SECTOR_CD NE '' & LENGTH(INDUSTRIAL_SECTOR_CD)=5 &              
+     INDUSTRIAL_SECTOR_CD > 0 THEN                                              
+     SECTORCD = PUT(INDUSTRIAL_SECTOR_CD,$INDSECT.); *18-2715;                  
+  IF CUSTCD IN ('77','78','95','96') THEN SECTORCD = '9700';                    
+*;                                                                              
+PROC SORT DATA=BNM.D_BTRAD&REPTDT; BY TRANSREF;                                 
+*;                                                                              
+DATA PBA;                                                                       
+   LENGTH TRANSREF $10.;                                                        
+   SET PBA01.PBA01&REPTDT;                                                      
+   KEEP TRANSREF UNEARNED;                                                      
+   TRANSREF = SUBSTR(TRANSREF,2,8);                                             
+   RUN;                                                                         
+*;                                                                              
+PROC SUMMARY DATA=PBA NWAY;                                                     
+CLASS TRANSREF; VAR UNEARNED;                                                   
+OUTPUT OUT=TRANSREFX (DROP=_TYPE_ _FREQ_) SUM=;                                 
+*;                                                                              
+DATA BNM.D_BTRAD&REPTDT;                                                        
+   MERGE BNM.D_BTRAD&REPTDT(IN=A) TRANSREFX; BY TRANSREF;                       
+   IF A;                                                                        
+*;                                                                              
+  /** NEW BT MANIPULATION TO TIE WITH GL **/                                    
+DATA TB BA APNBT;                                                               
+   SET BNM.BTDTL&REPTDT;                                                        
+   IF OUTSTAND > 0 THEN DO;                                                     
+   IF LIABCODE NOT IN ('BAI','BAP','BAS','BAE') THEN DO;                        
+      IF DIRCTIND = 'D' THEN BALANCE = OUTSTAND;                                
+      ELSE BALANCE = 0;                                                         
+      OUTPUT TB;                                                                
+   END;                                                                         
+   ELSE DO;                                                                     
+      OUTPUT BA;                                                                
+   END;                                                                         
+   END;                                                                         
+   ELSE OUTPUT APNBT;                                                           
+RUN;                                                                            
+DATA PBA;                                                                       
+   SET PBA01.PBA01&REPTDT;                                                      
+   TRANSREF_PBA = TRANSREF;                                                     
+   TRANSREF = SUBSTR(TRANSREF,2,8);                                             
+   DROP LNTYPE;                                                                 
+   RUN;                                                                         
+*;                                                                              
+PROC SORT DATA=BA; BY TRANSREF;                                                 
+PROC SORT DATA=PBA; BY TRANSREF;                                                
+DATA BA NOTMATCH;                                                               
+   MERGE PBA(IN=B) BA(IN=A); BY TRANSREF;                                       
+   IF A THEN OUTPUT BA;                                                         
+   IF B & NOT A THEN OUTPUT NOTMATCH;                                           
+*;                                                                              
+DATA NOTMATCH;                                                                  
+   SET NOTMATCH;                                                                
+   IF CERTNO NE .;                                                              
+   OUTSTAND = FCVALUE;                                                          
+RUN;                                                                            
+PROC SORT DATA=BA; BY BRANCH OUTSTAND MATDATE;                                  
+PROC SORT DATA=NOTMATCH; BY BRANCH OUTSTAND MATDATE;                            
+DATA BA (DROP=FCVALUE1 UNEARNED1 CERTNO1 UTRDF1 TRANSREF_PBA1 YIELD1);          
+   MERGE NOTMATCH(KEEP=BRANCH OUTSTAND MATDATE FCVALUE UNEARNED CERTNO          
+                       UTRDF TRANSREF_PBA YIELD                                 
+                  RENAME=(FCVALUE=FCVALUE1 UNEARNED=UNEARNED1                   
+                          TRANSREF_PBA=TRANSREF_PBA1 YIELD=YIELD1               
+                          CERTNO=CERTNO1 UTRDF=UTRDF1))                         
+         BA(IN=A);                                                              
+   BY BRANCH OUTSTAND MATDATE;                                                  
+   IF A;                                                                        
+   IF TRANSREF_PBA = '' THEN DO;                                                
+      IF FCVALUE1 NE . THEN FCVALUE=FCVALUE1;                                   
+      IF UNEARNED1 NE . THEN UNEARNED=UNEARNED1;                                
+      IF TRANSREF_PBA1 NE '' THEN TRANSREF_PBA=TRANSREF_PBA1;                   
+      IF YIELD1 NE . THEN YIELD=YIELD1;                                         
+      IF CERTNO1 NE . THEN CERTNO=CERTNO1;                                      
+   END;                                                                         
+   IF CERTNO = . THEN DO;                                                       
+      BALANCE = 0;                                                              
+      OUTSTAND = 0;                                                             
+   END;                                                                         
+   ELSE DO;                                                                     
+      BALANCE=SUM(OUTSTAND,(-1)*UNEARNED);                                      
+      *OUTSTAND=BALANCE;                                                        
+   END;                                                                         
+   *** SPECIAL MAPPING 4 SELECTED LIABCODE ***;                                 
+   IF LIABCODE IN ('BAI','BAP','BAS','BAE') THEN DO;                            
+      IF UTRDF = '' THEN DO;                                                    
+         IF UTRDF1 NE '' THEN UTRDF = UTRDF1;                                   
+         ELSE                 UTRDF = 'D';                                      
+      END;                                                                      
+   END;                                                                         
+RUN;                                                                            
+DATA TBBA;                                                                      
+   SET TB BA APNBT;                                                             
+RUN;                                                                            
+PROC SORT DATA=TBBA; BY ACCTNO TRANSREF;                                        
+PROC SORT DATA=BNM.D_BTRAD&REPTDT OUT=D_BTRAD (DROP=BTREL BRANCH                
+   LIABCODE APPRLIMT APPRLIM2 GLMNEMO BALANCE UNDRAWN UNEARNED                  
+   TRANSREX PURPOSES INTRATE SPREAD RETAILID CUSTCODE INTAMT                    
+   DIRCTIND CREATDS ISSDTE SECTOR PRODCD EXPRDATE MATDATE);                     
+   BY ACCTNO;                                                                   
+RUN;                                                                            
+PROC SORT DATA=D_BTRAD;                                                         
+   BY ACCTNO TRANSREF DESCENDING SUBACCT;                                       
+*;                                                                              
+PROC SORT DATA=D_BTRAD NODUPKEYS;                                               
+   BY ACCTNO TRANSREF;                                                          
+RUN;                                                                            
+DATA D_BTRAD;                                                                   
+   MERGE TBBA(IN=A) D_BTRAD(DROP=SUBACCT);                                      
+   BY ACCTNO TRANSREF;                                                          
+   IF A;                                                                        
+   IF ACCTNO = ' ' THEN DELETE;                                                 
+RUN;                                                                            
+PROC SORT DATA=D_BTRAD NODUP; BY ACCTNO;                                        
+PROC SORT DATA=APPRLIMT; BY ACCTNO;                                             
+RUN;                                                                            
+DATA BNM.D_BTRAD&REPTDT;                                                        
+   MERGE APPRLIMT(IN=B DROP=ISSDTE2) D_BTRAD(IN=A DROP=APPRLIMT);               
+   BY ACCTNO;                                                                   
+   APPRLIM2 = APPRLIMT;                                                         
+   IF A;                                                                        
+   IF LIABCODE NE ' ' THEN DO;                                                  
+     IF DIRCTIND EQ 'D' THEN PRODCD=PUT(LIABCODE,$BTPROD.);                     
+     ELSE IF DIRCTIND EQ 'I' THEN PRODCD=PUT(LIABCODE,$BTPRODI.);               
+   END;                                                                         
+RUN;                                                                            
+ /*****************************************************************/            
+ /*  TO CALCULATE THE DISBURSEMENT & REPAYMENT                    */            
+ /*****************************************************************/            
+ DATA PRNGL (DROP=ACCTNO RENAME=(ACCTNOX=ACCTNO));                              
+    SET BTRSA.COMM&REPTDAY&REPTMON(RENAME=(GLMNEMO=GLMNEM));                    
+    IF CREATDS NOT IN (.,0) THEN                                                
+       ISSDTE=INPUT(PUT(CREATDS,Z6.),YYMMDD6.);                                 
+    IF EXPIRDS NOT IN (.,0) THEN                                                
+       EXPRDATE = INPUT(PUT(EXPIRDS,Z6.),YYMMDD6.);                             
+    IF GLMNEM IN ('CONI','CONM','CONP','DDA','HOE','IBS') THEN                  
+       DELETE;                                                                  
+    ELSE IF SUBSTR(GLMNEM,1,1) = '9' THEN DELETE;                               
+    ELSE IF SUBSTR(GLMNEM,1,1) = '0' THEN GLMNEMO = GLMNEM||'0';                
+    ELSE GLMNEMO = GLMNEM;                                                      
+    DROP GLMNEM;                                                                
+    IF PAYGRNO NE ' ' THEN TRANSREF = SUBSTR(PAYGRNO,1,7);                      
+    IF ISSDTE <= &TDATE;                                                        
+ RUN;                                                                           
+DATA DISBURSE700;                                                               
+   SET PRNGL;                                                                   
+   WHERE GLMNEMO IN ('08000','09000') AND &STARTDT<=ISSDTE<= &TDATE;            
+   DISBURSE = TRANSAMT;                                                         
+RUN;                                                                            
+DATA REPAID101;                                                                 
+   SET PRNGL;                                                                   
+   WHERE GLMNEMO IN ('01010','01140') AND &STARTDT<=ISSDTE<= &TDATE             
+         AND TRANSAMT < 0;                                                      
+   REPAID = TRANSAMT;                                                           
+RUN;                                                                            
+PROC SORT DATA=REPAID101; BY ACCTNO TRANSREF;                                   
+PROC SUMMARY DATA=REPAID101;                                                    
+   BY ACCTNO TRANSREF;                                                          
+   VAR REPAID;                                                                  
+   OUTPUT OUT=REPAID101 SUM=REPAID;                                             
+RUN;                                                                            
+PROC SORT DATA=REPAID101; BY ACCTNO TRANSREF;                                   
+PROC SORT DATA=DISBURSE700; BY ACCTNO TRANSREF;                                 
+DATA REPAID101;                                                                 
+   MERGE REPAID101(IN=A) DISBURSE700(IN=B);                                     
+   BY ACCTNO TRANSREF;                                                          
+   IF A;                                                                        
+   IF REPAID < 0 AND B THEN DELETE;                                             
+   ELSE IF REPAID < 0 THEN DO;                                                  
+      REPAID = (-1)*REPAID;                                                     
+      OUTPUT;                                                                   
+   END;                                                                         
+RUN;                                                                            
+DATA DISBPAY;                                                                   
+   SET PRNGL;                                                                   
+   WHERE PUT(GLMNEMO,$DISBPAY.) EQ 'Y' AND &STARTDT<=ISSDTE<= &TDATE;           
+   IF TRANSAMT > 0 THEN DO;                                                     
+      IF GLMNEMO NE '01010' THEN DISBURSE = TRANSAMT;                           
+      * ELSE IF GLMNEMO = '01010' THEN REPAID = TRANSAMT;                       
+   END;                                                                         
+   ELSE REPAID = TRANSAMT * (-1);                                               
+RUN;                                                                            
+DATA REPAID60;                                                                  
+   SET DISBPAY;                                                                 
+   WHERE GLMNEMO IN ('00110','00130','00150','00800','00810','00820',           
+                     '00830','00290','00300','00310') &                         
+         REPAID > 0;                                                            
+   KEEP ACCTNO REPAID ISSDTE;                                                   
+RUN;                                                                            
+PROC SORT DATA=REPAID60 NODUPKEYS;;                                             
+   BY ACCTNO REPAID ISSDTE;                                                     
+PROC SORT DATA=DISBPAY;                                                         
+   BY ACCTNO DISBURSE ISSDTE;                                                   
+DATA DISBPAY REPAID60(DROP=GLMNEMO REPAID);                                     
+   MERGE DISBPAY(IN=A) REPAID60(IN=B RENAME=(REPAID=DISBURSE));                 
+   BY ACCTNO DISBURSE ISSDTE;                                                   
+   IF A;                                                                        
+   IF GLMNEMO = '00600' & (A & B) THEN OUTPUT REPAID60;                         
+   ELSE OUTPUT DISBPAY;                                                         
+RUN;                                                                            
+PROC SORT DATA=DISBPAY;                                                         
+   BY ACCTNO REPAID ISSDTE;                                                     
+PROC SORT DATA=REPAID60;                                                        
+   BY ACCTNO DISBURSE ISSDTE;                                                   
+DATA DISBPAY;                                                                   
+   MERGE DISBPAY(IN=A) REPAID60(IN=B RENAME=(DISBURSE=REPAID));                 
+   BY ACCTNO REPAID ISSDTE;                                                     
+   IF A;                                                                        
+   IF GLMNEMO IN ('00110','00130','00150','00800','00810','00820',              
+                  '00830','00290','00300','00310')                              
+      & (A & B) THEN DELETE;                                                    
+RUN;                                                                            
+DATA DISBURSE700;                                                               
+   SET DISBURSE700;                                                             
+   KEEP ACCTNO TRANSREF DISBURSE ISSDTE;                                        
+RUN;                                                                            
+PROC SORT DATA=DISBURSE700;                                                     
+   BY TRANSREF DISBURSE ISSDTE;                                                 
+PROC SORT DATA=DISBPAY;                                                         
+   BY TRANSREF REPAID ISSDTE;                                                   
+DATA DISBPAY DISBURSE700;                                                       
+   MERGE DISBPAY(IN=A) DISBURSE700(IN=B RENAME=(DISBURSE=REPAID));              
+   BY TRANSREF REPAID ISSDTE;                                                   
+   IF A;                                                                        
+   IF GLMNEMO NE '01010' & (A & B) THEN DELETE;                                 
+   ELSE IF B THEN OUTPUT DISBURSE700;                                           
+   ELSE OUTPUT DISBPAY;                                                         
+RUN;                                                                            
+DATA DISBPAY;                                                                   
+   SET DISBPAY(IN=A) REPAID101(IN=B KEEP=ACCTNO TRANSREF REPAID);               
+RUN;                                                                            
+PROC SUMMARY DATA=DISBPAY NWAY MISSING;                                         
+   CLASS ACCTNO TRANSREF;                                                       
+   VAR DISBURSE REPAID;                                                         
+OUTPUT OUT=DISBPAY (DROP= _FREQ_ _TYPE_) SUM=;                                  
+*;                                                                              
+PROC SORT DATA=DISBPAY; BY ACCTNO TRANSREF;                                     
+PROC SORT DATA=BNM.D_BTRAD&REPTDT; BY ACCTNO TRANSREF;                          
+PROC SORT DATA=BNMW.BTRAD&REPTMON1&NOWK OUT=PREVBT; BY ACCTNO TRANSREF;         
+*;                                                                              
+DATA BNM.D_BTRAD&REPTDT CLOSED;                                                 
+   MERGE BNM.D_BTRAD&REPTDT(IN=A)                                               
+         DISBPAY(IN=B KEEP=ACCTNO TRANSREF DISBURSE REPAID);                    
+   BY ACCTNO TRANSREF;                                                          
+   IF A THEN OUTPUT BNM.D_BTRAD&REPTDT;                                         
+   ELSE OUTPUT CLOSED;                                                          
+RUN;                                                                            
+DATA CLOSED;                                                                    
+   MERGE PREVBT(IN=A DROP=BALANCE OUTSTAND APPRLIMT APPRLIM2                    
+                          CURBAL INTRECV)                                       
+         CLOSED(IN=B KEEP=ACCTNO TRANSREF DISBURSE REPAID);                     
+   BY ACCTNO TRANSREF;                                                          
+   IF A & B;                                                                    
+   FCVALUE  = 0;                                                                
+   INTAMT   = 0;                                                                
+   UNEARNED = 0;                                                                
+   UTRDF    = '';                                                               
+RUN;                                                                            
+DATA BNM.D_BTRAD&REPTDT;                                                        
+   SET BNM.D_BTRAD&REPTDT CLOSED;                                               
+RUN;                                                                            
+                                                                                
+%INC PGM(EIDMTDBT);                                                             
+                                                                                
+DATA MTD;                                                                       
+   SET MTD.BTAVG&REPTMON;                                                       
+   KEEP ACCTNO TRANSREX MTDAVBAL_MIS;                                           
+RUN;                                                                            
+PROC SORT DATA=MTD; BY ACCTNO TRANSREX; RUN;                                    
+PROC SORT DATA=BNM.D_BTRAD&REPTDT; BY ACCTNO TRANSREX; RUN;                     
+PROC SORT DATA=BNMX.D_BTRAD&PREVDT                                              
+           OUT=PREVBTD(RENAME=(TRANSREF_PBA=TRANSPBA_PREV));                    
+   BY ACCTNO TRANSREX;                                                          
+RUN;                                                                            
+                                                                                
+DATA BNM.D_BTRAD&REPTDT;                                                        
+   MERGE BNM.D_BTRAD&REPTDT(IN=A) MTD                                           
+         PREVBTD(KEEP=ACCTNO TRANSREX TRANSPBA_PREV);                           
+   BY ACCTNO TRANSREX;                                                          
+   IF A;                                                                        
+   IF TRANSREF_PBA = '' THEN TRANSREF_PBA = TRANSPBA_PREV;                      
+   DROP TRANSPBA_PREV;                                                          
+RUN;                                                                            
+                                                                                
+DATA BNM.D_BTRAD&REPTDT BTRAD&REPTDT &BTRAD;                                    
+   SET BNM.D_BTRAD&REPTDT;                                                      
+   IF SUBSTR(ACCTNO,1,2)='25' THEN ACCTNOX=ACCTNO*1.;                           
+                              ELSE ACCTNOX=0;                                   
+                                                                                
+   IF PRODGRP = 'BA' THEN DO;                                                   
+      CALBASP = 365;                                                            
+      FIXFLT  = 'F';                                                            
+   END;                                                                         
+                                                                                
+RUN;                                                                            
+                                                                                
+DATA BTDTL&REPTDT;                                                              
+   SET BNM.BTDTL&REPTDT &BT;                                                    
+RUN;                                                                            
+*;                                                                              
+                                                                                
+FILENAME TRANFILE 'SAP.PBB.BTDATAWH.DAILY.DBTFTP' DISP=OLD;                     
+PROC CPORT LIBRARY=WORK FILE=TRANFILE;                                          
+SELECT BTDTL&REPTDT BTRAD&REPTDT;                                               
+RUN;                                                                            
+                                                                                
