@@ -111,19 +111,3 @@ print(f"Outputs written: {output_ibtrade}, {output_ibtdtl}")
 duckdb.sql("INSTALL parquet; LOAD parquet;")
 duckdb.sql(f"CREATE OR REPLACE TABLE ibtrade AS SELECT * FROM read_parquet('{output_ibtrade}')")
 print(duckdb.sql("SELECT COUNT(*) FROM ibtrade").fetchall())
-
-EIBMFEEX
-EIIDBTEX
-EIBDBKTR
-EIBDBTEX
-EIBDBTRD
-EIBDWALK
-EIIDBTEX
-EIBDDCIA
-EIBDEGIA
-EIBDFDHQ
-EIBDRSTF
-EIBMSTAF
-EIIDRSTF
-EIVMSTAF
-
