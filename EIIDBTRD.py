@@ -111,3 +111,19 @@ print(f"Outputs written: {output_ibtrade}, {output_ibtdtl}")
 duckdb.sql("INSTALL parquet; LOAD parquet;")
 duckdb.sql(f"CREATE OR REPLACE TABLE ibtrade AS SELECT * FROM read_parquet('{output_ibtrade}')")
 print(duckdb.sql("SELECT COUNT(*) FROM ibtrade").fetchall())
+
+EIBMCCR8
+EIIWCCR4
+EIIWCC5C
+EIIWCCR5
+EIIWCCR6
+EIBWBTEX
+EIBWBTMS
+EIBWBTRD
+FTPBTWHS
+EIBWCC5L
+EIIWCC5L
+EIBWCCR6
+EIBWCCR7
+EIIWBTCR
+
