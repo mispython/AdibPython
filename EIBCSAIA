@@ -1,0 +1,48 @@
+//EIBCSAIA JOB EIS,CLASS=A,MSGCLASS=X                                           
+//*                                                                             
+//* GET CREDIT CARD CUSTOMER CUSTNO FROM CIS FILE FOR CONSENTED                 
+//* CUSTOMER BASE (MONTHLY BASIS)                                               
+//* ESMR 2014-1885                                                              
+//*                                                                             
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01    DD DSN=SAP.PBB.AIA.CONSENT.AIAFTP,                                   
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//*                                                                             
+//CREATE  EXEC PGM=IEFBR14                                                      
+//CRT01    DD DSN=SAP.PBB.AIA.CONSENT.AIAFTP,                                   
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),                            
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)                         
+//*                                                                             
+//EIBCSAIA EXEC SAS609,REGION=64M                                               
+//CISFILE  DD DSN=RBP2.B033.CIS.CUST.DAILY,DISP=SHR                             
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                      
+//SASLIST  DD SYSOUT=X                                                          
+//SYSIN    DD *                                                                 
+OPTIONS YEARCUTOFF=1950;                                                        
+                                                                                
+DATA CISCARD(KEEP=CUSTNO1 ACCTNOC ACCTCODE                                      
+             PRISEC ALIASKEY ALIAS RENAME=(CUSTNO1=CUSTNO));                    
+   SET CISFILE.CUSTDLY;                                                         
+      IF ACCTCODE NOT IN ('DP   ','LN   ','EQC  ','FSF  ');                     
+      IF PRISEC = 901;                                                          
+      CUSTNO1=CUSTNO*1;                                                         
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=CISCARD NODUPKEY;BY ACCTNOC;RUN;                                 
+                                                                                
+FILENAME TRANFILE 'SAP.PBB.AIA.CONSENT.AIAFTP' DISP=OLD;                        
+PROC CPORT LIBRARY=WORK FILE=TRANFILE; RUN;                                     
+                                                                                
+//******************************************************************            
+//* FTP HOST DATASETS TO PBB DATAWAREHOUSE SERVER                               
+//******************************************************************            
+//RUNSFTP  EXEC COZBATCH                                                        
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(CSASSFTP)                         
+//           DD *                                                               
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=binary                     
+lzopts linerule=$lr                                                             
+CD AIACONST                                                                     
+PUT //SAP.PBB.AIA.CONSENT.AIAFTP   AIACONST                                     
+EOB                                                                             
