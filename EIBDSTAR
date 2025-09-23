@@ -1,0 +1,144 @@
+//EIBDSTAR JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                              
+/*JOBPARM S=S1M1                                                                
+//**********************************************************************        
+//* DAILY EXTRACTION FOR PB BRIGHT STAR SAVINGS ACCOUNT                         
+//* TRANSFERRED THE DATASET TO SAS SERVER UNDER FOLDER:CRM                      
+//* DATASET-BSTARYYMMDD                                                         
+//* ESMR   : 2009-940                                                           
+//* DATE   : 10-06-09 (HHH)                                                     
+//**********************************************************************        
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01   DD DSN=SAP.PBB.STARFTP,                                               
+//           DISP=(MOD,DELETE,DELETE),                                          
+//           SPACE=(CYL,(0))                                                    
+//DEL02   DD DSN=SAP.PBB.BSTAR,                                                 
+//           DISP=(MOD,DELETE,DELETE),                                          
+//           SPACE=(CYL,(0))                                                    
+//DEL03   DD DSN=SAP.PBB.BSTAR.TEXT,                                            
+//           DISP=(MOD,DELETE,DELETE),                                          
+//           SPACE=(CYL,(0))                                                    
+//**********************************************************************        
+//CREATE  EXEC PGM=IEFBR14                                                      
+//CRT01   DD DSN=SAP.PBB.STARFTP,                                               
+//           DISP=(NEW,CATLG,DELETE),                                           
+//           DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920),                             
+//           SPACE=(CYL,(10,10),RLSE),UNIT=(SYSDA,5)                            
+//*                                                                             
+//EIBMSMDP  EXEC SAS609                                                         
+//DEPOSIT   DD DISP=SHR,DSN=SAP.PBB.MNITB.DAILY(0)                              
+//CISDP     DD DSN=RBP2.B033.CIS.CUST.DAILY,DISP=SHR                            
+//DATEFILE  DD DSN=RBP2.SAS.B033.DATEFILE,DISP=SHR                              
+//BSTAR2   DD DSN=SAP.PBB.BSTAR,                                                
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=320,BLKSIZE=0),                               
+//            SPACE=(CYL,(50,50),RLSE),UNIT=(SYSDA,5)                           
+//BSTAR    DD DSN=SAP.PBB.BSTAR.TEXT,                                           
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=320,BLKSIZE=0),                               
+//            SPACE=(CYL,(50,50),RLSE),UNIT=(SYSDA,5)                           
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS YEARCUTOFF=1950 NOCENTER NODATE;                                        
+DATA REPTDATE;                                                                  
+   INFILE DATEFILE LRECL=80 OBS=1;                                              
+   INPUT @01  EXTDATE   11.;                                                    
+   REPTDATE=INPUT(SUBSTR(PUT(EXTDATE, Z11.), 1, 8), MMDDYY8.);                  
+   MM=MONTH(REPTDATE);                                                          
+CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                   
+CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                             
+CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                                
+CALL SYMPUT('REPTDTE', PUT(REPTDATE,Z5.));                                      
+RUN;                                                                            
+*;                                                                              
+DATA BRIGHT(KEEP=BRANCH ACCTNO OPENDT CURBAL OPENIND);                          
+   SET DEPOSIT.SAVING;                                                          
+   IF PRODUCT=208;                                                              
+   IF OPENDT GT 0 THEN DO;                                                      
+       OPENDD = SUBSTR(PUT(OPENDT,Z11.),3,2);                                   
+       OPENMM = SUBSTR(PUT(OPENDT,Z11.),1,2);                                   
+       OPENYY = SUBSTR(PUT(OPENDT,Z11.),5,4);                                   
+       END;                                                                     
+    OPENDT=MDY(OPENMM,OPENDD,OPENYY);                                           
+   IF OPENDT = &REPTDTE;                                                        
+RUN;                                                                            
+PROC SORT DATA=BRIGHT; BY ACCTNO; RUN;                                          
+*;                                                                              
+DATA CIS(KEEP=ACCTNO CUSTNAME PRIS2 ALIASKEY ALIAS CUSTOPDT);                   
+    SET CISDP.CUSTDLY;                                                          
+    IF CUSTOPENDATE GT 0 THEN DO;                                               
+       CUSTDD = SUBSTR(PUT(CUSTOPENDATE,Z11.),3,2);                             
+       CUSTMM = SUBSTR(PUT(CUSTOPENDATE,Z11.),1,2);                             
+       CUSTYY = SUBSTR(PUT(CUSTOPENDATE,Z11.),5,4);                             
+       END;                                                                     
+CUSTOPDT=MDY(CUSTMM,CUSTDD,CUSTYY);                                             
+IF PRISEC = 901 THEN DO;                                                        
+     PRIS2='N';                                                                 
+END;                                                                            
+  ELSE DO;                                                                      
+     PRIS2='Y';                                                                 
+  END;                                                                          
+RUN;                                                                            
+PROC SORT DATA=CIS(RENAME=(PRIS2=JOINT)); BY ACCTNO; RUN;                       
+*;                                                                              
+DATA NEW;                                                                       
+MERGE BRIGHT(IN=A) CIS(IN=B);                                                   
+BY ACCTNO;                                                                      
+IF A AND B;                                                                     
+RUN;                                                                            
+*;                                                                              
+DATA CONVERT(DROP=BRANCH ACCTNO OPENDT CURBAL JOINT CUSTOPDT);                  
+LENGTH BRANCH2 $8 ACCTNO2 $10 OPENDT2 $8 CURBAL2 $8.2 JOINT2 $8                 
+CUSTOPD2 $8;                                                                    
+   SET NEW;                                                                     
+   BRANCH2=LEFT(BRANCH);                                                        
+   ACCTNO2=LEFT(ACCTNO);                                                        
+   OPENDT2=LEFT(OPENDT);                                                        
+   CURBAL2=LEFT(CURBAL);                                                        
+   JOINT2=LEFT(JOINT);                                                          
+   CUSTOPD2=LEFT(CUSTOPDT);                                                     
+RUN;                                                                            
+PROC SORT DATA=CONVERT(RENAME=(ALIASKEY=PM_SC ALIAS=NEWIC                       
+BRANCH2=BRANCH ACCTNO2=ACCTNO OPENDT2=OPENDT CURBAL2=CURBAL                     
+CUSTOPD2=CUSTOPDT JOINT2=JOINT)); BY ACCTNO; RUN;                               
+*;                                                                              
+DATA NEW;                                                                       
+    SET CONVERT;                                                                
+    FILE BSTAR;                                                                 
+    PUT @001 BRANCH      8.                                                     
+        @012 ACCTNO      10.                                                    
+        @025 NEWIC       $20.                                                   
+        @045 JOINT       8.                                                     
+        @053 CUSTNAME    $40.                                                   
+        @100 OPENDT      8.                                                     
+        @108 OPENIND     $1.                                                    
+        @110 CUSTOPDT    8.                                                     
+        @120 CURBAL      8.2                                                    
+    ;                                                                           
+    RUN;                                                                        
+DATA BSTARNEW;                                                                  
+    SET NEW;                                                                    
+    FILE BSTAR2;                                                                
+    IF _N_ = 1 THEN DO;                                                         
+    PUT @1 'BRANCH'   ';'                                                       
+           'ACCTNO'   ';'                                                       
+           'NEWIC'    ';'                                                       
+           'JOINT'    ';'                                                       
+           'CUSTNAME' ';'                                                       
+           'OPENDT'   ';'                                                       
+           'OPENIND'   ';'                                                      
+           'CUSTOPDT' ';'                                                       
+           'CURBAL'   ';';                                                      
+           END;                                                                 
+    PUT @1 BRANCH   ';'                                                         
+           ACCTNO   ';'                                                         
+           NEWIC    ';'                                                         
+           JOINT    ';'                                                         
+           CUSTNAME ';'                                                         
+           OPENDT   ';'                                                         
+           OPENIND  ';'                                                         
+           CUSTOPDT ';'                                                         
+           CURBAL   ';';                                                        
+         *;                                                                     
+PROC PRINT DATA=BSTARNEW;                                                       
+VAR BRANCH ACCTNO NEWIC JOINT CUSTNAME OPENDT OPENIND CUSTOPDT                  
+CURBAL;                                                                         
