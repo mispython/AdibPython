@@ -1,0 +1,195 @@
+//EIBMCCMS JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                              
+/*JOBPARM S=S1M1                                                                
+//*                                                                             
+//DELETE   EXEC PGM=IEFBR14                                                     
+//DD1      DD DSN=SAP.PBB.CCRIS2.CMSCOLL,                                       
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//DD2      DD DSN=SAP.PBB.WCCMS,                                                
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//DD3      DD DSN=SAP.PBB.WCCMS.CCMSFTP,                                        
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//*                                                                             
+//CREATE   EXEC PGM=IEFBR14                                                     
+//CRT01    DD DSN=SAP.PBB.WCCMS.CCMSFTP,                                        
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),                            
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)                         
+//*                                                                             
+//SAS6094  EXEC SAS609                                                          
+//SUBACRED DD DSN=SAP.PBB.CCRIS2.SUBACRED.ELDS,DISP=SHR                         
+//BNM      DD DSN=SAP.PBB.MNILN(0),DISP=SHR                                     
+//ELDS     DD DSN=SAP.ELDS.ELAA(0),DISP=SHR                                     
+//CMSCOLL  DD DSN=SAP.PBB.CCRIS2.CMSCOLL,                                       
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            SPACE=(CYL,(150,80),RLSE),                                        
+//            UNIT=SYSDA,                                                       
+//            DCB=(LRECL=1100,RECFM=FB,BLKSIZE=0)                               
+//CMS      DD DSN=SAP.PBB.WCCMS,                                                
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)                         
+//SASLIST  DD SYSOUT=X                                                          
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,800)                                        
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,800)                                        
+//SORTWK03 DD UNIT=SYSDA,SPACE=(CYL,800)                                        
+//SORTWK04 DD UNIT=SYSDA,SPACE=(CYL,800)                                        
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS YEARCUTOFF=1950 NONUMBER NODATE NOCENTER MISSING=0 COMPRESS=YES;        
+                                                                                
+DATA REPTDATE;                                                                  
+   SET BNM.REPTDATE;                                                            
+   SELECT(DAY(REPTDATE));                                                       
+   WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;                            
+   WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;                            
+   WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;                            
+     OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3'; END;                          
+   END;                                                                         
+   MM = MONTH(REPTDATE);                                                        
+   IF WK = '1' THEN DO;                                                         
+      MM1 = MM - 1;                                                             
+      IF MM1 = 0 THEN MM1 = 12;                                                 
+   END;                                                                         
+   ELSE MM1 = MM;                                                               
+   IF WK = '4' THEN MM2 = MM;                                                   
+   ELSE DO MM2 = MM - 1 ;                                                       
+      IF MM2 = 0 THEN MM2 = 12;                                                 
+   END;                                                                         
+   DAYS = DAY(REPTDATE);                                                        
+   MONTHS = MONTH(REPTDATE);                                                    
+   YEARS = YEAR(REPTDATE);                                                      
+   CALL SYMPUT('NOWK',PUT(WK,$1.));                                             
+   CALL SYMPUT('NOWK1',PUT(WK1,$1.));                                           
+   CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                          
+   CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));                                        
+   CALL SYMPUT('REPTMON2',PUT(MM2,Z2.));                                        
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                                 
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                               
+   CALL SYMPUT('MDATE',PUT(REPTDATE,Z5.));                                      
+RUN;                                                                            
+                                                                                
+DATA SUBACRED;                                                                  
+  INFILE SUBACRED;                                                              
+   INPUT @0007 BRANCH      3.                                                   
+         @0013 ACCTNO     10.                                                   
+         @0043 NOTENO     10.                                                   
+         @0217 AANO      $13.;                                                  
+RUN;                                                                            
+                                                                                
+DATA ELNA7(KEEP=ACCTNOC1 ACCTNOC2 AANO ACCTAPP CCOLLNO CCLASSC                  
+   CPRPROPD CPRLANDU CINSTCL TTLPART TTLENO TTLMUKIM MASTTLNO                   
+   MASTTLMD MASTOWNR TTLID HOLDEXPD EXPDATE OWNOCUPY LANDAREA                   
+   LANDUNIT BLTNAREA BLTNUNIT DEVNAME PRJCTNAM ADDRESS CPRPARC1                 
+   CPRPARC2 CPRPARC3 CPRPARC4 CDOLARV CPRFORSV CPOSCODE                         
+   CPRVALDT CPRVALIN CPRVALU1 ADLREFNO CTRYSTAT CPRCHARG CPRSHARE               
+   INSURER CPOLYNUM FIREDATE SUMINSUR QUITRENT ASSESSDT CPRRANKC                
+   INDNEWE CPRVALIN2 CPRVALU2);                                                 
+   SET ELDS.ELNA7;                                                              
+   RENAME AANOSEC7=AANO PROPERT=CPRPROPD LNAREAUN=LANDUNIT                      
+   BUILTUP=BLTNAREA BLTUPUN=BLTNUNIT FREELEAS=HOLDEXPD                          
+   USEDSA=OWNOCUPY CMVALUE=CDOLARV FSVALUE=CPRFORSV                             
+   VALUERI=CPRVALIN VALUENM=CPRVALU1 ADDRESS6=CPOSCODE                          
+   VIND2=CPRVALIN2 VNAME=CPRVALU2                                               
+   PROJNAME=PRJCTNAM LNUSDCAT=CPRLANDU;                                         
+   IF TTLPART='INDIVIDUAL' THEN DO;                                             
+      TTLMUKIM=LOCPROP;                                                         
+   END;                                                                         
+   IF TTLPART='MASTER' THEN DO;                                                 
+      MASTTLMD=LOCPROP;                                                         
+      MASTTLNO=TTLENO;                                                          
+      TTLENO=' ';                                                               
+   END;                                                                         
+   FORMAT ADDRESS $100.;                                                        
+   IF ADDRESS1 NE '' THEN CPRPARC1=COMPRESS(ADDRESS1||','||ADDRESS2);           
+   ELSE                   CPRPARC1=ADDRESS2;                                    
+   CPRPARC2=ADDRESS3;                                                           
+   CPRPARC3=ADDRESS4;                                                           
+   CPRPARC4=ADDRESS5;                                                           
+   ADDRESS=COMPRESS(CPRPARC1||','||CPRPARC2||','||CPRPARC3||','||               
+           CPRPARC4);                                                           
+   CPRRANKC=1;                                                                  
+   CPRVALDT=PUT(VALUEDT,DDMMYY10.);                                             
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=SUBACRED NODUPKEY;BY AANO ACCTNO;RUN; /* NEED DELETE */          
+PROC SORT DATA=SUBACRED;BY AANO;RUN;                                            
+PROC SORT DATA=ELNA7;BY AANO CCOLLNO;RUN;                                       
+                                                                                
+DATA COMBINE;                                                                   
+   MERGE SUBACRED(IN=A) ELNA7(IN=B);BY AANO;                                    
+   IF A;                                                                        
+RUN;                                                                            
+PROC PRINT;RUN; /* CAN DELETE */                                                
+                                                                                
+DATA CMS.CCMS&REPTMON&REPTYEAR(DROP=ACCTNOC1 ACCTNOC2 NOTENO);                  
+   SET COMBINE;                                                                 
+   FILE CMSCOLL;                                                                
+   PUT @001 BRANCH     3.                                                       
+       @005 ACCTNO     10.                                                      
+       @016 AANO       $13.                                                     
+       @030 ACCTAPP   $UPCASE1.   /* PRIMARY ACCOUNT APP  */                    
+       @032 CCOLLNO   $UPCASE11.  /* COLLATERAL NO.       */                    
+       @044 CCLASSC   $UPCASE3.   /* SECURITY CLASS CODE  */                    
+       @048 CPRPROPD  $UPCASE45.  /* TYPE / DESC OF PROP. */                    
+       @094 CPRLANDU  $UPCASE20.  /* LAND USE CATEGORY    */                    
+       @115 CINSTCL   $UPCASE2.   /* INSTRUMENT OF CLAIM  */                    
+       @118 TTLPART   $UPCASE12.  /* TITLE PARTICULARS    */                    
+       @131 TTLENO    $UPCASE40.  /* TITLE NO             */                    
+       @172 MASTTLNO  $UPCASE40.  /* TITLE NO(MASTER)     */                    
+       @213 TTLMUKIM  $UPCASE40.  /* MUKIM/DAERAH         */                    
+       @254 MASTTLMD  $UPCASE40.  /* MUKIM/DAERAH(MASTER) */                    
+       @295 MASTOWNR  $UPCASE40.  /* NAME OF MAST.TTL.OWN */                    
+       @336 TTLID     $UPCASE15.  /* ID NO.MAST.TTL.OWNER */                    
+       @352 HOLDEXPD  $UPCASE9.   /* FREEHOLD/LEASEHOLD   */                    
+       @362 EXPDATE   $UPCASE10.  /* FREE/LEASE EXP DATE  */                    
+       @373 OWNOCUPY  $UPCASE18.  /* CURRENTLY USED AS    */                    
+       @392 LANDAREA  $9.         /*                      */                    
+       @402 LANDUNIT  $UPCASE8.   /* LAND AREA UNIT       */                    
+       @411 BLTNAREA  $9.         /* BUILT UP             */                    
+       @421 BLTNUNIT  $UPCASE8.   /* BUILT UP UNIT        */                    
+       @430 DEVNAME   $UPCASE60.  /* DEVELOPER'S NAME     */                    
+       @491 PRJCTNAM  $UPCASE60.  /* PROJECT NAME         */                    
+       @552 ADDRESS   $UPCASE100. /* ADDRESS COMBINE      */                    
+       @653 CPRPARC1  $UPCASE40.  /* HSE/LOT NO/ BUILDING */                    
+       @694 CPRPARC2  $UPCASE40.  /* JLN / ST             */                    
+       @735 CPRPARC3  $UPCASE40.  /* TMN / SEK / PREC     */                    
+       @776 CPRPARC4  $UPCASE30.  /* ADDRESS CONTINUATION */                    
+       @807 CPOSCODE  $5.         /* POSTCODE             */                    
+       @813 CDOLARV   $15.        /* CUR MARKET VAL (RM)? */                    
+       @829 CPRFORSV  $15.        /* FORCE SALE VAL (RM)? */                    
+       @845 CPRVALDT  $10.        /* DATE OF VALUATION    */                    
+       @856 CPRVALIN  $UPCASE12.  /* VALUER INDICATOR     */                    
+       @869 CPRVALU1  $UPCASE40.  /* VALUER NAME          */                    
+       @910 ADLREFNO  $UPCASE25.  /* ADL REF NO           */                    
+       @936 CTRYSTAT  $UPCASE3.   /* CURRENCY             */                    
+       @940 CPRCHARG  $UPCASE15.  /* AMOUNT OF CHARGE     */                    
+       @956 CPRSHARE  $UPCASE3.   /* SHARED               */                    
+       @960 INSURER   $UPCASE2.   /* INSURER              */                    
+       @963 CPOLYNUM  $UPCASE16.  /* POLICY NO            */                    
+       @980 FIREDATE  $UPCASE10.  /* EXPIRY DATE          */                    
+       @991 SUMINSUR  $UPCASE15.  /* SUM INSURED          */                    
+      @1007 QUITRENT  $UPCASE4.   /* LATEST QUIT RENT     */                    
+      @1012 ASSESSDT  $UPCASE4.   /* LATEST ASSESSMENT    */                    
+      @1017 CPRRANKC  1.          /* RANK OF CHARGE       */                    
+      ;                                                                         
+RUN;                                                                            
+                                                                                
+DATA CMS.CCMS&REPTMON&REPTYEAR;                                                 
+   SET CMS.CCMS&REPTMON&REPTYEAR(RENAME=(CCOLLNO =CCOLLNOX                      
+                                         EXPDATE =EXPDATEX                      
+                                         FIREDATE=FIREDATEX                     
+                                         CPRVALDT=CPRVALDTX));                  
+   CCOLLNO  = INPUT(CCOLLNOX,11.);                                              
+   EXPDATE  = INPUT(EXPDATEX,DDMMYY10.);                                        
+   FIREDATE = INPUT(FIREDATEX,DDMMYY10.);                                       
+   CPRVALDT = INPUT(CPRVALDTX,DDMMYY10.);                                       
+   DROP CCOLLNOX EXPDATEX FIREDATEX CPRVALDTX;                                  
+RUN;                                                                            
+                                                                                
+FILENAME TRANFILE 'SAP.PBB.WCCMS.CCMSFTP' DISP=OLD;                             
+PROC CPORT LIBRARY=CMS FILE=TRANFILE;                                           
+RUN;                                                                            
