@@ -1,0 +1,115 @@
+//EIIDBT12 JOB MISEIS,EIBWBKTR,MSGCLASS=A,CLASS=A,NOTIFY=&SYSUID        JOB30156
+//*                                                                             
+//* BANKTRADE PROCESSING. DEPENDENCIES.                                         
+//*                       BANK TRADE JOBS                                       
+//* TRIGGER ON 5PM                                                              
+//* ESMR : 2015-2301                                                            
+//*                                                                             
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DD1      DD DSN=SAP.PIBB.CCRIS2.DAYBTRD.PM12,                                 
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//*                                                                             
+//EIBDBT05 EXEC SAS609                                                          
+//BTFILE    DD DSN=SAP.PBB.SASCCRIS.BTPM12.TEXT,DISP=SHR                        
+//BASE      DD DSN=SAP.PIBB.CCRIS.BTBASE,DISP=SHR                               
+//DAYBTRD   DD DSN=SAP.PIBB.CCRIS2.DAYBTRD.PM12,                                
+//             DISP=(NEW,CATLG,DELETE),                                         
+//             SPACE=(CYL,(150,80),RLSE),                                       
+//             UNIT=SYSDA,                                                      
+//             DCB=(LRECL=125,RECFM=FB,BLKSIZE=0)                               
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//SASLIST   DD SYSOUT=X                                                         
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 LS=132 PS=60 NOCENTER;                     
+                                                                                
+DATA REPTDATE;                                                                  
+  REPTDATE = TODAY()-1;                                                         
+  PREVDATE=MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))-1;                             
+  RPTDT= PUT(REPTDATE, DDMMYY10.);                                              
+  CURMM = SUBSTR(RPTDT,4,2);                                                    
+  CURYY = SUBSTR(RPTDT,9,2);                                                    
+  RDATEX=TRIM(LEFT(CURMM)) || TRIM(LEFT(CURYY));                                
+  IF MONTH(REPTDATE)+1 = 13 THEN DO;                                            
+     MM = 1;                                                                    
+     YY = YEAR(REPTDATE)+1;                                                     
+  END;                                                                          
+  ELSE DO;                                                                      
+     MM = MONTH(REPTDATE)+1;                                                    
+     YY = YEAR(REPTDATE);                                                       
+  END;                                                                          
+  SDATE = MDY(MM,1,YY);                                                         
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                 
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                              
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                                
+  CALL SYMPUT('PREVMON',PUT(MONTH(PREVDATE),Z2.));                              
+  CALL SYMPUT('PREVDAY',PUT(DAY(PREVDATE),Z2.));                                
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                                  
+  CALL SYMPUT('RDATEX',PUT(RDATEX,$4.));                                        
+  CALL SYMPUT('SDATE',PUT(SDATE,Z5.));                                          
+RUN;                                                                            
+                                                                                
+%GLOBAL REPTMON REPTDAY PREVMON PREVDAY;                                        
+                                                                                
+%INC PGM(PBBBTFMT,PBBELF);                                                      
+                                                                                
+DATA BTDTL(KEEP=BRANCH ACCTNO TRANSREF OUTSTAND                                 
+           MATDATE FACILITY);                                                   
+   INFILE BTFILE FIRSTOBS=2;                                                    
+   INPUT @002 BRANCH      4.                                                    
+         @006 ACCTNO    $10.                                                    
+         @016 TRANSREF   $7.                                                    
+         @023 OUTSTAND   15.2                                                   
+         @038 MATDT       $6.                                                   
+         @043 LIABCODE   $3.                                                    
+         ;                                                                      
+   FACILITY=PUT(LIABCODE,$LIAB.);                                               
+   MATDATE = MDY(SUBSTR(MATDT,3,2),SUBSTR(MATDT,5,2),                           
+                 SUBSTR(MATDT,1,2));                                            
+   IF  BRANCH > 3000 AND (2850000000<=ACCTNO<=2859999999) THEN OUTPUT;          
+RUN;                                                                            
+                                                                                
+DATA BASE(KEEP=ACCTNO TRANSREF OUTSTAND PRODTYPE                                
+          RENAME=(OUTSTAND=PREOUTSTD));                                         
+   SET BASE.IBTBASE&PREVMON;                                                    
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=BASE NODUPKEY;BY ACCTNO TRANSREF;RUN;                            
+PROC SORT DATA=BTDTL NODUPKEY;BY ACCTNO TRANSREF;RUN;                           
+                                                                                
+DATA COMBT;                                                                     
+   FORMAT OVERDUE 10. RECOVAMT 17.2 RETAILID $1.;                               
+   MERGE BASE(IN=A) BTDTL(IN=B);BY ACCTNO TRANSREF;                             
+   IF A;                                                                        
+   OVERDUE = (&SDATE+1)-MATDATE;                                                
+   RECOVAMT = PREOUTSTD-OUTSTAND;                                               
+   IF PRODTYPE = 000 THEN RETAILID='R';                                         
+RUN;                                                                            
+                                                                                
+DATA _NULL_;                                                                    
+   SET COMBT;                                                                   
+   FILE DAYBTRD;                                                                
+   PUT @001 BRANCH      5.                                                      
+       @007 ACCTNO     10.                                                      
+       @018 TRANSREF   10.                                                      
+       @029 PRODTYPE   Z3.                                                      
+       @033 PREOUTSTD  17.2                                                     
+       @051 OUTSTAND   17.2                                                     
+       @069 OVERDUE    10.                                                      
+       @080 RECOVAMT   17.2                                                     
+       @098 FACILITY   $5.                                                      
+       ;                                                                        
+RUN;                                                                            
+//*----------------------------------------------------------------             
+//* FTP TO SAS CCRIS SERVER                                                     
+//*----------------------------------------------------------------             
+//RUNSFTP  EXEC COZBATCH,COZPARM='PARM#CER'                                     
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(COZD2CCR)                         
+//           DD *                                                               
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text                       
+lzopts linerule=$lr                                                             
+cd /ftp                                                                         
+cd Download                                                                     
+put //SAP.PIBB.CCRIS2.DAYBTRD.PM12   MNIDAILY_BT_PIBB                           
+EOB                                                                             
