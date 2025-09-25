@@ -196,3 +196,23 @@ pq.write_table(cisrl_final, parquet_path)
 with open(csv_path, "wb") as f:
     pcsv.write_csv(cisrl_final, f)
 
+
+CUSTNO1: string
+INDORG1: string
+CODE1: string
+DESC1: string
+CUSTNO2: string
+INDORG2: string
+CODE2: string
+DESC2: string
+EXPDATE: date32[day]
+CUSTNAME1: string
+ALIAS1: string
+CUSTNAME2: string
+ALIAS2: string
+OLDIC1: string
+BASICGRPCODE1: string
+OLDIC2: string
+BASICGRPCODE2: string
+EFFDATE: int64
+rn: int64
