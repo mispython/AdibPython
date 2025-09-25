@@ -1,0 +1,74 @@
+//EIBDADDR JOB MISEIS,EIBWCCR3,MSGCLASS=X,MSGLEVEL=(1,1),CLASS=A,
+//         REGION=64M,NOTIFY=&SYSUID
+//************************************************************
+//**
+//**    GENERATE CIS LATEST ADDRESS INFO
+//**
+//************************************************************
+//DELETE  EXEC PGM=IEFBR14
+//DEL01    DD DSN=SAP.PBB.CISLADDR,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(0))
+//DEL02    DD DSN=SAP.PBB.CISLADDR.CILAFTP,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(0))
+//*
+//CREATE   EXEC PGM=IEFBR14
+//CRT01    DD DSN=SAP.PBB.CISLADDR.CILAFTP,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)
+//*
+//SAS609  EXEC SAS609
+//ADDRFL   DD DSN=RBP2.B033.CIS.CUST.DAILY.ADDRESS,DISP=SHR
+//SRSDATA  DD DSN=RBP2.B033.SRSCTRL1(0),DISP=SHR
+//LADDR    DD DSN=SAP.PBB.CISLADDR,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(300,200),RLSE),UNIT=SYSDA
+//SYSIN    DD *
+
+OPTIONS YEARCUTOFF=1950 NOCENTER;
+
+DATA REPTDATE;
+   INFILE SRSDATA LRECL=80 OBS=1;
+   INPUT @01 TBDATE $8.;
+   REPTDATE = INPUT(TBDATE,YYMMDD8.);
+   CALL SYMPUT('RDATE',REPTDATE);
+   CALL SYMPUT('RPTDT',PUT(REPTDATE,YYMMDDN8.));
+RUN;
+PROC PRINT; RUN;
+
+DATA CISLADDR;
+   INFILE ADDRFL MISSOVER;
+   INPUT @001  CUSTNO            $11.
+         @013  ADDREF            11.
+         @024  LINE1IND          $1.
+         @025  LINE1ADR          $40.
+         @065  LINE2IND          $1.
+         @066  LINE2ADR          $40.
+         @106  LINE3IND          $1.
+         @107  LINE3ADR          $40.
+         @147  LINE4IND          $1.
+         @148  LINE4ADR          $40.
+         @188  LINE5IND          $1.
+         @189  LINE5ADR          $40.
+         @229  STREET            $15.
+         @244  CITY              $25.
+         @269  STATEX            $3.
+         @272  STATEID           $2.
+         @274  ZIP               $5.
+         @279  ZIP2              $4.
+         @283  COUNTRY           $10.
+         ;
+RUN;
+
+DATA LADDR.CISLADDR_&RPTDT;
+   SET CISLADDR;
+RUN;
+PROC SORT NODUP; BY _ALL_; RUN;
+
+FILENAME TRANFILE 'SAP.PBB.CISLADDR.CILAFTP' DISP=OLD;
+PROC CPORT LIBRARY=LADDR FILE=TRANFILE;
+RUN;
+
