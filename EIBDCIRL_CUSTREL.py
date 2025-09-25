@@ -109,17 +109,17 @@ RDATE = batch_date.strftime("%Y-%m-%d")
 RPTDT = batch_date.strftime("%Y%m%d")
 print("Reporting Date:", RDATE, "Report Tag:", RPTDT)
 
-# --- Step 2: Read CCRL.parquet ---
+# --- Step 2: Read CCRL.parquet with proper aliases ---
 duckdb.sql("""
-    CREATE TABLE cisrl AS
+    CREATE TABLE cisrl_base AS
     SELECT 
         custno1::BIGINT AS custno,
         indorg1,
-        code1 AS relatcd1,
+        code1,              -- keep raw for business IC logic
         desc1,
         custno2::BIGINT AS custno2,
         indorg2,
-        code2 AS relatcd2,
+        code2,
         desc2,
         expdate,
         custname1,
@@ -143,7 +143,7 @@ duckdb.sql("""
         CASE WHEN code1 <> 'IC' THEN alias1 ELSE NULL END AS bussreg1,
         CASE WHEN code2 <> 'IC' THEN code2 ELSE NULL END AS bussind2,
         CASE WHEN code2 <> 'IC' THEN alias2 ELSE NULL END AS bussreg2
-    FROM cisrl
+    FROM cisrl_base
 """)
 
 # --- Step 4: Read CISNAME.parquet ---
@@ -178,16 +178,3 @@ pq.write_table(cisrl_final, parquet_path)
 pc.write_csv(cisrl_final, csv_path)
 
 print(f"Output saved to {parquet_path} and {csv_path}")
-
-
-
-
-
-
-
-
-duckdb.sql("""
-duckdb.duckdb.BinderException: Binder Error: Referenced column "code1" not found in FROM clause!
-Candidate bindings: "relatcd1"
-
-LINE 4:         CASE WHEN code1 <> 'IC' THEN code1 ELSE NULL END AS bussind1,
