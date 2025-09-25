@@ -178,18 +178,3 @@ pq.write_table(cisrl_final, parquet_path)
 pc.write_csv(cisrl_final, csv_path)
 
 print(f"Output saved to {parquet_path} and {csv_path}")
-
-
-
-
-
-CUSTNO: int64
-CUSTNAME: string
-ADREFNO: int64
-PRIPHONE: double
-SECPHONE: double
-CUSTTYPE: string
-CUSTNAME1: string
-MOBILEPHONE: double
--- schema metadata --
-pandas: '{"index_columns": [], "column_indexes": [], "columns": [{"name":' + 1002
