@@ -178,3 +178,16 @@ pq.write_table(cisrl_final, parquet_path)
 pc.write_csv(cisrl_final, csv_path)
 
 print(f"Output saved to {parquet_path} and {csv_path}")
+
+
+
+
+
+
+
+
+duckdb.sql("""
+duckdb.duckdb.BinderException: Binder Error: Referenced column "code1" not found in FROM clause!
+Candidate bindings: "relatcd1"
+
+LINE 4:         CASE WHEN code1 <> 'IC' THEN code1 ELSE NULL END AS bussind1,
