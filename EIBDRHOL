@@ -1,0 +1,81 @@
+//EIBDRHOL JOB MISEIS,EIBWCCR3,MSGCLASS=X,MSGLEVEL=(1,1),CLASS=A,               
+//         REGION=64M,NOTIFY=&SYSUID                                            
+//************************************************************                  
+//**                                                                            
+//**    GENERATE CIS BLACKLIST CUSTOMER DETAILS (RHOLD)                         
+//**                                                                            
+//************************************************************                  
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01    DD DSN=SAP.PBB.CISRHOLD,                                             
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//DEL02    DD DSN=SAP.PBB.CISRHOLD.CIRHFTP,                                     
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//*                                                                             
+//CREATE   EXEC PGM=IEFBR14                                                     
+//CRT01    DD DSN=SAP.PBB.CISRHOLD.CIRHFTP,                                     
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),                            
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)                         
+//*                                                                             
+//SAS609  EXEC SAS609                                                           
+//CISRHOL  DD DSN=RBP2.B033.RHOLD.FULL.LIST.PIVB,DISP=SHR                       
+//SRSDATA  DD DSN=RBP2.B033.SRSCTRL1(0),DISP=SHR                                
+//CISRH    DD DSN=SAP.PBB.CISRHOLD,                                             
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(20,10),RLSE),UNIT=SYSDA                               
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS YEARCUTOFF=1950 NOCENTER;                                               
+                                                                                
+DATA REPTDATE;                                                                  
+   INFILE SRSDATA LRECL=80 OBS=1;                                               
+   INPUT @01 TBDATE $8.;                                                        
+   REPTDATE = INPUT(TBDATE,YYMMDD8.);                                           
+   CALL SYMPUT('RDATE',REPTDATE);                                               
+   CALL SYMPUT('RPTDT',PUT(REPTDATE,YYMMDDN8.));                                
+RUN;                                                                            
+PROC PRINT; RUN;                                                                
+                                                                                
+DATA CISRHOLD;                                                                  
+   INFILE CISRHOL MISSOVER;                                                     
+   INPUT                                                                        
+     /*  @001     CLASS_CODE             $10.                                   
+         @011     CLASS_DESC             $150.                                  
+         @161     NATURE_CODE            $10.                                   
+         @171     NATURE_DESC            $150.                                  
+         @321     DEPT_CODE              $10.                                   
+         @331     DEPT_DESC              $150.                                  
+         @481     GUIDE_CODE             $10.                                   
+         @491     CLASS_ID               $10.  */                               
+         @501     INDORG                 $01.                                   
+         @505     NAME                   $40.                                   
+         @545     ID1                    $20.                                   
+         @565     ID2                    $20.                                   
+     /*  @585     DTL_REMARK1            $40.                                   
+         @625     DTL_REMARK2            $40.                                   
+         @665     DTL_REMARK3            $40.                                   
+         @705     DTL_REMARK4            $40.                                   
+         @745     DTL_REMARK5            $40.                                   
+         @785     DTL_CRT_DATE           $10.                                   
+         @795     DTL_CRT_TIME           $08.                                   
+         @805     DTL_LASTOPERATOR       $08.                                   
+         @815     DTL_LASTMNT_DATE       $10.                                   
+         @825     DTL_LASTMNT_TIME       $08.  */                               
+         @835     CONTACT1               $50.                                   
+         @885     CONTACT2               $50.                                   
+         @935     CONTACT3               $50.                                   
+         ;                                                                      
+RUN;                                                                            
+PROC SORT NODUP; BY _ALL_; RUN;                                                 
+                                                                                
+DATA CISRH.CISRHOLD_&RPTDT;                                                     
+   SET CISRHOLD;                                                                
+RUN;                                                                            
+                                                                                
+FILENAME TRANFILE 'SAP.PBB.CISRHOLD.CIRHFTP' DISP=OLD;                          
+PROC CPORT LIBRARY=CISRH FILE=TRANFILE;                                         
+RUN;                                                                            
+                                                                                
