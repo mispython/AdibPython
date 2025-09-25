@@ -99,120 +99,82 @@ print("Output saved to:", out_path)
 
 import duckdb
 import pyarrow.parquet as pq
-import pyarrow.csv as pcsv
+import pyarrow.csv as pc
 import os
 import datetime
 
-# -----------------------------
-# Step 1. Reporting date from batch_date (yesterday)
-# -----------------------------
+# --- Step 1: Use batch date (yesterday) ---
 batch_date = datetime.date.today() - datetime.timedelta(days=1)
 RDATE = batch_date.strftime("%Y-%m-%d")
 RPTDT = batch_date.strftime("%Y%m%d")
 print("Reporting Date:", RDATE, "Report Tag:", RPTDT)
 
-# -----------------------------
-# Step 2. Read CCRL (already in Parquet format)
-# -----------------------------
+# --- Step 2: Read CCRL.parquet ---
 duckdb.sql("""
-    CREATE OR REPLACE TABLE cisrl AS
-    SELECT
-        custno,
+    CREATE TABLE cisrl AS
+    SELECT 
+        custno1::BIGINT AS custno,
         indorg1,
-        relatcd1,
+        code1 AS relatcd1,
         desc1,
-        custno2,
+        custno2::BIGINT AS custno2,
         indorg2,
-        relatcd2,
+        code2 AS relatcd2,
         desc2,
-        exp_raw,
+        expdate,
         custname1,
-        newicind1,
-        newic1,
+        alias1,
         custname2,
-        newicind2,
-        newic2,
+        alias2,
         oldic1,
-        bgc1,
+        basicgrpcode1 AS bgc1,
         oldic2,
-        bgc2
+        basicgrpcode2 AS bgc2,
+        effdate,
+        rn
     FROM read_parquet('CCRL.parquet')
 """)
 
-# Handle business IC fields like SAS logic
+# --- Step 3: Apply business IC logic ---
 duckdb.sql("""
-    CREATE OR REPLACE TABLE cisrl_clean AS
+    CREATE TABLE cisrl_clean AS
     SELECT *,
-        CASE WHEN newicind1 <> 'IC' THEN newicind1 END AS bussind1,
-        CASE WHEN newicind1 <> 'IC' THEN newic1 END    AS bussreg1,
-        CASE WHEN newicind2 <> 'IC' THEN newicind2 END AS bussind2,
-        CASE WHEN newicind2 <> 'IC' THEN newic2 END    AS bussreg2,
-        TRY_CAST(substr(exp_raw,1,4)||'-'||substr(exp_raw,5,2)||'-'||substr(exp_raw,7,2) AS DATE) AS expdte
+        CASE WHEN code1 <> 'IC' THEN code1 ELSE NULL END AS bussind1,
+        CASE WHEN code1 <> 'IC' THEN alias1 ELSE NULL END AS bussreg1,
+        CASE WHEN code2 <> 'IC' THEN code2 ELSE NULL END AS bussind2,
+        CASE WHEN code2 <> 'IC' THEN alias2 ELSE NULL END AS bussreg2
     FROM cisrl
 """)
 
-# -----------------------------
-# Step 3. Read CISNAME (Parquet)
-# -----------------------------
+# --- Step 4: Read CISNAME.parquet ---
 duckdb.sql("""
-    CREATE OR REPLACE TABLE cisname AS
-    SELECT
-        custno,
-        nmelong
+    CREATE TABLE cisname AS
+    SELECT custno::BIGINT, nmelong
     FROM read_parquet('CISNAME.parquet')
 """)
 
-# -----------------------------
-# Step 4. Merge CISRL + CISNAME by custno
-# -----------------------------
+# --- Step 5: Merge ---
 duckdb.sql("""
-    CREATE OR REPLACE TABLE cisrl_merged AS
+    CREATE TABLE cisrl_merged AS
     SELECT r.*, n.nmelong
     FROM cisrl_clean r
     LEFT JOIN cisname n USING(custno)
 """)
 
-# -----------------------------
-# Step 5. Sort + Deduplicate
-# -----------------------------
+# --- Step 6: Deduplicate + Sort ---
 cisrl_final = duckdb.sql("""
     SELECT DISTINCT *
     FROM cisrl_merged
-    ORDER BY expdte DESC
+    ORDER BY expdate DESC
 """).arrow()
 
-# -----------------------------
-# Step 6. Save outputs
-# -----------------------------
+# --- Step 7: Save ---
 os.makedirs("output", exist_ok=True)
 
 parquet_path = f"output/CISRLCC_{RPTDT}.parquet"
 csv_path = f"output/CISRLCC_{RPTDT}.csv"
 
-# Save to Parquet
 pq.write_table(cisrl_final, parquet_path)
+pc.write_csv(cisrl_final, csv_path)
 
-# Save to CSV
-with open(csv_path, "wb") as f:
-    pcsv.write_csv(cisrl_final, f)
-
-
-CUSTNO1: string
-INDORG1: string
-CODE1: string
-DESC1: string
-CUSTNO2: string
-INDORG2: string
-CODE2: string
-DESC2: string
-EXPDATE: date32[day]
-CUSTNAME1: string
-ALIAS1: string
-CUSTNAME2: string
-ALIAS2: string
-OLDIC1: string
-BASICGRPCODE1: string
-OLDIC2: string
-BASICGRPCODE2: string
-EFFDATE: int64
-rn: int64
+print(f"Output saved to {parquet_path} and {csv_path}")
