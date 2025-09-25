@@ -1,0 +1,135 @@
+//EIBDCIRL JOB MISEIS,EIBWCCR3,MSGCLASS=X,MSGLEVEL=(1,1),CLASS=A,               
+//         REGION=64M,NOTIFY=&SYSUID                                            
+//************************************************************                  
+//**                                                                            
+//**    GENERATE CIS RELATIONSHIP DATASET                                       
+//**                                                                            
+//************************************************************                  
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01    DD DSN=SAP.PBB.CISRLCC,                                              
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//DEL02    DD DSN=SAP.PBB.CISRLCC.CIRLFTP,                                      
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//*                                                                             
+//CREATE   EXEC PGM=IEFBR14                                                     
+//CRT01    DD DSN=SAP.PBB.CISRLCC.CIRLFTP,                                      
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),                            
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)                         
+//*                                                                             
+//SAS609  EXEC SAS609                                                           
+//CCRL     DD DSN=RBP2.B033.CCRIS.CC.RLNSHIP,DISP=SHR                           
+//CISNAME  DD DSN=RBP2.B033.CCRIS.CISNAME.GDG(0),DISP=SHR                       
+//SRSDATA  DD DSN=RBP2.B033.SRSCTRL1(0),DISP=SHR                                
+//CISRL    DD DSN=SAP.PBB.CISRLCC,                                              
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(300,200),RLSE),UNIT=SYSDA                             
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS YEARCUTOFF=1950 NOCENTER;                                               
+                                                                                
+DATA REPTDATE;                                                                  
+   INFILE SRSDATA LRECL=80 OBS=1;                                               
+   INPUT @01 TBDATE $8.;                                                        
+   REPTDATE = INPUT(TBDATE,YYMMDD8.);                                           
+   CALL SYMPUT('RDATE',REPTDATE);                                               
+   CALL SYMPUT('RPTDT',PUT(REPTDATE,YYMMDDN8.));                                
+RUN;                                                                            
+PROC PRINT; RUN;                                                                
+                                                                                
+DATA CISRL;                                                                     
+   FORMAT CUSTNO             11.                                                
+          INDORG1            $1.                                                
+          RELATCD1           $3.                                                
+          DESC1             $15.                                                
+          CUSTNAME1         $40.                                                
+          OLDIC1             $9.                                                
+          NEWICIND1          $3.                                                
+          NEWIC1            $17.                                                
+          BUSSIND1           $3.                                                
+          BUSSREG1          $17.                                                
+          BGC1               $2.                                                
+          CUSTNO2            11.                                                
+          INDORG2            $1.                                                
+          RELATCD2           $3.                                                
+          DESC2             $15.                                                
+          CUSTNAME2         $40.                                                
+          OLDIC2             $9.                                                
+          NEWICIND2          $3.                                                
+          NEWIC2            $17.                                                
+          BUSSIND2           $3.                                                
+          BUSSREG2          $17.                                                
+          BGC2               $2.                                                
+          EXPDTE              8.                                                
+          EXPIRE             $8.                                                
+          EXPYEAR            $4.                                                
+          EXPCC              $2.                                                
+          EXPYY              $2.                                                
+          EXPMM              $2.                                                
+          EXPDD              $2.                                                
+          ;                                                                     
+   INFILE CCRL MISSOVER;                                                        
+   INPUT @001  CUSTNO             11.                                           
+         @015  INDORG1            $1.                                           
+         @020  RELATCD1           $3.                                           
+         @025  DESC1             $15.                                           
+         @040  CUSTNO2            11.                                           
+         @055  INDORG2            $1.                                           
+         @060  RELATCD2           $3.                                           
+         @065  DESC2             $15.                                           
+         @080  EXPDTE        YYMMDD8.                                           
+         @080  EXPIRE             $8.                                           
+         @080  EXPYEAR            $4.                                           
+         @080  EXPCC              $2.                                           
+         @082  EXPYY              $2.                                           
+         @084  EXPMM              $2.                                           
+         @086  EXPDD              $2.                                           
+         @095  CUSTNAME1         $40.                                           
+         @135  NEWICIND1          $3.                                           
+         @138  NEWIC1            $17.                                           
+         @155  CUSTNAME2         $40.                                           
+         @195  NEWICIND2          $3.                                           
+         @198  NEWIC2            $17.                                           
+         @215  OLDIC1             $9.                                           
+         @226  BGC1               $2.                                           
+         @228  OLDIC2             $9.                                           
+         @239  BGC2               $2.                                           
+         ;                                                                      
+    IF NEWICIND1 NE 'IC' THEN DO;                                               
+       BUSSIND1 = NEWICIND1;                                                    
+       BUSSREG1 = NEWIC1;                                                       
+    END;                                                                        
+    IF NEWICIND2 NE 'IC' THEN DO;                                               
+       BUSSIND2 = NEWICIND2;                                                    
+       BUSSREG2 = NEWIC2;                                                       
+    END;                                                                        
+RUN;                                                                            
+PROC SORT DATA=CISRL; BY CUSTNO; RUN;                                           
+                                                                                
+DATA CISNAME;                                                                   
+  INFILE CISNAME MISSOVER;                                                      
+  INPUT @001 CUSTNO    11.                                                      
+        @137 NMELONG  $150.                                                     
+  ;                                                                             
+RUN;                                                                            
+PROC SORT DATA=CISNAME; BY CUSTNO; RUN;                                         
+                                                                                
+DATA CISRL;                                                                     
+     MERGE CISRL(IN=A) CISNAME;                                                 
+     BY CUSTNO;                                                                 
+     IF A;                                                                      
+RUN;                                                                            
+                                                                                
+DATA CISRL.CISRLCC_&RPTDT;                                                      
+   SET CISRL;                                                                   
+RUN;                                                                            
+PROC SORT; BY DESCENDING EXPDTE; RUN;                                           
+PROC SORT NODUPKEY; BY CUSTNO CUSTNO2 RELATCD1 RELATCD2; RUN;                   
+                                                                                
+FILENAME TRANFILE 'SAP.PBB.CISRLCC.CIRLFTP' DISP=OLD;                           
+PROC CPORT LIBRARY=CISRL FILE=TRANFILE;                                         
+RUN;                                                                            
+                                                                                
