@@ -1,0 +1,244 @@
+//EIBWCRCS JOB MIS,EIBECRCS,CLASS=A,NOTIFY=&SYSUID,MSGCLASS=X,          00010074
+//          USER=OPCC                                                   00020074
+//********************************************************************  00030046
+//*                                                                  *  00040046
+//*                                                                  *  00050046
+//********************************************************************  00060046
+/*JOBPARM S=S1M1                                                        00070075
+//DELETE  EXEC PGM=IEFBR14                                              00080046
+//DEL01    DD DSN=SAP.PBB.CRM.UNICRFTP,                                 00090074
+//            DISP=(MOD,DELETE,DELETE),                                 00100046
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),                    00110011
+//            SPACE=(CYL,(10,10),RLSE),UNIT=(SYSDA,5)                   00120011
+//DEL02    DD DSN=SAP.PBB.CRM.CARD,                                     00130074
+//            DISP=(MOD,DELETE,DELETE),                                 00140011
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                 00150011
+//            SPACE=(CYL,(10,10),RLSE),UNIT=(SYSDA,5)                   00151011
+//*                                                                     00152011
+//CREATE  EXEC PGM=IEFBR14                                              00153011
+//CRT01    DD DSN=SAP.PBB.CRM.UNICRFTP,                                 00154074
+//            DISP=(NEW,CATLG,DELETE),                                  00155011
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),                    00156011
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)                 00157013
+//*                                                                     00158011
+//EIBWCRCS EXEC SAS609,REGION=8M                                        00160072
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                             00161148
+//DEPOSIT   DD DSN=SAP.PBB.MNITB(0),DISP=SHR                            00163061
+//ACCTFILE  DD DSN=SAP.PBCS.ACCT33(0),DISP=SHR                          00163143
+//          DD DSN=SAP.PBCS.ACCT55(0),DISP=SHR                          00163243
+//CARDFILE  DD DSN=SAP.PBCS.CARD33(0),DISP=SHR                          00164043
+//          DD DSN=SAP.PBCS.CARD55(0),DISP=SHR                          00164143
+//CUSTFILE  DD DSN=SAP.PBCS.CUSTR33(0),DISP=SHR                         00164243
+//          DD DSN=SAP.PBCS.CUSTR55(0),DISP=SHR                         00164343
+//STMTFILE  DD DSN=ATP.CCD.EDWSTMT.PBB.OUTFILE(0),DISP=SHR              00164471
+//          DD DSN=ATP.CCD.EDWSTMT.PIBB.OUTFILE(0),DISP=SHR             00164571
+//CRM       DD DSN=SAP.PBB.CRM.CARD,DISP=(NEW,CATLG,DELETE),            00164674
+//          DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                   00164724
+//          SPACE=(CYL,(200,50),RLSE),UNIT=(SYSDA,8)                    00164824
+//SASLIST   DD SYSOUT=X                                                 00164825
+//SYSIN     DD *                                                        00164826
+                                                                        00169002
+OPTION NOCENTER NODATE NONUMBER;                                        00169003
+PROC FORMAT;                                                            00169110
+      VALUE  $CARDTYP  '455358' = 'VISA CLASSIC '                       00169210
+                       '455357' = 'VISA GOLD    '                       00169310
+                       '467950' = 'MU VISA CREDIT'                      00169320
+                       '467951' = 'MU VISA DEBIT'                       00169330
+                       '491253' = 'ESSO CLASSIC '                       00169410
+                       '491254' = 'ESSO GOLD    '                       00169510
+                       '455388' = 'VISA PLATINUM'                       00169610
+                       '447764' = 'VISA ELECTRON'                       00169710
+                       '542634' = 'PBB MSTR STD '                       00169810
+                       '547231' = 'PBB MSTR GOLD'                       00169910
+                       '543760' = 'PFB MSTR STD '                       00170010
+                       '540602' = 'PFB MSTR GOLD'                       00170110
+                       '520000' = 'PBB MSTR SMRT'                       00170210
+                       '467894' = 'ESSO MOBIL VISA CREDIT'                      
+                       '467893' = 'ESSO MOBIL VISA DEBIT'                       
+                       '559589' = 'PB WORLD MASTERCARD CREDIT CARD'             
+                       '537992' = 'PB MASTERCARD QUANTUM PLATINUM               
+                                   CREDIT CARD'                         00171013
+                       '493531' = 'PB VISA QUANTUM PLATINUM CREDIT              
+                                   CARD';                                       
+                                                                                
+DATA REPTDATE;                                                          00171113
+   SET DEPOSIT.REPTDATE;                                                00171213
+   SELECT(DAY(REPTDATE));                                               00172013
+   WHEN (8)  DO; SDD = 1;  WK = '01'; WK1 = '04'; END;                  00173044
+   WHEN(15)  DO; SDD = 9;  WK = '02'; WK1 = '01'; END;                  00174044
+   WHEN(22)  DO; SDD = 16; WK = '03'; WK1 = '02'; END;                  00175044
+     OTHERWISE DO; SDD = 23; WK = '04'; WK1 = '03'; END;                00176044
+   END;                                                                 00177013
+   MM = MONTH(REPTDATE);                                                00178013
+   IF WK = '01' THEN DO;                                                00179044
+      MM1 = MM - 1;                                                     00179113
+      IF MM1 = 0 THEN MM1 = 12;                                         00179213
+   END;                                                                 00179313
+   ELSE MM1 = MM;                                                       00179413
+   DAYS = DAY(REPTDATE);                                                00179513
+   MONTHS = MONTH(REPTDATE);                                            00179613
+   YEARS = YEAR(REPTDATE);                                              00179721
+   SDATE = MDY(MONTHS,DAYS,YEARS);                                      00179813
+   CALL SYMPUT('NOWK',PUT(WK,$2.));                                     00179944
+   CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                  00180113
+   CALL SYMPUT('REPTYR',PUT(REPTDATE,YEAR2.));                          00180221
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));                        00180338
+*;                                                                      00226013
+DATA ACCT;                                                              00261054
+   INFILE ACCTFILE;                                                     00263008
+   INPUT  @001 ACCTNO    11.                                            00264055
+          @018 APPRLIMT   6.                                            00264155
+          @164 ADDRES1  $30.                                            00265008
+          @194 ADDRES2  $30.                                            00265108
+          @224 ADDRES3  $30.                                            00265208
+          @254 ADDRES4  $30.                                            00265308
+          @284 ADDRES5  $30.                                            00265408
+          @314 BILLCYCL  $2.                                            00265555
+          @316 CLOSECD   $1.                                            00265666
+          @317 RECLASS   $1.                                            00265766
+      /*  @330 STATEINT  9.2 */                                         00265869
+          @339 STATSIGN  $1.                                            00265966
+          @340 CLASSCD    2.                                            00266066
+          @342 ACCTYPE   $2.                                            00266166
+          @344 POSTCODE  $5.                                            00266266
+          @379 BUSTELNO $12.                                            00266366
+          @391 HOMTELNO $12.                                            00266466
+          @403 BUCKET1  7.2                                             00266566
+          @410 BUCKET2  7.2                                             00266666
+          @417 BUCKET3  7.2                                             00266766
+          @424 BUCKET4  7.2                                             00266866
+          @431 BUCKET5  7.2                                             00266966
+          @438 BUCKET6  7.2                                             00267066
+          @445 CURBAL   9.2                                             00267166
+          @454 SIGN      $1.                                            00268014
+      /*  @455 NAME     $40.  */                                        00268128
+          @547 SOURCE   $10.                                                    
+          @557 MONITOR   $1.                                                    
+          @637 CITIZEN   $2.                                            00268250
+          @639 RESIDENT  $1.                                            00268350
+          @668 HPHONENO $12.                                            00268469
+          @747 OADDRES1 $30.                                            00268569
+          @777 OADDRES2 $30.                                            00268669
+          @807 OADDRES3 $30.                                            00268769
+          @837 OADDRES4 $30.                                            00268869
+          @867 OADDRES5 $30.                                            00268969
+          @900 MEGABNS    9.2;                                          00269069
+IF SIGN = '-' THEN CURBAL = (-1)*CURBAL;                                00269150
+IF STATSIGN = '-' THEN STATEINT = (-1)*STATEINT;                        00269256
+IF CITIZEN = 'MY' THEN RESIDENT = '1';                                  00269356
+IF BUCKET1>0 OR BUCKET2>0 OR BUCKET3>0 OR BUCKET4>0 OR BUCKET5>0 OR     00269456
+   BUCKET6>0 THEN OVRDUE = 'Y';                                         00269556
+ELSE OVRDUE = 'N';                                                      00269669
+DROP SIGN STATSIGN;                                                     00270056
+RUN;                                                                    00310008
+DATA CARD;                                                              00310108
+   INFILE CARDFILE;                                                     00310208
+   INPUT  @001 CUSTNBR  $12.                                            00310428
+          @013 ACCTNO    11.                                            00310508
+          @024 CARDHOLD   1.                                            00310608
+      /*  @027 APPRLIMT   6. */                                         00310708
+          @033 ACCTSTAT  $1.                                            00310808
+          @042 ISSUEDT   $6.  @;                                        00310954
+          IF ISSUEDT = '000000' THEN ISSUEDT = .;                       00311054
+       INPUT @048 CARDNO    $16.;                                       00311154
+   CARDTYPE = PUT(SUBSTR(CARDNO,1,6),$CARDTYP.);                        00311257
+   ISSDTE  = INPUT(SUBSTR(ISSUEDT,1,6),DDMMYY6.);                       00311357
+RUN;                                                                    00311548
+PROC SORT;                                                              00311748
+   BY CARDNO;                                                           00311848
+*;                                                                      00311948
+DATA CUST (KEEP=CUSTNBR CUSTREF CUSTNAME NEWIC OLDIC GENDER RACE MARITAL00312048
+                OPENDATE BIRTHDT AGE INCOME OCCUCOD OCCUPAT EMAILADR);  00312172
+   INFILE CUSTFILE;                                                     00312248
+   INPUT  @001 CUSTNBR  $12.                                            00312348
+          @013 CUSTREF  $12.                                            00312448
+          @025 CUSTNAME $40.                                            00312548
+          @071 BIRTHDAT  $7.                                            00312648
+          @078 GENDER    $1.                                            00312748
+          @079 RACE      $2.                                            00312848
+          @081 MARITAL   $1.                                            00312948
+          @082 INCOME     6.                                            00313048
+          @088 OCCUCOD   $5.                                            00313151
+          @095 OCCUPAT   $2.                                            00313351
+          @098 OPENDT    $6.                                            00313472
+          @209 EMAILADR  $30.;                                          00313572
+   IF CUSTNBR ^= '            ' THEN DO;                                00313651
+      IF SUBSTR(CUSTNBR,12,1)=' ' THEN DO;                              00313751
+         IF SUBSTR(CUSTNBR,1,1) IN ('A','H','K') THEN OLDIC = CUSTNBR;  00313851
+         ELSE IF SUBSTR(CUSTNBR,1,1) = 'T' THEN NEWIC = CUSTNBR;        00313951
+         ELSE DO;                                                       00314051
+            IF RACE > 59 THEN NEWIC = CUSTNBR;                          00314151
+            ELSE OLDIC = CUSTNBR;                                       00314251
+         END;                                                           00314351
+      END;                                                              00314451
+      ELSE NEWIC = CUSTNBR;                                             00314551
+   END;                                                                 00314651
+   IF CUSTREF ^= '            ' THEN DO;                                00314751
+      IF SUBSTR(CUSTREF,12,1) ^= ' ' THEN NEWIC = CUSTREF;              00314851
+      ELSE OLDIC = CUSTREF;                                             00314951
+   END;                                                                 00315051
+   IF BIRTHDAT NE ' ' THEN DO;                                          00315151
+      YR = SUBSTR(BIRTHDAT,6,2);                                        00315251
+      IF YR < 20 THEN BIRTHDT = YR + 2000;                              00315351
+      ELSE BIRTHDT = YR + 1900;                                         00315451
+      AGE = &REPTYEAR - BIRTHDT;                                        00315551
+   END;                                                                 00315651
+   OPENDATE = INPUT(OPENDT,DDMMYY6.);                                   00315751
+   RUN;                                                                 00315851
+RUN;                                                                    00315951
+                                                                        00316037
+PROC SORT DATA=CUST NODUPKEYS; BY CUSTNBR;                              00316736
+*;                                                                      00316828
+PROC SORT DATA=CARD; BY CUSTNBR;                                        00316928
+*;                                                                      00317028
+DATA CARDCUST;                                                          00317128
+   MERGE CARD(IN=A) CUST;                                               00317228
+   BY CUSTNBR;                                                          00317328
+   IF A;                                                                00317428
+RUN;                                                                    00317528
+PROC SORT DATA=ACCT; BY ACCTNO;                                         00317628
+PROC SORT DATA=CARDCUST; BY ACCTNO;                                     00317731
+*;                                                                      00317828
+DATA UNICARD;                                                           00317928
+   MERGE CARDCUST(IN=A) ACCT;                                           00318030
+   BY ACCTNO;                                                           00318128
+   IF A;                                                                00318228
+RUN;                                                                    00318328
+                                                                        00318470
+DATA STMT;                                                              00318570
+   INFILE STMTFILE;                                                     00318670
+   INPUT  @001 CARDNO   $16.                                            00318770
+          @079 INTEREST   7.2;                                          00318870
+RUN;                                                                    00318970
+                                                                        00319070
+PROC SORT DATA=UNICARD; BY CARDNO;                                      00319170
+PROC SORT DATA=STMT; BY CARDNO;                                         00319270
+*;                                                                      00319370
+DATA UNICARD;                                                           00319470
+   MERGE UNICARD(IN=A) STMT;                                            00319570
+   BY CARDNO;                                                           00319670
+   IF A;                                                                00319770
+RUN;                                                                    00319870
+                                                                        00319970
+PROC SORT DATA=UNICARD; BY ACCTNO;                                      00320070
+                                                                        00320170
+DATA CRM.UNICARD&REPTYR&REPTMON&NOWK (KEEP=CUSTNBR ACCTNO CARDHOLD      00320270
+     CARDNO APPRLIMT ADDRES1 ADDRES2 ADDRES3 ADDRES4 ADDRES5 POSTCODE   00320370
+     HOMTELNO CURBAL CITIZEN MEGABNS CUSTNAME GENDER RACE MARITAL       00320470
+     OPENDATE ACCTYPE OLDIC NEWIC RESIDENT OADDRES1 OADDRES2 OADDRES3   00320570
+     OADDRES4 OADDRES5 AGE CARDTYPE BILLCYCL INTEREST CARDTYPE BUSTELNO 00320670
+     BUCKET1 BUCKET2 BUCKET3 BUCKET4 BUCKET4 BUCKET5 BUCKET6 HPHONENO   00320770
+     INCOME OCCUCOD CLASSCD OCCUPAT OVRDUE RECLASS CLOSECD ACCTSTAT     00320870
+     ISSDTE EMAILADR MONITOR SOURCE);                                   00320972
+   SET UNICARD;                                                         00321070
+RUN;  /*                                                                00321144
+DATA CRM.UNICARDR1&REPTYR&REPTMON&NOWK(KEEP=ACCTNO NAME);               00321228
+   SET UNICARD;                                                         00321328
+RUN;  */                                                                00321444
+PROC PRINT DATA=CRM.UNICARD&REPTYR&REPTMON&NOWK (OBS=1000);             00321565
+RUN;                                                                    00321628
+FILENAME TRANFILE 'SAP.PBB.CRM.UNICRFTP' DISP=OLD;                      00321774
+PROC CPORT LIBRARY=CRM FILE=TRANFILE;                                   00321848
+RUN;                                                                    00321928
+/*                                                                      00322028
+//                                                                      00330027
