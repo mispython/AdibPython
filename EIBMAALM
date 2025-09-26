@@ -1,0 +1,162 @@
+//EIBMAALM JOB MISEIS,EIBMAALM,CLASS=A,MSGCLASS=X,MSGLEVEL=(1,1),               
+//         NOTIFY=&SYSUID                                                       
+//*--------------------------------------------------------------               
+//* ESMR 2012-2160                                                              
+//* PROGCWK                                                                     
+//* IMPLEMENTED ON 06 MAR 2013                                                  
+//*--------------------------------------------------------------               
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01   DD DSN=SAP.PBB.ELNLMT,                                                
+//           DISP=(MOD,DELETE,DELETE),                                          
+//           UNIT=SYSDA,SPACE=(CYL,0)                                           
+//DEL02   DD DSN=SAP.PBB.ELNLMT.DS,                                             
+//           DISP=(MOD,DELETE,DELETE),                                          
+//           UNIT=SYSDA,SPACE=(CYL,0)                                           
+//*                                                                             
+//EIBMAALM EXEC SAS609,REGION=32M,WORK='6000,6000'                              
+//LIMIT    DD DSN=SAP.PBB.MNILIMT(0),DISP=SHR                                   
+//LMTDET   DD DSN=SAP.PBB.DPDET(0),DISP=SHR                                     
+//ELDSRV   DD DSN=SAP.ELDS.AAAPP.BACKDATE(0),DISP=SHR                           
+//ELNLMT   DD DSN=SAP.PBB.ELNLMT,                                               
+//            DISP=(MOD,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=400,BLKSIZE=28800),                           
+//            SPACE=(CYL,(5,2)),UNIT=SYSDA                                      
+//ELNDS    DD DSN=SAP.PBB.ELNLMT.DS,                                            
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(800,400),RLSE),UNIT=(SYSDA,8)                         
+                                                                                
+OPTIONS YEARCUTOFF=1950 MISSING=0;                                              
+*;                                                                              
+DATA REPTDATE;                                                                  
+   SET LIMIT.REPTDATE;                                                          
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                             
+RUN;                                                                            
+*;                                                                              
+DATA LM;                                                                        
+   FORMAT STDT ENDDT $8.;                                                       
+   SET LIMIT.OVERDFT;                                                           
+   WHERE LMTAMT > 1 AND APPRLIMT > 1;                                           
+                                                                                
+   IF LMTINDEX IN (1,30) THEN DO;                                               
+      IF LMTRATE >= LMTBASER THEN TYPRIC = 41;                                  
+      ELSE TYPRIC = 42;                                                         
+   END;                                                                         
+   ELSE IF LMTINDEX IN (3,4,5,12,13,18,19,22,27)                                
+      THEN TYPRIC = 81;                                                         
+   ELSE TYPRIC = 59;                                                            
+                                                                                
+   STDT8=INPUT(SUBSTR(PUT(LMTSTART, Z11.), 1,8), MMDDYY8.);                     
+   STDTDD=PUT(DAY(STDT8),Z2.);                                                  
+   STDTMM=PUT(MONTH(STDT8),Z2.);                                                
+   STDTYY=PUT(STDT8,YEAR4.);                                                    
+                                                                                
+   ENDDT8=INPUT(SUBSTR(PUT(LMTENDDT, Z11.), 1,8), MMDDYY8.);                    
+   ENDDTDD=PUT(DAY(ENDDT8),Z2.);                                                
+   ENDDTMM=PUT(MONTH(ENDDT8),Z2.);                                              
+   ENDDTYY=PUT(ENDDT8,YEAR4.);                                                  
+                                                                                
+   STDT=(STDTYY||STDTMM||STDTDD);                                               
+   ENDDT=(ENDDTYY||ENDDTMM||ENDDTDD);                                           
+                                                                                
+   KEEP ACCTNO BRANCH LMTID LMTDESC LMTAMT LMTRATE                              
+        LMTINCR LMTCOLL LMTINDEX LMTBASER TYPRIC STDT ENDDT;                    
+RUN;                                                                            
+PROC SORT DATA=LM;BY ACCTNO LMTDESC;RUN;                                        
+*;                                                                              
+DATA LMTDET;                                                                    
+   FORMAT DT STDT ENDDT LSTDT $8.;                                              
+   SET LMTDET.LMTDET;                                                           
+   LMTDESC=AANO;                                                                
+   DT8=INPUT(SUBSTR(PUT(APRVDT, Z11.), 1,8), MMDDYY8.);                         
+   DTDD=PUT(DAY(DT8),Z2.);                                                      
+   DTMM=PUT(MONTH(DT8),Z2.);                                                    
+   DTYY=PUT(DT8,YEAR4.);                                                        
+                                                                                
+   LSTDT8=INPUT(SUBSTR(PUT(LASTMNTDT, Z11.), 1,8), MMDDYY8.);                   
+   LSTDTDD=PUT(DAY(LSTDT8),Z2.);                                                
+   LSTDTMM=PUT(MONTH(LSTDT8),Z2.);                                              
+   LSTDTYY=PUT(LSTDT8,YEAR4.);                                                  
+                                                                                
+   DT=(DTYY||DTMM||DTDD);                                                       
+   LSTDT=(ENDDTYY||ENDDTMM||ENDDTDD);                                           
+                                                                                
+   KEEP ACCTNO LMTDESC DT LSTDT                                                 
+        COLL1 COLL2 COLL3 COLL4 COLL5                                           
+        COLL6 COLL7 COLL8 COLL9 COLL10;                                         
+RUN;                                                                            
+PROC SORT DATA=LMTDET;BY ACCTNO LMTDESC;RUN;                                    
+*;                                                                              
+DATA LM_DET;                                                                    
+   MERGE LM(IN=A) LMTDET(IN=B);                                                 
+   BY ACCTNO LMTDESC;                                                           
+   IF A;                                                                        
+RUN;                                                                            
+PROC SORT DATA=LM_DET;BY LMTDESC;RUN;                                           
+*;                                                                              
+DATA ELNEND;                                                                    
+   SET ELDSRV.ELNEND;                                                           
+   LMTDESC=MAANO;                                                               
+   KEEP LMTDESC CACCRSCK CACRSPB CADCHQCK CADCHEQS GEAR CALGLACT;               
+RUN;                                                                            
+PROC SORT DATA=ELNEND;BY LMTDESC;RUN;                                           
+*;                                                                              
+DATA LM_END;                                                                    
+   MERGE LM_DET(IN=A) ELNEND(IN=B);                                             
+   BY LMTDESC;                                                                  
+   IF A;                                                                        
+RUN;                                                                            
+*;                                                                              
+DATA ELNMAX;                                                                    
+   SET ELDSRV.ELNMAX;                                                           
+   WHERE AANO NE ' ';                                                           
+   LMTDESC=AANO;                                                                
+   KEEP LMTDESC PCODCRIS CRRSCORE;                                              
+RUN;                                                                            
+PROC SORT DATA=ELNMAX;BY LMTDESC;RUN;                                           
+*;                                                                              
+DATA LM_MAX;                                                                    
+   MERGE LM_END(IN=A) ELNMAX(IN=B);                                             
+   BY LMTDESC;                                                                  
+   IF A;                                                                        
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=LM_MAX OUT=ELNDS.LM_ALL;BY ACCTNO LMTID LMTDESC;RUN;             
+                                                                                
+DATA _NULL_;                                                                    
+   SET ELNDS.LM_ALL;                                                            
+   FILE ELNLMT;                                                                 
+   PUT @001 ACCTNO     10.                                                      
+       @012 BRANCH      4.                                                      
+       @017 LMTID       3.                                                      
+       @021 LMTDESC    $20.                                                     
+       @042 LMTAMT     11.                                                      
+       @054 LMTRATE    10.6                                                     
+       @065 LMTINCR    $1.                                                      
+       @067 LMTCOLL    $5.                                                      
+       @073 TYPRIC      2.                                                      
+       @076 DT         $8.                                                      
+       @085 STDT       $8.                                                      
+       @094 ENDDT      $8.                                                      
+       @103 LSTDT      $8.                                                      
+       @112 COLL1      11.                                                      
+       @124 COLL2      11.                                                      
+       @136 COLL3      11.                                                      
+       @148 COLL4      11.                                                      
+       @160 COLL5      11.                                                      
+       @172 COLL6      11.                                                      
+       @184 COLL7      11.                                                      
+       @196 COLL8      11.                                                      
+       @208 COLL9      11.                                                      
+       @220 COLL10     11.                                                      
+       @232 PCODCRIS   $4.                                                      
+       @237 CACCRSCK   $30.                                                     
+       @268 CACRSPB    $3.                                                      
+       @272 CADCHQCK   $30.                                                     
+       @303 CADCHEQS   $3.                                                      
+       @307 CALGLACT   $3.                                                      
+       @311 CRRSCORE   $3.                                                      
+       @315 GEAR       5.2                                                      
+       @321 LMTINDEX    3.                                                      
+       ;                                                                        
+RUN;                                                                            
