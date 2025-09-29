@@ -1,0 +1,42 @@
+//EICRMEOD JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M,NOTIFY=&SYSUID              
+//*--------------------------------------------------------------------         
+//* CRMS Date Control                                                           
+//*--------------------------------------------------------------------         
+//DELETE   EXEC PGM=IEFBR14                                                     
+//DD01     DD DSN=SAP.CRMS.DAY.CONTROL,                                         
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//DD02     DD DSN=SAP.CRMS.MONTH.CONTROL,                                       
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//DD03     DD DSN=SAP.ALLFL.MONTH.CONTROL,                                      
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//*                                                                             
+//EICRMEOD EXEC SAS609                                                          
+//DAYFL    DD DSN=SAP.CRMS.DAY.CONTROL,                                         
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(LRECL=80,BLKSIZE=0,RECFM=FB),                                
+//            SPACE=(CYL,(5,5),RLSE),UNIT=SYSDA                                 
+//MTHFL    DD DSN=SAP.CRMS.MONTH.CONTROL,                                       
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(LRECL=80,BLKSIZE=0,RECFM=FB),                                
+//            SPACE=(CYL,(5,5),RLSE),UNIT=SYSDA                                 
+//ALLFL    DD DSN=SAP.ALLFL.MONTH.CONTROL,                                      
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(LRECL=80,BLKSIZE=0,RECFM=FB),                                
+//            SPACE=(CYL,(5,5),RLSE),UNIT=SYSDA                                 
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS YEARCUTOFF=1950 NOCENTER COMPRESS=Y;                                    
+                                                                                
+DATA REPTDATE;                                                                  
+   REPTDATE = TODAY()-1;                                                        
+   PREVDATE = TODAY()-DAY(TODAY());                                             
+   FILE DAYFL;                                                                  
+      PUT @1 REPTDATE  YYMMDDN8.;                                               
+   FILE MTHFL;                                                                  
+      PUT @1 PREVDATE  YYMMDDN8.;                                               
+   FILE ALLFL;                                                                  
+      PUT @1 PREVDATE  MMYYN4.;                                                 
+RUN;                                                                            
