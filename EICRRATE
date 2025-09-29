@@ -1,0 +1,48 @@
+//EICRRATE JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M,NOTIFY=&SYSUID              
+//*--------------------------------------------------------------------         
+//* Index Rate (Daily)                                                          
+//*--------------------------------------------------------------------         
+//DELETE   EXEC PGM=IEFBR14                                                     
+//DD01     DD DSN=SAP.CRMS.RATE.INDEXFTP,                                       
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//*--------------------------------------------------------------------         
+//CREATE   EXEC PGM=IEFBR14                                                     
+//CRT01    DD DSN=SAP.CRMS.RATE.INDEXFTP,                                       
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=0),                                
+//            SPACE=(CYL,(10,10),RLSE),UNIT=SYSDA                               
+//*--------------------------------------------------------------------         
+//EICRRATE EXEC SAS609                                                          
+//RATEFILE DD DSN=RBP2.SAS.B033.RATEFILE,DISP=SHR                               
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS YEARCUTOFF=1960 NOCENTER COMPRESS=Y;                                    
+                                                                                
+DATA LNRATE;                                                                    
+   INFILE RATEFILE MISSOVER;                                                    
+   INPUT @001 RINDEX    PD2.                                                    
+         @014 EFFDATE   PD6.                                                    
+         @041 CURRATE   PD5.6                                                   
+         ;                                                                      
+   IF EFFDATE GT 0 THEN                                                         
+      EFFDATE = INPUT(SUBSTR(PUT(EFFDATE,Z11.),1,8),MMDDYY8.);                  
+   IF RINDEX = 1; *BLR;                                                         
+RUN;                                                                            
+PROC SORT DATA=LNRATE; BY RINDEX DESCENDING EFFDATE; RUN;                       
+                                                                                
+FILENAME TRANFILE 'SAP.CRMS.RATE.INDEXFTP' DISP=OLD;                            
+PROC CPORT LIBRARY=WORK FILE=TRANFILE; RUN;                                     
+                                                                                
+//*------------------------------------------------------                       
+//* FTP TO EDW                                                                  
+//*------------------------------------------------------                       
+//RUNSFTP  EXEC COZBATCH                                                        
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(EDW#SFTP)                         
+//           DD *                                                               
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=binary                     
+lzopts linerule=$lr                                                             
+cd /stgsrcsys/host/ftpfiles                                                     
+put //SAP.CRMS.RATE.INDEXFTP  RINDXFTP                                          
+EOB                                                                             
+/*                                                                              
