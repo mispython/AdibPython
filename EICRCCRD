@@ -1,0 +1,243 @@
+//EICRCCRD JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M                             
+//***********************************************************                   
+//* DELETE OUTPUT DATASETS                                                      
+//***********************************************************                   
+//DELETE   EXEC PGM=IEFBR14                                                     
+//DD1      DD DSN=SAP.PBB.CISBEXT.CARD.DAILY,                                   
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//*                                                                             
+//EICRCCRD EXEC SAS609                                                          
+//CISCARD  DD DSN=RBP2.B033.CCRIS.CISDEMO.CARD01(0),DISP=SHR                    
+//CISNAME  DD DSN=RBP2.B033.CCRIS.CISNAME.GDG(0),DISP=SHR                       
+//CISADDR  DD DSN=RBP2.B033.CCRIS.CISADDR.GDG(0),DISP=SHR                       
+//CISTAXID DD DSN=RBP2.B033.CCRIS.TAXID.GDG(0),DISP=SHR                         
+//CISBNMID DD DSN=RBP2.B033.UNLOAD.ALLALIAS.BNM,DISP=SHR                        
+//CISSSMID DD DSN=RBP2.B033.UNLOAD.ALLALIAS.SSM,DISP=SHR                        
+//CISRMRK  DD DSN=RBP2.B033.CCRIS.CISRMRK.EMAIL,DISP=SHR                        
+//CISSALE  DD DSN=RBP2.B033.CCRIS.CISRMRK.SALES,DISP=SHR                        
+//CISEMPL  DD DSN=RBP2.B033.CCRIS.CISRMRK.EMPLOYEE,DISP=SHR                     
+//CISLARGE DD DSN=RBP2.B033.CCRIS.CISRMRK.LARGECO,DISP=SHR                      
+//CISMMTOH DD DSN=RBP2.B033.CCRIS.CISRMRK.MMTOH,DISP=SHR                        
+//CIS      DD DSN=SAP.PBB.CISBEXT.CARD.DAILY,                                   
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)                         
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))                                 
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))                                 
+//SORTWK03 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))                                 
+//SYSIN    DD *                                                                 
+OPTIONS YEARCUTOFF=1950 COMPRESS=Y;                                             
+                                                                                
+DATA CISADDR;                                                                   
+  INFILE CISADDR MISSOVER;                                                      
+  INPUT @001 ADDREF   $11.                                                      
+        @012 ADDRLN1  $40.                                                      
+        @052 ADDRLN2  $40.                                                      
+        @092 ADDRLN3  $40.                                                      
+        @132 ADDRLN4  $40.                                                      
+        @172 ADDRLN5  $40.                                                      
+        @220 MAILCODE  $5.                                                      
+        @225 MAILSTAT  $2.                                                      
+        ;                                                                       
+*;                                                                              
+DATA CISNAME;                                                                   
+  INFILE CISNAME MISSOVER;                                                      
+  INPUT @001 CUSTNO    11.                                                      
+        @012 CUSTNAME $40.                                                      
+        @052 ADDREF   $11.                                                      
+        @063 PRIPHONE $11.                                                      
+        @074 SECPHONE $11.                                                      
+        @086 CUSTNAM1 $40.                                                      
+        @126 MOBIPHON $11.                                                      
+        @137 LONGNAME $150.                                                     
+        ;                                                                       
+*;                                                                              
+DATA CISTAXID;                                                                  
+  INFILE CISTAXID MISSOVER;                                                     
+  INPUT @001 CUSTNO    11.                                                      
+        @012 OLDIC    $20.                                                      
+        @032 NEWICIND  $3.                                                      
+        @035 NEWIC    $20.                                                      
+        @055 BUSSIND   $3.                                                      
+        @058 BUSSREG  $20.                                                      
+        @078 BRANCH     5.                                                      
+        @083 RHOLD_IND $1.                                                      
+        ;                                                                       
+*;                                                                              
+DATA CISCARD;                                                                   
+  INFILE CISCARD MISSOVER;                                                      
+  INPUT @238 ACCTNO         16.                                                 
+        @238 ACCTNO_CHAR   $20.                                                 
+        @233 APPLICATION_CD $5.                                                 
+        @012 INDORG      $1.                                                    
+        @013 CUSTNO      11.                                                    
+        @024 GENDER      $1.                                                    
+        @025 CACCCODE    $3.                                                    
+        @028 SECCUST     $3.                                                    
+        @031 CITIZEN     $2.                                                    
+        @033 OCCUPAT     $3.                                                    
+        @036 HOBBIES    $10.                                                    
+        @046 RELIGION   $10.                                                    
+        @056 EDUCATN     $3.                                                    
+        @059 INCOME      $3.                                                    
+        @062 MARITAL     $1.                                                    
+        @072 BIRTHDAT    $8.                                                    
+        @128 OPENDAT     $6.                                                    
+        @134 RACE        $1.                                                    
+        @135 CUSTCONSENT $1.                                                    
+        @137 BGC         $2.                                                    
+        @139 FILLER      $7.                                                    
+        @146 CONSENT_OLD $1.                                                    
+        @147 CISCUSTCD1  $3.                                                    
+        @150 CISCUSTCD2  $3.                                                    
+        @153 CISCUSTCD3  $3.                                                    
+        @156 CISCUSTCD4  $3.                                                    
+        @159 CISCUSTCD5  $3.                                                    
+        @162 CISCUSTCD6  $3.                                                    
+        @165 CISCUSTCD7  $3.                                                    
+        @168 CISCUSTCD8  $3.                                                    
+        @171 CISCUSTCD9  $3.                                                    
+        @174 CISCUSTCD10 $3.                                                    
+        @177 CISCUSTCD11 $3.                                                    
+        @180 CISCUSTCD12 $3.                                                    
+        @183 CISCUSTCD13 $3.                                                    
+        @186 CISCUSTCD14 $3.                                                    
+        @189 CISCUSTCD15 $3.                                                    
+        @192 CONSDD      $2.                                                    
+        @194 CONSMM      $2.                                                    
+        @196 CONSCC      $2.                                                    
+        @198 CONSYY      $2.                                                    
+        @200 SECTOR_CODE $5.                                                    
+        @205 INSTSECT    $3.                                                    
+        @215 RESTATUS    $3.                                                    
+        @218 SIC_ISS     $5.                                                    
+        @223 OCCUPAT_MASCO_CD $5.                                               
+        @228 CUST_CODE   $5.                                                    
+        @233 ACCTCODE    $5.                                                    
+        ;                                                                       
+        FORMAT ACCTNO BEST16.;                                                  
+        CONSENTEFFDT=MDY(CONSMM,CONSDD,CONSYY);                                 
+                                                                                
+        IF BGC    IN (.) THEN BGC    = '';                                      
+        IF FILLER IN (.) THEN FILLER = '';                                      
+        OUTPUT;                                                                 
+*;                                                                              
+PROC SORT DATA=CISCARD;                                                         
+   BY CUSTNO;                                                                   
+*;                                                                              
+DATA CISBNMID;                                                                  
+  INFILE CISBNMID MISSOVER;                                                     
+  INPUT @005 CUSTNO          11.                                                
+        @092 BNM_ASSIGN_ID  $20.                                                
+        ;                                                                       
+RUN;                                                                            
+PROC SORT NODUPKEY; BY CUSTNO; RUN;                                             
+                                                                                
+DATA CISSSMID;                                                                  
+  INFILE CISSSMID MISSOVER;                                                     
+  INPUT @005 CUSTNO                 11.                                         
+        @089 NEW_BUSS_REG_ID_TYPE  $3.                                          
+        @092 NEW_BUSS_REG_ID       $20.                                         
+        ;                                                                       
+RUN;                                                                            
+PROC SORT NODUPKEY; BY CUSTNO; RUN;                                             
+                                                                                
+DATA CISRMRK;                                                                   
+  INFILE CISRMRK MISSOVER;                                                      
+  INPUT @009 CUSTNO     11.                                                     
+        @052 EMAILADD  $60.;                                                    
+*;                                                                              
+PROC SORT DATA=CISRMRK NODUPKEY; BY CUSTNO;                                     
+*;                                                                              
+DATA CISSALE;                                                                   
+  INFILE CISSALE MISSOVER;                                                      
+  INPUT @009 CUSTNO               11.                                           
+        @030 UPD_DT_SALE     YYMMDD8.                                           
+        @052 TURNOVER2           $60.;                                          
+  TURNOVER = INPUT(TURNOVER2,32.);                                              
+*;                                                                              
+PROC SORT DATA=CISSALE NODUPKEY; BY CUSTNO;                                     
+*;                                                                              
+DATA CISEMPL;                                                                   
+  INFILE CISEMPL MISSOVER;                                                      
+  INPUT @009 CUSTNO               11.                                           
+        @030 UPD_DT_EMPLOYEE YYMMDD8.                                           
+        @052 NOEMPLO2            $60.;                                          
+  NOEMPLO = INPUT(NOEMPLO2,32.);                                                
+*;                                                                              
+PROC SORT DATA=CISEMPL NODUPKEY; BY CUSTNO;                                     
+*;                                                                              
+DATA CISLARGE;                                                                  
+  INFILE CISLARGE MISSOVER;                                                     
+  INPUT @009 CUSTNO           11.                                               
+        @044 LARGECO          $8.                                               
+        @052 LARGECO_IND      $3.;                                              
+  IF LARGECO = 'LARGECO' AND LARGECO_IND='YES'                                  
+     THEN LARGE_CORP_FLG = 'Y';                                                 
+*;                                                                              
+PROC SORT DATA=CISLARGE NODUPKEY; BY CUSTNO;                                    
+*;                                                                              
+DATA CISMMTOH;                                                                  
+  INFILE CISMMTOH MISSOVER;                                                     
+  INPUT @009 CUSTNO     11.                                                     
+        @044 MMTOH      $8. ;                                                   
+  IF MMTOH = 'MMTOH'                                                            
+    THEN MM2H_FLG = 'Y';                                                        
+*;                                                                              
+PROC SORT DATA=CISMMTOH NODUPKEY; BY CUSTNO;                                    
+*;                                                                              
+DATA CISCARD;                                                                   
+  MERGE CISCARD (IN=A) CISTAXID CISBNMID;                                       
+  BY CUSTNO;                                                                    
+  IF A   THEN OUTPUT;                                                           
+*;                                                                              
+PROC DATASETS LIB=WORK;                                                         
+DELETE CISTAXID;                                                                
+RUN;                                                                            
+*;                                                                              
+DATA CISCARD;                                                                   
+  MERGE CISCARD (IN=A) CISNAME; BY CUSTNO;                                      
+  IF A   THEN OUTPUT;                                                           
+*;                                                                              
+PROC DATASETS LIB=WORK;                                                         
+DELETE CISNAME;                                                                 
+RUN;                                                                            
+*;                                                                              
+DATA CISCARD;                                                                   
+  MERGE CISCARD (IN=A) CISRMRK CISSALE CISEMPL CISSSMID CISLARGE                
+  CISMMTOH; BY CUSTNO;                                                          
+  IF A   THEN OUTPUT;                                                           
+*;                                                                              
+PROC DATASETS LIB=WORK;                                                         
+DELETE CISRMRK CISSALE CISEMPL CISSSMID CISLARGE CISMMTOH;                      
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=CISCARD; BY ADDREF;                                              
+*;                                                                              
+DATA CIS.CARD;                                                                  
+  MERGE CISCARD (IN=A) CISADDR; BY ADDREF;                                      
+  IF A;                                                                         
+*;                                                                              
+PROC CONTENTS DATA=WORK._ALL_ NODS;                                             
+//***********************************************************                   
+//* WEEKLY OUTPUT DATASETS                                                      
+//***********************************************************                   
+//*%OPC SCAN                                                                    
+//*%OPC SETFORM OCDATE=(DD)                                                     
+//*%OPC SETFORM OCLASTC=(DD)                                                    
+//*%OPC BEGIN ACTION=INCLUDE,                                                   
+//*%OPC COMP=(&OCDATE..EQ.(08,15,22,&OCLASTC))                                  
+//DELETE   EXEC PGM=IEFBR14                                                     
+//DD1      DD DSN=SAP.PBB.CISBEXT.CARD,                                         
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//COPYFILE EXEC PGM=ICEGENER                                                    
+//SYSPRINT DD SYSOUT=*                                                          
+//SYSUT1   DD DISP=SHR,DSN=SAP.PBB.CISBEXT.CARD.DAILY                           
+//SYSUT2   DD DSN=SAP.PBB.CISBEXT.CARD,                                         
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)                         
+//SYSIN    DD DUMMY                                                             
+//*%OPC END ACTION=INCLUDE                                                      
