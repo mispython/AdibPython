@@ -12,8 +12,9 @@ import numpy as np
 # --- Connect to DuckDB (in-memory or file) ---
 con = duckdb.connect(database=":memory:")
 
-# --- Step 1: Load REPTDATE ---
-reptdate_tbl = con.execute("SELECT * FROM DPTRBL_REPTDATE").fetch_arrow_table()
+# --- Step 1: Load REPTDATE (from parquet) ---
+reptdate_tbl = ds.dataset("DPTRBL_REPTDATE.parquet").to_table()
+con.register("DPTRBL_REPTDATE", reptdate_tbl)
 reptdate = pl.from_arrow(reptdate_tbl)
 
 # Determine week (WK) bucket
@@ -46,7 +47,8 @@ REPTDAY  = f"{reptdate['REPTDATE'][0].day:02d}"
 NOWK     = reptdate["WK"][0]
 
 # --- Step 2: CIS data ---
-cis_tbl = con.execute("SELECT * FROM CIS_DEPOSIT").fetch_arrow_table()
+cis_tbl = ds.dataset("CIS_DEPOSIT.parquet").to_table()
+con.register("CIS_DEPOSIT", cis_tbl)
 cis = pl.from_arrow(cis_tbl)
 
 cis = cis.filter(cis["SECCUST"] == "901").with_columns([
@@ -66,25 +68,36 @@ cis = cis.unique(subset=["ACCTNO"])
 
 # --- Step 3: MONTHLY macro equivalent ---
 if NOWK != "4" and REPTMON == "01":
-    sa_tbl  = con.execute("SELECT *, 0 AS FEEYTD FROM DPTRBL_SAVING").fetch_arrow_table()
-    uma_tbl = con.execute("SELECT *, 0 AS FEEYTD FROM DPTRBL_UMA").fetch_arrow_table()
+    sa_tbl  = ds.dataset("DPTRBL_SAVING.parquet").to_table()
+    uma_tbl = ds.dataset("DPTRBL_UMA.parquet").to_table()
 else:
-    crmsa_tbl = con.execute(f"SELECT * FROM MNICRM_SA{REPTMON1}").fetch_arrow_table()
+    crmsa_tbl = ds.dataset(f"MNICRM_SA{REPTMON1}.parquet").to_table()
     crmsa_tbl = pl.from_arrow(crmsa_tbl).unique(subset=["ACCTNO"]).drop("COSTCTR", True).to_arrow()
 
-    sa_tbl = con.execute("SELECT * FROM DPTRBL_SAVING").fetch_arrow_table()
-    sa_tbl = con.execute("SELECT s.* FROM sa_tbl s INNER JOIN crmsa_tbl c ON s.ACCTNO = c.ACCTNO").fetch_arrow_table()
+    sa_tbl = ds.dataset("DPTRBL_SAVING.parquet").to_table()
+    con.register("sa_src", sa_tbl)
+    con.register("crmsa_src", crmsa_tbl)
+    sa_tbl = con.execute("""
+        SELECT s.* 
+        FROM sa_src s 
+        INNER JOIN crmsa_src c ON s.ACCTNO = c.ACCTNO
+    """).fetch_arrow_table()
 
-    crmuma_tbl = con.execute(f"SELECT * FROM MNICRM_UMA{REPTMON1}").fetch_arrow_table()
+    crmuma_tbl = ds.dataset(f"MNICRM_UMA{REPTMON1}.parquet").to_table()
     crmuma_tbl = pl.from_arrow(crmuma_tbl).unique(subset=["ACCTNO"]).drop("COSTCTR", True).to_arrow()
 
-    uma_tbl = con.execute("SELECT * FROM DPTRBL_UMA").fetch_arrow_table()
-    uma_tbl = con.execute("SELECT u.* FROM uma_tbl u INNER JOIN crmuma_tbl c ON u.ACCTNO = c.ACCTNO").fetch_arrow_table()
+    uma_tbl = ds.dataset("DPTRBL_UMA.parquet").to_table()
+    con.register("uma_src", uma_tbl)
+    con.register("crmuma_src", crmuma_tbl)
+    uma_tbl = con.execute("""
+        SELECT u.* 
+        FROM uma_src u 
+        INNER JOIN crmuma_src c ON u.ACCTNO = c.ACCTNO
+    """).fetch_arrow_table()
 
 # --- Step 4: Combine SA and UMA ---
 savg = pa.concat_tables([sa_tbl, uma_tbl])
 
-# Use Polars only for STATCD split + date parsing
 savg_pl = pl.from_arrow(savg)
 
 # Split STATCD into chars
@@ -113,8 +126,8 @@ savg_pl = savg_pl.with_columns([
 savg = savg_pl.to_arrow()
 
 # --- Step 5: Merge CIS + SAVG + SAACC + MISMTD ---
-saacc_tbl  = con.execute("SELECT * FROM SIGNA_SMSACC").fetch_arrow_table()
-mismtd_tbl = con.execute(f"SELECT * FROM MISMTD_SAVG{REPTMON}").fetch_arrow_table()
+saacc_tbl  = ds.dataset("SIGNA_SMSACC.parquet").to_table()
+mismtd_tbl = ds.dataset(f"MISMTD_SAVG{REPTMON}.parquet").to_table()
 
 con.register("cis_tbl", cis.to_arrow())
 con.register("savg_tbl", savg)
@@ -135,8 +148,19 @@ final_pl = pl.from_arrow(final_df).with_columns([
 ])
 
 # --- Save final dataset ---
-con.register("final_result", final_pl.to_arrow())
-con.execute(f"""
-    CREATE TABLE SAVING_SA{REPTYEAR}{REPTMON}{REPTDAY} AS 
-    SELECT * FROM final_result
-""")
+final_table = final_pl.to_arrow()
+out_parquet = f"SAVING_SA{REPTYEAR}{REPTMON}{REPTDAY}.parquet"
+out_csv     = f"SAVING_SA{REPTYEAR}{REPTMON}{REPTDAY}.csv"
+
+# Save Parquet
+pq_writer = pa.parquet.ParquetWriter(out_parquet, final_table.schema)
+pq_writer.write_table(final_table)
+pq_writer.close()
+
+# Save CSV via DuckDB
+con.register("final_result", final_table)
+con.execute(f"COPY final_result TO '{out_csv}' (HEADER, DELIMITER ',')")
+
+print("✅ Job completed successfully.")
+print(f"   - Parquet: {out_parquet}")
+print(f"   - CSV    : {out_csv}")
