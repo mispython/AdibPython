@@ -112,8 +112,23 @@ if 'ESIGNATURE' in fixed_fd.column_names:
     )
     fixed_fd = fixed_fd.set_column(fixed_fd.schema.get_field_index("ESIGNATURE"), "ESIGNATURE", esig)
 
-# Save final result (table name based on date parts)
-final_name = f"FIXED.FD{int(reptyear[0].as_py())}{int(reptmon[0].as_py()):02d}{int(reptday[0].as_py()):02d}"
-duckdb.register(final_name, fixed_fd)
+# ---------------------------------------------------------------
+# Save final result (Parquet + CSV)
+# ---------------------------------------------------------------
+final_name = f"FIXED_FD{int(reptyear[0].as_py())}{int(reptmon[0].as_py()):02d}{int(reptday[0].as_py()):02d}"
+out_parquet = f"{final_name}.parquet"
+out_csv = f"{final_name}.csv"
 
-print(f"✅ Job {final_name} created successfully.")
+# Register Arrow table in DuckDB
+duckdb.register("final_tbl", fixed_fd)
+
+# Save to Parquet
+duckdb.sql(f"COPY final_tbl TO '{out_parquet}' (FORMAT 'parquet')")
+
+# Save to CSV
+duckdb.sql(f"COPY final_tbl TO '{out_csv}' (HEADER, DELIMITER ',')")
+
+print("✅ Job completed successfully.")
+print(f"   - Parquet: {out_parquet}")
+print(f"   - CSV    : {out_csv}")
+
