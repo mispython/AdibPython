@@ -8,9 +8,11 @@ import duckdb
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.compute as pc
+import pyarrow.parquet as pq
+import os
 
 # ------------------------------------------------------------------
-# 1. Load base datasets (replace with actual paths / formats)
+# 1. Load base datasets (replace with actual paths)
 # ------------------------------------------------------------------
 cis_deposit = ds.dataset("CIS/DEPOSIT.parquet", format="parquet").to_table()
 dptrbl_reptdate = ds.dataset("DPTRBL/REPTDATE.parquet", format="parquet").to_table()
@@ -27,13 +29,16 @@ cis = cis_deposit.filter(
 ).select(["ACCTNO", "CITIZEN", "BIRTHDAT", "RACE", "CUSTNAM1"])
 
 # Derive DOB (replicating SAS substrings)
-# Note: ensure BIRTHDAT is string type YYYYMMDD
 dob_dd = pc.utf8_slice_codeunits(cis["BIRTHDAT"], 0, 2)
 dob_mm = pc.utf8_slice_codeunits(cis["BIRTHDAT"], 2, 2)
 dob_yy = pc.utf8_slice_codeunits(cis["BIRTHDAT"], 4, 4)
 
-# For simplicity, keep raw substrings; can cast to dates if needed
-cis = cis.append_column("DOBCIS", pc.binary_join_element_wise(dob_yy, pc.binary_join_element_wise(dob_mm, dob_dd, ""), "-"))
+cis = cis.append_column(
+    "DOBCIS", 
+    pc.binary_join_element_wise(
+        dob_yy, pc.binary_join_element_wise(dob_mm, dob_dd, ""), "-"
+    )
+)
 
 cis = cis.rename_columns(["ACCTNO", "COUNTRY", "BIRTHDAT", "RACE", "NAME", "DOBCIS"])
 
@@ -50,7 +55,7 @@ con.register("saacc", signa_smsacc)
 con.register("accum", drcrca_accum)
 
 # ------------------------------------------------------------------
-# 4. Example REPTDATE week classification (simplified)
+# 4. REPTDATE transformation (example week classification)
 # ------------------------------------------------------------------
 reptdate_transformed = con.execute("""
     SELECT *,
@@ -81,7 +86,7 @@ curr = con.execute("""
 con.register("curr", curr)
 
 # ------------------------------------------------------------------
-# 6. Merge with CIS + SAACC + MISMTD CAVG (not provided, placeholder)
+# 6. Merge CIS + SAACC
 # ------------------------------------------------------------------
 ica = con.execute("""
     SELECT 
@@ -104,9 +109,19 @@ ica_final = con.execute("""
 """).arrow()
 
 # ------------------------------------------------------------------
-# 8. Save result
+# 8. Save result (Parquet + CSV)
 # ------------------------------------------------------------------
-output_path = "output/EIIDDPCA_DEPOSIT_ACCOUNT_ICA.parquet"
-pa.parquet.write_table(ica_final, output_path)
+os.makedirs("output", exist_ok=True)
+out_parquet = "output/EIIDDPCA_DEPOSIT_ACCOUNT_ICA.parquet"
+out_csv     = "output/EIIDDPCA_DEPOSIT_ACCOUNT_ICA.csv"
 
-print(f"Job EIIDDPCA_DEPOSIT_ACCOUNT_ICA completed. Output saved to {output_path}")
+# Save Parquet
+pq.write_table(ica_final, out_parquet)
+
+# Save CSV
+con.register("ica_final", ica_final)
+con.execute(f"COPY ica_final TO '{out_csv}' (HEADER, DELIMITER ',')")
+
+print(" Job EIIDDPCA_DEPOSIT_ACCOUNT_ICA completed.")
+print(f"   - Parquet: {out_parquet}")
+print(f"   - CSV    : {out_csv}")
