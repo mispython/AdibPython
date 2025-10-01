@@ -1,0 +1,243 @@
+//EIBDDPCA JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M,NOTIFY=&SYSUID              
+/*JOBPARM S=S1M1                                                                
+//**********************************************************************        
+//* EXTRACTION OF CA & FCY ACCT INFORMATION FOR DATA WAREHOUSE                  
+//**********************************************************************        
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01    DD DSN=SAP.PBB.CADATAWH.DAILY,                                       
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//DEL02    DD DSN=SAP.PBB.CADATAWH.DAILY.CAFTPD,                                
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//*                                                                             
+//CREATE  EXEC PGM=IEFBR14                                                      
+//CRT01    DD DSN=SAP.PBB.CADATAWH.DAILY.CAFTPD,                                
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920),                            
+//            SPACE=(CYL,(100,80),RLSE),UNIT=(SYSDA,5)                          
+//*                                                                             
+//EIBDDPCA  EXEC SAS609                                                         
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//DPTRBL    DD DSN=SAP.PBB.MNITB.DAILY(0),DISP=SHR                              
+//CIS       DD DSN=SAP.PBB.CISBEXT.DP.DAILY,DISP=SHR                            
+//MNICRM    DD DSN=SAP.PBB.CRMCUMDP,DISP=SHR                                    
+//MISMTD    DD DSN=SAP.PBB.MTD.SASDATA,DISP=SHR                                 
+//DRCRCA    DD DSN=SAP.PBB.DRCRCA,DISP=SHR                                      
+//SIGNA     DD DSN=SAP.PBB.SMS.SIGNATUR,DISP=SHR                                
+//CURRENT   DD DSN=SAP.PBB.CADATAWH.DAILY,DISP=(,CATLG,DELETE),                 
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(100,80),RLSE),UNIT=(SYSDA,5)                         
+//OD        DD DSN=SAP.PBB.MNILIMT.DAILY(0),DISP=SHR                            
+//SYSIN     DD *                                                                
+*+-----------------------------------------------------------------+            
+ |  PROGRAM : DATA WAREHOUSE EXTRACTION PROGRAM                    |            
+ |  FUNCTION: DEPOSIT EXTRACTION                                   |            
+ +-----------------------------------------------------------------+;           
+OPTIONS YEARCUTOFF=1950;                                                        
+                                                                                
+%INC PGM(PBBDPFMT,PBBELF);                                                      
+                                                                                
+DATA CIS  (KEEP=ACCTNO COUNTRY DOBCIS RACE);                                    
+ FORMAT DOBCIS 5. BMM BDD 2. BYY 4.;                                            
+ SET CIS.DEPOSIT;                                                               
+ COUNTRY=CITIZEN;                                                               
+ IF SECCUST='901';                                                              
+  BDD=SUBSTR(BIRTHDAT,1,2);                                                     
+  BMM=SUBSTR(BIRTHDAT,3,2);                                                     
+  BYY=SUBSTR(BIRTHDAT,5,4);                                                     
+  DOBCIS =MDY(BMM,BDD,BYY);                                                     
+  NAME=CUSTNAM1;                                                                
+                                                                                
+PROC SORT DATA=CIS  OUT=CIS  NODUPKEY; BY ACCTNO;                               
+                                                                                
+DATA CURRENT.REPTDATE;                                                          
+  SET DPTRBL.REPTDATE;                                                          
+  SELECT;                                                                       
+     WHEN(1<= DAY(REPTDATE)<= 8) DO; WK = '1'; END;                             
+     WHEN(9<= DAY(REPTDATE)<= 15) DO; WK = '2'; END;                            
+     WHEN(16<= DAY(REPTDATE)<= 22) DO; WK = '3'; END;                           
+     OTHERWISE DO; WK = '4'; END;                                               
+  END;                                                                          
+  IF WK NE '4' THEN MM = MONTH(REPTDATE) - 1 ;                                  
+  ELSE MM = MONTH(REPTDATE);                                                    
+  IF MM= 0 THEN MM = 12;                                                        
+  CALL SYMPUT('NOWK',PUT(WK,$1.));                                              
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR2.));                               
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                            
+  CALL SYMPUT('REPTMON1', PUT(MM, Z2.));                                        
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                              
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                                
+RUN;                                                                            
+                                                                                
+%LET CAVAR=(KEEP=ACCTNO BRANCH PRODUCT DEPTYPE ORGTYPE ORGCODE                  
+                 OPENDT OPENIND SECTOR STATE MTDAVBAL DNBFISME                  
+                 RISKCODE CUSTCODE LEDGBAL INTPAYBL CURBAL APPRLIMT             
+                 ODPLAN RATE1 RATE2 RATE3 RATE4 RATE5 FLATRATE                  
+                 LIMIT1 LIMIT2 LIMIT3 LIMIT4 LIMIT5 PURPOSE USER2               
+                 USER3 LASTTRAN INTPLAN INTPD USER2 SECOND INACTIVE             
+                 BONUTYPE SERVICE USER5 ODINTACC PREVBRNO CUSTFISS              
+                 CHQFLOAT CRRCODE FAACRR COSTCTR CENSUST FEEYTD                 
+                 INTYTD BONUSANO RISKRATE ODINTCHR CLOSEDT DNBFI_ORI            
+                 DOBMNI MAXPROF ACCPROF INTRSTPD YTDAVAMT AVGAMT                
+                 WRITE_DOWN_BAL CHGIND RETURNS_Y DATE_LST_DEP L_DEP             
+                 MAILCODE RRIND RRCOMPLDT BILLERIND ASCORE_PERM                 
+                 ASCORE_LTST INTCYCODE DTLSTCUST AUTHORISE_LIMIT                
+                 ACSTATUS4-ACSTATUS10 POST_IND REASON INSTRUCTIONS              
+                 DSR REPAY_TYPE_CD MTD_REPAID_AMT INDUSTRIAL_SECTOR_CD          
+                 OMNILOAN OMNITRDB ASCORE_COMM REOPENDT                         
+                 PB_ENTERPRISE_REG_DT PB_ENTERPRISE_TAG                         
+                 MTD_DISBURSED_AMT MTD_REPAY_TYPE10_AMT                         
+                 MTD_REPAY_TYPE20_AMT MTD_REPAY_TYPE30_AMT                      
+                 MODIFIED_FACILITY_IND STMT_CYCLE NXT_STMT_CYCLE_DT             
+                 COV_OPT_OUT RR_EXP_DATE RR_EFF_DATE                            
+                 PROP_DEVELOP_FIN_IND INTPLAN_IBCA                              
+                 PB_ENTERPRISE_PACKAGE_CD DIA_PAST01_MTH DIA_PAST02_MTH         
+                 DIA_PAST03_MTH DIA_PAST04_MTH DIA_PAST05_MTH                   
+                 DIA_PAST06_MTH DIA_PAST07_MTH DIA_PAST08_MTH                   
+                 DIA_PAST09_MTH DIA_PAST10_MTH DIA_PAST11_MTH                   
+                 DIA_PAST12_MTH);                                               
+                                                                                
+%LET CAVR1=(KEEP=ACCTNO NAME);                                                  
+  *** %LET CAVR2=(KEEP=ACCTNO PURPOSE);                                         
+                                                                                
+%MACRO MONTHLY;                                                                 
+   %IF "&NOWK" NE "4" AND "&REPTMON" EQ "01" %THEN %DO;                         
+      DATA CA;                                                                  
+         SET DPTRBL.CURRENT;                                                    
+         FEEYTD = 0;                                                            
+      RUN;                                                                      
+   %END;                                                                        
+   %ELSE %DO;                                                                   
+      PROC SORT DATA=MNICRM.CA&REPTMON1 OUT=CRMCA NODUPKEY;                     
+         BY ACCTNO; RUN;                                                        
+      DATA CA;                                                                  
+         MERGE DPTRBL.CURRENT(IN=A) CRMCA(DROP=COSTCTR);                        
+         BY ACCTNO; IF A;                                                       
+      RUN;                                                                      
+   %END;                                                                        
+%MEND MONTHLY;                                                                  
+%MONTHLY;                                                                       
+                                                                                
+%MACRO GET_GP3;                                                                 
+   %IF "&NOWK" EQ "4" %THEN %DO;                                                
+       DATA CA;                                                                 
+          MERGE CA(IN=A) OD.GP3;                                                
+          BY ACCTNO;                                                            
+          IF A;                                                                 
+   %END;                                                                        
+%MEND GET_GP3;                                                                  
+%GET_GP3;                                                                       
+                                                                                
+PROC SORT DATA=OD.OVERDFT                                                       
+          OUT=OVERDFT(KEEP=ACCTNO CRRINI CRRNOW ASCORE_PERM                     
+          ASCORE_LTST ASCORE_COMM) NODUPKEY;                                    
+   BY ACCTNO;                                                                   
+RUN;                                                                            
+                                                                                
+DATA CURR &CAVAR;                                                               
+                                                                                
+   MERGE CA(IN=A DROP=FAACRR CRRCODE)                                           
+         OVERDFT(RENAME=(CRRINI=FAACRR CRRNOW=CRRCODE));                        
+   BY ACCTNO;                                                                   
+   IF A;                                                                        
+   RENAME PSREASON = REASON;                                                    
+     ACSTATUS4  = SUBSTR(STATCD,4,1);                                           
+     ACSTATUS5  = SUBSTR(STATCD,5,1);                                           
+     ACSTATUS6  = SUBSTR(STATCD,6,1);                                           
+     ACSTATUS7  = SUBSTR(STATCD,7,1);                                           
+     ACSTATUS8  = SUBSTR(STATCD,8,1);                                           
+     ACSTATUS9  = SUBSTR(STATCD,9,1);                                           
+     ACSTATUS10 = SUBSTR(STATCD,10,1);                                          
+                                                                                
+   SELECT(PRODUCT);                                                             
+      WHEN(104) CUSTFISS='02';                                                  
+      WHEN(105) CUSTFISS='81';                                                  
+      OTHERWISE CUSTFISS=PUT(CUSTCODE, DDCUSTCD.);                              
+   END;                                                                         
+   IF OPENIND NOT IN ('B','C','P') AND                                          
+      (PRODUCT < 400 OR PRODUCT > 411) AND PRODUCT NE 413                       
+      AND PRODUCT NOT IN (420:434,320) THEN DO;                                 
+                                                                                
+      RISKRATE = PUT(RISKCODE,$1.);                                             
+                                                                                
+      IF BDATE NOT IN (0,.) THEN                                                
+         BIRTHS = INPUT(SUBSTR(PUT(BDATE,Z11.),1,8),MMDDYY8.);                  
+      ELSE BIRTHS = 0;                                                          
+      DOBMNI= BIRTHS;                                                           
+                                                                                
+      IF OPENDT NOT IN (0,.) THEN                                               
+         ODATES = INPUT(SUBSTR(PUT(OPENDT,Z11.),1,8),MMDDYY8.);                 
+      ELSE ODATES = 0;                                                          
+      OPENDT = ODATES;                                                          
+                                                                                
+      IF REOPENDT NOT IN (0,.) THEN                                             
+         RODATES = INPUT(SUBSTR(PUT(REOPENDT,Z11.),1,8),MMDDYY8.);              
+      REOPENDT = RODATES;                                                       
+                                                                                
+      IF CLOSEDT NOT IN (0,.) THEN                                              
+         CDATES = INPUT(SUBSTR(PUT(CLOSEDT,Z11.),1,8),MMDDYY8.);                
+      ELSE CDATES = CLOSEDT;                                                    
+      CLOSEDT = CDATES;                                                         
+                                                                                
+      IF LASTTRAN NOT IN (0,.) THEN                                             
+         LASTTR = INPUT(SUBSTR(PUT(LASTTRAN,Z9.),1,6),MMDDYY6.);                
+      ELSE LASTTR = 0;                                                          
+      LASTTRAN = LASTTR;                                                        
+                                                                                
+      IF DTLSTCUST NOT IN (0,.) THEN                                            
+         LSTCUST = INPUT(SUBSTR(PUT(DTLSTCUST,Z9.),1,6),MMDDYY6.);              
+         DTLSTCUST = LSTCUST;                                                   
+                                                                                
+      IF RRCOMPLDT NOT IN (.) THEN                                              
+         RRCOMPLDT = INPUT(SUBSTR(PUT(RRCOMPLDT,Z11.),1,8),MMDDYY8.);           
+                                                                                
+      IF RREXPIRYDT NOT IN (0,.) THEN                                           
+         RR_EXP_DATE = INPUT(SUBSTR(PUT(RREXPIRYDT,Z11.),1,8),MMDDYY8.);        
+                                                                                
+      IF RRMAINDT NOT IN (0,.) THEN                                             
+         RR_EFF_DATE = INPUT(SUBSTR(PUT(RRMAINDT,Z11.),1,8),MMDDYY8.);          
+                                                                                
+      IF PURPOSE = '4'  THEN PURPOSE = '1';                                     
+      DNBFI_ORI=DNBFISME;                                                       
+      IF CUSTFISS NOT IN (04,05,06,30,31,32,33,34,35,37,38,39,40,45)            
+         THEN DNBFISME = '0';                                                   
+      OUTPUT CURR;                                                              
+   END;                                                                         
+RUN;                                                                            
+PROC SORT DATA=CURR; BY ACCTNO;                                                 
+PROC SORT DATA=SIGNA.SMSACC OUT=SAACC; BY ACCTNO; RUN;                          
+                                                                                
+DATA CURRENT.CA&REPTYEAR&REPTMON&REPTDAY;                                       
+  MERGE CIS CURR(IN=A) SAACC                                                    
+        MISMTD.CAVG&REPTMON(DROP=MTDAVFORBAL_MIS);                              
+  BY ACCTNO;                                                                    
+  IF A;                                                                         
+  IF ESIGNATURE = '' THEN ESIGNATURE = 'N';                                     
+                                                                                
+ /* AS PER ESMR:2010-1346 */                                                    
+PROC SORT DATA=CURRENT.CA&REPTYEAR&REPTMON&REPTDAY OUT=CURRENT;                 
+   BY ACCTNO;RUN;                                                               
+PROC SORT DATA=DRCRCA.ACCUM OUT=ACCUM;BY ACCTNO;RUN;                            
+                                                                                
+DATA CURRENT.CA&REPTYEAR&REPTMON&REPTDAY;                                       
+   MERGE CURRENT(IN=A) ACCUM;BY ACCTNO;                                         
+IF A;                                                                           
+RUN;                                                                            
+                                                                                
+FILENAME TRANFILE 'SAP.PBB.CADATAWH.DAILY.CAFTPD' DISP=OLD;                     
+PROC CPORT LIBRARY=CURRENT FILE=TRANFILE;                                       
+RUN;                                                                            
+                                                                                
+//*------------------------------------------------------                       
+//* FTP TO SAS EDW                                                              
+//*------------------------------------------------------                       
+//RUNSFTP  EXEC COZBATCH                                                        
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(EDW#SFTP)                         
+//           DD *                                                               
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=binary                     
+lzopts linerule=$lr                                                             
+cd /stgsrcsys/host/ftpfiles                                                     
+PUT //SAP.PBB.CADATAWH.DAILY.CAFTPD       CAFTPD                                
+EOB                                                                             
+/*                                                                              
