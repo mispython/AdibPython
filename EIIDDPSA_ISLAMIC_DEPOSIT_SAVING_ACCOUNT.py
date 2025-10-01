@@ -1,147 +1,170 @@
 import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
-from datetime import datetime
+import pyarrow.dataset as ds
+import pyarrow.table as pat
+import pyarrow.parquet as pq
+import datetime
 
-# Connect to DuckDB (in-memory or file-based if needed)
+# Connect DuckDB in-memory
 con = duckdb.connect()
 
-# Load REPTDATE from DPTRBL.REPTDATE
-reptdate_tbl = con.execute("SELECT * FROM DPTRBL.REPTDATE").arrow()
+# ------------------------------------------------------------------
+# Load base tables (replace with actual parquet/csv/etc paths)
+# ------------------------------------------------------------------
+# Example: con.execute("CREATE TABLE dptrbl_reptdate AS SELECT * FROM 'DPTRBL_REPTDATE.parquet'")
+# You can adapt to your storage location
+con.execute("CREATE OR REPLACE TABLE dptrbl_reptdate AS SELECT * FROM 'DPTRBL_REPTDATE.parquet'")
+con.execute("CREATE OR REPLACE TABLE cis_deposit AS SELECT * FROM 'CIS_DEPOSIT.parquet'")
+con.execute("CREATE OR REPLACE TABLE dptrbl_saving AS SELECT * FROM 'DPTRBL_SAVING.parquet'")
+con.execute("CREATE OR REPLACE TABLE dptrbl_uma AS SELECT * FROM 'DPTRBL_UMA.parquet'")
+con.execute("CREATE OR REPLACE TABLE signa_smsacc AS SELECT * FROM 'SIGNA_SMSACC.parquet'")
+con.execute("CREATE OR REPLACE TABLE mismtd_savg AS SELECT * FROM 'MISMTD_SAVG.parquet'")
 
-# Derive WEEK, MONTH, YEAR, DAY
-def process_reptdate(tbl: pa.Table) -> pa.Table:
-    reptdate = tbl.column("REPTDATE")
-    day = pc.day(reptdate)
-    month = pc.month(reptdate)
-    year = pc.year(reptdate)
+# ------------------------------------------------------------------
+# Step 1: REPTDATE logic (derive WK, MM, year, etc.)
+# ------------------------------------------------------------------
+reptdate_tbl = con.execute("""
+    SELECT *,
+           CASE 
+               WHEN day(REPTDATE) BETWEEN 1 AND 8 THEN '1'
+               WHEN day(REPTDATE) BETWEEN 9 AND 15 THEN '2'
+               WHEN day(REPTDATE) BETWEEN 16 AND 22 THEN '3'
+               ELSE '4'
+           END AS WK,
+           CASE 
+               WHEN (CASE 
+                       WHEN day(REPTDATE) BETWEEN 1 AND 8 THEN '1'
+                       WHEN day(REPTDATE) BETWEEN 9 AND 15 THEN '2'
+                       WHEN day(REPTDATE) BETWEEN 16 AND 22 THEN '3'
+                       ELSE '4' END) <> '4'
+                    THEN month(REPTDATE)-1
+               ELSE month(REPTDATE)
+           END AS MM,
+           year(REPTDATE) AS REPTYEAR,
+           month(REPTDATE) AS REPTMON,
+           day(REPTDATE) AS REPTDAY
+    FROM dptrbl_reptdate
+""").arrow()
 
-    wk = []
-    mm = []
-    for d, m in zip(day.to_pylist(), month.to_pylist()):
-        if 1 <= d <= 8:
-            w = "1"
-        elif 9 <= d <= 15:
-            w = "2"
-        elif 16 <= d <= 22:
-            w = "3"
-        else:
-            w = "4"
-        wk.append(w)
-        mm.append(m - 1 if w != "4" else m if m > 0 else 12)
+# Extract macros (for substitution later)
+row0 = reptdate_tbl.to_pydict()
+NOWK     = row0["WK"][0]
+REPTMON  = str(row0["REPTMON"][0]).zfill(2)
+REPTMON1 = str(row0["MM"][0] if row0["MM"][0] != 0 else 12).zfill(2)
+REPTYEAR = str(row0["REPTYEAR"][0])
+REPTDAY  = str(row0["REPTDAY"][0]).zfill(2)
 
-    tbl = tbl.append_column("WK", pa.array(wk))
-    tbl = tbl.append_column("MM", pa.array(mm))
-    tbl = tbl.append_column("YEAR", year)
-    tbl = tbl.append_column("MONTH", month)
-    tbl = tbl.append_column("DAY", day)
-    return tbl
+# ------------------------------------------------------------------
+# Step 2: CIS dataset
+# ------------------------------------------------------------------
+cis_tbl = con.execute("""
+    SELECT 
+        ACCTNO,
+        CITIZEN AS COUNTRY,
+        custnam1 AS NAME,
+        substr(BIRTHDAT,1,2)::INT AS BDD,
+        substr(BIRTHDAT,3,2)::INT AS BMM,
+        substr(BIRTHDAT,5,4)::INT AS BYY,
+        RACE
+    FROM cis_deposit
+    WHERE SECCUST = '901'
+""").arrow()
 
-reptdate_tbl = process_reptdate(reptdate_tbl)
-con.register("FIXED_REPTDATE", reptdate_tbl)
+# Add DOBCIS column (build date)
+dobcis = [
+    datetime.date(r["BYY"], r["BMM"], r["BDD"]) 
+    if r["BDD"] and r["BMM"] and r["BYY"] else None
+    for r in cis_tbl.to_pylist()
+]
+cis_tbl = cis_tbl.append_column("DOBCIS", pa.array(dobcis))
 
-# --- CIS transformation ---
-cis_tbl = con.execute("SELECT * FROM CIS.DEPOSIT").arrow()
+# Deduplicate by ACCTNO
+cis_tbl = con.execute("""
+    SELECT * FROM cis_tbl
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY ACCTNO ORDER BY ACCTNO)=1
+""").arrow()
 
-def transform_cis(tbl: pa.Table) -> pa.Table:
-    acctno = tbl["ACCTNO"]
-    country = tbl["CITIZEN"]
-    race = tbl["RACE"]
+# ------------------------------------------------------------------
+# Step 3: Monthly logic for SA / UMA
+# ------------------------------------------------------------------
+if NOWK != "4" and REPTMON == "01":
+    # January special case → reset FeeYTD
+    con.execute("""
+        CREATE OR REPLACE TABLE sa AS 
+        SELECT *, 0 AS FEEYTD FROM dptrbl_saving
+    """)
+    con.execute("""
+        CREATE OR REPLACE TABLE uma AS 
+        SELECT *, 0 AS FEEYTD FROM dptrbl_uma
+    """)
+else:
+    # Merge with MNICRM history
+    con.execute(f"""
+        CREATE OR REPLACE TABLE crmsa AS
+        SELECT * FROM 'MNICRM_SA{REPTMON1}.parquet'
+    """)
+    con.execute(f"""
+        CREATE OR REPLACE TABLE crmsuma AS
+        SELECT * FROM 'MNICRM_UMA{REPTMON1}.parquet'
+    """)
+    con.execute("""
+        CREATE OR REPLACE TABLE sa AS
+        SELECT a.* 
+        FROM dptrbl_saving a
+        LEFT JOIN crmsa b USING(ACCTNO)
+    """)
+    con.execute("""
+        CREATE OR REPLACE TABLE uma AS
+        SELECT a.* 
+        FROM dptrbl_uma a
+        LEFT JOIN crmsuma b USING(ACCTNO)
+    """)
 
-    # Convert BIRTHDAT -> DOBCIS
-    dob = []
-    for b in tbl["BIRTHDAT"].to_pylist():
-        if b and len(str(b)) >= 8:
-            dd = int(str(b)[:2])
-            mm = int(str(b)[2:4])
-            yy = int(str(b)[4:8])
-            dob.append(datetime(yy, mm, dd))
-        else:
-            dob.append(None)
-
-    return pa.table({
-        "ACCTNO": acctno,
-        "COUNTRY": country,
-        "DOBCIS": pa.array(dob),
-        "RACE": race
-    })
-
-cis_tbl = transform_cis(cis_tbl)
-con.register("CIS", cis_tbl)
-
-# --- FD extraction ---
-fd_tbl = con.execute("SELECT * FROM DPTRBL.FD").arrow()
-
-# Transform FD (apply filtering + column adjustments)
-def transform_fd(tbl: pa.Table) -> pa.Table:
-    acctno = tbl["ACCTNO"]
-    product = tbl["PRODUCT"]
-    openind = tbl["OPENIND"]
-
-    # Filter OPENIND not in (B, C, P) and PRODUCT range
-    mask = []
-    for o, p in zip(openind.to_pylist(), product.to_pylist()):
-        if o not in ("B", "C", "P") and not (350 <= p <= 380):
-            mask.append(True)
-        else:
-            mask.append(False)
-    filtered = tbl.filter(pa.array(mask))
-
-    # Date conversions (BDATE, OPENDT, REOPENDT, CLOSEDT, LASTTRAN, DTLSTCUST)
-    def convert_date(col, fmt="MMDDYY"):
-        vals = []
-        for v in col.to_pylist():
-            if v and v not in (0, "."):
-                s = str(v).zfill(8)
-                try:
-                    dt = datetime.strptime(s[:8], "%m%d%Y")
-                except:
-                    dt = None
-                vals.append(dt)
-            else:
-                vals.append(None)
-        return pa.array(vals)
-
-    fd_tbl = filtered.append_column("DOBMNI", convert_date(filtered["BDATE"]))
-    fd_tbl = fd_tbl.set_column(fd_tbl.schema.get_field_index("OPENDT"), "OPENDT",
-                               convert_date(filtered["OPENDT"]))
-    fd_tbl = fd_tbl.set_column(fd_tbl.schema.get_field_index("REOPENDT"), "REOPENDT",
-                               convert_date(filtered["REOPENDT"]))
-    fd_tbl = fd_tbl.set_column(fd_tbl.schema.get_field_index("CLOSEDT"), "CLOSEDT",
-                               convert_date(filtered["CLOSEDT"]))
-    fd_tbl = fd_tbl.set_column(fd_tbl.schema.get_field_index("LASTTRAN"), "LASTTRAN",
-                               convert_date(filtered["LASTTRAN"]))
-    fd_tbl = fd_tbl.set_column(fd_tbl.schema.get_field_index("DTLSTCUST"), "DTLSTCUST",
-                               convert_date(filtered["DTLSTCUST"]))
-
-    # Normalize PURPOSE
-    purpose = []
-    for p in fd_tbl["PURPOSE"].to_pylist():
-        purpose.append("1" if p == "4" else p)
-    fd_tbl = fd_tbl.set_column(fd_tbl.schema.get_field_index("PURPOSE"), "PURPOSE",
-                               pa.array(purpose))
-
-    return fd_tbl
-
-fd_transformed = transform_fd(fd_tbl)
-con.register("FDFD", fd_transformed)
-
-# Merge CIS, FD, SMSACC, MISMTD.FAVG
+# ------------------------------------------------------------------
+# Step 4: Merge SA + UMA into SAVG
+# ------------------------------------------------------------------
 con.execute("""
-CREATE OR REPLACE TABLE FIXED_FD_FINAL AS
-SELECT 
-    CIS.ACCTNO,
-    CIS.COUNTRY,
-    CIS.DOBCIS,
-    CIS.RACE,
-    FDFD.*,
-    COALESCE(SAACC.ESIGNATURE, 'N') AS ESIGNATURE,
-    MIS.*
-FROM FDFD
-LEFT JOIN CIS USING (ACCTNO)
-LEFT JOIN SIGNA.SMSACC SAACC USING (ACCTNO)
-LEFT JOIN MISMTD.FAVG MIS USING (ACCTNO)
+    CREATE OR REPLACE TABLE savg AS
+    SELECT * FROM sa
+    UNION ALL
+    SELECT * FROM uma
 """)
 
-result = con.execute("SELECT * FROM FIXED_FD_FINAL").arrow()
-print(result.schema)
+# ------------------------------------------------------------------
+# Step 5: Apply data transformations (dates, purpose, etc.)
+# ------------------------------------------------------------------
+savg_tbl = con.execute("""
+    SELECT *,
+           substr(STATCD,4,1) AS ACSTATUS4,
+           substr(STATCD,5,1) AS ACSTATUS5,
+           substr(STATCD,6,1) AS ACSTATUS6,
+           substr(STATCD,7,1) AS ACSTATUS7,
+           substr(STATCD,8,1) AS ACSTATUS8,
+           substr(STATCD,9,1) AS ACSTATUS9,
+           substr(STATCD,10,1) AS ACSTATUS10,
+           CASE WHEN PURPOSE='4' THEN '1' ELSE PURPOSE END AS PURPOSE_CLEAN
+    FROM savg
+    WHERE OPENIND NOT IN ('B','C','P')
+""").arrow()
+
+# ------------------------------------------------------------------
+# Step 6: Final MERGE (CIS + SAVG + SMSACC + MISMTD)
+# ------------------------------------------------------------------
+con.execute(f"""
+    CREATE OR REPLACE TABLE saving_isa_{REPTYEAR}{REPTMON}{REPTDAY} AS
+    SELECT 
+        a.ACCTNO,
+        a.COUNTRY,
+        a.DOBCIS,
+        a.RACE,
+        b.*,
+        c.*,
+        d.*
+    FROM cis_tbl a
+    JOIN savg_tbl b USING(ACCTNO)
+    LEFT JOIN signa_smsacc c USING(ACCTNO)
+    LEFT JOIN mismtd_savg d USING(ACCTNO)
+""")
+
+print("EIIDDPSA job completed: saving_isa_", REPTYEAR, REPTMON, REPTDAY)
