@@ -1,109 +1,112 @@
+# ============================================================
+# Job Name : EIIDDPCA_DEPOSIT_ACCOUNT_ICA
+# Purpose  : Conversion of SAS EIIDDPCA program (Deposit Extraction)
+# Engine   : DuckDB + PyArrow (Polars only if needed)
+# ============================================================
+
 import duckdb
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.compute as pc
 
-# --- Step 1: Load CIS Data ---
-# Example: replace with actual CIS.DEPOSIT table source
-cis_deposit = duckdb.sql("SELECT * FROM cis_deposit").to_arrow()
+# ------------------------------------------------------------------
+# 1. Load base datasets (replace with actual paths / formats)
+# ------------------------------------------------------------------
+cis_deposit = ds.dataset("CIS/DEPOSIT.parquet", format="parquet").to_table()
+dptrbl_reptdate = ds.dataset("DPTRBL/REPTDATE.parquet", format="parquet").to_table()
+dptrbl_current = ds.dataset("DPTRBL/CURRENT.parquet", format="parquet").to_table()
+od_overdft = ds.dataset("OD/OVERDFT.parquet", format="parquet").to_table()
+signa_smsacc = ds.dataset("SIGNA/SMSACC.parquet", format="parquet").to_table()
+drcrca_accum = ds.dataset("DRCRCA/ACCUM.parquet", format="parquet").to_table()
 
-# Derive CIS
-cis = (
-    cis_deposit
-    .filter(pc.equal(cis_deposit['SECCUST'], pa.scalar('901')))
-    .select([
-        "ACCTNO",
-        pc.field("CITIZEN").alias("COUNTRY"),
-        pc.binary_slice(pc.field("BIRTHDAT"), 0, 2).cast(pa.int32()).alias("BDD"),
-        pc.binary_slice(pc.field("BIRTHDAT"), 2, 2).cast(pa.int32()).alias("BMM"),
-        pc.binary_slice(pc.field("BIRTHDAT"), 4, 4).cast(pa.int32()).alias("BYY"),
-        "CUSTNAM1"
-    ])
-)
+# ------------------------------------------------------------------
+# 2. Build CIS subset
+# ------------------------------------------------------------------
+cis = cis_deposit.filter(
+    pc.equal(cis_deposit["SECCUST"], pa.scalar("901"))
+).select(["ACCTNO", "CITIZEN", "BIRTHDAT", "RACE", "CUSTNAM1"])
 
-# Compute DOBCIS (birthdate)
-# In SAS: MDY(BMM, BDD, BYY)
-# Here: parse into pyarrow date
-cis = cis.append_column("DOBCIS", pc.strptime(
-    pc.binary_join_element_wise(
-        [cis["BMM"], cis["BDD"], cis["BYY"]], 
-        "-"), 
-    format="%m-%d-%Y", unit="s"
-))
+# Derive DOB (replicating SAS substrings)
+# Note: ensure BIRTHDAT is string type YYYYMMDD
+dob_dd = pc.utf8_slice_codeunits(cis["BIRTHDAT"], 0, 2)
+dob_mm = pc.utf8_slice_codeunits(cis["BIRTHDAT"], 2, 2)
+dob_yy = pc.utf8_slice_codeunits(cis["BIRTHDAT"], 4, 4)
 
-cis = duckdb.sql("SELECT DISTINCT * FROM cis").to_arrow()
+# For simplicity, keep raw substrings; can cast to dates if needed
+cis = cis.append_column("DOBCIS", pc.binary_join_element_wise(dob_yy, pc.binary_join_element_wise(dob_mm, dob_dd, ""), "-"))
 
-# --- Step 2: Handle REPTDATE logic (week partitioning, month calc) ---
-reptdate = duckdb.sql("SELECT * FROM dptrbl_reptdate").to_arrow()
+cis = cis.rename_columns(["ACCTNO", "COUNTRY", "BIRTHDAT", "RACE", "NAME", "DOBCIS"])
 
-reptdate = reptdate.append_column(
-    "WK",
-    pc.case_when(
-        (pc.day(reptdate["REPTDATE"]) <= 8, pa.scalar("1")),
-        ((pc.day(reptdate["REPTDATE"]) <= 15, pa.scalar("2"))),
-        ((pc.day(reptdate["REPTDATE"]) <= 22, pa.scalar("3"))),
-        (True, pa.scalar("4"))
-    )
-)
+# ------------------------------------------------------------------
+# 3. Register in DuckDB
+# ------------------------------------------------------------------
+con = duckdb.connect(database=":memory:")
 
-# Derive MM
-reptdate = reptdate.append_column(
-    "MM",
-    pc.if_else(
-        pc.not_equal(reptdate["WK"], pa.scalar("4")),
-        pc.subtract(pc.month(reptdate["REPTDATE"]), pa.scalar(1)),
-        pc.month(reptdate["REPTDATE"])
-    )
-)
+con.register("cis", cis)
+con.register("reptdate", dptrbl_reptdate)
+con.register("current", dptrbl_current)
+con.register("overdft", od_overdft)
+con.register("saacc", signa_smsacc)
+con.register("accum", drcrca_accum)
 
-# Ensure MM rollover
-reptdate = reptdate.set_column(
-    reptdate.schema.get_field_index("MM"),
-    "MM",
-    pc.if_else(
-        pc.equal(reptdate["MM"], pa.scalar(0)),
-        pa.scalar(12),
-        reptdate["MM"]
-    )
-)
+# ------------------------------------------------------------------
+# 4. Example REPTDATE week classification (simplified)
+# ------------------------------------------------------------------
+reptdate_transformed = con.execute("""
+    SELECT *,
+           CASE 
+               WHEN EXTRACT(DAY FROM REPTDATE) BETWEEN 1 AND 8  THEN 1
+               WHEN EXTRACT(DAY FROM REPTDATE) BETWEEN 9 AND 15 THEN 2
+               WHEN EXTRACT(DAY FROM REPTDATE) BETWEEN 16 AND 22 THEN 3
+               ELSE 4
+           END AS WK
+    FROM reptdate
+""").arrow()
 
-# --- Step 3: Monthly logic (simplified) ---
-# SAS had a macro MONTHLY with conditional branch
-# Here: we prepare CA table
-ca = duckdb.sql("SELECT * FROM dptrbl_current").to_arrow()
-# If Jan & not 4th week => set FEEYTD=0
-# Else join with CRMCA
+# ------------------------------------------------------------------
+# 5. Merge CURRENT + OVERDFT
+# ------------------------------------------------------------------
+curr = con.execute("""
+    SELECT 
+        c.*,
+        o.CRRINI AS FAACRR,
+        o.CRRNOW AS CRRCODE,
+        o.ASCORE_PERM,
+        o.ASCORE_LTST,
+        o.ASCORE_COMM
+    FROM current c
+    LEFT JOIN overdft o USING(ACCTNO)
+""").arrow()
 
-# --- Step 4: Join Overdraft Data ---
-overdft = duckdb.sql("SELECT DISTINCT ACCTNO, CRRINI AS FAACRR, CRRNOW AS CRRCODE, ASCORE_PERM, ASCORE_LTST, ASCORE_COMM FROM od_overdft").to_arrow()
+con.register("curr", curr)
 
-curr = duckdb.sql("""
-    SELECT ca.*, od.FAACRR, od.CRRCODE, od.ASCORE_PERM, od.ASCORE_LTST, od.ASCORE_COMM
-    FROM ca
-    LEFT JOIN overdft od USING(ACCTNO)
-""").to_arrow()
+# ------------------------------------------------------------------
+# 6. Merge with CIS + SAACC + MISMTD CAVG (not provided, placeholder)
+# ------------------------------------------------------------------
+ica = con.execute("""
+    SELECT 
+        cis.ACCTNO,
+        cis.NAME,
+        curr.*,
+        saacc.ESIGNATURE
+    FROM cis
+    JOIN curr ON cis.ACCTNO = curr.ACCTNO
+    LEFT JOIN saacc ON cis.ACCTNO = saacc.ACCTNO
+""").arrow()
 
-# Additional transformations like ACSTATUS, risk mapping, date parsing, etc.
-# Similar pc.if_else + pc.strptime to parse SAS dates
-
-# --- Step 5: Merge CIS + CURR + SAACC + MISMTD
-saacc = duckdb.sql("SELECT * FROM sig_na_smsacc").to_arrow()
-cavg = duckdb.sql("SELECT * FROM mismtd_cavg").to_arrow()
-
-ica = duckdb.sql("""
-    SELECT cis.*, curr.*, saacc.*, cavg.*
-    FROM curr
-    LEFT JOIN cis USING(ACCTNO)
-    LEFT JOIN saacc USING(ACCTNO)
-    LEFT JOIN cavg USING(ACCTNO)
-""").to_arrow()
-
-# --- Step 6: Final merge with ACCUM
-accum = duckdb.sql("SELECT * FROM drcrca_accum").to_arrow()
-
-ica_final = duckdb.sql("""
+# ------------------------------------------------------------------
+# 7. Merge with ACCUM
+# ------------------------------------------------------------------
+ica_final = con.execute("""
     SELECT i.*, a.*
     FROM ica i
-    LEFT JOIN accum a USING(ACCTNO)
-""").to_arrow()
+    LEFT JOIN accum a ON i.ACCTNO = a.ACCTNO
+""").arrow()
 
-# Final dataset: CURRENT.ICA<YYYYMMDD>
+# ------------------------------------------------------------------
+# 8. Save result
+# ------------------------------------------------------------------
+output_path = "output/EIIDDPCA_DEPOSIT_ACCOUNT_ICA.parquet"
+pa.parquet.write_table(ica_final, output_path)
+
+print(f"Job EIIDDPCA_DEPOSIT_ACCOUNT_ICA completed. Output saved to {output_path}")
