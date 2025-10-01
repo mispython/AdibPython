@@ -162,9 +162,17 @@ con.execute("""
 """)
 
 # -----------------------------------------------------------------
-# Save final output
+# Save final output (Parquet + CSV)
 # -----------------------------------------------------------------
-out_name = f"CURRENT_CA{reptyear}{repmon}{repday}.parquet"
-con.execute(f"COPY current_ca TO '{out_name}' (FORMAT 'parquet')")
+out_name_parquet = f"CURRENT_CA{reptyear}{repmon}{repday}.parquet"
+out_name_csv = f"CURRENT_CA{reptyear}{repmon}{repday}.csv"
 
-print(f"✅ Extraction completed. Output: {out_name}")
+# Save as Parquet
+con.execute(f"COPY current_ca TO '{out_name_parquet}' (FORMAT 'parquet')")
+
+# Save as CSV
+con.execute(f"COPY current_ca TO '{out_name_csv}' (HEADER, DELIMITER ',')")
+
+print(f" Extraction completed.")
+print(f"   - Parquet: {out_name_parquet}")
+print(f"   - CSV    : {out_name_csv}")
