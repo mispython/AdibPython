@@ -1,0 +1,146 @@
+//EIBDRNID JOB MSGCLASS=X,MSGLEVEL=(2,1),REGION=64M
+/*JOBPARM S=S1M1
+//*-------------------------------------------------------------------
+//* RETAIL NEGOTIABLE INSTRUMENTS OF DEPOSIT (R-NID)
+//* ESMR : 2016-4826
+//* EXTRACT RETAIL NEGOTIABLE INSTRUMENTS OF DEPOSIT (R-NID) TO SAS
+//* DATA WAREHOUSE ON DAILY BASIS
+//*-------------------------------------------------------------------
+//EIBDRNID EXEC SAS609
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//MNITB    DD DSN=SAP.PBB.MNITB.DAILY(0),DISP=SHR
+//IMNITB   DD DSN=SAP.PIBB.MNITB.DAILY(0),DISP=SHR
+//RNID     DD DSN=RBP2.BKUP.B033.NID.DAILY.SASFILE(0),DISP=SHR
+//TRNCH    DD DSN=RBP2.BKUP.B033.RNID.TRANCHE.DATA(0),DISP=SHR
+//DEPO     DD DSN=SAP.PBB.RNID.SASDATA,DISP=OLD
+//IDEPO    DD DSN=SAP.PIBB.RNID.SASDATA,DISP=OLD
+//SYSIN    DD *
+
+OPTIONS NOCENTER YEARCUTOFF=1950 COMPRESS=Y;
+%INC PGM(PBBELF);
+
+DATA DEPO.REPTDATE;
+   REPTDATE=TODAY()-1;
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDT',PUT(REPTDATE,YYMMDDN6.));
+RUN;
+
+*------------------------------------------------*
+*  FOR ACCOUNT HOLDER                            *
+*------------------------------------------------*;
+DATA RNID;
+   INFILE RNID;
+   INPUT @001 NID_ACCTNO       PD6.
+         @007 NID_REFNO        $20.
+         @027 ACCTNO           PD6.
+         @033 NID_CDNO         $20.
+         @053 CUSTNAME         $26.
+         @079 NEWIC            $20.
+         @099 BRANCH             5.
+         @104 CUSTCODE         PD3.
+         @107 TRANCHENO        $20.
+         @127 STARTDT     YYMMDD10.
+         @137 MATDT       YYMMDD10.
+         @147 INTRATE          PD7.7
+         @154 INTPLTDRATE      PD7.7
+         @161 CURBAL           PD7.2
+         @168 LSTINTPAYDT YYMMDD10.
+         @178 NXTINTPAYDT YYMMDD10.
+         @188 INTFRQ            $1.
+         @190 NIDSTAT           $1.
+         @191 ACCINT           PD8.6
+         @199 CDSTAT            $1.
+         @200 POSTSTAT          $1.
+         @201 EARLY_WDDT  YYMMDD10.
+         @211 EARLY_WDPROC     PD7.2
+         @218 EARLY_TELRID      $8.
+         @226 EARLY_OFFID1      $8.
+         @234 EARLY_OFFID2      $8.
+         @242 CANCDT      YYMMDD10.
+         @252 CANC_TELRID       $8.
+         @260 CANC_OFFID1       $8.
+         @268 CANC_OFFID2       $8.
+         @276 APPLDT      YYMMDD10.
+         @276 APPLDTTM         $26.
+         @302 APPL_TELRID       $8.
+         @310 APPL_OFFID1       $8.
+         @318 APPL_OFFID2       $8.
+         @326 PRINTDT     YYMMDD10.
+         @336 PRINT_TELRID      $8.
+         @344 PRINT_OFFID1      $8.
+         @352 PRINT_OFFID2      $8.
+         @360 MAINTDT     YYMMDD10.
+         @370 MAINT_TELRID      $8.
+         @378 MAINT_OFFID1      $8.
+         @386 MAINT_OFFID2      $8.
+         @394 PLEDGESTAT        $1.
+         @395 NID_ODACCTNO     PD6.
+         @401 CCOLLNO          PD6.
+         @407 PLEDGEDT    YYMMDD10.
+         @417 PLEDGE_TELRID     $8.
+         @425 PLEDGE_OFFID1     $8.
+         @433 PLEDGE_OFFID2     $8.
+         @441 CPLEDGEDT   YYMMDD10.
+         @451 CPLEDGE_TELRID    $8.
+         @459 CPLEDGE_OFFID1    $8.
+         @467 CPLEDGE_OFFID2    $8.
+         @475 TERM             PD2.
+         @484 SACODE           $20.
+         @504 STAFFID          $10.
+         @189 TERMID            $1.
+         @477 INTPD            PD7.2
+         @527 COSTCTR          PD3.
+         @530 PRODUCT          PD2.
+         ;
+   RENAME SACODE=SUITABILITY_ASSESSMENT_CD STAFFID=SALES_STAFF_ID;
+   BRABBR = PUT(BRANCH,BRCHCD.);
+   CURCODE= 'MYR';
+RUN;
+PROC SORT DATA=RNID; BY ACCTNO; RUN;
+
+DATA MNIACC(KEEP=ACCTNO CUSTCD);
+   SET MNITB.CURRENT(KEEP=ACCTNO CUSTCODE)
+       MNITB.SAVING (KEEP=ACCTNO CUSTCODE)
+       IMNITB.CURRENT(KEEP=ACCTNO CUSTCODE)
+       IMNITB.SAVING (KEEP=ACCTNO CUSTCODE);
+   CUSTCD = PUT(CUSTCODE,Z2.);
+RUN;
+PROC SORT DATA=MNIACC; BY ACCTNO; RUN;
+
+DATA DEPO.RNIDM&REPTMON DEPO.RNID&REPTDAY
+     IDEPO.RNIDM&REPTMON IDEPO.RNID&REPTDAY;
+   MERGE RNID(IN=A) MNIACC;
+   BY ACCTNO;
+   IF A;
+   IF CUSTCD = '' THEN CUSTCD = PUT(CUSTCODE,Z2.);
+   IF  (3000<=COSTCTR<=4999) THEN OUTPUT IDEPO.RNIDM&REPTMON
+                                         IDEPO.RNID&REPTDAY;
+   ELSE OUTPUT DEPO.RNIDM&REPTMON DEPO.RNID&REPTDAY;
+RUN;
+PROC SORT DATA=DEPO.RNID&REPTDAY OUT=RNID; BY TRANCHENO; RUN;
+PROC SORT DATA=IDEPO.RNID&REPTDAY OUT=IRNID; BY TRANCHENO; RUN;
+
+DATA DEPO.TRNCHM&REPTMON  DEPO.TRNCH&REPTDAY
+    IDEPO.TRNCHM&REPTMON IDEPO.TRNCH&REPTDAY;
+   INFILE TRNCH;
+   INPUT @001 TRANCHENO             $20.
+         @021 TRN_STAT               $1.
+         @022 TRN_OFFERSTARTDT YYMMDD10.
+         @032 TRN_OFFERENDDT   YYMMDD10.
+         @042 TRNSTARTDT       YYMMDD10.
+         @052 TRNMATDT         YYMMDD10.
+         @062 TERM                  PD2.
+         @064 TERMID                 $1.
+         @065 INTFRQ                 $1.
+         @066 INTRATE               PD7.7
+         @073 CREATDT          YYMMDD10.
+         @083 CREATSTAFFID           $8.
+         @091 MAINTDT          YYMMDD10.
+         @101 MAINTSTAFFID           $8.
+         @109 INTPLRATE_BID         PD7.7
+         @116 INTPLRATE_OFFER       PD7.7
+         ;
+RUN;
+PROC SORT DATA=DEPO.TRNCH&REPTDAY OUT=TRNCH; BY TRANCHENO; RUN;
+
