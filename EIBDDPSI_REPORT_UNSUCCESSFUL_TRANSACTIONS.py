@@ -1,149 +1,102 @@
 import duckdb
 import pyarrow as pa
-import pyarrow.parquet as pq
+import polars as pl
 import datetime
 
-# ------------------------------------------------------------------
-# Job name: EIBDDPSI - SI REPORT + WEEKLY UNSUCCESSFUL CASES
-# ------------------------------------------------------------------
-
-# Connect DuckDB in-memory
-con = duckdb.connect()
-
-# ------------------------------------------------------------------
-# Step 1: REPTDATE logic
-# ------------------------------------------------------------------
+# === Step 1: Dates (SAS CALL SYMPUT equivalent) ===
 today = datetime.date.today()
 reptdate = today - datetime.timedelta(days=1)
 
-REPTDAY  = str(reptdate.day).zfill(2)
-REPTMON  = str(reptdate.month).zfill(2)
-REPTYEAR = str(reptdate.year)[-2:]  # last 2 digits
-DD       = str(today.day).zfill(2)
-RDATE    = reptdate.strftime("%Y-%m-%d")
+REPTDAY = reptdate.strftime("%d")
+REPTMON = reptdate.strftime("%m")
+REPTYEAR = reptdate.strftime("%y")   # 2-digit year
+DD = today.strftime("%d")
+RDATE = reptdate
 
-# ------------------------------------------------------------------
-# Step 2: Load DEPOSIT input (replace with actual Parquet path)
-# ------------------------------------------------------------------
-con.execute("CREATE OR REPLACE TABLE deposit AS SELECT * FROM 'DEPOSIT.parquet'")
+# === Step 2: DuckDB connection ===
+con = duckdb.connect()
 
-# ------------------------------------------------------------------
-# Step 3: Main SI Report
-# ------------------------------------------------------------------
-si_tbl = con.execute("""
-    SELECT 
-        BANKNO,
-        REPTNO,
-        FMTCODE,
-        FLSEQNUM,
-        BRANCH,
-        ACCTNO,
-        NAME,
-        CONTROL,
-        TYPE,
-        FUNC,
-        RECSEQNUM,
-        STRDATE,
-        ENDDATE,
-        CURRENCY,
-        CYCLE,
-        AMOUNT,
-        TOACCT,
-        NEXTDATE,
-        TP,
-        BENECD,
-        REFNO,
-        DESC,
-        USERID
-    FROM deposit
+# deposit parquet files (simulate JCL DD concatenation)
+deposit_files = [
+    "RBP2.B033.MST01.DPDARPGS.parquet",
+    "RBP2.B033.MST02.DPDARPGS.parquet",
+    "RBP2.B033.MST03.DPDARPGS.parquet",
+    "RBP2.B033.MST04.DPDARPGS.parquet",
+    "RBP2.B033.MST05.DPDARPGS.parquet",
+    "RBP2.B033.MST06.DPDARPGS.parquet",
+    "RBP2.B033.MST07.DPDARPGS.parquet",
+    "RBP2.B033.MST08.DPDARPGS.parquet",
+    "RBP2.B033.MST09.DPDARPGS.parquet",
+    "RBP2.B033.MST10.DPDARPGS.parquet"
+]
+
+# Register all deposits as one virtual table
+con.execute(f"""
+    CREATE OR REPLACE VIEW deposit AS
+    SELECT * FROM read_parquet({deposit_files})
+""")
+
+# === Step 3: First dataset (REPTNO=1220, FMTCODE=1) ===
+tbl_si = con.execute("""
+    SELECT * FROM deposit
     WHERE REPTNO = 1220 AND FMTCODE = 1
 """).arrow()
 
-# Convert STRDATE / ENDDATE → proper dates
-strdates = []
-enddates = []
-for row in si_tbl.to_pylist():
-    try:
-        strdates.append(datetime.datetime.strptime(str(row["STRDATE"]).zfill(8), "%m%d%Y").date())
-    except:
-        strdates.append(None)
-    try:
-        enddates.append(datetime.datetime.strptime(str(row["ENDDATE"]).zfill(8), "%m%d%Y").date())
-    except:
-        enddates.append(None)
+if tbl_si.num_rows > 0:
+    df_si = pl.from_arrow(tbl_si)
 
-si_tbl = si_tbl.append_column("STRDT", pa.array(strdates))
-si_tbl = si_tbl.append_column("ENDDT", pa.array(enddates))
+    # STRDATE / ENDDATE → datetime (like SAS INPUT/PUT)
+    df_si = df_si.with_columns([
+        df_si["STRDATE"].cast(pl.Utf8).str.slice(0, 8).str.strptime(pl.Datetime, "%m%d%Y", strict=False).alias("STRDT"),
+        df_si["ENDDATE"].cast(pl.Utf8).str.slice(0, 8).str.strptime(pl.Datetime, "%m%d%Y", strict=False).alias("ENDDT")
+    ])
 
-# Save SI output
-output_si_parquet = f"SI{REPTDAY}{REPTMON}{REPTYEAR}.parquet"
-output_si_csv     = f"SI{REPTDAY}{REPTMON}{REPTYEAR}.csv"
-pq.write_table(si_tbl, output_si_parquet)
-con.register("si_tbl", si_tbl)
-con.execute(f"COPY si_tbl TO '{output_si_csv}' (HEADER, DELIMITER ',')")
+    out1_parquet = f"SI{REPTDAY}{REPTMON}{REPTYEAR}.parquet"
+    out1_csv     = f"SI{REPTDAY}{REPTMON}{REPTYEAR}.csv"
 
-# ------------------------------------------------------------------
-# Step 4: WEEKLY logic (only run on 09,16,23,29)
-# ------------------------------------------------------------------
+    df_si.write_parquet(out1_parquet)
+    df_si.write_csv(out1_csv)
+
+# === Step 4: Weekly condition (only 09,16,23,29) ===
 if DD in ["09", "16", "23", "29"]:
-    si_weekly = con.execute("""
-        SELECT 
-            BRANCH,
-            ACCTNO,
-            NAME,
-            DEPCAT,
-            TYPE,
-            SEQNO,
-            AMOUNT,
-            TRANTYP,
-            TOACCT,
-            SERVCH,
-            SERVCHTP,
-            RSNFRM,
-            RSNCD,
-            BENEFC
-        FROM deposit
+    tbl_unsu = con.execute("""
+        SELECT * FROM deposit
         WHERE REPTNO = 1231 AND FMTCODE = 1
     """).arrow()
 
-    # Reason code mapping (PROC FORMAT equivalent)
-    reason_map = {
-        1:  "ACCOUNT DOES NOT EXIST",
-        2:  "ACCOUNT CLOSED",
-        3:  "POST NO TRANSACTIONS",
-        4:  "DEPCAT = C OR T",
-        5:  "AMDB PRA SEG NOT FOUND",
-        6:  "BCDB PRA SEG NOT FOUND",
-        7:  "INSUFFICIENT FUNDS",
-        8:  "ABA BANK TABLE ERROR",
-        9:  "INVALID INSTRUCTION TYPE",
-        10: "NO TYPE 2 INSTRUCT. FOUND",
-        11: "INTERBANK TABLE ERROR",
-        12: "POST NO DEBITS",
-        13: "POST NO CREDITS",
-        14: "ATS DR EXCEEDS EXCTRN LMT",
-        15: "ATS SVC DR EXCEEDS TRNLMT",
-        16: "NOT ALLOW DR PB SHARELINK"
-    }
+    if tbl_unsu.num_rows > 0:
+        df_unsu = pl.from_arrow(tbl_unsu)
 
-    # Add UNSUCC_DT and REASON
-    reasons = []
-    unsucc_dt = []
-    for row in si_weekly.to_pylist():
-        reasons.append(reason_map.get(row["RSNCD"], "UNKNOWN"))
-        unsucc_dt.append(RDATE)
+        # SAS PROC FORMAT mapping for REASONCD
+        reason_map = {
+            1: "ACCOUNT DOES NOT EXIST",
+            2: "ACCOUNT CLOSED",
+            3: "POST NO TRANSACTIONS",
+            4: "DEPCAT = C OR T",
+            5: "AMDB PRA SEG NOT FOUND",
+            6: "BCDB PRA SEG NOT FOUND",
+            7: "INSUFFICIENT FUNDS",
+            8: "ABA BANK TABLE ERROR",
+            9: "INVALID INSTRUCTION TYPE",
+            10: "NO TYPE 2 INSTRUCT. FOUND",
+            11: "INTERBANK TABLE ERROR",
+            12: "POST NO DEBITS",
+            13: "POST NO CREDITS",
+            14: "ATS DR EXCEEDS EXCTRN LMT",
+            15: "ATS SVC DR EXCEEDS TRNLMT",
+            16: "NOT ALLOW DR PB SHARELINK"
+        }
 
-    si_weekly = si_weekly.append_column("UNSUCC_DT", pa.array(unsucc_dt))
-    si_weekly = si_weekly.append_column("REASON", pa.array(reasons))
+        # map RSNCD → REASON, add UNSUCC_DT
+        df_unsu = df_unsu.with_columns([
+            pl.lit(RDATE).alias("UNSUCC_DT"),
+            df_unsu["RSNCD"].map_dict(reason_map, default=None).alias("REASON")
+        ])
 
-    # Save UNSUCCESSFUL SI report
-    output_unsu_parquet = f"UNSUCSI{REPTDAY}{REPTMON}{REPTYEAR}.parquet"
-    output_unsu_csv     = f"UNSUCSI{REPTDAY}{REPTMON}{REPTYEAR}.csv"
-    pq.write_table(si_weekly, output_unsu_parquet)
-    con.register("si_weekly", si_weekly)
-    con.execute(f"COPY si_weekly TO '{output_unsu_csv}' (HEADER, DELIMITER ',')")
+        out2_parquet = f"UNSUCSI{REPTDAY}{REPTMON}{REPTYEAR}.parquet"
+        out2_csv     = f"UNSUCSI{REPTDAY}{REPTMON}{REPTYEAR}.csv"
 
-    print(f"EIBDDPSI weekly job executed. Outputs: {output_unsu_parquet}, {output_unsu_csv}")
+        df_unsu.write_parquet(out2_parquet)
+        df_unsu.write_csv(out2_csv)
 
-# ------------------------------------------------------------------
-print(f"EIBDDPSI daily job executed. Outputs: {output_si_parquet}, {output_si_csv}")
+con.close()
