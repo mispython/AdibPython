@@ -1,0 +1,163 @@
+//EIBDDPSI JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M
+/*JOBPARM S=S1M1
+//***********************************************************
+//* DELETE OUTPUT DATASETS
+//***********************************************************
+//DELETE   EXEC PGM=IEFBR14
+//DD1      DD DSN=SAP.DEPO.SIMAINT.FTP,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(0))
+//*
+//CREATE  EXEC PGM=IEFBR14
+//CRT01    DD DSN=SAP.DEPO.SIMAINT.FTP,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),
+//            SPACE=(CYL,(500,200),RLSE),UNIT=(SYSDA,5)
+//***********************************************************
+//* Extract SI Maintenance Record
+//* eSMR2018-4862 PB Junior Campaign (JKA)
+//* eSMR2019-2048 PB Junior Campaign (JKA)
+//***********************************************************
+//EIBDDPSI EXEC SAS609
+//DEPOSIT  DD DSN=RBP2.B033.MST01.DPDARPGS,DISP=SHR
+//         DD DSN=RBP2.B033.MST02.DPDARPGS,DISP=SHR
+//         DD DSN=RBP2.B033.MST03.DPDARPGS,DISP=SHR
+//         DD DSN=RBP2.B033.MST04.DPDARPGS,DISP=SHR
+//         DD DSN=RBP2.B033.MST05.DPDARPGS,DISP=SHR
+//         DD DSN=RBP2.B033.MST06.DPDARPGS,DISP=SHR
+//         DD DSN=RBP2.B033.MST07.DPDARPGS,DISP=SHR
+//         DD DSN=RBP2.B033.MST08.DPDARPGS,DISP=SHR
+//         DD DSN=RBP2.B033.MST09.DPDARPGS,DISP=SHR
+//         DD DSN=RBP2.B033.MST10.DPDARPGS,DISP=SHR
+//CA       DD DSN=SAP.DEPO.SIMAINT.CAMPGN,DISP=OLD
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,(800))
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,(800))
+//SYSIN    DD *
+OPTIONS YEARCUTOFF=1950;
+
+DATA REPTDATE;
+   REPTDATE=TODAY()-1;
+   TODATE = TODAY();
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+   CALL SYMPUT('DD',PUT(DAY(TODATE),Z2.));
+   CALL SYMPUT('RDATE',REPTDATE);
+RUN;
+
+DATA CA.SI&REPTDAY&REPTMON
+        SI&REPTDAY&REPTMON&REPTYEAR;
+
+   INFILE DEPOSIT;
+   INPUT @3   BANKNO   PD2.
+         @24  REPTNO   PD3.
+         @27  FMTCODE  PD2. @;
+
+   IF REPTNO = 1220 AND FMTCODE = 1;
+   INPUT @103 FLSEQNUM     PD3.
+         @106 BRANCH       PD4.
+         @110 ACCTNO       PD6.
+         @116 NAME         $15.
+         @131 CONTROL      $11.
+         @142 TYPE         $1.
+         @143 FUNC         $1.
+         @144 RECSEQNUM    PD3.
+         @147 STRDATE      PD5.
+         @152 ENDDATE      PD5.
+         @157 CURRENCY     $3.
+         @160 CYCLE        $3.
+         @163 AMOUNT       PD7.2
+         @174 TOACCT       PD9.
+         @185 NEXTDATE     PD5.
+         @196 TP           $1.
+         @210 BENECD       $3.
+         @213 REFNO        $18.
+         @231 DESC         $47.
+         @278 USERID       $8.
+         ;
+
+    STRDT=INPUT(SUBSTR(PUT(STRDATE,Z11.),1,8),MMDDYY8.);
+    ENDDT=INPUT(SUBSTR(PUT(ENDDATE,Z11.),1,8),MMDDYY8.);
+RUN;
+
+%MACRO WEEKLY;
+   %IF &DD EQ 09 OR &DD EQ 16
+    OR &DD EQ 23 OR &DD EQ 29 %THEN %DO;
+
+   PROC FORMAT;
+     VALUE REASONCD
+     001 = 'ACCOUNT DOES NOT EXIST'
+     002 = 'ACCOUNT CLOSED'
+     003 = 'POST NO TRANSACTIONS'
+     004 = 'DEPCAT = C OR T'
+     005 = 'AMDB PRA SEG NOT FOUND'
+     006 = 'BCDB PRA SEG NOT FOUND'
+     007 = 'INSUFFICIENT FUNDS'
+     008 = 'ABA BANK TABLE ERROR'
+     009 = 'INVALID INSTRUCTION TYPE'
+     010 = 'NO TYPE 2 INSTRUCT. FOUND'
+     011 = 'INTERBANK TABLE ERROR'
+     012 = 'POST NO DEBITS'
+     013 = 'POST NO CREDITS'
+     014 = 'ATS DR EXCEEDS EXCTRN LMT'
+     015 = 'ATS SVC DR EXCEEDS TRNLMT'
+     016 = 'NOT ALLOW DR PB SHARELINK'
+     ;
+   RUN;
+
+   DATA SI;
+      INFILE DEPOSIT;
+
+      INPUT @3   BANKNO   PD2.
+            @24  REPTNO   PD3.
+            @27  FMTCODE  PD2. @;
+
+      IF REPTNO = 1231 AND FMTCODE = 1;
+      INPUT @106 BRANCH    PD4.
+            @110 ACCTNO    PD6.
+            @116 NAME      $20.
+            @136 DEPCAT    $1.
+            @137 TYPE      $1.
+            @139 SEQNO     PD3.
+            @142 AMOUNT    PD7.2
+            @149 TRANTYP   $1.
+            @150 TOACCT    PD9.
+            @159 SERVCH    PD3.
+            @162 SERVCHTP  $1.
+            @163 RSNFRM    $1.
+            @164 RSNCD     PD2.
+            @166 BENEFC    $50.
+            ;
+      RUN;
+
+      DATA CA.UNSUCSI&REPTDAY&REPTMON
+              UNSUCSI&REPTDAY&REPTMON&REPTYEAR;
+         SET SI;
+         FORMAT REASON $30.;
+         UNSUCC_DT = &RDATE;
+         REASON = PUT(RSNCD,REASONCD.);
+      RUN;
+   %END;
+%MEND WEEKLY;
+%WEEKLY;
+
+FILENAME TRANFILE 'SAP.DEPO.SIMAINT.FTP' DISP=OLD;
+PROC CPORT LIBRARY=WORK FILE=TRANFILE;
+SELECT SI&REPTDAY&REPTMON&REPTYEAR UNSUCSI&REPTDAY&REPTMON&REPTYEAR;
+RUN;
+//*------------------------------------------------------
+//* FTP TO EDW
+//*------------------------------------------------------
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(EDW#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=binary
+lzopts linerule=$lr
+cd /stgsrcsys/host/ftpfiles
+PUT //SAP.DEPO.SIMAINT.FTP    SIJUNIOR
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+cd /stgsrcsys/host/control
+PUT //SAP.CRMS.DAY.CONTROL    DPSIDT.TXT
+EOB
+/*
