@@ -1,0 +1,54 @@
+//EIVGLTX4  JOB MSGLEVEL=(1,1),MSGCLASS=X,USER=OPCC                             
+//*--------------------------------------------------------------------         
+//*-->  COPY FDP.APPL.PIVB.MTHEND.NLF INTO SAP.FDP.APPL.PIVB.MTHEND.NLF         
+//*--------------------------------------------------------------------         
+//COPYFILE EXEC PGM=ICEGENER                                                    
+//SYSPRINT DD SYSOUT=*                                                          
+//SYSUT1   DD DISP=SHR,DSN=FDP.APPL.PIVB.MTHEND.NLF                             
+//SYSUT2   DD DSN=SAP.FDP.APPL.PIVB.MTHEND.NLF(+1),                             
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            UNIT=(SYSDA,5),LIKE=FDP.APPL.PIVB.MTHEND.NLF                      
+//SYSIN    DD DUMMY                                                             
+//*--------------------------------------------------------------------         
+//*-->  COPY FDP.APPL.PIVB.MTHEND.LCR INTO SAP.APPL.PIVB.MTHEND.LCR             
+//*--------------------------------------------------------------------         
+//COPYFILE EXEC PGM=ICEGENER                                                    
+//SYSPRINT DD SYSOUT=*                                                          
+//SYSUT1   DD DISP=SHR,DSN=FDP.APPL.PIVB.MTHEND.LCR                             
+//SYSUT2   DD DSN=SAP.APPL.PIVB.MTHEND.LCR(+1),                                 
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            UNIT=(SYSDA,5),LIKE=FDP.APPL.PIVB.MTHEND.LCR                      
+//SYSIN    DD DUMMY                                                             
+//*--------------------------------------------------------------------         
+//*-->  COPY FDP.APPL.PINA.MTHEND.LCR INTO SAP.APPL.PINA.MTHEND.LCR             
+//*--------------------------------------------------------------------         
+//COPYFILE EXEC PGM=ICEGENER                                                    
+//SYSPRINT DD SYSOUT=*                                                          
+//SYSUT1   DD DISP=SHR,DSN=FDP.APPL.PINA.MTHEND.LCR                             
+//SYSUT2   DD DSN=SAP.APPL.PINA.MTHEND.LCR(+1),                                 
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            UNIT=(SYSDA,5),LIKE=FDP.APPL.PINA.MTHEND.LCR                      
+//SYSIN    DD DUMMY                                                             
+//*--------------------------------------------------------------------         
+//*-->  COPY FDP.APPL.PINT.MTHEND.LCR INTO SAP.APPL.PINT.MTHEND.LCR             
+//*--------------------------------------------------------------------         
+//COPYFILE EXEC PGM=ICEGENER                                                    
+//SYSPRINT DD SYSOUT=*                                                          
+//SYSUT1   DD DISP=SHR,DSN=FDP.APPL.PINT.MTHEND.LCR                             
+//SYSUT2   DD DSN=SAP.APPL.PINT.MTHEND.LCR(+1),                                 
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            UNIT=(SYSDA,5),LIKE=FDP.APPL.PINT.MTHEND.LCR                      
+//SYSIN    DD DUMMY                                                             
+//*------------------------------------------------------                       
+//* FTP TO EDW                                                                  
+//*------------------------------------------------------                       
+//RUNSFTP  EXEC COZBATCH                                                        
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(EDW#SFTP)                         
+//           DD *                                                               
+lzopts servercp=$servercp,notrim,overflow=trunc,                                
+lzopts mode=text                                                                
+cd /stgsrcsys/host/ftpfiles                                                     
+PUT //SAP.APPL.PIVB.MTHEND.LCR(+1)   PIVB.MTHLCR.TXT                            
+PUT //SAP.APPL.PINA.MTHEND.LCR(+1)   PINA.MTHLCR.TXT                            
+PUT //SAP.APPL.PINT.MTHEND.LCR(+1)   PINT.MTHLCR.TXT                            
+EOB                                                                             
