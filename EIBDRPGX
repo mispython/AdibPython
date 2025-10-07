@@ -1,0 +1,124 @@
+//EIBDRPGX JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                              
+//*****************************************************                         
+//* SMR 2006 229.                                                               
+//* DAILY DATASETS - 5 GENERATIONS.                                             
+//*****************************************************                         
+//EIBDRPGX  EXEC SAS609                                                         
+//DEPOSIT   DD DSN=RBP2.B033.MST01.DPDARPGS,DISP=SHR                            
+//          DD DSN=RBP2.B033.MST02.DPDARPGS,DISP=SHR                            
+//          DD DSN=RBP2.B033.MST09.DPDARPGS,DISP=SHR                            
+//          DD DSN=RBP2.B033.MST10.DPDARPGS,DISP=SHR                            
+//BRHFILE   DD DSN=RBP2.B033.PBB.BRANCH,DISP=SHR                                
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//FD        DD DSN=SAP.PBB.MNIFD.DAILY(+1),DISP=(NEW,CATLG),                    
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(500,300)),UNIT=(SYSDA,5)                             
+//IFD       DD DSN=SAP.PIBB.MNIFD.DAILY(+1),DISP=(NEW,CATLG),                   
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(10,10)),UNIT=(SYSDA,5)                               
+//SYSIN     DD *                                                                
+OPTIONS YEARCUTOFF=1990;                                                        
+OPTIONS NOCENTER NODATE;                                                        
+*;                                                                              
+%INC PGM(PBBDPFMT);                                                             
+*;                                                                              
+*;                                                                              
+DATA FD.REPTDATE                                                                
+     IFD.REPTDATE;                                                              
+  INFILE DEPOSIT LRECL=1752 OBS=1;                                              
+  INPUT @106 TBDATE PD6.;                                                       
+  REPTDATE=INPUT(SUBSTR(PUT(TBDATE, Z11.), 1, 8), MMDDYY8.);                    
+  REPTDATX=REPTDATE+1;                                                          
+  CALL SYMPUT('XDATE',PUT(REPTDATX,Z5.));                                       
+RUN;                                                                            
+*;                                                                              
+DATA FD4001;                                                                    
+  INFILE DEPOSIT LRECL=1752;                                                    
+  INPUT @3   BANKNO   PD2.                                                      
+        @24  REPTNO   PD3.                                                      
+        @27  FMTCODE  PD2. @;                                                   
+  IF BANKNO = 33 AND REPTNO = 4001 AND FMTCODE IN (1,2) THEN                    
+    DO;                                                                         
+      INPUT @106 BRANCH   PD4.                                                  
+            @110 ACCTNO   PD6.                                                  
+            @116 STATEC   $6.                                                   
+            @122 PURPOSE  $1.                                                   
+            @124 CUSTCD   PD3.                                                  
+            @127 DEPODTE  PD6.                                                  
+            @134 NAME     $15.                                                  
+            @149 CDNO     PD6.                                                  
+            @155 OPENIND  $1.                                                   
+            @156 CURBAL   PD6.2                                                 
+            @168 ORIGAMT  PD6.2                                                 
+            @174 ORGDATE  PD5.                                                  
+            @179 MATDATE  PD5.                                                  
+            @189 RATE     PD3.3      /* CURRENT-INT-RATE */                     
+            @203 ACCTTYPE PD2.                                                  
+            @205 TERM     PD2.                                                  
+            @207 MATID     $1.                                                  
+            @208 INTPLAN  PD2.                                                  
+            @210 PAYMENT  $1.                                                   
+            @211 RENEWAL  $1.                                                   
+            @212 INTPDYTD PD6.2      /* INT-PD-YTD       */                     
+            @218 INTPAY   PD6.2      /* ACC-INT-CTD      */                     
+            @230 INTDATE  PD5.       /* LAST-INT-DT      */                     
+            @240 LASTACTV PD5.                                                  
+            @245 INTFREQ  PD2.                                                  
+            @247 INTFREQID $1.                                                  
+            @304 PENDINT  PD2.                                                  
+            @349 CURCODE  $3.                                                   
+            @392 LMATDATE PD6.                                                  
+            @405 PRORATIO PD3.       /* PROFIT RATIO     */                     
+            @408 FDHOLD   $1.                                                   
+            @409 COSTCTR  PD4.                                                  
+            @413 COLLNO   PD6.                                                  
+            @419 INTTFRACCT PD6.                                                
+            @425 PRN_DISP_OPT $1.                                               
+            @426 PRN_RENEW    PD6.                                              
+            @432 PRN_TFR_ACCT PD6.;                                             
+                                                                                
+         IF (0<CUSTCD<=99) THEN DO;                                             
+              CUSTCD = CUSTCD;                                                  
+         END;                                                                   
+         ELSE IF (100<=CUSTCD<=999) THEN DO;                                    
+              CUSTCD=INPUT(SUBSTR(PUT(CUSTCD,3.),2,2),2.);                      
+         END;                                                                   
+         ELSE IF (1000<=CUSTCD<=9999) THEN DO;                                  
+              CUSTCD=INPUT(SUBSTR(PUT(CUSTCD,4.),3,2),2.);                      
+         END;                                                                   
+         ELSE IF (10000<=CUSTCD<=99999) THEN DO;                                
+              CUSTCD=INPUT(SUBSTR(PUT(CUSTCD,5.),4,2),2.);                      
+         END;                                                                   
+      OUTPUT FD4001;                                                            
+    END;                                                                        
+RUN;                                                                            
+PROC SORT DATA=FD4001; BY ACCTNO CDNO;                                          
+RUN;                                                                            
+                                                                                
+DATA FD;                                                                        
+  DROP LMMM LMDD LMYY LMDATES;                                                  
+  SET FD4001;                                                                   
+      IF LMATDATE > 0 THEN DO;                                                  
+         LMDATES=INPUT(SUBSTR(PUT(LMATDATE,Z11.),1,8),MMDDYY8.);                
+         LMMM=MONTH(LMDATES);                                                   
+         LMDD=DAY  (LMDATES);                                                   
+         LMYY=YEAR (LMDATES);                                                   
+         IF RENEWAL='N' AND (LMDATES=&XDATE) THEN                               
+            MATDATE=PUT(LMYY,Z4.)||PUT(LMMM,Z2.)||PUT(LMDD,Z2.);                
+      END;                                                                      
+  AMTIND=PUT(INTPLAN,FDDENOM.);                                                 
+RUN;                                                                            
+                                                                                
+DATA IFD.FD                                                                     
+     IFD.TIA                                                                    
+      FD.FD;                                                                    
+   SET FD;                                                                      
+   IF (3000<=COSTCTR<=4999) THEN DO;                                            
+      IF ACCTTYPE IN (318) THEN  OUTPUT IFD.TIA;                                
+      ELSE                       OUTPUT IFD.FD;                                 
+   END;                                                                         
+   ELSE                          OUTPUT  FD.FD;                                 
+RUN;                                                                            
+                                                                                
+PROC PRINT DATA = FD.REPTDATE;                                                  
+                                                                                
