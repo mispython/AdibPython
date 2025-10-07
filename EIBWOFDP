@@ -1,0 +1,53 @@
+//EIBWOFDP JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                      JOB02003
+/*JOBPARM S=S1M1                                                                
+//*                                                                             
+//EIBWOFDP  EXEC SAS609,OPTIONS='COMPRESS=YES'                                  
+//OD       DD DSN=RBP2.BKUP.B033.WOA.DATA.ALL(0),DISP=SHR                       
+//ODWOF    DD DSN=SAP.PBB.ODWOF(+1),                                            
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(400,200),RLSE),UNIT=(SYSDA,8)                         
+//IODWOF   DD DSN=SAP.PIBB.ODWOF(+1),                                           
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(400,200),RLSE),UNIT=(SYSDA,8)                         
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,(500))                                      
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,(500))                                      
+//SORTWK03 DD UNIT=SYSDA,SPACE=(CYL,(500))                                      
+//SORTWK04 DD UNIT=SYSDA,SPACE=(CYL,(500))                                      
+//SORTWK05 DD UNIT=SYSDA,SPACE=(CYL,(500))                                      
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950;                                           
+                                                                                
+DATA ODWOF.ODWOF IODWOF.IODWOF;                                                 
+   INFILE OD LRECL=200;                                                         
+   INPUT @003 ACCTNO          PD6.                                              
+         @009 WODT10CM        PD5.   /* ORIGINAL WRITE-OFF DATE     */          
+         @014 WOTYPE           $1.   /* WRITE-OFF TYPE              */          
+         @015 WOSTAT           $1.   /* WRITE-OFF STATUS            */          
+         @016 ACSTAT           $1.   /* ACCOUNT STATUS              */          
+         @017 STATCDATE         8.   /* STATUS CHANGE DATE          */          
+         @025 LEDGBAL         PD7.2  /* OUTSTANDING/LEDGER BALANCE  */          
+         @032 CUMWOSP         PD7.2  /* CUMULATIVE WRITE-OFF SP     */          
+         @039 CUMWOIS         PD7.2  /* CUMULATIVE WRITE-OFF IIS    */          
+         @046 ORIWDB          PD7.2  /* ORIGINAL WRITE-DOWN BALANCE */          
+         @053 WRITE_DOWN_BAL  PD7.2  /* WRITE-DOWN BALANCE          */          
+         @060 NAI            PD10.9  /* NON-ACCRUED INTEREST        */          
+         @070 CUMNAI         PD10.9  /* CUMULATIVE NON-ACCRUAL INT. */          
+         @080 BDR             PD7.2  /* CUMULATIVE BAD-DEBT RECOVER */          
+         @087 CUMRC           PD7.2  /* RECOVERY COST CUMULATIVE    */          
+         @094 CUMSC           PD7.2  /* SUNDRY CREDITORS            */          
+         @101 IISR            PD7.2  /* IIS RECOVERED AMOUNT        */          
+         @108 ORIPRODUCT        3.   /* ORIGINAL ACCT TYPE          */          
+         @111 ACCBRCH           3.   /* ACCOUNT BRANCH              */          
+         @114 COSTCTR           4.   /* COST CENTER                 */          
+         @118 LASTMDATE         8.   /* LAST MAINTENANCE DATE       */          
+         @198 PRODUCT           3.   /* PRODUCT CODE */                         
+         ;                                                                      
+   /*** CONVERT DATE USING 10 COMPLIMENT METHOD ***/                            
+   ORIWODATE = SUM(100000000,(-1)*WODT10CM);                                    
+   IF (3000<=COSTCTR<=4999) THEN OUTPUT IODWOF.IODWOF;                          
+   ELSE                          OUTPUT ODWOF.ODWOF;                            
+RUN;                                                                            
+                                                                                
