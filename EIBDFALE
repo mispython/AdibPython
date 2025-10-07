@@ -1,0 +1,212 @@
+//EIBDFALE JOB EIS,EIBDFALE,CLASS=A,MSGCLASS=X,NOTIFY=&SYSUID                   
+/*JOBPARM S=S1M1                                                                
+//*                                                                             
+//* SMR 2008-1076                                                               
+//*                                                                             
+//EIBDFALE  EXEC SAS609,REGION=4096K                                            
+//DEPOSIT  DD DSN=RBP2.B033.MST01.DPDARPGS,DISP=SHR                             
+//         DD DSN=RBP2.B033.MST02.DPDARPGS,DISP=SHR                             
+//         DD DSN=RBP2.B033.MST09.DPDARPGS,DISP=SHR                             
+//         DD DSN=RBP2.B033.MST10.DPDARPGS,DISP=SHR                             
+//SYSIN    DD *                                                                 
+*+--------------------------------------------------------------+               
+ |  PROGRAM : FALDPBBE                                          |               
+ |  DATE    : 09.06.98                                          |               
+ |  REPORT  : AL-MUDHARABAH FD ACCOUNT (EXTRACT & SUMMARISE)    |               
+ +--------------------------------------------------------------+;              
+OPTIONS YEARCUTOFF=1990;                                                        
+*;                                                                              
+DATA REPTDATE;                                                                  
+   KEEP REPTDATE;                                                               
+   INFILE DEPOSIT LRECL=1693 OBS=1;                                             
+   INPUT @106 TBDATE PD6.;                                                      
+   REPTDATE=INPUT(SUBSTR(PUT(TBDATE,Z11.),1,8),MMDDYY8.);                       
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));                                
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                             
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                               
+   CALL SYMPUT('RDATE',PUT(REPTDATE,8.));                                       
+RUN;                                                                            
+*;                                                                              
+LIBNAME MIS "SAP.PBB.MIS.D&REPTYEAR" DISP=OLD;                                  
+*;                                                                              
+DATA FD;                                                                        
+   KEEP BRANCH ACCTNO CURBAL INTPLAN LMATDT;                                    
+   INFILE DEPOSIT LRECL=1693;                                                   
+   INPUT @3 BANKNO PD2. @24 REPTNO PD3. @27 FMTCODE PD2. @;                     
+   IF BANKNO = 33 AND REPTNO = 4001 AND FMTCODE IN (1,2);                       
+   INPUT @106 BRANCH  PD4.                                                      
+         @110 ACCTNO  PD6.                                                      
+         @155 OPENIND $1.                                                       
+         @156 CURBAL  PD6.2                                                     
+         @208 INTPLAN IB2.                                                      
+         @392 LMATDATE PD6.;                                                    
+   IF OPENIND IN ('D','O')       AND                                            
+      ((340 <= INTPLAN <= 359)   OR                                             
+       (448 <= INTPLAN <= 459)   OR                                             
+       (461 <= INTPLAN <= 469)   OR                                             
+       (580 <= INTPLAN <= 599)   OR                                             
+       (660 <= INTPLAN <= 740));                                                
+   IF LMATDATE NE (0) THEN DO;                                                  
+      LMDATES = INPUT(SUBSTR(PUT(LMATDATE,Z11.),1,8),MMDDYY8.);                 
+      LMATDT  = LMDATES;                                                        
+   END;                                                                         
+   ELSE LMATDT = 0;                                                             
+*;                                                                              
+*------------------------------------------------*                              
+*  SUMMARISE BY BRANCH, INTPLAN BEFORE STORING   *                              
+*------------------------------------------------*;                             
+PROC SORT DATA=FD OUT=AC NODUPKEYS;                                             
+   BY BRANCH INTPLAN ACCTNO;                                                    
+*;                                                                              
+PROC SUMMARY NWAY;                                                              
+   CLASS BRANCH INTPLAN;                                                        
+   OUTPUT OUT=AC1(DROP=_TYPE_ RENAME=_FREQ_=FDINO);                             
+*;                                                                              
+PROC SUMMARY DATA=FD NWAY;                                                      
+   CLASS BRANCH INTPLAN;                                                        
+   VAR CURBAL;                                                                  
+   OUTPUT OUT=FD1(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;                    
+*;                                                                              
+DATA DYIBUF;                                                                    
+   MERGE AC1 FD1;                                                               
+   BY BRANCH INTPLAN;                                                           
+   IF _N_ = 1 THEN SET REPTDATE;                                                
+*;                                                                              
+*----------------------------------------------------*                          
+*  SUMMARISE BY BRANCH, INTPLAN BEFORE PRIVATISATION *                          
+*----------------------------------------------------*;                         
+PROC SORT DATA=FD OUT=BAC NODUPKEYS;                                            
+   BY BRANCH INTPLAN ACCTNO;                                                    
+   WHERE LMATDT < '04SEP04'D AND LMATDT NE 0;                                   
+PROC SUMMARY NWAY;                                                              
+   CLASS BRANCH INTPLAN;                                                        
+   OUTPUT OUT=BAC(DROP=_TYPE_ RENAME=_FREQ_=FDINO);                             
+*;                                                                              
+PROC SUMMARY DATA=FD NWAY;                                                      
+   WHERE LMATDT < '04SEP04'D AND LMATDT NE 0;                                   
+   CLASS BRANCH INTPLAN;                                                        
+   VAR CURBAL;                                                                  
+   OUTPUT OUT=BFD(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;                    
+*;                                                                              
+DATA DYIBUB;                                                                    
+   MERGE BAC BFD;                                                               
+   BY BRANCH INTPLAN;                                                           
+   IF _N_ = 1 THEN SET REPTDATE;                                                
+*;                                                                              
+*---------------------------------------------------*                           
+*  SUMMARISE BY BRANCH, INTPLAN AFTER PRIVATISATION *                           
+*  04SEP04 UNTIL 15APR06.                           *                           
+*---------------------------------------------------*;                          
+PROC SORT DATA=FD OUT=AAC NODUPKEYS;                                            
+   BY BRANCH INTPLAN ACCTNO;                                                    
+   WHERE LMATDT >= '04SEP04'D AND LMATDT <= '15APR06'D;                         
+*;                                                                              
+PROC SUMMARY NWAY;                                                              
+   CLASS BRANCH INTPLAN;                                                        
+   OUTPUT OUT=AAC(DROP=_TYPE_ RENAME=_FREQ_=FDINO);                             
+*;                                                                              
+PROC SUMMARY DATA=FD NWAY;                                                      
+   WHERE LMATDT >= '04SEP04'D AND LMATDT <= '15APR06'D;                         
+   CLASS BRANCH INTPLAN;                                                        
+   VAR CURBAL;                                                                  
+   OUTPUT OUT=AFD(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;                    
+*;                                                                              
+DATA DYIBUA;                                                                    
+   MERGE AAC AFD;                                                               
+   BY BRANCH INTPLAN;                                                           
+   IF _N_ = 1 THEN SET REPTDATE;                                                
+*;                                                                              
+*---------------------------------------------------*                           
+*  SUMMARISE BY BRANCH  INTPLAN AFTER PRIVATISATION *                           
+*  16SEP04 UNTIL 15SEP08.                           *                           
+*---------------------------------------------------*;                          
+PROC SORT DATA=FD OUT=NAC NODUPKEYS;                                            
+   BY BRANCH INTPLAN ACCTNO;                                                    
+   WHERE LMATDT >= '16APR06'D AND LMATDT <= '15SEP08'D;                         
+*;                                                                              
+PROC SUMMARY NWAY;                                                              
+   CLASS BRANCH INTPLAN;                                                        
+   OUTPUT OUT=NAC(DROP=_TYPE_ RENAME=_FREQ_=FDINO);                             
+*;                                                                              
+PROC SUMMARY DATA=FD NWAY;                                                      
+   WHERE LMATDT >= '16APR06'D AND LMATDT <= '15SEP08'D;                         
+   CLASS BRANCH INTPLAN;                                                        
+   VAR CURBAL;                                                                  
+   OUTPUT OUT=NFD(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;                    
+*;                                                                              
+DATA DYIBUN;                                                                    
+   MERGE NAC NFD;                                                               
+   BY BRANCH INTPLAN;                                                           
+   IF _N_ = 1 THEN SET REPTDATE;                                                
+*;                                                                              
+*---------------------------------------------------*                           
+*  SUMMARISE BY BRANCH INTPLAN AFTER PRIVATISATION  *                           
+*  16SEP04 UNTIL 15SEP08.                           *                           
+*---------------------------------------------------*;                          
+PROC SORT DATA=FD OUT=YAC NODUPKEYS;                                            
+   BY BRANCH INTPLAN ACCTNO;                                                    
+   WHERE LMATDT >= '16SEP08'D;                                                  
+*;                                                                              
+PROC SUMMARY NWAY;                                                              
+   CLASS BRANCH INTPLAN;                                                        
+   OUTPUT OUT=YAC(DROP=_TYPE_ RENAME=_FREQ_=FDINO);                             
+*;                                                                              
+PROC SUMMARY DATA=FD NWAY;                                                      
+   WHERE LMATDT >= '16SEP08'D;                                                  
+   CLASS BRANCH INTPLAN;                                                        
+   VAR CURBAL;                                                                  
+   OUTPUT OUT=YFD(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;                    
+*;                                                                              
+DATA DYIBUY;                                                                    
+   MERGE YAC YFD;                                                               
+   BY BRANCH INTPLAN;                                                           
+   IF _N_ = 1 THEN SET REPTDATE;                                                
+*;                                                                              
+%MACRO MISAPPD;                                                                 
+   %IF "&REPTDAY" EQ "01"  %THEN %DO;                                           
+      PROC DATASETS LIB=MIS NOLIST;                                             
+         DELETE DYIBUF&REPTMON;                                                 
+      RUN;                                                                      
+      PROC DATASETS LIB=MIS NOLIST;                                             
+         DELETE DYIBUB&REPTMON;                                                 
+      RUN;                                                                      
+      PROC DATASETS LIB=MIS NOLIST;                                             
+         DELETE DYIBUA&REPTMON;                                                 
+      RUN;                                                                      
+      PROC DATASETS LIB=MIS NOLIST;                                             
+         DELETE DYIBUN&REPTMON;                                                 
+      RUN;                                                                      
+      PROC DATASETS LIB=MIS NOLIST;                                             
+         DELETE DYIBUY&REPTMON;                                                 
+      RUN;                                                                      
+   %END;                                                                        
+   %ELSE %DO;                                                                   
+      DATA MIS.DYIBUY&REPTMON;                                                  
+         SET MIS.DYIBUY&REPTMON;                                                
+         IF REPTDATE EQ &RDATE THEN DELETE;                                     
+      RUN;                                                                      
+      DATA MIS.DYIBUF&REPTMON;                                                  
+         SET MIS.DYIBUF&REPTMON;                                                
+         IF REPTDATE EQ &RDATE THEN DELETE;                                     
+      RUN;                                                                      
+      DATA MIS.DYIBUB&REPTMON;                                                  
+         SET MIS.DYIBUB&REPTMON;                                                
+         IF REPTDATE EQ &RDATE THEN DELETE;                                     
+      RUN;                                                                      
+      DATA MIS.DYIBUA&REPTMON;                                                  
+         SET MIS.DYIBUA&REPTMON;                                                
+         IF REPTDATE EQ &RDATE THEN DELETE;                                     
+      RUN;                                                                      
+      DATA MIS.DYIBUN&REPTMON;                                                  
+         SET MIS.DYIBUN&REPTMON;                                                
+         IF REPTDATE EQ &RDATE THEN DELETE;                                     
+      RUN;                                                                      
+   %END;                                                                        
+   PROC APPEND DATA=DYIBUF BASE=MIS.DYIBUF&REPTMON; RUN;                        
+   PROC APPEND DATA=DYIBUB BASE=MIS.DYIBUB&REPTMON; RUN;                        
+   PROC APPEND DATA=DYIBUA BASE=MIS.DYIBUA&REPTMON; RUN;                        
+   PROC APPEND DATA=DYIBUN BASE=MIS.DYIBUN&REPTMON; RUN;                        
+   PROC APPEND DATA=DYIBUY BASE=MIS.DYIBUY&REPTMON; RUN;                        
+%MEND MISAPPD;                                                                  
+%MISAPPD                                                                        
+/*                                                                              
