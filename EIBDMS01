@@ -1,0 +1,137 @@
+//EIBDMS01 JOB MISEIS,EIBWDEPE,CLASS=A,MSGCLASS=X,MSGLEVEL=(1,1),               
+//         NOTIFY=&SYSUID                                                       
+//*                                                                             
+//*  13/01/09                                                                   
+//*                                                                             
+//EIBDMS01  EXEC SAS609                                                         
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//MNITB     DD DSN=SAP.PBB.MNITB.DAILY(0),DISP=SHR                              
+//MNIIB     DD DSN=SAP.PIBB.MNITB.DAILY(0),DISP=SHR                             
+//SASLIST   DD SYSOUT=X                                                         
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS YEARCUTOFF=1950 NOCENTER;                                               
+                                                                                
+%INC PGM(PBBDPFMT);                                                             
+                                                                                
+DATA REPTDATE;                                                                  
+  SET MNITB.REPTDATE;                                                           
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));                               
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                            
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                              
+  CALL SYMPUT('RDATE', PUT(REPTDATE, Z5.));                                     
+RUN;                                                                            
+*;                                                                              
+LIBNAME MIS "SAP.PBB.MIS.D&REPTYEAR" DISP=OLD;                                  
+*;                                                                              
+DATA FD;                                                                        
+   SET MNITB.FD;                                                                
+   REPTDATE=&RDATE;                                                             
+   IF OPENIND NOT IN ('B','C','P');                                             
+   PRODCD=PUT(INTPLAN,FDPROD.);                                                 
+   IF PRODCD EQ '42630' THEN DELETE;                                            
+   IF CURBAL GE 0;                                                              
+   TOTFD=CURBAL;                                                                
+*;                                                                              
+PROC SUMMARY DATA=FD NWAY;                                                      
+CLASS REPTDATE; VAR TOTFD;                                                      
+OUTPUT OUT=FDC (DROP=_FREQ_ _TYPE_) SUM=;                                       
+*;                                                                              
+DATA FDI;                                                                       
+   SET MNIIB.FD;                                                                
+   REPTDATE=&RDATE;                                                             
+   IF OPENIND NOT IN ('B','C','P');                                             
+   PRODCD=PUT(INTPLAN,FDPROD.);                                                 
+   IF PRODCD EQ '42630' THEN DELETE;                                            
+   IF CURBAL GE 0;                                                              
+   TOTFDI=CURBAL;                                                               
+*;                                                                              
+PROC SUMMARY DATA=FDI NWAY;                                                     
+CLASS REPTDATE; VAR TOTFDI;                                                     
+OUTPUT OUT=FDI (DROP=_FREQ_ _TYPE_) SUM=;                                       
+*;                                                                              
+DATA SAVG;                                                                      
+   SET MNITB.SAVING;                                                            
+   REPTDATE=&RDATE;                                                             
+   IF OPENIND NOT IN ('B','C','P');                                             
+   PRODCD=PUT(PRODUCT,SAPROD.);                                                 
+   IF PRODCD NE 'N';                                                            
+   IF CURBAL GE 0;                                                              
+   TOTSAVG=CURBAL;                                                              
+*;                                                                              
+PROC SUMMARY DATA=SAVG NWAY;                                                    
+CLASS REPTDATE; VAR TOTSAVG;                                                    
+OUTPUT OUT=SAC (DROP=_FREQ_ _TYPE_) SUM=;                                       
+*;                                                                              
+DATA SAVGI;                                                                     
+   SET MNIIB.SAVING;                                                            
+   REPTDATE=&RDATE;                                                             
+   IF OPENIND NOT IN ('B','C','P');                                             
+   PRODCD=PUT(PRODUCT,SAPROD.);                                                 
+   IF PRODCD NE 'N';                                                            
+   IF CURBAL GE 0;                                                              
+   TOTSAVGI=CURBAL;                                                             
+   IF PRODUCT=214 THEN TOTMBSA=CURBAL;                                          
+*;                                                                              
+PROC SUMMARY DATA=SAVGI NWAY;                                                   
+CLASS REPTDATE; VAR TOTSAVGI TOTMBSA;                                           
+OUTPUT OUT=SAI (DROP=_FREQ_ _TYPE_) SUM=;                                       
+*;                                                                              
+DATA CURR;                                                                      
+   SET MNITB.CURRENT;                                                           
+   REPTDATE=&RDATE;                                                             
+   PRODCD=PUT(PRODUCT,CAPROD.);                                                 
+   IF OPENIND NOT IN ('B','C','P');                                             
+   IF PRODCD NE 'N';                                                            
+   IF PRODCD EQ '42610' THEN DELETE;                                            
+   IF CURBAL GE 0;                                                              
+   IF PRODUCT=104 THEN   TOTVOSC=CURBAL; ELSE                                   
+   IF PRODUCT=105 THEN   TOTVOSF=CURBAL; ELSE                                   
+   IF PRODUCT NOT IN &ACE THEN TOTDMND=CURBAL; ELSE                             
+                                                                                
+   IF PRODUCT IN (150,151,152,181) THEN DO;                                     
+      IF CURBAL > 5000 THEN DO;                                                 
+         ACESA  =CURBAL-5000;                                                   
+         ACECA=5000;                                                            
+         TOTDMND=5000;                                                          
+         TOTSAV1=ACESA;                                                         
+      END;                                                                      
+      ELSE DO;                                                                  
+         TOTDMND=CURBAL;                                                        
+         ACECA  =CURBAL;                                                        
+      END;                                                                      
+   END;                                                                         
+                                                                                
+   IF PRODUCT=177  THEN DO;                                                     
+      IF CURBAL > 5000 THEN DO;                                                 
+         TOTSAV1=CURBAL-5000;                                                   
+         TOTDMND=5000;                                                          
+      END;                                                                      
+      ELSE DO;                                                                  
+         TOTDMND=CURBAL;                                                        
+      END;                                                                      
+   END;                                                                         
+*;                                                                              
+PROC SUMMARY DATA=CURR NWAY;                                                    
+CLASS  REPTDATE; VAR TOTVOSC TOTVOSF TOTDMND TOTSAV1 ACESA ACECA;               
+OUTPUT OUT=CAC (DROP=_FREQ_ _TYPE_) SUM=;                                       
+*;                                                                              
+DATA CURR;                                                                      
+   SET MNIIB.CURRENT;                                                           
+   REPTDATE=&RDATE;                                                             
+   IF OPENIND NOT IN ('B','C','P');                                             
+   PRODCD=PUT(PRODUCT,CAPROD.);                                                 
+   IF CURBAL GE 0;                                                              
+   IF PRODCD NE 'N';                                                            
+   TOTDMNDI=CURBAL;                                                             
+*;                                                                              
+PROC SUMMARY DATA=CURR NWAY;                                                    
+CLASS  REPTDATE; VAR TOTDMNDI;                                                  
+OUTPUT OUT=CAI (DROP=_FREQ_ _TYPE_) SUM=;                                       
+*;                                                                              
+DATA DYPOSN;                                                                    
+   MERGE FDC FDI SAC SAI CAI CAC;  BY REPTDATE;                                 
+   TOTSAVG=TOTSAVG+TOTSAV1;                                                     
+*;                                                                              
+PROC APPEND DATA=DYPOSN BASE=MIS.DYPOSN&REPTMON; RUN;                           
+*;                                                                              
