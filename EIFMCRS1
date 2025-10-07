@@ -1,0 +1,157 @@
+//EIFMCRS1 JOB MISEIS,EIFMCRIS,CLASS=A,MSGCLASS=X,NOTIFY=&SYSUID,       JOB29901
+//        USER=OPCC                                                     JOB29901
+/*JOBPARM S=S1M2                                                                
+//*                                                                             
+//* MERGE PAGE03 / PAGE04 TO CREATE PROVISION FILE.                             
+//*                                                                             
+//DELETE   EXEC PGM=IEFBR14                                                     
+//DD1      DD DSN=SAP.PFB.CCRIS2.PROVISIO,                                      
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//*                                                                             
+//EIFMCRIS EXEC SAS609                                                          
+//PAGE03   DD DSN=SAP.PFCRISS.TEXT(PAGE03),DISP=SHR                             
+//PAGE04   DD DSN=SAP.PFCRISS.TEXT(PAGE04),DISP=SHR                             
+//PROVISIO DD DSN=SAP.PFB.CCRIS2.PROVISIO,                                      
+//         DISP=(NEW,CATLG,DELETE),                                             
+//         SPACE=(CYL,(100,50),RLSE),                                           
+//         UNIT=SYSDA,                                                          
+//         DCB=(LRECL=360,RECFM=FB,BLKSIZE=0,BUFNO=10)                          
+//SYSIN    DD *                                                                 
+*+--------------------------------------------------------------+               
+ |  PROGRAM : EIFMCRS1                                          |               
+ |  REPORT  : MERGE PAGE03 / PAGE04 (EIFMCRIS) TO CREATE        |               
+ |            PROVISION FILE FOR KL UNION.                      |               
+ +--------------------------------------------------------------+;              
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 MISSING=0 NOCENTER;                        
+DATA PAGE03;                                                                    
+ INFILE PAGE03;                                                                 
+ INPUT @1   VAL234   $4.       /* VALUE 0234                 */                 
+       @5   FICODE    5.       /* BRANCH                     */                 
+       @10  ACCTNO   10.       /* ACCOUNT NUMBER             */                 
+       @20  NOTENO    5.       /* LOAN NOTE NUMBER           */                 
+       @25  REPTDTE  $8.       /* REPORTING DATE             */                 
+       @33  APCODE    5.       /* LOAN TYPE                  */                 
+       @38  APPRDTE  $8.       /* DATE ACCOUNT OPENED        */                 
+       @46  CLOSDTE  $8.       /* DATE ACCOUNT CLOSED        */                 
+       @54  TENSPA   $10.      /* SPACES                     */                 
+       @64  SECTORCD $4.       /* LOAN SECTORAL CODE         */                 
+       @68  NOTETERM  3.       /* ORIGINAL TENURE            */                 
+       @71  PAYTERM  $1.       /* PRIN REPAYMENT TERM        */                 
+       @72  ARREARS   3.       /* MTHS IN DEFAULT - PRIN O/S */                 
+       @75  ARREARS   3.       /* MTHS IN DEFAULT - INT O/S  */                 
+       @78  CLASSIFY $1.       /* LOAN CLASSIFICATION        */                 
+       @79  SECURE   $1.       /* SECURED/CLEAN LENDING      */                 
+       @80  TWON     $2.       /* VALUE=NN                   */                 
+       @82  RESTRUC  $1.       /* RESTRUCTURED/RESCHED       */                 
+       @83  CAGAMAS  $1.       /* CAGAMAS,DANAHARTA,NONE     */                 
+       @84  SNNN     $4.       /* VALUE=SNNN                 */                 
+       @88  DMYR     $3.       /* MYR                        */                 
+       @91  PRINCIPA 12.2      /* PRINCIPAL OUTSTANDING      */                 
+       @103 INTEROUT 12.2      /* INTEREST OUTSTANDING       */                 
+       @127 TOTBAL   12.2      /* TOTAL OUTSTANDING          */                 
+       @140 BORSTAT  $1.;      /* TOTAL OUTSTANDING          */                 
+                                                                                
+       PRINCIPA=PRINCIPA * 100;                                                 
+       INTEROUT=INTEROUT * 100;                                                 
+       TOTBAL=TOTBAL * 100;                                                     
+*;                                                                              
+DATA PAGE04;                                                                    
+ INFILE PAGE04;                                                                 
+ INPUT @1   VAL234   $4.       /* VALUE=0234                 */                 
+       @5   FICODE    5.       /* COST CENTRE                */                 
+       @10  ACCTNO   10.       /* ACCOUNT NUMBER             */                 
+       @20  NOTENO    5.       /* LOAN NOTE NUMBER           */                 
+       @25  REPTDTE  $8.       /* REPORTING DATE             */                 
+       @33  REALISAB 12.2      /* REALIZABLE VALUE OF SEC    */                 
+       @45  CLASSAMT 12.2      /* AMOUNT CLASSIFIED          */                 
+       @57  IISOPBAL 12.2      /* IIS - OPENING BALANCE      */                 
+       @69  IISSUAMT 12.2      /* IIS - SUSPENDED AMOUNT     */                 
+       @81  IISWBAMT 12.2      /* IIS - WRITTEN BACK AMOUNT  */                 
+       @93  IISWOAMT 12.2      /* IIS - WRITTEN OFF AMOUNT   */                 
+       @105 INTEROUT 12.2      /* IIS - CLOSING BALANCE      */                 
+       @117 SPOPBAL  12.2      /* SP - OPENING BALANCE       */                 
+       @129 SPTRANS  12.2      /* SP - PROVISION MADE        */                 
+       @141 SPWBAMT  12.2      /* SP - WRITTEN BACK AMOUNT   */                 
+       @153 SPWOAMT  12.2      /* SP - WRITTEN OFF AMOUNT    */                 
+       @165 SP       12.2;     /* SP - CLOSING BALANCE       */                 
+*;                                                                              
+            REALISAB= REALISAB * 100;                                           
+            CLASSAMT= CLASSAMT * 100;                                           
+            IISOPBAL = IISOPBAL * 100;                                          
+            IISSUAMT = IISSUAMT * 100;                                          
+            IISWBAMT = IISWBAMT * 100;                                          
+            IISWOAMT = IISWOAMT * 100;                                          
+            INTEROUT = INTEROUT * 100;                                          
+            SPOPBAL  = SPOPBAL  * 100;                                          
+            SPTRANS  = SPTRANS  * 100;                                          
+            SPWBAMT  = SPWBAMT  * 100;                                          
+            SPWOAMT  = SPWOAMT  * 100;                                          
+            SP       = SP       * 100;                                          
+*;                                                                              
+PROC SORT DATA=PAGE03; BY ACCTNO NOTENO;                                        
+PROC SORT DATA=PAGE04; BY ACCTNO NOTENO;                                        
+*;                                                                              
+DATA PROVISIO;                                                                  
+  MERGE PAGE04(IN=B) PAGE03(IN=A); BY ACCTNO NOTENO;                            
+  IF A AND NOT B THEN DO;                                                       
+     REALISAB=0; CLASSAMT=0; IISOPBAL=0; IISSUAMT=0;                            
+     IISWBAMT=0; IISOPBAL=0; SPOPBAL=0;                                         
+     SPTRANS=0;  SPWBAMT=0;  SPWOAMT=0;                                         
+     OUTPUT;                                                                    
+  END;                                                                          
+  IF B AND NOT A THEN DO;                                                       
+     NOTENO=0; NOTETERM=0; ARREARS=0; PRINCIPA=0;                               
+     TOTBAL=0;                                                                  
+     OUTPUT;                                                                    
+  END;                                                                          
+  IF A AND B THEN OUTPUT;                                                       
+                                                                                
+DATA PROVISIO;                                                                  
+  SET PROVISIO;                                                                 
+                                                                                
+  IF CLASSIFY IN ('B','D','S')    THEN TREF='D';                                
+                                                                                
+  IF BORSTAT='F' AND CLASSIFY='B' AND                                           
+     FICODE NOT IN (981,982,983,991,992,993) THEN DO;                           
+     ARREARS=999; TREF='A';                                                     
+  END;                                                                          
+                                                                                
+  IF BORSTAT='F' AND CLASSIFY='B' AND                                           
+     FICODE IN (981,982,983,991,992,993) AND ARREARS=0 THEN DO;                 
+     ARREARS=999;   TREF='B';                                                   
+  END;                                                                          
+                                                                                
+  IF BORSTAT NE 'F' AND CLASSIFY='B' AND                                        
+     FICODE IN (981,982,983,991,992,993) THEN DO;                               
+     ARREARS=000;   TREF='C';                                                   
+  END;                                                                          
+                                                                                
+  FILE PROVISIO;                                                                
+     PUT @0001 FICODE      9.                                                   
+         @0010 APCODE      3.                                                   
+         @0013 ACCTNO     10.                                                   
+         @0043 NOTENO     10.                                                   
+         @0073 REPTDTE    $8.                                                   
+         @0081 CLASSIFY   $1.                                                   
+         @0082 ARREARS    Z3.                                                   
+         @0085 PRINCIPA  Z17.                                                   
+         @0102 INTEROUT  Z17.                                                   
+         @0119 OTHERCHG  Z16.                                                   
+         @0135 REALISAB  Z17.                                                   
+         @0152 IISOPBAL  Z17.                                                   
+         @0169 IISSUAMT  Z17.                                                   
+         @0186 IISWBAMT  Z17.                                                   
+         @0203 IISWOAMT  Z17.                                                   
+         @0220 IISDANAH  Z17.                                                   
+         @0237 IISTRANS  Z17.                                                   
+         @0254 SPOPBAL   Z17.                                                   
+         @0271 SPCHARGE  Z17.                                                   
+         @0288 SPWBAMT   Z17.                                                   
+         @0305 SPWOAMT   Z17.                                                   
+         @0322 SPDANAH   Z17.                                                   
+         @0339 SPTRANS   Z17.                                                   
+         @0357 BORSTAT    $1.                                                   
+         @0358 TREF       $1.;                                                  
+*;                                                                              
+/*                                                                              
