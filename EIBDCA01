@@ -1,0 +1,156 @@
+//EIBDCA01 JOB MISEIS,'EIBDCA01',MSGCLASS=X,CLASS=A,MSGLEVEL=(1,1),     JOB23503
+//         REGION=8M,NOTIFY=&SYSUID                                             
+/*JOBPARM S=S1M2                                                                
+//*                                                                             
+//* SET AFTER EIBDTRBX                                                          
+//*                                                                             
+//PRINT1    OUTPUT CLASS=X,                                                     
+//          NAME='THE MANAGER',                                                 
+//          ROOM='22ND FLOOR',                                                  
+//          BUILDING='MENARA PBB',                                              
+//          DEPT='DEPOSIT AND CHANNEL MANAGEMENT',                              
+//          ADDRESS='JALAN AMPANG',                                             
+//          DEST=LOCAL                                                          
+//SAS609  EXEC SAS609,REGION=8M,WORK='350000,350000'                            
+//DPTRBL  DD DSN=RBP2.B033.MST02.DPTRBLGS,DISP=SHR                              
+//        DD DSN=RBP2.B033.MST03.DPTRBLGS,DISP=SHR                              
+//IPTRBLP DD DSN=SAP.PIBB.MNITB.DAILY(-1),DISP=SHR                              
+//DPTRBLP DD DSN=SAP.PBB.MNITB.DAILY(-1),DISP=SHR                               
+//BRHFILE DD DSN=RBP2.B033.PBB.BRANCH,DISP=SHR                                  
+//PGM     DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                       
+//SASLIST DD SYSOUT=X                                                           
+//SYSIN  DD *                                                                   
+*;                                                                              
+%INC PGM(PBBDPFMT);                                                             
+*;                                                                              
+DATA REPTDATE;                                                                  
+  INFILE DPTRBL LRECL=924 OBS=1;                                                
+  INPUT @106 TBDATE PD6.;                                                       
+  REPTDATE=INPUT(SUBSTR(PUT(TBDATE, Z11.), 1, 8), MMDDYY8.);                    
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));                               
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                            
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                              
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                                
+RUN;                                                                            
+*;                                                                              
+DATA DPTRBLGS;                                                                  
+  INFILE DPTRBL LRECL=924;                                                      
+                                                                                
+  INPUT @3   BANKNO   PD2.                                                      
+        @24  REPTNO   PD3.                                                      
+        @27  FMTCODE  PD2. @;                                                   
+                                                                                
+  IF BANKNO = 33 AND REPTNO = 1001 AND FMTCODE IN (1);                          
+  INPUT @106 BRANCH PD4.                                                        
+        @110 ACCTNO PD6.                                                        
+        @116 NAME $15.                                                          
+        @200 ODPLAN PD2.                                                        
+        @338 OPENIND $1.                                                        
+        @397 PRODUCT PD2.                                                       
+        @431 DEPTYPE $1.                                                        
+        @466 CURBAL PD7.2                                                       
+        @566 APPRLIMT PD6.;                                                     
+  IF PRODUCT NOT IN (297,298);                                                  
+  IF DEPTYPE IN ('D','N') THEN OUTPUT;                                          
+RUN;                                                                            
+*;                                                                              
+DATA CURRENT;                                                                   
+   SET DPTRBLGS;                                                                
+   WHERE CURBAL <= -500000;                                                     
+   IF  OPENIND NOT IN ('B','C','P');                                            
+   PRODCD=PUT(PRODUCT, CAPROD.);                                                
+   AMTIND=PUT(PRODUCT, CADENOM.);                                               
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=CURRENT; BY BRANCH;                                              
+RUN;                                                                            
+*;                                                                              
+DATA BRHDATA;                                                                   
+  INFILE BRHFILE LRECL=80;                                                      
+  INPUT @2 BRANCH  3.                                                           
+        @6 BRHCODE $3.;                                                         
+RUN;                                                                            
+PROC SORT DATA=BRHDATA; BY BRANCH;                                              
+RUN;                                                                            
+*;                                                                              
+DATA CURRENT;                                                                   
+  MERGE CURRENT (IN=A) BRHDATA (IN=B);                                          
+  BY BRANCH;                                                                    
+  IF A THEN OUTPUT ;                                                            
+RUN;                                                                            
+*;                                                                              
+PROC SORT DATA=CURRENT;                                                         
+ BY ACCTNO;                                                                     
+RUN;                                                                            
+*;                                                                              
+DATA IDEP;                                                                      
+ SET IPTRBLP.CURRENT;                                                           
+*;                                                                              
+DATA DEP;                                                                       
+ SET DPTRBLP.CURRENT;                                                           
+*;                                                                              
+DATA PVTRBLGS;                                                                  
+ SET IDEP DEP;                                                                  
+ IF   FMTCODE=1;                                                                
+ PREVBAL=CURBAL;                                                                
+ KEEP ACCTNO PRODUCT PREVBAL;                                                   
+*;                                                                              
+PROC SORT DATA=PVTRBLGS;                                                        
+ BY ACCTNO;                                                                     
+RUN;                                                                            
+*;                                                                              
+DATA CURRENT;                                                                   
+  MERGE CURRENT (IN=A) PVTRBLGS (IN=B);                                         
+  BY ACCTNO;                                                                    
+  IF A THEN OUTPUT ;                                                            
+RUN;                                                                            
+*;                                                                              
+DATA CUR1(KEEP=BRANCH BRHCODE NAME ACCTNO CURBAL PREVBAL)                       
+     CUR2(KEEP=BRANCH BRHCODE NAME ACCTNO CURBAL PREVBAL);                      
+   SET CURRENT;                                                                 
+   IF AMTIND = 'D' THEN DO;                                                     
+      IF ODPLAN = 100 AND APPRLIMT = 0 THEN OUTPUT CUR1;                        
+   END;                                                                         
+   ELSE                                                                         
+   IF AMTIND = 'I' THEN DO;                                                     
+      OUTPUT CUR2;                                                              
+   END;                                                                         
+RUN;                                                                            
+*;                                                                              
+OPTIONS NOCENTER YEARCUTOFF=1950 MISSING='0';                                   
+*;                                                                              
+%LET TBL1=(A) CONVENTIONAL CURRENT ACCOUNT;                                     
+%LET TBL2=(B) ISLAMIC CURRENT ACCOUNT;                                          
+*;                                                                              
+TITLE1 'REPORT ID : EIBDCA01';                                                  
+TITLE2 'PUBLIC BANK BERHAD';                                                    
+TITLE3 'PRODUCT DEVELOPMENT & MARKETING';                                       
+TITLE4 'DAILY LISTING OF CURRENT ACCOUNT CUSTOMER WITHOUT';                     
+TITLE5 'OD FACILITY WITH NEGATIVE/DEBIT BALANCES OF';                           
+TITLE6 'RM500,000 & ABOVE AS AT '  &RDATE;                                      
+TITLE7 ' ';                                                                     
+*;                                                                              
+%MACRO BNKTBL1;                                                                 
+   %DO I = 1 %TO 2;                                                             
+        PROC SORT DATA=CUR&I;                                                   
+        BY BRANCH ACCTNO;                                                       
+                                                                                
+        PROC PRINT DATA=CUR&I  LABEL;                                           
+        VAR BRANCH BRHCODE NAME ACCTNO PREVBAL CURBAL;                          
+        SUM CURBAL;                                                             
+           LABEL BRANCH='BRCH NO'                                               
+                 BRHCODE='BRCH CODE'                                            
+                 NAME='CUST. NAME'                                              
+                 ACCTNO='CUST. ACCT. NO'                                        
+                 CURBAL='CURRENT BAL. (RM)'                                     
+                 PREVBAL='PREVIOUS DAY BAL. (RM)';                              
+         TITLE8 &&TBL&I ;                                                       
+        FORMAT CURBAL COMMA20.2  PREVBAL COMMA20.2;                             
+   %END;                                                                        
+%MEND BNKTBL1;                                                                  
+*;                                                                              
+*+--------------------------------------------------------------+               
+ |  LISTING OF CA CUSTOMERS WITHOUT OD FACILITY                 |               
+ +--------------------------------------------------------------+;              
+%BNKTBL1;                                                                       
+*;                                                                              
