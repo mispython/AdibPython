@@ -1,0 +1,55 @@
+//EIBDMSFX JOB MISEIS,CLASS=A,MSGCLASS=X,MSGLEVEL=(1,1),                        
+//         NOTIFY=&SYSUID                                                       
+//*                                                                             
+//*  04/10/12                                                                   
+//*                                                                             
+//EIBDMSFX  EXEC SAS609                                                         
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//FINAL     DD DSN=SAP.PBB.NLF.DAILY.SA,DISP=SHR                                
+//MISFX     DD DSN=SAP.PBB.MIS.FX,DISP=OLD                                      
+//MNITB     DD DSN=SAP.PBB.MNITB.DAILY(0),DISP=SHR                              
+//SASLIST   DD SYSOUT=X                                                         
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS YEARCUTOFF=1950 NOCENTER;                                               
+                                                                                
+DATA REPTDATE;                                                                  
+  SET MNITB.REPTDATE;                                                           
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));                               
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                            
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                              
+  CALL SYMPUT('RDATE', PUT(REPTDATE, Z5.));                                     
+RUN;                                                                            
+*;                                                                              
+DATA NLF;                                                                       
+   SET FINAL.BEHAVEINDFXFD(RENAME=BALANCE=INDFXFDBAL)                           
+       FINAL.BEHAVENONFXFD(RENAME=BALANCE=NONFXFDBAL)                           
+       FINAL.BEHAVEINDFXCA(RENAME=BALANCE=INDFXCABAL)                           
+       FINAL.BEHAVENONFXCA(RENAME=BALANCE=NONFXCABAL);                          
+   WHERE DATE=&RDATE;;                                                          
+   RENAME DATE=REPTDATE;                                                        
+   KEEP DATE INDFXFDBAL NONFXFDBAL INDFXCABAL NONFXCABAL;                       
+RUN;                                                                            
+                                                                                
+PROC SUMMARY DATA=NLF NWAY;                                                     
+  CLASS REPTDATE;                                                               
+  VAR INDFXFDBAL NONFXFDBAL INDFXCABAL NONFXCABAL;                              
+  OUTPUT OUT=NLF (DROP=_FREQ_ _TYPE_) SUM=;                                     
+RUN;                                                                            
+                                                                                
+%MACRO APPEND;                                                                  
+%IF "&REPTDAY" EQ "01" %THEN                                                    
+   %DO;                                                                         
+      DATA MISFX.NLF&REPTMON;                                                   
+         SET NLF;                                                               
+      RUN;                                                                      
+   %END;                                                                        
+   %ELSE %DO;                                                                   
+      DATA MISFX.NLF&REPTMON;                                                   
+         SET MISFX.NLF&REPTMON;                                                 
+         IF REPTDATE = &RDATE THEN DELETE;                                      
+      RUN;                                                                      
+      PROC APPEND BASE=MISFX.NLF&REPTMON DATA=NLF; RUN;                         
+   %END;                                                                        
+%MEND APPEND;                                                                   
+%APPEND;                                                                        
