@@ -1,0 +1,159 @@
+//EIBDNLHA JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M,NOTIFY=&SYSUID       JOB56893
+//*                                                                             
+//EIBDNLHA  EXEC SAS609                                                         
+//STORE     DD DSN=SAP.PBB.NLF.DAILY,DISP=OLD                                   
+//STOREM    DD DSN=SAP.PBB.NLF.MONTH,DISP=OLD                                   
+//HARDCODE  DD DSN=SAP.PBB.NLF.VALUE,DISP=SHR                                   
+//SASLIST   DD SYSOUT=X                                                         
+//SYSIN     DD *                                                                
+OPTIONS NOCENTER;                                                               
+DATA HARDCODE;                                                                  
+    INFILE HARDCODE FIRSTOBS=2;                                                 
+    INPUT @007 BNMCODE    $14.                                                  
+          @026 AMOUNT     10.;                                                  
+   PROD = SUBSTR(BNMCODE,1,5);                                                  
+   INDNON = SUBSTR(BNMCODE,9,1);                                                
+   IF INDNON = '0' THEN DELETE;                                                 
+   IF PROD IN ('93329','93421','93423','93424','93425','93429',                 
+               '93419','94419',                                                 
+               '94329','94421','94423','94424','94425','94429',                 
+               '95329','95421','95423','95424','95425','95429',                 
+               '96329','96421','96423','96424','96425','96429') THEN            
+      AMOUNT = AMOUNT * (-1);                                                   
+RUN;                                                                            
+PROC TRANSPOSE DATA=HARDCODE OUT=HARDCODE                                       
+   (RENAME=(COL1=WEEK COL2=MONTH COL3=QTR COL4=HALFYR COL5=YEAR                 
+            COL6=LAST));                                                        
+   BY PROD;                                                                     
+   VAR AMOUNT;                                                                  
+RUN;                                                                            
+                                                                                
+PROC PRINT;                                                                     
+DATA STORE.HARDRMP1                                                             
+     STORE.HARDRMP2                                                             
+     STORE.HARDFXP1                                                             
+     STORE.HARDFXP2                                                             
+     STORE.HARDUTP1                                                             
+   ;                                                                            
+   SET HARDCODE;                                                                
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);                              
+   IF PROD IN ('93229') THEN DO;                                                
+       ITEM = 'A1.11';                                                          
+   END;                                                                         
+   IF PROD IN ('95229') THEN DO;                                                
+       ITEM = 'A1.11';                                                          
+   END;                                                                         
+   IF PROD IN ('94229') THEN DO;                                                
+       ITEM = 'B1.11';                                                          
+   END;                                                                         
+   IF PROD IN ('96229') THEN DO;                                                
+       ITEM = 'B1.11';                                                          
+   END;                                                                         
+    /** ADD NEW **/                                                             
+   IF PROD IN ('93329') THEN DO;                                                
+       ITEM = 'A1.20';                                                          
+   END;                                                                         
+   IF PROD IN ('93421') THEN DO;                                                
+       ITEM = 'A1.23';                                                          
+   END;                                                                         
+   IF PROD IN ('93423') THEN DO;                                                
+       ITEM = 'A1.25';                                                          
+   END;                                                                         
+   IF PROD IN ('93424') THEN DO;                                                
+       ITEM = 'A1.27';                                                          
+   END;                                                                         
+   IF PROD IN ('93425') THEN DO;                                                
+       ITEM = 'A1.28';                                                          
+   END;                                                                         
+   IF PROD IN ('93429') THEN DO;                                                
+       ITEM = 'A1.29';                                                          
+   END;                                                                         
+   IF PROD IN ('94329') THEN DO;                                                
+       ITEM = 'B1.20';                                                          
+   END;                                                                         
+   IF PROD IN ('94421') THEN DO;                                                
+       ITEM = 'B1.23';                                                          
+   END;                                                                         
+   IF PROD IN ('94423') THEN DO;                                                
+       ITEM = 'B1.25';                                                          
+   END;                                                                         
+   IF PROD IN ('94424') THEN DO;                                                
+       ITEM = 'B1.27';                                                          
+   END;                                                                         
+   IF PROD IN ('94425') THEN DO;                                                
+       ITEM = 'B1.28';                                                          
+   END;                                                                         
+   IF PROD IN ('94429') THEN DO;                                                
+       ITEM = 'B1.29';                                                          
+   END;                                                                         
+   IF PROD IN ('95329') THEN DO;                                                
+       ITEM = 'A1.20';                                                          
+   END;                                                                         
+   IF PROD IN ('95421') THEN DO;                                                
+       ITEM = 'A1.23';                                                          
+   END;                                                                         
+   IF PROD IN ('95423') THEN DO;                                                
+       ITEM = 'A1.25';                                                          
+   END;                                                                         
+   IF PROD IN ('95424') THEN DO;                                                
+       ITEM = 'A1.27';                                                          
+   END;                                                                         
+   IF PROD IN ('95425') THEN DO;                                                
+       ITEM = 'A1.28';                                                          
+   END;                                                                         
+   IF PROD IN ('95429') THEN DO;                                                
+       ITEM = 'A1.29';                                                          
+   END;                                                                         
+   IF PROD IN ('96329') THEN DO;                                                
+       ITEM = 'B1.20';                                                          
+   END;                                                                         
+   IF PROD IN ('96421') THEN DO;                                                
+       ITEM = 'B1.23';                                                          
+   END;                                                                         
+   IF PROD IN ('96423') THEN DO;                                                
+       ITEM = 'B1.25';                                                          
+   END;                                                                         
+   IF PROD IN ('96424') THEN DO;                                                
+       ITEM = 'B1.27';                                                          
+   END;                                                                         
+   IF PROD IN ('96425') THEN DO;                                                
+       ITEM = 'B1.28';                                                          
+   END;                                                                         
+   IF PROD IN ('96429') THEN DO;                                                
+       ITEM = 'B1.29';                                                          
+   END;                                                                         
+   IF PROD IN ('93419') THEN DO;                                                
+       ITEM = 'A1.22';                                                          
+   END;                                                                         
+   IF PROD IN ('94419') THEN DO;                                                
+       ITEM = 'B1.22';                                                          
+   END;                                                                         
+   IF PROD IN ('93635') THEN DO;                                                
+       ITEM = 'A2.08';                                                          
+       OUTPUT STORE.HARDUTP1;                                                   
+   END;                                                                         
+   IF SUBSTR(ITEM,1,1) = 'A' & ITEM NE 'A2.08' THEN DO;                         
+      IF SUBSTR(PROD,1,2) = '93' THEN OUTPUT                                    
+         STORE.HARDRMP1;                                                        
+      IF SUBSTR(PROD,1,2) = '95' THEN OUTPUT                                    
+         STORE.HARDRMP2;                                                        
+   END;                                                                         
+   ELSE DO;                                                                     
+      IF SUBSTR(PROD,1,2) = '94' THEN OUTPUT                                    
+         STORE.HARDFXP1;                                                        
+      IF SUBSTR(PROD,1,2) = '96' THEN OUTPUT                                    
+         STORE.HARDFXP2;                                                        
+   END;                                                                         
+RUN;                                                                            
+DATA STOREM.HARDRMP1;                                                           
+   SET STORE.HARDRMP1;                                                          
+DATA STOREM.HARDRMP2;                                                           
+   SET STORE.HARDRMP2;                                                          
+DATA STOREM.HARDFXP1;                                                           
+   SET STORE.HARDFXP1;                                                          
+DATA STOREM.HARDFXP2;                                                           
+   SET STORE.HARDFXP2;                                                          
+DATA STOREM.HARDUTP1;                                                           
+   SET STORE.HARDUTP1;                                                          
+   PROC PRINT;                                                                  
+RUN;                                                                            
