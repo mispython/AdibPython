@@ -1,0 +1,177 @@
+//EIBDLNS2 JOB MISEIS,EIBDLNSA,CLASS=A,MSGCLASS=X,NOTIFY=&SYSUID,       JOB22447
+//         REGION=8M,USER=OPCC                                                  
+/*JOBPARM S=S1M1                                                                
+//PRINT1    OUTPUT CLASS=A                                                      
+//PRINT10   OUTPUT CLASS=R,                                                     
+//          NAME='EN FAZLY BIN SAMPOL',                                         
+//          ROOM='13TH FLOOR',                                                  
+//          BUILDING='MENARA PBB',                                              
+//          DEPT='ISLAMIC BUSINESS UNIT',                                       
+//          ADDRESS='JALAN AMPANG',                                             
+//          DEST=S1.LOCAL                                                       
+//*--------------------------------------------------------------               
+//*  IBU DAILY REPORT - MOVEMENTS OF PRODUCT 135,136.                           
+//*--------------------------------------------------------------               
+//EIBDLNSA  EXEC SAS609,REGION=8M,WORK='180000,150000'                          
+//FEEFILE   DD DSN=RBP2.B033.NFEEFILE(0),DISP=SHR                               
+//ACCTFILE  DD DSN=RBP2.SAS.B033.ACCTFILE,DISP=SHR                              
+//DATEFILE  DD DSN=RBP2.SAS.B033.DATEFILE,DISP=SHR                              
+//BRANCHF   DD DSN=RBP2.B033.PBB.BRANCH,DISP=SHR                                
+//MIS       DD DSN=SAP.PBB.MNILN.IBU,DISP=OLD                                   
+//SASLIST   DD SYSOUT=(,),OUTPUT=(*.PRINT1)                                     
+//SORTWK01  DD UNIT=SYSDA,SPACE=(CYL,(1000))                                    
+//SORTWK02  DD UNIT=SYSDA,SPACE=(CYL,(1000))                                    
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS NOCENTER YEARCUTOFF=1950 LS=132 MISSING=0 NODATE NONUMBER;              
+*;                                                                              
+DATA REPTDATE;                                                                  
+     INFILE DATEFILE LRECL=80 OBS=1;                                            
+     INPUT @01  EXTDATE   11.;                                                  
+     REPTDATE = INPUT(SUBSTR(PUT(EXTDATE, Z11.), 1, 8), MMDDYY8.);              
+     PREVDATE = REPTDATE -1;                                                    
+     DLETDATE = REPTDATE -3;                                                    
+     REPTDAY  = DAY(REPTDATE);                                                  
+     PREVDAY  = DAY(PREVDATE);                                                  
+     DLETDAY  = DAY(DLETDATE);                                                  
+     IF MONTH(REPTDATE) = 1 AND DAY(REPTDATE) = 1 THEN                          
+        YY = YEAR(REPTDATE) - 1;                                                
+     ELSE YY = YEAR(REPTDATE);                                                  
+     CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));                            
+     CALL SYMPUT('PREVYEAR', PUT(YY,Z4.));                                      
+     CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                         
+     CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                           
+     CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                             
+     CALL SYMPUT('REPTDATE',PUT(REPTDATE,Z5.));                                 
+     CALL SYMPUT('PREVDAY',PUT(PREVDAY,Z2.));                                   
+     CALL SYMPUT('DLETDAY',PUT(DLETDAY,Z2.));                                   
+RUN;                                                                            
+TITLE1 'REPORT ID : EIBDLNSA';                                                  
+                                                                                
+DATA FEPLAN;                                                                    
+   INFILE FEEFILE;                                                              
+   INPUT @001 ACCTNO    PD6.                                                    
+         @007 NOTENO    PD3.                                                    
+         @010 LOANTYPE  PD2.                                                    
+         @022 FEEPLN    $2.                                                     
+         @035 FEEAMTA   PD8.2 /*  AMT-ASSESSED-CURRENT */                       
+         @067 FEEAMTC   PD8.2 /*  AMT-DUE CURRENT - FOR THE DAY */              
+         @075 FEEAMTB   PD8.2 /*  AMT-DUE-TOTAL      */                         
+         ;                                                                      
+   IF ACCTNO < 3000000000 AND LOANTYPE IN (135,136)                             
+                          AND FEEPLN IN ('PA');                                 
+*;                                                                              
+PROC SUMMARY DATA=FEPLAN NWAY;                                                  
+CLASS ACCTNO NOTENO;                                                            
+VAR   FEEAMTA FEEAMTB FEEAMTC;                                                  
+OUTPUT OUT=FEEPO (DROP=_TYPE_ _FREQ_) SUM=;                                     
+*;                                                                              
+DATA FEEPO; SET FEEPO;                                                          
+*;                                                                              
+PROC SORT DATA=FEEPO; BY ACCTNO NOTENO;                                         
+*;                                                                              
+DATA LOAN;                                                                      
+  INFILE ACCTFILE;                                                              
+  INPUT @001 ACCTNO    PD6.                                                     
+        @007 NAME      $24.                                                     
+        @063 BANKNO    PD2.                                                     
+        @066 ACCBRCH   PD4.                                                     
+        @081 NOTENO    PD3.                                                     
+        @084 REVERSED   $1.                                                     
+        @085 LOANTYPE  PD2.                                                     
+        @087 NTBRCH    PD4.                                                     
+        @091 PENDBRH   PD4.                                                     
+        @113 LASTTRAN  PD6.                                                     
+        @121 CURBAL    PD8.2                                                    
+        @129 INTAMT    PD8.2                                                    
+        @261 PAIDIND    $1.                                                     
+        @296 NTINT      $1.                                                     
+        @311 INTEARN   PD8.2                                                    
+        @319 ACCRUAL   PD8.7                                                    
+        @400 INTEARN2  PD8.2                                                    
+        @408 INTEARN3  PD8.2                                                    
+        @416 INTEARN4  PD8.2                                                    
+        @457 FEEAMT    PD8.2                                                    
+        @465 FEEAMT2   PD8.2                                                    
+        @554 FEEAMT4   PD8.2                                                    
+        @764 NFEEAMT5  PD8.2                                                    
+        @772 NFEEAMT6  PD8.2                                                    
+        @780 NFEEAMT7  PD8.2                                                    
+        @861 FEEAMT8   PD8.2                                                    
+        @869 FEEAMT9   PD8.2                                                    
+        @885 FEEAMT13  PD8.2                                                    
+        @904 FEEAMT10  PD8.2                                                    
+        @912 FEEAMT11  PD8.2                                                    
+        @920 FEEAMT12  PD8.2                                                    
+        @928 FEEAMT14  PD8.2                                                    
+        @936 FEEAMT15  PD8.2                                                    
+        @944 FEEAMT16  PD8.2;                                                   
+  IF _N_ = 1  THEN SET REPTDATE;                                                
+  IF LOANTYPE IN (135,136);                                                     
+  BRANCH=PENDBRH;                                                               
+  IF PENDBRH = 0  THEN BRANCH=NTBRCH;                                           
+  IF BRANCH  = 0  THEN BRANCH=ACCBRCH;                                          
+  IF ((REVERSED NE 'Y') AND (NOTENO NE .) AND (PAIDIND NE 'P')) OR              
+     ((PAIDIND  EQ 'P') AND (LASTTRAN EQ REPTDATE));                            
+*;                                                                              
+DATA LOAN;                                                                      
+  MERGE LOAN(IN=A) FEEPO; BY ACCTNO NOTENO;                                     
+  IF A;                                                                         
+  IF ACCTNO > 8000000000 AND                                                    
+     LOANTYPE IN (720,725) THEN                                                 
+     FEEAMT = SUM(FEEAMT,FEEAMTA,FEEAMTC);                                      
+  ELSE FEEAMT=SUM(FEEAMT,FEEAMTA);                                              
+  IF NTINT='A' THEN BALANCE=SUM(CURBAL,INTEARN,(-1)*INTAMT,FEEAMT);             
+               ELSE BALANCE=SUM(CURBAL,ACCRUAL,FEEAMT);                         
+*;                                                                              
+PROC SUMMARY DATA=LOAN NWAY;                                                    
+   CLASS BRANCH REPTDATE EXTDATE;                                               
+   VAR   BALANCE;                                                               
+   OUTPUT OUT=LOAN                                                              
+              (RENAME=(_FREQ_=NOACCT) DROP=_TYPE_)                              
+          SUM=BRLNAMT;                                                          
+*;                                                                              
+PROC SORT; BY BRANCH;                                                           
+*;                                                                              
+DATA MIS.LOAN&REPTDAY;                                                          
+     SET LOAN;                                                                  
+*;                                                                              
+DATA PREVLN;                                                                    
+   SET MIS.LOAN&PREVDAY;                                                        
+   RENAME BRLNAMT=PBRLNAMT;                                                     
+*;                                                                              
+PROC SORT; BY BRANCH;                                                           
+*;                                                                              
+DATA LOANS;                                                                     
+   MERGE LOAN PREVLN; BY BRANCH;                                                
+*;                                                                              
+DATA BRANCH;                                                                    
+  INFILE BRANCHF;                                                               
+  INPUT @001 BANK       $1.                                                     
+        @002 BRANCH      3.                                                     
+        @006 ABBREV     $3.                                                     
+        @012 BRCHNAME  $30.;                                                    
+*;                                                                              
+PROC SORT DATA=BRANCH; BY BRANCH;                                               
+*;                                                                              
+DATA MLOAN;                                                                     
+   MERGE LOANS(IN=A) BRANCH; BY BRANCH;                                         
+   IF A;                                                                        
+   VARIANLN = BRLNAMT - PBRLNAMT;                                               
+*;                                                                              
+TITLE2 'PUBLIC BANK BERHAD';                                                    
+TITLE3 'BRANCH SUMMARY ON DAILY OUTSTANDING(RM)-BAE PERSONAL';                  
+TITLE4 'AS AT ' &RDATE;                                                         
+*;                                                                              
+PROC TABULATE DATA=MLOAN MISSING NOSEPS;                                        
+   CLASS BRANCH ABBREV BRCHNAME;                                                
+   VAR   PBRLNAMT BRLNAMT NOACCT VARIANLN;                                      
+   TABLE BRANCH='CODE'*                                                         
+         ABBREV='ABBREV'*                                                       
+         BRCHNAME='NAME' ALL='TOTAL',                                           
+         SUM=' '*NOACCT='NO OF ACCOUNTS'*F=10.                                  
+         SUM='OUSTANDING AMT (RM)'*(PBRLNAMT='PREV.AMOUNT '                     
+         BRLNAMT='CURR.AMOUNT')*F=COMMA18.2                                     
+         SUM=' '*VARIANLN='VARIANCE'*F=COMMA20.2                                
+         /RTS=50 BOX='BRANCH';                                                  
+*;                                                                              
