@@ -1,0 +1,123 @@
+//EIIMTDAV JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=128M                    JOB49966
+/*JOBPARM S=S1M1                                                                
+//*---------------------------------------------------------------------        
+//* ESMR     : 2015-274 (2015-409/2015-410)                                     
+//* DESC     : DAILY ACCUMULATE CURBAL/FORBAL FOR DEPOSIT                       
+//*---------------------------------------------------------------------        
+//EIIMTDAV EXEC SAS609                                                          
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                      
+//DP       DD DSN=SAP.PIBB.MNITB.DAILY(0),DISP=SHR                              
+//MIS      DD DSN=SAP.PIBB.MTD.SASDATA,DISP=OLD                                 
+//SASLIST  DD SYSOUT=X                                                          
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,(1000))                                     
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,(1000))                                     
+//SORTWK03 DD UNIT=SYSDA,SPACE=(CYL,(1000))                                     
+//SORTWK04 DD UNIT=SYSDA,SPACE=(CYL,(1000))                                     
+//SORTWK05 DD UNIT=SYSDA,SPACE=(CYL,(1000))                                     
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS YEARCUTOFF=1960 NOCENTER NODATE NONUMBER;                               
+                                                                                
+DATA REPTDATE;                                                                  
+   SET DP.REPTDATE;                                                             
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                             
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                               
+   CALL SYMPUT('RDATE',REPTDATE);                                               
+RUN;                                                                            
+                                                                                
+DATA CURSA;                                                                     
+   SET DP.SAVING DP.UMA;                                                        
+   REPTDATE = &RDATE;                                                           
+   KEEP BRANCH ACCTNO CURBAL OPENIND PRODUCT CURCODE REPTDATE;                  
+RUN;                                                                            
+                                                                                
+DATA CURFD;                                                                     
+   SET DP.FD;                                                                   
+   REPTDATE = &RDATE;                                                           
+   KEEP BRANCH ACCTNO CURBAL FORBAL OPENIND PRODUCT CURCODE REPTDATE;           
+RUN;                                                                            
+                                                                                
+DATA CURCA;                                                                     
+   SET DP.CURRENT;                                                              
+   REPTDATE = &RDATE;                                                           
+   KEEP BRANCH ACCTNO CURBAL FORBAL OPENIND PRODUCT CURCODE REPTDATE;           
+RUN;                                                                            
+                                                                                
+%MACRO APPEND;                                                                  
+%IF "&REPTDAY" EQ "01" %THEN %DO;                                               
+    DATA MIS.SA&REPTMON;                                                        
+       SET CURSA;                                                               
+    RUN;                                                                        
+    DATA MIS.FD&REPTMON;                                                        
+       SET CURFD;                                                               
+    RUN;                                                                        
+    DATA MIS.CA&REPTMON;                                                        
+       SET CURCA;                                                               
+    RUN;                                                                        
+%END;                                                                           
+%ELSE %DO;                                                                      
+    DATA MIS.SA&REPTMON;                                                        
+       SET MIS.SA&REPTMON;                                                      
+       IF REPTDATE EQ &RDATE THEN DELETE;                                       
+    RUN;                                                                        
+    DATA MIS.SA&REPTMON;                                                        
+       SET CURSA MIS.SA&REPTMON;                                                
+    RUN;                                                                        
+    DATA MIS.FD&REPTMON;                                                        
+       SET MIS.FD&REPTMON;                                                      
+       IF REPTDATE EQ &RDATE THEN DELETE;                                       
+    RUN;                                                                        
+    DATA MIS.FD&REPTMON;                                                        
+       SET CURFD MIS.FD&REPTMON;                                                
+    RUN;                                                                        
+    DATA MIS.CA&REPTMON;                                                        
+       SET MIS.CA&REPTMON;                                                      
+       IF REPTDATE EQ &RDATE THEN DELETE;                                       
+    RUN;                                                                        
+    DATA MIS.CA&REPTMON;                                                        
+       SET CURCA MIS.CA&REPTMON;                                                
+    RUN;                                                                        
+%END;                                                                           
+%MEND APPEND;                                                                   
+%APPEND;                                                                        
+                                                                                
+PROC SORT DATA=MIS.SA&REPTMON OUT=CURSA; BY ACCTNO; RUN;                        
+PROC SUMMARY DATA=CURSA NWAY;                                                   
+   WHERE REPTDATE <= &RDATE;                                                    
+   BY ACCTNO;                                                                   
+   VAR CURBAL;                                                                  
+   OUTPUT OUT=MIS.SAVG&REPTMON(DROP=_TYPE_ _FREQ_)                              
+          SUM=MTDAVBAL_MIS;                                                     
+RUN;                                                                            
+DATA MIS.SAVG&REPTMON;                                                          
+   SET MIS.SAVG&REPTMON;                                                        
+   MTDAVBAL_MIS    = MTDAVBAL_MIS    / &REPTDAY;                                
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=MIS.FD&REPTMON OUT=CURFD; BY ACCTNO; RUN;                        
+PROC SUMMARY DATA=CURFD NWAY;                                                   
+   WHERE REPTDATE <= &RDATE;                                                    
+   BY ACCTNO;                                                                   
+   VAR CURBAL FORBAL;                                                           
+   OUTPUT OUT=MIS.FAVG&REPTMON(DROP=_TYPE_ _FREQ_)                              
+          SUM=MTDAVBAL_MIS MTDAVFORBAL_MIS;                                     
+RUN;                                                                            
+DATA MIS.FAVG&REPTMON;                                                          
+   SET MIS.FAVG&REPTMON;                                                        
+   MTDAVBAL_MIS    = MTDAVBAL_MIS    / &REPTDAY;                                
+   MTDAVFORBAL_MIS = MTDAVFORBAL_MIS / &REPTDAY;                                
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=MIS.CA&REPTMON OUT=CURCA; BY ACCTNO; RUN;                        
+PROC SUMMARY DATA=CURCA NWAY;                                                   
+   WHERE REPTDATE <= &RDATE;                                                    
+   BY ACCTNO;                                                                   
+   VAR CURBAL FORBAL;                                                           
+   OUTPUT OUT=MIS.CAVG&REPTMON(DROP=_TYPE_ _FREQ_)                              
+          SUM=MTDAVBAL_MIS MTDAVFORBAL_MIS;                                     
+RUN;                                                                            
+DATA MIS.CAVG&REPTMON;                                                          
+   SET MIS.CAVG&REPTMON;                                                        
+   MTDAVBAL_MIS    = MTDAVBAL_MIS    / &REPTDAY;                                
+   MTDAVFORBAL_MIS = MTDAVFORBAL_MIS / &REPTDAY;                                
+RUN;                                                                            
