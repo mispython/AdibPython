@@ -1,0 +1,62 @@
+//EIBDERTE JOB ACCOUNT-CODE,'PROGRAMMER-NAME',                                  
+//         MSGCLASS=A,MSGLEVEL=(1,1),CLASS=A,                                   
+//         REGION=8M,NOTIFY=&SYSUID                                             
+//*                                                                             
+//* READS FCY RATES FROM EBANK                                                  
+//*                                                                             
+//EIBDERTE EXEC SAS609                                                          
+//RATE     DD DSN=SAP.PBB.EBNK.RATES,DISP=OLD                                   
+//ERATE    DD DSN=RBP2.B033.EBNK.RATES.DATA,DISP=SHR                            
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                      
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS YEARCUTOFF=1950 NOCENTER;                                               
+*;                                                                              
+DATA ERTE EDATE (KEEP=EDTE);                                                    
+  DROP FCIND REIND EYY EMM EDD;                                                 
+  INFILE ERATE;                                                                 
+  INPUT @001  FCIND    $2.                                                      
+        @004  REIND    $2.                                                      
+        @006  EFDATE    8.                                                      
+        @006  EYY       4.                                                      
+        @010  EMM       2.                                                      
+        @012  EDD       2.                                                      
+        @017  RATE1   5.2                                                       
+        @030  RATE2   5.2                                                       
+        @043  RATE3   5.2                                                       
+        @053  CURCODE  $3.;                                                     
+                                                                                
+     IF FCIND='FC';                                                             
+     EDTE=MDY(EMM,EDD,EYY);                                                     
+     IF REIND='01' THEN DO;                                                     
+        RATE1=RATE1 + 1.0;                                                      
+        IF RATE2=0 THEN RATE2=RATE1;                                            
+                   ELSE RATE2=RATE2 + 1.0;                                      
+        TENURE='01-MONTH';                                                      
+        OUTPUT ERTE;                                                            
+        IF CURCODE='AUD' THEN OUTPUT EDATE;                                     
+     END;                                                                       
+     IF REIND='03' THEN DO;                                                     
+        RATE1=RATE1 + 0.5;                                                      
+        IF RATE2=0 THEN RATE2=RATE1;                                            
+                   ELSE RATE2=RATE2 + 0.5;                                      
+        TENURE='03-MONTH';                                                      
+        OUTPUT ERTE;                                                            
+     END;                                                                       
+     IF REIND='06' THEN DO;                                                     
+        RATE1=RATE1 + 0.3;                                                      
+        IF RATE2=0 THEN RATE2=RATE1;                                            
+                   ELSE RATE2=RATE2 + 0.3;                                      
+        TENURE='06-MONTH';                                                      
+        OUTPUT ERTE;                                                            
+     END;                                                                       
+     IF REIND='12' THEN DO;                                                     
+        RATE1=RATE1 + 0.1;                                                      
+        IF RATE2=0 THEN RATE2=RATE1;                                            
+                   ELSE RATE2=RATE2 + 0.1;                                      
+        TENURE='12-MONTH';                                                      
+        OUTPUT ERTE;                                                            
+     END;                                                                       
+*;                                                                              
+PROC APPEND DATA=ERTE BASE=RATE.ERTE;                                           
+PROC SORT DATA=EDATE OUT=RATE.EDATE NODUPKEY; BY EDTE;                          
