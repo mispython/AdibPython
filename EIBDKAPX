@@ -1,0 +1,49 @@
+//EIBDKAPX JOB MISEIS,MSGCLASS=A,CLASS=A,NOTIFY=&SYSUID                         
+//*                                                                             
+//* SCHEDULE                                                                    
+//*            FTPDKAP1 *-EXISTING                                              
+//*               |                                                             
+//*            EIBDKAPX                                                         
+//*                                                                             
+//EIBDKAPD EXEC SAS609                                                          
+//BNMK      DD DSN=SAP.PBB.DKAPITI.SASDATA,DISP=OLD                             
+//BNMKI     DD DSN=SAP.PIBB.DKAPITI.SASDATA,DISP=OLD                            
+//SASLIST   DD SYSOUT=X                                                         
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 LS=132 PS=60 NOCENTER;                     
+*;                                                                              
+DATA REPTDATE;                                                                  
+  SXDATE=TODAY();                                                               
+  MM   =MONTH(SXDATE);                                                          
+  TDD  =DAY(SXDATE);                                                            
+                                                                                
+  IF   TDD=01 THEN WK1='1';  ELSE                                               
+  IF   TDD=09 THEN WK1='2';  ELSE                                               
+  IF   TDD=16 THEN WK1='3';  ELSE                                               
+  IF   TDD=23 THEN WK1='4';                                                     
+                                                                                
+  CALL SYMPUT('WK',PUT(WK1,$1.));                                               
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                           
+  CALL SYMPUT('REPTDAY',PUT(TDD,Z2.));                                          
+RUN;                                                                            
+*;                                                                              
+%MACRO APPEND;                                                                  
+  %IF "&REPTDAY" EQ "01" OR                                                     
+      "&REPTDAY" EQ "09" OR                                                     
+      "&REPTDAY" EQ "16" OR                                                     
+      "&REPTDAY" EQ "23" %THEN %DO;                                             
+       PROC DATASETS LIB=BNMK NOLIST;                                           
+            DELETE TBL1&REPTMON&WK                                              
+                   REP2&REPTMON&WK                                              
+                   REP3&REPTMON&WK                                              
+                   REP4&REPTMON&WK;                                             
+       PROC DATASETS LIB=BNMKI NOLIST;                                          
+            DELETE TBL1&REPTMON&WK                                              
+                   REP2&REPTMON&WK                                              
+                   REP3&REPTMON&WK                                              
+                   REP4&REPTMON&WK;                                             
+       %END;                                                                    
+%MEND APPEND;                                                                   
+%APPEND;                                                                        
+*;                                                                              
