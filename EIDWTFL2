@@ -1,0 +1,34 @@
+
+//EIDWTFL2 JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M,NOTIFY=&SYSUID              
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01    DD DSN=SAP.EDW.DPRPTFL2.FTP,                                         
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//CREATE  EXEC PGM=IEFBR14                                                      
+//CRT01    DD DSN=SAP.EDW.DPRPTFL2.FTP,                                         
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920),                            
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)                         
+//EIDWTFL1  EXEC SAS609                                                         
+//DPRPTF    DD DSN=RBP2.B033.DPRPTFL2,DISP=SHR                                  
+//SYSIN     DD *                                                                
+                                                                                
+DATA STG_DP_DPRPTFL2;                                                           
+  INFILE DPRPTF  LRECL=555;                                                     
+  INPUT @24  REPTNO   PD3.                                                      
+        @27  FMTCODE  PD2. @;                                                   
+  IF REPTNO = 210 AND FMTCODE = 1;                                              
+  INPUT @143 BRANCH   PD4.                                                      
+        @163 AMOUNT   PD7.2                                                     
+        @188 TRANCODE $4.                                                       
+        @192 CASHIN   PD7.2                                                     
+        @199 CASHOUT  PD7.2                                                     
+        @206 CHECKIN  PD7.2                                                     
+        @502 TRANNAME $20.;                                                     
+                                                                                
+RUN;                                                                            
+                                                                                
+FILENAME TRANFILE 'SAP.EDW.DPRPTFL2.FTP' DISP=OLD;                              
+PROC CPORT LIBRARY=WORK FILE=TRANFILE;                                          
+RUN;                                                                            
+                                                                                
