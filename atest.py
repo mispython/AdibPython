@@ -1,0 +1,125 @@
+import re
+import pprint
+from collections import defaultdict
+import os
+
+FOLDER_NAME = 'DETICA'
+
+def generate_layout_file(field_layout_file, output_dir='.'):
+    if not os.path.exists(field_layout_file):
+        raise FileNotFoundError(f"Field Config File not found in {field_layout_file}")
+    
+    try:
+        with open(field_layout_file, 'r', encoding='utf-8') as f:
+            sas_input_code = f.read()
+
+        lrecl_pattern = re.compile(r'lrecl\s*=\s*(\d+)', re.IGNORECASE)
+        lrecl_match = lrecl_pattern.search(sas_input_code)
+        if not lrecl_match:
+            raise ValueError("Could not find LRECL in the code")
+        lrecl = int(lrecl_match.group(1))
+
+        layout = {}
+        input_line_pattern = re.compile(r'@\s*(\d+)\s+([A-Za-z0-9_]+)\s+([$\w\.]+)')
+        print(input_line_pattern)
+        range_line_pattern = re.compile(r'^\s*([A-Za-z0-9_]+)\s*(\$)?[ ]*(\d+)-(\d+)')
+        input_lines = sas_input_code.split('input')[1].split(";")[0]
+
+        for line in input_lines.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            match = input_line_pattern.match(line)
+            print(match)
+            if match:
+                start_pos, field_name, informat_str = match.groups()
+                start_pos = int(start_pos)
+
+                spec = {}
+                byte_length = None
+                clean_informat = informat_str.strip('$.').upper()
+
+                float_match = re.match(r'(\d+)\.(\d+)', clean_informat)
+                pd_match = re.match(r'S370FPD(\d+)(?:\.(\d+))?', clean_informat)
+                ebcdic_match = re.match(r'EBCDIC(\d+)', clean_informat)
+                integer_match = re.match(r'(\d+)\.', informat_str.upper())
+                string_match = re.match(r'\$(\d+)\.', informat_str.upper())
+                if pd_match:
+                    spec['type'] = 'packed'
+                    byte_length =  int(pd_match.group(1))
+                    decimals = pd_match.group(2)
+                    if decimals:
+                        spec['decimals'] = int(decimals)
+                elif ebcdic_match:
+                    spec['type'] = 'ebcdic'
+                    byte_length =  int(ebcdic_match.group(1))
+                elif float_match:
+                    spec['type'] = 'float'
+                    byte_length = int(float_match.group(1))
+                    spec['decimals'] = int(float_match.group(2))
+                elif integer_match:
+                    spec['type'] = 'integer'
+                    byte_length = int(clean_informat)
+                elif string_match:
+                    spec['type'] = 'string'
+                    byte_length = int(clean_informat)
+                elif re.match(r'YYMMDD(\d+)', clean_informat):
+                    spec['type'] = 'integer'
+                    byte_length = int(re.match(r'YYMMDD(\d+)', clean_informat).group(1))
+
+                if byte_length is None:
+                    print(f"Could not parse informat '{informat_str}' for field '{field_name}'. Skiping")     
+                    continue
+
+                spec['slice'] = slice(start_pos - 1, start_pos - 1 + byte_length)
+                layout[field_name] = spec
+            elif match := range_line_pattern.match(line):
+                field_name, dollar_sign, start_pos_str, end_pos_str = match.groups()
+                start_pos = int(start_pos_str)
+                end_pos = int(end_pos_str)
+
+                spec = {}
+                byte_length = end_pos - start_pos - 1
+
+                if dollar_sign:
+                    spec['type'] = 'string'
+                else:
+                    spec['type'] = 'integer'
+
+                spec['slice'] = slice(start_pos - 1, end_pos)
+                layout[field_name] = spec
+            else:
+                print(f"Skipping line: {line} does not match defined INPUT format")
+                
+
+        output_filename = f"{os.path.basename(field_layout_file).rsplit('.' , 1)[0]}_layout.py"
+        output_layout_path = os.path.join(output_dir, output_filename)
+
+        formatted_layout_string = pprint.pformat(layout, sort_dicts=False)
+
+        with open(output_layout_path, 'w', encoding='utf-8') as f:
+            f.write(f"LRECL = {lrecl}\n\n")
+            f.write(f"LAYOUT = {formatted_layout_string}\n")
+        print(f"Successfully generated layout file to {output_layout_path}")
+    except Exception as e:
+        print(f"Error generating layout file: {e}")
+
+
+FIELD_LAYOUT_PATH = f"/host/mis/config/{FOLDER_NAME}"
+LAYOUT_OUTPUT_DIR = f"/host/mis/config/{FOLDER_NAME}/output"
+
+if not os.path.exists(LAYOUT_OUTPUT_DIR):
+    os.makedirs(LAYOUT_OUTPUT_DIR)
+    
+if __name__ == "__main__":
+    try:
+        for filename in os.listdir(FIELD_LAYOUT_PATH):
+            if filename.endswith(".txt"):
+                file_path = os.path.join(FIELD_LAYOUT_PATH, filename)
+                try:
+                    generate_layout_file(file_path, output_dir=LAYOUT_OUTPUT_DIR)
+                except Exception as e:
+                    print(f"Error generating layout {filename}: {e}")
+    except FileNotFoundError as e:
+        print(f"Error path not found: {e}")
+    print(f"Completed generating layout file.")
