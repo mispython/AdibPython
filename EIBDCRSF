@@ -1,0 +1,131 @@
+//EIBDCRSF JOB MISEIS,EIBDBTRD,COND=(0,LT),CLASS=A,MSGCLASS=X,          JOB59638
+//         NOTIFY=&SYSUID                                                       
+//*                                                                             
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01    DD DSN=SAP.PBB.CRS.CISFILE,                                          
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                              
+//            SPACE=(CYL,1,RLSE)                                                
+//*                                                                             
+//EIBDCRSF EXEC SAS609,WORK='24000,12000',REGION=8M                             
+//BNM      DD DSN=SAP.PBB.MNITB.YEAREND,DISP=SHR                                
+//IBNM     DD DSN=SAP.PIBB.MNITB.YEAREND,DISP=SHR                               
+//BNMC     DD DSN=SAP.PBB.MNITB.DAILY(0),DISP=SHR                               
+//IBNMC    DD DSN=SAP.PIBB.MNITB.DAILY(0),DISP=SHR                              
+//TRX      DD DSN=SAP.PBB.CRS.DPTRNSAC,DISP=SHR                                 
+//FORATE   DD DSN=SAP.PBB.FCYCA,DISP=SHR                                        
+//CIS      DD DSN=SAP.PBB.CRS.CIS,DISP=OLD                                      
+//CISFILE  DD DSN=SAP.PBB.CRS.CISFILE,                                          
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            SPACE=(CYL,(150,80),RLSE),                                        
+//            UNIT=SYSDA,                                                       
+//            DCB=(LRECL=150,RECFM=FB,BLKSIZE=0)                                
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                      
+//SASLIST  DD SYSOUT=X                                                          
+//SYSIN    DD *                                                                 
+                                                                                
+DATA CIS.REPTDATE (KEEP=REPTDATE);                                              
+  SET BNM.REPTDATE;                                                             
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                              
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                                
+  CALL SYMPUT('TDATE',REPTDATE);                                                
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                 
+RUN;                                                                            
+                                                                                
+PROC SORT DATA=FORATE.FORATEBKP OUT=FORATE;                                     
+   BY CURCODE DESCENDING REPTDATE;                                              
+   WHERE REPTDATE<= &TDATE;                                                     
+RUN;                                                                            
+PROC SORT DATA=FORATE NODUPKEY; BY CURCODE; RUN;                                
+                                                                                
+DATA FOFMT;                                                                     
+  LENGTH START $3. LABEL $13.7 FMTNAME $6. TYPE $1.;                            
+  SET FORATE;                                                                   
+  START   = CURCODE;                                                            
+  LABEL   = SPOTRATE;                                                           
+  FMTNAME = 'FORATE';                                                           
+  TYPE    = 'C';                                                                
+RUN;                                                                            
+PROC FORMAT CNTLIN=FOFMT; RUN;                                                  
+                                                                                
+PROC SORT DATA=TRX.FULLDPTRAN_CRS OUT=CRS; BY ACCTNO; RUN;                      
+                                                                                
+DATA DEPOSIT;                                                                   
+   SET BNM.SAVING  (IN=A)                                                       
+       IBNM.SAVING (IN=A)                                                       
+       BNM.CURRENT (IN=B)                                                       
+       IBNM.CURRENT(IN=B)                                                       
+       BNM.FD      (IN=C)                                                       
+       IBNM.FD     (IN=C)                                                       
+       ;                                                                        
+   IF      A THEN ACTYPE = 'SA';                                                
+   ELSE IF B THEN ACTYPE = 'CA';                                                
+   ELSE IF C THEN ACTYPE = 'FD';                                                
+   IF CURCODE = 'XAU' THEN DO;                                                  
+      FORATE = PUT(CURCODE,$FORATE.);                                           
+      FORBAL = CURBAL;                                                          
+      CURBAL = ROUND(CURBAL * FORATE,.01);                                      
+   END;                                                                         
+   IF CLOSEDT > 0 THEN                                                          
+      CLDT=PUT(INPUT(SUBSTR(PUT(CLOSEDT,Z11.),1,8),MMDDYY8.),YYMMDDN8.);        
+   IF OPENDT > 0 THEN                                                           
+      OPNDT=PUT(INPUT(SUBSTR(PUT(OPENDT,Z11.),1,8),MMDDYY8.),YYMMDDN8.);        
+   KEEP ACCTNO CURBAL FORBAL CURCODE ACTYPE FORATE OPENIND CLDT PRODUCT         
+        COSTCTR OPNDT;                                                          
+RUN;                                                                            
+PROC SORT DATA=DEPOSIT; BY ACCTNO; RUN;                                         
+                                                                                
+DATA PREVDP;                                                                    
+   SET BNMC.SAVING  (KEEP=ACCTNO INTPDPYR)                                      
+       IBNMC.SAVING (KEEP=ACCTNO INTPDPYR)                                      
+       BNMC.CURRENT (KEEP=ACCTNO INTPDPYR)                                      
+       IBNMC.CURRENT(KEEP=ACCTNO INTPDPYR)                                      
+       TRX.FULLDPTRAN_CRS(KEEP=ACCTNO INTPDPYR)                                 
+       ;                                                                        
+RUN;                                                                            
+PROC SORT DATA=PREVDP NODUPKEY; BY ACCTNO; RUN;                                 
+                                                                                
+DATA CIS.CRS&REPTYEAR;                                                          
+   MERGE DEPOSIT(IN=A) PREVDP;                                                  
+   BY ACCTNO;                                                                   
+   IF A;                                                                        
+   IF CURCODE NE 'MYR' THEN DO;                                                 
+      FORPDPYR = INTPDPYR;                                                      
+      INTPDPYR = ROUND(INTPDPYR * FORATE,.01);                                  
+   END;                                                                         
+   IF (3000<=COSTCTR<=4999) THEN ENTITY = 'I';                                  
+   ELSE                          ENTITY = 'C';                                  
+RUN;                                                                            
+                                                                                
+DATA _NULL_;                                                                    
+   SET CIS.CRS&REPTYEAR;                                                        
+   IF CURBAL   = . THEN CURBAL   = 0;                                           
+   IF FORBAL   = . THEN FORBAL   = 0;                                           
+   IF INTPDPYR = . THEN INTPDPYR = 0;                                           
+   IF FORPDPYR = . THEN FORPDPYR = 0;                                           
+   IF FORATE > 0 THEN FXRATE = FORATE*1;                                        
+   ELSE               FXRATE = 1;                                               
+   FILE CISFILE;                                                                
+      PUT @0001 ACCTNO     10.                                                  
+          @0011 CURCODE    $3.                                                  
+          @0014 FORBAL     COMMA20.2                                            
+          @0034 CURBAL     COMMA20.2                                            
+          @0054 INTPDPYR   COMMA20.2                                            
+          @0075 FXRATE          13.7                                            
+          @0088 OPENIND    $1.                                                  
+          @0090 CLDT       $8.                                                  
+          @0099 PRODUCT    Z3.                                                  
+          @0103 ENTITY     $1.                                                  
+          @0105 COSTCTR    Z4.                                                  
+          @0110 OPNDT      $8.                                                  
+          ;                                                                     
+RUN;                                                                            
+//*--------------------------------------------------------------------         
+//* COPY RBP2 FOR CIS                                                           
+//*--------------------------------------------------------------------         
+//COPYFILE EXEC PGM=ICEGENER                                                    
+//SYSPRINT DD SYSOUT=*                                                          
+//SYSUT1   DD DISP=SHR,DSN=SAP.PBB.CRS.CISFILE                                  
+//SYSUT2   DD DSN=RBP2.B033.CRS.CISFILE(+1),                                    
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            UNIT=SYSDA,LIKE=SAP.PBB.CRS.CISFILE                               
+//SYSIN    DD DUMMY                                                             
