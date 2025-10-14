@@ -1,0 +1,89 @@
+//EIIDFDCE JOB MISEIS,EIBWFDCE,CLASS=A,MSGCLASS=X,MSGLEVEL=(1,1),               
+//         NOTIFY=&SYSUID                                                       
+//*                                                                             
+//**********************************************************************        
+//* DAILY EXTRACTION FOR PIBB                                                   
+//* EXTRACTION OF FD CD LEVEL INFORMATION FOR DATA WAREHOUSE                    
+//**********************************************************************        
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01    DD DSN=SAP.PIBB.FDCDDATA.DAILY.IDFDCFTP,                             
+//            DISP=(MOD,DELETE,DELETE),                                         
+//            SPACE=(CYL,(0))                                                   
+//*                                                                             
+//CREATE  EXEC PGM=IEFBR14                                                      
+//CRT01    DD DSN=SAP.PIBB.FDCDDATA.DAILY.IDFDCFTP,                             
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920),                            
+//            SPACE=(CYL,(150,100),RLSE),UNIT=(SYSDA,5)                         
+//*                                                                             
+//EIIDFDCE  EXEC SAS609,REGION=8M,WORK='150000,100000'                          
+//DPDARPGS  DD DSN=SAP.PIBB.MNIFD.DAILY(0),DISP=SHR                             
+//BRHFILE   DD DSN=RBP2.B033.PBB.BRANCH,DISP=SHR                                
+//CISF      DD DSN=SAP.PBB.CRM.CISBEXT.DAILY,DISP=SHR                           
+//FIXEDCD   DD DSN=SAP.PIBB.FDCDDATA.DAILY(+1),                                 
+//             DISP=(,CATLG,DELETE),                                            
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(130,50),RLSE),UNIT=(SYSDA,5)                         
+//SYSIN     DD *                                                                
+OPTIONS YEARCUTOFF=1950 NOCENTER NODATE;                                        
+                                                                                
+DATA FIXEDCD.REPTDATE;                                                          
+  SET DPDARPGS.REPTDATE;                                                        
+  SELECT;                                                                       
+     WHEN(1 <= DAY(REPTDATE) <= 8) CALL SYMPUT('NOWK', PUT('1', $1.));          
+     WHEN(9 <= DAY(REPTDATE) <= 15) CALL SYMPUT('NOWK', PUT('2', $1.));         
+     WHEN(16 <= DAY(REPTDATE) <= 22) CALL SYMPUT('NOWK', PUT('3', $1.));        
+     OTHERWISE CALL SYMPUT('NOWK', PUT('4', $1.));                              
+  END;                                                                          
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR2.));                               
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                            
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                              
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                                
+RUN;                                                                            
+*;                                                                              
+%LET FDCDVAR=(KEEP=BRANCH ACCTNO CDNO STATEC CUSTCD OPENIND CURBAL              
+                   ORGDATE MATDATE RATE RENEWAL INTPLAN LASTACTV                
+                   TERM PURPOSE ORIGAMT INTPAY LMATDATE PAYMENT DEPDATE         
+                   INTTFRACCT INTFREQ INTFREQID MATID PRODUCT                   
+                   PEND_INTPLAN PRN_DISP_OPT PRN_RENEW PRN_TFR_ACCT);           
+%LET FDCDVR1=(KEEP=ACCTNO CDNO);                                                
+                                                                                
+DATA FIXEDCD.IFDCD&REPTYEAR&REPTMON&REPTDAY &FDCDVAR;                           
+  SET DPDARPGS.FD;                                                              
+  RENAME ACCTTYPE = PRODUCT                                                     
+         PENDINT  = PEND_INTPLAN;                                               
+      DEPDATE = INPUT(SUBSTR(PUT(DEPODTE,Z11.),1,8),MMDDYY8.);                  
+      IF OPENIND = 'D' OR OPENIND = 'O' THEN DO;                                
+                                                                                
+         ORGDTE = INPUT(SUBSTR(PUT(ORGDATE,Z9.),1,6),MMDDYY6.);                 
+         ORGDATE = ORGDTE;                                                      
+                                                                                
+         MDATES = INPUT(SUBSTR(PUT(MATDATE,Z8.),1,8),YYMMDD8.);                 
+         MATDATE = MDATES;                                                      
+                                                                                
+         LDATES = INPUT(SUBSTR(PUT(LASTACTV,Z9.),1,6),MMDDYY6.);                
+         LASTACTV = LDATES;                                                     
+                                                                                
+         PURPOSE1 = PURPOSE;                                                    
+         ***IF PURPOSE = '4' THEN                                               
+         ***  OUTPUT FIXEDR2.R2CD&REPTMON&NOWK&REPTYEAR;                        
+         IF PURPOSE1 = '4' THEN PURPOSE = '1';                                  
+         IF NOT (1590000000<=ACCTNO<=1599999999) AND                            
+            NOT (1689999999<=ACCTNO<=1699999999) AND                            
+            NOT (1789999999<=ACCTNO<=1799999999) THEN DO;                       
+            OUTPUT FIXEDCD.IFDCD&REPTYEAR&REPTMON&REPTDAY;                      
+         END;                                                                   
+      END;                                                                      
+RUN;                                                                            
+                                                                                
+FILENAME TRANFILE 'SAP.PIBB.FDCDDATA.DAILY.IDFDCFTP'                            
+DISP=OLD;                                                                       
+PROC CPORT LIBRARY=FIXEDCD FILE=TRANFILE;                                       
+RUN;                                                                            
+                                                                                
+PROC PRINT DATA = FIXEDCD.IFDCD&REPTYEAR&REPTMON&REPTDAY(OBS=100); RUN;         
+                                                                                
+PROC PRINT DATA = FIXEDCD.REPTDATE;                                             
+RUN;                                                                            
+                                                                                
+//                                                                              
