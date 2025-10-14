@@ -1,0 +1,112 @@
+//EIIDWALK JOB MISEIS,EIBWPBID,MSGCLASS=A,CLASS=A,NOTIFY=&SYSUID        JOB02956
+//SAS609  EXEC SAS609                                                           
+//LOAN     DD DSN=SAP.PIBB.MNILN.DAILY(0),DISP=SHR                              
+//WALKTXT  DD DSN=FDP.APPL.PIBB.DAILY.LOAN,DISP=SHR                             
+//PREWALK  DD DSN=SAP.PIBB.DAILY.WALKER(0),DISP=SHR                             
+//WALK     DD DSN=SAP.PIBB.DAILY.WALKER(+1),                                    
+//            DISP=(NEW,CATLG,DELETE),                                          
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                         
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)                         
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                      
+//SASLIST  DD SYSOUT=X                                                          
+//SYSIN    DD *                                                                 
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER;                                  
+                                                                                
+DATA REPTDATE;                                                                  
+   SET LOAN.REPTDATE;                                                           
+   PREVDATE=REPTDATE-1;                                                         
+   CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR2.));                              
+   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                           
+   CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                             
+   CALL SYMPUT('PREVYEAR', PUT(PREVDATE, YEAR2.));                              
+   CALL SYMPUT('PREVMON', PUT(MONTH(PREVDATE), Z2.));                           
+   CALL SYMPUT('PREVDAY', PUT(DAY(PREVDATE), Z2.));                             
+   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                               
+RUN;                                                                            
+                                                                                
+DATA WDATE(DROP=DD MM YY);                                                      
+   INFILE WALKTXT OBS=1;                                                        
+   INPUT @002 DD          2.                                                    
+         @005 MM          2.                                                    
+         @008 YY          2.;                                                   
+   WDATE = MDY(MM,DD,YY);                                                       
+RUN;                                                                            
+PROC PRINT; FORMAT WDATE DATE8. ;RUN;                                           
+                                                                                
+DATA _NULL_;                                                                    
+  SET WDATE;                                                                    
+  CALL SYMPUT('WDTE', PUT(WDATE, DDMMYY8.));                                    
+RUN;                                                                            
+                                                                                
+%MACRO PROCESS;                                                                 
+   %IF "&WDTE"="&RDATE" %THEN %DO;                                              
+                                                                                
+     DATA WK(DROP=INDICODE);                                                    
+        INFILE WALKTXT FIRSTOBS=1;                                              
+        INPUT @001 INDICODE   $1. @;                                            
+        IF INDICODE EQ '+';                                                     
+        INPUT @002 ORIBR      $4.                                               
+              @003 NTBRCH      3.                                               
+              @007 PROD      $13.                                               
+              @020 CURBAL    COMMA22.2                                          
+              ;                                                                 
+        IF PROD EQ 'ML34170' THEN LNTYPE = 'FS';                                
+        IF PROD EQ 'S-FCYSYNLN' THEN LNTYPE = 'SL';                             
+        IF PROD EQ 'S-FCYRC'    THEN LNTYPE = 'SR';                             
+        IF PROD EQ 'ZIIPSUSP' THEN LNTYPE = 'ZS';                               
+        IF PROD EQ 'ZIIPSUSP' THEN ZSBAL=CURBAL;                                
+        IF SUBSTR(PROD,1,5) EQ '34200' THEN LNTYPE = 'CC';                      
+        IF SUBSTR(PROD,1,5) EQ '54120' THEN LNTYPE = 'HC';                      
+     RUN;                                                                       
+                                                                                
+     DATA WK(RENAME=NTBRCH=BRANCH);                                             
+        SET WK;                                                                 
+        IF SUBSTR(ORIBR,1,1) IN ('H','I') THEN DO;                              
+           %INC PGM(IPLNTB1);                                                   
+        END;                                                                    
+        IF SUBSTR(ORIBR,1,1) IN ('3','I') THEN DO;                              
+           AMTIND = 'I';                                                        
+        END;                                                                    
+     RUN;                                                                       
+                                                                                
+     DATA PREWK;                                                                
+       SET PREWALK.WK&PREVYEAR&PREVMON&PREVDAY(DROP=PREBAL);                    
+     RUN;                                                                       
+     DATA PREWK(KEEP=ORIBR LNTYPE PREBAL);                                      
+       SET PREWK(RENAME=(BALANCE=PREBAL));                                      
+       IF LNTYPE = 'ZS';                                                        
+     RUN;                                                                       
+                                                                                
+     PROC SORT DATA=WK; BY ORIBR LNTYPE; RUN;                                   
+     PROC SORT DATA=PREWK; BY ORIBR LNTYPE; RUN;                                
+     DATA WALK.WK&REPTYEAR&REPTMON&REPTDAY;                                     
+        MERGE PREWK WK;                                                         
+        BY ORIBR LNTYPE;                                                        
+        IF LNTYPE = 'ZS' AND CURBAL EQ 0 THEN DO;                               
+           BALANCE = PREBAL;                                                    
+        END;                                                                    
+        ELSE DO;                                                                
+           BALANCE = CURBAL;                                                    
+        END;                                                                    
+     RUN;                                                                       
+                                                                                
+     PROC PRINT DATA=WALK.WK&REPTYEAR&REPTMON&REPTDAY;                          
+     RUN;                                                                       
+  %END;                                                                         
+  %ELSE %DO;                                                                    
+     %IF "&WDTE" NE "&RDATE" %THEN                                              
+        %PUT THE WALKER - FDP.APPL.DAILY.LOAN IS NOT DATED &RDATE;              
+        %PUT THE WALKER JOB - FDPGLRDL ;                                        
+        %PUT THE JOB IS NOT DONE !!;                                            
+     %DO;                                                                       
+        DATA A;                                                                 
+        ABORT 77;                                                               
+     %END;                                                                      
+  %END;                                                                         
+%MEND;                                                                          
+%PROCESS;                                                                       
+                                                                                
+                                                                                
+                                                                                
+//                                                                              
