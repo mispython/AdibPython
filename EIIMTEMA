@@ -1,0 +1,159 @@
+//EIIMTEMA JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                      JOB02003
+/*JOBPARM S=S1M1                                                                
+//*                                                                             
+//**************************************************************                
+//*** MUST SYNC WITH LNCCD001                                                   
+//**************************************************************                
+//EIFMCCD2  EXEC SAS609                                                         
+//*CONFIG   DD DISP=SHR,DSN=SYS3.SAS.V609.CNTL(BATCHXA)                         
+//LOAN      DD DSN=SAP.PIBB.MNILN(0),DISP=SHR                                   
+//LN        DD DSN=SAP.PIBB.SASDATA,DISP=SHR                                    
+//BRHFILE   DD DSN=RBP2.B033.PBB.BRANCH,DISP=SHR                                
+//BNM       DD DSN=SAP.PIBB.CCDTEMP(+1),                                        
+//             DISP=(NEW,CATLG,DELETE),                                         
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(200,100),RLSE),UNIT=(SYSDA,3)                        
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//ICAP      DD DSN=SAP.PIBB.NPL.HP.SASDATA,DISP=SHR                             
+//SASLIST   DD SYSOUT=X                                                         
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER;                                  
+                                                                                
+DATA BNM.REPTDATE;                                                              
+  REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||                               
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;                           
+  SELECT;                                                                       
+     WHEN( 8<=DAY(REPTDATE)<=14) CALL SYMPUT('NOWK', PUT('1', $1.));            
+     WHEN(15<=DAY(REPTDATE)<=21) CALL SYMPUT('NOWK', PUT('2', $1.));            
+     WHEN(21<=DAY(REPTDATE)<=27) CALL SYMPUT('NOWK', PUT('3', $1.));            
+     OTHERWISE                   CALL SYMPUT('NOWK', PUT('4', $1.));            
+  END;                                                                          
+  PREVDATE=MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))-1;                             
+  CALL SYMPUT('PREVMON',PUT(MONTH(PREVDATE),Z2.));                              
+  CALL SYMPUT('PREVYEAR',PUT(PREVDATE,YEAR2.));                                 
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                                
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));                               
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                            
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                              
+RUN;                                                                            
+                                                                                
+DATA _NULL_;                                                                    
+  SET LOAN.REPTDATE(OBS=1);                                                     
+  CALL SYMPUT('LOAN', PUT(REPTDATE, DDMMYY8.));                                 
+RUN;                                                                            
+                                                                                
+%MACRO PROCESS;                                                                 
+  %IF "&LOAN"="&RDATE" %THEN %DO;                                               
+                                                                                
+     %INC PGM(PBBLNFMT);                                                        
+                                                                                
+     %LET LOAN=(KEEP=BRANCH ACCTNO NAME NOTENO PRODUCT BALANCE                  
+                     BLDATE ARREAR ARREAR2 THISDATE DAYDIFF LOANSTAT            
+                     CHECKDT CENSUS COLLDESC ISSDTE FEEDUE BORSTAT              
+                     BILPAY NOISTLPD LASTRAN MATURDT LSTTRNAM                   
+                     LSTTRNCD USER5 CAP                                         
+                     PAYAMT ORGBAL CURBAL DELQCD BILTOT BILDUE);                
+                                                                                
+     PROC SORT DATA=LOAN.LNNOTE OUT=LNNOTE; BY ACCTNO COMMNO;                   
+     PROC SORT DATA=LOAN.LNCOMM OUT=LNCOMM NODUPKEY;  BY ACCTNO COMMNO;         
+     DATA LNNOTE;                                                               
+        MERGE LNNOTE(IN=A) LNCOMM(IN=B);  BY ACCTNO COMMNO;                     
+        IF A AND PAIDIND NE 'P';                                                
+     RUN;                                                                       
+                                                                                
+     PROC SORT DATA=LNNOTE; BY ACCTNO NOTENO; RUN;                              
+     PROC SORT DATA=ICAP.ICAP&PREVMON&PREVYEAR                                  
+                OUT=ICAP&PREVMON&PREVYEAR(KEEP=ACCTNO NOTENO CAP);              
+          BY ACCTNO NOTENO;                                                     
+     *;                                                                         
+     DATA LNNOTE;                                                               
+       MERGE ICAP&PREVMON&PREVYEAR LNNOTE(IN=A);                                
+       BY ACCTNO NOTENO;                                                        
+       IF A;                                                                    
+     RUN;                                                                       
+     *;                                                                         
+     DATA SASLN;                                                                
+        SET LN.LOAN&REPTMON&NOWK                                                
+            LN.LNWOF&REPTMON&NOWK                                               
+            LN.LNWOD&REPTMON&NOWK;                                              
+     RUN;                                                                       
+     PROC SORT DATA=SASLN; BY ACCTNO NOTENO; RUN;                               
+                                                                                
+     DATA BNM.LOANTEMP &LOAN;                                                   
+        MERGE LNNOTE(IN=A) SASLN(IN=B);                                         
+        BY ACCTNO NOTENO;                                                       
+        IF A AND PAIDIND NE 'P';                                                
+                                                                                
+        IF BRANCH = 0 THEN BRANCH = NTBRCH;                                     
+        IF ORGBAL GT 0 AND CURBAL GT 0 AND PAYAMT GT 0 THEN                     
+           NOISTLPD = ROUND((ORGBAL-CURBAL) / PAYAMT,0.01);                     
+        ELSE NOISTLPD = 0;                                                      
+        IF BORSTAT = 'F' THEN NOISTLPD = .;                                     
+        IF LASTTRAN NOT IN (.,0) THEN                                           
+           LASTRAN = INPUT(SUBSTR(PUT(LASTTRAN,Z11.),1,8),MMDDYY8.);            
+        IF MATUREDT NOT IN (.,0) THEN                                           
+           MATURDT = INPUT(SUBSTR(PUT(MATUREDT,Z11.),1,8),MMDDYY8.);            
+        IF REVERSED NE 'Y';                                                     
+           THISDATE = INPUT("&RDATE", DDMMYY8.);                                
+           CHECK = '01JAN98'D;                                                  
+           IF ISSDTE GE CHECK THEN CHECKDT = 1;                                 
+           ELSE CHECKDT = 0;                                                    
+                                                                                
+        IF BLDATE > 0 THEN DAYDIFF = THISDATE - BLDATE;                         
+        ELSE DAYDIFF = 0;                                                       
+        IF OLDNOTEDAYARR > 0 AND 98000<=NOTENO<=98999 THEN DO;                  
+           IF DAYDIFF < 0 THEN DAYDIFF = 0;                                     
+           DAYDIFF = SUM(DAYDIFF,OLDNOTEDAYARR);                                
+        END;                                                                    
+        IF DAYARR_MO NE . THEN DAYDIFF = DAYARR_MO;                             
+        SELECT;                                                                 
+           WHEN (DAYDIFF <  31)    ARREAR2=1;                                   
+           WHEN (DAYDIFF >  30 AND DAYDIFF < 60)   ARREAR2=2;                   
+           WHEN (DAYDIFF >  59 AND DAYDIFF < 90)   ARREAR2=3;                   
+           WHEN (DAYDIFF >  89 AND DAYDIFF < 122)  ARREAR2=4;                   
+           WHEN (DAYDIFF > 121 AND DAYDIFF < 152)  ARREAR2=5;                   
+           WHEN (DAYDIFF > 151 AND DAYDIFF < 183)  ARREAR2=6;                   
+           WHEN (DAYDIFF > 182 AND DAYDIFF < 214)  ARREAR2=7;                   
+           WHEN (DAYDIFF > 213 AND DAYDIFF < 244)  ARREAR2=8;                   
+           WHEN (DAYDIFF > 243 AND DAYDIFF < 274)  ARREAR2=9;                   
+           WHEN (DAYDIFF > 273 AND DAYDIFF < 365)  ARREAR2=10;                  
+           WHEN (DAYDIFF > 364 AND DAYDIFF < 548)  ARREAR2=11;                  
+           WHEN (DAYDIFF > 547 AND DAYDIFF < 730)  ARREAR2=12;                  
+           WHEN (DAYDIFF > 729 AND DAYDIFF < 1095) ARREAR2=13;                  
+           WHEN (DAYDIFF > 1094)   ARREAR2=14;                                  
+        END;                                                                    
+        SELECT;                                                                 
+           WHEN (DAYDIFF <  31)    ARREAR=1;                                    
+           WHEN (DAYDIFF >  30 AND DAYDIFF < 60)   ARREAR=2;                    
+           WHEN (DAYDIFF >  59 AND DAYDIFF < 90)   ARREAR=3;                    
+           WHEN (DAYDIFF >  89 AND DAYDIFF < 122)  ARREAR=4;                    
+           WHEN (DAYDIFF > 121 AND DAYDIFF < 152)  ARREAR=5;                    
+           WHEN (DAYDIFF > 151 AND DAYDIFF < 183)  ARREAR=6;                    
+           WHEN (DAYDIFF > 182 AND DAYDIFF < 214)  ARREAR=7;                    
+           WHEN (DAYDIFF > 213 AND DAYDIFF < 244)  ARREAR=8;                    
+           WHEN (DAYDIFF > 243 AND DAYDIFF < 274)  ARREAR=9;                    
+           WHEN (DAYDIFF > 273 AND DAYDIFF < 304)  ARREAR=10;                   
+           WHEN (DAYDIFF > 303 AND DAYDIFF < 334)  ARREAR=11;                   
+           WHEN (DAYDIFF > 333 AND DAYDIFF < 365)  ARREAR=12;                   
+           WHEN (DAYDIFF > 364 AND DAYDIFF < 548)  ARREAR=13;                   
+           WHEN (DAYDIFF > 547 AND DAYDIFF < 730)  ARREAR=14;                   
+           WHEN (DAYDIFF > 729 AND DAYDIFF < 1095) ARREAR=15;                   
+           WHEN (DAYDIFF > 1094)   ARREAR=16;                                   
+        END;                                                                    
+     RUN;                                                                       
+     PROC SORT DATA=BNM.LOANTEMP OUT=BNM.LOANTEMP;                              
+        BY BRANCH ARREAR;                                                       
+     RUN;                                                                       
+                                                                                
+  %END;                                                                         
+  %ELSE %DO;                                                                    
+      %PUT THE LOAN EXTRACTION IS NOT DATED &RDATE;                             
+      %PUT THIS JOB IS NOT RUN !!;                                              
+      %DO;                                                                      
+         DATA A;                                                                
+            ABORT 77;                                                           
+      %END;                                                                     
+  %END;                                                                         
+%MEND;                                                                          
+%PROCESS;                                                                       
