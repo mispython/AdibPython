@@ -1,0 +1,57 @@
+//EIIMCCDB JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                      JOB16305
+/*JOBPARM S=S1M1                                                                
+//*********************************************************************         
+//* DELETE OUTPUT FILES                                                         
+//*********************************************************************         
+//DELETE  EXEC PGM=IEFBR14                                                      
+//DEL01     DD DSN=SAP.PIBB.CCDTEMPB,                                           
+//             DISP=(MOD,DELETE,DELETE),                                        
+//             SPACE=(CYL,(0))                                                  
+//*                                                                             
+//EIFMCCDB  EXEC SAS609                                                         
+//*CONFIG   DD DISP=SHR,DSN=SYS3.SAS.V609.CNTL(BATCHXA)                         
+//LOAN      DD DSN=SAP.PIBB.MNILN(0),DISP=SHR                                   
+//BRHFILE   DD DSN=RBP2.B033.PBB.BRANCH,DISP=SHR                                
+//BNM       DD DSN=SAP.PIBB.CCDTEMPB,                                           
+//             DISP=(NEW,CATLG,DELETE),                                         
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
+//             SPACE=(CYL,(200,100),RLSE),UNIT=(SYSDA,3)                        
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//SASLIST   DD SYSOUT=X                                                         
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950;                                           
+                                                                                
+DATA _NULL_;                                                                    
+  REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||                               
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;                           
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                                
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));                               
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                            
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                              
+RUN;                                                                            
+                                                                                
+DATA _NULL_;                                                                    
+  SET LOAN.REPTDATE(OBS=1);                                                     
+  CALL SYMPUT('LOAN', PUT(REPTDATE, DDMMYY8.));                                 
+RUN;                                                                            
+                                                                                
+%MACRO PROCESS;                                                                 
+  /*                                                                            
+  %IF "&LOAN"="&RDATE" %THEN %DO;                                               
+  */                                                                            
+      %INC PGM(LNCCDB06);                                                       
+      PROC DATASETS LIB=WORK KILL NOLIST; RUN;                                  
+  /*                                                                            
+  %END;                                                                         
+  %ELSE %DO;                                                                    
+      %PUT THE LOAN EXTRACTION IS NOT DATED &RDATE;                             
+      %PUT THIS JOB IS NOT RUN !!;                                              
+      %DO;                                                                      
+         DATA A;                                                                
+            ABORT 77;                                                           
+      %END;                                                                     
+  %END;                                                                         
+  */                                                                            
+%MEND;                                                                          
+%PROCESS;                                                                       
