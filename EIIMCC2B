@@ -1,0 +1,70 @@
+//EIIMCC2B JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                      JOB16530
+/*JOBPARM S=S1M1                                                                
+//*                                                                             
+//PRINT1    OUTPUT CLASS=R,DEST='S1.R35',                                       
+//          NAME='THE MANAGER',                                                 
+//          BUILDING='MENARA PBB',                                              
+//          DEPT='PFB - CREDIT CONTROL',                                        
+//          ADDRESS=('22TH FLOOR','MENARA PUBLIC BANK',                         
+//          '146 JALAN AMPANG','50450 KUALA LUMPUR')                            
+//*                                                                             
+//EIFMCC2B  EXEC SAS609                                                         
+//LOAN      DD DSN=SAP.PIBB.MNILN(0),DISP=SHR                                   
+//BRHFILE   DD DSN=RBP2.B033.PBB.BRANCH,DISP=SHR                                
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
+//SASLIST   DD SYSOUT=(,),OUTPUT=(*.PRINT1)                                     
+//SYSIN     DD *                                                                
+                                                                                
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950;                                           
+                                                                                
+DATA _NULL_;                                                                    
+  SET LOAN.REPTDATE;                                                            
+  SELECT(DAY(REPTDATE));                                                        
+    WHEN (1-8)   DO; WK = '1'; END;                                             
+    WHEN(9-15)   DO; WK = '2'; END;                                             
+    WHEN(16-22)  DO; WK = '3'; END;                                             
+    OTHERWISE    DO; WK = '4'; END;                                             
+  END;                                                                          
+  CALL SYMPUT('NOWK',PUT(WK,$1.));                                              
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                                
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));                               
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                            
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));                              
+RUN;                                                                            
+                                                                                
+LIBNAME BNM "SAP.PBB.CCDTEMPB" DISP=SHR;                                        
+                                                                                
+DATA _NULL_;                                                                    
+  SET LOAN.REPTDATE(OBS=1);                                                     
+  CALL SYMPUT('LOAN', PUT(REPTDATE, DDMMYY8.));                                 
+RUN;                                                                            
+                                                                                
+%MACRO PROCESS;                                                                 
+  %IF "&LOAN"="&RDATE" %THEN %DO;                                               
+      /**  LOANS IN ARREARS REPORT - THE MONTHEND VERSION **/                   
+      %INC PGM(LNCCDBI2);                                                       
+      PROC DATASETS LIB=WORK KILL NOLIST; RUN;                                  
+                                                                                
+      /**  LOANS IN NPL REPORT - BY CAC **/                                     
+      %INC PGM(LNCCDBI3);                                                       
+      PROC DATASETS LIB=WORK KILL NOLIST; RUN;                                  
+                                                                                
+      /**  LOANS IN NPL REPORT - THE 10 & 20 OF THE MONTH VER **/               
+      %INC PGM(LNCCDBI4);                                                       
+      PROC DATASETS LIB=WORK KILL NOLIST; RUN;                                  
+                                                                                
+      /**  LOANS CLASSIFY AS NPL REPORT **/                                     
+      /* %INC PGM(LNCCDBI5);  */                                                
+      PROC DATASETS LIB=WORK KILL NOLIST; RUN;                                  
+  %END;                                                                         
+  %ELSE %DO;                                                                    
+      %PUT THE LOAN EXTRACTION IS NOT DATED &RDATE;                             
+      %PUT THIS JOB IS NOT RUN !!;                                              
+      %DO;                                                                      
+         DATA A;                                                                
+            ABORT 77;                                                           
+      %END;                                                                     
+  %END;                                                                         
+%MEND;                                                                          
+%PROCESS;                                                                       
+//                                                                              
