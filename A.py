@@ -428,3 +428,64 @@ print("PROCESSING COMPLETE!")
 print("="*80)
 print(f"SUMM1 total records: {ELDS_SUMM1.height}")
 print(f"SUMM2 total records: {ELDS_SUMM2.height}")
+
+
+
+
+
+
+(virt_edw_dev) [sas_edw_dev@svdwh004 MIS]$ /sas/python/virt_edw_dev/bin/python3 /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py
+Processing date: 2025-10-15 15:03:16.897921
+Input SUMM1: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input/bnmsummary1_20251015.csv
+Input SUMM2: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input/bnmsummary2_20251015.csv
+Output path: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output/year=2025/month=10/day=15
+
+Processing SUMM1...
+WARNING: 1723 rows where MAANO_NUM != row index
+This may be expected behavior for production data
+Sample rows for inspection:
+shape: (10, 3)
+┌─────┬───────────────┬───────────┐
+│ _N_ ┆ MAANO         ┆ MAANO_NUM │
+│ --- ┆ ---           ┆ ---       │
+│ u32 ┆ str           ┆ i64       │
+╞═════╪═══════════════╪═══════════╡
+│ 0   ┆ AKH/000709/25 ┆ 709       │
+│ 1   ┆ AKH/000854/25 ┆ 854       │
+│ 2   ┆ AKH/000945/25 ┆ 945       │
+│ 3   ┆ AKH/000945/25 ┆ 945       │
+│ 4   ┆ AKH/000981/25 ┆ 981       │
+│ 5   ┆ AKH/000981/25 ┆ 981       │
+│ 6   ┆ AKH/001026/25 ┆ 1026      │
+│ 7   ┆ AKH/001045/25 ┆ 1045      │
+│ 8   ┆ AKH/001045/25 ┆ 1045      │
+│ 9   ┆ AKH/001045/25 ┆ 1045      │
+└─────┴───────────────┴───────────┘
+SUMM1 CSV records: 1725
+Reading SUMM1_EHP from SAS...
+WARNING: 4548 invalid rows found in SUMM1_EHP
+Sample invalid rows:
+shape: (10, 3)
+┌──────┬───────────────┬───────────┐
+│ _N_  ┆ MAANO         ┆ MAANO_NUM │
+│ ---  ┆ ---           ┆ ---       │
+│ u32  ┆ str           ┆ i64       │
+╞══════╪═══════════════╪═══════════╡
+│ 1725 ┆ H01/520443/25 ┆ 520443    │
+│ 1726 ┆ H01/520659/25 ┆ 520659    │
+│ 1727 ┆ H01/523674/25 ┆ 523674    │
+│ 1728 ┆ H01/523829/25 ┆ 523829    │
+│ 1729 ┆ H01/524190/25 ┆ 524190    │
+│ 1730 ┆ H01/524277/25 ┆ 524277    │
+│ 1731 ┆ H01/524451/25 ┆ 524451    │
+│ 1732 ┆ H01/524685/25 ┆ 524685    │
+│ 1733 ┆ H01/524688/25 ┆ 524688    │
+│ 1734 ┆ H01/524745/25 ┆ 524745    │
+└──────┴───────────────┴───────────┘
+SUMM1_EHP records: 4550
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 141, in <module>
+    SUMM1 = pl.concat([SUMM1, SUMM1_EHP])
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/functions/eager.py", line 231, in concat
+    out = wrap_df(plr.concat_df(elems))
+polars.exceptions.ShapeError: unable to append to a DataFrame of width 43 with a DataFrame of width 38
