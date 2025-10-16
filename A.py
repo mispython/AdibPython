@@ -316,3 +316,5 @@ SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
+
+
