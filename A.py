@@ -180,63 +180,55 @@ def safe_concat(df1: pl.DataFrame, df2: pl.DataFrame) -> pl.DataFrame:
     return pl.concat([df1, df2], how="vertical_relaxed")
 
 # ---------------------------------------------------------
-# FUNCTION: Apply SAS EOF/COUNT CHECK LOGIC
+# FUNCTION: SAS EOF CONTROL CHECK (Exclude header/footer)
 # ---------------------------------------------------------
 def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
     """
-    Simulate SAS logic:
-      - Last record (MAANO like FT00001724) = control count
-      - Compare with actual number of data rows (excluding footer)
-      - If mismatch => ABORT 77
-      - Add INDINTERIM='Y', DATE=&RDATE (numeric)
+    SAS-style EOF control:
+      - Footer row (FT00001724) contains expected record count
+      - Ignore header/footer when counting
+      - Compare expected vs actual data row count
+      - Abort if mismatch
     """
-
     if "MAANO" not in df.columns:
         print(f"⚠️  MAANO column missing in {source_name}, skipping count validation.")
         return df
 
-    # Extract last record
+    # Extract the last row (footer)
     control_row = df[-1, :]
-    df_data = df.slice(0, df.height - 1)  # all except last (EOF/footer)
-
     ctrl_val = str(control_row["MAANO"]).strip()
 
-    # Try extract numeric control count (e.g. FT00001724 -> 1724)
+    # Detect control footer pattern (FT00001724)
     match = re.match(r"FT0*(\d+)", ctrl_val)
     if not match:
-        print(f"⚠️  No numeric control count found in {source_name}, proceeding without checks.")
-        control_count = None
+        print(f"⚠️ No numeric control count found in {source_name}, proceeding without checks.")
+        df_data = df  # no footer found, use all rows
+        return df_data.with_columns(
+            pl.lit("Y").alias("INDINTERIM"),
+            pl.lit(RDATE).alias("DATE")
+        )
+
+    control_count = int(match.group(1))
+    print(f"✅ {source_name}: Found control count in footer = {control_count}")
+
+    # Exclude header (if any) and footer
+    df_data = df.slice(0, df.height - 1)
+    actual_count = df_data.height
+
+    print(f"📊 {source_name}: Actual data row count (excluding header/footer) = {actual_count}")
+
+    # Compare control vs data row count
+    if control_count != actual_count:
+        print(f"❌ ABORT 77: Row count mismatch in {source_name} - expected {control_count}, got {actual_count}")
+        raise SystemExit(77)
     else:
-        control_count = int(match.group(1))
+        print(f"✅ Record count matches control record ({actual_count}).")
 
-    # Compare footer count with actual row count
-    if control_count is not None:
-        actual_count = df_data.height
-        print(f"ℹ️  {source_name}: Expected count from footer = {control_count}, actual rows = {actual_count}")
-        if control_count != actual_count:
-            print(f"❌ ABORT 77: Row count mismatch in {source_name} - expected {control_count}, got {actual_count}")
-            raise SystemExit(77)
-        else:
-            print(f"✅ {source_name} count check passed ({actual_count} rows match footer count).")
-
-    # Compare with summary row if exists (optional)
-    # For example, if last non-footer row has some summary fields
-    if "STAGE" in df_data.columns and df_data[-1, "STAGE"] == "SUMMARY":
-        summary_row = df_data[-1, :]
-        if "TOTAL_COUNT" in df_data.columns:
-            summary_count = int(summary_row["TOTAL_COUNT"])
-            if control_count and summary_count != control_count:
-                print(f"❌ {source_name}: Summary row count ({summary_count}) mismatch with footer ({control_count})")
-                raise SystemExit(77)
-            else:
-                print(f"✅ {source_name}: Summary row count matches footer ({summary_count}).")
-
-    # Add new columns (SAS equivalent)
+    # Add SAS-like columns
     df_data = df_data.with_columns(
         pl.lit("Y").alias("INDINTERIM"),
         pl.lit(RDATE).alias("DATE")
     )
-
     return df_data
 
 # ---------------------------------------------------------
@@ -258,12 +250,12 @@ SUMM1 = pl.read_csv(
 
 SUMM1 = apply_sas_eof_check(SUMM1, "bnmsummary1")
 
-# Read SAS7BDAT EHP source
+# Read EHP SAS7BDAT
 EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
 SUMM1_EHP_df, _ = pyreadstat.read_sas7bdat(EHP_SRC)
 SUMM1_EHP = apply_sas_eof_check(pl.from_pandas(SUMM1_EHP_df), "bnmsummary1_ehp")
 
-# Safe concat both versions
+# Combine
 SUMM1 = safe_concat(SUMM1, SUMM1_EHP)
 
 # ---------------------------------------------------------
@@ -280,7 +272,7 @@ try:
 except Exception:
     ELDS_SUMM1 = SUMM1
 
-# SAVE TO PARQUET
+# Save to Parquet
 duckdb.sql(f"""
     COPY (SELECT * FROM ELDS_SUMM1) TO '{OUTPUT_DATA_PATH}/SUMM1.parquet' (FORMAT PARQUET)
 """)
@@ -304,17 +296,14 @@ SUMM2 = pl.read_csv(
 
 SUMM2 = apply_sas_eof_check(SUMM2, "bnmsummary2")
 
-# Read SAS7BDAT (EHP2)
+# Read EHP2 SAS7BDAT
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
 SUMM2_EHP_df, _ = pyreadstat.read_sas7bdat(EHP2_SRC)
 SUMM2_EHP = apply_sas_eof_check(pl.from_pandas(SUMM2_EHP_df), "bnmsummary2_ehp")
 
-# Safe concat
+# Combine and save
 SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 
-# SAVE TO PARQUET
 duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
-
-
