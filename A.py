@@ -194,21 +194,24 @@ def extract_maano_number(maano_str):
 # ============================================================================
 print("\nProcessing SUMM1...")
 
+# Define expected columns for SUMM1
+SUMM1_COLUMNS = [
+    "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
+    "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
+    "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
+    "FACICODE", "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", 
+    "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", "STATUS", "CCPT_TAG", "CIR", 
+    "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", 
+    "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
+    "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
+]
+
 SUMM1 = pl.read_csv(
     BNMSUMM1,
     separator=",",
     has_header=False,
     ignore_errors=True,
-    new_columns=[
-        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
-        "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
-        "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
-        "FACICODE", "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", 
-        "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", "STATUS", "CCPT_TAG", "CIR", 
-        "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", 
-        "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
-        "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
-    ]
+    new_columns=SUMM1_COLUMNS
 )
 
 SUMM1 = SUMM1.slice(1, SUMM1.height - 1)
@@ -228,23 +231,7 @@ SUMM1 = SUMM1.with_columns(
       .alias("MAANO_NUM")
 )
 
-# FIXED: Validation - check if MAANO_NUM matches row index (_N_)
-# Note: This validation might not be appropriate for production data
-# as MAANO numbers may not necessarily match row indices
-invalid_rows = SUMM1.filter(
-    (pl.col("MAANO_NUM").is_not_null()) &
-    (pl.col("MAANO_NUM") != pl.col("_N_"))
-)
-
-if invalid_rows.height > 0:
-    print(f"WARNING: {invalid_rows.height} rows where MAANO_NUM != row index")
-    print("This may be expected behavior for production data")
-    print("Sample rows for inspection:")
-    print(invalid_rows.select(["_N_", "MAANO", "MAANO_NUM"]).head(10))
-    
-    # For production, you might want to comment out the exit and just log warning
-    # raise SystemExit(77)
-
+# FIXED: Remove the validation that's causing issues - MAANO numbers don't need to match row indices
 print(f"SUMM1 CSV records: {SUMM1.height}")
 
 # READ EHP SAS FILE
@@ -255,12 +242,26 @@ if os.path.exists(EHP_SRC):
     SUMM1_EHP_DF, meta_dp = pyreadstat.read_sas7bdat(EHP_SRC)
     SUMM1_EHP = pl.from_pandas(SUMM1_EHP_DF)
     
+    print(f"SUMM1_EHP original columns: {SUMM1_EHP.columns}")
+    print(f"SUMM1_EHP original shape: {SUMM1_EHP.shape}")
+    
+    # FIXED: Align EHP columns with SUMM1 structure
+    # First, add any missing columns from SUMM1 to SUMM1_EHP
+    for col in SUMM1_COLUMNS:
+        if col not in SUMM1_EHP.columns:
+            SUMM1_EHP = SUMM1_EHP.with_columns(pl.lit(None).alias(col))
+    
+    # Now select only the columns that exist in SUMM1
+    available_columns = [col for col in SUMM1_COLUMNS if col in SUMM1_EHP.columns]
+    SUMM1_EHP = SUMM1_EHP.select(available_columns)
+    
+    # Add the additional columns that SUMM1 has
     SUMM1_EHP = SUMM1_EHP.with_columns([
         pl.lit("Y").alias("INDINTERIM"),
         pl.lit(RDATE).alias("DATE")
     ])
     
-    # Start row index from the end of SUMM1
+    # Add row index for tracking (but don't validate)
     start_index = SUMM1.height
     SUMM1_EHP = SUMM1_EHP.with_row_index(name="_N_", offset=start_index)
     
@@ -270,18 +271,16 @@ if os.path.exists(EHP_SRC):
           .alias("MAANO_NUM")
     )
     
-    invalid_rows_ehp = SUMM1_EHP.filter(
-        (pl.col("MAANO_NUM").is_not_null()) &
-        (pl.col("MAANO_NUM") != (pl.col("_N_") - start_index))
-    )
+    print(f"SUMM1_EHP aligned columns: {SUMM1_EHP.columns}")
+    print(f"SUMM1_EHP aligned shape: {SUMM1_EHP.shape}")
+    print(f"SUMM1 shape: {SUMM1.shape}")
     
-    if invalid_rows_ehp.height > 0:
-        print(f"WARNING: {invalid_rows_ehp.height} invalid rows found in SUMM1_EHP")
-        print("Sample invalid rows:")
-        print(invalid_rows_ehp.select(["_N_", "MAANO", "MAANO_NUM"]).head(10))
+    # Ensure both DataFrames have the same columns in the same order
+    SUMM1_EHP = SUMM1_EHP.select(SUMM1.columns)
     
-    print(f"SUMM1_EHP records: {SUMM1_EHP.height}")
     SUMM1 = pl.concat([SUMM1, SUMM1_EHP])
+    print(f"SUMM1_EHP records: {SUMM1_EHP.height}")
+    print(f"Combined SUMM1 total: {SUMM1.height}")
 else:
     print(f"WARNING: EHP file not found: {EHP_SRC}")
 
@@ -296,6 +295,9 @@ if prev_summ1_path.exists():
     """
     PREV_SUMM1_DF = duckdb.query(query).to_df()
     PREV_SUMM1 = pl.from_pandas(PREV_SUMM1_DF)
+    
+    # Ensure previous data has same structure
+    PREV_SUMM1 = PREV_SUMM1.select(SUMM1.columns)
     
     ELDS_SUMM1 = pl.concat([PREV_SUMM1, SUMM1])
     print(f"Combined with previous: {ELDS_SUMM1.height} total records")
@@ -315,21 +317,24 @@ ELDS_SUMM1.write_parquet(OUTPUT_DATA_PATH / "SUMM1.parquet")
 # ============================================================================
 print("\nProcessing SUMM2...")
 
+# Define expected columns for SUMM2
+SUMM2_COLUMNS = [
+    "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", 
+    "APPLNAME", "COUNTRY", "DBIRTH", "ENTITY_TYPE", "CORP_STATUS_CD", 
+    "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY", 
+    "GENDER", "OCCUPATION", "EMPNAME", "EMPLOY_SECTOR_CD", "EMPLOY_TYPE_CD", 
+    "POSTCODE", "STATE_CD", "COUNTRY_CD", "ROLE", "ICPP", "MARRIED", 
+    "CUSTOMER_CODE", "CISNUMBER", "NO_OF_EMPLOYEE", "ANNUAL_TURNOVER",         
+    "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", 
+    "EREQNO", "DSRISS3", "DTCOMPLETE"
+]
+
 SUMM2 = pl.read_csv(
     BNMSUMM2,
     separator=",",
     has_header=False,
     ignore_errors=True,
-    new_columns=[
-        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", 
-        "APPLNAME", "COUNTRY", "DBIRTH", "ENTITY_TYPE", "CORP_STATUS_CD", 
-        "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY", 
-        "GENDER", "OCCUPATION", "EMPNAME", "EMPLOY_SECTOR_CD", "EMPLOY_TYPE_CD", 
-        "POSTCODE", "STATE_CD", "COUNTRY_CD", "ROLE", "ICPP", "MARRIED", 
-        "CUSTOMER_CODE", "CISNUMBER", "NO_OF_EMPLOYEE", "ANNUAL_TURNOVER",         
-        "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", 
-        "EREQNO", "DSRISS3", "DTCOMPLETE"
-    ]
+    new_columns=SUMM2_COLUMNS
 )
 
 SUMM2 = SUMM2.slice(1, SUMM2.height - 1)
@@ -347,16 +352,6 @@ SUMM2 = SUMM2.with_columns(
       .alias("MAANO_NUM")
 )
 
-invalid_rows_summ2 = SUMM2.filter(
-    (pl.col("MAANO_NUM").is_not_null()) &
-    (pl.col("MAANO_NUM") != pl.col("_N_"))
-)
-
-if invalid_rows_summ2.height > 0:
-    print(f"WARNING: {invalid_rows_summ2.height} rows where MAANO_NUM != row index in SUMM2")
-    print("Sample rows:")
-    print(invalid_rows_summ2.select(["_N_", "MAANO", "MAANO_NUM"]).head(10))
-
 print(f"SUMM2 CSV records: {SUMM2.height}")
 
 # READ EHP2 SAS FILE
@@ -367,7 +362,18 @@ if os.path.exists(EHP2_SRC):
     SUMM2_EHP_DF, meta_dp = pyreadstat.read_sas7bdat(EHP2_SRC)
     SUMM2_EHP = pl.from_pandas(SUMM2_EHP_DF)
     
+    print(f"SUMM2_EHP original columns: {SUMM2_EHP.columns}")
+    print(f"SUMM2_EHP original shape: {SUMM2_EHP.shape}")
+    
     SUMM2_EHP = SUMM2_EHP.slice(1, SUMM2_EHP.height - 1)
+    
+    # FIXED: Align EHP2 columns with SUMM2 structure
+    for col in SUMM2_COLUMNS:
+        if col not in SUMM2_EHP.columns:
+            SUMM2_EHP = SUMM2_EHP.with_columns(pl.lit(None).alias(col))
+    
+    available_columns = [col for col in SUMM2_COLUMNS if col in SUMM2_EHP.columns]
+    SUMM2_EHP = SUMM2_EHP.select(available_columns)
     
     SUMM2_EHP = SUMM2_EHP.with_columns([
         pl.lit("Y").alias("INDINTERIM"),
@@ -383,18 +389,15 @@ if os.path.exists(EHP2_SRC):
           .alias("MAANO_NUM")
     )
     
-    invalid_rows_ehp2 = SUMM2_EHP.filter(
-        (pl.col("MAANO_NUM").is_not_null()) &
-        (pl.col("MAANO_NUM") != (pl.col("_N_") - start_index_summ2))
-    )
+    print(f"SUMM2_EHP aligned columns: {SUMM2_EHP.columns}")
+    print(f"SUMM2_EHP aligned shape: {SUMM2_EHP.shape}")
     
-    if invalid_rows_ehp2.height > 0:
-        print(f"WARNING: {invalid_rows_ehp2.height} invalid rows found in SUMM2_EHP")
-        print("Sample invalid rows:")
-        print(invalid_rows_ehp2.select(["_N_", "MAANO", "MAANO_NUM"]).head(10))
+    # Ensure both DataFrames have the same columns in the same order
+    SUMM2_EHP = SUMM2_EHP.select(SUMM2.columns)
     
-    print(f"SUMM2_EHP records: {SUMM2_EHP.height}")
     SUMM2 = pl.concat([SUMM2, SUMM2_EHP])
+    print(f"SUMM2_EHP records: {SUMM2_EHP.height}")
+    print(f"Combined SUMM2 total: {SUMM2.height}")
 else:
     print(f"WARNING: EHP file not found: {EHP2_SRC}")
 
@@ -409,6 +412,9 @@ if prev_summ2_path.exists():
     """
     PREV_SUMM2_DF = duckdb.query(query).to_df()
     PREV_SUMM2 = pl.from_pandas(PREV_SUMM2_DF)
+    
+    # Ensure previous data has same structure
+    PREV_SUMM2 = PREV_SUMM2.select(SUMM2.columns)
     
     ELDS_SUMM2 = pl.concat([PREV_SUMM2, SUMM2])
     print(f"Combined with previous: {ELDS_SUMM2.height} total records")
@@ -428,64 +434,3 @@ print("PROCESSING COMPLETE!")
 print("="*80)
 print(f"SUMM1 total records: {ELDS_SUMM1.height}")
 print(f"SUMM2 total records: {ELDS_SUMM2.height}")
-
-
-
-
-
-
-(virt_edw_dev) [sas_edw_dev@svdwh004 MIS]$ /sas/python/virt_edw_dev/bin/python3 /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py
-Processing date: 2025-10-15 15:03:16.897921
-Input SUMM1: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input/bnmsummary1_20251015.csv
-Input SUMM2: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input/bnmsummary2_20251015.csv
-Output path: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output/year=2025/month=10/day=15
-
-Processing SUMM1...
-WARNING: 1723 rows where MAANO_NUM != row index
-This may be expected behavior for production data
-Sample rows for inspection:
-shape: (10, 3)
-┌─────┬───────────────┬───────────┐
-│ _N_ ┆ MAANO         ┆ MAANO_NUM │
-│ --- ┆ ---           ┆ ---       │
-│ u32 ┆ str           ┆ i64       │
-╞═════╪═══════════════╪═══════════╡
-│ 0   ┆ AKH/000709/25 ┆ 709       │
-│ 1   ┆ AKH/000854/25 ┆ 854       │
-│ 2   ┆ AKH/000945/25 ┆ 945       │
-│ 3   ┆ AKH/000945/25 ┆ 945       │
-│ 4   ┆ AKH/000981/25 ┆ 981       │
-│ 5   ┆ AKH/000981/25 ┆ 981       │
-│ 6   ┆ AKH/001026/25 ┆ 1026      │
-│ 7   ┆ AKH/001045/25 ┆ 1045      │
-│ 8   ┆ AKH/001045/25 ┆ 1045      │
-│ 9   ┆ AKH/001045/25 ┆ 1045      │
-└─────┴───────────────┴───────────┘
-SUMM1 CSV records: 1725
-Reading SUMM1_EHP from SAS...
-WARNING: 4548 invalid rows found in SUMM1_EHP
-Sample invalid rows:
-shape: (10, 3)
-┌──────┬───────────────┬───────────┐
-│ _N_  ┆ MAANO         ┆ MAANO_NUM │
-│ ---  ┆ ---           ┆ ---       │
-│ u32  ┆ str           ┆ i64       │
-╞══════╪═══════════════╪═══════════╡
-│ 1725 ┆ H01/520443/25 ┆ 520443    │
-│ 1726 ┆ H01/520659/25 ┆ 520659    │
-│ 1727 ┆ H01/523674/25 ┆ 523674    │
-│ 1728 ┆ H01/523829/25 ┆ 523829    │
-│ 1729 ┆ H01/524190/25 ┆ 524190    │
-│ 1730 ┆ H01/524277/25 ┆ 524277    │
-│ 1731 ┆ H01/524451/25 ┆ 524451    │
-│ 1732 ┆ H01/524685/25 ┆ 524685    │
-│ 1733 ┆ H01/524688/25 ┆ 524688    │
-│ 1734 ┆ H01/524745/25 ┆ 524745    │
-└──────┴───────────────┴───────────┘
-SUMM1_EHP records: 4550
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 141, in <module>
-    SUMM1 = pl.concat([SUMM1, SUMM1_EHP])
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/functions/eager.py", line 231, in concat
-    out = wrap_df(plr.concat_df(elems))
-polars.exceptions.ShapeError: unable to append to a DataFrame of width 43 with a DataFrame of width 38
