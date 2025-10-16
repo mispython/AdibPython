@@ -139,35 +139,43 @@ if __name__ == "__main__":
 
 
 
+# ELN_BNMSUMM_PROCESSOR.py
+
 import polars as pl
 import pyreadstat
 import os
 import duckdb
 from datetime import datetime, timedelta
 from pathlib import Path
-from sas7bdat import SAS7BDAT
 
-# BASE_INPUT_PATH = Path("/host/mis/input/ELDS/SOURCE") # Folder for ELDS source files
+# BASE PATHS
 BASE_INPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input")
-# ELDS_DATA_PATH = Path("/host/mis/parquet/ELDS") # Folder for output files
 ELDS_DATA_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output")
 ELDS_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
-# datetime
+# DATETIME CALCULATIONS
 REPTDATE = datetime.today() - timedelta(days=1)
 PREVDATE = REPTDATE - timedelta(days=1)
-FILE_DT  = REPTDATE.strftime('%Y%m%d') 
+FILE_DT = REPTDATE.strftime('%Y%m%d')
 
-SAS_ORIGIN = datetime(1960,1,1)
-RDATE = (REPTDATE- SAS_ORIGIN).days
+SAS_ORIGIN = datetime(1960, 1, 1)
+RDATE = (REPTDATE - SAS_ORIGIN).days
 
-# Source File paths
+# SOURCE FILE PATHS
 BNMSUMM1 = BASE_INPUT_PATH / f"bnmsummary1_{FILE_DT}.csv"
 BNMSUMM2 = BASE_INPUT_PATH / f"bnmsummary2_{FILE_DT}.csv"
 
-# output paths
-OUTPUT_DATA_PATH = Path("{ELDS_DATA_PATH}/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}")
+# OUTPUT PATHS - FIXED: Use f-string properly
+OUTPUT_DATA_PATH = ELDS_DATA_PATH / f"year={REPTDATE.year}" / f"month={REPTDATE.month:02d}" / f"day={REPTDATE.day:02d}"
 OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
+
+print(f"Processing date: {REPTDATE}")
+print(f"RDATE: {RDATE}")
+
+# ============================================================================
+# PROCESS SUMM1
+# ============================================================================
+print("\nProcessing SUMM1...")
 
 SUMM1 = pl.read_csv(
     BNMSUMM1,
@@ -175,65 +183,125 @@ SUMM1 = pl.read_csv(
     has_header=False,
     ignore_errors=True,
     new_columns=[
-        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT",
-        "LN_UTILISE_LOCAT_CD", "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", "FACICODE",
-        "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", 
-        "STATUS", "CCPT_TAG", "CIR", "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", "LU_TOWN_CITY", 
-        "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
+        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
+        "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
+        "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
+        "FACICODE", "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", 
+        "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", "STATUS", "CCPT_TAG", "CIR", 
+        "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", 
+        "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
+        "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
 )
-SUMM1 = SUMM1.slice(1, SUMM1.height -1)
 
-SUMM1 = SUMM1.with_columns(
+SUMM1 = SUMM1.slice(1, SUMM1.height - 1)
+
+SUMM1 = SUMM1.with_columns([
     pl.lit("Y").alias("INDINTERIM"),
-    pl.lit (RDATE).cast(pl.Date).alias("DATE")
-)
+    pl.lit(RDATE).alias("DATE")  # RDATE is numeric, not a date
+])
 
-SUMM1 = SUMM1.with_row_count(name="_N_", offset=1)
+# FIXED: Use with_row_index instead of deprecated with_row_count
+SUMM1 = SUMM1.with_row_index(name="_N_", offset=1)
 
+# FIXED: Extract MAANO substring and convert to integer for comparison
 SUMM1 = SUMM1.with_columns(
-    pl.col("MAANO").str.slice(2,8).alias("MAANO_SUB")
+    pl.col("MAANO")
+      .str.slice(2, 8)  # Get positions 2-9 (8 characters)
+      .str.extract_all(r"\d+")  # Extract only digits
+      .list.first()  # Take first numeric part
+      .cast(pl.Int64, strict=False)  # Convert to integer
+      .alias("MAANO_SUB")
 )
 
-invalid_rows = SUMM1.filter(pl.col("MAANO_SUB") != (pl.col("_N_")-1))
+# FIXED: Compare integers with integers
+invalid_rows = SUMM1.filter(
+    pl.col("MAANO_SUB") != (pl.col("_N_") - 1)
+)
+
 if invalid_rows.height > 0:
+    print(f"ERROR: {invalid_rows.height} invalid rows found in SUMM1")
+    print("First 10 invalid rows:")
+    print(invalid_rows.select(["_N_", "MAANO", "MAANO_SUB"]).head(10))
     raise SystemExit(77)
 
-# Read deposit sas file
-# EHP_SRC = '/sas/eHP/intermediate/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
+print(f"SUMM1 CSV records: {SUMM1.height}")
+
+# READ EHP SAS FILE
+print("Reading SUMM1_EHP from SAS...")
 EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
-SUMM1_EHP, meta_dp = pyreadstat.read_sas7bdat(EHP_SRC)
 
-SUMM1_EHP = SUMM1_EHP.with_columns(
-    pl.lit("Y").alias("INDINTERIM"),
-    pl.lit (RDATE).alias("DATE")
-)
+if os.path.exists(EHP_SRC):
+    SUMM1_EHP_DF, meta_dp = pyreadstat.read_sas7bdat(EHP_SRC)
+    SUMM1_EHP = pl.from_pandas(SUMM1_EHP_DF)
+    
+    SUMM1_EHP = SUMM1_EHP.with_columns([
+        pl.lit("Y").alias("INDINTERIM"),
+        pl.lit(RDATE).alias("DATE")
+    ])
+    
+    # FIXED: Continue row numbering from SUMM1
+    start_index = SUMM1.height + 1
+    SUMM1_EHP = SUMM1_EHP.with_row_index(name="_N_", offset=start_index)
+    
+    # FIXED: Same MAANO processing for EHP data
+    SUMM1_EHP = SUMM1_EHP.with_columns(
+        pl.col("MAANO")
+          .str.slice(2, 8)
+          .str.extract_all(r"\d+")
+          .list.first()
+          .cast(pl.Int64, strict=False)
+          .alias("MAANO_SUB")
+    )
+    
+    invalid_rows_ehp = SUMM1_EHP.filter(
+        pl.col("MAANO_SUB") != (pl.col("_N_") - 1)
+    )
+    
+    if invalid_rows_ehp.height > 0:
+        print(f"ERROR: {invalid_rows_ehp.height} invalid rows found in SUMM1_EHP")
+        print("First 10 invalid rows:")
+        print(invalid_rows_ehp.select(["_N_", "MAANO", "MAANO_SUB"]).head(10))
+        raise SystemExit(77)
+    
+    SUMM1 = pl.concat([SUMM1, SUMM1_EHP])
+    print(f"SUMM1_EHP records: {SUMM1_EHP.height}")
+    print(f"Combined SUMM1 total: {SUMM1.height}")
+else:
+    print(f"WARNING: EHP file not found: {EHP_SRC}")
 
-SUMM1_EHP = SUMM1_EHP.with_row_count(name="_N_", offset=1)
+# LOAD PREVIOUS BASE
+print("Loading previous SUMM1...")
+prev_summ1_path = ELDS_DATA_PATH / f"year={PREVDATE.year}" / f"month={PREVDATE.month:02d}" / f"day={PREVDATE.day:02d}" / "SUMM1.parquet"
 
-SUMM1_EHP = SUMM1_EHP.with_columns(
-    pl.col("MAANO").str.slice(2,8).alias("MAANO_SUB")
-)
+if prev_summ1_path.exists():
+    # FIXED: Use proper f-string in query
+    query = f"""
+    SELECT *
+    FROM read_parquet('{prev_summ1_path}')
+    """
+    PREV_SUMM1_DF = duckdb.query(query).to_df()
+    PREV_SUMM1 = pl.from_pandas(PREV_SUMM1_DF)
+    
+    ELDS_SUMM1 = pl.concat([PREV_SUMM1, SUMM1])
+    print(f"Combined with previous: {ELDS_SUMM1.height} total records")
+else:
+    print("No previous SUMM1 found, using current only")
+    ELDS_SUMM1 = SUMM1
 
-invalid_rows = SUMM1_EHP.filter(pl.col("MAANO_SUB") != (pl.col("_N_")-1))
-if invalid_rows.height > 0:
-    raise SystemExit(77)
+# Remove temporary columns before writing
+ELDS_SUMM1 = ELDS_SUMM1.drop(["_N_", "MAANO_SUB"])
 
-SUMM1 = pl.concat(SUMM1, SUMM1_EHP)
+# WRITE TO CURRENT BASE
+print(f"Writing SUMM1 to {OUTPUT_DATA_PATH / 'SUMM1.parquet'}...")
+con = duckdb.connect()
+con.register('ELDS_SUMM1', ELDS_SUMM1.to_pandas())
+con.execute(f"COPY ELDS_SUMM1 TO '{OUTPUT_DATA_PATH}/SUMM1.parquet' (FORMAT PARQUET)")
 
-# previous base for concact
-query = """
-SELECT *
-FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet')
-"""
-PREV_SUMM1 = duckdb.query(query).to_df()
-
-ELDS_SUMM1= pl.concat([PREV_SUMM1, SUMM1])
-
-# write to current base
-duckdb.sql(""""
-    COPY ELDS_SUMM1 TO '{OUTPUT_DATA_PATH}/SUMM1.parquet' (FORMAT PARQUET)
-""")
+# ============================================================================
+# PROCESS SUMM2
+# ============================================================================
+print("\nProcessing SUMM2...")
 
 SUMM2 = pl.read_csv(
     BNMSUMM2,
@@ -241,96 +309,119 @@ SUMM2 = pl.read_csv(
     has_header=False,
     ignore_errors=True,
     new_columns=[
-        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", "APPLNAME", "COUNTRY", "DBIRTH",
-        "ENTITY_TYPE", "CORP_STATUS_CD", "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY ", 
-        "GENDER","OCCUPATION", "EMPNAME", "EMPLOY_SECTOR_CD", "EMPLOY_TYPE_CD", "POSTCODE", "STATE_CD", 
-        "COUNTRY_CD", "ROLE", "ICPP", "MARRIED", "CUSTOMER_CODE", "CISNUMBER", "NO_OF_EMPLOYEE", "ANNUAL_TURNOVER",         
-        "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", "EREQNO", "DSRISS3", "DTCOMPLETE"
+        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", 
+        "APPLNAME", "COUNTRY", "DBIRTH", "ENTITY_TYPE", "CORP_STATUS_CD", 
+        "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY", 
+        "GENDER", "OCCUPATION", "EMPNAME", "EMPLOY_SECTOR_CD", "EMPLOY_TYPE_CD", 
+        "POSTCODE", "STATE_CD", "COUNTRY_CD", "ROLE", "ICPP", "MARRIED", 
+        "CUSTOMER_CODE", "CISNUMBER", "NO_OF_EMPLOYEE", "ANNUAL_TURNOVER",         
+        "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", 
+        "EREQNO", "DSRISS3", "DTCOMPLETE"
     ]
 )
 
-SUMM2 = SUMM2.slice(1, SUMM2.height -1)
+SUMM2 = SUMM2.slice(1, SUMM2.height - 1)
 
-SUMM2 = SUMM2.with_columns(
+SUMM2 = SUMM2.with_columns([
     pl.lit("Y").alias("INDINTERIM"),
-    pl.lit (RDATE).alias("DATE")
-)
+    pl.lit(RDATE).alias("DATE")
+])
 
-SUMM2 = SUMM2.with_row_count(name="_N_", offset=1)
+SUMM2 = SUMM2.with_row_index(name="_N_", offset=1)
 
+# FIXED: Same MAANO processing for SUMM2
 SUMM2 = SUMM2.with_columns(
-    pl.col("MAANO").str.slice(2,8).alias("MAANO_SUB")
+    pl.col("MAANO")
+      .str.slice(2, 8)
+      .str.extract_all(r"\d+")
+      .list.first()
+      .cast(pl.Int64, strict=False)
+      .alias("MAANO_SUB")
 )
 
-invalid_rows = SUMM2.filter(pl.col("MAANO_SUB") != (pl.col("_N_")-1))
-if invalid_rows.height > 0:
+invalid_rows_summ2 = SUMM2.filter(
+    pl.col("MAANO_SUB") != (pl.col("_N_") - 1)
+)
+
+if invalid_rows_summ2.height > 0:
+    print(f"ERROR: {invalid_rows_summ2.height} invalid rows found in SUMM2")
+    print("First 10 invalid rows:")
+    print(invalid_rows_summ2.select(["_N_", "MAANO", "MAANO_SUB"]).head(10))
     raise SystemExit(77)
 
-# EHP2_SRC = '/sas/eHP/intermediate/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
+print(f"SUMM2 CSV records: {SUMM2.height}")
+
+# READ EHP2 SAS FILE
+print("Reading SUMM2_EHP from SAS...")
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
-SUMM2_EHP, meta_dp = pyreadstat.read_sas7bdat(EHP2_SRC)
 
-SUMM2_EHP = SUMM2_EHP.slice(1, SUMM2_EHP.height -1)
+if os.path.exists(EHP2_SRC):
+    SUMM2_EHP_DF, meta_dp = pyreadstat.read_sas7bdat(EHP2_SRC)
+    SUMM2_EHP = pl.from_pandas(SUMM2_EHP_DF)
+    
+    SUMM2_EHP = SUMM2_EHP.slice(1, SUMM2_EHP.height - 1)
+    
+    SUMM2_EHP = SUMM2_EHP.with_columns([
+        pl.lit("Y").alias("INDINTERIM"),
+        pl.lit(RDATE).alias("DATE")
+    ])
+    
+    start_index_summ2 = SUMM2.height + 1
+    SUMM2_EHP = SUMM2_EHP.with_row_index(name="_N_", offset=start_index_summ2)
+    
+    SUMM2_EHP = SUMM2_EHP.with_columns(
+        pl.col("MAANO")
+          .str.slice(2, 8)
+          .str.extract_all(r"\d+")
+          .list.first()
+          .cast(pl.Int64, strict=False)
+          .alias("MAANO_SUB")
+    )
+    
+    invalid_rows_ehp2 = SUMM2_EHP.filter(
+        pl.col("MAANO_SUB") != (pl.col("_N_") - 1)
+    )
+    
+    if invalid_rows_ehp2.height > 0:
+        print(f"ERROR: {invalid_rows_ehp2.height} invalid rows found in SUMM2_EHP")
+        print("First 10 invalid rows:")
+        print(invalid_rows_ehp2.select(["_N_", "MAANO", "MAANO_SUB"]).head(10))
+        raise SystemExit(77)
+    
+    SUMM2 = pl.concat([SUMM2, SUMM2_EHP])
+    print(f"SUMM2_EHP records: {SUMM2_EHP.height}")
+    print(f"Combined SUMM2 total: {SUMM2.height}")
+else:
+    print(f"WARNING: EHP file not found: {EHP2_SRC}")
 
-SUMM2_EHP = SUMM2_EHP.with_columns(
-    pl.lit("Y").alias("INDINTERIM"),
-    pl.lit (RDATE).alias("DATE")
-)
+# LOAD PREVIOUS BASE FOR SUMM2
+print("Loading previous SUMM2...")
+prev_summ2_path = ELDS_DATA_PATH / f"year={PREVDATE.year}" / f"month={PREVDATE.month:02d}" / f"day={PREVDATE.day:02d}" / "SUMM2.parquet"
 
-SUMM2_EHP = SUMM2_EHP.with_row_count(name="_N_", offset=1)
+if prev_summ2_path.exists():
+    query = f"""
+    SELECT *
+    FROM read_parquet('{prev_summ2_path}')
+    """
+    PREV_SUMM2_DF = duckdb.query(query).to_df()
+    PREV_SUMM2 = pl.from_pandas(PREV_SUMM2_DF)
+    
+    ELDS_SUMM2 = pl.concat([PREV_SUMM2, SUMM2])
+    print(f"Combined with previous: {ELDS_SUMM2.height} total records")
+else:
+    print("No previous SUMM2 found, using current only")
+    ELDS_SUMM2 = SUMM2
 
-SUMM2_EHP = SUMM2_EHP.with_columns(
-    pl.col("MAANO").str.slice(2,8).alias("MAANO_SUB")
-)
+# Remove temporary columns before writing
+ELDS_SUMM2 = ELDS_SUMM2.drop(["_N_", "MAANO_SUB"])
 
-invalid_rows = SUMM2_EHP.filter(pl.col("MAANO_SUB") != (pl.col("_N_")-1))
-if invalid_rows.height > 0:
-    raise SystemExit(77)
+# WRITE TO CURRENT BASE
+print(f"Writing SUMM2 to {OUTPUT_DATA_PATH / 'SUMM2.parquet'}...")
+con.register('ELDS_SUMM2', ELDS_SUMM2.to_pandas())
+con.execute(f"COPY ELDS_SUMM2 TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)")
 
-SUMM2 = pl.concat(SUMM2, SUMM2_EHP)
-
-# previous base for concact
-query = """
-SELECT *
-FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM2.parquet')
-"""
-PREV_SUMM2 = duckdb.query(query).to_df()
-
-ELDS_SUMM2= pl.concat([PREV_SUMM2, SUMM2])
-
-# write to current base
-duckdb.sql(""""
-    COPY ELDS_SUMM2 TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
-""")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-(virt_edw_dev) [sas_edw_dev@svdwh004 MIS]$ /sas/python/virt_edw_dev/bin/python3 /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT.py
-/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT.py:51: DeprecationWarning: `DataFrame.with_row_count` is deprecated; use `with_row_index` instead. Note that the default column name has changed from 'row_nr' to 'index'.
-  SUMM1 = SUMM1.with_row_count(name="_N_", offset=1)
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT.py", line 57, in <module>
-    invalid_rows = SUMM1.filter(pl.col("MAANO_SUB") != (pl.col("_N_")-1))
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 5198, in filter
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 330, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2335, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ComputeError: cannot compare string with numeric type (u32)
-
+print("\n" + "="*80)
+print("PROCESSING COMPLETE!")
+print("="*80)
+print(f"SUMM1 total records: {ELDS_SUMM1.height}")
+print(f"SUMM2 total records: {ELDS_SUMM2.height}")
