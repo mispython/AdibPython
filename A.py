@@ -151,8 +151,9 @@ REPTDATE = datetime.today() - timedelta(days=1)
 PREVDATE = REPTDATE - timedelta(days=1)
 FILE_DT  = REPTDATE.strftime('%Y%m%d')
 
+# SAS-style numeric RDATE (days since 1960-01-01)
 SAS_ORIGIN = datetime(1960, 1, 1)
-RDATE = (REPTDATE - SAS_ORIGIN).days  # numeric (like SAS date)
+RDATE = (REPTDATE - SAS_ORIGIN).days  # numeric, not string
 
 # ---------------------------------------------------------
 # FILE PATHS
@@ -167,10 +168,14 @@ OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
 # HELPER: Safe Concatenation Function
 # ---------------------------------------------------------
 def safe_concat(df1: pl.DataFrame, df2: pl.DataFrame) -> pl.DataFrame:
-    # Align schemas by converting all to string before concatenation
+    """Align all columns by casting to string before concatenation."""
     all_cols = sorted(set(df1.columns) | set(df2.columns))
-    df1 = df1.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) if c in df1.columns else pl.lit(None).alias(c) for c in all_cols])
-    df2 = df2.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) if c in df2.columns else pl.lit(None).alias(c) for c in all_cols])
+    df1 = df1.select(
+        [pl.col(c).cast(pl.Utf8, strict=False).alias(c) if c in df1.columns else pl.lit(None).alias(c) for c in all_cols]
+    )
+    df2 = df2.select(
+        [pl.col(c).cast(pl.Utf8, strict=False).alias(c) if c in df2.columns else pl.lit(None).alias(c) for c in all_cols]
+    )
     return pl.concat([df1, df2], how="vertical_relaxed")
 
 # ---------------------------------------------------------
@@ -179,44 +184,43 @@ def safe_concat(df1: pl.DataFrame, df2: pl.DataFrame) -> pl.DataFrame:
 def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
     """
     Simulate SAS logic:
-    INDINTERIM = 'Y';
-    DATE = &RDATE;
-    IF NOT EOF THEN OUTPUT;
-    IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;
+        INDINTERIM = 'Y';
+        DATE = &RDATE;
+        IF NOT EOF THEN OUTPUT;
+        IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;
     """
 
     if "MAANO" not in df.columns:
         print(f"⚠️  MAANO column missing in {source_name}, skipping count validation.")
         return df
 
-    # Get control row (last record)
+    # Extract last record
     control_row = df[-1, :]
-    df = df.slice(0, df.height - 1)  # remove last row from output
+    df = df.slice(0, df.height - 1)  # all except last (EOF)
 
-    # SAS equivalent: SUBSTRN(MAANO,3,8)
+    # Try extract numeric control count from last MAANO (e.g., FT00001724)
     try:
-        ctrl_val_str = control_row["MAANO"]
-        if ctrl_val_str is None:
+        ctrl_val = str(control_row["MAANO"]).strip()
+        if not ctrl_val.startswith("FT"):
             raise ValueError
-        control_count = int(str(ctrl_val_str)[2:])  # convert substring to int
+        control_count = int(ctrl_val[2:])  # SUBSTRN(MAANO,3,8)
     except Exception:
-        print(f"⚠️  No numeric control count found in {source_name}, proceeding without checks")
-        return df
+        print(f"⚠️  No numeric control count found in {source_name}, proceeding without checks.")
+        control_count = None
 
-    # Check record count (excluding control)
-    expected_count = control_count
-    actual_count = df.height
+    # Compare if control count exists
+    if control_count is not None:
+        actual_count = df.height
+        if control_count != actual_count:
+            print(f"❌ ABORT 77: Row count mismatch in {source_name} - expected {control_count}, got {actual_count}")
+            raise SystemExit(77)
+        else:
+            print(f"✅ {source_name} count check passed ({actual_count} rows).")
 
-    if expected_count != actual_count:
-        print(f"❌ ABORT 77: Row count mismatch in {source_name} - expected {expected_count}, got {actual_count}")
-        raise SystemExit(77)
-
-    print(f"✅ {source_name} count check passed ({expected_count} rows)")
-
-    # Add columns as SAS logic
+    # Add new columns (SAS equivalent)
     df = df.with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).alias("DATE")  # numeric, not string
+        pl.lit(RDATE).alias("DATE")  # store numeric RDATE
     )
     return df
 
@@ -239,20 +243,22 @@ SUMM1 = pl.read_csv(
 
 SUMM1 = apply_sas_eof_check(SUMM1, "bnmsummary1")
 
-# Read SAS7BDAT (EHP)
+# Read SAS7BDAT EHP source
 EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
 SUMM1_EHP_df, _ = pyreadstat.read_sas7bdat(EHP_SRC)
 SUMM1_EHP = apply_sas_eof_check(pl.from_pandas(SUMM1_EHP_df), "bnmsummary1_ehp")
 
-# Safe concat
+# Safe concat both versions
 SUMM1 = safe_concat(SUMM1, SUMM1_EHP)
 
 # ---------------------------------------------------------
-# APPEND PREVIOUS DAY
+# APPEND PREVIOUS DAY (if exists)
 # ---------------------------------------------------------
 try:
     query = f"""
-    SELECT * FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet')
+        SELECT * FROM read_parquet(
+            '{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet'
+        )
     """
     PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
     ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
