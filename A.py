@@ -297,6 +297,14 @@ print("✅ ELN_BNMSUMM_UAT.py completed successfully.")
 
 
 
+Exception has occurred: SystemExit
+77
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 63, in <module>
+    raise SystemExit(77)
+SystemExit: 77
+
+
+
 
 
 
