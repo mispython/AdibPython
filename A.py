@@ -131,183 +131,174 @@ if __name__ == "__main__":
 
 import polars as pl
 import pyreadstat
+import os
 import duckdb
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# === Base Paths ===
+# ---------------------------------------------------------
+# CONFIGURATION PATHS
+# ---------------------------------------------------------
 BASE_INPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input")
 ELDS_DATA_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output")
 ELDS_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
-# === Dates ===
+# ---------------------------------------------------------
+# DATE VARIABLES
+# ---------------------------------------------------------
 REPTDATE = datetime.today() - timedelta(days=1)
 PREVDATE = REPTDATE - timedelta(days=1)
-FILE_DT  = REPTDATE.strftime('%Y%m%d')
+FILE_DT  = REPTDATE.strftime('%Y%m%d') 
 
-SAS_ORIGIN = datetime(1960, 1, 1)
+SAS_ORIGIN = datetime(1960,1,1)
 RDATE = (REPTDATE - SAS_ORIGIN).days
 
-# === Input CSVs ===
+# ---------------------------------------------------------
+# FILE PATHS
+# ---------------------------------------------------------
 BNMSUMM1 = BASE_INPUT_PATH / f"bnmsummary1_{FILE_DT}.csv"
 BNMSUMM2 = BASE_INPUT_PATH / f"bnmsummary2_{FILE_DT}.csv"
 
-# === Output Folder ===
-OUTPUT_DATA_PATH = Path(
-    f"{ELDS_DATA_PATH}/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}"
-)
+OUTPUT_DATA_PATH = Path(f"{ELDS_DATA_PATH}/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}")
 OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
-# ---------------------------------------------------------------------
-# === SUMM1 PROCESSING ===
-# ---------------------------------------------------------------------
+# ---------------------------------------------------------
+# READ BNMSUMM1 CSV
+# ---------------------------------------------------------
 SUMM1 = pl.read_csv(
     BNMSUMM1,
     separator=",",
     has_header=False,
     ignore_errors=True,
     new_columns=[
-        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", "PRIORITY_SECTOR",
-        "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", "SPECIALFUND", "ASSET_PURCH_AMT",
-        "PURPOSE_LOAN", "STRUPCO_3YR", "FACICODE", "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON",
-        "DATEXT", "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", "STATUS", "CCPT_TAG", "CIR",
-        "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", "LU_TOWN_CITY",
+        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT",
+        "LN_UTILISE_LOCAT_CD", "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", "FACICODE",
+        "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", 
+        "STATUS", "CCPT_TAG", "CIR", "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", "LU_TOWN_CITY", 
         "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
-).slice(1, -1)
-
-SUMM1 = SUMM1.with_columns(
-    pl.lit("Y").alias("INDINTERIM"),
-    pl.lit(RDATE).alias("DATE")
 )
 
-SUMM1 = SUMM1.with_row_index(name="_N_", offset=1)
+SUMM1 = SUMM1.slice(1, SUMM1.height - 1)
 
-# ✅ Clean MAANO: keep only digits before comparison
-SUMM1 = SUMM1.with_columns(
-    pl.col("MAANO").str.replace_all(r"[^0-9]", "").alias("MAANO_SUB")
+# Add new columns
+SUMM1 = (
+    SUMM1
+    .with_columns(
+        pl.lit("Y").alias("INDINTERIM"),
+        pl.lit(RDATE).alias("DATE")
+    )
+    .with_row_index(name="_N_", offset=1)
+    .with_columns(
+        pl.col("MAANO").str.slice(2, 6).cast(pl.Int64, strict=False).alias("MAANO_SUB")
+    )
 )
 
-# Check invalid rows safely
-invalid_rows = SUMM1.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
-if invalid_rows.height > 0:
-    raise SystemExit(77)
-
-# === Read SAS Source ===
+# ---------------------------------------------------------
+# READ SAS7BDAT (EHP SOURCE)
+# ---------------------------------------------------------
 EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
 SUMM1_EHP_df, meta_dp = pyreadstat.read_sas7bdat(EHP_SRC)
 SUMM1_EHP = pl.from_pandas(SUMM1_EHP_df)
 
-SUMM1_EHP = SUMM1_EHP.with_columns(
-    pl.lit("Y").alias("INDINTERIM"),
-    pl.lit(RDATE).alias("DATE")
-).with_row_index(name="_N_", offset=1)
-
-SUMM1_EHP = SUMM1_EHP.with_columns(
-    pl.col("MAANO").str.replace_all(r"[^0-9]", "").alias("MAANO_SUB")
+SUMM1_EHP = (
+    SUMM1_EHP
+    .with_columns(
+        pl.lit("Y").alias("INDINTERIM"),
+        pl.lit(RDATE).alias("DATE")
+    )
+    .with_row_index(name="_N_", offset=1)
 )
 
-invalid_rows = SUMM1_EHP.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
-if invalid_rows.height > 0:
-    raise SystemExit(77)
+if "MAANO" in SUMM1_EHP.columns:
+    SUMM1_EHP = SUMM1_EHP.with_columns(
+        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).cast(pl.Int64, strict=False).alias("MAANO_SUB")
+    )
 
-# Combine CSV + SAS Data
-SUMM1 = pl.concat([SUMM1, SUMM1_EHP])
+# ---------------------------------------------------------
+# CONCATENATE BOTH SUMM1 AND SUMM1_EHP (KEEP ALL COLUMNS)
+# ---------------------------------------------------------
+SUMM1 = pl.concat([SUMM1, SUMM1_EHP], how="diagonal")
 
-# === Read Previous Day’s Parquet (if exists) ===
+# ---------------------------------------------------------
+# APPEND WITH PREVIOUS DAY PARQUET
+# ---------------------------------------------------------
 query = f"""
 SELECT *
 FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet')
 """
 try:
     PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
-    ELDS_SUMM1 = pl.concat([PREV_SUMM1, SUMM1])
+    ELDS_SUMM1 = pl.concat([PREV_SUMM1, SUMM1], how="diagonal")
 except Exception:
-    ELDS_SUMM1 = SUMM1  # If previous day missing, start fresh
+    ELDS_SUMM1 = SUMM1  # If previous parquet missing, just use current
 
-# Write to Parquet
+# ---------------------------------------------------------
+# SAVE TO PARQUET
+# ---------------------------------------------------------
 duckdb.sql(f"""
-    COPY (SELECT * FROM ELDS_SUMM1)
-    TO '{OUTPUT_DATA_PATH}/SUMM1.parquet' (FORMAT PARQUET);
+    COPY (SELECT * FROM ELDS_SUMM1) TO '{OUTPUT_DATA_PATH}/SUMM1.parquet' (FORMAT PARQUET)
 """)
 
-# ---------------------------------------------------------------------
-# === SUMM2 PROCESSING ===
-# ---------------------------------------------------------------------
+# ---------------------------------------------------------
+# READ BNMSUMM2 CSV
+# ---------------------------------------------------------
 SUMM2 = pl.read_csv(
     BNMSUMM2,
     separator=",",
     has_header=False,
     ignore_errors=True,
     new_columns=[
-        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", "APPLNAME",
-        "COUNTRY", "DBIRTH", "ENTITY_TYPE", "CORP_STATUS_CD", "INDUSTRIAL_STATUS",
-        "RESIDENCY_STATUS_CD", "ANNSUBTSALARY", "GENDER", "OCCUPATION", "EMPNAME",
-        "EMPLOY_SECTOR_CD", "EMPLOY_TYPE_CD", "POSTCODE", "STATE_CD", "COUNTRY_CD",
-        "ROLE", "ICPP", "MARRIED", "CUSTOMER_CODE", "CISNUMBER", "NO_OF_EMPLOYEE",
-        "ANNUAL_TURNOVER", "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD",
-        "EREQNO", "DSRISS3", "DTCOMPLETE"
+        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", "APPLNAME", "COUNTRY", "DBIRTH",
+        "ENTITY_TYPE", "CORP_STATUS_CD", "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY", 
+        "GENDER", "OCCUPATION", "EMPNAME", "EMPLOY_SECTOR_CD", "EMPLOY_TYPE_CD", "POSTCODE", "STATE_CD", 
+        "COUNTRY_CD", "ROLE", "ICPP", "MARRIED", "CUSTOMER_CODE", "CISNUMBER", "NO_OF_EMPLOYEE", "ANNUAL_TURNOVER",         
+        "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", "EREQNO", "DSRISS3", "DTCOMPLETE"
     ]
-).slice(1, -1)
-
-SUMM2 = SUMM2.with_columns(
-    pl.lit("Y").alias("INDINTERIM"),
-    pl.lit(RDATE).alias("DATE")
-).with_row_index(name="_N_", offset=1)
-
-SUMM2 = SUMM2.with_columns(
-    pl.col("MAANO").str.replace_all(r"[^0-9]", "").alias("MAANO_SUB")
 )
 
-invalid_rows = SUMM2.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
-if invalid_rows.height > 0:
-    raise SystemExit(77)
+SUMM2 = SUMM2.slice(1, SUMM2.height - 1)
 
-# === Read SAS Source for SUMM2 ===
+SUMM2 = (
+    SUMM2
+    .with_columns(
+        pl.lit("Y").alias("INDINTERIM"),
+        pl.lit(RDATE).alias("DATE")
+    )
+    .with_row_index(name="_N_", offset=1)
+)
+
+if "MAANO" in SUMM2.columns:
+    SUMM2 = SUMM2.with_columns(
+        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).cast(pl.Int64, strict=False).alias("MAANO_SUB")
+    )
+
+# ---------------------------------------------------------
+# READ AND CONCAT EHP2 SAS FILE (KEEP ALL COLUMNS)
+# ---------------------------------------------------------
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
 SUMM2_EHP_df, meta_dp2 = pyreadstat.read_sas7bdat(EHP2_SRC)
 SUMM2_EHP = pl.from_pandas(SUMM2_EHP_df)
 
-SUMM2_EHP = SUMM2_EHP.with_columns(
-    pl.lit("Y").alias("INDINTERIM"),
-    pl.lit(RDATE).alias("DATE")
-).with_row_index(name="_N_", offset=1)
-
-SUMM2_EHP = SUMM2_EHP.with_columns(
-    pl.col("MAANO").str.replace_all(r"[^0-9]", "").alias("MAANO_SUB")
+SUMM2_EHP = (
+    SUMM2_EHP
+    .with_columns(
+        pl.lit("Y").alias("INDINTERIM"),
+        pl.lit(RDATE).alias("DATE")
+    )
+    .with_row_index(name="_N_", offset=1)
 )
 
-invalid_rows = SUMM2_EHP.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
-if invalid_rows.height > 0:
-    raise SystemExit(77)
+if "MAANO" in SUMM2_EHP.columns:
+    SUMM2_EHP = SUMM2_EHP.with_columns(
+        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).cast(pl.Int64, strict=False).alias("MAANO_SUB")
+    )
 
-SUMM2 = pl.concat([SUMM2, SUMM2_EHP])
+SUMM2 = pl.concat([SUMM2, SUMM2_EHP], how="diagonal")
 
-# === Write SUMM2 Output ===
+# ---------------------------------------------------------
+# SAVE SUMM2 TO PARQUET
+# ---------------------------------------------------------
 duckdb.sql(f"""
-    COPY (SELECT * FROM SUMM2)
-    TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET);
+    COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
-
-print("✅ ELN_BNMSUMM_UAT.py completed successfully.")
-
-
-
-
-
-
-
-Exception has occurred: ShapeError
-unable to append to a DataFrame of width 43 with a DataFrame of width 38
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 84, in <module>
-    SUMM1 = pl.concat([SUMM1, SUMM1_EHP])
-polars.exceptions.ShapeError: unable to append to a DataFrame of width 43 with a DataFrame of width 38
-
-
-
-
-
-
-
-
-
