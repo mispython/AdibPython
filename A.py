@@ -302,3 +302,18 @@ SUMM2 = pl.concat([SUMM2, SUMM2_EHP], how="diagonal")
 duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
+
+
+
+
+
+
+
+
+
+
+Exception has occurred: SchemaError
+type String is incompatible with expected type Int64
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 90, in <module>
+    SUMM1 = pl.concat([SUMM1, SUMM1_EHP], how="diagonal")
+polars.exceptions.SchemaError: type String is incompatible with expected type Int64
