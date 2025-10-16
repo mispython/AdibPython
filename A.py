@@ -136,6 +136,7 @@ import duckdb
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
+import re
 
 # ---------------------------------------------------------
 # CONFIGURATION PATHS
@@ -184,45 +185,59 @@ def safe_concat(df1: pl.DataFrame, df2: pl.DataFrame) -> pl.DataFrame:
 def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
     """
     Simulate SAS logic:
-        INDINTERIM = 'Y';
-        DATE = &RDATE;
-        IF NOT EOF THEN OUTPUT;
-        IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;
+      - Last record (MAANO like FT00001724) = control count
+      - Compare with actual number of data rows (excluding footer)
+      - If mismatch => ABORT 77
+      - Add INDINTERIM='Y', DATE=&RDATE (numeric)
     """
 
     if "MAANO" not in df.columns:
-        print(f"  MAANO column missing in {source_name}, skipping count validation.")
+        print(f"⚠️  MAANO column missing in {source_name}, skipping count validation.")
         return df
 
     # Extract last record
     control_row = df[-1, :]
-    df = df.slice(0, df.height - 1)  # all except last (EOF)
+    df_data = df.slice(0, df.height - 1)  # all except last (EOF/footer)
 
-    # Try extract numeric control count from last MAANO (e.g., FT00001724)
-    try:
-        ctrl_val = str(control_row["MAANO"]).strip()
-        if not ctrl_val.startswith("FT"):
-            raise ValueError
-        control_count = int(ctrl_val[2:])  # SUBSTRN(MAANO,3,8)
-    except Exception:
-        print(f"  No numeric control count found in {source_name}, proceeding without checks.")
+    ctrl_val = str(control_row["MAANO"]).strip()
+
+    # Try extract numeric control count (e.g. FT00001724 -> 1724)
+    match = re.match(r"FT0*(\d+)", ctrl_val)
+    if not match:
+        print(f"⚠️  No numeric control count found in {source_name}, proceeding without checks.")
         control_count = None
+    else:
+        control_count = int(match.group(1))
 
-    # Compare if control count exists
+    # Compare footer count with actual row count
     if control_count is not None:
-        actual_count = df.height
+        actual_count = df_data.height
+        print(f"ℹ️  {source_name}: Expected count from footer = {control_count}, actual rows = {actual_count}")
         if control_count != actual_count:
-            print(f" ABORT 77: Row count mismatch in {source_name} - expected {control_count}, got {actual_count}")
+            print(f"❌ ABORT 77: Row count mismatch in {source_name} - expected {control_count}, got {actual_count}")
             raise SystemExit(77)
         else:
-            print(f" {source_name} count check passed ({actual_count} rows).")
+            print(f"✅ {source_name} count check passed ({actual_count} rows match footer count).")
+
+    # Compare with summary row if exists (optional)
+    # For example, if last non-footer row has some summary fields
+    if "STAGE" in df_data.columns and df_data[-1, "STAGE"] == "SUMMARY":
+        summary_row = df_data[-1, :]
+        if "TOTAL_COUNT" in df_data.columns:
+            summary_count = int(summary_row["TOTAL_COUNT"])
+            if control_count and summary_count != control_count:
+                print(f"❌ {source_name}: Summary row count ({summary_count}) mismatch with footer ({control_count})")
+                raise SystemExit(77)
+            else:
+                print(f"✅ {source_name}: Summary row count matches footer ({summary_count}).")
 
     # Add new columns (SAS equivalent)
-    df = df.with_columns(
+    df_data = df_data.with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).alias("DATE")  # store numeric RDATE
+        pl.lit(RDATE).alias("DATE")
     )
-    return df
+
+    return df_data
 
 # ---------------------------------------------------------
 # READ BNMSUMM1 CSV + APPLY CHECK
