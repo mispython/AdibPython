@@ -147,162 +147,198 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from sas7bdat import SAS7BDAT
 
-# BASE_INPUT_PATH = Path("/host/mis/input/ELDS/SOURCE") # Folder for ELDS source files
+# BASE PATHS
 BASE_INPUT_PATH = Path("Data_Warehouse/MIS/Job/ELDS/input")
-# ELDS_DATA_PATH = Path("/host/mis/parquet/ELDS") # Folder for output files
 ELDS_DATA_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output")
 ELDS_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
-# datetime
+# DATETIME CALCULATIONS
 REPTDATE = datetime.today() - timedelta(days=1)
 PREVDATE = REPTDATE - timedelta(days=1)
-FILE_DT  = REPTDATE.strftime('%Y%m%d') 
+FILE_DT = REPTDATE.strftime('%Y%m%d')
 
-SAS_ORIGIN = datetime(1960,1,1)
-RDATE = (REPTDATE- SAS_ORIGIN).days
+SAS_ORIGIN = datetime(1960, 1, 1)
+RDATE = (REPTDATE - SAS_ORIGIN).days
 
-# Source File paths
-BNMSUMM1 = BASE_INPUT_PATH / "bnmsummary1_{FILE_DT}.csv"
-BNMSUMM2 = BASE_INPUT_PATH / "bnmsummary2_{FILE_DT}.csv"
+# SOURCE FILE PATHS - FIX: Use f-string
+BNMSUMM1 = BASE_INPUT_PATH / f"bnmsummary1_{FILE_DT}.csv"
+BNMSUMM2 = BASE_INPUT_PATH / f"bnmsummary2_{FILE_DT}.csv"
 
-# output paths
-OUTPUT_DATA_PATH = Path("{ELDS_DATA_PATH}/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}")
+# OUTPUT PATHS - FIX: Use f-string
+OUTPUT_DATA_PATH = ELDS_DATA_PATH / f"year={REPTDATE.year}" / f"month={REPTDATE.month:02d}" / f"day={REPTDATE.day:02d}"
 OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
+# ============================================================================
+# PROCESS SUMM1
+# ============================================================================
 SUMM1 = pl.read_csv(
     BNMSUMM1,
     separator=",",
     has_header=False,
     ignore_errors=True,
-    columns=[
-        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT",
-        "LN_UTILISE_LOCAT_CD", "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", "FACICODE",
-        "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", 
-        "STATUS", "CCPT_TAG", "CIR", "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", "LU_TOWN_CITY", 
-        "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
+    new_columns=[  # FIX: Changed from 'columns' to 'new_columns'
+        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
+        "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
+        "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
+        "FACICODE", "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", 
+        "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", "STATUS", "CCPT_TAG", "CIR", 
+        "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", 
+        "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
+        "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
 )
-SUMM1 = SUMM1.slice(1, SUMM1.height -1)
 
-SUMM1 = SUMM1.with_columns(
+SUMM1 = SUMM1.slice(1, SUMM1.height - 1)
+
+# FIX: Date conversion
+SUMM1 = SUMM1.with_columns([
     pl.lit("Y").alias("INDINTERIM"),
-    pl.lit (RDATE).cast(pl.Date).alias("DATE")
-)
+    pl.lit(RDATE).alias("DATE")  # FIX: Removed .cast(pl.Date) - RDATE is already int
+])
 
 SUMM1 = SUMM1.with_row_count(name="_N_", offset=1)
 
 SUMM1 = SUMM1.with_columns(
-    pl.col("MAANO").str.slice(2,8).alias("MAANO_SUB")
+    pl.col("MAANO").str.slice(2, 8).alias("MAANO_SUB")
 )
 
-invalid_rows = SUMM1.filter(pl.col("MAANO_SUB") != (pl.col("_N_")-1))
+# FIX: Comparison needs cast
+invalid_rows = SUMM1.filter(
+    pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1)
+)
 if invalid_rows.height > 0:
+    print("ERROR: Invalid rows found in SUMM1")
     raise SystemExit(77)
 
-# Read deposit sas file
-# EHP_SRC = '/sas/eHP/intermediate/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
+# READ EHP SAS FILE
 EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
-SUMM1_EHP, meta_dp = pyreadstat.read_sas7bdat(EHP_SRC)
+SUMM1_EHP_DF, meta_dp = pyreadstat.read_sas7bdat(EHP_SRC)
 
-SUMM1_EHP = SUMM1_EHP.with_columns(
+# FIX: Convert pandas to polars
+SUMM1_EHP = pl.from_pandas(SUMM1_EHP_DF)
+
+SUMM1_EHP = SUMM1_EHP.with_columns([
     pl.lit("Y").alias("INDINTERIM"),
-    pl.lit (RDATE).alias("DATE")
-)
+    pl.lit(RDATE).alias("DATE")
+])
 
 SUMM1_EHP = SUMM1_EHP.with_row_count(name="_N_", offset=1)
 
 SUMM1_EHP = SUMM1_EHP.with_columns(
-    pl.col("MAANO").str.slice(2,8).alias("MAANO_SUB")
+    pl.col("MAANO").str.slice(2, 8).alias("MAANO_SUB")
 )
 
-invalid_rows = SUMM1_EHP.filter(pl.col("MAANO_SUB") != (pl.col("_N_")-1))
+invalid_rows = SUMM1_EHP.filter(
+    pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1)
+)
 if invalid_rows.height > 0:
+    print("ERROR: Invalid rows found in SUMM1_EHP")
     raise SystemExit(77)
 
-SUMM1 = pl.concat(SUMM1, SUMM1_EHP)
+# FIX: Correct concat syntax
+SUMM1 = pl.concat([SUMM1, SUMM1_EHP])
 
-# previous base for concact
-query = """
+# PREVIOUS BASE FOR CONCAT - FIX: f-string
+query = f"""
 SELECT *
 FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet')
 """
-PREV_SUMM1 = duckdb.query(query).to_df()
+PREV_SUMM1_DF = duckdb.query(query).to_df()
+PREV_SUMM1 = pl.from_pandas(PREV_SUMM1_DF)  # FIX: Convert to polars
 
-ELDS_SUMM1= pl.concat([PREV_SUMM1, SUMM1])
+ELDS_SUMM1 = pl.concat([PREV_SUMM1, SUMM1])
 
-# write to current base
-duckdb.sql(""""
+# WRITE TO CURRENT BASE - FIX: f-string and register dataframe
+con = duckdb.connect()
+con.register('ELDS_SUMM1', ELDS_SUMM1.to_pandas())
+con.execute(f"""
     COPY ELDS_SUMM1 TO '{OUTPUT_DATA_PATH}/SUMM1.parquet' (FORMAT PARQUET)
 """)
 
+# ============================================================================
+# PROCESS SUMM2
+# ============================================================================
 SUMM2 = pl.read_csv(
     BNMSUMM2,
     separator=",",
     has_header=False,
     ignore_errors=True,
-    columns=[
-        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", "APPLNAME", "COUNTRY", "DBIRTH",
-        "ENTITY_TYPE", "CORP_STATUS_CD", "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY ", 
-        "GENDER","OCCUPATION", "EMPNAME", "EMPLOY_SECTOR_CD", "EMPLOY_TYPE_CD", "POSTCODE", "STATE_CD", 
-        "COUNTRY_CD", "ROLE", "ICPP", "MARRIED", "CUSTOMER_CODE", "CISNUMBER", "NO_OF_EMPLOYEE", "ANNUAL_TURNOVER",         
-        "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", "EREQNO", "DSRISS3", "DTCOMPLETE"
+    new_columns=[  # FIX: Changed from 'columns' to 'new_columns'
+        "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", 
+        "APPLNAME", "COUNTRY", "DBIRTH", "ENTITY_TYPE", "CORP_STATUS_CD", 
+        "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY", 
+        "GENDER", "OCCUPATION", "EMPNAME", "EMPLOY_SECTOR_CD", "EMPLOY_TYPE_CD", 
+        "POSTCODE", "STATE_CD", "COUNTRY_CD", "ROLE", "ICPP", "MARRIED", 
+        "CUSTOMER_CODE", "CISNUMBER", "NO_OF_EMPLOYEE", "ANNUAL_TURNOVER",         
+        "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", 
+        "EREQNO", "DSRISS3", "DTCOMPLETE"
     ]
 )
 
-SUMM2 = SUMM2.slice(1, SUMM2.height -1)
+SUMM2 = SUMM2.slice(1, SUMM2.height - 1)
 
-SUMM2 = SUMM2.with_columns(
+SUMM2 = SUMM2.with_columns([
     pl.lit("Y").alias("INDINTERIM"),
-    pl.lit (RDATE).alias("DATE")
-)
+    pl.lit(RDATE).alias("DATE")
+])
 
 SUMM2 = SUMM2.with_row_count(name="_N_", offset=1)
 
 SUMM2 = SUMM2.with_columns(
-    pl.col("MAANO").str.slice(2,8).alias("MAANO_SUB")
+    pl.col("MAANO").str.slice(2, 8).alias("MAANO_SUB")
 )
 
-invalid_rows = SUMM2.filter(pl.col("MAANO_SUB") != (pl.col("_N_")-1))
+invalid_rows = SUMM2.filter(
+    pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1)
+)
 if invalid_rows.height > 0:
+    print("ERROR: Invalid rows found in SUMM2")
     raise SystemExit(77)
 
-# EHP2_SRC = '/sas/eHP/intermediate/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
+# READ EHP2 SAS FILE
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
-SUMM2_EHP, meta_dp = pyreadstat.read_sas7bdat(EHP2_SRC)
+SUMM2_EHP_DF, meta_dp = pyreadstat.read_sas7bdat(EHP2_SRC)
 
-SUMM2_EHP = SUMM2_EHP.slice(1, SUMM2_EHP.height -1)
+# FIX: Convert pandas to polars
+SUMM2_EHP = pl.from_pandas(SUMM2_EHP_DF)
 
-SUMM2_EHP = SUMM2_EHP.with_columns(
+SUMM2_EHP = SUMM2_EHP.slice(1, SUMM2_EHP.height - 1)
+
+SUMM2_EHP = SUMM2_EHP.with_columns([
     pl.lit("Y").alias("INDINTERIM"),
-    pl.lit (RDATE).alias("DATE")
-)
+    pl.lit(RDATE).alias("DATE")
+])
 
 SUMM2_EHP = SUMM2_EHP.with_row_count(name="_N_", offset=1)
 
 SUMM2_EHP = SUMM2_EHP.with_columns(
-    pl.col("MAANO").str.slice(2,8).alias("MAANO_SUB")
+    pl.col("MAANO").str.slice(2, 8).alias("MAANO_SUB")
 )
 
-invalid_rows = SUMM2_EHP.filter(pl.col("MAANO_SUB") != (pl.col("_N_")-1))
+invalid_rows = SUMM2_EHP.filter(
+    pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1)
+)
 if invalid_rows.height > 0:
+    print("ERROR: Invalid rows found in SUMM2_EHP")
     raise SystemExit(77)
 
-SUMM2 = pl.concat(SUMM2, SUMM2_EHP)
+# FIX: Correct concat syntax
+SUMM2 = pl.concat([SUMM2, SUMM2_EHP])
 
-# previous base for concact
-query = """
+# PREVIOUS BASE FOR CONCAT - FIX: f-string
+query = f"""
 SELECT *
 FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM2.parquet')
 """
-PREV_SUMM2 = duckdb.query(query).to_df()
+PREV_SUMM2_DF = duckdb.query(query).to_df()
+PREV_SUMM2 = pl.from_pandas(PREV_SUMM2_DF)  # FIX: Convert to polars
 
-ELDS_SUMM2= pl.concat([PREV_SUMM2, SUMM2])
+ELDS_SUMM2 = pl.concat([PREV_SUMM2, SUMM2])
 
-# write to current base
-duckdb.sql(""""
+# WRITE TO CURRENT BASE - FIX: f-string and register dataframe
+con.register('ELDS_SUMM2', ELDS_SUMM2.to_pandas())
+con.execute(f"""
     COPY ELDS_SUMM2 TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
 
-
-
-
+print("PROCESSING COMPLETE!")
