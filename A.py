@@ -408,3 +408,31 @@ print("PROCESSING COMPLETE!")
 print("="*80)
 print(f"SUMM1 total records: {ELDS_SUMM1.height}")
 print(f"SUMM2 total records: {ELDS_SUMM2.height}")
+
+
+(virt_edw_dev) [sas_edw_dev@svdwh004 MIS]$ /sas/python/virt_edw_dev/bin/python3 /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py
+Processing date: 2025-10-15 14:57:43.365040
+Input SUMM1: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input/bnmsummary1_20251015.csv
+Input SUMM2: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input/bnmsummary2_20251015.csv
+Output path: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output/year=2025/month=10/day=15
+
+Processing SUMM1...
+ERROR: 1723 invalid rows found in SUMM1
+Sample invalid rows:
+shape: (10, 3)
+┌─────┬───────────────┬───────────┐
+│ _N_ ┆ MAANO         ┆ MAANO_SUB │
+│ --- ┆ ---           ┆ ---       │
+│ u32 ┆ str           ┆ i64       │
+╞═════╪═══════════════╪═══════════╡
+│ 1   ┆ AKH/000709/25 ┆ 709       │
+│ 2   ┆ AKH/000854/25 ┆ 854       │
+│ 3   ┆ AKH/000945/25 ┆ 945       │
+│ 4   ┆ AKH/000945/25 ┆ 945       │
+│ 5   ┆ AKH/000981/25 ┆ 981       │
+│ 6   ┆ AKH/000981/25 ┆ 981       │
+│ 7   ┆ AKH/001026/25 ┆ 1026      │
+│ 8   ┆ AKH/001045/25 ┆ 1045      │
+│ 9   ┆ AKH/001045/25 ┆ 1045      │
+│ 10  ┆ AKH/001045/25 ┆ 1045      │
+└─────┴───────────────┴───────────┘
