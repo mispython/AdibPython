@@ -282,3 +282,18 @@ if invalid_rows.height > 0:
 
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
 # (Continue SUMM2 EHP reading & concat if needed)
+
+
+
+
+
+
+Exception has occurred: InvalidOperationError
+conversion from `str` to `i64` failed in column 'MAANO_SUB' for 431 out of 431 values: ["R/000376", "R/000387", … "I/000837"]
+
+Did not show all failed cases as there were too many.
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 63, in <module>
+    invalid_rows = SUMM1.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
+polars.exceptions.InvalidOperationError: conversion from `str` to `i64` failed in column 'MAANO_SUB' for 431 out of 431 values: ["R/000376", "R/000387", … "I/000837"]
+
+Did not show all failed cases as there were too many.
