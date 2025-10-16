@@ -163,6 +163,15 @@ OUTPUT_DATA_PATH = Path(f"{ELDS_DATA_PATH}/year={REPTDATE.year}/month={REPTDATE.
 OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------
+# HELPER: Safe Concatenation Function
+# ---------------------------------------------------------
+def safe_concat(df1: pl.DataFrame, df2: pl.DataFrame) -> pl.DataFrame:
+    # Align schemas by converting all to string before concatenation
+    df1 = df1.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) for c in df1.columns])
+    df2 = df2.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) for c in df2.columns])
+    return pl.concat([df1, df2], how="diagonal")
+
+# ---------------------------------------------------------
 # READ BNMSUMM1 CSV
 # ---------------------------------------------------------
 SUMM1 = pl.read_csv(
@@ -178,19 +187,17 @@ SUMM1 = pl.read_csv(
         "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
 )
-
 SUMM1 = SUMM1.slice(1, SUMM1.height - 1)
 
-# Add new columns
 SUMM1 = (
     SUMM1
     .with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).alias("DATE")
+        pl.lit(str(RDATE)).alias("DATE")  # Cast to string early to avoid schema conflict
     )
     .with_row_index(name="_N_", offset=1)
     .with_columns(
-        pl.col("MAANO").str.slice(2, 6).cast(pl.Int64, strict=False).alias("MAANO_SUB")
+        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB")
     )
 )
 
@@ -205,20 +212,17 @@ SUMM1_EHP = (
     SUMM1_EHP
     .with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).alias("DATE")
+        pl.lit(str(RDATE)).alias("DATE")
     )
     .with_row_index(name="_N_", offset=1)
 )
-
 if "MAANO" in SUMM1_EHP.columns:
     SUMM1_EHP = SUMM1_EHP.with_columns(
-        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).cast(pl.Int64, strict=False).alias("MAANO_SUB")
+        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB")
     )
 
-# ---------------------------------------------------------
-# CONCATENATE BOTH SUMM1 AND SUMM1_EHP (KEEP ALL COLUMNS)
-# ---------------------------------------------------------
-SUMM1 = pl.concat([SUMM1, SUMM1_EHP], how="diagonal")
+# ✅ FIX: Safe concat that keeps all columns and prevents schema errors
+SUMM1 = safe_concat(SUMM1, SUMM1_EHP)
 
 # ---------------------------------------------------------
 # APPEND WITH PREVIOUS DAY PARQUET
@@ -229,9 +233,9 @@ FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:0
 """
 try:
     PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
-    ELDS_SUMM1 = pl.concat([PREV_SUMM1, SUMM1], how="diagonal")
+    ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
 except Exception:
-    ELDS_SUMM1 = SUMM1  # If previous parquet missing, just use current
+    ELDS_SUMM1 = SUMM1  # Fallback if previous parquet missing
 
 # ---------------------------------------------------------
 # SAVE TO PARQUET
@@ -256,21 +260,20 @@ SUMM2 = pl.read_csv(
         "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", "EREQNO", "DSRISS3", "DTCOMPLETE"
     ]
 )
-
 SUMM2 = SUMM2.slice(1, SUMM2.height - 1)
 
 SUMM2 = (
     SUMM2
     .with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).alias("DATE")
+        pl.lit(str(RDATE)).alias("DATE")
     )
     .with_row_index(name="_N_", offset=1)
 )
 
 if "MAANO" in SUMM2.columns:
     SUMM2 = SUMM2.with_columns(
-        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).cast(pl.Int64, strict=False).alias("MAANO_SUB")
+        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB")
     )
 
 # ---------------------------------------------------------
@@ -284,17 +287,16 @@ SUMM2_EHP = (
     SUMM2_EHP
     .with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).alias("DATE")
+        pl.lit(str(RDATE)).alias("DATE")
     )
     .with_row_index(name="_N_", offset=1)
 )
-
 if "MAANO" in SUMM2_EHP.columns:
     SUMM2_EHP = SUMM2_EHP.with_columns(
-        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).cast(pl.Int64, strict=False).alias("MAANO_SUB")
+        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB")
     )
 
-SUMM2 = pl.concat([SUMM2, SUMM2_EHP], how="diagonal")
+SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 
 # ---------------------------------------------------------
 # SAVE SUMM2 TO PARQUET
@@ -302,18 +304,3 @@ SUMM2 = pl.concat([SUMM2, SUMM2_EHP], how="diagonal")
 duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
-
-
-
-
-
-
-
-
-
-
-Exception has occurred: SchemaError
-type String is incompatible with expected type Int64
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 90, in <module>
-    SUMM1 = pl.concat([SUMM1, SUMM1_EHP], how="diagonal")
-polars.exceptions.SchemaError: type String is incompatible with expected type Int64
