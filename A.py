@@ -135,6 +135,7 @@ import os
 import duckdb
 from datetime import datetime, timedelta
 from pathlib import Path
+import sys
 
 # ---------------------------------------------------------
 # CONFIGURATION PATHS
@@ -148,10 +149,10 @@ ELDS_DATA_PATH.mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------
 REPTDATE = datetime.today() - timedelta(days=1)
 PREVDATE = REPTDATE - timedelta(days=1)
-FILE_DT  = REPTDATE.strftime('%Y%m%d')
+FILE_DT  = REPTDATE.strftime('%Y%m%d') 
 
-SAS_ORIGIN = datetime(1960, 1, 1)
-RDATE = (REPTDATE - SAS_ORIGIN).days  # ✅ numeric RDATE
+SAS_ORIGIN = datetime(1960,1,1)
+RDATE = (REPTDATE - SAS_ORIGIN).days   #  numeric (not string)
 
 # ---------------------------------------------------------
 # FILE PATHS
@@ -166,11 +167,23 @@ OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
 # HELPER: Safe Concatenation Function
 # ---------------------------------------------------------
 def safe_concat(df1: pl.DataFrame, df2: pl.DataFrame) -> pl.DataFrame:
-    """Safely concatenate two DataFrames, preserving all columns."""
-    all_cols = list(set(df1.columns) | set(df2.columns))
-    df1_aligned = df1.select([pl.col(c) if c in df1.columns else pl.lit(None).alias(c) for c in all_cols])
-    df2_aligned = df2.select([pl.col(c) if c in df2.columns else pl.lit(None).alias(c) for c in all_cols])
-    return pl.concat([df1_aligned, df2_aligned], how="vertical_relaxed")
+    # Align schemas by converting all to string before concatenation
+    df1 = df1.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) for c in df1.columns])
+    df2 = df2.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) for c in df2.columns])
+    return pl.concat([df1, df2], how="diagonal")
+
+# ---------------------------------------------------------
+# HELPER: Validate record count using substrn-like logic
+# ---------------------------------------------------------
+def validate_record_count(csv_path, df, file_label):
+    try:
+        last_row = pl.read_csv(csv_path, separator=",", has_header=False, ignore_errors=True).tail(1)
+        last_maano = str(last_row[0, 0])  # MAANO assumed first column
+        record_count = int(last_maano[2:8])  # substrn(MAANO,3,8)
+        if record_count != df.height:
+            sys.exit(f"ABORT 77: Record count mismatch in {file_label} (expected {record_count}, got {df.height})")
+    except Exception as e:
+        sys.exit(f"ERROR validating record count in {file_label}: {e}")
 
 # ---------------------------------------------------------
 # READ BNMSUMM1 CSV
@@ -188,21 +201,24 @@ SUMM1 = pl.read_csv(
         "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
 )
+
+#  Drop first header row and last count row
 SUMM1 = SUMM1.slice(1, SUMM1.height - 1)
+
+#  Validate record count (substrn logic)
+validate_record_count(BNMSUMM1, SUMM1, "BNMSUMM1")
 
 SUMM1 = (
     SUMM1
     .with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).cast(pl.Int64).alias("DATE")
+        pl.lit(RDATE).alias("DATE")  #  numeric RDATE
     )
     .with_row_index(name="_N_", offset=1)
-)
-
-if "MAANO" in SUMM1.columns:
-    SUMM1 = SUMM1.with_columns(
+    .with_columns(
         pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB")
     )
+)
 
 # ---------------------------------------------------------
 # READ SAS7BDAT (EHP SOURCE)
@@ -215,16 +231,16 @@ SUMM1_EHP = (
     SUMM1_EHP
     .with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).cast(pl.Int64).alias("DATE")
+        pl.lit(RDATE).alias("DATE")   #  numeric RDATE
     )
     .with_row_index(name="_N_", offset=1)
 )
-
 if "MAANO" in SUMM1_EHP.columns:
     SUMM1_EHP = SUMM1_EHP.with_columns(
         pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB")
     )
 
+#  Safe concat
 SUMM1 = safe_concat(SUMM1, SUMM1_EHP)
 
 # ---------------------------------------------------------
@@ -238,7 +254,7 @@ try:
     PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
     ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
 except Exception:
-    ELDS_SUMM1 = SUMM1  # fallback
+    ELDS_SUMM1 = SUMM1  # fallback if previous parquet missing
 
 # ---------------------------------------------------------
 # SAVE TO PARQUET
@@ -263,24 +279,28 @@ SUMM2 = pl.read_csv(
         "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", "EREQNO", "DSRISS3", "DTCOMPLETE"
     ]
 )
+
+#  Drop first header row and last count row
 SUMM2 = SUMM2.slice(1, SUMM2.height - 1)
+
+#  Validate record count
+validate_record_count(BNMSUMM2, SUMM2, "BNMSUMM2")
 
 SUMM2 = (
     SUMM2
     .with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).cast(pl.Int64).alias("DATE")
+        pl.lit(RDATE).alias("DATE")  #  numeric RDATE
     )
     .with_row_index(name="_N_", offset=1)
 )
-
 if "MAANO" in SUMM2.columns:
     SUMM2 = SUMM2.with_columns(
         pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB")
     )
 
 # ---------------------------------------------------------
-# READ AND CONCAT EHP2 SAS FILE
+# READ AND CONCAT EHP2 SAS FILE (KEEP ALL COLUMNS)
 # ---------------------------------------------------------
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
 SUMM2_EHP_df, meta_dp2 = pyreadstat.read_sas7bdat(EHP2_SRC)
@@ -290,31 +310,15 @@ SUMM2_EHP = (
     SUMM2_EHP
     .with_columns(
         pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).cast(pl.Int64).alias("DATE")
+        pl.lit(RDATE).alias("DATE")
     )
     .with_row_index(name="_N_", offset=1)
 )
-
 if "MAANO" in SUMM2_EHP.columns:
     SUMM2_EHP = SUMM2_EHP.with_columns(
         pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB")
     )
 
-# ✅ EOF CHECKSUM VALIDATION (SAS LOGIC)
-if SUMM2_EHP.height > 0:
-    try:
-        last_row = SUMM2_EHP.tail(1)
-        last_sub = last_row.select(pl.col("MAANO_SUB").cast(pl.Int64)).item(0, 0)
-        last_expected = int(SUMM2_EHP.height - 1)
-        if last_sub != last_expected:
-            print(f"❌ Validation failed: MAANO_SUB({last_sub}) != (_N_-1)({last_expected})")
-            raise SystemExit(77)
-        else:
-            print("✅ Validation passed: MAANO_SUB matches record count.")
-    except Exception as e:
-        print(f"⚠️ Validation skipped due to conversion issue: {e}")
-
-# ✅ Safe concat preserving all columns
 SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 
 # ---------------------------------------------------------
@@ -324,4 +328,4 @@ duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
 
-print("🏁 Job completed successfully.")
+print(f" Job completed successfully for report date {FILE_DT}")
