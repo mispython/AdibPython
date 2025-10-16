@@ -304,3 +304,32 @@ SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
+
+
+
+
+
+
+&RDATE should store in numeric
+the last row from the file is come with count  ,
+the substrn on sas is to get  the last row count compare with the summary row. 
+
+
+        INDINTERIM = 'Y';
+        DATE = &RDATE;      
+        IF NOT EOF THEN OUTPUT;
+        /* RECORD CHECKSUM -1 EXCLUDE FT */
+        IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;   
+SUMM2_EHP = (
+    SUMM2_EHP
+    .with_columns(
+        pl.lit("Y").alias("INDINTERIM"),
+        pl.lit(str(RDATE)).alias("DATE")
+    )
+    .with_row_index(name="_N_", offset=1)
+)
+if "MAANO" in SUMM2_EHP.columns:
+    SUMM2_EHP = SUMM2_EHP.with_columns(
+        pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB")
+    )
+
