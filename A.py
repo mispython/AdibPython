@@ -129,20 +129,8 @@ if __name__ == "__main__":
 
 
 
-
-
-
-
-
-
-
-
-
-
-
 import polars as pl
 import pyreadstat
-import os
 import duckdb
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -170,7 +158,9 @@ OUTPUT_DATA_PATH = Path(
 )
 OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
-# === SUMM1 Processing ===
+# ---------------------------------------------------------------------
+# === SUMM1 PROCESSING ===
+# ---------------------------------------------------------------------
 SUMM1 = pl.read_csv(
     BNMSUMM1,
     separator=",",
@@ -184,29 +174,26 @@ SUMM1 = pl.read_csv(
         "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", "LU_TOWN_CITY",
         "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
-)
-
-SUMM1 = SUMM1.slice(1, SUMM1.height - 1)
+).slice(1, -1)
 
 SUMM1 = SUMM1.with_columns(
     pl.lit("Y").alias("INDINTERIM"),
     pl.lit(RDATE).alias("DATE")
 )
 
-# ✅ Updated deprecated method
 SUMM1 = SUMM1.with_row_index(name="_N_", offset=1)
 
-# Extract substring
+# ✅ Clean MAANO: keep only digits before comparison
 SUMM1 = SUMM1.with_columns(
-    pl.col("MAANO").str.slice(2, 8).alias("MAANO_SUB")
+    pl.col("MAANO").str.replace_all(r"[^0-9]", "").alias("MAANO_SUB")
 )
 
-# ✅ Fix: Cast string to int before comparison
+# Check invalid rows safely
 invalid_rows = SUMM1.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
 if invalid_rows.height > 0:
     raise SystemExit(77)
 
-# === Read SAS (EHP Source) ===
+# === Read SAS Source ===
 EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
 SUMM1_EHP_df, meta_dp = pyreadstat.read_sas7bdat(EHP_SRC)
 SUMM1_EHP = pl.from_pandas(SUMM1_EHP_df)
@@ -214,39 +201,39 @@ SUMM1_EHP = pl.from_pandas(SUMM1_EHP_df)
 SUMM1_EHP = SUMM1_EHP.with_columns(
     pl.lit("Y").alias("INDINTERIM"),
     pl.lit(RDATE).alias("DATE")
-)
-
-SUMM1_EHP = SUMM1_EHP.with_row_index(name="_N_", offset=1)
+).with_row_index(name="_N_", offset=1)
 
 SUMM1_EHP = SUMM1_EHP.with_columns(
-    pl.col("MAANO").str.slice(2, 8).alias("MAANO_SUB")
+    pl.col("MAANO").str.replace_all(r"[^0-9]", "").alias("MAANO_SUB")
 )
 
 invalid_rows = SUMM1_EHP.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
 if invalid_rows.height > 0:
     raise SystemExit(77)
 
-# ✅ Concatenate
+# Combine CSV + SAS Data
 SUMM1 = pl.concat([SUMM1, SUMM1_EHP])
 
-# === Read Previous Day’s Base from Parquet ===
+# === Read Previous Day’s Parquet (if exists) ===
 query = f"""
 SELECT *
 FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet')
 """
-PREV_SUMM1 = duckdb.query(query).to_df()
-PREV_SUMM1 = pl.from_pandas(PREV_SUMM1)
+try:
+    PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
+    ELDS_SUMM1 = pl.concat([PREV_SUMM1, SUMM1])
+except Exception:
+    ELDS_SUMM1 = SUMM1  # If previous day missing, start fresh
 
-# ✅ Combine current and previous
-ELDS_SUMM1 = pl.concat([PREV_SUMM1, SUMM1])
-
-# === Write Output to Parquet ===
+# Write to Parquet
 duckdb.sql(f"""
     COPY (SELECT * FROM ELDS_SUMM1)
     TO '{OUTPUT_DATA_PATH}/SUMM1.parquet' (FORMAT PARQUET);
 """)
 
-# === SUMM2 Processing ===
+# ---------------------------------------------------------------------
+# === SUMM2 PROCESSING ===
+# ---------------------------------------------------------------------
 SUMM2 = pl.read_csv(
     BNMSUMM2,
     separator=",",
@@ -261,39 +248,59 @@ SUMM2 = pl.read_csv(
         "ANNUAL_TURNOVER", "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD",
         "EREQNO", "DSRISS3", "DTCOMPLETE"
     ]
-)
-
-SUMM2 = SUMM2.slice(1, SUMM2.height - 1)
+).slice(1, -1)
 
 SUMM2 = SUMM2.with_columns(
     pl.lit("Y").alias("INDINTERIM"),
     pl.lit(RDATE).alias("DATE")
-)
-
-SUMM2 = SUMM2.with_row_index(name="_N_", offset=1)
+).with_row_index(name="_N_", offset=1)
 
 SUMM2 = SUMM2.with_columns(
-    pl.col("MAANO").str.slice(2, 8).alias("MAANO_SUB")
+    pl.col("MAANO").str.replace_all(r"[^0-9]", "").alias("MAANO_SUB")
 )
 
 invalid_rows = SUMM2.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
 if invalid_rows.height > 0:
     raise SystemExit(77)
 
+# === Read SAS Source for SUMM2 ===
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
-# (Continue SUMM2 EHP reading & concat if needed)
+SUMM2_EHP_df, meta_dp2 = pyreadstat.read_sas7bdat(EHP2_SRC)
+SUMM2_EHP = pl.from_pandas(SUMM2_EHP_df)
+
+SUMM2_EHP = SUMM2_EHP.with_columns(
+    pl.lit("Y").alias("INDINTERIM"),
+    pl.lit(RDATE).alias("DATE")
+).with_row_index(name="_N_", offset=1)
+
+SUMM2_EHP = SUMM2_EHP.with_columns(
+    pl.col("MAANO").str.replace_all(r"[^0-9]", "").alias("MAANO_SUB")
+)
+
+invalid_rows = SUMM2_EHP.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
+if invalid_rows.height > 0:
+    raise SystemExit(77)
+
+SUMM2 = pl.concat([SUMM2, SUMM2_EHP])
+
+# === Write SUMM2 Output ===
+duckdb.sql(f"""
+    COPY (SELECT * FROM SUMM2)
+    TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET);
+""")
+
+print("✅ ELN_BNMSUMM_UAT.py completed successfully.")
 
 
 
 
 
 
-Exception has occurred: InvalidOperationError
-conversion from `str` to `i64` failed in column 'MAANO_SUB' for 431 out of 431 values: ["R/000376", "R/000387", … "I/000837"]
 
-Did not show all failed cases as there were too many.
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 63, in <module>
-    invalid_rows = SUMM1.filter(pl.col("MAANO_SUB").cast(pl.Int64) != (pl.col("_N_") - 1))
-polars.exceptions.InvalidOperationError: conversion from `str` to `i64` failed in column 'MAANO_SUB' for 431 out of 431 values: ["R/000376", "R/000387", … "I/000837"]
 
-Did not show all failed cases as there were too many.
+
+
+
+
+
+
