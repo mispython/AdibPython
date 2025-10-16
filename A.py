@@ -191,7 +191,7 @@ def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
     """
 
     if "MAANO" not in df.columns:
-        print(f"⚠️  MAANO column missing in {source_name}, skipping count validation.")
+        print(f"  MAANO column missing in {source_name}, skipping count validation.")
         return df
 
     # Extract last record
@@ -205,17 +205,17 @@ def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
             raise ValueError
         control_count = int(ctrl_val[2:])  # SUBSTRN(MAANO,3,8)
     except Exception:
-        print(f"⚠️  No numeric control count found in {source_name}, proceeding without checks.")
+        print(f"  No numeric control count found in {source_name}, proceeding without checks.")
         control_count = None
 
     # Compare if control count exists
     if control_count is not None:
         actual_count = df.height
         if control_count != actual_count:
-            print(f"❌ ABORT 77: Row count mismatch in {source_name} - expected {control_count}, got {actual_count}")
+            print(f" ABORT 77: Row count mismatch in {source_name} - expected {control_count}, got {actual_count}")
             raise SystemExit(77)
         else:
-            print(f"✅ {source_name} count check passed ({actual_count} rows).")
+            print(f" {source_name} count check passed ({actual_count} rows).")
 
     # Add new columns (SAS equivalent)
     df = df.with_columns(
@@ -301,5 +301,3 @@ SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
-
-print("✅ Job completed successfully!")
