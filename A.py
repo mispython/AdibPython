@@ -133,9 +133,9 @@ import polars as pl
 import pyreadstat
 import os
 import duckdb
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+import sys
 
 # ---------------------------------------------------------
 # CONFIGURATION PATHS
@@ -149,10 +149,10 @@ ELDS_DATA_PATH.mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------
 REPTDATE = datetime.today() - timedelta(days=1)
 PREVDATE = REPTDATE - timedelta(days=1)
-FILE_DT = REPTDATE.strftime('%Y%m%d')
+FILE_DT  = REPTDATE.strftime('%Y%m%d')
 
 SAS_ORIGIN = datetime(1960, 1, 1)
-RDATE = (REPTDATE - SAS_ORIGIN).days  # store as NUMERIC
+RDATE = (REPTDATE - SAS_ORIGIN).days  # numeric (like SAS date)
 
 # ---------------------------------------------------------
 # FILE PATHS
@@ -167,41 +167,61 @@ OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
 # HELPER: Safe Concatenation Function
 # ---------------------------------------------------------
 def safe_concat(df1: pl.DataFrame, df2: pl.DataFrame) -> pl.DataFrame:
-    df1 = df1.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) for c in df1.columns])
-    df2 = df2.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) for c in df2.columns])
-    return pl.concat([df1, df2], how="diagonal")
+    # Align schemas by converting all to string before concatenation
+    all_cols = sorted(set(df1.columns) | set(df2.columns))
+    df1 = df1.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) if c in df1.columns else pl.lit(None).alias(c) for c in all_cols])
+    df2 = df2.select([pl.col(c).cast(pl.Utf8, strict=False).alias(c) if c in df2.columns else pl.lit(None).alias(c) for c in all_cols])
+    return pl.concat([df1, df2], how="vertical_relaxed")
 
 # ---------------------------------------------------------
-# HELPER: VALIDATE CONTROL COUNT (SIMULATES ABORT 77)
+# FUNCTION: Apply SAS EOF/COUNT CHECK LOGIC
 # ---------------------------------------------------------
-def validate_footer_count(df: pl.DataFrame, filename: str):
-    """Simulates SAS: IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;"""
+def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
+    """
+    Simulate SAS logic:
+    INDINTERIM = 'Y';
+    DATE = &RDATE;
+    IF NOT EOF THEN OUTPUT;
+    IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;
+    """
+
     if "MAANO" not in df.columns:
-        print(f"[WARN] No MAANO column found in {filename}, skipping count validation.")
+        print(f"⚠️  MAANO column missing in {source_name}, skipping count validation.")
         return df
 
-    # Get footer record (last row)
-    df_footer = df.tail(1)
-    df_data = df.slice(0, df.height - 1)  # all except footer
+    # Get control row (last record)
+    control_row = df[-1, :]
+    df = df.slice(0, df.height - 1)  # remove last row from output
 
-    last_maano = str(df_footer[0, "MAANO"]).strip()
-    substr_part = last_maano[2:8] if len(last_maano) >= 8 else None
+    # SAS equivalent: SUBSTRN(MAANO,3,8)
+    try:
+        ctrl_val_str = control_row["MAANO"]
+        if ctrl_val_str is None:
+            raise ValueError
+        control_count = int(str(ctrl_val_str)[2:])  # convert substring to int
+    except Exception:
+        print(f"⚠️  No numeric control count found in {source_name}, proceeding without checks")
+        return df
 
-    if substr_part and substr_part.isdigit():
-        expected_count = int(substr_part)
-        actual_count = df_data.height
-        if expected_count != actual_count:
-            print(f"ABORT 77: Row count mismatch in {filename} - expected {expected_count}, got {actual_count}")
-            sys.exit(77)
-        else:
-            print(f"Record count validation PASSED for {filename} ({expected_count} rows).")
-    else:
-        print(f"[WARN] No numeric control count found in {filename}, proceeding without checks.")
+    # Check record count (excluding control)
+    expected_count = control_count
+    actual_count = df.height
 
-    return df_data  # Return only data portion (exclude footer)
+    if expected_count != actual_count:
+        print(f"❌ ABORT 77: Row count mismatch in {source_name} - expected {expected_count}, got {actual_count}")
+        raise SystemExit(77)
+
+    print(f"✅ {source_name} count check passed ({expected_count} rows)")
+
+    # Add columns as SAS logic
+    df = df.with_columns(
+        pl.lit("Y").alias("INDINTERIM"),
+        pl.lit(RDATE).alias("DATE")  # numeric, not string
+    )
+    return df
 
 # ---------------------------------------------------------
-# READ BNMSUMM1 CSV
+# READ BNMSUMM1 CSV + APPLY CHECK
 # ---------------------------------------------------------
 SUMM1 = pl.read_csv(
     BNMSUMM1,
@@ -217,56 +237,35 @@ SUMM1 = pl.read_csv(
     ]
 )
 
-# Validate and remove footer (SAS EOF logic)
-SUMM1 = validate_footer_count(SUMM1, "bnmsummary1")
+SUMM1 = apply_sas_eof_check(SUMM1, "bnmsummary1")
 
-# Add columns
-SUMM1 = (
-    SUMM1
-    .with_columns(
-        pl.lit("Y").alias("INDINTERIM"),
-        pl.lit(RDATE).cast(pl.Int64).alias("DATE")  # numeric DATE
-    )
-    .with_row_index(name="_N_", offset=1)
-    .with_columns(pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB"))
-)
-
-# ---------------------------------------------------------
-# READ SAS7BDAT (EHP SOURCE)
-# ---------------------------------------------------------
+# Read SAS7BDAT (EHP)
 EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
 SUMM1_EHP_df, _ = pyreadstat.read_sas7bdat(EHP_SRC)
-SUMM1_EHP = pl.from_pandas(SUMM1_EHP_df)
-
-SUMM1_EHP = (
-    SUMM1_EHP
-    .with_columns(pl.lit("Y").alias("INDINTERIM"), pl.lit(RDATE).cast(pl.Int64).alias("DATE"))
-    .with_row_index(name="_N_", offset=1)
-)
-if "MAANO" in SUMM1_EHP.columns:
-    SUMM1_EHP = SUMM1_EHP.with_columns(pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB"))
+SUMM1_EHP = apply_sas_eof_check(pl.from_pandas(SUMM1_EHP_df), "bnmsummary1_ehp")
 
 # Safe concat
 SUMM1 = safe_concat(SUMM1, SUMM1_EHP)
 
-# Append previous day parquet if exists
-query = f"""
-SELECT *
-FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet')
-"""
+# ---------------------------------------------------------
+# APPEND PREVIOUS DAY
+# ---------------------------------------------------------
 try:
+    query = f"""
+    SELECT * FROM read_parquet('{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet')
+    """
     PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
     ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
 except Exception:
     ELDS_SUMM1 = SUMM1
 
-# Save SUMM1 parquet
+# SAVE TO PARQUET
 duckdb.sql(f"""
     COPY (SELECT * FROM ELDS_SUMM1) TO '{OUTPUT_DATA_PATH}/SUMM1.parquet' (FORMAT PARQUET)
 """)
 
 # ---------------------------------------------------------
-# READ BNMSUMM2 CSV
+# READ BNMSUMM2 CSV + APPLY CHECK
 # ---------------------------------------------------------
 SUMM2 = pl.read_csv(
     BNMSUMM2,
@@ -282,35 +281,19 @@ SUMM2 = pl.read_csv(
     ]
 )
 
-# Validate footer
-SUMM2 = validate_footer_count(SUMM2, "bnmsummary2")
+SUMM2 = apply_sas_eof_check(SUMM2, "bnmsummary2")
 
-SUMM2 = (
-    SUMM2
-    .with_columns(pl.lit("Y").alias("INDINTERIM"), pl.lit(RDATE).cast(pl.Int64).alias("DATE"))
-    .with_row_index(name="_N_", offset=1)
-)
-if "MAANO" in SUMM2.columns:
-    SUMM2 = SUMM2.with_columns(pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB"))
-
-# Read SAS7BDAT for EHP2
+# Read SAS7BDAT (EHP2)
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
 SUMM2_EHP_df, _ = pyreadstat.read_sas7bdat(EHP2_SRC)
-SUMM2_EHP = pl.from_pandas(SUMM2_EHP_df)
+SUMM2_EHP = apply_sas_eof_check(pl.from_pandas(SUMM2_EHP_df), "bnmsummary2_ehp")
 
-SUMM2_EHP = (
-    SUMM2_EHP
-    .with_columns(pl.lit("Y").alias("INDINTERIM"), pl.lit(RDATE).cast(pl.Int64).alias("DATE"))
-    .with_row_index(name="_N_", offset=1)
-)
-if "MAANO" in SUMM2_EHP.columns:
-    SUMM2_EHP = SUMM2_EHP.with_columns(pl.col("MAANO").cast(pl.Utf8).str.slice(2, 6).alias("MAANO_SUB"))
-
+# Safe concat
 SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 
-# Save SUMM2 parquet
+# SAVE TO PARQUET
 duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
 
-print("\n✅ ETL Completed Successfully.")
+print("✅ Job completed successfully!")
