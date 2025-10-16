@@ -297,12 +297,11 @@ print("✅ ELN_BNMSUMM_UAT.py completed successfully.")
 
 
 
-Exception has occurred: SystemExit
-77
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 63, in <module>
-    raise SystemExit(77)
-SystemExit: 77
-
+Exception has occurred: ShapeError
+unable to append to a DataFrame of width 43 with a DataFrame of width 38
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 84, in <module>
+    SUMM1 = pl.concat([SUMM1, SUMM1_EHP])
+polars.exceptions.ShapeError: unable to append to a DataFrame of width 43 with a DataFrame of width 38
 
 
 
