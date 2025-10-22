@@ -179,3 +179,29 @@ SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
+
+
+
+
+
+
+
+ Job ended with error. I had redefine the date and all the source path. You can test it ya.
+
+28          new_columns=[
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 107, in <module>
+    SUMM1 = pl.read_csv(
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 91, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 91, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 91, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/io/csv/functions.py", line 499, in read_csv
+    df = _read_csv_impl(
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/io/csv/functions.py", line 645, in _read_csv_impl
+    pydf = PyDataFrame.read_csv(
+polars.exceptions.ComputeError: found more fields than defined in 'Schema'
+
+Consider setting 'truncate_ragged_lines=True'.
