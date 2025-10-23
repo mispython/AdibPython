@@ -12,6 +12,7 @@ import duckdb
 from datetime import datetime, timedelta
 import sys
 import warnings
+from collections import Counter
 
 warnings.filterwarnings('ignore')
 
@@ -26,6 +27,56 @@ NAMES = "Names:"
 OTHER = "Other:"
 CSV = "CSV:"
 FIRSTOBS = "Firstobs:"
+
+# ========================================
+# FILE MAPPING (Maps to SAS DD statements)
+# ========================================
+MAPPING = {
+    "ELNA1": {"raw": ["newbnm1"], "config": "ELAA1_output.txt"},
+    "ELNA2": {"raw": ["newbnm2"], "config": "ELAA2_output.txt"},
+    "ELNA3": {"raw": ["newbnm3"], "config": "ELAA3_output.txt"},
+    "ELNA4": {"raw": ["AABaselApp4"], "config": "ELAA4_output.txt"},
+    "ELNA5": {"raw": ["AABaselApp5"], "config": "ELAA5_output.txt"},
+    "ELNA6": {"raw": ["AABaselApp6"], "config": "ELAA6_output.txt"},
+    "ELNA7": {"raw": ["AABaselApp7"], "config": "ELAA7_output.txt"},
+    "ELNA8": {"raw": ["AABaselApp8"], "config": "ELAA8_output.txt"},
+}
+
+# ========================================
+# UTILITY FUNCTIONS
+# ========================================
+def find_latest_file(prefix):
+    """Find the actual dated file matching the prefix"""
+    if not os.path.exists(input_folder_path):
+        print(f"❌ Input folder not found: {input_folder_path}")
+        return None
+    
+    for fname in os.listdir(input_folder_path):
+        if fname.lower().startswith(prefix.lower()) and fname.endswith(".txt"):
+            return os.path.join(input_folder_path, fname)
+    return None
+
+def extract_file_date(filepath):
+    """
+    Extract date from first record of input file
+    Mimics SAS: INPUT @054 DD 2. @057 MM 2. @060 YY 4.
+    Returns date in DDMMYYYY format
+    """
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            first_line = f.readline()
+            if len(first_line) >= 64:
+                dd = first_line[53:55].strip()
+                mm = first_line[56:58].strip()
+                yy = first_line[59:63].strip()
+                
+                if dd and mm and yy and dd.isdigit() and mm.isdigit() and yy.isdigit():
+                    file_date = f"{dd}{mm}{yy}"
+                    return file_date
+    except Exception as e:
+        print(f"⚠ Error extracting date from {filepath}: {e}")
+    
+    return None
 
 # ========================================
 # DATE CALCULATION (Smart Detection from Files)
@@ -83,7 +134,6 @@ def get_reporting_dates():
     # If we found file dates, use the most common one
     if detected_file_dates:
         # Find the most frequent date
-        from collections import Counter
         date_counter = Counter(detected_file_dates)
         most_common_date, count = date_counter.most_common(1)[0]
         
@@ -169,33 +219,8 @@ config_dir = '/sas/python/virt_edw/Data_Warehouse/ELDS/COLUMN_CONFIG/ELDS_ELN'
 os.makedirs(output_folder_path, exist_ok=True)
 
 # ========================================
-# FILE MAPPING (Maps to SAS DD statements)
+# ADDITIONAL UTILITY FUNCTIONS
 # ========================================
-MAPPING = {
-    "ELNA1": {"raw": ["newbnm1"], "config": "ELAA1_output.txt"},
-    "ELNA2": {"raw": ["newbnm2"], "config": "ELAA2_output.txt"},
-    "ELNA3": {"raw": ["newbnm3"], "config": "ELAA3_output.txt"},
-    "ELNA4": {"raw": ["AABaselApp4"], "config": "ELAA4_output.txt"},
-    "ELNA5": {"raw": ["AABaselApp5"], "config": "ELAA5_output.txt"},
-    "ELNA6": {"raw": ["AABaselApp6"], "config": "ELAA6_output.txt"},
-    "ELNA7": {"raw": ["AABaselApp7"], "config": "ELAA7_output.txt"},
-    "ELNA8": {"raw": ["AABaselApp8"], "config": "ELAA8_output.txt"},
-}
-
-# ========================================
-# UTILITY FUNCTIONS
-# ========================================
-def find_latest_file(prefix):
-    """Find the actual dated file matching the prefix"""
-    if not os.path.exists(input_folder_path):
-        print(f"❌ Input folder not found: {input_folder_path}")
-        return None
-    
-    for fname in os.listdir(input_folder_path):
-        if fname.lower().startswith(prefix.lower()) and fname.endswith(".txt"):
-            return os.path.join(input_folder_path, fname)
-    return None
-
 def load_variables(var_path, script_name):
     """Load column configuration from output.txt files"""
     input_path = os.path.join(var_path, f"{script_name}_output.txt")
@@ -296,28 +321,6 @@ def prev_parquet(date, filename):
     except Exception as e:
         print(f"⚠ Error loading {full_path}: {e}")
         return pd.DataFrame()
-
-def extract_file_date(filepath):
-    """
-    Extract date from first record of input file
-    Mimics SAS: INPUT @054 DD 2. @057 MM 2. @060 YY 4.
-    Returns date in DDMMYYYY format
-    """
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            first_line = f.readline()
-            if len(first_line) >= 64:
-                dd = first_line[53:55].strip()
-                mm = first_line[56:58].strip()
-                yy = first_line[59:63].strip()
-                
-                if dd and mm and yy and dd.isdigit() and mm.isdigit() and yy.isdigit():
-                    file_date = f"{dd}{mm}{yy}"
-                    return file_date
-    except Exception as e:
-        print(f"⚠ Error extracting date from {filepath}: {e}")
-    
-    return None
 
 def create_date_from_components(df, day_col, month_col, year_col, target_col):
     """
