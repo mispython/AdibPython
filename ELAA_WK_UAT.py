@@ -28,40 +28,22 @@ CSV = "CSV:"
 FIRSTOBS = "Firstobs:"
 
 # ========================================
-# DATE CALCULATION (Mirrors SAS REPTDATE logic)
+# DATE CALCULATION (Smart Detection from Files)
 # ========================================
-def get_reporting_dates():
-    """
-    Mimics SAS REPTDATE calculation exactly:
-    WHEN(8 <= DAY(TODAY()) <= 14) -> Use 8th of current month (Week 1)
-    WHEN(15 <= DAY(TODAY()) <= 21) -> Use 15th of current month (Week 2)
-    WHEN(22 <= DAY(TODAY()) <= 27) -> Use 22nd of current month (Week 3)
-    OTHERWISE -> Use 1st of current month minus 1 day (Week 4)
-    """
-    # For testing with your specific files, force Week 2 logic
-    # Remove this line in production
-    print("⚠️  OVERRIDE: Using Week 2 reporting date (15th) to match input files")
-    
-    currdate = datetime.today()
-    day_of_month = currdate.day
-    month = currdate.month
-    year = currdate.year
-
-    # DEBUG: Show current date info
-    print(f"📅 Current date: {currdate.strftime('%Y-%m-%d')}, Day: {day_of_month}")
-
+def fallback_to_current_date(day_of_month, month, year):
+    """Fallback logic using current date"""
     if 8 <= day_of_month <= 14:
         reptdate = datetime(year=year, month=month, day=8)
         wk = '1'
-        print("📊 Using Week 1 reporting (8th)")
+        print("📊 Using Week 1 reporting (8th) - fallback")
     elif 15 <= day_of_month <= 21:
         reptdate = datetime(year=year, month=month, day=15)
         wk = '2'
-        print("📊 Using Week 2 reporting (15th)")
+        print("📊 Using Week 2 reporting (15th) - fallback")
     elif 22 <= day_of_month <= 27:
         reptdate = datetime(year=year, month=month, day=22)
         wk = '3'
-        print("📊 Using Week 3 reporting (22nd)")
+        print("📊 Using Week 3 reporting (22nd) - fallback")
     else:
         # Last day of previous month
         if month == 1:
@@ -69,11 +51,84 @@ def get_reporting_dates():
         else:
             reptdate = datetime(year=year, month=month, day=1) - timedelta(days=1)
         wk = '4'
-        print("📊 Using Week 4 reporting (end of previous month)")
+        print("📊 Using Week 4 reporting (end of previous month) - fallback")
+    
+    return reptdate, wk
+
+def get_reporting_dates():
+    """
+    Smart reporting date that detects the correct week from input files
+    """
+    currdate = datetime.today()
+    day_of_month = currdate.day
+    month = currdate.month
+    year = currdate.year
+
+    print(f"📅 Current date: {currdate.strftime('%Y-%m-%d')}, Day: {day_of_month}")
+
+    # Try to detect file dates first
+    detected_file_dates = []
+    for i in range(1, 9):
+        key = f"ELNA{i}"
+        meta = MAPPING[key]
+        raw_prefix = meta["raw"][0]
+        fpath = find_latest_file(raw_prefix)
+        
+        if fpath:
+            file_date = extract_file_date(fpath)
+            if file_date:
+                detected_file_dates.append(file_date)
+                print(f"📁 Detected file date from {raw_prefix}: {file_date}")
+    
+    # If we found file dates, use the most common one
+    if detected_file_dates:
+        # Find the most frequent date
+        from collections import Counter
+        date_counter = Counter(detected_file_dates)
+        most_common_date, count = date_counter.most_common(1)[0]
+        
+        print(f"📊 Most common file date: {most_common_date} (appears in {count} files)")
+        
+        try:
+            file_dt = datetime.strptime(most_common_date, '%d%m%Y')
+            file_day = file_dt.day
+            
+            # Determine week based on file date
+            if 8 <= file_day <= 14:
+                reptdate = datetime(year=file_dt.year, month=file_dt.month, day=8)
+                wk = '1'
+                print("📊 Using Week 1 reporting (8th) based on file date")
+            elif 15 <= file_day <= 21:
+                reptdate = datetime(year=file_dt.year, month=file_dt.month, day=15)
+                wk = '2'
+                print("📊 Using Week 2 reporting (15th) based on file date")
+            elif 22 <= file_day <= 27:
+                reptdate = datetime(year=file_dt.year, month=file_dt.month, day=22)
+                wk = '3'
+                print("📊 Using Week 3 reporting (22nd) based on file date")
+            else:
+                # Last day of previous month
+                if file_dt.month == 1:
+                    reptdate = datetime(year=file_dt.year-1, month=12, day=31)
+                else:
+                    reptdate = datetime(year=file_dt.year, month=file_dt.month, day=1) - timedelta(days=1)
+                wk = '4'
+                print("📊 Using Week 4 reporting (end of previous month) based on file date")
+                
+            print(f"🎯 Smart detection: Using {reptdate.strftime('%Y-%m-%d')} (Week {wk}) to match input files")
+            
+        except Exception as e:
+            print(f"⚠️  Error parsing file date, falling back to current date logic: {e}")
+            # Fall back to current date logic
+            reptdate, wk = fallback_to_current_date(day_of_month, month, year)
+    else:
+        # No files detected, use current date logic
+        print("⚠️  No input files detected, using current date logic")
+        reptdate, wk = fallback_to_current_date(day_of_month, month, year)
     
     reptdate1 = datetime.today() - timedelta(days=1)
     
-    print(f"📅 Reporting date: {reptdate.strftime('%Y-%m-%d')}, Week: {wk}")
+    print(f"📅 Final Reporting date: {reptdate.strftime('%Y-%m-%d')}, Week: {wk}")
     
     return reptdate, reptdate1, wk
 
@@ -898,7 +953,6 @@ if __name__ == "__main__":
 ║                     Version 1.0.0                         ║
 ╚═══════════════════════════════════════════════════════════╝
         """)
-        
         
         # Run the main process
         result_dfs = run_eiwelnex()
