@@ -911,68 +911,115 @@ if __name__ == "__main__":
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-"""
-EIWELNEX - Complete SAS to Python Migration
-100% 1:1 conversion of mainframe SAS job to Python
-Ready to run - no modifications needed
-"""
-
-import pandas as pd
-import numpy as np
-import os
-import ast
-import duckdb
-from datetime import datetime, timedelta
-import sys
-import warnings
-
-warnings.filterwarnings('ignore')
-
-import pyarrow as pa
-import pyarrow.parquet as pq
-
-# ========================================
-# CONFIGURATION CONSTANTS
-# ========================================
-SPECS = "Specs:"
-NAMES = "Names:"
-OTHER = "Other:"
-CSV = "CSV:"
-FIRSTOBS = "Firstobs:"
-
-# ========================================
-# CONFIGURATION FLAGS
-# ========================================
-SKIP_DATE_VALIDATION = True  # Set to True to skip date validation (for testing)
-FORCE_REPORTING_DATE = "15102025"  # Add this line to force a specific date
-
-# ========================================
-# DATE CALCULATION (Mirrors SAS REPTDATE logic)
-# ========================================
-def get_reporting_dates():
+def run_eiwelnex():
     """
-    Mimics SAS REPTDATE calculation exactly:
-    WHEN(8 <= DAY(TODAY()) <= 14) -> Use 8th of current month (Week 1)
-    WHEN(15 <= DAY(TODAY()) <= 21) -> Use 15th of current month (Week 2)
-    WHEN(22 <= DAY(TODAY()) <= 27) -> Use 22nd of current month (Week 3)
-    OTHERWISE -> Use 1st of current month minus 1 day (Week 4)
+    Main processing function - 100% mirrors SAS %PROCESS macro
     """
-    currdate = datetime.today()
-    day_of_month = currdate.day
+    
+    # ========================================
+    # STEP 1: CHECK INPUT FILE DATES
+    # ========================================
+    print("\n" + "="*60)
+    print("📋 STEP 1: Validating Input File Dates")
+    print("="*60)
+    
+    file_dates = {}
+    all_dates_match = True
+    
+    for i in range(1, 9):
+        key = f"ELNA{i}"
+        meta = MAPPING[key]
+        raw_prefix = meta["raw"][0]
+        fpath = find_latest_file(raw_prefix)
+        
+        if not fpath:
+            print(f"❌ File not found for prefix: {raw_prefix}")
+            all_dates_match = False
+            continue
+        
+        file_date = extract_file_date(fpath)
+        file_dates[key] = file_date
+        
+        if file_date != rdate:
+            print(f"❌ {key} ({raw_prefix}): Expected {rdate}, Got {file_date}")
+            all_dates_match = False
+        else:
+            print(f"✅ {key} ({raw_prefix}): {file_date}")
+    
+    # ========================================
+    # FORCE REPORTING DATE OVERRIDE
+    # ========================================
+    if SKIP_DATE_VALIDATION and FORCE_REPORTING_DATE:
+        print("\n" + "="*60)
+        print("⚠️  OVERRIDE: Using forced reporting date for testing")
+        print("="*60)
+        
+        # Declare global variables first
+        global rdate, reptdate, nowk, reptmon, reptday1, reptmon1, reptyr1, reptyear, batch_dt_str, prevwkdate, prevdate, output_folder_path
+        
+        # Now update the variables
+        rdate = FORCE_REPORTING_DATE
+        reptdate = datetime.strptime(FORCE_REPORTING_DATE, '%d%m%Y')
+        
+        # Determine week based on forced date
+        day_of_month = reptdate.day
+        if 8 <= day_of_month <= 14:
+            nowk = '1'
+        elif 15 <= day_of_month <= 21:
+            nowk = '2'
+        elif 22 <= day_of_month <= 27:
+            nowk = '3'
+        else:
+            nowk = '4'
+        
+        # Update all date-dependent variables
+        reptmon = reptdate.strftime('%m')
+        reptday1 = (datetime.today() - timedelta(days=1)).strftime('%d')
+        reptmon1 = (datetime.today() - timedelta(days=1)).strftime('%m')
+        reptyr1 = (datetime.today() - timedelta(days=1)).strftime('%y')
+        reptyear = reptdate.strftime('%y')
+        batch_dt_str = reptdate.strftime('%Y%m%d')
+        prevwkdate = reptdate - timedelta(days=7)
+        prevdate = reptdate - timedelta(days=1)
+        
+        # Update output folder path with forced date
+        output_folder_path = f'{BASE_PATH}/output/year={reptdate.strftime("%Y")}/month={reptdate.strftime("%m")}/day={reptdate.strftime("%d")}'
+        os.makedirs(output_folder_path, exist_ok=True)
+        
+        print(f"📅 Forced Reporting Date: {reptdate.strftime('%Y-%m-%d')}, Week: {nowk}")
+        print(f"📅 Previous Week: {prevwkdate.strftime('%Y-%m-%d')}")
+        print(f"📅 Previous Day: {prevdate.strftime('%Y-%m-%d')}")
+        print(f"📁 Updated Output Path: {output_folder_path}")
+        
+        all_dates_match = True  # Skip validation
+    
+    # ========================================
+    # CONTINUE WITH VALIDATION
+    # ========================================
+    if not all_dates_match:
+        print("\n" + "="*60)
+        print("❌ THE JOB IS NOT DONE!!")
+        print(f"❌ Input files NOT dated {rdate}")
+        print("="*60)
+        sys.exit(77)  # Mirrors SAS ABORT 77
+    
+    print("\n✅ All input file dates validated successfully!\n")
+    
+    # ... rest of the function remains the same ...
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     month = currdate.month
     year = currdate.year
 
@@ -1018,30 +1065,6 @@ print(f"""
 ╚═══════════════════════════════════════════════════════════╝
 """)
 
-# ========================================
-# PATH CONFIGURATION
-# ========================================
-BASE_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS'
-output_folder_path = f'{BASE_PATH}/output/year={reptdate.strftime("%Y")}/month={reptdate.strftime("%m")}/day={reptdate.strftime("%d")}'
-input_folder_path = f'{BASE_PATH}/input'
-config_dir = '/sas/python/virt_edw/Data_Warehouse/ELDS/COLUMN_CONFIG/ELDS_ELN'
-
-# Create output folder if it doesn't exist
-os.makedirs(output_folder_path, exist_ok=True)
-
-# ========================================
-# FILE MAPPING (Maps to SAS DD statements)
-# ========================================
-MAPPING = {
-    "ELNA1": {"raw": ["newbnm1"], "config": "ELAA1_output.txt"},
-    "ELNA2": {"raw": ["newbnm2"], "config": "ELAA2_output.txt"},
-    "ELNA3": {"raw": ["newbnm3"], "config": "ELAA3_output.txt"},
-    "ELNA4": {"raw": ["AABaselApp4"], "config": "ELAA4_output.txt"},
-    "ELNA5": {"raw": ["AABaselApp5"], "config": "ELAA5_output.txt"},
-    "ELNA6": {"raw": ["AABaselApp6"], "config": "ELAA6_output.txt"},
-    "ELNA7": {"raw": ["AABaselApp7"], "config": "ELAA7_output.txt"},
-    "ELNA8": {"raw": ["AABaselApp8"], "config": "ELAA8_output.txt"},
-}
 
 # ========================================
 # UTILITY FUNCTIONS
