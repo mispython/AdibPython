@@ -293,3 +293,35 @@ print(f"  SUMM1.parquet: {ELDS_SUMM1.height:,} rows")
 print(f"  SUMM2.parquet: {ELDS_SUMM2.height:,} rows")
 print("="*70)
 print("✓ All files processed successfully")
+
+
+
+
+
+
+======================================================================
+ELDS BNM Summary Processing - 2025-10-15
+======================================================================
+
+======================================================================
+PROCESSING SUMM1 (Loan Applications)
+======================================================================
+
+Reading bnmsummary1_20251015.csv...
+✓ CSV loaded: 1,726 rows
+  📊 bnmsummary1_csv: Control count = 1724
+  📊 bnmsummary1_csv: Actual data rows = 1724
+  ✓ Record count matches control (1724)
+
+Reading intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat...
+✓ SAS7BDAT loaded: 4,550 rows
+  ℹ No control count found in bnmsummary1_ehp, proceeding without checks.
+
+Combining CSV + EHP sources...
+✓ Combined: 6,275 rows
+
+Appending previous day data...
+✗ ABORT: Previous day file not found
+  Required: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output/year=2025/month=10/day=14/SUMM1.parquet
+  Date: 2025-10-14
+  Cumulative dataset requires previous day's data
