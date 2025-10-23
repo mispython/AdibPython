@@ -179,3 +179,38 @@ SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 duckdb.sql(f"""
     COPY (SELECT * FROM SUMM2) TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
 """)
+
+
+
+
+
+ Table A is for rerun purpose handling, can ignore in python as the program will recreate the base in duckdb format 
+
+Your table B code wrong, if the prevdate base not found should aborted the program instead of create exception as dataset need to be cumulative. 
+
+table a: 
+  %MACRO PROCESS1;
+%IF %SYSFUNC(EXIST(ELDS.SUMM1&REPTYEAR&REPTMON&REPTDAY)) %THEN %DO;
+   DATA ELDS.SUMM1&REPTYEAR&REPTMON&REPTDAY;
+      SET ELDS.SUMM1&REPTYEAR&REPTMON&REPTDAY;
+      IF DATE = &RDATE THEN DELETE;
+   RUN;
+%END;
+%MEND;
+%PROCESS1;
+
+DATA ELDS.SUMM1&REPTYEAR&REPTMON&REPTDAY;
+   SET PELDS.SUMM1&REPTYEAR1&REPTMON1&REPTDAY1 SUMM1;
+RUN
+
+table b: 
+try:
+    query = f"""
+        SELECT * FROM read_parquet(
+            '{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet'
+        )
+    """
+    PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
+    ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
+except Exception:
+    ELDS_SUMM1 = SUMM1
