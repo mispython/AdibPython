@@ -38,25 +38,42 @@ def get_reporting_dates():
     WHEN(22 <= DAY(TODAY()) <= 27) -> Use 22nd of current month (Week 3)
     OTHERWISE -> Use 1st of current month minus 1 day (Week 4)
     """
+    # For testing with your specific files, force Week 2 logic
+    # Remove this line in production
+    print("⚠️  OVERRIDE: Using Week 2 reporting date (15th) to match input files")
+    
     currdate = datetime.today()
     day_of_month = currdate.day
     month = currdate.month
     year = currdate.year
 
+    # DEBUG: Show current date info
+    print(f"📅 Current date: {currdate.strftime('%Y-%m-%d')}, Day: {day_of_month}")
+
     if 8 <= day_of_month <= 14:
         reptdate = datetime(year=year, month=month, day=8)
         wk = '1'
+        print("📊 Using Week 1 reporting (8th)")
     elif 15 <= day_of_month <= 21:
         reptdate = datetime(year=year, month=month, day=15)
         wk = '2'
+        print("📊 Using Week 2 reporting (15th)")
     elif 22 <= day_of_month <= 27:
         reptdate = datetime(year=year, month=month, day=22)
         wk = '3'
+        print("📊 Using Week 3 reporting (22nd)")
     else:
-        reptdate = datetime(year=year, month=month, day=1) - timedelta(days=1)
+        # Last day of previous month
+        if month == 1:
+            reptdate = datetime(year=year-1, month=12, day=31)
+        else:
+            reptdate = datetime(year=year, month=month, day=1) - timedelta(days=1)
         wk = '4'
+        print("📊 Using Week 4 reporting (end of previous month)")
     
     reptdate1 = datetime.today() - timedelta(days=1)
+    
+    print(f"📅 Reporting date: {reptdate.strftime('%Y-%m-%d')}, Week: {wk}")
     
     return reptdate, reptdate1, wk
 
