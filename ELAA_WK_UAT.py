@@ -43,6 +43,13 @@ MAPPING = {
 }
 
 # ========================================
+# PATH CONFIGURATION (Define paths first)
+# ========================================
+BASE_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS'
+input_folder_path = f'{BASE_PATH}/input'
+config_dir = '/sas/python/virt_edw/Data_Warehouse/ELDS/COLUMN_CONFIG/ELDS_ELN'
+
+# ========================================
 # UTILITY FUNCTIONS
 # ========================================
 def find_latest_file(prefix):
@@ -196,6 +203,12 @@ batch_dt_str = reptdate.strftime('%Y%m%d')
 prevwkdate = reptdate - timedelta(days=7)
 prevdate = reptdate - timedelta(days=1)
 
+# Update output folder path with detected date
+output_folder_path = f'{BASE_PATH}/output/year={reptdate.strftime("%Y")}/month={reptdate.strftime("%m")}/day={reptdate.strftime("%d")}'
+
+# Create output folder if it doesn't exist
+os.makedirs(output_folder_path, exist_ok=True)
+
 print(f"""
 ╔═══════════════════════════════════════════════════════════╗
 ║           EIWELNEX - SAS TO PYTHON MIGRATION              ║
@@ -204,19 +217,10 @@ print(f"""
 ║  Expected File Date: {rdate}                               ║
 ║  Previous Week: {prevwkdate.strftime('%Y-%m-%d')}                           ║
 ║  Previous Day: {prevdate.strftime('%Y-%m-%d')}                            ║
+║  Input Path: {input_folder_path}                          ║
+║  Output Path: {output_folder_path}                        ║
 ╚═══════════════════════════════════════════════════════════╝
 """)
-
-# ========================================
-# PATH CONFIGURATION
-# ========================================
-BASE_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS'
-output_folder_path = f'{BASE_PATH}/output/year={reptdate.strftime("%Y")}/month={reptdate.strftime("%m")}/day={reptdate.strftime("%d")}'
-input_folder_path = f'{BASE_PATH}/input'
-config_dir = '/sas/python/virt_edw/Data_Warehouse/ELDS/COLUMN_CONFIG/ELDS_ELN'
-
-# Create output folder if it doesn't exist
-os.makedirs(output_folder_path, exist_ok=True)
 
 # ========================================
 # ADDITIONAL UTILITY FUNCTIONS
