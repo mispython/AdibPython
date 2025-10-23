@@ -905,3 +905,20 @@ if __name__ == "__main__":
         
         # Exit with error code
         sys.exit(1)
+
+
+============================================================
+📋 STEP 1: Validating Input File Dates
+============================================================
+❌ ELNA1 (newbnm1): Expected 22102025, Got 15102025
+❌ ELNA2 (newbnm2): Expected 22102025, Got 15102025
+❌ ELNA3 (newbnm3): Expected 22102025, Got 15102025
+❌ ELNA4 (AABaselApp4): Expected 22102025, Got 15102025
+❌ ELNA5 (AABaselApp5): Expected 22102025, Got 15102025
+❌ ELNA6 (AABaselApp6): Expected 22102025, Got 15102025
+❌ ELNA7 (AABaselApp7): Expected 22102025, Got 15102025
+❌ ELNA8 (AABaselApp8): Expected 22102025, Got 15102025
+
+============================================================
+❌ THE JOB IS NOT DONE!!
+❌ Input files NOT dated 22102025
