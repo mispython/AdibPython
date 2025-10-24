@@ -1,0 +1,75 @@
+//EIBWTRBL JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                      JOB33290
+/*JOBPARM S=S1M2
+//*----------------------------------------------------------------
+//* PROGRAM  : EIBWBTRD
+//* DESC     : STORE TRADE BILLS TRANSACTION DATA ON WEEKLY BASIS
+//*            UNDER BTRADE FOLDER IN SAS DATAWH
+//* DATASET  : BILLSTRANMMWYY
+//* ESMR     : 2010-3123 (AAB)
+//*----------------------------------------------------------------
+//DELETE  EXEC PGM=IEFBR14
+//DEL01   DD DSN=SAP.PBB.TRBILDWH.TRBILFTP,
+//           DISP=(MOD,DELETE,DELETE),
+//           SPACE=(CYL,(0))
+//DEL02   DD DSN=SAP.PBB.TRBILDWH,
+//           DISP=(MOD,DELETE,DELETE),
+//           SPACE=(CYL,(0))
+//*----------------------------------------------------------------
+//CREATE  EXEC PGM=IEFBR14
+//CRT01   DD DSN=SAP.PBB.TRBILDWH.TRBILFTP,
+//           DISP=(NEW,CATLG,DELETE),
+//           DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920),
+//           SPACE=(CYL,(10,10),RLSE),UNIT=(SYSDA,5)
+//*----------------------------------------------------------------
+//EIBMSMDP  EXEC SAS609
+//LOAN      DD DSN=SAP.PBB.MNILN(0),DISP=SHR
+//EXTCOMM   DD DSN=SAP.PBB.BTRADE.CRFCOMM,DISP=SHR
+//BTRADE    DD DSN=SAP.PBB.TRBILDWH,
+//             DISP=(NEW,CATLG,DELETE),
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//             SPACE=(CYL,(20,10),RLSE),UNIT=SYSDA
+//SYSIN     DD *
+
+OPTIONS YEARCUTOFF=1950 NOCENTER;
+
+DATA REPTDATE;
+   SET LOAN.REPTDATE;
+   SELECT(DAY(REPTDATE));
+      WHEN(8)   CALL SYMPUT('NOWK', PUT('1', $1.));
+      WHEN(15)  CALL SYMPUT('NOWK', PUT('2', $1.));
+      WHEN(22)  CALL SYMPUT('NOWK', PUT('3', $1.));
+      OTHERWISE CALL SYMPUT('NOWK', PUT('4', $1.));
+   END;
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+RUN;
+
+DATA BTRADE.BILLSTRAN&REPTMON&NOWK&REPTYEAR;
+  INFILE EXTCOMM FIRSTOBS=2 TRUNCOVER;
+  INPUT @001 RECTYPE      $2.
+        @003 TRANSREF     $10.
+        @021 COSTCTR      4.
+        @027 ACCTNO       $15.
+        @042 SUBACCT      $13.
+        @064 GLMNEMONIC   $5.
+        @069 LIABCODE     $3.
+        @073 TRANDATE     YYMMDD8.
+        @081 EXPRDATE     YYMMDD6.
+        @087 TRANAMT      18.
+        @105 EXCHANGE     16.
+        @121 CURRENCY     $4.
+        @125 BTREL        $13.
+        @138 RELFROM      $13.
+        @169 TRANSREFPG   $10.
+        @180 TRANAMT_CCY  18.
+        @198 TRANS_NUM    $10.
+        @208 TRANS_IND    $3.
+        @211 MNEMONIC_CD  $5.
+        @216 ACCT_INFO    $20.
+        @236 CR_DR_IND    $1.
+        @237 VOUCHER_NUM  $10.
+        ;
+RUN;
+
+FILENAME TRANFILE 'SAP.PBB.TRBILDWH.TRBILFTP' DISP=OLD;
+PROC CPORT LIBRARY=BTRADE FILE=TRANFILE; RUN;
