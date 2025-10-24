@@ -299,6 +299,38 @@ print("✓ All files processed successfully")
 
 
 
+
+
+Reading bnmsummary1_20251022.csv...
+32      if not BNMSUMM1.exists():
+33      SUMM1 = pl.read_csv(
+34          BNMSUMM1,
+35          separator=",",
+36          has_header=False,
+37          ignore_errors=True,
+38          truncate_ragged_lines=True,
+39          new_columns=[
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 134, in <module>
+    SUMM1 = pl.read_csv(
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 91, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 91, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 91, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/io/csv/functions.py", line 532, in read_csv
+    return _update_columns(df, new_columns)
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/io/csv/_utils.py", line 35, in _update_columns
+    df.columns = list(new_columns)
+  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 838, in columns
+    self._df.set_column_names(names)
+polars.exceptions.ShapeError: 39 column names provided for a DataFrame of width 1
+
+Total time elapsed : 00:00:00
+Program end : 2025/10/23 20:24:20
+
+
 ======================================================================
 ELDS BNM Summary Processing - 2025-10-15
 ======================================================================
