@@ -23,7 +23,7 @@ ELDS_DATA_PATH.mkdir(parents=True, exist_ok=True)
 # DATE VARIABLES
 # =============================================================================
 # REPTDATE = datetime.today() - timedelta(days=1)
-REPTDATE = datetime.strptime("2025-10-15 00:00:00", '%Y-%m-%d %H:%M:%S')
+REPTDATE = datetime.strptime("2025-10-22 00:00:00", '%Y-%m-%d %H:%M:%S')
 PREVDATE = REPTDATE - timedelta(days=1)
 FILE_DT = REPTDATE.strftime('%Y%m%d')
 
@@ -148,7 +148,26 @@ SUMM1 = pl.read_csv(
         "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
 )
-print(f"✓ CSV loaded: {SUMM1.height:,} rows")
+
+# import pandas as pd
+# SUMM1 = pd.read_csv(
+#     BNMSUMM1,
+#     sep=",",
+#     header=None,
+#     names=["MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
+#           "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
+#           "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
+#           "FACICODE", "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", 
+#           "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", "STATUS", "CCPT_TAG", "CIR", 
+#           "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", 
+#           "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
+#           "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"],
+#     engine="python",
+#     on_bad_lines="warn",
+#     encoding_errors="replace"
+# )
+
+print(f"✓ CSV loaded: {len(SUMM1)} rows")
 
 SUMM1 = apply_sas_eof_check(SUMM1, "bnmsummary1_csv")
 
@@ -301,59 +320,35 @@ print("✓ All files processed successfully")
 
 
 
-Reading bnmsummary1_20251022.csv...
-32      if not BNMSUMM1.exists():
-33      SUMM1 = pl.read_csv(
-34          BNMSUMM1,
-35          separator=",",
-36          has_header=False,
-37          ignore_errors=True,
-38          truncate_ragged_lines=True,
-39          new_columns=[
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/ELN_BNMSUMM_UAT2.py", line 134, in <module>
-    SUMM1 = pl.read_csv(
-  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 91, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 91, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 91, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/io/csv/functions.py", line 532, in read_csv
-    return _update_columns(df, new_columns)
-  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/io/csv/_utils.py", line 35, in _update_columns
-    df.columns = list(new_columns)
-  File "/sas/python/virt_edw/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 838, in columns
-    self._df.set_column_names(names)
-polars.exceptions.ShapeError: 39 column names provided for a DataFrame of width 1
-
-Total time elapsed : 00:00:00
-Program end : 2025/10/23 20:24:20
 
 
-======================================================================
-ELDS BNM Summary Processing - 2025-10-15
-======================================================================
 
-======================================================================
-PROCESSING SUMM1 (Loan Applications)
-======================================================================
 
-Reading bnmsummary1_20251015.csv...
-✓ CSV loaded: 1,726 rows
-  📊 bnmsummary1_csv: Control count = 1724
-  📊 bnmsummary1_csv: Actual data rows = 1724
-  ✓ Record count matches control (1724)
 
-Reading intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat...
-✓ SAS7BDAT loaded: 4,550 rows
-  ℹ No control count found in bnmsummary1_ehp, proceeding without checks.
 
-Combining CSV + EHP sources...
-✓ Combined: 6,275 rows
 
-Appending previous day data...
-✗ ABORT: Previous day file not found
-  Required: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output/year=2025/month=10/day=14/SUMM1.parquet
-  Date: 2025-10-14
-  Cumulative dataset requires previous day's data
+
+2 items to fix : 
+
+1) New dataset having additional row for FH20251022
+
+
+CTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN"> 
+                                                       The COMPARE Procedure                                                        
+                                                Comparison of WORK.NEW with WORK.OLD                                                
+                                                           (Method=EXACT)                                                           
+                                                                                                                                    
+                                                         Data Set Summary                                                           
+                                                                                                                                    
+                                     Dataset            Created          Modified  NVar    NObs                                     
+                                                                                                                                    
+                                     WORK.NEW  27OCT25:11:59:06  27OCT25:11:59:06    62    9682                                     
+                                     WORK.OLD  27OCT25:11:59:13  27OCT25:11:59:13    38    9681                                     
+                                                                                                                                    
+                                                                                                                                    
+                                                         Variables Summary                                                          
+                                                                                                                                    
+                                      Number of Variables in Common: 38.                                                            
+                                      Number of Variables in WORK.NEW but not in WORK.OLD: 24.                                      
+                                      Number of Variables with Conflicting Types: 3.                                                
+                                      Number of Variables with Differing Attributes: 18.
