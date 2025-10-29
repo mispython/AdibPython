@@ -1,0 +1,10 @@
+Add-on remarks on migration exercise:
+
+	i)	New dataset structure/format (python generated) should remain unchanged as per current production with exception to justifiable changes/variances 
+
+	ii)	Non-issue for leading zeroes for some and utmost important for selected columns
+
+		ie. Location of Loan Utilisation is meant for State Code / Postal Code. Date value should valid and leading zero is critical to avoid BNM rejection for SDIS/B2B submission
+
+
+		
