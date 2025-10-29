@@ -1,0 +1,94 @@
+import duckdb
+import polars as pl
+from pathlib import Path
+
+# PROCESS REPTDATE FROM DEPOSIT.REPTDATE
+REPTDATE_DF = duckdb.connect().execute("SELECT * FROM READ_PARQUET('DEPOSIT/REPTDATE.PARQUET')").pl()
+REPTDATE = REPTDATE_DF["REPTDATE"][0]
+
+DAY = REPTDATE.day
+if DAY == 8:
+    NOWK = '1'
+elif DAY == 15:
+    NOWK = '2'
+elif DAY == 22:
+    NOWK = '3'
+else:
+    NOWK = '4'
+
+REPTDT = REPTDATE.strftime("%d%m%y")
+REPTMON = f"{REPTDATE.month:02d}"
+
+# EXECUTE EXTERNAL PROGRAMS (SIMULATED)
+# %INC PGM(DALWPBBD);
+# %INC PGM(FALWPBBD);
+
+# LOAD AND COMBINE DATA FROM MULTIPLE SOURCES
+SAVG_DF = duckdb.connect().execute(f"SELECT * FROM READ_PARQUET('BNM/SAVG{REPTMON}{NOWK}.PARQUET')").pl()
+CURN_DF = duckdb.connect().execute(f"SELECT * FROM READ_PARQUET('BNM/CURN{REPTMON}{NOWK}.PARQUET')").pl()
+FDWKLY_DF = duckdb.connect().execute(f"SELECT * FROM READ_PARQUET('BNM/FDWKLY.PARQUET')").pl().rename({
+    "INTPAY": "INTPAYBL",
+    "CUSTCODE": "CUSTCD", 
+    "BIC": "PRODCD",
+    "ACCTTYPE": "PRODUCT"
+})
+
+# COMBINE ALL DATASETS
+COMBINED_DF = pl.concat([SAVG_DF, CURN_DF, FDWKLY_DF])
+
+# FILTER DATA
+FILTERED_DF = COMBINED_DF.filter(
+    (pl.col("PRODCD").is_in(['42132','42199'])) &
+    (pl.col("CUSTCD").is_in(['80','81','82','83','84','85','86','87','88','89',
+                           '90','91','92','95','96','98','99'])) &
+    (pl.col("INTPAYBL").is_not_null()) &
+    (pl.col("INTPAYBL") != 0) &
+    (pl.col("INTPAYBL") != 0.0)
+)
+
+# ADD BNMCODE COLUMN
+PROCESSED_DF = FILTERED_DF.with_columns(
+    pl.lit('4929980000000Y').alias('BNMCODE')
+)
+
+# CALCULATE TOTAL INTPAYBL
+TOTAL_INTPAYBL = PROCESSED_DF["INTPAYBL"].sum()
+
+# CREATE OUTPUT DIRECTORY
+Path("OUTPUT/REPORTS").mkdir(parents=True, exist_ok=True)
+
+# WRITE DETAILED CSV REPORT
+with open(f"OUTPUT/REPORTS/ISLAMIC_NON_RESIDENT_LIABILITIES_DETAIL_{REPTMON}{NOWK}_{REPTDT}.CSV", "w") as f:
+    # WRITE HEADERS
+    f.write("PUBLIC ISLAMIC BANK BERHAD\n")
+    f.write("DETAIL TRANSACTIONS ON OTHER RM MISCELLANEOUS LIABILITIES TO NON-RESIDENTS\n")
+    f.write("\n")
+    f.write("Obs|BNMCODE|CUSTCD|PRODCD|BRANCH|ACCTNO|NAME|PRODUCT|INTPAYBL\n")
+    
+    # WRITE DATA ROWS
+    for idx, row in enumerate(PROCESSED_DF.iter_rows(named=True), 1):
+        f.write(f"{idx}|{row['BNMCODE']}|{row['CUSTCD']}|{row['PRODCD']}|{row['BRANCH']}|")
+        f.write(f"{row['ACCTNO']}|{row['NAME']}|{row['PRODUCT']}|{row['INTPAYBL']:.4f}\n")
+    
+    # WRITE TOTAL ROW
+    f.write(f"|TOTAL|||||||{TOTAL_INTPAYBL:.4f}|\n")
+
+# WRITE PARQUET FILES
+PROCESSED_DF.write_parquet(f"OUTPUT/REPORTS/ISLAMIC_NON_RESIDENT_LIABILITIES_DETAIL_{REPTMON}{NOWK}_{REPTDT}.PARQUET")
+
+# CREATE SUMMARY DATASET WITH TOTAL
+SUMMARY_DF = pl.DataFrame({
+    "REPORT_TYPE": ["DETAILED_TRANSACTIONS"],
+    "BNMCODE": ["4929980000000Y"],
+    "TOTAL_INTPAYBL": [TOTAL_INTPAYBL],
+    "RECORD_COUNT": [len(PROCESSED_DF)],
+    "REPORTING_PERIOD": [f"{REPTMON}{NOWK}_{REPTDT}"]
+})
+
+SUMMARY_DF.write_parquet(f"OUTPUT/REPORTS/ISLAMIC_NON_RESIDENT_LIABILITIES_SUMMARY_{REPTMON}{NOWK}_{REPTDT}.PARQUET")
+SUMMARY_DF.write_csv(f"OUTPUT/REPORTS/ISLAMIC_NON_RESIDENT_LIABILITIES_SUMMARY_{REPTMON}{NOWK}_{REPTDT}.CSV")
+
+print(f"ISLAMIC NON-RESIDENT LIABILITIES REPORT COMPLETED")
+print(f"REPORTING PERIOD: {REPTMON}{NOWK}_{REPTDT}")
+print(f"TOTAL RECORDS: {len(PROCESSED_DF)}")
+print(f"TOTAL INTPAYBL: {TOTAL_INTPAYBL:.4f}")
