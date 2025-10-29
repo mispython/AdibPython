@@ -6,58 +6,96 @@
                                                                                                                                     
                                   Dataset             Created          Modified  NVar         NObs                                  
                                                                                                                                     
-                                  WORK.NEW   29OCT25:16:43:58  29OCT25:16:43:58    44     11193454                                  
-                                  WORK.PROD  29OCT25:16:44:14  29OCT25:16:44:14    41     11193454                                  
+                                  WORK.NEW   29OCT25:16:53:08  29OCT25:16:53:08    43     14737478                                  
+                                  WORK.PROD  29OCT25:16:53:29  29OCT25:16:53:29    38     14737478                                  
                                                                                                                                     
                                                                                                                                     
                                                          Variables Summary                                                          
                                                                                                                                     
-                                      Number of Variables in Common: 41.                                                            
-                                      Number of Variables in WORK.NEW but not in WORK.PROD: 3.                                      
-                                      Number of Variables with Conflicting Types: 11.                                               
-                                      Number of Variables with Differing Attributes: 16.        
-
+                                      Number of Variables in Common: 38.                                                            
+                                      Number of Variables in WORK.NEW but not in WORK.PROD: 5.                                      
+                                      Number of Variables with Conflicting Types: 3.                                                
+                                      Number of Variables with Differing Attributes: 12.                                            
 
 
                                                                                                                                     
                                                                                                                                     
                                          Listing of Common Variables with Conflicting Types                                         
                                                                                                                                     
-                                              Variable         Dataset    Type  Length                                              
+                                               Variable       Dataset    Type  Length                                               
                                                                                                                                     
-                                              ACCTNO           WORK.NEW   Char      12                                              
-                                                               WORK.PROD  Num        8                                              
-                                              AMOUNT           WORK.NEW   Char      18                                              
-                                                               WORK.PROD  Num        8                                              
-                                              AMTAPPLY         WORK.NEW   Char      18                                              
-                                                               WORK.PROD  Num        8                                              
-                                              ASSET_PURCH_AMT  WORK.NEW   Char      12                                              
-                                                               WORK.PROD  Num        8                                              
-                                              CIR              WORK.NEW   Char      20                                              
-                                                               WORK.PROD  Num        8                                              
-                                              DATE             WORK.NEW   Char       7                                              
-                                                               WORK.PROD  Num        8                                              
-                                              DSRISS3          WORK.NEW   Char      20                                              
-                                                               WORK.PROD  Num        8                                              
-                                              EIR              WORK.NEW   Char      21                                              
-                                                               WORK.PROD  Num        8                                              
-                                              FACICODE         WORK.NEW   Char       7                                              
-                                                               WORK.PROD  Num        8                                              
-                                              PURPOSE_LOAN     WORK.NEW   Char       6                                              
-                                                               WORK.PROD  Num        8                                              
-                                              SPECIALFUND      WORK.NEW   Char       4                                              
-                                                               WORK.PROD  Num        8                                              
+                                               ANNSUBTSALARY  WORK.NEW   Char      20                                               
+                                                              WORK.PROD  Num        8                                               
+                                               DATE           WORK.NEW   Char       7                                               
+                                                              WORK.PROD  Num        8                                               
+                                               ENTITY_TYPE    WORK.NEW   Char       4                                               
+                                                              WORK.PROD  Num        8                                               
                                                                                                                                     
                                                                                                                                     
                                        Listing of Common Variables with Differing Attributes                                        
                                                                                                                                     
-                                            Variable             Dataset    Type  Length                                            
+                                           Variable              Dataset    Type  Length                                            
                                                                                                                                     
-                                            AANO                 WORK.NEW   Char      26                                            
-                                                                 WORK.PROD  Char      15                                            
-                                            APPKEY               WORK.NEW   Char       9                                            
+                                           ANNUAL_TURNOVER       WORK.NEW   Char      15                                            
+                                                                 WORK.PROD  Char      20                                            
+                                           APPLICATION           WORK.NEW   Char       4                                            
                                                                  WORK.PROD  Char      10                                            
+                                           CISNUMBER             WORK.NEW   Char      11                                            
+                                                                 WORK.PROD  Char      20                                            
+                                           CORP_STATUS_CD        WORK.NEW   Char       1                                            
+                                                                 WORK.PROD  Char       2                                            
+                                           COUNTRY_CD            WORK.NEW   Char       2                                            
+                                                                 WORK.PROD  Char       3                                            
+                                           DTCOMPLETE            WORK.NEW   Char      18                                            
+                                                                 WORK.PROD  Char      25                                            
+                                           ENTKEY                WORK.NEW   Char      11                                            
+                                                                 WORK.PROD  Char      20                                            
+                                           EREQNO                WORK.NEW   Char      13                                            
+                                                                 WORK.PROD  Char      15                                            
+                                           ICPP                  WORK.NEW   Char      18                                            
+                                                                 WORK.PROD  Char      30                                            
+                                           IDNO                  WORK.NEW   Char      17                                            
+                                                                 WORK.PROD  Char      30                                            
 
+
+                                                                                                                                    
+                                                                                                                                    
+                                         Listing of Common Variables with Conflicting Types                                         
+                                                                                                                                    
+                                               Variable       Dataset    Type  Length                                               
+                                                                                                                                    
+                                               ANNSUBTSALARY  WORK.NEW   Char      20                                               
+                                                              WORK.PROD  Num        8                                               
+                                               DATE           WORK.NEW   Char       7                                               
+                                                              WORK.PROD  Num        8                                               
+                                               ENTITY_TYPE    WORK.NEW   Char       4                                               
+                                                              WORK.PROD  Num        8                                               
+                                                                                                                                    
+                                                                                                                                    
+                                       Listing of Common Variables with Differing Attributes                                        
+                                                                                                                                    
+                                           Variable              Dataset    Type  Length                                            
+                                                                                                                                    
+                                           ANNUAL_TURNOVER       WORK.NEW   Char      15                                            
+                                                                 WORK.PROD  Char      20                                            
+                                           APPLICATION           WORK.NEW   Char       4                                            
+                                                                 WORK.PROD  Char      10                                            
+                                           CISNUMBER             WORK.NEW   Char      11                                            
+                                                                 WORK.PROD  Char      20                                            
+                                           CORP_STATUS_CD        WORK.NEW   Char       1                                            
+                                                                 WORK.PROD  Char       2                                            
+                                           COUNTRY_CD            WORK.NEW   Char       2                                            
+                                                                 WORK.PROD  Char       3                                            
+                                           DTCOMPLETE            WORK.NEW   Char      18                                            
+                                                                 WORK.PROD  Char      25                                            
+                                           ENTKEY                WORK.NEW   Char      11                                            
+                                                                 WORK.PROD  Char      20                                            
+                                           EREQNO                WORK.NEW   Char      13                                            
+                                                                 WORK.PROD  Char      15                                            
+                                           ICPP                  WORK.NEW   Char      18                                            
+                                                                 WORK.PROD  Char      30                                            
+                                           IDNO                  WORK.NEW   Char      17                                            
+                                                                 WORK.PROD  Char      30                                            
 
 
                                                        The COMPARE Procedure                                                        
@@ -66,36 +104,13 @@
                                                                                                                                     
                                        Listing of Common Variables with Differing Attributes                                        
                                                                                                                                     
-                                            Variable             Dataset    Type  Length                                            
+                                           Variable              Dataset    Type  Length                                            
                                                                                                                                     
-                                            APPLICATION          WORK.NEW   Char       4                                            
+                                           INDUSTRIAL_SECTOR_CD  WORK.NEW   Char       6                                            
                                                                  WORK.PROD  Char      10                                            
-                                            APPTYPE              WORK.NEW   Char       5                                            
-                                                                 WORK.PROD  Char       1                                            
-                                            CCPT_TAG             WORK.NEW   Char       3                                            
+                                           SMESIZE               WORK.NEW   Char       3                                            
                                                                  WORK.PROD  Char       5                                            
-                                            DTCOMPLETE           WORK.NEW   Char      22                                            
-                                                                 WORK.PROD  Char      25                                            
-                                            EREQNO               WORK.NEW   Char      13                                            
-                                                                 WORK.PROD  Char      15                                            
-                                            FIN_CONCEPT          WORK.NEW   Char       2                                            
-                                                                 WORK.PROD  Char       3                                            
-                                            LN_UTILISE_LOCAT_CD  WORK.NEW   Char       5                                            
-                                                                 WORK.PROD  Char      10                                            
-                                            LU_ADD4              WORK.NEW   Char      33                                            
-                                                                 WORK.PROD  Char      40                                            
-                                            LU_SOURCE            WORK.NEW   Char       4                                            
-                                                                 WORK.PROD  Char       5                                            
-                                            LU_TOWN_CITY         WORK.NEW   Char      23                                            
-                                                                 WORK.PROD  Char      20                                            
-                                            MAANO                WORK.NEW   Char      13                                            
-                                                                 WORK.PROD  Char      15                                            
-                                            PRICING_TYPE         WORK.NEW   Char       2                                            
-                                                                 WORK.PROD  Char       5                                            
-                                            PRIORITY_SECTOR      WORK.NEW   Char       1                                            
-                                                                 WORK.PROD  Char       2                                            
-                                            PROP_STATUS          WORK.NEW   Char       4                                            
-                                                                 WORK.PROD  Char       5                              
+
 
                                                                                                                                     
                                                                                                                                     
@@ -104,43 +119,33 @@
                                             Observation                Base      Compare                                            
                                                                                                                                     
                                             First Obs                     1            1                                            
-                                            First Unequal              8389         8389                                            
-                                            Last  Unequal          11187884     11187884                                            
-                                            Last  Obs              11193454     11193454                                            
+                                            First Unequal             12448        12448                                            
+                                            Last  Unequal          14728976     14728976                                            
+                                            Last  Obs              14737478     14737478                                            
                                                                                                                                     
-                                Number of Observations in Common: 11193454.                                                         
-                                Total Number of Observations Read from WORK.NEW: 11193454.                                          
-                                Total Number of Observations Read from WORK.PROD: 11193454.                                         
+                                Number of Observations in Common: 14737478.                                                         
+                                Total Number of Observations Read from WORK.NEW: 14737478.                                          
+                                Total Number of Observations Read from WORK.PROD: 14737478.                                         
                                                                                                                                     
-                                Number of Observations with Some Compared Variables Unequal: 6405.                                  
-                                Number of Observations with All Compared Variables Equal: 11187049.                                 
-
-
-                                                       The COMPARE Procedure                                                        
-                                               Comparison of WORK.NEW with WORK.PROD                                                
-                                                           (Method=EXACT)                                                           
+                                Number of Observations with Some Compared Variables Unequal: 3099.                                  
+                                Number of Observations with All Compared Variables Equal: 14734379.                                 
+                                                                                                                                    
                                                                                                                                     
                                                      Values Comparison Summary                                                      
                                                                                                                                     
-                                  Number of Variables Compared with All Observations Equal: 24.                                     
-                                  Number of Variables Compared with Some Observations Unequal: 6.                                   
-                                  Number of Variables with Missing Value Differences: 1.                                            
-                                  Total Number of Values which Compare Unequal: 6841.                                               
+                                  Number of Variables Compared with All Observations Equal: 31.                                     
+                                  Number of Variables Compared with Some Observations Unequal: 4.                                   
+                                  Total Number of Values which Compare Unequal: 7815.                                               
                                                                                                                                     
                                                                                                                                     
                                                    Variables with Unequal Values                                                    
                                                                                                                                     
-                                   Variable             Type  Len1 Len2        Ndif   MaxDif  MissDif                               
+                                       Variable              Type  Len1 Len2        Ndif   MaxDif                                   
                                                                                                                                     
-                                   AANO                 CHAR    26   15          65                 0                               
-                                   APPTYPE              CHAR     5    1        5354                 0                               
-                                   LN_UTILISE_LOCAT_CD  CHAR     5   10         318                 1                               
-                                   LU_POSTCODE          CHAR     5    5          64                 0                               
-                                   LU_STATE_CD          CHAR     2    2        1029                 0                               
-                                   LU_TOWN_CITY         CHAR    23   20          11                 0                               
-
-
-                                                                                                                                    
+                                       CUSTOMER_CODE         CHAR     5    5        3034                                            
+                                       ENTKEY                CHAR    11   20        3097                                            
+                                       POSTCODE              CHAR     5    5         145                                            
+                                       STATE_CD              CHAR     2    2        1539                                            
                                                                                                                                     
                                                        The COMPARE Procedure                                                        
                                                Comparison of WORK.NEW with WORK.PROD                                                
@@ -150,112 +155,54 @@
                                                                                                                                     
                                      ______________________________________________________________                                 
                                                     ||  Base Value           Compare Value                                          
-                                                Obs ||  LN_UTILISE_LOCAT_CD   LN_UTILISE_LOCAT_CD                                   
-                                      ____________  ||  _____                 __________                                            
-                                                    ||                                                                              
-                                             18139  ||  4                     04                                                    
-                                             45349  ||  6500                  06500                                                 
-                                             55907  ||  7                     07                                                    
-                                             67681  ||  7                     07                                                    
-                                             90814  ||  8                     08                                                    
-                                            116323  ||  7                     07                                                    
-                                            116358  ||  7                     07                                                    
-                                            116785  ||  7                     07                                                    
-                                            116873  ||  7                     07                                                    
-                                            143972  ||  4                     04                                                    
-                                            144670  ||  4                     04                                                    
-                                            184068  ||  6                     06                                                    
-                                            187462  ||  6                     06                                                    
-                                            187835  ||  6                     06                                                    
-                                            187944  ||  6                     06                                                    
-                                            197512  ||  8                     08                                                    
-                                            203950  ||  8                     08                                                    
-                                            203951  ||  8                     08                                                    
-                                            204054  ||  8                     08                                                    
-                                            204241  ||  8                     08                                                    
-                                            244828  ||  5                     05                                                    
-                                            265461  ||  1                     01                                                    
-                                            269737  ||  1                     01                                                    
-                                            330086  ||  9000                  09000                                                 
-                                            331956  ||  9000                  09000                                                 
-                                            334092  ||  7                     07                                                    
-                                            334707  ||  7                     07                                                    
-                                            335469  ||  9000                  09000                                                 
-                                            348381  ||  2                     02                                                    
-                                            348390  ||  7                     07                                                    
-                                            348461  ||  7                     07                                                    
-                                            348462  ||  7                     07                                                    
-                                            392269  ||  1                     01                                                    
-                                            409723  ||  1                     01                                                    
-                                            409725  ||  1                     01                                                    
-                                            410117  ||  1                     01                                                    
-                                            411127  ||  1                     01                                                    
-                                            426426  ||  1                     01                                                    
-                                            459305  ||  8000                  08000                                                 
-                                            459380  ||  8                     08                                                    
-                                            459427  ||  2                     02                                                    
-                                            459430  ||  9400                  09400                                                 
-                                            508559  ||  8                     08                                                    
-                                            526984  ||  6                     06                                                    
-                                            610884  ||  2                     02                                                    
-
-
-                                                       The COMPARE Procedure                                                        
-                                               Comparison of WORK.NEW with WORK.PROD                                                
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                               Value Comparison Results for Variables                                               
-                                                                                                                                    
-                                     ______________________________________________________________                                 
-                                                    ||  Base Value           Compare Value                                          
-                                                Obs ||  LN_UTILISE_LOCAT_CD   LN_UTILISE_LOCAT_CD                                   
-                                      ____________  ||  _____                 __________                                            
-                                                    ||                                                                              
-                                            635258  ||  1                     01                                                    
-                                            649125  ||  2                     02                                                    
-                                            649178  ||  2                     02                                                    
-                                            649210  ||  6010                  06010                                                 
-                                            649277  ||  8000                  08000                                                 
-                                                                                                                                    
-NOTE: The MAXPRINT=50 printing limit has been reached for the variable LN_UTILISE_LOCAT_CD. No more values will be printed for this 
-      comparison.                                                                                                                   
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     ______________________________________________________________                                 
-                                                    ||  Base Value           Compare Value                                          
-                                                Obs ||  LU_POSTCODE           LU_POSTCODE                                           
+                                                Obs ||  CUSTOMER_CODE         CUSTOMER_CODE                                         
                                       ____________  ||  _____                 _____                                                 
                                                     ||                                                                              
-                                             45349  ||  6500                  06500                                                 
-                                            330086  ||  9000                  09000                                                 
-                                            331956  ||  9000                  09000                                                 
-                                            335469  ||  9000                  09000                                                 
-                                            348381  ||  8000                  08000                                                 
-                                            459305  ||  8000                  08000                                                 
-                                            459427  ||  9400                  09400                                                 
-                                            459430  ||  9400                  09400                                                 
-                                            610884  ||  6000                  06000                                                 
-                                            649125  ||  6150                  06150                                                 
-                                            649178  ||  5400                  05400                                                 
-                                            649210  ||  6010                  06010                                                 
-                                            649277  ||  8000                  08000                                                 
-                                            649278  ||  8000                  08000                                                 
-                                            772458  ||  8000                  08000                                                 
-                                            787422  ||  6000                  06000                                                 
-                                           8399291  ||  8400                  08400                                                 
-                                           8399364  ||  2400                  02400                                                 
-                                           8399444  ||  6000                  06000                                                 
-                                           8399492  ||  8000                  08000                                                 
-                                           8399530  ||  8000                  08000                                                 
-                                           8399585  ||  8000                  08000                                                 
-                                           8399588  ||  2600                  02600                                                 
-                                           8399592  ||  9000                  09000                                                 
-                                           8419295  ||  5150                  05150                                                 
-                                           8419298  ||  5150                  05150                                                 
-                                           8419301  ||  5150                  05150                                                 
-                                           8419706  ||  8000                  08000                                                 
-                                           8426974  ||  9600                  09600                                                 
+                                             12448  ||  77                    0077                                                  
+                                             16706  ||  78                    0078                                                  
+                                             17395  ||  78                    0078                                                  
+                                             19349  ||  78                    0078                                                  
+                                             19709  ||  77                    0077                                                  
+                                             21768  ||  78                    0078                                                  
+                                             22177  ||  78                    0078                                                  
+                                             22719  ||  78                    0078                                                  
+                                             24261  ||  78                    0078                                                  
+                                             25712  ||  77                    0077                                                  
+                                             25713  ||  78                    0078                                                  
+                                             25868  ||  77                    0077                                                  
+                                             25869  ||  95                    0095                                                  
+                                             26449  ||  78                    0078                                                  
+                                             26491  ||  78                    0078                                                  
+                                             26540  ||  78                    0078                                                  
+                                             26596  ||  78                    0078                                                  
+                                             26597  ||  78                    0078                                                  
+                                             26639  ||  78                    0078                                                  
+                                             26640  ||  78                    0078                                                  
+                                             26653  ||  78                    0078                                                  
+                                             26654  ||  78                    0078                                                  
+                                             44346  ||  96                    0096                                                  
+                                             44347  ||  78                    0078                                                  
+                                             44348  ||  67                    0067                                                  
+                                             44435  ||  78                    0078                                                  
+                                             44791  ||  78                    0078                                                  
+                                             44886  ||  78                    0078                                                  
+                                             44887  ||  78                    0078                                                  
+                                             44922  ||  78                    0078                                                  
+                                             44923  ||  78                    0078                                                  
+                                             65672  ||  78                    0078                                                  
+                                             71198  ||  78                    0078                                                  
+                                             76807  ||  78                    0078                                                  
+                                             76809  ||  78                    0078                                                  
+                                             79922  ||  78                    0078                                                  
+                                             80101  ||  78                    0078                                                  
+                                             80674  ||  78                    0078                                                  
+                                             80829  ||  78                    0078                                                  
+                                             80830  ||  78                    0078                                                  
+                                             80940  ||  78                    0078                                                  
+                                             80941  ||  78                    0078                                                  
+                                             81033  ||  78                    0078                                                  
+                                             81034  ||  78                    0078                                                  
+                                             94834  ||  95                    0095                                                  
 
 
                                                        The COMPARE Procedure                                                        
@@ -266,56 +213,54 @@ NOTE: The MAXPRINT=50 printing limit has been reached for the variable LN_UTILIS
                                                                                                                                     
                                      ______________________________________________________________                                 
                                                     ||  Base Value           Compare Value                                          
-                                                Obs ||  LU_POSTCODE           LU_POSTCODE                                           
+                                                Obs ||  CUSTOMER_CODE         CUSTOMER_CODE                                         
                                       ____________  ||  _____                 _____                                                 
                                                     ||                                                                              
-                                           8563918  ||  0                     00000                                                 
-                                           8605698  ||  6750                  06750                                                 
-                                           8693480  ||  9400                  09400                                                 
-                                           8695924  ||  8100                  08100                                                 
-                                           8871239  ||  6000                  06000                                                 
-                                           9022228  ||  2600                  02600                                                 
-                                           9022745  ||  1000                  01000                                                 
-                                           9022898  ||  1000                  01000                                                 
-                                           9023185  ||  2100                  02100                                                 
-                                           9023266  ||  2600                  02600                                                 
-                                           9023766  ||  2800                  02800                                                 
-                                           9084263  ||  8010                  08010                                                 
-                                           9084266  ||  8010                  08010                                                 
-                                           9084269  ||  8010                  08010                                                 
-                                           9084272  ||  8010                  08010                                                 
-                                           9333768  ||  9000                  09000                                                 
-                                           9333772  ||  9000                  09000                                                 
-                                           9632156  ||  9600                  09600                                                 
-                                           9785330  ||  7000                  07000                                                 
-                                           9787116  ||  7000                  07000                                                 
-                                           9787118  ||  7000                  07000                                                 
+                                             94836  ||  78                    0078                                                  
+                                             97502  ||  77                    0077                                                  
+                                             97823  ||  78                    0078                                                  
+                                             98299  ||  62                    0062                                                  
+                                             98458  ||  78                    0078                                                  
                                                                                                                                     
-NOTE: The MAXPRINT=50 printing limit has been reached for the variable LU_POSTCODE. No more values will be printed for this         
+NOTE: The MAXPRINT=50 printing limit has been reached for the variable CUSTOMER_CODE. No more values will be printed for this       
       comparison.                                                                                                                   
                                      __________________________________________________________                                     
                                                                                                                                     
                                                                                                                                     
                                      ______________________________________________________________                                 
                                                     ||  Base Value           Compare Value                                          
-                                                Obs ||  LU_STATE_CD           LU_STATE_CD                                           
-                                      ____________  ||  __                    __                                                    
+                                                Obs ||  ENTKEY                ENTKEY                                                
+                                      ____________  ||  ___________           ____________________                                  
                                                     ||                                                                              
-                                              8389  ||  4                     04                                                    
-                                             11333  ||  7                     07                                                    
-                                             11799  ||  4                     04                                                    
-                                             13145  ||  4                     04                                                    
-                                             14800  ||  4                     04                                                    
-                                             15088  ||  4                     04                                                    
-                                             15463  ||  4                     04                                                    
-                                             16525  ||  1                     01                                                    
-                                             17515  ||  4                     04                                                    
-                                             17620  ||  4                     04                                                    
-                                             18040  ||  4                     04                                                    
-                                             18069  ||  4                     04                                                    
-                                             18139  ||  4                     04                                                    
-
-
+                                             12448  ||  28319666              00028319666                                           
+                                             16706  ||  24186583              00024186583                                           
+                                             17395  ||  22597784              00022597784                                           
+                                             19349  ||  29298016              00029298016                                           
+                                             19709  ||  16972731              00016972731                                           
+                                             21768  ||  20512872              00020512872                                           
+                                             22177  ||  32660969              00032660969                                           
+                                             22719  ||  34814457              00034814457                                           
+                                             24261  ||  33291023              00033291023                                           
+                                             25712  ||  24840896              00024840896                                           
+                                             25713  ||  26742058              00026742058                                           
+                                             25868  ||  24840896              00024840896                                           
+                                             25869  ||  26742058              00026742058                                           
+                                             26449  ||  35041628              00035041628                                           
+                                             26491  ||  24475012              00024475012                                           
+                                             26540  ||  3680969               00003680969                                           
+                                             26596  ||  23458738              00023458738                                           
+                                             26597  ||  25759014              00025759014                                           
+                                             26639  ||  2110233               00002110233                                           
+                                             26640  ||  14302634              00014302634                                           
+                                             26653  ||  33537411              00033537411                                           
+                                             26654  ||  33537411              00033537411                                           
+                                             44346  ||  29913928              00029913928                                           
+                                             44347  ||  2476897               00002476897                                           
+                                             44348  ||  10900057              00010900057                                           
+                                             44435  ||  10196502              00010196502                                           
+                                             44791  ||  12679649              00012679649                                           
+                                             44886  ||  32656192              00032656192                                           
+                                             44887  ||  2111513               00002111513                                           
                                                        The COMPARE Procedure                                                        
                                                Comparison of WORK.NEW with WORK.PROD                                                
                                                            (Method=EXACT)                                                           
@@ -324,56 +269,54 @@ NOTE: The MAXPRINT=50 printing limit has been reached for the variable LU_POSTCO
                                                                                                                                     
                                      ______________________________________________________________                                 
                                                     ||  Base Value           Compare Value                                          
-                                                Obs ||  LU_POSTCODE           LU_POSTCODE                                           
+                                                Obs ||  ENTKEY                ENTKEY                                                
+                                      ____________  ||  ___________           ____________________                                  
+                                                    ||                                                                              
+                                             44922  ||  2139023               00002139023                                           
+                                             44923  ||  2031108               00002031108                                           
+                                             65672  ||  1439950               00001439950                                           
+                                             71198  ||  27054340              00027054340                                           
+                                             76807  ||  21801645              00021801645                                           
+                                             76809  ||  34441658              00034441658                                           
+                                             79922  ||  21903496              00021903496                                           
+                                             80101  ||  8880065               00008880065                                           
+                                             80674  ||  30574872              00030574872                                           
+                                             80829  ||  24862690              00024862690                                           
+                                             80830  ||  20658519              00020658519                                           
+                                             80940  ||  9905138               00009905138                                           
+                                             80941  ||  2190634               00002190634                                           
+                                             81033  ||  23473046              00023473046                                           
+                                             81034  ||  17504244              00017504244                                           
+                                             94834  ||  2120106               00002120106                                           
+                                             94836  ||  24419047              00024419047                                           
+                                             97502  ||  30127117              00030127117                                           
+                                             97823  ||  22380779              00022380779                                           
+                                             98299  ||  35287015              00035287015                                           
+                                             98458  ||  30534658              00030534658                                           
+                                                                                                                                    
+NOTE: The MAXPRINT=50 printing limit has been reached for the variable ENTKEY. No more values will be printed for this comparison.  
+                                     __________________________________________________________                                     
+                                                                                                                                    
+                                                                                                                                    
+                                     ______________________________________________________________                                 
+                                                    ||  Base Value           Compare Value                                          
+                                                Obs ||  POSTCODE              POSTCODE                                              
                                       ____________  ||  _____                 _____                                                 
                                                     ||                                                                              
-                                           8563918  ||  0                     00000                                                 
-                                           8605698  ||  6750                  06750                                                 
-                                           8693480  ||  9400                  09400                                                 
-                                           8695924  ||  8100                  08100                                                 
-                                           8871239  ||  6000                  06000                                                 
-                                           9022228  ||  2600                  02600                                                 
-                                           9022745  ||  1000                  01000                                                 
-                                           9022898  ||  1000                  01000                                                 
-                                           9023185  ||  2100                  02100                                                 
-                                           9023266  ||  2600                  02600                                                 
-                                           9023766  ||  2800                  02800                                                 
-                                           9084263  ||  8010                  08010                                                 
-                                           9084266  ||  8010                  08010                                                 
-                                           9084269  ||  8010                  08010                                                 
-                                           9084272  ||  8010                  08010                                                 
-                                           9333768  ||  9000                  09000                                                 
-                                           9333772  ||  9000                  09000                                                 
-                                           9632156  ||  9600                  09600                                                 
-                                           9785330  ||  7000                  07000                                                 
-                                           9787116  ||  7000                  07000                                                 
-                                           9787118  ||  7000                  07000                                                 
-                                                                                                                                    
-NOTE: The MAXPRINT=50 printing limit has been reached for the variable LU_POSTCODE. No more values will be printed for this         
-      comparison.                                                                                                                   
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     ______________________________________________________________                                 
-                                                    ||  Base Value           Compare Value                                          
-                                                Obs ||  LU_STATE_CD           LU_STATE_CD                                           
-                                      ____________  ||  __                    __                                                    
-                                                    ||                                                                              
-                                              8389  ||  4                     04                                                    
-                                             11333  ||  7                     07                                                    
-                                             11799  ||  4                     04                                                    
-                                             13145  ||  4                     04                                                    
-                                             14800  ||  4                     04                                                    
-                                             15088  ||  4                     04                                                    
-                                             15463  ||  4                     04                                                    
-                                             16525  ||  1                     01                                                    
-                                             17515  ||  4                     04                                                    
-                                             17620  ||  4                     04                                                    
-                                             18040  ||  4                     04                                                    
-                                             18069  ||  4                     04                                                    
-                                             18139  ||  4                     04                                                    
-
-
+                                             65672  ||  9000                  09000                                                 
+                                            132583  ||  9000                  09000                                                 
+                                            132602  ||  9000                  09000                                                 
+                                            246151  ||  0                     00000                                                 
+                                            309852  ||  0                     00000                                                 
+                                            382686  ||  0                     00000                                                 
+                                            430328  ||  0                     00000                                                 
+                                            476957  ||  9800                  09800                                                 
+                                            479624  ||  9000                  09000                                                 
+                                            484544  ||  9000                  09000                                                 
+                                            502279  ||  8000                  08000                                                 
+                                            668944  ||  8000                  08000                                                 
+                                            668945  ||  8000                  08000                                                 
+                                            669102  ||  9400                  09400                                                 
                                                        The COMPARE Procedure                                                        
                                                Comparison of WORK.NEW with WORK.PROD                                                
                                                            (Method=EXACT)                                                           
@@ -382,49 +325,64 @@ NOTE: The MAXPRINT=50 printing limit has been reached for the variable LU_POSTCO
                                                                                                                                     
                                      ______________________________________________________________                                 
                                                     ||  Base Value           Compare Value                                          
-                                                Obs ||  LU_STATE_CD           LU_STATE_CD                                           
+                                                Obs ||  POSTCODE              POSTCODE                                              
+                                      ____________  ||  _____                 _____                                                 
+                                                    ||                                                                              
+                                            669103  ||  9400                  09400                                                 
+                                            682240  ||  0                     00000                                                 
+                                            682241  ||  0                     00000                                                 
+                                            755411  ||  5400                  05400                                                 
+                                            897040  ||  6000                  06000                                                 
+                                            898380  ||  5400                  05400                                                 
+                                            950332  ||  6150                  06150                                                 
+                                            950397  ||  5400                  05400                                                 
+                                            950435  ||  6010                  06010                                                 
+                                            950525  ||  6700                  06700                                                 
+                                            950526  ||  6700                  06700                                                 
+                                           1127919  ||  8000                  08000                                                 
+                                           1127920  ||  8000                  08000                                                 
+                                           1149218  ||  6000                  06000                                                 
+                                          10501959  ||  8400                  08400                                                 
+                                          10502032  ||  2400                  02400                                                 
+                                          10502112  ||  6000                  06000                                                 
+                                          10502160  ||  8000                  08000                                                 
+                                          10502198  ||  8000                  08000                                                 
+                                          10502253  ||  8000                  08000                                                 
+                                          10502256  ||  2600                  02600                                                 
+                                          10502260  ||  9000                  09000                                                 
+                                          10532259  ||  6400                  06400                                                 
+                                          10532260  ||  6400                  06400                                                 
+                                          10532261  ||  5150                  05150                                                 
+                                          10532846  ||  8000                  08000                                                 
+                                          10542194  ||  9600                  09600                                                 
+                                          10566491  ||  0                     00000                                                 
+                                          10574095  ||  0                     00000                                                 
+                                          10753965  ||  0                     00000                                                 
+                                          10823715  ||  6700                  06700                                                 
+                                          10959219  ||  8100                  08100                                                 
+                                          11010781  ||  0                     00000                                                 
+                                          11010782  ||  0                     00000                                                 
+                                          11180482  ||  9000                  09000                                                 
+                                          11218890  ||  6000                  06000                                                 
+                                                                                                                                    
+NOTE: The MAXPRINT=50 printing limit has been reached for the variable POSTCODE. No more values will be printed for this comparison.
+                                     __________________________________________________________                                     
+                                                       The COMPARE Procedure                                                        
+                                               Comparison of WORK.NEW with WORK.PROD                                                
+                                                           (Method=EXACT)                                                           
+                                                                                                                                    
+                                               Value Comparison Results for Variables                                               
+                                                                                                                                    
+                                     ______________________________________________________________                                 
+                                                    ||  Base Value           Compare Value                                          
+                                                Obs ||  STATE_CD              STATE_CD                                              
                                       ____________  ||  __                    __                                                    
                                                     ||                                                                              
-                                             18162  ||  1                     01                                                    
-                                             18173  ||  4                     04                                                    
-                                             18174  ||  4                     04                                                    
-                                             30701  ||  6                     06                                                    
-                                             31031  ||  7                     07                                                    
-                                             45349  ||  2                     02                                                    
-                                             49236  ||  8                     08                                                    
-                                             53010  ||  8                     08                                                    
-                                             55198  ||  8                     08                                                    
-                                             55314  ||  8                     08                                                    
-                                             55722  ||  8                     08                                                    
-                                             55907  ||  7                     07                                                    
-                                             55960  ||  8                     08                                                    
-                                             65273  ||  7                     07                                                    
-                                             67135  ||  7                     07                                                    
-                                             67356  ||  7                     07                                                    
-                                             67681  ||  7                     07                                                    
-                                             67791  ||  7                     07                                                    
-                                             71742  ||  7                     07                                                    
-                                             89400  ||  7                     07                                                    
-                                             90486  ||  7                     07                                                    
-                                             90814  ||  8                     08                                                    
-                                             90916  ||  7                     07                                                    
-                                             91012  ||  7                     07                                                    
-                                             91029  ||  7                     07                                                    
-                                             91044  ||  7                     07                                                    
-                                             91073  ||  7                     07                                                    
-                                             91088  ||  7                     07                                                    
-                                             91107  ||  7                     07                                                    
-                                             91119  ||  7                     07                                                    
-                                            106302  ||  7                     07                                                    
-                                            112786  ||  7                     07                                                    
-                                            114080  ||  7                     07                                                    
-                                            114532  ||  7                     07                                                    
-                                            115101  ||  7                     07                                                    
-                                            115121  ||  7                     07                                                    
-                                            115430  ||  7                     07                                                    
+                                            132505  ||  7                     07                                                    
+                                            132545  ||  7                     07                                                    
+                                            132583  ||  2                     02                                                    
+                                            132602  ||  2                     02                                                    
+                                            132625  ||  7                     07                                                    
                                                                                                                                     
-NOTE: The MAXPRINT=50 printing limit has been reached for the variable LU_STATE_CD. No more values will be printed for this         
-      comparison.                                                                                                                   
+NOTE: The MAXPRINT=50 printing limit has been reached for the variable STATE_CD. No more values will be printed for this comparison.
                                      __________________________________________________________                                     
-
-
