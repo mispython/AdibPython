@@ -320,61 +320,24 @@ if not BNMSUMM1.exists():
     print(f"✗ ABORT: File not found: {BNMSUMM1}")
     sys.exit(1)
 
-# Read all as strings first to preserve leading zeros
+# Read CSV and strictly enforce WORK.PROD schema (41 columns only)
 try:
+    # Read the file skipping FH header
     SUMM1 = pl.read_csv(
         BNMSUMM1,
         separator=",",
         has_header=False,
         ignore_errors=True,
         truncate_ragged_lines=True,
-        infer_schema_length=0,  # All strings initially
-        new_columns=[
-            "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
-            "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
-            "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
-            "FACICODE", "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", 
-            "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", "STATUS", "CCPT_TAG", "CIR", 
-            "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", 
-            "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
-            "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
-        ]
+        infer_schema_length=0,
+        skip_rows=1  # Skip FH header line
     )
-    print(f"✓ CSV loaded: {SUMM1.height:,} rows, {SUMM1.width} columns")
-except Exception as e:
-    print(f"✗ ERROR loading CSV: {e}")
-    print(f"\nDiagnostic: Checking file structure...")
     
-    # Read first few lines to diagnose
-    with open(BNMSUMM1, 'r') as f:
-        for i, line in enumerate(f):
-            if i < 5:
-                cols = line.strip().split(',')
-                print(f"  Line {i+1}: {len(cols)} columns")
-                if i == 0:
-                    print(f"    First line: {line[:200]}")
+    print(f"  Raw CSV: {SUMM1.height:,} rows, {SUMM1.width} columns")
     
-    # Try reading without column names to see actual structure
-    print(f"\nAttempting to read without predefined columns...")
-    SUMM1 = pl.read_csv(
-        BNMSUMM1,
-        separator=",",
-        has_header=False,
-        ignore_errors=True,
-        truncate_ragged_lines=True,
-        infer_schema_length=0
-    )
-    print(f"  Actual columns in file: {SUMM1.width}")
-    print(f"  Expected columns: 39")
-    
-    if SUMM1.width != 39:
-        print(f"\n✗ ABORT: Column count mismatch!")
-        print(f"  File has {SUMM1.width} columns, expected 39")
-        print(f"  Please verify CSV file format")
-        sys.exit(1)
-    
-    # Assign column names after reading
-    expected_cols = [
+    # STRICT: Select only the first 39 columns (matching WORK.PROD input columns)
+    # The 39 columns from CSV will be mapped to 41 WORK.PROD columns (adding INDINTERIM and DATE)
+    csv_column_names = [
         "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
         "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
         "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
@@ -384,8 +347,25 @@ except Exception as e:
         "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
         "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
-    SUMM1.columns = expected_cols[:SUMM1.width]
-    print(f"✓ CSV loaded: {SUMM1.height:,} rows, {SUMM1.width} columns")
+    
+    if SUMM1.width < 39:
+        print(f"✗ ABORT: CSV has only {SUMM1.width} columns, need at least 39")
+        sys.exit(1)
+    
+    # Take only first 39 columns and discard the rest
+    SUMM1 = SUMM1.select([pl.col(f"column_{i+1}") for i in range(39)])
+    SUMM1.columns = csv_column_names
+    
+    if SUMM1.width > 39:
+        print(f"  ⚠ Discarded {SUMM1.width - 39} extra columns beyond WORK.PROD schema")
+    
+    print(f"✓ CSV loaded: {SUMM1.height:,} rows, {SUMM1.width} columns (WORK.PROD compliant)")
+    
+except Exception as e:
+    print(f"✗ ERROR loading CSV: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 
 SUMM1 = apply_sas_eof_check(SUMM1, "bnmsummary1_csv")
 
@@ -501,14 +481,34 @@ if not BNMSUMM2.exists():
     print(f"✗ ABORT: File not found: {BNMSUMM2}")
     sys.exit(1)
 
-SUMM2 = pl.read_csv(
-    BNMSUMM2,
-    separator=",",
-    has_header=False,
-    ignore_errors=True,
-    truncate_ragged_lines=True,
-    infer_schema_length=0,
-    new_columns=[
+try:
+    # First, detect actual number of columns by reading without header
+    temp_df = pl.read_csv(
+        BNMSUMM2,
+        separator=",",
+        has_header=False,
+        ignore_errors=True,
+        truncate_ragged_lines=True,
+        infer_schema_length=0,
+        skip_rows=1,  # Skip the FH header line
+        n_rows=1      # Just read one row to detect columns
+    )
+    actual_cols = temp_df.width
+    print(f"  Detected {actual_cols} columns in data rows")
+    
+    # Now read the full file
+    SUMM2 = pl.read_csv(
+        BNMSUMM2,
+        separator=",",
+        has_header=False,
+        ignore_errors=True,
+        truncate_ragged_lines=True,
+        infer_schema_length=0,
+        skip_rows=1  # Skip FH header line
+    )
+    
+    # Assign column names based on actual structure
+    expected_cols = [
         "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", 
         "APPLNAME", "COUNTRY", "DBIRTH", "ENTITY_TYPE", "CORP_STATUS_CD", 
         "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY", "GENDER", 
@@ -518,8 +518,26 @@ SUMM2 = pl.read_csv(
         "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", 
         "EREQNO", "DSRISS3", "DTCOMPLETE"
     ]
-)
-print(f"✓ CSV loaded: {SUMM2.height:,} rows")
+    
+    # If we have more columns than expected, add generic names for extras
+    if SUMM2.width > len(expected_cols):
+        for i in range(len(expected_cols), SUMM2.width):
+            expected_cols.append(f"EXTRA_COL_{i+1}")
+        print(f"  ⚠ File has {SUMM2.width - 36} extra columns beyond expected schema")
+    
+    # Assign column names
+    SUMM2.columns = expected_cols[:SUMM2.width]
+    print(f"✓ CSV loaded: {SUMM2.height:,} rows, {SUMM2.width} columns")
+    
+    # Show column names for verification
+    if SUMM2.width != 36:
+        print(f"  Column names: {SUMM2.columns}")
+        
+except Exception as e:
+    print(f"✗ ERROR loading CSV: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 
 SUMM2 = apply_sas_eof_check(SUMM2, "bnmsummary2_csv")
 
