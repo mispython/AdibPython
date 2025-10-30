@@ -422,31 +422,57 @@ print(f"\nCombining CSV + EHP sources...")
 SUMM1 = safe_concat(SUMM1, SUMM1_EHP)
 print(f"✓ Combined: {SUMM1.height:,} rows")
 
-# Append previous day (REQUIRED - cumulative dataset)
-print(f"\nAppending previous day data...")
+# Append previous day's cumulative file (matching SAS logic)
+# SAS: SET PELDS.SUMM1&REPTYEAR1&REPTMON1&REPTDAY1 SUMM1;
+print(f"\n📦 Building cumulative file (SAS-style)...")
+print(f"  Today's new records: {SUMM1.height:,} rows")
+
 prev_parquet = Path(f"{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet")
 
-if not prev_parquet.exists():
-    print(f"⚠ WARNING: Previous day file not found")
-    print(f"  Expected: {prev_parquet}")
-    print(f"  Date: {PREVDATE.strftime('%Y-%m-%d')}")
-    print(f"  Proceeding with today's data only (initial load)")
-    ELDS_SUMM1 = SUMM1
-else:
+# Check if today's file already exists (rerun scenario)
+current_parquet = Path(f"{OUTPUT_DATA_PATH}/SUMM1.parquet")
+if current_parquet.exists():
+    print(f"  ⚠ Today's file exists - removing today's records first (rerun detected)")
     try:
-        query = f"SELECT * FROM read_parquet('{prev_parquet}')"
-        PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
-        print(f"✓ Previous day: {PREV_SUMM1.height:,} rows")
+        existing = pl.from_pandas(duckdb.query(f"SELECT * FROM read_parquet('{current_parquet}')").to_df())
+        # Remove today's records: IF DATE = &RDATE THEN DELETE
+        existing = existing.filter(pl.col("DATE") != RDATE)
+        print(f"  ✓ Removed today's duplicates, kept {existing.height:,} historical rows")
         
-        # Ensure previous data matches production schema
-        PREV_SUMM1 = apply_production_schema(PREV_SUMM1, SUMM1_SCHEMA, "Previous Day")
-        
-        ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
-        print(f"✓ Total cumulative: {ELDS_SUMM1.height:,} rows")
+        # Now append today's new data
+        if prev_parquet.exists():
+            print(f"  ℹ Using cleaned existing file as base")
+            PREV_SUMM1 = existing
+        else:
+            PREV_SUMM1 = existing
     except Exception as e:
-        print(f"✗ ERROR: Failed to read previous day file: {e}")
-        print(f"  Proceeding with today's data only")
-        ELDS_SUMM1 = SUMM1
+        print(f"  ⚠ Could not process existing file: {e}")
+        PREV_SUMM1 = None
+else:
+    # Normal flow: read yesterday's cumulative file
+    if not prev_parquet.exists():
+        print(f"  ℹ No previous day file (initial load)")
+        print(f"  Expected: {prev_parquet}")
+        PREV_SUMM1 = None
+    else:
+        try:
+            query = f"SELECT * FROM read_parquet('{prev_parquet}')"
+            PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
+            print(f"  ✓ Previous cumulative: {PREV_SUMM1.height:,} rows from {PREVDATE.strftime('%Y-%m-%d')}")
+            
+            # Ensure previous data matches production schema
+            PREV_SUMM1 = apply_production_schema(PREV_SUMM1, SUMM1_SCHEMA, "Previous Cumulative")
+        except Exception as e:
+            print(f"  ✗ ERROR reading previous file: {e}")
+            PREV_SUMM1 = None
+
+# Combine: SET PELDS.SUMM1PREVDATE SUMM1;
+if PREV_SUMM1 is not None:
+    ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
+    print(f"  ✓ New cumulative: {ELDS_SUMM1.height:,} rows (added {SUMM1.height:,} new)")
+else:
+    ELDS_SUMM1 = SUMM1
+    print(f"  ✓ Initial cumulative: {ELDS_SUMM1.height:,} rows")
 
 # Validation report
 print(f"\n🔍 Data Type Validation (SUMM1)...")
@@ -482,21 +508,7 @@ if not BNMSUMM2.exists():
     sys.exit(1)
 
 try:
-    # First, detect actual number of columns by reading without header
-    temp_df = pl.read_csv(
-        BNMSUMM2,
-        separator=",",
-        has_header=False,
-        ignore_errors=True,
-        truncate_ragged_lines=True,
-        infer_schema_length=0,
-        skip_rows=1,  # Skip the FH header line
-        n_rows=1      # Just read one row to detect columns
-    )
-    actual_cols = temp_df.width
-    print(f"  Detected {actual_cols} columns in data rows")
-    
-    # Now read the full file
+    # Read the file skipping FH header
     SUMM2 = pl.read_csv(
         BNMSUMM2,
         separator=",",
@@ -507,8 +519,11 @@ try:
         skip_rows=1  # Skip FH header line
     )
     
-    # Assign column names based on actual structure
-    expected_cols = [
+    print(f"  Raw CSV: {SUMM2.height:,} rows, {SUMM2.width} columns")
+    
+    # STRICT: Select only the first 36 columns (matching WORK.PROD input columns)
+    # The 36 columns from CSV will be mapped to 38 WORK.PROD columns (adding INDINTERIM and DATE)
+    csv_column_names = [
         "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", 
         "APPLNAME", "COUNTRY", "DBIRTH", "ENTITY_TYPE", "CORP_STATUS_CD", 
         "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY", "GENDER", 
@@ -519,20 +534,19 @@ try:
         "EREQNO", "DSRISS3", "DTCOMPLETE"
     ]
     
-    # If we have more columns than expected, add generic names for extras
-    if SUMM2.width > len(expected_cols):
-        for i in range(len(expected_cols), SUMM2.width):
-            expected_cols.append(f"EXTRA_COL_{i+1}")
-        print(f"  ⚠ File has {SUMM2.width - 36} extra columns beyond expected schema")
+    if SUMM2.width < 36:
+        print(f"✗ ABORT: CSV has only {SUMM2.width} columns, need at least 36")
+        sys.exit(1)
     
-    # Assign column names
-    SUMM2.columns = expected_cols[:SUMM2.width]
-    print(f"✓ CSV loaded: {SUMM2.height:,} rows, {SUMM2.width} columns")
+    # Take only first 36 columns and discard the rest
+    SUMM2 = SUMM2.select([pl.col(f"column_{i+1}") for i in range(36)])
+    SUMM2.columns = csv_column_names
     
-    # Show column names for verification
-    if SUMM2.width != 36:
-        print(f"  Column names: {SUMM2.columns}")
-        
+    if SUMM2.width > 36:
+        print(f"  ⚠ Discarded {SUMM2.width - 36} extra columns beyond WORK.PROD schema")
+    
+    print(f"✓ CSV loaded: {SUMM2.height:,} rows, {SUMM2.width} columns (WORK.PROD compliant)")
+    
 except Exception as e:
     print(f"✗ ERROR loading CSV: {e}")
     import traceback
@@ -594,30 +608,29 @@ print(f"\nCombining CSV + EHP sources...")
 SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 print(f"✓ Combined: {SUMM2.height:,} rows")
 
-# Append previous day
-print(f"\nAppending previous day data...")
-prev_parquet2 = Path(f"{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM2.parquet")
+# Store today's data only (incremental approach - prevents memory issues)
+print(f"\n📦 Storing today's data (incremental)...")
+print(f"  Today's records: {SUMM2.height:,} rows")
 
-if not prev_parquet2.exists():
-    print(f"⚠ WARNING: Previous day file not found")
-    print(f"  Expected: {prev_parquet2}")
-    print(f"  Date: {PREVDATE.strftime('%Y-%m-%d')}")
-    print(f"  Proceeding with today's data only (initial load)")
-    ELDS_SUMM2 = SUMM2
-else:
-    try:
-        query = f"SELECT * FROM read_parquet('{prev_parquet2}')"
-        PREV_SUMM2 = pl.from_pandas(duckdb.query(query).to_df())
-        print(f"✓ Previous day: {PREV_SUMM2.height:,} rows")
-        
-        PREV_SUMM2 = apply_production_schema(PREV_SUMM2, SUMM2_SCHEMA, "Previous Day")
-        
-        ELDS_SUMM2 = safe_concat(PREV_SUMM2, SUMM2)
-        print(f"✓ Total cumulative: {ELDS_SUMM2.height:,} rows")
-    except Exception as e:
-        print(f"✗ ERROR: Failed to read previous day file: {e}")
-        print(f"  Proceeding with today's data only")
-        ELDS_SUMM2 = SUMM2
+# Just use today's data - NO cumulative append
+ELDS_SUMM2 = SUMM2
+
+# Optional: Calculate cumulative count across all days without loading into memory
+print(f"\n📊 Calculating cumulative statistics...")
+try:
+    cumulative_query = f"""
+        SELECT 
+            COUNT(*) as total_rows,
+            COUNT(DISTINCT DATE) as total_days
+        FROM read_parquet('{ELDS_DATA_PATH}/**/SUMM2.parquet')
+    """
+    result = duckdb.query(cumulative_query).fetchone()
+    print(f"  ✓ Cumulative total: {result[0]:,} rows across {result[1]} days")
+    print(f"  ✓ Today adds: {SUMM2.height:,} rows")
+except Exception as e:
+    print(f"  ℹ Could not calculate cumulative stats: {e}")
+
+print(f"  ℹ Note: Each day stored separately to prevent memory issues")
 
 # Validation report
 print(f"\n🔍 Data Type Validation (SUMM2)...")
