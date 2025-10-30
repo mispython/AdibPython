@@ -321,14 +321,60 @@ if not BNMSUMM1.exists():
     sys.exit(1)
 
 # Read all as strings first to preserve leading zeros
-SUMM1 = pl.read_csv(
-    BNMSUMM1,
-    separator=",",
-    has_header=False,
-    ignore_errors=True,
-    truncate_ragged_lines=True,
-    infer_schema_length=0,  # All strings initially
-    new_columns=[
+try:
+    SUMM1 = pl.read_csv(
+        BNMSUMM1,
+        separator=",",
+        has_header=False,
+        ignore_errors=True,
+        truncate_ragged_lines=True,
+        infer_schema_length=0,  # All strings initially
+        new_columns=[
+            "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
+            "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
+            "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
+            "FACICODE", "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", 
+            "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", "STATUS", "CCPT_TAG", "CIR", 
+            "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", 
+            "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
+            "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
+        ]
+    )
+    print(f"✓ CSV loaded: {SUMM1.height:,} rows, {SUMM1.width} columns")
+except Exception as e:
+    print(f"✗ ERROR loading CSV: {e}")
+    print(f"\nDiagnostic: Checking file structure...")
+    
+    # Read first few lines to diagnose
+    with open(BNMSUMM1, 'r') as f:
+        for i, line in enumerate(f):
+            if i < 5:
+                cols = line.strip().split(',')
+                print(f"  Line {i+1}: {len(cols)} columns")
+                if i == 0:
+                    print(f"    First line: {line[:200]}")
+    
+    # Try reading without column names to see actual structure
+    print(f"\nAttempting to read without predefined columns...")
+    SUMM1 = pl.read_csv(
+        BNMSUMM1,
+        separator=",",
+        has_header=False,
+        ignore_errors=True,
+        truncate_ragged_lines=True,
+        infer_schema_length=0
+    )
+    print(f"  Actual columns in file: {SUMM1.width}")
+    print(f"  Expected columns: 39")
+    
+    if SUMM1.width != 39:
+        print(f"\n✗ ABORT: Column count mismatch!")
+        print(f"  File has {SUMM1.width} columns, expected 39")
+        print(f"  Please verify CSV file format")
+        sys.exit(1)
+    
+    # Assign column names after reading
+    expected_cols = [
         "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
         "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
         "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
@@ -338,9 +384,8 @@ SUMM1 = pl.read_csv(
         "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
         "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
-)
-
-print(f"✓ CSV loaded: {SUMM1.height:,} rows")
+    SUMM1.columns = expected_cols[:SUMM1.width]
+    print(f"✓ CSV loaded: {SUMM1.height:,} rows, {SUMM1.width} columns")
 
 SUMM1 = apply_sas_eof_check(SUMM1, "bnmsummary1_csv")
 
@@ -601,4 +646,4 @@ print(f"  ✓ Extra columns removed")
 print(f"  ✓ Numeric conversions completed")
 print("="*70)
 print("✓ Ready for BNM SDIS/B2B submission")
-print("✓ PROC COMPARE validation should now pass"
+print("✓ PROC COMPARE validation should now pass")
