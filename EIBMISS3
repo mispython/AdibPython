@@ -1,0 +1,280 @@
+//EIBMISS3 JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M
+/*JOBPARM S=S1M1
+//**********************************************************************
+//* STORE ALL RELATED ISS3 FIELDS FROM ELDS/EHPD/SIBC
+//* ESMR   : 2018-1610,2018-1605,2018-1670
+//**********************************************************************
+//DELETE  EXEC PGM=IEFBR14
+//DEL01   DD DSN=SAP.PBB.ISS3FTP.DLY,
+//           DISP=(MOD,DELETE,DELETE),
+//           SPACE=(CYL,(0))
+//**********************************************************************
+//CREATE  EXEC PGM=IEFBR14
+//CRT01   DD DSN=SAP.PBB.ISS3FTP.DLY,
+//           DISP=(NEW,CATLG,DELETE),
+//           DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920),
+//           SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)
+//*
+//EIWSTAN1  EXEC SAS609
+//FILE1     DD DSN=SAP.PBB.ELDS.SUMM1.TEXT(0),DISP=SHR
+//FILE2     DD DSN=SAP.PBB.ELDS.SUMM2.TEXT(0),DISP=SHR
+//FILE3     DD DSN=SAP.PBB.EHP.SUMM1.TEXT(0),DISP=SHR
+//FILE4     DD DSN=SAP.PBB.EHP.SUMM2.TEXT(0),DISP=SHR
+//ELDS      DD DSN=SAP.PBB.ELDS.ISS3(+1),
+//             DISP=(NEW,CATLG,DELETE),
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//             SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,8)
+//PELDS     DD DSN=SAP.PBB.ELDS.ISS3(0),DISP=SHR
+//SYSIN     DD *
+
+OPTIONS YEARCUTOFF=1950 NOCENTER;
+DATA REPTDATE;
+   REPTDATE = TODAY()-1;
+   PREVDATE = REPTDATE-1;
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
+  CALL SYMPUT('REPTYEAR1',PUT(PREVDATE,YEAR2.));
+  CALL SYMPUT('REPTMON1',PUT(MONTH(PREVDATE),Z2.));
+  CALL SYMPUT('REPTDAY1', PUT(DAY(PREVDATE), Z2.));
+  CALL SYMPUT('RDATE', REPTDATE);
+RUN;
+
+DATA SUMM1;
+  INFILE FILE1 DELIMITER=',' MISSOVER DSD LRECL=4500 FIRSTOBS=2 END=EOF;
+  INPUT MAANO               : $15.      /*MAANO                     */
+        STAGE               : $2.        /*STAGE                     */
+        APPLICATION         : $10.       /*APPLICATION               */
+        DTECOMPLETE         : $10.       /*DATE COMPLETED            */
+        AANO                : $15.       /*AANO                      */
+        APPKEY              : $20.       /*APP KEY                   */
+        PRIORITY_SECTOR     : $2.        /*PRIORITY SECTOR           */
+        DSRISS3             : 10.        /*DEBT SERVICE RATIO        */
+        FIN_CONCEPT         : $3.        /*FIN CONCEPT               */
+        LN_UTILISE_LOCAT_CD : $10.       /*LOCATION                  */
+        SPECIALFUND         : 5.         /*SPECIAL FUND              */
+        ASSET_PURCH_AMT     : COMMA20.   /*ASSET PURCHASE            */
+        PURPOSE_LOAN        : 5.         /* PURPOSE OF LOAN          */
+        STRUPCO_3YR         : $2.        /*STARTUP FINANCING         */
+        FACICODE            : 10.        /*FACILITY TYPE             */
+        AMTAPPLY            : COMMA20.   /*AMOUNT                    */
+        AMOUNT              : COMMA20.   /*AMT APPROVED              */
+        APPTYPE             : $1.        /*APP TYPE                  */
+        REJREASON           : $5.        /*REJECT REASON             */
+        DATEXT              : $10.       /*DATE                      */
+        ACCTNO              : 15.        /*ACCOUNT NUMBER            */
+        EIR                 : 10.        /*EIR                       */
+        EREQNO              : $15.       /*EREQNO                    */
+        REFIN_FLG           : $3.        /*refinancing               */
+        STATUS              : $1.        /*STATUS                    */
+        CCPT_TAG            : $5.
+        CIR                 : 10.
+        PRICING_TYPE        : $5.
+        LU_ADD1             : $40.
+        LU_ADD2             : $40.
+        LU_ADD3             : $40.
+        LU_ADD4             : $40.
+        LU_TOWN_CITY        : $20.
+        LU_POSTCODE         : $5.
+        LU_STATE_CD         : $2.
+        LU_COUNTRY_CD       : $2.
+        PROP_STATUS         : $5.
+        DTCOMPLETE          : $25.
+        LU_SOURCE           : $5.
+        ;
+        INDINTERIM = 'Y';
+        DATE = &RDATE;
+        IF NOT EOF THEN OUTPUT;
+        /* RECORD CHECKSUM -1 EXCLUDE FT */
+        IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;
+   RUN;
+
+DATA SUMM1_EHP;
+  INFILE FILE3 DELIMITER=',' MISSOVER DSD LRECL=4500 FIRSTOBS=2 END=EOF;
+  INPUT MAANO               : $15.      /*MAANO                     */
+        STAGE               : $2.        /*STAGE                     */
+        APPLICATION         : $10.       /*APPLICATION               */
+        DTECOMPLETE         : $10.       /*DATE COMPLETED            */
+        AANO                : $15.       /*AANO                      */
+        APPKEY              : $20.       /*APP KEY                   */
+        PRIORITY_SECTOR     : $2.        /*PRIORITY SECTOR           */
+        DSRISS3             : 10.        /*DEBT SERVICE RATIO        */
+        FIN_CONCEPT         : $3.        /*FIN CONCEPT               */
+        LN_UTILISE_LOCAT_CD : $10.       /*LOCATION                  */
+        SPECIALFUND         : 5.         /*SPECIAL FUND              */
+        ASSET_PURCH_AMT     : COMMA20.   /*ASSET PURCHASE            */
+        PURPOSE_LOAN        : 5.         /* PURPOSE OF LOAN          */
+        STRUPCO_3YR         : $2.        /*STARTUP FINANCING         */
+        FACICODE            : 10.        /*FACILITY TYPE             */
+        AMTAPPLY            : COMMA20.   /*AMOUNT                    */
+        AMOUNT              : COMMA20.   /*AMT APPROVED              */
+        APPTYPE             : $1.        /*APP TYPE                  */
+        REJREASON           : $5.        /*REJECT REASON             */
+        DATEXT              : $10.       /*DATE                      */
+        ACCTNO              : 15.        /*ACCOUNT NUMBER            */
+        EIR                 : 10.        /*EIR                       */
+        EREQNO              : $15.       /*EREQNO                    */
+        REFIN_FLG           : $3.        /*refinancing               */
+        STATUS              : $1.        /*STATUS                    */
+        CCPT_TAG            : $5.
+        LU_ADD1             : $40.
+        LU_ADD2             : $40.
+        LU_TOWN_CITY        : $20.
+        LU_POSTCODE         : $5.
+        LU_STATE_CD         : $2.
+        LU_COUNTRY_CD       : $2.
+        CIR                 : 10.
+        PRICING_TYPE        : $5.
+        DTCOMPLETE          : $25.
+        ;
+        INDINTERIM = 'Y';
+        DATE = &RDATE;
+        IF NOT EOF THEN OUTPUT;
+        /* RECORD CHECKSUM -1 EXCLUDE FT */
+        IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;
+   RUN;
+ *;
+
+DATA SUMM1;
+   SET SUMM1 SUMM1_EHP;
+RUN;
+
+%MACRO PROCESS1;
+%IF %SYSFUNC(EXIST(ELDS.SUMM1&REPTYEAR&REPTMON&REPTDAY)) %THEN %DO;
+   DATA ELDS.SUMM1&REPTYEAR&REPTMON&REPTDAY;
+      SET ELDS.SUMM1&REPTYEAR&REPTMON&REPTDAY;
+      IF DATE = &RDATE THEN DELETE;
+   RUN;
+%END;
+%MEND;
+%PROCESS1;
+
+DATA ELDS.SUMM1&REPTYEAR&REPTMON&REPTDAY;
+   SET PELDS.SUMM1&REPTYEAR1&REPTMON1&REPTDAY1 SUMM1;
+RUN;
+
+DATA SUMM2;
+  INFILE FILE2 DELIMITER=',' MISSOVER DSD LRECL=4500 FIRSTOBS=2 END=EOF;
+  INPUT MAANO               : $15.       /*MAANO                     */
+        STAGE               : $2.        /*STAGE                     */
+        APPLICATION         : $10.       /*APPLICATION               */
+        DTECOMPLETE         : $10.       /*DATE COMPLETED            */
+        IDNO                : $30.       /*IDNO                      */
+        ENTKEY              : $20.       /*ENTKEY                    */
+        APPLNAME            : $150.      /*NAME                      */
+        COUNTRY             : $5.        /*NATIONALITY               */
+        DBIRTH              : $10.       /*DOB/DATEBUSREG            */
+        ENTITY_TYPE         : 2.         /*ENTITY TYPE               */
+        CORP_STATUS_CD      : $2.        /*CORPORATE STATUS          */
+        INDUSTRIAL_STATUS   : $5.        /*INDUSTRIAL STATUS         */
+        RESIDENCY_STATUS_CD : $1.        /*RESIDENCY STATUS          */
+        ANNSUBTSALARY       : COMMA20.   /*INCOME                    */
+        GENDER              : $1.        /*GENDER                    */
+        OCCUPATION          : $5.        /*OCCUPATION                */
+        EMPNAME             : $150.      /*EMPLOYER NAME             */
+        EMPLOY_SECTOR_CD    : $10.       /*EMPLOYMENT SECTOR         */
+        EMPLOY_TYPE_CD      : $5.
+        POSTCODE            : $5.        /*POSTCODE                  */
+        STATE_CD            : $2.        /*STATE                     */
+        COUNTRY_CD          : $3.        /*COUNTRY                   */
+        ROLE                : $1.        /*ROLE                      */
+        ICPP                : $30.       /*ORIGINAL ID               */
+        MARRIED             : $10.       /*MARITAL STATUS            */
+        CUSTOMER_CODE       : $5.        /*CUSTOMER CODE             */
+        CISNUMBER           : $20.       /*CIS NUMBER                */
+        NO_OF_EMPLOYEE      : $10.       /*NO OF EMPLOYEES           */
+        ANNUAL_TURNOVER     : $20.       /*ANNUAL TURN OVER          */
+        SMESIZE             : $5.        /*SME SIZE                  */
+        RACE                : $2.        /*RACE                      */
+        INDUSTRIAL_SECTOR_CD : $10.      /*MSIC                      */
+        OCCUPAT_MASCO_CD    : $10.       /*MASCO                     */
+        EREQNO              : $15.
+        DSRISS3             : $10.
+        DTCOMPLETE          : $25.
+        ;
+        INDINTERIM = 'Y';
+        DATE = &RDATE;
+        IF NOT EOF THEN OUTPUT;
+        /* RECORD CHECKSUM -1 EXCLUDE FT */
+        IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;
+ RUN;
+
+DATA SUMM2_EHP;
+  INFILE FILE4 DELIMITER=',' MISSOVER DSD LRECL=4500 FIRSTOBS=2 END=EOF;
+  INPUT MAANO               : $15.       /*MAANO                     */
+        STAGE               : $2.        /*STAGE                     */
+        APPLICATION         : $10.       /*APPLICATION               */
+        DTECOMPLETE         : $10.       /*DATE COMPLETED            */
+        IDNO                : $30.       /*IDNO                      */
+        ENTKEY              : $20.       /*ENTKEY                    */
+        APPLNAME            : $150.      /*NAME                      */
+        COUNTRY             : $5.        /*NATIONALITY               */
+        DBIRTH              : $10.       /*DOB/DATEBUSREG            */
+        ENTITY_TYPE         : 2.         /*ENTITY TYPE               */
+        CORP_STATUS_CD      : $2.        /*CORPORATE STATUS          */
+        INDUSTRIAL_STATUS   : $5.        /*INDUSTRIAL STATUS         */
+        RESIDENCY_STATUS_CD : $1.        /*RESIDENCY STATUS          */
+        ANNSUBTSALARY       : COMMA20.   /*INCOME                    */
+        GENDER              : $1.        /*GENDER                    */
+        OCCUPATION          : $5.        /*OCCUPATION                */
+        EMPNAME             : $150.      /*EMPLOYER NAME             */
+        EMPLOY_SECTOR_CD    : $10.       /*EMPLOYMENT SECTOR         */
+        EMPLOY_TYPE_CD      : $5.
+        POSTCODE            : $5.        /*POSTCODE                  */
+        STATE_CD            : $2.        /*STATE                     */
+        COUNTRY_CD          : $3.        /*COUNTRY                   */
+        ROLE                : $1.        /*ROLE                      */
+        ICPP                : $30.       /*ORIGINAL ID               */
+        MARRIED             : $10.       /*MARITAL STATUS            */
+        CUSTOMER_CODE       : $5.        /*CUSTOMER CODE             */
+        CISNUMBER           : $20.       /*CIS NUMBER                */
+        NO_OF_EMPLOYEE      : $10.       /*NO OF EMPLOYEES           */
+        ANNUAL_TURNOVER     : $20.       /*ANNUAL TURN OVER          */
+        SMESIZE             : $5.        /*SME SIZE                  */
+        RACE                : $2.        /*RACE                      */
+        INDUSTRIAL_SECTOR_CD : $10.      /*MSIC                      */
+        OCCUPAT_MASCO_CD    : $10.       /*MASCO                     */
+        EREQNO              : $15.
+        DSRISS3             : $10.
+        DTCOMPLETE          : $25.
+        ;
+        INDINTERIM = 'Y';
+        DATE = &RDATE;
+        IF NOT EOF THEN OUTPUT;
+        /* RECORD CHECKSUM -1 EXCLUDE FT */
+        IF EOF & SUBSTRN(MAANO,3,8) NE SUM(_N_,-1) THEN ABORT 77;
+ RUN;
+
+DATA SUMM2;
+   SET SUMM2 SUMM2_EHP;
+RUN;
+
+%MACRO PROCESS2;
+%IF %SYSFUNC(EXIST(ELDS.SUMM2&REPTYEAR&REPTMON&REPTDAY)) %THEN %DO;
+   DATA ELDS.SUMM2&REPTYEAR&REPTMON&REPTDAY;
+      SET ELDS.SUMM2&REPTYEAR&REPTMON&REPTDAY;
+      IF DATE = &RDATE THEN DELETE;
+   RUN;
+%END;
+%MEND;
+%PROCESS2;
+
+DATA ELDS.SUMM2&REPTYEAR&REPTMON&REPTDAY;
+   SET PELDS.SUMM2&REPTYEAR1&REPTMON1&REPTDAY1 SUMM2;
+RUN;
+
+ FILENAME TRANFILE 'SAP.PBB.ISS3FTP.DLY' DISP=OLD;
+ PROC CPORT LIBRARY=ELDS FILE=TRANFILE;
+ *;
+//******************************************************************
+//* FTP HOST DATASETS TO EDW
+//******************************************************************
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(EDW#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=binary
+lzopts linerule=$lr
+cd /stgsrcsys/host/ftpfiles
+PUT //SAP.PBB.ISS3FTP.DLY    FULLISS3
+EOB
+/*
