@@ -240,13 +240,15 @@ def safe_concat(df1: pl.DataFrame, df2: pl.DataFrame) -> pl.DataFrame:
     return pl.concat([df1, df2], how="vertical_relaxed")
 
 
-def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
+def apply_sas_eof_check(df: pl.DataFrame, source_name: str, is_sas_dataset: bool = False) -> pl.DataFrame:
     """
     SAS-style file validation:
-      - Remove file header (FH prefix)
-      - Footer row (FT prefix) contains expected record count
+      - Remove file header (FH prefix) - CSV only
+      - Footer row (FT prefix) contains expected record count - CSV only
       - Compare expected vs actual data row count
       - Abort if mismatch (exit code 77)
+      
+    For SAS7BDAT files (is_sas_dataset=True), skip FH/FT validation as they don't have markers
     """
     if "MAANO" not in df.columns:
         print(f"  ⚠ MAANO column missing in {source_name}, skipping validation.")
@@ -255,6 +257,16 @@ def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
             pl.lit(RDATE).alias("DATE")
         ])
 
+    # SAS7BDAT files don't have FH/FT markers - skip validation
+    if is_sas_dataset:
+        print(f"  ℹ SAS dataset - no FH/FT markers expected")
+        df = df.with_columns([
+            pl.lit("Y").alias("INDINTERIM"),
+            pl.lit(RDATE).alias("DATE")
+        ])
+        return df
+
+    # CSV files - validate FH/FT markers
     # Remove file header rows (FH pattern)
     df_str = df.with_columns(pl.col("MAANO").cast(pl.Utf8, strict=False))
     header_mask = df_str["MAANO"].str.starts_with("FH")
@@ -276,11 +288,12 @@ def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
     # Detect control footer pattern (FT00001724)
     match = re.match(r"FT0*(\d+)", ctrl_val)
     if not match:
-        print(f"  ℹ No control count found in {source_name}, proceeding without checks.")
-        return df.with_columns([
+        print(f"  ℹ No FT control footer found in {source_name}")
+        df = df.with_columns([
             pl.lit("Y").alias("INDINTERIM"),
             pl.lit(RDATE).alias("DATE")
         ])
+        return df
 
     control_count = int(match.group(1))
     print(f"  📊 {source_name}: Control count = {control_count}")
@@ -410,7 +423,7 @@ if rename_dict:
     SUMM1_EHP = SUMM1_EHP.rename(rename_dict)
     print(f"  ✓ Renamed {len(rename_dict)} columns")
 
-SUMM1_EHP = apply_sas_eof_check(SUMM1_EHP, "bnmsummary1_ehp")
+SUMM1_EHP = apply_sas_eof_check(SUMM1_EHP, "bnmsummary1_ehp", is_sas_dataset=True)
 
 # Apply production schema to both CSV and EHP (converts types, preserves leading zeros)
 print(f"\nApplying production schema compliance...")
@@ -596,7 +609,7 @@ if rename_dict:
     SUMM2_EHP = SUMM2_EHP.rename(rename_dict)
     print(f"  ✓ Renamed {len(rename_dict)} columns")
 
-SUMM2_EHP = apply_sas_eof_check(SUMM2_EHP, "bnmsummary2_ehp")
+SUMM2_EHP = apply_sas_eof_check(SUMM2_EHP, "bnmsummary2_ehp", is_sas_dataset=True)
 
 # Apply production schema
 print(f"\nApplying production schema compliance...")
@@ -608,29 +621,57 @@ print(f"\nCombining CSV + EHP sources...")
 SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
 print(f"✓ Combined: {SUMM2.height:,} rows")
 
-# Store today's data only (incremental approach - prevents memory issues)
-print(f"\n📦 Storing today's data (incremental)...")
-print(f"  Today's records: {SUMM2.height:,} rows")
+# Append previous day's cumulative file (matching SAS logic)
+# SAS: SET PELDS.SUMM2&REPTYEAR1&REPTMON1&REPTDAY1 SUMM2;
+print(f"\n📦 Building cumulative file (SAS-style)...")
+print(f"  Today's new records: {SUMM2.height:,} rows")
 
-# Just use today's data - NO cumulative append
-ELDS_SUMM2 = SUMM2
+prev_parquet2 = Path(f"{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM2.parquet")
 
-# Optional: Calculate cumulative count across all days without loading into memory
-print(f"\n📊 Calculating cumulative statistics...")
-try:
-    cumulative_query = f"""
-        SELECT 
-            COUNT(*) as total_rows,
-            COUNT(DISTINCT DATE) as total_days
-        FROM read_parquet('{ELDS_DATA_PATH}/**/SUMM2.parquet')
-    """
-    result = duckdb.query(cumulative_query).fetchone()
-    print(f"  ✓ Cumulative total: {result[0]:,} rows across {result[1]} days")
-    print(f"  ✓ Today adds: {SUMM2.height:,} rows")
-except Exception as e:
-    print(f"  ℹ Could not calculate cumulative stats: {e}")
+# Check if today's file already exists (rerun scenario)
+current_parquet = Path(f"{OUTPUT_DATA_PATH}/SUMM2.parquet")
+if current_parquet.exists():
+    print(f"  ⚠ Today's file exists - removing today's records first (rerun detected)")
+    try:
+        existing = pl.from_pandas(duckdb.query(f"SELECT * FROM read_parquet('{current_parquet}')").to_df())
+        # Remove today's records: IF DATE = &RDATE THEN DELETE
+        existing = existing.filter(pl.col("DATE") != RDATE)
+        print(f"  ✓ Removed today's duplicates, kept {existing.height:,} historical rows")
+        
+        # Now append today's new data
+        if prev_parquet2.exists():
+            print(f"  ℹ Using cleaned existing file as base")
+            PREV_SUMM2 = existing
+        else:
+            PREV_SUMM2 = existing
+    except Exception as e:
+        print(f"  ⚠ Could not process existing file: {e}")
+        PREV_SUMM2 = None
+else:
+    # Normal flow: read yesterday's cumulative file
+    if not prev_parquet2.exists():
+        print(f"  ℹ No previous day file (initial load)")
+        print(f"  Expected: {prev_parquet2}")
+        PREV_SUMM2 = None
+    else:
+        try:
+            query = f"SELECT * FROM read_parquet('{prev_parquet2}')"
+            PREV_SUMM2 = pl.from_pandas(duckdb.query(query).to_df())
+            print(f"  ✓ Previous cumulative: {PREV_SUMM2.height:,} rows from {PREVDATE.strftime('%Y-%m-%d')}")
+            
+            # Ensure previous data matches production schema
+            PREV_SUMM2 = apply_production_schema(PREV_SUMM2, SUMM2_SCHEMA, "Previous Cumulative")
+        except Exception as e:
+            print(f"  ✗ ERROR reading previous file: {e}")
+            PREV_SUMM2 = None
 
-print(f"  ℹ Note: Each day stored separately to prevent memory issues")
+# Combine: SET PELDS.SUMM2PREVDATE SUMM2;
+if PREV_SUMM2 is not None:
+    ELDS_SUMM2 = safe_concat(PREV_SUMM2, SUMM2)
+    print(f"  ✓ New cumulative: {ELDS_SUMM2.height:,} rows (added {SUMM2.height:,} new)")
+else:
+    ELDS_SUMM2 = SUMM2
+    print(f"  ✓ Initial cumulative: {ELDS_SUMM2.height:,} rows")
 
 # Validation report
 print(f"\n🔍 Data Type Validation (SUMM2)...")
@@ -677,4 +718,4 @@ print(f"  ✓ Extra columns removed")
 print(f"  ✓ Numeric conversions completed")
 print("="*70)
 print("✓ Ready for BNM SDIS/B2B submission")
-print("✓ PROC COMPARE validation should now pass")
+print("✓ PROC COMPARE validation should now pass"
