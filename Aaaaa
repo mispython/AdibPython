@@ -444,67 +444,49 @@ print(f"  ✓ Combined successfully")
 # SAS: SET PELDS.SUMM1&REPTYEAR1&REPTMON1&REPTDAY1 SUMM1;
 print(f"\n📦 Building cumulative file (SAS-style)...")
 print(f"  Today's new records: {SUMM1.height:,} rows")
+print(f"  Today's date (RDATE): {RDATE}")
 
+# ALWAYS read from PREVIOUS DAY's file for cumulative data
 prev_parquet = Path(f"{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet")
 
-# Check if today's file already exists (rerun scenario)
-current_parquet = Path(f"{OUTPUT_DATA_PATH}/SUMM1.parquet")
-if current_parquet.exists():
-    print(f"  ⚠ Today's file exists - this is a RERUN scenario")
+print(f"  Looking for previous cumulative file: {prev_parquet}")
+
+if not prev_parquet.exists():
+    print(f"  ℹ No previous day file found (initial load)")
+    print(f"    Expected: {PREVDATE.strftime('%Y-%m-%d')} file")
+    PREV_SUMM1 = None
+else:
     try:
-        existing = pl.from_pandas(duckdb.query(f"SELECT * FROM read_parquet('{current_parquet}')").to_df())
-        print(f"  📊 Existing file has {existing.height:,} total rows")
+        print(f"  ✓ Previous day file exists, loading...")
+        query = f"SELECT * FROM read_parquet('{prev_parquet}')"
+        PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
+        print(f"  ✓ Previous cumulative from {PREVDATE.strftime('%Y-%m-%d')}: {PREV_SUMM1.height:,} rows")
         
-        # CRITICAL FIX: Remove ONLY today's records: IF DATE = &RDATE THEN DELETE
-        # But DATE might be numeric, need to handle both cases
-        if existing["DATE"].dtype == pl.Float64:
-            existing_filtered = existing.filter(pl.col("DATE") != float(RDATE))
-        else:
-            existing_filtered = existing.filter(pl.col("DATE").cast(pl.Float64) != float(RDATE))
+        # Show DATE distribution in previous file
+        try:
+            date_stats = PREV_SUMM1.select(pl.col("DATE")).describe()
+            print(f"  📊 Previous file DATE range: {date_stats}")
+        except:
+            pass
         
-        historical_rows = existing_filtered.height
-        removed_rows = existing.height - historical_rows
-        print(f"  ✓ Removed {removed_rows:,} rows with DATE={RDATE} (today's old data)")
-        print(f"  ✓ Kept {historical_rows:,} historical rows (DATE < {RDATE})")
+        # Ensure previous data matches production schema
+        PREV_SUMM1 = apply_production_schema(PREV_SUMM1, SUMM1_SCHEMA, "Previous Cumulative")
         
-        if historical_rows == 0:
-            print(f"  ℹ No historical data found - treating as initial load")
-            PREV_SUMM1 = None
-        else:
-            # Ensure filtered data matches production schema
-            PREV_SUMM1 = apply_production_schema(existing_filtered, SUMM1_SCHEMA, "Existing Historical")
     except Exception as e:
-        print(f"  ⚠ Could not process existing file: {e}")
+        print(f"  ✗ ERROR reading previous file: {e}")
         import traceback
         traceback.print_exc()
         PREV_SUMM1 = None
-else:
-    # Normal flow: read yesterday's cumulative file
-    if not prev_parquet.exists():
-        print(f"  ℹ No previous day file (initial load)")
-        print(f"  Expected: {prev_parquet}")
-        PREV_SUMM1 = None
-    else:
-        try:
-            query = f"SELECT * FROM read_parquet('{prev_parquet}')"
-            PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
-            print(f"  ✓ Previous cumulative: {PREV_SUMM1.height:,} rows from {PREVDATE.strftime('%Y-%m-%d')}")
-            
-            # Ensure previous data matches production schema
-            PREV_SUMM1 = apply_production_schema(PREV_SUMM1, SUMM1_SCHEMA, "Previous Cumulative")
-        except Exception as e:
-            print(f"  ✗ ERROR reading previous file: {e}")
-            import traceback
-            traceback.print_exc()
-            PREV_SUMM1 = None
 
 # Combine: SET PELDS.SUMM1PREVDATE SUMM1;
-if PREV_SUMM1 is not None:
+if PREV_SUMM1 is not None and PREV_SUMM1.height > 0:
+    print(f"  🔄 Appending: {PREV_SUMM1.height:,} (history) + {SUMM1.height:,} (today)")
     ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
-    print(f"  ✓ New cumulative: {ELDS_SUMM1.height:,} rows (History: {PREV_SUMM1.height:,} + New: {SUMM1.height:,})")
+    print(f"  ✓ New cumulative: {ELDS_SUMM1.height:,} rows")
+    print(f"    = {PREV_SUMM1.height:,} (previous) + {SUMM1.height:,} (new today)")
 else:
     ELDS_SUMM1 = SUMM1
-    print(f"  ✓ Initial cumulative: {ELDS_SUMM1.height:,} rows")
+    print(f"  ✓ Initial cumulative: {ELDS_SUMM1.height:,} rows (no previous history)")
 
 # Validation report
 print(f"\n🔍 Data Type Validation (SUMM1)...")
