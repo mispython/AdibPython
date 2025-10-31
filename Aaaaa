@@ -427,13 +427,18 @@ SUMM1_EHP = apply_sas_eof_check(SUMM1_EHP, "bnmsummary1_ehp", is_sas_dataset=Tru
 
 # Apply production schema to both CSV and EHP (converts types, preserves leading zeros)
 print(f"\nApplying production schema compliance...")
+print(f"  📊 Step 4 - Before schema: CSV={SUMM1.height:,}, EHP={SUMM1_EHP.height:,}")
+
 SUMM1 = apply_production_schema(SUMM1, SUMM1_SCHEMA, "CSV")
 SUMM1_EHP = apply_production_schema(SUMM1_EHP, SUMM1_SCHEMA, "EHP")
+
+print(f"  📊 Step 5 - After schema: CSV={SUMM1.height:,}, EHP={SUMM1_EHP.height:,}")
 
 # Combine CSV + EHP
 print(f"\nCombining CSV + EHP sources...")
 SUMM1 = safe_concat(SUMM1, SUMM1_EHP)
-print(f"✓ Combined: {SUMM1.height:,} rows")
+print(f"  📊 Step 6 - After combining: {SUMM1.height:,} rows (CSV + EHP)")
+print(f"  ✓ Combined successfully")
 
 # Append previous day's cumulative file (matching SAS logic)
 # SAS: SET PELDS.SUMM1&REPTYEAR1&REPTMON1&REPTDAY1 SUMM1;
@@ -445,21 +450,33 @@ prev_parquet = Path(f"{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.mont
 # Check if today's file already exists (rerun scenario)
 current_parquet = Path(f"{OUTPUT_DATA_PATH}/SUMM1.parquet")
 if current_parquet.exists():
-    print(f"  ⚠ Today's file exists - removing today's records first (rerun detected)")
+    print(f"  ⚠ Today's file exists - this is a RERUN scenario")
     try:
         existing = pl.from_pandas(duckdb.query(f"SELECT * FROM read_parquet('{current_parquet}')").to_df())
-        # Remove today's records: IF DATE = &RDATE THEN DELETE
-        existing = existing.filter(pl.col("DATE") != RDATE)
-        print(f"  ✓ Removed today's duplicates, kept {existing.height:,} historical rows")
+        print(f"  📊 Existing file has {existing.height:,} total rows")
         
-        # Now append today's new data
-        if prev_parquet.exists():
-            print(f"  ℹ Using cleaned existing file as base")
-            PREV_SUMM1 = existing
+        # CRITICAL FIX: Remove ONLY today's records: IF DATE = &RDATE THEN DELETE
+        # But DATE might be numeric, need to handle both cases
+        if existing["DATE"].dtype == pl.Float64:
+            existing_filtered = existing.filter(pl.col("DATE") != float(RDATE))
         else:
-            PREV_SUMM1 = existing
+            existing_filtered = existing.filter(pl.col("DATE").cast(pl.Float64) != float(RDATE))
+        
+        historical_rows = existing_filtered.height
+        removed_rows = existing.height - historical_rows
+        print(f"  ✓ Removed {removed_rows:,} rows with DATE={RDATE} (today's old data)")
+        print(f"  ✓ Kept {historical_rows:,} historical rows (DATE < {RDATE})")
+        
+        if historical_rows == 0:
+            print(f"  ℹ No historical data found - treating as initial load")
+            PREV_SUMM1 = None
+        else:
+            # Ensure filtered data matches production schema
+            PREV_SUMM1 = apply_production_schema(existing_filtered, SUMM1_SCHEMA, "Existing Historical")
     except Exception as e:
         print(f"  ⚠ Could not process existing file: {e}")
+        import traceback
+        traceback.print_exc()
         PREV_SUMM1 = None
 else:
     # Normal flow: read yesterday's cumulative file
@@ -477,12 +494,14 @@ else:
             PREV_SUMM1 = apply_production_schema(PREV_SUMM1, SUMM1_SCHEMA, "Previous Cumulative")
         except Exception as e:
             print(f"  ✗ ERROR reading previous file: {e}")
+            import traceback
+            traceback.print_exc()
             PREV_SUMM1 = None
 
 # Combine: SET PELDS.SUMM1PREVDATE SUMM1;
 if PREV_SUMM1 is not None:
     ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
-    print(f"  ✓ New cumulative: {ELDS_SUMM1.height:,} rows (added {SUMM1.height:,} new)")
+    print(f"  ✓ New cumulative: {ELDS_SUMM1.height:,} rows (History: {PREV_SUMM1.height:,} + New: {SUMM1.height:,})")
 else:
     ELDS_SUMM1 = SUMM1
     print(f"  ✓ Initial cumulative: {ELDS_SUMM1.height:,} rows")
@@ -631,21 +650,33 @@ prev_parquet2 = Path(f"{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.mon
 # Check if today's file already exists (rerun scenario)
 current_parquet = Path(f"{OUTPUT_DATA_PATH}/SUMM2.parquet")
 if current_parquet.exists():
-    print(f"  ⚠ Today's file exists - removing today's records first (rerun detected)")
+    print(f"  ⚠ Today's file exists - this is a RERUN scenario")
     try:
         existing = pl.from_pandas(duckdb.query(f"SELECT * FROM read_parquet('{current_parquet}')").to_df())
-        # Remove today's records: IF DATE = &RDATE THEN DELETE
-        existing = existing.filter(pl.col("DATE") != RDATE)
-        print(f"  ✓ Removed today's duplicates, kept {existing.height:,} historical rows")
+        print(f"  📊 Existing file has {existing.height:,} total rows")
         
-        # Now append today's new data
-        if prev_parquet2.exists():
-            print(f"  ℹ Using cleaned existing file as base")
-            PREV_SUMM2 = existing
+        # CRITICAL FIX: Remove ONLY today's records: IF DATE = &RDATE THEN DELETE
+        # But DATE might be numeric, need to handle both cases
+        if existing["DATE"].dtype == pl.Float64:
+            existing_filtered = existing.filter(pl.col("DATE") != float(RDATE))
         else:
-            PREV_SUMM2 = existing
+            existing_filtered = existing.filter(pl.col("DATE").cast(pl.Float64) != float(RDATE))
+        
+        historical_rows = existing_filtered.height
+        removed_rows = existing.height - historical_rows
+        print(f"  ✓ Removed {removed_rows:,} rows with DATE={RDATE} (today's old data)")
+        print(f"  ✓ Kept {historical_rows:,} historical rows (DATE < {RDATE})")
+        
+        if historical_rows == 0:
+            print(f"  ℹ No historical data found - treating as initial load")
+            PREV_SUMM2 = None
+        else:
+            # Ensure filtered data matches production schema
+            PREV_SUMM2 = apply_production_schema(existing_filtered, SUMM2_SCHEMA, "Existing Historical")
     except Exception as e:
         print(f"  ⚠ Could not process existing file: {e}")
+        import traceback
+        traceback.print_exc()
         PREV_SUMM2 = None
 else:
     # Normal flow: read yesterday's cumulative file
@@ -663,12 +694,14 @@ else:
             PREV_SUMM2 = apply_production_schema(PREV_SUMM2, SUMM2_SCHEMA, "Previous Cumulative")
         except Exception as e:
             print(f"  ✗ ERROR reading previous file: {e}")
+            import traceback
+            traceback.print_exc()
             PREV_SUMM2 = None
 
 # Combine: SET PELDS.SUMM2PREVDATE SUMM2;
 if PREV_SUMM2 is not None:
     ELDS_SUMM2 = safe_concat(PREV_SUMM2, SUMM2)
-    print(f"  ✓ New cumulative: {ELDS_SUMM2.height:,} rows (added {SUMM2.height:,} new)")
+    print(f"  ✓ New cumulative: {ELDS_SUMM2.height:,} rows (History: {PREV_SUMM2.height:,} + New: {SUMM2.height:,})")
 else:
     ELDS_SUMM2 = SUMM2
     print(f"  ✓ Initial cumulative: {ELDS_SUMM2.height:,} rows")
