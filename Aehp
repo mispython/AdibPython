@@ -1,112 +1,139 @@
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from datetime import datetime,timedelta
 import saspy
-import pandas as pd
-import os
+import sys
+from datetime import datetime
+from Data_Warehouse.Common.Jobs.GET_BATCH_DATE import get_batch_date_dwh
+from Data_Warehouse.Common.Jobs.SAS_COL_CTRL_TABLE import read_dataset_struct_crms,drop_table,create_table,append_data,remove_empty_first_row,assign_libname
 
-sas = saspy.SASsession()
-
-batch_dt =  (datetime.now() - timedelta(days=1))
+batch_dt = datetime.strptime("2025-10-28 00:00:00", '%Y-%m-%d %H:%M:%S')
 batch_dt_str = batch_dt.strftime("%Y%m%d")
-day = (batch_dt + timedelta(days=1)).day 
-one_week_ago = batch_dt - timedelta(weeks=1)
+output_file_name = 'billstran'
 
-# month and year
-month_str = f"{batch_dt.month:02d}"
-year_str = f"{batch_dt.year % 100:02d}"
-prevmonth_str = f"{one_week_ago.month:02d}"
-prevyear_str = f"{one_week_ago.year % 100:02d}"
+# BATCH_MODE = sys.argv[1]
+BATCH_MODE = 'D'
+print("BATCH MODE = ", BATCH_MODE)
 
-# Determine dataset suffixes
-suffix_map = {
-    1:  ("3","4"),
-    9:  ("4","1"),
-    16: ("1","2"), 
-    23: ("2","3")
-}
+if BATCH_MODE == 'M':
+    print("Monthly")
+    sas_path = "/stgsrcsys/crms/banktrade"
+    stg_file = "/parquet/dwh/TF/staging/STG_TF_CRFCOMM.parquet"
+elif BATCH_MODE == 'D':
+    print("Daily")
+    sas_path = "/stgsrcsys/host/uat/tbc"
+    stg_file = "Data_Warehouse/TF/input/staging/STG_TF_CRFCOMD.parquet"
 
-if day in suffix_map:
-    prev_suffix, cur_suffx = suffix_map[day]
-    prev_data = f"hpco{prevmonth_str}{prev_suffix}{prevyear_str}"
-    cur_data  = f"hpco{month_str}{cur_suffx}{year_str}"
-else:
-    raise ValueError(f"Unsupported batch day: {day}")
+# Initialize SAS session
+sas = saspy.SASsession()
+lib_name = 'bt'
+log = assign_libname(lib_name,sas_path)
 
-hpco_table = pq.read_table('/parquet/dwh/LOAN/staging/STG_LN_COMPFILE.parquet')
-hpco_df = hpco_table.to_pandas()
+# ------------------------------------------
+#  Clean column names
+# ------------------------------------------
 
-# Final selection
-df = hpco_df[["BANKNO","DEALERNO","COMPNAME","COMPADD1","BRANCH","DATEADDED","PANEL_CAR_DEALER_FLG","DEALER_TYPE"]]
-print("Number of records : ", len(df))
+def resolve_suffix_columns(df):
+    suffix = "_billstran"
+    # Find all columns that have _x suffixes
+    x_columns = [col for col in df.columns if col.endswith(suffix)]
 
-def assign_libname(lib_name, sas_path):
-    log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
-    return log
+    for col_x in x_columns:
+        base_col = col_x[:-(len(suffix))] # Remove '_x'
 
-def drop_table(lib_name, cur_data):
+        print(f"Renaming {col_x} to {base_col}")
+        df[base_col] = df[col_x]
+        df.drop(col_x, axis=1, inplace=True)
+    return df
 
-    sas_code = f"""
-            %macro drop_if_exists(lib=work, table=);
-                %if %sysfunc(exist(&lib..&table)) %then %do;
-                    proc sql;
-                        drop table &lib..&table;
-                    quit;
-                %end;
-            %mend;
+# ------------------------------------------
+#  Convert Character and Numeric Columns
+# ------------------------------------------
 
-            %drop_if_exists(lib={lib_name}, table={cur_data});
-        """
-    log = sas.submit(sas_code)
+def convert_columns_to_sas_format(df, df_struct):
+    for _, row in df_struct .iterrows():
+        col = row ['Col_Name']
+        if col in df.columns:
+            col_type = str(row['Col_Type']).lower()
 
-    return log
+            # Handle character columns
+            if col_type == 'character':
+                df[col] = df[col].astype(str).str.strip()
+            
+            # Handle numeric columns
+            elif col_type == 'numeric':
+                col_as_str = df[col].astype(str).str.strip()
 
-def set_data(df, lib_name, cur_data, prev_data):
-    sas.df2sd(df,table=cur_data, libref='work')
+                # Handle 8-digit dates (YYYYMMDD)
+                is_8digit_date = col_as_str.str.fullmatch(r'\d{8}')
+                if is_8digit_date.any():
+                    print(f"Converting column '{col}' to SAS date format.")
+                    df.loc[is_8digit_date, col] = (
+                        pd.to_datetime(col_as_str[is_8digit_date], format='%Y%m%d', errors='coerce')
+                        - pd.Timestamp('1960-01-01')
+                    ).dt.days
 
-    log = sas.submit(f"""
-            proc sql noprint;
-               create table colmeta as 
-               select name, type, length
-               from dictionary.columns
-               where libname = upcase("{lib_name}")  
-                     and memname = upcase("{prev_data}");
-            quit
-               """)
+                # Handle 6-digit dates (YYMMDD)
+                is_6digit_date = col_as_str.str.fullmatch(r'\d{6}')
+                if is_6digit_date.any():
+                    print(f"Converting column '{col}' to SAS date format.")
+                    df.loc[is_6digit_date, col] = (
+                        pd.to_datetime(col_as_str[is_6digit_date], format='%y%m%d', errors='coerce')
+                        - pd.Timestamp('1960-01-01')
+                    ).dt.days
+                
+                # Convert remaining values to numeric (non-date rows)
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+                
+    return df
+
+# ------------------------------------------
+#  MAIN EXECUTION
+# ------------------------------------------
+
+if __name__ == "__main__":
+
+    column_names = ["RECTYPE_billstran", "TRANSREF_billstran", "COSTCTR_billstran", "ACCTNO_billstran", "SUBACCT_billstran", "GLMNEMONIC_billstran", "LIABCODE_billstran", "TRANDATE_billstran", "EXPRDATE_billstran", "TRANAMT_billstran", 
+                    "EXCHANGE_billstran", "CURRENCY_billstran", "BTREL_billstran", "RELFROM_billstran", "TRANSREFPG_billstran", "TRANAMT_CCY_billstran", "TRANS_NUM_billstran", "TRANS_IND_billstran", "MNEMONIC_CD_billstran", "ACCT_INFO_billstran", 
+                    "CR_DR_IND_billstran", "VOUCHER_NUM_billstran"
+                    ]
     
-    print(log["LOG"])
-    df_meta = sas.sasdata("colmeta", libref="work").to_df()
-    cols = df_meta["name"].dropna().tolist()
-    col_list = ", ".join(cols)
+    df = pd.read_parquet(f"{stg_file}")
+    df = df [column_names]
+    df = resolve_suffix_columns(df)
+    df = df.iloc[1:].reset_index(drop = True)
+    df = df.fillna("")
 
-    casted_cols =[]
-    for _, row in df_meta.iterrows():
-        col = row["name"]
-        length = row['length']
-        if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
-            casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
-        else:
-            casted_cols.append(col)
+    table=pa.Table.from_pandas(df)
+    pq.write_table(table,f"Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_{BATCH_MODE}.parquet")
 
-    casted_cols = ",\n ".join(casted_cols)
+    df = df[df['ACCTNO'].notnull()]
+    df.loc[df['CURRENCY'] == 'MYR', 'EXCHANGE'] = 1
 
-    log = sas.submit(f"""
-                proc sql noprint;
-                     create table {lib_name}.{cur_data} as
-                     select {col_list} from {lib_name}.{prev_data}(obs=0)
-                     union corr
-                     select {casted_cols} from work.{cur_data};
-                quit;
-                """)
-    os.system (f'cp /dwh/ln_hp/{cur_data}.sas7bdat /dwh/iln_hp/i{cur_data}.sas7bdat')
-    print(log["LOG"]) 
-    return log
-    
-assign_libname("ln_hp" , "/dwh/ln_hp")
+    print("Retrieving dataset structure for table formatting")
+    name = output_file_name.upper()
+    df_struct, log = read_dataset_struct_crms("BT", f"{name}")
+    print(df_struct)
 
-log1 = set_data(df, "ln_hp", cur_data, prev_data)
+    # Apply CONTROLTABLE formatting
+    bill_df= convert_columns_to_sas_format(df, df_struct)
+    print(len(bill_df))
 
+    # final file name
+    output_file_name = output_file_name + "_" + batch_dt_str
 
+    # If table structure not found in control table, fallback to generate table w/o specified length.
+    if df_struct.empty:
+        print(f"Table {name} not found in CONTROLTABLE.")
+    else:
+        log = drop_table(lib_name, output_file_name)
+        print(f"LOGGING delete table: {log['LOG']}")
 
+        log = create_table(df_struct, lib_name, output_file_name)
+        print(f"LOGGING creating table: {log['LOG']}")
 
+        log = append_data(bill_df, lib_name, output_file_name)
+        print(f"LOGGING inserting data into table: {log['LOG']}")
+             
+        log = remove_empty_first_row(lib_name, output_file_name)
+        print(f"LOGGING removing empty lines in table: {log['LOG']}")
