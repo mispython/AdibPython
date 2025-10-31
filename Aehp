@@ -20,26 +20,30 @@ Reading intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat...
   ℹ SAS dataset - no FH/FT markers expected
 
 Applying production schema compliance...
+  📊 Step 4 - Before schema: CSV=2,136, EHP=5,355
   📋 Applying production schema to CSV...
   ✓ Schema applied: 41 columns, 2,136 rows
   📋 Applying production schema to EHP...
   ✓ Schema applied: 41 columns, 5,355 rows
+  📊 Step 5 - After schema: CSV=2,136, EHP=5,355
 
 Combining CSV + EHP sources...
-✓ Combined: 7,491 rows
+  📊 Step 6 - After combining: 7,491 rows (CSV + EHP)
+  ✓ Combined successfully
 
 📦 Building cumulative file (SAS-style)...
   Today's new records: 7,491 rows
-  ⚠ Today's file exists - removing today's records first (rerun detected)
-  ✓ Removed today's duplicates, kept 0 historical rows
-  ℹ Using cleaned existing file as base
-  ⚠ Column mismatch detected, aligning...
-  ✓ New cumulative: 7,491 rows (added 7,491 new)
+  ⚠ Today's file exists - this is a RERUN scenario
+  📊 Existing file has 7,491 total rows
+  ✓ Removed 7,491 rows with DATE=24036 (today's old data)
+  ✓ Kept 0 historical rows (DATE < 24036)
+  ℹ No historical data found - treating as initial load
+  ✓ Initial cumulative: 7,491 rows
 
 🔍 Data Type Validation (SUMM1)...
-  Total columns: 44
+  Total columns: 41
   String columns: 30
-  Numeric columns: 14
+  Numeric columns: 11
 
   Critical BNM fields (with leading zeros):
     LN_UTILISE_LOCAT_CD: ['0000077300', '0000011900', '0000075000', '0000075050', '0000048300']
@@ -77,16 +81,17 @@ Combining CSV + EHP sources...
 
 📦 Building cumulative file (SAS-style)...
   Today's new records: 9,681 rows
-  ⚠ Today's file exists - removing today's records first (rerun detected)
-  ✓ Removed today's duplicates, kept 0 historical rows
-  ℹ Using cleaned existing file as base
-  ⚠ Column mismatch detected, aligning...
-  ✓ New cumulative: 9,681 rows (added 9,681 new)
+  ⚠ Today's file exists - this is a RERUN scenario
+  📊 Existing file has 9,681 total rows
+  ✓ Removed 9,681 rows with DATE=24036 (today's old data)
+  ✓ Kept 0 historical rows (DATE < 24036)
+  ℹ No historical data found - treating as initial load
+  ✓ Initial cumulative: 9,681 rows
 
 🔍 Data Type Validation (SUMM2)...
-  Total columns: 41 (PROD has 38)
+  Total columns: 38 (PROD has 38)
   String columns: 35
-  Numeric columns: 6
+  Numeric columns: 3
 
   Critical BNM fields (with leading zeros):
     POSTCODE: ['75460', '11900', '84410', '75460', '75350']
@@ -104,8 +109,8 @@ Date: 2025-10-22
 Output Directory: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output/year=2025/month=10/day=22
 
 Results:
-  SUMM1.parquet: 7,491 rows, 44 columns
-  SUMM2.parquet: 9,681 rows, 41 columns
+  SUMM1.parquet: 7,491 rows, 41 columns
+  SUMM2.parquet: 9,681 rows, 38 columns
 
 ✅ Production Schema Compliance:
   ✓ SUMM1: 41 columns (30 CHAR + 11 NUM)
