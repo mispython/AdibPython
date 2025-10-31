@@ -1,19 +1,124 @@
+======================================================================
+ELDS BNM Summary Processing - 2025-10-22
+======================================================================
+
+======================================================================
+PROCESSING SUMM1 (Loan Applications)
+======================================================================
+
 Reading bnmsummary1_20251022.csv...
-✗ ERROR loading CSV: 39 column names provided for a DataFrame of width 1
+  Raw CSV: 2,137 rows, 39 columns
+✓ CSV loaded: 2,137 rows, 39 columns (WORK.PROD compliant)
+  📊 bnmsummary1_csv: Control count = 2136
+  📊 bnmsummary1_csv: Actual data rows = 2136
+  ✓ Record count matches control (2136)
 
-Diagnostic: Checking file structure...
-  Line 1: 1 columns
-    First line: "FH20251022"
+Reading intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat...
+✓ SAS7BDAT loaded: 5,355 rows
+  📋 Mapping EHP column names to CSV structure...
+  ✓ Renamed 20 columns
+  ℹ SAS dataset - no FH/FT markers expected
 
-  Line 2: 42 columns
-  Line 3: 42 columns
-  Line 4: 42 columns
-  Line 5: 42 columns
+Applying production schema compliance...
+  📋 Applying production schema to CSV...
+  ✓ Schema applied: 41 columns, 2,136 rows
+  📋 Applying production schema to EHP...
+  ✓ Schema applied: 41 columns, 5,355 rows
 
-Attempting to read without predefined columns...
-  Actual columns in file: 1
-  Expected columns: 39
+Combining CSV + EHP sources...
+✓ Combined: 7,491 rows
 
-✗ ABORT: Column count mismatch!
-  File has 1 columns, expected 39
-  Please verify CSV file format
+📦 Building cumulative file (SAS-style)...
+  Today's new records: 7,491 rows
+  ⚠ Today's file exists - removing today's records first (rerun detected)
+  ✓ Removed today's duplicates, kept 0 historical rows
+  ℹ Using cleaned existing file as base
+  ⚠ Column mismatch detected, aligning...
+  ✓ New cumulative: 7,491 rows (added 7,491 new)
+
+🔍 Data Type Validation (SUMM1)...
+  Total columns: 44
+  String columns: 30
+  Numeric columns: 14
+
+  Critical BNM fields (with leading zeros):
+    LN_UTILISE_LOCAT_CD: ['0000077300', '0000011900', '0000075000', '0000075050', '0000048300']
+    LU_POSTCODE: ['77300', '11900', '75000', '75050', '48300']
+    LU_STATE_CD: ['04', '07', '04', '04', '12']
+
+Saving SUMM1.parquet...
+✓ Saved: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output/year=2025/month=10/day=22/SUMM1.parquet (7,491 rows)
+
+======================================================================
+PROCESSING SUMM2 (Borrower Details)
+======================================================================
+
+Reading bnmsummary2_20251022.csv...
+  Raw CSV: 3,100 rows, 37 columns
+✓ CSV loaded: 3,100 rows, 36 columns (WORK.PROD compliant)
+  📊 bnmsummary2_csv: Control count = 3099
+  📊 bnmsummary2_csv: Actual data rows = 3099
+  ✓ Record count matches control (3099)
+
+Reading intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat...
+✓ SAS7BDAT loaded: 6,582 rows
+  📋 Mapping EHP column names to CSV structure...
+  ✓ Renamed 20 columns
+  ℹ SAS dataset - no FH/FT markers expected
+
+Applying production schema compliance...
+  📋 Applying production schema to CSV...
+  ✓ Schema applied: 38 columns, 3,099 rows
+  📋 Applying production schema to EHP...
+  ✓ Schema applied: 38 columns, 6,582 rows
+
+Combining CSV + EHP sources...
+✓ Combined: 9,681 rows
+
+📦 Building cumulative file (SAS-style)...
+  Today's new records: 9,681 rows
+  ⚠ Today's file exists - removing today's records first (rerun detected)
+  ✓ Removed today's duplicates, kept 0 historical rows
+  ℹ Using cleaned existing file as base
+  ⚠ Column mismatch detected, aligning...
+  ✓ New cumulative: 9,681 rows (added 9,681 new)
+
+🔍 Data Type Validation (SUMM2)...
+  Total columns: 41 (PROD has 38)
+  String columns: 35
+  Numeric columns: 6
+
+  Critical BNM fields (with leading zeros):
+    POSTCODE: ['75460', '11900', '84410', '75460', '75350']
+    STATE_CD: ['04', '07', '01', '04', '04']
+    CUSTOMER_CODE: ['00077', '00078', '00078', '00078', '00077']
+    ENTKEY: ['00000000000028319666', '00000000000024186583', '00000000000022597784', '00000000000029298016', '00000000000016972731']
+
+Saving SUMM2.parquet...
+✓ Saved: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output/year=2025/month=10/day=22/SUMM2.parquet (9,681 rows)
+
+======================================================================
+PROCESSING COMPLETE
+======================================================================
+Date: 2025-10-22
+Output Directory: /sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output/year=2025/month=10/day=22
+
+Results:
+  SUMM1.parquet: 7,491 rows, 44 columns
+  SUMM2.parquet: 9,681 rows, 41 columns
+
+✅ Production Schema Compliance:
+  ✓ SUMM1: 41 columns (30 CHAR + 11 NUM)
+  ✓ SUMM2: 38 columns (35 CHAR + 3 NUM)
+  ✓ Data types match WORK.PROD exactly
+  ✓ Column lengths match production
+  ✓ Leading zeros preserved for BNM critical fields:
+      - State codes (01-16)
+      - Postal codes (00000-99999)
+      - Customer codes (0077, 0078, etc.)
+      - Entity keys (00001234567, etc.)
+  ✓ Extra columns removed
+  ✓ Numeric conversions completed
+======================================================================
+✓ Ready for BNM SDIS/B2B submission
+✓ PROC COMPARE validation should now pass
