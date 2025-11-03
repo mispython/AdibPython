@@ -1,79 +1,9 @@
-EICRDBIL
+result = duckdb.query("""
+    SELECT ACCTNO, SUM(TRANAMT) AS TOTAL_TRANAMT
+    FROM '/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input/loan_current.parquet'
+    WHERE FMTCODE IN (1, 2, 6, 8)
+    GROUP BY ACCTNO
+    ORDER BY TOTAL_TRANAMT DESC
+""").to_df()
 
-DATA REPTDATE;
-   SET BTRSA.REPTDATE;
-   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
-   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
-   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-   CALL SYMPUT('REPTDT',PUT(REPTDATE,YYMMDDN8.));
-RUN;
-
-DATA BTRADE.BILLSTRAN_&REPTDT BILLSTRAN_&REPTDAY;
-  INFILE EXTCOMM FIRSTOBS=2 TRUNCOVER;
-  INPUT @001 RECTYPE      $2.
-        @003 TRANSREF     $10.
-        @021 COSTCTR      4.
-        @027 ACCTNO       $15.
-        @042 SUBACCT      $13.
-        @064 GLMNEMONIC   $5.
-        @069 LIABCODE     $3.
-        @073 TRANDATE     YYMMDD8.
-        @081 EXPRDATE     YYMMDD6.
-        @087 TRANAMT      18.
-        @105 EXCHANGE     16.
-        @121 CURRENCY     $4.
-        @125 BTREL        $13.
-        @138 RELFROM      $13.
-        @169 TRANSREFPG   $10.
-        @180 TRANAMT_CCY  18.
-        @198 TRANS_NUM    $10.
-        @208 TRANS_IND    $3.
-        @211 MNEMONIC_CD  $5.
-        @216 ACCT_INFO    $20.
-        @236 CR_DR_IND    $1.
-        @237 VOUCHER_NUM  $10.
-        ;
-RUN;
-
-
-
-EIBWTRBL
-
-DATA REPTDATE;
-   SET LOAN.REPTDATE;
-   SELECT(DAY(REPTDATE));
-      WHEN(8)   CALL SYMPUT('NOWK', PUT('1', $1.));
-      WHEN(15)  CALL SYMPUT('NOWK', PUT('2', $1.));
-      WHEN(22)  CALL SYMPUT('NOWK', PUT('3', $1.));
-      OTHERWISE CALL SYMPUT('NOWK', PUT('4', $1.));
-   END;
-   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
-   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
-RUN;
-
-DATA BTRADE.BILLSTRAN&REPTMON&NOWK&REPTYEAR;
-  INFILE EXTCOMM FIRSTOBS=2 TRUNCOVER;
-  INPUT @001 RECTYPE      $2.
-        @003 TRANSREF     $10.
-        @021 COSTCTR      4.
-        @027 ACCTNO       $15.
-        @042 SUBACCT      $13.
-        @064 GLMNEMONIC   $5.
-        @069 LIABCODE     $3.
-        @073 TRANDATE     YYMMDD8.
-        @081 EXPRDATE     YYMMDD6.
-        @087 TRANAMT      18.
-        @105 EXCHANGE     16.
-        @121 CURRENCY     $4.
-        @125 BTREL        $13.
-        @138 RELFROM      $13.
-        @169 TRANSREFPG   $10.
-        @180 TRANAMT_CCY  18.
-        @198 TRANS_NUM    $10.
-        @208 TRANS_IND    $3.
-        @211 MNEMONIC_CD  $5.
-        @216 ACCT_INFO    $20.
-        @236 CR_DR_IND    $1.
-        @237 VOUCHER_NUM  $10.
-        ;
-RUN;
+print(result.head())
