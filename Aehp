@@ -1,12 +1,223 @@
-  I had done the /sas/python/virt_edw/Data_Warehouse/TF/Job/CRMS_BILLSTRAN_UAT.py for CRMS part and tested good. 
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import saspy
+import sys
+from datetime import datetime, timedelta
+import os
 
-But for EICRDBIL BILLSTRAN_&DD dataset  & EIBWTRBL - BILLSTRAN_&MMWYY dataset, need help as below. 
+# Initialize SAS session
+sas = saspy.SASsession()
 
- 2 Items: 
-1) you can combine both daily and weekly using argument and uat input file from below. 
-      pq.write_table(table,f"Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_{BATCH_MODE}.parquet")
+# Get batch date
+batch_dt = datetime.now() - timedelta(days=1)
+batch_dt_str = batch_dt.strftime("%Y%m%d")
+day = batch_dt.day
 
-2) In order to create the same schema for the dataset , the code i using now require to get the schema from prev data.  Sample program sas below. 
+# Determine batch mode from argument or default to 'D'
+BATCH_MODE = sys.argv[1] if len(sys.argv) > 1 else 'D'
+print("BATCH MODE = ", BATCH_MODE)
 
-Appreciate your help to change it accordingly. Plan to cut by mid of November. 
-/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/HPCO.py
+# ------------------------------------------
+# Configure paths based on batch mode
+# ------------------------------------------
+if BATCH_MODE == 'W':  # Weekly
+    print("Weekly processing")
+    lib_name = 'bwt'
+    sas_path = "/stgsrcsys/host/uat/bwt"
+    
+    # Calculate month and year for weekly dataset naming (BILLSTRAN_MMWYY)
+    month_str = f"{batch_dt.month:02d}"
+    year_str = f"{batch_dt.year % 100:02d}"
+    
+    # Determine week number (W1-W4)
+    if day <= 7:
+        week_num = "1"
+    elif day <= 14:
+        week_num = "2"
+    elif day <= 21:
+        week_num = "3"
+    else:
+        week_num = "4"
+    
+    output_file_name = f"billstran_{month_str}w{week_num}{year_str}"
+    
+    # Previous week dataset for schema
+    if week_num == "1":
+        # If week 1, get previous month's week 4
+        prev_month = batch_dt - timedelta(days=30)
+        prev_month_str = f"{prev_month.month:02d}"
+        prev_year_str = f"{prev_month.year % 100:02d}"
+        prev_file_name = f"billstran_{prev_month_str}w4{prev_year_str}"
+    else:
+        # Get previous week
+        prev_week_num = str(int(week_num) - 1)
+        prev_file_name = f"billstran_{month_str}w{prev_week_num}{year_str}"
+    
+elif BATCH_MODE == 'D':  # Daily
+    print("Daily processing")
+    lib_name = 'rdb'
+    sas_path = "/stgsrcsys/host/uat/rdb"
+    
+    # Daily dataset naming (BILLSTRAN_DD)
+    day_str = f"{day:02d}"
+    output_file_name = f"billstran_{day_str}"
+    
+    # Previous day dataset for schema
+    prev_day = day - 1 if day > 1 else 31  # Simplified; adjust for month boundaries if needed
+    prev_file_name = f"billstran_{prev_day:02d}"
+    
+else:
+    raise ValueError(f"Invalid BATCH_MODE: {BATCH_MODE}. Use 'D' for Daily or 'W' for Weekly")
+
+print(f"Output file: {output_file_name}")
+print(f"Previous file for schema: {prev_file_name}")
+
+# ------------------------------------------
+# Helper Functions
+# ------------------------------------------
+
+def assign_libname(lib_name, sas_path):
+    log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
+    return log
+
+def resolve_suffix_columns(df):
+    suffix = "_billstran"
+    x_columns = [col for col in df.columns if col.endswith(suffix)]
+    
+    for col_x in x_columns:
+        base_col = col_x[:-(len(suffix))]
+        print(f"Renaming {col_x} to {base_col}")
+        df[base_col] = df[col_x]
+        df.drop(col_x, axis=1, inplace=True)
+    return df
+
+def drop_table(lib_name, table_name):
+    sas_code = f"""
+        %macro drop_if_exists(lib=work, table=);
+            %if %sysfunc(exist(&lib..&table)) %then %do;
+                proc sql;
+                    drop table &lib..&table;
+                quit;
+            %end;
+        %mend;
+        %drop_if_exists(lib={lib_name}, table={table_name});
+    """
+    log = sas.submit(sas_code)
+    return log
+
+def set_data_with_schema(df, lib_name, cur_data, prev_data):
+    """
+    Create dataset with schema matching previous dataset
+    Similar to HCPO.py approach
+    """
+    # Load data to work library
+    sas.df2sd(df, table=cur_data, libref='work')
+    
+    # Get metadata from previous dataset
+    log = sas.submit(f"""
+        proc sql noprint;
+            create table colmeta as
+            select name, type, length
+            from dictionary.columns
+            where libname = upcase("{lib_name}")
+                  and memname = upcase("{prev_data}");
+        quit;
+    """)
+    print(log["LOG"])
+    
+    # Check if previous dataset exists
+    df_meta = sas.sasdata("colmeta", libref="work").to_df()
+    
+    if df_meta.empty:
+        print(f"Warning: Previous dataset {prev_data} not found. Creating without schema matching.")
+        # Fallback: just copy the data as-is
+        log = sas.submit(f"""
+            data {lib_name}.{cur_data};
+                set work.{cur_data};
+            run;
+        """)
+        return log
+    
+    # Build column list and casted columns
+    cols = df_meta["name"].dropna().tolist()
+    col_list = ", ".join(cols)
+    
+    casted_cols = []
+    for _, row in df_meta.iterrows():
+        col = row["name"]
+        length = row['length']
+        if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
+            casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
+        else:
+            casted_cols.append(col)
+    
+    casted_cols_str = ",\n        ".join(casted_cols)
+    
+    # Create new dataset with schema from previous + data from work
+    log = sas.submit(f"""
+        proc sql noprint;
+            create table {lib_name}.{cur_data} as
+            select {col_list} from {lib_name}.{prev_data}(obs=0)
+            union corr
+            select {casted_cols_str} from work.{cur_data};
+        quit;
+    """)
+    print(log["LOG"])
+    
+    return log
+
+# ------------------------------------------
+# MAIN EXECUTION
+# ------------------------------------------
+
+if __name__ == "__main__":
+    
+    # Column names from staging file
+    column_names = [
+        "RECTYPE_billstran", "TRANSREF_billstran", "COSTCTR_billstran", 
+        "ACCTNO_billstran", "SUBACCT_billstran", "GLMNEMONIC_billstran", 
+        "LIABCODE_billstran", "TRANDATE_billstran", "EXPRDATE_billstran", 
+        "TRANAMT_billstran", "EXCHANGE_billstran", "CURRENCY_billstran", 
+        "BTREL_billstran", "RELFROM_billstran", "TRANSREFPG_billstran", 
+        "TRANAMT_CCY_billstran", "TRANS_NUM_billstran", "TRANS_IND_billstran", 
+        "MNEMONIC_CD_billstran", "ACCT_INFO_billstran", "CR_DR_IND_billstran", 
+        "VOUCHER_NUM_billstran"
+    ]
+    
+    # Read staging file
+    stg_file = f"Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_{BATCH_MODE}.parquet"
+    print(f"Reading staging file: {stg_file}")
+    
+    df = pd.read_parquet(stg_file)
+    df = df[column_names]
+    df = resolve_suffix_columns(df)
+    df = df.iloc[1:].reset_index(drop=True)
+    df = df.fillna("")
+    
+    # Filter and apply business logic
+    df = df[df['ACCTNO'].notnull()]
+    df.loc[df['CURRENCY'] == 'MYR', 'EXCHANGE'] = 1
+    
+    print(f"Number of records: {len(df)}")
+    
+    # Assign library
+    log = assign_libname(lib_name, sas_path)
+    print("Library assigned")
+    
+    # Drop existing table
+    log = drop_table(lib_name, output_file_name)
+    print(f"Drop table log: {log['LOG']}")
+    
+    # Create new dataset with schema from previous
+    log = set_data_with_schema(df, lib_name, output_file_name, prev_file_name)
+    print(f"Dataset creation log: {log['LOG']}")
+    
+    # Copy to mirror location (if needed, like HCPO.py does)
+    if BATCH_MODE == 'D':
+        source_path = f"/dwh/{lib_name}/{output_file_name}.sas7bdat"
+        dest_path = f"/dwh/i{lib_name}/i{output_file_name}.sas7bdat"
+        os.system(f'cp {source_path} {dest_path}')
+        print(f"Copied to {dest_path}")
+    
+    print("Processing completed successfully!")
