@@ -6,305 +6,110 @@ import saspy
 import sys
 import os
 
-"""
-TF.py - BILLSTRAN Processing for EICRDBIL (Daily) and EIBWTRBL (Weekly)
-Similar pattern to HPCO.py - uses previous dataset schema
-"""
-
-# Initialize SAS session
 sas = saspy.SASsession()
 
-# Get batch date and calculate metadata
 batch_dt = datetime.now() - timedelta(days=1)
 batch_dt_str = batch_dt.strftime("%Y%m%d")
 day = batch_dt.day
 month_str = f"{batch_dt.month:02d}"
 year_str = f"{batch_dt.year % 100:02d}"
 
-# Determine batch mode from argument or default to 'D'
 BATCH_MODE = sys.argv[1] if len(sys.argv) > 1 else 'D'
-print("=" * 60)
-print(f"BATCH MODE: {BATCH_MODE}")
-print(f"Processing Date: {batch_dt.strftime('%Y-%m-%d')}")
-print("=" * 60)
+print("BATCH MODE = ", BATCH_MODE)
 
-# ------------------------------------------
-# Configure based on batch mode
-# ------------------------------------------
-if BATCH_MODE == 'W':  # Weekly (EIBWTRBL)
-    print("Weekly processing (EIBWTRBL)")
-    lib_name = 'btrade'
-    sas_path = "/dwh/btrade"
-    
-    # Determine week number based on day (matching EIBWTRBL logic)
-    if day == 8:
-        nowk = "1"
-    elif day == 15:
-        nowk = "2"
-    elif day == 22:
-        nowk = "3"
-    else:
-        nowk = "4"
-    
-    # Current and previous dataset names
+# Determine dataset names
+if BATCH_MODE == 'W':
+    nowk = "1" if day == 8 else "2" if day == 15 else "3" if day == 22 else "4"
     cur_data = f"billstran{month_str}{nowk}{year_str}"
     
-    # Determine previous week dataset
     if nowk == "1":
-        # If week 1, get previous month's week 4
         prev_month = batch_dt - timedelta(days=30)
-        prev_month_str = f"{prev_month.month:02d}"
-        prev_year_str = f"{prev_month.year % 100:02d}"
-        prev_data = f"billstran{prev_month_str}4{prev_year_str}"
+        prev_data = f"billstran{prev_month.month:02d}4{prev_month.year % 100:02d}"
     else:
-        # Get previous week in same month
-        prev_week_num = str(int(nowk) - 1)
-        prev_data = f"billstran{month_str}{prev_week_num}{year_str}"
-    
-elif BATCH_MODE == 'D':  # Daily (EICRDBIL)
-    print("Daily processing (EICRDBIL)")
-    lib_name = 'btrade'
-    sas_path = "/dwh/btrade"
-    
-    # Current and previous dataset names
-    day_str = f"{day:02d}"
-    cur_data = f"billstran_{day_str}"
-    
-    # Determine previous day dataset
-    if day == 1:
-        # If day 1, get last day of previous month (simplified to 31)
-        prev_data = f"billstran_31"
-    else:
-        prev_day = day - 1
-        prev_data = f"billstran_{prev_day:02d}"
-    
-else:
-    raise ValueError(f"Invalid BATCH_MODE: {BATCH_MODE}. Use 'D' for Daily or 'W' for Weekly")
+        prev_data = f"billstran{month_str}{int(nowk)-1}{year_str}"
+        
+elif BATCH_MODE == 'D':
+    cur_data = f"billstran_{day:02d}"
+    prev_data = f"billstran_{31 if day == 1 else day-1:02d}"
 
-print(f"Current dataset: {cur_data}")
-print(f"Previous dataset (for schema): {prev_data}")
-print("=" * 60)
+print(f"Current: {cur_data}, Previous: {prev_data}")
 
-# ------------------------------------------
-# Helper Functions
-# ------------------------------------------
+# Column names
+columns = ["RECTYPE_billstran", "TRANSREF_billstran", "COSTCTR_billstran", 
+           "ACCTNO_billstran", "SUBACCT_billstran", "GLMNEMONIC_billstran", 
+           "LIABCODE_billstran", "TRANDATE_billstran", "EXPRDATE_billstran", 
+           "TRANAMT_billstran", "EXCHANGE_billstran", "CURRENCY_billstran", 
+           "BTREL_billstran", "RELFROM_billstran", "TRANSREFPG_billstran", 
+           "TRANAMT_CCY_billstran", "TRANS_NUM_billstran", "TRANS_IND_billstran", 
+           "MNEMONIC_CD_billstran", "ACCT_INFO_billstran", "CR_DR_IND_billstran", 
+           "VOUCHER_NUM_billstran"]
 
-def assign_libname(lib_name, sas_path):
-    """Assign SAS library"""
-    log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
-    return log
+# Read and prepare data
+df = pd.read_parquet(f"Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_{BATCH_MODE}.parquet")
+df = df[columns]
+df.columns = [col.replace('_billstran', '') for col in df.columns]
+df = df.iloc[1:].reset_index(drop=True).fillna("")
+df = df[df['ACCTNO'].notnull()]
+df.loc[df['CURRENCY'] == 'MYR', 'EXCHANGE'] = 1
 
-def resolve_suffix_columns(df):
-    """Remove _billstran suffix from column names"""
-    suffix = "_billstran"
-    x_columns = [col for col in df.columns if col.endswith(suffix)]
-    
-    for col_x in x_columns:
-        base_col = col_x[:-(len(suffix))]
-        print(f"  Renaming {col_x} -> {base_col}")
-        df[base_col] = df[col_x]
-        df.drop(col_x, axis=1, inplace=True)
-    
-    return df
+print("Number of records:", len(df))
 
-def drop_table(lib_name, table_name):
-    """Drop SAS table if exists"""
-    sas_code = f"""
-        %macro drop_if_exists(lib=work, table=);
+def assign_libname(lib, path):
+    return sas.submit(f"""libname {lib} '{path}';""")
+
+def drop_table(lib, table):
+    return sas.submit(f"""
+        %macro drop_if_exists(lib={lib}, table={table});
             %if %sysfunc(exist(&lib..&table)) %then %do;
-                proc sql;
-                    drop table &lib..&table;
-                quit;
+                proc sql; drop table &lib..&table; quit;
             %end;
         %mend;
-        %drop_if_exists(lib={lib_name}, table={table_name});
-    """
-    log = sas.submit(sas_code)
-    return log
+        %drop_if_exists();
+    """)
 
-def set_data(df, lib_name, cur_data, prev_data):
-    """
-    Create dataset with schema from previous dataset
-    Pattern similar to HPCO.py
-    """
-    print(f"\nCreating dataset with schema from previous...")
-    
-    # Load dataframe to work library
-    sas.df2sd(df, table=cur_data, libref='work')
-    print(f"  ✓ Data loaded to work.{cur_data}")
-    
-    # Get metadata from previous dataset
-    print(f"  ✓ Retrieving schema from {lib_name}.{prev_data}")
+def set_data(df, lib, cur, prev):
+    sas.df2sd(df, table=cur, libref='work')
     log = sas.submit(f"""
         proc sql noprint;
             create table colmeta as
             select name, type, length
             from dictionary.columns
-            where libname = upcase("{lib_name}")
-                  and memname = upcase("{prev_data}");
+            where libname=upcase("{lib}") and memname=upcase("{prev}");
         quit;
     """)
     
-    # Check if previous dataset exists
     df_meta = sas.sasdata("colmeta", libref="work").to_df()
     
     if df_meta.empty:
-        print(f"  ⚠ WARNING: Previous dataset {prev_data} not found!")
-        print(f"  ⚠ Creating dataset without schema matching (first run)")
-        
-        # Fallback: create without schema matching
-        log = sas.submit(f"""
-            data {lib_name}.{cur_data};
-                set work.{cur_data};
-            run;
-        """)
-        print(f"  ✓ Dataset {lib_name}.{cur_data} created (no schema matching)")
-        return log
+        return sas.submit(f"data {lib}.{cur}; set work.{cur}; run;")
     
-    print(f"  ✓ Schema retrieved: {len(df_meta)} columns")
-    
-    # Build column list and casted columns
-    cols = df_meta["name"].dropna().tolist()
-    col_list = ", ".join(cols)
-    
-    casted_cols = []
+    cols = ", ".join(df_meta["name"].dropna().tolist())
+    casted = []
     for _, row in df_meta.iterrows():
-        col = row["name"]
-        length = row['length']
+        col, length = row["name"], row['length']
         if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
-            casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
+            casted.append(f"input(trim({col}), ${int(length)}.) as {col}")
         else:
-            casted_cols.append(col)
+            casted.append(col)
     
-    casted_cols_str = ",\n        ".join(casted_cols)
-    
-    # Create new dataset with schema from previous + data from work
-    print(f"  ✓ Creating {lib_name}.{cur_data} with matched schema...")
-    log = sas.submit(f"""
+    return sas.submit(f"""
         proc sql noprint;
-            create table {lib_name}.{cur_data} as
-            select {col_list} from {lib_name}.{prev_data}(obs=0)
+            create table {lib}.{cur} as
+            select {cols} from {lib}.{prev}(obs=0)
             union corr
-            select {casted_cols_str} from work.{cur_data};
+            select {", ".join(casted)} from work.{cur};
         quit;
     """)
-    
-    print(f"  ✓ Dataset {lib_name}.{cur_data} created successfully")
-    return log
 
-# ------------------------------------------
-# MAIN EXECUTION
-# ------------------------------------------
+# Main execution
+assign_libname("btrade", "/dwh/btrade")
+drop_table("btrade", cur_data)
+set_data(df, "btrade", cur_data, prev_data)
 
-if __name__ == "__main__":
-    
-    print("\n" + "=" * 60)
-    print("STEP 1: Reading Staging Parquet File")
-    print("=" * 60)
-    
-    # Column names from staging file
-    column_names = [
-        "RECTYPE_billstran", "TRANSREF_billstran", "COSTCTR_billstran", 
-        "ACCTNO_billstran", "SUBACCT_billstran", "GLMNEMONIC_billstran", 
-        "LIABCODE_billstran", "TRANDATE_billstran", "EXPRDATE_billstran", 
-        "TRANAMT_billstran", "EXCHANGE_billstran", "CURRENCY_billstran", 
-        "BTREL_billstran", "RELFROM_billstran", "TRANSREFPG_billstran", 
-        "TRANAMT_CCY_billstran", "TRANS_NUM_billstran", "TRANS_IND_billstran", 
-        "MNEMONIC_CD_billstran", "ACCT_INFO_billstran", "CR_DR_IND_billstran", 
-        "VOUCHER_NUM_billstran"
-    ]
-    
-    # Read staging parquet file
-    stg_file = f"Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_{BATCH_MODE}.parquet"
-    
-    if not os.path.exists(stg_file):
-        print(f"ERROR: Staging file not found: {stg_file}")
-        sys.exit(1)
-    
-    print(f"Reading: {stg_file}")
-    df = pd.read_parquet(stg_file)
-    print(f"  ✓ Raw records loaded: {len(df)}")
-    
-    # Select required columns
-    df = df[column_names]
-    print(f"  ✓ Selected {len(column_names)} columns")
-    
-    # Clean column names (remove _billstran suffix)
-    print("\nCleaning column names:")
-    df = resolve_suffix_columns(df)
-    
-    # Remove first row and reset index
-    df = df.iloc[1:].reset_index(drop=True)
-    print(f"  ✓ Removed header row, remaining: {len(df)} records")
-    
-    # Fill null values
-    df = df.fillna("")
-    
-    print("\n" + "=" * 60)
-    print("STEP 2: Data Transformation")
-    print("=" * 60)
-    
-    # Filter out null accounts
-    original_count = len(df)
-    df = df[df['ACCTNO'].notnull()]
-    filtered_count = len(df)
-    print(f"  ✓ Filtered null ACCTNO: {original_count} -> {filtered_count} records")
-    
-    # Set EXCHANGE to 1 for MYR currency
-    myr_count = len(df[df['CURRENCY'] == 'MYR'])
-    df.loc[df['CURRENCY'] == 'MYR', 'EXCHANGE'] = 1
-    print(f"  ✓ Set EXCHANGE=1 for {myr_count} MYR records")
-    
-    print(f"\nFinal record count: {len(df)}")
-    
-    # Display sample data
-    print("\nSample data (first 3 rows):")
-    print(df.head(3).to_string())
-    
-    print("\n" + "=" * 60)
-    print("STEP 3: Creating SAS Dataset")
-    print("=" * 60)
-    
-    # Assign library
-    log = assign_libname(lib_name, sas_path)
-    print(f"  ✓ Library {lib_name} assigned to {sas_path}")
-    
-    # Drop existing table
-    print(f"\n  Dropping existing table {lib_name}.{cur_data} if exists...")
-    log = drop_table(lib_name, cur_data)
-    
-    # Create dataset with schema from previous
-    log = set_data(df, lib_name, cur_data, prev_data)
-    
-    # For daily mode, also create BILLSTRAN_YYYYMMDD
-    if BATCH_MODE == 'D':
-        print("\n" + "=" * 60)
-        print("STEP 4: Creating Additional Daily Dataset")
-        print("=" * 60)
-        
-        # Create BILLSTRAN_YYYYMMDD (full date version)
-        cur_data_full = f"billstran_{batch_dt_str}"
-        print(f"Creating additional dataset: {cur_data_full}")
-        
-        # Drop if exists
-        log = drop_table(lib_name, cur_data_full)
-        
-        # Create with same schema
-        log = set_data(df, lib_name, cur_data_full, prev_data)
-        
-        # Copy to mirror location (if needed)
-        source_path = f"{sas_path}/{cur_data}.sas7bdat"
-        dest_path = f"{sas_path.replace('btrade', 'ibtrade')}/i{cur_data}.sas7bdat"
-        
-        if os.path.exists(os.path.dirname(dest_path)):
-            os.system(f'cp {source_path} {dest_path}')
-            print(f"  ✓ Copied to {dest_path}")
-    
-    print("\n" + "=" * 60)
-    print("PROCESSING COMPLETED SUCCESSFULLY!")
-    print("=" * 60)
-    print(f"✓ Dataset created: {lib_name}.{cur_data}")
-    if BATCH_MODE == 'D':
-        print(f"✓ Dataset created: {lib_name}.{cur_data_full}")
-    print(f"✓ Total records: {len(df)}")
-    print("=" * 60)
+if BATCH_MODE == 'D':
+    cur_data_full = f"billstran_{batch_dt_str}"
+    drop_table("btrade", cur_data_full)
+    set_data(df, "btrade", cur_data_full, prev_data)
+    os.system(f'cp /dwh/btrade/{cur_data}.sas7bdat /dwh/ibtrade/i{cur_data}.sas7bdat')
+
+print("Processing completed!")
