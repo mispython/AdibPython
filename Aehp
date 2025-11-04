@@ -1,9 +1,0 @@
-result = duckdb.query("""
-    SELECT ACCTNO, SUM(TRANAMT) AS TOTAL_TRANAMT
-    FROM '/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/input/loan_current.parquet'
-    WHERE FMTCODE IN (1, 2, 6, 8)
-    GROUP BY ACCTNO
-    ORDER BY TOTAL_TRANAMT DESC
-""").to_df()
-
-print(result.head())
