@@ -1,0 +1,118 @@
+//EIDWDPTR JOB MSGCLASS=X,MSGLEVEL=(1,1),NOTIFY=&SYSUID                 JOB39593
+//*
+//DELETE  EXEC PGM=IEFBR14
+//DEL01    DD DSN=SAP.EDW.DPPSTRGS.FTP,
+//            DISP=(MOD,DELETE,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)
+//*
+//CREATE  EXEC PGM=IEFBR14
+//CRT01    DD DSN=SAP.EDW.DPPSTRGS.FTP,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),
+//            SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)
+//*
+//EIDWDPTR  EXEC SAS609,REGION=64M,WORK='12000,12000'
+//DPPSTRGS  DD DSN=RBP2.B033.MST01.DPPSTRGS,DISP=SHR
+//          DD DSN=RBP2.B033.MST02.DPPSTRGS,DISP=SHR
+//          DD DSN=RBP2.B033.MST03.DPPSTRGS,DISP=SHR
+//          DD DSN=RBP2.B033.MST04.DPPSTRGS,DISP=SHR
+//          DD DSN=RBP2.B033.MST05.DPPSTRGS,DISP=SHR
+//          DD DSN=RBP2.B033.MST06.DPPSTRGS,DISP=SHR
+//          DD DSN=RBP2.B033.MST07.DPPSTRGS,DISP=SHR
+//          DD DSN=RBP2.B033.MST08.DPPSTRGS,DISP=SHR
+//          DD DSN=RBP2.B033.MST09.DPPSTRGS,DISP=SHR
+//          DD DSN=RBP2.B033.MST10.DPPSTRGS,DISP=SHR
+//SYSIN     DD *
+DATA STG_DP_DPPSTRGS (DROP=POS);
+   INFILE DPPSTRGS LRECL=665 MISSOVER;
+   INPUT @01 BANKNO   PD2.
+         @32 FMTCODE  PD2.   @;
+   IF BANKNO = 33 THEN DO;
+      IF FMTCODE IN (1,2,6,8) THEN DO;
+         INPUT @03 ACCTNO   PD6.
+               @16 DATATYPE $1.
+               @23 USERID   $8.
+               @34 TRANCODE PD2.
+               @36 CHANNEL  PD2.
+               @38 TIME     PD8.
+               @46 TRANAMT  PD7.2
+               @53 CHQNO    PD6.
+               @59 TRLIND   $1.
+               @65 PENALTY  PD6.2 @;
+         IF FMTCODE IN (6,8) THEN DO;
+            IF TRLIND='1' THEN  INPUT @61 TRACEBR $3. ; ELSE
+            IF TRLIND='2' THEN  INPUT @89 TRACEBR $3. ; ELSE
+            IF TRLIND='3' THEN  INPUT @63 TRACEBR $3. ; ELSE
+            IF TRLIND='L' THEN  INPUT @65 TRACEBR $3. ;
+         END;
+         IF FMTCODE IN (2) THEN DO;
+            INPUT @59 ORIDT    PD6.
+                  @65 ORITXNCD PD2.
+                  @71 TRACEBR   $3.
+                 @60  STRAIL1  $18.
+                 @78  STRAIL2  $18.
+                 @96  STRAIL3  $18.
+                 @114 STRAIL4  $18.
+                 @132 STRAIL5  $18.
+                 @150 STRAIL6  $18.
+                  @62 LTRAIL1  $50.
+                 @112 LTRAIL2  $50.
+                 @162 LTRAIL3  $50. @;
+         END;
+         IF FMTCODE IN (1) THEN DO;
+            INPUT
+                 @60  STRAIL1  $18.
+                 @78  STRAIL2  $18.
+                 @96  STRAIL3  $18.
+                 @114 STRAIL4  $18.
+                 @132 STRAIL5  $18.
+                 @150 STRAIL6  $18.
+                  @62 LTRAIL1  $50.
+                 @112 LTRAIL2  $50.
+                 @162 LTRAIL3  $50. @;
+            IF TRLIND='1' THEN  INPUT @61 TRACEBR $3. @; ELSE
+            IF TRLIND='2' THEN  INPUT @89 TRACEBR $3. @; ELSE
+            IF TRLIND='3' THEN  INPUT @63 TRACEBR $3. @; ELSE
+            IF TRLIND='L' THEN  INPUT @65 TRACEBR $3. @;
+         END;
+         IF FMTCODE IN (1,2) THEN DO;
+            POS = 0;
+            IF FMTCODE IN (2) THEN DO;
+                POS = 8;
+                INPUT @67 TRLIND   $1. @;
+            END;
+            IF TRLIND = 'L' THEN DO;
+                INPUT
+                @(60+POS) NUMTRL       PD2.
+                @(62+POS) NEW_LTRAIL1  $50.
+               @(112+POS) NEW_LTRAIL2  $50.
+               @(162+POS) NEW_LTRAIL3  $50.
+               @(212+POS) NEW_LTRAIL4  $50.
+               @(262+POS) NEW_LTRAIL5  $50.
+               @(312+POS) NEW_LTRAIL6  $50.
+               @(362+POS) NEW_LTRAIL7  $50.
+               @(412+POS) NEW_LTRAIL8  $50.
+               @(462+POS) NEW_LTRAIL9  $50.
+               @(512+POS) NEW_LTRAIL10 $50.;
+            END;
+            ELSE DO;
+                INPUT
+                @(60+POS) NEW_STRAIL1  $18.
+                @(78+POS) NEW_STRAIL2  $18.
+                @(96+POS) NEW_STRAIL3  $18.
+               @(114+POS) NEW_STRAIL4  $18.
+               @(132+POS) NEW_STRAIL5  $18.
+               @(150+POS) NEW_STRAIL6  $18.
+               @(168+POS) NEW_STRAIL7  $18.
+               @(186+POS) NEW_STRAIL8  $18.
+               @(204+POS) NEW_STRAIL9  $18.;
+            END;
+         END;
+        OUTPUT;
+      END;
+   END;
+RUN;
+
+FILENAME TRANFILE 'SAP.EDW.DPPSTRGS.FTP' DISP=OLD;
+PROC CPORT LIB=WORK FILE=TRANFILE; RUN;
