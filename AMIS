@@ -1,115 +1,16 @@
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-from datetime import datetime, timedelta
-import saspy
-import sys
-import os
+Using SAS Config named: default
+SAS Connection established. Subprocess id is 924689
 
-sas = saspy.SASsession()
-
-batch_dt = datetime.now() - timedelta(days=1)
-batch_dt_str = batch_dt.strftime("%Y%m%d")
-day = batch_dt.day
-month_str = f"{batch_dt.month:02d}"
-year_str = f"{batch_dt.year % 100:02d}"
-
-BATCH_MODE = sys.argv[1] if len(sys.argv) > 1 else 'D'
-print("BATCH MODE = ", BATCH_MODE)
-
-# Determine dataset names
-if BATCH_MODE == 'W':
-    nowk = "1" if day == 8 else "2" if day == 15 else "3" if day == 22 else "4"
-    cur_data = f"billstran{month_str}{nowk}{year_str}"
-    
-    if nowk == "1":
-        prev_month = batch_dt - timedelta(days=30)
-        prev_data = f"billstran{prev_month.month:02d}4{prev_month.year % 100:02d}"
-    else:
-        prev_data = f"billstran{month_str}{int(nowk)-1}{year_str}"
-        
-elif BATCH_MODE == 'D':
-    cur_data = f"billstran_{day:02d}"
-    prev_data = f"billstran_{31 if day == 1 else day-1:02d}"
-
-print(f"Current: {cur_data}, Previous: {prev_data}")
-
-# Column names
-columns = ["RECTYPE_billstran", "TRANSREF_billstran", "COSTCTR_billstran", 
-           "ACCTNO_billstran", "SUBACCT_billstran", "GLMNEMONIC_billstran", 
-           "LIABCODE_billstran", "TRANDATE_billstran", "EXPRDATE_billstran", 
-           "TRANAMT_billstran", "EXCHANGE_billstran", "CURRENCY_billstran", 
-           "BTREL_billstran", "RELFROM_billstran", "TRANSREFPG_billstran", 
-           "TRANAMT_CCY_billstran", "TRANS_NUM_billstran", "TRANS_IND_billstran", 
-           "MNEMONIC_CD_billstran", "ACCT_INFO_billstran", "CR_DR_IND_billstran", 
-           "VOUCHER_NUM_billstran"]
-
-# Read and prepare data
-df = pd.read_parquet(f"Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_{BATCH_MODE}.parquet")
-df = df[columns]
-df.columns = [col.replace('_billstran', '') for col in df.columns]
-df = df.iloc[1:].reset_index(drop=True).fillna("")
-df = df[df['ACCTNO'].notnull()]
-df.loc[df['CURRENCY'] == 'MYR', 'EXCHANGE'] = 1
-
-print("Number of records:", len(df))
-
-def assign_libname(lib, path):
-    return sas.submit(f"""libname {lib} '{path}';""")
-
-def drop_table(lib, table):
-    return sas.submit(f"""
-        %macro drop_if_exists(lib={lib}, table={table});
-            %if %sysfunc(exist(&lib..&table)) %then %do;
-                proc sql; drop table &lib..&table; quit;
-            %end;
-        %mend;
-        %drop_if_exists();
-    """)
-
-def set_data(df, lib, cur, prev):
-    sas.df2sd(df, table=cur, libref='work')
-    log = sas.submit(f"""
-        proc sql noprint;
-            create table colmeta as
-            select name, type, length
-            from dictionary.columns
-            where libname=upcase("{lib}") and memname=upcase("{prev}");
-        quit;
-    """)
-    
-    df_meta = sas.sasdata("colmeta", libref="work").to_df()
-    
-    if df_meta.empty:
-        return sas.submit(f"data {lib}.{cur}; set work.{cur}; run;")
-    
-    cols = ", ".join(df_meta["name"].dropna().tolist())
-    casted = []
-    for _, row in df_meta.iterrows():
-        col, length = row["name"], row['length']
-        if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
-            casted.append(f"input(trim({col}), ${int(length)}.) as {col}")
-        else:
-            casted.append(col)
-    
-    return sas.submit(f"""
-        proc sql noprint;
-            create table {lib}.{cur} as
-            select {cols} from {lib}.{prev}(obs=0)
-            union corr
-            select {", ".join(casted)} from work.{cur};
-        quit;
-    """)
-
-# Main execution
-assign_libname("btrade", "/dwh/btrade")
-drop_table("btrade", cur_data)
-set_data(df, "btrade", cur_data, prev_data)
-
-if BATCH_MODE == 'D':
-    cur_data_full = f"billstran_{batch_dt_str}"
-    drop_table("btrade", cur_data_full)
-    set_data(df, "btrade", cur_data_full, prev_data)
-    os.system(f'cp /dwh/btrade/{cur_data}.sas7bdat /dwh/ibtrade/i{cur_data}.sas7bdat')
-
-print("Processing completed!")
+BATCH MODE =  D
+Current: billstran_03, Previous: billstran_02
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/TF/TF.py", line 49, in <module>
+    df = df[columns]
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4108, in __getitem__
+    indexer = self.columns._get_indexer_strict(key, "columns")[1]
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/indexes/base.py", line 6200, in _get_indexer_strict
+    self._raise_if_missing(keyarr, indexer, axis_name)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/indexes/base.py", line 6249, in _raise_if_missing
+    raise KeyError(f"None of [{key}] are in the [{axis_name}]")
+KeyError: "None of [Index(['RECTYPE_billstran', 'TRANSREF_billstran', 'COSTCTR_billstran',\n       'ACCTNO_billstran', 'SUBACCT_billstran', 'GLMNEMONIC_billstran',\n       'LIABCODE_billstran', 'TRANDATE_billstran', 'EXPRDATE_billstran',\n       'TRANAMT_billstran', 'EXCHANGE_billstran', 'CURRENCY_billstran',\n       'BTREL_billstran', 'RELFROM_billstran', 'TRANSREFPG_billstran',\n       'TRANAMT_CCY_billstran', 'TRANS_NUM_billstran', 'TRANS_IND_billstran',\n       'MNEMONIC_CD_billstran', 'ACCT_INFO_billstran', 'CR_DR_IND_billstran',\n       'VOUCHER_NUM_billstran'],\n      dtype='object')] are in the [columns]"
+SAS Connection terminated. Subprocess id was 924689
