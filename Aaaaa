@@ -1,7 +1,481 @@
-# datetime
-REPTDATE = datetime.today() - timedelta(days=1)
-PREVDATE = REPTDATE - timedelta(days=1)
-FILE_DT  = REPTDATE.strftime('%Y%m%d') 
+# COMMON Library - Complete Usage Guide
 
-SAS_ORIGIN = datetime(1960,1,1)
-RDATE = (REPTDATE- SAS_ORIGIN).days
+## 📁 Directory Structure
+
+```
+COMMON/
+├── __init__.py              # Package initializer (import everything)
+├── config.py                # Configuration management
+├── path_utils.py            # File and path operations
+├── io_utils.py              # File reading utilities
+├── date_utils.py            # Date calculations and formatting
+├── validation_utils.py      # Data validation functions
+├── duckdb_utils.py          # DuckDB integration
+├── pyarrow_utils.py         # Parquet operations
+├── log_utils.py             # Logging utilities
+├── error_handler.py         # Error handling decorators
+├── sas_functions.py         # SAS function equivalents
+└── data_transform.py        # ETL transformation patterns
+```
+
+---
+
+## 🚀 Quick Start
+
+### Installation
+
+```python
+# Add COMMON directory to your Python path
+import sys
+sys.path.insert(0, '/path/to/COMMON')
+
+# Import everything
+from COMMON import *
+
+# Or import specific modules
+from COMMON.config import Config, PathConfig
+from COMMON.io_utils import read_fixed_width_file
+from COMMON.date_utils import get_reporting_dates
+```
+
+---
+
+## 📚 Module Reference
+
+### 1. **config.py** - Configuration Management
+
+```python
+from COMMON.config import Config, PathConfig
+
+# Access global settings
+print(Config.BASE_PATH)
+print(Config.PARQUET_COMPRESSION)
+print(Config.SKIP_DATE_VALIDATION)
+
+# Get job-specific paths
+output_path = Config.get_output_path('ELDS', date=datetime.now())
+input_path = Config.get_input_path('ELDS')
+
+# Create path manager for a job
+paths = PathConfig('ELDS')
+print(paths.input_path)
+print(paths.output_path)
+print(paths.config_path)
+```
+
+**Key Settings:**
+- `SKIP_DATE_VALIDATION`: Toggle date validation
+- `PARQUET_COMPRESSION`: Compression algorithm
+- `LOG_LEVEL`: Logging verbosity
+- `FILE_ENCODING_PRIMARY`: Primary file encoding
+
+---
+
+### 2. **path_utils.py** - File Management
+
+```python
+from COMMON.path_utils import find_latest_file, ensure_directory, PathManager
+
+# Find input file
+filepath = find_latest_file('/input', prefix='newbnm1', extension='.txt')
+
+# Create directory
+ensure_directory('/output/2025/10/23')
+
+# Archive file
+PathManager.archive_file('input.txt', '/archive')
+
+# Get file size
+size = PathManager.get_file_size('data.txt')
+```
+
+---
+
+### 3. **io_utils.py** - File Reading
+
+```python
+from COMMON.io_utils import (
+    read_fixed_width_file,
+    read_csv_file,
+    load_config_file,
+    extract_file_date
+)
+
+# Read fixed-width file (SAS INPUT equivalent)
+df = read_fixed_width_file(
+    filepath='input.txt',
+    colspecs=[(0, 13), (13, 73), (73, 85)],
+    names=['AANO', 'NAME', 'NEWIC'],
+    skiprows=1
+)
+
+# Read CSV with auto-encoding
+df = read_csv_file('data.csv', skiprows=1)
+
+# Load SAS config file
+specs, names, other, col_types, col_subtypes, col_decimals, firstobs, csv_flag = \
+    load_config_file('/config', 'ELAA1')
+
+# Extract date from file header
+file_date = extract_file_date('input.txt')  # Returns DDMMYYYY
+```
+
+---
+
+### 4. **date_utils.py** - Date Functions
+
+```python
+from COMMON.date_utils import (
+    get_reporting_dates,
+    create_date_from_components,
+    format_date_sas,
+    parse_sas_date
+)
+
+# Get reporting dates (SAS REPTDATE logic)
+reptdate, reptdate1, week_num = get_reporting_dates()
+print(f"Reporting: {reptdate}, Week: {week_num}")
+
+# Create date from DD/MM/YY columns (SAS MDY function)
+df = create_date_from_components(
+    df,
+    day_col='DD',
+    month_col='MM',
+    year_col='YY',
+    target_col='AADATE'
+)
+
+# Format date (SAS PUT function)
+formatted = format_date_sas(datetime.now(), 'DDMMYY8')  # 23102025
+
+# Parse date (SAS INPUT function)
+date_obj = parse_sas_date('23102025', 'DDMMYY8')
+```
+
+---
+
+### 5. **validation_utils.py** - Data Validation
+
+```python
+from COMMON.validation_utils import (
+    validate_file_dates,
+    validate_dataframe,
+    check_required_columns
+)
+
+# Validate file dates
+file_paths = {'ELNA1': '/input/file1.txt', 'ELNA2': '/input/file2.txt'}
+all_match, dates = validate_file_dates(file_paths, '22102025')
+
+# Validate DataFrame
+is_valid, errors = validate_dataframe(
+    df,
+    required_columns=['AANO', 'NAME'],
+    check_empty=True,
+    check_duplicates='AANO'
+)
+
+# Check missing columns
+missing = check_required_columns(df, ['AANO', 'AMOUNT', 'STATUS'])
+```
+
+---
+
+### 6. **duckdb_utils.py** - Fast Querying
+
+```python
+from COMMON.duckdb_utils import DuckDBManager, load_parquet_duckdb, query_parquet
+
+# Create DuckDB manager
+db = DuckDBManager(memory_limit='4GB', threads=4)
+
+# Register DataFrame
+db.register_dataframe(df, 'my_table')
+
+# Query it
+result = db.query("SELECT * FROM my_table WHERE STATUS='APPROVED'")
+
+# Load parquet file
+df = load_parquet_duckdb('/output/ELNA1.parquet')
+
+# Query parquet with filter
+df = query_parquet('/output/ELNA1.parquet', "AMOUNT > 100000")
+```
+
+---
+
+### 7. **pyarrow_utils.py** - Parquet Operations
+
+```python
+from COMMON.pyarrow_utils import save_to_parquet, load_from_parquet, get_parquet_metadata
+
+# Save DataFrame
+save_to_parquet(df, 'output.parquet', compression='snappy')
+
+# Load specific columns
+df = load_from_parquet('output.parquet', columns=['AANO', 'AMOUNT'])
+
+# Get metadata
+metadata = get_parquet_metadata('output.parquet')
+print(f"Rows: {metadata['num_rows']}, Columns: {metadata['num_columns']}")
+```
+
+---
+
+### 8. **log_utils.py** - Logging
+
+```python
+from COMMON.log_utils import setup_logger, log_dataframe_info
+
+# Setup logger
+logger = setup_logger('ELDS', log_dir='/logs')
+
+# Use logger
+logger.section("STEP 1: Reading Files")
+logger.info("Processing started")
+logger.warning("Date mismatch detected")
+logger.error("File not found")
+
+# Log DataFrame info
+log_dataframe_info(logger, df, "ELNA1")
+```
+
+---
+
+### 9. **error_handler.py** - Error Handling
+
+```python
+from COMMON.error_handler import handle_errors, ETLError, ValidationError
+
+# Decorate functions
+@handle_errors(exit_code=77)
+def my_etl_job():
+    if not valid:
+        raise ValidationError("Data validation failed")
+    # ... process data
+
+# Safe execution
+result = safe_execute(risky_function, default=[])
+```
+
+---
+
+### 10. **sas_functions.py** - SAS Compatibility
+
+```python
+from COMMON.sas_functions import left, upcase, translate, substr, mdy, put
+
+# String functions
+df['NAME'] = left(df['NAME'])              # Remove leading spaces
+df['NAME'] = upcase(df['NAME'])            # Convert to uppercase
+df['GRADE'] = translate(df['GRADE'], '[]', '××')  # Replace characters
+
+# Substring (1-based indexing like SAS)
+df['PRODUCT'] = substr(df['FACCODE'], 6, 5)  # Start at position 6, length 5
+
+# Date creation
+date_obj = mdy(10, 23, 2025)  # October 23, 2025
+
+# Formatting
+formatted = put(12345, 'COMMA15.2')  # "12,345.00"
+formatted = put(date_obj, 'DDMMYY8')  # "23102025"
+```
+
+---
+
+### 11. **data_transform.py** - ETL Patterns
+
+```python
+from COMMON.data_transform import (
+    apply_sas_formats,
+    merge_datasets,
+    deduplicate,
+    filter_approved,
+    left_align_columns,
+    set_default_values
+)
+
+# Apply SAS formats to DataFrame
+df = apply_sas_formats(df, col_types, col_subtypes, col_decimals)
+
+# Filter for APPROVED status
+df = filter_approved(df, status_col='STATUS')
+
+# Remove duplicates (NODUPKEY)
+df = deduplicate(df, subset='AANO', keep='first')
+
+# Merge multiple datasets (SAS MERGE)
+merged = merge_datasets([df1, df2, df3], on='AANO', how='outer')
+
+# Left-align columns (SAS LEFT function)
+df = left_align_columns(df, ['REFINANC', 'SECTCD2', 'STATUS'])
+
+# Set defaults (IF col='' THEN col='0')
+df = set_default_values(df, {'DNBFISME': '0'})
+```
+
+---
+
+## 💡 Complete Example: Rewriting EIWELNEX with COMMON
+
+```python
+from COMMON import *
+
+# Setup
+SKIP_DATE_VALIDATION = True
+paths = PathConfig('ELDS')
+logger = setup_logger('EIWELNEX', paths.log_path)
+
+@handle_errors(exit_code=77)
+def run_eiwelnex():
+    # Get dates
+    reptdate, reptdate1, week = get_reporting_dates()
+    logger.info(f"Reporting Date: {reptdate} (Week {week})")
+    
+    # Create output directory
+    output_path = paths.get_output_path(reptdate)
+    ensure_directory(output_path)
+    
+    # Read files
+    dfs = {}
+    for key in ['ELNA1', 'ELNA2', 'ELNA3']:
+        filepath = find_latest_file(paths.input_path, f'newbnm{key[-1]}')
+        
+        # Load config
+        specs, names, _, col_types, col_subtypes, col_decimals, firstobs, is_csv = \
+            load_config_file(paths.config_path, f'ELAA{key[-1]}')
+        
+        # Read file
+        if is_csv == "True":
+            df = read_csv_file(filepath, names=names, skiprows=firstobs)
+        else:
+            df = read_fixed_width_file(filepath, specs, names, skiprows=firstobs)
+        
+        # Apply formats
+        df = apply_sas_formats(df, col_types, col_subtypes, col_decimals)
+        
+        # Filter approved
+        df = filter_approved(df)
+        
+        dfs[key] = df
+        logger.dataframe_info(df, key)
+    
+    # Merge datasets
+    merged = merge_datasets([dfs['ELNA1'], dfs['ELNA2'], dfs['ELNA3']], on='AANO')
+    
+    # Deduplicate
+    merged = deduplicate(merged, subset='AANO')
+    
+    # Save
+    output_file = f"{output_path}/ELBNMAX.parquet"
+    save_to_parquet(merged, output_file)
+    
+    logger.info("Job completed successfully!")
+
+# Run
+if __name__ == "__main__":
+    run_eiwelnex()
+```
+
+---
+
+## 🔧 Configuration Files
+
+Create a `job_config.py` in your job directory:
+
+```python
+from COMMON.config import Config
+
+# Override global settings
+Config.SKIP_DATE_VALIDATION = True
+Config.PARQUET_COMPRESSION = 'zstd'
+Config.LOG_LEVEL = 'DEBUG'
+
+# Job-specific settings
+JOB_NAME = 'EIWELNEX'
+MAPPING = {
+    "ELNA1": {"raw": ["newbnm1"], "config": "ELAA1_output.txt"},
+    "ELNA2": {"raw": ["newbnm2"], "config": "ELAA2_output.txt"},
+    # ...
+}
+```
+
+---
+
+## ✅ Benefits
+
+1. **Code Reusability**: Write once, use everywhere
+2. **Consistency**: Same patterns across all jobs
+3. **Easy Maintenance**: Update once, affects all jobs
+4. **SAS Compatibility**: 1:1 function mapping
+5. **Better Testing**: Unit test common functions once
+6. **Documentation**: Single source of truth
+7. **Team Collaboration**: Shared utilities
+8. **Error Handling**: Centralized error management
+
+---
+
+## 📦 Installation Steps
+
+1. Create COMMON directory in your project root
+2. Copy all .py files into COMMON/
+3. Add to Python path:
+   ```python
+   import sys
+   sys.path.insert(0, '/path/to/project')
+   from COMMON import *
+   ```
+
+4. Or install as package:
+   ```bash
+   cd COMMON
+   pip install -e .
+   ```
+
+---
+
+## 🧪 Testing
+
+Create `test_common.py`:
+
+```python
+from COMMON import *
+import unittest
+
+class TestSASFunctions(unittest.TestCase):
+    def test_left(self):
+        self.assertEqual(left('  hello'), 'hello')
+    
+    def test_upcase(self):
+        self.assertEqual(upcase('hello'), 'HELLO')
+    
+    def test_mdy(self):
+        date = mdy(10, 23, 2025)
+        self.assertEqual(date.year, 2025)
+
+if __name__ == '__main__':
+    unittest.main()
+```
+
+---
+
+## 📝 Naming Conventions
+
+- **Functions**: lowercase_with_underscores
+- **Classes**: PascalCase
+- **Constants**: UPPERCASE_WITH_UNDERSCORES
+- **Private functions**: _leading_underscore
+
+---
+
+## 🚨 Important Notes
+
+1. **Import Order**: Always import COMMON before other modules
+2. **Config Changes**: Modify Config before creating objects
+3. **Logging**: Setup logger at the start of each job
+4. **Error Handling**: Use decorators for main functions
+5. **Path Management**: Use PathConfig for consistency
+
+---
+
+Happy coding! 🎉
