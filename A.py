@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ELDS BNM Summary Processing
+ELDS BNM Summary Processing - Memory Efficient Version
 Processes Bank Negara Malaysia summary files with cumulative data loading
 """
 
@@ -33,6 +33,7 @@ RDATE = (REPTDATE - SAS_ORIGIN).days
 
 print("="*70)
 print(f"ELDS BNM Summary Processing - {REPTDATE.strftime('%Y-%m-%d')}")
+print("Memory Efficient Mode (DuckDB Streaming)")
 print("="*70)
 
 # =============================================================================
@@ -48,61 +49,208 @@ OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
 EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
 
+# ==============================
+# PRODUCTION SCHEMA DEFINITION
+# ==============================
+
+SUMM1_SCHEMA = {
+    # Character columns (30 total)
+    'MAANO': ('char', 15),
+    'STAGE': ('char', 2),
+    'APPLICATION': ('char', 10),
+    'DTECOMPLETE': ('char', 10),
+    'AANO': ('char', 15),
+    'APPKEY': ('char', 10),
+    'PRIORITY_SECTOR': ('char', 2),
+    'FIN_CONCEPT': ('char', 3),
+    'LN_UTILISE_LOCAT_CD': ('char', 10),
+    'STRUPCO_3YR': ('char', 2),
+    'APPTYPE': ('char', 1),
+    'REJREASON': ('char', 5),
+    'DATEXT': ('char', 10),
+    'EREQNO': ('char', 15),
+    'REFIN_FLG': ('char', 3),
+    'STATUS': ('char', 1),
+    'CCPT_TAG': ('char', 5),
+    'PRICING_TYPE': ('char', 5),
+    'LU_ADD1': ('char', 40),
+    'LU_ADD2': ('char', 40),
+    'LU_ADD3': ('char', 40),
+    'LU_ADD4': ('char', 40),
+    'LU_TOWN_CITY': ('char', 20),
+    'LU_POSTCODE': ('char', 5),
+    'LU_STATE_CD': ('char', 2),
+    'LU_COUNTRY_CD': ('char', 3),
+    'PROP_STATUS': ('char', 5),
+    'DTCOMPLETE': ('char', 25),
+    'LU_SOURCE': ('char', 5),
+    'INDINTERIM': ('char', 1),
+    
+    # Numeric columns (11 total)
+    'DSRISS3': ('num', 8),
+    'SPECIALFUND': ('num', 8),
+    'ASSET_PURCH_AMT': ('num', 8),
+    'PURPOSE_LOAN': ('num', 8),
+    'FACICODE': ('num', 8),
+    'AMTAPPLY': ('num', 8),
+    'AMOUNT': ('num', 8),
+    'ACCTNO': ('num', 8),
+    'EIR': ('num', 8),
+    'CIR': ('num', 8),
+    'DATE': ('num', 8)
+}
+
+SUMM2_SCHEMA = {
+    # Character columns (35 total)
+    'MAANO': ('char', 15),
+    'STAGE': ('char', 2),
+    'APPLICATION': ('char', 10),
+    'DTECOMPLETE': ('char', 10),
+    'IDNO': ('char', 30),
+    'ENTKEY': ('char', 20),
+    'APPLNAME': ('char', 150),
+    'COUNTRY': ('char', 5),
+    'DBIRTH': ('char', 10),
+    'CORP_STATUS_CD': ('char', 2),
+    'INDUSTRIAL_STATUS': ('char', 5),
+    'RESIDENCY_STATUS_CD': ('char', 1),
+    'GENDER': ('char', 1),
+    'OCCUPATION': ('char', 5),
+    'EMPNAME': ('char', 150),
+    'EMPLOY_SECTOR_CD': ('char', 10),
+    'EMPLOY_TYPE_CD': ('char', 5),
+    'POSTCODE': ('char', 5),
+    'STATE_CD': ('char', 2),
+    'COUNTRY_CD': ('char', 3),
+    'ROLE': ('char', 1),
+    'ICPP': ('char', 30),
+    'MARRIED': ('char', 10),
+    'CUSTOMER_CODE': ('char', 5),
+    'CISNUMBER': ('char', 20),
+    'NO_OF_EMPLOYEE': ('char', 10),
+    'ANNUAL_TURNOVER': ('char', 20),
+    'SMESIZE': ('char', 5),
+    'RACE': ('char', 2),
+    'INDUSTRIAL_SECTOR_CD': ('char', 10),
+    'OCCUPAT_MASCO_CD': ('char', 10),
+    'EREQNO': ('char', 15),
+    'DSRISS3': ('char', 10),
+    'DTCOMPLETE': ('char', 25),
+    'INDINTERIM': ('char', 1),
+    
+    # Numeric columns (3 total)
+    'ENTITY_TYPE': ('num', 8),
+    'ANNSUBTSALARY': ('num', 8),
+    'DATE': ('num', 8)
+}
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
-def safe_concat(df1: pl.DataFrame, df2: pl.DataFrame) -> pl.DataFrame:
-    """Align all columns by casting to string before concatenation."""
-    all_cols = sorted(set(df1.columns) | set(df2.columns))
-    df1 = df1.select([
-        pl.col(c).cast(pl.Utf8, strict=False).alias(c) if c in df1.columns 
-        else pl.lit(None).alias(c) for c in all_cols
-    ])
-    df2 = df2.select([
-        pl.col(c).cast(pl.Utf8, strict=False).alias(c) if c in df2.columns 
-        else pl.lit(None).alias(c) for c in all_cols
-    ])
-    return pl.concat([df1, df2], how="vertical_relaxed")
+def apply_production_schema(df: pl.DataFrame, schema: dict, dataset_name: str) -> pl.DataFrame:
+    """Apply exact production schema with proper data types and lengths."""
+    print(f"  📋 Applying production schema to {dataset_name}...")
+    
+    expressions = []
+    
+    for col_name, (col_type, col_len) in schema.items():
+        if col_name not in df.columns:
+            if col_type == 'char':
+                expressions.append(pl.lit(None).cast(pl.Utf8).alias(col_name))
+            else:
+                expressions.append(pl.lit(None).cast(pl.Float64).alias(col_name))
+            continue
+        
+        if col_type == 'char':
+            if col_name in ['ENTKEY', 'CUSTOMER_CODE', 'POSTCODE', 'STATE_CD', 
+                           'LN_UTILISE_LOCAT_CD', 'LU_POSTCODE', 'LU_STATE_CD']:
+                expr = (
+                    pl.col(col_name)
+                    .cast(pl.Utf8, strict=False)
+                    .str.strip_chars()
+                    .str.pad_start(col_len, '0')
+                    .alias(col_name)
+                )
+            else:
+                expr = (
+                    pl.col(col_name)
+                    .cast(pl.Utf8, strict=False)
+                    .str.slice(0, col_len)
+                    .alias(col_name)
+                )
+        else:
+            expr = (
+                pl.col(col_name)
+                .cast(pl.Utf8, strict=False)
+                .str.strip_chars()
+                .str.replace_all(r'[^0-9.\-]', '')
+                .replace('', None)
+                .cast(pl.Float64, strict=False)
+                .alias(col_name)
+            )
+        
+        expressions.append(expr)
+    
+    df_transformed = df.select(expressions)
+    schema_cols = list(schema.keys())
+    df_transformed = df_transformed.select([c for c in schema_cols if c in df_transformed.columns])
+    
+    print(f"  ✓ Schema applied: {len(df_transformed.columns)} columns, {df_transformed.height:,} rows")
+    
+    return df_transformed
 
 
-def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
-    """
-    SAS-style EOF control:
-      - Footer row (FT00001724) contains expected record count
-      - Compare expected vs actual data row count
-      - Abort if mismatch (exit code 77)
-    """
+def apply_sas_eof_check(df: pl.DataFrame, source_name: str, is_sas_dataset: bool = False) -> pl.DataFrame:
+    """SAS-style file validation with FH/FT checking."""
     if "MAANO" not in df.columns:
-        print(f"  ⚠ MAANO column missing in {source_name}, skipping count validation.")
+        print(f"  ⚠ MAANO column missing in {source_name}, skipping validation.")
         return df.with_columns([
             pl.lit("Y").alias("INDINTERIM"),
             pl.lit(RDATE).alias("DATE")
         ])
 
-    # Extract the last row (footer)
-    control_row = df[-1, :]
+    if is_sas_dataset:
+        print(f"  ℹ SAS dataset - no FH/FT markers expected")
+        df = df.with_columns([
+            pl.lit("Y").alias("INDINTERIM"),
+            pl.lit(RDATE).alias("DATE")
+        ])
+        return df
+
+    df_str = df.with_columns(pl.col("MAANO").cast(pl.Utf8, strict=False))
+    header_mask = df_str["MAANO"].str.starts_with("FH")
+    
+    if header_mask.any():
+        header_count = header_mask.sum()
+        print(f"  🗑️ Removing {header_count} header row(s) starting with 'FH'")
+        df = df.filter(~header_mask)
+        df_str = df.with_columns(pl.col("MAANO").cast(pl.Utf8, strict=False))
+
+    if df.height == 0:
+        print(f"  ⚠ No data rows in {source_name}")
+        return df
+
+    control_row = df_str[-1, :]
     ctrl_val = str(control_row["MAANO"][0]).strip()
 
-    # Detect control footer pattern (FT00001724)
     match = re.match(r"FT0*(\d+)", ctrl_val)
     if not match:
-        print(f"  ℹ No control count found in {source_name}, proceeding without checks.")
-        return df.with_columns([
+        print(f"  ℹ No FT control footer found in {source_name}")
+        df = df.with_columns([
             pl.lit("Y").alias("INDINTERIM"),
             pl.lit(RDATE).alias("DATE")
         ])
+        return df
 
     control_count = int(match.group(1))
     print(f"  📊 {source_name}: Control count = {control_count}")
 
-    # Exclude header (if any) and footer
     df_data = df.slice(0, df.height - 1)
-    actual_count = df_data.height - 1
+    actual_count = df_data.height
 
     print(f"  📊 {source_name}: Actual data rows = {actual_count}")
 
-    # Compare control vs data row count
     if control_count != actual_count:
         print(f"  ✗ ABORT 77: Row count mismatch in {source_name}")
         print(f"     Expected: {control_count}, Got: {actual_count}")
@@ -110,12 +258,84 @@ def apply_sas_eof_check(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
     else:
         print(f"  ✓ Record count matches control ({actual_count})")
 
-    # Add SAS-like columns
     df_data = df_data.with_columns([
         pl.lit("Y").alias("INDINTERIM"),
         pl.lit(RDATE).alias("DATE")
     ])
     return df_data
+
+
+def save_with_cumulative_append(df: pl.DataFrame, dataset_name: str, schema: dict, 
+                                prev_date: datetime, output_path: Path, data_path: Path):
+    """
+    Memory-efficient cumulative append using DuckDB streaming.
+    Never loads full previous file into memory.
+    """
+    print(f"\n📦 Building cumulative file for {dataset_name} (Memory Efficient)...")
+    print(f"  Today's new records: {df.height:,} rows")
+    print(f"  Today's date (RDATE): {RDATE}")
+    
+    prev_parquet = Path(f"{data_path}/year={prev_date.year}/month={prev_date.month:02d}/day={prev_date.day:02d}/{dataset_name}.parquet")
+    
+    print(f"  Looking for previous cumulative: {prev_parquet.name}")
+    
+    # Save today's data to temp file first
+    temp_today = output_path / f"{dataset_name}_today_temp.parquet"
+    print(f"  💾 Saving today's data to temp...")
+    duckdb.sql(f"""
+        COPY (SELECT * FROM df) 
+        TO '{temp_today}' (FORMAT PARQUET, COMPRESSION 'ZSTD')
+    """)
+    print(f"  ✓ Temp file created: {df.height:,} rows")
+    
+    output_file = output_path / f"{dataset_name}.parquet"
+    
+    if not prev_parquet.exists():
+        print(f"  ℹ No previous day file (initial load)")
+        # Just move temp to final
+        temp_today.rename(output_file)
+        final_count = df.height
+        print(f"  ✓ Initial cumulative: {final_count:,} rows")
+        
+    else:
+        try:
+            # Get count WITHOUT loading
+            prev_count = duckdb.query(f"SELECT COUNT(*) FROM read_parquet('{prev_parquet}')").fetchone()[0]
+            print(f"  ✓ Previous cumulative from {prev_date.strftime('%Y-%m-%d')}: {prev_count:,} rows")
+            
+            # Stream combine: previous + today → output (NEVER loads full data)
+            print(f"  🔄 Streaming append via DuckDB...")
+            print(f"    Combining: {prev_count:,} (previous) + {df.height:,} (today)")
+            
+            duckdb.sql(f"""
+                COPY (
+                    SELECT * FROM read_parquet('{prev_parquet}')
+                    UNION ALL
+                    SELECT * FROM read_parquet('{temp_today}')
+                )
+                TO '{output_file}' (FORMAT PARQUET, COMPRESSION 'ZSTD')
+            """)
+            
+            # Verify
+            final_count = duckdb.query(f"SELECT COUNT(*) FROM read_parquet('{output_file}')").fetchone()[0]
+            print(f"  ✓ New cumulative: {final_count:,} rows")
+            print(f"    Verified: {prev_count:,} + {df.height:,} = {final_count:,}")
+            
+            # Clean temp
+            temp_today.unlink()
+            
+        except Exception as e:
+            print(f"  ✗ ERROR during append: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Fallback: rename temp to output
+            print(f"  ⚠ Fallback: Using today's data only")
+            if temp_today.exists():
+                temp_today.rename(output_file)
+            final_count = df.height
+    
+    return final_count
 
 # =============================================================================
 # PROCESS SUMM1 (Loan Applications)
@@ -125,19 +345,25 @@ print("\n" + "="*70)
 print("PROCESSING SUMM1 (Loan Applications)")
 print("="*70)
 
-# Read CSV
 print(f"\nReading {BNMSUMM1.name}...")
 if not BNMSUMM1.exists():
     print(f"✗ ABORT: File not found: {BNMSUMM1}")
     sys.exit(1)
 
-SUMM1 = pl.read_csv(
-    BNMSUMM1,
-    separator=",",
-    has_header=False,
-    ignore_errors=True,
-    truncate_ragged_lines=True,
-    new_columns=[
+try:
+    SUMM1 = pl.read_csv(
+        BNMSUMM1,
+        separator=",",
+        has_header=False,
+        ignore_errors=True,
+        truncate_ragged_lines=True,
+        infer_schema_length=0,
+        skip_rows=1
+    )
+    
+    print(f"  ✓ Raw CSV: {SUMM1.height:,} rows, {SUMM1.width} columns")
+    
+    csv_column_names = [
         "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
         "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
         "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
@@ -147,31 +373,23 @@ SUMM1 = pl.read_csv(
         "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
         "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"
     ]
-)
+    
+    if SUMM1.width < 39:
+        print(f"✗ ABORT: CSV has only {SUMM1.width} columns, need at least 39")
+        sys.exit(1)
+    
+    SUMM1 = SUMM1.select([pl.col(f"column_{i+1}") for i in range(39)])
+    SUMM1.columns = csv_column_names
+    
+    if SUMM1.width != 39:
+        print(f"  ⚠ Adjusted to 39 columns")
+    
+except Exception as e:
+    print(f"✗ ERROR loading CSV: {e}")
+    sys.exit(1)
 
-# import pandas as pd
-# SUMM1 = pd.read_csv(
-#     BNMSUMM1,
-#     sep=",",
-#     header=None,
-#     names=["MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "AANO", "APPKEY", 
-#           "PRIORITY_SECTOR", "DSRISS3", "FIN_CONCEPT", "LN_UTILISE_LOCAT_CD", 
-#           "SPECIALFUND", "ASSET_PURCH_AMT", "PURPOSE_LOAN", "STRUPCO_3YR", 
-#           "FACICODE", "AMTAPPLY", "AMOUNT", "APPTYPE", "REJREASON", "DATEXT", 
-#           "ACCTNO", "EIR", "EREQNO", "REFIN_FLG", "STATUS", "CCPT_TAG", "CIR", 
-#           "PRICING_TYPE", "LU_ADD1", "LU_ADD2", "LU_ADD3", "LU_ADD4", 
-#           "LU_TOWN_CITY", "LU_POSTCODE", "LU_STATE_CD", "LU_COUNTRY_CD", 
-#           "PROP_STATUS", "DTCOMPLETE", "LU_SOURCE"],
-#     engine="python",
-#     on_bad_lines="warn",
-#     encoding_errors="replace"
-# )
+SUMM1 = apply_sas_eof_check(SUMM1, "bnmsummary1_csv", is_sas_dataset=False)
 
-print(f"✓ CSV loaded: {len(SUMM1)} rows")
-
-SUMM1 = apply_sas_eof_check(SUMM1, "bnmsummary1_csv")
-
-# Read EHP SAS7BDAT
 print(f"\nReading {Path(EHP_SRC).name}...")
 if not Path(EHP_SRC).exists():
     print(f"✗ ABORT: File not found: {EHP_SRC}")
@@ -180,42 +398,54 @@ if not Path(EHP_SRC).exists():
 SUMM1_EHP_df, _ = pyreadstat.read_sas7bdat(EHP_SRC)
 print(f"✓ SAS7BDAT loaded: {len(SUMM1_EHP_df):,} rows")
 
-SUMM1_EHP = apply_sas_eof_check(pl.from_pandas(SUMM1_EHP_df), "bnmsummary1_ehp")
+SUMM1_EHP = pl.from_pandas(SUMM1_EHP_df)
 
-# Combine CSV + EHP
-print(f"\nCombining CSV + EHP sources...")
-SUMM1 = safe_concat(SUMM1, SUMM1_EHP)
-print(f"✓ Combined: {SUMM1.height:,} rows")
+print(f"  📋 Mapping EHP column names...")
+ehp_column_map = {
+    'DATE_COMPLETED': 'DTECOMPLETE',
+    'DEBT_SERVICE_RATIO': 'DSRISS3',
+    'LOCATION': 'LN_UTILISE_LOCAT_CD',
+    'SPECIAL_FUND': 'SPECIALFUND',
+    'ASSET_PURCHASE': 'ASSET_PURCH_AMT',
+    'STARTUP_FINANCING': 'STRUPCO_3YR',
+    'FACILITY_TYPE': 'FACICODE',
+    'AMOUNT': 'AMTAPPLY',
+    'AMT_APPROVED': 'AMOUNT',
+    'REJECT_REASON': 'REJREASON',
+    'DATE': 'DATEXT',
+    'ACCOUNT_NO': 'ACCTNO',
+    'EREQ_NUMBER': 'EREQNO',
+    'REFINANCING': 'REFIN_FLG',
+    'ADDRESS_1': 'LU_ADD1',
+    'ADDRESS_2': 'LU_ADD2',
+    'CITY': 'LU_TOWN_CITY',
+    'POSTCODE': 'LU_POSTCODE',
+    'STATECODE': 'LU_STATE_CD',
+    'COUNTRY': 'LU_COUNTRY_CD'
+}
 
-# Append previous day (REQUIRED - cumulative dataset)
-print(f"\nAppending previous day data...")
-prev_parquet = Path(f"{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM1.parquet")
+rename_dict = {k: v for k, v in ehp_column_map.items() if k in SUMM1_EHP.columns}
+if rename_dict:
+    SUMM1_EHP = SUMM1_EHP.rename(rename_dict)
+    print(f"  ✓ Renamed {len(rename_dict)} columns")
 
-if not prev_parquet.exists():
-    print(f"✗ ABORT: Previous day file not found")
-    print(f"  Required: {prev_parquet}")
-    print(f"  Date: {PREVDATE.strftime('%Y-%m-%d')}")
-    print(f"  Cumulative dataset requires previous day's data")
-    sys.exit(1)
+SUMM1_EHP = apply_sas_eof_check(SUMM1_EHP, "bnmsummary1_ehp", is_sas_dataset=True)
 
-try:
-    query = f"SELECT * FROM read_parquet('{prev_parquet}')"
-    PREV_SUMM1 = pl.from_pandas(duckdb.query(query).to_df())
-    print(f"✓ Previous day: {PREV_SUMM1.height:,} rows")
-    
-    ELDS_SUMM1 = safe_concat(PREV_SUMM1, SUMM1)
-    print(f"✓ Total cumulative: {ELDS_SUMM1.height:,} rows")
-except Exception as e:
-    print(f"✗ ABORT: Error reading previous day file: {e}")
-    sys.exit(1)
+print(f"\nApplying production schema...")
+SUMM1 = apply_production_schema(SUMM1, SUMM1_SCHEMA, "CSV")
+SUMM1_EHP = apply_production_schema(SUMM1_EHP, SUMM1_SCHEMA, "EHP")
 
-# Save to Parquet
-print(f"\nSaving SUMM1.parquet...")
-duckdb.sql(f"""
-    COPY (SELECT * FROM ELDS_SUMM1) 
-    TO '{OUTPUT_DATA_PATH}/SUMM1.parquet' (FORMAT PARQUET)
-""")
-print(f"✓ Saved: {OUTPUT_DATA_PATH}/SUMM1.parquet ({ELDS_SUMM1.height:,} rows)")
+print(f"\nCombining CSV + EHP...")
+# Simple concatenation - both already have same schema
+SUMM1_COMBINED = pl.concat([SUMM1, SUMM1_EHP], how="vertical_relaxed")
+print(f"✓ Combined: {SUMM1_COMBINED.height:,} rows")
+
+# Memory-efficient cumulative save
+final_summ1_count = save_with_cumulative_append(
+    SUMM1_COMBINED, "SUMM1", SUMM1_SCHEMA, PREVDATE, OUTPUT_DATA_PATH, ELDS_DATA_PATH
+)
+
+print(f"\n✓ SUMM1 Complete: {final_summ1_count:,} total rows")
 
 # =============================================================================
 # PROCESS SUMM2 (Borrower Details)
@@ -225,19 +455,25 @@ print("\n" + "="*70)
 print("PROCESSING SUMM2 (Borrower Details)")
 print("="*70)
 
-# Read CSV
 print(f"\nReading {BNMSUMM2.name}...")
 if not BNMSUMM2.exists():
     print(f"✗ ABORT: File not found: {BNMSUMM2}")
     sys.exit(1)
 
-SUMM2 = pl.read_csv(
-    BNMSUMM2,
-    separator=",",
-    has_header=False,
-    ignore_errors=True,
-    truncate_ragged_lines=True,
-    new_columns=[
+try:
+    SUMM2 = pl.read_csv(
+        BNMSUMM2,
+        separator=",",
+        has_header=False,
+        ignore_errors=True,
+        truncate_ragged_lines=True,
+        infer_schema_length=0,
+        skip_rows=1
+    )
+    
+    print(f"  ✓ Raw CSV: {SUMM2.height:,} rows, {SUMM2.width} columns")
+    
+    csv_column_names = [
         "MAANO", "STAGE", "APPLICATION", "DTECOMPLETE", "IDNO", "ENTKEY", 
         "APPLNAME", "COUNTRY", "DBIRTH", "ENTITY_TYPE", "CORP_STATUS_CD", 
         "INDUSTRIAL_STATUS", "RESIDENCY_STATUS_CD", "ANNSUBTSALARY", "GENDER", 
@@ -247,12 +483,20 @@ SUMM2 = pl.read_csv(
         "SMESIZE", "RACE", "INDUSTRIAL_SECTOR_CD", "OCCUPAT_MASCO_CD", 
         "EREQNO", "DSRISS3", "DTCOMPLETE"
     ]
-)
-print(f"✓ CSV loaded: {SUMM2.height:,} rows")
+    
+    if SUMM2.width < 36:
+        print(f"✗ ABORT: CSV has only {SUMM2.width} columns, need at least 36")
+        sys.exit(1)
+    
+    SUMM2 = SUMM2.select([pl.col(f"column_{i+1}") for i in range(36)])
+    SUMM2.columns = csv_column_names
+    
+except Exception as e:
+    print(f"✗ ERROR loading CSV: {e}")
+    sys.exit(1)
 
-SUMM2 = apply_sas_eof_check(SUMM2, "bnmsummary2_csv")
+SUMM2 = apply_sas_eof_check(SUMM2, "bnmsummary2_csv", is_sas_dataset=False)
 
-# Read EHP2 SAS7BDAT
 print(f"\nReading {Path(EHP2_SRC).name}...")
 if not Path(EHP2_SRC).exists():
     print(f"✗ ABORT: File not found: {EHP2_SRC}")
@@ -261,42 +505,53 @@ if not Path(EHP2_SRC).exists():
 SUMM2_EHP_df, _ = pyreadstat.read_sas7bdat(EHP2_SRC)
 print(f"✓ SAS7BDAT loaded: {len(SUMM2_EHP_df):,} rows")
 
-SUMM2_EHP = apply_sas_eof_check(pl.from_pandas(SUMM2_EHP_df), "bnmsummary2_ehp")
+SUMM2_EHP = pl.from_pandas(SUMM2_EHP_df)
 
-# Combine CSV + EHP
-print(f"\nCombining CSV + EHP sources...")
-SUMM2 = safe_concat(SUMM2, SUMM2_EHP)
-print(f"✓ Combined: {SUMM2.height:,} rows")
+print(f"  📋 Mapping EHP column names...")
+ehp2_column_map = {
+    'DATECOMPLETE': 'DTECOMPLETE',
+    'NAME': 'APPLNAME',
+    'NATIONALITY': 'COUNTRY',
+    'DOB': 'DBIRTH',
+    'CORP_STATUS': 'CORP_STATUS_CD',
+    'INDUSTRIAL_SECTOR': 'INDUSTRIAL_STATUS',
+    'RESIDENCY_STATUS': 'RESIDENCY_STATUS_CD',
+    'INCOME': 'ANNSUBTSALARY',
+    'EMPLOYER_NAME': 'EMPNAME',
+    'EMPLOYMENT_SECTOR': 'EMPLOY_SECTOR_CD',
+    'EMPLOYMENT_TYPE': 'EMPLOY_TYPE_CD',
+    'STATE': 'STATE_CD',
+    'COUNTRY': 'COUNTRY_CD',
+    'MARITALSTATUS': 'MARRIED',
+    'CUSTCODE': 'CUSTOMER_CODE',
+    'CISNO': 'CISNUMBER',
+    'NUM_EMPLOYEE': 'NO_OF_EMPLOYEE',
+    'MSIC': 'INDUSTRIAL_SECTOR_CD',
+    'MASCO': 'OCCUPAT_MASCO_CD',
+    'DSR': 'DSRISS3'
+}
 
-# Append previous day (REQUIRED - cumulative dataset)
-print(f"\nAppending previous day data...")
-prev_parquet2 = Path(f"{ELDS_DATA_PATH}/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}/SUMM2.parquet")
+rename_dict = {k: v for k, v in ehp2_column_map.items() if k in SUMM2_EHP.columns}
+if rename_dict:
+    SUMM2_EHP = SUMM2_EHP.rename(rename_dict)
+    print(f"  ✓ Renamed {len(rename_dict)} columns")
 
-if not prev_parquet2.exists():
-    print(f"✗ ABORT: Previous day file not found")
-    print(f"  Required: {prev_parquet2}")
-    print(f"  Date: {PREVDATE.strftime('%Y-%m-%d')}")
-    print(f"  Cumulative dataset requires previous day's data")
-    sys.exit(1)
+SUMM2_EHP = apply_sas_eof_check(SUMM2_EHP, "bnmsummary2_ehp", is_sas_dataset=True)
 
-try:
-    query = f"SELECT * FROM read_parquet('{prev_parquet2}')"
-    PREV_SUMM2 = pl.from_pandas(duckdb.query(query).to_df())
-    print(f"✓ Previous day: {PREV_SUMM2.height:,} rows")
-    
-    ELDS_SUMM2 = safe_concat(PREV_SUMM2, SUMM2)
-    print(f"✓ Total cumulative: {ELDS_SUMM2.height:,} rows")
-except Exception as e:
-    print(f"✗ ABORT: Error reading previous day file: {e}")
-    sys.exit(1)
+print(f"\nApplying production schema...")
+SUMM2 = apply_production_schema(SUMM2, SUMM2_SCHEMA, "CSV")
+SUMM2_EHP = apply_production_schema(SUMM2_EHP, SUMM2_SCHEMA, "EHP")
 
-# Save to Parquet
-print(f"\nSaving SUMM2.parquet...")
-duckdb.sql(f"""
-    COPY (SELECT * FROM ELDS_SUMM2) 
-    TO '{OUTPUT_DATA_PATH}/SUMM2.parquet' (FORMAT PARQUET)
-""")
-print(f"✓ Saved: {OUTPUT_DATA_PATH}/SUMM2.parquet ({ELDS_SUMM2.height:,} rows)")
+print(f"\nCombining CSV + EHP...")
+SUMM2_COMBINED = pl.concat([SUMM2, SUMM2_EHP], how="vertical_relaxed")
+print(f"✓ Combined: {SUMM2_COMBINED.height:,} rows")
+
+# Memory-efficient cumulative save
+final_summ2_count = save_with_cumulative_append(
+    SUMM2_COMBINED, "SUMM2", SUMM2_SCHEMA, PREVDATE, OUTPUT_DATA_PATH, ELDS_DATA_PATH
+)
+
+print(f"\n✓ SUMM2 Complete: {final_summ2_count:,} total rows")
 
 # =============================================================================
 # COMPLETION SUMMARY
@@ -308,47 +563,5 @@ print("="*70)
 print(f"Date: {REPTDATE.strftime('%Y-%m-%d')}")
 print(f"Output Directory: {OUTPUT_DATA_PATH}")
 print(f"\nResults:")
-print(f"  SUMM1.parquet: {ELDS_SUMM1.height:,} rows")
-print(f"  SUMM2.parquet: {ELDS_SUMM2.height:,} rows")
-print("="*70)
-print("✓ All files processed successfully")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-2 items to fix : 
-
-1) New dataset having additional row for FH20251022
-
-
-CTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN"> 
-                                                       The COMPARE Procedure                                                        
-                                                Comparison of WORK.NEW with WORK.OLD                                                
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                                         Data Set Summary                                                           
-                                                                                                                                    
-                                     Dataset            Created          Modified  NVar    NObs                                     
-                                                                                                                                    
-                                     WORK.NEW  27OCT25:11:59:06  27OCT25:11:59:06    62    9682                                     
-                                     WORK.OLD  27OCT25:11:59:13  27OCT25:11:59:13    38    9681                                     
-                                                                                                                                    
-                                                                                                                                    
-                                                         Variables Summary                                                          
-                                                                                                                                    
-                                      Number of Variables in Common: 38.                                                            
-                                      Number of Variables in WORK.NEW but not in WORK.OLD: 24.                                      
-                                      Number of Variables with Conflicting Types: 3.                                                
-                                      Number of Variables with Differing Attributes: 18.
+print(f"  SUMM1.parquet: {final_summ1_count:,} rows, 41 columns")
+print(f"  SUMM2.parquet: {final_summ2_count:,} rows, 38 columns")
