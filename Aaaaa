@@ -1,652 +1,112 @@
-# COMMON Library - Generic Usage Guide
-
-## 🎯 Purpose
-
-A **completely generic**, reusable Python library for ETL jobs with **zero hardcoded values**. Use it for any project, any job, any data pipeline.
-
----
-
-## 📁 Directory Structure
-
-```
-COMMON/
-├── __init__.py              # Package initializer
-├── config.py                # Configuration management (customize per project)
-├── path_utils.py            # File/directory operations
-├── io_utils.py              # Read/write any file format
-├── date_utils.py            # Date calculations and formatting
-├── validation_utils.py      # Data quality checks
-├── duckdb_utils.py          # Fast parquet querying
-├── pyarrow_utils.py         # Parquet operations
-├── log_utils.py             # Professional logging
-├── error_handler.py         # Exception management
-├── sas_functions.py         # SAS-to-Python function mapping
-└── data_transform.py        # Common ETL patterns
-```
-
----
-
-## 🚀 Quick Start (Any Project)
-
-### 1. Installation
-
-```bash
-# Add to your Python path
-export PYTHONPATH="/path/to/COMMON:$PYTHONPATH"
-
-# Or copy COMMON/ to your project
-cp -r COMMON/ /your/project/
-```
-
-### 2. Basic Setup
-
-```python
-from COMMON import *
-
-# Configure for YOUR environment (change these!)
-Config.BASE_PATH = '/your/data/warehouse'
-Config.PARQUET_COMPRESSION = 'snappy'  # or zstd, gzip
-Config.LOG_LEVEL = 'INFO'
-
-# Create job config
-job = JobConfig('MyJobName')
-logger = setup_logger('MyJobName', job.get_log_file())
-```
-
-### 3. Simple Example
-
-```python
-from COMMON import *
-
-# Read any file
-df = read_csv('/input/data.csv')
-
-# Transform
-df = filter_by(df, STATUS='ACTIVE')
-df = deduplicate(df, subset='ID')
-
-# Save
-save_parquet(df, '/output/result.parquet')
-```
-
----
-
-## 📚 Module Reference
-
-### 1️⃣ **config.py** - Configuration
-
-```python
-from COMMON import Config, JobConfig
-
-# Global settings (customize these!)
-Config.BASE_PATH = '/data/warehouse'
-Config.PARQUET_COMPRESSION = 'snappy'
-Config.SKIP_VALIDATION = False
-Config.LOG_LEVEL = 'INFO'
-
-# Job-specific paths
-job = JobConfig('MyJob')
-print(job.input_path)     # /data/warehouse/MyJob/input
-print(job.output_path)    # /data/warehouse/MyJob/output
-print(job.log_path)       # /data/warehouse/MyJob/logs
-
-# Get dated output path
-dated_output = job.get_dated_output_path()
-# /data/warehouse/MyJob/output/year=2025/month=10/day=23
-```
-
-**Key Settings:**
-- `BASE_PATH` - Root directory for all jobs
-- `SKIP_VALIDATION` - Toggle validation checks
-- `PARQUET_COMPRESSION` - Compression algorithm
-- `LOG_LEVEL` - Logging verbosity
-
----
-
-### 2️⃣ **path_utils.py** - File Management
-
-```python
-from COMMON import find_latest_file, ensure_directory, PathManager
-
-# Find files
-latest = find_latest_file('/input', prefix='sales', extension='.csv')
-all_csv = find_files('/input', pattern='*.csv')
-
-# Create directories
-ensure_directory('/output/2025/10/23')
-
-# File operations
-PathManager.move_file('source.txt', '/archive/')
-PathManager.copy_file('config.ini', '/backup/')
-PathManager.archive_file('old_data.csv', '/archive', add_timestamp=True)
-
-# Get file info
-info = PathManager.get_file_info('data.csv')
-print(f"Size: {info['size_mb']:.2f} MB")
-
-# Cleanup old files
-deleted = PathManager.cleanup_old_files('/temp', days=7, dry_run=False)
-```
-
----
-
-### 3️⃣ **io_utils.py** - File I/O
-
-```python
-from COMMON import read_fixed_width, read_csv, read_excel, write_csv, save_parquet
-
-# Read fixed-width file (SAS INPUT style)
-df = read_fixed_width(
-    'data.txt',
-    colspecs=[(0, 10), (10, 30), (30, 40)],
-    names=['ID', 'NAME', 'AMOUNT']
-)
-
-# Read delimited files
-df = read_csv('data.csv', delimiter=',')
-df = read_csv('data.tsv', delimiter='\t')
-df = read_csv('data.pipe', delimiter='|')
-
-# Read Excel
-df = read_excel('data.xlsx', sheet_name='Sheet1')
-
-# Write files
-write_csv(df, 'output.csv', index=False)
-save_parquet(df, 'output.parquet', compression='zstd')
-
-# Extract header metadata
-file_date = FileReader.extract_header_value(
-    'data.txt',
-    position=[(0, 8), (8, 10), (10, 14)],  # Day, Month, Year positions
-    line_number=0
-)
-```
-
----
-
-### 4️⃣ **date_utils.py** - Date Operations
-
-```python
-from COMMON import format_date, parse_date, create_date_from_parts, DateCalculator
-
-# Format dates
-formatted = format_date(datetime.now(), 'ISO')      # 2025-10-23
-formatted = format_date(datetime.now(), 'US')       # 10/23/2025
-formatted = format_date(datetime.now(), 'SAS')      # 23102025
-formatted = format_date(datetime.now(), 'COMPACT')  # 20251023
-
-# Parse dates
-date = parse_date('2025-10-23', 'ISO')
-date = parse_date('10/23/2025', 'US')
-date = parse_date('23102025', 'SAS')
-
-# Create date from parts (SAS MDY function)
-df = create_date_from_parts(
-    df,
-    day_col='DAY',
-    month_col='MONTH',
-    year_col='YEAR',
-    target_col='DATE'
-)
-
-# Date calculations
-month_end = DateCalculator.get_month_end(datetime.now())
-quarter = DateCalculator.get_quarter(datetime.now())
-biz_date = DateCalculator.add_business_days(datetime.now(), 5)
-
-# Custom period logic
-period_date, prev_date, period_id = DateCalculator.get_period_dates(
-    reference_date=datetime.now(),
-    period_type='weekly'
-)
-```
-
----
-
-### 5️⃣ **validation_utils.py** - Data Validation
-
-```python
-from COMMON import validate_dataframe, check_missing_values, DataValidator
-
-# Comprehensive validation
-is_valid, errors = validate_dataframe(
-    df,
-    required_columns=['ID', 'AMOUNT', 'STATUS'],
-    check_empty=True,
-    check_duplicates='ID'
-)
-
-if not is_valid:
-    print("Validation errors:", errors)
-
-# Check missing values
-missing = check_missing_values(df, columns=['ID', 'AMOUNT'])
-# Returns: {'ID': 0, 'AMOUNT': 15}
-
-# Check data types
-type_issues = DataValidator.check_data_types(
-    df,
-    expected_types={'ID': 'int64', 'AMOUNT': 'float64'}
-)
-
-# Check value ranges
-range_issues = DataValidator.check_value_ranges(
-    df,
-    ranges={'AMOUNT': (0, 1000000), 'AGE': (0, 120)}
-)
-
-# Check allowed values
-value_issues = DataValidator.check_allowed_values(
-    df,
-    allowed={'STATUS': ['ACTIVE', 'PENDING', 'CLOSED']}
-)
-```
-
----
-
-### 6️⃣ **duckdb_utils.py** - Fast Queries
-
-```python
-from COMMON import DuckDBManager, query_parquet, merge_parquet_files
-
-# Query single parquet
-df = query_parquet('data.parquet', sql_filter="AMOUNT > 1000")
-
-# Query multiple parquet files
-df = query_parquet(
-    ['file1.parquet', 'file2.parquet', 'file3.parquet'],
-    sql_filter="STATUS = 'APPROVED'"
-)
-
-# Use DuckDB manager
-with DuckDBManager(memory_limit='8GB', threads=8) as db:
-    # Register DataFrames
-    db.register(df1, 'sales')
-    db.register(df2, 'customers')
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from datetime import datetime, timedelta
+import saspy
+import sys
+import os
+
+sas = saspy.SASsession()
+
+batch_dt = datetime.now() - timedelta(days=1)
+batch_dt_str = batch_dt.strftime("%Y%m%d")
+day = batch_dt.day
+month_str = f"{batch_dt.month:02d}"
+year_str = f"{batch_dt.year % 100:02d}"
+
+BATCH_MODE = sys.argv[1] if len(sys.argv) > 1 else 'D'
+print("BATCH MODE = ", BATCH_MODE)
+
+# Determine dataset names
+if BATCH_MODE == 'W':
+    nowk = "1" if day == 8 else "2" if day == 15 else "3" if day == 22 else "4"
+    cur_data = f"billstran{month_str}{nowk}{year_str}"
     
-    # Complex SQL query
-    result = db.query("""
-        SELECT s.*, c.NAME
-        FROM sales s
-        LEFT JOIN customers c ON s.CUSTOMER_ID = c.ID
-        WHERE s.AMOUNT > 1000
+    if nowk == "1":
+        prev_month = batch_dt - timedelta(days=30)
+        prev_data = f"billstran{prev_month.month:02d}4{prev_month.year % 100:02d}"
+    else:
+        prev_data = f"billstran{month_str}{int(nowk)-1}{year_str}"
+        
+elif BATCH_MODE == 'D':
+    cur_data = f"billstran_{day:02d}"
+    prev_data = f"billstran_{31 if day == 1 else day-1:02d}"
+
+print(f"Current: {cur_data}, Previous: {prev_data}")
+
+# Always read from Daily staging file (for both D and W modes)
+stg_file = "Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet"
+
+if not os.path.exists(stg_file):
+    print(f"ERROR: Staging file not found: {stg_file}")
+    sys.exit(1)
+
+df = pd.read_parquet(stg_file)
+print(f"Reading: {stg_file}")
+print(f"Columns loaded: {len(df.columns)}")
+# Remove first row and reset index (no header row to remove if already clean)
+df = df.fillna("")
+df = df[df['ACCTNO'].notnull()]
+df.loc[df['CURRENCY'] == 'MYR', 'EXCHANGE'] = 1
+
+print("Number of records:", len(df))
+
+def assign_libname(lib, path):
+    return sas.submit(f"""libname {lib} '{path}';""")
+
+def drop_table(lib, table):
+    return sas.submit(f"""
+        %macro drop_if_exists(lib={lib}, table={table});
+            %if %sysfunc(exist(&lib..&table)) %then %do;
+                proc sql; drop table &lib..&table; quit;
+            %end;
+        %mend;
+        %drop_if_exists();
     """)
 
-# Merge multiple parquet files
-merge_parquet_files(
-    ['part1.parquet', 'part2.parquet', 'part3.parquet'],
-    'merged.parquet',
-    compression='zstd'
-)
-```
-
----
-
-### 7️⃣ **pyarrow_utils.py** - Parquet Operations
-
-```python
-from COMMON import save_parquet, load_parquet, get_parquet_info, ParquetManager
-
-# Save DataFrame
-save_parquet(
-    df,
-    'output.parquet',
-    compression='snappy',
-    row_group_size=100000
-)
-
-# Load specific columns
-df = load_parquet('data.parquet', columns=['ID', 'NAME', 'AMOUNT'])
-
-# Get metadata
-info = get_parquet_info('data.parquet')
-print(f"Rows: {info['num_rows']:,}")
-print(f"Size: {info['size_bytes'] / 1024**2:.2f} MB")
-
-# Optimize parquet file (re-compress)
-ParquetManager.optimize(
-    'input.parquet',
-    'optimized.parquet',
-    compression='zstd',
-    row_group_size=50000
-)
-```
-
----
-
-### 8️⃣ **log_utils.py** - Professional Logging
-
-```python
-from COMMON import setup_logger
-
-# Setup logger
-logger = setup_logger('MyJob', log_file='/logs/myjob.log')
-
-# Log messages
-logger.info("Job started")
-logger.warning("Missing values detected")
-logger.error("File not found")
-
-# Log sections
-logger.section("DATA PROCESSING")
-logger.step(1, "Reading Input Files")
-
-# Log DataFrame info
-logger.dataframe_summary(df, "Input Data")
-# Output: Input Data: 10,000 rows, 25 columns
-
-logger.dataframe_detail(df, "Sales Data")
-# Output: 
-#   Sales Data Details:
-#     Rows: 10,000
-#     Columns: 25
-#     Memory: 1.23 MB
-
-# Log progress
-for i in range(100):
-    logger.progress(i+1, 100, "Processing records")
-```
-
----
-
-### 9️⃣ **error_handler.py** - Error Management
-
-```python
-from COMMON import handle_errors, ValidationError, retry, safe_execute
-
-# Decorate main functions
-@handle_errors(exit_code=1, logger=logger)
-def my_etl_job():
-    if not valid:
-        raise ValidationError("Data validation failed")
-    # ... process data
-
-# Retry on failure
-@retry(max_attempts=3, delay=1.0, backoff=2.0)
-def fetch_from_api():
-    response = requests.get('https://api.example.com/data')
-    return response.json()
-
-# Safe execution (returns default on error)
-result = safe_execute(
-    risky_function,
-    arg1, arg2,
-    default=[],
-    log_errors=True
-)
-```
-
----
-
-### 🔟 **sas_functions.py** - SAS Compatibility
-
-```python
-from COMMON.sas_functions import *
-
-# String functions
-df['NAME'] = left(df['NAME'])              # Remove leading spaces
-df['NAME'] = upcase(df['NAME'])            # UPPERCASE
-df['NAME'] = propcase(df['NAME'])          # Title Case
-df['CODE'] = substr(df['CODE'], 3, 5)      # Extract substring (1-based!)
-df['CLEAN'] = compress(df['TEXT'], ' .,')  # Remove characters
-df['STRIPPED'] = strip(df['TEXT'])         # Remove both sides
-
-# Translation
-df['GRADE'] = translate(df['GRADE'], '[]', '××')
-
-# Concatenation
-df['FULLNAME'] = catx(' ', df['FIRST'], df['MIDDLE'], df['LAST'])
-
-# Date functions
-date_obj = mdy(10, 23, 2025)  # October 23, 2025
-
-# Formatting
-formatted = put(12345.67, 'COMMA15.2')    # "12,345.67"
-formatted = put(date_obj, 'DDMMYY8')      # "23102025"
-zero_pad = put(5, 'Z3')                   # "005"
-
-# Parsing
-value = input_value('12,345.67', 'COMMA15.2')  # 12345.67
-
-# Coalesce
-first_value = coalescec(None, '', 'Value', 'Default')  # Returns 'Value'
-```
-
----
-
-### 1️⃣1️⃣ **data_transform.py** - ETL Patterns
-
-```python
-from COMMON import merge_datasets, deduplicate, filter_by, append_data, DataTransformer
-
-# Merge multiple DataFrames (SAS MERGE)
-merged = merge_datasets(
-    [customers, orders, products],
-    on='CUSTOMER_ID',
-    how='outer'
-)
-
-# Remove duplicates (SAS NODUPKEY)
-df = deduplicate(
-    df,
-    subset='ID',
-    keep='first',
-    sort_by=['DATE', 'AMOUNT']
-)
-
-# Filter data
-filtered = filter_by(
-    df,
-    STATUS='APPROVED',
-    REGION=['EAST', 'WEST', 'NORTH']
-)
-
-# Append datasets (SAS SET)
-combined = append_data([current_month, last_month, historical])
-
-# Apply formatting rules
-format_rules = {
-    'AMOUNT': {'type': 'numeric', 'decimals': 2},
-    'DATE': {'type': 'date', 'format': '%Y-%m-%d'},
-    'NAME': {'type': 'string', 'format': 'upper'}
-}
-df = DataTransformer.apply_formats(df, format_rules)
-
-# Create derived columns
-def calculate_total(df):
-    return df['QUANTITY'] * df['PRICE']
-
-def calculate_discount(df):
-    return df['TOTAL'] * 0.1
-
-df = DataTransformer.create_derived_columns(df, {
-    'TOTAL': calculate_total,
-    'DISCOUNT': calculate_discount
-})
-```
-
----
-
-## 🎯 Complete Real-World Example
-
-```python
-#!/usr/bin/env python3
-"""
-Generic ETL Job Template
-Works for ANY data processing task
-"""
-
-from COMMON import *
-from datetime import datetime
-
-# ============================================
-# CONFIGURATION (Customize for your project)
-# ============================================
-
-JOB_NAME = 'SalesETL'
-Config.BASE_PATH = '/data/warehouse'
-Config.LOG_LEVEL = 'INFO'
-
-# ============================================
-# MAIN ETL PROCESS
-# ============================================
-
-@handle_errors(exit_code=1)
-def run_etl():
-    # Setup
-    job = JobConfig(JOB_NAME)
-    logger = setup_logger(JOB_NAME, job.get_log_file())
+def set_data(df, lib, cur, prev):
+    sas.df2sd(df, table=cur, libref='work')
+    log = sas.submit(f"""
+        proc sql noprint;
+            create table colmeta as
+            select name, type, length
+            from dictionary.columns
+            where libname=upcase("{lib}") and memname=upcase("{prev}");
+        quit;
+    """)
     
-    logger.section(f"Starting {JOB_NAME}")
-    logger.info(f"Run Date: {datetime.now()}")
+    df_meta = sas.sasdata("colmeta", libref="work").to_df()
     
-    # ========== STEP 1: Read Data ==========
-    logger.step(1, "Reading Input Files")
+    if df_meta.empty:
+        return sas.submit(f"data {lib}.{cur}; set work.{cur}; run;")
     
-    filepath = find_latest_file(job.input_path, prefix='sales', extension='.csv')
-    if not filepath:
-        raise FileError("No input file found")
+    cols = ", ".join(df_meta["name"].dropna().tolist())
+    casted = []
+    for _, row in df_meta.iterrows():
+        col, length = row["name"], row['length']
+        if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
+            casted.append(f"input(trim({col}), ${int(length)}.) as {col}")
+        else:
+            casted.append(col)
     
-    df = read_csv(filepath)
-    logger.dataframe_summary(df, "Raw Data")
-    
-    # ========== STEP 2: Validate ==========
-    logger.step(2, "Validating Data")
-    
-    is_valid, errors = validate_dataframe(
-        df,
-        required_columns=['ID', 'AMOUNT', 'DATE', 'STATUS'],
-        check_empty=True,
-        check_duplicates='ID'
-    )
-    
-    if not is_valid:
-        raise ValidationError(f"Validation failed: {errors}")
-    
-    logger.info("✅ Validation passed")
-    
-    # ========== STEP 3: Transform ==========
-    logger.step(3, "Transforming Data")
-    
-    # Filter
-    df = filter_by(df, STATUS='APPROVED')
-    logger.info(f"After filter: {len(df):,} rows")
-    
-    # Clean data
-    df['NAME'] = upcase(left(df['NAME']))
-    df['AMOUNT'] = df['AMOUNT'].round(2)
-    
-    # Create dates
-    df = create_date_from_parts(df, 'DAY', 'MONTH', 'YEAR', 'DATE')
-    
-    # Deduplicate
-    df = deduplicate(df, subset='ID', keep='first')
-    logger.info(f"After dedup: {len(df):,} rows")
-    
-    # ========== STEP 4: Load Historical ==========
-    logger.step(4, "Loading Historical Data")
-    
-    prev_date = datetime.now() - timedelta(days=7)
-    hist_path = job.get_dated_output_path(prev_date)
-    hist_file = f"{hist_path}/output.parquet"
-    
-    if os.path.exists(hist_file):
-        df_hist = load_parquet(hist_file)
-        df = append_data([df, df_hist])
-        logger.info(f"Combined with history: {len(df):,} rows")
-    
-    # ========== STEP 5: Save Output ==========
-    logger.step(5, "Saving Output")
-    
-    output_path = job.get_dated_output_path()
-    ensure_directory(output_path)
-    
-    output_file = f"{output_path}/output.parquet"
-    save_parquet(df, output_file, compression='zstd')
-    
-    # Archive input
-    archive_file(filepath, job.archive_path)
-    
-    logger.section("Job Completed Successfully")
-    logger.info(f"Output: {output_file}")
-    logger.info(f"Rows: {len(df):,}")
-    logger.info(f"Size: {os.path.getsize(output_file) / 1024**2:.2f} MB")
+    return sas.submit(f"""
+        proc sql noprint;
+            create table {lib}.{cur} as
+            select {cols} from {lib}.{prev}(obs=0)
+            union corr
+            select {", ".join(casted)} from work.{cur};
+        quit;
+    """)
 
-# ============================================
-# EXECUTION
-# ============================================
+# Main execution
+assign_libname("btrade", "/dwh/btrade")
+drop_table("btrade", cur_data)
+set_data(df, "btrade", cur_data, prev_data)
 
-if __name__ == "__main__":
-    run_etl()
-```
+if BATCH_MODE == 'D':
+    cur_data_full = f"billstran_{batch_dt_str}"
+    drop_table("btrade", cur_data_full)
+    set_data(df, "btrade", cur_data_full, prev_data)
+    os.system(f'cp /dwh/btrade/{cur_data}.sas7bdat /dwh/ibtrade/i{cur_data}.sas7bdat')
 
----
-
-## 🔧 Customization for Your Project
-
-Create `my_project_config.py`:
-
-```python
-from COMMON import Config
-
-# Override defaults for your project
-Config.BASE_PATH = '/data/my_company/warehouse'
-Config.PARQUET_COMPRESSION = 'zstd'
-Config.LOG_LEVEL = 'DEBUG'
-Config.DUCKDB_MEMORY_LIMIT = '16GB'
-Config.DUCKDB_THREADS = 16
-
-# Add project-specific settings
-DATABASE_URL = 'postgresql://localhost/mydb'
-API_ENDPOINT = 'https://api.mycompany.com'
-NOTIFICATION_EMAIL = 'team@mycompany.com'
-
-# Custom constants
-APPROVED_STATUSES = ['ACTIVE', 'PENDING', 'APPROVED']
-MAX_AMOUNT = 1000000
-DATE_FORMAT = '%Y-%m-%d'
-```
-
-Then import in your jobs:
-
-```python
-from my_project_config import *
-from COMMON import *
-
-# Now all your custom settings are applied!
-```
-
----
-
-## ✅ Benefits
-
-| Benefit | Description |
-|---------|-------------|
-| **Generic** | Zero hardcoded values - works anywhere |
-| **Reusable** | Write once, use in all projects |
-| **Maintainable** | Update once, affects all jobs |
-| **Team-Friendly** | Easy to understand and extend |
-| **SAS Compatible** | 1:1 function mapping for migration |
-| **Production Ready** | Logging, error handling, validation built-in |
-| **Well Documented** | Examples and docstrings everywhere |
-| **Flexible** | Easy to customize per project/job |
-
----
-
-## 📖 Getting Help
-
-```python
-# View module documentation
-help(Config)
-help(PathManager)
-help(DataValidator)
-
-# View function documentation
-help(read_fixed_width)
-help(merge_datasets)
-help(deduplicate)
-```
-
----
-
-🎉 **You now have a complete, generic, reusable ETL library!**
+print("Processing completed!")
