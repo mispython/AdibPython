@@ -6,35 +6,77 @@ import saspy
 import sys
 import os
 
+"""
+TF_BOTH.py - Creates BOTH Daily and Weekly datasets in ONE run
+"""
+
+# Initialize SAS session
 sas = saspy.SASsession()
 
+# Get batch date and calculate metadata
 batch_dt = datetime.now() - timedelta(days=1)
 batch_dt_str = batch_dt.strftime("%Y%m%d")
 day = batch_dt.day
 month_str = f"{batch_dt.month:02d}"
 year_str = f"{batch_dt.year % 100:02d}"
 
-BATCH_MODE = sys.argv[1] if len(sys.argv) > 1 else 'D'
-print("BATCH MODE = ", BATCH_MODE)
+print("=" * 60)
+print("TF_BOTH.py - Creating BOTH Daily and Weekly Datasets")
+print(f"Processing Date: {batch_dt.strftime('%Y-%m-%d')}")
+print("=" * 60)
 
-# Determine dataset names
-if BATCH_MODE == 'W':
-    nowk = "1" if day == 8 else "2" if day == 15 else "3" if day == 22 else "4"
-    cur_data = f"billstran{month_str}{nowk}{year_str}"
-    
-    if nowk == "1":
-        prev_month = batch_dt - timedelta(days=30)
-        prev_data = f"billstran{prev_month.month:02d}4{prev_month.year % 100:02d}"
-    else:
-        prev_data = f"billstran{month_str}{int(nowk)-1}{year_str}"
-        
-elif BATCH_MODE == 'D':
-    cur_data = f"billstran_{day:02d}"
-    prev_data = f"billstran_{31 if day == 1 else day-1:02d}"
+# ------------------------------------------
+# Configure Daily Dataset Names
+# ------------------------------------------
+daily_cur_data = f"billstran_{day:02d}"
+daily_cur_data_full = f"billstran_{batch_dt_str}"
+if day == 1:
+    daily_prev_data = f"billstran_31"
+else:
+    daily_prev_data = f"billstran_{day-1:02d}"
 
-print(f"Current: {cur_data}, Previous: {prev_data}")
+print(f"\nDaily Dataset:")
+print(f"  Current: {daily_cur_data}")
+print(f"  Previous (schema): {daily_prev_data}")
 
-# Always read from Daily staging file (for both D and W modes)
+# ------------------------------------------
+# Configure Weekly Dataset Names
+# ------------------------------------------
+# Determine week number based on day (matching EIBWTRBL logic)
+if day == 8:
+    nowk = "1"
+elif day == 15:
+    nowk = "2"
+elif day == 22:
+    nowk = "3"
+else:
+    nowk = "4"
+
+# Weekly dataset naming: BILLSTRANMMWYY (e.g., billstran11125 = Month 11, Week 1, Year 25)
+weekly_cur_data = f"billstran{month_str}{nowk}{year_str}"
+
+# Determine previous week dataset
+if nowk == "1":
+    # If week 1, get previous month's week 4
+    prev_month = batch_dt - timedelta(days=30)
+    prev_month_str = f"{prev_month.month:02d}"
+    prev_year_str = f"{prev_month.year % 100:02d}"
+    weekly_prev_data = f"billstran{prev_month_str}4{prev_year_str}"
+else:
+    # Get previous week in same month
+    weekly_prev_data = f"billstran{month_str}{int(nowk)-1}{year_str}"
+
+print(f"\nWeekly Dataset:")
+print(f"  Current: {weekly_cur_data}")
+print(f"  Previous (schema): {weekly_prev_data}")
+
+# ------------------------------------------
+# Read Staging Data
+# ------------------------------------------
+print("\n" + "=" * 60)
+print("Reading Staging File")
+print("=" * 60)
+
 stg_file = "Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet"
 
 if not os.path.exists(stg_file):
@@ -42,43 +84,51 @@ if not os.path.exists(stg_file):
     sys.exit(1)
 
 df = pd.read_parquet(stg_file)
-print(f"Reading: {stg_file}")
-print(f"Columns loaded: {len(df.columns)}")
-# Remove first row and reset index (no header row to remove if already clean)
+print(f"✓ Reading: {stg_file}")
+print(f"✓ Columns loaded: {len(df.columns)}")
+print(f"✓ Raw records: {len(df)}")
+
+# Data transformation
 df = df.fillna("")
 df = df[df['ACCTNO'].notnull()]
 df.loc[df['CURRENCY'] == 'MYR', 'EXCHANGE'] = 1
 
-print("Number of records:", len(df))
+print(f"✓ Final records: {len(df)}")
 
-def assign_libname(lib, path):
-    return sas.submit(f"""libname {lib} '{path}';""")
+# ------------------------------------------
+# Helper Functions
+# ------------------------------------------
+def assign_libname(lib_name, sas_path):
+    return sas.submit(f"""libname {lib_name} '{sas_path}';""")
 
-def drop_table(lib, table):
-    return sas.submit(f"""
-        %macro drop_if_exists(lib={lib}, table={table});
+def drop_table(lib_name, table_name):
+    sas_code = f"""
+        %macro drop_if_exists(lib={lib_name}, table={table_name});
             %if %sysfunc(exist(&lib..&table)) %then %do;
                 proc sql; drop table &lib..&table; quit;
             %end;
         %mend;
         %drop_if_exists();
-    """)
+    """
+    return sas.submit(sas_code)
 
-def set_data(df, lib, cur, prev):
-    sas.df2sd(df, table=cur, libref='work')
+def set_data(df, lib_name, cur_data, prev_data):
+    sas.df2sd(df, table=cur_data, libref='work')
+    
     log = sas.submit(f"""
         proc sql noprint;
             create table colmeta as
             select name, type, length
             from dictionary.columns
-            where libname=upcase("{lib}") and memname=upcase("{prev}");
+            where libname=upcase("{lib_name}") and memname=upcase("{prev_data}");
         quit;
     """)
     
     df_meta = sas.sasdata("colmeta", libref="work").to_df()
     
     if df_meta.empty:
-        return sas.submit(f"data {lib}.{cur}; set work.{cur}; run;")
+        print(f"  ⚠ Previous dataset {prev_data} not found, creating without schema matching")
+        return sas.submit(f"data {lib_name}.{cur_data}; set work.{cur_data}; run;")
     
     cols = ", ".join(df_meta["name"].dropna().tolist())
     casted = []
@@ -91,22 +141,70 @@ def set_data(df, lib, cur, prev):
     
     return sas.submit(f"""
         proc sql noprint;
-            create table {lib}.{cur} as
-            select {cols} from {lib}.{prev}(obs=0)
+            create table {lib_name}.{cur_data} as
+            select {cols} from {lib_name}.{prev_data}(obs=0)
             union corr
-            select {", ".join(casted)} from work.{cur};
+            select {", ".join(casted)} from work.{cur_data};
         quit;
     """)
 
-# Main execution
-assign_libname("btrade", "/dwh/btrade")
-drop_table("btrade", cur_data)
-set_data(df, "btrade", cur_data, prev_data)
+# ------------------------------------------
+# Assign Library
+# ------------------------------------------
+lib_name = 'btrade'
+sas_path = "/dwh/btrade"
+assign_libname(lib_name, sas_path)
+print(f"\n✓ Library {lib_name} assigned to {sas_path}")
 
-if BATCH_MODE == 'D':
-    cur_data_full = f"billstran_{batch_dt_str}"
-    drop_table("btrade", cur_data_full)
-    set_data(df, "btrade", cur_data_full, prev_data)
-    os.system(f'cp /dwh/btrade/{cur_data}.sas7bdat /dwh/ibtrade/i{cur_data}.sas7bdat')
+# ------------------------------------------
+# Create DAILY Datasets
+# ------------------------------------------
+print("\n" + "=" * 60)
+print("Creating DAILY Datasets")
+print("=" * 60)
 
-print("Processing completed!")
+# Daily dataset 1: billstran_DD
+print(f"\n[1/3] Creating {daily_cur_data}...")
+drop_table(lib_name, daily_cur_data)
+set_data(df, lib_name, daily_cur_data, daily_prev_data)
+print(f"✓ Created: {lib_name}.{daily_cur_data}")
+
+# Daily dataset 2: billstran_YYYYMMDD
+print(f"\n[2/3] Creating {daily_cur_data_full}...")
+drop_table(lib_name, daily_cur_data_full)
+set_data(df, lib_name, daily_cur_data_full, daily_prev_data)
+print(f"✓ Created: {lib_name}.{daily_cur_data_full}")
+
+# Mirror copy
+source_path = f"{sas_path}/{daily_cur_data}.sas7bdat"
+dest_path = f"{sas_path.replace('btrade', 'ibtrade')}/i{daily_cur_data}.sas7bdat"
+if os.path.exists(os.path.dirname(dest_path)):
+    os.system(f'cp {source_path} {dest_path}')
+    print(f"✓ Mirror copy created: i{daily_cur_data}")
+
+# ------------------------------------------
+# Create WEEKLY Dataset
+# ------------------------------------------
+print("\n" + "=" * 60)
+print("Creating WEEKLY Dataset")
+print("=" * 60)
+
+print(f"\n[3/3] Creating {weekly_cur_data}...")
+drop_table(lib_name, weekly_cur_data)
+set_data(df, lib_name, weekly_cur_data, weekly_prev_data)
+print(f"✓ Created: {lib_name}.{weekly_cur_data}")
+
+# ------------------------------------------
+# Summary
+# ------------------------------------------
+print("\n" + "=" * 60)
+print("PROCESSING COMPLETED SUCCESSFULLY!")
+print("=" * 60)
+print(f"\n✓ Records processed: {len(df)}")
+print(f"\n✓ Daily datasets created:")
+print(f"   - {lib_name}.{daily_cur_data}")
+print(f"   - {lib_name}.{daily_cur_data_full}")
+print(f"   - Mirror: i{daily_cur_data}")
+print(f"\n✓ Weekly dataset created:")
+print(f"   - {lib_name}.{weekly_cur_data}")
+print("\n" + "=" * 60)
