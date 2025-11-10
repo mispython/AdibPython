@@ -15,21 +15,21 @@ output_path.mkdir(exist_ok=True)
 # DATA REPTDATE;
 reptdate_df = pl.read_parquet(bnm_path / "REPTDATE.parquet")
 
-# Process REPTDATE with SELECT/WHEN logic
+# Process REPTDATE with CORRECTED week logic using ranges
 processed_reptdate = reptdate_df.with_columns([
     pl.col('REPTDATE').dt.day().alias('day')
 ]).with_columns([
-    pl.when(pl.col('day') == 8).then(pl.struct([
+    pl.when(pl.col('day') <= 8).then(pl.struct([
         pl.lit(1).alias('sdd'),
         pl.lit('1').alias('wk'),
         pl.lit('4').alias('wk1')
     ]))
-    .when(pl.col('day') == 15).then(pl.struct([
+    .when(pl.col('day') <= 15).then(pl.struct([
         pl.lit(9).alias('sdd'),
         pl.lit('2').alias('wk'),
         pl.lit('1').alias('wk1')
     ]))
-    .when(pl.col('day') == 22).then(pl.struct([
+    .when(pl.col('day') <= 22).then(pl.struct([
         pl.lit(16).alias('sdd'),
         pl.lit('3').alias('wk'),
         pl.lit('2').alias('wk1')
@@ -93,22 +93,22 @@ if LOAN == RDATE and DEPOSIT == RDATE:
     # SAS: %INC PGM(LALWPBBD);
     try:
         print(">>> EXECUTING LALWPBBD")
-        lalw pbbd = importlib.import_module('LALWPBBD')
+        lalwpbbd_module = importlib.import_module('LALWPBBD')
         # Pass all global variables
-        lalw pbbd.NOWK = NOWK
-        lalw pbbd.NOWK1 = NOWK1
-        lalw pbbd.REPTMON = REPTMON
-        lalw pbbd.REPTMON1 = REPTMON1
-        lalw pbbd.REPTYEAR = REPTYEAR
-        lalw pbbd.REPTYR = REPTYR
-        lalw pbbd.REPTDAY = REPTDAY
-        lalw pbbd.RDATE = RDATE
-        lalw pbbd.SDATE = SDATE
-        lalw pbbd.TDATE = TDATE
-        lalw pbbd.QTR = QTR
-        lalw pbbd.LOAN = LOAN
-        lalw pbbd.DEPOSIT = DEPOSIT
-        lalw pbbd.process()
+        lalwpbbd_module.NOWK = NOWK
+        lalwpbbd_module.NOWK1 = NOWK1
+        lalwpbbd_module.REPTMON = REPTMON
+        lalwpbbd_module.REPTMON1 = REPTMON1
+        lalwpbbd_module.REPTYEAR = REPTYEAR
+        lalwpbbd_module.REPTYR = REPTYR
+        lalwpbbd_module.REPTDAY = REPTDAY
+        lalwpbbd_module.RDATE = RDATE
+        lalwpbbd_module.SDATE = SDATE
+        lalwpbbd_module.TDATE = TDATE
+        lalwpbbd_module.QTR = QTR
+        lalwpbbd_module.LOAN = LOAN
+        lalwpbbd_module.DEPOSIT = DEPOSIT
+        lalwpbbd_module.process()
     except ImportError:
         print("ERROR: LALWPBBD.py not found")
         sys.exit(1)
@@ -122,22 +122,22 @@ if LOAN == RDATE and DEPOSIT == RDATE:
     # SAS: %INC PGM(LALWPBBI);
     try:
         print(">>> EXECUTING LALWPBBI")
-        lalw pbbi = importlib.import_module('LALWPBBI')
+        lalwpbbi_module = importlib.import_module('LALWPBBI')
         # Pass all global variables
-        lalw pbbi.NOWK = NOWK
-        lalw pbbi.NOWK1 = NOWK1
-        lalw pbbi.REPTMON = REPTMON
-        lalw pbbi.REPTMON1 = REPTMON1
-        lalw pbbi.REPTYEAR = REPTYEAR
-        lalw pbbi.REPTYR = REPTYR
-        lalw pbbi.REPTDAY = REPTDAY
-        lalw pbbi.RDATE = RDATE
-        lalw pbbi.SDATE = SDATE
-        lalw pbbi.TDATE = TDATE
-        lalw pbbi.QTR = QTR
-        lalw pbbi.LOAN = LOAN
-        lalw pbbi.DEPOSIT = DEPOSIT
-        lalw pbbi.process()
+        lalwpbbi_module.NOWK = NOWK
+        lalwpbbi_module.NOWK1 = NOWK1
+        lalwpbbi_module.REPTMON = REPTMON
+        lalwpbbi_module.REPTMON1 = REPTMON1
+        lalwpbbi_module.REPTYEAR = REPTYEAR
+        lalwpbbi_module.REPTYR = REPTYR
+        lalwpbbi_module.REPTDAY = REPTDAY
+        lalwpbbi_module.RDATE = RDATE
+        lalwpbbi_module.SDATE = SDATE
+        lalwpbbi_module.TDATE = TDATE
+        lalwpbbi_module.QTR = QTR
+        lalwpbbi_module.LOAN = LOAN
+        lalwpbbi_module.DEPOSIT = DEPOSIT
+        lalwpbbi_module.process()
     except ImportError:
         print("ERROR: LALWPBBI.py not found")
         sys.exit(1)
@@ -151,22 +151,22 @@ if LOAN == RDATE and DEPOSIT == RDATE:
     # SAS: %INC PGM(LALWPBBU);
     try:
         print(">>> EXECUTING LALWPBBU")
-        lalw pbbu = importlib.import_module('LALWPBBU')
+        lalwpbbu_module = importlib.import_module('LALWPBBU')
         # Pass all global variables
-        lalw pbbu.NOWK = NOWK
-        lalw pbbu.NOWK1 = NOWK1
-        lalw pbbu.REPTMON = REPTMON
-        lalw pbbu.REPTMON1 = REPTMON1
-        lalw pbbu.REPTYEAR = REPTYEAR
-        lalw pbbu.REPTYR = REPTYR
-        lalw pbbu.REPTDAY = REPTDAY
-        lalw pbbu.RDATE = RDATE
-        lalw pbbu.SDATE = SDATE
-        lalw pbbu.TDATE = TDATE
-        lalw pbbu.QTR = QTR
-        lalw pbbu.LOAN = LOAN
-        lalw pbbu.DEPOSIT = DEPOSIT
-        lalw pbbu.process()
+        lalwpbbu_module.NOWK = NOWK
+        lalwpbbu_module.NOWK1 = NOWK1
+        lalwpbbu_module.REPTMON = REPTMON
+        lalwpbbu_module.REPTMON1 = REPTMON1
+        lalwpbbu_module.REPTYEAR = REPTYEAR
+        lalwpbbu_module.REPTYR = REPTYR
+        lalwpbbu_module.REPTDAY = REPTDAY
+        lalwpbbu_module.RDATE = RDATE
+        lalwpbbu_module.SDATE = SDATE
+        lalwpbbu_module.TDATE = TDATE
+        lalwpbbu_module.QTR = QTR
+        lalwpbbu_module.LOAN = LOAN
+        lalwpbbu_module.DEPOSIT = DEPOSIT
+        lalwpbbu_module.process()
     except ImportError:
         print("ERROR: LALWPBBU.py not found")
         sys.exit(1)
@@ -180,22 +180,22 @@ if LOAN == RDATE and DEPOSIT == RDATE:
     # SAS: %INC PGM(LALWEIRC);
     try:
         print(">>> EXECUTING LALWEIRC")
-        lalw eirc = importlib.import_module('LALWEIRC')
+        lalweirc_module = importlib.import_module('LALWEIRC')
         # Pass all global variables
-        lalw eirc.NOWK = NOWK
-        lalw eirc.NOWK1 = NOWK1
-        lalw eirc.REPTMON = REPTMON
-        lalw eirc.REPTMON1 = REPTMON1
-        lalw eirc.REPTYEAR = REPTYEAR
-        lalw eirc.REPTYR = REPTYR
-        lalw eirc.REPTDAY = REPTDAY
-        lalw eirc.RDATE = RDATE
-        lalw eirc.SDATE = SDATE
-        lalw eirc.TDATE = TDATE
-        lalw eirc.QTR = QTR
-        lalw eirc.LOAN = LOAN
-        lalw eirc.DEPOSIT = DEPOSIT
-        lalw eirc.process()
+        lalweirc_module.NOWK = NOWK
+        lalweirc_module.NOWK1 = NOWK1
+        lalweirc_module.REPTMON = REPTMON
+        lalweirc_module.REPTMON1 = REPTMON1
+        lalweirc_module.REPTYEAR = REPTYEAR
+        lalweirc_module.REPTYR = REPTYR
+        lalweirc_module.REPTDAY = REPTDAY
+        lalweirc_module.RDATE = RDATE
+        lalweirc_module.SDATE = SDATE
+        lalweirc_module.TDATE = TDATE
+        lalweirc_module.QTR = QTR
+        lalweirc_module.LOAN = LOAN
+        lalweirc_module.DEPOSIT = DEPOSIT
+        lalweirc_module.process()
     except ImportError:
         print("ERROR: LALWEIRC.py not found")
         sys.exit(1)
