@@ -14,23 +14,23 @@ output_path.mkdir(exist_ok=True)
 # DATA BNM.REPTDATE;
 reptdate_df = pl.read_parquet(loan_path / "REPTDATE.parquet")
 
-# Process REPTDATE with SELECT/WHEN logic
+# Process REPTDATE with corrected week logic
 processed_reptdate = reptdate_df.with_columns([
     pl.col('REPTDATE').dt.day().alias('DD'),
     pl.col('REPTDATE').dt.month().alias('MM'),
     pl.col('REPTDATE').dt.year().alias('YY')
 ]).with_columns([
-    pl.when(pl.col('DD') == 8).then(pl.struct([
+    pl.when(pl.col('DD') <= 8).then(pl.struct([
         pl.lit(1).alias('sdd'),
         pl.lit('1').alias('wk'),
         pl.lit('4').alias('wk1')
     ]))
-    .when(pl.col('DD') == 15).then(pl.struct([
+    .when(pl.col('DD') <= 15).then(pl.struct([
         pl.lit(9).alias('sdd'),
         pl.lit('2').alias('wk'),
         pl.lit('1').alias('wk1')
     ]))
-    .when(pl.col('DD') == 22).then(pl.struct([
+    .when(pl.col('DD') <= 22).then(pl.struct([
         pl.lit(16).alias('sdd'),
         pl.lit('3').alias('wk'),
         pl.lit('2').alias('wk1')
@@ -74,6 +74,7 @@ print(f"REPTYEAR: {REPTYEAR}, REPTDAY: {REPTDAY}, RDATE: {RDATE}, SDATE: {SDATE}
 print(f"TDATE: {TDATE}, QTR: {QTR}")
 
 # Save BNM.REPTDATE
+bnm_path.mkdir(exist_ok=True)
 processed_reptdate.write_parquet(bnm_path / "REPTDATE.parquet")
 
 # SMR 2021-4114 - CAGAMAS data processing
@@ -110,33 +111,33 @@ print(f"RDATE: {RDATE}")
 # MACRO %PROCESS equivalent
 # Note: Condition is commented out in SAS, so always execute the main block
 
-# SAS commented condition:
-/*
-%IF "&LOAN"="&RDATE" %THEN %DO;
-*/
-
 # Since condition is commented out, this block always executes:
-
-# SAS: %INC PGM(LALWPBBC);
 try:
     print(">>> EXECUTING LALWPBBC")
-    lalw pbbc = importlib.import_module('LALWPBBC')
-    # Pass all global variables
-    lalw pbbc.NOWK = NOWK
-    lalw pbbc.NOWK1 = NOWK1
-    lalw pbbc.REPTMON = REPTMON
-    lalw pbbc.REPTMON1 = REPTMON1
-    lalw pbbc.REPTYEAR = REPTYEAR
-    lalw pbbc.REPTDAY = REPTDAY
-    lalw pbbc.RDATE = RDATE
-    lalw pbbc.SDATE = SDATE
-    lalw pbbc.TDATE = TDATE
-    lalw pbbc.QTR = QTR
-    lalw pbbc.LOAN = LOAN
-    lalw pbbc.CAGALIST = CAGALIST
-    lalw pbbc.process()
+    
+    # Import the module
+    lalwpbbc_module = importlib.import_module('LALWPBBC')
+    
+    # Pass all global variables to the module
+    lalwpbbc_module.NOWK = NOWK
+    lalwpbbc_module.NOWK1 = NOWK1
+    lalwpbbc_module.REPTMON = REPTMON
+    lalwpbbc_module.REPTMON1 = REPTMON1
+    lalwpbbc_module.REPTYEAR = REPTYEAR
+    lalwpbbc_module.REPTDAY = REPTDAY
+    lalwpbbc_module.RDATE = RDATE
+    lalwpbbc_module.SDATE = SDATE
+    lalwpbbc_module.TDATE = TDATE
+    lalwpbbc_module.QTR = QTR
+    lalwpbbc_module.LOAN = LOAN
+    lalwpbbc_module.CAGALIST = CAGALIST
+    
+    # Call the process function
+    lalwpbbc_module.process()
+    
 except ImportError:
     print("ERROR: LALWPBBC.py not found")
+    print("Please create LALWPBBC.py with the required process() function")
     sys.exit(1)
 except Exception as e:
     print(f"ERROR in LALWPBBC: {e}")
@@ -162,22 +163,6 @@ try:
     print(f"Updated {note_filename} with CAGAMAS logic")
     
 except FileNotFoundError:
-    print(f"NOTE: {note_filename} not found")
-
-# SAS: PROC DATASETS LIB=WORK KILL NOLIST; RUN;
-print(">>> CLEARING WORK DATASETS AFTER LALWPBBC")
-
-# SAS commented else block:
-/*
-%ELSE %DO;
-    %IF "&LOAN" NE "&RDATE" %THEN
-        %PUT THE LOAN EXTRACTION IS NOT DATED &RDATE;
-    %PUT THE JOB IS NOT DONE !!;
-    %DO;
-        DATA A;
-            ABORT 77;
-    %END;
-%END;
-*/
+    print(f"NOTE: {note_filename} not found - skipping CAGAMAS update")
 
 print("PROCESSING COMPLETED SUCCESSFULLY")
