@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
 """
-ELDS BNM Summary Processing - Memory Efficient Version (CORRECTED)
+ELDS BNM Summary Processing - Memory Efficient Version
 Processes Bank Negara Malaysia summary files with cumulative data loading
-ALIGNED WITH EIBWELWH SAS PROGRAM
-
-CORRECTIONS APPLIED:
-- Fixed FIN_CONCEPT length: 3 → 60
-- Fixed STATUS length: 1 → 30
-- Fixed LN_UTILISE_LOCAT_CD length: 10 → 5
-- Added missing EHP column mappings (12 fields)
-- Aligned with SAS EIBWELWH field definitions
 """
 
 import polars as pl
@@ -41,7 +33,7 @@ RDATE = (REPTDATE - SAS_ORIGIN).days
 
 print("="*70)
 print(f"ELDS BNM Summary Processing - {REPTDATE.strftime('%Y-%m-%d')}")
-print("Memory Efficient Mode (DuckDB Streaming) - CORRECTED VERSION")
+print("Memory Efficient Mode (DuckDB Streaming)")
 print("="*70)
 
 # =============================================================================
@@ -58,7 +50,7 @@ EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
 
 # ==============================
-# PRODUCTION SCHEMA DEFINITION (CORRECTED)
+# PRODUCTION SCHEMA DEFINITION
 # ==============================
 
 SUMM1_SCHEMA = {
@@ -70,15 +62,15 @@ SUMM1_SCHEMA = {
     'AANO': ('char', 15),
     'APPKEY': ('char', 10),
     'PRIORITY_SECTOR': ('char', 2),
-    'FIN_CONCEPT': ('char', 60),           # CORRECTED: was 3, now 60 (per SAS @1167)
-    'LN_UTILISE_LOCAT_CD': ('char', 5),    # CORRECTED: was 10, now 5 (per SAS @1254)
+    'FIN_CONCEPT': ('char', 3),
+    'LN_UTILISE_LOCAT_CD': ('char', 10),
     'STRUPCO_3YR': ('char', 2),
     'APPTYPE': ('char', 1),
     'REJREASON': ('char', 5),
     'DATEXT': ('char', 10),
     'EREQNO': ('char', 15),
     'REFIN_FLG': ('char', 3),
-    'STATUS': ('char', 30),                # CORRECTED: was 1, now 30 (per SAS @983/@993)
+    'STATUS': ('char', 1),
     'CCPT_TAG': ('char', 5),
     'PRICING_TYPE': ('char', 5),
     'LU_ADD1': ('char', 40),
@@ -171,7 +163,6 @@ def apply_production_schema(df: pl.DataFrame, schema: dict, dataset_name: str) -
             continue
         
         if col_type == 'char':
-            # Special handling for zero-padded fields
             if col_name in ['ENTKEY', 'CUSTOMER_CODE', 'POSTCODE', 'STATE_CD', 
                            'LN_UTILISE_LOCAT_CD', 'LU_POSTCODE', 'LU_STATE_CD']:
                 expr = (
@@ -182,16 +173,13 @@ def apply_production_schema(df: pl.DataFrame, schema: dict, dataset_name: str) -
                     .alias(col_name)
                 )
             else:
-                # Standard character field: strip and truncate to max length
                 expr = (
                     pl.col(col_name)
                     .cast(pl.Utf8, strict=False)
-                    .str.strip_chars()
                     .str.slice(0, col_len)
                     .alias(col_name)
                 )
         else:
-            # Numeric field: clean and convert
             expr = (
                 pl.col(col_name)
                 .cast(pl.Utf8, strict=False)
@@ -412,60 +400,28 @@ print(f"✓ SAS7BDAT loaded: {len(SUMM1_EHP_df):,} rows")
 
 SUMM1_EHP = pl.from_pandas(SUMM1_EHP_df)
 
-print(f"  📋 Mapping EHP column names (CORRECTED - added missing mappings)...")
-# CORRECTED: Complete EHP column mapping aligned with EIBWELWH
+print(f"  📋 Mapping EHP column names...")
 ehp_column_map = {
-    # Core identifiers - ADDED
-    'MAANO': 'MAANO',
-    'STAGE': 'STAGE',
-    'APPLICATION': 'APPLICATION',
-    'APPKEY': 'APPKEY',
-    
-    # Dates
     'DATE_COMPLETED': 'DTECOMPLETE',
-    'DATE': 'DATEXT',
-    'DTCOMPLETE': 'DTCOMPLETE',
-    
-    # Classification - ADDED
-    'PRIORITY_SECTOR': 'PRIORITY_SECTOR',
-    'APPTYPE': 'APPTYPE',
-    'STATUS': 'STATUS',
-    
-    # Financial
     'DEBT_SERVICE_RATIO': 'DSRISS3',
+    'LOCATION': 'LN_UTILISE_LOCAT_CD',
     'SPECIAL_FUND': 'SPECIALFUND',
     'ASSET_PURCHASE': 'ASSET_PURCH_AMT',
-    'PURPOSE_LOAN': 'PURPOSE_LOAN',
-    'AMOUNT': 'AMTAPPLY',
-    'AMT_APPROVED': 'AMOUNT',
-    'ACCOUNT_NO': 'ACCTNO',
-    
-    # Interest rates - ADDED
-    'EIR': 'EIR',
-    'CIR': 'CIR',
-    'PRICING_TYPE': 'PRICING_TYPE',
-    
-    # Facility
     'STARTUP_FINANCING': 'STRUPCO_3YR',
     'FACILITY_TYPE': 'FACICODE',
+    'AMOUNT': 'AMTAPPLY',
+    'AMT_APPROVED': 'AMOUNT',
     'REJECT_REASON': 'REJREASON',
-    
-    # Concept & flags - ADDED
-    'FIN_CONCEPT': 'FIN_CONCEPT',
+    'DATE': 'DATEXT',
+    'ACCOUNT_NO': 'ACCTNO',
+    'EREQ_NUMBER': 'EREQNO',
     'REFINANCING': 'REFIN_FLG',
-    'CCPT_TAG': 'CCPT_TAG',
-    
-    # Location
-    'LOCATION': 'LN_UTILISE_LOCAT_CD',
     'ADDRESS_1': 'LU_ADD1',
     'ADDRESS_2': 'LU_ADD2',
     'CITY': 'LU_TOWN_CITY',
     'POSTCODE': 'LU_POSTCODE',
     'STATECODE': 'LU_STATE_CD',
-    'COUNTRY': 'LU_COUNTRY_CD',
-    
-    # Request
-    'EREQ_NUMBER': 'EREQNO',
+    'COUNTRY': 'LU_COUNTRY_CD'
 }
 
 rename_dict = {k: v for k, v in ehp_column_map.items() if k in SUMM1_EHP.columns}
@@ -475,7 +431,7 @@ if rename_dict:
 
 SUMM1_EHP = apply_sas_eof_check(SUMM1_EHP, "bnmsummary1_ehp", is_sas_dataset=True)
 
-print(f"\nApplying production schema (CORRECTED)...")
+print(f"\nApplying production schema...")
 SUMM1 = apply_production_schema(SUMM1, SUMM1_SCHEMA, "CSV")
 SUMM1_EHP = apply_production_schema(SUMM1_EHP, SUMM1_SCHEMA, "EHP")
 
@@ -602,24 +558,10 @@ print(f"\n✓ SUMM2 Complete: {final_summ2_count:,} total rows")
 # =============================================================================
 
 print("\n" + "="*70)
-print("PROCESSING COMPLETE - CORRECTED VERSION")
+print("PROCESSING COMPLETE")
 print("="*70)
 print(f"Date: {REPTDATE.strftime('%Y-%m-%d')}")
 print(f"Output Directory: {OUTPUT_DATA_PATH}")
 print(f"\nResults:")
 print(f"  SUMM1.parquet: {final_summ1_count:,} rows, 41 columns")
 print(f"  SUMM2.parquet: {final_summ2_count:,} rows, 38 columns")
-
-print("\n" + "="*70)
-print("CORRECTIONS APPLIED IN THIS VERSION:")
-print("="*70)
-print("✓ Fixed FIN_CONCEPT length: 3 → 60 characters")
-print("✓ Fixed STATUS length: 1 → 30 characters")
-print("✓ Fixed LN_UTILISE_LOCAT_CD length: 10 → 5 characters")
-print("✓ Added 12 missing EHP column mappings:")
-print("    - MAANO, STAGE, APPLICATION, APPKEY")
-print("    - PRIORITY_SECTOR, APPTYPE, STATUS")
-print("    - PURPOSE_LOAN, EIR, CIR, PRICING_TYPE")
-print("    - FIN_CONCEPT, CCPT_TAG, DTCOMPLETE")
-print("✓ Schema now aligned with SAS EIBWELWH field definitions")
-print("="*70)
