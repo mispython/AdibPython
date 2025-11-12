@@ -1,17 +1,17 @@
-# islamic_cheques_report.py
+# eibw_epc1_cheques_report.py
 
 import duckdb
 import polars as pl
 from pathlib import Path
 import datetime
 
-def process_islamic_cheques_report():
+def process_cheques_report():
     """
-    EIIWEPC1 - Islamic Banking Cheques Issued Report
-    Uses Polars for efficient data loading and DuckDB for SQL processing
+    EIBWEPC1 - Cheques Issued Report
+    Uses Polars for data loading and DuckDB for SQL processing
     """
     
-    print("Processing Islamic Cheques Report - EIIWEPC1")
+    print("Processing EIBWEPC1 - Cheques Issued Report")
     
     # Configuration
     loan_path = Path("LOAN")
@@ -26,7 +26,7 @@ def process_islamic_cheques_report():
     
     try:
         # =========================================================================
-        # DATA REPTDATE Processing with Polars
+        # DATA REPTDATE Processing
         # =========================================================================
         print("Loading report date...")
         reptdate_df = pl.read_parquet(loan_path / "REPTDATE.parquet")
@@ -56,7 +56,36 @@ def process_islamic_cheques_report():
         print(f"Report Date: {RDATE}, Period: {PREVDATE} to {REPTDATE}")
         
         # =========================================================================
-        # Load DPLD data with Polars
+        # PROC FORMAT equivalent
+        # =========================================================================
+        # Define format dictionaries
+        TCODE_FORMAT = {
+            310: 'LOAN DISBURSEMENT',
+            750: 'PRINCIPAL INCREASE (PROGRESSIVE LOAN RELEASE)',
+            752: 'DEBITING FOR INSURANCE PREMIUM',
+            753: 'DEBITING FOR LEGAL FEE',
+            754: 'DEBITING FOR OTHER PAYMENTS',
+            760: 'MANUAL FEE ASSESSMENT FOR PAYMENT TO 3RD PARTY'
+        }
+        
+        FEEFMT_FORMAT = {
+            'QR': 'QUIT RENT',
+            'LF': 'LEGAL FEE & DISBURSEMENT',
+            'VA': 'VALUATION FEE',
+            'IP': 'INSURANCE PREMIUM',
+            'PA': 'PROFESSIONAL/OTHERS',
+            'AC': 'ADVERTISEMENT FEE',
+            'MC': 'MAINTENANCE CHARGES',
+            'RE': 'REPOSSESION CHARGES',
+            'RI': 'REPAIR CHARGES',
+            'SC': 'STORAGE CHARGES',
+            'SF': 'SEARCH FEE',
+            'TC': 'TOWING CHARGES',
+            '99': 'MISCHELLANEOUS EXPENSES'
+        }
+        
+        # =========================================================================
+        # DATA BNM.DPLD - Load and filter DPLD data
         # =========================================================================
         print("Loading DPLD data...")
         dpl_file = dpld_path / f"DPLD{REPTMON}.parquet"
@@ -67,8 +96,6 @@ def process_islamic_cheques_report():
                 (pl.col('REPTDATE') >= PREVDATE) & (pl.col('REPTDATE') <= REPTDATE)
             )
             dpld_filtered.write_parquet(bnm_path / "DPLD.parquet")
-            
-            # Register with DuckDB for SQL processing
             conn.register("dpld_filtered", dpld_filtered)
             print(f"   Loaded {dpld_filtered.height} DPLD records")
         else:
@@ -76,14 +103,14 @@ def process_islamic_cheques_report():
             conn.execute("CREATE TEMP TABLE dpld_filtered AS SELECT 1 as dummy WHERE FALSE")
         
         # =========================================================================
-        # Load LNLD data with Polars (more efficient than DuckDB for text parsing)
+        # DATA BNM.LNLD - Process LNLD fixed-width file
         # =========================================================================
-        print("Loading LNLD data...")
+        print("Processing LNLD data...")
         try:
             # Use Polars for fixed-width text parsing
             lnld_df = pl.read_csv("LNLD.csv", has_header=False, new_columns=["line"])
             
-            # Parse fixed-width format using Polars string operations
+            # Parse fixed-width format
             lnld_processed = lnld_df.with_columns([
                 pl.col("line").str.slice(0, 11).str.strip_chars().alias("ACCTNO"),
                 pl.col("line").str.slice(12, 5).str.strip_chars().alias("NOTENO"),
@@ -106,9 +133,9 @@ def process_islamic_cheques_report():
                 .otherwise(None).alias("TRANDT")
             ]).drop(["line", "TRANDT_STR"])
             
-            # Apply Islamic branch filter
+            # Apply branch filters
             lnld_filtered = lnld_processed.filter(
-                ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999)) & 
+                ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999)) &
                 (~pl.col('COSTCTR').is_in([4043, 4048]))
             )
             
@@ -121,11 +148,9 @@ def process_islamic_cheques_report():
             conn.execute("CREATE TEMP TABLE lnld_filtered AS SELECT 1 as dummy WHERE FALSE")
         
         # =========================================================================
-        # Use DuckDB for SQL-based data merging and processing
+        # PROC SORT and DATA BNM.TRANX - Merge datasets
         # =========================================================================
-        print("Merging and processing data with DuckDB...")
-        
-        # Merge LNLD and DPLD
+        print("Merging transaction data...")
         conn.execute("""
             CREATE TEMP TABLE tranx AS 
             SELECT l.* 
@@ -135,7 +160,10 @@ def process_islamic_cheques_report():
         
         conn.execute(f"COPY tranx TO '{bnm_path}/TRANX.parquet' (FORMAT PARQUET)")
         
-        # Process transactions for reporting
+        # =========================================================================
+        # DATA TRANX - Process transactions for reporting
+        # =========================================================================
+        print("Processing transactions for reporting...")
         conn.execute("""
             CREATE TEMP TABLE tranx_processed AS 
             SELECT 
@@ -174,7 +202,7 @@ def process_islamic_cheques_report():
         # Generate Reports
         # =========================================================================
         
-        # Report 1: Summary
+        # Report 1: Summary of Cheques Issued
         print("\n" + "="*60)
         print("REPORT ID : EIBQEPC1")
         print("PUBLIC BANK BERHAD")
@@ -191,7 +219,7 @@ def process_islamic_cheques_report():
         print(f"Number of Cheques: {summary[0]:>16,d}")
         print(f"Value of Cheques (RM'000): {summary[1]:>16.2f}")
         
-        # Report 2: By number of cheques
+        # Report 2: By Number of Cheques
         print(f"\nALL PAYMENTS BY NUMBER OF CHEQUES AS AT {RDATE}")
         print("-" * 60)
         
@@ -210,12 +238,12 @@ def process_islamic_cheques_report():
             ORDER BY count
         """).fetchall()
         
-        print(f"{'NO':>2} {'PURPOSE':<40} {'UNIT':>10} {'VALUE (RM''000)':>15}")
-        print("-" * 70)
+        print(f"{'NO':>2} {'PURPOSE':<45} {'UNIT':>10} {'VALUE (RM''000)':>15}")
+        print("-" * 75)
         for row in by_count:
-            print(f"{row[0]:>2} {row[1]:<40} {row[2]:>10,d} {row[3]:>15.2f}")
+            print(f"{row[0]:>2} {row[1]:<45} {row[2]:>10,d} {row[3]:>15.2f}")
         
-        # Report 3: By value of cheques
+        # Report 3: By Value of Cheques
         print(f"\nALL PAYMENTS BY VALUE OF CHEQUES AS AT {RDATE}")
         print("-" * 60)
         
@@ -234,12 +262,12 @@ def process_islamic_cheques_report():
             ORDER BY count
         """).fetchall()
         
-        print(f"{'NO':>2} {'PURPOSE':<40} {'UNIT':>10} {'VALUE (RM''000)':>15}")
-        print("-" * 70)
+        print(f"{'NO':>2} {'PURPOSE':<45} {'UNIT':>10} {'VALUE (RM''000)':>15}")
+        print("-" * 75)
         for row in by_value:
-            print(f"{row[0]:>2} {row[1]:<40} {row[2]:>10,d} {row[3]:>15.2f}")
+            print(f"{row[0]:>2} {row[1]:<45} {row[2]:>10,d} {row[3]:>15.2f}")
         
-        # Report 4: By branch
+        # Report 4: By Branch
         print(f"\nALL PAYMENTS BY BRANCH AS AT {RDATE}")
         print("-" * 60)
         
@@ -259,19 +287,50 @@ def process_islamic_cheques_report():
         for row in by_branch:
             print(f"{row[0]:>6} {row[1]:<40} {row[2]:>10,d} {row[3]:>15.2f}")
         
-        # Save results
-        conn.execute(f"COPY tranx_processed TO '{output_path}/cheques_report.csv' (FORMAT CSV, HEADER true)")
-        print(f"\nResults saved to: {output_path}/cheques_report.csv")
+        # Save detailed results to CSV
+        conn.execute(f"COPY tranx_processed TO '{output_path}/cheques_detailed_report.csv' (FORMAT CSV, HEADER true)")
         
-        print("\nProcessing completed successfully")
+        # Save summary results
+        conn.execute(f"""
+            COPY (
+                SELECT 
+                    TRNXDESC as purpose,
+                    COUNT(*) as unit,
+                    SUM(TRANAMT1) as value_000
+                FROM tranx_processed
+                GROUP BY TRNXDESC
+                ORDER BY COUNT(*) DESC
+            ) TO '{output_path}/cheques_summary_report.csv' (FORMAT CSV, HEADER true)
+        """)
         
-        return summary[0]  # Return count of processed transactions
+        print(f"\nDetailed report saved to: {output_path}/cheques_detailed_report.csv")
+        print(f"Summary report saved to: {output_path}/cheques_summary_report.csv")
+        
+        # Final statistics
+        stats = conn.execute("""
+            SELECT 
+                COUNT(*) as total_transactions,
+                COUNT(DISTINCT COSTCTR) as branches,
+                COUNT(DISTINCT TRNXDESC) as purposes,
+                SUM(TRANAMT1) as total_value_000
+            FROM tranx_processed
+        """).fetchone()
+        
+        print(f"\nPROCESSING SUMMARY:")
+        print(f"  Total Transactions: {stats[0]:,}")
+        print(f"  Branches: {stats[1]}")
+        print(f"  Payment Purposes: {stats[2]}")
+        print(f"  Total Value: RM {stats[3]:,.2f} thousand")
+        
+        print("\nEIBWEPC1 PROCESSING COMPLETED SUCCESSFULLY")
+        
+        return stats[0]  # Return count of processed transactions
         
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"ERROR in EIBWEPC1 processing: {e}")
         raise
     finally:
         conn.close()
 
 if __name__ == "__main__":
-    process_islamic_cheques_report()
+    process_cheques_report()
