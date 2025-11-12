@@ -7,7 +7,6 @@ import sys
 def process_eibd_depf():
     """
     EIBDDEPF - Foreign Currency Deposit Processing
-    Uses Polars for data loading and DuckDB for SQL processing
     """
     
     print("Processing EIBDDEPF - Foreign Currency Deposits")
