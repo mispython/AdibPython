@@ -1,13 +1,14 @@
 # islamic_cheques_report.py
 
 import duckdb
+import polars as pl
 from pathlib import Path
 import datetime
 
 def process_islamic_cheques_report():
     """
     EIIWEPC1 - Islamic Banking Cheques Issued Report
-    Simple DuckDB implementation without pandas/polars
+    Uses Polars for efficient data loading and DuckDB for SQL processing
     """
     
     print("Processing Islamic Cheques Report - EIIWEPC1")
@@ -24,22 +25,18 @@ def process_islamic_cheques_report():
     conn = duckdb.connect()
     
     try:
-        # DATA REPTDATE Processing
+        # =========================================================================
+        # DATA REPTDATE Processing with Polars
+        # =========================================================================
         print("Loading report date...")
-        conn.execute(f"CREATE TEMP TABLE reptdate AS SELECT * FROM read_parquet('{loan_path}/REPTDATE.parquet')")
+        reptdate_df = pl.read_parquet(loan_path / "REPTDATE.parquet")
         
-        # Get date parameters
-        date_result = conn.execute("""
-            SELECT 
-                REPTDATE,
-                EXTRACT(DAY FROM REPTDATE) as day,
-                EXTRACT(MONTH FROM REPTDATE) as month,
-                EXTRACT(YEAR FROM REPTDATE) as year
-            FROM reptdate 
-            LIMIT 1
-        """).fetchone()
-        
-        REPTDATE, day, month, year = date_result
+        # Extract date parameters
+        first_row = reptdate_df.row(0)
+        REPTDATE = first_row['REPTDATE']
+        day = REPTDATE.day
+        month = REPTDATE.month
+        year = REPTDATE.year
         
         # Calculate PREVDATE based on day
         if day == 8:
@@ -58,62 +55,77 @@ def process_islamic_cheques_report():
         
         print(f"Report Date: {RDATE}, Period: {PREVDATE} to {REPTDATE}")
         
-        # Load and filter DPLD data
+        # =========================================================================
+        # Load DPLD data with Polars
+        # =========================================================================
         print("Loading DPLD data...")
         dpl_file = dpld_path / f"DPLD{REPTMON}.parquet"
         if dpl_file.exists():
-            conn.execute(f"""
-                CREATE TEMP TABLE dpld_filtered AS 
-                SELECT * FROM read_parquet('{dpl_file}')
-                WHERE REPTDATE BETWEEN '{PREVDATE}' AND '{REPTDATE}'
-            """)
-            conn.execute(f"COPY dpld_filtered TO '{bnm_path}/DPLD.parquet' (FORMAT PARQUET)")
+            # Use Polars for efficient filtering
+            dpld_df = pl.read_parquet(dpl_file)
+            dpld_filtered = dpld_df.filter(
+                (pl.col('REPTDATE') >= PREVDATE) & (pl.col('REPTDATE') <= REPTDATE)
+            )
+            dpld_filtered.write_parquet(bnm_path / "DPLD.parquet")
+            
+            # Register with DuckDB for SQL processing
+            conn.register("dpld_filtered", dpld_filtered)
+            print(f"   Loaded {dpld_filtered.height} DPLD records")
         else:
-            print("DPLD file not found")
+            print("   DPLD file not found")
             conn.execute("CREATE TEMP TABLE dpld_filtered AS SELECT 1 as dummy WHERE FALSE")
         
-        # Load and process LNLD data
-        print("Processing LNLD data...")
-        conn.execute("""
-            CREATE TEMP TABLE lnld_raw AS 
-            SELECT line FROM read_text('LNLD.csv')
-        """)
+        # =========================================================================
+        # Load LNLD data with Polars (more efficient than DuckDB for text parsing)
+        # =========================================================================
+        print("Loading LNLD data...")
+        try:
+            # Use Polars for fixed-width text parsing
+            lnld_df = pl.read_csv("LNLD.csv", has_header=False, new_columns=["line"])
+            
+            # Parse fixed-width format using Polars string operations
+            lnld_processed = lnld_df.with_columns([
+                pl.col("line").str.slice(0, 11).str.strip_chars().alias("ACCTNO"),
+                pl.col("line").str.slice(12, 5).str.strip_chars().alias("NOTENO"),
+                pl.col("line").str.slice(18, 7).str.strip_chars().cast(pl.Int64).alias("COSTCTR"),
+                pl.col("line").str.slice(26, 3).str.strip_chars().alias("NOTETYPE"),
+                pl.col("line").str.slice(30, 8).str.strip_chars().alias("TRANDT_STR"),
+                pl.col("line").str.slice(46, 3).str.strip_chars().cast(pl.Int64).alias("TRANCODE"),
+                pl.col("line").str.slice(50, 3).str.strip_chars().cast(pl.Int64).alias("SEQNO"),
+                pl.when(pl.col("line").str.slice(46, 3).str.strip_chars().cast(pl.Int64) == 760)
+                .then(pl.col("line").str.slice(54, 2).str.strip_chars())
+                .otherwise(None).alias("FEEPLAN"),
+                pl.when(pl.col("line").str.slice(46, 3).str.strip_chars().cast(pl.Int64) == 760)
+                .then(pl.col("line").str.slice(56, 3).str.strip_chars().cast(pl.Int64))
+                .otherwise(None).alias("FEENO"),
+                pl.col("line").str.slice(60, 18).str.strip_chars().cast(pl.Float64).alias("TRANAMT"),
+                pl.col("line").str.slice(79, 3).str.strip_chars().cast(pl.Int64).alias("SOURCE")
+            ]).with_columns([
+                pl.when(pl.col("TRANDT_STR").str.len_chars() == 8)
+                .then(pl.col("TRANDT_STR").str.strptime(pl.Date, format="%d%m%y"))
+                .otherwise(None).alias("TRANDT")
+            ]).drop(["line", "TRANDT_STR"])
+            
+            # Apply Islamic branch filter
+            lnld_filtered = lnld_processed.filter(
+                ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999)) & 
+                (~pl.col('COSTCTR').is_in([4043, 4048]))
+            )
+            
+            lnld_filtered.write_parquet(bnm_path / "LNLD.parquet")
+            conn.register("lnld_filtered", lnld_filtered)
+            print(f"   Processed {lnld_filtered.height} LNLD records")
+            
+        except FileNotFoundError:
+            print("   LNLD.csv not found")
+            conn.execute("CREATE TEMP TABLE lnld_filtered AS SELECT 1 as dummy WHERE FALSE")
         
-        # Parse fixed-width LNLD data
-        conn.execute("""
-            CREATE TEMP TABLE lnld_processed AS 
-            SELECT 
-                TRIM(SUBSTRING(line, 1, 11)) as ACCTNO,
-                TRIM(SUBSTRING(line, 13, 5)) as NOTENO,
-                CAST(TRIM(SUBSTRING(line, 19, 7)) AS INTEGER) as COSTCTR,
-                TRIM(SUBSTRING(line, 27, 3)) as NOTETYPE,
-                CASE 
-                    WHEN LENGTH(TRIM(SUBSTRING(line, 31, 8))) = 8 
-                    THEN strptime(TRIM(SUBSTRING(line, 31, 8)), '%d%m%y')
-                    ELSE NULL 
-                END as TRANDT,
-                CAST(TRIM(SUBSTRING(line, 47, 3)) AS INTEGER) as TRANCODE,
-                CAST(TRIM(SUBSTRING(line, 51, 3)) AS INTEGER) as SEQNO,
-                CASE WHEN CAST(TRIM(SUBSTRING(line, 47, 3)) AS INTEGER) = 760 
-                     THEN TRIM(SUBSTRING(line, 55, 2)) ELSE NULL END as FEEPLAN,
-                CASE WHEN CAST(TRIM(SUBSTRING(line, 47, 3)) AS INTEGER) = 760 
-                     THEN CAST(TRIM(SUBSTRING(line, 57, 3)) AS INTEGER) ELSE NULL END as FEENO,
-                CAST(TRIM(SUBSTRING(line, 61, 18)) AS DECIMAL(16,2)) as TRANAMT,
-                CAST(TRIM(SUBSTRING(line, 80, 3)) AS INTEGER) as SOURCE
-            FROM lnld_raw
-        """)
-        
-        # Apply filters
-        conn.execute("""
-            CREATE TEMP TABLE lnld_filtered AS 
-            SELECT * FROM lnld_processed
-            WHERE (COSTCTR < 3000 OR COSTCTR > 3999) AND COSTCTR NOT IN (4043, 4048)
-        """)
-        
-        conn.execute(f"COPY lnld_filtered TO '{bnm_path}/LNLD.parquet' (FORMAT PARQUET)")
+        # =========================================================================
+        # Use DuckDB for SQL-based data merging and processing
+        # =========================================================================
+        print("Merging and processing data with DuckDB...")
         
         # Merge LNLD and DPLD
-        print("Merging transaction data...")
         conn.execute("""
             CREATE TEMP TABLE tranx AS 
             SELECT l.* 
@@ -124,7 +136,6 @@ def process_islamic_cheques_report():
         conn.execute(f"COPY tranx TO '{bnm_path}/TRANX.parquet' (FORMAT PARQUET)")
         
         # Process transactions for reporting
-        print("Generating reports...")
         conn.execute("""
             CREATE TEMP TABLE tranx_processed AS 
             SELECT 
@@ -159,10 +170,14 @@ def process_islamic_cheques_report():
             FROM tranx
         """)
         
+        # =========================================================================
+        # Generate Reports
+        # =========================================================================
+        
         # Report 1: Summary
         print("\n" + "="*60)
-        print("REPORT ID : EIIQEPC1")
-        print("PUBLIC ISLAMIC BANK BERHAD")
+        print("REPORT ID : EIBQEPC1")
+        print("PUBLIC BANK BERHAD")
         print(f"CHEQUES ISSUED BY THE BANK AS AT {RDATE}")
         print("="*60)
         
@@ -244,15 +259,19 @@ def process_islamic_cheques_report():
         for row in by_branch:
             print(f"{row[0]:>6} {row[1]:<40} {row[2]:>10,d} {row[3]:>15.2f}")
         
-        # Save results to CSV
-        conn.execute(f"COPY tranx_processed TO '{output_path}/islamic_cheques_report.csv' (FORMAT CSV, HEADER true)")
-        print(f"\nResults saved to: {output_path}/islamic_cheques_report.csv")
+        # Save results
+        conn.execute(f"COPY tranx_processed TO '{output_path}/cheques_report.csv' (FORMAT CSV, HEADER true)")
+        print(f"\nResults saved to: {output_path}/cheques_report.csv")
         
         print("\nProcessing completed successfully")
+        
+        return summary[0]  # Return count of processed transactions
         
     except Exception as e:
         print(f"Error: {e}")
         raise
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     process_islamic_cheques_report()
