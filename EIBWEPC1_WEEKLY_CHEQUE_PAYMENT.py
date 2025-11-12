@@ -1,312 +1,258 @@
-import polars as pl
-import pandas as pd
+# islamic_cheques_report.py
+
+import duckdb
 from pathlib import Path
 import datetime
-from tabulate import tabulate
 
-# Configuration
-loan_path = Path("LOAN")
-bnm_path = Path("BNM")
-dpld_path = Path("DPLD")
-output_path = Path("output")
-output_path.mkdir(exist_ok=True)
+def process_islamic_cheques_report():
+    """
+    EIIWEPC1 - Islamic Banking Cheques Issued Report
+    Simple DuckDB implementation without pandas/polars
+    """
+    
+    print("Processing Islamic Cheques Report - EIIWEPC1")
+    
+    # Configuration
+    loan_path = Path("LOAN")
+    bnm_path = Path("BNM")
+    dpld_path = Path("DPLD")
+    output_path = Path("output")
+    output_path.mkdir(exist_ok=True)
+    bnm_path.mkdir(exist_ok=True)
+    
+    # Initialize DuckDB
+    conn = duckdb.connect()
+    
+    try:
+        # DATA REPTDATE Processing
+        print("Loading report date...")
+        conn.execute(f"CREATE TEMP TABLE reptdate AS SELECT * FROM read_parquet('{loan_path}/REPTDATE.parquet')")
+        
+        # Get date parameters
+        date_result = conn.execute("""
+            SELECT 
+                REPTDATE,
+                EXTRACT(DAY FROM REPTDATE) as day,
+                EXTRACT(MONTH FROM REPTDATE) as month,
+                EXTRACT(YEAR FROM REPTDATE) as year
+            FROM reptdate 
+            LIMIT 1
+        """).fetchone()
+        
+        REPTDATE, day, month, year = date_result
+        
+        # Calculate PREVDATE based on day
+        if day == 8:
+            PREVDATE = datetime.date(year, month, 1)
+        elif day == 15:
+            PREVDATE = datetime.date(year, month, 9)
+        elif day == 22:
+            PREVDATE = datetime.date(year, month, 16)
+        else:
+            PREVDATE = datetime.date(year, month, 23)
+        
+        REPTYEAR = str(year)
+        REPTMON = f"{month:02d}"
+        REPTDAY = f"{day:02d}"
+        RDATE = REPTDATE.strftime('%d/%m/%Y')
+        
+        print(f"Report Date: {RDATE}, Period: {PREVDATE} to {REPTDATE}")
+        
+        # Load and filter DPLD data
+        print("Loading DPLD data...")
+        dpl_file = dpld_path / f"DPLD{REPTMON}.parquet"
+        if dpl_file.exists():
+            conn.execute(f"""
+                CREATE TEMP TABLE dpld_filtered AS 
+                SELECT * FROM read_parquet('{dpl_file}')
+                WHERE REPTDATE BETWEEN '{PREVDATE}' AND '{REPTDATE}'
+            """)
+            conn.execute(f"COPY dpld_filtered TO '{bnm_path}/DPLD.parquet' (FORMAT PARQUET)")
+        else:
+            print("DPLD file not found")
+            conn.execute("CREATE TEMP TABLE dpld_filtered AS SELECT 1 as dummy WHERE FALSE")
+        
+        # Load and process LNLD data
+        print("Processing LNLD data...")
+        conn.execute("""
+            CREATE TEMP TABLE lnld_raw AS 
+            SELECT line FROM read_text('LNLD.csv')
+        """)
+        
+        # Parse fixed-width LNLD data
+        conn.execute("""
+            CREATE TEMP TABLE lnld_processed AS 
+            SELECT 
+                TRIM(SUBSTRING(line, 1, 11)) as ACCTNO,
+                TRIM(SUBSTRING(line, 13, 5)) as NOTENO,
+                CAST(TRIM(SUBSTRING(line, 19, 7)) AS INTEGER) as COSTCTR,
+                TRIM(SUBSTRING(line, 27, 3)) as NOTETYPE,
+                CASE 
+                    WHEN LENGTH(TRIM(SUBSTRING(line, 31, 8))) = 8 
+                    THEN strptime(TRIM(SUBSTRING(line, 31, 8)), '%d%m%y')
+                    ELSE NULL 
+                END as TRANDT,
+                CAST(TRIM(SUBSTRING(line, 47, 3)) AS INTEGER) as TRANCODE,
+                CAST(TRIM(SUBSTRING(line, 51, 3)) AS INTEGER) as SEQNO,
+                CASE WHEN CAST(TRIM(SUBSTRING(line, 47, 3)) AS INTEGER) = 760 
+                     THEN TRIM(SUBSTRING(line, 55, 2)) ELSE NULL END as FEEPLAN,
+                CASE WHEN CAST(TRIM(SUBSTRING(line, 47, 3)) AS INTEGER) = 760 
+                     THEN CAST(TRIM(SUBSTRING(line, 57, 3)) AS INTEGER) ELSE NULL END as FEENO,
+                CAST(TRIM(SUBSTRING(line, 61, 18)) AS DECIMAL(16,2)) as TRANAMT,
+                CAST(TRIM(SUBSTRING(line, 80, 3)) AS INTEGER) as SOURCE
+            FROM lnld_raw
+        """)
+        
+        # Apply filters
+        conn.execute("""
+            CREATE TEMP TABLE lnld_filtered AS 
+            SELECT * FROM lnld_processed
+            WHERE (COSTCTR < 3000 OR COSTCTR > 3999) AND COSTCTR NOT IN (4043, 4048)
+        """)
+        
+        conn.execute(f"COPY lnld_filtered TO '{bnm_path}/LNLD.parquet' (FORMAT PARQUET)")
+        
+        # Merge LNLD and DPLD
+        print("Merging transaction data...")
+        conn.execute("""
+            CREATE TEMP TABLE tranx AS 
+            SELECT l.* 
+            FROM lnld_filtered l
+            INNER JOIN dpld_filtered d ON l.ACCTNO = d.ACCTNO AND l.TRANDT = d.TRANDT AND l.TRANAMT = d.TRANAMT
+        """)
+        
+        conn.execute(f"COPY tranx TO '{bnm_path}/TRANX.parquet' (FORMAT PARQUET)")
+        
+        # Process transactions for reporting
+        print("Generating reports...")
+        conn.execute("""
+            CREATE TEMP TABLE tranx_processed AS 
+            SELECT 
+                ACCTNO, NOTENO, COSTCTR, TRANDT, TRANCODE, FEEPLAN,
+                TRANAMT / 1000 as TRANAMT1,
+                1 as VALUE,
+                CASE 
+                    WHEN TRANCODE = 310 THEN 'LOAN DISBURSEMENT'
+                    WHEN TRANCODE = 750 THEN 'PRINCIPAL INCREASE (PROGRESSIVE LOAN RELEASE)'
+                    WHEN TRANCODE = 752 THEN 'DEBITING FOR INSURANCE PREMIUM'
+                    WHEN TRANCODE = 753 THEN 'DEBITING FOR LEGAL FEE'
+                    WHEN TRANCODE = 754 THEN 'DEBITING FOR OTHER PAYMENTS'
+                    WHEN TRANCODE = 760 THEN 
+                        CASE FEEPLAN
+                            WHEN 'QR' THEN 'QUIT RENT'
+                            WHEN 'LF' THEN 'LEGAL FEE & DISBURSEMENT'
+                            WHEN 'VA' THEN 'VALUATION FEE'
+                            WHEN 'IP' THEN 'INSURANCE PREMIUM'
+                            WHEN 'PA' THEN 'PROFESSIONAL/OTHERS'
+                            WHEN 'AC' THEN 'ADVERTISEMENT FEE'
+                            WHEN 'MC' THEN 'MAINTENANCE CHARGES'
+                            WHEN 'RE' THEN 'REPOSSESION CHARGES'
+                            WHEN 'RI' THEN 'REPAIR CHARGES'
+                            WHEN 'SC' THEN 'STORAGE CHARGES'
+                            WHEN 'SF' THEN 'SEARCH FEE'
+                            WHEN 'TC' THEN 'TOWING CHARGES'
+                            WHEN '99' THEN 'MISCHELLANEOUS EXPENSES'
+                            ELSE 'MANUAL FEE ASSESSMENT FOR PAYMENT TO 3RD PARTY'
+                        END
+                    ELSE 'MANUAL FEE ASSESSMENT FOR PAYMENT TO 3RD PARTY'
+                END as TRNXDESC
+            FROM tranx
+        """)
+        
+        # Report 1: Summary
+        print("\n" + "="*60)
+        print("REPORT ID : EIIQEPC1")
+        print("PUBLIC ISLAMIC BANK BERHAD")
+        print(f"CHEQUES ISSUED BY THE BANK AS AT {RDATE}")
+        print("="*60)
+        
+        summary = conn.execute("""
+            SELECT 
+                COUNT(*) as number_of_cheques,
+                SUM(TRANAMT1) as value_000
+            FROM tranx_processed
+        """).fetchone()
+        
+        print(f"Number of Cheques: {summary[0]:>16,d}")
+        print(f"Value of Cheques (RM'000): {summary[1]:>16.2f}")
+        
+        # Report 2: By number of cheques
+        print(f"\nALL PAYMENTS BY NUMBER OF CHEQUES AS AT {RDATE}")
+        print("-" * 60)
+        
+        by_count = conn.execute("""
+            WITH ranked AS (
+                SELECT 
+                    TRNXDESC,
+                    COUNT(*) as unit,
+                    SUM(TRANAMT1) as value_000,
+                    ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC) as count
+                FROM tranx_processed
+                GROUP BY TRNXDESC
+            )
+            SELECT count, TRNXDESC, unit, value_000
+            FROM ranked
+            ORDER BY count
+        """).fetchall()
+        
+        print(f"{'NO':>2} {'PURPOSE':<40} {'UNIT':>10} {'VALUE (RM''000)':>15}")
+        print("-" * 70)
+        for row in by_count:
+            print(f"{row[0]:>2} {row[1]:<40} {row[2]:>10,d} {row[3]:>15.2f}")
+        
+        # Report 3: By value of cheques
+        print(f"\nALL PAYMENTS BY VALUE OF CHEQUES AS AT {RDATE}")
+        print("-" * 60)
+        
+        by_value = conn.execute("""
+            WITH ranked AS (
+                SELECT 
+                    TRNXDESC,
+                    COUNT(*) as unit,
+                    SUM(TRANAMT1) as value_000,
+                    ROW_NUMBER() OVER (ORDER BY SUM(TRANAMT1) DESC) as count
+                FROM tranx_processed
+                GROUP BY TRNXDESC
+            )
+            SELECT count, TRNXDESC, unit, value_000
+            FROM ranked
+            ORDER BY count
+        """).fetchall()
+        
+        print(f"{'NO':>2} {'PURPOSE':<40} {'UNIT':>10} {'VALUE (RM''000)':>15}")
+        print("-" * 70)
+        for row in by_value:
+            print(f"{row[0]:>2} {row[1]:<40} {row[2]:>10,d} {row[3]:>15.2f}")
+        
+        # Report 4: By branch
+        print(f"\nALL PAYMENTS BY BRANCH AS AT {RDATE}")
+        print("-" * 60)
+        
+        by_branch = conn.execute("""
+            SELECT 
+                COSTCTR,
+                TRNXDESC,
+                COUNT(*) as unit,
+                SUM(TRANAMT1) as value_000
+            FROM tranx_processed
+            GROUP BY COSTCTR, TRNXDESC
+            ORDER BY COSTCTR, TRNXDESC
+        """).fetchall()
+        
+        print(f"{'BRANCH':>6} {'PURPOSE':<40} {'UNIT':>10} {'VALUE (RM''000)':>15}")
+        print("-" * 75)
+        for row in by_branch:
+            print(f"{row[0]:>6} {row[1]:<40} {row[2]:>10,d} {row[3]:>15.2f}")
+        
+        # Save results to CSV
+        conn.execute(f"COPY tranx_processed TO '{output_path}/islamic_cheques_report.csv' (FORMAT CSV, HEADER true)")
+        print(f"\nResults saved to: {output_path}/islamic_cheques_report.csv")
+        
+        print("\nProcessing completed successfully")
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        raise
 
-# DATA REPTDATE;
-reptdate_df = pl.read_parquet(loan_path / "REPTDATE.parquet")
-
-# Process REPTDATE with SELECT/WHEN logic
-processed_reptdate = reptdate_df.with_columns([
-    pl.col('REPTDATE').dt.day().alias('day')
-]).with_columns([
-    pl.when(pl.col('day') == 8).then(
-        pl.datetime(pl.col('REPTDATE').dt.year(), pl.col('REPTDATE').dt.month(), 1)
-    ).when(pl.col('day') == 15).then(
-        pl.datetime(pl.col('REPTDATE').dt.year(), pl.col('REPTDATE').dt.month(), 9)
-    ).when(pl.col('day') == 22).then(
-        pl.datetime(pl.col('REPTDATE').dt.year(), pl.col('REPTDATE').dt.month(), 16)
-    ).otherwise(
-        pl.datetime(pl.col('REPTDATE').dt.year(), pl.col('REPTDATE').dt.month(), 23)
-    ).alias('PREVDATE')
-])
-
-# Extract parameters - CALL SYMPUT equivalent
-first_row = processed_reptdate.row(0)
-REPTYEAR = first_row['REPTDATE'].strftime('%Y')  # YEAR4.
-REPTMON = f"{first_row['REPTDATE'].month:02d}"  # Z2.
-REPTDAY = f"{first_row['REPTDATE'].day:02d}"  # Z2.
-RDATE = first_row['REPTDATE'].strftime('%d/%m/%Y')  # DDMMYY10.
-PREVDT = first_row['PREVDATE']
-REPTDT = first_row['REPTDATE']
-
-print(f"REPTYEAR: {REPTYEAR}, REPTMON: {REPTMON}, REPTDAY: {REPTDAY}")
-print(f"RDATE: {RDATE}, PREVDT: {PREVDT}, REPTDT: {REPTDT}")
-
-# PROC FORMAT equivalent - Create format dictionaries
-DESC_FORMAT = {
-    1: 'CHEQUES ISSUED'
-}
-
-TCODE_FORMAT = {
-    310: 'LOAN DISBURSEMENT',
-    750: 'PRINCIPAL INCREASE (PROGRESSIVE LOAN RELEASE)',
-    752: 'DEBITING FOR INSURANCE PREMIUM',
-    753: 'DEBITING FOR LEGAL FEE',
-    754: 'DEBITING FOR OTHER PAYMENTS',
-    760: 'MANUAL FEE ASSESSMENT FOR PAYMENT TO 3RD PARTY'
-}
-
-FEEFMT_FORMAT = {
-    'QR': 'QUIT RENT',
-    'LF': 'LEGAL FEE & DISBURSEMENT',
-    'VA': 'VALUATION FEE',
-    'IP': 'INSURANCE PREMIUM',
-    'PA': 'PROFESSIONAL/OTHERS',
-    'AC': 'ADVERTISEMENT FEE',
-    'MC': 'MAINTENANCE CHARGES',
-    'RE': 'REPOSSESION CHARGES',
-    'RI': 'REPAIR CHARGES',
-    'SC': 'STORAGE CHARGES',
-    'SF': 'SEARCH FEE',
-    'TC': 'TOWING CHARGES',
-    '99': 'MISCHELLANEOUS EXPENSES'
-}
-
-# DATA BNM.DPLD;
-try:
-    dpld_df = pl.read_parquet(dpld_path / f"DPLD{REPTMON}.parquet")
-    # IF (&PREVDT<=REPTDATE<=&REPTDT);
-    dpld_filtered = dpld_df.filter(
-        (pl.col('REPTDATE') >= PREVDT) & (pl.col('REPTDATE') <= REPTDT)
-    )
-    dpld_filtered.write_parquet(bnm_path / "DPLD.parquet")
-    print(f"Loaded and filtered DPLD data for month {REPTMON}")
-except FileNotFoundError:
-    print(f"NOTE: DPLD{REPTMON}.parquet not found")
-    dpld_filtered = pl.DataFrame()
-
-# DATA BNM.LNLD;
-# INFILE LNLD MISSOVER; - Assuming CSV format
-try:
-    lnld_df = pl.read_csv("LNLD.csv", null_values=[""], infer_schema_length=10000)
-    
-    # Apply the same input parsing logic
-    lnld_processed = lnld_df.with_columns([
-        pl.col('line').str.slice(0, 11).str.strip().cast(pl.Int64).alias('ACCTNO'),        # @001 ACCTNO 11.
-        pl.col('line').str.slice(12, 5).str.strip().cast(pl.Int64).alias('NOTENO'),        # @013 NOTENO 5.
-        pl.col('line').str.slice(18, 7).str.strip().cast(pl.Int64).alias('COSTCTR'),       # @019 COSTCTR 7.
-        pl.col('line').str.slice(26, 3).str.strip().alias('NOTETYPE'),                     # @027 NOTETYPE 3.
-        pl.col('line').str.slice(30, 8).str.strip().alias('TRANDT_STR'),                   # @031 TRANDT DDMMYY8.
-        pl.col('line').str.slice(46, 3).str.strip().cast(pl.Int64).alias('TRANCODE'),      # @047 TRANCODE 3.
-        pl.col('line').str.slice(50, 3).str.strip().cast(pl.Int64).alias('SEQNO')          # @051 SEQNO 3.
-    ]).with_columns([
-        # Convert DDMMYY8 to date
-        pl.when(pl.col('TRANDT_STR').str.len_bytes() == 8)
-        .then(pl.col('TRANDT_STR').str.strptime(pl.Date, format='%d%m%y'))
-        .otherwise(pl.lit(None)).alias('TRANDT')
-    ])
-    
-    # Conditional input based on TRANCODE
-    lnld_processed = lnld_processed.with_columns([
-        pl.lit(None).alias('FEEPLAN'),
-        pl.lit(None).alias('FEENO')
-    ]).with_columns([
-        pl.when(pl.col('TRANCODE') == 760)
-        .then(pl.struct([
-            pl.col('line').str.slice(54, 2).str.strip().alias('FEEPLAN'),
-            pl.col('line').str.slice(56, 3).str.strip().cast(pl.Int64).alias('FEENO')
-        ]))
-        .otherwise(pl.struct([
-            pl.col('FEEPLAN'),
-            pl.col('FEENO')
-        ])).alias('fee_info')
-    ]).with_columns([
-        pl.col('fee_info').struct.field('FEEPLAN').alias('FEEPLAN'),
-        pl.col('fee_info').struct.field('FEENO').alias('FEENO')
-    ]).with_columns([
-        # Continue with remaining input
-        pl.col('line').str.slice(60, 18).str.strip().cast(pl.Float64).alias('TRANAMT'),    # @061 TRANAMT 18.2
-        pl.col('line').str.slice(79, 3).str.strip().cast(pl.Int64).alias('SOURCE')         # @080 SOURCE 3.
-    ])
-    
-    # Apply filters
-    lnld_filtered = lnld_processed.filter(
-        ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999)) &
-        (~pl.col('COSTCTR').is_in([4043, 4048]))
-    ).drop(['line', 'TRANDT_STR', 'fee_info'])
-    
-    lnld_filtered.write_parquet(bnm_path / "LNLD.parquet")
-    print("Loaded and processed LNLD data")
-    
-except FileNotFoundError:
-    print("NOTE: LNLD.csv not found")
-    lnld_filtered = pl.DataFrame()
-
-# PROC SORT equivalent
-if not dpld_filtered.is_empty():
-    dpld_sorted = dpld_filtered.sort(['ACCTNO', 'TRANDT', 'TRANAMT'])
-else:
-    dpld_sorted = dpld_filtered
-
-if not lnld_filtered.is_empty():
-    lnld_sorted = lnld_filtered.sort(['ACCTNO', 'TRANDT', 'TRANAMT'])
-else:
-    lnld_sorted = lnld_filtered
-
-# DATA BNM.TRANX - MERGE equivalent
-if not lnld_sorted.is_empty() and not dpld_sorted.is_empty():
-    tranx_df = lnld_sorted.join(
-        dpld_sorted, 
-        on=['ACCTNO', 'TRANDT', 'TRANAMT'], 
-        how='inner', 
-        suffix='_dpld'
-    )
-    tranx_df.write_parquet(bnm_path / "TRANX.parquet")
-    print("Created TRANX dataset from merged LNLD and DPLD")
-else:
-    print("NOTE: Cannot merge - one or both datasets are empty")
-    tranx_df = pl.DataFrame()
-
-# DATA TRANX - FOR PBB
-if not tranx_df.is_empty():
-    tranx_processed = tranx_df.with_columns([
-        (pl.col('TRANAMT') / 1000).alias('TRANAMT1'),  # TRANAMT1 = TRANAMT/1000;
-        pl.lit(1).alias('VALUE'),                      # VALUE = 1;
-        # TRNXDESC = PUT(TRANCODE,TCODE.);
-        pl.col('TRANCODE').map_dict(TCODE_FORMAT).alias('TRNXDESC')
-    ]).with_columns([
-        # IF TRANCODE = 760 AND FEEPLAN NE ' ' THEN TRNXDESC = PUT(FEEPLAN,$FEEFMT.);
-        pl.when((pl.col('TRANCODE') == 760) & (pl.col('FEEPLAN').is_not_null()) & (pl.col('FEEPLAN') != ''))
-        .then(pl.col('FEEPLAN').map_dict(FEEFMT_FORMAT))
-        .otherwise(pl.col('TRNXDESC')).alias('TRNXDESC')
-    ])
-else:
-    tranx_processed = pl.DataFrame()
-
-# PROC TABULATE equivalent - Report 1
-if not tranx_processed.is_empty():
-    print("\n" + "="*80)
-    print("REPORT ID : EIBQEPC1")
-    print("PUBLIC BANK BERHAD")
-    print(f"CHEQUES ISSUED BY THE BANK AS AT {RDATE}")
-    print("="*80)
-    
-    # Calculate summary statistics
-    n_cheques = tranx_processed.height
-    sum_value = tranx_processed['TRANAMT1'].sum()
-    
-    report1_data = [
-        ["CHEQUES ISSUED", f"{n_cheques:16d}", f"{sum_value:16.2f}"]
-    ]
-    
-    print(tabulate(report1_data, 
-                   headers=['', 'NUMBER OF CHEQUES', "VALUE OF CHEQUES (RM'000)"],
-                   tablefmt='grid'))
-    
-    # PROC SUMMARY equivalent - Report 2 preparation
-    # Group by TRNXDESC and calculate summary
-    tran1_df = tranx_processed.group_by('TRNXDESC').agg([
-        pl.len().alias('UNIT'),
-        pl.col('TRANAMT1').sum().alias('TRANAMT1_SUM')
-    ])
-    
-    # PROC SORT equivalent - sort by descending UNIT
-    tran2_df = tran1_df.sort('UNIT', descending=True)
-    
-    # DATA TRAN equivalent - add COUNT
-    tran_df = tran2_df.with_columns([
-        pl.int_range(1, tran2_df.height + 1).alias('COUNT')
-    ])
-    
-    # Merge back with original data
-    xxx_df = tran_df.select(['COUNT', 'TRNXDESC'])
-    tranx1_df = tranx_processed.join(xxx_df, on='TRNXDESC', how='left').sort('COUNT')
-    
-    # Report 2 - By number of cheques
-    print("\n" + "="*80)
-    print("REPORT ID : EIBQEPC1")
-    print("PUBLIC BANK BERHAD")
-    print(f"ALL PAYMENTS BY NUMBER OF CHEQUES AS AT {RDATE}")
-    print("="*80)
-    
-    report2_data = []
-    for row in tran_df.rows():
-        report2_data.append([
-            row['COUNT'],
-            row['TRNXDESC'],
-            f"{row['UNIT']:16d}",
-            f"{row['TRANAMT1_SUM']:16.2f}"
-        ])
-    
-    print(tabulate(report2_data,
-                   headers=['NO', 'PURPOSE', 'UNIT', "VALUE (RM'000)"],
-                   tablefmt='grid'))
-    
-    # PROC SUMMARY equivalent - Report 3 preparation
-    # Group by TRNXDESC and calculate summary (by value)
-    tran1b_df = tranx_processed.group_by('TRNXDESC').agg([
-        pl.len().alias('UNIT'),
-        pl.col('TRANAMT1').sum().alias('TRANAMT1_SUM')
-    ])
-    
-    # PROC SORT equivalent - sort by descending TRANAMT1_SUM
-    tran2b_df = tran1b_df.sort('TRANAMT1_SUM', descending=True)
-    
-    # DATA TRAN equivalent - add COUNT
-    tranb_df = tran2b_df.with_columns([
-        pl.int_range(1, tran2b_df.height + 1).alias('COUNT')
-    ])
-    
-    # Merge back with original data
-    xxxb_df = tranb_df.select(['COUNT', 'TRNXDESC'])
-    tranx2_df = tranx_processed.join(xxxb_df, on='TRNXDESC', how='left').sort('COUNT')
-    
-    # Report 3 - By value of cheques
-    print("\n" + "="*80)
-    print("REPORT ID : EIBQEPC1")
-    print("PUBLIC BANK BERHAD")
-    print(f"ALL PAYMENTS BY VALUE OF CHEQUES AS AT {RDATE}")
-    print("="*80)
-    
-    report3_data = []
-    for row in tranb_df.rows():
-        report3_data.append([
-            row['COUNT'],
-            row['TRNXDESC'],
-            f"{row['UNIT']:16d}",
-            f"{row['TRANAMT1_SUM']:16.2f}"
-        ])
-    
-    print(tabulate(report3_data,
-                   headers=['NO', 'PURPOSE', 'UNIT', "VALUE (RM'000)"],
-                   tablefmt='grid'))
-    
-    # Report 4 - By branch
-    print("\n" + "="*80)
-    print("REPORT ID : EIBQEPC1")
-    print("PUBLIC BANK BERHAD")
-    print(f"ALL PAYMENTS BY BRANCH AS AT {RDATE}")
-    print("="*80)
-    
-    # Group by COSTCTR and TRNXDESC
-    branch_summary = tranx_processed.group_by(['COSTCTR', 'TRNXDESC']).agg([
-        pl.len().alias('UNIT'),
-        pl.col('TRANAMT1').sum().alias('VALUE')
-    ]).sort(['COSTCTR', 'TRNXDESC'])
-    
-    report4_data = []
-    for row in branch_summary.rows():
-        report4_data.append([
-            row['COSTCTR'],
-            row['TRNXDESC'],
-            f"{row['UNIT']:16d}",
-            f"{row['VALUE']:16.2f}"
-        ])
-    
-    print(tabulate(report4_data,
-                   headers=['COSTCTR', 'PURPOSE', 'UNIT', "VALUE (RM'000)"],
-                   tablefmt='grid'))
-    
-else:
-    print("No data available for reporting")
-
-print("\nPROCESSING COMPLETED SUCCESSFULLY")
+if __name__ == "__main__":
+    process_islamic_cheques_report()
