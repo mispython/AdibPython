@@ -1,9 +1,9 @@
+import duckdb
 import polars as pl
 from pathlib import Path
 from datetime import datetime
-import sys
 
-# Product codes (equivalent to SAS macro variables)
+# Product codes
 PBBPROD = [200,201,204,205,209,210,211,212,214,215,219,220,225,226,227,228,230,
            233,234,235,236,237,238,239,240,241,242,243,300,301,304,305,359,361,
            363,213,216,217,218,231,232,244,245,246,247,315,568,248,249,250,348,349,368]
@@ -15,7 +15,6 @@ def calculate_report_dates(reptdate: datetime) -> dict:
     """Calculate report date variables."""
     day = reptdate.day
     
-    # Determine week number
     if 1 <= day <= 8:
         nowk = '1'
     elif 9 <= day <= 15:
@@ -25,10 +24,8 @@ def calculate_report_dates(reptdate: datetime) -> dict:
     else:
         nowk = '4'
     
-    # Previous month date
     prevdate = reptdate.replace(day=1) - pl.duration(days=1)
     
-    # Calculate PDATE (2.5 years back)
     month = reptdate.month
     year = reptdate.year
     if month >= 6:
@@ -50,7 +47,7 @@ def calculate_report_dates(reptdate: datetime) -> dict:
         'prevdate': prevdate.date()
     }
 
-def process_eiqprom2(
+def process_eiqprom2_duckdb(
     reptdate: datetime,
     lnnote_pbb_path: Path,
     lnnote_pib_path: Path,
@@ -66,226 +63,438 @@ def process_eiqprom2(
     output_loan_path: Path,
     output_summary_path: Path
 ) -> None:
-    """
-    Process EIQPROM2 - Filter customers with 2.5 years prompt repayment.
-    """
+    """Process EIQPROM2 using DuckDB - 1:1 SAS conversion."""
     
-    # Calculate dates
     dates = calculate_report_dates(reptdate)
     print(f"Report Date: {dates['reptdt']}")
     print(f"PDATE (2.5 years back): {dates['prdate']}")
     print(f"Week: {dates['nowk']}, Month: {dates['reptmon']}")
     print("-" * 80)
     
-    # 1. Read and filter LNNOTE
-    lnnote_pbb = pl.read_parquet(lnnote_pbb_path)
-    lnnote_pib = pl.read_parquet(lnnote_pib_path)
+    con = duckdb.connect(':memory:')
     
-    lnnote = pl.concat([lnnote_pbb, lnnote_pib]).filter(
-        ((pl.col('LOANTYPE').is_in(PBBPROD)) | (pl.col('LOANTYPE').is_in(PIBPROD))) &
-        (pl.col('LOANSTAT') != 3) &
-        (pl.col('CURBAL') > 0) &
-        (pl.col('LSTTRNCD') != 661)
-    ).with_columns([
-        pl.col('VINNO').str.slice(0, 13).str.replace_all(r'[@*(#)\-]', '').alias('AANO')
-    ]).filter(
-        pl.col('AANO').str.len_chars() == 13
-    ).select(['ACCTNO','NOTENO','NAME','FLAG1','ORGBAL','NETPROC','AANO',
-              'COLLMAKE','COLLYEAR','NTINDEX','SPREAD','MODELDES','SCORE1',
-              'IA_LRU','BORSTAT','DELQCD','GUAREND','MAILCODE'])
+    pbb_prod_str = ','.join(map(str, PBBPROD))
+    pib_prod_str = ','.join(map(str, PIBPROD))
     
-    print(f"LNNOTE records: {len(lnnote):,}")
-    
-    # 2. Read and process LOAN
-    loan_pbb = pl.read_parquet(loan_pbb_path)
-    loan_pib = pl.read_parquet(loan_pib_path)
-    
-    loan = pl.concat([loan_pbb, loan_pib]).filter(
-        ((pl.col('PRODUCT').is_in(PBBPROD)) | (pl.col('PRODUCT').is_in(PIBPROD))) &
-        (pl.col('LOANSTAT') != 3) &
-        (pl.col('CURBAL') > 0)
-    ).with_columns([
-        pl.when(pl.col('BLDATE') > 0)
-          .then(pl.lit(dates['reptdt']) - pl.col('BLDATE'))
-          .otherwise(0)
-          .alias('DAYDIFF'),
-        pl.when(pl.col('EXPRDATE') > 0)
-          .then(pl.col('EXPRDATE').dt.year() - pl.lit(dates['reptdt'].year))
-          .otherwise(0)
-          .alias('REMTERM'),
-        pl.col('NOTENO').cast(pl.Utf8).str.slice(0, 1).alias('NOTE1'),
-        pl.col('NOTENO').cast(pl.Utf8).str.slice(1, 1).alias('NOTE2')
-    ]).select(['ACCTNO','NOTENO','COMMNO','ISSDTE','DAYDIFF','PRODUCT',
-               'NOTE1','NOTE2','BRANCH','APPRLIMT','BALANCE','EXPRDATE','REMTERM'])
-    
-    print(f"LOAN records: {len(loan):,}")
-    
-    # 3. Remove bad bills
-    billbad = pl.read_parquet(billbad_path).unique(subset=['ACCTNO','NOTENO'])
-    loan = loan.join(billbad, on=['ACCTNO','NOTENO'], how='anti')
-    print(f"After removing BILLBAD: {len(loan):,}")
-    
-    # 4. Merge LNNOTE
-    loan = loan.join(lnnote, on=['ACCTNO','NOTENO'], how='inner')
-    print(f"After merging LNNOTE: {len(loan):,}")
-    
-    # 5. Merge LNCOMM
-    lncomm_pbb = pl.read_parquet(lncomm_pbb_path)
-    lncomm_pib = pl.read_parquet(lncomm_pib_path)
-    lncomm = pl.concat([lncomm_pbb, lncomm_pib]).unique(subset=['ACCTNO','COMMNO'])
-    
-    loan = loan.join(lncomm.select(['ACCTNO','COMMNO','CORGAMT']), 
-                     on=['ACCTNO','COMMNO'], how='left')
-    print(f"After merging LNCOMM: {len(loan):,}")
-    
-    # 6. Apply main filters
-    loan = loan.filter(
-        (pl.col('BALANCE') > 30000) &
-        (pl.col('ISSDTE') < dates['prdate']) &
-        (pl.col('FLAG1') == 'F') &
-        (pl.col('DAYDIFF') <= 0) &
-        ((pl.col('PRODUCT').is_in(PBBPROD)) | (pl.col('PRODUCT').is_in(PIBPROD))) &
-        (pl.col('NOTE1') != '1') &
-        (pl.col('NOTE2') != '2')
-    ).with_columns([
-        pl.max_horizontal(['CORGAMT','ORGBAL','NETPROC','APPRLIMT']).alias('LMTAPPR')
-    ]).with_columns([
-        (pl.col('LMTAPPR') - pl.col('BALANCE')).alias('REPAID')
-    ])
-    
-    print(f"After main filters: {len(loan):,}")
-    
-    # 7. Exclude based on NTINDEX, SPREAD, MODELDES, SCORE1, etc.
-    loan = loan.filter(
-        ~(
-            ((pl.col('NTINDEX') == 1) & (pl.col('SPREAD') == 0.00)) |
-            ((pl.col('NTINDEX') == 1) & (pl.col('SPREAD') == 3.50)) |
-            ((pl.col('NTINDEX') == 38) & (pl.col('SPREAD') == 3.20)) |
-            ((pl.col('NTINDEX') == 38) & (pl.col('SPREAD') == 6.70)) |
-            (pl.col('MODELDES').str.slice(0, 1).is_in(['S','T','R','C'])) |
-            (pl.col('MODELDES') == 'Z') |
-            (pl.col('MODELDES').str.slice(4, 1) == 'F') |
-            (pl.col('SCORE1').str.slice(0, 1).is_in(['D','E','F','G','H','I'])) |
-            (pl.col('IA_LRU') == 'I') |
-            (pl.col('BORSTAT') == 'K') |
-            (pl.col('DELQCD').is_in(['9','09','10','11','12','13','14','15',
-                                     '16','17','18','19','20']))
+    # 1. LNNOTE - Read and filter
+    print("Processing LNNOTE...")
+    con.execute(f"""
+        CREATE TABLE lnnote AS
+        SELECT 
+            ACCTNO, NOTENO, NAME, FLAG1, ORGBAL, NETPROC,
+            REGEXP_REPLACE(REGEXP_REPLACE(SUBSTR(TRIM(VINNO), 1, 13), 
+                          '[@*(#)\\-]', '', 'g'), ' ', '', 'g') AS AANO,
+            COLLMAKE, COLLYEAR, NTINDEX, SPREAD, MODELDES, SCORE1,
+            IA_LRU, BORSTAT, DELQCD, GUAREND, MAILCODE
+        FROM (
+            SELECT * FROM read_parquet('{lnnote_pbb_path}')
+            UNION ALL
+            SELECT * FROM read_parquet('{lnnote_pib_path}')
         )
-    )
+        WHERE (LOANTYPE IN ({pbb_prod_str}) OR LOANTYPE IN ({pib_prod_str}))
+          AND LOANSTAT != 3
+          AND CURBAL > 0
+          AND LSTTRNCD != 661
+          AND LENGTH(REGEXP_REPLACE(REGEXP_REPLACE(SUBSTR(TRIM(VINNO), 1, 13), 
+                                   '[@*(#)\\-]', '', 'g'), ' ', '', 'g')) = 13
+          AND COLLMAKE IN ('.', '0', '')
+          AND (COLLYEAR IS NULL OR COLLYEAR = 0)
+    """)
     
-    print(f"After exclusion rules: {len(loan):,}")
+    count = con.execute("SELECT COUNT(*) FROM lnnote").fetchone()[0]
+    print(f"LNNOTE records: {count:,}")
     
-    # 8. Process COLLATER and exclude
-    coll_pbb = pl.read_parquet(collater_pbb_path)
-    coll_pib = pl.read_parquet(collater_pib_path)
-    
-    coll = pl.concat([coll_pbb, coll_pib]).with_columns([
-        pl.when(
-            ((pl.col('CPRPROPD').is_in(['10','11','32','33','34','35'])) &
-             (pl.col('CPRLANDU').is_in(['10','11','32','33','34','35']))) |
-            (pl.col('MRESERVE') == 'Y')
-        ).then(pl.lit('Y')).otherwise(pl.lit(None)).alias('EXCL')
-    ]).filter(
-        (pl.col('EXCL') == 'Y') | (pl.col('HOLDEXPD') == 'L')
-    ).select(['ACCTNO','NOTENO','EXCL','HOLDEXPD','EXPDATE'])
-    
-    loan = loan.join(coll, on=['ACCTNO','NOTENO'], how='left')
-    loan = loan.filter(
-        ~(
-            (pl.col('EXCL') == 'Y') |
-            ((pl.col('HOLDEXPD') == 'L') & 
-             ((pl.col('EXPRDATE') - pl.col('EXPDATE')).dt.total_days() / 365 < 30))
+    # 2. LOAN - Read and process
+    print("Processing LOAN...")
+    con.execute(f"""
+        CREATE TABLE loan AS
+        SELECT 
+            ACCTNO, NOTENO, COMMNO, ISSDTE, PRODUCT, BRANCH, 
+            APPRLIMT, BALANCE, EXPRDATE,
+            CASE 
+                WHEN BLDATE > 0 THEN DATEDIFF('day', BLDATE, DATE '{dates['reptdt']}')
+                ELSE 0 
+            END AS DAYDIFF,
+            CASE 
+                WHEN EXPRDATE IS NOT NULL THEN YEAR(EXPRDATE) - {dates['reptdt'].year}
+                ELSE 0 
+            END AS REMTERM,
+            SUBSTR(LPAD(CAST(NOTENO AS VARCHAR), 5, '0'), 1, 1) AS NOTE1,
+            SUBSTR(LPAD(CAST(NOTENO AS VARCHAR), 5, '0'), 2, 1) AS NOTE2
+        FROM (
+            SELECT * FROM read_parquet('{loan_pbb_path}')
+            UNION ALL
+            SELECT * FROM read_parquet('{loan_pib_path}')
         )
-    )
+        WHERE (PRODUCT IN ({pbb_prod_str}) OR PRODUCT IN ({pib_prod_str}))
+          AND LOANSTAT != 3
+          AND CURBAL > 0
+    """)
     
-    print(f"After COLLATER exclusion: {len(loan):,}")
+    count = con.execute("SELECT COUNT(*) FROM loan").fetchone()[0]
+    print(f"LOAN records: {count:,}")
     
-    # 9. CIS exclusions
-    cis = pl.read_parquet(cis_loan_path)
+    # 3. Sort and remove BILLBAD
+    print("Sorting and removing BILLBAD...")
+    con.execute(f"""
+        CREATE TABLE billbad AS
+        SELECT DISTINCT ACCTNO, NOTENO 
+        FROM read_parquet('{billbad_path}')
+    """)
     
-    # Split CIS into loan and bill accounts
-    cisbill = cis.filter(
-        ((pl.col('ACCTNO') >= 2500000000) & (pl.col('ACCTNO') <= 2599999999)) |
-        ((pl.col('ACCTNO') >= 2850000000) & (pl.col('ACCTNO') <= 2859999999))
-    ).select(['CUSTNO']).unique()
+    con.execute("""
+        CREATE TABLE loan_sorted AS
+        SELECT * FROM loan ORDER BY ACCTNO, NOTENO
+    """)
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_sorted RENAME TO loan")
     
-    cisln = cis.filter(
-        ~(((pl.col('ACCTNO') >= 2500000000) & (pl.col('ACCTNO') <= 2599999999)) |
-          ((pl.col('ACCTNO') >= 2850000000) & (pl.col('ACCTNO') <= 2859999999)))
-    )
+    con.execute("""
+        CREATE TABLE lnnote_sorted AS
+        SELECT * FROM lnnote ORDER BY ACCTNO, NOTENO
+    """)
+    con.execute("DROP TABLE lnnote")
+    con.execute("ALTER TABLE lnnote_sorted RENAME TO lnnote")
     
-    cisln = cisln.join(cisbill, on='CUSTNO', how='inner').select(['ACCTNO']).unique()
-    loan = loan.join(cisln, on='ACCTNO', how='anti')
+    # Merge and exclude billbad (SAS: MERGE with IN=A, IF A THEN DELETE)
+    con.execute("""
+        CREATE TABLE loan_merged AS
+        SELECT n.*, l.COMMNO, l.ISSDTE, l.DAYDIFF, l.PRODUCT, 
+               l.NOTE1, l.NOTE2, l.BRANCH, l.APPRLIMT, l.BALANCE, 
+               l.EXPRDATE, l.REMTERM
+        FROM lnnote n
+        INNER JOIN loan l ON n.ACCTNO = l.ACCTNO AND n.NOTENO = l.NOTENO
+        LEFT JOIN billbad b ON n.ACCTNO = b.ACCTNO AND n.NOTENO = b.NOTENO
+        WHERE b.ACCTNO IS NULL
+    """)
     
-    # Exclude SECCUST = 901
-    cis_901 = cis.filter(pl.col('SECCUST') == '901').select(['ACCTNO']).unique()
-    loan = loan.join(cis_901, on='ACCTNO', how='anti')
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_merged RENAME TO loan")
     
-    print(f"After CIS exclusion: {len(loan):,}")
+    count = con.execute("SELECT COUNT(*) FROM loan").fetchone()[0]
+    print(f"After removing BILLBAD: {count:,}")
     
-    # 10. ELDS exclusion
-    elds = pl.read_parquet(elds_path).select(['AANO','REINPROD'])
-    loan = loan.join(elds, on='AANO', how='left')
-    loan = loan.filter(pl.col('REINPROD') != 'Y')
+    # 4. Sort by ACCTNO, COMMNO and merge LNCOMM
+    print("Merging LNCOMM...")
+    con.execute("""
+        CREATE TABLE loan_sorted AS
+        SELECT * FROM loan ORDER BY ACCTNO, COMMNO
+    """)
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_sorted RENAME TO loan")
     
-    print(f"After ELDS exclusion: {len(loan):,}")
+    con.execute(f"""
+        CREATE TABLE lncomm AS
+        SELECT DISTINCT ACCTNO, COMMNO, CORGAMT
+        FROM (
+            SELECT ACCTNO, COMMNO, CORGAMT FROM read_parquet('{lncomm_pbb_path}')
+            UNION ALL
+            SELECT ACCTNO, COMMNO, CORGAMT FROM read_parquet('{lncomm_pib_path}')
+        )
+        ORDER BY ACCTNO, COMMNO
+    """)
     
-    # 11. Add NEW flag (compare with previous month)
-    try:
-        prev_month_loan = pl.read_parquet(
-            output_loan_path.parent / f"LOAN{dates['prevmon']}.parquet"
-        ).select(['ACCTNO','NOTENO'])
+    con.execute("""
+        CREATE TABLE loan_with_comm AS
+        SELECT l.*, c.CORGAMT
+        FROM loan l
+        LEFT JOIN lncomm c ON l.ACCTNO = c.ACCTNO AND l.COMMNO = c.COMMNO
+    """)
+    
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_with_comm RENAME TO loan")
+    
+    count = con.execute("SELECT COUNT(*) FROM loan").fetchone()[0]
+    print(f"After merging LNCOMM: {count:,}")
+    
+    # 5. Apply main filters and calculate LMTAPPR, REPAID
+    print("Applying main filters...")
+    con.execute(f"""
+        CREATE TABLE loan_filtered AS
+        SELECT *,
+               GREATEST(
+                   COALESCE(CORGAMT, 0), 
+                   COALESCE(ORGBAL, 0), 
+                   COALESCE(NETPROC, 0), 
+                   COALESCE(APPRLIMT, 0)
+               ) AS LMTAPPR
+        FROM loan
+        WHERE BALANCE > 30000
+          AND ISSDTE < DATE '{dates['prdate']}'
+          AND FLAG1 = 'F'
+          AND DAYDIFF <= 0
+          AND (PRODUCT IN ({pbb_prod_str}) OR PRODUCT IN ({pib_prod_str}))
+          AND NOTE1 != '1'
+          AND NOTE2 != '2'
+    """)
+    
+    con.execute("DROP TABLE loan")
+    con.execute("""
+        CREATE TABLE loan AS
+        SELECT *, (LMTAPPR - BALANCE) AS REPAID
+        FROM loan_filtered
+    """)
+    con.execute("DROP TABLE loan_filtered")
+    
+    count = con.execute("SELECT COUNT(*) FROM loan").fetchone()[0]
+    print(f"After main filters: {count:,}")
+    
+    # 6. Exclude based on risk indicators
+    print("Applying exclusion rules...")
+    con.execute("""
+        DELETE FROM loan
+        WHERE (NTINDEX = 1 AND SPREAD = 0.00)
+           OR (NTINDEX = 1 AND SPREAD = 3.50)
+           OR (NTINDEX = 38 AND SPREAD = 3.20)
+           OR (NTINDEX = 38 AND SPREAD = 6.70)
+           OR SUBSTR(MODELDES, 1, 1) IN ('S','T','R','C')
+           OR MODELDES = 'Z'
+           OR SUBSTR(MODELDES, 5, 1) = 'F'
+           OR SUBSTR(SCORE1, 1, 1) IN ('D','E','F','G','H','I')
+           OR IA_LRU = 'I'
+           OR BORSTAT = 'K'
+           OR DELQCD IN ('9','09','10','11','12','13','14','15','16','17','18','19','20')
+    """)
+    
+    count = con.execute("SELECT COUNT(*) FROM loan").fetchone()[0]
+    print(f"After exclusion rules: {count:,}")
+    
+    # 7. Sort and process COLLATER
+    print("Processing COLLATER...")
+    con.execute("""
+        CREATE TABLE loan_sorted AS
+        SELECT * FROM loan ORDER BY ACCTNO, NOTENO
+    """)
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_sorted RENAME TO loan")
+    
+    con.execute(f"""
+        CREATE TABLE coll_temp AS
+        SELECT 
+            ACCTNO, NOTENO, CPRPROPD, MRESERVE, CPRLANDU, HOLDEXPD,
+            CASE 
+                WHEN EXPDATE > 0 THEN CAST(EXPDATE AS DATE)
+                ELSE NULL 
+            END AS EXPDT,
+            CASE 
+                WHEN (
+                    (CPRPROPD IN ('10','11','32','33','34','35') AND
+                     CPRLANDU IN ('10','11','32','33','34','35'))
+                    OR MRESERVE = 'Y'
+                ) THEN 'Y' 
+                ELSE NULL 
+            END AS EXCL
+        FROM (
+            SELECT * FROM read_parquet('{collater_pbb_path}')
+            UNION ALL
+            SELECT * FROM read_parquet('{collater_pib_path}')
+        )
+    """)
+    
+    con.execute("""
+        CREATE TABLE coll AS
+        SELECT * FROM coll_temp
+        WHERE EXCL = 'Y' OR HOLDEXPD = 'L'
+        ORDER BY ACCTNO, NOTENO
+    """)
+    con.execute("DROP TABLE coll_temp")
+    
+    con.execute("""
+        CREATE TABLE loan_with_coll AS
+        SELECT l.*, c.EXCL, c.HOLDEXPD AS COLL_HOLDEXPD, c.EXPDT
+        FROM loan l
+        LEFT JOIN coll c ON l.ACCTNO = c.ACCTNO AND l.NOTENO = c.NOTENO
+    """)
+    
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_with_coll RENAME TO loan")
+    
+    con.execute("""
+        DELETE FROM loan
+        WHERE EXCL = 'Y'
+           OR (
+               COLL_HOLDEXPD = 'L' 
+               AND EXPDT IS NOT NULL 
+               AND EXPRDATE IS NOT NULL
+               AND (DATEDIFF('day', EXPDT, EXPRDATE) / 365.0) < 30
+           )
+    """)
+    
+    count = con.execute("SELECT COUNT(*) FROM loan").fetchone()[0]
+    print(f"After COLLATER exclusion: {count:,}")
+    
+    # 8. CIS exclusions
+    print("Processing CIS exclusions...")
+    con.execute(f"""
+        CREATE TABLE cis AS
+        SELECT ACCTNO, CUSTNO, SECCUST
+        FROM read_parquet('{cis_loan_path}')
+    """)
+    
+    con.execute("""
+        CREATE TABLE cis_sorted AS
+        SELECT * FROM cis ORDER BY CUSTNO
+    """)
+    con.execute("DROP TABLE cis")
+    con.execute("ALTER TABLE cis_sorted RENAME TO cis")
+    
+    con.execute("""
+        CREATE TABLE cisln_temp AS
+        SELECT ACCTNO, CUSTNO
+        FROM cis
+        WHERE NOT (
+            (ACCTNO BETWEEN 2500000000 AND 2599999999)
+            OR (ACCTNO BETWEEN 2850000000 AND 2859999999)
+        )
+    """)
+    
+    con.execute("""
+        CREATE TABLE cisbill AS
+        SELECT DISTINCT CUSTNO
+        FROM cis
+        WHERE (ACCTNO BETWEEN 2500000000 AND 2599999999)
+           OR (ACCTNO BETWEEN 2850000000 AND 2859999999)
+    """)
+    
+    con.execute("""
+        CREATE TABLE cisln AS
+        SELECT DISTINCT c.ACCTNO
+        FROM cisln_temp c
+        INNER JOIN cisbill b ON c.CUSTNO = b.CUSTNO
+    """)
+    con.execute("DROP TABLE cisln_temp")
+    
+    con.execute("""
+        CREATE TABLE cis_901 AS
+        SELECT DISTINCT ACCTNO
+        FROM cis
+        WHERE SECCUST = '901'
+        ORDER BY ACCTNO
+    """)
+    
+    con.execute("""
+        DELETE FROM loan
+        WHERE ACCTNO IN (SELECT ACCTNO FROM cisln)
+           OR ACCTNO IN (SELECT ACCTNO FROM cis_901)
+    """)
+    
+    count = con.execute("SELECT COUNT(*) FROM loan").fetchone()[0]
+    print(f"After CIS exclusion: {count:,}")
+    
+    # 9. Sort by AANO and ELDS exclusion
+    print("Processing ELDS exclusion...")
+    con.execute("""
+        CREATE TABLE loan_sorted AS
+        SELECT * FROM loan ORDER BY AANO
+    """)
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_sorted RENAME TO loan")
+    
+    con.execute(f"""
+        CREATE TABLE elds AS
+        SELECT AANO, REINPROD
+        FROM read_parquet('{elds_path}')
+        ORDER BY AANO
+    """)
+    
+    con.execute("""
+        CREATE TABLE loan_with_elds AS
+        SELECT l.*, e.REINPROD
+        FROM loan l
+        LEFT JOIN elds e ON l.AANO = e.AANO
+    """)
+    
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_with_elds RENAME TO loan")
+    
+    con.execute("""
+        DELETE FROM loan
+        WHERE REINPROD = 'Y'
+    """)
+    
+    count = con.execute("SELECT COUNT(*) FROM loan").fetchone()[0]
+    print(f"After ELDS exclusion: {count:,}")
+    
+    # 10. Add NEW flag
+    print("Adding NEW flag...")
+    con.execute("""
+        CREATE TABLE loan_sorted AS
+        SELECT * FROM loan ORDER BY ACCTNO, NOTENO
+    """)
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_sorted RENAME TO loan")
+    
+    prev_path = output_loan_path.parent / f"LOAN{dates['prevmon']}.parquet"
+    if prev_path.exists():
+        con.execute(f"""
+            CREATE TABLE prev_loan AS
+            SELECT DISTINCT ACCTNO, NOTENO 
+            FROM read_parquet('{prev_path}')
+        """)
         
-        loan = loan.join(
-            prev_month_loan.with_columns(pl.lit('N').alias('_prev')),
-            on=['ACCTNO','NOTENO'],
-            how='left'
-        ).with_columns([
-            pl.when(pl.col('_prev').is_null()).then(pl.lit('Y')).otherwise(pl.lit('')).alias('NEW')
-        ]).drop('_prev')
-    except:
-        loan = loan.with_columns(pl.lit('Y').alias('NEW'))
+        con.execute("""
+            CREATE TABLE loan_with_new AS
+            SELECT l.*,
+                   CASE WHEN p.ACCTNO IS NULL THEN 'Y' ELSE '' END AS NEW
+            FROM loan l
+            LEFT JOIN prev_loan p ON l.ACCTNO = p.ACCTNO AND l.NOTENO = p.NOTENO
+        """)
+        
+        con.execute("DROP TABLE loan")
+        con.execute("ALTER TABLE loan_with_new RENAME TO loan")
+    else:
+        con.execute("ALTER TABLE loan ADD COLUMN NEW VARCHAR")
+        con.execute("UPDATE loan SET NEW = 'Y'")
     
-    # 12. Sort and save
-    loan = loan.sort(['BRANCH','ACCTNO','NOTENO'])
+    # 11. Final sort and save
+    print("Saving output...")
+    con.execute("""
+        CREATE TABLE loan_final AS
+        SELECT * FROM loan ORDER BY BRANCH, ACCTNO
+    """)
+    con.execute("DROP TABLE loan")
+    con.execute("ALTER TABLE loan_final RENAME TO loan")
     
-    # Save main output
-    loan.write_parquet(output_loan_path)
-    print(f"\nFinal output: {len(loan):,} records")
+    result = con.execute("SELECT * FROM loan").pl()
+    result.write_parquet(output_loan_path)
+    
+    print(f"\nFinal output: {len(result):,} records")
     print(f"Saved to: {output_loan_path}")
     
-    # 13. Create summary by branch
-    summary = loan.group_by('BRANCH').agg([
-        pl.count().alias('NOACCT'),
-        pl.sum('LMTAPPR').alias('LMTAPPR'),
-        pl.sum('BALANCE').alias('BALANCE'),
-        pl.sum('REPAID').alias('REPAID')
-    ]).sort('BRANCH')
+    # 12. Create summary (PROC SUMMARY equivalent)
+    summary = con.execute("""
+        SELECT 
+            BRANCH AS BRCH,
+            COUNT(*) AS NOACCT,
+            SUM(LMTAPPR) AS LMTAPPR,
+            SUM(BALANCE) AS BALANCE,
+            SUM(REPAID) AS REPAID
+        FROM loan
+        GROUP BY BRANCH
+        ORDER BY BRANCH
+    """).pl()
     
     summary.write_parquet(output_summary_path)
     print(f"Summary saved to: {output_summary_path}")
     
-    # Print summary
     print("\n" + "="*80)
     print("SUMMARY BY BRANCH")
     print("="*80)
     print(summary)
+    
+    con.close()
 
 if __name__ == "__main__":
-    # Set report date
-    report_date = datetime.now()  # Replace with actual REPTDATE
-    
-    # Define input paths
+    report_date = datetime.now()
     input_dir = Path(".")
     
-    # Process EIQPROM2
-    process_eiqprom2(
+    process_eiqprom2_duckdb(
         reptdate=report_date,
         lnnote_pbb_path=input_dir / "PBBLN_LNNOTE.parquet",
         lnnote_pib_path=input_dir / "PIBLN_LNNOTE.parquet",
         loan_pbb_path=input_dir / f"PBBSAS_LOAN{report_date.month:02d}.parquet",
         loan_pib_path=input_dir / f"PIBSAS_LOAN{report_date.month:02d}.parquet",
-        billbad_path=input_dir / "LNBILL_BILL.parquet",  # From EIQPROM1
+        billbad_path=input_dir / "LNBILL_BILL.parquet",
         lncomm_pbb_path=input_dir / "PBBLN_LNCOMM.parquet",
         lncomm_pib_path=input_dir / "PIBLN_LNCOMM.parquet",
         collater_pbb_path=input_dir / "COLL_COLLATER.parquet",
