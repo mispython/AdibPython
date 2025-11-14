@@ -110,3 +110,33 @@ put //SAP.PBB.BLDATAWH.BILFTP        BILFTP
 cd /stgsrcsys/host/control
 put //SAP.DAY.CONTROL          FTPBILWH.TXT
 EOB
+
+
+
+
+
+
+
+
+
+DATA _NULL_;                        
+  INFILE INSFILE END=LAST MISSOVER; 
+  FILE OUTFILE;                     
+    INPUT @1   BILL_ACCT_NO     PD6.
+          @7   BILL_NOTE_NO     PD3.
+          @10  BILL_DUE_DATE    PD6.
+          @16  BILL_PAID_DATE   PD6.
+          @22  BILL_DAYS_LATE   PD2.
+          @24  BILL_NOTE_TYPE   PD2.
+          @26  BILL_COST_CENTER PD4.
+          @30  BILL_TOT_BILLED  PD8.
+          @38  BILL_PRIN_BILLED PD8.
+          @46  BILL_INT_BILLED  PD8.
+          @54  BILL_ESC_BILLED  PD8.
+          @62  BILL_FEE_BILLED  PD8.
+          @70  BILL_TOT_BNP     PD8.
+          @78  BILL_PRIN_BNP    PD8.
+          @86  BILL_INT_BNP     PD8.  
+          @94  BILL_ESC_BNP     PD8.  
+          @102 BILL_FEE_BNP     PD8.  
+          @110 FILLER            $91.;
