@@ -1,7 +1,7 @@
+import duckdb
 import polars as pl
 from pathlib import Path
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
+from datetime import datetime
 
 def read_packed_decimal(data: bytes, offset: int, length: int) -> int:
     """Read IBM packed decimal (PD) format."""
@@ -16,7 +16,7 @@ def read_packed_decimal(data: bytes, offset: int, length: int) -> int:
         result = -result
     return result
 
-def calculate_report_dates(reptdate: datetime) -> tuple:
+def calculate_report_dates(reptdate: datetime) -> dict:
     """
     Calculate REPTDATE and PDATE based on SAS logic.
     If month >= 6: PDATE = (month-5, year-2)
@@ -32,12 +32,11 @@ def calculate_report_dates(reptdate: datetime) -> tuple:
         pmth = month + 7
         pyear = year - 3
     
-    # First day of the calculated month
     pdate = datetime(pyear, pmth, 1).date()
     
     print(f"REPTDATE: {reptdate.date()}")
     print(f"PDATE (2.5 years back): {pdate}")
-    print("-" * 60)
+    print("-" * 80)
     
     return reptdate.date(), pdate
 
@@ -55,22 +54,15 @@ def parse_packed_date(packed_value: int) -> datetime.date:
     except:
         return None
 
-def process_billfile(input_path: Path, reptdate: datetime, output_path: Path) -> None:
+def process_billfile_binary(input_path: Path, reptdate: datetime, output_path: Path) -> None:
     """
-    Process bill file with date filtering.
-    
-    Logic:
-    1. Calculate PDATE (2.5 years before REPTDATE)
-    2. Parse bill records from binary file
-    3. Calculate DAYS (days between bill date and paid date or report date)
-    4. Filter: BLDAT >= PDATE AND DAYS > 0
-    5. Sort by ACCTNO, NOTENO
+    Process bill file from binary format using DuckDB.
+    Handles packed decimal data and converts to parquet.
     """
     
-    # Calculate report dates
     reptdate_val, pdate_val = calculate_report_dates(reptdate)
     
-    # Read and parse bill records
+    print("Reading binary bill file...")
     records = []
     with open(input_path, 'rb') as f:
         lines = f.readlines()
@@ -83,7 +75,6 @@ def process_billfile(input_path: Path, reptdate: datetime, output_path: Path) ->
         if len(line) < 22:
             continue
         
-        # Read fields
         acctno = read_packed_decimal(line, 0, 6)
         if acctno == 0:
             continue
@@ -93,7 +84,6 @@ def process_billfile(input_path: Path, reptdate: datetime, output_path: Path) ->
         blpddate_packed = read_packed_decimal(line, 15, 6)
         dayslate = read_packed_decimal(line, 21, 2)
         
-        # Parse dates
         bldat = parse_packed_date(bldate_packed)
         blpddat = parse_packed_date(blpddate_packed)
         
@@ -101,111 +91,225 @@ def process_billfile(input_path: Path, reptdate: datetime, output_path: Path) ->
         if bldat is None:
             days = 0
         elif blpddat is None:
-            # Use REPTDATE if no paid date
             days = (reptdate_val - bldat).days
         else:
-            # Use paid date
             days = (blpddat - bldat).days
         
-        record = {
+        records.append({
             'ACCTNO': acctno,
             'NOTENO': noteno,
             'BLDAT': bldat,
             'BLPDDAT': blpddat,
             'DAYSLATE': dayslate,
             'DAYS': days
-        }
-        records.append(record)
+        })
     
     print(f"Total records read: {len(records):,}")
     
-    # Create DataFrame
-    df = pl.DataFrame(records)
+    # Use DuckDB for filtering and sorting
+    con = duckdb.connect(':memory:')
     
-    # Filter: Bill within 2.5 years and more than 0 days due
-    df_filtered = df.filter(
-        (pl.col('BLDAT') >= pdate_val) & 
-        (pl.col('DAYS') > 0)
-    )
+    con.execute("CREATE TABLE bill AS SELECT * FROM records")
     
-    print(f"Records after filtering (BLDAT >= {pdate_val} AND DAYS > 0): {len(df_filtered):,}")
+    # Filter: BLDAT >= PDATE AND DAYS > 0
+    con.execute(f"""
+        CREATE TABLE bill_filtered AS
+        SELECT * FROM bill
+        WHERE BLDAT >= DATE '{pdate_val}'
+          AND DAYS > 0
+        ORDER BY ACCTNO, NOTENO
+    """)
     
-    # Sort by ACCTNO, NOTENO
-    df_sorted = df_filtered.sort(['ACCTNO', 'NOTENO'])
+    result = con.execute("SELECT * FROM bill_filtered").pl()
     
-    # Write to parquet
-    df_sorted.write_parquet(output_path)
+    print(f"Records after filtering (BLDAT >= {pdate_val} AND DAYS > 0): {len(result):,}")
+    
+    result.write_parquet(output_path)
     print(f"Output written to: {output_path}")
     
-    # Print sample (first 100 rows)
     print("\nSample output (first 10 rows):")
-    print(df_sorted.head(10))
+    print(result.head(10))
+    
+    con.close()
 
-def process_from_parquet(input_parquet: Path, reptdate: datetime, output_path: Path) -> None:
+def process_billfile_parquet(input_path: Path, reptdate: datetime, output_path: Path) -> None:
     """
-    Process bill data from existing parquet file.
-    Assumes input already has: ACCTNO, NOTENO, BLDAT, BLPDDAT, DAYSLATE columns.
+    Process bill file from parquet format using DuckDB.
+    Assumes input already has: ACCTNO, NOTENO, BLDAT, BLPDDAT, DAYSLATE.
     """
     
-    # Calculate report dates
     reptdate_val, pdate_val = calculate_report_dates(reptdate)
     
+    con = duckdb.connect(':memory:')
+    
+    print("Reading parquet bill file...")
+    
     # Read input parquet
-    df = pl.read_parquet(input_parquet)
+    con.execute(f"""
+        CREATE TABLE bill AS
+        SELECT 
+            ACCTNO, NOTENO, BLDAT, BLPDDAT, DAYSLATE,
+            CASE 
+                WHEN BLDAT IS NULL THEN 0
+                WHEN BLPDDAT IS NULL THEN DATEDIFF('day', BLDAT, DATE '{reptdate_val}')
+                ELSE DATEDIFF('day', BLDAT, BLPDDAT)
+            END AS DAYS
+        FROM read_parquet('{input_path}')
+    """)
     
-    # Ensure date columns are in date format
-    if df['BLDAT'].dtype != pl.Date:
-        df = df.with_columns(pl.col('BLDAT').cast(pl.Date))
-    if df['BLPDDAT'].dtype != pl.Date:
-        df = df.with_columns(pl.col('BLPDDAT').cast(pl.Date))
+    count = con.execute("SELECT COUNT(*) FROM bill").fetchone()[0]
+    print(f"Total records read: {count:,}")
     
-    # Calculate DAYS if not present
-    if 'DAYS' not in df.columns:
-        df = df.with_columns(
-            pl.when(pl.col('BLDAT').is_null())
-            .then(pl.lit(0))
-            .when(pl.col('BLPDDAT').is_null())
-            .then((pl.lit(reptdate_val) - pl.col('BLDAT')).dt.total_days())
-            .otherwise((pl.col('BLPDDAT') - pl.col('BLDAT')).dt.total_days())
-            .alias('DAYS')
-        )
+    # Filter: BLDAT >= PDATE AND DAYS > 0
+    con.execute(f"""
+        CREATE TABLE bill_filtered AS
+        SELECT * FROM bill
+        WHERE BLDAT >= DATE '{pdate_val}'
+          AND DAYS > 0
+    """)
     
-    print(f"Total records read: {len(df):,}")
-    
-    # Filter: Bill within 2.5 years and more than 0 days due
-    df_filtered = df.filter(
-        (pl.col('BLDAT') >= pdate_val) & 
-        (pl.col('DAYS') > 0)
-    )
-    
-    print(f"Records after filtering (BLDAT >= {pdate_val} AND DAYS > 0): {len(df_filtered):,}")
+    count_filtered = con.execute("SELECT COUNT(*) FROM bill_filtered").fetchone()[0]
+    print(f"Records after filtering (BLDAT >= {pdate_val} AND DAYS > 0): {count_filtered:,}")
     
     # Sort by ACCTNO, NOTENO
-    df_sorted = df_filtered.sort(['ACCTNO', 'NOTENO'])
+    con.execute("""
+        CREATE TABLE bill_sorted AS
+        SELECT * FROM bill_filtered
+        ORDER BY ACCTNO, NOTENO
+    """)
     
-    # Write to parquet
-    df_sorted.write_parquet(output_path)
+    # Save to parquet
+    result = con.execute("SELECT * FROM bill_sorted").pl()
+    result.write_parquet(output_path)
+    
     print(f"Output written to: {output_path}")
     
-    # Print sample
     print("\nSample output (first 10 rows):")
-    print(df_sorted.head(10))
+    print(result.head(10))
+    
+    con.close()
+
+def process_billfile_multiple_parquet(
+    input_dir: Path,
+    reptdate: datetime,
+    output_path: Path,
+    num_files: int = 10
+) -> None:
+    """
+    Process multiple bill files (MST01-MST10) and combine into single parquet.
+    Uses DuckDB for efficient processing.
+    """
+    
+    reptdate_val, pdate_val = calculate_report_dates(reptdate)
+    
+    con = duckdb.connect(':memory:')
+    
+    # Define input file pattern
+    input_files = [
+        input_dir / f"RBP2.B033.MST{i:02d}.BILLFILE.MIS.parquet"
+        for i in range(1, num_files + 1)
+    ]
+    
+    # Check existing files
+    existing_files = [f for f in input_files if f.exists()]
+    
+    if not existing_files:
+        print(f"ERROR: No input files found in {input_dir}")
+        return
+    
+    print(f"Found {len(existing_files)} input files")
+    print("-" * 80)
+    
+    # Create UNION ALL query for all files
+    union_queries = []
+    for file_path in existing_files:
+        union_queries.append(f"SELECT * FROM read_parquet('{file_path}')")
+    
+    union_sql = " UNION ALL ".join(union_queries)
+    
+    print("Reading and combining all parquet files...")
+    con.execute(f"""
+        CREATE TABLE bill_all AS
+        SELECT * FROM ({union_sql})
+    """)
+    
+    count = con.execute("SELECT COUNT(*) FROM bill_all").fetchone()[0]
+    print(f"Total records from all files: {count:,}")
+    
+    # Calculate DAYS if not present
+    columns = con.execute("PRAGMA table_info(bill_all)").fetchall()
+    column_names = [col[1] for col in columns]
+    
+    if 'DAYS' not in column_names:
+        print("Calculating DAYS...")
+        con.execute(f"""
+            CREATE TABLE bill AS
+            SELECT *,
+                CASE 
+                    WHEN BLDAT IS NULL THEN 0
+                    WHEN BLPDDAT IS NULL THEN DATEDIFF('day', BLDAT, DATE '{reptdate_val}')
+                    ELSE DATEDIFF('day', BLDAT, BLPDDAT)
+                END AS DAYS
+            FROM bill_all
+        """)
+        con.execute("DROP TABLE bill_all")
+    else:
+        con.execute("ALTER TABLE bill_all RENAME TO bill")
+    
+    # Filter: BLDAT >= PDATE AND DAYS > 0
+    print("Applying filters...")
+    con.execute(f"""
+        CREATE TABLE bill_filtered AS
+        SELECT * FROM bill
+        WHERE BLDAT >= DATE '{pdate_val}'
+          AND DAYS > 0
+    """)
+    
+    count_filtered = con.execute("SELECT COUNT(*) FROM bill_filtered").fetchone()[0]
+    print(f"Records after filtering (BLDAT >= {pdate_val} AND DAYS > 0): {count_filtered:,}")
+    
+    # Sort by ACCTNO, NOTENO
+    print("Sorting...")
+    con.execute("""
+        CREATE TABLE bill_sorted AS
+        SELECT * FROM bill_filtered
+        ORDER BY ACCTNO, NOTENO
+    """)
+    
+    # Save to parquet
+    result = con.execute("SELECT * FROM bill_sorted").pl()
+    result.write_parquet(output_path)
+    
+    print(f"\nOutput written to: {output_path}")
+    print(f"Final record count: {len(result):,}")
+    
+    print("\nSample output (first 10 rows):")
+    print(result.head(10))
+    
+    con.close()
 
 if __name__ == "__main__":
-    # Set report date (typically from BNM.REPTDATE dataset)
-    # For production, read from your REPTDATE source
+    # Set report date (from BNM.REPTDATE)
     report_date = datetime.now()  # Replace with actual REPTDATE
     
     # Option 1: Process from binary file
-    # process_billfile(
+    # process_billfile_binary(
     #     Path("BILLFILE.dat"),
     #     report_date,
     #     Path("LNBILL_BILL.parquet")
     # )
     
-    # Option 2: Process from existing parquet
-    process_from_parquet(
-        Path("STG_LN_BILL.parquet"),
-        report_date,
-        Path("LNBILL_BILL.parquet")
+    # Option 2: Process from single parquet
+    # process_billfile_parquet(
+    #     Path("STG_LN_BILL.parquet"),
+    #     report_date,
+    #     Path("LNBILL_BILL.parquet")
+    # )
+    
+    # Option 3: Process from multiple parquet files (MST01-MST10)
+    process_billfile_multiple_parquet(
+        input_dir=Path("."),
+        reptdate=report_date,
+        output_path=Path("LNBILL_BILL.parquet"),
+        num_files=10
     )
