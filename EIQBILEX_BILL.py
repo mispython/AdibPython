@@ -1,8 +1,6 @@
 import polars as pl
-import duckdb
 from pathlib import Path
 from datetime import datetime, timedelta
-import struct
 import sys
 
 def read_packed_decimal(data: bytes, offset: int, length: int, decimals: int = 0) -> float:
@@ -56,7 +54,7 @@ def validate_billfile(file_path: Path) -> None:
         errors.append(f"File Footer ERROR: LNBIL_OBS={footer_count:015d} <> SAS_OBS={expected_count:015d}")
     
     if errors:
-        print("DSN=RBP2.B033.BILLFILE.MIS(0)")
+        print(f"DSN={file_path.name}")
         print("+--------+--------+-------+-------+--------+-------+")
         print("|  ERROR MESSAGE(S) STATUS                         |")
         print("+--------+--------+-------+-------+--------+-------+")
@@ -66,56 +64,107 @@ def validate_billfile(file_path: Path) -> None:
         print("+========+========+=======+=======+========+=======+")
         sys.exit(77)
 
-def process_billfile(input_path: Path, output_path: Path) -> None:
-    """Process bill file from binary format to parquet."""
+def process_single_billfile(file_path: Path) -> pl.DataFrame:
+    """Process single bill file from binary format to DataFrame."""
     
     # Validate file first
-    validate_billfile(input_path)
+    validate_billfile(file_path)
     
     # Read and parse data records (skip header, stop before footer)
     records = []
-    with open(input_path, 'rb') as f:
+    with open(file_path, 'rb') as f:
         lines = f.readlines()
         
     for line in lines[1:-1]:  # Skip first (header) and last (footer)
         if len(line) < 110:
             continue
             
-        # Check if valid data record (ACCTNO not null)
-        acctno = read_packed_decimal(line, 0, 6)
-        if acctno == 0:
+        # Check if valid data record (BILL_ACCT_NO not null)
+        acct_no = read_packed_decimal(line, 0, 6)
+        if acct_no == 0:
             continue
         
         record = {
-            'ACCTNO': int(acctno),
-            'NOTENO': int(read_packed_decimal(line, 6, 3)),
-            'BLDATE': int(read_packed_decimal(line, 9, 6)),
-            'BLPDDATE': int(read_packed_decimal(line, 15, 6)),
-            'DAYSLATE': int(read_packed_decimal(line, 21, 2)),
-            'PRODUCT': int(read_packed_decimal(line, 23, 2)),
-            'COSTCTR': int(read_packed_decimal(line, 25, 4)),
-            'BILL_AMT': read_packed_decimal(line, 29, 8, 2),
-            'BILL_AMT_PRIN': read_packed_decimal(line, 37, 8, 2),
-            'BILL_AMT_INT': read_packed_decimal(line, 45, 8, 2),
-            'BILL_AMT_ESCROW': read_packed_decimal(line, 53, 8, 2),
-            'BILL_AMT_FEE': read_packed_decimal(line, 61, 8, 2),
-            'BILL_NOT_PAY_AMT': read_packed_decimal(line, 69, 8, 2),
-            'BILL_NOT_PAY_AMT_PRIN': read_packed_decimal(line, 77, 8, 2),
-            'BILL_NOT_PAY_AMT_INT': read_packed_decimal(line, 85, 8, 2),
-            'BILL_NOT_PAY_AMT_ESCROW': read_packed_decimal(line, 93, 8, 2),
-            'BILL_NOT_PAY_AMT_FEE': read_packed_decimal(line, 101, 8, 2),
+            'BILL_ACCT_NO': int(acct_no),
+            'BILL_NOTE_NO': int(read_packed_decimal(line, 6, 3)),
+            'BILL_DUE_DATE': int(read_packed_decimal(line, 9, 6)),
+            'BILL_PAID_DATE': int(read_packed_decimal(line, 15, 6)),
+            'BILL_DAYS_LATE': int(read_packed_decimal(line, 21, 2)),
+            'BILL_NOTE_TYPE': int(read_packed_decimal(line, 23, 2)),
+            'BILL_COST_CENTER': int(read_packed_decimal(line, 25, 4)),
+            'BILL_TOT_BILLED': int(read_packed_decimal(line, 29, 8)),
+            'BILL_PRIN_BILLED': int(read_packed_decimal(line, 37, 8)),
+            'BILL_INT_BILLED': int(read_packed_decimal(line, 45, 8)),
+            'BILL_ESC_BILLED': int(read_packed_decimal(line, 53, 8)),
+            'BILL_FEE_BILLED': int(read_packed_decimal(line, 61, 8)),
+            'BILL_TOT_BNP': int(read_packed_decimal(line, 69, 8)),
+            'BILL_PRIN_BNP': int(read_packed_decimal(line, 77, 8)),
+            'BILL_INT_BNP': int(read_packed_decimal(line, 85, 8)),
+            'BILL_ESC_BNP': int(read_packed_decimal(line, 93, 8)),
+            'BILL_FEE_BNP': int(read_packed_decimal(line, 101, 8)),
         }
         records.append(record)
     
-    # Create Polars DataFrame
-    df = pl.DataFrame(records)
+    print(f"Processed {len(records):,} records from {file_path.name}")
+    return pl.DataFrame(records) if records else pl.DataFrame()
+
+def process_billfiles(input_dir: Path, output_path: Path) -> None:
+    """Process all MST billfiles and combine into single parquet."""
     
-    # Write to parquet
-    df.write_parquet(output_path)
-    print(f"Processed {len(records)} records to {output_path}")
+    # Define input file pattern
+    input_files = [
+        input_dir / f"RBP2.B033.MST{i:02d}.BILLFILE.MIS.parquet"
+        for i in range(1, 11)
+    ]
+    
+    # Check if files exist
+    existing_files = [f for f in input_files if f.exists()]
+    
+    if not existing_files:
+        print(f"ERROR: No input files found in {input_dir}")
+        sys.exit(1)
+    
+    print(f"Found {len(existing_files)} input files")
+    print("-" * 60)
+    
+    # Process each file
+    dataframes = []
+    for file_path in existing_files:
+        try:
+            # Read parquet file (assuming it contains binary data column)
+            df_input = pl.read_parquet(file_path)
+            
+            # If parquet contains raw binary data, process it
+            # Otherwise, assume it's already processed and just append
+            if 'raw_data' in df_input.columns:
+                # Process binary data from parquet
+                df = process_single_billfile(file_path)
+            else:
+                # Already processed data
+                df = df_input
+                print(f"Loaded {len(df):,} records from {file_path.name}")
+            
+            if len(df) > 0:
+                dataframes.append(df)
+        except Exception as e:
+            print(f"ERROR processing {file_path.name}: {e}")
+            sys.exit(1)
+    
+    # Combine all dataframes
+    if dataframes:
+        combined_df = pl.concat(dataframes)
+        print("-" * 60)
+        print(f"Total records: {len(combined_df):,}")
+        
+        # Write to output parquet
+        combined_df.write_parquet(output_path)
+        print(f"Output written to: {output_path}")
+    else:
+        print("ERROR: No data to process")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    input_file = Path("BILLFILE.dat")
+    input_directory = Path(".")  # Current directory
     output_file = Path("STG_LN_BILL.parquet")
     
-    process_billfile(input_file, output_file)
+    process_billfiles(input_directory, output_file)
