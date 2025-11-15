@@ -18,41 +18,58 @@ batch_dt_str = batch_dt.strftime("%Y%m%d")
 
 # Get file names to export Parquet
 def get_file_names(config_path, directory_path):
-    file_names = []
-    required_names = []
-
+    """
+    Match data files to layout files based on base pattern.
+    E.g., BILL_MST_layout.py matches BILL_MST01_date, BILL_MST02_date, etc.
+    """
+    file_groups = {}
+    
     try:
-        files = os.listdir(directory_path)
-        required_files = os.listdir(config_path)
+        # Get all layout files
+        layout_files = [f for f in os.listdir(config_path) if f.endswith('_layout.py')]
         
-        for r_file in required_files:
-            if r_file.endswith('_layout.py'):
-                r_name = r_file.replace('_layout.py', '')
-                required_names.append(r_name)
+        # Extract base names from layout files
+        layout_bases = {}
+        for layout_file in layout_files:
+            base_name = layout_file.replace('_layout.py', '')
+            layout_bases[base_name] = layout_file
         
-        print(f"Required base names: {required_names}")
+        print(f"Layout files found: {list(layout_bases.keys())}")
         print(f"Looking for files with date: {batch_dt_str}\n")
-
-        for file in files:
-            full_path = os.path.join(directory_path, file)
-            if os.path.isfile(full_path):
-                parts = file.rsplit('_', 1)
-                if len(parts) > 1:
-                    base_name = parts[0]
-                    date_part = parts[1].rsplit('.', 1)[0]
+        
+        # Get all data files
+        data_files = [f for f in os.listdir(directory_path) 
+                     if os.path.isfile(os.path.join(directory_path, f))]
+        
+        # Match data files to layout files
+        for data_file in data_files:
+            parts = data_file.rsplit('_', 1)
+            if len(parts) < 2:
+                continue
+                
+            date_part = parts[1].rsplit('.', 1)[0]
+            if date_part != batch_dt_str:
+                continue
+            
+            # Check if this file matches any layout base
+            # E.g., BILL_MST01_20251114 should match BILL_MST layout
+            for layout_base in layout_bases.keys():
+                if parts[0].startswith(layout_base):
+                    print(f"✓ Matched: {data_file} -> {layout_base}_layout.py")
                     
-                    if base_name in required_names and date_part == batch_dt_str:
-                        file_names.append((file, base_name))
-                        print(f"✓ Matched: {file}")
-
-        if not file_names:
+                    if layout_base not in file_groups:
+                        file_groups[layout_base] = []
+                    file_groups[layout_base].append(data_file)
+                    break
+        
+        if not file_groups:
             raise ValueError(f"No files found with date: {batch_dt_str}")
-
-        return file_names
+        
+        return file_groups
 
     except Exception as e:
         print(f"Error: {e}")
-        return []
+        return {}
 
 # Load layout from _layout.py file
 def load_layout(var_path, base_name):
@@ -187,36 +204,64 @@ if __name__ == "__main__":
         exit(1)
     
     print(f"\nFound {len(files)} file(s) to process\n")
+    
+    # Group files by base pattern (e.g., BILL_MST01, BILL_MST02 -> BILL_MST)
+    file_groups = {}
+    for file_name, base_name in files:
+        # Remove trailing numbers to get the true base name
+        # BILL_MST01 -> BILL_MST, BILL_MST02 -> BILL_MST
+        import re
+        true_base = re.sub(r'\d+, '', base_name)
+        
+        if true_base not in file_groups:
+            file_groups[true_base] = []
+        file_groups[true_base].append((file_name, base_name))
+    
+    print(f"File groups to combine: {list(file_groups.keys())}\n")
     print("="*60 + "\n")
     
-    # Process each file
-    for file_name, base_name in files:
-        print(f"Processing: {file_name}")
+    # Process each group
+    for true_base, group_files in file_groups.items():
+        print(f"Processing group: {true_base}")
+        print(f"Combining {len(group_files)} files into one output")
         print("-"*60)
         
-        input_file = os.path.join(input_folder_path, file_name)
-        output_file_name = f"STG_LN_{base_name.upper()}"
+        output_file_name = f"STG_LN_{true_base.upper()}"
         output_file = os.path.join(output_folder_path, f"{output_file_name}.parquet")
         
+        # Delete existing output
+        check_and_delete_table(output_file)
+        
+        all_dataframes = []
+        
         try:
-            # Load layout
-            lrecl, layout = load_layout(var_path, base_name)
-            print(f"Layout loaded: LRECL={lrecl}, Fields={len(layout)}")
+            # Load layout from first file (they all share the same layout)
+            first_base_name = group_files[0][1]
+            lrecl, layout = load_layout(var_path, first_base_name)
+            print(f"Layout loaded: LRECL={lrecl}, Fields={len(layout)}\n")
             
-            # Delete existing output
-            check_and_delete_table(output_file)
+            # Process each file in the group
+            for idx, (file_name, base_name) in enumerate(group_files, 1):
+                print(f"[{idx}/{len(group_files)}] Processing: {file_name}")
+                input_file = os.path.join(input_folder_path, file_name)
+                
+                t0 = time.time()
+                df = process_file(input_file, lrecl, layout)
+                t1 = time.time()
+                
+                print(f"    Records: {len(df):,}, Time: {t1-t0:.2f}s\n")
+                all_dataframes.append(df)
             
-            # Process file
-            t0 = time.time()
-            df = process_file(input_file, lrecl, layout)
-            t1 = time.time()
-            print(f"Processing time: {t1-t0:.2f} seconds")
+            # Combine all dataframes
+            print(f"Combining {len(all_dataframes)} dataframes...")
+            combined_df = pd.concat(all_dataframes, ignore_index=True)
+            print(f"Total records: {len(combined_df):,}\n")
             
-            # Save to Parquet
-            save_to_parquet(df, output_file)
+            # Save combined data to Parquet
+            save_to_parquet(combined_df, output_file)
             
         except Exception as e:
-            print(f"✗ Error processing {file_name}: {e}")
+            print(f"✗ Error processing group {true_base}: {e}")
             import traceback
             traceback.print_exc()
         
