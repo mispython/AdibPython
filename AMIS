@@ -25,6 +25,73 @@ batch_dt = datetime.strptime("2025-11-14 00:00:00", '%Y-%m-%d %H:%M:%S')
 #batch_dt = datetime.strptime(batch_dt, '%Y-%m-%d %H:%M:%S')-timedelta(days=1)
 batch_dt_str = batch_dt.strftime("%Y%m%d")
 
+# Preprocessing: Combine split MST files
+def combine_mst_files(source_dir, date_str, base_pattern, num_files=10):
+    """
+    Combine multiple MST files (e.g., BILL_MST01_20251114 to BILL_MST10_20251114)
+    into a single file (e.g., BILL_MST_20251114)
+    """
+    output_file = f"{source_dir}/{base_pattern}_{date_str}"
+    
+    # Check if combined file already exists
+    if os.path.exists(output_file):
+        print(f"Combined file already exists: {output_file}")
+        return output_file
+    
+    mst_files = []
+    for i in range(1, num_files + 1):
+        mst_file = f"{source_dir}/{base_pattern}{i:02d}_{date_str}"
+        if os.path.exists(mst_file):
+            mst_files.append(mst_file)
+        else:
+            print(f"Warning: File not found: {mst_file}")
+    
+    if not mst_files:
+        print(f"No MST files found for pattern {base_pattern}*_{date_str}")
+        return None
+    
+    print(f"Combining {len(mst_files)} MST files into {output_file}")
+    
+    try:
+        with open(output_file, 'wb') as outf:
+            for mst_file in mst_files:
+                print(f"  Adding: {os.path.basename(mst_file)}")
+                with open(mst_file, 'rb') as inf:
+                    outf.write(inf.read())
+        
+        print(f"Successfully created combined file: {output_file}")
+        return output_file
+    except Exception as e:
+        print(f"Error combining files: {e}")
+        return None
+
+
+def preprocess_data_files(source_dir, date_str):
+    """
+    Preprocess data files by combining split MST files before ETL processing
+    """
+    print("\n" + "="*60)
+    print("PREPROCESSING DATA FILES")
+    print("="*60)
+    
+    # Define patterns for files that need combining
+    # Format: (base_pattern, number_of_files)
+    combine_patterns = [
+        ("BILL_MST", 10),  # Combine BILL_MST01-10
+        # Add more patterns here if needed, e.g.:
+        # ("LOAN_MST", 5),
+        # ("ACCT_MST", 8),
+    ]
+    
+    for base_pattern, num_files in combine_patterns:
+        print(f"\nProcessing {base_pattern} files...")
+        combine_mst_files(source_dir, date_str, base_pattern, num_files)
+    
+    print("\n" + "="*60)
+    print("PREPROCESSING COMPLETE")
+    print("="*60 + "\n")
+
+
 # Get file names to export Parquet
 def get_file_names(config_path, directory_path):
     file_names = []
@@ -91,7 +158,7 @@ def load_variables(var_path, script_name):
         other_start = content.index("Other:")
 
         # Extract text blocks
-        specs_str = content[specs_start:names_start - + len("Names:")].strip()
+        specs_str = content[specs_start:names_start - len("Names:")].strip()
         names_str = content[names_start:other_start].strip()
         other_str = content[other_start + len("Other:"):].strip()
 
@@ -220,6 +287,14 @@ def save_to_parquet(df, output_file):
 
 if __name__ == "__main__":
 
+    # Step 1: Preprocess - Combine split MST files BEFORE ETL processing
+    preprocess_data_files(input_folder_path, batch_dt_str)
+
+    # Step 2: ETL Processing
+    print("\n" + "="*60)
+    print("STARTING ETL PROCESSING")
+    print("="*60 + "\n")
+
     # Retrieves full file name and the extracted base name (e.g ACCTFILE_20250427 and ACCTFILE )
     files = get_file_names(var_path, input_folder_path)
 
@@ -243,3 +318,7 @@ if __name__ == "__main__":
         print("Saving to Parquet")
         # Save to Parquet
         save_to_parquet(df, output_file)
+    
+    print("\n" + "="*60)
+    print("ETL PROCESSING COMPLETE")
+    print("="*60)
