@@ -35,21 +35,37 @@ def get_file_names(config_path, directory_path):
 
         required_files = os.listdir(config_path)
         for r_file in required_files:
-            r_name = r_file.rsplit('_', 1)[0]
-            required_names.append(r_name)
+            # Fixed: Remove both "_layout" and ".py" to get the base name
+            # e.g., "BILL_MST01_layout.py" -> "BILL_MST01"
+            if r_file.endswith('_layout.py'):
+                r_name = r_file.replace('_layout.py', '')
+                required_names.append(r_name)
+        
+        print(f"Required base names from config: {required_names}")
+        print(f"Looking for files with date: {batch_dt_str}")
 
         for file in files:
             full_path = os.path.join(directory_path, file)
 
             # Only take file names not folders
             if os.path.isfile(full_path):
-                base_name = file.rsplit('_', 1)[0]
+                # Split to get base name and date
                 parts = file.rsplit('_', 1)
-                if base_name in required_names and len(parts) > 1:
-                    if parts[1].rsplit('.', 1)[0] == batch_dt_str:
+                if len(parts) > 1:
+                    base_name = parts[0]
+                    date_part = parts[1].rsplit('.', 1)[0]  # Remove extension if any
+                    
+                    print(f"Checking file: {file} -> base: {base_name}, date: {date_part}")
+                    
+                    if base_name in required_names and date_part == batch_dt_str:
                         file_names.append((file, base_name))
+                        print(f"  ✓ Matched: {file}")
 
         if not file_names:
+            print(f"\nAvailable files in {directory_path}:")
+            for f in files:
+                print(f"  {f}")
+            print(f"\nRequired base names: {required_names}")
             raise ValueError(f"No files found with date: {batch_dt_str}")
 
         return file_names
@@ -91,7 +107,7 @@ def load_variables(var_path, script_name):
         other_start = content.index("Other:")
 
         # Extract text blocks
-        specs_str = content[specs_start:names_start - + len("Names:")].strip()
+        specs_str = content[specs_start:names_start - len("Names:")].strip()
         names_str = content[names_start:other_start].strip()
         other_str = content[other_start + len("Other:"):].strip()
 
