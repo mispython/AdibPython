@@ -1,86 +1,154 @@
-import saspy
-import pandas as pd
+DATA _NULL_;                        
+  INFILE "/sasdata/rawdata/ln/BILL_MST*_&yyyymmdd" END=LAST MISSOVER LRECL=200 RECFM=F
+  ;                   
+    INPUT @1   BILL_ACCT_NO     S370FPD6.
+          @7   BILL_NOTE_NO     S370FPD3.
+          @10  BILL_DUE_DATE    S370FPD6.
+          @16  BILL_PAID_DATE   S370FPD6.
+          @22  BILL_DAYS_LATE   S370FPD2.
+          @24  BILL_NOTE_TYPE   S370FPD2.
+          @26  BILL_COST_CENTER S370FPD4.
+          @30  BILL_TOT_BILLED  S370FPD8.
+          @38  BILL_PRIN_BILLED S370FPD8.
+          @46  BILL_INT_BILLED  S370FPD8.
+          @54  BILL_ESC_BILLED  S370FPD8.
+          @62  BILL_FEE_BILLED  S370FPD8.
+          @70  BILL_TOT_BNP     S370FPD8.
+          @78  BILL_PRIN_BNP    S370FPD8.
+          @86  BILL_INT_BNP     S370FPD8.  
+          @94  BILL_ESC_BNP     S370FPD8.  
+          @102 BILL_FEE_BNP     S370FPD8.  
+          @110 FILLER           $EBCDIC91.
+          ;
+RUN;
+
+
+
+
+
+
+
+
+import re
+import pprint
+from collections import defaultdict
 import os
 
-from datetime import datetime, timedelta
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-
-import polars as pl
-import os
-import duckdb
-from datetime import datetime, timedelta
-from pathlib import Path
-from sas7bdat import SAS7BDAT
-
-sas = saspy.SASsession()
-
-batch_dt = datetime.strptime("2025-10-22 00:00:00", '%Y-%m-%d %H:%M:%S')
-batch_dt_str = batch_dt.strftime("%Y%m%d")
-day = (batch_dt + timedelta(days=1)).day 
-one_week_ago = batch_dt - timedelta(days=1)
-
-# month and year
-day_str = f"{batch_dt.day:02d}"
-month_str = f"{batch_dt.month:02d}"
-year_str = f"{batch_dt.year % 100:02d}"
-prevday_str = f"{one_week_ago.day:02d}"
-prevmonth_str = f"{one_week_ago.month:02d}"
-prevyear_str = f"{one_week_ago.year % 100:02d}"
-
-
-def assign_libname(lib_name, sas_path):
-    log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
-    return log
-
-def drop_table(lib_name, cur_data):
-
-    sas_code = f"""
-            %macro drop_if_exists(lib=work, table=);
-                %if %sysfunc(exist(&lib..&table)) %then %do;
-                    proc sql;
-                        drop table &lib..&table;
-                    quit;
-                %end;
-            %mend;
-
-            %drop_if_exists(lib={lib_name}, table={cur_data});
-        """
-    log = sas.submit(sas_code)
-
-    return log
-
-def set_data(df, lib_name, cur_data, prev_data):
-    sas.df2sd(df,table=cur_data, libref='work')
-
-    log = sas.submit(f"""
-                data {lib_name}.{cur_data};
-                   set {lib_name}.{prev_data}(obs=0) work.{cur_data};
-                run;
-            """)
-
-    return log
+def generate_layout_file(field_layout_file, output_dir='.'):
+    if not os.path.exists(field_layout_file):
+        raise FileNotFoundError(f"Field Config File not found in {field_layout_file}")
     
-assign_libname("ln" , "/restore/pythontbc")
+    try:
+        with open(field_layout_file, 'r', encoding='utf-8') as f:
+            sas_input_code = f.read()
 
-prev_data = f"summ1{prevyear_str}{prevmonth_str}{prevday_str}"
-cur_data  = f"summ1{year_str}{month_str}{day_str}"
-iprev_data = f"summ2{prevyear_str}{prevmonth_str}{prevday_str}"
-icur_data  = f"summ2{year_str}{month_str}{day_str}"
+        lrecl_pattern = re.compile(r'lrecl\s*=\s*(\d+)', re.IGNORECASE)
+        lrecl_match = lrecl_pattern.search(sas_input_code)
+        if not lrecl_match:
+            raise ValueError("Could not find LRECL in the code")
+        lrecl = int(lrecl_match.group(1))
 
-# ELDS_DATA_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/ELDS/output")
-# OUTPUT_DATA_PATH = Path(f"{ELDS_DATA_PATH}/year={batch_dt.year}/month={batch_dt.month:02d}/day={batch_dt.day:02d}")
+        layout = {}
+        input_line_pattern = re.compile(r'@\s*(\d+)\s+([A-Za-z0-9_]+)\s+([$\w\.]+)')
+        print(input_line_pattern)
+        range_line_pattern = re.compile(r'^\s*([A-Za-z0-9_]+)\s*(\$)?[ ]*(\d+)-(\d+)')
+        input_lines = sas_input_code.split('input')[1].split(";")[0]
 
-SUMM1_parquet = Path(f"/restore/pythontbc/SUMM1.parquet")
+        for line in input_lines.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            match = input_line_pattern.match(line)
+            print(match)
+            if match:
+                start_pos, field_name, informat_str = match.groups()
+                start_pos = int(start_pos)
 
-query = f"SELECT * FROM read_parquet('{SUMM1_parquet}')"
-summ1 = pl.from_pandas(duckdb.query(query).to_df())
+                spec = {}
+                byte_length = None
+                clean_informat = informat_str.strip('$.').upper()
 
-SUMM2_parquet = Path(f"/restore/pythontbc/SUMM2.parquet")
+                float_match = re.match(r'(\d+)\.(\d+)', clean_informat)
+                pd_match = re.match(r'S370FPD(\d+)(?:\.(\d+))?', clean_informat)
+                ebcdic_match = re.match(r'EBCDIC(\d+)', clean_informat)
+                integer_match = re.match(r'(\d+)\.', informat_str.upper())
+                string_match = re.match(r'\$(\d+)\.', informat_str.upper())
+                if pd_match:
+                    spec['type'] = 'packed'
+                    byte_length =  int(pd_match.group(1))
+                    decimals = pd_match.group(2)
+                    if decimals:
+                        spec['decimals'] = int(decimals)
+                elif ebcdic_match:
+                    spec['type'] = 'ebcdic'
+                    byte_length =  int(ebcdic_match.group(1))
+                elif float_match:
+                    spec['type'] = 'float'
+                    byte_length = int(float_match.group(1))
+                    spec['decimals'] = int(float_match.group(2))
+                elif integer_match:
+                    spec['type'] = 'integer'
+                    byte_length = int(clean_informat)
+                elif string_match:
+                    spec['type'] = 'string'
+                    byte_length = int(re.match(r'\$(\d+)', clean_informat).group(1))
+                elif re.match(r'YYMMDD(\d+)', clean_informat):
+                    spec['type'] = 'integer'
+                    byte_length = int(re.match(r'YYMMDD(\d+)', clean_informat).group(1))
 
-query = f"SELECT * FROM read_parquet('{SUMM2_parquet}')"
-summ2 = pl.from_pandas(duckdb.query(query).to_df())
+                if byte_length is None:
+                    print(f"Could not parse informat '{informat_str}' for field '{field_name}'. Skiping")     
+                    continue
 
-log1 = set_data(summ1, "ln", cur_data, prev_data)
-log1 = set_data(summ2, "ln", icur_data, iprev_data)
+                spec['slice'] = slice(start_pos - 1, start_pos - 1 + byte_length)
+                layout[field_name] = spec
+            elif match := range_line_pattern.match(line):
+                field_name, dollar_sign, start_pos_str, end_pos_str = match.groups()
+                start_pos = int(start_pos_str)
+                end_pos = int(end_pos_str)
+
+                spec = {}
+                byte_length = end_pos - start_pos - 1
+
+                if dollar_sign:
+                    spec['type'] = 'string'
+                else:
+                    spec['type'] = 'integer'
+
+                spec['slice'] = slice(start_pos - 1, end_pos)
+                layout[field_name] = spec
+            else:
+                print(f"Skipping line: {line} does not match defined INPUT format")
+                
+
+        output_filename = f"{os.path.basename(field_layout_file).rsplit('.' , 1)[0]}_layout.py"
+        output_layout_path = os.path.join(output_dir, output_filename)
+
+        formatted_layout_string = pprint.pformat(layout, sort_dicts=False)
+
+        with open(output_layout_path, 'w', encoding='utf-8') as f:
+            f.write(f"LRECL = {lrecl}\n\n")
+            f.write(f"LAYOUT = {formatted_layout_string}\n")
+        print(f"Successfully generated layout file to {output_layout_path}")
+    except Exception as e:
+        print(f"Error generating layout file: {e}")
+
+
+FIELD_LAYOUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/FIELDS_LAYOUT"
+LAYOUT_OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
+
+if not os.path.exists(LAYOUT_OUTPUT_DIR):
+    os.makedirs(LAYOUT_OUTPUT_DIR)
+    
+if __name__ == "__main__":
+    try:
+        for filename in os.listdir(FIELD_LAYOUT_PATH):
+            if filename.endswith(".txt"):
+                file_path = os.path.join(FIELD_LAYOUT_PATH, filename)
+                try:
+                    generate_layout_file(file_path, output_dir=LAYOUT_OUTPUT_DIR)
+                except Exception as e:
+                    print(f"Error generating layout {filename}: {e}")
+    except FileNotFoundError as e:
+        print(f"Error path not found: {e}")
+    print(f"Completed generating layout file.")
