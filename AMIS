@@ -1,20 +1,226 @@
-LRECL = 200
+import os
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import mmap
+import numpy as np
+from numba import njit
+import time
+from datetime import datetime
 
-LAYOUT = {'BILL_ACCT_NO': {'type': 'packed', 'slice': slice(0, 6, None)},
- 'BILL_NOTE_NO': {'type': 'packed', 'slice': slice(6, 9, None)},
- 'BILL_DUE_DATE': {'type': 'packed', 'slice': slice(9, 15, None)},
- 'BILL_PAID_DATE': {'type': 'packed', 'slice': slice(15, 21, None)},
- 'BILL_DAYS_LATE': {'type': 'packed', 'slice': slice(21, 23, None)},
- 'BILL_NOTE_TYPE': {'type': 'packed', 'slice': slice(23, 25, None)},
- 'BILL_COST_CENTER': {'type': 'packed', 'slice': slice(25, 29, None)},
- 'BILL_TOT_BILLED': {'type': 'packed', 'slice': slice(29, 37, None)},
- 'BILL_PRIN_BILLED': {'type': 'packed', 'slice': slice(37, 45, None)},
- 'BILL_INT_BILLED': {'type': 'packed', 'slice': slice(45, 53, None)},
- 'BILL_ESC_BILLED': {'type': 'packed', 'slice': slice(53, 61, None)},
- 'BILL_FEE_BILLED': {'type': 'packed', 'slice': slice(61, 69, None)},
- 'BILL_TOT_BNP': {'type': 'packed', 'slice': slice(69, 77, None)},
- 'BILL_PRIN_BNP': {'type': 'packed', 'slice': slice(77, 85, None)},
- 'BILL_INT_BNP': {'type': 'packed', 'slice': slice(85, 93, None)},
- 'BILL_ESC_BNP': {'type': 'packed', 'slice': slice(93, 101, None)},
- 'BILL_FEE_BNP': {'type': 'packed', 'slice': slice(101, 109, None)},
- 'FILLER': {'type': 'ebcdic', 'slice': slice(109, 200, None)}}
+# Global Paths
+input_folder_path = "/sasdata/rawdata/ln"
+output_folder_path = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output"
+var_path = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
+
+batch_dt = datetime.strptime("2025-11-14 00:00:00", '%Y-%m-%d %H:%M:%S')
+batch_dt_str = batch_dt.strftime("%Y%m%d")
+
+# Get file names to export Parquet
+def get_file_names(config_path, directory_path):
+    file_names = []
+    required_names = []
+
+    try:
+        files = os.listdir(directory_path)
+        required_files = os.listdir(config_path)
+        
+        for r_file in required_files:
+            if r_file.endswith('_layout.py'):
+                r_name = r_file.replace('_layout.py', '')
+                required_names.append(r_name)
+        
+        print(f"Required base names: {required_names}")
+        print(f"Looking for files with date: {batch_dt_str}\n")
+
+        for file in files:
+            full_path = os.path.join(directory_path, file)
+            if os.path.isfile(full_path):
+                parts = file.rsplit('_', 1)
+                if len(parts) > 1:
+                    base_name = parts[0]
+                    date_part = parts[1].rsplit('.', 1)[0]
+                    
+                    if base_name in required_names and date_part == batch_dt_str:
+                        file_names.append((file, base_name))
+                        print(f"✓ Matched: {file}")
+
+        if not file_names:
+            raise ValueError(f"No files found with date: {batch_dt_str}")
+
+        return file_names
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return []
+
+# Load layout from _layout.py file
+def load_layout(var_path, base_name):
+    layout_file = os.path.join(var_path, f"{base_name}_layout.py")
+    
+    if not os.path.exists(layout_file):
+        raise FileNotFoundError(f"Layout file not found: {layout_file}")
+    
+    # Read and execute the layout file
+    namespace = {}
+    with open(layout_file, 'r') as f:
+        exec(f.read(), namespace)
+    
+    lrecl = namespace['LRECL']
+    layout = namespace['LAYOUT']
+    
+    return lrecl, layout
+
+# Check if table exists and delete if present
+def check_and_delete_table(output_file):
+    if os.path.exists(output_file):
+        print(f"Table {output_file} exists. Deleting...")
+        os.remove(output_file)
+        print(f"Deleted: {output_file}")
+
+# Packed Decimal Decoder using numba
+@njit
+def decode_packed_decimal(data, start, end, decimals=0):
+    """Decode a single packed decimal field"""
+    field = data[start:end]
+    value = 0
+    
+    # Process all bytes except the last
+    for b in field[:-1]:
+        value = value * 100 + ((b >> 4) * 10 + (b & 0x0F))
+    
+    # Process last byte (includes sign)
+    sign = field[-1] & 0x0F
+    value = value * 10 + ((field[-1] >> 4) & 0x0F)
+    
+    # Apply sign
+    if sign == 0x0D or sign == 0x0B:
+        value = -value
+    
+    # Apply decimals
+    if decimals > 0:
+        value = value / (10 ** decimals)
+    
+    return value
+
+# Decode EBCDIC string
+def decode_ebcdic(data, start, end):
+    """Decode an EBCDIC field"""
+    return data[start:end].tobytes().decode('cp037').strip().rstrip('\x00')
+
+# Read binary file to array
+def load_binary_to_array(input_file, lrecl):
+    with open(input_file, "rb") as f:
+        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        num_records = mm.size() // lrecl
+        
+        data = np.frombuffer(mm, dtype=np.uint8)
+        data = data[:num_records * lrecl]
+        data = data.reshape((num_records, lrecl))
+    
+    return data
+
+# Process all columns based on layout
+def process_file(input_file, lrecl, layout):
+    print(f"Loading binary file: {input_file}")
+    data = load_binary_to_array(input_file, lrecl)
+    num_records = data.shape[0]
+    print(f"Number of records: {num_records:,}")
+    
+    result = {}
+    
+    for field_name, spec in layout.items():
+        print(f"  Processing: {field_name}")
+        field_type = spec['type']
+        field_slice = spec['slice']
+        decimals = spec.get('decimals', 0)
+        
+        if field_type == 'packed':
+            # Decode packed decimal
+            values = []
+            for i in range(num_records):
+                val = decode_packed_decimal(
+                    data[i], 
+                    field_slice.start, 
+                    field_slice.stop,
+                    decimals
+                )
+                values.append(val)
+            result[field_name] = values
+            
+        elif field_type == 'ebcdic':
+            # Decode EBCDIC string
+            values = []
+            for i in range(num_records):
+                val = decode_ebcdic(data[i], field_slice.start, field_slice.stop)
+                values.append(val)
+            result[field_name] = values
+            
+        else:
+            print(f"    Warning: Unknown type '{field_type}' for field '{field_name}'")
+            result[field_name] = [None] * num_records
+    
+    return pd.DataFrame(result)
+
+# Save DataFrame to Parquet
+def save_to_parquet(df, output_file):
+    if not df.empty:
+        try:
+            table = pa.Table.from_pandas(df, preserve_index=False)
+            pq.write_table(table, output_file)
+            print(f"✓ Data saved to {output_file}\n")
+        except Exception as e:
+            print(f"✗ Error saving data: {e}\n")
+    else:
+        print("No data to save.\n")
+
+if __name__ == "__main__":
+    print("="*60)
+    print("STARTING ETL PROCESSING")
+    print("="*60 + "\n")
+    
+    # Get files to process
+    files = get_file_names(var_path, input_folder_path)
+    
+    if not files:
+        print("No files to process!")
+        exit(1)
+    
+    print(f"\nFound {len(files)} file(s) to process\n")
+    print("="*60 + "\n")
+    
+    # Process each file
+    for file_name, base_name in files:
+        print(f"Processing: {file_name}")
+        print("-"*60)
+        
+        input_file = os.path.join(input_folder_path, file_name)
+        output_file_name = f"STG_LN_{base_name.upper()}"
+        output_file = os.path.join(output_folder_path, f"{output_file_name}.parquet")
+        
+        try:
+            # Load layout
+            lrecl, layout = load_layout(var_path, base_name)
+            print(f"Layout loaded: LRECL={lrecl}, Fields={len(layout)}")
+            
+            # Delete existing output
+            check_and_delete_table(output_file)
+            
+            # Process file
+            t0 = time.time()
+            df = process_file(input_file, lrecl, layout)
+            t1 = time.time()
+            print(f"Processing time: {t1-t0:.2f} seconds")
+            
+            # Save to Parquet
+            save_to_parquet(df, output_file)
+            
+        except Exception as e:
+            print(f"✗ Error processing {file_name}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        print("="*60 + "\n")
+    
+    print("ETL PROCESSING COMPLETE")
+    print("="*60)
