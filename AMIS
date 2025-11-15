@@ -1,22 +1,6 @@
-import os
-
-layout_dir = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
-os.chdir(layout_dir)
-
-# Create symbolic links
-for i in range(1, 11):
-    link_name = f"BILL_MST{i:02d}_layout.py"
-    target = "BILL_MST_layout.py"
-    
-    # Remove if exists
-    if os.path.exists(link_name):
-        os.remove(link_name)
-    
-    # Create symlink
-    os.symlink(target, link_name)
-    print(f"Created: {link_name} -> {target}")
-
-print("\nDone! Verifying:")
-for f in sorted(os.listdir(".")):
-    if f.startswith("BILL_MST"):
-        print(f"  {f}")
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_EXCT_LN_BILL.py", line 234, in <module>
+    column_specs, column_names, column_meta, column_types, column_subtypes, column_decimals, lrecl = load_variables(var_path, base_name)
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_EXCT_LN_BILL.py", line 71, in load_variables
+    raise FileNotFoundError(f"Input file '{input_path}' not found.")
+FileNotFoundError: Input file '/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT/BILL_MST05_output.txt' not found.
