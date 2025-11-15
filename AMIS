@@ -1,3 +1,8 @@
-df_src = pd.read_parquet('/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/STG_LN_BILL_MST.parquet')
-sas.df2sd(df_src,table='summ1251022',libref='output')
-print(df_src.head(10))
+nly this fields having issue 
+                                     __________________________________________________________                                     
+                                                ||  Base Value           Compare Value                                              
+                                            Obs ||  LN_UTILISE_LOCAT_CD   LN_UTILISE_LOCAT_CD                                       
+                                      ________  ||  _____                 __________                                                
+                                                ||                                                                                  
+                                            15  ||  00004                 04                                                        
+                                            20  ||  00012                 12                                                        
