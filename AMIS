@@ -16,118 +16,56 @@ var_path = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
 batch_dt = datetime.strptime("2025-11-14 00:00:00", '%Y-%m-%d %H:%M:%S')
 batch_dt_str = batch_dt.strftime("%Y%m%d")
 
-# Get file names to export Parquet
-def get_file_names(config_path, directory_path):
+def get_matching_files(layout_path, data_path, batch_date):
     """
-    Match data files to layout files based on base pattern.
-    E.g., BILL_MST_layout.py matches BILL_MST01_date, BILL_MST02_date, etc.
+    Find data files that match layout files.
+    Example: BILL_MST_layout.py matches BILL_MST01_20251114, BILL_MST02_20251114, etc.
+    Returns: {base_name: [list of matching data files]}
     """
-    file_groups = {}
+    result = {}
     
-    try:
-        # Get all layout files
-        layout_files = [f for f in os.listdir(config_path) if f.endswith('_layout.py')]
+    # Get all layout files
+    layout_files = [f for f in os.listdir(layout_path) if f.endswith('_layout.py')]
+    
+    for layout_file in layout_files:
+        base_name = layout_file.replace('_layout.py', '')
+        print(f"Looking for files matching: {base_name}")
         
-        # Extract base names from layout files
-        layout_bases = {}
-        for layout_file in layout_files:
-            base_name = layout_file.replace('_layout.py', '')
-            layout_bases[base_name] = layout_file
-        
-        print(f"Layout files found: {list(layout_bases.keys())}")
-        print(f"Looking for files with date: {batch_dt_str}\n")
-        
-        # Get all data files
-        data_files = [f for f in os.listdir(directory_path) 
-                     if os.path.isfile(os.path.join(directory_path, f))]
-        
-        # Match data files to layout files
-        for data_file in data_files:
-            parts = data_file.rsplit('_', 1)
-            if len(parts) < 2:
-                continue
-                
-            date_part = parts[1].rsplit('.', 1)[0]
-            if date_part != batch_dt_str:
+        # Find all data files that start with this base name and have the correct date
+        matching_files = []
+        for data_file in os.listdir(data_path):
+            full_path = os.path.join(data_path, data_file)
+            if not os.path.isfile(full_path):
                 continue
             
-            # Check if this file matches any layout base
-            # E.g., BILL_MST01_20251114 should match BILL_MST layout
-            for layout_base in layout_bases.keys():
-                if parts[0].startswith(layout_base):
-                    print(f"✓ Matched: {data_file} -> {layout_base}_layout.py")
-                    
-                    if layout_base not in file_groups:
-                        file_groups[layout_base] = []
-                    file_groups[layout_base].append(data_file)
-                    break
+            # Check if file starts with base_name and contains the date
+            if data_file.startswith(base_name) and batch_date in data_file:
+                matching_files.append(data_file)
+                print(f"  ✓ Found: {data_file}")
         
-        if not file_groups:
-            raise ValueError(f"No files found with date: {batch_dt_str}")
-        
-        return file_groups
+        if matching_files:
+            # Sort files for consistent processing order
+            matching_files.sort()
+            result[base_name] = matching_files
+    
+    return result
 
-    except Exception as e:
-        print(f"Error: {e}")
-        return {}
-
-# Load layout from _layout.py file
-def load_layout(var_path, base_name):
-    layout_file = os.path.join(var_path, f"{base_name}_layout.py")
+def load_layout(layout_path, base_name):
+    """Load layout configuration from _layout.py file"""
+    layout_file = os.path.join(layout_path, f"{base_name}_layout.py")
     
     if not os.path.exists(layout_file):
         raise FileNotFoundError(f"Layout file not found: {layout_file}")
     
-    # Read and execute the layout file
     namespace = {}
     with open(layout_file, 'r') as f:
         exec(f.read(), namespace)
     
-    lrecl = namespace['LRECL']
-    layout = namespace['LAYOUT']
-    
-    return lrecl, layout
+    return namespace['LRECL'], namespace['LAYOUT']
 
-# Check if table exists and delete if present
-def check_and_delete_table(output_file):
-    if os.path.exists(output_file):
-        print(f"Table {output_file} exists. Deleting...")
-        os.remove(output_file)
-        print(f"Deleted: {output_file}")
-
-# Packed Decimal Decoder using numba
-@njit
-def decode_packed_decimal(data, start, end, decimals=0):
-    """Decode a single packed decimal field"""
-    field = data[start:end]
-    value = 0
-    
-    # Process all bytes except the last
-    for b in field[:-1]:
-        value = value * 100 + ((b >> 4) * 10 + (b & 0x0F))
-    
-    # Process last byte (includes sign)
-    sign = field[-1] & 0x0F
-    value = value * 10 + ((field[-1] >> 4) & 0x0F)
-    
-    # Apply sign
-    if sign == 0x0D or sign == 0x0B:
-        value = -value
-    
-    # Apply decimals
-    if decimals > 0:
-        value = value / (10 ** decimals)
-    
-    return value
-
-# Decode EBCDIC string
-def decode_ebcdic(data, start, end):
-    """Decode an EBCDIC field"""
-    return data[start:end].tobytes().decode('cp037').strip().rstrip('\x00')
-
-# Read binary file to array
-def load_binary_to_array(input_file, lrecl):
-    with open(input_file, "rb") as f:
+def load_binary_file(file_path, lrecl):
+    """Load binary file into numpy array"""
+    with open(file_path, "rb") as f:
         mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         num_records = mm.size() // lrecl
         
@@ -137,23 +75,45 @@ def load_binary_to_array(input_file, lrecl):
     
     return data
 
-# Process all columns based on layout
-def process_file(input_file, lrecl, layout):
-    print(f"Loading binary file: {input_file}")
-    data = load_binary_to_array(input_file, lrecl)
+@njit
+def decode_packed_decimal(data, start, end, decimals=0):
+    """Decode packed decimal field"""
+    field = data[start:end]
+    value = 0
+    
+    for b in field[:-1]:
+        value = value * 100 + ((b >> 4) * 10 + (b & 0x0F))
+    
+    sign = field[-1] & 0x0F
+    value = value * 10 + ((field[-1] >> 4) & 0x0F)
+    
+    if sign == 0x0D or sign == 0x0B:
+        value = -value
+    
+    if decimals > 0:
+        value = value / (10 ** decimals)
+    
+    return value
+
+def decode_ebcdic(data, start, end):
+    """Decode EBCDIC string field"""
+    return data[start:end].tobytes().decode('cp037').strip().rstrip('\x00')
+
+def process_single_file(file_path, lrecl, layout):
+    """Process one binary file and return DataFrame"""
+    print(f"    Loading: {os.path.basename(file_path)}")
+    data = load_binary_file(file_path, lrecl)
     num_records = data.shape[0]
-    print(f"Number of records: {num_records:,}")
+    print(f"    Records: {num_records:,}")
     
     result = {}
     
     for field_name, spec in layout.items():
-        print(f"  Processing: {field_name}")
         field_type = spec['type']
         field_slice = spec['slice']
         decimals = spec.get('decimals', 0)
         
         if field_type == 'packed':
-            # Decode packed decimal
             values = []
             for i in range(num_records):
                 val = decode_packed_decimal(
@@ -166,7 +126,6 @@ def process_file(input_file, lrecl, layout):
             result[field_name] = values
             
         elif field_type == 'ebcdic':
-            # Decode EBCDIC string
             values = []
             for i in range(num_records):
                 val = decode_ebcdic(data[i], field_slice.start, field_slice.stop)
@@ -174,98 +133,87 @@ def process_file(input_file, lrecl, layout):
             result[field_name] = values
             
         else:
-            print(f"    Warning: Unknown type '{field_type}' for field '{field_name}'")
             result[field_name] = [None] * num_records
     
     return pd.DataFrame(result)
 
-# Save DataFrame to Parquet
-def save_to_parquet(df, output_file):
-    if not df.empty:
-        try:
-            table = pa.Table.from_pandas(df, preserve_index=False)
-            pq.write_table(table, output_file)
-            print(f"✓ Data saved to {output_file}\n")
-        except Exception as e:
-            print(f"✗ Error saving data: {e}\n")
-    else:
-        print("No data to save.\n")
+def save_parquet(df, output_path):
+    """Save DataFrame to parquet file"""
+    if df.empty:
+        print("    Warning: No data to save")
+        return
+    
+    try:
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        pq.write_table(table, output_path)
+        print(f"    ✓ Saved: {output_path}")
+        print(f"    Total records: {len(df):,}\n")
+    except Exception as e:
+        print(f"    ✗ Error saving: {e}\n")
 
 if __name__ == "__main__":
-    print("="*60)
-    print("STARTING ETL PROCESSING")
-    print("="*60 + "\n")
+    print("="*70)
+    print("ETL PROCESSING - COMBINE MULTIPLE FILES INTO ONE PARQUET")
+    print("="*70 + "\n")
     
-    # Get files to process
-    files = get_file_names(var_path, input_folder_path)
+    # Find all matching files grouped by base name
+    file_groups = get_matching_files(var_path, input_folder_path, batch_dt_str)
     
-    if not files:
-        print("No files to process!")
+    if not file_groups:
+        print("✗ No matching files found!")
         exit(1)
     
-    print(f"\nFound {len(files)} file(s) to process\n")
-    
-    # Group files by base pattern (e.g., BILL_MST01, BILL_MST02 -> BILL_MST)
-    file_groups = {}
-    for file_name, base_name in files:
-        # Remove trailing numbers to get the true base name
-        # BILL_MST01 -> BILL_MST, BILL_MST02 -> BILL_MST
-        import re
-        true_base = re.sub(r'\d+, '', base_name)
-        
-        if true_base not in file_groups:
-            file_groups[true_base] = []
-        file_groups[true_base].append((file_name, base_name))
-    
-    print(f"File groups to combine: {list(file_groups.keys())}\n")
-    print("="*60 + "\n")
+    print(f"\n{'='*70}\n")
     
     # Process each group
-    for true_base, group_files in file_groups.items():
-        print(f"Processing group: {true_base}")
-        print(f"Combining {len(group_files)} files into one output")
-        print("-"*60)
-        
-        output_file_name = f"STG_LN_{true_base.upper()}"
-        output_file = os.path.join(output_folder_path, f"{output_file_name}.parquet")
-        
-        # Delete existing output
-        check_and_delete_table(output_file)
-        
-        all_dataframes = []
+    for base_name, data_files in file_groups.items():
+        print(f"Processing: {base_name}")
+        print(f"Files to combine: {len(data_files)}")
+        print("-"*70)
         
         try:
-            # Load layout from first file (they all share the same layout)
-            first_base_name = group_files[0][1]
-            lrecl, layout = load_layout(var_path, first_base_name)
-            print(f"Layout loaded: LRECL={lrecl}, Fields={len(layout)}\n")
+            # Load layout
+            lrecl, layout = load_layout(var_path, base_name)
+            print(f"Layout: LRECL={lrecl}, Fields={len(layout)}\n")
             
-            # Process each file in the group
-            for idx, (file_name, base_name) in enumerate(group_files, 1):
-                print(f"[{idx}/{len(group_files)}] Processing: {file_name}")
-                input_file = os.path.join(input_folder_path, file_name)
+            # Process all files and collect DataFrames
+            all_dfs = []
+            total_time = 0
+            
+            for idx, data_file in enumerate(data_files, 1):
+                print(f"  [{idx}/{len(data_files)}] {data_file}")
+                file_path = os.path.join(input_folder_path, data_file)
                 
                 t0 = time.time()
-                df = process_file(input_file, lrecl, layout)
+                df = process_single_file(file_path, lrecl, layout)
                 t1 = time.time()
                 
-                print(f"    Records: {len(df):,}, Time: {t1-t0:.2f}s\n")
-                all_dataframes.append(df)
+                print(f"    Time: {t1-t0:.2f}s\n")
+                total_time += (t1 - t0)
+                all_dfs.append(df)
             
-            # Combine all dataframes
-            print(f"Combining {len(all_dataframes)} dataframes...")
-            combined_df = pd.concat(all_dataframes, ignore_index=True)
-            print(f"Total records: {len(combined_df):,}\n")
+            # Combine all DataFrames
+            print(f"  Combining {len(all_dfs)} DataFrames...")
+            combined_df = pd.concat(all_dfs, ignore_index=True)
+            print(f"  Combined records: {len(combined_df):,}")
+            print(f"  Total processing time: {total_time:.2f}s\n")
             
-            # Save combined data to Parquet
-            save_to_parquet(combined_df, output_file)
+            # Save to parquet
+            output_file = os.path.join(output_folder_path, f"STG_LN_{base_name.upper()}.parquet")
+            
+            # Delete existing file if present
+            if os.path.exists(output_file):
+                os.remove(output_file)
+                print(f"  Deleted existing: {output_file}")
+            
+            save_parquet(combined_df, output_file)
             
         except Exception as e:
-            print(f"✗ Error processing group {true_base}: {e}")
+            print(f"✗ Error processing {base_name}: {e}")
             import traceback
             traceback.print_exc()
         
-        print("="*60 + "\n")
+        print("="*70 + "\n")
     
-    print("ETL PROCESSING COMPLETE")
-    print("="*60)
+    print("✓ ETL PROCESSING COMPLETE")
+    print("="*70)
