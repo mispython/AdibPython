@@ -1,52 +1,20 @@
-import os
-import sys
-import dask.config
-from dask.distributed import Client, LocalCluster
-from Data_Warehouse.Common.Jobs.FILE_READER import run_file_reader
-from Data_Warehouse.Common.Jobs.GET_BATCH_DATE import get_batch_date_dwh, format_date
-import dask
-sys.dont_write_bytecode = True
+LRECL = 200
 
-if __name__ == "__main__":
-    batch_dt = get_batch_date_dwh('CIS')
-    batch_dt_str = format_date(batch_dt, "%Y%m%d")
-    APPL_KEY   = 'cis'
-    APPL_NAME  = 'CIS'
-    BATCH_MODE = sys.argv[1]
-    
-    config = {
-        'input_dir': f"/sasdata/rawdata/{APPL_KEY}",
-        'output_dir' : f"/parquet/dwh/{APPL_NAME}/staging",
-        'layout_dir' : f"/sas/python/virt_edw/Data_Warehouse/{APPL_NAME}/PARQUET_LAYOUT/{BATCH_MODE}",
-        'status_file_dir' : f"/sas/python/virt_edw/Data_Warehouse/{APPL_NAME}/STATUS",
-        'batch_date' : batch_dt_str,
-        'n_workers' : 20,
-        'threads_per_worker' : 3,
-        'memory_limit': '256GB',
-        'applname': APPL_NAME,
-	'batch_mode': f"{BATCH_MODE}"
-    }
-
-    dask.config.set({"distributed.worker.timeouts.connect":"180s"})
-    dask.config.set({"distributed.worker.timeouts.termination":"120s"})
-
-    cluster  = LocalCluster(
-        n_workers=config['n_workers'],
-        threads_per_worker=config['threads_per_worker'],
-        memory_limit=config['memory_limit']
-    )
-    client = Client(cluster)
-
-    try:
-        run_file_reader(
-            input_dir=config['input_dir'], 
-            output_dir=config['output_dir'], 
-            layout_dir=config['layout_dir'], 
-            batch_dt_str=config['batch_date'], 
-            status_file_dir=config['status_file_dir'],
-            applname=config['applname'],
-            batch_mode = config['batch_mode']        
-        )
-    finally:
-        client.close()
-        client.shutdown()
+LAYOUT = {'BILL_ACCT_NO': {'type': 'packed', 'slice': slice(0, 6, None)},
+ 'BILL_NOTE_NO': {'type': 'packed', 'slice': slice(6, 9, None)},
+ 'BILL_DUE_DATE': {'type': 'packed', 'slice': slice(9, 15, None)},
+ 'BILL_PAID_DATE': {'type': 'packed', 'slice': slice(15, 21, None)},
+ 'BILL_DAYS_LATE': {'type': 'packed', 'slice': slice(21, 23, None)},
+ 'BILL_NOTE_TYPE': {'type': 'packed', 'slice': slice(23, 25, None)},
+ 'BILL_COST_CENTER': {'type': 'packed', 'slice': slice(25, 29, None)},
+ 'BILL_TOT_BILLED': {'type': 'packed', 'slice': slice(29, 37, None)},
+ 'BILL_PRIN_BILLED': {'type': 'packed', 'slice': slice(37, 45, None)},
+ 'BILL_INT_BILLED': {'type': 'packed', 'slice': slice(45, 53, None)},
+ 'BILL_ESC_BILLED': {'type': 'packed', 'slice': slice(53, 61, None)},
+ 'BILL_FEE_BILLED': {'type': 'packed', 'slice': slice(61, 69, None)},
+ 'BILL_TOT_BNP': {'type': 'packed', 'slice': slice(69, 77, None)},
+ 'BILL_PRIN_BNP': {'type': 'packed', 'slice': slice(77, 85, None)},
+ 'BILL_INT_BNP': {'type': 'packed', 'slice': slice(85, 93, None)},
+ 'BILL_ESC_BNP': {'type': 'packed', 'slice': slice(93, 101, None)},
+ 'BILL_FEE_BNP': {'type': 'packed', 'slice': slice(101, 109, None)},
+ 'FILLER': {'type': 'ebcdic', 'slice': slice(109, 200, None)}}
