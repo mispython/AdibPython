@@ -1,245 +1,225 @@
-import os
-import ast
-import pandas as pd
-import io
-import pyarrow as pa
-import pyarrow.parquet as pq
-import mmap
-import numpy as np
-from numba import njit
-import time
 import re
-from datetime import datetime,timedelta
-from Data_Warehouse.Common.Jobs.GET_BATCH_DATE import get_batch_date_dwh
-import sys
+import pprint
+from collections import defaultdict
+import os
+import shutil
+from datetime import datetime
 
-#FOLDER_NAME = sys.argv[1]
-#print("FOLDER NAME = ", FOLDER_NAME)
-
-# Global Paths
-input_folder_path = "/sasdata/rawdata/ln"
-output_folder_path = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output"
-var_path = f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
-
-batch_dt = datetime.strptime("2025-11-14 00:00:00", '%Y-%m-%d %H:%M:%S')
-#batch_dt = datetime.strptime(batch_dt, '%Y-%m-%d %H:%M:%S')-timedelta(days=1)
-batch_dt_str = batch_dt.strftime("%Y%m%d")
-
-# Get file names to export Parquet
-def get_file_names(config_path, directory_path):
-    file_names = []
-    required_names = []
-
-    try:
-        files = os.listdir(directory_path)
-
-        required_files = os.listdir(config_path)
-        for r_file in required_files:
-            r_name = r_file.rsplit('_', 1)[0]
-            required_names.append(r_name)
-
-        for file in files:
-            full_path = os.path.join(directory_path, file)
-
-            # Only take file names not folders
-            if os.path.isfile(full_path):
-                base_name = file.rsplit('_', 1)[0]
-                parts = file.rsplit('_', 1)
-                if base_name in required_names and len(parts) > 1:
-                    if parts[1].rsplit('.', 1)[0] == batch_dt_str:
-                        file_names.append((file, base_name))
-
-        if not file_names:
-            raise ValueError(f"No files found with date: {batch_dt_str}")
-
-        return file_names
-
-    except FileNotFoundError:
-        print(f"Error: The directory '{directory_path}' was not found")
-        return []
+def generate_layout_file(field_layout_file, output_dir='.'):
+    if not os.path.exists(field_layout_file):
+        raise FileNotFoundError(f"Field Config File not found in {field_layout_file}")
     
-    except Exception as e:
-        print(f"Error: {e}")
-        return []
-    
-# Get column details from mapping files
-def load_variables(var_path, script_name):
-    # Get current script name without extension
-    input_path = os.path.join(f"{var_path}", f"{script_name}_output.txt")
-
-    if not os.path.exists(input_path):
-        raise FileNotFoundError(f"Input file '{input_path}' not found.")
-
-    with open(input_path, 'r') as file:
-        content = file.read()
-
-     # Extract specs and names from text using simple markers
-    specs = []
-    names = []
-    other = []
     try:
+        with open(field_layout_file, 'r', encoding='utf-8') as f:
+            sas_input_code = f.read()
 
-        # Extract LRECL
-        lrecl_start = content.index("Lrecl:") + len("Lrecl:")
-        lrecl_end =content.index("Specs:")
-        lrecl_str = content[lrecl_start:lrecl_end].strip()
-        lrecl = int(lrecl_str)
+        lrecl_pattern = re.compile(r'lrecl\s*=\s*(\d+)', re.IGNORECASE)
+        lrecl_match = lrecl_pattern.search(sas_input_code)
+        if not lrecl_match:
+            raise ValueError("Could not find LRECL in the code")
+        lrecl = int(lrecl_match.group(1))
 
-       # Locate positions of the metadata sections
-        specs_start = content.index("Specs:") + len("Specs:")
-        names_start = content.index("Names:") + len("Names:")
-        other_start = content.index("Other:")
-
-        # Extract text blocks
-        specs_str = content[specs_start:names_start - + len("Names:")].strip()
-        names_str = content[names_start:other_start].strip()
-        other_str = content[other_start + len("Other:"):].strip()
-
-        # Safely evaluate to Python lists
-        specs = ast.literal_eval(f"[{specs_str}]")
-        names = ast.literal_eval(f"[{names_str}]")
-        other = ast.literal_eval(f"[{other_str}]")  # this will be list of strings like "ascii, numeric, 0"
-
-        # If needed, split `other` entries into individual parts:
-        column_types, column_subtypes, column_decimals = [], [], []
-        for entry in other:
-            col_type, subtype, decimal = [x.strip() for x in entry.split(",")]
-            column_types.append(col_type)
-            column_subtypes.append(subtype)
-            column_decimals.append(int(decimal)) 
-
-    except Exception as e:
-        raise ValueError(f"Failed to parse variable file: {e}")
-
-    return specs, names, other, column_types, column_subtypes, column_decimals, lrecl
-
-# Check if table exists and delete if present
-def check_and_delete_table(output_file):
-    if os.path.exists(output_file):
-        print(f"Table {output_file} exists. Deleting...")
-        os.remove(output_file)
-        print(f"Deleted: {output_file}")
-    else:
-        print(f"Table {output_file} does not exist.")
-
-# Packed Decimal Decoder using numba for faster processing
-@njit
-def decode_s370fpd_column(data: np.ndarray, starts: np.ndarray, ends: np.ndarray, decimals: int) -> np.ndarray:
-    n = data.shape[0]
-    result = np.empty(n, dtype = np.float64)
-
-    for i in range(n):
-        value = 0
-        field = data[i, starts[i]:ends[i]+1]
+        layout = {}
+        input_line_pattern = re.compile(r'@\s*(\d+)\s+([A-Za-z0-9_]+)\s+([$\w\.]+)')
+        range_line_pattern = re.compile(r'^\s*([A-Za-z0-9_]+)\s*(\$)?[ ]*(\d+)-(\d+)')
         
-        for b in field[:-1]:
-            value = value * 100 + ((b >> 4) * 10 + (b & 0x0F))
-        sign = field[-1] & 0x0F
-        value = value * 10 + ((field[-1] >> 4) & 0x0F)
-        if sign == 0x0D or sign == 0x0B:
-            value = -value
-        result[i] = value / (10 ** decimals)
-    return result
+        # Fixed: Use case-insensitive split and handle the extraction better
+        input_section_pattern = re.compile(r'INPUT\s+(.*?);', re.IGNORECASE | re.DOTALL)
+        input_match = input_section_pattern.search(sas_input_code)
+        
+        if not input_match:
+            raise ValueError("Could not find INPUT section in the SAS code")
+        
+        input_lines = input_match.group(1)
 
-# Decode EBCDIC columns
-def decode_ebcdic_column(data: np.ndarray, start: int, end: int) -> list:
-    return [data[i, start:end+1].tobytes().decode('cp037').strip().rstrip('\x00') for i in range(data.shape[0])]
+        for line in input_lines.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            match = input_line_pattern.match(line)
+            
+            if match:
+                start_pos, field_name, informat_str = match.groups()
+                start_pos = int(start_pos)
 
-# Read binary file to array
-def load_binary_to_array(input_file, lrecl):
-    with open(input_file, "rb") as f:
-        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        num_records = mm.size() // lrecl
+                spec = {}
+                byte_length = None
+                clean_informat = informat_str.strip('$.').upper()
 
-        # Read data into numpy array
-        data = np.frombuffer(mm, dtype = np.uint8)
-        data = data[:num_records * lrecl] # Trim
-        data = data.reshape((num_records, lrecl))
-    return data
+                float_match = re.match(r'(\d+)\.(\d+)', clean_informat)
+                pd_match = re.match(r'S370FPD(\d+)(?:\.(\d+))?', clean_informat)
+                ebcdic_match = re.match(r'EBCDIC(\d+)', clean_informat)
+                integer_match = re.match(r'(\d+)\.', informat_str.upper())
+                string_match = re.match(r'\$(\d+)\.', informat_str.upper())
+                
+                if pd_match:
+                    spec['type'] = 'packed'
+                    byte_length = int(pd_match.group(1))
+                    decimals = pd_match.group(2)
+                    if decimals:
+                        spec['decimals'] = int(decimals)
+                elif ebcdic_match:
+                    spec['type'] = 'ebcdic'
+                    byte_length = int(ebcdic_match.group(1))
+                elif float_match:
+                    spec['type'] = 'float'
+                    byte_length = int(float_match.group(1))
+                    spec['decimals'] = int(float_match.group(2))
+                elif integer_match:
+                    spec['type'] = 'integer'
+                    byte_length = int(clean_informat)
+                elif string_match:
+                    spec['type'] = 'string'
+                    byte_length = int(re.match(r'\$(\d+)', clean_informat).group(1))
+                elif re.match(r'YYMMDD(\d+)', clean_informat):
+                    spec['type'] = 'integer'
+                    byte_length = int(re.match(r'YYMMDD(\d+)', clean_informat).group(1))
 
-# If input file is in .txt, read using fixed width decoder
-def load_text_file(input_file, column_specs, column_names, column_decimals):
+                if byte_length is None:
+                    print(f"Could not parse informat '{informat_str}' for field '{field_name}'. Skipping")     
+                    continue
 
-    with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
-        data = f.read()
-        adj_column_specs = [(start, end+1) for start, end in column_specs]
+                spec['slice'] = slice(start_pos - 1, start_pos - 1 + byte_length)
+                layout[field_name] = spec
+            elif match := range_line_pattern.match(line):
+                field_name, dollar_sign, start_pos_str, end_pos_str = match.groups()
+                start_pos = int(start_pos_str)
+                end_pos = int(end_pos_str)
 
-        df = pd.read_fwf(io.StringIO(data), colspecs=adj_column_specs, names=column_names)
+                spec = {}
+                byte_length = end_pos - start_pos + 1
 
-    return df
+                if dollar_sign:
+                    spec['type'] = 'string'
+                else:
+                    spec['type'] = 'integer'
 
-# Decoding by columns
-def process_columns(data: np.ndarray, column_specs, column_names, column_types, column_subtypes, column_decimals):
-    result = {}
+                spec['slice'] = slice(start_pos - 1, end_pos)
+                layout[field_name] = spec
+            else:
+                print(f"Skipping line: {line} does not match defined INPUT format")
+                
 
-    for idx, (name, (start, end), ctype, subtype, decimal) in enumerate(zip(column_names, column_specs, column_types, column_subtypes, column_decimals)):
-        print(f"Decoding column: {name}")
+        output_filename = f"{os.path.basename(field_layout_file).rsplit('.' , 1)[0]}_layout.py"
+        output_layout_path = os.path.join(output_dir, output_filename)
 
-        if ctype == 'packed' and subtype == "s370fpd":
-            result[name] = decode_s370fpd_column(data, np.full(data.shape[0], start), np.full(data.shape[0], end), decimal)
-        elif ctype == 'ebcdic':
-            result[name] = decode_ebcdic_column(data, start, end)
+        formatted_layout_string = pprint.pformat(layout, sort_dicts=False)
+
+        with open(output_layout_path, 'w', encoding='utf-8') as f:
+            f.write(f"LRECL = {lrecl}\n\n")
+            f.write(f"LAYOUT = {formatted_layout_string}\n")
+        print(f"Successfully generated layout file to {output_layout_path}")
+    except Exception as e:
+        print(f"Error generating layout file: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def combine_mst_files(source_dir, date_str, base_pattern, num_files=10):
+    """
+    Combine multiple MST files (e.g., BILL_MST01_20251114 to BILL_MST10_20251114)
+    into a single file (e.g., BILL_MST_20251114)
+    
+    Args:
+        source_dir: Directory containing the MST files
+        date_str: Date string (e.g., "20251114")
+        base_pattern: Base pattern (e.g., "BILL_MST")
+        num_files: Number of MST files to combine (default: 10)
+    """
+    output_file = f"{source_dir}/{base_pattern}_{date_str}"
+    
+    # Check if combined file already exists
+    if os.path.exists(output_file):
+        print(f"Combined file already exists: {output_file}")
+        return output_file
+    
+    mst_files = []
+    for i in range(1, num_files + 1):
+        mst_file = f"{source_dir}/{base_pattern}{i:02d}_{date_str}"
+        if os.path.exists(mst_file):
+            mst_files.append(mst_file)
         else:
-            col_data = []
-            for i in range(data.shape[0]):
-                field = data[i, start:end+1].tobytes()
-                try:
-                    col_data.append(field.decode('ascii').strip())
-                except:
-                    col_data.append(None)
-            result[name] = col_data
-    return pd.DataFrame(result)
-
-# Program flow for decoding
-def etl_loader_column(column_specs, column_names, column_types, column_subtypes, column_decimals, lrecl, source_file):
-    match_text_format = re.search(r'.*\.txt$', source_file)
-    t0 = time.time()
-    if match_text_format:
-        print(f"Processing Text File: {source_file}")
-        df = load_text_file(source_file, column_specs, column_names, column_decimals)
-    else:
-        data = load_binary_to_array(source_file, lrecl)
-        df = process_columns(data, column_specs, column_names, column_types, column_subtypes, column_decimals)
-    t1 = time.time()
-    print(f"time taken decoding: {t1 - t0}")
-    return df
-
-# Save DataFrame to Parquet file
-def save_to_parquet(df, output_file):
-    print(output_file)
-    if not df.empty:
-        try:
-            table = pa.Table.from_pandas(df, preserve_index = False)
-            pq.write_table(table, output_file)
-            print(f"Data saved to {output_file}")
-        except Exception as e:  
-            print(f"Error saving data: {e}")
-    else:
-        print("No data to save.")
+            print(f"Warning: File not found: {mst_file}")
+    
+    if not mst_files:
+        print(f"No MST files found for pattern {base_pattern}*_{date_str}")
+        return None
+    
+    print(f"Combining {len(mst_files)} MST files into {output_file}")
+    
+    try:
+        with open(output_file, 'wb') as outf:
+            for mst_file in mst_files:
+                print(f"  Adding: {os.path.basename(mst_file)}")
+                with open(mst_file, 'rb') as inf:
+                    outf.write(inf.read())
+        
+        print(f"Successfully created combined file: {output_file}")
+        return output_file
+    except Exception as e:
+        print(f"Error combining files: {e}")
+        return None
 
 
+def preprocess_data_files(source_dir, date_str):
+    """
+    Preprocess data files by combining split MST files
+    
+    Args:
+        source_dir: Directory containing the data files
+        date_str: Date string in YYYYMMDD format
+    """
+    print("\n" + "="*60)
+    print("PREPROCESSING DATA FILES")
+    print("="*60)
+    
+    # Define patterns for files that need combining
+    combine_patterns = [
+        ("BILL_MST", 10),  # Combine BILL_MST01-10
+        # Add more patterns here if needed, e.g.:
+        # ("LOAN_MST", 5),
+        # ("ACCT_MST", 8),
+    ]
+    
+    for base_pattern, num_files in combine_patterns:
+        print(f"\nProcessing {base_pattern} files...")
+        combine_mst_files(source_dir, date_str, base_pattern, num_files)
+    
+    print("\n" + "="*60)
+    print("PREPROCESSING COMPLETE")
+    print("="*60 + "\n")
+
+
+FIELD_LAYOUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/FIELDS_LAYOUT"
+LAYOUT_OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
+DATA_SOURCE_DIR = "/sasdata/rawdata/ln"
+
+if not os.path.exists(LAYOUT_OUTPUT_DIR):
+    os.makedirs(LAYOUT_OUTPUT_DIR)
+    
 if __name__ == "__main__":
-
-    # Retrieves full file name and the extracted base name (e.g ACCTFILE_20250427 and ACCTFILE )
-    files = get_file_names(var_path, input_folder_path)
-
-    for file_name, base_name in files:
-
-        input_file = f"{input_folder_path}/{file_name}"
-        output_file_name = f"STG_LN_{base_name.upper()}"
-
-        output_file = f"{output_folder_path}/{output_file_name}.parquet"
-
-        # Get values
-        column_specs, column_names, column_meta, column_types, column_subtypes, column_decimals, lrecl = load_variables(var_path, base_name)
-
-        # Check and delete existing table
-        check_and_delete_table(output_file)
-
-        # Read the fixed-width file
-        print("Reading source")
-        df = etl_loader_column(column_specs, column_names, column_types, column_subtypes, column_decimals, lrecl, input_file)
-
-        print("Saving to Parquet")
-        # Save to Parquet
-        save_to_parquet(df, output_file)
+    # Step 1: Preprocess data files (combine split files)
+    batch_dt = datetime.strptime("2025-11-14 00:00:00", '%Y-%m-%d %H:%M:%S')
+    batch_dt_str = batch_dt.strftime("%Y%m%d")
+    
+    preprocess_data_files(DATA_SOURCE_DIR, batch_dt_str)
+    
+    # Step 2: Generate layout files
+    print("\n" + "="*60)
+    print("GENERATING LAYOUT FILES")
+    print("="*60 + "\n")
+    
+    try:
+        for filename in os.listdir(FIELD_LAYOUT_PATH):
+            if filename.endswith(".txt"):
+                file_path = os.path.join(FIELD_LAYOUT_PATH, filename)
+                try:
+                    generate_layout_file(file_path, output_dir=LAYOUT_OUTPUT_DIR)
+                except Exception as e:
+                    print(f"Error generating layout {filename}: {e}")
+    except FileNotFoundError as e:
+        print(f"Error path not found: {e}")
+    
+    print(f"\n" + "="*60)
+    print("COMPLETED GENERATING LAYOUT FILES")
+    print("="*60)
