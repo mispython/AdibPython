@@ -101,24 +101,42 @@ def get_file_names(config_path, directory_path):
         files = os.listdir(directory_path)
 
         required_files = os.listdir(config_path)
+        print(f"\n[DEBUG] Layout files in {config_path}:")
         for r_file in required_files:
+            print(f"  - {r_file}")
             r_name = r_file.rsplit('_', 1)[0]
             required_names.append(r_name)
+        
+        print(f"\n[DEBUG] Required base names: {required_names}")
+        print(f"[DEBUG] Looking for files with date: {batch_dt_str}")
+        print(f"\n[DEBUG] Data files in {directory_path}:")
 
         for file in files:
             full_path = os.path.join(directory_path, file)
 
             # Only take file names not folders
             if os.path.isfile(full_path):
+                print(f"  - {file}")
                 base_name = file.rsplit('_', 1)[0]
                 parts = file.rsplit('_', 1)
+                
+                print(f"    -> base_name: {base_name}, parts: {parts}")
+                
                 if base_name in required_names and len(parts) > 1:
-                    if parts[1].rsplit('.', 1)[0] == batch_dt_str:
+                    date_part = parts[1].rsplit('.', 1)[0]
+                    print(f"    -> date_part: {date_part}, matches {batch_dt_str}? {date_part == batch_dt_str}")
+                    
+                    if date_part == batch_dt_str:
                         file_names.append((file, base_name))
+                        print(f"    -> ✓ MATCHED!")
 
         if not file_names:
+            print(f"\n[ERROR] No files matched!")
+            print(f"  Required names: {required_names}")
+            print(f"  Expected date: {batch_dt_str}")
             raise ValueError(f"No files found with date: {batch_dt_str}")
 
+        print(f"\n[SUCCESS] Found {len(file_names)} matching files")
         return file_names
 
     except FileNotFoundError:
