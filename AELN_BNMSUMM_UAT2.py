@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
 """
-ELDS BNM Summary Processing - Memory Efficient Version (CORRECTED)
+ELDS BNM Summary Processing
 Processes Bank Negara Malaysia summary files with cumulative data loading
-ALIGNED WITH EIBWELWH SAS PROGRAM
-
-CORRECTIONS APPLIED:
-- Fixed FIN_CONCEPT length: 3 → 60
-- Fixed STATUS length: 1 → 30
-- Fixed LN_UTILISE_LOCAT_CD length: 10 → 5
-- Added missing EHP column mappings (12 fields)
-- Aligned with SAS EIBWELWH field definitions
 """
 
 import polars as pl
@@ -41,7 +33,7 @@ RDATE = (REPTDATE - SAS_ORIGIN).days
 
 print("="*70)
 print(f"ELDS BNM Summary Processing - {REPTDATE.strftime('%Y-%m-%d')}")
-print("Memory Efficient Mode (DuckDB Streaming) - CORRECTED VERSION")
+print("Memory Efficient Mode (DuckDB Streaming)")
 print("="*70)
 
 # =============================================================================
@@ -58,28 +50,39 @@ EHP_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary1.sas7bdat'
 EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
 
 # ==============================
-# PRODUCTION SCHEMA DEFINITION (CORRECTED)
+# PRODUCTION SCHEMA DEFINITION
 # ==============================
 
 SUMM1_SCHEMA = {
-    # Character columns (30 total)
-    'MAANO': ('char', 15),
+    'MAANO': ('char', 50),
     'STAGE': ('char', 2),
     'APPLICATION': ('char', 10),
     'DTECOMPLETE': ('char', 10),
-    'AANO': ('char', 15),
+    'AANO': ('char', 50),
     'APPKEY': ('char', 10),
     'PRIORITY_SECTOR': ('char', 2),
-    'FIN_CONCEPT': ('char', 60),           # CORRECTED: was 3, now 60 (per SAS @1167)
-    'LN_UTILISE_LOCAT_CD': ('char', 2),    # CORRECTED: was 10→5, now 2 (comparison requirement)
+    'DSRISS3': ('num', 8),
+    'FIN_CONCEPT': ('char', 60),           
+    'LN_UTILISE_LOCAT_CD': ('char', 2),   
+    'SPECIALFUND': ('num', 8),
+    'ASSET_PURCH_AMT': ('num', 8),
+    'PURPOSE_LOAN': ('num', 8),
     'STRUPCO_3YR': ('char', 2),
+    'FACICODE': ('num', 8),
+    'AMTAPPLY': ('num', 8),
+    'AMOUNT': ('num', 8),
     'APPTYPE': ('char', 1),
     'REJREASON': ('char', 5),
     'DATEXT': ('char', 10),
+    'ACCTNO': ('num', 8),
+    'EIR': ('num', 8),
     'EREQNO': ('char', 15),
     'REFIN_FLG': ('char', 3),
-    'STATUS': ('char', 30),                # CORRECTED: was 1, now 30 (per SAS @983/@993)
+    'INDINTERIM': ('char', 1),
+    'DATE': ('num', 8),
+    'STATUS': ('char', 30),               
     'CCPT_TAG': ('char', 5),
+    'CIR': ('num', 8),
     'PRICING_TYPE': ('char', 5),
     'LU_ADD1': ('char', 40),
     'LU_ADD2': ('char', 40),
@@ -92,36 +95,25 @@ SUMM1_SCHEMA = {
     'PROP_STATUS': ('char', 5),
     'DTCOMPLETE': ('char', 25),
     'LU_SOURCE': ('char', 5),
-    'INDINTERIM': ('char', 1),
-    
-    # Numeric columns (11 total)
-    'DSRISS3': ('num', 8),
-    'SPECIALFUND': ('num', 8),
-    'ASSET_PURCH_AMT': ('num', 8),
-    'PURPOSE_LOAN': ('num', 8),
-    'FACICODE': ('num', 8),
-    'AMTAPPLY': ('num', 8),
-    'AMOUNT': ('num', 8),
-    'ACCTNO': ('num', 8),
-    'EIR': ('num', 8),
-    'CIR': ('num', 8),
-    'DATE': ('num', 8)
 }
 
+
+
 SUMM2_SCHEMA = {
-    # Character columns (35 total)
-    'MAANO': ('char', 15),
+    'MAANO': ('char', 50),
     'STAGE': ('char', 2),
     'APPLICATION': ('char', 10),
     'DTECOMPLETE': ('char', 10),
     'IDNO': ('char', 30),
-    'ENTKEY': ('char', 20),
+    'ENTKEY': ('char', 11),
     'APPLNAME': ('char', 150),
     'COUNTRY': ('char', 5),
     'DBIRTH': ('char', 10),
+    'ENTITY_TYPE': ('num', 8),
     'CORP_STATUS_CD': ('char', 2),
     'INDUSTRIAL_STATUS': ('char', 5),
     'RESIDENCY_STATUS_CD': ('char', 1),
+    'ANNSUBTSALARY': ('num', 8),
     'GENDER': ('char', 1),
     'OCCUPATION': ('char', 5),
     'EMPNAME': ('char', 150),
@@ -133,7 +125,7 @@ SUMM2_SCHEMA = {
     'ROLE': ('char', 1),
     'ICPP': ('char', 30),
     'MARRIED': ('char', 10),
-    'CUSTOMER_CODE': ('char', 5),
+    'CUSTOMER_CODE': ('char', 2),
     'CISNUMBER': ('char', 20),
     'NO_OF_EMPLOYEE': ('char', 10),
     'ANNUAL_TURNOVER': ('char', 20),
@@ -143,13 +135,9 @@ SUMM2_SCHEMA = {
     'OCCUPAT_MASCO_CD': ('char', 10),
     'EREQNO': ('char', 15),
     'DSRISS3': ('char', 10),
-    'DTCOMPLETE': ('char', 25),
     'INDINTERIM': ('char', 1),
-    
-    # Numeric columns (3 total)
-    'ENTITY_TYPE': ('num', 8),
-    'ANNSUBTSALARY': ('num', 8),
-    'DATE': ('num', 8)
+    'DATE': ('num', 8),
+    'DTCOMPLETE': ('char', 25),
 }
 
 # =============================================================================
@@ -171,10 +159,8 @@ def apply_production_schema(df: pl.DataFrame, schema: dict, dataset_name: str) -
             continue
         
         if col_type == 'char':
-            # Special handling for zero-padded fields
-            # NOTE: LN_UTILISE_LOCAT_CD removed - should be 2 chars without padding
+            # Special handling for CUSTOMER_CODE: only pad if value exists
             if col_name == 'CUSTOMER_CODE':
-                # CUSTOMER_CODE: Only pad if value exists, otherwise keep as NULL
                 expr = (
                     pl.when(
                         pl.col(col_name).is_null() | 
@@ -189,9 +175,9 @@ def apply_production_schema(df: pl.DataFrame, schema: dict, dataset_name: str) -
                     )
                     .alias(col_name)
                 )
-            elif col_name in ['ENTKEY', 'POSTCODE', 'STATE_CD', 
-                           'LU_POSTCODE', 'LU_STATE_CD']:
-                # Other fields: Always pad with zeros
+            # Other zero-padded fields: always pad
+            elif col_name in ['POSTCODE', 'STATE_CD', 
+                           'LN_UTILISE_LOCAT_CD', 'LU_POSTCODE', 'LU_STATE_CD']:
                 expr = (
                     pl.col(col_name)
                     .cast(pl.Utf8, strict=False)
@@ -613,31 +599,17 @@ final_summ2_count = save_with_cumulative_append(
     SUMM2_COMBINED, "SUMM2", SUMM2_SCHEMA, PREVDATE, OUTPUT_DATA_PATH, ELDS_DATA_PATH
 )
 
-print(f"\n✓ SUMM2 Complete: {final_summ2_count:,} total rows")
+print(f"\n✓ SUMM2 Complete: {final_summ2_count:,} rows")
 
-# =============================================================================
+# ====================
 # COMPLETION SUMMARY
-# =============================================================================
+# ====================
 
 print("\n" + "="*70)
-print("PROCESSING COMPLETE - CORRECTED VERSION")
+print("PROCESSING COMPLETE")
 print("="*70)
 print(f"Date: {REPTDATE.strftime('%Y-%m-%d')}")
 print(f"Output Directory: {OUTPUT_DATA_PATH}")
 print(f"\nResults:")
-print(f"  SUMM1.parquet: {final_summ1_count:,} rows, 41 columns")
-print(f"  SUMM2.parquet: {final_summ2_count:,} rows, 38 columns")
-
-print("\n" + "="*70)
-print("CORRECTIONS APPLIED IN THIS VERSION:")
-print("="*70)
-print("✓ Fixed FIN_CONCEPT length: 3 → 60 characters")
-print("✓ Fixed STATUS length: 1 → 30 characters")
-print("✓ Fixed LN_UTILISE_LOCAT_CD length: 10 → 2 characters (no padding)")
-print("✓ Added 12 missing EHP column mappings:")
-print("    - MAANO, STAGE, APPLICATION, APPKEY")
-print("    - PRIORITY_SECTOR, APPTYPE, STATUS")
-print("    - PURPOSE_LOAN, EIR, CIR, PRICING_TYPE")
-print("    - FIN_CONCEPT, CCPT_TAG, DTCOMPLETE")
-print("✓ Schema now aligned with SAS EIBWELWH field definitions")
-print("="*70)
+print(f"  SUMM1.parquet: {final_summ1_count:,} rows, 40 columns")
+print(f"  SUMM2.parquet: {final_summ2_count:,} rows, 37 columns")
