@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-ELDS BNM Summary Processing - Memory Efficient Version
+ELDS BNM Summary Processing
 Processes Bank Negara Malaysia summary files with cumulative data loading
 """
 
@@ -54,24 +53,35 @@ EHP2_SRC = '/stgsrcsys/host/uat/tbc/intg_app_ehp_fs_dwh_bnmsummary2.sas7bdat'
 # ==============================
 
 SUMM1_SCHEMA = {
-    # Character columns (30 total)
-    'MAANO': ('char', 15),
+    'MAANO': ('char', 50),
     'STAGE': ('char', 2),
     'APPLICATION': ('char', 10),
     'DTECOMPLETE': ('char', 10),
-    'AANO': ('char', 15),
+    'AANO': ('char', 50),
     'APPKEY': ('char', 10),
     'PRIORITY_SECTOR': ('char', 2),
-    'FIN_CONCEPT': ('char', 3),
-    'LN_UTILISE_LOCAT_CD': ('char', 10),
+    'DSRISS3': ('num', 8),
+    'FIN_CONCEPT': ('char', 60),           
+    'LN_UTILISE_LOCAT_CD': ('char', 2),   
+    'SPECIALFUND': ('num', 8),
+    'ASSET_PURCH_AMT': ('num', 8),
+    'PURPOSE_LOAN': ('num', 8),
     'STRUPCO_3YR': ('char', 2),
+    'FACICODE': ('num', 8),
+    'AMTAPPLY': ('num', 8),
+    'AMOUNT': ('num', 8),
     'APPTYPE': ('char', 1),
     'REJREASON': ('char', 5),
     'DATEXT': ('char', 10),
+    'ACCTNO': ('num', 8),
+    'EIR': ('num', 8),
     'EREQNO': ('char', 15),
     'REFIN_FLG': ('char', 3),
-    'STATUS': ('char', 1),
+    'INDINTERIM': ('char', 1),
+    'DATE': ('num', 8),
+    'STATUS': ('char', 30),               
     'CCPT_TAG': ('char', 5),
+    'CIR': ('num', 8),
     'PRICING_TYPE': ('char', 5),
     'LU_ADD1': ('char', 40),
     'LU_ADD2': ('char', 40),
@@ -84,36 +94,25 @@ SUMM1_SCHEMA = {
     'PROP_STATUS': ('char', 5),
     'DTCOMPLETE': ('char', 25),
     'LU_SOURCE': ('char', 5),
-    'INDINTERIM': ('char', 1),
-    
-    # Numeric columns (11 total)
-    'DSRISS3': ('num', 8),
-    'SPECIALFUND': ('num', 8),
-    'ASSET_PURCH_AMT': ('num', 8),
-    'PURPOSE_LOAN': ('num', 8),
-    'FACICODE': ('num', 8),
-    'AMTAPPLY': ('num', 8),
-    'AMOUNT': ('num', 8),
-    'ACCTNO': ('num', 8),
-    'EIR': ('num', 8),
-    'CIR': ('num', 8),
-    'DATE': ('num', 8)
 }
 
+
+
 SUMM2_SCHEMA = {
-    # Character columns (35 total)
-    'MAANO': ('char', 15),
+    'MAANO': ('char', 50),
     'STAGE': ('char', 2),
     'APPLICATION': ('char', 10),
     'DTECOMPLETE': ('char', 10),
     'IDNO': ('char', 30),
-    'ENTKEY': ('char', 20),
+    'ENTKEY': ('char', 11),
     'APPLNAME': ('char', 150),
     'COUNTRY': ('char', 5),
     'DBIRTH': ('char', 10),
+    'ENTITY_TYPE': ('num', 8),
     'CORP_STATUS_CD': ('char', 2),
     'INDUSTRIAL_STATUS': ('char', 5),
     'RESIDENCY_STATUS_CD': ('char', 1),
+    'ANNSUBTSALARY': ('num', 8),
     'GENDER': ('char', 1),
     'OCCUPATION': ('char', 5),
     'EMPNAME': ('char', 150),
@@ -125,7 +124,7 @@ SUMM2_SCHEMA = {
     'ROLE': ('char', 1),
     'ICPP': ('char', 30),
     'MARRIED': ('char', 10),
-    'CUSTOMER_CODE': ('char', 5),
+    'CUSTOMER_CODE': ('char', 2),
     'CISNUMBER': ('char', 20),
     'NO_OF_EMPLOYEE': ('char', 10),
     'ANNUAL_TURNOVER': ('char', 20),
@@ -135,13 +134,9 @@ SUMM2_SCHEMA = {
     'OCCUPAT_MASCO_CD': ('char', 10),
     'EREQNO': ('char', 15),
     'DSRISS3': ('char', 10),
-    'DTCOMPLETE': ('char', 25),
     'INDINTERIM': ('char', 1),
-    
-    # Numeric columns (3 total)
-    'ENTITY_TYPE': ('num', 8),
-    'ANNSUBTSALARY': ('num', 8),
-    'DATE': ('num', 8)
+    'DATE': ('num', 8),
+    'DTCOMPLETE': ('char', 25),
 }
 
 # =============================================================================
@@ -163,7 +158,8 @@ def apply_production_schema(df: pl.DataFrame, schema: dict, dataset_name: str) -
             continue
         
         if col_type == 'char':
-            if col_name in ['ENTKEY', 'CUSTOMER_CODE', 'POSTCODE', 'STATE_CD', 
+            # Special handling for zero-padded fields
+            if col_name in ['CUSTOMER_CODE', 'POSTCODE', 'STATE_CD', 
                            'LN_UTILISE_LOCAT_CD', 'LU_POSTCODE', 'LU_STATE_CD']:
                 expr = (
                     pl.col(col_name)
@@ -173,13 +169,16 @@ def apply_production_schema(df: pl.DataFrame, schema: dict, dataset_name: str) -
                     .alias(col_name)
                 )
             else:
+                # Standard character field: strip and truncate to max length
                 expr = (
                     pl.col(col_name)
                     .cast(pl.Utf8, strict=False)
+                    .str.strip_chars()
                     .str.slice(0, col_len)
                     .alias(col_name)
                 )
         else:
+            # Numeric field: clean and convert
             expr = (
                 pl.col(col_name)
                 .cast(pl.Utf8, strict=False)
@@ -400,28 +399,60 @@ print(f"✓ SAS7BDAT loaded: {len(SUMM1_EHP_df):,} rows")
 
 SUMM1_EHP = pl.from_pandas(SUMM1_EHP_df)
 
-print(f"  📋 Mapping EHP column names...")
+print(f"  📋 Mapping EHP column names (CORRECTED - added missing mappings)...")
+# CORRECTED: Complete EHP column mapping aligned with EIBWELWH
 ehp_column_map = {
+    # Core identifiers - ADDED
+    'MAANO': 'MAANO',
+    'STAGE': 'STAGE',
+    'APPLICATION': 'APPLICATION',
+    'APPKEY': 'APPKEY',
+    
+    # Dates
     'DATE_COMPLETED': 'DTECOMPLETE',
+    'DATE': 'DATEXT',
+    'DTCOMPLETE': 'DTCOMPLETE',
+    
+    # Classification - ADDED
+    'PRIORITY_SECTOR': 'PRIORITY_SECTOR',
+    'APPTYPE': 'APPTYPE',
+    'STATUS': 'STATUS',
+    
+    # Financial
     'DEBT_SERVICE_RATIO': 'DSRISS3',
-    'LOCATION': 'LN_UTILISE_LOCAT_CD',
     'SPECIAL_FUND': 'SPECIALFUND',
     'ASSET_PURCHASE': 'ASSET_PURCH_AMT',
-    'STARTUP_FINANCING': 'STRUPCO_3YR',
-    'FACILITY_TYPE': 'FACICODE',
+    'PURPOSE_LOAN': 'PURPOSE_LOAN',
     'AMOUNT': 'AMTAPPLY',
     'AMT_APPROVED': 'AMOUNT',
-    'REJECT_REASON': 'REJREASON',
-    'DATE': 'DATEXT',
     'ACCOUNT_NO': 'ACCTNO',
-    'EREQ_NUMBER': 'EREQNO',
+    
+    # Interest rates - ADDED
+    'EIR': 'EIR',
+    'CIR': 'CIR',
+    'PRICING_TYPE': 'PRICING_TYPE',
+    
+    # Facility
+    'STARTUP_FINANCING': 'STRUPCO_3YR',
+    'FACILITY_TYPE': 'FACICODE',
+    'REJECT_REASON': 'REJREASON',
+    
+    # Concept & flags - ADDED
+    'FIN_CONCEPT': 'FIN_CONCEPT',
     'REFINANCING': 'REFIN_FLG',
+    'CCPT_TAG': 'CCPT_TAG',
+    
+    # Location
+    'LOCATION': 'LN_UTILISE_LOCAT_CD',
     'ADDRESS_1': 'LU_ADD1',
     'ADDRESS_2': 'LU_ADD2',
     'CITY': 'LU_TOWN_CITY',
     'POSTCODE': 'LU_POSTCODE',
     'STATECODE': 'LU_STATE_CD',
-    'COUNTRY': 'LU_COUNTRY_CD'
+    'COUNTRY': 'LU_COUNTRY_CD',
+    
+    # Request
+    'EREQ_NUMBER': 'EREQNO',
 }
 
 rename_dict = {k: v for k, v in ehp_column_map.items() if k in SUMM1_EHP.columns}
@@ -431,7 +462,7 @@ if rename_dict:
 
 SUMM1_EHP = apply_sas_eof_check(SUMM1_EHP, "bnmsummary1_ehp", is_sas_dataset=True)
 
-print(f"\nApplying production schema...")
+print(f"\nApplying production schema (CORRECTED)...")
 SUMM1 = apply_production_schema(SUMM1, SUMM1_SCHEMA, "CSV")
 SUMM1_EHP = apply_production_schema(SUMM1_EHP, SUMM1_SCHEMA, "EHP")
 
@@ -553,9 +584,9 @@ final_summ2_count = save_with_cumulative_append(
 
 print(f"\n✓ SUMM2 Complete: {final_summ2_count:,} total rows")
 
-# =============================================================================
+# ====================
 # COMPLETION SUMMARY
-# =============================================================================
+# ====================
 
 print("\n" + "="*70)
 print("PROCESSING COMPLETE")
