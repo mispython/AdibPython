@@ -1,53 +1,429 @@
 import os
-import sys
-import dask.config
-from dask.distributed import Client, LocalCluster
-from Data_Warehouse.Common.Jobs.FILE_READER import run_file_reader
-from Data_Warehouse.Common.Jobs.GET_BATCH_DATE import get_batch_date_dwh, format_date
-from datetime import datetime
-import dask
-sys.dont_write_bytecode = True
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import mmap
+import numpy as np
+from numba import njit
+import time
+from datetime import datetime,timedelta
+
+# Global Paths
+input_folder_path  = "/sasdata/rawdata/ln"
+output_folder_path = "/parquet/dwh/LOAN/staging"
+var_path           = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT/BILL"
+
+batch_dt =  (datetime.now() - timedelta(days=1))
+batch_dt_str = batch_dt.strftime("%Y%m%d")
+
+def get_matching_files(layout_path, data_path, batch_date):
+    """
+    Find data files that match layout files.
+    Example: BILL_MST_layout.py matches BILL_MST01_20251114, BILL_MST02_20251114, etc.
+    Returns: {base_name: [list of matching data files]}
+    """
+    result = {}
+    
+    # Get all layout files
+    layout_files = [f for f in os.listdir(layout_path) if f.endswith('_layout.py')]
+    
+    for layout_file in layout_files:
+        base_name = layout_file.replace('_layout.py', '')
+        print(f"Looking for files matching: {base_name}")
+        
+        # Find all data files that start with this base name and have the correct date
+        matching_files = []
+        for data_file in os.listdir(data_path):
+            full_path = os.path.join(data_path, data_file)
+            if not os.path.isfile(full_path):
+                continue
+            
+            # Check if file starts with base_name and contains the date
+            if data_file.startswith(base_name) and batch_date in data_file:
+                matching_files.append(data_file)
+                print(f"  ✓ Found: {data_file}")
+        
+        if matching_files:
+            # Sort files for consistent processing order
+            matching_files.sort()
+            result[base_name] = matching_files
+    
+    return result
+
+def load_layout(layout_path, base_name):
+    """Load layout configuration from _layout.py file"""
+    layout_file = os.path.join(layout_path, f"{base_name}_layout.py")
+    
+    if not os.path.exists(layout_file):
+        raise FileNotFoundError(f"Layout file not found: {layout_file}")
+    
+    namespace = {}
+    with open(layout_file, 'r') as f:
+        exec(f.read(), namespace)
+    
+    return namespace['LRECL'], namespace['LAYOUT']
+
+def load_binary_file(file_path, lrecl):
+    """Load binary file into numpy array"""
+    with open(file_path, "rb") as f:
+        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        num_records = mm.size() // lrecl
+        
+        data = np.frombuffer(mm, dtype=np.uint8)
+        data = data[:num_records * lrecl]
+        data = data.reshape((num_records, lrecl))
+    
+    return data
+
+@njit
+def decode_packed_decimal(data, start, end, decimals=0):
+    """Decode packed decimal field"""
+    field = data[start:end]
+    value = 0
+    
+    for b in field[:-1]:
+        value = value * 100 + ((b >> 4) * 10 + (b & 0x0F))
+    
+    sign = field[-1] & 0x0F
+    value = value * 10 + ((field[-1] >> 4) & 0x0F)
+    
+    if sign == 0x0D or sign == 0x0B:
+        value = -value
+    
+    if decimals > 0:
+        value = value / (10 ** decimals)
+    
+    return value
+
+def decode_ebcdic(data, start, end):
+    """Decode EBCDIC string field"""
+    return data[start:end].tobytes().decode('cp037').strip().rstrip('\x00')
+
+def process_single_file(file_path, lrecl, layout):
+    """Process one binary file and return DataFrame"""
+    print(f"    Loading: {os.path.basename(file_path)}")
+    data = load_binary_file(file_path, lrecl)
+    num_records = data.shape[0]
+    print(f"    Records: {num_records:,}")
+    
+    result = {}
+    
+    for field_name, spec in layout.items():
+        field_type = spec['type']
+        field_slice = spec['slice']
+        decimals = spec.get('decimals', 0)
+        
+        if field_type == 'packed':
+            values = []
+            for i in range(num_records):
+                val = decode_packed_decimal(
+                    data[i], 
+                    field_slice.start, 
+                    field_slice.stop,
+                    decimals
+                )
+                values.append(val)
+            result[field_name] = values
+            
+        elif field_type == 'ebcdic':
+            values = []
+            for i in range(num_records):
+                val = decode_ebcdic(data[i], field_slice.start, field_slice.stop)
+                values.append(val)
+            result[field_name] = values
+            
+        else:
+            result[field_name] = [None] * num_records
+    
+    return pd.DataFrame(result)
+
+def save_parquet(df, output_path):
+    """Save DataFrame to parquet file"""
+    if df.empty:
+        print("    Warning: No data to save")
+        return
+    
+    try:
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        pq.write_table(table, output_path)
+        print(f"    ✓ Saved: {output_path}")
+        print(f"    Total records: {len(df):,}\n")
+    except Exception as e:
+        print(f"    ✗ Error saving: {e}\n")
 
 if __name__ == "__main__":
-    batch_dt = datetime.strptime("2025-11-17 00:00:00", '%Y-%m-%d %H:%M:%S')
-    batch_dt_str = batch_dt.strftime("%Y%m%d")
-    APPL_KEY   = 'ln'
-    APPL_NAME  = 'MIS'
-    BATCH_MODE = 'BILL'
+    print("="*70)
+    print("ETL PROCESSING - COMBINE MULTIPLE FILES INTO ONE PARQUET")
+    print("="*70 + "\n")
     
-    config = {
-        'input_dir': f"/sasdata/rawdata/{APPL_KEY}",
-        'output_dir' : f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output",
-        'layout_dir' : f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT",
-        'status_file_dir' : f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/STATUS",
-        'batch_date' : batch_dt_str,
-        'n_workers' : 10,
-        'threads_per_worker' : 3,
-        'memory_limit': '18GB',
-        'applname': APPL_NAME,
-	    'batch_mode': f"{BATCH_MODE}"
-    }
+    # Find all matching files grouped by base name
+    file_groups = get_matching_files(var_path, input_folder_path, batch_dt_str)
+    
+    if not file_groups:
+        print("✗ No matching files found!")
+        exit(1)
+    
+    print(f"\n{'='*70}\n")
+    
+    # Process each group
+    for base_name, data_files in file_groups.items():
+        print(f"Processing: {base_name}")
+        print(f"Files to combine: {len(data_files)}")
+        print("-"*70)
+        
+        try:
+            # Load layout
+            lrecl, layout = load_layout(var_path, base_name)
+            print(f"Layout: LRECL={lrecl}, Fields={len(layout)}\n")
+            
+            # Process all files and collect DataFrames
+            all_dfs = []
+            total_time = 0
+            
+            for idx, data_file in enumerate(data_files, 1):
+                print(f"  [{idx}/{len(data_files)}] {data_file}")
+                file_path = os.path.join(input_folder_path, data_file)
+                
+                t0 = time.time()
+                df = process_single_file(file_path, lrecl, layout)
+                t1 = time.time()
+                
+                print(f"    Time: {t1-t0:.2f}s\n")
+                total_time += (t1 - t0)
+                all_dfs.append(df)
+            
+            # Combine all DataFrames
+            print(f"  Combining {len(all_dfs)} DataFrames...")
+            combined_df = pd.concat(all_dfs, ignore_index=True)
+            print(f"  Combined records: {len(combined_df):,}")
+            print(f"  Total processing time: {total_time:.2f}s\n")
+            
+            # Save to parquet
+            output_file = os.path.join(output_folder_path, f"STG_LN_{base_name.upper()}.parquet")
+            
+            # Delete existing file if present
+            if os.path.exists(output_file):
+                os.remove(output_file)
+                print(f"  Deleted existing: {output_file}")
+            
+            save_parquet(combined_df, output_file)
+            
+        except Exception as e:
+            print(f"✗ Error processing {base_name}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        print("="*70 + "\n")
+    
+    print("✓ ETL PROCESSING COMPLETE")
+    print("="*70)
 
-    dask.config.set({"distributed.worker.timeouts.connect":"180s"})
-    dask.config.set({"distributed.worker.timeouts.termination":"120s"})
 
-    cluster  = LocalCluster(
-        n_workers=config['n_workers'],
-        threads_per_worker=config['threads_per_worker'],
-        memory_limit=config['memory_limit']
-    )
-    client = Client(cluster)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import duckdb
+import polars as pl
+from pathlib import Path
+from datetime import datetime
+
+import sys
+
+input_path = Path("/parquet/dwh/LOAN/staging/STG_LN_BILL_MST.parquet")
+output_path = Path("/parquet/dwh/LOAN/enrichment/ENRH_LN_BILL.parquet")
+   
+def parse_packed_date(packed_value: int, format_type: str = 'YYMMDD') -> datetime.date:
+    """
+    Convert packed decimal date to Python date.
+    YYMMDD8.: 20241115 -> 2024-11-15
+    MMDDYY8.: 11152024 -> 2024-11-15
+    """
+    if packed_value == 0:
+        return None
+    
+    date_str = str(packed_value).zfill(8)
+    
     try:
-        run_file_reader(
-            input_dir=config['input_dir'], 
-            output_dir=config['output_dir'], 
-            layout_dir=config['layout_dir'], 
-            batch_dt_str=config['batch_date'], 
-            status_file_dir=config['status_file_dir'],
-            applname=config['applname'],
-            batch_mode = config['batch_mode']        
-        )
-    finally:
-        client.close()
-        client.shutdown()
+        if format_type == 'YYMMDD':
+            return datetime.strptime(date_str, '%Y%m%d').date()
+        elif format_type == 'MMDDYY':
+            return datetime.strptime(date_str, '%m%d%Y').date()
+    except:
+        return None
+
+# Read the combined parquet file
+df = pl.read_parquet(input_path)
+        
+print(f"✓ Loaded {len(df):,} records")
+        
+# Validate required columns exist
+required_columns = [
+    'BILL_ACCT_NO', 'BILL_NOTE_NO', 'BILL_DUE_DATE', 
+    'BILL_PAID_DATE', 'BILL_DAYS_LATE', 'BILL_NOTE_TYPE',
+    'BILL_COST_CENTER', 'BILL_TOT_BILLED', 'BILL_PRIN_BILLED',
+    'BILL_INT_BILLED', 'BILL_ESC_BILLED', 'BILL_FEE_BILLED',
+    'BILL_TOT_BNP', 'BILL_PRIN_BNP', 'BILL_INT_BNP',
+    'BILL_ESC_BNP', 'BILL_FEE_BNP'
+]
+        
+missing_columns = [col for col in required_columns if col not in df.columns]
+if missing_columns:
+    print(f"WARNING: Missing columns: {missing_columns}")
+        
+print("\nColumn Structure:")
+print(f"  Total Columns: {len(df.columns)}")
+print(f"  Columns: {', '.join(df.columns[:5])}... (showing first 5)")
+        
+# Get data statistics
+print("\nData Statistics:")
+print(f"  Total Records: {len(df):,}")
+       
+if 'BILL_ACCT_NO' in df.columns:
+    print(f"  Unique Accounts: {df['BILL_ACCT_NO'].n_unique():,}")
+        
+if 'BILL_DUE_DATE' in df.columns:
+    print(f"  Date Range: {df['BILL_DUE_DATE'].min()} to {df['BILL_DUE_DATE'].max()}")
+        
+if 'BILL_TOT_BILLED' in df.columns:
+    total_billed = df['BILL_TOT_BILLED'].sum()
+    print(f"  Total Billed: {total_billed:,.2f}")
+        
+if 'BILL_TOT_BNP' in df.columns:
+    total_bnp = df['BILL_TOT_BNP'].sum()
+    print(f"  Total BNP: {total_bnp:,.2f}")
+        
+# Filter out null records (IF ACCTCHK NE .)
+if 'BILL_ACCT_NO' in df.columns:
+    initial_count = len(df)
+    stg_ln_bill = df.filter(pl.col('BILL_ACCT_NO').is_not_null() & (pl.col('BILL_ACCT_NO') != 0))
+    filtered_count = initial_count - len(stg_ln_bill)
+    if filtered_count > 0:
+        print(f"\n  Filtered out {filtered_count:,} null/zero account records")
+        
+
+print("ENRH_LN_BILL - Transform and Load")
+ 
+con = duckdb.connect(':memory:')
+# Step 2: Extract - Map columns and create date fields
+
+print("\nStep 2: Mapping columns and creating derived dates...")
+    
+con.execute("""
+    CREATE TABLE extracted AS
+    SELECT
+        ACCTNO,
+        NOTENO,
+        BLDATE,
+        BLPDDATE,
+        DAYSLATE,
+        PRODUCT,
+        COSTCTR,
+        BILL_AMT,
+        BILL_AMT_PRIN,
+        BILL_AMT_INT,
+        BILL_AMT_ESCROW,
+        BILL_AMT_FEE,
+        BILL_NOT_PAY_AMT,
+        BILL_NOT_PAY_AMT_PRIN,
+        BILL_NOT_PAY_AMT_INT,
+        BILL_NOT_PAY_AMT_ESCROW,
+        BILL_NOT_PAY_AMT_FEE,
+        -- Parse BLDATE (YYMMDD format)
+        CASE 
+            WHEN BLDATE > 0 THEN 
+                CAST(SUBSTR(LPAD(CAST(BLDATE AS VARCHAR), 11, '0'), 1, 8) AS DATE)
+            ELSE NULL
+            END AS BILL_DT,
+            -- Parse BLPDDATE (MMDDYY format)
+        CASE 
+            WHEN BLPDDATE > 0 THEN
+                TRY_CAST(
+                    SUBSTR(LPAD(CAST(BLPDDATE AS VARCHAR), 8, '0'), 5, 4) || '-' ||
+                    SUBSTR(LPAD(CAST(BLPDDATE AS VARCHAR), 8, '0'), 1, 2) || '-' ||
+                    SUBSTR(LPAD(CAST(BLPDDATE AS VARCHAR), 8, '0'), 3, 2)
+                    AS DATE
+                )
+            ELSE NULL
+            END AS BILL_PAID_DT
+        FROM stg_ln_bill
+""")
+    
+count = con.execute("SELECT COUNT(*) FROM extracted").fetchone()[0]
+print(f"  Transformed {count:,} records")
+    
+# Step 3: Table Loader - Replace entire table
+print("\nStep 3: Loading to ENRH_LN_BILL...")
+    
+# Get final result
+result = con.execute("""
+    SELECT 
+        ACCTNO,
+        NOTENO,
+        BLDATE,
+        BLPDDATE,
+        DAYSLATE,
+        PRODUCT,
+        COSTCTR,
+        BILL_AMT,
+        BILL_AMT_PRIN,
+        BILL_AMT_INT,
+        BILL_AMT_ESCROW,
+        BILL_AMT_FEE,
+        BILL_NOT_PAY_AMT,
+        BILL_NOT_PAY_AMT_PRIN,
+        BILL_NOT_PAY_AMT_INT,
+        BILL_NOT_PAY_AMT_ESCROW,
+        BILL_NOT_PAY_AMT_FEE,
+        BILL_DT,
+        BILL_PAID_DT
+    FROM extracted
+ """).pl()
+    
+# Write to parquet (Replace mode)
+result.write_parquet(output_path)
+    
+print(f"  ✓ Output written to: {output_path}")
+
+# Statistics
+stats = con.execute("""
+    SELECT 
+        COUNT(*) as total_records,
+        COUNT(DISTINCT ACCTNO) as unique_accounts,
+        MIN(BILL_DT) as min_date,
+        MAX(BILL_DT) as max_date,
+        SUM(BILL_AMT) as total_bill_amt
+    FROM extracted
+    WHERE BILL_DT IS NOT NULL
+""").fetchone()
+    
+print("\nData Statistics:")
+print(f"  Total Records: {stats[0]:,}")
+print(f"  Unique Accounts: {stats[1]:,}")
+print(f"  Date Range: {stats[2]} to {stats[3]}")
+print(f"  Total Bill Amount: {stats[4]:,.2f}")
+    
+# Sample output
+print("\nSample output (first 5 rows):")
+print(result.head(5))
+    
+con.close()
+
+print("Processing completed successfully")
+
+
