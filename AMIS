@@ -1,8 +1,53 @@
-nly this fields having issue 
-                                     __________________________________________________________                                     
-                                                ||  Base Value           Compare Value                                              
-                                            Obs ||  LN_UTILISE_LOCAT_CD   LN_UTILISE_LOCAT_CD                                       
-                                      ________  ||  _____                 __________                                                
-                                                ||                                                                                  
-                                            15  ||  00004                 04                                                        
-                                            20  ||  00012                 12                                                        
+import os
+import sys
+import dask.config
+from dask.distributed import Client, LocalCluster
+from Data_Warehouse.Common.Jobs.FILE_READER import run_file_reader
+from Data_Warehouse.Common.Jobs.GET_BATCH_DATE import get_batch_date_dwh, format_date
+from datetime import datetime
+import dask
+sys.dont_write_bytecode = True
+
+if __name__ == "__main__":
+    batch_dt = datetime.strptime("2025-11-17 00:00:00", '%Y-%m-%d %H:%M:%S')
+    batch_dt_str = batch_dt.strftime("%Y%m%d")
+    APPL_KEY   = 'ln'
+    APPL_NAME  = 'MIS'
+    BATCH_MODE = 'BILL'
+    
+    config = {
+        'input_dir': f"/sasdata/rawdata/{APPL_KEY}",
+        'output_dir' : f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output",
+        'layout_dir' : f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT",
+        'status_file_dir' : f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/STATUS",
+        'batch_date' : batch_dt_str,
+        'n_workers' : 10,
+        'threads_per_worker' : 3,
+        'memory_limit': '18GB',
+        'applname': APPL_NAME,
+	    'batch_mode': f"{BATCH_MODE}"
+    }
+
+    dask.config.set({"distributed.worker.timeouts.connect":"180s"})
+    dask.config.set({"distributed.worker.timeouts.termination":"120s"})
+
+    cluster  = LocalCluster(
+        n_workers=config['n_workers'],
+        threads_per_worker=config['threads_per_worker'],
+        memory_limit=config['memory_limit']
+    )
+    client = Client(cluster)
+
+    try:
+        run_file_reader(
+            input_dir=config['input_dir'], 
+            output_dir=config['output_dir'], 
+            layout_dir=config['layout_dir'], 
+            batch_dt_str=config['batch_date'], 
+            status_file_dir=config['status_file_dir'],
+            applname=config['applname'],
+            batch_mode = config['batch_mode']        
+        )
+    finally:
+        client.close()
+        client.shutdown()
