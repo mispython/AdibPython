@@ -1,0 +1,139 @@
+//EIBQFAR2 JOB ACCOUNT-CODE,'PROGRAMMER-NAME',                          JOB42351
+//         MSGCLASS=A,MSGLEVEL=(1,1),CLASS=A,
+//         NOTIFY=&SYSUID
+/*JOBPARM S=S1M2
+//DELETE   EXEC PGM=IEFBR14                                             00171313
+//DD3      DD DSN=SAP.PBB.FINANCE.CARD.DIS.TEXT,                        00171413
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,                      00171513
+//            SPACE=(CYL,1,RLSE)                                        00171613
+/*
+//EIBQCARD EXEC SAS609
+//CONFIG    DD DISP=SHR,DSN=SYS3.SAS.V609.CNTL(BATCHXA)
+//DEPOSIT1  DD DSN=SAP.PBB.DISDATA.FINAL.TEMP,DISP=SHR
+//PIDMFIN   DD DSN=SAP.PBB.PIDM.FINAL,DISP=SHR
+//SORTWK01  DD UNIT=SYSDA,SPACE=(CYL,800)
+//SORTWK02  DD UNIT=SYSDA,SPACE=(CYL,800)
+//SORTWK03  DD UNIT=SYSDA,SPACE=(CYL,800)
+//SORTWK04  DD UNIT=SYSDA,SPACE=(CYL,800)
+//SORTWK05  DD UNIT=SYSDA,SPACE=(CYL,800)
+//SASLIST   DD DSN=SAP.PBB.FINANCE.CARD.DIS.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=300,BLKSIZE=0),
+//            SPACE=(CYL,(2,1),RLSE),UNIT=SYSDA
+//SFTP01    DD DSN=&&FTPPUT,DISP=(NEW,PASS),
+//             SPACE=(TRK,(1)),UNIT=SYSDA,RECFM=FB,LRECL=80
+//SYSIN     DD *
+
+PROC FORMAT;
+     VALUE JOINFMT
+           0 = 'ORGANISATION'
+           1 = 'PERSONAL'
+           2 = 'JOIN 2'
+           3 = 'JOIN 3'
+           4 = 'JOIN 4'
+           5 = 'JOIN 5'
+           6 = 'JOIN 6'
+           7 = 'JOIN 7'
+           8 = 'JOIN 8'
+           9 = 'JOIN 9'
+          10 = 'JOIN 10'
+          11 = 'JOIN 11';
+     VALUE $PRODFMD
+           '42110' = 'CA (A)'
+           '42310' = 'CA (A)'
+           '34180' = 'CA (A)'
+           '42610' = 'FX CA (A)'
+           '42120' = 'SA (B)'
+           '42320' = 'SA (B)'
+           '42130' = 'FD (C)'
+           '42630' = 'FX FD (C)'
+           '42132' = 'GID'
+           '42133' = 'GID'
+           '42180' = 'HOUSING DEV (D)'
+           '42XXX' = 'ATM/SI (E)'
+           '46795' = 'DEBIT CARD (E)'
+           '42199' = 'OD CA '
+           '42699' = 'FX ODCA';
+
+     VALUE $PRODBRH
+           '42110' = 'DDMAND'
+           '42310' = 'DDMAND'
+           '34180' = 'DDMAND'
+           '42199' = 'DDMAND'
+           '42120' = 'DSVING'
+           '42320' = 'DSVING'
+           '42130' = 'DFIXED'
+           '42132' = 'DFIXED'
+           '42133' = 'DFIXED'
+           '42180' = 'DDMAND'
+           '42610' = 'FDMAND'
+           '42699' = 'FDMAND'
+           '42630' = 'FFIXED'
+           '42XXX' = 'ATM/SI (E)'
+           '46795' = 'DEBIT CARD (E)'
+           'TRUST' = 'TRUST ACCT';
+
+     VALUE $PRODFMI
+           '42110' = 'CA (A)'
+           '42310' = 'CA (A)'
+           '34180' = 'CA (A)'
+           '42120' = 'SA (D)'
+           '42320' = 'SA (D)'
+           '42130' = 'FD'
+           '42610' = 'FXCA'
+           '42630' = 'FXFD'
+           '42132' = 'GID (B) '
+           '42133' = 'GID (B) '
+           '42180' = 'HOUSING DEV (C)'
+           '42XXX' = 'ATM/SI (E)';
+
+
+OPTIONS YEARCUTOFF=1950 COMPRESS=YES;
+DATA REPTDATE (KEEP=REPTDATE);
+  REPTDATE=INPUT('01'||'01'||
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+  SDESC = 'PUBLIC BANK BERHAD';
+  IF MONTH(TODAY()) > 6 THEN REPTDATE = TODAY();
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+RUN;
+
+DATA TRUST(KEEP=BRANCH PRODCD INSURED RENAME=(INSURED=INSUREBR));
+  SET PIDMFIN.CISDEPXN;
+  WHERE ACCTYPE2 IN (3,7) AND BENEINT NE .;
+RUN;
+
+DATA RPT_BASE;
+  SET TRUST DEPOSIT1.CISDEPD;
+RUN;
+
+TITLE1 'APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(CONVENTIONAL)';
+PROC TABULATE DATA=RPT_BASE MISSING;
+         FORMAT PRODCD $PRODBRH.;
+         CLASS BRANCH PRODCD;
+         VAR INSUREBR;
+         TABLE BRANCH=' ' ALL='TOTAL',  PRODCD='PRODUCT' *
+               INSUREBR='AMOUNT TO BE INSURED'
+               *(SUM=' '*F=COMMA18.2)
+               / BOX='BRANCH' RTS=10;
+RUN;
+
+DATA _NULL_;
+   FILE SFTP01;
+   PUT @1 "PUT //SAP.PBB.FINANCE.CARD.DIS.TEXT \
+                 PBB_INSURABLE_DEPOSIT_&REPTMON&REPTYEAR..TXT"
+           ;
+RUN;
+//******************************************************************
+//* FTP HOST DATASETS TO DATA REPORT REPOSITORY SYSTEM (DRR)
+//******************************************************************
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(DRR#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+cd "FD-MA\LOAN"
+//           DD DISP=SHR,DSN=&&FTPPUT
+//           DD *
+EOB
+/*
