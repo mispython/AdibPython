@@ -1,226 +1,57 @@
-import os
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-import mmap
-import numpy as np
-from numba import njit
-import time
-from datetime import datetime,timedelta
+from pathlib import Path
+from datetime import datetime
+import polars as pl
 
-# Global Paths
-input_folder_path  = "/sasdata/rawdata/ln"
-output_folder_path = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
-var_path           = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT/BILL"
+# 1) Paths (adjust if your folders differ)
+BASE_IN  = Path("Data_Warehouse/MIS/XMIS/Outsource/input")
+BASE_OUT = Path("Data_Warehouse/MIS/XMIS/output")
+BASE_OUT.mkdir(parents=True, exist_ok=True)
 
-batch_dt =  (datetime.now() - timedelta(days=1))
-batch_dt_str = batch_dt.strftime("%Y%m%d")
+# Parquet inputs that represent SAS DATEFILE and RPTFILE DDs
+DATEFILE_PATH = BASE_IN / "DATEFILE.parquet"   # must contain column EXTDATE
+RPTFILE_PATH  = BASE_IN / "RPTFILE.parquet"    # must contain all listed columns
 
-def get_matching_files(layout_path, data_path, batch_date):
-    """
-    Find data files that match layout files.
-    Example: BILL_MST_layout.py matches BILL_MST01_20251114, BILL_MST02_20251114, etc.
-    Returns: {base_name: [list of matching data files]}
-    """
-    result = {}
-    
-    # Get all layout files
-    layout_files = [f for f in os.listdir(layout_path) if f.endswith('_layout.py')]
-    
-    for layout_file in layout_files:
-        base_name = layout_file.replace('_layout.py', '')
-        print(f"Looking for files matching: {base_name}")
-        
-        # Find all data files that start with this base name and have the correct date
-        matching_files = []
-        for data_file in os.listdir(data_path):
-            full_path = os.path.join(data_path, data_file)
-            if not os.path.isfile(full_path):
-                continue
-            
-            # Check if file starts with base_name and contains the date
-            if data_file.startswith(base_name) and batch_date in data_file:
-                matching_files.append(data_file)
-                print(f"  ✓ Found: {data_file}")
-        
-        if matching_files:
-            # Sort files for consistent processing order
-            matching_files.sort()
-            result[base_name] = matching_files
-    
-    return result
+# 2) REPTDATE / REPTMON / REPTYEAR derivation (SAS: PUT(Z11.) -> SUBSTR(1,8) -> MMDDYY8.)
+date_tbl = pl.read_parquet(DATEFILE_PATH)
 
-def load_layout(layout_path, base_name):
-    """Load layout configuration from _layout.py file"""
-    layout_file = os.path.join(layout_path, f"{base_name}_layout.py")
-    
-    if not os.path.exists(layout_file):
-        raise FileNotFoundError(f"Layout file not found: {layout_file}")
-    
-    namespace = {}
-    with open(layout_file, 'r') as f:
-        exec(f.read(), namespace)
-    
-    return namespace['LRECL'], namespace['LAYOUT']
+# take first EXTDATE (SAS OBS=1)
+EXTDATE_val = (
+    date_tbl
+    .select(pl.col("EXTDATE"))
+    .to_series()
+    .drop_nulls()
+    .first()
+)
 
-def load_binary_file(file_path, lrecl):
-    """Load binary file into numpy array"""
-    with open(file_path, "rb") as f:
-        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        num_records = mm.size() // lrecl
-        
-        data = np.frombuffer(mm, dtype=np.uint8)
-        data = data[:num_records * lrecl]
-        data = data.reshape((num_records, lrecl))
-    
-    return data
-
-@njit
-def decode_packed_decimal(data, start, end, decimals=0):
-    """Decode packed decimal field"""
-    field = data[start:end]
-    value = 0
-    
-    for b in field[:-1]:
-        value = value * 100 + ((b >> 4) * 10 + (b & 0x0F))
-    
-    sign = field[-1] & 0x0F
-    value = value * 10 + ((field[-1] >> 4) & 0x0F)
-    
-    if sign == 0x0D or sign == 0x0B:
-        value = -value
-    
-    if decimals > 0:
-        value = value / (10 ** decimals)
-    
-    return value
-
-def decode_ebcdic(data, start, end):
-    """Decode EBCDIC string field"""
-    return data[start:end].tobytes().decode('cp037').strip().rstrip('\x00')
-
-def process_single_file(file_path, lrecl, layout):
-    """Process one binary file and return DataFrame"""
-    print(f"    Loading: {os.path.basename(file_path)}")
-    data = load_binary_file(file_path, lrecl)
-    num_records = data.shape[0]
-    print(f"    Records: {num_records:,}")
-    
-    result = {}
-    
-    for field_name, spec in layout.items():
-        field_type = spec['type']
-        field_slice = spec['slice']
-        decimals = spec.get('decimals', 0)
-        
-        if field_type == 'packed':
-            values = []
-            for i in range(num_records):
-                val = decode_packed_decimal(
-                    data[i], 
-                    field_slice.start, 
-                    field_slice.stop,
-                    decimals
-                )
-                values.append(val)
-            result[field_name] = values
-            
-        elif field_type == 'ebcdic':
-            values = []
-            for i in range(num_records):
-                val = decode_ebcdic(data[i], field_slice.start, field_slice.stop)
-                values.append(val)
-            result[field_name] = values
-            
-        else:
-            result[field_name] = [None] * num_records
-    
-    return pd.DataFrame(result)
-
-def save_parquet(df, output_path):
-    """Save DataFrame to parquet file"""
-    if df.empty:
-        print("    Warning: No data to save")
-        return
-    
+# emulate PUT(EXTDATE, Z11.) then SUBSTR(...,1,8)
+def _to_mmddyyyy_first8(val) -> str:
+    # if numeric, zero-pad to width 11; if string, strip non-digits then zfill(11)
+    s = None
     try:
-        table = pa.Table.from_pandas(df, preserve_index=False)
-        pq.write_table(table, output_path)
-        print(f"    ✓ Saved: {output_path}")
-        print(f"    Total records: {len(df):,}\n")
-    except Exception as e:
-        print(f"    ✗ Error saving: {e}\n")
+        s = f"{int(val):011d}"
+    except Exception:
+        # keep only digits, then zfill to 11
+        digits = "".join(ch for ch in str(val) if ch.isdigit())
+        s = digits.zfill(11)
+    return s[:8]  # first 8 chars
 
-if __name__ == "__main__":
-    print("="*70)
-    print("ETL PROCESSING - COMBINE MULTIPLE FILES INTO ONE PARQUET")
-    print("="*70 + "\n")
-    
-    # Find all matching files grouped by base name
-    file_groups = get_matching_files(var_path, input_folder_path, batch_dt_str)
-    
-    if not file_groups:
-        print("✗ No matching files found!")
-        exit(1)
-    
-    print(f"\n{'='*70}\n")
-    
-    # Process each group
-    for base_name, data_files in file_groups.items():
-        print(f"Processing: {base_name}")
-        print(f"Files to combine: {len(data_files)}")
-        print("-"*70)
-        
-        try:
-            # Load layout
-            lrecl, layout = load_layout(var_path, base_name)
-            print(f"Layout: LRECL={lrecl}, Fields={len(layout)}\n")
-            
-            # Process all files and collect DataFrames
-            all_dfs = []
-            total_time = 0
-            
-            for idx, data_file in enumerate(data_files, 1):
-                print(f"  [{idx}/{len(data_files)}] {data_file}")
-                file_path = os.path.join(input_folder_path, data_file)
-                
-                t0 = time.time()
-                df = process_single_file(file_path, lrecl, layout)
-                t1 = time.time()
-                
-                print(f"    Time: {t1-t0:.2f}s\n")
-                total_time += (t1 - t0)
-                all_dfs.append(df)
-            
-            # Combine all DataFrames
-            print(f"  Combining {len(all_dfs)} DataFrames...")
-            combined_df = pd.concat(all_dfs, ignore_index=True)
-            print(f"  Combined records: {len(combined_df):,}")
-            print(f"  Total processing time: {total_time:.2f}s\n")
-            
-            # Save to parquet
-            output_file = os.path.join(output_folder_path, f"STG_LN_{base_name.upper()}.parquet")
-            
-            # Delete existing file if present
-            if os.path.exists(output_file):
-                os.remove(output_file)
-                print(f"  Deleted existing: {output_file}")
-            
-            save_parquet(combined_df, output_file)
-            
-        except Exception as e:
-            print(f"✗ Error processing {base_name}: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        print("="*70 + "\n")
-    
-    print("✓ ETL PROCESSING COMPLETE")
-    print("="*70)
+mmddyyyy_8 = _to_mmddyyyy_first8(EXTDATE_val)
+REPTDATE   = datetime.strptime(mmddyyyy_8, "%m%d%Y").date()
+REPTMON    = f"{REPTDATE.month:02d}"        # SAS PUT(MM, Z2.)
+REPTYEAR   = f"{REPTDATE.year % 100:02d}"   # SAS YEAR2.
 
-======================================================================
-ETL PROCESSING - COMBINE MULTIPLE FILES INTO ONE PARQUET
-======================================================================
+# 3) Read report data (already Parquet), keep column names as SAS (UPPERCASE)
+L6999 = pl.read_parquet(RPTFILE_PATH)
+keep_cols = [
+    "COSTCT","NOTETYPE","PRINBAL","PRNNACCR","INTACCR","INTNACCR",
+    "UNERNINT","UNERNNON","RSRVFIN","RSRVDLR","NONDDA","LATEFEES",
+    "OTHERFEE","CTPRINT","CTPRNNAC"
+]
+R6999 = L6999.select(keep_cols)
 
-Looking for files matching: BILL_MST
-✗ No matching files found!
+# Output path mirrors SAS library/member name
+out_dir  = BASE_OUT / "LNR6999"
+out_dir.mkdir(parents=True, exist_ok=True)
+out_name = f"R6999{REPTMON}{REPTYEAR}.parquet"
+
+R6999.write_parquet(out_dir / out_name)
