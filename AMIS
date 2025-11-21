@@ -7,51 +7,37 @@ BASE_IN  = Path("Data_Warehouse/MIS/XMIS/Outsource/input")
 BASE_OUT = Path("Data_Warehouse/MIS/XMIS/output")
 BASE_OUT.mkdir(parents=True, exist_ok=True)
 
-# Parquet inputs that represent SAS DATEFILE and RPTFILE DDs
-DATEFILE_PATH = BASE_IN / "DATEFILE.parquet"   # must contain column EXTDATE
-RPTFILE_PATH  = BASE_IN / "RPTFILE.parquet"    # must contain all listed columns
+# 2) Hardcoded batch date (replaces DATEFILE reading)
+batch_dt = datetime.strptime("2025-11-20 00:00:00", '%Y-%m-%d %H:%M:%S')
+batch_dt_str = batch_dt.strftime("%Y%m%d")
 
-# 2) REPTDATE / REPTMON / REPTYEAR derivation (SAS: PUT(Z11.) -> SUBSTR(1,8) -> MMDDYY8.)
-date_tbl = pl.read_parquet(DATEFILE_PATH)
+# Convert to REPTDATE format (MMDDYYYY)
+REPTDATE = batch_dt
+REPTMON = f"{REPTDATE.month:02d}"        # SAS PUT(MM, Z2.)
+REPTYEAR = f"{REPTDATE.year % 100:02d}"  # SAS YEAR2.
 
-# take first EXTDATE (SAS OBS=1)
-EXTDATE_val = (
-    date_tbl
-    .select(pl.col("EXTDATE"))
-    .to_series()
-    .drop_nulls()
-    .first()
-)
-
-# emulate PUT(EXTDATE, Z11.) then SUBSTR(...,1,8)
-def _to_mmddyyyy_first8(val) -> str:
-    # if numeric, zero-pad to width 11; if string, strip non-digits then zfill(11)
-    s = None
-    try:
-        s = f"{int(val):011d}"
-    except Exception:
-        # keep only digits, then zfill to 11
-        digits = "".join(ch for ch in str(val) if ch.isdigit())
-        s = digits.zfill(11)
-    return s[:8]  # first 8 chars
-
-mmddyyyy_8 = _to_mmddyyyy_first8(EXTDATE_val)
-REPTDATE   = datetime.strptime(mmddyyyy_8, "%m%d%Y").date()
-REPTMON    = f"{REPTDATE.month:02d}"        # SAS PUT(MM, Z2.)
-REPTYEAR   = f"{REPTDATE.year % 100:02d}"   # SAS YEAR2.
+print(f"Processing for batch date: {batch_dt_str}")
+print(f"REPTDATE: {REPTDATE}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
 
 # 3) Read report data (already Parquet), keep column names as SAS (UPPERCASE)
-L6999 = pl.read_parquet(RPTFILE_PATH)
+RPTFILE_PATH = BASE_IN / "RPTFILE.parquet"
+
 keep_cols = [
-    "COSTCT","NOTETYPE","PRINBAL","PRNNACCR","INTACCR","INTNACCR",
-    "UNERNINT","UNERNNON","RSRVFIN","RSRVDLR","NONDDA","LATEFEES",
-    "OTHERFEE","CTPRINT","CTPRNNAC"
+    "COSTCT", "NOTETYPE", "PRINBAL", "PRNNACCR", "INTACCR", "INTNACCR",
+    "UNERNINT", "UNERNNON", "RSRVFIN", "RSRVDLR", "NONDDA", "LATEFEES",
+    "OTHERFEE", "CTPRINT", "CTPRNNAC"
 ]
-R6999 = L6999.select(keep_cols)
+
+# Read only the needed columns for better performance
+R6999 = pl.read_parquet(RPTFILE_PATH, columns=keep_cols)
+
+print(f"Processed {len(R6999)} records")
 
 # Output path mirrors SAS library/member name
-out_dir  = BASE_OUT / "LNR6999"
+out_dir = BASE_OUT / "LNR6999"
 out_dir.mkdir(parents=True, exist_ok=True)
 out_name = f"R6999{REPTMON}{REPTYEAR}.parquet"
+output_path = out_dir / out_name
 
-R6999.write_parquet(out_dir / out_name)
+R6999.write_parquet(output_path)
+print(f"Output successfully written to: {output_path}")
