@@ -2,36 +2,32 @@ import duckdb
 import polars as pl
 from pathlib import Path
 from datetime import datetime
-
 import sys
 
 input_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/STG_LN_BILL_MST.parquet")
 output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/ENRH_LN_BILL.parquet")
 
-def parse_packed_date(packed_value: int, format_type: str = 'YYMMDD') -> datetime.date:
+def parse_packed_date(packed_value: int) -> datetime.date:
     """
     Convert packed decimal date to Python date.
-    YYMMDD8.: 20241115 -> 2024-11-15
-    MMDDYY8.: 11152024 -> 2024-11-15
+    Handles both 8-digit (YYYYMMDD) and 11-digit formats (with trailing zeros)
     """
-    if packed_value == 0:
+    if packed_value is None or packed_value == 0:
         return None
-    date_str = str(packed_value).zfill(8)
+    
+    # Convert to string and take first 8 digits
+    date_str = str(packed_value)[:8].zfill(8)
     
     try:
-        if format_type == 'YYMMDD':
-            return datetime.strptime(date_str, '%Y%m%d').date()
-        elif format_type == 'MMDDYY':
-            return datetime.strptime(date_str, '%m%d%Y').date()
+        return datetime.strptime(date_str, '%Y%m%d').date()
     except:
         return None
 
-# Read the combined parquet file
+# Read the parquet file
 df = pl.read_parquet(input_path)
-        
-print(f"✓ Loaded {len(df):,} records")
-        
-# Validate required columns exist
+print(f"✓ Loaded {len(df):,} records from {input_path.name}")
+
+# Validate required columns
 required_columns = [
     'BILL_ACCT_NO', 'BILL_NOTE_NO', 'BILL_DUE_DATE', 
     'BILL_PAID_DATE', 'BILL_DAYS_LATE', 'BILL_NOTE_TYPE',
@@ -40,96 +36,93 @@ required_columns = [
     'BILL_TOT_BNP', 'BILL_PRIN_BNP', 'BILL_INT_BNP',
     'BILL_ESC_BNP', 'BILL_FEE_BNP'
 ]
-        
+
 missing_columns = [col for col in required_columns if col not in df.columns]
 if missing_columns:
-    print(f"WARNING: Missing columns: {missing_columns}")
-        
-print("\nColumn Structure:")
-print(f"  Total Columns: {len(df.columns)}")
-print(f"  Columns: {', '.join(df.columns[:5])}... (showing first 5)")
-        
-# Get data statistics
-print("\nData Statistics:")
-print(f"  Total Records: {len(df):,}")
-       
-if 'BILL_ACCT_NO' in df.columns:
-    print(f"  Unique Accounts: {df['BILL_ACCT_NO'].n_unique():,}")
-        
-if 'BILL_DUE_DATE' in df.columns:
-    print(f"  Date Range: {df['BILL_DUE_DATE'].min()} to {df['BILL_DUE_DATE'].max()}")
-        
-if 'BILL_TOT_BILLED' in df.columns:
-    total_billed = df['BILL_TOT_BILLED'].sum()
-    print(f"  Total Billed: {total_billed:,.2f}")
-        
-if 'BILL_TOT_BNP' in df.columns:
-    total_bnp = df['BILL_TOT_BNP'].sum()
-    print(f"  Total BNP: {total_bnp:,.2f}")
-        
-# Filter out null records (IF ACCTCHK NE .)
-if 'BILL_ACCT_NO' in df.columns:
-    initial_count = len(df)
-    stg_ln_bill = df.filter(pl.col('BILL_ACCT_NO').is_not_null() & (pl.col('BILL_ACCT_NO') != 0))
-    filtered_count = initial_count - len(stg_ln_bill)
-    if filtered_count > 0:
-        print(f"\n  Filtered out {filtered_count:,} null/zero account records")
-        
+    print(f"✗ ERROR: Missing required columns: {missing_columns}")
+    sys.exit(1)
 
-print("ENRH_LN_BILL - Transform and Load")
- 
+print("\n✓ All required columns present")
+
+# Show actual column names
+print("\nActual columns in file:")
+print(df.columns)
+
+# Filter out null records
+initial_count = len(df)
+stg_ln_bill = df.filter(
+    pl.col('BILL_ACCT_NO').is_not_null() & 
+    (pl.col('BILL_ACCT_NO') != 0)
+)
+filtered_count = initial_count - len(stg_ln_bill)
+
+if filtered_count > 0:
+    print(f"\n✓ Filtered out {filtered_count:,} null/zero account records")
+
+print(f"\n✓ Processing {len(stg_ln_bill):,} valid records")
+
+# Convert to Pandas for DuckDB
+print("\nConverting to DuckDB...")
 con = duckdb.connect(':memory:')
-# Step 2: Extract - Map columns and create date fields
+con.register('stg_ln_bill', stg_ln_bill.to_pandas())
 
 print("\nStep 2: Mapping columns and creating derived dates...")
-    
-con.execute("""
-    CREATE TABLE extracted AS
-    SELECT
-        ACCTNO,
-        NOTENO,
-        BLDATE,
-        BLPDDATE,
-        DAYSLATE,
-        PRODUCT,
-        COSTCTR,
-        BILL_AMT,
-        BILL_AMT_PRIN,
-        BILL_AMT_INT,
-        BILL_AMT_ESCROW,
-        BILL_AMT_FEE,
-        BILL_NOT_PAY_AMT,
-        BILL_NOT_PAY_AMT_PRIN,
-        BILL_NOT_PAY_AMT_INT,
-        BILL_NOT_PAY_AMT_ESCROW,
-        BILL_NOT_PAY_AMT_FEE,
-        -- Parse BLDATE (YYMMDD format)
-        CASE 
-            WHEN BLDATE > 0 THEN 
-                CAST(SUBSTR(LPAD(CAST(BLDATE AS VARCHAR), 11, '0'), 1, 8) AS DATE)
-            ELSE NULL
+
+try:
+    con.execute("""
+        CREATE TABLE extracted AS
+        SELECT
+            BILL_ACCT_NO AS ACCTNO,
+            BILL_NOTE_NO AS NOTENO,
+            BILL_DUE_DATE AS BLDATE,
+            BILL_PAID_DATE AS BLPDDATE,
+            BILL_DAYS_LATE AS DAYSLATE,
+            BILL_NOTE_TYPE AS PRODUCT,
+            BILL_COST_CENTER AS COSTCTR,
+            BILL_TOT_BILLED AS BILL_AMT,
+            BILL_PRIN_BILLED AS BILL_AMT_PRIN,
+            BILL_INT_BILLED AS BILL_AMT_INT,
+            BILL_ESC_BILLED AS BILL_AMT_ESCROW,
+            BILL_FEE_BILLED AS BILL_AMT_FEE,
+            BILL_TOT_BNP AS BILL_NOT_PAY_AMT,
+            BILL_PRIN_BNP AS BILL_NOT_PAY_AMT_PRIN,
+            BILL_INT_BNP AS BILL_NOT_PAY_AMT_INT,
+            BILL_ESC_BNP AS BILL_NOT_PAY_AMT_ESCROW,
+            BILL_FEE_BNP AS BILL_NOT_PAY_AMT_FEE,
+            
+            -- Parse dates (take first 8 digits from packed decimal)
+            CASE 
+                WHEN BILL_DUE_DATE > 0 THEN 
+                    TRY_CAST(
+                        SUBSTR(CAST(BILL_DUE_DATE AS VARCHAR), 1, 8)
+                        AS DATE
+                    )
+                ELSE NULL
             END AS BILL_DT,
-            -- Parse BLPDDATE (MMDDYY format)
-        CASE 
-            WHEN BLPDDATE > 0 THEN
-                TRY_CAST(
-                    SUBSTR(LPAD(CAST(BLPDDATE AS VARCHAR), 8, '0'), 5, 4) || '-' ||
-                    SUBSTR(LPAD(CAST(BLPDDATE AS VARCHAR), 8, '0'), 1, 2) || '-' ||
-                    SUBSTR(LPAD(CAST(BLPDDATE AS VARCHAR), 8, '0'), 3, 2)
-                    AS DATE
-                )
-            ELSE NULL
+            
+            CASE 
+                WHEN BILL_PAID_DATE > 0 THEN
+                    TRY_CAST(
+                        SUBSTR(CAST(BILL_PAID_DATE AS VARCHAR), 1, 8)
+                        AS DATE
+                    )
+                ELSE NULL
             END AS BILL_PAID_DT
         FROM stg_ln_bill
-""")
+    """)
     
-count = con.execute("SELECT COUNT(*) FROM extracted").fetchone()[0]
-print(f"  Transformed {count:,} records")
+    count = con.execute("SELECT COUNT(*) FROM extracted").fetchone()[0]
+    print(f"  ✓ Transformed {count:,} records")
     
-# Step 3: Table Loader - Replace entire table
-print("\nStep 3: Loading to ENRH_LN_BILL...")
-    
+except Exception as e:
+    print(f"✗ ERROR in SQL transformation: {e}")
+    print("\nAvailable columns:")
+    print(con.execute("DESCRIBE stg_ln_bill").fetchdf())
+    raise
+
 # Get final result
+print("\nStep 3: Loading to ENRH_LN_BILL...")
+
 result = con.execute("""
     SELECT 
         ACCTNO,
@@ -152,74 +145,51 @@ result = con.execute("""
         BILL_DT,
         BILL_PAID_DT
     FROM extracted
- """).pl()
-    
-# Write to parquet (Replace mode)
+""").pl()
+
+# Write to parquet
 result.write_parquet(output_path)
-    
 print(f"  ✓ Output written to: {output_path}")
 
-# Statistics
+# Show statistics
 stats = con.execute("""
     SELECT 
         COUNT(*) as total_records,
         COUNT(DISTINCT ACCTNO) as unique_accounts,
         MIN(BILL_DT) as min_date,
         MAX(BILL_DT) as max_date,
-        SUM(BILL_AMT) as total_bill_amt
+        SUM(BILL_AMT) as total_bill_amt,
+        COUNT(CASE WHEN BILL_DT IS NULL THEN 1 END) as null_dates
     FROM extracted
-    WHERE BILL_DT IS NOT NULL
 """).fetchone()
-    
-print("\nData Statistics:")
-print(f"  Total Records: {stats[0]:,}")
-print(f"  Unique Accounts: {stats[1]:,}")
-print(f"  Date Range: {stats[2]} to {stats[3]}")
-print(f"  Total Bill Amount: {stats[4]:,.2f}")
-    
+
+print("\n" + "="*70)
+print("DATA STATISTICS")
+print("="*70)
+print(f"Total Records:     {stats[0]:>15,}")
+print(f"Unique Accounts:   {stats[1]:>15,}")
+print(f"Date Range:        {stats[2]} to {stats[3]}")
+print(f"Null Dates:        {stats[5]:>15,}")
+print(f"Total Bill Amount: {stats[4]:>15,.2f}")
+print("="*70)
+
 # Sample output
 print("\nSample output (first 5 rows):")
 print(result.head(5))
-    
+
+# Validate date parsing
+date_check = con.execute("""
+    SELECT 
+        COUNT(*) as total,
+        COUNT(BILL_DT) as valid_bill_dt,
+        COUNT(BILL_PAID_DT) as valid_paid_dt
+    FROM extracted
+""").fetchone()
+
+print(f"\nDate Parsing Results:")
+print(f"  Total records: {date_check[0]:,}")
+print(f"  Valid BILL_DT: {date_check[1]:,} ({100*date_check[1]/date_check[0]:.1f}%)")
+print(f"  Valid BILL_PAID_DT: {date_check[2]:,} ({100*date_check[2]/date_check[0]:.1f}%)")
+
 con.close()
-
-print("Processing completed successfully")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-✓ Loaded 3,211,493 records
-
-Column Structure:
-  Total Columns: 18
-  Columns: BILL_ACCT_NO, BILL_NOTE_NO, BILL_DUE_DATE, BILL_PAID_DATE, BILL_DAYS_LATE... (showing first 5)
-
-Data Statistics:
-  Total Records: 3,211,493
-  Unique Accounts: 17,703
-  Date Range: 19890930273 to 20570701182
-  Total Billed: 644,536,372,948,885.00
-  Total BNP: 624,439,829,876,304.00
-ENRH_LN_BILL - Transform and Load
-
-Step 2: Mapping columns and creating derived dates...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_ENRH_LN_BILL_UAT.py", line 86, in <module>
-    con.execute("""
-duckdb.duckdb.BinderException: Binder Error: Referenced column "ACCTNO" not found in FROM clause!
-Candidate bindings: "BILL_ACCT_NO", "BILL_TOT_BNP"
-
-LINE 4:         ACCTNO,
+print("\n✓ Processing completed successfully")
