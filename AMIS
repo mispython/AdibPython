@@ -1,43 +1,225 @@
+import duckdb
+import polars as pl
 from pathlib import Path
 from datetime import datetime
-import polars as pl
 
-# 1) Paths (adjust if your folders differ)
-BASE_IN  = Path("Data_Warehouse/MIS/XMIS/Outsource/input")
-BASE_OUT = Path("Data_Warehouse/MIS/XMIS/output")
-BASE_OUT.mkdir(parents=True, exist_ok=True)
+import sys
 
-# 2) Hardcoded batch date (replaces DATEFILE reading)
-batch_dt = datetime.strptime("2025-11-20 00:00:00", '%Y-%m-%d %H:%M:%S')
-batch_dt_str = batch_dt.strftime("%Y%m%d")
+input_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/STG_LN_BILL_MST.parquet")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/ENRH_LN_BILL.parquet")
 
-# Convert to REPTDATE format (MMDDYYYY)
-REPTDATE = batch_dt
-REPTMON = f"{REPTDATE.month:02d}"        # SAS PUT(MM, Z2.)
-REPTYEAR = f"{REPTDATE.year % 100:02d}"  # SAS YEAR2.
+def parse_packed_date(packed_value: int, format_type: str = 'YYMMDD') -> datetime.date:
+    """
+    Convert packed decimal date to Python date.
+    YYMMDD8.: 20241115 -> 2024-11-15
+    MMDDYY8.: 11152024 -> 2024-11-15
+    """
+    if packed_value == 0:
+        return None
+    date_str = str(packed_value).zfill(8)
+    
+    try:
+        if format_type == 'YYMMDD':
+            return datetime.strptime(date_str, '%Y%m%d').date()
+        elif format_type == 'MMDDYY':
+            return datetime.strptime(date_str, '%m%d%Y').date()
+    except:
+        return None
 
-print(f"Processing for batch date: {batch_dt_str}")
-print(f"REPTDATE: {REPTDATE}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
-
-# 3) Read report data (already Parquet), keep column names as SAS (UPPERCASE)
-RPTFILE_PATH = BASE_IN / "RPTFILE.parquet"
-
-keep_cols = [
-    "COSTCT", "NOTETYPE", "PRINBAL", "PRNNACCR", "INTACCR", "INTNACCR",
-    "UNERNINT", "UNERNNON", "RSRVFIN", "RSRVDLR", "NONDDA", "LATEFEES",
-    "OTHERFEE", "CTPRINT", "CTPRNNAC"
+# Read the combined parquet file
+df = pl.read_parquet(input_path)
+        
+print(f"✓ Loaded {len(df):,} records")
+        
+# Validate required columns exist
+required_columns = [
+    'BILL_ACCT_NO', 'BILL_NOTE_NO', 'BILL_DUE_DATE', 
+    'BILL_PAID_DATE', 'BILL_DAYS_LATE', 'BILL_NOTE_TYPE',
+    'BILL_COST_CENTER', 'BILL_TOT_BILLED', 'BILL_PRIN_BILLED',
+    'BILL_INT_BILLED', 'BILL_ESC_BILLED', 'BILL_FEE_BILLED',
+    'BILL_TOT_BNP', 'BILL_PRIN_BNP', 'BILL_INT_BNP',
+    'BILL_ESC_BNP', 'BILL_FEE_BNP'
 ]
+        
+missing_columns = [col for col in required_columns if col not in df.columns]
+if missing_columns:
+    print(f"WARNING: Missing columns: {missing_columns}")
+        
+print("\nColumn Structure:")
+print(f"  Total Columns: {len(df.columns)}")
+print(f"  Columns: {', '.join(df.columns[:5])}... (showing first 5)")
+        
+# Get data statistics
+print("\nData Statistics:")
+print(f"  Total Records: {len(df):,}")
+       
+if 'BILL_ACCT_NO' in df.columns:
+    print(f"  Unique Accounts: {df['BILL_ACCT_NO'].n_unique():,}")
+        
+if 'BILL_DUE_DATE' in df.columns:
+    print(f"  Date Range: {df['BILL_DUE_DATE'].min()} to {df['BILL_DUE_DATE'].max()}")
+        
+if 'BILL_TOT_BILLED' in df.columns:
+    total_billed = df['BILL_TOT_BILLED'].sum()
+    print(f"  Total Billed: {total_billed:,.2f}")
+        
+if 'BILL_TOT_BNP' in df.columns:
+    total_bnp = df['BILL_TOT_BNP'].sum()
+    print(f"  Total BNP: {total_bnp:,.2f}")
+        
+# Filter out null records (IF ACCTCHK NE .)
+if 'BILL_ACCT_NO' in df.columns:
+    initial_count = len(df)
+    stg_ln_bill = df.filter(pl.col('BILL_ACCT_NO').is_not_null() & (pl.col('BILL_ACCT_NO') != 0))
+    filtered_count = initial_count - len(stg_ln_bill)
+    if filtered_count > 0:
+        print(f"\n  Filtered out {filtered_count:,} null/zero account records")
+        
 
-# Read only the needed columns for better performance
-R6999 = pl.read_parquet(RPTFILE_PATH, columns=keep_cols)
+print("ENRH_LN_BILL - Transform and Load")
+ 
+con = duckdb.connect(':memory:')
+# Step 2: Extract - Map columns and create date fields
 
-print(f"Processed {len(R6999)} records")
+print("\nStep 2: Mapping columns and creating derived dates...")
+    
+con.execute("""
+    CREATE TABLE extracted AS
+    SELECT
+        ACCTNO,
+        NOTENO,
+        BLDATE,
+        BLPDDATE,
+        DAYSLATE,
+        PRODUCT,
+        COSTCTR,
+        BILL_AMT,
+        BILL_AMT_PRIN,
+        BILL_AMT_INT,
+        BILL_AMT_ESCROW,
+        BILL_AMT_FEE,
+        BILL_NOT_PAY_AMT,
+        BILL_NOT_PAY_AMT_PRIN,
+        BILL_NOT_PAY_AMT_INT,
+        BILL_NOT_PAY_AMT_ESCROW,
+        BILL_NOT_PAY_AMT_FEE,
+        -- Parse BLDATE (YYMMDD format)
+        CASE 
+            WHEN BLDATE > 0 THEN 
+                CAST(SUBSTR(LPAD(CAST(BLDATE AS VARCHAR), 11, '0'), 1, 8) AS DATE)
+            ELSE NULL
+            END AS BILL_DT,
+            -- Parse BLPDDATE (MMDDYY format)
+        CASE 
+            WHEN BLPDDATE > 0 THEN
+                TRY_CAST(
+                    SUBSTR(LPAD(CAST(BLPDDATE AS VARCHAR), 8, '0'), 5, 4) || '-' ||
+                    SUBSTR(LPAD(CAST(BLPDDATE AS VARCHAR), 8, '0'), 1, 2) || '-' ||
+                    SUBSTR(LPAD(CAST(BLPDDATE AS VARCHAR), 8, '0'), 3, 2)
+                    AS DATE
+                )
+            ELSE NULL
+            END AS BILL_PAID_DT
+        FROM stg_ln_bill
+""")
+    
+count = con.execute("SELECT COUNT(*) FROM extracted").fetchone()[0]
+print(f"  Transformed {count:,} records")
+    
+# Step 3: Table Loader - Replace entire table
+print("\nStep 3: Loading to ENRH_LN_BILL...")
+    
+# Get final result
+result = con.execute("""
+    SELECT 
+        ACCTNO,
+        NOTENO,
+        BLDATE,
+        BLPDDATE,
+        DAYSLATE,
+        PRODUCT,
+        COSTCTR,
+        BILL_AMT,
+        BILL_AMT_PRIN,
+        BILL_AMT_INT,
+        BILL_AMT_ESCROW,
+        BILL_AMT_FEE,
+        BILL_NOT_PAY_AMT,
+        BILL_NOT_PAY_AMT_PRIN,
+        BILL_NOT_PAY_AMT_INT,
+        BILL_NOT_PAY_AMT_ESCROW,
+        BILL_NOT_PAY_AMT_FEE,
+        BILL_DT,
+        BILL_PAID_DT
+    FROM extracted
+ """).pl()
+    
+# Write to parquet (Replace mode)
+result.write_parquet(output_path)
+    
+print(f"  ✓ Output written to: {output_path}")
 
-# Output path mirrors SAS library/member name
-out_dir = BASE_OUT / "LNR6999"
-out_dir.mkdir(parents=True, exist_ok=True)
-out_name = f"R6999{REPTMON}{REPTYEAR}.parquet"
-output_path = out_dir / out_name
+# Statistics
+stats = con.execute("""
+    SELECT 
+        COUNT(*) as total_records,
+        COUNT(DISTINCT ACCTNO) as unique_accounts,
+        MIN(BILL_DT) as min_date,
+        MAX(BILL_DT) as max_date,
+        SUM(BILL_AMT) as total_bill_amt
+    FROM extracted
+    WHERE BILL_DT IS NOT NULL
+""").fetchone()
+    
+print("\nData Statistics:")
+print(f"  Total Records: {stats[0]:,}")
+print(f"  Unique Accounts: {stats[1]:,}")
+print(f"  Date Range: {stats[2]} to {stats[3]}")
+print(f"  Total Bill Amount: {stats[4]:,.2f}")
+    
+# Sample output
+print("\nSample output (first 5 rows):")
+print(result.head(5))
+    
+con.close()
 
-R6999.write_parquet(output_path)
-print(f"Output successfully written to: {output_path}")
+print("Processing completed successfully")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✓ Loaded 3,211,493 records
+
+Column Structure:
+  Total Columns: 18
+  Columns: BILL_ACCT_NO, BILL_NOTE_NO, BILL_DUE_DATE, BILL_PAID_DATE, BILL_DAYS_LATE... (showing first 5)
+
+Data Statistics:
+  Total Records: 3,211,493
+  Unique Accounts: 17,703
+  Date Range: 19890930273 to 20570701182
+  Total Billed: 644,536,372,948,885.00
+  Total BNP: 624,439,829,876,304.00
+ENRH_LN_BILL - Transform and Load
+
+Step 2: Mapping columns and creating derived dates...
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_ENRH_LN_BILL_UAT.py", line 86, in <module>
+    con.execute("""
+duckdb.duckdb.BinderException: Binder Error: Referenced column "ACCTNO" not found in FROM clause!
+Candidate bindings: "BILL_ACCT_NO", "BILL_TOT_BNP"
+
+LINE 4:         ACCTNO,
