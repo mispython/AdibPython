@@ -1,287 +1,143 @@
 import re
 import pprint
-from collections import defaultdict
 import os
 
 def generate_layout_file(field_layout_file, output_dir='.'):
+    """Generate Python layout file from SAS field definition"""
+    
     if not os.path.exists(field_layout_file):
-        raise FileNotFoundError(f"Field Config File not found in {field_layout_file}")
+        raise FileNotFoundError(f"Field Config File not found: {field_layout_file}")
     
     try:
         print(f"\n{'='*70}")
         print(f"Processing: {os.path.basename(field_layout_file)}")
         print('='*70)
         
+        # Read file
         with open(field_layout_file, 'r', encoding='utf-8') as f:
             sas_input_code = f.read()
         
-        # DEBUG: Show file content
-        print(f"\nFile length: {len(sas_input_code)} characters")
-        print(f"First 500 characters:")
-        print("-"*70)
-        print(sas_input_code[:500])
-        print("-"*70)
+        print(f"File length: {len(sas_input_code)} characters")
         
         # Find LRECL
         lrecl_pattern = re.compile(r'lrecl\s*=\s*(\d+)', re.IGNORECASE)
         lrecl_match = lrecl_pattern.search(sas_input_code)
+        
         if not lrecl_match:
             raise ValueError("Could not find LRECL in the code")
+        
         lrecl = int(lrecl_match.group(1))
-        print(f"\n✓ Found LRECL: {lrecl}")
+        print(f"✓ Found LRECL: {lrecl}")
         
-        # DEBUG: Check for 'input' keyword
-        input_keyword_lower = sas_input_code.lower().count('input')
-        input_keyword_upper = sas_input_code.count('INPUT')
-        input_keyword_mixed = sas_input_code.count('Input')
-        
-        print(f"\nSearching for 'input' keyword:")
-        print(f"  - 'input' (lowercase): {input_keyword_lower} occurrences")
-        print(f"  - 'INPUT' (uppercase): {input_keyword_upper} occurrences")
-        print(f"  - 'Input' (mixed): {input_keyword_mixed} occurrences")
-        
-        # Try to split by 'input' (case-insensitive)
+        # Split by 'input' keyword (case-insensitive)
         split_result = re.split(r'input', sas_input_code, flags=re.IGNORECASE)
-        print(f"\nSplit by 'input' results in {len(split_result)} parts")
         
         if len(split_result) < 2:
-            print("\n✗ ERROR: No 'input' keyword found in file!")
-            print("\nFile structure doesn't match expected SAS INPUT format.")
-            print("Expected format:")
-            print("  LRECL = 123")
-            print("  INPUT @001 FIELD1 $10.")
-            print("        @011 FIELD2 PD6.")
-            print("        ;")
-            return
+            raise ValueError("No 'INPUT' keyword found in file")
         
-        # Show what's between 'input' and ';'
+        # Get content between INPUT and semicolon
         input_section = split_result[1]
-        print(f"\nContent after 'input' keyword (first 300 chars):")
-        print("-"*70)
-        print(input_section[:300])
-        print("-"*70)
         
-        # Check for semicolon
         if ';' not in input_section:
-            print("\n✗ ERROR: No semicolon (;) found after INPUT keyword!")
-            return
+            raise ValueError("No semicolon (;) found after INPUT keyword")
         
         input_lines = input_section.split(";")[0]
-        print(f"\n✓ Extracted INPUT block ({len(input_lines)} characters)")
+        print(f"✓ Extracted INPUT block")
         
+        # Parse fields
         layout = {}
         input_line_pattern = re.compile(r'@\s*(\d+)\s+([A-Za-z0-9_]+)\s+([$\w\.]+)')
-        range_line_pattern = re.compile(r'^\s*([A-Za-z0-9_]+)\s*(\$)?[ ]*(\d+)-(\d+)')
         
         field_count = 0
         skipped_count = 0
         
         for line_num, line in enumerate(input_lines.strip().splitlines(), 1):
             line = line.strip()
-            if not line:
+            
+            # Skip empty lines and comments
+            if not line or line.startswith('/*') or line.startswith('*'):
                 continue
             
+            # Remove inline comments
+            if '/*' in line:
+                line = line.split('/*')[0].strip()
+            
+            # Match INPUT line pattern
             match = input_line_pattern.match(line)
             
-            if match:
-                field_count += 1
-                start_pos, field_name, informat_str = match.groups()
-                start_pos = int(start_pos)
-                
-                spec = {}
-                byte_length = None
-                clean_informat = informat_str.strip('$.').upper()
-                
-                # Parse different informat types
-                pd_match = re.match(r'S370FPD(\d+)(?:\.(\d+))?', clean_informat)
+            if not match:
+                continue
+            
+            start_pos, field_name, informat_str = match.groups()
+            start_pos = int(start_pos)
+            
+            spec = {}
+            byte_length = None
+            
+            # Clean informat string
+            clean_informat = informat_str.strip('$.').upper()
+            
+            # Try to match different informat types
+            # 1. Packed Decimal: S370FPD6., S370FPD8.2
+            pd_match = re.match(r'S370FPD(\d+)(?:\.(\d+))?', clean_informat)
+            if pd_match:
+                spec['type'] = 'packed'
+                byte_length = int(pd_match.group(1))
+                if pd_match.group(2):
+                    spec['decimals'] = int(pd_match.group(2))
+            
+            # 2. EBCDIC: EBCDIC10
+            elif re.match(r'EBCDIC(\d+)', clean_informat):
                 ebcdic_match = re.match(r'EBCDIC(\d+)', clean_informat)
-                
-                # String formats: $10., $CHAR10., $UPCASE5., $HEX8., etc.
-                string_match = re.match(r'\$(?:[A-Z]+)?(\d+)\.?', informat_str.upper())
-                
-                # Date formats: YYMMDD8., MMDDYY8., DATE8., etc.
-                date_match = re.match(r'(?:YYMMDD|MMDDYY|DDMMYY|DATE)(\d+)\.?', clean_informat)
-                
-                # Float with decimals: 8.2, 10.4, etc.
-                float_match = re.match(r'(\d+)\.(\d+)', clean_informat)
-                
-                # Simple integer: 8., 10., etc.
-                integer_match = re.match(r'(\d+)\.?
-                
-                if byte_length is None:
-                    print(f"  ⚠ Line {line_num}: Could not parse '{informat_str}' for '{field_name}'")
-                    skipped_count += 1
-                    continue
-                
-                spec['slice'] = slice(start_pos - 1, start_pos - 1 + byte_length)
-                layout[field_name] = spec
-                
-            elif match := range_line_pattern.match(line):
-                field_count += 1
-                field_name, dollar_sign, start_pos_str, end_pos_str = match.groups()
-                start_pos = int(start_pos_str)
-                end_pos = int(end_pos_str)
-                
-                spec = {}
-                byte_length = end_pos - start_pos + 1
-                
-                if dollar_sign:
-                    spec['type'] = 'string'
-                else:
-                    spec['type'] = 'integer'
-                
-                spec['slice'] = slice(start_pos - 1, end_pos)
-                layout[field_name] = spec
-            else:
-                if line and not line.startswith('*'):  # Skip comment lines
-                    print(f"  ⚠ Line {line_num}: Skipped '{line[:50]}...'")
-                    skipped_count += 1
-        
-        print(f"\n✓ Processed {field_count} fields")
-        if skipped_count > 0:
-            print(f"  ⚠ Skipped {skipped_count} lines")
-        
-        if not layout:
-            print("\n✗ ERROR: No fields were extracted!")
-            return
-        
-        # Generate output file
-        output_filename = f"{os.path.basename(field_layout_file).rsplit('.', 1)[0]}_layout.py"
-        output_layout_path = os.path.join(output_dir, output_filename)
-        
-        formatted_layout_string = pprint.pformat(layout, sort_dicts=False)
-        
-        with open(output_layout_path, 'w', encoding='utf-8') as f:
-            f.write(f"LRECL = {lrecl}\n\n")
-            f.write(f"LAYOUT = {formatted_layout_string}\n")
-        
-        print(f"\n✓ Successfully generated: {output_filename}")
-        print(f"  Location: {output_layout_path}")
-        print(f"  Fields: {len(layout)}")
-        
-    except Exception as e:
-        print(f"\n✗ ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-
-FIELD_LAYOUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/FIELDS_LAYOUT"
-LAYOUT_OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
-
-if not os.path.exists(LAYOUT_OUTPUT_DIR):
-    os.makedirs(LAYOUT_OUTPUT_DIR)
-    print(f"✓ Created output directory: {LAYOUT_OUTPUT_DIR}\n")
-
-if __name__ == "__main__":
-    print("="*70)
-    print("LAYOUT FILE GENERATOR - DEBUG MODE")
-    print("="*70)
-    print(f"Input Path: {FIELD_LAYOUT_PATH}")
-    print(f"Output Path: {LAYOUT_OUTPUT_DIR}")
-    
-    if not os.path.exists(FIELD_LAYOUT_PATH):
-        print(f"\n✗ ERROR: Input path does not exist!")
-        exit(1)
-    
-    # Get all .txt files
-    txt_files = [f for f in os.listdir(FIELD_LAYOUT_PATH) if f.endswith(".txt")]
-    
-    if not txt_files:
-        print(f"\n✗ ERROR: No .txt files found in {FIELD_LAYOUT_PATH}")
-        exit(1)
-    
-    print(f"\nFound {len(txt_files)} .txt files:")
-    for f in txt_files:
-        print(f"  - {f}")
-    
-    # Process each file
-    success_count = 0
-    error_count = 0
-    
-    for filename in txt_files:
-        file_path = os.path.join(FIELD_LAYOUT_PATH, filename)
-        try:
-            generate_layout_file(file_path, output_dir=LAYOUT_OUTPUT_DIR)
-            success_count += 1
-        except Exception as e:
-            print(f"\n✗ ERROR processing {filename}: {e}")
-            error_count += 1
-    
-    print("\n" + "="*70)
-    print("SUMMARY")
-    print("="*70)
-    print(f"✓ Success: {success_count}")
-    print(f"✗ Errors: {error_count}")
-    print(f"Total: {len(txt_files)}")
-    print("="*70), clean_informat)
-                
-                if pd_match:
-                    # Packed decimal: S370FPD6., S370FPD8.2
-                    spec['type'] = 'packed'
-                    byte_length = int(pd_match.group(1))
-                    decimals = pd_match.group(2)
-                    if decimals:
-                        spec['decimals'] = int(decimals)
-                elif ebcdic_match:
-                    # EBCDIC string: EBCDIC10
-                    spec['type'] = 'ebcdic'
-                    byte_length = int(ebcdic_match.group(1))
-                elif string_match:
-                    # Any string format: $10., $CHAR10., $UPCASE5., $HEX8.
+                spec['type'] = 'ebcdic'
+                byte_length = int(ebcdic_match.group(1))
+            
+            # 3. String formats: $10., $CHAR10., $UPCASE5., $HEX8.
+            elif informat_str.startswith('$'):
+                string_match = re.search(r'(\d+)', informat_str)
+                if string_match:
                     spec['type'] = 'string'
                     byte_length = int(string_match.group(1))
-                elif date_match:
-                    # Date formats: YYMMDD8., MMDDYY8., etc. (stored as integer)
-                    spec['type'] = 'integer'
-                    byte_length = int(date_match.group(1))
-                elif float_match:
-                    # Float with decimals: 8.2, 10.4
-                    spec['type'] = 'float'
-                    byte_length = int(float_match.group(1))
-                    spec['decimals'] = int(float_match.group(2))
-                elif integer_match:
-                    # Simple integer: 8., 10.
-                    spec['type'] = 'integer'
-                    byte_length = int(integer_match.group(1))
-                
-                if byte_length is None:
-                    print(f"  ⚠ Line {line_num}: Could not parse '{informat_str}' for '{field_name}'")
-                    skipped_count += 1
-                    continue
-                
-                spec['slice'] = slice(start_pos - 1, start_pos - 1 + byte_length)
-                layout[field_name] = spec
-                
-            elif match := range_line_pattern.match(line):
-                field_count += 1
-                field_name, dollar_sign, start_pos_str, end_pos_str = match.groups()
-                start_pos = int(start_pos_str)
-                end_pos = int(end_pos_str)
-                
-                spec = {}
-                byte_length = end_pos - start_pos + 1
-                
-                if dollar_sign:
-                    spec['type'] = 'string'
-                else:
-                    spec['type'] = 'integer'
-                
-                spec['slice'] = slice(start_pos - 1, end_pos)
-                layout[field_name] = spec
-            else:
-                if line and not line.startswith('*'):  # Skip comment lines
-                    print(f"  ⚠ Line {line_num}: Skipped '{line[:50]}...'")
-                    skipped_count += 1
+            
+            # 4. Date formats: YYMMDD8., MMDDYY8., DDMMYY8., DATE8.
+            elif re.match(r'(?:YYMMDD|MMDDYY|DDMMYY|DATE)(\d+)', clean_informat):
+                date_match = re.match(r'(?:YYMMDD|MMDDYY|DDMMYY|DATE)(\d+)', clean_informat)
+                spec['type'] = 'integer'
+                byte_length = int(date_match.group(1))
+            
+            # 5. Float with decimals: 8.2, 10.4
+            elif re.match(r'^\d+\.\d+$', clean_informat):
+                parts = clean_informat.split('.')
+                spec['type'] = 'float'
+                byte_length = int(parts[0])
+                spec['decimals'] = int(parts[1])
+            
+            # 6. Simple integer: 8., 10., or just 8, 10
+            elif re.match(r'^\d+\.?$', clean_informat):
+                spec['type'] = 'integer'
+                byte_length = int(clean_informat.rstrip('.'))
+            
+            # If we couldn't parse the format
+            if byte_length is None:
+                print(f"  ⚠ Line {line_num}: Could not parse '{informat_str}' for '{field_name}'")
+                skipped_count += 1
+                continue
+            
+            # Create slice
+            spec['slice'] = slice(start_pos - 1, start_pos - 1 + byte_length)
+            layout[field_name] = spec
+            field_count += 1
         
-        print(f"\n✓ Processed {field_count} fields")
+        print(f"✓ Processed {field_count} fields")
         if skipped_count > 0:
             print(f"  ⚠ Skipped {skipped_count} lines")
         
         if not layout:
-            print("\n✗ ERROR: No fields were extracted!")
-            return
+            raise ValueError("No fields were extracted from INPUT block")
         
         # Generate output file
-        output_filename = f"{os.path.basename(field_layout_file).rsplit('.', 1)[0]}_layout.py"
+        base_name = os.path.basename(field_layout_file).rsplit('.', 1)[0]
+        output_filename = f"{base_name}_layout.py"
         output_layout_path = os.path.join(output_dir, output_filename)
         
         formatted_layout_string = pprint.pformat(layout, sort_dicts=False)
@@ -290,7 +146,7 @@ if __name__ == "__main__":
             f.write(f"LRECL = {lrecl}\n\n")
             f.write(f"LAYOUT = {formatted_layout_string}\n")
         
-        print(f"\n✓ Successfully generated: {output_filename}")
+        print(f"✓ Successfully generated: {output_filename}")
         print(f"  Location: {output_layout_path}")
         print(f"  Fields: {len(layout)}")
         
@@ -298,21 +154,27 @@ if __name__ == "__main__":
         print(f"\n✗ ERROR: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
+
+# Configuration
 FIELD_LAYOUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/FIELDS_LAYOUT"
 LAYOUT_OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
 
-if not os.path.exists(LAYOUT_OUTPUT_DIR):
-    os.makedirs(LAYOUT_OUTPUT_DIR)
-    print(f"✓ Created output directory: {LAYOUT_OUTPUT_DIR}\n")
 
 if __name__ == "__main__":
     print("="*70)
-    print("LAYOUT FILE GENERATOR - DEBUG MODE")
+    print("LAYOUT FILE GENERATOR")
     print("="*70)
     print(f"Input Path: {FIELD_LAYOUT_PATH}")
     print(f"Output Path: {LAYOUT_OUTPUT_DIR}")
     
+    # Create output directory if needed
+    if not os.path.exists(LAYOUT_OUTPUT_DIR):
+        os.makedirs(LAYOUT_OUTPUT_DIR)
+        print(f"✓ Created output directory: {LAYOUT_OUTPUT_DIR}")
+    
+    # Check input path exists
     if not os.path.exists(FIELD_LAYOUT_PATH):
         print(f"\n✗ ERROR: Input path does not exist!")
         exit(1)
@@ -324,9 +186,7 @@ if __name__ == "__main__":
         print(f"\n✗ ERROR: No .txt files found in {FIELD_LAYOUT_PATH}")
         exit(1)
     
-    print(f"\nFound {len(txt_files)} .txt files:")
-    for f in txt_files:
-        print(f"  - {f}")
+    print(f"\nFound {len(txt_files)} .txt files")
     
     # Process each file
     success_count = 0
@@ -338,9 +198,9 @@ if __name__ == "__main__":
             generate_layout_file(file_path, output_dir=LAYOUT_OUTPUT_DIR)
             success_count += 1
         except Exception as e:
-            print(f"\n✗ ERROR processing {filename}: {e}")
             error_count += 1
     
+    # Summary
     print("\n" + "="*70)
     print("SUMMARY")
     print("="*70)
