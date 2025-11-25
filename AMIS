@@ -1,197 +1,149 @@
-import duckdb
-import polars as pl
-from pathlib import Path
-from datetime import datetime
-import sys
+import re
+import pprint
+from collections import defaultdict
+import os
 
-input_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/STG_LN_BILL_MST.parquet")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/ENRH_LN_BILL.parquet")
-
-def parse_packed_date(packed_value: int) -> datetime.date:
-    """
-    Convert packed decimal date to Python date.
-    Handles both 8-digit (YYYYMMDD) and 11-digit formats (with trailing zeros)
-    """
-    if packed_value is None or packed_value == 0:
-        return None
-    
-    # Convert to string and take first 8 digits
-    date_str = str(packed_value)[:8].zfill(8)
+def generate_layout_file(field_layout_file, output_dir='.'):
+    if not os.path.exists(field_layout_file):
+        raise FileNotFoundError(f"Field Config File not found in {field_layout_file}")
     
     try:
-        return datetime.strptime(date_str, '%Y%m%d').date()
-    except:
-        return None
+        with open(field_layout_file, 'r', encoding='utf-8') as f:
+            sas_input_code = f.read()
 
-# Read the parquet file
-df = pl.read_parquet(input_path)
-print(f"✓ Loaded {len(df):,} records from {input_path.name}")
+        lrecl_pattern = re.compile(r'lrecl\s*=\s*(\d+)', re.IGNORECASE)
+        lrecl_match = lrecl_pattern.search(sas_input_code)
+        if not lrecl_match:
+            raise ValueError("Could not find LRECL in the code")
+        lrecl = int(lrecl_match.group(1))
 
-# Validate required columns
-required_columns = [
-    'BILL_ACCT_NO', 'BILL_NOTE_NO', 'BILL_DUE_DATE', 
-    'BILL_PAID_DATE', 'BILL_DAYS_LATE', 'BILL_NOTE_TYPE',
-    'BILL_COST_CENTER', 'BILL_TOT_BILLED', 'BILL_PRIN_BILLED',
-    'BILL_INT_BILLED', 'BILL_ESC_BILLED', 'BILL_FEE_BILLED',
-    'BILL_TOT_BNP', 'BILL_PRIN_BNP', 'BILL_INT_BNP',
-    'BILL_ESC_BNP', 'BILL_FEE_BNP'
-]
+        layout = {}
+        input_line_pattern = re.compile(r'@\s*(\d+)\s+([A-Za-z0-9_]+)\s+([$\w\.]+)')
+        print(input_line_pattern)
+        range_line_pattern = re.compile(r'^\s*([A-Za-z0-9_]+)\s*(\$)?[ ]*(\d+)-(\d+)')
+        input_lines = sas_input_code.split('input')[1].split(";")[0]
 
-missing_columns = [col for col in required_columns if col not in df.columns]
-if missing_columns:
-    print(f"✗ ERROR: Missing required columns: {missing_columns}")
-    sys.exit(1)
+        for line in input_lines.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            match = input_line_pattern.match(line)
+            print(match)
+            if match:
+                start_pos, field_name, informat_str = match.groups()
+                start_pos = int(start_pos)
 
-print("\n✓ All required columns present")
+                spec = {}
+                byte_length = None
+                clean_informat = informat_str.strip('$.').upper()
 
-# Show actual column names
-print("\nActual columns in file:")
-print(df.columns)
+                float_match = re.match(r'(\d+)\.(\d+)', clean_informat)
+                pd_match = re.match(r'S370FPD(\d+)(?:\.(\d+))?', clean_informat)
+                ebcdic_match = re.match(r'EBCDIC(\d+)', clean_informat)
+                integer_match = re.match(r'(\d+)\.', informat_str.upper())
+                string_match = re.match(r'\$(\d+)\.', informat_str.upper())
+                if pd_match:
+                    spec['type'] = 'packed'
+                    byte_length =  int(pd_match.group(1))
+                    decimals = pd_match.group(2)
+                    if decimals:
+                        spec['decimals'] = int(decimals)
+                elif ebcdic_match:
+                    spec['type'] = 'ebcdic'
+                    byte_length =  int(ebcdic_match.group(1))
+                elif float_match:
+                    spec['type'] = 'float'
+                    byte_length = int(float_match.group(1))
+                    spec['decimals'] = int(float_match.group(2))
+                elif integer_match:
+                    spec['type'] = 'integer'
+                    byte_length = int(clean_informat)
+                elif string_match:
+                    spec['type'] = 'string'
+                    byte_length = int(re.match(r'\$(\d+)', clean_informat).group(1))
+                elif re.match(r'YYMMDD(\d+)', clean_informat):
+                    spec['type'] = 'integer'
+                    byte_length = int(re.match(r'YYMMDD(\d+)', clean_informat).group(1))
 
-# Filter out null records
-initial_count = len(df)
-stg_ln_bill = df.filter(
-    pl.col('BILL_ACCT_NO').is_not_null() & 
-    (pl.col('BILL_ACCT_NO') != 0)
-)
-filtered_count = initial_count - len(stg_ln_bill)
+                if byte_length is None:
+                    print(f"Could not parse informat '{informat_str}' for field '{field_name}'. Skiping")     
+                    continue
 
-if filtered_count > 0:
-    print(f"\n✓ Filtered out {filtered_count:,} null/zero account records")
+                spec['slice'] = slice(start_pos - 1, start_pos - 1 + byte_length)
+                layout[field_name] = spec
+            elif match := range_line_pattern.match(line):
+                field_name, dollar_sign, start_pos_str, end_pos_str = match.groups()
+                start_pos = int(start_pos_str)
+                end_pos = int(end_pos_str)
 
-print(f"\n✓ Processing {len(stg_ln_bill):,} valid records")
+                spec = {}
+                byte_length = end_pos - start_pos - 1
 
-# Convert to Pandas for DuckDB
-print("\nConverting to DuckDB...")
-con = duckdb.connect(':memory:')
-con.register('stg_ln_bill', stg_ln_bill.to_pandas())
+                if dollar_sign:
+                    spec['type'] = 'string'
+                else:
+                    spec['type'] = 'integer'
 
-print("\nStep 2: Mapping columns and creating derived dates...")
+                spec['slice'] = slice(start_pos - 1, end_pos)
+                layout[field_name] = spec
+            else:
+                print(f"Skipping line: {line} does not match defined INPUT format")
+                
 
-try:
-    con.execute("""
-        CREATE TABLE extracted AS
-        SELECT
-            BILL_ACCT_NO AS ACCTNO,
-            BILL_NOTE_NO AS NOTENO,
-            BILL_DUE_DATE AS BLDATE,
-            BILL_PAID_DATE AS BLPDDATE,
-            BILL_DAYS_LATE AS DAYSLATE,
-            BILL_NOTE_TYPE AS PRODUCT,
-            BILL_COST_CENTER AS COSTCTR,
-            
-            -- Convert packed decimal amounts to 2 decimal places
-            ROUND(BILL_TOT_BILLED / 100.0, 2) AS BILL_AMT,
-            ROUND(BILL_PRIN_BILLED / 100.0, 2) AS BILL_AMT_PRIN,
-            ROUND(BILL_INT_BILLED / 100.0, 2) AS BILL_AMT_INT,
-            ROUND(BILL_ESC_BILLED / 100.0, 2) AS BILL_AMT_ESCROW,
-            ROUND(BILL_FEE_BILLED / 100.0, 2) AS BILL_AMT_FEE,
-            ROUND(BILL_TOT_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT,
-            ROUND(BILL_PRIN_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT_PRIN,
-            ROUND(BILL_INT_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT_INT,
-            ROUND(BILL_ESC_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT_ESCROW,
-            ROUND(BILL_FEE_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT_FEE,
-            
-            -- Parse dates (take first 8 digits from packed decimal)
-            CASE 
-                WHEN BILL_DUE_DATE > 0 THEN 
-                    TRY_CAST(
-                        SUBSTR(CAST(BILL_DUE_DATE AS VARCHAR), 1, 8)
-                        AS DATE
-                    )
-                ELSE NULL
-            END AS BILL_DT,
-            
-            CASE 
-                WHEN BILL_PAID_DATE > 0 THEN
-                    TRY_CAST(
-                        SUBSTR(CAST(BILL_PAID_DATE AS VARCHAR), 1, 8)
-                        AS DATE
-                    )
-                ELSE NULL
-            END AS BILL_PAID_DT
-        FROM stg_ln_bill
-    """)
+        output_filename = f"{os.path.basename(field_layout_file).rsplit('.' , 1)[0]}_layout.py"
+        output_layout_path = os.path.join(output_dir, output_filename)
+
+        formatted_layout_string = pprint.pformat(layout, sort_dicts=False)
+
+        with open(output_layout_path, 'w', encoding='utf-8') as f:
+            f.write(f"LRECL = {lrecl}\n\n")
+            f.write(f"LAYOUT = {formatted_layout_string}\n")
+        print(f"Successfully generated layout file to {output_layout_path}")
+    except Exception as e:
+        print(f"Error generating layout file: {e}")
+        
+
+FIELD_LAYOUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/FIELDS_LAYOUT"
+LAYOUT_OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
+
+
+if not os.path.exists(LAYOUT_OUTPUT_DIR):
+    os.makedirs(LAYOUT_OUTPUT_DIR)
     
-    count = con.execute("SELECT COUNT(*) FROM extracted").fetchone()[0]
-    print(f"  ✓ Transformed {count:,} records")
-    
-except Exception as e:
-    print(f"✗ ERROR in SQL transformation: {e}")
-    print("\nAvailable columns:")
-    print(con.execute("DESCRIBE stg_ln_bill").fetchdf())
-    raise
+if __name__ == "__main__":
+    try:
+        for filename in os.listdir(FIELD_LAYOUT_PATH):
+            if filename.endswith(".txt"):
+                file_path = os.path.join(FIELD_LAYOUT_PATH, filename)
+                try:
+                    generate_layout_file(file_path, output_dir=LAYOUT_OUTPUT_DIR)
+                except Exception as e:
+                    print(f"Error generating layout {filename}: {e}")
+    except FileNotFoundError as e:
+        print(f"Error path not found: {e}")
+    print(f"Completed generating layout file.")
 
-# Get final result
-print("\nStep 3: Loading to ENRH_LN_BILL...")
 
-result = con.execute("""
-    SELECT 
-        ACCTNO,
-        NOTENO,
-        BLDATE,
-        BLPDDATE,
-        DAYSLATE,
-        PRODUCT,
-        COSTCTR,
-        BILL_AMT,
-        BILL_AMT_PRIN,
-        BILL_AMT_INT,
-        BILL_AMT_ESCROW,
-        BILL_AMT_FEE,
-        BILL_NOT_PAY_AMT,
-        BILL_NOT_PAY_AMT_PRIN,
-        BILL_NOT_PAY_AMT_INT,
-        BILL_NOT_PAY_AMT_ESCROW,
-        BILL_NOT_PAY_AMT_FEE,
-        BILL_DT,
-        BILL_PAID_DT
-    FROM extracted
-""").pl()
 
-# Write to parquet
-result.write_parquet(output_path)
-print(f"  ✓ Output written to: {output_path}")
 
-# Show statistics
-stats = con.execute("""
-    SELECT 
-        COUNT(*) as total_records,
-        COUNT(DISTINCT ACCTNO) as unique_accounts,
-        MIN(BILL_DT) as min_date,
-        MAX(BILL_DT) as max_date,
-        SUM(BILL_AMT) as total_bill_amt,
-        COUNT(CASE WHEN BILL_DT IS NULL THEN 1 END) as null_dates
-    FROM extracted
-""").fetchone()
 
-print("\n" + "="*70)
-print("DATA STATISTICS")
-print("="*70)
-print(f"Total Records:     {stats[0]:>15,}")
-print(f"Unique Accounts:   {stats[1]:>15,}")
-print(f"Date Range:        {stats[2]} to {stats[3]}")
-print(f"Null Dates:        {stats[5]:>15,}")
-print(f"Total Bill Amount: {stats[4]:>15,.2f}")
-print("="*70)
 
-# Sample output
-print("\nSample output (first 5 rows):")
-print(result.head(5))
 
-# Validate date parsing
-date_check = con.execute("""
-    SELECT 
-        COUNT(*) as total,
-        COUNT(BILL_DT) as valid_bill_dt,
-        COUNT(BILL_PAID_DT) as valid_paid_dt
-    FROM extracted
-""").fetchone()
 
-print(f"\nDate Parsing Results:")
-print(f"  Total records: {date_check[0]:,}")
-print(f"  Valid BILL_DT: {date_check[1]:,} ({100*date_check[1]/date_check[0]:.1f}%)")
-print(f"  Valid BILL_PAID_DT: {date_check[2]:,} ({100*date_check[2]/date_check[0]:.1f}%)")
 
-con.close()
-print("\n✓ Processing completed successfully")
+
+
+
+
+
+re.compile('@\\s*(\\d+)\\s+([A-Za-z0-9_]+)\\s+([$\\w\\.]+)')
+Error generating layout file: list index out of range
+re.compile('@\\s*(\\d+)\\s+([A-Za-z0-9_]+)\\s+([$\\w\\.]+)')
+Error generating layout file: list index out of range
+re.compile('@\\s*(\\d+)\\s+([A-Za-z0-9_]+)\\s+([$\\w\\.]+)')
+Error generating layout file: list index out of range
+re.compile('@\\s*(\\d+)\\s+([A-Za-z0-9_]+)\\s+([$\\w\\.]+)')
+Error generating layout file: list index out of range
+re.compile('@\\s*(\\d+)\\s+([A-Za-z0-9_]+)\\s+([$\\w\\.]+)')
+Error generating layout file: list index out of range
+Completed generating layout file.
