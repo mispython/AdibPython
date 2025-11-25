@@ -79,16 +79,18 @@ try:
             BILL_DAYS_LATE AS DAYSLATE,
             BILL_NOTE_TYPE AS PRODUCT,
             BILL_COST_CENTER AS COSTCTR,
-            BILL_TOT_BILLED AS BILL_AMT,
-            BILL_PRIN_BILLED AS BILL_AMT_PRIN,
-            BILL_INT_BILLED AS BILL_AMT_INT,
-            BILL_ESC_BILLED AS BILL_AMT_ESCROW,
-            BILL_FEE_BILLED AS BILL_AMT_FEE,
-            BILL_TOT_BNP AS BILL_NOT_PAY_AMT,
-            BILL_PRIN_BNP AS BILL_NOT_PAY_AMT_PRIN,
-            BILL_INT_BNP AS BILL_NOT_PAY_AMT_INT,
-            BILL_ESC_BNP AS BILL_NOT_PAY_AMT_ESCROW,
-            BILL_FEE_BNP AS BILL_NOT_PAY_AMT_FEE,
+            
+            -- Convert packed decimal amounts to 2 decimal places
+            ROUND(BILL_TOT_BILLED / 100.0, 2) AS BILL_AMT,
+            ROUND(BILL_PRIN_BILLED / 100.0, 2) AS BILL_AMT_PRIN,
+            ROUND(BILL_INT_BILLED / 100.0, 2) AS BILL_AMT_INT,
+            ROUND(BILL_ESC_BILLED / 100.0, 2) AS BILL_AMT_ESCROW,
+            ROUND(BILL_FEE_BILLED / 100.0, 2) AS BILL_AMT_FEE,
+            ROUND(BILL_TOT_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT,
+            ROUND(BILL_PRIN_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT_PRIN,
+            ROUND(BILL_INT_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT_INT,
+            ROUND(BILL_ESC_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT_ESCROW,
+            ROUND(BILL_FEE_BNP / 100.0, 2) AS BILL_NOT_PAY_AMT_FEE,
             
             -- Parse dates (take first 8 digits from packed decimal)
             CASE 
