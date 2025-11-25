@@ -1,229 +1,254 @@
-import re
-import pprint
-from collections import defaultdict
-import os
+======================================================================
+LAYOUT FILE GENERATOR - DEBUG MODE
+======================================================================
+Input Path: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/FIELDS_LAYOUT
+Output Path: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT
 
-def generate_layout_file(field_layout_file, output_dir='.'):
-    if not os.path.exists(field_layout_file):
-        raise FileNotFoundError(f"Field Config File not found in {field_layout_file}")
-    
-    try:
-        print(f"\n{'='*70}")
-        print(f"Processing: {os.path.basename(field_layout_file)}")
-        print('='*70)
-        
-        with open(field_layout_file, 'r', encoding='utf-8') as f:
-            sas_input_code = f.read()
-        
-        # DEBUG: Show file content
-        print(f"\nFile length: {len(sas_input_code)} characters")
-        print(f"First 500 characters:")
-        print("-"*70)
-        print(sas_input_code[:500])
-        print("-"*70)
-        
-        # Find LRECL
-        lrecl_pattern = re.compile(r'lrecl\s*=\s*(\d+)', re.IGNORECASE)
-        lrecl_match = lrecl_pattern.search(sas_input_code)
-        if not lrecl_match:
-            raise ValueError("Could not find LRECL in the code")
-        lrecl = int(lrecl_match.group(1))
-        print(f"\n✓ Found LRECL: {lrecl}")
-        
-        # DEBUG: Check for 'input' keyword
-        input_keyword_lower = sas_input_code.lower().count('input')
-        input_keyword_upper = sas_input_code.count('INPUT')
-        input_keyword_mixed = sas_input_code.count('Input')
-        
-        print(f"\nSearching for 'input' keyword:")
-        print(f"  - 'input' (lowercase): {input_keyword_lower} occurrences")
-        print(f"  - 'INPUT' (uppercase): {input_keyword_upper} occurrences")
-        print(f"  - 'Input' (mixed): {input_keyword_mixed} occurrences")
-        
-        # Try to split by 'input' (case-insensitive)
-        split_result = re.split(r'input', sas_input_code, flags=re.IGNORECASE)
-        print(f"\nSplit by 'input' results in {len(split_result)} parts")
-        
-        if len(split_result) < 2:
-            print("\n✗ ERROR: No 'input' keyword found in file!")
-            print("\nFile structure doesn't match expected SAS INPUT format.")
-            print("Expected format:")
-            print("  LRECL = 123")
-            print("  INPUT @001 FIELD1 $10.")
-            print("        @011 FIELD2 PD6.")
-            print("        ;")
-            return
-        
-        # Show what's between 'input' and ';'
-        input_section = split_result[1]
-        print(f"\nContent after 'input' keyword (first 300 chars):")
-        print("-"*70)
-        print(input_section[:300])
-        print("-"*70)
-        
-        # Check for semicolon
-        if ';' not in input_section:
-            print("\n✗ ERROR: No semicolon (;) found after INPUT keyword!")
-            return
-        
-        input_lines = input_section.split(";")[0]
-        print(f"\n✓ Extracted INPUT block ({len(input_lines)} characters)")
-        
-        layout = {}
-        input_line_pattern = re.compile(r'@\s*(\d+)\s+([A-Za-z0-9_]+)\s+([$\w\.]+)')
-        range_line_pattern = re.compile(r'^\s*([A-Za-z0-9_]+)\s*(\$)?[ ]*(\d+)-(\d+)')
-        
-        field_count = 0
-        skipped_count = 0
-        
-        for line_num, line in enumerate(input_lines.strip().splitlines(), 1):
-            line = line.strip()
-            if not line:
-                continue
-            
-            match = input_line_pattern.match(line)
-            
-            if match:
-                field_count += 1
-                start_pos, field_name, informat_str = match.groups()
-                start_pos = int(start_pos)
-                
-                spec = {}
-                byte_length = None
-                clean_informat = informat_str.strip('$.').upper()
-                
-                # Parse different informat types
-                float_match = re.match(r'(\d+)\.(\d+)', clean_informat)
-                pd_match = re.match(r'S370FPD(\d+)(?:\.(\d+))?', clean_informat)
-                ebcdic_match = re.match(r'EBCDIC(\d+)', clean_informat)
-                integer_match = re.match(r'(\d+)\.', informat_str.upper())
-                string_match = re.match(r'\$(\d+)\.', informat_str.upper())
-                
-                if pd_match:
-                    spec['type'] = 'packed'
-                    byte_length = int(pd_match.group(1))
-                    decimals = pd_match.group(2)
-                    if decimals:
-                        spec['decimals'] = int(decimals)
-                elif ebcdic_match:
-                    spec['type'] = 'ebcdic'
-                    byte_length = int(ebcdic_match.group(1))
-                elif float_match:
-                    spec['type'] = 'float'
-                    byte_length = int(float_match.group(1))
-                    spec['decimals'] = int(float_match.group(2))
-                elif integer_match:
-                    spec['type'] = 'integer'
-                    byte_length = int(clean_informat)
-                elif string_match:
-                    spec['type'] = 'string'
-                    byte_length = int(re.match(r'\$(\d+)', clean_informat).group(1))
-                elif re.match(r'YYMMDD(\d+)', clean_informat):
-                    spec['type'] = 'integer'
-                    byte_length = int(re.match(r'YYMMDD(\d+)', clean_informat).group(1))
-                
-                if byte_length is None:
-                    print(f"  ⚠ Line {line_num}: Could not parse '{informat_str}' for '{field_name}'")
-                    skipped_count += 1
-                    continue
-                
-                spec['slice'] = slice(start_pos - 1, start_pos - 1 + byte_length)
-                layout[field_name] = spec
-                
-            elif match := range_line_pattern.match(line):
-                field_count += 1
-                field_name, dollar_sign, start_pos_str, end_pos_str = match.groups()
-                start_pos = int(start_pos_str)
-                end_pos = int(end_pos_str)
-                
-                spec = {}
-                byte_length = end_pos - start_pos + 1
-                
-                if dollar_sign:
-                    spec['type'] = 'string'
-                else:
-                    spec['type'] = 'integer'
-                
-                spec['slice'] = slice(start_pos - 1, end_pos)
-                layout[field_name] = spec
-            else:
-                if line and not line.startswith('*'):  # Skip comment lines
-                    print(f"  ⚠ Line {line_num}: Skipped '{line[:50]}...'")
-                    skipped_count += 1
-        
-        print(f"\n✓ Processed {field_count} fields")
-        if skipped_count > 0:
-            print(f"  ⚠ Skipped {skipped_count} lines")
-        
-        if not layout:
-            print("\n✗ ERROR: No fields were extracted!")
-            return
-        
-        # Generate output file
-        output_filename = f"{os.path.basename(field_layout_file).rsplit('.', 1)[0]}_layout.py"
-        output_layout_path = os.path.join(output_dir, output_filename)
-        
-        formatted_layout_string = pprint.pformat(layout, sort_dicts=False)
-        
-        with open(output_layout_path, 'w', encoding='utf-8') as f:
-            f.write(f"LRECL = {lrecl}\n\n")
-            f.write(f"LAYOUT = {formatted_layout_string}\n")
-        
-        print(f"\n✓ Successfully generated: {output_filename}")
-        print(f"  Location: {output_layout_path}")
-        print(f"  Fields: {len(layout)}")
-        
-    except Exception as e:
-        print(f"\n✗ ERROR: {e}")
-        import traceback
-        traceback.print_exc()
+Found 5 .txt files:
+  - RPTFILE.txt
+  - CHANNEL.txt
+  - BRANCH.txt
+  - BCODE.txt
+  - CHANNEL_FULL.txt
 
-FIELD_LAYOUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/FIELDS_LAYOUT"
-LAYOUT_OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
+======================================================================
+Processing: RPTFILE.txt
+======================================================================
 
-if not os.path.exists(LAYOUT_OUTPUT_DIR):
-    os.makedirs(LAYOUT_OUTPUT_DIR)
-    print(f"✓ Created output directory: {LAYOUT_OUTPUT_DIR}\n")
+File length: 451 characters
+First 500 characters:
+----------------------------------------------------------------------
+lrecl = 200 
 
-if __name__ == "__main__":
-    print("="*70)
-    print("LAYOUT FILE GENERATOR - DEBUG MODE")
-    print("="*70)
-    print(f"Input Path: {FIELD_LAYOUT_PATH}")
-    print(f"Output Path: {LAYOUT_OUTPUT_DIR}")
-    
-    if not os.path.exists(FIELD_LAYOUT_PATH):
-        print(f"\n✗ ERROR: Input path does not exist!")
-        exit(1)
-    
-    # Get all .txt files
-    txt_files = [f for f in os.listdir(FIELD_LAYOUT_PATH) if f.endswith(".txt")]
-    
-    if not txt_files:
-        print(f"\n✗ ERROR: No .txt files found in {FIELD_LAYOUT_PATH}")
-        exit(1)
-    
-    print(f"\nFound {len(txt_files)} .txt files:")
-    for f in txt_files:
-        print(f"  - {f}")
-    
-    # Process each file
-    success_count = 0
-    error_count = 0
-    
-    for filename in txt_files:
-        file_path = os.path.join(FIELD_LAYOUT_PATH, filename)
-        try:
-            generate_layout_file(file_path, output_dir=LAYOUT_OUTPUT_DIR)
-            success_count += 1
-        except Exception as e:
-            print(f"\n✗ ERROR processing {filename}: {e}")
-            error_count += 1
-    
-    print("\n" + "="*70)
-    print("SUMMARY")
-    print("="*70)
-    print(f"✓ Success: {success_count}")
-    print(f"✗ Errors: {error_count}")
-    print(f"Total: {len(txt_files)}")
-    print("="*70)
+INFILE RPTFILE;
+  INPUT @001 COSTCT    7.
+        @010 NOTETYPE  3.
+        @015 PRINBAL   24.2
+        @047 PRNNACCR  24.2
+        @079 INTACCR   21.2
+        @111 INTNACCR  21.2
+        @143 UNERNINT  24.2
+        @175 UNERNNON  24.2
+        @207 RSRVFIN   24.2
+        @239 RSRVDLR   24.2
+        @271 NONDDA    24.2
+        @303 LATEFEES  24.2
+        @335 OTHERFEE  24.2
+        @367 CTPRINT   7.
+        @377 CTPRNNAC  7.
+        ;
+----------------------------------------------------------------------
+
+✓ Found LRECL: 200
+
+Searching for 'input' keyword:
+  - 'input' (lowercase): 1 occurrences
+  - 'INPUT' (uppercase): 1 occurrences
+  - 'Input' (mixed): 0 occurrences
+
+Split by 'input' results in 2 parts
+
+Content after 'input' keyword (first 300 chars):
+----------------------------------------------------------------------
+ @001 COSTCT    7.
+        @010 NOTETYPE  3.
+        @015 PRINBAL   24.2
+        @047 PRNNACCR  24.2
+        @079 INTACCR   21.2
+        @111 INTNACCR  21.2
+        @143 UNERNINT  24.2
+        @175 UNERNNON  24.2
+        @207 RSRVFIN   24.2
+        @239 RSRVDLR   24.2
+        @271 NONDDA    24.2
+   
+----------------------------------------------------------------------
+
+✓ Extracted INPUT block (413 characters)
+
+✓ Processed 15 fields
+
+✓ Successfully generated: RPTFILE_layout.py
+  Location: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT/RPTFILE_layout.py
+  Fields: 15
+
+======================================================================
+Processing: CHANNEL.txt
+======================================================================
+
+File length: 260 characters
+First 500 characters:
+----------------------------------------------------------------------
+lrecl = 100
+
+INFILE CHANNEL FIRSTOBS=1;
+   INPUT @001  CHANNEL    $UPCASE5.      /* CHANNEL                */
+         @006  TOLPROMPT    S370F8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE    S370F8.      /* TOTAL UPDATED          */
+         ;
+----------------------------------------------------------------------
+
+✓ Found LRECL: 100
+
+Searching for 'input' keyword:
+  - 'input' (lowercase): 1 occurrences
+  - 'INPUT' (uppercase): 1 occurrences
+  - 'Input' (mixed): 0 occurrences
+
+Split by 'input' results in 2 parts
+
+Content after 'input' keyword (first 300 chars):
+----------------------------------------------------------------------
+ @001  CHANNEL    $UPCASE5.      /* CHANNEL                */
+         @006  TOLPROMPT    S370F8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE    S370F8.      /* TOTAL UPDATED          */
+         ;
+----------------------------------------------------------------------
+
+✓ Extracted INPUT block (211 characters)
+  ⚠ Line 1: Could not parse '$UPCASE5.' for 'CHANNEL'
+  ⚠ Line 2: Could not parse 'S370F8.' for 'TOLPROMPT'
+  ⚠ Line 3: Could not parse 'S370F8.' for 'TOLUPDATE'
+
+✓ Processed 3 fields
+  ⚠ Skipped 3 lines
+
+✗ ERROR: No fields were extracted!
+
+======================================================================
+Processing: BRANCH.txt
+======================================================================
+
+File length: 274 characters
+First 500 characters:
+----------------------------------------------------------------------
+lrecl = 100
+
+INFILE BRANCH FIRSTOBS=1;
+   INPUT @001  BRANCHNO          S370F5.      /* BRANCH NUMBER          */
+         @006  TOLPROMPT         S370F8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE         S370F8.      /* TOTAL UPDATED          */
+         ;
+----------------------------------------------------------------------
+
+✓ Found LRECL: 100
+
+Searching for 'input' keyword:
+  - 'input' (lowercase): 1 occurrences
+  - 'INPUT' (uppercase): 1 occurrences
+  - 'Input' (mixed): 0 occurrences
+
+Split by 'input' results in 2 parts
+
+Content after 'input' keyword (first 300 chars):
+----------------------------------------------------------------------
+ @001  BRANCHNO          S370F5.      /* BRANCH NUMBER          */
+         @006  TOLPROMPT         S370F8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE         S370F8.      /* TOTAL UPDATED          */
+         ;
+----------------------------------------------------------------------
+
+✓ Extracted INPUT block (226 characters)
+  ⚠ Line 1: Could not parse 'S370F5.' for 'BRANCHNO'
+  ⚠ Line 2: Could not parse 'S370F8.' for 'TOLPROMPT'
+  ⚠ Line 3: Could not parse 'S370F8.' for 'TOLUPDATE'
+
+✓ Processed 3 fields
+  ⚠ Skipped 3 lines
+
+✗ ERROR: No fields were extracted!
+
+======================================================================
+Processing: BCODE.txt
+======================================================================
+
+File length: 75 characters
+First 500 characters:
+----------------------------------------------------------------------
+lrecl = 80
+
+INFILE BCODE;
+   INPUT @002   BRANCHNO       S370F3.
+         ;
+----------------------------------------------------------------------
+
+✓ Found LRECL: 80
+
+Searching for 'input' keyword:
+  - 'input' (lowercase): 1 occurrences
+  - 'INPUT' (uppercase): 1 occurrences
+  - 'Input' (mixed): 0 occurrences
+
+Split by 'input' results in 2 parts
+
+Content after 'input' keyword (first 300 chars):
+----------------------------------------------------------------------
+ @002   BRANCHNO       S370F3.
+         ;
+----------------------------------------------------------------------
+
+✓ Extracted INPUT block (40 characters)
+  ⚠ Line 1: Could not parse 'S370F3.' for 'BRANCHNO'
+
+✓ Processed 1 fields
+  ⚠ Skipped 1 lines
+
+✗ ERROR: No fields were extracted!
+
+======================================================================
+Processing: CHANNEL_FULL.txt
+======================================================================
+
+File length: 250 characters
+First 500 characters:
+----------------------------------------------------------------------
+ lrecl = 150
+ 
+ INFILE CHANNEL;
+        INPUT    @022 ATM      S370F10.
+                 @037 EBK      S370F10.
+                 @052 OTC      S370F10.
+                 @067 TOTAL    S370F10.
+                 @080 DATE   $EBCDIC10.
+                 ;
+----------------------------------------------------------------------
+
+✓ Found LRECL: 150
+
+Searching for 'input' keyword:
+  - 'input' (lowercase): 1 occurrences
+  - 'INPUT' (uppercase): 1 occurrences
+  - 'Input' (mixed): 0 occurrences
+
+Split by 'input' results in 2 parts
+
+Content after 'input' keyword (first 300 chars):
+----------------------------------------------------------------------
+    @022 ATM      S370F10.
+                 @037 EBK      S370F10.
+                 @052 OTC      S370F10.
+                 @067 TOTAL    S370F10.
+                 @080 DATE   $EBCDIC10.
+                 ;
+----------------------------------------------------------------------
+
+✓ Extracted INPUT block (204 characters)
+  ⚠ Line 1: Could not parse 'S370F10.' for 'ATM'
+  ⚠ Line 2: Could not parse 'S370F10.' for 'EBK'
+  ⚠ Line 3: Could not parse 'S370F10.' for 'OTC'
+  ⚠ Line 4: Could not parse 'S370F10.' for 'TOTAL'
+
+✓ Processed 5 fields
+  ⚠ Skipped 4 lines
+
+✓ Successfully generated: CHANNEL_FULL_layout.py
+  Location: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT/CHANNEL_FULL_layout.py
+  Fields: 1
+
+======================================================================
+SUMMARY
+======================================================================
+✓ Success: 5
+✗ Errors: 0
+Total: 5
+======================================================================
