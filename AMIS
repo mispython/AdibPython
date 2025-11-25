@@ -76,15 +76,15 @@ Content after 'input' keyword (first 300 chars):
 Processing: CHANNEL.txt
 ======================================================================
 
-File length: 260 characters
+File length: 264 characters
 First 500 characters:
 ----------------------------------------------------------------------
 lrecl = 100
 
 INFILE CHANNEL FIRSTOBS=1;
    INPUT @001  CHANNEL    $UPCASE5.      /* CHANNEL                */
-         @006  TOLPROMPT    S370F8.      /* TOTAL PROMPTED         */
-         @014  TOLUPDATE    S370F8.      /* TOTAL UPDATED          */
+         @006  TOLPROMPT    S370FPD8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE    S370FPD8.      /* TOTAL UPDATED          */
          ;
 ----------------------------------------------------------------------
 
@@ -100,34 +100,34 @@ Split by 'input' results in 2 parts
 Content after 'input' keyword (first 300 chars):
 ----------------------------------------------------------------------
  @001  CHANNEL    $UPCASE5.      /* CHANNEL                */
-         @006  TOLPROMPT    S370F8.      /* TOTAL PROMPTED         */
-         @014  TOLUPDATE    S370F8.      /* TOTAL UPDATED          */
+         @006  TOLPROMPT    S370FPD8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE    S370FPD8.      /* TOTAL UPDATED          */
          ;
 ----------------------------------------------------------------------
 
-✓ Extracted INPUT block (211 characters)
+✓ Extracted INPUT block (215 characters)
   ⚠ Line 1: Could not parse '$UPCASE5.' for 'CHANNEL'
-  ⚠ Line 2: Could not parse 'S370F8.' for 'TOLPROMPT'
-  ⚠ Line 3: Could not parse 'S370F8.' for 'TOLUPDATE'
 
 ✓ Processed 3 fields
-  ⚠ Skipped 3 lines
+  ⚠ Skipped 1 lines
 
-✗ ERROR: No fields were extracted!
+✓ Successfully generated: CHANNEL_layout.py
+  Location: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT/CHANNEL_layout.py
+  Fields: 2
 
 ======================================================================
 Processing: BRANCH.txt
 ======================================================================
 
-File length: 274 characters
+File length: 280 characters
 First 500 characters:
 ----------------------------------------------------------------------
 lrecl = 100
 
 INFILE BRANCH FIRSTOBS=1;
-   INPUT @001  BRANCHNO          S370F5.      /* BRANCH NUMBER          */
-         @006  TOLPROMPT         S370F8.      /* TOTAL PROMPTED         */
-         @014  TOLUPDATE         S370F8.      /* TOTAL UPDATED          */
+   INPUT @001  BRANCHNO          S370FPD5.      /* BRANCH NUMBER          */
+         @006  TOLPROMPT         S370FPD8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE         S370FPD8.      /* TOTAL UPDATED          */
          ;
 ----------------------------------------------------------------------
 
@@ -142,33 +142,31 @@ Split by 'input' results in 2 parts
 
 Content after 'input' keyword (first 300 chars):
 ----------------------------------------------------------------------
- @001  BRANCHNO          S370F5.      /* BRANCH NUMBER          */
-         @006  TOLPROMPT         S370F8.      /* TOTAL PROMPTED         */
-         @014  TOLUPDATE         S370F8.      /* TOTAL UPDATED          */
+ @001  BRANCHNO          S370FPD5.      /* BRANCH NUMBER          */
+         @006  TOLPROMPT         S370FPD8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE         S370FPD8.      /* TOTAL UPDATED          */
          ;
 ----------------------------------------------------------------------
 
-✓ Extracted INPUT block (226 characters)
-  ⚠ Line 1: Could not parse 'S370F5.' for 'BRANCHNO'
-  ⚠ Line 2: Could not parse 'S370F8.' for 'TOLPROMPT'
-  ⚠ Line 3: Could not parse 'S370F8.' for 'TOLUPDATE'
+✓ Extracted INPUT block (232 characters)
 
 ✓ Processed 3 fields
-  ⚠ Skipped 3 lines
 
-✗ ERROR: No fields were extracted!
+✓ Successfully generated: BRANCH_layout.py
+  Location: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT/BRANCH_layout.py
+  Fields: 3
 
 ======================================================================
 Processing: BCODE.txt
 ======================================================================
 
-File length: 75 characters
+File length: 77 characters
 First 500 characters:
 ----------------------------------------------------------------------
 lrecl = 80
 
 INFILE BCODE;
-   INPUT @002   BRANCHNO       S370F3.
+   INPUT @002   BRANCHNO       S370FPD3.
          ;
 ----------------------------------------------------------------------
 
@@ -183,33 +181,33 @@ Split by 'input' results in 2 parts
 
 Content after 'input' keyword (first 300 chars):
 ----------------------------------------------------------------------
- @002   BRANCHNO       S370F3.
+ @002   BRANCHNO       S370FPD3.
          ;
 ----------------------------------------------------------------------
 
-✓ Extracted INPUT block (40 characters)
-  ⚠ Line 1: Could not parse 'S370F3.' for 'BRANCHNO'
+✓ Extracted INPUT block (42 characters)
 
 ✓ Processed 1 fields
-  ⚠ Skipped 1 lines
 
-✗ ERROR: No fields were extracted!
+✓ Successfully generated: BCODE_layout.py
+  Location: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT/BCODE_layout.py
+  Fields: 1
 
 ======================================================================
 Processing: CHANNEL_FULL.txt
 ======================================================================
 
-File length: 250 characters
+File length: 260 characters
 First 500 characters:
 ----------------------------------------------------------------------
  lrecl = 150
  
  INFILE CHANNEL;
-        INPUT    @022 ATM      S370F10.
-                 @037 EBK      S370F10.
-                 @052 OTC      S370F10.
-                 @067 TOTAL    S370F10.
-                 @080 DATE   $EBCDIC10.
+        INPUT    @022 ATM      S370FPD10.
+                 @037 EBK      S370FPD10.
+                 @052 OTC      S370FPD10.
+                 @067 TOTAL    S370FPD10.
+                 @080 DATE     $EBCDIC10.
                  ;
 ----------------------------------------------------------------------
 
@@ -224,26 +222,21 @@ Split by 'input' results in 2 parts
 
 Content after 'input' keyword (first 300 chars):
 ----------------------------------------------------------------------
-    @022 ATM      S370F10.
-                 @037 EBK      S370F10.
-                 @052 OTC      S370F10.
-                 @067 TOTAL    S370F10.
-                 @080 DATE   $EBCDIC10.
+    @022 ATM      S370FPD10.
+                 @037 EBK      S370FPD10.
+                 @052 OTC      S370FPD10.
+                 @067 TOTAL    S370FPD10.
+                 @080 DATE     $EBCDIC10.
                  ;
 ----------------------------------------------------------------------
 
-✓ Extracted INPUT block (204 characters)
-  ⚠ Line 1: Could not parse 'S370F10.' for 'ATM'
-  ⚠ Line 2: Could not parse 'S370F10.' for 'EBK'
-  ⚠ Line 3: Could not parse 'S370F10.' for 'OTC'
-  ⚠ Line 4: Could not parse 'S370F10.' for 'TOTAL'
+✓ Extracted INPUT block (214 characters)
 
 ✓ Processed 5 fields
-  ⚠ Skipped 4 lines
 
 ✓ Successfully generated: CHANNEL_FULL_layout.py
   Location: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT/CHANNEL_FULL_layout.py
-  Fields: 1
+  Fields: 5
 
 ======================================================================
 SUMMARY
