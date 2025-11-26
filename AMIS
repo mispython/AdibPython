@@ -219,10 +219,20 @@ def process_loan_bill_scd(
     print("\n1.4: Looking up ENTITY_CD...")
     
     if lookup_cost_ctr_path.exists():
-        con.execute(f"""
-            CREATE TABLE lkp_cost_ctr AS
-            SELECT * FROM read_parquet('{lookup_cost_ctr_path}')
-        """)
+        # Check file extension
+        if lookup_cost_ctr_path.suffix == '.sas7bdat':
+            import pyreadstat
+            df, meta = pyreadstat.read_sas7bdat(str(lookup_cost_ctr_path))
+            con.execute("""
+                CREATE TABLE lkp_cost_ctr AS
+                SELECT * FROM df
+            """)
+        else:
+            # Existing parquet logic
+            con.execute(f"""
+                CREATE TABLE lkp_cost_ctr AS
+                SELECT * FROM read_parquet('{lookup_cost_ctr_path}')
+            """)
         
         con.execute("""
             CREATE TABLE with_entity AS
@@ -384,17 +394,17 @@ if __name__ == "__main__":
     print(f"Report Date: {report_date.date()}\n")
     
     # Input paths
-    input_enrh = Path("ENRH_LN_BILL.parquet")
+    input_enrh = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/ENRH_LN_BILL.parquet")
     
     # Previous day's files for SCD comparison
     prev_date_str = (report_date - timedelta(days=1)).strftime("%y%m%d")
     input_ln_bill = Path(f"LOAN_BILL_{prev_date_str}.parquet")
     input_iln_bill = Path(f"ILOAN_BILL_{prev_date_str}.parquet")
     
-    lookup_cost_ctr = Path("LKP_COST_CTR.parquet")
+    lookup_cost_ctr = Path("/sasdata/rawdata/lookup/lkp_cost_ctr.sas7bdat")
     
     # Output directory
-    output_dir = Path(".")
+    output_dir = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output")
     
     # STEP 1: Generate LOAN_BILL and ILOAN_BILL
     loan_bill_path, iloan_bill_path = process_loan_bill_scd(
@@ -427,27 +437,3 @@ if __name__ == "__main__":
     print(f"  3. HP_BILL_{report_date.strftime('%y%m%d')}.parquet")
     print(f"  4. IHP_BILL_{report_date.strftime('%y%m%d')}.parquet")
     print("="*80)
-
-
-if __name__ == "__main__":
-    # Report date
-    report_date = datetime.now()
-    
-    # Input paths
-    input_enrh = Path("ENRH_LN_BILL.parquet")
-    input_ln_bill = Path("LOAN_BILL_241126.parquet")  # Previous day's file
-    input_iln_bill = Path("ILOAN_BILL_241126.parquet")
-    lookup_cost_ctr = Path("LKP_COST_CTR.parquet")
-    
-    # Output directory
-    output_dir = Path(".")
-    
-    # Process
-    process_complete_bill_pipeline(
-        input_enrh_path=input_enrh,
-        input_ln_bill_path=input_ln_bill,
-        input_iln_bill_path=input_iln_bill,
-        lookup_cost_ctr_path=lookup_cost_ctr,
-        output_dir=output_dir,
-        report_date=report_date
-    )
