@@ -1,660 +1,407 @@
-/*==========================================================================* 
- * Step:            Extract                               A5GUQBM3.BI001OOE * 
- * Transform:       Extract                                                 * 
- * Description:                                                             * 
- *                                                                          * 
- * Source Table:    LOAN_BILL - LN_BILL.LOAN_BILL         A5GUQBM3.BD000655 * 
- * Target Table:    Extract - work.WN28JL                 A5GUQBM3.BK0012OS * 
- *==========================================================================*/ 
-
-%let transformID = %quote(A5GUQBM3.BI001OOE);
-%let trans_rc = 0;
-%let etls_stepStartTime = %sysfunc(datetime(), datetime20.); 
-
-/* Access the data for LN_BILL  */ 
-LIBNAME LN_BILL BASE "/dwh/ln_bill";
-%rcSet(&syslibrc); 
-
-%let etls_recCheckExist = 0; 
-%let etls_recnt = 0; 
-%macro etls_recordCheck; 
-   %let etls_recCheckExist = %eval(%sysfunc(exist(LN_BILL.LOAN_BILL, DATA)) or 
-         %sysfunc(exist(LN_BILL.LOAN_BILL, VIEW))); 
-   
-   %if (&etls_recCheckExist) %then
-   %do;
-      %local etls_syntaxcheck; 
-      %let etls_syntaxcheck = %sysfunc(getoption(syntaxcheck)); 
-      /* Turn off syntaxcheck option to perform following steps  */ 
-      options nosyntaxcheck;
-      
-      proc contents data = LN_BILL.LOAN_BILL out = work.etls_contents(keep = nobs) noprint; 
-      run; 
-      
-      data _null_; 
-         set work.etls_contents (obs = 1); 
-         call symput("etls_recnt", left(put(nobs,32.))); 
-      run;
-      
-      proc datasets lib = work nolist nowarn memtype = (data view);
-         delete etls_contents;
-      quit;
-      
-      /* Reset syntaxcheck option to previous setting  */ 
-      options &etls_syntaxcheck; 
-   %end;
-%mend etls_recordCheck;
-%etls_recordCheck;
-
-%let SYSLAST = %nrquote(LN_BILL.LOAN_BILL); 
-
-/* Runtime statistics macros  */ 
-%etls_setPerfInit;
-%perfstrt(txnname=%BQUOTE(_DISARM|&transformID|&syshostname|Extract), metrNam6=_DISROWCNT, metrDef6=Count32)   ;
-
-%global etls_sql_pushDown;
-%let etls_sql_pushDown = -1;
-option DBIDIRECTEXEC;
-
-/*---- Map the columns  ----*/ 
-proc datasets lib = work nolist nowarn memtype = (data view);
-   delete WN28JL;
-quit;
-
-%put %str(NOTE: Mapping columns ...);
-proc sql;
-   create view work.WN28JL as
-      select
-         ACCTNO,
-         NOTENO,
-         BILL_DT,
-         BILL_PAID_DT,
-         BILL_AMT,
-         BILL_AMT_PRIN,
-         BILL_AMT_INT,
-         BILL_AMT_ESCROW,
-         BILL_AMT_FEE,
-         BILL_NOT_PAY_AMT,
-         BILL_NOT_PAY_AMT_PRIN,
-         BILL_NOT_PAY_AMT_INT,
-         BILL_NOT_PAY_AMT_ESCROW,
-         BILL_NOT_PAY_AMT_FEE,
-         COSTCTR,
-         PRODUCT,
-         VALID_FROM_DT,
-         VALID_TO_DT
-   from &SYSLAST
-      where PRODUCT IN &HP OR PRODUCT = 392
-   ;
-quit;
-
-%let SYSLAST = work.WN28JL;
-
-%global etls_sql_pushDown;
-%let etls_sql_pushDown = &sys_sql_ip_all;
-
-%rcSet(&sqlrc); 
-
-%perfstop(metrVal6=%sysfunc(max(&etls_recnt,-1)));
-%let etls_recnt=-1;
-
-
-
-/** Step end Extract **/
-
-
-
-
-/*==========================================================================* 
- * Step:            Table Loader                          A5GUQBM3.BI001OOG * 
- * Transform:       Table Loader (Version 2.1)                              * 
- * Description:                                                             * 
- *                                                                          * 
- * Source Table:    Extract - work.WN28JL                 A5GUQBM3.BK0012OS * 
- * Target Table:    HP_BILL - LN_HP.HP_BILL               A5GUQBM3.BD00089G * 
- *==========================================================================*/ 
-
-%let transformID = %quote(A5GUQBM3.BI001OOG);
-%let trans_rc = 0;
-%let etls_stepStartTime = %sysfunc(datetime(), datetime20.); 
-
-/* Access the data for LN_HP  */ 
-LIBNAME LN_HP BASE "/dwh/ln_hp";
-%rcSet(&syslibrc); 
-
-%let SYSLAST = %nrquote(work.WN28JL); 
-
-/* Runtime statistics macros  */ 
-%etls_setPerfInit;
-%perfstrt(txnname=%BQUOTE(_DISARM|&transformID|&syshostname|Loader), metrNam6=_DISROWCNT, metrDef6=Count32)   ;
-
-%global etls_sql_pushDown;
-%let etls_sql_pushDown = -1;
-option DBIDIRECTEXEC;
-
-%global etls_tableExist;
-%global etls_numIndex;
-%global etls_lastTable;
-%let etls_tableExist = -1; 
-%let etls_numIndex = -1; 
-%let etls_lastTable = &SYSLAST; 
-
-/*---- Define load data macro  ----*/ 
-
-/* --------------------------------------------------------------
-   Load Technique Selection: Replace - EntireTable
-   Constraint and index action selections: 'ASIS','ASIS','ASIS','ASIS'
-   Additional options selections... 
-      Set unmapped to missing on updates: false 
-   -------------------------------------------------------------- */
-%macro etls_loader;
-
-   %let etls_tableOptions = ;
-   
-   /* Determine if the target table exists  */ 
-   %let etls_tableExist = %eval(%sysfunc(exist(LN_HP.HP_BILL, DATA)) or 
-         %sysfunc(exist(LN_HP.HP_BILL, VIEW))); 
-   
-   %if &etls_tableExist %then 
-   %do;/* table exists  */ 
-      %let etls_hasPreExistingConstraint=0; 
-      
-      proc datasets lib = work nolist nowarn memtype = (data view);
-         delete etls_commands etls_commands_F;
-      quit;
-      
-      %let etls_otherTablesReferToThisTable=0;
-      
-      %macro etls_CIContents(table=,workTableOut=,inDSOptions=);
-         %put NOTE: Building table listing Constraints and Indexes for: &table;
-         proc datasets lib=work nolist; delete &workTableOut; quit;
-         proc contents data=&table&inDSOptions out2=&workTableOut noprint; run;
-         
-         data &workTableOut;
-            length name $60 type $20 icown idxUnique idxNoMiss $3 recreate $600;
-            name = '';
-            type = '';
-            icown = '';
-            idxUnique = '';
-            idxNoMiss = '';
-            recreate = '';
-            set &workTableOut;
-            ref = '';
-            type=upcase(type);
-            if type eq 'REFERENTIAL' then
-            do;
-               put "WARNING%QUOTE(:) Target table is referenced by constraints in"
-                    " another table: " ref;
-               call symput('etls_otherTablesReferToThisTable','1');
-               delete;
-            end;
-            if type='INDEX' and ICOwn eq 'YES' then delete;
-         run;
-         %rcSet(&syserr); 
-         
-      %mend etls_CIContents;
-      
-      %etls_CIContents(table=LN_HP.HP_BILL, workTableOut=etls_commands, inDSOptions=);
-      
-      %if &etls_otherTablesReferToThisTable %then 
-         %put WARNING%QUOTE(:) Replacing entire table will fail. Consider an alternate load technique or revising constraints.; 
-      %else 
-      %do; /* okay - remove foreign keys  */ 
-      
-         data etls_commands_F; 
-            set etls_commands; 
-            if upcase(type)="FOREIGN KEY" then 
-            do; 
-               command='ic delete '||trim(name)||';';
-               output etls_commands_F; 
-            end; 
-         run; 
-         
-         %put %str(NOTE: Removing foreign keys before dropping table...);
-         data _null_;
-            set etls_commands_F end=eof;
-            if _n_=1 then 
-               call execute('proc datasets nolist lib=LN_HP;modify HP_BILL;');
-            call execute(command);
-            if eof then call execute('; quit;');
-         run;
-         %rcSet(&syserr); 
-         
-   %end; /* okay - remove foreign keys  */ 
-   
-   proc datasets lib = work nolist nowarn memtype = (data view);
-      delete etls_commands etls_commands_F;
-   quit;
-   
-   /*---- Drop a table  ----*/ 
-   %put %str(NOTE: Dropping table ...);
-   proc datasets lib = LN_HP nolist nowarn memtype = (data view);
-      delete HP_BILL;
-   quit;
-   
-   %rcSet(&syserr); 
-   
-   %let etls_tableExist = 0;
-   
-%end; /* table exists  */ 
-
-/*---- Create a new table  ----*/ 
-%if (&etls_tableExist eq 0) %then 
-%do;  /* if table does not exist  */ 
-
-   %put %str(NOTE: Creating table ...);
-   
-   data LN_HP.HP_BILL;
-      attrib ACCTNO length = 8; 
-      attrib NOTENO length = 8; 
-      attrib BILL_DT length = 8
-         format = ddmmyy10.; 
-      attrib BILL_PAID_DT length = 8
-         format = ddmmyy10.; 
-      attrib BILL_AMT length = 8; 
-      attrib BILL_AMT_PRIN length = 8; 
-      attrib BILL_AMT_INT length = 8; 
-      attrib BILL_AMT_ESCROW length = 8; 
-      attrib BILL_AMT_FEE length = 8; 
-      attrib BILL_NOT_PAY_AMT length = 8; 
-      attrib BILL_NOT_PAY_AMT_PRIN length = 8; 
-      attrib BILL_NOT_PAY_AMT_INT length = 8; 
-      attrib BILL_NOT_PAY_AMT_ESCROW length = 8; 
-      attrib BILL_NOT_PAY_AMT_FEE length = 8; 
-      attrib COSTCTR length = 8; 
-      attrib PRODUCT length = 8; 
-      attrib VALID_FROM_DT length = 8
-         format = ddmmyy10.; 
-      attrib VALID_TO_DT length = 8
-         format = ddmmyy10.; 
-      call missing(of _all_);
-      stop;
-   run;
-   
-   %rcSet(&syserr); 
-   
-%end;  /* if table does not exist  */ 
-
-/*---- Append  ----*/ 
-%put %str(NOTE: Appending data ...);
-
-proc append base = LN_HP.HP_BILL 
-   data = &etls_lastTable (&etls_tableOptions)  force ; 
- run; 
-
-%rcSet(&syserr); 
-
-%mend etls_loader;
-%etls_loader;
-
-%let etls_recCheckExist = 0; 
-%let etls_recnt = 0; 
-%macro etls_recordCheck; 
-   %let etls_recCheckExist = %eval(%sysfunc(exist(LN_HP.HP_BILL, DATA)) or 
-         %sysfunc(exist(LN_HP.HP_BILL, VIEW))); 
-   
-   %if (&etls_recCheckExist) %then
-   %do;
-      %local etls_syntaxcheck; 
-      %let etls_syntaxcheck = %sysfunc(getoption(syntaxcheck)); 
-      /* Turn off syntaxcheck option to perform following steps  */ 
-      options nosyntaxcheck;
-      
-      proc contents data = LN_HP.HP_BILL out = work.etls_contents(keep = nobs) noprint; 
-      run; 
-      
-      data _null_; 
-         set work.etls_contents (obs = 1); 
-         call symput("etls_recnt", left(put(nobs,32.))); 
-      run;
-      
-      proc datasets lib = work nolist nowarn memtype = (data view);
-         delete etls_contents;
-      quit;
-      
-      /* Reset syntaxcheck option to previous setting  */ 
-      options &etls_syntaxcheck; 
-   %end;
-%mend etls_recordCheck;
-%etls_recordCheck;
-
-%perfstop(metrVal6=%sysfunc(max(&etls_recnt,-1)));
-%let etls_recnt=-1;
-
-
-
-/** Step end Table Loader **/
-
-
-
-
-/*==========================================================================* 
- * Step:            Extract                               A5GUQBM3.BI001OOF * 
- * Transform:       Extract                                                 * 
- * Description:                                                             * 
- *                                                                          * 
- * Source Table:    ILOAN_BILL - ILN_BILL.ILOAN_BILL      A5GUQBM3.BD00065A * 
- * Target Table:    Extract - work.WNFQGB                 A5GUQBM3.BK0012OT * 
- *==========================================================================*/ 
-
-%let transformID = %quote(A5GUQBM3.BI001OOF);
-%let trans_rc = 0;
-%let etls_stepStartTime = %sysfunc(datetime(), datetime20.); 
-
-/* Access the data for ILN_BILL  */ 
-LIBNAME ILN_BILL BASE "/dwh/iln_bill";
-%rcSet(&syslibrc); 
-
-%let etls_recCheckExist = 0; 
-%let etls_recnt = 0; 
-%macro etls_recordCheck; 
-   %let etls_recCheckExist = %eval(%sysfunc(exist(ILN_BILL.ILOAN_BILL, DATA)) or 
-         %sysfunc(exist(ILN_BILL.ILOAN_BILL, VIEW))); 
-   
-   %if (&etls_recCheckExist) %then
-   %do;
-      %local etls_syntaxcheck; 
-      %let etls_syntaxcheck = %sysfunc(getoption(syntaxcheck)); 
-      /* Turn off syntaxcheck option to perform following steps  */ 
-      options nosyntaxcheck;
-      
-      proc contents data = ILN_BILL.ILOAN_BILL out = work.etls_contents(keep = nobs) noprint; 
-      run; 
-      
-      data _null_; 
-         set work.etls_contents (obs = 1); 
-         call symput("etls_recnt", left(put(nobs,32.))); 
-      run;
-      
-      proc datasets lib = work nolist nowarn memtype = (data view);
-         delete etls_contents;
-      quit;
-      
-      /* Reset syntaxcheck option to previous setting  */ 
-      options &etls_syntaxcheck; 
-   %end;
-%mend etls_recordCheck;
-%etls_recordCheck;
-
-%let SYSLAST = %nrquote(ILN_BILL.ILOAN_BILL); 
-
-/* Runtime statistics macros  */ 
-%etls_setPerfInit;
-%perfstrt(txnname=%BQUOTE(_DISARM|&transformID|&syshostname|Extract), metrNam6=_DISROWCNT, metrDef6=Count32)   ;
-
-%global etls_sql_pushDown;
-%let etls_sql_pushDown = -1;
-option DBIDIRECTEXEC;
-
-/*---- Map the columns  ----*/ 
-proc datasets lib = work nolist nowarn memtype = (data view);
-   delete WNFQGB;
-quit;
-
-%put %str(NOTE: Mapping columns ...);
-proc sql;
-   create view work.WNFQGB as
-      select
-         ACCTNO,
-         NOTENO,
-         BILL_DT,
-         BILL_PAID_DT,
-         BILL_AMT,
-         BILL_AMT_PRIN,
-         BILL_AMT_INT,
-         BILL_AMT_ESCROW,
-         BILL_AMT_FEE,
-         BILL_NOT_PAY_AMT,
-         BILL_NOT_PAY_AMT_PRIN,
-         BILL_NOT_PAY_AMT_INT,
-         BILL_NOT_PAY_AMT_ESCROW,
-         BILL_NOT_PAY_AMT_FEE,
-         COSTCTR,
-         PRODUCT,
-         VALID_FROM_DT,
-         VALID_TO_DT
-   from &SYSLAST
-      where PRODUCT IN &HP
-   ;
-quit;
-
-%let SYSLAST = work.WNFQGB;
-
-%global etls_sql_pushDown;
-%let etls_sql_pushDown = &sys_sql_ip_all;
-
-%rcSet(&sqlrc); 
-
-%perfstop(metrVal6=%sysfunc(max(&etls_recnt,-1)));
-%let etls_recnt=-1;
-
-
-
-/** Step end Extract **/
-
-
-
-/*==========================================================================* 
- * Step:            Table Loader                          A5GUQBM3.BI001OOH * 
- * Transform:       Table Loader (Version 2.1)                              * 
- * Description:                                                             * 
- *                                                                          * 
- * Source Table:    Extract - work.WNFQGB                 A5GUQBM3.BK0012OT * 
- * Target Table:    IHP_BILL - ILN_HP.IHP_BILL            A5GUQBM3.BD00089H * 
- *==========================================================================*/ 
-
-%let transformID = %quote(A5GUQBM3.BI001OOH);
-%let trans_rc = 0;
-%let etls_stepStartTime = %sysfunc(datetime(), datetime20.); 
-
-/* Access the data for ILN_HP  */ 
-LIBNAME ILN_HP BASE "/dwh/iln_hp";
-%rcSet(&syslibrc); 
-
-%let SYSLAST = %nrquote(work.WNFQGB); 
-
-/* Runtime statistics macros  */ 
-%etls_setPerfInit;
-%perfstrt(txnname=%BQUOTE(_DISARM|&transformID|&syshostname|Loader), metrNam6=_DISROWCNT, metrDef6=Count32)   ;
-
-%global etls_sql_pushDown;
-%let etls_sql_pushDown = -1;
-option DBIDIRECTEXEC;
-
-%global etls_tableExist;
-%global etls_numIndex;
-%global etls_lastTable;
-%let etls_tableExist = -1; 
-%let etls_numIndex = -1; 
-%let etls_lastTable = &SYSLAST; 
-
-/*---- Define load data macro  ----*/ 
-
-/* --------------------------------------------------------------
-   Load Technique Selection: Replace - EntireTable
-   Constraint and index action selections: 'ASIS','ASIS','ASIS','ASIS'
-   Additional options selections... 
-      Set unmapped to missing on updates: false 
-   -------------------------------------------------------------- */
-%macro etls_loader;
-
-   %let etls_tableOptions = ;
-   
-   /* Determine if the target table exists  */ 
-   %let etls_tableExist = %eval(%sysfunc(exist(ILN_HP.IHP_BILL, DATA)) or 
-         %sysfunc(exist(ILN_HP.IHP_BILL, VIEW))); 
-   
-   %if &etls_tableExist %then 
-   %do;/* table exists  */ 
-      %let etls_hasPreExistingConstraint=0; 
-      
-      proc datasets lib = work nolist nowarn memtype = (data view);
-         delete etls_commands etls_commands_F;
-      quit;
-      
-      %let etls_otherTablesReferToThisTable=0;
-      
-      %macro etls_CIContents(table=,workTableOut=,inDSOptions=);
-         %put NOTE: Building table listing Constraints and Indexes for: &table;
-         proc datasets lib=work nolist; delete &workTableOut; quit;
-         proc contents data=&table&inDSOptions out2=&workTableOut noprint; run;
-         
-         data &workTableOut;
-            length name $60 type $20 icown idxUnique idxNoMiss $3 recreate $600;
-            name = '';
-            type = '';
-            icown = '';
-            idxUnique = '';
-            idxNoMiss = '';
-            recreate = '';
-            set &workTableOut;
-            ref = '';
-            type=upcase(type);
-            if type eq 'REFERENTIAL' then
-            do;
-               put "WARNING%QUOTE(:) Target table is referenced by constraints in"
-                    " another table: " ref;
-               call symput('etls_otherTablesReferToThisTable','1');
-               delete;
-            end;
-            if type='INDEX' and ICOwn eq 'YES' then delete;
-         run;
-         %rcSet(&syserr); 
-         
-      %mend etls_CIContents;
-      
-      %etls_CIContents(table=ILN_HP.IHP_BILL, workTableOut=etls_commands, inDSOptions=);
-      
-      %if &etls_otherTablesReferToThisTable %then 
-         %put WARNING%QUOTE(:) Replacing entire table will fail. Consider an alternate load technique or revising constraints.; 
-      %else 
-      %do; /* okay - remove foreign keys  */ 
-      
-         data etls_commands_F; 
-            set etls_commands; 
-            if upcase(type)="FOREIGN KEY" then 
-            do; 
-               command='ic delete '||trim(name)||';';
-               output etls_commands_F; 
-            end; 
-         run; 
-         
-         %put %str(NOTE: Removing foreign keys before dropping table...);
-         data _null_;
-            set etls_commands_F end=eof;
-            if _n_=1 then 
-               call execute('proc datasets nolist lib=ILN_HP;modify IHP_BILL;');
-            call execute(command);
-            if eof then call execute('; quit;');
-         run;
-         %rcSet(&syserr); 
-         
-   %end; /* okay - remove foreign keys  */ 
-   
-   proc datasets lib = work nolist nowarn memtype = (data view);
-      delete etls_commands etls_commands_F;
-   quit;
-   
-   /*---- Drop a table  ----*/ 
-   %put %str(NOTE: Dropping table ...);
-   proc datasets lib = ILN_HP nolist nowarn memtype = (data view);
-      delete IHP_BILL;
-   quit;
-   
-   %rcSet(&syserr); 
-   
-   %let etls_tableExist = 0;
-   
-%end; /* table exists  */ 
-
-/*---- Create a new table  ----*/ 
-%if (&etls_tableExist eq 0) %then 
-%do;  /* if table does not exist  */ 
-
-   %put %str(NOTE: Creating table ...);
-   
-   data ILN_HP.IHP_BILL;
-      attrib ACCTNO length = 8; 
-      attrib NOTENO length = 8; 
-      attrib BILL_DT length = 8
-         format = ddmmyy10.; 
-      attrib BILL_PAID_DT length = 8
-         format = ddmmyy10.; 
-      attrib BILL_AMT length = 8; 
-      attrib BILL_AMT_PRIN length = 8; 
-      attrib BILL_AMT_INT length = 8; 
-      attrib BILL_AMT_ESCROW length = 8; 
-      attrib BILL_AMT_FEE length = 8; 
-      attrib BILL_NOT_PAY_AMT length = 8; 
-      attrib BILL_NOT_PAY_AMT_PRIN length = 8; 
-      attrib BILL_NOT_PAY_AMT_INT length = 8; 
-      attrib BILL_NOT_PAY_AMT_ESCROW length = 8; 
-      attrib BILL_NOT_PAY_AMT_FEE length = 8; 
-      attrib COSTCTR length = 8; 
-      attrib PRODUCT length = 8; 
-      attrib VALID_FROM_DT length = 8
-         format = ddmmyy10.; 
-      attrib VALID_TO_DT length = 8
-         format = ddmmyy10.; 
-      call missing(of _all_);
-      stop;
-   run;
-   
-   %rcSet(&syserr); 
-   
-%end;  /* if table does not exist  */ 
-
-/*---- Append  ----*/ 
-%put %str(NOTE: Appending data ...);
-
-proc append base = ILN_HP.IHP_BILL 
-   data = &etls_lastTable (&etls_tableOptions)  force ; 
- run; 
-
-%rcSet(&syserr); 
-
-%mend etls_loader;
-%etls_loader;
-
-%let etls_recCheckExist = 0; 
-%let etls_recnt = 0; 
-%macro etls_recordCheck; 
-   %let etls_recCheckExist = %eval(%sysfunc(exist(ILN_HP.IHP_BILL, DATA)) or 
-         %sysfunc(exist(ILN_HP.IHP_BILL, VIEW))); 
-   
-   %if (&etls_recCheckExist) %then
-   %do;
-      %local etls_syntaxcheck; 
-      %let etls_syntaxcheck = %sysfunc(getoption(syntaxcheck)); 
-      /* Turn off syntaxcheck option to perform following steps  */ 
-      options nosyntaxcheck;
-      
-      proc contents data = ILN_HP.IHP_BILL out = work.etls_contents(keep = nobs) noprint; 
-      run; 
-      
-      data _null_; 
-         set work.etls_contents (obs = 1); 
-         call symput("etls_recnt", left(put(nobs,32.))); 
-      run;
-      
-      proc datasets lib = work nolist nowarn memtype = (data view);
-         delete etls_contents;
-      quit;
-      
-      /* Reset syntaxcheck option to previous setting  */ 
-      options &etls_syntaxcheck; 
-   %end;
-%mend etls_recordCheck;
-%etls_recordCheck;
-
-%perfstop(metrVal6=%sysfunc(max(&etls_recnt,-1)));
-%let etls_recnt=-1;
-
-
-
-/** Step end Table Loader **/
-
-
-
-
-
+import duckdb
+import polars as pl
+from pathlib import Path
+from datetime import datetime, timedelta
+
+# HP Product codes (defined in SAS macro &HP)
+HP_PRODUCTS = [
+    200, 201, 204, 205, 209, 210, 211, 212, 214, 215, 219, 220,
+    225, 226, 227, 228, 230, 233, 234, 235, 236, 237, 238, 239,
+    240, 241, 242, 243, 300, 301, 304, 305, 359, 361, 363, 392,
+    152, 153, 154, 155, 423, 424, 425, 426, 175, 176, 177, 178,
+    400, 401, 402, 406, 407, 408, 409, 410, 411, 412, 413, 414,
+    415, 416, 419, 420, 422, 429, 430, 464
+]
+
+def process_complete_bill_pipeline(
+    input_enrh_path: Path,
+    input_ln_bill_path: Path,
+    input_iln_bill_path: Path,
+    lookup_cost_ctr_path: Path,
+    output_dir: Path,
+    report_date: datetime
+) -> None:
+    """
+    Complete Bill Processing Pipeline:
+    1. SCD Type 2 Processing (LOAD_EXDWH_LN_BILL)
+    2. HP/IHP Extraction and Loading
+    
+    Outputs date-stamped files: LOAN_BILL_YYMMDD.parquet, HP_BILL_YYMMDD.parquet, etc.
+    """
+    
+    print("="*80)
+    print("COMPLETE BILL PROCESSING PIPELINE")
+    print("="*80)
+    print(f"Report Date: {report_date.date()}")
+    
+    # Calculate date string (YYMMDD format)
+    date_str = report_date.strftime("%y%m%d")
+    print(f"Date String: {date_str}")
+    print("-" * 80)
+    
+    con = duckdb.connect(':memory:')
+    
+    rdate = report_date.date()
+    hp_products_str = ','.join(map(str, HP_PRODUCTS))
+    
+    # ========================================================================
+    # STEP 1: SCD TYPE 2 PROCESSING (LOAD_EXDWH_LN_BILL)
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("STEP 1: SCD TYPE 2 PROCESSING (LOAN_BILL & ILOAN_BILL)")
+    print("="*80)
+    
+    if not input_enrh_path.exists():
+        print(f"ERROR: ENRH_LN_BILL not found: {input_enrh_path}")
+        return
+    
+    # Load ENRH_LN_BILL
+    print("\n1.1: Loading ENRH_LN_BILL...")
+    con.execute(f"""
+        CREATE TABLE enrh_ln_bill AS
+        SELECT * FROM read_parquet('{input_enrh_path}')
+    """)
+    
+    count = con.execute("SELECT COUNT(*) FROM enrh_ln_bill").fetchone()[0]
+    print(f"  Loaded {count:,} records")
+    
+    # Add NEW flag
+    con.execute("""
+        CREATE TABLE new_records AS
+        SELECT *, 'Y' AS NEW
+        FROM enrh_ln_bill
+    """)
+    
+    # Load historical data
+    print("\n1.2: Loading historical data...")
+    historical_exists = False
+    
+    if input_ln_bill_path.exists() or input_iln_bill_path.exists():
+        historical_exists = True
+        tables = []
+        
+        if input_ln_bill_path.exists():
+            con.execute(f"""
+                CREATE TABLE ln_bill_hist AS
+                SELECT * FROM read_parquet('{input_ln_bill_path}')
+            """)
+            tables.append('ln_bill_hist')
+            print(f"  ✓ Loaded LN_BILL history")
+        
+        if input_iln_bill_path.exists():
+            con.execute(f"""
+                CREATE TABLE iln_bill_hist AS
+                SELECT * FROM read_parquet('{input_iln_bill_path}')
+            """)
+            tables.append('iln_bill_hist')
+            print(f"  ✓ Loaded ILN_BILL history")
+        
+        # Combine historical
+        union_sql = " UNION ALL ".join([f"SELECT * FROM {t}" for t in tables])
+        con.execute(f"""
+            CREATE TABLE loan_bill_all AS
+            {union_sql}
+        """)
+        
+        con.execute(f"""
+            CREATE TABLE loan_bill AS
+            SELECT *, 'Y' AS EXT
+            FROM loan_bill_all
+            WHERE VALID_TO_DT = DATE '{rdate - timedelta(days=1)}'
+        """)
+        
+        con.execute(f"""
+            CREATE TABLE loan_bill_keep AS
+            SELECT *
+            FROM loan_bill_all
+            WHERE VALID_TO_DT != DATE '{rdate - timedelta(days=1)}'
+        """)
+    else:
+        print("  No historical data found - all records are new")
+        con.execute("""
+            CREATE TABLE loan_bill AS
+            SELECT CAST(NULL AS BIGINT) AS ACCTNO, 
+                   CAST(NULL AS BIGINT) AS NOTENO,
+                   CAST(NULL AS DATE) AS BILL_DT,
+                   CAST(NULL AS DATE) AS BILL_PAID_DT,
+                   CAST(NULL AS DOUBLE) AS BILL_AMT,
+                   CAST(NULL AS DOUBLE) AS BILL_AMT_PRIN,
+                   CAST(NULL AS DOUBLE) AS BILL_AMT_INT,
+                   CAST(NULL AS DOUBLE) AS BILL_AMT_ESCROW,
+                   CAST(NULL AS DOUBLE) AS BILL_AMT_FEE,
+                   CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT,
+                   CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_PRIN,
+                   CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_INT,
+                   CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_ESCROW,
+                   CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_FEE,
+                   CAST(NULL AS BIGINT) AS COSTCTR,
+                   CAST(NULL AS BIGINT) AS PRODUCT,
+                   CAST(NULL AS DATE) AS VALID_FROM_DT,
+                   CAST(NULL AS DATE) AS VALID_TO_DT,
+                   CAST(NULL AS VARCHAR) AS EXT
+            WHERE 1=0
+        """)
+        con.execute("CREATE TABLE loan_bill_keep AS SELECT * FROM loan_bill WHERE 1=0")
+    
+    # SCD Type 2: MATCH, CHGREC, UPDATEX
+    print("\n1.3: Applying SCD Type 2 logic...")
+    
+    # MATCH: Extend validity
+    con.execute(f"""
+        CREATE TABLE match AS
+        SELECT 
+            T1.ACCTNO, T1.NOTENO, T1.BILL_DT, T1.BILL_PAID_DT,
+            T1.BILL_AMT, T1.BILL_AMT_PRIN, T1.BILL_AMT_INT, T1.BILL_AMT_ESCROW, T1.BILL_AMT_FEE,
+            T1.BILL_NOT_PAY_AMT, T1.BILL_NOT_PAY_AMT_PRIN, T1.BILL_NOT_PAY_AMT_INT,
+            T1.BILL_NOT_PAY_AMT_ESCROW, T1.BILL_NOT_PAY_AMT_FEE,
+            T1.COSTCTR, T1.PRODUCT, T1.VALID_FROM_DT,
+            DATE '{rdate}' AS VALID_TO_DT
+        FROM loan_bill T1
+        INNER JOIN new_records T2 
+            ON T1.ACCTNO = T2.ACCTNO AND T1.NOTENO = T2.NOTENO
+            AND T1.BILL_DT = T2.BILL_DT
+            AND COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') = COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01')
+            AND T1.BILL_AMT = T2.BILL_AMT AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
+            AND T1.BILL_AMT_INT = T2.BILL_AMT_INT AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
+            AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
+            AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
+            AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
+            AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
+            AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
+            AND T1.COSTCTR = T2.COSTCTR AND T1.PRODUCT = T2.PRODUCT
+    """)
+    
+    # CHGREC: Close old records
+    con.execute("""
+        CREATE TABLE chgrec AS
+        SELECT T1.*, T2.NEW
+        FROM loan_bill T1
+        LEFT JOIN new_records T2 
+            ON T1.ACCTNO = T2.ACCTNO AND T1.NOTENO = T2.NOTENO
+            AND T1.BILL_DT = T2.BILL_DT
+            AND COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') = COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01')
+            AND T1.BILL_AMT = T2.BILL_AMT AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
+            AND T1.BILL_AMT_INT = T2.BILL_AMT_INT AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
+            AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
+            AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
+            AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
+            AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
+            AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
+            AND T1.COSTCTR = T2.COSTCTR AND T1.PRODUCT = T2.PRODUCT
+        WHERE T2.NEW IS NULL
+    """)
+    
+    # UPDATEX: New/changed records
+    con.execute(f"""
+        CREATE TABLE updatex AS
+        SELECT 
+            T2.ACCTNO, T2.NOTENO, T2.BILL_DT, T2.BILL_PAID_DT,
+            T2.BILL_AMT, T2.BILL_AMT_PRIN, T2.BILL_AMT_INT, T2.BILL_AMT_ESCROW, T2.BILL_AMT_FEE,
+            T2.BILL_NOT_PAY_AMT, T2.BILL_NOT_PAY_AMT_PRIN, T2.BILL_NOT_PAY_AMT_INT,
+            T2.BILL_NOT_PAY_AMT_ESCROW, T2.BILL_NOT_PAY_AMT_FEE,
+            T2.COSTCTR, T2.PRODUCT,
+            DATE '{rdate}' AS VALID_FROM_DT,
+            DATE '{rdate}' AS VALID_TO_DT,
+            T1.EXT
+        FROM loan_bill T1
+        RIGHT JOIN new_records T2 
+            ON T1.ACCTNO = T2.ACCTNO AND T1.NOTENO = T2.NOTENO
+            AND T1.BILL_DT = T2.BILL_DT
+            AND COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') = COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01')
+            AND T1.BILL_AMT = T2.BILL_AMT AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
+            AND T1.BILL_AMT_INT = T2.BILL_AMT_INT AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
+            AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
+            AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
+            AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
+            AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
+            AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
+            AND T1.COSTCTR = T2.COSTCTR AND T1.PRODUCT = T2.PRODUCT
+        WHERE T1.EXT IS NULL
+    """)
+    
+    # Combine all
+    con.execute("""
+        CREATE TABLE loan_bill_final AS
+        SELECT * FROM match
+        UNION ALL SELECT * FROM updatex
+        UNION ALL SELECT * FROM chgrec
+        UNION ALL SELECT * FROM loan_bill_keep
+        ORDER BY ACCTNO, NOTENO, BILL_DT, VALID_FROM_DT, VALID_TO_DT
+    """)
+    
+    # Lookup ENTITY_CD
+    print("\n1.4: Looking up ENTITY_CD...")
+    
+    if lookup_cost_ctr_path.exists():
+        con.execute(f"""
+            CREATE TABLE lkp_cost_ctr AS
+            SELECT * FROM read_parquet('{lookup_cost_ctr_path}')
+        """)
+        
+        con.execute("""
+            CREATE TABLE with_entity AS
+            SELECT L.*, C.ENTITY_CD
+            FROM loan_bill_final L
+            LEFT JOIN lkp_cost_ctr C ON L.COSTCTR = C.COSTCTR
+        """)
+    else:
+        con.execute("""
+            CREATE TABLE with_entity AS
+            SELECT *, CAST(NULL AS VARCHAR) AS ENTITY_CD
+            FROM loan_bill_final
+        """)
+    
+    # Split by ENTITY_CD
+    print("\n1.5: Splitting by ENTITY_CD...")
+    
+    con.execute("""
+        CREATE TABLE ln_bill_output AS
+        SELECT 
+            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+        FROM with_entity
+        WHERE ENTITY_CD IS NULL OR ENTITY_CD = ''
+    """)
+    
+    con.execute("""
+        CREATE TABLE iln_bill_output AS
+        SELECT 
+            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+        FROM with_entity
+        WHERE ENTITY_CD = 'PIBB'
+    """)
+    
+    ln_count = con.execute("SELECT COUNT(*) FROM ln_bill_output").fetchone()[0]
+    iln_count = con.execute("SELECT COUNT(*) FROM iln_bill_output").fetchone()[0]
+    
+    print(f"  LOAN_BILL: {ln_count:,} records")
+    print(f"  ILOAN_BILL: {iln_count:,} records")
+    
+    # ========================================================================
+    # STEP 2: HP/IHP EXTRACTION
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("STEP 2: HP/IHP EXTRACTION")
+    print("="*80)
+    
+    # Extract HP from LOAN_BILL
+    print("\n2.1: Extracting HP_BILL from LOAN_BILL...")
+    con.execute(f"""
+        CREATE TABLE hp_bill AS
+        SELECT * FROM ln_bill_output
+        WHERE PRODUCT IN ({hp_products_str}) OR PRODUCT = 392
+    """)
+    
+    hp_count = con.execute("SELECT COUNT(*) FROM hp_bill").fetchone()[0]
+    print(f"  HP_BILL: {hp_count:,} records")
+    
+    # Extract IHP from ILOAN_BILL
+    print("\n2.2: Extracting IHP_BILL from ILOAN_BILL...")
+    con.execute(f"""
+        CREATE TABLE ihp_bill AS
+        SELECT * FROM iln_bill_output
+        WHERE PRODUCT IN ({hp_products_str})
+    """)
+    
+    ihp_count = con.execute("SELECT COUNT(*) FROM ihp_bill").fetchone()[0]
+    print(f"  IHP_BILL: {ihp_count:,} records")
+    
+    # ========================================================================
+    # STEP 3: SAVE ALL OUTPUTS WITH DATE STAMPS
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("STEP 3: SAVING OUTPUTS (DATE-STAMPED)")
+    print("="*80)
+    
+    outputs = [
+        ('ln_bill_output', f'LOAN_BILL_{date_str}.parquet', 'LOAN_BILL'),
+        ('iln_bill_output', f'ILOAN_BILL_{date_str}.parquet', 'ILOAN_BILL'),
+        ('hp_bill', f'HP_BILL_{date_str}.parquet', 'HP_BILL'),
+        ('ihp_bill', f'IHP_BILL_{date_str}.parquet', 'IHP_BILL')
+    ]
+    
+    for table_name, filename, label in outputs:
+        output_path = output_dir / filename
+        result = con.execute(f"SELECT * FROM {table_name}").pl()
+        result.write_parquet(output_path)
+        
+        size_mb = output_path.stat().st_size / (1024 * 1024)
+        print(f"  ✓ {label}: {output_path.name}")
+        print(f"    Records: {len(result):,}, Size: {size_mb:.2f} MB")
+    
+    # Summary
+    print("\n" + "="*80)
+    print("SUMMARY")
+    print("="*80)
+    
+    summary = con.execute("""
+        SELECT 
+            'LOAN_BILL' AS dataset,
+            COUNT(*) AS records,
+            COUNT(DISTINCT ACCTNO) AS accounts,
+            SUM(BILL_AMT) AS total_amt
+        FROM ln_bill_output
+        UNION ALL
+        SELECT 
+            'ILOAN_BILL',
+            COUNT(*),
+            COUNT(DISTINCT ACCTNO),
+            SUM(BILL_AMT)
+        FROM iln_bill_output
+        UNION ALL
+        SELECT 
+            'HP_BILL',
+            COUNT(*),
+            COUNT(DISTINCT ACCTNO),
+            SUM(BILL_AMT)
+        FROM hp_bill
+        UNION ALL
+        SELECT 
+            'IHP_BILL',
+            COUNT(*),
+            COUNT(DISTINCT ACCTNO),
+            SUM(BILL_AMT)
+        FROM ihp_bill
+    """).pl()
+    
+    print(summary)
+    
+    con.close()
+    
+    print("\n" + "="*80)
+    print("PROCESSING COMPLETED SUCCESSFULLY")
+    print("="*80)
+
+
+if __name__ == "__main__":
+    # Report date
+    report_date = datetime.now()
+    
+    # Input paths
+    input_enrh = Path("ENRH_LN_BILL.parquet")
+    input_ln_bill = Path("LOAN_BILL_241126.parquet")  # Previous day's file
+    input_iln_bill = Path("ILOAN_BILL_241126.parquet")
+    lookup_cost_ctr = Path("LKP_COST_CTR.parquet")
+    
+    # Output directory
+    output_dir = Path(".")
+    
+    # Process
+    process_complete_bill_pipeline(
+        input_enrh_path=input_enrh,
+        input_ln_bill_path=input_ln_bill,
+        input_iln_bill_path=input_iln_bill,
+        lookup_cost_ctr_path=lookup_cost_ctr,
+        output_dir=output_dir,
+        report_date=report_date
+    )
