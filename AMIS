@@ -1,7 +1,475 @@
-1.2: Loading historical data...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_LOAD_LN_BILL.py", line 398, in <module>
-    loan_bill_path, iloan_bill_path = process_loan_bill_scd(
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_LOAD_LN_BILL.py", line 87, in process_loan_bill_scd
-    if len(tables) == 2:
-UnboundLocalError: local variable 'tables' referenced before assignment
+import duckdb
+import polars as pl
+from pathlib import Path
+from datetime import datetime, timedelta
+import pyarrow as pa
+import pyarrow.parquet as pq
+import tempfile
+
+# HP Product codes
+HP_PRODUCTS = [
+    200, 201, 204, 205, 209, 210, 211, 212, 214, 215, 219, 220,
+    225, 226, 227, 228, 230, 233, 234, 235, 236, 237, 238, 239,
+    240, 241, 242, 243, 300, 301, 304, 305, 359, 361, 363, 392,
+    152, 153, 154, 155, 423, 424, 425, 426, 175, 176, 177, 178,
+    400, 401, 402, 406, 407, 408, 409, 410, 411, 412, 413, 414,
+    415, 416, 419, 420, 422, 429, 430, 464
+]
+
+def process_large_loan_bill_scd(
+    input_enrh_path: Path,
+    output_dir: Path,
+    report_date: datetime,
+    chunk_size: int = 2_000_000
+) -> tuple:
+    """
+    Process large ENRH_LN_BILL in chunks
+    Uses previous day's LOAN_BILL and ILOAN_BILL as historical data
+    """
+    
+    print("="*80)
+    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING")
+    print("="*80)
+    print(f"Report Date: {report_date.date()}")
+    print(f"Processing in chunks of {chunk_size:,} records")
+    print("-" * 80)
+    
+    date_str = report_date.strftime("%y%m%d")
+    rdate = report_date.date()
+    
+    # Define historical file paths (previous day's output)
+    prev_date_str = (report_date - timedelta(days=1)).strftime("%y%m%d")
+    input_ln_bill = output_dir / f"LOAN_BILL_{prev_date_str}.parquet"
+    input_iln_bill = output_dir / f"ILOAN_BILL_{prev_date_str}.parquet"
+    
+    print(f"Looking for historical data:")
+    print(f"  LOAN_BILL: {input_ln_bill.name} - {'EXISTS' if input_ln_bill.exists() else 'NOT FOUND'}")
+    print(f"  ILOAN_BILL: {input_iln_bill.name} - {'EXISTS' if input_iln_bill.exists() else 'NOT FOUND'}")
+    
+    # Create temporary directory for chunk processing
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        
+        # Strategy 1: Use PyArrow for efficient chunked reading
+        print("\n1.1: Reading ENRH_LN_BILL in chunks...")
+        enrh_file = pq.ParquetFile(input_enrh_path)
+        total_records = enrh_file.metadata.num_rows
+        print(f"  Total records: {total_records:,}")
+        
+        # Process chunks
+        chunk_files = []
+        for i, batch in enumerate(enrh_file.iter_batches(batch_size=chunk_size)):
+            print(f"  Processing chunk {i+1}...")
+            
+            df = pl.from_arrow(batch)
+            chunk_file = temp_path / f"enrh_chunk_{i}.parquet"
+            df.write_parquet(chunk_file)
+            chunk_files.append(chunk_file)
+            
+            del df, batch  # Free memory
+        
+        # Strategy 2: Process each chunk separately and combine
+        print("\n1.2: Processing chunks with SCD logic...")
+        
+        con = duckdb.connect(':memory:')
+        
+        # Load and prepare historical data once
+        has_historical_data = False
+        
+        # Check if both historical files exist
+        if input_ln_bill.exists() and input_iln_bill.exists():
+            con.execute(f"""
+                CREATE TABLE ln_bill_hist AS 
+                SELECT * FROM read_parquet('{input_ln_bill}')
+            """)
+            
+            con.execute(f"""
+                CREATE TABLE iln_bill_hist AS 
+                SELECT * FROM read_parquet('{input_iln_bill}')
+            """)
+            
+            # Combine historical data
+            con.execute(f"""
+                CREATE TABLE loan_bill_hist AS
+                SELECT * FROM ln_bill_hist
+                UNION ALL
+                SELECT * FROM iln_bill_hist
+            """)
+            
+            # Create index for faster joins
+            con.execute("""
+                CREATE INDEX idx_hist_key ON loan_bill_hist(ACCTNO, NOTENO, BILL_DT)
+            """)
+            has_historical_data = True
+            print(f"  ✓ Loaded historical data from previous day")
+        else:
+            # Create empty historical table structure
+            con.execute("""
+                CREATE TABLE loan_bill_hist AS
+                SELECT 
+                    CAST(NULL AS BIGINT) AS ACCTNO,
+                    CAST(NULL AS BIGINT) AS NOTENO, 
+                    CAST(NULL AS DATE) AS BILL_DT,
+                    CAST(NULL AS DATE) AS BILL_PAID_DT,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_PRIN,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_INT,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_ESCROW,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_FEE,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_PRIN,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_INT,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_ESCROW,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_FEE,
+                    CAST(NULL AS BIGINT) AS COSTCTR,
+                    CAST(NULL AS BIGINT) AS PRODUCT,
+                    CAST(NULL AS DATE) AS VALID_FROM_DT,
+                    CAST(NULL AS DATE) AS VALID_TO_DT
+                WHERE 1=0
+            """)
+            print("  ✓ No historical data found - starting fresh")
+        
+        # Process each chunk
+        final_chunks = []
+        for i, chunk_file in enumerate(chunk_files):
+            print(f"  SCD processing chunk {i+1}/{len(chunk_files)}...")
+            
+            # Process chunk with optimized SCD logic
+            chunk_result = process_scd_chunk(
+                con, chunk_file, rdate, temp_path, f"chunk_{i}", has_historical_data
+            )
+            final_chunks.append(chunk_result)
+        
+        # Combine all chunks
+        print("\n1.3: Combining all chunks...")
+        if final_chunks:
+            union_chunks = " UNION ALL ".join([f"SELECT * FROM read_parquet('{f}')" for f in final_chunks])
+            con.execute(f"""
+                CREATE TABLE loan_bill_combined AS
+                {union_chunks}
+            """)
+        else:
+            # If no chunks were processed, create empty table
+            con.execute("""
+                CREATE TABLE loan_bill_combined AS
+                SELECT 
+                    CAST(NULL AS BIGINT) AS ACCTNO,
+                    CAST(NULL AS BIGINT) AS NOTENO, 
+                    CAST(NULL AS DATE) AS BILL_DT,
+                    CAST(NULL AS DATE) AS BILL_PAID_DT,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_PRIN,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_INT,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_ESCROW,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_FEE,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_PRIN,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_INT,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_ESCROW,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_FEE,
+                    CAST(NULL AS BIGINT) AS COSTCTR,
+                    CAST(NULL AS BIGINT) AS PRODUCT,
+                    CAST(NULL AS DATE) AS VALID_FROM_DT,
+                    CAST(NULL AS DATE) AS VALID_TO_DT
+                WHERE 1=0
+            """)
+        
+        # Add ENTITY_CD (optimized lookup)
+        print("\n1.4: Adding ENTITY_CD with optimized lookup...")
+        lookup_cost_ctr_path = Path("/sasdata/rawdata/lookup/lkp_cost_ctr.sas7bdat")
+        if lookup_cost_ctr_path.exists():
+            # Use broadcast join for small lookup table
+            if lookup_cost_ctr_path.suffix == '.sas7bdat':
+                import pyreadstat
+                df, meta = pyreadstat.read_sas7bdat(str(lookup_cost_ctr_path))
+                con.execute("CREATE TABLE lkp_cost_ctr AS SELECT * FROM df")
+            else:
+                con.execute(f"CREATE TABLE lkp_cost_ctr AS SELECT * FROM read_parquet('{lookup_cost_ctr_path}')")
+            
+            # Create index on lookup table
+            con.execute("CREATE INDEX idx_lkp_cost ON lkp_cost_ctr(COSTCTR)")
+            
+            con.execute("""
+                CREATE TABLE with_entity AS
+                SELECT L.*, C.ENTITY_CD
+                FROM loan_bill_combined L
+                LEFT JOIN lkp_cost_ctr C ON L.COSTCTR = C.COSTCTR
+            """)
+        else:
+            con.execute("""
+                CREATE TABLE with_entity AS
+                SELECT *, CAST(NULL AS VARCHAR) AS ENTITY_CD
+                FROM loan_bill_combined
+            """)
+        
+        # Split and save results
+        print("\n1.5: Saving final results...")
+        ln_bill_path, iln_bill_path = save_final_results(con, output_dir, date_str)
+        
+        con.close()
+        
+        return ln_bill_path, iln_bill_path
+
+def process_scd_chunk(con, chunk_file, rdate, temp_path, chunk_id, has_historical_data):
+    """Process SCD logic for a single chunk"""
+    
+    # Load chunk as new records
+    con.execute(f"""
+        CREATE TEMP TABLE new_records AS
+        SELECT *, 'Y' AS NEW
+        FROM read_parquet('{chunk_file}')
+    """)
+    
+    # Create index for faster joins
+    con.execute("""
+        CREATE INDEX idx_new_key ON new_records(ACCTNO, NOTENO, BILL_DT)
+    """)
+    
+    if has_historical_data:
+        # Optimized SCD logic with historical data
+        con.execute(f"""
+            CREATE TEMP TABLE scd_result AS
+            WITH matched_records AS (
+                -- MATCH: Records that exist in both with same values
+                SELECT 
+                    T1.ACCTNO, T1.NOTENO, T1.BILL_DT, T1.BILL_PAID_DT,
+                    T1.BILL_AMT, T1.BILL_AMT_PRIN, T1.BILL_AMT_INT, 
+                    T1.BILL_AMT_ESCROW, T1.BILL_AMT_FEE,
+                    T1.BILL_NOT_PAY_AMT, T1.BILL_NOT_PAY_AMT_PRIN, 
+                    T1.BILL_NOT_PAY_AMT_INT, T1.BILL_NOT_PAY_AMT_ESCROW, 
+                    T1.BILL_NOT_PAY_AMT_FEE,
+                    T1.COSTCTR, T1.PRODUCT, T1.VALID_FROM_DT,
+                    DATE '{rdate}' AS VALID_TO_DT
+                FROM loan_bill_hist T1
+                WHERE EXISTS (
+                    SELECT 1 FROM new_records T2 
+                    WHERE T1.ACCTNO = T2.ACCTNO 
+                    AND T1.NOTENO = T2.NOTENO
+                    AND T1.BILL_DT = T2.BILL_DT
+                    AND COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') = COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01')
+                    AND T1.BILL_AMT = T2.BILL_AMT
+                )
+            ),
+            new_or_changed AS (
+                -- New records or records with changes
+                SELECT 
+                    T2.ACCTNO, T2.NOTENO, T2.BILL_DT, T2.BILL_PAID_DT,
+                    T2.BILL_AMT, T2.BILL_AMT_PRIN, T2.BILL_AMT_INT, 
+                    T2.BILL_AMT_ESCROW, T2.BILL_AMT_FEE,
+                    T2.BILL_NOT_PAY_AMT, T2.BILL_NOT_PAY_AMT_PRIN, 
+                    T2.BILL_NOT_PAY_AMT_INT, T2.BILL_NOT_PAY_AMT_ESCROW, 
+                    T2.BILL_NOT_PAY_AMT_FEE,
+                    T2.COSTCTR, T2.PRODUCT,
+                    DATE '{rdate}' AS VALID_FROM_DT,
+                    DATE '{rdate}' AS VALID_TO_DT
+                FROM new_records T2
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM loan_bill_hist T1
+                    WHERE T1.ACCTNO = T2.ACCTNO 
+                    AND T1.NOTENO = T2.NOTENO
+                    AND T1.BILL_DT = T2.BILL_DT
+                    AND COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') = COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01')
+                    AND T1.BILL_AMT = T2.BILL_AMT
+                )
+            )
+            SELECT * FROM matched_records
+            UNION ALL
+            SELECT * FROM new_or_changed
+        """)
+    else:
+        # No historical data - all records are new
+        con.execute(f"""
+            CREATE TEMP TABLE scd_result AS
+            SELECT 
+                ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+                BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, 
+                BILL_AMT_ESCROW, BILL_AMT_FEE,
+                BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, 
+                BILL_NOT_PAY_AMT_INT, BILL_NOT_PAY_AMT_ESCROW, 
+                BILL_NOT_PAY_AMT_FEE,
+                COSTCTR, PRODUCT,
+                DATE '{rdate}' AS VALID_FROM_DT,
+                DATE '{rdate}' AS VALID_TO_DT
+            FROM new_records
+        """)
+    
+    # Save chunk result
+    chunk_output = temp_path / f"scd_result_{chunk_id}.parquet"
+    con.execute(f"COPY scd_result TO '{chunk_output}' (FORMAT PARQUET)")
+    
+    # Cleanup
+    con.execute("DROP TABLE new_records")
+    con.execute("DROP TABLE scd_result")
+    
+    return chunk_output
+
+def save_final_results(con, output_dir, date_str):
+    """Save the final LN_BILL and ILOAN_BILL files"""
+    
+    con.execute("""
+        CREATE TEMP TABLE ln_bill_output AS
+        SELECT 
+            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+        FROM with_entity
+        WHERE ENTITY_CD IS NULL OR ENTITY_CD = ''
+    """)
+    
+    con.execute("""
+        CREATE TEMP TABLE iln_bill_output AS
+        SELECT 
+            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+        FROM with_entity
+        WHERE ENTITY_CD = 'PIBB'
+    """)
+    
+    # Save with progress
+    ln_bill_path = output_dir / f"LOAN_BILL_{date_str}.parquet"
+    iln_bill_path = output_dir / f"ILOAN_BILL_{date_str}.parquet"
+    
+    print(f"  Saving LOAN_BILL...")
+    con.execute(f"COPY ln_bill_output TO '{ln_bill_path}' (FORMAT PARQUET)")
+    
+    print(f"  Saving ILOAN_BILL...")  
+    con.execute(f"COPY iln_bill_output TO '{iln_bill_path}' (FORMAT PARQUET)")
+    
+    ln_count = con.execute("SELECT COUNT(*) FROM ln_bill_output").fetchone()[0]
+    iln_count = con.execute("SELECT COUNT(*) FROM iln_bill_output").fetchone()[0]
+    
+    print(f"  ✓ LOAN_BILL: {ln_count:,} records")
+    print(f"  ✓ ILOAN_BILL: {iln_count:,} records")
+    
+    return ln_bill_path, iln_bill_path
+
+# Keep the process_hp_bill_extraction function exactly as in your original code
+def process_hp_bill_extraction(
+    loan_bill_path: Path,
+    iloan_bill_path: Path,
+    output_dir: Path,
+    report_date: datetime
+) -> None:
+    """
+    STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
+    """
+    
+    print("\n" + "="*80)
+    print("STEP 2: HP/IHP BILL EXTRACTION")
+    print("="*80)
+    
+    date_str = report_date.strftime("%y%m%d")
+    hp_products_str = ','.join(map(str, HP_PRODUCTS))
+    
+    con = duckdb.connect(':memory:')
+    
+    # Extract HP_BILL from TODAY'S LOAN_BILL
+    print("\n2.1: Extracting HP_BILL from LOAN_BILL...")
+    
+    if not loan_bill_path.exists():
+        print(f"  ERROR: LOAN_BILL not found: {loan_bill_path}")
+        return
+    
+    con.execute(f"""
+        CREATE TABLE loan_bill AS
+        SELECT * FROM read_parquet('{loan_bill_path}')
+    """)
+    
+    con.execute(f"""
+        CREATE TABLE hp_bill AS
+        SELECT * FROM loan_bill
+        WHERE PRODUCT IN ({hp_products_str}) OR PRODUCT = 392
+    """)
+    
+    hp_count = con.execute("SELECT COUNT(*) FROM hp_bill").fetchone()[0]
+    print(f"  Filtered {hp_count:,} HP records")
+    
+    # Save HP_BILL
+    hp_bill_path = output_dir / f"HP_BILL_{date_str}.parquet"
+    con.execute(f"COPY hp_bill TO '{hp_bill_path}' (FORMAT PARQUET)")
+    hp_size = hp_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ HP_BILL: {hp_bill_path.name}")
+    print(f"    Records: {hp_count:,}, Size: {hp_size:.2f} MB")
+    
+    # Extract IHP_BILL from TODAY'S ILOAN_BILL
+    print("\n2.2: Extracting IHP_BILL from ILOAN_BILL...")
+    
+    if not iloan_bill_path.exists():
+        print(f"  ERROR: ILOAN_BILL not found: {iloan_bill_path}")
+        con.close()
+        return
+    
+    con.execute(f"""
+        CREATE TABLE iloan_bill AS
+        SELECT * FROM read_parquet('{iloan_bill_path}')
+    """)
+    
+    con.execute(f"""
+        CREATE TABLE ihp_bill AS
+        SELECT * FROM iloan_bill
+        WHERE PRODUCT IN ({hp_products_str})
+    """)
+    
+    ihp_count = con.execute("SELECT COUNT(*) FROM ihp_bill").fetchone()[0]
+    print(f"  Filtered {ihp_count:,} IHP records")
+    
+    # Save IHP_BILL
+    ihp_bill_path = output_dir / f"IHP_BILL_{date_str}.parquet"
+    con.execute(f"COPY ihp_bill TO '{ihp_bill_path}' (FORMAT PARQUET)")
+    ihp_size = ihp_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ IHP_BILL: {ihp_bill_path.name}")
+    print(f"    Records: {ihp_count:,}, Size: {ihp_size:.2f} MB")
+    
+    con.close()
+
+# Main execution
+if __name__ == "__main__":
+    print("="*80)
+    print("BILL PROCESSING PIPELINE")
+    print("="*80)
+    
+    report_date = datetime.now()
+    print(f"Report Date: {report_date.date()}\n")
+    
+    # Input paths - ONLY the ENRH file needs to be specified
+    input_enrh = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/ENRH_LN_BILL.parquet")
+    
+    # Output directory
+    output_dir = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output")
+    
+    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL
+    # (uses previous day's files automatically if they exist)
+    loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
+        input_enrh_path=input_enrh,
+        output_dir=output_dir,
+        report_date=report_date,
+        chunk_size=2_000_000
+    )
+    
+    if loan_bill_path is None:
+        print("\n✗ STEP 1 failed. Exiting.")
+        exit(1)
+    
+    # STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
+    process_hp_bill_extraction(
+        loan_bill_path=loan_bill_path,
+        iloan_bill_path=iloan_bill_path,
+        output_dir=output_dir,
+        report_date=report_date
+    )
+    
+    print("\n" + "="*80)
+    print("PROCESSING COMPLETED SUCCESSFULLY")
+    print("="*80)
+    date_str = report_date.strftime("%y%m%d")
+    print(f"\nGenerated Files (Date: {date_str}):")
+    print(f"  1. LOAN_BILL_{date_str}.parquet")
+    print(f"  2. ILOAN_BILL_{date_str}.parquet") 
+    print(f"  3. HP_BILL_{date_str}.parquet")
+    print(f"  4. IHP_BILL_{date_str}.parquet")
+    print("="*80)
