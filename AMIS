@@ -13,28 +13,24 @@ HP_PRODUCTS = [
     415, 416, 419, 420, 422, 429, 430, 464
 ]
 
-def process_complete_bill_pipeline(
+def process_loan_bill_scd(
     input_enrh_path: Path,
     input_ln_bill_path: Path,
     input_iln_bill_path: Path,
     lookup_cost_ctr_path: Path,
     output_dir: Path,
     report_date: datetime
-) -> None:
+) -> tuple:
     """
-    Complete Bill Processing Pipeline:
-    1. SCD Type 2 Processing (LOAD_EXDWH_LN_BILL)
-    2. HP/IHP Extraction and Loading
-    
-    Outputs date-stamped files: LOAN_BILL_YYMMDD.parquet, HP_BILL_YYMMDD.parquet, etc.
+    STEP 1: Generate LOAN_BILL and ILOAN_BILL with SCD Type 2.
+    Returns paths to the generated files.
     """
     
     print("="*80)
-    print("COMPLETE BILL PROCESSING PIPELINE")
+    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING")
     print("="*80)
     print(f"Report Date: {report_date.date()}")
     
-    # Calculate date string (YYMMDD format)
     date_str = report_date.strftime("%y%m%d")
     print(f"Date String: {date_str}")
     print("-" * 80)
@@ -42,22 +38,13 @@ def process_complete_bill_pipeline(
     con = duckdb.connect(':memory:')
     
     rdate = report_date.date()
-    hp_products_str = ','.join(map(str, HP_PRODUCTS))
-    
-    # ========================================================================
-    # STEP 1: SCD TYPE 2 PROCESSING (LOAD_EXDWH_LN_BILL)
-    # ========================================================================
-    
-    print("\n" + "="*80)
-    print("STEP 1: SCD TYPE 2 PROCESSING (LOAN_BILL & ILOAN_BILL)")
-    print("="*80)
-    
-    if not input_enrh_path.exists():
-        print(f"ERROR: ENRH_LN_BILL not found: {input_enrh_path}")
-        return
     
     # Load ENRH_LN_BILL
     print("\n1.1: Loading ENRH_LN_BILL...")
+    if not input_enrh_path.exists():
+        print(f"ERROR: ENRH_LN_BILL not found: {input_enrh_path}")
+        return None, None
+    
     con.execute(f"""
         CREATE TABLE enrh_ln_bill AS
         SELECT * FROM read_parquet('{input_enrh_path}')
@@ -75,10 +62,8 @@ def process_complete_bill_pipeline(
     
     # Load historical data
     print("\n1.2: Loading historical data...")
-    historical_exists = False
     
     if input_ln_bill_path.exists() or input_iln_bill_path.exists():
-        historical_exists = True
         tables = []
         
         if input_ln_bill_path.exists():
@@ -285,101 +270,162 @@ def process_complete_bill_pipeline(
     print(f"  LOAN_BILL: {ln_count:,} records")
     print(f"  ILOAN_BILL: {iln_count:,} records")
     
-    # ========================================================================
-    # STEP 2: HP/IHP EXTRACTION
-    # ========================================================================
+    # Save LOAN_BILL and ILOAN_BILL
+    print("\n1.6: Saving LOAN_BILL and ILOAN_BILL...")
+    
+    ln_bill_path = output_dir / f"LOAN_BILL_{date_str}.parquet"
+    iln_bill_path = output_dir / f"ILOAN_BILL_{date_str}.parquet"
+    
+    ln_result = con.execute("SELECT * FROM ln_bill_output").pl()
+    ln_result.write_parquet(ln_bill_path)
+    ln_size = ln_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ LOAN_BILL: {ln_bill_path.name}")
+    print(f"    Records: {len(ln_result):,}, Size: {ln_size:.2f} MB")
+    
+    iln_result = con.execute("SELECT * FROM iln_bill_output").pl()
+    iln_result.write_parquet(iln_bill_path)
+    iln_size = iln_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ ILOAN_BILL: {iln_bill_path.name}")
+    print(f"    Records: {len(iln_result):,}, Size: {iln_size:.2f} MB")
+    
+    con.close()
+    
+    return ln_bill_path, iln_bill_path
+
+
+def process_hp_bill_extraction(
+    loan_bill_path: Path,
+    iloan_bill_path: Path,
+    output_dir: Path,
+    report_date: datetime
+) -> None:
+    """
+    STEP 2: Extract HP_BILL and IHP_BILL from LOAN_BILL and ILOAN_BILL.
+    """
     
     print("\n" + "="*80)
-    print("STEP 2: HP/IHP EXTRACTION")
+    print("STEP 2: HP/IHP BILL EXTRACTION")
     print("="*80)
     
-    # Extract HP from LOAN_BILL
+    date_str = report_date.strftime("%y%m%d")
+    hp_products_str = ','.join(map(str, HP_PRODUCTS))
+    
+    con = duckdb.connect(':memory:')
+    
+    # Extract HP_BILL from LOAN_BILL
     print("\n2.1: Extracting HP_BILL from LOAN_BILL...")
+    
+    if not loan_bill_path.exists():
+        print(f"  ERROR: LOAN_BILL not found: {loan_bill_path}")
+        return
+    
+    con.execute(f"""
+        CREATE TABLE loan_bill AS
+        SELECT * FROM read_parquet('{loan_bill_path}')
+    """)
+    
     con.execute(f"""
         CREATE TABLE hp_bill AS
-        SELECT * FROM ln_bill_output
+        SELECT * FROM loan_bill
         WHERE PRODUCT IN ({hp_products_str}) OR PRODUCT = 392
     """)
     
     hp_count = con.execute("SELECT COUNT(*) FROM hp_bill").fetchone()[0]
-    print(f"  HP_BILL: {hp_count:,} records")
+    print(f"  Filtered {hp_count:,} HP records")
     
-    # Extract IHP from ILOAN_BILL
+    # Save HP_BILL
+    hp_bill_path = output_dir / f"HP_BILL_{date_str}.parquet"
+    hp_result = con.execute("SELECT * FROM hp_bill").pl()
+    hp_result.write_parquet(hp_bill_path)
+    hp_size = hp_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ HP_BILL: {hp_bill_path.name}")
+    print(f"    Records: {len(hp_result):,}, Size: {hp_size:.2f} MB")
+    
+    # Extract IHP_BILL from ILOAN_BILL
     print("\n2.2: Extracting IHP_BILL from ILOAN_BILL...")
+    
+    if not iloan_bill_path.exists():
+        print(f"  ERROR: ILOAN_BILL not found: {iloan_bill_path}")
+        con.close()
+        return
+    
+    con.execute(f"""
+        CREATE TABLE iloan_bill AS
+        SELECT * FROM read_parquet('{iloan_bill_path}')
+    """)
+    
     con.execute(f"""
         CREATE TABLE ihp_bill AS
-        SELECT * FROM iln_bill_output
+        SELECT * FROM iloan_bill
         WHERE PRODUCT IN ({hp_products_str})
     """)
     
     ihp_count = con.execute("SELECT COUNT(*) FROM ihp_bill").fetchone()[0]
-    print(f"  IHP_BILL: {ihp_count:,} records")
+    print(f"  Filtered {ihp_count:,} IHP records")
     
-    # ========================================================================
-    # STEP 3: SAVE ALL OUTPUTS WITH DATE STAMPS
-    # ========================================================================
-    
-    print("\n" + "="*80)
-    print("STEP 3: SAVING OUTPUTS (DATE-STAMPED)")
-    print("="*80)
-    
-    outputs = [
-        ('ln_bill_output', f'LOAN_BILL_{date_str}.parquet', 'LOAN_BILL'),
-        ('iln_bill_output', f'ILOAN_BILL_{date_str}.parquet', 'ILOAN_BILL'),
-        ('hp_bill', f'HP_BILL_{date_str}.parquet', 'HP_BILL'),
-        ('ihp_bill', f'IHP_BILL_{date_str}.parquet', 'IHP_BILL')
-    ]
-    
-    for table_name, filename, label in outputs:
-        output_path = output_dir / filename
-        result = con.execute(f"SELECT * FROM {table_name}").pl()
-        result.write_parquet(output_path)
-        
-        size_mb = output_path.stat().st_size / (1024 * 1024)
-        print(f"  ✓ {label}: {output_path.name}")
-        print(f"    Records: {len(result):,}, Size: {size_mb:.2f} MB")
-    
-    # Summary
-    print("\n" + "="*80)
-    print("SUMMARY")
-    print("="*80)
-    
-    summary = con.execute("""
-        SELECT 
-            'LOAN_BILL' AS dataset,
-            COUNT(*) AS records,
-            COUNT(DISTINCT ACCTNO) AS accounts,
-            SUM(BILL_AMT) AS total_amt
-        FROM ln_bill_output
-        UNION ALL
-        SELECT 
-            'ILOAN_BILL',
-            COUNT(*),
-            COUNT(DISTINCT ACCTNO),
-            SUM(BILL_AMT)
-        FROM iln_bill_output
-        UNION ALL
-        SELECT 
-            'HP_BILL',
-            COUNT(*),
-            COUNT(DISTINCT ACCTNO),
-            SUM(BILL_AMT)
-        FROM hp_bill
-        UNION ALL
-        SELECT 
-            'IHP_BILL',
-            COUNT(*),
-            COUNT(DISTINCT ACCTNO),
-            SUM(BILL_AMT)
-        FROM ihp_bill
-    """).pl()
-    
-    print(summary)
+    # Save IHP_BILL
+    ihp_bill_path = output_dir / f"IHP_BILL_{date_str}.parquet"
+    ihp_result = con.execute("SELECT * FROM ihp_bill").pl()
+    ihp_result.write_parquet(ihp_bill_path)
+    ihp_size = ihp_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ IHP_BILL: {ihp_bill_path.name}")
+    print(f"    Records: {len(ihp_result):,}, Size: {ihp_size:.2f} MB")
     
     con.close()
+
+
+if __name__ == "__main__":
+    print("="*80)
+    print("COMPLETE BILL PROCESSING PIPELINE")
+    print("="*80)
+    
+    # Report date
+    report_date = datetime.now()
+    print(f"Report Date: {report_date.date()}\n")
+    
+    # Input paths
+    input_enrh = Path("ENRH_LN_BILL.parquet")
+    
+    # Previous day's files for SCD comparison
+    prev_date_str = (report_date - timedelta(days=1)).strftime("%y%m%d")
+    input_ln_bill = Path(f"LOAN_BILL_{prev_date_str}.parquet")
+    input_iln_bill = Path(f"ILOAN_BILL_{prev_date_str}.parquet")
+    
+    lookup_cost_ctr = Path("LKP_COST_CTR.parquet")
+    
+    # Output directory
+    output_dir = Path(".")
+    
+    # STEP 1: Generate LOAN_BILL and ILOAN_BILL
+    loan_bill_path, iloan_bill_path = process_loan_bill_scd(
+        input_enrh_path=input_enrh,
+        input_ln_bill_path=input_ln_bill,
+        input_iln_bill_path=input_iln_bill,
+        lookup_cost_ctr_path=lookup_cost_ctr,
+        output_dir=output_dir,
+        report_date=report_date
+    )
+    
+    if loan_bill_path is None:
+        print("\n✗ STEP 1 failed. Exiting.")
+        exit(1)
+    
+    # STEP 2: Extract HP_BILL and IHP_BILL from saved LOAN_BILL and ILOAN_BILL
+    process_hp_bill_extraction(
+        loan_bill_path=loan_bill_path,
+        iloan_bill_path=iloan_bill_path,
+        output_dir=output_dir,
+        report_date=report_date
+    )
     
     print("\n" + "="*80)
     print("PROCESSING COMPLETED SUCCESSFULLY")
+    print("="*80)
+    print(f"\nGenerated Files (Date: {report_date.strftime('%y%m%d')}):")
+    print(f"  1. LOAN_BILL_{report_date.strftime('%y%m%d')}.parquet")
+    print(f"  2. ILOAN_BILL_{report_date.strftime('%y%m%d')}.parquet")
+    print(f"  3. HP_BILL_{report_date.strftime('%y%m%d')}.parquet")
+    print(f"  4. IHP_BILL_{report_date.strftime('%y%m%d')}.parquet")
     print("="*80)
 
 
