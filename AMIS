@@ -1,14 +1,32 @@
-1.2: Processing chunks with SCD logic...
-  SCD processing chunk 1/49...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_LOAD_LN_BILL_UAT.py", line 378, in <module>
-    loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_LOAD_LN_BILL_UAT.py", line 104, in process_large_loan_bill_scd
-    chunk_result = process_scd_chunk(
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_LOAD_LN_BILL_UAT.py", line 169, in process_scd_chunk
-    con.execute(f"""
-duckdb.duckdb.CatalogException: Catalog Error: Table with name loan_bill_hist does not exist!
-Did you mean "sqlite_master"?
-
-LINE 14:             FROM loan_bill_hist T1
-                          ^
+# Combine historical - EXPLICITLY SELECT COLUMNS
+    if len(tables) == 2:
+        con.execute(f"""
+            CREATE TABLE loan_bill_all AS
+            SELECT 
+                ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+                BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+                BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+                BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+                COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+            FROM ln_bill_hist
+            UNION ALL
+            SELECT 
+                ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+                BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+                BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+                BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+                COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+            FROM iln_bill_hist
+        """)
+    else:
+        # Only one table exists
+        con.execute(f"""
+            CREATE TABLE loan_bill_all AS
+            SELECT 
+                ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+                BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+                BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+                BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+                COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+            FROM {tables[0]}
+        """)
