@@ -1,7 +1,198 @@
-0 20250401                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
-1 8042194628 90010      36 FROZEN MART SDN. BHD.                           R   700                0 N          R 20250326     750.00 5SNE         0.00       0.00       0.00   54000.00 20250329                       20250327                0.00                                                                                                                                                                                                                                                                                                                                                                     
-1 8042229447 90010      ABD RAZAK BIN MD NOOR                              R   700 F N Y          0 N          R 20250310    1200.00 PTDR     30000.00   31000.00   21000.00   21000.00 20250313 0                     20250327                0.00                                                                                                                                                                                                                                                                                                                                                                     
-1 8785972221 90010      ABDUL HANIS BIN DAUD                               R   128 F N N          0 N          R 20250311    1100.00 5SNE     10000.00   15000.00   10000.00   10000.00 20250314 0                     20250317                0.00                                                                                                                                                                                                                                                                                                                                                                     
-1 8766333414 90010      ABDUL HISYAM BIN MUBIN                             R   128                0 N          R 20250312     750.00 5SNE         0.00       0.00       0.00   20000.00 20250314                       20250313                0.00                                                                                                                                                                                                                                                                                                                                                                     
-1 8650989531 90010      ABDUL JABBAR BIN ZAINAL                            D   700 F N N          0 N          R 20250213    1100.00 PTDR     20000.00   22000.00   20000.00   20000.00 20250215 A   18200.00 20250325 20250326 20250321   16000.00                                                                                                                                                                                                                                                                                                                                                                     
-9 1206
+from __future__ import annotations
+
+import polars as pl
+import pyarrow.parquet as pq
+import duckdb
+from datetime import date, timedelta
+from pathlib import Path
+
+# =========================
+# PATHS
+# =========================
+base_input_path  = Path("Data_Warehouse/MIS/Job/REPO/input")
+base_output_path = Path("Data_Warehouse/MIS/Job/REPO/output")
+
+# Inputs
+RPVBDATA_TXT_PATH    = base_input_path / "RPVBDATA.txt"              # Text file with header/footer
+RPVBDATA_DETAIL_PATH = base_input_path / "RPVBDATA_DETAIL.parquet"   # rows with SAS-named columns
+
+# Outputs (Parquet) — libraries
+REPO_DIR   = base_output_path / "REPO"     # SAS: REPO (SAP.RPVB.DATA)
+REPOWH_DIR = base_output_path / "REPOWH"   # SAS: REPOWH (SAP.PBB.RPDATAWH)
+ 
+USE_DUCKDB_COPY = False  # DuckDB COPY vs PyArrow write
+
+# =========================
+# HELPERS
+# =========================
+def read_parquet(p: Path) -> pl.DataFrame:
+    return pl.read_parquet(p)
+
+def read_rpvdata_txt(p: Path) -> str:
+    """Read RPVBDATA.txt, extract TBDATE from first line after '0' record"""
+    with open(p, 'r') as f:
+        lines = f.readlines()
+    
+    if not lines:
+        raise ValueError("RPVBDATA.txt is empty")
+    
+    # Find the first line that starts with '0' - this contains the TBDATE
+    for line in lines:
+        if line.strip().startswith('0'):
+            # Extract the date from the '0' record
+            # Format: "0 20250401" - second field is YYYYMMDD
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                return parts[1]  # Return the YYYYMMDD date
+    
+    raise ValueError("No '0' record found in RPVBDATA.txt")
+
+def write_parquet(df: pl.DataFrame, p: Path):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if USE_DUCKDB_COPY:
+        con = duckdb.connect()
+        con.register("DF", df.to_arrow())
+        con.execute(f"COPY DF TO '{p.as_posix()}' (FORMAT PARQUET)")
+        con.close()
+    else:
+        pq.write_table(df.to_arrow(), p)
+
+def yyyymmdd_to_date(s: str) -> date:
+    return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+
+def end_of_month(d: date) -> date:
+    nxt = date(d.year + (d.month == 12), 1 if d.month == 12 else d.month + 1, 1)
+    return nxt - timedelta(days=1)
+
+def MMYYN4(d: date) -> str:
+    return f"{d.month:02d}{d.year % 100:02d}"  # MMYY (no slash), matches MMYYN4.
+
+def sas_date_to_python(sas_date: int) -> date:
+    """Convert SAS date (days since 1960-01-01) to Python date"""
+    sas_origin = date(1960, 1, 1)
+    return sas_origin + timedelta(days=sas_date)
+
+# =========================
+# 1) OPTIONS (ignored)
+# =========================
+# OPTIONS NOCENTER YEARCUTOFF=1950;
+
+# =========================
+# 2) REPTDATE & SRSTDT headers → REPTDT, PREVDT, SRSTDT
+# =========================
+
+# Read RPVBDATA from text file - extract TBDATE from '0' record
+try:
+    TBDATE_STR = read_rpvdata_txt(RPVBDATA_TXT_PATH)
+    print(f"Extracted TBDATE from RPVBDATA.txt: {TBDATE_STR}")
+    
+    # Convert to date and calculate REPTDATE (end of previous month)
+    tb_date = yyyymmdd_to_date(TBDATE_STR)
+    REPTDATE = end_of_month(date(tb_date.year, tb_date.month, 1) - timedelta(days=1))
+    
+except Exception as e:
+    print(f"Error reading RPVBDATA.txt: {e}")
+    # Fallback: use current date logic
+    today = date.today()
+    REPTDATE = end_of_month(date(today.year, today.month, 1) - timedelta(days=1))
+
+PREVDATE = end_of_month(date(REPTDATE.year, REPTDATE.month, 1) - timedelta(days=1))
+
+REPTDT = MMYYN4(REPTDATE)
+PREVDT = MMYYN4(PREVDATE)
+
+# HARDCODED SRSDATE using SAS date format
+SAS_SRSDATE = 24071  # Example SAS date (2025-11-26) - CHANGE THIS VALUE AS NEEDED
+SRSDATE = sas_date_to_python(SAS_SRSDATE)
+SRSTDT  = MMYYN4(SRSDATE)
+
+print(f"REPTDATE: {REPTDATE}")
+print(f"PREVDATE: {PREVDATE}")
+print(f"REPTDT: {REPTDT}")
+print(f"PREVDT: {PREVDT}")
+print(f"SRSDATE (from SAS date {SAS_SRSDATE}): {SRSDATE}")
+print(f"SRSTDT: {SRSTDT}")
+
+# =========================
+# 3) Macro guard
+# =========================
+if REPTDT != SRSTDT:
+    raise RuntimeError(f"THE SAP.PBB.RPVB.TEXT IS NOT DATED (MMYY:{SRSTDT})")
+
+# =========================
+# 4) RPVB1 — $UPCASE fields, MDY() dates with SAME NAMES
+# =========================
+RPVB1 = (
+    read_parquet(RPVBDATA_DETAIL_PATH)
+    # $UPCASE. fields — keep exact column names
+    .with_columns([
+        pl.col("NAME").str.to_uppercase(),
+        pl.col("ACCTSTA").str.to_uppercase(),
+        pl.col("PRSTCOND").str.to_uppercase(),
+        pl.col("REGCARD").str.to_uppercase(),
+        pl.col("IGNTKEY").str.to_uppercase(),
+        pl.col("ACCTWOFF").str.to_uppercase(),
+        pl.col("MODEREPO").str.to_uppercase(),
+        pl.col("REPOSTAT").str.to_uppercase(),
+        pl.col("MODEDISP").str.to_uppercase(),
+    ])
+    # MDY() → create Date-typed columns with SAME NAMES as SAS outputs
+    .with_columns([
+        pl.when(pl.any_horizontal([pl.col("MM1").is_null(), pl.col("DD1").is_null(), pl.col("YY1").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY1"), pl.col("MM1"), pl.col("DD1")).cast(pl.Date))
+          .alias("DATEWOFF"),
+        pl.when(pl.any_horizontal([pl.col("MM2").is_null(), pl.col("DD2").is_null(), pl.col("YY2").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY2"), pl.col("MM2"), pl.col("DD2")).cast(pl.Date))
+          .alias("DATEREPO"),
+        pl.when(pl.any_horizontal([pl.col("MM3").is_null(), pl.col("DD3").is_null(), pl.col("YY3").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY3"), pl.col("MM3"), pl.col("DD3")).cast(pl.Date))
+          .alias("DATE5TH"),
+        pl.when(pl.any_horizontal([pl.col("MM4").is_null(), pl.col("DD4").is_null(), pl.col("YY4").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY4"), pl.col("MM4"), pl.col("DD4")).cast(pl.Date))
+          .alias("DATEAPRV"),
+        pl.when(pl.any_horizontal([pl.col("MM5").is_null(), pl.col("DD5").is_null(), pl.col("YY5").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY5"), pl.col("MM5"), pl.col("DD5")).cast(pl.Date))
+          .alias("DATESTLD"),
+        pl.when(pl.any_horizontal([pl.col("MM6").is_null(), pl.col("DD6").is_null(), pl.col("YY6").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY6"), pl.col("MM6"), pl.col("DD6")).cast(pl.Date))
+          .alias("DATEHO"),
+    ])
+    # DROP list EXACTLY as SAS
+    .drop(["DD1","MM1","YY1","DD2","MM2","YY2","DD3","MM3","YY3","DD4","MM4","YY4","DD5","MM5","YY5","DD6","MM6","YY6"])
+)
+
+# =========================
+# 5) RPVB2 / RPVB3 — same condition names
+# =========================
+RPVB2 = RPVB1.filter(pl.col("ACCTSTA").is_in(["D","S","R"]))
+RPVB3 = RPVB2.filter(pl.col("DATESTLD").is_not_null())
+
+# =========================
+# 6) REPO.REPS&REPTDT = RPVB3 + REPO.REPS&PREVDT
+# =========================
+REPO_PREV_PATH = REPO_DIR / f"REPS_{PREVDT}.parquet"
+REPO_CURR_PATH = REPO_DIR / f"REPS_{REPTDT}.parquet"
+REPOWH_PATH    = REPOWH_DIR / f"REPS_{REPTDT}.parquet"
+
+try:
+    REPO_PREV = read_parquet(REPO_PREV_PATH)
+except Exception:
+    REPO_PREV = pl.DataFrame([])
+
+REPO_REPS = pl.concat([RPVB3, REPO_PREV], how="vertical", rechunk=True)
+write_parquet(REPO_REPS, REPO_CURR_PATH)
+
+# =========================
+# 7) REPOWH.REPS&REPTDT = REPO.REPS&REPTDT ; PROC SORT NODUPKEY BY MNIACTNO
+# =========================
+REPOWH_REPS = REPO_REPS.clone()
+REPOWH_REPS = REPOWH_REPS.sort("MNIACTNO").unique(subset=["MNIACTNO"], keep="first")
+write_parquet(REPOWH_REPS, REPOWH_PATH)
+
+print("Processing completed successfully!")
