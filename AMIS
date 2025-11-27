@@ -1,78 +1,55 @@
-import polars as pl
-import duckdb
-from datetime import datetime, timedelta
-from pathlib import Path
+/pythonITD/mis_dev/sas_migration/EIBMCHNL_UAT.py
+REPTDATE: 2025-11-26
+PREVDATE: 2025-11-25
+RDATE (SAS date format): 24071
+REPTDATE_STR: 26/11/25
+CHANNEL (head):
+shape: (3, 4)
+┌─────────┬────────┬─────────┬───────┐
+│ CHANNEL ┆ PROMPT ┆ UPDATED ┆ MONTH │
+│ ---     ┆ ---    ┆ ---     ┆ ---   │
+│ str     ┆ i64    ┆ i64     ┆ str   │
+╞═════════╪════════╪═════════╪═══════╡
+│ ATM     ┆ 0      ┆ 0       ┆ NOV25 │
+│ EBK     ┆ 4      ┆ 0       ┆ NOV25 │
+│ OTC     ┆ 0      ┆ 0       ┆ NOV25 │
+└─────────┴────────┴─────────┴───────┘
+CRMWH.CHANNEL_SUM (head):
+shape: (12, 4)
+┌─────────┬────────┬─────────┬───────┐
+│ CHANNEL ┆ PROMPT ┆ UPDATED ┆ MONTH │
+│ ---     ┆ ---    ┆ ---     ┆ ---   │
+│ str     ┆ f64    ┆ f64     ┆ str   │
+╞═════════╪════════╪═════════╪═══════╡
+│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
+│ OTC     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
+│ …       ┆ …      ┆ …       ┆ …     │
+│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
+│ OTC     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
+│ OTC     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+└─────────┴────────┴─────────┴───────┘
+Traceback (most recent call last):
+  File "/pythonITD/mis_dev/sas_migration/EIBMCHNL_UAT.py", line 79, in <module>
+    branch_df = pl.read_parquet(BRANCH_SRC)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/io/parquet/functions.py", line 288, in read_parquet
+    return lf.collect()
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 330, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2335, in collect
+    return wrap_df(ldf.collect(engine, callback))
+polars.exceptions.ComputeError: expected at least 1 source
 
-# Base folders (adjust to your environment)
-BASE_INPUT_PATH  = Path("/host/cis/parquet/")     # holds input Parquet
-BASE_OUTPUT_PATH = Path("/pythonITD/mis_dev/OUTPUT")    # holds output Parquet
-BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
-
-# Map SAS DDs to Parquet paths
-# CHANNEL DD -> RBP2.B033.CIPHONET.FULL.SUMMARY (assumed pre-parsed to Parquet)
-CHANNEL_PARQUET = BASE_INPUT_PATH / "CIPHONET_FULL_SUMMARY/year=2025/month=11/day=24/data_0.parquet"
-
-# SAS LIB CHN -> a folder of Parquets; target table we append to
-CHN_DIR = BASE_OUTPUT_PATH / "CHN"
-CHN_DIR.mkdir(parents=True, exist_ok=True)
-CHN_CHANNEL_UPDATE = CHN_DIR / "CHANNEL_UPDATE.parquet"
-
-# --- OPTIONS NOCENTER YEARCUTOFF=1950 (no action in Python) ---
-
-# --- SAS Date Format Calculations ---
-SAS_ORIGIN = datetime(1960, 1, 1).date()
-REPTDATE = datetime.today().date() - timedelta(days=1)
-PREVDATE = REPTDATE - timedelta(days=1)
-RDATE = (REPTDATE - SAS_ORIGIN).days
-
-# --- Formatted date variables ---
-REPTYEAR = f"{REPTDATE.year % 100:02d}"  # YEAR2.
-REPTMON  = f"{REPTDATE.month:02d}"       # Z2.
-REPTDAY  = f"{REPTDATE.day:02d}"         # Z2.
-REPTDATE_STR = REPTDATE.strftime("%d/%m/%y") # DDMMYY8. -> "dd/mm/yy"
-
-print(f"REPTDATE: {REPTDATE}")
-print(f"PREVDATE: {PREVDATE}")
-print(f"RDATE (SAS date format): {RDATE}")
-print(f"REPTDATE_STR: {REPTDATE_STR}")
-
-# --- DATA SUM: read from Parquet with required columns only ---
-SUM = (
-    pl.read_parquet(CHANNEL_PARQUET)
-      .select(["ATM", "EBK", "OTC", "TOTAL", "REPORT_DATE"])
-)
-
-# --- DATA UAT(KEEP=DESC ATM EBK OTC TOTAL DATE) with SAS _N_ logic ---
-UAT = (
-    SUM
-    .with_row_index(name="_N_", offset=1)  # FIXED: using with_row_index instead of with_row_count
-    .with_columns(
-        pl.when(pl.col("_N_") == 1).then(pl.lit("TOTAL PROMPT BASE"))
-         .when(pl.col("_N_") == 2).then(pl.lit("TOTAL UPDATED"))
-         .otherwise(pl.lit(None))
-         .alias("LINE")
-    )
-    .select(["LINE", "ATM", "EBK", "OTC", "TOTAL", "REPORT_DATE"])  # KEEP/order same as SAS
-)
-
-# --- PROC SQL SELECT (no-op) executed via DuckDB for fidelity ---
-con = duckdb.connect()
-con.register("UAT", UAT.to_arrow())
-UAT_SQL = pl.from_arrow(
-    con.execute("""
-        SELECT LINE, ATM, EBK, OTC, TOTAL, REPORT_DATE
-        FROM UAT
-    """).arrow()
-)
-
-# --- PROC APPEND DATA=UAT BASE=CHN.CHANNEL_UPDATE FORCE ---
-if CHN_CHANNEL_UPDATE.exists():
-    existing = pl.read_parquet(CHN_CHANNEL_UPDATE).select(UAT_SQL.columns)
-    combined = pl.concat([existing, UAT_SQL], how="vertical_relaxed")
-else:
-    combined = UAT_SQL
-
-combined.write_parquet(CHN_CHANNEL_UPDATE)
-
-# - PROC CPORT step removed intentionally (not needed in Parquet-native pipeline).
-# - If you require packaging the CHN library for transfer, we can optionally zip CHN_DIR.
+This error occurred with the following context stack:
+        [1] 'parquet scan'
+        [2] 'sink'
