@@ -19,12 +19,22 @@ CHN_CHANNEL_UPDATE = CHN_DIR / "CHANNEL_UPDATE.parquet"
 
 # --- OPTIONS NOCENTER YEARCUTOFF=1950 (no action in Python) ---
 
-# --- DATA REPTDATE macros (kept for parity; not used downstream) ---
-REPTDATE = (datetime.today() - timedelta(days=1)).date()
+# --- SAS Date Format Calculations ---
+SAS_ORIGIN = datetime(1960, 1, 1).date()
+REPTDATE = datetime.today().date() - timedelta(days=1)
+PREVDATE = REPTDATE - timedelta(days=1)
+RDATE = (REPTDATE - SAS_ORIGIN).days
+
+# --- Formatted date variables ---
 REPTYEAR = f"{REPTDATE.year % 100:02d}"  # YEAR2.
 REPTMON  = f"{REPTDATE.month:02d}"       # Z2.
 REPTDAY  = f"{REPTDATE.day:02d}"         # Z2.
-RDATE    = REPTDATE.strftime("%d/%m/%y") # DDMMYY8. -> "dd/mm/yy"
+REPTDATE_STR = REPTDATE.strftime("%d/%m/%y") # DDMMYY8. -> "dd/mm/yy"
+
+print(f"REPTDATE: {REPTDATE}")
+print(f"PREVDATE: {PREVDATE}")
+print(f"RDATE (SAS date format): {RDATE}")
+print(f"REPTDATE_STR: {REPTDATE_STR}")
 
 # --- DATA SUM: read from Parquet with required columns only ---
 SUM = (
