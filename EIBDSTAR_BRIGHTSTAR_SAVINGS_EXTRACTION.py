@@ -1,4 +1,150 @@
-['CUSTNO', 'BANKNO', 'ACCTNOC', 'ACCTNO', 'ACCTCODE', 'RLENCODE', 'PRISEC', 'RLENTYPE', 'RLENDESC', 'PROCESSTIME', 'GENDER', 'CUSTSTAT', 'TAXCODE', 'TAXID', 'CUSTBRCH', 'COSTCTR', 'CUSTLASTDATECC', 'CUSTLASTDATEYY', 'CUSTLASTDATEMM', 'CUSTLASTDATEDD', 'CUSTLASTOPER', 'PRIM_OFF', 'SEC_OFF', 'PRIM_LN_OFF', 'SEC_LN_OFF', 'RESIDENCY', 'RACE', 'CITIZENSHIP', 'CUSTSINCEDATE', 'CUSTOPENDATE', 'HRC01', 'HRC02', 'HRC03', 'HRC04', 'HRC05', 'HRC06', 'HRC07', 'HRC08', 'HRC09', 'HRC10', 'HRC11', 'HRC12', 'HRC13', 'HRC14', 'HRC15', 'HRC16', 'HRC17', 'HRC18', 'HRC19', 'HRC20', 'EXPERIENCE', 'HOBBIES', 'RELIGION', 'LANGUAGE', 'INST_SEC', 'CUST_CODE', 'CUSTCONSENT', 'BASICGRPCODE', 'MSICCODE', 'MASCO2008', 'CUSTMNTDATE', 'INDORG', 'HRCINDC', 'HRC998', 'HRCPEP', 'HRC037', 'ADDREF', 'CUSTNAME', 'PRIPHONE', 'SECPHONE', 'MOBILEPH', 'FAX', 'NAMEFMT', 'ALIASKEY', 'ALIAS', 'BNMKEY', 'BNMID', 'INCOME', 'EDUCATION', 'OCCUP', 'MARITALSTAT', 'OWNRENT', 'EMPNAME', 'DOBCC', 'DOBYY', 'DOBMM', 'DOBDD', 'DOBDOR', 'SICCODE', 'CORPSTATUS', 'NETWORTH', 'LONGNAME', 'JOINTACC', 'PRCOUNTRY', 'EMPLNAME', 'EMPLTYPE', 'EMPLSECT', 'EMPLDATE', 'EMPLTIME', 'rownum']
+from pathlib import Path
+import duckdb
+import polars as pl
+from datetime import datetime, timedelta
 
+# Define paths clearly
+DATA_DIR = Path("data")
+INPUT_DIR = Path("input")
+OUTPUT_DIR = Path("output")
+OUTPUT_DIR.mkdir(exist_ok=True)  # Ensure output directory exists
 
-AC_OPEN_STATUS_CD	ACCTNO	ACCYTD	AVGAMT	AVGBAL	BANKNO	BDATE	BENINTPD	BONUSANO	BONUTYPE	BRANCH	CASH_DEPOSIT_LIMIT_IND	CHGIND	CHQFLOAT	CLOSEDT	CLOSEMH	CONVDT	COSTCTR	CREDIT	CURBAL	CURCODE	CUSTCODE	DEBIT	DEPTYPE	DNBFISME	DPMTDBAL	DTLSTCUST	EXODDATE	FEEPD	FMTCODE	INACTIVE	INSTRUCTIONS	INT1	INTCYCODE	INTPAYBL	INTPD	INTPDPYR	INTPLAN	INTRATE	INTRSTPD	INTYTD	LASTTRAN	LEDGBAL	MAILCODE	MTDAVBAL	MTDLOWBA	NAME	NXT_STMT_CYCLE_DT	ODXSAMT	OPENDT	OPENIND	OPENMH	ORGCODE	ORGTYPE	PBIND	POST_IND	POST_IND_EXP_DT	POST_IND_MAINT_DT	PREVBRNO	PRIN_ACCT	PRODUCT	PSREASON	PURPOSE	RACE	REOPENDT	RISKCODE	SCHIND	SECOND	SECTOR	SERVICE	SSADATE	STATCD	STATE	STMT_CYCLE	TAXNO	TEMPODDT	TRACKCD	USER2	USER3	USER5	YTDAVAMT
+# -----------------------------
+# Step 1: Use SAS date format instead of DATEFILE
+# -----------------------------
+# Calculate dates using SAS format
+SAS_ORIGIN = datetime(1960, 1, 1)
+REPTDATE = datetime.today() - timedelta(days=1)
+PREVDATE = REPTDATE - timedelta(days=1)
+RDATE = (REPTDATE - SAS_ORIGIN).days
+
+# Format dates for file naming and filtering - using YYMMDD like SAS &REPTDTE
+reptyear = REPTDATE.strftime("%y")
+reptmon = REPTDATE.strftime("%m") 
+reptday = REPTDATE.strftime("%d")
+reptdte = REPTDATE.strftime("%y%m%d")  # YYMMDD format like SAS &REPTDTE
+
+print(f"REPTDATE = {REPTDATE.date()}, PREVDATE = {PREVDATE.date()}")
+print(f"RDATE (SAS format) = {RDATE}")
+print(f"MON={reptmon}, DAY={reptday}, YEAR={reptyear}")
+print(f"Filter date (reptdte) = {reptdte}")
+
+# -----------------------------
+# Step 2: Load datasets
+# -----------------------------
+saving_csv_path = DATA_DIR / "SAVING.csv"
+cis_path = DATA_DIR / "CIS_CUSTDLY.parquet"
+
+# Check if files exist before processing
+if not saving_csv_path.exists():
+    raise FileNotFoundError(f"SAVING.csv file not found: {saving_csv_path}")
+if not cis_path.exists():
+    raise FileNotFoundError(f"CIS file not found: {cis_path}")
+
+# Read SAVING.csv
+saving = pl.read_csv(
+    saving_csv_path,
+    infer_schema_length=10000,
+    schema_overrides={
+        'ODXSAMT': pl.Float64,
+        'OPENDT': pl.Utf8,
+        'CURBAL': pl.Float64,
+        'ACCTNO': pl.Utf8,
+        'BRANCH': pl.Utf8,
+    }
+)
+
+cis = pl.read_parquet(cis_path)
+
+print(f"SAVING.csv shape: {saving.shape}")
+print(f"CIS shape: {cis.shape}")
+
+# Check if PRISEC exists and show sample values
+if 'PRISEC' in cis.columns:
+    prisec_sample = cis.select('PRISEC').unique().head(10)
+    print(f"PRISEC sample values: {prisec_sample['PRISEC'].to_list()}")
+else:
+    print("❌ PRISEC column not found in CIS data")
+
+# -----------------------------
+# Step 3: Process BRIGHT data (like SAS)
+# -----------------------------
+bright = (
+    saving.filter(pl.col("PRODUCT") == 208)
+    .with_columns(pl.col("OPENDT").cast(pl.Int64))
+    .filter(pl.col("OPENDT") > 0)
+    .filter(pl.col("OPENDT") == int(reptdte))  # Filter for reporting date
+    .select(["BRANCH", "ACCTNO", "OPENDT", "CURBAL", "OPENIND"])
+)
+
+print(f"Bright accounts found: {len(bright)}")
+
+# -----------------------------
+# Step 4: Process CIS data (with PRISEC field)
+# -----------------------------
+cis_processed = (
+    cis.with_columns(pl.col("CUSTOPENDATE").cast(pl.Int64))
+    .filter(pl.col("CUSTOPENDATE") > 0)
+    .with_columns(
+        # Original SAS logic: IF PRISEC = 901 THEN 'N' ELSE 'Y'
+        pl.when(pl.col("PRISEC") == 901)
+        .then(pl.lit("N"))
+        .otherwise(pl.lit("Y"))
+        .alias("JOINT")
+    )
+    .select(["ACCTNO", "CUSTNAME", "ALIASKEY", "ALIAS", "CUSTOPENDATE", "JOINT"])
+)
+
+print(f"CIS processed records: {len(cis_processed)}")
+
+# Check joint account distribution
+joint_dist = cis_processed.group_by("JOINT").agg(pl.count())
+print(f"Joint account distribution: {joint_dist}")
+
+# -----------------------------
+# Step 5: Merge datasets (like SAS MERGE)
+# -----------------------------
+new = bright.join(cis_processed, on="ACCTNO", how="inner")
+
+print(f"Joined records: {len(new)}")
+
+# -----------------------------
+# Step 6: Convert and format
+# -----------------------------
+convert = new.select([
+    pl.col("BRANCH").cast(pl.Utf8).alias("BRANCH"),
+    pl.col("ACCTNO").cast(pl.Utf8).alias("ACCTNO"),
+    pl.col("ALIAS").alias("NEWIC"),
+    pl.col("JOINT"),
+    pl.col("CUSTNAME"),
+    pl.col("OPENDT").cast(pl.Utf8).alias("OPENDT"),
+    pl.col("OPENIND"),
+    pl.col("CUSTOPENDATE").cast(pl.Utf8).alias("CUSTOPDT"),
+    pl.col("CURBAL").cast(pl.Float64).alias("CURBAL"),
+])
+
+print(f"Final output records: {len(convert)}")
+
+# -----------------------------
+# Step 7: Save output
+# -----------------------------
+output_file = OUTPUT_DIR / f"BRIGHTSTAR_SAVINGS_{reptyear}{reptmon}{reptday}.parquet"
+convert.write_parquet(output_file)
+
+print(f"Output written to {output_file}")
+
+# -----------------------------
+# Step 8: Load to DuckDB
+# -----------------------------
+duckdb.sql("INSTALL parquet; LOAD parquet;")
+output_file_str = str(output_file)
+duckdb.sql(f"""
+    CREATE OR REPLACE TABLE brightstar_savings 
+    AS SELECT * FROM read_parquet('{output_file_str}')
+""")
+
+print("DuckDB table 'brightstar_savings' ready")
+result = duckdb.sql("SELECT COUNT(*) as record_count FROM brightstar_savings").fetchall()
+print(f"Records in DuckDB table: {result[0][0]}")
+
+print("✅ Program completed successfully with proper joint account logic!")
