@@ -1,121 +1,97 @@
-REPTDATE = 2025-11-26, PREVDATE = 2025-11-25
-MON=11, DAY=26, YEAR=25
-SAVING.csv shape: (8320, 81)
-CIS shape: (224992, 100)
+import polars as pl
+import duckdb
+from pathlib import Path
+from datetime import datetime
 
-============================================================
-INVESTIGATING ACCOUNT NUMBER MATCHING ISSUE
-============================================================
-SAVING ACCTNO sample:
-shape: (10, 1)
-┌────────┐
-│ ACCTNO │
-│ ---    │
-│ str    │
-╞════════╡
-│ 1      │
-│ 1      │
-│ 1      │
-│ 1      │
-│ 1      │
-│ 1      │
-│ 1      │
-│ 1      │
-│ 1      │
-│ 1      │
-└────────┘
+# File paths
+datefile_path = Path("datefile.txt")
+deposit_saving_path = Path("deposit_saving.csv")
+cis_custdly_path = Path("cis_custdly.parquet")
+output_path = Path("bstar_output.parquet")
 
-CIS ACCTNO sample:
-shape: (10, 1)
-┌──────────────────┐
-│ ACCTNO           │
-│ ---              │
-│ str              │
-╞══════════════════╡
-│ 01950002820      │
-│ 5472310900369100 │
-│ 02000031427      │
-│ 03000940936      │
-│ 5472310900359101 │
-│ 03800000232      │
-│ 02468394422      │
-│ 03001642036      │
-│ 03098967635      │
-│ 01950027005      │
-└──────────────────┘
+# Read report date from datefile (first 8 digits of 11-digit number)
+with open(datefile_path, 'r') as f:
+    extdate = f.readline().strip()[:8]
+    reptdate = datetime.strptime(extdate, '%m%d%Y')
+    reptdte = (reptdate - datetime(1960, 1, 1)).days  # SAS date format
 
-Common ACCTNOs found: 0
-❌ NO COMMON ACCOUNT NUMBERS FOUND!
+# Read and filter deposit saving data
+deposit = pl.read_csv(deposit_saving_path)
 
-CIS columns that might contain account numbers:
-  CUSTNO: ['00000000001', '00000000001', '00000000001']
-  BANKNO: [33.0, 33.0, 33.0]
-  ACCTNOC: ['01950002820', '5472310900369100', '02000031427']
-  ACCTNO: ['01950002820', '5472310900369100', '02000031427']
-  ACCTCODE: ['DP', 'BMG', 'LN']
-  CUSTSTAT: ['O', 'O', 'O']
-  CUSTBRCH: [37.0, 37.0, 37.0]
-  CUSTLASTDATECC: ['20', '20', '20']
-  CUSTLASTDATEYY: ['25', '25', '25']
-  CUSTLASTDATEMM: ['11', '11', '11']
-  CUSTLASTDATEDD: ['17', '17', '17']
-  CUSTLASTOPER: ['BDSBAZA', 'BDSBAZA', 'BDSBAZA']
-  CUSTSINCEDATE: [12011996336.0, 12011996336.0, 12011996336.0]
-  CUSTOPENDATE: [1161986016.0, 1161986016.0, 1161986016.0]
-  CUST_CODE: ['012', '012', '012']
-  CUSTCONSENT: ['002', '002', '002']
-  CUSTMNTDATE: ['20251117', '20251117', '20251117']
-  CUSTNAME: ['YAP YIP SENG', 'YAP YIP SENG', 'YAP YIP SENG']
+bright = (deposit
+    .filter(pl.col('PRODUCT') == 208)
+    .filter(pl.col('OPENDT') > 0)
+    .with_columns([
+        pl.col('OPENDT').cast(pl.Utf8).str.zfill(11).alias('OPENDT_STR')
+    ])
+    .with_columns([
+        pl.col('OPENDT_STR').str.slice(2, 2).alias('OPENDD'),
+        pl.col('OPENDT_STR').str.slice(0, 2).alias('OPENMM'),
+        pl.col('OPENDT_STR').str.slice(4, 4).alias('OPENYY')
+    ])
+    .with_columns([
+        (pl.datetime(
+            pl.col('OPENYY').cast(pl.Int32),
+            pl.col('OPENMM').cast(pl.Int32),
+            pl.col('OPENDD').cast(pl.Int32)
+        ) - datetime(1960, 1, 1)).dt.total_days().alias('OPENDT_SAS')
+    ])
+    .filter(pl.col('OPENDT_SAS') == reptdte)
+    .select(['BRANCH', 'ACCTNO', 'OPENDT_SAS', 'CURBAL', 'OPENIND'])
+    .rename({'OPENDT_SAS': 'OPENDT'})
+    .sort('ACCTNO')
+)
 
-============================================================
-TRYING DIFFERENT JOIN STRATEGIES
-============================================================
-Strategy 1: Direct ACCTNO join
-  Results: 0 records
-Strategy 2: Join with ACCTNOC
-  Results: 0 records
-Strategy 4: Check for partial matches
-  SAVING ACCTNO lengths: [1, 2]
-  CIS ACCTNO lengths: [None, 11, 14, 16, 19]
+# Read and process CIS customer data
+cis_raw = pl.read_parquet(cis_custdly_path)
 
-============================================================
-PROCESSING WITH BEST AVAILABLE DATA
-============================================================
-Processed SAVING accounts: 7875
-Relaxed join results: 0
+cis = (cis_raw
+    .filter(pl.col('CUSTOPENDATE') > 0)
+    .with_columns([
+        pl.col('CUSTOPENDATE').cast(pl.Utf8).str.zfill(11).alias('CUSTDT_STR')
+    ])
+    .with_columns([
+        pl.col('CUSTDT_STR').str.slice(2, 2).alias('CUSTDD'),
+        pl.col('CUSTDT_STR').str.slice(0, 2).alias('CUSTMM'),
+        pl.col('CUSTDT_STR').str.slice(4, 4).alias('CUSTYY')
+    ])
+    .with_columns([
+        (pl.datetime(
+            pl.col('CUSTYY').cast(pl.Int32),
+            pl.col('CUSTMM').cast(pl.Int32),
+            pl.col('CUSTDD').cast(pl.Int32)
+        ) - datetime(1960, 1, 1)).dt.total_days().alias('CUSTOPDT')
+    ])
+    .with_columns([
+        pl.when(pl.col('PRISEC') == 901)
+        .then(pl.lit('N'))
+        .otherwise(pl.lit('Y'))
+        .alias('JOINT')
+    ])
+    .select(['ACCTNO', 'CUSTNAME', 'JOINT', 'ALIASKEY', 'ALIAS', 'CUSTOPDT'])
+    .sort('ACCTNO')
+)
 
-Final output records: 7875
-Output written to /pythonITD/mis_dev/OUTPUT/BRIGHTSTAR_SAVINGS_251126.parquet
+# Merge datasets
+merged = bright.join(cis, on='ACCTNO', how='inner')
 
-============================================================
-DATA QUALITY ASSESSMENT
-============================================================
-SAVING DATA ISSUES:
-  - Total records: 8320
-  - OPENDT: 741 non-null, but only 2 valid dates
-  - PRODUCT: 1866 unique values
-  - ACCTNO: 2 unique values
+# Final output with renamed columns
+final = (merged
+    .rename({
+        'ALIASKEY': 'PM_SC',
+        'ALIAS': 'NEWIC'
+    })
+    .select([
+        'BRANCH', 'ACCTNO', 'NEWIC', 'JOINT', 'CUSTNAME',
+        'OPENDT', 'OPENIND', 'CUSTOPDT', 'CURBAL'
+    ])
+    .sort('ACCTNO')
+)
 
-CIS DATA ISSUES:
-  - Total records: 224992
-  - ACCTNO: 116557 unique values
+# Write to parquet
+final.write_parquet(output_path)
 
-MATCHING ISSUES:
-  - Common ACCTNOs: 0
-  - Direct join results: 0
-
-============================================================
-RECOMMENDATIONS
-============================================================
-🚨 CRITICAL: Account numbers don't match between SAVING and CIS files!
-   Possible causes:
-   1. Different account number formats
-   2. Different data sources or time periods
-   3. Account number transformation issues
-   4. Missing leading zeros or formatting differences
-
-🔧 Required fixes:
-   1. Check account number formats in both files
-   2. Verify both files are from the same time period
-   3. Check for leading zeros or formatting differences
-   4. Contact data providers about the mismatch
+print(f"Processing complete. Output saved to {output_path}")
+print(f"Records processed: {len(final)}")
+print("\nSample output:")
+print(final.head())
