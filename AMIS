@@ -1,55 +1,153 @@
-/pythonITD/mis_dev/sas_migration/EIBMCHNL_UAT.py
-REPTDATE: 2025-11-26
-PREVDATE: 2025-11-25
-RDATE (SAS date format): 24071
-REPTDATE_STR: 26/11/25
-CHANNEL (head):
-shape: (3, 4)
-┌─────────┬────────┬─────────┬───────┐
-│ CHANNEL ┆ PROMPT ┆ UPDATED ┆ MONTH │
-│ ---     ┆ ---    ┆ ---     ┆ ---   │
-│ str     ┆ i64    ┆ i64     ┆ str   │
-╞═════════╪════════╪═════════╪═══════╡
-│ ATM     ┆ 0      ┆ 0       ┆ NOV25 │
-│ EBK     ┆ 4      ┆ 0       ┆ NOV25 │
-│ OTC     ┆ 0      ┆ 0       ┆ NOV25 │
-└─────────┴────────┴─────────┴───────┘
-CRMWH.CHANNEL_SUM (head):
-shape: (12, 4)
-┌─────────┬────────┬─────────┬───────┐
-│ CHANNEL ┆ PROMPT ┆ UPDATED ┆ MONTH │
-│ ---     ┆ ---    ┆ ---     ┆ ---   │
-│ str     ┆ f64    ┆ f64     ┆ str   │
-╞═════════╪════════╪═════════╪═══════╡
-│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
-│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
-│ OTC     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
-│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
-│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
-│ …       ┆ …      ┆ …       ┆ …     │
-│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
-│ OTC     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
-│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
-│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
-│ OTC     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
-└─────────┴────────┴─────────┴───────┘
-Traceback (most recent call last):
-  File "/pythonITD/mis_dev/sas_migration/EIBMCHNL_UAT.py", line 79, in <module>
-    branch_df = pl.read_parquet(BRANCH_SRC)
-  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
-    return function(*args, **kwargs)
-  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
-    return function(*args, **kwargs)
-  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/io/parquet/functions.py", line 288, in read_parquet
-    return lf.collect()
-  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 330, in wrapper
-    return function(*args, **kwargs)
-  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2335, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ComputeError: expected at least 1 source
+from __future__ import annotations
 
-This error occurred with the following context stack:
-        [1] 'parquet scan'
-        [2] 'sink'
+import polars as pl
+import pyarrow.parquet as pq
+import duckdb
+from datetime import date, timedelta
+from pathlib import Path
+
+# =========================
+# PATHS
+# =========================
+base_input_path  = Path("Data_Warehouse/MIS/Job/REPO/input")
+base_output_path = Path("Data_Warehouse/MIS/Job/REPO/output")
+
+# Inputs (Parquet)
+RPVBDATA_PATH        = base_input_path / "RPVBDATA.parquet"          # 1-row with TBDATE (YYYYMMDD)
+SRSDATA_PATH         = base_input_path / "SRSDATA.parquet"           # 1-row with TBDATE (YYYYMMDD)
+RPVBDATA_DETAIL_PATH = base_input_path / "RPVBDATA_DETAIL.parquet"   # rows with SAS-named columns
+
+# Outputs (Parquet) — libraries
+REPO_DIR   = base_output_path / "REPO"     # SAS: REPO (SAP.RPVB.DATA)
+REPOWH_DIR = base_output_path / "REPOWH"   # SAS: REPOWH (SAP.PBB.RPDATAWH)
+ 
+USE_DUCKDB_COPY = False  # DuckDB COPY vs PyArrow write
+
+# =========================
+# HELPERS
+# =========================
+def read_parquet(p: Path) -> pl.DataFrame:
+    return pl.read_parquet(p)
+
+def write_parquet(df: pl.DataFrame, p: Path):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if USE_DUCKDB_COPY:
+        con = duckdb.connect()
+        con.register("DF", df.to_arrow())
+        con.execute(f"COPY DF TO '{p.as_posix()}' (FORMAT PARQUET)")
+        con.close()
+    else:
+        pq.write_table(df.to_arrow(), p)
+
+def yyyymmdd_to_date(s: str) -> date:
+    return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+
+def end_of_month(d: date) -> date:
+    nxt = date(d.year + (d.month == 12), 1 if d.month == 12 else d.month + 1, 1)
+    return nxt - timedelta(days=1)
+
+def MMYYN4(d: date) -> str:
+    return f"{d.month:02d}{d.year % 100:02d}"  # MMYY (no slash), matches MMYYN4.
+
+# =========================
+# 1) OPTIONS (ignored)
+# =========================
+# OPTIONS NOCENTER YEARCUTOFF=1950;
+
+# =========================
+# 2) REPTDATE & SRSTDT headers → REPTDT, PREVDT, SRSTDT
+# =========================
+HDR_RPVB = read_parquet(RPVBDATA_PATH).head(1)  # OBS=1
+HDR_SRS  = read_parquet(SRSDATA_PATH).head(1)   # OBS=1
+
+REPTDATE = end_of_month(date(yyyymmdd_to_date(HDR_RPVB.item(0, "TBDATE")).year,
+                             yyyymmdd_to_date(HDR_RPVB.item(0, "TBDATE")).month, 1) - timedelta(days=1))
+PREVDATE = end_of_month(date(REPTDATE.year, REPTDATE.month, 1) - timedelta(days=1))
+
+REPTDT = MMYYN4(REPTDATE)
+PREVDT = MMYYN4(PREVDATE)
+
+SRSDATE = yyyymmdd_to_date(HDR_SRS.item(0, "TBDATE"))
+SRSTDT  = MMYYN4(SRSDATE)
+
+# =========================
+# 3) Macro guard
+# =========================
+if REPTDT != SRSTDT:
+    raise RuntimeError(f"THE SAP.PBB.RPVB.TEXT IS NOT DATED (MMYY:{SRSTDT})")
+
+# =========================
+# 4) RPVB1 — $UPCASE fields, MDY() dates with SAME NAMES
+# =========================
+RPVB1 = (
+    read_parquet(RPVBDATA_DETAIL_PATH)
+    # $UPCASE. fields — keep exact column names
+    .with_columns([
+        pl.col("NAME").str.to_uppercase(),
+        pl.col("ACCTSTA").str.to_uppercase(),
+        pl.col("PRSTCOND").str.to_uppercase(),
+        pl.col("REGCARD").str.to_uppercase(),
+        pl.col("IGNTKEY").str.to_uppercase(),
+        pl.col("ACCTWOFF").str.to_uppercase(),
+        pl.col("MODEREPO").str.to_uppercase(),
+        pl.col("REPOSTAT").str.to_uppercase(),
+        pl.col("MODEDISP").str.to_uppercase(),
+    ])
+    # MDY() → create Date-typed columns with SAME NAMES as SAS outputs
+    .with_columns([
+        pl.when(pl.any_horizontal([pl.col("MM1").is_null(), pl.col("DD1").is_null(), pl.col("YY1").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY1"), pl.col("MM1"), pl.col("DD1")).cast(pl.Date))
+          .alias("DATEWOFF"),
+        pl.when(pl.any_horizontal([pl.col("MM2").is_null(), pl.col("DD2").is_null(), pl.col("YY2").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY2"), pl.col("MM2"), pl.col("DD2")).cast(pl.Date))
+          .alias("DATEREPO"),
+        pl.when(pl.any_horizontal([pl.col("MM3").is_null(), pl.col("DD3").is_null(), pl.col("YY3").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY3"), pl.col("MM3"), pl.col("DD3")).cast(pl.Date))
+          .alias("DATE5TH"),
+        pl.when(pl.any_horizontal([pl.col("MM4").is_null(), pl.col("DD4").is_null(), pl.col("YY4").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY4"), pl.col("MM4"), pl.col("DD4")).cast(pl.Date))
+          .alias("DATEAPRV"),
+        pl.when(pl.any_horizontal([pl.col("MM5").is_null(), pl.col("DD5").is_null(), pl.col("YY5").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY5"), pl.col("MM5"), pl.col("DD5")).cast(pl.Date))
+          .alias("DATESTLD"),
+        pl.when(pl.any_horizontal([pl.col("MM6").is_null(), pl.col("DD6").is_null(), pl.col("YY6").is_null()]))
+          .then(pl.lit(None))
+          .otherwise(pl.datetime(pl.col("YY6"), pl.col("MM6"), pl.col("DD6")).cast(pl.Date))
+          .alias("DATEHO"),
+    ])
+    # DROP list EXACTLY as SAS
+    .drop(["DD1","MM1","YY1","DD2","MM2","YY2","DD3","MM3","YY3","DD4","MM4","YY4","DD5","MM5","YY5","DD6","MM6","YY6"])
+)
+
+# =========================
+# 5) RPVB2 / RPVB3 — same condition names
+# =========================
+RPVB2 = RPVB1.filter(pl.col("ACCTSTA").is_in(["D","S","R"]))
+RPVB3 = RPVB2.filter(pl.col("DATESTLD").is_not_null())
+
+# =========================
+# 6) REPO.REPS&REPTDT = RPVB3 + REPO.REPS&PREVDT
+# =========================
+REPO_PREV_PATH = REPO_DIR / f"REPS_{PREVDT}.parquet"
+REPO_CURR_PATH = REPO_DIR / f"REPS_{REPTDT}.parquet"
+REPOWH_PATH    = REPOWH_DIR / f"REPS_{REPTDT}.parquet"
+
+try:
+    REPO_PREV = read_parquet(REPO_PREV_PATH)
+except Exception:
+    REPO_PREV = pl.DataFrame([])
+
+REPO_REPS = pl.concat([RPVB3, REPO_PREV], how="vertical", rechunk=True)
+write_parquet(REPO_REPS, REPO_CURR_PATH)
+
+# =========================
+# 7) REPOWH.REPS&REPTDT = REPO.REPS&REPTDT ; PROC SORT NODUPKEY BY MNIACTNO
+# =========================
+REPOWH_REPS = REPO_REPS.clone()
+REPOWH_REPS = REPOWH_REPS.sort("MNIACTNO").unique(subset=["MNIACTNO"], keep="first")
+write_parquet(REPOWH_REPS, REPOWH_PATH)
