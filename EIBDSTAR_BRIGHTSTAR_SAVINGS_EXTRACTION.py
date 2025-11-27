@@ -3,17 +3,17 @@ import duckdb
 from pathlib import Path
 from datetime import datetime
 
+# Configuration
+REPORT_DATE = "11272024"  # MMDDYYYY format - change this as needed
+
 # File paths
-datefile_path = Path("datefile.txt")
 deposit_saving_path = Path("deposit_saving.csv")
 cis_custdly_path = Path("cis_custdly.parquet")
 output_path = Path("bstar_output.parquet")
 
-# Read report date from datefile (first 8 digits of 11-digit number)
-with open(datefile_path, 'r') as f:
-    extdate = f.readline().strip()[:8]
-    reptdate = datetime.strptime(extdate, '%m%d%Y')
-    reptdte = (reptdate - datetime(1960, 1, 1)).days  # SAS date format
+# Convert report date to SAS date format
+reptdate = datetime.strptime(REPORT_DATE, '%m%d%Y')
+reptdte = (reptdate - datetime(1960, 1, 1)).days  # SAS date format
 
 # Read and filter deposit saving data
 deposit = pl.read_csv(deposit_saving_path)
