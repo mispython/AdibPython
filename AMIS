@@ -27,27 +27,31 @@ def process_large_loan_bill_scd(
 ) -> tuple:
     """
     OPTIMIZED VERSION: Process large ENRH_LN_BILL in chunks
-    Uses SAS date format for file naming
+    Uses SAS date for processing, but yymmdd format for output files
     """
     
     print("="*80)
     print("OPTIMIZED STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING")
     print("="*80)
     
-    # SAS date calculations
+    # SAS date calculations for processing logic
     REPTDATE = report_date
     PREVDATE = REPTDATE - timedelta(days=1)
     RDATE = (REPTDATE - SAS_ORIGIN).days
     PDATE = (PREVDATE - SAS_ORIGIN).days
     
-    print(f"Report Date: {REPTDATE.strftime('%Y-%m-%d')} (SAS: {RDATE})")
-    print(f"Previous Date: {PREVDATE.strftime('%Y-%m-%d')} (SAS: {PDATE})")
+    # yymmdd format for file naming
+    date_str = REPTDATE.strftime("%y%m%d")
+    prev_date_str = PREVDATE.strftime("%y%m%d")
+    
+    print(f"Report Date: {REPTDATE.strftime('%Y-%m-%d')} (SAS: {RDATE}, File: {date_str})")
+    print(f"Previous Date: {PREVDATE.strftime('%Y-%m-%d')} (SAS: {PDATE}, File: {prev_date_str})")
     print(f"Processing in chunks of {chunk_size:,} records")
     print("-" * 80)
     
-    # Define historical file paths (previous day's output)
-    input_ln_bill = output_dir / f"LOAN_BILL_{PDATE}.parquet"
-    input_iln_bill = output_dir / f"ILOAN_BILL_{PDATE}.parquet"
+    # Define historical file paths (previous day's output) - using yymmdd format
+    input_ln_bill = output_dir / f"LOAN_BILL_{prev_date_str}.parquet"
+    input_iln_bill = output_dir / f"ILOAN_BILL_{prev_date_str}.parquet"
     
     print(f"Looking for historical data:")
     print(f"  LOAN_BILL: {input_ln_bill.name} - {'EXISTS' if input_ln_bill.exists() else 'NOT FOUND'}")
@@ -211,7 +215,7 @@ def process_large_loan_bill_scd(
         
         # Split and save results
         print("\n1.5: Saving final results...")
-        ln_bill_path, iln_bill_path = save_final_results(con, output_dir, RDATE)
+        ln_bill_path, iln_bill_path = save_final_results(con, output_dir, date_str)
         
         con.close()
         
@@ -310,8 +314,8 @@ def process_scd_chunk(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, 
     
     return chunk_output
 
-def save_final_results(con, output_dir, RDATE):
-    """Save the final LN_BILL and ILOAN_BILL files using SAS date format"""
+def save_final_results(con, output_dir, date_str):
+    """Save the final LN_BILL and ILOAN_BILL files using yymmdd format"""
     
     con.execute("""
         CREATE TEMP TABLE ln_bill_output AS
@@ -337,9 +341,9 @@ def save_final_results(con, output_dir, RDATE):
         WHERE ENTITY_CD = 'PIBB'
     """)
     
-    # Save with SAS date format in filenames
-    ln_bill_path = output_dir / f"LOAN_BILL_{RDATE}.parquet"
-    iln_bill_path = output_dir / f"ILOAN_BILL_{RDATE}.parquet"
+    # Save with yymmdd format in filenames
+    ln_bill_path = output_dir / f"LOAN_BILL_{date_str}.parquet"
+    iln_bill_path = output_dir / f"ILOAN_BILL_{date_str}.parquet"
     
     print(f"  Saving LOAN_BILL...")
     con.execute(f"COPY ln_bill_output TO '{ln_bill_path}' (FORMAT PARQUET)")
@@ -363,16 +367,15 @@ def process_hp_bill_extraction(
 ) -> None:
     """
     STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
-    Uses SAS date format for file naming
+    Uses yymmdd format for file naming
     """
     
     print("\n" + "="*80)
     print("STEP 2: HP/IHP BILL EXTRACTION")
     print("="*80)
     
-    # SAS date calculation
-    REPTDATE = report_date
-    RDATE = (REPTDATE - SAS_ORIGIN).days
+    # yymmdd format for file naming
+    date_str = report_date.strftime("%y%m%d")
     
     hp_products_str = ','.join(map(str, HP_PRODUCTS))
     
@@ -399,8 +402,8 @@ def process_hp_bill_extraction(
     hp_count = con.execute("SELECT COUNT(*) FROM hp_bill").fetchone()[0]
     print(f"  Filtered {hp_count:,} HP records")
     
-    # Save HP_BILL with SAS date format
-    hp_bill_path = output_dir / f"HP_BILL_{RDATE}.parquet"
+    # Save HP_BILL with yymmdd format
+    hp_bill_path = output_dir / f"HP_BILL_{date_str}.parquet"
     con.execute(f"COPY hp_bill TO '{hp_bill_path}' (FORMAT PARQUET)")
     hp_size = hp_bill_path.stat().st_size / (1024 * 1024)
     print(f"  ✓ HP_BILL: {hp_bill_path.name}")
@@ -428,8 +431,8 @@ def process_hp_bill_extraction(
     ihp_count = con.execute("SELECT COUNT(*) FROM ihp_bill").fetchone()[0]
     print(f"  Filtered {ihp_count:,} IHP records")
     
-    # Save IHP_BILL with SAS date format
-    ihp_bill_path = output_dir / f"IHP_BILL_{RDATE}.parquet"
+    # Save IHP_BILL with yymmdd format
+    ihp_bill_path = output_dir / f"IHP_BILL_{date_str}.parquet"
     con.execute(f"COPY ihp_bill TO '{ihp_bill_path}' (FORMAT PARQUET)")
     ihp_size = ihp_bill_path.stat().st_size / (1024 * 1024)
     print(f"  ✓ IHP_BILL: {ihp_bill_path.name}")
@@ -440,17 +443,21 @@ def process_hp_bill_extraction(
 # Main execution
 if __name__ == "__main__":
     print("="*80)
-    print("OPTIMIZED BILL PROCESSING PIPELINE (SAS DATE FORMAT)")
+    print("OPTIMIZED BILL PROCESSING PIPELINE")
     print("="*80)
     
-    # SAS date calculations
+    # SAS date calculations for processing logic
     REPTDATE = datetime.today() - timedelta(days=1)  # Yesterday as report date
     PREVDATE = REPTDATE - timedelta(days=1)          # Day before yesterday
     RDATE = (REPTDATE - SAS_ORIGIN).days
     PDATE = (PREVDATE - SAS_ORIGIN).days
     
-    print(f"Report Date: {REPTDATE.strftime('%Y-%m-%d')} (SAS: {RDATE})")
-    print(f"Previous Date: {PREVDATE.strftime('%Y-%m-%d')} (SAS: {PDATE})")
+    # yymmdd format for file naming
+    date_str = REPTDATE.strftime("%y%m%d")
+    prev_date_str = PREVDATE.strftime("%y%m%d")
+    
+    print(f"Report Date: {REPTDATE.strftime('%Y-%m-%d')} (SAS: {RDATE}, File: {date_str})")
+    print(f"Previous Date: {PREVDATE.strftime('%Y-%m-%d')} (SAS: {PDATE}, File: {prev_date_str})")
     print()
     
     # Input paths
@@ -482,9 +489,9 @@ if __name__ == "__main__":
     print("\n" + "="*80)
     print("PROCESSING COMPLETED SUCCESSFULLY")
     print("="*80)
-    print(f"\nGenerated Files (SAS Date: {RDATE}):")
-    print(f"  1. LOAN_BILL_{RDATE}.parquet")
-    print(f"  2. ILOAN_BILL_{RDATE}.parquet") 
-    print(f"  3. HP_BILL_{RDATE}.parquet")
-    print(f"  4. IHP_BILL_{RDATE}.parquet")
+    print(f"\nGenerated Files (Date: {date_str}):")
+    print(f"  1. LOAN_BILL_{date_str}.parquet")
+    print(f"  2. ILOAN_BILL_{date_str}.parquet") 
+    print(f"  3. HP_BILL_{date_str}.parquet")
+    print(f"  4. IHP_BILL_{date_str}.parquet")
     print("="*80)
