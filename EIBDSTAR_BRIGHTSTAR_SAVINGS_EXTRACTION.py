@@ -1,109 +1,28 @@
-from pathlib import Path
-import duckdb
-import polars as pl
-from datetime import datetime, timedelta
+REPTDATE = 2025-11-26, PREVDATE = 2025-11-25
+RDATE (SAS format) = 24071
+MON=11, DAY=26, YEAR=25
+Filter date (reptdte) = 251126
+Traceback (most recent call last):
+  File "/pythonITD/mis_dev/sas_migration/BRIGHTSTAR/EIBDSTAR_BRIGHTSTAR_SAVINGS_EXTRACTION.py", line 45, in <module>
+    saving = pl.read_csv(saving_csv_path)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/io/csv/functions.py", line 549, in read_csv
+    df = _read_csv_impl(
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/io/csv/functions.py", line 697, in _read_csv_impl
+    pydf = PyDataFrame.read_csv(
+polars.exceptions.ComputeError: could not parse `6.01884E15` as dtype `i64` at column 'ODXSAMT' (column number 49)
 
-# Define paths clearly
-DATA_DIR = Path("data")
-INPUT_DIR = Path("input")
-OUTPUT_DIR = Path("output")
-OUTPUT_DIR.mkdir(exist_ok=True)  # Ensure output directory exists
+The current offset in the file is 895 bytes.
 
-# -----------------------------
-# Step 1: Use SAS date format instead of DATEFILE
-# -----------------------------
-# Calculate dates using SAS format
-SAS_ORIGIN = datetime(1960, 1, 1)
-REPTDATE = datetime.today() - timedelta(days=1)
-PREVDATE = REPTDATE - timedelta(days=1)
-RDATE = (REPTDATE - SAS_ORIGIN).days
+You might want to try:
+- increasing `infer_schema_length` (e.g. `infer_schema_length=10000`),
+- specifying correct dtype with the `schema_overrides` argument
+- setting `ignore_errors` to `True`,
+- adding `6.01884E15` to the `null_values` list.
 
-# Format dates for file naming and filtering
-reptyear = REPTDATE.strftime("%y")
-reptmon = REPTDATE.strftime("%m")
-reptday = REPTDATE.strftime("%d")
-reptdte = REPTDATE.strftime("%y%m%d")  # YYMMDD format for integer comparison
-
-print(f"REPTDATE = {REPTDATE.date()}, PREVDATE = {PREVDATE.date()}")
-print(f"RDATE (SAS format) = {RDATE}")
-print(f"MON={reptmon}, DAY={reptday}, YEAR={reptyear}")
-print(f"Filter date (reptdte) = {reptdte}")
-
-# -----------------------------
-# Step 2: Load datasets with clear paths - using CSV instead of parquet
-# -----------------------------
-saving_csv_path = DATA_DIR / "SAVING.csv"
-cis_path = DATA_DIR / "CIS_CUSTDLY.parquet"
-
-# Check if files exist before processing
-if not saving_csv_path.exists():
-    raise FileNotFoundError(f"SAVING.csv file not found: {saving_csv_path}")
-if not cis_path.exists():
-    raise FileNotFoundError(f"CIS file not found: {cis_path}")
-
-# Read SAVING.csv instead of parquet
-saving = pl.read_csv(saving_csv_path)
-cis = pl.read_parquet(cis_path)
-
-print(f"SAVING.csv columns: {saving.columns}")
-print(f"SAVING.csv shape: {saving.shape}")
-
-# -----------------------------
-# Steps 3-5: Your processing logic (adjusted for CSV column names if needed)
-# -----------------------------
-bright = (
-    saving.filter(pl.col("PRODUCT") == 208)
-    .with_columns(pl.col("OPENDT").cast(pl.Int64))
-    .filter(pl.col("OPENDT") > 0)
-    .filter(pl.col("OPENDT") == int(reptdte))
-    .select(["BRANCH", "ACCTNO", "OPENDT", "CURBAL", "OPENIND"])
-)
-
-cis_processed = (
-    cis.with_columns(pl.col("CUSTOPENDATE").cast(pl.Int64))
-    .filter(pl.col("CUSTOPENDATE") > 0)
-    .with_columns(
-        pl.when(pl.col("PRISEC") == 901).then("N").otherwise("Y").alias("JOINT")
-    )
-    .select(["ACCTNO", "CUSTNAME", "ALIASKEY", "ALIAS", "CUSTOPENDATE", "JOINT"])
-)
-
-new = bright.join(cis_processed, on="ACCTNO", how="inner")
-
-convert = new.select([
-    pl.col("BRANCH").cast(pl.Utf8).alias("BRANCH"),
-    pl.col("ACCTNO").cast(pl.Utf8).alias("ACCTNO"),
-    pl.col("ALIAS").alias("NEWIC"),
-    pl.col("JOINT"),
-    pl.col("CUSTNAME"),
-    pl.col("OPENDT").cast(pl.Utf8).alias("OPENDT"),
-    pl.col("OPENIND"),
-    pl.col("CUSTOPENDATE").cast(pl.Utf8).alias("CUSTOPDT"),
-    pl.col("CURBAL").cast(pl.Float64).alias("CURBAL"),
-])
-
-print(f"Final output records: {len(convert)}")
-
-# -----------------------------
-# Step 6: Save with pathlib - much cleaner
-# -----------------------------
-output_file = OUTPUT_DIR / f"BRIGHTSTAR_SAVINGS_{reptyear}{reptmon}{reptday}.parquet"
-convert.write_parquet(output_file)
-
-print(f"Output written to {output_file}")
-
-# -----------------------------
-# Step 7: DuckDB with pathlib path conversion
-# -----------------------------
-duckdb.sql("INSTALL parquet; LOAD parquet;")
-
-# Convert Path object to string for DuckDB
-output_file_str = str(output_file)
-duckdb.sql(f"""
-    CREATE OR REPLACE TABLE brightstar_savings 
-    AS SELECT * FROM read_parquet('{output_file_str}')
-""")
-
-print("DuckDB table 'brightstar_savings' ready")
-result = duckdb.sql("SELECT COUNT(*) as record_count FROM brightstar_savings").fetchall()
-print(f"Records in DuckDB table: {result[0][0]}")
+Original error: ```remaining bytes non-empty```
