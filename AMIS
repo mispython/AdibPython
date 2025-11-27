@@ -10,7 +10,7 @@ BASE_INPUT_PATH  = Path("/host/cis/parquet/")   # where source Parquet lives
 BASE_OUTPUT_PATH = Path("/pythonITD/mis_dev/OUTPUT/")  # where outputs should go
 BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-# Source “tables” corresponding to SAS INFILE targets (now Parquet)
+# Source "tables" corresponding to SAS INFILE targets (now Parquet)
 CHANNEL_SRC = BASE_INPUT_PATH / "CIPHONET_ALL_SUMMARY/year=2025/month=11/day=24/data_0.parquet"   # columns: CHANNEL, TOLPROMPT, TOLUPDATE (UPPERCASE)
 BRANCH_SRC  = BASE_INPUT_PATH / "CIPHONET_OTC_SUMMARY"    # columns: BRANCHNO, TOLPROMPT, TOLUPDATE
 BCODE_SRC   = BASE_INPUT_PATH / "sas_parquet/PBBBRCH_20251114.parquet"     # columns: BRANCHNO
@@ -20,18 +20,28 @@ CRMWH_DIR = BASE_OUTPUT_PATH / "CRMWH"
 CRMWH_DIR.mkdir(parents=True, exist_ok=True)
 CHANNEL_SUM_PATH = CRMWH_DIR / "CHANNEL_SUM.parquet"
 
-# --- REPTDATE macro variables (SAS: TODAY()-1 and formatting) ---
-REPTDATE = (datetime.today() - timedelta(days=1)).date()
+# --- SAS Date Format Calculations ---
+SAS_ORIGIN = datetime(1960, 1, 1).date()
+REPTDATE = datetime.today().date() - timedelta(days=1)
+PREVDATE = REPTDATE - timedelta(days=1)
+RDATE = (REPTDATE - SAS_ORIGIN).days
+
+# --- Formatted date variables ---
 REPTYEAR = f"{REPTDATE.year % 100:02d}"          # YEAR2.
 REPTMON  = f"{REPTDATE.month:02d}"               # Z2.
 REPTDAY  = f"{REPTDATE.day:02d}"                 # Z2.
-RDATE    = f"{REPTDATE.day:02d}/{REPTDATE.month:02d}/{REPTDATE.year % 100:02d}"  # DD/MM/YY -> DDMMYY8.
+REPTDATE_STR = f"{REPTDATE.day:02d}/{REPTDATE.month:02d}/{REPTDATE.year % 100:02d}"  # DD/MM/YY -> DDMMYY8.
+
+print(f"REPTDATE: {REPTDATE}")
+print(f"PREVDATE: {PREVDATE}")
+print(f"RDATE (SAS date format): {RDATE}")
+print(f"REPTDATE_STR: {REPTDATE_STR}")
 
 # --- CHANNEL step (SAS adds REPTDATE=TODAY()-2; MONTH=MONYY5.) ---
 # Assume CHANNEL source is already a Parquet with the needed columns in UPPERCASE.
 channel_df = pl.read_parquet(CHANNEL_SRC).with_columns(
     # SAS: REPTDATE = TODAY()-2
-    pl.lit((datetime.today() - timedelta(days=2)).date()).alias("REPTDATE"),
+    pl.lit(PREVDATE).alias("REPTDATE"),  # Using PREVDATE which is TODAY()-2
 ).with_columns(
     # SAS MONYY5. -> e.g., "SEP25" (3-letter month + 2-digit year, uppercase)
     pl.col("REPTDATE").map_elements(
@@ -71,7 +81,7 @@ branch_df = pl.read_parquet(BRANCH_SRC)
 # --- BCODE step ---
 bcode_df = pl.read_parquet(BCODE_SRC)
 
-# --- PROC SORT BY BRANCHNO (SAS requires sorted before MERGE; Polars join does not, but we’ll mimic order) ---
+# --- PROC SORT BY BRANCHNO (SAS requires sorted before MERGE; Polars join does not, but we'll mimic order) ---
 bcode_sorted  = bcode_df.sort("BRANCHNO")
 branch_sorted = branch_df.sort("BRANCHNO")
 
