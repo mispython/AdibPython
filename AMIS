@@ -443,7 +443,7 @@ if __name__ == "__main__":
     print("OPTIMIZED BILL PROCESSING PIPELINE (SAS DATE FORMAT)")
     print("="*80)
     
-    # SAS date calculations - using your desired RDATE = 24071
+    # SAS date calculations
     REPTDATE = datetime.today() - timedelta(days=1)  # Yesterday as report date
     PREVDATE = REPTDATE - timedelta(days=1)          # Day before yesterday
     RDATE = (REPTDATE - SAS_ORIGIN).days
