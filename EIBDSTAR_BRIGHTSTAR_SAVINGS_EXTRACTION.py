@@ -240,3 +240,74 @@ if len(convert) == 0:
     print("4. The date format might be different (YYYYMMDD, DDMMYY, etc.)")
 else:
     print("✅ Success! Accounts processed and saved.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+REPTDATE = 2025-11-26, PREVDATE = 2025-11-25
+MON=11, DAY=26, YEAR=25
+MMDDYY format (reptdte_mmddyy) = 112625
+YYMMDD format (reptdte_yymmdd) = 251126
+SAVING.csv shape: (8320, 81)
+Sample OPENDT values:
+shape: (0, 1)
+┌────────┐
+│ OPENDT │
+│ ---    │
+│ str    │
+╞════════╡
+└────────┘
+Top 10 PRODUCT values:
+shape: (10, 3)
+┌───────────┬───────┬─────────────┐
+│ PRODUCT   ┆ count ┆ avg_balance │
+│ ---       ┆ ---   ┆ ---         │
+│ str       ┆ u32   ┆ f64         │
+╞═══════════╪═══════╪═════════════╡
+│ 111411318 ┆ 139   ┆ 1.143885    │
+│ 112625330 ┆ 99    ┆ 2.625       │
+│ 32720087  ┆ 83    ┆ 1.1         │
+│ 121001344 ┆ 77    ┆ 2.025974    │
+│ 12319023  ┆ 40    ┆ 4.0         │
+│ 52225142  ┆ 39    ┆ 3.428571    │
+│ 111825322 ┆ 38    ┆ 0.5         │
+│ 112525329 ┆ 37    ┆ 3.2         │
+│ 112025324 ┆ 37    ┆ 1.0         │
+│ 52523145  ┆ 37    ┆ null        │
+└───────────┴───────┴─────────────┘
+CIS shape: (224992, 100)
+Accounts with OPENDT = 112625 (MMDDYY): 0
+Accounts with OPENDT = 251126 (YYMMDD): 0
+No accounts found for today. Recent OPENDT values: []
+Final bright accounts: 0
+CIS processed records: 224992
+No accounts to process
+Final output records: 0
+Output written to /pythonITD/mis_dev/OUTPUT/BRIGHTSTAR_SAVINGS_251126.parquet
+
+==================================================
+PROGRAM SUMMARY
+==================================================
+Date format used: None
+Reporting date: 112625 (MMDDYY)
+Accounts found: 0
+Output file: /pythonITD/mis_dev/OUTPUT/BRIGHTSTAR_SAVINGS_251126.parquet
+==================================================
+
+💡 SUGGESTIONS:
+1. Check the actual OPENDT format in your SAVING.csv
+2. Verify the correct PRODUCT code for savings accounts
+3. Check if accounts exist for the reporting date
+4. The date format might be different (YYYYMMDD, DDMMYY, etc.)
