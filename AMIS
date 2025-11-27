@@ -2,118 +2,67 @@ import polars as pl
 import duckdb
 from datetime import datetime, timedelta
 from pathlib import Path
-import pyarrow as pa
-import pyarrow.parquet as pq
 
-# --- Paths (adjust to your environment) ---
-BASE_INPUT_PATH  = Path("/host/cis/parquet/")   # where source Parquet lives
-BASE_OUTPUT_PATH = Path("/pythonITD/mis_dev/OUTPUT/")  # where outputs should go
+# Base folders (adjust to your environment)
+BASE_INPUT_PATH  = Path("/host/cis/parquet/")     # holds input Parquet
+BASE_OUTPUT_PATH = Path("/pythonITD/mis_dev/OUTPUT")    # holds output Parquet
 BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-# Source "tables" corresponding to SAS INFILE targets (now Parquet)
-CHANNEL_SRC = BASE_INPUT_PATH / "CIPHONET_ALL_SUMMARY/year=2025/month=11/day=24/data_0.parquet"   # columns: CHANNEL, TOLPROMPT, TOLUPDATE (UPPERCASE)
-BRANCH_SRC  = BASE_INPUT_PATH / "CIPHONET_OTC_SUMMARY"    # columns: BRANCHNO, TOLPROMPT, TOLUPDATE
-BCODE_SRC   = BASE_INPUT_PATH / "sas_parquet/PBBBRCH_20251114.parquet"     # columns: BRANCHNO
+# Map SAS DDs to Parquet paths
+# CHANNEL DD -> RBP2.B033.CIPHONET.FULL.SUMMARY (assumed pre-parsed to Parquet)
+CHANNEL_PARQUET = BASE_INPUT_PATH / "CIPHONET_FULL_SUMMARY/year=2025/month=11/day=24/data_0.parquet"
 
-# CRMWH library targets as Parquet files
-CRMWH_DIR = BASE_OUTPUT_PATH / "CRMWH"
-CRMWH_DIR.mkdir(parents=True, exist_ok=True)
-CHANNEL_SUM_PATH = CRMWH_DIR / "CHANNEL_SUM.parquet"
+# SAS LIB CHN -> a folder of Parquets; target table we append to
+CHN_DIR = BASE_OUTPUT_PATH / "CHN"
+CHN_DIR.mkdir(parents=True, exist_ok=True)
+CHN_CHANNEL_UPDATE = CHN_DIR / "CHANNEL_UPDATE.parquet"
 
-# --- SAS Date Format Calculations ---
-SAS_ORIGIN = datetime(1960, 1, 1).date()
-REPTDATE = datetime.today().date() - timedelta(days=1)
-PREVDATE = REPTDATE - timedelta(days=1)
-RDATE = (REPTDATE - SAS_ORIGIN).days
+# --- OPTIONS NOCENTER YEARCUTOFF=1950 (no action in Python) ---
 
-# --- Formatted date variables ---
-REPTYEAR = f"{REPTDATE.year % 100:02d}"          # YEAR2.
-REPTMON  = f"{REPTDATE.month:02d}"               # Z2.
-REPTDAY  = f"{REPTDATE.day:02d}"                 # Z2.
-REPTDATE_STR = f"{REPTDATE.day:02d}/{REPTDATE.month:02d}/{REPTDATE.year % 100:02d}"  # DD/MM/YY -> DDMMYY8.
+# --- DATA REPTDATE macros (kept for parity; not used downstream) ---
+REPTDATE = (datetime.today() - timedelta(days=1)).date()
+REPTYEAR = f"{REPTDATE.year % 100:02d}"  # YEAR2.
+REPTMON  = f"{REPTDATE.month:02d}"       # Z2.
+REPTDAY  = f"{REPTDATE.day:02d}"         # Z2.
+RDATE    = REPTDATE.strftime("%d/%m/%y") # DDMMYY8. -> "dd/mm/yy"
 
-print(f"REPTDATE: {REPTDATE}")
-print(f"PREVDATE: {PREVDATE}")
-print(f"RDATE (SAS date format): {RDATE}")
-print(f"REPTDATE_STR: {REPTDATE_STR}")
-
-# --- CHANNEL step (SAS adds REPTDATE=TODAY()-2; MONTH=MONYY5.) ---
-# Assume CHANNEL source is already a Parquet with the needed columns in UPPERCASE.
-channel_df = pl.read_parquet(CHANNEL_SRC).with_columns(
-    # SAS: REPTDATE = TODAY()-2
-    pl.lit(PREVDATE).alias("REPTDATE"),  # Using PREVDATE which is TODAY()-2
-).with_columns(
-    # SAS MONYY5. -> e.g., "SEP25" (3-letter month + 2-digit year, uppercase)
-    pl.col("REPTDATE").map_elements(
-        lambda d: d.strftime("%b%y").upper(),
-        return_dtype=pl.Utf8,
-    ).alias("MONTH")
-).drop("REPTDATE")
-
-# (Optional) print equivalent of PROC PRINT DATA=CHANNEL;
-print("CHANNEL (head):")
-print(channel_df.head(20))
-
-# --- PROC APPEND: append CHANNEL into CRMWH.CHANNEL_SUM ---
-def parquet_exists(path: Path) -> bool:
-    try:
-        pq.read_schema(path)
-        return True
-    except Exception:
-        return path.exists()
-
-if parquet_exists(CHANNEL_SUM_PATH):
-    existing = pl.read_parquet(CHANNEL_SUM_PATH)
-    channel_sum = pl.concat([existing, channel_df], how="vertical_relaxed")
-else:
-    channel_sum = channel_df
-
-# Write back (overwrite with appended result)
-channel_sum.write_parquet(CHANNEL_SUM_PATH)
-
-# (Optional) print equivalent of PROC PRINT DATA=CRMWH.CHANNEL_SUM;
-print("CRMWH.CHANNEL_SUM (head):")
-print(pl.read_parquet(CHANNEL_SUM_PATH).head(20))
-
-# --- BRANCH step ---
-branch_df = pl.read_parquet(BRANCH_SRC)
-
-# --- BCODE step ---
-bcode_df = pl.read_parquet(BCODE_SRC)
-
-# --- PROC SORT BY BRANCHNO (SAS requires sorted before MERGE; Polars join does not, but we'll mimic order) ---
-bcode_sorted  = bcode_df.sort("BRANCHNO")
-branch_sorted = branch_df.sort("BRANCHNO")
-
-# --- MERGE BCODE(IN=A) BRANCH(IN=B) BY BRANCHNO; IF A; fill missing TOLPROMPT/TOLUPDATE with 0 ---
-# SAS MERGE with IF A; == left join of BCODE to BRANCH (keep all BCODE rows)
-otc_detail = (
-    bcode_sorted.join(
-        branch_sorted,
-        on="BRANCHNO",
-        how="left",
-        suffix="_BR"  # in case of duplicated col names
-    )
-    .with_columns([
-        pl.col("TOLPROMPT").fill_null(0),
-        pl.col("TOLUPDATE").fill_null(0),
-    ])
+# --- DATA SUM: read from Parquet with required columns only ---
+SUM = (
+    pl.read_parquet(CHANNEL_PARQUET)
+      .select(["ATM", "EBK", "OTC", "TOTAL", "REPORT_DATE"])
 )
 
-# Output name: CRMWH.OTC_DETAIL_&REPTMON&REPTYEAR;  e.g., OTC_DETAIL_0925
-otc_name = f"OTC_DETAIL_{REPTMON}{REPTYEAR}"
-otc_path = CRMWH_DIR / f"{otc_name}.parquet"
-otc_detail.write_parquet(otc_path)
+# --- DATA UAT(KEEP=DESC ATM EBK OTC TOTAL DATE) with SAS _N_ logic ---
+UAT = (
+    SUM
+    .with_row_count(name="_N_", offset=1)  # mimic SAS _N_ starting at 1
+    .with_columns(
+        pl.when(pl.col("_N_") == 1).then(pl.lit("TOTAL PROMPT BASE"))
+         .when(pl.col("_N_") == 2).then(pl.lit("TOTAL UPDATED"))
+         .otherwise(pl.lit(None))
+         .alias("LINE")
+    )
+    .select(["LINE", "ATM", "EBK", "OTC", "TOTAL", "REPORT_DATE"])  # KEEP/order same as SAS
+)
 
-# --- DuckDB touch (optional, to satisfy environment & allow quick SQL checks) ---
-con = duckdb.connect(database=':memory:')
-con.register('CHANNEL_SUM', channel_sum.to_arrow())
-# Example quick sanity check query (not modifying files):
-_ = con.execute("""
-    SELECT CHANNEL, SUM(TOLPROMPT) AS SUM_PROMPT, SUM(TOLUPDATE) AS SUM_UPDATE
-    FROM CHANNEL_SUM
-    GROUP BY CHANNEL
-    ORDER BY CHANNEL
-""").fetchdf()
-print("DuckDB sanity check (CHANNEL_SUM grouped):")
-print(_)
+# --- PROC SQL SELECT (no-op) executed via DuckDB for fidelity ---
+con = duckdb.connect()
+con.register("UAT", UAT.to_arrow())
+UAT_SQL = pl.from_arrow(
+    con.execute("""
+        SELECT LINE, ATM, EBK, OTC, TOTAL, REPORT_DATE
+        FROM UAT
+    """).arrow()
+)
+
+# --- PROC APPEND DATA=UAT BASE=CHN.CHANNEL_UPDATE FORCE ---
+if CHN_CHANNEL_UPDATE.exists():
+    existing = pl.read_parquet(CHN_CHANNEL_UPDATE).select(UAT_SQL.columns)
+    combined = pl.concat([existing, UAT_SQL], how="vertical_relaxed")
+else:
+    combined = UAT_SQL
+
+combined.write_parquet(CHN_CHANNEL_UPDATE)
+
+# - PROC CPORT step removed intentionally (not needed in Parquet-native pipeline).
+# - If you require packaging the CHN library for transfer, we can optionally zip CHN_DIR.
