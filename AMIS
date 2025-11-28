@@ -1,80 +1,126 @@
-================================================================================
-BILL PROCESSING PIPELINE
-================================================================================
-Report Date: 2025-11-26 (SAS: 24071, File: 251126)
-Previous Date: 2025-11-25 (SAS: 24070, File: 251125)
-
-================================================================================
-STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING
-================================================================================
-Report Date: 2025-11-26 (SAS: 24071, File: 251126)
-Previous Date: 2025-11-25 (SAS: 24070, File: 251125)
-Processing in chunks of 2,000,000 records
---------------------------------------------------------------------------------
-Looking for historical data:
-  LOAN_BILL: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/year=2025/month=11/day=25/LOAN_BILL.parquet - EXISTS
-  ILOAN_BILL: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/year=2025/month=11/day=25/ILOAN_BILL.parquet - EXISTS
-
-1.1: Reading ENRH_LN_BILL in chunks...
-  Total records: 97,027,080
-  Processing chunk 1...
-  Processing chunk 2...
-  Processing chunk 3...
-  Processing chunk 4...
-  Processing chunk 5...
-  Processing chunk 6...
-  Processing chunk 7...
-  Processing chunk 8...
-  Processing chunk 9...
-  Processing chunk 10...
-  Processing chunk 11...
-  Processing chunk 12...
-  Processing chunk 13...
-  Processing chunk 14...
-  Processing chunk 15...
-  Processing chunk 16...
-  Processing chunk 17...
-  Processing chunk 18...
-  Processing chunk 19...
-  Processing chunk 20...
-  Processing chunk 21...
-  Processing chunk 22...
-  Processing chunk 23...
-  Processing chunk 24...
-  Processing chunk 25...
-  Processing chunk 26...
-  Processing chunk 27...
-  Processing chunk 28...
-  Processing chunk 29...
-  Processing chunk 30...
-  Processing chunk 31...
-  Processing chunk 32...
-  Processing chunk 33...
-  Processing chunk 34...
-  Processing chunk 35...
-  Processing chunk 36...
-  Processing chunk 37...
-  Processing chunk 38...
-  Processing chunk 39...
-  Processing chunk 40...
-  Processing chunk 41...
-  Processing chunk 42...
-  Processing chunk 43...
-  Processing chunk 44...
-  Processing chunk 45...
-  Processing chunk 46...
-  Processing chunk 47...
-  Processing chunk 48...
-  Processing chunk 49...
-
-1.2: Processing chunks with SCD logic...
-  ✓ Loaded historical data from previous day
-  SCD processing chunk 1/49...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_LOAD_LN_BILL_UAT.py", line 495, in <module>
-    loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_LOAD_LN_BILL_UAT.py", line 146, in process_large_loan_bill_scd
-    chunk_result = process_scd_chunk(
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/MIS_LOAD_LN_BILL_UAT.py", line 238, in process_scd_chunk
+def process_scd_chunk(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, has_historical_data):
+    """Process SCD logic for a single chunk"""
+    
+    # Load chunk as new records - CONVERT SAS DATES TO DATE TYPE
     con.execute(f"""
-duckdb.duckdb.BinderException: Binder Error: Cannot mix values of type DOUBLE and DATE in COALESCE operator - an explicit cast is required
+        CREATE TEMP TABLE new_records AS
+        SELECT 
+            ACCTNO, NOTENO,
+            BILL_DT,
+            CASE 
+                WHEN BILL_PAID_DT IS NOT NULL THEN 
+                    CAST(BILL_PAID_DT AS DATE)
+                ELSE NULL 
+            END AS BILL_PAID_DT,
+            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+            COSTCTR, PRODUCT,
+            'Y' AS NEW
+        FROM read_parquet('{chunk_file}')
+    """)
+    
+    # Create index for faster joins
+    con.execute("""
+        CREATE INDEX idx_new_key ON new_records(ACCTNO, NOTENO, BILL_DT)
+    """)
+    
+    if has_historical_data:
+        # Optimized SCD logic with historical data - FULL FIELD COMPARISON
+        con.execute(f"""
+            CREATE TEMP TABLE scd_result AS
+            WITH matched_records AS (
+                -- MATCH: Records that exist in both with same values (ALL FIELDS)
+                SELECT 
+                    T1.ACCTNO, T1.NOTENO, T1.BILL_DT, T1.BILL_PAID_DT,
+                    T1.BILL_AMT, T1.BILL_AMT_PRIN, T1.BILL_AMT_INT, 
+                    T1.BILL_AMT_ESCROW, T1.BILL_AMT_FEE,
+                    T1.BILL_NOT_PAY_AMT, T1.BILL_NOT_PAY_AMT_PRIN, 
+                    T1.BILL_NOT_PAY_AMT_INT, T1.BILL_NOT_PAY_AMT_ESCROW, 
+                    T1.BILL_NOT_PAY_AMT_FEE,
+                    T1.COSTCTR, T1.PRODUCT, T1.VALID_FROM_DT,
+                    DATE '{REPTDATE.date()}' AS VALID_TO_DT
+                FROM loan_bill_hist T1
+                WHERE EXISTS (
+                    SELECT 1 FROM new_records T2 
+                    WHERE T1.ACCTNO = T2.ACCTNO 
+                    AND T1.NOTENO = T2.NOTENO
+                    AND T1.BILL_DT = T2.BILL_DT
+                    AND COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') = COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01')
+                    AND T1.BILL_AMT = T2.BILL_AMT
+                    AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
+                    AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
+                    AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
+                    AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
+                    AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
+                    AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
+                    AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
+                    AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
+                    AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
+                    AND T1.COSTCTR = T2.COSTCTR
+                    AND T1.PRODUCT = T2.PRODUCT
+                )
+            ),
+            new_or_changed AS (
+                -- New records or records with changes
+                SELECT 
+                    T2.ACCTNO, T2.NOTENO, T2.BILL_DT, T2.BILL_PAID_DT,
+                    T2.BILL_AMT, T2.BILL_AMT_PRIN, T2.BILL_AMT_INT, 
+                    T2.BILL_AMT_ESCROW, T2.BILL_AMT_FEE,
+                    T2.BILL_NOT_PAY_AMT, T2.BILL_NOT_PAY_AMT_PRIN, 
+                    T2.BILL_NOT_PAY_AMT_INT, T2.BILL_NOT_PAY_AMT_ESCROW, 
+                    T2.BILL_NOT_PAY_AMT_FEE,
+                    T2.COSTCTR, T2.PRODUCT,
+                    DATE '{REPTDATE.date()}' AS VALID_FROM_DT,
+                    DATE '{REPTDATE.date()}' AS VALID_TO_DT
+                FROM new_records T2
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM loan_bill_hist T1
+                    WHERE T1.ACCTNO = T2.ACCTNO 
+                    AND T1.NOTENO = T2.NOTENO
+                    AND T1.BILL_DT = T2.BILL_DT
+                    AND COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') = COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01')
+                    AND T1.BILL_AMT = T2.BILL_AMT
+                    AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
+                    AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
+                    AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
+                    AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
+                    AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
+                    AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
+                    AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
+                    AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
+                    AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
+                    AND T1.COSTCTR = T2.COSTCTR
+                    AND T1.PRODUCT = T2.PRODUCT
+                )
+            )
+            SELECT * FROM matched_records
+            UNION ALL
+            SELECT * FROM new_or_changed
+        """)
+    else:
+        # No historical data - all records are new
+        con.execute(f"""
+            CREATE TEMP TABLE scd_result AS
+            SELECT 
+                ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+                BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, 
+                BILL_AMT_ESCROW, BILL_AMT_FEE,
+                BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, 
+                BILL_NOT_PAY_AMT_INT, BILL_NOT_PAY_AMT_ESCROW, 
+                BILL_NOT_PAY_AMT_FEE,
+                COSTCTR, PRODUCT,
+                DATE '{REPTDATE.date()}' AS VALID_FROM_DT,
+                DATE '{REPTDATE.date()}' AS VALID_TO_DT
+            FROM new_records
+        """)
+    
+    # Save chunk result
+    chunk_output = temp_path / f"scd_result_{chunk_id}.parquet"
+    con.execute(f"COPY scd_result TO '{chunk_output}' (FORMAT PARQUET)")
+    
+    # Cleanup
+    con.execute("DROP TABLE new_records")
+    con.execute("DROP TABLE scd_result")
+    
+    return chunk_output
