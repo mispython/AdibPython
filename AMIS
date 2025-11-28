@@ -1,193 +1,88 @@
-import polars as pl
-import duckdb
-from datetime import datetime, timedelta
-from pathlib import Path
-import pyarrow as pa
-import pyarrow.parquet as pq
-
-# --- Paths ---
-BASE_INPUT_PATH  = Path("/host/cis/parquet/")  
-BASE_OUTPUT_PATH = Path("/pythonITD/mis_dev/OUTPUT/") 
-BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
-
-# Source files
-ALL_SUMMARY_SRC = BASE_INPUT_PATH / "year=2025/month=11/day=27/CIPHONET_ALL_SUMMARY.parquet"   # CHANNEL level data
-OTC_SUMMARY_SRC = BASE_INPUT_PATH / "year=2025/month=11/day=27/CIPHONET_OTC_SUMMARY.parquet"    # BRANCH level data  
-BCODE_SRC       = BASE_INPUT_PATH / "sas_parquet/PBBBRCH.parquet"                              # Branch codes
-
-# CRMWH library targets
-CRMWH_DIR = BASE_OUTPUT_PATH / "CRMWH"
-CRMWH_DIR.mkdir(parents=True, exist_ok=True)
-CHANNEL_SUM_PATH = CRMWH_DIR / "CHANNEL_SUM.parquet"
-
-# --- SAS Date Format Calculations ---
-SAS_ORIGIN = datetime(1960, 1, 1).date()
-REPTDATE = datetime.today().date() - timedelta(days=1)
-PREVDATE = REPTDATE - timedelta(days=1)
-RDATE = (REPTDATE - SAS_ORIGIN).days
-
-# --- Formatted date variables (matching SAS SYMPUT) ---
-REPTYEAR = f"{REPTDATE.year % 100:02d}"          # YEAR2.
-REPTMON  = f"{REPTDATE.month:02d}"               # Z2.
-REPTDAY  = f"{REPTDATE.day:02d}"                 # Z2.
-REPTDATE_STR = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year % 100:02d}"  # DDMMYY8.
-
-print(f"REPTDATE: {REPTDATE}")
-print(f"PREVDATE: {PREVDATE}")
-print(f"RDATE (SAS date format): {RDATE}")
-print(f"REPTDATE_STR: {REPTDATE_STR}")
-
-# --- CHANNEL step (1:1 SAS migration) ---
-# SAS: DATA CHANNEL; INFILE CHANNEL; INPUT @001 CHANNEL $UPCASE5. @006 TOLPROMPT 8. @014 TOLUPDATE 8.;
-channel_df = (
-    pl.read_parquet(ALL_SUMMARY_SRC)
-    .with_columns([
-        # Convert CHANNEL to uppercase (matching $UPCASE5.)
-        pl.col("CHANNEL").str.to_uppercase(),
-        # SAS: REPTDATE=TODAY()-2
-        pl.lit(PREVDATE).alias("REPTDATE"),
-    ])
-    .with_columns([
-        # SAS: MONTH=PUT(REPTDATE,MONYY5.)
-        pl.col("REPTDATE").map_elements(
-            lambda d: d.strftime("%b%y").upper(),
-            return_dtype=pl.Utf8,
-        ).alias("MONTH")
-    ])
-    .drop("REPTDATE")
-    # Rename to match SAS variable names - FIXED COLUMN NAMES
-    .rename({
-        "PROMPT": "TOLPROMPT",
-        "UPDATED": "TOLUPDATE"
-    })
-    # Select only the final columns to ensure consistent schema
-    .select(["CHANNEL", "TOLPROMPT", "TOLUPDATE", "MONTH"])
-)
-
-print("CHANNEL (head):")
-print(channel_df.head(20))
-print("CHANNEL schema:")
-print(channel_df.schema)
-
-# --- PROC APPEND DATA=CHANNEL BASE=CRMWH.CHANNEL_SUM FORCE ---
-def parquet_exists(path: Path) -> bool:
-    try:
-        pq.read_schema(path)
-        return True
-    except Exception:
-        return path.exists()
-
-if parquet_exists(CHANNEL_SUM_PATH):
-    existing = pl.read_parquet(CHANNEL_SUM_PATH)
-    print("Existing CHANNEL_SUM schema:")
-    print(existing.schema)
-    
-    # Ensure both DataFrames have the same column names and types
-    # Rename columns in existing data if they don't match
-    if "PROMPT" in existing.columns and "TOLPROMPT" not in existing.columns:
-        existing = existing.rename({"PROMPT": "TOLPROMPT"})
-    if "UPDATED" in existing.columns and "TOLUPDATE" not in existing.columns:
-        existing = existing.rename({"UPDATED": "TOLUPDATE"})
-    
-    # FORCE option - append regardless of column type differences
-    channel_sum = pl.concat([existing, channel_df], how="vertical_relaxed")
-else:
-    channel_sum = channel_df
-
-# Ensure final schema consistency
-channel_sum = channel_sum.select(["CHANNEL", "TOLPROMPT", "TOLUPDATE", "MONTH"])
-
-channel_sum.write_parquet(CHANNEL_SUM_PATH)
-print("CRMWH.CHANNEL_SUM (head):")
-print(pl.read_parquet(CHANNEL_SUM_PATH).head(20))
-print("CRMWH.CHANNEL_SUM schema:")
-print(pl.read_parquet(CHANNEL_SUM_PATH).schema)
-
-# --- BRANCH step (1:1 SAS migration) ---
-# SAS: DATA BRANCH; INFILE BRANCH; INPUT @001 BRANCHNO 5. @006 TOLPROMPT 8. @014 TOLUPDATE 8.;
-branch_source = pl.read_parquet(OTC_SUMMARY_SRC)
-
-print("BRANCH source data structure:")
-print(branch_source.head())
-print("BRANCH source columns:", branch_source.columns)
-
-# Transform OTC summary to match SAS BRANCH structure
-# For OTC data, we need to map to actual branch numbers
-branch_df = (
-    branch_source
-    .filter(pl.col("CHANNEL") == "OTC")  # Keep only OTC records
-    .with_columns([
-        # Convert CHANNEL to BRANCHNO - YOU NEED TO ADJUST THIS LOGIC
-        # This is a placeholder - replace with your actual branch mapping
-        pl.lit(999).cast(pl.Int64).alias("BRANCHNO")  # Use actual branch number
-    ])
-    .rename({
-        "PROMPT": "TOLPROMPT",
-        "UPDATED": "TOLUPDATE"
-    })
-    .select(["BRANCHNO", "TOLPROMPT", "TOLUPDATE"])  # Keep only needed columns
-)
-
-print("BRANCH (after transformation):")
-print(branch_df.head())
-
-# --- BCODE step (1:1 SAS migration) ---
-# SAS: DATA BCODE; INFILE BCODE; INPUT @002 BRANCHNO 3.;
-bcode_df = pl.read_parquet(BCODE_SRC)
-print("BCODE (head):")
-print(bcode_df.head())
-print("BCODE schema:")
-print(bcode_df.schema)
-
-# --- PROC SORT (1:1 SAS migration) ---
-# SAS: PROC SORT DATA=BCODE; BY BRANCHNO; RUN;
-# SAS: PROC SORT DATA=BRANCH; BY BRANCHNO; RUN;
-bcode_sorted = bcode_df.sort("BRANCHNO")
-branch_sorted = branch_df.sort("BRANCHNO")
-
-# --- MERGE (1:1 SAS migration) ---
-# SAS: DATA CRMWH.OTC_DETAIL_&REPTMON&REPTYEAR;
-#      MERGE BCODE(IN=A) BRANCH(IN=B); BY BRANCHNO;
-#      IF TOLPROMPT=. THEN DO TOLPROMPT=0; END;
-#      IF TOLUPDATE=. THEN DO TOLUPDATE=0; END;
-#      IF A;
-#      RUN;
-otc_detail = (
+PREVDATE: 2025-11-26
+RDATE (SAS date format): 24072
+REPTDATE_STR: 271125
+CHANNEL (head):
+shape: (3, 4)
+┌─────────┬───────────┬───────────┬───────┐
+│ CHANNEL ┆ TOLPROMPT ┆ TOLUPDATE ┆ MONTH │
+│ ---     ┆ ---       ┆ ---       ┆ ---   │
+│ str     ┆ i64       ┆ i64       ┆ str   │
+╞═════════╪═══════════╪═══════════╪═══════╡
+│ ATM     ┆ 0         ┆ 0         ┆ NOV25 │
+│ EBK     ┆ 4         ┆ 0         ┆ NOV25 │
+│ OTC     ┆ 0         ┆ 0         ┆ NOV25 │
+└─────────┴───────────┴───────────┴───────┘
+CHANNEL schema:
+Schema([('CHANNEL', String), ('TOLPROMPT', Int64), ('TOLUPDATE', Int64), ('MONTH', String)])
+Existing CHANNEL_SUM schema:
+Schema([('CHANNEL', String), ('PROMPT', Float64), ('UPDATED', Float64), ('MONTH', String)])
+CRMWH.CHANNEL_SUM (head):
+shape: (20, 4)
+┌─────────┬───────────┬───────────┬───────┐
+│ CHANNEL ┆ TOLPROMPT ┆ TOLUPDATE ┆ MONTH │
+│ ---     ┆ ---       ┆ ---       ┆ ---   │
+│ str     ┆ f64       ┆ f64       ┆ str   │
+╞═════════╪═══════════╪═══════════╪═══════╡
+│ ATM     ┆ 0.0       ┆ 0.0       ┆ NOV25 │
+│ EBK     ┆ 4.0       ┆ 0.0       ┆ NOV25 │
+│ OTC     ┆ 0.0       ┆ 0.0       ┆ NOV25 │
+│ ATM     ┆ 0.0       ┆ 0.0       ┆ NOV25 │
+│ EBK     ┆ 4.0       ┆ 0.0       ┆ NOV25 │
+│ …       ┆ …         ┆ …         ┆ …     │
+│ ATM     ┆ 0.0       ┆ 0.0       ┆ NOV25 │
+│ EBK     ┆ 4.0       ┆ 0.0       ┆ NOV25 │
+│ OTC     ┆ 0.0       ┆ 0.0       ┆ NOV25 │
+│ ATM     ┆ 0.0       ┆ 0.0       ┆ NOV25 │
+│ EBK     ┆ 4.0       ┆ 0.0       ┆ NOV25 │
+└─────────┴───────────┴───────────┴───────┘
+CRMWH.CHANNEL_SUM schema:
+Schema([('CHANNEL', String), ('TOLPROMPT', Float64), ('TOLUPDATE', Float64), ('MONTH', String)])
+BRANCH source data structure:
+shape: (0, 3)
+┌─────────┬────────┬─────────┐
+│ CHANNEL ┆ PROMPT ┆ UPDATED │
+│ ---     ┆ ---    ┆ ---     │
+│ str     ┆ i64    ┆ i64     │
+╞═════════╪════════╪═════════╡
+└─────────┴────────┴─────────┘
+BRANCH source columns: ['CHANNEL', 'PROMPT', 'UPDATED']
+BRANCH (after transformation):
+shape: (0, 3)
+┌──────────┬───────────┬───────────┐
+│ BRANCHNO ┆ TOLPROMPT ┆ TOLUPDATE │
+│ ---      ┆ ---       ┆ ---       │
+│ i64      ┆ i64       ┆ i64       │
+╞══════════╪═══════════╪═══════════╡
+└──────────┴───────────┴───────────┘
+BCODE (head):
+shape: (5, 6)
+┌───────┬──────────┬────────────┬───────────────────────┬───────┬───────┐
+│ CODE1 ┆ BRANCHNO ┆ ACCTBRABBR ┆ BRANCHNAME            ┆ CODE2 ┆ CODE3 │
+│ ---   ┆ ---      ┆ ---        ┆ ---                   ┆ ---   ┆ ---   │
+│ str   ┆ str      ┆ str        ┆ str                   ┆ str   ┆ str   │
+╞═══════╪══════════╪════════════╪═══════════════════════╪═══════╪═══════╡
+│ B     ┆ 001      ┆ PCS        ┆ BANK-ATMC             ┆ null  ┆ C     │
+│ B     ┆ 002      ┆ JSS        ┆ JALAN SULTAN SULAIMAN ┆ W     ┆ O     │
+│ B     ┆ 003      ┆ JRC        ┆ JALAN RAJA CHULAN     ┆ W     ┆ O     │
+│ B     ┆ 004      ┆ MLK        ┆ MELAKA                ┆ M     ┆ O     │
+│ B     ┆ 005      ┆ IMO        ┆ IPOH MAIN OFFICE      ┆ A     ┆ O     │
+└───────┴──────────┴────────────┴───────────────────────┴───────┴───────┘
+BCODE schema:
+Schema([('CODE1', String), ('BRANCHNO', String), ('ACCTBRABBR', String), ('BRANCHNAME', String), ('CODE2', String), ('CODE3', String)])
+Traceback (most recent call last):
+  File "/pythonITD/mis_dev/sas_migration/EIBMCHNL_UAT.py", line 156, in <module>
     bcode_sorted.join(
-        branch_sorted,
-        on="BRANCHNO",
-        how="left"  # This matches "IF A" - keep all BCODE rows
-    )
-    .with_columns([
-        # SAS: IF TOLPROMPT=. THEN DO TOLPROMPT=0; END;
-        pl.col("TOLPROMPT").fill_null(0),
-        # SAS: IF TOLUPDATE=. THEN DO TOLUPDATE=0; END;
-        pl.col("TOLUPDATE").fill_null(0),
-    ])
-)
-
-print("OTC_DETAIL (after merge):")
-print(otc_detail.head())
-print(f"OTC_DETAIL shape: {otc_detail.shape}")
-
-# Output name: CRMWH.OTC_DETAIL_&REPTMON&REPTYEAR;
-otc_name = f"OTC_DETAIL_{REPTMON}{REPTYEAR}"
-otc_path = CRMWH_DIR / f"{otc_name}.parquet"
-otc_detail.write_parquet(otc_path)
-print(f"OTC detail written to: {otc_path}")
-
-# --- DuckDB sanity check ---
-con = duckdb.connect(database=':memory:')
-con.register('CHANNEL_SUM', channel_sum.to_arrow())
-result = con.execute("""
-    SELECT CHANNEL, SUM(TOLPROMPT) AS SUM_PROMPT, SUM(TOLUPDATE) AS SUM_UPDATE
-    FROM CHANNEL_SUM
-    GROUP BY CHANNEL
-    ORDER BY CHANNEL
-""").fetchdf()
-print("DuckDB sanity check (CHANNEL_SUM grouped):")
-print(result)
-
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 7927, in join
+    self.lazy()
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 330, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2335, in collect
+    return wrap_df(ldf.collect(engine, callback))
+polars.exceptions.SchemaError: datatypes of join keys don't match - `BRANCHNO`: str on left does not match `BRANCHNO`: i64 on right
 
 
 
