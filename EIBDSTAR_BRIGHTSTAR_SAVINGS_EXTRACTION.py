@@ -1,97 +1,26 @@
-import polars as pl
-import duckdb
-from pathlib import Path
-from datetime import datetime
+BANKNO	FMTCODE	BRANCH	ACCTNO	NAME	TAXNO	DEBIT	CREDIT	CLOSEDT	REOPENDT	CUSTCODE	ORGCODE	ORGTYPE	INTYTD	FEEPD	PURPOSE	SECTOR	USER2	USER3	RISKCODE	LEDGBAL	OPENIND	STATCD	LASTTRAN	CHGIND	AVGAMT	PRODUCT	RACE	DEPTYPE	INT1	INTPD	INTPLAN	CURBAL	CHQFLOAT	MTDLOWBA	BENINTPD	STATE	INTCYCODE	CURCODE	PBIND	INTRATE	YTDAVAMT	BDATE	INACTIVE	SECOND	ODXSAMT	BONUTYPE	SERVICE	BONUSANO	USER5	TRACKCD	EXODDATE	TEMPODDT	SCHIND	PREVBRNO	AVGBAL	COSTCTR	POST_IND	INTRSTPD	MTDAVBAL	DTLSTCUST	INTPDPYR	OPENDT	PRIN_ACCT	CASH_DEPOSIT_LIMIT_IND	NXT_STMT_CYCLE_DT	STMT_CYCLE	AC_OPEN_STATUS_CD	DNBFISME	DPMTDBAL	INTPAYBL	OPENMH	CLOSEMH	ACCYTD	MAILCODE	CONVDT	PSREASON	INSTRUCTIONS	POST_IND_MAINT_DT	POST_IND_EXP_DT	SSADATE
 
-# Configuration
-REPORT_DATE = "11272024"  # MMDDYYYY format - change this as needed
+Traceback (most recent call last):
+  File "/pythonITD/mis_dev/sas_migration/BRIGHTSTAR/EIBDSTAR_BRIGHTSTAR_SAVINGS_EXTRACTION.py", line 19, in <module>
+    deposit = pl.read_csv(deposit_saving_path)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/io/csv/functions.py", line 549, in read_csv
+    df = _read_csv_impl(
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/io/csv/functions.py", line 697, in _read_csv_impl
+    pydf = PyDataFrame.read_csv(
+polars.exceptions.ComputeError: could not parse `6.01884E15` as dtype `i64` at column 'BONUSANO' (column number 49)
 
-# File paths
-deposit_saving_path = Path("deposit_saving.csv")
-cis_custdly_path = Path("cis_custdly.parquet")
-output_path = Path("bstar_output.parquet")
+The current offset in the file is 900 bytes.
 
-# Convert report date to SAS date format
-reptdate = datetime.strptime(REPORT_DATE, '%m%d%Y')
-reptdte = (reptdate - datetime(1960, 1, 1)).days  # SAS date format
+You might want to try:
+- increasing `infer_schema_length` (e.g. `infer_schema_length=10000`),
+- specifying correct dtype with the `schema_overrides` argument
+- setting `ignore_errors` to `True`,
+- adding `6.01884E15` to the `null_values` list.
 
-# Read and filter deposit saving data
-deposit = pl.read_csv(deposit_saving_path)
-
-bright = (deposit
-    .filter(pl.col('PRODUCT') == 208)
-    .filter(pl.col('OPENDT') > 0)
-    .with_columns([
-        pl.col('OPENDT').cast(pl.Utf8).str.zfill(11).alias('OPENDT_STR')
-    ])
-    .with_columns([
-        pl.col('OPENDT_STR').str.slice(2, 2).alias('OPENDD'),
-        pl.col('OPENDT_STR').str.slice(0, 2).alias('OPENMM'),
-        pl.col('OPENDT_STR').str.slice(4, 4).alias('OPENYY')
-    ])
-    .with_columns([
-        (pl.datetime(
-            pl.col('OPENYY').cast(pl.Int32),
-            pl.col('OPENMM').cast(pl.Int32),
-            pl.col('OPENDD').cast(pl.Int32)
-        ) - datetime(1960, 1, 1)).dt.total_days().alias('OPENDT_SAS')
-    ])
-    .filter(pl.col('OPENDT_SAS') == reptdte)
-    .select(['BRANCH', 'ACCTNO', 'OPENDT_SAS', 'CURBAL', 'OPENIND'])
-    .rename({'OPENDT_SAS': 'OPENDT'})
-    .sort('ACCTNO')
-)
-
-# Read and process CIS customer data
-cis_raw = pl.read_parquet(cis_custdly_path)
-
-cis = (cis_raw
-    .filter(pl.col('CUSTOPENDATE') > 0)
-    .with_columns([
-        pl.col('CUSTOPENDATE').cast(pl.Utf8).str.zfill(11).alias('CUSTDT_STR')
-    ])
-    .with_columns([
-        pl.col('CUSTDT_STR').str.slice(2, 2).alias('CUSTDD'),
-        pl.col('CUSTDT_STR').str.slice(0, 2).alias('CUSTMM'),
-        pl.col('CUSTDT_STR').str.slice(4, 4).alias('CUSTYY')
-    ])
-    .with_columns([
-        (pl.datetime(
-            pl.col('CUSTYY').cast(pl.Int32),
-            pl.col('CUSTMM').cast(pl.Int32),
-            pl.col('CUSTDD').cast(pl.Int32)
-        ) - datetime(1960, 1, 1)).dt.total_days().alias('CUSTOPDT')
-    ])
-    .with_columns([
-        pl.when(pl.col('PRISEC') == 901)
-        .then(pl.lit('N'))
-        .otherwise(pl.lit('Y'))
-        .alias('JOINT')
-    ])
-    .select(['ACCTNO', 'CUSTNAME', 'JOINT', 'ALIASKEY', 'ALIAS', 'CUSTOPDT'])
-    .sort('ACCTNO')
-)
-
-# Merge datasets
-merged = bright.join(cis, on='ACCTNO', how='inner')
-
-# Final output with renamed columns
-final = (merged
-    .rename({
-        'ALIASKEY': 'PM_SC',
-        'ALIAS': 'NEWIC'
-    })
-    .select([
-        'BRANCH', 'ACCTNO', 'NEWIC', 'JOINT', 'CUSTNAME',
-        'OPENDT', 'OPENIND', 'CUSTOPDT', 'CURBAL'
-    ])
-    .sort('ACCTNO')
-)
-
-# Write to parquet
-final.write_parquet(output_path)
-
-print(f"Processing complete. Output saved to {output_path}")
-print(f"Records processed: {len(final)}")
-print("\nSample output:")
-print(final.head())
+Original error: ```remaining bytes non-empty```
