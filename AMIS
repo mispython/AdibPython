@@ -55,8 +55,8 @@ def process_large_loan_bill_scd(
     input_iln_bill = prev_dir / f"ILOAN_BILL.parquet"
     
     print(f"Looking for historical data:")
-    print(f"  LOAN_BILL: {input_ln_bill.name} - {'EXISTS' if input_ln_bill.exists() else 'NOT FOUND'}")
-    print(f"  ILOAN_BILL: {input_iln_bill.name} - {'EXISTS' if input_iln_bill.exists() else 'NOT FOUND'}")
+    print(f"  LOAN_BILL: {input_ln_bill} - {'EXISTS' if input_ln_bill.exists() else 'NOT FOUND'}")
+    print(f"  ILOAN_BILL: {input_iln_bill} - {'EXISTS' if input_iln_bill.exists() else 'NOT FOUND'}")
     
     # Create temporary directory for chunk processing
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -238,11 +238,11 @@ def process_scd_chunk(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, 
     """)
     
     if has_historical_data:
-        # Optimized SCD logic with historical data
+        # Optimized SCD logic with historical data - FULL FIELD COMPARISON
         con.execute(f"""
             CREATE TEMP TABLE scd_result AS
             WITH matched_records AS (
-                -- MATCH: Records that exist in both with same values
+                -- MATCH: Records that exist in both with same values (ALL FIELDS)
                 SELECT 
                     T1.ACCTNO, T1.NOTENO, T1.BILL_DT, T1.BILL_PAID_DT,
                     T1.BILL_AMT, T1.BILL_AMT_PRIN, T1.BILL_AMT_INT, 
@@ -258,8 +258,20 @@ def process_scd_chunk(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, 
                     WHERE T1.ACCTNO = T2.ACCTNO 
                     AND T1.NOTENO = T2.NOTENO
                     AND T1.BILL_DT = T2.BILL_DT
-                    AND COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') = COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01')
+                    AND CAST(COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') AS DATE) = 
+                        CAST(COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01') AS DATE)
                     AND T1.BILL_AMT = T2.BILL_AMT
+                    AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
+                    AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
+                    AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
+                    AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
+                    AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
+                    AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
+                    AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
+                    AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
+                    AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
+                    AND T1.COSTCTR = T2.COSTCTR
+                    AND T1.PRODUCT = T2.PRODUCT
                 )
             ),
             new_or_changed AS (
@@ -280,8 +292,20 @@ def process_scd_chunk(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, 
                     WHERE T1.ACCTNO = T2.ACCTNO 
                     AND T1.NOTENO = T2.NOTENO
                     AND T1.BILL_DT = T2.BILL_DT
-                    AND COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') = COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01')
+                    AND CAST(COALESCE(T1.BILL_PAID_DT, DATE '1900-01-01') AS DATE) = 
+                        CAST(COALESCE(T2.BILL_PAID_DT, DATE '1900-01-01') AS DATE)
                     AND T1.BILL_AMT = T2.BILL_AMT
+                    AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
+                    AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
+                    AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
+                    AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
+                    AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
+                    AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
+                    AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
+                    AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
+                    AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
+                    AND T1.COSTCTR = T2.COSTCTR
+                    AND T1.PRODUCT = T2.PRODUCT
                 )
             )
             SELECT * FROM matched_records
@@ -316,6 +340,7 @@ def process_scd_chunk(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, 
     return chunk_output
 
 def save_final_results(con, output_dir, date_str):
+    """Save the final LN_BILL and ILOAN_BILL files"""
     
     con.execute("""
         CREATE TEMP TABLE ln_bill_output AS
@@ -341,7 +366,7 @@ def save_final_results(con, output_dir, date_str):
         WHERE ENTITY_CD = 'PIBB'
     """)
     
-    # Save with yymmdd format in filenames
+    # Save without date suffix in filename
     ln_bill_path = output_dir / f"LOAN_BILL.parquet"
     iln_bill_path = output_dir / f"ILOAN_BILL.parquet"
     
@@ -401,7 +426,7 @@ def process_hp_bill_extraction(
     hp_count = con.execute("SELECT COUNT(*) FROM hp_bill").fetchone()[0]
     print(f"  Filtered {hp_count:,} HP records")
     
-    # Save HP_BILL with yymmdd format
+    # Save HP_BILL without date suffix
     hp_bill_path = output_dir / f"HP_BILL.parquet"
     con.execute(f"COPY hp_bill TO '{hp_bill_path}' (FORMAT PARQUET)")
     hp_size = hp_bill_path.stat().st_size / (1024 * 1024)
@@ -430,7 +455,7 @@ def process_hp_bill_extraction(
     ihp_count = con.execute("SELECT COUNT(*) FROM ihp_bill").fetchone()[0]
     print(f"  Filtered {ihp_count:,} IHP records")
     
-    # Save IHP_BILL with yymmdd format
+    # Save IHP_BILL without date suffix
     ihp_bill_path = output_dir / f"IHP_BILL.parquet"
     con.execute(f"COPY ihp_bill TO '{ihp_bill_path}' (FORMAT PARQUET)")
     ihp_size = ihp_bill_path.stat().st_size / (1024 * 1024)
@@ -487,7 +512,6 @@ if __name__ == "__main__":
     process_hp_bill_extraction(
         loan_bill_path=loan_bill_path,
         iloan_bill_path=iloan_bill_path,
-        prev_dir=prev_dir,
         output_dir=output_dir,
         report_date=REPTDATE
     )
