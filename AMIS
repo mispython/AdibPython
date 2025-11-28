@@ -117,3 +117,59 @@ _ = con.execute("""
 """).fetchdf()
 print("DuckDB sanity check (CHANNEL_SUM grouped):")
 print(_)
+
+
+
+
+
+
+
+
+
+
+REPTDATE: 2025-11-27
+PREVDATE: 2025-11-26
+RDATE (SAS date format): 24072
+REPTDATE_STR: 27/11/25
+CHANNEL (head):
+shape: (3, 4)
+┌─────────┬────────┬─────────┬───────┐
+│ CHANNEL ┆ PROMPT ┆ UPDATED ┆ MONTH │
+│ ---     ┆ ---    ┆ ---     ┆ ---   │
+│ str     ┆ i64    ┆ i64     ┆ str   │
+╞═════════╪════════╪═════════╪═══════╡
+│ ATM     ┆ 0      ┆ 0       ┆ NOV25 │
+│ EBK     ┆ 4      ┆ 0       ┆ NOV25 │
+│ OTC     ┆ 0      ┆ 0       ┆ NOV25 │
+└─────────┴────────┴─────────┴───────┘
+CRMWH.CHANNEL_SUM (head):
+shape: (20, 4)
+┌─────────┬────────┬─────────┬───────┐
+│ CHANNEL ┆ PROMPT ┆ UPDATED ┆ MONTH │
+│ ---     ┆ ---    ┆ ---     ┆ ---   │
+│ str     ┆ f64    ┆ f64     ┆ str   │
+╞═════════╪════════╪═════════╪═══════╡
+│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
+│ OTC     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
+│ …       ┆ …      ┆ …       ┆ …     │
+│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
+│ OTC     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ ATM     ┆ 0.0    ┆ 0.0     ┆ NOV25 │
+│ EBK     ┆ 4.0    ┆ 0.0     ┆ NOV25 │
+└─────────┴────────┴─────────┴───────┘
+Traceback (most recent call last):
+  File "/pythonITD/mis_dev/sas_migration/EIBMCHNL_UAT.py", line 86, in <module>
+    branch_sorted = branch_df.sort("BRANCHNO")
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 5722, in sort
+    self.lazy()
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 330, in wrapper
+    return function(*args, **kwargs)
+  File "/pythonITD/mis_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2335, in collect
+    return wrap_df(ldf.collect(engine, callback))
+polars.exceptions.ColumnNotFoundError: unable to find column "BRANCHNO"; valid columns: ["CHANNEL", "PROMPT", "UPDATED"]
