@@ -1,35 +1,8 @@
-Extracted TBDATE from RPVBDATA.txt: 20250401
-Raw data shape: (776, 14)
-Raw data columns: ['MNIACTNO', 'BRANCHNO', 'NAME', 'ACCTSTA', 'PRSTCOND', 'REGCARD', 'IGNTKEY', 'ACCTWOFF', 'MODEREPO', 'REPOSTAT', 'MODEDISP', 'YY1', 'MM1', 'DD1']
-REPTDATE: 2025-03-31
-PREVDATE: 2025-02-28
-REPTDT: 0325
-PREVDT: 0225
-SRSDATE (same as REPTDATE): 2025-03-31
-SRSTDT (same as REPTDT): 0325
-SAS_SRSDATE: 23831
-✓ Date validation passed - REPTDT matches SRSTDT
-RPVB1 data:
-shape: (5, 12)
-┌────────────┬──────────┬───────────────────────────┬─────────┬───┬──────────┬──────────┬──────────┬────────────┐
-│ MNIACTNO   ┆ BRANCHNO ┆ NAME                      ┆ ACCTSTA ┆ … ┆ MODEREPO ┆ REPOSTAT ┆ MODEDISP ┆ DATEWOFF   │
-│ ---        ┆ ---      ┆ ---                       ┆ ---     ┆   ┆ ---      ┆ ---      ┆ ---      ┆ ---        │
-│ str        ┆ str      ┆ str                       ┆ str     ┆   ┆ str      ┆ str      ┆ str      ┆ date       │
-╞════════════╪══════════╪═══════════════════════════╪═════════╪═══╪══════════╪══════════╪══════════╪════════════╡
-│ 8042194628 ┆ 90010    ┆ 36 FROZEN MART SDN. BHD.  ┆ R       ┆ … ┆ 20250326 ┆ 750.00   ┆ 5SNE     ┆ null       │
-│ 8042229447 ┆ 90010    ┆ ABD RAZAK BIN MD NOOR     ┆ R       ┆ … ┆ 0        ┆ N        ┆ R        ┆ 2025-03-10 │
-│ 8785972221 ┆ 90010    ┆ ABDUL HANIS BIN DAUD R    ┆ 128     ┆ … ┆ N        ┆ R        ┆ 20250311 ┆ null       │
-│ 8766333414 ┆ 90010    ┆ ABDUL HISYAM BIN MUBIN R  ┆ 128     ┆ … ┆ 750.00   ┆ 5SNE     ┆ 0.00     ┆ null       │
-│ 8650989531 ┆ 90010    ┆ ABDUL JABBAR BIN ZAINAL D ┆ 700     ┆ … ┆ N        ┆ R        ┆ 20250213 ┆ null       │
-└────────────┴──────────┴───────────────────────────┴─────────┴───┴──────────┴──────────┴──────────┴────────────┘
-RPVB2 records: 139
-RPVB3 records: 79
-No previous REPO data found or error loading: No such file or directory (os error 2): /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/REPO/REPS_0225.parquet
-
-This error occurred with the following context stack:
-        [1] 'parquet scan'
-        [2] 'sink'
-
-Saved REPO data: 79 records to /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/REPO/REPS_0325.parquet
-Saved REPOWH data: 79 records to /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output/REPOWH/REPS_0325.parquet
-Processing completed successfully!
+Traceback (most recent call last):
+  File "/sas/pythonITD/mis/job/LOAN/MIS_LOAD_LN_BILL.py", line 474, in <module>
+    loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
+  File "/sas/pythonITD/mis/job/LOAN/MIS_LOAD_LN_BILL.py", line 150, in process_large_loan_bill_scd
+    chunk_result = process_scd_chunk(
+  File "/sas/pythonITD/mis/job/LOAN/MIS_LOAD_LN_BILL.py", line 242, in process_scd_chunk
+    con.execute(f"""
+_duckdb.BinderException: Binder Error: Cannot mix values of type DOUBLE and DATE in COALESCE operator - an explicit cast is required
