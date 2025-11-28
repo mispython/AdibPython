@@ -1,138 +1,45 @@
-import polars as pl
-import duckdb
-from datetime import datetime, timedelta
-from pathlib import Path
-import pyarrow as pa
-import pyarrow.parquet as pq
+DATA REPTDATE;
+   REPTDATE=TODAY()-1;
+   CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR2.));
+   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
+   CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
+   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
+RUN;
 
-# --- Paths ---
-BASE_INPUT_PATH  = Path("/host/cis/parquet/")  
-BASE_OUTPUT_PATH = Path("/pythonITD/mis_dev/OUTPUT/") 
-BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+DATA CHANNEL(DROP=REPTDATE);
+   INFILE CHANNEL FIRSTOBS=1;
+   INPUT @001  CHANNEL    $UPCASE5.      /* CHANNEL                */
+         @006  TOLPROMPT         8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE         8.      /* TOTAL UPDATED          */
+         ;
+         REPTDATE=TODAY()-2;
+         MONTH=PUT(REPTDATE,MONYY5.);
+RUN;
+PROC PRINT DATA=CHANNEL;RUN;
 
-# Source "tables" corresponding to SAS INFILE targets (now Parquet)
-CHANNEL_SRC = BASE_INPUT_PATH / "year=2025/month=11/day=27/CIPHONET_ALL_SUMMARY.parquet"   # columns: CHANNEL, PROMPT, UPDATED
-BRANCH_SRC  = BASE_INPUT_PATH / "year=2025/month=11/day=27/CIPHONET_OTC_SUMMARY.parquet"    # columns: CHANNEL, PROMPT, UPDATED
-BCODE_SRC   = BASE_INPUT_PATH / "sas_parquet/PBBBRCH.parquet"     # columns: BRANCHNO
+PROC APPEND DATA=CHANNEL BASE=CRMWH.CHANNEL_SUM FORCE;RUN;
+PROC PRINT DATA=CRMWH.CHANNEL_SUM;RUN;
 
-# CRMWH library targets as Parquet files
-CRMWH_DIR = BASE_OUTPUT_PATH / "CRMWH"
-CRMWH_DIR.mkdir(parents=True, exist_ok=True)
-CHANNEL_SUM_PATH = CRMWH_DIR / "CHANNEL_SUM.parquet"
+DATA BRANCH;
+   INFILE BRANCH FIRSTOBS=1;
+   INPUT @001  BRANCHNO          5.      /* BRANCH NUMBER          */
+         @006  TOLPROMPT         8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE         8.      /* TOTAL UPDATED          */
+         ;
+RUN;
 
-# --- SAS Date Format Calculations ---
-SAS_ORIGIN = datetime(1960, 1, 1).date()
-REPTDATE = datetime.today().date() - timedelta(days=1)
-PREVDATE = REPTDATE - timedelta(days=1)
-RDATE = (REPTDATE - SAS_ORIGIN).days
+DATA BCODE;
+   INFILE BCODE;
+   INPUT @002   BRANCHNO       3.        /* BRANCH NUMBER          */
+         ;
+RUN;
 
-# --- Formatted date variables ---
-REPTYEAR = f"{REPTDATE.year % 100:02d}"          # YEAR2.
-REPTMON  = f"{REPTDATE.month:02d}"               # Z2.
-REPTDAY  = f"{REPTDATE.day:02d}"                 # Z2.
-REPTDATE_STR = f"{REPTDATE.day:02d}/{REPTDATE.month:02d}/{REPTDATE.year % 100:02d}"  # DD/MM/YY -> DDMMYY8.
+PROC SORT DATA=BCODE;BY BRANCHNO;RUN;
+PROC SORT DATA=BRANCH;BY BRANCHNO;RUN;
 
-print(f"REPTDATE: {REPTDATE}")
-print(f"PREVDATE: {PREVDATE}")
-print(f"RDATE (SAS date format): {RDATE}")
-print(f"REPTDATE_STR: {REPTDATE_STR}")
-
-# --- CHANNEL step (SAS adds REPTDATE=TODAY()-2; MONTH=MONYY5.) ---
-channel_df = pl.read_parquet(CHANNEL_SRC).with_columns(
-    # SAS: REPTDATE = TODAY()-2
-    pl.lit(PREVDATE).alias("REPTDATE"),  # Using PREVDATE which is TODAY()-2
-).with_columns(
-    # SAS MONYY5. -> e.g., "SEP25" (3-letter month + 2-digit year, uppercase)
-    pl.col("REPTDATE").map_elements(
-        lambda d: d.strftime("%b%y").upper(),
-        return_dtype=pl.Utf8,
-    ).alias("MONTH")
-).drop("REPTDATE")
-
-# (Optional) print equivalent of PROC PRINT DATA=CHANNEL;
-print("CHANNEL (head):")
-print(channel_df.head(20))
-
-# --- PROC APPEND: append CHANNEL into CRMWH.CHANNEL_SUM ---
-def parquet_exists(path: Path) -> bool:
-    try:
-        pq.read_schema(path)
-        return True
-    except Exception:
-        return path.exists()
-
-if parquet_exists(CHANNEL_SUM_PATH):
-    existing = pl.read_parquet(CHANNEL_SUM_PATH)
-    channel_sum = pl.concat([existing, channel_df], how="vertical_relaxed")
-else:
-    channel_sum = channel_df
-
-# Write back (overwrite with appended result)
-channel_sum.write_parquet(CHANNEL_SUM_PATH)
-
-# (Optional) print equivalent of PROC PRINT DATA=CRMWH.CHANNEL_SUM;
-print("CRMWH.CHANNEL_SUM (head):")
-print(pl.read_parquet(CHANNEL_SUM_PATH).head(20))
-
-# --- BRANCH step - Process OTC channel data ---
-# Since BRANCH source has CHANNEL, PROMPT, UPDATED, let's filter for OTC channel only
-branch_df = pl.read_parquet(BRANCH_SRC)
-
-print("BRANCH source data (all channels):")
-print(branch_df.head())
-
-# Filter for OTC channel and rename columns to match expected names
-branch_otc = branch_df.filter(pl.col("CHANNEL") == "OTC").rename({
-    "CHANNEL": "BRANCHNO",      # For OTC data, CHANNEL value becomes BRANCHNO
-    "PROMPT": "TOLPROMPT",      
-    "UPDATED": "TOLUPDATE"      
-})
-
-print("BRANCH OTC data (after filtering and renaming):")
-print(branch_otc.head())
-
-# --- BCODE step ---
-bcode_df = pl.read_parquet(BCODE_SRC)
-print("BCODE (head):")
-print(bcode_df.head())
-
-# --- PROC SORT BY BRANCHNO ---
-bcode_sorted  = bcode_df.sort("BRANCHNO")
-branch_sorted = branch_otc.sort("BRANCHNO")
-
-# --- MERGE BCODE(IN=A) BRANCH(IN=B) BY BRANCHNO; IF A; fill missing TOLPROMPT/TOLUPDATE with 0 ---
-otc_detail = (
-    bcode_sorted.join(
-        branch_sorted,
-        on="BRANCHNO",
-        how="left",
-        suffix="_BR"
-    )
-    .with_columns([
-        pl.col("TOLPROMPT").fill_null(0),
-        pl.col("TOLUPDATE").fill_null(0),
-    ])
-)
-
-print("OTC_DETAIL (after merge):")
-print(otc_detail.head())
-print(f"OTC_DETAIL shape: {otc_detail.shape}")
-
-# Output name: CRMWH.OTC_DETAIL_&REPTMON&REPTYEAR;
-otc_name = f"OTC_DETAIL_{REPTMON}{REPTYEAR}"
-otc_path = CRMWH_DIR / f"{otc_name}.parquet"
-otc_detail.write_parquet(otc_path)
-print(f"OTC detail written to: {otc_path}")
-
-# --- DuckDB touch (optional, to satisfy environment & allow quick SQL checks) ---
-con = duckdb.connect(database=':memory:')
-con.register('CHANNEL_SUM', channel_sum.to_arrow())
-# Example quick sanity check query (not modifying files):
-_ = con.execute("""
-    SELECT CHANNEL, SUM(PROMPT) AS SUM_PROMPT, SUM(UPDATED) AS SUM_UPDATE
-    FROM CHANNEL_SUM
-    GROUP BY CHANNEL
-    ORDER BY CHANNEL
-""").fetchdf()
-print("DuckDB sanity check (CHANNEL_SUM grouped):")
-print(_)
+DATA CRMWH.OTC_DETAIL_&REPTMON&REPTYEAR;
+   MERGE BCODE(IN=A) BRANCH(IN=B);BY BRANCHNO;
+   IF TOLPROMPT=. THEN DO TOLPROMPT=0;END;
+   IF TOLUPDATE=. THEN DO TOLUPDATE=0;END;
+   IF A;
+RUN;
