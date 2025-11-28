@@ -1,45 +1,170 @@
-DATA REPTDATE;
-   REPTDATE=TODAY()-1;
-   CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR2.));
-   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
-   CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
-   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
-RUN;
+import polars as pl
+import duckdb
+from datetime import datetime, timedelta
+from pathlib import Path
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-DATA CHANNEL(DROP=REPTDATE);
-   INFILE CHANNEL FIRSTOBS=1;
-   INPUT @001  CHANNEL    $UPCASE5.      /* CHANNEL                */
-         @006  TOLPROMPT         8.      /* TOTAL PROMPTED         */
-         @014  TOLUPDATE         8.      /* TOTAL UPDATED          */
-         ;
-         REPTDATE=TODAY()-2;
-         MONTH=PUT(REPTDATE,MONYY5.);
-RUN;
-PROC PRINT DATA=CHANNEL;RUN;
+# --- Paths ---
+BASE_INPUT_PATH  = Path("/host/cis/parquet/")  
+BASE_OUTPUT_PATH = Path("/pythonITD/mis_dev/OUTPUT/") 
+BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-PROC APPEND DATA=CHANNEL BASE=CRMWH.CHANNEL_SUM FORCE;RUN;
-PROC PRINT DATA=CRMWH.CHANNEL_SUM;RUN;
+# Source files
+ALL_SUMMARY_SRC = BASE_INPUT_PATH / "year=2025/month=11/day=27/CIPHONET_ALL_SUMMARY.parquet"   # CHANNEL level data
+OTC_SUMMARY_SRC = BASE_INPUT_PATH / "year=2025/month=11/day=27/CIPHONET_OTC_SUMMARY.parquet"    # BRANCH level data  
+BCODE_SRC       = BASE_INPUT_PATH / "sas_parquet/PBBBRCH.parquet"                              # Branch codes
 
-DATA BRANCH;
-   INFILE BRANCH FIRSTOBS=1;
-   INPUT @001  BRANCHNO          5.      /* BRANCH NUMBER          */
-         @006  TOLPROMPT         8.      /* TOTAL PROMPTED         */
-         @014  TOLUPDATE         8.      /* TOTAL UPDATED          */
-         ;
-RUN;
+# CRMWH library targets
+CRMWH_DIR = BASE_OUTPUT_PATH / "CRMWH"
+CRMWH_DIR.mkdir(parents=True, exist_ok=True)
+CHANNEL_SUM_PATH = CRMWH_DIR / "CHANNEL_SUM.parquet"
 
-DATA BCODE;
-   INFILE BCODE;
-   INPUT @002   BRANCHNO       3.        /* BRANCH NUMBER          */
-         ;
-RUN;
+# --- SAS Date Format Calculations ---
+SAS_ORIGIN = datetime(1960, 1, 1).date()
+REPTDATE = datetime.today().date() - timedelta(days=1)
+PREVDATE = REPTDATE - timedelta(days=1)
+RDATE = (REPTDATE - SAS_ORIGIN).days
 
-PROC SORT DATA=BCODE;BY BRANCHNO;RUN;
-PROC SORT DATA=BRANCH;BY BRANCHNO;RUN;
+# --- Formatted date variables (matching SAS SYMPUT) ---
+REPTYEAR = f"{REPTDATE.year % 100:02d}"          # YEAR2.
+REPTMON  = f"{REPTDATE.month:02d}"               # Z2.
+REPTDAY  = f"{REPTDATE.day:02d}"                 # Z2.
+REPTDATE_STR = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year % 100:02d}"  # DDMMYY8.
 
-DATA CRMWH.OTC_DETAIL_&REPTMON&REPTYEAR;
-   MERGE BCODE(IN=A) BRANCH(IN=B);BY BRANCHNO;
-   IF TOLPROMPT=. THEN DO TOLPROMPT=0;END;
-   IF TOLUPDATE=. THEN DO TOLUPDATE=0;END;
-   IF A;
-RUN;
+print(f"REPTDATE: {REPTDATE}")
+print(f"PREVDATE: {PREVDATE}")
+print(f"RDATE (SAS date format): {RDATE}")
+print(f"REPTDATE_STR: {REPTDATE_STR}")
+
+# --- CHANNEL step (1:1 SAS migration) ---
+# SAS: DATA CHANNEL; INFILE CHANNEL; INPUT @001 CHANNEL $UPCASE5. @006 TOLPROMPT 8. @014 TOLUPDATE 8.;
+channel_df = (
+    pl.read_parquet(ALL_SUMMARY_SRC)
+    .with_columns([
+        # Convert CHANNEL to uppercase (matching $UPCASE5.)
+        pl.col("CHANNEL").str.to_uppercase(),
+        # SAS: REPTDATE=TODAY()-2
+        pl.lit(PREVDATE).alias("REPTDATE"),
+    ])
+    .with_columns([
+        # SAS: MONTH=PUT(REPTDATE,MONYY5.)
+        pl.col("REPTDATE").map_elements(
+            lambda d: d.strftime("%b%y").upper(),
+            return_dtype=pl.Utf8,
+        ).alias("MONTH")
+    ])
+    .drop("REPTDATE")
+    # Rename to match SAS variable names
+    .rename({
+        "PROMPT": "TOLPROMPT",
+        "UPDATED": "TOLUPDATE"
+    })
+)
+
+print("CHANNEL (head):")
+print(channel_df.head(20))
+
+# --- PROC APPEND DATA=CHANNEL BASE=CRMWH.CHANNEL_SUM FORCE ---
+def parquet_exists(path: Path) -> bool:
+    try:
+        pq.read_schema(path)
+        return True
+    except Exception:
+        return path.exists()
+
+if parquet_exists(CHANNEL_SUM_PATH):
+    existing = pl.read_parquet(CHANNEL_SUM_PATH)
+    # FORCE option - append regardless of column type differences
+    channel_sum = pl.concat([existing, channel_df], how="vertical_relaxed")
+else:
+    channel_sum = channel_df
+
+channel_sum.write_parquet(CHANNEL_SUM_PATH)
+print("CRMWH.CHANNEL_SUM (head):")
+print(pl.read_parquet(CHANNEL_SUM_PATH).head(20))
+
+# --- BRANCH step (1:1 SAS migration) ---
+# SAS: DATA BRANCH; INFILE BRANCH; INPUT @001 BRANCHNO 5. @006 TOLPROMPT 8. @014 TOLUPDATE 8.;
+# Since OTC_SUMMARY has CHANNEL instead of BRANCHNO, we need to transform it
+branch_source = pl.read_parquet(OTC_SUMMARY_SRC)
+
+print("BRANCH source data structure:")
+print(branch_source.head())
+print("Columns:", branch_source.columns)
+
+# Transform OTC summary to match SAS BRANCH structure
+# Assuming OTC channel data needs to be converted to branch-level data
+branch_df = (
+    branch_source
+    .filter(pl.col("CHANNEL") == "OTC")  # Keep only OTC records
+    .with_columns([
+        # Convert CHANNEL to BRANCHNO - YOU MAY NEED TO ADJUST THIS LOGIC
+        # This assumes "OTC" should be converted to a branch number
+        # Replace this with your actual branch mapping logic
+        pl.lit(999).alias("BRANCHNO")  # Placeholder - use actual branch number
+    ])
+    .rename({
+        "PROMPT": "TOLPROMPT",
+        "UPDATED": "TOLUPDATE"
+    })
+    .select(["BRANCHNO", "TOLPROMPT", "TOLUPDATE"])  # Keep only needed columns
+)
+
+print("BRANCH (after transformation):")
+print(branch_df.head())
+
+# --- BCODE step (1:1 SAS migration) ---
+# SAS: DATA BCODE; INFILE BCODE; INPUT @002 BRANCHNO 3.;
+bcode_df = pl.read_parquet(BCODE_SRC)
+print("BCODE (head):")
+print(bcode_df.head())
+
+# --- PROC SORT (1:1 SAS migration) ---
+# SAS: PROC SORT DATA=BCODE; BY BRANCHNO; RUN;
+# SAS: PROC SORT DATA=BRANCH; BY BRANCHNO; RUN;
+bcode_sorted = bcode_df.sort("BRANCHNO")
+branch_sorted = branch_df.sort("BRANCHNO")
+
+# --- MERGE (1:1 SAS migration) ---
+# SAS: DATA CRMWH.OTC_DETAIL_&REPTMON&REPTYEAR;
+#      MERGE BCODE(IN=A) BRANCH(IN=B); BY BRANCHNO;
+#      IF TOLPROMPT=. THEN DO TOLPROMPT=0; END;
+#      IF TOLUPDATE=. THEN DO TOLUPDATE=0; END;
+#      IF A;
+#      RUN;
+otc_detail = (
+    bcode_sorted.join(
+        branch_sorted,
+        on="BRANCHNO",
+        how="left"  # This matches "IF A" - keep all BCODE rows
+    )
+    .with_columns([
+        # SAS: IF TOLPROMPT=. THEN DO TOLPROMPT=0; END;
+        pl.col("TOLPROMPT").fill_null(0),
+        # SAS: IF TOLUPDATE=. THEN DO TOLUPDATE=0; END;
+        pl.col("TOLUPDATE").fill_null(0),
+    ])
+)
+
+print("OTC_DETAIL (after merge):")
+print(otc_detail.head())
+print(f"OTC_DETAIL shape: {otc_detail.shape}")
+
+# Output name: CRMWH.OTC_DETAIL_&REPTMON&REPTYEAR;
+otc_name = f"OTC_DETAIL_{REPTMON}{REPTYEAR}"
+otc_path = CRMWH_DIR / f"{otc_name}.parquet"
+otc_detail.write_parquet(otc_path)
+print(f"OTC detail written to: {otc_path}")
+
+# --- DuckDB sanity check ---
+con = duckdb.connect(database=':memory:')
+con.register('CHANNEL_SUM', channel_sum.to_arrow())
+result = con.execute("""
+    SELECT CHANNEL, SUM(TOLPROMPT) AS SUM_PROMPT, SUM(TOLUPDATE) AS SUM_UPDATE
+    FROM CHANNEL_SUM
+    GROUP BY CHANNEL
+    ORDER BY CHANNEL
+""").fetchdf()
+print("DuckDB sanity check (CHANNEL_SUM grouped):")
+print(result)
