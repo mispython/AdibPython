@@ -55,15 +55,19 @@ channel_df = (
         ).alias("MONTH")
     ])
     .drop("REPTDATE")
-    # Rename to match SAS variable names
+    # Rename to match SAS variable names - FIXED COLUMN NAMES
     .rename({
         "PROMPT": "TOLPROMPT",
         "UPDATED": "TOLUPDATE"
     })
+    # Select only the final columns to ensure consistent schema
+    .select(["CHANNEL", "TOLPROMPT", "TOLUPDATE", "MONTH"])
 )
 
 print("CHANNEL (head):")
 print(channel_df.head(20))
+print("CHANNEL schema:")
+print(channel_df.schema)
 
 # --- PROC APPEND DATA=CHANNEL BASE=CRMWH.CHANNEL_SUM FORCE ---
 def parquet_exists(path: Path) -> bool:
@@ -75,34 +79,47 @@ def parquet_exists(path: Path) -> bool:
 
 if parquet_exists(CHANNEL_SUM_PATH):
     existing = pl.read_parquet(CHANNEL_SUM_PATH)
+    print("Existing CHANNEL_SUM schema:")
+    print(existing.schema)
+    
+    # Ensure both DataFrames have the same column names and types
+    # Rename columns in existing data if they don't match
+    if "PROMPT" in existing.columns and "TOLPROMPT" not in existing.columns:
+        existing = existing.rename({"PROMPT": "TOLPROMPT"})
+    if "UPDATED" in existing.columns and "TOLUPDATE" not in existing.columns:
+        existing = existing.rename({"UPDATED": "TOLUPDATE"})
+    
     # FORCE option - append regardless of column type differences
     channel_sum = pl.concat([existing, channel_df], how="vertical_relaxed")
 else:
     channel_sum = channel_df
 
+# Ensure final schema consistency
+channel_sum = channel_sum.select(["CHANNEL", "TOLPROMPT", "TOLUPDATE", "MONTH"])
+
 channel_sum.write_parquet(CHANNEL_SUM_PATH)
 print("CRMWH.CHANNEL_SUM (head):")
 print(pl.read_parquet(CHANNEL_SUM_PATH).head(20))
+print("CRMWH.CHANNEL_SUM schema:")
+print(pl.read_parquet(CHANNEL_SUM_PATH).schema)
 
 # --- BRANCH step (1:1 SAS migration) ---
 # SAS: DATA BRANCH; INFILE BRANCH; INPUT @001 BRANCHNO 5. @006 TOLPROMPT 8. @014 TOLUPDATE 8.;
-# Since OTC_SUMMARY has CHANNEL instead of BRANCHNO, we need to transform it
 branch_source = pl.read_parquet(OTC_SUMMARY_SRC)
 
 print("BRANCH source data structure:")
 print(branch_source.head())
-print("Columns:", branch_source.columns)
+print("BRANCH source columns:", branch_source.columns)
 
 # Transform OTC summary to match SAS BRANCH structure
-# Assuming OTC channel data needs to be converted to branch-level data
+# For OTC data, we need to map to actual branch numbers
 branch_df = (
     branch_source
     .filter(pl.col("CHANNEL") == "OTC")  # Keep only OTC records
     .with_columns([
-        # Convert CHANNEL to BRANCHNO - YOU MAY NEED TO ADJUST THIS LOGIC
-        # This assumes "OTC" should be converted to a branch number
-        # Replace this with your actual branch mapping logic
-        pl.lit(999).alias("BRANCHNO")  # Placeholder - use actual branch number
+        # Convert CHANNEL to BRANCHNO - YOU NEED TO ADJUST THIS LOGIC
+        # This is a placeholder - replace with your actual branch mapping
+        pl.lit(999).cast(pl.Int64).alias("BRANCHNO")  # Use actual branch number
     ])
     .rename({
         "PROMPT": "TOLPROMPT",
@@ -119,6 +136,8 @@ print(branch_df.head())
 bcode_df = pl.read_parquet(BCODE_SRC)
 print("BCODE (head):")
 print(bcode_df.head())
+print("BCODE schema:")
+print(bcode_df.schema)
 
 # --- PROC SORT (1:1 SAS migration) ---
 # SAS: PROC SORT DATA=BCODE; BY BRANCHNO; RUN;
