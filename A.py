@@ -519,7 +519,130 @@ def process_scd_chunk_optimized(con, chunk_file, REPTDATE, PREVDATE, temp_path, 
     
     return chunk_output
 
-# ... (rest of the functions remain the same - save_final_results, process_hp_bill_extraction)
+def save_final_results(con, output_dir, date_str):
+    """Save the final LN_BILL and ILOAN_BILL files"""
+    
+    con.execute("""
+        CREATE TEMP TABLE ln_bill_output AS
+        SELECT 
+            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+        FROM with_entity
+        WHERE ENTITY_CD IS NULL OR ENTITY_CD = ''
+    """)
+    
+    con.execute("""
+        CREATE TEMP TABLE iln_bill_output AS
+        SELECT 
+            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+        FROM with_entity
+        WHERE ENTITY_CD = 'PIBB'
+    """)
+    
+    # Save without date suffix in filename
+    ln_bill_path = output_dir / f"LOAN_BILL.parquet"
+    iln_bill_path = output_dir / f"ILOAN_BILL.parquet"
+    
+    print(f"  Saving LOAN_BILL...")
+    con.execute(f"COPY ln_bill_output TO '{ln_bill_path}' (FORMAT PARQUET)")
+    
+    print(f"  Saving ILOAN_BILL...")  
+    con.execute(f"COPY iln_bill_output TO '{iln_bill_path}' (FORMAT PARQUET)")
+    
+    ln_count = con.execute("SELECT COUNT(*) FROM ln_bill_output").fetchone()[0]
+    iln_count = con.execute("SELECT COUNT(*) FROM iln_bill_output").fetchone()[0]
+    
+    print(f"  ✓ LOAN_BILL: {ln_count:,} records")
+    print(f"  ✓ ILOAN_BILL: {iln_count:,} records")
+    
+    return ln_bill_path, iln_bill_path
+
+def process_hp_bill_extraction(
+    loan_bill_path: Path,
+    iloan_bill_path: Path,
+    output_dir: Path,
+    report_date: datetime
+) -> None:
+    """
+    STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
+    """
+    
+    print("\n" + "="*80)
+    print("STEP 2: HP/IHP BILL EXTRACTION")
+    print("="*80)
+    
+    # yymmdd format for file naming
+    date_str = report_date.strftime("%y%m%d")
+    
+    hp_products_str = ','.join(map(str, HP_PRODUCTS))
+    
+    con = duckdb.connect(':memory:')
+    
+    # Extract HP_BILL from TODAY'S LOAN_BILL
+    print("\n2.1: Extracting HP_BILL from LOAN_BILL...")
+    
+    if not loan_bill_path.exists():
+        print(f"  ERROR: LOAN_BILL not found: {loan_bill_path}")
+        return
+    
+    con.execute(f"""
+        CREATE TABLE loan_bill AS
+        SELECT * FROM read_parquet('{loan_bill_path}')
+    """)
+    
+    con.execute(f"""
+        CREATE TABLE hp_bill AS
+        SELECT * FROM loan_bill
+        WHERE PRODUCT IN ({hp_products_str}) OR PRODUCT = 392
+    """)
+    
+    hp_count = con.execute("SELECT COUNT(*) FROM hp_bill").fetchone()[0]
+    print(f"  Filtered {hp_count:,} HP records")
+    
+    # Save HP_BILL without date suffix
+    hp_bill_path = output_dir / f"HP_BILL.parquet"
+    con.execute(f"COPY hp_bill TO '{hp_bill_path}' (FORMAT PARQUET)")
+    hp_size = hp_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ HP_BILL: {hp_bill_path.name}")
+    print(f"    Records: {hp_count:,}, Size: {hp_size:.2f} MB")
+    
+    # Extract IHP_BILL from TODAY'S ILOAN_BILL
+    print("\n2.2: Extracting IHP_BILL from ILOAN_BILL...")
+    
+    if not iloan_bill_path.exists():
+        print(f"  ERROR: ILOAN_BILL not found: {iloan_bill_path}")
+        con.close()
+        return
+    
+    con.execute(f"""
+        CREATE TABLE iloan_bill AS
+        SELECT * FROM read_parquet('{iloan_bill_path}')
+    """)
+    
+    con.execute(f"""
+        CREATE TABLE ihp_bill AS
+        SELECT * FROM iloan_bill
+        WHERE PRODUCT IN ({hp_products_str})
+    """)
+    
+    ihp_count = con.execute("SELECT COUNT(*) FROM ihp_bill").fetchone()[0]
+    print(f"  Filtered {ihp_count:,} IHP records")
+    
+    # Save IHP_BILL without date suffix
+    ihp_bill_path = output_dir / f"IHP_BILL.parquet"
+    con.execute(f"COPY ihp_bill TO '{ihp_bill_path}' (FORMAT PARQUET)")
+    ihp_size = ihp_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ IHP_BILL: {ihp_bill_path.name}")
+    print(f"    Records: {ihp_count:,}, Size: {ihp_size:.2f} MB")
+    
+    con.close()
 
 # Main execution
 if __name__ == "__main__":
