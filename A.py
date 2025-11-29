@@ -24,11 +24,11 @@ def process_large_loan_bill_scd(
     output_dir: Path,
     prev_dir: Path,
     report_date: datetime,
-    chunk_size: int = 5_000_000  # Back to production chunk size
+    chunk_size: int = 5_000_000
 ) -> tuple:
     
     print("="*80)
-    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING (OPTIMIZED)")
+    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING")
     print("="*80)
     
     # SAS date calculations for processing logic
@@ -77,7 +77,7 @@ def process_large_loan_bill_scd(
             del df, batch  # Free memory
         
         # Strategy 2: Process each chunk separately and combine
-        print("\n1.2: Processing chunks with OPTIMIZED SCD logic...")
+        print("\n1.2: Processing chunks with SCD logic...")
         
         con = duckdb.connect(':memory:')
         
@@ -581,11 +581,11 @@ def process_hp_bill_extraction(
 # Main execution
 if __name__ == "__main__":
     print("="*80)
-    print("BILL PROCESSING PIPELINE - OPTIMIZED VERSION")
+    print("OPTIMIZED BILL PROCESSING PIPELINE")
     print("="*80)
     
     # SAS date calculations for processing logic
-    REPTDATE = datetime.strptime("2025-11-26 00:00:00", '%Y-%m-%d %H:%M:%S')  # Yesterday as report date
+    REPTDATE = datetime.today() - timedelta(days=1)  # Yesterday as report date
     PREVDATE = REPTDATE - timedelta(days=1)          # Day before yesterday
     RDATE = (REPTDATE - SAS_ORIGIN).days
     PDATE = (PREVDATE - SAS_ORIGIN).days
@@ -599,23 +599,23 @@ if __name__ == "__main__":
     print()
     
     # Input paths
-    input_enrh = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/enrichment/ENRH_LN_BILL.parquet")
+    input_enrh = Path("/parquet/dwh/LOAN/enrichment/ENRH_LN_BILL.parquet")
     
     # Output directory
-    output_dir = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}")
+    output_dir = Path(f"/parquet/dwh/LOAN/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Previous Output directory
-    prev_dir = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}")
+    prev_dir = Path(f"/parquet/dwh/LOAN/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}")
 
     
-    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL (OPTIMIZED)
+    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL
     loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
         input_enrh_path=input_enrh,
         output_dir=output_dir,
         prev_dir=prev_dir,
         report_date=REPTDATE,
-        chunk_size=5_000_000  # Production chunk size
+        chunk_size=5_000_000
     )
     
     if loan_bill_path is None:
@@ -626,12 +626,13 @@ if __name__ == "__main__":
     process_hp_bill_extraction(
         loan_bill_path=loan_bill_path,
         iloan_bill_path=iloan_bill_path,
+        prev_dir=prev_dir,
         output_dir=output_dir,
         report_date=REPTDATE
     )
     
     print("\n" + "="*80)
-    print("OPTIMIZED PROCESSING COMPLETED SUCCESSFULLY")
+    print("PROCESSING COMPLETED SUCCESSFULLY")
     print("="*80)
     print(f"\nGenerated Files (Date: {date_str}):")
     print(f"  1. LOAN_BILL.parquet")
