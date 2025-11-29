@@ -24,12 +24,11 @@ def process_large_loan_bill_scd(
     output_dir: Path,
     prev_dir: Path,
     report_date: datetime,
-    chunk_size: int = 50_000,  # Reduced chunk size for testing
-    test_mode: bool = True     # Added test mode flag
+    chunk_size: int = 5_000_000  # Back to production chunk size
 ) -> tuple:
     
     print("="*80)
-    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING (OPTIMIZED - TEST MODE)")
+    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING (OPTIMIZED)")
     print("="*80)
     
     # SAS date calculations for processing logic
@@ -45,7 +44,6 @@ def process_large_loan_bill_scd(
     print(f"Report Date: {REPTDATE.strftime('%Y-%m-%d')} (SAS: {RDATE}, File: {date_str})")
     print(f"Previous Date: {PREVDATE.strftime('%Y-%m-%d')} (SAS: {PDATE}, File: {prev_date_str})")
     print(f"Processing in chunks of {chunk_size:,} records")
-    print(f"TEST MODE: {test_mode}")
     print("-" * 80)
       
     # Define historical file paths (previous day's output)
@@ -60,47 +58,23 @@ def process_large_loan_bill_scd(
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         
-        # Strategy 1: Use PyArrow for efficient chunked reading - WITH LIMIT FOR TESTING
-        print("\n1.1: Reading ENRH_LN_BILL in chunks (TEST MODE - LIMITED RECORDS)...")
+        # Strategy 1: Use PyArrow for efficient chunked reading
+        print("\n1.1: Reading ENRH_LN_BILL in chunks...")
         enrh_file = pq.ParquetFile(input_enrh_path)
         total_records = enrh_file.metadata.num_rows
-        print(f"  Total records in file: {total_records:,}")
+        print(f"  Total records: {total_records:,}")
         
-        # TEST MODE: Only read first few chunks or limited rows
-        if test_mode:
-            # Option 1: Read only first N rows
-            test_row_limit = 100_000  # Adjust this number as needed
-            print(f"  TEST MODE: Reading only first {test_row_limit:,} records")
+        # Process chunks
+        chunk_files = []
+        for i, batch in enumerate(enrh_file.iter_batches(batch_size=chunk_size)):
+            print(f"  Processing chunk {i+1}...")
             
-            # Read the entire file but limit rows
-            full_df = pl.read_parquet(input_enrh_path)
-            test_df = full_df.head(test_row_limit)
+            df = pl.from_arrow(batch)
+            chunk_file = temp_path / f"enrh_chunk_{i}.parquet"
+            df.write_parquet(chunk_file)
+            chunk_files.append(chunk_file)
             
-            # Split into smaller chunks for processing
-            chunk_files = []
-            for i in range(0, len(test_df), chunk_size):
-                chunk = test_df[i:i + chunk_size]
-                chunk_file = temp_path / f"enrh_chunk_{i//chunk_size}.parquet"
-                chunk.write_parquet(chunk_file)
-                chunk_files.append(chunk_file)
-                print(f"  Created chunk {i//chunk_size + 1} with {len(chunk):,} records")
-                
-            del full_df, test_df  # Free memory
-            
-        else:
-            # Original logic for production
-            chunk_files = []
-            for i, batch in enumerate(enrh_file.iter_batches(batch_size=chunk_size)):
-                print(f"  Processing chunk {i+1}...")
-                
-                df = pl.from_arrow(batch)
-                chunk_file = temp_path / f"enrh_chunk_{i}.parquet"
-                df.write_parquet(chunk_file)
-                chunk_files.append(chunk_file)
-                
-                del df, batch  # Free memory
-        
-        print(f"  Total chunks to process: {len(chunk_files)}")
+            del df, batch  # Free memory
         
         # Strategy 2: Process each chunk separately and combine
         print("\n1.2: Processing chunks with OPTIMIZED SCD logic...")
@@ -118,82 +92,39 @@ def process_large_loan_bill_scd(
             # Convert SAS date to numeric for comparison (since VALID_TO_DT is stored as DOUBLE)
             prev_date_numeric = (PREVDATE - SAS_ORIGIN).days
             
-            # TEST MODE: Also limit historical data for faster testing
-            if test_mode:
-                print(f"  TEST MODE: Limiting historical data to first 10,000 records per file")
-                
-                # Load limited active records from LOAN_BILL
-                con.execute(f"""
-                    CREATE TABLE ln_bill_hist_active AS 
-                    SELECT 
-                        ACCTNO, NOTENO, 
-                        BILL_DT,
-                        BILL_PAID_DT,
-                        BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-                        BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-                        BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-                        COSTCTR, PRODUCT,
-                        VALID_FROM_DT,
-                        VALID_TO_DT
-                    FROM (
-                        SELECT * FROM read_parquet('{input_ln_bill}')
-                        WHERE VALID_TO_DT = {prev_date_numeric}
-                        LIMIT 10000
-                    )
-                """)
-                
-                # Load limited active records from ILOAN_BILL
-                con.execute(f"""
-                    CREATE TABLE iln_bill_hist_active AS 
-                    SELECT 
-                        ACCTNO, NOTENO, 
-                        BILL_DT,
-                        BILL_PAID_DT,
-                        BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-                        BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-                        BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-                        COSTCTR, PRODUCT,
-                        VALID_FROM_DT,
-                        VALID_TO_DT
-                    FROM (
-                        SELECT * FROM read_parquet('{input_iln_bill}')
-                        WHERE VALID_TO_DT = {prev_date_numeric}
-                        LIMIT 10000
-                    )
-                """)
-            else:
-                # Original logic for production
-                con.execute(f"""
-                    CREATE TABLE ln_bill_hist_active AS 
-                    SELECT 
-                        ACCTNO, NOTENO, 
-                        BILL_DT,
-                        BILL_PAID_DT,
-                        BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-                        BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-                        BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-                        COSTCTR, PRODUCT,
-                        VALID_FROM_DT,
-                        VALID_TO_DT
-                    FROM read_parquet('{input_ln_bill}')
-                    WHERE VALID_TO_DT = {prev_date_numeric}
-                """)
-                
-                con.execute(f"""
-                    CREATE TABLE iln_bill_hist_active AS 
-                    SELECT 
-                        ACCTNO, NOTENO, 
-                        BILL_DT,
-                        BILL_PAID_DT,
-                        BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-                        BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-                        BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-                        COSTCTR, PRODUCT,
-                        VALID_FROM_DT,
-                        VALID_TO_DT
-                    FROM read_parquet('{input_iln_bill}')
-                    WHERE VALID_TO_DT = {prev_date_numeric}
-                """)
+            # Load only active records from LOAN_BILL - FIXED: Keep dates as numeric for filtering
+            con.execute(f"""
+                CREATE TABLE ln_bill_hist_active AS 
+                SELECT 
+                    ACCTNO, NOTENO, 
+                    BILL_DT,
+                    BILL_PAID_DT,
+                    BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+                    BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+                    BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+                    COSTCTR, PRODUCT,
+                    VALID_FROM_DT,
+                    VALID_TO_DT
+                FROM read_parquet('{input_ln_bill}')
+                WHERE VALID_TO_DT = {prev_date_numeric}
+            """)
+            
+            # Load only active records from ILOAN_BILL - FIXED: Keep dates as numeric for filtering
+            con.execute(f"""
+                CREATE TABLE iln_bill_hist_active AS 
+                SELECT 
+                    ACCTNO, NOTENO, 
+                    BILL_DT,
+                    BILL_PAID_DT,
+                    BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+                    BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+                    BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+                    COSTCTR, PRODUCT,
+                    VALID_FROM_DT,
+                    VALID_TO_DT
+                FROM read_parquet('{input_iln_bill}')
+                WHERE VALID_TO_DT = {prev_date_numeric}
+            """)
             
             # Combine active historical data
             con.execute(f"""
@@ -324,7 +255,7 @@ def process_large_loan_bill_scd(
 def process_scd_chunk_optimized(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, has_historical_data, active_hist_count):
     """Process OPTIMIZED SCD logic for a single chunk - only compare with active records"""
     
-    # Load chunk as new records - FIXED: Convert to DATE types
+    # Load chunk as new records - FIXED: Proper SAS date conversion
     con.execute(f"""
         CREATE TEMP TABLE new_records AS
         SELECT 
@@ -336,7 +267,7 @@ def process_scd_chunk_optimized(con, chunk_file, REPTDATE, PREVDATE, temp_path, 
                     DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_DT AS INTEGER)) DAYS
                 ELSE NULL 
             END AS BILL_DT,
-            -- Convert BILL_PAID_DT from SAS numeric to DATE
+            -- Convert BILL_PAID_DT from SAS numeric to DATE - FIXED: Compare numeric values first
             CASE 
                 WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
                     DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_PAID_DT AS INTEGER)) DAYS
@@ -377,7 +308,7 @@ def process_scd_chunk_optimized(con, chunk_file, REPTDATE, PREVDATE, temp_path, 
                         DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_DT AS INTEGER)) DAYS
                     ELSE NULL 
                 END AS BILL_DT,
-                -- Convert BILL_PAID_DT from SAS numeric to DATE
+                -- Convert BILL_PAID_DT from SAS numeric to DATE - FIXED: Compare numeric values first
                 CASE 
                     WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
                         DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_PAID_DT AS INTEGER)) DAYS
@@ -410,6 +341,7 @@ def process_scd_chunk_optimized(con, chunk_file, REPTDATE, PREVDATE, temp_path, 
         """)
         
         # OPTIMIZED SCD logic - only compare with ACTIVE historical records
+        # FIXED: Removed COALESCE with mixed types, using proper NULL comparison instead
         con.execute(f"""
             CREATE TEMP TABLE scd_result AS
             WITH matched_records AS (
@@ -430,6 +362,7 @@ def process_scd_chunk_optimized(con, chunk_file, REPTDATE, PREVDATE, temp_path, 
                     WHERE T1.ACCTNO = T2.ACCTNO 
                     AND T1.NOTENO = T2.NOTENO
                     AND T1.BILL_DT = T2.BILL_DT
+                    -- FIXED: Replaced COALESCE with proper NULL handling
                     AND (T1.BILL_PAID_DT = T2.BILL_PAID_DT OR (T1.BILL_PAID_DT IS NULL AND T2.BILL_PAID_DT IS NULL))
                     AND T1.BILL_AMT = T2.BILL_AMT
                     AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
@@ -464,6 +397,7 @@ def process_scd_chunk_optimized(con, chunk_file, REPTDATE, PREVDATE, temp_path, 
                     WHERE T1.ACCTNO = T2.ACCTNO 
                     AND T1.NOTENO = T2.NOTENO
                     AND T1.BILL_DT = T2.BILL_DT
+                    -- FIXED: Replaced COALESCE with proper NULL handling
                     AND (T1.BILL_PAID_DT = T2.BILL_PAID_DT OR (T1.BILL_PAID_DT IS NULL AND T2.BILL_PAID_DT IS NULL))
                     AND T1.BILL_AMT = T2.BILL_AMT
                     AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
@@ -647,7 +581,7 @@ def process_hp_bill_extraction(
 # Main execution
 if __name__ == "__main__":
     print("="*80)
-    print("BILL PROCESSING PIPELINE - OPTIMIZED VERSION (TEST MODE)")
+    print("BILL PROCESSING PIPELINE - OPTIMIZED VERSION")
     print("="*80)
     
     # SAS date calculations for processing logic
@@ -675,14 +609,13 @@ if __name__ == "__main__":
     prev_dir = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}")
 
     
-    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL (OPTIMIZED - TEST MODE)
+    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL (OPTIMIZED)
     loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
         input_enrh_path=input_enrh,
         output_dir=output_dir,
         prev_dir=prev_dir,
         report_date=REPTDATE,
-        chunk_size=50_000,  # Smaller chunks for testing
-        test_mode=True      # Enable test mode
+        chunk_size=5_000_000  # Production chunk size
     )
     
     if loan_bill_path is None:
@@ -698,7 +631,7 @@ if __name__ == "__main__":
     )
     
     print("\n" + "="*80)
-    print("OPTIMIZED PROCESSING COMPLETED SUCCESSFULLY (TEST MODE)")
+    print("OPTIMIZED PROCESSING COMPLETED SUCCESSFULLY")
     print("="*80)
     print(f"\nGenerated Files (Date: {date_str}):")
     print(f"  1. LOAN_BILL.parquet")
