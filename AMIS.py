@@ -1,18 +1,45 @@
-data work.WSGTCEI / view = work.WSGTCEI ; 
-   infile '/sasdata/rawdata/lookup/LKP_BRANCH'
-          lrecl = 80
-          firstobs = 1; 
-   ; 
-   attrib BRCODE length = 8; 
-   attrib BRABBR length = $3; 
-   attrib BRSTAT length = $29; 
-   attrib BRSTATEIND length = $1; 
-   attrib BRSTATUS length = $1; 
-   
-   input BRCODE 2-4
-          BRABBR $ 6-8
-          BRSTAT $ 12-40
-          BRSTATEIND $ 45-45
-          BRSTATUS $ 50-50; 
-   
-run; 
+DATA REPTDATE;
+   REPTDATE=TODAY()-1;
+   CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR2.));
+   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
+   CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
+   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
+RUN;
+
+DATA CHANNEL(DROP=REPTDATE);
+   INFILE CHANNEL FIRSTOBS=1;
+   INPUT @001  CHANNEL    $UPCASE5.      /* CHANNEL                */
+         @006  TOLPROMPT         8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE         8.      /* TOTAL UPDATED          */
+         ;
+         REPTDATE=TODAY()-2;
+         MONTH=PUT(REPTDATE,MONYY5.);
+RUN;
+PROC PRINT DATA=CHANNEL;RUN;
+
+PROC APPEND DATA=CHANNEL BASE=CRMWH.CHANNEL_SUM FORCE;RUN;
+PROC PRINT DATA=CRMWH.CHANNEL_SUM;RUN;
+
+DATA BRANCH;
+   INFILE BRANCH FIRSTOBS=1;
+   INPUT @001  BRANCHNO          5.      /* BRANCH NUMBER          */
+         @006  TOLPROMPT         8.      /* TOTAL PROMPTED         */
+         @014  TOLUPDATE         8.      /* TOTAL UPDATED          */
+         ;
+RUN;
+
+DATA BCODE;
+   INFILE BCODE;
+   INPUT @002   BRANCHNO       3.        /* BRANCH NUMBER          */
+         ;
+RUN;
+
+PROC SORT DATA=BCODE;BY BRANCHNO;RUN;
+PROC SORT DATA=BRANCH;BY BRANCHNO;RUN;
+
+DATA CRMWH.OTC_DETAIL_&REPTMON&REPTYEAR;
+   MERGE BCODE(IN=A) BRANCH(IN=B);BY BRANCHNO;
+   IF TOLPROMPT=. THEN DO TOLPROMPT=0;END;
+   IF TOLUPDATE=. THEN DO TOLUPDATE=0;END;
+   IF A;
+RUN;
