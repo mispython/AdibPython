@@ -42,8 +42,8 @@ print(f"Batch Date (REPTDATE): {REPTDATE.strftime('%Y-%m-%d')}")
 print(f"Previous Date (PREVDATE): {PREVDATE.strftime('%Y-%m-%d')}")
 print(f"SAS Date (RDATE): {RDATE}")
 print()
-print(f"LAST MONTH (BASE):        {LAST_MONTH_YEAR}-{LAST_MONTH_NUM:02d}")
-print(f"CURRENT MONTH (NEW BASE): {CURRENT_MONTH_YEAR}-{CURRENT_MONTH_NUM:02d}")
+print(f"LAST MONTH (FINAL):       {LAST_MONTH_YEAR}-{LAST_MONTH_NUM:02d}")
+print(f"CURRENT MONTH (ACTIVE):   {CURRENT_MONTH_YEAR}-{CURRENT_MONTH_NUM:02d}")
 print(f"CIS DATA PATH:            year={CIS_YEAR}/month={CIS_MONTH}/day={CIS_DAY}")
 print("=" * 80)
 print()
@@ -56,23 +56,24 @@ BASE_PATH = "/host/mis/parquet/crm"
 
 # Today's CIS input data paths (dynamic based on REPTDATE)
 CIS_DATA_PATH = BASE_INPUT_PATH / f"year={CIS_YEAR}/month={CIS_MONTH}/day={CIS_DAY}"
-TODAY_CHANNEL_SUM = CIS_DATA_PATH / "CIPHONET_ALL_SUMMARY.parquet"  # CHANNEL level data
-TODAY_CHANNEL_UPDATE = CIS_DATA_PATH / "CIPHONET_FULL_SUMMARY.parquet"  # Full summary for CHN
+TODAY_CHANNEL_SUM = CIS_DATA_PATH / "CIPHONET_ALL_SUMMARY.parquet"
+TODAY_CHANNEL_UPDATE = CIS_DATA_PATH / "CIPHONET_FULL_SUMMARY.parquet"
 
-# Last month paths (BASE)
+# Last month paths (FINAL - no more updates after month end)
 LAST_MONTH_PATH = f"{BASE_PATH}/year={LAST_MONTH_YEAR}/month={LAST_MONTH_NUM:02d}"
+os.makedirs(LAST_MONTH_PATH, exist_ok=True)
 LAST_CHANNEL_SUM = f"{LAST_MONTH_PATH}/CHANNEL_SUM.parquet"
 LAST_CHANNEL_UPDATE = f"{LAST_MONTH_PATH}/CHANNEL_UPDATE.parquet"
 
-# Current month paths (NEW BASE)
+# Current month paths (ACTIVE - accumulating daily)
 CURRENT_MONTH_PATH = f"{BASE_PATH}/year={CURRENT_MONTH_YEAR}/month={CURRENT_MONTH_NUM:02d}"
 os.makedirs(CURRENT_MONTH_PATH, exist_ok=True)
 CURRENT_CHANNEL_SUM = f"{CURRENT_MONTH_PATH}/CHANNEL_SUM.parquet"
 CURRENT_CHANNEL_UPDATE = f"{CURRENT_MONTH_PATH}/CHANNEL_UPDATE.parquet"
 
 print(f"CIS Input Path:        {CIS_DATA_PATH}")
-print(f"Last Month (BASE):     {LAST_MONTH_PATH}")
-print(f"Current Month (NEW):   {CURRENT_MONTH_PATH}")
+print(f"Last Month (FINAL):    {LAST_MONTH_PATH}")
+print(f"Current Month (ACTIVE):{CURRENT_MONTH_PATH}")
 print()
 
 # =============================================================================
@@ -90,24 +91,19 @@ def parquet_exists(path):
 
 def normalize_channel_sum_schema(df):
     """Normalize CHANNEL_SUM schema - handle PROMPT/TOLPROMPT and UPDATED/TOLUPDATE"""
-    # Handle column name variations
     if "PROMPT" in df.columns and "TOLPROMPT" not in df.columns:
         df = df.rename({"PROMPT": "TOLPROMPT"})
     if "UPDATED" in df.columns and "TOLUPDATE" not in df.columns:
         df = df.rename({"UPDATED": "TOLUPDATE"})
     
-    # Ensure proper dtypes
     for col in df.columns:
         if df[col].dtype == pl.Object:
             df = df.with_columns(pl.col(col).cast(pl.Utf8))
     
-    # Add MONTH column if it doesn't exist
     if "MONTH" not in df.columns:
-        # Use REPTDATE to create MONTH
         month_str = REPTDATE.strftime("%b%y").upper()
         df = df.with_columns(pl.lit(month_str).alias("MONTH"))
     
-    # Select only required columns in correct order
     return df.select([
         pl.col("CHANNEL").cast(pl.Utf8),
         pl.col("TOLPROMPT").cast(pl.Int64),
@@ -117,12 +113,8 @@ def normalize_channel_sum_schema(df):
 
 def process_full_summary_to_channel_update(df):
     """Convert CIPHONET_FULL_SUMMARY to CHANNEL_UPDATE format"""
-    # Expected input columns: ATM, EBK, OTC, TOTAL, REPORT_DATE
-    # Need to add LINE (DESC) based on row number
-    
     df = df.with_row_index(name="_N_", offset=1)
     
-    # Add LINE based on row number (matching SAS logic)
     df = df.with_columns(
         pl.when(pl.col("_N_") == 1).then(pl.lit("TOTAL PROMPT BASE"))
          .when(pl.col("_N_") == 2).then(pl.lit("TOTAL UPDATED"))
@@ -130,12 +122,10 @@ def process_full_summary_to_channel_update(df):
          .alias("LINE")
     )
     
-    # Ensure proper dtypes
     for col in df.columns:
         if col != "REPORT_DATE" and df[col].dtype == pl.Object:
             df = df.with_columns(pl.col(col).cast(pl.Utf8))
     
-    # Handle REPORT_DATE
     if "REPORT_DATE" not in df.columns:
         df = df.with_columns(pl.lit(REPTDATE).alias("REPORT_DATE"))
     elif df["REPORT_DATE"].dtype == pl.Utf8 or df["REPORT_DATE"].dtype == pl.Object:
@@ -158,19 +148,16 @@ def process_full_summary_to_channel_update(df):
 
 def normalize_channel_update_schema(df):
     """Normalize CHANNEL_UPDATE schema - handle DESC/LINE and DATE/REPORT_DATE"""
-    # Handle column name variations
     if "DESC" in df.columns and "LINE" not in df.columns:
         df = df.rename({"DESC": "LINE"})
     if "DATE" in df.columns and "REPORT_DATE" not in df.columns:
         df = df.rename({"DATE": "REPORT_DATE"})
     
-    # Ensure proper dtypes for non-date columns
     for col in df.columns:
         if col != "REPORT_DATE" and df[col].dtype == pl.Object:
             if col in ["LINE"]:
                 df = df.with_columns(pl.col(col).cast(pl.Utf8))
     
-    # Handle REPORT_DATE - convert string to date if needed
     if "REPORT_DATE" in df.columns:
         if df["REPORT_DATE"].dtype == pl.Utf8 or df["REPORT_DATE"].dtype == pl.Object:
             print(f"  Converting REPORT_DATE from string to date...")
@@ -182,7 +169,6 @@ def normalize_channel_update_schema(df):
                 .alias("REPORT_DATE")
             )
     
-    # Select only required columns in correct order
     return df.select([
         pl.col("LINE").cast(pl.Utf8),
         pl.col("ATM").cast(pl.Int64),
@@ -199,7 +185,6 @@ def read_or_create_empty(path, schema_dict, normalize_func=None):
         print(f"  Original columns: {df.columns}")
         print(f"  Original schema: {df.schema}")
         
-        # Apply normalization function if provided
         if normalize_func:
             df = normalize_func(df)
             print(f"  Normalized schema: {df.schema}")
@@ -209,28 +194,13 @@ def read_or_create_empty(path, schema_dict, normalize_func=None):
         print(f"⚠ File not found: {path}, creating empty DataFrame")
         return pl.DataFrame(schema=schema_dict)
 
-def safe_print_unique(df, column_name):
-    """Safely print unique values from a column"""
-    try:
-        if column_name in df.columns and len(df) > 0:
-            if df[column_name].dtype == pl.Object:
-                values = df[column_name].to_list()
-                unique_values = list(set([v for v in values if v is not None]))
-                return unique_values
-            else:
-                return df[column_name].unique().to_list()
-    except Exception as e:
-        return f"[Unable to extract: {str(e)}]"
-    return []
-
 # =============================================================================
-# PROCESS CHANNEL_SUM (CRMWH)
+# READ TODAY'S CIS DATA
 # =============================================================================
 print("=" * 80)
-print("PROCESSING CHANNEL_SUM")
+print("READING TODAY'S CIS DATA")
 print("=" * 80)
 
-# Define schema
 channel_sum_schema = {
     'CHANNEL': pl.Utf8,
     'TOLPROMPT': pl.Int64,
@@ -238,77 +208,6 @@ channel_sum_schema = {
     'MONTH': pl.Utf8
 }
 
-# Read last month (BASE)
-print(f"Reading last month base: {LAST_CHANNEL_SUM}")
-last_month_channel = read_or_create_empty(
-    LAST_CHANNEL_SUM, 
-    channel_sum_schema,
-    normalize_channel_sum_schema
-)
-print(f"  Records: {len(last_month_channel)}")
-if len(last_month_channel) > 0:
-    unique_months = safe_print_unique(last_month_channel, 'MONTH')
-    print(f"  Unique months: {unique_months}")
-print()
-
-# Read today's data from CIS
-print(f"Reading today's data: {TODAY_CHANNEL_SUM}")
-if parquet_exists(TODAY_CHANNEL_SUM):
-    today_channel = pl.read_parquet(TODAY_CHANNEL_SUM)
-    print(f"  Original columns: {today_channel.columns}")
-    today_channel = normalize_channel_sum_schema(today_channel)
-    print(f"  Records: {len(today_channel)}")
-    if len(today_channel) > 0:
-        unique_months = safe_print_unique(today_channel, 'MONTH')
-        print(f"  Unique months: {unique_months}")
-else:
-    print("  ⚠ Today's data not found!")
-    today_channel = pl.DataFrame(schema=channel_sum_schema)
-print()
-
-# Combine last month + today = current month (NEW BASE)
-print("Combining data...")
-combined_channel_sum = pl.concat(
-    [last_month_channel, today_channel],
-    how="vertical"
-)
-
-print(f"  Combined records: {len(combined_channel_sum)}")
-print(f"  Combined schema: {combined_channel_sum.schema}")
-print()
-
-# Save current month (NEW BASE)
-combined_channel_sum.write_parquet(CURRENT_CHANNEL_SUM)
-print(f"✓ Saved NEW BASE: {CURRENT_CHANNEL_SUM}")
-print()
-
-# Show summary
-print("CHANNEL_SUM Summary by Channel:")
-try:
-    summary = (
-        combined_channel_sum
-        .group_by("CHANNEL")
-        .agg([
-            pl.col("TOLPROMPT").sum().alias("TOTAL_PROMPT"),
-            pl.col("TOLUPDATE").sum().alias("TOTAL_UPDATE"),
-            pl.col("MONTH").n_unique().alias("UNIQUE_MONTHS")
-        ])
-        .sort("CHANNEL")
-    )
-    print(summary)
-except Exception as e:
-    print(f"⚠ Could not generate summary: {str(e)}")
-    print(combined_channel_sum.head(10))
-print()
-
-# =============================================================================
-# PROCESS CHANNEL_UPDATE (CHN)
-# =============================================================================
-print("=" * 80)
-print("PROCESSING CHANNEL_UPDATE")
-print("=" * 80)
-
-# Define schema
 channel_update_schema = {
     'LINE': pl.Utf8,
     'ATM': pl.Int64,
@@ -318,82 +217,148 @@ channel_update_schema = {
     'REPORT_DATE': pl.Date
 }
 
-# Read last month (BASE)
-print(f"Reading last month base: {LAST_CHANNEL_UPDATE}")
-last_month_update = read_or_create_empty(
-    LAST_CHANNEL_UPDATE, 
-    channel_update_schema,
-    normalize_channel_update_schema
-)
-print(f"  Records: {len(last_month_update)}")
-if len(last_month_update) > 0:
-    try:
-        dates = last_month_update.select(pl.col('REPORT_DATE')).drop_nulls()
-        if len(dates) > 0:
-            min_date = dates['REPORT_DATE'].min()
-            max_date = dates['REPORT_DATE'].max()
-            print(f"  Date range: {min_date} to {max_date}")
-    except Exception as e:
-        print(f"  ⚠ Could not extract date range: {str(e)}")
+# Read today's CHANNEL_SUM data
+print(f"Reading: {TODAY_CHANNEL_SUM}")
+if parquet_exists(TODAY_CHANNEL_SUM):
+    today_channel = pl.read_parquet(TODAY_CHANNEL_SUM)
+    today_channel = normalize_channel_sum_schema(today_channel)
+    print(f"  ✓ Records: {len(today_channel)}")
+else:
+    print("  ⚠ Today's data not found!")
+    today_channel = pl.DataFrame(schema=channel_sum_schema)
 print()
 
-# Read today's data from CIS (CIPHONET_FULL_SUMMARY)
-print(f"Reading today's data: {TODAY_CHANNEL_UPDATE}")
+# Read today's CHANNEL_UPDATE data
+print(f"Reading: {TODAY_CHANNEL_UPDATE}")
 if parquet_exists(TODAY_CHANNEL_UPDATE):
     today_update = pl.read_parquet(TODAY_CHANNEL_UPDATE)
-    print(f"  Original columns: {today_update.columns}")
-    # Process FULL_SUMMARY format to CHANNEL_UPDATE format
     today_update = process_full_summary_to_channel_update(today_update)
-    print(f"  Records: {len(today_update)}")
-    if len(today_update) > 0:
-        try:
-            dates = today_update.select(pl.col('REPORT_DATE')).drop_nulls()
-            if len(dates) > 0:
-                min_date = dates['REPORT_DATE'].min()
-                max_date = dates['REPORT_DATE'].max()
-                print(f"  Date range: {min_date} to {max_date}")
-        except Exception as e:
-            print(f"  ⚠ Could not extract date range: {str(e)}")
+    print(f"  ✓ Records: {len(today_update)}")
 else:
     print("  ⚠ Today's data not found!")
     today_update = pl.DataFrame(schema=channel_update_schema)
 print()
 
-# Combine last month + today = current month (NEW BASE)
-print("Combining data...")
-combined_channel_update = pl.concat(
-    [last_month_update, today_update],
-    how="vertical"
-)
+# =============================================================================
+# PROCESS LAST MONTH (FINAL - append today if still in last month)
+# =============================================================================
+print("=" * 80)
+print(f"PROCESSING LAST MONTH (FINAL): {LAST_MONTH_YEAR}-{LAST_MONTH_NUM:02d}")
+print("=" * 80)
 
-print(f"  Combined records: {len(combined_channel_update)}")
-print(f"  Combined schema: {combined_channel_update.schema}")
-print()
+# Check if today's batch belongs to last month
+is_last_month_batch = (CIS_YEAR == LAST_MONTH_YEAR and CIS_MONTH == LAST_MONTH_NUM)
 
-# Save current month (NEW BASE)
-combined_channel_update.write_parquet(CURRENT_CHANNEL_UPDATE)
-print(f"✓ Saved NEW BASE: {CURRENT_CHANNEL_UPDATE}")
-print()
-
-# Show summary
-print("CHANNEL_UPDATE Summary by Line:")
-try:
-    summary = (
-        combined_channel_update
-        .group_by("LINE")
-        .agg([
-            pl.col("ATM").sum().alias("TOTAL_ATM"),
-            pl.col("EBK").sum().alias("TOTAL_EBK"),
-            pl.col("OTC").sum().alias("TOTAL_OTC"),
-            pl.col("TOTAL").sum().alias("GRAND_TOTAL"),
-            pl.col("REPORT_DATE").count().alias("DAYS")
-        ])
+if is_last_month_batch:
+    print(f"⚠ Today's batch ({REPTDATE.strftime('%Y-%m-%d')}) belongs to LAST MONTH")
+    print(f"  Will append to last month's files...")
+    print()
+    
+    # Read existing last month data
+    print(f"Reading: {LAST_CHANNEL_SUM}")
+    last_month_channel = read_or_create_empty(
+        LAST_CHANNEL_SUM, 
+        channel_sum_schema,
+        normalize_channel_sum_schema
     )
-    print(summary)
-except Exception as e:
-    print(f"⚠ Could not generate summary: {str(e)}")
-    print(combined_channel_update.head(10))
-print()
+    print(f"  Existing records: {len(last_month_channel)}")
+    
+    # Append today's data
+    final_last_channel = pl.concat([last_month_channel, today_channel], how="vertical")
+    final_last_channel.write_parquet(LAST_CHANNEL_SUM)
+    print(f"  ✓ Updated LAST MONTH: {LAST_CHANNEL_SUM}")
+    print(f"  Total records: {len(final_last_channel)}")
+    print()
+    
+    # Same for CHANNEL_UPDATE
+    print(f"Reading: {LAST_CHANNEL_UPDATE}")
+    last_month_update = read_or_create_empty(
+        LAST_CHANNEL_UPDATE, 
+        channel_update_schema,
+        normalize_channel_update_schema
+    )
+    print(f"  Existing records: {len(last_month_update)}")
+    
+    final_last_update = pl.concat([last_month_update, today_update], how="vertical")
+    final_last_update.write_parquet(LAST_CHANNEL_UPDATE)
+    print(f"  ✓ Updated LAST MONTH: {LAST_CHANNEL_UPDATE}")
+    print(f"  Total records: {len(final_last_update)}")
+    print()
+else:
+    print(f"✓ Today's batch ({REPTDATE.strftime('%Y-%m-%d')}) is in CURRENT MONTH")
+    print(f"  Last month files remain unchanged (final/closed)")
+    print()
+
+# =============================================================================
+# PROCESS CURRENT MONTH (ACTIVE - always append)
+# =============================================================================
+print("=" * 80)
+print(f"PROCESSING CURRENT MONTH (ACTIVE): {CURRENT_MONTH_YEAR}-{CURRENT_MONTH_NUM:02d}")
+print("=" * 80)
+
+# If today is first day of current month, use last month as base
+# Otherwise, use existing current month data
+if CIS_DAY == 1 and not is_last_month_batch:
+    print(f"⚠ First day of month - copying LAST MONTH as base for CURRENT MONTH")
+    print()
+    
+    # Copy last month as base for current month
+    print(f"Reading last month base: {LAST_CHANNEL_SUM}")
+    current_base_channel = read_or_create_empty(
+        LAST_CHANNEL_SUM, 
+        channel_sum_schema,
+        normalize_channel_sum_schema
+    )
+    print(f"  Base records: {len(current_base_channel)}")
+    
+    print(f"Reading last month base: {LAST_CHANNEL_UPDATE}")
+    current_base_update = read_or_create_empty(
+        LAST_CHANNEL_UPDATE, 
+        channel_update_schema,
+        normalize_channel_update_schema
+    )
+    print(f"  Base records: {len(current_base_update)}")
+    print()
+else:
+    # Read existing current month data
+    print(f"Reading existing current month: {CURRENT_CHANNEL_SUM}")
+    current_base_channel = read_or_create_empty(
+        CURRENT_CHANNEL_SUM, 
+        channel_sum_schema,
+        normalize_channel_sum_schema
+    )
+    print(f"  Existing records: {len(current_base_channel)}")
+    
+    print(f"Reading existing current month: {CURRENT_CHANNEL_UPDATE}")
+    current_base_update = read_or_create_empty(
+        CURRENT_CHANNEL_UPDATE, 
+        channel_update_schema,
+        normalize_channel_update_schema
+    )
+    print(f"  Existing records: {len(current_base_update)}")
+    print()
+
+# Only append today's data if it belongs to current month
+if not is_last_month_batch:
+    print("Appending today's data to current month...")
+    
+    # Combine and save CHANNEL_SUM
+    final_current_channel = pl.concat([current_base_channel, today_channel], how="vertical")
+    final_current_channel.write_parquet(CURRENT_CHANNEL_SUM)
+    print(f"  ✓ Updated CURRENT MONTH: {CURRENT_CHANNEL_SUM}")
+    print(f"  Total records: {len(final_current_channel)}")
+    
+    # Combine and save CHANNEL_UPDATE
+    final_current_update = pl.concat([current_base_update, today_update], how="vertical")
+    final_current_update.write_parquet(CURRENT_CHANNEL_UPDATE)
+    print(f"  ✓ Updated CURRENT MONTH: {CURRENT_CHANNEL_UPDATE}")
+    print(f"  Total records: {len(final_current_update)}")
+    print()
+else:
+    print("⚠ Today's data belongs to last month - current month unchanged")
+    final_current_channel = current_base_channel
+    final_current_update = current_base_update
+    print()
 
 # =============================================================================
 # VERIFICATION WITH DUCKDB
@@ -404,49 +369,45 @@ print("=" * 80)
 
 con = duckdb.connect()
 
-# Verify CHANNEL_SUM
-print("CHANNEL_SUM Verification:")
-try:
-    con.register('channel_sum', combined_channel_sum.to_arrow())
-    result = con.execute("""
-        SELECT 
-            CHANNEL,
-            COUNT(*) as record_count,
-            SUM(TOLPROMPT) as total_prompt,
-            SUM(TOLUPDATE) as total_update,
-            COUNT(DISTINCT MONTH) as unique_months
-        FROM channel_sum
-        GROUP BY CHANNEL
-        ORDER BY CHANNEL
-    """).fetchdf()
-    print(result)
-except Exception as e:
-    print(f"⚠ Verification failed: {str(e)}")
-print()
+# Verify LAST MONTH
+if is_last_month_batch:
+    print(f"LAST MONTH ({LAST_MONTH_YEAR}-{LAST_MONTH_NUM:02d}) - CHANNEL_SUM:")
+    try:
+        con.register('last_channel_sum', final_last_channel.to_arrow())
+        result = con.execute("""
+            SELECT 
+                CHANNEL,
+                COUNT(*) as record_count,
+                SUM(TOLPROMPT) as total_prompt,
+                SUM(TOLUPDATE) as total_update
+            FROM last_channel_sum
+            GROUP BY CHANNEL
+            ORDER BY CHANNEL
+        """).fetchdf()
+        print(result)
+    except Exception as e:
+        print(f"⚠ Verification failed: {str(e)}")
+    print()
 
-# Verify CHANNEL_UPDATE
-print("CHANNEL_UPDATE Verification:")
-try:
-    con.register('channel_update', combined_channel_update.to_arrow())
-    result = con.execute("""
-        SELECT 
-            LINE,
-            COUNT(*) as record_count,
-            SUM(ATM) as total_atm,
-            SUM(EBK) as total_ebk,
-            SUM(OTC) as total_otc,
-            SUM(TOTAL) as grand_total,
-            MIN(REPORT_DATE) as first_date,
-            MAX(REPORT_DATE) as last_date
-        FROM channel_update
-        WHERE LINE IS NOT NULL
-        GROUP BY LINE
-        ORDER BY LINE
-    """).fetchdf()
-    print(result)
-except Exception as e:
-    print(f"⚠ Verification failed: {str(e)}")
-print()
+# Verify CURRENT MONTH
+if not is_last_month_batch:
+    print(f"CURRENT MONTH ({CURRENT_MONTH_YEAR}-{CURRENT_MONTH_NUM:02d}) - CHANNEL_SUM:")
+    try:
+        con.register('current_channel_sum', final_current_channel.to_arrow())
+        result = con.execute("""
+            SELECT 
+                CHANNEL,
+                COUNT(*) as record_count,
+                SUM(TOLPROMPT) as total_prompt,
+                SUM(TOLUPDATE) as total_update
+            FROM current_channel_sum
+            GROUP BY CHANNEL
+            ORDER BY CHANNEL
+        """).fetchdf()
+        print(result)
+    except Exception as e:
+        print(f"⚠ Verification failed: {str(e)}")
+    print()
 
 con.close()
 
@@ -458,20 +419,21 @@ print("PROCESS COMPLETE")
 print("=" * 80)
 print(f"Batch Date: {REPTDATE.strftime('%Y-%m-%d')}")
 print()
-print("FILES CREATED:")
-print(f"  1. {CURRENT_CHANNEL_SUM}")
-print(f"     Records: {len(combined_channel_sum)}")
+print("FILES UPDATED:")
+
+if is_last_month_batch:
+    print(f"LAST MONTH (FINAL): {LAST_MONTH_YEAR}-{LAST_MONTH_NUM:02d}")
+    print(f"  1. {LAST_CHANNEL_SUM}")
+    print(f"     Records: {len(final_last_channel)}")
+    print(f"  2. {LAST_CHANNEL_UPDATE}")
+    print(f"     Records: {len(final_last_update)}")
+else:
+    print(f"CURRENT MONTH (ACTIVE): {CURRENT_MONTH_YEAR}-{CURRENT_MONTH_NUM:02d}")
+    print(f"  1. {CURRENT_CHANNEL_SUM}")
+    print(f"     Records: {len(final_current_channel)}")
+    print(f"  2. {CURRENT_CHANNEL_UPDATE}")
+    print(f"     Records: {len(final_current_update)}")
+
 print()
-print(f"  2. {CURRENT_CHANNEL_UPDATE}")
-print(f"     Records: {len(combined_channel_update)}")
-print()
-print("DATA SOURCES:")
-print(f"  Today's CIS data: {CIS_DATA_PATH}")
-print(f"  - CIPHONET_ALL_SUMMARY.parquet → CHANNEL_SUM")
-print(f"  - CIPHONET_FULL_SUMMARY.parquet → CHANNEL_UPDATE")
-print()
-print("MONTH BREAKDOWN:")
-print(f"  Last Month (BASE):     {LAST_MONTH_YEAR}-{LAST_MONTH_NUM:02d}")
-print(f"  Current Month (NEW):   {CURRENT_MONTH_YEAR}-{CURRENT_MONTH_NUM:02d}")
-print(f"  Today's batch added:   {REPTDATE.strftime('%Y-%m-%d')}")
+print(f"DATA SOURCE: {CIS_DATA_PATH}")
 print("=" * 80)
