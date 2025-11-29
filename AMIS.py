@@ -1,3 +1,5 @@
-    input @1   BILL_ACCT_NO     S370FPD6.
-
-B002 JSS   JALAN SULTAN SULAIMAN            W    O
+input @2   BRCODE        8.
+      @6   BRABBR        $3.
+      @12  BRSTAT        $29.
+      @45  BRSTATEIND    $1.
+      @50  BRSTATUS      $1.;
