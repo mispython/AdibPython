@@ -1,6 +1,6 @@
 import duckdb
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 def check_historical_records():
     """Simple program to count records in historical LOAN_BILL and ILOAN_BILL files"""
@@ -9,8 +9,8 @@ def check_historical_records():
     print("HISTORICAL RECORDS COUNTER")
     print("="*50)
     
-    # Set the date for the historical files you want to check
-    CHECK_DATE = datetime.today() - timedelta(days=1)
+    # Set the specific date to check (27/11/2025)
+    CHECK_DATE = datetime(2025, 11, 27)
     
     print(f"Checking date: {CHECK_DATE.strftime('%Y-%m-%d')}")
     print()
