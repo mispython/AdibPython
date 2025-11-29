@@ -28,7 +28,7 @@ def process_large_loan_bill_scd(
 ) -> tuple:
     
     print("="*80)
-    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING")
+    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING (OPTIMIZED)")
     print("="*80)
     
     # SAS date calculations for processing logic
@@ -77,7 +77,7 @@ def process_large_loan_bill_scd(
             del df, batch  # Free memory
         
         # Strategy 2: Process each chunk separately and combine
-        print("\n1.2: Processing chunks with SCD logic...")
+        print("\n1.2: Processing chunks with OPTIMIZED SCD logic...")
         
         con = duckdb.connect(':memory:')
         
@@ -92,7 +92,7 @@ def process_large_loan_bill_scd(
             # Convert SAS date to numeric for comparison (since VALID_TO_DT is stored as DOUBLE)
             prev_date_numeric = (PREVDATE - SAS_ORIGIN).days
             
-            # Load only active records from LOAN_BILL - FIXED: Keep dates as numeric for filtering
+            # Load only active records from LOAN_BILL
             con.execute(f"""
                 CREATE TABLE ln_bill_hist_active AS 
                 SELECT 
@@ -109,7 +109,7 @@ def process_large_loan_bill_scd(
                 WHERE VALID_TO_DT = {prev_date_numeric}
             """)
             
-            # Load only active records from ILOAN_BILL - FIXED: Keep dates as numeric for filtering
+            # Load only active records from ILOAN_BILL
             con.execute(f"""
                 CREATE TABLE iln_bill_hist_active AS 
                 SELECT 
@@ -581,7 +581,7 @@ def process_hp_bill_extraction(
 # Main execution
 if __name__ == "__main__":
     print("="*80)
-    print("OPTIMIZED BILL PROCESSING PIPELINE")
+    print("BILL PROCESSING PIPELINE - OPTIMIZED VERSION")
     print("="*80)
     
     # SAS date calculations for processing logic
@@ -609,7 +609,7 @@ if __name__ == "__main__":
     prev_dir = Path(f"/parquet/dwh/LOAN/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}")
 
     
-    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL
+    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL (OPTIMIZED)
     loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
         input_enrh_path=input_enrh,
         output_dir=output_dir,
@@ -626,7 +626,6 @@ if __name__ == "__main__":
     process_hp_bill_extraction(
         loan_bill_path=loan_bill_path,
         iloan_bill_path=iloan_bill_path,
-        prev_dir=prev_dir,
         output_dir=output_dir,
         report_date=REPTDATE
     )
