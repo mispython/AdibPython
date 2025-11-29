@@ -81,15 +81,15 @@ def process_large_loan_bill_scd(
         
         con = duckdb.connect(':memory:')
         
-        # Load ALL historical records (not just active ones) - REVERTED OPTIMIZATION
+        # Load ALL historical records (not just active ones)
         has_historical_data = False
         hist_count = 0
         
         # Check if both historical files exist
         if input_ln_bill.exists() and input_iln_bill.exists():
-            print(f"  Loading ALL historical records (not just active ones)...")
+            print(f"  Loading ALL historical records...")
             
-            # Load ALL records from LOAN_BILL - NOT filtering by VALID_TO_DT
+            # Load ALL records from LOAN_BILL
             con.execute(f"""
                 CREATE TABLE ln_bill_hist AS 
                 SELECT 
@@ -105,7 +105,7 @@ def process_large_loan_bill_scd(
                 FROM read_parquet('{input_ln_bill}')
             """)
             
-            # Load ALL records from ILOAN_BILL - NOT filtering by VALID_TO_DT
+            # Load ALL records from ILOAN_BILL
             con.execute(f"""
                 CREATE TABLE iln_bill_hist AS 
                 SELECT 
@@ -513,4 +513,189 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
     
     return chunk_output
 
-# ... (save_final_results, process_hp_bill_extraction, and main execution remain the same)
+def save_final_results(con, output_dir, date_str):
+    """Save the final LN_BILL and ILOAN_BILL files"""
+    
+    con.execute("""
+        CREATE TEMP TABLE ln_bill_output AS
+        SELECT 
+            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+        FROM with_entity
+        WHERE ENTITY_CD IS NULL OR ENTITY_CD = ''
+    """)
+    
+    con.execute("""
+        CREATE TEMP TABLE iln_bill_output AS
+        SELECT 
+            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
+            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
+        FROM with_entity
+        WHERE ENTITY_CD = 'PIBB'
+    """)
+    
+    # Save without date suffix in filename
+    ln_bill_path = output_dir / f"LOAN_BILL.parquet"
+    iln_bill_path = output_dir / f"ILOAN_BILL.parquet"
+    
+    print(f"  Saving LOAN_BILL...")
+    con.execute(f"COPY ln_bill_output TO '{ln_bill_path}' (FORMAT PARQUET)")
+    
+    print(f"  Saving ILOAN_BILL...")  
+    con.execute(f"COPY iln_bill_output TO '{iln_bill_path}' (FORMAT PARQUET)")
+    
+    ln_count = con.execute("SELECT COUNT(*) FROM ln_bill_output").fetchone()[0]
+    iln_count = con.execute("SELECT COUNT(*) FROM iln_bill_output").fetchone()[0]
+    
+    print(f"  ✓ LOAN_BILL: {ln_count:,} records")
+    print(f"  ✓ ILOAN_BILL: {iln_count:,} records")
+    
+    return ln_bill_path, iln_bill_path
+
+def process_hp_bill_extraction(
+    loan_bill_path: Path,
+    iloan_bill_path: Path,
+    output_dir: Path,
+    report_date: datetime
+) -> None:
+    """
+    STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
+    """
+    
+    print("\n" + "="*80)
+    print("STEP 2: HP/IHP BILL EXTRACTION")
+    print("="*80)
+    
+    # yymmdd format for file naming
+    date_str = report_date.strftime("%y%m%d")
+    
+    hp_products_str = ','.join(map(str, HP_PRODUCTS))
+    
+    con = duckdb.connect(':memory:')
+    
+    # Extract HP_BILL from TODAY'S LOAN_BILL
+    print("\n2.1: Extracting HP_BILL from LOAN_BILL...")
+    
+    if not loan_bill_path.exists():
+        print(f"  ERROR: LOAN_BILL not found: {loan_bill_path}")
+        return
+    
+    con.execute(f"""
+        CREATE TABLE loan_bill AS
+        SELECT * FROM read_parquet('{loan_bill_path}')
+    """)
+    
+    con.execute(f"""
+        CREATE TABLE hp_bill AS
+        SELECT * FROM loan_bill
+        WHERE PRODUCT IN ({hp_products_str}) OR PRODUCT = 392
+    """)
+    
+    hp_count = con.execute("SELECT COUNT(*) FROM hp_bill").fetchone()[0]
+    print(f"  Filtered {hp_count:,} HP records")
+    
+    # Save HP_BILL without date suffix
+    hp_bill_path = output_dir / f"HP_BILL.parquet"
+    con.execute(f"COPY hp_bill TO '{hp_bill_path}' (FORMAT PARQUET)")
+    hp_size = hp_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ HP_BILL: {hp_bill_path.name}")
+    print(f"    Records: {hp_count:,}, Size: {hp_size:.2f} MB")
+    
+    # Extract IHP_BILL from TODAY'S ILOAN_BILL
+    print("\n2.2: Extracting IHP_BILL from ILOAN_BILL...")
+    
+    if not iloan_bill_path.exists():
+        print(f"  ERROR: ILOAN_BILL not found: {iloan_bill_path}")
+        con.close()
+        return
+    
+    con.execute(f"""
+        CREATE TABLE iloan_bill AS
+        SELECT * FROM read_parquet('{iloan_bill_path}')
+    """)
+    
+    con.execute(f"""
+        CREATE TABLE ihp_bill AS
+        SELECT * FROM iloan_bill
+        WHERE PRODUCT IN ({hp_products_str})
+    """)
+    
+    ihp_count = con.execute("SELECT COUNT(*) FROM ihp_bill").fetchone()[0]
+    print(f"  Filtered {ihp_count:,} IHP records")
+    
+    # Save IHP_BILL without date suffix
+    ihp_bill_path = output_dir / f"IHP_BILL.parquet"
+    con.execute(f"COPY ihp_bill TO '{ihp_bill_path}' (FORMAT PARQUET)")
+    ihp_size = ihp_bill_path.stat().st_size / (1024 * 1024)
+    print(f"  ✓ IHP_BILL: {ihp_bill_path.name}")
+    print(f"    Records: {ihp_count:,}, Size: {ihp_size:.2f} MB")
+    
+    con.close()
+
+# Main execution
+if __name__ == "__main__":
+    print("="*80)
+    print("BILL PROCESSING PIPELINE - ORIGINAL SAS LOGIC")
+    print("="*80)
+    
+    # SAS date calculations for processing logic
+    REPTDATE = datetime.today() - timedelta(days=1)  # Yesterday as report date
+    PREVDATE = REPTDATE - timedelta(days=1)          # Day before yesterday
+    RDATE = (REPTDATE - SAS_ORIGIN).days
+    PDATE = (PREVDATE - SAS_ORIGIN).days
+    
+    # yymmdd format for file naming
+    date_str = REPTDATE.strftime("%y%m%d")
+    prev_date_str = PREVDATE.strftime("%y%m%d")
+    
+    print(f"Report Date: {REPTDATE.strftime('%Y-%m-%d')} (SAS: {RDATE}, File: {date_str})")
+    print(f"Previous Date: {PREVDATE.strftime('%Y-%m-%d')} (SAS: {PDATE}, File: {prev_date_str})")
+    print()
+    
+    # Input paths
+    input_enrh = Path("/parquet/dwh/LOAN/enrichment/ENRH_LN_BILL.parquet")
+    
+    # Output directory
+    output_dir = Path(f"/parquet/dwh/LOAN/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Previous Output directory
+    prev_dir = Path(f"/parquet/dwh/LOAN/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}")
+
+    
+    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL (ORIGINAL SAS LOGIC)
+    loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
+        input_enrh_path=input_enrh,
+        output_dir=output_dir,
+        prev_dir=prev_dir,
+        report_date=REPTDATE,
+        chunk_size=5_000_000
+    )
+    
+    if loan_bill_path is None:
+        print("\n✗ STEP 1 failed. Exiting.")
+        exit(1)
+    
+    # STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
+    process_hp_bill_extraction(
+        loan_bill_path=loan_bill_path,
+        iloan_bill_path=iloan_bill_path,
+        output_dir=output_dir,
+        report_date=REPTDATE
+    )
+    
+    print("\n" + "="*80)
+    print("PROCESSING COMPLETED SUCCESSFULLY")
+    print("="*80)
+    print(f"\nGenerated Files (Date: {date_str}):")
+    print(f"  1. LOAN_BILL.parquet")
+    print(f"  2. ILOAN_BILL.parquet") 
+    print(f"  3. HP_BILL.parquet")
+    print(f"  4. IHP_BILL.parquet")
+    print("="*80)
