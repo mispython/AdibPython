@@ -50,10 +50,35 @@ def process_large_loan_bill_scd(
     input_ln_bill = prev_dir / f"LOAN_BILL.parquet"
     input_iln_bill = prev_dir / f"ILOAN_BILL.parquet"
     
+    # ============================================================================
+    # TEMPORARY CHECKING - JUST COUNT RECORDS AND EXIT
+    # ============================================================================
+    print("TEMPORARY CHECK - COUNTING HISTORICAL RECORDS ONLY")
+    
     print(f"Looking for historical data:")
     print(f"  LOAN_BILL: {input_ln_bill} - {'EXISTS' if input_ln_bill.exists() else 'NOT FOUND'}")
+    if input_ln_bill.exists():
+        temp_con = duckdb.connect()
+        ln_bill_count = temp_con.execute(f"SELECT COUNT(*) FROM read_parquet('{input_ln_bill}')").fetchone()[0]
+        temp_con.close()
+        print(f"    Records: {ln_bill_count:,}")
+        
     print(f"  ILOAN_BILL: {input_iln_bill} - {'EXISTS' if input_iln_bill.exists() else 'NOT FOUND'}")
+    if input_iln_bill.exists():
+        temp_con = duckdb.connect()
+        iln_bill_count = temp_con.execute(f"SELECT COUNT(*) FROM read_parquet('{input_iln_bill}')").fetchone()[0]
+        temp_con.close()
+        print(f"    Records: {iln_bill_count:,}")
     
+    print("\n" + "="*80)
+    print("TEMPORARY CHECK COMPLETED - EXITING WITHOUT PROCESSING")
+    print("="*80)
+    return None, None  # Return None to indicate we're just checking
+    
+    # ============================================================================
+    # COMMENT OUT EVERYTHING BELOW THIS LINE FOR TEMPORARY CHECKING
+    # ============================================================================
+    '''
     # Create temporary directory for chunk processing
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
@@ -246,317 +271,20 @@ def process_large_loan_bill_scd(
         con.close()
         
         return ln_bill_path, iln_bill_path
+    '''
+    # ============================================================================
+    # END OF COMMENTED SECTION
+    # ============================================================================
+
+# ... (keep all other functions: process_scd_chunk_original_sas, save_final_results, process_hp_bill_extraction)
 
 def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, has_historical_data, hist_count):
     """Process ORIGINAL SAS SCD logic for a single chunk - compare with ALL historical records"""
-    
-    # Load chunk as new records (W5KTCTSDX in SAS)
-    con.execute(f"""
-        CREATE TEMP TABLE new_records AS
-        SELECT 
-            ACCTNO, 
-            NOTENO,
-            -- Convert BILL_DT from SAS numeric to DATE
-            CASE 
-                WHEN BILL_DT IS NOT NULL THEN 
-                    DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_DT AS INTEGER)) DAYS
-                ELSE NULL 
-            END AS BILL_DT,
-            -- Convert BILL_PAID_DT from SAS numeric to DATE
-            CASE 
-                WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
-                    DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_PAID_DT AS INTEGER)) DAYS
-                ELSE NULL 
-            END AS BILL_PAID_DT,
-            BILL_AMT, 
-            BILL_AMT_PRIN, 
-            BILL_AMT_INT, 
-            BILL_AMT_ESCROW, 
-            BILL_AMT_FEE,
-            BILL_NOT_PAY_AMT, 
-            BILL_NOT_PAY_AMT_PRIN, 
-            BILL_NOT_PAY_AMT_INT,
-            BILL_NOT_PAY_AMT_ESCROW, 
-            BILL_NOT_PAY_AMT_FEE,
-            COSTCTR, 
-            PRODUCT,
-            'Y' AS NEW  -- Equivalent to SAS NEW flag
-        FROM read_parquet('{chunk_file}')
-    """)
-    
-    # Create index for faster joins
-    con.execute("""
-        CREATE INDEX idx_new_key ON new_records(ACCTNO, NOTENO, BILL_DT)
-    """)
-    
-    if has_historical_data and hist_count > 0:
-        print(f"    Comparing with {hist_count:,} ALL historical records...")
-        
-        # Create temporary table for historical data with converted dates
-        con.execute(f"""
-            CREATE TEMP TABLE hist_with_dates AS
-            SELECT 
-                ACCTNO, 
-                NOTENO,
-                -- Convert BILL_DT from SAS numeric to DATE
-                CASE 
-                    WHEN BILL_DT IS NOT NULL THEN 
-                        DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_DT AS INTEGER)) DAYS
-                    ELSE NULL 
-                END AS BILL_DT,
-                -- Convert BILL_PAID_DT from SAS numeric to DATE
-                CASE 
-                    WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
-                        DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_PAID_DT AS INTEGER)) DAYS
-                    ELSE NULL 
-                END AS BILL_PAID_DT,
-                BILL_AMT, 
-                BILL_AMT_PRIN, 
-                BILL_AMT_INT, 
-                BILL_AMT_ESCROW, 
-                BILL_AMT_FEE,
-                BILL_NOT_PAY_AMT, 
-                BILL_NOT_PAY_AMT_PRIN, 
-                BILL_NOT_PAY_AMT_INT,
-                BILL_NOT_PAY_AMT_ESCROW, 
-                BILL_NOT_PAY_AMT_FEE,
-                COSTCTR, 
-                PRODUCT,
-                -- Convert VALID_FROM_DT from SAS numeric to DATE
-                CASE 
-                    WHEN VALID_FROM_DT IS NOT NULL THEN 
-                        DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(VALID_FROM_DT AS INTEGER)) DAYS
-                    ELSE NULL 
-                END AS VALID_FROM_DT,
-                -- Convert VALID_TO_DT from SAS numeric to DATE
-                CASE 
-                    WHEN VALID_TO_DT IS NOT NULL THEN 
-                        DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(VALID_TO_DT AS INTEGER)) DAYS
-                    ELSE NULL 
-                END AS VALID_TO_DT,
-                -- Create EXT flag for records where VALID_TO_DT = previous date (SAS logic)
-                CASE 
-                    WHEN VALID_TO_DT = {(PREVDATE - SAS_ORIGIN).days} THEN 'Y'
-                    ELSE NULL 
-                END AS EXT
-            FROM loan_bill_hist
-        """)
-        
-        # Create index for historical data
-        con.execute("""
-            CREATE INDEX idx_hist_dates_key ON hist_with_dates(ACCTNO, NOTENO, BILL_DT)
-        """)
-        
-        # ORIGINAL SAS SCD logic - MATCH (equivalent to SAS MATCH table)
-        con.execute(f"""
-            CREATE TEMP TABLE match_records AS
-            SELECT 
-                T1.ACCTNO, T1.NOTENO, T1.BILL_DT, T1.BILL_PAID_DT,
-                T1.BILL_AMT, T1.BILL_AMT_PRIN, T1.BILL_AMT_INT, 
-                T1.BILL_AMT_ESCROW, T1.BILL_AMT_FEE,
-                T1.BILL_NOT_PAY_AMT, T1.BILL_NOT_PAY_AMT_PRIN, 
-                T1.BILL_NOT_PAY_AMT_INT, T1.BILL_NOT_PAY_AMT_ESCROW, 
-                T1.BILL_NOT_PAY_AMT_FEE,
-                T1.COSTCTR, T1.PRODUCT, T1.VALID_FROM_DT,
-                DATE '{REPTDATE.date()}' AS VALID_TO_DT
-            FROM hist_with_dates T1
-            INNER JOIN new_records T2 ON 
-                T1.ACCTNO = T2.ACCTNO 
-                AND T1.NOTENO = T2.NOTENO
-                AND T1.BILL_DT = T2.BILL_DT
-                AND (T1.BILL_PAID_DT = T2.BILL_PAID_DT OR (T1.BILL_PAID_DT IS NULL AND T2.BILL_PAID_DT IS NULL))
-                AND T1.BILL_AMT = T2.BILL_AMT
-                AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
-                AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
-                AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
-                AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
-                AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
-                AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
-                AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
-                AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
-                AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
-                AND T1.COSTCTR = T2.COSTCTR
-                AND T1.PRODUCT = T2.PRODUCT
-            WHERE T1.EXT = 'Y'  -- Only update records that were expiring today
-        """)
-        
-        # ORIGINAL SAS SCD logic - CHGREC (equivalent to SAS CHGREC table)
-        con.execute(f"""
-            CREATE TEMP TABLE chgrec_records AS
-            SELECT 
-                T1.ACCTNO, T1.NOTENO, T1.BILL_DT, T1.BILL_PAID_DT,
-                T1.BILL_AMT, T1.BILL_AMT_PRIN, T1.BILL_AMT_INT, 
-                T1.BILL_AMT_ESCROW, T1.BILL_AMT_FEE,
-                T1.BILL_NOT_PAY_AMT, T1.BILL_NOT_PAY_AMT_PRIN, 
-                T1.BILL_NOT_PAY_AMT_INT, T1.BILL_NOT_PAY_AMT_ESCROW, 
-                T1.BILL_NOT_PAY_AMT_FEE,
-                T1.COSTCTR, T1.PRODUCT, T1.VALID_FROM_DT,
-                T1.VALID_TO_DT
-            FROM hist_with_dates T1
-            LEFT JOIN new_records T2 ON 
-                T1.ACCTNO = T2.ACCTNO 
-                AND T1.NOTENO = T2.NOTENO
-                AND T1.BILL_DT = T2.BILL_DT
-                AND (T1.BILL_PAID_DT = T2.BILL_PAID_DT OR (T1.BILL_PAID_DT IS NULL AND T2.BILL_PAID_DT IS NULL))
-                AND T1.BILL_AMT = T2.BILL_AMT
-                AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
-                AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
-                AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
-                AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
-                AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
-                AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
-                AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
-                AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
-                AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
-                AND T1.COSTCTR = T2.COSTCTR
-                AND T1.PRODUCT = T2.PRODUCT
-            WHERE T2.NEW IS NULL  -- Records that don't match new data (keep unchanged)
-        """)
-        
-        # ORIGINAL SAS SCD logic - UPDATEX (equivalent to SAS UPDATEX table)
-        con.execute(f"""
-            CREATE TEMP TABLE updatex_records AS
-            SELECT 
-                T2.ACCTNO, T2.NOTENO, T2.BILL_DT, T2.BILL_PAID_DT,
-                T2.BILL_AMT, T2.BILL_AMT_PRIN, T2.BILL_AMT_INT, 
-                T2.BILL_AMT_ESCROW, T2.BILL_AMT_FEE,
-                T2.BILL_NOT_PAY_AMT, T2.BILL_NOT_PAY_AMT_PRIN, 
-                T2.BILL_NOT_PAY_AMT_INT, T2.BILL_NOT_PAY_AMT_ESCROW, 
-                T2.BILL_NOT_PAY_AMT_FEE,
-                T2.COSTCTR, T2.PRODUCT,
-                DATE '{REPTDATE.date()}' AS VALID_FROM_DT,
-                DATE '{REPTDATE.date()}' AS VALID_TO_DT
-            FROM hist_with_dates T1
-            RIGHT JOIN new_records T2 ON 
-                T1.ACCTNO = T2.ACCTNO 
-                AND T1.NOTENO = T2.NOTENO
-                AND T1.BILL_DT = T2.BILL_DT
-                AND (T1.BILL_PAID_DT = T2.BILL_PAID_DT OR (T1.BILL_PAID_DT IS NULL AND T2.BILL_PAID_DT IS NULL))
-                AND T1.BILL_AMT = T2.BILL_AMT
-                AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
-                AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
-                AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
-                AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
-                AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
-                AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
-                AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
-                AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
-                AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
-                AND T1.COSTCTR = T2.COSTCTR
-                AND T1.PRODUCT = T2.PRODUCT
-            WHERE T1.EXT IS NULL  -- New records that don't exist in historical
-        """)
-        
-        # ORIGINAL SAS SCD logic - KEEP records (LOAN_BILL_KEEP in SAS)
-        con.execute(f"""
-            CREATE TEMP TABLE keep_records AS
-            SELECT 
-                ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
-                BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, 
-                BILL_AMT_ESCROW, BILL_AMT_FEE,
-                BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, 
-                BILL_NOT_PAY_AMT_INT, BILL_NOT_PAY_AMT_ESCROW, 
-                BILL_NOT_PAY_AMT_FEE,
-                COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
-            FROM hist_with_dates
-            WHERE EXT IS NULL  -- Records that are not expiring today
-        """)
-        
-        # Combine all results (equivalent to SAS final UNION)
-        con.execute(f"""
-            CREATE TEMP TABLE scd_result AS
-            SELECT * FROM match_records
-            UNION ALL
-            SELECT * FROM updatex_records
-            UNION ALL
-            SELECT * FROM chgrec_records
-            UNION ALL
-            SELECT * FROM keep_records
-        """)
-        
-        # Cleanup temporary tables
-        con.execute("DROP TABLE hist_with_dates")
-        con.execute("DROP TABLE match_records")
-        con.execute("DROP TABLE chgrec_records")
-        con.execute("DROP TABLE updatex_records")
-        con.execute("DROP TABLE keep_records")
-        
-    else:
-        # No historical data - all records are new
-        print("    No historical records found - treating all as new...")
-        con.execute(f"""
-            CREATE TEMP TABLE scd_result AS
-            SELECT 
-                ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
-                BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, 
-                BILL_AMT_ESCROW, BILL_AMT_FEE,
-                BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, 
-                BILL_NOT_PAY_AMT_INT, BILL_NOT_PAY_AMT_ESCROW, 
-                BILL_NOT_PAY_AMT_FEE,
-                COSTCTR, PRODUCT,
-                DATE '{REPTDATE.date()}' AS VALID_FROM_DT,
-                DATE '{REPTDATE.date()}' AS VALID_TO_DT
-            FROM new_records
-        """)
-    
-    # Save chunk result
-    chunk_output = temp_path / f"scd_result_{chunk_id}.parquet"
-    con.execute(f"COPY scd_result TO '{chunk_output}' (FORMAT PARQUET)")
-    
-    # Get count for monitoring
-    result_count = con.execute("SELECT COUNT(*) FROM scd_result").fetchone()[0]
-    print(f"    Generated {result_count:,} records")
-    
-    # Cleanup
-    con.execute("DROP TABLE new_records")
-    con.execute("DROP TABLE scd_result")
-    
-    return chunk_output
+    pass  # Placeholder - this won't be called during temporary check
 
 def save_final_results(con, output_dir, date_str):
     """Save the final LN_BILL and ILOAN_BILL files"""
-    
-    con.execute("""
-        CREATE TEMP TABLE ln_bill_output AS
-        SELECT 
-            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
-            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
-        FROM with_entity
-        WHERE ENTITY_CD IS NULL OR ENTITY_CD = ''
-    """)
-    
-    con.execute("""
-        CREATE TEMP TABLE iln_bill_output AS
-        SELECT 
-            ACCTNO, NOTENO, BILL_DT, BILL_PAID_DT,
-            BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-            BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-            BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-            COSTCTR, PRODUCT, VALID_FROM_DT, VALID_TO_DT
-        FROM with_entity
-        WHERE ENTITY_CD = 'PIBB'
-    """)
-    
-    # Save without date suffix in filename
-    ln_bill_path = output_dir / f"LOAN_BILL.parquet"
-    iln_bill_path = output_dir / f"ILOAN_BILL.parquet"
-    
-    print(f"  Saving LOAN_BILL...")
-    con.execute(f"COPY ln_bill_output TO '{ln_bill_path}' (FORMAT PARQUET)")
-    
-    print(f"  Saving ILOAN_BILL...")  
-    con.execute(f"COPY iln_bill_output TO '{iln_bill_path}' (FORMAT PARQUET)")
-    
-    ln_count = con.execute("SELECT COUNT(*) FROM ln_bill_output").fetchone()[0]
-    iln_count = con.execute("SELECT COUNT(*) FROM iln_bill_output").fetchone()[0]
-    
-    print(f"  ✓ LOAN_BILL: {ln_count:,} records")
-    print(f"  ✓ ILOAN_BILL: {iln_count:,} records")
-    
-    return ln_bill_path, iln_bill_path
+    pass  # Placeholder - this won't be called during temporary check
 
 def process_hp_bill_extraction(
     loan_bill_path: Path,
@@ -564,84 +292,13 @@ def process_hp_bill_extraction(
     output_dir: Path,
     report_date: datetime
 ) -> None:
-    """
-    STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
-    """
-    
-    print("\n" + "="*80)
-    print("STEP 2: HP/IHP BILL EXTRACTION")
-    print("="*80)
-    
-    # yymmdd format for file naming
-    date_str = report_date.strftime("%y%m%d")
-    
-    hp_products_str = ','.join(map(str, HP_PRODUCTS))
-    
-    con = duckdb.connect(':memory:')
-    
-    # Extract HP_BILL from TODAY'S LOAN_BILL
-    print("\n2.1: Extracting HP_BILL from LOAN_BILL...")
-    
-    if not loan_bill_path.exists():
-        print(f"  ERROR: LOAN_BILL not found: {loan_bill_path}")
-        return
-    
-    con.execute(f"""
-        CREATE TABLE loan_bill AS
-        SELECT * FROM read_parquet('{loan_bill_path}')
-    """)
-    
-    con.execute(f"""
-        CREATE TABLE hp_bill AS
-        SELECT * FROM loan_bill
-        WHERE PRODUCT IN ({hp_products_str}) OR PRODUCT = 392
-    """)
-    
-    hp_count = con.execute("SELECT COUNT(*) FROM hp_bill").fetchone()[0]
-    print(f"  Filtered {hp_count:,} HP records")
-    
-    # Save HP_BILL without date suffix
-    hp_bill_path = output_dir / f"HP_BILL.parquet"
-    con.execute(f"COPY hp_bill TO '{hp_bill_path}' (FORMAT PARQUET)")
-    hp_size = hp_bill_path.stat().st_size / (1024 * 1024)
-    print(f"  ✓ HP_BILL: {hp_bill_path.name}")
-    print(f"    Records: {hp_count:,}, Size: {hp_size:.2f} MB")
-    
-    # Extract IHP_BILL from TODAY'S ILOAN_BILL
-    print("\n2.2: Extracting IHP_BILL from ILOAN_BILL...")
-    
-    if not iloan_bill_path.exists():
-        print(f"  ERROR: ILOAN_BILL not found: {iloan_bill_path}")
-        con.close()
-        return
-    
-    con.execute(f"""
-        CREATE TABLE iloan_bill AS
-        SELECT * FROM read_parquet('{iloan_bill_path}')
-    """)
-    
-    con.execute(f"""
-        CREATE TABLE ihp_bill AS
-        SELECT * FROM iloan_bill
-        WHERE PRODUCT IN ({hp_products_str})
-    """)
-    
-    ihp_count = con.execute("SELECT COUNT(*) FROM ihp_bill").fetchone()[0]
-    print(f"  Filtered {ihp_count:,} IHP records")
-    
-    # Save IHP_BILL without date suffix
-    ihp_bill_path = output_dir / f"IHP_BILL.parquet"
-    con.execute(f"COPY ihp_bill TO '{ihp_bill_path}' (FORMAT PARQUET)")
-    ihp_size = ihp_bill_path.stat().st_size / (1024 * 1024)
-    print(f"  ✓ IHP_BILL: {ihp_bill_path.name}")
-    print(f"    Records: {ihp_count:,}, Size: {ihp_size:.2f} MB")
-    
-    con.close()
+    """STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL"""
+    pass  # Placeholder - this won't be called during temporary check
 
 # Main execution
 if __name__ == "__main__":
     print("="*80)
-    print("BILL PROCESSING PIPELINE - ORIGINAL SAS LOGIC")
+    print("BILL PROCESSING PIPELINE - TEMPORARY RECORD COUNT CHECK")
     print("="*80)
     
     # SAS date calculations for processing logic
@@ -669,7 +326,7 @@ if __name__ == "__main__":
     prev_dir = Path(f"/parquet/dwh/LOAN/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}")
 
     
-    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL (ORIGINAL SAS LOGIC)
+    # STEP 1: Just count historical records and exit
     loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
         input_enrh_path=input_enrh,
         output_dir=output_dir,
@@ -678,24 +335,7 @@ if __name__ == "__main__":
         chunk_size=5_000_000
     )
     
-    if loan_bill_path is None:
-        print("\n✗ STEP 1 failed. Exiting.")
-        exit(1)
-    
-    # STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
-    process_hp_bill_extraction(
-        loan_bill_path=loan_bill_path,
-        iloan_bill_path=iloan_bill_path,
-        output_dir=output_dir,
-        report_date=REPTDATE
-    )
-    
+    # Don't proceed to STEP 2 since we're just checking
     print("\n" + "="*80)
-    print("PROCESSING COMPLETED SUCCESSFULLY")
-    print("="*80)
-    print(f"\nGenerated Files (Date: {date_str}):")
-    print(f"  1. LOAN_BILL.parquet")
-    print(f"  2. ILOAN_BILL.parquet") 
-    print(f"  3. HP_BILL.parquet")
-    print(f"  4. IHP_BILL.parquet")
+    print("PROGRAM COMPLETED - ONLY RECORD COUNTING WAS PERFORMED")
     print("="*80)
