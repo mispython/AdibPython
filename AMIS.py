@@ -2,6 +2,7 @@ import polars as pl
 import pyreadstat
 import os
 import duckdb
+import struct
 from datetime import datetime, timedelta
 from pathlib import Path
 import pyarrow.parquet as pq
@@ -58,6 +59,10 @@ BASE_PATH = "/host/mis/parquet/crm"
 CIS_DATA_PATH = BASE_INPUT_PATH / f"year={CIS_YEAR}/month={CIS_MONTH}/day={CIS_DAY}"
 TODAY_CHANNEL_SUM = CIS_DATA_PATH / "CIPHONET_ALL_SUMMARY.parquet"
 TODAY_CHANNEL_UPDATE = CIS_DATA_PATH / "CIPHONET_FULL_SUMMARY.parquet"
+OTC_SUMMARY_SRC = CIS_DATA_PATH / "CIPHONET_OTC_SUMMARY.parquet"  # For BRANCH data
+
+# Lookup file
+BCODE_LOOKUP = "/sasdata/rawdata/lookup/LKP_BRANCH"
 
 # Last month paths (FINAL - no more updates after month end)
 LAST_MONTH_PATH = f"{BASE_PATH}/year={LAST_MONTH_YEAR}/month={LAST_MONTH_NUM:02d}"
@@ -71,10 +76,123 @@ os.makedirs(CURRENT_MONTH_PATH, exist_ok=True)
 CURRENT_CHANNEL_SUM = f"{CURRENT_MONTH_PATH}/CHANNEL_SUM.parquet"
 CURRENT_CHANNEL_UPDATE = f"{CURRENT_MONTH_PATH}/CHANNEL_UPDATE.parquet"
 
+# OTC_DETAIL output (CRMWH library)
+CRMWH_DIR = Path(BASE_PATH) / "CRMWH"
+CRMWH_DIR.mkdir(parents=True, exist_ok=True)
+
 print(f"CIS Input Path:        {CIS_DATA_PATH}")
 print(f"Last Month (FINAL):    {LAST_MONTH_PATH}")
 print(f"Current Month (ACTIVE):{CURRENT_MONTH_PATH}")
+print(f"CRMWH Output:          {CRMWH_DIR}")
 print()
+
+# =============================================================================
+# BRCODE LOOKUP READER (EBCDIC Format)
+# =============================================================================
+
+# BRCODE Layout
+LRECL = 80
+LAYOUT = {
+    'BRCODE': {'type': 'packed', 'slice': slice(1, 9, None)},
+    'BRABBR': {'type': 'ebcdic', 'slice': slice(5, 8, None)},
+    'BRSTAT': {'type': 'ebcdic', 'slice': slice(11, 40, None)},
+    'BRSTATEIND': {'type': 'ebcdic', 'slice': slice(44, 45, None)},
+    'BRSTATUS': {'type': 'ebcdic', 'slice': slice(49, 50, None)}
+}
+
+def unpack_packed_decimal(packed_bytes):
+    """
+    Unpack IBM packed decimal (COMP-3) to integer
+    Each byte contains 2 digits except last byte (1 digit + sign)
+    """
+    if not packed_bytes or len(packed_bytes) == 0:
+        return None
+    
+    result = 0
+    for i, byte in enumerate(packed_bytes[:-1]):
+        high = (byte >> 4) & 0x0F
+        low = byte & 0x0F
+        result = result * 100 + high * 10 + low
+    
+    # Last byte: high nibble is digit, low nibble is sign
+    last_byte = packed_bytes[-1]
+    last_digit = (last_byte >> 4) & 0x0F
+    result = result * 10 + last_digit
+    
+    # Check sign (0xD = negative, 0xC/0xF = positive)
+    sign = last_byte & 0x0F
+    if sign == 0x0D:
+        result = -result
+    
+    return result
+
+def decode_ebcdic(ebcdic_bytes):
+    """Decode EBCDIC bytes to ASCII string"""
+    try:
+        return ebcdic_bytes.decode('cp037').strip()
+    except:
+        return ''
+
+def read_brcode_lookup(filepath):
+    """
+    Read LKP_BRANCH EBCDIC file and return DataFrame
+    
+    SAS equivalent:
+    DATA BCODE;
+       INFILE BCODE;
+       INPUT @002 BRANCHNO 3.;
+    RUN;
+    """
+    records = []
+    
+    try:
+        with open(filepath, 'rb') as f:
+            while True:
+                record = f.read(LRECL)
+                if not record or len(record) < LRECL:
+                    break
+                
+                row = {}
+                
+                for field_name, field_info in LAYOUT.items():
+                    field_slice = field_info['slice']
+                    field_type = field_info['type']
+                    field_bytes = record[field_slice]
+                    
+                    if field_type == 'packed':
+                        # Packed decimal - convert to integer
+                        row[field_name] = unpack_packed_decimal(field_bytes)
+                    elif field_type == 'ebcdic':
+                        # EBCDIC string - convert to ASCII
+                        row[field_name] = decode_ebcdic(field_bytes)
+                    else:
+                        row[field_name] = None
+                
+                records.append(row)
+        
+        # Convert to Polars DataFrame
+        df = pl.DataFrame(records)
+        
+        # Match SAS data types and rename BRCODE to BRANCHNO
+        df = df.select([
+            pl.col('BRCODE').cast(pl.Int64).alias('BRANCHNO'),
+            pl.col('BRABBR').cast(pl.Utf8),
+            pl.col('BRSTAT').cast(pl.Utf8),
+            pl.col('BRSTATEIND').cast(pl.Utf8),
+            pl.col('BRSTATUS').cast(pl.Utf8)
+        ])
+        
+        # Filter for active branches only (optional - matching SAS logic)
+        df = df.filter(pl.col('BRSTATUS') == 'A')
+        
+        return df
+        
+    except FileNotFoundError:
+        print(f"⚠ Lookup file not found: {filepath}")
+        return pl.DataFrame({'BRANCHNO': pl.Series([], dtype=pl.Int64)})
+    except Exception as e:
+        print(f"✗ Error reading lookup file: {str(e)}")
+        return pl.DataFrame({'BRANCHNO': pl.Series([], dtype=pl.Int64)})
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -361,6 +479,99 @@ else:
     print()
 
 # =============================================================================
+# PROCESS OTC_DETAIL (BRANCH + BCODE)
+# =============================================================================
+print("=" * 80)
+print("PROCESSING OTC_DETAIL (BRANCH + BCODE)")
+print("=" * 80)
+
+# Read BCODE from lookup file
+print(f"Reading BCODE from: {BCODE_LOOKUP}")
+bcode_df = read_brcode_lookup(BCODE_LOOKUP)
+print(f"  Total branches in lookup: {len(bcode_df)}")
+if len(bcode_df) > 0:
+    print(f"  BRANCHNO range: {bcode_df['BRANCHNO'].min()} - {bcode_df['BRANCHNO'].max()}")
+    print("  Sample:")
+    print(bcode_df.head(10))
+print()
+
+# Read BRANCH data from OTC_SUMMARY
+print(f"Reading BRANCH from: {OTC_SUMMARY_SRC}")
+branch_schema = {
+    'BRANCHNO': pl.Int64,
+    'TOLPROMPT': pl.Int64,
+    'TOLUPDATE': pl.Int64
+}
+
+if parquet_exists(OTC_SUMMARY_SRC):
+    branch_source = pl.read_parquet(OTC_SUMMARY_SRC)
+    print(f"  OTC_SUMMARY records: {len(branch_source)}")
+    print(f"  Columns: {branch_source.columns}")
+    
+    # Check if BRANCHNO column exists, if not try to extract from other columns
+    if "BRANCHNO" not in branch_source.columns:
+        print("  ⚠ BRANCHNO not found in OTC_SUMMARY, creating placeholder")
+        branch_df = pl.DataFrame(schema=branch_schema)
+    else:
+        # Transform to match SAS BRANCH structure
+        branch_df = (
+            branch_source
+            .with_columns([
+                pl.col("BRANCHNO").cast(pl.Int64)
+            ])
+            .rename({
+                "PROMPT": "TOLPROMPT",
+                "UPDATED": "TOLUPDATE"
+            })
+            .select(["BRANCHNO", "TOLPROMPT", "TOLUPDATE"])
+        )
+        print(f"  BRANCH records: {len(branch_df)}")
+        print("  Sample:")
+        print(branch_df.head(10))
+else:
+    print("  ⚠ OTC_SUMMARY file not found, creating empty BRANCH DataFrame")
+    branch_df = pl.DataFrame(schema=branch_schema)
+print()
+
+# Sort both DataFrames
+bcode_sorted = bcode_df.select(['BRANCHNO']).sort("BRANCHNO")
+branch_sorted = branch_df.sort("BRANCHNO")
+
+print(f"Sorted BCODE records: {len(bcode_sorted)}")
+print(f"Sorted BRANCH records: {len(branch_sorted)}")
+print()
+
+# Merge (SAS: MERGE BCODE(IN=A) BRANCH(IN=B); BY BRANCHNO; IF A;)
+print("Merging BCODE and BRANCH...")
+otc_detail = (
+    bcode_sorted.join(
+        branch_sorted,
+        on="BRANCHNO",
+        how="left"  # Keep all BCODE rows (IF A)
+    )
+    .with_columns([
+        pl.col("TOLPROMPT").fill_null(0),
+        pl.col("TOLUPDATE").fill_null(0),
+    ])
+)
+
+print(f"  Merged records: {len(otc_detail)}")
+print(f"  Branches with data: {otc_detail.filter(pl.col('TOLPROMPT') > 0).height}")
+print(f"  Branches without data: {otc_detail.filter(pl.col('TOLPROMPT') == 0).height}")
+print()
+
+# Output: CRMWH.OTC_DETAIL_MMYY
+otc_name = f"OTC_DETAIL_{REPTMON}{REPTYEAR}"
+otc_path = CRMWH_DIR / f"{otc_name}.parquet"
+otc_detail.write_parquet(otc_path)
+print(f"✓ OTC detail written to: {otc_path}")
+print()
+
+print("OTC_DETAIL Summary:")
+print(otc_detail.describe())
+print()
+
+# =============================================================================
 # VERIFICATION WITH DUCKDB
 # =============================================================================
 print("=" * 80)
@@ -409,6 +620,23 @@ if not is_last_month_batch:
         print(f"⚠ Verification failed: {str(e)}")
     print()
 
+# Verify OTC_DETAIL
+print(f"OTC_DETAIL ({REPTMON}{REPTYEAR}):")
+try:
+    con.register('otc_detail', otc_detail.to_arrow())
+    result = con.execute("""
+        SELECT 
+            COUNT(*) as total_branches,
+            SUM(TOLPROMPT) as total_prompt,
+            SUM(TOLUPDATE) as total_update,
+            COUNT(CASE WHEN TOLPROMPT > 0 THEN 1 END) as branches_with_data
+        FROM otc_detail
+    """).fetchdf()
+    print(result)
+except Exception as e:
+    print(f"⚠ Verification failed: {str(e)}")
+print()
+
 con.close()
 
 # =============================================================================
@@ -435,5 +663,11 @@ else:
     print(f"     Records: {len(final_current_update)}")
 
 print()
-print(f"DATA SOURCE: {CIS_DATA_PATH}")
+print(f"OTC DETAIL:")
+print(f"  3. {otc_path}")
+print(f"     Branches: {len(otc_detail)}")
+print()
+print(f"DATA SOURCES:")
+print(f"  CIS: {CIS_DATA_PATH}")
+print(f"  Lookup: {BCODE_LOOKUP}")
 print("=" * 80)
