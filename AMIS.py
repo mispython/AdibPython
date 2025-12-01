@@ -100,6 +100,12 @@ def process_channel_sum():
         if os.path.exists(prev_sum_path):
             prev_month_data = pl.read_parquet(prev_sum_path)
             print(f"  Previous month data: {len(prev_month_data)} records")
+            
+            # Convert all numeric columns to Float64 to match schema
+            prev_month_data = prev_month_data.with_columns([
+                pl.col("TOLPROMPT").cast(pl.Float64),
+                pl.col("TOLUPDATE").cast(pl.Float64)
+            ])
         else:
             print(f"  No previous month data found at: {prev_sum_path}")
         
@@ -110,8 +116,20 @@ def process_channel_sum():
         if os.path.exists(curr_sum_path):
             curr_month_data = pl.read_parquet(curr_sum_path)
             print(f"  Current month existing: {len(curr_month_data)} records")
+            
+            # Convert to Float64 for consistency
+            curr_month_data = curr_month_data.with_columns([
+                pl.col("TOLPROMPT").cast(pl.Float64),
+                pl.col("TOLUPDATE").cast(pl.Float64)
+            ])
         
-        # 3. Combine: previous month + current month existing + today's new data
+        # 3. Convert today's data to Float64
+        channel_df = channel_df.with_columns([
+            pl.col("TOLPROMPT").cast(pl.Float64),
+            pl.col("TOLUPDATE").cast(pl.Float64)
+        ])
+        
+        # 4. Combine: previous month + current month existing + today's new data
         all_data = []
         
         # Add previous month data
@@ -135,7 +153,7 @@ def process_channel_sum():
         
         # Combine all data
         if all_data:
-            final_df = pl.concat(all_data, how="vertical")
+            final_df = pl.concat(all_data, how="vertical", how="diagonal_relaxed")
             print(f"  After accumulation: {len(final_df)} total records")
             return final_df
         else:
@@ -143,6 +161,8 @@ def process_channel_sum():
         
     except Exception as e:
         print(f"  Error: {e}")
+        import traceback
+        traceback.print_exc()
         return pl.DataFrame()
 
 # =============================================================================
@@ -196,6 +216,8 @@ def process_otc_detail():
         return otc_detail
     except Exception as e:
         print(f"  Error: {e}")
+        import traceback
+        traceback.print_exc()
         return pl.DataFrame()
 
 # =============================================================================
@@ -216,9 +238,9 @@ def process_channel_update():
             update_df = df.head(2)
             
             # SAS: IF _N_ = 1 THEN DESC='TOTAL PROMPT BASE';
-            update_df = update_df.with_row_index().with_columns(
-                pl.when(pl.col("index") == 0).then("TOTAL PROMPT BASE")
-                 .when(pl.col("index") == 1).then("TOTAL UPDATED")
+            update_df = update_df.with_row_index(name="index").with_columns(
+                pl.when(pl.col("index") == 0).then(pl.lit("TOTAL PROMPT BASE"))
+                 .when(pl.col("index") == 1).then(pl.lit("TOTAL UPDATED"))
                  .alias("DESC")
             ).drop("index").select([
                 pl.col("DESC"),
@@ -246,6 +268,14 @@ def process_channel_update():
             if os.path.exists(prev_update_path):
                 prev_month_data = pl.read_parquet(prev_update_path)
                 print(f"  Previous month data: {len(prev_month_data)} records")
+                
+                # Ensure consistent data types
+                prev_month_data = prev_month_data.with_columns([
+                    pl.col("ATM").cast(pl.Float64),
+                    pl.col("EBK").cast(pl.Float64),
+                    pl.col("OTC").cast(pl.Float64),
+                    pl.col("TOTAL").cast(pl.Float64)
+                ])
             else:
                 print(f"  No previous month data found at: {prev_update_path}")
             
@@ -256,8 +286,24 @@ def process_channel_update():
             if os.path.exists(curr_update_path):
                 curr_month_data = pl.read_parquet(curr_update_path)
                 print(f"  Current month existing: {len(curr_month_data)} records")
+                
+                # Ensure consistent data types
+                curr_month_data = curr_month_data.with_columns([
+                    pl.col("ATM").cast(pl.Float64),
+                    pl.col("EBK").cast(pl.Float64),
+                    pl.col("OTC").cast(pl.Float64),
+                    pl.col("TOTAL").cast(pl.Float64)
+                ])
             
-            # 3. Combine: previous month + current month existing + today's new data
+            # 3. Convert today's data to Float64
+            update_df = update_df.with_columns([
+                pl.col("ATM").cast(pl.Float64),
+                pl.col("EBK").cast(pl.Float64),
+                pl.col("OTC").cast(pl.Float64),
+                pl.col("TOTAL").cast(pl.Float64)
+            ])
+            
+            # 4. Combine: previous month + current month existing + today's new data
             all_data = []
             
             # Add previous month data
@@ -281,7 +327,7 @@ def process_channel_update():
             
             # Combine all data
             if all_data:
-                final_df = pl.concat(all_data, how="vertical")
+                final_df = pl.concat(all_data, how="vertical", how="diagonal_relaxed")
                 print(f"  After accumulation: {len(final_df)} total records")
                 return final_df
             else:
@@ -291,6 +337,8 @@ def process_channel_update():
             return pl.DataFrame()
     except Exception as e:
         print(f"  Error: {e}")
+        import traceback
+        traceback.print_exc()
         return pl.DataFrame()
 
 # =============================================================================
@@ -302,22 +350,43 @@ def write_otc_sas_dataset(df, dataset_name):
         return False
     
     try:
-        sas_path = f"{CURRENT_MONTH_PATH}"
+        sas_path = CURRENT_MONTH_PATH
         os.makedirs(sas_path, exist_ok=True)
         
         # Assign library
+        print(f"  Assigning SAS library OTCLIB to {sas_path}")
         lib_result = sas.submit(f"libname OTCLIB '{sas_path}';")
-        if "ERROR" in lib_result["LOG"]:
-            print(f"  Library error: {lib_result['LOG'][:200]}")
-            return False
+        
+        # Check for errors
+        if isinstance(lib_result, dict) and "LOG" in lib_result:
+            if "ERROR" in lib_result["LOG"]:
+                print(f"  Library error: {lib_result['LOG'][:500]}")
+                return False
+        elif hasattr(lib_result, 'LOG'):
+            if "ERROR" in lib_result.LOG:
+                print(f"  Library error: {lib_result.LOG[:500]}")
+                return False
         
         # Write dataset
         print(f"  Creating {dataset_name}...")
-        write_result = sas.df2sd(df.to_pandas(), table=dataset_name, libref="OTCLIB")
+        pandas_df = df.to_pandas()
         
-        if hasattr(write_result, 'LOG') and "ERROR" in write_result.LOG:
-            print(f"  Write error: {write_result.LOG}")
-            return False
+        # Debug: Show dataframe info
+        print(f"  DataFrame shape: {pandas_df.shape}")
+        print(f"  DataFrame columns: {list(pandas_df.columns)}")
+        print(f"  DataFrame dtypes: {pandas_df.dtypes.to_dict()}")
+        
+        write_result = sas.df2sd(pandas_df, table=dataset_name, libref="OTCLIB")
+        
+        # Check for errors
+        if hasattr(write_result, 'LOG'):
+            log_text = write_result.LOG
+            if "ERROR" in log_text:
+                print(f"  Write error found in log")
+                print(f"  Log snippet: {log_text[:1000]}")
+                return False
+            else:
+                print(f"  Write successful")
         
         # Check file
         sas_file = f"{sas_path}/{dataset_name}.sas7bdat"
@@ -326,11 +395,16 @@ def write_otc_sas_dataset(df, dataset_name):
             print(f"  ✓ {dataset_name}.sas7bdat created ({size:,} bytes)")
             return True
         else:
-            print(f"  ✗ SAS file not found")
+            print(f"  ✗ SAS file not found at: {sas_file}")
+            print(f"  Listing files in {sas_path}:")
+            for f in os.listdir(sas_path):
+                print(f"    {f}")
             return False
             
     except Exception as e:
         print(f"  SAS error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # =============================================================================
@@ -338,57 +412,78 @@ def write_otc_sas_dataset(df, dataset_name):
 # =============================================================================
 def assign_libname(lib_name, sas_path):
     """Assign SAS library to physical path"""
+    print(f"  Assigning {lib_name} to {sas_path}")
     log = sas.submit(f"libname {lib_name} '{sas_path}';")
     return log
 
 def set_data(df_polars, lib_name, ctrl_name, cur_data, prev_data):
     """Transfer polars DataFrame to SAS dataset with metadata control"""
-    df_pandas = df_polars.to_pandas()
-    sas.df2sd(df_pandas, table=cur_data, libref='work')
-    
-    log = sas.submit(f"""
-        proc sql noprint;
-           create table colmeta as 
-            select name, type, length
-        from dictionary.columns
-        where libname = upcase("{ctrl_name}")  
-             and memname = upcase("{prev_data}");
-        quit;
-    """)
-    
-    df_meta = sas.sasdata("colmeta", libref="work").to_df()
-    
-    if len(df_meta) > 0:
-        cols = df_meta["name"].dropna().tolist()
-        col_list = ", ".join(cols)
+    try:
+        df_pandas = df_polars.to_pandas()
+        print(f"  Converting to pandas: {df_pandas.shape}")
         
-        casted_cols = []
-        for _, row in df_meta.iterrows():
-            col = row["name"]
-            length = row['length']
-            if str(row['type']).strip().lower() == 'char' and pd.notnull(length) and length > 0:
-                casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
-            else:
-                casted_cols.append(col)
+        # Write to WORK library first
+        print(f"  Writing to work.{cur_data}")
+        sas.df2sd(df_pandas, table=cur_data, libref='work')
         
-        casted_cols_str = ",\n ".join(casted_cols)
-        
+        # Get metadata from control dataset
+        print(f"  Getting metadata from {ctrl_name}.{prev_data}")
         log = sas.submit(f"""
             proc sql noprint;
-                 create table {lib_name}.{cur_data} as
-                 select {col_list} from {ctrl_name}.{prev_data}(obs=0)
-                 union corr
-                 select {casted_cols_str} from work.{cur_data};
+               create table work.colmeta as 
+                select name, type, length
+            from dictionary.columns
+            where libname = upcase("{ctrl_name}")  
+                 and memname = upcase("{prev_data}");
             quit;
         """)
-    else:
-        log = sas.submit(f"""
-            data {lib_name}.{cur_data};
-                set work.{cur_data};
-            run;
-        """)
-    
-    return log
+        
+        df_meta = sas.sasdata("colmeta", libref="work").to_df()
+        print(f"  Metadata records: {len(df_meta)}")
+        
+        if len(df_meta) > 0:
+            cols = df_meta["name"].dropna().tolist()
+            col_list = ", ".join(cols)
+            
+            casted_cols = []
+            for _, row in df_meta.iterrows():
+                col = row["name"]
+                length = row['length']
+                if str(row['type']).strip().lower() == 'char' and pd.notnull(length) and length > 0:
+                    casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
+                else:
+                    casted_cols.append(col)
+            
+            casted_cols_str = ",\n ".join(casted_cols)
+            
+            log = sas.submit(f"""
+                proc sql noprint;
+                     create table {lib_name}.{cur_data} as
+                     select {col_list} from {ctrl_name}.{prev_data}(obs=0)
+                     union corr
+                     select {casted_cols_str} from work.{cur_data};
+                quit;
+            """)
+        else:
+            print(f"  No metadata found, using simple data step")
+            log = sas.submit(f"""
+                data {lib_name}.{cur_data};
+                    set work.{cur_data};
+                run;
+            """)
+        
+        # Check for errors
+        if hasattr(log, 'LOG') and "ERROR" in log.LOG:
+            print(f"  Transfer error: {log.LOG[:500]}")
+        
+        print(f"  Transfer complete")
+        return log
+        
+    except Exception as e:
+        print(f"  Error in set_data: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 # =============================================================================
 # MAIN PROCESSING
@@ -451,13 +546,15 @@ if sas:
         if len(channel_df) > 0:
             print(f"\nTransferring CHANNEL_SUM to SAS...")
             log1 = set_data(channel_df, "crm", "ctrl_crm", "channel_sum", "channel_sum_ctl")
-            print(f"  CHANNEL_SUM transferred: {len(channel_df)} records")
+            if log1:
+                print(f"  ✓ CHANNEL_SUM transferred: {len(channel_df)} records")
         
         # Transfer CHANNEL_UPDATE
         if len(update_df) > 0:
             print(f"\nTransferring CHANNEL_UPDATE to SAS...")
             log2 = set_data(update_df, "crm", "ctrl_crm", "channel_update", "channel_update_ctl")
-            print(f"  CHANNEL_UPDATE transferred: {len(update_df)} records")
+            if log2:
+                print(f"  ✓ CHANNEL_UPDATE transferred: {len(update_df)} records")
         
         # Transfer OTC_DETAIL
         if len(otc_detail) > 0:
@@ -465,12 +562,17 @@ if sas:
             print(f"\nTransferring OTC_DETAIL to SAS...")
             sas_success = write_otc_sas_dataset(otc_detail, dataset_name)
             if not sas_success:
+                print(f"  Fallback: Using set_data method")
                 log3 = set_data(otc_detail, "crm", "ctrl_crm", dataset_name, "otc_detail_ctl")
+                if log3:
+                    print(f"  ✓ OTC_DETAIL transferred via set_data")
             
         print(f"\n✓ SAS datasets created with previous month accumulation")
         
     except Exception as e:
         print(f"\n✗ Error transferring to SAS: {e}")
+        import traceback
+        traceback.print_exc()
 else:
     print(f"\nSAS session not available")
 
@@ -509,8 +611,13 @@ if len(update_df) > 0:
 if len(otc_detail) > 0:
     print(f"\n4. OTC_DETAIL:")
     print(f"   - Total branches: {len(otc_detail)} (should be 375)")
-    print(f"   - First BRANCHNO: {otc_detail['BRANCHNO'].min()} (should be 2)")
+    print(f"   - First BRANCHNO: {otc_detail['BRANCHNO'].min()}")
+    print(f"   - Last BRANCHNO: {otc_detail['BRANCHNO'].max()}")
+    
+    # Show the first few BRANCHNO values
+    first_10 = otc_detail.head(10)['BRANCHNO'].to_list()
+    print(f"   - First 10 BRANCHNO: {first_10}")
 
 print("\n" + "=" * 80)
-print("PROCESS COMPLETE")
+print("PROCESS COMPLETE - WITH PREVIOUS MONTH ACCUMULATION")
 print("=" * 80)
