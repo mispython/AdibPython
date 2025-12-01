@@ -1,13 +1,24 @@
 import polars as pl
 import os
+import sys
 import duckdb
 import struct
 from datetime import datetime, timedelta
 from pathlib import Path
 import pyarrow.parquet as pq
 
-# Import BRCODE layout from separate module
-from BRCODE_layout import LRECL, LAYOUT
+# =============================================================================
+# DYNAMIC IMPORT OF BRCODE_LAYOUT
+# =============================================================================
+var_path = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/PARQUET_LAYOUT"
+sys.path.insert(0, var_path)
+
+try:
+    from BRCODE_layout import LRECL, LAYOUT
+    print(f"✓ Loaded BRCODE_layout from: {var_path}")
+except ImportError as e:
+    print(f"✗ Failed to import BRCODE_layout from {var_path}: {e}")
+    sys.exit(1)
 
 # =============================================================================
 # DATE CALCULATIONS
