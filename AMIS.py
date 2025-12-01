@@ -4,6 +4,19 @@ import duckdb
 from datetime import datetime, timedelta
 from pathlib import Path
 import pyarrow.parquet as pq
+import saspy
+
+# =============================================================================
+# SAS SESSION INITIALIZATION
+# =============================================================================
+print("Initializing SAS session...")
+try:
+    sas = saspy.SASsession()
+    print("✓ SAS session initialized")
+except Exception as e:
+    print(f"✗ Failed to initialize SAS session: {e}")
+    print("Will fall back to Parquet output")
+    sas = None
 
 # =============================================================================
 # DATE CALCULATIONS
@@ -51,7 +64,10 @@ LAST_MONTH_PATH = f"{BASE_PATH}/year={LAST_MONTH_YEAR}/month={LAST_MONTH_NUM:02d
 CURRENT_MONTH_PATH = f"{BASE_PATH}/year={CURRENT_MONTH_YEAR}/month={CURRENT_MONTH_NUM:02d}"
 CRMWH_DIR = Path(BASE_PATH) / "CRMWH"
 
-for path in [LAST_MONTH_PATH, CURRENT_MONTH_PATH, str(CRMWH_DIR)]:
+# Monthly OTC detail path - NEW
+OTC_DETAIL_MONTHLY_PATH = f"{BASE_PATH}/year={CURRENT_MONTH_YEAR}/month={CURRENT_MONTH_NUM:02d}/otc_detail"
+
+for path in [LAST_MONTH_PATH, CURRENT_MONTH_PATH, str(CRMWH_DIR), OTC_DETAIL_MONTHLY_PATH]:
     os.makedirs(path, exist_ok=True)
 
 LAST_CHANNEL_SUM = f"{LAST_MONTH_PATH}/CHANNEL_SUM.parquet"
@@ -92,35 +108,17 @@ def read_brcode_lookup_text(filepath):
                 line = line.ljust(80)
                 
                 # Extract fields based on fixed positions
-                # BRCODE: positions 1-4 (index 0-3) -> e.g., "B001"
-                # We want positions 2-4 (index 1-3) -> "001" as per SAS INPUT @002 BRANCHNO 3.
-                brcode_str = line[0:4].strip()  # "B001"
-                branchno_str = line[1:4].strip()  # "001" (positions 2-4)
-                
-                # BRABBR: positions 6-8 (index 5-7)
-                brabbr = line[5:8].strip()
-                
-                # BRSTAT: positions 12-40 (index 11-39)
-                brstat = line[11:40].strip()
-                
-                # BRSTATEIND: position 45 (index 44)
-                brstateind = line[44:45].strip() if len(line) > 44 else ''
-                
-                # BRSTATUS: position 50 (index 49)
-                brstatus = line[49:50].strip() if len(line) > 49 else ''
+                brcode_str = line[0:4].strip()
+                branchno_str = line[1:4].strip()
                 
                 # Convert BRANCHNO to integer
                 try:
                     branchno = int(branchno_str)
                 except ValueError:
-                    continue  # Skip invalid records
+                    continue
                 
                 records.append({
                     'BRANCHNO': branchno,
-                    'BRABBR': brabbr,
-                    'BRSTAT': brstat,
-                    'BRSTATEIND': brstateind,
-                    'BRSTATUS': brstatus
                 })
         
         if not records:
@@ -129,11 +127,7 @@ def read_brcode_lookup_text(filepath):
         
         df = pl.DataFrame(records)
         
-        # Filter for active branches (BRSTATUS = 'O' or 'A')
-        # Based on your example: O = Open/Active
-        df = df.filter(pl.col('BRSTATUS').is_in(['O', 'A'])).select(['BRANCHNO'])
-        
-        return df
+        return df.select(['BRANCHNO'])
         
     except FileNotFoundError:
         print(f"⚠ Lookup file not found: {filepath}")
@@ -198,6 +192,68 @@ def read_or_empty(path, schema, normalizer=None):
         return normalizer(df) if normalizer else df
     return pl.DataFrame(schema=schema)
 
+def write_to_sas_dataset(df_polars, sas_path, dataset_name="OTC_DETAIL"):
+    """
+    Write polars DataFrame to SAS dataset
+    
+    Parameters:
+    - df_polars: Polars DataFrame
+    - sas_path: Directory path for SAS dataset
+    - dataset_name: Name of SAS dataset (without extension)
+    
+    Returns: True if successful, False otherwise
+    """
+    if sas is None:
+        print("  ✗ SAS session not available, cannot write to SAS dataset")
+        return False
+    
+    try:
+        # Convert polars to pandas
+        df_pandas = df_polars.to_pandas()
+        
+        # Define SAS library reference
+        lib_ref = "otc_monthly"
+        
+        # Assign SAS library
+        assign_log = sas.submit(f"libname {lib_ref} '{sas_path}';")
+        if "ERROR" in assign_log["LOG"]:
+            print(f"  ✗ Error assigning SAS library: {assign_log['LOG']}")
+            return False
+        
+        print(f"  ✓ SAS library assigned: {lib_ref} -> {sas_path}")
+        
+        # Write to SAS dataset
+        print(f"  Writing {len(df_pandas)} records to SAS dataset...")
+        result = sas.df2sd(
+            df=df_pandas,
+            table=dataset_name,
+            libref=lib_ref
+        )
+        
+        # Check for errors
+        if hasattr(result, 'LOG') and "ERROR" in result.LOG:
+            print(f"  ✗ Error in df2sd: {result.LOG}")
+            return False
+        
+        # Verify the dataset was created
+        verify_log = sas.submit(f"""
+            proc sql noprint;
+                select count(*) as record_count
+                from {lib_ref}.{dataset_name};
+            quit;
+        """)
+        
+        print(f"  ✓ SAS dataset created: {sas_path}/{dataset_name}.sas7bdat")
+        
+        # Clear library
+        sas.submit(f"libname {lib_ref} clear;")
+        
+        return True
+        
+    except Exception as e:
+        print(f"  ✗ Error writing to SAS: {str(e)}")
+        return False
+
 # =============================================================================
 # READ TODAY'S DATA
 # =============================================================================
@@ -261,7 +317,7 @@ else:
     print(f"  ✓ CURRENT MONTH updated: {len(final_current_ch)} / {len(final_current_up)} records")
 
 # =============================================================================
-# PROCESS OTC_DETAIL (BCODE + BRANCH MERGE)
+# PROCESS OTC_DETAIL (BCODE + BRANCH MERGE) - OUTPUT TO SAS DATASET
 # =============================================================================
 print("\n>>> PROCESSING OTC_DETAIL")
 
@@ -294,9 +350,29 @@ otc_detail = bcode_df.join(branch_df, on="BRANCHNO", how="left").with_columns([
     pl.col("TOLUPDATE").fill_null(0)
 ])
 
-otc_path = CRMWH_DIR / f"OTC_DETAIL_{REPTMON}{REPTYEAR}.parquet"
-otc_detail.write_parquet(otc_path)
-print(f"  ✓ OTC_DETAIL: {len(otc_detail)} branches ({otc_detail.filter(pl.col('TOLPROMPT') > 0).height} with data)")
+# =============================================================================
+# WRITE OTC_DETAIL TO SAS DATASET (MONTHLY OUTPUT)
+# =============================================================================
+print(f"\n>>> WRITING OTC_DETAIL TO SAS DATASET")
+print(f"  Monthly path: {OTC_DETAIL_MONTHLY_PATH}")
+
+# Write to SAS dataset
+sas_success = write_to_sas_dataset(
+    df_polars=otc_detail,
+    sas_path=OTC_DETAIL_MONTHLY_PATH,
+    dataset_name="OTC_DETAIL"
+)
+
+if sas_success:
+    print(f"  ✓ OTC_DETAIL written to SAS dataset: {len(otc_detail)} branches")
+else:
+    # Fallback to Parquet if SAS write fails
+    print("  Falling back to Parquet format...")
+    otc_path = CRMWH_DIR / f"OTC_DETAIL_{REPTMON}{REPTYEAR}.parquet"
+    otc_detail.write_parquet(otc_path)
+    print(f"  ✓ OTC_DETAIL saved as Parquet: {otc_path}")
+
+print(f"  Branches with data: {otc_detail.filter(pl.col('TOLPROMPT') > 0).height}")
 
 # =============================================================================
 # VERIFICATION
@@ -325,6 +401,19 @@ try:
     """).fetchdf()
     print(f"\n  OTC_DETAIL TOTALS:")
     print(result.to_string(index=False))
+    
+    # List files in OTC monthly directory
+    print(f"\n  OTC_DETAIL directory contents:")
+    if os.path.exists(OTC_DETAIL_MONTHLY_PATH):
+        files = os.listdir(OTC_DETAIL_MONTHLY_PATH)
+        for file in sorted(files)[:10]:  # Show first 10 files
+            size = os.path.getsize(os.path.join(OTC_DETAIL_MONTHLY_PATH, file))
+            print(f"    {file} ({size:,} bytes)")
+        if len(files) > 10:
+            print(f"    ... and {len(files) - 10} more files")
+    else:
+        print(f"    Directory not found: {OTC_DETAIL_MONTHLY_PATH}")
+        
 except Exception as e:
     print(f"  ⚠ Verification failed: {e}")
 
@@ -335,22 +424,10 @@ con.close()
 # =============================================================================
 print("\n" + "=" * 80)
 print(f"COMPLETED: {REPTDATE.strftime('%Y-%m-%d')}")
-print(f"  Monthly: {CURRENT_CHANNEL_SUM}")
-print(f"  OTC:     {otc_path}")
+print(f"  Monthly Channel Data: {CURRENT_CHANNEL_SUM}")
+if sas_success:
+    print(f"  OTC Detail (SAS): {OTC_DETAIL_MONTHLY_PATH}/OTC_DETAIL.sas7bdat")
+else:
+    print(f"  OTC Detail (Parquet): {otc_path}")
+print(f"  OTC Records: {len(otc_detail)} branches")
 print("=" * 80)
-```
-
-**Key changes:**
-
-1. **Removed all EBCDIC/packed decimal code** - no longer needed
-2. **Created `read_brcode_lookup_text()`** - simple text file reader that:
-   - Reads LKP_BRANCH as plain text (UTF-8)
-   - Extracts BRANCHNO from positions 2-4 (e.g., "001" from "B001")
-   - Filters for active branches (BRSTATUS = 'O' or 'A')
-   - Returns simple DataFrame with just BRANCHNO column
-
-3. **Field positions matched to your example:**
-```
-   B001 PCS   BANK-ATMC                             C                              
-   |    |     |                                     |
-   1-4  6-8   12-40                                 50
