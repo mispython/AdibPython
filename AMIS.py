@@ -1,510 +1,341 @@
-                                                       The COMPARE Procedure                                                        
-                                         Comparison of A.CHANNEL_SUM_UAT with A.CHANNEL_SUM                                         
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                                         Data Set Summary                                                           
-                                                                                                                                    
-                                Dataset                     Created          Modified  NVar    NObs                                 
-                                                                                                                                    
-                                A.CHANNEL_SUM_UAT  01DEC25:19:30:41  01DEC25:19:30:41     4       3                                 
-                                A.CHANNEL_SUM      01DEC25:05:36:34  01DEC25:05:36:34     4     540                                 
-                                                                                                                                    
-                                                                                                                                    
-                                                         Variables Summary                                                          
-                                                                                                                                    
-                                               Number of Variables in Common: 4.                                                    
+import polars as pl
+import os
+import saspy
+from datetime import datetime, timedelta
+from pathlib import Path
 
+# =============================================================================
+# INITIALIZATION - ALL USING TODAY()-1
+# =============================================================================
+sas = saspy.SASsession() if saspy else None
 
-                                                                                                                                    
-                                                                                                                                    
-                                                        Observation Summary                                                         
-                                                                                                                                    
-                                                   Observation      Base  Compare                                                   
-                                                                                                                                    
-                                                   First Obs           1        1                                                   
-                                                   First Unequal       1        1                                                   
-                                                   Last  Unequal       3        3                                                   
-                                                   Last  Match         3        3                                                   
-                                                   Last  Obs           .      540                                                   
-                                                                                                                                    
-                             Number of Observations in Common: 3.                                                                   
-                             Number of Observations in A.CHANNEL_SUM but not in A.CHANNEL_SUM_UAT: 537.                             
-                             Total Number of Observations Read from A.CHANNEL_SUM_UAT: 3.                                           
-                             Total Number of Observations Read from A.CHANNEL_SUM: 540.                                             
-                                                                                                                                    
-                             Number of Observations with Some Compared Variables Unequal: 3.                                        
-                             Number of Observations with All Compared Variables Equal: 0.                                           
-                                                                                                                                    
-                                                                                                                                    
-                                                     Values Comparison Summary                                                      
-                                                                                                                                    
-                                  Number of Variables Compared with All Observations Equal: 0.                                      
-                                  Number of Variables Compared with Some Observations Unequal: 4.                                   
-                                  Total Number of Values which Compare Unequal: 12.                                                 
-                                  Maximum Difference: 341733.                                                                       
-                                                                                                                                    
-                                                                                                                                    
-                                             All Variables Compared have Unequal Values                                             
-                                                                                                                                    
-                                               Variable   Type  Len  Ndif   MaxDif                                                  
-                                                                                                                                    
-                                               CHANNEL    CHAR    5     3                                                           
-                                               TOLPROMPT  NUM     8     3   341733                                                  
-                                               TOLUPDATE  NUM     8     3    59464                                                  
-                                               MONTH      CHAR    5     3                                                           
-                                                                                                                                    
+# SAS: REPTDATE = TODAY() - 1;
+REPTDATE = datetime.today() - timedelta(days=1)
+REPTYEAR = f"{REPTDATE.year % 100:02d}"
+REPTMON = f"{REPTDATE.month:02d}"
+REPTDAY = f"{REPTDATE.day:02d}"
 
+print(f"PROCESSING DATE: {REPTDATE:%Y-%m-%d} (TODAY()-1)")
 
-                                                       The COMPARE Procedure                                                        
-                                         Comparison of A.CHANNEL_SUM_UAT with A.CHANNEL_SUM                                         
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                               Value Comparison Results for Variables                                               
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||  Base Value           Compare Value                                              
-                                            Obs ||  CHANNEL               CHANNEL                                                   
-                                      ________  ||  _____                 _____                                                     
-                                                ||                                                                                  
-                                             1  ||  ATM                    ATM                                                      
-                                             2  ||  EBK                    EBK                                                      
-                                             3  ||  OTC                    OTC                                                      
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||  TOLPROMPT  TOLPROMPT      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                             1  ||     412154      70421    -341733   -82.9139                                      
-                                             2  ||     142075       9630    -132445   -93.2219                                      
-                                             3  ||      18368     117994      99626   542.3889                                      
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||  TOLUPDATE  TOLUPDATE      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                             1  ||    56.0000      49115      49059      87605                                      
-                                             2  ||          0       1292       1292          .                                      
-                                             3  ||      18202      77666      59464   326.6894                                      
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||  Base Value           Compare Value                                              
-                                            Obs ||  MONTH                 MONTH                                                     
-                                      ________  ||  _____                 _____                                                     
-                                                ||                                                                                  
-                                             1  ||  NOV25                 JAN11                                                     
-                                             2  ||  NOV25                 JAN11                                                     
-                                             3  ||  NOV25                 JAN11                                                     
-                                     __________________________________________________________                                     
+# =============================================================================
+# PATH CONFIGURATION
+# =============================================================================
+BASE_PATH = "/host/mis/parquet/crm"
+CURRENT_MONTH_PATH = f"{BASE_PATH}/year={REPTDATE.year}/month={REPTMON}"
+os.makedirs(CURRENT_MONTH_PATH, exist_ok=True)
 
+# =============================================================================
+# FUNCTION 1: READ BCODE FILE - ALL BRANCHES
+# =============================================================================
+def read_bcode_file():
+    """Read ALL BCODE branches (375 total, not 269 active)"""
+    records = []
+    try:
+        with open("/sasdata/rawdata/lookup/LKP_BRANCH", 'r') as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        line_padded = line.ljust(80)
+                        branchno_str = line_padded[1:4].strip()
+                        
+                        if branchno_str:
+                            branchno = int(branchno_str)
+                            # Include ALL branches (375), not filtering by status
+                            records.append({"BRANCHNO": branchno})
+                    except:
+                        continue
+        
+        if records:
+            df = pl.DataFrame(records).unique().sort("BRANCHNO")
+            print(f"  BCODE total branches: {len(df)}")
+            print(f"  BRANCHNO starts at: {df['BRANCHNO'].min()}")
+            return df
+        else:
+            return pl.DataFrame()
+    except Exception as e:
+        print(f"  Error reading BCODE: {e}")
+        return pl.DataFrame()
 
+# =============================================================================
+# FUNCTION 2: PROCESS CHANNEL SUMMARY WITH ACCUMULATION
+# =============================================================================
+def process_channel_sum():
+    """Process CHANNEL summary and append to existing"""
+    try:
+        channel_path = f"/host/cis/parquet/year={REPTDATE.year}/month={REPTMON}/day={REPTDAY}/CIPHONET_ALL_SUMMARY.parquet"
+        if not os.path.exists(channel_path):
+            print(f"  File not found: {channel_path}")
+            return pl.DataFrame()
+        
+        df = pl.read_parquet(channel_path)
+        print(f"  Columns: {df.columns}")
+        
+        # SAS: REPTDATE = TODAY() - 1; MONTH = PUT(REPTDATE, MONYY5.);
+        # MONTH = "NOV25" (3-char month + 2-digit year)
+        channel_df = df.select([
+            pl.col("CHANNEL").str.to_uppercase().alias("CHANNEL"),
+            pl.col("PROMPT").cast(pl.Int64).alias("TOLPROMPT"),
+            pl.col("UPDATED").cast(pl.Int64).alias("TOLUPDATE"),
+            pl.lit(REPTDATE.strftime("%b%y").upper()).alias("MONTH")  # TODAY()-1
+        ])
+        
+        print(f"  Today's records: {len(channel_df)}")
+        print(f"  MONTH: {REPTDATE.strftime('%b%y').upper()}")
+        
+        # Append to existing data
+        existing_path = f"{CURRENT_MONTH_PATH}/CHANNEL_SUM.parquet"
+        if os.path.exists(existing_path):
+            existing_df = pl.read_parquet(existing_path)
+            print(f"  Existing records: {len(existing_df)}")
+            
+            # Check if today's data already exists (avoid duplicates)
+            existing_dates = existing_df['MONTH'].unique()
+            if REPTDATE.strftime("%b%y").upper() in existing_dates:
+                print(f"  Today's data already exists, replacing...")
+                # Remove today's data if exists
+                existing_df = existing_df.filter(
+                    pl.col("MONTH") != REPTDATE.strftime("%b%y").upper()
+                )
+            
+            # Append new data
+            final_df = pl.concat([existing_df, channel_df], how="vertical")
+            print(f"  After append: {len(final_df)} records")
+            return final_df
+        else:
+            print(f"  No existing data, creating new")
+            return channel_df
+        
+    except Exception as e:
+        print(f"  Error: {e}")
+        return pl.DataFrame()
 
-                                                                                                 The COMPARE Procedure                                                        
-                                      Comparison of A.CHANNEL_UPDATE_UAT with A.CHANNEL_UPDATE                                      
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                                         Data Set Summary                                                           
-                                                                                                                                    
-                               Dataset                        Created          Modified  NVar    NObs                               
-                                                                                                                                    
-                               A.CHANNEL_UPDATE_UAT  01DEC25:19:30:41  01DEC25:19:30:41     6       2                               
-                               A.CHANNEL_UPDATE      01DEC25:05:36:36  01DEC25:05:36:36     6     338                               
-                                                                                                                                    
-                                                                                                                                    
-                                                         Variables Summary                                                          
-                                                                                                                                    
-                                               Number of Variables in Common: 6.                                                    
+# =============================================================================
+# FUNCTION 3: PROCESS OTC DETAIL - ALL 375 BRANCHES
+# =============================================================================
+def process_otc_detail():
+    """Process OTC detail for ALL 375 BCODE branches"""
+    try:
+        bcode_df = read_bcode_file()
+        if len(bcode_df) == 0:
+            print(f"  No BCODE data")
+            return pl.DataFrame()
+        
+        otc_path = f"/host/cis/parquet/year={REPTDATE.year}/month={REPTMON}/day={REPTDAY}/CIPHONET_OTC_SUMMARY.parquet"
+        if not os.path.exists(otc_path):
+            print(f"  OTC file not found: {otc_path}")
+            # Create with zeros for all branches
+            otc_detail = bcode_df.with_columns([
+                pl.lit(0).alias("TOLPROMPT"),
+                pl.lit(0).alias("TOLUPDATE")
+            ])
+            return otc_detail
+        
+        otc_df = pl.read_parquet(otc_path)
+        print(f"  OTC columns: {otc_df.columns}")
+        print(f"  OTC records: {len(otc_df)}")
+        
+        # Convert CHANNEL to BRANCHNO
+        otc_clean = otc_df.with_columns(
+            pl.col("CHANNEL").cast(pl.Int64).alias("BRANCHNO")
+        ).select([
+            pl.col("BRANCHNO"),
+            pl.col("PROMPT").cast(pl.Int64).alias("TOLPROMPT"),
+            pl.col("UPDATED").cast(pl.Int64).alias("TOLUPDATE")
+        ])
+        
+        print(f"  OTC BRANCHNO range: {otc_clean['BRANCHNO'].min()} to {otc_clean['BRANCHNO'].max()}")
+        
+        # Merge ALL BCODE branches (375) with OTC data
+        merged = bcode_df.join(otc_clean, on="BRANCHNO", how="left")
+        
+        # SAS: IF TOLPROMPT=. THEN DO TOLPROMPT=0;
+        otc_detail = merged.with_columns([
+            pl.col("TOLPROMPT").fill_null(0),
+            pl.col("TOLUPDATE").fill_null(0)
+        ]).sort("BRANCHNO")
+        
+        print(f"\n  FINAL OTC_DETAIL:")
+        print(f"    Records: {len(otc_detail)} (should be 375)")
+        print(f"    First BRANCHNO: {otc_detail['BRANCHNO'].head(5).to_list()}")
+        print(f"    TOLPROMPT sum: {otc_detail['TOLPROMPT'].sum():,}")
+        
+        return otc_detail
+    except Exception as e:
+        print(f"  Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return pl.DataFrame()
 
+# =============================================================================
+# FUNCTION 4: PROCESS CHANNEL UPDATE WITH ACCUMULATION
+# =============================================================================
+def process_channel_update():
+    """Process CHANNEL update and append to existing"""
+    try:
+        update_path = f"/host/cis/parquet/year={REPTDATE.year}/month={REPTMON}/day={REPTDAY}/CIPHONET_FULL_SUMMARY.parquet"
+        if not os.path.exists(update_path):
+            print(f"  File not found: {update_path}")
+            return pl.DataFrame()
+        
+        df = pl.read_parquet(update_path)
+        print(f"  Columns: {df.columns}")
+        
+        if len(df) >= 2:
+            update_df = df.head(2)
+            
+            # SAS: IF _N_ = 1 THEN DESC='TOTAL PROMPT BASE';
+            #      IF _N_ = 2 THEN DESC='TOTAL UPDATED';
+            update_df = update_df.with_row_index().with_columns(
+                pl.when(pl.col("index") == 0).then("TOTAL PROMPT BASE")
+                 .when(pl.col("index") == 1).then("TOTAL UPDATED")
+                 .alias("DESC")
+            ).drop("index").select([
+                pl.col("DESC"),
+                pl.col("ATM").cast(pl.Int64),
+                pl.col("EBK").cast(pl.Int64),
+                pl.col("OTC").cast(pl.Int64),
+                pl.col("TOTAL").cast(pl.Int64)
+            ])
+            
+            # Add DATE column using REPTDATE (TODAY()-1)
+            update_df = update_df.with_columns(
+                pl.lit(REPTDATE.strftime("%d/%m/%Y")).alias("DATE")
+            )
+            
+            print(f"  Today's update records: {len(update_df)}")
+            
+            # Append to existing data
+            existing_path = f"{CURRENT_MONTH_PATH}/CHANNEL_UPDATE.parquet"
+            if os.path.exists(existing_path):
+                existing_df = pl.read_parquet(existing_path)
+                print(f"  Existing records: {len(existing_df)}")
+                
+                # Remove today's date if exists
+                existing_df = existing_df.filter(
+                    pl.col("DATE") != REPTDATE.strftime("%d/%m/%Y")
+                )
+                
+                # Append new data
+                final_df = pl.concat([existing_df, update_df], how="vertical")
+                print(f"  After append: {len(final_df)} records")
+                return final_df
+            else:
+                print(f"  No existing data, creating new")
+                return update_df
+        else:
+            print(f"  Not enough records")
+            return pl.DataFrame()
+    except Exception as e:
+        print(f"  Error: {e}")
+        return pl.DataFrame()
 
+# =============================================================================
+# FUNCTION 5: WRITE OTC_DETAIL SAS DATASET
+# =============================================================================
+def write_otc_sas_dataset(df, dataset_name):
+    """Write OTC_DETAIL to SAS dataset"""
+    if sas is None or len(df) == 0:
+        return False
+    
+    try:
+        sas_path = f"{CURRENT_MONTH_PATH}"
+        os.makedirs(sas_path, exist_ok=True)
+        
+        # Assign library
+        lib_result = sas.submit(f"libname OTCLIB '{sas_path}';")
+        if "ERROR" in lib_result["LOG"]:
+            print(f"  Library error: {lib_result['LOG'][:200]}")
+            return False
+        
+        # Write dataset
+        print(f"  Creating {dataset_name}...")
+        write_result = sas.df2sd(df.to_pandas(), table=dataset_name, libref="OTCLIB")
+        
+        if hasattr(write_result, 'LOG') and "ERROR" in write_result.LOG:
+            print(f"  Write error: {write_result.LOG}")
+            return False
+        
+        # Check file
+        sas_file = f"{sas_path}/{dataset_name}.sas7bdat"
+        if os.path.exists(sas_file):
+            size = os.path.getsize(sas_file)
+            print(f"  ✓ {dataset_name}.sas7bdat created ({size:,} bytes)")
+            return True
+        else:
+            print(f"  ✗ SAS file not found")
+            return False
+            
+    except Exception as e:
+        print(f"  SAS error: {e}")
+        return False
 
+# =============================================================================
+# MAIN PROCESSING
+# =============================================================================
+print("\n" + "=" * 80)
+print("PROCESSING WITH TODAY()-1 AND ACCUMULATION")
+print("=" * 80)
 
+print(f"\n>>> 1. CHANNEL SUMMARY")
+channel_df = process_channel_sum()
 
+print(f"\n>>> 2. CHANNEL UPDATE")
+update_df = process_channel_update()
 
-                                                                                                                                    
-                                                                                                                                    
-                                                        Observation Summary                                                         
-                                                                                                                                    
-                                                   Observation      Base  Compare                                                   
-                                                                                                                                    
-                                                   First Obs           1        1                                                   
-                                                   First Unequal       1        1                                                   
-                                                   Last  Unequal       2        2                                                   
-                                                   Last  Match         2        2                                                   
-                                                   Last  Obs           .      338                                                   
-                                                                                                                                    
-                          Number of Observations in Common: 2.                                                                      
-                          Number of Observations in A.CHANNEL_UPDATE but not in A.CHANNEL_UPDATE_UAT: 336.                          
-                          Total Number of Observations Read from A.CHANNEL_UPDATE_UAT: 2.                                           
-                          Total Number of Observations Read from A.CHANNEL_UPDATE: 338.                                             
-                                                                                                                                    
-                          Number of Observations with Some Compared Variables Unequal: 2.                                           
-                          Number of Observations with All Compared Variables Equal: 0.                                              
-                                                                                                                                    
-                                                                                                                                    
-                                                     Values Comparison Summary                                                      
-                                                                                                                                    
-                                  Number of Variables Compared with All Observations Equal: 1.                                      
-                                  Number of Variables Compared with Some Observations Unequal: 5.                                   
-                                  Total Number of Values which Compare Unequal: 10.                                                 
-                                  Maximum Difference: 4349647.                                                                      
-                                                                                                                                    
-                                                                                                                                    
-                                                   Variables with Unequal Values                                                    
-                                                                                                                                    
-                                                Variable  Type  Len  Ndif   MaxDif                                                  
-                                                                                                                                    
-                                                ATM       NUM     8     2  2303777                                                  
-                                                EBK       NUM     8     2  1702250                                                  
-                                                OTC       NUM     8     2  1005265                                                  
-                                                TOTAL     NUM     8     2  4349647                                                  
-                                                DATE      CHAR   10     2                                                           
+print(f"\n>>> 3. OTC DETAIL")
+otc_detail = process_otc_detail()
 
+# =============================================================================
+# WRITE OUTPUTS
+# =============================================================================
+print("\n" + "=" * 80)
+print("WRITING OUTPUTS")
+print("=" * 80)
 
+# 1. Write CHANNEL_SUM
+if len(channel_df) > 0:
+    output_path = f"{CURRENT_MONTH_PATH}/CHANNEL_SUM.parquet"
+    channel_df.write_parquet(output_path)
+    print(f"✓ CHANNEL_SUM: {output_path} ({len(channel_df)} records)")
+    print(f"  MONTH values: {channel_df['MONTH'].unique().to_list()}")
 
+# 2. Write CHANNEL_UPDATE
+if len(update_df) > 0:
+    output_path = f"{CURRENT_MONTH_PATH}/CHANNEL_UPDATE.parquet"
+    update_df.write_parquet(output_path)
+    print(f"✓ CHANNEL_UPDATE: {output_path} ({len(update_df)} records)")
 
-                                                       The COMPARE Procedure                                                        
-                                      Comparison of A.CHANNEL_UPDATE_UAT with A.CHANNEL_UPDATE                                      
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                               Value Comparison Results for Variables                                               
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||        ATM        ATM      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                             1  ||    3686451    1382674   -2303777   -62.4931                                      
-                                             2  ||    2958580    1268699   -1689881   -57.1180                                      
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||        EBK        EBK      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                             1  ||    1766446      64196   -1702250   -96.3658                                      
-                                             2  ||      31846      21308     -10538   -33.0905                                      
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||        OTC        OTC      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                             1  ||     904677     561057    -343620   -37.9826                                      
-                                             2  ||    1534709     529444   -1005265   -65.5020                                      
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||      TOTAL      TOTAL      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                             1  ||    6357574    2007927   -4349647   -68.4168                                      
-                                             2  ||    4525135    1819451   -2705684   -59.7923                                      
-                                     __________________________________________________________                                     
+# 3. Write OTC_DETAIL SAS dataset
+if len(otc_detail) > 0:
+    dataset_name = f"OTC_DETAIL_{REPTMON}{REPTYEAR}"  # OTC_DETAIL_1125
+    print(f"\nCreating OTC_DETAIL SAS dataset...")
+    sas_success = write_otc_sas_dataset(otc_detail, dataset_name)
+    
+    if sas_success:
+        print(f"✓ {dataset_name}.sas7bdat created")
+    else:
+        # Fallback to Parquet
+        parquet_path = f"{CURRENT_MONTH_PATH}/{dataset_name}.parquet"
+        otc_detail.write_parquet(parquet_path)
+        print(f"✓ {dataset_name}.parquet (fallback): {parquet_path}")
 
+# =============================================================================
+# VERIFICATION
+# =============================================================================
+print("\n" + "=" * 80)
+print("VERIFICATION")
+print("=" * 80)
 
+print(f"\nExpected vs Actual:")
+print(f"1. REPTDATE: {REPTDATE:%Y-%m-%d} (TODAY()-1)")
+print(f"2. MONTH format: {REPTDATE.strftime('%b%y').upper()} (should be NOV25)")
 
+if len(otc_detail) > 0:
+    print(f"\n3. OTC_DETAIL check:")
+    print(f"   - Records: {len(otc_detail)} (should be 375)")
+    print(f"   - First BRANCHNO: {otc_detail['BRANCHNO'].min()} (should be 2)")
+    print(f"   - Last BRANCHNO: {otc_detail['BRANCHNO'].max()}")
 
-                                                       The COMPARE Procedure                                                        
-                                     Comparison of A.OTC_DETAIL_1125_UAT with A.OTC_DETAIL_1125                                     
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                                         Data Set Summary                                                           
-                                                                                                                                    
-                              Dataset                         Created          Modified  NVar    NObs                               
-                                                                                                                                    
-                              A.OTC_DETAIL_1125_UAT  01DEC25:19:30:42  01DEC25:19:30:42     3     269                               
-                              A.OTC_DETAIL_1125      01DEC25:05:36:35  01DEC25:05:36:35     3     375                               
-                                                                                                                                    
-                                                                                                                                    
-                                                         Variables Summary                                                          
-                                                                                                                                    
-                                               Number of Variables in Common: 3.                                                    
-
-
-
-
-
-                                                                                                                                    
-                                                                                                                                    
-                                                        Observation Summary                                                         
-                                                                                                                                    
-                                                   Observation      Base  Compare                                                   
-                                                                                                                                    
-                                                   First Obs           1        1                                                   
-                                                   First Unequal       1        1                                                   
-                                                   Last  Unequal     269      269                                                   
-                                                   Last  Match       269      269                                                   
-                                                   Last  Obs           .      375                                                   
-                                                                                                                                    
-                         Number of Observations in Common: 269.                                                                     
-                         Number of Observations in A.OTC_DETAIL_1125 but not in A.OTC_DETAIL_1125_UAT: 106.                         
-                         Total Number of Observations Read from A.OTC_DETAIL_1125_UAT: 269.                                         
-                         Total Number of Observations Read from A.OTC_DETAIL_1125: 375.                                             
-                                                                                                                                    
-                         Number of Observations with Some Compared Variables Unequal: 269.                                          
-                         Number of Observations with All Compared Variables Equal: 0.                                               
-                                                                                                                                    
-                                                                                                                                    
-                                                     Values Comparison Summary                                                      
-                                                                                                                                    
-                                  Number of Variables Compared with All Observations Equal: 0.                                      
-                                  Number of Variables Compared with Some Observations Unequal: 3.                                   
-                                  Total Number of Values which Compare Unequal: 794.                                                
-                                  Maximum Difference: 434.                                                                          
-                                                                                                                                    
-                                                                                                                                    
-                                             All Variables Compared have Unequal Values                                             
-                                                                                                                                    
-                                               Variable   Type  Len  Ndif   MaxDif                                                  
-                                                                                                                                    
-                                               BRANCHNO   NUM     8   269      434                                                  
-                                               TOLPROMPT  NUM     8   263      183                                                  
-                                               TOLUPDATE  NUM     8   262      183                                                  
-                                                                                                                                    
-
-
-
-                                                       The COMPARE Procedure                                                        
-                                     Comparison of A.OTC_DETAIL_1125_UAT with A.OTC_DETAIL_1125                                     
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                               Value Comparison Results for Variables                                               
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||   BRANCHNO   BRANCHNO      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                             1  ||     2.0000     1.0000    -1.0000   -50.0000                                      
-                                             2  ||     3.0000     2.0000    -1.0000   -33.3333                                      
-                                             3  ||     4.0000     3.0000    -1.0000   -25.0000                                      
-                                             4  ||     5.0000     4.0000    -1.0000   -20.0000                                      
-                                             5  ||     6.0000     5.0000    -1.0000   -16.6667                                      
-                                             6  ||     7.0000     6.0000    -1.0000   -14.2857                                      
-                                             7  ||     8.0000     7.0000    -1.0000   -12.5000                                      
-                                             8  ||     9.0000     8.0000    -1.0000   -11.1111                                      
-                                             9  ||    10.0000     9.0000    -1.0000   -10.0000                                      
-                                            10  ||    11.0000    10.0000    -1.0000    -9.0909                                      
-                                            11  ||    13.0000    11.0000    -2.0000   -15.3846                                      
-                                            12  ||    14.0000    12.0000    -2.0000   -14.2857                                      
-                                            13  ||    15.0000    13.0000    -2.0000   -13.3333                                      
-                                            14  ||    16.0000    14.0000    -2.0000   -12.5000                                      
-                                            15  ||    17.0000    15.0000    -2.0000   -11.7647                                      
-                                            16  ||    18.0000    16.0000    -2.0000   -11.1111                                      
-                                            17  ||    19.0000    17.0000    -2.0000   -10.5263                                      
-                                            18  ||    20.0000    18.0000    -2.0000   -10.0000                                      
-                                            19  ||    21.0000    19.0000    -2.0000    -9.5238                                      
-                                            20  ||    22.0000    20.0000    -2.0000    -9.0909                                      
-                                            21  ||    23.0000    21.0000    -2.0000    -8.6957                                      
-                                            22  ||    24.0000    22.0000    -2.0000    -8.3333                                      
-                                            23  ||    25.0000    23.0000    -2.0000    -8.0000                                      
-                                            24  ||    26.0000    24.0000    -2.0000    -7.6923                                      
-                                            25  ||    27.0000    25.0000    -2.0000    -7.4074                                      
-                                            26  ||    28.0000    26.0000    -2.0000    -7.1429                                      
-                                            27  ||    29.0000    27.0000    -2.0000    -6.8966                                      
-                                            28  ||    30.0000    28.0000    -2.0000    -6.6667                                      
-                                            29  ||    31.0000    29.0000    -2.0000    -6.4516                                      
-                                            30  ||    32.0000    30.0000    -2.0000    -6.2500                                      
-                                            31  ||    33.0000    31.0000    -2.0000    -6.0606                                      
-                                            32  ||    34.0000    32.0000    -2.0000    -5.8824                                      
-                                            33  ||    35.0000    33.0000    -2.0000    -5.7143                                      
-                                            34  ||    36.0000    34.0000    -2.0000    -5.5556                                      
-                                            35  ||    37.0000    35.0000    -2.0000    -5.4054                                      
-                                            36  ||    38.0000    36.0000    -2.0000    -5.2632                                      
-                                            37  ||    39.0000    37.0000    -2.0000    -5.1282                                      
-                                            38  ||    40.0000    38.0000    -2.0000    -5.0000                                      
-                                            39  ||    41.0000    39.0000    -2.0000    -4.8780                                      
-                                            40  ||    42.0000    40.0000    -2.0000    -4.7619                                      
-                                            41  ||    43.0000    41.0000    -2.0000    -4.6512                                      
-                                            42  ||    44.0000    42.0000    -2.0000    -4.5455                                      
-                                            43  ||    45.0000    43.0000    -2.0000    -4.4444                                      
-                                            44  ||    46.0000    44.0000    -2.0000    -4.3478                                      
-                                            45  ||    47.0000    45.0000    -2.0000    -4.2553                                      
-
-
-
-
-                                                       The COMPARE Procedure                                                        
-                                     Comparison of A.OTC_DETAIL_1125_UAT with A.OTC_DETAIL_1125                                     
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                               Value Comparison Results for Variables                                               
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||   BRANCHNO   BRANCHNO      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                            46  ||    48.0000    46.0000    -2.0000    -4.1667                                      
-                                            47  ||    49.0000    47.0000    -2.0000    -4.0816                                      
-                                            48  ||    50.0000    48.0000    -2.0000    -4.0000                                      
-                                            49  ||    51.0000    49.0000    -2.0000    -3.9216                                      
-                                            50  ||    52.0000    50.0000    -2.0000    -3.8462                                      
-                                                                                                                                    
-NOTE: The MAXPRINT=50 printing limit has been reached for the variable BRANCHNO. No more values will be printed for this comparison.
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||  TOLPROMPT  TOLPROMPT      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                             1  ||    16.0000          0   -16.0000  -100.0000                                      
-                                             2  ||    13.0000    16.0000     3.0000    23.0769                                      
-                                             3  ||    70.0000    13.0000   -57.0000   -81.4286                                      
-                                             4  ||    49.0000    70.0000    21.0000    42.8571                                      
-                                             5  ||    55.0000    49.0000    -6.0000   -10.9091                                      
-                                             6  ||   147.0000    55.0000   -92.0000   -62.5850                                      
-                                             7  ||    88.0000   147.0000    59.0000    67.0455                                      
-                                             8  ||   104.0000    88.0000   -16.0000   -15.3846                                      
-                                             9  ||    76.0000   104.0000    28.0000    36.8421                                      
-                                            10  ||    49.0000    76.0000    27.0000    55.1020                                      
-                                            11  ||    67.0000    49.0000   -18.0000   -26.8657                                      
-                                            12  ||    31.0000          0   -31.0000  -100.0000                                      
-                                            13  ||   250.0000    67.0000  -183.0000   -73.2000                                      
-                                            14  ||    54.0000    31.0000   -23.0000   -42.5926                                      
-                                            15  ||    93.0000   250.0000   157.0000   168.8172                                      
-                                            16  ||    39.0000    54.0000    15.0000    38.4615                                      
-                                            17  ||    42.0000    93.0000    51.0000   121.4286                                      
-                                            18  ||    83.0000    39.0000   -44.0000   -53.0120                                      
-                                            19  ||    77.0000    42.0000   -35.0000   -45.4545                                      
-                                            20  ||    87.0000    83.0000    -4.0000    -4.5977                                      
-                                            21  ||    53.0000    77.0000    24.0000    45.2830                                      
-                                            23  ||    33.0000    53.0000    20.0000    60.6061                                      
-                                            24  ||    98.0000    87.0000   -11.0000   -11.2245                                      
-                                            25  ||    85.0000    33.0000   -52.0000   -61.1765                                      
-                                            26  ||   164.0000    98.0000   -66.0000   -40.2439                                      
-                                            27  ||    18.0000    85.0000    67.0000   372.2222                                      
-                                            28  ||    50.0000   164.0000   114.0000   228.0000                                      
-                                            29  ||    74.0000    18.0000   -56.0000   -75.6757                                      
-                                            30  ||    54.0000    50.0000    -4.0000    -7.4074                                      
-                                            31  ||    40.0000    74.0000    34.0000    85.0000                                      
-
-
-
-
-                                                       The COMPARE Procedure                                                        
-                                     Comparison of A.OTC_DETAIL_1125_UAT with A.OTC_DETAIL_1125                                     
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                               Value Comparison Results for Variables                                               
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||  TOLPROMPT  TOLPROMPT      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                            32  ||    35.0000    54.0000    19.0000    54.2857                                      
-                                            33  ||    51.0000    40.0000   -11.0000   -21.5686                                      
-                                            34  ||    64.0000    35.0000   -29.0000   -45.3125                                      
-                                            35  ||   116.0000    51.0000   -65.0000   -56.0345                                      
-                                            36  ||    34.0000    64.0000    30.0000    88.2353                                      
-                                            37  ||    45.0000   116.0000    71.0000   157.7778                                      
-                                            38  ||    41.0000    34.0000    -7.0000   -17.0732                                      
-                                            39  ||    32.0000    45.0000    13.0000    40.6250                                      
-                                            40  ||    91.0000    41.0000   -50.0000   -54.9451                                      
-                                            41  ||   115.0000    32.0000   -83.0000   -72.1739                                      
-                                            42  ||    86.0000    91.0000     5.0000     5.8140                                      
-                                            43  ||   112.0000   115.0000     3.0000     2.6786                                      
-                                            44  ||    62.0000    86.0000    24.0000    38.7097                                      
-                                            45  ||   122.0000   112.0000   -10.0000    -8.1967                                      
-                                            46  ||    57.0000    62.0000     5.0000     8.7719                                      
-                                            47  ||   110.0000   122.0000    12.0000    10.9091                                      
-                                            48  ||   164.0000    57.0000  -107.0000   -65.2439                                      
-                                            49  ||    40.0000   110.0000    70.0000   175.0000                                      
-                                            50  ||    82.0000   164.0000    82.0000   100.0000                                      
-                                            51  ||    55.0000    40.0000   -15.0000   -27.2727                                      
-                                                                                                                                    
-NOTE: The MAXPRINT=50 printing limit has been reached for the variable TOLPROMPT. No more values will be printed for this           
-      comparison.                                                                                                                   
-                                     __________________________________________________________                                     
-                                                                                                                                    
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||  TOLUPDATE  TOLUPDATE      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                             1  ||    16.0000          0   -16.0000  -100.0000                                      
-                                             2  ||    13.0000    16.0000     3.0000    23.0769                                      
-                                             3  ||    70.0000    13.0000   -57.0000   -81.4286                                      
-                                             4  ||    49.0000    70.0000    21.0000    42.8571                                      
-                                             5  ||    55.0000    49.0000    -6.0000   -10.9091                                      
-                                             6  ||   147.0000    55.0000   -92.0000   -62.5850                                      
-                                             7  ||    88.0000   147.0000    59.0000    67.0455                                      
-                                             8  ||   104.0000    88.0000   -16.0000   -15.3846                                      
-                                             9  ||    76.0000   104.0000    28.0000    36.8421                                      
-                                            10  ||    49.0000    76.0000    27.0000    55.1020                                      
-                                            11  ||    67.0000    49.0000   -18.0000   -26.8657                                      
-                                            12  ||    31.0000          0   -31.0000  -100.0000                                      
-                                            13  ||   250.0000    67.0000  -183.0000   -73.2000                                      
-                                            14  ||    54.0000    31.0000   -23.0000   -42.5926                                      
-
-
-
-                                                       The COMPARE Procedure                                                        
-                                     Comparison of A.OTC_DETAIL_1125_UAT with A.OTC_DETAIL_1125                                     
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                               Value Comparison Results for Variables                                               
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||  TOLUPDATE  TOLUPDATE      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                            15  ||    93.0000   250.0000   157.0000   168.8172                                      
-                                            16  ||    39.0000    54.0000    15.0000    38.4615                                      
-                                            17  ||    42.0000    93.0000    51.0000   121.4286                                      
-                                            18  ||    83.0000    39.0000   -44.0000   -53.0120                                      
-                                            19  ||    77.0000    42.0000   -35.0000   -45.4545                                      
-                                            20  ||    87.0000    83.0000    -4.0000    -4.5977                                      
-                                            21  ||    53.0000    77.0000    24.0000    45.2830                                      
-                                            23  ||    33.0000    53.0000    20.0000    60.6061                                      
-                                            24  ||    98.0000    87.0000   -11.0000   -11.2245                                      
-                                            25  ||    85.0000    33.0000   -52.0000   -61.1765                                      
-                                            26  ||   164.0000    98.0000   -66.0000   -40.2439                                      
-                                            27  ||    18.0000    85.0000    67.0000   372.2222                                      
-                                            28  ||    50.0000   164.0000   114.0000   228.0000                                      
-                                            29  ||    74.0000    18.0000   -56.0000   -75.6757                                      
-                                            30  ||    54.0000    50.0000    -4.0000    -7.4074                                      
-                                            31  ||    40.0000    74.0000    34.0000    85.0000                                      
-                                            32  ||    35.0000    54.0000    19.0000    54.2857                                      
-                                            33  ||    51.0000    40.0000   -11.0000   -21.5686                                      
-                                            34  ||    64.0000    35.0000   -29.0000   -45.3125                                      
-                                            35  ||   116.0000    51.0000   -65.0000   -56.0345                                      
-                                            36  ||    34.0000    64.0000    30.0000    88.2353                                      
-                                            37  ||    45.0000   116.0000    71.0000   157.7778                                      
-                                            38  ||    41.0000    34.0000    -7.0000   -17.0732                                      
-                                            39  ||    32.0000    45.0000    13.0000    40.6250                                      
-                                            40  ||    91.0000    41.0000   -50.0000   -54.9451                                      
-                                            41  ||   115.0000    32.0000   -83.0000   -72.1739                                      
-                                            42  ||    86.0000    91.0000     5.0000     5.8140                                      
-                                            43  ||   110.0000   115.0000     5.0000     4.5455                                      
-                                            44  ||    62.0000    86.0000    24.0000    38.7097                                      
-                                            45  ||   122.0000   110.0000   -12.0000    -9.8361                                      
-                                            46  ||    57.0000    62.0000     5.0000     8.7719                                      
-                                            47  ||   110.0000   122.0000    12.0000    10.9091                                      
-                                            48  ||   164.0000    57.0000  -107.0000   -65.2439                                      
-                                            49  ||    40.0000   110.0000    70.0000   175.0000                                      
-                                            50  ||    82.0000   164.0000    82.0000   100.0000                                      
-                                            51  ||    55.0000    40.0000   -15.0000   -27.2727                                      
-                                                                                                                                    
-NOTE: The MAXPRINT=50 printing limit has been reached for the variable TOLUPDATE. No more values will be printed for this           
-      comparison.                                                                                                                   
-                                     __________________________________________________________                                     
-
+print("\n" + "=" * 80)
+print("PROCESS COMPLETE")
+print("=" * 80)
