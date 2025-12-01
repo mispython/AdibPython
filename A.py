@@ -259,13 +259,13 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
             -- Convert BILL_DT from SAS numeric to DATE
             CASE 
                 WHEN BILL_DT IS NOT NULL THEN 
-                    DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_DT AS INTEGER)) DAYS
+                    DATE '1960-01-01' + CAST(BILL_DT AS INTEGER) * INTERVAL 1 DAY
                 ELSE NULL 
             END AS BILL_DT,
             -- Convert BILL_PAID_DT from SAS numeric to DATE
             CASE 
                 WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
-                    DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_PAID_DT AS INTEGER)) DAYS
+                    DATE '1960-01-01' + CAST(BILL_PAID_DT AS INTEGER) * INTERVAL 1 DAY
                 ELSE NULL 
             END AS BILL_PAID_DT,
             BILL_AMT, 
@@ -301,13 +301,13 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
                 -- Convert BILL_DT from SAS numeric to DATE
                 CASE 
                     WHEN BILL_DT IS NOT NULL THEN 
-                        DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_DT AS INTEGER)) DAYS
+                        DATE '1960-01-01' + CAST(BILL_DT AS INTEGER) * INTERVAL 1 DAY
                     ELSE NULL 
                 END AS BILL_DT,
                 -- Convert BILL_PAID_DT from SAS numeric to DATE
                 CASE 
                     WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
-                        DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(BILL_PAID_DT AS INTEGER)) DAYS
+                        DATE '1960-01-01' + CAST(BILL_PAID_DT AS INTEGER) * INTERVAL 1 DAY
                     ELSE NULL 
                 END AS BILL_PAID_DT,
                 BILL_AMT, 
@@ -325,18 +325,18 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
                 -- Convert VALID_FROM_DT from SAS numeric to DATE
                 CASE 
                     WHEN VALID_FROM_DT IS NOT NULL THEN 
-                        DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(VALID_FROM_DT AS INTEGER)) DAYS
+                        DATE '1960-01-01' + CAST(VALID_FROM_DT AS INTEGER) * INTERVAL 1 DAY
                     ELSE NULL 
                 END AS VALID_FROM_DT,
                 -- Convert VALID_TO_DT from SAS numeric to DATE
                 CASE 
                     WHEN VALID_TO_DT IS NOT NULL THEN 
-                        DATE '{SAS_ORIGIN.date()}' + INTERVAL (CAST(VALID_TO_DT AS INTEGER)) DAYS
+                        DATE '1960-01-01' + CAST(VALID_TO_DT AS INTEGER) * INTERVAL 1 DAY
                     ELSE NULL 
                 END AS VALID_TO_DT,
                 -- Create EXT flag for records where VALID_TO_DT = previous date (SAS logic)
                 CASE 
-                    WHEN VALID_TO_DT = {(PREVDATE - SAS_ORIGIN).days} THEN 'Y'
+                    WHEN CAST(VALID_TO_DT AS INTEGER) = {(PREVDATE - SAS_ORIGIN).days} THEN 'Y'
                     ELSE NULL 
                 END AS EXT
             FROM loan_bill_hist
