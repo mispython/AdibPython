@@ -32,7 +32,7 @@ def process_large_loan_bill_scd(
     print("="*80)
     
     # SAS date calculations for processing logic
-    REPTDATE = report_date
+    REPTDATE = datetime(2025, 11, 28)
     PREVDATE = REPTDATE - timedelta(days=1)
     RDATE = (REPTDATE - SAS_ORIGIN).days
     PDATE = (PREVDATE - SAS_ORIGIN).days
@@ -645,7 +645,7 @@ if __name__ == "__main__":
     print("="*80)
     
     # SAS date calculations for processing logic
-    REPTDATE = datetime.today() - timedelta(days=1)  # Yesterday as report date
+    REPTDATE = datetime(2025, 11, 28)  # Yesterday as report date
     PREVDATE = REPTDATE - timedelta(days=1)          # Day before yesterday
     RDATE = (REPTDATE - SAS_ORIGIN).days
     PDATE = (PREVDATE - SAS_ORIGIN).days
@@ -699,3 +699,67 @@ if __name__ == "__main__":
     print(f"  3. HP_BILL.parquet")
     print(f"  4. IHP_BILL.parquet")
     print("="*80)
+
+    # sas = saspy.SASsession()
+
+    # lnbill_ctl = "lnbill_ctrl"
+    # hpbill_ctl = 'hpbill_ctrl'
+    # ln_bill_data  = "loan_bill"
+    # iln_bill_data  = "iloan_bill"
+    # hp_bill_data  = "hp_bill"
+    # ihp_bill_data  = "ihp_bill"
+
+    # def assign_libname(lib_name, sas_path):
+    #     log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
+    #     return log
+
+    # def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
+    #     sas.df2sd(df,table=cur_data, libref='work')
+
+    #     log = sas.submit(f"""
+    #             proc sql noprint;
+    #                create table colmeta as 
+    #                 select name, type, length
+    #             from dictionary.columns
+    #             where libname = upcase("{ctrl_name}")  
+    #                  and memname = upcase("{prev_data}");
+    #             quit
+    #             """)
+    
+    #     print(log["LOG"])
+    #     df_meta = sas.sasdata("colmeta", libref="work").to_df()
+    #     cols = df_meta["name"].dropna().tolist()
+    #     col_list = ", ".join(cols)
+
+    #     casted_cols =[]
+    #     for _, row in df_meta.iterrows():
+    #         col = row["name"]
+    #         length = row['length']
+    #         if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
+    #             casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
+    #         else:
+    #             casted_cols.append(col)
+
+    #     casted_cols = ",\n ".join(casted_cols)
+
+    #     log = sas.submit(f"""
+    #                 proc sql noprint;
+    #                      create table {lib_name}.{cur_data} as
+    #                      select {col_list} from {ctrl_name}.{prev_data}(obs=0)
+    #                      union corr
+    #                      select {casted_cols} from work.{cur_data};
+    #                 quit;
+    #                 """)
+    #     print(f"Final table created : {log['LOG']}") 
+    #     return log
+
+    # assign_libname("ln" , "/dwh/ln_bill")
+    # assign_libname("iln" , "/dwh/iln_bill")
+    # assign_libname("hp" , "/dwh/ln_hp")
+    # assign_libname("ihp" , "/dwh/iln_hp")
+    # assign_libname("ctrl", "/sas/python/virt_edw/Data_Warehouse/SASTABLE")
+
+    # log1 = set_data(ln_df, "ln", "ctrl", ln_bill_data, lnbill_ctl)
+    # log2 = set_data(iln_df, "iln", "ctrl", iln_bill_data, lnbill_ctl)
+    # log3 = set_data(hp_df, "hp", "ctrl", hp_bill_data, hpbill_ctl)
+    # log4 = set_data(ihp_df, "ihp", "ctrl", ihp_bill_data, hpbill_ctl)
