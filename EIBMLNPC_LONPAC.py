@@ -55,7 +55,7 @@ def parse_date(date_str: str) -> datetime:
 
 def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Personal Accident (PA) product data"""
-    df = pl.read_parquet(input_dir / "LONPAC_PA.txt")
+    df = pl.read_parquet(input_dir / "LONPAC_PA")
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -100,7 +100,7 @@ def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_motor_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Motor product data"""
-    df = pl.read_parquet(input_dir / "LONPAC_MOTOR.txt")
+    df = pl.read_parquet(input_dir / "LONPAC_MOTOR")
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -182,7 +182,7 @@ def process_misc_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_fire_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Fire product data"""
-    df = pl.read_parquet(input_dir / "LONPAC_FIRE.txt")
+    df = pl.read_parquet(input_dir / "LONPAC_FIRE")
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -229,7 +229,7 @@ def process_fire_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_hire_data(input_dir: Path, output_dir: Path, file_name: str, output_prefix: str, reptyear4: int):
     """Process Hire Purchase data (both HIRE and NHIRE)"""
-    df = pl.read_parquet(input_dir / "LONPAC_HIRE.txt")
+    df = pl.read_parquet(input_dir / file_name)
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -340,10 +340,10 @@ def process_lonpac_data(input_dir: str, output_dir: str):
     process_fire_data(input_path, output_path, reptyear4)
     
     print("Processing Hire Purchase data...")
-    process_hire_data(input_path, output_path, "hire.parquet", "hire", reptyear4)
+    process_hire_data(input_path, output_path, "LONPAC_HIRE", "hire", reptyear4)
     
     print("Processing Non-Hire Purchase data...")
-    process_hire_data(input_path, output_path, "nhire.parquet", "nonhire", reptyear4)
+    process_hire_data(input_path, output_path, "LONPAC_NONHIRE", "nonhire", reptyear4)
     
     print("Merging all datasets...")
     merge_all_data(output_path)
