@@ -132,12 +132,11 @@ def process_large_loan_bill_scd(
             # Count historical records for monitoring
             hist_count = con.execute("SELECT COUNT(*) FROM loan_bill_hist").fetchone()[0]
             
-            # Create index for faster joins
-            con.execute("""
-                CREATE INDEX idx_hist_key ON loan_bill_hist(ACCTNO, NOTENO, BILL_DT)
-            """)
+            # DON'T create index on full historical table (300M+ records = too slow)
+            # We'll create indexes on the filtered active/inactive tables instead
+            
             has_historical_data = True
-            print(f"  ✓ Loaded {hist_count:,} ALL historical records")
+            print(f"  ✓ Loaded {hist_count:,} ALL historical records (no index - will filter first)")
         else:
             # Create empty historical table structure
             con.execute("""
