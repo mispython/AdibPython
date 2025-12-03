@@ -55,7 +55,19 @@ def parse_date(date_str: str) -> datetime:
 
 def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Personal Accident (PA) product data"""
-    df = pl.read_parquet(input_dir / "LONPAC_PA")
+    # Check if input is parquet or text
+    input_file = input_dir / "LONPAC_PA"
+    if input_file.with_suffix('.parquet').exists():
+        df = pl.read_parquet(input_file.with_suffix('.parquet'))
+    else:
+        df = pl.read_csv(
+            input_file,
+            separator='|',
+            skip_rows=5,  # FIRSTOBS=6 in SAS
+            has_header=True,
+            truncate_ragged_lines=True,
+            ignore_errors=True
+        )
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -100,7 +112,18 @@ def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_motor_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Motor product data"""
-    df = pl.read_parquet(input_dir / "LONPAC_MOTOR")
+    input_file = input_dir / "LONPAC_MOTOR"
+    if input_file.with_suffix('.parquet').exists():
+        df = pl.read_parquet(input_file.with_suffix('.parquet'))
+    else:
+        df = pl.read_csv(
+            input_file,
+            separator='|',
+            skip_rows=5,
+            has_header=True,
+            truncate_ragged_lines=True,
+            ignore_errors=True
+        )
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -144,7 +167,18 @@ def process_motor_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_misc_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Miscellaneous product data"""
-    df = pl.read_parquet(input_dir / "LONPAC_MISC.txt")
+    input_file = input_dir / "LONPAC_MISC"
+    if input_file.with_suffix('.parquet').exists():
+        df = pl.read_parquet(input_file.with_suffix('.parquet'))
+    else:
+        df = pl.read_csv(
+            input_file,
+            separator='|',
+            skip_rows=5,
+            has_header=True,
+            truncate_ragged_lines=True,
+            ignore_errors=True
+        )
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -182,7 +216,18 @@ def process_misc_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_fire_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Fire product data"""
-    df = pl.read_parquet(input_dir / "LONPAC_FIRE")
+    input_file = input_dir / "LONPAC_FIRE"
+    if input_file.with_suffix('.parquet').exists():
+        df = pl.read_parquet(input_file.with_suffix('.parquet'))
+    else:
+        df = pl.read_csv(
+            input_file,
+            separator='|',
+            skip_rows=5,
+            has_header=True,
+            truncate_ragged_lines=True,
+            ignore_errors=True
+        )
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -229,7 +274,18 @@ def process_fire_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_hire_data(input_dir: Path, output_dir: Path, file_name: str, output_prefix: str, reptyear4: int):
     """Process Hire Purchase data (both HIRE and NHIRE)"""
-    df = pl.read_parquet(input_dir / file_name)
+    input_file = input_dir / file_name
+    if input_file.with_suffix('.parquet').exists():
+        df = pl.read_parquet(input_file.with_suffix('.parquet'))
+    else:
+        df = pl.read_csv(
+            input_file,
+            separator='|',
+            skip_rows=8,  # FIRSTOBS=9 in SAS (different from other files!)
+            has_header=True,
+            truncate_ragged_lines=True,
+            ignore_errors=True
+        )
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -278,8 +334,9 @@ def merge_all_data(output_dir: Path):
     pacust = pl.read_parquet(output_dir / "lonpac_pacust.parquet")
     
     motorcust = pl.read_parquet(output_dir / "lonpac_motorcust.parquet")
-    if (output_dir / "lonpac_misccust.parquet").exists():
-        misccust = pl.read_parquet(output_dir / "lonpac_misccust.parquet")
+    misccust_path = output_dir / "lonpac_misccust.parquet"
+    if misccust_path.exists():
+        misccust = pl.read_parquet(misccust_path)
         motorcust = pl.concat([motorcust, misccust])
     
     firecust = pl.read_parquet(output_dir / "lonpac_firecust.parquet")
@@ -297,12 +354,14 @@ def merge_all_data(output_dir: Path):
     
     paprod = pl.read_parquet(output_dir / "lonpac_paprod.parquet")
     motorprod = pl.read_parquet(output_dir / "lonpac_motorprod.parquet")
-    if (output_dir / "lonpac_miscprod.parquet").exists():
-        miscprod = pl.read_parquet(output_dir / "lonpac_miscprod.parquet")
+    miscprod_path = output_dir / "lonpac_miscprod.parquet"
+    if miscprod_path.exists():
+        miscprod = pl.read_parquet(miscprod_path)
         motorprod = pl.concat([motorprod, miscprod])
     
     fireprod = pl.read_parquet(output_dir / "lonpac_fireprod.parquet")
     
+    # SAS only merges PA, MOTOR, and FIRE into PROD (NOT hire/nonhire)
     all_prod = pl.concat([paprod, motorprod, fireprod], how="diagonal")
     all_prod = all_prod.filter(
         (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
@@ -330,11 +389,10 @@ def process_lonpac_data(input_dir: str, output_dir: str):
     print("Processing Motor data...")
     process_motor_data(input_path, output_path, reptyear4)
     
-    if (input_path / "misc.parquet").exists():
-        print("Processing Misc data...")
-        misc_prod, misc_cust = process_misc_data(input_path, output_path, reptyear4)
-        misc_prod.write_parquet(output_path / "lonpac_miscprod.parquet")
-        misc_cust.write_parquet(output_path / "lonpac_misccust.parquet")
+    print("Processing Misc data...")
+    misc_prod, misc_cust = process_misc_data(input_path, output_path, reptyear4)
+    misc_prod.write_parquet(output_path / "lonpac_miscprod.parquet")
+    misc_cust.write_parquet(output_path / "lonpac_misccust.parquet")
     
     print("Processing Fire data...")
     process_fire_data(input_path, output_path, reptyear4)
