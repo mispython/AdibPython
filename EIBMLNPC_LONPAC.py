@@ -55,7 +55,7 @@ def parse_date(date_str: str) -> datetime:
 
 def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Personal Accident (PA) product data"""
-    df = pl.read_parquet(input_dir / "pa.parquet")
+    df = pl.read_parquet(input_dir / "LONPAC_PA.txt")
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -100,7 +100,7 @@ def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_motor_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Motor product data"""
-    df = pl.read_parquet(input_dir / "motor.parquet")
+    df = pl.read_parquet(input_dir / "LONPAC_MOTOR.txt")
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -144,7 +144,7 @@ def process_motor_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_misc_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Miscellaneous product data"""
-    df = pl.read_parquet(input_dir / "misc.parquet")
+    df = pl.read_parquet(input_dir / "LONPAC_MISC.txt")
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -182,7 +182,7 @@ def process_misc_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_fire_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Fire product data"""
-    df = pl.read_parquet(input_dir / "fire.parquet")
+    df = pl.read_parquet(input_dir / "LONPAC_FIRE.txt")
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -229,7 +229,7 @@ def process_fire_data(input_dir: Path, output_dir: Path, reptyear4: int):
 
 def process_hire_data(input_dir: Path, output_dir: Path, file_name: str, output_prefix: str, reptyear4: int):
     """Process Hire Purchase data (both HIRE and NHIRE)"""
-    df = pl.read_parquet(input_dir / file_name)
+    df = pl.read_parquet(input_dir / "LONPAC_HIRE.txt")
     
     df = df.with_columns([
         pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
@@ -353,6 +353,6 @@ def process_lonpac_data(input_dir: str, output_dir: str):
 # Usage
 if __name__ == "__main__":
     process_lonpac_data(
-        input_dir="./input_data",
-        output_dir="./output_data"
+        input_dir="/sasdata/rawdata/lonpac/",
+        output_dir="/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output"
     )
