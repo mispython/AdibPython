@@ -1,0 +1,309 @@
+//EIBMRNID JOB MSGCLASS=X,MSGLEVEL=(2,1),REGION=64M
+/*JOBPARM S=S1M1
+//*-------------------------------------------------------------------
+//* RETAIL NEGOTIABLE INSTRUMENTS OF DEPOSIT (R-NID)
+//* ESMR : 2017-499
+//* DESC : CREATE NEW REPORT FOR RETAIL RINGGIT-DENOMINATED NEGOTIABLE
+//*        INSTRUMENT OF DEPOSIT (R-NID) ON MONTHLY BASIS
+//*-------------------------------------------------------------------
+//DELETE EXEC PGM=IEFBR14
+//DEL01    DD DSN=SAP.PBB.RNID.TEXT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//*
+//EIBMRNID EXEC SAS609
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//NID      DD DSN=SAP.PBB.RNID.SASDATA,DISP=SHR
+//NIDOUT   DD DSN=SAP.PBB.RNID.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,10)),UNIT=SYSDA
+//SYSIN    DD *
+
+OPTIONS NOCENTER YEARCUTOFF=1950 COMPRESS=Y MISSING=0;
+
+PROC FORMAT;
+   VALUE REMFMTA
+      LOW-6   = '1. LE  6      '
+      6-12    = '2. GT  6 TO 12'
+      12-24   = '3. GT 12 TO 24'
+      24-36   = '4. GT 24 TO 36'
+      36-60   = '5. GT 36 TO 60'
+      OTHER   = '              '
+      ;
+
+   VALUE REMFMTB
+      LOW-1   = '1. LE  1      '
+      1-3     = '2. GT  1 TO  3'
+      3-6     = '3. GT  3 TO  6'
+      6-9     = '4. GT  6 TO  9'
+      9-12    = '5. GT  9 TO 12'
+      12-24   = '6. GT 12 TO 24'
+      24-36   = '7. GT 24 TO 36'
+      36-60   = '8. GT 36 TO 60'
+      OTHER   = '             '
+      ;
+RUN;
+PROC FORMAT LIBRARY=WORK CNTLOUT=ALLFMT(RENAME=(LABEL=REMMFMT)); RUN;
+PROC SORT DATA=ALLFMT; BY FMTNAME; WHERE REMMFMT NE ''; RUN;
+
+*------------------------------------------------*
+*  MACRO TO DECLARE VARIABLES                    *
+*------------------------------------------------*;
+%MACRO DCLVAR;
+   RETAIN D1-D12 31 D4 D6 D9 D11 30
+          RD1-RD12 MD1-MD12 31 RD2 MD2 28 RD4 RD6 RD9 RD11
+          MD4 MD6 MD9 MD11 30 RPYR RPMTH RPDAY;
+   ARRAY LDAY D1-D12;
+   ARRAY RPDAYS RD1-RD12;
+   ARRAY MDDAYS MD1-MD12;
+%MEND DCLVAR;
+
+*------------------------------------------------*
+*  MACRO TO CALCULATE REMAIN MONTH               *
+*------------------------------------------------*;
+%MACRO REMMTH;
+   MDYR  = YEAR(MATDT);
+   MDMTH = MONTH(MATDT);
+   MDDAY = DAY(MATDT);
+   IF MDMTH = 2 THEN
+      IF MOD(MDYR,4) = 0 THEN MD2 = 29;
+      ELSE MD2 = 28;
+   IF MDDAY > RPDAYS(RPMTH) THEN MDDAY = RPDAYS(RPMTH);
+   REMY = MDYR - RPYR;
+   REMM = MDMTH - RPMTH;
+   REMD = MDDAY - RPDAY;
+   REMMTH = REMY*12 + REMM + REMD/RPDAYS(RPMTH);
+   REM30D = (MATDT-REPTDATE)/30;
+%MEND REMMTH;
+
+DATA REPTDATE;
+   REPTDATE=TODAY()-DAY(TODAY());
+   STARTDTE=MDY(MONTH(REPTDATE),1,YEAR(REPTDATE));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDT',PUT(REPTDATE,DDMMYY10.));
+   CALL SYMPUT('STDATE',STARTDTE);
+   CALL SYMPUT('RPDATE',REPTDATE);
+RUN;
+
+PROC SORT DATA=NID.RNIDM&REPTMON OUT=RNID; BY TRANCHENO; RUN;
+PROC SORT DATA=NID.TRNCHM&REPTMON OUT=TRNCH; BY TRANCHENO; RUN;
+
+DATA RNID;
+   MERGE RNID(IN=A) TRNCH;
+   BY TRANCHENO;
+   IF A;
+RUN;
+
+*------------------------------------------------*
+*  TABLE 1 - OUTSTANDING RETAIL NID              *
+*------------------------------------------------*;
+DATA RNIDTBL1 RNIDTBL2 RNIDTBL3;
+   %DCLVAR
+   SET RNID END=EOF;
+   WHERE CURBAL > 0;
+   IF _N_ = 1 THEN DO;
+      SET REPTDATE;
+      RPYR  = YEAR(REPTDATE);
+      RPMTH = MONTH(REPTDATE);
+      RPDAY = DAY(REPTDATE);
+      IF MOD(RPYR,4) = 0 THEN RD2 = 29;
+   END;
+   IF MATDT > REPTDATE AND STARTDT <= REPTDATE;
+   IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1;
+   ELSE DO;
+      %REMMTH
+   END;
+
+   IF      NIDSTAT = 'N' AND CDSTAT = 'A'                 THEN DO;
+      HELDMKT  = 0;
+      OUTSTAND = SUM(CURBAL,-HELDMKT);
+      REMMFMT  = PUT(REMMTH,REMFMTA.);
+      OUTPUT RNIDTBL1;
+      YIELD    = SUM(INTPLRATE_BID,INTPLRATE_OFFER)/2;
+      REMMFMT  = PUT(REMMTH,REMFMTB.);
+      OUTPUT RNIDTBL3;
+   END;
+   ELSE IF NIDSTAT = 'E' AND &STDATE<=EARLY_WDDT<=&RPDATE THEN DO;
+      NIDCNT+1;
+      NIDVOL+CURBAL;
+   END;
+   IF EOF THEN OUTPUT RNIDTBL2;
+RUN;
+
+PROC SORT DATA=ALLFMT OUT=RFMTA;WHERE FMTNAME='REMFMTA'; BY REMMFMT;RUN;
+PROC SORT DATA=RNIDTBL1; BY REMMFMT; RUN;
+DATA RNIDTBL1;
+   MERGE RFMTA(IN=A) RNIDTBL1;
+   BY REMMFMT;
+   IF A;
+RUN;
+
+PROC SUMMARY DATA=RNIDTBL1 NWAY;
+   BY REMMFMT;
+   VAR CURBAL HELDMKT OUTSTAND;
+   OUTPUT OUT=RNID1 SUM=;
+RUN;
+
+PROC SORT DATA=ALLFMT OUT=RFMTB;WHERE FMTNAME='REMFMTB'; BY REMMFMT;RUN;
+
+PROC SORT DATA=RNIDTBL3 NODUPKEY; BY REMMFMT TRANCHENO; RUN;
+DATA RNID3;
+   MERGE RFMTB(IN=A) RNIDTBL3 END=EOF;
+   BY REMMFMT;
+   IF A;
+   IF FIRST.REMMFMT THEN DO;
+      PCTYIELD = 0;
+      CNTYIELD = 0;
+   END;
+   PCTYIELD+YIELD; AVGPCT+YIELD;
+   IF YIELD > 0 THEN DO;
+      CNTYIELD+1;  AVGCNT+1;
+   END;
+   IF LAST.REMMFMT THEN DO;
+      MIDYIELD = PCTYIELD/CNTYIELD;
+      OUTPUT;
+      IF EOF THEN DO;
+         MIDYIELD = AVGPCT/AVGCNT;
+         OUTPUT;
+      END;
+   END;
+RUN;
+
+DATA _NULL_;
+   SET RNID1 END=LAST;
+   DLM='05'X;
+   FILE NIDOUT;
+   IF _N_=1 THEN DO;
+      PUT @001 "PUBLIC BANK BERHAD"
+          /
+          /    "REPORT ON RETAIL RINGGIT-DENOMINATED NEGOTIABLE "
+               "INSTRUMENT OF DEPOSIT (NID)"
+          /    "REPORTING DATE : &REPTDT";
+          ;
+      PUT @001                                       DLM
+          /    "Table 1 - Outstanding Retail NID"
+          /
+          /                                          DLM
+               "REMAINING MATURITY (IN MONTHS)"      DLM
+               "GROSS ISSUANCE"                      DLM
+               "HELD FOR MARKET MARKING"             DLM
+               "NET OUTSTANDING"                     DLM
+          /                                          DLM
+                                                     DLM
+               "(A)"                                 DLM
+               "(B)"                                 DLM
+               "(A-B)"                               DLM
+          ;
+   END;
+
+   FORMAT CURBAL HELDMKT OUTSTAND TOTBAL TOTHELD TOTOUT COMMA16.2;
+   TOTBAL+CURBAL;
+   TOTHELD+HELDMKT;
+   TOTOUT+OUTSTAND;
+
+   REMMGRP  = SCAN(REMMFMT,2,'.');
+   PUT @001                                          DLM
+            REMMGRP                                  DLM
+            CURBAL                                   DLM
+            HELDMKT                                  DLM
+            OUTSTAND                                 DLM
+       ;
+
+   IF LAST THEN
+      PUT @001                                       DLM
+               'TOTAL'                               DLM
+               TOTBAL                                DLM
+               TOTHELD                               DLM
+               TOTOUT                                DLM
+          ;
+RUN;
+
+DATA _NULL_;
+   FORMAT NIDVOL COMMA16.2;
+   DLM='05'X;
+   FILE NIDOUT MOD;
+   IF TRN=0 THEN
+   PUT @001                                          DLM
+       /    "Table 2 - Monthly Trading Volume"
+       /
+       /                                             DLM
+            "GROSS MONTHLY PURCHASE OF RETAIL NID BY THE BANK" DLM
+            "A) NUMBER OF NID"                       DLM
+            "0.00"                                   DLM
+       /                                             DLM
+                                                     DLM
+            "B) VOLUME OF NID"                       DLM
+            "0.00"                                   DLM
+       ;
+   SET RNIDTBL2 NOBS=TRN;
+   PUT @001                                          DLM
+       /    "Table 2 - Monthly Trading Volume"
+       /
+       /                                             DLM
+            "GROSS MONTHLY PURCHASE OF RETAIL NID BY THE BANK" DLM
+            "A) NUMBER OF NID"                       DLM
+            NIDCNT                                   DLM
+       /                                             DLM
+                                                     DLM
+            "B) VOLUME OF NID"                       DLM
+            NIDVOL                                   DLM
+       ;
+RUN;
+
+DATA _NULL_;
+   SET RNID3 END=LAST;
+   DLM='05'X;
+   FILE NIDOUT MOD;
+   IF _N_=1 THEN DO;
+      PUT @001                                       DLM
+          /    "Table 3 - Indicative Mid Yield"
+          /
+          /                                          DLM
+               "REMAINING MATURITY (IN MONTHS)"      DLM
+               "(%)"                                 DLM
+          ;
+   END;
+
+   FORMAT MIDYIELD 7.4;
+   REMMGRP  = SCAN(REMMFMT,2,'.');
+   IF LAST THEN
+      PUT @001                                            DLM
+               'AVERAGE BID-ASK SPREAD ACROSS MATURITIES' DLM
+               MIDYIELD                                   DLM
+          ;
+   ELSE
+      PUT @001                                            DLM
+               REMMGRP                                    DLM
+               MIDYIELD                                   DLM
+          ;
+RUN;
+//*-------------------------------------------------------------------
+//* FTP TO SAS DATAWAREHOUSE
+//*-------------------------------------------------------------------
+//*%OPC SCAN
+//*%OPC SETVAR TOYY=(OYY-15CD)
+//*%OPC SETVAR TOMM=(OMM-15CD)
+//*RUNSFTP  EXEC COZBATCH
+//*CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(CSASSFTP)
+//*           DD *
+//*lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+//*lzopts linerule=$lr
+//*cd TextFile/Fin
+//*PUT //SAP.PBB.RNID.TEXT       RNID_%TOMM.%TOYY..XLS
+//*EOB
+/*
+//******************************************************************
+//* FTP HOST DATASETS TO DATA REPORT REPOSITORY SYSTEM (DRR)
+//******************************************************************
+//*%OPC SCAN
+//*
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(DRR#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+cd "FD-BNM REPORTING/PBB/BNM RPTG"
+PUT //SAP.PBB.RNID.TEXT   RNID_%TOMM.%TOYY..XLS
+EOB
+/*
