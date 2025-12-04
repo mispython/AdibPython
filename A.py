@@ -28,11 +28,11 @@ def process_large_loan_bill_scd(
 ) -> tuple:
     
     print("="*80)
-    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING (ORIGINAL SAS LOGIC)")
+    print("STEP 1: LOAD_EXDWH_LN_BILL - SCD TYPE 2 PROCESSING (OPTIMIZED)")
     print("="*80)
     
     # SAS date calculations for processing logic
-    REPTDATE = datetime(2025, 11, 28)
+    REPTDATE = report_date
     PREVDATE = REPTDATE - timedelta(days=1)
     RDATE = (REPTDATE - SAS_ORIGIN).days
     PDATE = (PREVDATE - SAS_ORIGIN).days
@@ -77,75 +77,161 @@ def process_large_loan_bill_scd(
             del df, batch  # Free memory
         
         # Strategy 2: Process each chunk separately and combine
-        print("\n1.2: Processing chunks with ORIGINAL SAS SCD logic...")
+        print("\n1.2: Loading and preparing historical data...")
         
         con = duckdb.connect(':memory:')
         
-        # Load ALL historical records (not just active ones)
+        # Load historical data ONCE
         has_historical_data = False
         hist_count = 0
         
         # Check if both historical files exist
         if input_ln_bill.exists() and input_iln_bill.exists():
-            print(f"  Loading ALL historical records...")
+            print(f"  Loading historical files...")
             
-            # Load ALL records from LOAN_BILL
+            # Load parquet files into tables
             con.execute(f"""
                 CREATE TABLE ln_bill_hist AS 
-                SELECT 
-                    ACCTNO, NOTENO, 
-                    BILL_DT,
-                    BILL_PAID_DT,
-                    BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-                    BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-                    BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-                    COSTCTR, PRODUCT,
-                    VALID_FROM_DT,
-                    VALID_TO_DT
-                FROM read_parquet('{input_ln_bill}')
+                SELECT * FROM read_parquet('{input_ln_bill}')
             """)
             
-            # Load ALL records from ILOAN_BILL
             con.execute(f"""
                 CREATE TABLE iln_bill_hist AS 
-                SELECT 
-                    ACCTNO, NOTENO, 
-                    BILL_DT,
-                    BILL_PAID_DT,
-                    BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-                    BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-                    BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-                    COSTCTR, PRODUCT,
-                    VALID_FROM_DT,
-                    VALID_TO_DT
-                FROM read_parquet('{input_iln_bill}')
+                SELECT * FROM read_parquet('{input_iln_bill}')
             """)
             
-            # Combine ALL historical data
+            # Create VIEW (not materialized table) for union
             con.execute(f"""
-                CREATE TABLE loan_bill_hist AS
+                CREATE VIEW loan_bill_hist AS
                 SELECT * FROM ln_bill_hist
                 UNION ALL
                 SELECT * FROM iln_bill_hist
             """)
             
-            # Count historical records for monitoring
-            hist_count = con.execute("SELECT COUNT(*) FROM loan_bill_hist").fetchone()[0]
+            # Estimate count without full scan
+            ln_count = con.execute("SELECT COUNT(*) FROM ln_bill_hist").fetchone()[0]
+            iln_count = con.execute("SELECT COUNT(*) FROM iln_bill_hist").fetchone()[0]
+            hist_count = ln_count + iln_count
             
-            # DON'T create index on full historical table (300M+ records = too slow)
-            # We'll create indexes on the filtered active/inactive tables instead
+            print(f"  ✓ Created view over {hist_count:,} historical records")
+            
+            # Create ACTIVE records table ONCE (with hash-based comparison)
+            print(f"  Creating ACTIVE records table (VALID_TO_DT = {PREVDATE.date()})...")
+            con.execute(f"""
+                CREATE TABLE active_records AS
+                SELECT 
+                    ACCTNO, NOTENO,
+                    CASE 
+                        WHEN BILL_DT IS NOT NULL THEN 
+                            DATE '1960-01-01' + CAST(BILL_DT AS INTEGER) * INTERVAL 1 DAY
+                        ELSE NULL 
+                    END AS BILL_DT,
+                    CASE 
+                        WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
+                            DATE '1960-01-01' + CAST(BILL_PAID_DT AS INTEGER) * INTERVAL 1 DAY
+                        ELSE NULL 
+                    END AS BILL_PAID_DT,
+                    BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+                    BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+                    BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+                    COSTCTR, PRODUCT,
+                    CASE 
+                        WHEN VALID_FROM_DT IS NOT NULL THEN 
+                            DATE '1960-01-01' + CAST(VALID_FROM_DT AS INTEGER) * INTERVAL 1 DAY
+                        ELSE NULL 
+                    END AS VALID_FROM_DT,
+                    CASE 
+                        WHEN VALID_TO_DT IS NOT NULL THEN 
+                            DATE '1960-01-01' + CAST(VALID_TO_DT AS INTEGER) * INTERVAL 1 DAY
+                        ELSE NULL 
+                    END AS VALID_TO_DT,
+                    MD5(
+                        CAST(ACCTNO AS VARCHAR) || '|' ||
+                        CAST(NOTENO AS VARCHAR) || '|' ||
+                        CAST(CASE 
+                            WHEN BILL_DT IS NOT NULL THEN 
+                                DATE '1960-01-01' + CAST(BILL_DT AS INTEGER) * INTERVAL 1 DAY
+                            ELSE NULL 
+                        END AS VARCHAR) || '|' ||
+                        CAST(COALESCE(CASE 
+                            WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
+                                DATE '1960-01-01' + CAST(BILL_PAID_DT AS INTEGER) * INTERVAL 1 DAY
+                            ELSE NULL 
+                        END, DATE '1900-01-01') AS VARCHAR) || '|' ||
+                        CAST(BILL_AMT AS VARCHAR) || '|' ||
+                        CAST(BILL_AMT_PRIN AS VARCHAR) || '|' ||
+                        CAST(BILL_AMT_INT AS VARCHAR) || '|' ||
+                        CAST(BILL_AMT_ESCROW AS VARCHAR) || '|' ||
+                        CAST(BILL_AMT_FEE AS VARCHAR) || '|' ||
+                        CAST(BILL_NOT_PAY_AMT AS VARCHAR) || '|' ||
+                        CAST(BILL_NOT_PAY_AMT_PRIN AS VARCHAR) || '|' ||
+                        CAST(BILL_NOT_PAY_AMT_INT AS VARCHAR) || '|' ||
+                        CAST(BILL_NOT_PAY_AMT_ESCROW AS VARCHAR) || '|' ||
+                        CAST(BILL_NOT_PAY_AMT_FEE AS VARCHAR) || '|' ||
+                        CAST(COSTCTR AS VARCHAR) || '|' ||
+                        CAST(PRODUCT AS VARCHAR)
+                    ) AS record_hash
+                FROM loan_bill_hist
+                WHERE CAST(VALID_TO_DT AS INTEGER) = {PDATE}
+            """)
+            
+            active_count = con.execute("SELECT COUNT(*) FROM active_records").fetchone()[0]
+            print(f"  ✓ Created {active_count:,} ACTIVE records with hash keys")
+            
+            # Create indexes on active records
+            con.execute("""
+                CREATE INDEX idx_active_hash ON active_records(record_hash)
+            """)
+            print(f"  ✓ Created index on active records")
+            
+            # Create INACTIVE records VIEW (not materialized - saves memory)
+            print(f"  Creating INACTIVE records view...")
+            con.execute(f"""
+                CREATE VIEW inactive_records AS
+                SELECT 
+                    ACCTNO, NOTENO,
+                    CASE 
+                        WHEN BILL_DT IS NOT NULL THEN 
+                            DATE '1960-01-01' + CAST(BILL_DT AS INTEGER) * INTERVAL 1 DAY
+                        ELSE NULL 
+                    END AS BILL_DT,
+                    CASE 
+                        WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
+                            DATE '1960-01-01' + CAST(BILL_PAID_DT AS INTEGER) * INTERVAL 1 DAY
+                        ELSE NULL 
+                    END AS BILL_PAID_DT,
+                    BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
+                    BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
+                    BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
+                    COSTCTR, PRODUCT,
+                    CASE 
+                        WHEN VALID_FROM_DT IS NOT NULL THEN 
+                            DATE '1960-01-01' + CAST(VALID_FROM_DT AS INTEGER) * INTERVAL 1 DAY
+                        ELSE NULL 
+                    END AS VALID_FROM_DT,
+                    CASE 
+                        WHEN VALID_TO_DT IS NOT NULL THEN 
+                            DATE '1960-01-01' + CAST(VALID_TO_DT AS INTEGER) * INTERVAL 1 DAY
+                        ELSE NULL 
+                    END AS VALID_TO_DT
+                FROM loan_bill_hist
+                WHERE CAST(VALID_TO_DT AS INTEGER) != {PDATE}
+            """)
+            
+            inactive_count = hist_count - active_count
+            print(f"  ✓ Created view for {inactive_count:,} INACTIVE records (estimated)")
             
             has_historical_data = True
-            print(f"  ✓ Loaded {hist_count:,} ALL historical records (no index - will filter first)")
+            
         else:
-            # Create empty historical table structure
+            # Create empty structure for first run
             con.execute("""
-                CREATE TABLE loan_bill_hist AS
+                CREATE TABLE active_records AS
                 SELECT 
                     CAST(NULL AS BIGINT) AS ACCTNO,
                     CAST(NULL AS BIGINT) AS NOTENO, 
-                    CAST(NULL AS DOUBLE) AS BILL_DT,
-                    CAST(NULL AS DOUBLE) AS BILL_PAID_DT,
+                    CAST(NULL AS DATE) AS BILL_DT,
+                    CAST(NULL AS DATE) AS BILL_PAID_DT,
                     CAST(NULL AS DOUBLE) AS BILL_AMT,
                     CAST(NULL AS DOUBLE) AS BILL_AMT_PRIN,
                     CAST(NULL AS DOUBLE) AS BILL_AMT_INT,
@@ -158,32 +244,61 @@ def process_large_loan_bill_scd(
                     CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_FEE,
                     CAST(NULL AS BIGINT) AS COSTCTR,
                     CAST(NULL AS BIGINT) AS PRODUCT,
-                    CAST(NULL AS DOUBLE) AS VALID_FROM_DT,
-                    CAST(NULL AS DOUBLE) AS VALID_TO_DT
+                    CAST(NULL AS DATE) AS VALID_FROM_DT,
+                    CAST(NULL AS DATE) AS VALID_TO_DT,
+                    CAST(NULL AS VARCHAR) AS record_hash
+                WHERE 1=0
+            """)
+            
+            con.execute("""
+                CREATE VIEW inactive_records AS
+                SELECT 
+                    CAST(NULL AS BIGINT) AS ACCTNO,
+                    CAST(NULL AS BIGINT) AS NOTENO, 
+                    CAST(NULL AS DATE) AS BILL_DT,
+                    CAST(NULL AS DATE) AS BILL_PAID_DT,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_PRIN,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_INT,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_ESCROW,
+                    CAST(NULL AS DOUBLE) AS BILL_AMT_FEE,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_PRIN,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_INT,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_ESCROW,
+                    CAST(NULL AS DOUBLE) AS BILL_NOT_PAY_AMT_FEE,
+                    CAST(NULL AS BIGINT) AS COSTCTR,
+                    CAST(NULL AS BIGINT) AS PRODUCT,
+                    CAST(NULL AS DATE) AS VALID_FROM_DT,
+                    CAST(NULL AS DATE) AS VALID_TO_DT
                 WHERE 1=0
             """)
             print("  ✓ No historical data found - starting fresh")
         
-        # Process each chunk
+        # Process each chunk with HASH-BASED SCD logic
+        print("\n1.3: Processing chunks with optimized SCD logic...")
         final_chunks = []
         for i, chunk_file in enumerate(chunk_files):
-            print(f"  SCD processing chunk {i+1}/{len(chunk_files)}...")
+            print(f"  Chunk {i+1}/{len(chunk_files)}:")
             
-            # Process chunk with ORIGINAL SAS SCD logic
-            chunk_result = process_scd_chunk_original_sas(
+            # Process chunk with optimized hash-based SCD logic
+            chunk_result = process_scd_chunk_hash_based(
                 con, chunk_file, REPTDATE, PREVDATE, temp_path, f"chunk_{i}", 
-                has_historical_data, hist_count
+                has_historical_data
             )
             final_chunks.append(chunk_result)
         
         # Combine all chunks
-        print("\n1.3: Combining all chunks...")
+        print("\n1.4: Combining all chunks...")
         if final_chunks:
             union_chunks = " UNION ALL ".join([f"SELECT * FROM read_parquet('{f}')" for f in final_chunks])
             con.execute(f"""
                 CREATE TABLE loan_bill_combined AS
                 {union_chunks}
             """)
+            
+            combined_count = con.execute("SELECT COUNT(*) FROM loan_bill_combined").fetchone()[0]
+            print(f"  ✓ Combined {combined_count:,} records from all chunks")
         else:
             # If no chunks were processed, create empty table
             con.execute("""
@@ -211,7 +326,7 @@ def process_large_loan_bill_scd(
             """)
         
         # Add ENTITY_CD (optimized lookup)
-        print("\n1.4: Adding ENTITY_CD with optimized lookup...")
+        print("\n1.5: Adding ENTITY_CD with optimized lookup...")
         lookup_cost_ctr_path = Path("/sasdata/rawdata/lookup/lkp_cost_ctr.sas7bdat")
         if lookup_cost_ctr_path.exists():
             # Use broadcast join for small lookup table
@@ -231,6 +346,7 @@ def process_large_loan_bill_scd(
                 FROM loan_bill_combined L
                 LEFT JOIN lkp_cost_ctr C ON L.COSTCTR = C.COSTCTR
             """)
+            print(f"  ✓ Added ENTITY_CD")
         else:
             con.execute("""
                 CREATE TABLE with_entity AS
@@ -239,17 +355,17 @@ def process_large_loan_bill_scd(
             """)
         
         # Split and save results
-        print("\n1.5: Saving final results...")
+        print("\n1.6: Saving final results...")
         ln_bill_path, iln_bill_path = save_final_results(con, output_dir, date_str)
         
         con.close()
         
         return ln_bill_path, iln_bill_path
 
-def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, has_historical_data, hist_count):
-    """Process ORIGINAL SAS SCD logic - Compare with ACTIVE records, Keep ALL history"""
+def process_scd_chunk_hash_based(con, chunk_file, REPTDATE, PREVDATE, temp_path, chunk_id, has_historical_data):
+    """Process SCD logic with HASH-BASED comparison - ultra fast!"""
     
-    # Load chunk as new records
+    # Load chunk as new records with HASH KEY
     con.execute(f"""
         CREATE TEMP TABLE new_records AS
         SELECT 
@@ -268,95 +384,45 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
             BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
             BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
             COSTCTR, PRODUCT,
-            'Y' AS NEW
+            MD5(
+                CAST(ACCTNO AS VARCHAR) || '|' ||
+                CAST(NOTENO AS VARCHAR) || '|' ||
+                CAST(CASE 
+                    WHEN BILL_DT IS NOT NULL THEN 
+                        DATE '1960-01-01' + CAST(BILL_DT AS INTEGER) * INTERVAL 1 DAY
+                    ELSE NULL 
+                END AS VARCHAR) || '|' ||
+                CAST(COALESCE(CASE 
+                    WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
+                        DATE '1960-01-01' + CAST(BILL_PAID_DT AS INTEGER) * INTERVAL 1 DAY
+                    ELSE NULL 
+                END, DATE '1900-01-01') AS VARCHAR) || '|' ||
+                CAST(BILL_AMT AS VARCHAR) || '|' ||
+                CAST(BILL_AMT_PRIN AS VARCHAR) || '|' ||
+                CAST(BILL_AMT_INT AS VARCHAR) || '|' ||
+                CAST(BILL_AMT_ESCROW AS VARCHAR) || '|' ||
+                CAST(BILL_AMT_FEE AS VARCHAR) || '|' ||
+                CAST(BILL_NOT_PAY_AMT AS VARCHAR) || '|' ||
+                CAST(BILL_NOT_PAY_AMT_PRIN AS VARCHAR) || '|' ||
+                CAST(BILL_NOT_PAY_AMT_INT AS VARCHAR) || '|' ||
+                CAST(BILL_NOT_PAY_AMT_ESCROW AS VARCHAR) || '|' ||
+                CAST(BILL_NOT_PAY_AMT_FEE AS VARCHAR) || '|' ||
+                CAST(COSTCTR AS VARCHAR) || '|' ||
+                CAST(PRODUCT AS VARCHAR)
+            ) AS record_hash
         FROM read_parquet('{chunk_file}')
     """)
     
+    # Index on hash for ultra-fast lookups
     con.execute("""
-        CREATE INDEX idx_new_key ON new_records(ACCTNO, NOTENO, BILL_DT)
+        CREATE INDEX idx_new_hash ON new_records(record_hash)
     """)
     
-    if has_historical_data and hist_count > 0:
-        print(f"    Loaded {hist_count:,} total historical records")
-        
-        # KEY OPTIMIZATION: Create ACTIVE records table (EXT='Y' equivalent)
-        # Only records with VALID_TO_DT = PREVDATE for comparison
-        con.execute(f"""
-            CREATE TEMP TABLE active_records AS
-            SELECT 
-                ACCTNO, NOTENO,
-                CASE 
-                    WHEN BILL_DT IS NOT NULL THEN 
-                        DATE '1960-01-01' + CAST(BILL_DT AS INTEGER) * INTERVAL 1 DAY
-                    ELSE NULL 
-                END AS BILL_DT,
-                CASE 
-                    WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
-                        DATE '1960-01-01' + CAST(BILL_PAID_DT AS INTEGER) * INTERVAL 1 DAY
-                    ELSE NULL 
-                END AS BILL_PAID_DT,
-                BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-                BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-                BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-                COSTCTR, PRODUCT,
-                CASE 
-                    WHEN VALID_FROM_DT IS NOT NULL THEN 
-                        DATE '1960-01-01' + CAST(VALID_FROM_DT AS INTEGER) * INTERVAL 1 DAY
-                    ELSE NULL 
-                END AS VALID_FROM_DT,
-                CASE 
-                    WHEN VALID_TO_DT IS NOT NULL THEN 
-                        DATE '1960-01-01' + CAST(VALID_TO_DT AS INTEGER) * INTERVAL 1 DAY
-                    ELSE NULL 
-                END AS VALID_TO_DT
-            FROM loan_bill_hist
-            WHERE CAST(VALID_TO_DT AS INTEGER) = {(PREVDATE - SAS_ORIGIN).days}
-        """)
-        
-        active_count = con.execute("SELECT COUNT(*) FROM active_records").fetchone()[0]
-        print(f"    Comparing with {active_count:,} ACTIVE records (VALID_TO_DT = {PREVDATE.date()})")
-        
-        con.execute("""
-            CREATE INDEX idx_active_key ON active_records(ACCTNO, NOTENO, BILL_DT)
-        """)
-        
-        # Create INACTIVE records table (for KEEP logic)
-        con.execute(f"""
-            CREATE TEMP TABLE inactive_records AS
-            SELECT 
-                ACCTNO, NOTENO,
-                CASE 
-                    WHEN BILL_DT IS NOT NULL THEN 
-                        DATE '1960-01-01' + CAST(BILL_DT AS INTEGER) * INTERVAL 1 DAY
-                    ELSE NULL 
-                END AS BILL_DT,
-                CASE 
-                    WHEN BILL_PAID_DT IS NOT NULL AND CAST(BILL_PAID_DT AS INTEGER) > 0 THEN 
-                        DATE '1960-01-01' + CAST(BILL_PAID_DT AS INTEGER) * INTERVAL 1 DAY
-                    ELSE NULL 
-                END AS BILL_PAID_DT,
-                BILL_AMT, BILL_AMT_PRIN, BILL_AMT_INT, BILL_AMT_ESCROW, BILL_AMT_FEE,
-                BILL_NOT_PAY_AMT, BILL_NOT_PAY_AMT_PRIN, BILL_NOT_PAY_AMT_INT,
-                BILL_NOT_PAY_AMT_ESCROW, BILL_NOT_PAY_AMT_FEE,
-                COSTCTR, PRODUCT,
-                CASE 
-                    WHEN VALID_FROM_DT IS NOT NULL THEN 
-                        DATE '1960-01-01' + CAST(VALID_FROM_DT AS INTEGER) * INTERVAL 1 DAY
-                    ELSE NULL 
-                END AS VALID_FROM_DT,
-                CASE 
-                    WHEN VALID_TO_DT IS NOT NULL THEN 
-                        DATE '1960-01-01' + CAST(VALID_TO_DT AS INTEGER) * INTERVAL 1 DAY
-                    ELSE NULL 
-                END AS VALID_TO_DT
-            FROM loan_bill_hist
-            WHERE CAST(VALID_TO_DT AS INTEGER) != {(PREVDATE - SAS_ORIGIN).days}
-        """)
-        
-        inactive_count = con.execute("SELECT COUNT(*) FROM inactive_records").fetchone()[0]
-        print(f"    Keeping {inactive_count:,} INACTIVE historical records unchanged")
-        
-        # SCD Logic - MATCH (compare with ACTIVE only)
+    new_count = con.execute("SELECT COUNT(*) FROM new_records").fetchone()[0]
+    print(f"    Loaded {new_count:,} new records with hash keys")
+    
+    if has_historical_data:
+        # OPTIMIZED SCD Logic - MATCH (compare HASH only!)
         con.execute(f"""
             CREATE TEMP TABLE match_records AS
             SELECT 
@@ -369,26 +435,13 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
                 T1.COSTCTR, T1.PRODUCT, T1.VALID_FROM_DT,
                 DATE '{REPTDATE.date()}' AS VALID_TO_DT
             FROM active_records T1
-            INNER JOIN new_records T2 ON 
-                T1.ACCTNO = T2.ACCTNO 
-                AND T1.NOTENO = T2.NOTENO
-                AND T1.BILL_DT = T2.BILL_DT
-                AND (T1.BILL_PAID_DT = T2.BILL_PAID_DT OR (T1.BILL_PAID_DT IS NULL AND T2.BILL_PAID_DT IS NULL))
-                AND T1.BILL_AMT = T2.BILL_AMT
-                AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
-                AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
-                AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
-                AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
-                AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
-                AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
-                AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
-                AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
-                AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
-                AND T1.COSTCTR = T2.COSTCTR
-                AND T1.PRODUCT = T2.PRODUCT
+            INNER JOIN new_records T2 ON T1.record_hash = T2.record_hash
         """)
         
-        # SCD Logic - CHGREC (active records that didn't match)
+        match_count = con.execute("SELECT COUNT(*) FROM match_records").fetchone()[0]
+        print(f"    MATCH: {match_count:,} records (unchanged)")
+        
+        # OPTIMIZED SCD Logic - CHGREC (active records with different hash)
         con.execute(f"""
             CREATE TEMP TABLE chgrec_records AS
             SELECT 
@@ -401,27 +454,14 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
                 T1.COSTCTR, T1.PRODUCT, T1.VALID_FROM_DT,
                 DATE '{PREVDATE.date()}' AS VALID_TO_DT
             FROM active_records T1
-            LEFT JOIN new_records T2 ON 
-                T1.ACCTNO = T2.ACCTNO 
-                AND T1.NOTENO = T2.NOTENO
-                AND T1.BILL_DT = T2.BILL_DT
-                AND (T1.BILL_PAID_DT = T2.BILL_PAID_DT OR (T1.BILL_PAID_DT IS NULL AND T2.BILL_PAID_DT IS NULL))
-                AND T1.BILL_AMT = T2.BILL_AMT
-                AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
-                AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
-                AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
-                AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
-                AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
-                AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
-                AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
-                AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
-                AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
-                AND T1.COSTCTR = T2.COSTCTR
-                AND T1.PRODUCT = T2.PRODUCT
-            WHERE T2.NEW IS NULL
+            LEFT JOIN new_records T2 ON T1.record_hash = T2.record_hash
+            WHERE T2.record_hash IS NULL
         """)
         
-        # SCD Logic - UPDATEX (new or changed records)
+        chgrec_count = con.execute("SELECT COUNT(*) FROM chgrec_records").fetchone()[0]
+        print(f"    CHGREC: {chgrec_count:,} records (closed)")
+        
+        # OPTIMIZED SCD Logic - UPDATEX (new records with no matching hash)
         con.execute(f"""
             CREATE TEMP TABLE updatex_records AS
             SELECT 
@@ -435,27 +475,14 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
                 DATE '{REPTDATE.date()}' AS VALID_FROM_DT,
                 DATE '{REPTDATE.date()}' AS VALID_TO_DT
             FROM active_records T1
-            RIGHT JOIN new_records T2 ON 
-                T1.ACCTNO = T2.ACCTNO 
-                AND T1.NOTENO = T2.NOTENO
-                AND T1.BILL_DT = T2.BILL_DT
-                AND (T1.BILL_PAID_DT = T2.BILL_PAID_DT OR (T1.BILL_PAID_DT IS NULL AND T2.BILL_PAID_DT IS NULL))
-                AND T1.BILL_AMT = T2.BILL_AMT
-                AND T1.BILL_AMT_PRIN = T2.BILL_AMT_PRIN
-                AND T1.BILL_AMT_INT = T2.BILL_AMT_INT
-                AND T1.BILL_AMT_ESCROW = T2.BILL_AMT_ESCROW
-                AND T1.BILL_AMT_FEE = T2.BILL_AMT_FEE
-                AND T1.BILL_NOT_PAY_AMT = T2.BILL_NOT_PAY_AMT
-                AND T1.BILL_NOT_PAY_AMT_PRIN = T2.BILL_NOT_PAY_AMT_PRIN
-                AND T1.BILL_NOT_PAY_AMT_INT = T2.BILL_NOT_PAY_AMT_INT
-                AND T1.BILL_NOT_PAY_AMT_ESCROW = T2.BILL_NOT_PAY_AMT_ESCROW
-                AND T1.BILL_NOT_PAY_AMT_FEE = T2.BILL_NOT_PAY_AMT_FEE
-                AND T1.COSTCTR = T2.COSTCTR
-                AND T1.PRODUCT = T2.PRODUCT
-            WHERE T1.ACCTNO IS NULL
+            RIGHT JOIN new_records T2 ON T1.record_hash = T2.record_hash
+            WHERE T1.record_hash IS NULL
         """)
         
-        # Combine all results
+        updatex_count = con.execute("SELECT COUNT(*) FROM updatex_records").fetchone()[0]
+        print(f"    UPDATEX: {updatex_count:,} records (new/changed)")
+        
+        # Combine results (inactive_records is a VIEW - only materialized here)
         con.execute(f"""
             CREATE TEMP TABLE scd_result AS
             SELECT * FROM match_records
@@ -468,15 +495,13 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
         """)
         
         # Cleanup
-        con.execute("DROP TABLE active_records")
-        con.execute("DROP TABLE inactive_records")
         con.execute("DROP TABLE match_records")
         con.execute("DROP TABLE chgrec_records")
         con.execute("DROP TABLE updatex_records")
         
     else:
         # No historical data - all records are new
-        print("    No historical records - treating all as new...")
+        print("    No historical data - treating all as new...")
         con.execute(f"""
             CREATE TEMP TABLE scd_result AS
             SELECT 
@@ -497,7 +522,7 @@ def process_scd_chunk_original_sas(con, chunk_file, REPTDATE, PREVDATE, temp_pat
     con.execute(f"COPY scd_result TO '{chunk_output}' (FORMAT PARQUET)")
     
     result_count = con.execute("SELECT COUNT(*) FROM scd_result").fetchone()[0]
-    print(f"    Generated {result_count:,} records for this chunk")
+    print(f"    ✓ Generated {result_count:,} total records for this chunk")
     
     # Cleanup
     con.execute("DROP TABLE new_records")
@@ -519,7 +544,7 @@ def save_final_results(con, output_dir, date_str):
         FROM with_entity
         WHERE ENTITY_CD IS NULL OR ENTITY_CD = ''
     """)
-    
+
     con.execute("""
         CREATE TEMP TABLE iln_bill_output AS
         SELECT 
@@ -531,7 +556,7 @@ def save_final_results(con, output_dir, date_str):
         FROM with_entity
         WHERE ENTITY_CD = 'PIBB'
     """)
-    
+
     # Save without date suffix in filename
     ln_bill_path = output_dir / f"LOAN_BILL.parquet"
     iln_bill_path = output_dir / f"ILOAN_BILL.parquet"
@@ -555,11 +580,11 @@ def process_hp_bill_extraction(
     iloan_bill_path: Path,
     output_dir: Path,
     report_date: datetime
-) -> None:
+    ) -> None:
     """
     STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
     """
-    
+
     print("\n" + "="*80)
     print("STEP 2: HP/IHP BILL EXTRACTION")
     print("="*80)
@@ -630,50 +655,44 @@ def process_hp_bill_extraction(
     
     con.close()
 
-# Main execution
-if __name__ == "__main__":
-    print("="*80)
-    print("BILL PROCESSING PIPELINE - ORIGINAL SAS LOGIC")
-    print("="*80)
-    
-    # SAS date calculations for processing logic
-    REPTDATE = datetime(2025, 11, 28)  # Yesterday as report date
-    PREVDATE = REPTDATE - timedelta(days=1)          # Day before yesterday
-    RDATE = (REPTDATE - SAS_ORIGIN).days
-    PDATE = (PREVDATE - SAS_ORIGIN).days
-    
-    # yymmdd format for file naming
-    date_str = REPTDATE.strftime("%y%m%d")
-    prev_date_str = PREVDATE.strftime("%y%m%d")
-    
-    print(f"Report Date: {REPTDATE.strftime('%Y-%m-%d')} (SAS: {RDATE}, File: {date_str})")
-    print(f"Previous Date: {PREVDATE.strftime('%Y-%m-%d')} (SAS: {PDATE}, File: {prev_date_str})")
-    print()
-    
-    # Input paths
-    input_enrh = Path("/parquet/dwh/LOAN/enrichment/ENRH_LN_BILL.parquet")
-    
-    # Output directory
-    output_dir = Path(f"/parquet/dwh/LOAN/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}")
-    output_dir.mkdir(parents=True, exist_ok=True)
+# SAS date calculations for processing logic
+REPTDATE = datetime(2025, 11, 28)  # Set your report date
+PREVDATE = REPTDATE - timedelta(days=1)
+RDATE = (REPTDATE - SAS_ORIGIN).days
+PDATE = (PREVDATE - SAS_ORIGIN).days
 
-    # Previous Output directory
-    prev_dir = Path(f"/parquet/dwh/LOAN/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}")
+# yymmdd format for file naming
+date_str = REPTDATE.strftime("%y%m%d")
+prev_date_str = PREVDATE.strftime("%y%m%d")
 
-    
-    # STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL (ORIGINAL SAS LOGIC)
-    loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
-        input_enrh_path=input_enrh,
-        output_dir=output_dir,
-        prev_dir=prev_dir,
-        report_date=REPTDATE,
-        chunk_size=3_000_000
-    )
-    
-    if loan_bill_path is None:
-        print("\n✗ STEP 1 failed. Exiting.")
-        exit(1)
-    
+print(f"Report Date: {REPTDATE.strftime('%Y-%m-%d')} (SAS: {RDATE}, File: {date_str})")
+print(f"Previous Date: {PREVDATE.strftime('%Y-%m-%d')} (SAS: {PDATE}, File: {prev_date_str})")
+print()
+
+# Input paths - CHANGE THESE TO YOUR PATHS
+input_enrh = Path("/parquet/dwh/LOAN/enrichment/ENRH_LN_BILL.parquet")
+
+# Output directory
+output_dir = Path(f"/parquet/dwh/LOAN/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}")
+output_dir.mkdir(parents=True, exist_ok=True)
+
+# Previous Output directory
+prev_dir = Path(f"/parquet/dwh/LOAN/year={PREVDATE.year}/month={PREVDATE.month:02d}/day={PREVDATE.day:02d}")
+
+
+# STEP 1: Generate TODAY'S LOAN_BILL and ILOAN_BILL
+loan_bill_path, iloan_bill_path = process_large_loan_bill_scd(
+    input_enrh_path=input_enrh,
+    output_dir=output_dir,
+    prev_dir=prev_dir,
+    report_date=REPTDATE,
+    chunk_size=3_000_000
+)
+
+if loan_bill_path is None:
+    print("\n✗ STEP 1 failed. Exiting.")
+    exit(1)
+
     # STEP 2: Extract HP_BILL and IHP_BILL from TODAY'S LOAN_BILL and ILOAN_BILL
     process_hp_bill_extraction(
         loan_bill_path=loan_bill_path,
@@ -691,67 +710,3 @@ if __name__ == "__main__":
     print(f"  3. HP_BILL.parquet")
     print(f"  4. IHP_BILL.parquet")
     print("="*80)
-
-    # sas = saspy.SASsession()
-
-    # lnbill_ctl = "lnbill_ctrl"
-    # hpbill_ctl = 'hpbill_ctrl'
-    # ln_bill_data  = "loan_bill"
-    # iln_bill_data  = "iloan_bill"
-    # hp_bill_data  = "hp_bill"
-    # ihp_bill_data  = "ihp_bill"
-
-    # def assign_libname(lib_name, sas_path):
-    #     log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
-    #     return log
-
-    # def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
-    #     sas.df2sd(df,table=cur_data, libref='work')
-
-    #     log = sas.submit(f"""
-    #             proc sql noprint;
-    #                create table colmeta as 
-    #                 select name, type, length
-    #             from dictionary.columns
-    #             where libname = upcase("{ctrl_name}")  
-    #                  and memname = upcase("{prev_data}");
-    #             quit
-    #             """)
-    
-    #     print(log["LOG"])
-    #     df_meta = sas.sasdata("colmeta", libref="work").to_df()
-    #     cols = df_meta["name"].dropna().tolist()
-    #     col_list = ", ".join(cols)
-
-    #     casted_cols =[]
-    #     for _, row in df_meta.iterrows():
-    #         col = row["name"]
-    #         length = row['length']
-    #         if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
-    #             casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
-    #         else:
-    #             casted_cols.append(col)
-
-    #     casted_cols = ",\n ".join(casted_cols)
-
-    #     log = sas.submit(f"""
-    #                 proc sql noprint;
-    #                      create table {lib_name}.{cur_data} as
-    #                      select {col_list} from {ctrl_name}.{prev_data}(obs=0)
-    #                      union corr
-    #                      select {casted_cols} from work.{cur_data};
-    #                 quit;
-    #                 """)
-    #     print(f"Final table created : {log['LOG']}") 
-    #     return log
-
-    # assign_libname("ln" , "/dwh/ln_bill")
-    # assign_libname("iln" , "/dwh/iln_bill")
-    # assign_libname("hp" , "/dwh/ln_hp")
-    # assign_libname("ihp" , "/dwh/iln_hp")
-    # assign_libname("ctrl", "/sas/python/virt_edw/Data_Warehouse/SASTABLE")
-
-    # log1 = set_data(ln_df, "ln", "ctrl", ln_bill_data, lnbill_ctl)
-    # log2 = set_data(iln_df, "iln", "ctrl", iln_bill_data, lnbill_ctl)
-    # log3 = set_data(hp_df, "hp", "ctrl", hp_bill_data, hpbill_ctl)
-    # log4 = set_data(ihp_df, "ihp", "ctrl", ihp_bill_data, hpbill_ctl)
