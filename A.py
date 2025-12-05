@@ -293,12 +293,28 @@ def process_large_loan_bill_scd(
         if final_chunks:
             union_chunks = " UNION ALL ".join([f"SELECT * FROM read_parquet('{f}')" for f in final_chunks])
             con.execute(f"""
-                CREATE TABLE loan_bill_combined AS
+                CREATE TABLE loan_bill_chunks_only AS
                 {union_chunks}
             """)
             
-            combined_count = con.execute("SELECT COUNT(*) FROM loan_bill_combined").fetchone()[0]
-            print(f"  ✓ Combined {combined_count:,} records from all chunks")
+            chunks_count = con.execute("SELECT COUNT(*) FROM loan_bill_chunks_only").fetchone()[0]
+            print(f"  ✓ Combined {chunks_count:,} records from chunks")
+            
+            # NOW add inactive records ONCE (not per chunk)
+            if has_historical_data:
+                print(f"  Adding inactive historical records (ONCE)...")
+                con.execute("""
+                    CREATE TABLE loan_bill_combined AS
+                    SELECT * FROM loan_bill_chunks_only
+                    UNION ALL
+                    SELECT * FROM inactive_records
+                """)
+                combined_count = con.execute("SELECT COUNT(*) FROM loan_bill_combined").fetchone()[0]
+                print(f"  ✓ Final total: {combined_count:,} records (chunks + inactive)")
+            else:
+                con.execute("ALTER TABLE loan_bill_chunks_only RENAME TO loan_bill_combined")
+                combined_count = chunks_count
+                print(f"  ✓ Final total: {combined_count:,} records")
         else:
             # If no chunks were processed, create empty table
             con.execute("""
@@ -490,8 +506,7 @@ def process_scd_chunk_hash_based(con, chunk_file, REPTDATE, PREVDATE, temp_path,
             SELECT * FROM updatex_records
             UNION ALL
             SELECT * FROM chgrec_records
-            UNION ALL
-            SELECT * FROM inactive_records
+
         """)
         
         # Cleanup
