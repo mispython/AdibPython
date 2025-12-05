@@ -4,6 +4,9 @@ import datetime
 import pandas as pd
 from typing import Tuple
 
+# Define the delimiter (ASCII ENQ character 05)
+DELIMITER = "\x05"  # This is the 1:1 translation of SAS's DLM = '05'X
+
 # ============================================
 # SAS: DATA REPTDATE; SET DEPOSIT.REPTDATE;
 # ============================================
@@ -140,7 +143,6 @@ def write_inward_report(inward_df: pl.DataFrame, output_file: str = "INWREPT.txt
            ADMIN     +(-1)DLM+(-1);
     RUN;
     """
-    delimiter = "\x05"  # ASCII ENQ character (05'X in SAS)
     
     with open(output_file, "w", encoding="utf-8") as f:
         # Write header (SAS: IF _N_ = 1 THEN DO;)
@@ -170,7 +172,7 @@ def write_inward_report(inward_df: pl.DataFrame, output_file: str = "INWREPT.txt
         ]
         
         # SAS: +(-1)DLM+(-1) adds delimiter between items
-        f.write(delimiter.join(header) + "\n")
+        f.write(DELIMITER.join(header) + "\n")
         
         # Write data rows
         for row in inward_df.iter_rows(named=True):
@@ -200,7 +202,7 @@ def write_inward_report(inward_df: pl.DataFrame, output_file: str = "INWREPT.txt
                 str(row.get("ADMIN", ""))
             ]
             
-            f.write(delimiter.join(data_row) + "\n")
+            f.write(DELIMITER.join(data_row) + "\n")
     
     print(f"Inward report written to: {output_file}")
 
@@ -211,7 +213,6 @@ def write_outward_report(outward_df: pl.DataFrame, output_file: str = "OUTWREPT.
     """
     Exact translation of second DATA _NULL_ step
     """
-    delimiter = "\x05"  # ASCII ENQ character
     
     with open(output_file, "w", encoding="utf-8") as f:
         # Write header
@@ -241,7 +242,7 @@ def write_outward_report(outward_df: pl.DataFrame, output_file: str = "OUTWREPT.
             "CBOP CODE"
         ]
         
-        f.write(delimiter.join(header) + "\n")
+        f.write(DELIMITER.join(header) + "\n")
         
         # Write data rows
         for row in outward_df.iter_rows(named=True):
@@ -271,7 +272,7 @@ def write_outward_report(outward_df: pl.DataFrame, output_file: str = "OUTWREPT.
                 str(row.get("ADMIN", ""))
             ]
             
-            f.write(delimiter.join(data_row) + "\n")
+            f.write(DELIMITER.join(data_row) + "\n")
     
     print(f"Outward report written to: {output_file}")
 
@@ -371,7 +372,7 @@ def sas_style_procedural():
     # DATA _NULL_; SET INWARD; FILE INWREPT;
     with open("INWREPT.txt", "w", encoding="utf-8") as f:
         # Header
-        header = delimiter.join([
+        header = DELIMITER.join([
             "TRANSACTION DATE", "BRANCH NAME", "REFERENCE NO",
             "BENEFICIARY NAME 1", "BENEFICIARY NAME 2", "BENEFICIARY NAME 3", "BENEFICIARY NAME 4",
             "ORDERING CUSTOMER 1", "ORDERING CUSTOMER 2", "ORDERING CUSTOMER 3", "ORDERING CUSTOMER 4",
@@ -382,7 +383,7 @@ def sas_style_procedural():
         
         # Data
         for row in INWARD.iter_rows(named=True):
-            line = delimiter.join([
+            line = DELIMITER.join([
                 str(row.get("LASTTRAN", "")), str(row.get("BRANCHABB", "")),
                 str(row.get("SERIAL", "")), str(row.get("BNAD1", "")),
                 str(row.get("BNAD2", "")), str(row.get("BNAD3", "")),
@@ -400,7 +401,7 @@ def sas_style_procedural():
     # DATA _NULL_; SET OUTWARD; FILE OUTWREPT;
     with open("OUTWREPT.txt", "w", encoding="utf-8") as f:
         # Header
-        header = delimiter.join([
+        header = DELIMITER.join([
             "TRANSACTION DATE", "BRANCH NAME", "REFERENCE NO",
             "ORDERING CUSTOMER 1", "ORDERING CUSTOMER 2", "ORDERING CUSTOMER 3", "ORDERING CUSTOMER 4",
             "ORDERING CUSTOMER ACCOUNT NO", "BENEFICIARY NAME 1", "BENEFICIARY NAME 2",
@@ -412,7 +413,7 @@ def sas_style_procedural():
         
         # Data
         for row in OUTWARD.iter_rows(named=True):
-            line = delimiter.join([
+            line = DELIMITER.join([
                 str(row.get("LASTTRAN", "")), str(row.get("BRANCHABB", "")),
                 str(row.get("SERIAL", "")), str(row.get("ANAD1", "")),
                 str(row.get("ANAD2", "")), str(row.get("ANAD3", "")),
@@ -429,11 +430,31 @@ def sas_style_procedural():
             f.write(line)
 
 # ============================================
+# Test function to verify the delimiter
+# ============================================
+def test_delimiter():
+    """Test that the delimiter is correctly defined"""
+    print("Testing delimiter...")
+    print(f"Delimiter character: {repr(DELIMITER)}")
+    print(f"Delimiter hex code: {DELIMITER.encode('utf-8').hex()}")
+    print(f"Is this ASCII ENQ (05)?: {DELIMITER.encode('utf-8').hex() == '05'}")
+    
+    # Create a simple test file
+    test_data = ["Field1", "Field2", "Field3"]
+    test_line = DELIMITER.join(test_data)
+    
+    print(f"\nTest line: {repr(test_line)}")
+    print(f"Expected (hex): {'05'.join([f.encode('utf-8').hex() for f in test_data])}")
+    print(f"Actual (hex): {test_line.encode('utf-8').hex()}")
+
+# ============================================
 # Run the complete SAS program
 # ============================================
 if __name__ == "__main__":
+    # First, test the delimiter
+    test_delimiter()
+    
+    print("\n" + "=" * 60 + "\n")
+    
     # Execute the complete SAS program flow
     main()
-    
-    # Or use the more SAS-like procedural version
-    # sas_style_procedural()
