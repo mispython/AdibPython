@@ -1,458 +1,228 @@
-from pathlib import Path
-from datetime import datetime
 import polars as pl
-import logging
-import re
-from typing import List, Optional, Dict
+from datetime import date, timedelta
+from pathlib import Path
+import pyreadstat
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# ============================================
+# CORE EIBMRNID LOGIC
+# ============================================
 
-class LoanDataProcessor:
-    """Combined processor for both SAS steps: text file processing and report generation"""
+def eibmrnid_sas(nid_file, trnch_file=None, output_dir='.', rep_date=None):
+    """EIBMRNID report from SAS7BDAT - follows original SAS logic"""
     
-    # Constants for the first step (text parsing)
-    ITEM_TYPES = {
-        'PRINCIPAL/LOAN BALANCE': 'PRINBAL',
-        'PRINCIPAL IN NON-ACCRUAL': 'PRNNACCR',
-        'INTEREST ACCRUALS': 'INTACCR',
-        'INTEREST IN NON-ACCRUAL': 'INTNACCR',
-        'UNEARNED INTEREST': 'UNERNINT',
-        'RESERVE FINANCED': 'RSRVFIN',
-        'NON DDA ESCROW FUNDS': 'NONDDA',
-        'LATE FEES': 'LATEFEES',
-        'OTHER EARNED FEES': 'OTHERFEE'
-    }
+    # 1. Set report date
+    rd = rep_date or (date.today().replace(day=1) - timedelta(days=1))
+    sd = date(rd.year, rd.month, 1)
     
-    # Columns for the output report (second step)
-    OUTPUT_COLUMNS = [
-        "COSTCT", "NOTETYPE", "PRINBAL", "PRNNACCR", "INTACCR", "INTNACCR",
-        "UNERNINT", "UNERNNON", "RSRVFIN", "RSRVDLR", "NONDDA", "LATEFEES",
-        "OTHERFEE", "CTPRINT", "CTPRNNAC"
-    ]
+    print(f"EIBMRNID Report: {rd.strftime('%d/%m/%Y')}")
     
-    def __init__(self, input_text_path: str, base_output_path: str, 
-                 batch_date_str: str = None):
-        """
-        Initialize the combined processor
-        """
-        self.input_text_path = Path(input_text_path)
-        self.BASE_OUT = Path(base_output_path)
-        
-        # Parse batch date from filename if not provided
-        if batch_date_str is None:
-            filename = self.input_text_path.name
-            date_match = re.search(r'(\d{8})', filename)
-            if date_match:
-                date_str = date_match.group(1)
-                batch_date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
-                logger.info(f"Extracted batch date from filename: {batch_date_str}")
-            else:
-                batch_date_str = datetime.now().strftime('%Y-%m-%d 00:00:00')
-        
-        # Parse batch date
-        try:
-            self.batch_dt = datetime.strptime(batch_date_str, '%Y-%m-%d %H:%M:%S')
-            self.batch_dt_str = self.batch_dt.strftime("%Y%m%d")
-        except ValueError:
-            self.batch_dt = datetime.now()
-            self.batch_dt_str = self.batch_dt.strftime("%Y%m%d")
-        
-        # Report date formatting
-        self.REPTDATE = self.batch_dt
-        self.REPTMON = f"{self.REPTDATE.month:02d}"
-        self.REPTYEAR = f"{self.REPTDATE.year % 100:02d}"
-        
-        # Ensure output directory exists
-        self.BASE_OUT.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize data structures
-        self.current_costct = 0
-        self.current_notety = 0
-        self.current_item = ""
-        
-        self.current_record = {
-            'COSTCT': 0,
-            'NOTETY': 0,
-            'BAL1': '0.00',
-            'BAL2': '0.00',
-            'BAL3': '0.0000000',
-            'BAL4': '0.0000000',
-            'BAL5': '0.00',
-            'BAL5A': '0.00',
-            'BAL6': '0.00',
-            'BAL6A': '0.00',
-            'BAL7': '0.00',
-            'BAL8': '0.00',
-            'BAL9': '0.00',
-            'C_PRN': '0',
-            'C_PRNNAC': '0'
-        }
-        
-        self.all_records = []
-        
-        logger.info(f"Initialized processor for batch date: {self.batch_dt_str}")
+    # 2. Read SAS7BDAT files
+    df_nid = pl.from_pandas(pyreadstat.read_sas7bdat(nid_file)[0])
     
-    def _extract_costct_notety(self, line: str) -> tuple:
-        """Extract cost center and loan type from header line"""
-        costct = 0
-        notety = 0
-        
-        # Look for COST CENTER: pattern
-        costct_match = re.search(r'COST CENTER:\s*(\d+)', line)
-        if costct_match:
-            try:
-                costct = int(costct_match.group(1))
-            except ValueError:
-                costct = 0
-        
-        # Look for LOAN TYPE: pattern
-        notety_match = re.search(r'LOAN TYPE:\s*(\d+)', line)
-        if notety_match:
-            try:
-                notety = int(notety_match.group(1))
-            except ValueError:
-                notety = 0
-        
-        return costct, notety
+    # Fix column names
+    col_map = {}
+    for c in df_nid.columns:
+        cl = c.lower()
+        if 'tranche' in cl: col_map[c] = 'trancheno'
+        elif 'curbal' in cl: col_map[c] = 'curbal'
+        elif 'nidstat' in cl: col_map[c] = 'nidstat'
+        elif 'cdstat' in cl: col_map[c] = 'cdstat'
+        elif 'matdt' in cl: col_map[c] = 'matdt'
+        elif 'startdt' in cl: col_map[c] = 'startdt'
+        elif 'early' in cl: col_map[c] = 'early_wddt'
+        elif 'bid' in cl: col_map[c] = 'intplrate_bid'
+        elif 'offer' in cl: col_map[c] = 'intplrate_offer'
     
-    def _extract_balance_from_line(self, line: str) -> str:
-        """Extract balance amount from a line with = sign"""
-        # Look for the number after "="
-        if '=' in line:
-            # Find the position of "="
-            eq_pos = line.find('=')
-            
-            # Look for numbers after the "="
-            # The balance appears to be in positions like: "0.0049482-"
-            remaining = line[eq_pos:]
-            
-            # Find all numbers with possible minus sign
-            matches = re.findall(r'[\d.]+-?', remaining)
-            if matches:
-                # Usually the first number after "=" is the balance
-                return matches[0].strip()
-        
-        return '0.0000000'
+    df_nid = df_nid.rename(col_map) if col_map else df_nid
     
-    def process_text_file(self) -> List[Dict]:
-        """
-        Process the input text file
-        """
-        logger.info(f"Processing text file: {self.input_text_path}")
-        
-        if not self.input_text_path.exists():
-            logger.error(f"Input text file not found: {self.input_text_path}")
-            return []
-        
-        try:
-            with open(self.input_text_path, 'r') as file:
-                lines = file.readlines()
-            
-            logger.info(f"Read {len(lines)} lines from text file")
-            
-            # Track state
-            in_r6999_section = False
-            found_header = False
-            
-            for line_num, line in enumerate(lines, 1):
-                # Skip empty lines
-                if not line.strip():
-                    continue
-                
-                # Check if this is an R-6999 report section
-                if 'R-6999' in line and 'CONTROL TOTALS' in line:
-                    in_r6999_section = True
-                    found_header = False
-                    logger.debug(f"Line {line_num}: Entered R-6999 section")
-                    continue
-                
-                # Only process lines within R-6999 sections
-                if not in_r6999_section:
-                    continue
-                
-                # Look for header line with TOTALS ACCRUAL DATE
-                if 'TOTALS  ACCRUAL DATE:' in line:
-                    found_header = True
-                    # Extract cost center and loan type
-                    self.current_costct, self.current_notety = self._extract_costct_notety(line)
-                    logger.debug(f"Line {line_num}: Found header - COSTCT: {self.current_costct}, NOTETY: {self.current_notety}")
-                    
-                    # Reset current record
-                    self.current_record = {
-                        'COSTCT': self.current_costct,
-                        'NOTETY': self.current_notety,
-                        'BAL1': '0.00',
-                        'BAL2': '0.00',
-                        'BAL3': '0.0000000',
-                        'BAL4': '0.0000000',
-                        'BAL5': '0.00',
-                        'BAL5A': '0.00',
-                        'BAL6': '0.00',
-                        'BAL6A': '0.00',
-                        'BAL7': '0.00',
-                        'BAL8': '0.00',
-                        'BAL9': '0.00',
-                        'C_PRN': '0',
-                        'C_PRNNAC': '0'
-                    }
-                    continue
-                
-                # Only process item lines after header is found
-                if not found_header:
-                    continue
-                
-                # Check for item lines
-                item_found = False
-                for item_key in self.ITEM_TYPES:
-                    if item_key in line:
-                        self.current_item = item_key
-                        item_found = True
-                        logger.debug(f"Line {line_num}: Found item: {item_key}")
-                        
-                        # Check for ZERO indicator
-                        if 'ARE  EQUAL  TO  ZERO' in line or '*  *  *' in line:
-                            # Set zeros based on item type
-                            if item_key == 'PRINCIPAL/LOAN BALANCE':
-                                self.current_record['BAL1'] = '0.00'
-                                self.current_record['C_PRN'] = '0'
-                            elif item_key == 'PRINCIPAL IN NON-ACCRUAL':
-                                self.current_record['BAL2'] = '0.00'
-                                self.current_record['C_PRNNAC'] = '0'
-                            elif item_key == 'INTEREST ACCRUALS':
-                                self.current_record['BAL3'] = '0.0000000'
-                            elif item_key == 'INTEREST IN NON-ACCRUAL':
-                                # Special case: might have a balance line following
-                                self.current_record['BAL4'] = '0.0000000'
-                            elif item_key == 'UNEARNED INTEREST':
-                                self.current_record['BAL5'] = '0.00'
-                                self.current_record['BAL5A'] = '0.00'
-                            elif item_key == 'RESERVE FINANCED':
-                                self.current_record['BAL6'] = '0.00'
-                                self.current_record['BAL6A'] = '0.00'
-                            elif item_key == 'NON DDA ESCROW FUNDS':
-                                self.current_record['BAL7'] = '0.00'
-                            elif item_key == 'LATE FEES':
-                                self.current_record['BAL8'] = '0.00'
-                            elif item_key == 'OTHER EARNED FEES':
-                                self.current_record['BAL9'] = '0.00'
-                        break
-                
-                # Check for balance line (starts with "=") for INTEREST IN NON-ACCRUAL
-                if line.strip().startswith('=') and self.current_item == 'INTEREST IN NON-ACCRUAL':
-                    balance = self._extract_balance_from_line(line)
-                    self.current_record['BAL4'] = balance
-                    logger.debug(f"Line {line_num}: Extracted balance for INTNACCR: {balance}")
-                
-                # Check for EXTENSION FEES to trigger output
-                if 'EXTENSION FEES' in line and self.current_costct != 0:
-                    # Output current record
-                    record_copy = self.current_record.copy()
-                    self.all_records.append(record_copy)
-                    logger.debug(f"Line {line_num}: Output record - COSTCT: {self.current_costct}, NOTETY: {self.current_notety}")
-                    
-                    # Reset for next record
-                    in_r6999_section = False
-                    found_header = False
-            
-            logger.info(f"Processed {len(self.all_records)} records from text file")
-            
-            # Log sample records
-            if self.all_records:
-                logger.info(f"Sample first record: COSTCT={self.all_records[0]['COSTCT']}, NOTETY={self.all_records[0]['NOTETY']}")
-                logger.info(f"BAL4 (INTNACCR) in first record: {self.all_records[0]['BAL4']}")
-            
-            return self.all_records
-            
-        except Exception as e:
-            logger.error(f"Error processing text file: {e}", exc_info=True)
-            return []
+    # Merge with TRNCH if exists
+    if trnch_file and Path(trnch_file).exists():
+        df_trnch = pl.from_pandas(pyreadstat.read_sas7bdat(trnch_file)[0])
+        for c in df_trnch.columns:
+            cl = c.lower()
+            if 'tranche' in cl: 
+                df_trnch = df_trnch.rename({c: 'trancheno'})
+                break
+        df = df_nid.join(df_trnch, on='trancheno', how='left')
+    else:
+        df = df_nid
     
-    def create_intermediate_dataframe(self) -> Optional[pl.DataFrame]:
-        """
-        Create intermediate DataFrame from parsed text data
-        """
-        if not self.all_records:
-            logger.error("No records processed from text file")
-            return None
-        
-        try:
-            # Format the data with proper right alignment
-            processed_data = []
-            
-            for i, record in enumerate(self.all_records):
-                # Format numbers consistently
-                output_record = {
-                    'COSTCT': record['COSTCT'],
-                    'NOTETYPE': record['NOTETY'],
-                    
-                    # Format balances with proper alignment
-                    'PRINBAL': str(record['BAL1']).rjust(24),
-                    'PRNNACCR': str(record['BAL2']).rjust(24),
-                    'INTACCR': str(record['BAL3']).rjust(21),
-                    'INTNACCR': str(record['BAL4']).rjust(21),
-                    'UNERNINT': str(record['BAL5']).rjust(24),
-                    'UNERNNON': str(record['BAL5A']).rjust(24),
-                    'RSRVFIN': str(record['BAL6']).rjust(24),
-                    'RSRVDLR': str(record['BAL6A']).rjust(24),
-                    'NONDDA': str(record['BAL7']).rjust(24),
-                    'LATEFEES': str(record['BAL8']).rjust(24),
-                    'OTHERFEE': str(record['BAL9']).rjust(24),
-                    
-                    # Counts
-                    'CTPRINT': str(record['C_PRN']).rjust(7),
-                    'CTPRNNAC': str(record['C_PRNNAC']).rjust(7)
-                }
-                processed_data.append(output_record)
-            
-            # Create DataFrame
-            result_df = pl.DataFrame(processed_data, schema=self.OUTPUT_COLUMNS)
-            
-            logger.info(f"Created DataFrame with {len(result_df)} records")
-            
-            # Show summary
-            logger.info(f"Unique COSTCT values: {result_df['COSTCT'].n_unique()}")
-            logger.info(f"Unique NOTETYPE values: {result_df['NOTETYPE'].n_unique()}")
-            
-            return result_df
-            
-        except Exception as e:
-            logger.error(f"Error creating DataFrame: {e}", exc_info=True)
-            return None
+    # Filter positive balance
+    df = df.filter(pl.col('curbal') > 0)
     
-    def save_parquet_output(self, df: pl.DataFrame, output_dir_name: str = "LNR6999") -> bool:
-        """
-        Save the processed DataFrame to parquet file
-        """
-        try:
-            # Create output directory
-            out_dir = self.BASE_OUT / output_dir_name
-            out_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Construct output filename
-            out_name = f"R6999{self.REPTMON}{self.REPTYEAR}.parquet"
-            output_path = out_dir / out_name
-            
-            # Write to parquet
-            df.write_parquet(output_path)
-            
-            logger.info(f"Output successfully written to: {output_path}")
-            
-            # Also save text version for verification
-            txt_path = output_path.with_suffix('.txt')
-            with open(txt_path, 'w') as f:
-                # Write header
-                header = (
-                    "COSTCT NOTETY PRINBAL                PRNNACCR               "
-                    "INTACCR              INTNACCR              UNERNINT                "
-                    "UNERNNON                RSRVFIN                 RSRVDLR                 "
-                    "NONDDA                  LATEFEES                 OTHERFEE                 "
-                    "CTPRINT CTPRNNAC"
-                )
-                f.write(header + "\n")
-                
-                # Write data
-                for row in df.iter_rows(named=True):
-                    line = (
-                        f"{row['COSTCT']:07d} "
-                        f"{row['NOTETYPE']:03d} "
-                        f"{row['PRINBAL']:>24} "
-                        f"{row['PRNNACCR']:>24} "
-                        f"{row['INTACCR']:>21} "
-                        f"{row['INTNACCR']:>21} "
-                        f"{row['UNERNINT']:>24} "
-                        f"{row['UNERNNON']:>24} "
-                        f"{row['RSRVFIN']:>24} "
-                        f"{row['RSRVDLR']:>24} "
-                        f"{row['NONDDA']:>24} "
-                        f"{row['LATEFEES']:>24} "
-                        f"{row['OTHERFEE']:>24} "
-                        f"{row['CTPRINT']:>7} "
-                        f"{row['CTPRNNAC']:>7}"
-                    )
-                    f.write(line + "\n")
-            
-            logger.info(f"Text version saved to: {txt_path}")
-            
-            return True
-                
-        except Exception as e:
-            logger.error(f"Error saving output file: {e}", exc_info=True)
-            return False
+    # Convert dates (SAS numeric to Python date)
+    for col in ['matdt','startdt','early_wddt']:
+        if col in df.columns and df[col].dtype in [pl.Int64, pl.Float64]:
+            df = df.with_columns(
+                (pl.col(col) + pl.date(1960,1,1).timestamp()/86400).cast(pl.Date)
+            )
     
-    def run_full_processing(self) -> bool:
-        """
-        Run the complete processing pipeline
-        """
-        try:
-            logger.info("Starting loan data processing...")
-            
-            # Step 1: Process text file
-            logger.info("Step 1: Processing input text file...")
-            records = self.process_text_file()
-            if not records:
-                logger.error("No records processed from text file")
-                return False
-            
-            # Step 2: Create DataFrame
-            logger.info("Step 2: Creating formatted DataFrame...")
-            df = self.create_intermediate_dataframe()
-            if df is None:
-                logger.error("Failed to create DataFrame")
-                return False
-            
-            # Step 3: Save to parquet
-            logger.info("Step 3: Saving to parquet file...")
-            success = self.save_parquet_output(df)
-            
-            if success:
-                logger.info("All processing steps completed successfully")
-                # Show final summary
-                logger.info(f"Total records processed: {len(df)}")
-                logger.info(f"Output file: R6999{self.REPTMON}{self.REPTYEAR}.parquet")
-            else:
-                logger.error("Processing failed during output save")
-            
-            return success
-            
-        except Exception as e:
-            logger.error(f"Processing pipeline failed: {e}", exc_info=True)
-            return False
-
-
-def main():
-    """Main execution function"""
+    # Add report dates
+    df = df.with_columns([
+        pl.lit(rd).alias('reptdate'),
+        pl.lit(sd).alias('startdte')
+    ])
     
-    # Configuration
-    INPUT_TEXT_PATH = "/sasdata/rawdata/ln/R6999_BAL_ITEM_20251204.txt"
-    BASE_OUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output"
+    # 3. Apply SAS logic
     
-    logger.info("=" * 60)
-    logger.info("Starting Loan Data Processing")
-    logger.info(f"Input file: {INPUT_TEXT_PATH}")
-    logger.info("=" * 60)
-    
-    # Initialize and run processor
-    processor = LoanDataProcessor(
-        input_text_path=INPUT_TEXT_PATH,
-        base_output_path=BASE_OUT_PATH,
-        batch_date_str=None  # Extract from filename
+    # Filter active records
+    active = df.filter(
+        (pl.col('matdt') > pl.col('reptdate')) &
+        (pl.col('startdt') <= pl.col('reptdate'))
     )
     
-    # Run full processing
-    success = processor.run_full_processing()
+    # Calculate remaining months (SAS logic)
+    def remmth_calc(matdt):
+        if not matdt or matdt <= rd: return None
+        if (matdt - rd).days < 8: return 0.1
+        
+        y1,m1,d1 = matdt.year, matdt.month, matdt.day
+        y2,m2,d2 = rd.year, rd.month, rd.day
+        
+        month_days = [31,29 if y1%4==0 else 28,31,30,31,30,31,31,30,31,30,31]
+        d1 = min(d1, month_days[m1-1])
+        
+        remy = y1 - y2
+        remm = m1 - m2
+        remd = d1 - d2
+        
+        if remd < 0:
+            remm -= 1
+            if remm < 0: remy -= 1; remm += 12
+            remd += month_days[(m1-2)%12]
+        
+        return remy*12 + remm + remd/month_days[m1-1]
     
-    if not success:
-        logger.error("Processing failed")
-        exit(1)
+    active = active.with_columns(
+        pl.col('matdt').map_elements(remmth_calc).alias('remmth')
+    )
+    
+    # Format definitions (REMFMTA & REMFMTB)
+    FMTA = {(-1e9,6):'1. LE  6      ',(6,12):'2. GT  6 TO 12',
+            (12,24):'3. GT 12 TO 24',(24,36):'4. GT 24 TO 36',
+            (36,60):'5. GT 36 TO 60','other':'              '}
+    
+    FMTB = {(-1e9,1):'1. LE  1      ',(1,3):'2. GT  1 TO  3',
+            (3,6):'3. GT  3 TO  6',(6,9):'4. GT  6 TO  9',
+            (9,12):'5. GT  9 TO 12',(12,24):'6. GT 12 TO 24',
+            (24,36):'7. GT 24 TO 36',(36,60):'8. GT 36 TO 60',
+            'other':'             '}
+    
+    def apply_fmt(val, fmt):
+        if not val or val != val: return fmt['other']
+        for (l,h),lab in fmt.items():
+            if l != 'other' and l <= val < h: return lab
+        return fmt['other']
+    
+    # Table 1: Outstanding NID
+    tbl1 = active.filter(
+        (pl.col('nidstat') == 'N') & (pl.col('cdstat') == 'A')
+    ).with_columns([
+        pl.lit(0).alias('heldmkt'),
+        (pl.col('curbal') - pl.col('heldmkt')).alias('outstanding'),
+        pl.col('remmth').map_elements(lambda x: apply_fmt(x, FMTA)).alias('remmfmt')
+    ])
+    
+    # Table 2: Monthly Trading
+    tbl2_stats = df.filter(
+        (pl.col('nidstat') == 'E') &
+        (pl.col('early_wddt') >= sd) &
+        (pl.col('early_wddt') <= rd)
+    ).select([
+        pl.len().alias('nidcnt'),
+        pl.sum('curbal').alias('nidvol')
+    ]).row(0)
+    
+    # Table 3: Mid Yield
+    if 'intplrate_bid' in active.columns and 'intplrate_offer' in active.columns:
+        tbl3 = active.filter(
+            (pl.col('nidstat') == 'N') & (pl.col('cdstat') == 'A')
+        ).with_columns([
+            ((pl.col('intplrate_bid') + pl.col('intplrate_offer')) / 2).alias('yield'),
+            pl.col('remmth').map_elements(lambda x: apply_fmt(x, FMTB)).alias('remmfmt')
+        ]).unique(subset=['remmfmt', 'trancheno'])
+        
+        tbl3_sum = tbl3.filter(pl.col('yield') > 0).group_by('remmfmt').agg(
+            pl.mean('yield').alias('midyield')
+        ).sort('remmfmt')
+        overall = tbl3.filter(pl.col('yield') > 0).select(pl.mean('yield')).row(0)[0] or 0
     else:
-        logger.info("Processing completed successfully")
-        exit(0)
+        tbl3_sum = pl.DataFrame()
+        overall = 0
+    
+    # Table 1 summary
+    tbl1_sum = tbl1.group_by('remmfmt').agg([
+        pl.sum('curbal').alias('curbal'),
+        pl.sum('heldmkt').alias('heldmkt'),
+        pl.sum('outstanding').alias('outstanding')
+    ]).sort('remmfmt')
+    
+    # 4. Save Parquet files
+    Path(output_dir).mkdir(exist_ok=True)
+    base = f"EIBMRNID_{rd.strftime('%Y%m')}"
+    
+    # Save main tables
+    tbl1.write_parquet(f"{output_dir}/{base}_TABLE1.parquet")
+    
+    # Save summaries
+    tbl1_sum.write_parquet(f"{output_dir}/{base}_TABLE1_SUMMARY.parquet")
+    
+    if not tbl3_sum.is_empty():
+        tbl3_sum.write_parquet(f"{output_dir}/{base}_TABLE3_SUMMARY.parquet")
+    
+    # Metadata
+    meta = pl.DataFrame({
+        'report_date': [rd],
+        'nid_file': [Path(nid_file).name],
+        'trnch_file': [Path(trnch_file).name if trnch_file else None],
+        'table1_records': [len(tbl1)],
+        'table2_count': [tbl2_stats['nidcnt']],
+        'overall_yield': [overall]
+    })
+    meta.write_parquet(f"{output_dir}/{base}_METADATA.parquet")
+    
+    print(f"✓ Saved to: {output_dir}")
+    return {'success': True, 'output_dir': output_dir}
 
+# ============================================
+# COMMAND LINE
+# ============================================
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='EIBMRNID from SAS7BDAT')
+    parser.add_argument('--nid', required=True, help='NID SAS7BDAT file')
+    parser.add_argument('--trnch', help='TRNCH SAS7BDAT file')
+    parser.add_argument('--output', default='.', help='Output directory')
+    parser.add_argument('--date', help='Report date YYYY-MM-DD')
+    
+    args = parser.parse_args()
+    
+    # Check file exists
+    if not Path(args.nid).exists():
+        print(f"Error: File not found: {args.nid}")
+        sys.exit(1)
+    
+    # Parse date
+    rd = None
+    if args.date:
+        try:
+            rd = date.fromisoformat(args.date)
+        except:
+            print("Error: Use YYYY-MM-DD format")
+            sys.exit(1)
+    
+    # Run
+    try:
+        result = eibmrnid_sas(
+            nid_file=args.nid,
+            trnch_file=args.trnch,
+            output_dir=args.output,
+            rep_date=rd
+        )
+        if result['success']:
+            sys.exit(0)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
