@@ -5,11 +5,11 @@ from pathlib import Path
 import os
 import math
 
-NID_FILE = "/stgsrcsys/host/uat/rnidm09.sas7bdat"
-TRNCH_FILE = "/stgsrcsys/host/uat/trnchm09.sas7bdat"
+NID_FILE = "/stgsrcsys/host/uat/rinidm09.sas7bdat"  # Changed to Islamic NID file
+TRNCH_FILE = "/stgsrcsys/host/uat/trnchim09.sas7bdat"  # Changed to Islamic TRNCH file
 OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/Output"
-OUTPUT_FILE = "EIBMRNID_REPORT.TXT"
-PARQUET_FILE = "EIBMRNID_DATA.parquet"
+OUTPUT_FILE = "EIIMRNID_REPORT.TXT"  # Changed output filename
+PARQUET_FILE = "EIIMRNID_DATA.parquet"
 
 def convert_sas_date(sas_num):
     if sas_num is None:
@@ -85,17 +85,17 @@ def apply_remfmtb(val):
     else:
         return '             '
 
-def write_sas_exact_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
+def write_islamic_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
     dlm = '\x05'
     nidcnt, nidvol = tbl2_stats[0], tbl2_stats[1]
     
     with open(filename, 'w', encoding='utf-8') as f:
-        f.write("PUBLIC BANK BERHAD\n\n")
+        f.write("PUBLIC ISLAMIC BANK BERHAD\n\n")
         f.write("REPORT ON RETAIL RINGGIT-DENOMINATED NEGOTIABLE ")
-        f.write("INSTRUMENT OF DEPOSIT (NID)\n")
+        f.write("ISLAMIC DEBT CERTIFICATE (R-NIDC)\n")
         f.write(f"REPORTING DATE : {reptdate.strftime('%d/%m/%Y')}\n")
         
-        f.write(f"{dlm}\nTable 1 - Outstanding Retail NID\n\n{dlm}\n")
+        f.write(f"{dlm}\nTable 1 - Outstanding Retail R-NIDC\n\n{dlm}\n")
         f.write("REMAINING MATURITY (IN MONTHS)" + dlm)
         f.write("GROSS ISSUANCE" + dlm)
         f.write("HELD FOR MARKET MARKING" + dlm)
@@ -125,8 +125,8 @@ def write_sas_exact_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
         f.write(f"{dlm}TOTAL{24*' '}{dlm}{total_curbal:16,.2f}{dlm}{total_heldmkt:16,.2f}{dlm}{total_outstanding:16,.2f}{dlm}\n")
         
         f.write(f"{dlm}\nTable 2 - Monthly Trading Volume\n\n{dlm}\n")
-        f.write("GROSS MONTHLY PURCHASE OF RETAIL NID BY THE BANK" + dlm + "A) NUMBER OF NID" + dlm)
-        f.write(f"{nidcnt if nidcnt > 0 else '0'}{dlm}\n{dlm}{dlm}B) VOLUME OF NID{dlm}{nidvol if nidcnt > 0 else '0.00'}{dlm}\n")
+        f.write("GROSS MONTHLY PURCHASE OF RETAIL R-NIDC BY THE BANK" + dlm + "A) NUMBER OF R-NIDC" + dlm)
+        f.write(f"{nidcnt if nidcnt > 0 else '0'}{dlm}\n{dlm}{dlm}B) VOLUME OF R-NIDC{dlm}{nidvol if nidcnt > 0 else '0.00'}{dlm}\n")
         
         f.write(f"{dlm}\nTable 3 - Indicative Mid Yield\n\n{dlm}\n")
         f.write("REMAINING MATURITY (IN MONTHS)" + dlm + "(%)" + dlm + "\n")
@@ -149,18 +149,18 @@ def write_sas_exact_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
 
 def main():
     print("=" * 60)
-    print("EIBMRNID - EXACT SAS OUTPUT")
+    print("EIIMRNID - EXACT SAS OUTPUT (ISLAMIC VERSION)")
     print("=" * 60)
     
-    test_report_date = date(2017, 6, 30)
-    test_start_date = date(2017, 6, 1)
-    reptdate, startdte = test_report_date, test_start_date
+    today = date.today()
+    reptdate = date(today.year, today.month, 1) - timedelta(days=1)
+    startdte = date(reptdate.year, reptdate.month, 1)
     
     print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
     print(f"Start Date: {startdte.strftime('%d/%m/%Y')}")
     
     if not Path(NID_FILE).exists():
-        print(f"❌ NID file not found: {NID_FILE}")
+        print(f"❌ Islamic NID file not found: {NID_FILE}")
         return
     
     output_path = Path(OUTPUT_DIR)
@@ -168,16 +168,16 @@ def main():
     final_output_file = output_path / OUTPUT_FILE
     final_parquet_file = output_path / PARQUET_FILE
     
-    print("\n📂 Processing data...")
+    print("\n📂 Processing Islamic data...")
     df_nid, _ = pyreadstat.read_sas7bdat(NID_FILE)
     df = pl.from_pandas(df_nid).rename({col: col.lower() for col in df_nid.columns})
-    print(f"  Original NID records: {len(df):,}")
+    print(f"  Original Islamic NID records: {len(df):,}")
     
     if Path(TRNCH_FILE).exists():
         df_trnch, _ = pyreadstat.read_sas7bdat(TRNCH_FILE)
         df_trnch = pl.from_pandas(df_trnch).rename({col: col.lower() for col in df_trnch.columns})
         df = df.join(df_trnch, on='trancheno', how='left')
-        print("  Merged with TRNCH")
+        print("  Merged with Islamic TRNCH")
     
     for col in ['matdt', 'startdt', 'early_wddt']:
         if col in df.columns and df[col].dtype in [pl.Int64, pl.Float64]:
@@ -195,7 +195,7 @@ def main():
             ).alias('remmth')
         )
     
-    print(f"\n💾 Saving processed data to Parquet: {final_parquet_file}")
+    print(f"\n💾 Saving processed Islamic data to Parquet: {final_parquet_file}")
     df.write_parquet(final_parquet_file)
     print(f"  Saved {len(df):,} records to Parquet")
     
@@ -259,7 +259,7 @@ def main():
         nidcnt, nidvol = 0, 0.0
     
     tbl2_stats = (nidcnt, nidvol)
-    print(f"  Table 2 - NID Count: {nidcnt:,}, Volume: {nidvol:,.2f}")
+    print(f"  Table 2 - R-NIDC Count: {nidcnt:,}, Volume: {nidvol:,.2f}")
     
     print("\n📊 Creating Table 3...")
     if 'intplrate_bid' in df.columns and 'intplrate_offer' in df.columns:
@@ -304,15 +304,15 @@ def main():
             
             print(f"  Table 3 - Overall yield: {overall_yield:.4f}%, Buckets: {len(tbl3_data)-1}")
     
-    print(f"\n💾 Writing SAS-format output to: {final_output_file}")
-    write_sas_exact_output(final_output_file, reptdate, tbl1_sum, tbl2_stats, tbl3_data)
+    print(f"\n💾 Writing Islamic SAS-format output to: {final_output_file}")
+    write_islamic_output(final_output_file, reptdate, tbl1_sum, tbl2_stats, tbl3_data)
     
-    print(f"\n✅ SAS report generated: {final_output_file}")
-    print(f"✅ Parquet data saved: {final_parquet_file}")
+    print(f"\n✅ Islamic SAS report generated: {final_output_file}")
+    print(f"✅ Islamic Parquet data saved: {final_parquet_file}")
     print(f"\n📊 Final Summary:")
     print(f"  Total processed records: {len(df):,}")
     print(f"  Table 1 (Outstanding): {len(tbl1):,} records")
-    print(f"  Table 2 (Trading): {nidcnt:,} NIDs, RM {nidvol:,.2f}")
+    print(f"  Table 2 (Trading): {nidcnt:,} R-NIDCs, RM {nidvol:,.2f}")
     print(f"  Table 3 (Yield): {overall_yield:.4f}% overall")
     print(f"\n📁 Output folder: {output_path.absolute()}")
 
