@@ -1,5 +1,5 @@
 # ============================================
-# EIBMRNID for SAS7BDAT - Your Actual Data Structure
+# EIBMRNID for SAS7BDAT - With TRNCH File
 # ============================================
 
 import polars as pl
@@ -11,8 +11,9 @@ from pathlib import Path
 # CONFIGURE PATHS
 # ============================================
 
-NID_FILE = "/stgsrcsys/host/uat/rnidm09.sas7bdat"  # Your NID file
-OUTPUT_DIR = "eibmrnid_output"                    # Output folder
+NID_FILE = "/stgsrcsys/host/uat/rnidm09.sas7bdat"   # Your NID file
+TRNCH_FILE = "/stgsrcsys/host/uat/trnchm09.sas7bdat"  # Your TRNCH file
+OUTPUT_DIR = "eibmrnid_output"                     # Output folder
 
 # ============================================
 # HELPER FUNCTIONS
@@ -63,7 +64,7 @@ def calc_remmth(matdt, reptdate):
 
 def main():
     print("=" * 60)
-    print("EIBMRNID SAS7BDAT PROCESSOR")
+    print("EIBMRNID SAS7BDAT PROCESSOR (WITH TRNCH)")
     print("=" * 60)
     
     # Set report date
@@ -72,25 +73,64 @@ def main():
     startdte = date(reptdate.year, reptdate.month, 1)
     
     print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
-    print(f"NID File: {NID_FILE}")
+    print(f"NID File: {Path(NID_FILE).name}")
+    print(f"TRNCH File: {Path(TRNCH_FILE).name}")
     
+    # Check files exist
     if not Path(NID_FILE).exists():
-        print(f"❌ ERROR: File not found: {NID_FILE}")
+        print(f"❌ ERROR: NID file not found: {NID_FILE}")
         return
     
-    # 1. READ SAS FILE
-    print("\n📂 Reading SAS file...")
+    if not Path(TRNCH_FILE).exists():
+        print(f"⚠️  WARNING: TRNCH file not found: {TRNCH_FILE}")
+        print("  Continuing without TRNCH data...")
+        use_trnch = False
+    else:
+        use_trnch = True
+    
+    # 1. READ NID SAS FILE
+    print("\n📂 Reading NID file...")
     df_nid, _ = pyreadstat.read_sas7bdat(NID_FILE)
-    df = pl.from_pandas(df_nid)
-    print(f"✅ Loaded: {len(df):,} records")
+    df_nid = pl.from_pandas(df_nid)
+    print(f"✅ NID loaded: {len(df_nid):,} records")
     
-    # 2. STANDARDIZE COLUMN NAMES (lowercase)
-    print("\n🔧 Standardizing column names (to lowercase)...")
-    df = df.rename({col: col.lower() for col in df.columns})
+    # Convert NID columns to lowercase
+    df_nid = df_nid.rename({col: col.lower() for col in df_nid.columns})
     
-    # Show important columns
+    # 2. READ TRNCH SAS FILE
+    if use_trnch:
+        print("📂 Reading TRNCH file...")
+        df_trnch, _ = pyreadstat.read_sas7bdat(TRNCH_FILE)
+        df_trnch = pl.from_pandas(df_trnch)
+        print(f"✅ TRNCH loaded: {len(df_trnch):,} records")
+        
+        # Convert TRNCH columns to lowercase
+        df_trnch = df_trnch.rename({col: col.lower() for col in df_trnch.columns})
+        
+        # Find tranche column in TRNCH
+        trnch_tranche_col = None
+        for col in df_trnch.columns:
+            if 'tranche' in col:
+                trnch_tranche_col = col
+                break
+        
+        if trnch_tranche_col and trnch_tranche_col != 'trancheno':
+            df_trnch = df_trnch.rename({trnch_tranche_col: 'trancheno'})
+            print(f"  Renamed TRNCH column: {trnch_tranche_col} → trancheno")
+        
+        # Check what columns TRNCH has
+        print(f"  TRNCH columns: {df_trnch.columns[:10]}...")  # First 10 columns
+        
+        # Merge NID with TRNCH
+        print("\n🔗 Merging NID with TRNCH...")
+        df = df_nid.join(df_trnch, on='trancheno', how='left', suffix='_trnch')
+        print(f"✅ Merged: {len(df):,} records")
+    else:
+        df = df_nid
+    
+    # 3. SHOW IMPORTANT COLUMNS
     important_cols = ['trancheno', 'startdt', 'matdt', 'curbal', 'nidstat', 'cdstat', 'early_wddt']
-    print("\n📋 Important columns:")
+    print("\n📋 Important columns in data:")
     for col in important_cols:
         if col in df.columns:
             dtype = str(df[col].dtype)
@@ -99,22 +139,28 @@ def main():
         else:
             print(f"  ✗ {col:20} NOT FOUND")
     
-    # 3. CONVERT SAS DATES
+    # Check for rate columns (could be in TRNCH)
+    rate_cols = ['intplrate_bid', 'intplrate_offer', 'intrate', 'intpltdrate']
+    print("\n📋 Rate columns available:")
+    for col in rate_cols:
+        if col in df.columns:
+            dtype = str(df[col].dtype)
+            non_null = df[col].is_not_null().sum()
+            print(f"  ✓ {col:20} {dtype:15} {non_null:,} non-null")
+    
+    # 4. CONVERT SAS DATES
     print("\n📅 Converting SAS dates...")
     for col in ['matdt', 'startdt', 'early_wddt']:
-        if col in df.columns:
-            if df[col].dtype in [pl.Int64, pl.Float64]:
-                df = df.with_columns(
-                    pl.col(col).map_elements(
-                        convert_sas_date,
-                        return_dtype=pl.Date
-                    ).alias(col)
-                )
-                print(f"  ✓ Converted {col} (numeric → date)")
-            else:
-                print(f"  ⚠️  {col} has unexpected dtype: {df[col].dtype}")
+        if col in df.columns and df[col].dtype in [pl.Int64, pl.Float64]:
+            df = df.with_columns(
+                pl.col(col).map_elements(
+                    convert_sas_date,
+                    return_dtype=pl.Date
+                ).alias(col)
+            )
+            print(f"  ✓ Converted {col} (numeric → date)")
     
-    # 4. ADD REPORT DATES & FILTER
+    # 5. ADD REPORT DATES & FILTER
     df = df.with_columns([
         pl.lit(reptdate).alias('reptdate'),
         pl.lit(startdte).alias('startdte')
@@ -122,13 +168,14 @@ def main():
     
     # Filter positive balance
     if 'curbal' in df.columns:
+        initial_count = len(df)
         df = df.filter(pl.col('curbal') > 0)
-        print(f"\n💰 Positive balance filter: {len(df):,} records")
+        print(f"\n💰 Positive balance filter: {initial_count:,} → {len(df):,} records")
     else:
         print("❌ curbal column not found")
         return
     
-    # 5. CALCULATE REMAINING MONTHS
+    # 6. CALCULATE REMAINING MONTHS
     print("\n🧮 Calculating remaining months...")
     if 'matdt' in df.columns:
         df = df.with_columns(
@@ -142,7 +189,7 @@ def main():
         print("❌ matdt column not found")
         return
     
-    # 6. APPLY SAS FORMATS
+    # 7. APPLY SAS FORMATS
     print("\n🎯 Applying SAS formats...")
     
     # REMFMTA format
@@ -165,10 +212,9 @@ def main():
                 return label
         return FMTA['other']
     
-    # 7. CREATE TABLE 1 (Outstanding NID)
+    # 8. CREATE TABLE 1 (Outstanding NID)
     print("\n📊 Creating Table 1 (Outstanding NID)...")
     
-    # Your data doesn't have HELDMKT column, so we use 0
     tbl1 = df.filter(
         (pl.col('matdt') > pl.col('reptdate')) &
         (pl.col('startdt') <= pl.col('reptdate')) &
@@ -182,7 +228,7 @@ def main():
     
     print(f"✅ Table 1 records: {len(tbl1):,}")
     
-    # 8. CREATE TABLE 2 (Monthly Trading)
+    # 9. CREATE TABLE 2 (Monthly Trading)
     print("\n📊 Creating Table 2 (Monthly Trading)...")
     
     if all(col in df.columns for col in ['nidstat', 'early_wddt', 'curbal']):
@@ -197,29 +243,56 @@ def main():
         tbl2_count = 0
         tbl2_volume = 0
     
-    print(f"✅ Table 2 count: {tbl2_count:,}, volume: {tbl2_volume:,.2f}")
+    print(f"✅ Table 2 count: {tbl2_count:,}, volume: RM{tbl2_volume:,.2f}")
     
-    # 9. CREATE TABLE 3 (Mid Yield)
+    # 10. CREATE TABLE 3 (Mid Yield)
     print("\n📊 Creating Table 3 (Mid Yield)...")
     
-    # Your data has INTRATE and INTPLTDRATE, not intplrate_bid/offer
+    # Check which rate columns we have
     overall_yield = 0
-    if 'intrate' in df.columns:
-        # Use INTRATE as yield
+    yield_source = "None"
+    
+    if 'intplrate_bid' in df.columns and 'intplrate_offer' in df.columns:
+        # Use bid/offer rates from TRNCH
+        yield_df = df.filter(
+            (pl.col('nidstat') == 'N') &
+            (pl.col('cdstat') == 'A') &
+            pl.col('intplrate_bid').is_not_null() &
+            pl.col('intplrate_offer').is_not_null()
+        )
+        if len(yield_df) > 0:
+            overall_yield = yield_df.select(
+                ((pl.col('intplrate_bid') + pl.col('intplrate_offer')) / 2).mean()
+            ).row(0)[0] or 0
+            yield_source = "intplrate_bid/offer (TRNCH)"
+    
+    elif 'intrate' in df.columns:
+        # Use INTRATE from NID
         yield_df = df.filter(
             (pl.col('nidstat') == 'N') &
             (pl.col('cdstat') == 'A') &
             pl.col('intrate').is_not_null() &
             (pl.col('intrate') > 0)
         )
-        
         if len(yield_df) > 0:
             overall_yield = yield_df.select(pl.mean('intrate')).row(0)[0] or 0
-            print(f"✅ Using INTRATE column for yield")
+            yield_source = "intrate (NID)"
     
-    print(f"✅ Overall yield: {overall_yield:.4f}%")
+    elif 'intpltdrate' in df.columns:
+        # Use INTPLTDRATE from NID
+        yield_df = df.filter(
+            (pl.col('nidstat') == 'N') &
+            (pl.col('cdstat') == 'A') &
+            pl.col('intpltdrate').is_not_null() &
+            (pl.col('intpltdrate') > 0)
+        )
+        if len(yield_df) > 0:
+            overall_yield = yield_df.select(pl.mean('intpltdrate')).row(0)[0] or 0
+            yield_source = "intpltdrate (NID)"
     
-    # 10. CREATE SUMMARY
+    print(f"✅ Overall yield: {overall_yield:.4f}% (Source: {yield_source})")
+    
+    # 11. CREATE SUMMARY
     print("\n📈 Creating summaries...")
     
     if len(tbl1) > 0:
@@ -234,7 +307,7 @@ def main():
         tbl1_sum = pl.DataFrame()
         print("⚠️  No data for Table 1 summary")
     
-    # 11. SAVE TO PARQUET
+    # 12. SAVE TO PARQUET
     print("\n💾 Saving to Parquet...")
     out_dir = Path(OUTPUT_DIR)
     out_dir.mkdir(exist_ok=True)
@@ -263,35 +336,47 @@ def main():
     meta = pl.DataFrame({
         'report_date': [reptdate],
         'nid_file': [Path(NID_FILE).name],
+        'trnch_file': [Path(TRNCH_FILE).name if use_trnch else 'None'],
         'processed_at': [datetime.now()],
         'table1_records': [len(tbl1)],
         'table2_count': [tbl2_count],
         'table2_volume': [tbl2_volume],
         'overall_yield': [overall_yield],
+        'yield_source': [yield_source],
         'total_records': [len(df)],
-        'yield_source': ['INTRATE' if 'intrate' in df.columns else 'None']
+        'merged_with_trnch': [use_trnch]
     })
     meta.write_parquet(meta_path)
     files_saved.append(meta_path)
     size_kb = meta_path.stat().st_size / 1024
     print(f"  📄 {meta_path.name} ({size_kb:.1f} KB)")
     
-    # 12. PRINT FINAL RESULTS
+    # Save full merged data (optional)
+    if len(df) > 0:
+        full_path = out_dir / f"{base}_FULL.parquet"
+        df.write_parquet(full_path)
+        files_saved.append(full_path)
+        size_kb = full_path.stat().st_size / 1024
+        print(f"  📄 {full_path.name} ({size_kb:.1f} KB)")
+    
+    # 13. PRINT FINAL RESULTS
     print("\n" + "=" * 60)
     print("✅ EIBMRNID PROCESSING COMPLETE")
     print("=" * 60)
     
     print(f"\n📊 FINAL SUMMARY:")
+    print(f"  • Merged with TRNCH: {'Yes' if use_trnch else 'No'}")
     print(f"  • Table 1 (Outstanding): {len(tbl1):,} records")
     print(f"  • Table 2 (Trading): {tbl2_count:,} transactions, RM {tbl2_volume:,.2f}")
     print(f"  • Table 3 (Yield): {overall_yield:.4f}%")
+    print(f"  • Yield source: {yield_source}")
     print(f"  • Files saved: {len(files_saved)}")
     print(f"\n📁 Output folder: {out_dir.absolute()}")
     
     # Show sample of Table 1
     if len(tbl1) > 0:
-        print(f"\n📋 Sample of Table 1 (first 5 records):")
-        sample = tbl1.select(['trancheno', 'curbal', 'outstanding', 'remmfmt']).head(5)
+        print(f"\n📋 Sample of Table 1 (first 3 records):")
+        sample = tbl1.select(['trancheno', 'curbal', 'outstanding', 'remmfmt']).head(3)
         for row in sample.iter_rows(named=True):
             print(f"  {row['trancheno']:15} RM{row['curbal']:12,.2f} → {row['remmfmt'].strip()}")
 
