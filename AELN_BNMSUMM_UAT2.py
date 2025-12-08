@@ -1,180 +1,303 @@
-===========================================================
-EIBMRNID SAS7BDAT PROCESSOR
-============================================================
-Report Date: 30/11/2025
-NID File: /stgsrcsys/host/uat/rnidm09.sas7bdat
+# ============================================
+# EIBMRNID for SAS7BDAT - Your Actual Data Structure
+# ============================================
 
-📂 Reading SAS file...
-✅ Loaded: 580 records
+import polars as pl
+import pyreadstat
+from datetime import date, timedelta, datetime
+from pathlib import Path
 
-📋 Original columns (64):
-    1. NID_ACCTNO
-    2. NID_REFNO
-    3. ACCTNO
-    4. NID_CDNO
-    5. CUSTNAME
-    6. NEWIC
-    7. BRANCH
-    8. CUSTCODE
-    9. TRANCHENO
-   10. STARTDT
-   11. MATDT
-   12. INTRATE
-   13. INTPLTDRATE
-   14. CURBAL
-   15. LSTINTPAYDT
-   16. NXTINTPAYDT
-   17. INTFRQ
-   18. NIDSTAT
-   19. ACCINT
-   20. CDSTAT
-   21. POSTSTAT
-   22. EARLY_WDDT
-   23. EARLY_WDPROC
-   24. EARLY_TELRID
-   25. EARLY_OFFID1
-   26. EARLY_OFFID2
-   27. CANCDT
-   28. CANC_TELRID
-   29. CANC_OFFID1
-   30. CANC_OFFID2
-   31. APPLDT
-   32. APPLDTTM
-   33. APPL_TELRID
-   34. APPL_OFFID1
-   35. APPL_OFFID2
-   36. PRINTDT
-   37. PRINT_TELRID
-   38. PRINT_OFFID1
-   39. PRINT_OFFID2
-   40. MAINTDT
-   41. MAINT_TELRID
-   42. MAINT_OFFID1
-   43. MAINT_OFFID2
-   44. PLEDGESTAT
-   45. NID_ODACCTNO
-   46. CCOLLNO
-   47. PLEDGEDT
-   48. PLEDGE_TELRID
-   49. PLEDGE_OFFID1
-   50. PLEDGE_OFFID2
-   51. CPLEDGEDT
-   52. CPLEDGE_TELRID
-   53. CPLEDGE_OFFID1
-   54. CPLEDGE_OFFID2
-   55. TERM
-   56. SUITABILITY_ASSESSMENT_CD
-   57. SALES_STAFF_ID
-   58. TERMID
-   59. INTPD
-   60. COSTCTR
-   61. PRODUCT
-   62. BRABBR
-   63. CURCODE
-   64. CUSTCD
+# ============================================
+# CONFIGURE PATHS
+# ============================================
 
-🔧 Checking for duplicate columns...
+NID_FILE = "/stgsrcsys/host/uat/rnidm09.sas7bdat"  # Your NID file
+OUTPUT_DIR = "eibmrnid_output"                    # Output folder
 
-🔧 Standardizing column names...
-✅ Will rename 7 columns:
-  TRANCHENO → trancheno
-  STARTDT → startdt
-  MATDT → matdt
-  CURBAL → curbal
-  NIDSTAT → nidstat
-  CDSTAT → cdstat
-  EARLY_WDDT → early_wddt
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
 
-📋 Final columns (64):
-    1. NID_ACCTNO                     Float64
-    2. NID_REFNO                      String
-    3. ACCTNO                         Float64
-    4. NID_CDNO                       String
-    5. CUSTNAME                       String
-    6. NEWIC                          String
-    7. BRANCH                         Float64
-    8. CUSTCODE                       Float64
-    9. trancheno                      String
-   10. startdt                        Float64
-   11. matdt                          Float64
-   12. INTRATE                        Float64
-   13. INTPLTDRATE                    Float64
-   14. curbal                         Float64
-   15. LSTINTPAYDT                    Float64
-   16. NXTINTPAYDT                    Float64
-   17. INTFRQ                         String
-   18. nidstat                        String
-   19. ACCINT                         Float64
-   20. cdstat                         String
-   21. POSTSTAT                       String
-   22. early_wddt                     Float64
-   23. EARLY_WDPROC                   Float64
-   24. EARLY_TELRID                   String
-   25. EARLY_OFFID1                   String
-   26. EARLY_OFFID2                   String
-   27. CANCDT                         Float64
-   28. CANC_TELRID                    String
-   29. CANC_OFFID1                    String
-   30. CANC_OFFID2                    String
-   31. APPLDT                         Float64
-   32. APPLDTTM                       String
-   33. APPL_TELRID                    String
-   34. APPL_OFFID1                    String
-   35. APPL_OFFID2                    String
-   36. PRINTDT                        Float64
-   37. PRINT_TELRID                   String
-   38. PRINT_OFFID1                   String
-   39. PRINT_OFFID2                   String
-   40. MAINTDT                        Float64
-   41. MAINT_TELRID                   String
-   42. MAINT_OFFID1                   String
-   43. MAINT_OFFID2                   String
-   44. PLEDGESTAT                     String
-   45. NID_ODACCTNO                   Float64
-   46. CCOLLNO                        Float64
-   47. PLEDGEDT                       Float64
-   48. PLEDGE_TELRID                  String
-   49. PLEDGE_OFFID1                  String
-   50. PLEDGE_OFFID2                  String
-   51. CPLEDGEDT                      Float64
-   52. CPLEDGE_TELRID                 String
-   53. CPLEDGE_OFFID1                 String
-   54. CPLEDGE_OFFID2                 String
-   55. TERM                           Float64
-   56. SUITABILITY_ASSESSMENT_CD      String
-   57. SALES_STAFF_ID                 String
-   58. TERMID                         String
-   59. INTPD                          Float64
-   60. COSTCTR                        Float64
-   61. PRODUCT                        Float64
-   62. BRABBR                         String
-   63. CURCODE                        String
-   64. CUSTCD                         String
+def convert_sas_date(sas_num):
+    """Convert SAS numeric date (days since 1960-01-01) to Python date"""
+    if sas_num is None:
+        return None
+    try:
+        return date(1960, 1, 1) + timedelta(days=int(float(sas_num)))
+    except:
+        return None
 
-📅 Converting SAS dates...
-  Converted matdt (numeric → date)
-  Converted startdt (numeric → date)
-  Converted early_wddt (numeric → date)
+def calc_remmth(matdt, reptdate):
+    """Calculate remaining months - SAS exact logic"""
+    if matdt is None or matdt <= reptdate:
+        return None
+    
+    if (matdt - reptdate).days < 8:
+        return 0.1
+    
+    mdyr, mdmth, mdday = matdt.year, matdt.month, matdt.day
+    rpyear, rpmonth, rpday = reptdate.year, reptdate.month, reptdate.day
+    
+    # Days in month with leap year
+    month_days = [31, 29 if mdyr % 4 == 0 else 28, 31, 30, 31, 30, 
+                  31, 31, 30, 31, 30, 31]
+    
+    mdday = min(mdday, month_days[mdmth - 1])
+    
+    remy = mdyr - rpyear
+    remm = mdmth - rpmonth
+    remd = mdday - rpday
+    
+    if remd < 0:
+        remm -= 1
+        if remm < 0:
+            remy -= 1
+            remm += 12
+        remd += month_days[(mdmth - 2) % 12]
+    
+    return remy * 12 + remm + remd / month_days[mdmth - 1]
 
-💰 Positive balance filter: 580 → 580 records
+# ============================================
+# MAIN PROCESSING
+# ============================================
 
-🧮 Calculating remaining months...
-✅ Remaining months calculated
-
-🎯 Applying SAS formats...
-
-📊 Creating Table 1...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/EIBMRNID_NID.py", line 394, in <module>
-    main()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/EIBMRNID_NID.py", line 267, in main
+def main():
+    print("=" * 60)
+    print("EIBMRNID SAS7BDAT PROCESSOR")
+    print("=" * 60)
+    
+    # Set report date
+    today = date.today()
+    reptdate = date(today.year, today.month, 1) - timedelta(days=1)
+    startdte = date(reptdate.year, reptdate.month, 1)
+    
+    print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+    print(f"NID File: {NID_FILE}")
+    
+    if not Path(NID_FILE).exists():
+        print(f"❌ ERROR: File not found: {NID_FILE}")
+        return
+    
+    # 1. READ SAS FILE
+    print("\n📂 Reading SAS file...")
+    df_nid, _ = pyreadstat.read_sas7bdat(NID_FILE)
+    df = pl.from_pandas(df_nid)
+    print(f"✅ Loaded: {len(df):,} records")
+    
+    # 2. STANDARDIZE COLUMN NAMES (lowercase)
+    print("\n🔧 Standardizing column names (to lowercase)...")
+    df = df.rename({col: col.lower() for col in df.columns})
+    
+    # Show important columns
+    important_cols = ['trancheno', 'startdt', 'matdt', 'curbal', 'nidstat', 'cdstat', 'early_wddt']
+    print("\n📋 Important columns:")
+    for col in important_cols:
+        if col in df.columns:
+            dtype = str(df[col].dtype)
+            non_null = df[col].is_not_null().sum()
+            print(f"  ✓ {col:20} {dtype:15} {non_null:,} non-null")
+        else:
+            print(f"  ✗ {col:20} NOT FOUND")
+    
+    # 3. CONVERT SAS DATES
+    print("\n📅 Converting SAS dates...")
+    for col in ['matdt', 'startdt', 'early_wddt']:
+        if col in df.columns:
+            if df[col].dtype in [pl.Int64, pl.Float64]:
+                df = df.with_columns(
+                    pl.col(col).map_elements(
+                        convert_sas_date,
+                        return_dtype=pl.Date
+                    ).alias(col)
+                )
+                print(f"  ✓ Converted {col} (numeric → date)")
+            else:
+                print(f"  ⚠️  {col} has unexpected dtype: {df[col].dtype}")
+    
+    # 4. ADD REPORT DATES & FILTER
+    df = df.with_columns([
+        pl.lit(reptdate).alias('reptdate'),
+        pl.lit(startdte).alias('startdte')
+    ])
+    
+    # Filter positive balance
+    if 'curbal' in df.columns:
+        df = df.filter(pl.col('curbal') > 0)
+        print(f"\n💰 Positive balance filter: {len(df):,} records")
+    else:
+        print("❌ curbal column not found")
+        return
+    
+    # 5. CALCULATE REMAINING MONTHS
+    print("\n🧮 Calculating remaining months...")
+    if 'matdt' in df.columns:
+        df = df.with_columns(
+            pl.col('matdt').map_elements(
+                lambda x: calc_remmth(x, reptdate),
+                return_dtype=pl.Float64
+            ).alias('remmth')
+        )
+        print("✅ Remaining months calculated")
+    else:
+        print("❌ matdt column not found")
+        return
+    
+    # 6. APPLY SAS FORMATS
+    print("\n🎯 Applying SAS formats...")
+    
+    # REMFMTA format
+    FMTA = {
+        (-float('inf'), 6): '1. LE  6      ',
+        (6, 12): '2. GT  6 TO 12',
+        (12, 24): '3. GT 12 TO 24',
+        (24, 36): '4. GT 24 TO 36',
+        (36, 60): '5. GT 36 TO 60',
+        'other': '              '
+    }
+    
+    def apply_fmt(val):
+        if val is None or pl.is_nan(val):
+            return FMTA['other']
+        for (low, high), label in FMTA.items():
+            if low == 'other':
+                continue
+            if low <= val < high:
+                return label
+        return FMTA['other']
+    
+    # 7. CREATE TABLE 1 (Outstanding NID)
+    print("\n📊 Creating Table 1 (Outstanding NID)...")
+    
+    # Your data doesn't have HELDMKT column, so we use 0
     tbl1 = df.filter(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10020, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 330, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2335, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ColumnNotFoundError: unable to find column "heldmkt"; valid columns: ["NID_ACCTNO", "NID_REFNO", "ACCTNO", "NID_CDNO", "CUSTNAME", "NEWIC", "BRANCH", "CUSTCODE", "trancheno", "startdt", "matdt", "INTRATE", "INTPLTDRATE", "curbal", "LSTINTPAYDT", "NXTINTPAYDT", "INTFRQ", "nidstat", "ACCINT", "cdstat", "POSTSTAT", "early_wddt", "EARLY_WDPROC", "EARLY_TELRID", "EARLY_OFFID1", "EARLY_OFFID2", "CANCDT", "CANC_TELRID", "CANC_OFFID1", "CANC_OFFID2", "APPLDT", "APPLDTTM", "APPL_TELRID", "APPL_OFFID1", "APPL_OFFID2", "PRINTDT", "PRINT_TELRID", "PRINT_OFFID1", "PRINT_OFFID2", "MAINTDT", "MAINT_TELRID", "MAINT_OFFID1", "MAINT_OFFID2", "PLEDGESTAT", "NID_ODACCTNO", "CCOLLNO", "PLEDGEDT", "PLEDGE_TELRID", "PLEDGE_OFFID1", "PLEDGE_OFFID2", "CPLEDGEDT", "CPLEDGE_TELRID", "CPLEDGE_OFFID1", "CPLEDGE_OFFID2", "TERM", "SUITABILITY_ASSESSMENT_CD", "SALES_STAFF_ID", "TERMID", "INTPD", "COSTCTR", "PRODUCT", "BRABBR", "CURCODE", "CUSTCD", "reptdate", "startdte", "remmth"]
+        (pl.col('matdt') > pl.col('reptdate')) &
+        (pl.col('startdt') <= pl.col('reptdate')) &
+        (pl.col('nidstat') == 'N') &
+        (pl.col('cdstat') == 'A')
+    ).with_columns([
+        pl.lit(0).alias('heldmkt'),  # Add HELDMKT column with value 0
+        (pl.col('curbal') - pl.col('heldmkt')).alias('outstanding'),
+        pl.col('remmth').map_elements(apply_fmt, return_dtype=pl.Utf8).alias('remmfmt')
+    ])
+    
+    print(f"✅ Table 1 records: {len(tbl1):,}")
+    
+    # 8. CREATE TABLE 2 (Monthly Trading)
+    print("\n📊 Creating Table 2 (Monthly Trading)...")
+    
+    if all(col in df.columns for col in ['nidstat', 'early_wddt', 'curbal']):
+        tbl2_df = df.filter(
+            (pl.col('nidstat') == 'E') &
+            (pl.col('early_wddt') >= startdte) &
+            (pl.col('early_wddt') <= reptdate)
+        )
+        tbl2_count = len(tbl2_df)
+        tbl2_volume = tbl2_df['curbal'].sum() if tbl2_count > 0 else 0
+    else:
+        tbl2_count = 0
+        tbl2_volume = 0
+    
+    print(f"✅ Table 2 count: {tbl2_count:,}, volume: {tbl2_volume:,.2f}")
+    
+    # 9. CREATE TABLE 3 (Mid Yield)
+    print("\n📊 Creating Table 3 (Mid Yield)...")
+    
+    # Your data has INTRATE and INTPLTDRATE, not intplrate_bid/offer
+    overall_yield = 0
+    if 'intrate' in df.columns:
+        # Use INTRATE as yield
+        yield_df = df.filter(
+            (pl.col('nidstat') == 'N') &
+            (pl.col('cdstat') == 'A') &
+            pl.col('intrate').is_not_null() &
+            (pl.col('intrate') > 0)
+        )
+        
+        if len(yield_df) > 0:
+            overall_yield = yield_df.select(pl.mean('intrate')).row(0)[0] or 0
+            print(f"✅ Using INTRATE column for yield")
+    
+    print(f"✅ Overall yield: {overall_yield:.4f}%")
+    
+    # 10. CREATE SUMMARY
+    print("\n📈 Creating summaries...")
+    
+    if len(tbl1) > 0:
+        tbl1_sum = tbl1.group_by('remmfmt').agg([
+            pl.sum('curbal').alias('curbal'),
+            pl.sum('heldmkt').alias('heldmkt'),
+            pl.sum('outstanding').alias('outstanding'),
+            pl.len().alias('count')
+        ]).sort('remmfmt')
+        print(f"✅ Summary created: {len(tbl1_sum)} maturity buckets")
+    else:
+        tbl1_sum = pl.DataFrame()
+        print("⚠️  No data for Table 1 summary")
+    
+    # 11. SAVE TO PARQUET
+    print("\n💾 Saving to Parquet...")
+    out_dir = Path(OUTPUT_DIR)
+    out_dir.mkdir(exist_ok=True)
+    
+    base = f"EIBMRNID_{reptdate.strftime('%Y%m')}"
+    files_saved = []
+    
+    # Save Table 1
+    if len(tbl1) > 0:
+        tbl1_path = out_dir / f"{base}_TABLE1.parquet"
+        tbl1.write_parquet(tbl1_path)
+        files_saved.append(tbl1_path)
+        size_kb = tbl1_path.stat().st_size / 1024
+        print(f"  📄 {tbl1_path.name} ({size_kb:.1f} KB)")
+    
+    # Save summary
+    if len(tbl1_sum) > 0:
+        summary_path = out_dir / f"{base}_SUMMARY.parquet"
+        tbl1_sum.write_parquet(summary_path)
+        files_saved.append(summary_path)
+        size_kb = summary_path.stat().st_size / 1024
+        print(f"  📄 {summary_path.name} ({size_kb:.1f} KB)")
+    
+    # Save metadata
+    meta_path = out_dir / f"{base}_METADATA.parquet"
+    meta = pl.DataFrame({
+        'report_date': [reptdate],
+        'nid_file': [Path(NID_FILE).name],
+        'processed_at': [datetime.now()],
+        'table1_records': [len(tbl1)],
+        'table2_count': [tbl2_count],
+        'table2_volume': [tbl2_volume],
+        'overall_yield': [overall_yield],
+        'total_records': [len(df)],
+        'yield_source': ['INTRATE' if 'intrate' in df.columns else 'None']
+    })
+    meta.write_parquet(meta_path)
+    files_saved.append(meta_path)
+    size_kb = meta_path.stat().st_size / 1024
+    print(f"  📄 {meta_path.name} ({size_kb:.1f} KB)")
+    
+    # 12. PRINT FINAL RESULTS
+    print("\n" + "=" * 60)
+    print("✅ EIBMRNID PROCESSING COMPLETE")
+    print("=" * 60)
+    
+    print(f"\n📊 FINAL SUMMARY:")
+    print(f"  • Table 1 (Outstanding): {len(tbl1):,} records")
+    print(f"  • Table 2 (Trading): {tbl2_count:,} transactions, RM {tbl2_volume:,.2f}")
+    print(f"  • Table 3 (Yield): {overall_yield:.4f}%")
+    print(f"  • Files saved: {len(files_saved)}")
+    print(f"\n📁 Output folder: {out_dir.absolute()}")
+    
+    # Show sample of Table 1
+    if len(tbl1) > 0:
+        print(f"\n📋 Sample of Table 1 (first 5 records):")
+        sample = tbl1.select(['trancheno', 'curbal', 'outstanding', 'remmfmt']).head(5)
+        for row in sample.iter_rows(named=True):
+            print(f"  {row['trancheno']:15} RM{row['curbal']:12,.2f} → {row['remmfmt'].strip()}")
+
+# ============================================
+# RUN
+# ============================================
+
+if __name__ == "__main__":
+    main()
