@@ -1,120 +1,96 @@
 """
-EIBWTRBL - Billings Transaction Processing
+EIBWTRBL - Simplified Billings Processing
 """
 
-import duckdb
 import polars as pl
 import pyreadstat
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 
 print("Billings Transaction Processing...")
 
-# Configuration
 BASE_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/Job'
 OUTPUT_DIR = f'{BASE_PATH}/BTRADE/output'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ========================================
-# DATE PROCESSING (from SAS dataset)
-# ========================================
-print("📅 Processing reporting dates...")
-
-# Read REPTDATE from SAS dataset (like DATA REPTDATE)
+# Get REPTDATE from SAS dataset
 df_sas, meta = pyreadstat.read_sas7bdat('/stgsrcsys/host/uat/reptdate.sas7bdat')
-reptdate_numeric = df_sas['REPTDATE'][0]
+reptdate = datetime(1960, 1, 1) + timedelta(days=int(df_sas['REPTDATE'][0]))
 
-# Convert SAS date (days since 1960-01-01) to Python datetime
-reptdate = datetime(1960, 1, 1) + datetime.timedelta(days=int(reptdate_numeric))
-
-# Determine week (equivalent to SAS SELECT/WHEN)
-day_of_month = reptdate.day
-if day_of_month == 8:
-    nowk = '1'
-elif day_of_month == 15:
-    nowk = '2'
-elif day_of_month == 22:
-    nowk = '3'
-else:
-    nowk = '4'
+# Determine week
+day = reptdate.day
+nowk = '4'  # default
+if day == 8: nowk = '1'
+elif day == 15: nowk = '2'
+elif day == 22: nowk = '3'
 
 reptyear = reptdate.strftime('%y')
 reptmon = reptdate.strftime('%m')
 
 print(f"📅 Processing date: {reptdate.strftime('%Y-%m-%d')} (Week {nowk})")
 
-# ========================================
-# PROCESS TRANSACTION DATA (like INFILE EXTCOMM)
-# ========================================
+# Read and parse text file
 print("📊 Processing transaction data...")
 
-# Read fixed-width text file (like INFILE EXTCOMM)
-extcomm_path = '/stgsrcsys/host/uat/EXTCOMM.TXT'
+data = []
+with open('/stgsrcsys/host/uat/EXTCOMM.TXT', 'r') as f:
+    lines = f.readlines()
+    
+for i, line in enumerate(lines):
+    if i == 0:  # Skip header (FIRSTOBS=2)
+        continue
+    
+    if len(line) < 246:
+        continue
+    
+    # Parse fixed-width positions (0-indexed in Python)
+    trandate_str = line[72:80]
+    exprdat_raw = line[80:86]
+    
+    # Convert dates
+    try:
+        trandate = datetime.strptime(trandate_str, '%Y%m%d').date()
+    except:
+        trandate = None
+    
+    try:
+        if exprdat_raw[:2] < '50':
+            exprdat = datetime.strptime('20' + exprdat_raw, '%Y%m%d').date()
+        else:
+            exprdat = datetime.strptime('19' + exprdat_raw, '%Y%m%d').date()
+    except:
+        exprdat = None
+    
+    data.append({
+        'RECTYPE': line[0:2],
+        'TRANSREF': line[2:12],
+        'COSTCTR': int(line[20:24]) if line[20:24].strip() else 0,
+        'ACCTNO': line[26:41],
+        'SUBACCT': line[41:54],
+        'GLMNEMONIC': line[63:68],
+        'LIABCODE': line[68:71],
+        'TRANDATE': trandate,
+        'EXPRDATE': exprdat,
+        'TRANAMT': float(line[86:104]) if line[86:104].strip() else 0.0,
+        'EXCHANGE': float(line[104:120]) if line[104:120].strip() else 0.0,
+        'CURRENCY': line[120:124],
+        'BTREL': line[124:137],
+        'RELFROM': line[137:150],
+        'TRANSREFPG': line[168:178],
+        'TRANAMT_CCY': float(line[179:197]) if line[179:197].strip() else 0.0,
+        'TRANS_NUM': line[197:207],
+        'TRANS_IND': line[207:210],
+        'MNEMONIC_CD': line[210:215],
+        'ACCT_INFO': line[215:235],
+        'CR_DR_IND': line[235:236],
+        'VOUCHER_NUM': line[236:246]
+    })
 
-# Parse fixed-width format using DuckDB (matching SAS INPUT statements)
-query = f"""
-SELECT 
-    SUBSTRING(line, 1, 2) as RECTYPE,
-    SUBSTRING(line, 3, 10) as TRANSREF,
-    CAST(SUBSTRING(line, 21, 4) as INTEGER) as COSTCTR,
-    SUBSTRING(line, 27, 15) as ACCTNO,
-    SUBSTRING(line, 42, 13) as SUBACCT,
-    SUBSTRING(line, 64, 5) as GLMNEMONIC,
-    SUBSTRING(line, 69, 3) as LIABCODE,
-    DATE_PARSE(
-        CONCAT(
-            CASE WHEN SUBSTRING(line, 73, 2)::INTEGER < 50 THEN '20' ELSE '19' END,
-            SUBSTRING(line, 73, 2), '-', 
-            SUBSTRING(line, 75, 2), '-', 
-            SUBSTRING(line, 77, 2)
-        ), '%Y-%m-%d'
-    ) as TRANDATE,
-    DATE_PARSE(
-        CONCAT(
-            CASE WHEN SUBSTRING(line, 81, 2)::INTEGER < 50 THEN '20' ELSE '19' END,
-            SUBSTRING(line, 81, 2), '-', 
-            SUBSTRING(line, 83, 2), '-', 
-            SUBSTRING(line, 85, 2)
-        ), '%Y-%m-%d'
-    ) as EXPRDATE,
-    CAST(SUBSTRING(line, 87, 18) as DOUBLE) as TRANAMT,
-    CAST(SUBSTRING(line, 105, 16) as DOUBLE) as EXCHANGE,
-    SUBSTRING(line, 121, 4) as CURRENCY,
-    SUBSTRING(line, 125, 13) as BTREL,
-    SUBSTRING(line, 138, 13) as RELFROM,
-    SUBSTRING(line, 169, 10) as TRANSREFPG,
-    CAST(SUBSTRING(line, 180, 18) as DOUBLE) as TRANAMT_CCY,
-    SUBSTRING(line, 198, 10) as TRANS_NUM,
-    SUBSTRING(line, 208, 3) as TRANS_IND,
-    SUBSTRING(line, 211, 5) as MNEMONIC_CD,
-    SUBSTRING(line, 216, 20) as ACCT_INFO,
-    SUBSTRING(line, 236, 1) as CR_DR_IND,
-    SUBSTRING(line, 237, 10) as VOUCHER_NUM
-FROM read_text('{extcomm_path}', delim='\x1e')
-WHERE line_number > 1  -- Skip header (FIRSTOBS=2)
-"""
+# Create DataFrame and save
+df = pl.DataFrame(data)
+output_file = f'{OUTPUT_DIR}/BILLSTRAN{reptmon}{nowk}{reptyear}.parquet'
+df.write_parquet(output_file)
 
-# Execute query and convert to Polars DataFrame
-conn = duckdb.connect()
-btrbl_df = conn.execute(query).pl()
-conn.close()
-
-print(f"📄 Records loaded: {len(btrbl_df)}")
-
-# ========================================
-# SAVE OUTPUT FILE (like SAS DATA step)
-# ========================================
-output_file = f"{OUTPUT_DIR}/BILLSTRAN{reptmon}{nowk}{reptyear}.parquet"
-btrbl_df.write_parquet(output_file)
-
+print(f"📄 Records loaded: {len(df)}")
 print(f"💾 Output saved: {output_file}")
-print(f"🎉 Processing completed successfully!")
-
-
-Billings Transaction Processing...
-📅 Processing reporting dates...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/EIBWTRBL_BILLING_TRANSACTION_PROCESSING.py", line 28, in <module>
-    reptdate = datetime(1960, 1, 1) + datetime.timedelta(days=int(reptdate_numeric))
-AttributeError: type object 'datetime.datetime' has no attribute 'timedelta'
-You have mail in /var/spool/mail/sas_edw_dev
+print("🎉 Processing completed successfully!")
