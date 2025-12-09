@@ -1,3 +1,88 @@
+import polars as pl
+from datetime import datetime, timedelta
+from pathlib import Path
+
+BASE_INPUT_PATH = Path("/host/cis/parquet/") # Folder for source files
+BASE_OUTPUT_PATH = Path("/pythonITD/mis_dev/sas_migration/CIGR/output") # Folder for output files
+BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+
+# File paths
+CIS_FILE = BASE_INPUT_PATH / "year=2025/month=12/day=08/CUST_GROUPING_OUT.parquet"
+RCIS_FILE = BASE_INPUT_PATH / "year=2025/month=12/day=08/CUST_GROUPING_RPTCC.parquet"
+
+# Helper Functions
+def get_report_date_info():
+    today = datetime.today()
+    first_day_this_month = today.replace(day=1)
+    last_day_prev_month = first_day_this_month - timedelta(days=1)
+
+    reptmon = f"{last_day_prev_month:02d}"
+    reptyear = str(last_day_prev_month.year)[-2:]
+
+    return last_day_prev_month, reptmon, reptyear
+
+def read_fixed_width_file(file_path, columns, widths, dtypes):
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = [line.rstrip("\n") for line in f]
+
+    data = []
+    for line in lines:
+        row = []
+        start = 0
+        for w in widths:
+            row.append(line[start:start+w].strip())
+            start += w
+        data.append(row)
+
+    df = pl.DataFrame(data, schema=columns)
+
+    # Apply dtypes conversion if needed
+    for col, dtype in dtypes.items():
+        df = df.with_columns(pl.col(col).cast(dtype))
+    return df
+
+def save_outputs(df, name):
+    df.write_parquet(BASE_OUTPUT_PATH / f"{name}.parquet")
+    df.write_csv(BASE_OUTPUT_PATH / f"{name}.csv")
+
+# MAIN SCRIPT
+if __name__ == "__main__":
+    reptdate, reptmon, reptyear, = get_report_date_info()
+
+    #CISBASEL
+    cisbasel_columns = [
+        "GROUPNO", "CUSTNO", "FULLNAME", "ACCTNO", "NOTENO", 
+        "PRODUCT", "AMTINDC", "BALAMT", "TOTAMT", "RLENCODE", "PRIMSEC"
+    ]
+    cisbasel_widths = [11, 11, 11, 40, 10, 5, 3, 3, 24, 24, 3, 1]
+    cisbasel_dtypes = {
+        "ACCTNO" : pl.Int64,
+        "NOTENO" : pl.Int64,
+        "BALAMT" : pl.Float64,
+        "TOTAMT" : pl.Float64,
+    }
+
+    cisbasel_df = read_fixed_width_file(CIS_FILE, cisbasel_columns, cisbasel_widths, cisbasel_dtypes)
+    save_outputs(cisbasel_df, f"LOAN_CISBASEL{reptmon}{reptyear}")
+
+    #CISRPTCC
+    cisrptcc_columns = [
+        "GRPING", "C1CUST", "C1TYPE", "C1CODE", "C1DESC",
+        "C2CUST", "C2TYPE", "C2CODE", "C2DESC"
+    ]
+    cisrptcc_wdiths = [11, 11, 1, 3, 15, 11, 1, 3, 15]
+    cisrptcc_dtypes = {
+        "GRPING": pl.Int64
+    }
+
+    cisrptcc_df = read_fixed_width_file(RCIS_FILE, cisrptcc_columns, cisrptcc_wdiths, cisrptcc_dtypes)
+    save_outputs(cisrptcc_df, f"LOAN_CISRPTCC{reptmon}{reptyear}")
+
+    print(cisbasel_df.head(100))
+
+
+
+
 Traceback (most recent call last):
   File "/pythonITD/mis_dev/sas_migration/CIGR/output/EIBWCIGR.py", line 65, in <module>
     cisbasel_df = read_fixed_width_file(CIS_FILE, cisbasel_columns, cisbasel_widths, cisbasel_dtypes)
