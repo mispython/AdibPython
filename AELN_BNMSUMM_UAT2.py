@@ -1,320 +1,272 @@
+"""
+EIBWTRBL - Billings Transaction Processing
+"""
+
+import duckdb
 import polars as pl
-import pyreadstat
-from datetime import date, timedelta
-from pathlib import Path
+from datetime import datetime
 import os
-import math
 
-NID_FILE = "/stgsrcsys/host/uat/rinidm09.sas7bdat"  # Changed to Islamic NID file
-TRNCH_FILE = "/stgsrcsys/host/uat/trnchim09.sas7bdat"  # Changed to Islamic TRNCH file
-OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/Output"
-OUTPUT_FILE = "EIIMRNID_REPORT.TXT"  # Changed output filename
-PARQUET_FILE = "EIIMRNID_DATA.parquet"
+print("Billings Transaction Processing...")
+start_time = datetime.now()
 
-def convert_sas_date(sas_num):
-    if sas_num is None:
-        return None
+# Configuration
+BASE_PATH = '/sas/python/virt_edw/Data_Warehouse'
+OUTPUT_DIR = f'{BASE_PATH}/BTRADE/output'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# ========================================
+# DATE PROCESSING (equivalent to DATA REPTDATE)
+# ========================================
+print("📅 Processing reporting dates...")
+
+# Load REPTDATE from parquet
+reptdate_df = pl.read_parquet(f'{BASE_PATH}/LOAN/REPTDATE/*.parquet')
+reptdate = reptdate_df['REPTDATE'][0]
+
+# Determine week (equivalent to SAS SELECT/WHEN)
+day_of_month = reptdate.day
+
+if day_of_month == 8:
+    nowk = '1'
+elif day_of_month == 15:
+    nowk = '2'
+elif day_of_month == 22:
+    nowk = '3'
+else:
+    nowk = '4'
+
+reptyear = reptdate.strftime('%y')
+reptmon = reptdate.strftime('%m')
+
+print(f"📅 Processing date: {reptdate.strftime('%Y-%m-%d')} (Week {nowk})")
+
+# Connect to DuckDB
+conn = duckdb.connect()
+
+try:
+    # ========================================
+    # PROCESS BILLINGS TRANSACTION DATA
+    # ========================================
+    print("📊 Processing billings transaction data...")
+    
+    # Read from parquet file (equivalent to INFILE EXTCOMM)
+    # Assuming the external file is available as parquet
+    extcomm_query = """
+    SELECT 
+        SUBSTRING(record, 1, 2) as RECTYPE,
+        SUBSTRING(record, 3, 10) as TRANSREF,
+        CAST(SUBSTRING(record, 21, 4) as INTEGER) as COSTCTR,
+        SUBSTRING(record, 27, 15) as ACCTNO,
+        SUBSTRING(record, 42, 13) as SUBACCT,
+        SUBSTRING(record, 64, 5) as GLMNEMONIC,
+        SUBSTRING(record, 69, 3) as LIABCODE,
+        CAST(CONCAT(SUBSTRING(record, 73, 4), '-', SUBSTRING(record, 77, 2), '-', SUBSTRING(record, 79, 2)) as DATE) as TRANDATE,
+        CAST(CONCAT('20', SUBSTRING(record, 81, 2), '-', SUBSTRING(record, 83, 2), '-', SUBSTRING(record, 85, 2)) as DATE) as EXPRDATE,
+        CAST(SUBSTRING(record, 87, 18) as DOUBLE) as TRANAMT,
+        CAST(SUBSTRING(record, 105, 16) as DOUBLE) as EXCHANGE,
+        SUBSTRING(record, 121, 4) as CURRENCY,
+        SUBSTRING(record, 125, 13) as BTREL,
+        SUBSTRING(record, 138, 13) as RELFROM,
+        SUBSTRING(record, 169, 10) as TRANSREFPG,
+        CAST(SUBSTRING(record, 180, 18) as DOUBLE) as TRANAMT_CCY,
+        SUBSTRING(record, 198, 10) as TRANS_NUM,
+        SUBSTRING(record, 208, 3) as TRANS_IND,
+        SUBSTRING(record, 211, 5) as MNEMONIC_CD,
+        SUBSTRING(record, 216, 20) as ACCT_INFO,
+        SUBSTRING(record, 236, 1) as CR_DR_IND,
+        SUBSTRING(record, 237, 10) as VOUCHER_NUM
+    FROM read_parquet('/sas/python/virt_edw/Data_Warehouse/EXTCOMM/*.parquet')
+    WHERE LENGTH(record) >= 246  -- Ensure record has minimum length
+    """
+    
+    # Alternative: If data is already in structured parquet format
     try:
-        return date(1960, 1, 1) + timedelta(days=int(float(sas_num)))
+        # Try to read as structured parquet first
+        btrbl_df = pl.read_parquet(f'{BASE_PATH}/EXTCOMM/structured/*.parquet')
+        print("📄 Loaded from structured parquet file")
     except:
-        return None
+        # Fallback to parsing from raw text format
+        btrbl_df = conn.execute(extcomm_query).pl()
+        print("📄 Loaded and parsed from raw format")
+    
+    print(f"📄 Transaction records loaded: {len(btrbl_df)}")
+    
+    # ========================================
+    # DATA VALIDATION AND CLEANING
+    # ========================================
+    print("🔍 Validating and cleaning data...")
+    
+    # Remove invalid records and clean data
+    btrbl_clean = btrbl_df.filter(
+        pl.col('ACCTNO').is_not_null() &
+        pl.col('TRANDATE').is_not_null() &
+        pl.col('TRANAMT').is_not_null()
+    ).with_columns([
+        # Clean account numbers
+        pl.col('ACCTNO').str.strip_chars().alias('ACCTNO_CLEAN'),
+        # Ensure numeric fields are properly formatted
+        pl.col('TRANAMT').fill_nan(0.0).fill_null(0.0),
+        pl.col('EXCHANGE').fill_nan(0.0).fill_null(0.0),
+        pl.col('TRANAMT_CCY').fill_nan(0.0).fill_null(0.0),
+        # Add processing timestamp
+        pl.lit(datetime.now()).alias('PROCESSING_TS')
+    ])
+    
+    print(f"📄 Valid records after cleaning: {len(btrbl_clean)}")
 
-def calc_remmth(matdt, reptdate):
-    if matdt is None or matdt <= reptdate:
-        return None
-    if (matdt - reptdate).days < 8:
-        return 0.1
+    # ========================================
+    # SAVE OUTPUT FILES
+    # ========================================
+    print("💾 Saving output files...")
     
-    mdyr, mdmth, mdday = matdt.year, matdt.month, matdt.day
-    rpyear, rpmonth, rpday = reptdate.year, reptdate.month, reptdate.day
+    # Base filename
+    base_filename = f"BILLSTRAN_{reptmon}{nowk}_{reptyear}"
     
-    rp_month_days = [31, 29 if rpyear % 4 == 0 else 28, 31, 30, 31, 30,
-                     31, 31, 30, 31, 30, 31]
-    md_month_days = [31, 29 if mdyr % 4 == 0 else 28, 31, 30, 31, 30,
-                     31, 31, 30, 31, 30, 31]
+    # Save as Parquet
+    parquet_file = f"{OUTPUT_DIR}/{base_filename}.parquet"
+    btrbl_clean.write_parquet(parquet_file)
+    print(f"💾 Parquet output: {parquet_file}")
     
-    mdday = min(mdday, md_month_days[mdmth - 1])
-    remy = mdyr - rpyear
-    remm = mdmth - rpmonth
-    remd = mdday - rpday
+    # Save as CSV
+    csv_file = f"{OUTPUT_DIR}/{base_filename}.csv"
+    btrbl_clean.write_csv(csv_file)
+    print(f"💾 CSV output: {csv_file}")
     
-    if remd < 0:
-        remm -= 1
-        if remm < 0:
-            remy -= 1
-            remm += 12
-        remd += rp_month_days[(rpmonth - 2) % 12]
+    # ========================================
+    # GENERATE SUMMARY STATISTICS
+    # ========================================
+    print("📈 Generating summary statistics...")
     
-    return remy * 12 + remm + remd / rp_month_days[rpmonth - 1]
+    summary_stats = pl.DataFrame({
+        'metric': [
+            'Total_Records', 'Valid_Records', 'Total_Amount', 
+            'Avg_Transaction_Amount', 'Credit_Transactions', 
+            'Debit_Transactions', 'Unique_Accounts'
+        ],
+        'value': [
+            len(btrbl_df),
+            len(btrbl_clean),
+            btrbl_clean['TRANAMT'].sum(),
+            btrbl_clean['TRANAMT'].mean(),
+            btrbl_clean.filter(pl.col('CR_DR_IND') == 'C').height,
+            btrbl_clean.filter(pl.col('CR_DR_IND') == 'D').height,
+            btrbl_clean['ACCTNO_CLEAN'].n_unique()
+        ],
+        'week': [nowk] * 7,
+        'month': [reptmon] * 7,
+        'year': [reptyear] * 7
+    })
+    
+    # Save summary as Parquet
+    summary_parquet = f"{OUTPUT_DIR}/BILLSTRAN_SUMMARY_{reptmon}{nowk}_{reptyear}.parquet"
+    summary_stats.write_parquet(summary_parquet)
+    print(f"💾 Summary parquet: {summary_parquet}")
+    
+    # Save summary as CSV
+    summary_csv = f"{OUTPUT_DIR}/BILLSTRAN_SUMMARY_{reptmon}{nowk}_{reptyear}.csv"
+    summary_stats.write_csv(summary_csv)
+    print(f"💾 Summary CSV: {summary_csv}")
 
-def apply_remfmta(val):
-    if val is None or (isinstance(val, float) and math.isnan(val)):
-        return '              '
-    if val <= 6:
-        return '1. LE  6      '
-    elif 6 < val <= 12:
-        return '2. GT  6 TO 12'
-    elif 12 < val <= 24:
-        return '3. GT 12 TO 24'
-    elif 24 < val <= 36:
-        return '4. GT 24 TO 36'
-    elif 36 < val <= 60:
-        return '5. GT 36 TO 60'
-    else:
-        return '              '
+    # ========================================
+    # GENERATE DAILY BREAKDOWN
+    # ========================================
+    print("📊 Generating daily breakdown...")
+    
+    daily_breakdown = btrbl_clean.group_by('TRANDATE').agg([
+        pl.col('TRANAMT').sum().alias('DAILY_TOTAL'),
+        pl.col('ACCTNO_CLEAN').n_unique().alias('UNIQUE_ACCOUNTS'),
+        pl.col('TRANSREF').count().alias('TRANSACTION_COUNT'),
+        pl.col('CR_DR_IND').filter(pl.col('CR_DR_IND') == 'C').count().alias('CREDIT_COUNT'),
+        pl.col('CR_DR_IND').filter(pl.col('CR_DR_IND') == 'D').count().alias('DEBIT_COUNT')
+    ]).sort('TRANDATE')
+    
+    # Save daily breakdown as Parquet
+    daily_parquet = f"{OUTPUT_DIR}/BILLSTRAN_DAILY_{reptmon}{nowk}_{reptyear}.parquet"
+    daily_breakdown.write_parquet(daily_parquet)
+    print(f"💾 Daily breakdown parquet: {daily_parquet}")
+    
+    # Save daily breakdown as CSV
+    daily_csv = f"{OUTPUT_DIR}/BILLSTRAN_DAILY_{reptmon}{nowk}_{reptyear}.csv"
+    daily_breakdown.write_csv(daily_csv)
+    print(f"💾 Daily breakdown CSV: {daily_csv}")
 
-def apply_remfmtb(val):
-    if val is None or (isinstance(val, float) and math.isnan(val)):
-        return '             '
-    if val <= 1:
-        return '1. LE  1      '
-    elif 1 < val <= 3:
-        return '2. GT  1 TO  3'
-    elif 3 < val <= 6:
-        return '3. GT  3 TO  6'
-    elif 6 < val <= 9:
-        return '4. GT  6 TO  9'
-    elif 9 < val <= 12:
-        return '5. GT  9 TO 12'
-    elif 12 < val <= 24:
-        return '6. GT 12 TO 24'
-    elif 24 < val <= 36:
-        return '7. GT 24 TO 36'
-    elif 36 < val <= 60:
-        return '8. GT 36 TO 60'
-    else:
-        return '             '
+    # ========================================
+    # GENERATE CURRENCY BREAKDOWN
+    # ========================================
+    print("💰 Generating currency breakdown...")
+    
+    currency_breakdown = btrbl_clean.group_by('CURRENCY').agg([
+        pl.col('TRANAMT_CCY').sum().alias('TOTAL_AMOUNT_CCY'),
+        pl.col('TRANAMT').sum().alias('TOTAL_AMOUNT_LCY'),
+        pl.col('EXCHANGE').mean().alias('AVG_EXCHANGE_RATE'),
+        pl.col('ACCTNO_CLEAN').n_unique().alias('UNIQUE_ACCOUNTS'),
+        pl.col('TRANSREF').count().alias('TRANSACTION_COUNT')
+    ]).sort('CURRENCY')
+    
+    # Save currency breakdown as Parquet
+    currency_parquet = f"{OUTPUT_DIR}/BILLSTRAN_CURRENCY_{reptmon}{nowk}_{reptyear}.parquet"
+    currency_breakdown.write_parquet(currency_parquet)
+    print(f"💾 Currency breakdown parquet: {currency_parquet}")
+    
+    # Save currency breakdown as CSV
+    currency_csv = f"{OUTPUT_DIR}/BILLSTRAN_CURRENCY_{reptmon}{nowk}_{reptyear}.csv"
+    currency_breakdown.write_csv(currency_csv)
+    print(f"💾 Currency breakdown CSV: {currency_csv}")
 
-def write_islamic_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
-    dlm = '\x05'
-    nidcnt, nidvol = tbl2_stats[0], tbl2_stats[1]
+    # ========================================
+    # GENERATE METADATA FILE
+    # ========================================
+    print("📄 Generating metadata...")
     
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write("PUBLIC ISLAMIC BANK BERHAD\n\n")
-        f.write("REPORT ON RETAIL RINGGIT-DENOMINATED NEGOTIABLE ")
-        f.write("ISLAMIC DEBT CERTIFICATE (R-NIDC)\n")
-        f.write(f"REPORTING DATE : {reptdate.strftime('%d/%m/%Y')}\n")
-        
-        f.write(f"{dlm}\nTable 1 - Outstanding Retail R-NIDC\n\n{dlm}\n")
-        f.write("REMAINING MATURITY (IN MONTHS)" + dlm)
-        f.write("GROSS ISSUANCE" + dlm)
-        f.write("HELD FOR MARKET MARKING" + dlm)
-        f.write("NET OUTSTANDING" + dlm + "\n")
-        f.write(dlm + dlm + "(A)" + dlm + "(B)" + dlm + "(A-B)" + dlm + "\n")
-        
-        total_curbal = total_heldmkt = total_outstanding = 0
-        fmt_order = ['1. LE  6      ', '2. GT  6 TO 12', '3. GT 12 TO 24',
-                    '4. GT 24 TO 36', '5. GT 36 TO 60', '              ']
-        
-        tbl1_dict = {}
-        for row in tbl1_sum.rows(named=True):
-            label = row['remfmta']
-            if label: tbl1_dict[label.strip()] = row
-        
-        for label in fmt_order:
-            stripped = label.strip()
-            if stripped in tbl1_dict:
-                row = tbl1_dict[stripped]
-                curbal, heldmkt, outstanding = float(row['curbal']), float(row['heldmkt']), float(row['outstanding'])
-                total_curbal += curbal
-                total_heldmkt += heldmkt
-                total_outstanding += outstanding
-                remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
-                f.write(f"{dlm}{remmgrp:24}{dlm}{curbal:16,.2f}{dlm}{heldmkt:16,.2f}{dlm}{outstanding:16,.2f}{dlm}\n")
-        
-        f.write(f"{dlm}TOTAL{24*' '}{dlm}{total_curbal:16,.2f}{dlm}{total_heldmkt:16,.2f}{dlm}{total_outstanding:16,.2f}{dlm}\n")
-        
-        f.write(f"{dlm}\nTable 2 - Monthly Trading Volume\n\n{dlm}\n")
-        f.write("GROSS MONTHLY PURCHASE OF RETAIL R-NIDC BY THE BANK" + dlm + "A) NUMBER OF R-NIDC" + dlm)
-        f.write(f"{nidcnt if nidcnt > 0 else '0'}{dlm}\n{dlm}{dlm}B) VOLUME OF R-NIDC{dlm}{nidvol if nidcnt > 0 else '0.00'}{dlm}\n")
-        
-        f.write(f"{dlm}\nTable 3 - Indicative Mid Yield\n\n{dlm}\n")
-        f.write("REMAINING MATURITY (IN MONTHS)" + dlm + "(%)" + dlm + "\n")
-        
-        fmtb_order = ['1. LE  1      ', '2. GT  1 TO  3', '3. GT  3 TO  6',
-                     '4. GT  6 TO  9', '5. GT  9 TO 12', '6. GT 12 TO 24',
-                     '7. GT 24 TO 36', '8. GT 36 TO 60', '             ']
-        
-        for label in fmtb_order:
-            stripped = label.strip()
-            if stripped in tbl3_data:
-                midyield = tbl3_data[stripped]
-                if midyield > 0:
-                    remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
-                    f.write(f"{dlm}{remmgrp:24}{dlm}{midyield:7.4f}{dlm}\n")
-        
-        overall_avg = tbl3_data.get('OVERALL', 0)
-        if overall_avg > 0:
-            f.write(f"{dlm}AVERAGE BID-ASK SPREAD ACROSS MATURITIES{dlm}{overall_avg:7.4f}{dlm}\n")
+    metadata_data = {
+        'parameter': [
+            'PROCESS_NAME', 'REPORT_DATE', 'WEEK', 'MONTH', 'YEAR',
+            'INPUT_RECORDS', 'OUTPUT_RECORDS', 'PROCESSING_TIME'
+        ],
+        'value': [
+            'EIBWTRBL', reptdate.strftime('%Y-%m-%d'), nowk, reptmon, reptyear,
+            str(len(btrbl_df)), str(len(btrbl_clean)), 
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        ]
+    }
+    metadata_df = pl.DataFrame(metadata_data)
+    
+    # Save metadata as Parquet
+    metadata_parquet = f"{OUTPUT_DIR}/BILLSTRAN_METADATA_{reptmon}{nowk}_{reptyear}.parquet"
+    metadata_df.write_parquet(metadata_parquet)
+    print(f"💾 Metadata parquet: {metadata_parquet}")
+    
+    # Save metadata as CSV
+    metadata_csv = f"{OUTPUT_DIR}/BILLSTRAN_METADATA_{reptmon}{nowk}_{reptyear}.csv"
+    metadata_df.write_csv(metadata_csv)
+    print(f"💾 Metadata CSV: {metadata_csv}")
 
-def main():
-    print("=" * 60)
-    print("EIIMRNID - EXACT SAS OUTPUT (ISLAMIC VERSION)")
-    print("=" * 60)
+    # ========================================
+    # COMPLETION SUMMARY
+    # ========================================
+    end_time = datetime.now()
+    duration = end_time - start_time
     
-    today = date.today()
-    reptdate = date(today.year, today.month, 1) - timedelta(days=1)
-    startdte = date(reptdate.year, reptdate.month, 1)
+    print(f"\n🎉 EIBWTRBL Completed!")
+    print(f"⏱️  Duration: {duration}")
+    print(f"📄 Input Records: {len(btrbl_df)}")
+    print(f"📄 Output Records: {len(btrbl_clean)}")
+    print(f"💰 Total Amount: {btrbl_clean['TRANAMT'].sum():,.2f}")
+    print(f"👤 Unique Accounts: {btrbl_clean['ACCTNO_CLEAN'].n_unique()}")
+    print(f"📁 Output Directory: {OUTPUT_DIR}")
+    print(f"📊 Files Generated: 8 files (4 Parquet + 4 CSV)")
     
-    print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
-    print(f"Start Date: {startdte.strftime('%d/%m/%Y')}")
+    exit(0)
     
-    if not Path(NID_FILE).exists():
-        print(f"❌ Islamic NID file not found: {NID_FILE}")
-        return
+except Exception as e:
+    print(f"💥 Processing failed: {e}")
+    exit(1)
     
-    output_path = Path(OUTPUT_DIR)
-    output_path.mkdir(parents=True, exist_ok=True)
-    final_output_file = output_path / OUTPUT_FILE
-    final_parquet_file = output_path / PARQUET_FILE
-    
-    print("\n📂 Processing Islamic data...")
-    df_nid, _ = pyreadstat.read_sas7bdat(NID_FILE)
-    df = pl.from_pandas(df_nid).rename({col: col.lower() for col in df_nid.columns})
-    print(f"  Original Islamic NID records: {len(df):,}")
-    
-    if Path(TRNCH_FILE).exists():
-        df_trnch, _ = pyreadstat.read_sas7bdat(TRNCH_FILE)
-        df_trnch = pl.from_pandas(df_trnch).rename({col: col.lower() for col in df_trnch.columns})
-        df = df.join(df_trnch, on='trancheno', how='left')
-        print("  Merged with Islamic TRNCH")
-    
-    for col in ['matdt', 'startdt', 'early_wddt']:
-        if col in df.columns and df[col].dtype in [pl.Int64, pl.Float64]:
-            df = df.with_columns(
-                pl.col(col).map_elements(convert_sas_date, return_dtype=pl.Date).alias(col)
-            )
-    
-    df = df.filter(pl.col('curbal') > 0)
-    
-    if 'matdt' in df.columns and df['matdt'].dtype == pl.Date:
-        df = df.with_columns(
-            pl.col('matdt').map_elements(
-                lambda x: calc_remmth(x, reptdate),
-                return_dtype=pl.Float64
-            ).alias('remmth')
-        )
-    
-    print(f"\n💾 Saving processed Islamic data to Parquet: {final_parquet_file}")
-    df.write_parquet(final_parquet_file)
-    print(f"  Saved {len(df):,} records to Parquet")
-    
-    overall_yield = 0
-    tbl3_data = {'OVERALL': 0}
-    
-    print("\n📊 Creating Table 1...")
-    required_cols = ['matdt', 'startdt', 'nidstat', 'cdstat']
-    if all(col in df.columns for col in required_cols):
-        tbl1_filtered = df.filter(
-            (pl.col('matdt') > reptdate) &
-            (pl.col('startdt') <= reptdate) &
-            (pl.col('nidstat') == 'N') &
-            (pl.col('cdstat') == 'A')
-        )
-        print(f"  Table 1 filtered records: {len(tbl1_filtered):,}")
-        
-        if len(tbl1_filtered) > 0:
-            tbl1 = tbl1_filtered.with_columns([
-                pl.lit(0).alias('heldmkt')
-            ]).with_columns([
-                (pl.col('curbal') - pl.col('heldmkt')).alias('outstanding')
-            ]).with_columns([
-                pl.col('remmth').map_elements(
-                    lambda x: apply_remfmta(x) if x is not None else '              ',
-                    return_dtype=pl.Utf8
-                ).alias('remfmta')
-            ])
-            
-            tbl1_sum = tbl1.group_by('remfmta').agg([
-                pl.sum('curbal').alias('curbal'),
-                pl.sum('heldmkt').alias('heldmkt'),
-                pl.sum('outstanding').alias('outstanding')
-            ])
-            print(f"  Table 1 summary: {len(tbl1_sum)} maturity buckets")
-        else:
-            tbl1_sum = pl.DataFrame({'remfmta': [], 'curbal': [], 'heldmkt': [], 'outstanding': []})
-            tbl1 = pl.DataFrame()
-    else:
-        tbl1_sum = pl.DataFrame({'remfmta': [], 'curbal': [], 'heldmkt': [], 'outstanding': []})
-        tbl1 = pl.DataFrame()
-    
-    print("\n📊 Creating Table 2...")
-    if 'nidstat' in df.columns and 'early_wddt' in df.columns and df['early_wddt'].dtype == pl.Date:
-        tbl2_result = df.filter(
-            (pl.col('nidstat') == 'E') &
-            (pl.col('early_wddt') >= startdte) &
-            (pl.col('early_wddt') <= reptdate)
-        ).select([
-            pl.len().alias('nidcnt'),
-            pl.sum('curbal').alias('nidvol')
-        ])
-        
-        if tbl2_result.height > 0:
-            nidcnt, nidvol = tbl2_result.row(0)
-            nidcnt = nidcnt if nidcnt is not None else 0
-            nidvol = nidvol if nidvol is not None else 0.0
-        else:
-            nidcnt, nidvol = 0, 0.0
-    else:
-        nidcnt, nidvol = 0, 0.0
-    
-    tbl2_stats = (nidcnt, nidvol)
-    print(f"  Table 2 - R-NIDC Count: {nidcnt:,}, Volume: {nidvol:,.2f}")
-    
-    print("\n📊 Creating Table 3...")
-    if 'intplrate_bid' in df.columns and 'intplrate_offer' in df.columns:
-        tbl3_filtered = df.filter(
-            (pl.col('matdt') > reptdate) &
-            (pl.col('startdt') <= reptdate) &
-            (pl.col('nidstat') == 'N') &
-            (pl.col('cdstat') == 'A') &
-            pl.col('intplrate_bid').is_not_null() &
-            pl.col('intplrate_offer').is_not_null()
-        )
-        print(f"  Table 3 filtered records: {len(tbl3_filtered):,}")
-        
-        if len(tbl3_filtered) > 0:
-            tbl3 = tbl3_filtered.with_columns([
-                ((pl.col('intplrate_bid') + pl.col('intplrate_offer')) / 2).alias('yield')
-            ]).with_columns([
-                pl.col('remmth').map_elements(
-                    lambda x: apply_remfmtb(x) if x is not None else '             ',
-                    return_dtype=pl.Utf8
-                ).alias('remfmtb')
-            ])
-            
-            tbl3_unique = tbl3.unique(subset=['remfmtb', 'trancheno'])
-            tbl3_yield = tbl3_unique.filter(pl.col('yield') > 0).group_by('remfmtb').agg([
-                pl.mean('yield').alias('midyield'),
-                pl.len().alias('count')
-            ])
-            
-            overall_yield_df = tbl3_unique.filter(pl.col('yield') > 0).select(
-                pl.mean('yield').alias('overall_yield')
-            )
-            
-            if overall_yield_df.height > 0:
-                overall_yield = overall_yield_df.row(0)[0] or 0
-            
-            tbl3_data = {'OVERALL': overall_yield}
-            for row in tbl3_yield.rows(named=True):
-                label = row['remfmtb']
-                if label:
-                    tbl3_data[label.strip()] = float(row['midyield'])
-            
-            print(f"  Table 3 - Overall yield: {overall_yield:.4f}%, Buckets: {len(tbl3_data)-1}")
-    
-    print(f"\n💾 Writing Islamic SAS-format output to: {final_output_file}")
-    write_islamic_output(final_output_file, reptdate, tbl1_sum, tbl2_stats, tbl3_data)
-    
-    print(f"\n✅ Islamic SAS report generated: {final_output_file}")
-    print(f"✅ Islamic Parquet data saved: {final_parquet_file}")
-    print(f"\n📊 Final Summary:")
-    print(f"  Total processed records: {len(df):,}")
-    print(f"  Table 1 (Outstanding): {len(tbl1):,} records")
-    print(f"  Table 2 (Trading): {nidcnt:,} R-NIDCs, RM {nidvol:,.2f}")
-    print(f"  Table 3 (Yield): {overall_yield:.4f}% overall")
-    print(f"\n📁 Output folder: {output_path.absolute()}")
+finally:
+    conn.close()
 
-if __name__ == "__main__":
-    main()
+
+
+EXTDATE	REPTDATE
+12082025342	24083
