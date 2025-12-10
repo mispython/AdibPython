@@ -1,222 +1,108 @@
-# EIBWSDB1.py - SDBMS Data Processor
-
-import duckdb
-import pyarrow as pa
-import pyarrow.parquet as pq
+import polars as pl
+from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timedelta
 
-# Configuration
-base_path = Path("/stgsrcsys/host/uat")
-SDBM_DATA_PATH = Path("/host/mis/parquet")
+BASE_INPUT_PATH = Path("Data_Warehouse/MIS/XMIS/Outsource/input") # Folder for source files
+BASE_OUTPUT_PATH = Path("Data_Warehouse/MIS/XMIS/output") # Folder for output files
+BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-# Remove these legacy paths - outputs go to SDBM_DATA_PATH now
-# STATUS_PATH and R1STAT_PATH are no longer needed
+# File paths
+REPTDATE_FILE = BASE_INPUT_PATH / "DEPOSIT_REPTDATE.txt"
+EGOLD_FILE = BASE_INPUT_PATH / "GOLD_ETRX_20250715"
+OTHER_FILE = BASE_INPUT_PATH / "GOLD_ETRX_OTH_20250715"
 
-# Connect to DuckDB
-conn = duckdb.connect()
+# Existing MIS data for path (for appending)
+MIS_DATA_PATH = BASE_OUTPUT_PATH / "MIS"
 
-print("=" * 60)
-print("EIBWSDB1 - SDBMS Data Processor")
-print("=" * 60)
+# Read REPTDATE and set variables
+REPTDATE_df = pl.read_csv("data/input/DEPOSIT_REPTDATE.txt")
+REPTDATE_value = REPTDATE_df["REPTDATE"][0]
+REPTDATE = datetime.strptime(REPTDATE_value, "%Y-%m-%d")
 
-# Calculate REPTDATE (same as parent program)
-reptdate = datetime.today().date() - timedelta(days=1)
-rept_day = reptdate.day
+day = REPTDATE.day
+month = REPTDATE.month
+year = REPTDATE.year
 
-if 1 <= rept_day <= 8:
-    nowk = '1'
-elif 9 <= rept_day <= 15:
-    nowk = '2'
-elif 16 <= rept_day <= 22:
-    nowk = '3'
+# Equivalent to CALL SYMPUT logic
+if 1 <= day <= 8:
+    NOWK = "1"
+elif 9 <= day <= 15:
+    NOWK = "2"
+elif 16 <= day <= 22:
+    NOWK = "3"
 else:
-    nowk = '4'
+    NOWK = "4"
 
-reptyear = reptdate.strftime('%y')
-reptmon = reptdate.strftime('%m')
-reptday = reptdate.strftime('%d')
+REPTYEAR = str(year)[-2:]
+REPTMON = f"{month:02d}" # year2.
+REPTDAY = f"{day:02d}" # z2.
+REPTDT = REPTDATE.strftime("%Y%m%d") # 8.
 
-# Create Hive-partitioned output path
-OUTPUT_DATA_PATH = Path(f"{SDBM_DATA_PATH}/year={reptdate.year}/month={reptdate.month:02d}/day={reptdate.day:02d}")
-OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
+# Read EGOLD flat file
+EGOLD = pl.read_csv(
+    "GOLD_ETRX_20250715",
+    has_header=False,
+    columns=[
+        "TRXNYY", "TRXNMM", "TRXNDD", "ACCTNO ", "MPURCGM ", "MSALEGM", "BRANCH", "MPURCPR", "MPURCAMT", "MSALEPR", "MSALEAMT"
+    ],
+    dtypes={
+        "TRXNYY": pl.Int32,
+        "TRXNMM": pl.Int32,  
+        "TRXNDD": pl.Int32
+    }                                              
+)
 
-print(f"Report Date: {reptdate} (Week {nowk})")
-print(f"Output Path: {OUTPUT_DATA_PATH}")
-print("-" * 60)
+# Create TRXNDATE and REPTDATE
+EGOLD = EGOLD.with_columns([
+    pl.date(pl.col("TRXNYY"), pl.col("TRXNMM"), pl.col("TRXNDD")).alias("TRXNDATE"),
+    pl.lit(REPTDT).alias("REPTDATE"),
+    pl.lit("EBANKING").alias("CHANNELIND")
+])
+    
 
-# Step 1: Read and process SDBMS file (equivalent to DATA SDBMS)
-sdbms_file = base_path / "SDBMS.txt"
+# Read OTHER flat file
+OTHER = pl.read_csv(
+    "GOLD_ETRX_OTH_20250715",
+    has_header=False,
+    columns=[
+        "TRXNYY", "TRXNMM", "TRXNDD", "ACCTNO ", "MPURCGM ", "MSALEGM", "BRANCH", "MPURCPR", "MPURCAMT", "MSALEPR", "MSALEAMT", "TRANCODE", "CHANNEL" 
+    ],
+    dtypes={
+        "TRXNYY": pl.Int32,
+        "TRXNMM": pl.Int32,  
+        "TRXNDD": pl.Int32
+    }    
+)
 
-if not sdbms_file.exists():
-    print(f"✗ SDBMS file not found: {sdbms_file}")
-    exit(1)
+OTHER = OTHER.with_columns([
+    pl.date(pl.col("TRXNYY"), pl.col("TRXNMM"), pl.col("TRXNDD")).alias("TRXNDATE"),
+    pl.lit(REPTDT).alias("REPTDATE"),
+    pl.lit("OTHER").alias("CHANNELIND")
+])
 
-try:
-    # Use Python to read the file directly (more reliable for fixed-width)
-    with open(sdbms_file, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-    
-    print(f"Total lines in file: {len(lines)}")
-    print(f"First line (header): {lines[0][:50]}...")
-    if len(lines) > 1:
-        print(f"Second line (first data): {lines[1][:50]}...")
-    print("-" * 60)
-    
-    # Skip first line (header) and process data lines
-    data_lines = [line for line in lines[1:] if len(line.strip()) > 0]
-    print(f"Data lines to process: {len(data_lines)}")
-    
-    if len(data_lines) == 0:
-        print("⚠ No data lines found in SDBMS.txt")
-        sdbms_pd = pd.DataFrame()
-    else:
-        # Parse each line using fixed-width positions
-        import pandas as pd
-        records = []
-        
-        for line in data_lines:
-            try:
-                record = {
-                    'BRANCH': line[0:3] if len(line) > 3 else '',
-                    'NAME': line[4:54].strip() if len(line) > 54 else '',
-                    'IC': line[55:75] if len(line) > 75 else '',
-                    'NATIONALITY': line[76:78] if len(line) > 78 else '',
-                    'BOXNO': line[78:88] if len(line) > 88 else '',
-                    'HIRERTY': line[89:90] if len(line) > 90 else '',
-                    'ADDRESS': line[91:341].strip() if len(line) > 341 else '',
-                    'ACCTHOLDER': line[342:343] if len(line) > 343 else '',
-                    'ACCTNO': line[344:364] if len(line) > 364 else '',
-                    'PRIPHONE': line[365:385] if len(line) > 385 else '',
-                    'MOBILENO': line[386:406] if len(line) > 406 else '',
-                    'OPENDD': line[407:409] if len(line) > 409 else '',
-                    'OPENMM': line[409:411] if len(line) > 411 else '',
-                    'OPENYY': line[411:415] if len(line) > 415 else '',
-                    'RENTALDATE_STR': line[416:424] if len(line) > 424 else '',
-                    'LASTRENTPAY_STR': line[425:433] if len(line) > 433 else '',
-                    'MTHOVERDUE1': line[436:438] if len(line) > 438 else '0',
-                    'MTHOVERDUE2': line[438:440] if len(line) > 440 else '0',
-                    'MTHOVERDUE3': line[440:442] if len(line) > 442 else '0',
-                    'TOTALOVERDUE': line[442:444] if len(line) > 444 else '0'
-                }
-                records.append(record)
-            except Exception as e:
-                print(f"⚠ Error parsing line: {e}")
-                continue
-        
-        sdbms_pd = pd.DataFrame(records)
-        print(f"✓ Read {len(sdbms_pd)} records from SDBMS.txt")
-    
-    # Convert to pandas for date processing
-    import pandas as pd
-    
-    # Create OPENDT (equivalent to MDY function in SAS)
-    if len(sdbms_pd) > 0:
-        def create_opendt(row):
-            try:
-                if pd.notna(row['OPENDD']) and pd.notna(row['OPENMM']) and pd.notna(row['OPENYY']):
-                    opendd = int(row['OPENDD'])
-                    openmm = int(row['OPENMM'])
-                    openyy = int(row['OPENYY'])
-                    return datetime(openyy, openmm, opendd).date()
-            except:
-                return None
-            return None
-    
-            
-        sdbms_pd['OPENDT'] = sdbms_pd.apply(create_opendt, axis=1)
-        
-        # Parse RENTALDATE and LASTRENTPAY (DDMMYYYY format)
-        def parse_ddmmyyyy(date_str):
-            try:
-                if pd.notna(date_str) and len(str(date_str).strip()) == 8:
-                    date_str = str(date_str).strip()
-                    day = int(date_str[0:2])
-                    month = int(date_str[2:4])
-                    year = int(date_str[4:8])
-                    return datetime(year, month, day).date()
-            except:
-                return None
-            return None
-        
-        sdbms_pd['RENTALDATE'] = sdbms_pd['RENTALDATE_STR'].apply(parse_ddmmyyyy)
-        sdbms_pd['LASTRENTPAY'] = sdbms_pd['LASTRENTPAY_STR'].apply(parse_ddmmyyyy)
-        
-        # Convert numeric fields
-        for col in ['MTHOVERDUE1', 'MTHOVERDUE2', 'MTHOVERDUE3', 'TOTALOVERDUE']:
-            sdbms_pd[col] = pd.to_numeric(sdbms_pd[col], errors='coerce').fillna(0).astype(int)
-        
-        # Drop temporary columns
-        sdbms_pd = sdbms_pd.drop(columns=['OPENDD', 'OPENMM', 'OPENYY', 'RENTALDATE_STR', 'LASTRENTPAY_STR'])
-        
-        print(f"✓ Processed dates and created OPENDT field")
-        
-        # Display sample (equivalent to PROC PRINT)
-        print("\nSample Records (first 5 rows):")
-        print("-" * 60)
-        print(sdbms_pd.head().to_string())
-        print("-" * 60)
-    else:
-        print("⚠ No data to process")
-    
-    # Convert back to Arrow
-    sdbms_table = pa.Table.from_pandas(sdbms_pd)
-    
-except Exception as e:
-    print(f"✗ Error processing SDBMS file: {e}")
-    import traceback
-    traceback.print_exc()
-    exit(1)
+# Combine EGOLD and OTHER
+GOLDTRAN = pl.concat([EGOLD, OTHER])
 
-# Step 2: Create STATUS dataset (without NAME, ADDRESS, PRIPHONE, MOBILENO)
-try:
-    status_columns = [col for col in sdbms_pd.columns 
-                     if col not in ['NAME', 'ADDRESS', 'PRIPHONE', 'MOBILENO']]
-    status_df = sdbms_pd[status_columns].copy()
-    
-    # Save to STATUS path
-    status_filename = "SDB.parquet"
-    status_file_path = OUTPUT_DATA_PATH / status_filename
-    
-    status_table = pa.Table.from_pandas(status_df)
-    pq.write_table(status_table, status_file_path)
-    
-    print(f"\n✓ STATUS dataset saved: {status_filename}")
-    print(f"  Location: {status_file_path}")
-    print(f"  Records: {len(status_df)}")
-    print(f"  Columns: {len(status_df.columns)}")
-    
-except Exception as e:
-    print(f"✗ Error creating STATUS dataset: {e}")
-    import traceback
-    traceback.print_exc()
-    exit(1)
+# Append Logic
+target_name = f"MIS_GOLDTRAN{REPTMON}{NOWK}"
 
-# Step 3: Create R1STAT dataset (only IC, NAME, ADDRESS, PRIPHONE, MOBILENO)
-try:
-    r1stat_columns = ['IC', 'NAME', 'ADDRESS', 'PRIPHONE', 'MOBILENO']
-    r1stat_df = sdbms_pd[r1stat_columns].copy()
-    
-    # Save to R1STAT path
-    r1stat_filename = "R1SDB.parquet"
-    r1stat_file_path = OUTPUT_DATA_PATH / r1stat_filename
-    
-    r1stat_table = pa.Table.from_pandas(r1stat_df)
-    pq.write_table(r1stat_table, r1stat_file_path)
-    
-    print(f"\n✓ R1STAT dataset saved: {r1stat_filename}")
-    print(f"  Location: {r1stat_file_path}")
-    print(f"  Records: {len(r1stat_df)}")
-    print(f"  Columns: {len(r1stat_df.columns)}")
-    
-except Exception as e:
-    print(f"✗ Error creating R1STAT dataset: {e}")
-    import traceback
-    traceback.print_exc()
-    exit(1)
+if{REPTDAY} == "01":
+    # Start new dataset
+    MIS_GOLDTRAN = GOLDTRAN
+else:
+    # Load existing dataset
+    MIS_GOLDTRAN = pl.read.parquet(f"{target_name}.parquet")
+    # Remove duplicates for same REPTDATE
+    MIS_GOLDTRAN = MIS_GOLDTRAN.filter(pl.col("REPTDATE") != REPTDT)
+    # Append new
+    MIS_GOLDTRAN = pl.concat([MIS_GOLDTRAN, GOLDTRAN])
 
-print("\n" + "=" * 60)
-print("✓ EIBWSDB1 processing completed successfully")
-print("=" * 60)
+# Save back
+MIS_GOLDTRAN.write_parquet(f"{target_name}.parquet")
 
-conn.close()
+# Save TEMP copy
+TEMP = f"TEMP_GOLDTRAN{REPTMON}{NOWK}{REPTYEAR}"
+MIS_GOLDTRAN.write.parquet(f"{TEMP}.parquet")
+
+# Export
+MIS_GOLDTRAN.write.csv("TRANFILE.csv.gz")
