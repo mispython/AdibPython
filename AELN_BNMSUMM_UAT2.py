@@ -19,16 +19,10 @@ output_base = "/sasdata/output"
 # -------------------------
 # STEP 1: REPTDATE
 # -------------------------
-# Note: Polars doesn't directly support SAS7BDAT, so we use pyreadstat or pandas
-try:
-    import pyreadstat
-    reptdate_df, meta = pyreadstat.read_sas7bdat(depo1_file, usecols=["TBDATE"], row_limit=1)
-    tbd = reptdate_df["TBDATE"].iloc[0]
-except ImportError:
-    # Fallback to pandas if pyreadstat not available
-    import pandas as pd
-    reptdate_df = pd.read_sas(depo1_file, encoding='latin1').head(1)[["TBDATE"]]
-    tbd = reptdate_df["TBDATE"].iloc[0]
+# Read date from SAS file using pandas
+import pandas as pd
+reptdate_df = pd.read_sas(depo1_file, encoding='latin1').head(1)[["TBDATE"]]
+tbd = reptdate_df["TBDATE"].iloc[0]
 
 reptdate = dt.datetime.strptime(str(tbd)[:8], "%Y%m%d")
 
@@ -44,17 +38,12 @@ print(f"Partitions: year={REPTYEAR}/month={REPTMON}/day={REPTDAY}")
 # STEP 2: DEPO1 - Read SAS files
 # -------------------------
 def read_sas_to_polars(filepath, columns=None):
-    """Helper function to read SAS7BDAT files into Polars DataFrame"""
-    try:
-        import pyreadstat
-        df, meta = pyreadstat.read_sas7bdat(filepath, usecols=columns)
-        return pl.from_pandas(df)
-    except ImportError:
-        import pandas as pd
-        df = pd.read_sas(filepath, encoding='latin1')
-        if columns:
-            df = df[columns]
-        return pl.from_pandas(df)
+    """Helper function to read SAS7BDAT files into Polars DataFrame using pandas"""
+    import pandas as pd
+    df = pd.read_sas(filepath, encoding='latin1')
+    if columns:
+        df = df[columns]
+    return pl.from_pandas(df)
 
 depo1 = read_sas_to_polars(depo1_file, ["ACCTNO","BRANCH","SECOND","NAME"])
 depo1x = read_sas_to_polars(depo1x_file, ["ACCTNO","BRANCH","SECOND","NAME"])
