@@ -1,130 +1,91 @@
-import polars as pl
-from datetime import datetime
-from pathlib import Path
+DATA REPTDATE;
+  SET DEPOSIT.REPTDATE;
+  SELECT;
+     WHEN( 1<= DAY(REPTDATE)<=  8) CALL SYMPUT('NOWK', PUT('1', $1.));
+     WHEN( 9<= DAY(REPTDATE)<= 15) CALL SYMPUT('NOWK', PUT('2', $1.));
+     WHEN(16<= DAY(REPTDATE)<= 22) CALL SYMPUT('NOWK', PUT('3', $1.));
+     OTHERWISE                     CALL SYMPUT('NOWK', PUT('4', $1.));
+  END;
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('REPTDT',PUT(REPTDATE,8.));
+RUN;
 
-# Base paths
-BASE_INPUT_PATH = Path("Data_Warehouse/MIS/XMIS/Outsource/input")
-BASE_OUTPUT_PATH = Path("Data_Warehouse/MIS/XMIS/output")
-BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+DATA EGOLD;
+   INFILE EGOLD;
+   INPUT  @002 TRXNYY       4.
+          @006 TRXNMM       2.
+          @008 TRXNDD       2.
+          @013 ACCTNO      10.
+          @026 MPURCGM     10.
+          @042 MSALEGM     10.
+          @058 BRANCH       3.
+          @064 MPURCPR     11.6   /* SELLING PRICE */
+          @078 MPURCAMT    14.2
+          @095 MSALEPR     11.6   /* BUYING PRICE */
+          @109 MSALEAMT    14.2;
+   TRXNDATE = MDY(TRXNMM,TRXNDD,TRXNYY);
+   REPTDATE = &REPTDT;
+RUN;
 
-# File paths
-REPTDATE_FILE = BASE_INPUT_PATH / "DEPOSIT_REPTDATE.sas7bdat"
-EGOLD_FILE = BASE_INPUT_PATH / "GOLD_ETRX_20250715.txt"
-OTHER_FILE = BASE_INPUT_PATH / "GOLD_ETRX_OTH_20250715.txt"
-MIS_DATA_PATH = BASE_OUTPUT_PATH / "MIS.sas7bdat"
+DATA EGOLD;
+     SET EGOLD;
+     FORMAT CHANNELIND     $8.;
+     CHANNELIND = 'EBANKING';
+RUN;
 
-# Read REPTDATE from SAS file
-# Note: Polars' read_sas() uses pyreadstat under the hood
-# If you don't have pyreadstat installed, install it: pip install pyreadstat
-REPTDATE_df = pl.read_sas(REPTDATE_FILE)
-REPTDATE_value = REPTDATE_df["REPTDATE"][0]
-REPTDATE = datetime.strptime(str(REPTDATE_value), "%Y-%m-%d")
+DATA OTHER;
+   INFILE OTHER;
+   INPUT  @002 TRXNYY       4.
+          @006 TRXNMM       2.
+          @008 TRXNDD       2.
+          @013 ACCTNO      10.
+          @026 MPURCGM     10.
+          @042 MSALEGM     10.
+          @058 BRANCH      3.
+          @064 MPURCPR     11.6   /* SELLING PRICE */
+          @078 MPURCAMT    14.2
+          @095 MSALEPR     11.6   /* BUYING PRICE */
+          @109 MSALEAMT    14.2
+          @125 TRANCODE     3.
+          @128 CHANNEL     3.;
+   TRXNDATE = MDY(TRXNMM,TRXNDD,TRXNYY);
+   REPTDATE = &REPTDT;
+RUN;
 
-day = REPTDATE.day
-month = REPTDATE.month
-year = REPTDATE.year
+DATA OTHER;
+     SET OTHER;
+     FORMAT CHANNELIND     $8.;
+     CHANNELIND = 'OTHER';
+RUN;
 
-# Determine week number
-if 1 <= day <= 8:
-    NOWK = "1"
-elif 9 <= day <= 15:
-    NOWK = "2"
-elif 16 <= day <= 22:
-    NOWK = "3"
-else:
-    NOWK = "4"
+DATA GOLDTRAN;
+     SET EGOLD OTHER;
+RUN;
 
-REPTYEAR = str(year)[-2:]
-REPTMON = f"{month:02d}"
-REPTDAY = f"{day:02d}"
-REPTDT = REPTDATE.strftime("%Y%m%d")
+%MACRO APPEND;
+%IF "&REPTDAY" EQ "01" OR
+    "&REPTDAY" EQ "09" OR
+    "&REPTDAY" EQ "16" OR
+    "&REPTDAY" EQ "23" %THEN
+    %DO;
+       DATA MIS.GOLDTRAN&REPTMON&NOWK;
+          SET GOLDTRAN;
+       RUN;
+    %END;
+%ELSE %DO;
+       DATA MIS.GOLDTRAN&REPTMON&NOWK;
+          SET MIS.GOLDTRAN&REPTMON&NOWK;
+          IF REPTDATE EQ &REPTDT THEN DELETE;
+       RUN;
+       PROC APPEND DATA=GOLDTRAN
+                   BASE=MIS.GOLDTRAN&REPTMON&NOWK;
+       RUN;
+%END;
+%MEND APPEND;
+%APPEND;
 
-# Read EGOLD text file
-EGOLD = pl.read_csv(
-    EGOLD_FILE,
-    has_header=False,
-    separator="|",  # Adjust delimiter as needed
-    new_columns=[
-        "TRXNYY", "TRXNMM", "TRXNDD", "ACCTNO", "MPURCGM", "MSALEGM", 
-        "BRANCH", "MPURCPR", "MPURCAMT", "MSALEPR", "MSALEAMT"
-    ],
-    schema_overrides={
-        "TRXNYY": pl.Int32,
-        "TRXNMM": pl.Int32,
-        "TRXNDD": pl.Int32
-    }
-)
-
-# Create derived columns for EGOLD
-EGOLD = EGOLD.with_columns([
-    pl.date(pl.col("TRXNYY"), pl.col("TRXNMM"), pl.col("TRXNDD")).alias("TRXNDATE"),
-    pl.lit(REPTDT).alias("REPTDATE"),
-    pl.lit("EBANKING").alias("CHANNELIND")
-])
-
-# Read OTHER text file
-OTHER = pl.read_csv(
-    OTHER_FILE,
-    has_header=False,
-    separator="|",  # Adjust delimiter as needed
-    new_columns=[
-        "TRXNYY", "TRXNMM", "TRXNDD", "ACCTNO", "MPURCGM", "MSALEGM",
-        "BRANCH", "MPURCPR", "MPURCAMT", "MSALEPR", "MSALEAMT", 
-        "TRANCODE", "CHANNEL"
-    ],
-    schema_overrides={
-        "TRXNYY": pl.Int32,
-        "TRXNMM": pl.Int32,
-        "TRXNDD": pl.Int32
-    }
-)
-
-# Create derived columns for OTHER
-OTHER = OTHER.with_columns([
-    pl.date(pl.col("TRXNYY"), pl.col("TRXNMM"), pl.col("TRXNDD")).alias("TRXNDATE"),
-    pl.lit(REPTDT).alias("REPTDATE"),
-    pl.lit("OTHER").alias("CHANNELIND")
-])
-
-# Combine EGOLD and OTHER
-GOLDTRAN = pl.concat([EGOLD, OTHER], how="diagonal")
-
-# Append logic
-target_name = f"MIS_GOLDTRAN{REPTMON}{NOWK}"
-
-if REPTDAY == "01":
-    # Start new dataset
-    MIS_GOLDTRAN = GOLDTRAN
-else:
-    # Load existing MIS data if it exists
-    if MIS_DATA_PATH.exists():
-        MIS_GOLDTRAN = pl.read_sas(MIS_DATA_PATH)
-        # Remove duplicates for same REPTDATE
-        MIS_GOLDTRAN = MIS_GOLDTRAN.filter(pl.col("REPTDATE") != REPTDT)
-        # Append new data
-        MIS_GOLDTRAN = pl.concat([MIS_GOLDTRAN, GOLDTRAN], how="diagonal")
-    else:
-        MIS_GOLDTRAN = GOLDTRAN
-
-# Create Hive partition structure: /year/month/day/
-hive_partition_path = BASE_OUTPUT_PATH / f"year={year}" / f"month={REPTMON}" / f"day={REPTDAY}"
-hive_partition_path.mkdir(parents=True, exist_ok=True)
-
-# Save to Hive partition
-output_file = hive_partition_path / f"{target_name}.parquet"
-MIS_GOLDTRAN.write_parquet(output_file)
-
-# Save TEMP copy in Hive partition
-temp_name = f"TEMP_GOLDTRAN{REPTMON}{NOWK}{REPTYEAR}"
-temp_file = hive_partition_path / f"{temp_name}.parquet"
-MIS_GOLDTRAN.write_parquet(temp_file)
-
-# Export CSV with compression (optional)
-csv_file = hive_partition_path / "TRANFILE.csv.gz"
-MIS_GOLDTRAN.write_csv(csv_file, separator=",")
-
-print(f"Processing complete!")
-print(f"Report Date: {REPTDATE.strftime('%Y-%m-%d')}")
-print(f"Week: {NOWK}")
-print(f"Output saved to: {hive_partition_path}")
-print(f"Records processed: {len(MIS_GOLDTRAN)}")
+DATA TEMP.GOLDTRAN&REPTMON&NOWK&REPTYEAR;
+   SET MIS.GOLDTRAN&REPTMON&NOWK;
+RUN;
