@@ -148,8 +148,8 @@ try:
                      if col not in ['NAME', 'ADDRESS', 'PRIPHONE', 'MOBILENO']]
     status_df = sdbms_pd[status_columns].copy()
     
-    # Save to STATUS path with naming convention: SDB{REPTMON}{NOWK}{REPTYEAR}
-    status_filename = f"SDB{reptmon}{nowk}{reptyear}.parquet"
+    # Save to STATUS path
+    status_filename = "SDB.parquet"
     status_file_path = OUTPUT_DATA_PATH / status_filename
     
     status_table = pa.Table.from_pandas(status_df)
@@ -171,8 +171,8 @@ try:
     r1stat_columns = ['IC', 'NAME', 'ADDRESS', 'PRIPHONE', 'MOBILENO']
     r1stat_df = sdbms_pd[r1stat_columns].copy()
     
-    # Save to R1STAT path with naming convention: R1SDB{REPTMON}{NOWK}{REPTYEAR}
-    r1stat_filename = f"R1SDB{reptmon}{nowk}{reptyear}.parquet"
+    # Save to R1STAT path
+    r1stat_filename = "R1SDB.parquet"
     r1stat_file_path = OUTPUT_DATA_PATH / r1stat_filename
     
     r1stat_table = pa.Table.from_pandas(r1stat_df)
