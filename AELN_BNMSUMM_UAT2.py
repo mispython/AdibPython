@@ -69,3 +69,13 @@ DATA STATUS.SDB&REPTMON&NOWK&REPTYEAR   (DROP=NAME ADDRESS PRIPHONE
      SET SDBMS;
 
 RUN;
+
+
+
+
+
+
+
+
+OUTPUT_DATA_PATH = Path(f"{ELDS_DATA_PATH}/year={REPTDATE.year}/month={REPTDATE.month:02d}/day={REPTDATE.day:02d}")
+OUTPUT_DATA_PATH.mkdir(parents=True, exist_ok=True)
