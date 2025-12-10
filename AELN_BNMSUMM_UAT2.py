@@ -113,15 +113,15 @@ try:
     # Create OPENDT (equivalent to MDY function in SAS)
     if len(sdbms_pd) > 0:
         def create_opendt(row):
-        try:
-            if pd.notna(row['OPENDD']) and pd.notna(row['OPENMM']) and pd.notna(row['OPENYY']):
-                opendd = int(row['OPENDD'])
-                openmm = int(row['OPENMM'])
-                openyy = int(row['OPENYY'])
-                return datetime(openyy, openmm, opendd).date()
-        except:
+            try:
+                if pd.notna(row['OPENDD']) and pd.notna(row['OPENMM']) and pd.notna(row['OPENYY']):
+                    opendd = int(row['OPENDD'])
+                    openmm = int(row['OPENMM'])
+                    openyy = int(row['OPENYY'])
+                    return datetime(openyy, openmm, opendd).date()
+            except:
+                return None
             return None
-        return None
     
             
         sdbms_pd['OPENDT'] = sdbms_pd.apply(create_opendt, axis=1)
