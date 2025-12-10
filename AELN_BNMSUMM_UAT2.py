@@ -1,46 +1,20 @@
-============================================================
-EIBWSDBM - SDBMS File Processor
-============================================================
-Report Date: 2025-12-09 (Week 2)
-Expected SDBMS date (DDMMYY): 091225
-Output Path: /host/mis/parquet/year=2025/month=12/day=09
-✓ SDBMS file date found: 09122025 (comparing as 091225)
-------------------------------------------------------------
-✓ SDBMS file date matches expected date
-→ Executing EIBWSDB1...
-------------------------------------------------------------
-============================================================
-EIBWSDB1 - SDBMS Data Processor
-============================================================
-Report Date: 2025-12-09 (Week 2)
-Output Path: /host/mis/parquet/year=2025/month=12/day=09
-------------------------------------------------------------
-✓ Read 0 records from SDBMS.txt
-✓ Processed dates and created OPENDT field
-
-Sample Records (first 5 rows):
-------------------------------------------------------------
-Empty DataFrame
-Columns: [BRANCH, NAME, IC, NATIONALITY, BOXNO, HIRERTY, ADDRESS, ACCTHOLDER, ACCTNO, PRIPHONE, MOBILENO, MTHOVERDUE1, MTHOVERDUE2, MTHOVERDUE3, TOTALOVERDUE, OPENDT, RENTALDATE, LASTRENTPAY]
-Index: []
-------------------------------------------------------------
-
-✓ STATUS dataset saved: SDB.parquet
-  Location: /host/mis/parquet/year=2025/month=12/day=09/SDB.parquet
-  Records: 0
-  Columns: 14
-
-✓ R1STAT dataset saved: R1SDB.parquet
-  Location: /host/mis/parquet/year=2025/month=12/day=09/R1SDB.parquet
-  Records: 0
-  Columns: 5
-
-============================================================
-✓ EIBWSDB1 processing completed successfully
-============================================================
-
-------------------------------------------------------------
-✓ EIBWSDB1 executed successfully
-============================================================
-✓ Processing completed successfully
-============================================================
+09122025                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+002 DAVID JAMES                                        00003                MY 00087      P BLOCK C 3-12F JALAN KENANGA SRI SARAWAK FLATS 55200 KL                                                                                                                                                                                                     N                      0321111111           0182154113           08042004 08042009 00000000 0 0 1 1 Hired                                                    
+002 DAVID JAMES                                        00003                MY 01968      P STARHILL DAAMAN SARA                                                                                                                                                                                                                                       N                      0321111111           0182154113           31012025 31012027 00000000 0 0 0 0 Hired                                                    
+002 DAVID JAMES                                        00003                MY 05017      P 3 PERSIARAN 12 47000 PUCHONG SELANGOR                                                                                                                                                                                                                      N                      0321111111           0182154113           10032020 31082024 00000000 0 0 1 1 Hired                                                    
+002 DAVID JAMES                                        00003                MY 50001      P NO 2, JLN LAZAT 2 TMN BANDARAYA 58200 KUALA LUMPUR                                                                                                                                                                                                         N 4993220706           0321111111           0182154113           31082016 20092024 00000000 0 0 1 1 Hired                                                    
+704 NG ZHI YONG                                        000505012022         MY 20004      P NO 1 JLN DUA TMN TIGA 43000 KAJANG SELANGOR                                                                                                                                                                                                                Y 3099178005           01263236411          01162123664          27062020 05072022 00000000 0 0 1 1 Hired                                                    
+168 JESPER SIOW SVENSON                                031111080605         MY 01001      P 123 JALAN AMPANG 50450 KUALA LUMPUR                                                                                                                                                                                                                        Y                      60323485249          0123568555           14012021 16122025 00000000 0 0 0 0 Hired                                                    
+002 FATEHAH INARA MOHD FIRDAUS                         050726087442         MY 13336      P NO 1 JALAN DUA TAMAN TIGA 43000 KAJANG SELANGOR MALAYSIA                                                                                                                                                                                                   Y 5000382821           0124406657           0124406657           23092024 05052026 00000000 0 0 0 0 Hired                                                    
+002 PERSATUAN MALIM GUNUNG                             104070G              MY 01878      P NO 11 JLN 22 TMN JAYA 40400 SHAH ALAM SELANGOR                                                                                                                                                                                                             Y                      0352416377                                14072015 01042016 00000000 0 0 1 1 Hired                                                    
+002 HMJ CALIPH SDN. BHD.                               1042625V             MY 05010      P 34, JALAN BUAYA LAVENDER HEIGHT 70200 SEREMBAN NEGERI SEMBILAN                                                                                                                                                                                             Y                      0195427709           0195427709           21072021 21072022 00000000 0 0 1 1 Hired                                                    
+702 HMJ CALIPH SDN. BHD.                               1042625V             MY 00120      P PUBLIC BANK UAT TEST 43000 KAJANG                                                                                                                                                                                                                          Y 5000441903           01262123466                               01082023 31082025 00000000 0 1 0 1 Hired                                                    
+704 HMJ CALIPH SDN. BHD.                               1042625V             MY 10002      P 1 JALAN AIR HITAM BANDAR BARU BANGI 43000 KAJANG SELANGOR MALAYSIA                                                                                                                                                                                         N                      01262123466                               04062024 04062025 00000000 0 1 0 1 Hired                                                    
+002 AAAYYY SDN BHD                                     1111111Z             MY 05015      P 17 JALAN DRIVE 50000 KUALA LUMPUR W.P. KUALA LUMPUR                                                                                                                                                                                                        N                      0321111111                                10032020 10032021 00000000 0 0 1 1 Hired                                                    
+002 AAAYYY SDN BHD                                     1111111Z             MY 13093      P 166 JLN DESA BAKTI TMN DESA JLN KLANG LAMA 58100 KUALA LUMPUR                                                                                                                                                                                              N                      0321111111                                09071979 26042023 00000000 0 0 1 1 Hired                                                    
+002 C2C SDN BHD                                        1112223M             MY 05012      P 123 & 125 JALAN CEPAT 47000 PUCHONG SELANGOR                                                                                                                                                                                                               Y                      0321766000                                18052022 18052023 00000000 0 0 1 1 Hired                                                    
+168 FOREX CAPITAL MARKETS PTY LTD                      1167755D             MY 01011      P 123 TESTING TESTING                                                                                                                                                                                                                                        Y                      0389468293                                09032021 07072025 00000000 0 1 0 1 Terminated           20082025                            
+002 NEW LAW FIRM                                       123456789123         MY 13054      P 1 JALAN AIR HITAM 43000 BANGI SELANGOR                                                                                                                                                                                                                     N                      0321766000                                18052022 18052023 00000000 0 0 1 1 Hired                                                    
+002 SYARIKAT SDB SDN BHD                               123456L              MY 01971      P 98 LORONG GELAP 2 50000 KUALA LUMPUR W.P.KUALA LUMPUR                                                                                                                                                                                                      Y                      0182154113                                10092019 04032021 00000000 0 0 1 1 Hired                                                    
+002 NEW FASHION                                        1239874X             MY 01969      P 1 JALAN AIR HITAM BANDAR BARU BANGI 43000 KAJANG SELANGOR                                                                                                                                                                                                  Y                      0195708177           0195708177           04082023 01082025 00000000 0 1 0 1 Hired                                                    
+002 NEW FASHION                                        1239874X             MY 13312      P 51 JALAN LIPAT 3 47000 PUCHONG SELANGOR                                                                                                                                                                                                                    Y                      0195708177           0195708177           06092021 06092022 00000000 0 0 1 1 Hired                                                    
