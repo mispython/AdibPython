@@ -43,7 +43,6 @@ def assign_libname(lib_name, sas_path):
 
 def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
     sas.df2sd(df, table=cur_data, libref='work')
-    
     log = sas.submit(f"""
             proc sql noprint;
                create table colmeta as 
@@ -54,6 +53,7 @@ def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
             quit;
                """)
     
+    print(log["LOG"])
     df_meta = sas.sasdata("colmeta", libref="work").to_df()
     cols = df_meta["name"].dropna().tolist()
     col_list = ", ".join(cols)
@@ -61,13 +61,9 @@ def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
     
     for _, row in df_meta.iterrows():
         col = row["name"]
-        col_type = row['type'].strip().lower()
         length = row['length']
-        
-        if col_type == 'char' and pd.notnull(length) and length > 0:
-            casted_cols.append(f"substr(coalescec({col}, ''), 1, {int(length)}) as {col}")
-        elif col_type == 'num':
-            casted_cols.append(col)
+        if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
+            casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
         else:
             casted_cols.append(col)
     
@@ -75,25 +71,16 @@ def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
     
     log = sas.submit(f"""
                 proc sql noprint;
-                     create table work.{cur_data}_transformed as
-                     select {casted_cols} from work.{cur_data};
-                quit;
-                """)
-    
-    log = sas.submit(f"""
-                proc sql noprint;
                      create table {lib_name}.{cur_data} as
                      select {col_list} from {ctrl_name}.{prev_data}
                      union all corr
-                     select {col_list} from work.{cur_data}_transformed;
+                     select {casted_cols} from work.{cur_data};
                 quit;
                 """)
-    
+    print(f"Final table created: {log['LOG']}") 
     return log
 
 assign_libname("bt", sas_path)
 assign_libname("ctl", "/stgsrcsys/host/uat")
 
 log1 = set_data(pq_bill, "bt", "ctl", output_file, billstran_ctl)
-
-print("Process completed successfully!")
