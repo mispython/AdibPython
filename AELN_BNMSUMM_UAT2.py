@@ -1,208 +1,86 @@
-import polars as pl
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import duckdb
-import datetime as dt
-import os
+import saspy
+import sys
+from datetime import datetime,timedelta
 
-# -------------------------
-# CONFIG / PATHS
-# -------------------------
-depo1_file = "/sasdata/SAP.PBB.MNITB.DAILY.sas7bdat"
-depo1x_file = "/sasdata/SAP.PIBB.MNITB.DAILY.sas7bdat"
-depo2_file = "/sasdata/SAP.PBB.MNIFD.DAILY.sas7bdat"
-depo2x_file = "/sasdata/SAP.PIBB.MNIFD.DAILY.sas7bdat"
+batch_dt = datetime.today() - timedelta(days=1)
+batch_dt_str = batch_dt.strftime("%Y%m%d")
+output_file_name = 'billstran'
+month_str = f"{batch_dt.month:02d}"
+year_str = f"{batch_dt.year % 100:02d}"
+day_str = f"{batch_dt.day:02d}"
 
-# Base output directory for Hive partitioning
-output_base = "/sasdata/output"
+BATCH_MODE = 'D'
+print("BATCH MODE = ", BATCH_MODE)
 
-# -------------------------
-# STEP 1: REPTDATE
-# -------------------------
-# Read date from SAS file using pandas
-import pandas as pd
-reptdate_df = pd.read_sas(depo1_file, encoding='latin1').head(1)[["TBDATE"]]
-tbd = reptdate_df["TBDATE"].iloc[0]
+if BATCH_MODE == 'M':
+    print("Monthly")
+    sas_path    = "/dwh/btrade"
+    output_file = f"billstran{month_str}4{year_str}"
+    bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_M.parquet')
+    pq_bill = bill_table.to_pandas()
+elif BATCH_MODE == 'D':
+    print("Daily")
+    sas_path    = "/dwh/btrade_d'"
+    output_file = f"billstran_{day_str}"
+    bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet')
+    pq_bill = bill_table.to_pandas()
 
-print(f"Raw TBDATE value: {tbd} (type: {type(tbd).__name__})")
+pq_bill["TRANDATE"] = pq_bill["TRANDATE"].astype(int)
+pq_bill["EXPRDATE"] = pq_bill["EXPRDATE"].astype(int)
 
-# Handle different date formats from SAS
-if isinstance(tbd, (pd.Timestamp, dt.datetime, dt.date)):
-    # Already a datetime object
-    reptdate = pd.to_datetime(tbd)
-elif isinstance(tbd, (int, float)):
-    tbd_str = str(int(tbd))
+# Initialize SAS session
+sas = saspy.SASsession()
+
+billstran_ctl    = "billstran_ctl"
+
+def assign_libname(lib_name, sas_path):
+    log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
+    return log
+
+def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
+    sas.df2sd(df,table=cur_data, libref='work')
+
+    log = sas.submit(f"""
+            proc sql noprint;
+               create table colmeta as 
+               select name, type, length
+               from dictionary.columns
+               where libname = upcase("{ctrl_name}")  
+                     and memname = upcase("{prev_data}");
+            quit
+               """)
     
-    # Check for DDMMYYYYXXX format (date + extra digits)
-    if len(tbd_str) >= 8:
-        # Try DDMMYYYY format (first 8 digits)
-        date_part = tbd_str[:8]
-        try:
-            reptdate = dt.datetime.strptime(date_part, "%d%m%Y")
-        except ValueError:
-            # Try YYYYMMDD format
-            try:
-                reptdate = dt.datetime.strptime(date_part, "%Y%m%d")
-            except ValueError:
-                # Fall back to SAS date (days since 1960-01-01)
-                # Only use reasonable date values
-                if int(tbd_str[:6]) < 100000:
-                    sas_epoch = dt.datetime(1960, 1, 1)
-                    reptdate = sas_epoch + dt.timedelta(days=int(tbd_str[:6]))
-                else:
-                    raise ValueError(f"Unable to parse date from: {tbd}")
-    else:
-        # SAS date format (days since 1960-01-01)
-        sas_epoch = dt.datetime(1960, 1, 1)
-        reptdate = sas_epoch + dt.timedelta(days=int(tbd))
-else:
-    # String format
-    tbd_str = str(tbd).replace('-', '').replace('/', '').replace(' ', '')
-    if len(tbd_str) >= 8:
-        reptdate = dt.datetime.strptime(tbd_str[:8], "%d%m%Y")
+    print(log["LOG"])
+    df_meta = sas.sasdata("colmeta", libref="work").to_df()
+    cols = df_meta["name"].dropna().tolist()
+    col_list = ", ".join(cols)
 
-REPTYEAR = reptdate.strftime("%Y")
-REPTMON = reptdate.strftime("%m")
-REPTDAY = reptdate.strftime("%d")
-REPDT = reptdate.strftime("%d%b%Y").upper()  # e.g. 11SEP2025
+    casted_cols =[]
+    for _, row in df_meta.iterrows():
+        col = row["name"]
+        length = row['length']
+        if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
+            casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
+        else:
+            casted_cols.append(col)
 
-print("Report Date:", REPDT)
-print(f"Partitions: year={REPTYEAR}/month={REPTMON}/day={REPTDAY}")
+    casted_cols = ",\n ".join(casted_cols)
 
-# -------------------------
-# STEP 2: DEPO1 - Read SAS files
-# -------------------------
-def read_sas_to_polars(filepath, columns=None):
-    """Helper function to read SAS7BDAT files into Polars DataFrame using pandas"""
-    import pandas as pd
-    df = pd.read_sas(filepath, encoding='latin1')
-    if columns:
-        df = df[columns]
-    return pl.from_pandas(df)
+    log = sas.submit(f"""
+                proc sql noprint;
+                     create table {lib_name}.{cur_data} as
+                     select {col_list} from {ctrl_name}.{prev_data}
+                     union corr
+                     select {casted_cols} from work.{cur_data};
+                quit;
+                """)
+    print(f"Final table created : {log['LOG']}") 
+    return log
 
-depo1 = read_sas_to_polars(depo1_file, ["ACCTNO","BRANCH","SECOND","NAME"])
-depo1x = read_sas_to_polars(depo1x_file, ["ACCTNO","BRANCH","SECOND","NAME"])
-depo1 = pl.concat([depo1, depo1x])
+assign_libname("bt" , sas_path)
+assign_libname("ctl", "/stgsrcsys/host/uat")
 
-depo1 = depo1.filter(pl.col("SECOND").is_in([99991, 99992]))
-depo1 = depo1.with_columns([
-    pl.when(pl.col("SECOND")==99991).then("PBB")
-     .when(pl.col("SECOND")==99992).then("PIBB")
-     .otherwise(None).alias("SECOND2")
-])
-depo1 = depo1.select(["ACCTNO","BRANCH","SECOND2","NAME"]).sort(["ACCTNO","BRANCH"])
-
-# -------------------------
-# STEP 3: DEPO2
-# -------------------------
-depo2 = read_sas_to_polars(depo2_file, ["ACCTNO","BRANCH","CDNO","MATDATE","TERM","RATE","CURBAL"])
-depo2x = read_sas_to_polars(depo2x_file, ["ACCTNO","BRANCH","CDNO","MATDATE","TERM","RATE","CURBAL"])
-depo2 = pl.concat([depo2, depo2x])
-
-depo2 = depo2.filter(pl.col("CURBAL")>0).sort(["ACCTNO","BRANCH"])
-
-# -------------------------
-# STEP 4: MERGE
-# -------------------------
-all_df = depo1.join(depo2, on=["ACCTNO","BRANCH"], how="inner").sort("MATDATE")
-
-# -------------------------
-# STEP 5: SPLIT FD vs FCYFD
-# -------------------------
-cond = (
-    ((pl.col("ACCTNO")>=1590000000)&(pl.col("ACCTNO")<=1599999999)) |
-    ((pl.col("ACCTNO")>=1689999999)&(pl.col("ACCTNO")<=1699999999)) |
-    ((pl.col("ACCTNO")>=1789999999)&(pl.col("ACCTNO")<=1799999999))
-)
-fcyfd = all_df.filter(cond)
-fd = all_df.filter(~cond)
-
-# -------------------------
-# STEP 6: CREATE HIVE PARTITION DIRECTORIES
-# -------------------------
-def get_hive_path(base_dir, filename, year, month, day):
-    """Create Hive partition path: base/year=YYYY/month=MM/day=DD/filename.parquet"""
-    partition_path = os.path.join(
-        base_dir, 
-        f"year={year}", 
-        f"month={month}", 
-        f"day={day}"
-    )
-    os.makedirs(partition_path, exist_ok=True)
-    return os.path.join(partition_path, filename)
-
-# -------------------------
-# STEP 7: OUTPUT FD → HIVE PARTITIONED PARQUET
-# -------------------------
-fd_parquet_path = get_hive_path(output_base, "fd_maturity.parquet", REPTYEAR, REPTMON, REPTDAY)
-fd_csv_path = get_hive_path(output_base, "fd_maturity.csv", REPTYEAR, REPTMON, REPTDAY)
-
-# Write CSV with header
-fd_header = [
-    f"DAILY RM FD MATURITY HQ AS AT {REPDT}",
-    "BRANCH,PBB/PIBB,NAME,ACCTNO,PRINCIPAL AM(RM),CDNO,MATDATE,PREVIOUS RATE(% P.A),PREVIOUS TERM (MONTH)"
-]
-with open(fd_csv_path, "w") as f:
-    for line in fd_header:
-        f.write(line + "\n")
-fd.write_csv(fd_csv_path, include_header=False, separator=",", append=True)
-
-# Write Parquet
-fd.write_parquet(fd_parquet_path)
-
-# -------------------------
-# STEP 8: OUTPUT FCYFD → HIVE PARTITIONED PARQUET
-# -------------------------
-fcyfd_parquet_path = get_hive_path(output_base, "fcyfd_maturity.parquet", REPTYEAR, REPTMON, REPTDAY)
-fcyfd_csv_path = get_hive_path(output_base, "fcyfd_maturity.csv", REPTYEAR, REPTMON, REPTDAY)
-
-# Write CSV with header
-fcyfd_header = [
-    f"DAILY FCYFD MATURITY HQ AS AT {REPDT}",
-    "BRANCH,PBB/PIBB,NAME,ACCTNO,PRINCIPAL AM(RM),CDNO,MATDATE,PREVIOUS RATE(% P.A),PREVIOUS TERM (MONTH)"
-]
-with open(fcyfd_csv_path, "w") as f:
-    for line in fcyfd_header:
-        f.write(line + "\n")
-fcyfd.write_csv(fcyfd_csv_path, include_header=False, separator=",", append=True)
-
-# Write Parquet
-fcyfd.write_parquet(fcyfd_parquet_path)
-
-# -------------------------
-# STEP 9: ARROW FORMAT (Optional)
-# -------------------------
-arrow_fd = fd.to_arrow()
-arrow_fcyfd = fcyfd.to_arrow()
-
-fd_arrow_path = get_hive_path(output_base, "fd_maturity_arrow.parquet", REPTYEAR, REPTMON, REPTDAY)
-fcyfd_arrow_path = get_hive_path(output_base, "fcyfd_maturity_arrow.parquet", REPTYEAR, REPTMON, REPTDAY)
-
-pq.write_table(arrow_fd, fd_arrow_path)
-pq.write_table(arrow_fcyfd, fcyfd_arrow_path)
-
-# -------------------------
-# STEP 10: DUCKDB VALIDATION
-# -------------------------
-con = duckdb.connect()
-con.register("fd", arrow_fd)
-con.register("fcyfd", arrow_fcyfd)
-
-print("\n" + "="*60)
-print("VALIDATION RESULTS")
-print("="*60)
-print(f"FD count: {con.execute('SELECT COUNT(*) FROM fd').fetchall()[0][0]}")
-print(f"FCYFD count: {con.execute('SELECT COUNT(*) FROM fcyfd').fetchall()[0][0]}")
-print("\nSample FD records:")
-print(con.execute("SELECT * FROM fd LIMIT 5").fetchdf())
-print("\nSample FCYFD records:")
-print(con.execute("SELECT * FROM fcyfd LIMIT 5").fetchdf())
-
-print("\n" + "="*60)
-print("OUTPUT FILES CREATED")
-print("="*60)
-print(f"FD Parquet: {fd_parquet_path}")
-print(f"FD CSV: {fd_csv_path}")
-print(f"FCYFD Parquet: {fcyfd_parquet_path}")
-print(f"FCYFD CSV: {fcyfd_csv_path}")
-print("="*60)
+log1 = set_data(pq_bill, "bt", "ctl", output_file , billstran_ctl)
