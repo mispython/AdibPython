@@ -28,8 +28,16 @@ elif BATCH_MODE == 'D':
     bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet')
     pq_bill = bill_table.to_pandas()
 
-pq_bill["TRANDATE"] = pq_bill["TRANDATE"].astype(int)
-pq_bill["EXPRDATE"] = pq_bill["EXPRDATE"].astype(int)
+def yyyymmdd_to_sas_date(date_val):
+    if pd.isna(date_val) or date_val == 0:
+        return None
+    date_str = str(int(date_val))
+    date_obj = pd.to_datetime(date_str, format='%Y%m%d')
+    sas_epoch = pd.Timestamp('1960-01-01')
+    return (date_obj - sas_epoch).days
+
+pq_bill["TRANDATE"] = pq_bill["TRANDATE"].apply(yyyymmdd_to_sas_date)
+pq_bill["EXPRDATE"] = pq_bill["EXPRDATE"].apply(yyyymmdd_to_sas_date)
 
 for col in pq_bill.select_dtypes(include=['object']).columns:
     pq_bill[col] = pq_bill[col].fillna('')
