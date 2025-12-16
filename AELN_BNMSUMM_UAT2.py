@@ -1,89 +1,99 @@
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-import saspy
-import sys
-from datetime import datetime, timedelta
+BATCH MODE =  D
+Daily
+Using SAS Config named: default
+SAS Connection established. Subprocess id is 469290
 
-batch_dt = datetime.today() - timedelta(days=1)
-batch_dt_str = batch_dt.strftime("%Y%m%d")
-output_file_name = 'billstran'
-month_str = f"{batch_dt.month:02d}"
-year_str = f"{batch_dt.year % 100:02d}"
-day_str = f"{batch_dt.day:02d}"
-BATCH_MODE = 'D'
+Libname assignment for bt: 
+21   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+21 ! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+22   
+23   libname bt '/dwh/btrade_d';
+NOTE: Libref BT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /dwh/btrade_d
+24   
+25   ods html5 (id=saspy_internal) close;ods listing;
 
-print("BATCH MODE = ", BATCH_MODE)
+Libname assignment for ctl: 
+27   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+27 ! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+28   
+29   libname ctl '/stgsrcsys/host/uat';
+NOTE: Libref CTL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /stgsrcsys/host/uat
+30   
+31   ods html5 (id=saspy_internal) close;ods listing;
 
-if BATCH_MODE == 'M':
-    print("Monthly")
-    sas_path = "/dwh/btrade"
-    output_file = f"billstran{month_str}4{year_str}"
-    bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_M.parquet')
-    pq_bill = bill_table.to_pandas()
-elif BATCH_MODE == 'D':
-    print("Daily")
-    sas_path = "/dwh/btrade_d"  # FIXED: Removed extra quote
-    output_file = f"billstran_{day_str}"
-    bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet')
-    pq_bill = bill_table.to_pandas()
 
-pq_bill["TRANDATE"] = pq_bill["TRANDATE"].astype(int)
-pq_bill["EXPRDATE"] = pq_bill["EXPRDATE"].astype(int)
+132  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+132! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+133  
+134  
+135              proc sql noprint;
+136                 create table colmeta as
+137                 select name, type, length
+138                 from dictionary.columns
+139                 where libname = upcase("ctl")
+140                       and memname = upcase("billstran_ctl");
+NOTE: Table WORK.COLMETA created, with 22 rows and 3 columns.
 
-# Initialize SAS session
-sas = saspy.SASsession()
-billstran_ctl = "billstran_ctl"
+141              quit;
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+142  
+143  
+144  ods html5 (id=saspy_internal) close;ods listing;
 
-def assign_libname(lib_name, sas_path):
-    log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
-    print(f"Libname assignment for {lib_name}: {log['LOG']}")  # Added logging
-    return log
+Final table created: 
+209  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+209! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+210  
+211  
+212                  proc sql noprint;
+213                       create table bt.billstran_15 as
+214                       select RECTYPE, TRANSREF, COSTCTR, ACCTNO, SUBACCT, GLMNEMONIC, LIABCODE, TRANDATE, EXPRDATE, TRANAMT,
+214! EXCHANGE, CURRENCY, BTREL, RELFROM, TRANSREFPG, TRANAMT_CCY, TRANS_NUM, TRANS_IND, MNEMONIC_CD, ACCT_INFO, CR_DR_IND,
+214! VOUCHER_NUM from ctl.billstran_ctl
+215                       union corr
+216                       select input(trim(RECTYPE), $2.) as RECTYPE,
+217   input(trim(TRANSREF), $10.) as TRANSREF,
+218   COSTCTR,
+219   input(trim(ACCTNO), $15.) as ACCTNO,
+220   input(trim(SUBACCT), $13.) as SUBACCT,
+221   input(trim(GLMNEMONIC), $5.) as GLMNEMONIC,
+222   input(trim(LIABCODE), $3.) as LIABCODE,
+223   TRANDATE,
+224   EXPRDATE,
+225   TRANAMT,
+226   EXCHANGE,
+227   input(trim(CURRENCY), $4.) as CURRENCY,
+228   input(trim(BTREL), $13.) as BTREL,
+229   input(trim(RELFROM), $13.) as RELFROM,
+230   input(trim(TRANSREFPG), $10.) as TRANSREFPG,
+231   TRANAMT_CCY,
+232   input(trim(TRANS_NUM), $10.) as TRANS_NUM,
+233   input(trim(TRANS_IND), $3.) as TRANS_IND,
+234   input(trim(MNEMONIC_CD), $5.) as MNEMONIC_CD,
+235   input(trim(ACCT_INFO), $20.) as ACCT_INFO,
+236   input(trim(CR_DR_IND), $1.) as CR_DR_IND,
+237   input(trim(VOUCHER_NUM), $10.) as VOUCHER_NUM from work.billstran_15;
+NOTE: Table BT.BILLSTRAN_15 created, with 7618 rows and 22 columns.
 
-def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
-    sas.df2sd(df, table=cur_data, libref='work')
-    log = sas.submit(f"""
-            proc sql noprint;
-               create table colmeta as 
-               select name, type, length
-               from dictionary.columns
-               where libname = upcase("{ctrl_name}")  
-                     and memname = upcase("{prev_data}");
-            quit;
-               """)
-    
-    print(log["LOG"])
-    df_meta = sas.sasdata("colmeta", libref="work").to_df()
-    cols = df_meta["name"].dropna().tolist()
-    col_list = ", ".join(cols)
-    casted_cols = []
-    
-    for _, row in df_meta.iterrows():
-        col = row["name"]
-        length = row['length']
-        if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
-            casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
-        else:
-            casted_cols.append(col)
-    
-    casted_cols = ",\n ".join(casted_cols)
-    
-    log = sas.submit(f"""
-                proc sql noprint;
-                     create table {lib_name}.{cur_data} as
-                     select {col_list} from {ctrl_name}.{prev_data}
-                     union corr
-                     select {casted_cols} from work.{cur_data};
-                quit;
-                """)
-    print(f"Final table created: {log['LOG']}") 
-    return log
+238                  quit;
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.09 seconds
+      cpu time            0.03 seconds
+      
+239  
+240  
+241  ods html5 (id=saspy_internal) close;ods listing;
 
-# Assign libnames
-assign_libname("bt", sas_path)
-assign_libname("ctl", "/stgsrcsys/host/uat")
-
-# Set data
-log1 = set_data(pq_bill, "bt", "ctl", output_file, billstran_ctl)
-
-print("Process completed successfully!")
+Process completed successfully!
+SAS Connection terminated. Subprocess id was 469290
