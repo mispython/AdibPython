@@ -1,75 +1,129 @@
-BATCH MODE =  D
-Today's date: 2025-12-17 10:21:48.266991
-Batch date: 2025-12-16 10:21:48.266930
-Day string: 16
-Daily
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 612966
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import saspy
+import sys
+from datetime import datetime, timedelta
+import numpy as np
 
+batch_dt = datetime.today() - timedelta(days=1)
+batch_dt_str = batch_dt.strftime("%Y%m%d")
+output_file_name = 'billstran'
+month_str = f"{batch_dt.month:02d}"
+year_str = f"{batch_dt.year % 100:02d}"
+day_str = f"{batch_dt.day:02d}"
+BATCH_MODE = 'D'
 
-132  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
-132! graphics on / outputfmt=png;
-NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
-133  
-134  
-135              proc sql noprint;
-136                 create table colmeta as
-137                 select name, type, length
-138                 from dictionary.columns
-139                 where libname = upcase("ctl")
-140                       and memname = upcase("billstran_ctl");
-NOTE: Table WORK.COLMETA created, with 22 rows and 3 columns.
+print("BATCH MODE = ", BATCH_MODE)
 
-141              quit;
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.01 seconds
-      cpu time            0.01 seconds
-      
-142  
-143  
-144  ods html5 (id=saspy_internal) close;ods listing;
+if BATCH_MODE == 'M':
+    print("Monthly")
+    sas_path = "/dwh/btrade"
+    output_file = f"billstran{month_str}4{year_str}"
+    bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_M.parquet')
+    pq_bill = bill_table.to_pandas()
+elif BATCH_MODE == 'D':
+    print("Daily")
+    sas_path = "/dwh/btrade_d"
+    output_file = f"billstran_{day_str}"
+    bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet')
+    pq_bill = bill_table.to_pandas()
 
-Final table created: 
-209  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
-209! graphics on / outputfmt=png;
-NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
-210  
-211  
-212                  proc sql noprint;
-213                       create table bt.billstran_16 as
-214                       select RECTYPE, TRANSREF, COSTCTR, ACCTNO, SUBACCT, GLMNEMONIC, LIABCODE, TRANDATE, EXPRDATE, TRANAMT,
-214! EXCHANGE, CURRENCY, BTREL, RELFROM, TRANSREFPG, TRANAMT_CCY, TRANS_NUM, TRANS_IND, MNEMONIC_CD, ACCT_INFO, CR_DR_IND,
-214! VOUCHER_NUM from ctl.billstran_ctl
-215                       union all corr
-216                       select input(trim(RECTYPE), $2.) as RECTYPE,
-217   input(trim(TRANSREF), $10.) as TRANSREF,
-218   COSTCTR,
-219   input(trim(ACCTNO), $15.) as ACCTNO,
-220   input(trim(SUBACCT), $13.) as SUBACCT,
-221   input(trim(GLMNEMONIC), $5.) as GLMNEMONIC,
-222   input(trim(LIABCODE), $3.) as LIABCODE,
-223   TRANDATE,
-224   EXPRDATE,
-225   TRANAMT,
-226   EXCHANGE,
-227   input(trim(CURRENCY), $4.) as CURRENCY,
-228   input(trim(BTREL), $13.) as BTREL,
-229   input(trim(RELFROM), $13.) as RELFROM,
-230   input(trim(TRANSREFPG), $10.) as TRANSREFPG,
-231   TRANAMT_CCY,
-232   input(trim(TRANS_NUM), $10.) as TRANS_NUM,
-233   input(trim(TRANS_IND), $3.) as TRANS_IND,
-234   input(trim(MNEMONIC_CD), $5.) as MNEMONIC_CD,
-235   input(trim(ACCT_INFO), $20.) as ACCT_INFO,
-236   input(trim(CR_DR_IND), $1.) as CR_DR_IND,
-237   input(trim(VOUCHER_NUM), $10.) as VOUCHER_NUM from work.billstran_16;
-NOTE: Table BT.BILLSTRAN_16 created, with 7885 rows and 22 columns.
+def convert_yyyymmdd_to_sas_date(date_series):
+    """Convert YYYYMMDD format to SAS date"""
+    result = pd.Series([np.nan] * len(date_series), dtype='float64')
+    
+    for idx, val in date_series.items():
+        if pd.isna(val) or val == 0:
+            result[idx] = np.nan
+        else:
+            try:
+                date_str = str(int(val))
+                if len(date_str) == 8:
+                    date_obj = pd.to_datetime(date_str, format='%Y%m%d')
+                    sas_epoch = pd.Timestamp('1960-01-01')
+                    result[idx] = (date_obj - sas_epoch).days
+                else:
+                    result[idx] = np.nan
+            except:
+                result[idx] = np.nan
+    
+    return result
 
-238                  quit;
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.02 seconds
-      cpu time            0.01 seconds
-      
-239  
-240  
-241  ods html5 (id=saspy_internal) close;ods listing;
+def convert_yymmdd_to_sas_date(date_series):
+    """Convert YYMMDD format to SAS date (assumes 20xx for YY)"""
+    result = pd.Series([np.nan] * len(date_series), dtype='float64')
+    
+    for idx, val in date_series.items():
+        if pd.isna(val) or val == 0:
+            result[idx] = np.nan
+        else:
+            try:
+                date_str = str(int(val)).zfill(6)
+                if len(date_str) == 6:
+                    # Add century: assume 20xx
+                    full_date_str = '20' + date_str
+                    date_obj = pd.to_datetime(full_date_str, format='%Y%m%d')
+                    sas_epoch = pd.Timestamp('1960-01-01')
+                    result[idx] = (date_obj - sas_epoch).days
+                else:
+                    result[idx] = np.nan
+            except:
+                result[idx] = np.nan
+    
+    return result
+
+pq_bill["TRANDATE"] = convert_yyyymmdd_to_sas_date(pq_bill["TRANDATE"])
+pq_bill["EXPRDATE"] = convert_yymmdd_to_sas_date(pq_bill["EXPRDATE"])
+
+for col in pq_bill.select_dtypes(include=['object']).columns:
+    pq_bill[col] = pq_bill[col].fillna('')
+
+sas = saspy.SASsession()
+billstran_ctl = "billstran_ctl"
+
+def assign_libname(lib_name, sas_path):
+    log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
+    return log
+
+def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
+    sas.df2sd(df, table=cur_data, libref='work')
+    log = sas.submit(f"""
+            proc sql noprint;
+               create table colmeta as 
+               select name, type, length
+               from dictionary.columns
+               where libname = upcase("{ctrl_name}")  
+                     and memname = upcase("{prev_data}");
+            quit;
+               """)
+    
+    df_meta = sas.sasdata("colmeta", libref="work").to_df()
+    cols = df_meta["name"].dropna().tolist()
+    col_list = ", ".join(cols)
+    casted_cols = []
+    
+    for _, row in df_meta.iterrows():
+        col = row["name"]
+        length = row['length']
+        if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
+            casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
+        else:
+            casted_cols.append(col)
+    
+    casted_cols = ",\n ".join(casted_cols)
+    
+    log = sas.submit(f"""
+                proc sql noprint;
+                     create table {lib_name}.{cur_data} as
+                     select {col_list} from {ctrl_name}.{prev_data}
+                     union all corr
+                     select {casted_cols} from work.{cur_data};
+                quit;
+                """)
+    return log
+
+assign_libname("bt", sas_path)
+assign_libname("ctl", "/stgsrcsys/host/uat")
+
+log1 = set_data(pq_bill, "bt", "ctl", output_file, billstran_ctl)
