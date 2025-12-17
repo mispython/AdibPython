@@ -6,13 +6,13 @@ import sys
 from datetime import datetime, timedelta
 import numpy as np
 
-batch_dt = datetime.today() - timedelta(days=1)
+batch_dt = datetime.today() - timedelta(days=20)
 batch_dt_str = batch_dt.strftime("%Y%m%d")
 output_file_name = 'billstran'
 month_str = f"{batch_dt.month:02d}"
 year_str = f"{batch_dt.year % 100:02d}"
 day_str = f"{batch_dt.day:02d}"
-BATCH_MODE = 'D'
+BATCH_MODE = 'M'
 
 print("BATCH MODE = ", BATCH_MODE)
 
@@ -28,6 +28,7 @@ elif BATCH_MODE == 'D':
     output_file = f"billstran_{day_str}"
     bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet')
     pq_bill = bill_table.to_pandas()
+
 
 def convert_to_sas_date_series(date_series):
     """Convert a pandas series of YYYYMMDD dates to SAS dates"""
