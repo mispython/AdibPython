@@ -29,31 +29,53 @@ elif BATCH_MODE == 'D':
     bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet')
     pq_bill = bill_table.to_pandas()
 
-
-def convert_to_sas_date_series(date_series):
-    """Convert a pandas series of YYYYMMDD dates to SAS dates"""
-    # Convert to string, handling NaN and invalid values
-    date_str_series = date_series.astype(str).str.strip()
-    
-    # Create mask for valid 8-digit dates
-    valid_mask = date_str_series.str.match(r'^\d{8}$') & (date_str_series != '00000000')
-    
-    # Initialize result with NaN
+def convert_yyyymmdd_to_sas_date(date_series):
+    """Convert YYYYMMDD format to SAS date"""
     result = pd.Series([np.nan] * len(date_series), dtype='float64')
     
-    if valid_mask.any():
-        # Convert valid dates
-        valid_dates = pd.to_datetime(date_str_series[valid_mask], format='%Y%m%d', errors='coerce')
-        sas_epoch = pd.Timestamp('1960-01-01')
-        result[valid_mask] = (valid_dates - sas_epoch).dt.days
+    for idx, val in date_series.items():
+        if pd.isna(val) or val == 0:
+            result[idx] = np.nan
+        else:
+            try:
+                date_str = str(int(val))
+                if len(date_str) == 8:
+                    date_obj = pd.to_datetime(date_str, format='%Y%m%d')
+                    sas_epoch = pd.Timestamp('1960-01-01')
+                    result[idx] = (date_obj - sas_epoch).days
+                else:
+                    result[idx] = np.nan
+            except:
+                result[idx] = np.nan
     
     return result
 
-# Use vectorized conversion instead of apply
-pq_bill["TRANDATE"] = convert_to_sas_date_series(pq_bill["TRANDATE"])
-pq_bill["EXPRDATE"] = convert_to_sas_date_series(pq_bill["EXPRDATE"])
+def convert_yymmdd_to_sas_date(date_series):
+    """Convert YYMMDD format to SAS date (assumes 20xx for YY)"""
+    result = pd.Series([np.nan] * len(date_series), dtype='float64')
+    
+    for idx, val in date_series.items():
+        if pd.isna(val) or val == 0:
+            result[idx] = np.nan
+        else:
+            try:
+                date_str = str(int(val)).zfill(6)
+                if len(date_str) == 6:
+                    # Add century: assume 20xx
+                    full_date_str = '20' + date_str
+                    date_obj = pd.to_datetime(full_date_str, format='%Y%m%d')
+                    sas_epoch = pd.Timestamp('1960-01-01')
+                    result[idx] = (date_obj - sas_epoch).days
+                else:
+                    result[idx] = np.nan
+            except:
+                result[idx] = np.nan
+    
+    return result
 
-# Fill string columns
+pq_bill["TRANDATE"] = convert_yyyymmdd_to_sas_date(pq_bill["TRANDATE"])
+pq_bill["EXPRDATE"] = convert_yymmdd_to_sas_date(pq_bill["EXPRDATE"])
+
 for col in pq_bill.select_dtypes(include=['object']).columns:
     pq_bill[col] = pq_bill[col].fillna('')
 
@@ -107,67 +129,3 @@ assign_libname("bt", sas_path)
 assign_libname("ctl", "/stgsrcsys/host/uat")
 
 log1 = set_data(pq_bill, "bt", "ctl", output_file, billstran_ctl)
-
-
-
-
-
-
-
-                                                       The COMPARE Procedure                                                        
-                                      Comparison of A1.BILLSTRAN_15 with A1.BILLSTRAN_15_PROD                                       
-                                                           (Method=EXACT)                                                           
-                                                                                                                                    
-                                               Value Comparison Results for Variables                                               
-                                                                                                                                    
-                                     __________________________________________________________                                     
-                                                ||       Base    Compare                                                            
-                                            Obs ||   EXPRDATE   EXPRDATE      Diff.     % Diff                                      
-                                      ________  ||  _________  _________  _________  _________                                      
-                                                ||                                                                                  
-                                           106  ||          .      24136          .          .                                      
-                                           107  ||          .      24136          .          .                                      
-                                           108  ||          .      24136          .          .                                      
-                                           109  ||          .      24136          .          .                                      
-                                           110  ||          .      24136          .          .                                      
-                                           111  ||          .      24136          .          .                                      
-                                           139  ||          .      24146          .          .                                      
-                                           140  ||          .      24146          .          .                                      
-                                           141  ||          .      24146          .          .                                      
-                                           142  ||          .      24146          .          .                                      
-                                           143  ||          .      24146          .          .                                      
-                                           144  ||          .      24146          .          .                                      
-                                           145  ||          .      24146          .          .                                      
-                                           146  ||          .      24146          .          .                                      
-                                           147  ||          .      24146          .          .                                      
-                                           148  ||          .      24146          .          .                                      
-                                           149  ||          .      24137          .          .                                      
-                                           150  ||          .      24137          .          .                                      
-                                           151  ||          .      24137          .          .                                      
-                                           152  ||          .      24137          .          .                                      
-                                           153  ||          .      24137          .          .                                      
-                                           154  ||          .      24137          .          .                                      
-                                           155  ||          .      24152          .          .                                      
-                                           156  ||          .      24152          .          .                                      
-                                           157  ||          .      24152          .          .                                      
-                                           158  ||          .      24152          .          .                                      
-                                           159  ||          .      24152          .          .                                      
-                                           160  ||          .      24152          .          .                                      
-                                           161  ||          .      24152          .          .                                      
-                                           162  ||          .      24152          .          .                                      
-                                           163  ||          .      24152          .          .                                      
-                                           164  ||          .      24152          .          .                                      
-                                           165  ||          .      24166          .          .                                      
-                                           166  ||          .      24166          .          .                                      
-                                           167  ||          .      24166          .          .                                      
-                                           168  ||          .      24166          .          .                                      
-                                           169  ||          .      24166          .          .                                      
-                                           170  ||          .      24166          .          .                                      
-                                           171  ||          .      24166          .          .                                      
-                                           172  ||          .      24166          .          .                                      
-                                           173  ||          .      24166          .          .                                      
-                                           174  ||          .      24166          .          .                                      
-                                           175  ||          .      24149          .          .                                      
-                                           176  ||          .      24149          .          .                                      
-                                           177  ||          .      24149          .          .                                      
-
