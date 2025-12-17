@@ -6,15 +6,18 @@ import sys
 from datetime import datetime, timedelta
 import numpy as np
 
-batch_dt = datetime.today() - timedelta(days=20)
+batch_dt = datetime.today() - timedelta(days=1)
 batch_dt_str = batch_dt.strftime("%Y%m%d")
 output_file_name = 'billstran'
 month_str = f"{batch_dt.month:02d}"
 year_str = f"{batch_dt.year % 100:02d}"
 day_str = f"{batch_dt.day:02d}"
-BATCH_MODE = 'M'
+BATCH_MODE = 'D'
 
 print("BATCH MODE = ", BATCH_MODE)
+print(f"Today's date: {datetime.today()}")
+print(f"Batch date: {batch_dt}")
+print(f"Day string: {day_str}")
 
 if BATCH_MODE == 'M':
     print("Monthly")
