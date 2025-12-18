@@ -1,81 +1,143 @@
-DATA REPTDATE;
-   SET DP.REPTDATE;
-   PREVDATE = MDY(MONTH(REPTDATE), DAY(REPTDATE),YEAR(REPTDATE))-60;
-   SELECT;
-     WHEN(1<= DAY(REPTDATE)<= 8) DO; WK = '1'; WK1 = '4'; END;
-     WHEN(9<= DAY(REPTDATE)<= 15) DO; WK = '2'; WK1 = '1'; END;
-     WHEN(16<= DAY(REPTDATE)<= 22) DO; WK = '3'; WK1 = '2'; END;
-     OTHERWISE DO; WK = '4'; WK1 ='3'; END;
-  END;
-   MM2 = MONTH(REPTDATE) - 1;
-   IF MM2= 0 THEN MM2 = 12;
-   CALL SYMPUT('NOWK',PUT(WK,$2.));
-   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
-   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
-   CALL SYMPUT('PREVMON',PUT(MM2,Z2.));
-   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY10.));
-   CALL SYMPUT('REPTDT',REPTDATE);
-   CALL SYMPUT('PREVDATE',PREVDATE);
-RUN;
+import duckdb
+from pathlib import Path
+from datetime import timedelta
 
-DATA SRC;
-  REPTDATE = &REPTDT;
-  INFILE DPFILE;
-  INPUT @106 HOLDBRH       PD4.
-        @110 ACCTNO        PD6.
-        @142 SEQNUM        PD3.
-        @145 HOLDACT         1.
-        @146 EARAMT        PD7.2
-        @154 REASON        $20.
-        @174 DESC          $20.
-        @194 EARDATE       PD5.
-        @199 EXPDATE       PD5.
-        @215 USERID         $8.
-        ;
-  IF HOLDACT = 4 THEN DELETE;
-RUN;
+# Configuration
+DP_PATH = Path("DP")
+DPGF_PATH = Path("DPGF")
+DPFILE_PATH = Path("path/to/dpfile.dat")
+DPGF_PATH.mkdir(exist_ok=True)
 
- /* MNITB DETAILS */
-DATA SA(KEEP=ACCTNO PRODUCT BRANCH USER3);
-   SET DP.SAVING;
-   IF OPENIND NOT IN ('B','C','P') AND CUSTCODE IN (77,78,95,96);
-RUN;
+# Initialize DuckDB connection
+con = duckdb.connect()
 
-DATA CA(KEEP=ACCTNO PRODUCT BRANCH USER3);
-   SET DP.CURRENT;
-   IF OPENIND NOT IN ('B','C','P') AND CUSTCODE IN (77,78,95,96);
-RUN;
+# ===== STEP 1: REPTDATE Processing =====
+reptdate = con.execute(f"""
+    SELECT REPTDATE FROM '{DP_PATH / "REPTDATE.parquet"}'
+""").fetchone()[0]
 
-DATA CASA;
-  SET CA SA;
-RUN;
-PROC SORT DATA=CASA; BY ACCTNO;RUN;
-PROC SORT DATA=SRC; BY ACCTNO;RUN;
+prevdate = reptdate - timedelta(days=60)
 
-DATA SRC;
-   MERGE SRC(IN=A) CASA(IN=B);
-   IF A;
-   BY ACCTNO;
-RUN;
+# Determine WK and WK1
+day = reptdate.day
+if 1 <= day <= 8:
+    wk, wk1 = '1', '4'
+elif 9 <= day <= 15:
+    wk, wk1 = '2', '1'
+elif 16 <= day <= 22:
+    wk, wk1 = '3', '2'
+else:
+    wk, wk1 = '4', '3'
 
-%MACRO CHECKDS1(DSN);
-   %IF %SYSFUNC(EXIST(&DSN)) %THEN %DO;
-      DATA &DSN;
-         SET &DSN;
-         IF REPTDATE = &REPTDT THEN DELETE;
-         IF REPTDATE < &PREVDATE THEN DELETE;
-      RUN;
+mm2 = reptdate.month - 1 if reptdate.month > 1 else 12
 
-      DATA &DSN;
-         SET SRC(OBS=0) &DSN SRC;
-      RUN;
-   %END;
-   %ELSE %DO;
-      DATA &DSN;
-         SET SRC;
-      RUN;
-   %END;
-%MEND CHECKDS1;
+# Macro variables
+NOWK = wk
+REPTYEAR = str(reptdate.year)[-2:]
+REPTMON = f"{reptdate.month:02d}"
+PREVMON = f"{mm2:02d}"
+REPTDAY = f"{reptdate.day:02d}"
+RDATE = reptdate.strftime("%d/%m/%Y")
 
-%CHECKDS1(DPGF.KEEP_EARMARK);
+print(f"Report Date: {RDATE}")
+print(f"Previous Date: {prevdate.strftime('%d/%m/%Y')}")
+
+# ===== STEP 2: Read Fixed-Width Data File =====
+def read_fixed_width_file(file_path, reptdate):
+    """Parse fixed-width file per SAS INPUT spec"""
+    data = []
+    with open(file_path, 'r') as f:
+        for line in f:
+            holdact = line[144]
+            if holdact == '4':
+                continue
+            
+            data.append({
+                'REPTDATE': reptdate,
+                'HOLDBRH': int(line[105:109]),
+                'ACCTNO': int(line[109:115]),
+                'SEQNUM': int(line[141:144]),
+                'HOLDACT': holdact,
+                'EARAMT': float(line[145:152]) / 100,
+                'REASON': line[153:173].strip(),
+                'DESC': line[173:193].strip(),
+                'EARDATE': line[193:198],
+                'EXPDATE': line[198:203],
+                'USERID': line[214:222].strip()
+            })
+    return data
+
+src_data = read_fixed_width_file(DPFILE_PATH, reptdate)
+con.execute("CREATE TABLE src AS SELECT * FROM src_data")
+
+# ===== STEP 3: Process CASA accounts using DuckDB SQL =====
+con.execute(f"""
+    CREATE TABLE casa AS
+    SELECT ACCTNO, PRODUCT, BRANCH, USER3
+    FROM (
+        SELECT ACCTNO, PRODUCT, BRANCH, USER3
+        FROM '{DP_PATH / "SAVING.parquet"}'
+        WHERE OPENIND NOT IN ('B', 'C', 'P') 
+          AND CUSTCODE IN (77, 78, 95, 96)
+        
+        UNION ALL
+        
+        SELECT ACCTNO, PRODUCT, BRANCH, USER3
+        FROM '{DP_PATH / "CURRENT.parquet"}'
+        WHERE OPENIND NOT IN ('B', 'C', 'P') 
+          AND CUSTCODE IN (77, 78, 95, 96)
+    )
+""")
+
+# ===== STEP 4: Merge SRC with CASA =====
+con.execute("""
+    CREATE TABLE src_merged AS
+    SELECT s.*, c.PRODUCT, c.BRANCH, c.USER3
+    FROM src s
+    LEFT JOIN casa c ON s.ACCTNO = c.ACCTNO
+""")
+
+# ===== STEP 5: CHECKDS1 Logic using SQL =====
+keep_earmark_path = DPGF_PATH / "KEEP_EARMARK.parquet"
+
+if keep_earmark_path.exists():
+    con.execute(f"""
+        CREATE TABLE final_output AS
+        SELECT * FROM (
+            -- Existing data (filtered)
+            SELECT *
+            FROM '{keep_earmark_path}'
+            WHERE REPTDATE != DATE '{reptdate}'
+              AND REPTDATE >= DATE '{prevdate}'
+            
+            UNION ALL
+            
+            -- New data
+            SELECT * FROM src_merged
+        )
+    """)
+else:
+    con.execute("CREATE TABLE final_output AS SELECT * FROM src_merged")
+
+# ===== STEP 6: Write Output =====
+con.execute(f"""
+    COPY final_output 
+    TO '{keep_earmark_path}' 
+    (FORMAT PARQUET, COMPRESSION ZSTD)
+""")
+
+# Summary statistics
+result = con.execute("""
+    SELECT 
+        COUNT(*) as total_records,
+        MIN(REPTDATE) as min_date,
+        MAX(REPTDATE) as max_date,
+        COUNT(DISTINCT ACCTNO) as unique_accounts
+    FROM final_output
+""").fetchdf()
+
+print(f"\nOutput written to: {keep_earmark_path}")
+print("\nSummary Statistics:")
+print(result)
+
+con.close()
