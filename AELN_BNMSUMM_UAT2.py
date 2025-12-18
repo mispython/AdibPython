@@ -7,8 +7,6 @@ from datetime import datetime, timedelta
 import numpy as np
 
 batch_dt = datetime.today() - timedelta(days=1)
-batch_dt_str = batch_dt.strftime("%Y%m%d")
-output_file_name = 'billstran'
 day_str = f"{batch_dt.day:02d}"
 BATCH_MODE = 'D'
 
@@ -46,7 +44,6 @@ def convert_date_to_sas(date_series, date_format='YYYYMMDD'):
         pandas Series with SAS date values
     """
     sas_epoch = pd.Timestamp('1960-01-01')
-    expected_len = 8 if date_format == 'YYYYMMDD' else 6
     
     def convert_single_date(val):
         if pd.isna(val) or val == 0:
@@ -64,7 +61,7 @@ def convert_date_to_sas(date_series, date_format='YYYYMMDD'):
                 date_obj = pd.to_datetime(date_str, format='%Y%m%d')
                 return (date_obj - sas_epoch).days
             return np.nan
-        except:
+        except (ValueError, TypeError):
             return np.nan
     
     return date_series.apply(convert_single_date)
