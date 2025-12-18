@@ -9,16 +9,6 @@ import numpy as np
 batch_dt = datetime.today() - timedelta(days=1)
 batch_dt_str = batch_dt.strftime("%Y%m%d")
 output_file_name = 'billstran'
-
-# For monthly, use previous month's date
-if 'M' in str(locals().get('BATCH_MODE', 'D')):
-    batch_dt_monthly = (batch_dt.replace(day=1) - timedelta(days=1))
-    month_str = f"{batch_dt_monthly.month:02d}"
-    year_str = f"{batch_dt_monthly.year % 100:02d}"
-else:
-    month_str = f"{batch_dt.month:02d}"
-    year_str = f"{batch_dt.year % 100:02d}"
-
 day_str = f"{batch_dt.day:02d}"
 BATCH_MODE = 'D'
 
@@ -26,6 +16,10 @@ print("BATCH MODE = ", BATCH_MODE)
 
 if BATCH_MODE == 'M':
     print("Monthly")
+    # For monthly, use previous month's date
+    batch_dt_monthly = (batch_dt.replace(day=1) - timedelta(days=1))
+    month_str = f"{batch_dt_monthly.month:02d}"
+    year_str = f"{batch_dt_monthly.year % 100:02d}"
     print(f"Processing month: {month_str}/{year_str}")
     sas_path = "/dwh/btrade"
     output_file = f"billstran{month_str}4{year_str}"
@@ -33,6 +27,8 @@ if BATCH_MODE == 'M':
     pq_bill = bill_table.to_pandas()
 elif BATCH_MODE == 'D':
     print("Daily")
+    month_str = f"{batch_dt.month:02d}"
+    year_str = f"{batch_dt.year % 100:02d}"
     sas_path = "/dwh/btrade_d"
     output_file = f"billstran_{day_str}"
     bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet')
