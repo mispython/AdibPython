@@ -1,415 +1,126 @@
-from pathlib import Path
-from datetime import datetime
-import polars as pl
-import logging
-import re
-from typing import List, Optional, Dict
-
-# Configure logging with more detail
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-class LoanDataProcessor:
-    """Combined processor for both SAS steps: text file processing and report generation"""
-    
-    # Columns for the output report
-    OUTPUT_COLUMNS = [
-        "COSTCT", "NOTETYPE", "PRINBAL", "PRNNACCR", "INTACCR", "INTNACCR",
-        "UNERNINT", "UNERNNON", "RSRVFIN", "RSRVDLR", "NONDDA", "LATEFEES",
-        "OTHERFEE", "CTPRINT", "CTPRNNAC"
-    ]
-    
-    def __init__(self, input_text_path: str, base_output_path: str, 
-                 batch_date_str: str = None):
-        self.input_text_path = Path(input_text_path)
-        self.BASE_OUT = Path(base_output_path)
-        
-        # Parse batch date
-        if batch_date_str is None:
-            filename = self.input_text_path.name
-            date_match = re.search(r'(\d{8})', filename)
-            if date_match:
-                date_str = date_match.group(1)
-                batch_date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
-            else:
-                batch_date_str = datetime.now().strftime('%Y-%m-%d 00:00:00')
-        
-        self.batch_dt = datetime.strptime(batch_date_str, '%Y-%m-%d %H:%M:%S')
-        self.batch_dt_str = self.batch_dt.strftime("%Y%m%d")
-        
-        # Report date formatting
-        self.REPTDATE = self.batch_dt
-        self.REPTMON = f"{self.REPTDATE.month:02d}"
-        self.REPTYEAR = f"{self.REPTDATE.year % 100:02d}"
-        
-        # Ensure output directory exists
-        self.BASE_OUT.mkdir(parents=True, exist_ok=True)
-        
-        self.all_records = []
-        
-        logger.info(f"Initialized processor for batch date: {self.batch_dt_str}")
-    
-    def analyze_file_structure(self):
-        """Analyze the file structure to understand the format"""
-        logger.info("Analyzing file structure...")
-        
-        try:
-            with open(self.input_text_path, 'r') as file:
-                lines = file.readlines()
-            
-            logger.info(f"Total lines: {len(lines)}")
-            
-            # Look for patterns in first 100 lines
-            logger.info("\n=== Analyzing first 100 lines ===")
-            for i, line in enumerate(lines[:100]):
-                line = line.rstrip('\n')
-                if line.strip():  # Only show non-empty lines
-                    logger.info(f"Line {i+1:4d}: {repr(line[:150])}")
-            
-            # Count occurrences of key patterns
-            patterns = {
-                'R6999': 0,
-                'R-6999': 0,
-                'COST CENTER': 0,
-                'LOAN TYPE': 0,
-                'PRINCIPAL': 0,
-                'INTEREST': 0,
-                'UNEARNED': 0,
-                'RESERVE': 0,
-                'LATE FEES': 0,
-                'EXTENSION': 0,
-                'TOTALS': 0,
-                'CONTROL TOTALS': 0
-            }
-            
-            for line in lines:
-                for pattern in patterns:
-                    if pattern in line:
-                        patterns[pattern] += 1
-            
-            logger.info("\n=== Pattern counts ===")
-            for pattern, count in patterns.items():
-                if count > 0:
-                    logger.info(f"{pattern:20s}: {count}")
-            
-            # Find sample lines with key patterns
-            logger.info("\n=== Sample lines with R6999/R-6999 ===")
-            r6999_lines = []
-            for i, line in enumerate(lines):
-                if 'R6999' in line or 'R-6999' in line:
-                    r6999_lines.append((i, line.strip()))
-                    if len(r6999_lines) >= 5:
-                        break
-            
-            for i, line in r6999_lines:
-                logger.info(f"Line {i+1}: {repr(line[:100])}")
-            
-            # Look for cost center patterns
-            logger.info("\n=== Sample lines with COST CENTER ===")
-            cost_center_lines = []
-            for i, line in enumerate(lines):
-                if 'COST CENTER' in line:
-                    cost_center_lines.append((i, line.strip()))
-                    if len(cost_center_lines) >= 3:
-                        break
-            
-            for i, line in cost_center_lines:
-                logger.info(f"Line {i+1}: {repr(line[:100])}")
-            
-            return lines
-            
-        except Exception as e:
-            logger.error(f"Error analyzing file: {e}", exc_info=True)
-            return []
-    
-    def parse_file_based_on_analysis(self, lines):
-        """Parse file after analyzing its structure"""
-        logger.info("\n=== Starting file parsing ===")
-        
-        records = []
-        current_record = {}
-        in_record = False
-        
-        item_patterns = [
-            ('PRINCIPAL/LOAN BALANCE', 'PRINBAL'),
-            ('PRINCIPAL IN NON-ACCRUAL', 'PRNNACCR'),
-            ('INTEREST ACCRUALS', 'INTACCR'),
-            ('INTEREST IN NON-ACCRUAL', 'INTNACCR'),
-            ('UNEARNED INTEREST', 'UNERNINT'),
-            ('RESERVE FINANCED', 'RSRVFIN'),
-            ('NON DDA ESCROW FUNDS', 'NONDDA'),
-            ('LATE FEES', 'LATEFEES'),
-            ('OTHER EARNED FEES', 'OTHERFEE')
-        ]
-        
-        for i, line in enumerate(lines):
-            line = line.rstrip('\n')
-            
-            # Skip empty lines
-            if not line.strip():
-                continue
-            
-            # Look for start of a new record (header with cost center)
-            if 'COST CENTER:' in line and 'LOAN TYPE:' in line:
-                if in_record and current_record:
-                    records.append(current_record.copy())
-                    logger.debug(f"Completed record at line {i}: {current_record}")
-                
-                # Start new record
-                in_record = True
-                current_record = {
-                    'COSTCT': 0,
-                    'NOTETYPE': 0,
-                    'PRINBAL': '0.00',
-                    'PRNNACCR': '0.00',
-                    'INTACCR': '0.0000000',
-                    'INTNACCR': '0.0000000',
-                    'UNERNINT': '0.00',
-                    'UNERNNON': '0.00',
-                    'RSRVFIN': '0.00',
-                    'RSRVDLR': '0.00',
-                    'NONDDA': '0.00',
-                    'LATEFEES': '0.00',
-                    'OTHERFEE': '0.00',
-                    'C_PRN': '0',
-                    'C_PRNNAC': '0'
-                }
-                
-                # Extract cost center and loan type
-                costct_match = re.search(r'COST CENTER:\s*(\d+)', line)
-                notety_match = re.search(r'LOAN TYPE:\s*(\d+)', line)
-                
-                if costct_match:
-                    try:
-                        current_record['COSTCT'] = int(costct_match.group(1))
-                    except ValueError:
-                        current_record['COSTCT'] = 0
-                
-                if notety_match:
-                    try:
-                        current_record['NOTETYPE'] = int(notety_match.group(1))
-                    except ValueError:
-                        current_record['NOTETYPE'] = 0
-                
-                logger.debug(f"New record started at line {i}: COSTCT={current_record['COSTCT']}, NOTETYPE={current_record['NOTETYPE']}")
-                continue
-            
-            # Process item lines if we're in a record
-            if in_record:
-                # Check for item patterns
-                for item_text, item_code in item_patterns:
-                    if item_text in line:
-                        logger.debug(f"Found {item_text} at line {i}")
-                        
-                        # Check for zero indicator
-                        if 'ZERO' in line or '* * *' in line:
-                            # Set appropriate fields to zero
-                            if item_text == 'PRINCIPAL/LOAN BALANCE':
-                                current_record['PRINBAL'] = '0.00'
-                                current_record['C_PRN'] = '0'
-                            elif item_text == 'PRINCIPAL IN NON-ACCRUAL':
-                                current_record['PRNNACCR'] = '0.00'
-                                current_record['C_PRNNAC'] = '0'
-                            elif item_text == 'INTEREST ACCRUALS':
-                                current_record['INTACCR'] = '0.0000000'
-                            elif item_text == 'INTEREST IN NON-ACCRUAL':
-                                current_record['INTNACCR'] = '0.0000000'
-                            elif item_text == 'UNEARNED INTEREST':
-                                current_record['UNERNINT'] = '0.00'
-                                current_record['UNERNNON'] = '0.00'
-                            elif item_text == 'RESERVE FINANCED':
-                                current_record['RSRVFIN'] = '0.00'
-                                current_record['RSRVDLR'] = '0.00'
-                            elif item_text == 'NON DDA ESCROW FUNDS':
-                                current_record['NONDDA'] = '0.00'
-                            elif item_text == 'LATE FEES':
-                                current_record['LATEFEES'] = '0.00'
-                            elif item_text == 'OTHER EARNED FEES':
-                                current_record['OTHERFEE'] = '0.00'
-                        break
-                
-                # Check for balance amounts (lines starting with =)
-                if line.strip().startswith('='):
-                    logger.debug(f"Found balance line at {i}: {repr(line[:50])}")
-                    
-                    # Try to extract numbers
-                    numbers = re.findall(r'[-\d.]+', line)
-                    if numbers:
-                        logger.debug(f"Extracted numbers: {numbers}")
-                        # For now, if we find a number and the last item was INTEREST IN NON-ACCRUAL, use it
-                        if 'INTEREST IN NON-ACCRUAL' in lines[i-1] if i > 0 else False:
-                            current_record['INTNACCR'] = numbers[0]
-                
-                # Check for end of record (EXTENSION FEES)
-                if 'EXTENSION FEES' in line and current_record['COSTCT'] != 0:
-                    records.append(current_record.copy())
-                    logger.debug(f"Completed record at EXTENSION FEES line {i}")
-                    in_record = False
-        
-        # Add last record if we're still in one
-        if in_record and current_record:
-            records.append(current_record.copy())
-        
-        return records
-    
-    def process_text_file(self) -> List[Dict]:
-        """Process the input text file"""
-        logger.info(f"Processing text file: {self.input_text_path}")
-        
-        if not self.input_text_path.exists():
-            logger.error(f"Input text file not found: {self.input_text_path}")
-            return []
-        
-        try:
-            # First analyze the file structure
-            lines = self.analyze_file_structure()
-            
-            if not lines:
-                logger.error("Failed to read file or file is empty")
-                return []
-            
-            # Then parse based on the analysis
-            self.all_records = self.parse_file_based_on_analysis(lines)
-            
-            logger.info(f"Processed {len(self.all_records)} records from text file")
-            
-            if self.all_records:
-                logger.info(f"Sample records:")
-                for i, record in enumerate(self.all_records[:3]):
-                    logger.info(f"Record {i+1}: COSTCT={record['COSTCT']}, NOTETYPE={record['NOTETYPE']}, "
-                               f"PRINBAL={record['PRINBAL']}, INTNACCR={record['INTNACCR']}")
-            else:
-                logger.warning("No records found. Check if file format matches expected patterns.")
-            
-            return self.all_records
-            
-        except Exception as e:
-            logger.error(f"Error processing text file: {e}", exc_info=True)
-            return []
-    
-    def create_intermediate_dataframe(self) -> Optional[pl.DataFrame]:
-        """Create DataFrame from parsed data"""
-        if not self.all_records:
-            logger.error("No records processed from text file")
-            return None
-        
-        try:
-            processed_data = []
-            
-            for record in self.all_records:
-                output_record = {
-                    'COSTCT': record['COSTCT'],
-                    'NOTETYPE': record['NOTETYPE'],
-                    'PRINBAL': str(record['PRINBAL']).rjust(24),
-                    'PRNNACCR': str(record['PRNNACCR']).rjust(24),
-                    'INTACCR': str(record['INTACCR']).rjust(21),
-                    'INTNACCR': str(record['INTNACCR']).rjust(21),
-                    'UNERNINT': str(record['UNERNINT']).rjust(24),
-                    'UNERNNON': str(record['UNERNNON']).rjust(24),
-                    'RSRVFIN': str(record['RSRVFIN']).rjust(24),
-                    'RSRVDLR': str(record['RSRVDLR']).rjust(24),
-                    'NONDDA': str(record['NONDDA']).rjust(24),
-                    'LATEFEES': str(record['LATEFEES']).rjust(24),
-                    'OTHERFEE': str(record['OTHERFEE']).rjust(24),
-                    'CTPRINT': str(record['C_PRN']).rjust(7),
-                    'CTPRNNAC': str(record['C_PRNNAC']).rjust(7)
-                }
-                processed_data.append(output_record)
-            
-            result_df = pl.DataFrame(processed_data, schema=self.OUTPUT_COLUMNS)
-            logger.info(f"Created DataFrame with {len(result_df)} records")
-            
-            return result_df
-            
-        except Exception as e:
-            logger.error(f"Error creating DataFrame: {e}", exc_info=True)
-            return None
-    
-    def save_parquet_output(self, df: pl.DataFrame, output_dir_name: str = "LNR6999") -> bool:
-        """Save DataFrame to parquet file"""
-        try:
-            out_dir = self.BASE_OUT / output_dir_name
-            out_dir.mkdir(parents=True, exist_ok=True)
-            
-            out_name = f"R6999{self.REPTMON}{self.REPTYEAR}.parquet"
-            output_path = out_dir / out_name
-            
-            df.write_parquet(output_path)
-            logger.info(f"Output written to: {output_path}")
-            
-            return True
-                
-        except Exception as e:
-            logger.error(f"Error saving output file: {e}", exc_info=True)
-            return False
-    
-    def run_full_processing(self) -> bool:
-        """Run the complete processing pipeline"""
-        try:
-            logger.info("Starting loan data processing...")
-            
-            # Step 1: Process text file
-            logger.info("Step 1: Processing input text file...")
-            records = self.process_text_file()
-            if not records:
-                logger.error("No records processed from text file")
-                logger.error("Please check the analysis output above to understand the file format")
-                return False
-            
-            # Step 2: Create DataFrame
-            logger.info("Step 2: Creating formatted DataFrame...")
-            df = self.create_intermediate_dataframe()
-            if df is None:
-                logger.error("Failed to create DataFrame")
-                return False
-            
-            # Step 3: Save to parquet
-            logger.info("Step 3: Saving to parquet file...")
-            success = self.save_parquet_output(df)
-            
-            if success:
-                logger.info("All processing steps completed successfully")
-                logger.info(f"Total records processed: {len(df)}")
-            else:
-                logger.error("Processing failed during output save")
-            
-            return success
-            
-        except Exception as e:
-            logger.error(f"Processing pipeline failed: {e}", exc_info=True)
-            return False
-
-
-def main():
-    """Main execution function"""
-    
-    # Configuration
-    INPUT_TEXT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/R6999_BAL_NOTE_20251218.txt"
-    BASE_OUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output"
-    
-    logger.info("=" * 60)
-    logger.info("Starting Loan Data Processing")
-    logger.info(f"Input file: {INPUT_TEXT_PATH}")
-    logger.info("=" * 60)
-    
-    processor = LoanDataProcessor(
-        input_text_path=INPUT_TEXT_PATH,
-        base_output_path=BASE_OUT_PATH,
-        batch_date_str=None
-    )
-    
-    success = processor.run_full_processing()
-    
-    if not success:
-        logger.error("Processing failed")
-        exit(1)
-    else:
-        logger.info("Processing completed successfully")
-        exit(0)
-
-
-if __name__ == "__main__":
-    main()
+2025-12-19 11:47:50,717 - INFO - ============================================================
+2025-12-19 11:47:50,717 - INFO - Starting Loan Data Processing
+2025-12-19 11:47:50,717 - INFO - Input file: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/R6999_BAL_NOTE_20251218.txt
+2025-12-19 11:47:50,717 - INFO - ============================================================
+2025-12-19 11:47:50,718 - INFO - Initialized processor for batch date: 20251218
+2025-12-19 11:47:50,718 - INFO - Starting loan data processing...
+2025-12-19 11:47:50,718 - INFO - Step 1: Processing input text file...
+2025-12-19 11:47:50,718 - INFO - Processing text file: /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/R6999_BAL_NOTE_20251218.txt
+2025-12-19 11:47:50,718 - INFO - Analyzing file structure...
+2025-12-19 11:47:50,809 - INFO - Total lines: 30529
+2025-12-19 11:47:50,809 - INFO - 
+=== Analyzing first 100 lines ===
+2025-12-19 11:47:50,809 - INFO - Line    1: '0000002  004                      0.00                            0.00                   -0.0184596                       0.0000000                   '
+2025-12-19 11:47:50,809 - INFO - Line    2: '0000002  005             17,716,058.79                            0.00                  -98.1270373                       0.0000000                   '
+2025-12-19 11:47:50,809 - INFO - Line    3: '0000002  006                      0.00                            0.00                   -0.0011981                       0.0000000                   '
+2025-12-19 11:47:50,809 - INFO - Line    4: '0000002  007                      0.00                            0.00                    0.0000000                       0.0000000                   '
+2025-12-19 11:47:50,809 - INFO - Line    5: '0000002  015                      0.00                            0.00                    0.0651905                       0.0000000                   '
+2025-12-19 11:47:50,809 - INFO - Line    6: '0000002  020                      0.00                            0.00                    0.0206393                       0.0000000                   '
+2025-12-19 11:47:50,809 - INFO - Line    7: '0000002  025                  2,707.34                            0.00                    0.0284097                       0.0000000                   '
+2025-12-19 11:47:50,809 - INFO - Line    8: '0000002  026                      0.00                            0.00                    0.0023532                       0.0000000                   '
+2025-12-19 11:47:50,809 - INFO - Line    9: '0000002  029                      0.00                            0.00                    0.0041339                       0.0000000                   '
+2025-12-19 11:47:50,809 - INFO - Line   10: '0000002  030                      0.00                            0.00                   -0.0041200                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   11: '0000002  031                      0.00                            0.00                    0.0032645                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   12: '0000002  032                      0.00                            0.00                   -0.0359454                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   13: '0000002  034                      0.00                            0.00                   -0.0044935                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   14: '0000002  060                      0.00                            0.00                   -0.0004093                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   15: '0000002  061                285,875.30                            0.00                   -1.7131444                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   16: '0000002  200                      0.00                            0.00                   -0.0224447                       0.0001992                   '
+2025-12-19 11:47:50,810 - INFO - Line   17: '0000002  201                699,948.53                       45,542.05               12,220.9262209                   1,168.4074473                   '
+2025-12-19 11:47:50,810 - INFO - Line   18: '0000002  204                      0.00                            0.00                   -0.0193861                      -0.0005235                   '
+2025-12-19 11:47:50,810 - INFO - Line   19: '0000002  205                556,366.30                      222,362.78                  476.1925547                  18,420.2701980                   '
+2025-12-19 11:47:50,810 - INFO - Line   20: '0000002  209                      0.00                            0.00                   -0.0015420                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   21: '0000002  210                 94,135.95                       48,483.29                  558.2013197                   5,168.4771507                   '
+2025-12-19 11:47:50,810 - INFO - Line   22: '0000002  212                 50,498.71                       24,248.12                  890.8230252                  15,379.3136791                   '
+2025-12-19 11:47:50,810 - INFO - Line   23: '0000002  216             12,179,106.44                            0.00               42,651.3392935                   3,299.2874064                   '
+2025-12-19 11:47:50,810 - INFO - Line   24: '0000002  219                      0.00                            0.00                    0.0063854                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   25: '0000002  225                      0.00                            0.00                   -0.0389418                       0.0014819                   '
+2025-12-19 11:47:50,810 - INFO - Line   26: '0000002  226                      0.00                            0.00                   -0.0051926                      -0.0034277                   '
+2025-12-19 11:47:50,810 - INFO - Line   27: '0000002  227                      0.00                            0.00                   -0.0180209                       0.0074580                   '
+2025-12-19 11:47:50,810 - INFO - Line   28: '0000002  228                      0.00                            0.00                   -0.0066362                       0.0016817                   '
+2025-12-19 11:47:50,810 - INFO - Line   29: '0000002  233                      0.00                            0.00                   -0.0014888                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   30: '0000002  234              1,316,966.64                            0.00                4,426.7994936                     823.1581072                   '
+2025-12-19 11:47:50,810 - INFO - Line   31: '0000002  235             16,211,108.01                            0.00               42,288.6856923                  -2,024.7265540                   '
+2025-12-19 11:47:50,810 - INFO - Line   32: '0000002  238                      0.00                            0.00                    0.0011395                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   33: '0000002  239                      0.00                            0.00                    0.0024155                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   34: '0000002  240                      0.00                            0.00                   -0.0076995                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   35: '0000002  241                      0.00                            0.00                    0.0123259                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   36: '0000002  242                      0.00                            0.00                    0.0064565                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   37: '0000002  244                451,059.74                            0.00                1,104.5550495                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   38: '0000002  245            595,574,410.07                      859,293.73            2,020,905.0351199                 109,878.8347133                   '
+2025-12-19 11:47:50,810 - INFO - Line   39: '0000002  246                787,875.30                       37,360.57               13,230.3159864                  15,036.4266894                   '
+2025-12-19 11:47:50,810 - INFO - Line   40: '0000002  247              9,693,456.75                      110,619.82               90,236.4625363                   8,807.3897109                   '
+2025-12-19 11:47:50,810 - INFO - Line   41: '0000002  248             21,800,365.24                            0.00               44,583.0614890                   5,614.7925851                   '
+2025-12-19 11:47:50,810 - INFO - Line   42: '0000002  249                337,216.72                            0.00                  761.3514634                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   43: '0000002  250             14,809,355.90                            0.00               50,428.4178450                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   44: '0000002  300                      0.00                            0.00                   -0.3892816                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   45: '0000002  301             19,025,482.68                            0.00              136,948.2215458                       0.0215117                   '
+2025-12-19 11:47:50,810 - INFO - Line   46: '0000002  302                      0.00                            0.00                    0.0002336                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   47: '0000002  303                950,837.43                             .00                3,986.9305726                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   48: '0000002  305                      0.00                            0.00                   -0.0011897                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   49: '0000002  311              8,818,013.12                            0.00               39,502.5023602                    -683.9319198                   '
+2025-12-19 11:47:50,810 - INFO - Line   50: '0000002  315             88,365,908.79                            0.00              428,142.9402718                  15,266.2517561                   '
+2025-12-19 11:47:50,810 - INFO - Line   51: '0000002  320                      0.00                            0.00                   -0.0118897                       0.0020984                   '
+2025-12-19 11:47:50,810 - INFO - Line   52: '0000002  321                      0.00                            0.00                    0.0431595                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   53: '0000002  322                723,257.92                            0.00                   92.1748717                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   54: '0000002  330                      0.00                            0.00                   -0.0011061                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   55: '0000002  348             37,361,357.51                            0.00              174,454.7743056                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   56: '0000002  349              1,240,068.49                            0.00                4,266.4704212                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   57: '0000002  350                      0.00                            0.00                    0.0035980                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   58: '0000002  351                      0.00                            0.00                   -0.0021783                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   59: '0000002  355                      0.00                            0.00                    0.0000000                      -0.0000740                   '
+2025-12-19 11:47:50,810 - INFO - Line   60: '0000002  359              3,796,441.00                            0.00                8,616.7753481                      -0.0088206                   '
+2025-12-19 11:47:50,810 - INFO - Line   61: '0000002  361                      0.00                            0.00                   -0.0082194                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   62: '0000002  363            193,018,057.93                      474,347.74              802,961.5683267                  62,161.2568367                   '
+2025-12-19 11:47:50,810 - INFO - Line   63: '0000002  365                      0.00                            0.00                   -0.0023575                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   64: '0000002  368              9,404,896.55                            0.00               27,454.9938995                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   65: '0000002  369                126,327.02                            0.00                   58.9342499                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   66: '0000002  505                      0.00                            0.00                    0.0058511                       0.0018067                   '
+2025-12-19 11:47:50,810 - INFO - Line   67: '0000002  510                      0.00                            0.00                    0.0043832                      -0.0044204                   '
+2025-12-19 11:47:50,810 - INFO - Line   68: '0000002  515                      0.00                            0.00                    0.0021374                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   69: '0000002  518              1,810,494.12                            0.00               11,387.3139046                      -0.0012358                   '
+2025-12-19 11:47:50,810 - INFO - Line   70: '0000002  521                      0.00                            0.00                    0.0032518                       0.0014741                   '
+2025-12-19 11:47:50,810 - INFO - Line   71: '0000002  524                      0.00                            0.00                   -0.0009842                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   72: '0000002  532                      0.00                            0.00                   -0.0050743                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   73: '0000002  533                      0.00                            0.00                    0.0139207                      -0.0050592                   '
+2025-12-19 11:47:50,810 - INFO - Line   74: '0000002  566                      0.00                            0.00                   -0.0021568                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   75: '0000002  568                      0.00                            0.00                   -0.0060149                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   76: '0000002  570                      0.00                            0.00                   -0.0127464                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   77: '0000002  575                431,309.07                            0.00                1,341.8008960                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   78: '0000002  577                419,389.10                            0.00                1,276.0760797                       0.0000000                   '
+2025-12-19 11:47:50,810 - INFO - Line   79: '0000002  600                      0.00                      219,553.13                    0.0000000                 625,527.4912411                   '
+2025-12-19 11:47:50,810 - INFO - Line   80: '0000002  601                      0.00                       32,009.05                    0.0000000                 136,486.0790786                   '
+2025-12-19 11:47:50,810 - INFO - Line   81: '0000002  602                      0.00                       26,859.11                    0.0000000                  43,142.3086816                   '
+2025-12-19 11:47:50,810 - INFO - Line   82: '0000002  604                      0.00                            7.84                    0.0000000                       2.1661714                   '
+2025-12-19 11:47:50,811 - INFO - Line   83: '0000002  606                      0.00                       58,163.95                    0.0000000                 287,317.0749281                   '
+2025-12-19 11:47:50,811 - INFO - Line   84: '0000002  608                      0.00                        3,539.00                    0.0000000                      -0.0031511                   '
+2025-12-19 11:47:50,811 - INFO - Line   85: '0000002  609                      0.00                        7,259.95                    0.0000000                  10,133.8320991                   '
+2025-12-19 11:47:50,811 - INFO - Line   86: '0000002  610                      0.00                            0.00                    0.0000000                      -0.0011424                   '
+2025-12-19 11:47:50,811 - INFO - Line   87: '0000002  631                      0.00                            0.00                    0.0000000                       0.0000000                   '
+2025-12-19 11:47:50,811 - INFO - Line   88: '0000002  634                      0.00                            0.00                    0.0000000                       8.0002757                   '
+2025-12-19 11:47:50,811 - INFO - Line   89: '0000002  635                      0.00                            2.00                    0.0000000                       0.0000000                   '
+2025-12-19 11:47:50,811 - INFO - Line   90: '0000002  700                      0.00                            0.00                    0.0000000                       0.0000000                   '
+2025-12-19 11:47:50,811 - INFO - Line   91: '0000002  705                      0.00                            0.00                    0.0000000                       0.0000000                   '
+2025-12-19 11:47:50,811 - INFO - Line   92: '0000002  900                      0.00                            0.00                   -0.0149274                       0.0000000                   '
+2025-12-19 11:47:50,811 - INFO - Line   93: '0000002  901            135,542,000.00                            0.00              178,618.3625887                       0.0017150                   '
+2025-12-19 11:47:50,811 - INFO - Line   94: '0000002  902                      0.00                            0.00                   -0.0014661                       0.0000000                   '
+2025-12-19 11:47:50,811 - INFO - Line   95: '0000002  904                      0.00                            0.00                   -0.0015592                       0.0000000                   '
+2025-12-19 11:47:50,811 - INFO - Line   96: '0000002  905                      0.00                            0.00                    0.0012508                       0.0027044                   '
+2025-12-19 11:47:50,811 - INFO - Line   97: '0000002  906                      0.00                            0.00                    0.0072338                       0.0000000                   '
+2025-12-19 11:47:50,811 - INFO - Line   98: '0000002  910                      0.00                            0.00                    0.0006821                       0.0000000                   '
+2025-12-19 11:47:50,811 - INFO - Line   99: '0000002  914                      0.00                            0.00                    0.0000000                       0.0015274                   '
+2025-12-19 11:47:50,811 - INFO - Line  100: '0000002  915                      0.00                            0.00                    0.0000072                      -0.0027898                   '
+2025-12-19 11:47:51,005 - INFO - 
+=== Pattern counts ===
+2025-12-19 11:47:51,005 - INFO - 
+=== Sample lines with R6999/R-6999 ===
+2025-12-19 11:47:51,011 - INFO - 
+=== Sample lines with COST CENTER ===
+2025-12-19 11:47:51,021 - INFO - 
+=== Starting file parsing ===
+2025-12-19 11:47:51,092 - INFO - Processed 0 records from text file
+2025-12-19 11:47:51,092 - WARNING - No records found. Check if file format matches expected patterns.
+2025-12-19 11:47:51,094 - ERROR - No records processed from text file
+2025-12-19 11:47:51,094 - ERROR - Please check the analysis output above to understand the file format
+2025-12-19 11:47:51,094 - ERROR - Processing failed
+2025-12-19 11:47:51,392 - DEBUG - Using selector: EpollSelector
