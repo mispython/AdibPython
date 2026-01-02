@@ -6,7 +6,8 @@ import sys
 from datetime import datetime, timedelta
 import numpy as np
 
-batch_dt = datetime.today() - timedelta(days=1)
+# Get today's date (no subtraction)
+batch_dt = datetime.today()
 day_str = f"{batch_dt.day:02d}"
 BATCH_MODE = 'M'
 
@@ -14,19 +15,26 @@ print("BATCH MODE = ", BATCH_MODE)
 
 if BATCH_MODE == 'M':
     print("Monthly")
-    # For monthly, use previous month's date
-    batch_dt_monthly = (batch_dt.replace(day=1) - timedelta(days=1))
+    # For monthly, we want to process the previous month
+    # If today is the first day of the month, we still want previous month
+    # Calculate first day of current month, then subtract 1 day to get last day of previous month
+    batch_dt_monthly = batch_dt.replace(day=1) - timedelta(days=1)
     month_str = f"{batch_dt_monthly.month:02d}"
     year_str = f"{batch_dt_monthly.year % 100:02d}"
     print(f"Processing month: {month_str}/{year_str}")
+    print(f"Processing date range: Previous month ({batch_dt_monthly.strftime('%B %Y')})")
     sas_path = "/dwh/btrade"
     output_file = f"billstran{month_str}4{year_str}"
     bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_M.parquet')
     pq_bill = bill_table.to_pandas()
 elif BATCH_MODE == 'D':
     print("Daily")
-    month_str = f"{batch_dt.month:02d}"
-    year_str = f"{batch_dt.year % 100:02d}"
+    # For daily, we want to process yesterday's data
+    batch_dt_daily = batch_dt - timedelta(days=1)
+    day_str = f"{batch_dt_daily.day:02d}"
+    month_str = f"{batch_dt_daily.month:02d}"
+    year_str = f"{batch_dt_daily.year % 100:02d}"
+    print(f"Processing date: {batch_dt_daily.strftime('%Y-%m-%d')}")
     sas_path = "/dwh/btrade_d"
     output_file = f"billstran_{day_str}"
     bill_table = pq.read_table('/sas/python/virt_edw/Data_Warehouse/TF/input/staging/STG_TF_BILLSTRAN_D.parquet')
