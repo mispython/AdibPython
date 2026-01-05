@@ -56,57 +56,64 @@ def read_source_data(file_pattern):
     path = f"/host/cis/parquet/year={REPTDATE.year}/month={REPTMON}/day={REPTDAY}/{file_pattern}"
     if os.path.exists(path):
         return pl.read_parquet(path)
-    print(f"File not found: {path}")
+    print(f"  File not found: {path}")
     return None
 
 def accumulate_monthly_data(df_new, dataset_name, schema, date_field="MONTH"):
-    """Accumulate new data with ALL historical data (current month + previous month)"""
+    """EXACT SAME LOGIC AS LONG CODE VERSION"""
     # Cast new data to schema
     df_new = df_new.select([pl.col(c).cast(schema[c]) for c in schema.keys()])
     
-    # Get ALL existing data from current month (including previous runs)
-    all_existing_data = pl.DataFrame(schema=schema)
-    curr_path = f"{CURRENT_PATH}/{dataset_name}.parquet"
-    
-    if os.path.exists(curr_path):
-        all_existing_data = pl.read_parquet(curr_path).select([pl.col(c).cast(schema[c]) for c in schema.keys()])
-        print(f"  Found {len(all_existing_data):,} existing records in current month")
-    
-    # Get ALL data from previous month
+    # 1. Get previous month data
     prev_month_data = pl.DataFrame(schema=schema)
     prev_path = f"{PREV_PATH}/{dataset_name}.parquet"
     
     if os.path.exists(prev_path):
         prev_month_data = pl.read_parquet(prev_path).select([pl.col(c).cast(schema[c]) for c in schema.keys()])
-        print(f"  Found {len(prev_month_data):,} records from previous month")
+        print(f"  Previous month data: {len(prev_month_data)} records")
     
-    # Remove duplicate for current processing date from ALL existing data
-    if date_field in all_existing_data.columns:
+    # 2. Get current month existing data
+    curr_month_data = pl.DataFrame(schema=schema)
+    curr_path = f"{CURRENT_PATH}/{dataset_name}.parquet"
+    
+    if os.path.exists(curr_path):
+        curr_month_data = pl.read_parquet(curr_path).select([pl.col(c).cast(schema[c]) for c in schema.keys()])
+        print(f"  Current month existing: {len(curr_month_data)} records")
+        
+        # Remove today's data if exists
         if date_field == "MONTH":
             current_value = REPTDATE.strftime("%b%y").upper()
         else:  # DATE field
             current_value = REPTDATE.strftime("%d/%m/%Y")
             
-        if current_value in all_existing_data[date_field].unique().to_list():
-            before = len(all_existing_data)
-            all_existing_data = all_existing_data.filter(pl.col(date_field) != current_value)
-            print(f"  Removed {before - len(all_existing_data):,} duplicate records for {current_value}")
+        if current_value in curr_month_data[date_field].unique().to_list():
+            print(f"  Removing existing {current_value} data...")
+            curr_month_data = curr_month_data.filter(pl.col(date_field) != current_value)
+            print(f"  After removal: {len(curr_month_data)}")
     
-    # Combine: Previous month + Current month (without duplicate) + New data
-    result = pl.concat([prev_month_data, all_existing_data, df_new], how="vertical")
-    print(f"  Total after accumulation: {len(result):,} records")
+    # 3. Combine all data (EXACT SAME ORDER AS LONG CODE)
+    all_data = []
+    if len(prev_month_data) > 0:
+        all_data.append(prev_month_data)
+    if len(curr_month_data) > 0:
+        all_data.append(curr_month_data)
+    all_data.append(df_new)
     
-    return result
+    if all_data:
+        final_df = pl.concat(all_data, how="vertical")
+        print(f"  After accumulation: {len(final_df)} total records")
+        return final_df
+    else:
+        return df_new
 
 def process_channel_summary():
     """Process channel summary data"""
     print("\n1. CHANNEL SUMMARY")
     df = read_source_data("CIPHONET_ALL_SUMMARY.parquet")
     if df is None:
-        print("  No source data found")
         return pl.DataFrame()
     
-    print(f"  Source records: {len(df)}")
+    print(f"  Columns: {df.columns}")
     
     df_new = df.select([
         pl.col("CHANNEL").str.to_uppercase().alias("CHANNEL"),
@@ -115,44 +122,50 @@ def process_channel_summary():
         pl.lit(REPTDATE.strftime("%b%y").upper()).alias("MONTH")
     ])
     
+    print(f"  Today's records: {len(df_new)}")
+    print(f"  MONTH: {REPTDATE.strftime('%b%y').upper()}")
+    
     schema = {
         'CHANNEL': pl.Utf8, 'TOLPROMPT': pl.Int64, 
         'TOLUPDATE': pl.Int64, 'MONTH': pl.Utf8
     }
     
-    result = accumulate_monthly_data(df_new, "CHANNEL_SUM", schema, date_field="MONTH")
-    return result
+    return accumulate_monthly_data(df_new, "CHANNEL_SUM", schema, date_field="MONTH")
 
 def process_otc_detail():
     """Process OTC detail for all branches"""
     print("\n2. OTC DETAIL")
     bcode_df = read_bcode()
     if len(bcode_df) == 0:
-        print("  No BCODE data found")
+        print("  No BCODE data")
         return pl.DataFrame()
-    
-    print(f"  BCODE branches: {len(bcode_df)}")
     
     df = read_source_data("CIPHONET_OTC_SUMMARY.parquet")
     if df is None:
-        print("  No OTC data found, creating zero-filled records")
+        print("  OTC file not found")
         return bcode_df.with_columns([
             pl.lit(0).alias("TOLPROMPT"),
             pl.lit(0).alias("TOLUPDATE")
         ])
     
-    print(f"  OTC source records: {len(df)}")
+    print(f"  OTC columns: {df.columns}")
+    print(f"  OTC records: {len(df)}")
     
     df_clean = df.with_columns(
         pl.col("CHANNEL").cast(pl.Int64).alias("BRANCHNO")
     ).select(["BRANCHNO", "PROMPT", "UPDATED"])
+    
+    print(f"  OTC after conversion: {len(df_clean)} records")
     
     result = bcode_df.join(df_clean, on="BRANCHNO", how="left").with_columns([
         pl.col("PROMPT").fill_null(0).alias("TOLPROMPT"),
         pl.col("UPDATED").fill_null(0).alias("TOLUPDATE")
     ]).drop(["PROMPT", "UPDATED"]).sort("BRANCHNO")
     
-    print(f"  Final OTC records: {len(result):,}, TOLPROMPT sum: {result['TOLPROMPT'].sum():,}")
+    print(f"\n  FINAL OTC_DETAIL:")
+    print(f"    Total records: {len(result)}")
+    print(f"    TOLPROMPT sum: {result['TOLPROMPT'].sum():,}")
+    
     return result
 
 def process_channel_update():
@@ -160,10 +173,9 @@ def process_channel_update():
     print("\n3. CHANNEL UPDATE")
     df = read_source_data("CIPHONET_FULL_SUMMARY.parquet")
     if df is None:
-        print("  No source data found")
         return pl.DataFrame()
     
-    print(f"  Source records: {len(df)}")
+    print(f"  Columns: {df.columns}")
     
     if len(df) < 2:
         print(f"  Not enough records (need 2, got {len(df)})")
@@ -179,13 +191,14 @@ def process_channel_update():
         pl.lit(REPTDATE.strftime("%d/%m/%Y")).alias("DATE")
     )
     
+    print(f"  Today's update records: {len(df_new)}")
+    
     schema = {
         'DESC': pl.Utf8, 'ATM': pl.Int64, 'EBK': pl.Int64,
         'OTC': pl.Int64, 'TOTAL': pl.Int64, 'DATE': pl.Utf8
     }
     
-    result = accumulate_monthly_data(df_new, "CHANNEL_UPDATE", schema, date_field="DATE")
-    return result
+    return accumulate_monthly_data(df_new, "CHANNEL_UPDATE", schema, date_field="DATE")
 
 # =============================================================================
 # SAS TRANSFER FUNCTIONS
@@ -193,7 +206,7 @@ def process_channel_update():
 def transfer_to_sas(df, lib_name, dataset_name):
     """Transfer data to SAS"""
     if len(df) == 0 or sas is None:
-        print(f"  Skipping {dataset_name} - no data or SAS not available")
+        print(f"  Skipping {dataset_name} - no data")
         return None
     
     try:
