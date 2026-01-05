@@ -1,0 +1,8 @@
+STG_LN_ACCTFILE.parquet
+STG_LN_ACC3FILE.parquet
+STG_DP_DPTRBLGS.parquet
+dpbtran*.sas7bdat
+STG_CIS_CISRLCC.parquet
+LKP_BRANCH
+enrh_exdwh_cisr1.sas7bdat
+LKP_CUSTCODE
