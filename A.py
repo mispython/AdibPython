@@ -5,38 +5,42 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 # =============================================================================
-# INITIALIZATION - MATCH SAS LOGIC
+# INITIALIZATION
 # =============================================================================
 sas = saspy.SASsession() if saspy else None
 
-# SAS uses TODAY()-1 (not last day of previous month!)
-REPTDATE = datetime.today() - timedelta(days=1)
+# Monthly job: Process last day of previous month
+TODAY = datetime.today()
+REPTDATE = TODAY.replace(day=1) - timedelta(days=1)  # Last day of prev month
 REPTYEAR = f"{REPTDATE.year % 100:02d}"
 REPTMON = f"{REPTDATE.month:02d}"
 REPTDAY = f"{REPTDATE.day:02d}"
 
-print(f"PROCESSING DATE: {REPTDATE:%Y-%m-%d} (TODAY()-1)")
-print(f"REPTYEAR: {REPTYEAR}, REPTMON: {REPTMON}, REPTDAY: {REPTDAY}")
+# Previous month for accumulation (two months ago)
+PREV_DATE = REPTDATE.replace(day=1) - timedelta(days=1)
+
+print(f"MONTHLY JOB: Processing {REPTDATE:%B %Y}")
+print(f"Processing: {REPTDATE:%Y-%m-%d}")
 
 # =============================================================================
 # PATH CONFIGURATION
 # =============================================================================
 BASE_PATH = "/host/mis/parquet/crm"
 CURRENT_PATH = f"{BASE_PATH}/year={REPTDATE.year}/month={REPTMON}"
+PREV_PATH = f"{BASE_PATH}/year={PREV_DATE.year}/month={PREV_DATE.month:02d}"
 os.makedirs(CURRENT_PATH, exist_ok=True)
 
 # =============================================================================
-# DATA PROCESSING FUNCTIONS - MATCH SAS LOGIC
+# DATA PROCESSING FUNCTIONS
 # =============================================================================
 def read_bcode():
-    """Read BCODE branches from lookup file - matches SAS INFILE BCODE"""
+    """Read BCODE branches from lookup file"""
     branches = []
     try:
         with open("/sasdata/rawdata/lookup/LKP_BRANCH", 'r') as f:
             for line in f:
                 if line.strip():
                     try:
-                        # SAS: INPUT @002 BRANCHNO 3.
                         branchno = int(line[1:4].strip())
                         if branchno:
                             branches.append({"BRANCHNO": branchno})
@@ -47,214 +51,241 @@ def read_bcode():
         print(f"Error reading BCODE: {e}")
         return pl.DataFrame({'BRANCHNO': []})
 
-def process_channel_summary():
-    """Matches SAS EIBMCHNL CHANNEL processing"""
-    print("\n1. PROCESSING CHANNEL SUMMARY (EIBMCHNL)")
+def read_source_data(file_pattern):
+    """Read source Parquet file if exists"""
+    path = f"/host/cis/parquet/year={REPTDATE.year}/month={REPTMON}/day={REPTDAY}/{file_pattern}"
+    if os.path.exists(path):
+        return pl.read_parquet(path)
+    print(f"  File not found: {path}")
+    return None
+
+def accumulate_monthly_data(df_new, dataset_name, schema, date_field="MONTH"):
+    """
+    CORRECTED ACCUMULATION LOGIC:
+    - On FIRST run of the month: Include previous month data
+    - On SUBSEQUENT runs: Only accumulate within current month
+    """
+    # Cast new data to schema
+    df_new = df_new.select([pl.col(c).cast(schema[c]) for c in schema.keys()])
     
-    # Read source data
-    path = f"/host/cis/parquet/year={REPTDATE.year}/month={REPTMON}/day={REPTDAY}/CIPHONET_ALL_SUMMARY.parquet"
-    if not os.path.exists(path):
-        print(f"  File not found: {path}")
+    # Get current month existing data
+    curr_month_data = pl.DataFrame(schema=schema)
+    curr_path = f"{CURRENT_PATH}/{dataset_name}.parquet"
+    
+    # Check if this is FIRST run of the month
+    is_first_run = not os.path.exists(curr_path)
+    
+    if not is_first_run:
+        curr_month_data = pl.read_parquet(curr_path).select([pl.col(c).cast(schema[c]) for c in schema.keys()])
+        print(f"  Current month existing: {len(curr_month_data)} records")
+        
+        # Remove duplicate for current processing date
+        if date_field == "MONTH":
+            current_value = REPTDATE.strftime("%b%y").upper()
+        else:  # DATE field
+            current_value = REPTDATE.strftime("%d/%m/%Y")
+            
+        if current_value in curr_month_data[date_field].unique().to_list():
+            print(f"  Removing existing {current_value} data...")
+            curr_month_data = curr_month_data.filter(pl.col(date_field) != current_value)
+            print(f"  After removal: {len(curr_month_data)}")
+    
+    # Only include previous month data on FIRST run
+    prev_month_data = pl.DataFrame(schema=schema)
+    if is_first_run:
+        prev_path = f"{PREV_PATH}/{dataset_name}.parquet"
+        if os.path.exists(prev_path):
+            prev_month_data = pl.read_parquet(prev_path).select([pl.col(c).cast(schema[c]) for c in schema.keys()])
+            print(f"  First run - adding previous month data: {len(prev_month_data)} records")
+    
+    # Combine data
+    all_data = []
+    if len(prev_month_data) > 0:
+        all_data.append(prev_month_data)
+    if len(curr_month_data) > 0:
+        all_data.append(curr_month_data)
+    all_data.append(df_new)
+    
+    if all_data:
+        final_df = pl.concat(all_data, how="vertical")
+        print(f"  After accumulation: {len(final_df)} total records")
+        return final_df
+    else:
+        return df_new
+
+def process_channel_summary():
+    """Process channel summary data"""
+    print("\n1. CHANNEL SUMMARY")
+    df = read_source_data("CIPHONET_ALL_SUMMARY.parquet")
+    if df is None:
         return pl.DataFrame()
     
-    df = pl.read_parquet(path)
-    print(f"  Source records: {len(df)}")
+    print(f"  Columns: {df.columns}")
     
-    # Create CHANNEL dataset - matches SAS DATA CHANNEL
-    # SAS: MONTH=PUT(TODAY()-2,MONYY5.)
-    month_date = REPTDATE - timedelta(days=1)  # TODAY()-2
-    channel_df = df.select([
+    df_new = df.select([
         pl.col("CHANNEL").str.to_uppercase().alias("CHANNEL"),
         pl.col("PROMPT").alias("TOLPROMPT"),
         pl.col("UPDATED").alias("TOLUPDATE"),
-        pl.lit(month_date.strftime("%b%y").upper()).alias("MONTH")
+        pl.lit(REPTDATE.strftime("%b%y").upper()).alias("MONTH")
     ])
     
-    print(f"  Created CHANNEL with {len(channel_df)} records")
-    print(f"  MONTH value: {month_date.strftime('%b%y').upper()}")
+    print(f"  Today's records: {len(df_new)}")
+    print(f"  MONTH: {REPTDATE.strftime('%b%y').upper()}")
     
-    # SAS: PROC APPEND DATA=CHANNEL BASE=CRMWH.CHANNEL_SUM FORCE
-    # Simple append, no complex accumulation
-    base_path = f"{CURRENT_PATH}/CHANNEL_SUM.parquet"
-    if os.path.exists(base_path):
-        base_df = pl.read_parquet(base_path)
-        print(f"  Existing CHANNEL_SUM records: {len(base_df)}")
-        result = pl.concat([base_df, channel_df], how="vertical")
-    else:
-        result = channel_df
+    schema = {
+        'CHANNEL': pl.Utf8, 'TOLPROMPT': pl.Int64, 
+        'TOLUPDATE': pl.Int64, 'MONTH': pl.Utf8
+    }
     
-    print(f"  Final CHANNEL_SUM: {len(result)} records")
-    return result
+    return accumulate_monthly_data(df_new, "CHANNEL_SUM", schema, date_field="MONTH")
 
 def process_otc_detail():
-    """Matches SAS EIBMCHNL OTC_DETAIL processing"""
-    print("\n2. PROCESSING OTC DETAIL (EIBMCHNL)")
-    
-    # Read BCODE - matches SAS DATA BCODE
+    """Process OTC detail for all branches"""
+    print("\n2. OTC DETAIL")
     bcode_df = read_bcode()
     if len(bcode_df) == 0:
-        print("  No BCODE data found")
+        print("  No BCODE data")
         return pl.DataFrame()
     
-    print(f"  BCODE branches: {len(bcode_df)}")
-    
-    # Read BRANCH data - matches SAS DATA BRANCH
-    path = f"/host/cis/parquet/year={REPTDATE.year}/month={REPTMON}/day={REPTDAY}/CIPHONET_OTC_SUMMARY.parquet"
-    if not os.path.exists(path):
-        print(f"  BRANCH file not found: {path}")
-        # SAS: IF TOLPROMPT=. THEN DO TOLPROMPT=0;
+    df = read_source_data("CIPHONET_OTC_SUMMARY.parquet")
+    if df is None:
+        print("  OTC file not found")
         return bcode_df.with_columns([
             pl.lit(0).alias("TOLPROMPT"),
             pl.lit(0).alias("TOLUPDATE")
         ])
     
-    branch_df = pl.read_parquet(path)
-    print(f"  BRANCH records: {len(branch_df)}")
+    print(f"  OTC columns: {df.columns}")
+    print(f"  OTC records: {len(df)}")
     
-    # Convert and prepare BRANCH data
-    branch_clean = branch_df.with_columns(
+    df_clean = df.with_columns(
         pl.col("CHANNEL").cast(pl.Int64).alias("BRANCHNO")
-    ).select([
-        "BRANCHNO",
-        pl.col("PROMPT").alias("TOLPROMPT"),
-        pl.col("UPDATED").alias("TOLUPDATE")
-    ])
+    ).select(["BRANCHNO", "PROMPT", "UPDATED"])
     
-    # SAS: MERGE BCODE(IN=A) BRANCH(IN=B);BY BRANCHNO; IF A;
-    result = bcode_df.join(branch_clean, on="BRANCHNO", how="left").with_columns([
-        pl.col("TOLPROMPT").fill_null(0),
-        pl.col("TOLUPDATE").fill_null(0)
-    ]).sort("BRANCHNO")
+    print(f"  OTC after conversion: {len(df_clean)} records")
     
-    print(f"  OTC_DETAIL records: {len(result)}")
-    print(f"  TOLPROMPT sum: {result['TOLPROMPT'].sum():,}")
+    result = bcode_df.join(df_clean, on="BRANCHNO", how="left").with_columns([
+        pl.col("PROMPT").fill_null(0).alias("TOLPROMPT"),
+        pl.col("UPDATED").fill_null(0).alias("TOLUPDATE")
+    ]).drop(["PROMPT", "UPDATED"]).sort("BRANCHNO")
+    
+    print(f"\n  FINAL OTC_DETAIL:")
+    print(f"    Total records: {len(result)}")
+    print(f"    TOLPROMPT sum: {result['TOLPROMPT'].sum():,}")
     
     return result
 
 def process_channel_update():
-    """Matches SAS EIBMCHN2 processing"""
-    print("\n3. PROCESSING CHANNEL UPDATE (EIBMCHN2)")
-    
-    # Read source data
-    path = f"/host/cis/parquet/year={REPTDATE.year}/month={REPTMON}/day={REPTDAY}/CIPHONET_FULL_SUMMARY.parquet"
-    if not os.path.exists(path):
-        print(f"  File not found: {path}")
+    """Process channel update data"""
+    print("\n3. CHANNEL UPDATE")
+    df = read_source_data("CIPHONET_FULL_SUMMARY.parquet")
+    if df is None:
         return pl.DataFrame()
     
-    df = pl.read_parquet(path)
-    print(f"  Source records: {len(df)}")
+    print(f"  Columns: {df.columns}")
     
     if len(df) < 2:
         print(f"  Not enough records (need 2, got {len(df)})")
         return pl.DataFrame()
     
-    # SAS: First 2 records only
-    df_head = df.head(2)
-    
-    # SAS: IF _N_ = 1 THEN DESC='TOTAL PROMPT BASE';
-    #      IF _N_ = 2 THEN DESC='TOTAL UPDATED';
-    update_df = df_head.with_row_index().with_columns(
+    df_new = df.head(2).with_row_index().with_columns(
         pl.when(pl.col("index") == 0).then(pl.lit("TOTAL PROMPT BASE"))
         .when(pl.col("index") == 1).then(pl.lit("TOTAL UPDATED"))
         .alias("DESC")
     ).drop("index").select([
         "DESC", "ATM", "EBK", "OTC", "TOTAL"
     ]).with_columns(
-        pl.lit(REPTDATE.strftime("%d/%m/%Y")).alias("DATE")  # SAS: &RDATE
+        pl.lit(REPTDATE.strftime("%d/%m/%Y")).alias("DATE")
     )
     
-    print(f"  Created UAT with {len(update_df)} records")
+    print(f"  Today's update records: {len(df_new)}")
     
-    # SAS: PROC APPEND DATA=UAT BASE=CHN.CHANNEL_UPDATE FORCE
-    # Simple append, no complex accumulation
-    base_path = f"{CURRENT_PATH}/CHANNEL_UPDATE.parquet"
-    if os.path.exists(base_path):
-        base_df = pl.read_parquet(base_path)
-        print(f"  Existing CHANNEL_UPDATE records: {len(base_df)}")
-        result = pl.concat([base_df, update_df], how="vertical")
-    else:
-        result = update_df
-    
-    print(f"  Final CHANNEL_UPDATE: {len(result)} records")
-    return result
-
-# =============================================================================
-# SAS TRANSFER - MATCHES ORIGINAL LOGIC
-# =============================================================================
-def transfer_to_sas():
-    """Transfer data to SAS matching original program"""
-    if sas is None:
-        print("SAS session not available")
-        return
-    
-    print("\n" + "=" * 60)
-    print("TRANSFERRING TO SAS DATASETS")
-    print("=" * 60)
-    
-    # Create SAS datasets matching original names
-    datasets = {
-        "channel_sum": channel_df,
-        f"otc_detail_{REPTYEAR}{REPTMON}": otc_df,
-        "channel_update": update_df
+    schema = {
+        'DESC': pl.Utf8, 'ATM': pl.Int64, 'EBK': pl.Int64,
+        'OTC': pl.Int64, 'TOTAL': pl.Int64, 'DATE': pl.Utf8
     }
     
-    for dataset_name, df in datasets.items():
-        if len(df) == 0:
-            print(f"  Skipping {dataset_name} - no data")
-            continue
+    return accumulate_monthly_data(df_new, "CHANNEL_UPDATE", schema, date_field="DATE")
+
+# =============================================================================
+# SAS TRANSFER FUNCTIONS
+# =============================================================================
+def transfer_to_sas(df, lib_name, dataset_name):
+    """Transfer data to SAS"""
+    if len(df) == 0 or sas is None:
+        print(f"  Skipping {dataset_name} - no data")
+        return None
+    
+    try:
+        # Assign library
+        sas.submit(f"libname {lib_name} '/dwh/crm';")
         
+        # Transfer data
+        print(f"  Creating {lib_name}.{dataset_name}...")
+        sas.dataframe2sasdata(df.to_pandas(), table=dataset_name, libref=lib_name)
+        
+        # Verify
         try:
-            # Assign library
-            sas.submit(f"libname crm '/dwh/crm';")
-            
-            # Transfer data
-            print(f"  Creating crm.{dataset_name}...")
-            sas.dataframe2sasdata(df.to_pandas(), table=dataset_name, libref='crm')
-            print(f"  ✓ crm.{dataset_name} created")
-            
-        except Exception as e:
-            print(f"  ✗ Error creating {dataset_name}: {e}")
+            sas_ds = sas.sasdata(dataset_name, libref=lib_name)
+            row_count = sas_ds.shape[0] if hasattr(sas_ds, 'shape') else 'unknown'
+            print(f"  ✓ {dataset_name} created with {row_count} rows")
+            return True
+        except:
+            print(f"  ⚠ {dataset_name} may not have been created")
+            return False
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        return False
 
 # =============================================================================
 # MAIN EXECUTION
 # =============================================================================
 print("\n" + "=" * 60)
-print("PROCESSING STARTED - FOLLOWING SAS LOGIC")
+print("MONTHLY PROCESSING STARTED")
 print("=" * 60)
 
-# Process data following SAS logic
+# Process data
 channel_df = process_channel_summary()
 otc_df = process_otc_detail()
 update_df = process_channel_update()
 
 # Write output files
 print("\n" + "=" * 60)
-print("WRITING PARQUET FILES")
+print("WRITING OUTPUT FILES")
 print("=" * 60)
 
-if len(channel_df) > 0:
-    channel_df.write_parquet(f"{CURRENT_PATH}/CHANNEL_SUM.parquet")
-    print(f"✓ CHANNEL_SUM.parquet: {len(channel_df):,} records")
+datasets = [
+    (channel_df, "CHANNEL_SUM"),
+    (update_df, "CHANNEL_UPDATE"),
+    (otc_df, "OTC_DETAIL")
+]
 
-if len(otc_df) > 0:
-    otc_df.write_parquet(f"{CURRENT_PATH}/OTC_DETAIL.parquet")
-    print(f"✓ OTC_DETAIL.parquet: {len(otc_df):,} records")
-
-if len(update_df) > 0:
-    update_df.write_parquet(f"{CURRENT_PATH}/CHANNEL_UPDATE.parquet")
-    print(f"✓ CHANNEL_UPDATE.parquet: {len(update_df):,} records")
+for df, name in datasets:
+    if len(df) > 0:
+        path = f"{CURRENT_PATH}/{name}.parquet"
+        df.write_parquet(path)
+        print(f"✓ {name}: {len(df):,} records → {path}")
+    else:
+        print(f"✗ {name}: No data to write")
 
 # Transfer to SAS
-transfer_to_sas()
+if sas:
+    print("\n" + "=" * 60)
+    print("TRANSFERRING TO SAS")
+    print("=" * 60)
+    
+    transfer_to_sas(channel_df, "crm", "channel_sum")
+    transfer_to_sas(update_df, "crm", "channel_update")
+    transfer_to_sas(otc_df, "crm", f"otc_detail_{REPTYEAR}{REPTMON}")
 
 # Summary
 print("\n" + "=" * 60)
 print("PROCESS COMPLETED")
 print("=" * 60)
-print(f"Processing Date: {REPTDATE:%Y-%m-%d}")
-print(f"Output Path: {CURRENT_PATH}")
-print(f"\nRecords Processed:")
-print(f"  CHANNEL_SUM: {len(channel_df):,}")
-print(f"  OTC_DETAIL:  {len(otc_df):,}")
-print(f"  CHANNEL_UPDATE: {len(update_df):,}")
+print(f"Date: {REPTDATE:%Y-%m-%d}")
+print(f"Output: {CURRENT_PATH}")
+print("\nRecords processed:")
+print(f"  Channel Summary: {len(channel_df):,}")
+print(f"  Channel Update:  {len(update_df):,}")
+print(f"  OTC Detail:      {len(otc_df):,}")
 print("=" * 60)
