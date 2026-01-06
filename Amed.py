@@ -2,11 +2,10 @@ import duckdb
 import polars as pl
 from pathlib import Path
 from datetime import datetime
-import pyreadstat  # For reading SAS7BDAT files
+import pyreadstat
 import warnings
 import os
 
-# Suppress warnings if needed
 warnings.filterwarnings('ignore')
 
 # Configuration - Input paths
@@ -17,8 +16,8 @@ cis_staging = Path("/parquet/dwh/CIS/staging")
 lookup_path = Path("/sasdata/rawdata/lookup")
 cis_mart = Path("/sas/cis/mart/enrichment")
 
-# Output paths
-output_path = Path("/host/mis/parquet/")
+# Output paths - Monthly YYMM format
+output_path = Path("/host/mis/parquet")
 output_path.mkdir(parents=True, exist_ok=True)
 
 # Report date (configurable - set to desired date)
@@ -41,6 +40,9 @@ else:
 
 stdate = report_date.replace(day=1)
 
+# Monthly format: YYMM (e.g., 2501 for Jan 2025)
+monthly_format = f"{report_date.year % 100:02d}{report_date.month:02d}"
+
 macro_vars = {
     'NOWK': f"{nowk:02d}",
     'NOWK1': f"{nowk:01d}",
@@ -51,10 +53,12 @@ macro_vars = {
     'SDATE': stdate.strftime('%d/%m/%Y'),
     'EDATE': report_date.strftime('%d/%m/%Y'),
     'RPTDT': report_date.strftime('%Y%m%d'),
-    'REPTDATE': report_date
+    'REPTDATE': report_date,
+    'MONTHLY': monthly_format  # Add monthly format
 }
 
-print(f"Processing for week {macro_vars['NOWK']} of {macro_vars['REPTMON']}/{macro_vars['REPTYEAR']}")
+print(f"Processing for week {macro_vars['NOWK']} of {report_date.month:02d}/{report_date.year}")
+print(f"Monthly output format: {macro_vars['MONTHLY']}")
 
 def read_sas_file(file_path):
     """Read SAS7BDAT file using pyreadstat and return as Polars DataFrame"""
@@ -87,7 +91,7 @@ def read_parquet_or_empty(file_path):
         print(f"  Error reading {file_path}: {e}")
         return pl.DataFrame()
 
-def read_flat_file(file_path, delimiter=","):
+def read_flat_file(file_path):
     """Read flat file (CSV, TSV, etc.) and return as Polars DataFrame"""
     try:
         if not file_path.exists():
@@ -96,145 +100,160 @@ def read_flat_file(file_path, delimiter=","):
         
         print(f"Reading flat file: {file_path}")
         
-        # Try to determine file type and read accordingly
-        if file_path.suffix.lower() in ['.csv', '.txt']:
-            # Try to read with comma delimiter
+        # Try different delimiters
+        for separator in [",", "\t", "|", ";"]:
             try:
-                df = pl.read_csv(file_path, separator=delimiter)
-                print(f"  Successfully read {len(df)} rows with delimiter '{delimiter}'")
+                df = pl.read_csv(file_path, separator=separator, infer_schema_length=10000)
+                print(f"  Successfully read {len(df)} rows with separator '{separator}'")
                 return df
-            except Exception as e:
-                # Try tab delimiter
-                try:
-                    df = pl.read_csv(file_path, separator="\t")
-                    print(f"  Successfully read {len(df)} rows with tab delimiter")
-                    return df
-                except:
-                    # Try pipe delimiter
-                    try:
-                        df = pl.read_csv(file_path, separator="|")
-                        print(f"  Successfully read {len(df)} rows with pipe delimiter")
-                        return df
-                    except:
-                        # Try with inferring schema
-                        df = pl.read_csv(file_path, infer_schema_length=1000)
-                        print(f"  Successfully read {len(df)} rows with inferred schema")
-                        return df
-        else:
-            print(f"  Unsupported file format: {file_path.suffix}")
-            return pl.DataFrame()
+            except:
+                continue
+        
+        # If all delimiters fail, try with default
+        df = pl.read_csv(file_path, infer_schema_length=10000)
+        print(f"  Successfully read {len(df)} rows with inferred schema")
+        return df
     except Exception as e:
         print(f"  Error reading flat file {file_path}: {e}")
         return pl.DataFrame()
 
-# Step 2: Load and process BRANCH lookup from flat file
-print("\nStep 2: Loading BRANCH lookup from flat file...")
-branch_file = lookup_path / "LKP_BRANCH"  # Assuming no extension or .csv/.txt
+# Step 2: Load and process BRANCH lookup
+print("\nStep 2: Loading BRANCH lookup...")
 brch_df = pl.DataFrame()
 
-# Try different file extensions
-possible_extensions = ['', '.csv', '.txt', '.dat', '.tsv']
-for ext in possible_extensions:
-    file_path = Path(str(branch_file) + ext)
+# Try to find the branch file with common extensions
+for ext in ['', '.parquet', '.csv', '.txt', '.dat']:
+    file_path = lookup_path / f"LKP_BRANCH{ext}"
     if file_path.exists():
-        brch_df = read_flat_file(file_path)
+        if ext == '.parquet' or ext == '':
+            brch_df = read_parquet_or_empty(file_path)
+        else:
+            brch_df = read_flat_file(file_path)
         if not brch_df.is_empty():
             break
 
 if brch_df.is_empty():
-    # Try to find any file with LKP_BRANCH in the name
-    for file in lookup_path.glob("*LKP_BRANCH*"):
+    # Try to find any branch-related file
+    for file in lookup_path.glob("*BRANCH*"):
         if file.is_file():
-            brch_df = read_flat_file(file)
+            if file.suffix == '.parquet':
+                brch_df = read_parquet_or_empty(file)
+            else:
+                brch_df = read_flat_file(file)
             if not brch_df.is_empty():
                 break
 
 if not brch_df.is_empty():
-    # Print columns to help debug
     print(f"  Columns in BRANCH file: {brch_df.columns}")
     
-    # Look for common column names
+    # Find column names (case-insensitive)
+    col_map = {col.upper(): col for col in brch_df.columns}
+    
+    # Get required columns
     branch_col = None
-    label_col = None
-    status_col = None
+    brabbr_col = None
+    brstat_col = None
     
-    # Common column name patterns
-    for col in brch_df.columns:
-        col_upper = col.upper()
-        if 'BRANCH' in col_upper or col_upper in ['BRANCH', 'BR', 'BRNCH']:
-            branch_col = col
-        elif 'BRABBR' in col_upper or 'ABBR' in col_upper or 'LABEL' in col_upper or 'NAME' in col_upper:
-            label_col = col
-        elif 'BRSTAT' in col_upper or 'STAT' in col_upper or 'STATUS' in col_upper:
-            status_col = col
+    for col_name in ['BRANCH', 'BR', 'BRNCH', 'BRANCH_NO', 'BRANCH_CODE']:
+        if col_name in col_map:
+            branch_col = col_map[col_name]
+            break
     
-    if branch_col and label_col:
-        if status_col:
-            brch_df = brch_df.filter(pl.col(status_col) != "C")
+    for col_name in ['BRABBR', 'ABBR', 'LABEL', 'NAME', 'BRANCH_NAME', 'BRANCH_ABBR']:
+        if col_name in col_map:
+            brabbr_col = col_map[col_name]
+            break
+    
+    for col_name in ['BRSTAT', 'STATUS', 'STAT', 'BRANCH_STATUS']:
+        if col_name in col_map:
+            brstat_col = col_map[col_name]
+            break
+    
+    if branch_col and brabbr_col:
+        # Filter out closed branches if status column exists
+        if brstat_col and brstat_col in brch_df.columns:
+            brch_df = brch_df.filter(pl.col(brstat_col) != "C")
         
         brch_df = brch_df.select([
             pl.col(branch_col).alias("START"),
-            pl.col(label_col).alias("LABEL")
+            pl.col(brabbr_col).alias("LABEL")
         ]).sort("START")
         
         # Create branch lookup dictionary
         branch_lookup = dict(zip(brch_df["START"].to_list(), brch_df["LABEL"].to_list()))
         print(f"  Loaded {len(branch_lookup)} branch mappings")
     else:
-        print(f"  Warning: Could not identify required columns. Available columns: {brch_df.columns}")
+        print(f"  Warning: Could not find required columns")
         branch_lookup = {}
 else:
     branch_lookup = {}
     print("  Warning: Could not load branch lookup data")
 
-# Step 3: Load and process CUSTCODE to identify staff from flat file
-print("\nStep 3: Loading CUSTCODE lookup from flat file...")
-custcode_file = lookup_path / "LKP_CUSTCODE"  # Assuming no extension or .csv/.txt
+# Step 3: Load and process CUSTCODE to identify staff
+print("\nStep 3: Loading CUSTCODE lookup...")
 code_df = pl.DataFrame()
 
-# Try different file extensions
-for ext in possible_extensions:
-    file_path = Path(str(custcode_file) + ext)
+# Try to find the custcode file with common extensions
+for ext in ['', '.parquet', '.csv', '.txt', '.dat']:
+    file_path = lookup_path / f"LKP_CUSTCODE{ext}"
     if file_path.exists():
-        code_df = read_flat_file(file_path)
+        if ext == '.parquet' or ext == '':
+            code_df = read_parquet_or_empty(file_path)
+        else:
+            code_df = read_flat_file(file_path)
         if not code_df.is_empty():
             break
 
 if code_df.is_empty():
-    # Try to find any file with LKP_CUSTCODE in the name
-    for file in lookup_path.glob("*LKP_CUSTCODE*"):
+    # Try to find any custcode-related file
+    for file in lookup_path.glob("*CUSTCODE*"):
         if file.is_file():
-            code_df = read_flat_file(file)
+            if file.suffix == '.parquet':
+                code_df = read_parquet_or_empty(file)
+            else:
+                code_df = read_flat_file(file)
             if not code_df.is_empty():
                 break
 
 if not code_df.is_empty():
     print(f"  Columns in CUSTCODE file: {code_df.columns}")
     
-    # Look for CUSTNO column
+    # Find column names (case-insensitive)
+    col_map = {col.upper(): col for col in code_df.columns}
+    
+    # Find CUSTNO column
     custno_col = None
-    for col in code_df.columns:
-        col_upper = col.upper()
-        if 'CUSTNO' in col_upper or col_upper in ['CUSTNO', 'CUSTNUM', 'CUSTOMERNO']:
-            custno_col = col
+    for col_name in ['CUSTNO', 'CUSTNUM', 'CUSTOMERNO', 'CUSTOMER_NO', 'CUST_CODE']:
+        if col_name in col_map:
+            custno_col = col_map[col_name]
             break
     
     if custno_col:
-        # Look for CUST01-CUST20 columns
+        # Find CUST01-CUST20 columns
         cust_cols = []
         for i in range(1, 21):
-            for col in code_df.columns:
-                col_upper = col.upper()
-                if f'CUST{i:02d}' == col_upper or f'CUST{i}' == col_upper:
-                    cust_cols.append(col)
+            for pattern in [f'CUST{i:02d}', f'CUST{i}', f'CUSTOMER{i:02d}', f'CUSTOMER{i}']:
+                if pattern in col_map:
+                    cust_cols.append(col_map[pattern])
                     break
         
         if cust_cols:
             # Check if any CUST01-CUST20 contains '002'
-            code_df = code_df.filter(
-                pl.concat([pl.col(c) == "002" for c in cust_cols]).any()
-            ).select(pl.col(custno_col).alias("CUSTNO")).unique().sort("CUSTNO")
-            print(f"  Found {len(code_df)} staff customer codes")
+            condition = None
+            for col in cust_cols:
+                if condition is None:
+                    condition = pl.col(col) == "002"
+                else:
+                    condition = condition | (pl.col(col) == "002")
+            
+            if condition is not None:
+                code_df = code_df.filter(condition).select(
+                    pl.col(custno_col).alias("CUSTNO")
+                ).unique().sort("CUSTNO")
+                print(f"  Found {len(code_df)} staff customer codes")
+            else:
+                print(f"  Warning: Could not create filter condition")
+                code_df = pl.DataFrame()
         else:
             print(f"  Warning: Could not find CUST01-CUST20 columns")
             code_df = pl.DataFrame()
@@ -245,27 +264,23 @@ else:
     print("  Warning: Could not load CUSTCODE data")
     code_df = pl.DataFrame()
 
-# Step 4: Load CIS customer data from SAS file
-print("\nStep 4: Loading CIS data...")
+# Step 4: Load CIS customer data
+print("\nStep 4: Loading CIS customer data...")
 cis_sas_file = cis_mart / "enrh_exdwh_cisr1.sas7bdat"
 cis_df = read_sas_file(cis_sas_file)
 
 if not cis_df.is_empty():
-    # Check for PRISEC column
-    if "PRISEC" in cis_df.columns:
+    # Check for required columns
+    if "PRISEC" in cis_df.columns and "ACCTNO" in cis_df.columns and "CUSTNAME" in cis_df.columns and "CUSTNO" in cis_df.columns:
         cis_df = cis_df.filter(pl.col("PRISEC") == 901).select([
             "ACCTNO",
             "CUSTNAME",
             pl.col("CUSTNO").cast(pl.Int64).alias("CUSTNO")
         ]).sort("CUSTNO")
-        print(f"  Filtered to {len(cis_df)} rows with PRISEC=901")
+        print(f"  Loaded {len(cis_df)} CIS records with PRISEC=901")
     else:
-        print(f"  Warning: PRISEC column not found in CIS data. Using all rows.")
-        cis_df = cis_df.select([
-            "ACCTNO",
-            "CUSTNAME",
-            pl.col("CUSTNO").cast(pl.Int64).alias("CUSTNO")
-        ]).sort("CUSTNO")
+        print(f"  Warning: Missing required columns in CIS data")
+        cis_df = pl.DataFrame()
 else:
     print("  Warning: Could not load CIS data")
     cis_df = pl.DataFrame()
@@ -513,8 +528,8 @@ else:
                 ~pl.col("RELATCD2").is_in(excluded_codes)
             ).sort(["BRANCH", "PRODUCT", "REPTDATE", "TIMECTRL", "ACCTNO"])
             
-            # Generate text report for Staff to Customer transfers
-            report_file_sc = output_path / f"staff_to_customer_report_{macro_vars['RPTDT']}.txt"
+            # Generate text report for Staff to Customer transfers - Monthly YYMM format
+            report_file_sc = output_path / f"SC{macro_vars['MONTHLY']}.txt"
             with open(report_file_sc, 'w') as f:
                 f.write("P U B L I C   B A N K   B E R H A D\n")
                 f.write("MONTHLY REPORT ON ELECTRONIC FUND TRANSFER BETWEEN STAFF SA/CA TO CUSTOMER HP ACCOUNT\n")
@@ -530,11 +545,14 @@ else:
                 f.write(f"{'':<7} {'(TIME)':<20} {'CODE':<17} {'(RM)':<15} {'BRANCH':<15} "
                         f"{'(CUSTOMER NAME)':<52} {'(USER)':<15} {'(CUSTOMER NAME)':<52} {'(CUSTOMER)':<15}\n\n")
                 
-                for idx, row in enumerate(tranz_sc_df.iter_rows(named=True), 1):
-                    f.write(f"{idx:<7} {row['TRANDATE']:<20} {row['TRANCODE']:<17} "
-                           f"{row['TRANAMT']:>13,.2f}  {row['TRACEBR']:<15} "
-                           f"{row['DEBIT']:<52} {row['BRANCH']:03d} {row['BRABBR']:<11} "
-                           f"{row['CREDIT']:<52} {row['BRANCH2']:03d} {row['BRABBR2']:<11}\n")
+                if len(tranz_sc_df) > 0:
+                    for idx, row in enumerate(tranz_sc_df.iter_rows(named=True), 1):
+                        f.write(f"{idx:<7} {row['TRANDATE']:<20} {row['TRANCODE']:<17} "
+                               f"{row['TRANAMT']:>13,.2f}  {row['TRACEBR']:<15} "
+                               f"{row['DEBIT']:<52} {row['BRANCH']:03d} {row['BRABBR']:<11} "
+                               f"{row['CREDIT']:<52} {row['BRANCH2']:03d} {row['BRABBR2']:<11}\n")
+                else:
+                    f.write("NO TRANSACTIONS FOUND FOR THIS PERIOD\n")
             
             print(f"\n✓ Staff to Customer report saved to: {report_file_sc}")
             print(f"  Total Staff to Customer transfers: {len(tranz_sc_df)}")
@@ -650,8 +668,8 @@ else:
                 ~pl.col("RELATCD2").is_in(excluded_codes)
             ).sort(["BRANCH", "PRODUCT", "REPTDATE", "TIMECTRL", "ACCTNO"])
             
-            # Generate text report for Customer to Staff transfers
-            report_file_cs = output_path / f"customer_to_staff_report_{macro_vars['RPTDT']}.txt"
+            # Generate text report for Customer to Staff transfers - Monthly YYMM format
+            report_file_cs = output_path / f"CS{macro_vars['MONTHLY']}.txt"
             with open(report_file_cs, 'w') as f:
                 f.write("P U B L I C   B A N K   B E R H A D\n")
                 f.write("MONTHLY REPORT ON ELECTRONIC FUND TRANSFER BETWEEN CUSTOMER CA TO STAFF SA/CA ACCOUNT\n")
@@ -667,11 +685,14 @@ else:
                 f.write(f"{'':<7} {'(TIME)':<20} {'CODE':<17} {'(RM)':<15} {'BRANCH':<15} "
                         f"{'(CUSTOMER NAME)':<52} {'(USER)':<15} {'(CUSTOMER NAME)':<52} {'(CUSTOMER)':<15}\n\n")
                 
-                for idx, row in enumerate(tranz_cs_df.iter_rows(named=True), 1):
-                    f.write(f"{idx:<7} {row['TRANDATE']:<20} {row['TRANCODE']:<17} "
-                           f"{row['TRANAMT']:>13,.2f}  {row['TRACEBR']:<15} "
-                           f"{row['DEBIT']:<52} {row['BRANCH']:03d} {row['BRABBR']:<11} "
-                           f"{row['CREDIT']:<52} {row['BRANCH2']:03d} {row['BRABBR2']:<11}\n")
+                if len(tranz_cs_df) > 0:
+                    for idx, row in enumerate(tranz_cs_df.iter_rows(named=True), 1):
+                        f.write(f"{idx:<7} {row['TRANDATE']:<20} {row['TRANCODE']:<17} "
+                               f"{row['TRANAMT']:>13,.2f}  {row['TRACEBR']:<15} "
+                               f"{row['DEBIT']:<52} {row['BRANCH']:03d} {row['BRABBR']:<11} "
+                               f"{row['CREDIT']:<52} {row['BRANCH2']:03d} {row['BRABBR2']:<11}\n")
+                else:
+                    f.write("NO TRANSACTIONS FOUND FOR THIS PERIOD\n")
             
             print(f"\n✓ Customer to Staff report saved to: {report_file_cs}")
             print(f"  Total Customer to Staff transfers: {len(tranz_cs_df)}")
@@ -688,11 +709,12 @@ print("PROCESSING COMPLETE")
 print("="*60)
 print(f"Report Date: {macro_vars['EDATE']}")
 print(f"Week: {macro_vars['NOWK']}")
+print(f"Monthly Code: {macro_vars['MONTHLY']}")
 print(f"Transaction Files Processed: {len(dptr_frames)}")
 print(f"All reports saved as text files to: {output_path}")
 
-# Generate summary report
-summary_file = output_path / f"transfer_summary_{macro_vars['RPTDT']}.txt"
+# Generate summary report - Monthly YYMM format
+summary_file = output_path / f"SUMMARY{macro_vars['MONTHLY']}.txt"
 with open(summary_file, 'w') as f:
     f.write("=== TRANSFER REPORT SUMMARY ===\n")
     f.write(f"Report Period: {macro_vars['SDATE']} to {macro_vars['EDATE']}\n")
@@ -703,6 +725,7 @@ with open(summary_file, 'w') as f:
     f.write(f"Staff to Customer Transfers: {staff_to_customer}\n")
     f.write(f"Customer to Staff Transfers: {customer_to_staff}\n")
     f.write(f"Total Transfers: {staff_to_customer + customer_to_staff}\n")
+    f.write(f"Monthly Code: {macro_vars['MONTHLY']}\n")
     f.write(f"Output Directory: {output_path}\n")
 
 print(f"\n✓ Summary report saved to: {summary_file}")
