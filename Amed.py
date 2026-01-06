@@ -1,7 +1,8 @@
 import polars as pl
 import pyreadstat
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 # Configuration - Input paths
 loan_staging = Path("/parquet/dwh/LOAN/staging")
@@ -15,21 +16,19 @@ cis_mart = Path("/sas/cis/mart/enrichment")
 output_path = Path("/parquet/output")
 output_path.mkdir(parents=True, exist_ok=True)
 
-# Report date (configurable - set to desired date)
-report_date = datetime.now()  # Change this as needed
+# Report date - set to previous month's last processing date
+today = datetime.now()
+# Get previous month
+prev_month = today - relativedelta(months=1)
+# Set to last day of previous month for monthly report
+report_date = datetime(prev_month.year, prev_month.month, 1) + relativedelta(months=1) - timedelta(days=1)
 
-# Step 1: Process REPTDATE and set macro variables
-day = report_date.day
+print(f"Today's date: {today.strftime('%d %B %Y')}")
+print(f"Processing monthly report for: {report_date.strftime('%B %Y')}")
 
-if day == 8:
-    nowk, sday = 1, 1
-elif day == 15:
-    nowk, sday = 2, 9
-elif day == 22:
-    nowk, sday = 3, 16
-else:
-    nowk, sday = 4, 23
-
+# Step 1: Process REPTDATE and set macro variables for MONTHLY report
+# For monthly report, we always process all 4 weeks
+nowk = 4  # Always process all 4 weeks for monthly report
 stdate = report_date.replace(day=1)
 
 macro_vars = {
@@ -38,14 +37,17 @@ macro_vars = {
     'REPTYEAR': f"{report_date.year % 100:02d}",
     'REPTMON': f"{report_date.month:02d}",
     'REPTDAY': f"{report_date.day:02d}",
-    'RDATE': report_date.strftime('%d/%m/%Y'),
+    'RDATE': today.strftime('%d/%m/%Y'),
     'SDATE': stdate.strftime('%d/%m/%Y'),
     'EDATE': report_date.strftime('%d/%m/%Y'),
     'RPTDT': report_date.strftime('%Y%m%d'),
-    'REPTDATE': report_date
+    'REPTDATE': report_date,
+    'REPORT_MONTH_YEAR': report_date.strftime('%B %Y')
 }
 
-print(f"Processing Islamic Banking Report for week {macro_vars['NOWK']} of {macro_vars['REPTMON']}/{macro_vars['REPTYEAR']}")
+print(f"Processing Islamic Banking Monthly Report for {macro_vars['REPORT_MONTH_YEAR']}")
+print(f"Period: {macro_vars['SDATE']} to {macro_vars['EDATE']}")
+print(f"Processing all {nowk} weeks of transaction data")
 
 # Step 2: Load and process BRANCH lookup from flat file
 brch_file = lookup_path / "LKP_BRANCH"
@@ -159,10 +161,9 @@ lncust_df = loan_df.join(staf_df, on="ACCTNO", how="anti").join(
 )
 print(f"Staff loan accounts: {len(lnstaf_df)}, Customer loan accounts: {len(lncust_df)}")
 
-# Step 10: Load deposit transactions based on week - read SAS7BDAT files
+# Step 10: Load ALL deposit transactions for the MONTH - read all 4 weeks
 dptr_dfs = []
-nowk_int = int(macro_vars['NOWK'])
-for week in range(1, nowk_int + 1):
+for week in range(1, 5):  # Always load weeks 1-4 for monthly report
     file_pattern = f"dpbtran{macro_vars['REPTYEAR']}{macro_vars['REPTMON']}{week:02d}.sas7bdat"
     file_path = dptr_path / file_pattern
     if file_path.exists():
@@ -170,6 +171,7 @@ for week in range(1, nowk_int + 1):
         df_data, df_meta = pyreadstat.read_sas7bdat(str(file_path))
         df = pl.from_pandas(df_data)
         dptr_dfs.append(df)
+        print(f"  Week {week}: {len(df)} transactions")
     else:
         print(f"Warning: Transaction file not found: {file_pattern}")
 
@@ -179,7 +181,7 @@ if dptr_dfs:
         "ACCTNO", "TRANCODE", "TRANAMT", "REPTDATE",
         "TIMECTRL", "STRAIL1", "LTRAIL1", "TRACEBR"
     ]).sort("ACCTNO")
-    print(f"Loaded {len(dptr_dfs)} transaction file(s) with {len(dptr_df)} total records")
+    print(f"Loaded {len(dptr_dfs)} transaction file(s) with {len(dptr_df)} total records for the month")
 else:
     dptr_df = pl.DataFrame()
     print("Warning: No transaction files found")
@@ -286,11 +288,12 @@ if not dptr_df.is_empty() and not dpstaf_df.is_empty():
         ~pl.col("RELATCD2").is_in(excluded_codes)
     ).sort(["BRANCH", "PRODUCT", "REPTDATE", "TIMECTRL", "ACCTNO"])
     
-    # Generate text report (Staff to Customer)
-    report_file_sc = output_path / f"islamic_staff_to_customer_report_{macro_vars['RPTDT']}.txt"
+    # Generate text report (Staff to Customer) - MONTHLY
+    report_file_sc = output_path / f"islamic_staff_to_customer_monthly_{macro_vars['REPTYEAR']}{macro_vars['REPTMON']}.txt"
     with open(report_file_sc, 'w') as f:
         f.write("P U B L I C   I S L A M I C   B A N K   B E R H A D\n")
         f.write("MONTHLY REPORT ON ELECTRONIC FUND TRANSFER BETWEEN STAFF SA/CA TO CUSTOMER HP ACCOUNT\n")
+        f.write(f"FOR THE MONTH OF {macro_vars['REPORT_MONTH_YEAR'].upper()}\n")
         f.write(f"FROM {macro_vars['SDATE']} TO {macro_vars['EDATE']}\n\n")
         f.write(f"DATE OF REPORT: {macro_vars['RDATE']}\n\n")
         f.write(f"{'ITEM':<7} {'DATE':<20} {'TRANSACTION':<17} {'AMOUNT':<15} {'TRANSACTION':<15} "
@@ -304,7 +307,7 @@ if not dptr_df.is_empty() and not dpstaf_df.is_empty():
                    f"{row['DEBIT']:<52} {row['BRANCH']:03d} {row['BRABBR']:<11} "
                    f"{row['CREDIT']:<52} {row['BRANCH2']:03d} {row['BRABBR2']:<11}\n")
     
-    print(f"Islamic Staff to Customer report saved to: {report_file_sc}")
+    print(f"Islamic Staff to Customer MONTHLY report saved to: {report_file_sc}")
     print(f"Total transactions (Staff to Customer): {len(tranz_sc_df)}")
 
 # ==================== PART 2: Customer to Staff Transfers (Islamic) ====================
@@ -399,11 +402,12 @@ if not dptr_df.is_empty() and not dpcust_df.is_empty():
         ~pl.col("RELATCD2").is_in(excluded_codes)
     ).sort(["BRANCH", "PRODUCT", "REPTDATE", "TIMECTRL", "ACCTNO"])
     
-    # Generate text report (Customer to Staff)
-    report_file_cs = output_path / f"islamic_customer_to_staff_report_{macro_vars['RPTDT']}.txt"
+    # Generate text report (Customer to Staff) - MONTHLY
+    report_file_cs = output_path / f"islamic_customer_to_staff_monthly_{macro_vars['REPTYEAR']}{macro_vars['REPTMON']}.txt"
     with open(report_file_cs, 'w') as f:
         f.write("P U B L I C   I S L A M I C   B A N K   B E R H A D\n")
         f.write("MONTHLY REPORT ON ELECTRONIC FUND TRANSFER BETWEEN CUSTOMER CA TO STAFF SA/CA ACCOUNT\n")
+        f.write(f"FOR THE MONTH OF {macro_vars['REPORT_MONTH_YEAR'].upper()}\n")
         f.write(f"FROM {macro_vars['SDATE']} TO {macro_vars['EDATE']}\n\n")
         f.write(f"DATE OF REPORT: {macro_vars['RDATE']}\n\n")
         f.write(f"{'ITEM':<7} {'DATE':<20} {'TRANSACTION':<17} {'AMOUNT':<15} {'TRANSACTION':<15} "
@@ -417,10 +421,11 @@ if not dptr_df.is_empty() and not dpcust_df.is_empty():
                    f"{row['DEBIT']:<52} {row['BRANCH']:03d} {row['BRABBR']:<11} "
                    f"{row['CREDIT']:<52} {row['BRANCH2']:03d} {row['BRABBR2']:<11}\n")
     
-    print(f"Islamic Customer to Staff report saved to: {report_file_cs}")
+    print(f"Islamic Customer to Staff MONTHLY report saved to: {report_file_cs}")
     print(f"Total transactions (Customer to Staff): {len(tranz_cs_df)}")
 
-print("\n=== Islamic Banking Processing Complete ===")
-print(f"Report Date: {macro_vars['EDATE']}")
-print(f"Week: {macro_vars['NOWK']}")
-print(f"All text reports saved to: {output_path}")
+print("\n=== Islamic Banking MONTHLY Processing Complete ===")
+print(f"Report Month: {macro_vars['REPORT_MONTH_YEAR']}")
+print(f"Report Period: {macro_vars['SDATE']} to {macro_vars['EDATE']}")
+print(f"Report Generated: {macro_vars['RDATE']}")
+print(f"All monthly text reports saved to: {output_path}")
