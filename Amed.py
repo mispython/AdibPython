@@ -2,9 +2,6 @@ import polars as pl
 import pyreadstat
 from pathlib import Path
 from datetime import datetime
-import warnings
-
-warnings.filterwarnings('ignore')
 
 # Configuration - Input paths
 loan_staging = Path("/parquet/dwh/LOAN/staging")
@@ -50,140 +47,380 @@ macro_vars = {
 
 print(f"Processing Islamic Banking Report for week {macro_vars['NOWK']} of {macro_vars['REPTMON']}/{macro_vars['REPTYEAR']}")
 
-def read_parquet_or_flat(file_path, delimiter=","):
-    """Try to read parquet, then flat file if parquet doesn't exist"""
-    # Try parquet first
-    parquet_path = Path(str(file_path) + ".parquet")
-    if parquet_path.exists():
-        print(f"Reading parquet file: {parquet_path}")
-        return pl.read_parquet(parquet_path)
-    
-    # Try flat file with various extensions
-    for ext in ['', '.csv', '.txt', '.dat', '.tsv']:
-        flat_path = Path(str(file_path) + ext)
-        if flat_path.exists():
-            print(f"Reading flat file: {flat_path}")
-            # Try different delimiters
-            for sep in [",", "\t", "|", ";"]:
+# Step 2: Load and process BRANCH lookup from flat file
+brch_file = lookup_path / "LKP_BRANCH"
+brch_records = []
+with open(brch_file, 'r') as f:
+    for line in f:
+        if len(line) >= 50:
+            branch = line[1:4].strip()
+            brabbr = line[5:8].strip()
+            brname = line[11:41].strip()
+            brstat = line[49:50].strip()
+            if brstat != 'C' and branch:
                 try:
-                    return pl.read_csv(flat_path, separator=sep, infer_schema_length=1000)
-                except:
+                    brch_records.append({
+                        'BRANCH': int(branch),
+                        'BRABBR': brabbr
+                    })
+                except ValueError:
                     continue
-            # If all delimiters fail, try with default
-            return pl.read_csv(flat_path, infer_schema_length=1000)
-    
-    print(f"Warning: File not found: {file_path}")
-    return pl.DataFrame()
 
-# Step 2: Load and process BRANCH lookup
-print("\nStep 2: Loading BRANCH lookup...")
-brch_df = read_parquet_or_flat(lookup_path / "LKP_BRANCH")
+brch_df = pl.DataFrame(brch_records).sort("BRANCH")
+print(f"Loaded {len(brch_df)} branch records")
 
-if not brch_df.is_empty():
-    # Print columns to debug
-    print(f"  Columns found: {brch_df.columns}")
-    
-    # Find column names (case-insensitive)
-    col_map = {col.upper(): col for col in brch_df.columns}
-    
-    # Get actual column names
-    branch_col = col_map.get('BRANCH', col_map.get('BR', None))
-    brstat_col = col_map.get('BRSTAT', col_map.get('STATUS', col_map.get('STAT', None)))
-    brabbr_col = col_map.get('BRABBR', col_map.get('ABBR', col_map.get('LABEL', col_map.get('NAME', None))))
-    
-    if branch_col and brabbr_col:
-        # Filter if status column exists
-        if brstat_col:
-            brch_df = brch_df.filter(pl.col(brstat_col) != "C")
-        
-        brch_df = brch_df.select([
-            pl.col(branch_col).alias("START"),
-            pl.col(brabbr_col).alias("LABEL")
-        ]).sort("START")
-        
-        # Create branch lookup dictionary
-        branch_lookup = dict(zip(brch_df["START"].to_list(), brch_df["LABEL"].to_list()))
-        print(f"  Loaded {len(branch_lookup)} branch mappings")
-    else:
-        branch_lookup = {}
-        print(f"  Error: Could not find required columns. Need BRANCH and BRABBR columns.")
-else:
-    branch_lookup = {}
-    print("  Warning: Could not load branch lookup data")
+# Create branch lookup dictionary
+branch_lookup = dict(zip(brch_df["BRANCH"].to_list(), brch_df["BRABBR"].to_list()))
 
-# Step 3: Load and process CUSTCODE to identify staff
-print("\nStep 3: Loading CUSTCODE lookup...")
-code_df = read_parquet_or_flat(lookup_path / "LKP_CUSTCODE")
+# Step 3: Load and process CUSTCODE from flat file to identify staff
+code_file = lookup_path / "LKP_CUSTCODE"
+code_records = []
+with open(code_file, 'r') as f:
+    for line in f:
+        if len(line) >= 86:
+            custno = line[0:12].strip()
+            # Check CUST01 through CUST20
+            has_002 = False
+            for i in range(20):
+                pos = 28 + (i * 3)
+                cust_code = line[pos:pos+3].strip()
+                if cust_code == '002':
+                    has_002 = True
+                    break
+            
+            if has_002 and custno:
+                try:
+                    code_records.append({'CUSTNO': int(custno)})
+                except ValueError:
+                    continue
 
-if not code_df.is_empty():
-    print(f"  Columns found: {code_df.columns}")
-    
-    # Find column names (case-insensitive)
-    col_map = {col.upper(): col for col in code_df.columns}
-    
-    # Find CUSTNO column
-    custno_col = col_map.get('CUSTNO', col_map.get('CUSTNUM', col_map.get('CUSTOMERNO', None)))
-    
-    if custno_col:
-        # Find CUST01-CUST20 columns
-        cust_cols = []
-        for i in range(1, 21):
-            col_name = f'CUST{i:02d}'
-            if col_name in col_map:
-                cust_cols.append(col_map[col_name])
-            elif f'CUST{i}' in col_map:
-                cust_cols.append(col_map[f'CUST{i}'])
-        
-        if cust_cols:
-            # Check if any CUST01-CUST20 contains '002'
-            code_df = code_df.filter(
-                pl.concat([pl.col(c) == "002" for c in cust_cols]).any()
-            ).select(pl.col(custno_col).alias("CUSTNO")).unique().sort("CUSTNO")
-            print(f"  Found {len(code_df)} staff customer codes")
-        else:
-            print(f"  Warning: Could not find CUST01-CUST20 columns")
-            code_df = pl.DataFrame()
-    else:
-        print(f"  Warning: Could not find CUSTNO column")
-        code_df = pl.DataFrame()
-else:
-    print("  Warning: Could not load CUSTCODE data")
-    code_df = pl.DataFrame()
+code_df = pl.DataFrame(code_records).unique().sort("CUSTNO")
+print(f"Loaded {len(code_df)} staff customer records")
 
 # Step 4: Load CIS customer data
-print("\nStep 4: Loading CIS customer data...")
 cis_sas_file = cis_mart / "enrh_exdwh_cisr1.sas7bdat"
-if cis_sas_file.exists():
-    cis_data, cis_meta = pyreadstat.read_sas7bdat(str(cis_sas_file))
-    cis_df = pl.from_pandas(cis_data)
-    
-    # Check for PRISEC column
-    if "PRISEC" in cis_df.columns:
-        cis_df = cis_df.filter(pl.col("PRISEC") == 901).select([
-            "ACCTNO",
-            "CUSTNAME",
-            pl.col("CUSTNO").cast(pl.Int64).alias("CUSTNO")
-        ]).sort("CUSTNO")
-        print(f"  Loaded {len(cis_df)} CIS records with PRISEC=901")
-    else:
-        print(f"  Warning: PRISEC column not found. Using all rows.")
-        cis_df = cis_df.select([
-            "ACCTNO",
-            "CUSTNAME",
-            pl.col("CUSTNO").cast(pl.Int64).alias("CUSTNO")
-        ]).sort("CUSTNO")
-else:
-    cis_df = pl.DataFrame()
-    print("  Warning: CIS SAS file not found")
+print(f"Reading CIS data from: {cis_sas_file}")
+cis_data, cis_meta = pyreadstat.read_sas7bdat(str(cis_sas_file))
+cis_df = pl.from_pandas(cis_data)
+cis_df = cis_df.filter(pl.col("PRISEC") == 901).select([
+    "ACCTNO",
+    "CUSTNAME",
+    pl.col("CUSTNO").cast(pl.Int64).alias("CUSTNO")
+]).sort("CUSTNO")
+print(f"Loaded {len(cis_df)} CIS customer records")
 
 # Step 5: Merge to get staff accounts
-print("\nStep 5: Identifying staff accounts...")
-if not cis_df.is_empty() and not code_df.is_empty():
-    staf_df = code_df.join(cis_df, on="CUSTNO", how="inner").select("ACCTNO").sort("ACCTNO")
-    print(f"  Found {len(staf_df)} staff accounts")
-else:
-    staf_df = pl.DataFrame()
-    print("  Warning: Could not create staff accounts list")
+staf_df = code_df.join(cis_df, on="CUSTNO", how="inner").select("ACCTNO").sort("ACCTNO")
+print(f"Identified {len(staf_df)} staff accounts")
 
-# Continue with the rest of your second code (Steps 6-11 and transfer processing)
-# ... [Rest of your second code remains the same]
+# Step 6: Load DEPOSIT accounts
+saving_df = pl.read_parquet(deposit_staging / "STG_DP_DPTRBLGS.parquet")
+depo_df = saving_df.filter(
+    ~((pl.col("ACCTNO") >= 3990000000) & (pl.col("ACCTNO") <= 3999999999))
+).select(["ACCTNO", "PRODUCT", "BRANCH"]).sort("ACCTNO")
+print(f"Loaded {len(depo_df)} deposit accounts")
+
+# Step 7: Separate staff and customer deposit accounts
+cis_df = cis_df.sort("ACCTNO")
+dpstaf_df = depo_df.join(staf_df, on="ACCTNO", how="inner").join(
+    cis_df, on="ACCTNO", how="left"
+)
+dpcust_df = depo_df.join(staf_df, on="ACCTNO", how="anti").join(
+    cis_df, on="ACCTNO", how="left"
+)
+print(f"Staff deposit accounts: {len(dpstaf_df)}, Customer deposit accounts: {len(dpcust_df)}")
+
+# Step 8: Load LOAN accounts
+loan_acct_df = pl.read_parquet(loan_staging / "STG_LN_ACCTFILE.parquet")
+loan_acc3_df = pl.read_parquet(loan_staging / "STG_LN_ACC3FILE.parquet")
+
+loan_df = loan_acct_df.join(
+    loan_acc3_df.select(["ACCTNO", "NOTENO", "NTBRCH"]),
+    on=["ACCTNO", "NOTENO"],
+    how="left"
+).with_columns(
+    pl.when(pl.col("NTBRCH") != 0)
+    .then(pl.col("NTBRCH"))
+    .otherwise(pl.col("ACCBRCH"))
+    .alias("BRANCH")
+).select([
+    "ACCTNO", "NOTENO", 
+    pl.col("LOANTYPE").alias("PRODUCT"),
+    "BRANCH"
+]).sort(["ACCTNO", "NOTENO"])
+print(f"Loaded {len(loan_df)} loan accounts")
+
+# Step 9: Separate staff and customer loan accounts
+lnstaf_df = loan_df.join(staf_df, on="ACCTNO", how="inner").join(
+    cis_df, on="ACCTNO", how="left"
+)
+lncust_df = loan_df.join(staf_df, on="ACCTNO", how="anti").join(
+    cis_df, on="ACCTNO", how="left"
+)
+print(f"Staff loan accounts: {len(lnstaf_df)}, Customer loan accounts: {len(lncust_df)}")
+
+# Step 10: Load deposit transactions based on week - read SAS7BDAT files
+dptr_dfs = []
+nowk_int = int(macro_vars['NOWK'])
+for week in range(1, nowk_int + 1):
+    file_pattern = f"dpbtran{macro_vars['REPTYEAR']}{macro_vars['REPTMON']}{week:02d}.sas7bdat"
+    file_path = dptr_path / file_pattern
+    if file_path.exists():
+        print(f"Reading transaction file: {file_pattern}")
+        df_data, df_meta = pyreadstat.read_sas7bdat(str(file_path))
+        df = pl.from_pandas(df_data)
+        dptr_dfs.append(df)
+    else:
+        print(f"Warning: Transaction file not found: {file_pattern}")
+
+if dptr_dfs:
+    dptr_df = pl.concat(dptr_dfs)
+    dptr_df = dptr_df.select([
+        "ACCTNO", "TRANCODE", "TRANAMT", "REPTDATE",
+        "TIMECTRL", "STRAIL1", "LTRAIL1", "TRACEBR"
+    ]).sort("ACCTNO")
+    print(f"Loaded {len(dptr_dfs)} transaction file(s) with {len(dptr_df)} total records")
+else:
+    dptr_df = pl.DataFrame()
+    print("Warning: No transaction files found")
+
+# Step 11: Load CIS relationship data
+cisrl_file = cis_staging / f"STG_CIS_CISRLCC.parquet"
+if cisrl_file.exists():
+    cisrl1_df = pl.read_parquet(cisrl_file).sort(["CUSTNO", "CUSTNO2"])
+    print(f"Loaded {len(cisrl1_df)} CIS relationship records")
+else:
+    cisrl1_df = pl.DataFrame()
+    print("Warning: CIS relationship file not found")
+
+# ==================== PART 1: Staff to Customer Transfers (Islamic) ====================
+
+if not dptr_df.is_empty() and not dpstaf_df.is_empty():
+    dpstaf_df = dpstaf_df.sort("ACCTNO")
+    
+    # Merge staff deposit accounts with transactions
+    tran_df = dpstaf_df.join(dptr_df, on="ACCTNO", how="inner")
+    
+    # Parse account numbers from transaction trails
+    tran_df = tran_df.with_columns([
+        pl.col("LTRAIL1").str.strip_chars().alias("LTRAIL1_CLEAN"),
+        pl.lit(None).cast(pl.Utf8).alias("ACCTNO2"),
+        pl.lit(None).cast(pl.Int64).alias("NOTENO2")
+    ])
+    
+    # Extract ACCTNO2 from STRAIL1 when LTRAIL1 is empty and contains 'TO'
+    tran_df = tran_df.with_columns(
+        pl.when(
+            (pl.col("LTRAIL1_CLEAN") == "") & 
+            (pl.col("STRAIL1").str.slice(2, 2) == "TO")
+        )
+        .then(pl.col("STRAIL1").str.slice(7, 10))
+        .otherwise(pl.col("ACCTNO2"))
+        .alias("ACCTNO2")
+    )
+    
+    # Extract ACCTNO2 and NOTENO2 from LTRAIL1 when it contains '/' at position 11
+    tran_df = tran_df.with_columns([
+        pl.when(pl.col("LTRAIL1_CLEAN").str.contains("/").fill_null(False))
+        .then(pl.col("LTRAIL1_CLEAN").str.slice(0, 10))
+        .otherwise(pl.col("ACCTNO2"))
+        .alias("ACCTNO2"),
+        pl.when(pl.col("LTRAIL1_CLEAN").str.contains("/").fill_null(False))
+        .then(pl.col("LTRAIL1_CLEAN").str.slice(11, 5).cast(pl.Int64))
+        .otherwise(pl.col("NOTENO2"))
+        .alias("NOTENO2")
+    ]).sort(["ACCTNO2", "NOTENO2"])
+    
+    # Prepare customer loan accounts for matching
+    accust_df = lncust_df.filter(
+        (pl.col("ACCTNO") >= 8000000000) & (pl.col("ACCTNO") <= 8999999999)
+    ).with_columns([
+        pl.col("ACCTNO").cast(pl.Utf8).alias("ACCTNO2"),
+        pl.col("NOTENO").alias("NOTENO2"),
+        pl.col("CUSTNAME").alias("CUSTNAME2"),
+        pl.col("CUSTNO").alias("CUSTNO2"),
+        pl.col("BRANCH").alias("BRANCH2")
+    ]).select([
+        "ACCTNO2", "NOTENO2", "CUSTNAME2", "CUSTNO2", "BRANCH2"
+    ]).sort(["ACCTNO2", "NOTENO2"])
+    
+    # Merge transactions with customer accounts
+    tranx_df = tran_df.join(accust_df, on=["ACCTNO2", "NOTENO2"], how="inner")
+    
+    # Format transaction details
+    tranx_df = tranx_df.with_columns([
+        (pl.col("REPTDATE").dt.strftime('%d/%m/%Y') + " " + 
+         pl.col("TIMECTRL").str.strip_chars()).alias("TRANDATE"),
+        (pl.col("ACCTNO").cast(pl.Utf8) + " " + 
+         pl.col("CUSTNAME")).str.strip_chars().alias("DEBIT"),
+        (pl.col("ACCTNO2") + " " + 
+         pl.col("CUSTNAME2")).str.strip_chars().alias("CREDIT")
+    ])
+    
+    # Add branch abbreviations using map
+    tranx_df = tranx_df.with_columns([
+        pl.col("BRANCH").map_elements(lambda x: branch_lookup.get(x, ""), return_dtype=pl.Utf8).alias("BRABBR"),
+        pl.col("BRANCH2").map_elements(lambda x: branch_lookup.get(x, ""), return_dtype=pl.Utf8).alias("BRABBR2")
+    ]).sort(["CUSTNO", "CUSTNO2"])
+    
+    # Filter by relationship codes
+    if not cisrl1_df.is_empty():
+        tranx_temp = tranx_df.join(cisrl1_df, on=["CUSTNO", "CUSTNO2"], how="left")
+        trany_df = tranx_temp.filter(pl.col("RELATCD2").is_null())
+        tranx_df = tranx_temp.filter(pl.col("RELATCD2").is_not_null())
+        
+        # Swap relationship for reverse lookup
+        cisrl2_df = cisrl1_df.rename({
+            "RELATCD1": "RELATCD2",
+            "RELATCD2": "RELATCD1",
+            "CUSTNO": "CUSTNO2",
+            "CUSTNO2": "CUSTNO"
+        }).sort(["CUSTNO", "CUSTNO2"])
+        
+        trany_df = trany_df.join(cisrl2_df, on=["CUSTNO", "CUSTNO2"], how="left")
+        tranx_df = pl.concat([tranx_df, trany_df])
+    
+    # Exclude related parties
+    excluded_codes = ['001','002','003','004','005','006','007','008','009']
+    tranz_sc_df = tranx_df.filter(
+        ~pl.col("RELATCD2").is_in(excluded_codes)
+    ).sort(["BRANCH", "PRODUCT", "REPTDATE", "TIMECTRL", "ACCTNO"])
+    
+    # Generate text report (Staff to Customer)
+    report_file_sc = output_path / f"islamic_staff_to_customer_report_{macro_vars['RPTDT']}.txt"
+    with open(report_file_sc, 'w') as f:
+        f.write("P U B L I C   I S L A M I C   B A N K   B E R H A D\n")
+        f.write("MONTHLY REPORT ON ELECTRONIC FUND TRANSFER BETWEEN STAFF SA/CA TO CUSTOMER HP ACCOUNT\n")
+        f.write(f"FROM {macro_vars['SDATE']} TO {macro_vars['EDATE']}\n\n")
+        f.write(f"DATE OF REPORT: {macro_vars['RDATE']}\n\n")
+        f.write(f"{'ITEM':<7} {'DATE':<20} {'TRANSACTION':<17} {'AMOUNT':<15} {'TRANSACTION':<15} "
+                f"{'DEBIT FROM ACCOUNT':<52} {'DEBIT BRANCH':<15} {'CREDIT FROM ACCOUNT':<52} {'CREDIT BRANCH':<15}\n")
+        f.write(f"{'':<7} {'(TIME)':<20} {'CODE':<17} {'(RM)':<15} {'BRANCH':<15} "
+                f"{'(CUSTOMER NAME)':<52} {'(USER)':<15} {'(CUSTOMER NAME)':<52} {'(CUSTOMER)':<15}\n\n")
+        
+        for idx, row in enumerate(tranz_sc_df.iter_rows(named=True), 1):
+            f.write(f"{idx:<7} {row['TRANDATE']:<20} {row['TRANCODE']:<17} "
+                   f"{row['TRANAMT']:>13,.2f}  {row['TRACEBR']:<15} "
+                   f"{row['DEBIT']:<52} {row['BRANCH']:03d} {row['BRABBR']:<11} "
+                   f"{row['CREDIT']:<52} {row['BRANCH2']:03d} {row['BRABBR2']:<11}\n")
+    
+    print(f"Islamic Staff to Customer report saved to: {report_file_sc}")
+    print(f"Total transactions (Staff to Customer): {len(tranz_sc_df)}")
+
+# ==================== PART 2: Customer to Staff Transfers (Islamic) ====================
+
+if not dptr_df.is_empty() and not dpcust_df.is_empty():
+    # Prepare staff deposit accounts for matching
+    acstaf_df = dpstaf_df.with_columns([
+        pl.col("ACCTNO").cast(pl.Utf8).alias("ACCTNO2"),
+        pl.lit(None).cast(pl.Int64).alias("NOTENO2"),
+        pl.col("CUSTNAME").alias("CUSTNAME2"),
+        pl.col("CUSTNO").alias("CUSTNO2"),
+        pl.col("BRANCH").alias("BRANCH2")
+    ]).select([
+        "ACCTNO2", "NOTENO2", "CUSTNAME2", "CUSTNO2", "BRANCH2"
+    ]).sort(["ACCTNO2", "NOTENO2"])
+    
+    # Filter customer deposit accounts
+    accust_df = dpcust_df.filter(
+        (pl.col("ACCTNO") >= 3000000000) & (pl.col("ACCTNO") <= 3999999999)
+    ).sort("ACCTNO")
+    
+    # Merge customer accounts with transactions
+    tran_df = accust_df.join(dptr_df, on="ACCTNO", how="inner")
+    
+    # Parse account numbers from transaction trails
+    tran_df = tran_df.with_columns([
+        pl.col("LTRAIL1").str.strip_chars().alias("LTRAIL1_CLEAN"),
+        pl.lit(None).cast(pl.Utf8).alias("ACCTNO2"),
+        pl.lit(None).cast(pl.Int64).alias("NOTENO2")
+    ])
+    
+    # Extract ACCTNO2 from STRAIL1
+    tran_df = tran_df.with_columns(
+        pl.when(
+            (pl.col("LTRAIL1_CLEAN") == "") & 
+            (pl.col("STRAIL1").str.slice(2, 2) == "TO")
+        )
+        .then(pl.col("STRAIL1").str.slice(7, 10))
+        .otherwise(pl.col("ACCTNO2"))
+        .alias("ACCTNO2")
+    )
+    
+    # Extract ACCTNO2 and NOTENO2 from LTRAIL1
+    tran_df = tran_df.with_columns([
+        pl.when(pl.col("ACCTNO2").str.contains("/").fill_null(False))
+        .then(pl.col("LTRAIL1_CLEAN").str.slice(0, 10))
+        .otherwise(pl.col("ACCTNO2"))
+        .alias("ACCTNO2"),
+        pl.when(pl.col("ACCTNO2").str.contains("/").fill_null(False))
+        .then(pl.col("LTRAIL1_CLEAN").str.slice(11, 5).cast(pl.Int64))
+        .otherwise(pl.col("NOTENO2"))
+        .alias("NOTENO2")
+    ]).sort(["ACCTNO2", "NOTENO2"])
+    
+    # Merge with staff accounts
+    tranx_df = tran_df.join(acstaf_df, on=["ACCTNO2", "NOTENO2"], how="inner")
+    
+    # Format transaction details
+    tranx_df = tranx_df.with_columns([
+        (pl.col("REPTDATE").dt.strftime('%d/%m/%Y') + " " + 
+         pl.col("TIMECTRL").str.strip_chars()).alias("TRANDATE"),
+        (pl.col("ACCTNO").cast(pl.Utf8) + " " + 
+         pl.col("CUSTNAME")).str.strip_chars().alias("DEBIT"),
+        (pl.col("ACCTNO2") + " " + 
+         pl.col("CUSTNAME2")).str.strip_chars().alias("CREDIT")
+    ])
+    
+    # Add branch abbreviations
+    tranx_df = tranx_df.with_columns([
+        pl.col("BRANCH").map_elements(lambda x: branch_lookup.get(x, ""), return_dtype=pl.Utf8).alias("BRABBR"),
+        pl.col("BRANCH2").map_elements(lambda x: branch_lookup.get(x, ""), return_dtype=pl.Utf8).alias("BRABBR2")
+    ]).sort(["CUSTNO", "CUSTNO2"])
+    
+    # Filter by relationship codes
+    if not cisrl1_df.is_empty():
+        tranx_temp = tranx_df.join(cisrl1_df, on=["CUSTNO", "CUSTNO2"], how="left")
+        trany_df = tranx_temp.filter(pl.col("RELATCD2").is_null())
+        tranx_df = tranx_temp.filter(pl.col("RELATCD2").is_not_null())
+        
+        cisrl2_df = cisrl1_df.rename({
+            "RELATCD1": "RELATCD2",
+            "RELATCD2": "RELATCD1",
+            "CUSTNO": "CUSTNO2",
+            "CUSTNO2": "CUSTNO"
+        }).sort(["CUSTNO", "CUSTNO2"])
+        
+        trany_df = trany_df.join(cisrl2_df, on=["CUSTNO", "CUSTNO2"], how="left")
+        tranx_df = pl.concat([tranx_df, trany_df])
+    
+    # Exclude related parties
+    tranz_cs_df = tranx_df.filter(
+        ~pl.col("RELATCD2").is_in(excluded_codes)
+    ).sort(["BRANCH", "PRODUCT", "REPTDATE", "TIMECTRL", "ACCTNO"])
+    
+    # Generate text report (Customer to Staff)
+    report_file_cs = output_path / f"islamic_customer_to_staff_report_{macro_vars['RPTDT']}.txt"
+    with open(report_file_cs, 'w') as f:
+        f.write("P U B L I C   I S L A M I C   B A N K   B E R H A D\n")
+        f.write("MONTHLY REPORT ON ELECTRONIC FUND TRANSFER BETWEEN CUSTOMER CA TO STAFF SA/CA ACCOUNT\n")
+        f.write(f"FROM {macro_vars['SDATE']} TO {macro_vars['EDATE']}\n\n")
+        f.write(f"DATE OF REPORT: {macro_vars['RDATE']}\n\n")
+        f.write(f"{'ITEM':<7} {'DATE':<20} {'TRANSACTION':<17} {'AMOUNT':<15} {'TRANSACTION':<15} "
+                f"{'DEBIT FROM ACCOUNT':<52} {'DEBIT BRANCH':<15} {'CREDIT FROM ACCOUNT':<52} {'CREDIT BRANCH':<15}\n")
+        f.write(f"{'':<7} {'(TIME)':<20} {'CODE':<17} {'(RM)':<15} {'BRANCH':<15} "
+                f"{'(CUSTOMER NAME)':<52} {'(USER)':<15} {'(CUSTOMER NAME)':<52} {'(CUSTOMER)':<15}\n\n")
+        
+        for idx, row in enumerate(tranz_cs_df.iter_rows(named=True), 1):
+            f.write(f"{idx:<7} {row['TRANDATE']:<20} {row['TRANCODE']:<17} "
+                   f"{row['TRANAMT']:>13,.2f}  {row['TRACEBR']:<15} "
+                   f"{row['DEBIT']:<52} {row['BRANCH']:03d} {row['BRABBR']:<11} "
+                   f"{row['CREDIT']:<52} {row['BRANCH2']:03d} {row['BRABBR2']:<11}\n")
+    
+    print(f"Islamic Customer to Staff report saved to: {report_file_cs}")
+    print(f"Total transactions (Customer to Staff): {len(tranz_cs_df)}")
+
+print("\n=== Islamic Banking Processing Complete ===")
+print(f"Report Date: {macro_vars['EDATE']}")
+print(f"Week: {macro_vars['NOWK']}")
+print(f"All text reports saved to: {output_path}")
