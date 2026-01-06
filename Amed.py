@@ -47,24 +47,61 @@ macro_vars = {
 
 print(f"Processing Islamic Banking Report for week {macro_vars['NOWK']} of {macro_vars['REPTMON']}/{macro_vars['REPTYEAR']}")
 
-# Step 2: Load and process BRANCH lookup
-brch_df = pl.read_parquet(lookup_path / "LKP_BRANCH.parquet")
-brch_df = brch_df.filter(pl.col("BRSTAT") != "C").select([
-    pl.col("BRANCH").alias("START"),
-    pl.col("BRABBR").alias("LABEL")
-]).sort("START")
+# Step 2: Load and process BRANCH lookup from flat file
+brch_file = lookup_path / "LKP_BRANCH"
+brch_df = pl.read_csv(
+    brch_file,
+    has_header=False,
+    separator=None,  # Fixed width file
+    schema={
+        "BRANCH": pl.Int64,
+        "BRABBR": pl.Utf8,
+        "BRNAME": pl.Utf8,
+        "BRSTAT": pl.Utf8
+    },
+    columns=[1, 5, 11, 49]  # Column positions from SAS INPUT statement
+)
+
+# Alternative: Read as fixed width
+with open(brch_file, 'r') as f:
+    brch_records = []
+    for line in f:
+        if len(line) >= 50:
+            branch = line[1:4].strip()
+            brabbr = line[5:8].strip()
+            brname = line[11:41].strip()
+            brstat = line[49:50].strip()
+            if brstat != 'C':
+                brch_records.append({
+                    'BRANCH': int(branch) if branch else None,
+                    'BRABBR': brabbr
+                })
+
+brch_df = pl.DataFrame(brch_records).sort("BRANCH")
 
 # Create branch lookup dictionary
-branch_lookup = dict(zip(brch_df["START"].to_list(), brch_df["LABEL"].to_list()))
+branch_lookup = dict(zip(brch_df["BRANCH"].to_list(), brch_df["BRABBR"].to_list()))
 
-# Step 3: Load and process CUSTCODE to identify staff
-code_df = pl.read_parquet(lookup_path / "LKP_CUSTCODE.parquet")
+# Step 3: Load and process CUSTCODE from flat file to identify staff
+code_file = lookup_path / "LKP_CUSTCODE"
+with open(code_file, 'r') as f:
+    code_records = []
+    for line in f:
+        if len(line) >= 86:
+            custno = line[0:12].strip()
+            # Check CUST01 through CUST20
+            has_002 = False
+            for i in range(20):
+                pos = 28 + (i * 3)
+                cust_code = line[pos:pos+3].strip()
+                if cust_code == '002':
+                    has_002 = True
+                    break
+            
+            if has_002 and custno:
+                code_records.append({'CUSTNO': int(custno)})
 
-# Check if any CUST01-CUST20 contains '002'
-cust_cols = [f"CUST{i:02d}" for i in range(1, 21)]
-code_df = code_df.filter(
-    pl.concat([pl.col(c) == "002" for c in cust_cols]).any()
-).select("CUSTNO").unique().sort("CUSTNO")
+code_df = pl.DataFrame(code_records).unique().sort("CUSTNO")
 
 # Step 4: Load CIS customer data
 cis_sas_file = cis_mart / "enrh_exdwh_cisr1.sas7bdat"
