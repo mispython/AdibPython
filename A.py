@@ -5,15 +5,19 @@ import pyarrow.parquet as pq
 from datetime import date, timedelta
 from pathlib import Path
 
+# =========================
+# PATHS
+# =========================
 base_input_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input")
 base_output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output")
-
 RPVBDATA_TXT_PATH = base_input_path / "RPVBDATA.txt"
 SRSDATA_TXT_PATH = base_input_path / "SRSDATA.txt"
-
 REPO_DIR = base_output_path / "REPO"
 REPOWH_DIR = base_output_path / "REPOWH"
 
+# =========================
+# UTILITIES
+# =========================
 def yyyymmdd_to_date(s: str) -> date:
     return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
 
@@ -24,139 +28,170 @@ def end_of_month(d: date) -> date:
 def MMYYN4(d: date) -> str:
     return f"{d.month:02d}{d.year % 100:02d}"
 
-def extract_rpvb_date():
-    with open(RPVBDATA_TXT_PATH, 'r') as f:
-        first_line = f.readline().strip()
-    return first_line.split()[1] if first_line.startswith('0') else ""
-
-def extract_srs_date():
-    with open(SRSDATA_TXT_PATH, 'r') as f:
-        first_line = f.readline().strip()
-    return first_line[:8] if first_line else ""
-
-def read_rpvdata_txt():
-    """Fixed-width parsing like original code"""
-    records = []
-    with open(RPVBDATA_TXT_PATH, 'r') as f:
-        lines = f.readlines()
-    
-    for line in lines:
-        line = line.rstrip('\n')
-        if not line or line.startswith('0'):
-            continue
-            
-        if line.startswith('1'):
-            # Fixed-width parsing based on your original code structure
-            # Adjust positions based on actual file format
-            record = {
-                'RECID': line[0:1].strip(),
-                'MNIACTNO': line[2:12].strip(),
-                'BRANCHNO': line[13:18].strip(),
-                'NAME': line[19:69].strip(),
-                'ACCTSTA': line[70:71].strip(),
-                'PRSTCOND': line[72:75].strip(),
-                'REGCARD': line[76:77].strip(),
-                'IGNTKEY': line[78:79].strip(),
-                'ACCTWOFF': line[80:81].strip(),
-                'MODEREPO': line[82:90].strip(),
-                'REPOSTAT': line[98:106].strip(),
-                'MODEDISP': line[106:114].strip(),
-                'DATESTLD': line[240:248].strip() if len(line) > 248 else "",
-            }
-            
-            # Parse DATESTLD date if present
-            if record['DATESTLD'] and len(record['DATESTLD']) == 8:
-                try:
-                    record['DATESTLD_DATE'] = yyyymmdd_to_date(record['DATESTLD'])
-                except:
-                    record['DATESTLD_DATE'] = None
-            else:
-                record['DATESTLD_DATE'] = None
-                
-            records.append(record)
-    
-    return pl.DataFrame(records)
-
 def write_parquet(df: pl.DataFrame, p: Path):
     p.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(df.to_arrow(), p)
 
-def main():
-    TBDATE_STR_RPVB = extract_rpvb_date()
-    TBDATE_STR_SRS = extract_srs_date()
+# =========================
+# DATE PROCESSING
+# =========================
+def extract_dates():
+    with open(RPVBDATA_TXT_PATH, 'r') as f:
+        rpvb_first = f.readline().strip()
+        rpvb_date = rpvb_first.split()[1] if rpvb_first.startswith('0') else ""
     
-    tb_date_rpvb = yyyymmdd_to_date(TBDATE_STR_RPVB)
-    srs_tb_date = yyyymmdd_to_date(TBDATE_STR_SRS)
+    with open(SRSDATA_TXT_PATH, 'r') as f:
+        srs_first = f.readline().strip()
+        srs_date = srs_first[:8] if srs_first else ""
     
-    REPTDATE = end_of_month(date(tb_date_rpvb.year, tb_date_rpvb.month, 1) - timedelta(days=1))
+    return rpvb_date, srs_date
+
+def calculate_report_dates(rpvb_date_str: str, srs_date_str: str):
+    rpvb_date = yyyymmdd_to_date(rpvb_date_str)
+    srs_date = yyyymmdd_to_date(srs_date_str)
+    
+    REPTDATE = end_of_month(date(rpvb_date.year, rpvb_date.month, 1) - timedelta(days=1))
     PREVDATE = end_of_month(date(REPTDATE.year, REPTDATE.month, 1) - timedelta(days=1))
     
     REPTDT = MMYYN4(REPTDATE)
     PREVDT = MMYYN4(PREVDATE)
-    SRSTDT = MMYYN4(srs_tb_date)
+    SRSTDT = MMYYN4(srs_date)
+    
+    return REPTDATE, PREVDATE, REPTDT, PREVDT, SRSTDT
+
+# =========================
+# DATA PROCESSING
+# =========================
+def parse_rpvdata():
+    """Based on your original working parsing logic"""
+    records = []
+    
+    with open(RPVBDATA_TXT_PATH, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('0'):
+                continue
+                
+            if line.startswith('1'):
+                parts = line.split()
+                if len(parts) >= 15:
+                    # Your original parsing logic that worked
+                    record = {
+                        'RECID': parts[0],
+                        'MNIACTNO': parts[1],
+                        'BRANCHNO': parts[2],
+                        'NAME': ' '.join(parts[3:8]),
+                        'ACCTSTA': parts[8],
+                        'PRODTYPE': parts[9] if len(parts) > 9 else '',
+                        'PRSTCOND': parts[10] if len(parts) > 10 else '',
+                        'REGCARD': parts[11] if len(parts) > 11 else '',
+                        'IGNTKEY': parts[12] if len(parts) > 12 else '',
+                        'REPODIST': parts[13] if len(parts) > 13 else '',
+                        'ACCTWOFF': parts[14] if len(parts) > 14 else '',
+                        'MODEREPO': parts[15] if len(parts) > 15 else '',
+                        'REPOPAID': parts[16] if len(parts) > 16 else '',
+                        'REPOSTAT': parts[17] if len(parts) > 17 else '',
+                        'TKEPRICE': parts[18] if len(parts) > 18 else '',
+                        'MRKTVAL': parts[19] if len(parts) > 19 else '',
+                        'RSVPRICE': parts[20] if len(parts) > 20 else '',
+                        'FTHSCHLD': parts[21] if len(parts) > 21 else '',
+                        'MODEDISP': parts[22] if len(parts) > 22 else '',
+                        'APPVDISP': parts[23] if len(parts) > 23 else '',
+                        'HOPRICE': parts[24] if len(parts) > 24 else '',
+                        'NOAUCT': parts[25] if len(parts) > 25 else '',
+                        'PRIOUT': parts[26] if len(parts) > 26 else '',
+                        'DATEWOFF': parts[27] if len(parts) > 27 else '',
+                        'DATEREPO': parts[28] if len(parts) > 28 else '',
+                        'DATE5TH': parts[29] if len(parts) > 29 else '',
+                        'DATEAPRV': parts[30] if len(parts) > 30 else '',
+                        'DATESTLD': parts[31] if len(parts) > 31 else '',
+                        'DATEHO': parts[32] if len(parts) > 32 else '',
+                    }
+                    records.append(record)
+    
+    df = pl.DataFrame(records)
+    
+    # Parse date fields
+    date_fields = ['DATEWOFF', 'DATEREPO', 'DATE5TH', 'DATEAPRV', 'DATESTLD', 'DATEHO']
+    for field in date_fields:
+        if field in df.columns:
+            df = df.with_columns(
+                pl.when(pl.col(field).str.len_chars() == 8)
+                .then(pl.col(field).str.strptime(pl.Date, format="%Y%m%d"))
+                .otherwise(pl.lit(None))
+                .alias(f"{field}_DATE")
+            )
+    
+    return df
+
+def process_rpvb_data(df: pl.DataFrame):
+    """Apply $UPCASE and filters"""
+    uppercase_cols = ['NAME', 'ACCTSTA', 'PRSTCOND', 'REGCARD', 'IGNTKEY', 
+                     'ACCTWOFF', 'MODEREPO', 'REPOSTAT', 'MODEDISP']
+    
+    for col in uppercase_cols:
+        if col in df.columns:
+            df = df.with_columns(pl.col(col).str.to_uppercase())
+    
+    return df
+
+# =========================
+# MAIN
+# =========================
+def main():
+    # 1. Extract and validate dates
+    rpvb_date_str, srs_date_str = extract_dates()
+    REPTDATE, PREVDATE, REPTDT, PREVDT, SRSTDT = calculate_report_dates(rpvb_date_str, srs_date_str)
     
     if REPTDT != SRSTDT:
         raise RuntimeError(f"Date validation failed: REPTDT={REPTDT}, SRSTDT={SRSTDT}")
     
-    raw_data_df = read_rpvdata_txt()
+    # 2. Parse and process data
+    raw_df = parse_rpvdata()
+    RPVB1 = process_rpvb_data(raw_df)
     
-    if len(raw_data_df) > 0:
-        RPVB1 = raw_data_df.with_columns([
-            pl.col("NAME").str.to_uppercase(),
-            pl.col("ACCTSTA").str.to_uppercase(),
-            pl.col("PRSTCOND").str.to_uppercase(),
-            pl.col("REGCARD").str.to_uppercase(),
-            pl.col("IGNTKEY").str.to_uppercase(),
-            pl.col("ACCTWOFF").str.to_uppercase(),
-            pl.col("MODEREPO").str.to_uppercase(),
-            pl.col("REPOSTAT").str.to_uppercase(),
-            pl.col("MODEDISP").str.to_uppercase(),
-        ])
-    else:
-        RPVB1 = pl.DataFrame()
+    # 3. Apply filters (based on your original: ACCTSTA in D,S,R and DATESTLD not null)
+    RPVB2 = RPVB1.filter(pl.col("ACCTSTA").is_in(["D", "S", "R"]))
+    RPVB3 = RPVB2.filter(pl.col("DATESTLD_DATE").is_not_null())
     
-    if len(RPVB1) > 0:
-        RPVB2 = RPVB1.filter(pl.col("ACCTSTA").is_in(["D","S","R"]))
-        RPVB3 = RPVB2.filter(pl.col("DATESTLD_DATE").is_not_null())
-    else:
-        RPVB2 = RPVB1
-        RPVB3 = RPVB1
-    
+    # 4. Load previous month's data
     REPO_PREV_PATH = REPO_DIR / f"REPS_{PREVDT}.parquet"
     REPO_CURR_PATH = REPO_DIR / f"REPS_{REPTDT}.parquet"
     REPOWH_PATH = REPOWH_DIR / f"REPS_{REPTDT}.parquet"
     
-    rpbv3_schema = RPVB3.schema if len(RPVB3) > 0 else None
-    
     try:
         REPO_PREV = pl.read_parquet(REPO_PREV_PATH)
-        if rpbv3_schema and len(REPO_PREV) > 0:
-            for col_name, col_type in rpbv3_schema.items():
-                if col_name not in REPO_PREV.columns:
-                    REPO_PREV = REPO_PREV.with_columns(pl.lit(None).cast(col_type).alias(col_name))
-                else:
-                    REPO_PREV = REPO_PREV.with_columns(pl.col(col_name).cast(col_type))
-            if len(RPVB3.columns) > 0:
-                REPO_PREV = REPO_PREV.select(RPVB3.columns)
+        # Ensure schema compatibility
+        for col in RPVB3.columns:
+            if col not in REPO_PREV.columns:
+                REPO_PREV = REPO_PREV.with_columns(pl.lit(None).alias(col))
+        REPO_PREV = REPO_PREV.select(RPVB3.columns)
     except Exception:
-        if rpbv3_schema:
-            REPO_PREV = pl.DataFrame(schema=rpbv3_schema)
-        else:
-            REPO_PREV = pl.DataFrame()
+        REPO_PREV = pl.DataFrame(schema=RPVB3.schema)
     
-    if len(REPO_PREV) == 0:
-        REPO_REPS = RPVB3
-    else:
-        REPO_REPS = pl.concat([RPVB3, REPO_PREV], how="vertical", rechunk=True)
+    # 5. Combine current and previous data
+    REPO_REPS = pl.concat([RPVB3, REPO_PREV], how="vertical")
     
+    # 6. Write outputs
     write_parquet(REPO_REPS, REPO_CURR_PATH)
     
-    REPOWH_REPS = REPO_REPS.clone()
-    if len(REPOWH_REPS) > 0 and 'MNIACTNO' in REPOWH_REPS.columns:
-        REPOWH_REPS = REPOWH_REPS.sort("MNIACTNO").unique(subset=["MNIACTNO"], keep="first")
+    # 7. Create deduplicated version
+    if 'MNIACTNO' in REPO_REPS.columns:
+        REPOWH_REPS = REPO_REPS.sort("MNIACTNO").unique(subset=["MNIACTNO"])
+    else:
+        REPOWH_REPS = REPO_REPS
     write_parquet(REPOWH_REPS, REPOWH_PATH)
     
-    print(f"Processing completed. Records: RPVB1={len(RPVB1)}, RPVB2={len(RPVB2)}, RPVB3={len(RPVB3)}, REPO={len(REPO_REPS)}, REPOWH={len(REPOWH_REPS)}")
+    # 8. Summary
+    print(f"Summary:")
+    print(f"  RPVB1: {len(RPVB1)} records")
+    print(f"  RPVB2: {len(RPVB2)} records")
+    print(f"  RPVB3: {len(RPVB3)} records")
+    print(f"  REPO:  {len(REPO_REPS)} records")
+    print(f"  REPOWH: {len(REPOWH_REPS)} records")
+    print(f"Output files created:")
+    print(f"  {REPO_CURR_PATH}")
+    print(f"  {REPOWH_PATH}")
 
 if __name__ == "__main__":
     main()
