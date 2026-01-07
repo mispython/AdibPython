@@ -50,7 +50,7 @@ def read_first_line(path: Path) -> str:
         return f.readline().strip()
 
 # =========================
-# FIELD SPECS FOR FIXED-WIDTH PARSING
+# FIELD SPECS
 # =========================
 FIELDS = [
     (0,1,'RECID',str), (2,12,'MNIACTNO',str), (13,23,'LOANNOTE',str), (24,74,'NAME','u'),
@@ -76,15 +76,11 @@ def read_rpvdata() -> pl.DataFrame:
     with open(BASE_INPUT / "RPVBDATA.txt", 'r', encoding='utf-8') as f:
         lines = f.readlines()[1:]
     
-    print(f"\nReading RPVBDATA.txt - Total lines: {len(lines) + 1}")
     data = []
-    
-    for i, line in enumerate(lines, 2):
+    for line in lines:
         line = line.rstrip('\n')
         if not line.strip():
             continue
-        if i <= 7:
-            print(f"DEBUG Line {i}: '{line}'")
         
         rec = {}
         for start, end, field, dtype in FIELDS:
@@ -92,10 +88,8 @@ def read_rpvdata() -> pl.DataFrame:
             rec[field] = val.upper() if dtype == 'u' else (int(val) if dtype == int and val.isdigit() else val if dtype == str else None)
         data.append(rec)
     
-    print(f"Parsed {len(data)} data records")
     df = pl.DataFrame(data)
     
-    # Create date fields and drop components
     for yy, mm, dd, dcol in DATES:
         df = df.with_columns(pl.struct([yy,mm,dd]).map_elements(
             lambda x: mdy(x[mm], x[dd], x[yy]), return_dtype=pl.Date).alias(dcol))
@@ -107,13 +101,11 @@ def read_rpvdata() -> pl.DataFrame:
 # MAIN PROCESSING
 # =========================
 def main():
-    print("=" * 60 + "\nSTEP 1: Processing RPVBDATA dates\n" + "=" * 60)
+    print("=" * 60 + "\nProcessing RPVBDATA dates\n" + "=" * 60)
     
     try:
         line = read_first_line(BASE_INPUT / "RPVBDATA.txt")
-        print(f"DEBUG: RPVBDATA first line: '{line}'")
         tbdate_rpvb = line[2:10]
-        print(f"DEBUG: Extracted TBDATE from positions 3-10: '{tbdate_rpvb}'")
         
         if not (tbdate_rpvb.isdigit() and len(tbdate_rpvb) == 8):
             raise ValueError(f"Invalid TBDATE: {tbdate_rpvb}")
@@ -123,8 +115,7 @@ def main():
         prevdate = end_of_prev_month(reptdate)
         reptdt, prevdt = mmyy_format(reptdate), mmyy_format(prevdate)
         
-        print(f"✓ TBDATE from RPVBDATA: {tbdate_rpvb}\n  Date: {tb_date} → REPTDATE: {reptdate} → PREVDATE: {prevdate}")
-        print(f"  REPTDT (MMYY): {reptdt}\n  PREVDT (MMYY): {prevdt}")
+        print(f"✓ TBDATE: {tbdate_rpvb} → REPTDT: {reptdt}, PREVDT: {prevdt}")
     except Exception as e:
         print(f"✗ Error: {e}")
         today = date.today()
@@ -133,64 +124,55 @@ def main():
         reptdt, prevdt = mmyy_format(reptdate), mmyy_format(prevdate)
         print(f"  Fallback: REPTDT={reptdt}, PREVDT={prevdt}")
     
-    print("\n" + "=" * 60 + "\nSTEP 2: Processing SRSDATA dates\n" + "=" * 60)
+    print("\n" + "=" * 60 + "\nProcessing SRSDATA dates\n" + "=" * 60)
     
     try:
         line = read_first_line(BASE_INPUT / "SRSDATA.txt")
-        print(f"DEBUG: SRSDATA first line: '{line}'")
         tbdate_srs = line[0:8]
-        print(f"DEBUG: Extracted TBDATE (first 8 chars): '{tbdate_srs}'")
         
         if tbdate_srs.isdigit() and len(tbdate_srs) == 8:
             srs_tb_date = yyyymmdd_to_date(tbdate_srs)
-            srstdt = mmyy_format(srs_tb_date)  # Direct conversion, no month adjustment
-            print(f"✓ TBDATE from SRSDATA: {tbdate_srs}\n  SRS TBDATE as date: {srs_tb_date}")
-            print(f"  SRS REPTDATE: {srs_tb_date}\n  SRSTDT (MMYY): {srstdt}")
+            srstdt = mmyy_format(srs_tb_date)
+            print(f"✓ TBDATE: {tbdate_srs} → SRSTDT: {srstdt}")
         else:
-            print(f"⚠ WARNING: TBDATE '{tbdate_srs}' not valid, attempting extraction...")
             match = re.search(r'(\d{8})', tbdate_srs)
             if match:
                 srs_tb_date = yyyymmdd_to_date(match.group(1))
                 srstdt = mmyy_format(srs_tb_date)
-                print(f"  Found: {match.group(1)} → SRSTDT: {srstdt}")
+                print(f"✓ Extracted date: {match.group(1)} → SRSTDT: {srstdt}")
             else:
-                print(f"  Using REPTDT as fallback")
                 srstdt = reptdt
+                print(f"⚠ Using REPTDT as fallback: {srstdt}")
     except Exception as e:
-        print(f"✗ Error: {e}\n  Using REPTDT as fallback: {reptdt}")
+        print(f"✗ Error: {e}")
         srstdt = reptdt
+        print(f"  Using REPTDT as fallback: {srstdt}")
     
-    print("\n" + "=" * 60 + "\nSTEP 3: Macro guard validation\n" + "=" * 60)
-    print(f"Comparing: REPTDT={reptdt} vs SRSTDT={srstdt}")
+    print("\n" + "=" * 60 + "\nDate validation\n" + "=" * 60)
     if reptdt != srstdt:
         error_msg = f"THE SAP.PBB.RPVB.TEXT IS NOT DATED (MMYY:{srstdt})"
         print(f"✗ {error_msg}")
         raise RuntimeError(error_msg)
-    print(f"✓ Date validation passed")
+    print(f"✓ REPTDT={reptdt} matches SRSTDT={srstdt}")
     
-    print("\n" + "=" * 60 + "\nSTEP 4-5: Reading and filtering RPVBDATA\n" + "=" * 60)
+    print("\n" + "=" * 60 + "\nReading and filtering data\n" + "=" * 60)
     
     rpvb1 = read_rpvdata()
-    print(f"✓ RPVB1: {len(rpvb1)} records\n  Columns: {rpvb1.columns}")
+    print(f"✓ RPVB1: {len(rpvb1)} records")
+    
     if len(rpvb1) > 0:
-        print("\nSample (first 3 rows):")
-        print(rpvb1.head(3))
-        
         rpvb2 = rpvb1.filter(pl.col("ACCTSTA").is_in(["D", "S", "R"]))
         rpvb3 = rpvb2.filter(pl.col("DATESTLD").is_not_null()) if 'DATESTLD' in rpvb2.columns else rpvb2.filter(pl.lit(False))
         print(f"✓ RPVB2: {len(rpvb2)} records (ACCTSTA in D,S,R)")
         print(f"✓ RPVB3: {len(rpvb3)} records (with DATESTLD)")
     else:
-        print("⚠ No data")
         rpvb2 = rpvb3 = rpvb1
     
-    print("\n" + "=" * 60 + "\nSTEP 6-7: Creating REPO and REPOWH datasets\n" + "=" * 60)
+    print("\n" + "=" * 60 + "\nCreating output datasets\n" + "=" * 60)
     
     repo_prev_path = BASE_OUTPUT / "REPO" / f"REPS_{prevdt}.parquet"
     repo_curr_path = BASE_OUTPUT / "REPO" / f"REPS_{reptdt}.parquet"
     repowh_path = BASE_OUTPUT / "REPOWH" / f"REPS_{reptdt}.parquet"
-    
-    print(f"Previous: {repo_prev_path}\nCurrent: {repo_curr_path}")
     
     try:
         repo_prev = pl.read_parquet(repo_prev_path)
@@ -204,28 +186,24 @@ def main():
                 if col not in repo_prev.columns:
                     repo_prev = repo_prev.with_columns(pl.lit(None).alias(col))
             rpvb3, repo_prev = rpvb3.select(all_cols), repo_prev.select(all_cols)
-    except Exception as e:
-        print(f"ℹ No previous data: {e}")
+    except Exception:
         repo_prev = pl.DataFrame()
     
     repo_reps = rpvb3 if len(repo_prev) == 0 else pl.concat([rpvb3, repo_prev], how="vertical", rechunk=True)
-    print(f"  Combined: {len(rpvb3)} new + {len(repo_prev)} previous = {len(repo_reps)} total")
-    
     write_parquet(repo_reps, repo_curr_path)
-    print(f"✓ Saved REPO: {len(repo_reps)} records")
+    print(f"✓ REPO: {len(repo_reps)} records")
     
     repowh_reps = repo_reps.sort("MNIACTNO").unique(subset=["MNIACTNO"], keep="first") if len(repo_reps) > 0 and 'MNIACTNO' in repo_reps.columns else repo_reps
-    
     write_parquet(repowh_reps, repowh_path)
-    print(f"✓ Saved REPOWH: {len(repowh_reps)} records ({len(repo_reps)-len(repowh_reps)} duplicates removed)")
+    print(f"✓ REPOWH: {len(repowh_reps)} records ({len(repo_reps)-len(repowh_reps)} duplicates removed)")
     
     print("\n" + "=" * 60 + "\nSUMMARY\n" + "=" * 60)
-    print(f"TBDATE from RPVBDATA: {tbdate_rpvb if 'tbdate_rpvb' in locals() else 'N/A'}")
-    print(f"TBDATE from SRSDATA: {tbdate_srs if 'tbdate_srs' in locals() else 'N/A'}")
-    print(f"REPTDT: {reptdt}\nPREVDT: {prevdt}\nSRSTDT: {srstdt}")
-    print(f"RPVB1 records: {len(rpvb1)}\nRPVB2 records: {len(rpvb2)}\nRPVB3 records: {len(rpvb3)}")
-    print(f"REPO_REPS records: {len(repo_reps)}\nREPOWH_REPS records: {len(repowh_reps)}")
-    print("=" * 60 + "\n✓ Processing completed successfully!\n" + "=" * 60)
+    print(f"TBDATE RPVBDATA: {tbdate_rpvb if 'tbdate_rpvb' in locals() else 'N/A'}")
+    print(f"TBDATE SRSDATA: {tbdate_srs if 'tbdate_srs' in locals() else 'N/A'}")
+    print(f"REPTDT: {reptdt} | PREVDT: {prevdt} | SRSTDT: {srstdt}")
+    print(f"RPVB1: {len(rpvb1)} | RPVB2: {len(rpvb2)} | RPVB3: {len(rpvb3)}")
+    print(f"REPO: {len(repo_reps)} | REPOWH: {len(repowh_reps)}")
+    print("=" * 60 + "\n✓ Processing completed\n" + "=" * 60)
 
 if __name__ == "__main__":
     main()
