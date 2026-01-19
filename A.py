@@ -1,20 +1,52 @@
-PROC   REPORT DATA=NPGS3 NOWD HEADSKIP HEADLINE SPLIT='*';
-COLUMN CVAR02  CVAR03 CVAR04 CVARX1 CVAR06 CVAR08 CVAR09 CURBAL
-       ACCRUAL CVAR11 CVAR12A CVAR13 CVARX2 CVARX3 CVAR01 TRANCHE;
-DEFINE CVAR02  / DISPLAY FORMAT=$3.       'SCH';
-DEFINE CVAR03  / DISPLAY FORMAT=$15.      'IC /BUSS. NUM.';
-DEFINE CVAR04  / DISPLAY FORMAT=$100.     'NAME OF CUSTOMER';
-DEFINE CVARX1  / DISPLAY FORMAT=$10.      '              ';
-DEFINE CVAR06  / DISPLAY FORMAT=10.       'ACCOUNT NUMBER';
-DEFINE CVAR08  / DISPLAY FORMAT=10.2      'LOAN AMOUNT';
-DEFINE CVAR09  / DISPLAY FORMAT=10.2      'O/S BALANCE';
-DEFINE CURBAL  / DISPLAY FORMAT=10.2      'PRINCIPAL*BALANCE';
-DEFINE ACCRUAL / DISPLAY FORMAT=10.2      'INTEREST*BALANCE';
-DEFINE CVAR11  / DISPLAY FORMAT=7.        'ARREARS';
-DEFINE CVAR12A / DISPLAY FORMAT=$3.       'ST ';
-DEFINE CVAR13  / DISPLAY FORMAT=$10.      'NPL DATE';
-DEFINE CVARX2  / DISPLAY FORMAT=$10.      'NPL*NOTIFICATN*DATE';
-DEFINE CVARX3  / DISPLAY FORMAT=$4.       'NPL*REASON';
-DEFINE CVAR01  / DISPLAY FORMAT=10.       'APPLICATN*NUMBER';
-DEFINE TRANCHE / DISPLAY FORMAT=$8.       'TRANCHE*NUMBER';
-*;
+import polars as pl
+
+def npgs3rpt(df, rdate):
+    """Minimal SCH=93 report"""
+    if df.is_empty():
+        print("No data for SCH=93")
+        return df
+    
+    print(f"SCH=93 Report - {rdate}")
+    print("=" * 80)
+    
+    # Select and rename columns for display
+    cols = ['CVAR02','CVAR03','CVAR04','CVAR06','CVAR08','CVAR09',
+            'CURBAL','ACCRUAL','CVAR11','CVAR12A','CVAR13',
+            'CVARX2','CVARX3','CVAR01','TRANCHE']
+    
+    display_df = df.select([c for c in cols if c in df.columns])
+    
+    # Rename for readability
+    rename_map = {
+        'CVAR02': 'SCH',
+        'CVAR03': 'IC_NO',
+        'CVAR04': 'CUSTOMER_NAME',
+        'CVAR06': 'ACCT_NO',
+        'CVAR08': 'LOAN_AMT',
+        'CVAR09': 'OS_BALANCE',
+        'CURBAL': 'PRINCIPAL',
+        'ACCRUAL': 'INTEREST',
+        'CVAR11': 'ARREARS',
+        'CVAR12A': 'STATUS',
+        'CVAR13': 'NPL_DATE',
+        'CVARX2': 'NPL_NOTIFY',
+        'CVARX3': 'NPL_REASON',
+        'CVAR01': 'APP_NO',
+        'TRANCHE': 'TRANCHE'
+    }
+    
+    display_df = display_df.rename({k:v for k,v in rename_map.items() if k in display_df.columns})
+    print(display_df)
+    print(f"\nTotal: {len(df)} records")
+    
+    return df
+
+def generate_report(df, output_file=None, rdate=""):
+    """For other programs to call"""
+    result = npgs3rpt(df, rdate)
+    if output_file and not df.is_empty():
+        df.write_csv(output_file)
+    return result
+
+# SAS compatibility
+pgm = generate_report
