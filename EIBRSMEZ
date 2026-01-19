@@ -1,0 +1,187 @@
+//EIBRSMEZ JOB MISEIS,EIBRNPGS,MSGCLASS=A,CLASS=A TYPRUN=SCAN                  1
+//*
+//DELETE   EXEC PGM=IEFBR14
+//DD93T    DD DSN=SAP.PBB.SC93.TEXT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//DD93R    DD DSN=SAP.PBB.SC93.REPT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//DD94T    DD DSN=SAP.PBB.SC94.TEXT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//DD94R    DD DSN=SAP.PBB.SC94.REPT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//DD101T   DD DSN=SAP.PBB.SC101.TEXT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//DD101R   DD DSN=SAP.PBB.SC101.REPT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//*
+//EIBRSMEZ EXEC SAS609
+//NPGS     DD DSN=SAP.PBB.NPGS.SASDATA,DISP=OLD
+//BNM      DD DSN=SAP.PBB.MNILN(0),DISP=SHR
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//SC93T    DD DSN=SAP.PBB.SC93.TEXT,DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(2,2),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=240,RECFM=VB,BLKSIZE=0)
+//SC93R    DD DSN=SAP.PBB.SC93.REPT,DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(2,2),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=240,RECFM=FB,BLKSIZE=0)
+//SC94T    DD DSN=SAP.PBB.SC94.TEXT,DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(2,2),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=240,RECFM=VB,BLKSIZE=0)
+//SC94R    DD DSN=SAP.PBB.SC94.REPT,DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(2,2),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=240,RECFM=FB,BLKSIZE=0)
+//SC101T   DD DSN=SAP.PBB.SC101.TEXT,DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(2,2),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=240,RECFM=VB,BLKSIZE=0)
+//SC101R   DD DSN=SAP.PBB.SC101.REPT,DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(2,2),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=240,RECFM=FB,BLKSIZE=0)
+//SASLIST  DD SYSOUT=X
+//SYSIN    DD *
+
+OPTIONS YEARCUTOFF=1940 SORTDEV=3390
+        NONUMBER NODATE NOCENTER;
+*;
+DATA REPTDATE (KEEP=REPTDATE);
+  SET BNM.REPTDATE;
+  MM =MONTH(REPTDATE);
+  MM1=MM - 1;
+  IF MM1 = 0 THEN MM1 = 12;
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('NDATE',PUT(REPTDATE,Z5.));
+RUN;
+*;
+DATA NPGS.SMEZ;
+  SET NPGS.LNSMEZ&REPTMON
+      NPGS.DPSMEZ&REPTMON;
+  IF  CVAR13 NE '         ';
+  NDATE =CVAR13;
+  STATUS=CVAR12;
+  KEEP CVAR01 CVAR06 STATUS NDATE;
+*;
+DATA NPGS;
+  SET NPGS.LNSMEZ&REPTMON
+      NPGS.DPSMEZ&REPTMON;
+  CVARX1='          ';
+  CVARX2='          ';
+  CVARX3='    ';
+  IF CVAR12='NPL'  THEN CVAR12A='NP';
+                   ELSE CVAR12A='AP';
+*;
+DATA NPGS3;
+  FORMAT ACCRUALX CURBAL 10.2;
+  SET NPGS;
+  IF  CVAR02='93';
+  IF  NATGUAR='06' AND CINSTCL='18';
+  CVARXX='          ';
+  ACCRUALX=ACCRUAL;
+RUN;
+PROC SORT; BY CVAR01 CVAR06;
+*;
+DATA SC93T;
+  SET NPGS3;
+  FILE SC93T;
+  PUT  @001 CVAR02         +(-1)';'
+            CVAR03         +(-1)';'
+            CVAR04         +(-1)';'
+            CVAR06         +(-1)';'
+            CVAR08         +(-1)';' /* NETPROC   */
+            CVAR09         +(-1)';' /* O/S       */
+            CURBAL         +(-1)';' /* PRINCIPAL */
+            ACCRUALX       +(-1)';' /* INTEREST  */
+            CVAR11         +(-1)';'
+            CVAR12A        +(-1)';' /* AP OR NP */
+            CVAR13         +(-1)';'
+            CVARX2         +(-2)';' /* NPL NOTIFICATION */
+            CVARX3         +(-2)';' /* NPL REASON */
+            CVAR01         +(-1)';'
+            TRANCHE        +(-1)';'
+       ;
+*;
+PROC    PRINTTO PRINT=SC93R;
+TITLE1 'PUBLIC BANK BERHAD';
+TITLE2 'DETAIL OF ACCTS (SCH=93) FOR SUBMISSION TO CGC @' &RDATE;
+%INC PGM(NPGS3RPT);
+*;
+DATA NPGS4;
+  FORMAT ACCRUAL CURBAL 10.2;
+  SET NPGS;
+  IF  CVAR02='94';
+  IF  NATGUAR='06' AND CINSTCL='18';
+  CVARXX='          ';
+PROC SORT; BY CVAR01 CVAR06;
+*;
+DATA SC94T;
+  SET NPGS4;
+  FILE SC94T;
+  PUT  @001 CVAR02   $2.       ';'
+       @004 CVAR03   $15.      ';'
+       @020 CVAR04   $100.     ';'
+       @121 CVARX1   $10.
+       @131 CVAR06   10.       ';'
+       @142 CVAR08   10.2      ';'  /* NETPROC   */
+       @153 CVAR09   10.2      ';'  /* O/S       */
+       @164 CURBAL   10.2      ';'  /* PRINCIPAL */
+       @175 ACCRUAL  10.2      ';'  /* INTEREST  */
+       @186 CVAR11   2.        ';'
+       @189 CVAR12A  $2.       ';'  /* AP OR NP */
+       @192 CVAR13   $10.      ';'
+       @203 CVARX2   $10.      ';'  /* NPL NOTIFICATION */
+       @214 CVARX3   $4.       ';'  /* NPL REASON */
+       @219 CVAR01   10.       ';'
+       @230 TRANCHE  $8.       ';'
+       ;
+*;
+PROC    PRINTTO PRINT=SC94R;
+TITLE1 'PUBLIC BANK BERHAD';
+TITLE2 'DETAIL OF ACCTS (SCH=94) FOR SUBMISSION TO CGC @' &RDATE;
+%INC PGM(NPGS4RPT);
+*;
+DATA NPGS5;
+  FORMAT ACCRUALX 10.2;
+  SET NPGS;
+  IF CVAR02 ='101';
+  IF NATGUAR='06' AND CINSTCL='18';
+  IF CVAR12 = 'NPL' THEN DO;
+     CVAX13 = INPUT(CVAR13,DDMMYY10.);
+     CVARX2 = PUT(INTNX('MONTH',CVAX13,1,'B')+6,DDMMYY10.);
+     CVARX3 = 'CFBS';
+  END;
+  IF CVAR05 NOT IN (0,.) THEN CVARX5=PUT(CVAR05,DDMMYY10.);
+  ELSE                        CVARX5='          ';
+  IF CVAR17  =. THEN CVAR17  =0.00;
+  IF ACCRUAL =. THEN ACCRUALX=0.00;
+  ELSE               ACCRUALX=ACCRUAL;
+PROC SORT; BY CVAR01 CVAR06;
+*;
+DATA SC101T;
+  SET NPGS5;
+  FILE SC101T DLM=';' DSD;
+  PUT  @001 CVAR02                  /* SCHEME NUMBER       */
+            CVAR03                  /* IC /BUSS. NUM.      */
+            CVAR04                  /* NAME OF CUSTOMER    */
+            CVAR06                  /* ACCOUNT NUMBER      */
+            CVARX5                  /* DISBURSEMENT DATE   */
+            CVAR16                  /* FACILITY TYPE       */
+            CVAR08                  /* LOAN AMOUNT         */
+            CVAR09                  /* O/S BALANCE         */
+            CVAR17                  /* PRINCIPAL BALANCE   */
+            ACCRUALX                /* INTEREST BALANCE    */
+            CVAR10                  /* CREDIT BALANCE      */
+            CVAR11                  /* ARREARS             */
+            CVAR12A                 /* STATUS              */
+            CVAR13                  /* NPL DATE            */
+            CVARX2                  /* NPL NOTIFICATN DATE */
+            CVARX3                  /* NPL REASON          */
+            CVAR01                  /* APPLICATN NUMBER    */
+       ;
+*;
+PROC    PRINTTO PRINT=SC101R;
+TITLE1 'PUBLIC BANK BERHAD';
+TITLE2 'DETAIL OF ACCTS (SCH=101) FOR SUBMISSION TO CGC @' &RDATE;
+%INC PGM(NPGS5RPT);
+*;
