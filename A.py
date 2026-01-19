@@ -1,21 +1,29 @@
-PROC   REPORT DATA=NPGS NOWD HEADSKIP HEADLINE SPLIT='*';
-COLUMN CVAR01 CVAR02 CVAR03 CVAR04 CVAR05 CVAR06 CVAR07 CVAR08
-       CVARXX CVAR09 CVAR10 CVAR11 CVAR12 CVAR13 CVAR14 CVAR15 BRANCH;
-DEFINE CVAR01  / DISPLAY FORMAT=10.       'REFER.NUM ';
-DEFINE CVAR02  / DISPLAY FORMAT=$3.       'SCH';
-DEFINE CVAR03  / DISPLAY FORMAT=$15.      'IC /BUSS. NUM.';
-DEFINE CVAR04  / DISPLAY FORMAT=$50.      'NAME OF CUSTOMER';
-DEFINE CVAR05  / DISPLAY FORMAT=DDMMYY10. 'DISBURSE';
-DEFINE CVARXX  / DISPLAY FORMAT=$10.      '              ';
-DEFINE CVAR06  / DISPLAY FORMAT=10.       'ACCOUNT NUMBER';
-DEFINE CVAR07  / DISPLAY FORMAT=$2.       'TY';
-DEFINE CVAR08  / DISPLAY FORMAT=13.2      'APPROVE LIMIT';
-DEFINE CVAR09  / DISPLAY FORMAT=13.2      'DEBIT  BALANCE';
-DEFINE CVAR10  / DISPLAY FORMAT=13.2      'CREDIT BALANCE';
-DEFINE CVAR11  / DISPLAY FORMAT=7.        'ARREARS';
-DEFINE CVAR12  / DISPLAY FORMAT=$3.       'ST ';
-DEFINE CVAR13  / DISPLAY FORMAT=$10.      'NPL DATE';
-DEFINE CVAR14  / DISPLAY FORMAT=$4.       'FI  CODE';
-DEFINE CVAR15  / DISPLAY FORMAT=$5.       'MICR CODE';
-DEFINE BRANCH  / DISPLAY FORMAT=3.        'BRH';
-*;
+import polars as pl
+
+def npgsrpt(df, rdate):
+    """Minimal NPGS report - just show data"""
+    if df.is_empty():
+        print("No data")
+        return
+    
+    print(f"NPGS Report - {rdate}")
+    print("=" * 60)
+    
+    # Just show the data with original column names
+    print(df)
+    print(f"\nTotal: {len(df)} records")
+    
+    return df
+
+def generate_report(df, output_file=None, rdate=""):
+    """For other programs to call"""
+    result = npgsrpt(df, rdate)
+    
+    if output_file:
+        # Save as CSV if output file specified
+        df.write_csv(output_file)
+    
+    return result
+
+# For SAS compatibility naming
+pgm = generate_report  # alias for %INC PGM(NPGSRPT)
