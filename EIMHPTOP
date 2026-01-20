@@ -1,0 +1,216 @@
+//EIMHPTOP JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                      00010002
+/*JOBPARM S=S1M1                                                        00020005
+//*******************************************************************   00030002
+//* HP TOP 10 A/C BY BRANCH AND CUSTOMER                                00040002
+//* LAST MODIFY : ESMR 2005-610                                         00041003
+//*******************************************************************   00050002
+//DELETE  EXEC PGM=IEFBR14                                              00060002
+//DEL01    DD DSN=SAP.PBB.HPTOP.COLD,                                   00070005
+//            DISP=(MOD,DELETE,DELETE),                                 00080002
+//            SPACE=(CYL,(0))                                           00090002
+//*                                                                     00130002
+//EIMHPTOP EXEC SAS609                                                  00140002
+//LOAN     DD DSN=SAP.PBB.SASDATA,DISP=SHR                              00150002
+//CIS      DD DSN=SAP.PBB.CISBEXT.LN,DISP=SHR                           00160002
+//BRHFILE  DD DSN=RBP2.B033.PBB.BRANCH,DISP=SHR                         00170002
+//HPCOLD   DD DSN=SAP.PBB.HPTOP.COLD,                                   00180005
+//            DISP=(NEW,CATLG,DELETE),                                  00190002
+//            DCB=(RECFM=FBA,LRECL=130,BLKSIZE=13000),                  00200002
+//            SPACE=(CYL,(10,10),RLSE),UNIT=(SYSDA,3)                   00210002
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR                              00220002
+//SYSIN    DD *                                                         00260002
+                                                                        00270002
+%INC PGM(PBBLNFMT);                                                     00280002
+                                                                        00290002
+DATA REPTDATE;                                                          00300002
+   SET LOAN.REPTDATE;                                                   00320002
+   SELECT(DAY(REPTDATE));                                               00350002
+      WHEN (8)  DO; WK = '1'; WK1 = '4'; END;                           00360002
+      WHEN(15)  DO; WK = '2'; WK1 = '1'; END;                           00370002
+      WHEN(22)  DO; WK = '3'; WK1 = '2'; END;                           00380002
+      OTHERWISE DO; WK = '4'; WK1 = '3'; END;                           00390002
+   END;                                                                 00400002
+   MM = MONTH(REPTDATE);                                                00410002
+   IF WK = '1' THEN DO;                                                 00420002
+      MM1 = MM - 1;                                                     00430002
+      IF MM1 = 0 THEN MM1 = 12;                                         00440002
+   END;                                                                 00450002
+   ELSE MM1 = MM;                                                       00460002
+   CALL SYMPUT('NOWK',PUT(WK,$1.));                                     00470002
+   CALL SYMPUT('NOWK1',PUT(WK1,$1.));                                   00480002
+   CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                  00490002
+   CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));                                00500002
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                         00510002
+RUN;                                                                    00520002
+                                                                        00530002
+*** CIS INFO ***;                                                       00540002
+DATA HPCIS(KEEP=ACCTNO ICNO CUSTNAME);                                  00550002
+   SET CIS.LOAN;                                                        00560002
+   IF CACCCODE NOT IN ('017','021','028') AND SECCUST = '901';          00561002
+   IF NEWIC NE ' ' THEN ICNO = NEWIC;                                   00570002
+   ELSE ICNO = OLDIC;                                                   00580002
+RUN;                                                                    00590002
+                                                                        00600002
+*** EXTRACT HP A/C ***;                                                 00610002
+DATA HPACC(KEEP=ACCTNO NOTENO PRODUCT BORSTAT BALANCE BLDATE            00620002
+                ISSDTE MTHARR BRANCH);                                  00630002
+   SET LOAN.LOAN&REPTMON&NOWK;                                          00640002
+   IF PRODUCT IN &HPD AND                                               00650002
+      BALANCE GT 0;                                                     00660002
+   THISDATE = INPUT("&RDATE", DDMMYY8.);                                00670002
+   IF BLDATE > 0 THEN DAYDIFF = THISDATE - BLDATE;                      00680002
+   IF      (DAYDIFF>729) THEN MTHARR = INT((DAYDIFF/365)*12);           00690002
+   ELSE IF (DAYDIFF>698) THEN MTHARR = 23;                              00700002
+   ELSE IF (DAYDIFF>668) THEN MTHARR = 22;                              00710002
+   ELSE IF (DAYDIFF>638) THEN MTHARR = 21;                              00720002
+   ELSE IF (DAYDIFF>608) THEN MTHARR = 20;                              00730002
+   ELSE IF (DAYDIFF>577) THEN MTHARR = 19;                              00740002
+   ELSE IF (DAYDIFF>547) THEN MTHARR = 18;                              00750002
+   ELSE IF (DAYDIFF>516) THEN MTHARR = 17;                              00760002
+   ELSE IF (DAYDIFF>486) THEN MTHARR = 16;                              00770002
+   ELSE IF (DAYDIFF>456) THEN MTHARR = 15;                              00780002
+   ELSE IF (DAYDIFF>424) THEN MTHARR = 14;                              00790002
+   ELSE IF (DAYDIFF>394) THEN MTHARR = 13;                              00800002
+   ELSE IF (DAYDIFF>364) THEN MTHARR = 12;                              00810002
+   ELSE IF (DAYDIFF>333) THEN MTHARR = 11;                              00820002
+   ELSE IF (DAYDIFF>303) THEN MTHARR = 10;                              00830002
+   ELSE IF (DAYDIFF>273) THEN MTHARR = 9;                               00840002
+   ELSE IF (DAYDIFF>243) THEN MTHARR = 8;                               00850002
+   ELSE IF (DAYDIFF>213) THEN MTHARR = 7;                               00860002
+   ELSE IF (DAYDIFF>182) THEN MTHARR = 6;                               00870002
+   ELSE IF (DAYDIFF>151) THEN MTHARR = 5;                               00880002
+   ELSE IF (DAYDIFF>121) THEN MTHARR = 4;                               00890002
+   ELSE IF (DAYDIFF>91)  THEN MTHARR = 3;                               00900002
+   ELSE IF (DAYDIFF>61)  THEN MTHARR = 2;                               00910002
+   ELSE IF (DAYDIFF>30)  THEN MTHARR = 1;                               00920002
+   ELSE                       MTHARR = 0;                               00930002
+RUN;                                                                    00940002
+                                                                        00950002
+*** MERGE HP A/C WITH BRANCH ABBR ***;                                  00960002
+DATA BRHDATA;                                                           00970002
+  INFILE BRHFILE LRECL=80;                                              00980002
+  INPUT @2 BRANCH  3.                                                   00990002
+        @6 BRABBR  $3.;                                                 01000002
+RUN;                                                                    01010002
+                                                                        01020002
+PROC SORT DATA=HPACC; BY BRANCH; RUN;                                   01030002
+PROC SORT DATA=BRHDATA; BY BRANCH; RUN;                                 01040002
+DATA HPACC;                                                             01050002
+   MERGE HPACC(IN=A) BRHDATA;                                           01060002
+   BY BRANCH;                                                           01070002
+   IF A;                                                                01080002
+RUN;                                                                    01090002
+                                                                        01100002
+*** MERGE HP A/C WITH CIS ***;                                          01110002
+PROC SORT DATA=HPCIS; BY ACCTNO; RUN;                                   01120002
+PROC SORT DATA=HPACC; BY ACCTNO; RUN;                                   01130002
+DATA HPACC;                                                             01140002
+   MERGE HPACC(IN=A) HPCIS(IN=B);                                       01150002
+   BY ACCTNO;                                                           01160002
+   IF A AND B;                                                          01170002
+RUN;                                                                    01180002
+                                                                        01190002
+PROC SORT DATA=HPACC; BY BRANCH ICNO; RUN;                              01200002
+PROC MEANS DATA=HPACC NWAY NOPRINT;                                     01210004
+     BY      BRANCH ICNO;                                               01220002
+     VAR     BALANCE;                                                   01230002
+     OUTPUT  OUT=HPIC (DROP=_TYPE_ _FREQ_) SUM=;                        01240002
+RUN;                                                                    01250002
+                                                                        01260002
+*** EXTRACT TOP TEN CUSTOMER PER BRANCH ***;                            01261002
+PROC SORT DATA=HPIC; BY BRANCH DESCENDING BALANCE; RUN;                 01270002
+DATA HPIC;                                                              01280002
+   RETAIN N 0;                                                          01280102
+   SET HPIC; BY BRANCH;                                                 01281002
+   IF FIRST.BRANCH THEN N = 1;                                          01283002
+   ELSE N = N + 1;                                                      01284002
+   IF N <=10 THEN OUTPUT;                                               01290002
+RUN;                                                                    01330002
+                                                                        01340002
+PROC SORT DATA=HPIC OUT=HPIC(RENAME=BALANCE=TOTBAL);                    01350002
+   BY BRANCH ICNO; RUN;                                                 01351002
+PROC SORT DATA=HPACC; BY BRANCH ICNO; RUN;                              01360002
+DATA HPACC1;                                                            01370002
+   MERGE HPACC(IN=A) HPIC(IN=B);                                        01380002
+   BY BRANCH ICNO;                                                      01390002
+   IF A AND B;                                                          01400002
+RUN;                                                                    01410002
+                                                                        01430002
+PROC SORT DATA=HPACC1;                                                  01431002
+   BY BRANCH DESCENDING TOTBAL ICNO ACCTNO;                             01432002
+RUN;                                                                    01433002
+                                                                        01434002
+TITLE ' ';                                                              01440002
+OPTIONS NOCENTER NODATE NONUMBER;                                       01443102
+DATA _NULL_;                                                            01450002
+  SET HPACC1;                                                           01460002
+  BY BRANCH DESCENDING TOTBAL ICNO ACCTNO;                              01470002
+  FILE HPCOLD HEADER=NEWPAGE;                                           01501002
+                                                                        01510002
+  IF FIRST.BRANCH THEN DO;                                              01520002
+     BRAMT=0;                                                           01540002
+     PUT _PAGE_;                                                        01541002
+  END;                                                                  01560002
+                                                                        01570002
+  BRAMT+BALANCE;                                                        01620002
+  ICAMT+BALANCE;                                                        01630002
+  PUT @1   ACCTNO                                                       01650002
+      @13  NOTENO                                                       01660002
+      @20  CUSTNAME    $30.                                             01661002
+      @51  PRODUCT                                                      01662002
+      @59  BORSTAT                                                      01663002
+      @65  BALANCE COMMA16.2                                            01664002
+      @82  MTHARR COMMA6.                                               01665002
+      @92  ISSDTE DATE8.;                                               01666002
+      LINECNT +1;                                                       01700002
+                                                                        01710002
+  IF LAST.ICNO THEN DO;                                                 01760002
+     PUT @65 '----------------';                                        01780002
+     PUT @58 'TOTAL: '                                                  01800002
+         @65 ICAMT COMMA16.2;                                           01801002
+     PUT @65 '================';                                        01820002
+     ICAMT = 0;                                                         01830002
+     LINECNT +3;                                                        01840002
+  END;                                                                  01850002
+                                                                        01860002
+  IF LAST.BRANCH THEN DO;                                               01910002
+     PUT @65 '----------------';                                        01911002
+     PUT @51 'BRANCH TOTAL: '                                           01912002
+         @65 BRAMT COMMA16.2;                                           01913002
+     PUT @65 '================';                                        01914002
+     PAGECNT=0;                                                         01915002
+  END;                                                                  02000002
+  RETURN;                                                               02010002
+                                                                        02020002
+  NEWPAGE:                                                              02030002
+    PAGECNT+1;                                                          02040002
+    PUT @1   'PUBLIC BANK BERHAD'                                       02220002
+        @80  "&RDATE"                                                   02221002
+        @90  'PAGE NO : ' PAGECNT;                                      02230002
+    PUT @1   'TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) '   02240002
+        @55  'AS AT ' "&RDATE";                                         02250002
+    PUT @1   'REPORT ID: EIMHPTOP';                                     02260002
+    PUT @1   '     ';                                                   02270002
+    PUT @1   'BRANCH CODE= ' BRANCH Z3.;                                02280002
+    PUT @1   '     ';                                                   02290002
+    PUT @13  'NOTE'                                                     02300002
+        @50  'LOAN'                                                     02320002
+        @56  'BORROWER'                                                 02330002
+        @82  'MONTH'                                                    02350002
+        @93  'ISSUE';                                                   02360002
+    PUT @1   'MNI NO'                                                   02370002
+        @13  'NO'                                                       02380002
+        @20  'NAME'                                                     02390002
+        @50  'TYPE'                                                     02400002
+        @56  'STATUS'                                                   02410002
+        @70  'NET BALANCE'                                              02420002
+        @82  'PASS DUE'                                                 02430002
+        @93  'DATE';                                                    02440002
+    PUT @1   '------------------------------------------'               02500002
+        @43  '------------------------------------------'               02510002
+        @85  '--------------------';                                    02520002
+    LINECNT = 9;                                                        02560002
+  RETURN;                                                               02570002
+RUN;                                                                    02580002
+                                                                        02590002
+                                                                        02600002
