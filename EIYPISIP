@@ -1,0 +1,1006 @@
+//EIYPISIP JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M
+/*JOBPARM S=S1M1
+//***********************************************************
+//* DELETE OUTPUT DATASETS
+//***********************************************************
+//DELETE   EXEC PGM=IEFBR14
+//DD1      DD DSN=SAP.PBB.PIDM.MASTER.DCI,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//DD2      DD DSN=SAP.PBB.PIDM.HOLDER.DCI,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//DD3      DD DSN=SAP.PBB.PIDM.TERMDP.DCI,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//DD4      DD DSN=SAP.PBB.PIDM.BENE.DCI,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//DD5      DD DSN=SAP.PBB.PIDM.ADDRESS.DCI,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//DD6      DD DSN=SAP.PBB.PIDM.ADJUST.DCI,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//DD7      DD DSN=SAP.PBB.PIDM.FINREP.DCI,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//*
+//EIYPISIP EXEC SAS609
+//MNITB    DD DSN=SAP.PBB.MNITB(0),DISP=SHR
+//DPMAS    DD DSN=RBP2.B033.DCI.PIDM.FILE(0),DISP=SHR
+//EQ       DD DSN=SAP.PBB.WEQUT(0),DISP=SHR
+//PIDM     DD DSN=SAP.PBB.PIDM.SOURCE,DISP=SHR
+//PIDMWH   DD DSN=SAP.PBB.PIDM.SASDATA,DISP=SHR
+//DEPOSIT  DD DSN=SAP.PBB.DISDATA,DISP=SHR
+//MASTER   DD DSN=SAP.PBB.PIDM.MASTER.DCI,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(150,80),RLSE),
+//            UNIT=SYSDA,
+//            DCB=(LRECL=1000,RECFM=FB,BLKSIZE=0)
+//HOLDER   DD DSN=SAP.PBB.PIDM.HOLDER.DCI,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(150,80),RLSE),
+//            UNIT=SYSDA,
+//            DCB=(LRECL=725,RECFM=FB,BLKSIZE=0)
+//TERMDP   DD DSN=SAP.PBB.PIDM.TERMDP.DCI,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(150,80),RLSE),
+//            UNIT=SYSDA,
+//            DCB=(LRECL=400,RECFM=FB,BLKSIZE=0)
+//BENE     DD DSN=SAP.PBB.PIDM.BENE.DCI,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(150,80),RLSE),
+//            UNIT=SYSDA,
+//            DCB=(LRECL=110,RECFM=FB,BLKSIZE=0)
+//ADDRESS  DD DSN=SAP.PBB.PIDM.ADDRESS.DCI,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(150,80),RLSE),
+//            UNIT=SYSDA,
+//            DCB=(LRECL=460,RECFM=FB,BLKSIZE=0)
+//ADJUST   DD DSN=SAP.PBB.PIDM.ADJUST.DCI,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(150,80),RLSE),
+//            UNIT=SYSDA,
+//            DCB=(LRECL=270,RECFM=FB,BLKSIZE=0)
+//FINREP   DD DSN=SAP.PBB.PIDM.FINREP.DCI,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(150,80),RLSE),
+//            UNIT=SYSDA,
+//            DCB=(LRECL=400,RECFM=FB,BLKSIZE=0)
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK03 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SYSIN    DD *
+OPTIONS YEARCUTOFF=1950;
+
+%INC PGM(PBBELF);
+
+DATA REPTDATE;
+   SET MNITB.REPTDATE;
+
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('NOWK','4');
+   CALL SYMPUT('RDATE',REPTDATE);
+RUN;
+
+DATA DPPIDM(RENAME=(B_CURR_ACC_NO=ACCNUM));
+  INFILE DPMAS FIRSTOBS=3;
+     INPUT @001 CNT                5.
+           @007 CONTRACT_NO       $7.
+           @015 B_CUST_NAME      $26.
+           @042 A_CUST_NAME      $26.
+           @069 CUST_ID1         $20.
+           @090 CUST_ID2         $20.
+           @111 PFE_ID            $8.
+           @120 TREASURY_ID       $8.
+           @129 TRADING_DATE     $10.
+           @140 START_DATE       $10.
+           @151 MATURITY_DATE    $10.
+           @162 FIXING_DATE      $10.
+           @173 B_CURR_TYPE       $3.
+           @177 B_CURR_ACC_NO     11.
+           @189 B_CURR_AMOUNT     13.2
+           @203 A_CURR_TYPE       $3.
+           @207 A_CURR_ACC_NO     11.
+           @219 BRANCH            $5.
+           @225 BRCHABRV          $3.
+           @229 TENURE             3.
+           @233 INTEREST           9.6
+           @243 STRIKE_RATE       13.7
+           @257 FIXING_RATE       13.7
+           @271 ACCRUAL_INT       15.6
+           @287 DCISTATS          $2.
+           @290 DCICONV           $1.
+           @292 DEAL_CONFIRM      $1.
+           @294 ROLLOVER_IND      $1.
+           @296 RO_PREV_CONTR     $7.
+           @304 CREATE_DATE      $26.
+           @331 CHARGES_AMT       13.2
+           @345 OPTION_PREM       13.2
+           @359 CONV_MAKER        $8.
+           @368 CONV_CHECKER      $8.
+           @377 BUY_TICKET_NO     $7.
+           @385 DEPT_NBR           3.
+           @389 CONV_CONTRACT     $7.
+           @397 SPOT_RATE          9.5
+           @407 POSTING_STATUS    $1.
+           @409 OPTION_PREM_IB    13.2
+           @423 CONV_ERR_CODE    $60.;
+
+   IF DCISTATS NOT IN ('C','P','M');
+   CHKDATE=MDY(SUBSTR(START_DATE,6,2),SUBSTR(START_DATE,9,2),
+               SUBSTR(START_DATE,1,4));
+   MATDATE=MDY(SUBSTR(MATURITY_DATE,6,2),SUBSTR(MATURITY_DATE,9,2),
+               SUBSTR(MATURITY_DATE,1,4));
+   IF CHKDATE > &RDATE OR MATDATE <= &RDATE THEN DELETE;
+
+RUN;
+ /*
+DATA DEPOCIS(RENAME=(ACCTNO=ACCNUM));
+   SET DEPOSIT.CISDEP1X;
+   KEEP ACCTNO KEY JOIN;
+RUN;*/
+DATA DEPOCIS(KEEP=ACCTNO KEY JOIN RENAME=(ACCTNO=ACCNUM));
+   SET DEPOSIT.TRANS02
+       DEPOSIT.TRANS03
+       DEPOSIT.TRANS04
+       DEPOSIT.TRANS05
+       DEPOSIT.TRANS06
+       DEPOSIT.TRANS07
+       DEPOSIT.TRANS11
+       DEPOSIT.TRANS14
+       DEPOSIT.TRANS08
+       DEPOSIT.TRANS01
+       DEPOSIT.TRANORG
+       DEPOSIT.TRAN999;
+RUN;
+PROC SORT DATA=DEPOCIS NODUPKEYS; BY ACCNUM;RUN;
+
+DATA PIDMMAST(RENAME=(ACCTNO=ACCNUM CUSTNAME=ACCNAME
+              PRIPHONE=TELHOME SECPHONE=TELOFFICE
+              MOBIPHON=TELHP));
+   SET PIDM.CISDEPOSIT;
+   KEEP ACCTNO SPECIALACC CUSTNAME STAFFCODE ACCTYPE PRIPHONE
+        SECPHONE MOBIPHON REGNUM;
+   REGNUM = NEWIC;
+RUN;
+
+PROC SORT DATA=PIDMMAST;BY ACCNUM;RUN;
+
+DATA PIDMMAST;
+   MERGE PIDMMAST(IN=A) DEPOCIS(IN=B);BY ACCNUM;
+   IF A AND B;
+RUN;
+
+DATA PIDMMAST(DROP=ACCTYPE RENAME=(ACCTYPE2=ACCTYPE));
+   SET PIDMMAST;
+   IF KEY NE ' ' THEN DO;
+      IF JOIN = 1 THEN DO;
+         IF ACCTYPE = 6 THEN ACCTYPE2 = 6;
+         ELSE ACCTYPE2 = 1;
+      END;
+      ELSE IF JOIN = 0 THEN DO;
+         IF      ACCTYPE = 4 THEN ACCTYPE2 = 4;
+         ELSE IF ACCTYPE = 5 THEN ACCTYPE2 = 5;
+         ELSE IF ACCTYPE = 6 THEN ACCTYPE2 = 6;
+         ELSE ACCTYPE2 = 6;
+      END;
+      ELSE IF JOIN > 1 THEN DO;
+         ACCTYPE2 = 2;
+      END;
+      ELSE ACCTYPE2 = 9;
+      IF NEWICIND = 'SA' & ACCTYPE2 = 1 THEN ACCTYPE2 = 6;
+   END;
+   ELSE DO;
+      IF JOIN = 1 THEN DO;
+         IF ACCTYPE = 6 THEN ACCTYPE2 = 6;
+         ELSE ACCTYPE2 = 1;
+      END;
+      ELSE IF JOIN = 0 THEN DO;
+         IF      ACCTYPE = 4 THEN ACCTYPE2 = 4;
+         ELSE IF ACCTYPE = 5 THEN ACCTYPE2 = 5;
+         ELSE IF ACCTYPE = 6 THEN ACCTYPE2 = 6;
+         ELSE ACCTYPE2 = 6;
+      END;
+      ELSE ACCTYPE2 = ACCTYPE;
+   END;
+RUN;
+
+PROC SORT DATA=DPPIDM;BY ACCNUM;RUN;
+PROC SORT DATA=PIDMMAST NODUPKEY;BY ACCNUM;RUN;
+
+DATA MASTER(RENAME=(B_CURR_TYPE=CURRENCY));
+   MERGE DPPIDM(IN=A) PIDMMAST(IN=B);BY ACCNUM;
+   IF A;
+RUN;
+
+DATA EQRATE;
+   SET EQ.EQRATE&REPTMON&NOWK&REPTYEAR;
+   KEEP CURRENCY SPOTRATE;
+RUN;
+
+PROC SORT DATA=MASTER;BY CURRENCY;RUN;
+PROC SORT DATA=EQRATE NODUPKEY;BY CURRENCY;RUN;
+
+DATA MASTER;
+   MERGE MASTER(IN=A) EQRATE(IN=B);BY CURRENCY;
+   IF A;
+RUN;
+
+DATA MASTER;
+   SET MASTER(DROP=ACCNUM);
+   FORMAT ACCNUM          $19.
+          BUSSTYPE        1.
+          BRANCHCODE      $UPCASE15.
+          DEPTYPE         2.
+          CURRENCYCODE    $UPCASE12.
+          INSURABILITY    15.
+          DEPCODE         $UPCASE16.
+          SPECIALACC      1.
+          ACCNAME         $UPCASE90.
+          CIFNUM          $UPCASE15.
+          STAFFCODE       1.
+          ACCTYPE         1.
+          TELHOME         $UPCASE15.
+          TELOFFICE       $UPCASE15.
+          TELHP           $UPCASE15.
+          REGNUM          $UPCASE15.
+          ACCOPENDATE     18.
+          APPROVERACCOPEN $UPCASE20.
+          LEDGERBAL       COMMA20.2
+          FXRATE          15.10
+          FXLEDGERBAL     COMMA15.2
+          AVAILABLEBAL    COMMA20.2
+          FXAVAILABLEBAL  COMMA20.2
+          BILLPAYABLE     COMMA20.2
+          FXBILLPAYABLE   COMMA20.2
+          ACCRUEDINT      COMMA19.2
+          FXACCRUEDINT    COMMA20.2
+          INTPROFTODATE   COMMA20.2
+          FXINTPROFTODATE COMMA20.2
+          TAGGING         15.
+          CONDOFTAGGING   $50.
+          UCLAIMEDMONIES  1.
+          NOMINALVALUES   COMMA20.2
+          FXNOMINALVALUE  COMMA20.2
+          PROCEEDVALUE    COMMA20.2
+          FXPROCEEDVALUE  COMMA20.2
+          ATMCARD         1.;
+   ACCNUM=CONTRACT_NO;
+   BUSSTYPE=2;
+   BRANCHCODE=PUT(BRCHABRV,$BRCHRVR.);
+   DEPTYPE=12;
+   CURRENCYCODE=CURRENCY;
+   INSURABILITY=2;
+   DEPCODE='0';
+   CIFNUM=0;
+
+   IF START_DATE=' ' THEN ACCOPENDATE='19000101';
+   ELSE ACCOPENDATE=COMPRESS(START_DATE,'-');
+
+   APPROVERACCOPEN=0;
+
+   LEDGERBAL=ROUND(B_CURR_AMOUNT * SPOTRATE,.01);
+   FXRATE=SPOTRATE;
+
+   IF CURRENCY='MYR' THEN FXLEDGERBAL=0;
+   ELSE FXLEDGERBAL=ROUND(B_CURR_AMOUNT,.01);
+
+   AVAILABLEBAL=LEDGERBAL;
+   FXAVAILABLEBAL=FXLEDGERBAL;
+
+   BILLPAYABLE=0; FXBILLPAYABLE=0;
+   ACCRUEDINT=ROUND(ACCRUAL_INT * SPOTRATE,.01);
+
+   IF CURRENCY='MYR' THEN FXACCRUEDINT=0;
+   ELSE FXACCRUEDINT=ROUND(ACCRUAL_INT,.01);
+
+   INTPROFTODATE=0; FXINTPROFTODATE=0; TAGGING=0;
+   CONDOFTAGGING=0; UCLAIMEDMONIES=2;
+   NOMINALVALUES=LEDGERBAL;
+   FXNOMINALVALUE=FXLEDGERBAL;
+   PROCEEDVALUE=SUM(LEDGERBAL,ACCRUEDINT);
+   FXPROCEEDVALUE=SUM(FXLEDGERBAL,FXACCRUEDINT);
+   ATMCARD=4;
+
+   IF TELHOME=' ' THEN TELHOME='0';
+   IF TELOFFICE=' ' THEN TELOFFICE='0';
+   IF TELHP=' ' THEN TELHP='0';
+
+   IF ACCTYPE IN (1,2,3) THEN REGNUM='0';
+RUN;
+
+PROC SUMMARY DATA=MASTER NWAY;
+VAR LEDGERBAL;
+OUTPUT OUT=SUMMAS SUM=;
+RUN;
+
+DATA SUMMAS;
+   SET SUMMAS;
+   CALL SYMPUT('COUNT',_FREQ_);
+   CALL SYMPUT('TOTLEDGERBAL',LEDGERBAL);
+RUN;
+
+DATA _NULL_;
+   SET MASTER END=LAST;
+   FILE MASTER;
+   COUNT=&COUNT;
+   TOTLEDGERBAL=&TOTLEDGERBAL;
+   IF TELHOME=. THEN TELHOME=0;
+   IF TELOFFICE=. THEN TELOFFICE=0;
+   IF TELHP=. THEN TELHP=0;
+   IF _N_=1 THEN DO;
+   PUT  @001 'AccNum'
+        @021 '|'
+        @022 'BussType'
+        @030 '|'
+        @031 'BranchCode'
+        @051 '|'
+        @052 'DepType'
+        @059 '|'
+        @060 'CurrencyCode'
+        @072 '|'
+        @073 'Insurability'
+        @085 '|'
+        @086 'DepCode'
+        @136 '|'
+        @137 'SpecialAcc'
+        @147 '|'
+        @148 'AccName'
+        @348 '|'
+        @349 'CifNum'
+        @449 '|'
+        @450 'StaffCode'
+        @459 '|'
+        @460 'AccType'
+        @467 '|'
+        @468 'TelHome'
+        @483 '|'
+        @484 'TelOffice'
+        @499 '|'
+        @500 'TelHp'
+        @515 '|'
+        @516 'RegNum'
+        @531 '|'
+        @532 'AccOpenDate'
+        @543 '|'
+        @544 'ApproverAccOpen'
+        @564 '|'
+        @565 'LedgerBal'
+        @582 '|'
+        @583 'FxRate'
+        @605 '|'
+        @606 'FxLedgerBal'
+        @623 '|'
+        @624 'AvailableBal'
+        @641 '|'
+        @642 'FxAvailableBal'
+        @659 '|'
+        @660 'BillPayable'
+        @677 '|'
+        @678 'FxBillPayable'
+        @695 '|'
+        @696 'AccruedInt/Prof'
+        @713 '|'
+        @714 'FxAccruedInt/Prof'
+        @731 '|'
+        @732 'Int/ProfTodate'
+        @749 '|'
+        @750 'FxInt/ProfTodate'
+        @767 '|'
+        @768 'Tagging'
+        @775 '|'
+        @776 'CondOfTagging'
+        @826 '|'
+        @827 'UnclaimedMonies'
+        @842 '|'
+        @843 'NominalValues'
+        @860 '|'
+        @861 'FxNominalValue'
+        @878 '|'
+        @879 'ProceedValue'
+        @896 '|'
+        @897 'FxProceedValue'
+        @914 '|'
+        @915 'AtmCard'
+        ;
+   END;
+   PUT  @001 ACCNUM             $20. /* ACCOUNT NUMBER              */
+        @021 '|'
+        @022 BUSSTYPE             1. /* BANKING BUSINESS TYPE       */
+        @030 '|'
+        @031 BRANCHCODE   $UPCASE20. /* BRANCH CODE                 */
+        @051 '|'
+        @052 DEPTYPE              2. /* DEPOSIT TYPE                */
+        @059 '|'
+        @060 CURRENCYCODE $UPCASE10. /* CURRENCY                    */
+        @072 '|'
+        @073 INSURABILITY        12. /* INSURABILITY                */
+        @085 '|'
+        @086 DEPCODE      $UPCASE50. /* DEPOSIT PRODUCT CODE        */
+        @136 '|'
+        @137 SPECIALACC           1. /* SPECIAL ACCOUNT             */
+        @147 '|'
+        @148 ACCNAME     $UPCASE200. /* CUSTOMER/ACCOUNT NAME       */
+        @348 '|'
+        @349 CIFNUM      $UPCASE100. /* CIF NO                     */
+        @449 '|'
+        @450 STAFFCODE            1. /* STAFF/NON STAFF             */
+        @459 '|'
+        @460 ACCTYPE              1. /* ACCOUNT TYPE                */
+        @467 '|'
+        @468 TELHOME      $UPCASE15. /* TEL NUMBER-HOME             */
+        @483 '|'
+        @484 TELOFFICE    $UPCASE15. /* TEL NUMBER-OFFICE           */
+        @499 '|'
+        @500 TELHP        $UPCASE15. /* TEL NUMBER-HP               */
+        @515 '|'
+        @516 REGNUM       $UPCASE15. /* REGISTRATION NO             */
+        @531 '|'
+        @532 ACCOPENDATE          8. /* ACCOUNT OPENING DATE        */
+        @543 '|'
+        @544 APPROVERACCOPEN $UPCASE20. /* APPROVER FOR ACC OPENING */
+        @564 '|'
+        @565 LEDGERBAL       COMMA17.2  /* RM LEDGER BALANCE/         */
+        @582 '|'
+        @583 FXRATE            22.10  /* CURRENCY EXCHANGE RATE      */
+        @605 '|'
+        @606 FXLEDGERBAL     COMMA17.2 /* FX LEDGER BALANCE/          */
+        @623 '|'
+        @624 AVAILABLEBAL    COMMA17.2 /* RM AVAILABLE DEPOSIT BALANCE*/
+        @641 '|'
+        @642 FXAVAILABLEBAL  COMMA17.2 /* FX AVAILABLE DEPOSIT BALANCE*/
+        @659 '|'
+        @660 BILLPAYABLE     COMMA17.2 /* RM BILLS PAYABLE OUTSTANDING*/
+        @677 '|'
+        @678 FXBILLPAYABLE   COMMA17.2 /* FX BILLS PAYABLE OUTSTANDING*/
+        @695 '|'
+        @696 ACCRUEDINT      COMMA17.2 /* RM ACCRUED INTEREST/DIV/PRO */
+        @713 '|'
+        @714 FXACCRUEDINT    COMMA17.2 /* FX ACCRUED INTEREST/DIV/PRO */
+        @731 '|'
+        @732 INTPROFTODATE   COMMA17.2 /* RM INT/DIV/PRO PAID TODATE  */
+        @749 '|'
+        @750 FXINTPROFTODATE COMMA17.2 /* FX INT/DIV/PRO PAID TODATE  */
+        @767 '|'
+        @768 TAGGING                7. /* TAGGING                     */
+        @775 '|'
+        @776 CONDOFTAGGING       $50.  /*CONDITION OF TAGGING        */
+        @826 '|'
+        @827 UCLAIMEDMONIES       1.   /* UNCLAIM MONIES              */
+        @842 '|'
+        @843 NOMINALVALUES   COMMA17.2 /* RM NOMINAL VALUE            */
+        @860 '|'
+        @861 FXNOMINALVALUE  COMMA17.2 /* FX NOMINAL VALUE            */
+        @878 '|'
+        @879 PROCEEDVALUE    COMMA17.2 /* RM PROCEED VALUE            */
+        @896 '|'
+        @897 FXPROCEEDVALUE  COMMA17.2 /* FX PROCEED VALUE            */
+        @914 '|'
+        @915 ATMCARD              1.   /* ATM CARD                    */
+        ;
+   IF LAST THEN DO;
+   PUT  @001 COUNT          18.
+        @565 TOTLEDGERBAL   COMMA17.2;
+   END;
+RUN;
+
+PROC SORT DATA=DPPIDM OUT=DPHOLD(KEEP=ACCNUM CONTRACT_NO);BY ACCNUM;RUN;
+PROC SORT DATA=PIDMWH.HOLDER
+   OUT=HOLDER;BY ACCNUM;
+RUN;
+
+DATA HOLDER HOLDNAME(KEEP=ACCNUM ACCNAME);
+   SET HOLDER;
+   *IF SECCUST = '901';
+RUN;
+
+PROC SQL;
+CREATE TABLE DPHOLDER AS SELECT *
+FROM DPHOLD A LEFT JOIN HOLDNAME B
+ON A.ACCNUM=B.ACCNUM;
+QUIT;
+
+PROC SQL;
+CREATE TABLE HOLDER1 AS SELECT
+A.ACCNUM,A.ACCNAME,B.HOLDERNAME,B.NEWIDNUM,B.OLDIDNUM,
+B.POLICEARMYID,B.PASSPORTNUM,B.RESIDENT,B.DATEOFBIRTH,B.GENDER,
+A.CONTRACT_NO
+FROM DPHOLDER A LEFT JOIN HOLDER B
+ON A.ACCNUM=B.ACCNUM AND A.ACCNAME=B.ACCNAME;
+QUIT;
+
+DATA HOLDER1(DROP=ACCNUM RENAME=(CONTRACT_NO=ACCNUM));
+   SET HOLDER1;
+   CIFNUM='0';
+   SALUTATION='0';
+   FIELD13='  ';
+RUN;
+
+PROC SORT DATA=MASTER OUT=MHOLD(KEEP=ACCNUM ACCTYPE) NODUPKEY;
+BY ACCNUM;RUN;
+PROC SORT DATA=HOLDER1;BY ACCNUM;RUN;
+
+DATA HOLDER1;
+   MERGE HOLDER1(IN=A) MHOLD(IN=B);BY ACCNUM;
+   IF A;
+RUN;
+
+DATA _NULL_;
+   SET HOLDER1 END=LAST;
+   RETAIN NO 0;
+       NO=NO+1;
+   BDATE=PUT(DATEOFBIRTH,YYMMDDN.);
+   IF ACCTYPE IN (4,5,6,7) THEN DO;
+      CIFNUM = '0';
+      HOLDERNAME = '0';
+      SALUTATION = '0';
+      NEWIDNUM = '0';
+      OLDIDNUM = '0';
+      POLICEARMYID = '0';
+      PASSPORTNUM = '0';
+      RESIDENT = 0;
+      BDATE = '19000101';
+      GENDER = 0;
+   END;
+   IF OLDIDNUM = ' ' THEN OLDIDNUM = '0';
+   IF SUBSTR(NEWIDNUM,1,12) NOT IN ('0','1','2','3','4','5'
+      '6','7','8','9') AND LENGTH(NEWIDNUM) NE 12 THEN DO;
+      NEWIDNUM = '0' ;
+   END;
+   FILE HOLDER;
+   IF _N_=1 THEN DO;
+   PUT @001  'AccNum'
+       @021  '|'
+       @022  'AccName'
+       @222  '|'
+       @223  'CifNum'
+       @323  '|'
+       @324  'Holdername'
+       @524  '|'
+       @525  'Salutation'
+       @575  '|'
+       @576  'NewIdNum'
+       @596  '|'
+       @597  'OldIdNum'
+       @617  '|'
+       @618  'Police/Arm'
+       @638  '|'
+       @639  'PassportNum'
+       @689  '|'
+       @690  'Resident'
+       @698  '|'
+       @699  'DateOfBirth'
+       @710  '|'
+       @711  'Gender'
+       @717  '|'
+       @718  'Field13';
+   END;
+   PUT @001  ACCNUM            $20.
+       @021  '|'
+       @022  ACCNAME           $UPCASE200.
+       @222  '|'
+       @223  CIFNUM            $100.
+       @323  '|'
+       @324  HOLDERNAME        $UPCASE200.
+       @524  '|'
+       @525  SALUTATION        $50.
+       @575  '|'
+       @576  NEWIDNUM          12.
+       @596  '|'
+       @597  OLDIDNUM          $UPCASE20.
+       @617  '|'
+       @618  POLICEARMYID      $UPCASE20.
+       @638  '|'
+       @639  PASSPORTNUM       $UPCASE50.
+       @689  '|'
+       @690  RESIDENT          8.
+       @698  '|'
+       @699  BDATE             8.
+       @710  '|'
+       @711  GENDER            1.
+       @717  '|'
+       @718  FIELD13           $1. ;
+   IF LAST THEN DO;
+   PUT @001  NO                18. ;
+   END;
+RUN;
+
+PROC SUMMARY DATA=MASTER NWAY;
+VAR LEDGERBAL;
+OUTPUT OUT=SUMTERM SUM=;
+RUN;
+
+DATA SUMTERM;
+   SET SUMTERM;
+   CALL SYMPUT('TOTLEDGERBAL1',LEDGERBAL);
+RUN;
+
+DATA _NULL_;
+   SET MASTER END=LAST;
+   RETAIN NO 0;
+   NO=NO+1;
+   FILE TERMDP;
+   GROSSRATE = 0;
+   PSR = 0 ;
+   LASTINTDIVPMT = 19000101;
+   RATE = PUT((INTEREST/100),10.5);
+   MATURITYDATE = COMPRESS(MATURITY_DATE,'-');
+   IF MATURITYDATE = ' ' THEN MATURITYDATE = '19000101';
+   TOTLEDGERBAL1 = &TOTLEDGERBAL1;
+
+   IF _N_=1 THEN DO;
+   PUT @001  'AccNum'
+       @021  '|'
+       @022  'CurrencyCode'
+       @034  '|'
+       @035  'CertNum'
+       @073  '|'
+       @074  'AccOpenDate'
+       @085  '|'
+       @086  'NominalValues'
+       @103  '|'
+       @104  'FxNominalValues'
+       @121  '|'
+       @122  'LedgerBal'
+       @139  '|'
+       @140  'FxLedgerbal'
+       @157  '|'
+       @158  'AvailableBal'
+       @175  '|'
+       @176  'FxAvailableBal'
+       @193  '|'
+       @194  'Placement/RenewDate'
+       @213  '|'
+       @214  'MaturityDate'
+       @226  '|'
+       @227  'Tenor'
+       @232  '|'
+       @233  'Rate/NetGiaRate'
+       @248  '|'
+       @249  'GrossRate'
+       @259  '|'
+       @260  'PSR'
+       @270  '|'
+       @271  'AccruedInt/Prof'
+       @288  '|'
+       @289  'FxAccruedInt/Prof'
+       @306  '|'
+       @307  'Int/ProfTodate'
+       @324  '|'
+       @325  'FxInt/ProfTodate'
+       @342  '|'
+       @343  'ProceedValue'
+       @360  '|'
+       @361  'FxProceedValue'
+       @378  '|'
+       @379  'LastInt/DivPmt'
+       ;
+   END;
+   PUT @001  ACCNUM            $20.
+       @021  '|'
+       @022  CURRENCYCODE      $UPCASE10.
+       @034  '|'
+       @035  ACCNUM            $38.
+       @073  '|'
+       @074  ACCOPENDATE       8.
+       @085  '|'
+       @086  LEDGERBAL         COMMA17.2
+       @103  '|'
+       @104  FXLEDGERBAL       COMMA17.2
+       @121  '|'
+       @122  LEDGERBAL         COMMA17.2
+       @139  '|'
+       @140  FXLEDGERBAL       COMMA17.2
+       @157  '|'
+       @158  LEDGERBAL         COMMA17.2
+       @175  '|'
+       @176  FXLEDGERBAL       COMMA17.2
+       @193  '|'
+       @194  ACCOPENDATE       8.
+       @213  '|'
+       @214  MATURITYDATE      8.
+       @226  '|'
+       @227  TENURE            4.
+       @232  '|'
+       @233  RATE              10.5
+       @248  '|'
+       @249  GROSSRATE         10.5
+       @259  '|'
+       @260  PSR               10.5
+       @270  '|'
+       @271  ACCRUEDINT        COMMA17.2
+       @288  '|'
+       @289  FXACCRUEDINT      COMMA17.2
+       @306  '|'
+       @307  INTPROFTODATE     COMMA17.2
+       @324  '|'
+       @325  FXINTPROFTODATE   COMMA17.2
+       @342  '|'
+       @343  PROCEEDVALUE      COMMA17.2
+       @360  '|'
+       @361  FXPROCEEDVALUE    COMMA17.2
+       @378  '|'
+       @379  LASTINTDIVPMT     8.
+       ;
+   IF LAST THEN DO;
+   PUT @001  NO                18.
+       @122 TOTLEDGERBAL1      COMMA17.2;
+   END;
+RUN;
+
+DATA BENE;
+   SET MASTER(KEEP=ACCNUM);
+   CURRENCYCODE = '0';
+   ACCNAME = '0';
+   BENENAME = '0';
+   BENEID = '0';
+   BENEADD = '0';
+   BENEINT = '0';
+RUN;
+
+DATA _NULL_;
+   SET BENE END=LAST;
+   FILE BENE;
+   COUNT = &COUNT;
+   IF _N_= 1 THEN DO;
+   PUT @001 'AccNum'
+       @021 '|'
+       @022 'CurrencyCode'
+       @034 '|'
+       @035 'AccName'
+       @042 '|'
+       @043 'BeneficiaryName'
+       @058 '|'
+       @059 'BeneficiaryID'
+       @072 '|'
+       @073 'BeneficiaryAdd'
+       @087 '|'
+       @088 'BeneficiaryInt'
+       ;
+   END;
+   PUT @001 ACCNUM         $20.
+       @021 '|'
+       @022 CURRENCYCODE   $1.
+       @034 '|'
+       @035 ACCNAME        $1.
+       @042 '|'
+       @043 BENENAME       $1.
+       @058 '|'
+       @059 BENEID         $1.
+       @072 '|'
+       @073 BENEADD        $1.
+       @087 '|'
+       @088 BENEINT        $1.
+       ;
+   IF LAST THEN DO;
+   PUT @001 COUNT          18.
+       ;
+   END;
+RUN;
+
+DATA ADDRESS(KEEP=RESIDENTADD1 RESIDENTADD2 RESIDENTADD3 RESIDENTADD4
+                  POSTCODE MAILADD1 MAILADD2 MAILADD3 MAILADD4
+                  MAILCODE ACCNUM);
+   SET PIDMWH.ADDRESS;
+RUN;
+PROC SORT DATA=DPPIDM OUT=DPADD(KEEP=ACCNUM CONTRACT_NO);BY ACCNUM;RUN;
+PROC SORT DATA=MASTER OUT=MASADD(KEEP=ACCNUM);BY ACCNUM;RUN;
+PROC SORT DATA=ADDRESS;BY ACCNUM;RUN;
+
+DATA ADDRESS(DROP=ACCNUM RENAME=(CONTRACT_NO=ACCNUM));
+   MERGE DPADD(IN=A) ADDRESS(IN=B);BY ACCNUM;
+   IF B;
+RUN;
+
+PROC SORT DATA=ADDRESS;BY ACCNUM;RUN;
+
+DATA ADDRESS;
+   MERGE MASADD(IN=A) ADDRESS(IN=B);BY ACCNUM;
+   IF A;
+RUN;
+
+DATA _NULL_;
+   SET ADDRESS END=LAST;
+   FILE ADDRESS;
+   COUNT = &COUNT;
+   IF RESIDENTADD1 = ' ' THEN RESIDENTADD1 = '0';
+   IF RESIDENTADD2 = ' ' THEN RESIDENTADD2 = '0';
+   IF RESIDENTADD3 = ' ' THEN RESIDENTADD3 = '0';
+   IF RESIDENTADD4 = ' ' THEN RESIDENTADD4 = '0';
+   IF POSTCODE = ' ' THEN POSTCODE = '0';
+   IF MAILADD1 = ' ' THEN MAILADD1 = '0';
+   IF MAILADD2 = ' ' THEN MAILADD2 = '0';
+   IF MAILADD3 = ' ' THEN MAILADD3 = '0';
+   IF MAILADD4 = ' ' THEN MAILADD4 = '0';
+   IF MAILCODE = ' ' THEN MAILCODE = '0';
+   IF _N_ = 1 THEN DO;
+   PUT @001 'AccNum'
+       @021 '|'
+       @022 'ResidentAdd1'
+       @072 '|'
+       @073 'ResidentAdd2'
+       @123 '|'
+       @124 'ResidentAdd3'
+       @174 '|'
+       @175 'ResidentAdd4'
+       @225 '|'
+       @226 'PostCode'
+       @236 '|'
+       @237 'MailAdd1'
+       @287 '|'
+       @288 'MailAdd2'
+       @338 '|'
+       @339 'MailAdd3'
+       @389 '|'
+       @390 'MailAdd4'
+       @440 '|'
+       @441 'PostCode'
+       ;
+   END;
+   PUT @001 ACCNUM         $20.
+       @021 '|'
+       @022 RESIDENTADD1   $50.
+       @072 '|'
+       @073 RESIDENTADD2   $50.
+       @123 '|'
+       @124 RESIDENTADD3   $50.
+       @174 '|'
+       @175 RESIDENTADD4   $50.
+       @225 '|'
+       @226 POSTCODE       $10.
+       @236 '|'
+       @237 MAILADD1       $50.
+       @287 '|'
+       @288 MAILADD2       $50.
+       @338 '|'
+       @339 MAILADD3       $50.
+       @389 '|'
+       @390 MAILADD4       $50.
+       @440 '|'
+       @441 MAILCODE       $10.
+       ;
+   IF LAST THEN DO;
+   PUT @001 COUNT      18.;
+   END;
+RUN;
+
+DATA ADJUST;
+   SET MASTER(KEEP=ACCNUM CURRENCYCODE ACCNAME);
+   ADJAMT = 0;
+   ADJTYPE = '0';
+   REMARKS = '0';
+RUN;
+
+PROC SUMMARY DATA=ADJUST NWAY;
+VAR ADJAMT;
+OUTPUT OUT=SUMADJUST SUM=;
+RUN;
+
+DATA _NULL_;
+   SET SUMADJUST;
+   CALL SYMPUT('SUMADJAMT',ADJAMT);
+RUN;
+
+DATA _NULL_;
+   SET ADJUST END=LAST;
+   FILE ADJUST;
+   COUNT = &COUNT;
+   SUMADJAMT = &SUMADJAMT;
+   IF _N_ = 1 THEN DO;
+   PUT @001 'AccNum'
+       @021 '|'
+       @022 'CurrencyCode'
+       @034 '|'
+       @035 'AccName'
+       @235 '|'
+       @236 'AdjAmount'
+       @253 '|'
+       @254 'AdjType'
+       @261 '|'
+       @262 'Remarks'
+       ;
+   END;
+   PUT @001 ACCNUM          $20.
+       @021 '|'
+       @022 CURRENCYCODE    $10.
+       @034 '|'
+       @035 ACCNAME         $200.
+       @235 '|'
+       @236 ADJAMT          COMMA17.2
+       @253 '|'
+       @254 ADJTYPE         $1.
+       @261 '|'
+       @262 REMARKS         $1.
+       ;
+   IF LAST THEN DO;
+   PUT @001 COUNT           18.
+       @236 SUMADJAMT       COMMA17.2;
+   END;
+RUN;
+
+DATA _NULL_;
+   SET MASTER END=LAST;
+   RETAIN NO 0;
+   NO=NO+1;
+   SOURCESYSTEM='0004';
+   FILE FINREP;
+
+   IF _N_=1 THEN DO;
+   PUT @001  'AccNum'
+       @021  '|'
+       @022  'CertNum'
+       @060  '|'
+       @061  'LedgerBal'
+       @078  '|'
+       @079  'AvailableBal'
+       @096  '|'
+       @097  'AccruedInt/Prof'
+       @114  '|'
+       @115  'NominalValues'
+       @132  '|'
+       @133  'ProceedValue'
+       @150  '|'
+       @151  'BillPayable'
+       @168  '|'
+       @169  'Int/ProfTodate'
+       @186  '|'
+       @187  'FxLedgerBal'
+       @204  '|'
+       @205  'FxAvailableBal'
+       @222  '|'
+       @223  'FxAccruedInt/Prof'
+       @240  '|'
+       @241  'FxNominalValue'
+       @258  '|'
+       @259  'FxProceedValue'
+       @276  '|'
+       @277  'FxBillPayable'
+       @294  '|'
+       @295  'FxInt/ProfTodate'
+       @312  '|'
+       @313  'SourceSystem'
+       @326  '|'
+       @327  'AccOpenDate'
+       ;
+   END;
+   PUT @001  ACCNUM            $20.
+       @021  '|'
+       @022  ACCNUM            $38.
+       @060  '|'
+       @061  LEDGERBAL         COMMA17.2
+       @078  '|'
+       @079  LEDGERBAL         COMMA17.2
+       @096  '|'
+       @097  ACCRUEDINT        COMMA17.2
+       @114  '|'
+       @115  LEDGERBAL         COMMA17.2
+       @132  '|'
+       @133  PROCEEDVALUE      COMMA17.2
+       @150  '|'
+       @151  BILLPAYABLE       COMMA17.2
+       @168  '|'
+       @169  INTPROFTODATE     COMMA17.2
+       @186  '|'
+       @187  FXLEDGERBAL       COMMA17.2
+       @204  '|'
+       @205  FXLEDGERBAL       COMMA17.2
+       @222  '|'
+       @223  FXACCRUEDINT      COMMA17.2
+       @240  '|'
+       @241  FXLEDGERBAL       COMMA17.2
+       @258  '|'
+       @259  FXPROCEEDVALUE    COMMA17.2
+       @276  '|'
+       @277  FXBILLPAYABLE     COMMA17.2
+       @294  '|'
+       @295  FXINTPROFTODATE   COMMA17.2
+       @312  '|'
+       @313  SOURCESYSTEM      $4.
+       @326  '|'
+       @327  ACCOPENDATE       8.
+             ;
+RUN;
