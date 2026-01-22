@@ -1,0 +1,62 @@
+//EIQHPCR2 JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                      JOB17119
+/*JOBPARM S=S1M2
+//*
+//DELETE   EXEC PGM=IEFBR14
+//DD1      DD DSN=SAP.PBB.HP.CRRISK.REV,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,0)
+//*
+//EIQHPCR2 EXEC SAS609
+//HPNPL    DD DSN=SAP.PBB.HP.CRRISK,DISP=SHR
+//HPREV    DD DSN=SAP.PBB.HP.CRRISK.REV,
+//            DISP=(MOD,CATLG,DELETE),
+//            SPACE=(CYL,(50,50),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=256,RECFM=FB,BLKSIZE=0)
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//SYSIN    DD *
+
+OPTIONS YEARCUTOFF=1950 NOCENTER MISSING=0;
+
+PROC SORT DATA=HPNPL.HPLOAN OUT=HPLOAN; BY ACCTNO NOTENO;
+
+*** HP REVIEW TXT FILE ***;
+DATA HPAC;
+   SET HPLOAN;
+   IF (MTHARR GE 3 OR BORSTAT IN ('F','I','R'));
+RUN;
+
+PROC SORT DATA=HPAC OUT=HPAC NODUPKEY; BY ACCTNO NOTENO;
+DATA _NULL_;
+   SET HPAC END=LAST;
+   BY ACCTNO NOTENO;
+   FILE HPREV NOTITLES;
+   IF _N_ = 1 THEN DO;
+      PUT 'REPORT ID : EIQHPCR2)';
+      PUT 'PUBLIC BANK BERHAD - CCD (ATTN : JENNY YAP)';
+      PUT 'HP REVIEW FOR NPL & WRITTEN OFF ACCOUNT';
+      PUT 'MNI NO'         ';' 'NOTE NO'        ';'
+          'NAME'           ';' 'BRABBR'         ';'
+          'PRODUCT'        ';' 'BOR. STATUS'    ';'
+          'AMT FINANCE'    ';' 'NET BALANCE'    ';'
+          'MTH PASS DUE'   ';' 'MARGIN OF FIN.' ';'
+          'LOAN TERM'      ';'
+          'MAKE OF VEC.'   ';' 'NEW/SECONDHAND' ';'
+          'SP PROVISION'   ';' 'SP WRITTEN OFF' ;
+   END;
+   TOTACC + 1;
+   TOTAMT + BALANCE;
+   PUT   ACCTNO   ';' NOTENO  ';'
+         NAME     ';' BRABBR  ';'
+         LOANTYPE ';' BORSTAT ';'
+         NETPROC  ';' BALANCE ';'
+         MTHARR   ';' MARGINF ';'
+         NOTETERM ';'
+         MAKE     ';' NEWSEC  ';'
+         SPPL     ';' RECOVER ;
+
+   IF LAST = 1 THEN DO;
+      PUT  'TOT NO OF A/C : ' ';' TOTACC ';'
+           'TOT NET BALANCE : ' ';' TOTAMT ';' ;
+   END;
+RETURN;
+
