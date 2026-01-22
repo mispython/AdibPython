@@ -1,303 +1,358 @@
-"""
-PBBELF - Format definitions and mappings for banking data
-Converted from SAS format library
-"""
+absl-py==2.1.0
+adagio==0.2.6
+alembic==1.16.5
+algorithms==0.1.4
+amqp==5.3.1
+annotated-types==0.7.0
+anyio==4.10.0
+apispec==6.8.4
+appdirs==1.4.4
+apsw==3.51.0.0
+argon2-cffi==25.1.0
+argon2-cffi-bindings==25.1.0
+arrow==1.3.0
+asttokens==3.0.0
+async-lru==2.0.5
+async-timeout==5.0.1
+attrs==25.4.0
+azure-core==1.37.0
+azure-devops==7.1.0b4
+babel==2.17.0
+backoff==2.2.1
+backports.tarfile==1.2.0
+backports.zstd==1.2.0
+bcrypt==4.2.1
+beautifulsoup4==4.13.4
+billiard==  4.2.4
+bleach==    6.2.0
+blinker==   1.9.0
+blis==      1.0.2
+bokeh==     3.4.3
+Bottleneck==1.5.0
+brotli==    1.2.0
+cachelib==  0.13.0
+cachetools==5.5.2
+catalogue== 2.0.10
+cattrs==    25.3.0
+celery==    5.6.0
+certifi==   2025.1.31
+cffi==      2.0.0
+chardet==   5.2.0
+charset-normalizer        3.4.1
+click==     8.1.8
+click-didyoumean          0.3.1
+click-option-group        0.5.9
+click-repl==0.3.0
+cloudpathlib              0.21.0
+cloudpickle               3.1.1
+coboljsonifier            1.0.8
+collection==0.1.6
+colorama==  0.4.6
+colorlog==  6.9.0
+comm==      0.2.3
+confection==0.1.5
+conllu==    6.0.0
+contourpy== 1.3.0
+cron_descriptor           2.0.6
+cryptography              42.0.8
+cx-Oracle== 8.3.0
+cycler==    0.12.1
+cymem==     2.0.11
+dask==      2024.8.0
+dask-expr== 1.1.10
+debugpy==   1.8.14
+decorator== 5.2.1
+defusedxml==0.7.1
+Deprecated==1.3.1
+deprecation               2.1.0
+dill==      0.4.0
+distributed               2024.8.0
+dnspython== 2.7.0
+duckdb==    1.2.0
+ebcdic==    1.1.1
+ebcdic-parser             3.4.0
+email-validator           2.3.0
+et_xmlfile==2.0.0
+exceptiongroup            1.3.1
+executing== 2.2.0
+fastjsonschema            2.21.2
+filelock==  3.19.1
+Flask==     2.3.3
+Flask-AppBuilder          4.8.1
+Flask-Babel               2.0.0
+Flask-Compress            1.23
+Flask-JWT-Extended        4.7.1
+Flask-Limiter             3.11.0
+Flask-Login               0.6.3
+Flask-Migrate             3.1.0
+Flask-Session             0.8.0
+Flask-SQLAlchemy          2.5.1
+flask-talisman            1.1.0
+Flask-WTF== 1.2.2
+fonttools== 4.56.0
+fpdf==      1.7.2
+fqdn==      1.5.1
+fs==        2.4.16
+fsspec==    2025.2.0
+fugue==     0.9.1
+func_timeout              4.3.5
+geographiclib             2.1
+geopy==     2.4.1
+google-auth               2.45.0
+graphviz==  0.21
+greenlet==  3.1.1
+gunicorn==  23.0.0
+h11==       0.16.0
+h5py==      3.13.0
+hashids==   1.3.1
+holidays==  0.25
+httpcore==  1.0.9
+httpx==     0.28.1
+humanize==  4.13.0
+ibm_db==    3.2.6
+idna==      3.10
+importlib_metadata        8.6.1
+importlib_resources       6.5.2
+imutils==   0.5.4
+iniconfig== 2.0.0
+ipykernel== 6.30.1
+ipython==   8.18.1
+isodate==   0.7.2
+isoduration               20.11.0
+itsdangerous              2.2.0
+jaraco.classes            3.4.0
+jaraco.context            6.1.0
+jaraco.functools          4.4.0
+jedi==      0.19.2
+jeepney==   0.9.0
+Jinja2==    3.1.5
+joblib==    1.4.2
+json5==     0.12.1
+jsonpath-ng               1.7.0
+jsonpointer               3.0.0
+jsonschema==4.25.1
+jsonschema-specifications 2025.9.1
+jupyter_client            8.6.3
+jupyter_core              5.8.1
+jupyter-events            0.12.0
+jupyter-lsp               2.3.0
+jupyter_server            2.17.0
+jupyter_server_terminals  0.5.3
+jupyterlab==4.4.6
+jupyterlab_pygments       0.3.0
+jupyterlab_server         2.27.3
+keras==     3.9.0
+keyring==   25.7.0
+keyrings.alt              5.0.2
+kiwisolver==1.4.7
+kombu==     5.6.1
+korean-lunar-calendar     0.3.1
+langcodes== 3.5.0
+language_data             1.3.0
+lark==      1.2.2
+limits==    4.2
+llvmlite==  0.43.0
+locket==    1.0.0
+Mako==      1.3.10
+marisa-trie               1.2.1
+Markdown==  3.9
+markdown-it-py            3.0.0
+MarkupSafe==3.0.2
+marshmallow               3.26.1
+marshmallow-sqlalchemy    1.4.2
+matplotlib==3.9.2
+matplotlib-inline         0.1.7
+mdurl==     0.1.2
+mimetypes-magic           0.4.30
+mistune==   3.1.4
+ml_dtypes== 0.5.1
+mmh3==      5.2.0
+more-itertools            10.8.0
+msgpack==   1.0.8
+msgspec==   0.20.0
+msrest==    0.7.1
+multiprocess              0.70.18
+murmurhash==1.0.12
+namex==     0.0.8
+narwhals==  1.29.0
+nbclient==  0.10.2
+nbconvert== 7.16.6
+nbformat==  5.10.4
+nest-asyncio              1.6.0
+networkx==  3.2.1
+nh3==       0.2.22
+nmslib==    2.1.1
+notebook_shim             0.2.4
+numba==     0.60.0
+numexpr==   2.10.2
+numpy==     1.23.5
+oauthlib==  3.3.1
+opencv-python             4.11.0.86
+opencv-python-headless    4.11.0.86
+openpyxl==  3.1.5
+optree==    0.14.1
+oracledb==  3.1.1
+ordered-set               4.1.0
+outcome==   1.3.0.post0
+overrides== 7.7.0
+packaging== 24.2
+pandas==    2.2.3
+pandocfilters             1.5.1
+pantab==    5.2.2
+paramiko==  3.5.1
+parquetdb== 1.0.1
+parsedatetime             2.6
+parso==     0.8.4
+partd==     1.4.2
+pathos==    0.3.4
+patsy==     1.0.1
+pdf2image== 1.17.0
+pexpect==   4.9.0
+pgsanity==  0.3.0
+pillow==    11.1.0
+pip==       25.3
+platformdirs              4.3.8
+plotly==    6.0.0
+pluggy==    1.5.0
+ply==       3.11
+polars==    1.36.1
+polars-runtime-32         1.36.1
+polyline==  2.0.4
+pox==       0.3.6
+ppft==      1.7.7
+preshed==   3.0.9
+prison==    0.2.1
+prometheus_client         0.22.1
+prompt_toolkit            3.0.50
+protobuf==  6.32.1
+psutil==    7.0.0
+ptyprocess==0.7.0
+pure_eval== 0.2.3
+pyarrow==   14.0.2
+pyasn1==    0.6.1
+pyasn1_modules            0.4.2
+pybind11==  2.6.1
+pycobol2csv               1.0.6
+pycparser== 2.22
+pycryptodome              3.23.0
+pydantic==  2.10.6
+pydantic_core             2.27.2
+pyglmnet==  1.1
+Pygments==  2.19.1
+pyiceberg== 0.9.1
+PyJWT==     2.10.1
+pymssql==   2.3.2
+PyMySQL==   1.1.1
+PyNaCl==    1.5.0
+pyodbc==    5.2.0
+pyparsing== 3.2.1
+pypdf==     5.3.0
+PyPDF2==    3.0.1
+pyreadstat==1.2.8
+pysbd==     0.3.4
+PySocks==   1.7.1
+pyspnego==  0.11.2
+pytesseract               0.3.13
+pytest==    8.3.4
+python-crontab            3.3.0
+python-dateutil           2.9.0.post0
+python-dotenv             1.1.0
+python-json-logger        3.3.0
+pytz==      2025.1
+PyYAML==    6.0.2
+pyzmq==     27.1.0
+RapidFuzz== 3.13.0
+ray==       2.49.2
+redis==     4.6.0
+referencing               0.36.2
+requests==  2.32.3
+requests-cache            1.2.1
+requests_ntlm             1.3.0
+requests-oauthlib         2.0.0
+rfc3339-validator         0.1.4
+rfc3986-validator         0.1.1
+rfc3987-syntax            1.1.0
+rich==      13.9.4
+rpds-py==   0.27.1
+rsa==       4.9.1
+sas7bdat==  2.2.3
+saspy==     5.102.0
+scikit-learn              1.6.1
+scipy==     1.13.1
+scispacy==  0.5.5
+seaborn==   0.13.2
+SecretStorage             3.3.3
+selenium==  4.9.1
+Send2Trash==1.8.3
+setuptools==80.9.0
+shellingham               1.5.4
+shillelagh==1.4.3
+shortid==   0.1.2
+simplejson==3.20.1
+six==       1.17.0
+slack_sdk== 3.39.0
+smart-open==7.1.0
+sniffio==   1.3.1
+sortedcontainers          2.4.0
+soupsieve== 2.7
+spacy==     3.7.5
+spacy-legacy              3.0.12
+spacy-loggers             1.0.5
+SQLAlchemy==2.0.45
+SQLAlchemy-Utils          0.38.3
+sqlglot==   26.33.0
+sqlparse==  0.5.5
+srsly==     2.5.1
+sshtunnel== 0.4.0
+stack-data==0.6.3
+statsmodels               0.14.4
+strictyaml==1.7.3
+tableauserverclient       0.38
+tabula==    1.0.5
+tabulate==  0.8.10
+tblib==     3.0.0
+tenacity==  9.1.2
+terminado== 0.18.1
+Theano==    1.0.5
+thinc==     9.1.1
+threadpoolctl             3.5.0
+tinycss2==  1.4.0
+tk==        0.1.0
+toml==      0.10.2
+tomli==     2.2.1
+toolz==     1.0.0
+tornado==   6.4.2
+tqdm==      4.67.1
+traitlets== 5.14.3
+triad==     0.9.8
+trio==      0.31.0
+typer==     0.15.2
+types-python-dateutil     2.9.0.20250822
+typing==    3.7.4.3
+typing_extensions         4.15.0
+tzdata==    2025.3
+tzlocal==   5.3.1
+uri-template              1.3.0
+url-normalize             2.2.1
+urllib3==   2.3.0
+vaex==      4.17.0
+variconfig==0.0.3
+vine==      5.1.0
+wasabi==    1.1.3
+wcwidth==   0.2.13
+weasel==    0.4.1
+webcolors== 24.11.1
+webencodings              0.5.1
+websocket-client          1.8.0
+Werkzeug==  3.1.4
+wheel==     0.45.1
+wrapt==     1.17.2
+wsproto==   1.2.0
+WTForms==   3.2.1
+WTForms-JSON              0.3.5
+xgboost==   2.1.4
+XlsxWriter==3.0.9
+xyzservices               2025.4.0
+zict==      3.0.0
+zipp==      3.21.0
 
-# Account code mappings
-EL_DATA = {
-    '4211000000000Y': ('+', 'RMEL', 'C', 'A', 'RM DEMAND DEPOSITS ACCEPTED'),
-    '4212000000000Y': ('+', 'RMEL', 'C', 'A', 'RM SAVINGS DEPOSITS ACCEPTED'),
-    '4213000000000Y': ('+', 'RMEL', 'C', 'A', 'RM FIXED DEPOSITS ACCEPTED'),
-    '4213100000000Y': ('+', 'RMEL', 'C', 'A', 'RM SPECIAL INVESTMENT DEPOSIT ACCEPTED'),
-    '4213200000000Y': ('+', 'RMEL', 'C', 'A', 'RM GENERAL INVESTMENT DEPOSIT ACCEPTED'),
-    '4213300000000Y': ('+', 'RMEL', 'C', 'A', 'RM COMMODITY MURABAHAH'),
-    '4215000000000Y': ('+', 'RMEL', 'C', 'A', 'RM NID ISSUED'),
-    '4216000000000Y': ('+', 'RMEL', 'C', 'A', 'RM REPURCHASE AGREEMENTS'),
-    '4217071000000Y': ('+', 'RMEL', 'C', 'A', 'RM SPECIAL DEPOSITS'),
-    '4218000000000Y': ('+', 'RMEL', 'C', 'A', 'RM HOUSING DEVELOPMENT ACCOUNTS'),
-    '4219000000000Y': ('+', 'RMEL', 'C', 'A', 'RM SHORT TERM DEPOSIT ACCEPTED'),
-    '4219100000000Y': ('+', 'RMEL', 'C', 'A', 'RM INVESTMENT LINKED TO DERIVATIVES'),
-    '4219900000000Y': ('+', 'RMEL', 'C', 'A', 'RM OTHER DEPOSITS ACCEPTED'),
-    '4310000000000Y': ('+', 'RMEL', 'C', 'A', 'RM AMOUNT DUE TO DESIGNATED FI'),
-    '4311002000000Y': ('+', 'RMEL', 'C', 'A', 'RM VOSTRO ACCOUNTS OF CB'),
-    '4311003000000Y': ('+', 'RMEL', 'C', 'A', 'RM VOSTRO ACCOUNTS OF IB'),
-    '4311081000000Y': ('+', 'RMEL', 'C', 'A', 'RM VOSTRO ACCOUNTS OF FBI'),
-    '4312002000000Y': ('+', 'RMEL', 'C', 'A', 'RM OVERDRAWN NOSTRO ACCOUNTS WITH CB'),
-    '4312003000000Y': ('+', 'RMEL', 'C', 'A', 'RM OVERDRAWN NOSTRO ACCOUNTS WITH IB'),
-    '4313000000000Y': ('+', 'RMEL', 'C', 'A', 'RM DEFICIT IN SPICK'),
-    '4313002000000Y': ('+', 'RMEL', 'C', 'A', 'RM AMOUNT BORROWING FROM SPICK POOL CB'),
-    '4313003000000Y': ('+', 'RMEL', 'C', 'A', 'RM AMOUNT BORROWING FROM SPICK POOL IB'),
-    '4314001000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTERBANK BORROWINGS FROM BNM'),
-    '4314002000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTERBANK BORROWINGS FROM CB'),
-    '4314011000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTERBANK BORROWINGS FROM FC'),
-    '4314012000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTERBANK BORROWINGS FROM MB'),
-    '4314013000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTERBANK BORROWINGS FROM DH'),
-    '4314017000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTERBANK BORROWINGS FROM CAGAMAS'),
-    '4314020000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTERBANK BORROWINGS FROM DNBFI'),
-    '4314081100000Y': ('+', 'RMEL', 'C', 'A', 'RM INTERBANK BORROWINGS FROM FBI <= 1 YR'),
-    '4314003000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTERBANK BORROWINGS FROM IB'),
-    '4410000000000Y': ('+', 'RMEL', 'C', 'A', 'RM MISC BORROWINGS'),
-    '4911080000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTEREST PAYABLE TO NON-RESIDENTS'),
-    '4911095000000Y': ('+', 'RMEL', 'C', 'A', 'RM INTEREST PAYABLE TO NON-RES - DCI/CRA'),
-    '4929996000000Y': ('+', 'RMEL', 'C', 'A', 'OTHR RM MISC LIAB NIE DUE TO NON-RES-DCI'),
-    '4912080000000Y': ('+', 'RMEL', 'C', 'A', 'RM BILLS PAYABLE TO NON-RESIDENTS'),
-    '4929980000000Y': ('+', 'RMEL', 'C', 'A', 'OTHER RM MISC LIAB NIE DUE TO NON-RES'),
-    '4929995000000Y': ('+', 'RMEL', 'C', 'A', 'RM GOLD INVESTMENT FROM NON-RESIDENTS'),
-    '4411100000000Y': ('-', 'RMEL', 'C', 'A', 'RM SUBORDINATED DEBT CAPITAL'),
-    '4411200000000Y': ('-', 'RMEL', 'C', 'A', 'RM EXEMPT SUBORDINATED DEBT CAPITAL'),
-    '4411300000000Y': ('-', 'RMEL', 'C', 'A', 'RM SUBORDIN DEBT CAPITAL W APPR FR BNM'),
-    '4414000000000Y': ('-', 'RMEL', 'C', 'A', 'RM RESOURCE OBLIQ ON LN SOLD TO CAGAMAS'),
-    '4260000000000Y': ('+', 'FXEL', 'C', '', 'FX DEPOSITS ACCEPTED'),
-    '4269981000000Y': ('+', 'FXEL', 'C', '', 'FX DEPOSITS ACCEPTED TO BNM'),
-    '4360000000000Y': ('+', 'FXEL', 'C', '', 'FX AMOUNT DUE TO DESIGNATED FI'),
-    '4362081000000Y': ('+', 'FXEL', 'C', '', 'FX OVERDRAWN NOSTRO ACCOUNTS WITH FBI'),
-    '4364002000000Y': ('+', 'FXEL', 'C', '', 'FX INTERBANK BORROWINGS FROM CB'),
-    '4364003000000Y': ('+', 'FXEL', 'C', '', 'FX INTERBANK BORROWINGS FROM IB'),
-    '4364012000000Y': ('+', 'FXEL', 'C', '', 'FX INTERBANK BORROWINGS FROM MB'),
-    '4364081100000Y': ('+', 'FXEL', 'C', '', 'FX INTERBANK BORROWINGS FROM FBI <= 1 YR'),
-    '4370000000000Y': ('+', 'FXEL', 'C', '', 'SPTF FX AMOUNT DUE TO FI'),
-    '4460000000000Y': ('+', 'FXEL', 'C', '', 'FX MISC BORROWINGS'),
-    '4760000000000Y': ('+', 'FXEL', 'C', '', 'FX DEBT SECURITIES ISSUED'),
-    '4961050000000Y': ('+', 'FXEL', 'C', '', 'FX INTEREST PAYABLE TO RESIDENTS'),
-    '4961080000000Y': ('+', 'FXEL', 'C', '', 'FX INTEREST PAYABLE TO NON-RESIDENTS'),
-    '4969950000000Y': ('+', 'FXEL', 'C', '', 'OTHER FX MISC LIAB NIE DUE TO RESIDENTS'),
-    '4969980000000Y': ('+', 'FXEL', 'C', '', 'OTHER FX MISC LIAB NIE DUE TO NON-RES'),
-    '4461100000000Y': ('-', 'FXEL', 'C', '', 'FX SUBORDINATED DEBT CAPITAL'),
-    '3311003000000Y': ('+', 'RMEA', 'C', 'B', 'RM OVERDRAWN VOSTRO ACCOUNTS OF IB'),
-    '3212002000000Y': ('+', 'RMEA', 'C', 'B', 'RM BALANCES IN CURRENT ACCOUNTS WITH CB'),
-    '3212003000000Y': ('+', 'RMEA', 'C', 'B', 'RM BALANCES IN CURRENT ACCOUNTS WITH IB'),
-    '3213002000000Y': ('+', 'RMEA', 'C', 'B', 'RM FIXED DEPOSITS PLACED WITH CB'),
-    '3213011000000Y': ('+', 'RMEA', 'C', 'B', 'RM FIXED DEPOSITS PLACED WITH FC'),
-    '3213012000000Y': ('+', 'RMEA', 'C', 'B', 'RM FIXED DEPOSITS PLACED WITH MB'),
-    '3213013000000Y': ('+', 'RMEA', 'C', 'B', 'RM FIXED DEPOSITS PLACED WITH DH'),
-    '3213102000000Y': ('+', 'RMEA', 'C', 'B', 'RM SPECIAL INV DEP PLACED WITH CB'),
-    '3213103000000Y': ('+', 'RMEA', 'C', 'B', 'RM SPECIAL INV DEP PLACED WITH IB'),
-    '3213111000000Y': ('+', 'RMEA', 'C', 'B', 'RM SPECIAL INV DEP PLACED WITH FC'),
-    '3213112000000Y': ('+', 'RMEA', 'C', 'B', 'RM SPECIAL INV DEP PLACED WITH MB'),
-    '3213113000000Y': ('+', 'RMEA', 'C', 'B', 'RM SPECIAL INV DEP PLACED WITH DH'),
-    '3213202000000Y': ('+', 'RMEA', 'C', 'B', 'RM GEN INVESTMENT DEP PLACED WITH CB'),
-    '3213203000000Y': ('+', 'RMEA', 'C', 'B', 'RM GEN INVESTMENT DEP PLACED WITH IB'),
-    '3213211000000Y': ('+', 'RMEA', 'C', 'B', 'RM GEN INVESTMENT DEP PLACED WITH FC'),
-    '3213212000000Y': ('+', 'RMEA', 'C', 'B', 'RM GEN INVESTMENT DEP PLACED WITH MB'),
-    '3213213000000Y': ('+', 'RMEA', 'C', 'B', 'RM GEN INVESTMENT DEP PLACED WITH DH'),
-    '3219910000000Y': ('+', 'RMEA', 'C', 'B', 'RM OTHER DEPOSITS PLACED WITH DBI'),
-    '3250002000000Y': ('+', 'RMEA', 'C', 'B', 'RM REVERSE REPOS WITH CB'),
-    '3250001000000Y': ('+', 'RMEA', 'C', 'B', 'RM REVERSE REPOS WITH BNM'),
-    '3250011000000Y': ('+', 'RMEA', 'C', 'B', 'RM REVERSE REPOS WITH FC'),
-    '3250012000000Y': ('+', 'RMEA', 'C', 'B', 'RM REVERSE REPOS WITH MB'),
-    '3250013000000Y': ('+', 'RMEA', 'C', 'B', 'RM REVERSE REPOS WITH DH'),
-    '3311002000000Y': ('+', 'RMEA', 'C', 'B', 'RM OVERDRAWN VOSTRO ACCOUNTS OF CB'),
-    '3312002000000Y': ('+', 'RMEA', 'C', 'B', 'RM NOSTRO ACCOUNT BALANCES WITH CB'),
-    '3312003000000Y': ('+', 'RMEA', 'C', 'B', 'RM NOSTRO ACCOUNT BALANCES WITH IB'),
-    '3313000000000Y': ('+', 'RMEA', 'C', 'B', 'RM SURPLUS IN SPICK'),
-    '3314001000000Y': ('+', 'RMEA', 'C', 'B', 'RM INTERBANK PLACEMENTS WITH BNM'),
-    '3314002000000Y': ('+', 'RMEA', 'C', 'B', 'RM INTERBANK PLACEMENTS WITH CB'),
-    '3314003000000Y': ('+', 'RMEA', 'C', 'B', 'RM INTERBANK PLACEMENTS WITH IB'),
-    '3314011000000Y': ('+', 'RMEA', 'C', 'B', 'RM INTERBANK PLACEMENTS WITH FC'),
-    '3314012000000Y': ('+', 'RMEA', 'C', 'B', 'RM INTERBANK PLACEMENTS WITH MB'),
-    '3314013000000Y': ('+', 'RMEA', 'C', 'B', 'RM INTERBANK PLACEMENTS WITH DH'),
-    '3314017000000Y': ('+', 'RMEA', 'C', 'B', 'RM INTERBANK PLACEMENTS WITH CAGAMAS'),
-    '3410002000000Y': ('+', 'RMEA', 'C', 'B', 'RM LOANS TO CB'),
-    '3410003000000Y': ('+', 'RMEA', 'C', 'B', 'RM LOANS TO IB'),
-    '3410011000000Y': ('+', 'RMEA', 'C', 'B', 'RM LOANS TO FC'),
-    '3410012000000Y': ('+', 'RMEA', 'C', 'B', 'RM LOANS TO MB'),
-    '3410013000000Y': ('+', 'RMEA', 'C', 'B', 'RM LOANS TO DH'),
-    '3410017000000Y': ('+', 'RMEA', 'C', 'B', 'RM LOANS TO CAGAMAS'),
-    '3703000000000Y': ('+', 'RMEA', 'C', 'B', 'RM NIDS HELD'),
-    '3803000000000Y': ('+', 'RMEA', 'C', 'B', 'NIDS SOLD UNDER REPO'),
-    '4015000000000Y': ('+', 'RMEA', 'C', 'B', 'ELIGIBLE CAGAMAS TIER-2 BONDS (DAY I)'),
-    '4019000000000Y': ('+', 'RMEA', 'C', 'B', 'SRGF LOANS'),
-    '4019100000000Y': ('+', 'RMEA', 'C', 'B', 'SRGF-2 LOANS'),
-    '3314013110000Y': ('-', 'RMEA', 'C', 'B', 'RM INTERBKS PLACEMENTS WITH DH OVRNIGHT'),
-    '4014000000000Y': ('+', 'RMET', 'C', 'C', 'ELIGIBLE TIER 2 LOANS SOLD TO CAGAMAS'),
-    '4017100000000Y': ('-', 'RMMS', 'C', 'D', 'RM MARKETABLE SECURITIES'),
-    '3260000000000Y': ('+', 'FXEA', 'C', '', 'FX DEPOSITS PLACED'),
-    '3280000000000Y': ('+', 'FXEA', 'C', '', 'FX REVERSE REPOS'),
-    '3362081000000Y': ('+', 'FXEA', 'C', '', 'FX NOSTRO ACCOUNT BALANCES WITH FBI'),
-    '3364002000000Y': ('+', 'FXEA', 'C', '', 'FX INTERBANK PLACEMENTS WITH CB'),
-    '3364003000000Y': ('+', 'FXEA', 'C', '', 'FX INTERBANK PLACEMENTS WITH IB'),
-    '3364012000000Y': ('+', 'FXEA', 'C', '', 'FX INTERBANK PLACEMENTS WITH MB'),
-    '3364081100000Y': ('+', 'FXEA', 'C', '', 'FX INTERBANK PLACEMENTS WITH FBI <= 1 YR'),
-    '3370000000000Y': ('+', 'FXEA', 'C', '', 'SPTF - FX AMOUNT DUE FROM DESIGNATED FI'),
-    '3460000000000Y': ('+', 'FXEA', 'C', '', 'FX LOANS'),
-    '3460064000000Y': ('+', 'FXEA', 'C', '', 'FX LOANS GOV DBE'),
-    '3460081000000Y': ('+', 'FXEA', 'C', '', 'FX LOANS FBI'),
-    '3761000000000Y': ('+', 'FXEA', 'C', '', 'FX SHARES HELD'),
-    '3765000200000Y': ('+', 'FXEA', 'C', '', 'FX SECURITIES HELD (OLD=37600)'),
-    '3769900000000Y': ('+', 'FXEA', 'C', '', 'FX SECURITIES HELD (OLD=37600)'),
-    '3961000000000Y': ('+', 'FXEA', 'C', '', 'FX NOTES AND COINS'),
-    '3961100000000Y': ('+', 'FXEA', 'C', '', 'FX INVESTMENTS'),
-    '3962000000000Y': ('+', 'FXEA', 'C', '', 'FOREIGN SUBSIDIARIES'),
-    '3963000000000Y': ('+', 'FXEA', 'C', '', 'FOREIGN ASSOCIATE COMPANIES'),
-    '3966900000000Y': ('+', 'FXEA', 'C', '', 'FX INVESTMENT IN LABUAN OFFSHORE ENTITY'),
-    '3967000000000Y': ('+', 'FXEA', 'C', '', 'FX MARGIN PLACED WITH EXCHANGES'),
-    '3968000000000Y': ('+', 'FXEA', 'C', '', 'FX INTEREST RECEIVABLES NIE'),
-    '3969900000000Y': ('+', 'FXEA', 'C', '', 'FX OTHER ASSETS NIE'),
-    '3979900000000Y': ('+', 'FXEA', 'C', '', 'SPTF OTHER FX MISC LIAB NIE'),
-    'NSSTS': ('', '', 'C', '', '1. NSSTS'),
-    'SSTS': ('', '', 'C', '', 'SSTS'),
-    'NSSTS TRADING': ('', '', 'C', '', '1.2 NSSTS TRADING'),
-    'NSSTS INVEST': ('', '', 'C', '', '1.1 NSSTS INVESTMENT'),
-}
-
-# Branch code mappings
-BRCHCD = {
-    'HOE': [1] + list(range(7000, 9001)) + [9994, 9995, 9996, 9998, 9999],
-    'IBU': [3000, 3001, 3999] + list(range(4000, 5000)),
-    'H01': [800, 3800], 'H02': [801, 3801], 'H03': [802, 3802], 'H04': [803, 3803],
-    'H05': [804, 3804], 'H06': [805, 3805], 'H07': [806, 3806], 'H08': [807, 3807],
-    'H09': [808, 3808], 'H10': [809, 3809], 'H11': [811, 3811], 'H12': [812, 3812],
-    'H13': [813, 3813], 'H14': [814, 3814], 'H15': [815, 3815], 'H16': [816, 3816],
-    'H17': [817, 3817], 'H18': [818, 3818], 'H19': [819, 3819], 'H20': [820, 3820],
-    'H21': [821, 3821], 'H22': [822, 3822], 'H23': [823, 3823], 'H24': [824, 3824],
-    'H25': [825, 3825], 'H26': [826, 3826], 'H27': [827, 3827], 'H28': [828, 3828],
-    'H44': [844, 3844], 'H45': [845, 3845], 'H46': [846, 3846], 'H47': [847, 3847],
-    'H48': [848, 3848], 'H49': [849, 3849], 'H50': [850, 3850], 'H51': [851, 3851],
-    'H52': [852, 3852], 'H53': [853, 3853], 'H54': [854, 3854], 'H55': [855, 3855],
-    'H56': [856, 3856], 'H57': [857, 3857], 'H58': [858, 3858], 'H59': [859, 3859],
-    'H60': [860, 3860], 'H61': [861, 3861], 'H62': [862, 3862], 'H63': [863, 3863],
-}
-
-# Branch reverse mapping (code to name)
-BRCHRVR = {
-    'PCS': 1, 'JSS': 2, 'JRC': 3, 'MLK': 4, 'IMO': 5, 'PPG': 6, 'JBU': 7,
-    'KTN': 8, 'JYK': 9, 'ASR': 10, 'GRN': 11, 'PPH': 12, 'KBU': 13, 'TMH': 14,
-    'KPG': 15, 'NLI': 16, 'TPN': 17, 'PJN': 18, 'DUA': 19, 'TCL': 20, 'BPT': 21,
-    'SMY': 22, 'KMT': 23, 'RSH': 24, 'SAM': 25, 'SPG': 26, 'NTL': 27, 'MUA': 28,
-    'JRL': 29, 'KTU': 30, 'SKC': 31, 'WSS': 32, 'KKU': 33, 'KGR': 34, 'SSA': 35,
-    'SS2': 36, 'TSA': 37, 'JKL': 38, 'KKG': 39, 'JSB': 40, 'JIH': 41, 'BMM': 42,
-    'BTG': 43, 'TWU': 44, 'SRB': 45, 'APG': 46, 'SGM': 47, 'MTK': 48, 'JLP': 49,
-    'MRI': 50, 'SMG': 51, 'UTM': 52, 'TMI': 53, 'BBB': 54, 'LBN': 55, 'KJG': 56,
-    'SPI': 57, 'SBU': 58, 'PKL': 59, 'BAM': 60, 'KLI': 61, 'SDK': 62, 'GMS': 63,
-    'PDN': 64, 'BHU': 65, 'BDA': 66, 'CMR': 67, 'SAT': 68, 'BKI': 69, 'PSA': 70,
-    'IKB': 701, 'IPJ': 702, 'IWS': 703, 'IJK': 704, 'HOE': 884,
-}
-
-# Customer type mappings
-CTYPE = {
-    'BP': '01', 'BC': '01', 'BB': '02', 'BI': '03', 'BJ': '07', 'BQ': '11',
-    'BM': '12', 'BN': '13', 'BG': '17',
-    'BR': '20', 'BF': '20', 'BH': '20', 'BZ': '20', 'BU': '20', 'AD': '20',
-    'BT': '20', 'BV': '20', 'BS': '20',
-    'AC': '60', 'DD': '60', 'CG': '60', 'CA': '60', 'CC': '60', 'CB': '60',
-    'CD': '60', 'CF': '60',
-    'DA': '71', 'DB': '72', 'DC': '74',
-    'EC': '76', 'EA': '76', 'EJ': '76',
-    'FA': '79',
-    'BW': '81', 'BA': '81', 'BE': '81',
-    'EB': '85', 'CE': '85', 'GA': '85',
-}
-
-# CAC branch mappings
-CACBRCH = {
-    '911': [2,18,35,38,40,41,53,66,120,124,128,129,141,148,169,170,225,226,230,232,236,248,262,267,802,812,816,818],
-    '912': [3,15,19,22,26,29,36,46,56,69,83,94,96,97,701,118,122,125,131,132,136,138,145,151,155,157,162,163,270,167,168,173,178,179,195,198,180,196,197,202,220,229,241,252,280,811,815,822,103,821,825,269,284,285,288,289,702],
-    '916': [27,42,60,68,88,121,154,177,204,206,255,801,826],
-    '915': [6,54,107,114,126,150,159,171,205,253,265,266,808,817],
-    '914': [7,37,52,59,61,79,89,105,110,147,174,176,216,217,222,286,804,805,287,290],
-    '913': [20,25,43,78,81,92,109,127,133,135,153,199,201,203,221,240,250,268,814,820],
-}
-
-# Regional office mappings
-REGIOFF = {
-    'SELWP1': [3,22,40,46,53,56,120,122,129,136,155,168,169,170,173,220,225,226,232,252,262,802,818,284,285],
-    'SELWP2': [2,15,29,41,66,83,94,96,97,701,103,118,128,138,141,151,178,195,196,197,248,821,822],
-    'SELWP3': [18,19,26,35,36,38,81,124,125,131,145,148,157,162,163,167,179,198,230,241,267,269,270,280,825],
-    'SELWP4': [20,25,31,43,69,73,78,92,109,127,133,135,153,180,199,201,202,203,221,235,240,250,268,814,820,279,288,289,702],
-    'JOHOR': [7,21,28,37,47,52,59,61,75,79,87,89,91,93,102,105,110,144,147,174,176,216,217,222,224,234,242,247,286,804,805,287,290],
-    'PNGKDHPLS': [6,10,11,27,34,42,54,57,60,68,70,74,77,86,88,104,107,114,121,126,150,154,159,164,171,177,204,205,206,213,238,253,255,258,265,266,801,806,808,817,826,704],
-    'PERAK': [5,9,23,49,51,67,71,76,80,85,95,108,123,137,146,152,158,207,208,209,210,211,243,244,245,246,249,251,256,809],
-    'MLKNSEM': [4,16,17,24,39,45,63,64,65,111,156,160,165,172,212,223,231,254,800,807],
-    'PAHKELTER': [8,13,14,30,48,106,113,116,117,139,233,237,239,257,260,261,263,264,277,827,819,703],
-    'SARAWAK': [32,50,58,90,130,175,182,183,184,185,273,274,275,186,189,190,191,192,193,194,259,813,281],
-    'SABAHLBN': [33,44,55,62,72,112,115,140,142,143,149,161,228,803,278,276,282,283],
-}
-
-# New regional mappings
-REGNEW = {
-    'WS I': [2,3,22,46,53,56,120,129,136,169,170,173,196,226,232,252,262,284,285,802,812],
-    'WS II': [15,29,40,41,66,83,96,97,103,118,128,141,151,195,197,248,269,701,818,822],
-    'WS III': [18,19,35,36,81,124,125,131,135,145,148,162,167,180,220,241,267,280,815,816,820],
-    'WS IV': [26,38,94,122,138,153,155,157,163,168,178,179,198,225,230,250,270,279,288,289,702,811,821,825],
-    'WS V': [20,25,31,43,69,73,78,92,109,127,133,199,201,202,203,221,235,240,268,814],
-    'S I': [7,37,52,59,61,79,87,89,91,93,102,105,110,144,147,174,176,216,217,222,234,286,287,290,804,805],
-    'S II': [4,16,17,21,24,28,39,45,47,63,64,65,75,111,156,160,165,172,224,231,242,247,254,800,807],
-    'N I': [6,10,34,54,70,74,77,86,104,107,114,126,150,159,171,205,238,258,265,266,806,808,817,704],
-    'N II': [11,23,27,42,57,60,68,88,108,121,154,164,177,204,206,211,243,249,256,801,824,826],
-    'CTR': [5,9,49,51,67,71,76,80,85,95,123,137,146,152,158,207,208,209,210,244,245,251,809,823],
-    'EST': [8,13,14,30,48,106,113,116,117,139,233,237,239,257,260,261,263,264,277,819,827,703],
-    'SRW': [32,50,58,90,130,175,182,183,184,185,273,274,275,186,189,190,191,192,193,194,259,281,813],
-    'SAB': [33,44,55,62,72,112,115,140,142,143,149,161,228,278,276,282,283,803],
-}
-
-# Branch lists by region
-PRKBRH = [119,67,123,5,207,49,137,208,9,80,146,158,85,244,246,809,243,251]
-IPRKBRH = [3119,3067,3123,3005,3207,3049,3137,3208,3009,3080,3146,3158,3085,3244,3246,3809,3243,3251]
-PNGBRH = [114,60,54,42,154,204,107,171,177,164,150,27,6,121,126,159,68,205,206,265,266,253,255,801,808,817,826,256]
-IPNGBRH = [3114,3060,3054,3042,3154,3204,3107,3171,3177,3164,3150,3027,3006,3121,3126,3159,3068,3205,3206,3265,3266,3253,3255,3801,3808,3817,3826,3256]
-JBBRH = [174,7,61,105,79,59,147,216,110,217,176,89,37,52,222,804,805,286,287,290]
-IJBBRH = [3174,3007,3061,3105,3079,3059,3147,3216,3110,3217,3176,3089,3037,3052,3222,3804,3805,3286,3287,3290]
-KLGBRH = [20,25,43,78,81,92,109,127,133,199,201,203,221,240,250,268,135,153,814,820,293,294]
-IKLGBRH = [3020,3025,3043,3078,3081,3092,3109,3127,3133,3199,3201,3203,3221,3240,3250,3268,3135,3153,3814,3820,3293,3294]
-MLKBRH = [4,17,28,111,156,160,165,172,224,231,242,247,807]
-IMLKBRH = [3004,3017,3028,3111,3156,3160,3165,3172,3224,3231,3242,3247,3807]
-KCGBRH = [32,130,184,185,186,274]
-IKCGBRH = [3032,3130,3184,3185,3186,3274]
-KKUBRH = [33,140,278,112,228,161,142,72,149,282]
-IKKUBRH = [3033,3140,3278,3112,3228,3161,3142,3072,3149,3282]
-SROBRH = [44,50,55,58,62,90,115,143,175,183,189,190,191,192,193,194,259,273,275,276,281,283]
-ISROBRH = [3044,3050,3055,3058,3062,3090,3115,3143,3175,3183,3189,3190,3191,3192,3193,3194,3259,3273,3275,3276,3281,3283]
-SPIBRH = [10,238,11,57,88,104,74,704]
-ISPIBRH = [3010,3238,3011,3057,3088,3104,3074,3704]
-SRBBRH = [16,24,39,45,64,65,254]
-ISRBBRH = [3016,3024,3039,3045,3064,3065,3254]
-
-# Utility functions
-def get_account_info(bnmcode):
-    """Get account information by BNM code"""
-    return EL_DATA.get(bnmcode)
-
-def get_branch_code(branch_name):
-    """Get numeric branch code from branch name"""
-    return BRCHRVR.get(branch_name)
-
-def get_customer_type(ctype_code):
-    """Get customer type category"""
-    return CTYPE.get(ctype_code, '')
-
-def get_cac_code(branch_num):
-    """Get CAC code for branch number"""
-    for code, branches in CACBRCH.items():
-        if branch_num in branches:
-            return code
-    return '000'
-
-def get_region(branch_num):
-    """Get region for branch number"""
-    for region, branches in REGIOFF.items():
-        if branch_num in branches:
-            return region
-    return 'NON REGION'
-
-def get_new_region(branch_num):
-    """Get new region classification for branch number"""
-    for region, branches in REGNEW.items():
-        if branch_num in branches:
-            return region
-    return 'OFF'
-
-def is_in_branch_list(branch_num, list_name):
-    """Check if branch is in specified list"""
-    lists = {
-        'PRKBRH': PRKBRH, 'IPRKBRH': IPRKBRH,
-        'PNGBRH': PNGBRH, 'IPNGBRH': IPNGBRH,
-        'JBBRH': JBBRH, 'IJBBRH': IJBBRH,
-        'KLGBRH': KLGBRH, 'IKLGBRH': IKLGBRH,
-        'MLKBRH': MLKBRH, 'IMLKBRH': IMLKBRH,
-        'KCGBRH': KCGBRH, 'IKCGBRH': IKCGBRH,
-        'KKUBRH': KKUBRH, 'IKKUBRH': IKKUBRH,
-        'SROBRH': SROBRH, 'ISROBRH': ISROBRH,
-        'SPIBRH': SPIBRH, 'ISPIBRH': ISPIBRH,
-        'SRBBRH': SRBBRH, 'ISRBBRH': ISRBBRH,
-    }
-    return branch_num in lists.get(list_name, [])
