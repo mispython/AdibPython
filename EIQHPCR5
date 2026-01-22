@@ -1,0 +1,193 @@
+//EIQHPCR5 JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                      JOB06535
+/*JOBPARM S=S1M2
+//*
+//DELETE   EXEC PGM=IEFBR14
+//DD1      DD DSN=SAP.PBB.HP.CRRISK.TERM,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,0)
+//*
+//EIQHPCR5 EXEC SAS609
+//HPNPL    DD DSN=SAP.PBB.HP.CRRISK,DISP=SHR
+//HPTXT    DD DSN=SAP.PBB.HP.CRRISK.TERM,
+//            DISP=(MOD,CATLG,DELETE),
+//            SPACE=(CYL,(50,50),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=256,RECFM=FB,BLKSIZE=0)
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//SYSIN    DD *
+
+TITLE ' ';
+OPTIONS YEARCUTOFF=1950 NOCENTER NODATE LS=200;
+
+DATA REPTDATE;
+  SET HPNPL.REPTDATE;
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+RUN;
+*;
+*** MARGIN OF FINANCE ***;
+%MACRO GENRPT;
+   PROC SUMMARY DATA=LOAN1 NWAY;
+      CLASS NEWSEC TERMGRP BRABBR;
+      VAR BALANCE SPPL RECOVER NETSP;
+      OUTPUT OUT=LN1 (RENAME=(_FREQ_=NOACC)
+                      DROP=_TYPE_) SUM=;
+   RUN;
+   PROC SUMMARY DATA=LOAN2 NWAY;
+      CLASS NEWSEC TERMGRP BRABBR;
+      VAR BALANCE;
+      OUTPUT OUT=LN2 (RENAME=(_FREQ_=NPACC BALANCE=NPBAL)
+                      DROP=_TYPE_) SUM=;
+   RUN;
+   DATA LN3;
+      MERGE LN1 LN2;
+      BY NEWSEC TERMGRP BRABBR;
+      RATIO = NPBAL/BALANCE * 100;
+      CREDIT = NETSP/BALANCE * 100;
+   RUN;
+
+   PROC SORT DATA=LN3; BY NEWSEC TERMGRP BRABBR;RUN;
+   DATA _NULL_;
+      SET LN3 END=LAST;
+      BY NEWSEC TERMGRP BRABBR;
+      FILE HPTXT;
+      IF _N_ = 1 THEN DO ;
+         LINK NEWPAGE;
+         TACC=0;
+         TBAL=0;
+         TNPLACC=0;
+         TNPLBAL=0;
+         TSPPL=0;
+         TRECOVER=0;
+         TNETSP=0;
+      END;
+
+      IF FIRST.NEWSEC THEN DO;
+         PUT @1  NEWSEC;
+         GACC=0;
+         GBAL=0;
+         GNPLACC=0;
+         GNPLBAL=0;
+         GSPPL=0;
+         GRECOVER=0;
+         GNETSP=0;
+         LINECNT + 1;
+      END;
+
+      IF FIRST.TERMGRP THEN DO;
+         PUT @1  TERMGRP;
+         SACC=0;
+         SBAL=0;
+         SNPLACC=0;
+         SNPLBAL=0;
+         SSPPL=0;
+         SRECOVER=0;
+         SNETSP=0;
+         LINECNT + 1;
+      END;
+
+      PUT  @3   BRABBR        $3.     @10  NOACC      COMMA7.
+           @20  BALANCE  COMMA16.2    @40  NPACC      COMMA7.
+           @50  NPBAL    COMMA16.2    @68  SPPL      COMMA16.2
+           @90  RECOVER  COMMA16.2    @110 NETSP     COMMA16.2
+           @133 RATIO     COMMA6.2    @142 CREDIT     COMMA6.2;
+
+      LINECNT + 1;
+      GACC    + NOACC;     GBAL + BALANCE;
+      GNPLACC + NPACC;     GNPLBAL + NPBAL;
+      GSPPL   + SPPL;      GRECOVER + RECOVER;
+      GNETSP  + NETSP;
+      SACC    + NOACC;     SBAL + BALANCE;
+      SNPLACC + NPACC;     SNPLBAL + NPBAL;
+      SSPPL   + SPPL;      SRECOVER + RECOVER;
+      SNETSP  + NETSP;
+      TACC    + NOACC;     TBAL + BALANCE;
+      TNPLACC + NPACC;     TNPLBAL + NPBAL;
+      TSPPL   + SPPL;      TRECOVER + RECOVER;
+      TNETSP  + NETSP;
+
+      IF LINECNT > 55 THEN DO;
+         LINK NEWPAGE;
+      END;
+
+      IF LAST.TERMGRP THEN DO;
+         PUT @1   '----------------------------------------'
+             @41  '----------------------------------------'
+             @81  '----------------------------------------'
+             @121 '--------------------------';
+         PUT @1   'TERM   '              @10  SACC       COMMA7.
+             @20  SBAL      COMMA16.2    @40  SNPLACC    COMMA7.
+             @50  SNPLBAL   COMMA16.2    @70  SSPPL     COMMA16.2
+             @90  SRECOVER  COMMA16.2    @110 SNETSP    COMMA16.2 ;
+         PUT @1   '----------------------------------------'
+             @41  '----------------------------------------'
+             @81  '----------------------------------------'
+             @121 '--------------------------';
+         LINECNT + 3;
+      END;
+
+      IF LAST.NEWSEC THEN DO;
+         PUT @1   'NEW/SEC'              @10  GACC       COMMA7.
+             @20  GBAL      COMMA16.2    @40  GNPLACC    COMMA7.
+             @50  GNPLBAL   COMMA16.2    @70  GSPPL     COMMA16.2
+             @90  GRECOVER  COMMA16.2    @110 GNETSP    COMMA16.2 ;
+         PUT @1   '----------------------------------------'
+             @41  '----------------------------------------'
+             @81  '----------------------------------------'
+             @121 '--------------------------';
+         LINECNT + 2;
+      END;
+
+      IF LAST = 1 THEN DO;
+         PUT @1   'GRD TOT'              @10  TACC       COMMA7.
+             @20  TBAL      COMMA16.2    @40  TNPLACC    COMMA7.
+             @50  TNPLBAL   COMMA16.2    @70  TSPPL     COMMA16.2
+             @90  TRECOVER  COMMA16.2    @110 TNETSP    COMMA16.2 ;
+         PUT @1   '----------------------------------------'
+             @41  '----------------------------------------'
+             @81  '----------------------------------------'
+             @121 '--------------------------';
+      END;
+      RETURN;
+
+      NEWPAGE:
+         PAGECNT+1;
+         LINECNT=9;
+         PUT @1   'PROGRAM-ID : EIQHPCR5'
+             @118 'PAGE NO.: ' PAGECNT;
+         PUT @1   'PUBLIC  BANK  BERHAD - CCD (ATTN JENNY YAP)';
+         PUT @1   'REVIEW OF HPD (CONV & AITAB) CREDIT CHARGE AS AT '
+                  "&RDATE";
+         PUT @1   "&RPTTITLE";
+         PUT @1   ' ';
+         PUT @10  'TOTAL HPD'        @25  '  TOTAL HPD'
+             @40  '      NPL'        @55  '        NPL'
+             @77  'ALLOWANCE'
+             @94  'WRITTEN BACK'     @110 ' SP CHARGED NET'
+             @130 'NPL RATIO'        @140 'C CHARGE'  ;
+         PUT @1   'BRABBR'           @10  'NO OF A/C'
+             @25  'BALANCE (A)'      @40  'NO OF A/C'
+             @55  'BALANCE (B)'      @78  ' P&L (C)'
+             @95  '    P&L (D)'      @110 'RECOVER (C-D=E)'
+             @130 '  % (B/A)'        @140 ' % (E/A)'  ;
+         PUT @1   '----------------------------------------'
+             @41  '----------------------------------------'
+             @81  '----------------------------------------'
+             @121 '--------------------------';
+      RETURN;
+   RUN;
+%MEND;
+
+   *** HIRING PERIOD - WITHOUT WOFF ***;
+DATA LOAN1;
+   SET HPNPL.HPLOAN;
+   IF LOANTYPE NOT IN (983,993);
+   CALL SYMPUT('RPTTITLE','HIRING PERIOD - EXCLUDE 983 & 993');
+RUN;
+
+DATA LOAN2;
+   SET HPNPL.HPLOAN;
+   IF LOANTYPE NOT IN (983,993) AND
+      (MTHARR GE 3 OR BORSTAT IN ('F','I','R'));
+   CALL SYMPUT('RPTTITLE','HIRING PERIOD - EXCLUDE 983 & 993');
+RUN;
+%GENRPT;
+
