@@ -1,23 +1,17 @@
 import polars as pl
 from pathlib import Path
 import datetime
-from typing import Optional
 
-INPUT_BASE_PATH = Path(r"C:\Your\Input\Path")
-OUTPUT_BASE_PATH = Path(r"C:\Your\Output\Path")
+BASE_INPUT = Path("C:/Your/Base/Input/Path")
+BASE_OUTPUT = Path("C:/Your/Base/Output/Path")
 
-PATHS = {
-    "reptdate": INPUT_BASE_PATH / "DEP" / "REPTDATE.csv",
-    "cis_deposit": INPUT_BASE_PATH / "CIS" / "DEPOSIT.csv",
-    "curr_template": INPUT_BASE_PATH / "MIS" / "CURRC{month}.csv",
-    "crmca_template": INPUT_BASE_PATH / "MNICRM" / "CA{month}.csv",
-    "dpclos": INPUT_BASE_PATH / "PRODEV" / "DPCLOS.csv",
-    "accum": INPUT_BASE_PATH / "DRCRCA" / "ACCUM.csv",
-    "saacc": INPUT_BASE_PATH / "SIGNA" / "SMSACC.csv",
-    "cavg_template": INPUT_BASE_PATH / "MISMTD" / "CAVG{month}.csv",
-}
+DEP_REPTDATE = BASE_INPUT / "DEP" / "REPTDATE.csv"
+CIS_DEPOSIT = BASE_INPUT / "CIS" / "DEPOSIT.csv"
+SIGNA_SMSACC = BASE_INPUT / "SIGNA" / "SMSACC.csv"
+PRODEV_DPCLOS = BASE_INPUT / "PRODEV" / "DPCLOS.csv"
+DRCRCA_ACCUM = BASE_INPUT / "DRCRCA" / "ACCUM.csv"
 
-def parse_sas_date(date_col: pl.Expr) -> pl.Expr:
+def parse_sas_date(date_col):
     return (
         date_col.cast(pl.Utf8)
         .str.zfill(11)
@@ -25,13 +19,11 @@ def parse_sas_date(date_col: pl.Expr) -> pl.Expr:
         .str.strptime(pl.Date, format="%m%d%Y")
     )
 
-def process_eiimclca(nowk: str = "4") -> pl.DataFrame:
-    reptdate_df = pl.read_csv(PATHS["reptdate"])
+def process_eiimclca(nowk="4"):
+    reptdate_df = pl.read_csv(DEP_REPTDATE)
     reptdate_str = reptdate_df["REPTDATE"][0]
-    reptdate = None
     
-    date_formats = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y%m%d", "%d%m%Y"]
-    for fmt in date_formats:
+    for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y%m%d", "%d%m%Y"]:
         try:
             reptdate = datetime.datetime.strptime(str(reptdate_str), fmt).date()
             break
@@ -52,7 +44,7 @@ def process_eiimclca(nowk: str = "4") -> pl.DataFrame:
     REPTMON1 = f"{mm1:02d}"
     
     cis_df = (
-        pl.scan_csv(PATHS["cis_deposit"])
+        pl.scan_csv(CIS_DEPOSIT)
         .filter(pl.col("SECCUST") == "901")
         .with_columns([
             pl.col("CITIZEN").alias("COUNTRY"),
@@ -68,8 +60,8 @@ def process_eiimclca(nowk: str = "4") -> pl.DataFrame:
         .collect()
     )
     
-    curr_path = str(PATHS["curr_template"]).format(month=REPTMON)
-    if not Path(curr_path).exists():
+    curr_path = BASE_INPUT / "MIS" / f"CURRC{REPTMON}.csv"
+    if not curr_path.exists():
         raise FileNotFoundError(f"CURR file not found: {curr_path}")
     
     curr_df = pl.scan_csv(curr_path).sort("ACCTNO").collect()
@@ -77,8 +69,8 @@ def process_eiimclca(nowk: str = "4") -> pl.DataFrame:
     if nowk != "4" and REPTMON == "01":
         curr_df = curr_df.with_columns(pl.lit(0).alias("FEEYTD"))
     else:
-        crmca_path = str(PATHS["crmca_template"]).format(month=REPTMON1)
-        if Path(crmca_path).exists():
+        crmca_path = BASE_INPUT / "MNICRM" / f"CA{REPTMON1}.csv"
+        if crmca_path.exists():
             crmca_df = (
                 pl.scan_csv(crmca_path)
                 .unique("ACCTNO")
@@ -108,9 +100,9 @@ def process_eiimclca(nowk: str = "4") -> pl.DataFrame:
         pl.col("RISKCODE").cast(pl.Utf8).str.slice(0, 1).alias("RISKRATE")
     ]).drop(["ODATE", "CDATE"])
     
-    if PATHS["dpclos"].exists():
+    if PRODEV_DPCLOS.exists():
         dpclos_df = (
-            pl.scan_csv(PATHS["dpclos"])
+            pl.scan_csv(PRODEV_DPCLOS)
             .sort("CLOSEDT", descending=True)
             .unique("ACCTNO", keep="first")
             .select(["ACCTNO", "CLOSEDT", "RCODE"])
@@ -120,50 +112,42 @@ def process_eiimclca(nowk: str = "4") -> pl.DataFrame:
     else:
         dpclos_df = pl.DataFrame(schema={"ACCTNO": pl.Utf8, "CLOSEDT": pl.Date, "RCODE": pl.Utf8})
     
-    accum_df = (
-        pl.scan_csv(PATHS["accum"]).sort("ACCTNO").collect() 
-        if PATHS["accum"].exists() 
-        else pl.DataFrame(schema={"ACCTNO": pl.Utf8})
-    )
+    if DRCRCA_ACCUM.exists():
+        accum_df = pl.scan_csv(DRCRCA_ACCUM).sort("ACCTNO").collect()
+    else:
+        accum_df = pl.DataFrame(schema={"ACCTNO": pl.Utf8})
     
-    saacc_df = (
-        pl.scan_csv(PATHS["saacc"]).sort("ACCTNO").collect() 
-        if PATHS["saacc"].exists() 
-        else pl.DataFrame(schema={"ACCTNO": pl.Utf8})
-    )
+    if SIGNA_SMSACC.exists():
+        saacc_df = pl.scan_csv(SIGNA_SMSACC).sort("ACCTNO").collect()
+    else:
+        saacc_df = pl.DataFrame(schema={"ACCTNO": pl.Utf8})
     
-    cavg_path = str(PATHS["cavg_template"]).format(month=REPTMON)
-    if Path(cavg_path).exists():
+    cavg_path = BASE_INPUT / "MISMTD" / f"CAVG{REPTMON}.csv"
+    if cavg_path.exists():
         cavg_df = pl.scan_csv(cavg_path).select(["ACCTNO", "MTDAVBAL_MIS"]).collect()
     else:
         cavg_df = pl.DataFrame(schema={"ACCTNO": pl.Utf8, "MTDAVBAL_MIS": pl.Float64})
     
-    final_df = icaclose_df
+    final_df = (
+        icaclose_df.lazy()
+        .join(dpclos_df.lazy(), on="ACCTNO", how="left")
+        .join(accum_df.lazy(), on="ACCTNO", how="left")
+        .join(saacc_df.lazy(), on="ACCTNO", how="left")
+        .join(cavg_df.lazy(), on="ACCTNO", how="left")
+        .with_columns([
+            pl.when(pl.col("ESIGNATURE") == "")
+            .then(pl.lit("N"))
+            .otherwise(pl.col("ESIGNATURE"))
+            .alias("ESIGNATURE")
+        ])
+        .collect()
+    )
     
-    datasets = [
-        (dpclos_df, "ACCTNO", "left", "_DPCLOS"),
-        (accum_df, "ACCTNO", "left", ""),
-        (saacc_df, "ACCTNO", "left", ""),
-        (cavg_df, "ACCTNO", "left", "")
-    ]
-    
-    for df, on, how, suffix in datasets:
-        if len(df) > 0:
-            final_df = final_df.join(df, on=on, how=how, suffix=suffix)
-    
-    final_df = final_df.with_columns([
-        pl.when(pl.col("ESIGNATURE") == "")
-        .then(pl.lit("N"))
-        .otherwise(pl.col("ESIGNATURE"))
-        .alias("ESIGNATURE")
-    ])
-    
-    OUTPUT_BASE_PATH.mkdir(parents=True, exist_ok=True)
-    output_file = OUTPUT_BASE_PATH / f"ICACLOSE{REPTMON}{REPTYEAR}.parquet"
-    
+    BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
+    output_file = BASE_OUTPUT / f"ICACLOSE{REPTMON}{REPTYEAR}.parquet"
     final_df.write_parquet(output_file, compression="zstd", statistics=True)
     
     return final_df
 
 if __name__ == "__main__":
-    result_df = process_eiimclca(nowk="4")
+    result = process_eiimclca()
