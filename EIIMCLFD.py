@@ -2,19 +2,14 @@ import polars as pl
 from pathlib import Path
 import datetime
 
-INPUT_BASE_PATH = Path(r"C:\Your\Input\Path")
-OUTPUT_BASE_PATH = Path(r"C:\Your\Output\Path")
+BASE_INPUT = Path("C:/Your/Base/Input/Path")
+BASE_OUTPUT = Path("C:/Your/Base/Output/Path")
 
-PATHS = {
-    "reptdate": INPUT_BASE_PATH / "DEP" / "REPTDATE.csv",
-    "cis_deposit": INPUT_BASE_PATH / "CIS" / "DEPOSIT.csv",
-    "fd_template": INPUT_BASE_PATH / "MIS" / "FDC{month}.csv",
-    "crmfd_template": INPUT_BASE_PATH / "MNICRM" / "FD{month}.csv",
-    "saacc": INPUT_BASE_PATH / "SIGNA" / "SMSACC.csv",
-    "favg_template": INPUT_BASE_PATH / "MISMTD" / "FAVG{month}.csv",
-}
+DEP_REPTDATE = BASE_INPUT / "DEP" / "REPTDATE.csv"
+CIS_DEPOSIT = BASE_INPUT / "CIS" / "DEPOSIT.csv"
+SIGNA_SMSACC = BASE_INPUT / "SIGNA" / "SMSACC.csv"
 
-def parse_sas_date(date_col: pl.Expr) -> pl.Expr:
+def parse_sas_date(date_col):
     return (
         date_col.cast(pl.Utf8)
         .str.zfill(11)
@@ -22,13 +17,11 @@ def parse_sas_date(date_col: pl.Expr) -> pl.Expr:
         .str.strptime(pl.Date, format="%m%d%Y")
     )
 
-def process_eiimclfd() -> pl.DataFrame:
-    reptdate_df = pl.read_csv(PATHS["reptdate"])
+def process_eiimclfd():
+    reptdate_df = pl.read_csv(DEP_REPTDATE)
     reptdate_str = reptdate_df["REPTDATE"][0]
-    reptdate = None
     
-    date_formats = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y%m%d", "%d%m%Y"]
-    for fmt in date_formats:
+    for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y%m%d", "%d%m%Y"]:
         try:
             reptdate = datetime.datetime.strptime(str(reptdate_str), fmt).date()
             break
@@ -42,7 +35,7 @@ def process_eiimclfd() -> pl.DataFrame:
     REPTMON = f"{reptdate.month:02d}"
     
     cis_df = (
-        pl.scan_csv(PATHS["cis_deposit"])
+        pl.scan_csv(CIS_DEPOSIT)
         .filter(pl.col("SECCUST") == "901")
         .with_columns([
             pl.col("CITIZEN").alias("COUNTRY"),
@@ -58,14 +51,14 @@ def process_eiimclfd() -> pl.DataFrame:
         .collect()
     )
     
-    fd_path = str(PATHS["fd_template"]).format(month=REPTMON)
-    if not Path(fd_path).exists():
+    fd_path = BASE_INPUT / "MIS" / f"FDC{REPTMON}.csv"
+    if not fd_path.exists():
         raise FileNotFoundError(f"FD file not found: {fd_path}")
     
     fd_df = pl.scan_csv(fd_path).sort("ACCTNO").collect()
     
-    crmfd_path = str(PATHS["crmfd_template"]).format(month=REPTMON)
-    if Path(crmfd_path).exists():
+    crmfd_path = BASE_INPUT / "MNICRM" / f"FD{REPTMON}.csv"
+    if crmfd_path.exists():
         crmfd_df = (
             pl.scan_csv(crmfd_path)
             .unique("ACCTNO")
@@ -74,13 +67,13 @@ def process_eiimclfd() -> pl.DataFrame:
         )
         fd_df = fd_df.join(crmfd_df, on="ACCTNO", how="inner")
     
-    if PATHS["saacc"].exists():
-        saacc_df = pl.scan_csv(PATHS["saacc"]).sort("ACCTNO").collect()
+    if SIGNA_SMSACC.exists():
+        saacc_df = pl.scan_csv(SIGNA_SMSACC).sort("ACCTNO").collect()
     else:
         saacc_df = pl.DataFrame(schema={"ACCTNO": pl.Utf8})
     
-    favg_path = str(PATHS["favg_template"]).format(month=REPTMON)
-    if Path(favg_path).exists():
+    favg_path = BASE_INPUT / "MISMTD" / f"FAVG{REPTMON}.csv"
+    if favg_path.exists():
         favg_df = pl.scan_csv(favg_path).select(["ACCTNO", "MTDAVBAL_MIS"]).collect()
     else:
         favg_df = pl.DataFrame(schema={"ACCTNO": pl.Utf8, "MTDAVBAL_MIS": pl.Float64})
@@ -111,12 +104,11 @@ def process_eiimclfd() -> pl.DataFrame:
         pl.col("CDATE").alias("CLOSEDT")
     ]).drop(["ODATE", "CDATE"])
     
-    OUTPUT_BASE_PATH.mkdir(parents=True, exist_ok=True)
-    output_file = OUTPUT_BASE_PATH / f"IFDCLOSE{REPTMON}{REPTYEAR}.parquet"
-    
+    BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
+    output_file = BASE_OUTPUT / f"IFDCLOSE{REPTMON}{REPTYEAR}.parquet"
     final_df.write_parquet(output_file, compression="zstd", statistics=True)
     
     return final_df
 
 if __name__ == "__main__":
-    result_df = process_eiimclfd()
+    result = process_eiimclfd()
