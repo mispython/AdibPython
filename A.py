@@ -132,10 +132,10 @@ jsonpath-ng==1.7.0
 jsonpointer==3.0.0
 jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
-jupyter_client==8.6.3
-jupyter_core==5.8.1
 jupyter-events==0.12.0
 jupyter-lsp==2.3.0
+jupyter_client==8.6.3
+jupyter_core==5.8.1
 jupyter_server==2.17.0
 jupyter_server_terminals==0.5.3
 jupyterlab==4.4.6
@@ -210,7 +210,6 @@ pdf2image==1.17.0
 pexpect==4.9.0
 pgsanity==0.3.0
 pillow==11.1.0
-pip==25.3
 platformdirs==4.3.8
 plotly==6.0.0
 pluggy==1.5.0
@@ -267,8 +266,8 @@ redis==4.6.0
 referencing==0.36.2
 requests==2.32.3
 requests-cache==1.2.1
-requests_ntlm==1.3.0
 requests-oauthlib==2.0.0
+requests_ntlm==1.3.0
 rfc3339-validator==0.1.4
 rfc3986-validator==0.1.1
 rfc3987-syntax==1.1.0
@@ -284,7 +283,6 @@ seaborn==0.13.2
 SecretStorage==3.3.3
 selenium==4.9.1
 Send2Trash==1.8.3
-setuptools==80.9.0
 shellingham==1.5.4
 shillelagh==1.4.3
 shortid==0.1.2
@@ -345,7 +343,6 @@ webcolors==24.11.1
 webencodings==0.5.1
 websocket-client==1.8.0
 Werkzeug==3.1.4
-wheel==0.45.1
 wrapt==1.17.2
 wsproto==1.2.0
 WTForms==3.2.1
