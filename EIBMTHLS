@@ -1,0 +1,216 @@
+//EIBMTHLS JOB MSGCLASS=X,MSGLEVEL=(2,1),REGION=64M
+//*-------------------------------------------------------------------
+//* FILE NAME : FOREX_DCI_mmyy.XLS
+//* ESMR : 2017-1320
+//* EXTRACT DETAIL FOREX AND DCI TRANSACTIONS FOR TOTAL COMMITMENTS &
+//* CONTIGENCIES AND MONTHLY PURCHASES & SALES REPORTING
+//*-------------------------------------------------------------------
+//DELETE   EXEC PGM=IEFBR14
+//DEL01    DD DSN=SAP.PBB.FOREX.DCI.TEXT,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(0))
+//*-------------------------------------------------------------------
+//EIBMTHLS EXEC SAS609
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//DEPO     DD DSN=SAP.PBB.DEPOSIT(0),DISP=SHR
+//OUTPUT   DD DSN=SAP.PBB.FOREX.DCI.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=1000,BLKSIZE=10000),
+//            SPACE=(TRK,(10,10)),UNIT=SYSDA
+//SYSIN    DD *
+
+OPTIONS NOCENTER YEARCUTOFF=1950 COMPRESS=Y;
+
+DATA REPTDATE;
+   REPTDATE=TODAY()-DAY(TODAY());
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDT',PUT(REPTDATE,YYMMDDN6.));
+RUN;
+
+%LET BIC=('57210','57299','57510','57599','57610','57620','57631',
+          '57632','57633','57639','57711','57712','57720','57730',
+          '57799','57110','57120','57130','57200','57410','57420',
+          '57430','57500','68504','78504');
+
+*------------------------------------------------*
+*  (A) Total Commitments & Contigencies          *
+*------------------------------------------------*;
+DATA FOREX;
+   SET DEPO.K1TBL&REPTMON DEPO.DCITBL&REPTMON;
+   WHERE SUBSTR(BNMCODE,1,5) IN &BIC;
+RUN;
+PROC SORT; BY BNMCODE; RUN;
+
+DATA FOREX;
+   SET FOREX;
+   BY BNMCODE;
+   DLM='05'X;
+   FILE OUTPUT;
+   IF _N_=1 THEN DO;
+      PUT @001 'PUBLIC BANK BERHAD'
+          /    'DETAIL FOREX AND DCI TRANSACTIONS FOR TOTAL COMMITMENTS'
+               ' & CONTIGENCIES AND MONTHLY PURCHASES & SALES'
+          /
+          /    '(A) Total Commitments & Contigencies'
+          /
+          ;
+   END;
+   AMOUNT = ABS(AMOUNT);
+   IF DCIAMT IN (.,0) THEN DCIAMT = AMOUNT;
+   IF FIRST.BNMCODE THEN DO;
+      RECNO = 0; TOTAMT = 0;
+      IF SUBSTR(BNMCODE,1,5) = '68504' AND PRN < 1 THEN DO;
+      PUT @001 '(B) Monthly Purchases & Sales'
+          /
+          ;
+          PRN+1;
+      END;
+
+      IF DCDLP IN ('DCI','RFO','TFO','PFO') THEN
+          PUT @001 'BNMCODE=' BNMCODE
+          /
+          /    'No'                                  DLM
+               'Reporting Date'                      DLM
+               'Deal Type'                           DLM
+               'Deal Reference'                      DLM
+               'Customer Name'                       DLM
+               'Customer Location'                   DLM
+               'Base Currency'                       DLM
+               'Base Amount'                         DLM
+               'Spot Value'                          DLM
+               'RM Equivalent'                       DLM
+               'Alternate Currency'                  DLM
+               'Customer Type'                       DLM
+               'Customer Long Name'                  DLM
+               'Residence Country'                   DLM
+               'Transaction Type'                    DLM
+               'Buy/Sell'                            DLM
+               'Customer Group'                      DLM
+               'Status Indicator'                    DLM
+               'Contract Date'                       DLM
+               'Maturity Date'                       DLM
+               'FISS Code'                           DLM
+               'Option Type'                         DLM
+               'Strike Rate'                         DLM
+          ;
+      ELSE
+          PUT @001 'BNMCODE=' BNMCODE
+          /
+          /    'NO'                                  DLM
+               'BALANCE - ORIGINAL CURRENCY'         DLM
+               'AMOUNT'                              DLM
+               'ACCOUNT SHORT NAME'                  DLM
+               'CUSTOMER TYPE'                       DLM
+               'RESIDENCE COUNTRY'                   DLM
+               'CCY'                                 DLM
+               'PARENT COUNTRY'                      DLM
+               'DEAL TYPE'                           DLM
+               'DEAL REFERENCE'                      DLM
+               'START DATE'                          DLM
+               'MOVEMENT TYPE'                       DLM
+               'MOVEMENT SUB-TYPE'                   DLM
+               'CUSTFISS'                            DLM
+               'OTHER CURRENCY MNEMONIC'             DLM
+               'CURRENT BUSINESS DATE'               DLM
+          ;
+   END;
+   RECNO+1;
+   TOTAMT+AMOUNT;
+   IF DCDLP IN ('DCI','RFO','TFO','PFO') THEN
+      PUT @001 RECNO                                 DLM
+               REPTDATE      DDMMYY10.               DLM
+               DCDLP                                 DLM
+               DCDLR                                 DLM
+               DCCUS                                 DLM
+               DCCLC                                 DLM
+               DCBCCY                                DLM
+               DCIAMT         COMMA20.2              DLM
+               C8SPT               11.7              DLM
+               AMOUNT         COMMA20.2              DLM
+               DCACCY                                DLM
+               GFCTP                                 DLM
+               GFCUN                                 DLM
+               GFCNAL                                DLM
+               DCTRNT                                DLM
+               DCBSI                                 DLM
+               ODGRP                                 DLM
+               STATUS                                DLM
+               DCCTRD        DDMMYY10.               DLM
+               DCMTYD        DDMMYY10.               DLM
+               CUSTCD              Z2.               DLM
+               OPTYPE                                DLM
+               STKRATE                               DLM
+          ;
+   ELSE
+      PUT @001 RECNO                                 DLM
+               GWBALA         COMMA20.2              DLM
+               AMOUNT         COMMA20.2              DLM
+               GWSHN                                 DLM
+               GWCTP                                 DLM
+               GWCNAL                                DLM
+               GWCCY                                 DLM
+               GWCNAP                                DLM
+               GWDLP                                 DLM
+               GWDLR                                 DLM
+               GWSDT         DDMMYY10.               DLM
+               GWMVT                                 DLM
+               GWMVTS                                DLM
+               GWC2R                                 DLM
+               GWOCY                                 DLM
+               GWCBD         DDMMYY10.               DLM
+               ;
+
+   IF LAST.BNMCODE THEN DO;
+      OUTPUT;
+      IF DCDLP IN ('DCI','RFO','TFO','PFO') THEN
+         PUT @001                                       DLM
+                                                        DLM
+                                                        DLM
+                                                        DLM
+                                                        DLM
+                                                        DLM
+                                                        DLM
+                                                        DLM
+                  'TOTAL'                               DLM
+                  TOTAMT         COMMA20.2              DLM
+             /
+             ;
+      ELSE
+         PUT @001                                       DLM
+                  'TOTAL'                               DLM
+                  TOTAMT         COMMA20.2              DLM
+             /
+             ;
+   END;
+RUN;
+//*-------------------------------------------------------------------
+//* FTP TO SAS DATAWAREHOUSE
+//*-------------------------------------------------------------------
+//*%OPC SCAN
+//*%OPC SETVAR TOYY=(OYY-15CD)
+//*%OPC SETVAR TOMM=(OMM-15CD)
+//*RUNSFTP  EXEC COZBATCH
+//*CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(CSASSFTP)
+//*           DD *
+//*lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+//*lzopts linerule=$lr
+//*cd TextFile/Fin
+//*PUT //SAP.PBB.FOREX.DCI.TEXT  FOREX_DCI_%TOMM.%TOYY..XLS
+//*EOB
+/*
+//*-------------------------------------------------------------------
+//* FTP HOST DATASETS TO DATA REPORT REPOSITORY SYSTEM (DRR)
+//*-------------------------------------------------------------------
+//*%OPC SCAN
+//*%OPC SETVAR TOYY=(OYY-15CD)
+//*%OPC SETVAR TOMM=(OMM-15CD)
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(DRR#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+cd "FD-BNM REPORTING/PBB/BNM RPTG"
+PUT //SAP.PBB.FOREX.DCI.TEXT  FOREX_DCI_%TOMM.%TOYY..XLS
+EOB
+/*
