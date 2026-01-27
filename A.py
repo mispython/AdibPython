@@ -1,526 +1,394 @@
-import pandas as pd
-import polars as pl
-import numpy as np
-from datetime import datetime,timedelta
-
-import pyarrow as pa
-import pyarrow.parquet as pq
-
-# !!! Note that this program will only work if SAS License is valid.
-import sys
-import saspy
-import os
-import shutil
-import ast
-from pathlib import Path
-import numbers
-
-SPECS = "Specs:"
-NAMES = "Names:"
-OTHER = "Other:"
-CSV = "CSV:"
-FIRSTOBS = "Firstobs:"
-
-# Define batch date
-
-def get_reporting_dates():
-    currdate = datetime.strptime("2025-11-02 00:00:00", '%Y-%m-%d %H:%M:%S')
-    day_of_month = currdate.day
-    month = currdate.month
-    year = currdate.year
-
-    if 1 <= day_of_month <= 8:
-        reptdate = currdate - timedelta(days=day_of_month)
-        startdte = datetime(year=reptdate.year, month=reptdate.month, day=23)
-        day_of_month = 2
-    elif 9 <= day_of_month <= 15:
-        reptdate = datetime(year=year, month=month, day=8)   
-        startdte = datetime(year=reptdate.year, month=reptdate.month, day=1) 
-        day_of_month = 10
-    elif 16 <= day_of_month <= 22:
-        reptdate = datetime(year=year, month=month, day=15)   
-        startdte = datetime(year=reptdate.year, month=reptdate.month, day=9)     
-        day_of_month = 17
-    else:
-        reptdate = datetime(year=year, month=month, day=22)   
-        startdte = datetime(year=reptdate.year, month=reptdate.month, day=16) 
-        day_of_month = 24
-
-    return reptdate, startdte, day_of_month
-
-reptdate, startdte, day_of_month = get_reporting_dates()
-print(reptdate)
-file_dt = startdte.strftime('%Y%m%d')  
-batch_dt_mth = reptdate.strftime("%Y-%m-%d %H:%M:%S")
-batch_dt_str = reptdate.strftime('%Y%m%d')
-one_week_ago = reptdate - timedelta(days=8)
-
-#sas month and year
-month_str = f"{reptdate.month:02d}"
-year_str = f"{reptdate.year % 100:02d}"
-prevmonth_str = f"{one_week_ago.month:02d}"
-prevyear_str = f"{one_week_ago.year % 100:02d}"
-
-# Parquet path adapted for duckdb format
-output_folder_path = f'/parquet/dwh/ELDS/year={reptdate.strftime("%Y")}/month={reptdate.strftime("%m")}/day={reptdate.strftime("%d")}'
-
-# If folder path doesnt exist, create
-os.makedirs(output_folder_path, exist_ok=True)
-
-# Define the file path
-input_folder_path = '/host/dwh/input/ELDS'
-var_path = '/sas/python/virt_edw/Data_Warehouse/ELDS/COLUMN_CONFIG/WELN'
-
-# Extract number from file name
-def get_file_number(directory_path):
-    file_nums = []
-    try:
-        files = os.listdir(directory_path)
-
-        for file in files:
-            full_path = os.path.join(directory_path, file)
-
-            # Only take file names not folders
-            if os.path.isfile(full_path):
-                parts = file.split("_")
-                if parts[1] == batch_dt_str:
-                    base_num = file.rsplit('_', 1)[1]
-                    file_nums.append((file, base_num))
-
-        return file_nums
-
-    except FileNotFoundError:
-        print(f"Error: The directory '{directory_path}' was not found")
-        return []
-    
-    except Exception as e:
-        print(f"Error in get_file_number: {e}")
-        return []
-    
-# Get column details from mapping files
-def load_variables(var_path, script_name):
-    # Get current script name without extension
-    input_path = os.path.join(f"{var_path}", f"{script_name}_output.txt")
-
-    if not os.path.exists(input_path):
-        raise FileNotFoundError(f"Input file '{input_path}' not found.")
-
-    with open(input_path, 'r') as file:
-        content = file.read()
-
-    # Extract specs and names from text using simple markers
-    specs = []
-    names = []
-    other = []
-    try:
-
-        # Extract firstobs
-        firstobs_start = content.index(FIRSTOBS) + len(FIRSTOBS)
-        firstobs_end = content.index(CSV)
-        firstobs_str = content[firstobs_start:firstobs_end].strip()
-        firstobs = int(firstobs_str) - 1
-
-        # Check if input file type is CSV
-        csv_start = content.index(CSV) + len(CSV)
-        csv_end = content.index(SPECS)
-        csv_str = content[csv_start:csv_end].strip()
-
-        # Locate positions of the metadata sections
-        specs_start = content.index(SPECS) + len(SPECS)
-        names_start = content.index(NAMES) + len(NAMES)
-        other_start = content.index(OTHER)
-
-        # Extract text blocks
-        specs_str = content[specs_start:names_start - + len(NAMES)].strip()
-        names_str = content[names_start:other_start].strip()
-        other_str = content[other_start + len(OTHER):].strip()
-
-        # Safely evaluate to Python lists
-        specs = ast.literal_eval(f"[{specs_str}]")
-        names = ast.literal_eval(f"[{names_str}]")
-        other = ast.literal_eval(f"[{other_str}]")  # this will be list of strings like "ascii, numeric, 0"
-
-        # If needed, split `other` entries into individual parts:
-        column_types, column_subtypes, column_decimals = [], [], []
-        for entry in other:
-            col_type, subtype, decimal = [x.strip() for x in entry.split(",")]
-            column_types.append(col_type)
-            column_subtypes.append(subtype)
-            column_decimals.append(int(decimal)) 
-
-    except Exception as e:
-        raise ValueError(f"Failed to parse variable file: {e}")
-
-    return specs, names, other, column_types, column_subtypes, column_decimals, firstobs, csv_str
-
-# Check if table exists as parquet and delete if present
-def check_and_delete_table(output_file):
-    if os.path.exists(output_file):
-        print(f"Table {output_file} exists. Deleting...")
-        os.remove(output_file)
-        print(f"Deleted: {output_file}")
-    else:
-        print(f"Table {output_file} does not exist.")
-
-# Remove comma in numerical field     
-def parse_comma_format(s):
-    s = s.strip().replace(',', '')
-    return s
-
-# Check if x is a valid number
-def is_number(x):
-    try:
-        float(x)
-        return True
-    except (ValueError, TypeError):
-        return False
-
-# Character formatting
-def parse_ascii_format(subtype, s, decimal):
-    if subtype == 'comma':
-        if pd.notna(s) and str(s).strip().lower() != 'nan' and str(s).strip() != '-' and str(s).strip() !='':
-            return parse_comma_format(s)
-    elif subtype == 'numeric':
-        if pd.notna(s) and is_number(s) and str(s).strip() !='':
-            return format_number(s)
-    elif decimal and decimal > 0:
-        return round(float(s), decimal)
-    elif subtype == 'upcase':
-        return s.upper()
-    else:
-        return s
-
-# Convert dates to SAS format
-def parse_date_format(subtype, s):
-    if s != 'nan' and pd.notna(s):
-        if subtype == 'ddmmyy':
-            if s.strip():
-                dt = datetime.strptime(s, "%d/%m/%Y").date()
-                return safe_to_days(dt.year, dt.month, dt.day)
-        else:
-            return s
-    return s
-
-# Supplementary function to column_format
-def parse_value(s, ctype, subtype, decimal):
-    s = s.strip()
-    if not s:
-        return ''
-    try:
-        if ctype == 'ascii':
-            s = parse_ascii_format(subtype, s, decimal)
-        elif ctype == 'date':
-            s = parse_date_format(subtype, s)
-        return s
-    except Exception as e:
-        print(f"Error in parse_value: {e}")
-        return ''
-
-# Ensure numerical values does not contain str
-def is_valid_number(x):
-    return pd.notna(x) and isinstance(x, numbers.Number) and str(x).strip().lower() != 'nan' and str(x).strip() != '-' and str(x).strip() !=''
-
-def format_number(x):
-    return x
-
-# Format values based on column type
-def column_format(df, col, ctype, subtype, decimal):
-
-    df[col] = df[col].astype(str).apply(lambda x, ct = ctype, st = subtype, d = decimal: parse_value(x, ct, st, d))
-
-    if subtype == 'numeric' or ctype == 'date':
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-        df[col] = df[col].apply(
-            lambda x, d = decimal: format_number(x) if is_valid_number(x) else x
-        )
-    elif subtype == 'comma':
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    else:
-        df[col] = df[col].astype(str)
-
-    return df
-
-# Parse format on DataFrame
-def apply_parsing(df):
-# Apply parsing column by column
-    for i, col in enumerate(df.columns):
-        ctype = column_types[i]
-        subtype = column_subtypes[i]
-        decimal = column_decimals[i]
-        df = column_format(df, col, ctype, subtype, decimal)
-            
-    return df
-
-# Drop exact duplicate rows from DataFrame
-def common_drop_dups(df):
-    initial_count = len(df)
-    df = df.drop_duplicates()
-    removed_count = initial_count - len(df)
-    print(f"Removed {removed_count} duplicate rows")
-    return df             
-
-# Save to Parquet format using PyArrow
-def save_to_parquet(df, output_file):
-    if df is not None:
-        try:
-            table = pa.Table.from_pandas(df, preserve_index = False)
-            pq.write_table(table, output_file)
-            print(f"Data saved to {output_file}")
-        except Exception as e:  
-            print(f"Error saving data: {e}")
-    else:
-        print("No data to save.")
-
-# Validation: Record count checker
-def check_record_count(dest_path: str) -> int:
-    if Path(dest_path).exists():
-        df = pd.read_parquet(dest_path)
-        return len(df)
-    return 0
-
-# Helper function for date conversion
-def safe_int_convert(value, default=1):
-    try:
-        return int(value)
-    except ValueError:
-        return default
-
-# Convert to SAS date format (Number of days since 1st Jan 1960)
-def safe_to_days(yy, mm, dd):
-    if np.isnan(yy) or np.isnan(mm) or np.isnan(dd):
-        return np.nan
-    else:
-        try:
-            y = int(yy) if int(yy) > 0 else 1900
-            m = int(mm) if int(mm) > 0 else 1
-            d = int(dd) if int(dd) > 0 else 1
-            dt = datetime (y, m, d)
-
-            # Fault catching (if equals to default value)
-            if dt == datetime(1900,1,1,0,0,0):
-                return np.nan
-            else:
-                return(pd.Timestamp(dt) - sas_origin).days
-        except Exception as e:
-            print(f"Error in safe_to_days: {e}")
-            return np.nan
-
-# Entry Point
-sas = saspy.SASsession()
-sas_origin = pd.Timestamp("1960-01-01")
-base_num = ['01','03','12','28','49']
-
-df_01= pl.read_parquet(f"{output_folder_path}/CRMS_ELN_WK_01.parquet")
-df_03= pl.read_parquet(f"{output_folder_path}/CRMS_ELN_WK_03.parquet")
-df_12= pl.read_parquet(f"{output_folder_path}/CRMS_ELN_WK_12.parquet")
-df_28= pl.read_parquet(f"{output_folder_path}/CRMS_ELN_WK_28.parquet")
-df_49= pl.read_parquet(f"{output_folder_path}/CRMS_ELN_WK_49.parquet")
-
-ELNA1 = df_01[["AANO","BRANCH","CUSTCODE"]]
-print(ELNA1)
-ELNA3 = df_03[["AANO","MAANO"]]
-print(ELNA3)
-ELNA12 = df_12
-print(ELNA12)
-ELNA28 = df_28
-print(ELNA28)
-ELNA49 = df_49
-print(ELNA49)
-
-########################################################
-
-ECMS = ELNA49[["MAANO","ACCTNO","CCOLLNO","CCOLLTYPE"]]
-
-########################################################
-# Convert Polars DataFrames to Pandas for compatibility with existing code
-ELNA1 = ELNA1.to_pandas()
-ELNA3 = ELNA3.to_pandas()
-ELNA12 = ELNA12.to_pandas()
-ELNA28 = ELNA28.to_pandas()
-ECMS = ECMS.to_pandas()
-
-# ---------------------------- DATA ELNA -------------------------------
-# MERGE ELNA1(keep= AANO BRANCH CUSTCODE IN=A) ELNA3(keep= AANO MAANO);
-# BY AANO; IF A;  → left join ELNA1 ⋈ ELNA3 on AANO, keep only ELNA1 hits
-
-# make join key same type (string, trimmed, no trailing ".0")
-ELNA1["AANO"] = ELNA1["AANO"].astype("string").str.strip().str.replace(r"\.0$", "", regex=True)
-ELNA3["AANO"] = ELNA3["AANO"].astype("string").str.strip().str.replace(r"\.0$", "", regex=True)
-
-# PROC SORT DATA=ELNA NODUPKEY; BY MAANO;
-# NODUPKEY → keep first per MAANO (even if other cols differ)
-ELNA = (
-    ELNA1[["AANO", "BRANCH", "CUSTCODE"]]
-      .merge(ELNA3[["AANO", "MAANO"]].drop_duplicates("AANO", keep="last"), on="AANO", how="left")
-      .dropna(subset=["MAANO"])
-      .drop_duplicates(subset=["MAANO"], keep="first")
-      .reset_index(drop=True)
-)
-
-# --- NODUPRECS on ELNA12 (sort by MAANO, drop exact dup rows) ---
-ELNA12 = (
-    ELNA12.sort_values("MAANO", kind="mergesort")
-          .drop_duplicates(keep="first")
-          .reset_index(drop=True)
-)
-
-# ensure join key dtype matches
-ELNA12["MAANO"] = ELNA12["MAANO"].astype("string").str.strip()
-ELNA["MAANO"]   = ELNA["MAANO"].astype("string").str.strip()
-
-# # ------------------------- DATA ELDS.ELNA12_... ------------------------
-# # MERGE ELNA12(IN=A) ELNA; BY MAANO; IF A; IF CUSTCODE IN (...);
-# # Branch split: BRANCH >= 3000 → IELDS else ELDS; KEEP list
-
-ELNA12_MERGED = ELNA12.merge(
-    ELNA[["MAANO", "BRANCH", "CUSTCODE"]],
-    on="MAANO",
-    how="left",
-    validate="m:1"
-)
-
-# # Filter CUSTCODE in (77,78,95,96)
-# --- MERGE ELNA12 (left) with ELNA on MAANO; then keep only target custcodes ---
-ELNA12_MERGED = ELNA12_MERGED[ELNA12_MERGED["CUSTCODE"].isin([77, 78, 95, 96])]
-
-ELNA12_KEEP = [
-    "MAANO","FNAME","BANK1","TYPEACCT1","TYPEFAC1","LMTAPP1","BALANCE1","BANK2",
-    "TYPEACCT2","TYPEFAC2","LMTAPP2","BALANCE2","OORACC1","OORACC2","TBANK1",
-    "TOORACC1","TTYPEACC1","TTYPEFAC1","TLMTAPP1","TBALANCE1","TBANK2",
-    "TOORACC2","TTYPEACC2","TTYPEFAC2","TLMTAPP2","TBALANCE2","CADBCR"
-]
-
-# Some columns might not exist in source; to emulate SAS keep-as-missing, ensure presence
-# add any missing columns as NA to emulate SAS KEEP behavior
-for col in ELNA12_KEEP:
-    if col not in ELNA12_MERGED.columns:
-        ELNA12_MERGED[col] = pd.NA
-
-ELNA12_MERGED = ELNA12_MERGED[ELNA12_KEEP + ["BRANCH"]]
-
-ELDS_ELNA12   = ELNA12_MERGED[ELNA12_MERGED["BRANCH"] < 3000][ELNA12_KEEP].reset_index(drop=True)
-IELDS_ELNA12  = ELNA12_MERGED[ELNA12_MERGED["BRANCH"] >= 3000][ELNA12_KEEP].reset_index(drop=True)
-
-# ----------------------- DATA ELDS.ACC_CONDUCT_AA_... --------------------
-# --- NODUPRECS on ELNA28 ---
-ELNA28 = (
-    ELNA28.sort_values("MAANO", kind="mergesort")
-          .drop_duplicates(keep="first")
-          .reset_index(drop=True)
-)
-
-# ensure join key dtype matches
-ELNA28["MAANO"] = ELNA28["MAANO"].astype("string").str.strip()
-
-# MERGE ELNA28 (left) with ELNA on MAANO
-ELNA28_MERGED = ELNA28.merge(
-    ELNA[["MAANO", "BRANCH"]],
-    on="MAANO",
-    how="left",
-    validate="m:1"
-)
-
-ACCCOND_KEEP = [
-    "MAANO","NAME","ID","BRRWERTYPE","SINCEDT","ACCNATURE","ODLIMIT","AMD","ADB",
-    "EXCESSFREQ","CHQRTRN","ACCACTVTY","CACONDUCT","REPAYMENT","BTCONDUCT"
-]
-
-for col in ACCCOND_KEEP:
-    if col not in ELNA28_MERGED.columns:
-        ELNA28_MERGED[col] = pd.NA
-
-ELNA28_MERGED = ELNA28_MERGED[ACCCOND_KEEP + ["BRANCH"]]
-
-ELDS_ACC   = ELNA28_MERGED[(ELNA28_MERGED["BRANCH"] < 3000) | (ELNA28_MERGED["BRANCH"].isna())][ACCCOND_KEEP].reset_index(drop=True)
-IELDS_ACC  = ELNA28_MERGED[ELNA28_MERGED["BRANCH"] >= 3000][ACCCOND_KEEP].reset_index(drop=True)
-
-def assign_libname(lib_name, sas_path):
-    log = sas.submit(f"""libname {lib_name} '{sas_path}';""")
-    return log
-
-def drop_table(lib_name, cur_data):
-
-    sas_code = f"""
-            %macro drop_if_exists(lib=work, table=);
-                %if %sysfunc(exist(&lib..&table)) %then %do;
-                    proc sql;
-                        drop table &lib..&table;
-                    quit;
-                %end;
-            %mend;
-
-            %drop_if_exists(lib={lib_name}, table={cur_data});
-        """
-    log = sas.submit(sas_code)
-
-    return log
-
-def set_data(df, lib_name, ctrl_name, cur_data, prev_data):
-    sas.df2sd(df,table=cur_data, libref='work')
-
-    log = sas.submit(f"""
-            proc sql noprint;
-               create table colmeta as 
-               select name, type, length
-               from dictionary.columns
-               where libname = upcase("{ctrl_name}")  
-                     and memname = upcase("{prev_data}");
-            quit
-               """)
-    
-    print(log["LOG"])
-    df_meta = sas.sasdata("colmeta", libref="work").to_df()
-    cols = df_meta["name"].dropna().tolist()
-    col_list = ", ".join(cols)
-
-    casted_cols =[]
-    for _, row in df_meta.iterrows():
-        col = row["name"]
-        length = row['length']
-        if row['type'].strip().lower() == 'char' and pd.notnull(length) and length > 0:
-            casted_cols.append(f"input(trim({col}), ${int(length)}.) as {col}")
-        else:
-            casted_cols.append(col)
-
-    casted_cols = ",\n ".join(casted_cols)
-
-    log = sas.submit(f"""
-                proc sql noprint;
-                     create table {lib_name}.{cur_data} as
-                     select {col_list} from {ctrl_name}.{prev_data}(obs=0)
-                     union corr
-                     select {casted_cols} from work.{cur_data};
-                quit;
-                """)
-    
-    print(log["LOG"]) 
-    return log
-    
-assign_libname("elds" , "/dwh/elds")
-assign_libname("ields" , "/dwh/ields")
-assign_libname("ctl_elds" , "/sas/python/virt_edw/Data_Warehouse/SASTABLE")
-
-# Determine dataset suffixes
-suffix_map = {
-    2:  ("3","4"),
-    10: ("4","1"),
-    17: ("1","2"), 
-    24: ("2","3")
-}
-
-if day_of_month in suffix_map:
-    prev_suffix, cur_suffx = suffix_map[day_of_month]
-
-    labels = ["elna12_", "ielna12_", "acc_conduct_aa_", "iacc_conduct_aa_", "ecms"]
-    data   = {}
-
-    for label in labels:
-        data[f"c_{label}"] = f"{label}{month_str}{cur_suffx}{year_str}"
-else:
-    raise ValueError(f"Unsupported batch day: {day_of_month}")
-
-log1 = set_data(ELDS_ELNA12, "elds", "ctl_elds", data["c_elna12_"], "elna12_ctl")
-log1 = set_data(IELDS_ELNA12, "ields", "ctl_elds", data["c_ielna12_"], "ielna12_ctl")
-log1 = set_data(ELDS_ACC, "elds", "ctl_elds", data["c_acc_conduct_aa_"], "acc_conduct_aa_ctl")
-log1 = set_data(IELDS_ACC, "ields", "ctl_elds", data["c_iacc_conduct_aa_"], "iacc_conduct_aa_ctl")
-log1 = set_data(ECMS, "elds", "ctl_elds", data["c_ecms"], "ecms_ctl")
+shape: (11_956, 3)
+┌───────────────┬────────┬──────────┐
+│ AANO          ┆ BRANCH ┆ CUSTCODE │
+│ ---           ┆ ---    ┆ ---      │
+│ str           ┆ i64    ┆ f64      │
+╞═══════════════╪════════╪══════════╡
+│ IMO/000750/25 ┆ 5      ┆ 67.0     │
+│ SAM/000723/25 ┆ 25     ┆ 59.0     │
+│ SPG/000963/25 ┆ 26     ┆ 67.0     │
+│ SGM/001452/25 ┆ 47     ┆ 67.0     │
+│ MRI/000923/25 ┆ 50     ┆ 66.0     │
+│ …             ┆ …      ┆ …        │
+│ JHL/000505/25 ┆ 196    ┆ 77.0     │
+│ JRL/001062/25 ┆ 29     ┆ 78.0     │
+│ JRL/001062/25 ┆ 29     ┆ 78.0     │
+│ BSA/000455/25 ┆ 293    ┆ 78.0     │
+│ BSA/000455/25 ┆ 293    ┆ 78.0     │
+└───────────────┴────────┴──────────┘
+shape: (11_956, 2)
+┌───────────────┬───────────────┐
+│ AANO          ┆ MAANO         │
+│ ---           ┆ ---           │
+│ str           ┆ str           │
+╞═══════════════╪═══════════════╡
+│ IMO/000750/25 ┆ IMO/000750/25 │
+│ SAM/000723/25 ┆ SAM/000723/25 │
+│ SPG/000963/25 ┆ SPG/000963/25 │
+│ SGM/001452/25 ┆ SGM/001452/25 │
+│ MRI/000923/25 ┆ MRI/000923/25 │
+│ …             ┆ …             │
+│ JHL/000505/25 ┆ JHL/000505/25 │
+│ JRL/001062/25 ┆ JRL/001062/25 │
+│ JRL/001062/25 ┆ JRL/001062/25 │
+│ BSA/000455/25 ┆ BSA/000455/25 │
+│ BSA/000455/25 ┆ BSA/000455/25 │
+└───────────────┴───────────────┘
+shape: (17_116, 38)
+┌───────────────┬─────────────────────────────────┬──────┬───────┬───┬───────────┬──────────┬───────────┬────────┐
+│ MAANO         ┆ FNAME                           ┆ PROP ┆ SHRES ┆ … ┆ TTYPEFAC2 ┆ TLMTAPP2 ┆ TBALANCE2 ┆ CADBCR │
+│ ---           ┆ ---                             ┆ ---  ┆ ---   ┆   ┆ ---       ┆ ---      ┆ ---       ┆ ---    │
+│ str           ┆ str                             ┆ str  ┆ str   ┆   ┆ str       ┆ str      ┆ str       ┆ str    │
+╞═══════════════╪═════════════════════════════════╪══════╪═══════╪═══╪═══════════╪══════════╪═══════════╪════════╡
+│ IMO/000750/25 ┆ BAN SOONG HENG SDN. BHD.        ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+│ IMO/000750/25 ┆ TAN WENG HUAT                   ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+│ IMO/000750/25 ┆ TAN SIONG HENG                  ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+│ IMO/000750/25 ┆ CHA SOK SEE                     ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+│ SAM/000723/25 ┆ XENERGI SDN. BHD.               ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+│ …             ┆ …                               ┆ …    ┆ …     ┆ … ┆ …         ┆ …        ┆ …         ┆ …      │
+│ TMG/000556/25 ┆ MEHALA A/P SANDERAN             ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+│ JHL/000505/25 ┆ KHAIRULERWAN SHAH BIN AHMAD SA… ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+│ JHL/000505/25 ┆ SITI HAWA BINTI YASIN           ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+│ JRL/001062/25 ┆ PRAKASH A/L BALA                ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+│ BSA/000455/25 ┆ TAN SU SZE                      ┆      ┆       ┆ … ┆           ┆          ┆           ┆        │
+└───────────────┴─────────────────────────────────┴──────┴───────┴───┴───────────┴──────────┴───────────┴────────┘
+shape: (8_164, 16)
+┌───────────────┬─────────────────────────────────┬──────────────┬────────────┬───┬───────────┬──────────────┬──────────────┬───────────┐
+│ MAANO         ┆ NAME                            ┆ ID           ┆ BRRWERTYPE ┆ … ┆ ACCACTVTY ┆ CACONDUCT    ┆ REPAYMENT    ┆ BTCONDUCT │
+│ ---           ┆ ---                             ┆ ---          ┆ ---        ┆   ┆ ---       ┆ ---          ┆ ---          ┆ ---       │
+│ str           ┆ str                             ┆ str          ┆ str        ┆   ┆ str       ┆ str          ┆ str          ┆ str       │
+╞═══════════════╪═════════════════════════════════╪══════════════╪════════════╪═══╪═══════════╪══════════════╪══════════════╪═══════════╡
+│ JRC/001563/25 ┆ Versatile Materials Sdn Bhd     ┆ 762018H      ┆ Applicant  ┆ … ┆ Active    ┆ N/A          ┆ Satisfactory ┆ N/A       │
+│ DUA/000369/25 ┆ Range Pharma Sdn. Bhd.          ┆ 144401U      ┆ Applicant  ┆ … ┆ Active    ┆ Satisfactory ┆ Satisfactory ┆ N/A       │
+│ JAH/000807/25 ┆ One B Import & Export Sdn. Bhd… ┆ 1257331P     ┆ Applicant  ┆ … ┆ Active    ┆ Satisfactory ┆ Satisfactory ┆ N/A       │
+│ JAH/000807/25 ┆ One B Import & Export Sdn. Bhd… ┆ 1257331P     ┆ Applicant  ┆ … ┆ Active    ┆ Satisfactory ┆ Satisfactory ┆ N/A       │
+│ DUA/000434/25 ┆ AIM Coffee (M) Sdn. Bhd.        ┆ 1046485M     ┆ Applicant  ┆ … ┆ Active    ┆ Satisfactory ┆ Satisfactory ┆ N/A       │
+│ …             ┆ …                               ┆ …            ┆ …          ┆ … ┆ …         ┆ …            ┆ …            ┆ …         │
+│ PLT/000841/25 ┆ Jack Chang Hong Kwang           ┆ 780722135063 ┆ Applicant  ┆ … ┆ Inactive  ┆ Satisfactory ┆ Satisfactory ┆ N/A       │
+│ BSP/000796/25 ┆ INAYATUN NISSAH BINTI ABDUL KA… ┆ 960704085742 ┆ Applicant  ┆ … ┆ Inactive  ┆ Satisfactory ┆ N/A          ┆ N/A       │
+│ TDY/000741/25 ┆ Chir Kee Kong                   ┆ 810425016089 ┆ Applicant  ┆ … ┆ Inactive  ┆ Satisfactory ┆ Satisfactory ┆ N/A       │
+│ TDY/000741/25 ┆ Chir Kee Kong                   ┆ 810425016089 ┆ Applicant  ┆ … ┆ Active    ┆ Satisfactory ┆ Satisfactory ┆ N/A       │
+│ TDY/000741/25 ┆ Chir Kee Kong                   ┆ 810425016089 ┆ Applicant  ┆ … ┆ Inactive  ┆ Satisfactory ┆ Satisfactory ┆ N/A       │
+└───────────────┴─────────────────────────────────┴──────────────┴────────────┴───┴───────────┴──────────────┴──────────────┴───────────┘
+shape: (1_437, 4)
+┌───────────────┬──────────┬─────────────┬───────────────────┐
+│ MAANO         ┆ ACCTNO   ┆ CCOLLNO     ┆ CCOLLTYPE         │
+│ ---           ┆ ---      ┆ ---         ┆ ---               │
+│ str           ┆ f64      ┆ str         ┆ str               │
+╞═══════════════╪══════════╪═════════════╪═══════════════════╡
+│ KTN/000609/25 ┆ 2.2036e9 ┆ 00027704519 ┆ New Property(1)   │
+│ ASR/000534/25 ┆ null     ┆ 00014129522 ┆ Existing Property │
+│ BPT/000675/25 ┆ null     ┆ 00022802557 ┆ Existing Property │
+│ BPT/000675/25 ┆ null     ┆ 00022802615 ┆ Existing Property │
+│ SMY/000349/25 ┆ 2.2027e9 ┆ 00027704535 ┆ New Property(1)   │
+│ …             ┆ …        ┆ …           ┆ …                 │
+│ PDN/000683/24 ┆ 2.9080e9 ┆ 00026617324 ┆ New Property(1)   │
+│ KHG/000294/25 ┆ 2.2004e9 ┆ 00027702786 ┆ New Property(1)   │
+│ BTL/000892/25 ┆ 2.2044e9 ┆ 00027695196 ┆ New Property(1)   │
+│ PDG/001344/25 ┆ 2.2043e9 ┆ 00027698869 ┆ New Property(1)   │
+│ FT0000001438  ┆ null     ┆             ┆                   │
+└───────────────┴──────────┴─────────────┴───────────────────┘
+
+165  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+165! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+166  
+167  
+168              proc sql noprint;
+169                 create table colmeta as
+170                 select name, type, length
+171                 from dictionary.columns
+172                 where libname = upcase("ctl_elds")
+173                       and memname = upcase("elna12_ctl");
+NOTE: Table WORK.COLMETA created, with 0 rows and 3 columns.
+
+174              quit
+175  
+176  
+177  ;
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+177!  *';*";*/;ods html5 (id=saspy_internal) close;ods listing;
+
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+
+242  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+242! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+243  
+244  
+245                  proc sql noprint;
+246                       create table elds.elna12_10425 as
+247                       select  from ctl_elds.elna12_ctl(obs=0)
+                                       --------           -
+                                       22                 76
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, (, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, FROM, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+ERROR 76-322: Syntax error, statement will be ignored.
+
+247!                      select  from ctl_elds.elna12_ctl(obs=0)
+                                                          -
+                                                          22
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+248                       union corr
+249                       select  from work.elna12_10425;
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+250                  quit;
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+251  
+252  
+253  ods html5 (id=saspy_internal) close;ods listing;
+
+
+381  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+381! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+382  
+383  
+384              proc sql noprint;
+385                 create table colmeta as
+386                 select name, type, length
+387                 from dictionary.columns
+388                 where libname = upcase("ctl_elds")
+389                       and memname = upcase("ielna12_ctl");
+NOTE: Table WORK.COLMETA created, with 0 rows and 3 columns.
+
+390              quit
+391  
+392  
+393  ;
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+393!  *';*";*/;ods html5 (id=saspy_internal) close;ods listing;
+
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+
+458  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+458! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+459  
+460  
+461                  proc sql noprint;
+462                       create table ields.ielna12_10425 as
+463                       select  from ctl_elds.ielna12_ctl(obs=0)
+                                       --------            -
+                                       22                  76
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, (, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, FROM, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+ERROR 76-322: Syntax error, statement will be ignored.
+
+463!                      select  from ctl_elds.ielna12_ctl(obs=0)
+                                                           -
+                                                           22
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+464                       union corr
+465                       select  from work.ielna12_10425;
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+466                  quit;
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+467  
+468  
+469  ods html5 (id=saspy_internal) close;ods listing;
+
+
+557  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+557! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+558  
+559  
+560              proc sql noprint;
+561                 create table colmeta as
+562                 select name, type, length
+563                 from dictionary.columns
+564                 where libname = upcase("ctl_elds")
+565                       and memname = upcase("acc_conduct_aa_ctl");
+NOTE: Table WORK.COLMETA created, with 0 rows and 3 columns.
+
+566              quit
+567  
+568  
+569  ;
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+569!  *';*";*/;ods html5 (id=saspy_internal) close;ods listing;
+
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+
+634  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+634! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+635  
+636  
+637                  proc sql noprint;
+638                       create table elds.acc_conduct_aa_10425 as
+639                       select  from ctl_elds.acc_conduct_aa_ctl(obs=0)
+                                       --------                   -
+                                       22                         76
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, (, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, FROM, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+ERROR 76-322: Syntax error, statement will be ignored.
+
+639!                      select  from ctl_elds.acc_conduct_aa_ctl(obs=0)
+                                                                  -
+                                                                  22
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+640                       union corr
+641                       select  from work.acc_conduct_aa_10425;
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+642                  quit;
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+643  
+644  
+645  ods html5 (id=saspy_internal) close;ods listing;
+
+
+733  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+733! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+734  
+735  
+736              proc sql noprint;
+737                 create table colmeta as
+738                 select name, type, length
+739                 from dictionary.columns
+740                 where libname = upcase("ctl_elds")
+741                       and memname = upcase("iacc_conduct_aa_ctl");
+NOTE: Table WORK.COLMETA created, with 0 rows and 3 columns.
+
+742              quit
+743  
+744  
+745  ;
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+745!  *';*";*/;ods html5 (id=saspy_internal) close;ods listing;
+
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+
+810  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+810! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+811  
+812  
+813                  proc sql noprint;
+814                       create table ields.iacc_conduct_aa_10425 as
+815                       select  from ctl_elds.iacc_conduct_aa_ctl(obs=0)
+                                       --------                    -
+                                       22                          76
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, (, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, FROM, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+ERROR 76-322: Syntax error, statement will be ignored.
+
+815!                      select  from ctl_elds.iacc_conduct_aa_ctl(obs=0)
+                                                                   -
+                                                                   22
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+816                       union corr
+817                       select  from work.iacc_conduct_aa_10425;
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+818                  quit;
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+819  
+820  
+821  ods html5 (id=saspy_internal) close;ods listing;
+
+
+878  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+878! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+879  
+880  
+881              proc sql noprint;
+882                 create table colmeta as
+883                 select name, type, length
+884                 from dictionary.columns
+885                 where libname = upcase("ctl_elds")
+886                       and memname = upcase("ecms_ctl");
+NOTE: Table WORK.COLMETA created, with 0 rows and 3 columns.
+
+887              quit
+888  
+889  
+890  ;
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+890!  *';*";*/;ods html5 (id=saspy_internal) close;ods listing;
+
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+
+955  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+955! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+956  
+957  
+958                  proc sql noprint;
+959                       create table elds.ecms10425 as
+960                       select  from ctl_elds.ecms_ctl(obs=0)
+                                       --------         -
+                                       22               76
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, (, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, FROM, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+ERROR 76-322: Syntax error, statement will be ignored.
+
+960!                      select  from ctl_elds.ecms_ctl(obs=0)
+                                                        -
+                                                        22
+ERROR 22-322: Syntax error, expecting one of the following: !, !!, &, *, **, +, ',', -, /, <, <=, <>, =, >, >=, ?, AND, BETWEEN, 
+              CONTAINS, EQ, EQT, GE, GET, GT, GTT, LE, LET, LIKE, LT, LTT, NE, NET, OR, ^=, |, ||, ~=.  
+
+961                       union corr
+962                       select  from work.ecms10425;
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+963                  quit;
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+964  
+965  
+966  ods html5 (id=saspy_internal) close;ods listing;
