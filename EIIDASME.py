@@ -1,290 +1,250 @@
 import polars as pl
-from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 
 # ==================== SETUP ====================
 BASE_PATH = Path("/path/to/data")
-LOAN_PATH = BASE_PATH / "loan"
-NPL_PATH = BASE_PATH / "npl"
-OUTPUT_PATH = BASE_PATH / "output"
+PATHS = {k: BASE_PATH / k for k in ['dp', 'eqwh', 'bnmk', 'cisieq', 'cisdp', 'cisdp2', 'output']}
 
-# ==================== REPTDATE PROCESSING ====================
-print("Processing report date...")
-reptdate_df = pl.read_parquet(LOAN_PATH / "REPTDATE.parquet")
-reptdate_val = reptdate_df[0, "REPTDATE"]
+# ==================== DATE SETUP ====================
+reptdate_val = pl.read_parquet(PATHS['dp'] / "REPTDATE.parquet")[0, "REPTDATE"]
+REPTMON, REPTYEAR = f"{reptdate_val.month:02d}", str(reptdate_val.year)[-2:]
+REPTMMMYY = reptdate_val.strftime("%b%y").upper()
+print(f"Report Date: {reptdate_val.strftime('%d-%b-%Y').upper()}")
 
-# Calculate previous month
-mm1 = reptdate_val.month - 1
-if mm1 == 0:
-    mm1 = 12
+# ==================== MAPPINGS ====================
+SME_CODES = ['41','42','43','44','46','47','48','49','51','52','53','54','66','67','68','69']
+DNBFI_CODES = ['04','05','06','30','31','32','33','34','35','36','37','38','39','40','45']
+FX_CODES = ['87','88','89']
+VALID_CODES = SME_CODES + DNBFI_CODES + FX_CODES
 
-# Current date/time
-now = datetime.now()
-dt = now.date()
-tm = now.time()
+CUST_GROUP_MAP = {**{c: 'SMALL MEDIUM ENTERPRISE (SMES)' for c in SME_CODES},
+                  **{c: 'DOMESTIC (DNBFI)' for c in DNBFI_CODES + ['4','04','5','05','6','06']},
+                  **{c: 'NON-RESIDENT/FOREIGN ENTITIES' for c in FX_CODES}}
 
-REPTMON = f"{reptdate_val.month:02d}"
-PREVMON = f"{mm1:02d}"
-RDATE = reptdate_val.strftime("%d-%B-%Y").upper()
-REPTDAT = reptdate_val
-NOWK = "4"
-RPTDTE = now.strftime("%Y%m%d")
-RPTTIME = now.strftime("%H%M%S")
-CURDAY = f"{now.day:02d}"
-CURMTH = f"{now.month:02d}"
-CURYR = f"{now.year:04d}"
-RPTYR = f"{reptdate_val.year:04d}"
-RPTDY = f"{reptdate_val.day:02d}"
+CUST_TYPE_MAP = {
+    **{c: 'BUMIPUTRA CONTROLLED SME' for c in ['41','42','43','66']},
+    **{c: 'NON-BUMIPUTRA CONTROLLED SME' for c in ['44','46','47','67']},
+    **{c: 'NON-RESIDENT CONTROLLED SME' for c in ['48','49','51','68']},
+    **{c: 'GOVERNMENT CONTROLLED SME' for c in ['52','53','54','69']},
+    '04': 'SUBSIDIARY STOCKBROKING COS.', '05': 'ASSOCIATE STOCKBROKING COS.',
+    '06': 'OTHER STOCKBROKING COS.', '30': 'DOMESTIC OTHER NBFI',
+    '31': 'SAVING INSTITUTIONS', '32': 'CREDIT CARD COMPANIES',
+    '33': 'DEVELOPMENT FINANCE INSTITUTION', '34': 'BUILDING SOCIETIES',
+    '35': 'CO-OPERATIVE SOCIESTIES', '36': 'STOCKBROKING COMPANIES',
+    '37': 'COMMODITY BROKERS', '38': 'CREDIT AND LEASING COMPANIES',
+    '39': 'UNIT TRUST COMPANIES', '40': 'INSURANCE COS AND INSURANCE RELATED ENT.',
+    '45': 'REHABILITATION INSTITUTIONS',
+    **{c: 'FOREIGN BUSINESS ENTERPRISES' for c in FX_CODES}
+}
 
-print(f"Report Date: {RDATE}, Month: {REPTMON}")
-
-# ==================== NPL DATA PROCESSING ====================
-print("Processing NPL data...")
-# Read and deduplicate NPL data
-npl_df = pl.read_parquet(NPL_PATH / "IIS.parquet").unique(subset=["ACCTNO", "NOTENO"])
-
-# Read LNNOTE data
-lnnote_df = pl.read_parquet(LOAN_PATH / "LNNOTE.parquet").select(["ACCTNO", "NOTENO", "COSTCTR"])
-
-# Merge and clean COSTCTR
-npl_df = npl_df.join(lnnote_df, on=["ACCTNO", "NOTENO"], how="left")
-npl_df = npl_df.with_columns([
-    pl.when(pl.col("COSTCTR") == 1146)
-    .then(146)
-    .otherwise(pl.col("COSTCTR"))
-    .alias("COSTCTR")
-]).sort("COSTCTR")
-
-# ==================== GLPROC PROCESSING ====================
-def create_glproc(df, is_pibb=False):
-    """Create GLPROC dataset based on loan type and conditions"""
+# ==================== HELPER FUNCTIONS ====================
+def process_islamic_account(file, filters, prodcd=None, custfiss_expr=None, extra_cols=None):
+    """Generic Islamic account processing"""
+    cols = ["ACCTNO", "CUSTFISS", "DNBFISME", "CURBAL"] + (extra_cols or [])
+    df = pl.read_parquet(PATHS['dp'] / file).filter(filters)
     
-    # Filter for PIBB if needed
-    if is_pibb:
-        df = df.filter(
-            ((3000 <= pl.col("COSTCTR")) & (pl.col("COSTCTR") <= 3999)) |
-            (pl.col("COSTCTR").is_in([4043, 4048]))
+    if custfiss_expr is None:
+        custfiss_expr = pl.col("CUSTCODE").cast(pl.Utf8).str.zfill(2)
+    
+    df = df.with_columns([custfiss_expr.alias("CUSTFISS")])
+    if prodcd:
+        df = df.with_columns([pl.lit(prodcd).alias("PRODCD")])
+    
+    return df.filter(
+        (pl.col("CUSTFISS").is_in(VALID_CODES)) | 
+        (pl.col("DNBFISME").is_in(['1','2','3']) if "DNBFISME" in df.columns else pl.lit(False))
+    ).select([c for c in cols if c in df.columns or c == "PRODCD"])
+
+def add_mappings(df):
+    """Add customer group and type mappings"""
+    return df.with_columns([
+        df["CUSTFISS"].map_dict(CUST_GROUP_MAP).alias("CUSTGROUP"),
+        df["CUSTFISS"].map_dict(CUST_TYPE_MAP).alias("CUSTTYPE"),
+        pl.col("CURBAL").alias("AMOUNT")
+    ])
+
+def write_islamic_report(filename, lines):
+    """Write report with ASA control"""
+    with open(PATHS['output'] / filename, 'w') as f:
+        for i, line in enumerate(lines):
+            prefix = "\x0c" if i == 0 or i % 60 == 0 else " "
+            f.write(prefix + line + '\n')
+
+# ==================== MNI DATA ====================
+print("Processing Islamic MNI data...")
+
+# Current Accounts
+ca_df = process_islamic_account(
+    "CURRENT.parquet",
+    (~pl.col("OPENIND").is_in(["B","C","P"])) & 
+    (((pl.col("PRODUCT") >= 400) & (pl.col("PRODUCT") <= 444)) | pl.col("PRODUCT").is_in([63,163,413])) &
+    (pl.col("CURBAL") > 0) & (~pl.col("PRODUCT").is_in([63,163,413])),
+    "ICA",
+    pl.when(pl.col("PRODUCT")==104).then(pl.lit("02"))
+      .when(pl.col("PRODUCT")==105).then(pl.lit("81"))
+      .otherwise(pl.col("CUSTCODE").cast(pl.Utf8).str.zfill(2))
+)
+
+# Savings Accounts (filtered by product '42120')
+sa_df = process_islamic_account(
+    "SAVING.parquet",
+    (~pl.col("OPENIND").is_in(["B","C","P"])) & (pl.col("CURBAL") > 0),
+    "ISA"
+).filter(pl.col("PRODCD") == "42120")
+
+# UMA Accounts
+uma_df = process_islamic_account(
+    "UMA.parquet",
+    (pl.col("OPENIND").is_in(["D","O"])) & (pl.col("CURBAL") > 0),
+    custfiss_expr=pl.when(pl.col("PRODUCT")==297)
+                     .then(pl.col("CUSTCODE").cast(pl.Utf8).str.zfill(2))
+                     .otherwise(pl.col("CUSTCODE").cast(pl.Utf8).str.zfill(2))
+)
+
+# FD Accounts
+fd_df = process_islamic_account(
+    "FD.parquet",
+    pl.col("OPENIND").is_in(["D","O"]),
+    extra_cols=["PRODUCT"]
+).with_columns([pl.col("PRODUCT").cast(pl.Utf8).alias("PRODCD")])
+
+# Combine MNI
+mni_df = add_mappings(pl.concat([ca_df, sa_df, uma_df, fd_df]))
+
+# ==================== EQ DATA ====================
+print("Processing Islamic EQ data...")
+eq_list = []
+
+# IUTMS file
+eq_file = PATHS['eqwh'] / f"IUTMS{REPTMON}.4{REPTYEAR}.parquet"
+if eq_file.exists():
+    eq_list.append(
+        pl.read_parquet(eq_file).drop("CUSTNAME").filter(
+            pl.col("SECTYPE").is_in(['IFD','ILD','ISD','IZD','IDC','IDP','IZP']) &
+            pl.col("PORTREF").is_in(['PFD','PLD','PSD','PZD','PDC']) &
+            (pl.col("CUSTFISS").is_in(VALID_CODES) | 
+             ((pl.col("CUSTFISS").cast(pl.Int32) >= 30) & (pl.col("CUSTFISS").cast(pl.Int32) <= 45)))
+        ).with_columns([pl.col("AMTOWNED").alias("AMOUNT"), pl.col("CUSTEQNO").alias("ACCTNO")])
+    )
+
+# K1TBL file (Islamic deals)
+k1_file = PATHS['bnmk'] / f"K1TBL{REPTMON}.4.parquet"
+if k1_file.exists():
+    eq_list.append(
+        pl.read_parquet(k1_file).filter(
+            ((pl.col("GWCCY")=="MYR") & (pl.col("GWMVT")=="P") & (pl.col("GWMVTS")=="M") & 
+             pl.col("GWDLP").is_in(['BCS','BCT','BCW','BQD'])) |  # Islamic deals
+            ((pl.col("GWDLP").str.slice(1,2).is_in(['MI','MT'])) & (pl.col("GWCCY")=="MYR") & 
+             (pl.col("GWMVT")=="P") & (pl.col("GWMVTS")=="M"))
+        ).with_columns([
+            pl.col("GWC2R").alias("CUSTFISS"),
+            pl.col("GWAN").cast(pl.Int64).alias("ACCTNO"),
+            pl.col("GWBALC").alias("AMOUNT")
+        ]).filter(
+            pl.col("CUSTFISS").is_in(VALID_CODES) | 
+            ((pl.col("CUSTFISS").cast(pl.Int32) >= 30) & (pl.col("CUSTFISS").cast(pl.Int32) <= 45))
         )
-    
-    # Initialize empty list for results
-    results = []
-    
-    # Define ARID mappings for different loan types and amounts
-    arid_mappings = [
-        # HPD CONV loan type
-        {
-            "condition": lambda row: row["LOANTYP"][:8] == "HPD CONV",
-            "fields": [
-                ("SUSPEND", "ISHPDTE", "HPD CONV INTEREST SUSPENDED DURING THE PERIOD (E)"),
-                ("RECOVER", "ISWHPDF", "HPD CONV WRITTEN BACK TO PROFIT & LOSS (F)"),
-                ("RECC", "ISHPDRG", "HPD CONV REVERSAL OF CURRENT YEAR IIS (G)"),
-                ("OISUSP", "ISHPDTK", "HPD CONV OI SUSPENDED DURING THE PERIOD (K)"),
-                ("OIRECV", "ISWHPDL", "HPD CONV WRITTEN BACK TO PROFIT & LOSS (L)"),
-                ("OIRECC", "ISHPDRM", "HPD CONV REVERSAL OF CURRENT YEAR IIS (M)")
-            ]
-        },
-        # Other loan types
-        {
-            "condition": lambda row: row["LOANTYP"][:8] != "HPD CONV",
-            "fields": [
-                ("SUSPEND", "ISAITAE", "HPD AITAB INTEREST SUSPENDED DURING THE PERIOD (E)"),
-                ("RECOVER", "ISAITWF", "HPD AITAB WRITTEN BACK TO PROFIT & LOSS (F)"),
-                ("RECC", "ISAITRG", "HPD AITAB REVERSAL OF CURRENT YEAR IIS (G)"),
-                ("OISUSP", "ISAITAK", "HPD AITAB OI SUSPENDED DURING THE PERIOD (K)"),
-                ("OIRECV", "ISAITWL", "HPD AITAB WRITTEN BACK TO PROFIT & LOSS (L)"),
-                ("OIRECC", "ISAITRM", "HPD AITAB REVERSAL OF CURRENT YEAR IIS (M)")
-            ]
-        }
+    )
+
+eq_combined = (pl.concat(eq_list).with_columns([
+    pl.col("CUSTFISS").map_dict(CUST_GROUP_MAP).alias("CUSTGROUP"),
+    pl.col("CUSTFISS").map_dict(CUST_TYPE_MAP).alias("CUSTTYPE")
+]).select(["ACCTNO", "CUSTFISS", "AMOUNT", "CUSTGROUP", "CUSTTYPE"])
+) if eq_list else pl.DataFrame()
+
+# ==================== MERGE WITH CUSTOMER NAMES ====================
+print("Merging customer names...")
+cisdp = pl.concat([
+    pl.read_parquet(PATHS[k] / "DEPOSIT.parquet").select(["ACCTNO","CUSTNAME"]) 
+    for k in ['cisdp','cisdp2']
+]).unique(subset=["ACCTNO"])
+cisieq = pl.read_parquet(PATHS['cisieq'] / "DEPOSIT.parquet").select(["ACCTNO","CUSTNAME"])
+
+mni_final = mni_df.join(cisdp, on="ACCTNO", how="left") if len(mni_df) > 0 else mni_df
+eq_final = eq_combined.join(cisieq, on="ACCTNO", how="left") if len(eq_combined) > 0 else eq_combined
+
+# ==================== SUMMARIZE ====================
+print("Summarizing Islamic data...")
+all_data = pl.concat([
+    df.select(["CUSTGROUP","CUSTTYPE","AMOUNT"]) 
+    for df in [mni_final, eq_final] if len(df) > 0
+]).filter(pl.col("CUSTGROUP").is_not_null())
+
+summary = all_data.group_by(["CUSTGROUP","CUSTTYPE"]).agg([pl.col("AMOUNT").sum()])
+grand_total = all_data.select(pl.col("AMOUNT").sum().alias("AMOUNT")).with_columns([
+    pl.lit("GRAND TOTAL").alias("CUSTTYPE")
+])
+
+# ==================== GENERATE REPORTS ====================
+print("Generating Islamic reports...")
+
+for group, prefix, title in [
+    ('SMALL MEDIUM ENTERPRISE (SMES)', 'SME', 'DEPOSITS ACCEPTED FROM SMALL MEDIUM ENTERPRISES (SME)'),
+    ('DOMESTIC (DNBFI)', 'DNBFI', 'DOMESTIC (DNBFI)'),
+    ('NON-RESIDENT/FOREIGN ENTITIES', 'FX', 'NON-RESIDENT/FOREIGN ENTITIES')
+]:
+    df = summary.filter(pl.col("CUSTGROUP") == group)
+    if len(df) > 0:
+        total_row = df.select(pl.col("AMOUNT").sum().alias("AMOUNT")).with_columns([
+            pl.lit("TOTAL").alias("CUSTTYPE")
+        ])
+        df = pl.concat([df, total_row]).sort("CUSTTYPE")
+        
+        lines = [
+            " "*40 + "PUBLIC ISLAMIC BANK BERHAD",
+            " "*20 + title,
+            " "*40 + f"@ {REPTMMMYY}",
+            "", group if prefix == 'SME' else "", "="*80 if prefix == 'SME' else "-"*80,
+            f"{'CUSTOMER':<40} {'TOTAL OS MYR':>20}"
+        ]
+        lines.extend([f"{row['CUSTTYPE']:<40} {row['AMOUNT']:>20,.2f}" 
+                     for row in df.iter_rows(named=True)])
+        
+        write_islamic_report(f"ISLAMIC_{prefix}_REPORT_{REPTMMMYY}.txt", lines)
+        print(f"Islamic {prefix} Total: {total_row['AMOUNT'][0]:,.2f}")
+
+# Grand Total
+write_islamic_report(f"ISLAMIC_GRAND_TOTAL_{REPTMMMYY}.txt", 
+                     [f"{'GRAND TOTAL':<40} {grand_total[0,'AMOUNT']:>20,.2f}"])
+print(f"Islamic Grand Total: {grand_total[0,'AMOUNT']:,.2f}")
+
+# ==================== DETAILED LISTS ====================
+print("Generating Islamic detailed lists...")
+
+# EQ List
+if len(eq_final) > 0:
+    lines = [
+        " "*40 + "PUBLIC ISLAMIC BANK BERHAD",
+        " "*40 + "EQ CUSTOMER LIST",
+        " "*40 + f"@ {REPTMMMYY}",
+        "", "="*100,
+        f"{'ACCTNO':<12} {'CUSTNAME':<40} {'CUSTTYPE':<30} {'AMOUNT':>15}"
     ]
-    
-    # Process each row
-    for row in df.iter_rows(named=True):
-        # Find the appropriate mapping based on loan type
-        for mapping in arid_mappings:
-            if mapping["condition"](row):
-                for field_name, arid, jdesc in mapping["fields"]:
-                    value = row.get(field_name, 0)
-                    if value not in (0, None):
-                        results.append({
-                            "COSTCTR": row["COSTCTR"],
-                            "ARID": arid,
-                            "JDESC": jdesc,
-                            "AVALUE": float(value)
-                        })
-                break  # Found the matching mapping
-    
-    # Create DataFrame and summarize
-    if results:
-        result_df = pl.DataFrame(results)
-        # Group by COSTCTR, ARID, JDESC and sum AVALUE
-        summary = result_df.group_by(["COSTCTR", "ARID", "JDESC"]).agg([
-            pl.col("AVALUE").sum().alias("AVALUE")
-        ]).sort(["COSTCTR", "ARID"])
-        return summary
-    return pl.DataFrame()
+    lines.extend([
+        f"{row.get('ACCTNO',''):<12} {row.get('CUSTNAME',''):<40} "
+        f"{row.get('CUSTTYPE',''):<30} {row.get('AMOUNT',0):>15,.2f}"
+        for row in eq_final.sort("ACCTNO").iter_rows(named=True)
+    ])
+    write_islamic_report(f"ISLAMIC_EQ_LIST_{REPTMMMYY}.txt", lines)
 
-# Create GLPROC (all data)
-print("Creating GLPROC summary...")
-glproc = create_glproc(npl_df, is_pibb=False)
+# MNI List
+if len(mni_final) > 0:
+    lines = [
+        " "*40 + "PUBLIC ISLAMIC BANK BERHAD",
+        " "*40 + "MNI CUSTOMER LIST",
+        " "*40 + f"@ {REPTMMMYY}",
+        "", "="*120,
+        f"{'ACCTNO':<12} {'CUSTNAME':<40} {'CUSTFISS':<8} {'DNBFISME':<8} "
+        f"{'PRODCD':<10} {'CUSTTYPE':<30} {'AMOUNT':>15}"
+    ]
+    lines.extend([
+        f"{row.get('ACCTNO',''):<12} {row.get('CUSTNAME',''):<40} "
+        f"{row.get('CUSTFISS',''):<8} {row.get('DNBFISME',''):<8} "
+        f"{row.get('PRODCD',''):<10} {row.get('CUSTTYPE',''):<30} "
+        f"{row.get('AMOUNT',0):>15,.2f}"
+        for row in mni_final.sort("ACCTNO").iter_rows(named=True)
+    ])
+    write_islamic_report(f"ISLAMIC_MNI_LIST_{REPTMMMYY}.txt", lines)
 
-# Create GLPROC2 (PIBB only)
-print("Creating GLPROC2 summary (PIBB)...")
-glproc2 = create_glproc(npl_df, is_pibb=True)
-
-# ==================== GLINTER FILE GENERATION ====================
-print("Generating GLINTER file...")
-
-def format_amount(value):
-    """Format amount as Z17.2 without decimal point"""
-    if value < 0:
-        sign = "-"
-        value = abs(value)
-    else:
-        sign = "+"
-    
-    # Format as string with 2 decimal places, remove decimal point
-    formatted = f"{value:017.2f}".replace(".", "")
-    return sign, formatted
-
-def write_gl_file(glproc2_df, output_path):
-    """Write GLINTER file with fixed-width format"""
-    
-    if len(glproc2_df) == 0:
-        print("No PIBB data to process")
-        return
-    
-    # Group by ARID and calculate totals
-    grouped = glproc2_df.group_by(["COSTCTR", "ARID", "JDESC"]).agg([
-        pl.col("AVALUE").sum().alias("AVALUE")
-    ]).sort(["COSTCTR", "ARID"])
-    
-    lines = []
-    
-    # Header record (record type 0)
-    header = f"INTFISF20{RPTYR}{REPTMON}{RPTDY}{RPTDTE}{RPTTIME}"
-    lines.append(header.ljust(40))
-    
-    # Initialize totals
-    amttotc = 0.0  # Credit total
-    amttotd = 0.0  # Debit total
-    cnt = 0
-    
-    # Process each ARID group
-    for row in grouped.iter_rows(named=True):
-        avalue = row["AVALUE"]
-        arid = row["ARID"]
-        costctr = row["COSTCTR"]
-        jdesc = row["JDESC"]
-        
-        # Determine sign and format amount
-        if avalue < 0:
-            asign = "-"
-            avalue_abs = abs(avalue)
-            amttotc += avalue_abs
-        else:
-            asign = "+"
-            avalue_abs = avalue
-            amttotd += avalue_abs
-        
-        # Format amount
-        _, brhamto = format_amount(avalue_abs)
-        
-        # Determine date fields based on ARID
-        if arid.endswith("COR"):
-            date_field1 = f"{CURYR}{CURMTH}{CURDAY}"
-            date_field2 = f"{CURYR}{CURMTH}{CURDAY}"
-        else:
-            date_field1 = f"{RPTYR}{REPTMON}{RPTDY}"
-            date_field2 = f"{RPTYR}{REPTMON}{RPTDY}"
-        
-        # Create detail record (record type 1)
-        cnt += 1
-        detail = (f"INTFISF21{arid:<8}PIBB{costctr:04d}" + 
-                  " " * (71-22) + "MYR" + 
-                  " " * (77-74) + date_field1 + 
-                  f"{asign}{brhamto}{jdesc:<60}{arid:<8}IISL" +
-                  " " * (252-172) + "+" + "0" * 16 +
-                  " " * (273-269) + "+" + "0" * 15 +
-                  " " * (297-289) + date_field2 +
-                  "+" + "0" * 16)
-        lines.append(detail.ljust(324))
-    
-    # Format totals
-    _, amttotco = format_amount(amttotc)
-    _, amttotdo = format_amount(amttotd)
-    
-    # Footer record (record type 9)
-    footer = (f"INTFISF29{RPTYR}{REPTMON}{RPTDY}{RPTDTE}{RPTTIME}" +
-              f"+{amttotdo}-{amttotco}+{'0'*16}-{'0'*16}{cnt:09d}")
-    lines.append(footer.ljust(117))
-    
-    # Write to file
-    gl_file = output_path / f"GLINTER_{RPTDTE}_{RPTTIME}.txt"
-    with open(gl_file, 'w') as f:
-        for line in lines:
-            f.write(line + '\n')
-    
-    print(f"GLINTER file generated: {gl_file}")
-    print(f"Records processed: {cnt}")
-    print(f"Debit total: {amttotd:,.2f}")
-    print(f"Credit total: {amttotc:,.2f}")
-
-# Generate GLINTER file
-write_gl_file(glproc2, OUTPUT_PATH)
-
-# ==================== SAVE SUMMARIES ====================
-print("Saving summary files...")
-
-if len(glproc) > 0:
-    glproc.write_parquet(OUTPUT_PATH / f"GLPROC_{REPTMON}_{RPTYR}.parquet")
-    print(f"GLPROC saved: {len(glproc)} records")
-
-if len(glproc2) > 0:
-    glproc2.write_parquet(OUTPUT_PATH / f"GLPROC2_{REPTMON}_{RPTYR}.parquet")
-    print(f"GLPROC2 (PIBB) saved: {len(glproc2)} records")
-
-# ==================== SUMMARY REPORT ====================
-print("Generating summary report...")
-report_file = OUTPUT_PATH / f"IIS_SUMMARY_{REPTMON}_{RPTYR}.txt"
-
-with open(report_file, 'w') as f:
-    f.write("INTEREST IN SUSPENSE (IIS) PROCESSING SUMMARY\n")
-    f.write("=" * 80 + "\n")
-    f.write(f"Report Date: {RDATE}\n")
-    f.write(f"Processing Date: {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
-    f.write(f"Month: {REPTMON}, Previous Month: {PREVMON}\n")
-    f.write("-" * 80 + "\n")
-    
-    f.write("\nGLPROC SUMMARY:\n")
-    if len(glproc) > 0:
-        # Summarize by ARID
-        arid_summary = glproc.group_by("ARID").agg([
-            pl.col("AVALUE").sum().alias("TOTAL_VALUE"),
-            pl.col("COSTCTR").n_unique().alias("UNIQUE_COSTCTR")
-        ])
-        
-        for row in arid_summary.iter_rows(named=True):
-            f.write(f"{row['ARID']:<10} {row['TOTAL_VALUE']:>15,.2f} ({row['UNIQUE_COSTCTR']} cost centers)\n")
-    else:
-        f.write("No data\n")
-    
-    f.write("\nGLPROC2 (PIBB) SUMMARY:\n")
-    if len(glproc2) > 0:
-        # Summarize by ARID
-        arid_summary2 = glproc2.group_by("ARID").agg([
-            pl.col("AVALUE").sum().alias("TOTAL_VALUE"),
-            pl.col("COSTCTR").n_unique().alias("UNIQUE_COSTCTR")
-        ])
-        
-        for row in arid_summary2.iter_rows(named=True):
-            f.write(f"{row['ARID']:<10} {row['TOTAL_VALUE']:>15,.2f} ({row['UNIQUE_COSTCTR']} cost centers)\n")
-    else:
-        f.write("No data\n")
-    
-    f.write("\n" + "=" * 80 + "\n")
-    f.write(f"Total NPL records processed: {len(npl_df)}\n")
-    f.write(f"GLPROC records: {len(glproc)}\n")
-    f.write(f"GLPROC2 (PIBB) records: {len(glproc2)}\n")
-
-print("Processing complete!")
-print(f"Summary report: {report_file}")
+print("Islamic processing complete!")
