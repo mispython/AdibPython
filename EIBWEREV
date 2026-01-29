@@ -1,0 +1,323 @@
+//EIBWEREV JOB MISEIS,CLASS=A,MSGCLASS=A,NOTIFY=&SYSUID
+//**
+//** SMR 2008-789 & 2009-1345
+//** KEYS NEWID & REVIEWNO.
+//**
+//DELETE   EXEC PGM=IEFBR14
+//DEL01    DD DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0)),
+//            DSN=SAP.ELDS.EBNMREV
+//DEL02    DD DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0)),
+//            DSN=SAP.PBB.EREVFTP
+//*
+//CREATE   EXEC PGM=IEFBR14
+//CRT01    DD DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5),
+//            DSN=SAP.PBB.EREVFTP
+//*
+//EIBWELWH EXEC SAS609
+//ELDSRV1  DD DISP=SHR,DSN=SAP.PBB.ELDS.NEWBNM.RV1.TEXT(0)
+//ELDSRV2  DD DISP=SHR,DSN=SAP.PBB.ELDS.NEWBNM.RV2.TEXT(0)
+//ELDSRV3  DD DISP=SHR,DSN=SAP.PBB.ELDS.NEWBNM.RV3.TEXT(0)
+//ELDSRV4  DD DISP=SHR,DSN=SAP.PBB.ELDS.NEWBNM.RV4.TEXT(0)
+//ELDSRV5  DD DISP=SHR,DSN=SAP.PBB.ELDS.NEWBNM.RV5.TEXT(0)
+//ELDSRVO  DD DSN=SAP.ELDS.EREV(0),DISP=SHR
+//ELDSRV   DD DSN=SAP.ELDS.EREV(+1),
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)
+//SYSIN    DD *
+
+OPTIONS NOCENTER YEARCUTOFF=1950;
+
+DATA ELDSRV.REPTDATE;
+   SELECT;
+      WHEN(8 <= DAY(TODAY()) <= 14) DO;
+         REPTDATE=INPUT('08'||PUT(MONTH(TODAY()), Z2.)||
+                  PUT(YEAR(TODAY()), 4.), DDMMYY8.);
+         WK      ='1';
+      END;
+      WHEN(15 <= DAY(TODAY()) <= 21) DO;
+         REPTDATE=INPUT('15'||PUT(MONTH(TODAY()), Z2.)||
+                  PUT(YEAR(TODAY()), 4.), DDMMYY8.);
+         WK      ='2';
+      END;
+      WHEN(22 <= DAY(TODAY()) <= 27) DO;
+         REPTDATE=INPUT('22'||PUT(MONTH(TODAY()), Z2.)||
+                  PUT(YEAR(TODAY()), 4.), DDMMYY8.);
+         WK      ='3';
+      END;
+      OTHERWISE DO;
+         REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
+                  PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+         WK      ='4';
+      END;
+   END;
+   CALL SYMPUT('NOWK',PUT(WK,$1.));
+   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
+   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+RUN;
+   *** CHECK INPUT FILE DATE ***;
+DATA ELDSDT1(DROP=DD MM YY);
+   INFILE ELDSRV1 OBS=1;
+   INPUT @041 DD          2.
+         @044 MM          2.
+         @047 YY          4.;
+   ELDSDT1 = MDY(MM,DD,YY);
+RUN;
+PROC PRINT; FORMAT ELDSDT1 DATE8. ;RUN;
+
+DATA _NULL_;
+  SET ELDSDT1;
+  CALL SYMPUT('ELDSDT1', PUT(ELDSDT1, DDMMYY8.));
+RUN;
+
+DATA ELDSDT2(DROP=DD MM YY);
+   INFILE ELDSRV2 OBS=1;
+   INPUT @041 DD          2.
+         @044 MM          2.
+         @047 YY          4.;
+   ELDSDT2 = MDY(MM,DD,YY);
+RUN;
+PROC PRINT; FORMAT ELDSDT2 DATE8. ;RUN;
+
+DATA _NULL_;
+  SET ELDSDT2;
+  CALL SYMPUT('ELDSDT2', PUT(ELDSDT2, DDMMYY8.));
+RUN;
+
+DATA ELDSDT3(DROP=DD MM YY);
+   INFILE ELDSRV3 OBS=1;
+   INPUT @041 DD          2.
+         @044 MM          2.
+         @047 YY          4.;
+   ELDSDT3 = MDY(MM,DD,YY);
+RUN;
+PROC PRINT; FORMAT ELDSDT3 DATE8. ;RUN;
+
+DATA _NULL_;
+  SET ELDSDT3;
+  CALL SYMPUT('ELDSDT3', PUT(ELDSDT3, DDMMYY8.));
+RUN;
+
+DATA ELDSDT4(DROP=DD MM YY);
+   INFILE ELDSRV4 OBS=1;
+   INPUT @041 DD          2.
+         @044 MM          2.
+         @047 YY          4.;
+   ELDSDT4 = MDY(MM,DD,YY);
+RUN;
+PROC PRINT; FORMAT ELDSDT4 DATE8. ;RUN;
+
+DATA _NULL_;
+  SET ELDSDT4;
+  CALL SYMPUT('ELDSDT4', PUT(ELDSDT4, DDMMYY8.));
+RUN;
+
+DATA ELDSDT5(DROP=DD MM YY);
+   INFILE ELDSRV5 OBS=1;
+   INPUT @041 DD          2.
+         @044 MM          2.
+         @047 YY          4.;
+   ELDSDT5 = MDY(MM,DD,YY);
+RUN;
+PROC PRINT; FORMAT ELDSDT5 DATE8. ;RUN;
+
+DATA _NULL_;
+  SET ELDSDT5;
+  CALL SYMPUT('ELDSDT5', PUT(ELDSDT5, DDMMYY8.));
+RUN;
+
+   /** CHECK INPUT FILE END **/
+*;
+%MACRO PROCESS;
+  %IF "&ELDSDT1"="&RDATE" AND
+      "&ELDSDT2"="&RDATE" AND
+      "&ELDSDT3"="&RDATE" AND
+      "&ELDSDT4"="&RDATE" AND
+      "&ELDSDT5"="&RDATE" %THEN %DO;
+     DATA ELN1;
+        INFILE ELDSRV1 FIRSTOBS=2;
+        INPUT @001 NEWID      $12.
+              @016 REVIEWNO   $UPCASE17.
+              @036 AANO       $UPCASE20.
+              @059 CUSTNAME   $UPCASE50.
+              @112 SEQNO      2.
+              @117 REVSTAT    $UPCASE19.
+              @139 DSERVRA    $UPCASE16. /* DEBT SERV RATIO */
+              @158 NETWORTH   $UPCASE19. /*                 */
+              @180 MAVAL      6.         /* MA              */
+              @207 YEARC      22.        /* GOOD CONDUCT    */
+              @232 YEARCR     $UPCASE38. /* GOOD CONDUCT-RE */
+              @273 YEARBS     26.        /* BUSS.YEAR       */
+              @302 MGMEXP     $UPCASE25. /* MGM EXPERIENCES */
+              @330 INDTYPE    $UPCASE10. /* TYPE OF IND.    */
+              @343 TURNOVR    $UPCASE25. /*                 */
+              @371 NETPROFT   $UPCASE15. /* TYPE OF IND.    */
+              @389 TSTRATIO   $UPCASE15. /* ACID TEST RATIO */
+              @407 LEVERGE    $UPCASE11. /*                 */
+              @421 INTCOVR    $UPCASE20. /* INT COVERG RAT. */
+              @444 AVGCPER    $UPCASE26. /* AVG COLL PERIOD */
+              @473 CASHFLW    $UPCASE35. /* CURR. YEAR NET  */
+              @511 ACCTNOD    $UPCASE50. /* ACCT DESC       */
+              @564 PRHOLDER   $UPCASE40. /* PRIME MOVER     */
+              @607 EXPERNC    4.         /* EXPR. SINCE     */
+              @614 NRDD       2.         /* NEXT REVIEW     */
+              @617 NRMM       2.
+              @620 NRYY       4.
+              @627 CPARTI     $UPCASE3.  /* CONNECTING PART */
+              @633 STAFFNM    $UPCASE50. /* STAFF NAME      */
+              @686 BODMEM     $UPCASE3.  /*                 */
+              @692 STAFFID    5.         /*                 */
+              @700 SBRANCH    $UPCASE30. /* BRANCH / HO     */
+              @733 RELNAME    $UPCASE50. /* NAME OF RELATIV */
+              @786 RELATE     $UPCASE50. /* RELATIONSHIP    */
+              @839 TOTSVAL    $6.        /* TOTAL SEC VAL   */
+              @848 MAODFL     $UPCASE6.  /* MA ON OD+FL     */
+              @857 NETEXPO    $UPCASE15. /* NET EXPOSURE    */
+              @875 SBLCBG     $UPCASE15. /* AMOUNT          */
+              @893 SBDD       2.         /* SBLC EXPIRY DD  */
+              @896 SBMM       2.         /* SBLC EXPIRY MM  */
+              @899 SBYY       4.         /* SBLC EXPIRY YY  */
+              @906 CGCAMT     $UPCASE15. /*                 */
+              @924 CGDD       2.         /* CGC EXPIRY DD   */
+              @927 CGMM       2.         /* CGC EXPIRY MM   */
+              @930 CGYY       4.         /* CGC EXPIRY YY   */
+              @937 CGCNUM     $UPCASE8.  /* CGC NUMBER      */
+              @948 XXDD       2.         /*                 */
+              @951 XXMM       2.         /*                 */
+              @954 XXYY       4.         /*                 */
+             @1010 APDD       2.         /* APPROVAL DD     */
+             @1013 APMM       2.         /* APPROVAL DD     */
+             @1016 APYY       4.         /* APPROVAL DD     */
+             @1097 CRR1       $5.        /* LATEST CRR      */
+             @1110 CRR2       $5.        /* PREV CRR        */
+             @1123 CRR3       $5.        /* FIRST CRR       */
+             ;
+              NXREVDT=MDY(NRMM,NRDD,NRYY);
+              SBLCXDT=MDY(SBMM,SBDD,SBYY);
+              CGCEXDT=MDY(CGMM,CGDD,CGYY);
+              APPRDT =MDY(APMM,APDD,APYY);
+              DROP NRMM NRDD NRYY SBMM SBDD SBYY CGMM CGDD CGYY
+                   APMM APDD APYY;
+
+     *;
+     DATA ELN2;
+        INFILE ELDSRV2 FIRSTOBS=2;
+        INPUT @001 NEWID     $UPCASE12.
+              @016 REVIEWNO   $UPCASE17.
+              @036 CUSTNME   $UPCASE140.
+              @179 OCCPAT    $UPCASE110.
+              @292 IDENTY    $UPCASE40.
+              @335 CUSTID    $UPCASE50.
+              @388 DOBDEC    $UPCASE50.  /* DATES OF BIRTH */
+              @441 AANOS     $UPCASE80.  /*                */
+              @524 FACILT    $UPCASE85.  /* FACILITIES     */
+              @612 APPRAMT   COMMA11.2   /* APPROVED AMT   */
+              @626 OPERLMT   COMMA11.2   /* APPROVED AMT   */
+              @640 BALANCE   COMMA11.2   /* BALANCE        */
+              @654 EXCSARR   COMMA11.2   /* EXCESS/ARREARS */
+              @668 GUARANTR  $UPCASE140. /* GUARANTOR NM   */
+              @811 GUARIDNO  $UPCASE80.  /* GUARANTOR ID   */
+              @894 GUARAGES  $UPCASE10.  /* GUARANTOR AGE  */
+              @907 GUARNETW  $UPCASE50.  /* GUAR.NET WORTH */
+              @978 NEW_BUSS_REG_ID  12.  /* CUST IDNO(SSM) */
+              ;
+     *;
+     DATA ELN3;
+        INFILE ELDSRV3 FIRSTOBS=2;
+        INPUT @001 NEWID     $12.
+              @016 REVIEWNO  $UPCASE17.
+              @036 PRPTDES   $UPCASE150. /* PROPERTY DESC  */
+              @189 ADDRB01   $UPCASE160. /* ADDRESS        */
+              @349 ADDRB02   $UPCASE160. /* ADDRESS CONTD. */
+              @509 ADDRB03   $UPCASE160. /* ADDRESS CONTD. */
+              @669 ADDRB04   $UPCASE300. /* ADDRESS CONTD. */
+              @972 CMSCODE   $UPCASE50.  /* CMS CPDES      */
+              ;
+     *;
+     DATA ELN4;
+       INFILE ELDSRV4 FIRSTOBS=2;
+       INPUT @001  NEWID     $UPCASE12.
+             @016  REVIEWNO  $UPCASE17.
+             @036  ODACCT    $UPCASE43.  /* CONDUCT OF ACC -OD   */
+             @082  FLACCT    $UPCASE29.  /* CONDUCT OF ACC -FL   */
+             @114  TFACCT    $UPCASE29.  /* CONDUCT OF ACC -TF   */
+             @146  BBACCT    $UPCASE29.  /* CONDUCT - BASIS      */
+             @178  BBREAS    $UPCASE70.  /* CONDUCT-REASON BASIS */
+             @251  CCACCT    $UPCASE56.  /* CONDUCT OF ACC -CCR  */
+             @310  CCREAS    $UPCASE70.  /* CONDUCT-REASON CCRIS */
+          /* @383  BNMCD     $4.            BNMCODE              */
+             @940  BNMCD     $UPCASE6.   /* BNMCODE              */
+             @390  CUSTCD    $UPCASE38.  /* CUSTOMER CODE - DESC */
+             @431  SMICD     $3.         /* SMI - Y/N            */
+             @437  NONCOM1   $UPCASE100. /* NON COMPLIANCE       */
+             @537  NONCOM2   $UPCASE100. /* NON COMPLIANCE-CONTD */
+             @637  NONCOM3   $UPCASE100. /* NON COMPLIANCE-CONTD */
+             @737  NONCOM4   $UPCASE100. /* NON COMPLIANCE-CONTD */
+             @837  NONCOM5   $UPCASE100. /* NON COMPLIANCE-CONTD */
+             @940  BNMSECT   $UPCASE6.   /* BNM SECTOR CODE      */
+             ;
+     *;
+     DATA ELN5;
+       INFILE ELDSRV5 FIRSTOBS=2;
+       INPUT @001  NEWID     $UPCASE12.
+             @016  REVIEWNO  $UPCASE17.
+             @036  JOINT     $1.         /* JOINT INDICATOR      */
+             @040  LMDD      2.          /* LAST MAINTENANCE     */
+             @043  LMMM      2.          /* LAST MAINTENANCE     */
+             @046  LMYY      4.          /* LAST MAINTENANCE     */
+             @053  REASON    $UPCASE72.  /* UNSATIS.COND-ACCT     */
+             @128  REASON1   $UPCASE71.  /* UNSATIS.COND-REL ACC  */
+             @202  TURNOVR   $UPCASE25.  /* TURNOVER              */
+             @230  CAPITAL   $UPCASE16.  /* CAPITAL               */
+             @249  ASSETS    $UPCASE16.  /* ASSETS                */
+             @268  LIABIL    $UPCASE16.  /* LIABILITIES           */
+             @287  FINCOST   $UPCASE16.  /* TOT INT/FIN COST      */
+             @306  NETPROF   $UPCASE16.  /* NET PROF B4 TAX/INTR. */
+             @325  STOCK     $UPCASE16.  /* STOCK                 */
+             @344  TOLSCORE  $UPCASE3.   /* TOTAL SCORE           */
+             @350  PTOLSCORE $UPCASE3.   /* PERCENTAGE TOTAL SCORE*/
+             @356  NEWSPACCT $UPCASE1.   /* NEW SPECIAL MENTION ACCT*/
+             @360  UPSPACCT  $UPCASE1.   /* UPLIFTED SPECIAL MEN ACCT*/
+             @364  STATUS    $UPCASE20.  /* STATUS                */
+             ;
+             LASTMDT =MDY(LMMM,LMDD,LMYY);
+     *;
+     PROC SORT DATA=ELN1; BY NEWID REVIEWNO; RUN;
+     PROC SORT DATA=ELN2; BY NEWID REVIEWNO; RUN;
+     PROC SORT DATA=ELN3; BY NEWID REVIEWNO; RUN;
+     PROC SORT DATA=ELN4; BY NEWID REVIEWNO; RUN;
+     PROC SORT DATA=ELN5; BY NEWID REVIEWNO; RUN;
+
+     DATA ELDSRV.EREV;
+        MERGE ELN1 ELN2 ELN3 ELN3 ELN4 ELN5; BY NEWID REVIEWNO; RUN;
+     RUN;
+     DATA ELDSRV.EREV;
+        SET ELDSRV.EREV ELDSRVO.EREV;
+     RUN;
+     DATA ELDSRV.EREV;
+        SET ELDSRV.EREV;
+        IF AANO = ' ' THEN DELETE;
+     RUN;
+     PROC SORT DATA=ELDSRV.EREV; BY NEWID REVIEWNO; RUN;
+     FILENAME TRANFILE 'SAP.PBB.EREVFTP' DISP=OLD;
+     PROC CPORT LIBRARY=ELDSRV FILE=TRANFILE;
+     RUN;
+  %END;
+  %ELSE %DO;
+     %IF "&ELDSDT1" NE "&RDATE" OR
+         "&ELDSDT2" NE "&RDATE" OR
+         "&ELDSDT3" NE "&RDATE" OR
+         "&ELDSDT4" NE "&RDATE" OR
+         "&ELDSDT5" NE "&RDATE" %THEN
+         %PUT THE SAP.PBB.ELDS.NEWBNM.RV1.TEXT(0) NOT DATED &RDATE;
+     %PUT THE JOB IS NOT DONE !!;
+     %DO;
+        DATA A;
+        ABORT 77;
+     %END;
+  %END;
+%MEND;
+%PROCESS;
