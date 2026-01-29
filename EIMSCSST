@@ -1,0 +1,363 @@
+//EIMSCSST JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M,NOTIFY=&SYSUID
+//**********************************************************************
+//* 2019-00000965
+//* SERVICE FEE OF RM0.50 FOR LOAN/HP REPAYMENTS VIA SST (CDT/CRM/CDM)
+//**********************************************************************
+//DELETE   EXEC PGM=IEFBR14
+//DD01     DD DSN=SAP.PBB.SST.LIST.TEXT,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//DD02     DD DSN=SAP.PBB.SST.SUMM.TEXT,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//DD01     DD DSN=SAP.PIBB.SST.LIST.TEXT,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//DD02     DD DSN=SAP.PIBB.SST.SUMM.TEXT,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//EIMSCSST EXEC SAS609
+//LNTRN    DD DSN=SAP.PBB.LNHIST,DISP=SHR
+//DPTRN    DD DSN=SAP.PBB.CRM.DPTRNSAC(0),DISP=SHR
+//CTCS     DD DSN=SAP.PBB.EPCU.CTCS,DISP=SHR
+//FEE      DD DSN=SAP.PBB.FEE.HISTORY,DISP=SHR
+//LOAN     DD DSN=SAP.PBB.MNILN(0),DISP=SHR
+//ILOAN    DD DSN=SAP.PIBB.MNILN(0),DISP=SHR
+//LISTPBB  DD DSN=SAP.PBB.SST.LIST.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(200,100),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=1000,RECFM=FB,BLKSIZE=10000)
+//SUMMPBB  DD DSN=SAP.PBB.SST.SUMM.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(200,100),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=1000,RECFM=FB,BLKSIZE=10000)
+//LISTPIB  DD DSN=SAP.PIBB.SST.LIST.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(200,100),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=1000,RECFM=FB,BLKSIZE=10000)
+//SUMMPIB  DD DSN=SAP.PIBB.SST.SUMM.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(200,100),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=1000,RECFM=FB,BLKSIZE=10000)
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//SYSIN    DD *
+
+OPTIONS YEARCUTOFF=1930 NOCENTER NODATE MISSING = '';
+DATA REPTDATE (KEEP=REPTDATE);
+   SET LOAN.REPTDATE;
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+   CALL SYMPUT('RDATE',REPTDATE);
+RUN;
+
+PROC SORT DATA=LNTRN.LNHIST OUT=LNHIST;
+   WHERE ((TRANCODE IN (614,668) AND CHANNEL IN (513,514,523,524)) OR
+          (TRANCODE IN (610,668) AND CHANNEL IN (505,515))) AND
+           REVERSED NE 'R';
+   BY ACCTNO NOTENO CHANNEL POSTDATE USERID TIMECTRL;
+RUN;
+
+DATA SSTC
+     REDRAW(KEEP=ACCTNO NOTENO CHANNEL POSTDATE USERID TIMECTRL
+                 TOTAMT TRANNO);
+   SET LNHIST;
+   TRANDT =POSTDATE;
+   TRANTM =INPUT(PUT(TIMECTRL,Z6.),HHMMSS.);
+   TRANAMT=ROUND(TOTAMT,0.01);
+   IF      TRANCODE = 614 THEN DO;
+      IF CHANNEL IN (513,514) THEN ITEM = 'CDT';
+      ELSE                         ITEM = 'CRM';
+   END;
+   ELSE IF TRANCODE = 610 THEN DO;
+      IF CHANNEL IN (505,515) THEN ITEM = 'CDM';
+   END;
+   IF TRANCODE = 668 THEN OUTPUT REDRAW;
+   ELSE                   OUTPUT SSTC;
+RUN;
+
+DATA SSTC;
+   MERGE REDRAW(RENAME=(TOTAMT=RTOTAMT TRANNO=TTRANNO)) SSTC(IN=A);
+   BY ACCTNO NOTENO CHANNEL POSTDATE USERID TIMECTRL;
+   IF A;
+   IF RTOTAMT > 0 AND TTRANNO-TRANNO = 1 THEN
+      TRANAMT=ROUND(SUM(TOTAMT,RTOTAMT),0.01);
+RUN;
+PROC SORT; BY ACCTNO NOTENO TRANDT TRANAMT; RUN;
+
+DATA CTCS;
+   SET CTCS.CTCS&REPTMON;
+   WHERE PRODIND = 'C';
+   TRANAMT=ROUND(TRANAMT,0.01);
+RUN;
+PROC SORT DATA=CTCS; BY TRANDT TRANAMT CHEQNO; RUN;
+
+DATA DPTRX(RENAME=(CHQNO=CHEQNO REPTDATE=TRANDT ACCTNO=DEBACCT));
+   SET DPTRN.DPBTRAN&REPTYEAR&REPTMON.01
+       DPTRN.DPBTRAN&REPTYEAR&REPTMON.02
+       DPTRN.DPBTRAN&REPTYEAR&REPTMON.03
+       DPTRN.DPBTRAN&REPTYEAR&REPTMON.04;
+   KEEP REPTDATE TRANAMT CHQNO ACCTNO;
+   WHERE TRANCODE=876;
+   TRANAMT=ROUND(TRANAMT,0.01);
+RUN;
+PROC SORT DATA=DPTRX NODUPKEYS; BY TRANDT TRANAMT CHEQNO DEBACCT;RUN;
+
+DATA CTCS;
+   MERGE CTCS(IN=A) DPTRX(IN=B);
+   BY TRANDT TRANAMT CHEQNO;
+   IF A;
+RUN;
+PROC SORT NODUPKEY; BY ACCTNO NOTENO TRANDT TRANAMT; RUN;
+
+DATA CONSO;
+   MERGE SSTC(IN=A) CTCS;
+   BY ACCTNO NOTENO TRANDT TRANAMT;
+   IF A;
+RUN;
+
+DATA CONSO;
+   SET CONSO;
+   BY ACCTNO NOTENO TRANDT TRANAMT;
+   IF FIRST.ACCTNO OR FIRST.NOTENO OR FIRST.TRANDT THEN TRNSEQ=0;
+   TRNSEQ+1;
+RUN;
+
+DATA LNNOTE;
+   SET LOAN.LNNOTE(KEEP=ACCBRCH ACCTNO NOTENO LOANTYPE COSTCTR NTBRCH)
+      ILOAN.LNNOTE(KEEP=ACCBRCH ACCTNO NOTENO LOANTYPE COSTCTR NTBRCH);
+   IF NTBRCH IN (.,0) THEN NTBRCH = ACCBRCH;
+RUN;
+PROC SORT DATA=LNNOTE;BY ACCTNO NOTENO;RUN;
+
+DATA CONSO;
+   MERGE CONSO(IN=A) LNNOTE;
+   BY ACCTNO NOTENO;
+   IF A;
+   IF COSTCTR IN (3000:3999,4043,4048) THEN ENTITY = 'PIB';
+   ELSE                                     ENTITY = 'PBB';
+RUN;
+PROC SORT; BY ACCTNO NOTENO TRANDT TRNSEQ; RUN;
+
+PROC SORT DATA=FEE.FEETRAN&REPTMON.4&REPTYEAR OUT=FMFEE;
+   WHERE CHANNEL = 100 AND TRANCODE IN (760,820) AND FEEPLAN = 'FM' AND
+         TRANAMT > 0 AND REVERSED NE 'R';
+   BY ACCTNO NOTENO ACTDATE TRANCODE;
+RUN;
+
+DATA FMFEE(RENAME=(ACTDATE=TRANDT TRANAMT=FEEAMT));
+   SET FMFEE;
+   BY ACCTNO NOTENO ACTDATE TRANCODE;
+   IF FIRST.ACCTNO OR FIRST.NOTENO OR FIRST.ACTDATE OR FIRST.TRANCODE
+      THEN TRNSEQ=0;
+   TRNSEQ+1;
+   IF TRANCODE = 820 THEN TRANAMT = -TRANAMT;
+   KEEP ACCTNO NOTENO ACTDATE EFFDATE TRANAMT TRNSEQ;
+RUN;
+PROC SORT; BY ACCTNO NOTENO TRANDT TRNSEQ; RUN;
+
+PROC SUMMARY DATA=FMFEE NWAY;
+   BY ACCTNO NOTENO TRANDT TRNSEQ;
+   VAR FEEAMT;
+   OUTPUT OUT=FMFEE(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA FINAL;
+   MERGE CONSO(IN=A) FMFEE;
+   BY ACCTNO NOTENO TRANDT TRNSEQ;
+   IF A;
+   IF FEEAMT = . THEN FEEAMT = 0;
+   SVCFEE = 0; WVEFEE = 0; SVCCDM = 0; WVECDM = 0;
+   SVCFEEAMT = 0; WVEFEEAMT = 0; SVCCDMAMT = 0; WVECDMAMT = 0;
+   IF ITEM = 'CDM' THEN DO;
+      IF FEEAMT > 0 THEN DO;
+         SVCCDM    = 1;
+         SVCCDMAMT = TRANAMT;
+      END;
+      ELSE DO;
+         WVECDM    = 1;
+         WVECDMAMT = TRANAMT;
+      END;
+   END;
+   ELSE DO;
+      IF FEEAMT > 0 THEN DO;
+         SVCFEE    = 1;
+         SVCFEEAMT = TRANAMT;
+      END;
+      ELSE DO;
+         WVEFEE    = 1;
+         WVEFEEAMT = TRANAMT;
+      END;
+   END;
+RUN;
+PROC SORT; BY TRANDT ACCTNO; RUN;
+
+PROC SUMMARY DATA=FINAL NWAY;
+   CLASS TRANDT;
+   VAR FEEAMT;
+   OUTPUT OUT=FMVALD(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+PROC PRINT DATA=FMVALD; FORMAT TRANDT DDMMYY10.; SUM FEEAMT; RUN;
+
+%MACRO REPORT(ENT);
+DATA TEMP;
+   SET FINAL END=LAST;
+   WHERE ENTITY = "&ENT";
+   DLM='05'X;
+   FILE LIST&ENT;
+   IF _N_ = 1 THEN
+      PUT @001 'BRANCH'                        DLM+(-1)
+               'PAYMENT DATE'                  DLM+(-1)
+               'TRANSACTION TIME'              DLM+(-1)
+               'ACCOUNT NUMBER'                DLM+(-1)
+               'NOTE NUMBER'                   DLM+(-1)
+               'TYPE OF TRANSACTIONS'          DLM+(-1)
+               'CHEQUE NUMBER'                 DLM+(-1)
+               'ACCOUNT DEBITED'               DLM+(-1)
+               'VALUE OF TRANSACTIONS (RM)'    DLM+(-1)
+               'TRANSACTION CODE'              DLM+(-1)
+               'TRANSACTION SEQUENCE'          DLM+(-1)
+               'SERVICE FEE - REPAYMENT SST'   DLM+(-1)
+          ;
+   PUT @001 NTBRCH                    DLM
+            TRANDT     DDMMYY10.      DLM
+            TRANTM        TIME9.      DLM
+            ACCTNO                    DLM
+            NOTENO                    DLM
+            ITEM                      DLM
+            CHEQNO                    DLM
+            DEBACCT                   DLM
+            TRANAMT     COMMA20.2     DLM
+            TRANCODE                  DLM
+            TRANNO                    DLM
+            FEEAMT      COMMA20.2     DLM
+       ;
+RUN;
+PROC SORT DATA=TEMP; BY NTBRCH; RUN;
+
+PROC SUMMARY DATA=TEMP NWAY;
+   BY NTBRCH;
+   VAR SVCFEE WVEFEE SVCCDM WVECDM
+       SVCFEEAMT WVEFEEAMT SVCCDMAMT WVECDMAMT;
+   OUTPUT OUT=TEMP SUM=;
+RUN;
+
+DATA _NULL_;
+   SET TEMP END=LAST;
+   TSVCCDM+SVCCDM;
+   TSVCCDMAMT+SVCCDMAMT;
+   TWVECDM+WVECDM;
+   TWVECDMAMT+WVECDMAMT;
+   TSVCFEE+SVCFEE;
+   TSVCFEEAMT+SVCFEEAMT;
+   TWVEFEE+WVEFEE;
+   TWVEFEEAMT+WVEFEEAMT;
+   DLM='05'X;
+   FILE SUMM&ENT;
+   IF _N_ = 1 THEN
+      PUT @001 'BRANCH'                  DLM+(-1)
+               'CDT/CRM'                 DLM+(-1)
+                                         DLM+(-1)
+                                         DLM+(-1)
+                                         DLM+(-1)
+               'CDM'                     DLM+(-1)
+                                         DLM+(-1)
+                                         DLM+(-1)
+                                         DLM+(-1)
+               'SST Charges Sub Total'   DLM+(-1)
+                                         DLM+(-1)
+               'SST Waived Sub Total'    DLM+(-1)
+                                         DLM+(-1)
+               'TOTAL'                   DLM+(-1)
+                                         DLM+(-1)
+      /                                  DLM+(-1)
+               'Charged'                 DLM+(-1)
+               'Amount'                  DLM+(-1)
+               'Waived'                  DLM+(-1)
+               'Amount'                  DLM+(-1)
+               'Charged'                 DLM+(-1)
+               'Amount'                  DLM+(-1)
+               'Waived'                  DLM+(-1)
+               'Amount'                  DLM+(-1)
+               'No'                      DLM+(-1)
+               'Amount'                  DLM+(-1)
+               'No'                      DLM+(-1)
+               'Amount'                  DLM+(-1)
+               'No'                      DLM+(-1)
+               'Amount'                  DLM+(-1)
+          ;
+   SVCTOT=SUM(SVCFEE,SVCCDM);
+   SVCTOTAMT=SUM(SVCFEEAMT,SVCCDMAMT);
+   WVETOT=SUM(WVEFEE,WVECDM);
+   WVETOTAMT=SUM(WVEFEEAMT,WVECDMAMT);
+   TOT=SUM(SVCTOT,WVETOT);
+   TOTAMT=SUM(SVCTOTAMT,WVETOTAMT);
+   PUT @001 NTBRCH                       DLM
+            SVCFEE      COMMA15.         DLM
+            SVCFEEAMT   COMMA20.2        DLM
+            WVEFEE      COMMA15.         DLM
+            WVEFEEAMT   COMMA20.2        DLM
+            SVCCDM      COMMA15.         DLM
+            SVCCDMAMT   COMMA20.2        DLM
+            WVECDM      COMMA15.         DLM
+            WVECDMAMT   COMMA20.2        DLM
+            SVCTOT      COMMA15.         DLM
+            SVCTOTAMT   COMMA20.2        DLM
+            WVETOT      COMMA15.         DLM
+            WVETOTAMT   COMMA20.2        DLM
+            TOT         COMMA15.         DLM
+            TOTAMT      COMMA20.2        DLM
+       ;
+   IF LAST THEN DO;
+      TSVCTOT=SUM(TSVCFEE,TSVCCDM);
+      TSVCTOTAMT=SUM(TSVCFEEAMT,TSVCCDMAMT);
+      TWVETOT=SUM(TWVEFEE,TWVECDM);
+      TWVETOTAMT=SUM(TWVEFEEAMT,TWVECDMAMT);
+      GTOT=SUM(TSVCTOT,TWVETOT);
+      GTOTAMT=SUM(TSVCTOTAMT,TWVETOTAMT);
+      PUT @001 'TOTAL'                   DLM
+               TSVCFEE    COMMA15.       DLM
+               TSVCFEEAMT COMMA20.2      DLM
+               TWVEFEE    COMMA15.       DLM
+               TWVEFEEAMT COMMA20.2      DLM
+               TSVCCDM    COMMA15.       DLM
+               TSVCCDMAMT COMMA20.2      DLM
+               TWVECDM    COMMA15.       DLM
+               TWVECDMAMT COMMA20.2      DLM
+               TSVCTOT    COMMA15.       DLM
+               TSVCTOTAMT COMMA20.2      DLM
+               TWVETOT    COMMA15.       DLM
+               TWVETOTAMT COMMA20.2      DLM
+               GTOT       COMMA15.       DLM
+               GTOTAMT    COMMA20.2      DLM
+          ;
+   END;
+RUN;
+%MEND REPORT;
+%REPORT(PBB);
+%REPORT(PIB);
+//*----------------------------------------------------------------
+//* FTP TO SAS DATAWAREHOUSE
+//*----------------------------------------------------------------
+//*%OPC SCAN
+//*%OPC SETVAR TOMM=(OMM - 15CD)
+//*%OPC SETVAR TOYY=(OYY - 15CD)
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(DRR#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+CD "BOD-BPP/SSTC - FEE FOR LOAN REPAYMENT VIA CASH & CHEQUE"
+PUT //SAP.PBB.SST.LIST.TEXT     PBB_LNREPYMT_TRX_SST@%TOMM.%TOYY..XLS
+PUT //SAP.PBB.SST.SUMM.TEXT     PBB_LNREPYMT_SUM_SST@%TOMM.%TOYY..XLS
+PUT //SAP.PIBB.SST.LIST.TEXT    PIBB_LNREPYMT_TRX_SST@%TOMM.%TOYY..XLS
+PUT //SAP.PIBB.SST.SUMM.TEXT    PIBB_LNREPYMT_SUM_SST@%TOMM.%TOYY..XLS
+CD "/CD-HOC/PBB/BOD/SST PBB REPAYMENT LISTING"
+PUT //SAP.PBB.SST.LIST.TEXT     PBB_LNREPYMT_TRX_SST@%TOMM.%TOYY..XLS
+CD "/CD-HOC/PIBB/BOD/SST PIBB REPAYMENT LISTING"
+PUT //SAP.PIBB.SST.LIST.TEXT    PIBB_LNREPYMT_TRX_SST@%TOMM.%TOYY..XLS
+CD "/CD-HOC/PBB/BOD/SST PBB REPAYMENT SUMMARY"
+PUT //SAP.PBB.SST.SUMM.TEXT     PBB_LNREPYMT_SUM_SST@%TOMM.%TOYY..XLS
+CD "/CD-HOC/PIBB/BOD/SST PIBB REPAYMENT SUMMARY"
+PUT //SAP.PIBB.SST.SUMM.TEXT    PIBB_LNREPYMT_SUM_SST@%TOMM.%TOYY..XLS
+EOB
+/*
