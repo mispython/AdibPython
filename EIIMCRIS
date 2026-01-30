@@ -1,0 +1,775 @@
+//EIIMCRIS JOB MISEIS,EIFMCRIS,CLASS=A,MSGCLASS=X,NOTIFY=&SYSUID
+/*JOBPARM S=S1M1
+//*
+//* ******************************************************
+//* MODIFY (ESMR) : 2006-1048
+//* ******************************************************
+//DELETE   EXEC PGM=IEFBR14
+//DEL01    DD DSN=SAP.PICRISS.TEXT,DISP=(MOD,DELETE,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(10,2)),
+//            DCB=(RECFM=VB,LRECL=300,BLKSIZE=27998)
+//DEL02    DD DSN=SAP.PICRISS.SASDATA,DISP=(MOD,DELETE,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(10,2)),
+//            DCB=(RECFM=VB,LRECL=300,BLKSIZE=27998)
+//*
+//CREATE   EXEC PGM=IEFBR14
+//CRT01    DD DSN=SAP.PICRISS.TEXT,DISP=(NEW,CATLG,DELETE),
+//         UNIT=SYSDA,SPACE=(CYL,(100,2,100)),
+//         DCB=(RECFM=VB,LRECL=300,BLKSIZE=27998,DSORG=PO)
+//*
+//EIFMCRIS EXEC SAS609
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//CRSSTA   DD DSN=SAP.BNM.PROGRAM(CRSSTA),DISP=SHR
+//ELDS2    DD DSN=SAP.ELDS.ELHP(0),DISP=SHR
+//BNM      DD DSN=SAP.PIBB.SASDATA,DISP=SHR
+//NPL      DD DSN=SAP.PIBB.NPL.HP.SASDATA,DISP=SHR
+//MNICS    DD DSN=SAP.PBB.MNICS(0),DISP=SHR
+//LOAN     DD DSN=SAP.PIBB.MNILN(0),DISP=SHR
+//NAME     DD DSN=SAP.PIBB.LNNAME,DISP=SHR
+//TRAN     DD DSN=SAP.PBB.CRM.LNTRNSAC(0),DISP=SHR
+//SUBA     DD DSN=SAP.PIBB.CCRIS.SPLIT,DISP=SHR
+//SAVE     DD DSN=SAP.PICRISS.SASDATA,DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(100,200),RLSE),UNIT=(,5)
+//SORTWK01  DD UNIT=SYSDA,SPACE=(CYL,800)
+//SORTWK02  DD UNIT=SYSDA,SPACE=(CYL,800)
+//SORTWK03  DD UNIT=SYSDA,SPACE=(CYL,800)
+//SORTWK04  DD UNIT=SYSDA,SPACE=(CYL,800)
+//SYSIN    DD *
+*+--------------------------------------------------------------+
+ |  PROGRAM : EIFMCRIS                                          |
+ |  REPORT  : PREPARE TEXT FILES FOR KLUNION FOR CRISS          |
+ |            (AGGREGATE APPRLIMT >= 1000000 & NPL ACCOUNTS)    |
+ |  MODIFY :     ESMR 2004-720 &2004-579                        |
+ |  MODIFICATION : CHANGE EXISTING NPL WHICH TURNED PERFORMING  |
+ |                 CLASSIFICATION FROM 'S' INTO 'P'             |
+ +--------------------------------------------------------------+;
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 MISSING=0 NOCENTER;
+*;
+%INC PGM(PFBCRFMT);
+*;
+PROC FORMAT;
+   VALUE $PAYFQ
+     '1'   = 'M'    /* MONTHLY            */
+     '2'   = 'Q'    /* QUARTERLY          */
+     '3'   = 'S'    /* SEMI-ANNUALLY      */
+     '4'   = 'A'    /* ANNUALLY           */
+     '5'   = 'B'    /* BULLET (DUE DATE)  */
+     '9'   = 'I'    /* INDEFINITE         */
+     OTHER = 'O';   /* OTHERS             */
+*;
+*------------------------------------------------*
+*  MACRO FOR CALCULATING NEXT BLDATE             *
+*------------------------------------------------*;
+%MACRO DCLVAR;
+   RETAIN D1-D12 31 D4 D6 D9 D11 30;
+   ARRAY LDAY D1-D12;
+%MEND DCLVAR;
+*;
+%MACRO NXTBLDT;
+   DD = DAY(ISSDTE);
+   MM = MONTH(BLDATE) + 1;
+   YY = YEAR(BLDATE);
+   IF MM > 12 THEN DO;
+      MM = 1; YY + 1;
+   END;
+   IF MM = 2 THEN
+      IF MOD(YY,4) = 0 THEN D2 = 29;
+      ELSE D2 = 28;
+   IF DD > LDAY(MM) THEN DD = LDAY(MM);
+   BLDATE = MDY(MM,DD,YY);
+%MEND NXTBLDT;
+*;
+*------------------------------------------------*
+*  BACKUP PREVIOUS SUBMISSION BEFORE THIS RUN    *
+*------------------------------------------------*;
+*PROC DATASETS LIB=SAVE NOLIST;
+*   AGE LOAN LOAN1-LOAN8 / MEMTYPE=DATA;
+*;
+*------------------------------------------------*
+*  GET REPTDATE                                  *
+*------------------------------------------------*;
+DATA _NULL_;
+   SET LOAN.REPTDATE;
+   SELECT(DAY(REPTDATE));
+      WHEN  (8) CALL SYMPUT('NOWK',PUT('1',$1.));
+      WHEN (15) CALL SYMPUT('NOWK',PUT('2',$1.));
+      WHEN (22) CALL SYMPUT('NOWK',PUT('3',$1.));
+      OTHERWISE CALL SYMPUT('NOWK',PUT('4',$1.));
+   END;
+   WK1='01';
+   WK2='02';
+   WK3='03';
+   WK4='04';
+   CALL SYMPUT('WK1',PUT(WK1,$2.));
+   CALL SYMPUT('WK2',PUT(WK2,$2.));
+   CALL SYMPUT('WK3',PUT(WK3,$2.));
+   CALL SYMPUT('WK4',PUT(WK4,$2.));
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+   CALL SYMPUT('RYEAR',PUT(REPTDATE,YEAR2.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+   PREVMON = MONTH(REPTDATE)- 1;
+   IF PREVMON = 0 THEN PREVMON = 12;
+   CALL SYMPUT('PREVMON',PUT(PREVMON,Z2.));
+RUN;
+*;
+*------------------------------------------------*
+*  EXTRACT PERFORMING ACCOUNTS FOR ONE MONTH     *
+*------------------------------------------------*;
+*;
+DATA PREV&PREVMON;
+   SET NPL.LOAN&PREVMON; * NPOL.LOAN&PREVMON NPIL.ILOAN&PREVMON;
+   PREVIND = 'OLD';
+   WHERE LOANTYPE < 900;
+RUN;
+PROC SORT DATA=PREV&PREVMON;
+  BY ACCTNO; RUN;
+*;
+DATA CURR&REPTMON;
+   SET NPL.LOAN&REPTMON; * NPOL.LOAN&REPTMON NPIL.ILOAN&REPTMON;
+  * WHERE LOANTYPE < 900;
+   PREVIND = 'NEW';
+RUN;
+PROC SORT DATA = CURR&REPTMON;
+  BY ACCTNO; RUN;
+*;
+DATA PERFORM;
+   MERGE PREV&PREVMON CURR&REPTMON;
+   BY ACCTNO;
+   IF PREVIND = 'OLD';
+   MARKETVL = 0;
+RUN;
+*------------------------------------------------*
+*  EXTRACT NON-PERFORMING ACCOUNTS               *
+*------------------------------------------------*;
+DATA IIS;
+  SET NPL.IIS; * NPOL.IIS NPIL.IIS;
+RUN;
+PROC SORT DATA=IIS OUT=IIS(RENAME=(RECOVER=RECIIS NTBRCH=BRANCH)
+   KEEP=NTBRCH ACCTNO NOTENO BORSTAT TOTIIS IISP SUSPEND RECOVER
+        IISPW RECC OI OIP OISUSP OIW OIRECC OIRECV DAYS);
+   BY ACCTNO NOTENO;
+*;             /*
+PROC SORT DATA=NPOL.SP1 OUT=SPOL1;
+   BY ACCTNO NOTENO;
+*;
+PROC SORT DATA=NPIL.SP1 OUT=SPIL1;
+   BY ACCTNO NOTENO;
+*; */
+PROC SORT DATA=NPL.SP2 OUT=SP2 /* (DROP=MARKETVL) REMOVE BY JENNY */;
+   BY ACCTNO NOTENO;
+*;
+PROC SORT DATA=NPL.SP1OPEN OUT=SP1OPEN;
+   BY ACCTNO NOTENO;
+*;
+PROC SORT DATA=NPL.SP1 OUT=SP1;
+   BY ACCTNO NOTENO;
+*;
+PROC SORT DATA=NPL.SP2OPEN OUT=SP2OPEN;
+   BY ACCTNO NOTENO;
+*;
+DATA SP2;
+   MERGE SP2(IN=A)
+         SP2OPEN (KEEP=ACCTNO RISKOPEN);
+   BY ACCTNO;
+   IF A;
+DATA SP2;
+   MERGE SP2(IN=A)
+         /* SP1 (KEEP=ACCTNO NOTENO MARKETVL SPP1) CHG BY JENNY ; */
+         SP1 (KEEP=ACCTNO NOTENO SPP1);
+   BY ACCTNO NOTENO;
+   IF A;
+DATA SP1;
+   MERGE SP1(IN=A)
+         SP1OPEN (KEEP=ACCTNO RISKOPEN);
+   BY ACCTNO;
+   IF A;
+*;
+DATA SP1;
+   MERGE SP1(IN=A)
+         SP2(KEEP=ACCTNO NOTENO SPP2 RISK);
+   BY ACCTNO NOTENO;
+   IF A;
+*;
+DATA SP;
+   KEEP ACCTNO NOTENO OSPRIN MARKETVL SPP SPPL RECOVER SPPW SP RISKC
+        SPMADE SPWRBACK SPP1 SPP2 RISKO OTHERFEE;
+   LENGTH RISKC $1;
+   * SET SP1(IN=A) SP2(IN=B) SPOL1(IN=C) SPIL1(IN=C);
+   SET SP2(IN=B); * SPOL1(IN=C) SPIL1(IN=C);
+   IF RISK = 'SUBSTANDARD-1' THEN RISK = 'C';
+   RISKC = SUBSTR(RISK,1,1);
+   RISKO = SUBSTR(RISKOPEN,1,1);
+   IF RISKO EQ ' ' THEN RISKO = RISKC;
+   * IF (A & (RISKO IN ('S','C'))) | (B & RISKO IN ('B','D')) | C;
+   * IF RISKO IN ('S','C') THEN SPP = SPP1;
+   * ELSE IF RISKO IN ('B','D') THEN SPP=SPP2;
+   IF B THEN SPP = SPP2;
+   /* IF C THEN SPP=SPP1;
+   IF C THEN MARKETVL = REALISVL;   */  /** FOR HL/FL **/
+   IF SP =. THEN SP = 0; IF SPPW =. THEN SPPW = 0;
+   IF SPP1 =. THEN SPP1 = 0; IF SPP2 =. THEN SPP2 = 0;
+   IF SPPL = . THEN SPPL = 0;
+   IF SPP = . THEN SPP = 0;
+   IF RECOVER = . THEN RECOVER= 0;
+   SPMADE = SPPL;
+   SPWRBACK = RECOVER;
+   /*
+   IF SUBSTR(RISKOPEN,1,1) NE ' ' THEN SPMADE = SP + SPPW - SPP;
+   IF SPMADE <= 0 THEN SPMADE = 0;
+   IF SPMADE > 0 THEN SPWRBACK = 0;
+   IF SPWRBACK >= SPP THEN SPWRBACK = SPP;
+   */
+*;
+PROC SORT;
+   BY ACCTNO NOTENO;
+*;
+DATA NPL;
+   DROP OIP OI;
+   MERGE IIS(IN=A) SP;
+   BY ACCTNO NOTENO;
+   IF A;
+   IF OIP = . THEN OIP = 0;
+   IF OI = . THEN OI = 0;
+   IISP + OIP;
+   * SUSPEND = SUM(SUSPEND,OISUSP,(-1)*RECC,(-1)*OIRECC);
+   SUSPEND = SUM(SUSPEND,OISUSP);
+   * RECIIS + OIRECV;
+   RECIIS = SUM(RECIIS, OIRECV, RECC, OIRECC);
+   IISPW + OIW;
+   IF MARKETVL = . THEN MARKETVL = 0;
+   CLASSAMT = OSPRIN - MARKETVL;
+*;
+PROC SORT DATA=LOAN.LNNOTE OUT=LNNOTE (DROP=MARKETVL BORSTAT);
+   BY ACCTNO NOTENO;
+*;
+DATA NPL;
+   MERGE PERFORM (IN=A) NPL;
+   BY ACCTNO NOTENO;
+   IF A THEN DO;
+      RISKC = 'O';
+      MARKETVL = 0;
+   END;
+*;
+PROC SORT DATA=NPL; BY ACCTNO NOTENO; RUN;
+DATA NPL;
+   MERGE NPL(IN=A) LNNOTE;
+   BY ACCTNO NOTENO;
+   IF GRANTDT > 0 THEN
+      APPRDATE = INPUT(SUBSTR(PUT(GRANTDT, Z11.), 1, 8), MMDDYY8.);
+   IF LOANTYPE IN (983,993) THEN DO;
+      RISKC= 'B';
+      RISKD= 'B';
+   END;
+   IF MORDAYARR NE . THEN DAYS = MORDAYARR;
+   IF DAYS < 90 AND TOTIIS <= 0 AND SP <= 0 AND RISKC IN ('S','C') AND
+   PAIDIND NE 'P' THEN DO;
+      IF LOANTYPE IN (128,130,700,705,380,381) THEN DO;
+         IF BORSTAT NOT IN ('F','R','I') OR USER5 NE 'N' THEN DO;
+            RISKC = 'P';
+            RISKD = 'P';
+         END;
+      END;
+      ELSE DO;
+         IF CENSUS7 ^= '9' THEN DO;
+         RISKC = 'P';
+         RISKD = 'P';
+         END;
+      END;
+   END;
+   IF PAIDIND = 'P' THEN DO;
+      CLOSEDTE=INPUT(SUBSTR(PUT(LASTTRAN,Z11.),1,8),MMDDYY8.);
+      RISKD = 'S';
+      BRANCH=NTBRCH;
+   END;
+   IF A;
+*;
+PROC SORT DATA=NAME.LNNAME OUT=LNNAME;
+   BY ACCTNO;
+*;
+*------------------------------------------------*
+*  GET LOAN NAME & ADDR                          *
+*------------------------------------------------*;
+DATA LNADDR (KEEP=ACCTNO TAXNO GUAREND NAMELN1-NAMELN5
+   RENAME=(TAXNO=OLDIC GUAREND=NEWIC));
+   MERGE LOAN.LNNOTE (IN=AA) LNNAME;
+   BY ACCTNO;
+   IF AA;
+*;
+PROC SORT DATA=LNADDR NODUPKEYS;
+   BY ACCTNO;
+RUN;
+*;
+*------------------------------------------------*
+*  GET TERMCHG FOR HP                            *
+*------------------------------------------------*;
+DATA TERMCHG;
+   KEEP ACCTNO NOTENO TERMCHG VINNO;
+   SET LOAN.LNNOTE;
+   IF REVERSED^='Y' & NOTENO^=. & PAIDIND^='P' & NTBRCH^=. &
+      LOANTYPE IN (128,130,700,705,380,381);
+   IF INTAMT > 0.1 THEN TERMCHG = INTAMT + INTEARN2;
+   ELSE TERMCHG = 0;
+*;
+PROC SORT;
+   BY ACCTNO NOTENO;
+*;
+PROC SORT DATA=BNM.ULOAN&REPTMON&NOWK OUT=ULOAN;
+   BY ACCTNO COMMNO;
+PROC SORT DATA=LOAN.LNCOMM OUT=LNCOMM;
+   BY ACCTNO COMMNO;
+*;
+DATA MERGECOM;
+   MERGE ULOAN (IN=A)
+         LNCOMM(KEEP=ACCTNO COMMNO CMBRCH CAPPDATE);
+   BY ACCTNO COMMNO;
+   IF A;
+   IF CAPPDATE > 0 THEN
+      APPRDATE= INPUT(SUBSTR(PUT(CAPPDATE, Z11.), 1, 8), MMDDYY8.);
+   IF BRANCH = 0 OR BRANCH = . THEN BRANCH = CMBRCH;
+   IF APPRLIMT >= 1000000;
+*;
+*------------------------------------------------*
+*  BASED ON M&I LOANS DETERMINE ACCOUNTS WITHIN  *
+*  TRESHOLD IE. APPRLIMT >= RM 1M OR NPL         *
+*  - OMIT LOANS TO OTHER FINANCIAL INSTITUTIONS  *
+*  AT THE SAME TIME COMBINE HP NPL               *
+*------------------------------------------------*;
+DATA LOAN;
+   SET BNM.LOAN&REPTMON&NOWK MERGECOM (IN=B);
+   WHERE CUSTCODE NOT IN (1,2,3,10,11,12,81,91);
+   IF B THEN NOTENO = COMMNO;
+   IF PRODUCT IN (128,130,700,705,380,381,709,710,750,752,760) THEN
+      APPRLIMT = NETPROC;
+   ELSE APPRLIMT = ORGBAL;
+*;
+PROC SORT; BY ACCTNO NOTENO;
+*;
+PROC SUMMARY DATA=LOAN;
+   BY ACCTNO;
+   VAR APPRLIMT;
+   OUTPUT OUT=TEMP(DROP=_TYPE_ RENAME=_FREQ_=LOANCNT) SUM=TOTLIMT;
+*;
+DATA LOAN;
+   MERGE LOAN TEMP;
+   BY ACCTNO;
+RUN;
+DATA LOAN;
+   RETAIN REPTDTE REPTDATE;
+   %DCLVAR
+   MERGE LOAN NPL(IN=B) TERMCHG;
+   BY ACCTNO NOTENO;
+   IF _N_ = 1 THEN DO;
+      REPTDTE = "&REPTDAY"||"&REPTMON"||"&REPTYEAR";
+      REPTDATE = INPUT("&RDATE",DDMMYY8.);
+   END;
+   IF DAYS = . AND BLDATE > 0 THEN DAYS = REPTDATE - BLDATE;
+   IF DAYS = . AND BLDATE = 0 THEN DAYS = 0;
+   IF BRANCH = . THEN BRANCH = NTBRCH;
+   /***  NPL (FL/HL) NOT IN NPL DATASET  ***/
+ /* THIS PART REMOVE BECAUSE HL/FL IS INCLUDED IN IISCOMB AND SPOL1 */
+ /* IF PRODUCT NOT IN (128,130,700,705) & BLDATE > 0 THEN DO;
+      IF DAYS > 364 THEN RISKC = 'B';
+      ELSE IF DAYS > 273 THEN RISKC = 'D';
+      ELSE IF DAYS > 182 THEN RISKC = 'S';
+      IF BORSTAT IN ('F','I','R','T') THEN RISKC = 'B';
+   END;              */
+
+   IF B OR TOTLIMT >= 1000000;
+
+   /***  PL (HP) - CAL PRIN & INT O/S    ***/
+
+   IF ^B THEN DO;
+      TOTIIS = 0; UHC = 0;
+      IF LOANTYPE NOT IN (128,130,700,705,380,381) THEN OSPRIN = CURBAL;
+      ELSE IF BLDATE > 0 THEN DO;
+         IF BILPAY > 0 THEN DO;
+            IF BILTOT = . THEN BILTOT = 0;
+            IF BILTOT / BILPAY <= 0.01 THEN DO;
+               %NXTBLDT
+            END;
+         END;
+         DAYS=0;
+         IF BLDATE > 0 THEN DAYS = REPTDATE - BLDATE;
+         IF TERMCHG > 0 THEN DO;
+            REMMTH1 = EARNTERM - ((YEAR(BLDATE) - YEAR(ISSDTE))*12 +
+                      MONTH(BLDATE) - MONTH(ISSDTE) + 1);
+            REMMTH2 = EARNTERM - ((YEAR(REPTDATE) - YEAR(ISSDTE))*12 +
+                      MONTH(REPTDATE) - MONTH(ISSDTE) + 1);
+            IF REMMTH2 < 0 THEN REMMTH2 = 0;
+            IF LOANTYPE IN (128,130) THEN
+                 REMMTH1 = REMMTH1 - 3;
+            ELSE REMMTH1 = REMMTH1 - 1;
+            IF REMMTH1 >= REMMTH2 THEN DO;
+               DO REMMTH = REMMTH1 TO REMMTH2 BY -1;
+                  TOTIIS + 2*(REMMTH+1)*TERMCHG/(EARNTERM*(EARNTERM+1));
+               END;
+            END;
+            IF REMMTH2 > 0 THEN
+               UHC = REMMTH2*(REMMTH2+1)*TERMCHG/(EARNTERM*(EARNTERM+1));
+         END;
+         IF CURBAL = . THEN CURBAL = 0;
+         OSPRIN = CURBAL - UHC - TOTIIS;
+      END;
+   END;
+   IF OSPRIN < 0 THEN OSPRIN = 0;
+   IF LOANTYPE IN (131,132) THEN OSPRIN = CURBAL;
+   IF BORSTAT = 'W' OR LOANTYPE IN (981,982,983,991,992,993) THEN
+      OSPRIN = 0;
+   /*
+   TOTIIS = ROUND(TOTIIS);
+   TOTBAL = ROUND(OSPRIN + TOTIIS);
+   */
+   TOTBAL = SUM(OSPRIN,TOTIIS);
+*;
+*------------------------------------------------*
+*  HOLDER/DIRECTOR (PAGE02)                      *
+*------------------------------------------------*;
+PROC SORT DATA=LOAN OUT=TEMP(KEEP=BRANCH ACCTNO REPTDTE NTBRCH
+   COSTCTR) NODUPKEY;
+   BY ACCTNO;
+*;
+DATA SAVE.DIRINFO;
+   KEEP BRANCH ACCTNO REPTDTE DIRNIC DIROIC DIRNAME COSTCTR;
+   MERGE TEMP(IN=TT) MNICS.CIS;
+   BY ACCTNO;
+   IF BRANCH = . THEN BRANCH = NTBRCH;
+   IF TT;
+   IF VERIFY(DIRNIC,'0 ') = 0 THEN DIRNIC = ' ';
+   IF VERIFY(DIROIC,'0 ') = 0 THEN DIROIC = ' ';
+*;
+PROC SORT DATA=SAVE.DIRINFO NODUP;
+   BY BRANCH ACCTNO;
+*;
+DATA _NULL_;
+   RETAIN FV 'SAP.PICRISS.TEXT(PAGE02)';
+   SET SAVE.DIRINFO;
+   FILE OUTFLE FILEVAR=FV;
+   PUT @1   '0234'             /* FI TYPE/FI CODE            */
+       @5   BRANCH   Z5.       /* COST CENTRE                */
+       @10  ACCTNO   10.       /* ACCOUNT NUMBER             */
+       @20  REPTDTE  $8.       /* REPORTING DATE             */
+       @28  DIRNIC   $20.      /* DIRECTOR NEW IC            */
+       @48  DIROIC   $20.      /* DIRECTOR OLD IC            */
+       @68  2*' '              /* DIRECTOR CONSTITUTION CODE */
+       @70  DIRNAME  $60.      /* DIRECTOR NAME              */
+       @130 'MY'               /* DIRECTOR COUNTRY CODE      */
+       @132 'N'                /* STATUS                     */
+       @133 COSTCTR  Z4.       /* COST CENTRE                */
+       ;
+*------------------------------------------------*
+*  OTHER LOAN INFO                               *
+*------------------------------------------------*;
+PROC SORT DATA=MNICS.CIS OUT=TEMP(KEEP=ACCTNO NAME SIC) NODUPKEYS;
+   BY ACCTNO;
+*;
+DATA SAVE.LOAN;
+   DROP NAMELN2-NAMELN5;
+   LENGTH ADDR1 $45 ADDR2 $90;
+   MERGE LOAN(IN=AA DROP=NAME) LNADDR TEMP;
+   BY ACCTNO;
+   IF AA;
+   IF VERIFY(NEWIC,'0 ') = 0 THEN NEWIC = ' ';
+   IF VERIFY(OLDIC,'0 ') = 0 THEN OLDIC = ' ';
+   ADDR1 = NAMELN2;
+   ADDR2 = TRIM(NAMELN3)||' '||TRIM(NAMELN4)||' '||NAMELN5;
+
+   IF 100 <= PRODUCT <= 199 THEN FITYPE = 'I';
+   ELSE FITYPE = 'C';
+   IF LOANCNT > 1 THEN LOANOPT = 'M';
+   ELSE LOANOPT = 'S';
+   IF APPRDATE > 0 THEN
+         APPRDTE = PUT(DAY(APPRDATE),Z2.)||PUT(MONTH(APPRDATE),Z2.)||
+                   PUT(APPRDATE,YEAR4.);
+   IF PAIDIND = 'P' & BALANCE <= 0 THEN DO;
+      IF CLOSEDTE > 0 THEN
+         CLOSDTE = PUT(DAY(CLOSEDTE),Z2.)||PUT(MONTH(CLOSEDTE),Z2.)||
+                   PUT(CLOSEDTE,YEAR4.);
+   END;
+   PRODCD = PUT(PRODUCT,LNPRODC.);
+   IF PAYFREQ = ' ' THEN PAYTERM = 'M';
+   ELSE PAYTERM = PUT(PAYFREQ,$PAYFQ.);
+   IF SECURE ^= 'S' THEN SECURE = 'C';
+   IF BORSTAT = 'S' THEN RESTRUC = 'R';
+   ELSE RESTRUC = 'N';
+   IF PRODUCT IN (101,210,307,709,710,910) THEN CAGAMAS = 'C';
+   ELSE CAGAMAS = 'N';
+   IF RISKC = ' ' THEN RISKC = 'P';
+   MTHARR = FLOOR(DAYS/30.00050); *22-5723;
+
+   IF PAIDIND NE 'P' OR
+     (PAIDIND = 'P' AND PUT(CLOSEDTE,YYMMN6.)="&REPTYEAR&REPTMON");
+
+   IF APPLDATE > 0
+      THEN APPLDT=INPUT(SUBSTR(PUT(APPLDATE,Z11.),1,8),MMDDYY8.);
+
+   CHKDT='31AUG04'D;
+
+   IF LOANTYPE IN (981,982,983,991,992,993) OR
+     (LOANTYPE IN (128,130,380,381,700,705) AND
+      LSTTRNCD IN (658,662) AND APPLDT NE . )
+   /* ACCTNO > 8000000000 */      THEN DO;
+      IF       CHKDT > APPLDT     THEN DELETE;
+   END;
+
+   IMPAIRED = 'N';
+   IF DAYS >= 90 OR
+      BORSTAT IN ('F','I','R') OR
+      LOANTYPE IN (983,993,678,679,698,699) OR
+      USER5 = 'N' THEN IMPAIRED = 'Y';
+*;
+PROC SORT; BY ACCTNO NOTENO; RUN;
+PROC SORT DATA=SUBA.LOAN(KEEP=ACCTNO NOTENO) OUT=SUB;
+   BY ACCTNO NOTENO;
+RUN;
+DATA SAVE.LOAN;
+   MERGE SAVE.LOAN(IN=A) SUB(IN=B);
+   BY ACCTNO NOTENO;
+   IF A AND B;
+RUN;
+PROC SORT;
+   BY BRANCH ACCTNO NOTENO;
+*;
+*------------------------------------------------*
+*  BORROWER/LOAN PROFILE (PAGE01)                *
+*------------------------------------------------*;
+DATA _NULL_;
+   RETAIN FV 'SAP.PICRISS.TEXT(PAGE01)';
+   SET SAVE.LOAN;
+   BY BRANCH ACCTNO;
+   FILE OUTFLE FILEVAR=FV;
+   IF FIRST.ACCTNO;
+   PUT @1   '0234'             /* FI TYPE/FI CODE            */
+       @5   BRANCH   Z5.       /* COST CENTRE                */
+       @10  ACCTNO   10.       /* ACCOUNT NUMBER             */
+       @20  REPTDTE  $8.       /* REPORTING DATE             */
+       @28  NEWIC    $20.      /* NEW IC                     */
+       @48  OLDIC    $20.      /* OLD IC                     */
+       @68  2*' '              /* CONSTITUTION CODE          */
+       @70  NAME     $60.      /* NAME                       */
+       @130 ADDR1    $45.      /* ADDRESS 1                  */
+       @175 ADDR2    $90.      /* ADDRESS 2 & 3 (@175,220)   */
+       @265 CUSTCD   $2.       /* CUSTOMER CODE              */
+       @267 'MY'               /* COUNTRY CODE               */
+       @269 SIC      Z4.       /* BUSINESS ACTIVITY CODE     */
+       @273 'N'                /* BUSS REG IN SABAH/SARAWAK  */
+       @274 'N'                /* STATUS                     */
+
+       @275 FITYPE   $1.       /* TYPE OF FINANCING          */
+       @276 LOANOPT  $1.       /* LOAN OPTION                */
+       @277 TOTLIMT  12.       /* APPROVE LIMIT (AGGREGATE)  */
+       @289 LOANCNT   2.       /* NO OF LOAN                 */
+       @291 'N'                /* STATUS                     */
+       @292 COSTCTR  Z4.       /* COST CENTRE                */
+       ;
+*;
+DATA CRSSTA;
+   INFILE CRSSTA;
+   INPUT  @001 ACCTNO    10.
+          @012 NOTENO     5.;
+*;
+PROC SORT; BY ACCTNO NOTENO;
+PROC SORT DATA=SAVE.LOAN OUT=SLOAN; BY ACCTNO NOTENO;
+*;
+DATA SAVE.LOAN;
+   MERGE SLOAN(IN=A) CRSSTA(IN=B); BY ACCTNO NOTENO;
+   IF A AND B THEN DELETE;
+*;
+   /** ESMR - 2009-161 MERGE WITH ELDS  **/
+DATA ELDS;
+  SET ELDS2.ELHPAX;
+  IF  BRANCH GE 3000;
+RUN;
+DATA ELDS;
+  SET ELDS         (KEEP=AANO AMOUNT AADATE RECONAME REFTYPE NMREF1
+                         NMREF2 APVNME1 APVNME2 COMPLIBY COMPLIDT
+                         COMPLIGR);
+RUN;
+DATA LOAN;
+  SET SAVE.LOAN;
+  AANO = SUBSTR(LEFT(VINNO),1,13);
+RUN;
+PROC SORT DATA=ELDS NODUPKEYS; BY AANO;
+PROC SORT DATA=LOAN; BY AANO;
+DATA SAVE.LOAN;
+   MERGE ELDS(IN=A) LOAN(IN=B);
+   BY AANO;
+   IF B;
+   IF B AND NOT A THEN AANO = ' ';
+   IF AMOUNT NE . THEN APPRLMAA = AMOUNT;
+   IF LOANTYPE IN (128,131,380,700,720,983,993)
+                                             THEN FACILITY=34331;
+   IF LOANTYPE IN (130,132,381,705,725)
+                                             THEN FACILITY=34332;
+   PURPOSES = CRISPURP;
+   IF LOANTYPE IN (700,720,128,131) OR FACILITY=34331 THEN
+      PURPOSES = 3100;
+   IF LOANTYPE IN (705,725,130,132) OR FACILITY=34332 THEN
+      PURPOSES = 3200;
+
+   FACCODE = 0;
+   IF LOANTYPE IN (128,130,131,132,380,381,700,705,709,710,720,725,
+                   750,752,760,983,993,996) THEN DO;
+      IF      PURPOSES IN ('3100','3101','3110','3120') THEN
+         FACCODE = 34333;
+      ELSE IF PURPOSES IN ('3200','3201','3300','3900','3901',
+                           '4100','5100','5200')       THEN
+         FACCODE = 34334;
+   END;
+
+   IF FACCODE = 0 THEN FACCODE = FACILITY;
+RUN;
+*;
+DATA WOBACK(KEEP=ACCTNO NOTENO);
+  SET LOAN.LNNOTE;
+  IF LOANTYPE IN (983,993) AND BORSTAT NE 'E';
+RUN;
+PROC SORT DATA=WOBACK; BY ACCTNO NOTENO; RUN;
+*;
+DATA TRANS;
+  SET TRAN.LNBTRAN&RYEAR&REPTMON&WK1
+      TRAN.LNBTRAN&RYEAR&REPTMON&WK2
+      TRAN.LNBTRAN&RYEAR&REPTMON&WK3
+      TRAN.LNBTRAN&RYEAR&REPTMON&WK4;
+RUN;
+PROC SORT DATA=TRANS; BY ACCTNO NOTENO; RUN;
+*;
+DATA TRANS;
+  MERGE WOBACK(IN=A) TRANS(IN=B); BY ACCTNO NOTENO;
+  IF A AND B;
+RUN;
+PROC SUMMARY DATA=TRANS MISSING;
+   WHERE TRANCODE IN (610,614,615,619,650,660,680);
+   BY ACCTNO NOTENO;
+   VAR TRANAMT;
+   OUTPUT OUT=TOTAMT SUM=;
+RUN;
+PROC SORT DATA=TOTAMT; BY ACCTNO NOTENO; RUN;
+PROC SORT DATA=SAVE.LOAN; BY ACCTNO NOTENO; RUN;
+*;
+DATA SAVE.LOAN;
+  MERGE SAVE.LOAN(IN=A) TOTAMT(IN=B); BY ACCTNO NOTENO;
+  IF A;
+  TOTAL=0.00;
+  IF TRANAMT = . THEN TRANAMT=0.00;
+RUN;
+*------------------------------------------------*
+*  LOAN DETAILS/CURRENCY (PAGE03)                *
+*------------------------------------------------*;
+DATA SAVE.PROV(KEEP=ACCTNO NOTENO OSPRIN TOTIIS OTHERFEE TOTBAL);
+   RETAIN FV 'SAP.PICRISS.TEXT(PAGE03)';
+   SET SAVE.LOAN;
+   IF RISKC = 'O' THEN RISKC = 'P';
+   IF RISKD EQ 'S' AND BORSTAT NE 'W' AND RISKC NE 'P' THEN RISKC= ' ';
+   IF RISKC EQ ' ' THEN DELETE;
+   IF RISKC NE 'S' AND DAYS < 90 AND BORSTAT NOT IN ('F','I','R','W')
+      AND USER5 NE 'N' THEN RISKC='P';
+   IF LOANTYPE IN (983,993,698,699) THEN DO;
+      IF PAIDIND NE 'P' THEN DO;
+         RISKC='B';
+      END;
+      ELSE IF PAIDIND='P' THEN DO;
+         IMPAIRED='N';
+         RISKC='P';
+         MTH1AA=0;
+      END;
+   END;
+   IF IMPAIRED = 'Y' AND LOANTYPE NOT IN (983,993,698,699) THEN DO;
+      PIO = ROUND(SUM(OSPRIN,TOTIIS,OTHERFEE),.01);
+      IF PIO NE ROUND(BALANCE,.01) THEN DO;
+         DIFF = SUM(BALANCE,-1*PIO);
+         TOTIIS = SUM(TOTIIS,DIFF);
+         IF TOTIIS < 0 THEN DO;
+            OSPRIN = SUM(OSPRIN,TOTIIS);
+            TOTIIS = 0;
+            IF OSPRIN < 0 THEN DO;
+               OTHERFEE = SUM(OTHERFEE,OSPRIN);
+               OSPRIN = 0;
+            END;
+         END;
+      END;
+   END;
+   FILE OUTFLE FILEVAR=FV;
+   PUT @1   '0234'             /* FI TYPE/FI CODE            */
+       @5   BRANCH   Z5.       /* COST CENTRE                */
+       @10  ACCTNO   10.       /* ACCOUNT NUMBER             */
+       @20  NOTENO   Z5.       /* LOAN NOTE NUMBER           */
+       @25  REPTDTE  $8.       /* REPORTING DATE             */
+       @33  LOANTYPE  5.       /* LOAN FACILITY CODE         */
+       @38  APPRDTE  $8.       /* DATE ACCOUNT OPENED        */
+       @46  CLOSDTE  $8.       /* DATE ACCOUNT CLOSED        */
+       @54  8*' '              /* DATE ACCOUNT CANCELLED     */
+       @62  2*' '              /* ISLAMIC CONCEPT CODE       */
+       @64  SECTORCD $4.       /* LOAN SECTORAL CODE         */
+       @68  NOTETERM  3.       /* ORIGINAL TENURE            */
+       @71  PAYTERM  $1.       /* PRIN REPAYMENT TERM        */
+       @72  MTHARR    3.       /* MTHS IN DEFAULT - PRIN O/S */
+       @75  MTHARR    3.       /* MTHS IN DEFAULT - INT O/S  */
+       @78  RISKC    $1.       /* LOAN CLASSIFICATION        */
+       @79  SECURE   $1.       /* SECURED/CLEAN LENDING      */
+       @80  'N'                /* SHARED SECURITY            */
+       @81  'N'                /* LEGAL ACTION STATUS        */
+       @82  RESTRUC  $1.       /* RESTRUCTURED/RESCHED       */
+       @83  CAGAMAS  $1.       /* CAGAMAS,DANAHARTA,NONE     */
+       @84  'S'                /* CURRENCY                   */
+       @85  'N'                /* REMARK INDICATOR           */
+       @86  'N'                /* USER DEFINED FIELD IND     */
+       @87  'N'                /* STATUS                     */
+       @88  'MYR'              /* CURRENCY CODE              */
+       @91  OSPRIN   12.2      /* PRINCIPAL OUTSTANDING      */
+       @103 TOTIIS   12.2      /* INTEREST OUTSTANDING       */
+       @115 OTHERFEE 12.2      /* OTHER FEE                  */
+       @127 TOTBAL   12.2      /* TOTAL OUTSTANDING          */
+       @139 'N'                /* STATUS                     */
+       @140 BORSTAT   $1.      /* BORROWER STATUS            */
+       @141 COSTCTR   Z4.      /* COST CENTRE                */
+       @145 AANO     $13.      /* AANO                       */
+       @158 FACILITY   5.      /* FACILITY                   */
+       @165 TOTAL    17.2      /* TOTAL IIS AND SP           */
+       @182 TRANAMT  17.2      /* TOTAL WRITTEN OFF BACK     */
+       @199 FACCODE    5.      /* NSRS FACILITY              */
+       @205 IMPAIRED  $1.      /* IMPAIRED LOAN STATUS       */
+       ;
+*;
+*------------------------------------------------*
+*  NON-PERFORMING LOAN (PAGE04)                  *
+*  FREQUENCY : QUARTERLY                         *
+*------------------------------------------------*;
+DATA _NULL_;
+   RETAIN FV 'SAP.PICRISS.TEXT(PAGE04)';
+   SET SAVE.LOAN;
+   FILE OUTFLE FILEVAR=FV;
+   IF RISKC ^= 'P' OR RISKD = 'P';
+   PUT @1   '0234'             /* FI TYPE/FI CODE            */
+       @5   BRANCH   Z5.       /* COST CENTRE                */
+       @10  ACCTNO   10.       /* ACCOUNT NUMBER             */
+       @20  NOTENO   Z5.       /* LOAN NOTE NUMBER           */
+       @25  REPTDTE  $8.       /* REPORTING DATE             */
+       @33  MARKETVL 12.2      /* REALIZABLE VALUE OF SEC    */
+       @45  CLASSAMT 12.2      /* AMOUNT CLASSIFIED          */
+       @57  IISP     12.2      /* IIS - OPENING BALANCE      */
+       @69  SUSPEND  12.2      /* IIS - SUSPENDED AMOUNT     */
+       @81  RECIIS   12.2      /* IIS - WRITTEN BACK AMOUNT  */
+       @93  IISPW    12.2      /* IIS - WRITTEN OFF AMOUNT   */
+       @105 TOTIIS   12.2      /* IIS - CLOSING BALANCE      */
+       @117 SPP      12.2      /* SP - OPENING BALANCE       */
+       @129 SPMADE   12.2      /* SP - PROVISION MADE        */
+       @141 SPWRBACK 12.2      /* SP - WRITTEN BACK AMOUNT   */
+       @153 SPPW     12.2      /* SP - WRITTEN OFF AMOUNT    */
+       @165 SP       12.2      /* SP - CLOSING BALANCE       */
+       @177 12*' '             /* SHORTFALL/ADDITIONAL SP REQ*/
+       @189 'N'                /* STATUS                     */
+       @190 COSTCTR   Z4.      /* COST CENTRE                */
+       @194 AANO     $13.      /* AANO                       */
+       @207 FACILITY   5.      /* FACILITY                   */
+       @215 TOTAL    17.2      /* TOTAL                      */
+       @232 TRANAMT  17.2      /* WRITTEN OFF BACK           */
+       @249 FACCODE    5.      /* NSRS FACILITY              */
+       @255 IMPAIRED  $1.      /* IMPAIRED LOAN STATUS       */
+       ;
+*;
+/*
+//
+
