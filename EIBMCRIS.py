@@ -1,277 +1,266 @@
-#!/usr/bin/env python3
-"""
-EIBMCRIS - BNM Credit Information Reporting System
-Concise Python conversion from SAS using DuckDB and Polars
-"""
-
-import polars as pl
+import duckdb
 from pathlib import Path
-from datetime import datetime
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-LOAN_DIR = Path("/data/loan")
-LNADDR_DIR = Path("/data/lnaddr")
-BNM_DIR = Path("/data/bnm")
-MNICS_DIR = Path("/data/mnics")
-OD_DIR = Path("/data/od")
-ODADDR_DIR = Path("/data/odaddr")
-DEPOSIT_FILE = Path("/data/deposit/gp3.txt")
-OUTPUT_DIR = Path("/output")
+BASE_DIR = Path('.')
+INPUT_DIR = BASE_DIR / 'data'
+OUTPUT_DIR = BASE_DIR / 'output'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Format mappings (PBBCRFMT)
+# PBBCRFMT - Format Definitions
 PAYFQ = {'1':'M', '2':'Q', '3':'S', '4':'A', '5':'B', '9':'I'}
 RISK = {1:'C', 2:'S', 3:'D', 4:'B'}
-LNPRODC = {}  # Add your product code mappings
+LNPRODC = {}  # Add your product code mappings: {100:'34120', 200:'34130', ...}
 
-fmt_payfq = lambda v: PAYFQ.get(str(v), 'O')
-fmt_risk = lambda v: RISK.get(v, 'P')
-fmt_lnprodc = lambda v: LNPRODC.get(v, str(v).zfill(5))
+con = duckdb.connect()
 
 # ============================================================================
 # GET REPORTING DATE
 # ============================================================================
 
-reptdate = pl.read_parquet(LOAN_DIR / "reptdate.parquet")["REPTDATE"][0]
-NOWK = {8:'1', 15:'2', 22:'3'}.get(reptdate.day, '4')
-REPTYEAR, REPTMON, REPTDAY = f"{reptdate.year}", f"{reptdate.month:02d}", f"{reptdate.day:02d}"
-REPTDTE = f"{REPTDAY}{REPTMON}{REPTYEAR}"
-REPTDATE = int((reptdate - datetime(1960, 1, 1)).days)
+try:
+    reptdate = con.execute(f"SELECT reptdate FROM read_parquet('{INPUT_DIR}/loan/reptdate.parquet')").fetchone()[0]
+except:
+    reptdate = con.execute("SELECT CURRENT_DATE").fetchone()[0]
+    print(f"Warning: Using current date {reptdate}")
 
-print(f"Report Date: {REPTDAY}/{REPTMON}/{REPTYEAR}, Week: {NOWK}")
+day = reptdate.day
+nowk = {8:'1', 15:'2', 22:'3'}.get(day, '4')
+reptyear, reptmon, reptday = str(reptdate.year), f"{reptdate.month:02d}", f"{reptdate.day:02d}"
+reptdte = reptday + reptmon + reptyear
+
+print(f"Report: {reptday}/{reptmon}/{reptyear}, Week: {nowk}")
+
+# Create format lookup tables
+con.executemany("CREATE TEMP TABLE payfq_fmt(k VARCHAR, v VARCHAR); INSERT INTO payfq_fmt VALUES(?,?)", 
+                [(k,v) for k,v in PAYFQ.items()])
+con.executemany("CREATE TEMP TABLE risk_fmt(k INT, v VARCHAR); INSERT INTO risk_fmt VALUES(?,?)", 
+                [(k,v) for k,v in RISK.items()])
+con.executemany("CREATE TEMP TABLE lnprodc_fmt(k INT, v VARCHAR); INSERT INTO lnprodc_fmt VALUES(?,?)", 
+                [(k,v) for k,v in LNPRODC.items()])
 
 # ============================================================================
-# LOAD DATA
+# BUILD BASE DATASETS
 # ============================================================================
 
-# Loan address data
-lnaddr = pl.read_parquet(LOAN_DIR / "lnnote.parquet").join(
-    pl.read_parquet(LNADDR_DIR / "lnname.parquet"), on="ACCTNO", how="inner"
-).select([
-    "ACCTNO", 
-    pl.col("TAXNO").alias("OLDIC"), 
-    pl.col("GUAREND").alias("NEWIC"),
-    "NAMELN1", "NAMELN2", "NAMELN3", "NAMELN4", "NAMELN5"
-])
+# Loan address
+con.execute(f"""
+    CREATE TEMP TABLE lnaddr AS
+    SELECT n.acctno, n.taxno AS oldic, n.guarend AS newic, 
+           n.nameln1, n.nameln2, n.nameln3, n.nameln4, n.nameln5
+    FROM read_parquet('{INPUT_DIR}/loan/lnnote.parquet') ln
+    JOIN read_parquet('{INPUT_DIR}/lnaddr/lnname.parquet') n ON ln.acctno = n.acctno
+""")
 
-# Load and merge loans
-loan = pl.concat([
-    pl.read_parquet(BNM_DIR / f"loan{REPTMON}{NOWK}.parquet"),
-    pl.read_parquet(BNM_DIR / f"uloan{REPTMON}{NOWK}.parquet").with_columns(
-        pl.col("COMMNO").alias("NOTENO")
-    )
-], how="diagonal").filter(
-    ~pl.col("CUSTCODE").is_in([1, 2, 3, 10, 11, 12, 81, 91])
-).sort("ACCTNO").with_columns(
-    (pl.col("ACCTNO").cum_count().over("ACCTNO") == 1).alias("first_acct")
-).filter(
-    pl.when(pl.col("PRODCD").is_in(['34190', '34690']))
-      .then(pl.col("first_acct")).otherwise(True)
-).drop("first_acct")
+# Load loans (regular + unsecured)
+con.execute(f"""
+    CREATE TEMP TABLE loan_base AS
+    SELECT *, CASE WHEN src='u' THEN commno ELSE noteno END AS noteno_final
+    FROM (
+        SELECT *, 'r' src FROM read_parquet('{INPUT_DIR}/bnm/loan{reptmon}{nowk}.parquet')
+        UNION ALL
+        SELECT *, 'u' src FROM read_parquet('{INPUT_DIR}/bnm/uloan{reptmon}{nowk}.parquet')
+    ) WHERE custcode NOT IN (1,2,3,10,11,12,81,91)
+""")
+
+# Deduplicate dual accounts
+con.execute("""
+    CREATE TEMP TABLE loan_dedup AS
+    SELECT * FROM (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY acctno ORDER BY acctno) AS rn
+        FROM loan_base WHERE prodcd IN ('34190','34690')
+    ) WHERE rn = 1
+    UNION ALL
+    SELECT *, 1 AS rn FROM loan_base WHERE prodcd NOT IN ('34190','34690')
+""")
 
 # Aggregate limits
-temp = loan.group_by("ACCTNO").agg([
-    pl.col("APPRLIMT").sum().alias("TOTLIMT"),
-    pl.count().alias("LOANCNT")
-])
+con.execute("CREATE TEMP TABLE temp AS SELECT acctno, SUM(apprlimt) totlimt, COUNT(*) loancnt FROM loan_dedup GROUP BY 1")
 
-# Load GP3 fixed-width file
-with open(DEPOSIT_FILE, 'r') as f:
-    gp3klu = pl.DataFrame([{
-        'BRANCH': int(ln[0:3]), 'ACCTNO': int(ln[3:13]), 'ZERO5': int(ln[13:18]),
-        'RPTDAY': int(ln[18:20]), 'RPTMON': int(ln[20:22]), 'RPTYEAR': int(ln[22:26]),
-        'SCV': float(ln[26:38]), 'IIS': float(ln[38:50]), 'IISR': float(ln[50:62]),
-        'IISW': float(ln[62:74]), 'PRINWOFF': float(ln[74:86]), 'GP3IND': ln[86:87]
-    } for ln in f]).with_columns(pl.lit(None).alias("NOTENO")).sort(["ACCTNO", "NOTENO"])
+# Load GP3 fixed-width
+con.execute(f"""
+    CREATE TEMP TABLE gp3klu AS
+    SELECT CAST(SUBSTRING(line,1,3) AS INT) branch, CAST(SUBSTRING(line,4,10) AS BIGINT) acctno,
+           CAST(SUBSTRING(line,14,5) AS INT) zero5, CAST(SUBSTRING(line,27,12) AS DECIMAL(12,2)) scv,
+           CAST(SUBSTRING(line,39,12) AS DECIMAL(14,2)) iis, CAST(SUBSTRING(line,51,12) AS DECIMAL(14,2)) iisr,
+           CAST(SUBSTRING(line,63,12) AS DECIMAL(14,2)) iisw, CAST(SUBSTRING(line,75,12) AS DECIMAL(14,2)) prinwoff,
+           SUBSTRING(line,87,1) gp3ind, NULL::INT noteno
+    FROM read_csv('{INPUT_DIR}/deposit.txt', columns={{'line':'VARCHAR'}}, header=false)
+""")
 
-# ============================================================================
-# PROCESS O/D DAYS OVERDUE
-# ============================================================================
-
-def parse_dt(dt_int):
-    if not dt_int or dt_int == 0: return None
-    s = str(dt_int).zfill(11)
-    try: return datetime(int(s[4:8]), int(s[0:2]), int(s[2:4]))
-    except: return None
-
-loan2 = pl.read_parquet(BNM_DIR / f"loan{REPTMON}{NOWK}.parquet").filter(
-    (pl.col("ACCTYPE") == "OD") & ((pl.col("APPRLIMT") >= 0) | (pl.col("BALANCE") < 0)) &
-    ((pl.col("ACCTNO") <= 3900000000) | (pl.col("ACCTNO") > 3999999999))
-).select(["ACCTNO", "BRANCH", "BALANCE", "PRODUCT"]).unique("ACCTNO")
-
-od = pl.read_parquet(OD_DIR / "overdft.parquet").filter(
-    (pl.col("EXCESSDT") > 0) | (pl.col("TODDATE") > 0)
-).select(["ACCTNO", "EXCESSDT", "TODDATE", "RISKCODE"]).unique("ACCTNO")
-
-loanod = loan2.join(od, on="ACCTNO", how="inner").filter(
-    (pl.col("BRANCH").is_not_null()) & (~pl.col("PRODUCT").is_in([517, 500]))
-).with_columns([
-    pl.col("EXCESSDT").map_elements(parse_dt, return_dtype=pl.Datetime).alias("EXCDATE"),
-    pl.col("TODDATE").map_elements(parse_dt, return_dtype=pl.Datetime).alias("TODDT")
-]).with_columns(
-    pl.when((pl.col("EXCESSDT") != 0) & (pl.col("TODDATE") != 0))
-      .then(pl.when(pl.col("EXCDATE") <= pl.col("TODDT")).then(pl.col("EXCDATE")).otherwise(pl.col("TODDT")))
-      .when(pl.col("EXCESSDT") > 0).then(pl.col("EXCDATE"))
-      .when(pl.col("TODDATE") > 0).then(pl.col("TODDT"))
-      .otherwise(None).alias("BLDATE")
-).with_columns(
-    pl.when(pl.col("BLDATE").is_not_null())
-      .then((pl.lit(reptdate) - pl.col("BLDATE").cast(pl.Date)).dt.total_days() + 1)
-      .otherwise(None).cast(pl.Int32).alias("DAYS")
-).select(["ACCTNO", "DAYS"])
+# Filter loans >= 1M or NPL, merge with GP3
+con.execute(f"""
+    CREATE TEMP TABLE loan AS
+    SELECT l.*, t.totlimt, t.loancnt, g.scv, g.iis, g.iisr, g.iisw, g.prinwoff, g.gp3ind,
+           CASE WHEN l.acctype!='OD' THEN l.balance-l.curbal-l.feeamt END intout, '{reptdte}' reptdte
+    FROM loan_dedup l
+    JOIN temp t ON l.acctno=t.acctno
+    LEFT JOIN gp3klu g ON l.acctno=g.acctno AND l.noteno_final=g.noteno
+    WHERE t.totlimt>=1000000 OR l.loanstat=3
+""")
 
 # ============================================================================
-# BUILD FINAL LOAN DATASET
+# O/D DAYS OVERDUE
 # ============================================================================
 
-addr = pl.concat([
-    lnaddr, pl.read_parquet(ODADDR_DIR / "savings.parquet")
-], how="diagonal").select(["ACCTNO", "NAMELN2", "NAMELN3", "NAMELN4", "NAMELN5", "OLDIC", "NEWIC"])
+con.execute(f"""
+    CREATE TEMP TABLE loanod AS
+    SELECT acctno, CASE WHEN bldate IS NOT NULL THEN DATE'{reptdate}'-bldate+1 END days
+    FROM (
+        SELECT l.acctno,
+               CASE WHEN o.excessdt>0 AND o.toddate>0 THEN LEAST(excdate,toddt)
+                    WHEN o.excessdt>0 THEN excdate WHEN o.toddate>0 THEN toddt END bldate
+        FROM (SELECT DISTINCT acctno, branch, product FROM read_parquet('{INPUT_DIR}/bnm/loan{reptmon}{nowk}.parquet')
+              WHERE acctype='OD' AND (apprlimt>=0 OR balance<0) 
+              AND (acctno<=3900000000 OR acctno>3999999999)) l
+        LEFT JOIN (SELECT acctno, excessdt, toddate,
+                   TRY_STRPTIME(SUBSTRING(LPAD(CAST(excessdt AS VARCHAR),11,'0'),1,8),'%m%d%Y') excdate,
+                   TRY_STRPTIME(SUBSTRING(LPAD(CAST(toddate AS VARCHAR),11,'0'),1,8),'%m%d%Y') toddt
+                   FROM read_parquet('{INPUT_DIR}/od/overdft.parquet')
+                   WHERE excessdt>0 OR toddate>0) o ON l.acctno=o.acctno
+        WHERE l.branch IS NOT NULL AND l.product NOT IN (517,500)
+    )
+""")
 
-cis = pl.read_parquet(MNICS_DIR / "cis.parquet").unique("ACCTNO").select(["ACCTNO", "NAME", "SIC"])
+# ============================================================================
+# FINAL LOAN DATASET WITH FORMATS
+# ============================================================================
 
-loan = loan.join(temp, on="ACCTNO", how="left").filter(
-    (pl.col("TOTLIMT") >= 1000000) | (pl.col("LOANSTAT") == 3)
-).sort(["ACCTNO", "NOTENO"]).join(
-    gp3klu, on=["ACCTNO", "NOTENO"], how="left"
-).with_columns([
-    pl.lit(REPTDTE).alias("REPTDTE"),
-    pl.when(pl.col("ACCTYPE") != "OD")
-      .then(pl.col("BALANCE") - pl.col("CURBAL") - pl.col("FEEAMT"))
-      .otherwise(None).alias("INTOUT")
-]).drop("NAME").join(
-    addr, on="ACCTNO", how="left"
-).join(
-    cis, on="ACCTNO", how="left"
-).join(
-    loanod, on="ACCTNO", how="left"
-).with_columns([
-    pl.when(pl.col("NEWIC").str.strip_chars("0 ") == "").then(" ").otherwise(pl.col("NEWIC")).alias("NEWIC"),
-    pl.when(pl.col("OLDIC").str.strip_chars("0 ") == "").then(" ").otherwise(pl.col("OLDIC")).alias("OLDIC"),
-    pl.col("NAMELN2").alias("ADDR1"),
-    (pl.col("NAMELN3").str.strip_chars() + " " + pl.col("NAMELN4").str.strip_chars() + 
-     " " + pl.col("NAMELN5").fill_null("")).str.strip_chars().alias("ADDR2"),
-    pl.when((pl.col("ACCTNO") >= 2990000000) & (pl.col("ACCTNO") <= 2999999999))
-      .then("I").otherwise("C").alias("FITYPE"),
-    pl.when(pl.col("LOANCNT") > 1).then("M").otherwise("S").alias("LOANOPT"),
-    pl.col("APPRDATE").dt.strftime("%d%m%Y").alias("APPRDTE")
-]).with_columns(
-    pl.when((pl.col("ACCTYPE") == "OD") & (pl.col("CLOSEDTE") > 0))
-      .then(pl.col("CLOSEDTE").cast(pl.Date).dt.strftime("%d%m%Y"))
-      .when((pl.col("ACCTYPE") == "LN") & (pl.col("PAIDIND") == "P") & 
-            (pl.col("BALANCE") <= 0) & (pl.col("CLOSEDTE") > 0))
-      .then(pl.col("CLOSEDTE").cast(pl.Date).dt.strftime("%d%m%Y"))
-      .otherwise("").alias("CLOSDTE")
-).with_columns([
-    pl.when(pl.col("ACCTYPE") == "LN")
-      .then(pl.col("PRODUCT").map_elements(fmt_lnprodc, return_dtype=pl.Utf8))
-      .otherwise("34110").alias("PRODCD"),
-    pl.when(pl.col("ACCTYPE") == "LN")
-      .then(pl.col("PAYFREQ").cast(pl.Utf8).map_elements(fmt_payfq, return_dtype=pl.Utf8))
-      .otherwise("A").alias("PAYTERM"),
-    pl.when((pl.col("ACCTYPE") == "LN") & pl.col("BLDATE").is_not_null() & (pl.col("BALANCE") >= 1))
-      .then(pl.lit(REPTDATE) - pl.col("BLDATE").cast(pl.Date).cast(pl.Int32))
-      .otherwise(pl.col("DAYS")).alias("DAYS")
-]).with_columns([
-    pl.when(pl.col("SECURE") != "S").then("C").otherwise(pl.col("SECURE")).alias("SECURE"),
-    pl.when(pl.col("PRODUCT").is_in([225, 226])).then("C").otherwise("N").alias("CAGAMAS"),
-    pl.col("RISKRTE").map_elements(fmt_risk, return_dtype=pl.Utf8).alias("RISKC"),
-    (pl.col("DAYS") / 30.00050).floor().cast(pl.Int32).alias("MTHARR")
-]).with_columns(
-    pl.when(pl.col("BORSTAT") == "F").then(999)
-      .when(pl.col("BORSTAT") == "W").then(0)
-      .otherwise(pl.col("MTHARR")).alias("MTHARR")
-).unique(["BRANCH", "ACCTNO", "NOTENO"]).sort(["BRANCH", "ACCTNO", "NOTENO"])
+con.execute(f"""
+    CREATE TABLE save_loan AS
+    SELECT l.*, 
+           CASE WHEN REGEXP_REPLACE(a.newic,'[0 ]','')='' THEN ' ' ELSE a.newic END newic,
+           CASE WHEN REGEXP_REPLACE(a.oldic,'[0 ]','')='' THEN ' ' ELSE a.oldic END oldic,
+           COALESCE(a.nameln2,'') addr1,
+           COALESCE(TRIM(a.nameln3)||' '||TRIM(a.nameln4)||' '||a.nameln5,'') addr2,
+           COALESCE(c.name,'') name, COALESCE(c.sic,0) sic, od.days,
+           CASE WHEN l.acctno BETWEEN 2990000000 AND 2999999999 THEN 'I' ELSE 'C' END fitype,
+           CASE WHEN l.loancnt>1 THEN 'M' ELSE 'S' END loanopt,
+           LPAD(CAST(EXTRACT(DAY FROM l.apprdate) AS VARCHAR),2,'0')||
+           LPAD(CAST(EXTRACT(MONTH FROM l.apprdate) AS VARCHAR),2,'0')||
+           CAST(EXTRACT(YEAR FROM l.apprdate) AS VARCHAR) apprdte,
+           CASE WHEN l.acctype='OD' AND l.closedte>0 THEN
+                LPAD(CAST(EXTRACT(DAY FROM l.closedte) AS VARCHAR),2,'0')||
+                LPAD(CAST(EXTRACT(MONTH FROM l.closedte) AS VARCHAR),2,'0')||
+                CAST(EXTRACT(YEAR FROM l.closedte) AS VARCHAR)
+                WHEN l.acctype='LN' AND l.paidind='P' AND l.balance<=0 AND l.closedte>0 THEN
+                LPAD(CAST(EXTRACT(DAY FROM l.closedte) AS VARCHAR),2,'0')||
+                LPAD(CAST(EXTRACT(MONTH FROM l.closedte) AS VARCHAR),2,'0')||
+                CAST(EXTRACT(YEAR FROM l.closedte) AS VARCHAR)
+                ELSE '' END closdte,
+           CASE WHEN l.acctype='LN' THEN COALESCE(pc.v,LPAD(CAST(l.product AS VARCHAR),5,'0')) ELSE '34110' END prodcd,
+           CASE WHEN l.acctype='LN' THEN COALESCE(pf.v,'O') ELSE 'A' END payterm,
+           CASE WHEN l.secure!='S' THEN 'C' ELSE l.secure END secure,
+           CASE WHEN l.product IN (225,226) THEN 'C' ELSE 'N' END cagamas,
+           COALESCE(rf.v,'P') riskc,
+           CASE WHEN l.borstat='F' THEN 999 WHEN l.borstat='W' THEN 0
+                ELSE FLOOR(COALESCE(od.days,CASE WHEN l.acctype='LN' AND l.bldate IS NOT NULL AND l.balance>=1 
+                     THEN DATE'{reptdate}'-l.bldate ELSE 0 END)/30.00050) END mtharr
+    FROM loan l
+    LEFT JOIN (SELECT * FROM lnaddr UNION ALL SELECT acctno,oldic,newic,nameln1,nameln2,nameln3,nameln4,nameln5 
+               FROM read_parquet('{INPUT_DIR}/odaddr/savings.parquet')) a ON l.acctno=a.acctno
+    LEFT JOIN (SELECT DISTINCT acctno,name,sic FROM read_parquet('{INPUT_DIR}/mnics/cis.parquet')) c ON l.acctno=c.acctno
+    LEFT JOIN loanod od ON l.acctno=od.acctno
+    LEFT JOIN payfq_fmt pf ON CAST(l.payfreq AS VARCHAR)=pf.k
+    LEFT JOIN risk_fmt rf ON l.riskrte=rf.k
+    LEFT JOIN lnprodc_fmt pc ON l.product=pc.k
+""")
 
-loan.write_parquet(OUTPUT_DIR / "loan.parquet")
+con.execute(f"COPY save_loan TO '{OUTPUT_DIR}/save_loan.parquet'")
 
 # ============================================================================
 # PAGE 02: DIRECTOR INFO
 # ============================================================================
 
-dirinfo = loan.unique("ACCTNO").select(["BRANCH", "ACCTNO", "REPTDTE"]).join(
-    pl.read_parquet(MNICS_DIR / "cis.parquet"), on="ACCTNO", how="left"
-).with_columns([
-    pl.when(pl.col("DIRNIC").str.strip_chars("0 ") == "").then(" ").otherwise(pl.col("DIRNIC")).alias("DIRNIC"),
-    pl.when(pl.col("DIROIC").str.strip_chars("0 ") == "").then(" ").otherwise(pl.col("DIROIC")).alias("DIROIC")
-]).unique(["BRANCH", "ACCTNO"]).sort(["BRANCH", "ACCTNO"])
+con.execute(f"""
+    CREATE TEMP TABLE dirinfo AS
+    SELECT DISTINCT l.branch, l.acctno, l.reptdte,
+           CASE WHEN REGEXP_REPLACE(c.dirnic,'[0 ]','')='' THEN ' ' ELSE c.dirnic END dirnic,
+           CASE WHEN REGEXP_REPLACE(c.diroic,'[0 ]','')='' THEN ' ' ELSE c.diroic END diroic,
+           COALESCE(c.dirname,'') dirname
+    FROM (SELECT DISTINCT branch,acctno,reptdte FROM loan) l
+    LEFT JOIN read_parquet('{INPUT_DIR}/mnics/cis.parquet') c ON l.acctno=c.acctno
+    ORDER BY 1,2
+""")
 
-with open(OUTPUT_DIR / "PAGE02.txt", 'w') as f:
-    for r in dirinfo.iter_rows(named=True):
-        f.write(f"0233{r['BRANCH']:05d}{r['ACCTNO']:10d}{r['REPTDTE']:8}"
-                f"{r.get('DIRNIC',''):20}{r.get('DIROIC',''):20}  "
-                f"{r.get('DIRNAME',''):60}MYN\n")
+con.execute(f"COPY dirinfo TO '{OUTPUT_DIR}/page02.parquet'")
 
-print(f"PAGE02: {dirinfo.height} records")
+with open(OUTPUT_DIR/'page02.txt','w') as f:
+    for r in con.execute("SELECT * FROM dirinfo").fetchall():
+        f.write(f"0233{r[0]:05d}{r[1]:010d}{r[2]}{r[3]:20s}{r[4]:20s}  {r[5]:60s}MYN\n")
+
+print(f"PAGE02: {con.execute('SELECT COUNT(*) FROM dirinfo').fetchone()[0]} records")
 
 # ============================================================================
-# PAGE 01: BORROWER/LOAN PROFILE
+# PAGE 01: BORROWER PROFILE
 # ============================================================================
 
-page01 = loan.unique("ACCTNO", maintain_order=True)
+with open(OUTPUT_DIR/'page01.txt','w') as f:
+    for r in con.execute("""
+        SELECT DISTINCT ON (branch,acctno) branch,acctno,reptdte,newic,oldic,name,addr1,addr2,
+               custcd,sic,fitype,loanopt,totlimt,loancnt
+        FROM save_loan ORDER BY branch,acctno
+    """).fetchall():
+        f.write(f"0233{r[0]:05d}{r[1]:010d}{r[2]}{r[3]:20s}{r[4]:20s}  {r[5]:60s}"
+                f"{r[6]:45s}{r[7]:90s}{r[8]:2s}MY{r[9]:04d}NN{r[10]}{r[11]}{r[12]:12.0f}{r[13]:02d}N\n")
 
-with open(OUTPUT_DIR / "PAGE01.txt", 'w') as f:
-    for r in page01.iter_rows(named=True):
-        f.write(f"0233{r['BRANCH']:05d}{r['ACCTNO']:10d}{r['REPTDTE']:8}"
-                f"{r.get('NEWIC',''):20}{r.get('OLDIC',''):20}  {r.get('NAME',''):60}"
-                f"{r.get('ADDR1',''):45}{r.get('ADDR2',''):90}{r.get('CUSTCD',''):2}MY"
-                f"{r.get('SIC',0):04d}NN{r.get('FITYPE','C'):1}{r.get('LOANOPT','S'):1}"
-                f"{r.get('TOTLIMT',0):12.0f}{r.get('LOANCNT',0):2d}N\n")
-
-print(f"PAGE01: {page01.height} records")
+print(f"PAGE01: {con.execute('SELECT COUNT(DISTINCT acctno) FROM save_loan').fetchone()[0]} records")
 
 # ============================================================================
 # PAGE 03: LOAN DETAILS
 # ============================================================================
 
-with open(OUTPUT_DIR / "PAGE03.txt", 'w') as f:
-    for r in loan.iter_rows(named=True):
-        f.write(f"0233{r['BRANCH']:05d}{r['ACCTNO']:10d}{r.get('NOTENO',0):05d}"
-                f"{r['REPTDTE']:8}{r.get('PRODCD',''):5}{r.get('APPRDTE',''):8}"
-                f"{r.get('CLOSDTE',''):8}          {r.get('SECTORCD',''):4}"
-                f"{r.get('NOTETERM',0):3d}{r.get('PAYTERM','A'):1}"
-                f"{r.get('MTHARR',0):3d}{r.get('MTHARR',0):3d}{r.get('RISKC','P'):1}"
-                f"{r.get('SECURE','C'):1}NNN{r.get('CAGAMAS','N'):1}SNNNMYR"
-                f"{r.get('CURBAL',0):12.0f}{r.get('INTOUT',0):12.0f}"
-                f"{r.get('FEEAMT',0):12.0f}{r.get('BALANCE',0):12.0f}N\n")
+with open(OUTPUT_DIR/'page03.txt','w') as f:
+    for r in con.execute("""
+        SELECT branch,acctno,noteno_final,reptdte,prodcd,apprdte,closdte,sectorcd,noteterm,
+               payterm,mtharr,riskc,secure,cagamas,curbal,intout,feeamt,balance
+        FROM save_loan ORDER BY 1,2,3
+    """).fetchall():
+        f.write(f"0233{r[0]:05d}{r[1]:010d}{r[2]:05d}{r[3]}{r[4]:5s}{r[5]:8s}{r[6]:8s}          "
+                f"{r[7]:4s}{r[8]:3d}{r[9]}{r[10]:3d}{r[10]:3d}{r[11]}{r[12]}NN{r[13]}SNNMYR"
+                f"{r[14]:12.0f}{r[15]:12.0f}{r[16]:12.0f}{r[17]:12.0f}N\n")
 
-print(f"PAGE03: {loan.height} records")
+print(f"PAGE03: {con.execute('SELECT COUNT(*) FROM save_loan').fetchone()[0]} records")
 
 # ============================================================================
 # PAGE 04: GP3 DATA
 # ============================================================================
 
-page04 = gp3klu.with_columns([
-    pl.col("IISR").fill_null(0), pl.col("IISW").fill_null(0), 
-    pl.col("IIS").fill_null(0), pl.lit(int(REPTDTE)).alias("REPTDATE")
-]).sort(["BRANCH", "ACCTNO"])
+con.execute(f"""
+    CREATE TEMP TABLE page04 AS
+    SELECT branch,acctno,zero5,'{reptdte}' reptdate,COALESCE(scv,0) scv,COALESCE(iis,0) iis,
+           COALESCE(iisr,0) iisr,COALESCE(iisw,0) iisw,COALESCE(prinwoff,0) prinwoff,gp3ind
+    FROM gp3klu ORDER BY 1,2
+""")
 
-with open(OUTPUT_DIR / "PAGE04.txt", 'w') as f:
-    for r in page04.iter_rows(named=True):
-        f.write(f"{r['BRANCH']:03d}{r['ACCTNO']:010d}{r['ZERO5']:05d}"
-                f"{r['REPTDATE']:08d}{r['SCV']:012.0f}{r['IIS']:012.2f}"
-                f"{r['IISR']:012.2f}{r['IISW']:012.2f}{r['PRINWOFF']:012.2f}"
-                f"{r['GP3IND']:1}\n")
+con.execute(f"COPY page04 TO '{OUTPUT_DIR}/page04.parquet'")
 
-print(f"PAGE04: {page04.height} records")
+with open(OUTPUT_DIR/'page04.txt','w') as f:
+    for r in con.execute("SELECT * FROM page04").fetchall():
+        f.write(f"{r[0]:03d}{r[1]:010d}{r[2]:05d}{r[3]}{r[4]:012.0f}{r[5]:014.2f}"
+                f"{r[6]:014.2f}{r[7]:014.2f}{r[8]:014.2f}{r[9]}\n")
+
+print(f"PAGE04: {con.execute('SELECT COUNT(*) FROM page04').fetchone()[0]} records")
 
 # ============================================================================
 # EXCEPTIONAL REPORT
 # ============================================================================
 
-exclude = page04.select("ACCTNO").join(
-    pl.read_parquet(OD_DIR / "overdft.parquet").filter(
-        (pl.col("EXCESSDT") > 0) | (pl.col("TODDATE") > 0)
-    ).select(["ACCTNO", "EXCESSDT", "TODDATE", "RISKCODE"]), on="ACCTNO", how="inner"
-).with_columns(
-    (pl.col("ACCTNO").cum_count().over("ACCTNO") > 1).alias("is_dup")
-).filter(pl.col("is_dup")).drop("is_dup")
+exc = con.execute("""
+    SELECT p.*,o.excessdt,o.toddate FROM page04 p
+    LEFT JOIN (SELECT DISTINCT acctno,excessdt,toddate FROM read_parquet('{INPUT_DIR}/od/overdft.parquet')
+               WHERE excessdt>0 OR toddate>0) o ON p.acctno=o.acctno
+    WHERE o.acctno IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER(PARTITION BY p.acctno ORDER BY p.acctno)>1
+""").fetchall()
 
-if exclude.height > 0:
-    print(f"\nEXCEPTIONAL O/D: {exclude.height} records")
-    exclude.write_csv(OUTPUT_DIR / "EXCLUDE_OD.csv")
+if exc:
+    print(f"\nEXCEPTIONAL O/D: {len(exc)} duplicate records")
+else:
+    print("\nNo exceptional O/D duplicates")
 
+con.close()
 print(f"\nCompleted: PAGE01-04 generated in {OUTPUT_DIR}")
