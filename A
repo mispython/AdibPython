@@ -1,1554 +1,366 @@
-//EIBWELWH JOB MISEIS,CLASS=A,MSGCLASS=A,NOTIFY=&SYSUID                 JOB33084
-//*
-//*%OPC SCAN
-//*%OPC SETFORM OCDATE=(DD)
-//*%OPC SETFORM OCLASTC=(DD)
-//*
-//**********************************************************************
-//* EXTRACTION OF ELDS BNM FILE FOR DATA WAREHOUSE
-//* ESMR 2004/981, 07-1000, 07-1104
-//* ESMR 2015-127
-//* ESMR 2015-54
-//**********************************************************************
-//* MUST AMEND/SYNC WITH EIBDELWH
-//**********************************************************************
-//DELETE   EXEC PGM=IEFBR14
-//DEL01    DD DSN=SAP.PBB.ELDATAWH,
-//            DISP=(MOD,DELETE,DELETE),
-//            SPACE=(CYL,(0))
-//DEL02    DD DSN=SAP.PBB.ELDATAWH.ELFTP,
-//            DISP=(MOD,DELETE,DELETE),
-//            SPACE=(CYL,(0))
-//DEL03    DD DSN=SAP.PIBB.ELDATAWH,
-//            DISP=(MOD,DELETE,DELETE),
-//            SPACE=(CYL,(0))
-//DEL04    DD DSN=SAP.PIBB.ELDATAWH.IELFTP,
-//            DISP=(MOD,DELETE,DELETE),
-//            SPACE=(CYL,(0))
-//*
-//CREATE   EXEC PGM=IEFBR14
-//CRT01    DD DSN=SAP.PBB.ELDATAWH.ELFTP,
-//            DISP=(NEW,CATLG,DELETE),
-//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),
-//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)
-//CRT02    DD DSN=SAP.PIBB.ELDATAWH.IELFTP,
-//            DISP=(NEW,CATLG,DELETE),
-//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),
-//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)
-//*
-//EIBWELWH EXEC SAS609
-//ELDSTXT  DD DSN=SAP.PBB.ELDS.NEWBNM1.TEXT(0),DISP=SHR
-//ELDSTX2  DD DSN=SAP.PBB.ELDS.NEWBNM2.TEXT(0),DISP=SHR
-//ELDSTX3  DD DSN=SAP.PBB.ELDS.NEWBNM3.TEXT(0),DISP=SHR
-//ELDSTX4  DD DSN=SAP.PBB.ELDS.AABASEL.APP4.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.ELDS.AABASEL.REJ4.TEXT(0),DISP=SHR
-//ELDSTX7  DD DSN=SAP.PBB.ELDS.AABASEL.APP7.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.ELDS.AABASEL.REJ7.TEXT(0),DISP=SHR
-//ELDSTX8  DD DSN=SAP.PBB.ELDS.AABASEL.APP8.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.ELDS.AABASEL.REJ8.TEXT(0),DISP=SHR
-//ELDST10  DD DSN=SAP.PBB.ELDS.AABASEL.APP10.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.ELDS.AABASEL.REJ10.TEXT(0),DISP=SHR
-//ELDST17  DD DSN=SAP.PBB.ELDS.AABASEL.APP17.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.ELDS.AABASEL.REJ17.TEXT(0),DISP=SHR
-//ELDST20  DD DSN=SAP.PBB.ELDS.AABASEL.APP20.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.ELDS.AABASEL.REJ20.TEXT(0),DISP=SHR
-//ELDST22  DD DSN=SAP.PBB.ELDS.AABASEL.APP22.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.ELDS.AABASEL.REJ22.TEXT(0),DISP=SHR
-//ELDST26  DD DSN=SAP.ELDS.CRMS.ELN26W.TEXT(0),DISP=SHR
-//ELDST30  DD DSN=SAP.ELDS.CRMS.ELN30W.TEXT(0),DISP=SHR
-//ELDST63  DD DSN=SAP.ELDS.CRMS.ELN63W.TEXT(0),DISP=SHR
-//ELDSHP1  DD DSN=SAP.PBB.EHPN.NEWBNM.HP1.TEXT(0),DISP=SHR
-//ELDSHP2  DD DSN=SAP.PBB.EHPN.NEWBNM.HP2.TEXT(0),DISP=SHR
-//ELDSHP3  DD DSN=SAP.PBB.EHPN.NEWBNM.HP3.TEXT(0),DISP=SHR
-//ELDSHP8  DD DSN=SAP.PBB.EHPN.HPBASEL.APP8.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ8.TEXT(0),DISP=SHR
-//ELDSHP4  DD DSN=SAP.PBB.EHPN.HPBASEL.APP4.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ4.TEXT(0),DISP=SHR
-//ELDSHP10 DD DSN=SAP.PBB.EHPN.HPBASEL.APP10.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ10.TEXT(0),DISP=SHR
-//ELDSHP11 DD DSN=SAP.PBB.EHPN.HPBASEL.APP11.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ11.TEXT(0),DISP=SHR
-//ELDSHP13 DD DSN=SAP.PBB.EHPN.HPBASEL.APP13.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ13.TEXT(0),DISP=SHR
-//ELDSHP17 DD DSN=SAP.PBB.EHPN.HPBASEL.APP17.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ17.TEXT(0),DISP=SHR
-//ELDSHP18 DD DSN=SAP.PBB.EHPN.HPBASEL.APP18.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ18.TEXT(0),DISP=SHR
-//ELDSHP19 DD DSN=SAP.PBB.EHPN.HPBASEL.APP19.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ19.TEXT(0),DISP=SHR
-//ELDSHP21 DD DSN=SAP.PBB.EHPN.HPBASEL.APP21.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ21.TEXT(0),DISP=SHR
-//ELDSHP22 DD DSN=SAP.PBB.EHPN.HPBASEL.APP22.TEXT(0),DISP=SHR
-//         DD DSN=SAP.PBB.EHPN.HPBASEL.REJ22.TEXT(0),DISP=SHR
-//ELNAA    DD DSN=SAP.PBB.ELDS.NEWBNM.COUNT.TEXT(0),DISP=SHR
-//ELNHP    DD DSN=SAP.PBB.EHPN.NEWBNM.HPCOUNT.TEXT(0),DISP=SHR
-//ELDS1    DD DSN=SAP.PBB.ELDATAWH,
-//            DISP=(NEW,CATLG,DELETE),
-//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
-//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)
-//IELDS1   DD DSN=SAP.PIBB.ELDATAWH,
-//            DISP=(NEW,CATLG,DELETE),
-//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
-//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)
-//*
-//*%OPC BEGIN ACTION=INCLUDE,
-//*%OPC COMP=(&OCDATE..EQ.(08,09,10,11,12,13,14))
-//ELDS2    DD DSN=SAP.PBB.ELDS.BNM(+1),
-//            DISP=(NEW,CATLG,DELETE),
-//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
-//            SPACE=(CYL,(200,200)),UNIT=(SYSDA,5)
-//IELDS2   DD DSN=SAP.PIBB.ELDS.BNM(+1),
-//            DISP=(NEW,CATLG,DELETE),
-//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
-//            SPACE=(CYL,(200,200)),UNIT=(SYSDA,5)
-//*%OPC END ACTION=INCLUDE
-//*
-//*%OPC BEGIN ACTION=INCLUDE,
-//*%OPC COMP=((&OCDATE..NE.(08)),
-//*%OPC       (&OCDATE..NE.(09)),
-//*%OPC       (&OCDATE..NE.(10)),
-//*%OPC       (&OCDATE..NE.(11)),
-//*%OPC       (&OCDATE..NE.(12)),
-//*%OPC       (&OCDATE..NE.(13)),
-//*%OPC       (&OCDATE..NE.(14)))
-//ELDS2    DD DSN=SAP.PBB.ELDS.BNM(0),DISP=OLD
-//IELDS2   DD DSN=SAP.PIBB.ELDS.BNM(0),DISP=OLD
-//*%OPC END ACTION=INCLUDE
-//*
-//*%OPC BEGIN ACTION=NOSCAN
-//SYSIN    DD *
-
-OPTIONS NOCENTER YEARCUTOFF=1950;
-
-DATA ELDS1.REPTDATE
-     ELDS2.REPTDATE
-     IELDS1.REPTDATE
-     IELDS2.REPTDATE;
-
-   SELECT;
-      WHEN(8 <= DAY(TODAY()) <= 14) DO;
-         REPTDATE=INPUT('08'||PUT(MONTH(TODAY()), Z2.)||
-                  PUT(YEAR(TODAY()), 4.), DDMMYY8.);
-         WK      ='1';
-      END;
-      WHEN(15 <= DAY(TODAY()) <= 21) DO;
-         REPTDATE=INPUT('15'||PUT(MONTH(TODAY()), Z2.)||
-                  PUT(YEAR(TODAY()), 4.), DDMMYY8.);
-         WK      ='2';
-      END;
-      WHEN(22 <= DAY(TODAY()) <= 27) DO;
-         REPTDATE=INPUT('22'||PUT(MONTH(TODAY()), Z2.)||
-                  PUT(YEAR(TODAY()), 4.), DDMMYY8.);
-         WK      ='3';
-      END;
-      OTHERWISE DO;
-         REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
-                  PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
-         WK      ='4';
-      END;
-   END;
-   CALL SYMPUT('NOWK',PUT(WK,$1.));
-   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
-   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
-   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
-RUN;
-
-PROC PRINT DATA=ELDS1.REPTDATE; FORMAT REPTDATE DATE8. ;RUN;
-
-   *** CHECK INPUT FILE DATE ***;
-DATA ELDSDT1(DROP=DD MM YY);
-   INFILE ELDSTXT OBS=1;
-   INPUT @054 DD          2.
-         @057 MM          2.
-         @060 YY          4.;
-   ELDSDT1 = MDY(MM,DD,YY);
-RUN;
-PROC PRINT; FORMAT ELDSDT1 DATE8. ;RUN;
-
-DATA _NULL_;
-  SET ELDSDT1;
-  CALL SYMPUT('ELDSDT1', PUT(ELDSDT1, DDMMYY8.));
-RUN;
-
-DATA ELDSDT2(DROP=DD MM YY);
-   INFILE ELDSTX2 OBS=1;
-   INPUT @054 DD          2.
-         @057 MM          2.
-         @060 YY          4.;
-   ELDSDT2 = MDY(MM,DD,YY);
-RUN;
-PROC PRINT; FORMAT ELDSDT2 DATE8. ;RUN;
-
-DATA _NULL_;
-  SET ELDSDT2;
-  CALL SYMPUT('ELDSDT2', PUT(ELDSDT2, DDMMYY8.));
-RUN;
-
-DATA ELDSDT3(DROP=DD MM YY);
-   INFILE ELDSTX3 OBS=1;
-   INPUT @054 DD          2.
-         @057 MM          2.
-         @060 YY          4.;
-   ELDSDT3 = MDY(MM,DD,YY);
-RUN;
-PROC PRINT; FORMAT ELDSDT3 DATE8. ;RUN;
-
-DATA _NULL_;
-  SET ELDSDT3;
-  CALL SYMPUT('ELDSDT3', PUT(ELDSDT3, DDMMYY8.));
-RUN;
-
-DATA ELHPDT1(DROP=DD MM YY);
-   INFILE ELDSHP1 OBS=1;
-   INPUT @054 DD          2.
-         @057 MM          2.
-         @060 YY          4.;
-   ELHPDT1 = MDY(MM,DD,YY);
-RUN;
-PROC PRINT; FORMAT ELHPDT1 DATE8. ;RUN;
-
-DATA _NULL_;
-  SET ELHPDT1;
-  CALL SYMPUT('ELHPDT1', PUT(ELHPDT1, DDMMYY8.));
-RUN;
-
-DATA ELHPDT2(DROP=DD MM YY);
-   INFILE ELDSHP2 OBS=1;
-   INPUT @054 DD          2.
-         @057 MM          2.
-         @060 YY          4.;
-   ELHPDT2 = MDY(MM,DD,YY);
-RUN;
-PROC PRINT; FORMAT ELHPDT2 DATE8. ;RUN;
-
-DATA _NULL_;
-  SET ELHPDT2;
-  CALL SYMPUT('ELHPDT2', PUT(ELHPDT2, DDMMYY8.));
-RUN;
-
-DATA ELHPDT3(DROP=DD MM YY);
-   INFILE ELDSHP3 OBS=1;
-   INPUT @054 DD          2.
-         @057 MM          2.
-         @060 YY          4.;
-   ELHPDT3 = MDY(MM,DD,YY);
-RUN;
-PROC PRINT; FORMAT ELHPDT3 DATE8. ;RUN;
-
-DATA _NULL_;
-  SET ELHPDT3;
-  CALL SYMPUT('ELHPDT3', PUT(ELHPDT3, DDMMYY8.));
-RUN;
-%MACRO PROCESS;
-  %IF "&ELDSDT1"="&RDATE" AND
-      "&ELDSDT2"="&RDATE" AND
-      "&ELDSDT3"="&RDATE" AND
-      "&ELHPDT1"="&RDATE" AND
-      "&ELHPDT2"="&RDATE" AND
-      "&ELHPDT3"="&RDATE" %THEN %DO;
-
-     DATA ELN1(DROP=DD MM YY DD1 MM1 YY1
-                    DD2 MM2 YY2 DD3 MM3 YY3 DD4 MM4 YY4
-                    DD5 MM5 YY5 DD6 MM6 YY6 DD7 MM7 YY7);
-        INFILE ELDSTXT FIRSTOBS=2 MISSOVER;
-        INPUT @001 AANO      $UPCASE13.
-             @1222 NAME      $UPCASE150.
-             @1375 NEWIC     $UPCASE20.
-              @095 BRANCH      4.
-              @102 CUSTCODE    4.
-              @109 SECTOR      4.
-              @116 STATE       3.
-           /* @122 PRODUCT     3. */
-              @128 PRICING     5.2
-              @136 DD          2.
-              @139 MM          2.
-              @142 YY          4.
-              @149 AMOUNT    COMMA15.
-              @167 NOEMPLO     4.
-              @174 SECURITY    1.
-              @178 ADVANCES   $1.
-              @182 PRODESC   $30.
-              @215 PRESRATE   $7.
-              @225 INSTRLF    $3.
-              @231 COMPLETE  $11.
-              @245 SMENAME1  $30.
-              @308 SMENAME2  $30.
-              @371 DD1         2.
-              @374 MM1         2.
-              @377 YY1         4.
-              @384 APVDES1   $25.
-              @412 APVNME1   $60.
-              @475 DD2         2.
-              @478 MM2         2.
-              @481 YY2         4.
-              @488 APVDES2   $25.
-              @516 APVNME2   $60.
-              @579 DD3         2.
-              @582 MM3         2.
-              @585 YY3         4.
-              @592 PCODCRIS   $4.    /* PURPOSE CODE CCRIS           */
-              @599 PCODFISS   $4.    /* PURPOSE CODE FISS            */
-              @606 TURNOVER COMMA11.
-              @620 SMESIZE     2.
-           /* @625 CRRGRADE   $3. SMR2016-2894 */
-              @631 CRRSCORE   $3.
-              @637 SPAAMT   COMMA11.
-           /* @651 EXEMPIND   $1.   SMR2024-5099 */
-              @655 ELDSPROD   $2.
-              @660 DD4         2.
-              @663 MM4         2.
-              @666 YY4         4.
-              @673 ICREASON   $9.
-              @685 MAKE      $20.
-              @708 YEARMADE    4.
-              @715 VECHAGE   $30.
-              @748 RATE       10.8
-              @761 TERM        3.
-              @767 CASHPRIC COMMA15.2
-              @785 ACCTNO     10.        /* MNI LOAN A/C NO */
-              @798 INTEARN2  15.2
-              @816 TRANBR     $3.        /* TRANSFER BR ABBR */
-              @822 TRANBRNO    3.        /* TRANSFER BR NO */
-              @828 TRANREG    $4.        /* TRANSFER REGION */
-              @835 LOBE       $3.        /* LOBE INDICATOR */
-              @841 DD5         2.        /* LOBE DATE OF FULL DOC. */
-              @844 MM5         2.
-              @847 YY5         4.
-              @854 DD6         2.        /* LOBE DATE APR */
-              @857 MM6         2.
-              @860 YY6         4.
-              @867 DD7         2.        /* LOBE DATE LO */
-              @870 MM7         2.
-              @873 YY7         4.
-              @880 MARGIN     $6.        /* MARGIN OF ADVANCE */
-              @889 PMAGNNO    $8.        /* PUBLIC MUTUAL AGENT CODE */
-              @900 PMAGNNM   $UPCASE50.  /* PUBLIC MUTUAL AGENT NAME */
-              @953 GINCOME  COMMA11.     /* GROSS INCOME  */
-              @967 PRITYPE    $5.        /* TYPE OF PRICING */
-              @975 PRIRATE    5.2        /* INTEREST RATE */
-              @983 STATUS    $UPCASE30.
-              @1214 CRRGRADE   $5.
-              @1402 SPECIAL_FUND_SCHEME  $45. /* 2018-5200 */
-              @1450 CGC_GUARANTEE_FLG    $6.  /* 2018-5200 */
-              @1459 SJPP_GUARANTEE_FLG   $6.  /* 2018-5200 */
-              @1474 GRAD_PROF_1ST_HOUSE_FLG $3. /* 2020-0355 */
-              ;
-        AADATE = MDY(MM,DD,YY);
-        LODATE = MDY(MM1,DD1,YY1);
-        APVDTE1 = MDY(MM2,DD2,YY2);
-        APVDTE2 = MDY(MM3,DD3,YY3);
-        ICDATE  = MDY(MM4,DD4,YY4);
-        LOBEFUDT = MDY(MM5,DD5,YY5);
-        LOBEAPDT = MDY(MM6,DD6,YY6);
-        LOBELODT = MDY(MM7,DD7,YY7);
-     RUN;
-
-     DATA EHP1(DROP=DD MM YY DD1 MM1 YY1
-                    DD2 MM2 YY2 DD3 MM3 YY3 DD4 MM4 YY4
-                    DD5 MM5 YY5 DD6 MM6 YY6 DD7 MM7 YY7);
-        INFILE ELDSHP1 FIRSTOBS=2;
-        INPUT @001 AANO      $UPCASE13.
-             @1222 NAME      $UPCASE150.
-             @1375 NEWIC     $UPCASE20.
-              @095 BRANCH      4.
-              @102 CUSTCODE    4.
-              @109 SECTOR      4.
-              @116 STATE       3.
-              @122 PRODUCT     3.
-              @128 PRICING     5.2
-              @136 DD          2.
-              @139 MM          2.
-              @142 YY          4.
-              @149 AMOUNT    COMMA15.
-              @167 NOEMPLO     4.
-              @174 SECURITY    1.
-              @178 ADVANCES   $1.
-              @182 PRODESC   $30.
-              @215 PRESRATE   $7.
-              @225 INSTRLF    $3.
-              @231 COMPLETE  $11.
-              @245 SMENAME1  $30.
-              @308 SMENAME2  $30.
-              @371 DD1         2.
-              @374 MM1         2.
-              @377 YY1         4.
-              @384 APVDES1   $25.
-              @412 APVNME1   $60.
-              @475 DD2         2.
-              @478 MM2         2.
-              @481 YY2         4.
-              @488 APVDES2   $25.
-              @516 APVNME2   $60.
-              @579 DD3         2.
-              @582 MM3         2.
-              @585 YY3         4.
-              @592 PCODCRIS   $4.    /* PURPOSE CODE CCRIS           */
-              @599 PCODFISS   $4.    /* PURPOSE CODE FISS            */
-              @606 TURNOVER COMMA11.
-              @620 SMESIZE     2.
-           /* @625 CRRGRADE   $3. SMR2016-2894 */
-           /* @631 CRRSCORE   $13. SMR2020-5012 */
-              @637 SPAAMT   COMMA11.
-          /*  @651 EXEMPIND   $1.   SMR2024-5099 */
-              @655 ELDSPROD   $2.
-              @660 DD4         2.
-              @663 MM4         2.
-              @666 YY4         4.
-              @673 ICREASON   $9.
-              @685 MAKE      $20.
-              @708 YEARMADE    4.
-              @715 VECHAGE   $30.
-              @748 RATE       10.8
-              @761 TERM        3.
-              @767 CASHPRIC COMMA15.2
-              @785 ACCTNO     10.        /* MNI LOAN A/C NO */
-              @798 INTEARN2  15.2
-              @816 TRANBR     $3.        /* TRANSFER BR ABBR */
-              @822 TRANBRNO    3.        /* TRANSFER BR NO */
-              @828 TRANREG    $4.        /* TRANSFER REGION */
-              @835 LOBE       $3.        /* LOBE INDICATOR */
-              @841 DD5         2.        /* LOBE DATE OF FULL DOC. */
-              @844 MM5         2.
-              @847 YY5         4.
-              @854 DD6         2.        /* LOBE DATE APR */
-              @857 MM6         2.
-              @860 YY6         4.
-              @867 DD7         2.        /* LOBE DATE LO */
-              @870 MM7         2.
-              @873 YY7         4.
-              @880 MARGIN     $6.        /* MARGIN OF ADVANCE */
-              @889 PMAGNNO    $8.        /* PUBLIC MUTUAL AGENT CODE */
-              @900 PMAGNNM   $UPCASE50.  /* PUBLIC MUTUAL AGENT NAME */
-              @953 GINCOME  COMMA11.     /* GROSS INCOME  */
-              @967 PRITYPE    $5.        /* TYPE OF PRICING */
-              @975 PRIRATE    5.2        /* INTEREST RATE */
-              @983 STATUS    $UPCASE30.
-          /*  @1214 CRRGRADE   $13. SMR 2020-5012 */
-              @1474 SYS_TYPE   $8.
-              @1485 CRRGRADE   $13. /* SMR 2020-5012 */
-              @1501 CRRSCORE   $13. /* SMR 2020-5012 */
-              @1514 REFER_OTH_BR_ABBV $11.
-              @1525 REFER_OTH_BR_STAFF_ID $10.
-              @1535 REFER_OTH_BR_STAFF_NAME $150.
-              ;
-        IF SYS_TYPE = '' THEN SYS_TYPE = 'EHPDS';
-        AADATE = MDY(MM,DD,YY);
-        LODATE = MDY(MM1,DD1,YY1);
-        APVDTE1 = MDY(MM2,DD2,YY2);
-        APVDTE2 = MDY(MM3,DD3,YY3);
-        ICDATE  = MDY(MM4,DD4,YY4);
-        LOBEFUDT = MDY(MM5,DD5,YY5);
-        LOBEAPDT = MDY(MM6,DD6,YY6);
-        LOBELODT = MDY(MM7,DD7,YY7);
-     RUN;
-
-     DATA ELN2;
-        INFILE ELDSTX2 FIRSTOBS=2 MISSOVER;
-        INPUT @001 AANO      $UPCASE13.
-              @017 REFTYPE   $70.
-              @090 NMREF1    $UPCASE60.
-              @153 NMREF2    $UPCASE60.
-              @216 CPARTY    $UPCASE3.   /* CONNECTED PARTIES    */
-              @222 CPSTAFF   $UPCASE50.  /* CP STAFF NAME        */
-              @275 CPDITOR   $UPCASE3.   /* CP BOARD DIRECTOR    */
-              @281 CPSTFID   $UPCASE5.   /* CP STAFF ID          */
-              @289 CPBRHO    $UPCASE11.  /* CP BRANCH/HO         */
-              @303 CPBRID    $UPCASE3.   /* CP BRANCH ID         */
-              @309 CPHQDIV   $UPCASE30.  /* CP HO DIVISION       */
-              @342 CPRELAT   $UPCASE100. /* CP RELATIVES         */
-              @445 CPRELAS   $UPCASE100. /* CP RELATIONSHIP      */
-              @548 NEWESIT   $UPCASE8.   /* NEW/EXISTING         */
-              @559 AMTAPPLY  COMMA15.    /* AMOUNT APPLIED       */
-              @577 LNTERM          3.    /* LOAN TERMS           */
-              @583 APPRIC    $UPCASE200. /* APPLIED PRICING      */
-              @786 AVPRIC    $UPCASE200. /* APPROVED PRICING     */
-              @989 REINPROD  $UPCASE1.   /* ADDTIONAL FACILITIES */
-              @993 STATUS    $UPCASE30.
-              @1026 REFTYPE_3RD_PARTY $70.       /*2017-2960 */
-              @1099 NMREF_3RD_PARTY   $UPCASE60. /*2017-2960 */
-              @1162 STRUPCO_3YR $UPCASE2. /* STARTUP FINANCING   */
-              @1167 FIN_CONCEPT $UPCASE60. /* FINANCING CONCEPT       */
-              @1230 REFIN_FLG   $UPCASE3.  /* REFINANCING(ISS3)  */
-              @1236 ASSET_PURCH_AMT COMMA15. /* VALUE OF ASSET PURCH  */
-              @1254 LN_UTILISE_LOCAT_CD $UPCASE5. /*LOC OF LN UTILI   */
-              @1262 APP_PUBLIST_FLG       $UPCASE3. /* EXCSME1        */
-              @1268 APP_SUBSI_PUBLIST_FLG $UPCASE3. /* EXCSME2        */
-              @1274 APP_SUBSI_COMP_FLG    $UPCASE3. /* EXCSME3        */
-              @1280 APP_SUBSI_CORP_FLG    $UPCASE3. /* EXCSME4        */
-              @1286 APP_SPV_FLG           $UPCASE3. /* APPSPV         */
-              @1292 INDUSTRIAL_SECTOR_CD        $5.
-              @1301 CHG_BY_SYS                  $1. /* 2018-3151 */
-              @1305 BR_FULL_DOC_RECEIVE_DT    DDMMYY10.
-              @1318 HOE_FULL_DOC_RECEIVE_DT   DDMMYY10.
-              @1331 CORPSTAT                   $15. /* 2018-1960     */
-              @1349 APP_SUBSI_NONSME_HOLD_FLG  $3.  /* 2019-4947     */
-              @1355 INCEPTION_RISK_RATING_GRADE_SME $13.
-              @1371 SICR_TAG                    $3. /* 2022-5675    */
-              ;
-      INCEPTION_RISK_RATING_GRADE_SME =
-            TRANSLATE(INCEPTION_RISK_RATING_GRADE_SME,"[]","��");
-
-         IF UPCASE(REFTYPE) IN ('INSURANCE AGENT', 'LOAN AGENT',
-                                'MCCM REFERRAL',
-                                'OUTSOURCED MARKETING COMPANY',
-                                'PROPERTY AGENT','REAL ESTATE BROKE',
-                                'TAX AGENT')
-            THEN DO;
-            REFTYPE_3RD_PARTY  = REFTYPE;
-            NMREF_3RD_PARTY    = NMREF1;
-            REFTYPE = ' ';
-            NMREF1  = ' ';
-         END;
-     RUN;
-
-     DATA EHP2;
-        INFILE ELDSHP2 FIRSTOBS=2 MISSOVER;
-        INPUT @001 AANO      $UPCASE13.
-              @017 REFTYPE   $70.
-              @090 NMREF1    $UPCASE60.
-              @153 NMREF2    $UPCASE60.
-              @216 CPARTY    $UPCASE3.   /* CONNECTED PARTIES    */
-              @222 CPSTAFF   $UPCASE50.  /* CP STAFF NAME        */
-              @275 CPDITOR   $UPCASE3.   /* CP BOARD DIRECTOR    */
-              @281 CPSTFID   $UPCASE5.   /* CP STAFF ID          */
-              @289 CPBRHO    $UPCASE11.  /* CP BRANCH/HO         */
-              @303 CPBRID    $UPCASE3.   /* CP BRANCH ID         */
-              @309 CPHQDIV   $UPCASE30.  /* CP HO DIVISION       */
-              @342 CPRELAT   $UPCASE100. /* CP RELATIVES         */
-              @445 CPRELAS   $UPCASE100. /* CP RELATIONSHIP      */
-              @548 NEWESIT   $UPCASE8.   /* NEW/EXISTING         */
-              @559 AMTAPPLY  COMMA15.    /* AMOUNT APPLIED       */
-              @577 LNTERM          3.    /* LOAN TERMS           */
-              @583 APPRIC    $UPCASE200. /* APPLIED PRICING      */
-              @786 AVPRIC    $UPCASE200. /* APPROVED PRICING     */
-              @989 REINPROD  $UPCASE1.   /* ADDTIONAL FACILITIES */
-              @993 STATUS    $UPCASE30.
-              @1026 REFTYPE_3RD_PARTY $70.       /*2017-2960 */
-              @1099 NMREF_3RD_PARTY   $UPCASE60. /*2017-2960 */
-              @1162 STRUPCO_3YR $UPCASE2. /* STARTUP FINANCING   */
-              @1167 FIN_CONCEPT $UPCASE60. /* FINANCING CONCEPT       */
-              @1230 REFIN_FLG   $UPCASE3.  /* REFINANCING(ISS3)  */
-              @1236 ASSET_PURCH_AMT COMMA15. /* VALUE OF ASSET PURCH  */
-              @1254 LN_UTILISE_LOCAT_CD $UPCASE5. /*LOC OF LN UTILI   */
-              @1262 APP_PUBLIST_FLG       $UPCASE3. /* EXCSME1        */
-              @1268 APP_SUBSI_PUBLIST_FLG $UPCASE3. /* EXCSME2        */
-              @1274 APP_SUBSI_COMP_FLG    $UPCASE3. /* EXCSME3        */
-              @1280 APP_SUBSI_CORP_FLG    $UPCASE3. /* EXCSME4        */
-              @1286 APP_SPV_FLG           $UPCASE3. /* APPSPV         */
-              @1292 INDUSTRIAL_SECTOR_CD      $5.
-              @1301 CHG_BY_SYS                $1. /* 2018-3151 */
-              @1305 BR_FULL_DOC_RECEIVE_DT    DDMMYY10.
-              @1318 HOE_FULL_DOC_RECEIVE_DT   DDMMYY10.
-              @1331 CORPSTAT                   $15. /* 2018-1960    */
-              ;
-         IF UPCASE(REFTYPE) IN ('INSURANCE AGENT', 'LOAN AGENT',
-                                'MCCM REFERRAL',
-                                'OUTSOURCED MARKETING COMPANY',
-                                'PROPERTY AGENT','REAL ESTATE BROKE',
-                                'TAX AGENT')
-            THEN DO;
-            REFTYPE_3RD_PARTY  = REFTYPE;
-            NMREF_3RD_PARTY    = NMREF1;
-            REFTYPE = ' ';
-            NMREF1  = ' ';
-         END;
-     RUN;
-
-     DATA ELN3(DROP=RAW_PD IMP_EXP_IND);
-        INFILE ELDSTX3 FIRSTOBS=2;
-        INPUT @1   AANO      $UPCASE13.  /* AA NUM               */
-              @17  MAANO     $UPCASE13.  /* MAIN AA NUM          */
-              @33  APVBY     $UPCASE2.   /* APPBRHO              */
-              @38  MRTAIND   $UPCASE15.  /* MRTA INDICATOR       */
-              @56  NOMRTA    $UPCASE2.   /* MRTA NO OF POLICY    */
-              @61  MRTAPREM   COMMA15.0  /* TOTAL PREMIUM MRTA   */
-              @79  MRTAOPT   $UPCASE15.  /* FINANCE OPTION MRTA  */
-              @97  MRTAINS   $UPCASE30.  /* MRTA INSURANCE COMPAN*/
-              @130 ODLFIN    $UPCASE15.  /* FINANCE OPTION ODL   */
-              @148 ODLPREM    COMMA15.0  /* TOTAL PREMIUM ODL    */
-              @166 ODLINS    $UPCASE30.  /* ODL INSURANCE COMPANY*/
-              @199 MRPAFIN   $UPCASE15.  /* FINANCE OPTION MRPA  */
-              @217 MRPAPREM   COMMA15.0  /* TOTAL PREMIUM MRPA   */
-              @235 MRPAINS   $UPCASE30.  /* MRPA INSURANCE COMPAN*/
-              @268 BLDIND    $UPCASE3.   /* BLDTA INDICATOR      */
-              @274 BLOIND    $UPCASE3.   /* BLOLTA INDICATOR     */
-              @280 BLDCASE   $UPCASE2.   /* BLDTA NO OF INSURANCE*/
-              @285 BLOCASE   $UPCASE2.   /* BLOLTA NO OF INSURANC*/
-              @290 BLDPREM    COMMA15.2  /* BLDTA TOTAL PREMIUM  */
-              @308 BLOPREM    COMMA15.2  /* BLOLTA TOTAL PREMIUM */
-              @326 BLDINS    $UPCASE30.  /* BLDTA INSURANCE COMPA*/
-              @359 BLOINS    $UPCASE30.  /* BLOLTA INSURANCE COMP*/
-              @392 CCIND     $UPCASE3.   /* CRECARD INDICATOR    */
-              @398 CCREA     $UPCASE200. /* REASON FOR NO CRECARD*/
-              @601 REFINANC  $UPCASE1.   /* REFINANCING          */
-              @605 SECTOR2   $UPCASE8.   /* SECTOR CODE 2        */
-              @616 FDTAIND   $UPCASE3.   /* FBLDTA INDICATOR     */
-              @622 FOTAIND   $UPCASE3.   /* FBLOLDTA INDICATOR  */
-              @628 FDTANUM   $UPCASE2.   /* FBLDTA NO OF INSURANC*/
-              @633 FOTANUM   $UPCASE2.   /* FBLOLDTA NO OF INSURA*/
-              /* @638 FBLDTAP   $UPCASE15.  FBLDTA PREMIUM       */
-              /* @656 FNLOLTAP  $UPCASE15.  FBLOLDTA PREMIUM     */
-              @674 FDTAINS   $UPCASE30.  /* FBLDTA INSURANCE COMP*/
-              @707 FOTAINS   $UPCASE30.  /* FBLOLDTA INSURANCE CO*/
-              @740 HPDTAIND  $UPCASE3.   /* HPDTA INDICATOR      */
-              @746 HPDTASUM  $UPCASE12.  /* HPDTA SUM INSURED    */
-              @761 HPDTAPRE  $UPCASE12.  /* HPDTA GROSS PREMIUM  */
-              @776 HPDTAINS  $UPCASE2.   /* HPDTA PERIOD INSURED */
-              @781 COLLCODE  $UPCASE2.   /* COLLATERAL CODE      */
-              @786 STATUS    $UPCASE30.  /* STATUS               */
-              @819 REFINANCAMT $UPCASE15. /* REFINANCING AMOUNT  */
-              @837 BUSINESSID  $UPCASE15. /* BUSINESS ID         */
-              @855 PRODGRP   $1.          /* FACILITY GROUP TYPE */
-              @859 BUSTYPEID $UPCASE2.    /* BUSINESS TYPE ID        */
-              @864 APPAMTSC  COMMA15.0    /* APPROVED AMT W/O S&C    */
-              @882 FACICODE   5.          /* FACILITY CODE           */
-              @890 ABMHL     $1.          /* ABM HOUSING LOAN <RM500K*/
-              @894 FACNAME   $UPCASE60.   /* FACILITY NAME        */
-              @967 DNBFISME  $1.          /* 3RD BYTE OF CUSTCODE */
-              @971 FACCODE   $10.         /* FACILITY CODE        */
-              @984 GREENTCO  $1.          /* GREENTECHCO          */
-              @988 BIOTCO    $1.          /* BIOTECHCO            */
-              @992 SMEIP     $1.          /* SMEIPRIGHTS          */
-              @996 SME1INCR  $1.          /* SME1INNOCERT         */
-              @1000 SMEMSC   $1.          /* SMEMSCSTATUS         */
-              @1004 STRUPCO_2YR  $1.      /* STARTUPCO            */
-              @1008 PURLNMOD $1.          /* PURPLOANMOD          */
-              @1012 RRTYPE   $1.          /* REINSTATEMENT INDICATOR  */
-              @1016 VB       $1.          /* VULNERABLE BORROWERS  */
-              @1020 PRESCSTATE  2.        /* PRESCRIVE STATE       */
-          /*  @1042 ASCOREBRH  $10.          ASCORE GRADE BRANCH   */
-          /*  @1055 ASCORECOD  $10.          ASCORE GRADE HO       */
-              @1068 ASCORESCORE 10.       /* ASCORE SCORE  */
-              @1081 RAW_PD   $10.         /* ASCORE PD */
-              @1094 ASCORE_SEQ  $40.      /* ASCORE SEQ */
-              @1137 ASCORE_XY   $1.       /* ASCORE PROXY */
-              @1141 ASCORE_ID   $50.      /* ASCORE SCORE ID */
-              @1194 ASCORE_DEBT COMMA10.2 /* ASCORE DEBT */
-              @1207 ASCORE_INC  COMMA15.2 /* ASCORE INCOME */
-              @1225 ASCORE_DSR   10.      /* ASCORE DSR */
-              @1238 ASCORE_CRLMT COMMA15. /* ASCORE CREDIT LIMIT */
-              @1256 ASCORE_SEC   COMMA15. /* ASCORE SECURITY */
-              @1274 ASCORE_MA    10.      /* ASCORE MA */
-          /*  @1287 ASCOREGRADE $10.         ASCORE GRADE */
-              @1300 ASCORE_DSRYR 10.      /* ASCORE DSR 10 YR */
-              @1313 ASCORE_LEGAL $3.      /* ASCORE EXISTINGLEGALAC*/
-              @1319 ASCORE_CRIS  $3.      /* ASCORE UNSAT CCRIS COND */
-              @1325 ASCORE_RES   $3.      /* ASCORE RESCHEDULEAKPK */
-              @1331 ASCORE_OUT   $3.      /* ASCORE OUTSTANDINGLG */
-              @1337 ASCORE_SPE   $3.      /* ASCORE SPECIAL ATTENTION */
-              @1343 SCOREIND    $7.       /* FINAL_GRADE */
-              @1353 MTHINSTLMT COMMA15.   /* MONTHLY INSTALMENT   */
-              @1371 DSRBRH      $5.       /* DSR BRANCH */
-              @1379 DSRCOD      $5.       /* DSR HEAD OFFICE */
-              @1394 ASCOREBRH  $13.       /* ASCORE GRADE BRANCH  */
-              @1410 ASCORECOD  $13.       /* ASCORE GRADE HO      */
-              @1426 ASCOREGRADE $13.      /* ASCORE GRADE */
-              @1442 MODIFIED_FAC_TAG $1.  /* MODIFIED FACILITY */
-              @1446 AMT_REJ_HOE COMMA15.0 /* REJECTED AMOUNT   */
-              @1464 MASTER_RATING    $7.  /* MASTER RATING     */
-              @1472 SCORECARD_RATING $7.  /* SCORECARD RATING  */
-              @1480 LCC_CRR_CREDIT   $1.  /* LOW RISK CREDIT RISK RTG*/
-              @1484 CUST_CLASSIFICATION $4.
-              @1491 CURRENCY_CD       $20. /* APPRVED CURR LMT */
-              @1514 APP_LIMIT_AMT_CCY COMMA20. /* APPRVED LIMT AMT CCY*/
-              @1537 GEARUPTAG           $1. /* SMR 2019-405 */
-              @1541 EDD_HIGH_RISK_FACTOR_CD $150.  /* SMR 2019-2022 */
-              @1694 LARGE_CORP_FLG  $UPCASE3. /* SMR 2019-2763/2104 */
-              @1700 INCEPTION_RISK_RATING_GRADE_LC $12. /*SMR2022-5675*/
-              @1715 CLIMATE_ECON_ACTIVITY_CLASS  $3.   /*SMR 2020-985*/
-              @1721 CLIMATE_GREEN_ACTIVITY_TYPE  $160. /*SMR 2020-985*/
-              @1884 CLIMATE_FLOOD_RISK_FLG       $3.   /*SMR 2020-985*/
-              @1896 CUST_SINCE_YYYYMM_BORR       $6.  /*SMR 2020-2511*/
-              @1905 IMP_EXP_BUSS_OWNER_FLG       $3. /*SMR 2020-2511*/
-              @1911 IMP_EXP_IND                $25. /* SMR 2020-3222 */
-              @1939 TEMP_FLEXI_LTV_FLG           $3. /*SMR 2020-4495*/
-              @1945 NUM_WORKDAY_TAKEN_BR       $5. /* SMR 2021-3361 */
-              @1953 NUM_WORKDAY_TAKEN_HOE      $5. /* SMR 2021-3361 */
-              @1961 NUM_TOT_WORKDAY_TAKEN      $5. /* SMR 2021-3361 */
-              @1969 CLIMATE_GREEN_ACTIVITY_CD  $100. /*SMR 2021-3894*/
-              @2072 SOCIAL_AGENDA_ACTIVITY_CD  $100. /*SMR 2021-3894*/
-              @2175 FIN_INSURE_PREMIUM    COMMA15. /* SMR 2022-383  */
-              @2193 FIN_LN_DOC_EXPENSES   COMMA15. /* SMR 2022-383  */
-              @2211 FIN_VALUATION_FEE     COMMA15. /* SMR 2022-383  */
-              @2229 BULLET_REPAY_IND           $1. /* SMR 2022-1525 */
-              @2233 BALLOON_REPAY_IND          $1. /* SMR 2022-1535 */
-              @2260 RAC_DEV                    $3. /* SMR 2023-1232 */
-              @2272 CCRIS_SUMM_EIR              7. /* SMR 2022-2766 */
-              @2282 CCRIS_SUMM_CIR              7. /* SMR 2022-2766 */
-              @2292 CCRIS_SUMM_PRICE_CODE     $20. /* SMR 2022-2766 */
-              @2315 CLIMATE_MITIGATE_GP1_FLG   $3. /* SMR 2023-3529 */
-              @2321 CLIMATE_ADAPT_GP2_FLG      $3. /* SMR 2023-3529 */
-              @2327 CLIMATE_ENVIRONMT_GP3_FLG  $3. /* SMR 2023-3529 */
-              @2333 CLIMATE_TRANSITION_GP4_FLG $3. /* SMR 2023-3529 */
-              @2339 CLIMATE_PROHIBIT_GP5_FLG   $3. /* SMR 2023-3529 */
-              @2345 IMMATERIALISE_REASON       $10./* SMR 2023-2260 */
-              @2358 REASON_RELIEF_LVL2       $500. /* SMR 2023-2263 */
-              @2861 REASON_RELIEF_LVL1       $500. /* SMR 2023-2263 */
-              @3364 GREEN_FIN_FACILITY_IND     $3. /* SMR 2024-705  */
-              @3370 RENO_PURP_FLG              $3. /* SMR 2024-3608 */
-              @3376 EDU_PURP_FLG               $3. /* SMR 2024-3608 */
-              @3382 HALAL_ENGAGE_FLG           $3. /* SMR 2024-2147 */
-              @3388 GRP_ANNL_SALES_FINANCIAL_DT DDMMYY10.
-              @3401 GRP_ANNL_SALES_AMT    COMMA25. /* SMR 2024-3447 */
-              @3429 SOC_AGD_B40_M40_FLG       $3.    /*SMR 2024-1227*/
-              @3435 SOC_AGD_1ST_2ND_PROP_FLG  $3.    /*SMR 2024-1227*/
-              @3441 SOC_AGD_OWN_STAY_FLG      $3.    /*SMR 2024-1227*/
-              @3447 SOC_AGD_PRICE_UP_300K_FLG  $3.   /*SMR 2024-1227*/
-              @3453 SOC_AGD_AFFORD_PROP_GOV_FLG  $3. /*SMR 2024-1227*/
-              @3459 SOC_AGD_AFFORD_SCHEME_FLG   $3.  /*SMR 2024-1227*/
-              @3465 SOC_AGD_REL_PARTY_PROP_FLG  $3.  /*SMR 2024-1227*/
-              ;
-              ASCOREBRH = TRANSLATE(ASCOREBRH,"[]","��");
-              ASCORECOD = TRANSLATE(ASCORECOD,"[]","��");
-            ASCOREGRADE = TRANSLATE(ASCOREGRADE,"[]","��");
-            ASCORE_PD   = INPUT(COMPRESS(RAW_PD,"%"),10.);
-              IF DNBFISME='' THEN DNBFISME='0';
-              IF SUBSTR(FACCODE,3,1) EQ 5 THEN DO;
-                 PRODUCT = SUBSTR(FACCODE,4,7)*1;
-              END;
-              ELSE PRODUCT = SUBSTR(FACCODE,8,3)*1;
-
-              IF PRESCSTATE IN (10,11) THEN SBH_SWK='Y';
-              ELSE SBH_SWK='N';
-
-             IF UPCASE(IMP_EXP_IND) = 'IMPORT ONLY'
-                THEN IMP_EXP_BUSS_OWNER_IND = 1;
-             IF UPCASE(IMP_EXP_IND) = 'EXPORT ONLY'
-                THEN IMP_EXP_BUSS_OWNER_IND = 2;
-             IF UPCASE(IMP_EXP_IND) = 'BOTH IMPORT AND EXPORT'
-                THEN IMP_EXP_BUSS_OWNER_IND = 3;
-
-     RUN;
-
-     DATA EHP3(DROP=RAW_PD);
-        INFILE ELDSHP3 FIRSTOBS=2;
-        INPUT @1   AANO      $UPCASE13.  /* AA NUM               */
-              @17  MAANO     $UPCASE13.  /* MAIN AA NUM          */
-              @33  APVBY     $UPCASE2.   /* APPBRHO              */
-              @38  MRTAIND   $UPCASE15.  /* MRTA INDICATOR       */
-              @56  NOMRTA    $UPCASE2.   /* MRTA NO OF POLICY    */
-              @61  MRTAPREM   COMMA15.0  /* TOTAL PREMIUM MRTA   */
-              @79  MRTAOPT   $UPCASE15.  /* FINANCE OPTION MRTA  */
-              @97  MRTAINS   $UPCASE30.  /* MRTA INSURANCE COMPAN*/
-              @130 ODLFIN    $UPCASE15.  /* FINANCE OPTION ODL   */
-              @148 ODLPREM    COMMA15.0  /* TOTAL PREMIUM ODL    */
-              @166 ODLINS    $UPCASE30.  /* ODL INSURANCE COMPANY*/
-              @199 MRPAFIN   $UPCASE15.  /* FINANCE OPTION MRPA  */
-              @217 MRPAPREM   COMMA15.0  /* TOTAL PREMIUM MRPA   */
-              @235 MRPAINS   $UPCASE30.  /* MRPA INSURANCE COMPAN*/
-              @268 BLDIND    $UPCASE3.   /* BLDTA INDICATOR      */
-              @274 BLOIND    $UPCASE3.   /* BLOLTA INDICATOR     */
-              @280 BLDCASE   $UPCASE2.   /* BLDTA NO OF INSURANCE*/
-              @285 BLOCASE   $UPCASE2.   /* BLOLTA NO OF INSURANC*/
-              @290 BLDPREM    COMMA15.2  /* BLDTA TOTAL PREMIUM  */
-              @308 BLOPREM    COMMA15.2  /* BLOLTA TOTAL PREMIUM */
-              @326 BLDINS    $UPCASE30.  /* BLDTA INSURANCE COMPA*/
-              @359 BLOINS    $UPCASE30.  /* BLOLTA INSURANCE COMP*/
-              @392 CCIND     $UPCASE3.   /* CRECARD INDICATOR    */
-              @398 CCREA     $UPCASE200. /* REASON FOR NO CRECARD*/
-              @601 REFINANC  $UPCASE1.   /* REFINANCING          */
-              @605 SECTOR2   $UPCASE8.   /* SECTOR CODE 2        */
-              @616 FDTAIND   $UPCASE3.   /* FBLDTA INDICATOR     */
-              @622 FOTAIND   $UPCASE3.   /* FBLOLDTA INDICATOR  */
-              @628 FDTANUM   $UPCASE2.   /* FBLDTA NO OF INSURANC*/
-              @633 FOTANUM   $UPCASE2.   /* FBLOLDTA NO OF INSURA*/
-              /* @638 FBLDTAP   $UPCASE15.  FBLDTA PREMIUM       */
-              /* @656 FNLOLTAP  $UPCASE15.  FBLOLDTA PREMIUM     */
-              @674 FDTAINS   $UPCASE30.  /* FBLDTA INSURANCE COMP*/
-              @707 FOTAINS   $UPCASE30.  /* FBLOLDTA INSURANCE CO*/
-              @740 HPDTAIND  $UPCASE3.   /* HPDTA INDICATOR      */
-              @746 HPDTASUM  $UPCASE12.  /* HPDTA SUM INSURED    */
-              @761 HPDTAPRE  $UPCASE12.  /* HPDTA GROSS PREMIUM  */
-              @776 HPDTAINS  $UPCASE2.   /* HPDTA PERIOD INSURED */
-              @781 COLLCODE  $UPCASE2.   /* COLLATERAL CODE      */
-              @786 STATUS    $UPCASE30.  /* STATUS               */
-              @837 BUSINESSID $UPCASE15. /* BUSINESS ID          */
-              @855 PRODGRP    $1.        /* FACILITY GROUP TYPE  */
-              @882 FACICODE    5.        /* FACILITY CODE       */
-              @859 BUSTYPEID $UPCASE2.   /* BUSINESS TYPE ID        */
-              @864 APPAMTSC  COMMA15.0   /* APPROVED AMT W/O S&C    */
-              @894 FACNAME   $UPCASE60.   /* FACILITY NAME        */
-              @967 DNBFISME  $1.         /* 3RD BYTE OF CUSTCODE */
-              @984 GREENTCO  $1.         /* GREENTECHCO          */
-              @988 BIOTCO    $1.         /* BIOTECHCO            */
-              @992 SMEIP     $1.         /* SMEIPRIGHTS          */
-              @996 SME1INCR  $1.         /* SME1INNOCERT         */
-              @1000 SMEMSC   $1.         /* SMEMSCSTATUS         */
-              @1004 STRUPCO_2YR  $1.     /* STARTUPCO            */
-              @1008 PURLNMOD $1.         /* PURPLOANMOD          */
-              @1012 RRTYPE   $1.         /* REINSTATEMENT INDICATOR  */
-         /*   @1042 ASCOREBRH  $10.          ASCORE GRADE BRANCH   */
-         /*   @1055 ASCORECOD  $10.          ASCORE GRADE HO       */
-              @1068 ASCORESCORE 10.       /* ASCORE SCORE  */
-              @1081 RAW_PD      $10.      /* ASCORE PD */
-              @1094 ASCORE_SEQ  $40.      /* ASCORE SEQ */
-              @1137 ASCORE_XY   $1.       /* ASCORE PROXY */
-              @1141 ASCORE_ID   $50.      /* ASCORE SCORE ID */
-              @1194 ASCORE_DEBT COMMA10.2 /* ASCORE DEBT */
-              @1207 ASCORE_INC  COMMA15.2 /* ASCORE INCOME */
-              @1225 ASCORE_DSR   10.      /* ASCORE DSR */
-              @1238 ASCORE_CRLMT COMMA15. /* ASCORE CREDIT LIMIT */
-              @1256 ASCORE_SEC   COMMA15. /* ASCORE SECURITY */
-              @1274 ASCORE_MA    10.      /* ASCORE MA */
-         /*   @1287 ASCOREGRADE $10.         ASCORE GRADE */
-              @1300 ASCORE_DSRYR 10.     /* ASCORE DSR 10 YR */
-              @1313 ASCORE_LEGAL $3.      /* ASCORE EXISTINGLEGALAC*/
-              @1319 ASCORE_CRIS  $3.      /* ASCORE UNSAT CCRIS COND */
-              @1325 ASCORE_RES   $3.      /* ASCORE RESCHEDULEAKPK */
-              @1331 ASCORE_OUT   $3.      /* ASCORE OUTSTANDINGLG */
-              @1337 ASCORE_SPE   $3.      /* ASCORE SPECIAL ATTENTION */
-              @1343 SCOREIND    $7.       /* FINAL_GRADE */
-              @1353 MTHINSTLMT COMMA15.   /* MONTHLY INSTALMENT   */
-              @1394 ASCOREBRH  $13.       /* ASCORE GRADE BRANCH  */
-              @1410 ASCORECOD  $13.       /* ASCORE GRADE HO      */
-              @1426 ASCOREGRADE $13.      /* ASCORE GRADE */
-              @1442 MODIFIED_FAC_TAG $1.  /* MODIFIED FACILITY */
-              @1694 LARGE_CORP_FLG  $UPCASE3. /* SMR 2019-2763/2104 */
-              @1700 INCEPTION_RISK_RATING_GRADE  $12. /*ESMR 2019-3302*/
-              @1715 CLIMATE_ECON_ACTIVITY_CLASS $UPCASE3.
-              @1721 CLIMATE_GREEN_ACTIVITY_TYPE $UPCASE160.
-              @1884 CLIMATE_FLOOD_RISK_FLG $UPCASE3.
-              @1969 CLIMATE_GREEN_ACTIVITY_CD  $100. /*SMR 2021-3894*/
-              @2072 SOCIAL_AGENDA_ACTIVITY_CD  $100. /*SMR 2021-3894*/
-              @2315 CLIMATE_MITIGATE_GP1_FLG   $3. /* SMR 2025-3143*/
-              @2321 CLIMATE_ADAPT_GP2_FLG      $3. /* SMR 2025-3143*/
-              @2327 CLIMATE_ENVIRONMT_GP3_FLG  $3. /* SMR 2025-3143*/
-              @2333 CLIMATE_TRANSITION_GP4_FLG $3. /* SMR 2025-3143*/
-              @2339 CLIMATE_PROHIBIT_GP5_FLG   $3. /* SMR 2025-3143*/
-              ;
-              ASCOREBRH = TRANSLATE(ASCOREBRH,"[]","��");
-              ASCORECOD = TRANSLATE(ASCORECOD,"[]","��");
-            ASCOREGRADE = TRANSLATE(ASCOREGRADE,"[]","��");
-              ASCORE_PD = INPUT(COMPRESS(RAW_PD,"%"),10.);
-              MAANO=AANO;
-              IF DNBFISME='' THEN DNBFISME='0';
-     RUN;
-
-     DATA ELN4;
-         INFILE ELDSTX4 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13.
-               @70  APVBY     $UPCASE10.
-               @089 NATIONALITY $UPCASE55.
-               @262 YEARSS    $20.        /* YEAR OF SERVICE          */
-               @306 SALARY    COMMA15.    /* SUBSTANTIATED INCOME     */
-               @324 OTHINCOME COMMA15.    /* UNSUBSTANTIATED INCOME   */
-               @705 NEWICIND  $UPCASE2.   /* TYPE OF ID               */
-               @899 TOLSCORE  $UPCASE4.   /* GUARANTOR CRR TOTAL SCORE*/
-               @912 CRRGRD    $UPCASE2.   /* GUARANTOR CRR GRADE      */
-               @1436 TNETINCM  COMMA15.   /* TOTAL NET INCOME         */
-              @1724 EMPLOYER_ADDR_COUNTRY $UPCASE50. /*  SMR17-3655   */
-              @1818 SIBITYPE  $UPCASE2.   /* S'PORE/BRUNEI IC TYPE    */
-              @1823 SIBINUM   $UPCASE12.  /* S'PORE/BRUNEI IC NUMBER  */
-              @1838 MM2H      $UPCASE2.   /* MM2H                     */
-              @4028 PR_CTRY   $UPCASE50.  /* PR_CTRY                  */
-              @4081 ANNSUBTSALARY COMMA15. /* ANNUAL INCOME           */
-              @4099 DSRISS3  $UPCASE10.    /* DEBT SERVISE RATIO      */
-              @4112 CITIZEN_CD $UPCASE50. /* CITIZENSHIP              */
-              @4165 POSTCODE  $UPCASE10.   /* POST CODE               */
-              @4178 STATE_CD  $UPCASE50.   /* STATE CODE              */
-              @4231 COUNTRY_CD $UPCASE50.  /* COUNTRY CODE            */
-              @4569 BNM_ASSIGN_ID $UPCASE20. /* BNM ASSISGN ID        */
-              @4678 EMPLOY_SECTOR_CD $UPCASE50. /* EMPLOYMENT SECTOR  */
-              @5041 NEW_BUSS_REG_ID       12.
-              @5056 NEW_BUSS_REG_ID_TYPE  $3.
-              @5061 CUST_SINCE_YYYYMM_BANK      $6.  /* SMR2020-2019 */
-              @5070 ASCORE_GRADE                $13. /* SMR2020-2019 */
-              @5086 ASCORE_SCORE                10.  /* SMR2020-2019 */
-              @5099 CRIS_LN_ARR_ABAN_PROJ_FLG   $3.  /* SMR2020-2019 */
-              @5105 CRIS_LN_ARR_PTPTN_FLG       $3.  /* SMR2022-5096 */
-              @5139 SOURCE_INCOME_CURRENCY_CD   $3.  /* SMR2024-3446 */
-              ;
-        ASCORE_GRADE = TRANSLATE(ASCORE_GRADE,"[]","��");
-        IF SUBSTR(APVBY,1,3)='APP';
-        DROP APVBY;
-     RUN;
-     PROC SORT DATA=ELN4 NODUPKEY; BY MAANO; RUN;
-
-     DATA EHP4(DROP=EXPEND1);
-         INFILE ELDSHP4 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13.  /* MAIN AA NO               */
-               @70  APVBY     $UPCASE10.
-               @089 NATIONALITY $UPCASE55.
-               @262 YEARSS    $20.        /* YEAR OF SERVICE          */
-               @306 SALARY    COMMA15.    /* SUBSTANTIATED INCOME     */
-               @324 OTHINCOME COMMA15.    /* UNSUBSTANTIATED INCOME   */
-               @342 EXPEND1   COMMA15.    /* GROSS INCOME             */
-               @705 NEWICIND  $UPCASE2.   /* TYPE OF ID               */
-               @899 TOLSCORE  $UPCASE4.   /* GUARANTOR CRR TOTAL SCORE*/
-               @912 CRRGRD    $UPCASE2.   /* GUARANTOR CRR GRADE      */
-              @1724 EMPLOYER_ADDR_COUNTRY $UPCASE50. /*  SMR17-3655   */
-              @1818 SIBITYPE  $UPCASE2.   /* S'PORE/BRUNEI IC TYPE    */
-              @1823 SIBINUM   $UPCASE12.  /* S'PORE/BRUNEI IC NUMBER  */
-              @1838 MM2H      $UPCASE2.   /* MM2H                     */
-              @4028 PR_CTRY   $UPCASE50.  /* PR_CTRY                  */
-              @4081 ANNSUBTSALARY COMMA15. /* ANNUAL INCOME           */
-              @2445 DSRISS3  $UPCASE10.    /* DEBT SERVISE RATIO      */
-              @4112 CITIZEN_CD $UPCASE50. /* CITIZENSHIP              */
-              @4165 POSTCODE  $UPCASE10.   /* POST CODE               */
-              @4178 STATE_CD  $UPCASE50.   /* STATE CODE              */
-              @4231 COUNTRY_CD $UPCASE50.  /* COUNTRY CODE            */
-              @4569 BNM_ASSIGN_ID $UPCASE20. /* BNM ASSISGN ID        */
-              @4678 EMPLOY_SECTOR_CD $UPCASE50. /* EMPLOYMENT SECTOR  */
-              @5105 CRIS_LN_ARR_PTPTN_FLG       $3.  /* SMR2022-5096 */
-              @5139 SOURCE_INCOME_CURRENCY_CD   $3.  /* SMR2025-2064 */
-               ;
-          IF SUBSTR(APVBY,1,3)='APP';
-          DROP APVBY;
-     RUN;
-
-     DATA ELN7;
-        INFILE ELDSTX7 FIRSTOBS=2 MISSOVER;
-        INPUT @01  MAANO     $UPCASE13.  /* MAIN AA NO           */
-              @17  AANO      $UPCASE13.  /* AANO 2018-5200       */
-              @33  INDNEWE   $UPCASE8.
-             @225  CMVALUE   COMMA15.    /* CUR MARKET VAL (RM)  */
-             @243  FSVALUE   COMMA15.    /* FORCE SALE VAL (RM)  */
-             @722  LOCPROP   $UPCASE40.  /* LOCATION OF PROPERTY */
-             @765  PCTCOMP   3.          /* PERCENTAGE COMPLETION*/
-             @771  AREALOC   $UPCASE30.  /* AREA LOCATION        */
-            @1096  ENCUMBER  $1.         /* ENCUMBERED/UNENCUMBERED  */
-            @1100  ENCUMTRN  $40.        /* ENCUMBERED/UNCBRD TRANSAC */
-            @1143  PROTYPPO  $1.         /* PROPERTY TYPE POSITION   */
-            @1147  STDDESG   $1.         /* STANDARD DESIGN PROPERTY */
-            @1151  VIND2     $1.         /* VALUER INDICATOR 2       */
-            @1155  VNAME     $40.        /* VALUER'S NAME            */
-            @1198  PVRPOLICY $1.         /* IS PVR REQUIRED PV POLICY*/
-            @1202  PVRWAIVE  $1.         /* IS PVR WAIVED            */
-            @1206  PVRREASON $1.         /* PVR NO REASON            */
-            @1210  PVRWVERES $1.         /* PVR WAIVED REASON        */
-            @1214  PROPERT   $100.       /* TYPE/DESC OF PROPERTY 2  */
-            @1317  PROPERTYNO 3.         /* PROPERTYNO               */
-             ;
-             IF PCTCOMP = 100 THEN COMPSTAT = 'Y';
-             ELSE                  COMPSTAT = 'N';
-             IF INDNEWE NE 'N/A';
-     RUN;
-
-     DATA ELN8;
-        INFILE ELDSTX8 FIRSTOBS=2 MISSOVER;
-        INPUT @01  MAANO     $UPCASE13.  /* MAIN AA NO           */
-              @35  ACCTNO1   $12.        /* ACCOUNT NO 1         */
-              @53  ACCTNO2   $12.        /* ACCOUNT NO 2         */
-              @97  INCDD     2.          /* DATE OF IC/ESTD/REG/BIRTH*/
-             @100  INCMM     2.          /* SMR 2021-750 */
-             @103  INCYY     4.
-             @146  AVGMTH1   $UPCASE20.  /* AVERAGE MTH DEP 1    */
-             @169  AVGMTH2   $UPCASE20.  /* AVERAGE MTH DEP 2    */
-             @192  AVGMTH3   $UPCASE20.  /* AVERAGE MTH DEP 3    */
-             @290  XDD       2.          /* APPLICATION DATE     */
-             @293  XMM       2.          /*                      */
-             @296  XYY       4.          /*                      */
-             @429  CDD       2.          /* COMPLIANCE CHECKLIST */
-             @432  CMM       2.          /* SMR 2021-750         */
-             @435  CYY       4.          /*                      */
-             @460  STAFFREF  $UPCASE10.  /* REFERRING STAFF'S ID     */
-             @473  STAFFLOA  $UPCASE3.   /* STAFF LOAN INDICATOR     */
-             @479  STAFFNAME $UPCASE50.  /* STAFF LOAN-NAME          */
-             @532  STAFFID   $UPCASE5.   /* STAFF LOAN-ID            */
-             @540  STAFFBRAN $UPCASE11.  /* STAFF LOAN-BRANCH/HO     */
-             @554  STAFFBRID $UPCASE3.   /* STAFF LOAN-BRANCH ID     */
-             @560  STAFFDIV  $UPCASE30.  /* STAFF LOAN-HO DIVISION   */
-             @593  STRTDLOA  $UPCASE3.   /* STAFF RTD LOAN INDICATOR */
-             @599  STRTDNAME $UPCASE50.  /* STAFF RTD LOAN-NAME      */
-             @652  STRTDID   $UPCASE5.   /* STAFF RTD LOAN-ID        */
-             @660  STRTDBRAN $UPCASE11.  /* STAFF RTD LOAN-BRANCH/HO */
-             @674  STRTDBRID $UPCASE3.   /* STAFF RTD LOAN-BRANCH ID */
-             @680  STRTDHO   $UPCASE30.  /* STAFF RTD LOAN-HO DIVISIO*/
-             @713  STRTDREL  $UPCASE100. /* STAFF RTD LOAN-RELATIVE  */
-             @816  STRTDSHIP $UPCASE100. /* STAFF RTD LOAN-RELATIONSH*/
-             @926  DPOTHERFI COMMA15.    /* BEP DEPOSIT OTHER FI     */
-             @1029 APPRLVL   $1.         /* APPROVING LEVEL          */
-             @1033 HRCIND    $1.         /* HRC INDICATOR            */
-          /* @1070 EXRATIO   $6. 2024-5099  BPS % EXEMPTED RATIO     */
-              ;
-        APPLDATE=MDY(XMM,XDD,XYY);
-        INCRDT=MDY(INCMM,INCDD,INCYY);
-        COMPLIDT=MDY(CMM,CDD,CYY);
-        DROP INCDD INCMM INCYY XMM XDD XYY CDD CMM CYY;
-    RUN;
-
-    DATA EHP8;
-        INFILE ELDSHP8 FIRSTOBS=2 MISSOVER;
-        INPUT @01  MAANO     $UPCASE13.  /* MAIN AA NO           */
-              @35  ACCTNO1   $12.        /* ACCOUNT NO 1         */
-              @53  ACCTNO2   $12.        /* ACCOUNT NO 2         */
-              @97  INCDD     2.          /* DATE OF IC/ESTD/REG/BIRTH*/
-             @100  INCMM     2.          /* SMR 2021-750 */
-             @103  INCYY     4.
-             @146  AVGMTH1   $UPCASE20.  /* AVERAGE MTH DEP 1    */
-             @169  AVGMTH2   $UPCASE20.  /* AVERAGE MTH DEP 2    */
-             @192  AVGMTH3   $UPCASE20.  /* AVERAGE MTH DEP 3    */
-             @290  XDD       2.          /* APPLICATION DATE     */
-             @293  XMM       2.          /*                      */
-             @296  XYY       4.          /*                      */
-             @429  CDD       2.          /* COMPLIANCE CHECKLIST */
-             @432  CMM       2.          /* SMR 2021-750         */
-             @435  CYY       4.          /*                      */
-             @460  STAFFREF  $UPCASE10.  /* REFERRING STAFF'S ID     */
-             @473  STAFFLOA  $UPCASE3.   /* STAFF LOAN INDICATOR     */
-             @479  STAFFNAME $UPCASE50.  /* STAFF LOAN-NAME          */
-             @532  STAFFID   $UPCASE5.   /* STAFF LOAN-ID            */
-             @540  STAFFBRAN $UPCASE11.  /* STAFF LOAN-BRANCH/HO     */
-             @554  STAFFBRID $UPCASE3.   /* STAFF LOAN-BRANCH ID     */
-             @560  STAFFDIV  $UPCASE30.  /* STAFF LOAN-HO DIVISION   */
-             @593  STRTDLOA  $UPCASE3.   /* STAFF RTD LOAN INDICATOR */
-             @599  STRTDNAME $UPCASE50.  /* STAFF RTD LOAN-NAME      */
-             @652  STRTDID   $UPCASE5.   /* STAFF RTD LOAN-ID        */
-             @660  STRTDBRAN $UPCASE11.  /* STAFF RTD LOAN-BRANCH/HO */
-             @674  STRTDBRID $UPCASE3.   /* STAFF RTD LOAN-BRANCH ID */
-             @680  STRTDHO   $UPCASE30.  /* STAFF RTD LOAN-HO DIVISIO*/
-             @713  STRTDREL  $UPCASE100. /* STAFF RTD LOAN-RELATIVE  */
-             @816  STRTDSHIP $UPCASE100. /* STAFF RTD LOAN-RELATIONSH*/
-             @1029 APPRLVL   $1.         /* APPROVING LEVEL          */
-          /* @1070 EXRATIO   $6.  2024-5099 BPS % EXEMPTED RATIO     */
-              ;
-        APPLDATE=MDY(XMM,XDD,XYY);
-        INCRDT=MDY(INCMM,INCDD,INCYY);
-        COMPLIDT=MDY(CMM,CDD,CYY);
-        DROP INCDD INCMM INCYY XMM XDD XYY CDD CMM CYY;
-     RUN;
-
-     DATA ELN10;
-         INFILE ELDST10 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13.  /* MAIN AA NO              */
-               @112 MRGADVE   $6.         /* HOE-MARGIN OF ADVANCE   */
-               @017 APPL      $UPCASE6.   /* APPEAL                  */
-               @515 CACCRIS   $UPCASE3.   /* CONDUCT BORROWER BORR   */
-               @521 CACRSFIY  $UPCASE15.
-               @850 APPLMRG   $UPCASE6.   /* APPEAL MARGIN           */
-               @1002 NATIONALITY $2.
-               @1007 RESIDENCY_STATUS_CD $UPCASE15. /* RESIDT STAT */
-               @1055 VBCSTAT  $UPCASE8.   /* VBC STATUS              */
-               @1169 CTRY_OPERATION $UPCASE55. /*COUNTRY OF OPERATION*/
-               @1227 CTRY_INCORP $2.      /* COUNTRY OF INCORPORATION*/
-               ;
-         CACRSFIY_MTH = SCAN(CACRSFIY, 1,'');
-         CACRSFIY_YR  = SCAN(CACRSFIY, 2,'')*1;
-     RUN;
-     *;
-     DATA EHP10;
-         INFILE ELDSHP10 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13.  /* MAIN AA NO              */
-               @112 MRGADVE   $UPCASE6.   /* HOE-MARGIN OF ADVANCE   */
-               @017 APPL      $UPCASE6.   /* APPEAL                  */
-               @515 CACCRIS   $UPCASE3. /* CONDUCT BORROWER BORR   */
-               @521 CACRSFIY  $UPCASE15.
-               @850 APPLMRG   $UPCASE6.   /* APPEAL MARGIN           */
-               @1002 NATIONALITY $2.
-               @1007 RESIDENCY_STATUS_CD $UPCASE15. /* RESIDT STAT */
-               @1055 VBCSTAT  $UPCASE8.   /* VBC STATUS              */
-               @1169 CTRY_OPERATION $UPCASE55. /*COUNTRY OF OPERATION*/
-               @1227 CTRY_INCORP $2.      /* COUNTRY OF INCORPORATION*/
-               ;
-      CACRSFIY_MTH = SCAN(CACRSFIY, 1,'');
-      CACRSFIY_YR  = SCAN(CACRSFIY, 2,'')*1;
-     RUN;
-
-     DATA EHP11;
-         INFILE ELDSHP11 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13.  /* MAIN AA NO              */
-               @017 PRODTYPE  $UPCASE50.  /* PRODUCT TYPE             */
-               @139 FISCHK    $UPCASE10.  /* FIS CHECKINGS            */
-               @152 SNLCHK    $UPCASE10.  /* SNL CHECKINGS            */
-               @165 CTOS      $UPCASE10.  /* CTOS                     */
-               @178 BRIS      $UPCASE10.  /* BRIS                     */
-               @191 FRAUDLS   $UPCASE10.  /* FRADULENT LIST           */
-               @204 PVLCHK    $UPCASE10.  /* PVL CHECKING             */
-               @217 CCRISCHK  $UPCASE10.  /* CCRIS CHECKING           */
-               @230 GNTORID   $UPCASE10.  /* GRTR'ID MATCHED IN CCRIS */
-               @243 OUTCRDT   $UPCASE3.   /* REC OF OUTSTANDING CREDIT*/
-               @357 CRDTBLNC  $UPCASE15.  /* AVR DAILY CREDIT BALANCE */
-               @375 BALFD     $UPCASE15.  /* BAL OF SA/FD AMOUNT      */
-               @411 HPLIAB    $UPCASE20.  /* AGGREGATE HP LIAB        */
-               @434 EXTLIAB   $UPCASE20.  /* AGG OTH EXS LIABILITIES  */
-               @2206 HPVR     $UPCASE30.  /* INTEREST RATE/INSTALMENT */
-            /* @2268 MTHINSTLMT COMMA15.     MONTHLY INSTALMENT       */
-               ;
-     RUN;
-
-     DATA EHP13;
-         INFILE ELDSHP13 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13.  /* MAIN AA NO              */
-               @034 TYPE      $UPCASE40.  /* TYPE                    */
-               @179 OUTSTND   $150.       /* OUTSTANDING             */
-               ;
-         IF TYPE="GUARANTOR'S EXISTING LIABILITY WITH PBB"
-         THEN OUTPUT;
-     RUN;
-
-     DATA EHP13;
-         SET EHP13;
-         IF OUTSTND='-' THEN DO OUTSTND=0; END;
-         OUTSTND=COMPRESS(OUTSTND,',');
-         AGGOUTSTND=OUTSTND*1;
-     RUN;
-
-     PROC SUMMARY DATA=EHP13 NWAY;
-     CLASS MAANO; VAR AGGOUTSTND;
-     OUTPUT OUT=EHP13(DROP=_TYPE_ _FREQ_)
-     SUM=;
-     RUN;
-
-   DATA ELN17;
-        INFILE ELDST17 FIRSTOBS=2 MISSOVER;
-        INPUT @001 MAANO     $UPCASE13. /* MAIN AA NO              */
-              @163 GEAR       5.2       /* EXACT VALUE FOR GEARING */
-              @136 MA         6.        /* M/A                     */
-              @827 DSR        8.        /* DEBT SER RATIO:EXT VALUE*/
-              ;
-   RUN;
-   *;
-    DATA EHP17;
-         INFILE ELDSHP17 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13. /* MAIN AA NO               */
-               @163 GEAR       5.2       /* EXACT VALUE FOR GEARING */
-               @136 MA         6.        /* M/A                     */
-               @827 DSR        8.        /* DEBT SER RATIO:EXT VALUE*/
-              ;
-   RUN;
-     DATA EHP18;
-         INFILE ELDSHP18 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13. /* MAIN AA NO               */
-               @378 TIRNGE    $UPCASE30. /* TYPE OF INDUSTRY:RANGE  */
-               @411 TISCR     3.         /* TYPE OF INDUSTRY:SCORE  */
-               @417 TIWGT     3.         /* TYPE OF INDUSTRY:WEIGHT */
-               @423 TITTOTSC  3.         /* TYPE OF INDUSTRY:TOL SC */
-               @429 TIBNMCD   $UPCASE4.  /* TYPE OF INDUSTRY:BNM CODE*/
-               ;
-     RUN;
-
-     DATA EHP19;
-         INFILE ELDSHP19 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13.  /* MAIN AA NO              */
-               @425 TVRNGE     $UPCASE50. /* TYPE OF VEHICLE:RANGE    */
-               @478 TVSCR      $UPCASE3.  /*TYPE OF VEHICLE:SCORE     */
-               @484 TVWGT      $UPCASE3.  /* TYPE OF VEHICLE:WEIGHT   */
-               @490 TVTOTSC    $UPCASE3.  /*TYPE OF VEHICLE:TOTAL SC  */
-               ;
-     RUN;
-
-     DATA ELN20;
-        INFILE ELDST20 FIRSTOBS=2 MISSOVER;
-        INPUT @001 MAANO     $UPCASE13. /* MAIN AA NO              */
-              @258 CRRBRH    $5.        /* CRR BRANCH              */
-              @266 CRRCOD    $5.        /* CRR COD / HEAD OFFICE   */
-              ;
-     RUN;
-
-     DATA EHP21; /* HP2 NEW  BSA=BANK STATEMENT ANALYSIS */
-         INFILE ELDSHP21 FIRSTOBS=2 MISSOVER;
-         INPUT @001 MAANO     $UPCASE13.  /* MAIN AA NO           */
-               @017 BANKBRC1  $UPCASE60.  /* BSN:BANK NAME& BRANCH 1 */
-               @080 BANKBRC2  $UPCASE60.  /* BSN:BANK NAME& BRANCH 2 */
-               @143 BANKBRC3  $UPCASE60.  /* BSN:BANK NAME& BRANCH 3 */
-               @206 NAMEACC1  $UPCASE60.  /* BSN:NAME OF ACCT HOLDER1*/
-               @269 NAMEACC2  $UPCASE60.  /* BSN:NAME OF ACCT HOLDER2*/
-               @332 NAMEACC3  $UPCASE60.  /* BSN:NAME OF ACCT HOLDER3*/
-               @395 PERIODF1  $UPCASE10.  /* BSN:PERIOD FROM 1       */
-               @408 PERIODT1  $UPCASE10.  /* BSN:PERIOD TO 1         */
-               @421 PERIODF2  $UPCASE10.  /* BSN:PERIOD FROM 2       */
-               @434 PERIODT2  $UPCASE10.  /* BSN:PERIOD TO 2         */
-               @447 PERIODF3  $UPCASE10.  /* BSN:PERIOD FROM 3       */
-               @460 PERIODT3  $UPCASE10.  /* BSN:PERIOD TO 3         */
-               @473 PERCENS1  $UPCASE5.   /* BSN:PERCENTAGE OF SHARE1*/
-               @481 PERCENS2  $UPCASE5.   /* BSN:PERCENTAGE OF SHARE2*/
-               @489 PERCENS3  $UPCASE5.   /* BSN:PERCENTAGE OF SHARE3*/
-               @497 BALUT     $UPCASE20.  /* BSN:BALANCE OF UNITTRUST*/
-               @520 MODEL     $UPCASE20.  /* MODEL                   */
-               @543 CATEGORY  $UPCASE15.  /* CATEGORY                */
-               @561 GOODS     $UPCASE15.  /* GOODS TO BE USE         */
-               @579 COLLACODE $UPCASE70.  /* COLLATERAL CODE         */
-               @652 BDM       $UPCASE7.   /* BDM                     */
-               @2238 CLIMATE_CAR_TYPE $UPCASE30.
-               @2271 ENERGY_EFFC_VEH_FLG $UPCASE3.
-               ;
-     RUN;
-
-     DATA ELN22; /* SOLE PROPRIETOR'S / PARTNERS'/ DIRECTORS'*/
-        INFILE ELDST22 FIRSTOBS=2 MISSOVER;
-        INPUT @001 MAANO     $UPCASE13.  /* MAIN AA NO           */
-              @017 APPNAME   $UPCASE60.  /* NAME                    */
-              @080 TYPEIDENT $UPCASE2.   /* TYPE OF IDENTIFICATION  */
-              @085 IDNO      $UPCASE50.  /* ID NO.                  */
-              @138 MONINCOME $UPCASE20.  /* MONTHLY INCOME          */
-              @161 DOB       $UPCASE10.  /* DATE OF BIRTH           */
-              @174 READDRESS $UPCASE150. /* RESIDENTIAL ADDRESS     */
-              @327 NATION    $UPCASE55.  /* NATIONALITY             */
-              @385 POHELD    $UPCASE15.  /* POSITION HELD           */
-              @403 PERCENSHA $UPCASE5.   /* PERCENTAGE OF SHAREHOLDING*/
-              @552 SPPSIBITYPE $UPCASE2. /* S'PORE/BRUNEI IC TYPE   */
-              @557 SPPSIBINUM $UPCASE12. /* S'PORE/BRUNEI IC NUMBER */
-              ;
-     RUN;
-
-     DATA ELN26(KEEP=MAANO HIGH_NWORTH); /* SUPPORT_FACTOR_AA */
-        INFILE ELDST26 FIRSTOBS=2 DLM=',' MISSOVER DSD END=EOF;
-        INPUT MAANO               :  $CHAR13.
-              FIELD               :  $CHAR18.
-              VALUE               : $CHAR500.
-              ;
-        IF UPCASE(VALUE) = 'HIGH NETWORTH BORROWER' THEN
-           HIGH_NWORTH = 'Y';
-        IF HIGH_NWORTH = 'Y' THEN OUTPUT;
-     RUN;
-
-     DATA ELN30;
-        INFILE ELDST30 FIRSTOBS=2 DLM=',' MISSOVER DSD END=EOF;
-        INPUT MAANO               : $CHAR32.
-              CATEGORY            : $CHAR20.
-              LISTNO              : $CHAR5.
-              DESC                : $CHAR300.
-              VALUE               : $CHAR6.
-        ;
-        IF UPCASE(CATEGORY) = 'CONDUCT OF ACCOUNTS'
-                 AND LISTNO = ''
-                 AND VERIFY(VALUE,'0123456789') = 0;
-        FORMAT CACRSFIY $15.;
-        TEMPDATE = MDY(SUBSTR(VALUE,1,2),1,SUBSTR(VALUE,3,4));
-        CACRSFIY = LEFT(UPCASE(PUT(TEMPDATE,MONNAME.)||' '||
-                    PUT(TEMPDATE,YEAR4.)));
-        CACRSFIY_MTH = SCAN(CACRSFIY,1,'');
-        CACRSFIY_YR  = SCAN(CACRSFIY,2,'')*1;
-        KEEP MAANO CACRSFIY CACRSFIY_MTH CACRSFIY_YR;
-        IF NOT EOF THEN OUTPUT;
-     RUN;
-
-     DATA EHP22; /* SOLE PROPRIETOR'S / PARTNERS'/ DIRECTORS'*/
-        INFILE ELDSHP22 FIRSTOBS=2 MISSOVER;
-        INPUT @001 MAANO     $UPCASE13.  /* MAIN AA NO           */
-              @017 APPNAME   $UPCASE60.  /* NAME                    */
-              @080 TYPEIDENT $UPCASE2.   /* TYPE OF IDENTIFICATION  */
-              @085 IDNO      $UPCASE50.  /* ID NO.                  */
-              @138 MONINCOME $UPCASE20.  /* MONTHLY INCOME          */
-              @161 DOB       $UPCASE10.  /* DATE OF BIRTH           */
-              @174 READDRESS $UPCASE150. /* RESIDENTIAL ADDRESS     */
-              @327 NATION    $UPCASE55.  /* NATIONALITY             */
-              @385 POHELD    $UPCASE15.  /* POSITION HELD           */
-              @403 PERCENSHA $UPCASE5.   /* PERCENTAGE OF SHAREHOLDING*/
-              @552 SPPSIBITYPE $UPCASE2. /* S'PORE/BRUNEI IC TYPE   */
-              @557 SPPSIBINUM $UPCASE12. /* S'PORE/BRUNEI IC NUMBER */
-              ;
-     RUN;
-
-     PROC SORT DATA=EHP1;BY AANO STATUS;
-     DATA XXX;
-        SET EHP1;
-        BY AANO STATUS;
-        IF FIRST.AANO OR FIRST.STATUS THEN DO;
-        END;
-        ELSE OUTPUT;
-     RUN;
-     PROC PRINT DATA=XXX;RUN;
-
-     PROC SORT DATA=ELN1 NODUPKEYS; BY AANO STATUS; RUN;
-     PROC SORT DATA=ELN2 NODUPKEYS; BY AANO STATUS; RUN;
-     PROC SORT DATA=ELN3 NODUPKEYS; BY AANO STATUS; RUN;
-     PROC SORT DATA=EHP1 NODUPKEYS; BY AANO STATUS; RUN;
-     PROC SORT DATA=EHP2 NODUPKEYS; BY AANO STATUS; RUN;
-     PROC SORT DATA=EHP3 NODUPKEYS; BY AANO STATUS; RUN;
-
-     DATA AA;
-        MERGE ELN1 ELN2 ELN3;
-        BY AANO STATUS;
-     RUN;
-
-     DATA HP;
-        MERGE EHP1 EHP2 EHP3;
-        BY AANO STATUS;
-     RUN;
-
-     DATA CC;
-        INFILE ELDST63 FIRSTOBS=2 MISSOVER;
-        INPUT @001 MAANO      $UPCASE13.
-              @017 AANO       $UPCASE50.
-              @070 REJCC      $UPCASE5.
-              @078 FACNAME    $UPCASE200.
-              @078 PRODESC    $200.
-              @281 APPAMTSC   COMMA20.0
-              @304 STATUS     $UPCASE30.
-              @337 BRANCH     4.
-              ;
-     RUN;
-     PROC SORT DATA=CC NODUPKEY; BY MAANO AANO STATUS; RUN;
-
-     DATA ELN;
-        LENGTH CRRGRADE CRRSCORE $13. AANO $50.;
-        SET AA HP CC;
-     RUN;
-
-     PROC SORT DATA=ELN NODUPKEYS; BY AANO STATUS; RUN;
-
-     DATA YYY;
-        SET ELN;
-        BY AANO STATUS;
-        IF FIRST.AANO OR FIRST.STATUS THEN DO;
-        END;
-        ELSE OUTPUT;
-     RUN;
-     PROC PRINT DATA=YYY;RUN;
-
-     PROC SORT DATA=ELN4 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=EHP4 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=ELN7 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=ELN8 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=EHP8 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=ELN10 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=EHP10 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=EHP11 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=EHP13 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=EHP18 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=EHP19 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=ELN20 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=ELN22 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=EHP21 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=EHP22 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=ELN26 NODUPRECS; BY MAANO;RUN;
-     PROC SORT DATA=ELN30 NODUPRECS; BY MAANO;RUN;
-
-     DATA PREHP;
-        MERGE EHP4 EHP8 EHP10 EHP11 EHP13 EHP18 EHP19 EHP21 EHP22;
-        BY MAANO;
-     RUN;
-
-     DATA PREAA;
-        MERGE ELN4 ELN8 ELN22 ELN26 ELN10 ELN30;
-        BY MAANO;
-     RUN;
-
-     DATA ENDCOM;
-        SET PREAA PREHP;
-     RUN;
-     *;
-     PROC SORT DATA=ELN; BY MAANO; RUN;
-     PROC SORT DATA=ELN10; BY MAANO; RUN;
-     PROC SORT DATA=EHP17; BY MAANO; RUN;
-     PROC SORT DATA=ELN17; BY MAANO; RUN;
-     *;
-     DATA ELN17;
-        MERGE EHP17 ELN17;
-        BY MAANO;
-     RUN;
-     *;
-     DATA ELN;
-        MERGE ELN(IN=A) ELN17(IN=B) ELN20;
-        BY MAANO;
-        IF A;
-     RUN;
-     *;
-     PROC SORT DATA=ENDCOM;BY MAANO;RUN;
-     PROC SORT DATA=ELN;BY MAANO;RUN;
-     *;
-     DATA ELN;
-        MERGE ELN(IN=B) ENDCOM(IN=A); BY MAANO;
-        IF B;
-     RUN;
-     *;
-     PROC SORT DATA=ELN; BY MAANO AANO;RUN;
-     PROC SORT DATA=ELN7; BY MAANO AANO;RUN;
-     DATA ELN;
-        MERGE ELN(IN=B) ELN7(IN=A); BY MAANO AANO;
-        IF B;
-     RUN;
-     PROC SORT DATA=ELN; BY MAANO AANO STATUS AADATE; RUN;
-     *;
-     DATA ELN ELNDUP;
-        SET ELN;
-        BY MAANO AANO STATUS AADATE;
-        IF FIRST.MAANO OR FIRST.AANO OR FIRST.STATUS OR FIRST.AADATE
-           THEN DO;
-           OUTPUT ELN;
-           END;
-        ELSE OUTPUT ELNDUP;
-     RUN;
-     *;
-     DATA ELN(DROP=MA);
-        MERGE ELN(IN=A) ELN17(IN=B);
-        BY MAANO;
-        IF AANO = ' ' THEN DELETE;
-        IF A AND B THEN DO;
-           IF APVBY = 'BR' THEN MARGIN = MA;
-           IF APVBY = 'HO' THEN DO;
-              IF APPL NE ' ' THEN DO;
-                 IF APPLMRG NE ' ' THEN MARGIN = APPLMRG;
-              END;
-              ELSE DO;
-                 IF MRGADVE NE ' ' THEN MARGIN = MRGADVE;
-              END;
-           END;
-           IF MA NE . THEN MARGIN = MA;
-        END;
-        IF A AND NOT B THEN DO;
-           IF APVBY = 'BR' THEN MARGIN = MARGIN;
-           IF APVBY = 'HO' THEN DO;
-              IF APPL NE ' ' THEN DO;
-                 IF APPLMRG NE ' ' THEN MARGIN = APPLMRG;
-              END;
-              ELSE DO;
-                 IF MRGADVE NE ' ' THEN MARGIN = MRGADVE;
-              END;
-           END;
-        END;
-        MARGIN = COMPRESS(MARGIN);
-     RUN;
-     *;
-     *** CONVENTIONAL + ISLAMIC ***;
-     DATA ELDS1.ELN&REPTMON&NOWK&REPTYEAR;
-        SET ELN; IF BRANCH LT 3000;
-        DROP HALAL_ENGAGE_FLG;
-     RUN;
-     DATA ELDS1.ELNDUP&REPTMON&NOWK&REPTYEAR;
-        SET ELNDUP; IF BRANCH LT 3000;
-        DROP HALAL_ENGAGE_FLG;
-     RUN;
-     DATA ELDS2.ELN&REPTMON&NOWK&REPTYEAR;
-        SET ELN; IF BRANCH LT 3000;
-        DROP HALAL_ENGAGE_FLG;
-     RUN;
-     DATA ELDS2.ELNDUP&REPTMON&NOWK&REPTYEAR;
-        SET ELNDUP; IF BRANCH LT 3000;
-        DROP HALAL_ENGAGE_FLG;
-     RUN;
-
-     PROC PRINT DATA=ELDS1.ELN&REPTMON&NOWK&REPTYEAR (OBS=50);
-        FORMAT AADATE LODATE APVDTE1 APVDTE2 DATE8.;
-     RUN;
-     FILENAME TRANFILE 'SAP.PBB.ELDATAWH.ELFTP' DISP=OLD;
-     PROC CPORT LIBRARY=ELDS1 FILE=TRANFILE;
-     RUN;
-
-     *** ISLAMIC ***;
-     DATA IELDS1.IELN&REPTMON&NOWK&REPTYEAR;
-        SET ELN; IF BRANCH GE 3000;
-     RUN;
-     DATA IELDS1.IELNDUP&REPTMON&NOWK&REPTYEAR;
-        SET ELNDUP; IF BRANCH GE 3000;
-     RUN;
-     DATA IELDS2.IELN&REPTMON&NOWK&REPTYEAR;
-        SET ELN; IF BRANCH GE 3000;
-     RUN;
-     DATA IELDS2.IELNDUP&REPTMON&NOWK&REPTYEAR;
-        SET ELNDUP; IF BRANCH GE 3000;
-     RUN;
-
-     PROC PRINT DATA=IELDS1.IELN&REPTMON&NOWK&REPTYEAR (OBS=50);
-        FORMAT AADATE LODATE APVDTE1 APVDTE2 DATE8.;
-     RUN;
-     FILENAME TRANFILE 'SAP.PIBB.ELDATAWH.IELFTP' DISP=OLD;
-     PROC CPORT LIBRARY=IELDS1 FILE=TRANFILE;
-     RUN;
-  %END;
-  %ELSE %DO;
-     %IF "&ELDSDT1" NE "&RDATE" OR
-         "&ELDSDT2" NE "&RDATE" OR
-         "&ELHPDT1" NE "&RDATE" OR
-         "&ELHPDT2" NE "&RDATE" %THEN
-         %PUT THE SAP.PBB.ELDS.BNM.TEXT(0) IS NOT DATED &RDATE;
-     %PUT THE JOB IS NOT DONE !!;
-     %DO;
-        DATA A;
-        ABORT 77;
-     %END;
-  %END;
-%MEND;
-%PROCESS;
-
-*****************************************;
-*            COUNT AANO                 *;
-*****************************************;
-DATA AA;
-   INFILE ELNAA FIRSTOBS=2;
-   INPUT @1 COUNT 10.;
-   CALL SYMPUT('COUNT',PUT(COUNT,10.));
-RUN;
-
-DATA HP;
-   INFILE ELNHP FIRSTOBS=2;
-   INPUT @1 COUNTHP 10.;
-RUN;
-
-PROC SQL NOPRINT;
-   SELECT PUT(SUM(COUNTHP),BEST. -L) INTO :COUNTHP
-   FROM HP;
-QUIT;
-
-DATA ELNOUT(KEEP=AANO DESC);
-SET ELN1(IN=A) ELN2(IN=B) ELN3(IN=C) EHP1(IN=D) EHP2(IN=E) EHP3(IN=F);
-   IF A THEN DESC='ELN1';
-   IF B THEN DESC='ELN2';
-   IF C THEN DESC='ELN3';
-   IF D THEN DESC='EHP1';
-   IF E THEN DESC='EHP2';
-   IF F THEN DESC='EHP3';
-RUN;
-
-PROC SUMMARY DATA=ELNOUT NWAY;
-CLASS DESC;
-OUTPUT OUT=ELNOUTT;
-RUN;
-
-PROC PRINT DATA=ELNOUTT;
-RUN;
-
-DATA AP;
-   SET ELNOUTT;
-   IF DESC='ELN1' THEN DO;
-      COUNTELDS="&COUNT";
-      COUNTMIS=_FREQ_;
-      IF COUNTMIS=COUNTELDS THEN DO;
-         STATUS="OK    ";
-      END;
-      ELSE STATUS="NOT OK";
-   END;
-   ELSE IF DESC='ELN2' THEN DO;
-      COUNTELDS="&COUNT";
-      COUNTMIS=_FREQ_;
-      IF COUNTMIS=COUNTELDS THEN DO;
-         STATUS="OK    ";
-      END;
-      ELSE STATUS="NOT OK";
-   END;
-   ELSE IF DESC='ELN3' THEN DO;
-      COUNTELDS="&COUNT";
-      COUNTMIS=_FREQ_;
-      IF COUNTMIS=COUNTELDS THEN DO;
-         STATUS="OK    ";
-      END;
-      ELSE STATUS="NOT OK";
-   END;
-   ELSE IF DESC='EHP1' THEN DO;
-      COUNTELDS="&COUNTHP";
-      COUNTMIS=_FREQ_;
-      IF COUNTMIS=COUNTELDS THEN DO;
-         STATUS="OK    ";
-      END;
-      ELSE STATUS="NOT OK";
-   END;
-   ELSE IF DESC='EHP2' THEN DO;
-      COUNTELDS="&COUNTHP";
-      COUNTMIS=_FREQ_;
-      IF COUNTMIS=COUNTELDS THEN DO;
-         STATUS="OK    ";
-      END;
-      ELSE STATUS='NOT OK';
-   END;
-   ELSE IF DESC='EHP3' THEN DO;
-      COUNTELDS="&COUNTHP";
-      COUNTMIS=_FREQ_;
-      IF COUNTMIS=COUNTELDS THEN DO;
-         STATUS="OK    ";
-      END;
-      ELSE STATUS="NOT OK";
-   END;
-
-   PROC PRINT DATA=AP;RUN;
-
-DATA CHECKING;
-   SET AP;
-   IF (DESC='ELN1' AND STATUS='NOT OK') OR
-      (DESC='EHP1' AND STATUS='NOT OK') THEN
-      ABORT 77;
-RUN;
-
-//*%OPC END   ACTION=NOSCAN
-
-
+import duckdb
+from pathlib import Path
+from datetime import datetime
+
+# ============================================================================
+# PATH CONFIGURATION - Edit these paths to match your environment
+# ============================================================================
+
+# Base directories
+BASE_DIR = Path('.')
+INPUT_DIR = BASE_DIR / 'data'
+OUTPUT_DIR = BASE_DIR / 'output'
+
+# Input paths
+LOAN_LNNOTE = INPUT_DIR / 'loan' / 'lnnote.parquet'
+LNADDR_LNNAME = INPUT_DIR / 'lnaddr' / 'lnname.parquet'
+BNM_LOAN = INPUT_DIR / 'bnm' / 'loan{reptmon}{nowk}.parquet'
+BNM_ULOAN = INPUT_DIR / 'bnm' / 'uloan{reptmon}{nowk}.parquet'
+DEPOSIT_TXT = INPUT_DIR / 'deposit.txt'
+MNICS_CIS = INPUT_DIR / 'mnics' / 'cis.parquet'
+ODADDR_SAVINGS = INPUT_DIR / 'odaddr' / 'savings.parquet'
+OD_OVERDFT = INPUT_DIR / 'od' / 'overdft.parquet'
+
+# Output paths
+SAVE_LOAN = OUTPUT_DIR / 'save_loan.parquet'
+PAGE02_PARQUET = OUTPUT_DIR / 'page02.parquet'
+PAGE04_PARQUET = OUTPUT_DIR / 'page04.parquet'
+PAGE01_TXT = OUTPUT_DIR / 'page01.txt'
+PAGE02_TXT = OUTPUT_DIR / 'page02.txt'
+PAGE03_TXT = OUTPUT_DIR / 'page03.txt'
+PAGE04_TXT = OUTPUT_DIR / 'page04.txt'
+
+# Create output directory if it doesn't exist
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# ============================================================================
+
+# Initialize DuckDB connection
+con = duckdb.connect()
+
+# Get reporting date and derive variables (mimics SAS REPTDATE logic)
+# In production, you would read from LOAN.REPTDATE dataset
+# For now, using current date or you can hardcode a specific date
+reptdate_value = con.execute("SELECT CURRENT_DATE").fetchone()[0]
+# reptdate_value = datetime(2026, 1, 23).date()  # Uncomment to use specific date
+
+day = reptdate_value.day
+nowk = '1' if day == 8 else '2' if day == 15 else '3' if day == 22 else '4'
+reptyear = str(reptdate_value.year)
+reptmon = f"{reptdate_value.month:02d}"
+reptday = f"{reptdate_value.day:02d}"
+reptdte = reptday + reptmon + reptyear
+reptdate_str = f"'{reptdate_value}'"  # For SQL queries
+
+# Format mappings
+payfq_map = {'1': 'M', '2': 'Q', '3': 'S', '4': 'A', '5': 'B', '9': 'I'}
+risk_map = {1: 'C', 2: 'S', 3: 'D', 4: 'B'}
+
+# Read and process loan data
+con.execute(f"""
+    CREATE TEMP TABLE lnnote AS 
+    SELECT * FROM read_parquet('{LOAN_LNNOTE}')
+    ORDER BY acctno
+""")
+
+con.execute(f"""
+    CREATE TEMP TABLE lnname AS 
+    SELECT * FROM read_parquet('{LNADDR_LNNAME}')
+    ORDER BY acctno
+""")
+
+# Merge loan name and address
+con.execute("""
+    CREATE TEMP TABLE lnaddr AS
+    SELECT n.acctno, n.taxno AS oldic, n.guarend AS newic,
+           n.nameln1, n.nameln2, n.nameln3, n.nameln4, n.nameln5
+    FROM lnnote ln
+    INNER JOIN lnname n ON ln.acctno = n.acctno
+""")
+
+# Process main loan data
+bnm_loan_path = str(BNM_LOAN).format(reptmon=reptmon, nowk=nowk)
+bnm_uloan_path = str(BNM_ULOAN).format(reptmon=reptmon, nowk=nowk)
+
+con.execute(f"""
+    CREATE TEMP TABLE loan_base AS
+    SELECT *, 
+           CASE WHEN source = 'uloan' THEN commno ELSE noteno END AS noteno
+    FROM (
+        SELECT *, 'loan' AS source FROM read_parquet('{bnm_loan_path}')
+        UNION ALL
+        SELECT *, 'uloan' AS source FROM read_parquet('{bnm_uloan_path}')
+    )
+    WHERE custcode NOT IN (1,2,3,10,11,12,81,91)
+""")
+
+# Handle duplicate product codes
+con.execute("""
+    CREATE TEMP TABLE loan_dedup AS
+    SELECT * FROM (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY acctno ORDER BY acctno) AS rn
+        FROM loan_base
+        WHERE prodcd IN ('34190','34690')
+    ) WHERE rn = 1
+    UNION ALL
+    SELECT *, 1 AS rn FROM loan_base WHERE prodcd NOT IN ('34190','34690')
+""")
+
+# Calculate total limits
+con.execute("""
+    CREATE TEMP TABLE temp AS
+    SELECT acctno, 
+           SUM(apprlimt) AS totlimt,
+           COUNT(*) AS loancnt
+    FROM loan_dedup
+    GROUP BY acctno
+""")
+
+# Read GP3 data
+con.execute(f"""
+    CREATE TEMP TABLE gp3klu AS
+    SELECT 
+        CAST(SUBSTRING(line, 1, 3) AS INTEGER) AS branch,
+        CAST(SUBSTRING(line, 4, 10) AS BIGINT) AS acctno,
+        CAST(SUBSTRING(line, 14, 5) AS INTEGER) AS zero5,
+        CAST(SUBSTRING(line, 19, 2) AS INTEGER) AS rptday,
+        CAST(SUBSTRING(line, 21, 2) AS INTEGER) AS rptmon,
+        CAST(SUBSTRING(line, 23, 4) AS INTEGER) AS rptyear,
+        CAST(SUBSTRING(line, 27, 12) AS DECIMAL(12,2)) AS scv,
+        CAST(SUBSTRING(line, 39, 12) AS DECIMAL(14,2)) AS iis,
+        CAST(SUBSTRING(line, 51, 12) AS DECIMAL(14,2)) AS iisr,
+        CAST(SUBSTRING(line, 63, 12) AS DECIMAL(14,2)) AS iisw,
+        CAST(SUBSTRING(line, 75, 12) AS DECIMAL(14,2)) AS prinwoff,
+        SUBSTRING(line, 87, 1) AS gp3ind,
+        NULL AS noteno
+    FROM read_csv('{DEPOSIT_TXT}', columns={{'line': 'VARCHAR'}}, header=false)
+    ORDER BY acctno, noteno
+""")
+
+# Filter loans >= 1M or NPL
+con.execute("""
+    CREATE TEMP TABLE loan_filtered AS
+    SELECT l.*, t.totlimt, t.loancnt
+    FROM loan_dedup l
+    INNER JOIN temp t ON l.acctno = t.acctno
+    WHERE t.totlimt >= 1000000 OR l.loanstat = 3
+""")
+
+# Merge with GP3
+con.execute(f"""
+    CREATE TEMP TABLE loan AS
+    SELECT l.*,
+           g.scv, g.iis, g.iisr, g.iisw, g.prinwoff, g.gp3ind,
+           CASE WHEN l.acctype != 'OD' 
+                THEN l.balance + (-1)*l.curbal + (-1)*l.feeamt 
+                ELSE NULL END AS intout,
+           '{reptdte}' AS reptdte
+    FROM loan_filtered l
+    LEFT JOIN gp3klu g ON l.acctno = g.acctno AND l.noteno = g.noteno
+""")
+
+# Director info (PAGE02)
+con.execute(f"""
+    CREATE TEMP TABLE dirinfo AS
+    SELECT DISTINCT
+           l.branch, l.acctno, l.reptdte,
+           CASE WHEN REGEXP_REPLACE(c.dirnic, '[0 ]', '') = '' THEN '' ELSE c.dirnic END AS dirnic,
+           CASE WHEN REGEXP_REPLACE(c.diroic, '[0 ]', '') = '' THEN '' ELSE c.diroic END AS diroic,
+           c.dirname
+    FROM (SELECT DISTINCT branch, acctno, reptdte FROM loan) l
+    LEFT JOIN read_parquet('{MNICS_CIS}') c ON l.acctno = c.acctno
+""")
+
+con.execute(f"COPY dirinfo TO '{PAGE02_PARQUET}'")
+
+# Write PAGE02 text file
+with open(PAGE02_TXT, 'w') as f:
+    for row in con.execute("SELECT * FROM dirinfo ORDER BY branch, acctno").fetchall():
+        line = f"0233{row[0]:05d}{row[1]:010d}{row[2]}{row[3]:20s}{row[4]:20s}  {row[5]:60s}MYN"
+        f.write(line + '\n')
+
+# Process address data
+con.execute(f"""
+    CREATE TEMP TABLE addr AS
+    SELECT acctno, nameln2, nameln3, nameln4, nameln5, oldic, newic
+    FROM lnaddr
+    UNION ALL
+    SELECT acctno, nameln2, nameln3, nameln4, nameln5, oldic, newic
+    FROM read_parquet('{ODADDR_SAVINGS}')
+""")
+
+# Get CIS data
+con.execute(f"""
+    CREATE TEMP TABLE cis_temp AS
+    SELECT DISTINCT acctno, name, sic
+    FROM read_parquet('{MNICS_CIS}')
+""")
+
+# Process OD data
+con.execute(f"""
+    CREATE TEMP TABLE loan2 AS
+    SELECT acctno, branch, balance, product
+    FROM read_parquet('{bnm_loan_path}')
+    WHERE acctype = 'OD' 
+      AND (apprlimt >= 0 OR balance < 0)
+      AND (acctno <= 3900000000 OR acctno > 3999999999)
+""")
+
+con.execute(f"""
+    CREATE TEMP TABLE od AS
+    SELECT DISTINCT acctno, excessdt, toddate, riskcode
+    FROM read_parquet('{OD_OVERDFT}')
+    WHERE excessdt > 0 OR toddate > 0
+""")
+
+# Calculate OD days overdue
+con.execute(f"""
+    CREATE TEMP TABLE loanod AS
+    SELECT l.acctno,
+           CASE WHEN bldate IS NOT NULL 
+                THEN DATE {reptdate_str} - bldate + 1 
+                ELSE NULL END AS days
+    FROM (
+        SELECT l.acctno,
+               CASE WHEN o.excessdt > 0 AND o.toddate > 0 THEN
+                    CASE WHEN excdate <= toddt THEN excdate ELSE toddt END
+               WHEN o.excessdt > 0 THEN excdate
+               WHEN o.toddate > 0 THEN toddt
+               ELSE NULL END AS bldate
+        FROM loan2 l
+        LEFT JOIN (
+            SELECT acctno, excessdt, toddate,
+                   TRY_STRPTIME(SUBSTRING(LPAD(CAST(excessdt AS VARCHAR), 11, '0'), 1, 8), '%m%d%Y') AS excdate,
+                   TRY_STRPTIME(SUBSTRING(LPAD(CAST(toddate AS VARCHAR), 11, '0'), 1, 8), '%m%d%Y') AS toddt
+            FROM od
+        ) o ON l.acctno = o.acctno
+        WHERE l.branch IS NOT NULL AND l.product NOT IN (517, 500)
+    ) l
+""")
+
+# Final loan table
+con.execute(f"""
+    CREATE TABLE save_loan AS
+    SELECT 
+        l.*,
+        a.nameln2, a.nameln3, a.nameln4, a.nameln5,
+        CASE WHEN REGEXP_REPLACE(a.newic, '[0 ]', '') = '' THEN '' ELSE a.newic END AS newic,
+        CASE WHEN REGEXP_REPLACE(a.oldic, '[0 ]', '') = '' THEN '' ELSE a.oldic END AS oldic,
+        a.nameln2 AS addr1,
+        TRIM(a.nameln3) || ' ' || TRIM(a.nameln4) || ' ' || a.nameln5 AS addr2,
+        c.name, c.sic,
+        od.days,
+        CASE WHEN l.acctno BETWEEN 2990000000 AND 2999999999 THEN 'I' ELSE 'C' END AS fitype,
+        CASE WHEN l.loancnt > 1 THEN 'M' ELSE 'S' END AS loanopt,
+        LPAD(CAST(EXTRACT(DAY FROM l.apprdate) AS VARCHAR), 2, '0') || 
+        LPAD(CAST(EXTRACT(MONTH FROM l.apprdate) AS VARCHAR), 2, '0') || 
+        CAST(EXTRACT(YEAR FROM l.apprdate) AS VARCHAR) AS apprdte,
+        CASE WHEN l.acctype = 'OD' AND l.closedte > 0 THEN
+            LPAD(CAST(EXTRACT(DAY FROM l.closedte) AS VARCHAR), 2, '0') || 
+            LPAD(CAST(EXTRACT(MONTH FROM l.closedte) AS VARCHAR), 2, '0') || 
+            CAST(EXTRACT(YEAR FROM l.closedte) AS VARCHAR)
+        WHEN l.acctype = 'LN' AND l.paidind = 'P' AND l.balance <= 0 AND l.closedte > 0 THEN
+            LPAD(CAST(EXTRACT(DAY FROM l.closedte) AS VARCHAR), 2, '0') || 
+            LPAD(CAST(EXTRACT(MONTH FROM l.closedte) AS VARCHAR), 2, '0') || 
+            CAST(EXTRACT(YEAR FROM l.closedte) AS VARCHAR)
+        ELSE '' END AS closdte,
+        CASE WHEN l.acctype = 'LN' THEN CAST(l.product AS VARCHAR) ELSE '34110' END AS prodcd,
+        CASE WHEN l.acctype = 'LN' THEN COALESCE(payfreq_map.val, 'O') ELSE 'A' END AS payterm,
+        CASE WHEN l.secure != 'S' THEN 'C' ELSE l.secure END AS secure,
+        CASE WHEN l.product IN (225, 226) THEN 'C' ELSE 'N' END AS cagamas,
+        COALESCE(risk_map.val, 'P') AS riskc,
+        CASE 
+            WHEN l.borstat = 'F' THEN 999
+            WHEN l.borstat = 'W' THEN 0
+            ELSE FLOOR(COALESCE(od.days, 
+                CASE WHEN l.acctype = 'LN' AND l.bldate IS NOT NULL AND l.balance >= 1 
+                     THEN DATE {reptdate_str} - l.bldate 
+                     ELSE 0 END) / 30.00050)
+        END AS mtharr
+    FROM loan l
+    LEFT JOIN addr a ON l.acctno = a.acctno
+    LEFT JOIN cis_temp c ON l.acctno = c.acctno
+    LEFT JOIN loanod od ON l.acctno = od.acctno
+    LEFT JOIN (VALUES ('1','M'),('2','Q'),('3','S'),('4','A'),('5','B'),('9','I')) 
+        AS payfreq_map(key, val) ON CAST(l.payfreq AS VARCHAR) = payfreq_map.key
+    LEFT JOIN (VALUES (1,'C'),(2,'S'),(3,'D'),(4,'B')) 
+        AS risk_map(key, val) ON l.riskrte = risk_map.key
+""")
+
+con.execute(f"COPY save_loan TO '{SAVE_LOAN}'")
+
+# Generate PAGE01
+with open(PAGE01_TXT, 'w') as f:
+    for row in con.execute("""
+        SELECT DISTINCT ON (branch, acctno)
+            branch, acctno, reptdte, newic, oldic, name, addr1, addr2, 
+            custcd, sic, fitype, loanopt, totlimt, loancnt
+        FROM save_loan
+        ORDER BY branch, acctno
+    """).fetchall():
+        line = f"0233{row[0]:05d}{row[1]:010d}{row[2]}{row[3]:20s}{row[4]:20s}  {row[5]:60s}"
+        line += f"{row[6]:45s}{row[7]:90s}{row[8]:2s}MY{row[9]:04d}NN"
+        line += f"{row[10]}{row[11]}{row[12]:12.0f}{row[13]:02d}N"
+        f.write(line + '\n')
+
+# Generate PAGE03
+with open(PAGE03_TXT, 'w') as f:
+    for row in con.execute("""
+        SELECT branch, acctno, noteno, reptdte, prodcd, apprdte, closdte,
+               sectorcd, noteterm, payterm, mtharr, riskc, secure, cagamas,
+               curbal, intout, feeamt, balance
+        FROM save_loan
+        ORDER BY branch, acctno, noteno
+    """).fetchall():
+        line = f"0233{row[0]:05d}{row[1]:010d}{row[2]:05d}{row[3]}{row[4]:5s}"
+        line += f"{row[5]:8s}{row[6]:8s}        {row[7]:4s}{row[8]:3d}"
+        line += f"{row[9]}{row[10]:3d}{row[10]:3d}{row[11]}{row[12]}NN{row[13]}SNNMYR"
+        line += f"{row[14]:12.0f}{row[15]:12.0f}{row[16]:12.0f}{row[17]:12.0f}N"
+        f.write(line + '\n')
+
+# Generate PAGE04
+con.execute(f"""
+    CREATE TEMP TABLE page04 AS
+    SELECT branch, acctno, zero5, 
+           '{reptdte}' AS reptdate,
+           COALESCE(scv, 0) AS scv,
+           COALESCE(iis, 0) AS iis,
+           COALESCE(iisr, 0) AS iisr,
+           COALESCE(iisw, 0) AS iisw,
+           COALESCE(prinwoff, 0) AS prinwoff,
+           gp3ind
+    FROM gp3klu
+    ORDER BY branch, acctno
+""")
+
+con.execute(f"COPY page04 TO '{PAGE04_PARQUET}'")
+
+with open(PAGE04_TXT, 'w') as f:
+    for row in con.execute("SELECT * FROM page04").fetchall():
+        line = f"{row[0]:03d}{row[1]:010d}{row[2]:05d}{row[3]}"
+        line += f"{row[4]:012.0f}{row[5]:014.2f}{row[6]:014.2f}{row[7]:014.2f}"
+        line += f"{row[8]:014.2f}{row[9]}"
+        f.write(line + '\n')
+
+# Exclusion report
+con.execute("""
+    CREATE TEMP TABLE exclude AS
+    SELECT p.*, o.excessdt, o.toddate
+    FROM page04 p
+    LEFT JOIN od o ON p.acctno = o.acctno
+    WHERE o.acctno IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acctno ORDER BY p.acctno) > 1
+""")
+
+print("Exceptional Report on OD:")
+print(con.execute("SELECT * FROM exclude").df())
+
+con.close()
+print("\nProcessing complete. Output files generated:")
+print(f"- {SAVE_LOAN}")
+print(f"- {PAGE02_PARQUET}")
+print(f"- {PAGE04_PARQUET}")
+print(f"- {PAGE01_TXT}")
+print(f"- {PAGE02_TXT}")
+print(f"- {PAGE03_TXT}")
+print(f"- {PAGE04_TXT}")
