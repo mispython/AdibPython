@@ -1,0 +1,485 @@
+//EIBDCOLE JOB MISEIS,EIBDCOLE,MSGCLASS=A,MSGLEVEL=(1,1),CLASS=A,
+//         REGION=4096K,NOTIFY=&SYSUID
+//*JOBPARM S=S1M1
+//*
+//* SMR 2014-771, 2015-127
+//*
+//SAS609    EXEC SAS609
+//MIS       DD DSN=SAP.PBB.FCYFD,DISP=SHR
+//MNITB     DD DSN=SAP.PBB.MNITB.DAILY(0),DISP=SHR
+//MNILN     DD DSN=SAP.PBB.MNILN.DAILY(0),DISP=SHR
+//MIITB     DD DSN=SAP.PIBB.MNITB.DAILY(0),DISP=SHR
+//MIILN     DD DSN=SAP.PIBB.MNILN.DAILY(0),DISP=SHR
+//COLL      DD DSN=RBP2.B033.MST00.LCCRISEX,DISP=SHR
+//          DD DSN=RBP2.B033.MST00.LCCRISE2,DISP=SHR
+//          DD DSN=RBP2.B033.MST00.LCCRISE3,DISP=SHR
+//DESC      DD DSN=RBP2.B033.MST00.LCCRISEX.DESC,DISP=SHR
+//          DD DSN=RBP2.B033.MST00.LCCRISE2.DESC,DISP=SHR
+//LOAN      DD DSN=SAP.PBB.MNICOL.DAILY(+1),
+//             DISP=(NEW,CATLG,DELETE),
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//             SPACE=(CYL,(300,100),RLSE),UNIT=(SYSDA,5)
+//LOANI     DD DSN=SAP.PIBB.MNICOL.DAILY(+1),
+//             DISP=(NEW,CATLG,DELETE),
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//             SPACE=(CYL,(300,100),RLSE),UNIT=(SYSDA,5)
+//SORTWK01  DD UNIT=SYSDA,SPACE=(CYL,(500))
+//SORTWK02  DD UNIT=SYSDA,SPACE=(CYL,(500))
+//SORTWK03  DD UNIT=SYSDA,SPACE=(CYL,(500))
+//SORTWK04  DD UNIT=SYSDA,SPACE=(CYL,(500))
+//SORTWK05  DD UNIT=SYSDA,SPACE=(CYL,(500))
+//SORTWK06  DD UNIT=SYSDA,SPACE=(CYL,(500))
+//SORTWK07  DD UNIT=SYSDA,SPACE=(CYL,(500))
+//SORTWK08  DD UNIT=SYSDA,SPACE=(CYL,(500))
+//SYSIN     DD *
+
+OPTIONS NOCENTER YEARCUTOFF=1950 LS=132;
+
+DATA FOFMT;
+   SET MIS.FOFMT;
+   IF CURCODE NE ' ' THEN OUTPUT;
+RUN;
+PROC SORT; BY CURCODE; RUN;
+
+DATA COLL;
+   INFILE COLL;
+   INPUT @004  CCOLLNO  PD6.
+         @010  ACCTAPP   $1.
+      /* @011  ACCTNO   PD6. */
+         @017  CISSUER   $6.
+         @023  CISSUE    $2.
+         @025  UNIQCODE  $1.
+         @026  CCLASSC   $3.
+         @029  TOTUNITS PD7.2
+         @078  LSTDEPDT PD6.
+         @084  DEPNOPRD PD3.
+         @087  DEPFREQ   $1.
+         @089  MARGINP  PD2.
+         @091  ORIGVAL  PD7.2
+         @098  CDOLARV  PD7.2
+         @105  CPRVDOLV PD7.2     /* PREVIOUS DOLLAR VALUE */
+         @135  CURCODE  $3.
+         @138  PURGEIND $1.
+         @145  APPCODE  $1.       /* APPLICATION CODE */
+         @146  ACCTNO   PD6.
+         @152  OBLGCODE $1.       /* OBLIGATION CODE */
+         @153  NOTENO   PD6.
+         @159  COLLATERAL_EFF_DT   PD6. /* 2018-2830 */
+         @165  OBBAL    PD8.2
+         @185  TOTOBBAL PD8.2
+         @193  AANO      $UPCASE13.
+         @207  PROPERTY_IND     $1.
+         @223  BONDID    $1.
+         @243  COUPONRT  2.4
+         @296  MARGINVL  13.2
+         @309  ACCOSCT   PD4.
+         @313  COSTCTR1  PD4.
+         @351  RANK_OF_CHARGE  $1.     /* 2017-3109 */
+         @352  COLLATERAL_START_DT PD5. /* 2017-3109 */
+         ;
+   IF NOT (2500000000<=ACCTNO<=2599999999  OR
+           2850000000<=ACCTNO<=2859999999) AND
+      APPCODE='C' AND OBLGCODE='A' THEN UCOLL= 'Y';
+   OUTPUT;
+*;
+PROC SORT; BY CURCODE;
+*;
+DATA COLL;
+   MERGE COLL(IN=A) FOFMT(IN=B); BY CURCODE;
+   IF A;
+   IF SPOTRATE=. THEN SPOTRATE=1.00;
+   CDOLARVX=CDOLARV;
+   IF CURCODE NOT IN ('MYR','   ') THEN DO;
+      CDOLARV=CDOLARV*SPOTRATE;
+      CDOLARV=ROUND(CDOLARV,.01);
+  END;
+*;
+PROC SORT DATA=COLL NODUPKEYS; BY ACCTNO NOTENO CCOLLNO; RUN;
+PROC SORT DATA=COLL; BY ACCTNO NOTENO;
+*;
+DATA CURR;
+   KEEP ACCTNO COSTCTR NOTENO BRANCH;
+   SET  MNITB.CURRENT
+        MIITB.CURRENT;
+   NOTENO=ACCTNO;
+*;
+DATA NOTE;
+  KEEP ACCTNO NOTENO BRANCH COSTCTR;
+  SET MNILN.LNNOTE
+      MIILN.LNNOTE;
+  BRANCH=NTBRCH;
+*;
+DATA LNNOTE;
+   SET CURR NOTE;
+*;
+PROC SORT DATA=LNNOTE OUT=LNNOTE NODUPKEYS; BY ACCTNO NOTENO;
+PROC SORT DATA=COLL; BY ACCTNO NOTENO; RUN;
+*;
+DATA COLL;
+   DROP START LABEL FMTNAME TYPE REPTDATE COSTCTR1;
+   MERGE LNNOTE COLL(IN=A); BY ACCTNO NOTENO;
+   IF A;
+   IF COSTCTR=.  THEN COSTCTR=COSTCTR1;
+   IF COSTCTR IN (.,0) THEN COSTCTR=ACCOSCT;
+   IF APPCODE='C' AND OBLGCODE='A' AND
+      (2500000000<=ACCTNO<=2599999999 OR
+       2850000000<=ACCTNO<=2859999999) THEN
+      COSTCTR=ACCOSCT;
+*;
+DATA LOAN.COLL
+    LOANI.COLL;
+   SET COLL;
+   IF (3000<=COSTCTR<=4999) THEN
+       OUTPUT LOANI.COLL;
+   ELSE OUTPUT LOAN.COLL;
+RUN;
+*;
+%LET FDR       = ('001','006','007','014','016','024','025','026','046',
+                  '048','049','112','113','114','115','116','117',
+                  '149');
+
+%LET GUARANT   = ('000','011','012','013','017','018','019','021',
+                  '027','028','029','030','031','105','106','124');
+
+%LET DEBENT    = ('002','003','041','042','043','058','059',
+                  '067','068','069','070','071','072','078','079',
+                  '084','107','111','123');
+
+%LET HP        = ('004','005','125','126','127','128','129',
+                  '131','132','133','134','135','136','137','138','139',
+                  '141','142','143');
+
+%LET PROPER    = ('032','033','034','035','036','037','038','039',
+                  '040','044','050','051','052','053','054','055','056',
+                  '057','060','061','062',
+                  '118','119','121','122');
+
+%LET OTHERHP   = ('065','066','075','076','082','083',
+                  '093','094','095','096','097','098',
+                  '101','102','103','104');
+
+%LET PLTMACH   = ('063','064','073','074','080','081');
+
+%LET CONCESS   = ('010','085','086','087','088','089','090','091',
+                  '092','144');
+
+%LET SHARE     = ('008','015','045','047','108','147');
+
+%LET NP        = ('020');
+
+DATA DESC;
+   INFILE DESC;
+   INPUT @001 CCOLLNO   11.
+         @012 CCLASSC   $3.
+         @015 PURGEIND  $1. @;
+   IF CCLASSC IN &PROPER THEN DO;
+   INPUT @051  CINSTCL    $2.
+         @053  IDTY1OWN   $2.   /* ID TYPE OWNER 1 ESMR2015-127 */
+         @055  NATGUAR    $2.
+         @055  IDTY2OWN   $2.   /* ID TYPE OWNER 2 ESMR2015-127 */
+         @057  IDTY3OWN   $2.   /* ID TYPE OWNER 3 ESMR2015-127 */
+         @059  CPRRANKC   $1.
+         @060  CPRSHARE   $1.
+         @061  CPRCHARG  PD8.2
+         @077  CPRLANDU   $2.
+         @079  CPRPROPD   $2.
+         @091  NAME1OWN   $40.
+         @131  IDNO1OWN   $40.  /* ID NO OWNER 1 ESMR2015-127 */
+         @171  NAME2OWN   $40.  /* NAME  OWNER 2 ESMR2015-127 */
+         @211  CENSUS     10.
+         @211  IDNO2OWN   $40.  /* ID NO OWNER 2 ESMR2015-127 */
+         @251  NAME3OWN   $40.  /* NAME  OWNER 3 ESMR2015-127 */
+         @291  IDNO3OWN   $40.  /* ID NO OWNER 3 ESMR2015-127 */
+         @340  OWNOCUPY   $1.
+         @341  HOLDEXPD   $1.   /* FREEHOLD/LEASEHOLD */
+         @342  EXPDATE    $8.   /* EXPIRY DATE */
+         @366  BLTNAREA   $4.   /* BUILT UP AREA  */
+         @370  BLTNUNIT   $1.   /* BUILT UP UNIT  */
+         @379  QUITRENT   $4.
+         @383  ASSESSDT   $4.
+         @387  CPRSTAT    $8.   /* PROPERTY COMPLETION STATUS */
+         @395  CPOLYNUM  $16.
+      /* @411  MASTTLNO  $20.      MASTER TITLE NO */
+      /* @431  MASTTLMD  $20.      MASTER TITLE MUKIM/DAERAH */
+         @411  TTLPARTCLR $1.  /* 2016-1859 */
+         @451  MASTOWNR  $40.   /* MASTER TITLE OWNER */
+         @491  TTLENO    $40.   /* INIDIVIDUAL TITLE NO */
+         @531  TTLMUKIM  $40.   /* INIDIVIDUAL TITLE MUKIM/DAERAH */
+         @651  TTLID     $15.
+         @666  LANDAREA   $4.   /* LAND AREA   */
+         @670  INSURER    $2.
+         @672  FIREDATE   $8.
+         @680  SUMINSUR  PD8.
+         @688  ESCL       $1.   /* ESCALATION CLAUSE 2015-2994 */
+         @689  LANDUNIT   $1.   /* LAND UNIT   */
+         @690  MRESERVE   $1.   /* MALAY RESERVE LAND */
+         @691  DEVNAME   $40.   /* DEVELOPER'S NAME */
+         @731  PRJCTNAM  $40.   /* PROJECT NAME */
+         @771  CTRYSTAT   $2.
+         @773  PRABANDT   $8.
+         @781  CPRDISDT   $8.   /* PROPERTY DISCHARGED DATE */
+         @781  COLLATERAL_END_DT   $8.   /*2017-3109 */
+         @797  CPOSCODE   $5.   /* POSTCODE */
+         @803  CPRVALIN2  $1.   /* SOURCE OF VALUATION */
+         @804  STDESIGN   $1.   /* STANDARD DESIGN */
+         @811  CPRFORSV  PD8.2
+         @819  CTRYCODE   $2.   /* COUNTRY CODE */
+         @827  CPRESVAL  PD8.2
+         @835  CPTYPOS    $1.   /* PROPERTY TYPE POSITION */
+         @851  CPRVALDT   $8.   /* PROPERTY VALUATION DATE  */
+         @859  CPRVALIN   $1.   /* PROPERTY VALUATION INDICATOR */
+         @860  CPPVALDT   $8.   /* PROPERTY PREVIOUS VALUATION DATE  */
+         @868  PROJPHSE  $23.   /* PROJECT PHASE */
+         @891  CPHSENO   $10.
+         @901  CPBUILNO  $30.
+         @931  CPRPARC2  $40.
+         @971  CPRPARC3  $40.
+         @1011 CPRPARC4  $40.
+         @1051 CPSTATE    $2.   /* STATE CODE */
+         @1053 CPSTATEN  $14.
+         @1067 CPTOWN     $3.
+         @1070 CPTOWNN   $20.   /* PROPERTY TOWN NAME */
+         @1090 CPLOCAT    $1.
+         @1091 CPRVALU1  $40.
+         @1131 CPRVALU2  $40.
+         @1171 CPRVALU3  $40.
+         @1211 ENV_NO_REF   $40. /*2020-4603*/
+         @1251 REMARKS   $40.
+         @1291 VALSOURCE_CD $1. /* VALUATION UPDATE SOURCE */
+         @1292 NAME1     $40.
+         @1332 IDNO1     $40.
+         @1372 TOWN1     $40.
+         @1412 STATE1    $40.
+         @1452 COUNTRY1  $40.
+         @1492 IDTYPE1    $2.
+         @1494 LOTNO1    $40.
+         @1534 CITY1     $40.
+         @1574 CHRIND1    $1.
+         @1575 NAME2     $40.
+         @1615 IDNO2     $40.
+         @1655 TOWN2     $40.
+         @1695 STATE2    $40.
+         @1735 COUNTRY2  $40.
+         @1775 IDTYPE2    $2.
+         @1777 LOTNO2    $40.
+         @1817 CITY2     $40.
+         @1857 CHRIND2    $1.
+         @1858 NAME3     $40.
+         @1898 IDNO3     $40.
+         @1938 TOWN3     $40.
+         @1978 STATE3    $40.
+         @2018 COUNTRY3  $40.
+         @2058 IDTYPE3    $2.
+         @2060 LOTNO3    $40.
+         @2100 CITY3     $40.
+         @2140 CHRIND3    $1.
+         @2141 NAME4     $40.
+         @2181 IDNO4     $40.
+         @2221 TOWN4     $40.
+         @2261 STATE4    $40.
+         @2301 COUNTRY4  $40.
+         @2341 IDTYPE4    $2.
+         @2343 LOTNO4    $40.
+         @2383 CITY4     $40.
+         @2423 CHRIND4    $1.
+         @2424 NAME5     $40.
+         @2464 IDNO5     $40.
+         @2504 TOWN5     $40.
+         @2544 STATE5    $40.
+         @2584 COUNTRY5  $40.
+         @2624 IDTYPE5    $2.
+         @2626 LOTNO5    $40.
+         @2666 CITY5     $40.
+         @2706 CHRIND5    $1.
+         @2707 NAME6     $40.
+         @2747 IDNO6     $40.
+         @2787 TOWN6     $40.
+         @2827 STATE6    $40.
+         @2867 COUNTRY6  $40.
+         @2907 IDTYPE6    $2.
+         @2909 LOTNO6    $40.
+         @2949 CITY6     $40.
+         @2989 CHRIND6    $1.
+         @2990 AUCIND     $1.
+         @2991 AUCCOMDT   $8.
+         @2999 NOAUC       2.
+         @3001 AUCSUCCIND $1.
+         @3002 LTABTAUCPC PD8.2
+         @3010 SUCCAUCDT  $8.
+         @3018 SUCCAUCPC  PD8.2
+         ;
+   END;
+   ELSE IF CCLASSC IN &HP THEN DO;
+   INPUT @051  CINSTCL    $2.
+         @074  CHPVECON   $2.
+         @076  CHPVEHNO  $12.
+         @131  CHPENGIN  $20.
+         @151  CHPCHASS  $20.
+         @331  CHPMAKE   $40.
+         @491  REMARKS   $40.         /*2020-4603*/
+         @531  COLLATERAL_END_DT $8.; /*2017-3109*/
+   END;
+   ELSE IF CCLASSC IN &OTHERHP THEN DO;
+   INPUT @051  CINSTCL    $2.
+         @055  COVDESCR   $2.
+         @075  COVVALDT   $8.
+         @251  REMARKS    $40.          /*2020-4603*/
+         @291  COLLATERAL_END_DT $8.    /*2017-3109*/
+         @299  ACTUAL_SALE_VALUE PD8.2  /*2017-3109*/
+         @307  CPRFORSV          PD8.2; /*2017-3109*/
+   END;
+   ELSE IF CCLASSC IN &PLTMACH THEN DO;
+   INPUT @051  CINSTCL    $2.
+         @055  CPMDESCR   $2.
+         @075  CPMVALDT   $8.
+         @251  REMARKS    $40.          /*2020-4603*/
+         @291  COLLATERAL_END_DT $8.    /*2017-3109*/
+         @299  ACTUAL_SALE_VALUE PD8.2  /*2017-3109*/
+         @307  CPRFORSV          PD8.2; /*2017-3109*/
+   END;
+   ELSE IF CCLASSC IN &CONCESS THEN DO;
+   INPUT @051  CINSTCL    $2.
+         @055  CCCDESCR   $2.
+         @075  CCCVALDT   $8.
+         @251  REMARKS    $40.         /*2020-4603*/
+         @291  COLLATERAL_END_DT  $8.; /*2017-3109 */
+   END;
+   ELSE IF CCLASSC IN &FDR THEN DO;
+   INPUT @051  CINSTCL    $2.
+         @059  CFDDESCR   $2.
+         @091  NAME1OWN   $40.  /* NAME  OWNER 1 ESMR15-3040 */
+         @131  IDNO1OWN   $40.  /* ID NO OWNER 1 ESMR15-3040 */
+         @171  NAME2OWN   $40.  /* NAME  OWNER 2 ESMR15-3040 */
+         @211  IDNO2OWN   $40.  /* ID NO OWNER 2 ESMR15-3040 */
+         @251  NAME3OWN   $40.  /* NAME  OWNER 3 ESMR15-3040 */
+         @291  IDNO3OWN   $40.  /* ID NO OWNER 3 ESMR15-3040 */
+         @411  REMARKS    $40.  /*2020-4603*/
+         @451  CFDVALDT   $8.
+         @459  FDMATDT    $8.
+         @467  FDACCTNO   10.
+         @477  FDCDNO     10.
+         @491  COLLATERAL_UPLIFT_DT $8.  /*2017-3109*/
+         @491  COLLATERAL_END_DT    $8.  /*2017-3109*/
+         @499  ACTUAL_SALE_VALUE PD8.2   /*2017-3109*/
+         @507  CPRFORSV          PD8.2;  /*2017-3109*/
+   END;
+   ELSE IF CCLASSC IN &DEBENT THEN DO;
+   INPUT @051  CINSTCL    $2.
+         @055  CDEBAMT   PD8.2
+         @071  CDEBDESC   $2.
+         @091  CDEBVALD   $8.
+         @291  REMARKS    $40.                    /*2020-4603*/
+         @331  COLLATERAL_END_DT  $8.             /*2017-3109*/
+         @339  ACTUAL_SALE_VALUE  PD8.2           /*2017-3109*/
+         @347  CPRESVAL           PD8.2           /*2017-3109*/
+         @355  DEBENTURE_REALISABLE_VALUE  PD8.2; /*2017-3109*/
+   END;
+   ELSE IF CCLASSC IN &GUARANT THEN DO;
+   INPUT @051  CINSTCL    $2.
+         @055  CGUARNAT   $2.
+         @057  CGUARCTY   $2.
+         @059  CGEFFDAT   $8.
+         @067  CGEXPDAT   $8.
+         @075  SCHEME_CD  $2.                   /* 2020-4603 */
+         @077  GUARANTOR_ENTITY_TYPE       $2.  /* 2017-3109 */
+         @079  GUARANTOR_BIRTH_REGISTER_DT $8.  /* 2017-3109 */
+         @091  GTEEFEE   PD8.2
+         @107  CGEXAMTG  PD8.2
+         @125  CGCGSR     $3.
+         @128  CGCGUR     $3.
+         @131  CGUARNAM   $40.
+         @171  CGUARID    $40.
+         @211  CGUARLG    $40.
+         @291  SBETRAN    $40.
+         @331  REMARKS               $40.  /*2020-4603*/
+         @371  RAAC_EXPIRE_DT        $8.   /*2020-4603*/
+         @379  CLAIM_EXPIRE_DT       $8.   /*2020-4603*/
+         @387  CLAIM_SUBMIT_DT       $8.   /*2020-4603*/
+         @395  CLAIM_SUBMIT_AMT      PD8.  /*2020-4603*/
+         @411  CLAIM_FINAL_AMT       PD8.  /*2020-4603*/
+         @427  CGC_SJPP_REPLY_DT     $8.   /*2020-4603*/
+         @435  CLAIM_PAID_DT         $8.   /*2020-4603*/
+         @443  IMPAIRED_LOAN_DT      $8.   /*2020-4603*/
+         @451  CLAIM_STATUS          $1.   /*2020-4603*/
+         @452  TOT_REMIT_AMT         PD8.  /*2020-4603*/
+         @468  REMIT_AMT_01          PD8.  /*2020-4603*/
+         @484  REMIT_AMT_02          PD8.  /*2020-4603*/
+         @500  REMIT_AMT_03          PD8.  /*2020-4603*/
+         @516  REMIT_AMT_04          PD8.  /*2020-4603*/
+         @532  REMIT_AMT_05          PD8.  /*2020-4603*/
+         @548  CGC_SJPP_LETTER_DT_01 $8.   /*2020-4603*/
+         @556  CGC_SJPP_LETTER_DT_02 $8.   /*2020-4603*/
+         @564  CGC_SJPP_LETTER_DT_03 $8.   /*2020-4603*/
+         @572  CGC_SJPP_LETTER_DT_04 $8.   /*2020-4603*/
+         @580  CGC_SJPP_LETTER_DT_05 $8.   /*2020-4603*/
+         @588  CLAIM_UTILISE_DT      $8.   /*2020-4603*/
+         @596  CLAIM_UTILISE_AMT     PD8.  /*2020-4603*/
+         @612  BAL_CLAIM_AMT         PD8.  /*2020-4603*/
+         @628  GFEERS      6.
+         @634  GFEERU      6.
+         @640  GFAMTS    PD8.2
+         @656  GFAMTU    PD8.2
+         @672  GCAMTS    PD8.2
+         @688  GCAMTU    PD8.2
+         @704  COLLATERAL_END_DT   $8.   /*2017-3109 */
+         @712  GUARANTOR_ID_TYPE   $2.   /*2017-3109 */
+         @714  EAST_MALAYSIA_IND   $1.   /*2017-3109 */
+         @731  BNMASSIGNID         $12.  /*2017-3443 */
+         @743  CUSTNO              11.   /*2018-2942 */
+         @754  GUARANTOR_ID_TYPE_02 $2.  /*2020-4603*/
+         @756  GUARANTOR_ID_02      $40. /*2020-4603*/
+         @796  NEW_SSM_ID_TYPE      $4.  /*2020-4603*/
+         @800  NEW_SSM_ID_NO        $12. /*2020-4603*/
+         ;
+   END;
+   ELSE IF CCLASSC IN &SHARE THEN DO;
+   INPUT @1651  COLLATERAL_END_DT   $8.   /*2017-3109 */
+         ;
+   END;
+   ELSE IF CCLASSC IN &NP THEN DO;
+   INPUT @051    COLLATERAL_END_DT   $8.   /*2017-3109 */
+         ;
+   END;
+   CPRPARC1 = CPHSENO || ' ' || CPBUILNO;
+   CPRPARC1 = COMPBL(CPRPARC1);
+   OUTPUT;
+*;
+PROC SORT DATA=COLL; BY CCOLLNO; RUN;
+PROC SORT DATA=DESC; BY CCOLLNO; RUN;
+*;
+DATA COLLATER;
+   RETAIN NUM '0123456789';
+   MERGE COLL(IN=A) DESC; BY CCOLLNO;
+   IF A;
+   IF EXPDATE  <0 THEN EXPDATE  = '00000000';
+   IF FIREDATE <0 THEN FIREDATE = '00000000';
+   IF CPRVALDT <0 THEN CPRVALDT = '00000000';
+   IF COVVALDT <0 THEN COVVALDT = '00000000';
+   IF CPMVALDT <0 THEN CPMVALDT = '00000000';
+   IF CCCVALDT <0 THEN CCCVALDT = '00000000';
+   IF CFDVALDT <0 THEN CFDVALDT = '00000000';
+   IF CDEBVALD <0 THEN CDEBVALD = '00000000';
+   IF CGEFFDAT <0 THEN CGEFFDAT = '00000000';
+   IF CGEXPDAT <0 THEN CGEXPDAT = '00000000';
+   IF PRABANDT <0 THEN PRABANDT = '00000000';
+   IF AUCCOMDT <0 THEN AUCCOMDT = '00000000';
+   IF SUCCAUCDT <0 THEN SUCCAUCDT = '00000000';
+   IF COLLATERAL_UPLIFT_DT < 0 THEN COLLATERAL_UPLIFT_DT ='00000000';
+   IF COLLATERAL_END_DT < 0 THEN COLLATERAL_END_DT ='00000000';
+   IF GUARANTOR_BIRTH_REGISTER_DT < 0 THEN
+      GUARANTOR_BIRTH_REGISTER_DT = '00000000';
+   CPRABNDT=0;
+   IF VERIFY(PRABANDT,NUM)=0  THEN CPRABNDT=PRABANDT;
+   IF SUMINSUR = 404040404040404 THEN SUMINSUR = 0;
+RUN;
+*;
+PROC SORT; BY ACCTNO;
+*;
+DATA LOANI.COLLATER
+      LOAN.COLLATER;
+   SET COLLATER;
+   IF (3000<=COSTCTR<=4999) THEN OUTPUT LOANI.COLLATER;
+   ELSE OUTPUT  LOAN.COLLATER;
+*;
+PROC PRINT DATA= LOAN.COLLATER (OBS=20);
+PROC PRINT DATA=LOANI.COLLATER (OBS=20);
