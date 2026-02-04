@@ -1,0 +1,451 @@
+//EIMUCARD JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=8M                      JOB67706
+/*JOBPARM S=S1M1                                                        00000200
+//*                                                                     00000300
+//PRINT1   OUTPUT CLASS=R,                                              00000400
+//         NAME='CARD ADMIN',                                           00000500
+//         ROOM='10TH FLOOR',                                           00000600
+//         DEPT='PB CARD SERVICES & SUPPORT',                           00000700
+//         ADDRESS=('MENARA PUBLIC BANK',                               00000800
+//         '146 JALAN AMPANG','50450 KUALA LUMPUR'),                    00000900
+//         DEST=S1.LOCAL                                                00001000
+//********************************************************************  00001100
+//* TO GENERATE REPORT FOR CREDIT CARD                               *  00001200
+//*    1) CREDIT CARD OPEN WITHOUT LOAN A/C AFTER 6 MONTH            *  00001300
+//*    2) LN A/C SETTLED FOR THE MONTH AFTER CREDIT CARD OPEN        *  00001400
+//********************************************************************  00001500
+//DELETE  EXEC PGM=IEFBR14                                              00001600
+//DEL01    DD DSN=SAP.PBB.UNICARD,                                      00001700
+//            DISP=(MOD,DELETE,DELETE),                                 00001800
+//            SPACE=(CYL,(0,0))                                         00001900
+//DEL02    DD DSN=SAP.PBB.EIMUCARD.TEXT,                                00001700
+//            DISP=(MOD,DELETE,DELETE),                                 00001800
+//            SPACE=(CYL,(0,0))                                         00001900
+//*                                                                     00002000
+//EIMUCARD EXEC SAS609                                                  00002100
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                             00002200
+//CARDTXT   DD DSN=SAP.PBB.UNICARD.TXT,DISP=SHR                         00002300
+//LN        DD DSN=SAP.PBB.MNILN(0),DISP=SHR                            00002400
+//LNI       DD DSN=SAP.PIBB.MNILN(0),DISP=SHR                           00002410
+//CIS       DD DSN=SAP.PBB.CISBEXT.LN,DISP=SHR                          00002500
+//CARD      DD DSN=SAP.PBB.UNICARD,DISP=(NEW,CATLG),                    00002600
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                00002700
+//             SPACE=(CYL,(200,150),RLSE),UNIT=(SYSDA,5)                00002800
+//SASLIST   DD DSN=SAP.PBB.EIMUCARD.TEXT,
+//             DISP=(NEW,CATLG,DELETE),
+//             DCB=(RECFM=FB,LRECL=300,BLKSIZE=0,DSORG=PS),
+//             SPACE=(CYL,(3,2),RLSE),UNIT=SYSDA
+//SYSIN     DD *                                                        00003000
+                                                                        00003100
+TITLE;                                                                  00003200
+OPTION NOCENTER NODATE LS=150;                                          00003300
+%INC PGM(PBBLNFMT);                                                     00003400
+DATA CARD.REPTDATE;                                                     00003500
+   SET LN.REPTDATE;                                                     00003600
+   SELECT(DAY(REPTDATE));                                               00003700
+   WHEN (8)  DO; WK = '01'; WK1 = '04'; END;                            00003800
+   WHEN(15)  DO; WK = '02'; WK1 = '01'; END;                            00003900
+   WHEN(22)  DO; WK = '03'; WK1 = '02'; END;                            00004000
+     OTHERWISE DO; WK = '04'; WK1 = '03'; END;                          00004100
+   END;                                                                 00004200
+   NOMTH = (YEAR(REPTDATE) * 12) + MONTH(REPTDATE);                     00004300
+   CALL SYMPUT('NOWK',PUT(WK,$2.));                                     00004400
+   CALL SYMPUT('NOWK1',PUT(WK1,$2.));                                   00004500
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                     00004600
+   CALL SYMPUT('REPTYR2',PUT(REPTDATE,YEAR2.));                         00004700
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));                        00004800
+   CALL SYMPUT('NOMTH',NOMTH);                                          00004900
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                         00005000
+RUN;                                                                    00005100
+                                                                        00005200
+***************************                                             00005300
+***  FILE FROM UNCARD   ***                                             00005400
+***************************;                                            00005500
+DATA CARD.CARD&REPTMON (DROP=DD MM YY);                                 00005600
+   INFILE CARDTXT FIRSTOBS=2;                                           00005700
+   INPUT  @001 CARDNO      $16.                                         00005800
+          @018 OLDIC       $12.                                         00005900
+          @030 NEWIC       $12.                                         00006000
+          @043 DD            2.                                         00006100
+          @046 MM            2.                                         00006200
+          @049 YY            2.                                         00006300
+          @052 CNAME       $30.                                         00006400
+          @082 BRCODE        3.;                                        00006500
+   COPENDT = MDY(MM,DD,YY);                                             00006600
+   MTHDUE = &NOMTH - ((YEAR(COPENDT)*12)+MONTH(COPENDT));               00006700
+RUN;                                                                    00006800
+                                                                        00006900
+***************************                                             00007000
+***  VISA CARD          ***                                             00007100
+***************************;                                            00007200
+%MACRO MGVISA;                                                          00007300
+   PROC SORT DATA=VNOFOUND OUT=VNOFOUND; BY IC; RUN;                    00007400
+   DATA VFOUND                                                          00007500
+        CARD.VNOFOUND;                                                  00007600
+        MERGE VNOFOUND(IN=A) CIS(IN=B);                                 00007700
+        BY IC;                                                          00007800
+        IF A AND B THEN OUTPUT VFOUND;                                  00007900
+        ELSE IF A AND NOT B THEN OUTPUT CARD.VNOFOUND;                  00008000
+   RUN;                                                                 00008100
+   PROC APPEND DATA=VFOUND BASE=CARD.VFOUND; RUN;                       00008200
+%MEND;                                                                  00008300
+%MACRO MGVISA1;                                                         00008400
+   PROC SORT DATA=VFOUND NODUPKEY; BY IC; RUN;                          00008500
+   DATA VFOUND;                                                         00008600
+        MERGE VFOUND(IN=A) CIS(IN=B);                                   00008700
+        BY IC;                                                          00008800
+        IF A AND B THEN OUTPUT VFOUND;                                  00008900
+   RUN;                                                                 00009000
+   PROC APPEND DATA=VFOUND BASE=CARD.VFOUND; RUN;                       00009100
+%MEND;                                                                  00009200
+                                                                        00009300
+***************************                                             00009400
+***  VISA CARD          ***                                             00009500
+***************************;                                            00009600
+DATA CARD.VISA;                                                         00009700
+     SET CARD.CARD&REPTMON;                                             00009800
+     IF SUBSTR(CARDNO,1,1) = 4;                                         00009900
+     IC = NEWIC;                                                        00010000
+RUN;                                                                    00010100
+PROC SORT DATA=CARD.VISA OUT=CARD; BY IC; RUN;                          00010200
+                                                                        00010300
+DATA CARD.CIS(KEEP=ACCTNO NEWIC OLDIC CUSTNO IC);                       00010400
+     SET CIS.LOAN;                                                      00010500
+RUN;                                                                    00010600
+                                                                        00010700
+    *** NEW IC ***;                                                     00010800
+DATA CISNEW;                                                            00010900
+     SET CARD.CIS;                                                      00011000
+     IF NEWIC NE '' AND ACCTNO GT 0;                                    00011100
+     IC = NEWIC;                                                        00011200
+RUN;                                                                    00011300
+PROC SORT DATA=CISNEW OUT=CIS; BY IC; RUN;                              00011400
+                                                                        00011500
+DATA CARD.VNOFOUND                                                      00011600
+     CARD.VFOUND;                                                       00011700
+     MERGE CARD(IN=A) CIS(IN=B);                                        00011800
+     BY IC;                                                             00011900
+     IF A AND B THEN OUTPUT CARD.VFOUND;                                00012000
+     ELSE IF A AND NOT B THEN OUTPUT CARD.VNOFOUND;                     00012100
+RUN;                                                                    00012200
+                                                                        00012300
+    *** OLD IC ***;                                                     00012400
+DATA CISOLD(KEEP=ACCTNO NEWIC OLDIC CUSTNO IC);                         00012500
+     SET CARD.CIS;                                                      00012600
+     IF OLDIC NE '' AND ACCTNO GT 0;                                    00012700
+     IC = OLDIC;                                                        00012800
+RUN;                                                                    00012900
+PROC SORT DATA=CISOLD OUT=CIS; BY IC; RUN;                              00013000
+DATA VNOFOUND;                                                          00013100
+     SET CARD.VNOFOUND;                                                 00013200
+     IC=OLDIC;                                                          00013300
+RUN;                                                                    00013400
+%MGVISA;                                                                00013500
+                                                                        00013600
+    *** PASSPORT NO ***;                                                00013700
+PROC SORT DATA=CISNEW OUT=CIS; BY IC; RUN;                              00013800
+DATA VNOFOUND;                                                          00013900
+     SET CARD.VNOFOUND;                                                 00014000
+     IC=OLDIC;                                                          00014100
+RUN;                                                                    00014200
+%MGVISA;                                                                00014300
+                                                                        00014400
+***************************                                             00014500
+***  MASTER CARD        ***                                             00014600
+***************************;                                            00014700
+%MACRO MGMASTER;                                                        00014800
+   PROC SORT DATA=MNOFOUND OUT=MNOFOUND; BY IC; RUN;                    00014900
+   DATA CARD.MNOFOUND                                                   00015000
+        MFOUND;                                                         00015100
+        MERGE MNOFOUND(IN=A) CIS(IN=B);                                 00015200
+        BY IC;                                                          00015300
+        IF A AND B THEN OUTPUT MFOUND;                                  00015400
+        ELSE IF A AND NOT B THEN OUTPUT CARD.MNOFOUND;                  00015500
+   RUN;                                                                 00015600
+   PROC APPEND DATA=MFOUND BASE=CARD.MFOUND; RUN;                       00015700
+%MEND;                                                                  00015800
+%MACRO MGMASTER1;                                                       00015900
+   PROC SORT DATA=MFOUND NODUPKEY; BY IC; RUN;                          00016000
+   DATA MFOUND;                                                         00016100
+        MERGE MFOUND(IN=A) CIS(IN=B);                                   00016200
+        BY IC;                                                          00016300
+        IF A AND B THEN OUTPUT MFOUND;                                  00016400
+   RUN;                                                                 00016500
+   PROC APPEND DATA=MFOUND BASE=CARD.MFOUND; RUN;                       00016600
+%MEND;                                                                  00016700
+                                                                        00016800
+DATA CARD.MASTER;                                                       00016900
+     SET CARD.CARD&REPTMON;                                             00017000
+     IF SUBSTR(CARDNO,1,1) = 5;                                         00017100
+     IC = NEWIC;                                                        00017200
+RUN;                                                                    00017300
+                                                                        00017400
+PROC SORT DATA=CARD.MASTER OUT=CARD; BY IC; RUN;                        00017500
+    *** NEW IC ***;                                                     00017600
+PROC SORT DATA=CISNEW OUT=CIS; BY IC; RUN;                              00017700
+                                                                        00017800
+DATA CARD.MNOFOUND                                                      00017900
+     CARD.MFOUND;                                                       00018000
+     MERGE CARD(IN=A) CIS(IN=B);                                        00018100
+     BY IC;                                                             00018200
+     IF A AND B THEN OUTPUT CARD.MFOUND;                                00018300
+     ELSE IF A AND NOT B THEN OUTPUT CARD.MNOFOUND;                     00018400
+RUN;                                                                    00018500
+                                                                        00018600
+    *** OLD IC ***;                                                     00018700
+PROC SORT DATA=CISOLD OUT=CIS; BY IC; RUN;                              00018800
+DATA MNOFOUND;                                                          00018900
+     SET CARD.MNOFOUND;                                                 00019000
+     IC=OLDIC;                                                          00019100
+RUN;                                                                    00019200
+%MGMASTER;                                                              00019300
+                                                                        00019400
+    *** PASSPORT NO ***;                                                00019500
+PROC SORT DATA=CISNEW OUT=CIS; BY IC; RUN;                              00019600
+DATA MNOFOUND;                                                          00019700
+     SET CARD.MNOFOUND;                                                 00019800
+     IC=OLDIC;                                                          00019900
+RUN;                                                                    00020000
+%MGMASTER;                                                              00020100
+                                                                        00020200
+*****************************                                           00020300
+*** CONSOLIDATE           ***                                           00020400
+*****************************;                                          00020500
+DATA CARD.CFOUND;                                                       00020600
+     SET CARD.VFOUND CARD.MFOUND;                                       00020700
+RUN;                                                                    00020800
+PROC SORT DATA=CARD.CFOUND OUT=CARD.CFOUND NODUPKEY;                    00020900
+     BY CARDNO NEWIC OLDIC ACCTNO;                                      00021000
+DATA CARD.CNOFOUND;                                                     00021100
+     SET CARD.VNOFOUND CARD.MNOFOUND;                                   00021200
+RUN;                                                                    00021300
+                                                                        00021400
+*****************************                                           00021500
+*** REPORTING             ***                                           00021600
+*****************************;                                          00021700
+                                                                        00021800
+PROC SORT DATA=CARD.CNOFOUND OUT=CARD; BY CARDNO; RUN;                  00021900
+DATA CARD;                                                              00022000
+     SET CARD;                                                          00022100
+     MTHDUE = &NOMTH - ((YEAR(COPENDT)*12)+MONTH(COPENDT));             00022200
+     IF MTHDUE GE 6;                                                    00022300
+RUN;                                                                    00022400
+PROC SORT DATA=CARD OUT=CARD; BY BRCODE CARDNO; RUN;                    00022500
+       /*                                                               00022600
+PROC REPORT DATA=CARD                                                   00022700
+     NOCENTER SPLIT='*' NOWINDOWS HEADSKIP;                             00022800
+     COLUMN CARDNO BRCODE CNAME NEWIC OLDIC COPENDT;                    00022900
+     DEFINE CARDNO   /DISPLAY WIDTH=16 'CREDIT*CARD NO';                00023000
+     DEFINE BRCODE   /DISPLAY WIDTH=6  'BRANCH*CODE';                   00023100
+     DEFINE CNAME    /DISPLAY WIDTH=30 'NAME';                          00023200
+     DEFINE NEWIC    /DISPLAY WIDTH=15 'NEW IC';                        00023300
+     DEFINE OLDIC    /DISPLAY WIDTH=10 'OLD IC';                        00023400
+     DEFINE COPENDT  /DISPLAY WIDTH=10 FORMAT=DDMMYY8. 'CARD OPEN*DATE';00023500
+     TITLE1 'REPORT-ID: EIMUCARD';                                      00023600
+     TITLE2 'HP/HL ACCOUNT DOES NOT EXIST IN CIS/M&I AS AT ' "&RDATE";  00023700
+       */                                                               00023800
+*** PRINT SETTLE REPORT ***;                                            00023900
+                                                                        00024000
+*** 1ST EXTRACT ALL SETTLE A/C INCLUDE ACTIVE FROM SETTLE CUSTOMER ***; 00024100
+PROC SORT DATA=CARD.CFOUND OUT=CFOUND;                                  00024200
+     WHERE ACCTNO GT 0; BY ACCTNO;                                      00024300
+RUN;                                                                    00024400
+                                                                        00024500
+DATA NOTE;                                                              00024501
+     SET LN.LNNOTE                                                      00024502
+         LNI.LNNOTE;                                                    00024503
+*;                                                                      00024520
+DATA LOANPD(KEEP=NAME NTBRCH LASTRAN ACCTNO NOTENO PAIDIND);            00024600
+     SET NOTE;                                                          00024700
+     IF PAIDIND= 'P';                                                   00024800
+     AMTIND=PUT(LOANTYPE,LNDENOM.);                                     00024900
+*    IF AMTIND NE 'I';                                                  00025000
+     IF LASTTRAN NOT IN (.,0) THEN                                      00025100
+        LASTRAN = INPUT(SUBSTR(PUT(LASTTRAN,Z11.),1,8),MMDDYY8.);       00025200
+RUN;                                                                    00025300
+                                                                        00025400
+PROC SORT DATA=LOANPD OUT=LOANPD;                                       00025500
+     WHERE ACCTNO GT 0; BY ACCTNO;                                      00025600
+RUN;                                                                    00025700
+                                                                        00025800
+DATA SETTLE;                                                            00025900
+     MERGE CFOUND(IN=A) LOANPD(IN=B);                                   00026000
+     BY ACCTNO;                                                         00026100
+     IF A AND B;                                                        00026200
+RUN;                                                                    00026300
+                                                                        00026400
+*** ADD BACK SAME CUSTOMER FOR SETTLE WITH A/C FOUND IN CIS ***;        00026500
+PROC SORT DATA=SETTLE OUT=TEMP1;                                        00026600
+     WHERE NEWIC NE ''; BY NEWIC;                                       00026700
+RUN;                                                                    00026800
+PROC SORT DATA=CFOUND OUT=TEMP2;                                        00026900
+     WHERE NEWIC NE ''; BY NEWIC;                                       00027000
+RUN;                                                                    00027100
+DATA TOTNEW;                                                            00027200
+     MERGE TEMP1(IN=A) TEMP2(IN=B);                                     00027300
+     BY NEWIC;                                                          00027400
+     IF A AND B;                                                        00027500
+RUN;                                                                    00027600
+PROC SORT DATA=SETTLE OUT=TEMP1;                                        00027700
+     WHERE OLDIC NE ''; BY OLDIC;                                       00027800
+RUN;                                                                    00027900
+PROC SORT DATA=CFOUND OUT=TEMP2;                                        00028000
+     WHERE OLDIC NE ''; BY OLDIC;                                       00028100
+RUN;                                                                    00028200
+DATA TOTOLD;                                                            00028300
+     MERGE TEMP1(IN=A) TEMP2(IN=B);                                     00028400
+     BY OLDIC;                                                          00028500
+     IF A AND B;                                                        00028600
+RUN;                                                                    00028700
+DATA SETTLE;                                                            00028800
+     SET TOTNEW TOTOLD SETTLE;                                          00028900
+     IF NEWIC EQ '' THEN DO;                                            00029000
+        NEWIC = OLDIC;                                                  00029100
+     END;                                                               00029200
+RUN;                                                                    00029300
+PROC SORT DATA=SETTLE OUT=CARD.SETTLE NODUPKEYS;                        00029400
+     BY CARDNO NEWIC OLDIC ACCTNO; RUN;                                 00029500
+                                                                        00029600
+*** 2ND EXTRACT ALL ACTIVE A/C ***;                                     00029700
+DATA SETTLE;                                                            00029800
+     SET CARD.SETTLE;                                                   00029900
+     IF ACCTNO GT 0;                                                    00030000
+RUN;                                                                    00030100
+PROC SORT DATA=SETTLE; BY ACCTNO;                                       00030200
+RUN;                                                                    00030300
+*;                                                                      00030400
+DATA NOTE1;                                                             00030410
+     SET LN.LNNOTE                                                      00030420
+         LNI.LNNOTE;                                                    00030430
+*;                                                                      00030440
+DATA LOAN1(KEEP=ACCTNO PAIDIND NAME TAXNO GUAREND);                     00030500
+     SET NOTE1;                                                         00030600
+     AMTIND=PUT(LOANTYPE,LNDENOM.);                                     00030700
+*    IF AMTIND NE 'I';                                                  00030800
+     IF PAIDIND NE 'P' AND ACCTNO GT 0;                                 00030900
+RUN;                                                                    00031000
+                                                                        00031100
+PROC SORT DATA=LOAN1 OUT=LOAN1; BY ACCTNO;                              00031200
+RUN;                                                                    00031300
+                                                                        00031400
+DATA ACTIVE;                                                            00031500
+     MERGE SETTLE(IN=A) LOAN1(IN=B);                                    00031600
+     BY ACCTNO;                                                         00031700
+     IF A AND B;                                                        00031800
+RUN;                                                                    00031900
+                                                                        00032000
+*** BY ICNO ***;                                                        00032100
+%MACRO CHKATIVE;                                                        00032200
+   PROC SORT DATA=SETTLE OUT=SETTLE;                                    00032300
+        WHERE IC NE ''; BY IC;                                          00032400
+   RUN;                                                                 00032500
+   PROC SORT DATA=LOAN1 OUT=LOAN1;                                      00032600
+        WHERE IC NE ''; BY IC;                                          00032700
+   RUN;                                                                 00032800
+   DATA ACTIVE1;                                                        00032900
+        MERGE SETTLE(IN=A) LOAN1(IN=B);                                 00033000
+        BY IC;                                                          00033100
+        IF A AND B;                                                     00033200
+   RUN;                                                                 00033300
+   PROC APPEND DATA=ACTIVE1 BASE=ACTIVE; RUN;                           00033400
+%MEND;                                                                  00033500
+                                                                        00033600
+DATA SETTLE; SET SETTLE; IC=OLDIC; RUN;                                 00033700
+DATA LOAN1;  SET LOAN1;  IC=TAXNO; RUN;                                 00033800
+%CHKATIVE;                                                              00033900
+                                                                        00034000
+DATA SETTLE; SET SETTLE; IC=NEWIC; RUN;                                 00034100
+DATA LOAN1;  SET LOAN1;  IC=GUAREND; RUN;                               00034200
+%CHKATIVE;                                                              00034300
+                                                                        00034400
+*** PBB NO UTILISED A/C BY ACCTNO **;                                   00034500
+DATA LOAN1(KEEP=ACCTNO NAME TAXNO GUAREND);                             00034600
+     SET LN.LNACCT;                                                     00034700
+RUN;                                                                    00034800
+                                                                        00034900
+PROC SORT DATA=SETTLE OUT=SETTLE;                                       00035000
+     WHERE ACCTNO GT 0; BY ACCTNO;                                      00035100
+RUN;                                                                    00035200
+PROC SORT DATA=LOAN1 OUT=LOAN1;                                         00035300
+     WHERE ACCTNO GT 0; BY ACCTNO;                                      00035400
+RUN;                                                                    00035500
+DATA ACTIVE1;                                                           00035600
+     MERGE SETTLE(IN=A) LOAN1(IN=B);                                    00035700
+     BY ACCTNO;                                                         00035800
+     IF A AND B;                                                        00035900
+RUN;                                                                    00036000
+PROC APPEND DATA=ACTIVE1 BASE=ACTIVE; RUN;                              00036100
+                                                                        00036200
+DATA SETTLE; SET SETTLE; IC=OLDIC; RUN;                                 00036300
+DATA LOAN1;  SET LOAN1;  IC=TAXNO; RUN;                                 00036400
+%CHKATIVE;                                                              00036500
+                                                                        00036600
+DATA SETTLE; SET SETTLE; IC=NEWIC; RUN;                                 00036700
+DATA LOAN1;  SET LOAN1;  IC=GUAREND; RUN;                               00036800
+%CHKATIVE;                                                              00036900
+                                                                        00037000
+*** REMOVE DUPLICATE RECORD ***;                                        00037100
+PROC SORT DATA=ACTIVE OUT=CARD.ACTIVE NODUPKEY;                         00037200
+     BY NEWIC OLDIC ACCTNO;                                             00037300
+RUN;                                                                    00037400
+                                                                        00037500
+*** 4TH FILTER OUT ACTIVE ACCOUNTS ***;                                 00037600
+PROC SORT DATA=CARD.ACTIVE OUT=ACTIVE;                                  00037700
+     WHERE OLDIC NE ''; BY OLDIC;                                       00037800
+RUN;                                                                    00037900
+PROC SORT DATA=CARD.SETTLE OUT=SETTLE;                                  00038000
+     BY OLDIC;                                                          00038100
+RUN;                                                                    00038200
+DATA SETTLE;                                                            00038300
+     MERGE ACTIVE(IN=B) SETTLE(IN=A);                                   00038400
+     BY OLDIC;                                                          00038500
+     IF A AND NOT B;                                                    00038600
+RUN;                                                                    00038700
+                                                                        00038800
+PROC SORT DATA=CARD.ACTIVE OUT=ACTIVE;                                  00038900
+     WHERE NEWIC NE ''; BY NEWIC;                                       00039000
+RUN;                                                                    00039100
+PROC SORT DATA=SETTLE OUT=SETTLE;                                       00039200
+     BY NEWIC;                                                          00039300
+RUN;                                                                    00039400
+DATA SETTLE;                                                            00039500
+     MERGE ACTIVE(IN=B) SETTLE(IN=A);                                   00039600
+     BY NEWIC;                                                          00039700
+     IF A AND NOT B;                                                    00039800
+RUN;                                                                    00039900
+                                                                        00040000
+PROC SORT DATA=CARD.ACTIVE OUT=ACTIVE;                                  00040100
+     WHERE ACCTNO GT 0; BY ACCTNO;                                      00040200
+RUN;                                                                    00040300
+PROC SORT DATA=SETTLE OUT=SETTLE;                                       00040400
+     BY ACCTNO;                                                         00040500
+RUN;                                                                    00040600
+DATA SETTLE;                                                            00040700
+     MERGE ACTIVE(IN=B) SETTLE(IN=A);                                   00040800
+     BY ACCTNO;                                                         00040900
+     IF A AND NOT B;                                                    00041000
+RUN;                                                                    00041100
+                                                                        00041200
+PROC SORT DATA=SETTLE OUT=CARD.FSETTLE NODUPKEY;                        00041300
+     BY CARDNO;                                                         00041400
+RUN;                                                                    00041500
+PROC SORT DATA=CARD.FSETTLE OUT=FSETTLE;                                00041600
+     BY NTBRCH CNAME NEWIC OLDIC;                                       00041700
+RUN;                                                                    00041800
+                                                                        00041900
+PROC REPORT DATA=FSETTLE                                                00042000
+   NOCENTER SPLIT='*' NOWINDOWS HEADSKIP;                               00042100
+   COLUMN CUSTNO CARDNO CNAME NEWIC OLDIC COPENDT                       00042200
+          NTBRCH LASTRAN ACCTNO NOTENO;                                 00042300
+   DEFINE CUSTNO   /DISPLAY WIDTH=12 'CIS NO';                          00042400
+   DEFINE CARDNO   /DISPLAY WIDTH=16 'CREDIT*CARD NO';                  00042500
+   DEFINE CNAME    /DISPLAY WIDTH=25 'NAME';                            00042600
+   DEFINE NEWIC    /DISPLAY WIDTH=13 'NEW IC';                          00042700
+   DEFINE OLDIC    /DISPLAY WIDTH=10 'OLD IC';                          00042800
+   DEFINE COPENDT  /DISPLAY WIDTH=9 FORMAT=DDMMYY8. 'CARD OPEN*DATE';   00042900
+   DEFINE NTBRCH   /DISPLAY WIDTH=4 'BR*CODE';                          00043000
+   DEFINE LASTRAN  /DISPLAY WIDTH=9 FORMAT=DDMMYY8. 'SETTLED*DATE';     00043100
+   DEFINE ACCTNO   /DISPLAY WIDTH=11 FORMAT=10. 'ACCT NO';              00043200
+   DEFINE NOTENO   /DISPLAY WIDTH=5 FORMAT=5. 'NOTE NO';                00043300
+   TITLE1 'REPORT-ID: EIMUCARD';                                        00043400
+   TITLE2 'HP/HL ACCOUNT HAS BEEN REDEEMED/SETTLED AS AT ' "&RDATE";    00043500
+RUN;                                                                    00043600
