@@ -1,0 +1,261 @@
+//EIBDFD1M JOB MIS,'MIS',COND=(4,LT),CLASS=A,
+//         MSGCLASS=X,NOTIFY=&SYSUID
+//*
+//EIBDLIQP EXEC SAS609
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//CISAFD   DD DSN=SAP.PBB.CRM.CISBEXT,DISP=SHR
+//FD       DD DSN=SAP.PBB.MNIFD.DAILY(0),DISP=SHR
+//OVER1M   DD DSN=SAP.PBB.NONFD.OVER1M.DAILY(+1),
+//            DISP=(MOD,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=0),
+//            SPACE=(CYL,(2,1),RLSE),UNIT=SYSDA
+//SASLIST  DD SYSOUT=X
+//SYSIN    DD *
+
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER MPRINT;
+*;
+%INC PGM(PBBELF,PBBDPFMT);
+*;
+PROC FORMAT;
+   VALUE REMFMT
+      LOW-0.1 = '01'   /*  UP TO 1 WK       */
+      0.1-1   = '02'   /*  >1 WK - 1 MTH    */
+      1-3     = '03'   /*  >1 MTH - 3 MTHS  */
+      3-6     = '04'   /*  >3 - 6 MTHS      */
+      6-12    = '05'   /*  >6 MTHS - 1 YR   */
+      OTHER   = '06';  /*  > 1 YEAR         */
+*------------------------------------------------*
+*  MACRO TO DECLARE VARIABLES                    *
+*------------------------------------------------*;
+%MACRO DCLVAR;
+   RETAIN D1-D12 31 D4 D6 D9 D11 30
+          RD1-RD12 MD1-MD12 31 RD2 MD2 28 RD4 RD6 RD9 RD11
+          MD4 MD6 MD9 MD11 30 RPYR RPMTH RPDAY;
+   ARRAY LDAY D1-D12;
+   ARRAY RPDAYS RD1-RD12;
+   ARRAY MDDAYS MD1-MD12;
+%MEND DCLVAR;
+*;
+*------------------------------------------------*
+*  MACRO TO CALCULATE NEXT BLDATE                *
+*------------------------------------------------*;
+%MACRO NXTBLDT;
+   IF PAYFREQ = '6' THEN DO;
+      DD = DAY(BLDATE) + 14;
+      MM = MONTH(BLDATE);
+      YY = YEAR(BLDATE);
+      IF MM = 2 THEN
+         IF MOD(YY,4) = 0 THEN D2 = 29;
+         ELSE D2 = 28;
+      IF DD > LDAY(MM) THEN DO;
+         DD = DD - LDAY(MM);
+         MM + 1;
+         IF MM > 12 THEN DO;
+            MM = MM - 12; YY + 1;
+         END;
+      END;
+   END;
+   ELSE DO;
+      DD = DAY(ISSDTE);
+      MM = MONTH(BLDATE) + FREQ;
+      YY = YEAR(BLDATE);
+      IF MM > 12 THEN DO;
+         MM = MM - 12; YY + 1;
+      END;
+   END;
+   IF MM = 2 THEN
+      IF MOD(YY,4) = 0 THEN D2 = 29;
+      ELSE D2 = 28;
+   IF DD > LDAY(MM) THEN DD = LDAY(MM);
+   BLDATE = MDY(MM,DD,YY);
+%MEND NXTBLDT;
+*;
+*------------------------------------------------*
+*  MACRO TO CALCULATE REMAIN MONTH               *
+*------------------------------------------------*;
+%MACRO REMMTH;
+   MDYR  = YEAR(MATDT);
+   MDMTH = MONTH(MATDT);
+   MDDAY = DAY(MATDT);
+   IF MDMTH = 2 THEN
+      IF MOD(MDYR,4) = 0 THEN MD2 = 29;
+      ELSE MD2 = 28;
+   IF MDDAY > RPDAYS(RPMTH) THEN MDDAY = RPDAYS(RPMTH);
+   REMY = MDYR - RPYR;
+   REMM = MDMTH - RPMTH;
+   REMD = MDDAY - RPDAY;
+   REMMTH = REMY*12 + REMM + REMD/RPDAYS(RPMTH);
+%MEND REMMTH;
+*;
+*------------------------------------------------*
+*  GET REPTDATE                                  *
+*------------------------------------------------*;
+DATA REPTDATE;
+   SET FD.REPTDATE;
+   SELECT(DAY(REPTDATE));
+      WHEN (8)  CALL SYMPUT('NOWK',PUT('1',$1.));
+      WHEN (15) CALL SYMPUT('NOWK',PUT('2',$1.));
+      WHEN (22) CALL SYMPUT('NOWK',PUT('3',$1.));
+      OTHERWISE CALL SYMPUT('NOWK',PUT('4',$1.));
+   END;
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+   CALL SYMPUT('REPTDATE',REPTDATE);
+RUN;
+*;
+PROC SORT DATA=CISAFD.DEPOSIT(KEEP=ACCTNO CUSTNAM1 NEWIC OLDIC BUSSREG
+                                   CUSTNO SECCUST)
+          OUT=CISFD;
+    WHERE SECCUST = '901';
+  *  WHERE SECCUST = '901' & NEWIC = '133606W';
+    BY ACCTNO; RUN;
+*;
+DATA FD;
+   SET FD.FD;
+   FORMAT TMATURITY $10.;
+   REPTDATE = &REPTDATE;
+   IF CURBAL > 0 AND CUSTCD NOT IN (77,78,95,96) AND CURCODE = 'MYR';
+   MATDT = INPUT(PUT(MATDATE,Z8.),YYMMDD8.);
+   MATURITY = MATDT - REPTDATE;
+   IF LMATDATE NE 0 THEN
+      LASTMAT = INPUT(SUBSTR(PUT(LMATDATE,Z11.),1,8),MMDDYY8.);
+   IF LASTMAT = REPTDATE THEN DO;
+      MATURITY = 0;
+      MATDT = LASTMAT;
+   END;
+   IF MATURITY = 0 THEN TMATURITY = '(T)';
+   ELSE TMATURITY = '(T+'||COMPRESS(MATURITY)||')';
+   RATEBAL = CURBAL * RATE;
+   DROP NAME;
+*;
+DATA FD;
+   MERGE FD(IN=A) CISFD(IN=B RENAME=(CUSTNAM1=NAME));
+   BY ACCTNO;
+   IF A & B;
+   IF BUSSREG NE ' ' THEN CUSTID = BUSSREG;
+   ELSE IF NEWIC NE ' ' THEN CUSTID = NEWIC;
+   ELSE IF OLDIC NE ' ' THEN CUSTID = OLDIC;
+   ELSE CUSTID = CUSTNO;
+RUN;
+PROC SORT; BY MATDT;
+*;
+PROC SORT; BY CUSTID MATDT;
+PROC SUMMARY DATA=FD;
+BY CUSTID MATDT;
+VAR CURBAL RATEBAL;
+OUTPUT OUT=FDTOTAL SUM=TOTAL TOTRATEBAL;
+*;
+PROC SORT DATA=FD NODUPKEYS; BY CUSTID MATDT;
+DATA FDTOTAL;
+   MERGE FD(IN=A) FDTOTAL(IN=B);
+   BY CUSTID MATDT;
+   * IF TOTAL > 1000000 THEN OUTPUT;
+RUN;
+DATA FDTOTAL(KEEP=NAME TOTAL AVGRATE MATDT MATURITY TMATURITY REPTDATE
+                  TOTRATEBAL);
+   FORMAT AVGRATE 5.2;
+   SET FDTOTAL;
+   AVGRATE = ROUND(TOTRATEBAL / TOTAL,.01);
+RUN;
+   /** TOTAL FD  **/
+DATA FD;
+   SET FD.FD;
+   WHERE CURBAL > 0 AND CUSTCD NOT IN (77,78,95,96) AND CURCODE = 'MYR';
+   RATEBAL = CURBAL * RATE;
+RUN;
+PROC SUMMARY DATA=FD NWAY;
+VAR CURBAL RATEBAL;
+OUTPUT OUT=TOTALFD SUM=;
+RUN;
+*;
+DATA TOTALFD;
+   FORMAT AVGRATE 5.2;
+   SET TOTALFD;
+   AVGRATE = ROUND(RATEBAL / CURBAL,.01);
+RUN;
+  DATA _NULL_;
+  FORMAT CURBAL1 10.3;
+  SET TOTALFD;
+  FILE OVER1M;
+  CURBAL1 = ROUND(CURBAL / 1000000,0.001);
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT       'TOTAL NON-INDI FD (MIL)' ';'
+             'AVERAGE RATE'  ';'
+   ;
+   END;
+   PUT       CURBAL1          ';'
+             AVGRATE          ';'
+             ;
+RUN;
+DATA MATURE;
+   FORMAT TOTAL1 10.3;
+   SET FDTOTAL;
+   REPTDATE1 = COMPRESS(PUT(MATDT,DDMMYY10.) || TMATURITY);
+RUN;
+PROC SUMMARY DATA=MATURE NWAY;
+WHERE 0 <= MATURITY < 8;
+CLASS REPTDATE1;
+VAR TOTAL;
+OUTPUT OUT=TOTAL (DROP=_FREQ_ _TYPE_) SUM=;
+DATA _NULL_;
+  SET TOTAL;
+  FILE OVER1M;
+  CURBAL1 = ROUND(TOTAL / 1000000,0.001);
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT       'MATURITY DATE' ';'
+             'TOTAL NON-INDI FD (MIL)'  ';'
+   ;
+   END;
+   PUT       REPTDATE1           ';'
+             CURBAL1             ';'
+             ;
+RUN;
+%MACRO PROCESS;
+   PROC SORT DATA=MATURE; BY DESCENDING TOTAL;
+   *;
+   TITLE1 'RM NON-INDI '&TMAT &DATE;
+   PROC PRINT;
+   *;
+  DATA _NULL_;
+  SET MATURE;
+  FILE OVER1M;
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 ' ';
+   PUT @1 ' ';
+   PUT @1 'RM NON-INDI FD DETAILS BY CUSTOMER MATURING '"&DATE &TMAT";
+   PUT @1 ' ';
+   PUT       'CUSTOMER'                 ';'
+             'SETTLEMENT AMOUNT(MIL.)'  ';'
+             'MATURITY DATE'            ';'
+             'AVERAGE RATE'             ';'
+   ;
+   END;
+   PUT       NAME            ';'
+             TOTAL1           ';'
+             REPTDATE1        ';'
+             AVGRATE          ';'
+             ;
+RUN;
+%MEND PROCESS;
+RUN;
+%MACRO MATURE;
+   %DO I = 0 %TO 7;
+   DATA MATURE;
+   FORMAT TOTAL1 10.3;
+      SET FDTOTAL;
+      IF MATURITY = &I;
+      REPTDATE1 = PUT(MATDT,DDMMYY10.);
+      TOTAL1 = ROUND(TOTAL / 1000000,0.001);
+   CALL SYMPUT('TMAT',TMATURITY);
+   CALL SYMPUT('DATE',REPTDATE1);
+   RUN;
+   %PROCESS
+   %END;
+%MEND MATURE;
+%MATURE
+*;
