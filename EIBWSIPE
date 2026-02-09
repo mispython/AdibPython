@@ -1,0 +1,366 @@
+//EIBWSIPE JOB MSGCLASS=X,MSGLEVEL=(1,1)
+//* **************************************************
+//* WEEKLY SIP EXTRACTION TO WAREHOUSE AFTER FTPBSIP1
+//* ESMR 07-1356
+//* **************************************************
+//*
+//*%OPC SCAN
+//*%OPC SETFORM OCDATE=(DD)
+//*%OPC SETFORM OCLASTC=(DD)
+//*
+//DELETE   EXEC PGM=IEFBR14
+//DEL01    DD DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0)),
+//            DSN=SAP.PBB.SIP.SIPWH
+//DEL02    DD DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0)),
+//            DSN=SAP.PBB.SIP.SIPFTP
+//DEL03    DD DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0)),
+//            DSN=SAP.PBB.SIP.R1SIPWH
+//DEL04    DD DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0)),
+//            DSN=SAP.PBB.SIP.R1SIPFTP
+//*
+//CREATE   EXEC PGM=IEFBR14
+//CRT01    DD DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),
+//            SPACE=(CYL,(300,200),RLSE),UNIT=(SYSDA,5),
+//            DSN=SAP.PBB.SIP.SIPFTP
+//CRT02    DD DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),
+//            SPACE=(CYL,(300,200),RLSE),UNIT=(SYSDA,5),
+//            DSN=SAP.PBB.SIP.R1SIPFTP
+//*
+//SAS609   EXEC SAS609
+//SIPCUST  DD DISP=SHR,DSN=SAP.PBB.SIP.CUST.TEXT(0)
+//SIPCERT  DD DISP=SHR,DSN=SAP.PBB.SIP.CERT.TEXT(0)
+//SIPPROD  DD DISP=SHR,DSN=SAP.PBB.SIP.PROD.TEXT(0)
+//SIPWH    DD DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5),
+//            DSN=SAP.PBB.SIP.SIPWH
+//R1SIPWH  DD DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5),
+//            DSN=SAP.PBB.SIP.R1SIPWH
+//*
+//*%OPC BEGIN ACTION=INCLUDE,
+//*%OPC COMP=(&OCDATE..EQ.(08,09,10,11,12))
+//SIP      DD DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(200,200)),UNIT=(SYSDA,5),
+//            DSN=SAP.PBB.SIP(+1)
+//*%OPC END ACTION=INCLUDE
+//*
+//*%OPC BEGIN ACTION=INCLUDE,
+//*%OPC COMP=((&OCDATE..NE.(08)),
+//*%OPC       (&OCDATE..NE.(09)),
+//*%OPC       (&OCDATE..NE.(10)),
+//*%OPC       (&OCDATE..NE.(11)),
+//*%OPC       (&OCDATE..NE.(12)))
+//SIP      DD DISP=OLD,DSN=SAP.PBB.SIP(0)
+//*%OPC END ACTION=INCLUDE
+//*%OPC BEGIN ACTION=NOSCAN
+//SYSIN     DD *
+
+OPTIONS NOCENTER YEARCUTOFF=1950 LS=132;
+
+DATA SIP.REPTDATE
+     SIPWH.REPTDATE;
+   SELECT;
+      WHEN(8 <= DAY(TODAY()) <= 14) DO;
+         REPTDATE=INPUT('08'||PUT(MONTH(TODAY()), Z2.)||
+                  PUT(YEAR(TODAY()), 4.), DDMMYY8.);
+         WK      ='1';
+      END;
+      WHEN(15 <= DAY(TODAY()) <= 21) DO;
+         REPTDATE=INPUT('15'||PUT(MONTH(TODAY()), Z2.)||
+                  PUT(YEAR(TODAY()), 4.), DDMMYY8.);
+         WK      ='2';
+      END;
+      WHEN(22 <= DAY(TODAY()) <= 27) DO;
+         REPTDATE=INPUT('22'||PUT(MONTH(TODAY()), Z2.)||
+                  PUT(YEAR(TODAY()), 4.), DDMMYY8.);
+         WK      ='3';
+      END;
+      OTHERWISE DO;
+         REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
+                  PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+         WK      ='4';
+      END;
+   END;
+   CALL SYMPUT('NOWK',PUT(WK,$1.));
+   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
+   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+RUN;
+PROC PRINT DATA=SIP.REPTDATE; FORMAT REPTDATE DATE8. ;RUN;
+
+
+%MACRO PROCESS;
+   *** CUSTOMER PROFILE ***;
+   DATA CUST(DROP=INVSDES1 DD1 MM1 YY1 GEND ETHN MARI);
+      FORMAT GENDER ETHNIC MARITAL $15.;
+      INFILE SIPCUST FIRSTOBS=1;
+      INPUT @001 CUSTID   $UPCASE2.   /* C0-FIRST, C1-JOINT HOLDER   */
+            @003 PRIMIC   $UPCASE15.  /* FOR LINK TO 1ST FOLDER IC
+                                         FOR JOINT HOLDER            */
+            @018 BRANCH           3.  /* BRANCH CODE                 */
+            @021 BRABBR   $UPCASE15.  /* BRANCH ABBRIEVATE           */
+            @036 CUSTYPE          1.  /* 1-INDIVIDUAL 2-ORGANISATION */
+            @037 NAME     $UPCASE120. /* NAME                        */
+            @157 ICTYPE   $UPCASE2.   /* IDENTIFICATION TYPE         */
+            @159 IC       $UPCASE15.  /* IC NO                       */
+            @174 CUSTCODE $UPCASE2.   /* CUSTOMER CODE               */
+            @176 CUSTDESC $UPCASE100. /* CUSTOMER CODE DESCRIPTION   */
+            @276 INVSTYPE $UPCASE3.   /* INVESTOR TYPE               */
+            @279 INVSDESC $UPCASE100. /* INVESTOR TYPE DESCRIPTION   */
+            @379 INVSDES1 $UPCASE100. /* INVESTOR TYPE DESC FOR OTH  */
+            @479 HOMENO          $12. /* CONTACT NO - HOME           */
+            @491 OFFNO           $12. /* CONTACT NO - OFFICE         */
+            @503 MOBILE          $12. /* CONTACT NO - MOBILE         */
+            @515 INVSNO          $10. /* INVESTMENT A/C NO           */
+            @525 DD1               2. /* BIRTH DATE                  */
+            @528 MM1               2.
+            @531 YY1               4.
+            @535 GEND              1. /* GENDER                      */
+            @536 ETHN              1. /* ETHNIC                      */
+            @537 MARI              1. /* MARITAL STATUS              */
+            @538 INCOME          $80. /* MONTHLY INCOME              */
+            @618 OCCUPT          $80. /* OCCUPATION                  */
+            @698 CERTNO           $8. /* CERTIFICATE NO              */
+            ;
+            IF IC NE '';
+            IF INVSTYPE = 'OTH' THEN INVSDESC=INVSDES1;
+            IF GEND=1 THEN GENDER='MALE';
+            ELSE GENDER='FEMALE';
+
+            IF ETHN=1 THEN ETHNIC='MALAY';
+            ELSE IF ETHN=2 THEN ETHNIC='CHINESE';
+            ELSE IF ETHN=3 THEN ETHNIC='INDIAN';
+            ELSE                ETHNIC='OTHERS';
+
+            IF MARI=1 THEN MARITAL='SINGLE';
+            ELSE IF MARI=2 THEN MARITAL='MARRIED';
+            ELSE IF MARI=3 THEN MARITAL='DIVORCED';
+            ELSE IF MARI=4 THEN MARITAL='SEPARATED';
+            ELSE IF MARI=5 THEN MARITAL='WIDOW/WIDOWER';
+            ELSE                MARITAL=' ';
+
+            IF MM1 GT 0 THEN BIRTHDT = MDY(MM1,DD1,YY1);
+   RUN;
+
+   *** INVESTMENT PROFILE ***;
+   DATA PROD(DROP=DD1 MM1 YY1 DD2 MM2 YY2 DD3 MM3 YY3
+                  DD4 MM4 YY4 DD5 MM5 YY5 DD6 MM6 YY6
+                  DD7 MM7 YY7 DD8 MM8 YY8 DD9 MM9 YY9
+                  DD10 MM10 YY10);
+      INFILE SIPPROD FIRSTOBS=1;
+      INPUT @001 PRODKEY   $UPCASE7.  /* PRODUCT KEY                 */
+            @008 PRODNM        $100.  /* PRODUCT NAME                */
+            @108 PRODUCT          3.  /* PRODUCT CODE                */
+            @111 ASETCODE        $2.  /* ASSET CLASS CODE            */
+            @113 AGENT         $120.  /* AGENT NAME                  */
+            @233 COLLACC        $10.  /* COLLECTION ACCOUNT NO       */
+            @243 PRTECT          $1.  /* PRINCIPAL PROTECTED         */
+            @244 COLLABLE        $1.  /* COLLABLE                    */
+            @245 TRANCNO          2.  /* TRANCHE NO                  */
+            @247 VALUFEQ          1.  /* VALUATION FREQUENCY         */
+            @248 TENURE           4.  /* TENURE                      */
+            @252 ISOCURR         $3.  /* ISO CURRENCY CODE           */
+            @255 MINAMT          17.2 /* MIN INVESTMENT AMT          */
+            @272 PRATE            6.2 /* PARTICIPATION RATE          */
+            @278 ISRATE           8.4 /* INITIAL SPOT RATE           */
+            @288 DD1              2.  /* OFFER START DATE            */
+            @291 MM1              2.
+            @294 YY1              4.
+            @298 DD2              2.  /* OFFER END DATE              */
+            @301 MM2              2.
+            @304 YY2              4.
+            @308 DD3              2.  /* TRADE DATE                  */
+            @311 MM3              2.
+            @314 YY3              4.
+            @318 DD4              2.  /* MATURITY DATE               */
+            @321 MM4              2.
+            @324 YY4              4.
+            @328 DD5              2.  /* MATURITY PAYMENT DATE       */
+            @331 MM5              2.
+            @334 YY5              4.
+            @338 INVAMT          17.2 /* TOT SUCCESSFUL INVESTMENT AM*/
+            @355 DD6              2.  /* DATE OF VALUATION           */
+            @358 MM6              2.
+            @361 YY6              4.
+            @365 TOTNAV          17.2 /* TOTAL NAV                   */
+            @382 TOTNAVP          8.4 /* TOTAL NAV %                 */
+            @390 FVALIND         $1.  /* IS FINAL VALUATION          */
+            @391 INVINTRE         6.2 /* NEW INVEST - INT REBATE %   */
+            @398 INVCSREB         6.2 /* NEW INVEST - CASH REBATE %  */
+            @404 INVCSFD          6.2 /* NEW INVEST - CASH REBATE -FD*/
+            @410 CSREBFD        $10.  /* CAPPING- CASH REBATE - FD   */
+            @420 SWNAME          $8.  /* SWITCHOVER - PROD NAME      */
+            @428 SWKEY           $8.  /* SWITCHOVER - PROD KEY       */
+            @435 SWCSREB          6.2 /* SWITCHOVER - CASH REBATE %  */
+            @441 DD7              2.  /* EFFECTIVE DATE              */
+            @444 MM7              2.
+            @447 YY7              4.
+            @451 DD8              2.  /* INITIAL VALUATION DATE      */
+            @454 MM8              2.
+            @457 YY8              4.
+            @461 DD9              2.  /* FINAL VALUATION DATE        */
+            @464 MM9              2.
+            @467 YY9              4.
+            @471 DD10             2.  /* FINAL FX VALUATION DATE     */
+            @474 MM10             2.
+            @477 YY10             4.
+            @481 MININVBY       $10.  /* MIN INVESTMENT AMOUNT      */
+            @491 LOWBAR           8.4 /* LOWER BARRIER               */
+            @499 UPPBAR           8.4 /* UPPER BARRIER               */
+            @507 COUPAYFR         2.  /* COUPON PAYMENT FREQUENCY    */
+            @509 COUPAYRA         5.2 /* COUPON PAYMENT RATE         */
+            @514 DISERBCP         3.  /* DISALLOW ER N DAYS BF CP    */
+            @517 ALLERBCP         3.  /* ALLOW ER N DAYS AFTER CP    */
+            @520 LISCOUPD      $480.  /* LIST OF COUPON PAYMENT DATE */
+            ;
+            IF PRODKEY NE '';
+            IF MM1 GT 0 THEN OFSTDT = MDY(MM1,DD1,YY1);
+            IF MM2 GT 0 THEN OFENDT = MDY(MM2,DD2,YY2);
+            IF MM3 GT 0 THEN TRADDT = MDY(MM3,DD3,YY3);
+            IF MM4 GT 0 THEN MATUDT = MDY(MM4,DD4,YY4);
+            IF MM5 GT 0 THEN MATPYDT = MDY(MM5,DD5,YY5);
+            IF MM6 GT 0 THEN VALUDT = MDY(MM6,DD6,YY6);
+            IF MM7 GT 0 THEN EFFTDT = MDY(MM7,DD7,YY7);
+            IF MM8 GT 0 THEN INIVALDT = MDY(MM8,DD8,YY8);
+            IF MM9 GT 0 THEN FINVALDT = MDY(MM9,DD9,YY9);
+            IF MM10 GT 0 THEN FIFXVADT = MDY(MM10,DD10,YY10);
+   RUN;
+
+   *** INVESTMENT DETAILS ***;
+   DATA CERT(DROP=DD1 MM1 YY1 DD2 MM2 YY2 DD3 MM3 YY3 DD4 MM4 YY4
+                  DD5 MM5 YY5 DD6 MM6 YY6);
+      INFILE SIPCERT FIRSTOBS=1;
+      INPUT @001 BRANCH           3.  /* BRANCH CODE                 */
+            @004 BRABBR   $UPCASE15.  /* BRANCH ABBRIEVATE           */
+            @019 NAME     $UPCASE120. /* NAME                        */
+            @139 CUSTYPE          1.  /* 1-INDIVIDUAL 2-ORGANISATION */
+            @142 IC       $UPCASE15.  /* IC NO                       */
+            @157 PRODKEY   $UPCASE7.  /* PRODUCT KEY                 */
+            @164 PRODUCT          3.  /* PRODUCT CODE                */
+            @167 PRODNM        $100.  /* PRODUCT NAME                */
+            @267 ASETCODE        $2.  /* ASSET CLASS CODE            */
+            @269 TRANCNO          2.  /* TRANCHE NO                  */
+            @271 DD1              2.  /* DATE OF PLACEMENT           */
+            @274 MM1              2.
+            @277 YY1              4.
+            @281 PRINAMT         17.2 /* PRINCIPAL AMOUNT            */
+            @298 SOFUND          $2.  /* SOURCE OF FUND              */
+            @300 FUNDET        $100.  /* DETAIL SOURCE OF FUND       */
+            @400 ADD1           $40.  /* CUSTUMER ADDRESS            */
+            @440 ADD2           $40.
+            @480 ADD3           $40.
+            @520 ADD4           $40.
+            @560 CERTNO          $8.  /* CERTIFICATE NO              */
+            @568 INVSTAT         $3.  /* INVESTMENT STATUS           */
+            @571 EARAMT          17.2 /* EARMARK AMOUNT              */
+            @588 AVAIBAL         17.2 /* AVAILABLE BALANCE           */
+            @605 UNSUREA        $30.  /* UNSUCESSFUL REASON          */
+            @635 DEBITBY       $100.  /* MANUAL DEBIT UPDATE BY      */
+            @735 DD2              2.  /* MANUAL DEBIT DATE           */
+            @738 MM2              2.
+            @741 YY2              4.
+            @745 DEBITREA      $100.  /* REASON MANUAL DEBIT         */
+            @845 DD3              2.  /* DATE CREDITED               */
+            @848 MM3              2.
+            @851 YY3              4.
+            @855 PLAMT           17.2 /* P & L AMOUNT                */
+            @872 UNSUREA       $100.  /* UNSUCCESSFUL REASON         */
+            @972 STATUPBY      $100.  /* STATUS UPDATE BY            */
+           @1072 DD4              2.  /* STATUS UPDATE DATE          */
+           @1075 MM4              2.
+           @1078 YY4              4.
+           @1082 REMARKS       $100.  /* REMARKS                     */
+           @1182 SWABBR          $8.  /* SWITCHOVER PROD ABBR        */
+           @1190 SWAMT           17.2 /* AMT FROM SWITCHOVER PROD    */
+           @1207 AMTFD           17.2 /* AMT FROM 12 MTHS FD         */
+           @1224 AMTOTH          17.2 /* AMT FROM FD/TT/CHEQ/OTH     */
+           @1241 AMTDEP          17.2 /* AMT FROM SA/CA              */
+           @1258 SALENAME        $9.  /* SALES PERSONNEL             */
+           @1267 REDAMT          17.2 /* REDEMPTION AMT              */
+           @1284 OSREDAMT        17.2 /* O/S REDEMPTION AMT          */
+           @1301 CREMTACC        10   /* CREDITING MATURITY ACC      */
+           @1311 PLAGSNTLN        1   /* PLEDGE AGAINST LOAN         */
+           @1312 TAGBY           $100 /* TAG BY                      */
+           @1412 DD5              2.  /* TAG DATE                    */
+           @1415 MM5              2.
+           @1418 YY5              4.
+           @1422 DD6              2.  /* COUPON PAYMENT DATE         */
+           @1425 MM6              2.
+           @1428 YY6              4.
+           @1432 COUPAYAM        13.2 /* COUPON PAYMENT AMOUNT       */
+           @1445 OUTSDAMT        17.2 /* OUTSTANDING ABOUNT          */
+           @1462 POSTCODE       $15.  /* POSTCODE                    */
+           @1477 STATE          $50.  /* STATE                       */
+           @1527 COUNTRY        $50.  /* COUNTRY                     */
+            ;
+            IF IC NE '';
+            IF MM1 GT 0 THEN PLACEDT = MDY(MM1,DD1,YY1);
+            IF MM2 GT 0 THEN DEBITDT = MDY(MM2,DD2,YY2);
+            IF MM3 GT 0 THEN CREDITDT = MDY(MM3,DD3,YY3);
+            IF MM4 GT 0 THEN STATUPDT = MDY(MM4,DD4,YY4);
+            IF MM5 GT 0 THEN TAGDATE = MDY(MM5,DD5,YY5);
+            IF MM6 GT 0 THEN COUPAYDT = MDY(MM6,DD6,YY6);
+   RUN;
+
+   *** MOVE CUSTCODE ***;
+   PROC SORT DATA=CERT; BY IC; RUN;
+   PROC SORT DATA=CUST OUT=CUST01(KEEP=IC CUSTCODE CUSTDESC INVSTYPE
+      INVSDESC) NODUPKEY; WHERE INVSNO NE '';
+      BY IC; RUN;
+   DATA CERT;
+      MERGE CERT(IN=A) CUST01;
+      BY IC; IF A;
+   RUN;
+
+   *** MOVE ADDRESS  ***;
+   PROC SORT DATA=CERT OUT=CERT01(KEEP=IC ADD1 ADD2 ADD3 ADD4)
+      NODUPKEY; BY IC; RUN;
+   PROC SORT DATA=CUST; BY IC; RUN;
+   DATA CUST;
+      MERGE CUST(IN=A) CERT01;
+      BY IC;
+      IF A;
+   RUN;
+
+   DATA CERT(DROP=ADD1 ADD2 ADD3 ADD4);
+      SET CERT;
+   RUN;
+%MEND;
+%PROCESS;
+
+DATA SIP.SIPCUST&REPTMON&NOWK&REPTYEAR
+   R1SIPWH.SIPCUST&REPTMON&NOWK&REPTYEAR;
+   SET CUST;
+RUN;
+
+DATA SIP.SIPPROD&REPTMON&NOWK&REPTYEAR
+   SIPWH.SIPPROD&REPTMON&NOWK&REPTYEAR;
+   SET PROD;
+RUN;
+
+PROC SORT DATA = SIP.SIPPROD&REPTMON&NOWK&REPTYEAR;
+   BY TRADDT;RUN;
+PROC SORT DATA = SIPWH.SIPPROD&REPTMON&NOWK&REPTYEAR;
+   BY TRADDT;RUN;
+
+DATA SIP.SIPCERT&REPTMON&NOWK&REPTYEAR
+   SIPWH.SIPCERT&REPTMON&NOWK&REPTYEAR;
+   SET CERT;
+RUN;
+
+FILENAME TRANFILE 'SAP.PBB.SIP.SIPFTP' DISP=OLD;
+PROC CPORT LIBRARY=SIPWH FILE=TRANFILE;
+RUN;
+
+FILENAME TRANFILE 'SAP.PBB.SIP.R1SIPFTP' DISP=OLD;
+PROC CPORT LIBRARY=R1SIPWH FILE=TRANFILE;
+RUN;
+
+
+//*%OPC END ACTION=NOSCAN
+
