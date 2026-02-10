@@ -1,366 +1,665 @@
-import duckdb
-from pathlib import Path
-from datetime import datetime
+import os
+import numpy as np
+from numba import njit
+import dask.bag as db
+import dask.dataframe as dd
+from dask.distributed import Client, LocalCluster
+import pandas as pd
+import importlib.util
+import sys
+import shutil
+import time
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
+import dask
+from decimal import Decimal
+import json
+sys.dont_write_bytecode = True
+from sas7bdat import SAS7BDAT
+from datetime import datetime, timedelta
+import calendar
 
-# ============================================================================
-# PATH CONFIGURATION - Edit these paths to match your environment
-# ============================================================================
+# for dwh batch date
+def get_batch_date_dwh(source_system_cd):
+    with SAS7BDAT('/sasdata/dwh/control/ctl_dwh_batch_dttm.sas7bdat') as reader:
+        df = reader.to_data_frame()
 
-# Base directories
-BASE_DIR = Path('.')
-INPUT_DIR = BASE_DIR / 'data'
-OUTPUT_DIR = BASE_DIR / 'output'
+    batch_date = df.loc[df['SOURCE_SYSTEM_CD'] == source_system_cd]
+    return_batch_date = pd.to_datetime(batch_date.iloc[0]['BATCH_DTTM'])
+    return_batch_date_str = return_batch_date.strftime('%Y-%m-%d %H:%M:%S')
+    
+    return return_batch_date_str
 
-# Input paths
-LOAN_LNNOTE = INPUT_DIR / 'loan' / 'lnnote.parquet'
-LNADDR_LNNAME = INPUT_DIR / 'lnaddr' / 'lnname.parquet'
-BNM_LOAN = INPUT_DIR / 'bnm' / 'loan{reptmon}{nowk}.parquet'
-BNM_ULOAN = INPUT_DIR / 'bnm' / 'uloan{reptmon}{nowk}.parquet'
-DEPOSIT_TXT = INPUT_DIR / 'deposit.txt'
-MNICS_CIS = INPUT_DIR / 'mnics' / 'cis.parquet'
-ODADDR_SAVINGS = INPUT_DIR / 'odaddr' / 'savings.parquet'
-OD_OVERDFT = INPUT_DIR / 'od' / 'overdft.parquet'
+def format_date(date, format_str):
+    # Return the date formatted based on the provided format string
+    return  datetime.strptime(date,"%Y-%m-%d %H:%M:%S").strftime(format_str)
 
-# Output paths
-SAVE_LOAN = OUTPUT_DIR / 'save_loan.parquet'
-PAGE02_PARQUET = OUTPUT_DIR / 'page02.parquet'
-PAGE04_PARQUET = OUTPUT_DIR / 'page04.parquet'
-PAGE01_TXT = OUTPUT_DIR / 'page01.txt'
-PAGE02_TXT = OUTPUT_DIR / 'page02.txt'
-PAGE03_TXT = OUTPUT_DIR / 'page03.txt'
-PAGE04_TXT = OUTPUT_DIR / 'page04.txt'
+@njit
+def unpack_packed_decimal(pd_bytes_array):
+    val = np.int64(0)
 
-# Create output directory if it doesn't exist
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if not pd_bytes_array.size:
+        return val
+    
+    sign_nibble = pd_bytes_array[-1] & 0x0F
+    is_negative = (sign_nibble == 0x0D or sign_nibble == 0x0B)
 
-# ============================================================================
+    for i in range(len(pd_bytes_array)):
+        byte = pd_bytes_array[i]
+        high_nibble = byte >> 4
 
-# Initialize DuckDB connection
-con = duckdb.connect()
+        if i == len(pd_bytes_array) - 1:
+            val = val * 10 + high_nibble
+        else:
+            low_nibble = byte & 0x0F
+            val = val * 100 + high_nibble * 10 + low_nibble
 
-# Get reporting date and derive variables (mimics SAS REPTDATE logic)
-# In production, you would read from LOAN.REPTDATE dataset
-# For now, using current date or you can hardcode a specific date
-reptdate_value = con.execute("SELECT CURRENT_DATE").fetchone()[0]
-# reptdate_value = datetime(2026, 1, 23).date()  # Uncomment to use specific date
+    return -val if is_negative else val
 
-day = reptdate_value.day
-nowk = '1' if day == 8 else '2' if day == 15 else '3' if day == 22 else '4'
-reptyear = str(reptdate_value.year)
-reptmon = f"{reptdate_value.month:02d}"
-reptday = f"{reptdate_value.day:02d}"
-reptdte = reptday + reptmon + reptyear
-reptdate_str = f"'{reptdate_value}'"  # For SQL queries
+def decode_records(record_bytes, layout):
+    decoded_row = {}
+    all_null = True
+    
+    for field_name, specs in layout.items():
+        field_bytes = record_bytes[specs['slice']]
+        field_type = specs['type']
 
-# Format mappings
-payfq_map = {'1': 'M', '2': 'Q', '3': 'S', '4': 'A', '5': 'B', '9': 'I'}
-risk_map = {1: 'C', 2: 'S', 3: 'D', 4: 'B'}
+        try:
+            if field_type == 'ebcdic':
+                # Try multiple EBCDIC code pages
+                decoded_value = None
+                for code_page in ['cp037', 'cp500', 'cp1047', 'latin-1']:
+                    try:
+                        decoded = field_bytes.decode(code_page).strip()
+                        if decoded and not all(c in ' \x00' for c in decoded):
+                            decoded_value = decoded
+                            all_null = False
+                            break
+                    except:
+                        continue
+                
+                if decoded_value is None:
+                    # Try raw approach for problematic bytes
+                    try:
+                        cleaned = field_bytes.replace(b'\x00', b' ').strip()
+                        decoded_value = cleaned.decode('ascii', errors='ignore').strip()
+                        if decoded_value and not all(c in ' \x00' for c in decoded_value):
+                            all_null = False
+                        else:
+                            decoded_value = None
+                    except:
+                        decoded_value = None
+                
+                decoded_row[field_name] = decoded_value
+                        
+            elif field_type == 'packed':
+                try:
+                    raw_val = unpack_packed_decimal(np.frombuffer(field_bytes, dtype=np.uint8))
+                    decimals = specs.get('decimals', 0)
+                    if decimals > 0:
+                        decoded_row[field_name] = Decimal(raw_val) / (Decimal(10) ** decimals)
+                    else:
+                        decoded_row[field_name] = raw_val
+                    
+                    if decoded_row[field_name] not in (None, 0, ''):
+                        all_null = False
+                except Exception as e:
+                    decoded_row[field_name] = None
+                    
+        except Exception as e:
+            decoded_row[field_name] = None
+    
+    # COMMENTED OUT: Skip padding records
+    # if all_null:
+    #     # Check if this looks like a padding record (all zeros, spaces, or nulls)
+    #     if record_bytes.strip(b'\x00\x20\xFF') == b'':
+    #         return None  # Skip padding records entirely
+    
+    return decoded_row
 
-# Read and process loan data
-con.execute(f"""
-    CREATE TEMP TABLE lnnote AS 
-    SELECT * FROM read_parquet('{LOAN_LNNOTE}')
-    ORDER BY acctno
-""")
+def generate_records(filename, record_size, max_records):
+    records_yeild = 0
+    try:
+        with open(filename, 'rb') as f:
+            while True:
+                if max_records != None and records_yeild >= max_records:
+                    break
+                record = f.read(record_size)
+                if not record:
+                    break
+                if len(record) == record_size:
+                    yield record
+                    records_yeild += 1
+    except Exception as e:
+        print(f"Error file{e}:")
+        return
 
-con.execute(f"""
-    CREATE TEMP TABLE lnname AS 
-    SELECT * FROM read_parquet('{LNADDR_LNNAME}')
-    ORDER BY acctno
-""")
+def load_layout_file(layout_file_path):
+    spec = importlib.util.spec_from_file_location("layout_module", layout_file_path)
+    if spec is None:
+        raise FileNotFoundError(f"Layout file not found at {layout_file_path}")
+    
+    layout_module = importlib.util.module_from_spec(spec)
+    sys.modules['layout_module'] = layout_module
+    spec.loader.exec_module(layout_module)
+    return layout_module.LAYOUT, layout_module.LRECL
 
-# Merge loan name and address
-con.execute("""
-    CREATE TEMP TABLE lnaddr AS
-    SELECT n.acctno, n.taxno AS oldic, n.guarend AS newic,
-           n.nameln1, n.nameln2, n.nameln3, n.nameln4, n.nameln5
-    FROM lnnote ln
-    INNER JOIN lnname n ON ln.acctno = n.acctno
-""")
+def is_text_file(filepath, chunksize=4096, threshold=0.3):
+    """
+    More robust text file detection that checks for a high percentage of printable characters
+    """
+    if not os.path.exists(filepath):
+        return False
+        
+    try:
+        # First check file extension as a hint
+        if filepath.endswith('.txt') or '.txt' in filepath.lower():
+            return True
+            
+        with open(filepath, 'rb') as f:
+            chunk = f.read(chunksize)
+            if not chunk:
+                return True  # Empty file is considered text
+                
+            # Count printable ASCII characters (bytes 32-126 plus common whitespace)
+            printable_count = sum(1 for byte in chunk if 32 <= byte <= 126 or byte in (9, 10, 13))
+            total_count = len(chunk)
+            
+            # If more than threshold% are printable, it's likely text
+            if total_count > 0 and (printable_count / total_count) > threshold:
+                if b'\x00' in chunk or any(byte <32 and byte not in (9, 10, 13) for byte in chunk):
+                    return False
+                return True
+                
+        return False
+        
+    except Exception:
+        return False
 
-# Process main loan data
-bnm_loan_path = str(BNM_LOAN).format(reptmon=reptmon, nowk=nowk)
-bnm_uloan_path = str(BNM_ULOAN).format(reptmon=reptmon, nowk=nowk)
+def analyze_file_format(filename, lrecl, layout):
+    """Analyze file to determine its actual format"""
+    try:
+        with open(filename, 'rb') as f:
+            # Read sample records
+            samples = []
+            for i in range(min(10, os.path.getsize(filename) // lrecl)):
+                record = f.read(lrecl)
+                if not record:
+                    break
+                samples.append(record)
+            
+            if not samples:
+                return False
+                
+            # Check if records appear to be text
+            text_like = 0
+            for sample in samples:
+                # Count printable characters
+                printable = sum(1 for byte in sample if 32 <= byte <= 126 or byte in (9, 10, 13))
+                if printable / len(sample) > 0.6:  # 60% printable = likely text
+                    text_like += 1
+            
+            return text_like / len(samples) > 0.7  # 70% of samples text-like
+    except:
+        return False
 
-con.execute(f"""
-    CREATE TEMP TABLE loan_base AS
-    SELECT *, 
-           CASE WHEN source = 'uloan' THEN commno ELSE noteno END AS noteno
-    FROM (
-        SELECT *, 'loan' AS source FROM read_parquet('{bnm_loan_path}')
-        UNION ALL
-        SELECT *, 'uloan' AS source FROM read_parquet('{bnm_uloan_path}')
-    )
-    WHERE custcode NOT IN (1,2,3,10,11,12,81,91)
-""")
+def read_decode_chunk_to_df(byte_range, filename, lrecl, layout, schema):
+    start_byte, end_byte = byte_range
+    try:
+        print(f"[Chunk Start] {filename}: {start_byte}-{end_byte}, size={end_byte-start_byte} bytes")
 
-# Handle duplicate product codes
-con.execute("""
-    CREATE TEMP TABLE loan_dedup AS
-    SELECT * FROM (
-        SELECT *, ROW_NUMBER() OVER (PARTITION BY acctno ORDER BY acctno) AS rn
-        FROM loan_base
-        WHERE prodcd IN ('34190','34690')
-    ) WHERE rn = 1
-    UNION ALL
-    SELECT *, 1 AS rn FROM loan_base WHERE prodcd NOT IN ('34190','34690')
-""")
+        with open(filename, 'rb') as f:
+            f.seek(start_byte)
+            record_count = 0
+            success_count = 0
+            skipped_count = 0
 
-# Calculate total limits
-con.execute("""
-    CREATE TEMP TABLE temp AS
-    SELECT acctno, 
-           SUM(apprlimt) AS totlimt,
-           COUNT(*) AS loancnt
-    FROM loan_dedup
-    GROUP BY acctno
-""")
+            while f.tell() < end_byte:
+                record_byte = f.read(lrecl)
+                if not record_byte or len(record_byte) < lrecl:
+                    break
 
-# Read GP3 data
-con.execute(f"""
-    CREATE TEMP TABLE gp3klu AS
-    SELECT 
-        CAST(SUBSTRING(line, 1, 3) AS INTEGER) AS branch,
-        CAST(SUBSTRING(line, 4, 10) AS BIGINT) AS acctno,
-        CAST(SUBSTRING(line, 14, 5) AS INTEGER) AS zero5,
-        CAST(SUBSTRING(line, 19, 2) AS INTEGER) AS rptday,
-        CAST(SUBSTRING(line, 21, 2) AS INTEGER) AS rptmon,
-        CAST(SUBSTRING(line, 23, 4) AS INTEGER) AS rptyear,
-        CAST(SUBSTRING(line, 27, 12) AS DECIMAL(12,2)) AS scv,
-        CAST(SUBSTRING(line, 39, 12) AS DECIMAL(14,2)) AS iis,
-        CAST(SUBSTRING(line, 51, 12) AS DECIMAL(14,2)) AS iisr,
-        CAST(SUBSTRING(line, 63, 12) AS DECIMAL(14,2)) AS iisw,
-        CAST(SUBSTRING(line, 75, 12) AS DECIMAL(14,2)) AS prinwoff,
-        SUBSTRING(line, 87, 1) AS gp3ind,
-        NULL AS noteno
-    FROM read_csv('{DEPOSIT_TXT}', columns={{'line': 'VARCHAR'}}, header=false)
-    ORDER BY acctno, noteno
-""")
+                decoded = decode_records(record_byte, layout)
+                
+                # COMMENTED OUT: Skip records that decoded to None (padding)
+                # if decoded is None:
+                #     skipped_count += 1
+                #     continue
+                    
+                yield decoded
+                record_count += 1
+                success_count += 1
 
-# Filter loans >= 1M or NPL
-con.execute("""
-    CREATE TEMP TABLE loan_filtered AS
-    SELECT l.*, t.totlimt, t.loancnt
-    FROM loan_dedup l
-    INNER JOIN temp t ON l.acctno = t.acctno
-    WHERE t.totlimt >= 1000000 OR l.loanstat = 3
-""")
+                if record_count % 100000 == 0:
+                    print(f"   Processed {record_count} records, {success_count} success, {skipped_count} skipped")
 
-# Merge with GP3
-con.execute(f"""
-    CREATE TEMP TABLE loan AS
-    SELECT l.*,
-           g.scv, g.iis, g.iisr, g.iisw, g.prinwoff, g.gp3ind,
-           CASE WHEN l.acctype != 'OD' 
-                THEN l.balance + (-1)*l.curbal + (-1)*l.feeamt 
-                ELSE NULL END AS intout,
-           '{reptdte}' AS reptdte
-    FROM loan_filtered l
-    LEFT JOIN gp3klu g ON l.acctno = g.acctno AND l.noteno = g.noteno
-""")
+        print(f"[Chunk Done] {filename}: {start_byte}-{end_byte}, total={record_count}, success={success_count}, skipped={skipped_count}")
 
-# Director info (PAGE02)
-con.execute(f"""
-    CREATE TEMP TABLE dirinfo AS
-    SELECT DISTINCT
-           l.branch, l.acctno, l.reptdte,
-           CASE WHEN REGEXP_REPLACE(c.dirnic, '[0 ]', '') = '' THEN '' ELSE c.dirnic END AS dirnic,
-           CASE WHEN REGEXP_REPLACE(c.diroic, '[0 ]', '') = '' THEN '' ELSE c.diroic END AS diroic,
-           c.dirname
-    FROM (SELECT DISTINCT branch, acctno, reptdte FROM loan) l
-    LEFT JOIN read_parquet('{MNICS_CIS}') c ON l.acctno = c.acctno
-""")
+    except Exception as e:
+        print(f"Error file {filename}: {e}")
+        return pd.DataFrame(columns=schema.keys()).astype(schema)
+    
+def create_status_file(all_jobs, status_file_path):
+    status = {}
+    if os.path.exists(status_file_path):
+        print(f"Rerun detected. Loading job status fom {status_file_path}")
+        with open(status_file_path, 'r') as f:
+            data = json.load(f)
+        for file_path, current_status in data.items():
+            if isinstance(current_status, str):
+                status[file_path] = {"status": current_status, "reason": "N/A"}
+            else:
+                status[file_path] = current_status
+    else:
+        print(f"First run detected. Creating new status file {status_file_path}")
+    for job in all_jobs:
+        file_path = job['input_file']
+        if file_path not in status:
+            status[file_path] = {"status": "pending", "reason": "N/A"}
+    with open(status_file_path, 'w') as f:
+        json.dump(status, f, indent=4)
+    return status
 
-con.execute(f"COPY dirinfo TO '{PAGE02_PARQUET}'")
+def update_status_file(status_file_path, file_path, new_result):
+    with open(status_file_path, 'r+') as f:
+        data = json.load(f)
+        data[file_path] = {
+            'status': new_result['status'],
+            'reason': new_result.get('reason', 'Unknown Error')
+        }
+        f.seek(0)
+        json.dump(data, f, indent=4)
+        f.truncate()
 
-# Write PAGE02 text file
-with open(PAGE02_TXT, 'w') as f:
-    for row in con.execute("SELECT * FROM dirinfo ORDER BY branch, acctno").fetchall():
-        line = f"0233{row[0]:05d}{row[1]:010d}{row[2]}{row[3]:20s}{row[4]:20s}  {row[5]:60s}MYN"
-        f.write(line + '\n')
+def process_file(job_spec, output_dir, applname):
+    file_start_time = time.time()
+    input_file = job_spec['input_file']
+    layout_file_path = job_spec['layout_file']
+    is_text_file_flag = job_spec['is_text']
 
-# Process address data
-con.execute(f"""
-    CREATE TEMP TABLE addr AS
-    SELECT acctno, nameln2, nameln3, nameln4, nameln5, oldic, newic
-    FROM lnaddr
-    UNION ALL
-    SELECT acctno, nameln2, nameln3, nameln4, nameln5, oldic, newic
-    FROM read_parquet('{ODADDR_SAVINGS}')
-""")
+    file_base_name = os.path.splitext(os.path.basename(input_file))[0]
+    base_name = file_base_name.rsplit('_', 1)[0]
 
-# Get CIS data
-con.execute(f"""
-    CREATE TEMP TABLE cis_temp AS
-    SELECT DISTINCT acctno, name, sic
-    FROM read_parquet('{MNICS_CIS}')
-""")
+    os.makedirs(output_dir, exist_ok=True)
 
-# Process OD data
-con.execute(f"""
-    CREATE TEMP TABLE loan2 AS
-    SELECT acctno, branch, balance, product
-    FROM read_parquet('{bnm_loan_path}')
-    WHERE acctype = 'OD' 
-      AND (apprlimt >= 0 OR balance < 0)
-      AND (acctno <= 3900000000 OR acctno > 3999999999)
-""")
+    final_parquet_output = os.path.join(output_dir, f"STG_{applname}_{base_name}.parquet")
 
-con.execute(f"""
-    CREATE TEMP TABLE od AS
-    SELECT DISTINCT acctno, excessdt, toddate, riskcode
-    FROM read_parquet('{OD_OVERDFT}')
-    WHERE excessdt > 0 OR toddate > 0
-""")
+    if os.path.exists(final_parquet_output) and os.path.isdir(final_parquet_output):
+        final_parquet_output = os.path.join(final_parquet_output, f"STG_{applname}_{base_name}.parquet")
 
-# Calculate OD days overdue
-con.execute(f"""
-    CREATE TEMP TABLE loanod AS
-    SELECT l.acctno,
-           CASE WHEN bldate IS NOT NULL 
-                THEN DATE {reptdate_str} - bldate + 1 
-                ELSE NULL END AS days
-    FROM (
-        SELECT l.acctno,
-               CASE WHEN o.excessdt > 0 AND o.toddate > 0 THEN
-                    CASE WHEN excdate <= toddt THEN excdate ELSE toddt END
-               WHEN o.excessdt > 0 THEN excdate
-               WHEN o.toddate > 0 THEN toddt
-               ELSE NULL END AS bldate
-        FROM loan2 l
-        LEFT JOIN (
-            SELECT acctno, excessdt, toddate,
-                   TRY_STRPTIME(SUBSTRING(LPAD(CAST(excessdt AS VARCHAR), 11, '0'), 1, 8), '%m%d%Y') AS excdate,
-                   TRY_STRPTIME(SUBSTRING(LPAD(CAST(toddate AS VARCHAR), 11, '0'), 1, 8), '%m%d%Y') AS toddt
-            FROM od
-        ) o ON l.acctno = o.acctno
-        WHERE l.branch IS NOT NULL AND l.product NOT IN (517, 500)
-    ) l
-""")
+    print(f"\n---- START Processing for file: {input_file} ----")
 
-# Final loan table
-con.execute(f"""
-    CREATE TABLE save_loan AS
-    SELECT 
-        l.*,
-        a.nameln2, a.nameln3, a.nameln4, a.nameln5,
-        CASE WHEN REGEXP_REPLACE(a.newic, '[0 ]', '') = '' THEN '' ELSE a.newic END AS newic,
-        CASE WHEN REGEXP_REPLACE(a.oldic, '[0 ]', '') = '' THEN '' ELSE a.oldic END AS oldic,
-        a.nameln2 AS addr1,
-        TRIM(a.nameln3) || ' ' || TRIM(a.nameln4) || ' ' || a.nameln5 AS addr2,
-        c.name, c.sic,
-        od.days,
-        CASE WHEN l.acctno BETWEEN 2990000000 AND 2999999999 THEN 'I' ELSE 'C' END AS fitype,
-        CASE WHEN l.loancnt > 1 THEN 'M' ELSE 'S' END AS loanopt,
-        LPAD(CAST(EXTRACT(DAY FROM l.apprdate) AS VARCHAR), 2, '0') || 
-        LPAD(CAST(EXTRACT(MONTH FROM l.apprdate) AS VARCHAR), 2, '0') || 
-        CAST(EXTRACT(YEAR FROM l.apprdate) AS VARCHAR) AS apprdte,
-        CASE WHEN l.acctype = 'OD' AND l.closedte > 0 THEN
-            LPAD(CAST(EXTRACT(DAY FROM l.closedte) AS VARCHAR), 2, '0') || 
-            LPAD(CAST(EXTRACT(MONTH FROM l.closedte) AS VARCHAR), 2, '0') || 
-            CAST(EXTRACT(YEAR FROM l.closedte) AS VARCHAR)
-        WHEN l.acctype = 'LN' AND l.paidind = 'P' AND l.balance <= 0 AND l.closedte > 0 THEN
-            LPAD(CAST(EXTRACT(DAY FROM l.closedte) AS VARCHAR), 2, '0') || 
-            LPAD(CAST(EXTRACT(MONTH FROM l.closedte) AS VARCHAR), 2, '0') || 
-            CAST(EXTRACT(YEAR FROM l.closedte) AS VARCHAR)
-        ELSE '' END AS closdte,
-        CASE WHEN l.acctype = 'LN' THEN CAST(l.product AS VARCHAR) ELSE '34110' END AS prodcd,
-        CASE WHEN l.acctype = 'LN' THEN COALESCE(payfreq_map.val, 'O') ELSE 'A' END AS payterm,
-        CASE WHEN l.secure != 'S' THEN 'C' ELSE l.secure END AS secure,
-        CASE WHEN l.product IN (225, 226) THEN 'C' ELSE 'N' END AS cagamas,
-        COALESCE(risk_map.val, 'P') AS riskc,
-        CASE 
-            WHEN l.borstat = 'F' THEN 999
-            WHEN l.borstat = 'W' THEN 0
-            ELSE FLOOR(COALESCE(od.days, 
-                CASE WHEN l.acctype = 'LN' AND l.bldate IS NOT NULL AND l.balance >= 1 
-                     THEN DATE {reptdate_str} - l.bldate 
-                     ELSE 0 END) / 30.00050)
-        END AS mtharr
-    FROM loan l
-    LEFT JOIN addr a ON l.acctno = a.acctno
-    LEFT JOIN cis_temp c ON l.acctno = c.acctno
-    LEFT JOIN loanod od ON l.acctno = od.acctno
-    LEFT JOIN (VALUES ('1','M'),('2','Q'),('3','S'),('4','A'),('5','B'),('9','I')) 
-        AS payfreq_map(key, val) ON CAST(l.payfreq AS VARCHAR) = payfreq_map.key
-    LEFT JOIN (VALUES (1,'C'),(2,'S'),(3,'D'),(4,'B')) 
-        AS risk_map(key, val) ON l.riskrte = risk_map.key
-""")
+    try:
+        FILE_LAYOUT, INPUT_LRECL = load_layout_file(layout_file_path)
 
-con.execute(f"COPY save_loan TO '{SAVE_LOAN}'")
+        meta_schema = {}
+        for name, spec in FILE_LAYOUT.items():
+            if spec['type'] == 'packed':
+                meta_schema[name] = float if 'decimals' in spec else int
+            elif spec['type'] == 'ebcdic':
+                meta_schema[name] = str
+            elif spec['type'] == 'string':
+                meta_schema[name] = str
+            elif spec['type'] == 'integer':
+                if is_text_file_flag:
+                    meta_schema[name] = float
+                else:
+                    meta_schema[name] = int
+            elif spec['type'] == 'float':
+                meta_schema[name] = float
 
-# Generate PAGE01
-with open(PAGE01_TXT, 'w') as f:
-    for row in con.execute("""
-        SELECT DISTINCT ON (branch, acctno)
-            branch, acctno, reptdte, newic, oldic, name, addr1, addr2, 
-            custcd, sic, fitype, loanopt, totlimt, loancnt
-        FROM save_loan
-        ORDER BY branch, acctno
-    """).fetchall():
-        line = f"0233{row[0]:05d}{row[1]:010d}{row[2]}{row[3]:20s}{row[4]:20s}  {row[5]:60s}"
-        line += f"{row[6]:45s}{row[7]:90s}{row[8]:2s}MY{row[9]:04d}NN"
-        line += f"{row[10]}{row[11]}{row[12]:12.0f}{row[13]:02d}N"
-        f.write(line + '\n')
+        # ============ FILE ANALYSIS ============
+        print(f"=== FILE ANALYSIS ===")
+        file_size = os.path.getsize(input_file)
+        print(f"File size: {file_size} bytes")
+        print(f"Record length from layout: {INPUT_LRECL} bytes")
+        print(f"Expected records: {file_size // INPUT_LRECL if file_size else 0}")
+        
+        # Read first few records to diagnose
+        with open(input_file, 'rb') as f:
+            first_record = f.read(INPUT_LRECL)
+            second_record = f.read(INPUT_LRECL)
+            
+            print(f"First record hex (first 50 bytes): {first_record[:50].hex() if first_record else 'None'}")
+            
+            # Try decoding first record
+            if first_record and len(first_record) == INPUT_LRECL:
+                test_decode = decode_records(first_record, FILE_LAYOUT)
+                print(f"First record decode test: {test_decode}")
+                
+                # Check if it's all NULL
+                if test_decode and all(v is None for v in test_decode.values()):
+                    print("WARNING: First record decoded to all NULL values!")
+                    # Try alternative code pages
+                    print("Trying alternative decoding...")
+                    for code_page in ['cp500', 'cp1047', 'latin-1']:
+                        try:
+                            test_text = first_record.decode(code_page)
+                            print(f"  As {code_page}: {repr(test_text)}")
+                        except:
+                            print(f"  {code_page}: Failed")
+        # ============ END FILE ANALYSIS ============
 
-# Generate PAGE03
-with open(PAGE03_TXT, 'w') as f:
-    for row in con.execute("""
-        SELECT branch, acctno, noteno, reptdte, prodcd, apprdte, closdte,
-               sectorcd, noteterm, payterm, mtharr, riskc, secure, cagamas,
-               curbal, intout, feeamt, balance
-        FROM save_loan
-        ORDER BY branch, acctno, noteno
-    """).fetchall():
-        line = f"0233{row[0]:05d}{row[1]:010d}{row[2]:05d}{row[3]}{row[4]:5s}"
-        line += f"{row[5]:8s}{row[6]:8s}        {row[7]:4s}{row[8]:3d}"
-        line += f"{row[9]}{row[10]:3d}{row[10]:3d}{row[11]}{row[12]}NN{row[13]}SNNMYR"
-        line += f"{row[14]:12.0f}{row[15]:12.0f}{row[16]:12.0f}{row[17]:12.0f}N"
-        f.write(line + '\n')
+        # if not input_file.endswith('.txt') and not input_file.lower().endswith('.txt'):
+        #     print(f"File {input_file} has no .txt extension, forcing binary processing.")
+        #     is_text_file_flag = False
 
-# Generate PAGE04
-con.execute(f"""
-    CREATE TEMP TABLE page04 AS
-    SELECT branch, acctno, zero5, 
-           '{reptdte}' AS reptdate,
-           COALESCE(scv, 0) AS scv,
-           COALESCE(iis, 0) AS iis,
-           COALESCE(iisr, 0) AS iisr,
-           COALESCE(iisw, 0) AS iisw,
-           COALESCE(prinwoff, 0) AS prinwoff,
-           gp3ind
-    FROM gp3klu
-    ORDER BY branch, acctno
-""")
+        # Check if binary file might actually be text
+        # if not is_text_file_flag:
+        #     might_be_text = analyze_file_format(input_file, INPUT_LRECL, FILE_LAYOUT)
+        #     if might_be_text:
+        #         print(f"File {input_file} appears to be text format, trying text processing...")
+        #         is_text_file_flag = True
 
-con.execute(f"COPY page04 TO '{PAGE04_PARQUET}'")
+        if is_text_file_flag:
+            print(f"The file {input_file} is detected as Text File / Non-Binary.")
 
-with open(PAGE04_TXT, 'w') as f:
-    for row in con.execute("SELECT * FROM page04").fetchall():
-        line = f"{row[0]:03d}{row[1]:010d}{row[2]:05d}{row[3]}"
-        line += f"{row[4]:012.0f}{row[5]:014.2f}{row[6]:014.2f}{row[7]:014.2f}"
-        line += f"{row[8]:014.2f}{row[9]}"
-        f.write(line + '\n')
+            colspecs = [(spec['slice'].start, spec['slice'].stop) for spec in FILE_LAYOUT.values()]
+            names = list(FILE_LAYOUT.keys())
 
-# Exclusion report
-con.execute("""
-    CREATE TEMP TABLE exclude AS
-    SELECT p.*, o.excessdt, o.toddate
-    FROM page04 p
-    LEFT JOIN od o ON p.acctno = o.acctno
-    WHERE o.acctno IS NOT NULL
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acctno ORDER BY p.acctno) > 1
-""")
+            try:
+                ddf = dd.read_fwf(
+                    input_file,
+                    colspecs=colspecs,
+                    names=names,
+                    dtype={k: v for k, v in meta_schema.items() if v != 'object'},
+                    blocksize='128MB',
+                    na_values=['.'],  # Only dots as NA, not spaces or empty strings
+                    engine='python',
+                    encoding='latin-1'
+                )
+                df = ddf.compute()
+                
+                # ============ TEXT DIAGNOSTICS ============
+                print("=== TEXT PROCESSING DIAGNOSTICS ===")
+                print(f"Raw DataFrame shape: {df.shape}")
+                print(f"Null value counts:")
+                print(df.isnull().sum())
+                
+                # COMMENTED OUT: Remove only completely empty rows
+                # initial_count = len(df)
+                # df = df[~df.isnull().all(axis=1)]
+                # final_count = len(df)
+                
+                # if initial_count != final_count:
+                #     print(f"Removed {initial_count - final_count} completely empty rows")
+                print(f"Final text record count: {len(df)}")
+                # ============ END DIAGNOSTICS ============
+                
+                print(f"Successfully processed as text file")
 
-print("Exceptional Report on OD:")
-print(con.execute("SELECT * FROM exclude").df())
+            except UnicodeDecodeError as e:
+                print(f"Text processing failed with encoding error: {e}")
+                print("Falling back to binary processing...")
+                is_text_file_flag = False
+            except Exception as e:
+                print(f"Text processing failed: {e}")
+                print("Falling back to binary processing...")
+                is_text_file_flag = False
 
-con.close()
-print("\nProcessing complete. Output files generated:")
-print(f"- {SAVE_LOAN}")
-print(f"- {PAGE02_PARQUET}")
-print(f"- {PAGE04_PARQUET}")
-print(f"- {PAGE01_TXT}")
-print(f"- {PAGE02_TXT}")
-print(f"- {PAGE03_TXT}")
-print(f"- {PAGE04_TXT}")
+        if not is_text_file_flag:
+            print(f"Processing {input_file} as Binary File.")
+            file_size = os.path.getsize(input_file)
+
+            if file_size % INPUT_LRECL != 0:
+                print(f"Warning: File size {file_size} not divisible by record length {INPUT_LRECL}")
+                print(f"Will process {file_size // INPUT_LRECL} complete records")
+
+            if file_size == 0:
+                print(f"Warning: Empty file {input_file}")
+                return {"file": input_file, "status": "completed"}
+
+            # TEST MODE: Process first 1000 records only for debugging
+            TEST_MODE = False
+            if TEST_MODE:
+                print("=== TEST MODE: Processing first 1000 records only ===")
+                test_records = []
+                with open(input_file, 'rb') as f:
+                    for i in range(1000):
+                        record_bytes = f.read(INPUT_LRECL)
+                        if not record_bytes or len(record_bytes) < INPUT_LRECL:
+                            break
+                        decoded = decode_records(record_bytes, FILE_LAYOUT)
+                        # COMMENTED OUT: Skip padding
+                        # if decoded is not None:  # Skip padding
+                        test_records.append(decoded)
+                
+                df = pd.DataFrame(test_records)
+                print("Test results shape:", df.shape)
+                print("Non-null counts:", df.notnull().sum())
+                print("First 10 records:")
+                print(df.head(10))
+                
+            else:
+                # Full processing
+                chunk_size = 128 * 1024 * 1024
+                chunks = []
+                start = 0
+
+                while start < file_size:
+                    remaining_bytes = file_size - start
+                    
+                    if remaining_bytes >= chunk_size:
+                        records_in_chunk = chunk_size // INPUT_LRECL
+                        end = start + (records_in_chunk * INPUT_LRECL)
+                    else:
+                        records_in_chunk = remaining_bytes // INPUT_LRECL
+                        end = start + (records_in_chunk * INPUT_LRECL)
+                    
+                    if records_in_chunk > 0:
+                        chunks.append((start, end))
+                        print(f"Created chunk: {start}-{end} ({records_in_chunk} records)")
+                    
+                    if end > start:
+                        start = end
+                    else:
+                        start = file_size
+                        print(f"Advancing past {remaining_bytes} remaining bytes")
+
+                if not chunks:
+                    print(f"Warning: No valid chunks found for file {input_file}")
+                    return {"file": input_file, "status": "completed"}
+                
+                print(f"Total chunks created: {len(chunks)}")
+                    
+                chunks_bag = db.from_sequence(chunks)
+                df_bag = chunks_bag.map(read_decode_chunk_to_df, filename=input_file, lrecl=INPUT_LRECL, layout=FILE_LAYOUT, schema=meta_schema).flatten()
+                df = df_bag.to_dataframe(meta=meta_schema).compute()
+
+        # ============ FINAL VALIDATION ============
+        print("=== FINAL VALIDATION ===")
+        print(f"Final DataFrame shape: {df.shape}")
+        print(f"Null value counts:")
+        null_counts = df.isnull().sum()
+        print(null_counts)
+        
+        # COMMENTED OUT: Remove rows that are 100% empty
+        # initial_count = len(df)
+        # df = df[~df.isnull().all(axis=1)]
+        # final_count = len(df)
+        
+        # if initial_count != final_count:
+        #     print(f"Removed {initial_count - final_count} completely empty rows")
+        
+        print(f"Final row count: {len(df)}")
+        
+        # Verify against expected count for binary files
+        if not is_text_file_flag:
+            expected_records = file_size // INPUT_LRECL
+            print(f"Expected records from binary file: {expected_records}")
+            if expected_records != len(df):
+                print(f"WARNING: Record count mismatch! Expected: {expected_records}, Got: {len(df)}")
+        # ============ END VALIDATION ============
+
+        df.to_parquet(final_parquet_output, index=False)
+        
+        row_count = len(df)
+        file_end_time = time.time()
+        print(f"Successfully processed {input_file}. Saved to {final_parquet_output}")
+        print(f"Time taken to complete file {input_file}: {file_end_time - file_start_time}")
+        print(f"Total Row Count for {input_file}: {row_count}")
+        return {"file": input_file, "status": "completed", "reason":"Success"}
+    except FileNotFoundError as e:
+        error_msg = f"Data File Not Found: {input_file}"
+        return {"file": input_file, "status": "failed", "reason":error_msg}
+    except Exception as e:
+        print(f"Failed to process {input_file}: {e}")
+        error_msg = f"ERROR: {type(e).__name__} - {str(e)}..."
+        return {"file": input_file, "status": "failed", "reason":error_msg}
+    finally:
+        print(f"\n---- END Processing for file: {input_file} ----")
+    
+def run_file_reader(input_dir, output_dir, layout_dir, batch_dt_str, status_file_dir, applname, batch_mode):
+    all_jobs = []
+    unique_files = set()
+    for layout_file_name in os.listdir(layout_dir):
+        if not layout_file_name.endswith("_layout.py"):
+            continue
+
+        base_name = os.path.splitext(layout_file_name)[0].rsplit("_layout", 1)[0]
+
+        binary_input_path = os.path.join(input_dir, f"{base_name}_{batch_dt_str}")
+        text_input_path = os.path.join(input_dir, f"{base_name}_{batch_dt_str}.txt")
+        binary_input_path_x = os.path.join(input_dir, f"{base_name}{batch_dt_str}")
+        text_input_path_x = os.path.join(input_dir, f"{base_name}{batch_dt_str}.txt")
+
+        try:
+            temp_layout, _ = load_layout_file(os.path.join(layout_dir, layout_file_name))
+            is_text_flag = any(spec['type'] in ('string') for spec in temp_layout.values())
+        except Exception as e:
+            print(f"Failed to load layout file '{layout_dir}'. Skipping")
+            continue
+
+        input_file_path = None
+        if os.path.exists(binary_input_path):
+            input_file_path = binary_input_path
+            print(f"==========================={input_file_path}=====================================")
+        elif os.path.exists(text_input_path):
+            input_file_path = text_input_path
+            print(f"==========================={input_file_path}=====================================")
+        elif os.path.exists(binary_input_path_x):
+            input_file_path = binary_input_path_x
+            print(f"==========================={input_file_path}=====================================")
+        elif os.path.exists(text_input_path_x):
+            input_file_path = text_input_path_x
+            print(f"==========================={input_file_path}=====================================")            
+        else:
+            print(f"Warning: Input file not found for layout {layout_file_name}")
+
+        all_jobs.append({
+            "input_file": input_file_path if input_file_path else f"{binary_input_path}",
+            "layout_file": os.path.join(layout_dir, layout_file_name),
+            "is_text": is_text_flag
+        })
+        unique_files.add(input_file_path)
+
+    if not os.path.exists(status_file_dir):
+        os.makedirs(status_file_dir)
+
+    status_file_path = os.path.join(status_file_dir, f"{batch_mode}_status_{batch_dt_str}.json")
+    job_status = create_status_file(all_jobs, status_file_path)
+
+    jobs_to_run = [
+        job for job in all_jobs
+        if job_status.get(job['input_file'], {}).get("status") in ("pending", "failed")
+    ]
+
+    if not jobs_to_run:
+        print("All the files for today's batch are completed.")
+        return
+
+    lazy_tasks = [dask.delayed(process_file)(job_spec, output_dir, applname) for job_spec in jobs_to_run]
+
+    results = dask.compute(*lazy_tasks)
+    for result in results:
+        if result:
+            update_status_file(status_file_path, result['file'], result)
+
+    with open(status_file_path, 'r') as f:
+        final_status = json.load(f)
+
+    failed_files = [file for file, data in final_status.items() if isinstance(data, dict) and data.get("status") == "failed"]
+
+    if failed_files:
+        error_msg = (
+            f"ERROR: The batch job failed {len(failed_files)} file(s) failed to process:\n"
+            f"{', '.join(failed_files)}"
+        )
+        raise RuntimeError(error_msg)
+
+
+def decode_single_file(layout_file, input_file):
+    if not os.path.exists(input_file):
+        raise FileNotFoundError(f"Data file not found {input_file}")
+    
+    is_text_flag = is_text_file(input_file)
+
+    file_base_name = os.path.splitext(os.path.basename(input_file))[0]
+    base_name = file_base_name.rsplit('_', 1)[0]
+    final_parquet_output = f"/parquet/dwh/CC/staging/{base_name}.parquet"
+
+    FILE_LAYOUT, INPUT_LRECL = load_layout_file(layout_file)
+
+    meta_schema = {}
+    for name, spec in FILE_LAYOUT.items():
+        if spec['type'] == 'packed':
+            meta_schema[name] = float if 'decimals' in spec else int
+        elif spec['type'] == 'ebcdic':
+            meta_schema[name] = str
+        elif spec['type'] == 'string':
+            meta_schema[name] = str
+        elif spec['type'] == 'integer':
+            if is_text_flag:
+                meta_schema[name] = float
+            else:
+                meta_schema[name] = int
+        elif spec['type'] == 'float':
+            meta_schema[name] = float
+
+    if os.path.getsize(input_file) == 0:
+        print(f"The data file '{input_file}' is empty, return empty Dataframe")
+        return pd.DataFrame({col: pd.Series(dtype=dtype) for col, dtype in meta_schema.items()})
+
+    if is_text_flag:
+
+        colspecs = [(spec['slice'].start, spec['slice'].stop) for spec in FILE_LAYOUT.values()]
+        names = list(FILE_LAYOUT.keys())
+
+        ddf = dd.read_fwf(
+            input_file,
+            colspecs=colspecs,
+            names=names,
+            dtype={k: v for k, v in meta_schema.items() if v != 'object'},
+            blocksize='128MB',
+            na_values=['.'],  # Only dots as NA, not spaces or empty strings
+            engine='python'
+        )
+        for name, spec in FILE_LAYOUT.items():
+            if spec['type'] == 'integer':
+                ddf[name] = dd.to_numeric(ddf[name], errors='coerce')
+            elif spec['type'] == 'float' and 'decimals' in spec and spec['decimals'] > 0:
+                decimals = spec['decimals']
+                numeric_col = dd.to_numeric(ddf[name], errors='coerce')
+                ddf[name] = numeric_col / (10**decimals)
+        df = ddf
+    else:
+        file_size = os.path.getsize(input_file)
+        chunk_size = 128 * 1024 * 1024
+        chunks = []
+        start = 0
+
+        while start < file_size:
+            end = min(start + chunk_size, file_size)
+            if end < file_size and end % INPUT_LRECL != 0:
+                end -= (end % INPUT_LRECL)
+            if start < end:
+                chunks.append((start, end))
+            start = end
+
+        chunks_bag = db.from_sequence(chunks)
+
+        df_bag = chunks_bag.map(read_decode_chunk_to_df, filename=input_file, lrecl=INPUT_LRECL, layout=FILE_LAYOUT, schema=meta_schema).flatten()
+
+        df = df_bag.to_dataframe(meta=meta_schema)
+    df.to_parquet(final_parquet_output)
+    return df
