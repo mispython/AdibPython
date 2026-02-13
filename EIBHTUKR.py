@@ -1,9 +1,22 @@
+"""
+EIBHTUKR - TUK Loan Reporting for CGC
+Includes: PBBELF, EIFPCFMT format definitions
+"""
+
 import polars as pl
 from datetime import datetime, timedelta
+import sys
 
-LOAN_DIR = 'data/loan/'
-RAW_DIR = 'data/raw/'
-TEMP_DIR = 'data/temp/'
+# Import format definition programs (%INC PGM equivalent)
+sys.path.insert(0, '/mnt/user-data/outputs')
+from pbbelf import LIBRARY_PATHS, format_ddmmyy8, format_ddmmyy10
+from eifpcfmt import get_state_name
+
+# Use library paths from PBBELF
+LOAN_DIR = LIBRARY_PATHS['LOAN']
+RAW_DIR = LIBRARY_PATHS['RAW']
+TEMP_DIR = LIBRARY_PATHS['TEMP']
+
 BRHFILE = 'data/brhfile.dat'
 OUTPUT_RPT1 = 'reports/tuk_outstanding_loans.txt'
 OUTPUT_RPT2 = 'reports/tuk_interest_accrued.txt'
@@ -11,26 +24,29 @@ OUTPUT_RPT3 = 'reports/tuk_interest_paid.txt'
 OUTPUT_RPT4 = 'reports/tuk_package134.txt'
 OUTPUT_RPT5 = 'reports/tuk_package2.txt'
 
-def state_format(state_code):
-    """Format state code to state name"""
-    state_map = {
-        'J': 'JOHOR',
-        'K': 'KEDAH',
-        'D': 'KELANTAN',
-        'M': 'MELAKA',
-        'N': 'NEGERI SEMBILAN',
-        'C': 'PAHANG',
-        'A': 'PERAK',
-        'R': 'PERLIS',
-        'P': 'PULAU PINANG',
-        'B': 'SELANGOR',
-        'T': 'TERENGGANU',
-        'W': 'KUALA LUMPUR',
-        'S': 'SABAH',
-        'Y': 'SARAWAK',
-        'L': 'LABUAN'
-    }
-    return state_map.get(state_code, state_code)
+# TUK format - Product code to description (from original SAS PROC FORMAT)
+TUK_FORMAT = {
+    521: 'TUK 1-CODE 521',
+    522: 'TUK 2-CODE 522',
+    523: 'TUK 3-CODE 523',
+    528: 'TUK 4-CODE 528'
+}
+
+# COL format - Column type descriptions (from original SAS PROC FORMAT)
+COL_FORMAT = {
+    'A': 'TOTAL INTEREST',
+    'B': 'INT. TO CGC (2/6)',
+    'C': 'INT. TO CGC (1/6)',
+    'D': 'INT. TO INSTITUTION APPT BY CGC (4/6)'
+}
+
+def get_tuk_description(product):
+    """Get TUK product description"""
+    return TUK_FORMAT.get(product, f'PRODUCT {product}')
+
+def get_col_description(col):
+    """Get column description"""
+    return COL_FORMAT.get(col, col)
 
 today = datetime.today().date()
 first_of_month = datetime(today.year, today.month, 1).date()
@@ -148,6 +164,15 @@ df_cdrlntuk_sorted = df_cdrlntuk_sorted.with_columns([
     pl.Series('NUM', num_list)
 ])
 
+# Apply STATE format from EIFPCFMT (equivalent to FORMAT STATE $STATE.)
+state_names = []
+for state_code in df_cdrlntuk_sorted['STATE'].to_list():
+    state_names.append(get_state_name(state_code))
+
+df_cdrlntuk_sorted = df_cdrlntuk_sorted.with_columns([
+    pl.Series('STATE_NAME', state_names)
+])
+
 df_cdrlntuk.write_parquet(f'{TEMP_DIR}CDRLNTUK.parquet')
 df_cdrlntuk_sorted.write_parquet(f'{TEMP_DIR}CDRLNTUK_sorted.parquet')
 
@@ -248,7 +273,8 @@ df_tuk2 = pl.DataFrame(tuk2_records).sort(['CLASSIF', 'STATE', 'BRNAME', 'BRH'])
 
 with open(OUTPUT_RPT4, 'w') as f:
     pagecnt = 0
-    date_today = datetime.today().strftime('%d%m%Y')
+    # Use PBBELF date format
+    date_today = format_ddmmyy8(datetime.today())
     
     tbalance = tapprlim = thstprin = tintpdyt = tinterb = tintercg = 0
     
@@ -256,12 +282,15 @@ with open(OUTPUT_RPT4, 'w') as f:
         pagecnt += 1
         brh = branch_group['BRH'][0]
         
+        # Apply STATE format from EIFPCFMT
+        state_name = get_state_name(state)
+        
         f.write(f"REPORT NAME : EIBHTUKR - 4{' '*18}P U B L I C   B A N K   B E R H A D{' '*34}PAGE NO : {pagecnt}\n")
         f.write(f"{' '*29}TABUNG USAHAWAN KECIL (TUK) LOAN SCHEME - PACKAGE 1,3,OR 4\n")
         f.write(f"{' '*46}{classif}\n")
         f.write(f"{' '*17}PROFIT EARNED FOR THE HALF YEARLY REPAYMENT FOR PERIOD ENDED : {fulldate}{ryear}"
                 f"{' '*34}DATE    : {date_today}\n\n")
-        f.write(f" STATE : {state} BRANCH CODE : {brname} BRANCH ABBR : {brh}\n\n")
+        f.write(f" STATE : {state_name} BRANCH CODE : {brname} BRANCH ABBR : {brh}\n\n")
         f.write(f"      CGC REF{' '*48}  LOAN    OUSTANDING       REPAYMENT COLLECTED(RM)       INCOME SHARING IN (RM)\n")
         f.write(f"NO.   NUMBER     ACCOUNT NO   NAME OF BORROWER      AMOUNT(RM) BALANCE(RM)  PRINCIPAL    INTEREST6%   BANK(X 4/6)  CGC (X 2/6)\n")
         f.write(f"{'_'*130}\n\n")
