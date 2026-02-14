@@ -1,0 +1,632 @@
+//EIBDPBIF JOB MISEIS,EIBWPBID,MSGCLASS=A,CLASS=A,NOTIFY=&SYSUID
+/*JOBPARM S=S1M1
+//*
+//*   DEPENDENCIES.
+//*   FPTBPULL
+//*   ESMR : 07-0023
+//*
+//SAS609  EXEC SAS609
+//ADVANC   DD DISP=SHR,DSN=SAP.PBB.PBIF.ADVANCES(0)
+//CCLINK   DD DISP=SHR,DSN=SAP.PBB.PBIF.CCLINK(0)
+//CLIENT   DD DISP=SHR,DSN=SAP.PBB.PBIF.CLIENT(0)
+//CRNOTE   DD DISP=SHR,DSN=SAP.PBB.PBIF.CRNOTE(0)
+//CRNOTE1  DD DISP=SHR,DSN=SAP.PBB.PBIF.CRNOTE1(0)
+//CUSTMR   DD DISP=SHR,DSN=SAP.PBB.PBIF.CUSTOMER(0)
+//HISTORY  DD DISP=SHR,DSN=SAP.PBB.PBIF.HISTORY(0)
+//INVOIS   DD DISP=SHR,DSN=SAP.PBB.PBIF.INVOICE(0)
+//ISCHED   DD DISP=SHR,DSN=SAP.PBB.PBIF.ISCHED(0)
+//PAYMNT   DD DISP=SHR,DSN=SAP.PBB.PBIF.PAYMENT(0)
+//JOURNL   DD DISP=SHR,DSN=SAP.PBB.PBIF.PBIJOUR(0)
+//RECEIP   DD DISP=SHR,DSN=SAP.PBB.PBIF.RECEIPT(0)
+//PGM      DD DISP=SHR,DSN=SAP.BNM.PROGRAM
+//SASD     DD DISP=SHR,DSN=SAP.PBB.MNILN(0)
+//FACWH    DD DSN=SAP.PBB.PBIF.SASDATA(+1),
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(10,10),),UNIT=(SYSDA,8)
+//SASLIST  DD SYSOUT=X
+//SYSIN     DD *
+
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER;
+%INC PGM(PBBLNFMT);
+
+DATA FACWH.REPTDATE;
+   REPTDATE=TODAY()-1;
+   CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR2.));
+   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
+   CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
+   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
+RUN;
+
+DATA REPTDATX;
+   SET SASD.REPTDATE;
+   MM      =MONTH(REPTDATE);
+   YY      = YEAR(REPTDATE);
+   STDATE  = MDY(MM,01,YY);
+   PREVDATE= STDATE-1;
+   CALL SYMPUT('CDATE',PUT(REPTDATE,Z5.));
+   CALL SYMPUT('PDATE',PUT(PREVDATE,Z5.));
+RUN;
+
+*** ONLY PBBH A/C ***;
+DATA CLIENT;
+   FORMAT CUSTCX $2. SECTORCD $4.;
+   INFILE CLIENT;
+   INPUT @001  CLIENTNO            $9.
+         @010  CLNAMES            $20.
+         @030  CLNAME             $50.
+         @080  ADDRESS1           $45.
+         @125  ADDRESS2           $45.
+         @170  ADDRESS3           $45.
+         @215  COUNTRY            $20.
+         @235  CONTACT            $20.
+         @255  TELENUM            $20.
+         @275  SECTORX             $5. /* INDUSTRY */
+         @280  ROCNO              $20.
+         @300  BNKDESC            $20.
+         @320  BNKACTNO           $20.
+         @340  CURRENCY            $3.
+         @343  MOCODE             $20.
+         @363  RCLIMIT           14.2
+         @377  INLIMIT           14.2
+         @391  SRVCHARGE          7.4
+         @398  YEARMIN              6.
+         @404  MTHMIN               6.
+         @410  DISCHRG            7.4
+         @417  HANDCHG            6.2
+         @423  ADVRATE            5.2
+         @428  STDATE               8.
+         @436  PRMTHFIU          14.2 /* PREV MONTH FIU */
+         @450  RESBAL            14.2
+         @464  DEBBAL            14.2
+         @478  FIU               14.2 /* FIU          */
+         @492  RESERVES          14.2
+         @506  DEBTORS           14.2
+         @520  OUTSDEBT          14.2
+         @534  UNAPDEBT          14.2
+         @548  DISPUTE           14.2
+         @562  ADRESRVE          14.2
+         @576  SOCODE              $3.
+         @579  TERMINTD            $1.
+         @580  YTDSERVC          14.2  /* YTD SERVICE CHARGE   */
+         @594  YTDHANDC          14.2  /* YTD HANDLING CHARGE  */
+         @608  YTDDISCC          14.2  /* YTD DISCOUNT CHARGE  */
+         @622  YTDCDELC          14.2  /* YTD DELAY CHARGE     */
+         @636  YTDINVOI          14.2  /* YTD INVOICE FACTORED */
+         @650  YTDBADDB          14.2  /* YTD BAD DEBTS        */
+         @664  SETTLE               3. /* SETTLEMENT           */
+         @667  EFFECDT              8. /* EFFECTIVE DATE       */
+         @675  MCREATE              8. /* CREATE    DATE       */
+         @683  MUPDATE              8. /* UPDATE DATE          */
+         @691  FAXNO              $20.
+         @711  CFLIMIT             10.
+         @721  CFRATE             7.4
+         @728  CFINTE             7.4  /* CF INTEREST          */
+         @735  CFDATE               8.
+         @743  ENTITY              $4.
+         @747  PROFITCT             4.
+         @751  ACCTNO              10.
+         @761  CUSTCD               2.
+         @763  RPERIOD              5.    /* NEW */
+         @768  NPLGRACE             5.    /* NEW */
+         @773  NPLINT            11.5     /* NEW */
+         @784  NPLCLBK             $1.    /* NEW */
+         @785  NPLCHRG           13.2     /* NEW    TOTAL 798 */
+         ;
+   IF ENTITY = 'PBBH' AND CLIENTNO NE ' ';
+
+   CUSTCX=CUSTCD; SECTORCD=SUBSTR(SECTORX,1,4);
+   SECTCD=PUT(SECTORCD,$SECTCD.);
+   AMTIND='D';
+   BALANCE=SUM(FIU,PRMTHFIU);
+   UNDRAWN=0;
+   IF INLIMIT > 0 THEN DO;
+      UNDRAWN=(INLIMIT-BALANCE) * 0.2;
+      IF UNDRAWN < 0 THEN UNDRAWN=0;
+   END;
+
+   CFDATES=0; MUPDATS=0; MCREATS=0; EFFECDS=0;
+   STDATES=0;
+   IF CFDATE  > 0  THEN
+      CFDATES=INPUT(SUBSTR(PUT(CFDATE,Z8.),1,8),YYMMDD8.);
+   IF MUPDATE > 0  THEN
+      MUPDATS=INPUT(SUBSTR(PUT(MUPDATE,Z8.),1,8),YYMMDD8.);
+   IF MCREATE > 0  THEN
+      MCREATS=INPUT(SUBSTR(PUT(MCREATE,Z8.),1,8),YYMMDD8.);
+   IF EFFECDT > 0  THEN
+      EFFECDS=INPUT(SUBSTR(PUT(EFFECDT,Z8.),1,8),YYMMDD8.);
+   IF STDATE  > 0  THEN
+      STDATES=INPUT(SUBSTR(PUT(STDATE,Z8.),1,8),YYMMDD8.);
+
+   BRANCH=PROFITCT;
+   IF SUBSTR(CLIENTNO,8,2)='KL' THEN STATECD='W';
+   IF SUBSTR(CLIENTNO,8,2)='PG' THEN STATECD='P';
+   IF SUBSTR(CLIENTNO,8,2)='JB' THEN STATECD='J';
+
+RUN;
+
+PROC SORT DATA=CLIENT OUT=FACWH.CLIEN&REPTYEAR&REPTMON&REPTDAY;
+     BY CLIENTNO;
+RUN;
+
+PROC SORT DATA=CLIENT OUT=CLIENT(KEEP=CLIENTNO) NODUPKEY;
+   BY CLIENTNO;
+RUN;
+
+
+DATA CCLINK;
+   INFILE CCLINK;
+   INPUT @001  CLIENTNO            $9.
+         @010  CUSTNO              $9.
+         @019  CLLIMIT              8.
+         @027  APPRDTE              8. /* APPROVAL DATE */
+         @035  EXPRDTE              8. /* EXPIRY DATE   */
+         @043  TERMCODE            $2.
+         @045  CURRENCY            $3.
+         @048  TERMINTD            $1.
+         @049  TERM                 3.
+         @052  CURINV            14.2
+         @066  O030DAY           14.2
+         @080  O060DAY           14.2
+         @094  O090DAY           14.2
+         @108  O120DAY           14.2
+         @122  O150DAY           14.2
+         @136  O180DAY           14.2
+         @150  O210DAY           14.2
+         @164  MCREATE              8. /* FIRST CREATE DD */
+         @172  MUPDATE              8. /* LAST UPDATE     */
+         @180  CLLIMIT1             8.
+         @188  APDATE1              8.
+         @196  EXDATE1              8.
+         @204  NLIND               $1.
+         @205  NPLIND              $1.
+         ;
+   EXDATS1=0; APDATS1=0; MUPDATS=0;
+   MCREATS=0; EXPRDTS=0; APPRDTS=0;
+   IF EXDATE1 > 0 THEN
+      EXDATS1=INPUT(SUBSTR(PUT(EXDATE1,Z8.),1,8),YYMMDD8.);
+   IF APDATE1 > 0 THEN
+      APDATS1=INPUT(SUBSTR(PUT(APDATE1,Z8.),1,8),YYMMDD8.);
+   IF MUPDATE > 0 THEN
+      MUPDATS=INPUT(SUBSTR(PUT(MUPDATE,Z8.),1,8),YYMMDD8.);
+   IF MCREATE > 0 THEN
+      MCREATS=INPUT(SUBSTR(PUT(MCREATE,Z8.),1,8),YYMMDD8.);
+   IF EXPRDTE > 0 THEN
+      EXPRDTS=INPUT(SUBSTR(PUT(EXPRDTE,Z8.),1,8),YYMMDD8.);
+   IF APPRDTE > 0 THEN
+      APPRDTS=INPUT(SUBSTR(PUT(APPRDTE,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=CCLINK; BY CLIENTNO; RUN;
+DATA CCLINK;
+   MERGE CCLINK(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF (A AND B) AND CUSTNO NE ' ';
+RUN;
+
+PROC SORT DATA=CCLINK OUT=FACWH.CCLNK&REPTYEAR&REPTMON&REPTDAY;
+   BY CLIENTNO CUSTNO;
+RUN;
+
+PROC SORT DATA=CCLINK OUT=CCLINK(KEEP=CUSTNO) NODUPKEY;
+   BY CUSTNO;
+RUN;
+
+
+DATA CRNOTE;
+   INFILE CRNOTE;
+   INPUT @001  CLIENTNO            $9.
+         @010  SCHEDNO             $5.
+         @015  CUSTNO              $9.
+         @024  CRNOTE             $10.
+         @034  TRXDATE              8.
+         @042  CRDATE               8.
+         @050  AMOUNT            14.2
+         @064  INVNO              $10.
+         @074  CURRENCY            $3.
+         @077  EXRATE            10.5
+         @087  SETOFF              $1.
+         @088  RESERVE             $1.
+         @089  ADJNO              $10.
+         @099  ADATE                8.
+         @107  OPTR                $3./* OPERATOR */
+         @110  OSBAL              14.2
+         ;
+   ADATES =0;
+   IF ADATE   > 0 THEN
+      ADATES =INPUT(SUBSTR(PUT(ADATE,Z8.),1,8),YYMMDD8.);
+      TRXDATS=0;
+   IF TRXDATE > 0 THEN
+      TRXDATS=INPUT(SUBSTR(PUT(TRXDATE,Z8.),1,8),YYMMDD8.);
+      CRDATES=0;
+   IF CRDATE  > 0 THEN
+      CRDATES=INPUT(SUBSTR(PUT(CRDATE,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=CRNOTE; BY CLIENTNO; RUN;
+DATA CRNOTE;
+   MERGE CRNOTE(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=CRNOTE OUT=FACWH.CRNOT&REPTYEAR&REPTMON&REPTDAY;
+     BY CUSTNO;
+RUN;
+
+
+DATA CRNOTE1;
+   INFILE CRNOTE1;
+   INPUT @001  CLIENTNO            $9.
+         @010  CUSTNO              $9.
+         @019  CRNOTE             $10.
+         @029  INVNO              $10.
+         @039  AMOUNT            14.2
+         @053  TRXDATE              8.
+         @061  CRDATE               8.
+         @069  EXGNL             14.2;  /* EXCHNAGE GAIN/LOSS */
+
+   TRXDATS=0;
+   IF TRXDATE > 0 THEN
+      TRXDATS=INPUT(SUBSTR(PUT(TRXDATE,Z8.),1,8),YYMMDD8.);
+      CDATES =0;
+   IF CRDATE  > 0 THEN
+      CDATES =INPUT(SUBSTR(PUT(CRDATE,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=CRNOTE1; BY CLIENTNO; RUN;
+DATA CRNOTE1;
+   MERGE CRNOTE1(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=CRNOTE1 OUT=FACWH.CRNT1&REPTYEAR&REPTMON&REPTDAY;
+     BY CLIENTNO;
+RUN;
+
+
+DATA CUSTMR;
+  INFILE CUSTMR;
+  INPUT  @001  CUSTNO              $9.
+         @010  CUNAMES            $20. /* SHORT NAME */
+         @030  CUNAME             $50. /* LONG NAME  */
+         @080  ADDRESS1           $45.
+         @125  ADDRESS2           $45.
+         @170  ADDRESS3           $45.
+         @215  COUNTRY            $20.
+         @235  CONTACT            $20.
+         @255  TELENUM            $20.
+         @275  ROCNO              $20.
+         @295  INDUSTRY            $5.
+         @300  BNKNAME            $20.
+         @320  BNKACTNO           $20.
+         @340  GROUP               $5.
+         @345  TERMINTD            $1.
+         @346  FILE                $5.
+         @351  MCREATE              8.
+         @359  MUPDATE              8.
+         @367  OLDCODE             $5.
+         @372  NEWCODE             $6.
+         @378  FAXNO              $20.
+         @398  ACCOUNT            $20.
+         ;
+    MCREATS=0; MUPDATS=0;
+    IF MCREATE > 0 THEN
+       MCREATS=INPUT(SUBSTR(PUT(MCREATE,Z8.),1,8),YYMMDD8.);
+    IF MUPDATE > 0 THEN
+       MUPDATS=INPUT(SUBSTR(PUT(MUPDATE,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=CUSTMR; BY CUSTNO; RUN;
+DATA CUSTMR;
+   MERGE CUSTMR(IN=A) CCLINK(IN=B);
+   BY CUSTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=CUSTMR OUT=FACWH.CUSTM&REPTYEAR&REPTMON&REPTDAY;
+     BY CUSTNO;
+RUN;
+
+
+DATA INVOIS;
+   INFILE INVOIS;
+   INPUT @001  CLIENTNO            $9.
+         @010  SCHEDNO             $5.
+         @015  CUSTNO              $9.
+         @024  INVNO              $10.
+         @034  TRXDATE              8.
+         @042  INVDATE              8.
+         @050  AMOUNT            14.2
+         @064  CURRENCY            $3.
+         @067  EXRATE            10.5
+         @077  TERM                 3.
+         @080  INTAMT            14.2
+         @094  RECEIPT            $10.
+         @104  CRNOTE             $10.
+         @114  CREAMT            14.2
+         @128  REVERSE             $1.
+         @129  REASSIG             $1.
+         @130  ADJNO              $10. /* ADJUSTMENT NO */
+         @140  ADJDTE               8. /* ADJUSTMENT DT */
+         @148  UPAYMNT           14.2  /* UNDER PAYMENT */
+         @162  PAIDIND             $1. /* F=FULL,T=?    */
+         @163  OPTR                $3.
+         @166  PAYUGR              $1. /* PAYMENT UNDER GUAR. */
+         @167  OSBALN            14.2
+         @181  DISPUTE             $1.
+         @182  NPLAMT            14.2  /* ADVANCE AMOUNT */
+         @196  NPLCHG            14.2  /* NPL INT CHARGED   */
+         @210  NPLCINT           14.2  /* NPL INT           */
+         @224  NPLSTART            8.  /* NPL START ?       */
+         @232  ISNPL               $1. /* ISNPL             */
+
+         ;
+   ADATES =0; TRXDATS=0; INVDATS=0;
+   IF ADJDTE  > 0 THEN
+      ADATES =INPUT(SUBSTR(PUT(ADJDTE,Z8.),1,8),YYMMDD8.);
+   IF TRXDATE > 0 THEN
+      TRXDATS=INPUT(SUBSTR(PUT(TRXDATE,Z8.),1,8),YYMMDD8.);
+   IF INVDATE > 0 THEN
+      INVDATS=INPUT(SUBSTR(PUT(INVDATE,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=INVOIS; BY CLIENTNO; RUN;
+DATA INVOIS;
+   MERGE INVOIS(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=INVOIS OUT=FACWH.INVOI&REPTYEAR&REPTMON&REPTDAY;
+     BY CUSTNO;
+RUN;
+
+
+DATA PAYMNT;
+   INFILE PAYMNT;
+   INPUT @001  RECEIPT            $10.
+         @011  CUSTNO              $9.
+         @020  CLIENTNO            $9.
+         @029  INVNO              $10.
+         @039  DATEIN               8.
+         @047  AMOUNT            14.2
+         @061  CURRENCY            $3.
+         @064  EXRATE            10.5
+         ;
+    DATEIS=0;
+    IF DATEIN > 0  THEN
+       DATEIS =INPUT(SUBSTR(PUT(DATEIN,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=PAYMNT; BY CLIENTNO; RUN;
+DATA PAYMNT;
+   MERGE PAYMNT(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=PAYMNT OUT=FACWH.PAYMN&REPTYEAR&REPTMON&REPTDAY;
+   BY CUSTNO;
+RUN;
+
+
+DATA JOURNL;
+   INFILE JOURNL;
+   INPUT @001  TRXDATE              8.
+         @009  ADATE                8.
+         @017  CLIENTNO            $9.
+         @026  DESCRIP            $25.
+         @051  DEBTORS           14.2
+         @065  RESERVES          14.2
+         @079  FIU               14.2
+         @093  ADJNO              $10.
+         @103  CUSTNO              $9.
+         @112  AMOUNT            14.2
+         @126  CURRENCY            $3.
+         @129  EXRATE             8.4
+         @137  INVNO              $10.
+         @147  OPTR                $3./* OPERATOR */
+         ;
+   ADATES=0; TRXDATS=0;
+   IF ADATE   > 0 THEN
+      ADATES =INPUT(SUBSTR(PUT(ADATE,Z8.),1,8),YYMMDD8.);
+   IF TRXDATE > 0 THEN
+      TRXDATS=INPUT(SUBSTR(PUT(TRXDATE,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=JOURNL; BY CLIENTNO; RUN;
+DATA JOURNL;
+   MERGE JOURNL(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=JOURNL OUT=FACWH.JOURN&REPTYEAR&REPTMON&REPTDAY;
+   BY CUSTNO;
+RUN;
+
+
+DATA RECEIP;
+   INFILE RECEIP;
+   INPUT @001  RECEIPT            $10.
+         @011  CUSTNO              $9.
+         @020  VDATE                8.
+         @028  CHEQUE             $10.
+         @038  AMOUNT            14.2
+         @052  CURRENCY            $3.
+         @055  EXRATE            10.5
+         @065  DELAY                2.
+         @067  CLIENTNO            $9.
+         @076  EXCHAMT           10.4  /* GAIN/LOST ON EXCHANGE */
+         @086  OVRPAYM           14.2  /* OVER PAYMENT          */
+         @100  BNKCHRG           10.4
+         @110  REVERSE             $1.
+         @111  ADJSTMN            $10. /* ADJUSTMENT NO. */
+         @121  ADATE                8.
+         @129  TRXDATE              8.
+         @137  CLOUP             14.2  /* CUSTM DEDUCTION */
+         @151  PRINTED             $1.
+         @152  INVNO              $10.
+         @162  OPTR                $3.
+         @165  REFUNDED            $1.
+         @166  PUG                 $1.
+         @167  ATDATE               8.
+         ;
+   VDATES=0; ATDATES=0; ADATES=0; TRXDATS=0;
+   IF VDATE  > 0  THEN
+      VDATES=INPUT(SUBSTR(PUT(VDATE,Z8.),1,8),YYMMDD8.);
+   IF ATDATE > 0  THEN
+      ATDATES=INPUT(SUBSTR(PUT(ATDATE,Z8.),1,8),YYMMDD8.);
+   IF ADATE  > 0  THEN
+      ADATES =INPUT(SUBSTR(PUT(ADATE,Z8.),1,8),YYMMDD8.);
+   IF TRXDATE> 0  THEN
+      TRXDATS=INPUT(SUBSTR(PUT(TRXDATE,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=RECEIP; BY CLIENTNO; RUN;
+DATA RECEIP;
+   MERGE RECEIP(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=RECEIP OUT=FACWH.RECEI&REPTYEAR&REPTMON&REPTDAY;
+     BY CUSTNO;
+RUN;
+
+
+DATA ADVANC;
+   INFILE ADVANC;
+   INPUT @001  CLIENTNO            $9.
+         @010  VOUCHER            $10.
+         @020  CHEQUE             $10.
+         @030  RLSEAMT           10.2
+         @040  ADATE                8.
+         @048  OPTR                $3.
+         ;
+   ADATES=0;
+   IF ADATE > 0  THEN
+      ADATES=INPUT(SUBSTR(PUT(ADATE,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=ADVANC; BY CLIENTNO; RUN;
+DATA ADVANC;
+   MERGE ADVANC(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=ADVANC OUT=FACWH.ADVAN&REPTYEAR&REPTMON&REPTDAY;
+     BY CLIENTNO VOUCHER;
+RUN;
+
+
+DATA ISCHED;
+   INFILE ISCHED;
+   INPUT @001  CLIENTNO            $9.
+         @010  TRXDATE              8.
+         @018  VALDTE               8. /* VALUE DATE */
+         @026  SCHEDNO             $5.
+         @031  AMOUNT            14.2  /* SCHED AMT */
+         @045  SCHGAMT           14.2  /* SVR CHARGE AMOUNT */
+         @059  HANDCHG              5. /* SVR CHARGE AMOUNT */
+         @064  ORICAMT           14.2  /* ORI CUR AMOUNT    */
+         @078  CURRENCY            $3.
+         @081  EXCGRTE           10.5
+         @091  OPTR                $3.
+         ;
+   ITRXDT=0;  VALDTS=0;
+   IF TRXDATE > 0  THEN
+      ITRXDT=INPUT(SUBSTR(PUT(TRXDATE,Z8.),1,8),YYMMDD8.);
+   IF VALDTE  > 0  THEN
+      VALDTS=INPUT(SUBSTR(PUT(VALDTE,Z8.),1,8),YYMMDD8.);
+RUN;
+
+PROC SORT DATA=ISCHED; BY CLIENTNO; RUN;
+DATA ISCHED;
+   MERGE ISCHED(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=ISCHED OUT=FACWH.ISCHE&REPTYEAR&REPTMON&REPTDAY;
+   BY CLIENTNO SCHEDNO;
+RUN;
+
+
+DATA HISTORY;
+   INFILE HISTORY;
+   INPUT @001  CLIENTNO            $9.
+         @010  HSDATE               8.
+         @018  HDEBTOR           14.2
+         @032  HRESERV           14.2
+         @046  HFIU              14.2
+         @060  HMINV             14.2
+         @074  HCN               14.2
+         @088  HMRCT             14.2
+         @102  HMDC              14.2
+         @116  HMCDC             14.2
+         @130  HMSC              14.2
+         @144  HMMSC             14.2
+         ;
+   HSDATS=0;
+   IF HSDATE > 0 THEN
+      HSDATS=INPUT(SUBSTR(PUT(HSDATE,Z8.),1,8),YYMMDD8.);
+   IF CLIENTNO='   ' THEN DELETE;
+   IF HSDATS GE &PDATE;
+RUN;
+PROC SORT DATA=HISTORY; BY CLIENTNO; RUN;
+DATA HISTORY;
+   MERGE HISTORY(IN=A) CLIENT(IN=B);
+   BY CLIENTNO;
+   IF A AND B;
+RUN;
+
+PROC SORT DATA=HISTORY OUT=FACWH.HISTR&REPTYEAR&REPTMON&REPTDAY;
+     BY CLIENTNO;
+RUN;
+
+
+DATA CLIENT;
+   SET FACWH.CLIEN&REPTYEAR&REPTMON&REPTDAY;
+   IF  CUSTCD > 0;
+   AMTIND='D';
+RUN;
+PROC SORT; BY CLIENTNO; RUN;
+
+DATA ADVAN;
+   KEEP CLIENTNO RLSEAMT;
+   SET FACWH.ADVAN&REPTYEAR&REPTMON&REPTDAY;
+RUN;
+PROC SORT; BY CLIENTNO; RUN;
+
+DATA FACWH.CLADV&REPTYEAR&REPTMON&REPTDAY;
+   MERGE ADVAN CLIENT(IN=A); BY CLIENTNO;
+   IF A;
+   IF RLSEAMT=.  THEN RLSEAMT=0;
+   REBATE=RLSEAMT-BALANCE;
+   APPRLIMX=INLIMIT-REBATE;
+RUN;
+//***********************************************************
+//* OUTPUT MONTHLY DATASETS
+//***********************************************************
+//*%OPC SCAN
+//*%OPC SETFORM OCDATE=(DD)
+//*%OPC SETFORM OCLASTC=(DD)
+//*%OPC BEGIN ACTION=INCLUDE,
+//*%OPC COMP=(&OCDATE..EQ.(&OCLASTC))
+//DELETE   EXEC PGM=IEFBR14
+//DD1      DD DSN=SAP.PBB.PBIF.SASDATA.MTH,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//COPYFILE EXEC PGM=ICEGENER
+//SYSPRINT DD SYSOUT=*
+//SYSUT1   DD DISP=SHR,DSN=SAP.PBB.PBIF.SASDATA(+1)
+//SYSUT2   DD DSN=SAP.PBB.PBIF.SASDATA.MTH,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(10,10),),UNIT=(SYSDA,8)
+//SYSIN    DD DUMMY
+//*%OPC END ACTION=INCLUDE
