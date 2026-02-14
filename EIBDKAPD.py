@@ -620,9 +620,11 @@ def append_or_create_table(df, base_path, macro_vars, table_suffix, elday_field=
         # Combine
         combined_df = pl.concat([existing_df, df])
         combined_df.write_parquet(filepath)
+        print(f"Appended to {filename}")
     else:
         # Create new
         df.write_parquet(filepath)
+        print(f"Created {filename}")
 
 # =============================================================================
 # MAIN EXECUTION
@@ -634,54 +636,117 @@ def main():
     
     # Setup date variables
     macro_vars = setup_date_variables()
-    print(f"Report Date: {macro_vars['SXDATE']}, Week: {macro_vars['WK']}")
+    print(f"Report Date (SAS): {macro_vars['SXDATE']}, Week: {macro_vars['WK']}")
+    print(f"INDATES: {macro_vars['INDATES']}, YYMMDD: {macro_vars['YYMMDD']}")
     
     try:
         # ===== PART 1: Conventional Securities =====
-        print("\n=== Processing Conventional Securities ===")
+        print("\n" + "="*60)
+        print("PART 1: Conventional Securities")
+        print("="*60)
         
         # Process UTFX -> TBL -> TBL1
-        print("Processing UTFX data...")
+        print("\n1. Processing UTFX data...")
         tbl_summary = process_utfx(macro_vars)
         if tbl_summary is not None:
+            print(f"   UTFX summary: {len(tbl_summary)} rows")
             append_or_create_table(tbl_summary, BNMK_DIR, macro_vars, 'TBL1')
         
         # Process K3TBL
-        print("Processing K3TBL data...")
+        print("\n2. Processing K3TBL data...")
         k3tbl_df = process_k3tbl(macro_vars)
+        if k3tbl_df is not None:
+            print(f"   K3TBL: {len(k3tbl_df)} rows")
         
         # Process K3TBL1 for REP2 and REP3
-        print("Processing K3TBL1 for REP2/REP3...")
+        print("\n3. Processing K3TBL1 for REP2/REP3...")
         rep2_df, rep3_df = process_k3tbl1(k3tbl_df, macro_vars)
         if rep2_df is not None:
+            print(f"   REP2: {len(rep2_df)} rows")
             append_or_create_table(rep2_df, BNMK_DIR, macro_vars, 'REP2')
         if rep3_df is not None:
+            print(f"   REP3: {len(rep3_df)} rows")
             append_or_create_table(rep3_df, BNMK_DIR, macro_vars, 'REP3')
         
         # Process PROVALUE
-        print("Processing PROVALUE...")
+        print("\n4. Processing PROVALUE...")
         provalue_df = process_provalue(macro_vars)
+        if provalue_df is not None:
+            print(f"   PROVALUE: {len(provalue_df)} rows")
         
         # Process K3TBLF for REP4
-        print("Processing K3TBLF for REP4...")
+        print("\n5. Processing K3TBLF for REP4...")
         rep4_df = process_k3tblf(k3tbl_df, provalue_df, macro_vars)
         if rep4_df is not None:
+            print(f"   REP4: {len(rep4_df)} rows")
             append_or_create_table(rep4_df, BNMK_DIR, macro_vars, 'REP4')
         
         # ===== PART 2: Islamic Securities =====
-        print("\n=== Processing Islamic Securities ===")
+        print("\n" + "="*60)
+        print("PART 2: Islamic Securities")
+        print("="*60)
         
         # Process IUTFX -> TBLI -> TBL1I
-        print("Processing IUTFX data...")
+        print("\n1. Processing IUTFX data...")
         tbli_summary = process_iutfx(macro_vars)
         if tbli_summary is not None:
+            print(f"   IUTFX summary: {len(tbli_summary)} rows")
             append_or_create_table(tbli_summary, BNMKI_DIR, macro_vars, 'TBL1')
         
         # Process K3TBLI
-        print("Processing K3TBLI data...")
+        print("\n2. Processing K3TBLI data...")
         k3tbli_df = process_k3tbli(macro_vars)
+        if k3tbli_df is not None:
+            print(f"   K3TBLI: {len(k3tbli_df)} rows")
         
         # Process K3TBL1I for REP2I and REP3I
-        print("Processing K3TBL1I for REP2I/REP3I...")
+        print("\n3. Processing K3TBL1I for REP2I/REP3I...")
         rep2i_df, rep3i_df = process_k3tbl1i(k3tbli_df, macro_vars)
-        if rep2i_df is
+        if rep2i_df is not None:
+            print(f"   REP2I: {len(rep2i_df)} rows")
+            append_or_create_table(rep2i_df, BNMKI_DIR, macro_vars, 'REP2')
+        if rep3i_df is not None:
+            print(f"   REP3I: {len(rep3i_df)} rows")
+            append_or_create_table(rep3i_df, BNMKI_DIR, macro_vars, 'REP3')
+        
+        # Process K3TBLFI for REP4I
+        print("\n4. Processing K3TBLFI for REP4I (standard)...")
+        rep4i_df = process_k3tblfi(k3tbli_df, macro_vars, variant='standard')
+        if rep4i_df is not None:
+            print(f"   REP4I: {len(rep4i_df)} rows")
+            append_or_create_table(rep4i_df, BNMKI_DIR, macro_vars, 'REP4')
+        
+        # Process K3TBLFI for REP4X
+        print("\n5. Processing K3TBLFI for REP4X (alternative)...")
+        rep4x_df = process_k3tblfi(k3tbli_df, macro_vars, variant='alternative')
+        if rep4x_df is not None:
+            print(f"   REP4X: {len(rep4x_df)} rows")
+            append_or_create_table(rep4x_df, BNMKI_DIR, macro_vars, f"REP4X{macro_vars['REPTYEAR']}")
+        
+        # ===== Summary =====
+        print("\n" + "="*60)
+        print("PROCESSING COMPLETE")
+        print("="*60)
+        print(f"\nOutput files saved in:")
+        print(f"  - Conventional: {BNMK_DIR}")
+        print(f"  - Islamic: {BNMKI_DIR}")
+        print(f"\nELBATCH value: {macro_vars.get('ELBATCH', 'Not set')}")
+        
+        # List output files
+        print("\nGenerated files:")
+        for dir_path in [BNMK_DIR, BNMKI_DIR]:
+            if dir_path.exists():
+                files = list(dir_path.glob("*.parquet"))
+                for f in sorted(files):
+                    print(f"  {dir_path.name}/{f.name}")
+        
+        print(f"\nProcessing completed successfully at {datetime.now()}")
+        
+    except Exception as e:
+        print(f"\nError during processing: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+if __name__ == "__main__":
+    main()
