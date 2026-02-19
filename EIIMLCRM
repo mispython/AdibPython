@@ -1,0 +1,802 @@
+//EIIMLCRM JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M,NOTIFY=&SYSUID
+/*JOBPARM S=S1M1
+//*---------------------------------------------------------------------
+//* PROGRAM  : EIIMLCRM
+//* ESMR     : 2015-894 (AAB)
+//* DESC     : CREATE NEW REPORT FOR LIQUIDITY COVERAGE RATIO (LCR)
+//*            BASED ON LATEST LCR PAPER RELATING TO BASEL III TO
+//*            SUBSTITUTE EXISTING FISS - RLFM REPORTING
+//*-------------------------------------------------------------------
+//DELETE EXEC PGM=IEFBR14
+//DEL01    DD DSN=SAP.PIBB.LCR.MTH.TEXT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//DEL02    DD DSN=SAP.PIBB.LCR.USD.TEXT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//DEL03    DD DSN=SAP.PIBB.LCR.SGD.TEXT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//DEL04    DD DSN=SAP.PIBB.LCR.MYR.TEXT,
+//            DISP=(MOD,DELETE,DELETE),SPACE=(CYL,(0))
+//*-------------------------------------------------------------------
+//EIIMLCRM EXEC SAS609
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//DEPOSIT  DD DSN=SAP.PIBB.MNITB(0),DISP=SHR
+//WALK     DD DSN=SAP.FDP.APPL.PIBB.MTHEND.NLF(0),DISP=SHR
+//CISCA    DD DSN=SAP.PBB.CISBEXT.DP,DISP=SHR
+//CISDP    DD DSN=SAP.PBB.CRM.CISBEXT,DISP=SHR
+//FORATE   DD DSN=SAP.PIBB.FCYCA,DISP=SHR
+//BNMK     DD DSN=SAP.PIBB.KAPITI.SASDATA,DISP=SHR
+//TEMPL    DD DSN=SAP.PIBB.LCR.TEMPLATE,DISP=SHR
+//LCR      DD DSN=SAP.PIBB.LCR.SASDATA,DISP=OLD
+//LIST     DD DSN=SAP.PBB.LCR.LISTDATA,DISP=SHR
+//SME      DD DSN=SAP.PIBB.BASEL.SME,DISP=SHR
+//LCRMTH   DD DSN=SAP.PIBB.LCR.MTH.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,10)),UNIT=SYSDA
+//LCRUSD   DD DSN=SAP.PIBB.LCR.USD.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,10)),UNIT=SYSDA
+//LCRSGD   DD DSN=SAP.PIBB.LCR.SGD.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,10)),UNIT=SYSDA
+//LCRMYR   DD DSN=SAP.PIBB.LCR.MYR.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,10)),UNIT=SYSDA
+//SFTPFL   DD DSN=&&FTPPUT,DISP=(NEW,PASS),
+//            SPACE=(TRK,(1)),UNIT=SYSDA,RECFM=FB,LRECL=80
+//SFTPFL2  DD DSN=&&FTPPUT2,DISP=(NEW,PASS),
+//            SPACE=(TRK,(1)),UNIT=SYSDA,RECFM=FB,LRECL=80
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SORTWK03 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SORTWK04 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SORTWK05 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SORTWK06 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SORTWK07 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SORTWK08 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SORTWK09 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SORTWK10 DD UNIT=SYSDA,SPACE=(CYL,(1000))
+//SYSIN    DD *
+
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER NODATE MISSING=' '
+        NOSORTBLKMODE SORTPARM='HIPRMAX=0,MOSIZE=0';
+
+%INC PGM(PBBELF,PBLCRFMT);
+
+DATA LCR.REPTDATE REPTDATE;
+   SET DEPOSIT.REPTDATE;
+   SELECT;
+      WHEN (01<=DAY(REPTDATE)<=08) DO; NOWK = '1'; END;
+      WHEN (09<=DAY(REPTDATE)<=15) DO; NOWK = '2'; END;
+      WHEN (16<=DAY(REPTDATE)<=22) DO; NOWK = '3'; END;
+      OTHERWISE                    DO; NOWK = '4'; END;
+   END;
+   CALL SYMPUT('NOWK',PUT(NOWK,$1.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('RPTDT',PUT(REPTDATE,YYMMDDN6.));
+   CALL SYMPUT('FILDT',PUT(REPTDATE,DDMMYYN6.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+   CALL SYMPUT('TDATE',REPTDATE);
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+RUN;
+
+DATA TEMPLATE;
+   INFILE TEMPL;
+   INPUT @1 ITEM           $5.
+         @8 IDESC    $CHAR120.
+         ;
+   FORMAT FD95315RM1 FD95315RM2 FD95315RM  FD95317RM1 FD95317RM2
+          FD95317RM  SA95312RM  CA95313RM  CA96313FX  STD95830V1
+          STD95830V2 STD95830   STQ95830V1 STQ95830V2 STQ95830
+          NID95840V1 NID95840V2 NID95840V3
+          NID95840V4 NID95840V5 NID95840V6 NID95840   IBB9X810V1
+          IBB9X810V2 IBB9X810V3 IBB9X810V4 IBB9X810V5 IBB9X810V6
+          IBB9X810   OTHSOURCE  TOTALV1    TOTALDP    FDPLEDGE1
+          FDPLEDGE2  TDPLEDGE1  TDPLEDGE2  COMMA20.2;
+RUN;
+PROC SORT; BY ITEM; RUN;
+
+*------------------------------------------------*
+*  TREASURY (KAPITI)                             *
+*------------------------------------------------*;
+PROC SORT DATA=LCR.UTSAS&REPTMON OUT=UTSAS NODUPKEY; BY DEALREF; RUN;
+
+DATA ALLEQU;
+   SET LCR.K1TBL LCR.K3TBL;
+RUN;
+PROC SORT DATA=ALLEQU NODUPKEY; BY DEALREF; RUN;
+
+DATA ALLEQU LCR.EQU&REPTMON;
+   MERGE ALLEQU(IN=A) UTSAS;
+   BY DEALREF;
+   IF A;
+   IF CUSTFISS = . AND UTCTP NE '' THEN CUSTFISS=PUT(UTCTP,$CTYPE.);
+   IF CUSTNAME = '' THEN DO;
+      IF GWSHN   ^= '' THEN CUSTNAME = GWSHN;
+      IF CUSTNAME = '' THEN CUSTNAME = CUSTNO;
+   END;
+
+   *15-894;
+   IF   CUSTNO IN ('KWSP','KWAP','KWAN','LEMTAB')   THEN CUST='39';
+   ELSE IF CUSTFISS IN (76,77,78,95,96)             THEN CUST='08';
+   ELSE IF CUSTFISS IN (41,42,43,44,46,47,48,49,51,
+                        52,53,54,65,66,67,68,69)    THEN CUST='19';
+   ELSE IF CUSTFISS IN (00,45,57,59,60,61,62,63,64,
+                        75,79,85,86,87,88,89,98,99) THEN CUST='29';
+   ELSE IF CUSTFISS IN (01,71,72,73,74,90,91,92)    THEN CUST='39';
+   ELSE IF CUSTFISS IN (02,03,07,12,81,82,83,84)    THEN CUST='49';
+   ELSE IF CUSTFISS IN (04,05,06,13,20,30:40,17)    THEN CUST='59';
+   ELSE                                                  CUST='29';
+
+   *NSFR;
+   IF   CUSTNO IN ('KWSP','KWSPKL','KWAP','KWAPKL',
+                   'KWAN','KWANKL','LEMTAB','LEMTABKL')
+                                                    THEN CUSX='49';
+   ELSE IF CUSTFISS IN (76,77,78,95,96)             THEN CUSX='08';
+   ELSE IF CUSTFISS IN (41,42,43,44,46,47,48,49,51,
+                        52,53,54,65,66,67,68,69)    THEN CUSX='19';
+   ELSE IF CUSTFISS IN (00,17,45,57,59,60,61,62,63,64,
+                        75,79,85,86,87,88,89,98,99) THEN CUSX='29';
+   ELSE IF CUSTFISS IN (01,91)                      THEN CUSX='39';
+   ELSE IF CUSTFISS IN (71,72,73,74,90,92)          THEN CUSX='49';
+   ELSE IF CUSTFISS IN (02,03,04,05,06,07,12,13,20,
+                        30,31,32,33,34,35,37,38,39,
+                        40,81,82,83,84)             THEN CUSX='59';
+   ELSE                                                  CUSX='29';
+
+   IF REM30D = . THEN REM30D = REMMTH;
+   IF REM30D > 1 AND REMMTH > 1 THEN REM30D = REMMTH;
+
+   *18-1761;
+   IF DEALTYPE = 'BQD' THEN DLTYPE = '01';
+
+   FORMAT BIC $5. CMMCODE $14.;
+   BIC = SUBSTR(BNMCODE,1,5);
+   BNMCODE = BIC||CUST||PUT(REM30D,REMFMT.)||'00'||DLTYPE||'Y';
+   CMMCODE = BIC||CUST||PUT(REMMTH,CMMFMT.)||'00'||DLTYPE||'Y';
+   NSFCODE = BIC||CUSX||PUT(REM30D,REMFMX.)||'00'||DLTYPE||'Y';
+
+   *15-1789;
+   IF CUSTNO IN ('AIM','PBL','PBLEUR','PBLNID','PBLUSD','PIVMYR','PBB',
+                 'PBBMYR','PBBUSD','CUST')
+      AND CUST='49' AND BIC IN ('95840','96840') THEN DO;
+      IF PUT(ORI30D,REMFMT.) > 5 AND PUT(REM30D,REMFMT.) > 1 THEN
+         BNMCODE = SUBSTR(BNMCODE,1,9)||'0200Y';
+   END;
+   IF CUSTNO IN ('AIM','PBL','PBLEUR','PBLNID','PBLUSD','PIVMYR','PBB',
+                 'PBBMYR','PBBUSD','CUST')
+      AND CUSX='49' AND BIC IN ('95840','96840') THEN DO;
+      IF PUT(ORI30D,REMFMX.) > 5 AND PUT(REM30D,REMFMX.) > 1 THEN
+         NSFCODE = SUBSTR(NSFCODE,1,9)||'0200Y';
+   END;
+   FORMAT ICGRP $400.;
+   IF CUSTID NE '' THEN ICGRP = COMPRESS(CUSTID);
+   ELSE                 ICGRP = COMPRESS(ICNO);
+   KEEP BIC BNMCODE CMMCODE CURCODE AMOUNT DEALREF DEALTYPE CUSTFISS
+        CUSTNO CUSTNAME REM30D REMMTH ORI30D MATDT CUSTID ICNO ACCTNO
+        CISNO CISNAME ICGRP NSFCODE;
+RUN;
+PROC SORT DATA=ALLEQU; BY BNMCODE CURCODE; RUN;
+
+PROC SUMMARY DATA=ALLEQU NWAY;
+   BY BNMCODE CURCODE;
+   VAR AMOUNT;
+   OUTPUT OUT=EQUTOT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+PROC SORT DATA=ALLEQU; BY ICGRP; RUN;
+
+PROC SUMMARY DATA=ALLEQU NWAY;
+   WHERE SUBSTR(BIC,3,3) IN ('810','820','830','83X','840','850');
+   BY ICGRP;
+   VAR AMOUNT;
+   OUTPUT OUT=TOTEQU(DROP=_TYPE_ _FREQ_) SUM=TOTICEQBAL;
+RUN;
+
+*------------------------------------------------*
+*  CORE BANKING                                  *
+*------------------------------------------------*;
+DATA ALLMNI;
+   SET LCR.FD(RENAME=(CUSTCD=CUSTCDX) IN=FD)
+       LCR.SA
+       LCR.CA
+       LCR.FCYCA;
+   IF FD THEN CUSTCD = PUT(CUSTCDX,Z2.);
+   IF      CUSTCD IN (76,77,78,95,96)             THEN CUST='08';
+   ELSE IF CUSTCD IN (41,42,43,44,46,47,48,49,51,
+                      52,53,54,65,66,67,68,69)    THEN CUST='19';
+   ELSE IF CUSTCD IN (00,45,57,59,60,61,62,63,64,
+                      75,79,85,86,87,88,89,98,99) THEN CUST='29';
+   ELSE IF CUSTCD IN (01,71,72,73,74,90,91,92)    THEN CUST='39';
+   ELSE IF CUSTCD IN (02,03,07,12,81,82,83,84)    THEN CUST='49';
+   ELSE IF CUSTCD IN (04,05,06,13,20,30:40,17)    THEN CUST='59';
+   ELSE                                                CUST='29';
+
+   IF      CUSTCD IN (76,77,78,95,96)             THEN CUSX='08';
+   ELSE IF CUSTCD IN (41,42,43,44,46,47,48,49,51,
+                      52,53,54,65,66,67,68,69)    THEN CUSX='19';
+   ELSE IF CUSTCD IN (00,45,57,59,60,61,62,63,64,
+                      75,79,85,86,87,88,89,98,99) THEN CUSX='29';
+   ELSE IF CUSTCD IN (01,91)                      THEN CUSX='39';
+   ELSE IF CUSTCD IN (71,72,73,74,90,92)          THEN CUSX='49';
+   ELSE IF CUSTCD IN (02,03,04,05,06,07,12,13,17,20,
+                      30,31,32,33,34,35,37,38,39,
+                      40,81,82,83,84)             THEN CUSX='59';
+   ELSE                                                CUSX='29';
+
+   IF REM30D = . THEN REM30D = REMMTH;
+   IF REM30D > 1 AND REMMTH > 1 THEN REM30D = REMMTH; *15-2370;
+RUN;
+PROC SORT DATA=ALLMNI; BY ACCTNO; RUN;
+
+DATA CISINFO;
+   SET CISDP.DEPOSIT(KEEP=ACCTNO CUSTNO SECCUST NEWIC OLDIC CUSTNAME
+                          BUSSREG)
+       CISCA.DEPOSIT(KEEP=ACCTNO CUSTNO SECCUST NEWIC OLDIC CUSTNAME
+                          BUSSREG);
+   WHERE SECCUST='901';
+RUN;
+PROC SORT DATA=CISINFO OUT=LCR.CISINFO; BY ACCTNO; RUN;
+
+PROC SORT DATA=LIST.LCR_ECP_&REPTMON OUT=ECP NODUPKEY;BY ACCTNO;RUN;
+PROC SORT DATA=SME.IBASELSME&REPTMON&REPTYEAR
+          OUT=LCR.SME; BY ACCTNO; RUN;
+
+DATA ALLMNI;
+   MERGE ALLMNI(IN=A) LCR.CISINFO LCR.TRNSCISIC ECP LCR.SME;
+   BY ACCTNO;
+   IF A;
+   IF ECP = '' THEN ECP = '00';
+   IF ECP = '01' THEN DO;
+      IF INTRATE < OPRRATE THEN ECP = '01';        *OPERATIONAL;
+      ELSE IF INTRATE >= OPRRATE THEN ECP = '00';  *NON-OPERATIONAL;
+   END;
+   IF BILLERIND = 'Y' OR PBMERCH = 'Y' THEN
+      ECP = '01'; *16-2778/4738/17-754/17-2026;
+   IF PRODUCT IN (106,151,158,97,164,201,215) OR
+      INTPLAN IN (400:419,600:658,720:740,864:890,941:967) OR
+     (SOURCE NE 'PGD' AND
+      DTSIGNED > 0 AND YRDIF(DTSIGNED,&TDATE,'ACT/ACT') >= 1) THEN
+      SIGN= 'R '; *17-2949/4521;
+   IF CUSTNO IN ( 4391161, 2115999,12579649,13468207,14300254,
+                 14675929,15327497,17104931,12677444, 3703533,
+                  5978659,16185090,2558344,10819745) THEN CUST='39';
+   *NSFR;
+   IF CUSTNO IN ( 4391161, 2115999,12579649,13468207,14675929,
+                 15327497,17104931,12677444, 3703533, 5978659,
+                 16185090,10819745,2558344) THEN CUSX='49';
+   *2017-2623;
+   IF CUSTNO IN ( 9888664, 11565156, 170458,17835250,12078514,
+                 12542063) OR
+           BUSSREG IN ('061904X','186852H','211510H','685480K',
+                       '643815V','734789U')          THEN DO;
+      CUST = '59';
+      CUSX = '59';
+   END;
+
+   FORMAT BIC $5. CMMCODE $14.;
+   BIC = SUBSTR(BNMCODE,1,5);
+   IF BIC = '95317' AND PRODUCT IN (302,315,394,396) THEN DO;
+      BIC = '95315'; /* MGIA */ *17-451/17-598;
+   END;
+   BNMCODE = BIC||CUST||'02'||'0000Y';
+   CMMCODE = BIC||CUST||PUT(REMMTH,CMMFMT.)||'0000Y';
+   NSFCODE = BIC||CUSX||'02'||'0000Y';
+RUN;
+PROC SORT DATA=ALLMNI; BY ICGRP; RUN;
+
+PROC SUMMARY DATA=ALLMNI NWAY;
+   BY ICGRP;
+   VAR AMOUNT;
+   OUTPUT OUT=TOTMNI(DROP=_TYPE_ _FREQ_) SUM=TOTICBAL;
+RUN;
+
+DATA ALLMNI
+     LCR.CMM&REPTMON(KEEP=BIC BNMCODE CMMCODE BRANCH ACCTNO CUSTCD
+                          PRODUCT CURCODE AMOUNT CUSTNO NEWIC OLDIC
+                          CUSTNAME REM30D REMMTH ECP CDNO MATDT
+                          BILLERIND TOTDPBAL TOTICBAL TOTICEQBAL
+                          SME_TAG PBMERCH INTPLAN);
+   MERGE ALLMNI(IN=A) TOTMNI TOTEQU;
+   BY ICGRP;
+   IF A;
+   IF (CUSTNO NOT IN (14094942,16557696,3728510,11335374,16265490,
+                      3523050,11880426,16771972,15241330,16500538) AND
+      SUBSTR(BNMCODE,6,2) = '29') OR CUSTCD IN (72,73,74) THEN DO;
+      TOTDPBAL = SUM(TOTICBAL,TOTICEQBAL); *16-3319;
+      IF TOTDPBAL < 5000000 THEN DO; *15-1076;
+         BNMCODE = BIC||'19'||SUBSTR(BNMCODE,8,7);
+         CMMCODE = BIC||'19'||SUBSTR(CMMCODE,8,7);
+         NSFCODE = BIC||'19'||SUBSTR(NSFCODE,8,7);
+      END;
+   END;
+   *16-4512;
+   ELSE IF SUBSTR(BNMCODE,6,2) = '19' AND SME_TAG = 'N' THEN DO;
+      TOTDPBAL = SUM(TOTICBAL,TOTICEQBAL);
+      IF TOTDPBAL => 5000000 THEN DO;
+         BNMCODE = BIC||'29'||SUBSTR(BNMCODE,8,7);
+         CMMCODE = BIC||'29'||SUBSTR(CMMCODE,8,7);
+         NSFCODE = BIC||'29'||SUBSTR(NSFCODE,8,7);
+      END;
+   END;
+   IF SUBSTR(BNMCODE,6,2) IN ('08','19') THEN DO;
+      IF      TRX  IN (1)        THEN TAG = '01';
+      ELSE IF SIGN IN ('R','R ') THEN TAG = '02';
+      ELSE                            TAG = '03';
+      BNMCODE = SUBSTR(BNMCODE,1,7)||TAG||'0000Y';
+      NSFCODE = SUBSTR(NSFCODE,1,7)||TAG||'0000Y';
+   END;
+   /* OPERATIONAL DEPOSIT - LCR_ECP UNDER EGS_FD */
+   IF BIC IN ('95313','96313') THEN DO;
+      BNMCODE = SUBSTR(BNMCODE,1,9)||ECP||'00Y';
+      CMMCODE = SUBSTR(CMMCODE,1,9)||ECP||'00Y';
+      NSFCODE = SUBSTR(NSFCODE,1,9)||ECP||'00Y';
+   END;
+   IF TOTICBAL > 250000 THEN DO; /* PROPORTION INSURED/UNINSURED */
+      IF SUBSTR(BNMCODE,6,2) IN ('29','39') AND ECP NE '01' THEN DO;
+         BNMCODE = SUBSTR(BNMCODE,1,7)||'10'||SUBSTR(BNMCODE,10,5);
+         NSFCODE = SUBSTR(NSFCODE,1,7)||'10'||SUBSTR(NSFCODE,10,5);
+         OUTPUT;                    /* NOT FULLY COVERED */
+      END;
+      ELSE DO;
+         CURBAL  = AMOUNT;
+         AMOUNT  = (CURBAL/TOTICBAL)*250000;
+         IF SUBSTR(BNMCODE,6,2) IN ('49') AND ECP NE '01' THEN
+             NSFCODE = SUBSTR(NSFCODE,1,7)||'10'||SUBSTR(NSFCODE,10,5);
+         OUTPUT;                    /* INSURED   */
+         AMOUNT  = SUM(CURBAL,-1*AMOUNT);
+         BNMCODE = SUBSTR(BNMCODE,1,7)||'10'||SUBSTR(BNMCODE,10,5);
+         NSFCODE = SUBSTR(NSFCODE,1,7)||'10'||SUBSTR(NSFCODE,10,5);
+         OUTPUT;                    /* UNINSURED */
+      END;
+   END;
+   ELSE
+      OUTPUT;                    /* INSURED   */
+RUN;
+
+DATA LCR.NSFR&REPTMON(KEEP=BIC BNMCODE CMMCODE BRANCH ACCTNO CUSTCD
+                          PRODUCT CURCODE AMOUNT CUSTNO NEWIC OLDIC
+                          CUSTNAME REM30D REMMTH ECP CDNO MATDT
+                          BILLERIND TOTDPBAL TOTICBAL TOTICEQBAL
+                          SME_TAG PBMERCH NSFCODE INTPLAN);
+   SET ALLMNI;
+   IF BIC IN ('95315','95317') THEN DO;
+      NSFCODE = SUBSTR(NSFCODE,1,9)||PUT(REMMTH,REMFMX.)||'00Y';
+      IF FDHOLD = 'Y' THEN DO;
+         NSFCODE = SUBSTR(NSFCODE,1,7)||'20'||SUBSTR(NSFCODE,10,5);
+      END;
+   END;
+RUN;
+
+DATA ALLMNI FDHOLD(KEEP=BNMCODE CURCODE AMOUNT);
+   SET ALLMNI;
+   IF BIC IN ('95315','95317') THEN DO;
+      IF REM30D <= 1 THEN BNMCODE = SUBSTR(BNMCODE,1,9)||'0100Y';
+      ELSE                BNMCODE = SUBSTR(BNMCODE,1,9)||'0200Y';
+      IF FDHOLD = 'Y' THEN DO;
+         OUTPUT FDHOLD;
+         BNMCODE = SUBSTR(BNMCODE,1,7)||'20'||SUBSTR(BNMCODE,10,5);
+      END;
+   END;
+   OUTPUT ALLMNI;
+RUN;
+PROC SORT DATA=ALLMNI; BY BNMCODE CURCODE; RUN;
+
+PROC SUMMARY DATA=ALLMNI NWAY;
+   BY BNMCODE CURCODE;
+   VAR AMOUNT;
+   OUTPUT OUT=MNITOT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+*------------------------------------------------*
+*  FD PLEDGED                                    *
+*------------------------------------------------*;
+PROC SORT DATA=FDHOLD; BY BNMCODE CURCODE; RUN;
+PROC SUMMARY DATA=FDHOLD NWAY;
+   BY BNMCODE CURCODE;
+   VAR AMOUNT;
+   OUTPUT OUT=FDHOLD(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA FDHOLD;
+   SET FDHOLD;
+   ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNI.);
+   IF ITEM NE '';
+   BIC = SUBSTR(BNMCODE,1,5);
+   IF SUBSTR(BNMCODE,10,2) = '01' THEN  /*REM30D<=1*/
+      IF BIC = '95315' THEN FDPLEDGE1 = AMOUNT;
+      ELSE                  TDPLEDGE1 = AMOUNT;
+   ELSE
+      IF BIC = '95315' THEN FDPLEDGE2 = AMOUNT;
+      ELSE                  TDPLEDGE2 = AMOUNT;
+RUN;
+PROC SORT DATA=FDHOLD OUT=LCR.FDHOLD; BY ITEM CURCODE; RUN;
+
+PROC SUMMARY DATA=LCR.FDHOLD NWAY;
+   BY ITEM CURCODE;
+   VAR FDPLEDGE1 FDPLEDGE2 TDPLEDGE1 TDPLEDGE2;
+   OUTPUT OUT=FDHOLD(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+*------------------------------------------------*
+*  SUMMARISE AND CONSOLIDATE                     *
+*------------------------------------------------*;
+%MACRO SHAREX;
+   FORMAT COLNAME $15.;
+   BIC     = SUBSTR(BNMCODE,1,5);
+   COLNAME = PUT(BIC,$COLID.);
+   ECP     = SUBSTR(BNMCODE,10,2);
+   DLTYPE  = SUBSTR(BNMCODE,12,2);
+   IF A THEN DO;
+      IF BIC IN ('95313','96313') AND ECP = '01' THEN
+         ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNIOPR.);
+      IF ITEM = '' THEN
+         ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNI.);
+      REMMTH = SUBSTR(BNMCODE,10,2);
+   END;
+   ELSE      DO;
+      IF DLTYPE = '01' THEN COLNAME = 'STQ95830';
+      ITEM   = PUT(SUBSTR(BNMCODE,6,2),$LCRCDEQU.);
+      REMMTH = SUBSTR(BNMCODE,8,2);
+      ORIMTH = SUBSTR(BNMCODE,10,2); *15-1789;
+      IF ITEM = 'B3.30' AND ORIMTH = '02' THEN ITEM = 'B6.30';
+   END;
+   IF COLNAME NE '' AND ITEM NE ''; *CONTROLLER;
+
+   AMOUNT = ABS(ROUND(AMOUNT/1000,.01));
+   IF SUBSTR(COLNAME,1,2)= 'FD' OR SUBSTR(COLNAME,1,3) IN ('STD','STQ')
+   THEN
+         IF REMMTH=1 THEN COLNAME = COMPRESS(COLNAME||'1');
+         ELSE             COLNAME = COMPRESS(COLNAME||'2');
+   ELSE IF SUBSTR(COLNAME,1,3) IN ('NID','IBB') THEN
+      DO I = 1 TO 6;
+         IF REMMTH=I THEN COLNAME = COMPRESS(COLNAME||'V'||I);
+      END;
+   DROP I;
+%MEND SHAREX;
+
+DATA LCR.ALLDPDTL;
+   SET ALLMNI(IN=A);
+   %SHAREX
+RUN;
+
+DATA LCR.ALLEQDTL;
+   SET ALLEQU;
+   %SHAREX
+RUN;
+
+DATA LCR.ALLSRC;
+   SET MNITOT(IN=A) EQUTOT;
+   %SHAREX
+RUN;
+PROC SORT DATA=LCR.ALLSRC OUT=DEPOSIT; BY ITEM CURCODE COLNAME; RUN;
+
+PROC SUMMARY DATA=DEPOSIT NWAY;
+   BY ITEM CURCODE COLNAME;
+   VAR AMOUNT;
+   OUTPUT OUT=DEPOSIT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+PROC TRANSPOSE DATA=DEPOSIT OUT=DEPOSIT(DROP=_NAME_ _LABEL_);
+   BY ITEM CURCODE;
+   ID COLNAME;
+   VAR AMOUNT;
+RUN;
+
+*------------------------------------------------*
+*  WALKER GL                                     *
+*------------------------------------------------*;
+DATA LCR.GL;
+   INFILE WALK;
+   INPUT @002 SET_ID         $19.
+         @042 AMOUNT     COMMA20.2
+         @062 SIGN            $1.
+         ;
+   FORMAT ITEM $5. CURCODE $3.;
+   IF SIGN = '' THEN AMOUNT = -1*AMOUNT;
+   ITEM    = PUT(SET_ID,$LCRCDIGL.);
+   CURCODE = PUT(SET_ID,$LCRCDIGLCCY.);
+   IF ITEM = '' AND CURCODE NE '' THEN ITEM = PUT(SET_ID,$LCRCDGLOTH.);
+RUN;
+PROC SORT DATA=LCR.GL OUT=GL NODUPKEY; BY SET_ID; RUN;
+PROC SORT DATA=GL; BY ITEM CURCODE; WHERE ITEM NE ''; RUN;
+
+PROC SUMMARY DATA=GL NWAY;
+   BY ITEM CURCODE;
+   VAR AMOUNT;
+   OUTPUT OUT=GL SUM=OTHSOURCE;
+RUN;
+
+*------------------------------------------------*
+*  LCR REPORTING                                 *
+*------------------------------------------------*;
+%MACRO LCRPRINT(FL,PRINTFL);
+DATA REPORT SREPORT;
+   MERGE DEPOSIT FDHOLD GL(IN=GL);
+   BY ITEM CURCODE;
+   %IF "&CCY" EQ "SKIPCUR" %THEN %DO;
+       IF GL AND CURCODE IN ('USD','SGD') THEN OTHSOURCE = 0; *MAIN;
+   %END;
+   %ELSE %DO;
+       IF CURCODE IN &CCY;                    *LCRUSD-LCRSGD-LCRMYR;
+   %END;
+   PART=SUBSTR(ITEM,1,1);
+   FDPLEDGE1 = ABS(ROUND(FDPLEDGE1/1000,.01));
+   FDPLEDGE2 = ABS(ROUND(FDPLEDGE2/1000,.01));
+   TDPLEDGE1 = ABS(ROUND(TDPLEDGE1/1000,.01));
+   TDPLEDGE2 = ABS(ROUND(TDPLEDGE2/1000,.01));
+   OTHSOURCE = ABS(ROUND(OTHSOURCE/1000,.01));
+RUN;
+
+PROC SUMMARY DATA=REPORT NWAY;
+   BY ITEM;
+   VAR _NUMERIC_;
+   OUTPUT OUT=REPORT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+PROC SORT DATA=SREPORT; BY PART; RUN;
+PROC SUMMARY DATA=SREPORT NWAY;
+   BY PART;
+   VAR _NUMERIC_;
+   OUTPUT OUT=SREPORT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA SREPORT;
+   SET SREPORT;
+   IF PART = 'A' THEN ITEM = 'A9.01';
+   ELSE               ITEM = 'B9.01';
+RUN;
+PROC SORT DATA=SREPORT; BY ITEM; RUN;
+
+DATA LCR.LCR&FL&REPTMON;
+   MERGE TEMPLATE(IN=A) REPORT SREPORT;
+   BY ITEM;
+   IF A;
+   DLM='05'X;
+   FILE &PRINTFL;
+   IF _N_=1 THEN DO;
+      PUT @001 'PUBLIC ISLAMIC BANK BERHAD'
+          /    "LIQUIDITY COVERAGE RATIO (LCR) AS AT &RDATE"
+          /
+           ;
+      PUT @125                                              DLM
+                                                            DLM
+                'MGIA (P)'                                  DLM
+                                                            DLM
+                                                            DLM
+                'TD-I (Q)'                                  DLM
+                                                            DLM
+                                                            DLM
+                'FX TD-I (R)'                               DLM
+                                                            DLM
+                'SA (S)'                                    DLM
+                'CA (T)'                                    DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'SHORT TERM DEPOSIT (U)'                    DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'RM&FX NID ISSUED **'                       DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'RM&FX INTERBANK BORROWINGS (IBB) **'       DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'RM&FX INTERBANK REPOS **'                  DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'RM&FX BAS PAYABLE **'                      DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'OTHER SOURCE'                              DLM
+                'TOTAL'                                     DLM
+                'TOTAL'                                     DLM
+                'FD PLEDGED'                                DLM
+                ;
+      PUT @125                                    DLM
+                '<= 30 DAYS (P1)'                 DLM
+                ' > 30 DAYS (P2)'                 DLM
+                'TOTAL (P)=(P1+P2)'               DLM
+                '<= 30 DAYS (Q1)'                 DLM
+                ' > 30 DAYS (Q2)'                 DLM
+                'TOTAL (Q)=(Q1+Q2)'               DLM
+                '<= 30 DAYS (R1)'                 DLM
+                ' > 30 DAYS (R2)'                 DLM
+                'TOTAL (R)=(R1+R2)'               DLM
+                                                  DLM
+                'RM'                              DLM
+                'FX'                              DLM
+                '<= 30 DAYS (U1)'                 DLM
+                ' > 30 DAYS (U2)'                 DLM
+                'TOTAL (U)=(U1+U2)'               DLM
+                '<= 30 DAYS (V1)'                 DLM
+                ' > 30 DAYS (V2)'                 DLM
+                'TOTAL (V)=(V1+V2)'               DLM
+                '<= 30 DAYS (W1)'                 DLM
+                '> 30 DAYS-3 MTHS (W2)'           DLM
+                '> 3-6 MTHS (W3)'                 DLM
+                '> 6-9 MTHS (W4)'                 DLM
+                '> 9-12 MTHS (W5)'                DLM
+                '> 1 YEAR (W6)'                   DLM
+                'TOTAL (W)'                       DLM
+                '<= 30 DAYS (X1)'                 DLM
+                '> 30 DAYS-3 MTHS (X2)'           DLM
+                '> 3-6 MTHS (X3)'                 DLM
+                '> 6-9 MTHS (X4)'                 DLM
+                '> 9-12 MTHS (X5)'                DLM
+                '> 1 YEAR (X6)'                   DLM
+                'TOTAL (X)'                       DLM
+                '<= 30 DAYS (Y1)'                 DLM
+                '> 30 DAYS-3 MTHS (Y2)'           DLM
+                '> 3-6 MTHS (Y3)'                 DLM
+                '> 6-9 MTHS (Y4)'                 DLM
+                '> 9-12 MTHS (Y5)'                DLM
+                '> 1 YEAR (Y6)'                   DLM
+                'TOTAL (Y)'                       DLM
+                '<= 30 DAYS (Z1)'                 DLM
+                '> 30 DAYS-3 MTHS (Z2)'           DLM
+                '> 3-6 MTHS (Z3)'                 DLM
+                '> 6-9 MTHS (Z4)'                 DLM
+                '> 9-12 MTHS (Z5)'                DLM
+                '> 1 YEAR (Z6)'                   DLM
+                'TOTAL (Z)'                       DLM
+                '(GL)'                            DLM
+                '(P+Q1+R1+S+T+U+V+W+X1+Y+Z+GL)'   DLM
+                '(P+Q+R+S+T+U+V+W+X+Y+Z+GL)'      DLM
+                '<= 30 DAYS'                      DLM
+                ' > 30 DAYS'                      DLM
+                '<= 30 DAYS'                      DLM
+                ' > 30 DAYS'                      DLM
+          ;
+   END;
+   FORMAT FD95315RM1 FD95315RM2 FD95315RM  FD95317RM1 FD95317RM2
+          FD95317RM  SA95312RM  CA95313RM  CA96313FX  STD95830V1
+          STD95830V2 STD95830   STQ95830V1 STQ95830V2 STQ95830
+          NID95840V1 NID95840V2 NID95840V3
+          NID95840V4 NID95840V5 NID95840V6 NID95840   IBB9X810V1
+          IBB9X810V2 IBB9X810V3 IBB9X810V4 IBB9X810V5 IBB9X810V6
+          IBB9X810   OTHSOURCE  TOTALV1    TOTALDP    FDPLEDGE1
+          FDPLEDGE2  TDPLEDGE1  TDPLEDGE2  COMMA20.2;
+
+   FD95315RM = SUM(FD95315RM1,FD95315RM2);  *SUM(OF FD95315RM:);
+   FD95317RM = SUM(FD95317RM1,FD95317RM2);  *SUM(OF FD95317RM:);
+   STD95830  = SUM(OF STD95830V:);
+   STQ95830  = SUM(OF STQ95830V:);
+   NID95840  = SUM(OF NID95840V:);
+   IBB9X810  = SUM(OF IBB9X810V:);
+   TOTALV1   = SUM(FD95315RM ,FD95317RM1,SA95312RM,CA95313RM,CA96313FX,
+                   STD95830  ,STQ95830 ,NID95840 ,IBB9X810V1,OTHSOURCE);
+   TOTALDP   = SUM(FD95315RM ,FD95317RM ,SA95312RM,CA95313RM,CA96313FX,
+                   STD95830  ,STQ95830 ,NID95840  ,IBB9X810 ,OTHSOURCE);
+   IF SUBSTR(UPCASE(IDESC),1,2)='B)' THEN PUT ;
+   PUT @001  IDESC        $CHAR120.          DLM
+       @125  FD95315RM1                      DLM
+             FD95315RM2                      DLM
+             FD95315RM                       DLM
+             FD95317RM1                      DLM
+             FD95317RM2                      DLM
+             FD95317RM                       DLM
+                                             DLM
+                                             DLM
+                                             DLM
+             SA95312RM                       DLM
+             CA95313RM                       DLM
+             CA96313FX                       DLM
+             STD95830V1                      DLM
+             STD95830V2                      DLM
+             STD95830                        DLM
+             STQ95830V1                      DLM
+             STQ95830V2                      DLM
+             STQ95830                        DLM
+             NID95840V1                      DLM
+             NID95840V2                      DLM
+             NID95840V3                      DLM
+             NID95840V4                      DLM
+             NID95840V5                      DLM
+             NID95840V6                      DLM
+             NID95840                        DLM
+             IBB9X810V1                      DLM
+             IBB9X810V2                      DLM
+             IBB9X810V3                      DLM
+             IBB9X810V4                      DLM
+             IBB9X810V5                      DLM
+             IBB9X810V6                      DLM
+             IBB9X810                        DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+                                             DLM
+             OTHSOURCE                       DLM
+             TOTALV1                         DLM
+             TOTALDP                         DLM
+             FDPLEDGE1                       DLM
+             FDPLEDGE2                       DLM
+             TDPLEDGE1                       DLM
+             TDPLEDGE2                       DLM
+       ;
+RUN;
+%MEND LCRPRINT;
+
+%LET CCY=SKIPCUR;       %LCRPRINT(MTH,LCRMTH); *ALL;
+%LET CCY=('USD');       %LCRPRINT(USD,LCRUSD);
+%LET CCY=('SGD');       %LCRPRINT(SGD,LCRSGD);
+%LET CCY=('MYR');       %LCRPRINT(MYR,LCRMYR);
+
+DATA _NULL_;
+   FILE SFTPFL;
+   PUT @1 "cd TextFile/Fin/LCR_NSFR/PIBB"
+        / "put //SAP.PIBB.LCR.MTH.TEXT  ILCR_&FILDT._MTH.XLS"
+        / "put //SAP.PIBB.LCR.USD.TEXT  ILCR_&FILDT._USD.XLS"
+        / "put //SAP.PIBB.LCR.SGD.TEXT  ILCR_&FILDT._SGD.XLS"
+        / "put //SAP.PIBB.LCR.MYR.TEXT  ILCR_&FILDT._MYR.XLS"
+        / "cd ../../../RiskMgt/LCR"
+        / "put //SAP.PIBB.LCR.MTH.TEXT  ILCR_&FILDT._MTH.XLS"
+        / "put //SAP.PIBB.LCR.USD.TEXT  ILCR_&FILDT._USD.XLS"
+        / "put //SAP.PIBB.LCR.SGD.TEXT  ILCR_&FILDT._SGD.XLS"
+        / "put //SAP.PIBB.LCR.MYR.TEXT  ILCR_&FILDT._MYR.XLS"
+        ;
+   FILE SFTPFL2;
+   PUT @1 "cd ""FD-BNM REPORTING/PIBB/LCR_MT_NSFR/CASH OUTFLOWS"""
+        / "put //SAP.PIBB.LCR.MTH.TEXT  ILCR_&FILDT._MTH.XLS"
+        / "put //SAP.PIBB.LCR.USD.TEXT  ILCR_&FILDT._USD.XLS"
+        / "put //SAP.PIBB.LCR.SGD.TEXT  ILCR_&FILDT._SGD.XLS"
+        / "put //SAP.PIBB.LCR.MYR.TEXT  ILCR_&FILDT._MYR.XLS"
+        ;
+RUN;
+
+//*------------------------------------------------------
+//* FTP TO SAS DATAWAREHOUSE
+//*------------------------------------------------------
+//*RUNSFTP  EXEC COZBATCH
+//*CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(CSASSFTP)
+//*           DD *
+//*lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+//*lzopts linerule=$lr
+//*           DD DISP=SHR,DSN=&&FTPPUT
+//*           DD *
+//*EOB
+/*
+//*---------------------------------------------------------
+//* FTP HOST DATASETS TO DATA REPORT REPOSITORY SYSTEM (DRR)
+//*---------------------------------------------------------
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(DRR#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+//           DD DISP=SHR,DSN=&&FTPPUT2
+//           DD *
+EOB
+/*
