@@ -1,0 +1,765 @@
+//EIBMTLCR JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M,NOTIFY=&SYSUID
+/*JOBPARM S=S1M1
+//*---------------------------------------------------------------------
+//* PROGRAM  : EIBMTLCR
+//* ESMR     : 2015-1410 (AAB)
+//* DESC     : CREATE NEW REPORT TO CATER FOR LIQUIDITY COVERAGE RATIO
+//*            (LCR) MONITORING TOOLS ON CONCENTRATION OF FUNDING
+//*            (LIABILITIES) IN LARGEST 100 EXPOSURES TO COUNTERPARTIES
+//*---------------------------------------------------------------------
+//DELETE   EXEC PGM=IEFBR14
+//DD1      DD DISP=(MOD,DELETE,DELETE),
+//            SPACE=(TRK,(1,10)),
+//            DSN=SAP.PBB.LCR.COF100T1.TEXT
+//DD2      DD DISP=(MOD,DELETE,DELETE),
+//            SPACE=(TRK,(1,10)),
+//            DSN=SAP.PBB.LCR.COF100T2.TEXT
+//DD3      DD DISP=(MOD,DELETE,DELETE),
+//            SPACE=(TRK,(1,10)),
+//            DSN=SAP.PBB.LCR.COF100T3.TEXT
+//DD4      DD DISP=(MOD,DELETE,DELETE),
+//            SPACE=(TRK,(1,10)),
+//            DSN=SAP.PBB.LCR.COFTOPTI.TEXT
+//DD5      DD DISP=(MOD,DELETE,DELETE),
+//            SPACE=(TRK,(1,10)),
+//            DSN=SAP.PBB.LCR.COFTOPTC.TEXT
+//*
+//EIBMTLCR EXEC SAS609
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//LCR      DD DSN=SAP.PBB.LCR.SASDATA,DISP=SHR
+//LIST     DD DSN=SAP.PBB.LCR.LISTDATA,DISP=OLD
+//TEMPL    DD DSN=SAP.PBB.LCR.COF100.TEMPLATE,DISP=SHR
+//COFOUT1  DD DSN=SAP.PBB.LCR.COF100T1.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,5)),UNIT=SYSDA
+//COFOUT2  DD DSN=SAP.PBB.LCR.COF100T2.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,5)),UNIT=SYSDA
+//COFOUT3  DD DSN=SAP.PBB.LCR.COF100T3.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,5)),UNIT=SYSDA
+//COFOUTI  DD DSN=SAP.PBB.LCR.COFTOPTI.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,5)),UNIT=SYSDA
+//COFOUTC  DD DSN=SAP.PBB.LCR.COFTOPTC.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=2000,BLKSIZE=20000),
+//            SPACE=(TRK,(10,5)),UNIT=SYSDA
+//SFTPFL   DD DSN=&&FTPPUT,DISP=(NEW,PASS),
+//            SPACE=(TRK,(1)),UNIT=SYSDA,RECFM=FB,LRECL=80
+//SASLIST  DD SYSOUT=*
+//SYSIN    DD *
+
+OPTIONS YEARCUTOFF=1960 NOCENTER NODATE NONUMBER MISSING=' ';
+
+%INC PGM(PBBLNFMT);
+
+PROC FORMAT;
+   VALUE $BICTAG
+      '95311'                        = 'A1.01'
+      '95312'                        = 'A1.02'
+      '95313'                        = 'A1.03'
+      '95810'                        = 'A1.04'
+      '95820'                        = 'A1.05'
+      '95830','9583X'                = 'A1.06'
+      '95840'                        = 'A1.07'
+      '95329'                        = 'A1.08'
+      '953XX'                        = 'A1.09'
+      '9531X'                        = 'A1.10'
+      '96311'                        = 'B1.01'
+      '96313'                        = 'B1.02'
+      '96810'                        = 'B1.03'
+      '96820'                        = 'B1.04'
+      '96830','9683X'                = 'B1.05'
+      '96840'                        = 'B1.06'
+      '96329'                        = 'B1.07'
+       OTHER                         = '     '
+       ;
+RUN;
+
+DATA _NULL_;
+   SET LCR.REPTDATE;
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('RPTDT',PUT(REPTDATE,YYMMDDN6.));
+   CALL SYMPUT('FILDT',PUT(REPTDATE,DDMMYYN6.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY10.));
+RUN;
+
+%LET EXCLCIS=%STR();
+PROC SQL NOPRINT;
+   SELECT DISTINCT CUSTNO INTO :EXCLCIS SEPARATED BY ','
+     FROM LIST.KEEP_TOP_DEP_EXCL_PBB
+    WHERE CUSTNO > 0;
+QUIT;
+
+PROC SORT DATA=LCR.VOSTRO OUT=VOSTRO; BY ACCTNO; RUN;
+
+DATA VOSTRO;
+   MERGE VOSTRO(IN=A) LCR.CISINFO;
+   BY ACCTNO;
+   IF A;
+   CMMCODE = '953XX';  *VOSTRO;
+   KEEP CMMCODE BRANCH ACCTNO CUSTCD CUSTNAME PRODUCT CURCODE
+        AMOUNT CUSTNO NEWIC CUSTNAME;
+RUN;
+
+DATA CMM;
+   SET LCR.CMM&REPTMON VOSTRO;
+RUN;
+PROC SORT DATA=CMM; BY NEWIC; RUN;
+
+PROC SORT DATA=LIST.COF_MNI_DEPOSITOR_LIST
+           OUT=COF_MNI_IDNO(KEEP=DEPID DEPGRP BUSSREG) NODUPKEY;
+   BY BUSSREG;
+RUN;
+
+DATA MNISRC1 XMNISRC(DROP=DEPID DEPGRP);
+   MERGE CMM(IN=A) COF_MNI_IDNO(RENAME=(BUSSREG=NEWIC));
+   BY NEWIC;
+   IF A;
+   IF CUSTNO IN (&EXCLCIS) THEN EXCL = 'Y';
+   IF DEPID > 0 THEN OUTPUT MNISRC1;
+   ELSE              OUTPUT XMNISRC;
+RUN;
+
+PROC SORT DATA=XMNISRC OUT=CMM; BY CUSTNO; RUN;
+PROC SORT DATA=LIST.COF_MNI_DEPOSITOR_LIST
+           OUT=COF_MNI_CUST(KEEP=DEPID DEPGRP CUSTNO) NODUPKEY;
+   BY CUSTNO;
+RUN;
+
+DATA MNISRC2 XMNISRC(DROP=DEPID);
+   MERGE CMM(IN=A) COF_MNI_CUST;
+   BY CUSTNO;
+   IF A;
+   IF DEPID > 0 THEN OUTPUT MNISRC2;
+   ELSE              OUTPUT XMNISRC;
+RUN;
+
+DATA XMNISRC;
+   SET XMNISRC;
+   BY CUSTNO;
+   RETAIN DEPID;
+   IF _N_ = 1 THEN DEPID = 5000;
+   IF FIRST.CUSTNO THEN DEPID = DEPID + 1;
+   DEPGRP = CUSTNAME;
+RUN;
+
+DATA MNISRC;
+   SET MNISRC1 MNISRC2 XMNISRC;
+   BIC = SUBSTR(CMMCODE,1,5);
+   SELECT(BIC);
+      WHEN('95311','96311') FD   = AMOUNT;
+      WHEN('95312')         SA   = AMOUNT;
+      WHEN('95313','96313') CA   = AMOUNT;
+      WHEN('953XX'        ) VOST = AMOUNT;
+      WHEN('9531X'        ) GOLD = AMOUNT;
+      WHEN('95840','96840') RNID = AMOUNT;
+      OTHERWISE             DELETE;
+   END;
+   IF EXCL NE 'Y' THEN DO; *19-3747;
+      FD2   = FD  ;
+      SA2   = SA  ;
+      CA2   = CA  ;
+      RNID2 = RNID;
+   END;
+   IF CUSTCD IN ('77','78','95','96') THEN CUSTYPE = 'I';
+   ELSE                                    CUSTYPE = 'C';
+RUN;
+PROC SORT; BY DEPID DEPGRP CUSTYPE; RUN;
+PROC SUMMARY DATA=MNISRC NWAY;
+   BY DEPID DEPGRP CUSTYPE;
+   VAR FD SA CA VOST GOLD RNID FD2 SA2 CA2 RNID2;
+   OUTPUT OUT=LIST.MNITOT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+%LET EXCLEQU=%STR();
+PROC SQL NOPRINT;
+   SELECT COMPRESS(CAT("'",CUSTNO,"'")) INTO :EXCLEQU SEPARATED BY ','
+     FROM LIST.KEEP_TOP_DEP_EXCL_EQU_PBB
+    WHERE CUSTNO NE '';
+QUIT;
+
+DATA CMM;
+   SET LCR.EQU&REPTMON;
+   WHERE CUSTNO NE '';
+   IF CUSTNO IN (&EXCLEQU) THEN EXCL = 'Y';
+RUN;
+PROC SORT; BY CUSTNO; RUN;
+
+PROC SORT DATA=LIST.COF_EQU_DEPOSITOR_LIST
+           OUT=COF_EQU_CUST(KEEP=DEPID DEPGRP CUSTNO LINKID) NODUPKEY;
+   BY CUSTNO;
+RUN;
+
+DATA EQUSRC XEQUSRC(DROP=DEPID);
+   MERGE CMM(IN=A) COF_EQU_CUST;
+   BY CUSTNO;
+   IF A;
+   IF DEPID > 0 THEN OUTPUT EQUSRC;
+   ELSE              OUTPUT XEQUSRC;
+RUN;
+
+DATA XEQUSRC;
+   SET XEQUSRC;
+   BY CUSTNO;
+   RETAIN DEPID;
+   IF _N_ = 1 THEN DEPID = 50005000;
+   IF FIRST.CUSTNO THEN DEPID = DEPID + 1;
+   IF DEPGRP = '' THEN DEPGRP = CUSTNAME;
+   IF DEPGRP = '' THEN DEPGRP = CUSTNO;
+RUN;
+
+DATA EQUSRC;
+   SET EQUSRC(IN=A) XEQUSRC;
+   BIC = SUBSTR(CMMCODE,1,5);
+   SELECT(BIC);
+      WHEN('95830','96830','9583X','9683X') STD  = AMOUNT;
+      WHEN('95840','96840')                 NID  = AMOUNT;
+      WHEN('95810','96810')                 IBB  = AMOUNT;
+      WHEN('95820','96820')                 REPO = AMOUNT;
+      WHEN('95329','96329')                 DCI  = AMOUNT;
+      OTHERWISE                             DELETE;
+   END;
+   IF EXCL NE 'Y' THEN DO; *19-3747;
+      STD2  = STD;
+      NID2  = NID;
+      DCI2  = DCI;
+   END;
+   IF BIC IN ('95850','96850') THEN DELETE; *N/A;
+   IF A & LINKID = . THEN LINKID = 50000000+DEPID;
+   IF LINKID = . THEN LINKID = DEPID;
+   IF CUSTFISS IN ('77','78','95','96') THEN CUSTYPE = 'I';
+   ELSE                                      CUSTYPE = 'C';
+RUN;
+PROC SORT; BY LINKID DEPGRP CUSTYPE; RUN;
+
+PROC SUMMARY DATA=EQUSRC NWAY;
+   BY LINKID DEPGRP CUSTYPE;
+   VAR STD NID IBB REPO DCI STD2 NID2 DCI2;
+   OUTPUT OUT=LIST.EQUTOT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA ALLSRC;
+   MERGE LIST.MNITOT LIST.EQUTOT(RENAME=(LINKID=DEPID CUSTYPE=CUSTYPEQ
+                                         DEPGRP=DEPGRPEQ));
+   BY DEPID;
+   IF DEPGRP = '' THEN DEPGRP = DEPGRPEQ;
+   IF CUSTYPE= '' THEN CUSTYPE= CUSTYPEQ;
+   NID = SUM(NID,RNID); *17-766;
+   TOT = SUM(FD,SA,GOLD,CA,STD,NID,IBB,REPO,DCI,VOST);
+   *19-3747;
+   MNI = SUM(FD2,SA2,CA2,RNID2);
+   EQU = SUM(STD2,NID2,DCI2);
+   TOT2= SUM(MNI,EQU);
+RUN;
+PROC SORT; BY DEPID DEPGRP CUSTYPE; RUN;
+
+PROC SUMMARY DATA=ALLSRC NWAY;
+   BY DEPID DEPGRP CUSTYPE;
+   VAR TOT2 MNI EQU;
+   OUTPUT OUT=ALLTOT2(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+PROC SORT DATA=ALLTOT2; BY CUSTYPE DESCENDING TOT2; RUN;
+
+%MACRO REPORT(CTYPE,DESC);
+DATA ALLTOT;
+   SET ALLTOT2(WHERE=(CUSTYPE="&CTYPE") OBS=50);
+   RANK = _N_;
+   DLM='05'X;
+   FILE COFOUT&CTYPE;
+   IF _N_=1 THEN DO;
+      PUT @001 'PUBLIC BANK BERHAD'
+          /    "TOP 50 LARGEST DEPOSITORS AS AT &RDATE"
+          /
+          /    "(i) Top 50 &DESC Depositors by Sources"
+          /
+          ;
+      PUT @001                                    DLM
+                'NOBS'                            DLM
+                'DEPOSITORS'                      DLM
+                'TOTAL BALANCE'                   DLM
+                'M&I'                             DLM
+                'EQUATION'                        DLM
+          ;
+   END;
+   FORMAT TOT2 MNI EQU COMMA20.2;
+   PUT @001                                  DLM
+             _N_                             DLM
+             DEPGRP                          DLM
+             TOT2                            DLM
+             MNI                             DLM
+             EQU                             DLM
+       ;
+RUN;
+
+PROC SORT DATA=ALLTOT; BY DEPID; RUN;
+PROC SORT DATA=MNISRC; BY DEPID; RUN;
+PROC SORT DATA=EQUSRC; BY LINKID; RUN;
+
+DATA ALLMNI;
+   MERGE ALLTOT(IN=A) MNISRC;
+   BY DEPID;
+   IF A;
+   SRC = '1 - M&I';
+RUN;
+DATA ALLEQU;
+   MERGE ALLTOT(IN=A) EQUSRC(DROP=DEPID RENAME=(LINKID=DEPID
+                                                CUSTNO=EQCUSTNO));
+   BY DEPID;
+   IF A;
+   SRC = '2 - EQU';
+RUN;
+
+DATA ALLTOT;
+   SET ALLMNI ALLEQU;
+   WHERE AMOUNT>0 AND EXCL NE 'Y' AND
+         BIC NOT IN ('953XX','9531X','95810','96810','95820','96820');
+RUN;
+PROC SORT; BY RANK SRC ACCTNO; RUN;
+
+DATA _NULL_;
+   SET ALLTOT END=LAST;
+   BY RANK SRC ACCTNO;
+   DLM='05'X;
+   FILE COFOUT&CTYPE MOD;
+   IF _N_=1 THEN DO;
+      PUT @001
+          /
+          /   "(ii) Detail Accounts Listing for Top 50 &DESC Depositors"
+          /
+          ;
+   END;
+   SRCX = SUBSTR(SRC,5,3);
+   RETAIN CNT;
+   IF FIRST.RANK THEN DO;
+      IF FIRST.SRC THEN CNT=0;
+      PUT @001  RANK                              DLM
+                DEPGRP '(' DEPID ')'              DLM
+          /
+          ;
+   END;
+   IF FIRST.SRC THEN DO;
+      CNT=0;
+      PUT @001                                    DLM
+                'Source: ' SRCX
+          /
+          ;
+      IF SRCX = 'M&I' THEN
+      PUT @001                                    DLM
+                'NO'                              DLM
+                'BRANCH'                          DLM
+                'ACCTNO'                          DLM
+                'CUSTNAME'                        DLM
+                'CUSTNO'                          DLM
+                'BUSSREG'                         DLM
+                'CUSTCD'                          DLM
+                'PRODUCT'                         DLM
+                'BALANCE'                         DLM
+          ;
+      ELSE
+      PUT @001                                    DLM
+                'NO'                              DLM
+                'DEALREF'                         DLM
+                'DEALTYPE'                        DLM
+                'NAME'                            DLM
+                'CUST MNEMONIC'                   DLM
+                'AMOUNT'                          DLM
+          ;
+   END;
+   IF FIRST.ACCTNO THEN CURBAL=0;
+   CURBAL+AMOUNT;
+   IF FIRST.RANK OR FIRST.SRC THEN TOTBAL=0;
+   TOTBAL+AMOUNT;
+   FORMAT CURBAL TOTBAL AMOUNT COMMA20.2;
+
+   IF LAST.ACCTNO THEN DO;
+      CNT+1;
+   IF SRCX = 'M&I' THEN
+   PUT @001                                    DLM
+             CNT                               DLM
+             BRANCH                            DLM
+             ACCTNO                            DLM
+             CUSTNAME                          DLM
+             CUSTNO                            DLM
+             NEWIC                             DLM
+             CUSTCD                            DLM
+             PRODUCT                           DLM
+             CURBAL                            DLM
+          ;
+   END;
+   IF SRCX NE 'M&I' THEN DO;
+      CNT+1;
+   PUT @001                                    DLM
+             CNT                               DLM
+             DEALREF                           DLM
+             DEALTYPE                          DLM
+             CUSTNAME                          DLM
+             EQCUSTNO                          DLM
+             AMOUNT                            DLM
+          ;
+   END;
+   IF LAST.RANK OR LAST.SRC THEN
+   IF SRCX = 'M&I' THEN
+   PUT @001                                    DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+             TOTBAL                            DLM
+          /
+          ;
+   ELSE
+   PUT @001                                    DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+             TOTBAL                            DLM
+          /
+          ;
+RUN;
+%MEND REPORT;
+%REPORT(I,Individual);
+%REPORT(C,Corporate);
+
+PROC SUMMARY DATA=ALLSRC NWAY;
+   BY DEPID DEPGRP;
+   VAR TOT FD SA GOLD CA STD NID IBB REPO DCI VOST;
+   OUTPUT OUT=ALLTOT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+PROC SORT DATA=ALLTOT; BY DESCENDING TOT; RUN;
+
+DATA ALLTOT;
+   SET ALLTOT(OBS=100);
+   RANK = _N_;
+   DLM='05'X;
+   FILE COFOUT1;
+   IF _N_=1 THEN DO;
+      PUT @001 'PUBLIC BANK BERHAD'
+          /    "TOP 100 LARGEST DEPOSITORS AS AT &RDATE"
+          /
+          /    '(i) Top 100 Depositors by Products'
+          /
+          ;
+      PUT @001                                    DLM
+                'NOBS'                            DLM
+                'DEPOSITORS'                      DLM
+                'TOTAL BALANCE'                   DLM
+                'FIXED DEPOSIT'                   DLM
+                'SAVINGS'                         DLM
+                'DEMAND DEPOSIT'                  DLM
+                'SHORT TERM DEPOSIT'              DLM
+                'NID ISSUED'                      DLM
+                'INTERBANK BORROWING'             DLM
+                'REPOS'                           DLM
+                'DUAL CURRENCY INVESTMENT'        DLM
+                'GOLD INVESTMENT'                 DLM
+                'VOSTRO'                          DLM
+          ;
+   END;
+   FORMAT TOT FD SA CA STD NID IBB REPO DCI GOLD VOST COMMA20.2;
+   PUT @001                                  DLM
+             _N_                             DLM
+             DEPGRP                          DLM
+             TOT                             DLM
+             FD                              DLM
+             SA                              DLM
+             CA                              DLM
+             STD                             DLM
+             NID                             DLM
+             IBB                             DLM
+             REPO                            DLM
+             DCI                             DLM
+             GOLD                            DLM
+             VOST                            DLM
+       ;
+RUN;
+
+PROC SORT DATA=ALLTOT; BY DEPID; RUN;
+PROC SORT DATA=MNISRC; BY DEPID; RUN;
+PROC SORT DATA=EQUSRC; BY LINKID; RUN;
+
+DATA ALLMNI;
+   MERGE ALLTOT(IN=A) MNISRC;
+   BY DEPID;
+   IF A;
+   SRC = '1 - M&I';
+RUN;
+DATA ALLEQU;
+   MERGE ALLTOT(IN=A) EQUSRC(DROP=DEPID RENAME=(LINKID=DEPID
+                                                CUSTNO=EQCUSTNO));
+   BY DEPID;
+   IF A;
+   SRC = '2 - EQU';
+RUN;
+
+DATA LIST.ALLTOT ALLTOT;
+   SET ALLMNI ALLEQU;
+   WHERE AMOUNT>0;
+RUN;
+PROC SORT; BY RANK SRC ACCTNO; RUN;
+
+DATA _NULL_;
+   SET ALLTOT END=LAST;
+   BY RANK SRC ACCTNO;
+   DLM='05'X;
+   FILE COFOUT2;
+   IF _N_=1 THEN DO;
+      PUT @001 'PUBLIC BANK BERHAD'
+          /    "TOP 100 LARGEST DEPOSITORS AS AT &RDATE"
+          /
+          /    '(ii) Detail Accounts Listing for Top 100 Depositors'
+          /
+          ;
+   END;
+   SRCX = SUBSTR(SRC,5,3);
+   RETAIN CNT;
+   IF FIRST.RANK THEN DO;
+      IF FIRST.SRC THEN CNT=0;
+      PUT @001  RANK                              DLM
+                DEPGRP '(' DEPID ')'              DLM
+          /
+          ;
+   END;
+   IF FIRST.SRC THEN DO;
+      CNT=0;
+      PUT @001                                    DLM
+                'Source: ' SRCX
+          /
+          ;
+      IF SRCX = 'M&I' THEN
+      PUT @001                                    DLM
+                'NO'                              DLM
+                'BRANCH'                          DLM
+                'ACCTNO'                          DLM
+                'CUSTNAME'                        DLM
+                'CUSTNO'                          DLM
+                'BUSSREG'                         DLM
+                'CUSTCD'                          DLM
+                'PRODUCT'                         DLM
+                'BALANCE'                         DLM
+          ;
+      ELSE
+      PUT @001                                    DLM
+                'NO'                              DLM
+                'DEALREF'                         DLM
+                'DEALTYPE'                        DLM
+                'NAME'                            DLM
+                'CUST MNEMONIC'                   DLM
+                'AMOUNT'                          DLM
+          ;
+   END;
+   IF FIRST.ACCTNO THEN CURBAL=0;
+   CURBAL+AMOUNT;
+   IF FIRST.RANK OR FIRST.SRC THEN TOTBAL=0;
+   TOTBAL+AMOUNT;
+   FORMAT TOT FD SA CA STD NID IBB REPO DCI GOLD VOST
+          CURBAL TOTBAL AMOUNT COMMA20.2;
+   IF LAST.ACCTNO THEN DO;
+      CNT+1;
+   IF SRCX = 'M&I' THEN
+   PUT @001                                    DLM
+             CNT                               DLM
+             BRANCH                            DLM
+             ACCTNO                            DLM
+             CUSTNAME                          DLM
+             CUSTNO                            DLM
+             NEWIC                             DLM
+             CUSTCD                            DLM
+             PRODUCT                           DLM
+             CURBAL                            DLM
+          ;
+   END;
+   IF SRCX NE 'M&I' THEN DO;
+      CNT+1;
+   PUT @001                                    DLM
+             CNT                               DLM
+             DEALREF                           DLM
+             DEALTYPE                          DLM
+             CUSTNAME                          DLM
+             EQCUSTNO                          DLM
+             AMOUNT                            DLM
+          ;
+   END;
+   IF LAST.RANK OR LAST.SRC THEN
+   IF SRCX = 'M&I' THEN
+   PUT @001                                    DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+             TOTBAL                            DLM
+          /
+          ;
+   ELSE
+   PUT @001                                    DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+                                               DLM
+             TOTBAL                            DLM
+          /
+          ;
+RUN;
+PROC SORT DATA=ALLTOT; BY RANK CMMCODE; RUN;
+PROC SORT DATA=ALLTOT OUT=RANKNM(KEEP=RANK DEPGRP DEPID) NODUPKEY;
+BY RANK; RUN;
+
+DATA TEMPLATE;
+   INFILE TEMPL;
+   INPUT @1  ITEM           $5.
+         @11 IDESC     $CHAR50.
+         ;
+   FORMAT AMOUNT BUC1-BUC7 COMMA20.2;
+   DO I=1 TO 100;
+      RANK=I;
+      OUTPUT;
+   END;
+RUN;
+PROC SORT; BY RANK ITEM; RUN;
+DATA TEMPLATE;
+   MERGE TEMPLATE(IN=A) RANKNM;
+   BY RANK;
+   IF A;
+RUN;
+
+PROC SUMMARY DATA=ALLTOT NWAY;
+   BY RANK CMMCODE;
+   VAR AMOUNT;
+   OUTPUT OUT=LCRCMM(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA LCRCMM;
+   SET LCRCMM;
+   FORMAT ITEM  $5.;
+   BIC    = SUBSTR(CMMCODE,1,5);
+   REM    = SUBSTR(CMMCODE,8,2);
+   ITEM   = PUT(BIC,$BICTAG.);
+   IF ITEM NE '';
+
+   /* NO SPECIFIC MATURITY */
+   IF BIC IN ('95312','95313','96313','9531X','953XX') THEN REM = '07';
+
+   SELECT(REM);
+      WHEN(01) BUC1 = AMOUNT;
+      WHEN(02) BUC2 = AMOUNT;
+      WHEN(03) BUC3 = AMOUNT;
+      WHEN(04) BUC4 = AMOUNT;
+      WHEN(05) BUC5 = AMOUNT;
+      WHEN(06) BUC6 = AMOUNT;
+      WHEN(07) BUC7 = AMOUNT;
+      OTHERWISE;
+   END;
+   PART1 = SUBSTR(ITEM,1,2);     /* GRAND TOTAL RETAIL & NON-RETAIL */
+RUN;
+PROC SORT; BY RANK ITEM; RUN;
+
+PROC SUMMARY DATA=LCRCMM NWAY;
+   BY RANK ITEM;
+   VAR AMOUNT BUC1-BUC7;
+   OUTPUT OUT=CMM(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+PROC SORT; BY RANK ITEM; RUN;
+
+PROC SUMMARY DATA=LCRCMM NWAY;
+   CLASS RANK PART1;
+   VAR AMOUNT BUC1-BUC7;
+   OUTPUT OUT=P1CMM(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+PROC SUMMARY DATA=LCRCMM NWAY;
+   CLASS RANK;
+   VAR AMOUNT BUC1-BUC7;
+   OUTPUT OUT=P2CMM(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA TOTCMM;
+   SET P1CMM(IN=A) P2CMM;
+   FORMAT ITEM  $5.;
+   IF A THEN ITEM = COMPRESS(PART1 || '.99');
+   ELSE      ITEM = 'C9.99';
+RUN;
+PROC SORT DATA=TOTCMM; BY RANK ITEM; RUN;
+
+DATA _NULL_;
+   MERGE TEMPLATE(IN=A) CMM TOTCMM;
+   BY RANK ITEM;
+   IF A;
+   DLM='05'X;
+   FILE COFOUT3;
+   IF _N_=1 THEN DO;
+      PUT @001 'PUBLIC BANK BERHAD'
+          /    "TOP 100 DEPOSITORS BY CONTRACTUAL MATURITY AS AT &RDATE"
+          /
+          /    '(iii) Top 100 Depositors by Contractual Maturity'
+          ;
+   END;
+   IF FIRST.RANK THEN DO;
+      PUT @001
+          /     RANK                              DLM
+                DEPGRP
+          /                                       DLM
+                'DEPOSIT TYPE'                    DLM
+                'UP TO 1 WEEK'                    DLM
+                '> 1 WK - 1 MTH'                  DLM
+                '> 1 - 3 MTHS'                    DLM
+                '> 3 - 6 MTHS'                    DLM
+                '> 6 MTHS -  1 YR'                DLM
+                '> 1 YEAR'                        DLM
+                'NO SPECIFIC MATURITY'            DLM
+                'TOTAL'                           DLM
+          ;
+   END;
+   FORMAT AMOUNT BUC1-BUC7 COMMA20.2;
+   PUT @001                                  DLM
+             IDESC        $CHAR50.           DLM
+             BUC1                            DLM
+             BUC2                            DLM
+             BUC3                            DLM
+             BUC4                            DLM
+             BUC5                            DLM
+             BUC6                            DLM
+             BUC7                            DLM
+             AMOUNT                          DLM
+       ;
+RUN;
+
+DATA _NULL_;
+   FILE SFTPFL;
+   PUT @1 "cd ""FD-BNM REPORTING/PBB/LCR_MT_NSFR/CASH OUTFLOWS"""
+        / "put //SAP.PBB.LCR.COF100T1.TEXT  COF_&FILDT._TBL1.XLS"
+        / "put //SAP.PBB.LCR.COF100T2.TEXT  COF_&FILDT._TBL2.XLS"
+        / "put //SAP.PBB.LCR.COF100T3.TEXT  COF_&FILDT._TBL3.XLS"
+        / "put //SAP.PBB.LCR.COFTOPTI.TEXT  TOP50_&FILDT._IND.XLS"
+        / "put //SAP.PBB.LCR.COFTOPTC.TEXT  TOP50_&FILDT._CORP.XLS"
+        ;
+RUN;
+//*---------------------------------------------------------
+//* FTP HOST DATASETS TO DATA REPORT REPOSITORY SYSTEM (DRR)
+//*---------------------------------------------------------
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(DRR#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+//           DD DISP=SHR,DSN=&&FTPPUT
+//           DD *
+EOB
+/*
