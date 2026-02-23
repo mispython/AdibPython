@@ -1,0 +1,646 @@
+//EIVDLNEX JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M
+/*JOBPARM S=S1M1
+//***************************************************
+//* PIVB EXTRACTION (IVP#LOAN#EXTRACT)
+//* ESMR 2018-195
+//***************************************************
+//SAS609    EXEC SAS609
+//ACCTFILE  DD DSN=IVP2.SAS.B124.ACCTFILE,DISP=SHR
+//          DD DSN=IVP2.SAS.B124.ACC3FILE,DISP=SHR
+//COMTFILE  DD DSN=IVP2.SAS.B124.COMTFILE,DISP=SHR
+//COMPFILE  DD DSN=IVP2.SAS.B124.COMPFILE,DISP=SHR
+//ACC1FILE  DD DSN=IVP2.SAS.B124.ACC1FILE,DISP=SHR
+//NAMEFILE  DD DSN=IVP2.SAS.B124.NAM1FILE,DISP=SHR
+//LIABFILE  DD DSN=IVP2.SAS.B124.LIABFILE,DISP=SHR
+//NAM8FILE  DD DSN=IVP2.SAS.B124.NAM8FILE,DISP=SHR
+//NAM9FILE  DD DSN=IVP2.SAS.B124.NAM9FILE,DISP=SHR
+//DATEFILE  DD DSN=IVP2.SAS.B124.DATEFILE,DISP=SHR
+//PENDFILE  DD DSN=IVP2.SAS.B124.PENDFILE,DISP=SHR
+//RATEFILE  DD DSN=IVP2.SAS.B124.RATEFILE,DISP=SHR
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//LOAN      DD DSN=SAP.PIVB.MNILN.DAILY(+1),
+//             DISP=(NEW,CATLG,DELETE),
+//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//             SPACE=(CYL,(100,100),RLSE),UNIT=SYSDA
+//SORTWK01  DD UNIT=SYSDA,SPACE=(CYL,500)
+//SORTWK02  DD UNIT=SYSDA,SPACE=(CYL,500)
+//SORTWK03  DD UNIT=SYSDA,SPACE=(CYL,500)
+//SYSIN     DD *
+
+OPTIONS NOCENTER YEARCUTOFF=1950 LS=132;
+
+DATA LOAN.REPTDATE;
+   INFILE DATEFILE LRECL=80 OBS=1;
+   INPUT @01  EXTDATE   11.;
+   REPTDATE=INPUT(SUBSTR(PUT(EXTDATE, Z11.), 1, 8), MMDDYY8.);
+   CALL SYMPUT ('RDATE',REPTDATE);
+RUN;
+PROC PRINT DATA=LOAN.REPTDATE;
+
+DATA LNNOTE(DROP=MODELR DD MM YY NACODT LOCK_IN_END_DTX);
+  INFILE ACCTFILE;
+  INPUT @001 ACCTNO    PD6.
+        @007 NAME      $24.
+        @031 TAXNO     $11.
+        @042 ORGTYPE    $1.
+        @043 GUAREND   $20.
+        @063 BANKNO    PD2.
+        @065 APPCODE    $1.
+        @066 ACCBRCH   PD4.
+        @070 CUSTCODE  PD3.
+        @073 PURPOSE    $1.
+        @074 FOREIGN    $6.
+        @080 BKRPTIND   $1.
+        @081 NOTENO    PD3.
+        @084 REVERSED   $1.
+        @085 LOANTYPE  PD2.
+        @087 NTBRCH    PD4.
+        @091 PENDBRH   PD4.
+        @095 ISSUEDT   PD6.
+        @101 NOTEMAT   PD6.
+        @107 ASSMDATE  PD6.   /*  ESMR:2010-1566  */
+        @113 LASTTRAN  PD6.
+        @119 LSTTRNCD  PD2.
+        @121 CURBAL    PD8.2
+        @129 INTAMT    PD8.2
+        @137 PRINBNP   PD8.2
+        @145 APPVALUE  PD8.2
+        @153 NOTETERM  PD2.
+        @155 COLLDESC  $CHAR70.
+        @225 FLAG3      $1.
+        @226 SYNDIND    $1.
+        @227 FLAG5      $1.
+        @229 DLIVRYDT  PD6.
+        @235 COMMNO    PD2.
+        @237 CORPCODE   $1.
+        @238 COSTCTR   PD4.
+        @242 PCOSTCTR  PD4.
+        @246 SECTOR     $4.
+        @250 CENSUS    PD4.2
+        @254 BILLTYPE   $1.
+        @255 GRANTDT   PD6.
+        @261 PAIDIND    $1.
+        @262 ORGBAL    PD8.2
+        @270 NETPROC   PD8.2
+        @278 FEEDUE    PD8.2
+        @286 INTRATE   PD5.6
+        @291 SPREAD    PD5.6
+        @296 NTINT      $1.
+        @297 INTMAINT  PD6.
+        @303 REBATE    PD8.2
+        @311 INTEARN   PD8.2
+        @319 ACCRUAL   PD8.7
+        @327 RISKRATE   $4.
+        @331 SECURE     $1.
+        @332 LIABCODE   $2.
+        @334 FLAG1      $1.
+        @335 MORTGIND   $1.
+        @336 REFINANC   $1.
+        @337 SBA        $1.
+        @338 LOANSTAT    1.
+        @339 NONACCR    $1.
+        @340 DEALERNO  PD6.
+        @346 MATUREDT  PD6.
+        @352 BORSTAT    $1.
+        @353 MARKETVL  PD5.
+        @358 COLLMAKE   $6.
+        @364 EARNTERM  PD2.
+        @366 USURYIDX  PD2.
+        @368 STATE      $6.
+        @400 INTEARN2  PD8.2
+        @408 INTEARN3  PD8.2
+        @416 INTEARN4  PD8.2
+        @424 PAYAMT    PD8.2
+        @440 PAYFREQ    $1.
+        @441 FEETOTAL  PD8.2
+        @449 FEETOT2   PD8.2
+        @457 FEEAMT    PD8.2
+        @465 FEEAMT2   PD8.2
+        @473 FEEAMT3   PD8.2
+        @481 NXDUEDT   PD6.
+        @506 BILDUE    PD6.
+        @512 BILTOT    PD8.2
+        @520 BILPAY    PD8.2
+        @528 BILPRIN   PD8.2
+        @536 HSTOTAMT  PD8.2
+        @544 PAYTYPE    $1.
+        @545 HSTOTPAY  PD8.2
+        @553 DISPYIND   1.
+        @554 FEEAMT4   PD8.2
+        @562 REBIND     $1.
+        @563 APPRDATE  PD6.
+        @569 POSTNTRN   $1.
+        @570 LSTTRNAM  PD8.2
+        @578 INTBNP    PD8.2
+        @586 NTAPR     PD5.6
+        @591 ORIGRATE  PD5.6
+        @596 VINNO     $20.
+        @616 RESTIND    $1.
+        @617 TOTPDEOP  PD8.2
+        @625 USER2      $1.
+        @626 USER3      $1.
+        @627 USER4      $1.
+        @628 POSTCODE  PD5.
+        @633 INTPDYTD  PD8.2
+        @641 ACCRUYTD  PD8.7
+        @649 ACCRUEOP  PD8.7
+        @657 BIRTHDT   PD6.
+        @663 NTINDEX   PD2.
+        @665 MTDINT    PD8.7
+        @673 SCORE1     $4.
+        @677 REBATEI   PD8.2
+        @687 ACCTYIND  PD2.
+        @689 ACCOSTCT  PD4.
+        @693 INTINYTD  PD8.2
+        @701 BILLCNT   PD3.
+        @704 PREVBRNO  PD4.
+        @708 SCORE2     $4.
+        @712 HSTPRIN   PD8.2
+        @720 CRISPURP   $4.
+        @724 USER1      $1.
+        @725 ACCTPBRH  PD4.
+        @729 HSTINT    PD8.2
+        @737 PAIDOFF    $2.
+        @764 NFEEAMT5  PD8.2
+        @772 NFEEAMT6  PD8.2
+        @780 NFEEAMT7  PD8.2
+        @796 NOOFPAY   PD3.
+        @799 NDHISSDT  PD5.        /* PFB STARTS HERE */
+        @804 NDPAYIND   $1.
+        @805 NDHEXPDT  PD5.
+        @810 ROPAYIND   $1.
+        @811 PAIDTODT  PD8.2
+        @819 FEEYTD    PD8.2
+        @827 FEEPDYTD  PD8.2
+        @835 RSRVTERM  PD2.
+        @837 BILPDYTD  PD8.2
+        @845 FEEYTDX   PD8.2
+        @853 FEPDYTDX  PD8.2
+        @861 FEEAMT8   PD8.2
+        @869 FEEAMT9   PD8.2
+        @877 MINIFEE   PD8.2
+        @885 FEEAMT13  PD8.2
+        @893 APPLDATE  PD6.
+        @899 PZIPCODE  PD5.
+        @904 FEEAMT10  PD8.2
+        @912 FEEAMT11  PD8.2
+        @920 FEEAMT12  PD8.2
+        @928 FEEAMT14  PD8.2
+        @936 FEEAMT15  PD8.2
+        @944 FEEAMT16  PD8.2
+        @952 FEEEARN1  PD8.2
+        @960 FEEEARN2  PD8.2
+        @968 COLLYEAR  PD3.
+        @971 HSTOTAMT  PD8.2
+        @979 HSTOTPAY  PD8.2
+        @987 DISBIND1   $1.
+        @988 PRINPAID  PD8.2
+        @996 INTPAID   PD8.2
+       @1004 HTOTAMT2  PD8.2
+       @1012 HTOTPAY2  PD8.2
+       @1020 PRINYTD   PD8.2
+       @1028 OSTDAMT   PD8.2
+       @1036 PAYNUM    PD3.
+       @1039 RSRVREBI   $1.
+       @1040 TERMIDAT  PD6.
+       @1046 TMLATE15  PD2.
+       @1048 TMLATE30  PD2.
+       @1050 TMLATE60  PD2.
+       @1052 TMLATE90  PD2.
+       @1054 BONUSANO  PD9.
+       @1063 DELQCD    $2.
+       @1065 FEEPLAN   $2.
+       @1067 FEERATE   PD3.2
+       @1070 WORDTYP   $1.
+       @1071 HISPTDT   PD6.
+       @1077 STAFFNO   PD6.
+       @1083 PAYEFFDT  PD6.
+       @1089 AANUMBR   $20.   /* ELDS AA */
+       @1111 APPORMT   PD2.
+       @1116 ECSRRSRV  PD8.2
+       @1128 COSTFUND  PD4.4
+       @1140 POFFICER  PD3.
+       @1143 NPLCRR    $4.
+       @1156 CUSTCDX   PD3.
+       @1167 FORM2     PD8.7            /* ESMR 2011-1914 */
+       @1175 FORM1     PD8.2            /* ESMR 2011-1914 */
+       @1183 STATUSDT  PD6.
+       @1225 INTBUYPD  PD8.2
+       @1233 MODELDES  $6.
+       @1239 YTDEARNS  PD8.2
+       @1247 ESCRACCT  PD6.             /* ESMR 2008-0021 */
+       @1253 RESTBALC  PD8.2            /* ESMR 2008-0863 */
+       @1261 INTRATE2  PD5.6
+       @1266 RATELMT2  PD8.2
+       @1274 PRMOFFHP  PD3.             /* ESMR 2007-1532 */
+       @1277 POINTAMT  PD8.2            /* ESMR 2008-0021 */
+       @1285 CEILINGO  PD5.6            /* ESMR 2008-0162 */
+       @1290 CEILINGU  PD5.6            /* ESMR 2008-0162 */
+       @1295 BILDUE1   PD6.             /* ESMR 2008-0642 */
+       @1301 MAILCODE   $2.             /* ESMR 2011-1914 */
+       @1303 NXBILDT   PD6.             /* AS PER-EMAIL 24/4/09 GJY*/
+       @1317 PAYIND     $1.             /* ESMR 2009-0577 */
+       @1318 SITYPE     $1.             /* ESMR 2010-4272 */
+       @1319 SIACCTNO  PD6.             /* ESMR 2010-4272 */
+       @1325 OLDUNPAID PD6.             /* OLDEST UNPAID BILL - SCEL */
+       @1335 VARSTDTE  PD6.             /* ESMR 2011-1914 */
+       @1341 USER5      $1.             /* ESMR 2010-4473 */
+       @1353 SENDNBL    $1.             /* SEND NO BILL: 2009-1945 */
+       @1354 FRELEAS   PD6.             /* ESMR 2010-1003 */
+       @1360 USMARGIN  PD3.3            /* ESMR 2011-1914 */
+       @1363 USEDIT     $1.             /* ESMR 2011-1914 */
+       @1364 FEECOMBIND $1.             /* ESMR 2011-1914 */
+       @1375 CURCODE    $3.             /* ESMR 2010-1811 */
+       @1378 STOPDEBIT  $1.             /* ESMR 2011-1914 */
+       @1388 SM_STATUS  $1.             /* ESMR 2011-610  */
+       @1398 CASHPRICE PD9.2            /* ESMR 2011-2425 */
+       @1415 REACCRUAL  $1.             /* ESMR 2011-1914 */
+       @1416 LATENOTICE $1.             /* ESMR 2011-1914 */
+       @1417 GUARNOTICE $1.             /* ESMR 2011-1914 */
+       @1418 INTBASIS    1.             /* ESMR 2011-1914 */
+       @1419 MEMOACC   PD8.7            /* ESMR 2011-1914 */
+       @1427 EXCESSPAY PD8.2            /* ESMR 2011-1914 */
+       @1436 BILLEADDAY PD2.            /* ESMR 2011-1914 */
+       @1438 DEATHDATE PD6.             /* ESMR 2011-1914 */
+       @1444 INTSTDTE  PD6.             /* ESMR 2011-1914 */
+       @1450 AUTNACCR   $1.             /* ESMR 2011-1914 */
+       @1452 NACODT    PD6.             /* ESMR 2017-495  */
+       @1464 CFINDEX   PD2.
+   /*  @1512 NUMCPNS   PD2.                ESMR 2013-0884 */
+       @1514 EXRATIO   PD3.             /* ESMR 2013-1086 */
+       @1539 CONTRTYPE  $2.             /* ESMR 2014-2064 */
+       @1542 BILDUEMIG PD6.             /* ESMR 2013-0934 */
+       @1541 NPLCRRBPA  $1.             /* ESMR 2014-2064 */
+       @1556 FDACCTNO_  $17.            /* ESMR 2017-3167 */
+       @1573 FDCERTNO  PD5.             /* ESMR 2017-3167 */
+       @1582 FCLOSUREDT PD6.            /* ESMR 2014-0794 */
+       @1588 RRCYCLE    $3.             /* ESMR 2014-1918 */
+       @1591 VB         $1.             /* ESMR 2014-2876 */
+       @1609 CPNSTDTE   PD6.            /* ESMR 2015-1081 */
+       @1615 INSOLVENCY_IND  $1.        /* ESMR 2018-2570 */
+       @1624 CURRILDTE  PD6.            /* ESMR 2016-176  */
+       @1630 FIRSILDTE  PD6.            /* ESMR 2016-176  */
+       @1636 NUMCPNS     4.             /* ESMR 2015-2489 */
+       @1640 RSN        $1.             /* ESMR 2015-2489 */
+       @1641 PTMNATE    $CHAR11.        /* ESMR 2016-338  */
+       @1676 ASCORE_PERM $8.            /* ESMR 2016-317 */
+       @1684 ASCORE_LTST $8.            /* ESMR 2016-317 */
+       @1692 OLDRR      $1.             /* ESMR 2016-210  */
+       @1693 EARLY_SETTLE_FEE_CHARGE_FLG $1. /* ESMR 2017-4352 */
+       @1694 LOCK_IN_END_DTX PD5.      /* ESMR 2017-4352 */
+       @1699 ACCTREVDT  PD5.            /* ESMR 2016-1672 */
+       @1704 MNIAPLMT  PD8.2            /* ESMR 2016-1763 */
+       @1712 MNIAPDT   PD5.             /* ESMR 2016-1763 */
+       @1724 ABM_HL     $1.             /* ESMR 2016-1677 */
+       @1725 IA_LRU     $1.             /* ESMR 2016-1677 */
+       @1726 COMMNO_OLD  3.             /* ESMR 2016-3345 */
+       @1758 TIMES_RENEWED PD2.         /* ESMR 2016-4304 */
+       @1775 CCRIS_INSTLAMT PD8.2       /* ESMR 2017-2395 */
+       @1785 NURS_TAG     $6.           /* ESMR 2017-3451 */
+       @1791 NUR_STARTDT DDMMYY8.      /* EMSR 2017-3451 */
+       @1799 NURS_TAGDT  DDMMYY8.      /* ESMR 2017-3451 */
+       @1807 NURS_ENDDT  DDMMYY8.      /* EMSR 2017-3451 */
+       @1815 NURS_COUNTER PD3.          /* EMSR 2017-3451 */
+       @1818 WRIOFF_DT    $8.           /* EMSR 2017-3451 */
+       @1826 WRIOFF_AMT   PD8.          /* EMSR 2017-3451 */
+       @1834 CUM_WRIOFF   PD8.          /* EMSR 2017-3451 */
+       @1842 RECOVER_COST PD8.          /* EMSR 2017-3451 */
+       @1850 ASCORE_COMM $12.           /* ESMR 2017-4001 */
+       @1862 REPOSDTE        $8.        /* EMSR 2018-153  */
+       @1870 VALUEDTE        $8.        /* EMSR 2018-153  */
+       @1878 DISPOSED_AMT   PD8.2       /* EMSR 2018-153  */
+       @1886 DSR            PD3.2       /* EMSR 2018-490  */
+       @1889 REPAY_SOURCE   PD3.        /* EMSR 2018-490  */
+       @1892 REPAY_TYPE_CD   $2.        /* EMSR 2018-490  */
+       @1894 MTD_REPAID_AMT PD9.2       /* EMSR 2018-490  */
+       @1903 MTD_TAWIDH_AMT   PD9.2     /* EMSR 2018-520  */
+       @1912 MTD_GHARAMAH_AMT PD9.2     /* EMSR 2018-520  */
+       @1942 INDUSTRIAL_SECTOR_CD $8.   /* ESMR 2018-874  */
+       @1950 PROMPT_PAY_TRACKER $4.     /* EMSR 2017-4463 */
+       @1954 MAN_REV_RATE     PD5.6     /* ESMR 2017-3654 */
+       @1959 MAN_REV_DATE     $8.       /* ESMR 2017-3654 */
+       @1967 SYS_REV_RATE     PD5.6     /* ESMR 2017-3654 */
+       @1972 SYS_REV_DATE     $8.       /* ESMR 2017-3654 */
+       ;
+
+   FORMAT  FDACCTNO 10.;
+   FDACCTNO=SUBSTRN(COMPRESS(FDACCTNO_,' ',''),1,10);
+   ASCORE_PERM = TRANSLATE(ASCORE_PERM,"[]","��");
+   ASCORE_LTST = TRANSLATE(ASCORE_LTST,"[]","��");
+   ASCORE_COMM = TRANSLATE(ASCORE_COMM,"[]","��");
+   NACOSPADT = INPUT(SUBSTR(PUT(NACODT,Z11.),1,8),MMDDYY8.);
+   IF LOCK_IN_END_DTX NOT IN (0,.) THEN DO;
+   LOCK_IN_END_DT =INPUT(SUBSTR(PUT(LOCK_IN_END_DTX,Z8.),1,8),DDMMYY8.)
+   ;
+   END;
+   FDB= SBA;
+   CP = SUBSTR(PTMNATE,8,1);
+   SM_DATE = APPLDATE;
+   IF SM_DATE NE 0 THEN DO;
+      MM= SUBSTR(SM_DATE,2,2);
+      DD= SUBSTR(SM_DATE,4,2);
+      YY= SUBSTR(SM_DATE,6,4);
+      SM_DATE = MDY(MM,DD,YY);
+   END;
+
+   INTPYTD1=INTPDYTD+INTINYTD-INTBUYPD;
+   CUSTCDR=CUSTCODE; /* FOR CCRIS IDIC - ACCT LEVEL CUSTCODE */
+   IF CUSTCODE < 100 OR CUSTCDX = 0 THEN DNBFISME = '0';
+
+   IF (0<CUSTCDX<=99) THEN DO;
+       CUSTCODE = CUSTCDX;
+       DNBFISME = '0';
+   END;
+   ELSE IF (100<=CUSTCDX<=999) THEN DO;
+           CUSTCODE=INPUT(SUBSTR(PUT(CUSTCDX,3.),2,2),2.);
+           DNBFISME=INPUT(SUBSTR(PUT(CUSTCDX,3.),1,1),$1.);
+   END;
+   ELSE IF (1000<=CUSTCDX<=9999) THEN DO;
+           CUSTCODE=INPUT(SUBSTR(PUT(CUSTCDX,4.),3,2),2.);
+           DNBFISME=INPUT(SUBSTR(PUT(CUSTCDX,4.),2,1),$1.);
+   END;
+   ELSE IF (10000<=CUSTCDX<=99999) THEN DO;
+           CUSTCODE=INPUT(SUBSTR(PUT(CUSTCDX,5.),4,2),2.);
+           DNBFISME=INPUT(SUBSTR(PUT(CUSTCDX,5.),3,1),$1.);
+   END;
+
+   SYNRATIO=APPORMT;
+   APPORMT=APPORMT*0.01;
+   EXRATIO=EXRATIO*0.01;
+
+  IF MNIAPDT GT 0 THEN
+     MNIAPDTE = INPUT(SUBSTR(PUT(MNIAPDT,Z8.),1,8),DDMMYY8.);
+
+  IF NXDUEDT GT 0 THEN
+     NXDUEDT= INPUT(SUBSTR(PUT(NXDUEDT,Z11.),1,8),YYMMDD8.);
+
+  IF NXBILDT GT 0 THEN
+     NXTBIL = INPUT(SUBSTR(PUT(NXBILDT,Z11.),1,8),MMDDYY8.);
+
+  IF BILDUE1 GT 0 THEN
+     BLDATE = INPUT(SUBSTR(PUT(BILDUE1,Z11.),1,8),YYMMDD8.);
+
+  IF DLIVRYDT GT 0 THEN
+     DLVDATE= INPUT(SUBSTR(PUT(DLIVRYDT,Z11.),1,8),MMDDYY8.);
+
+  IF NTINT = 'A' THEN
+     BALANCE=SUM(CURBAL,INTEARN,(-1)*INTAMT,FEEAMT);
+  ELSE
+     BALANCE=SUM(CURBAL,ACCRUAL,FEEAMT);
+
+*;
+DATA LOAN.LNACCT(DROP=DD MM YY);
+   INFILE ACC1FILE;
+   INPUT @001 ACCTNO    PD6.
+         @007 NAME      $24.
+         @031 TAXNO     $11.
+         @042 ORGTYPE    $1.
+         @043 GUAREND   $20.
+         @063 BANKNO    PD2.
+         @065 APPCODE    $1.
+         @066 ACCBRCH   PD4.
+         @070 CUSTCODE  PD3.
+         @073 PURPOSE    $1.
+         @074 FOREIGN    $6.
+         @080 BKRPTIND   $1.
+         @081 USER2      $1.
+         @082 USER3      $1.
+         @083 USER4      $1.
+         @084 POSTCODE  PD5.
+         @089 BIRTHDT   PD6.
+         @097 COSTCTR   PD4.
+         @113 PRMOFFHP  PD3.             /* ESMR 2007-1532 */
+         @116 SM_STATUS  $1.             /* ESMR 2011-610  */
+         @117 SM_DATE   PD5.             /* ESMR 2011-610  */
+         ;
+     IF SM_DATE NE 0 THEN DO;
+        MM= SUBSTR(SM_DATE,5,2);
+        DD= SUBSTR(SM_DATE,7,2);
+        YY= SUBSTR(SM_DATE,9,4);
+        SM_DATE = MDY(MM,DD,YY);
+     END;
+*;
+DATA LNCOMM;
+  INFILE COMTFILE;
+  INPUT @001 BANKNO    PD3.
+        @004 ACCTNO    PD6.
+        @010 COMMNO    PD2.
+        @012 CCOLLTRL   $2.
+        @014 CPRODUCT   $3.
+        @017 CORGAMT   PD8.2
+        @025 CCURAMT   PD8.2
+        @033 CAVAIAMT  PD8.2
+        @041 CUSEDAMT  PD8.2
+        @049 CAPPDATE  PD6.
+        @055 EXPIREDT  PD6.
+        @061 REVOVLI    $1.
+        @062 ACTIND     $1.
+        @063 CMBRCH    PD4.
+        @067 CORIGMT   PD2.
+        @069 CSTATE     $6.
+        @075 HSTNCDOR  PD8.2
+        @083 HSTCADAD  PD8.2
+        @091 CSECTOR    $4.
+        @095 CMHSTADJ  PD8.2
+        @103 UNUSEAMT  PD8.2  /* CMHSTAD2 */
+        @111 CMHSTAD3  PD8.2;
+*;
+DATA LOAN.HPCOMP;
+   INFILE COMPFILE;
+   INPUT @01  BANKNO     PD2.
+         @03  DEALERNO   PD6.
+         @09  COMPNAME   $24.
+         @33  COMPADD1   $40.
+         @353 BRANCH     PD4.  /* ESMR 2013-1146 */
+         @357 DATEADDED  $6.;   /* ESMR 2013-1146 */
+*;
+DATA LNNAME;
+   ARRAY NAMELN $40. NAMELN1-NAMELN5;
+   INFILE NAMEFILE;
+   INPUT @01  ACCTNO     PD6.
+         @18  NAMELN(*)  $40.
+         @274 SECPHONE   PD6.
+         @280 PRIPHONE   PD6.;
+*;
+DATA LIAB;
+   INFILE LIABFILE;
+   INPUT @01 ACCTNO   PD6.
+         @07 NOTENO   PD3.
+         @10 LIABACCT PD6.
+         @16 LIABTYPE  $1.
+         @17 LIABNAME $24.;
+*;
+DATA NAME8;
+   INFILE NAM8FILE;
+   INPUT @001  ACCTNO   PD6.
+         @007  SEQKEY    $1.
+         @008  COUNTRY  $10.
+         @018  LINEONE  $40.
+         @058  LINETWO  $40.
+         @098  LINETHRE $40.
+         @138  LINEFOUR $40.
+         @178  LINEFIVE $40.
+         @218  NAME     $24.
+         @242  TAXNO    $11.
+         @253  ORGTYPE   $1.
+         @254  GUAREND  $20.
+         @274  DTEREGVH PD6.;          /*ESMR 2008-242*/
+*;
+PROC SORT; BY ACCTNO; RUN;
+*;
+DATA NAME9;
+   INFILE NAM9FILE;
+   INPUT @001  ACCTNO   PD6.
+         @007  SEQKEY    $1.
+         @008  COUNTRY  $10.
+         @018  ADRPLN1  $40.
+         @058  ADRPLN2  $40.
+         @098  ADRPLN3  $40.
+         @138  ADRPLN4  $40.
+         @178  ADRPLN5  $40.
+         @218  NAME     $24.
+         @242  TAXNO    $11.
+         @253  ORGTYPE   $1.
+         @254  GUAREND  $20.;
+*;
+DATA LNRATE;
+   INFILE RATEFILE MISSOVER;
+   INPUT @001 RINDEX    PD2.
+         @014 EFFDATE    PD6.
+         @041 CURRATE   PD5.6
+         ;
+   IF EFFDATE GT 0 THEN
+      EFFDATE = INPUT(SUBSTR(PUT(EFFDATE,Z11.),1,8),MMDDYY8.);
+   IF EFFDATE <= &RDATE;
+RUN;
+
+PROC SORT DATA=LNRATE; BY RINDEX DESCENDING EFFDATE; RUN;
+DATA LOAN.LNRATE;
+   SET LNRATE;
+   BY RINDEX;
+   IF FIRST.RINDEX THEN OUTPUT;
+RUN;
+
+DATA PEND;
+   INFILE PENDFILE;
+   INPUT @004  TRANTYPE PD2. @;
+   IF TRANTYPE = 400 THEN DO;
+      INPUT @006  ACCTNO   PD6.
+            @034  RELDTE   PD6.
+            @059  USERID   $8.
+            @249  NOTENO   5.
+            @284  ROVER    $10.
+            @294  RTIND    $1.
+            @295  ROVER1   $10.
+            @316  RINX     $3.
+            @319  RUNDER   $10.
+            @329  RUIND    $1.
+            @330  RUND1    $10.
+            @340  RUNDPCT  $10.
+            @350  RUNDLMT  $18.
+            ;
+      OUTPUT;
+   END;
+RUN;
+
+DATA PEND(DROP=ROVER ROVER1 RINX RUNDER RUND1 RUNDLMT);
+   SET PEND;
+   FORMAT RATEOVER MARGIN RTUNDER RATEUDR 8.6 RINDEX 3.
+          RATELMIT 18.0 ;
+   RATEOVER = ROVER;
+   MARGIN = ROVER1;
+   RINDEX = RINX;
+   RTUNDER = RUNDER;
+   RATEUDR = RUND1;
+   RATELMIT = RUNDLMT;
+   IF RATELMIT NOT IN (.,0) THEN RATELMIT = RATELMIT/100;
+RUN;
+
+PROC SORT DATA=LOAN.LNRATE OUT=RATE(KEEP=RINDEX CURRATE);
+   BY RINDEX; RUN;
+PROC SORT DATA=PEND; BY RINDEX; RUN;
+DATA PEND;
+   MERGE PEND(IN=A) RATE;
+   BY RINDEX;
+   IF A;
+   IF RATEOVER IN (0, .) THEN DO;
+      IF RTIND = '+' THEN ACCRATE  = SUM(CURRATE, MARGIN);
+      IF RTIND = '-' THEN ACCRATE  = SUM(CURRATE, (-1)*MARGIN);
+   END;
+   IF RATEUDR NOT IN (0, .) THEN DO;
+      IF RUIND = '+' THEN ACCUDRT  = SUM(CURRATE, RATEUDR);
+      IF RUIND = '-' THEN ACCUDRT  = SUM(CURRATE, (-1)*RATEUDR);
+   END;
+   IF RELDTE NOT IN (.,0) THEN
+      EFFDATE = INPUT(SUBSTR(PUT(RELDTE,Z11.),1,8),YYMMDD8.);
+RUN;
+PROC SORT DATA=LNNOTE; BY USURYIDX;
+*;
+DATA LNNOTE;
+   MERGE LNNOTE(IN=A)
+         RATE(KEEP=RINDEX CURRATE RENAME=(RINDEX=USURYIDX));
+   BY USURYIDX;
+   IF A;
+   USLIMIT=SUM(USMARGIN,CURRATE);
+RUN;
+PROC SORT DATA=LNNOTE;  BY ACCTNO NOTENO;
+*;
+
+DATA LOAN.LNNOTE LOAN.RVNOTE;
+   SET LNNOTE;
+   IF REVERSED ^= 'Y' THEN OUTPUT LOAN.LNNOTE;
+   ELSE                    OUTPUT LOAN.RVNOTE;
+*;
+
+DATA NOTE;
+     KEEP ACCTNO NOTENO;
+     SET LOAN.LNNOTE;
+PROC SORT DATA=LIAB; BY ACCTNO NOTENO;
+DATA LOAN.LIAB;
+   MERGE LIAB(IN=A) NOTE(IN=B);  BY ACCTNO NOTENO;
+   IF A AND B;
+RUN;
+PROC SORT DATA=PEND; BY ACCTNO NOTENO;
+DATA LOAN.PEND;
+   MERGE PEND(IN=A) NOTE(IN=B);  BY ACCTNO NOTENO;
+   IF A AND B;
+RUN;
+PROC SORT DATA=LNCOMM; BY ACCTNO COMMNO;
+PROC SORT DATA=LOAN.LNNOTE  OUT=COMM (KEEP=ACCTNO COMMNO)
+NODUPKEY; BY ACCTNO COMMNO;
+DATA LOAN.LNCOMM;
+   MERGE LNCOMM(IN=A) COMM(IN=B); BY ACCTNO COMMNO;
+   IF A AND B THEN OUTPUT;
+PROC SORT DATA=NAME8; BY ACCTNO;
+PROC SORT DATA=LOAN.LNNOTE  OUT=NAME (KEEP=ACCTNO)
+NODUPKEY; BY ACCTNO;
+DATA LOAN.NAME8;
+   MERGE NAME8(IN=A) NAME(IN=B); BY ACCTNO;
+   IF A AND B;
+RUN;
+PROC SORT DATA=NAME9; BY ACCTNO;
+DATA LOAN.NAME9;
+   MERGE NAME9(IN=A) NAME(IN=B); BY ACCTNO;
+   IF A AND B;
+PROC SORT DATA=LNNAME; BY ACCTNO;
+DATA LOAN.LNNAME;
+   MERGE LNNAME(IN=A) NAME(IN=B); BY ACCTNO;
+   IF A AND B;
+RUN;
+//***********************************************************
+//* WEEKLY OUTPUT DATASETS
+//***********************************************************
+//*%OPC SCAN
+//*%OPC SETFORM OCDATE=(DD)
+//*%OPC SETFORM OCLASTC=(DD)
+//*%OPC BEGIN ACTION=INCLUDE,
+//*%OPC COMP=(&OCDATE..EQ.(&OCLASTC))
+//COPYFILE EXEC PGM=ICEGENER
+//SYSPRINT DD SYSOUT=*
+//SYSUT1   DD DISP=SHR,DSN=SAP.PIVB.MNILN.DAILY(+1)
+//SYSUT2   DD DSN=SAP.PIVB.MNILN(+1),
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),
+//            SPACE=(CYL,(100,100),RLSE),UNIT=SYSDA
+//SYSIN    DD DUMMY
+//*%OPC END ACTION=INCLUDE
