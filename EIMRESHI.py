@@ -1,5 +1,5 @@
 """
-EIMRESHP - HP/Hire Purchase Loan Summary & Detail Report (Production Ready)
+EIMRESHI - HP/Hire Purchase Loan Summary & Detail Report (Production Ready)
 
 Purpose:
 - Generate summary reports for HP loans (Conv & Aitab) by various groupings
@@ -41,7 +41,7 @@ OUTPUT_DIR = 'data/output/'
 for d in [OUTPUT_DIR]:
     os.makedirs(d, exist_ok=True)
 
-print("EIMRESHP - HP Loan Summary & Detail Report")
+print("EIMRESHI - HP Loan Summary & Detail Report")
 print("=" * 60)
 
 # HP Products (from PBBLNFMT)
@@ -385,7 +385,7 @@ for i, report in enumerate(reports):
             report['subtitle']
         )
         
-        filename = f"EIMRESHP_SUMMARY_{i+1:02d}_{report['title'].replace(' ', '_')}.parquet"
+        filename = f"EIMRESHI_SUMMARY_{i+1:02d}_{report['title'].replace(' ', '_')}.parquet"
         df_report.write_parquet(f'{OUTPUT_DIR}{filename}')
         summary_count += 1
 
@@ -400,7 +400,7 @@ df_detail = df_hploan2.select([
     'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE'
 ]).sort(['ACCTNO', 'NOTENO'])
 
-df_detail.write_csv(f'{OUTPUT_DIR}EIMRESHP_DETAIL_NPL.csv', separator=';')
+df_detail.write_csv(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.csv', separator=';')
 
 # Calculate totals
 tot_acc = len(df_detail)
@@ -410,7 +410,7 @@ print(f"  ✓ Detail report: {tot_acc:,} NPL accounts")
 print(f"  ✓ Total balance: {tot_amt:,.2f}")
 
 print(f"\n{'='*60}")
-print(f"✓ EIMRESHP Complete!")
+print(f"✓ EIMRESHI Complete!")
 print(f"{'='*60}")
 print(f"\nOutputs:")
 print(f"  - {summary_count} summary reports (by category)")
