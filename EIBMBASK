@@ -1,0 +1,1646 @@
+//EIBMBASK JOB MISEIS,EIFMNPL,CLASS=A,MSGCLASS=X,
+//         NOTIFY=&SYSUID,USER=OPCC
+/*JOBPARM   S=S1M1
+//PRINT1   OUTPUT CLASS=K,
+//         NAME='MR.HEE POH WING',
+//         ROOM='14TH FLOOR',
+//         BUILDING='MENARA PBB',
+//         DEPT='CREDIT SUPERVISION',
+//         ADDRESS=('CASD','MENARA PUBLIC BANK',
+//         '146 JALAN AMPANG','50450 KUALA LUMPUR'),
+//         DEST=S1.LOCAL
+//DELETE   EXEC PGM=IEFBR14
+//DD1      DD DSN=SAP.PBB.NEWSURF2.NEW.TEXT,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(10,20))
+//DD2      DD DSN=SAP.PBB.NEWSURA.NEW.TEXT,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(10,20))
+//DD3      DD DSN=SAP.PBB.REDUCT.TEXT,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(10,20))
+//*
+//EIBMBASK EXEC SAS609
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//BNM      DD DSN=SAP.PBB.SASDATA,DISP=SHR
+//BTRADE   DD DSN=SAP.BT.SASDATA,DISP=SHR
+//MIS      DD DSN=SAP.PBB.BASKET.BASE,DISP=OLD
+//CISIND   DD DSN=SAP.PBB.CCRIS1.CCRISIND,DISP=SHR
+//CISCORP  DD DSN=SAP.PBB.CCRIS1.CCRISCOR,DISP=SHR
+//BNM1     DD DSN=SAP.PBB.MNILN(0),DISP=SHR
+//OD       DD DSN=SAP.PBB.MNILIMT(0),DISP=SHR
+//PREVOD   DD DSN=SAP.PBB.MNILIMT(-4),DISP=SHR
+//FC2B     DD DSN=SAP.PBB.NEWSURF2.NEW.TEXT,
+//             DISP=(MOD,CATLG,DELETE),
+//             DCB=(RECFM=FB,LRECL=320,BLKSIZE=32000),
+//             SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)
+//FC2A     DD DSN=SAP.PBB.NEWSURA.NEW.TEXT,
+//             DISP=(MOD,CATLG,DELETE),
+//             DCB=(RECFM=FB,LRECL=320,BLKSIZE=32000),
+//             SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)
+//REDUCT   DD DSN=SAP.PBB.REDUCT.TEXT,
+//             DISP=(MOD,CATLG,DELETE),
+//             DCB=(RECFM=FB,LRECL=320,BLKSIZE=32000),
+//             SPACE=(CYL,(100,100),RLSE),UNIT=(SYSDA,5)
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,(200))
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,(200))
+//SORTWK03 DD UNIT=SYSDA,SPACE=(CYL,(200))
+//SORTWK04 DD UNIT=SYSDA,SPACE=(CYL,(200))
+//SASLIST  DD SYSOUT=X
+OPTIONS YEARCUTOFF=1950 NOCENTER;
+*;
+%INC PGM(PBBLNFMT,PBBELF);
+*;
+*------------------------------------------------*
+*  GET REPTDATE                                  *
+*------------------------------------------------*;
+DATA REPTDATE;
+   SET BNM1.REPTDATE;
+   MM1 = MONTH(REPTDATE)-1;
+   IF MM1= 0 THEN MM1 = 12;
+   CALL SYMPUT('NOWK',PUT('4',$1.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('PREVMON',PUT(MM1,Z2.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+   CALL SYMPUT('RMONTH',PUT(REPTDATE,WORDDATE9.));
+   CALL SYMPUT('RYEAR',PUT(PUT(REPTDATE,YEAR2.)-1,Z2.));
+   CALL SYMPUT('REPTDT',REPTDATE);
+   IF MONTH(REPTDATE) IN (2,4,6,7,9,11,12) THEN
+      CALL SYMPUT('BTCADT',61);
+   ELSE IF MONTH(REPTDATE) IN (3,5,8,10) THEN CALL SYMPUT('BTCADT',62);
+   ELSE DO;
+      IF MONTH(REPTDATE)= 1 THEN DO;
+         IF MOD(YEAR(REPTDATE),4) = 0 THEN CALL SYMPUT('BTCADT',63);
+         ELSE CALL SYMPUT('BTCADT',64);
+      END;
+   END;
+
+RUN;
+*;
+DATA REPTDATE1;
+   SET PREVOD.REPTDATE;
+   CALL SYMPUT('PREPTDT',REPTDATE);
+RUN;
+
+PROC FORMAT;
+     VALUE  $RISKNAME     '0C' = 'CA '
+                          '1C' = 'SS1'
+                          '2S' = 'SS2'
+                          '3D' = 'D  '
+                          '4B' = 'B  ';
+
+     VALUE $TYPE          'D' = 'CB'
+                          'I' = 'IS';
+
+     VALUE $OPDIV         'CB'  = 'CORPORATE BANKING'
+                          'IS'   = 'ISLAMIC LOANS'
+                          OTHER = 'RETAIL BANKING';
+
+     VALUE $PRODFMT       '34180' = 'OVERDRAFT/TOD'
+                          '34240' = 'OVERDRAFT/TOD'
+                          '34190' = 'REVOLVING CREDIT'
+                          '34690' = 'REVOLVING CREDIT'
+                          '34111' = 'HIRE PURCHASE'
+                          '34120' = 'HOUSING LOAN'
+                          '34149' = 'FIXED LOAN'
+                          '34600' = 'FIXED LOAN'
+                          '34230' = 'PERSONAL'
+                          '34114' = 'BL'
+                          '34112' = 'LEASING'
+                           OTHER  = 'OTHERS';
+*;
+OPTIONS MISSING = 0 LINESIZE=256;
+
+%MACRO BASE;
+ %IF "&REPTMON" EQ "01" %THEN %DO;
+      DATA MIS.BASECA&RYEAR;
+       SET MIS.BASECA;
+    DATA MIS.BASENP&RYEAR;
+       SET MIS.BASENPL;
+    DATA MIS.BASECAX&RYEAR;
+       SET MIS.BASECAX;
+    DATA CAODBASE;
+       SET PREVOD.OVERDFT;
+       FORMAT RISKBASE 1.;
+       EXCESS = INPUT(SUBSTR(PUT(EXCESSDT,Z11.),1,8),MMDDYY8.);
+       EXCESSDT = EXCESS;
+       TODDAT = INPUT(SUBSTR(PUT(TODDATE,Z11.),1,8),MMDDYY8.);
+       TODDATE = TODDAT;
+       RISKBASE = RISKCODE;
+       NOTENO = .;
+       DAY1 = &PREPTDT - EXCESSDT+1 ;
+       DAY2 = &PREPTDT - TODDATE +1;
+       IF RISKCODE = '1' AND (1<=DAY1<=182 OR 1<=DAY2<=182);
+       KEEP ACCTNO NOTENO RISKBASE;
+    DATA CALNBASE;
+       SET BNM.LOAN&PREVMON&NOWK;
+       FORMAT RISKBASE 1.;
+       DAYS = &PREPTDT - BLDATE;
+       IF 2000000000 < ACCTNO < 3000000000 AND (RISKRTE = 1 AND
+       DAYS >= 90)
+       THEN DO;
+          RISKBASE = RISKRTE;
+          KEEP ACCTNO NOTENO RISKBASE;
+          OUTPUT;
+       END;
+       ELSE IF 8000000000 < ACCTNO < 9000000000 AND 90 <=DAYS <=182
+       THEN DO;
+          RISKBASE = 1;
+          KEEP ACCTNO NOTENO RISKBASE;
+          OUTPUT;
+       END;
+
+    DATA MIS.BASECA;
+       SET CAODBASE CALNBASE;
+
+    DATA MIS.BASENPL;
+       SET BNM.LOAN&PREVMON&NOWK;
+       DAYS = &PREPTDT - BLDATE;
+       IF 2000000000 < ACCTNO < 4000000000 AND RISKRTE IN (2,3,4)
+       THEN DO;
+          RISKBASE = RISKRTE;
+          KEEP ACCTNO NOTENO RISKBASE BLDATE;
+          OUTPUT;
+       END;
+       ELSE IF 8000000000 < ACCTNO < 9000000000 AND DAYS > 182 THEN DO;
+          RISKBASE = 2;
+          KEEP ACCTNO NOTENO RISKBASE BLDATE;
+          OUTPUT;
+       END;
+
+    DATA CAODBASX;
+       SET PREVOD.OVERDFT;
+       FORMAT RISKBASE 1.;
+       EXCESS = INPUT(SUBSTR(PUT(EXCESSDT,Z11.),1,8),MMDDYY8.);
+       EXCESSDT = EXCESS;
+       TODDAT = INPUT(SUBSTR(PUT(TODDATE,Z11.),1,8),MMDDYY8.);
+       TODDATE = TODDAT;
+       RISKBASE = 0;
+       NOTENO = .;
+       DAY1 = &PREPTDT - EXCESSDT+1 ;
+       DAY2 = &PREPTDT - TODDATE +1;
+       IF (60<=DAY1<=89 OR 60<=DAY2<=89);
+       KEEP ACCTNO NOTENO RISKBASE;
+    DATA CALNBASX;
+       SET BNM.LOAN&PREVMON&NOWK;
+       FORMAT RISKBASE 1.;
+       DAYS = &PREPTDT - BLDATE;
+       IF 2000000000 < ACCTNO < 3000000000 AND 60 <=DAYS <=89 THEN DO;
+          RISKBASE = 0;
+          KEEP ACCTNO NOTENO RISKBASE;
+          OUTPUT;
+       END;
+       IF 8000000000 < ACCTNO < 9000000000 AND 60 <=DAYS <=89 THEN DO;
+          RISKBASE = 0;
+          KEEP ACCTNO NOTENO RISKBASE;
+          OUTPUT;
+       END;
+
+    DATA MIS.BASECAX;
+       SET CAODBASX CALNBASX;
+
+    PROC SORT DATA=MIS.BASENPL NODUPKEYS;
+       BY ACCTNO NOTENO;
+
+    PROC SORT DATA=MIS.BASECA NODUPKEYS;
+       BY ACCTNO NOTENO;
+
+    PROC SORT DATA=MIS.BASECAX NODUPKEYS;
+       BY ACCTNO NOTENO;
+
+    DATA MIS.BILLNPLBASE;
+       FORMAT ACCTNO 11.;
+       SET BTRADE.BTRAD&PREVMON&NOWK(DROP=ACCTNO);
+       IF MATDATE NOT IN (0,.);
+       DAYS = &PREPTDT - MATDATE + 1;
+       IF BALANCE > 0 AND DAYS >= 90;
+       REPTDT = &PREPTDT;
+       RISKBASE = 4;
+       ACCTNO = ACCTNOX;
+       KEEP ACCTNO TRANSREF MATDATE RISKBASE;
+    DATA MIS.BILLCABASE;
+       FORMAT ACCTNO 11.;
+       SET BTRADE.BTRAD&PREVMON&NOWK(DROP=ACCTNO);
+       IF MATDATE NOT IN (0,.);
+       DAYS = &PREPTDT - MATDATE + 1;
+       IF BALANCE > 0 AND 60 <= DAYS < 90;
+       REPTDT = &PREPTDT;
+       RISKBASE = 0;
+       ACCTNO = ACCTNOX;
+       KEEP ACCTNO TRANSREF MATDATE RISKBASE;
+
+%END;
+%MEND BASE;
+*;
+%BASE;
+PROC SORT DATA=BNM.LOAN&REPTMON&NOWK
+          OUT=LOAN3 (KEEP=ACCTNO BRANCH BALANCE PRODUCT NAME APPRLIMT
+                          ISSDTE AMTIND PRODCD ORGCODE ODINTACC);
+   BY ACCTNO;
+   WHERE ACCTYPE = 'OD' AND (APPRLIMT >= 0 OR BALANCE < 0);
+*;
+PROC SORT DATA=OD.OVERDFT NODUPKEY
+          OUT=OD (KEEP=ACCTNO EXCESSDT TODDATE RISKCODE REVIEWDT);
+   BY ACCTNO;
+   WHERE EXCESSDT > 0 OR TODDATE > 0;
+*;
+DATA OD;
+  * MERGE OD GP3; /* THIS WILL TAKE EFFECT IF THE GP3 FIX IMPLEMENTED */
+   SET OD;
+   BY ACCTNO;
+   WHERE EXCESSDT > 0 OR TODDATE > 0;
+RUN;
+DATA OD;
+   KEEP BRCH BALANCE RISKRTE RISKCODE RISKBAL RISKRATE EXCESSDT TODDATE
+   BLDATE TODDT ACCTNO DAYS NAME BRANCH PRODUCT ISSDTE APPRLIMT
+   AMTIND PRODCD REVIEWDT CORPBIND ODINTACC;
+   MERGE LOAN3(IN=AA) OD;
+   BY ACCTNO;
+   LENGTH RISKRTE 2;
+   IF _N_ = 1 THEN SET REPTDATE;
+   IF AA & BRANCH ^= . & PRODUCT NOT IN (517,500);
+   BRCH = PUT(BRANCH,BRCHCD.);
+   RISKRTE = RISKCODE;
+   IF ORGCODE IN ('1','001','100') THEN CORPBIND = 'CB';
+   IF ODINTACC > 0 THEN BALANCE = SUM(BALANCE,(-1)*ODINTACC);
+   IF EXCESSDT > 0 THEN DO;
+     EXCDAY = SUBSTR(PUT(EXCESSDT,Z11.),3,2);
+     EXCMONTH = SUBSTR(PUT(EXCESSDT,Z11.),1,2);
+     EXCYEAR = SUBSTR(PUT(EXCESSDT,Z11.),5,4);
+     EXCDATE = MDY(EXCMONTH,EXCDAY,EXCYEAR);
+   END;
+   IF TODDATE > 0 THEN DO;
+     TODDAY = INPUT(SUBSTR(PUT(TODDATE,Z11.),3,2),2.);
+     TODMONTH = INPUT(SUBSTR(PUT(TODDATE,Z11.),1,2),2.);
+     TODYEAR = INPUT(SUBSTR(PUT(TODDATE,Z11.),5,4),4.);
+     TODDT = MDY(TODMONTH,TODDAY,TODYEAR);
+   END;
+   IF EXCESSDT NE 0 AND TODDATE NE 0 THEN DO;
+   IF EXCDATE <= TODDT THEN
+      BLDATE = INPUT(SUBSTR(PUT(EXCESSDT,Z11.),1,8),MMDDYY8.);
+   IF EXCDATE > TODDT THEN
+      BLDATE = INPUT(SUBSTR(PUT(TODDATE,Z11.),1,8),MMDDYY8.);
+   END;
+   ELSE IF EXCESSDT > 0 THEN
+      BLDATE = INPUT(SUBSTR(PUT(EXCESSDT,Z11.),1,8),MMDDYY8.);
+   ELSE IF TODDATE > 0 THEN
+      BLDATE = INPUT(SUBSTR(PUT(TODDATE,Z11.),1,8),MMDDYY8.);
+   IF BLDATE ^= . THEN DAYS = REPTDATE - BLDATE + 1;
+ /********************************************************************/
+ /*  GET LOANS                                                       */
+ /********************************************************************/
+DATA LOANS;
+   KEEP BRCH BRANCH BALANCE RISKRATE RISKRTE ACCTNO DAYS NOTENO PRODUCT
+        APPRLIMT BALANCE ISSDTE NAME AMTIND PRODCD CORPBIND BORSTAT;
+   SET BNM.LOAN&REPTMON&NOWK;
+   WHERE PRODUCT NOT IN (700,705,380,381,128,130);
+   IF _N_ = 1 THEN SET REPTDATE;
+   IF ACCTYPE = 'LN' AND BRANCH ^= . AND BALANCE >= 1.00 AND
+      PRODCD NE 'N';
+   IF BLDATE > 0 THEN DAYS = REPTDATE - BLDATE;
+   IF ACCTYIND = 900 THEN CORPBIND = 'CB';
+   AMTIND=PUT(PRODUCT, LNDENOM.);
+RUN;
+ /********************************************************************/
+ /*  COMBINE LOANS & OD                                              */
+ /********************************************************************/
+DATA COMBINE;
+   KEEP BRCH BRANCH BALANCE RISKRATE RISKRTE ACCTNO DAYS NOTENO PRODUCT
+        APPRLIMT BALANCE ISSDTE NAME AMTIND PRODCD REVIEWDT CORPBIND
+        BORSTAT;
+   SET LOANS OD;
+*;
+PROC SORT;
+   BY ACCTNO NOTENO;
+*;
+PROC SORT DATA=BNM1.LNNOTE OUT=LNNOTE (KEEP=ACCTNO NOTENO SCORE1);
+   BY ACCTNO NOTENO;
+   WHERE PAIDIND NE 'P';
+RUN;
+DATA COMBINE;
+   MERGE COMBINE (IN=A) LNNOTE;
+   BY ACCTNO NOTENO;
+   IF A;
+RUN;
+ /********************************************************************/
+ /*  EXCLUDING BASE DATA                                             */
+ /********************************************************************/
+
+PROC SORT DATA=MIS.BASECA;
+   BY ACCTNO NOTENO;
+RUN;
+PROC SORT DATA=MIS.BASENPL;
+   BY ACCTNO NOTENO;
+RUN;
+PROC SORT DATA=MIS.BASECAX;
+   BY ACCTNO NOTENO;
+RUN;
+DATA BASE;
+   MERGE MIS.BASECAX MIS.BASECA MIS.BASENPL;
+   BY ACCTNO NOTENO;
+RUN;
+PROC SORT;
+   BY ACCTNO NOTENO;
+*;
+DATA LN&REPTMON&NOWK;
+   MERGE COMBINE(IN=A) BASE(IN=B);
+   BY ACCTNO NOTENO;
+*;
+ /********************************************************************/
+ /*  DETERMINE NEWLY SURFACE A/C                                     */
+ /********************************************************************/
+%MACRO NEW;
+ %IF "&REPTMON" EQ "01" %THEN %DO;
+DATA LNPRV&PREVMON&NOWK;
+   SET MIS.GETCIS&PREVMON (KEEP=ACCTNO NOTENO RISK);
+   RISKOLD = '  ';
+   DROP RISK;
+*;
+ %END;
+ %ELSE %DO;
+   DATA LNPRV&PREVMON&NOWK;
+      SET MIS.GETCIS&PREVMON (KEEP=ACCTNO NOTENO RISK);
+      RISKOLD = RISK;
+      DROP RISK;
+ %END;
+   RUN;
+%MEND NEW;
+*;
+%NEW;
+PROC SORT;
+   BY ACCTNO NOTENO;
+*;
+DATA LN&REPTMON&NOWK;
+   FORMAT NOTENO $7.;
+   SET LN&REPTMON&NOWK(RENAME=(NOTENO=NOTENOX));
+   NOTENO = NOTENOX;
+   DROP NOTENOX;
+*;
+DATA LN&REPTMON&NOWK;
+   MERGE LN&REPTMON&NOWK (IN=A)
+         LNPRV&PREVMON&NOWK (IN=B);
+   BY ACCTNO NOTENO;
+   IF A;
+RUN;
+PROC SORT;
+   BY BRANCH;
+*;
+  /** ADD IN BTRADE  **/
+PROC SORT DATA=BTRADE.BTDTL&REPTMON&NOWK NODUPKEYS
+   OUT=BTDTL;
+   BY ACCTNO TRANSREF;
+   WHERE DIRCTIND EQ 'D' & ROUND(OUTSTAND,0.01) > 0;
+RUN;
+PROC SUMMARY DATA=BTDTL NWAY;
+   CLASS ACCTNO TRANSREF;
+   VAR OUTSTAND;
+   OUTPUT OUT=BTRADSUM SUM=BALANCE;
+RUN;
+DATA BTRADSUM;
+   MERGE BTDTL BTRADSUM;
+   BY ACCTNO TRANSREF;
+RUN;
+DATA BTRADSUM;
+   FORMAT ACCTNO 11.;
+   SET BTRADSUM (RENAME=(ACCTNO=ACCTNOX));
+   IF '2500000000'<ACCTNOX<'2599999999';
+   DAYS = &REPTDT - MATDATE + 1;
+   IF ROUND(BALANCE,0.01) > 0 AND DAYS >= &BTCADT;
+   AMTIND = 'D';
+   ACCTNO = ACCTNOX;
+   IF (90<=DAYS<=182)  THEN RISKRTE = 3;
+   ELSE IF (    DAYS> 182)  THEN RISKRTE = 4;
+   ELSE RISKRTE = 0;
+RUN;
+
+DATA BTRADE1(DROP=ACCTNOX);
+     SET BTRADE.BTRAD&REPTMON&NOWK;
+RUN;
+
+DATA BTRADE;
+   FORMAT ACCTNO 11.;
+   SET BTRADE1(RENAME=(ACCTNO=ACCTNOX));
+   IF '2500000000'<ACCTNOX<'2599999999';
+   DAYS = &REPTDT - MATDATE + 1;
+   IF ROUND(BALANCE,0.01) > 0 AND DAYS >= &BTCADT;
+   AMTIND = 'D';
+   ACCTNO = ACCTNOX;
+   IF (90<=DAYS<=182)  THEN RISKRTE = 3;
+   ELSE IF (    DAYS> 182)  THEN RISKRTE = 4;
+   ELSE RISKRTE = 0;
+RUN;
+PROC SORT DATA=BTRADSUM; BY ACCTNO TRANSREF;
+PROC SORT DATA=BTRADE;   BY ACCTNO TRANSREF;
+DATA BTRADE;
+   FORMAT ACCTNO 11.;
+   MERGE BTRADE(IN=A) BTRADSUM (IN=B);
+   BY ACCTNO TRANSREF;
+   IF B & ROUND(BALANCE,0.01) > 0 AND DAYS >= &BTCADT;
+RUN;
+PROC SORT DATA=BTRADE; BY ACCTNO;
+PROC SORT DATA=BTRADE.BTMAST&REPTMON&NOWK
+   OUT=BTMAST (KEEP=ACCTNO RETAILID NAME) NODUPKEYS;
+   BY ACCTNO;
+DATA BTMAST;
+   SET BTMAST (RENAME=(ACCTNO=ACCTNOX));
+   IF SUBSTR(ACCTNOX,1,2)='25' THEN ACCTNO=ACCTNOX * 1;
+RUN;
+PROC SORT DATA=BTMAST; BY ACCTNO;
+DATA BTRADE;
+   MERGE BTRADE(IN=A) BTMAST (IN=B);
+   BY ACCTNO;
+   IF A;
+RUN;
+PROC SORT DATA=BTRADE NODUPKEYS;
+   BY ACCTNO TRANSREF;
+RUN;
+PROC SORT DATA=MIS.BILLNPLBASE;
+   BY ACCTNO TRANSREF;
+RUN;
+PROC SORT DATA=MIS.BILLCABASE;
+   BY ACCTNO TRANSREF;
+RUN;
+DATA BASE;
+   MERGE MIS.BILLNPLBASE MIS.BILLCABASE;
+   BY ACCTNO TRANSREF;
+RUN;
+DATA BT&REPTMON&NOWK;
+   FORMAT NOTENO $7.;
+   MERGE BTRADE(IN=A DROP=NOTENO) BASE(IN=B);
+   BY ACCTNO TRANSREF;
+   NOTENO = TRANSREF;
+   IF A;
+*;
+PROC SORT DATA=LNPRV&PREVMON&NOWK;
+   BY ACCTNO NOTENO;
+*;
+DATA LNPRV&PREVMON&NOWK;
+   FORMAT NOTENO $7.;
+   SET LNPRV&PREVMON&NOWK(RENAME=(NOTENO=NOTENOX));
+   NOTENO = NOTENOX;
+   DROP NOTENOX;
+*;
+DATA BT&REPTMON&NOWK;
+   MERGE BT&REPTMON&NOWK (IN=A)
+         LNPRV&PREVMON&NOWK (IN=B);
+   BY ACCTNO NOTENO;
+   TYPE = 'BT';
+   IF A;
+RUN;
+PROC SORT;
+   BY BRANCH;
+*;
+ /** ADD IN BTRADE END  **/
+DATA LN&REPTMON&NOWK;
+   SET LN&REPTMON&NOWK BT&REPTMON&NOWK;
+RUN;
+ /********************************************************************/
+ /*  SPLITTING INTO CA & NPL                                         */
+ /********************************************************************/
+
+DATA MIS.CA&REPTMON&NOWK;
+   SET LN&REPTMON&NOWK;
+   BRCH = PUT(BRANCH,BRCHCD.);
+   IF 2500000000<=ACCTNO<=2599999999 THEN NOTENO = TRANSREF;
+   SELECT;
+      WHEN (DAYS>729) MTHARR = ROUND((DAYS/365)*12);
+      WHEN (DAYS>698) MTHARR = 23;
+      WHEN (DAYS>668) MTHARR = 22;
+      WHEN (DAYS>638) MTHARR = 21;
+      WHEN (DAYS>608) MTHARR = 20;
+      WHEN (DAYS>577) MTHARR = 19;
+      WHEN (DAYS>547) MTHARR = 18;
+      WHEN (DAYS>516) MTHARR = 17;
+      WHEN (DAYS>486) MTHARR = 16;
+      WHEN (DAYS>456) MTHARR = 15;
+      WHEN (DAYS>424) MTHARR = 14;
+      WHEN (DAYS>394) MTHARR = 13;
+      WHEN (DAYS>364) MTHARR = 12;
+      WHEN (DAYS>333) MTHARR = 11;
+      WHEN (DAYS>303) MTHARR = 10;
+      WHEN (DAYS>273) MTHARR = 9;
+      WHEN (DAYS>243) MTHARR = 8;
+      WHEN (DAYS>212) MTHARR = 7;
+      WHEN (DAYS>182) MTHARR = 6;
+      WHEN (DAYS>151) MTHARR = 5;
+      WHEN (DAYS>121) MTHARR = 4;
+      WHEN (DAYS>89)  MTHARR = 3;
+      WHEN (DAYS>59)  MTHARR = 2;
+      WHEN (DAYS>29)  MTHARR = 1;
+      OTHERWISE       MTHARR = 0;
+   END;
+   IF BORSTAT = 'F' THEN MTHARR = 999;
+   IF BORSTAT = 'W' THEN MTHARR = 0;
+   DAYNPL = DAYS - 182;
+   SELECT;
+      WHEN (DAYNPL>729) MTHCLAS = ROUND((DAYNPL/365)*12);
+      WHEN (DAYNPL>698) MTHCLASS = 23;
+      WHEN (DAYNPL>668) MTHCLASS = 22;
+      WHEN (DAYNPL>638) MTHCLASS = 21;
+      WHEN (DAYNPL>608) MTHCLASS = 20;
+      WHEN (DAYNPL>577) MTHCLASS = 19;
+      WHEN (DAYNPL>547) MTHCLASS = 18;
+      WHEN (DAYNPL>516) MTHCLASS = 17;
+      WHEN (DAYNPL>486) MTHCLASS = 16;
+      WHEN (DAYNPL>456) MTHCLASS = 15;
+      WHEN (DAYNPL>424) MTHCLASS = 14;
+      WHEN (DAYNPL>394) MTHCLASS = 13;
+      WHEN (DAYNPL>364) MTHCLASS = 12;
+      WHEN (DAYNPL>333) MTHCLASS = 11;
+      WHEN (DAYNPL>303) MTHCLASS = 10;
+      WHEN (DAYNPL>273) MTHCLASS = 9;
+      WHEN (DAYNPL>243) MTHCLASS = 8;
+      WHEN (DAYNPL>212) MTHCLASS = 7;
+      WHEN (DAYNPL>182) MTHCLASS = 6;
+      WHEN (DAYNPL>151) MTHCLASS = 5;
+      WHEN (DAYNPL>121) MTHCLASS = 4;
+      WHEN (DAYNPL>89)  MTHCLASS = 3;
+      WHEN (DAYNPL>59)  MTHCLASS = 2;
+      WHEN (DAYNPL>29)  MTHCLASS = 1;
+      OTHERWISE         MTHCLASS = 0;
+   END;
+   IF TYPE NE 'BT' THEN DO;
+   IF 3000000000<=ACCTNO<=3999999999 AND RISKRTE IN ('1','2','3','4')
+      AND 1<=DAYS<=89 THEN ODVALID = 1;
+   IF (RISKRTE = 1) AND ((90 <= DAYS <=182) OR ODVALID=1) &
+   RISKBASE NOT IN ('1','2','3','4') THEN DO;
+      RISK = '1C';
+      IF RISKOLD NOT IN ('1C','2S','3D','4B') THEN NEW = '*';
+   END;
+   ELSE IF RISKRTE IN (2,3,4) &
+   RISKBASE NOT IN ('1','2','3','4') THEN DO;
+      IF RISKOLD NOT IN ('1C','2S','3D','4B') THEN NEW = '*';
+      IF RISKRTE = 2 THEN RISK = '2S';
+      ELSE IF RISKRTE = 3 THEN RISK = '3D';
+      ELSE IF RISKRTE = 4 THEN RISK = '4B';
+   END;
+   ELSE IF (60<=DAYS<=89) & RISKBASE NOT IN ('0','1','2','3','4')
+   THEN DO
+      RISK = '0C';
+      IF RISKOLD NE '0C' THEN NEW = '*';
+   END;
+   END;
+   IF TYPE = 'BT' THEN DO;
+   STARTDT = MDY(1,1,YEAR(TODAY()));
+   LASTDATE=MDY(MONTH(&REPTDT),1,YEAR(TODAY()))-1;
+   LASTDAY = LASTDATE - MATDATE + 1;
+   YRDATE  = &REPTDT  - STARTDT + 92;
+      IF RISKRTE = 1 & DAYS < YRDATE THEN DO;
+         RISK = '1C';
+         IF RISKOLD NOT IN ('1C','2S','3D','4B') &
+         LASTDAY < 90 THEN NEW = '*';
+      END;
+      ELSE IF RISKRTE IN (2,3,4) & DAYS <= YRDATE &
+      RISKBASE NOT IN ('1','2','3','4') THEN DO;
+         IF RISKOLD NOT IN ('1C','2S','3D','4B') & LASTDAY < 90
+         THEN NEW = '*';
+         IF RISKRTE = 2 THEN RISK = '2S';
+         ELSE IF RISKRTE = 3 THEN RISK = '3D';
+         ELSE IF RISKRTE = 4 THEN RISK = '4B';
+      END;
+      ELSE IF (&BTCADT<=DAYS<=89) & RISKBASE NOT IN('0','1','2','3','4')
+      AND DAYS < YRDATE
+      THEN DO
+         RISK = '0C';
+         IF RISKOLD NE '0C' &  LASTDAY< 62 THEN NEW = '*';
+      END;
+   END;
+*;
+TITLE1 'REPORT NAME : EIBMCANP';
+*;
+PROC SORT DATA=MIS.CA&REPTMON&NOWK OUT=LOAN;
+   BY ACCTNO;
+*;
+DATA LOAN;
+   SET LOAN;
+   IF (4<=PRODUCT<=7) OR PRODUCT = 70 THEN PRODCD = '34120';
+   LOANTYPE = PUT(PRODCD,$PRODFMT.);
+   IF REVIEWDT NOT IN (.,0) THEN
+      REVIEWD1 = PUT(INPUT(SUBSTR(PUT(REVIEWDT,Z11.),1,8),MMDDYY8.),
+                 DDMMYY.);
+   SP = 0;
+   IIS = 0;
+   BRANCH1 = PUT(BRANCH,Z3.)||'('||PUT(BRANCH,BRCHCD.)||')';
+   APPRLIMT = ROUND(APPRLIMT,.01);
+   IF AMTIND = 'I' THEN CORPBIND = 'IS';
+   IF TYPE = 'BT' THEN DO;
+      IF RETAILID = 'C' THEN CORPBIND = 'CB';
+      ELSE CORPBIND = ' ';
+      LOANTYPE = 'BANK TRADE';
+   END;
+*;
+DATA CISIND;
+   INFILE CISIND;
+     INPUT @0013 CUSTNO     20.
+           @0033 ACCTNO     10.
+           @0183 CUSTNAME $150.
+           @0333 OLDIC     $20.
+           @0353 NEWIC     $20.;
+RUN;
+DATA CISCORP;
+   INFILE CISCORP;
+     INPUT @0013 CUSTNO     20.
+           @0033 ACCTNO     10.
+           @0183 CUSTNAME $150.
+           @0333 OLDIC     $20.;
+RUN;
+PROC SORT DATA=CISIND; BY ACCTNO;
+PROC SORT DATA=CISCORP; BY ACCTNO;
+DATA CIS;
+   MERGE CISIND(IN=A) CISCORP(IN=B);
+   BY ACCTNO;
+
+*;
+PROC SORT DATA=CIS (KEEP=CUSTNO ACCTNO CUSTNAME OLDIC NEWIC) NODUPKEYS;
+   BY ACCTNO;
+*;
+DATA CIS;
+   MERGE LOAN (IN=A) CIS;
+   BY ACCTNO;
+   IF A;
+*;
+DATA MIS.GETCIS&REPTMON;
+   SET CIS;
+   FORMAT IC $12.;
+   IF OLDIC ^= ' ' AND SUBSTR(COMPRESS(OLDIC,' '),1,3) ^= '000'
+      THEN IC = OLDIC;
+   ELSE IF NEWIC NE '    ' THEN IC = NEWIC;
+   ELSE IC = ACCTNO;
+   IF RISKRTE = 1 THEN NPASAT = BALANCE;
+   IF RISKRTE IN (2,3,4) THEN NPASAT = BALANCE;
+   ELSE IF (60<=DAYS<=89) THEN DO;
+      IF TYPE NE 'BT' THEN CAASATX = BALANCE;
+      ELSE BTCAASATX = BALANCE;
+   END;
+   IF RISK = '1C' THEN
+      IF MTHARR >= 3 THEN MTHARR1 = MTHARR - 3;
+      ELSE MTHARR1 = 0;
+   ELSE IF RISK = '3D' THEN
+      MTHCLASS = MTHCLASS - 3;
+   ELSE IF RISK = '4B' THEN
+      MTHCLASS = MTHCLASS - 6;
+   IF RISK = '1C' THEN DO;
+      YRNPBAL = BALANCE;
+      IF NEW = '*' THEN NEWNPBAL = BALANCE;
+   END;
+   ELSE IF RISK IN ('2S','3D','4B') THEN DO;
+      YRNPBAL = BALANCE;
+      IF NEW = '*' AND RISK IN ('1C','2S','3D','4B')
+         THEN NEWNPBAL=BALANCE;
+      IF RISK = '1C' THEN BAL1C = BALANCE;
+      ELSE IF RISK = '2S' THEN BAL2S = BALANCE;
+      ELSE IF RISK = '3D' THEN BAL3D = BALANCE;
+      ELSE IF RISK = '4B' THEN BAL4B = BALANCE;
+   END;
+   ELSE IF RISK = '0C' THEN DO;
+      IF TYPE = 'BT' THEN DO;
+         BTYRCABALX = BALANCE;
+         IF NEW = '*' THEN BTNEWCABAX = BALANCE;
+      END;
+      ELSE DO;
+         YRCABALX = BALANCE;
+         IF NEW = '*' THEN NEWCABAX = BALANCE;
+      END;
+   END;
+*;
+PROC SORT DATA=MIS.GETCIS&REPTMON;
+   BY IC;
+*;
+PROC SUMMARY DATA=MIS.GETCIS&REPTMON NWAY;
+   WHERE RISK NE ' ';
+   CLASS IC;
+   VAR BALANCE YRNPBAL NEWNPBAL BAL1C BAL2S BAL3D BAL4B
+       YRCABALX NEWCABAX;
+OUTPUT OUT=NEWNPL SUM=TOTBAL YRTOTNP TOTNPBAL BALTOT1C BALTOT2S
+           BALTOT3D BALTOT4B YRTOTCAX TOTCABAX;
+*;
+DATA NEWNPL;
+   MERGE MIS.GETCIS&REPTMON (IN=A) NEWNPL;
+   BY IC;
+RUN;
+PROC SORT DATA=NEWNPL;
+   BY RISK BRANCH;
+*;
+DATA DUMMY;
+   SET NEWNPL (KEEP=RISK);
+   BY RISK;
+   IF FIRST.RISK THEN
+      DO BRANCH = 1 TO 267;
+      BRANCH1 = PUT(BRANCH,Z3.)||'('||PUT(BRANCH,BRCHCD.)||')';
+      BRANCH2 = PUT(BRANCH,BRCHCD.)||'('||PUT(BRANCH,Z3.)||')';
+      OUTPUT;
+      END;
+RUN;
+DATA NEWNPL;
+   MERGE NEWNPL DUMMY;
+   BY RISK BRANCH;
+*;
+PROC SORT DATA=NEWNPL;
+   BY BRANCH1 IC;
+DATA _NULL_;
+  SET NEWNPL;
+  FILE FC2B;
+  WHERE RISK IN ('0C','1C','2S','3D','4B');
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'LIST OF NEWLY SURFACE DELINQUENT LOAN (CA-BAD) AS AT' RDATE;
+   PUT @1 ' ';
+   PUT  'BRANCH'   ';'
+        'CUSTOMER NAME' ';'
+        'ACCTNO'      ';'
+        'NOTENO'      ';'
+        'PRODUCT'     ';'
+        'TYPE OF FAC'  ';'
+        'CQG/CRR'     ';'
+        'APPRLIMT'    ';'
+        'O/S AMOUNT'  ';'
+        'TOTAL BALANCE' ';'
+        'CLOSING SP'   ';'
+        'CLOSING IIS'  ';'
+        'LAST REV'   ';'
+        'ISSUE DATE'  ';'
+        'NEW'        ';'
+        'CORPBIND' ';'
+        'DAYS' ';';
+  END;
+    PUT BRANCH ';'
+        NAME   ';'
+        ACCTNO ';'
+        NOTENO ';'
+        PRODUCT ';'
+        LOANTYPE ';'
+        SCORE1   ';'
+        APPRLIMT ';'
+        BALANCE  ';'
+        TOTBAL  ';'
+        SP      ';'
+        IIS     ';'
+        REVIEWD1 ';'
+        ISSDTE   ';'
+        NEW      ';'
+        CORPBIND ';'
+        DAYS ';' ;
+RUN;
+*;
+PROC SORT DATA=NEWNPL OUT=NEWN;
+   BY DESCENDING TOTNPBAL;
+*;
+DATA NEWX;
+   SET NEWN;
+   WHERE RISK IN ('1C','2S','3D','4B') AND NEW = '*' AND ACCTNO NE .;
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NEWLY SURFACE NPL IN ' &RMONTH;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE TOTNPBAL DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+RUN;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RMONTH";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NEWLY SURFACE NPL IN ' RDATE;
+   PUT @1 ' ';
+   PUT   'BRANCH'         ';'
+         'CUSTOMER NAME'   ';'
+         'ACCTNO'          ';'
+         'NOTENO'          ';'
+         'RISK'            ';'
+         'O/S AMOUNT'      ';'
+         'TOTNPBAL'        ';'
+         'DAYS'            ';'
+         'CORPBIND'        ';'
+         'PRODUCT'        ';'  ;
+  END;
+    PUT      BRANCH1    ';'
+             NAME       ';'
+             ACCTNO     ';'
+             NOTENO     ';'
+             RISK       ';'
+             BALANCE    ';'
+             TOTNPBAL   ';'
+             DAYS       ';'
+             CORPBIND   ';'
+             PRODUCT    ';'  ;
+RUN;
+PROC SORT DATA=NEWNPL OUT=NEWN;
+   BY NAME;
+*;
+DATA NEWX;
+   SET NEWN;
+   WHERE RISK IN ('1C','2S','3D','4B') AND NEW = '*' AND ACCTNO NE .;
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NEWLY SURFACE NPL BY NAME IN ' &RMONTH;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE TOTNPBAL DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+RUN;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RMONTH";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NEWLY SURFACE NPL IN BY NAME ' RDATE;
+   PUT @1 ' ';
+   PUT  'BRANCH'  ';'
+        'CUSTOMER NAME'  ';'
+        'ACCTNO'      ';'
+        'NOTENO'     ';'
+        'RISK'      ';'
+        'O/S AMOUNT' ';'
+        'TOTNPBAL'  ';'
+        'DAYS'    ';'
+        'CORPBIND'  ';'
+        'PRODUCT' ';' ;
+  END;
+    PUT BRANCH1    ';'
+        NAME       ';'
+        ACCTNO     ';'
+        NOTENO     ';'
+        RISK       ';'
+        BALANCE    ';'
+        TOTNPBAL   ';'
+        DAYS       ';'
+        CORPBIND   ';'
+        PRODUCT   ';' ;
+RUN;
+  /*********************/
+  /* NEW CA SMR217     */
+  /*********************/
+PROC SORT DATA=NEWNPL OUT=NEWCX;
+   BY DESCENDING TOTCABAX;
+*;
+DATA NEWX;
+   SET NEWCX;
+   WHERE RISK = '0C' AND NEW = '*' AND ACCTNO NE . AND TYPE NE 'BT';
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NEWLY SURFACE CA IN ' &RMONTH;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE TOTCABAX DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RMONTH";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NEWLY SURFACE CA IN ' RDATE;
+   PUT @1 ' ';
+   PUT       'BRANCH'          ';'
+             'CUSTOMER NAME'   ';'
+             'ACCTNO'          ';'
+             'NOTENO'          ';'
+             'RISK'            ';'
+             'O/S AMOUNT'      ';'
+             'TOTCABAX'        ';'
+             'DAYS'            ';'
+             'CORPBIND'        ';'
+             'PRODUCT'         ';' ;
+  END;
+    PUT      BRANCH1     ';'
+             NAME        ';'
+             ACCTNO      ';'
+             NOTENO      ';'
+             RISK        ';'
+             BALANCE     ';'
+             TOTCABAX    ';'
+             DAYS        ';'
+             CORPBIND    ';'
+             PRODUCT     ';' ;
+RUN;
+PROC SORT DATA=NEWNPL OUT=NEWCX;
+   BY NAME;
+*;
+DATA NEWX;
+   SET NEWCX;
+   WHERE RISK = '0C' AND NEW = '*' AND ACCTNO NE . AND TYPE NE 'BT';
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NEWLY SURFACE CA BY NAME IN ' &RMONTH;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE TOTCABAX DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RMONTH";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NEWLY SURFACE CA BY NAME IN ' RDATE;
+   PUT @1 ' ';
+   PUT  'BRANCH'   ';'
+        'CUSTOMER NAME'  ';'
+        'ACCTNO' ';'
+        'NOTENO'  ';'
+        'RISK'    ';'
+        'O/S AMOUNT' ';'
+        'TOTCABAX'   ';'
+        'DAYS'    ';'
+        'CORPBIND' ';'
+        'PRODUCT' ';' ;
+  END;
+    PUT BRANCH1   ';'
+        NAME      ';'
+        ACCTNO    ';'
+        NOTENO    ';'
+        RISK      ';'
+        BALANCE  ';'
+        TOTCABAX   ';'
+        DAYS     ';'
+        CORPBIND  ';'
+        PRODUCT  ';' ;
+RUN;
+  /**************/
+  /* END NEW CA */
+  /**************/
+PROC SORT DATA=NEWNPL OUT=NEWN;
+   BY DESCENDING YRTOTNP;
+*;
+DATA NEWX;
+   SET NEWN;
+   WHERE RISK IN ('1C','2S','3D','4B') AND ACCTNO NE .;
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NEWLY SURFACE THIS YEAR NPL AS AT ' &RDATE;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE YRTOTNP DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NEWLY SURFACE THIS YEAR NPL AS AT ' RDATE;
+   PUT @1 ' ';
+   PUT  'BRANCH'    ';'
+        'CUSTOMER NAME'  ';'
+        'ACCTNO'      ';'
+        'NOTENO'      ';'
+        'RISK'        ';'
+        'O/S AMOUNT'  ';'
+        'YRTOTNP'    ';'
+        'DAYS'       ';'
+        'CORPBIND'   ';'
+        'PRODUCT' ';' ;
+  END;
+    PUT BRANCH1  ';'
+        NAME     ';'
+        ACCTNO   ';'
+        NOTENO   ';'
+        RISK     ';'
+        BALANCE  ';'
+        YRTOTNP  ';'
+        DAYS     ';'
+        CORPBIND ';'
+        PRODUCT  ';' ;
+RUN;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2A;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 'NEWLY SURFACE THIS YEAR NPL AS AT ' RDATE;
+  END;
+  PUT @001 ACCTNO   10.
+      @012 NOTENO   10.
+      @025 PRODUCT   3.
+      @030 NAME     $40.;
+RUN;
+PROC SORT DATA=NEWNPL OUT=NEWN;
+   BY NAME;
+*;
+DATA NEWX;
+   SET NEWN;
+   WHERE RISK IN ('1C','2S','3D','4B') AND ACCTNO NE .;
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NEWLY SURFACE THIS YEAR NPL BY NAME AS AT ' &RDATE;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE YRTOTNP DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NEWLY SURFACE THIS YEAR NPL BY NAME AS AT ' RDATE;
+   PUT @1 ' ';
+   PUT  'BRANCH'         ';'
+        'CUSTOMER NAME'  ';'
+        'ACCTNO'         ';'
+        'NOTENO'         ';'
+        'RISK'           ';'
+        'O/S AMOUNT'     ';'
+        'YRTOTNP'        ';'
+        'DAYS'           ';'
+        'CORPBIND'       ';'
+        'PRODUCT'  ';' ;
+  END;
+    PUT BRANCH1    ';'
+         NAME      ';'
+         ACCTNO    ';'
+          NOTENO   ';'
+          RISK     ';'
+         BALANCE   ';'
+         YRTOTNP   ';'
+         DAYS      ';'
+         CORPBIND  ';'
+         PRODUCT   ';' ;
+RUN;
+  /**  NEW REQUEST SMR217 **/
+PROC SORT DATA=NEWNPL OUT=NEWC;
+   BY DESCENDING YRTOTCAX;
+*;
+DATA NEWX;
+   SET NEWC;
+   WHERE RISK = '0C' AND ACCTNO NE . AND TYPE NE 'BT';
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NEWLY SURFACE THIS YEAR CA AS AT ' &RDATE;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE YRTOTCAX DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NEWLY SURFACE THIS YEAR CA AS AT ' RDATE;
+   PUT @1 ' ';
+   PUT       'BRANCH'          ';'
+             'CUSTOMER NAME'   ';'
+             'ACCTNO'          ';'
+             'NOTENO'          ';'
+             'RISK'            ';'
+             'O/S AMOUNT'      ';'
+             'YRTOTCAX'        ';'
+             'DAYS'            ';'
+             'CORPBIND'        ';'
+             'PRODUCT'         ';'  ;
+  END;
+    PUT      BRANCH1           ';'
+             NAME              ';'
+             ACCTNO            ';'
+             NOTENO            ';'
+             RISK              ';'
+             BALANCE           ';'
+             YRTOTCAX          ';'
+             DAYS              ';'
+             CORPBIND          ';'
+             PRODUCT           ';'  ;
+RUN;
+PROC SORT DATA=NEWNPL OUT=NEWC;
+   BY NAME;
+*;
+DATA NEWX;
+   SET NEWC;
+   WHERE RISK = '0C' AND ACCTNO NE . AND TYPE NE 'BT';
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NEWLY SURFACE THIS YEAR CA BY NAME AS AT ' &RDATE;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE YRTOTCAX DAYS CORPBIND
+        PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NEWLY SURFACE THIS YEAR CA BY NAME AS AT ' RDATE;
+   PUT @1 ' ';
+   PUT       'BRANCH'        ';'
+             'CUSTOMER NAME' ';'
+             'ACCTNO'        ';'
+             'NOTENO'        ';'
+             'RISK'          ';'
+             'O/S AMOUNT'    ';'
+             'YRTOTCAX'      ';'
+             'DAYS'          ';'
+             'CORPBIND'      ';'
+             'PRODUCT'       ';' ;
+  END;
+    PUT      BRANCH1         ';'
+             NAME            ';'
+             ACCTNO          ';'
+             NOTENO          ';'
+             RISK            ';'
+             BALANCE       ';'
+             YRTOTCAX     ';'
+             DAYS         ';'
+             CORPBIND     ';'
+             PRODUCT      ';'   ;
+RUN;
+  /* SUMMARY */
+
+PROC TABULATE DATA=NEWNPL MISSING;
+         FORMAT RISK $RISKNAME.;
+         CLASS RISK LOANTYPE;
+         VAR BALANCE;
+         WHERE RISK IN ('1C','2S','3D','4B') AND ACCTNO NE .;
+         TABLE RISK=' ' ALL='TOTAL',
+               (LOANTYPE=' ' ALL='TOTAL')*
+               (BALANCE=' ')*
+               (N='NO.OF A/C'*F=COMMA6. SUM='AMOUNT(RM)'*F=COMMA18.2)
+               / BOX=' ' RTS=30 CONDENSE;
+TITLE1 'NEW DELINQUENT LOANS (CONVENTIONAL & ISLAMIC LOANS) WHICH SURFACED';
+TITLE2 'FROM 1-1-2002 TO REPORTING MONTH BREAKDOWN BY TYPE OF FACILITY';
+*;
+PROC TABULATE DATA=NEWNPL MISSING;
+         FORMAT RISK $RISKNAME.;
+         CLASS RISK LOANTYPE;
+         WHERE RISK IN ('1C','2S','3D','4B') AND ACCTNO NE . AND
+               CORPBIND = 'I';
+         VAR BALANCE;
+         TABLE RISK=' ' ALL='TOTAL',
+               (LOANTYPE=' ' ALL='TOTAL')*
+               (BALANCE=' ')*
+               (N='NO.OF A/C'*F=COMMA6. SUM='AMOUNT(RM)'*F=COMMA18.2)
+               / BOX=' ' RTS=30 CONDENSE;
+TITLE1 'NEW DELINQUENT ISLAMIC LOANS WHICH SURFACED';
+TITLE2 'FROM 1-1-2002 TO REPORTING MONTH BREAKDOWN BY TYPE OF FACILITY';
+*;
+PROC SUMMARY DATA=MIS.GETCIS&REPTMON NWAY;
+   WHERE RISKRTE IN (1,2,3,4);
+   CLASS IC;
+   VAR BALANCE NPASAT;
+OUTPUT OUT=NPLASAT SUM=TOTBAL NPASTOT;
+*;
+DATA NPLASAT;
+   MERGE MIS.GETCIS&REPTMON (IN=A) NPLASAT;
+   BY IC;
+RUN;
+PROC SORT DATA=NPLASAT;
+   BY RISK BRANCH;
+*;
+DATA DUMMY;
+   SET NPLASAT (KEEP=RISK);
+   BY RISK;
+   IF FIRST.RISK THEN
+      DO BRANCH = 1 TO 267;
+      BRANCH1 = PUT(BRANCH,Z3.)||'('||PUT(BRANCH,BRCHCD.)||')';
+      OUTPUT;
+      END;
+RUN;
+DATA NPLASAT;
+   MERGE NPLASAT DUMMY;
+   BY RISK BRANCH;
+*;
+PROC SORT DATA=NPLASAT;
+   BY RISK BRANCH1;
+*;
+PROC SORT DATA=NPLASAT OUT=NPASAT;
+   BY DESCENDING NPASTOT;
+*;
+DATA NEWX;
+   SET NPASAT;
+   WHERE RISKRTE IN (1,2,3,4) AND ACCTNO NE .;
+   IF RISKRTE = 1 THEN RISK = '1C';
+   ELSE IF RISKRTE = 2 THEN RISK = '2S';
+   ELSE IF RISKRTE = 3 THEN RISK = '3D';
+   ELSE IF RISKRTE = 4 THEN RISK = '4B';
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NPL AS AT ' &RDATE;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE NPASTOT DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING'
+            NPASTOT  = 'TOTBAL';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NPL AS AT ' RDATE;
+   PUT @1 ' ';
+   PUT       'BRANCH'         ';'
+             'CUSTOMER NAME'  ';'
+             'ACCTNO'         ';'
+             'NOTENO'         ';'
+             'RISK'           ';'
+             'O/S AMOUNT'     ';'
+             'NPASTOT'        ';'
+             'DAYS'           ';'
+             'CORPBIND'       ';'
+             'PRODUCT'        ';'  ;
+  END;
+    PUT      BRANCH1    ';'
+             NAME       ';'
+             ACCTNO     ';'
+             NOTENO     ';'
+             RISK       ';'
+             BALANCE    ';'
+             NPASTOT    ';'
+             DAYS       ';'
+             CORPBIND   ';'
+             PRODUCT    ';'  ;
+RUN;
+PROC SORT DATA=NPLASAT OUT=NPASAT;
+   BY NAME;
+*;
+DATA NEWX;
+   SET NPASAT;
+   WHERE RISKRTE IN (1,2,3,4) AND ACCTNO NE .;
+   IF RISKRTE = 1 THEN RISK = '1C';
+   ELSE IF RISKRTE = 2 THEN RISK = '2S';
+   ELSE IF RISKRTE = 3 THEN RISK = '3D';
+   ELSE IF RISKRTE = 4 THEN RISK = '4B';
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'NPL BY NAME AS AT ' &RDATE;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE NPASTOT DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING'
+            NPASTOT  = 'TOTBAL';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'NPL BY NAME AS AT ' RDATE;
+   PUT @1 ' ';
+   PUT       'BRANCH'         ';'
+             'CUSTOMER NAME'  ';'
+             'ACCTNO'         ';'
+             'NOTENO'         ';'
+             'RISK'           ';'
+             'O/S AMOUNT'     ';'
+             'NPASTOT'        ';'
+             'DAYS'           ';'
+             'CORPBIND'       ';'
+             'PRODUCT'        ';' ;
+  END;
+    PUT      BRANCH1          ';'
+             NAME             ';'
+             ACCTNO           ';'
+             NOTENO           ';'
+             RISK             ';'
+             BALANCE          ';'
+             NPASTOT          ';'
+             DAYS             ';'
+             CORPBIND         ';'
+             PRODUCT          ';';
+RUN;
+PROC SORT DATA=NEWNPL;
+   BY BRANCH2 IC;
+*;
+PROC TABULATE DATA=NEWNPL MISSING;
+TITLE1 'NEW SURFACE THIS YEAR NPL AS AT ' &RDATE;
+         FORMAT RISK $RISKNAME. CORPBIND $OPDIV.;
+         CLASS CORPBIND BRANCH2;
+         VAR BALANCE;
+         WHERE RISK IN ('1C','2S','3D','4B') AND ACCTNO NE .;
+         TABLE CORPBIND=' '*BRANCH2=' ' ALL='TOTAL',
+               (BALANCE=' ')*
+               (N='NO.OF A/C'*F=COMMA6. SUM='AMOUNT(RM)'*F=COMMA18.2)
+               / BOX='OPERATING DIVISION' RTS=30;
+PROC TABULATE DATA=NEWNPL MISSING;
+         FORMAT RISK $RISKNAME.;
+         CLASS BRANCH2 LOANTYPE;
+         VAR BALANCE;
+         WHERE RISK IN ('1C','2S','3D','4B') AND ACCTNO NE .;
+         TABLE BRANCH2=' ' ALL='TOTAL',
+               (LOANTYPE=' ' ALL='TOTAL')*
+               (BALANCE=' ')*
+               (N='NO.OF A/C'*F=COMMA6. SUM='AMOUNT(RM)'*F=COMMA18.2)
+               / BOX=' ' RTS=30;
+TITLE1 'NEW DELINQUENT LOANS (SS1 TO BAD) WHICH SURFACED';
+TITLE2 'FROM 1-1-2002 TO REPORTING MONTH BREAKDOWN BY TYPE OF FACILITY';
+*;
+ /*-----------------------------------------------------------------*/
+ /*--> ADDITIONAL REPORT REQUESTED BY SMR 217 */
+ /*-----------------------------------------------------------------*/
+PROC TABULATE DATA=NEWNPL MISSING;
+         FORMAT RISK $RISKNAME.;
+         CLASS BRANCH2 LOANTYPE;
+         VAR BALANCE;
+         WHERE RISK IN ('0C','1C','2S','3D','4B') AND ACCTNO NE .;
+         TABLE BRANCH2=' '  ALL='TOTAL',
+               (LOANTYPE=' ' ALL='TOTAL')*
+               (BALANCE=' ')*
+               (N='NO.OF A/C'*F=COMMA6. SUM='AMOUNT(RM)'*F=COMMA18.2)
+               / BOX=' ' RTS=30;
+TITLE1 'NEW DELINQUENT LOANS (CA TO BAD) WHICH SURFACED';
+TITLE2 'FROM 1-1-2002 TO REPORTING MONTH BREAKDOWN BY TYPE OF FACILITY';
+*;
+PROC SUMMARY DATA=MIS.GETCIS&REPTMON NWAY;
+   WHERE 60<=DAYS<=89 AND RISKRTE < 1 AND ACCTNO NE .;
+   CLASS IC;
+   VAR BALANCE CAASATX BTCAASATX;
+OUTPUT OUT=NPLASAT SUM=TOTBAL CAASTOTX BTCAASTOTX;
+*;
+DATA NPLASAT;
+   MERGE MIS.GETCIS&REPTMON (IN=A) NPLASAT;
+   BY IC;
+RUN;
+PROC SORT DATA=NPLASAT;
+   BY RISK BRANCH;
+*;
+DATA DUMMY;
+   SET NPLASAT (KEEP=RISK);
+   BY RISK;
+   IF FIRST.RISK THEN
+      DO BRANCH = 1 TO 267;
+      BRANCH1 = PUT(BRANCH,Z3.)||'('||PUT(BRANCH,BRCHCD.)||')';
+      OUTPUT;
+      END;
+RUN;
+DATA NPLASAT;
+   MERGE NPLASAT DUMMY;
+   BY RISK BRANCH;
+*;
+PROC SORT DATA=NPLASAT;
+   BY RISK BRANCH1;
+*;
+PROC SORT DATA=NPLASAT OUT=CAASAT;
+   BY DESCENDING CAASTOTX;
+*;
+DATA NEWX;
+   SET CAASAT;
+   WHERE 60<=DAYS<=89 AND RISKRTE < 1 AND ACCTNO NE . & TYPE NE 'BT';
+   RISK = '0C';
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'CA AS AT ' &RDATE;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE CAASTOTX DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING'
+            CAASTOTX  = 'TOTBAL';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'CA AS AT ' RDATE;
+   PUT @1 ' ';
+   PUT       'BRANCH'          ';'
+             'CUSTOMER NAME'   ';'
+             'ACCTNO'          ';'
+             'NOTENO'          ';'
+             'RISK'            ';'
+             'O/S AMOUNT'      ';'
+             'CAASTOTX'        ';'
+             'DAYS'            ';'
+             'CORPBIND'        ';'
+             'PRODUCT'         ';'  ;
+  END;
+    PUT      BRANCH1    ';'
+             NAME       ';'
+             ACCTNO     ';'
+             NOTENO     ';'
+             RISK       ';'
+             BALANCE    ';'
+             CAASTOTX   ';'
+             DAYS       ';'
+             CORPBIND   ';'
+             PRODUCT    ';'  ;
+RUN;
+PROC SORT DATA=NPLASAT OUT=CAASAT;
+   BY NAME;
+*;
+DATA NEWX;
+   SET CAASAT;
+   WHERE 60<=DAYS<=89 AND RISKRTE < 1 AND ACCTNO NE . AND TYPE NE 'BT';
+   RISK = '0C';
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'CA BY NAME AS AT ' &RDATE;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE CAASTOTX DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING'
+            CAASTOTX  = 'TOTBAL';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'CA BY NAME AS AT ' RDATE;
+   PUT @1 ' ';
+   PUT       'BRANCH'         ';'
+             'CUSTOMER NAME'  ';'
+             'ACCTNO'         ';'
+             'NOTENO'         ';'
+             'RISK'           ';'
+             'O/S AMOUNT'     ';'
+             'CAASTOTX'       ';'
+             'DAYS'           ';'
+             'CORPBIND'       ';'
+             'PRODUCT'        ';'   ;
+  END;
+    PUT      BRANCH1          ';'
+             NAME             ';'
+             ACCTNO           ';'
+             NOTENO           ';'
+             RISK             ';'
+             BALANCE          ';'
+             CAASTOTX         ';'
+             DAYS             ';'
+             CORPBIND         ';'
+             PRODUCT          ';' ;
+RUN;
+  /** NEW BILL CA REPORT **/
+
+PROC SORT DATA=NPLASAT OUT=CAASAT;
+   BY NAME;
+*;
+DATA NEWX;
+   SET CAASAT;
+   WHERE &BTCADT<=DAYS<=89 & RISKRTE < 1 & ACCTNO NE . & TYPE = 'BT';
+   RISK = '0C';
+*;
+PROC PRINT DATA=NEWX LABEL;
+TITLE1 'POTENTIAL NPL BILLS (NEW REPORT) AS AT ' &RDATE;
+   VAR BRANCH1 NAME ACCTNO NOTENO RISK BALANCE CAASTOTX DAYS CORPBIND
+       PRODUCT;
+   LABEL    BALANCE  = 'AMOUNT OUTSTANDING'
+            BTCAASTOTX  = 'TOTBAL';
+   FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+   SUM BALANCE;
+*;
+DATA _NULL_;
+  SET NEWX;
+  FILE FC2B;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'POTENTIAL NPL BILLS (NEW REPORT) AS AT ' RDATE;
+   PUT @1 ' ';
+   PUT       'BRANCH'         ';'
+             'CUSTOMER NAME'  ';'
+             'ACCTNO'         ';'
+             'NOTENO'         ';'
+             'RISK'           ';'
+             'O/S AMOUNT'     ';'
+             'BTCAASTOTX'       ';'
+             'DAYS'           ';'
+             'CORPBIND'       ';'
+             'PRODUCT'        ';'   ;
+  END;
+    PUT      BRANCH1          ';'
+             NAME             ';'
+             ACCTNO           ';'
+             NOTENO           ';'
+             RISK             ';'
+             BALANCE          ';'
+             BTCAASTOTX         ';'
+             DAYS             ';'
+             CORPBIND         ';'
+             PRODUCT          ';' ;
+RUN;
+PROC SORT DATA=MIS.GETCIS&REPTMON OUT=GETCIS; BY ACCTNO NOTENO;
+   WHERE RISKRTE IN (1,2,3,4);
+RUN;
+PROC SORT DATA=MIS.GETCIS&PREVMON OUT=GETCISPRV;
+   WHERE RISKRTE IN (1,2,3,4);
+   BY ACCTNO NOTENO;
+RUN;
+DATA MIS.REDUCT&REPTMON;
+   MERGE GETCIS (IN=A)
+         GETCISPRV (IN=B RENAME=(RISK=PRVRISK BALANCE=PRVBAL));
+   BY ACCTNO NOTENO;
+   IF A & NOT B THEN REDUCT = 0;
+   IF B & NOT A THEN REDUCT = PRVBAL;
+   IF A & B THEN PAYMENT = SUM(PRVBAL,(-1)*BALANCE);
+   TTLREDUC = SUM(REDUCT,PAYMENT);
+RUN;
+PROC SORT DATA=MIS.REDUCT&REPTMON;
+   BY IC;
+*;
+PROC SUMMARY DATA=MIS.REDUCT&REPTMON NWAY;
+   CLASS IC;
+   VAR REDUCT PAYMENT TTLREDUC;
+OUTPUT OUT=NEWNPL SUM=TOTRED TOTPAY TOTREDUC;
+*;
+DATA NEWNPL;
+   MERGE MIS.REDUCT&REPTMON (IN=A) NEWNPL;
+   BY IC;
+RUN;
+PROC SORT DATA=NEWNPL;
+   BY RISK BRANCH;
+*;
+DATA DUMMY;
+   SET NEWNPL (KEEP=RISK);
+   BY RISK;
+   IF FIRST.RISK THEN
+      DO BRANCH = 1 TO 267;
+      BRANCH1 = PUT(BRANCH,Z3.)||'('||PUT(BRANCH,BRCHCD.)||')';
+      BRANCH2 = PUT(BRANCH,BRCHCD.)||'('||PUT(BRANCH,Z3.)||')';
+      OUTPUT;
+      END;
+RUN;
+DATA NEWNPL;
+   MERGE NEWNPL DUMMY;
+   BY RISK BRANCH;
+*;
+PROC SORT; BY IC;
+DATA _NULL_;
+  SET NEWNPL;
+  FILE REDUCT;
+  WHERE TOTREDUC > 0;
+  FORMAT RISK $RISKNAME. CORPBIND $TYPE.;
+  RDATE = "&RDATE";
+  IF _N_ = 1 THEN DO;
+   PUT @1 ' ';
+   PUT @1 'REDUCTION IN NPL (SS1 TO BAD) A/C FOR THE MONTH OF ' RDATE;
+   PUT @1 ' ';
+   PUT       'BRANCH'         ';'
+             'CUSTOMER NAME'  ';'
+             'ICNO'           ';'
+             'ACCTNO'         ';'
+             'NOTENO'         ';'
+             'PRODUCT'        ';'
+             'RISK'           ';'
+             'REDUCTION'     ';'
+             'REPAYMENT'       ';'
+             'TOTAL REDUCT'     ';'
+             'TOTAL REPAY'       ';'
+             'REDUCT+REPAY'     ';' ;
+  END;
+    PUT      BRANCH1          ';'
+             NAME             ';'
+             IC               ';'
+             ACCTNO           ';'
+             NOTENO           ';'
+             PRODUCT          ';'
+             RISK             ';'
+             REDUCT           ';'
+             PAYMENT            ';'
+             TOTRED           ';'
+             TOTPAY            ';'
+             TOTREDUC          ';' ;
+RUN;
+//******************************************************************
+//* FTP HOST DATASETS TO PBB DATAWAREHOUSE SERVER
+//******************************************************************
+//*RUNSFTP  EXEC COZBATCH
+//*CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(CSASSFTP)
+//*           DD *
+//*lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+//*lzopts linerule=$lr
+//*cd TEXTFILE
+//*cd CRADMIN
+//*put //SAP.PBB.NEWSURF2.NEW.TEXT  NEWSURF.TXT
+//*put //SAP.PBB.NEWSURA.NEW.TEXT   NEWSURA.TXT
+//*put //SAP.PBB.REDUCT.TEXT        REDUCT.TXT
+//*EOB
+/*
