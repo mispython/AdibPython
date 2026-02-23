@@ -1,0 +1,1027 @@
+//EIBMIISX JOB MISEIS,EIBMIIS0,COND=(0,LT),CLASS=A,MSGCLASS=X,
+//         NOTIFY=&SYSUID,USER=OPCC
+/*JOBPARM  S=S1M1
+//*
+//* ONE TIME RUN. TO CHECK TIMING. SET AFTER EIBWLNEX
+//*
+//PRINT1   OUTPUT CLASS=K,
+//         NAME='MR.ERIC TAN',
+//         ROOM='14TH FLOOR',
+//         BUILDING='MENARA PBB',
+//         DEPT=' ',
+//         ADDRESS=('CREDIT ADMIN & SUPERVISION','MENARA PUBLIC BANK',
+//         'JALAN AMPANG','50000 KUALA LUMPUR'),
+//         DEST=S1.LOCAL
+//PRINT2   OUTPUT CLASS=A
+//PRINTX   OUTPUT CLASS=K,
+//         NAME='MR.CHEONG KIEN MENG',
+//         ROOM='23RD FLOOR',
+//         BUILDING='MENARA PBB',
+//         DEPT=' ',
+//         ADDRESS=('WILAYAH CREDIT CONTROL CENTRE','MENARA PBB',
+//         'JALAN AMPANG','50000 KUALA LUMPUR'),
+//         DEST=S1.LOCAL
+//DELETE   EXEC PGM=IEFBR14
+//DD2      DD DSN=SAP.PBB.NPL.GLFILE,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(1,1))
+//DD3      DD DSN=SAP.PIBB.NPL.GLFILE,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(1,1))
+//DD4      DD DSN=SAP.PBB.NPL.OUTFILE,
+//            DISP=(MOD,DELETE,DELETE),
+//            SPACE=(CYL,(1,1))
+//*
+//CREATE   EXEC PGM=IEFBR14
+//CRT01    DD DSN=SAP.PBB.NPL.GLFILE,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=324,BLKSIZE=27864),
+//            SPACE=(CYL,(1,1),RLSE),UNIT=SYSDA
+//CRT02    DD DSN=SAP.PIBB.NPL.GLFILE,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=324,BLKSIZE=27864),
+//            SPACE=(CYL,(1,1),RLSE),UNIT=SYSDA
+//CRT03    DD DSN=SAP.PBB.NPL.OUTFILE,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=324,BLKSIZE=27864),
+//            SPACE=(CYL,(1,1),RLSE),UNIT=SYSDA
+//*
+//EIBMIISX EXEC SAS609,REGION=6M,WORK='120000,8000'
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//IISCLOSE DD DSN=SAP.PBB.IISCLOSE,DISP=SHR
+//NPLFILE   DD DSN=RBP2.B033.LN.INTRADAY.GL,DISP=SHR
+//ACCTFILE  DD DSN=RBP2.B033.NPL.IISFILE,DISP=SHR
+//DATEFILE  DD DSN=RBP2.B033.NPL.DATEFILE,DISP=SHR
+//ADONIIS   DD DSN=RBP2.B033.IIS.MTDAMT(0),DISP=SHR
+//NPL       DD DSN=SAP.PBB.NPL.SASDATA,DISP=OLD
+//LOAN     DD DSN=SAP.PBB.MNILN(0),DISP=SHR
+//ILOAN    DD DSN=SAP.PIBB.MNILN(0),DISP=SHR
+//PRVLOAN  DD DSN=SAP.PBB.MNILN(-4),DISP=SHR
+//IPRVLOAN DD DSN=SAP.PIBB.MNILN(-4),DISP=SHR
+//GLFILE   DD DSN=SAP.PBB.NPL.GLFILE,DISP=MOD
+//GLFILE2  DD DSN=SAP.PIBB.NPL.GLFILE,DISP=MOD
+//OUTFILE  DD DSN=SAP.PBB.NPL.OUTFILE,DISP=OLD
+//SASLIST  DD SYSOUT=X
+//SORTWK01 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK02 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK03 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK04 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK05 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK06 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK07 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK08 DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SYSIN    DD *
+*+--------------------------------------------------------------+
+ |  PROGRAM : EIBMIIS0                                          |
+ |  DATE    : 01.08.02                                          |
+ |  REPORT  : MOVEMENTS OF INTEREST IN SUSPENSE FOR THE MONTH   |
+ |            ENDING                                            |
+ +--------------------------------------------------------------+;
+OPTIONS YEARCUTOFF=1950 NOCENTER;
+*;
+DATA _NULL_;
+   INFILE DATEFILE LRECL=80 OBS=1;
+   INPUT @01  EXTDATE   11.;
+   REPTDATE=INPUT(SUBSTR(PUT(EXTDATE, Z11.), 1, 8), MMDDYY8.);
+   MM1 = MONTH(REPTDATE)-1;
+   IF MM1= 0 THEN MM1 = 12;
+   DT = TODAY();
+   TM = TIME();
+   DATENOW=PUT(YEAR(DT),Z4.)||PUT(MONTH(DT),Z2.)||PUT(DAY(DT),Z2.);
+   TIMENOW=PUT(HOUR(TM),Z2.)||PUT(MINUTE(TM),Z2.)||PUT(SECOND(TM),Z2.);
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('PREVMON',PUT(MM1,Z2.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,WORDDATX18.));
+   CALL SYMPUT('REPTDAT',REPTDATE);
+   CALL SYMPUT('NOWK',PUT('4',$1.));
+   CALL SYMPUT('RPTDTE',PUT(DATENOW,8.));
+   CALL SYMPUT('RPTTIME',PUT(TIMENOW,6.));
+   CALL SYMPUT('CURDAY',PUT(DAY(DT),Z2.));
+   CALL SYMPUT('CURMTH',PUT(MONTH(DT),Z2.));
+   CALL SYMPUT('CURYR',PUT(YEAR(DT),Z4.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY10.));
+   CALL SYMPUT('RPTYR',PUT(YEAR(REPTDATE),Z4.));
+   CALL SYMPUT('RPTDY',PUT(DAY(REPTDATE), Z2.));
+RUN;
+
+ /********************** PBLEAN START ******************************/
+DATA NPL.NEXTDAY;
+  INFILE NPLFILE;
+  INPUT @1    NOTETYPE          3.
+        @6    NOTEINT          $1.
+        @8    ACCTNO           11.
+        @19   NOTENO            5.
+        @26   TRANSAMT        $18.
+        @44   DATE              6.
+        @52   ACCRAMT          15.7      /*782 ACCRUAL AMOUNT*/
+        @74   NOTECOST          7.;                      /*PBCCL3*/
+
+  IIS_AMT = ROUND(ACCRAMT,.01);
+PROC SORT DATA=NPL.NEXTDAY;
+   BY ACCTNO NOTENO;
+ /************************ PBLEAN END ********************************/
+*;
+DATA NPL.IIS&REPTMON;
+  INFILE ACCTFILE;
+  INPUT @001 ACCTNO    PD6.
+        @007 NAME      $24.
+        @031 ACCBRCH   PD4.
+        @035 NOTENO    PD3.
+        @038 REVERSED   $1.
+        @039 LOANTYPE  PD2.
+        @041 NTBRCH    PD4.
+        @045 PENDBRH   PD4.
+        @049 LOANSTAT    1.
+        @050 LNSTATDT  PD6.
+        @056 ACCRUAL   PD8.7
+        @064 ACTIACCR  PD8.7
+        @072 MTHINT    PD8.2
+        @080 INTMEMO   PD8.2
+        @088 FEEASSES  PD8.2
+        @096 FEEPAY    PD8.2
+        @104 FEEWAIVE  PD8.2
+        @112 FEELVLWR  PD8.2
+        @120 OPENBAL   PD8.2
+        @128 IIS       PD8.2
+        @136 IISR      PD8.2
+        @144 IISW      PD8.2
+        @152 IISCLOSE  PD8.2
+        @160 NPLIND     $1.
+        @161 COSTCTR   PD4.
+        @165 CURBAL    PD8.2
+        @173 FEEDUE    PD8.2
+        @181 FEELVTOT  PD8.2
+        @189 FEELWTOT  PD8.2
+        @197 MEMOINT   PD8.2
+        @205 OUTSTBAL  PD8.2
+        @213 INTACTIV  PD8.2
+        @221 FEERWTOT  PD8.2
+        @245 SPWOF     PD8.2
+        @253 ADJUST    PD8.2;
+*;
+PROC SORT DATA=NPL.IIS&REPTMON NODUPKEY;
+   BY ACCTNO NOTENO;
+   WHERE LOANTYPE < 981;
+*;
+DATA NPL.ADONIIS;
+  INFILE ADONIIS;
+  INPUT @001 ACCTNO     11.
+        @012 NOTENO      5.
+        @017 ADONIIS   16.2;
+RUN;
+PROC SORT; BY ACCTNO NOTENO;
+DATA NPL.IIS&REPTMON;
+   MERGE NPL.IIS&REPTMON(IN=A) NPL.ADONIIS(IN=B);
+   BY ACCTNO NOTENO;
+   IF A;
+RUN;
+%INC PGM(PBBLNFMT,PBBELF);
+*;
+DATA NPL.IISCLOSE&REPTMON&NOWK;
+  INFILE IISCLOSE FIRSTOBS=2;
+  INPUT @001 BRANCH     3.
+        @004 ACCTNO     11.
+        @036 NOTENO      5.
+        @068 IISCLS   16.2;
+   IF BRANCH = 901 THEN DELETE;
+*;
+PROC SORT; BY ACCTNO NOTENO;
+*;
+DATA PRVNPL;
+  SET  NPL.TOTIIS&PREVMON (DROP=PREVIIS PREVOI
+                          RENAME=(IISCLOSE=PREVIIS OICLOSE=PREVOI));
+  KEEP ACCTNO NOTENO PREVIIS PREVOI;
+*;
+PROC SORT DATA=PRVNPL NODUPKEY;
+  BY ACCTNO NOTENO;
+*;
+PROC FORMAT;
+     VALUE  $RISKFMT  1 = 'SS1'
+                      2 = 'SS2'
+                      3 = 'D  '
+                      4 = 'B  ';
+*;
+DATA LNNOTEMRG;
+   SET LOAN.LNNOTE ILOAN.LNNOTE;
+RUN;
+PROC SORT DATA=LNNOTEMRG OUT=LNNOTE NODUPKEY;
+  BY ACCTNO NOTENO;
+   WHERE (REVERSED^='Y' & NOTENO^=. & NTBRCH^= . );
+RUN;
+DATA PRVLOAN;
+   SET PRVLOAN.LNNOTE IPRVLOAN.LNNOTE;
+RUN;
+PROC SORT DATA=PRVLOAN
+     OUT=PRVLN(KEEP=ACCTNO NOTENO CURBAL REBATE
+               RENAME=(CURBAL=PREVBAL REBATE=PRVREB))
+  NODUPKEY;
+  BY ACCTNO NOTENO;
+  WHERE (REVERSED^='Y' & NOTENO^=. & NTBRCH^= . );
+RUN;
+DATA LNNOTE;
+   MERGE LNNOTE (IN=A) PRVLN
+         NPL.IISCLOSE&REPTMON&NOWK(DROP=BRANCH);
+   BY ACCTNO NOTENO;
+   IF A;
+RUN;
+DATA NPL.TOTIIS&REPTMON;
+   MERGE NPL.IIS&REPTMON (IN=A) LNNOTE PRVNPL;
+   BY ACCTNO NOTENO;
+   IF A;
+   FORMAT CLASSNEW $3.;
+   REPTDATE = &REPTDAT;
+   CLASSOLD = ' ';
+   IF BLDATE > 0 THEN AGEING = REPTDATE - BLDATE;
+   IF OLDNOTEDAYARR > 0 AND 98000<=NOTENO<=98999 THEN DO;
+      IF AGEING < 0 THEN AGEING = 0;
+      AGEING = SUM(AGEING,OLDNOTEDAYARR);
+   END;
+   IF RISKRATE NE ' ' THEN CLASSNEW = PUT(RISKRATE,$RISKFMT.);
+   ELSE CLASSNEW = ' ';
+   BRANCH = PUT(NTBRCH,Z3.)||' '||PUT(NTBRCH,BRCHCD.);
+   DIFFBAL = SUM(PREVBAL,(-1)*CURBAL,(-1)*SPWOF,(-1)*IISW,(-1)*ADJUST);
+   IISP = PREVIIS;
+   OIP = PREVOI;
+
+   IF NPLIND IN ('O','P')
+      THEN IIS = SUM(IISR,IISW,(-1)*IISP);
+   IF LOANTYPE IN (517,521,522,523,528) AND NPLIND = 'N' AND
+      LSTTRNCD = 166 THEN LSTTRNAM = LSTTRNAM / 100000;
+   ELSE LSTTRNAM = 0;
+   IF NTINT = 'A' THEN DO;
+      IF IISCLS NE . THEN IISP = SUM(IISCLS,(-1)*OIP);
+      IF NPLIND IN ('O','P') THEN IIS = SUM(IISR,IISW,(-1)*IISP);
+      IIS = ADONIIS;
+      OI = FEEASSES - FEEWAIVE;
+      IF OI < 0 THEN OI = 0;
+      OIREC = FEEPAY;
+      IF BORSTAT IN ('W','X') AND NPLIND NE 'P' THEN DO;
+         IIS = 0;
+         OI = FEELWTOT;
+      *  OIREC = OIP;
+      END;
+      IF NPLIND = 'E' & BORSTAT = 'P' OR LSTTRNCD = 652 THEN IISR = 0;
+      ELSE IF LOANSTAT = 1 OR DIFFBAL >= IISP THEN
+         IISR = SUM(IISP,(-1)*IISW);
+      ELSE IF DIFFBAL < IISP THEN IISR = SUM(DIFFBAL,(-1)*IISW);
+      IF NPLIND = 'O' THEN DO;
+       *  IISR = SUM(IISP,(-1)*IISW);
+         IIS = 0;
+         OIREC = SUM(FEEPAY,FEELWTOT);
+      END;
+      IF IISR < 0 THEN IISR = 0;
+      IF NPLIND = 'P' THEN DO;
+       *  IISR = SUM(IISR,IIS);
+         IIS = SUM(IIS,IISR,IISW,(-1)*IISP);
+      END;
+      IISCLOSE = SUM(IISP,IIS,(-1)*IISR,(-1)*IISW);
+      IF IISCLOSE < 0 THEN IISCLOSE = 0;
+      IF NPLIND = 'O' THEN OICLOSE = 0;
+      ELSE OICLOSE = FEELWTOT;
+      TOTOPEN = SUM(IISP,OIP);
+      TOTIIS = SUM(IIS,OI);
+      TOTIISR = SUM(IISR,OIREC);
+      TOTWOF  = SUM(IISW);
+      IF NPLIND = 'N' THEN DO;
+         TOTIIS = SUM(IISCLOSE,TOTIISR,TOTWOF);
+         TOTOPEN = 0;
+      END;
+      TOTCLOSE = SUM(IISCLOSE,OICLOSE);
+      IF BORSTAT IN ('W','X') AND NPLIND NE 'P' THEN
+         TOTCLOSE = SUM(TOTOPEN,(-1)*TOTIISR,(-1)*TOTWOF);
+   END;
+   ELSE DO;
+      IF NPLIND = 'O' THEN DO;
+        IF ACTIACCR = 0 THEN DO;
+          IF INTACTIV < 0 THEN IISR = SUM(IISR,FEELWTOT,(-1)*INTACTIV);
+          ELSE IISR = SUM(IISR,FEELWTOT);
+          IIS = SUM(IISR,IISW,(-1)*IISP);
+      *   IIS = SUM(IIS,FEELWTOT);
+        END;
+        ELSE DO;
+          IIS =  SUM(IISR,IISW,ACTIACCR,(-1)*IISP); ;
+          OIREC = SUM(FEEPAY,FEELWTOT);
+        END;
+      END;
+      TOTOPEN = IISP;
+      TOTIISR = IISR;
+      TOTWOF = IISW;
+      TOTIIS = IIS;
+      IF NPLIND = 'N' THEN DO;
+         TOTIIS = SUM(IISCLOSE,TOTIISR,TOTWOF);
+         TOTOPEN = 0;
+      END;
+      IF NPLIND = 'O' THEN TOTCLOSE = SUM(IISP,IIS,(-1)*IISR,(-1)*IISW);
+      ELSE TOTCLOSE = IISCLOSE;
+   END;
+*;
+DATA _NULL_;
+   SET NPL.TOTIIS&REPTMON;
+   FILE OUTFILE;
+   IF NTINT = 'A';
+   PUT @01   ACCTNO    11.
+       @013  NOTENO     5.
+       @020  IISCLOSE  16.2;
+RUN;
+DATA NPL.TOTIIS&REPTMON;
+   SET NPL.TOTIIS&REPTMON;
+RUN;
+ /************************ PBLEAN START ******************************/
+PROC SORT DATA=NPL.TOTIIS&REPTMON OUT=TOTIIS;
+   BY ACCTNO NOTENO;
+   WHERE (LOANTYPE < 4 OR LOANTYPE > 99) AND
+     LOANTYPE NOT IN (100,199,380,381,390,500,516,517,521,522,523,528);
+
+DATA NXDAYNPL;
+   MERGE TOTIIS(IN=A) NPL.NEXTDAY(IN=B);
+   BY ACCTNO NOTENO;
+   IF A AND B THEN PREV_IND = 'E';ELSE PREV_IND = 'N';   /*PBCCL3*/
+   /*IF (A=1) AND (B=1) THEN                              *PBCCL3*/
+     IF B=1 THEN OUTPUT NXDAYNPL;                        /*PBCCL3*/
+RUN;
+DATA NXDAYNPL;
+   MERGE NXDAYNPL(IN=A) NPL.ADONIIS(IN=B);               /*PBCCL3*/
+   BY ACCTNO NOTENO;                                     /*PBCCL3*/
+   IF A;                                                 /*PBCCL3*/
+   IF COSTCTR =. THEN COSTCTR=NOTECOST;                  /*PBCCL3*/
+   IF LOANTYPE =. THEN LOANTYPE=NOTETYPE;                /*PBCCL3*/
+RUN;                                                     /*PBCCL3*/
+PROC SORT DATA=NXDAYNPL; BY COSTCTR ACCTNO;
+PROC PRINT DATA = NXDAYNPL; VAR ACCTNO NOTENO COSTCTR LOANTYPE NOTEINT
+                                NPLIND PREV_IND IIS IIS_AMT ADONIIS;
+
+ /*** PBB - CONVENTIONAL ***/
+DATA GLNXDAY(KEEP=COSTCTR ARID JDESC ASIGN AVALUE);
+   SET NXDAYNPL END=EOF; BY COSTCTR;
+   FORMAT   ARID  $8. AVALUE  14.2  ASIGN  $1. JDESC $60.;
+   WHERE ((COSTCTR < 3000 OR COSTCTR > 3999) AND
+          COSTCTR NOT IN (4043,4048)) OR
+         (LOANTYPE IN (147,148,173,174));
+
+   /*IF NPLIND = 'O' AND PREV_IND = 'N' THEN DO;            *PBCCL3*/
+   IF PREV_IND = 'N' THEN DO;                              /*PBCCL3*/
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY1';
+      JDESC = 'IISL-NORMALISE NEW NPL';
+      AVALUE   = IIS_AMT;
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLNXDAY;
+   END;
+   /*IF NPLIND = 'O' AND PREV_IND = 'N' THEN DO;            *PBCCL3*/
+   IF PREV_IND = 'N' THEN DO;                              /*PBCCL3*/
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY2';
+      JDESC = 'IISL-REVERSE IIS CHARGE';
+   /* AVALUE   = IIS - TRANSAMT;  */                          /*PBLEAN*/
+      AVALUE   = IIS_AMT;
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLNXDAY;
+   END;
+   /*IF NPLIND = 'N' THEN DO;                   */            /*PBLEAN*/
+   /*   ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY3'; */            /*PBLEAN*/
+   /*   JDESC = 'IISL-REVERSE INT RECOVERED';   */            /*PBLEAN*/
+   /*   AVALUE   = TRANSAMT;                    */            /*PBLEAN*/
+   /*   IF AVALUE < 0 THEN DO;                  */            /*PBLEAN*/
+   /*      AVALUE   = AVALUE * -1;              */            /*PBLEAN*/
+   /*      ASIGN = '-';                         */            /*PBLEAN*/
+   /*   END;                                    */            /*PBLEAN*/
+   /*   ELSE                                    */            /*PBLEAN*/
+   /*      ASIGN = '+';                         */            /*PBLEAN*/
+   /*   OUTPUT GLNXDAY;                         */            /*PBLEAN*/
+   /*END;                                       */            /*PBLEAN*/
+
+   /*IF NPLIND = 'O' AND PREV_IND = 'E' THEN DO;           *PBCCL3*/
+   IF PREV_IND = 'E' THEN DO;                             /*PBCCL3*/
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY4';
+      JDESC = 'IISL-NORMALISE EXISTING NPL';
+      AVALUE   = IIS_AMT;
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLNXDAY;
+   END;
+   /*IF NPLIND = 'O' AND PREV_IND = 'E' THEN DO;           *PBCCL3*/
+   IF PREV_IND = 'E' THEN DO;                             /*PBCCL3*/
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY5';
+      JDESC = 'IISL-REVERSE IIS CHARGE';
+   /* AVALUE   = IIS - TRANSAMT; */                           /*PBLEAN*/
+      AVALUE   = IIS_AMT;                                     /*PBLEAN*/
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLNXDAY;
+   END;
+   /*IF NPLIND = 'E' THEN DO;                   */            /*PBLEAN*/
+   /*   ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY6'; */            /*PBLEAN*/
+   /*   JDESC = 'IISL-REVERSE INT RECOVERED';   */            /*PBLEAN*/
+   /*   AVALUE   = TRANSAMT;                    */            /*PBLEAN*/
+   /*   IF AVALUE < 0 THEN DO;                  */            /*PBLEAN*/
+   /*      AVALUE   = AVALUE * -1;              */            /*PBLEAN*/
+   /*      ASIGN = '-';                         */            /*PBLEAN*/
+   /*   END;                                    */            /*PBLEAN*/
+   /*   ELSE                                    */            /*PBLEAN*/
+   /*      ASIGN = '+';                         */            /*PBLEAN*/
+   /*   OUTPUT GLNXDAY;                         */            /*PBLEAN*/
+   /*END;                                       */            /*PBLEAN*/
+
+ /*** PIBB - ISLAMIC ***/
+DATA GLNXDAY2(KEEP=COSTCTR ARID JDESC ASIGN AVALUE);
+   SET NXDAYNPL END=EOF; BY COSTCTR;
+   FORMAT   ARID  $8. AVALUE  14.2  ASIGN  $1. JDESC $60.;
+   WHERE ((3000 <= COSTCTR <= 3999) OR COSTCTR IN (4043,4048)) AND
+      (LOANTYPE NOT IN (147,148,173,174));
+
+   /*IF NPLIND = 'O' AND PREV_IND = 'N' THEN DO;         *PBCCL3*/
+   IF PREV_IND = 'N' THEN DO;                           /*PBCCL3*/
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY1';
+      JDESC = 'IISL-NORMALISE NEW NPL';
+      /*AVALUE   = IIS_AMT;                              *PBCCL3*/
+      IF NOTEINT = 'A' THEN AVALUE = ADONIIS;           /*PBCCL3*/
+      ELSE AVALUE = IIS_AMT;                            /*PBCCL3*/
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLNXDAY2;
+   END;
+   /*IF NPLIND = 'O' AND NOTEINT NOT = 'A' AND PREV_IND = 'N' THEN DO;
+                                                            *PBCCL3*/
+   IF NOTEINT NOT = 'A' AND PREV_IND = 'N' THEN DO;        /*PBCCL3*/
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY2';
+      JDESC = 'IISL-REVERSE IIS CHARGE';
+   /* AVALUE   = IIS - TRANSAMT;  */                          /*PBLEAN*/
+      AVALUE   = IIS_AMT;                                     /*PBLEAN*/
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLNXDAY2;
+   END;
+   /*IF NPLIND = 'N' THEN DO;                   */            /*PBLEAN*/
+   /*   ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY3'; */            /*PBLEAN*/
+   /*   JDESC = 'IISL-REVERSE INT RECOVERED';   */            /*PBLEAN*/
+   /*   AVALUE   = TRANSAMT;                    */            /*PBLEAN*/
+   /*   IF AVALUE < 0 THEN DO;                  */            /*PBLEAN*/
+   /*      AVALUE   = AVALUE * -1;              */            /*PBLEAN*/
+   /*      ASIGN = '-';                         */            /*PBLEAN*/
+   /*   END;                                    */            /*PBLEAN*/
+   /*   ELSE                                    */            /*PBLEAN*/
+   /*      ASIGN = '+';                         */            /*PBLEAN*/
+   /*   OUTPUT GLNXDAY2;                        */            /*PBLEAN*/
+   /*END;                                       */            /*PBLEAN*/
+
+   /*IF NPLIND = 'O' AND PREV_IND = 'E' THEN DO;          *PBCCL3*/
+   IF PREV_IND = 'E' THEN DO;                            /*PBCCL3*/
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY4';
+      JDESC = 'IISL-NORMALISE EXISTING NPL';
+      /*AVALUE   = IIS_AMT;                              *PBCCL3*/
+      IF NOTEINT = 'A' THEN AVALUE = ADONIIS;           /*PBCCL3*/
+      ELSE AVALUE = IIS_AMT;                            /*PBCCL3*/
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLNXDAY2;
+   END;
+   /*IF NPLIND = 'O' AND NOTEINT NOT = 'A' AND PREV_IND = 'E' THEN DO;
+                                                           *PBCCL3*/
+   IF NOTEINT NOT = 'A' AND PREV_IND = 'E' THEN DO;       /*PBCCL3*/
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY5';
+      JDESC = 'IISL-REVERSE IIS CHARGE';
+   /* AVALUE   = IIS - TRANSAMT; */                           /*PBLEAN*/
+      AVALUE   = IIS_AMT;                                     /*PBLEAN*/
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLNXDAY2;
+   END;
+   /*IF NPLIND = 'E' THEN DO;                   */            /*PBLEAN*/
+   /*   ARID = 'II'||PUT(LOANTYPE, Z3.)||'PY6'; */            /*PBLEAN*/
+   /*   JDESC = 'IISL-REVERSE INT RECOVERED';   */            /*PBLEAN*/
+   /*   AVALUE   = TRANSAMT;                    */            /*PBLEAN*/
+   /*   IF AVALUE < 0 THEN DO;                  */            /*PBLEAN*/
+   /*      AVALUE   = AVALUE * -1;              */            /*PBLEAN*/
+   /*      ASIGN = '-';                         */            /*PBLEAN*/
+   /*   END;                                    */            /*PBLEAN*/
+   /*   ELSE                                    */            /*PBLEAN*/
+   /*      ASIGN = '+';                         */            /*PBLEAN*/
+   /*   OUTPUT GLNXDAY2;                        */            /*PBLEAN*/
+   /*END;                                       */            /*PBLEAN*/
+ /************************ PBLEAN END ********************************/
+
+PROC SORT DATA=NPL.TOTIIS&REPTMON OUT=TOTIIS;
+   BY ACCTNO NOTENO;
+   WHERE (LOANTYPE < 4 OR LOANTYPE > 99) AND
+     LOANTYPE NOT IN (100,199,380,381,390,500,516,517,521,522,523,528);
+*;
+DATA TOTIIS;
+   MERGE TOTIIS(IN=A) NPL.NEXTDAY(IN=B);
+   BY ACCTNO NOTENO;
+   IF A;
+   IF B THEN DELETE;
+RUN;
+PROC SORT DATA=TOTIIS; BY COSTCTR ACCTNO;
+
+ /********************************************************************/
+ /* PROCESS & CREATE INTERFACE FILE FOR GL WALKER                    */
+ /********************************************************************/
+
+DATA GLPROC(KEEP=COSTCTR ARID JDESC ASIGN AVALUE);
+   SET TOTIIS END=EOF; BY COSTCTR;
+   FORMAT   ARID  $8. AVALUE  14.2  ASIGN  $1. JDESC $60.;
+   WHERE ((COSTCTR < 3000 OR COSTCTR > 3999) AND
+          COSTCTR NOT IN (4043,4048)) OR
+         (LOANTYPE IN (147,148,173,174));
+   IF NTINT ^= 'A' THEN DO;
+      IF INTACTIV>0 & LOANTYPE NOT IN (600:609,631:637,650:699) THEN DO;
+         ARID = 'II'||PUT(LOANTYPE, Z3.)||'CWB';
+         JDESC = 'IISL-CONV LOAN WRITE BACK';
+         AVALUE   = INTACTIV;
+         IF AVALUE < 0 THEN
+            ASIGN = '-';
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC;
+      END;
+
+      IF IISW > 0 THEN DO;
+         ARID = 'II'||PUT(LOANTYPE, Z3.)||'CWO';
+         AVALUE   = IISW;
+         JDESC = 'IISL-CONV LOAN WRITE OFF';
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC;
+      END;
+      IF SPWOF > 0 THEN DO;
+         ARID = 'SP'||PUT(LOANTYPE, Z3.)||'CWO';
+         JDESC = 'SP WRITTEN-OFF - CONV';
+         AVALUE   = SPWOF;
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC;
+      END;
+   END;
+   ELSE DO;
+      IF IISR > 0 & LOANTYPE NOT IN (600:609,631:637,650:699) THEN DO;
+         ARID = 'II'||PUT(LOANTYPE, Z3.)||'IWB';
+         JDESC = 'IISL-ISL LOAN WRITE BACK';
+         AVALUE   = IISR;
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC;
+      END;
+      IF IISW > 0 THEN DO;
+         ARID = 'II'||PUT(LOANTYPE, Z3.)||'IWO';
+         AVALUE   = IISW;
+         JDESC = 'IISL-ISL LOAN WRITE OFF';
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC;
+      END;
+      IF SPWOF > 0 THEN DO;
+         ARID = 'SP'||PUT(LOANTYPE, Z3.)||'IWO';
+         JDESC = 'SP WRITTEN-OFF - ISLM';
+         AVALUE   = SPWOF;
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+            OUTPUT GLPROC;
+      END;
+   END;
+   IF NPLIND = 'O' AND FEELWTOT > 0 THEN DO;
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'COR';
+      JDESC = 'IISL-CORR FOR KYWD FEE ASSESS';
+      AVALUE   = FEELWTOT;
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLPROC;
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'FWB';
+      JDESC = 'IISL-NORMALIZATION OF FEETYPE LW';
+      OUTPUT GLPROC;
+   END;
+
+PROC SORT DATA=GLPROC;
+   BY COSTCTR ARID;
+PROC SORT DATA=GLNXDAY;
+   BY COSTCTR ARID;
+
+DATA GLINTER;
+   FILE GLFILE;
+   IF TRN=0 THEN DO;
+      PUT @1   'INTFIISL'
+          @9   '0'
+          @18  "&RPTYR"
+          @22  "&REPTMON"
+          @24  "&RPTDY"
+          @26  "&RPTDTE"
+          @34  "&RPTTIME";
+      PUT @1   'INTFIISL'
+          @9   '9'
+          @18  "&RPTYR"
+          @22  "&REPTMON"
+          @24  "&RPTDY"
+          @26  "&RPTDTE"
+          @34  "&RPTTIME"
+          @40  '+'
+          @41  '0000000000000000'
+          @57  '-'
+          @58  '0000000000000000'
+          @74  '+'
+          @75  '0000000000000000'
+          @91  '-'
+          @92  '0000000000000000'
+          @108 '000000000'     ;
+   END;
+   RETAIN TRN;
+
+ /*SET GLPROC NOBS=TRN END=EOF;         */                    /*PBLEAN*/
+   SET GLPROC GLNXDAY NOBS=TRN END=EOF;                       /*PBLEAN*/
+   BY COSTCTR ARID;
+   AVALUE = ROUND(AVALUE,.01);
+   IF AVALUE < 0 THEN DO;
+      AVALUE   = AVALUE * -1;
+      ASIGN = '-';
+   END;
+   ELSE ASIGN = '+';
+   FILE GLFILE;
+   FORMAT    BRHAMT   17.2     BRHAMTO   $16.     AMTTOTC    17.2
+             AMTTOTD  17.2     AMTTOTCO  $16.     AMTTOTDO   $16.;
+
+   IF _N_=1 THEN DO;
+      CNT = 0;
+      AMTTOTC = 0;
+      AMTTOTD = 0;
+      PUT @1   'INTFIISL'
+          @9   '0'
+          @18  "&RPTYR"
+          @22  "&REPTMON"
+          @24  "&RPTDY"
+          @26  "&RPTDTE"
+          @34  "&RPTTIME";
+   END;
+
+   IF FIRST.ARID THEN DO;
+      BRHAMT = 0;
+   END;
+
+   BRHAMT + AVALUE;
+   IF ASIGN = '-' THEN
+      AMTTOTC + AVALUE;
+   ELSE
+      AMTTOTD + AVALUE;
+
+   IF LAST.ARID THEN DO;
+      CNT + 1;
+      TEMPAMT1 = PUT(BRHAMT, Z17.2);
+      BRHAMTO  = COMPRESS(TEMPAMT1,'.');
+      PUT @1   'INTFIISL'
+          @9   '1'
+          @10  ARID       $8.
+          @18  'PBBH'              /* CHANGE WHEN MOVE TO PRODUCTION */
+          @22  COSTCTR     Z4.
+          @71  'MYR'         @;
+   /* IF SUBSTR(ARID,6,3) EQ 'COR' THEN DO;     */            /*PBLEAN*/
+      IF SUBSTR(ARID,6,3) IN ('COR','PY2','PY3',              /*PBLEAN*/
+                                    'PY5','PY6') THEN DO;     /*PBLEAN*/
+      PUT @77  "&CURYR"
+          @81  "&CURMTH"
+          @83  "&CURDAY"     @;
+      END;
+      ELSE DO;
+      PUT @77  "&RPTYR"
+          @81  "&REPTMON"
+          @83  "&RPTDY"     @;
+      END;
+      PUT @85  ASIGN      $1.
+          @86  BRHAMTO    $16.
+          @102 JDESC      $60.
+          @162 ARID       $8.
+          @172 'IISL'
+          @252 '+'
+          @253 '0000000000000000'
+          @273 '+'
+          @274 '000000000000000'   @;
+   /* IF SUBSTR(ARID,6,3) EQ 'COR' THEN DO; */                /*PBLEAN*/
+      IF SUBSTR(ARID,6,3) IN ('COR','PY2','PY3',              /*PBLEAN*/
+                                    'PY5','PY6') THEN DO;     /*PBLEAN*/
+      PUT @297  "&CURYR"
+          @301  "&CURMTH"
+          @303  "&CURDAY"     @;
+      END;
+      ELSE DO;
+      PUT @297 "&RPTYR"
+          @301 "&REPTMON"
+          @303 "&RPTDY"       @;
+      END;
+      PUT @307 '+'
+          @308 '0000000000000000' ;
+   END;
+
+   IF EOF THEN DO;
+      TEMPAMT1  = PUT(AMTTOTC, Z17.2);
+      AMTTOTCO  = COMPRESS(TEMPAMT1,'.');
+      TEMPAMT2  = PUT(AMTTOTD, Z17.2);
+      AMTTOTDO  = COMPRESS(TEMPAMT2,'.');
+      PUT @1   'INTFIISL'
+          @9   '9'
+          @18  "&RPTYR"
+          @22  "&REPTMON"
+          @24  "&RPTDY"
+          @26  "&RPTDTE"
+          @34  "&RPTTIME"
+          @40  '+'
+          @41  AMTTOTDO    $16.
+          @57  '-'
+          @58  AMTTOTCO    $16.
+          @74  '+'
+          @75  '0000000000000000'
+          @91  '-'
+          @92  '0000000000000000'
+          @108 CNT         Z9. ;
+   END;
+   RETURN;
+RUN;
+  /** PIBB **/
+DATA GLPROC2(KEEP=COSTCTR ARID JDESC ASIGN AVALUE);
+   SET TOTIIS END=EOF; BY COSTCTR;
+   FORMAT   ARID  $8. AVALUE  14.2  ASIGN  $1. JDESC $60.;
+   WHERE ((3000 <= COSTCTR <= 3999) OR COSTCTR IN (4043,4048)) AND
+      (LOANTYPE NOT IN (147,148,173,174));
+   IF NTINT ^= 'A' THEN DO;
+      IF INTACTIV>0 & LOANTYPE NOT IN (600:609,631:637,650:699) THEN DO;
+         ARID = 'II'||PUT(LOANTYPE, Z3.)||'CWB';
+         JDESC = 'IISL-CONV LOAN WRITE BACK';
+         AVALUE   = INTACTIV;
+         IF AVALUE < 0 THEN
+            ASIGN = '-';
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC2;
+      END;
+
+      IF IISW > 0 THEN DO;
+         ARID = 'II'||PUT(LOANTYPE, Z3.)||'CWO';
+         AVALUE   = IISW;
+         JDESC = 'IISL-CONV LOAN WRITE OFF';
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC2;
+      END;
+      IF SPWOF > 0 THEN DO;
+         ARID = 'SP'||PUT(LOANTYPE, Z3.)||'CWO';
+         JDESC = 'SP WRITTEN-OFF - CONV';
+         AVALUE   = SPWOF;
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC2;
+      END;
+   END;
+   ELSE DO;
+      IF IISR > 0 & LOANTYPE NOT IN (600:609,631:637,650:699) THEN DO;
+         ARID = 'II'||PUT(LOANTYPE, Z3.)||'IWB';
+         JDESC = 'IISL-ISL LOAN WRITE BACK';
+         AVALUE   = IISR;
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC2;
+      END;
+      IF IISW > 0 THEN DO;
+         ARID = 'II'||PUT(LOANTYPE, Z3.)||'IWO';
+         AVALUE   = IISW;
+         JDESC = 'IISL-ISL LOAN WRITE OFF';
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+         OUTPUT GLPROC2;
+      END;
+      IF SPWOF > 0 THEN DO;
+         ARID = 'SP'||PUT(LOANTYPE, Z3.)||'IWO';
+         JDESC = 'SP WRITTEN-OFF - ISLM';
+         AVALUE   = SPWOF;
+         IF AVALUE < 0 THEN DO;
+            AVALUE   = AVALUE * -1;
+            ASIGN = '-';
+         END;
+         ELSE
+            ASIGN = '+';
+            OUTPUT GLPROC2;
+      END;
+   END;
+   IF NPLIND = 'O' AND FEELWTOT > 0 THEN DO;
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'COR';
+      JDESC = 'IISL-CORR FOR KYWD FEE ASSESS';
+      AVALUE   = FEELWTOT;
+      IF AVALUE < 0 THEN DO;
+         AVALUE   = AVALUE * -1;
+         ASIGN = '-';
+      END;
+      ELSE
+         ASIGN = '+';
+      OUTPUT GLPROC2;
+      ARID = 'II'||PUT(LOANTYPE, Z3.)||'FWB';
+      JDESC = 'IISL-NORMALIZATION OF FEETYPE LW';
+      OUTPUT GLPROC2;
+   END;
+
+PROC SORT DATA=GLPROC2;
+   BY COSTCTR ARID;
+PROC SORT DATA=GLNXDAY2;
+   BY COSTCTR ARID;
+
+DATA GLINTER;
+   FILE GLFILE2;
+   IF TRN=0 THEN DO;
+      PUT @1   'INTFISL2'
+          @9   '0'
+          @18  "&RPTYR"
+          @22  "&REPTMON"
+          @24  "&RPTDY"
+          @26  "&RPTDTE"
+          @34  "&RPTTIME";
+      PUT @1   'INTFISL2'
+          @9   '9'
+          @18  "&RPTYR"
+          @22  "&REPTMON"
+          @24  "&RPTDY"
+          @26  "&RPTDTE"
+          @34  "&RPTTIME"
+          @40  '+'
+          @41  '0000000000000000'
+          @57  '-'
+          @58  '0000000000000000'
+          @74  '+'
+          @75  '0000000000000000'
+          @91  '-'
+          @92  '0000000000000000'
+          @108 '000000000'     ;
+   END;
+   RETAIN TRN;
+
+ /*SET GLPROC2 NOBS=TRN END=EOF;         */                   /*PBLEAN*/
+   SET GLPROC2 GLNXDAY2 NOBS=TRN END=EOF;                     /*PBLEAN*/
+   BY COSTCTR ARID;
+   AVALUE = ROUND(AVALUE,.01);
+   IF AVALUE < 0 THEN DO;
+      AVALUE   = AVALUE * -1;
+      ASIGN = '-';
+   END;
+   ELSE ASIGN = '+';
+   FILE GLFILE2;
+   FORMAT    BRHAMT   17.2     BRHAMTO   $16.     AMTTOTC    17.2
+             AMTTOTD  17.2     AMTTOTCO  $16.     AMTTOTDO   $16.;
+
+   IF _N_=1 THEN DO;
+      CNT = 0;
+      AMTTOTC = 0;
+      AMTTOTD = 0;
+      PUT @1   'INTFISL2'
+          @9   '0'
+          @18  "&RPTYR"
+          @22  "&REPTMON"
+          @24  "&RPTDY"
+          @26  "&RPTDTE"
+          @34  "&RPTTIME";
+   END;
+
+   IF FIRST.ARID THEN DO;
+      BRHAMT = 0;
+   END;
+
+   BRHAMT + AVALUE;
+   IF ASIGN = '-' THEN
+      AMTTOTC + AVALUE;
+   ELSE
+      AMTTOTD + AVALUE;
+
+   IF LAST.ARID THEN DO;
+      CNT + 1;
+      TEMPAMT1 = PUT(BRHAMT, Z17.2);
+      BRHAMTO  = COMPRESS(TEMPAMT1,'.');
+      PUT @1   'INTFISL2'
+          @9   '1'
+          @10  ARID       $8.
+          @18  'PIBB'              /* CHANGE WHEN MOVE TO PRODUCTION */
+          @22  COSTCTR     Z4.
+          @71  'MYR'         @;
+   /* IF SUBSTR(ARID,6,3) EQ 'COR' THEN DO;     */            /*PBLEAN*/
+      IF SUBSTR(ARID,6,3) IN ('COR','PY2','PY3',              /*PBLEAN*/
+                                    'PY5','PY6') THEN DO;     /*PBLEAN*/
+      PUT @77  "&CURYR"
+          @81  "&CURMTH"
+          @83  "&CURDAY"     @;
+      END;
+      ELSE DO;
+      PUT @77  "&RPTYR"
+          @81  "&REPTMON"
+          @83  "&RPTDY"     @;
+      END;
+      PUT @85  ASIGN      $1.
+          @86  BRHAMTO    $16.
+          @102 JDESC      $60.
+          @162 ARID       $8.
+          @172 'IISL'
+          @252 '+'
+          @253 '0000000000000000'
+          @273 '+'
+          @274 '000000000000000'   @;
+  /*  IF SUBSTR(ARID,6,3) EQ 'COR' THEN DO;  */               /*PBLEAN*/
+      IF SUBSTR(ARID,6,3) IN ('COR','PY2','PY3',              /*PBLEAN*/
+                                    'PY5','PY6') THEN DO;     /*PBLEAN*/
+      PUT @297  "&CURYR"
+          @301  "&CURMTH"
+          @303  "&CURDAY"     @;
+      END;
+      ELSE DO;
+      PUT @297 "&RPTYR"
+          @301 "&REPTMON"
+          @303 "&RPTDY"       @;
+      END;
+      PUT @307 '+'
+          @308 '0000000000000000' ;
+   END;
+
+   IF EOF THEN DO;
+      TEMPAMT1  = PUT(AMTTOTC, Z17.2);
+      AMTTOTCO  = COMPRESS(TEMPAMT1,'.');
+      TEMPAMT2  = PUT(AMTTOTD, Z17.2);
+      AMTTOTDO  = COMPRESS(TEMPAMT2,'.');
+      PUT @1   'INTFISL2'
+          @9   '9'
+          @18  "&RPTYR"
+          @22  "&REPTMON"
+          @24  "&RPTDY"
+          @26  "&RPTDTE"
+          @34  "&RPTTIME"
+          @40  '+'
+          @41  AMTTOTDO    $16.
+          @57  '-'
+          @58  AMTTOTCO    $16.
+          @74  '+'
+          @75  '0000000000000000'
+          @91  '-'
+          @92  '0000000000000000'
+          @108 CNT         Z9. ;
+   END;
+   RETURN;
+RUN;
