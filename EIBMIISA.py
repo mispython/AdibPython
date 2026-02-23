@@ -1,880 +1,447 @@
 """
-EIBMIISA - Monthly Movement of Interest-In-Suspense (IIS) Report
-Comprehensive IIS reporting for NPL accounts including:
-- IIS opening/closing balances
-- IIS recognized, recovered, written-off
-- Realisable value calculation for collateral
-- Multiple report formats (detail by NPL type, by branch)
+EIBMIISA - Monthly Movement of Interest-In-Suspense (IIS)
+Comprehensive IIS reporting for NPL accounts including opening/closing balances,
+IIS recognized, recovered, written-off, and realisable value calculation.
 """
 
 import polars as pl
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from pathlib import Path
-import numpy as np
+from collections import defaultdict
 
 # =============================================================================
-# CONFIGURATION
+# CONFIG
 # =============================================================================
 PATHS = {
-    'LOAN': 'data/loan/',
-    'NPL': 'data/npl/',
-    'PRVLOAN': 'data/prvloan/',
-    'SASDATA': 'data/sasdata/',
-    'ISASDATA': 'data/isasdata/',
-    'OUTPUT': 'output/'
+    'LOAN': 'data/loan/', 'NPL': 'data/npl/', 'PRVLOAN': 'data/prvloan/',
+    'SASDATA': 'data/sasdata/', 'ISASDATA': 'data/isasdata/', 'OUTPUT': 'output/'
 }
+for p in PATHS.values(): Path(p).mkdir(exist_ok=True)
 
-for path in PATHS.values():
-    Path(path).mkdir(parents=True, exist_ok=True)
-
-# Risk classification format ($RISKFMT)
+# Risk format
 RISK_FMT = {'1': 'SS1', '2': 'SS2', '3': 'D  ', '4': 'B  '}
 
+# Cost centre rules
+CONV = lambda x: (x < 3000 or x > 3999) and x not in [4043, 4048]
+ISLM = lambda x: (3000 <= x <= 3999) or x in [4043, 4048]
+
+CGC_TYPES = [517, 521, 522, 523, 528]
+
 # =============================================================================
-# DATE PROCESSING
+# DATE
 # =============================================================================
-def get_report_dates():
-    """Read datefile and set all macro variables"""
-    datefile_path = Path(PATHS['OUTPUT']) / 'DATEFILE.txt'
-    
-    # Create sample datefile if not exists
-    if not datefile_path.exists():
-        with open(datefile_path, 'w') as f:
-            f.write(f"{datetime.now().strftime('%m%d%Y'):<11}")
-    
-    with open(datefile_path, 'r') as f:
-        line = f.readline().strip()
-        extdate = int(line[:11])
-    
-    # Convert external date to date (MMDDYYYY format in Z11.)
-    extdate_str = str(extdate).zfill(11)
-    reptdate = datetime.strptime(extdate_str[:8], "%m%d%Y").date()
-    
-    # Previous month
-    prev_month = reptdate.month - 1
-    if prev_month == 0:
-        prev_month = 12
-        prev_year = reptdate.year - 1
-    else:
-        prev_year = reptdate.year
-    
-    now = datetime.now()
-    
+def get_dates():
+    df = pl.read_parquet(f"{PATHS['LOAN']}REPTDATE.parquet")
+    reptdate = df['REPTDATE'][0]
+    prev_month = reptdate.month - 1 or 12
     return {
-        'reptdate': reptdate,
-        'prev_month': f"{prev_month:02d}",
-        'prev_year': prev_year,
-        'reptmon': f"{reptdate.month:02d}",
-        'prevmON': f"{prev_month:02d}",
-        'rdate_word': reptdate.strftime("%d %B %Y"),  # WORDDATX18.
-        'rdate_dmy': reptdate.strftime("%d/%m/%Y"),   # DDMMYY10.
-        'nowk': '4',  # Fixed as per SAS
-        'rptdte': now.strftime("%Y%m%d"),
-        'rpttime': now.strftime("%H%M%S"),
-        'curday': f"{now.day:02d}",
-        'curmth': f"{now.month:02d}",
-        'curyr': str(now.year),
-        'rptyr': str(reptdate.year),
-        'rptdy': f"{reptdate.day:02d}"
+        'reptdate': reptdate, 'reptmon': f"{reptdate.month:02d}", 'prevmON': f"{prev_month:02d}",
+        'rdate_word': reptdate.strftime("%d %B %Y"), 'rdate_dmy': reptdate.strftime("%d/%m/%Y"),
+        'rptyr': str(reptdate.year), 'rptdy': f"{reptdate.day:02d}"
     }
-
-# =============================================================================
-# DATA LOADING
-# =============================================================================
-def load_sasdata(rep_vars):
-    """Load and combine conventional and Islamic loan data"""
-    try:
-        conv = pl.read_parquet(f"{PATHS['SASDATA']}LOAN{rep_vars['reptmon']}{rep_vars['nowk']}.parquet")
-    except:
-        conv = pl.DataFrame()
-    
-    try:
-        islam = pl.read_parquet(f"{PATHS['ISASDATA']}LOAN{rep_vars['reptmon']}{rep_vars['nowk']}.parquet")
-    except:
-        islam = pl.DataFrame()
-    
-    if conv.is_empty() and islam.is_empty():
-        return pl.DataFrame()
-    
-    combined = pl.concat([conv, islam]) if not conv.is_empty() and not islam.is_empty() \
-               else (conv if not conv.is_empty() else islam)
-    
-    # Keep only ACCTNO, NOTENO, BALANCE and deduplicate
-    combined = combined.select(['ACCTNO', 'NOTENO', 'BALANCE']).unique(subset=['ACCTNO', 'NOTENO'])
-    
-    return combined
-
-def load_prev_npl(rep_vars):
-    """Load previous month's NPL data"""
-    try:
-        prev = pl.read_parquet(f"{PATHS['NPL']}TOTIIS{rep_vars['prevmON']}.parquet")
-        prev = prev.rename({'IISCLOSE': 'PREVIIS', 'OICLOSE': 'PREVOI'})
-        prev = prev.select(['ACCTNO', 'NOTENO', 'PREVIIS', 'PREVOI']).unique()
-        return prev
-    except:
-        return pl.DataFrame()
-
-def load_lnnote():
-    """Load loan note data (conventional and Islamic)"""
-    conv = pl.DataFrame()
-    islam = pl.DataFrame()
-    
-    try:
-        conv = pl.read_parquet(f"{PATHS['LOAN']}LNNOTE.parquet")
-    except:
-        pass
-    
-    try:
-        islam = pl.read_parquet(f"{PATHS['LOAN']}ILOAN.LNNOTE.parquet")
-    except:
-        pass
-    
-    if conv.is_empty() and islam.is_empty():
-        return pl.DataFrame()
-    
-    combined = pl.concat([conv, islam]) if not conv.is_empty() and not islam.is_empty() \
-               else (conv if not conv.is_empty() else islam)
-    
-    # Filter and deduplicate
-    combined = combined.filter(
-        (pl.col('REVERSED') != 'Y') & 
-        pl.col('NOTENO').is_not_null() & 
-        pl.col('NTBRCH').is_not_null()
-    ).unique(subset=['ACCTNO', 'NOTENO'])
-    
-    return combined
-
-def load_prev_loan():
-    """Load previous loan data"""
-    conv = pl.DataFrame()
-    islam = pl.DataFrame()
-    
-    try:
-        conv = pl.read_parquet(f"{PATHS['PRVLOAN']}LNNOTE.parquet")
-    except:
-        pass
-    
-    try:
-        islam = pl.read_parquet(f"{PATHS['PRVLOAN']}IPRVLOAN.LNNOTE.parquet")
-    except:
-        pass
-    
-    if conv.is_empty() and islam.is_empty():
-        return pl.DataFrame()
-    
-    combined = pl.concat([conv, islam]) if not conv.is_empty() and not islam.is_empty() \
-               else (conv if not conv.is_empty() else islam)
-    
-    # Filter and rename
-    combined = combined.filter(
-        (pl.col('REVERSED') != 'Y') & 
-        pl.col('NOTENO').is_not_null() & 
-        pl.col('NTBRCH').is_not_null()
-    ).select(['ACCTNO', 'NOTENO', 'CURBAL', 'REBATE']).unique(subset=['ACCTNO', 'NOTENO'])
-    
-    combined = combined.rename({'CURBAL': 'PREVBAL', 'REBATE': 'PRVREB'})
-    
-    return combined
-
-def load_iisclose(rep_vars):
-    """Load IIS close data"""
-    try:
-        iisclose = pl.read_parquet(f"{PATHS['NPL']}IISCLOSE{rep_vars['reptmon']}{rep_vars['nowk']}.parquet")
-        if 'BRANCH' in iisclose.columns:
-            iisclose = iisclose.drop('BRANCH')
-        return iisclose
-    except:
-        return pl.DataFrame()
-
-def load_iis(rep_vars):
-    """Load IIS data"""
-    try:
-        iis = pl.read_parquet(f"{PATHS['NPL']}IIS{rep_vars['reptmon']}.parquet")
-        return iis
-    except:
-        return pl.DataFrame()
-
-def load_lncomm():
-    """Load loan commitment data"""
-    conv = pl.DataFrame()
-    islam = pl.DataFrame()
-    
-    try:
-        conv = pl.read_parquet(f"{PATHS['LOAN']}LNCOMM.parquet")
-    except:
-        pass
-    
-    try:
-        islam = pl.read_parquet(f"{PATHS['LOAN']}ILOAN.LNCOMM.parquet")
-    except:
-        pass
-    
-    if conv.is_empty() and islam.is_empty():
-        return pl.DataFrame()
-    
-    combined = pl.concat([conv, islam]) if not conv.is_empty() and not islam.is_empty() \
-               else (conv if not conv.is_empty() else islam)
-    
-    combined = combined.select(['ACCTNO', 'COMMNO', 'CCURAMT', 'CUSEDAMT']).unique(subset=['ACCTNO', 'COMMNO'])
-    
-    return combined
 
 # =============================================================================
 # IIS CALCULATION ENGINE
 # =============================================================================
-def calculate_iis(row, rep_date):
-    """
-    Core IIS calculation logic (matches SAS logic exactly)
-    Handles both Accrual (NTINT='A') and Non-Accrual cases
-    """
-    result = row.copy()
+def calc_iis(r, rep_date):
+    """Core IIS calculation - exact SAS logic"""
+    r = r.copy()
     
-    # Initialize fields
-    result['CLASSOLD'] = ' '
-    result['CLASSNEW'] = ' '
-    result['AGEING'] = 0
-    result['DIFFBAL'] = 0
-    result['IISP'] = 0
-    result['OIP'] = 0
-    result['IIS'] = 0
-    result['IISR'] = 0
-    result['OI'] = 0
-    result['OIREC'] = 0
-    result['IISCLOSE'] = 0
-    result['OICLOSE'] = 0
-    result['TOTOPEN'] = 0
-    result['TOTIIS'] = 0
-    result['TOTIISR'] = 0
-    result['TOTWOF'] = 0
-    result['TOTCLOSE'] = 0
-    
-    # Ageing calculation
-    if row.get('BLDATE', 0) > 0:
+    # Ageing
+    if r.get('BLDATE', 0) > 0:
         try:
-            bldate = datetime.strptime(str(int(row['BLDATE'])).zfill(8), "%m%d%Y").date()
-            result['AGEING'] = (rep_date - bldate).days
-        except:
-            pass
+            bd = datetime.strptime(str(int(r['BLDATE'])).zfill(8), "%m%d%Y").date()
+            r['AGEING'] = (rep_date - bd).days
+        except: pass
+    if r.get('OLDNOTEDAYARR', 0) > 0 and 98000 <= r.get('NOTENO', 0) <= 98999:
+        r['AGEING'] = max(0, r.get('AGEING', 0)) + r['OLDNOTEDAYARR']
     
-    # Special handling for certain note ranges
-    if row.get('OLDNOTEDAYARR', 0) > 0 and 98000 <= row.get('NOTENO', 0) <= 98999:
-        if result['AGEING'] < 0:
-            result['AGEING'] = 0
-        result['AGEING'] += row['OLDNOTEDAYARR']
+    # Risk
+    r['CLASSNEW'] = RISK_FMT.get(str(r.get('RISKRATE', '')).strip(), ' ')
     
-    # Risk classification
-    riskrate = row.get('RISKRATE', '')
-    if riskrate and riskrate != ' ':
-        result['CLASSNEW'] = RISK_FMT.get(str(riskrate).strip(), ' ')
+    # Branch
+    nb = r.get('NTBRCH', 0)
+    r['BRANCH'] = f"{int(nb):03d} {nb}"
     
-    # Branch formatting
-    ntbrch = row.get('NTBRCH', 0)
-    result['BRANCH'] = f"{int(ntbrch):03d} {ntbrch}"  # Simple format, would need BRCHCD format
-    
-    # Difference balance
-    prevbal = row.get('PREVBAL', 0) or 0
-    curbal = row.get('CURBAL', 0) or 0
-    spwof = row.get('SPWOF', 0) or 0
-    iisw = row.get('IISW', 0) or 0
-    adjust = row.get('ADJUST', 0) or 0
-    result['DIFFBAL'] = prevbal - curbal - spwof - iisw - adjust
+    # Diff balance
+    pv = r.get('PREVBAL', 0) or 0
+    cb = r.get('CURBAL', 0) or 0
+    sw = r.get('SPWOF', 0) or 0
+    iw = r.get('IISW', 0) or 0
+    ad = r.get('ADJUST', 0) or 0
+    r['DIFFBAL'] = pv - cb - sw - iw - ad
     
     # Previous IIS/OI
-    result['IISP'] = row.get('PREVIIS', 0) or 0
-    result['OIP'] = row.get('PREVOI', 0) or 0
+    r['IISP'] = r.get('PREVIIS', 0) or 0
+    r['OIP'] = r.get('PREVOI', 0) or 0
     
-    nplind = row.get('NPLIND', '')
-    loantype = row.get('LOANTYPE', 0)
-    lsttrncd = row.get('LSTTRNCD', 0)
-    iisr = row.get('IISR', 0) or 0
-    iisw = row.get('IISW', 0) or 0
-    ntint = row.get('NTINT', '')
+    n = r.get('NPLIND', '')
+    lt = r.get('LOANTYPE', 0)
+    lc = r.get('LSTTRNCD', 0)
+    ir = r.get('IISR', 0) or 0
+    iw = r.get('IISW', 0) or 0
+    nt = r.get('NTINT', '')
     
-    # ACCRUAL CASE (NTINT = 'A')
-    if ntint == 'A':
-        # Initial IIS calculation for O/P NPL
-        if nplind in ('O', 'P'):
-            result['IIS'] = (iisr + iisw) - result['IISP']
-        
-        # Special LSTTRNAM handling
-        if loantype in (517, 521, 522, 523, 528) and nplind == 'N' and lsttrncd == 166:
-            result['LSTTRNAM'] = row.get('LSTTRNAM', 0) / 100000
-        else:
-            result['LSTTRNAM'] = 0
-        
-        iiscls = row.get('IISCLS', 0) or 0
-        oi = 0
-        oirec = 0
-        
-        # IIS/OI calculations
-        if iiscls != 0:
-            result['IISP'] = iiscls - result['OIP']
-        
-        if nplind in ('O', 'P'):
-            result['IIS'] = iisr + iisw - result['IISP']
-        
-        result['IIS'] = row.get('ADONIIS', 0) or 0
-        oi = (row.get('FEEASSES', 0) or 0) - (row.get('FEEWAIVE', 0) or 0)
-        if oi < 0:
-            oi = 0
-        oirec = row.get('FEEPAY', 0) or 0
-        
-        borstat = row.get('BORSTAT', '')
-        if borstat in ('W', 'X') and nplind != 'P':
-            result['IIS'] = 0
-            oi = row.get('FEELWTOT', 0) or 0
-            # oirec stays as oip (commented in SAS)
-        
-        if nplind == 'E' and borstat == 'P' or lsttrncd == 652:
-            iisr = 0
-        elif row.get('LOANSTAT', 0) == 1 or result['DIFFBAL'] >= result['IISP']:
-            iisr = result['IISP'] - iisw
-        elif result['DIFFBAL'] < result['IISP']:
-            iisr = result['DIFFBAL'] - iisw
-        
-        if nplind == 'O':
-            # iisr = result['IISP'] - iisw (commented)
-            result['IIS'] = 0
-            oirec = (row.get('FEEPAY', 0) or 0) + (row.get('FEELWTOT', 0) or 0)
-        
-        if iisr < 0:
-            iisr = 0
-        result['IISR'] = iisr
-        
-        if nplind == 'P':
-            # iisr = iisr + result['IIS'] (commented)
-            result['IIS'] = result['IIS'] + iisr + iisw - result['IISP']
-        
-        result['IISCLOSE'] = result['IISP'] + result['IIS'] - iisr - iisw
-        if result['IISCLOSE'] < 0:
-            result['IISCLOSE'] = 0
-        
-        if nplind == 'O':
-            result['OICLOSE'] = 0
-        else:
-            result['OICLOSE'] = row.get('FEELWTOT', 0) or 0
-        
-        result['TOTOPEN'] = result['IISP'] + result['OIP']
-        result['TOTIIS'] = result['IIS'] + oi
-        result['TOTIISR'] = iisr + oirec
-        result['TOTWOF'] = iisw
-        
-        if nplind == 'N':
-            result['TOTIIS'] = result['IISCLOSE'] + result['TOTIISR'] + result['TOTWOF']
-            result['TOTOPEN'] = 0
-        
-        result['TOTCLOSE'] = result['IISCLOSE'] + result['OICLOSE']
-        
-        if borstat in ('W', 'X') and nplind != 'P':
-            result['TOTCLOSE'] = result['TOTOPEN'] - result['TOTIISR'] - result['TOTWOF']
+    # LSTTRNAM
+    r['LSTTRNAM'] = (r.get('LSTTRNAM', 0) / 100000) if lt in CGC_TYPES and n == 'N' and lc == 166 else 0
     
-    # NON-ACCRUAL CASE
+    # ACCRUAL (NTINT='A')
+    if nt == 'A':
+        if n in ('O','P'): r['IIS'] = ir + iw - r['IISP']
+        if r.get('IISCLS', 0): r['IISP'] = r['IISCLS'] - r['OIP']
+        if n in ('O','P'): r['IIS'] = ir + iw - r['IISP']
+        r['IIS'] = r.get('ADONIIS', 0) or 0
+        
+        oi = (r.get('FEEASSES',0)or0) - (r.get('FEEWAIVE',0)or0)
+        if oi < 0: oi = 0
+        oir = r.get('FEEPAY',0)or0
+        b = r.get('BORSTAT', '')
+        
+        if b in ('W','X') and n != 'P':
+            r['IIS'] = 0
+            oi = r.get('FEELWTOT',0)or0
+        
+        if (n == 'E' and b == 'P') or lc == 652:
+            ir = 0
+        elif r.get('LOANSTAT',0) == 1 or r['DIFFBAL'] >= r['IISP']:
+            ir = r['IISP'] - iw
+        elif r['DIFFBAL'] < r['IISP']:
+            ir = r['DIFFBAL'] - iw
+        
+        if n == 'O':
+            r['IIS'] = 0
+            oir = (r.get('FEEPAY',0)or0) + (r.get('FEELWTOT',0)or0)
+        
+        if ir < 0: ir = 0
+        r['IISR'] = ir
+        
+        if n == 'P':
+            r['IIS'] = r['IIS'] + ir + iw - r['IISP']
+        
+        r['IISCLOSE'] = r['IISP'] + r['IIS'] - ir - iw
+        if r['IISCLOSE'] < 0: r['IISCLOSE'] = 0
+        
+        r['OICLOSE'] = 0 if n == 'O' else (r.get('FEELWTOT',0)or0)
+        r['TOTOPEN'] = r['IISP'] + r['OIP']
+        r['TOTIIS'] = r['IIS'] + oi
+        r['TOTIISR'] = ir + oir
+        r['TOTWOF'] = iw
+        
+        if n == 'N':
+            r['TOTIIS'] = r['IISCLOSE'] + r['TOTIISR'] + r['TOTWOF']
+            r['TOTOPEN'] = 0
+        
+        r['TOTCLOSE'] = r['IISCLOSE'] + r['OICLOSE']
+        if b in ('W','X') and n != 'P':
+            r['TOTCLOSE'] = r['TOTOPEN'] - r['TOTIISR'] - r['TOTWOF']
+    
+    # NON-ACCRUAL
     else:
-        if nplind == 'O':
-            actiaccr = row.get('ACTIACCR', 0) or 0
-            if actiaccr == 0:
-                intactiv = row.get('INTACTIV', 0) or 0
-                if intactiv < 0:
-                    iisr = iisr + (row.get('FEELWTOT', 0) or 0) - intactiv
+        if n == 'O':
+            ac = r.get('ACTIACCR',0)or0
+            if ac == 0:
+                ia = r.get('INTACTIV',0)or0
+                if ia < 0:
+                    ir = ir + (r.get('FEELWTOT',0)or0) - ia
                 else:
-                    iisr = iisr + (row.get('FEELWTOT', 0) or 0)
-                result['IIS'] = iisr + iisw - result['IISP']
+                    ir = ir + (r.get('FEELWTOT',0)or0)
+                r['IIS'] = ir + iw - r['IISP']
             else:
-                result['IIS'] = iisr + iisw + actiaccr - result['IISP']
-                result['OIREC'] = (row.get('FEEPAY', 0) or 0) + (row.get('FEELWTOT', 0) or 0)
+                r['IIS'] = ir + iw + ac - r['IISP']
+                r['OIREC'] = (r.get('FEEPAY',0)or0) + (r.get('FEELWTOT',0)or0)
         
-        result['TOTOPEN'] = result['IISP']
-        result['TOTIISR'] = iisr
-        result['TOTWOF'] = iisw
-        result['TOTIIS'] = result['IIS']
+        r['TOTOPEN'] = r['IISP']
+        r['TOTIISR'] = ir
+        r['TOTWOF'] = iw
+        r['TOTIIS'] = r['IIS']
         
-        if nplind == 'N':
-            iisclose = row.get('IISCLOSE', 0) or 0
-            result['TOTIIS'] = iisclose + result['TOTIISR'] + result['TOTWOF']
-            result['TOTOPEN'] = 0
+        if n == 'N':
+            ic = r.get('IISCLOSE',0)or0
+            r['TOTIIS'] = ic + r['TOTIISR'] + r['TOTWOF']
+            r['TOTOPEN'] = 0
         
-        if nplind == 'O':
-            result['TOTCLOSE'] = result['IISP'] + result['IIS'] - iisr - iisw
+        if n == 'O':
+            r['TOTCLOSE'] = r['IISP'] + r['IIS'] - ir - iw
         else:
-            result['TOTCLOSE'] = row.get('IISCLOSE', 0) or 0
+            r['TOTCLOSE'] = r.get('IISCLOSE',0)or0
     
-    return result
+    return r
 
 # =============================================================================
-# REALISABLE VALUE CALCULATION (%SPRO MACRO)
+# REALISABLE VALUE (%SPRO)
 # =============================================================================
-def calculate_realisable_value(row, rep_date):
-    """
-    %SPRO macro - Calculate realisable value for collateral
-    Handles different liability codes and flag types (F, P, I)
-    """
-    result = row.copy()
+def calc_realisable(r, rep_date):
+    """Calculate realisable value for collateral"""
+    r = r.copy()
     
-    # Calculate last update date
-    lastupdt = None
-    dlivrydt = row.get('DLIVRYDT', 0)
-    apprdate = row.get('APPRDATE', 0)
-    issuedt = row.get('ISSUEDT', 0)
+    # Last update date
+    last = None
+    for f in ['DLIVRYDT', 'APPRDATE', 'ISSUEDT']:
+        if r.get(f, 0) > 0:
+            try:
+                last = datetime.strptime(str(int(r[f])).zfill(11)[:8], "%m%d%Y").date()
+                break
+            except: pass
     
-    if dlivrydt and dlivrydt != 0:
-        dlivry_str = str(int(dlivrydt)).zfill(11)[:8]
-        lastupdt = datetime.strptime(dlivry_str, "%m%d%Y").date()
-    elif apprdate and apprdate != 0:
-        appr_str = str(int(apprdate)).zfill(11)[:8]
-        lastupdt = datetime.strptime(appr_str, "%m%d%Y").date()
-    else:
-        iss_str = str(int(issuedt)).zfill(11)[:8]
-        lastupdt = datetime.strptime(iss_str, "%m%d%Y").date()
+    days = (rep_date - last).days if last else 0
+    f1 = r.get('FLAG1', '')
+    lb = r.get('LIABCODE', '')
+    mv = r.get('MARKETVL',0) or 0
+    av = r.get('APPVALUE',0) or 0
+    lt = r.get('LOANTYPE', 0)
     
-    result['LASTUPDT'] = lastupdt
-    
-    # Calculate days since last update
-    days_since = (rep_date - lastupdt).days if lastupdt else 0
-    
-    # Initialize realisvl
-    realisvl = 0
-    flag1 = row.get('FLAG1', '')
-    liabcode = row.get('LIABCODE', '')
-    marketvl = row.get('MARKETVL', 0) or 0
-    appvalue = row.get('APPVALUE', 0) or 0
-    loantype = row.get('LOANTYPE', 0)
-    
-    # FLAG1 = 'F' (Fully secured)
-    if flag1 == 'F':
-        # First category: LIABCODE in ('50','C2')
-        if liabcode in ('50', 'C2'):
-            if marketvl > 0 and appvalue > 0:
-                if marketvl == appvalue:
-                    realisvl = marketvl
-                    if days_since >= 730:
-                        if liabcode == '50':
-                            realisvl *= 0.9  # 10% reduction
-                        else:
-                            realisvl *= 0.8  # 20% reduction
-                else:
-                    if dlivrydt and dlivrydt > 0:
-                        realisvl = marketvl
-                    else:
-                        realisvl = min(marketvl, appvalue) if marketvl < appvalue else appvalue
-                    if days_since >= 730:
-                        if liabcode == '50':
-                            realisvl *= 0.9
-                        else:
-                            realisvl *= 0.8
-            
-            elif marketvl > 0 and appvalue == 0:
-                realisvl = marketvl
-                if days_since >= 730:
-                    if liabcode == '50':
-                        realisvl *= 0.9
-                    else:
-                        realisvl *= 0.8
-            
-            elif marketvl == 0 and appvalue > 0:
-                realisvl = appvalue
-                if days_since >= 730:
-                    if liabcode == '50':
-                        realisvl *= 0.9
-                    else:
-                        realisvl *= 0.8
+    # FLAG1 = 'F'
+    if f1 == 'F':
+        if lb in ('50','C2'):
+            if mv > 0 and av > 0:
+                rv = mv if mv == av else (mv if r.get('DLIVRYDT',0)>0 else min(mv,av))
+                if days >= 730: rv *= 0.9 if lb == '50' else 0.8
+            elif mv > 0: rv = mv
+            elif av > 0: rv = av
+            if days >= 730 and mv > 0 and av == 0: rv *= 0.9 if lb == '50' else 0.8
+            if days >= 730 and mv == 0 and av > 0: rv *= 0.9 if lb == '50' else 0.8
         
-        # Second category: Other liability codes
-        elif liabcode in ('B8', 'B9', '33', '37', '34', '32', 'C1'):
-            if marketvl > 0 and appvalue > 0:
-                if marketvl == appvalue:
-                    realisvl = marketvl
-                    if days_since >= 730:
-                        realisvl *= 0.75  # 25% reduction
-                else:
-                    if dlivrydt and dlivrydt > 0:
-                        realisvl = marketvl
-                    else:
-                        realisvl = min(marketvl, appvalue) if marketvl < appvalue else appvalue
-                    if days_since >= 730:
-                        realisvl *= 0.75
-            
-            elif marketvl > 0 and appvalue == 0:
-                realisvl = marketvl
-                if days_since >= 730:
-                    realisvl *= 0.75
-            
-            elif marketvl == 0 and appvalue > 0:
-                realisvl = appvalue
-                if days_since >= 730:
-                    realisvl *= 0.75
+        elif lb in ('B8','B9','33','37','34','32','C1'):
+            if mv > 0 and av > 0:
+                rv = mv if mv == av else (mv if r.get('DLIVRYDT',0)>0 else min(mv,av))
+                if days >= 730: rv *= 0.75
+            elif mv > 0: rv = mv
+            elif av > 0: rv = av
+            if days >= 730 and (mv > 0 or av > 0): rv *= 0.75
         
-        # Default case
         else:
-            realisvl = marketvl
-            if loantype in (300, 301) and days_since >= 730:
-                realisvl *= 0.9  # 10% reduction
+            rv = mv
+            if lt in (300,301) and days >= 730: rv *= 0.9
     
-    # FLAG1 in ('P', 'I') (Partially secured / Insufficient)
-    elif flag1 in ('P', 'I'):
-        cusedamt = row.get('CUSEDAMT', 0) or 0
-        cc uramt = row.get('CCURAMT', 0) or 0
-        undrawn = cc uramt - cusedamt
-        result['UNDRAWN'] = undrawn
+    # FLAG1 in ('P','I')
+    elif f1 in ('P','I'):
+        cu = r.get('CUSEDAMT',0) or 0
+        cc = r.get('CCURAMT',0) or 0
+        ud = cc - cu
         
-        # LIABCODE in ('50','C2') with undrawn
-        if liabcode in ('50', 'C2'):
-            if undrawn > 0:
-                apprdt = None
-                if apprdate and apprdate != 0:
-                    appr_str = str(int(apprdate)).zfill(11)[:8]
-                    apprdt = datetime.strptime(appr_str, "%m%d%Y").date()
-                
-                days_since_appr = (rep_date - apprdt).days if apprdt else 0
-                
-                if days_since_appr <= 730:
-                    realisvl = cusedamt  # Based on comment SMR A503
-                else:
-                    if liabcode == '50':
-                        realisvl = cusedamt * 0.9
-                    else:
-                        realisvl = cusedamt * 0.8
+        if lb in ('50','C2'):
+            if ud > 0:
+                ap = None
+                if r.get('APPRDATE',0) > 0:
+                    try: ap = datetime.strptime(str(int(r['APPRDATE'])).zfill(11)[:8], "%m%d%Y").date()
+                    except: pass
+                adays = (rep_date - ap).days if ap else 0
+                if adays <= 730: rv = cu
+                else: rv = cu * (0.9 if lb == '50' else 0.8)
             else:
-                if marketvl > 0:
-                    realisvl = marketvl
-                    if days_since >= 730:
-                        if liabcode == '50':
-                            realisvl *= 0.9
-                        else:
-                            realisvl *= 0.8
-                else:
-                    realisvl = appvalue
-                    if days_since >= 730:
-                        if liabcode == '50':
-                            realisvl *= 0.9
-                        else:
-                            realisvl *= 0.8
-        
-        # Default case
+                if mv > 0: rv = mv
+                else: rv = av
+                if days >= 730: rv *= 0.9 if lb == '50' else 0.8
         else:
-            realisvl = marketvl
-            if loantype in (300, 301) and days_since >= 730:
-                realisvl *= 0.9
+            rv = mv
+            if lt in (300,301) and days >= 730: rv *= 0.9
     
-    # Special overrides
-    if loantype == 521:
-        realisvl = row.get('CURRBAL', 0) or 0
+    else: rv = 0
     
-    if row.get('BORSTAT', '') == 'F':
-        realisvl = 0
+    # Overrides
+    if lt == 521: rv = r.get('CURRBAL',0) or 0
+    if r.get('BORSTAT','') == 'F': rv = 0
     
-    result['REALISVL'] = realisvl
-    return result
+    r['REALISVL'] = rv
+    return r
 
 # =============================================================================
-# REPORT GENERATION
+# REPORT GENERATOR
 # =============================================================================
-def generate_iis_report(df, title, footnote, output_file, 
-                        filter_loantype=None, exclude_loantype=None,
-                        group_by=None, page_by=None):
-    """Generate IIS report in the format of PROC REPORT"""
+def write_report(df, title, footer, fn, grp=None, cols=None):
+    """Generate formatted report"""
+    if df.is_empty(): return 0
     
-    # Apply filters
-    if filter_loantype:
-        df = df.filter(pl.col('LOANTYPE').is_in(filter_loantype))
-    if exclude_loantype:
-        df = df.filter(~pl.col('LOANTYPE').is_in(exclude_loantype))
+    lines = [f"{'='*135}", title, f"{'='*135}", ""]
     
-    if df.is_empty():
-        return []
-    
-    lines = []
-    lines.append("=" * 135)
-    lines.append(title)
-    lines.append("=" * 135)
-    lines.append("")
-    
-    if group_by:
-        # Sort by group
-        df = df.sort(group_by)
+    if grp:
+        df = df.sort(grp)
+        cur = None
+        tot = defaultdict(float)
+        gt = defaultdict(float)
         
-        current_group = None
-        group_total = {col: 0 for col in ['BALANCE', 'TOTOPEN', 'TOTIIS', 
-                                           'TOTIISR', 'TOTWOF', 'TOTCLOSE']}
-        grand_total = group_total.copy()
-        
-        for row in df.rows(named=True):
-            group_val = row[group_by]
+        for r in df.rows(named=True):
+            gv = r[grp]
+            if gv != cur:
+                if cur:
+                    lines += [f"{'-'*135}", f"SUBTOTAL FOR {grp}: {cur}"]
+                    for k in ['BALANCE','TOTOPEN','TOTIIS','TOTIISR','TOTWOF','TOTCLOSE']:
+                        if k in r: lines[-1] += f"  {k}: {tot[k]:>15,.2f}"
+                    lines += [f"{'-'*135}", ""]
+                    tot = defaultdict(float)
+                cur = gv
             
-            # New group
-            if group_val != current_group:
-                if current_group is not None:
-                    # Print group total
-                    lines.append("-" * 135)
-                    lines.append(f"SUBTOTAL FOR {group_by}: {current_group}")
-                    lines.append(f"  Balance: {group_total['BALANCE']:>15,.2f}  "
-                               f"TOTOPEN: {group_total['TOTOPEN']:>15,.2f}  "
-                               f"TOTIIS: {group_total['TOTIIS']:>15,.2f}  "
-                               f"TOTIISR: {group_total['TOTIISR']:>15,.2f}  "
-                               f"TOTWOF: {group_total['TOTWOF']:>15,.2f}  "
-                               f"TOTCLOSE: {group_total['TOTCLOSE']:>15,.2f}")
-                    lines.append("-" * 135)
-                    lines.append("")
-                    
-                    # Reset group total
-                    group_total = {col: 0 for col in group_total}
-                
-                current_group = group_val
-            
-            # Print detail line
-            lines.append(f"{row.get('BRANCH',''):<10} {row['ACCTNO']:>12} {row['NOTENO']:>8} "
-                        f"{str(row.get('NAME',''))[:30]:<30} {row['LOANTYPE']:>5} "
-                        f"{row.get('AGEING',0):>10} {row.get('CLASSNEW',''):<5} "
-                        f"{row['BALANCE']:>15,.2f} {row.get('NPLIND',''):<8} "
-                        f"{row.get('TOTOPEN',0):>15,.2f} {row.get('TOTIIS',0):>15,.2f} "
-                        f"{row.get('TOTIISR',0):>15,.2f} {row.get('TOTWOF',0):>15,.2f} "
-                        f"{row.get('TOTCLOSE',0):>15,.2f}")
+            # Detail line
+            if cols:
+                line = ""
+                for c in cols:
+                    if c == 'NAME': line += f"{str(r.get(c,''))[:30]:<30} "
+                    elif c in ['BALANCE','TOTOPEN','TOTIIS','TOTIISR','TOTWOF','TOTCLOSE','LSTTRNAM']:
+                        line += f"{r.get(c,0):>15,.2f} "
+                    else:
+                        line += f"{r.get(c,'')} "
+                lines.append(line)
             
             # Update totals
-            for col in group_total:
-                if col in row:
-                    group_total[col] += row.get(col, 0)
-                    grand_total[col] += row.get(col, 0)
+            for k in tot:
+                if k in r: tot[k] += r.get(k,0)
+                gt[k] += r.get(k,0)
     
-    # Print grand total
-    lines.append("=" * 135)
-    lines.append("GRAND TOTAL")
-    lines.append(f"  Balance: {grand_total['BALANCE']:>15,.2f}  "
-                f"TOTOPEN: {grand_total['TOTOPEN']:>15,.2f}  "
-                f"TOTIIS: {grand_total['TOTIIS']:>15,.2f}  "
-                f"TOTIISR: {grand_total['TOTIISR']:>15,.2f}  "
-                f"TOTWOF: {grand_total['TOTWOF']:>15,.2f}  "
-                f"TOTCLOSE: {grand_total['TOTCLOSE']:>15,.2f}")
-    lines.append("=" * 135)
-    lines.append("")
-    lines.append(f"Footnote: {footnote}")
-    
-    # Write to file
-    with open(output_file, 'w') as f:
-        for line in lines:
-            f.write(f"{line}\n")
-    
-    return lines
+    Path(fn).write_text('\n'.join(lines))
+    return len(df)
 
 # =============================================================================
 # MAIN
 # =============================================================================
 def main():
-    print("=" * 60)
-    print("EIBMIISA - Monthly Movement of Interest-In-Suspense")
-    print("=" * 60)
+    print("="*60+"\nEIBMIISA - IIS Monthly Movement\n"+"="*60)
+    d = get_dates()
+    print(f"Date: {d['rdate_word']}")
     
-    # Get report dates
-    rep_vars = get_report_dates()
-    print(f"\nReport Date: {rep_vars['rdate_word']}")
-    print(f"Month: {rep_vars['reptmon']}, Previous: {rep_vars['prevmON']}")
+    # Load all data
+    print("\nLoading...")
     
-    # Load all data sources
-    print("\nLoading data sources...")
+    # SASDATA
+    sas = pl.DataFrame()
+    for p in [f"{PATHS['SASDATA']}LOAN{d['reptmon']}4.parquet", f"{PATHS['ISASDATA']}LOAN{d['reptmon']}4.parquet"]:
+        if Path(p).exists():
+            df = pl.read_parquet(p)
+            if 'BALANCE' in df.columns:
+                sas = pl.concat([sas, df.select(['ACCTNO','NOTENO','BALANCE']).unique()]) if not sas.is_empty() else df.select(['ACCTNO','NOTENO','BALANCE']).unique()
     
-    sasdata = load_sasdata(rep_vars)
-    print(f"  SASDATA: {len(sasdata)} records")
+    # Previous NPL
+    prev = pl.read_parquet(f"{PATHS['NPL']}TOTIIS{d['prevmON']}.parquet") if Path(f"{PATHS['NPL']}TOTIIS{d['prevmON']}.parquet").exists() else pl.DataFrame()
+    if not prev.is_empty():
+        prev = prev.rename({'IISCLOSE':'PREVIIS','OICLOSE':'PREVOI'}).select(['ACCTNO','NOTENO','PREVIIS','PREVOI']).unique()
     
-    prev_npl = load_prev_npl(rep_vars)
-    print(f"  Previous NPL: {len(prev_npl)} records")
+    # LNNOTE
+    ln = pl.DataFrame()
+    for p in [f"{PATHS['LOAN']}LNNOTE.parquet", f"{PATHS['LOAN']}ILOAN.LNNOTE.parquet"]:
+        if Path(p).exists():
+            df = pl.read_parquet(p)
+            ln = pl.concat([ln, df]) if not ln.is_empty() else df
+    if not ln.is_empty():
+        ln = ln.filter((pl.col('REVERSED')!='Y') & pl.col('NOTENO').is_not_null()).unique(['ACCTNO','NOTENO'])
     
-    lnnote = load_lnnote()
-    print(f"  LNNOTE: {len(lnnote)} records")
+    # Previous loan
+    prv = pl.DataFrame()
+    for p in [f"{PATHS['PRVLOAN']}LNNOTE.parquet", f"{PATHS['PRVLOAN']}IPRVLOAN.LNNOTE.parquet"]:
+        if Path(p).exists():
+            df = pl.read_parquet(p)
+            prv = pl.concat([prv, df]) if not prv.is_empty() else df
+    if not prv.is_empty():
+        prv = prv.filter((pl.col('REVERSED')!='Y') & pl.col('NOTENO').is_not_null()).select(['ACCTNO','NOTENO','CURBAL','REBATE']).unique()
+        prv = prv.rename({'CURBAL':'PREVBAL','REBATE':'PRVREB'})
     
-    prev_loan = load_prev_loan()
-    print(f"  Previous Loan: {len(prev_loan)} records")
+    # IISCLOSE
+    icl = pl.read_parquet(f"{PATHS['NPL']}IISCLOSE{d['reptmon']}4.parquet") if Path(f"{PATHS['NPL']}IISCLOSE{d['reptmon']}4.parquet").exists() else pl.DataFrame()
+    if not icl.is_empty() and 'BRANCH' in icl.columns: icl = icl.drop('BRANCH')
     
-    iisclose = load_iisclose(rep_vars)
-    print(f"  IISCLOSE: {len(iisclose)} records")
-    
-    iis = load_iis(rep_vars)
-    print(f"  IIS: {len(iis)} records")
-    
-    # Merge LNNOTE with previous loan and sasdata
-    print("\nMerging loan data...")
-    
-    # Start with LNNOTE as base
-    if lnnote.is_empty():
-        print("  ERROR: No LNNOTE data found")
+    # IIS
+    iis = pl.read_parquet(f"{PATHS['NPL']}IIS{d['reptmon']}.parquet") if Path(f"{PATHS['NPL']}IIS{d['reptmon']}.parquet").exists() else pl.DataFrame()
+    if iis.is_empty():
+        print("ERROR: No IIS data")
         return
+    iis = iis.filter(pl.col('LOANTYPE') < 981).unique(['ACCTNO','NOTENO'])
     
-    lnnote_merged = lnnote
+    # ADONIIS
+    ado = pl.read_parquet(f"{PATHS['NPL']}ADONIIS.parquet") if Path(f"{PATHS['NPL']}ADONIIS.parquet").exists() else pl.DataFrame()
     
-    # Merge with previous loan
-    if not prev_loan.is_empty():
-        lnnote_merged = lnnote_merged.join(prev_loan, on=['ACCTNO', 'NOTENO'], how='left')
+    # LNCOMM
+    lc = pl.DataFrame()
+    for p in [f"{PATHS['LOAN']}LNCOMM.parquet", f"{PATHS['LOAN']}ILOAN.LNCOMM.parquet"]:
+        if Path(p).exists():
+            df = pl.read_parquet(p)
+            lc = pl.concat([lc, df]) if not lc.is_empty() else df
+    if not lc.is_empty():
+        lc = lc.select(['ACCTNO','COMMNO','CCURAMT','CUSEDAMT']).unique(['ACCTNO','COMMNO'])
     
-    # Merge with sasdata
-    if not sasdata.is_empty():
-        lnnote_merged = lnnote_merged.join(sasdata, on=['ACCTNO', 'NOTENO'], how='left')
+    print(f"  IIS: {len(iis)}")
     
-    # Merge with IISCLOSE
-    if not iisclose.is_empty():
-        lnnote_merged = lnnote_merged.join(iisclose, on=['ACCTNO', 'NOTENO'], how='left')
+    # Merge
+    print("\nMerging...")
+    ln = ln.join(prv, on=['ACCTNO','NOTENO'], how='left')
+    if not icl.is_empty(): ln = ln.join(icl, on=['ACCTNO','NOTENO'], how='left')
+    iis = iis.join(ln, on=['ACCTNO','NOTENO'], how='left')
+    if not prev.is_empty(): iis = iis.join(prev, on=['ACCTNO','NOTENO'], how='left')
+    if not ado.is_empty(): iis = iis.join(ado, on=['ACCTNO','NOTENO'], how='left')
     
-    print(f"  Merged LNNOTE: {len(lnnote_merged)} records")
+    # Calculate IIS
+    print("\nCalculating IIS...")
+    res = [calc_iis(r, d['reptdate']) for r in iis.rows(named=True)]
+    iis = pl.DataFrame(res)
+    print(f"  Done: {len(iis)} records")
     
-    # Merge with IIS and previous NPL
-    print("\nCalculating IIS movements...")
-    
-    iis_merged = iis
-    
-    if not iis_merged.is_empty():
-        iis_merged = iis_merged.join(lnnote_merged, on=['ACCTNO', 'NOTENO'], how='left')
-        iis_merged = iis_merged.join(prev_npl, on=['ACCTNO', 'NOTENO'], how='left')
+    # Realisable value
+    print("\nCalculating realisable values...")
+    if not lc.is_empty() and not iis.is_empty():
+        # Merge with LNCOMM
+        ln2 = ln.sort(['ACCTNO','COMMNO'])
+        lc = lc.sort(['ACCTNO','COMMNO'])
+        ln2 = ln2.join(lc, on=['ACCTNO','COMMNO'], how='left')
+        ln2 = ln2.with_columns([(pl.col('CCURAMT').fill_null(0) - pl.col('CUSEDAMT').fill_null(0)).alias('UNDRAWN')])
         
-        # Calculate IIS for each row
-        iis_results = []
-        for row in iis_merged.rows(named=True):
-            result = calculate_iis(row, rep_vars['reptdate'])
-            iis_results.append(result)
-        
-        iis_final = pl.DataFrame(iis_results)
-        print(f"  IIS calculated: {len(iis_final)} records")
-    else:
-        iis_final = pl.DataFrame()
+        # Large accounts
+        big = iis.filter(pl.col('ACCTNO') > 8000000000).sort(['ACCTNO','NOTENO'])
+        if not big.is_empty():
+            ln2 = ln2.sort(['ACCTNO','NOTENO'])
+            big = big.join(ln2, on=['ACCTNO','NOTENO'], how='left')
+            rv = [calc_realisable(r, d['reptdate']) for r in big.rows(named=True)]
+            rv_df = pl.DataFrame(rv).select(['ACCTNO','NOTENO','REALISVL'])
+            iis = iis.join(rv_df, on=['ACCTNO','NOTENO'], how='left')
+            print(f"  Realisable: {len(rv_df)} records")
     
     # Generate reports
     print("\nGenerating reports...")
     
-    # Define NPL types for filtering
-    npl_types = ['N', 'O', 'P', 'E']
-    
     # Report 1: Newly surfaced / Normalised / Fully settled (non-CGC)
-    if not iis_final.is_empty():
-        generate_iis_report(
-            iis_final.filter(~pl.col('LOANTYPE').is_in([517,521,522,523,528]) &
-                             pl.col('NPLIND').is_in(['N','O','P'])),
-            "MONTHLY MOVEMENT OF INTEREST-IN-SUSPENSE",
-            "NPL INDICATOR: N-NEWLY SURFACED, O-NORMALIZE AND P-SETTLE",
-            f"{PATHS['OUTPUT']}IIS_REPORT1.txt"
-        )
-        print(f"  Report 1: IIS_REPORT1.txt")
-        
-        # Report 2: CGC/TUK loans
-        generate_iis_report(
-            iis_final.filter(pl.col('LOANTYPE').is_in([517,521,522,523,528]) &
-                             pl.col('NPLIND').is_in(['N','O','P'])),
-            "MONTHLY MOVEMENT FOR NEWLY SURFACED/NORMALISED/FULLY SETTLED NON-PERFORMING CGC/TUK LOANS",
-            "NPL INDICATOR: N-NEWLY SURFACED, O-NORMALIZE AND P-SETTLE",
-            f"{PATHS['OUTPUT']}IIS_REPORT2.txt",
-            columns=['BRANCH', 'ACCTNO', 'NOTENO', 'NAME', 'LOANTYPE', 
-                    'AGEING', 'CLASSNEW', 'BALANCE', 'NPLIND', 'LSTTRNAM']
-        )
-        print(f"  Report 2: IIS_REPORT2.txt")
-        
-        # Report 3: All NPL by branch (non-CGC)
-        generate_iis_report(
-            iis_final.filter(~pl.col('LOANTYPE').is_in([517,521,522,523,528]) &
-                             pl.col('NPLIND').is_in(['E','N','O','P'])),
-            "MONTHLY MOVEMENT OF INTEREST-IN-SUSPENSE FOR NON-PERFORMING TL/FL/HL/RC",
-            "NPL INDICATOR: E-EXISTING,N-NEWLY SURFACED, O-NORMALIZE AND P-SETTLE",
-            f"{PATHS['OUTPUT']}IIS_REPORT3.txt",
-            group_by='BRANCH'
-        )
-        print(f"  Report 3: IIS_REPORT3.txt")
-        
-        # Report 4: CGC/TUK by branch
-        generate_iis_report(
-            iis_final.filter(pl.col('LOANTYPE').is_in([517,521,522,523,528]) &
-                             pl.col('NPLIND').is_in(['E','N','O','P'])),
-            "MONTHLY MOVEMENT FOR NON-PERFORMING CGC/TUK LOANS",
-            "NPL INDICATOR: E-EXISTING,N-NEWLY SURFACED, O-NORMALIZE AND P-SETTLE",
-            f"{PATHS['OUTPUT']}IIS_REPORT4.txt",
-            group_by='BRANCH',
-            columns=['BRANCH', 'ACCTNO', 'NOTENO', 'NAME', 'LOANTYPE', 
-                    'AGEING', 'CLASSNEW', 'BALANCE', 'NPLIND', 'LSTTRNAM']
-        )
-        print(f"  Report 4: IIS_REPORT4.txt")
+    w1 = iis.filter(~pl.col('LOANTYPE').is_in(CGC_TYPES) & pl.col('NPLIND').is_in(['N','O','P']))
+    write_report(w1, "MONTHLY MOVEMENT OF INTEREST-IN-SUSPENSE",
+                "NPL: N-NEWLY SURFACED, O-NORMALIZE, P-SETTLE",
+                f"{PATHS['OUTPUT']}IIS_R1.txt")
+    print(f"  R1: {len(w1)} records")
     
-    # Load commitment data for realisable value
-    print("\nCalculating realisable values...")
+    # Report 2: CGC/TUK loans
+    w2 = iis.filter(pl.col('LOANTYPE').is_in(CGC_TYPES) & pl.col('NPLIND').is_in(['N','O','P']))
+    write_report(w2, "MONTHLY MOVEMENT FOR CGC/TUK LOANS",
+                "NPL: N-NEWLY SURFACED, O-NORMALIZE, P-SETTLE",
+                f"{PATHS['OUTPUT']}IIS_R2.txt")
+    print(f"  R2: {len(w2)} records")
     
-    lncomm = load_lncomm()
+    # Report 3: All NPL by branch (non-CGC)
+    w3 = iis.filter(~pl.col('LOANTYPE').is_in(CGC_TYPES) & pl.col('NPLIND').is_in(['E','N','O','P']))
+    write_report(w3, "MONTHLY MOVEMENT OF IIS FOR NON-PERFORMING TL/FL/HL/RC",
+                "NPL: E-EXISTING, N-NEWLY SURFACED, O-NORMALIZE, P-SETTLE",
+                f"{PATHS['OUTPUT']}IIS_R3.txt", grp='BRANCH')
+    print(f"  R3: {len(w3)} records")
     
-    # Merge LNNOTE with LNCOMM
-    if not lnnote.is_empty() and not lncomm.is_empty():
-        lnnote_comm = lnnote.sort(['ACCTNO', 'COMMNO'])
-        lncomm = lncomm.sort(['ACCTNO', 'COMMNO'])
-        
-        loan_merged = lnnote_comm.join(lncomm, on=['ACCTNO', 'COMMNO'], how='left')
-        
-        # Fill nulls
-        loan_merged = loan_merged.with_columns([
-            pl.col('CCURAMT').fill_null(0),
-            pl.col('CUSEDAMT').fill_null(0)
-        ])
-        
-        # Calculate undrawn
-        loan_merged = loan_merged.with_columns([
-            (pl.col('CCURAMT') - pl.col('CUSEDAMT')).alias('UNDRAWN')
-        ])
-        
-        print(f"  Loan with commitments: {len(loan_merged)} records")
-        
-        # Merge with IIS data for accounts > 8000000000
-        if not iis_final.is_empty():
-            iis_large = iis_final.filter(pl.col('ACCTNO') > 8000000000)
-            
-            if not iis_large.is_empty():
-                iis_large = iis_large.sort(['ACCTNO', 'NOTENO'])
-                loan_merged = loan_merged.sort(['ACCTNO', 'NOTENO'])
-                
-                iis_with_collateral = iis_large.join(loan_merged, on=['ACCTNO', 'NOTENO'], how='left')
-                
-                # Calculate realisable value
-                realis_results = []
-                for row in iis_with_collateral.rows(named=True):
-                    result = calculate_realisable_value(row, rep_vars['reptdate'])
-                    realis_results.append(result)
-                
-                realis_df = pl.DataFrame(realis_results)
-                
-                # Add realisable value back to main IIS
-                realis_df = realis_df.select(['ACCTNO', 'NOTENO', 'REALISVL'])
-                iis_final = iis_final.join(realis_df, on=['ACCTNO', 'NOTENO'], how='left')
-                
-                print(f"  Realisable values calculated for {len(realis_df)} records")
+    # Report 4: CGC/TUK by branch
+    w4 = iis.filter(pl.col('LOANTYPE').is_in(CGC_TYPES) & pl.col('NPLIND').is_in(['E','N','O','P']))
+    write_report(w4, "MONTHLY MOVEMENT FOR NON-PERFORMING CGC/TUK LOANS",
+                "NPL: E-EXISTING, N-NEWLY SURFACED, O-NORMALIZE, P-SETTLE",
+                f"{PATHS['OUTPUT']}IIS_R4.txt", grp='BRANCH')
+    print(f"  R4: {len(w4)} records")
     
-    # Split by cost centre (conventional vs Islamic)
+    # Split by cost centre
     print("\nSplitting by cost centre...")
-    
-    if not iis_final.is_empty() and 'COSTCTR' in iis_final.columns:
-        # Conventional (costctr < 3000 or > 3999, excluding 4043,4048)
-        conv_mask = ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999)) & \
-                    (~pl.col('COSTCTR').is_in([4043, 4048]))
+    if 'COSTCTR' in iis.columns:
+        conv = iis.filter((CONV(pl.col('COSTCTR'))) | pl.col('LOANTYPE').is_in(CGC_TYPES)).unique(['ACCTNO','NOTENO'])
+        islm = iis.filter(ISLM(pl.col('COSTCTR')) & ~pl.col('LOANTYPE').is_in(CGC_TYPES)).unique(['ACCTNO','NOTENO'])
         
-        conventional = iis_final.filter(conv_mask).unique(subset=['ACCTNO', 'NOTENO'])
-        islamic = iis_final.filter(~conv_mask).unique(subset=['ACCTNO', 'NOTENO'])
-        
-        conventional.write_parquet(f"{PATHS['NPL']}TOTIIS{rep_vars['reptmon']}.parquet")
-        islamic.write_parquet(f"{PATHS['NPL']}NPLI.TOTIIS{rep_vars['reptmon']}.parquet")
-        
-        print(f"  Conventional: {len(conventional)} records")
-        print(f"  Islamic: {len(islamic)} records")
+        conv.write_parquet(f"{PATHS['NPL']}TOTIIS{d['reptmon']}.parquet")
+        islm.write_parquet(f"{PATHS['NPL']}NPLI.TOTIIS{d['reptmon']}.parquet")
+        print(f"  Conv: {len(conv)}, Islm: {len(islm)}")
     
     # Summary
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
+    print("\n"+"="*60+"\nSUMMARY\n"+"="*60)
+    if not iis.is_empty():
+        print(f"\nTotal Balance: RM {iis['BALANCE'].sum():,.2f}")
+        if 'TOTIIS' in iis.columns: print(f"Total IIS: RM {iis['TOTIIS'].sum():,.2f}")
+        if 'TOTIISR' in iis.columns: print(f"Total IISR: RM {iis['TOTIISR'].sum():,.2f}")
+        if 'TOTWOF' in iis.columns: print(f"Total WOFF: RM {iis['TOTWOF'].sum():,.2f}")
+        if 'REALISVL' in iis.columns: print(f"Total Realisable: RM {iis['REALISVL'].sum():,.2f}")
     
-    if not iis_final.is_empty():
-        total_balance = iis_final['BALANCE'].sum()
-        total_iis = iis_final['TOTIIS'].sum() if 'TOTIIS' in iis_final.columns else 0
-        total_iisr = iis_final['TOTIISR'].sum() if 'TOTIISR' in iis_final.columns else 0
-        total_woff = iis_final['TOTWOF'].sum() if 'TOTWOF' in iis_final.columns else 0
-        
-        print(f"\nTotal Outstanding Balance: RM {total_balance:,.2f}")
-        print(f"Total IIS: RM {total_iis:,.2f}")
-        print(f"Total IIS Recognized: RM {total_iisr:,.2f}")
-        print(f"Total IIS Written-off: RM {total_woff:,.2f}")
-        
-        if 'REALISVL' in iis_final.columns:
-            total_realis = iis_final['REALISVL'].sum()
-            print(f"Total Realisable Value: RM {total_realis:,.2f}")
-    
-    print("\n" + "=" * 60)
-    print("✓ EIBMIISA Complete")
-    print("=" * 60)
+    print("\n"+"="*60+"\n✓ EIBMIISA Complete")
 
 if __name__ == "__main__":
     main()
