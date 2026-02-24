@@ -1,0 +1,153 @@
+//EIIMERGE JOB EIS,EIBDFALE,CLASS=A,MSGCLASS=X                          JOB42510
+//*
+//* MERGE NORMAL + SPECIAL NPL PIBB
+//*
+//EIIMERGE EXEC SAS609,REGION=4096K
+//SPLA     DD DSN=SAP.PIBB.SPCL1503.AMT(0),
+//            DISP=SHR
+//SPLC     DD DSN=SAP.PIBB.SPCL1503.CNT(0),
+//            DISP=SHR
+//SPLV     DD DSN=SAP.PIBB.SPCL1503.AVG(0),
+//            DISP=SHR
+//NPLA     DD DSN=SAP.PIBB.FMGL1503.AMT(0),
+//            DISP=SHR
+//NPLC     DD DSN=SAP.PIBB.FMGL1503.CNT(0),
+//            DISP=SHR
+//NPLV     DD DSN=SAP.PIBB.FMGL1503.AVG(0),
+//            DISP=SHR
+//AMT      DD DSN=SAP.PIBB.FM1503.AMT(+1),
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(10,10),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=500,RECFM=FB,BLKSIZE=0)
+//AMT2     DD DSN=SAP.PIBB.TM0683.AMT(+1),
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(10,10),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=500,RECFM=FB,BLKSIZE=0)
+//CNT      DD DSN=SAP.PIBB.FM1503.CNT(+1),
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(10,10),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=500,RECFM=FB,BLKSIZE=0)
+//AVG      DD DSN=SAP.PIBB.FM1503.AVG(+1),
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(10,10),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=500,RECFM=FB,BLKSIZE=0)
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//SASLIST  DD SYSOUT=X
+//SYSIN    DD *
+
+OPTIONS YEARCUTOFF=1950 SORTDEV=3390 NONUMBER NODATE NOCENTER;
+DATA SAMT;
+  INFILE SPLA;
+  INPUT
+      @267 YM    @300 AMOUNT 15.2  @201 LOB $10. @234 PRODUCX $10.
+      @168 BRANCX $5. @069 TYPE $5. @316 Y $1.;
+RUN;
+DATA FAMT;
+  INFILE NPLA;
+  INPUT
+      @267 YM    @300 AMOUNT 15.2  @201 LOB $10. @234 PRODUCX $10.
+      @168 BRANCX $5. @069 TYPE $5.  @316 Y $1.;
+RUN;
+*;
+DATA AMT;
+SET FAMT SAMT;
+TOTAMT+AMOUNT;
+LCNT+1;
+RUN;
+*;
+DATA SCNT;
+  INFILE SPLC;
+  INPUT
+      @267 YM    @300 NOACC 15. @201 LOB  $10.   @234 PRODUCX $10.
+      @168 BRANCX $5. @069 TYPE $5.  @316 Y $1.;
+RUN;
+DATA FCNT;
+  INFILE NPLC;
+  INPUT
+      @267 YM    @300 NOACC 15. @201 LOB  $10.   @234 PRODUCX $10.
+      @168 BRANCX $5. @069 TYPE $5.  @316 Y $1.;
+RUN;
+*;
+DATA CNT;
+SET FCNT SCNT;
+TOTCNT+NOACC;
+LCNT+1;
+RUN;
+*;
+DATA CNT;
+  SET CNT END=EOF;
+  FILE CNT;
+  PUT @001 'D,'  @003 'PIBB'     @069 TYPE
+      @267 YM    @300 NOACC 15. @201 LOB      @234 PRODUCX
+      @036 'EXT' @102 'ACTUAL'  @168 BRANCX
+      @035 ','   @068 ','    @101 ','    @134 ',MYR'    @167 ','
+      @200 ','   @233 ','    @266 ','    @299 ',' @315 ','  @317 ','
+      @316  Y   @350 ','    @383 ','    @416 ',';
+  IF  EOF THEN DO;
+      PUT @001 'T,'  @003 LCNT  10. ','  TOTCNT 15. ',';
+  END;
+*;
+DATA NPLA;
+  SET AMT END=EOF;
+  FILE AMT;
+  PUT @001 'D,'  @003 'PIBB'        @069 TYPE
+      @267 YM    @300 AMOUNT 15.2  @201 LOB @234 PRODUCX
+      @036 'EXT' @102 'ACTUAL'     @168 BRANCX
+      @035 ','   @068 ','    @101 ','    @134 ',MYR'    @167 ','
+      @200 ','   @233 ','    @266 ','    @299 ',' @315 ','  @317 ','
+      @316  Y   @350 ','    @383 ','    @416 ',';
+  IF  EOF THEN DO;
+      PUT @001 'T,'  @003 LCNT  10. ','  TOTAMT 15.2 ',';
+  END;
+*;
+DATA NPLA2;
+  SET AMT END=EOF;
+  FORMAT AMOUNT 15.2;
+  DLM = '|';
+  FILE AMT2;
+  PUT @001 'D'         @002 DLM
+      @003 'PIBB'       @035 DLM
+      @036 'EXT'       @068 DLM
+      @069 TYPE        @101 DLM
+      @102 'ACTUAL'    @134 DLM
+      @135 'MYR'       @167 DLM
+      @168 BRANCX      @200 DLM
+      @201 LOB         @233 DLM
+      @234 PRODUCX     @266 DLM
+      @267 YM          @299 DLM
+      @300 AMOUNT      @315 DLM
+      @316  Y          @317 DLM
+                       @350 DLM
+                       @383 DLM
+                       @416 DLM;
+*;
+DATA SAVG;
+  INFILE SPLV;
+  INPUT @102 AVG $10.
+      @267 YM    @300 AVGAMR 15.2  @201 LOB $10. @234 PRODUCX $10.
+      @168 BRANCX $5. @069 TYPE $5. @316 Y $1.;
+  RUN;
+DATA FAVG;
+  INFILE NPLV;
+  INPUT @102 AVG $10.
+      @267 YM    @300 AVGAMR 15.2  @201 LOB $10. @234 PRODUCX $10.
+      @168 BRANCX $5. @069 TYPE $5.  @316 Y $1.;
+  RUN;
+ *;
+ DATA AVG;
+  SET FAVG SAVG;
+  TAVG+AVGAMR;
+  LCNT+1;
+ RUN;
+DATA AVG;
+  SET AVG END=EOF;
+  FILE AVG;
+  PUT @001 'D,'  @003 'PIBB'        @069 TYPE
+      @267 YM    @300 AVGAMR 15.2  @201 LOB @234 PRODUCX
+      @036 'EXT' @102 AVG        @168 BRANCX
+      @035 ','   @068 ','    @101 ','    @134 ',MYR'    @167 ','
+      @200 ','   @233 ','    @266 ','    @299 ',' @315 ','  @317 ','
+      @316  Y   @350 ','    @383 ','    @416 ',';
+  IF EOF THEN DO;
+      PUT @001 'T,'  @003 LCNT  10. ','  TAVG 15.2 ',';
+  END;
