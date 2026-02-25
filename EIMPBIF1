@@ -1,0 +1,95 @@
+//EIMPBIF1 JOB ACCOUNT-CODE,'PROGRAMMER-NAME',                          JOB23591
+//         MSGCLASS=A,MSGLEVEL=(1,1),CLASS=A,                           00000200
+//         NOTIFY=&SYSUID                                               00000300
+//DELETE   EXEC PGM=IEFBR14
+//DD1      DD DSN=SAP.PBIF.EIMPBIF1.TEXT,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//EIMPBIF1 EXEC SAS609                                                  00002200
+//PBIF      DD DSN=SAP.PBB.PBIF.SASDATA(0),DISP=SHR                     00002502
+//MECHRG    DD DSN=SAP.PBB.PBIF.MECHRG(0),DISP=SHR                      00002502
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                             00002600
+//SASLIST   DD DSN=SAP.PBIF.EIMPBIF1.TEXT,                              00002702
+//             DISP=(NEW,CATLG,DELETE),                                 00002800
+//             DCB=(RECFM=FB,LRECL=133,BLKSIZE=0),                      00002900
+//             SPACE=(CYL,(1,1)),UNIT=SYSDA                             00003000
+//SYSIN     DD *                                                        00003100
+                                                                        00003200
+OPTIONS NOCENTER;                                                       00003300
+DATA REPTDATE (KEEP=REPTDATE);                                          00004100
+  SET PBIF.REPTDATE;                                                    00004202
+  SELECT(DAY(REPTDATE));                                                00004400
+    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;                   00004500
+    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;                   00004600
+    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;                   00004700
+    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3';                        00004800
+                            WK2= '2'; WK3 = '1'; END;                   00004900
+  END;                                                                  00005000
+  MM = MONTH(REPTDATE);                                                 00005100
+  IF WK = '1' THEN DO;                                                  00005200
+     MM1 = MM - 1;                                                      00005300
+     IF MM1 = 0 THEN MM1 = 12;                                          00005400
+  END;                                                                  00005500
+  ELSE MM1 = MM;                                                        00005600
+  MM2 = MM - 1;                                                         00005700
+  IF MM2 = 0 THEN MM2 = 12;                                             00005800
+  SDATE = MDY(MM,SDD,YEAR(REPTDATE));                                   00005900
+  CALL SYMPUT('NOWK',PUT(WK,$1.));                                      00006000
+  CALL SYMPUT('NOWK1',PUT(WK1,$1.));                                    00006100
+  CALL SYMPUT('NOWK2',PUT(WK2,$1.));                                    00006200
+  CALL SYMPUT('NOWK3',PUT(WK3,$1.));                                    00006300
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                   00006400
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));                                 00006500
+  CALL SYMPUT('REPTMON2',PUT(MM2,Z2.));                                 00006600
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                         00006700
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                        00006800
+  CALL SYMPUT('MDATE',PUT(REPTDATE,Z5.));                               00006800
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                          00006900
+  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));                             00007000
+RUN;                                                                    00007100
+                                                                        00007200
+%INC PGM(RDLMPBIF);                                                     00007200
+                                                                        00007200
+ DATA PBIF;
+   SET PBIF;
+   APPRLIMX=INLIMIT;
+    PRODESC='FACTORING';                                                00013402
+    DISBNO=0; REPAYNO=0;                                                00013502
+    IF  BALANCE  > 0 THEN NOACCT=1;                                     00013602
+    IF  DISBURSE > 0 THEN DISBNO=1;                                     00013702
+    IF  REPAID   > 0 THEN REPAYNO=1;                                    00013802
+RUN;                                                                    00013902
+                                                                        00014002
+PROC SUMMARY DATA=PBIF NWAY MISSING;                                    00014102
+CLASS PRODESC CUSTCX;                                                   00014202
+VAR   DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                    00014302
+OUTPUT OUT=ALM (DROP=_TYPE_  _FREQ_) SUM=;                              00015002
+                                                                        00029000
+PROC SUMMARY DATA=ALM  NWAY MISSING;                                    00029202
+CLASS PRODESC;                                                          00029302
+VAR   DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                    00029402
+OUTPUT OUT=ALM1 (DROP=_TYPE_  _FREQ_) SUM=;                             00029502
+                                                                        00029602
+PROC PRINT DATA=ALM1;                                                   00029702
+SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                      00029802
+TITLE1 'FACTORING AS AT '&REPTMON'/'&REPTYEAR;                          00029902
+TITLE2 'REPORT ID : EIMBNM02';                                          00030002
+RUN;                                                                    00030102
+                                                                        00030202
+DATA ALMSME;                                                            00030302
+   SET ALM;                                                             00030402
+   IF CUSTCX IN ('41','42','43','44','46','47','48','49','51'           00030502
+            '52','53','54');                                            00030602
+RUN;                                                                    00030702
+                                                                        00030802
+PROC SUMMARY DATA=ALMSME NWAY MISSING;                                  00030902
+CLASS PRODESC;                                                          00031002
+VAR   DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                    00031102
+OUTPUT OUT=ALMSME (DROP=_TYPE_  _FREQ_) SUM=;                           00031302
+RUN;                                                                    00031402
+                                                                        00032200
+PROC PRINT DATA=ALMSME;                                                 00032302
+SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                      00032402
+TITLE1 'SME FACTORING AS AT '&REPTMON'/'&REPTYEAR;                      00032502
+TITLE2 'REPORT ID : EIMPBIF1';                                          00032602
+RUN;                                                                    00032700
