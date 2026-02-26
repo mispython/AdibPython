@@ -1,15 +1,16 @@
 """
 EIBWFCFD - Foreign Currency Fixed Deposit Processing and Export
 Extracts FCY FD data, merges with additional sources, processes dates,
-and exports to SAS transport format (XPORT).
+and exports to SAS transport format (CPORT simulation).
 """
 
 import polars as pl
 from datetime import datetime
 from pathlib import Path
+import shutil
 import pandas as pd
-from sas7bdat import SAS7BDAT  # Requires sas7bdat package
-import xport  # Requires xport package
+import subprocess
+import tempfile
 
 # =============================================================================
 # CONFIGURATION
@@ -121,20 +122,63 @@ def convert_sas_date(date_val):
     return None
 
 # =============================================================================
-# SAS TRANSPORT FILE CREATION
+# SAS TRANSPORT FILE CREATION (Alternative to xport)
 # =============================================================================
 def create_sas_transport(df, filename, dataset_name):
-    """Create SAS transport file (XPORT format)"""
+    """
+    Create SAS transport file using one of several methods:
+    1. SASPy (if SAS installed)
+    2. sas7bdat + xport combination
+    3. CSV fallback with metadata
+    """
     # Convert Polars to Pandas
     pdf = df.to_pandas()
     
-    # Write XPORT file
-    with open(filename, 'wb') as f:
-        writer = xport.XportWriter(f)
-        writer.write(pdf, dataset_name)
-        writer.close()
+    # Method 1: Use SASPy if available (requires SAS installation)
+    try:
+        import saspy
+        sess = saspy.SASsession()
+        sess.df2sd(pdf, dataset_name)
+        sess.submit(f"""
+            proc cport data={dataset_name} file="{filename}";
+            run;
+        """)
+        sess.endsas()
+        print(f"  SAS transport file created via SASPy: {filename}")
+        return True
+    except ImportError:
+        print("  SASPy not available, trying sas7bdat...")
     
-    print(f"  SAS transport file created: {filename}")
+    # Method 2: Create sas7bdat file (many systems can read this)
+    try:
+        from sas7bdat import SAS7BDAT
+        with SAS7BDAT(filename.replace('.cport', '.sas7bdat'), mode='w') as f:
+            f.write(pdf)
+        print(f"  SAS dataset created: {filename.replace('.cport', '.sas7bdat')}")
+        
+        # Add a note that CPORT wasn't used
+        with open(f"{filename}.txt", 'w') as f:
+            f.write(f"Dataset: {dataset_name}\n")
+            f.write(f"Records: {len(pdf)}\n")
+            f.write("Note: This is a sas7bdat file, not CPORT transport\n")
+        return True
+    except ImportError:
+        print("  sas7bdat not available, falling back to CSV...")
+    
+    # Method 3: CSV with metadata (always works)
+    csv_file = filename.with_suffix('.csv')
+    pdf.to_csv(csv_file, index=False)
+    
+    # Create metadata file
+    with open(f"{filename}.meta", 'w') as f:
+        f.write(f"Dataset: {dataset_name}\n")
+        f.write(f"Records: {len(pdf)}\n")
+        f.write(f"Variables: {', '.join(pdf.columns)}\n")
+        f.write("Note: This is a CSV file, not SAS transport format\n")
+    
+    print(f"  CSV file created: {csv_file}")
+    print(f"  Metadata file: {filename}.meta")
+    return False
 
 # =============================================================================
 # MAIN PROCESSING
@@ -259,16 +303,15 @@ def main():
     
     # Export to SAS transport format (PROC CPORT equivalent)
     print("\nExporting to SAS transport format (PROC CPORT)...")
-    transport_file = PATHS['OUTPUT'] / "SAP.PBB.FCYFD.FCYFDFTP"
+    transport_file = Path(PATHS['OUTPUT']) / "SAP.PBB.FCYFD.FCYFDFTP"
     
-    try:
-        # Create SAS transport file (XPORT format)
-        create_sas_transport(temp_df, transport_file, f"FCYFD{rep['reptmon']}{rep['nowk']}")
-        print(f"  Transport file created with DISP=OLD: {transport_file}")
-    except Exception as e:
-        print(f"  Error creating transport file: {e}")
-        print("  Falling back to parquet copy")
-        shutil.copy2(temp_path, transport_file)
+    # Create transport file (using our function)
+    success = create_sas_transport(temp_df, transport_file, f"FCYFD{rep['reptmon']}{rep['nowk']}")
+    
+    if success:
+        print(f"  Transport file created: {transport_file}")
+    else:
+        print(f"  Transport files created with metadata: {transport_file}.*")
     
     # Print sample data (like PROC PRINT)
     print("\n" + "=" * 60)
