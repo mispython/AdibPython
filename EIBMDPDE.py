@@ -26,22 +26,56 @@ except Exception as e:
 
 # Extract date from position 34
 try:
-    # Get 6 bytes at position 34 (1-indexed)
+    # Get 6 bytes at position 34 (1-indexed = 33 0-indexed)
     bytes6 = record[33:39]
+    print(f"\nBytes: {' '.join([f'{b:02X}' for b in bytes6])}")
     
-    # Unpack PD6. to integer (SAS method)
-    value = 0
+    # Unpack PD6. to string of digits (SAS method)
+    # Each byte has 2 digits except last byte's low nibble is sign
+    digits = []
     for i, b in enumerate(bytes6):
-        high, low = (b >> 4) & 0x0F, b & 0x0F
+        high = (b >> 4) & 0x0F
+        low = b & 0x0F
+        
+        # High nibble is always a digit
+        digits.append(str(high))
+        
+        # Low nibble is digit for first 5 bytes
         if i < 5:
-            value = value * 100 + high * 10 + low
+            digits.append(str(low))
         else:
-            value = value * 10 + high
+            print(f"  Sign nibble: {low} (0x{low:X})")
     
-    # Z11. format → first 8 chars → MMDDYYYY
-    date_str = f"{value:011d}"[:8]
-    reptdate = datetime(int(date_str[4:8]), int(date_str[0:2]), int(date_str[2:4]))
+    # Join digits to get the packed decimal value
+    value_str = ''.join(digits)
+    print(f"All digits: {value_str} (length: {len(value_str)})")
     
+    # Take first 11 digits for Z11. format (PD6. gives 11 digits)
+    if len(value_str) > 11:
+        value_str = value_str[:11]
+    
+    # Z11. format (zero-padded to 11 digits)
+    tbdate_z11 = value_str.zfill(11)
+    print(f"Z11.: {tbdate_z11}")
+    
+    # Take first 8 chars as MMDDYYYY
+    date_str = tbdate_z11[:8]
+    print(f"Date string: {date_str}")
+    
+    # Parse MMDDYYYY
+    month = int(date_str[0:2])
+    day = int(date_str[2:4])
+    year = int(date_str[4:8])
+    
+    print(f"Parsed: Month={month}, Day={day}, Year={year}")
+    
+    # Validate
+    if not (1 <= month <= 12):
+        raise ValueError(f"Month must be 1-12, got {month}")
+    if not (1 <= day <= 31):
+        raise ValueError(f"Day must be 1-31, got {day}")
+    
+    reptdate = datetime(year, month, day)
     print(f"\n✓ Report date: {reptdate.strftime('%d/%m/%Y')}")
     
 except Exception as e:
@@ -51,12 +85,13 @@ except Exception as e:
 # Set environment variables
 reptday = f"{reptdate.day:02d}"
 reptdt_sas = (reptdate - datetime(1960, 1, 1)).days
-os.environ.update({'REPTDAY': reptday, 'REPTDT': str(reptdt_sas)})
+os.environ['REPTDAY'] = reptday
+os.environ['REPTDT'] = str(reptdt_sas)
+
+print(f"\nREPTDAY={reptday}, REPTDT={reptdt_sas}")
 
 # Save to parquet
 pl.DataFrame({'REPTDATE': [reptdate], 'REPTDT_SAS': [reptdt_sas]})\
   .write_parquet(f'{OUTPUT_DIR}REPTDATE.parquet')
-
-print(f"\nREPTDAY={reptday}, REPTDT={reptdt_sas}")
 print(f"\n✓ Saved to {OUTPUT_DIR}/REPTDATE.parquet")
 print("\n" + "="*60 + "\n✓ EIBMDPDE Complete!")
