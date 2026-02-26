@@ -1,0 +1,39 @@
+//EIBMCRMA JOB MISEIS,CLASS=A,MSGCLASS=A,NOTIFY=&SYSUID                 00010000
+//*                                                                     00020001
+//* 2009-1606. MONTHLY.                                                 00020101
+//*                                                                     00020201
+//DELETE   EXEC PGM=IEFBR14                                             00021001
+//DEL01    DD DSN=SAP.PBB.CRMATM.CRMFTP,                                00030002
+//            DISP=(MOD,DELETE,DELETE),                                 00040000
+//            SPACE=(CYL,(0))                                           00050000
+//CREATE   EXEC PGM=IEFBR14                                             00060000
+//CRT01    DD DSN=SAP.PBB.CRMATM.CRMFTP,                                00061002
+//            DISP=(NEW,CATLG,DELETE),                                  00080000
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=24000),                    00090000
+//            SPACE=(CYL,(200,200),RLSE),UNIT=(SYSDA,5)                 00100000
+//*                                                                     00110000
+//EIBMFXLM EXEC SAS609,REGION=8M                                        00120000
+//DEP      DD DSN=SAP.PBB.MNITB(0),DISP=SHR                             00130000
+//EQUTFX   DD DSN=RBP2.B033.DP.CRM.ATM.ACCLIST(0),DISP=SHR              00140001
+//EQ1      DD DSN=&&FXLM,DISP=(NEW,DELETE,DELETE),                      00150000
+//            DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                 00160000
+//            SPACE=(CYL,(80,20)),UNIT=SYSDA                            00170001
+//SYSIN    DD *                                                         00180000
+                                                                        00190000
+OPTIONS NOCENTER YEARCUTOFF=1950;                                       00200000
+                                                                        00210000
+     DATA CRMA;                                                         00290002
+     INFILE EQUTFX;                                                     00300000
+     INPUT @002 ACCTNO     10.                                          00310000
+           @013 HOMEPH    $11.                                          00320000
+           @025 BUSSPH    $11.                                          00330000
+           @037 TINOWN      1.                                          00340000
+           @039 DEPTNO      5.                                          00350000
+           @045 PURPOSE    $1.                                          00360001
+           ;                                                            00370000
+                                                                        00380000
+     PROC SORT DATA=CRMA OUT=EQ1.CRM_ATM; BY ACCTNO;                    00381002
+                                                                        00382002
+     FILENAME TRANFILE 'SAP.PBB.CRMATM.CRMFTP' DISP=OLD;                00390002
+     PROC CPORT LIBRARY=EQ1 FILE=TRANFILE;                              00400000
+     RUN;                                                               00410000
