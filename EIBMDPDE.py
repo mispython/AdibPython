@@ -14,8 +14,8 @@ from datetime import datetime
 import os
 
 # Directories
-INPUT_DIR = 'data/input/'
-OUTPUT_DIR = 'data/output/'
+INPUT_DIR = '/host/dp/parquet/year=2026/month=02/day=25/'
+OUTPUT_DIR = '/pythonITD/mis_dev/output/parquet'
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -25,7 +25,7 @@ print("=" * 60)
 # Read DPPSTRGS file
 print("\nReading DPPSTRGS file...")
 try:
-    dppstrgs_path = f'{INPUT_DIR}DPPSTRGS'
+    dppstrgs_path = f'{INPUT_DIR}MST01_DPPSTRGS.parquet'
     
     if not os.path.exists(dppstrgs_path):
         print(f"  ✗ ERROR: DPPSTRGS file not found: {dppstrgs_path}")
@@ -144,3 +144,21 @@ print(f"  REPTDATE.parquet saved")
 
 import sys
 sys.exit(0)
+
+
+
+
+
+
+
+EIBMDPDE - Deposit Position Date Extraction
+============================================================
+
+Reading DPPSTRGS file...
+  ✓ DPPSTRGS: Record read (665 bytes)
+
+Extracting TBDATE (packed decimal)...
+  TBDATE (packed): 30390302410
+  TBDATE (Z11.):   30390302410
+  Date substring:  30390302
+  ✗ ERROR: Cannot extract/parse TBDATE: month must be in 1..12
