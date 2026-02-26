@@ -1,0 +1,130 @@
+//EIBM0961 JOB EIS,EIBM0958,CLASS=A,MSGCLASS=X
+//*
+//* CHUA YEN LI 2010-961 : PBB PMM
+//* AFTER EIBDEQWH/EIBWLNEX
+//*
+//EIBM0961 EXEC SAS609,REGION=4096K
+//BNM      DD DSN=SAP.PBB.MNILN(0),DISP=SHR
+//EQUTFX   DD DSN=SAP.PBB.EQUTFX.TXT(0),DISP=SHR
+//GLPMM    DD DSN=SAP.PBB.FMGL0961.TEXT(+1),
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(1,0),RLSE),UNIT=SYSDA,
+//            DCB=(LRECL=500,RECFM=FB,BLKSIZE=0)
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//SASLIST  DD SYSOUT=X
+//SYSIN    DD *
+OPTIONS YEARCUTOFF=1950 SORTDEV=3390 NONUMBER NODATE NOCENTER;
+*;
+DATA REPTDATE;
+   SET BNM.REPTDATE;
+   MM=MONTH(REPTDATE);
+   MM1=MM-1;
+   IF MM1=0 THEN MM1=12;
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+   CALL SYMPUT('RYEAR',PUT(REPTDATE,YEAR2.));
+   CALL SYMPUT('REPTYEA4',PUT(REPTDATE,YEAR4.));
+   CALL SYMPUT('RMONTH',PUT(MM,Z2.));
+   CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
+   CALL SYMPUT('RDAY',PUT(REPTDATE,DAY2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE), Z2.));
+RUN;
+
+DATA UTFX(KEEP=UFCLC UFDLP UFDLR UFAPP AGLFLD NOACCT
+          RENAME=(UFCLC=BRANCH UFDLP=DEALTYPE
+                  UFDLR=DEALREF UFAPP=APPLCODE));
+   INFILE EQUTFX FIRSTOBS=1  DELIMITER = '|' DSD MISSOVER;
+   INPUT  UFCBD : $10.
+          UFBRNM : $4.
+          UFDLP : $3.
+          UFDLR : $13.
+          UFAPP : $2.
+          UFBDT : $1.
+          UFCUS : $6.
+          UFCLC : $3.
+          UFCUN : $35.
+          UFCNO : $6.
+          UFCTP : $2.
+          UFTLX : $15.
+          UFFAX : $15.
+          UFC2R : $2.
+          UFSDT : $10.
+          UFMDT : $10.
+          UFMVT : $1.
+          UFMVTS : $1.
+          UFPCCY : $3.
+          UFSCCY : $3.
+          UFDLA : $15.
+          UFNWP : $15.
+          UFNWR : $15.
+          UFRAT : $15.
+          UFCA2 : $2.
+          UFSAC : $2.
+          UFCNAL : $2.
+          UFCNAP : $2.
+          UFCNAR : $2.
+          UFGRP : $6.
+          UFSPRT : $3.
+          UFSART : $4.
+          UFDEA : $3.
+          UFBKC : $2.
+          UFAMAB : $15.
+          UFSSRC : $2.
+          UFSUC1 : $3.
+          UFSUC2 : $3.
+          UFAMAP : $15.
+          UFAM1 : $15.
+          UFAM4 : $16.
+          UFSD1 : $35.
+          UFSD2 : $35.
+          UFSD3 : $35.
+          UFSD4 : $35.
+          UFWSRC : $3.
+          UFWUC1 : $3.
+          UFWUC2 : $3.
+          UFOPT : $1.
+          UFC1R : $2.
+          UFC3R : $2.
+          UFP1R : $3.
+          UFP2R : $3.
+          UFP3R : $3.
+          UFMYREQ : $15.
+          ;
+     IF UFCLC = 'KL' THEN UFCLC = 'KLC';
+     IF UFDLP IN ('BCD','BCQ');
+     AGLFLD='PBB ';
+     NOACCT=1;
+RUN;
+
+ *;
+     PROC SUMMARY DATA=UTFX NWAY;
+     CLASS AGLFLD; VAR NOACCT;
+     OUTPUT OUT=EQS SUM=;
+ *;
+     DATA EQS;
+       SET EQS;
+     PRODUCX ='DPPMMS';
+     BRANCX  ='7800';
+     BGLFLD  ='EXT';
+     CGLFLD  ='C_DEP';
+     DGLFLD  ='ACTUAL';
+     YM      =&REPTYEA4&RMONTH;
+*;
+     PROC SORT; BY AGLFLD BRANCX PRODUCX;
+     DATA EQS; SET EQS; CNT+1; NUMAC+NOACCT;
+*;
+DATA EQS;
+  SET EQS END=EOF;
+  FILE GLPMM;
+    PUT @001 'D,'
+      @003 AGLFLD    @035 ','     @036 BGLFLD     @068 ','
+      @069 CGLFLD    @101 ','
+      @102 DGLFLD    @134 ','     @167 ','
+      @168 BRANCX    @200 ','     @201 'TREA'
+      @233 ','       @234 PRODUCX    @266 ','
+      @267 YM        @299 ','
+      @300 NOACCT 15.                @315 ','
+      @316 'Y,'      @350 ','        @383 ','          @416 ',';
+  IF  EOF THEN DO;
+      PUT @001 'T,'  @003 CNT   10. ','  NUMAC 15. ',';
+  END;
