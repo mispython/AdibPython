@@ -1,99 +1,126 @@
-New Fixes and Implementations Guideline
+AZURE DEVOPS IMPLEMENTATION GUIDELINE (SIMPLIFIED)
 
-FIRST STEPS -> CREATE PULL REQUEST -> RUN PIPELINE
-First steps
-1.	Ensure a folder name Data_Warehouse/MIS created in your local machine.
-2.	Ensure you have closed the remote connection in Visual Studio Code (Esc key).
-3.	Clone the git repository from Azure DevOps to your local machine.
-4.	If Error, try git config –global http.sslbackend schannel in Git Bash.
-5.	If Error prompts user.name and user.email, do as below in Git Bash:
-a.	git config –global user.name “full name”
-b.	git config –global user.email “adid@publicbank.com.my”
-6.	Then enter your IUIA and password. Try to clone again from Azure DevOps.
-7.	Create a new branch. Name branch using eSMR number, e.g. 202X_XXXX. Below is the step to create new branch.
-a.	Azure DevOps. Go to your repo, then click branches in the sidebar. 
-Click New branch. Input the eSMR number in the Name field and select MAIN from the Based on dropdown. Create.
-8.	In VS Code, go to the Source Control panel, click on the 3 dots aligned with ‘changes’
-a.	Click Fetch to fetch your new branch
-b.	Go to the bottom left corner, click on the current Git branch name, e.g. main
-c.	A list of branch will pop up from the top menu, choose your branch.
-9.	Implement any development changes in this branch.
-a.	Paste the job from svdwh004 to the Data_Warehouse/MIS folder in your local machine.
-b.	In VS Code, go to the Source Control panel in the left bar.
-c.	Type your commit message which should be your eSMR number, e.g. 202X_XXXX.
-d.	Click Commit to commit your changes.
-e.	Click Sync
+------------------------------------------------------------
+PART 1 – FIRST TIME SETUP (LOCAL MACHINE)
 
-Creating a Pull Request (DEV & UAT)
+1. Create folder:
+   Data_Warehouse/MIS
+
+2. Close any remote connection in VS Code (press Esc).
+
+3. Clone the repository from Azure DevOps to your local machine.
+
+4. If SSL error occurs, run in Git Bash:
+   git config --global http.sslbackend schannel
+
+5. If git prompts for name and email, run:
+   git config --global user.name "Full Name"
+   git config --global user.email "your_email@publicbank.com.my"
+
+6. Login using your IUIA and password.
+
+------------------------------------------------------------
+PART 2 – CREATE NEW BRANCH (USING eSMR NUMBER)
+
+1. Go to Azure DevOps → Repos → Branches.
+2. Click New Branch.
+3. Branch name: 202X_XXXX (your eSMR number)
+4. Base on: main
+5. Click Create.
+
+In VS Code:
+1. Go to Source Control.
+2. Click the three dots (…) → Fetch.
+3. Click the current branch name at bottom left.
+4. Select your new branch.
+
+------------------------------------------------------------
+PART 3 – DEVELOPMENT STEPS
+
+1. Copy job from svdwh004 into:
+   Data_Warehouse/MIS
+
+2. In VS Code:
+   - Go to Source Control.
+   - Enter commit message (your eSMR number).
+   - Click Commit.
+   - Click Sync.
+
+------------------------------------------------------------
+PART 4 – CREATE PULL REQUEST (PR)
+
+DEV ENVIRONMENT
+1. Go to Azure DevOps → Repos → Pull Requests.
+2. Create new Pull Request.
+3. From: 202X_XXXX
+4. Into: DEV
+5. Resolve conflicts if any.
+6. Approve and Complete.
+7. Make sure "Delete branch after merge" is NOT checked.
+
+UAT ENVIRONMENT
+1. Create new Pull Request.
+2. From: 202X_XXXX
+3. Into: UAT
+4. Approve and Complete.
+5. Make sure "Delete branch after merge" is NOT checked.
+
+PROD ENVIRONMENT
+1. Create new Pull Request.
+2. From: 202X_XXXX
+3. Into: main
+4. Approve and Complete.
+5. Make sure "Delete branch after merge" IS checked.
+
+------------------------------------------------------------
+PART 5 – PIPELINE & RELEASE
+
 DEV
-1.	In Azure DevOps, go to Repos, go to Pull Requests.
-2.	Create new pull request.
-3.	Ensure that your pull request is from eSMR branch, 202X_XXXX into DEV branch. Click create.
-4.	If merge conflicts are detected, resolve. Else, Approve, then Complete. 
-5.	Approve and complete can be done by developers itself.
-6.	Ensure that the checkbox for Delete 202X_XXXX after merging is NOT checked. Please UNCHECK that option before proceeding.
-UAT
-1.	In Azure DevOps, go to Repos, go to Pull Requests.
-2.	Create new pull request.
-3.	Ensure that your pull request is from eSMR branch, 202X_XXXX into UAT branch. Click create.
-4.	If merge conflicts are detected, resolve. Else, Approve, then Complete. 
-5.	Approve and complete can be done by developers itself.
+1. Pull Request will automatically trigger the Pipeline.
+2. Pipeline will automatically create a Release.
+3. Go to Azure DevOps → Pipelines → Check status.
+4. Go to Azure DevOps → Releases → Verify release.
+5. Ensure Deployment is SUCCESS.
+6. Check SonarQube – Quality Gate must PASS (0 issues).
 
-6.	Ensure that the checkbox for Delete 202X_XXXX after merging is NOT checked. Please UNCHECK that option before proceeding.
-Prod
-1.	In Azure DevOps, go to Repos, go to Pull Requests.
-2.	Create new pull request.
-3.	Ensure that your pull request is from eSMR branch, 202X_XXXX into main branch. Click create.
-4.	If merge conflicts are detected, resolve. Else, Approve, then Complete. 
-5.	Approve and complete can be done by developers itself.
-6.	Ensure that the checkbox for Delete 202X_XXXX after merging is CHECKED. After implementation, eSMR branch is no longer necessary.
-Pipeline & Release (DEV & UAT)
-DEV
-1.	Pull Request will auto trigger the Pipeline.
-2.	Pipeline will auto create a release.
-3.	In Azure DevOps, go to Releases, you should be able to view your release.
-4.	In Azure DevOps, go to Pipelines. Click All and select the repo you are working on.
-5.	Take note of the Release Number, e.g. #20250623.3 Merged PR 1: 202X_XXXX.
-6.	Deployment should succeed for DEV pipeline.
-7.	Go to SonaQube, ensure the quality gate passed and 0 issues detected, else resolve them.
 UAT
-1.	Pull Request will auto trigger the Pipeline.
-2.	Pipeline will auto create a release.
-3.	In Azure DevOps, go to Releases, you should be able to view your release.
-4.	In Azure DevOps, go to Pipelines. Click All and select the repo you are working on.
-5.	Take note of the Release Number, e.g. #20250623.3 Merged PR 1: 202X_XXXX.
-6.	Deployment should indicate that it is waiting for team lead’s approval. 
-(Pre-deployment approval pending)
-7.	Raise eJS. Example is given below.
-eJS Ref: A2025-00023510
-http://webnotes01.pbb.my/esmr/ejobspec.nsf/0/D957CF1897F05A9E48258CB2002CBABE?OpenDocument 
-Prod
-1.	Pull Request will auto trigger the Pipeline.
-2.	Pipeline will NOT auto create a release. Hence, you need to create on your own.
-3.	In Azure DevOps, go to Releases, you should be able to view your release
-4.	In Azure DevOps, go to Pipelines. Click All and select the repo you are working on.
-5.	Take note of the Release Number, e.g. #20250623.3 Merged PR 1: 202X_XXXX.
-6.	Deployment should indicate that it is waiting for team lead’s approval.
-7.	Raise eJS. Example is given below (All information is taken from the following eJS.
-eJS Ref: 2024-00001420
-http://webnotes01.pbb.my/esmr/ejobspec.nsf/0/AFA74C59A06BB1EE48258CB4002023A2?OpenDocument
-Sample Job Description:
-Azure DevOps release approval
-TL -> SDM -> COM ->SCOS
-Collection : DWHCollection
-Project : DataWarehouse
-Release Definition : eBANKING - prd
-Release number/ Title : Release -1
-https://bgnvmtfa001/tfs/DWHCollection/DataWarehouse/_releaseProgress?_a=release-pipeline-progress&releaseId=23
-Please modify the above with your associated repo, Release and Release Pipeline URL.
-Main Instructions
-☒ Source Compare – ChangeMan
-☒ Unit Test
-☒ Super User / Admin ID
+1. Pull Request auto triggers Pipeline.
+2. Release will be created automatically.
+3. Deployment status will show “Waiting for approval”.
+4. Raise eJS with required details:
+   - Release Number
+   - Repo Name
+   - Release Pipeline URL
+   - Approval flow: TL → SDM → COM → SCOS
+   - Implementation Instructions
+   - Source Compare
+   - Unit Test
+   - Super User / Admin ID
+   - Rollback & Recovery
 
-For how to fill other required information, please see the following section in the provided link. 
--	Impl Instructions
--	Source Compare
--	Super User / Admin ID
--	Unit Test
--	Rollback & Recovery
+PROD
+1. Pull Request triggers Pipeline.
+2. Release is NOT auto created.
+3. Manually create the Release.
+4. Deployment will wait for approval.
+5. Raise eJS with required details:
+   - Release Number
+   - Release Definition
+   - Pipeline URL
+   - Collection Name
+   - Project Name
+   - Implementation Instructions
+   - Source Compare
+   - Unit Test
+   - Super User / Admin ID
+   - Rollback & Recovery
+
+------------------------------------------------------------
+OVERALL FLOW
+
+Create Branch
+→ Develop & Commit
+→ PR to DEV
+→ PR to UAT
+→ PR to PROD
+→ Delete Branch After PROD
