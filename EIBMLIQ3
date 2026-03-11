@@ -1,0 +1,122 @@
+//EIBMLIQ3 JOB MISEIS,EIBMLIQ3,CLASS=A,MSGCLASS=X,NOTIFY=&SYSUID,
+//         USER=OPCC
+/*JOBPARM S=S1M1
+//* CAN ONLY BE RUN AFTER FISS JOBS DUE TO ALW DATASETS
+//PRINT1    OUTPUT CLASS=R,
+//          NAME='THE MANAGER, (PBB)',
+//          ROOM='26TH FLOOR',
+//          BUILDING='MENARA PBB',
+//          DEPT='FINANCE DIV',
+//          ADDRESS='JALAN AMPANG',
+//          DEST=S1.RMT5
+//*
+//DELETE   EXEC PGM=IEFBR14
+//DD02     DD DSN=SAP.PBB.EIBMLIQ3.TEXT,
+//            DISP=(MOD,DELETE,DELETE),UNIT=SYSDA,
+//            SPACE=(CYL,1,RLSE)
+//*%OPC SCAN
+//*%OPC SETVAR TOYYYY=(OYYYY -5CD)
+//EIBMLIQ3 EXEC SAS609,REGION=64M,WORK='120000,8000'
+//BNMTBL1  DD DSN=SAP.PBB.KAPITI1(0),DISP=SHR
+//WALKER   DD DSN=SAP.PBB.RDAL2A(0),DISP=SHR
+//BNMK     DD DSN=SAP.PBB.KAPITI.SASDATA,DISP=SHR
+//BNM1     DD DSN=SAP.PBB.D%TOYYYY,DISP=SHR
+//EQ1      DD DSN=SAP.PBB.WEQUT(0),DISP=SHR
+//SIP      DD DSN=SAP.PBB.SIP(0),DISP=SHR
+//DCI      DD DSN=SAP.PBB.DCIWH,DISP=SHR
+//FD       DD DSN=SAP.PBB.FDDATAWH,DISP=SHR
+//FCY      DD DSN=SAP.BNM.MONTHEND.FCDATAWH,DISP=SHR
+//CA       DD DSN=SAP.PBB.CADATAWH,DISP=SHR
+//CIS      DD DSN=SAP.PBB.CIDATAWH,DISP=SHR
+//FORATE   DD DSN=SAP.PBB.FCYCA,DISP=SHR
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//*%OPC BEGIN ACTION=NOSCAN
+//SASLIST  DD DSN=SAP.PBB.EIBMLIQ3.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=122,BLKSIZE=0),
+//            SPACE=(TRK,(5,5)),UNIT=SYSDA
+//SYSIN    DD *
+ *+--------------------------------------------------------------+
+  |  REPORT  : LIQUIDITY FRAMEWORK PART 3 - CONCENTRATION OF     |
+  |            FUNDING SOURCES (KAPITI ITEMS)                    |
+  +--------------------------------------------------------------+
+  |  DATE MODIFIED : 20-7-2001  (WBL)                            |
+  |  SMR/OTHERS    : JS                                          |
+  |  CHANGES MADE  : INCLUDE PORTFOLIO TAP (AS PER EMAIL 19/7)   |
+  +--------------------------------------------------------------+;
+OPTIONS YEARCUTOFF=1950 NOCENTER NODATE NONUMBER MISSING=0;
+*;
+DATA REPTDATE;
+   INFILE BNMTBL1 OBS=1;
+   INPUT @1 REPTDATE YYMMDD8.;
+   SELECT(DAY(REPTDATE));
+      WHEN  (8) CALL SYMPUT('NOWK',PUT('1',$1.));
+      WHEN (15) CALL SYMPUT('NOWK',PUT('2',$1.));
+      WHEN (22) CALL SYMPUT('NOWK',PUT('3',$1.));
+      OTHERWISE CALL SYMPUT('NOWK',PUT('4',$1.));
+   END;
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+   CALL SYMPUT('YEAR',PUT(REPTDATE,YEAR2.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+   CALL SYMPUT('MTHEND',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('WK1',PUT('1',$1.));
+   CALL SYMPUT('WK2',PUT('2',$1.));
+   CALL SYMPUT('WK3',PUT('3',$1.));
+   CALL SYMPUT('WK4',PUT('4',$1.));
+RUN;
+
+*------------------------------------------------*
+*  MACRO TO CALCULATE REMAIN MONTH               *
+*------------------------------------------------*;
+%MACRO DCLVAR;
+   RETAIN RD1-RD12 MD1-MD12 31 RD2 MD2 28 RD4 RD6 RD9 RD11
+          MD4 MD6 MD9 MD11 30 RPYR RPMTH RPDAY;
+   ARRAY RPDAYS RD1-RD12;
+   ARRAY MDDAYS MD1-MD12;
+%MEND DCLVAR;
+*;
+%MACRO REMMTH;
+   RPYR  = YEAR(REPTDATE);
+   RPMTH = MONTH(REPTDATE);
+   RPDAY = DAY(REPTDATE);
+   IF RPMTH = 2 THEN
+      IF MOD(RPYR,4) = 0 THEN RD2 = 29;
+      ELSE RD2 = 28;
+*;
+   MDYR  = YEAR(MATDT);
+   MDMTH = MONTH(MATDT);
+   MDDAY = DAY(MATDT);
+   IF MDMTH = 2 THEN
+      IF MOD(MDYR,4) = 0 THEN MD2 = 29;
+      ELSE MD2 = 28;
+   IF MDDAY > RPDAYS(RPMTH) THEN MDDAY = RPDAYS(RPMTH);
+   REMY = MDYR - RPYR;
+   REMM = MDMTH - RPMTH;
+   REMD = MDDAY - RPDAY;
+   REMMTH = REMY*12 + REMM + REMD/RPDAYS(RPMTH);
+%MEND REMMTH;
+*;
+*----------------------------------------------------------------*
+*  CONCENTRATION OF FUNDING SOURCES (PART 3)                     *
+*----------------------------------------------------------------*;
+
+%INC PGM(EILIQ301);
+%INC PGM(EILIQ302);
+%INC PGM(EILIQ303);
+%INC PGM(EILIQ304);
+%INC PGM(EILIQ305);
+
+//*%OPC END ACTION=NOSCAN
+//***********************************************************
+//* FTP HOST DATASETS TO DATA REPORT REPOSITORY SYSTEM (DRR)
+//***********************************************************
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(DRR#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+cd "FD-BNM REPORTING/PBB/BNM RPTG"
+put //SAP.PBB.EIBMLIQ3.TEXT   EIBMLIQ3.TXT
+EOB
+/*
