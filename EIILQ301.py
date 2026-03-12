@@ -1,5 +1,5 @@
 """
-EIILIQ301 - Islamic Bank Ratio 1: Adjusted Financing / Adjusted Deposits
+EIILQ301 - Islamic Bank Ratio 1: Adjusted Financing / Adjusted Deposits
 """
 
 import polars as pl
@@ -13,7 +13,7 @@ OUTPUT_DIR = 'data/output/'
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-print("EIILIQ301 - Islamic Bank Funding Concentration Ratio")
+print("EIILQ301 - Islamic Bank Funding Concentration Ratio")
 print("=" * 60)
 
 try:
@@ -166,5 +166,5 @@ df_output = pl.DataFrame({
 df_output.write_csv(f'{OUTPUT_DIR}ISLAMIC_FUNDING_RATIO.csv')
 print(f"\n✓ Saved: ISLAMIC_FUNDING_RATIO.csv")
 print(f"\n{'='*60}")
-print("✓ EIILIQ301 Complete")
+print("✓ EIILQ301 Complete")
 print(f"{'='*60}")
