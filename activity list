@@ -6,165 +6,241 @@ Dear Operator/SCOS, kindly assist to attend below activity,
 
 3) Deploy the new jobs inside the below folders in "Shared Data" 
 
-   a) Python/MIS Deployed Jobs (Flow: MIS_PY_BNMIVDMNI)
+   a) Python/MIS Deployed Jobs (Flow: MIS_PY_DACCMCA)
 
         Right Click Deploy : Deploy a job for scheduling box pop-up choose
         Batch Server         : SASEDW - Python MIS Batch Server
         Deployment Directory : Python MIS Jobs
         Deployed Job Name    :
-EIVDCCLN
-EIVDLNEX
+EIBDACCA
+EIIDACCA
         Location             :/Shared Data/Python/MIS Deployed Jobs
-        Host Application Reference : SAPBNMIVDMNI
+        Host Application Reference : SAPDACCMCA
 
-   b) Python/MIS Deployed Jobs (Flow: MIS_PY_BNMLONPAC_5TH)
+   b) Python/MIS Deployed Jobs (Flow: MIS_PY_DLY_EQUATION2)
 
         Right Click Deploy : Deploy a job for scheduling box pop-up choose
         Batch Server         : SASEDW - Python MIS Batch Server
         Deployment Directory : Python MIS Jobs
         Deployed Job Name    :
-EIBMLNPC
+EIBDEQWH
+EIDUTRPC
         Location             :/Shared Data/Python/MIS Deployed Jobs
-        Host Application Reference : SAPBNMLONPAC#5TH
+        Host Application Reference : SAPDLY#EQUATION2
 
-   c) Python/MIS Deployed Jobs (Flow: MIS_PY_BNMMERGEPBB)
+   c) Python/MIS Deployed Jobs (Flow: MIS_PY_DTREXT_DLY)
 
         Right Click Deploy : Deploy a job for scheduling box pop-up choose
         Batch Server         : SASEDW - Python MIS Batch Server
         Deployment Directory : Python MIS Jobs
         Deployed Job Name    :
-EIBMMTH1
-EIIMMTH1
-EIPWRDAL
-EIBWKAPD
-EIIWKAPD
-EIIWKAPE
-EIBWKAPE
-EIIWREXL
+EIBDTRBL
+EIBDEALS
         Location             :/Shared Data/Python/MIS Deployed Jobs
-        Host Application Reference : SAPBNMMERGEPBB
+        Host Application Reference : SAPDTREXT#DLY
 
-   d) Python/MIS Deployed Jobs (Flow: MIS_PY_BNMMMNI)
+   d) Python/MIS Deployed Jobs (Flow: MIS_PY_DTREXT_WKY)
 
         Right Click Deploy : Deploy a job for scheduling box pop-up choose
         Batch Server         : SASEDW - Python MIS Batch Server
         Deployment Directory : Python MIS Jobs
         Deployed Job Name    :
-EIBWDALE
-EIBMDALE
-EIBWWKLY
-EIBMRPTS
-EIBMFDS2
-EIBMFDC3
-EIMAR301
-EIMAR201
-EIMAR101
-EIBWHP01
-EIBWHP02
-EIBWHP03
-EIBWHP04
-EIBMODLT
-EIBMLNLT
-EIMAR202
-EIMAR102
-EIMAR103
-EIMAR104
-EIBWFALE
-EIBDLNSA
-EIBMIISX
-EIBMFALE
-EIBXFCFD
-EIBRFCFD
-EIFMNPLE
-EIFFCCD2
-EIIFCCD2
-EIMPBIF1
-EIBMCOSX
-EIIMRPTS
-EIIMTOP5
-EIBWFCFD
-EIBMLCRC
-EIBMCOLE
-EIBMDPDE
-EIBMDSAS
-EIBMCRMA
-EIBM0958
-EIBM0959
-EIBM0961
-EIBM0962
-EIBM0946
+EIBWTRWH
+EIBMNR04
         Location             :/Shared Data/Python/MIS Deployed Jobs
-        Host Application Reference : SAPBNMMMNI
+        Host Application Reference : SAPDTREXT#WKY
 
-   e) Python/MIS Deployed Jobs (Flow: MIS_PY_BNMMMNI1)
+   e) Python/MIS Deployed Jobs (Flow: MIS_PY_EXTWAREHOUSE)
 
         Right Click Deploy : Deploy a job for scheduling box pop-up choose
         Batch Server         : SASEDW - Python MIS Batch Server
         Deployment Directory : Python MIS Jobs
         Deployed Job Name    :
-EIBMISLX
-EIBMNPL0
-EIBMIISA
-EIBMFD1M
-EIBMFDI3
-EIBMFDC3
-EIBMCOLR
-DMMISRI3
-EIBTCOSX
+EIBWCMW1
+EIBWDPSA
+EIBWDPFD
+EIBWLMTE
+EIBWLIME
+EIBWFDCE
+EIBWCIWH
+EIBWTLTR
+EIBWREPL
+EIIWLIME
         Location             :/Shared Data/Python/MIS Deployed Jobs
-        Host Application Reference : SAPBNMMMNI1
+        Host Application Reference : SAPEXTWAREHOUSE
 
-   f) Python/MIS Deployed Jobs (Flow: MIS_PY_BNMPBBMKAP)
+   f) Python/MIS Deployed Jobs (Flow: MIS_PY_EXTWAREHOUSE1)
 
         Right Click Deploy : Deploy a job for scheduling box pop-up choose
         Batch Server         : SASEDW - Python MIS Batch Server
         Deployment Directory : Python MIS Jobs
         Deployed Job Name    :
-EIIMBPOS
-EIBMLIQI
-EIBMCLSA
-EIBMCLFD
-EIBMCLCA
-EIIMCLSA
-EIIMCLFD
-EIIMCLCA
+EIBWLNW1
+EIBWLNW2
+EIWLNZIP
+EIBWDPCA
         Location             :/Shared Data/Python/MIS Deployed Jobs
-        Host Application Reference : SAPBNMPBBMKAP
+        Host Application Reference : SAPEXTWAREHOUSE1
 
-   g) Python/MIS Deployed Jobs (Flow: MIS_PY_BNMSDBM)
+   g) Python/MIS Deployed Jobs (Flow: MIS_PY_EXTWAREHSEMTH)
 
         Right Click Deploy : Deploy a job for scheduling box pop-up choose
         Batch Server         : SASEDW - Python MIS Batch Server
         Deployment Directory : Python MIS Jobs
         Deployed Job Name    :
-EIBWSDBM
+EIWLNZIP
         Location             :/Shared Data/Python/MIS Deployed Jobs
-        Host Application Reference : SAPBNMSDBM
+        Host Application Reference : SAPEXTWAREHSEMTH
 
-   h) Python/MIS Deployed Jobs (Flow: MIS_PY_BNMWCOLLATER)
+   h) Python/MIS Deployed Jobs (Flow: MIS_PY_HPNPLRPS)
 
         Right Click Deploy : Deploy a job for scheduling box pop-up choose
         Batch Server         : SASEDW - Python MIS Batch Server
         Deployment Directory : Python MIS Jobs
         Deployed Job Name    :
-EIBWCOLE
-EIWCOLWH
-EIICOLWH
+EIFMNP2A
+EIFMNP2B
+EIFMNP3Y
+EIFMNP3Z
         Location             :/Shared Data/Python/MIS Deployed Jobs
-        Host Application Reference : SAPBNMWCOLLATER
+        Host Application Reference : SAPHPNPLRPS
+
+   i) Python/MIS Deployed Jobs (Flow: MIS_PY_NEWNPL)
+
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployed Job Name    :
+EIBMBASK
+EIBMBAS1
+EIBMBSWH
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPNEWNPL
+
+   j) Python/MIS Deployed Jobs (Flow: MIS_PY_NEWNPLPIBB)
+
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployed Job Name    :
+EIIMBASK
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPNEWNPLPIBB
+
+   k) Python/MIS Deployed Jobs (Flow: MIS_PY_PBBQUARTDIS)
+
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployed Job Name    :
+EIBQPIUC
+EIBQDISE
+EIBQREMT
+EIBQINST
+EIBQDCIS
+EIBQDISF
+EIBQPICL
+EIBQIBGT
+EIBQUCLM
+EIPCBFLO
+EIPCIFLO
+EIFLTEXP
+EIBFLOAT
+EIBQFAR2
+EIIQFISF
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPPBBQUARTDIS
+
+   l) Python/MIS Deployed Jobs (Flow: MIS_PY_PBBQUARTDIS13)
+
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployed Job Name    :
+EIBQCAR1
+EIBQCAR2
+EIBQDCIS
+EIBQDISF
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPPBBQUARTDIS13
+
+   m) Python/MIS Deployed Jobs (Flow: MIS_PY_PIBQUARTDIS)
+
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployed Job Name    :
+EIIQDISE
+EIIQREMT
+EIIQINST
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPPIBQUARTDIS
+
+   n) Python/MIS Deployed Jobs (Flow: MIS_PY_PIBQUARTDIS13)
+
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployed Job Name    :
+EIBPIUTR
+EIIPIUTR
+EIIQDISF
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPPIBQUARTDIS13
+
+   o) Python/MIS Deployed Jobs (Flow: MIS_PY_PIBBCCD_MTH)
+
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployed Job Name    :
+EIIMCCDB
+EIIMCC2B
+EIIMTEMA
+EIMREPOI
+EIMRESHI
+EIMIR301
+EIMIR201
+EIMIR202
+EIMIR103
+EIMIR104
+EIMIR101
+EIMIR102
+EIIAQTXT
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPPIBBCCD#MTH
+
+   p) Python/MIS Deployed Jobs (Flow: MIS_PY_WLK_EQUATION2)
+
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployed Job Name    :
+EIBWEQWH
+EIIWEQWH
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPWLK#EQUATION2
 
 4) Deploy the jobs above into flow as specified below:
 
-   a) Jobs from section (a) > Flow: MIS_PY_BNMIVDMNI
-   b) Jobs from section (b) > Flow: MIS_PY_BNMLONPAC_5TH
-   c) Jobs from section (c) > Flow: MIS_PY_BNMMERGEPBB
-   d) Jobs from section (d) > Flow: MIS_PY_BNMMMNI
-   e) Jobs from section (e) > Flow: MIS_PY_BNMMMNI1
-   f) Jobs from section (f) > Flow: MIS_PY_BNMPBBMKAP
-   g) Jobs from section (g) > Flow: MIS_PY_BNMSDBM
-   h) Jobs from section (h) > Flow: MIS_PY_BNMWCOLLATER
+   a) Jobs from section (a) > Flow: MIS_PY_DACCMCA
+   b) Jobs from section (b) > Flow: MIS_PY_DLY_EQUATION2
+   c) Jobs from section (c) > Flow: MIS_PY_DTREXT_DLY
+   d) Jobs from section (d) > Flow: MIS_PY_DTREXT_WKY
+   e) Jobs from section (e) > Flow: MIS_PY_EXTWAREHOUSE
+   f) Jobs from section (f) > Flow: MIS_PY_EXTWAREHOUSE1
+   g) Jobs from section (g) > Flow: MIS_PY_EXTWAREHSEMTH
+   h) Jobs from section (h) > Flow: MIS_PY_HPNPLRPS
+   i) Jobs from section (i) > Flow: MIS_PY_NEWNPL
+   j) Jobs from section (j) > Flow: MIS_PY_NEWNPLPIBB
+   k) Jobs from section (k) > Flow: MIS_PY_PBBQUARTDIS
+   l) Jobs from section (l) > Flow: MIS_PY_PBBQUARTDIS13
+   m) Jobs from section (m) > Flow: MIS_PY_PIBQUARTDIS
+   n) Jobs from section (n) > Flow: MIS_PY_PIBQUARTDIS13
+   o) Jobs from section (o) > Flow: MIS_PY_PIBBCCD_MTH
+   p) Jobs from section (p) > Flow: MIS_PY_WLK_EQUATION2
 
 5) Login to SAS Management Console using "sasdemo_edw" id
 
-   a) Create all flows listed above (8 flows total) and schedule with below triggering event:
+   a) Create all flows listed above (16 flows total) and schedule with below triggering event:
       Daily@Sys, 10:00 Asia/Singapore
