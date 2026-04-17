@@ -1,0 +1,126 @@
+Dear Operator/SCOS, kindly assist to attend below activity,
+ 
+1) Login to SAS Data Integration Studio 4.9 using "sasdemo_edw" id
+ 
+2) Click "Shared Data" folder.
+ 
+3) Deploy the new jobs inside the below folders in "Shared Data" 
+ 
+   a) Python/MIS Deployed Jobs
+ 
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployed Job Name    :
+EIBWWKLY 
+EIBWFALE 
+EIBWRPTS 
+EIBWHP01 
+EIBWHP02 
+EIBWHP03 
+EIBWHP04 
+EIFFCCD2 
+EIIFCCD2 
+EIBWFCFD
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPBNMWMNI 
+ 
+   b) Python/MIS Deployed Jobs
+ 
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployment Directory : Python Jobs
+        Deployed Job Name    :
+EIBWLNW2
+EIWLNZIP
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPEXTWAREHSEMTH
+ 
+   c) Python/MIS Deployed Jobs
+ 
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployment Directory : Python Jobs
+        Deployed Job Name    :
+EIIMBTAT
+EIBMBTAT
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAP#MTH#BTAT#EXT
+ 
+   d) Python/MIS Deployed Jobs
+ 
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployment Directory : Python Jobs
+        Deployed Job Name    :
+EIBMTCSM
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SSAP#MTH#ATMTCSM 
+ 
+   e) Python/MIS Deployed Jobs
+ 
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployment Directory : Python Jobs
+        Deployed Job Name    :
+EEIBNMMFR
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAP#MTH#BNMRPT1
+ 
+   f) Python/MIS Deployed Jobs
+ 
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployment Directory : Python Jobs
+        Deployed Job Name    :
+EIBWRMPU
+EIIWRMPU
+EIBWRMPT
+EIWRMPU1
+EIWRMPU2
+EIWRMPU3
+EIWRMPU4
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : RBP2#WLY#BPPRPT 
+ 
+   g) Python/MIS Deployed Jobs
+ 
+        Right Click Deploy : Deploy a job for scheduling box pop-up choose
+        Batch Server         : SASEDW - Python MIS Batch Server
+        Deployment Directory : Python MIS Jobs
+        Deployment Directory : Python Jobs
+        Deployed Job Name    :
+EIBMFGP3 
+EIBMTH1A 
+EIBMMISE 
+EIIMMISE 
+EIBMRDMI 
+EIBMLIQI 
+EIBMP124 
+EIBM1241 
+EIIMFGP3 
+EIBMTHLS 
+EIBMTH1A 
+        Location             :/Shared Data/Python/MIS Deployed Jobs
+        Host Application Reference : SAPRDALMTHLY
+ 
+4) Deploy the job above into flow  
+ 
+  a) Job (a)> MIS_PY_CTRL_DETICA
+ 
+  b) Job (b)and(c) > MIS_PY_DLY_BTRADE
+ 
+ 
+5) Login to SAS Management Console using using "sasdemo_edw" id
+ 
+  a) create new flow MIS_PY_CTRL_DETICA  and schedule with below triggering event :
+         
+Daily@Sys, 07: 02 Asia/Singapore
+ 
+  b) create new flow MIS_PY_CTRL_BTRADE  and schedule with below triggering event
+ ONLY(002) DAY(DAY) MONTH(FEBRUARY MAY AUGUST NOVEMBER)
