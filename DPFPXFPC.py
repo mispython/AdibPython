@@ -1,176 +1,209 @@
-import duckdb
+from __future__ import annotations
+
 import polars as pl
-from datetime import datetime, timedelta
-import common.parquet_splitter as parquet_splitter
-import common.data_cleaner as data_cleaner
-import common.fixed_width_reader as fixed_width_reader
-import ast
-import os
+import pyarrow.parquet as pq
+import duckdb
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Optional
+import re
 
-# Obtain date for file paths
-batch_date = datetime.now()-timedelta(days=1)
-file_date = batch_date.strftime("%d%m%y")
-folder_day = batch_date.strftime("%d")
-folder_month = batch_date.strftime("%m")
-folder_year = batch_date.strftime("%Y")
+# =========================
+# CONFIGURATION
+# =========================
+BASE_INPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input")
+BASE_OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output")
+USE_DUCKDB_COPY = False
 
-# Define global file paths
-table_layout_folder = "/host/dp/input/table_layout/lookup"
-control1_f = f"/host/dp/input/lookup/DPCOLTPM.txt"
-control2_f = f"/host/dp/input/SRSCTRL1_{folder_year}{folder_month}{folder_day}.txt"
-inputf1_f = f"/host/dp/parquet/year={folder_year}/month={folder_month}/day={folder_day}/DPFEED03_CSTPM001.parquet"
-inputf2_f = f"/host/dp/parquet/year={folder_year}/month={folder_month}/day={folder_day}/DP_ALLFILE.parquet"
-output1_f = f"/host/dp/output/DP_SASTPMF3_PYMT_SUMM_{folder_year}{folder_month}{folder_day}.txt"
-excpo_f = f"/host/dp/output/DP_SASTPMF3_PYMT_EXCP_{folder_year}{folder_month}{folder_day}.txt"
-
-# Step 1: Read INPUTF1.parquet using DuckDB and convert to Polars
-# Construct table layout file path
-program_name = os.path.basename(__file__).rsplit('.', maxsplit=1)[0]
-inputf1_dsn = inputf1_f.rsplit('/', maxsplit=1)[1].rsplit('.', maxsplit=1)[0].split('_', maxsplit=1)[1]
-inputf1_layout_path = f"{table_layout_folder}/{program_name}_{inputf1_dsn}.txt"
-
-select_clause = parquet_splitter.split(inputf1_layout_path)
-
-con = duckdb.connect()
-aaa = pl.from_arrow(con.execute(f"""
-    SELECT {select_clause} FROM '{inputf1_f}'
-    WHERE TTRANCODE != '874' AND SRCECDE = '313'
-""").fetch_arrow_table())
-
-# Step 2: Load CONTROL1 fixed-width
-# control1_schema = [("ACCTNO", 10, str), ("SHORTNAME", 3, str), ("LONGNAME", 20, str)]
-# control1 = pl.read_csv(control1_f, separator=None, has_header=False,
-#                        new_columns=[x[0] for x in control1_schema],
-#                        encoding="utf8", infer_schema_length=0, skip_rows=0,
-#                        width=[x[1] for x in control1_schema])
-control1_schema = [
-    (0, 10, "ACCTNO"),
-    (11, 3, "SHORTNAME"),
-    (15, 20, "LONGNAME")
-]
-df = fixed_width_reader.read(control1_f, control1_schema)
-
-# Step 3: Load CONTROL2 fixed-width
-# control2 = pl.read_csv(control2_f, separator=None, has_header=False,
-#                        new_columns=["ACTDATE"], width=[8], encoding="utf8")
-control2_schema = [
-    (0, 8, "ACTDATE")
-]
-control2 = fixed_width_reader.read(control2_f, control2_schema)
-
-rptday = str(control2[0, "ACTDATE"])
-
-rpt_dd, rpt_mm, rpt_yy = rptday[6:8], rptday[4:6], rptday[2:4]
-
-# Step 4: Load INPUTF2 fixed-width
-# inputf2_schema = [
-#     ("FTRANSID", 16, str), ("FSERIALN", 3, str), ("FMSTOKEN", 2, str), ("FTOKEN", 2, str),
-#     ("FEXCHGID", 10, str), ("FBATCH", 40, str), ("FNOOFORD", 2, str), ("FPROCDT", 8, str),
-#     ("FTXNDATE", 14, str), ("FFPXDATE", 14, str), ("FENCRYVA", 48, str), ("FSELORDN", 40, str),
-#     ("FSELERID", 10, str), ("FSELERDE", 30, str), ("FSELBKID", 15, str), ("FSELBRCH", 10, str),
-#     ("FSELACNO", 20, str), ("FSELLERI", 35, str), ("FBUYBKID", 15, str), ("FBUYBRCH", 10, str),
-#     ("FBUYACNO", 20, str), ("FBUYNAME", 40, str), ("FBUYERID", 20, str), ("FMAKERNM", 40, str),
-#     ("FBUYERIB", 35, str), ("FCHRGTYP", 4, str), ("FTRXCNCY", 3, str), ("FTRXAMNT", 8, str),
-#     ("FSETCNCY", 3, str), ("FSETAMNT", 8, str), ("FDRAUCDE", 2, str), ("FDRAUTNO", 10, str),
-#     ("FCRAUCDE", 2, str), ("FCRAUTNO", 10, str), ("FTIMESTA", 26, str),
-# ]
-# inputf2 = pl.read_csv(inputf2_f, separator=None, has_header=False,
-#                       new_columns=[x[0] for x in inputf2_schema],
-#                       encoding="utf8", infer_schema_length=0, skip_rows=0,
-#                       width=[x[1] for x in inputf2_schema])
-# bbb = inputf2.filter(pl.col("FSELERID") == "SE00027722")
-
-bbb_query = f"""
-    SELECT *
-    FROM read_parquet('{inputf2_f}')
-    WHERE FSELERID = 'SE00027722'
-"""
-
-bbb = duckdb.sql(bbb_query).pl()
-bbb = bbb.with_columns(
-    pl.col("FTRANSID").cast(pl.String)
-)
-
-# Step 5: Process AAA
-aaa = aaa.with_columns([
-    pl.when((pl.col("FRMTCDE").cast(pl.Int32) == 2) & (pl.col("TRAITY2") == "L"))
-      .then(pl.col("TRAILDT1").str.slice(17, 18).str.strip_chars("* "))
-      .otherwise(None).alias("REFNO1"),
-    pl.when(pl.col("TRANCDE") == "795")
-      .then(pl.col("TRAILDT1").str.slice(11, 3))
-      .otherwise(pl.col("TRANCDE")).alias("TRANCDE"),
-    pl.when(pl.col("TRANCDE") == "796")
-      .then(pl.col("TRANAMT"))
-      .otherwise(None).alias("TRXNFEE")
-])
-aaa = aaa.with_columns([
-    pl.col("REFNO1").fill_null("").alias("FTRANSID")
-])
-
-# Step 6: Split CR and DR
-createf1 = aaa.filter(pl.col("DATATYP") == "C")
-createf2 = aaa.filter(pl.col("DATATYP") == "D")
-
-# Step 7: Extract TRXNFEE from first EBKCHQ in DR
-trxnfee = createf2.unique(subset=["EBKCHQ"]).select(["EBKCHQ", "RECNO", "TRANAMT"]).rename({"TRANAMT": "TRXNFEE"})
-
-# Step 8: Merge CR with TRXNFEE
-outf3 = createf1.join(trxnfee, on="EBKCHQ", how="left")
-
-# Step 9: Merge with BBB
-# outff = outf3.join(bbb, on="FTRANSID", how="inner")
-# excpo = outf3.join(bbb, on="FTRANSID", how="anti")
-merged = outf3.join(bbb, on="FTRANSID", how="full", coalesce=True).with_columns(
-    pl.col("TRANAMT").fill_null(0)
-)
-outff = merged.filter(pl.col("BANKNO").is_not_null()).fill_nan("").fill_null("")
-excpo = merged.filter(pl.col("FSELORDN").is_null() & pl.col("BANKNO").is_not_null())
-
-# Step 10: Write OUTPUT1.txt
-with open(output1_f, "w") as f:
-    for row in outff.iter_rows(named=True):
-        if row.get("COMMIND", "").strip() and int(row["TRANAMT"]) != 150:
-            # nettamt = row["TRANAMT"] - row["TRXNFEE"]
-            trxnfee = ""
-            nettamt = ""
-            if row["TRXNFEE"] != "":
-                trxnfee = int(row["TRXNFEE"])
-                nettamt = int(row["TRANAMT"]) - trxnfee
-
-            f.write(f"{rpt_dd:>2}{rpt_mm:>2}{rpt_yy:>2}{row['FTRANSID']:>16}{row['FSELORDN']:>40}"
-                    f"{int(row['TRANAMT']):>13}{trxnfee:>13}{nettamt:>13}"
-                    f"{row['RECNO']:>6}{row['TRANCDE']:>3}{row['FSELERID']:>10}"
-                    f"{row['ACCTNO']:>10}{row['FBUYBKID']:>15}{row['FSELERDE']:>30}"
-                    f"{row['FBUYACNO']:>20}\n")
-
-# Step 11: Write EXCPO.txt
-with open(excpo_f, "w") as f:
-    if excpo.is_empty():
-        f.write("------ NO EXCEPTIONS FOR TODAY -------\n")
+# =========================
+# UTILITIES
+# =========================
+def write_parquet(df: pl.DataFrame, path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if USE_DUCKDB_COPY:
+        con = duckdb.connect()
+        con.register("DF", df.to_arrow())
+        con.execute(f"COPY DF TO '{path.as_posix()}' (FORMAT PARQUET)")
+        con.close()
     else:
-        totamt = 0
-        totcnt = 0
-        f.write(" " * 19 + "==========================================\n")
-        f.write(" " * 19 + "   !!! ITEMS WITH MISSING INFO !!!\n")
-        f.write(" " * 19 + " RECORD AVAILABLE IN DEPOSIT RAW FILE\n")
-        f.write(" " * 19 + "   BUT NOT FOUND IN MA FPX EXT FILE\n")
-        f.write(" " * 19 + "  PLEASE NOTIFY SKK, RCD, NPH, LFK\n")
-        f.write(" " * 19 + "     AND DEPOSIT TEAM VIA EMAIL!!\n")
-        f.write(" " * 19 + "==========================================\n")
-        f.write(" " * 54 + "PAGE NO. :     1\n")
-        f.write(" " * 19 + "       DAILY EXCEPTION REPORT        \n")
-        f.write(" " * 19 + "   FOR TICKETPRO MALAYSIA SDN BHD      \n")
-        f.write(" " * 19 + " ---------------------------------\n")
-        f.write("COUNT    TRAN DATE   FPX TRANS ID      TRAN AMOUNT     TRN  SRC\n")
-        f.write("-" * 120 + "\n")
+        pq.write_table(df.to_arrow(), path)
 
-        for row in excpo.iter_rows(named=True):
-            tranamt = float(row["TRANAMT"]) / 100
-            totamt += tranamt
-            totcnt += 1
-            f.write(f"{totcnt:>7}  {rpt_dd:>2}{rpt_mm:>2}{rpt_yy:>2}      {row['FTRANSID']:>16}  "
-                    f"{tranamt:>13.2f}   {row['TRANCDE']:>3}  {row['SRCECDE']:>3}\n")
+def yyyymmdd_to_date(s: str) -> date:
+    return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
 
-        f.write(" " * 4 + f"TOTAL EXCEPTION AMOUNT  : {totamt:13.2f}\n")
-        f.write(" " * 4 + f"TOTAL EXCEPTION COUNT   : {totcnt:7}\n")
-        f.write(f"{' ':15}*** THIS REPORT IS GENERATED ON {datetime.today().strftime('%d/%m/%Y')} ***")
+def end_of_prev_month(d: date) -> date:
+    return date(d.year, d.month, 1) - timedelta(days=1) if d.month > 1 else date(d.year - 1, 12, 31)
+
+def mmyy_format(d: date) -> str:
+    return f"{d.month:02d}{d.year % 100:02d}"
+
+def mdy(month: int, day: int, year: int) -> Optional[date]:
+    if None in (month, day, year):
+        return None
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+def read_first_line(path: Path) -> str:
+    with open(path, 'r', encoding='utf-8') as f:
+        return f.readline().strip()
+
+# =========================
+# FIELD SPECS
+# =========================
+FIELDS = [
+    (0,1,'RECID',str), (2,12,'MNIACTNO',str), (13,23,'LOANNOTE',str), (24,74,'NAME','u'),
+    (75,76,'ACCTSTA','u'), (77,82,'PRODTYPE',str), (83,84,'PRSTCOND','u'), (85,86,'REGCARD','u'),
+    (87,88,'IGNTKEY','u'), (89,99,'REPODIST',str), (100,101,'ACCTWOFF','u'), (102,106,'YY1',int),
+    (106,108,'MM1',int), (108,110,'DD1',int), (111,112,'MODEREPO','u'), (113,117,'YY2',int),
+    (117,119,'MM2',int), (119,121,'DD2',int), (122,132,'REPOPAID',str), (133,139,'REPOSTAT','u'),
+    (140,150,'TKEPRICE',str), (151,161,'MRKTVAL',str), (162,172,'RSVPRICE',str), (173,183,'FTHSCHLD',str),
+    (184,188,'YY3',int), (188,190,'MM3',int), (190,192,'DD3',int), (193,194,'MODEDISP','u'),
+    (195,205,'APPVDISP',str), (206,210,'YY4',int), (210,212,'MM4',int), (212,214,'DD4',int),
+    (215,219,'YY5',int), (219,221,'MM5',int), (221,223,'DD5',int), (224,228,'YY6',int),
+    (228,230,'MM6',int), (230,232,'DD6',int), (233,243,'HOPRICE',str), (244,249,'NOAUCT',str),
+    (250,270,'PRIOUT',str)
+]
+
+DATES = [('YY1','MM1','DD1','DATEWOFF'), ('YY2','MM2','DD2','DATEREPO'), ('YY3','MM3','DD3','DATE5TH'),
+         ('YY4','MM4','DD4','DATEAPRV'), ('YY5','MM5','DD5','DATESTLD'), ('YY6','MM6','DD6','DATEHO')]
+
+# =========================
+# DATA READING
+# =========================
+def read_rpvdata() -> pl.DataFrame:
+    with open(BASE_INPUT / "RPVBDATA.txt", 'r', encoding='utf-8') as f:
+        lines = f.readlines()[1:]
+    
+    data = []
+    for line in lines:
+        line = line.rstrip('\n')
+        if not line.strip():
+            continue
+        
+        rec = {}
+        for start, end, field, dtype in FIELDS:
+            val = line[start:end].strip() if len(line) >= end else ''
+            rec[field] = val.upper() if dtype == 'u' else (int(val) if dtype == int and val.isdigit() else val if dtype == str else None)
+        data.append(rec)
+    
+    df = pl.DataFrame(data)
+    
+    for yy, mm, dd, dcol in DATES:
+        df = df.with_columns(pl.struct([yy,mm,dd]).map_elements(
+            lambda x: mdy(x[mm], x[dd], x[yy]), return_dtype=pl.Date).alias(dcol))
+    
+    return df.drop([c for c in df.columns if any(c == x for x in 
+        ['YY1','MM1','DD1','YY2','MM2','DD2','YY3','MM3','DD3','YY4','MM4','DD4','YY5','MM5','DD5','YY6','MM6','DD6'])])
+
+# =========================
+# MAIN PROCESSING
+# =========================
+def main():
+    print("=" * 60 + "\nProcessing RPVBDATA dates\n" + "=" * 60)
+    
+    try:
+        line = read_first_line(BASE_INPUT / "RPVBDATA.txt")
+        tbdate_rpvb = line[2:10]
+        
+        if not (tbdate_rpvb.isdigit() and len(tbdate_rpvb) == 8):
+            raise ValueError(f"Invalid TBDATE: {tbdate_rpvb}")
+        
+        tb_date = yyyymmdd_to_date(tbdate_rpvb)
+        reptdate = end_of_prev_month(tb_date)
+        prevdate = end_of_prev_month(reptdate)
+        reptdt, prevdt = mmyy_format(reptdate), mmyy_format(prevdate)
+        
+        print(f"✓ TBDATE: {tbdate_rpvb} → REPTDT: {reptdt}, PREVDT: {prevdt}")
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        today = date.today()
+        reptdate = end_of_prev_month(today)
+        prevdate = end_of_prev_month(reptdate)
+        reptdt, prevdt = mmyy_format(reptdate), mmyy_format(prevdate)
+        print(f"  Fallback: REPTDT={reptdt}, PREVDT={prevdt}")
+    
+    print("\n" + "=" * 60 + "\nProcessing SRSDATA dates\n" + "=" * 60)
+    
+    try:
+        line = read_first_line(BASE_INPUT / "SRSDATA.txt")
+        tbdate_srs = line[0:8]
+        
+        if tbdate_srs.isdigit() and len(tbdate_srs) == 8:
+            srs_tb_date = yyyymmdd_to_date(tbdate_srs)
+            srstdt = mmyy_format(srs_tb_date)
+            print(f"✓ TBDATE: {tbdate_srs} → SRSTDT: {srstdt}")
+        else:
+            match = re.search(r'(\d{8})', tbdate_srs)
+            if match:
+                srs_tb_date = yyyymmdd_to_date(match.group(1))
+                srstdt = mmyy_format(srs_tb_date)
+                print(f"✓ Extracted date: {match.group(1)} → SRSTDT: {srstdt}")
+            else:
+                srstdt = reptdt
+                print(f"⚠ Using REPTDT as fallback: {srstdt}")
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        srstdt = reptdt
+        print(f"  Using REPTDT as fallback: {srstdt}")
+    
+    print("\n" + "=" * 60 + "\nDate validation\n" + "=" * 60)
+    if reptdt != srstdt:
+        error_msg = f"THE SAP.PBB.RPVB.TEXT IS NOT DATED (MMYY:{srstdt})"
+        print(f"✗ {error_msg}")
+        raise RuntimeError(error_msg)
+    print(f"✓ REPTDT={reptdt} matches SRSTDT={srstdt}")
+    
+    print("\n" + "=" * 60 + "\nReading and filtering data\n" + "=" * 60)
+    
+    rpvb1 = read_rpvdata()
+    print(f"✓ RPVB1: {len(rpvb1)} records")
+    
+    if len(rpvb1) > 0:
+        rpvb2 = rpvb1.filter(pl.col("ACCTSTA").is_in(["D", "S", "R"]))
+        rpvb3 = rpvb2.filter(pl.col("DATESTLD").is_not_null()) if 'DATESTLD' in rpvb2.columns else rpvb2.filter(pl.lit(False))
+        print(f"✓ RPVB2: {len(rpvb2)} records (ACCTSTA in D,S,R)")
+        print(f"✓ RPVB3: {len(rpvb3)} records (with DATESTLD)")
+    else:
+        rpvb2 = rpvb3 = rpvb1
+    
+    print("\n" + "=" * 60 + "\nCreating output datasets\n" + "=" * 60)
+    
+    repo_prev_path = BASE_OUTPUT / "REPO" / f"REPS_{prevdt}.parquet"
+    repo_curr_path = BASE_OUTPUT / "REPO" / f"REPS_{reptdt}.parquet"
+    repowh_path = BASE_OUTPUT / "REPOWH" / f"REPS_{reptdt}.parquet"
+    
+    try:
+        repo_prev = pl.read_parquet(repo_prev_path)
+        print(f"✓ Loaded previous: {len(repo_prev)} records")
+        
+        if len(rpvb3) > 0 and len(repo_prev) > 0:
+            all_cols = list(set(rpvb3.columns) | set(repo_prev.columns))
+            for col in all_cols:
+                if col not in rpvb3.columns:
+                    rpvb3 = rpvb3.with_columns(pl.lit(None).alias(col))
+                if col not in repo_prev.columns:
+                    repo_prev = repo_prev.with_columns(pl.lit(None).alias(col))
+            rpvb3, repo_prev = rpvb3.select(all_cols), repo_prev.select(all_cols)
+    except Exception:
+        repo_prev = pl.DataFrame()
+    
+    repo_reps = rpvb3 if len(repo_prev) == 0 else pl.concat([rpvb3, repo_prev], how="vertical", rechunk=True)
+    write_parquet(repo_reps, repo_curr_path)
+    print(f"✓ REPO: {len(repo_reps)} records")
+    
+    repowh_reps = repo_reps.sort("MNIACTNO").unique(subset=["MNIACTNO"], keep="first") if len(repo_reps) > 0 and 'MNIACTNO' in repo_reps.columns else repo_reps
+    write_parquet(repowh_reps, repowh_path)
+    print(f"✓ REPOWH: {len(repowh_reps)} records ({len(repo_reps)-len(repowh_reps)} duplicates removed)")
+    
+    print("\n" + "=" * 60 + "\nSUMMARY\n" + "=" * 60)
+    print(f"TBDATE RPVBDATA: {tbdate_rpvb if 'tbdate_rpvb' in locals() else 'N/A'}")
+    print(f"TBDATE SRSDATA: {tbdate_srs if 'tbdate_srs' in locals() else 'N/A'}")
+    print(f"REPTDT: {reptdt} | PREVDT: {prevdt} | SRSTDT: {srstdt}")
+    print(f"RPVB1: {len(rpvb1)} | RPVB2: {len(rpvb2)} | RPVB3: {len(rpvb3)}")
+    print(f"REPO: {len(repo_reps)} | REPOWH: {len(repowh_reps)}")
+    print("=" * 60 + "\n✓ Processing completed\n" + "=" * 60)
+
+if __name__ == "__main__":
+    main()
