@@ -1,262 +1,305 @@
-from pathlib import Path
-from datetime import datetime
-import polars as pl
+from __future__ import annotations
+
 import re
 import logging
+import pandas as pd
+import polars as pl
+import pyarrow.parquet as pq
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Optional
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# =========================
+# LOGGING
+# =========================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Configuration
-INPUT_TEXT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/r69990426.sas7bdat"
-BASE_OUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output"
+# =========================
+# CONFIGURATION
+# =========================
+INPUT_SAS_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/r69990426.sas7bdat")
+BASE_OUT_PATH  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output")
 
-# Output columns matching SAS format
+SAS_EPOCH = date(1960, 1, 1)
+
+# Expected output columns — must match SAS dataset variable order
 OUTPUT_COLUMNS = [
     "COSTCT", "NOTETYPE", "PRINBAL", "PRNNACCR", "INTACCR", "INTNACCR",
     "UNERNINT", "UNERNNON", "RSRVFIN", "RSRVDLR", "NONDDA", "LATEFEES",
     "OTHERFEE", "CTPRINT", "CTPRNNAC"
 ]
 
-def extract_batch_date(filename: str) -> datetime:
-    """Extract batch date from filename"""
-    date_match = re.search(r'(\d{8})', filename)
-    if date_match:
-        date_str = date_match.group(1)
-        return datetime.strptime(date_str, '%Y%m%d')
-    return datetime.now()
+# =========================
+# UTILITIES
+# =========================
+def to_sas_date(d: date) -> int:
+    """Convert Python date to SAS date serial (days since 1960-01-01)
+    e.g. 22/04/2026 -> 24218
+    """
+    return (d - SAS_EPOCH).days
 
-def clean_number(num_str: str) -> str:
-    """Clean and format a number string"""
-    if not num_str or num_str == '.' or num_str == '-':
-        return '0.00'
-    
-    cleaned = num_str.replace(',', '')
-    if '.' in cleaned:
-        parts = cleaned.split('.')
-        if len(parts) == 2:
-            decimal_places = len(parts[1])
-            if decimal_places <= 2:
-                return f"{float(cleaned):.2f}"
-            elif decimal_places <= 7:
-                return f"{float(cleaned):.7f}"
-    return cleaned
+def from_sas_date(n: int) -> date:
+    """Convert SAS date serial back to Python date"""
+    return SAS_EPOCH + timedelta(days=int(n))
 
-def parse_line(line: str) -> dict:
-    """Parse a fixed-width line from the input file"""
-    line = line.rstrip('\n')
-    if not line.strip() or len(line) < 11:
-        return None
-    
-    try:
-        # Extract COSTCT and NOTETYPE
-        costct = line[0:7].strip()
-        notetype = line[8:11].strip()
-        
-        if not costct or not notetype:
-            return None
-        
-        costct_int = int(costct)
-        notetype_int = int(notetype)
-        
-        # Find all numbers in the line
-        numbers = re.findall(r'[-\d,.]+', line[11:])
-        
-        # Create record with defaults
-        record = {
-            'COSTCT': costct_int,
-            'NOTETYPE': notetype_int,
-            'PRINBAL': '0.00',
-            'PRNNACCR': '0.00',
-            'INTACCR': '0.0000000',
-            'INTNACCR': '0.0000000',
-            'UNERNINT': '0.00',
-            'UNERNNON': '0.00',
-            'RSRVFIN': '0.00',
-            'RSRVDLR': '0.00',
-            'NONDDA': '0.00',
-            'LATEFEES': '0.00',
-            'OTHERFEE': '0.00',
-            'CTPRINT': '0',
-            'CTPRNNAC': '0'
-        }
-        
-        # Map numbers to fields
-        field_mapping = [
-            ('PRINBAL', 0), ('PRNNACCR', 1), ('INTACCR', 2), ('INTNACCR', 3),
-            ('UNERNINT', 4), ('UNERNNON', 5), ('RSRVFIN', 6), ('RSRVDLR', 7),
-            ('NONDDA', 8), ('LATEFEES', 9), ('OTHERFEE', 10), ('CTPRINT', 11),
-            ('CTPRNNAC', 12)
-        ]
-        
-        for field_name, idx in field_mapping:
-            if idx < len(numbers):
-                record[field_name] = clean_number(numbers[idx])
-        
-        return record
-        
-    except Exception as e:
-        logger.debug(f"Error parsing line: {e}")
-        return None
+def extract_batch_date(filename: str) -> date:
+    """Extract batch date from filename (e.g. r69990426.sas7bdat -> 2026-04-26 if YYYYMMDD,
+    or tries MMDDYYYY / other patterns as fallback).
+    Returns today if no date found.
+    """
+    stem = Path(filename).stem   # e.g. 'r69990426'
 
-def process_text_file(file_path: Path) -> list:
-    """Process the structured text file"""
-    logger.info(f"Processing text file: {file_path}")
-    
-    records = []
-    line_count = 0
-    
-    try:
-        with open(file_path, 'r') as file:
-            for line in file:
-                line_count += 1
-                if line_count % 10000 == 0:
-                    logger.info(f"Processed {line_count:,} lines...")
-                
-                record = parse_line(line)
-                if record:
-                    records.append(record)
-        
-        logger.info(f"Total records parsed: {len(records):,}")
-        return records
-        
-    except Exception as e:
-        logger.error(f"Error processing file: {e}")
-        return []
+    # Try to find 8 consecutive digits anywhere in the filename
+    match = re.search(r'(\d{8})', stem)
+    if match:
+        s = match.group(1)
+        # Try YYYYMMDD
+        try:
+            return datetime.strptime(s, '%Y%m%d').date()
+        except ValueError:
+            pass
+        # Try MMDDYYYY
+        try:
+            return datetime.strptime(s, '%m%d%Y').date()
+        except ValueError:
+            pass
+        # Try DDMMYYYY
+        try:
+            return datetime.strptime(s, '%d%m%Y').date()
+        except ValueError:
+            pass
 
-def create_dataframe(records: list) -> pl.DataFrame:
-    """Create DataFrame from parsed records with SAS formatting"""
-    if not records:
-        raise ValueError("No records to create DataFrame")
-    
-    # Format with proper right alignment (mimics SAS RIGHT() function)
-    formatted_data = []
-    for record in records:
-        formatted_record = {
-            'COSTCT': record['COSTCT'],
-            'NOTETYPE': record['NOTETYPE'],
-            'PRINBAL': str(record['PRINBAL']).rjust(24),
-            'PRNNACCR': str(record['PRNNACCR']).rjust(24),
-            'INTACCR': str(record['INTACCR']).rjust(21),
-            'INTNACCR': str(record['INTNACCR']).rjust(21),
-            'UNERNINT': str(record['UNERNINT']).rjust(24),
-            'UNERNNON': str(record['UNERNNON']).rjust(24),
-            'RSRVFIN': str(record['RSRVFIN']).rjust(24),
-            'RSRVDLR': str(record['RSRVDLR']).rjust(24),
-            'NONDDA': str(record['NONDDA']).rjust(24),
-            'LATEFEES': str(record['LATEFEES']).rjust(24),
-            'OTHERFEE': str(record['OTHERFEE']).rjust(24),
-            'CTPRINT': str(record['CTPRINT']).rjust(7),
-            'CTPRNNAC': str(record['CTPRNNAC']).rjust(7)
-        }
-        formatted_data.append(formatted_record)
-    
-    return pl.DataFrame(formatted_data, schema=OUTPUT_COLUMNS)
+    # Try 6 digits: MMDDYY or YYMMDD
+    match6 = re.search(r'(\d{6})', stem)
+    if match6:
+        s = match6.group(1)
+        for fmt in ('%m%d%y', '%y%m%d', '%d%m%y'):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                pass
 
-def save_output(df: pl.DataFrame, output_dir: Path, reptmon: str, reptyear: str):
-    """Save DataFrame to parquet and text files"""
-    # Create output directory
-    out_dir = output_dir / "LNR6999"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Construct output filename
-    out_name = f"R6999{reptmon}{reptyear}.parquet"
-    output_path = out_dir / out_name
-    
-    # Write to parquet
-    df.write_parquet(output_path)
-    logger.info(f"Parquet output written to: {output_path}")
-    
-    # Also save text version for verification
-    txt_path = output_path.with_suffix('.txt')
-    with open(txt_path, 'w') as f:
-        # Write header matching SAS format
-        header = (
-            "COSTCT NOTETYPE PRINBAL                PRNNACCR               "
-            "INTACCR              INTNACCR              UNERNINT                "
-            "UNERNNON                RSRVFIN                 RSRVDLR                 "
-            "NONDDA                  LATEFEES                 OTHERFEE                 "
-            "CTPRINT CTPRNNAC"
+    logger.warning(f"Could not extract date from filename '{filename}' — using today")
+    return date.today()
+
+def end_of_prev_month(d: date) -> date:
+    """End of previous month — mirrors SAS INTNX('MONTH', d, -1, 'E')"""
+    if d.month == 1:
+        return date(d.year - 1, 12, 31)
+    return date(d.year, d.month, 1) - timedelta(days=1)
+
+def mmyy_format(d: date) -> str:
+    """MMYY string — mirrors SAS MMYYN4. format"""
+    return f"{d.month:02d}{d.year % 100:02d}"
+
+# =========================
+# READ SAS7BDAT
+# =========================
+def read_sas7bdat(path: Path) -> pl.DataFrame:
+    """Read a .sas7bdat file using pandas.read_sas and convert to Polars.
+
+    Handles:
+    - Numeric columns stored as float (SAS default)
+    - SAS date serials (float days since 1960-01-01) left as integers
+    - Byte-string column names/values decoded to str
+    - Missing values filled with appropriate defaults
+    """
+    logger.info(f"Reading SAS dataset: {path}")
+
+    # pandas.read_sas is the most reliable reader without pyreadstat
+    pdf = pd.read_sas(str(path), format='sas7bdat', encoding='utf-8')
+
+    logger.info(f"  Raw shape      : {pdf.shape[0]:,} rows × {pdf.shape[1]} columns")
+    logger.info(f"  Raw columns    : {list(pdf.columns)}")
+
+    # Decode byte-string column names (pandas sometimes returns bytes)
+    pdf.columns = [
+        c.decode('utf-8') if isinstance(c, bytes) else str(c)
+        for c in pdf.columns
+    ]
+
+    # Decode byte-string cell values
+    for col in pdf.select_dtypes(include='object').columns:
+        pdf[col] = pdf[col].apply(
+            lambda v: v.decode('utf-8').strip() if isinstance(v, bytes) else (str(v).strip() if pd.notna(v) else '')
         )
-        f.write(header + "\n")
-        
-        # Write data with proper formatting
-        for row in df.iter_rows(named=True):
-            line = (
-                f"{row['COSTCT']:07d} "
-                f"{row['NOTETYPE']:03d} "
-                f"{row['PRINBAL']:>24} "
-                f"{row['PRNNACCR']:>24} "
-                f"{row['INTACCR']:>21} "
-                f"{row['INTNACCR']:>21} "
-                f"{row['UNERNINT']:>24} "
-                f"{row['UNERNNON']:>24} "
-                f"{row['RSRVFIN']:>24} "
-                f"{row['RSRVDLR']:>24} "
-                f"{row['NONDDA']:>24} "
-                f"{row['LATEFEES']:>24} "
-                f"{row['OTHERFEE']:>24} "
-                f"{row['CTPRINT']:>7} "
-                f"{row['CTPRNNAC']:>7}"
-            )
-            f.write(line + "\n")
-    
-    logger.info(f"Text version saved to: {txt_path}")
 
+    # Convert to Polars
+    df = pl.from_pandas(pdf)
+    logger.info(f"  Polars shape   : {df.shape[0]:,} rows × {df.shape[1]} columns")
+
+    return df
+
+
+# =========================
+# COLUMN ALIGNMENT
+# =========================
+def align_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """Ensure all OUTPUT_COLUMNS exist; add nulls for any missing ones.
+    Reorders to OUTPUT_COLUMNS order.
+    """
+    for col in OUTPUT_COLUMNS:
+        if col not in df.columns:
+            logger.warning(f"  Column '{col}' not found in SAS dataset — filling with null")
+            df = df.with_columns(pl.lit(None).alias(col))
+
+    extra = [c for c in df.columns if c not in OUTPUT_COLUMNS]
+    if extra:
+        logger.info(f"  Extra columns (kept): {extra}")
+
+    # Reorder: OUTPUT_COLUMNS first, then any extras
+    return df.select(OUTPUT_COLUMNS + extra)
+
+
+# =========================
+# FORMAT NUMERIC COLUMNS
+# =========================
+def format_numeric_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """Cast numeric columns to appropriate types.
+
+    - COSTCT, NOTETYPE, CTPRINT, CTPRNNAC  → Int64 (integer)
+    - PRINBAL, PRNNACCR, UNERNINT, ...      → Float64 (2 decimal)
+    - INTACCR, INTNACCR                     → Float64 (7 decimal)
+
+    Nulls are filled with 0.
+    """
+    int_cols   = ["COSTCT", "NOTETYPE", "CTPRINT", "CTPRNNAC"]
+    float2_cols = ["PRINBAL", "PRNNACCR", "UNERNINT", "UNERNNON",
+                   "RSRVFIN", "RSRVDLR", "NONDDA", "LATEFEES", "OTHERFEE"]
+    float7_cols = ["INTACCR", "INTNACCR"]
+
+    for col in int_cols:
+        if col in df.columns:
+            df = df.with_columns(
+                pl.col(col).cast(pl.Float64, strict=False)
+                           .fill_null(0)
+                           .cast(pl.Int64)
+                           .alias(col)
+            )
+
+    for col in float2_cols + float7_cols:
+        if col in df.columns:
+            df = df.with_columns(
+                pl.col(col).cast(pl.Float64, strict=False)
+                           .fill_null(0.0)
+                           .alias(col)
+            )
+
+    return df
+
+
+# =========================
+# SAVE OUTPUT
+# =========================
+def write_parquet(df: pl.DataFrame, path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(df.to_arrow(), path)
+    logger.info(f"  Parquet written : {path}")
+
+def write_csv(df: pl.DataFrame, path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_csv(path)
+    logger.info(f"  CSV written     : {path}")
+
+
+# =========================
+# MAIN
+# =========================
 def main():
-    """Main processing function"""
     logger.info("=" * 60)
-    logger.info("Starting Loan Data Processing")
-    logger.info(f"Input file: {INPUT_TEXT_PATH}")
+    logger.info("Starting LNR6999 Processing")
+    logger.info(f"Input : {INPUT_SAS_PATH}")
     logger.info("=" * 60)
-    
-    # Validate input
-    input_path = Path(INPUT_TEXT_PATH)
-    if not input_path.exists():
-        logger.error(f"Input file not found: {input_path}")
-        exit(1)
-    
-    # Extract batch date
-    batch_dt = extract_batch_date(input_path.name)
-    batch_dt_str = batch_dt.strftime("%Y%m%d")
-    reptmon = f"{batch_dt.month:02d}"
-    reptyear = f"{batch_dt.year % 100:02d}"
-    
-    logger.info(f"Processing for batch date: {batch_dt_str}")
-    logger.info(f"REPTMON: {reptmon}, REPTYEAR: {reptyear}")
-    
-    # Process the file
-    records = process_text_file(input_path)
-    if not records:
-        logger.error("No records processed from text file")
-        exit(1)
-    
-    # Create DataFrame
-    try:
-        df = create_dataframe(records)
-        logger.info(f"Created DataFrame with {len(df)} records")
-        
-        # Show summary
-        logger.info(f"Unique COSTCT values: {df['COSTCT'].n_unique()}")
-        logger.info(f"Unique NOTETYPE values: {df['NOTETYPE'].n_unique()}")
-        
-    except Exception as e:
-        logger.error(f"Error creating DataFrame: {e}")
-        exit(1)
-    
-    # Save output
-    output_dir = Path(BASE_OUT_PATH)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    try:
-        save_output(df, output_dir, reptmon, reptyear)
-        logger.info("Processing completed successfully")
-        logger.info(f"Output file: R6999{reptmon}{reptyear}.parquet")
-        
-    except Exception as e:
-        logger.error(f"Error saving output: {e}")
-        exit(1)
+
+    # -------------------------------------------------------
+    # STEP 1: Validate input file
+    # -------------------------------------------------------
+    if not INPUT_SAS_PATH.exists():
+        logger.error(f"Input file not found: {INPUT_SAS_PATH}")
+        raise FileNotFoundError(f"Input file not found: {INPUT_SAS_PATH}")
+
+    # -------------------------------------------------------
+    # STEP 2: Derive batch dates from filename
+    # -------------------------------------------------------
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 2: Extracting batch date from filename")
+    logger.info("=" * 60)
+
+    batch_date    = extract_batch_date(INPUT_SAS_PATH.name)
+    reptdate      = end_of_prev_month(batch_date)    # INTNX('MONTH',...,-1,'E')
+    reptdt        = mmyy_format(reptdate)
+    reptdate_sas  = to_sas_date(reptdate)
+    batch_date_sas = to_sas_date(batch_date)
+
+    reptmon  = f"{reptdate.month:02d}"
+    reptyear = f"{reptdate.year % 100:02d}"
+
+    logger.info(f"  Filename        : {INPUT_SAS_PATH.name}")
+    logger.info(f"  Batch date      : {batch_date}  (SAS serial: {batch_date_sas})")
+    logger.info(f"  REPTDATE        : {reptdate}  (SAS serial: {reptdate_sas})")
+    logger.info(f"  REPTDT (MMYY)   : {reptdt}")
+    logger.info(f"  REPTMON         : {reptmon}")
+    logger.info(f"  REPTYEAR        : {reptyear}")
+
+    # -------------------------------------------------------
+    # STEP 3: Read SAS dataset
+    # -------------------------------------------------------
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 3: Reading SAS7BDAT file")
+    logger.info("=" * 60)
+
+    df = read_sas7bdat(INPUT_SAS_PATH)
+
+    # -------------------------------------------------------
+    # STEP 4: Align and format columns
+    # -------------------------------------------------------
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 4: Aligning and formatting columns")
+    logger.info("=" * 60)
+
+    df = align_columns(df)
+    df = format_numeric_columns(df)
+
+    logger.info(f"  Final shape     : {df.shape[0]:,} rows × {df.shape[1]} columns")
+    logger.info(f"  Unique COSTCT   : {df['COSTCT'].n_unique() if 'COSTCT' in df.columns else 'N/A'}")
+    logger.info(f"  Unique NOTETYPE : {df['NOTETYPE'].n_unique() if 'NOTETYPE' in df.columns else 'N/A'}")
+
+    # -------------------------------------------------------
+    # STEP 5: Save outputs (parquet + csv)
+    # -------------------------------------------------------
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 5: Saving output files")
+    logger.info("=" * 60)
+
+    out_dir      = BASE_OUT_PATH / "LNR6999"
+    out_name     = f"R6999{reptmon}{reptyear}"
+    parquet_path = out_dir / f"{out_name}.parquet"
+    csv_path     = out_dir / f"{out_name}.csv"
+
+    write_parquet(df, parquet_path)
+    write_csv(df, csv_path)
+
+    # -------------------------------------------------------
+    # SUMMARY
+    # -------------------------------------------------------
+    logger.info("\n" + "=" * 60)
+    logger.info("SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"  Input file      : {INPUT_SAS_PATH.name}")
+    logger.info(f"  Batch date      : {batch_date}  (SAS: {batch_date_sas})")
+    logger.info(f"  REPTDATE        : {reptdate}  (SAS: {reptdate_sas})")
+    logger.info(f"  REPTDT          : {reptdt}")
+    logger.info(f"  Total records   : {len(df):,}")
+    logger.info(f"  Output parquet  : {parquet_path}")
+    logger.info(f"  Output csv      : {csv_path}")
+    logger.info("=" * 60)
+    logger.info("✓ Processing completed successfully")
+    logger.info("=" * 60)
+
 
 if __name__ == "__main__":
     main()
