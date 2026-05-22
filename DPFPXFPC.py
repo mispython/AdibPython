@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 # =========================
 # CONFIGURATION
 # =========================
-INPUT_SAS_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/r69990426.sas7bdat")
-BASE_OUT_PATH  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output")
+INPUT_DIR     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input")
+BASE_OUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output")
 
 SAS_EPOCH = date(1960, 1, 1)
 
@@ -46,46 +46,6 @@ def from_sas_date(n: int) -> date:
     """Convert SAS date serial back to Python date"""
     return SAS_EPOCH + timedelta(days=int(n))
 
-def extract_batch_date(filename: str) -> date:
-    """Extract batch date from filename (e.g. r69990426.sas7bdat -> 2026-04-26 if YYYYMMDD,
-    or tries MMDDYYYY / other patterns as fallback).
-    Returns today if no date found.
-    """
-    stem = Path(filename).stem   # e.g. 'r69990426'
-
-    # Try to find 8 consecutive digits anywhere in the filename
-    match = re.search(r'(\d{8})', stem)
-    if match:
-        s = match.group(1)
-        # Try YYYYMMDD
-        try:
-            return datetime.strptime(s, '%Y%m%d').date()
-        except ValueError:
-            pass
-        # Try MMDDYYYY
-        try:
-            return datetime.strptime(s, '%m%d%Y').date()
-        except ValueError:
-            pass
-        # Try DDMMYYYY
-        try:
-            return datetime.strptime(s, '%d%m%Y').date()
-        except ValueError:
-            pass
-
-    # Try 6 digits: MMDDYY or YYMMDD
-    match6 = re.search(r'(\d{6})', stem)
-    if match6:
-        s = match6.group(1)
-        for fmt in ('%m%d%y', '%y%m%d', '%d%m%y'):
-            try:
-                return datetime.strptime(s, fmt).date()
-            except ValueError:
-                pass
-
-    logger.warning(f"Could not extract date from filename '{filename}' — using today")
-    return date.today()
-
 def end_of_prev_month(d: date) -> date:
     """End of previous month — mirrors SAS INTNX('MONTH', d, -1, 'E')"""
     if d.month == 1:
@@ -96,6 +56,78 @@ def mmyy_format(d: date) -> str:
     """MMYY string — mirrors SAS MMYYN4. format"""
     return f"{d.month:02d}{d.year % 100:02d}"
 
+
+# =========================
+# AUTO-DETECT INPUT FILE
+# =========================
+def find_input_file(input_dir: Path, run_date: Optional[date] = None) -> Path:
+    """Auto-detect the r6999mmyy.sas7bdat input file for the current run month.
+
+    File naming pattern: r6999MMYY.sas7bdat
+      - MM  = 2-digit month
+      - YY  = 2-digit year
+    e.g. r69990426.sas7bdat for April 2026
+         r69990526.sas7bdat for May 2026
+
+    Strategy:
+      1. Use run_date if provided, else use today.
+      2. The reporting month is end_of_prev_month(run_date), so MMYY is
+         derived from that — matches REPTDT logic used everywhere.
+      3. If exact file not found, scan directory for any r6999*.sas7bdat
+         and pick the most recent one, with a warning.
+    """
+    if run_date is None:
+        run_date = date.today()
+
+    reptdate = end_of_prev_month(run_date)
+    mmyy     = mmyy_format(reptdate)                          # e.g. '0426'
+    expected = input_dir / f"r6999{mmyy}.sas7bdat"
+
+    logger.info(f"  Run date        : {run_date}")
+    logger.info(f"  REPTDATE        : {reptdate}  (MMYY: {mmyy})")
+    logger.info(f"  Expected file   : {expected.name}")
+
+    # --- exact match ---
+    if expected.exists():
+        logger.info(f"  ✓ Found exact match: {expected.name}")
+        return expected
+
+    # --- case-insensitive fallback (some systems differ in case) ---
+    for f in input_dir.glob("r6999*.sas7bdat"):
+        if f.name.lower() == expected.name.lower():
+            logger.info(f"  ✓ Found case-insensitive match: {f.name}")
+            return f
+
+    # --- scan for any r6999*.sas7bdat and pick most recent by filename date ---
+    logger.warning(f"  ⚠ Exact file '{expected.name}' not found — scanning directory...")
+    candidates = sorted(input_dir.glob("r6999*.sas7bdat"))
+
+    if not candidates:
+        raise FileNotFoundError(
+            f"No r6999*.sas7bdat files found in {input_dir}. "
+            f"Expected: {expected.name}"
+        )
+
+    # Parse MMYY from each candidate filename and pick the latest
+    def parse_mmyy(path: Path) -> date:
+        m = re.search(r'r6999(\d{2})(\d{2})\.sas7bdat', path.name, re.IGNORECASE)
+        if m:
+            mm, yy = int(m.group(1)), int(m.group(2))
+            # YY -> full year: assume 2000s
+            yyyy = 2000 + yy
+            try:
+                return date(yyyy, mm, 1)
+            except ValueError:
+                pass
+        return date(1960, 1, 1)   # fallback sort key
+
+    candidates_sorted = sorted(candidates, key=parse_mmyy, reverse=True)
+    chosen = candidates_sorted[0]
+    logger.warning(f"  ⚠ Using most recent available file: {chosen.name}")
+    logger.warning(f"    (Expected {expected.name} for REPTDATE {reptdate})")
+    return chosen
+
+
 # =========================
 # READ SAS7BDAT
 # =========================
@@ -104,34 +136,30 @@ def read_sas7bdat(path: Path) -> pl.DataFrame:
 
     Handles:
     - Numeric columns stored as float (SAS default)
-    - SAS date serials (float days since 1960-01-01) left as integers
-    - Byte-string column names/values decoded to str
+    - Byte-string column names / values decoded to str
     - Missing values filled with appropriate defaults
     """
-    logger.info(f"Reading SAS dataset: {path}")
+    logger.info(f"  Reading: {path}")
 
-    # pandas.read_sas is the most reliable reader without pyreadstat
     pdf = pd.read_sas(str(path), format='sas7bdat', encoding='utf-8')
+    logger.info(f"  Raw shape       : {pdf.shape[0]:,} rows × {pdf.shape[1]} columns")
 
-    logger.info(f"  Raw shape      : {pdf.shape[0]:,} rows × {pdf.shape[1]} columns")
-    logger.info(f"  Raw columns    : {list(pdf.columns)}")
-
-    # Decode byte-string column names (pandas sometimes returns bytes)
+    # Decode byte-string column names
     pdf.columns = [
         c.decode('utf-8') if isinstance(c, bytes) else str(c)
         for c in pdf.columns
     ]
 
-    # Decode byte-string cell values
+    # Decode byte-string cell values in object columns
     for col in pdf.select_dtypes(include='object').columns:
         pdf[col] = pdf[col].apply(
-            lambda v: v.decode('utf-8').strip() if isinstance(v, bytes) else (str(v).strip() if pd.notna(v) else '')
+            lambda v: v.decode('utf-8').strip() if isinstance(v, bytes)
+                      else (str(v).strip() if pd.notna(v) else '')
         )
 
-    # Convert to Polars
     df = pl.from_pandas(pdf)
-    logger.info(f"  Polars shape   : {df.shape[0]:,} rows × {df.shape[1]} columns")
-
+    logger.info(f"  Polars shape    : {df.shape[0]:,} rows × {df.shape[1]} columns")
+    logger.info(f"  Columns found   : {df.columns}")
     return df
 
 
@@ -139,19 +167,16 @@ def read_sas7bdat(path: Path) -> pl.DataFrame:
 # COLUMN ALIGNMENT
 # =========================
 def align_columns(df: pl.DataFrame) -> pl.DataFrame:
-    """Ensure all OUTPUT_COLUMNS exist; add nulls for any missing ones.
-    Reorders to OUTPUT_COLUMNS order.
-    """
+    """Ensure all OUTPUT_COLUMNS exist; add nulls for missing ones."""
     for col in OUTPUT_COLUMNS:
         if col not in df.columns:
-            logger.warning(f"  Column '{col}' not found in SAS dataset — filling with null")
+            logger.warning(f"  Column '{col}' not in SAS dataset — filling with null")
             df = df.with_columns(pl.lit(None).alias(col))
 
     extra = [c for c in df.columns if c not in OUTPUT_COLUMNS]
     if extra:
         logger.info(f"  Extra columns (kept): {extra}")
 
-    # Reorder: OUTPUT_COLUMNS first, then any extras
     return df.select(OUTPUT_COLUMNS + extra)
 
 
@@ -159,18 +184,11 @@ def align_columns(df: pl.DataFrame) -> pl.DataFrame:
 # FORMAT NUMERIC COLUMNS
 # =========================
 def format_numeric_columns(df: pl.DataFrame) -> pl.DataFrame:
-    """Cast numeric columns to appropriate types.
-
-    - COSTCT, NOTETYPE, CTPRINT, CTPRNNAC  → Int64 (integer)
-    - PRINBAL, PRNNACCR, UNERNINT, ...      → Float64 (2 decimal)
-    - INTACCR, INTNACCR                     → Float64 (7 decimal)
-
-    Nulls are filled with 0.
-    """
-    int_cols   = ["COSTCT", "NOTETYPE", "CTPRINT", "CTPRNNAC"]
-    float2_cols = ["PRINBAL", "PRNNACCR", "UNERNINT", "UNERNNON",
-                   "RSRVFIN", "RSRVDLR", "NONDDA", "LATEFEES", "OTHERFEE"]
-    float7_cols = ["INTACCR", "INTNACCR"]
+    """Cast numeric columns to correct types, fill nulls with 0."""
+    int_cols    = ["COSTCT", "NOTETYPE", "CTPRINT", "CTPRNNAC"]
+    float_cols  = ["PRINBAL", "PRNNACCR", "INTACCR", "INTNACCR",
+                   "UNERNINT", "UNERNNON", "RSRVFIN", "RSRVDLR",
+                   "NONDDA", "LATEFEES", "OTHERFEE"]
 
     for col in int_cols:
         if col in df.columns:
@@ -181,7 +199,7 @@ def format_numeric_columns(df: pl.DataFrame) -> pl.DataFrame:
                            .alias(col)
             )
 
-    for col in float2_cols + float7_cols:
+    for col in float_cols:
         if col in df.columns:
             df = df.with_columns(
                 pl.col(col).cast(pl.Float64, strict=False)
@@ -212,38 +230,38 @@ def write_csv(df: pl.DataFrame, path: Path):
 def main():
     logger.info("=" * 60)
     logger.info("Starting LNR6999 Processing")
-    logger.info(f"Input : {INPUT_SAS_PATH}")
     logger.info("=" * 60)
 
     # -------------------------------------------------------
-    # STEP 1: Validate input file
-    # -------------------------------------------------------
-    if not INPUT_SAS_PATH.exists():
-        logger.error(f"Input file not found: {INPUT_SAS_PATH}")
-        raise FileNotFoundError(f"Input file not found: {INPUT_SAS_PATH}")
-
-    # -------------------------------------------------------
-    # STEP 2: Derive batch dates from filename
+    # STEP 1: Derive run dates
     # -------------------------------------------------------
     logger.info("\n" + "=" * 60)
-    logger.info("STEP 2: Extracting batch date from filename")
+    logger.info("STEP 1: Deriving run dates")
     logger.info("=" * 60)
 
-    batch_date    = extract_batch_date(INPUT_SAS_PATH.name)
-    reptdate      = end_of_prev_month(batch_date)    # INTNX('MONTH',...,-1,'E')
+    run_date      = date.today()
+    reptdate      = end_of_prev_month(run_date)
     reptdt        = mmyy_format(reptdate)
+    reptmon       = f"{reptdate.month:02d}"
+    reptyear      = f"{reptdate.year % 100:02d}"
+    run_date_sas  = to_sas_date(run_date)
     reptdate_sas  = to_sas_date(reptdate)
-    batch_date_sas = to_sas_date(batch_date)
 
-    reptmon  = f"{reptdate.month:02d}"
-    reptyear = f"{reptdate.year % 100:02d}"
-
-    logger.info(f"  Filename        : {INPUT_SAS_PATH.name}")
-    logger.info(f"  Batch date      : {batch_date}  (SAS serial: {batch_date_sas})")
+    logger.info(f"  Today           : {run_date}  (SAS serial: {run_date_sas})")
     logger.info(f"  REPTDATE        : {reptdate}  (SAS serial: {reptdate_sas})")
     logger.info(f"  REPTDT (MMYY)   : {reptdt}")
     logger.info(f"  REPTMON         : {reptmon}")
     logger.info(f"  REPTYEAR        : {reptyear}")
+
+    # -------------------------------------------------------
+    # STEP 2: Auto-detect input file for this month
+    # -------------------------------------------------------
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 2: Auto-detecting input file")
+    logger.info("=" * 60)
+
+    input_path = find_input_file(INPUT_DIR, run_date)
+    logger.info(f"  ✓ Input file    : {input_path.name}")
 
     # -------------------------------------------------------
     # STEP 3: Read SAS dataset
@@ -252,7 +270,7 @@ def main():
     logger.info("STEP 3: Reading SAS7BDAT file")
     logger.info("=" * 60)
 
-    df = read_sas7bdat(INPUT_SAS_PATH)
+    df = read_sas7bdat(input_path)
 
     # -------------------------------------------------------
     # STEP 4: Align and format columns
@@ -269,7 +287,7 @@ def main():
     logger.info(f"  Unique NOTETYPE : {df['NOTETYPE'].n_unique() if 'NOTETYPE' in df.columns else 'N/A'}")
 
     # -------------------------------------------------------
-    # STEP 5: Save outputs (parquet + csv)
+    # STEP 5: Save outputs — parquet + csv
     # -------------------------------------------------------
     logger.info("\n" + "=" * 60)
     logger.info("STEP 5: Saving output files")
@@ -289,8 +307,8 @@ def main():
     logger.info("\n" + "=" * 60)
     logger.info("SUMMARY")
     logger.info("=" * 60)
-    logger.info(f"  Input file      : {INPUT_SAS_PATH.name}")
-    logger.info(f"  Batch date      : {batch_date}  (SAS: {batch_date_sas})")
+    logger.info(f"  Input file      : {input_path.name}")
+    logger.info(f"  Run date        : {run_date}  (SAS: {run_date_sas})")
     logger.info(f"  REPTDATE        : {reptdate}  (SAS: {reptdate_sas})")
     logger.info(f"  REPTDT          : {reptdt}")
     logger.info(f"  Total records   : {len(df):,}")
