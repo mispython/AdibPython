@@ -1,425 +1,262 @@
-from __future__ import annotations
-
-import re
-import polars as pl
-import pyarrow.parquet as pq
-import duckdb
-from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
+from datetime import datetime
+import polars as pl
+import re
+import logging
 
-# =========================
-# CONFIGURATION
-# =========================
-BASE_INPUT      = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input")
-BASE_OUTPUT     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output")
-USE_DUCKDB_COPY = False
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-SAS_EPOCH = date(1960, 1, 1)
+# Configuration
+INPUT_TEXT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/r69990426.sas7bdat"
+BASE_OUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/output"
 
-# =========================
-# UTILITIES
-# =========================
-def write_parquet(df: pl.DataFrame, path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if USE_DUCKDB_COPY:
-        con = duckdb.connect()
-        con.register("DF", df.to_arrow())
-        con.execute(f"COPY DF TO '{path.as_posix()}' (FORMAT PARQUET)")
-        con.close()
-    else:
-        pq.write_table(df.to_arrow(), path)
+# Output columns matching SAS format
+OUTPUT_COLUMNS = [
+    "COSTCT", "NOTETYPE", "PRINBAL", "PRNNACCR", "INTACCR", "INTNACCR",
+    "UNERNINT", "UNERNNON", "RSRVFIN", "RSRVDLR", "NONDDA", "LATEFEES",
+    "OTHERFEE", "CTPRINT", "CTPRNNAC"
+]
 
-def write_csv(df: pl.DataFrame, path: Path):
-    """Write DataFrame to CSV file with header"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.write_csv(path)
+def extract_batch_date(filename: str) -> datetime:
+    """Extract batch date from filename"""
+    date_match = re.search(r'(\d{8})', filename)
+    if date_match:
+        date_str = date_match.group(1)
+        return datetime.strptime(date_str, '%Y%m%d')
+    return datetime.now()
 
-def to_sas_date(d: date) -> int:
-    """Convert Python date to SAS date serial number (days since 1960-01-01)
-    e.g. 22/04/2026 -> 24218
-    """
-    return (d - SAS_EPOCH).days
+def clean_number(num_str: str) -> str:
+    """Clean and format a number string"""
+    if not num_str or num_str == '.' or num_str == '-':
+        return '0.00'
+    
+    cleaned = num_str.replace(',', '')
+    if '.' in cleaned:
+        parts = cleaned.split('.')
+        if len(parts) == 2:
+            decimal_places = len(parts[1])
+            if decimal_places <= 2:
+                return f"{float(cleaned):.2f}"
+            elif decimal_places <= 7:
+                return f"{float(cleaned):.7f}"
+    return cleaned
 
-def from_sas_date(n: int) -> date:
-    """Convert SAS date serial number back to Python date"""
-    return SAS_EPOCH + timedelta(days=n)
-
-def yyyymmdd_to_date(s: str) -> date:
-    """Convert YYYYMMDD string to date"""
-    return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
-
-def end_of_prev_month(d: date) -> date:
-    """Get end of previous month — mirrors SAS INTNX('MONTH', d, -1, 'E')"""
-    if d.month == 1:
-        return date(d.year - 1, 12, 31)
-    return date(d.year, d.month, 1) - timedelta(days=1)
-
-def mmyy_format(d: date) -> str:
-    """Convert date to MMYY string — mirrors SAS MMYYN4. format"""
-    return f"{d.month:02d}{d.year % 100:02d}"
-
-def mdy(month: int, day: int, year: int) -> Optional[int]:
-    """Create SAS date serial from month/day/year components.
-    Mirrors SAS MDY() but returns SAS serial integer instead of date object.
-    Returns None if any component is missing or invalid.
-    """
-    if None in (month, day, year):
+def parse_line(line: str) -> dict:
+    """Parse a fixed-width line from the input file"""
+    line = line.rstrip('\n')
+    if not line.strip() or len(line) < 11:
         return None
+    
     try:
-        return to_sas_date(date(year, month, day))
-    except ValueError:
+        # Extract COSTCT and NOTETYPE
+        costct = line[0:7].strip()
+        notetype = line[8:11].strip()
+        
+        if not costct or not notetype:
+            return None
+        
+        costct_int = int(costct)
+        notetype_int = int(notetype)
+        
+        # Find all numbers in the line
+        numbers = re.findall(r'[-\d,.]+', line[11:])
+        
+        # Create record with defaults
+        record = {
+            'COSTCT': costct_int,
+            'NOTETYPE': notetype_int,
+            'PRINBAL': '0.00',
+            'PRNNACCR': '0.00',
+            'INTACCR': '0.0000000',
+            'INTNACCR': '0.0000000',
+            'UNERNINT': '0.00',
+            'UNERNNON': '0.00',
+            'RSRVFIN': '0.00',
+            'RSRVDLR': '0.00',
+            'NONDDA': '0.00',
+            'LATEFEES': '0.00',
+            'OTHERFEE': '0.00',
+            'CTPRINT': '0',
+            'CTPRNNAC': '0'
+        }
+        
+        # Map numbers to fields
+        field_mapping = [
+            ('PRINBAL', 0), ('PRNNACCR', 1), ('INTACCR', 2), ('INTNACCR', 3),
+            ('UNERNINT', 4), ('UNERNNON', 5), ('RSRVFIN', 6), ('RSRVDLR', 7),
+            ('NONDDA', 8), ('LATEFEES', 9), ('OTHERFEE', 10), ('CTPRINT', 11),
+            ('CTPRNNAC', 12)
+        ]
+        
+        for field_name, idx in field_mapping:
+            if idx < len(numbers):
+                record[field_name] = clean_number(numbers[idx])
+        
+        return record
+        
+    except Exception as e:
+        logger.debug(f"Error parsing line: {e}")
         return None
 
-def read_first_line(path: Path) -> str:
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.readline().strip()
+def process_text_file(file_path: Path) -> list:
+    """Process the structured text file"""
+    logger.info(f"Processing text file: {file_path}")
+    
+    records = []
+    line_count = 0
+    
+    try:
+        with open(file_path, 'r') as file:
+            for line in file:
+                line_count += 1
+                if line_count % 10000 == 0:
+                    logger.info(f"Processed {line_count:,} lines...")
+                
+                record = parse_line(line)
+                if record:
+                    records.append(record)
+        
+        logger.info(f"Total records parsed: {len(records):,}")
+        return records
+        
+    except Exception as e:
+        logger.error(f"Error processing file: {e}")
+        return []
 
-# =========================
-# FIELD SPECS
-# SAS @position maps to Python [position-1 : position-1+length]
-# =========================
-FIELDS = [
-    (0,   1,   'RECID',    str),
-    (2,   12,  'MNIACTNO', str),
-    (13,  23,  'LOANNOTE', str),
-    (24,  74,  'NAME',     'u'),
-    (75,  76,  'ACCTSTA',  'u'),
-    (77,  82,  'PRODTYPE', str),
-    (83,  84,  'PRSTCOND', 'u'),
-    (85,  86,  'REGCARD',  'u'),
-    (87,  88,  'IGNTKEY',  'u'),
-    (89,  99,  'REPODIST', str),
-    (100, 101, 'ACCTWOFF', 'u'),
-    (102, 106, 'YY1',      int),
-    (106, 108, 'MM1',      int),
-    (108, 110, 'DD1',      int),
-    (111, 112, 'MODEREPO', 'u'),
-    (113, 117, 'YY2',      int),
-    (117, 119, 'MM2',      int),
-    (119, 121, 'DD2',      int),
-    (122, 132, 'REPOPAID', str),
-    (133, 139, 'REPOSTAT', 'u'),
-    (140, 150, 'TKEPRICE', str),
-    (151, 161, 'MRKTVAL',  str),
-    (162, 172, 'RSVPRICE', str),
-    (173, 183, 'FTHSCHLD', str),
-    (184, 188, 'YY3',      int),
-    (188, 190, 'MM3',      int),
-    (190, 192, 'DD3',      int),
-    (193, 194, 'MODEDISP', 'u'),
-    (195, 205, 'APPVDISP', str),
-    (206, 210, 'YY4',      int),
-    (210, 212, 'MM4',      int),
-    (212, 214, 'DD4',      int),
-    (215, 219, 'YY5',      int),
-    (219, 221, 'MM5',      int),
-    (221, 223, 'DD5',      int),
-    (224, 228, 'YY6',      int),
-    (228, 230, 'MM6',      int),
-    (230, 232, 'DD6',      int),
-    (233, 243, 'HOPRICE',  str),
-    (244, 249, 'NOAUCT',   str),
-    (250, 270, 'PRIOUT',   str),
-]
+def create_dataframe(records: list) -> pl.DataFrame:
+    """Create DataFrame from parsed records with SAS formatting"""
+    if not records:
+        raise ValueError("No records to create DataFrame")
+    
+    # Format with proper right alignment (mimics SAS RIGHT() function)
+    formatted_data = []
+    for record in records:
+        formatted_record = {
+            'COSTCT': record['COSTCT'],
+            'NOTETYPE': record['NOTETYPE'],
+            'PRINBAL': str(record['PRINBAL']).rjust(24),
+            'PRNNACCR': str(record['PRNNACCR']).rjust(24),
+            'INTACCR': str(record['INTACCR']).rjust(21),
+            'INTNACCR': str(record['INTNACCR']).rjust(21),
+            'UNERNINT': str(record['UNERNINT']).rjust(24),
+            'UNERNNON': str(record['UNERNNON']).rjust(24),
+            'RSRVFIN': str(record['RSRVFIN']).rjust(24),
+            'RSRVDLR': str(record['RSRVDLR']).rjust(24),
+            'NONDDA': str(record['NONDDA']).rjust(24),
+            'LATEFEES': str(record['LATEFEES']).rjust(24),
+            'OTHERFEE': str(record['OTHERFEE']).rjust(24),
+            'CTPRINT': str(record['CTPRINT']).rjust(7),
+            'CTPRNNAC': str(record['CTPRNNAC']).rjust(7)
+        }
+        formatted_data.append(formatted_record)
+    
+    return pl.DataFrame(formatted_data, schema=OUTPUT_COLUMNS)
 
-# Date triplets: (year_col, month_col, day_col, output_col)
-DATE_COLS = [
-    ('YY1', 'MM1', 'DD1', 'DATEWOFF'),
-    ('YY2', 'MM2', 'DD2', 'DATEREPO'),
-    ('YY3', 'MM3', 'DD3', 'DATE5TH'),
-    ('YY4', 'MM4', 'DD4', 'DATEAPRV'),
-    ('YY5', 'MM5', 'DD5', 'DATESTLD'),
-    ('YY6', 'MM6', 'DD6', 'DATEHO'),
-]
-
-DATE_COMPONENT_COLS = [
-    'YY1','MM1','DD1',
-    'YY2','MM2','DD2',
-    'YY3','MM3','DD3',
-    'YY4','MM4','DD4',
-    'YY5','MM5','DD5',
-    'YY6','MM6','DD6',
-]
-
-# =========================
-# DATA READING
-# =========================
-def read_rpvdata() -> pl.DataFrame:
-    """
-    Read RPVBDATA.txt with fixed-width parsing.
-    Skips first line (header). Mirrors SAS FIRSTOBS=2 + INPUT statement.
-    Date columns are stored as SAS date serial integers (days since 1960-01-01).
-    """
-    with open(BASE_INPUT / "RPVBDATA.txt", 'r', encoding='utf-8') as f:
-        lines = f.readlines()[1:]   # skip header — mirrors SAS FIRSTOBS=2
-
-    data = []
-    for line in lines:
-        line = line.rstrip('\n')
-        if not line.strip():
-            continue
-
-        rec = {}
-        for start, end, field, dtype in FIELDS:
-            raw = line[start:end].strip() if len(line) >= end else ''
-            if dtype == 'u':
-                rec[field] = raw.upper()
-            elif dtype == int:
-                rec[field] = int(raw) if raw.isdigit() else None
-            else:
-                rec[field] = raw
-        data.append(rec)
-
-    df = pl.DataFrame(data)
-
-    # Build date columns as SAS serial integers — mirrors SAS MDY(MM,DD,YY)
-    # Default-arg capture avoids Python lambda closure bug
-    for yy, mm, dd, dcol in DATE_COLS:
-        df = df.with_columns(
-            pl.struct([yy, mm, dd]).map_elements(
-                lambda x, m=mm, d=dd, y=yy: mdy(x[m], x[d], x[y]),
-                return_dtype=pl.Int32
-            ).alias(dcol)
+def save_output(df: pl.DataFrame, output_dir: Path, reptmon: str, reptyear: str):
+    """Save DataFrame to parquet and text files"""
+    # Create output directory
+    out_dir = output_dir / "LNR6999"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Construct output filename
+    out_name = f"R6999{reptmon}{reptyear}.parquet"
+    output_path = out_dir / out_name
+    
+    # Write to parquet
+    df.write_parquet(output_path)
+    logger.info(f"Parquet output written to: {output_path}")
+    
+    # Also save text version for verification
+    txt_path = output_path.with_suffix('.txt')
+    with open(txt_path, 'w') as f:
+        # Write header matching SAS format
+        header = (
+            "COSTCT NOTETYPE PRINBAL                PRNNACCR               "
+            "INTACCR              INTNACCR              UNERNINT                "
+            "UNERNNON                RSRVFIN                 RSRVDLR                 "
+            "NONDDA                  LATEFEES                 OTHERFEE                 "
+            "CTPRINT CTPRNNAC"
         )
+        f.write(header + "\n")
+        
+        # Write data with proper formatting
+        for row in df.iter_rows(named=True):
+            line = (
+                f"{row['COSTCT']:07d} "
+                f"{row['NOTETYPE']:03d} "
+                f"{row['PRINBAL']:>24} "
+                f"{row['PRNNACCR']:>24} "
+                f"{row['INTACCR']:>21} "
+                f"{row['INTNACCR']:>21} "
+                f"{row['UNERNINT']:>24} "
+                f"{row['UNERNNON']:>24} "
+                f"{row['RSRVFIN']:>24} "
+                f"{row['RSRVDLR']:>24} "
+                f"{row['NONDDA']:>24} "
+                f"{row['LATEFEES']:>24} "
+                f"{row['OTHERFEE']:>24} "
+                f"{row['CTPRINT']:>7} "
+                f"{row['CTPRNNAC']:>7}"
+            )
+            f.write(line + "\n")
+    
+    logger.info(f"Text version saved to: {txt_path}")
 
-    # Drop raw date component columns — mirrors SAS DROP= option
-    return df.drop([c for c in df.columns if c in DATE_COMPONENT_COLS])
-
-
-# =========================
-# MAIN PROCESSING
-# =========================
 def main():
-    # -------------------------------------------------------
-    # STEP 1: Read TBDATE from RPVBDATA — derive REPTDT / PREVDT
-    # Mirrors SAS DATA REPTDATE step
-    # -------------------------------------------------------
-    print("=" * 60)
-    print("STEP 1: Processing RPVBDATA dates")
-    print("=" * 60)
-
-    tbdate_rpvb = "N/A"
+    """Main processing function"""
+    logger.info("=" * 60)
+    logger.info("Starting Loan Data Processing")
+    logger.info(f"Input file: {INPUT_TEXT_PATH}")
+    logger.info("=" * 60)
+    
+    # Validate input
+    input_path = Path(INPUT_TEXT_PATH)
+    if not input_path.exists():
+        logger.error(f"Input file not found: {input_path}")
+        exit(1)
+    
+    # Extract batch date
+    batch_dt = extract_batch_date(input_path.name)
+    batch_dt_str = batch_dt.strftime("%Y%m%d")
+    reptmon = f"{batch_dt.month:02d}"
+    reptyear = f"{batch_dt.year % 100:02d}"
+    
+    logger.info(f"Processing for batch date: {batch_dt_str}")
+    logger.info(f"REPTMON: {reptmon}, REPTYEAR: {reptyear}")
+    
+    # Process the file
+    records = process_text_file(input_path)
+    if not records:
+        logger.error("No records processed from text file")
+        exit(1)
+    
+    # Create DataFrame
     try:
-        line        = read_first_line(BASE_INPUT / "RPVBDATA.txt")
-        tbdate_rpvb = line[2:10]   # @03 TBDATE $8. → 0-indexed [2:10]
-
-        if not (tbdate_rpvb.isdigit() and len(tbdate_rpvb) == 8):
-            raise ValueError(f"Invalid TBDATE: '{tbdate_rpvb}'")
-
-        tb_date  = yyyymmdd_to_date(tbdate_rpvb)
-        reptdate = end_of_prev_month(tb_date)       # INTNX('MONTH',...,-1,'E')
-        prevdate = end_of_prev_month(reptdate)       # INTNX('MONTH',...,-1,'E')
-        reptdt   = mmyy_format(reptdate)             # PUT(..., MMYYN4.)
-        prevdt   = mmyy_format(prevdate)
-
-        # SAS serial equivalents for reference
-        reptdate_sas = to_sas_date(reptdate)
-        prevdate_sas = to_sas_date(prevdate)
-
-        print(f"✓ TBDATE       : {tbdate_rpvb}")
-        print(f"  REPTDATE     : {reptdate}  (SAS serial: {reptdate_sas})")
-        print(f"  PREVDATE     : {prevdate}  (SAS serial: {prevdate_sas})")
-        print(f"  REPTDT (MMYY): {reptdt}")
-        print(f"  PREVDT (MMYY): {prevdt}")
-
+        df = create_dataframe(records)
+        logger.info(f"Created DataFrame with {len(df)} records")
+        
+        # Show summary
+        logger.info(f"Unique COSTCT values: {df['COSTCT'].n_unique()}")
+        logger.info(f"Unique NOTETYPE values: {df['NOTETYPE'].n_unique()}")
+        
     except Exception as e:
-        print(f"✗ Error: {e}")
-        today        = date.today()
-        reptdate     = end_of_prev_month(today)
-        prevdate     = end_of_prev_month(reptdate)
-        reptdt       = mmyy_format(reptdate)
-        prevdt       = mmyy_format(prevdate)
-        reptdate_sas = to_sas_date(reptdate)
-        prevdate_sas = to_sas_date(prevdate)
-        print(f"  Fallback: REPTDT={reptdt} ({reptdate_sas}), PREVDT={prevdt} ({prevdate_sas})")
-
-    # -------------------------------------------------------
-    # STEP 2: Read TBDATE from SRSDATA — derive SRSTDT
-    # Mirrors SAS DATA _NULL_ (direct INPUT, no month shift)
-    # -------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 2: Processing SRSDATA dates")
-    print("=" * 60)
-
-    tbdate_srs = "N/A"
-    srstdt     = reptdt   # default fallback
+        logger.error(f"Error creating DataFrame: {e}")
+        exit(1)
+    
+    # Save output
+    output_dir = Path(BASE_OUT_PATH)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     try:
-        line       = read_first_line(BASE_INPUT / "SRSDATA.txt")
-        tbdate_srs = line[0:8]   # @01 TBDATE $8.
-
-        if tbdate_srs.isdigit() and len(tbdate_srs) == 8:
-            srs_date     = yyyymmdd_to_date(tbdate_srs)
-            srstdt       = mmyy_format(srs_date)   # direct PUT, no INTNX
-            srs_date_sas = to_sas_date(srs_date)
-            print(f"✓ TBDATE       : {tbdate_srs}")
-            print(f"  SRS date     : {srs_date}  (SAS serial: {srs_date_sas})")
-            print(f"  SRSTDT (MMYY): {srstdt}")
-        else:
-            match = re.search(r'(\d{8})', line)
-            if match:
-                tbdate_srs   = match.group(1)
-                srs_date     = yyyymmdd_to_date(tbdate_srs)
-                srstdt       = mmyy_format(srs_date)
-                srs_date_sas = to_sas_date(srs_date)
-                print(f"✓ Extracted    : {tbdate_srs}")
-                print(f"  SRS date     : {srs_date}  (SAS serial: {srs_date_sas})")
-                print(f"  SRSTDT (MMYY): {srstdt}")
-            else:
-                print(f"⚠ Could not parse SRSDATA date — using REPTDT fallback: {srstdt}")
-
+        save_output(df, output_dir, reptmon, reptyear)
+        logger.info("Processing completed successfully")
+        logger.info(f"Output file: R6999{reptmon}{reptyear}.parquet")
+        
     except Exception as e:
-        print(f"✗ Error: {e}")
-        print(f"  Using REPTDT as fallback for SRSTDT: {srstdt}")
-
-    # -------------------------------------------------------
-    # STEP 3: Date guard — mirrors SAS %MACRO PROCESS / ABORT 77
-    # -------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 3: Date validation guard")
-    print("=" * 60)
-
-    print(f"  REPTDT={reptdt}  vs  SRSTDT={srstdt}")
-    if reptdt != srstdt:
-        error_msg = f"THE SAP.PBB.RPVB.TEXT IS NOT DATED (MMYY:{srstdt})"
-        print(f"✗ {error_msg}")
-        raise RuntimeError(error_msg)
-    print(f"✓ Dates match — proceeding")
-
-    # -------------------------------------------------------
-    # STEP 4: Read RPVBDATA — mirrors SAS DATA RPVB1
-    # Date columns stored as SAS serial integers
-    # -------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 4: Reading RPVBDATA (fixed-width parse)")
-    print("=" * 60)
-
-    rpvb1 = read_rpvdata()
-    print(f"✓ RPVB1: {len(rpvb1)} records, {len(rpvb1.columns)} columns")
-    if len(rpvb1) > 0:
-        date_cols_present = [c for c in ['DATEWOFF','DATEREPO','DATE5TH','DATEAPRV','DATESTLD','DATEHO'] if c in rpvb1.columns]
-        print(f"  Date columns (SAS serial): {date_cols_present}")
-
-    # -------------------------------------------------------
-    # STEP 5: Filter — mirrors SAS DATA RPVB2 / RPVB3
-    # -------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 5: Filtering (RPVB2 and RPVB3)")
-    print("=" * 60)
-
-    if len(rpvb1) > 0 and 'ACCTSTA' in rpvb1.columns:
-        # SAS: IF ACCTSTA IN ('D','S','R')
-        rpvb2 = rpvb1.filter(pl.col("ACCTSTA").is_in(["D", "S", "R"]))
-        print(f"✓ RPVB2: {len(rpvb2)} records  (ACCTSTA in D, S, R)")
-
-        # SAS: IF DATESTLD NE ''  — for SAS serial: not null
-        if 'DATESTLD' in rpvb2.columns:
-            rpvb3 = rpvb2.filter(pl.col("DATESTLD").is_not_null())
-            print(f"✓ RPVB3: {len(rpvb3)} records  (DATESTLD not null)")
-        else:
-            print("⚠ DATESTLD column missing — RPVB3 will be empty")
-            rpvb3 = rpvb2.filter(pl.lit(False))
-    else:
-        print("⚠ No data or ACCTSTA column missing")
-        rpvb2 = rpvb3 = rpvb1
-
-    # -------------------------------------------------------
-    # STEP 6: Build REPO.REPS&REPTDT = RPVB3 + REPO.REPS&PREVDT
-    # Mirrors SAS DATA REPO.REPS&REPTDT; SET RPVB3 REPO.REPS&PREVDT
-    # -------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 6: Creating REPO.REPS output")
-    print("=" * 60)
-
-    repo_prev_path = BASE_OUTPUT / "REPO" / f"REPS_{prevdt}.parquet"
-    repo_curr_path = BASE_OUTPUT / "REPO" / f"REPS_{reptdt}.parquet"
-    repo_curr_csv  = BASE_OUTPUT / "REPO" / f"REPS_{reptdt}.csv"
-
-    print(f"  Previous parquet : {repo_prev_path}")
-    print(f"  Output parquet   : {repo_curr_path}")
-    print(f"  Output csv       : {repo_curr_csv}")
-
-    try:
-        repo_prev = pl.read_parquet(repo_prev_path)
-        print(f"✓ Loaded previous REPO: {len(repo_prev)} records")
-
-        # Align schemas before concat
-        if len(rpvb3) > 0 and len(repo_prev) > 0:
-            all_cols = list(set(rpvb3.columns) | set(repo_prev.columns))
-            for col in all_cols:
-                if col not in rpvb3.columns:
-                    rpvb3 = rpvb3.with_columns(pl.lit(None).alias(col))
-                if col not in repo_prev.columns:
-                    repo_prev = repo_prev.with_columns(pl.lit(None).alias(col))
-            rpvb3     = rpvb3.select(all_cols)
-            repo_prev = repo_prev.select(all_cols)
-
-    except Exception as e:
-        print(f"  No previous REPO file ({e}) — using RPVB3 only")
-        repo_prev = pl.DataFrame()
-
-    repo_reps = (
-        rpvb3 if len(repo_prev) == 0
-        else pl.concat([rpvb3, repo_prev], how="vertical", rechunk=True)
-    )
-
-    write_parquet(repo_reps, repo_curr_path)
-    write_csv(repo_reps, repo_curr_csv)
-    print(f"✓ REPO saved: {len(repo_reps)} records  →  parquet + csv")
-
-    # -------------------------------------------------------
-    # STEP 7: Build REPOWH.REPS&REPTDT
-    # Mirrors SAS PROC SORT NODUPKEY BY MNIACTNO
-    # -------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 7: Creating REPOWH.REPS output (NODUPKEY)")
-    print("=" * 60)
-
-    repowh_path = BASE_OUTPUT / "REPOWH" / f"REPS_{reptdt}.parquet"
-    repowh_csv  = BASE_OUTPUT / "REPOWH" / f"REPS_{reptdt}.csv"
-
-    print(f"  Output parquet   : {repowh_path}")
-    print(f"  Output csv       : {repowh_csv}")
-
-    if len(repo_reps) > 0 and 'MNIACTNO' in repo_reps.columns:
-        repowh_reps        = repo_reps.sort("MNIACTNO").unique(subset=["MNIACTNO"], keep="first")
-        duplicates_removed = len(repo_reps) - len(repowh_reps)
-        print(f"✓ Duplicates removed: {duplicates_removed}")
-    else:
-        repowh_reps = repo_reps
-        print("  No MNIACTNO column or empty data — skipping deduplication")
-
-    write_parquet(repowh_reps, repowh_path)
-    write_csv(repowh_reps, repowh_csv)
-    print(f"✓ REPOWH saved: {len(repowh_reps)} records  →  parquet + csv")
-
-    # -------------------------------------------------------
-    # SUMMARY
-    # -------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    print(f"  TBDATE (RPVBDATA) : {tbdate_rpvb}")
-    print(f"  TBDATE (SRSDATA)  : {tbdate_srs}")
-    print(f"  REPTDATE          : {reptdate}  (SAS serial: {reptdate_sas})")
-    print(f"  PREVDATE          : {prevdate}  (SAS serial: {prevdate_sas})")
-    print(f"  REPTDT (MMYY)     : {reptdt}")
-    print(f"  PREVDT (MMYY)     : {prevdt}")
-    print(f"  SRSTDT (MMYY)     : {srstdt}")
-    print(f"  RPVB1             : {len(rpvb1)} records")
-    print(f"  RPVB2             : {len(rpvb2)} records")
-    print(f"  RPVB3             : {len(rpvb3)} records")
-    print(f"  REPO_REPS         : {len(repo_reps)} records")
-    print(f"  REPOWH_REPS       : {len(repowh_reps)} records")
-    print(f"\nOutput files:")
-    print(f"  {repo_curr_path}")
-    print(f"  {repo_curr_csv}")
-    print(f"  {repowh_path}")
-    print(f"  {repowh_csv}")
-    print("=" * 60)
-    print("✓ Processing completed successfully")
-    print("=" * 60)
-
+        logger.error(f"Error saving output: {e}")
+        exit(1)
 
 if __name__ == "__main__":
     main()
