@@ -1,10 +1,10 @@
 from __future__ import annotations
- 
+
 import re
 import logging
 import pandas as pd
 import polars as pl
-import pyarrow.parquet as pq
+import pyreadstat
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -33,13 +33,49 @@ OUTPUT_COLUMNS = [
     "OTHERFEE", "CTPRINT", "CTPRNNAC"
 ]
 
+# Variable formats for SAS output (matches original SAS dataset)
+VAR_FORMATS = {
+    "COSTCT": "8.",      # numeric, 8 digits
+    "NOTETYPE": "8.",    # numeric, 8 digits
+    "PRINBAL": "16.2",   # 16 digits total, 2 decimals
+    "PRNNACCR": "16.2",
+    "INTACCR": "16.2",
+    "INTNACCR": "16.2",
+    "UNERNINT": "16.2",
+    "UNERNNON": "16.2",
+    "RSRVFIN": "16.2",
+    "RSRVDLR": "16.2",
+    "NONDDA": "16.2",
+    "LATEFEES": "16.2",
+    "OTHERFEE": "16.2",
+    "CTPRINT": "8.",     # count variable
+    "CTPRNNAC": "8.",    # count variable
+}
+
+# Variable labels for SAS output (metadata)
+VAR_LABELS = {
+    "COSTCT": "Cost Center",
+    "NOTETYPE": "Note Type",
+    "PRINBAL": "Principal Balance",
+    "PRNNACCR": "Principal Not Accrued",
+    "INTACCR": "Interest Accrued",
+    "INTNACCR": "Interest Not Accrued",
+    "UNERNINT": "Unearned Interest",
+    "UNERNNON": "Unearned Non-Interest",
+    "RSRVFIN": "Reserve Financial",
+    "RSRVDLR": "Reserve Dollar",
+    "NONDDA": "Non DDA",
+    "LATEFEES": "Late Fees",
+    "OTHERFEE": "Other Fees",
+    "CTPRINT": "Count Principal",
+    "CTPRNNAC": "Count Principal Not Accrued",
+}
+
 # =========================
 # UTILITIES
 # =========================
 def to_sas_date(d: date) -> int:
-    """Convert Python date to SAS date serial (days since 1960-01-01)
-    e.g. 22/04/2026 -> 24218
-    """
+    """Convert Python date to SAS date serial (days since 1960-01-01)"""
     return (d - SAS_EPOCH).days
 
 def from_sas_date(n: int) -> date:
@@ -60,26 +96,12 @@ def mmyy_format(d: date) -> str:
 # AUTO-DETECT INPUT FILE
 # =========================
 def find_input_file(input_dir: Path, run_date: Optional[date] = None) -> Path:
-    """Auto-detect the r6999mmyy.sas7bdat input file for the current run month.
-
-    File naming pattern: r6999MMYY.sas7bdat
-      - MM  = 2-digit month
-      - YY  = 2-digit year
-    e.g. r69990426.sas7bdat for April 2026
-         r69990526.sas7bdat for May 2026
-
-    Strategy:
-      1. Use run_date if provided, else use today.
-      2. The reporting month is end_of_prev_month(run_date), so MMYY is
-         derived from that — matches REPTDT logic used everywhere.
-      3. If exact file not found, scan directory for any r6999*.sas7bdat
-         and pick the most recent one, with a warning.
-    """
+    """Auto-detect the r6999mmyy.sas7bdat input file for the current run month."""
     if run_date is None:
         run_date = date.today()
 
     reptdate = end_of_prev_month(run_date)
-    mmyy     = mmyy_format(reptdate)                          # e.g. '0426'
+    mmyy     = mmyy_format(reptdate)
     expected = input_dir / f"r6999{mmyy}.sas7bdat"
 
     logger.info(f"  Run date        : {run_date}")
@@ -91,13 +113,13 @@ def find_input_file(input_dir: Path, run_date: Optional[date] = None) -> Path:
         logger.info(f"  ✓ Found exact match: {expected.name}")
         return expected
 
-    # --- case-insensitive fallback (some systems differ in case) ---
+    # --- case-insensitive fallback ---
     for f in input_dir.glob("r6999*.sas7bdat"):
         if f.name.lower() == expected.name.lower():
             logger.info(f"  ✓ Found case-insensitive match: {f.name}")
             return f
 
-    # --- scan for any r6999*.sas7bdat and pick most recent by filename date ---
+    # --- scan for any r6999*.sas7bdat and pick most recent ---
     logger.warning(f"  ⚠ Exact file '{expected.name}' not found — scanning directory...")
     candidates = sorted(input_dir.glob("r6999*.sas7bdat"))
 
@@ -107,18 +129,16 @@ def find_input_file(input_dir: Path, run_date: Optional[date] = None) -> Path:
             f"Expected: {expected.name}"
         )
 
-    # Parse MMYY from each candidate filename and pick the latest
     def parse_mmyy(path: Path) -> date:
         m = re.search(r'r6999(\d{2})(\d{2})\.sas7bdat', path.name, re.IGNORECASE)
         if m:
             mm, yy = int(m.group(1)), int(m.group(2))
-            # YY -> full year: assume 2000s
             yyyy = 2000 + yy
             try:
                 return date(yyyy, mm, 1)
             except ValueError:
                 pass
-        return date(1960, 1, 1)   # fallback sort key
+        return date(1960, 1, 1)
 
     candidates_sorted = sorted(candidates, key=parse_mmyy, reverse=True)
     chosen = candidates_sorted[0]
@@ -129,59 +149,40 @@ def find_input_file(input_dir: Path, run_date: Optional[date] = None) -> Path:
 # =========================
 # READ SAS7BDAT
 # =========================
-def read_sas7bdat(path: Path) -> pl.DataFrame:
-    """Read a .sas7bdat file using pandas.read_sas and convert to Polars.
-
-    Handles:
-    - Numeric columns stored as float (SAS default)
-    - Byte-string column names / values decoded to str
-    - Missing values filled with appropriate defaults
-    """
+def read_sas7bdat(path: Path) -> pd.DataFrame:
+    """Read a .sas7bdat file using pyreadstat (preserves formats/labels)."""
     logger.info(f"  Reading: {path}")
-
-    pdf = pd.read_sas(str(path), format='sas7bdat', encoding='utf-8')
-    logger.info(f"  Raw shape       : {pdf.shape[0]:,} rows × {pdf.shape[1]} columns")
-
-    # Decode byte-string column names
-    pdf.columns = [
-        c.decode('utf-8') if isinstance(c, bytes) else str(c)
-        for c in pdf.columns
-    ]
-
-    # Decode byte-string cell values in object columns
-    for col in pdf.select_dtypes(include='object').columns:
-        pdf[col] = pdf[col].apply(
-            lambda v: v.decode('utf-8').strip() if isinstance(v, bytes)
-                      else (str(v).strip() if pd.notna(v) else '')
-        )
-
-    df = pl.from_pandas(pdf)
-    logger.info(f"  Polars shape    : {df.shape[0]:,} rows × {df.shape[1]} columns")
-    logger.info(f"  Columns found   : {df.columns}")
-    return df
-
+    
+    df, meta = pyreadstat.read_sas7bdat(str(path))
+    
+    logger.info(f"  Raw shape       : {df.shape[0]:,} rows × {df.shape[1]} columns")
+    logger.info(f"  Columns found   : {list(df.columns)}")
+    
+    # Clean up column names (remove any trailing spaces)
+    df.columns = [col.strip() if isinstance(col, str) else col for col in df.columns]
+    
+    return df, meta
 
 # =========================
 # COLUMN ALIGNMENT
 # =========================
-def align_columns(df: pl.DataFrame) -> pl.DataFrame:
+def align_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure all OUTPUT_COLUMNS exist; add nulls for missing ones."""
     for col in OUTPUT_COLUMNS:
         if col not in df.columns:
             logger.warning(f"  Column '{col}' not in SAS dataset — filling with null")
-            df = df.with_columns(pl.lit(None).alias(col))
+            df[col] = None
 
     extra = [c for c in df.columns if c not in OUTPUT_COLUMNS]
     if extra:
         logger.info(f"  Extra columns (kept): {extra}")
 
-    return df.select(OUTPUT_COLUMNS + extra)
-
+    return df[OUTPUT_COLUMNS + extra]
 
 # =========================
 # FORMAT NUMERIC COLUMNS
 # =========================
-def format_numeric_columns(df: pl.DataFrame) -> pl.DataFrame:
+def format_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Cast numeric columns to correct types, fill nulls with 0."""
     int_cols    = ["COSTCT", "NOTETYPE", "CTPRINT", "CTPRNNAC"]
     float_cols  = ["PRINBAL", "PRNNACCR", "INTACCR", "INTNACCR",
@@ -190,44 +191,59 @@ def format_numeric_columns(df: pl.DataFrame) -> pl.DataFrame:
 
     for col in int_cols:
         if col in df.columns:
-            df = df.with_columns(
-                pl.col(col).cast(pl.Float64, strict=False)
-                           .fill_null(0)
-                           .cast(pl.Int64)
-                           .alias(col)
-            )
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype('int64')
 
     for col in float_cols:
         if col in df.columns:
-            df = df.with_columns(
-                pl.col(col).cast(pl.Float64, strict=False)
-                           .fill_null(0.0)
-                           .alias(col)
-            )
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype('float64')
 
     return df
 
-
 # =========================
-# SAVE OUTPUT
+# SAVE OUTPUT (SAS7BDAT FORMAT)
 # =========================
-def write_parquet(df: pl.DataFrame, path: Path):
+def write_sas7bdat(df: pd.DataFrame, path: Path, 
+                   reptdate: date, reptdt: str,
+                   reptmon: str, reptyear: str,
+                   run_date_sas: int, reptdate_sas: int):
+    """Write DataFrame to SAS7BDAT format with proper metadata."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(df.to_arrow(), path)
-    logger.info(f"  Parquet written : {path}")
-
-def write_csv(df: pl.DataFrame, path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.write_csv(path)
-    logger.info(f"  CSV written     : {path}")
-
+    
+    # Prepare variable formats for pyreadstat
+    # Convert VAR_FORMATS dict to list in column order
+    variable_formats = {}
+    variable_labels = {}
+    
+    for col in df.columns:
+        if col in VAR_FORMATS:
+            variable_formats[col] = VAR_FORMATS[col]
+        if col in VAR_LABELS:
+            variable_labels[col] = VAR_LABELS[col]
+    
+    # Create SAS dataset with metadata
+    # Note: pyreadstat doesn't support all SAS metadata features, but handles basic formats
+    try:
+        pyreadstat.write_sas7bdat(
+            df, 
+            str(path),
+            column_labels=variable_labels,
+            column_formats=variable_formats,
+            compress=True  # Compress to save space
+        )
+        logger.info(f"  SAS7BDAT written : {path}")
+        logger.info(f"  Variable formats applied: {list(variable_formats.keys())}")
+    except Exception as e:
+        logger.error(f"  Error writing SAS7BDAT: {e}")
+        logger.warning(f"  Falling back to CSV output at {path.with_suffix('.csv')}")
+        df.to_csv(path.with_suffix('.csv'), index=False)
+        raise
 
 # =========================
 # MAIN
 # =========================
 def main():
     logger.info("=" * 60)
-    logger.info("Starting LNR6999 Processing")
+    logger.info("Starting LNR6999 Processing (SAS7BDAT Output)")
     logger.info("=" * 60)
 
     # -------------------------------------------------------
@@ -268,7 +284,7 @@ def main():
     logger.info("STEP 3: Reading SAS7BDAT file")
     logger.info("=" * 60)
 
-    df = read_sas7bdat(input_path)
+    df, input_meta = read_sas7bdat(input_path)
 
     # -------------------------------------------------------
     # STEP 4: Align and format columns
@@ -281,23 +297,27 @@ def main():
     df = format_numeric_columns(df)
 
     logger.info(f"  Final shape     : {df.shape[0]:,} rows × {df.shape[1]} columns")
-    logger.info(f"  Unique COSTCT   : {df['COSTCT'].n_unique() if 'COSTCT' in df.columns else 'N/A'}")
-    logger.info(f"  Unique NOTETYPE : {df['NOTETYPE'].n_unique() if 'NOTETYPE' in df.columns else 'N/A'}")
+    logger.info(f"  Unique COSTCT   : {df['COSTCT'].nunique() if 'COSTCT' in df.columns else 'N/A'}")
+    logger.info(f"  Unique NOTETYPE : {df['NOTETYPE'].nunique() if 'NOTETYPE' in df.columns else 'N/A'}")
 
     # -------------------------------------------------------
-    # STEP 5: Save outputs — parquet + csv
+    # STEP 5: Save output as SAS7BDAT
     # -------------------------------------------------------
     logger.info("\n" + "=" * 60)
-    logger.info("STEP 5: Saving output files")
+    logger.info("STEP 5: Saving output as SAS7BDAT")
     logger.info("=" * 60)
 
     out_dir      = BASE_OUT_PATH / "LNR6999"
     out_name     = f"R6999{reptmon}{reptyear}"
-    parquet_path = out_dir / f"{out_name}.parquet"
-    csv_path     = out_dir / f"{out_name}.csv"
+    sas7bdat_path = out_dir / f"{out_name}.sas7bdat"
+    
+    write_sas7bdat(df, sas7bdat_path, reptdate, reptdt, reptmon, reptyear, 
+                   run_date_sas, reptdate_sas)
 
-    write_parquet(df, parquet_path)
-    write_csv(df, csv_path)
+    # Also save CSV for verification (optional)
+    csv_path = out_dir / f"{out_name}.csv"
+    df.to_csv(csv_path, index=False)
+    logger.info(f"  CSV written (verification): {csv_path}")
 
     # -------------------------------------------------------
     # SUMMARY
@@ -310,8 +330,8 @@ def main():
     logger.info(f"  REPTDATE        : {reptdate}  (SAS: {reptdate_sas})")
     logger.info(f"  REPTDT          : {reptdt}")
     logger.info(f"  Total records   : {len(df):,}")
-    logger.info(f"  Output parquet  : {parquet_path}")
-    logger.info(f"  Output csv      : {csv_path}")
+    logger.info(f"  Output SAS7BDAT : {sas7bdat_path}")
+    logger.info(f"  Output CSV      : {csv_path}")
     logger.info("=" * 60)
     logger.info("✓ Processing completed successfully")
     logger.info("=" * 60)
