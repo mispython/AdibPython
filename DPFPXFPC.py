@@ -6,7 +6,6 @@ import os
 import math
 
 NID_FILE = "/stgsrcsys/host/uat/rnidm09.sas7bdat"  
-TRNCH_FILE = "/stgsrcsys/host/uat/trnchm09.sas7bdat"  
 OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/Output"
 OUTPUT_FILE = "EIIMRNID_REPORT.TXT" 
 PARQUET_FILE = "EIIMRNID_DATA.parquet"
@@ -196,13 +195,6 @@ def main():
     df_nid, _ = pyreadstat.read_sas7bdat(NID_FILE)
     df = pl.from_pandas(df_nid).rename({col: col.lower() for col in df_nid.columns})
     print(f"  Original Islamic NID records: {len(df):,}")
-    
-    # Optionally merge with TRNCH if needed (commented out as per your requirement)
-    # if Path(TRNCH_FILE).exists():
-    #     df_trnch, _ = pyreadstat.read_sas7bdat(TRNCH_FILE)
-    #     df_trnch = pl.from_pandas(df_trnch).rename({col: col.lower() for col in df_trnch.columns})
-    #     df = df.join(df_trnch, on='trancheno', how='left')
-    #     print("  Merged with Islamic TRNCH")
     
     # Convert SAS dates to Python dates
     for col in ['matdt', 'startdt', 'early_wddt']:
