@@ -1,527 +1,320 @@
 import polars as pl
-import duckdb
+import pyreadstat
+from datetime import date, timedelta
 from pathlib import Path
-import datetime
-from datetime import date
-import re
-import sys
-import calendar
-import pyreadstat  # Better library for reading SAS files
-import logging
+import os
+import math
 
-# Suppress unnecessary logging
-logging.basicConfig(level=logging.WARNING)
+NID_FILE = "/stgsrcsys/host/uat/rnidm09.sas7bdat"
+TRNCH_FILE = "/stgsrcsys/host/uat/trnchm09.sas7bdat"
+OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/Output"
+OUTPUT_FILE = "EIBMRNID_REPORT.TXT"
+PARQUET_FILE = "EIBMRNID_DATA.parquet"
 
-# ------------------------------------------------------------
-# 1. REPTDATE CALCULATION
-# ------------------------------------------------------------
-def get_reptdate():
-    today = date.today()
-    day = today.day
+def convert_sas_date(sas_num):
+    if sas_num is None:
+        return None
+    try:
+        return date(1960, 1, 1) + timedelta(days=int(float(sas_num)))
+    except:
+        return None
+
+def calc_remmth(matdt, reptdate):
+    if matdt is None or matdt <= reptdate:
+        return None
+    if (matdt - reptdate).days < 8:
+        return 0.1
     
-    if 8 <= day <= 14:
-        reptdate = date(today.year, today.month, 8)
-        wk = '1'
-    elif 15 <= day <= 21:
-        reptdate = date(today.year, today.month, 15)
-        wk = '2'
-    elif 22 <= day <= 27:
-        reptdate = date(today.year, today.month, 22)
-        wk = '3'
+    mdyr, mdmth, mdday = matdt.year, matdt.month, matdt.day
+    rpyear, rpmonth, rpday = reptdate.year, reptdate.month, reptdate.day
+    
+    rp_month_days = [31, 29 if rpyear % 4 == 0 else 28, 31, 30, 31, 30,
+                     31, 31, 30, 31, 30, 31]
+    md_month_days = [31, 29 if mdyr % 4 == 0 else 28, 31, 30, 31, 30,
+                     31, 31, 30, 31, 30, 31]
+    
+    mdday = min(mdday, md_month_days[mdmth - 1])
+    remy = mdyr - rpyear
+    remm = mdmth - rpmonth
+    remd = mdday - rpday
+    
+    if remd < 0:
+        remm -= 1
+        if remm < 0:
+            remy -= 1
+            remm += 12
+        remd += rp_month_days[(rpmonth - 2) % 12]
+    
+    return remy * 12 + remm + remd / rp_month_days[rpmonth - 1]
+
+def apply_remfmta(val):
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return '              '
+    if val <= 6:
+        return '1. LE  6      '
+    elif 6 < val <= 12:
+        return '2. GT  6 TO 12'
+    elif 12 < val <= 24:
+        return '3. GT 12 TO 24'
+    elif 24 < val <= 36:
+        return '4. GT 24 TO 36'
+    elif 36 < val <= 60:
+        return '5. GT 36 TO 60'
     else:
-        # Last day of previous month
-        if today.month == 1:
-            reptdate = date(today.year - 1, 12, 31)
-        else:
-            last_day = calendar.monthrange(today.year, today.month - 1)[1]
-            reptdate = date(today.year, today.month - 1, last_day)
-        wk = '4'
-    
-    return {
-        'NOWK': wk,
-        'RDATE': reptdate.strftime('%d%m%y'),
-        'REPTMON': f"{reptdate.month:02d}",
-        'REPTYEAR': str(reptdate.year)[-2:],
-        'reptdate': reptdate
-    }
+        return '              '
 
-# ------------------------------------------------------------
-# 2. BRH PROCESSING
-# ------------------------------------------------------------
-def process_brh(brh_path):
-    """Process BRH flat file, remove BRSTAT='C'"""
-    print(f"Reading BRH from: {brh_path}")
-    lines = []
-    try:
-        with open(brh_path, 'r') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.rstrip('\n')
-                if not line.strip():
-                    continue
-                    
-                brstat = line[-1] if len(line) > 0 else ''
-                
-                if brstat != 'C':
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        branch = parts[0]
-                        brcd = parts[1]
-                        lines.append({'BRANCH': branch, 'BRCD': brcd})
-                    else:
-                        print(f"Warning: Line {line_num} has unexpected format: {line[:50]}...")
-    
-    except FileNotFoundError:
-        print(f"ERROR: BRH file not found at {brh_path}")
-        return pl.DataFrame({'BRANCH': [], 'BRCD': []})
-    except Exception as e:
-        print(f"ERROR reading BRH: {e}")
-        return pl.DataFrame({'BRANCH': [], 'BRCD': []})
-    
-    print(f"BRH records after filtering BRSTAT='C': {len(lines)}")
-    
-    if not lines:
-        return pl.DataFrame({'BRANCH': [], 'BRCD': []})
-    
-    return pl.DataFrame(lines)
+def apply_remfmtb(val):
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return '             '
+    if val <= 1:
+        return '1. LE  1      '
+    elif 1 < val <= 3:
+        return '2. GT  1 TO  3'
+    elif 3 < val <= 6:
+        return '3. GT  3 TO  6'
+    elif 6 < val <= 9:
+        return '4. GT  6 TO  9'
+    elif 9 < val <= 12:
+        return '5. GT  9 TO 12'
+    elif 12 < val <= 24:
+        return '6. GT 12 TO 24'
+    elif 24 < val <= 36:
+        return '7. GT 24 TO 36'
+    elif 36 < val <= 60:
+        return '8. GT 36 TO 60'
+    else:
+        return '             '
 
-# ------------------------------------------------------------
-# 3. DATE EXTRACTION FROM TEXT FILES
-# ------------------------------------------------------------
-def extract_elds_date(file_path, file_name):
-    """Extract date from ELDSTX2 first line"""
-    try:
-        if not Path(file_path).exists():
-            print(f"Warning: File not found: {file_path}")
-            return None
-            
-        with open(file_path, 'r', encoding='latin-1') as f:
-            line = f.readline()
-            print(f"First line of {file_name}: {line[:100]}...")
-            
-            # Look for date pattern in the line
-            date_patterns = [
-                r'(\d{2})-(\d{2})-(\d{4})',
-                r'(\d{2})/(\d{2})/(\d{4})',
-                r'(\d{2})\.(\d{2})\.(\d{4})',
-                r'(\d{2})(\d{2})(\d{4})'
-            ]
-            
-            for pattern in date_patterns:
-                date_match = re.search(pattern, line)
-                if date_match:
-                    dd, mm, yy = date_match.groups()
-                    return date(int(yy), int(mm), int(dd))
-                    
-    except Exception as e:
-        print(f"Warning: Could not extract date from {file_path}: {e}")
+def write_sas_exact_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
+    dlm = '\x05'
+    nidcnt, nidvol = tbl2_stats[0], tbl2_stats[1]
     
-    return None
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write("PUBLIC BANK BERHAD\n\n")
+        f.write("REPORT ON RETAIL RINGGIT-DENOMINATED NEGOTIABLE ")
+        f.write("INSTRUMENT OF DEPOSIT (NID)\n")
+        f.write(f"REPORTING DATE : {reptdate.strftime('%d/%m/%Y')}\n")
+        
+        f.write(f"{dlm}\nTable 1 - Outstanding Retail NID\n\n{dlm}\n")
+        f.write("REMAINING MATURITY (IN MONTHS)" + dlm)
+        f.write("GROSS ISSUANCE" + dlm)
+        f.write("HELD FOR MARKET MARKING" + dlm)
+        f.write("NET OUTSTANDING" + dlm + "\n")
+        f.write(dlm + dlm + "(A)" + dlm + "(B)" + dlm + "(A-B)" + dlm + "\n")
+        
+        total_curbal = total_heldmkt = total_outstanding = 0
+        fmt_order = ['1. LE  6      ', '2. GT  6 TO 12', '3. GT 12 TO 24',
+                    '4. GT 24 TO 36', '5. GT 36 TO 60', '              ']
+        
+        tbl1_dict = {}
+        for row in tbl1_sum.rows(named=True):
+            label = row['remfmta']
+            if label: tbl1_dict[label.strip()] = row
+        
+        for label in fmt_order:
+            stripped = label.strip()
+            if stripped in tbl1_dict:
+                row = tbl1_dict[stripped]
+                curbal, heldmkt, outstanding = float(row['curbal']), float(row['heldmkt']), float(row['outstanding'])
+                total_curbal += curbal
+                total_heldmkt += heldmkt
+                total_outstanding += outstanding
+                remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
+                f.write(f"{dlm}{remmgrp:24}{dlm}{curbal:16,.2f}{dlm}{heldmkt:16,.2f}{dlm}{outstanding:16,.2f}{dlm}\n")
+        
+        f.write(f"{dlm}TOTAL{24*' '}{dlm}{total_curbal:16,.2f}{dlm}{total_heldmkt:16,.2f}{dlm}{total_outstanding:16,.2f}{dlm}\n")
+        
+        f.write(f"{dlm}\nTable 2 - Monthly Trading Volume\n\n{dlm}\n")
+        f.write("GROSS MONTHLY PURCHASE OF RETAIL NID BY THE BANK" + dlm + "A) NUMBER OF NID" + dlm)
+        f.write(f"{nidcnt if nidcnt > 0 else '0'}{dlm}\n{dlm}{dlm}B) VOLUME OF NID{dlm}{nidvol if nidcnt > 0 else '0.00'}{dlm}\n")
+        
+        f.write(f"{dlm}\nTable 3 - Indicative Mid Yield\n\n{dlm}\n")
+        f.write("REMAINING MATURITY (IN MONTHS)" + dlm + "(%)" + dlm + "\n")
+        
+        fmtb_order = ['1. LE  1      ', '2. GT  1 TO  3', '3. GT  3 TO  6',
+                     '4. GT  6 TO  9', '5. GT  9 TO 12', '6. GT 12 TO 24',
+                     '7. GT 24 TO 36', '8. GT 36 TO 60', '             ']
+        
+        for label in fmtb_order:
+            stripped = label.strip()
+            if stripped in tbl3_data:
+                midyield = tbl3_data[stripped]
+                if midyield > 0:
+                    remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
+                    f.write(f"{dlm}{remmgrp:24}{dlm}{midyield:7.4f}{dlm}\n")
+        
+        overall_avg = tbl3_data.get('OVERALL', 0)
+        if overall_avg > 0:
+            f.write(f"{dlm}AVERAGE BID-ASK SPREAD ACROSS MATURITIES{dlm}{overall_avg:7.4f}{dlm}\n")
 
-def extract_elds_date_from_sas(sas_file_path, file_name):
-    """Extract date from SAS dataset metadata"""
-    try:
-        sas_path_str = str(sas_file_path)  # Convert Path to string
-        if not Path(sas_path_str).exists():
-            print(f"Warning: SAS file not found: {sas_path_str}")
-            return None
-        
-        # Read only metadata to get file creation/modification info
-        df, meta = pyreadstat.read_sas7bdat(sas_path_str, rows_limit=1)
-        
-        # Try to get date from metadata
-        if hasattr(meta, 'table_date'):
-            if meta.table_date:
-                print(f"Extracted date from SAS metadata: {meta.table_date}")
-                return meta.table_date.date() if hasattr(meta.table_date, 'date') else meta.table_date
-        
-        # If no date in metadata, use file modification time
-        mod_time = Path(sas_path_str).stat().st_mtime
-        file_date = datetime.datetime.fromtimestamp(mod_time).date()
-        print(f"Using file modification date: {file_date}")
-        return file_date
-            
-    except Exception as e:
-        print(f"Warning: Could not extract date from SAS file {sas_file_path}: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    return None
-
-# ------------------------------------------------------------
-# 4. PROCESS ELN1 (From SAS Dataset) - COMPLETE COLUMNS
-# ------------------------------------------------------------
-def process_eln1_from_sas(file_path):
-    """Process ELN1 from SAS dataset (.sas7bdat) using pyreadstat"""
-    print(f"Processing ELN1 from SAS dataset: {file_path}")
-    
-    try:
-        # Convert Path to string
-        sas_path_str = str(file_path)
-        
-        # Read SAS dataset directly into pandas then convert to polars
-        # pyreadstat is more robust than sas7bdat
-        print(f"Reading SAS file: {sas_path_str}")
-        df_pd, meta = pyreadstat.read_sas7bdat(sas_path_str)
-        
-        print(f"Successfully read SAS dataset with {len(df_pd)} rows and {len(df_pd.columns)} columns")
-        print(f"Column names: {list(df_pd.columns[:20])}...")  # Show first 20 columns
-        
-        # Convert to polars DataFrame
-        df = pl.from_pandas(df_pd)
-        
-        # Standardize column names to uppercase to match expected format
-        df = df.rename({col: col.upper() for col in df.columns})
-        
-        # Ensure all expected columns exist (create missing ones as null)
-        expected_columns = [
-            'AANO', 'FACCODE', 'FACILI', 'BNMEFF', 'APPRIC', 'AMTAPPLY', 'AVPRIC', 'PRICING',
-            'NEWIC', 'CPARTY', 'LNTYPE', 'GINCOME', 'SPAAMT', 'CPRELAT', 'CPRELAS', 'CPSTAFF',
-            'CPDITOR', 'CPSTFID', 'CPBRHO', 'STATUS', 'FELIMIT', 'TRLIMIT', 'CUSTCODE', 'SECTOR',
-            'PCODCRIS', 'PCODFISS', 'SMESIZE', 'NOEMPL', 'TURNOVER', 'APVBY', 'APVBY2', 'APVDES1',
-            'APVDES2', 'REASONS', 'ICREASON', 'SMENAME1', 'SMENAME2', 'TRANBR', 'TRANBRNO', 'TRANREG',
-            'ADVANCES', 'PRODUCT', 'STATE', 'EXSTLMT', 'GREENTCO', 'BIOTCO', 'SMEIP', 'SME1INCR',
-            'SMEMSC', 'STRUPCO_2YR', 'CTRY_INCORP', 'STRUPCO_3YR', 'NAME', 'LN_UTILISE_LOCAT_CD',
-            'NEW_BUSS_REG_ID', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'SOURCE_INCOME_CURRENCY_CD',
-            'GRP_ANNL_SALES_FINANCIAL_DT', 'GRP_ANNL_SALES_AMT'
-        ]
-        
-        # Add missing columns with null values
-        for col in expected_columns:
-            if col not in df.columns:
-                df = df.with_columns(pl.lit(None).alias(col))
-        
-        # Ensure AMOUNT column is initialized with AMTAPPLY if available
-        if 'AMOUNT' not in df.columns and 'AMTAPPLY' in df.columns:
-            df = df.with_columns(pl.col('AMTAPPLY').alias('AMOUNT'))
-        elif 'AMOUNT' in df.columns and 'AMTAPPLY' in df.columns:
-            # Keep AMOUNT as is, but ensure it exists
-            pass
-        else:
-            df = df.with_columns(pl.lit(None).alias('AMOUNT'))
-        
-        # Clean numeric fields - convert to float where possible
-        numeric_fields = ['AMTAPPLY', 'GINCOME', 'SPAAMT', 'FELIMIT', 'TRLIMIT', 
-                         'NOEMPL', 'TURNOVER', 'ADVANCES', 'EXSTLMT', 'GRP_ANNL_SALES_AMT', 'AMOUNT']
-        
-        for field in numeric_fields:
-            if field in df.columns:
-                try:
-                    # Try to cast to float, replace errors with null
-                    df = df.with_columns(
-                        pl.col(field).cast(pl.Float64, strict=False).alias(field)
-                    )
-                except Exception as e:
-                    print(f"Warning: Could not convert {field} to float: {e}")
-        
-        print(f"ELN1 records processed from SAS: {len(df)}")
-        
-        # Show first few rows for verification
-        if len(df) > 0:
-            print("\nFirst 2 rows of ELN1 data:")
-            print(df.head(2))
-        
-        return df
-        
-    except FileNotFoundError:
-        print(f"ERROR: SAS file not found at {file_path}")
-        return pl.DataFrame()
-    except Exception as e:
-        print(f"ERROR processing ELN1 from SAS: {e}")
-        import traceback
-        traceback.print_exc()
-        return pl.DataFrame()
-
-# ------------------------------------------------------------
-# 5. PROCESS ELN2 (From ELDSTX2) - COMPLETE COLUMNS
-# ------------------------------------------------------------
-def process_eln2(file_path):
-    """Process ELN2 from ELDSTX2 starting at line 2"""
-    print(f"Processing ELN2 from: {file_path}")
-    lines = []
-    
-    try:
-        with open(file_path, 'r', encoding='latin-1') as f:
-            all_lines = f.readlines()
-        
-        if len(all_lines) < 2:
-            print(f"Warning: {file_path} has less than 2 lines")
-            return pl.DataFrame()
-            
-        print(f"Total lines in ELDSTX2: {len(all_lines)}")
-        
-        for line_num, line in enumerate(all_lines[1:], 2):
-            line = line.rstrip('\n')
-            if len(line.strip()) == 0:
-                continue
-            
-            # Parse additional fields from ELDSTX2
-            aano = line[0:13].strip() if len(line) >= 13 else ''
-            status = line[13:25].strip().upper() if len(line) >= 25 else ''
-            amount_str = line[25:40].strip() if len(line) >= 40 else ''
-            aadate_str = line[40:48].strip() if len(line) >= 48 else ''
-            sbdate_str = line[48:56].strip() if len(line) >= 56 else ''
-            dpdate_str = line[56:64].strip() if len(line) >= 64 else ''
-            iddate_str = line[64:72].strip() if len(line) >= 72 else ''
-            lodate_str = line[72:80].strip() if len(line) >= 80 else ''
-            cmdate_str = line[80:88].strip() if len(line) >= 88 else ''
-            apvdte1_str = line[88:96].strip() if len(line) >= 96 else ''
-            apvdte2_str = line[96:104].strip() if len(line) >= 104 else ''
-            br_full_doc_receive_dt_str = line[104:112].strip() if len(line) >= 112 else ''
-            hoe_full_doc_receive_dt_str = line[112:120].strip() if len(line) >= 120 else ''
-            branch = line[120:123].strip() if len(line) >= 123 else ''
-            
-            # Parse numeric
-            def parse_numeric(val_str):
-                if val_str:
-                    try:
-                        # Remove any non-numeric characters except decimal point and minus sign
-                        clean_str = re.sub(r'[^\d\-\.]', '', val_str)
-                        if clean_str and clean_str != '-':
-                            return float(clean_str)
-                    except:
-                        pass
-                return None
-            
-            amount = parse_numeric(amount_str)
-            
-            # Parse dates (format: DDMMYY)
-            def parse_date(date_str):
-                if date_str and len(date_str) >= 6:
-                    try:
-                        dd = int(date_str[0:2])
-                        mm = int(date_str[2:4])
-                        yy = int(date_str[4:6])
-                        # Assuming 20xx for years 00-69, 19xx for 70-99
-                        year = 2000 + yy if yy <= 69 else 1900 + yy
-                        return date(year, mm, dd)
-                    except:
-                        pass
-                return None
-            
-            lines.append({
-                'AANO': aano,
-                'STATUS': status,
-                'AMOUNT': amount,
-                'AADATE': parse_date(aadate_str),
-                'SBDATE': parse_date(sbdate_str),
-                'DPDATE': parse_date(dpdate_str),
-                'IDDATE': parse_date(iddate_str),
-                'LODATE': parse_date(lodate_str),
-                'CMDATE': parse_date(cmdate_str),
-                'APVDTE1': parse_date(apvdte1_str),
-                'APVDTE2': parse_date(apvdte2_str),
-                'BR_FULL_DOC_RECEIVE_DT': parse_date(br_full_doc_receive_dt_str),
-                'HOE_FULL_DOC_RECEIVE_DT': parse_date(hoe_full_doc_receive_dt_str),
-                'BRANCH': branch
-            })
-            
-            if line_num % 1000 == 0:
-                print(f"  Processed {line_num} lines...")
-    
-    except FileNotFoundError:
-        print(f"ERROR: ELDSTX2 file not found at {file_path}")
-        return pl.DataFrame()
-    except Exception as e:
-        print(f"ERROR processing ELN2: {e}")
-        import traceback
-        traceback.print_exc()
-        return pl.DataFrame()
-    
-    print(f"ELN2 records processed: {len(lines)}")
-    
-    if not lines:
-        return pl.DataFrame()
-    
-    return pl.DataFrame(lines)
-
-# ------------------------------------------------------------
-# 6. MAIN PROCESSING PIPELINE
-# ------------------------------------------------------------
-def process_loan_reports():
-    """Main processing function"""
-    
+def main():
     print("=" * 60)
-    print("Starting EIBWSIBC Report Processing")
+    print("EIBMRNID - EXACT SAS OUTPUT")
     print("=" * 60)
     
-    macros = get_reptdate()
-    NOWK = macros['NOWK']
-    REPTMON = macros['REPTMON']
-    REPTYEAR = macros['REPTYEAR']
+    test_report_date = date(2017, 6, 30)
+    test_start_date = date(2017, 6, 1)
+    reptdate, startdte = test_report_date, test_start_date
     
-    print(f"Processing for period: {REPTMON}/{REPTYEAR}, Week: {NOWK}")
+    print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+    print(f"Start Date: {startdte.strftime('%d/%m/%Y')}")
     
-    # Define file paths - ELDSTXT is SAS dataset
-    eldstxt_path = Path("/stgsrcsys/host/uat/sibc05264.sas7bdat")  # Your SAS file
-    eldstx2_path = Path("/stgsrcsys/host/uat/BNMSIBC2.TXT")
-    brh_path = Path("/sasdata/rawdata/lookup/LKP_BRANCH")
+    if not Path(NID_FILE).exists():
+        print(f"❌ NID file not found: {NID_FILE}")
+        return
     
-    # Check if input files exist
-    missing_files = []
-    if not eldstxt_path.exists():
-        missing_files.append(str(eldstxt_path))
-    if not eldstx2_path.exists():
-        missing_files.append(str(eldstx2_path))
-    if not brh_path.exists():
-        missing_files.append(str(brh_path))
+    output_path = Path(OUTPUT_DIR)
+    output_path.mkdir(parents=True, exist_ok=True)
+    final_output_file = output_path / OUTPUT_FILE
+    final_parquet_file = output_path / PARQUET_FILE
+       
+    print("\n📂 Processing data...")
+    df_nid, _ = pyreadstat.read_sas7bdat(NID_FILE)
+    df = pl.from_pandas(df_nid).rename({col: col.lower() for col in df_nid.columns})
+    print(f"  Original NID records: {len(df):,}")
     
-    if missing_files:
-        print("ERROR: Missing input files:")
-        for f in missing_files:
-            print(f"  - {f}")
-        print("Please check file paths and permissions.")
-        return None
+    if Path(TRNCH_FILE).exists():
+        df_trnch, _ = pyreadstat.read_sas7bdat(TRNCH_FILE)
+        df_trnch = pl.from_pandas(df_trnch).rename({col: col.lower() for col in df_trnch.columns})
+        df = df.join(df_trnch, on='trancheno', how='left')
+        print("  Merged with TRNCH")
     
-    # Extract dates from ELDS files
-    print("\n" + "-" * 60)
-    print("Extracting ELDS dates...")
-    ELDSDT1 = extract_elds_date_from_sas(eldstxt_path, "ELDSTXT (SAS)")
-    ELDSDT2 = extract_elds_date(eldstx2_path, "ELDSTX2")
-    
-    print(f"ELDSDT1 (from SAS): {ELDSDT1}")
-    print(f"ELDSDT2: {ELDSDT2}")
-    
-    # Process BRH
-    print("\n" + "-" * 60)
-    brh_df = process_brh(brh_path)
-    
-    # Process ELN1 from SAS and ELN2 from text
-    print("\n" + "-" * 60)
-    eln1_df = process_eln1_from_sas(eldstxt_path)
-    
-    print("\n" + "-" * 60)
-    eln2_df = process_eln2(eldstx2_path)
-    
-    if eln1_df.is_empty():
-        print("ERROR: No data processed from ELN1 (SAS file)")
-        return None
-    
-    if eln2_df.is_empty():
-        print("ERROR: No data processed from ELN2 (text file)")
-        return None
-    
-    # Merge ELN1 and ELN2
-    print("\n" + "-" * 60)
-    print("Merging datasets...")
-    
-    # Ensure columns exist for merging
-    if 'AANO' not in eln1_df.columns:
-        print("ERROR: 'AANO' column missing from ELN1 data")
-        return None
-    
-    if 'STATUS' not in eln1_df.columns:
-        # Add STATUS column if missing
-        eln1_df = eln1_df.with_columns(pl.lit(None).alias('STATUS'))
-    
-    # Merge on AANO and STATUS
-    sibc_df = eln1_df.join(eln2_df, on=['AANO', 'STATUS'], how='left')
-    print(f"After ELN1+ELN2 merge: {len(sibc_df)} records")
-    
-    # Apply business logic: If AMOUNT is missing or 0 from ELN2, use AMTAPPLY from ELN1
-    if 'AMOUNT' in sibc_df.columns and 'AMTAPPLY' in sibc_df.columns:
-        sibc_df = sibc_df.with_columns([
-            pl.when(
-                (pl.col('AMOUNT').is_null()) | (pl.col('AMOUNT') == 0)
+    for col in ['matdt', 'startdt', 'early_wddt']:
+        if col in df.columns and df[col].dtype in [pl.Int64, pl.Float64]:
+            df = df.with_columns(
+                pl.col(col).map_elements(convert_sas_date, return_dtype=pl.Date).alias(col)
             )
-            .then(pl.col('AMTAPPLY'))
-            .otherwise(pl.col('AMOUNT'))
-            .alias('AMOUNT')
-        ])
     
-    # Remove duplicates
-    if 'AANO' in sibc_df.columns:
-        sibc_df = sibc_df.unique(subset=['AANO', 'STATUS'] if 'STATUS' in sibc_df.columns else ['AANO'])
-        print(f"After deduplication: {len(sibc_df)} records")
+    df = df.filter(pl.col('curbal') > 0)
     
-    # Reorder columns to match sample output
-    column_order = [
-        'AANO', 'FACCODE', 'FACILI', 'BNMEFF', 'APPRIC', 'AMTAPPLY', 'AVPRIC', 'PRICING',
-        'NEWIC', 'CPARTY', 'LNTYPE', 'GINCOME', 'SPAAMT', 'CPRELAT', 'CPRELAS', 'CPSTAFF',
-        'CPDITOR', 'CPSTFID', 'CPBRHO', 'STATUS', 'FELIMIT', 'TRLIMIT', 'CUSTCODE', 'SECTOR',
-        'PCODCRIS', 'PCODFISS', 'SMESIZE', 'NOEMPL', 'TURNOVER', 'APVBY', 'APVBY2', 'APVDES1',
-        'APVDES2', 'REASONS', 'ICREASON', 'SMENAME1', 'SMENAME2', 'TRANBR', 'TRANBRNO', 'TRANREG',
-        'ADVANCES', 'PRODUCT', 'STATE', 'EXSTLMT', 'GREENTCO', 'BIOTCO', 'SMEIP', 'SME1INCR',
-        'SMEMSC', 'STRUPCO_2YR', 'CTRY_INCORP', 'STRUPCO_3YR', 'NAME', 'LN_UTILISE_LOCAT_CD',
-        'NEW_BUSS_REG_ID', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'SOURCE_INCOME_CURRENCY_CD',
-        'GRP_ANNL_SALES_FINANCIAL_DT', 'GRP_ANNL_SALES_AMT', 'AMOUNT', 'AADATE', 'SBDATE',
-        'DPDATE', 'IDDATE', 'LODATE', 'CMDATE', 'APVDTE1', 'APVDTE2', 'BR_FULL_DOC_RECEIVE_DT',
-        'HOE_FULL_DOC_RECEIVE_DT', 'BRANCH'
-    ]
+    if 'matdt' in df.columns and df['matdt'].dtype == pl.Date:
+        df = df.with_columns(
+            pl.col('matdt').map_elements(
+                lambda x: calc_remmth(x, reptdate),
+                return_dtype=pl.Float64
+            ).alias('remmth')
+        )
     
-    # Only keep columns that exist
-    existing_cols = [col for col in column_order if col in sibc_df.columns]
-    sibc_df = sibc_df.select(existing_cols)
+    print(f"\n💾 Saving processed data to Parquet: {final_parquet_file}")
+    df.write_parquet(final_parquet_file)
+    print(f"  Saved {len(df):,} records to Parquet")
     
-    # Save output
-    print("\n" + "-" * 60)
-    print("Saving output files...")
+    overall_yield = 0
+    tbl3_data = {'OVERALL': 0}
     
-    output_name = f"SIBC{REPTMON}{REPTYEAR}{NOWK}"
-    
-    script_dir = Path(__file__).parent
-    output_dir = script_dir / "Output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save to CSV
-    csv_path = output_dir / f"{output_name}.csv"
-    sibc_df.write_csv(csv_path)
-    print(f"✓ Saved CSV file: {csv_path}")
-    
-    # Save to Parquet
-    parquet_path = output_dir / f"{output_name}.parquet"
-    sibc_df.write_parquet(parquet_path)
-    print(f"✓ Saved Parquet file: {parquet_path}")
-    
-    # Create summary report
-    summary_path = output_dir / f"{output_name}_SUMMARY.txt"
-    with open(summary_path, 'w') as f:
-        f.write(f"EIBWSIBC Processing Summary\n")
-        f.write(f"{'=' * 40}\n")
-        f.write(f"Processing Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Report Period: {REPTMON}/{REPTYEAR}, Week: {NOWK}\n")
-        f.write(f"ELDSDT1 (from SAS): {ELDSDT1}\n")
-        f.write(f"ELDSDT2: {ELDSDT2}\n")
-        f.write(f"BRH Records: {len(brh_df)}\n")
-        f.write(f"ELN1 Records: {len(eln1_df)}\n")
-        f.write(f"ELN2 Records: {len(eln2_df)}\n")
-        f.write(f"Final Records: {len(sibc_df)}\n")
-        f.write(f"Output Files:\n")
-        f.write(f"  - {csv_path}\n")
-        f.write(f"  - {parquet_path}\n")
-    
-    print(f"✓ Saved summary file: {summary_path}")
-    
-    return sibc_df
-
-# ------------------------------------------------------------
-# 7. EXECUTE
-# ------------------------------------------------------------
-if __name__ == "__main__":
-    try:
-        result = process_loan_reports()
+    print("\n📊 Creating Table 1...")
+    required_cols = ['matdt', 'startdt', 'nidstat', 'cdstat']
+    if all(col in df.columns for col in required_cols):
+        tbl1_filtered = df.filter(
+            (pl.col('matdt') > reptdate) &
+            (pl.col('startdt') <= reptdate) &
+            (pl.col('nidstat') == 'N') &
+            (pl.col('cdstat') == 'A')
+        )
+        print(f"  Table 1 filtered records: {len(tbl1_filtered):,}")
         
-        if result is not None:
-            print("\n" + "=" * 60)
-            print("PROCESSING COMPLETE!")
-            print("=" * 60)
-            print(f"\nFinal dataset has {len(result)} records")
-            print(f"\nColumns ({len(result.columns)}): {list(result.columns[:20])}...")
-            print("\nSample data (first 5 rows):")
-            print(result.head(5))
+        if len(tbl1_filtered) > 0:
+            tbl1 = tbl1_filtered.with_columns([
+                pl.lit(0).alias('heldmkt')
+            ]).with_columns([
+                (pl.col('curbal') - pl.col('heldmkt')).alias('outstanding')
+            ]).with_columns([
+                pl.col('remmth').map_elements(
+                    lambda x: apply_remfmta(x) if x is not None else '              ',
+                    return_dtype=pl.Utf8
+                ).alias('remfmta')
+            ])
             
-            # Show data types for verification
-            print("\nData types of first 10 columns:")
-            for col in result.columns[:10]:
-                print(f"  {col}: {result[col].dtype}")
+            tbl1_sum = tbl1.group_by('remfmta').agg([
+                pl.sum('curbal').alias('curbal'),
+                pl.sum('heldmkt').alias('heldmkt'),
+                pl.sum('outstanding').alias('outstanding')
+            ])
+            print(f"  Table 1 summary: {len(tbl1_sum)} maturity buckets")
         else:
-            print("\nProcessing failed. Please check error messages above.")
-            sys.exit(1)
+            tbl1_sum = pl.DataFrame({'remfmta': [], 'curbal': [], 'heldmkt': [], 'outstanding': []})
+            tbl1 = pl.DataFrame()
+    else:
+        tbl1_sum = pl.DataFrame({'remfmta': [], 'curbal': [], 'heldmkt': [], 'outstanding': []})
+        tbl1 = pl.DataFrame()
+    
+    print("\n📊 Creating Table 2...")
+    if 'nidstat' in df.columns and 'early_wddt' in df.columns and df['early_wddt'].dtype == pl.Date:
+        tbl2_result = df.filter(
+            (pl.col('nidstat') == 'E') &
+            (pl.col('early_wddt') >= startdte) &
+            (pl.col('early_wddt') <= reptdate)
+        ).select([
+            pl.len().alias('nidcnt'),
+            pl.sum('curbal').alias('nidvol')
+        ])
+        
+        if tbl2_result.height > 0:
+            nidcnt, nidvol = tbl2_result.row(0)
+            nidcnt = nidcnt if nidcnt is not None else 0
+            nidvol = nidvol if nidvol is not None else 0.0
+        else:
+            nidcnt, nidvol = 0, 0.0
+    else:
+        nidcnt, nidvol = 0, 0.0
+    
+    tbl2_stats = (nidcnt, nidvol)
+    print(f"  Table 2 - NID Count: {nidcnt:,}, Volume: {nidvol:,.2f}")
+    
+    print("\n📊 Creating Table 3...")
+    if 'intplrate_bid' in df.columns and 'intplrate_offer' in df.columns:
+        tbl3_filtered = df.filter(
+            (pl.col('matdt') > reptdate) &
+            (pl.col('startdt') <= reptdate) &
+            (pl.col('nidstat') == 'N') &
+            (pl.col('cdstat') == 'A') &
+            pl.col('intplrate_bid').is_not_null() &
+            pl.col('intplrate_offer').is_not_null()
+        )
+        print(f"  Table 3 filtered records: {len(tbl3_filtered):,}")
+        
+        if len(tbl3_filtered) > 0:
+            tbl3 = tbl3_filtered.with_columns([
+                ((pl.col('intplrate_bid') + pl.col('intplrate_offer')) / 2).alias('yield')
+            ]).with_columns([
+                pl.col('remmth').map_elements(
+                    lambda x: apply_remfmtb(x) if x is not None else '             ',
+                    return_dtype=pl.Utf8
+                ).alias('remfmtb')
+            ])
             
-    except KeyboardInterrupt:
-        print("\nProcessing interrupted by user.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\nUnexpected error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+            tbl3_unique = tbl3.unique(subset=['remfmtb', 'trancheno'])
+            tbl3_yield = tbl3_unique.filter(pl.col('yield') > 0).group_by('remfmtb').agg([
+                pl.mean('yield').alias('midyield'),
+                pl.len().alias('count')
+            ])
+            
+            overall_yield_df = tbl3_unique.filter(pl.col('yield') > 0).select(
+                pl.mean('yield').alias('overall_yield')
+            )
+            
+            if overall_yield_df.height > 0:
+                overall_yield = overall_yield_df.row(0)[0] or 0
+            
+            tbl3_data = {'OVERALL': overall_yield}
+            for row in tbl3_yield.rows(named=True):
+                label = row['remfmtb']
+                if label:
+                    tbl3_data[label.strip()] = float(row['midyield'])
+            
+            print(f"  Table 3 - Overall yield: {overall_yield:.4f}%, Buckets: {len(tbl3_data)-1}")
+    
+    print(f"\n💾 Writing SAS-format output to: {final_output_file}")
+    write_sas_exact_output(final_output_file, reptdate, tbl1_sum, tbl2_stats, tbl3_data)
+    
+    print(f"\n✅ SAS report generated: {final_output_file}")
+    print(f"✅ Parquet data saved: {final_parquet_file}")
+    print(f"\n📊 Final Summary:")
+    print(f"  Total processed records: {len(df):,}")
+    print(f"  Table 1 (Outstanding): {len(tbl1):,} records")
+    print(f"  Table 2 (Trading): {nidcnt:,} NIDs, RM {nidvol:,.2f}")
+    print(f"  Table 3 (Yield): {overall_yield:.4f}% overall")
+    print(f"\n📁 Output folder: {output_path.absolute()}")
+
+if __name__ == "__main__":
+    main()
