@@ -5,10 +5,11 @@ from pathlib import Path
 import os
 import math
 
-NID_FILE = "/stgsrcsys/host/uat/rnidm09.sas7bdat"
+NID_FILE = "/stgsrcsys/host/uat/rnidm09.sas7bdat"  
+TRNCH_FILE = "/stgsrcsys/host/uat/trnchm09.sas7bdat"  
 OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/Output"
-OUTPUT_FILE = "EIBMRNID_REPORT.TXT"
-PARQUET_FILE = "EIBMRNID_DATA.parquet"
+OUTPUT_FILE = "EIIMRNID_REPORT.TXT" 
+PARQUET_FILE = "EIIMRNID_DATA.parquet"
 
 def convert_sas_date(sas_num):
     if sas_num is None:
@@ -84,19 +85,22 @@ def apply_remfmtb(val):
     else:
         return '             '
 
-def write_sas_exact_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
+def write_islamic_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
+    dlm = '\x05'
     nidcnt, nidvol = tbl2_stats[0], tbl2_stats[1]
     
     with open(filename, 'w', encoding='utf-8') as f:
-        # Header
-        f.write("PUBLIC BANK BERHAD\n\n")
-        f.write("REPORT ON RETAIL RINGGIT-DENOMINATED NEGOTIABLE INSTRUMENT OF DEPOSIT (NID)\n")
-        f.write(f"REPORTING DATE : {reptdate.strftime('%d/%m/%Y')}\n\n")
+        f.write("PUBLIC ISLAMIC BANK BERHAD\n\n")
+        f.write("REPORT ON RETAIL RINGGIT-DENOMINATED NEGOTIABLE ")
+        f.write("ISLAMIC DEBT CERTIFICATE (R-NIDC)\n")
+        f.write(f"REPORTING DATE : {reptdate.strftime('%d/%m/%Y')}\n")
         
-        # Table 1
-        f.write("Table 1 - Outstanding Retail NID\n\n")
-        f.write(" ,REMAINING MATURITY (IN MONTHS),GROSS ISSUANCE,HELD FOR MARKET MARKING,NET OUTSTANDING\n")
-        f.write(" , ,(A),(B),(A-B)\n")
+        f.write(f"{dlm}\nTable 1 - Outstanding Retail R-NIDC\n\n{dlm}\n")
+        f.write("REMAINING MATURITY (IN MONTHS)" + dlm)
+        f.write("GROSS ISSUANCE" + dlm)
+        f.write("HELD FOR MARKET MARKING" + dlm)
+        f.write("NET OUTSTANDING" + dlm + "\n")
+        f.write(dlm + dlm + "(A)" + dlm + "(B)" + dlm + "(A-B)" + dlm + "\n")
         
         total_curbal = total_heldmkt = total_outstanding = 0
         fmt_order = ['1. LE  6      ', '2. GT  6 TO 12', '3. GT 12 TO 24',
@@ -105,103 +109,84 @@ def write_sas_exact_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
         tbl1_dict = {}
         for row in tbl1_sum.rows(named=True):
             label = row['remfmta']
-            if label: 
-                tbl1_dict[label.strip()] = row
+            if label: tbl1_dict[label.strip()] = row
         
-        # Write each maturity bucket
         for label in fmt_order:
             stripped = label.strip()
             if stripped in tbl1_dict:
                 row = tbl1_dict[stripped]
-                curbal = float(row['curbal'])
-                heldmkt = float(row['heldmkt'])
-                outstanding = float(row['outstanding'])
+                curbal, heldmkt, outstanding = float(row['curbal']), float(row['heldmkt']), float(row['outstanding'])
                 total_curbal += curbal
                 total_heldmkt += heldmkt
                 total_outstanding += outstanding
                 remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
-                f.write(f" ,{remmgrp},{curbal:,.2f},{heldmkt:,.2f},{outstanding:,.2f},,\n")
-            else:
-                # Write zero rows for missing buckets to match original format
-                remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
-                if stripped == '':  # Handle the OTHER category
-                    remmgrp = ''
-                f.write(f" ,{remmgrp},0.00,0.00,0.00,,\n")
+                f.write(f"{dlm}{remmgrp:24}{dlm}{curbal:16,.2f}{dlm}{heldmkt:16,.2f}{dlm}{outstanding:16,.2f}{dlm}\n")
         
-        # Write total row
-        f.write(f" ,TOTAL,{total_curbal:,.2f},{total_heldmkt:,.2f},{total_outstanding:,.2f},,\n\n")
+        f.write(f"{dlm}TOTAL{24*' '}{dlm}{total_curbal:16,.2f}{dlm}{total_heldmkt:16,.2f}{dlm}{total_outstanding:16,.2f}{dlm}\n")
         
-        # Table 2
-        f.write("Table 2 - Monthly Trading Volume\n\n")
-        f.write(" ,GROSS MONTHLY PURCHASE OF RETAIL NID BY THE BANK,A) NUMBER OF NID,")
-        f.write(f"{nidcnt if nidcnt > 0 else '0.00'}\n")
-        f.write(" , ,B) VOLUME OF NID,")
-        f.write(f"{nidvol if nidcnt > 0 else '0.00'}\n\n")
+        f.write(f"{dlm}\nTable 2 - Monthly Trading Volume\n\n{dlm}\n")
+        f.write("GROSS MONTHLY PURCHASE OF RETAIL R-NIDC BY THE BANK" + dlm + "A) NUMBER OF R-NIDC" + dlm)
+        f.write(f"{nidcnt if nidcnt > 0 else '0'}{dlm}\n{dlm}{dlm}B) VOLUME OF R-NIDC{dlm}{nidvol if nidcnt > 0 else '0.00'}{dlm}\n")
         
-        # Table 3
-        f.write("Table 3 - Indicative Mid Yield\n\n")
-        f.write(" ,REMAINING MATURITY (IN MONTHS),(%)\n")
+        f.write(f"{dlm}\nTable 3 - Indicative Mid Yield\n\n{dlm}\n")
+        f.write("REMAINING MATURITY (IN MONTHS)" + dlm + "(%)" + dlm + "\n")
         
         fmtb_order = ['1. LE  1      ', '2. GT  1 TO  3', '3. GT  3 TO  6',
                      '4. GT  6 TO  9', '5. GT  9 TO 12', '6. GT 12 TO 24',
                      '7. GT 24 TO 36', '8. GT 36 TO 60', '             ']
         
-        # Write each yield bucket
         for label in fmtb_order:
             stripped = label.strip()
-            remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
-            if stripped == '':  # Handle the OTHER category
-                remmgrp = ''
-            
-            if stripped in tbl3_data and tbl3_data[stripped] > 0:
+            if stripped in tbl3_data:
                 midyield = tbl3_data[stripped]
-                f.write(f" ,{remmgrp},{midyield:.4f},,\n")
-            else:
-                # Write zero rows for missing buckets to match original format
-                f.write(f" ,{remmgrp},0.0000,,\n")
+                if midyield > 0:
+                    remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
+                    f.write(f"{dlm}{remmgrp:24}{dlm}{midyield:7.4f}{dlm}\n")
         
-        # Write overall average
         overall_avg = tbl3_data.get('OVERALL', 0)
-        f.write(f" ,AVERAGE BID-ASK SPREAD ACROSS MATURITIES,{overall_avg:.4f},,\n")
+        if overall_avg > 0:
+            f.write(f"{dlm}AVERAGE BID-ASK SPREAD ACROSS MATURITIES{dlm}{overall_avg:7.4f}{dlm}\n")
 
 def main():
     print("=" * 60)
-    print("EIBMRNID - EXACT SAS OUTPUT")
+    print("EIIMRNID - EXACT SAS OUTPUT (ISLAMIC VERSION)")
     print("=" * 60)
     
-    # Note: Using the date from the original output for testing
-    test_report_date = date(2026, 5, 31)
-    test_start_date = date(2026, 5, 1)
-    reptdate, startdte = test_report_date, test_start_date
+    today = date.today()
+    reptdate = date(today.year, today.month, 1) - timedelta(days=1)
+    startdte = date(reptdate.year, reptdate.month, 1)
     
     print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
     print(f"Start Date: {startdte.strftime('%d/%m/%Y')}")
     
     if not Path(NID_FILE).exists():
-        print(f"❌ NID file not found: {NID_FILE}")
+        print(f"❌ Islamic NID file not found: {NID_FILE}")
         return
     
     output_path = Path(OUTPUT_DIR)
     output_path.mkdir(parents=True, exist_ok=True)
     final_output_file = output_path / OUTPUT_FILE
     final_parquet_file = output_path / PARQUET_FILE
-       
-    print("\n📂 Processing data...")
+    
+    print("\n📂 Processing Islamic data...")
     df_nid, _ = pyreadstat.read_sas7bdat(NID_FILE)
     df = pl.from_pandas(df_nid).rename({col: col.lower() for col in df_nid.columns})
-    print(f"  Original NID records: {len(df):,}")
+    print(f"  Original Islamic NID records: {len(df):,}")
     
-    # Convert SAS dates to Python dates
+    if Path(TRNCH_FILE).exists():
+        df_trnch, _ = pyreadstat.read_sas7bdat(TRNCH_FILE)
+        df_trnch = pl.from_pandas(df_trnch).rename({col: col.lower() for col in df_trnch.columns})
+        df = df.join(df_trnch, on='trancheno', how='left')
+        print("  Merged with Islamic TRNCH")
+    
     for col in ['matdt', 'startdt', 'early_wddt']:
         if col in df.columns and df[col].dtype in [pl.Int64, pl.Float64]:
             df = df.with_columns(
                 pl.col(col).map_elements(convert_sas_date, return_dtype=pl.Date).alias(col)
             )
     
-    # Filter for positive current balance
     df = df.filter(pl.col('curbal') > 0)
     
-    # Calculate remaining months
     if 'matdt' in df.columns and df['matdt'].dtype == pl.Date:
         df = df.with_columns(
             pl.col('matdt').map_elements(
@@ -210,7 +195,7 @@ def main():
             ).alias('remmth')
         )
     
-    print(f"\n💾 Saving processed data to Parquet: {final_parquet_file}")
+    print(f"\n💾 Saving processed Islamic data to Parquet: {final_parquet_file}")
     df.write_parquet(final_parquet_file)
     print(f"  Saved {len(df):,} records to Parquet")
     
@@ -274,7 +259,7 @@ def main():
         nidcnt, nidvol = 0, 0.0
     
     tbl2_stats = (nidcnt, nidvol)
-    print(f"  Table 2 - NID Count: {nidcnt:,}, Volume: {nidvol:,.2f}")
+    print(f"  Table 2 - R-NIDC Count: {nidcnt:,}, Volume: {nidvol:,.2f}")
     
     print("\n📊 Creating Table 3...")
     if 'intplrate_bid' in df.columns and 'intplrate_offer' in df.columns:
@@ -319,15 +304,15 @@ def main():
             
             print(f"  Table 3 - Overall yield: {overall_yield:.4f}%, Buckets: {len(tbl3_data)-1}")
     
-    print(f"\n💾 Writing SAS-format output to: {final_output_file}")
-    write_sas_exact_output(final_output_file, reptdate, tbl1_sum, tbl2_stats, tbl3_data)
+    print(f"\n💾 Writing Islamic SAS-format output to: {final_output_file}")
+    write_islamic_output(final_output_file, reptdate, tbl1_sum, tbl2_stats, tbl3_data)
     
-    print(f"\n✅ SAS report generated: {final_output_file}")
-    print(f"✅ Parquet data saved: {final_parquet_file}")
+    print(f"\n✅ Islamic SAS report generated: {final_output_file}")
+    print(f"✅ Islamic Parquet data saved: {final_parquet_file}")
     print(f"\n📊 Final Summary:")
     print(f"  Total processed records: {len(df):,}")
-    print(f"  Table 1 (Outstanding): {len(tbl1) if 'tbl1' in locals() else 0:,} records")
-    print(f"  Table 2 (Trading): {nidcnt:,} NIDs, RM {nidvol:,.2f}")
+    print(f"  Table 1 (Outstanding): {len(tbl1):,} records")
+    print(f"  Table 2 (Trading): {nidcnt:,} R-NIDCs, RM {nidvol:,.2f}")
     print(f"  Table 3 (Yield): {overall_yield:.4f}% overall")
     print(f"\n📁 Output folder: {output_path.absolute()}")
 
