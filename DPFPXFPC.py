@@ -6,7 +6,6 @@ import os
 import math
 
 NID_FILE = "/stgsrcsys/host/uat/rnidm09.sas7bdat"
-TRNCH_FILE = "/stgsrcsys/host/uat/trnchm09.sas7bdat"
 OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/Job/Output"
 OUTPUT_FILE = "EIBMRNID_REPORT.TXT"
 PARQUET_FILE = "EIBMRNID_DATA.parquet"
@@ -173,20 +172,17 @@ def main():
     df = pl.from_pandas(df_nid).rename({col: col.lower() for col in df_nid.columns})
     print(f"  Original NID records: {len(df):,}")
     
-    if Path(TRNCH_FILE).exists():
-        df_trnch, _ = pyreadstat.read_sas7bdat(TRNCH_FILE)
-        df_trnch = pl.from_pandas(df_trnch).rename({col: col.lower() for col in df_trnch.columns})
-        df = df.join(df_trnch, on='trancheno', how='left')
-        print("  Merged with TRNCH")
-    
+    # Convert SAS dates to Python dates
     for col in ['matdt', 'startdt', 'early_wddt']:
         if col in df.columns and df[col].dtype in [pl.Int64, pl.Float64]:
             df = df.with_columns(
                 pl.col(col).map_elements(convert_sas_date, return_dtype=pl.Date).alias(col)
             )
     
+    # Filter for positive current balance
     df = df.filter(pl.col('curbal') > 0)
     
+    # Calculate remaining months
     if 'matdt' in df.columns and df['matdt'].dtype == pl.Date:
         df = df.with_columns(
             pl.col('matdt').map_elements(
@@ -311,7 +307,7 @@ def main():
     print(f"✅ Parquet data saved: {final_parquet_file}")
     print(f"\n📊 Final Summary:")
     print(f"  Total processed records: {len(df):,}")
-    print(f"  Table 1 (Outstanding): {len(tbl1):,} records")
+    print(f"  Table 1 (Outstanding): {len(tbl1) if 'tbl1' in locals() else 0:,} records")
     print(f"  Table 2 (Trading): {nidcnt:,} NIDs, RM {nidvol:,.2f}")
     print(f"  Table 3 (Yield): {overall_yield:.4f}% overall")
     print(f"\n📁 Output folder: {output_path.absolute()}")
