@@ -86,21 +86,19 @@ def apply_remfmtb(val):
         return '             '
 
 def write_islamic_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
-    dlm = '\x05'
     nidcnt, nidvol = tbl2_stats[0], tbl2_stats[1]
     
     with open(filename, 'w', encoding='utf-8') as f:
+        # Header
         f.write("PUBLIC ISLAMIC BANK BERHAD\n\n")
         f.write("REPORT ON RETAIL RINGGIT-DENOMINATED NEGOTIABLE ")
         f.write("ISLAMIC DEBT CERTIFICATE (R-NIDC)\n")
-        f.write(f"REPORTING DATE : {reptdate.strftime('%d/%m/%Y')}\n")
+        f.write(f"REPORTING DATE : {reptdate.strftime('%d/%m/%Y')}\n\n")
         
-        f.write(f"{dlm}\nTable 1 - Outstanding Retail R-NIDC\n\n{dlm}\n")
-        f.write("REMAINING MATURITY (IN MONTHS)" + dlm)
-        f.write("GROSS ISSUANCE" + dlm)
-        f.write("HELD FOR MARKET MARKING" + dlm)
-        f.write("NET OUTSTANDING" + dlm + "\n")
-        f.write(dlm + dlm + "(A)" + dlm + "(B)" + dlm + "(A-B)" + dlm + "\n")
+        # Table 1
+        f.write("Table 1 - Outstanding Retail R-NIDC\n\n")
+        f.write(" ,REMAINING MATURITY (IN MONTHS),GROSS ISSUANCE,HELD FOR MARKET MARKING,NET OUTSTANDING\n")
+        f.write(" , ,(A),(B),(A-B)\n")
         
         total_curbal = total_heldmkt = total_outstanding = 0
         fmt_order = ['1. LE  6      ', '2. GT  6 TO 12', '3. GT 12 TO 24',
@@ -109,49 +107,75 @@ def write_islamic_output(filename, reptdate, tbl1_sum, tbl2_stats, tbl3_data):
         tbl1_dict = {}
         for row in tbl1_sum.rows(named=True):
             label = row['remfmta']
-            if label: tbl1_dict[label.strip()] = row
+            if label: 
+                tbl1_dict[label.strip()] = row
         
+        # Write each maturity bucket
         for label in fmt_order:
             stripped = label.strip()
             if stripped in tbl1_dict:
                 row = tbl1_dict[stripped]
-                curbal, heldmkt, outstanding = float(row['curbal']), float(row['heldmkt']), float(row['outstanding'])
+                curbal = float(row['curbal'])
+                heldmkt = float(row['heldmkt'])
+                outstanding = float(row['outstanding'])
                 total_curbal += curbal
                 total_heldmkt += heldmkt
                 total_outstanding += outstanding
                 remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
-                f.write(f"{dlm}{remmgrp:24}{dlm}{curbal:16,.2f}{dlm}{heldmkt:16,.2f}{dlm}{outstanding:16,.2f}{dlm}\n")
+                f.write(f" ,{remmgrp},{curbal:,.2f},{heldmkt:,.2f},{outstanding:,.2f},,\n")
+            else:
+                # Write zero rows for missing buckets to match original format
+                remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
+                if stripped == '':  # Handle the OTHER category
+                    remmgrp = ''
+                f.write(f" ,{remmgrp},0.00,0.00,0.00,,\n")
         
-        f.write(f"{dlm}TOTAL{24*' '}{dlm}{total_curbal:16,.2f}{dlm}{total_heldmkt:16,.2f}{dlm}{total_outstanding:16,.2f}{dlm}\n")
+        # Write total row
+        f.write(f" ,TOTAL,{total_curbal:,.2f},{total_heldmkt:,.2f},{total_outstanding:,.2f},,\n\n")
         
-        f.write(f"{dlm}\nTable 2 - Monthly Trading Volume\n\n{dlm}\n")
-        f.write("GROSS MONTHLY PURCHASE OF RETAIL R-NIDC BY THE BANK" + dlm + "A) NUMBER OF R-NIDC" + dlm)
-        f.write(f"{nidcnt if nidcnt > 0 else '0'}{dlm}\n{dlm}{dlm}B) VOLUME OF R-NIDC{dlm}{nidvol if nidcnt > 0 else '0.00'}{dlm}\n")
+        # Table 2
+        f.write("Table 2 - Monthly Trading Volume\n\n")
+        f.write(" ,GROSS MONTHLY PURCHASE OF RETAIL R-NIDC BY THE BANK,A) NUMBER OF R-NIDC,")
+        f.write(f"{nidcnt if nidcnt > 0 else '0.00'}\n")
+        f.write(" , ,B) VOLUME OF R-NIDC,")
+        f.write(f"{nidvol if nidcnt > 0 else '0.00'}\n\n")
         
-        f.write(f"{dlm}\nTable 3 - Indicative Mid Yield\n\n{dlm}\n")
-        f.write("REMAINING MATURITY (IN MONTHS)" + dlm + "(%)" + dlm + "\n")
+        # Table 3
+        f.write("Table 3 - Indicative Mid Yield\n\n")
+        f.write(" ,REMAINING MATURITY (IN MONTHS),(%)\n")
         
         fmtb_order = ['1. LE  1      ', '2. GT  1 TO  3', '3. GT  3 TO  6',
                      '4. GT  6 TO  9', '5. GT  9 TO 12', '6. GT 12 TO 24',
                      '7. GT 24 TO 36', '8. GT 36 TO 60', '             ']
         
+        # Write each yield bucket
         for label in fmtb_order:
             stripped = label.strip()
-            if stripped in tbl3_data:
+            remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
+            if stripped == '':  # Handle the OTHER category
+                remmgrp = ''
+            
+            if stripped in tbl3_data and tbl3_data[stripped] > 0:
                 midyield = tbl3_data[stripped]
-                if midyield > 0:
-                    remmgrp = label.split('.', 1)[1].strip() if '.' in label else label.strip()
-                    f.write(f"{dlm}{remmgrp:24}{dlm}{midyield:7.4f}{dlm}\n")
+                f.write(f" ,{remmgrp},{midyield:.4f},,\n")
+            else:
+                # Write zero rows for missing buckets to match original format
+                f.write(f" ,{remmgrp},0.0000,,\n")
         
+        # Write overall average
         overall_avg = tbl3_data.get('OVERALL', 0)
-        if overall_avg > 0:
-            f.write(f"{dlm}AVERAGE BID-ASK SPREAD ACROSS MATURITIES{dlm}{overall_avg:7.4f}{dlm}\n")
+        f.write(f" ,AVERAGE BID-ASK SPREAD ACROSS MATURITIES,{overall_avg:.4f},,\n")
 
 def main():
     print("=" * 60)
     print("EIIMRNID - EXACT SAS OUTPUT (ISLAMIC VERSION)")
     print("=" * 60)
     
+    # For testing with specific date (uncomment to use)
+    # reptdate = date(2026, 5, 31)
+    # startdte = date(2026, 5, 1)
+    
+    # For production - last day of previous month
     today = date.today()
     reptdate = date(today.year, today.month, 1) - timedelta(days=1)
     startdte = date(reptdate.year, reptdate.month, 1)
@@ -173,20 +197,24 @@ def main():
     df = pl.from_pandas(df_nid).rename({col: col.lower() for col in df_nid.columns})
     print(f"  Original Islamic NID records: {len(df):,}")
     
-    if Path(TRNCH_FILE).exists():
-        df_trnch, _ = pyreadstat.read_sas7bdat(TRNCH_FILE)
-        df_trnch = pl.from_pandas(df_trnch).rename({col: col.lower() for col in df_trnch.columns})
-        df = df.join(df_trnch, on='trancheno', how='left')
-        print("  Merged with Islamic TRNCH")
+    # Optionally merge with TRNCH if needed (commented out as per your requirement)
+    # if Path(TRNCH_FILE).exists():
+    #     df_trnch, _ = pyreadstat.read_sas7bdat(TRNCH_FILE)
+    #     df_trnch = pl.from_pandas(df_trnch).rename({col: col.lower() for col in df_trnch.columns})
+    #     df = df.join(df_trnch, on='trancheno', how='left')
+    #     print("  Merged with Islamic TRNCH")
     
+    # Convert SAS dates to Python dates
     for col in ['matdt', 'startdt', 'early_wddt']:
         if col in df.columns and df[col].dtype in [pl.Int64, pl.Float64]:
             df = df.with_columns(
                 pl.col(col).map_elements(convert_sas_date, return_dtype=pl.Date).alias(col)
             )
     
+    # Filter for positive current balance
     df = df.filter(pl.col('curbal') > 0)
     
+    # Calculate remaining months
     if 'matdt' in df.columns and df['matdt'].dtype == pl.Date:
         df = df.with_columns(
             pl.col('matdt').map_elements(
@@ -311,7 +339,7 @@ def main():
     print(f"✅ Islamic Parquet data saved: {final_parquet_file}")
     print(f"\n📊 Final Summary:")
     print(f"  Total processed records: {len(df):,}")
-    print(f"  Table 1 (Outstanding): {len(tbl1):,} records")
+    print(f"  Table 1 (Outstanding): {len(tbl1) if 'tbl1' in locals() else 0:,} records")
     print(f"  Table 2 (Trading): {nidcnt:,} R-NIDCs, RM {nidvol:,.2f}")
     print(f"  Table 3 (Yield): {overall_yield:.4f}% overall")
     print(f"\n📁 Output folder: {output_path.absolute()}")
