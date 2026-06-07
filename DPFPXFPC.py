@@ -6,6 +6,7 @@ from datetime import date
 import re
 import sys
 import calendar
+import sas7bdat  # Add this import for reading SAS files
 
 # ------------------------------------------------------------
 # 1. REPTDATE CALCULATION
@@ -120,191 +121,129 @@ def extract_elds_date(file_path, file_name):
     
     return None
 
+def extract_elds_date_from_sas(sas_file_path, file_name):
+    """Extract date from SAS dataset metadata or first observation"""
+    try:
+        if not Path(sas_file_path).exists():
+            print(f"Warning: SAS file not found: {sas_file_path}")
+            return None
+            
+        # Try to read the first row to extract date from appropriate column
+        # Assuming there might be a date column like ELDSDT or similar
+        with sas7bdat.SAS7BDAT(sas_file_path) as reader:
+            # Get column names
+            col_names = reader.header.columns
+            print(f"Columns in SAS dataset: {col_names[:10]}...")  # Show first 10 columns
+            
+            # Try to find a date column
+            date_cols = [col for col in col_names if 'DATE' in col.upper() or 'DT' in col.upper()]
+            
+            if date_cols:
+                print(f"Found potential date columns: {date_cols}")
+                # Read first row
+                for i, row in enumerate(reader):
+                    if i == 0:
+                        for date_col in date_cols:
+                            if row[date_col] and isinstance(row[date_col], (date, datetime.datetime)):
+                                print(f"Extracted date from column '{date_col}': {row[date_col]}")
+                                if isinstance(row[date_col], datetime.datetime):
+                                    return row[date_col].date()
+                                return row[date_col]
+                        break
+        
+        # If no date column found, try to get file modification date
+        mod_time = Path(sas_file_path).stat().st_mtime
+        file_date = datetime.datetime.fromtimestamp(mod_time).date()
+        print(f"Using file modification date: {file_date}")
+        return file_date
+            
+    except Exception as e:
+        print(f"Warning: Could not extract date from SAS file {sas_file_path}: {e}")
+    
+    return None
+
 # ------------------------------------------------------------
-# 4. PROCESS ELN1 (From ELDSTXT) - COMPLETE COLUMNS
+# 4. PROCESS ELN1 (From SAS Dataset) - COMPLETE COLUMNS
 # ------------------------------------------------------------
-def process_eln1(file_path):
-    """Process ELN1 from ELDSTXT starting at line 2"""
-    print(f"Processing ELN1 from: {file_path}")
-    lines = []
+def process_eln1_from_sas(file_path):
+    """Process ELN1 from SAS dataset (.sas7bdat)"""
+    print(f"Processing ELN1 from SAS dataset: {file_path}")
     
     try:
-        with open(file_path, 'r', encoding='latin-1') as f:
-            all_lines = f.readlines()
+        # Read SAS dataset directly into polars DataFrame
+        # First read with sas7bdat, then convert to polars
+        rows = []
+        column_names = None
         
-        if len(all_lines) < 2:
-            print(f"Warning: {file_path} has less than 2 lines")
+        with sas7bdat.SAS7BDAT(file_path) as reader:
+            # Get column names
+            column_names = reader.header.columns
+            print(f"Found {len(column_names)} columns in SAS dataset")
+            print(f"Columns: {column_names[:20]}...")  # Show first 20 columns
+            
+            # Read all rows
+            for row in reader:
+                rows.append(row)
+        
+        if not rows:
+            print("No data found in SAS dataset")
             return pl.DataFrame()
-            
-        print(f"Total lines in ELDSTXT: {len(all_lines)}")
         
-        for line_num, line in enumerate(all_lines[1:], 2):
-            line = line.rstrip('\n')
-            if len(line.strip()) == 0:
-                continue
-            
-            # Parse all fields based on positions from sample
-            aano = line[0:13].strip() if len(line) >= 13 else ''
-            faccode = line[13:21].strip() if len(line) >= 21 else ''
-            facili = line[21:31].strip() if len(line) >= 31 else ''
-            bnmeff = line[31:36].strip() if len(line) >= 36 else ''
-            appric = line[36:51].strip() if len(line) >= 51 else ''
-            amtapply_str = line[51:66].strip() if len(line) >= 66 else ''
-            avpric = line[66:81].strip() if len(line) >= 81 else ''
-            pricing = line[81:96].strip() if len(line) >= 96 else ''
-            newic = line[96:106].strip() if len(line) >= 106 else ''
-            cparty = line[106:116].strip() if len(line) >= 116 else ''
-            lntype = line[116:126].strip() if len(line) >= 126 else ''
-            gincome_str = line[126:141].strip() if len(line) >= 141 else ''
-            spaamt_str = line[141:156].strip() if len(line) >= 156 else ''
-            cprelat = line[156:158].strip() if len(line) >= 158 else ''
-            cprelas = line[158:160].strip() if len(line) >= 160 else ''
-            cpstaff = line[160:162].strip() if len(line) >= 162 else ''
-            cpditor = line[162:164].strip() if len(line) >= 164 else ''
-            cpstfid = line[164:166].strip() if len(line) >= 166 else ''
-            cpbrho = line[166:168].strip() if len(line) >= 168 else ''
-            status = line[168:180].strip().upper() if len(line) >= 180 else ''
-            felimit_str = line[180:195].strip() if len(line) >= 195 else ''
-            trlimit_str = line[195:210].strip() if len(line) >= 210 else ''
-            custcode = line[210:212].strip() if len(line) >= 212 else ''
-            sector = line[212:216].strip() if len(line) >= 216 else ''
-            pcodcris = line[216:220].strip() if len(line) >= 220 else ''
-            pcodfiss = line[220:224].strip() if len(line) >= 224 else ''
-            smesize = line[224:226].strip() if len(line) >= 226 else ''
-            noempl_str = line[226:233].strip() if len(line) >= 233 else ''
-            turnover_str = line[233:248].strip() if len(line) >= 248 else ''
-            apvby = line[248:250].strip() if len(line) >= 250 else ''
-            apvby2 = line[250:252].strip() if len(line) >= 252 else ''
-            apvdes1 = line[252:262].strip() if len(line) >= 262 else ''
-            apvdes2 = line[262:272].strip() if len(line) >= 272 else ''
-            reasons = line[272:282].strip() if len(line) >= 282 else ''
-            icreason = line[282:292].strip() if len(line) >= 292 else ''
-            smename1 = line[292:312].strip() if len(line) >= 312 else ''
-            smename2 = line[312:332].strip() if len(line) >= 332 else ''
-            tranbr = line[332:334].strip() if len(line) >= 334 else ''
-            tranbrno = line[334:336].strip() if len(line) >= 336 else ''
-            tranreg = line[336:338].strip() if len(line) >= 338 else ''
-            advances_str = line[338:353].strip() if len(line) >= 353 else ''
-            product = line[353:363].strip() if len(line) >= 363 else ''
-            state = line[363:365].strip() if len(line) >= 365 else ''
-            exstlmt_str = line[365:380].strip() if len(line) >= 380 else ''
-            greentco = line[380:382].strip() if len(line) >= 382 else ''
-            biotco = line[382:384].strip() if len(line) >= 384 else ''
-            smeip = line[384:386].strip() if len(line) >= 386 else ''
-            sme1incr = line[386:388].strip() if len(line) >= 388 else ''
-            smemsc = line[388:390].strip() if len(line) >= 390 else ''
-            strupco_2yr = line[390:392].strip() if len(line) >= 392 else ''
-            ctry_incorp = line[392:402].strip() if len(line) >= 402 else ''
-            strupco_3yr = line[402:404].strip() if len(line) >= 404 else ''
-            name = line[404:444].strip() if len(line) >= 444 else ''
-            ln_utilise_locat_cd = line[444:446].strip() if len(line) >= 446 else ''
-            new_buss_reg_id = line[446:448].strip() if len(line) >= 448 else ''
-            climate_prin_taxonomy_class = line[448:450].strip() if len(line) >= 450 else ''
-            source_income_currency_cd = line[450:453].strip() if len(line) >= 453 else ''
-            grp_annl_sales_financial_dt = line[453:461].strip() if len(line) >= 461 else ''
-            grp_annl_sales_amt_str = line[461:476].strip() if len(line) >= 476 else ''
-            
-            # Parse numeric fields
-            def parse_numeric(val_str):
-                if val_str:
-                    try:
-                        return float(val_str.replace(',', '').replace(' ', ''))
-                    except:
-                        return None
-                return None
-            
-            amtapply = parse_numeric(amtapply_str)
-            gincome = parse_numeric(gincome_str)
-            spaamt = parse_numeric(spaamt_str)
-            felimit = parse_numeric(felimit_str)
-            trlimit = parse_numeric(trlimit_str)
-            noempl = parse_numeric(noempl_str)
-            turnover = parse_numeric(turnover_str)
-            advances = parse_numeric(advances_str)
-            exstlmt = parse_numeric(exstlmt_str)
-            grp_annl_sales_amt = parse_numeric(grp_annl_sales_amt_str)
-            
-            lines.append({
-                'AANO': aano,
-                'FACCODE': faccode,
-                'FACILI': facili,
-                'BNMEFF': bnmeff,
-                'APPRIC': appric,
-                'AMTAPPLY': amtapply,
-                'AVPRIC': avpric,
-                'PRICING': pricing,
-                'NEWIC': newic,
-                'CPARTY': cparty,
-                'LNTYPE': lntype,
-                'GINCOME': gincome,
-                'SPAAMT': spaamt,
-                'CPRELAT': cprelat,
-                'CPRELAS': cprelas,
-                'CPSTAFF': cpstaff,
-                'CPDITOR': cpditor,
-                'CPSTFID': cpstfid,
-                'CPBRHO': cpbrho,
-                'STATUS': status,
-                'FELIMIT': felimit,
-                'TRLIMIT': trlimit,
-                'CUSTCODE': custcode,
-                'SECTOR': sector,
-                'PCODCRIS': pcodcris,
-                'PCODFISS': pcodfiss,
-                'SMESIZE': smesize,
-                'NOEMPL': noempl,
-                'TURNOVER': turnover,
-                'APVBY': apvby,
-                'APVBY2': apvby2,
-                'APVDES1': apvdes1,
-                'APVDES2': apvdes2,
-                'REASONS': reasons,
-                'ICREASON': icreason,
-                'SMENAME1': smename1,
-                'SMENAME2': smename2,
-                'TRANBR': tranbr,
-                'TRANBRNO': tranbrno,
-                'TRANREG': tranreg,
-                'ADVANCES': advances,
-                'PRODUCT': product,
-                'STATE': state,
-                'EXSTLMT': exstlmt,
-                'GREENTCO': greentco,
-                'BIOTCO': biotco,
-                'SMEIP': smeip,
-                'SME1INCR': sme1incr,
-                'SMEMSC': smemsc,
-                'STRUPCO_2YR': strupco_2yr,
-                'CTRY_INCORP': ctry_incorp,
-                'STRUPCO_3YR': strupco_3yr,
-                'NAME': name,
-                'LN_UTILISE_LOCAT_CD': ln_utilise_locat_cd,
-                'NEW_BUSS_REG_ID': new_buss_reg_id,
-                'CLIMATE_PRIN_TAXONOMY_CLASS': climate_prin_taxonomy_class,
-                'SOURCE_INCOME_CURRENCY_CD': source_income_currency_cd,
-                'GRP_ANNL_SALES_FINANCIAL_DT': grp_annl_sales_financial_dt,
-                'GRP_ANNL_SALES_AMT': grp_annl_sales_amt,
-                'AMOUNT': amtapply  # Initialize AMOUNT with AMTAPPLY
-            })
-            
-            if line_num % 1000 == 0:
-                print(f"  Processed {line_num} lines...")
-    
-    except FileNotFoundError:
-        print(f"ERROR: ELDSTXT file not found at {file_path}")
-        return pl.DataFrame()
+        # Convert to polars DataFrame
+        df = pl.DataFrame(rows)
+        print(f"Loaded {len(df)} records from SAS dataset")
+        
+        # Map SAS column names to expected column names if needed
+        # You may need to adjust this mapping based on actual SAS column names
+        column_mapping = {
+            # Add mappings if SAS column names are different
+            # Example: 'AANO_OLD': 'AANO'
+        }
+        
+        if column_mapping:
+            df = df.rename(column_mapping)
+        
+        # Ensure all expected columns exist (create missing ones as null)
+        expected_columns = [
+            'AANO', 'FACCODE', 'FACILI', 'BNMEFF', 'APPRIC', 'AMTAPPLY', 'AVPRIC', 'PRICING',
+            'NEWIC', 'CPARTY', 'LNTYPE', 'GINCOME', 'SPAAMT', 'CPRELAT', 'CPRELAS', 'CPSTAFF',
+            'CPDITOR', 'CPSTFID', 'CPBRHO', 'STATUS', 'FELIMIT', 'TRLIMIT', 'CUSTCODE', 'SECTOR',
+            'PCODCRIS', 'PCODFISS', 'SMESIZE', 'NOEMPL', 'TURNOVER', 'APVBY', 'APVBY2', 'APVDES1',
+            'APVDES2', 'REASONS', 'ICREASON', 'SMENAME1', 'SMENAME2', 'TRANBR', 'TRANBRNO', 'TRANREG',
+            'ADVANCES', 'PRODUCT', 'STATE', 'EXSTLMT', 'GREENTCO', 'BIOTCO', 'SMEIP', 'SME1INCR',
+            'SMEMSC', 'STRUPCO_2YR', 'CTRY_INCORP', 'STRUPCO_3YR', 'NAME', 'LN_UTILISE_LOCAT_CD',
+            'NEW_BUSS_REG_ID', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'SOURCE_INCOME_CURRENCY_CD',
+            'GRP_ANNL_SALES_FINANCIAL_DT', 'GRP_ANNL_SALES_AMT'
+        ]
+        
+        for col in expected_columns:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None).alias(col))
+        
+        # Ensure AMOUNT column is initialized
+        if 'AMOUNT' not in df.columns and 'AMTAPPLY' in df.columns:
+            df = df.with_columns(pl.col('AMTAPPLY').alias('AMOUNT'))
+        
+        print(f"ELN1 records processed from SAS: {len(df)}")
+        
+        # Clean numeric fields
+        numeric_fields = ['AMTAPPLY', 'GINCOME', 'SPAAMT', 'FELIMIT', 'TRLIMIT', 
+                         'NOEMPL', 'TURNOVER', 'ADVANCES', 'EXSTLMT', 'GRP_ANNL_SALES_AMT']
+        
+        for field in numeric_fields:
+            if field in df.columns:
+                # Convert to float, handling any string/numeric issues
+                df = df.with_columns(
+                    pl.col(field).cast(pl.Float64, strict=False).alias(field)
+                )
+        
+        return df
+        
     except Exception as e:
-        print(f"ERROR processing ELN1: {e}")
+        print(f"ERROR processing ELN1 from SAS: {e}")
         import traceback
         traceback.print_exc()
         return pl.DataFrame()
-    
-    print(f"ELN1 records processed: {len(lines)}")
-    
-    if not lines:
-        return pl.DataFrame()
-    
-    return pl.DataFrame(lines)
 
 # ------------------------------------------------------------
 # 5. PROCESS ELN2 (From ELDSTX2) - COMPLETE COLUMNS
@@ -426,8 +365,8 @@ def process_loan_reports():
     
     print(f"Processing for period: {REPTMON}/{REPTYEAR}, Week: {NOWK}")
     
-    # Define file paths
-    eldstxt_path = Path("/stgsrcsys/host/uat/ELDSTXT.txt")
+    # Define file paths - CHANGED: ELDSTXT is now SAS dataset
+    eldstxt_path = Path("/stgsrcsys/host/uat/ELDSTXT.sas7bdat")  # Changed to .sas7bdat
     eldstx2_path = Path("/stgsrcsys/host/uat/BNMSIBC2.TXT")
     brh_path = Path("/sasdata/rawdata/lookup/LKP_BRANCH")
     
@@ -450,19 +389,19 @@ def process_loan_reports():
     # Extract dates from ELDS files
     print("\n" + "-" * 60)
     print("Extracting ELDS dates...")
-    ELDSDT1 = extract_elds_date(eldstxt_path, "ELDSTXT")
+    ELDSDT1 = extract_elds_date_from_sas(eldstxt_path, "ELDSTXT (SAS)")
     ELDSDT2 = extract_elds_date(eldstx2_path, "ELDSTX2")
     
-    print(f"ELDSDT1: {ELDSDT1}")
+    print(f"ELDSDT1 (from SAS): {ELDSDT1}")
     print(f"ELDSDT2: {ELDSDT2}")
     
     # Process BRH
     print("\n" + "-" * 60)
     brh_df = process_brh(brh_path)
     
-    # Process ELN1 and ELN2
+    # Process ELN1 from SAS and ELN2 from text
     print("\n" + "-" * 60)
-    eln1_df = process_eln1(eldstxt_path)
+    eln1_df = process_eln1_from_sas(eldstxt_path)
     
     print("\n" + "-" * 60)
     eln2_df = process_eln2(eldstx2_path)
@@ -494,10 +433,8 @@ def process_loan_reports():
     sibc_df = sibc_df.unique(subset=['AANO', 'STATUS'])
     print(f"After deduplication: {len(sibc_df)} records")
     
-    # Merge with BRH data if needed (BRANCH column from ELN2 might already have branch info)
-    # Only merge if BRANCH column is missing or needs mapping
+    # Merge with BRH data if needed
     if not brh_df.is_empty() and 'BRANCH' in sibc_df.columns:
-        # If BRANCH exists but we need to map from BRCD, we would do that here
         pass
     
     # Reorder columns to match sample output
@@ -529,7 +466,7 @@ def process_loan_reports():
     output_dir = script_dir / "Output"
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save to CSV (matching sample format)
+    # Save to CSV
     csv_path = output_dir / f"{output_name}.csv"
     sibc_df.write_csv(csv_path)
     print(f"✓ Saved CSV file: {csv_path}")
@@ -546,7 +483,7 @@ def process_loan_reports():
         f.write(f"{'=' * 40}\n")
         f.write(f"Processing Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Report Period: {REPTMON}/{REPTYEAR}, Week: {NOWK}\n")
-        f.write(f"ELDSDT1: {ELDSDT1}\n")
+        f.write(f"ELDSDT1 (from SAS): {ELDSDT1}\n")
         f.write(f"ELDSDT2: {ELDSDT2}\n")
         f.write(f"Final Records: {len(sibc_df)}\n")
         f.write(f"Output Files:\n")
@@ -569,7 +506,7 @@ if __name__ == "__main__":
             print("PROCESSING COMPLETE!")
             print("=" * 60)
             print(f"\nFinal dataset has {len(result)} records")
-            print(f"\nColumns ({len(result.columns)}): {result.columns[:20]}...")  # Show first 20 columns
+            print(f"\nColumns ({len(result.columns)}): {result.columns[:20]}...")
             print("\nSample data:")
             print(result.head(5))
         else:
