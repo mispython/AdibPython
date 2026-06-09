@@ -1,123 +1,3 @@
-Skip to content
-mispython
-AdibPython
-Repository navigation
-Code
-Issues
-Pull requests
-Agents
-Actions
-Projects
-Security and quality
-Insights
-Settings
-Files
-Go to file
-t
-T
-DPFPXFPC.py
-EIBDBKTR
-EIBDBKTR.py
-EIBDBTEX
-EIBDBTEX.py
-EIBDDCIA
-EIBDDCIA.py
-EIBDFDHQ
-EIBDFDHQ.py
-EIBDWALK
-EIBDWALK.py
-EIBMCCR8
-EIBMCCR8.py
-EIBMFEEX
-EIBMFEEX.py
-EIBMSTAF
-EIBMSTAF.py
-EIBWBTEX
-EIBWBTEX.py
-EIBWBTMS
-EIBWBTMS.py
-EIBWBTRD
-EIBWBTRD.py
-EIBWCC5L
-EIBWCC5L.py
-EIBWCCR6
-EIBWCCR6.py
-EIBWCCR7
-EIBWCCR7.py
-EIIWBTCR
-EIIWBTCR.py
-EIIWCC5C
-EIIWCC5C.py
-EIIWCC5L
-EIIWCC5L.py
-EIIWCCR4
-EIIWCCR4.py
-EIIWCCR5
-EIIWCCR5.py
-EIIWCCR6
-EIIWCCR6.py
-EIVMSTAF
-EIVMSTAF.py
-FTPBTWHS
-Python-THORIQ.zip
-activity list
-activitylist 1
-excel
-AdibPython
-/
-DPFPXFPC.py
-in
-main
-
-Edit
-
-Preview
-Indent mode
-
-Spaces
-Indent size
-
-2
-Line wrap mode
-
-No wrap
-Editing DPFPXFPC.py file contents
-  1
-  2
-  3
-  4
-  5
-  6
-  7
-  8
-  9
- 10
- 11
- 12
- 13
- 14
- 15
- 16
- 17
- 18
- 19
- 20
- 21
- 22
- 23
- 24
- 25
- 26
- 27
- 28
- 29
- 30
- 31
- 32
- 33
- 34
- 35
- 36
 from __future__ import annotations
 from pathlib import Path
 from datetime import date, timedelta
@@ -146,12 +26,176 @@ if not DPAA_TXT.exists():
 
 print(f"Reading from text file: {DPAA_TXT}")
 
-# Try different delimiters
-delimiters_to_try = ['\t', '|', ',', ' ']
+# First, let's examine the raw file to understand its structure
+print("\n--- Examining first few lines of the file ---")
+with open(DPAA_TXT, 'r') as f:
+    for i, line in enumerate(f):
+        if i < 5:  # Show first 5 lines
+            print(f"Line {i+1}: {line[:200]}...")  # First 200 chars
+            print(f"  Length: {len(line)}")
+            print(f"  Contains tab: {'\\t' in line}")
+            print(f"  Contains pipe: {'|' in line}")
+            print(f"  Contains comma: {',' in line}")
+            print(f"  Contains semicolon: {';' in line}")
+        else:
+            break
+
+print("\n--- Trying to read the file ---")
+
+# Try reading with different approaches
 df = None
 
-for delimiter in delimiters_to_try:
+# Approach 1: Let Polars auto-detect everything
+print("\nApproach 1: Auto-detection")
+try:
+    df = pl.read_csv(
+        DPAA_TXT,
+        has_header=True,  # Assume first row is header
+        try_parse_dates=True
+    )
+    print(f"  Auto-detection: {df.height} rows, {df.width} columns")
+    if df.height > 0:
+        print(f"  First row sample: {df.row(0)[:5]}")
+except Exception as e:
+    print(f"  Auto-detection failed: {e}")
+
+# Approach 2: Read as raw text to see structure
+print("\nApproach 2: Reading as raw text to understand structure")
+try:
+    # Read the file as lines
+    with open(DPAA_TXT, 'r') as f:
+        lines = f.readlines()
+    
+    print(f"  Total lines in file: {len(lines)}")
+    if len(lines) > 1:
+        # Check the header line
+        header = lines[0].strip()
+        print(f"  Header line: {header[:200]}")
+        
+        # Try to detect delimiter by counting common delimiters in header
+        delimiters = {'tab': '\t', 'pipe': '|', 'comma': ',', 'semicolon': ';', 'space': ' '}
+        delimiter_counts = {}
+        
+        for name, delim in delimiters.items():
+            count = header.count(delim)
+            delimiter_counts[name] = count
+            if count > 0:
+                print(f"    {name} count: {count}")
+        
+        # Use the most common delimiter
+        best_delimiter = max(delimiter_counts.items(), key=lambda x: x[1])
+        if best_delimiter[1] > 0:
+            print(f"\n  Using delimiter: {best_delimiter[0]} ('{delimiters[best_delimiter[0]]}')")
+            df = pl.read_csv(
+                DPAA_TXT,
+                separator=delimiters[best_delimiter[0]],
+                has_header=True,
+                try_parse_dates=True
+            )
+            print(f"  Result: {df.height} rows, {df.width} columns")
+            if df.height > 0:
+                print(f"  First row sample: {df.row(0)[:5]}")
+except Exception as e:
+    print(f"  Raw read approach failed: {e}")
+
+# Approach 3: Read without header first, then assign
+if df is None or df.height == 0:
+    print("\nApproach 3: Read without header")
     try:
-        print(f"  Trying delimiter: '{delimiter}'")
-        df = pl.read_csv(
-Use Control + Shift + m to toggle the tab key moving focus. Alternatively, use esc then tab to move to the next interactive element on the page.
+        # Read all lines as data
+        df_no_header = pl.read_csv(
+            DPAA_TXT,
+            has_header=False,
+            try_parse_dates=True
+        )
+        print(f"  No header: {df_no_header.height} rows, {df_no_header.width} columns")
+        
+        if df_no_header.height > 1:
+            # First row might be header
+            df = df_no_header.slice(1)  # Skip first row
+            # Use first row as column names
+            new_columns = [str(col) for col in df_no_header.row(0)]
+            df = df.rename({old: new for old, new in zip(df.columns, new_columns)})
+            print(f"  After assigning header: {df.height} rows, {df.width} columns")
+    except Exception as e:
+        print(f"  No-header approach failed: {e}")
+
+if df is None or df.height == 0:
+    raise ValueError("Could not read any data from the text file")
+
+print(f"\n--- Successfully read {df.height} rows with {df.width} columns ---")
+print(f"Column names: {df.columns[:10]}...")
+
+# Check for missing required columns and add them as nulls
+miss = [c for c in req if c not in df.columns]
+if miss:
+    print(f"\nAdding missing columns: {miss}")
+    df = df.with_columns([pl.lit(None).alias(c) for c in miss])
+
+# Select only required columns that exist
+available_req = [c for c in req if c in df.columns]
+LMTDET_LMTDET = df.select(available_req)
+
+print(f"\nSelected {len(available_req)} columns for output")
+print(f"Output shape: {LMTDET_LMTDET.height} rows × {LMTDET_LMTDET.width} columns")
+
+# Verify data exists before writing
+if LMTDET_LMTDET.height == 0:
+    print("\nWARNING: No data rows found! The CSV file will only have headers.")
+    print("First few rows of raw data:")
+    with open(DPAA_TXT, 'r') as f:
+        for i, line in enumerate(f):
+            if i < 10:
+                print(f"  Row {i}: {line[:100]}")
+            else:
+                break
+
+# Write to both Parquet and CSV in output directory
+parquet_path = OUTPUT_DIR / "LMTDET.parquet"
+csv_path = OUTPUT_DIR / "LMTDET.csv"
+
+LMTDET_LMTDET.write_parquet(parquet_path)
+LMTDET_LMTDET.write_csv(csv_path)
+
+print(f"\nWritten to Parquet: {parquet_path} ({LMTDET_LMTDET.height} rows)")
+print(f"Written to CSV: {csv_path} ({LMTDET_LMTDET.height} rows)")
+
+# Show a sample of the output data
+if LMTDET_LMTDET.height > 0:
+    print("\n--- Sample of output data (first 3 rows) ---")
+    print(LMTDET_LMTDET.head(3))
+
+# ---------- 2) DATA LMTDET.REPTDATE ----------
+today = date.today()
+REPTDATE = today - timedelta(days=1)
+YYYY = f"{REPTDATE.year:04d}"
+MM   = f"{REPTDATE.month:02d}"
+DD   = f"{REPTDATE.day:02d}"
+DAY1 = date(REPTDATE.year, 1, 1)
+DAYS = (today - DAY1).days
+TEMPDATE = f"{MM}{DD}{YYYY}{DAYS}"
+EXTDATE = int(TEMPDATE)
+
+reptdate_df = pl.DataFrame({"EXTDATE":[EXTDATE], "REPTDATE":[REPTDATE]})
+
+# Write REPTDATE to both Parquet and CSV
+reptdate_parquet_path = OUTPUT_DIR / "REPTDATE.parquet"
+reptdate_csv_path = OUTPUT_DIR / "REPTDATE.csv"
+
+reptdate_df.write_parquet(reptdate_parquet_path)
+reptdate_df.write_csv(reptdate_csv_path)
+
+print(f"\nWritten REPTDATE to Parquet: {reptdate_parquet_path}")
+print(f"Written REPTDATE to CSV: {reptdate_csv_path}")
+
+print("\n" + "="*50)
+print("DONE - All outputs generated:")
+print("="*50)
+print(f"\nOutput directory: {OUTPUT_DIR}")
+print(f"\nFiles created:")
+print(f"  • {parquet_path}")
+print(f"  • {csv_path}")
+print(f"  • {reptdate_parquet_path}")
+print(f"  • {reptdate_csv_path}")
+print(f"\nREPTDATE: {REPTDATE}")
+print(f"EXTDATE: {EXTDATE}")
