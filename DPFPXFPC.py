@@ -33,10 +33,15 @@ with open(DPAA_TXT, 'r') as f:
         if i < 5:  # Show first 5 lines
             print(f"Line {i+1}: {line[:200]}...")  # First 200 chars
             print(f"  Length: {len(line)}")
-            print(f"  Contains tab: {'\\t' in line}")
-            print(f"  Contains pipe: {'|' in line}")
-            print(f"  Contains comma: {',' in line}")
-            print(f"  Contains semicolon: {';' in line}")
+            # Check for special characters without using backslash in f-string
+            has_tab = '\t' in line
+            has_pipe = '|' in line
+            has_comma = ',' in line
+            has_semicolon = ';' in line
+            print(f"  Contains tab: {has_tab}")
+            print(f"  Contains pipe: {has_pipe}")
+            print(f"  Contains comma: {has_comma}")
+            print(f"  Contains semicolon: {has_semicolon}")
         else:
             break
 
@@ -85,10 +90,11 @@ try:
         # Use the most common delimiter
         best_delimiter = max(delimiter_counts.items(), key=lambda x: x[1])
         if best_delimiter[1] > 0:
-            print(f"\n  Using delimiter: {best_delimiter[0]} ('{delimiters[best_delimiter[0]]}')")
+            delim_char = delimiters[best_delimiter[0]]
+            print(f"\n  Using delimiter: {best_delimiter[0]} ('{delim_char}')")
             df = pl.read_csv(
                 DPAA_TXT,
-                separator=delimiters[best_delimiter[0]],
+                separator=delim_char,
                 has_header=True,
                 try_parse_dates=True
             )
