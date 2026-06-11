@@ -2,14 +2,14 @@
 # JOB NAME : EIBMBTAT (Python version)
 # DESC     : Average Original Tenure for BA Primary Rediscounted
 # INPUT    : SAS7BDAT (SAS dataset)
-# OUTPUT   : Parquet + CSV
+# OUTPUT   : Parquet + CSV + Report
 # ============================================================
 
 import pandas as pd
-import sas7bdat  # Requires: pip install sas7bdat
+import sas7bdat
 from datetime import datetime
-import glob
 import os
+import sys
 
 # ============================================================
 # 1. LOAD REPORT DATE (FROM LOAN.REPTDATE)
@@ -23,30 +23,34 @@ def load_sas(path):
 
 # SAS input paths (replace with real paths)
 LOAN_REPTDATE_SAS = "LOAN_REPTDATE.sas7bdat"
-BTRWH_BASE_PATH   = "BTRWH_BTRAD"   # base name only
+BTRWH_BASE_PATH   = "BTRWH_BTRAD"
 
 rept_df = load_sas(LOAN_REPTDATE_SAS)
 
 # Assume single-row dataset like SAS
 REPTDATE = pd.to_datetime(rept_df.iloc[0]["REPTDATE"])
 
+# SELECT(DAY(REPTDATE)) logic
 day = REPTDATE.day
 if day == 8:
-    NOWK = "1"
+    NOWK = '1'
 elif day == 15:
-    NOWK = "2"
+    NOWK = '2'
 elif day == 22:
-    NOWK = "3"
+    NOWK = '3'
 else:
-    NOWK = "4"
+    NOWK = '4'
 
-REPTYEAR = REPTDATE.strftime("%y")
-REPTMON  = REPTDATE.strftime("%m")
-RDATE    = REPTDATE.strftime("%d/%m/%Y")
+REPTYEAR = REPTDATE.strftime("%y")  # YEAR2. format in SAS (2-digit year)
+REPTMON  = REPTDATE.strftime("%m")  # Z2. format (leading zero)
+RDATE    = REPTDATE.strftime("%d/%m/%Y")  # DDMMYY10. format
+
+print(f"Report Date: {RDATE}")
+print(f"Period: {REPTMON}/{NOWK}/{REPTYEAR}")
+print("="*60)
 
 # ============================================================
 # 2. LOAD BTRAD DATASET (DYNAMIC NAME)
-# SAS: BTRWH.BTRAD&REPTMON&NOWK&REPTYEAR
 # ============================================================
 
 btrad_sas = f"{BTRWH_BASE_PATH}{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
@@ -59,15 +63,17 @@ btrad = load_sas(btrad_sas)
 
 # ============================================================
 # 3. FILTER DATA (SAS WHERE CLAUSE)
+# Note: Preserving duplicate '34470' as in original SAS
 # ============================================================
 
 FACILITY_LIST = [
-    "34411", "34412", "34421", "34422",
-    "34440", "34470", "34480", "34490"
+    '34411', '34412', '34421', '34422', '34440', '34470',
+    '34470', '34480', '34490'  # Duplicate preserved from original
 ]
 
-LIABCODE_LIST = ["BAE", "BAI", "BAP", "BAS"]
+LIABCODE_LIST = ['BAE', 'BAI', 'BAP', 'BAS']
 
+# Apply filters
 btrad = btrad[
     (btrad["FACILITY"].isin(FACILITY_LIST)) &
     (btrad["LIABCODE"].isin(LIABCODE_LIST)) &
@@ -79,21 +85,32 @@ print(f"Records after filtering: {len(btrad):,}")
 
 # ============================================================
 # 4. CALCULATE TENURE & TOTAMT
+# SAS: TENURE = (MATDATE-ISSDTE)+1
 # ============================================================
 
 btrad["ISSDTE"]  = pd.to_datetime(btrad["ISSDTE"])
 btrad["MATDATE"] = pd.to_datetime(btrad["MATDATE"])
 
+# Calculate tenure in days (difference + 1)
 btrad["TENURE"] = (btrad["MATDATE"] - btrad["ISSDTE"]).dt.days + 1
 btrad["TOTAMT"] = btrad["FCVALUE"] * btrad["TENURE"]
 
+# Keep only necessary columns (matching SAS KEEP statement)
 btrad = btrad[
-    ["BRANCH", "ACCTNOX", "TRANSREF", "FCVALUE",
+    ["BRANCH", "ACCTNOX", "TRANSREF", "FCVALUE", 
      "MATDATE", "ISSDTE", "TENURE", "TOTAMT"]
 ]
 
 # ============================================================
-# 5. AGGREGATE (PROC SUMMARY)
+# 5. SORT BY BRANCH (equivalent to PROC SORT)
+# ============================================================
+
+btrad = btrad.sort_values("BRANCH")
+
+# ============================================================
+# 6. PROC SUMMARY (BY BRANCH, SUM of FCVALUE and TOTAMT)
+# SAS: PROC SUMMARY DATA=BTRAD NWAY; BY BRANCH; VAR FCVALUE TOTAMT;
+#      OUTPUT OUT=AVGTENURE(DROP=_FREQ_ _TYPE_) SUM=;
 # ============================================================
 
 avgt = (
@@ -106,79 +123,126 @@ avgt = (
 )
 
 # ============================================================
-# 6. CALCULATE AVERAGE TENURE
+# 7. CALCULATE TENURE (SAS DATA step after PROC SUMMARY)
 # ============================================================
 
 avgt["TENURE"] = avgt["TOTAMT"] / avgt["FCVALUE"]
 
-# Round to 2 decimal places (optional, like SAS)
+# Format as 8. (SAS format 8. with 2 decimals default)
 avgt["TENURE"] = avgt["TENURE"].round(2)
 
 # ============================================================
-# 7. ADD REPORT METADATA (OPTIONAL BUT USEFUL)
+# 8. GENERATE PROC REPORT OUTPUT (Console/Text report)
 # ============================================================
 
-avgt["REPORT_ID"]   = "EIBMBTAT"
-avgt["REPORT_DATE"] = RDATE
-avgt["REPTMON"]     = REPTMON
-avgt["NOWK"]        = NOWK
-avgt["REPTYEAR"]    = REPTYEAR
+print("\n" + "="*86)
+print(" P U B L I C   B A N K   B E R H A D".center(86))
+print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
+print("="*86)
+print(f" REPORT ID    : EIBMBTAT".center(86))
+print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
+print(f" REPORT DATE  : {RDATE}".center(86))
+print("="*86)
 
-# Reorder columns for better readability
-avgt = avgt[[
-    "BRANCH", "FCVALUE", "TOTAMT", "TENURE",
-    "REPORT_ID", "REPORT_DATE", "REPTMON", "NOWK", "REPTYEAR"
-]]
+# Create the report dataframe with formatted columns
+report_df = avgt.copy()
+report_df["TOTAMT"] = report_df["TOTAMT"].apply(lambda x: f"{x:,.2f}")
+report_df["FCVALUE"] = report_df["FCVALUE"].apply(lambda x: f"{x:,.2f}")
+report_df["TENURE"] = report_df["TENURE"].apply(lambda x: f"{x:.2f}")
+
+# Print header
+print(f"{'BRANCH':<10} {'TOTAL AMOUNT (RM)':<30} {'BALANCE (RM)':<20} {'AVG TENURE (DAY)':<20}")
+print("-"*86)
+
+# Print each row
+for _, row in report_df.iterrows():
+    print(f"{row['BRANCH']:<10} {row['TOTAMT']:<30} {row['FCVALUE']:<20} {row['TENURE']:<20}")
+
+# Calculate totals and overall average
+total_totamt = avgt["TOTAMT"].sum()
+total_fcvalue = avgt["FCVALUE"].sum()
+overall_avg_tenure = total_totamt / total_fcvalue
+
+# Print footer (RBREAK AFTER)
+print("-"*86)
+print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':<10} {overall_avg_tenure:>9.2f}")
+print("="*86)
 
 # ============================================================
-# 8. WRITE OUTPUT AS PARQUET AND CSV
+# 9. SAVE OUTPUT DATASETS (Parquet and CSV)
 # ============================================================
 
-# Create output directory if it doesn't exist
+# Create output directory
 OUTPUT_DIR = "output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Output filenames with timestamp
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+# Output filenames
 base_filename = f"EIBMBTAT_AVGTENURE_{REPTMON}{NOWK}{REPTYEAR}"
-
 OUTPUT_PARQUET = os.path.join(OUTPUT_DIR, f"{base_filename}.parquet")
 OUTPUT_CSV = os.path.join(OUTPUT_DIR, f"{base_filename}.csv")
 
-# Save as Parquet (recommended)
-avgt.to_parquet(
+# Save dataset (same as SAS dataset AVGTENURE)
+avgt_output = avgt[["BRANCH", "TOTAMT", "FCVALUE", "TENURE"]].copy()
+avgt_output["REPORT_DATE"] = RDATE
+avgt_output["REPTMON"] = REPTMON
+avgt_output["NOWK"] = NOWK
+avgt_output["REPTYEAR"] = REPTYEAR
+
+# Save as Parquet
+avgt_output.to_parquet(
     OUTPUT_PARQUET,
     engine="pyarrow",
     compression="snappy",
     index=False
 )
-print(f"Parquet output saved to: {OUTPUT_PARQUET}")
+print(f"\nDataset saved to Parquet: {OUTPUT_PARQUET}")
 
-# Save as CSV (optional, for compatibility)
-avgt.to_csv(
+# Save as CSV
+avgt_output.to_csv(
     OUTPUT_CSV,
     index=False,
     encoding='utf-8'
 )
-print(f"CSV output saved to: {OUTPUT_CSV}")
+print(f"Dataset saved to CSV: {OUTPUT_CSV}")
 
 # ============================================================
-# 9. DISPLAY SUMMARY STATISTICS
+# 10. OPTIONAL: Save the report as text file
 # ============================================================
 
-print("\n" + "="*60)
-print("JOB SUMMARY")
-print("="*60)
-print(f"Report Date: {RDATE}")
-print(f"Period: {REPTMON}/{NOWK}/{REPTYEAR}")
-print(f"Total Branches: {len(avgt):,}")
-print(f"Total FCVALUE: {avgt['FCVALUE'].sum():,.2f}")
-print(f"Overall Average Tenure: {(avgt['TOTAMT'].sum() / avgt['FCVALUE'].sum()):.2f} days")
-print("\nTop 10 Branches by Average Tenure:")
-print(avgt.nlargest(10, "TENURE")[["BRANCH", "TENURE", "FCVALUE"]].to_string(index=False))
-print("="*60)
+report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
+with open(report_txt, 'w') as f:
+    # Redirect print output to file (simpler approach)
+    original_stdout = sys.stdout
+    sys.stdout = f
+    
+    print("="*86)
+    print(" P U B L I C   B A N K   B E R H A D".center(86))
+    print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
+    print("="*86)
+    print(f" REPORT ID    : EIBMBTAT".center(86))
+    print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
+    print(f" REPORT DATE  : {RDATE}".center(86))
+    print("="*86)
+    print(f"{'BRANCH':<10} {'TOTAL AMOUNT (RM)':<30} {'BALANCE (RM)':<20} {'AVG TENURE (DAY)':<20}")
+    print("-"*86)
+    
+    for _, row in report_df.iterrows():
+        print(f"{row['BRANCH']:<10} {row['TOTAMT']:<30} {row['FCVALUE']:<20} {row['TENURE']:<20}")
+    
+    print("-"*86)
+    print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':<10} {overall_avg_tenure:>9.2f}")
+    print("="*86)
+    
+    sys.stdout = original_stdout
+
+print(f"Report saved to text file: {report_txt}")
 
 # ============================================================
 # END OF JOB
 # ============================================================
-print("\nEIBMBTAT job completed successfully (SAS7BDAT → Parquet + CSV).")
+print("\n" + "="*60)
+print("EIBMBTAT job completed successfully")
+print(f"  - Processed {len(btrad):,} records")
+print(f"  - Generated {len(avgt):,} branch summaries")
+print(f"  - Overall average tenure: {overall_avg_tenure:.2f} days")
+print("="*60)
