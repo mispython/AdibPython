@@ -1,130 +1,70 @@
-# ============================================================
-# JOB NAME : EIBMBTAT (Python version)
-# DESC     : Average Original Tenure for BA Primary Rediscounted
-# INPUT    : Binary (pickle)
-# OUTPUT   : Parquet
-# ============================================================
+DATA REPTDATE;
+   SET LOAN.REPTDATE;
+   SELECT(DAY(REPTDATE));
+      WHEN(8)   CALL SYMPUT('NOWK', PUT('1', $1.));
+      WHEN(15)  CALL SYMPUT('NOWK', PUT('2', $1.));
+      WHEN(22)  CALL SYMPUT('NOWK', PUT('3', $1.));
+      OTHERWISE CALL SYMPUT('NOWK', PUT('4', $1.));
+   END;
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY10.));
+RUN;
 
-import pandas as pd
-import pickle
-from datetime import datetime
+DATA BTRAD;
+   SET BTRWH.BTRAD&REPTMON&NOWK&REPTYEAR;
+   WHERE FACILITY IN ('34411','34412','34421','34422','34440','34470'
+                      '34470','34480','34490') AND
+         LIABCODE IN ('BAE','BAI','BAP','BAS') AND
+         UTRDF EQ 'D' AND BALANCE GT 0;
+   KEEP BRANCH ACCTNOX TRANSREF FCVALUE MATDATE ISSDTE TENURE TOTAMT;
+   FORMAT TENURE   12.;
+   TENURE = (MATDATE-ISSDTE)+1;
+   TOTAMT = FCVALUE*TENURE;
+RUN;
 
-# ============================================================
-# 1. LOAD REPORT DATE (FROM LOAN.REPTDATE)
-# ============================================================
+PROC SORT DATA=BTRAD; BY BRANCH; RUN;
 
-def load_binary(path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
+PROC SUMMARY DATA=BTRAD NWAY;
+   BY BRANCH;
+   VAR FCVALUE TOTAMT;
+   OUTPUT OUT=AVGTENURE(DROP=_FREQ_ _TYPE_) SUM=;
+RUN;
 
-# Binary input (replace with real paths)
-LOAN_REPTDATE_BIN = "LOAN_REPTDATE.bin"
-BTRWH_BASE_PATH   = "BTRWH_BTRAD"   # base name only
+DATA AVGTENURE;
+   SET AVGTENURE;
+   TENURE = TOTAMT/FCVALUE;
+RUN;
 
-rept_df = load_binary(LOAN_REPTDATE_BIN)
+PROC REPORT DATA=AVGTENURE NOWD HEADLINE SPLIT='*' PS=2000;
+   TITLE1 ' P U B L I C   B A N K   B E R H A D';
+   TITLE2 ' MANAGEMENT ACCOUNTING, FINANCE DIVISION';
+   TITLE4 ' REPORT ID    : EIBMBTAT';
+   TITLE5 ' REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY '
+                           'REDISCOUNTED';
+   TITLE6 ' REPORT DATE  : ' "&RDATE";
+   COLUMN BRANCH TOTAMT FCVALUE TENURE AVGTEN;
+   DEFINE BRANCH   / DISPLAY     FORMAT=8.   'BRANCH'
+                     WIDTH=10;
+   DEFINE TOTAMT   / SUM     FORMAT=COMMA22. 'TOTAL AMOUNT (RM)'
+                     WIDTH=30;
+   DEFINE FCVALUE  / SUM     FORMAT=COMMA20. 'BALANCE (RM)'
+                     WIDTH=20;
+   DEFINE TENURE   / DISPLAY     FORMAT=8.   'AVG TENURE (DAY)'
+                     WIDTH=20;
+   DEFINE AVGTEN   / COMPUTED NOPRINT;
 
-# Assume single-row dataset like SAS
-REPTDATE = pd.to_datetime(rept_df.iloc[0]["REPTDATE"])
-
-day = REPTDATE.day
-if day == 8:
-    NOWK = "1"
-elif day == 15:
-    NOWK = "2"
-elif day == 22:
-    NOWK = "3"
-else:
-    NOWK = "4"
-
-REPTYEAR = REPTDATE.strftime("%y")
-REPTMON  = REPTDATE.strftime("%m")
-RDATE    = REPTDATE.strftime("%d/%m/%Y")
-
-# ============================================================
-# 2. LOAD BTRAD DATASET (DYNAMIC NAME)
-# SAS: BTRWH.BTRAD&REPTMON&NOWK&REPTYEAR
-# ============================================================
-
-btrad_bin = f"{BTRWH_BASE_PATH}{REPTMON}{NOWK}{REPTYEAR}.bin"
-btrad = load_binary(btrad_bin)
-
-# ============================================================
-# 3. FILTER DATA (SAS WHERE CLAUSE)
-# ============================================================
-
-FACILITY_LIST = [
-    "34411", "34412", "34421", "34422",
-    "34440", "34470", "34480", "34490"
-]
-
-LIABCODE_LIST = ["BAE", "BAI", "BAP", "BAS"]
-
-btrad = btrad[
-    (btrad["FACILITY"].isin(FACILITY_LIST)) &
-    (btrad["LIABCODE"].isin(LIABCODE_LIST)) &
-    (btrad["UTRDF"] == "D") &
-    (btrad["BALANCE"] > 0)
-].copy()
-
-# ============================================================
-# 4. CALCULATE TENURE & TOTAMT
-# ============================================================
-
-btrad["ISSDTE"]  = pd.to_datetime(btrad["ISSDTE"])
-btrad["MATDATE"] = pd.to_datetime(btrad["MATDATE"])
-
-btrad["TENURE"] = (btrad["MATDATE"] - btrad["ISSDTE"]).dt.days + 1
-btrad["TOTAMT"] = btrad["FCVALUE"] * btrad["TENURE"]
-
-btrad = btrad[
-    ["BRANCH", "ACCTNOX", "TRANSREF", "FCVALUE",
-     "MATDATE", "ISSDTE", "TENURE", "TOTAMT"]
-]
-
-# ============================================================
-# 5. AGGREGATE (PROC SUMMARY)
-# ============================================================
-
-avgt = (
-    btrad
-    .groupby("BRANCH", as_index=False)
-    .agg({
-        "FCVALUE": "sum",
-        "TOTAMT": "sum"
-    })
-)
-
-# ============================================================
-# 6. CALCULATE AVERAGE TENURE
-# ============================================================
-
-avgt["TENURE"] = avgt["TOTAMT"] / avgt["FCVALUE"]
-
-# ============================================================
-# 7. ADD REPORT METADATA (OPTIONAL BUT USEFUL)
-# ============================================================
-
-avgt["REPORT_ID"]   = "EIBMBTAT"
-avgt["REPORT_DATE"] = RDATE
-avgt["REPTMON"]     = REPTMON
-avgt["NOWK"]        = NOWK
-avgt["REPTYEAR"]    = REPTYEAR
-
-# ============================================================
-# 8. WRITE OUTPUT AS PARQUET
-# ============================================================
-
-OUTPUT_PARQUET = "SAP.EIBMBTAT.AVGTENURE.parquet"
-
-avgt.to_parquet(
-    OUTPUT_PARQUET,
-    engine="pyarrow",
-    compression="snappy",
-    index=False
-)
-
-# ============================================================
-# END OF JOB
-# ============================================================
-
-print("EIBMBTAT job completed successfully (Binary → Parquet).")
+   COMPUTE AVGTEN;
+      AVGTEN=TOTAMT.SUM/FCVALUE.SUM;
+   ENDCOMP;
+   RBREAK AFTER  /SKIP;
+   COMPUTE AFTER;
+       LINE @003 86*'-';
+       LINE @015 'TOTAL :'
+            @023 TOTAMT.SUM   COMMA22.
+            @047 FCVALUE.SUM  COMMA20.
+            @073 'AVG :'
+            @080 AVGTEN          9.;
+       LINE @003 86*'=';
+   ENDCOMP;
+RUN;
