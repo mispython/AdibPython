@@ -1,12 +1,12 @@
 # ============================================================
-# JOB NAME : EIIMBTAT (Python version)
-# DESC     : Average Original Tenure for BA Primary Rediscounted (Islamic)
+# JOB NAME : EIBMBTAT (Python version)
+# DESC     : Average Original Tenure for BA Primary Rediscounted
 # INPUT    : SAS7BDAT (SAS dataset)
 # OUTPUT   : Parquet + CSV + Report
 # ============================================================
 
 import pandas as pd
-import pyreadstat  # Better SAS reader - no header length warning
+import sas7bdat
 from datetime import datetime, timedelta
 import os
 import sys
@@ -15,18 +15,20 @@ import sys
 # 0. DEFINE PATHS
 # ============================================================
 
-# Input paths - Islamic dataset 'ibtrad'
-BTRWH_BASE_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/ibtrad"
+# Input paths
+BTRWH_BASE_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrad" 
 
 # Output paths
-OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output"
+OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE" 
+
 
 # ============================================================
 # 1. CALCULATE REPORT DATE (YESTERDAY'S DATE)
 # ============================================================
 
 # Get yesterday's date
-yesterday = datetime.now() - timedelta(days=1)
+#yesterday = datetime.now() - timedelta(days=1)
+yesterday = datetime(2026, 6, 8)
 REPTDATE = yesterday
 
 # Calculate NOWK based on DAY of REPTDATE (SAS logic)
@@ -51,50 +53,29 @@ print(f"Period: {REPTMON}/{NOWK}/{REPTYEAR}")
 print("="*60)
 
 # ============================================================
-# 2. LOAD IBTRAD DATASET (ISLAMIC - DYNAMIC NAME)
-# Using pyreadstat to avoid header length warning
+# 2. LOAD BTRAD DATASET (DYNAMIC NAME)
+# SAS: BTRWH.BTRAD&REPTMON&NOWK&REPTYEAR
 # ============================================================
 
 btrad_sas = f"{BTRWH_BASE_PATH}{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
 print(f"Looking for file: {btrad_sas}")
 
 if not os.path.exists(btrad_sas):
-    raise FileNotFoundError(f"IBTRAD input file not found: {btrad_sas}")
+    raise FileNotFoundError(f"BTRAD input file not found: {btrad_sas}")
 
-def load_sas_pyreadstat(path):
-    """Load SAS .sas7bdat file using pyreadstat (handles large page sizes)"""
+def load_sas(path):
+    """Load SAS .sas7bdat file into pandas DataFrame"""
     print(f"Loading: {path}")
-    try:
-        # Read SAS file with pyreadstat
-        df, meta = pyreadstat.read_sas7bdat(path)
-        
-        # Print metadata for debugging
-        print(f"  - Rows loaded: {len(df):,}")
-        print(f"  - Columns loaded: {len(df.columns)}")
-        
-        # Try to get SAS version info if available
-        if hasattr(meta, 'table_metadata') and meta.table_metadata:
-            if 'SASRelease' in meta.table_metadata:
-                print(f"  - SAS Version: {meta.table_metadata['SASRelease']}")
-        
-        return df
-    except Exception as e:
-        print(f"Error with pyreadstat: {e}")
-        raise
+    with sas7bdat.SAS7BDAT(path) as f:
+        df = f.to_data_frame()
+    return df
 
-# Load the data
-btrad = load_sas_pyreadstat(btrad_sas)
-print(f"Original records in IBTRAD: {len(btrad):,}")
-
-# Display first few rows and column names for debugging
-print(f"\nColumn names in dataset:")
-for col in btrad.columns[:20]:  # Show first 20 columns
-    print(f"  - {col}")
-print(f"  ... and {len(btrad.columns) - 20} more columns" if len(btrad.columns) > 20 else "")
+btrad = load_sas(btrad_sas)
+print(f"Original records in BTRAD: {len(btrad):,}")
 
 # ============================================================
 # 3. FILTER DATA (SAS WHERE CLAUSE)
-# Islamic version uses different LIABCODE values!
+# Note: Preserving duplicate '34470' as in original SAS
 # ============================================================
 
 FACILITY_LIST = [
@@ -102,35 +83,20 @@ FACILITY_LIST = [
     '34470', '34480', '34490'  # Duplicate preserved from original
 ]
 
-# Islamic LIABCODE values (different from conventional)
-LIABCODE_LIST = ['BPI', 'BII', 'BSI', 'BEI']
-
-print(f"\nFiltering with LIABCODE values: {LIABCODE_LIST}")
-print(f"Unique LIABCODE values in dataset: {btrad['LIABCODE'].unique()}")
-
-# Save original count for debugging
-original_count = len(btrad)
+LIABCODE_LIST = ['BAE', 'BAI', 'BAP', 'BAS']
 
 # Apply filters
-filtered = (
+btrad = btrad[
     (btrad["FACILITY"].isin(FACILITY_LIST)) &
     (btrad["LIABCODE"].isin(LIABCODE_LIST)) &
     (btrad["UTRDF"] == "D") &
     (btrad["BALANCE"] > 0)
-)
+].copy()
 
-btrad = btrad[filtered].copy()
-
-print(f"\nFilter results:")
-print(f"  - Original records: {original_count:,}")
-print(f"  - Records after filtering: {len(btrad):,}")
+print(f"Records after filtering: {len(btrad):,}")
 
 if len(btrad) == 0:
-    print("\nWARNING: No records after filtering. Debugging information:")
-    print(f"  - FACILITY filter matches: {(btrad['FACILITY'].isin(FACILITY_LIST)).sum()}")
-    print(f"  - LIABCODE filter matches: {(btrad['LIABCODE'].isin(LIABCODE_LIST)).sum()}")
-    print(f"  - UTRDF filter matches: {(btrad['UTRDF'] == 'D').sum()}")
-    print(f"  - BALANCE filter matches: {(btrad['BALANCE'] > 0).sum()}")
+    print("WARNING: No records after filtering. Exiting.")
     sys.exit(0)
 
 # ============================================================
@@ -139,7 +105,7 @@ if len(btrad) == 0:
 # ============================================================
 
 # Convert to datetime if they aren't already
-btrad["ISSDTE"] = pd.to_datetime(btrad["ISSDTE"])
+btrad["ISSDTE"]  = pd.to_datetime(btrad["ISSDTE"])
 btrad["MATDATE"] = pd.to_datetime(btrad["MATDATE"])
 
 # Calculate tenure in days (difference + 1)
@@ -152,11 +118,6 @@ btrad = btrad[
      "MATDATE", "ISSDTE", "TENURE", "TOTAMT"]
 ]
 
-print(f"\nAfter tenure calculation:")
-print(f"  - Records with TENURE > 0: {(btrad['TENURE'] > 0).sum():,}")
-print(f"  - Total FCVALUE: {btrad['FCVALUE'].sum():,.2f}")
-print(f"  - Total TOTAMT: {btrad['TOTAMT'].sum():,.2f}")
-
 # ============================================================
 # 5. SORT BY BRANCH (equivalent to PROC SORT)
 # ============================================================
@@ -165,7 +126,7 @@ btrad = btrad.sort_values("BRANCH")
 
 # ============================================================
 # 6. PROC SUMMARY (BY BRANCH, SUM of FCVALUE and TOTAMT)
-# SAS: PROC SUMMARY DATA=IBTRAD NWAY; BY BRANCH; VAR FCVALUE TOTAMT;
+# SAS: PROC SUMMARY DATA=BTRAD NWAY; BY BRANCH; VAR FCVALUE TOTAMT;
 #      OUTPUT OUT=AVGTENURE(DROP=_FREQ_ _TYPE_) SUM=;
 # ============================================================
 
@@ -178,8 +139,7 @@ avgt = (
     })
 )
 
-print(f"\nAggregation results:")
-print(f"  - Number of branches after aggregation: {len(avgt):,}")
+print(f"Number of branches after aggregation: {len(avgt):,}")
 
 # ============================================================
 # 7. CALCULATE TENURE (SAS DATA step after PROC SUMMARY)
@@ -195,10 +155,10 @@ avgt["TENURE"] = avgt["TENURE"].round(2)
 # ============================================================
 
 print("\n" + "="*86)
-print(" P U B L I C   I S L A M I C   B A N K   B E R H A D".center(86))
+print(" P U B L I C   B A N K   B E R H A D".center(86))
 print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
 print("="*86)
-print(f" REPORT ID    : EIIMBTAT".center(86))
+print(f" REPORT ID    : EIBMBTAT".center(86))
 print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
 print(f" REPORT DATE  : {RDATE}".center(86))
 print("="*86)
@@ -235,7 +195,7 @@ print("="*86)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Output filenames
-base_filename = f"EIIMBTAT_AVGTENURE_{REPTMON}{NOWK}{REPTYEAR}"
+base_filename = f"EIBMBTAT_AVGTENURE_{REPTMON}{NOWK}{REPTYEAR}"
 OUTPUT_PARQUET = os.path.join(OUTPUT_DIR, f"{base_filename}.parquet")
 OUTPUT_CSV = os.path.join(OUTPUT_DIR, f"{base_filename}.csv")
 
@@ -272,21 +232,21 @@ except Exception as e:
     print(f"Error saving CSV: {e}")
 
 # ============================================================
-# 10. Save the report as text file
+# 10. OPTIONAL: Save the report as text file
 # ============================================================
 
 try:
     report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
     with open(report_txt, 'w') as f:
-        # Redirect print output to file
+        # Redirect print output to file (simpler approach)
         original_stdout = sys.stdout
         sys.stdout = f
         
         print("="*86)
-        print(" P U B L I C   I S L A M I C   B A N K   B E R H A D".center(86))
+        print(" P U B L I C   B A N K   B E R H A D".center(86))
         print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
         print("="*86)
-        print(f" REPORT ID    : EIIMBTAT".center(86))
+        print(f" REPORT ID    : EIBMBTAT".center(86))
         print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
         print(f" REPORT DATE  : {RDATE}".center(86))
         print("="*86)
@@ -310,11 +270,11 @@ except Exception as e:
 # 11. DISPLAY EXECUTION SUMMARY
 # ============================================================
 print("\n" + "="*60)
-print("EIIMBTAT job completed successfully")
+print("EIBMBTAT job completed successfully")
 print("="*60)
 print(f"Execution Date & Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print(f"Report Date (Yesterday): {RDATE}")
-print(f"Input IBTRAD file: {btrad_sas}")
+print(f"Input BTRAD file: {btrad_sas}")
 print(f"Records processed: {len(btrad):,}")
 print(f"Branches summarized: {len(avgt):,}")
 print(f"Total Balance (FCVALUE): RM {total_fcvalue:,.2f}")
