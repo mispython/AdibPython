@@ -6,7 +6,7 @@
 # ============================================================
 
 import pandas as pd
-import sas7bdat
+import pyreadstat  # Better SAS reader - no header length warning
 from datetime import datetime, timedelta
 import os
 import sys
@@ -20,7 +20,6 @@ BTRWH_BASE_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrad
 
 # Output paths
 OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE" 
-
 
 # ============================================================
 # 1. CALCULATE REPORT DATE (YESTERDAY'S DATE)
@@ -54,7 +53,7 @@ print("="*60)
 
 # ============================================================
 # 2. LOAD BTRAD DATASET (DYNAMIC NAME)
-# SAS: BTRWH.BTRAD&REPTMON&NOWK&REPTYEAR
+# Using pyreadstat to avoid header length warning
 # ============================================================
 
 btrad_sas = f"{BTRWH_BASE_PATH}{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
@@ -63,15 +62,35 @@ print(f"Looking for file: {btrad_sas}")
 if not os.path.exists(btrad_sas):
     raise FileNotFoundError(f"BTRAD input file not found: {btrad_sas}")
 
-def load_sas(path):
-    """Load SAS .sas7bdat file into pandas DataFrame"""
+def load_sas_pyreadstat(path):
+    """Load SAS .sas7bdat file using pyreadstat (handles large page sizes)"""
     print(f"Loading: {path}")
-    with sas7bdat.SAS7BDAT(path) as f:
-        df = f.to_data_frame()
-    return df
+    try:
+        # Read SAS file with pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(path)
+        
+        # Print metadata for debugging
+        print(f"  - Rows loaded: {len(df):,}")
+        print(f"  - Columns loaded: {len(df.columns)}")
+        
+        # Try to get SAS version info if available
+        if hasattr(meta, 'table_metadata') and meta.table_metadata:
+            if 'SASRelease' in meta.table_metadata:
+                print(f"  - SAS Version: {meta.table_metadata['SASRelease']}")
+        
+        return df
+    except Exception as e:
+        print(f"Error with pyreadstat: {e}")
+        raise
 
-btrad = load_sas(btrad_sas)
+btrad = load_sas_pyreadstat(btrad_sas)
 print(f"Original records in BTRAD: {len(btrad):,}")
+
+# Display column names for debugging (optional)
+print(f"\nFirst few column names:")
+for col in list(btrad.columns)[:10]:
+    print(f"  - {col}")
+print("  ...")
 
 # ============================================================
 # 3. FILTER DATA (SAS WHERE CLAUSE)
@@ -85,18 +104,32 @@ FACILITY_LIST = [
 
 LIABCODE_LIST = ['BAE', 'BAI', 'BAP', 'BAS']
 
+print(f"\nFiltering with LIABCODE values: {LIABCODE_LIST}")
+print(f"Unique LIABCODE values in dataset: {btrad['LIABCODE'].unique()}")
+
+# Save original count for debugging
+original_count = len(btrad)
+
 # Apply filters
-btrad = btrad[
+filtered = (
     (btrad["FACILITY"].isin(FACILITY_LIST)) &
     (btrad["LIABCODE"].isin(LIABCODE_LIST)) &
     (btrad["UTRDF"] == "D") &
     (btrad["BALANCE"] > 0)
-].copy()
+)
 
-print(f"Records after filtering: {len(btrad):,}")
+btrad = btrad[filtered].copy()
+
+print(f"\nFilter results:")
+print(f"  - Original records: {original_count:,}")
+print(f"  - Records after filtering: {len(btrad):,}")
 
 if len(btrad) == 0:
-    print("WARNING: No records after filtering. Exiting.")
+    print("\nWARNING: No records after filtering. Debugging information:")
+    print(f"  - FACILITY filter matches: {(btrad['FACILITY'].isin(FACILITY_LIST)).sum()}")
+    print(f"  - LIABCODE filter matches: {(btrad['LIABCODE'].isin(LIABCODE_LIST)).sum()}")
+    print(f"  - UTRDF filter matches: {(btrad['UTRDF'] == 'D').sum()}")
+    print(f"  - BALANCE filter matches: {(btrad['BALANCE'] > 0).sum()}")
     sys.exit(0)
 
 # ============================================================
@@ -117,6 +150,11 @@ btrad = btrad[
     ["BRANCH", "ACCTNOX", "TRANSREF", "FCVALUE", 
      "MATDATE", "ISSDTE", "TENURE", "TOTAMT"]
 ]
+
+print(f"\nAfter tenure calculation:")
+print(f"  - Records with TENURE > 0: {(btrad['TENURE'] > 0).sum():,}")
+print(f"  - Total FCVALUE: {btrad['FCVALUE'].sum():,.2f}")
+print(f"  - Total TOTAMT: {btrad['TOTAMT'].sum():,.2f}")
 
 # ============================================================
 # 5. SORT BY BRANCH (equivalent to PROC SORT)
@@ -139,7 +177,8 @@ avgt = (
     })
 )
 
-print(f"Number of branches after aggregation: {len(avgt):,}")
+print(f"\nAggregation results:")
+print(f"  - Number of branches after aggregation: {len(avgt):,}")
 
 # ============================================================
 # 7. CALCULATE TENURE (SAS DATA step after PROC SUMMARY)
@@ -232,13 +271,13 @@ except Exception as e:
     print(f"Error saving CSV: {e}")
 
 # ============================================================
-# 10. OPTIONAL: Save the report as text file
+# 10. Save the report as text file
 # ============================================================
 
 try:
     report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
     with open(report_txt, 'w') as f:
-        # Redirect print output to file (simpler approach)
+        # Redirect print output to file
         original_stdout = sys.stdout
         sys.stdout = f
         
