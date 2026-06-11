@@ -6,7 +6,7 @@
 # ============================================================
 
 import pandas as pd
-import sas7bdat
+import pyreadstat  # Better SAS reader - no header length warning
 from datetime import datetime, timedelta
 import os
 import sys
@@ -15,7 +15,7 @@ import sys
 # 0. DEFINE PATHS
 # ============================================================
 
-# Input paths - Note: Islamic dataset is 'ibtrad' (lowercase i)
+# Input paths - Islamic dataset 'ibtrad'
 BTRWH_BASE_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/ibtrad"
 
 # Output paths
@@ -52,7 +52,7 @@ print("="*60)
 
 # ============================================================
 # 2. LOAD IBTRAD DATASET (ISLAMIC - DYNAMIC NAME)
-# SAS: BTRWH.IBTRAD&REPTMON&NOWK&REPTYEAR
+# Using pyreadstat to avoid header length warning
 # ============================================================
 
 btrad_sas = f"{BTRWH_BASE_PATH}{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
@@ -61,19 +61,40 @@ print(f"Looking for file: {btrad_sas}")
 if not os.path.exists(btrad_sas):
     raise FileNotFoundError(f"IBTRAD input file not found: {btrad_sas}")
 
-def load_sas(path):
-    """Load SAS .sas7bdat file into pandas DataFrame"""
+def load_sas_pyreadstat(path):
+    """Load SAS .sas7bdat file using pyreadstat (handles large page sizes)"""
     print(f"Loading: {path}")
-    with sas7bdat.SAS7BDAT(path) as f:
-        df = f.to_data_frame()
-    return df
+    try:
+        # Read SAS file with pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(path)
+        
+        # Print metadata for debugging
+        print(f"  - Rows loaded: {len(df):,}")
+        print(f"  - Columns loaded: {len(df.columns)}")
+        
+        # Try to get SAS version info if available
+        if hasattr(meta, 'table_metadata') and meta.table_metadata:
+            if 'SASRelease' in meta.table_metadata:
+                print(f"  - SAS Version: {meta.table_metadata['SASRelease']}")
+        
+        return df
+    except Exception as e:
+        print(f"Error with pyreadstat: {e}")
+        raise
 
-btrad = load_sas(btrad_sas)
+# Load the data
+btrad = load_sas_pyreadstat(btrad_sas)
 print(f"Original records in IBTRAD: {len(btrad):,}")
+
+# Display first few rows and column names for debugging
+print(f"\nColumn names in dataset:")
+for col in btrad.columns[:20]:  # Show first 20 columns
+    print(f"  - {col}")
+print(f"  ... and {len(btrad.columns) - 20} more columns" if len(btrad.columns) > 20 else "")
 
 # ============================================================
 # 3. FILTER DATA (SAS WHERE CLAUSE)
-# IMPORTANT: Islamic version uses different LIABCODE values!
+# Islamic version uses different LIABCODE values!
 # ============================================================
 
 FACILITY_LIST = [
@@ -84,6 +105,12 @@ FACILITY_LIST = [
 # Islamic LIABCODE values (different from conventional)
 LIABCODE_LIST = ['BPI', 'BII', 'BSI', 'BEI']
 
+print(f"\nFiltering with LIABCODE values: {LIABCODE_LIST}")
+print(f"Unique LIABCODE values in dataset: {btrad['LIABCODE'].unique()}")
+
+# Save original count for debugging
+original_count = len(btrad)
+
 # Apply filters
 btrad = btrad[
     (btrad["FACILITY"].isin(FACILITY_LIST)) &
@@ -92,13 +119,16 @@ btrad = btrad[
     (btrad["BALANCE"] > 0)
 ].copy()
 
-print(f"Records after filtering: {len(btrad):,}")
+print(f"\nFilter results:")
+print(f"  - Original records: {original_count:,}")
+print(f"  - Records after filtering: {len(btrad):,}")
 
 if len(btrad) == 0:
-    print("WARNING: No records after filtering. Exiting.")
-    # Print sample of unique LIABCODE values for debugging
-    print("\nDebug - Unique LIABCODE values in dataset:")
-    print(btrad_original['LIABCODE'].unique()[:20] if 'btrad_original' in dir() else "Original dataset not available")
+    print("\nWARNING: No records after filtering. Debugging information:")
+    print(f"  - FACILITY filter matches: {(btrad_original['FACILITY'].isin(FACILITY_LIST)).sum()}")
+    print(f"  - LIABCODE filter matches: {(btrad_original['LIABCODE'].isin(LIABCODE_LIST)).sum()}")
+    print(f"  - UTRDF filter matches: {(btrad_original['UTRDF'] == 'D').sum()}")
+    print(f"  - BALANCE filter matches: {(btrad_original['BALANCE'] > 0).sum()}")
     sys.exit(0)
 
 # ============================================================
@@ -107,7 +137,7 @@ if len(btrad) == 0:
 # ============================================================
 
 # Convert to datetime if they aren't already
-btrad["ISSDTE"]  = pd.to_datetime(btrad["ISSDTE"])
+btrad["ISSDTE"] = pd.to_datetime(btrad["ISSDTE"])
 btrad["MATDATE"] = pd.to_datetime(btrad["MATDATE"])
 
 # Calculate tenure in days (difference + 1)
@@ -119,6 +149,11 @@ btrad = btrad[
     ["BRANCH", "ACCTNOX", "TRANSREF", "FCVALUE", 
      "MATDATE", "ISSDTE", "TENURE", "TOTAMT"]
 ]
+
+print(f"\nAfter tenure calculation:")
+print(f"  - Records with TENURE > 0: {(btrad['TENURE'] > 0).sum():,}")
+print(f"  - Total FCVALUE: {btrad['FCVALUE'].sum():,.2f}")
+print(f"  - Total TOTAMT: {btrad['TOTAMT'].sum():,.2f}")
 
 # ============================================================
 # 5. SORT BY BRANCH (equivalent to PROC SORT)
@@ -141,7 +176,8 @@ avgt = (
     })
 )
 
-print(f"Number of branches after aggregation: {len(avgt):,}")
+print(f"\nAggregation results:")
+print(f"  - Number of branches after aggregation: {len(avgt):,}")
 
 # ============================================================
 # 7. CALCULATE TENURE (SAS DATA step after PROC SUMMARY)
@@ -234,13 +270,13 @@ except Exception as e:
     print(f"Error saving CSV: {e}")
 
 # ============================================================
-# 10. OPTIONAL: Save the report as text file
+# 10. Save the report as text file
 # ============================================================
 
 try:
     report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
     with open(report_txt, 'w') as f:
-        # Redirect print output to file (simpler approach)
+        # Redirect print output to file
         original_stdout = sys.stdout
         sys.stdout = f
         
