@@ -112,12 +112,14 @@ print(f"Unique LIABCODE values in dataset: {btrad['LIABCODE'].unique()}")
 original_count = len(btrad)
 
 # Apply filters
-btrad = btrad[
+filtered = (
     (btrad["FACILITY"].isin(FACILITY_LIST)) &
     (btrad["LIABCODE"].isin(LIABCODE_LIST)) &
     (btrad["UTRDF"] == "D") &
     (btrad["BALANCE"] > 0)
-].copy()
+)
+
+btrad = btrad[filtered].copy()
 
 print(f"\nFilter results:")
 print(f"  - Original records: {original_count:,}")
@@ -125,10 +127,10 @@ print(f"  - Records after filtering: {len(btrad):,}")
 
 if len(btrad) == 0:
     print("\nWARNING: No records after filtering. Debugging information:")
-    print(f"  - FACILITY filter matches: {(btrad_original['FACILITY'].isin(FACILITY_LIST)).sum()}")
-    print(f"  - LIABCODE filter matches: {(btrad_original['LIABCODE'].isin(LIABCODE_LIST)).sum()}")
-    print(f"  - UTRDF filter matches: {(btrad_original['UTRDF'] == 'D').sum()}")
-    print(f"  - BALANCE filter matches: {(btrad_original['BALANCE'] > 0).sum()}")
+    print(f"  - FACILITY filter matches: {(btrad['FACILITY'].isin(FACILITY_LIST)).sum()}")
+    print(f"  - LIABCODE filter matches: {(btrad['LIABCODE'].isin(LIABCODE_LIST)).sum()}")
+    print(f"  - UTRDF filter matches: {(btrad['UTRDF'] == 'D').sum()}")
+    print(f"  - BALANCE filter matches: {(btrad['BALANCE'] > 0).sum()}")
     sys.exit(0)
 
 # ============================================================
