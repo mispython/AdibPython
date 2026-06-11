@@ -7,7 +7,7 @@
 
 import pandas as pd
 import sas7bdat
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import sys
 
@@ -16,34 +16,21 @@ import sys
 # ============================================================
 
 # Input paths
-LOAN_REPTDATE_PATH = "/dwh/ln/LOAN_REPTDATE.sas7bdat"
-BTRWH_BASE_PATH     = "/dwh/btrade/BTRWH_BTRAD"   # base name before MM/WK/YY
+BTRWH_BASE_PATH = "/dwh/btrade/BTRWH_BTRAD"   # base name before MM/WK/YY
 
 # Output paths
 OUTPUT_DIR = "/dwh/output"  # Change as needed
 # Or use current directory: OUTPUT_DIR = "output"
 
 # ============================================================
-# 1. LOAD REPORT DATE (FROM LOAN.REPTDATE)
+# 1. CALCULATE REPORT DATE (YESTERDAY'S DATE)
 # ============================================================
 
-def load_sas(path):
-    """Load SAS .sas7bdat file into pandas DataFrame"""
-    print(f"Loading: {path}")
-    with sas7bdat.SAS7BDAT(path) as f:
-        df = f.to_data_frame()
-    return df
+# Get yesterday's date
+yesterday = datetime.now() - timedelta(days=1)
+REPTDATE = yesterday
 
-# Check if REPTDATE file exists
-if not os.path.exists(LOAN_REPTDATE_PATH):
-    raise FileNotFoundError(f"REPTDATE file not found: {LOAN_REPTDATE_PATH}")
-
-rept_df = load_sas(LOAN_REPTDATE_PATH)
-
-# Assume single-row dataset like SAS
-REPTDATE = pd.to_datetime(rept_df.iloc[0]["REPTDATE"])
-
-# SELECT(DAY(REPTDATE)) logic
+# Calculate NOWK based on DAY of REPTDATE (SAS logic)
 day = REPTDATE.day
 if day == 8:
     NOWK = '1'
@@ -58,9 +45,10 @@ REPTYEAR = REPTDATE.strftime("%y")  # YEAR2. format in SAS (2-digit year)
 REPTMON  = REPTDATE.strftime("%m")  # Z2. format (leading zero)
 RDATE    = REPTDATE.strftime("%d/%m/%Y")  # DDMMYY10. format
 
-print(f"Report Date: {RDATE}")
-print(f"Period: {REPTMON}/{NOWK}/{REPTYEAR}")
+print(f"Report Date (Yesterday): {RDATE}")
+print(f"Original REPTDATE value: {REPTDATE.strftime('%Y-%m-%d')}")
 print(f"Day of month: {day} → Week number: {NOWK}")
+print(f"Period: {REPTMON}/{NOWK}/{REPTYEAR}")
 print("="*60)
 
 # ============================================================
@@ -73,6 +61,13 @@ print(f"Looking for file: {btrad_sas}")
 
 if not os.path.exists(btrad_sas):
     raise FileNotFoundError(f"BTRAD input file not found: {btrad_sas}")
+
+def load_sas(path):
+    """Load SAS .sas7bdat file into pandas DataFrame"""
+    print(f"Loading: {path}")
+    with sas7bdat.SAS7BDAT(path) as f:
+        df = f.to_data_frame()
+    return df
 
 btrad = load_sas(btrad_sas)
 print(f"Original records in BTRAD: {len(btrad):,}")
@@ -108,6 +103,7 @@ if len(btrad) == 0:
 # SAS: TENURE = (MATDATE-ISSDTE)+1
 # ============================================================
 
+# Convert to datetime if they aren't already
 btrad["ISSDTE"]  = pd.to_datetime(btrad["ISSDTE"])
 btrad["MATDATE"] = pd.to_datetime(btrad["MATDATE"])
 
@@ -205,6 +201,7 @@ OUTPUT_CSV = os.path.join(OUTPUT_DIR, f"{base_filename}.csv")
 # Save dataset (same as SAS dataset AVGTENURE)
 avgt_output = avgt[["BRANCH", "TOTAMT", "FCVALUE", "TENURE"]].copy()
 avgt_output["REPORT_DATE"] = RDATE
+avgt_output["REPTDATE_RAW"] = REPTDATE.strftime("%Y-%m-%d")
 avgt_output["REPTMON"] = REPTMON
 avgt_output["NOWK"] = NOWK
 avgt_output["REPTYEAR"] = REPTYEAR
@@ -269,14 +266,22 @@ except Exception as e:
     print(f"Error saving report text file: {e}")
 
 # ============================================================
-# END OF JOB
+# 11. DISPLAY EXECUTION SUMMARY
 # ============================================================
 print("\n" + "="*60)
 print("EIBMBTAT job completed successfully")
-print(f"  - Input REPTDATE: {LOAN_REPTDATE_PATH}")
-print(f"  - Input BTRAD: {btrad_sas}")
-print(f"  - Processed {len(btrad):,} records")
-print(f"  - Generated {len(avgt):,} branch summaries")
-print(f"  - Overall average tenure: {overall_avg_tenure:.2f} days")
-print(f"  - Output directory: {OUTPUT_DIR}")
 print("="*60)
+print(f"Execution Date & Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print(f"Report Date (Yesterday): {RDATE}")
+print(f"Input BTRAD file: {btrad_sas}")
+print(f"Records processed: {len(btrad):,}")
+print(f"Branches summarized: {len(avgt):,}")
+print(f"Total Balance (FCVALUE): RM {total_fcvalue:,.2f}")
+print(f"Total Amount (TOTAMT): RM {total_totamt:,.2f}")
+print(f"Overall Average Tenure: {overall_avg_tenure:.2f} days")
+print(f"Output directory: {OUTPUT_DIR}")
+print("="*60)
+
+# ============================================================
+# END OF JOB
+# ============================================================
