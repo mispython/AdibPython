@@ -12,20 +12,33 @@ import os
 import sys
 
 # ============================================================
+# 0. DEFINE PATHS
+# ============================================================
+
+# Input paths
+LOAN_REPTDATE_PATH = "/dwh/ln/LOAN_REPTDATE.sas7bdat"
+BTRWH_BASE_PATH     = "/dwh/btrade/BTRWH_BTRAD"   # base name before MM/WK/YY
+
+# Output paths
+OUTPUT_DIR = "/dwh/output"  # Change as needed
+# Or use current directory: OUTPUT_DIR = "output"
+
+# ============================================================
 # 1. LOAD REPORT DATE (FROM LOAN.REPTDATE)
 # ============================================================
 
 def load_sas(path):
     """Load SAS .sas7bdat file into pandas DataFrame"""
+    print(f"Loading: {path}")
     with sas7bdat.SAS7BDAT(path) as f:
         df = f.to_data_frame()
     return df
 
-# SAS input paths (replace with real paths)
-LOAN_REPTDATE_SAS = "LOAN_REPTDATE.sas7bdat"
-BTRWH_BASE_PATH   = "BTRWH_BTRAD"
+# Check if REPTDATE file exists
+if not os.path.exists(LOAN_REPTDATE_PATH):
+    raise FileNotFoundError(f"REPTDATE file not found: {LOAN_REPTDATE_PATH}")
 
-rept_df = load_sas(LOAN_REPTDATE_SAS)
+rept_df = load_sas(LOAN_REPTDATE_PATH)
 
 # Assume single-row dataset like SAS
 REPTDATE = pd.to_datetime(rept_df.iloc[0]["REPTDATE"])
@@ -47,19 +60,22 @@ RDATE    = REPTDATE.strftime("%d/%m/%Y")  # DDMMYY10. format
 
 print(f"Report Date: {RDATE}")
 print(f"Period: {REPTMON}/{NOWK}/{REPTYEAR}")
+print(f"Day of month: {day} → Week number: {NOWK}")
 print("="*60)
 
 # ============================================================
 # 2. LOAD BTRAD DATASET (DYNAMIC NAME)
+# SAS: BTRWH.BTRAD&REPTMON&NOWK&REPTYEAR
 # ============================================================
 
 btrad_sas = f"{BTRWH_BASE_PATH}{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
-print(f"Loading: {btrad_sas}")
+print(f"Looking for file: {btrad_sas}")
 
 if not os.path.exists(btrad_sas):
-    raise FileNotFoundError(f"Input file not found: {btrad_sas}")
+    raise FileNotFoundError(f"BTRAD input file not found: {btrad_sas}")
 
 btrad = load_sas(btrad_sas)
+print(f"Original records in BTRAD: {len(btrad):,}")
 
 # ============================================================
 # 3. FILTER DATA (SAS WHERE CLAUSE)
@@ -82,6 +98,10 @@ btrad = btrad[
 ].copy()
 
 print(f"Records after filtering: {len(btrad):,}")
+
+if len(btrad) == 0:
+    print("WARNING: No records after filtering. Exiting.")
+    sys.exit(0)
 
 # ============================================================
 # 4. CALCULATE TENURE & TOTAMT
@@ -122,6 +142,8 @@ avgt = (
     })
 )
 
+print(f"Number of branches after aggregation: {len(avgt):,}")
+
 # ============================================================
 # 7. CALCULATE TENURE (SAS DATA step after PROC SUMMARY)
 # ============================================================
@@ -146,9 +168,9 @@ print("="*86)
 
 # Create the report dataframe with formatted columns
 report_df = avgt.copy()
-report_df["TOTAMT"] = report_df["TOTAMT"].apply(lambda x: f"{x:,.2f}")
-report_df["FCVALUE"] = report_df["FCVALUE"].apply(lambda x: f"{x:,.2f}")
-report_df["TENURE"] = report_df["TENURE"].apply(lambda x: f"{x:.2f}")
+report_df["TOTAMT_FMT"] = report_df["TOTAMT"].apply(lambda x: f"{x:,.2f}")
+report_df["FCVALUE_FMT"] = report_df["FCVALUE"].apply(lambda x: f"{x:,.2f}")
+report_df["TENURE_FMT"] = report_df["TENURE"].apply(lambda x: f"{x:.2f}")
 
 # Print header
 print(f"{'BRANCH':<10} {'TOTAL AMOUNT (RM)':<30} {'BALANCE (RM)':<20} {'AVG TENURE (DAY)':<20}")
@@ -156,7 +178,7 @@ print("-"*86)
 
 # Print each row
 for _, row in report_df.iterrows():
-    print(f"{row['BRANCH']:<10} {row['TOTAMT']:<30} {row['FCVALUE']:<20} {row['TENURE']:<20}")
+    print(f"{row['BRANCH']:<10} {row['TOTAMT_FMT']:<30} {row['FCVALUE_FMT']:<20} {row['TENURE_FMT']:<20}")
 
 # Calculate totals and overall average
 total_totamt = avgt["TOTAMT"].sum()
@@ -172,8 +194,7 @@ print("="*86)
 # 9. SAVE OUTPUT DATASETS (Parquet and CSV)
 # ============================================================
 
-# Create output directory
-OUTPUT_DIR = "output"
+# Create output directory if it doesn't exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Output filenames
@@ -189,60 +210,73 @@ avgt_output["NOWK"] = NOWK
 avgt_output["REPTYEAR"] = REPTYEAR
 
 # Save as Parquet
-avgt_output.to_parquet(
-    OUTPUT_PARQUET,
-    engine="pyarrow",
-    compression="snappy",
-    index=False
-)
-print(f"\nDataset saved to Parquet: {OUTPUT_PARQUET}")
+try:
+    avgt_output.to_parquet(
+        OUTPUT_PARQUET,
+        engine="pyarrow",
+        compression="snappy",
+        index=False
+    )
+    print(f"\nDataset saved to Parquet: {OUTPUT_PARQUET}")
+except Exception as e:
+    print(f"Error saving Parquet: {e}")
+    print("Falling back to CSV only...")
 
 # Save as CSV
-avgt_output.to_csv(
-    OUTPUT_CSV,
-    index=False,
-    encoding='utf-8'
-)
-print(f"Dataset saved to CSV: {OUTPUT_CSV}")
+try:
+    avgt_output.to_csv(
+        OUTPUT_CSV,
+        index=False,
+        encoding='utf-8'
+    )
+    print(f"Dataset saved to CSV: {OUTPUT_CSV}")
+except Exception as e:
+    print(f"Error saving CSV: {e}")
 
 # ============================================================
 # 10. OPTIONAL: Save the report as text file
 # ============================================================
 
-report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
-with open(report_txt, 'w') as f:
-    # Redirect print output to file (simpler approach)
-    original_stdout = sys.stdout
-    sys.stdout = f
+try:
+    report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
+    with open(report_txt, 'w') as f:
+        # Redirect print output to file (simpler approach)
+        original_stdout = sys.stdout
+        sys.stdout = f
+        
+        print("="*86)
+        print(" P U B L I C   B A N K   B E R H A D".center(86))
+        print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
+        print("="*86)
+        print(f" REPORT ID    : EIBMBTAT".center(86))
+        print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
+        print(f" REPORT DATE  : {RDATE}".center(86))
+        print("="*86)
+        print(f"{'BRANCH':<10} {'TOTAL AMOUNT (RM)':<30} {'BALANCE (RM)':<20} {'AVG TENURE (DAY)':<20}")
+        print("-"*86)
+        
+        for _, row in report_df.iterrows():
+            print(f"{row['BRANCH']:<10} {row['TOTAMT_FMT']:<30} {row['FCVALUE_FMT']:<20} {row['TENURE_FMT']:<20}")
+        
+        print("-"*86)
+        print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':<10} {overall_avg_tenure:>9.2f}")
+        print("="*86)
+        
+        sys.stdout = original_stdout
     
-    print("="*86)
-    print(" P U B L I C   B A N K   B E R H A D".center(86))
-    print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
-    print("="*86)
-    print(f" REPORT ID    : EIBMBTAT".center(86))
-    print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
-    print(f" REPORT DATE  : {RDATE}".center(86))
-    print("="*86)
-    print(f"{'BRANCH':<10} {'TOTAL AMOUNT (RM)':<30} {'BALANCE (RM)':<20} {'AVG TENURE (DAY)':<20}")
-    print("-"*86)
-    
-    for _, row in report_df.iterrows():
-        print(f"{row['BRANCH']:<10} {row['TOTAMT']:<30} {row['FCVALUE']:<20} {row['TENURE']:<20}")
-    
-    print("-"*86)
-    print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':<10} {overall_avg_tenure:>9.2f}")
-    print("="*86)
-    
-    sys.stdout = original_stdout
-
-print(f"Report saved to text file: {report_txt}")
+    print(f"Report saved to text file: {report_txt}")
+except Exception as e:
+    print(f"Error saving report text file: {e}")
 
 # ============================================================
 # END OF JOB
 # ============================================================
 print("\n" + "="*60)
 print("EIBMBTAT job completed successfully")
+print(f"  - Input REPTDATE: {LOAN_REPTDATE_PATH}")
+print(f"  - Input BTRAD: {btrad_sas}")
 print(f"  - Processed {len(btrad):,} records")
 print(f"  - Generated {len(avgt):,} branch summaries")
 print(f"  - Overall average tenure: {overall_avg_tenure:.2f} days")
+print(f"  - Output directory: {OUTPUT_DIR}")
 print("="*60)
