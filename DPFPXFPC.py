@@ -3,7 +3,19 @@
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pyreadstat
 from datetime import date, timedelta
+import os
+
+# -------------------------
+# Configuration Paths
+# -------------------------
+INPUT_PATHS = {
+    'base': '/path/to/input/base/',  # Directory containing BASE parquet files
+    'btdtl': '/path/to/input/btdtl/'  # Directory containing BTDTL SAS files
+}
+
+OUTPUT_PATH = '/path/to/output/'  # Directory for output files
 
 # -------------------------
 # Step 1: Prepare report dates
@@ -34,13 +46,25 @@ sdate_str = sdate.strftime("%Y%m%d")
 # -------------------------
 con = duckdb.connect()
 
-# Replace with actual file locations or parquet tables
-base_tbl = f"BASE_BTBASE{prevmon}.parquet"
-btdtl_tbl = f"btdtl{reptyear}{reptmon}{reptday}.sas7bdat"
+# Input file paths
+base_file = os.path.join(INPUT_PATHS['base'], f"BASE_BTBASE{prevmon}.parquet")
+btdtl_file = os.path.join(INPUT_PATHS['btdtl'], f"btdtl{reptyear}{reptmon}{reptday}.sas7bdat")
 
-# Read into Arrow Tables
-base = pq.read_table(base_tbl)
-btdtl = pq.read_table(btdtl_tbl)
+# Check if files exist
+if not os.path.exists(base_file):
+    raise FileNotFoundError(f"BASE file not found: {base_file}")
+if not os.path.exists(btdtl_file):
+    raise FileNotFoundError(f"BTDTL file not found: {btdtl_file}")
+
+# Read BASE parquet file
+base = pq.read_table(base_file)
+print(f"Loaded BASE file: {base_file}")
+
+# Read BTDTL SAS file using pyreadstat
+df_btdtl, meta = pyreadstat.read_sas7bdat(btdtl_file)
+btdtl = pa.Table.from_pandas(df_btdtl)
+print(f"Loaded BTDTL file: {btdtl_file}")
+print(f"BTDTL metadata: {meta.column_names}")
 
 # Register in DuckDB
 con.register("base", base)
@@ -54,6 +78,8 @@ base_trans = con.execute("""
     FROM base
     GROUP BY ACCTNO, TRANSREF, OUTSTAND
 """).arrow()
+
+print(f"BASE transformation complete. Rows: {base_trans.num_rows}")
 
 # -------------------------
 # Step 4: Transform BTDTL (assign PRODTYPE)
@@ -69,6 +95,8 @@ btdtl_trans = con.execute("""
     FROM btdtl
     GROUP BY BRANCH, ACCTNO, TRANSREF, PRODTYPE, OUTSTAND, MATDATE, FACILITY, RETAILID
 """).arrow()
+
+print(f"BTDTL transformation complete. Rows: {btdtl_trans.num_rows}")
 
 # -------------------------
 # Step 5: Merge BASE + BTDTL
@@ -93,23 +121,41 @@ combt = con.execute(f"""
    AND base.TRANSREF = b.TRANSREF
 """).arrow()
 
+print(f"Merge complete. Combined rows: {combt.num_rows}")
+
 # -------------------------
 # Step 6: Export to fixed-width style file
 # -------------------------
-output_file = "DAYBTRD.txt"
+# Create output directory if it doesn't exist
+os.makedirs(OUTPUT_PATH, exist_ok=True)
+
+output_file = os.path.join(OUTPUT_PATH, f"DAYBTRD_{rdate}.txt")
 
 with open(output_file, "w") as f:
     for row in combt.to_pylist():
-        f.write(
-            f"{str(row['BRANCH']).rjust(5)}"
-            f"{str(row['ACCTNO']).rjust(10)}"
-            f"{str(row['TRANSREF']).rjust(10)}"
-            f"{str(row['PRODTYPE']).zfill(3)}"
-            f"{row['PREOUTSTD']:017.2f}"
-            f"{row['OUTSTAND']:017.2f}"
-            f"{str(row['OVERDUE']).rjust(10)}"
-            f"{row['RECOVAMT']:017.2f}"
-            f"{str(row['FACILITY']).ljust(5)}\n"
-        )
+        # Format each field according to specifications
+        branch = str(row['BRANCH']).rjust(5)
+        acctno = str(row['ACCTNO']).rjust(10)
+        transref = str(row['TRANSREF']).rjust(10)
+        prodtype = str(row['PRODTYPE']).zfill(3)
+        preoutstd = f"{row['PREOUTSTD']:017.2f}"
+        outstanding = f"{row['OUTSTAND']:017.2f}"
+        overdue = str(row['OVERDUE']).rjust(10)
+        recovamt = f"{row['RECOVAMT']:017.2f}"
+        facility = str(row['FACILITY']).ljust(5)
+        
+        f.write(f"{branch}{acctno}{transref}{prodtype}{preoutstd}{outstanding}{overdue}{recovamt}{facility}\n")
 
 print(f"Report generated: {output_file}")
+print(f"Total records written: {combt.num_rows}")
+
+# Optional: Display sample of output
+if combt.num_rows > 0:
+    print("\nSample output (first 5 rows):")
+    sample = combt.slice(0, min(5, combt.num_rows))
+    for row in sample.to_pylist():
+        print(f"ACCTNO: {row['ACCTNO']}, PRODTYPE: {row['PRODTYPE']}, "
+              f"PREOUTSTD: {row['PREOUTSTD']:.2f}, OUTSTAND: {row['OUTSTAND']:.2f}")
+
+# Close connection
+con.close()
