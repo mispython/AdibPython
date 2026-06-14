@@ -26,9 +26,9 @@ BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "data"
 OUTPUT_DIR = BASE_DIR / "output"
 
-# Input SAS files - pattern: BTRAD{YY}{MM}{WK}.sas7bdat
-# Example: BTRAD240601.sas7bdat (Year=2024, Month=06, Week=1)
-BTRAD_FILE_TEMPLATE = INPUT_DIR / "BTRAD{yy}{mm}{wk}.sas7bdat"
+# Input SAS files - pattern: BTRAD{MM}{WK}{YY}.sas7bdat
+# Example: BTRAD060124.sas7bdat (Month=06, Week=1, Year=2024)
+BTRAD_FILE_TEMPLATE = INPUT_DIR / "BTRAD{mm}{wk}{yy}.sas7bdat"
 
 # Output files
 BT_OUTPUT_PATH = OUTPUT_DIR / "BT.txt"
@@ -166,7 +166,7 @@ def get_week_number(reptdate: date) -> str:
 
 
 # ============================================================================
-# READ REPTDATE (Using datetime instead of file)
+# GET REPORT DATE (Using datetime instead of file)
 # ============================================================================
 
 def get_report_date(reptdate: date | None = None) -> dict:
@@ -197,13 +197,13 @@ def get_report_date(reptdate: date | None = None) -> dict:
 def process_loan_data(macro_vars: dict) -> pl.DataFrame:
     """Process BTRAD loan data and produce BNMCODE/AMOUNT output."""
     reptdate = macro_vars["REPTDATE"]
-    yy = macro_vars["REPTYEAR2"]      # 2-digit year (e.g., "24")
     mm = macro_vars["REPTMON"]         # 2-digit month (e.g., "06")
     wk = macro_vars["NOWK"]            # week (1-4)
+    yy = macro_vars["REPTYEAR2"]       # 2-digit year (e.g., "24")
 
-    # Build filename: BTRAD{YY}{MM}{WK}.sas7bdat
-    # Example: BTRAD240601.sas7bdat
-    btrad_filename = f"BTRAD{yy}{mm}{wk}.sas7bdat"
+    # Build filename: BTRAD{MM}{WK}{YY}.sas7bdat
+    # Example: BTRAD060124.sas7bdat (Month=06, Week=1, Year=2024)
+    btrad_filename = f"BTRAD{mm}{wk}{yy}.sas7bdat"
     btrad_path = INPUT_DIR / btrad_filename
     
     print(f"\nLooking for BTRAD file: {btrad_filename}")
@@ -215,6 +215,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
     print(f"  Total records read: {len(df)}")
 
     # Filter for loan products (PRODCD starts with '34' OR PRODUCT in (225,226))
+    # This matches SAS: IF SUBSTR(PRODCD,1,2) = '34' OR PRODUCT IN (225,226)
     df = df.filter(
         (pl.col("PRODCD").cast(pl.Utf8).str.slice(0, 2) == "34")
         | (pl.col("PRODUCT").is_in([225, 226]))
@@ -241,16 +242,16 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
         if exprdate is None:
             continue
 
-        # Determine customer code
+        # Determine customer code (matches SAS: CUST = '08' or '09')
         if custcd in {"77", "78", "95", "96"}:
             cust = "08"
         else:
             cust = "09"
 
-        # Determine product type
+        # Determine product type using PRDFMT
         prod_type = get_prod_format(product)
 
-        # Determine item code
+        # Determine item code (matches SAS SELECT logic)
         if custcd in {"77", "78", "95", "96"}:
             item = "214" if prod_type == "HL" else "219"
         else:
@@ -265,30 +266,21 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
         if product == 100:
             item = "212"
 
-        # Calculate days past due
+        # Calculate days past due (matches SAS: DAYS = REPTDATE - BLDATE)
         days = (reptdate - bldate).days if bldate else 0
 
         # Initialize remaining months
         remmth = None
 
-        # Process maturity profile
+        # Process maturity profile (matches SAS IF-ELSE logic)
         if exprdate <= reptdate:
             remmth = None
         elif (exprdate - reptdate).days < 8:
             remmth = 0.1
         else:
-            # Payment frequency (hardcoded to '3' = 6 months as per SAS)
+            # Payment frequency (matches SAS: PAYFREQ = '3', FREQ = 6)
             payfreq = "3"
-            if payfreq == "1":
-                freq = 1
-            elif payfreq == "2":
-                freq = 3
-            elif payfreq == "3":
-                freq = 6
-            elif payfreq == "4":
-                freq = 12
-            else:
-                freq = 6
+            freq = 6
 
             # RC products use expiry date as billing date
             if product in (350, 910, 925):
@@ -297,7 +289,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
                 bldate = issdte
                 if bldate is None:
                     continue
-                # Advance billing date to after report date
+                # Advance billing date to after report date (matches SAS DO WHILE)
                 while bldate <= reptdate:
                     bldate = calculate_next_bldate(bldate, issdte, payfreq, freq)
 
@@ -310,7 +302,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
             current_balance = balance
             current_bldate = bldate
 
-            # Process payment schedule
+            # Process payment schedule (matches SAS DO WHILE loop)
             while current_bldate <= exprdate:
                 remmth = calculate_remaining_months(current_bldate, reptdate)
                 
@@ -344,7 +336,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
             if bldate <= exprdate:
                 remmth = calculate_remaining_months(bldate, reptdate)
 
-        # Output remaining balance
+        # Output remaining balance (matches final OUTPUT statements)
         amount = balance
         if amount != 0 and amount is not None:
             # Part 2-RM record (95)
@@ -451,7 +443,7 @@ def build_report_lines(df_agg: pl.DataFrame, macro_vars: dict) -> list[str]:
 
 
 def write_report(lines: list[str]) -> None:
-    """Write report with ASA control characters."""
+    """Write report with ASA carriage control characters."""
     print(f"Writing report to: {BT_REPORT_PATH}")
     with open(BT_REPORT_PATH, "w", encoding="utf-8") as file_handle:
         for line in lines:
@@ -475,7 +467,7 @@ def main(reptdate: date | None = None) -> int:
         print(f"Week Number: {macro_vars['NOWK']}")
         print(f"Report Month: {macro_vars['REPTMON']}")
         print(f"Report Year (2-digit): {macro_vars['REPTYEAR2']}")
-        print(f"Expected BTRAD file: BTRAD{macro_vars['REPTYEAR2']}{macro_vars['REPTMON']}{macro_vars['NOWK']}.sas7bdat")
+        print(f"Expected BTRAD file: BTRAD{macro_vars['REPTMON']}{macro_vars['NOWK']}{macro_vars['REPTYEAR2']}.sas7bdat")
 
         # Step 2: Process loan data
         df_output = process_loan_data(macro_vars)
@@ -513,8 +505,8 @@ def main(reptdate: date | None = None) -> int:
         
     except FileNotFoundError as e:
         print(f"\nFILE NOT FOUND ERROR: {e}", file=sys.stderr)
-        print("\nExpected file pattern: BTRAD{YY}{MM}{WK}.sas7bdat")
-        print("Example: BTRAD240601.sas7bdat for Year=2024, Month=06, Week=1")
+        print("\nExpected file pattern: BTRAD{MM}{WK}{YY}.sas7bdat")
+        print("Example: BTRAD060124.sas7bdat for Month=06, Week=1, Year=2024")
         return 1
     except Exception as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
