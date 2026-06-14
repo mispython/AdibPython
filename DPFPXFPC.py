@@ -3,32 +3,72 @@
 File Name: EIBDLIBT
 BNM Liquidity Report for Trade Finance
 Processes BA (Banker's Acceptance) and TR (Trade) transactions
+Reads from SAS .sas7bdat files and outputs Parquet + CSV
 """
 
 import duckdb
 import polars as pl
+import pyreadstat
 from datetime import datetime, timedelta
 from pathlib import Path
 import calendar
+import pandas as pd
 
 # ============================================================================
 # PATH CONFIGURATION
 # ============================================================================
-# INPUT_DIR = Path("/mnt/user-data/uploads")
-# OUTPUT_DIR = Path("/mnt/user-data/outputs")
-
 BASE_DIR = Path(__file__).resolve().parent
 
 INPUT_DIR = BASE_DIR / "data"
 OUTPUT_DIR = BASE_DIR / "output"
 
-# Input files
-BNM1_FILE = INPUT_DIR / "sap_bt_sasdata_daily_0.parquet"
-PBA01_FILE = INPUT_DIR / "sap_pbb_pba_daily_0.parquet"
-BTDTL_FILE = INPUT_DIR / "sap_bt_sasdata_daily_btdtl.parquet"
+# Input SAS files (without date suffix - will be appended)
+BNM1_FILE_BASE = INPUT_DIR / "sap_bt_sasdata_daily_0.sas7bdat"
+PBA01_FILE_BASE = INPUT_DIR / "sap_pbb_pba_daily_0.sas7bdat"
+BTDTL_FILE_BASE = INPUT_DIR / "sap_bt_sasdata_daily_btdtl.sas7bdat"
 
-# Output file
-OUTPUT_FILE = OUTPUT_DIR / "bt.parquet"
+# Output files
+OUTPUT_PARQUET = OUTPUT_DIR / "bt.parquet"
+OUTPUT_CSV = OUTPUT_DIR / "bt.csv"
+
+# Create output directory if it doesn't exist
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================================
+# HELPER FUNCTION TO READ SAS FILES
+# ============================================================================
+def read_sas_file(filepath: Path) -> pl.DataFrame:
+    """Read SAS .sas7bdat file and return as Polars DataFrame"""
+    print(f"  Reading: {filepath.name}")
+    
+    # Read with pyreadstat to get metadata
+    df, meta = pyreadstat.read_sas7bdat(str(filepath))
+    
+    # Convert to Polars
+    pl_df = pl.from_pandas(df)
+    
+    # Print metadata
+    print(f"    Rows: {len(pl_df)}, Columns: {len(pl_df.columns)}")
+    
+    return pl_df
+
+
+def read_sas_with_date_suffix(base_filepath: Path, year: str, month: str, day: str) -> pl.DataFrame:
+    """Read SAS file with date suffix (YYYYMMDD) appended before .sas7bdat"""
+    # Insert date suffix before .sas7bdat
+    filepath = base_filepath.parent / f"{base_filepath.stem}{year}{month}{day}.sas7bdat"
+    
+    if not filepath.exists():
+        # Try without the base name duplication (some files might already have the pattern)
+        alt_filepath = base_filepath.parent / f"{base_filepath.stem.replace('_daily', f'_daily{year}{month}{day}')}.sas7bdat"
+        if alt_filepath.exists():
+            filepath = alt_filepath
+        else:
+            raise FileNotFoundError(f"SAS file not found: {filepath} or {alt_filepath}")
+    
+    return read_sas_file(filepath)
+
 
 # ============================================================================
 # INITIALIZE DUCKDB CONNECTION
@@ -78,10 +118,19 @@ def get_prod_type(product):
 # ============================================================================
 # STEP 1: READ REPTDATE AND SET VARIABLES
 # ============================================================================
-print("Step 1: Reading report date...")
+print("=" * 80)
+print("BNM LIQUIDITY REPORT - TRADE FINANCE PROCESSING")
+print("=" * 80)
+print("\nStep 1: Reading report date from BNM1 file...")
 
-reptdate_df = pl.read_parquet(BNM1_FILE).select(['REPTDATE']).head(1)
+bnm1_df = read_sas_file(BNM1_FILE_BASE)
+reptdate_df = bnm1_df.select(['REPTDATE']).head(1)
 reptdate = reptdate_df['REPTDATE'][0]
+
+# Convert SAS date (days since 1960-01-01) to Python date if needed
+if isinstance(reptdate, (int, float)):
+    base_date = datetime(1960, 1, 1).date()
+    reptdate = base_date + timedelta(days=int(reptdate))
 
 # Set macro variables
 REPTYEAR = f"{reptdate.year % 100:02d}"
@@ -99,17 +148,15 @@ elif reptdate.day == 22:
 else:
     NOWK = '4'
 
-print(f"Report Date: {reptdate}")
-
-# Update file paths with date suffix
-BTDTL_FILE = INPUT_DIR / f"sap_bt_sasdata_daily_btdtl{REPTYEAR}{REPTMON}{REPTDAY}.parquet"
-PBA01_FILE = INPUT_DIR / f"sap_pbb_pba_daily_0_pba01{REPTYEAR}{REPTMON}{REPTDAY}.parquet"
+print(f"  Report Date: {reptdate}")
+print(f"  Report Year: {REPTYEAR}, Month: {REPTMON}, Day: {REPTDAY}")
+print(f"  Week Number: {NOWK}")
 
 
 # ============================================================================
 # STEP 2: CALCULATE RUNOFF DATE
 # ============================================================================
-print("Step 2: Calculating runoff date...")
+print("\nStep 2: Calculating runoff date...")
 
 rpyr = reptdate.year
 rpmth = reptdate.month
@@ -120,7 +167,7 @@ last_day = calendar.monthrange(rpyr, rpmth)[1]
 runoff_date = datetime(rpyr, rpmth, last_day).date()
 RUNOFFDT = (runoff_date - datetime(1960, 1, 1).date()).days  # SAS date
 
-print(f"Runoff Date: {runoff_date} (SAS: {RUNOFFDT})")
+print(f"  Runoff Date: {runoff_date} (SAS: {RUNOFFDT})")
 
 
 # ============================================================================
@@ -199,9 +246,13 @@ def calculate_remmth(matdate, runoff_date, rpyr, rpmth, rpday):
 # ============================================================================
 # STEP 3: PROCESS BTDTL DATA
 # ============================================================================
-print("Step 3: Processing BTDTL data...")
+print("\nStep 3: Processing BTDTL data...")
 
-btdtl_data = pl.read_parquet(BTDTL_FILE).filter(
+# Read BTDTL with date suffix
+btdtl_df = read_sas_with_date_suffix(BTDTL_FILE_BASE, REPTYEAR, REPTMON, REPTDAY)
+
+# Filter and select columns
+btdtl_data = btdtl_df.filter(
     (pl.col('ISSDTE') > 0) | (pl.col('EXPRDATE') > 0)
 ).select(['TRANSREF', 'ISSDTE', 'EXPRDATE', 'PAYAMT'])
 
@@ -210,56 +261,59 @@ btdtl_data = btdtl_data.sort(['TRANSREF', 'ISSDTE'], descending=[False, True]).u
     subset=['TRANSREF'], keep='first'
 )
 
+print(f"  BTDTL records after filtering: {len(btdtl_data)}")
+
 
 # ============================================================================
 # STEP 4: PROCESS PBA DATA (BANKER'S ACCEPTANCE)
 # ============================================================================
-print("Step 4: Processing PBA data...")
+print("\nStep 4: Processing PBA data...")
 
-pba_data = pl.read_parquet(PBA01_FILE)
+# Read PBA01 with date suffix
+pba_df = read_sas_with_date_suffix(PBA01_FILE_BASE, REPTYEAR, REPTMON, REPTDAY)
 
 # Extract TRANSREF (skip first character)
-pba_data = pba_data.with_columns([
-    pl.col('TRANSREF').str.slice(1, 8).alias('TRANSREF')
+pba_data = pba_df.with_columns([
+    pl.col('TRANSREF').cast(pl.Utf8).str.slice(1, 8).alias('TRANSREF')
 ])
 
 # Merge PBA with BTDTL
 ba_data = pba_data.join(btdtl_data, on='TRANSREF', how='left')
 
+print(f"  BA records after merge: {len(ba_data)}")
+
 
 # ============================================================================
 # STEP 5: PROCESS BA TRANSACTIONS
 # ============================================================================
-print("Step 5: Processing BA transactions...")
+print("\nStep 5: Processing BA transactions...")
 
 ba_records = []
+base_date_sas = datetime(1960, 1, 1).date()
+reptdate_sas = (reptdate - base_date_sas).days
 
 for row in ba_data.iter_rows(named=True):
     balance = (row.get('FCVALUE', 0) or 0) - (row.get('UNEARNED', 0) or 0)
-    custcd = row.get('CUSTCD', '')
-    product = row.get('PRODUCT', 0)
-    bldate = row.get('BLDATE', 0)
-    issdte = row.get('ISSDTE', 0)
-    exprdate = row.get('EXPRDATE', 0)
-    payamt = row.get('PAYAMT', 0)
+    custcd = str(row.get('CUSTCD', '')) if row.get('CUSTCD') is not None else ''
+    product = row.get('PRODUCT', 0) or 0
+    bldate = row.get('BLDATE', 0) or 0
+    issdte = row.get('ISSDTE', 0) or 0
+    exprdate = row.get('EXPRDATE', 0) or 0
+    payamt = row.get('PAYAMT', 0) or 0
+    
+    # Skip if no balance
+    if balance == 0:
+        continue
 
     # Determine customer type
     cust = '08' if custcd in ['77', '78', '95', '96'] else '09'
-
-    # Determine product type
-    prod = 'BT'
 
     # Determine item code
     if custcd in ['77', '78', '95', '96']:
         item = '219'  # Default for BT
     else:
-        if prod == 'FL':
-            item = '211'
-        elif prod == 'RC':
-            item = '212'
-        else:
-            item = '219'
-
+        item = '219'  # Default for others
+    
     # Hardcode override
     if product == 100:
         item = '212'
@@ -267,7 +321,7 @@ for row in ba_data.iter_rows(named=True):
     # Calculate days
     days = 0
     if bldate and bldate > 0:
-        days = (reptdate - datetime(1960, 1, 1).date()).days - bldate
+        days = reptdate_sas - bldate
 
     # Initialize variables
     current_balance = balance
@@ -279,7 +333,7 @@ for row in ba_data.iter_rows(named=True):
     elif exprdate and (exprdate - RUNOFFDT < 8):
         remmth = 0.1
     else:
-        # Payment frequency
+        # Payment frequency (hardcoded to 6 months for now)
         payfreq = '3'
         if payfreq == '1':
             freq = 1
@@ -295,8 +349,6 @@ for row in ba_data.iter_rows(named=True):
         # Initialize bldate if needed
         if current_bldate is None or current_bldate <= 0:
             current_bldate = issdte
-            # Advance bldate to after reptdate
-            reptdate_sas = (reptdate - datetime(1960, 1, 1).date()).days
             while current_bldate and current_bldate <= reptdate_sas:
                 current_bldate = calculate_next_bldate(current_bldate, issdte, payfreq, freq, reptdate)
                 if current_bldate is None:
@@ -351,7 +403,7 @@ for row in ba_data.iter_rows(named=True):
             remmth = 0.1
         else:
             remmth = calculate_remmth(current_bldate if current_bldate else exprdate, runoff_date, rpyr, rpmth, rpday)
-
+    
     # Output remaining balance
     amount = current_balance
     if amount and amount != 0:
@@ -366,47 +418,49 @@ for row in ba_data.iter_rows(named=True):
 
 ba_df = pl.DataFrame(ba_records) if ba_records else pl.DataFrame({'BNMCODE': [], 'AMOUNT': []})
 
-print(f"BA records created: {len(ba_records)}")
+print(f"  BA records created: {len(ba_records)}")
+if len(ba_records) > 0:
+    print(f"  BA total amount: {ba_df['AMOUNT'].sum():,.2f}")
 
 
 # ============================================================================
 # STEP 6: PROCESS TR DATA (TRADE TRANSACTIONS)
 # ============================================================================
-print("Step 6: Processing TR data...")
+print("\nStep 6: Processing TR data...")
 
-tr_data = pl.read_parquet(BTDTL_FILE).filter(
-    (~pl.col('LIABCODE').is_in(['BAI', 'BAP', 'BAS', 'BAE'])) &
-    (pl.col('DIRCTIND') == 'D')
+# Read BTDTL again for TR (using same file but different filter)
+# We already have btdtl_df from step 3
+tr_data = btdtl_df.filter(
+    (~pl.col('LIABCODE').cast(pl.Utf8).is_in(['BAI', 'BAP', 'BAS', 'BAE'])) &
+    (pl.col('DIRCTIND').cast(pl.Utf8) == 'D')
 )
+
+print(f"  TR records before processing: {len(tr_data)}")
 
 tr_records = []
 
 for row in tr_data.iter_rows(named=True):
     outstand = row.get('OUTSTAND', 0) or 0
-    custcd = row.get('CUSTCD', '')
-    product = row.get('PRODUCT', 0)
-    bldate = row.get('BLDATE', 0)
-    issdte = row.get('ISSDTE', 0)
-    exprdate = row.get('EXPRDATE', 0)
-    payamt = row.get('PAYAMT', 0)
+    custcd = str(row.get('CUSTCD', '')) if row.get('CUSTCD') is not None else ''
+    product = row.get('PRODUCT', 0) or 0
+    bldate = row.get('BLDATE', 0) or 0
+    issdte = row.get('ISSDTE', 0) or 0
+    exprdate = row.get('EXPRDATE', 0) or 0
+    payamt = row.get('PAYAMT', 0) or 0
+    
+    # Skip if no outstand
+    if outstand == 0:
+        continue
 
     # Determine customer type
     cust = '08' if custcd in ['77', '78', '95', '96'] else '09'
-
-    # Determine product type
-    prod = 'BT'
 
     # Determine item code
     if custcd in ['77', '78', '95', '96']:
         item = '219'
     else:
-        if prod == 'FL':
-            item = '211'
-        elif prod == 'RC':
-            item = '212'
-        else:
-            item = '219'
-
+        item = '219'
+    
     # Hardcode override
     if product == 100:
         item = '212'
@@ -414,7 +468,7 @@ for row in tr_data.iter_rows(named=True):
     # Calculate days
     days = 0
     if bldate and bldate > 0:
-        days = (reptdate - datetime(1960, 1, 1).date()).days - bldate
+        days = reptdate_sas - bldate
 
     # Initialize variables
     current_outstand = outstand
@@ -442,7 +496,6 @@ for row in tr_data.iter_rows(named=True):
         # Initialize bldate if needed
         if current_bldate is None or current_bldate <= 0:
             current_bldate = issdte
-            reptdate_sas = (reptdate - datetime(1960, 1, 1).date()).days
             while current_bldate and current_bldate <= reptdate_sas:
                 current_bldate = calculate_next_bldate(current_bldate, issdte, payfreq, freq, reptdate)
                 if current_bldate is None:
@@ -509,32 +562,35 @@ for row in tr_data.iter_rows(named=True):
 
 tr_df = pl.DataFrame(tr_records) if tr_records else pl.DataFrame({'BNMCODE': [], 'AMOUNT': []})
 
-print(f"TR records created: {len(tr_records)}")
+print(f"  TR records created: {len(tr_records)}")
+if len(tr_records) > 0:
+    print(f"  TR total amount: {tr_df['AMOUNT'].sum():,.2f}")
 
 
 # ============================================================================
 # STEP 7: COMBINE AND FILTER
 # ============================================================================
-print("Step 7: Combining data...")
+print("\nStep 7: Combining and filtering data...")
 
 combine_df = pl.concat([ba_df, tr_df])
 
 # Filter out records with missing remmth (code '07')
-print(f"\nRecords with MISSING remmth (code '07'):")
 missing_df = combine_df.filter(pl.col('BNMCODE').str.slice(7, 2) == '07')
 if len(missing_df) > 0:
-    print(f"Count: {len(missing_df)}, Sum: {missing_df['AMOUNT'].sum()}")
+    print(f"  Records with MISSING remmth (code '07'): {len(missing_df)}")
+    print(f"  Missing amount sum: {missing_df['AMOUNT'].sum():,.2f}")
 else:
-    print("Count: 0, Sum: 0")
+    print("  Records with MISSING remmth (code '07'): 0")
 
 # Keep only records without missing remmth
 note_df = combine_df.filter(pl.col('BNMCODE').str.slice(7, 2) != '07')
+print(f"  Valid records after filtering: {len(note_df)}")
 
 
 # ============================================================================
 # STEP 8: SUMMARIZE AND OUTPUT
 # ============================================================================
-print("\nStep 8: Summarizing data...")
+print("\nStep 8: Summarizing and writing output...")
 
 bnm_df = note_df.group_by('BNMCODE').agg([
     pl.col('AMOUNT').sum().alias('AMOUNT')
@@ -543,19 +599,33 @@ bnm_df = note_df.group_by('BNMCODE').agg([
 # Sort by BNMCODE
 bnm_df = bnm_df.sort('BNMCODE')
 
-# Write output
-bnm_df.write_parquet(OUTPUT_FILE)
+# Write output files
+print(f"\n  Writing Parquet: {OUTPUT_PARQUET}")
+bnm_df.write_parquet(OUTPUT_PARQUET)
 
-print(f"\nOutput written to: {OUTPUT_FILE}")
-print(f"Total records: {len(bnm_df)}")
-print(f"Total amount: {bnm_df['AMOUNT'].sum():.2f}")
+print(f"  Writing CSV: {OUTPUT_CSV}")
+bnm_df.write_csv(OUTPUT_CSV)
 
-# Display summary
-print("\nSummary by BNMCODE:")
-for row in bnm_df.iter_rows(named=True):
-    print(f"  {row['BNMCODE']}: {row['AMOUNT']:,.2f}")
+# Summary statistics
+total_amount = bnm_df['AMOUNT'].sum() if len(bnm_df) > 0 else 0
 
-print("\nProcessing complete!")
+print("\n" + "=" * 80)
+print("PROCESSING COMPLETE")
+print("=" * 80)
+print(f"\nOutput files:")
+print(f"  Parquet: {OUTPUT_PARQUET}")
+print(f"  CSV:     {OUTPUT_CSV}")
+print(f"\nSummary:")
+print(f"  Total BNM Codes: {len(bnm_df)}")
+print(f"  Total Amount:    {total_amount:,.2f}")
+
+if len(bnm_df) > 0:
+    print(f"\nBreakdown by BNMCODE:")
+    print("-" * 50)
+    for row in bnm_df.iter_rows(named=True):
+        print(f"  {row['BNMCODE']}: {row['AMOUNT']:>15,.2f}")
+
+print("\n" + "=" * 80)
 
 # Close DuckDB connection
 con.close()
