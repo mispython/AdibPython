@@ -26,9 +26,9 @@ BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "data"
 OUTPUT_DIR = BASE_DIR / "output"
 
-# Input SAS files
-REPTDATE_FILE = INPUT_DIR / "REPTDATE.sas7bdat"  # Optional - can use datetime instead
-BTRAD_FILE_TEMPLATE = INPUT_DIR / "BTRAD{}{}.sas7bdat"
+# Input SAS files - pattern: BTRAD{YY}{MM}{WK}.sas7bdat
+# Example: BTRAD240601.sas7bdat (Year=2024, Month=06, Week=1)
+BTRAD_FILE_TEMPLATE = INPUT_DIR / "BTRAD{yy}{mm}{wk}.sas7bdat"
 
 # Output files
 BT_OUTPUT_PATH = OUTPUT_DIR / "BT.txt"
@@ -41,19 +41,11 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # ============================================================================
 # SAS FILE READER
 # ============================================================================
-def read_sas_single(filepath: Path) -> pl.DataFrame:
-    """Read a single SAS .sas7bdat file and return as Polars DataFrame"""
+def read_sas_file(filepath: Path) -> pl.DataFrame:
+    """Read a SAS .sas7bdat file and return as Polars DataFrame"""
     print(f"  Reading: {filepath.name}")
     df, meta = pyreadstat.read_sas7bdat(str(filepath))
     return pl.from_pandas(df)
-
-
-def read_sas_file(base_path: Path, mon: str, wk: str) -> pl.DataFrame:
-    """Read SAS file with month and week suffix"""
-    filepath = Path(str(base_path).format(mon, wk))
-    if not filepath.exists():
-        raise FileNotFoundError(f"SAS file not found: {filepath}")
-    return read_sas_single(filepath)
 
 
 # ============================================================================
@@ -160,8 +152,21 @@ def calculate_remaining_months(matdt: date, reptdate: date) -> float:
     return remy * 12 + remm + remd / rpdays
 
 
+def get_week_number(reptdate: date) -> str:
+    """Determine week number based on report day (1st, 2nd, 3rd, or 4th week)."""
+    day = reptdate.day
+    if day == 8:
+        return "1"
+    elif day == 15:
+        return "2"
+    elif day == 22:
+        return "3"
+    else:
+        return "4"
+
+
 # ============================================================================
-# READ REPTDATE (Optional - can use datetime instead)
+# READ REPTDATE (Using datetime instead of file)
 # ============================================================================
 
 def get_report_date(reptdate: date | None = None) -> dict:
@@ -172,15 +177,7 @@ def get_report_date(reptdate: date | None = None) -> dict:
     if reptdate is None:
         reptdate = date.today()
     
-    day = reptdate.day
-    if day == 8:
-        nowk = "1"
-    elif day == 15:
-        nowk = "2"
-    elif day == 22:
-        nowk = "3"
-    else:
-        nowk = "4"
+    nowk = get_week_number(reptdate)
 
     return {
         "REPTDATE": reptdate,
@@ -188,6 +185,7 @@ def get_report_date(reptdate: date | None = None) -> dict:
         "REPTMON": f"{reptdate.month:02d}",
         "REPTDAY": f"{reptdate.day:02d}",
         "REPTYEAR": f"{reptdate.year:04d}",
+        "REPTYEAR2": f"{reptdate.year % 100:02d}",  # 2-digit year for filename
         "RDATE": reptdate.strftime("%d%m%Y"),
     }
 
@@ -199,17 +197,21 @@ def get_report_date(reptdate: date | None = None) -> dict:
 def process_loan_data(macro_vars: dict) -> pl.DataFrame:
     """Process BTRAD loan data and produce BNMCODE/AMOUNT output."""
     reptdate = macro_vars["REPTDATE"]
-    reptmon = macro_vars["REPTMON"]
-    nowk = macro_vars["NOWK"]
+    yy = macro_vars["REPTYEAR2"]      # 2-digit year (e.g., "24")
+    mm = macro_vars["REPTMON"]         # 2-digit month (e.g., "06")
+    wk = macro_vars["NOWK"]            # week (1-4)
 
-    # Read BTRAD SAS file
-    print(f"\nReading BTRAD data for month {reptmon}, week {nowk}...")
-    btrad_path = Path(str(BTRAD_FILE_TEMPLATE).format(reptmon, nowk))
+    # Build filename: BTRAD{YY}{MM}{WK}.sas7bdat
+    # Example: BTRAD240601.sas7bdat
+    btrad_filename = f"BTRAD{yy}{mm}{wk}.sas7bdat"
+    btrad_path = INPUT_DIR / btrad_filename
+    
+    print(f"\nLooking for BTRAD file: {btrad_filename}")
     
     if not btrad_path.exists():
         raise FileNotFoundError(f"BTRAD file not found: {btrad_path}")
-    
-    df = read_sas_single(btrad_path)
+
+    df = read_sas_file(btrad_path)
     print(f"  Total records read: {len(df)}")
 
     # Filter for loan products (PRODCD starts with '34' OR PRODUCT in (225,226))
@@ -218,6 +220,10 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
         | (pl.col("PRODUCT").is_in([225, 226]))
     )
     print(f"  Records after filtering: {len(df)}")
+
+    if len(df) == 0:
+        print("  No records after filtering.")
+        return pl.DataFrame({"BNMCODE": [], "AMOUNT": []})
 
     output_records: list[dict] = []
     processed = 0
@@ -255,6 +261,10 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
             else:
                 item = "219"
 
+        # Hardcode override for product 100
+        if product == 100:
+            item = "212"
+
         # Calculate days past due
         days = (reptdate - bldate).days if bldate else 0
 
@@ -262,10 +272,12 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
         remmth = None
 
         # Process maturity profile
-        if (exprdate - reptdate).days < 8:
+        if exprdate <= reptdate:
+            remmth = None
+        elif (exprdate - reptdate).days < 8:
             remmth = 0.1
         else:
-            # Payment frequency (hardcoded to '3' = 6 months)
+            # Payment frequency (hardcoded to '3' = 6 months as per SAS)
             payfreq = "3"
             if payfreq == "1":
                 freq = 1
@@ -284,7 +296,8 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
             elif not bldate:
                 bldate = issdte
                 if bldate is None:
-                    bldate = reptdate
+                    continue
+                # Advance billing date to after report date
                 while bldate <= reptdate:
                     bldate = calculate_next_bldate(bldate, issdte, payfreq, freq)
 
@@ -333,7 +346,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
 
         # Output remaining balance
         amount = balance
-        if amount != 0:
+        if amount != 0 and amount is not None:
             # Part 2-RM record (95)
             bnmcode = f"95{item}{cust}{get_rem_format(remmth)}0000Y"
             output_records.append({"BNMCODE": bnmcode, "AMOUNT": amount})
@@ -370,7 +383,7 @@ def aggregate_output(df_output: pl.DataFrame) -> pl.DataFrame:
     
     missing = df_output.filter(pl.col("BNMCODE").str.slice(7, 2) == "07")
     if len(missing) > 0:
-        print(f"  Records with missing remmth (code '07'): {len(missing)}")
+        print(f"\n  Records with missing remmth (code '07'): {len(missing)}")
         print(f"  Missing amount sum: {missing['AMOUNT'].sum():,.2f}")
 
     return df_valid.group_by("BNMCODE").agg(pl.col("AMOUNT").sum()).sort("BNMCODE")
@@ -382,8 +395,10 @@ def write_output_txt(df_agg: pl.DataFrame) -> None:
     with open(BT_OUTPUT_PATH, "w", encoding="utf-8") as file_handle:
         for row in df_agg.iter_rows(named=True):
             file_handle.write(f"{row['BNMCODE']}|{row['AMOUNT']:.2f}\n")
+    
+    total_amount = df_agg['AMOUNT'].sum() if len(df_agg) > 0 else 0
     print(f"  Total BNM codes written: {len(df_agg)}")
-    print(f"  Total amount: {df_agg['AMOUNT'].sum():,.2f}")
+    print(f"  Total amount: {total_amount:,.2f}")
 
 
 # ============================================================================
@@ -409,6 +424,10 @@ def build_report_lines(df_agg: pl.DataFrame, macro_vars: dict) -> list[str]:
         lines.append(" " + "-" * 60)
         return 4
 
+    if df_agg.is_empty():
+        lines.append(" " + "NO DATA FOUND FOR THE REPORT PERIOD")
+        return lines
+
     line_count = add_header()
     total_amount = 0.0
 
@@ -431,7 +450,7 @@ def build_report_lines(df_agg: pl.DataFrame, macro_vars: dict) -> list[str]:
     return lines
 
 
-def write_report(lines: list[str], macro_vars: dict) -> None:
+def write_report(lines: list[str]) -> None:
     """Write report with ASA control characters."""
     print(f"Writing report to: {BT_REPORT_PATH}")
     with open(BT_REPORT_PATH, "w", encoding="utf-8") as file_handle:
@@ -450,11 +469,13 @@ def main(reptdate: date | None = None) -> int:
     print("=" * 70)
 
     try:
-        # Step 1: Get report date (use datetime, no parquet file needed)
+        # Step 1: Get report date (using datetime, no parquet file needed)
         macro_vars = get_report_date(reptdate)
         print(f"\nReport Date: {macro_vars['REPTDATE'].strftime('%d/%m/%Y')}")
         print(f"Week Number: {macro_vars['NOWK']}")
         print(f"Report Month: {macro_vars['REPTMON']}")
+        print(f"Report Year (2-digit): {macro_vars['REPTYEAR2']}")
+        print(f"Expected BTRAD file: BTRAD{macro_vars['REPTYEAR2']}{macro_vars['REPTMON']}{macro_vars['NOWK']}.sas7bdat")
 
         # Step 2: Process loan data
         df_output = process_loan_data(macro_vars)
@@ -467,6 +488,9 @@ def main(reptdate: date | None = None) -> int:
 
         if df_agg.is_empty():
             print("\nNo valid records to output.")
+            # Still write empty report
+            report_lines = build_report_lines(df_agg, macro_vars)
+            write_report(report_lines)
             return 0
 
         # Step 4: Write output files
@@ -477,7 +501,7 @@ def main(reptdate: date | None = None) -> int:
 
         # Step 5: Generate report
         report_lines = build_report_lines(df_agg, macro_vars)
-        write_report(report_lines, macro_vars)
+        write_report(report_lines)
 
         print("\n" + "=" * 70)
         print("PROCESSING COMPLETED SUCCESSFULLY")
@@ -487,6 +511,11 @@ def main(reptdate: date | None = None) -> int:
         
         return 0
         
+    except FileNotFoundError as e:
+        print(f"\nFILE NOT FOUND ERROR: {e}", file=sys.stderr)
+        print("\nExpected file pattern: BTRAD{YY}{MM}{WK}.sas7bdat")
+        print("Example: BTRAD240601.sas7bdat for Year=2024, Month=06, Week=1")
+        return 1
     except Exception as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
         import traceback
@@ -500,7 +529,10 @@ def main(reptdate: date | None = None) -> int:
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='EIBMLIBT - Loan Maturity Profile Processor')
+    parser = argparse.ArgumentParser(
+        description='EIBMLIBT - Loan Maturity Profile Processor',
+        epilog='Example: python EIBMLIBT.py 2024-06-15'
+    )
     parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format (default: today)')
     
     args = parser.parse_args()
