@@ -179,7 +179,16 @@ def get_report_date(reptdate: date | None = None) -> dict:
     If reptdate is None, use today's date.
     """
     if reptdate is None:
+        # ====================================================================
+        # TESTING - Use today's date
+        # ====================================================================
         reptdate = date.today()
+        
+        # ====================================================================
+        # PRODUCTION - Uncomment below for production use
+        # The report date should come from the parameter or a specific date
+        # ====================================================================
+        # reptdate = datetime(2026, 6, 8).date()  # Example: June 8, 2026
     
     nowk = get_week_number(reptdate)
 
@@ -533,7 +542,7 @@ if __name__ == "__main__":
         description='EIBMLIBT - Loan Maturity Profile Processor',
         epilog='Example: python EIBMLIBT.py 2026-06-08'
     )
-    parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format (default: today)')
+    parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format (default: today for testing)')
     
     args = parser.parse_args()
     
@@ -542,8 +551,11 @@ if __name__ == "__main__":
     if args.date:
         try:
             reptdate = datetime.strptime(args.date, '%Y-%m-%d').date()
+            print(f"Using command line date: {reptdate}")
         except ValueError:
             print(f"Error: Invalid date format. Use YYYY-MM-DD")
             sys.exit(1)
+    else:
+        print("No date provided - using today's date for testing")
     
     sys.exit(main(reptdate))
