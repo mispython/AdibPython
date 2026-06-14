@@ -44,6 +44,18 @@ def read_sas_file(filepath: Path) -> pl.DataFrame:
     """Read a SAS .sas7bdat file and return as Polars DataFrame"""
     print(f"  Reading: {filepath.name}")
     df, meta = pyreadstat.read_sas7bdat(str(filepath))
+    
+    # Convert all date columns from SAS numeric to proper dates
+    # SAS dates are days since 1960-01-01
+    date_columns = ['BLDATE', 'ISSDTE', 'EXPRDATE', 'MATDATE', 'CREATDS', 'APVDATE']
+    for col in date_columns:
+        if col in df.columns:
+            # Convert SAS numeric dates to datetime, then to date
+            df[col] = df[col].apply(
+                lambda x: (date(1960, 1, 1) + timedelta(days=int(x))).strftime('%Y-%m-%d') 
+                if pd.notna(x) and x > 0 else None
+            )
+    
     return pl.from_pandas(df)
 
 
@@ -90,18 +102,29 @@ def get_prod_format(product: int | None) -> str:
 
 def to_date(value) -> date | None:
     """
-    Convert SAS numeric date or datetime to Python date.
-    Always returns date object (not datetime) for consistent comparison.
+    Convert any date-like value to a Python date object.
+    Handles datetime, date, and SAS numeric values.
+    Always returns a date object (never datetime).
     """
     if value is None:
         return None
-    if isinstance(value, date):
-        # If it's already a date, return as date
+    if isinstance(value, date) and not isinstance(value, datetime):
+        # Already a date object
         return value
     if isinstance(value, datetime):
         # Convert datetime to date
         return value.date()
+    if isinstance(value, str):
+        # Try to parse string date
+        try:
+            return datetime.strptime(value, '%Y-%m-%d').date()
+        except ValueError:
+            try:
+                return datetime.strptime(value, '%d/%m/%Y').date()
+            except ValueError:
+                return None
     if isinstance(value, (int, float)):
+        # SAS numeric date (days since 1960-01-01)
         if value <= 0:
             return None
         return date(1960, 1, 1) + timedelta(days=int(value))
@@ -176,19 +199,19 @@ def get_week_number(reptdate: date) -> str:
 def get_report_date(reptdate: date | None = None) -> dict:
     """
     Get report date and derive macro variables.
-    If reptdate is None, use today's date.
+    If reptdate is None, use today's date for testing.
     """
     if reptdate is None:
         # ====================================================================
         # TESTING - Use today's date
         # ====================================================================
         reptdate = date.today()
+        print(f"  TESTING MODE: Using today's date: {reptdate}")
         
         # ====================================================================
-        # PRODUCTION - Uncomment below for production use
-        # The report date should come from the parameter or a specific date
+        # PRODUCTION - Uncomment below for production use with fixed date
         # ====================================================================
-        # reptdate = datetime(2026, 6, 8).date()  # Example: June 8, 2026
+        # reptdate = date(2026, 6, 8)  # Example: June 8, 2026
     
     nowk = get_week_number(reptdate)
 
@@ -228,33 +251,45 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
     if not btrad_path.exists():
         raise FileNotFoundError(f"BTRAD file not found: {btrad_path}")
 
-    df = read_sas_file(btrad_path)
+    # Read SAS file
+    print(f"  Reading: {btrad_path.name}")
+    df, meta = pyreadstat.read_sas7bdat(str(btrad_path))
     print(f"  Total records read: {len(df)}")
+    
+    # Convert to Polars
+    df_pl = pl.from_pandas(df)
+    
+    # Show available columns for debugging
+    print(f"  Available columns: {df_pl.columns[:20]}...")
 
     # Filter for loan products (PRODCD starts with '34' OR PRODCD in ('225','226'))
-    df = df.filter(
+    df_filtered = df_pl.filter(
         (pl.col("PRODCD").cast(pl.Utf8).str.slice(0, 2) == "34")
         | (pl.col("PRODCD").cast(pl.Utf8).is_in(["225", "226"]))
     )
-    print(f"  Records after filtering: {len(df)}")
+    print(f"  Records after filtering: {len(df_filtered)}")
 
-    if len(df) == 0:
+    if len(df_filtered) == 0:
         print("  No records after filtering.")
         return pl.DataFrame({"BNMCODE": [], "AMOUNT": []})
 
     output_records: list[dict] = []
     processed = 0
 
-    for row in df.iter_rows(named=True):
+    for row in df_filtered.iter_rows(named=True):
         custcd = str(row.get("CUSTCD", ""))
         prodcd = str(row.get("PRODCD", ""))
         balance = float(row.get("BALANCE", 0) or 0)
         payamt = float(row.get("PAYAMT", 0) or 0)
 
-        # Convert all dates to date objects (not datetime)
-        bldate = to_date(row.get("BLDATE"))
-        issdte = to_date(row.get("ISSDTE"))
-        exprdate = to_date(row.get("EXPRDATE"))
+        # Convert all dates to date objects using to_date() function
+        bldate_val = row.get("BLDATE")
+        issdte_val = row.get("ISSDTE")
+        exprdate_val = row.get("EXPRDATE")
+        
+        bldate = to_date(bldate_val)
+        issdte = to_date(issdte_val)
+        exprdate = to_date(exprdate_val)
 
         if exprdate is None:
             continue
@@ -367,7 +402,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
             output_records.append({"BNMCODE": bnmcode, "AMOUNT": amount})
 
         processed += 1
-        if processed % 10000 == 0:
+        if processed % 5000 == 0:
             print(f"  Processed {processed} records...")
 
     print(f"  Total records processed: {processed}")
