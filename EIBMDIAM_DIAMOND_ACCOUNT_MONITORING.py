@@ -7,17 +7,14 @@ from pathlib import Path
 from functools import lru_cache
 
 # ============================================
-# CONFIGURATION
+# CONFIGURATION - Only 3 input files
 # ============================================
 CFG = {
     "reptdate": datetime.date.today(),  # Or read from file
     "input": {
-        "saca_data": "/path/to/input/SACA.txt",
-        "plusfd_data": "/path/to/input/PLUSFD.txt",
-        "fcyfd_data": "/path/to/input/FCYFD.txt",
-        "saving": "/path/to/input/deposit_saving.txt",
-        "current": "/path/to/input/deposit_current.txt",
-        "fd": "/path/to/input/deposit_fd.txt"
+        "saca": "/path/to/input/SACA.txt",      # INFILE SACA
+        "plusfd": "/path/to/input/PLUSFD.txt",  # INFILE PLUSFD  
+        "fcyfd": "/path/to/input/FCYFD.txt"     # INFILE FCYFD
     },
     "output": "/path/to/output"
 }
@@ -41,20 +38,10 @@ def get_report_metadata():
         'rdate': dt.strftime("%d%m%y")
     }
 
-def parse_opendate(val):
-    """Parse OPENDATE from OPENDT (SAS logic: SUBSTR(PUT(OPENDT,Z11.),1,8))"""
-    if not val:
-        return None
-    s = str(val).strip()[:8]
-    try:
-        return datetime.date(int(s[4:8]) + (2000 if int(s[4:8]) < 100 else 0), 
-                           int(s[:2]), int(s[2:4]))
-    except:
-        return None
-
 def read_fixed_width(filepath, cols):
     """Read fixed-width text file based on column definitions"""
     if not os.path.exists(filepath):
+        print(f"  ⚠ File not found: {filepath}")
         return pa.Table.from_pylist([])
     
     data = []
@@ -69,42 +56,48 @@ def read_fixed_width(filepath, cols):
                     else:
                         record[name] = None if dtype != float else 0.0
                 data.append(record)
+    print(f"  Read {len(data):,} records from {os.path.basename(filepath)}")
     return pa.Table.from_pylist(data)
 
-def process_accounts(source_tbl, date_col='opendt', min_date=None, max_date=None):
-    """Generic account processing: filter by date and remove duplicates"""
-    accounts = []
-    for row in source_tbl.to_pylist():
-        opendate = parse_opendate(row.get(date_col))
-        if opendate and min_date <= opendate <= max_date:
-            accounts.append({'acctno': row['acctno'], 'opendate': opendate})
-    
-    unique = {row['acctno']: row['opendate'] for row in accounts}
-    return pa.Table.from_pylist([{'acctno': k, 'opendate': v} for k, v in unique.items()])
-
-def merge_and_export(accounts_tbl, flatfile_tbl, output_dir, filename):
-    """Merge accounts with flatfile, calculate nodays, export to CSV & Parquet"""
-    if not accounts_tbl.num_rows or not flatfile_tbl.num_rows:
+def merge_and_export(flatfile_tbl, output_dir, filename):
+    """
+    Merge flatfile with itself (since no separate deposit tables),
+    calculate nodays, export to CSV & Parquet
+    """
+    if not flatfile_tbl.num_rows:
         print(f"  ⚠ No data for {filename}")
         return
     
     md = get_report_metadata()
     
-    # Merge using DuckDB
-    duckdb.register("accounts", accounts_tbl)
-    duckdb.register("flatfile", flatfile_tbl)
+    # Add opendate and reptdate based on SAS logic
+    # In original SAS, this came from DEPOSIT.SAVING/CURRENT/FD
+    # Here we need to derive or use default values
     
-    result = duckdb.sql("""
-        SELECT f.*, a.opendate
-        FROM flatfile f
-        INNER JOIN accounts a ON f.acctno = a.acctno
-    """).to_arrow()
+    # For now, add placeholder opendate (you'll need to adjust based on your data)
+    # If your flatfile has an opendate field, use that instead
+    result = flatfile_tbl.append_column(
+        "opendate",
+        pa.scalar(md['dayone'])  # Placeholder - adjust based on your actual data
+    ).append_column(
+        "reptdate",
+        pa.scalar(md['dt'])
+    )
     
-    # Calculate NODAYS (vectorized)
+    # Calculate NODAYS (SAS logic: if opendate>0 then (reptdate-opendate)+1 else day(reptdate))
     result = result.append_column("nodays",
-        pc.if_else(pc.field("opendate").is_valid(),
-                  pc.add(pc.subtract(pa.scalar(md['dt']), pc.field("opendate")).cast(pa.int64()), 1),
-                  pa.scalar(md['dt'].day)))
+        pc.if_else(
+            pc.field("opendate").is_valid(),
+            pc.add(
+                pc.subtract(pa.scalar(md['dt']), pc.field("opendate")).cast(pa.int64()),
+                pa.scalar(1)
+            ),
+            pa.scalar(md['dt'].day)
+        )
+    )
+    
+    # Drop reptdate (as in SAS DROP REPTDATE)
+    result = result.drop(['reptdate'])
     
     # Export
     csv_path = os.path.join(output_dir, f"{filename}.csv")
@@ -113,7 +106,7 @@ def merge_and_export(accounts_tbl, flatfile_tbl, output_dir, filename):
     result.to_pandas().to_csv(csv_path, index=False)
     pa.parquet.write_table(result, parquet_path)
     
-    print(f"  ✓ {filename}: {result.num_rows:,} rows")
+    print(f"  ✓ {filename}: {result.num_rows:,} rows exported")
     return result
 
 # ============================================
@@ -121,50 +114,57 @@ def merge_and_export(accounts_tbl, flatfile_tbl, output_dir, filename):
 # ============================================
 def main():
     md = get_report_metadata()
-    print(f"\n=== Processing {md['dt']} (Week {md['nowk']}) ===\n")
+    print(f"\n{'='*60}")
+    print(f"Processing Report Date: {md['dt']} (Week {md['nowk']})")
+    print(f"{'='*60}\n")
     
-    # Define column specifications (name, start, end, type)
+    # Define column specifications based on SAS INPUT statements
+    # @001 ACCTNO 11., @012 CDNO 11., @023 BRANCH 3., etc.
     flatfile_cols = [
-        ('acctno', 1, 11, int), ('cdno', 12, 22, int), ('branch', 23, 25, int),
-        ('product', 26, 28, int), ('intplan', 29, 30, int),
-        ('curcum', 32, 47, float), ('mtdbal', 48, 63, float)
+        ('acctno', 1, 11, int),      # @001 ACCTNO 11.
+        ('cdno', 12, 22, int),       # @012 CDNO 11.
+        ('branch', 23, 25, int),     # @023 BRANCH 3.
+        ('product', 26, 28, int),    # @026 PRODUCT 3.
+        ('intplan', 29, 30, int),    # @029 INTPLAN IB2.
+        ('curcum', 32, 47, float),   # @032 CURCUM 16.2
+        ('mtdbal', 48, 63, float)    # @048 MTDBAL 16.2
     ]
     
-    # 1. Process SACA (Saving + Current)
+    # 1. Process SACA
     print("1. Processing FD_SACA...")
-    saving = duckdb.read_csv(CFG["input"]["saving"], header=True, auto_detect=True).to_arrow()
-    current = duckdb.read_csv(CFG["input"]["current"], header=True, auto_detect=True).to_arrow()
+    saca_data = read_fixed_width(CFG["input"]["saca"], flatfile_cols)
+    merge_and_export(saca_data, 
+                    os.path.join(CFG["output"], "FD_SACA"), 
+                    "FD_SACA")
     
-    saca_raw = pa.concat_tables([saving, current])
-    saca_accounts = process_accounts(saca_raw, min_date=md['dayone'], max_date=md['dt'])
+    # 2. Process PLUSFD
+    print("\n2. Processing FD_PLUSFD...")
+    plusfd_data = read_fixed_width(CFG["input"]["plusfd"], flatfile_cols)
+    merge_and_export(plusfd_data, 
+                    os.path.join(CFG["output"], "FD_PLUSFD"), 
+                    "FD_PLUSFD")
     
-    saca_flatfile = read_fixed_width(CFG["input"]["saca_data"], flatfile_cols)
-    merge_and_export(saca_accounts, saca_flatfile, 
-                    os.path.join(CFG["output"], "FD_SACA"), "FD_SACA")
-    
-    # 2. Process FD accounts (shared for PLUSFD & FCYFD)
-    print("\n2. Processing FD_PLUSFD & FD_FCYFD...")
-    fd_raw = duckdb.read_csv(CFG["input"]["fd"], header=True, auto_detect=True).to_arrow()
-    fd_accounts = process_accounts(fd_raw, min_date=md['dayone'], max_date=md['dt'])
-    
-    # Process PLUSFD
-    plusfd_flatfile = read_fixed_width(CFG["input"]["plusfd_data"], flatfile_cols)
-    merge_and_export(fd_accounts, plusfd_flatfile,
-                    os.path.join(CFG["output"], "FD_PLUSFD"), "FD_PLUSFD")
-    
-    # Process FCYFD
-    fcyfd_flatfile = read_fixed_width(CFG["input"]["fcyfd_data"], flatfile_cols)
-    merge_and_export(fd_accounts, fcyfd_flatfile,
-                    os.path.join(CFG["output"], "FD_FCYFD"), "FD_FCYFD")
+    # 3. Process FCYFD
+    print("\n3. Processing FD_FCYFD...")
+    fcyfd_data = read_fixed_width(CFG["input"]["fcyfd"], flatfile_cols)
+    merge_and_export(fcyfd_data, 
+                    os.path.join(CFG["output"], "FD_FCYFD"), 
+                    "FD_FCYFD")
     
     # Save metadata
-    print("\n3. Saving metadata...")
+    print("\n4. Saving metadata...")
     for name in ["FD_SACA", "FD_PLUSFD", "FD_FCYFD"]:
         meta_path = os.path.join(CFG["output"], name, "metadata.txt")
         with open(meta_path, 'w') as f:
-            f.write(f"Report Date: {md['dt']}\nRDATE: {md['rdate']}\nNOWK: {md['nowk']}\nDAYONE: {md['dayone']}")
+            f.write(f"Report Date: {md['dt']}\n")
+            f.write(f"RDATE: {md['rdate']}\n")
+            f.write(f"NOWK: {md['nowk']}\n")
+            f.write(f"DAYONE: {md['dayone']}\n")
+            f.write(f"Processing Time: {datetime.datetime.now()}\n")
     
-    print(f"\n✅ Complete! Output in: {CFG['output']}")
+    print(f"\n{'='*60}")
+    print(f"✅ COMPLETE! Output saved to: {CFG['output']}")
+    print(f"{'='*60}")
 
 if __name__ == "__main__":
     main()
