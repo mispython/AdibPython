@@ -8,19 +8,36 @@ from pathlib import Path
 import warnings
 import re
 
-# Import from PBBLNFMT - using exact function names from the file
+# Import from PBBLNFMT (only what's actually available)
 from PBBLNFMT import (
-    get_remfmt,           # Format remaining months (REMFMT)
-    get_days_in_month,    # Get days in month (from LDAY array)
-    format_liqpfmt,       # Liquidity product format (LIQPFMT) - was get_liqpfmt
-    format_btcustcd,      # Bankers Trust customer code (BTCUSTCD)
+    get_days_in_month,      # ✅ This exists
+    format_liqpfmt,         # ✅ This exists (LIQPFMT format)
+    format_btcustcd,        # ✅ This exists (BTCUSTCD format)
 )
 
-# Import from PBBELF - macros
+# Import from PBBELF
 from PBBELF import (
-    calculate_next_bldate,   # NXTBLDT macro
-    calculate_remmth,        # REMMTH macro
+    calculate_next_bldate,
+    calculate_remmth,
 )
+
+# REMFMT is NOT in PBBLNFMT - defined locally (from SAS PROC FORMAT)
+def get_remfmt(remmth):
+    """Format remaining months into BNM codes (REMFMT from SAS)"""
+    if remmth is None:
+        return '07'  # MISSING
+    elif remmth <= 0.1:
+        return '01'  # UP TO 1 WK
+    elif remmth <= 1:
+        return '02'  # >1 WK - 1 MTH
+    elif remmth <= 3:
+        return '03'  # >1 MTH - 3 MTHS
+    elif remmth <= 6:
+        return '04'  # >3 - 6 MTHS
+    elif remmth <= 12:
+        return '05'  # >6 MTHS - 1 YR
+    else:
+        return '06'  # > 1 YEAR
 
 warnings.filterwarnings('ignore')
 
