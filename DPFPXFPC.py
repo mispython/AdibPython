@@ -23,8 +23,8 @@ warnings.filterwarnings('ignore')
 # PATH CONFIGURATION
 # ============================================================================
 BASE_DIR = Path(__file__).resolve().parent
-INPUT_DIR = BASE_DIR / "data"
-OUTPUT_DIR = BASE_DIR / "output"
+INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod"
+OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMLIBT"
 
 # Input SAS files - pattern: BTRAD{MM}{WK}{YY}.sas7bdat (case insensitive)
 # Example: BTRAD060126.sas7bdat or btrad060126.sas7bdat
@@ -175,7 +175,8 @@ def get_report_date(reptdate: date | None = None) -> dict:
     If reptdate is None, use today's date.
     """
     if reptdate is None:
-        reptdate = date.today()
+        #reptdate = datetime.now() - timedelta(days=1)
+        reptdate = datetime(2026, 6, 8)
     
     nowk = get_week_number(reptdate)
 
@@ -208,7 +209,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
     
     # Also try uppercase version if lowercase not found
     if not btrad_path.exists():
-        btrad_filename_upper = f"BTRAD{mm}{wk}{yy}.sas7bdat"
+        btrad_filename_upper = f"btrad{mm}{wk}{yy}.sas7bdat"
         btrad_path = INPUT_DIR / btrad_filename_upper
     
     print(f"\nLooking for BTRAD file: {btrad_path.name}")
@@ -553,3 +554,31 @@ if __name__ == "__main__":
             sys.exit(1)
     
     sys.exit(main(reptdate))
+
+
+
+
+
+======================================================================
+EIBMLIBT - LOAN MATURITY PROFILE PROCESSOR
+======================================================================
+
+Report Date: 08/06/2026
+Week Number: 1
+Report Month: 06
+Report Year (2-digit): 26
+Expected BTRAD file: btrad06126.sas7bdat
+
+Looking for BTRAD file: btrad06126.sas7bdat
+  Reading: btrad06126.sas7bdat
+  Total records read: 41554
+  Available columns: ['ACCTNO', 'APPRLIMT', 'TRANSREX', 'CREATTYP', 'BRANCH', 'APPLCODE', 'SUBACCT', 'CREATYYMMDD', 'EXPIRDS', 'SYNDICAT', 'SPECIALF', 'PURPOSES', 'AANUMBER', 'INTRATE', 'SPREAD', 'INFUNDRT', 'DISCNTB', 'DISCNTF', 'TRANXMT', 'EXCHRTE']...
+  Records after filtering: 19631
+
+ERROR: can't compare datetime.datetime to datetime.date
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMLIBT.py", line 488, in main
+    df_output = process_loan_data(macro_vars)
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMLIBT.py", line 291, in process_loan_data
+    if exprdate <= reptdate:
+TypeError: can't compare datetime.datetime to datetime.date
