@@ -26,8 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod"
 OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMLIBT"
 
-# Input SAS files - pattern: BTRAD{MM}{WK}{YY}.sas7bdat (case insensitive)
-# Example: BTRAD060126.sas7bdat or btrad060126.sas7bdat
+# Input SAS files - pattern: BTRAD{MM}{WK}{YY}.sas7bdat
 BTRAD_FILE_TEMPLATE = INPUT_DIR / "btrad{mm}{wk}{yy}.sas7bdat"
 
 # Output files
@@ -90,12 +89,17 @@ def get_prod_format(product: int | None) -> str:
 # ============================================================================
 
 def to_date(value) -> date | None:
-    """Convert SAS numeric date to Python date."""
+    """
+    Convert SAS numeric date or datetime to Python date.
+    Always returns date object (not datetime) for consistent comparison.
+    """
     if value is None:
         return None
-    if isinstance(value, date) and not isinstance(value, datetime):
+    if isinstance(value, date):
+        # If it's already a date, return as date
         return value
     if isinstance(value, datetime):
+        # Convert datetime to date
         return value.date()
     if isinstance(value, (int, float)):
         if value <= 0:
@@ -175,8 +179,7 @@ def get_report_date(reptdate: date | None = None) -> dict:
     If reptdate is None, use today's date.
     """
     if reptdate is None:
-        #reptdate = datetime.now() - timedelta(days=1)
-        reptdate = datetime(2026, 6, 8)
+        reptdate = date.today()
     
     nowk = get_week_number(reptdate)
 
@@ -186,7 +189,7 @@ def get_report_date(reptdate: date | None = None) -> dict:
         "REPTMON": f"{reptdate.month:02d}",
         "REPTDAY": f"{reptdate.day:02d}",
         "REPTYEAR": f"{reptdate.year:04d}",
-        "REPTYEAR2": f"{reptdate.year % 100:02d}",  # 2-digit year for filename
+        "REPTYEAR2": f"{reptdate.year % 100:02d}",
         "RDATE": reptdate.strftime("%d%m%Y"),
     }
 
@@ -202,14 +205,13 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
     wk = macro_vars["NOWK"]            # week (1-4)
     yy = macro_vars["REPTYEAR2"]       # 2-digit year (e.g., "26")
 
-    # Build filename: btrad{MM}{WK}{YY}.sas7bdat (lowercase as per actual file)
-    # Example: btrad060126.sas7bdat (Month=06, Week=1, Year=2026)
+    # Build filename: btrad{MM}{WK}{YY}.sas7bdat
     btrad_filename = f"btrad{mm}{wk}{yy}.sas7bdat"
     btrad_path = INPUT_DIR / btrad_filename
     
     # Also try uppercase version if lowercase not found
     if not btrad_path.exists():
-        btrad_filename_upper = f"btrad{mm}{wk}{yy}.sas7bdat"
+        btrad_filename_upper = f"BTRAD{mm}{wk}{yy}.sas7bdat"
         btrad_path = INPUT_DIR / btrad_filename_upper
     
     print(f"\nLooking for BTRAD file: {btrad_path.name}")
@@ -220,11 +222,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
     df = read_sas_file(btrad_path)
     print(f"  Total records read: {len(df)}")
 
-    # Get column names for debugging
-    print(f"  Available columns: {df.columns[:20]}...")  # Show first 20 columns
-
     # Filter for loan products (PRODCD starts with '34' OR PRODCD in ('225','226'))
-    # Using PRODCD instead of PRODUCT (which doesn't exist)
     df = df.filter(
         (pl.col("PRODCD").cast(pl.Utf8).str.slice(0, 2) == "34")
         | (pl.col("PRODCD").cast(pl.Utf8).is_in(["225", "226"]))
@@ -244,6 +242,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
         balance = float(row.get("BALANCE", 0) or 0)
         payamt = float(row.get("PAYAMT", 0) or 0)
 
+        # Convert all dates to date objects (not datetime)
         bldate = to_date(row.get("BLDATE"))
         issdte = to_date(row.get("ISSDTE"))
         exprdate = to_date(row.get("EXPRDATE"))
@@ -286,6 +285,8 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
 
         # Initialize remaining months
         remmth = None
+        current_balance = balance
+        current_bldate = bldate
 
         # Process maturity profile (matches SAS IF-ELSE logic)
         if exprdate <= reptdate:
@@ -299,23 +300,20 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
 
             # RC products use expiry date as billing date
             if product in (350, 910, 925):
-                bldate = exprdate
-            elif not bldate:
-                bldate = issdte
-                if bldate is None:
+                current_bldate = exprdate
+            elif not current_bldate:
+                current_bldate = issdte
+                if current_bldate is None:
                     continue
-                # Advance billing date to after report date (matches SAS DO WHILE)
-                while bldate <= reptdate:
-                    bldate = calculate_next_bldate(bldate, issdte, payfreq, freq)
+                # Advance billing date to after report date
+                while current_bldate <= reptdate:
+                    current_bldate = calculate_next_bldate(current_bldate, issdte, payfreq, freq)
 
             if payamt < 0:
                 payamt = 0
 
-            if bldate > exprdate or balance <= payamt:
-                bldate = exprdate
-
-            current_balance = balance
-            current_bldate = bldate
+            if current_bldate > exprdate or current_balance <= payamt:
+                current_bldate = exprdate
 
             # Process payment schedule (matches SAS DO WHILE loop)
             while current_bldate <= exprdate:
@@ -324,7 +322,7 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
                 if remmth > 12 or current_bldate == exprdate:
                     break
 
-                if payamt > 0:
+                if payamt > 0 and remmth is not None:
                     amount = payamt
                     current_balance -= payamt
                     
@@ -343,16 +341,12 @@ def process_loan_data(macro_vars: dict) -> pl.DataFrame:
                 if current_bldate > exprdate or current_balance <= payamt:
                     current_bldate = exprdate
 
-            # Use the final remaining balance
-            balance = current_balance
-            bldate = current_bldate
-            
-            # Calculate final remaining months
-            if bldate <= exprdate:
-                remmth = calculate_remaining_months(bldate, reptdate)
+            # Calculate final remaining months for remaining balance
+            if current_bldate <= exprdate:
+                remmth = calculate_remaining_months(current_bldate, reptdate)
 
         # Output remaining balance (matches final OUTPUT statements)
-        amount = balance
+        amount = current_balance
         if amount != 0 and amount is not None:
             # Part 2-RM record (95)
             bnmcode = f"95{item}{cust}{get_rem_format(remmth)}0000Y"
@@ -476,7 +470,7 @@ def main(reptdate: date | None = None) -> int:
     print("=" * 70)
 
     try:
-        # Step 1: Get report date (using datetime, no parquet file needed)
+        # Step 1: Get report date
         macro_vars = get_report_date(reptdate)
         print(f"\nReport Date: {macro_vars['REPTDATE'].strftime('%d/%m/%Y')}")
         print(f"Week Number: {macro_vars['NOWK']}")
@@ -495,7 +489,6 @@ def main(reptdate: date | None = None) -> int:
 
         if df_agg.is_empty():
             print("\nNo valid records to output.")
-            # Still write empty report
             report_lines = build_report_lines(df_agg, macro_vars)
             write_report(report_lines)
             return 0
@@ -554,31 +547,3 @@ if __name__ == "__main__":
             sys.exit(1)
     
     sys.exit(main(reptdate))
-
-
-
-
-
-======================================================================
-EIBMLIBT - LOAN MATURITY PROFILE PROCESSOR
-======================================================================
-
-Report Date: 08/06/2026
-Week Number: 1
-Report Month: 06
-Report Year (2-digit): 26
-Expected BTRAD file: btrad06126.sas7bdat
-
-Looking for BTRAD file: btrad06126.sas7bdat
-  Reading: btrad06126.sas7bdat
-  Total records read: 41554
-  Available columns: ['ACCTNO', 'APPRLIMT', 'TRANSREX', 'CREATTYP', 'BRANCH', 'APPLCODE', 'SUBACCT', 'CREATYYMMDD', 'EXPIRDS', 'SYNDICAT', 'SPECIALF', 'PURPOSES', 'AANUMBER', 'INTRATE', 'SPREAD', 'INFUNDRT', 'DISCNTB', 'DISCNTF', 'TRANXMT', 'EXCHRTE']...
-  Records after filtering: 19631
-
-ERROR: can't compare datetime.datetime to datetime.date
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMLIBT.py", line 488, in main
-    df_output = process_loan_data(macro_vars)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMLIBT.py", line 291, in process_loan_data
-    if exprdate <= reptdate:
-TypeError: can't compare datetime.datetime to datetime.date
