@@ -198,11 +198,13 @@ def main(reptdate=None):
     print("=" * 70)
 
     try:
-        # Step 1: Get report date
+        # Step 1: Get report date (ensure it's a date object, not datetime)
         if reptdate is None:
-            #reptdate = date.today()
-            reptdate = datetime(2026, 6, 8)
-            print("\nTESTING MODE: Using today's date: {}".format(reptdate))
+            # Use fixed date for testing - convert to date
+            reptdate = date(2026, 6, 8)
+            print("\nTESTING MODE: Using fixed date: {}".format(reptdate))
+        elif isinstance(reptdate, datetime):
+            reptdate = reptdate.date()
         
         # Derive macro variables
         nowk = get_week_number(reptdate)
@@ -222,7 +224,7 @@ def main(reptdate=None):
         
         # Also try uppercase
         if not btrad_path.exists():
-            btrad_filename_upper = "btrad{}{}{}.sas7bdat".format(reptmon, nowk, yy_2digit)
+            btrad_filename_upper = "BTRAD{}{}{}.sas7bdat".format(reptmon, nowk, yy_2digit)
             btrad_path = INPUT_DIR / btrad_filename_upper
         
         print("\nLooking for BTRAD file: {}".format(btrad_path.name))
@@ -300,7 +302,10 @@ def main(reptdate=None):
         ])
         
         # Step 8: Calculate DAYS past due
-        reptdate_sas = (reptdate - date(1960, 1, 1)).days
+        base_sas_date = date(1960, 1, 1)
+        reptdate_sas = (reptdate - base_sas_date).days
+        
+        # Convert BLDATE from SAS numeric to days difference
         df_note = df_note.with_columns([
             pl.when(pl.col("BLDATE") > 0)
               .then(reptdate_sas - pl.col("BLDATE"))
@@ -521,19 +526,7 @@ if __name__ == "__main__":
             print("Error: Invalid date format. Use YYYY-MM-DD")
             sys.exit(1)
     else:
-        print("No date provided - using today's date for testing")
+        print("No date provided - using June 8, 2026 for testing")
+        reptdate = date(2026, 6, 8)
     
     sys.exit(main(reptdate))
-
-
-
-Looking for BTRAD file: btrad06126.sas7bdat
-  Reading SAS file...
-  Total records read: 41554
-  Records after filtering: 19631
-
-ERROR: unsupported operand type(s) for -: 'datetime.datetime' and 'datetime.date'
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMABTL.py", line 303, in main
-    reptdate_sas = (reptdate - date(1960, 1, 1)).days
-TypeError: unsupported operand type(s) for -: 'datetime.datetime' and 'datetime.date'
