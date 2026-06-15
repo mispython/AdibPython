@@ -16,36 +16,13 @@ BASE_TXT   = Path("text_output")       # final text output folder
 BASE_OUT.mkdir(parents=True, exist_ok=True)
 BASE_TXT.mkdir(parents=True, exist_ok=True)
 
-# Inputs corresponding to DD names:
-# - BNM1.REPTDATE  -> one-row parquet with column REPTDATE (date/datetime or yyyymmdd int/str)
-# - BNM1.IBTRAD&REPTMON&NOWK -> naming pattern; see below
-REPTDATE_PARQUET = BASE_INPUT / "BNM1_REPTDATE.parquet"
-
-# Output “host dataset” mirror
+# Input: BNM1.IBTRAD&REPTMON&NOWK -> naming pattern; see below
+# Output "host dataset" mirror
 NLFBT_TXT = BASE_TXT / "SAP.PIBB.ALM.NLFBT.TEXT.txt"
 
 # ============================================
 # HELPERS: date handling & formats/macros
 # ============================================
-
-def _coerce_date(x) -> date | None:
-    if x is None:
-        return None
-    if isinstance(x, date) and not isinstance(x, datetime):
-        return x
-    if isinstance(x, datetime):
-        return x.date()
-    s = str(x).strip()
-    if not s:
-        return None
-    # accept yyyymmdd
-    if s.isdigit() and len(s) == 8:
-        return date(int(s[:4]), int(s[4:6]), int(s[6:]))
-    # try ISO
-    try:
-        return datetime.fromisoformat(s).date()
-    except Exception:
-        return None
 
 def is_leap_sas_style(y: int) -> bool:
     # SAS macro uses MOD(year,4)=0 in this job context
@@ -59,6 +36,8 @@ def LDAY_for(m: int, y: int) -> int:
 
 # PROC FORMAT: REMFMT (Islamic version - same as EIBMABTL)
 def REMFMT(x: float) -> str:
+    if x is None:
+        return "07"
     if x <= 0.1:  return "01"
     if x <= 1:    return "02"
     if x <= 3:    return "03"
@@ -68,7 +47,7 @@ def REMFMT(x: float) -> str:
     if x <= 60:   return "07"
     return "08"
 
-# PROC FORMAT: PRDFMT (defined in SAS but not used by this program’s logic)
+# PROC FORMAT: PRDFMT (defined in SAS but not used by this program's logic)
 HL_SET = {4,5,6,7,31,32,100,101,102,103,110,111,112,113,114,115,
           116,170,200,201,204,205,209,210,211,212,214,215,219,220,
           225,226,227,228,229,230,231,232,233,234}
@@ -112,27 +91,34 @@ def REMMTH_fn(MATDT: date, RPYR: int, RPMTH: int, RPDAY: int) -> float:
     REMD = MDDAY - RPDAY
     return REMY*12 + REMM + (REMD / rpdays_month_len)
 
+def to_date(value):
+    """Convert SAS numeric date or datetime to Python date."""
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            return None
+        return date(1960, 1, 1) + timedelta(days=int(value))
+    return None
+
+
 # ============================================
-# 1) READ REPTDATE + derive macros
+# 1) SET REPORT DATE (using datetime directly)
 # ============================================
 
 # ====================================================================
 # TESTING MODE - Use today's date minus 1 day
 # ====================================================================
-# Uncomment the line below for testing
 repdt = date.today() - timedelta(days=1)
 
 # ====================================================================
-# PRODUCTION MODE - Uncomment below for production use
+# PRODUCTION MODE - Uncomment below for production use with specific date
 # ====================================================================
-# REPTDATE_DF = pl.read_parquet(REPTDATE_PARQUET)
-# if REPTDATE_DF.height != 1:
-#     raise RuntimeError("BNM1.REPTDATE must have exactly one row.")
-# 
-# REPTDATE_VAL = REPTDATE_DF["REPTDATE"][0]
-# repdt = _coerce_date(REPTDATE_VAL)
-# if repdt is None:
-#     raise RuntimeError("REPTDATE could not be parsed as a date.")
+# repdt = date(2026, 6, 8)  # Example: June 8, 2026
 
 # ====================================================================
 # End of date selection
@@ -166,7 +152,14 @@ print(f"\nLooking for IBTRAD file: {IBTRAD_PATH.name}")
 if not IBTRAD_PATH.exists():
     raise FileNotFoundError(f"IBTRAD file not found: {IBTRAD_PATH}")
 
-IBTRAD = pl.read_parquet(IBTRAD_PATH)
+# Read SAS file if it's .sas7bdat, otherwise read parquet
+if IBTRAD_PATH.suffix == '.sas7bdat':
+    import pyreadstat
+    df, meta = pyreadstat.read_sas7bdat(str(IBTRAD_PATH))
+    IBTRAD = pl.from_pandas(df)
+else:
+    IBTRAD = pl.read_parquet(IBTRAD_PATH)
+
 print(f"Total records read: {len(IBTRAD)}")
 
 # ============================================
@@ -183,9 +176,16 @@ for rec in IBTRAD.iter_rows(named=True):
     PRODCD   = str(rec.get("PRODCD", "") or "")
     PRODUCT  = int(rec.get("PRODUCT", 0) or 0)
     CUSTCD   = str(rec.get("CUSTCD", "") or "")
-    BLDATE   = _coerce_date(rec.get("BLDATE", None))
-    EXPRDATE = _coerce_date(rec.get("EXPRDATE", None))
-    ISSDTE   = _coerce_date(rec.get("ISSDTE", None))
+    
+    # Convert dates from SAS numeric if needed
+    BLDATE_val = rec.get("BLDATE", None)
+    EXPRDATE_val = rec.get("EXPRDATE", None)
+    ISSDTE_val = rec.get("ISSDTE", None)
+    
+    BLDATE = to_date(BLDATE_val)
+    EXPRDATE = to_date(EXPRDATE_val)
+    ISSDTE = to_date(ISSDTE_val)
+    
     PAYAMT   = float(rec.get("PAYAMT", 0) or 0.0)
     BALANCE  = float(rec.get("BALANCE", 0) or 0.0)
 
@@ -217,36 +217,37 @@ for rec in IBTRAD.iter_rows(named=True):
     if BLDATE is not None:
         DAYS = (repdt - BLDATE).days
 
-    # --- SAS-faithful initialization to avoid undefined REMMTH when EXPRDATE is missing ---
-    REMMTH_val = 0.1  # safe default bucket, consistent with earliest range
+    # --- SAS-faithful initialization ---
+    REMMTH_val = 0.1  # safe default bucket
 
     # If expiry within <8 days, set REMMTH=0.1, else compute via loop/macro
     if EXPRDATE is not None and (EXPRDATE - repdt).days < 8:
         REMMTH_val = 0.1
-    else:
+    elif EXPRDATE is not None:
         PAYFREQ = "3"
         if   PAYFREQ == "1": FREQ = 1
         elif PAYFREQ == "2": FREQ = 3
         elif PAYFREQ == "3": FREQ = 6
         elif PAYFREQ == "4": FREQ = 12
-        else:                FREQ = 6  # conservative default
+        else:                FREQ = 6
 
         if PRODUCT in (350, 910, 925):
             BLDATE = EXPRDATE
-        elif BLDATE is None or BLDATE <= date(1600, 1, 1):  # emulate BLDATE<=0
+        elif BLDATE is None or BLDATE <= date(1900, 1, 1):
             BLDATE = ISSDTE
-            while BLDATE is not None and BLDATE <= repdt:
-                BLDATE = NXTBLDT(BLDATE, PAYFREQ, FREQ, ISSDTE)
+            if BLDATE is not None:
+                while BLDATE <= repdt:
+                    BLDATE = NXTBLDT(BLDATE, PAYFREQ, FREQ, ISSDTE)
 
         if PAYAMT < 0:
             PAYAMT = 0.0
 
-        if BLDATE is not None and EXPRDATE is not None:
+        if BLDATE is not None:
             if (BLDATE > EXPRDATE) or (BALANCE <= PAYAMT):
                 BLDATE = EXPRDATE
 
         # DO WHILE (BLDATE <= EXPRDATE)
-        while BLDATE is not None and EXPRDATE is not None and BLDATE <= EXPRDATE:
+        while BLDATE is not None and BLDATE <= EXPRDATE:
             MATDT = BLDATE
             REMMTH_val = REMMTH_fn(MATDT, RPYR, RPMTH, RPDAY)
             if (REMMTH_val > 60) or (BLDATE == EXPRDATE):
@@ -254,7 +255,7 @@ for rec in IBTRAD.iter_rows(named=True):
 
             AMOUNT = PAYAMT
             BALANCE = BALANCE - PAYAMT
-            # Islamic version uses 95/93 prefixes (same as conventional for this program)
+            # Islamic version uses 95/93 prefixes
             BNMCODE = "95" + ITEM + CUST + REMFMT(REMMTH_val) + "0000Y"
             rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
 
@@ -289,6 +290,10 @@ for rec in IBTRAD.iter_rows(named=True):
 print(f"\n  Total records processed: {processed}")
 print(f"  Output records created: {len(rows)}")
 
+if len(rows) == 0:
+    print("  No output records generated.")
+    sys.exit(0)
+
 # Build NOTE (detail) as Arrow, then summarize with DuckDB to mirror PROC SUMMARY NWAY
 NOTE_arrow = pa.Table.from_pylist(rows, schema=pa.schema([
     pa.field("BNMCODE", pa.string()),
@@ -315,27 +320,29 @@ NOTE_SUM_arrow = con.execute("""
 NOTE_SUM_PARQUET = BASE_OUT / "NOTE_SUM_EIIMABTL.parquet"
 pq.write_table(NOTE_SUM_arrow, NOTE_SUM_PARQUET)
 
-# Also hold as Polars if you want to reuse downstream
+# Also hold as Polars
 NOTE_SUM = pl.from_arrow(NOTE_SUM_arrow)
 
 # ============================================
 # 4) Emit text file (header + BNMCODE;AMOUNT;)
-#    Faithful to SAS: no forced decimals / separators
 # ============================================
 print(f"\nWriting output to: {NLFBT_TXT}")
 with NLFBT_TXT.open("w", encoding="utf-8", newline="") as f:
-    # Header: INLFBT REPTDAY REPTMON REPTYEAR (spaces between, like SAS line)
+    # Header: INLFBT REPTDAY REPTMON REPTYEAR
     f.write(f"INLFBT {REPTDAY} {REPTMON} {REPTYEAR}\n")
     for r in NOTE_SUM.iter_rows(named=True):
         BNMCODE = r["BNMCODE"]
         AMOUNT  = r["AMOUNT"]
-        # SAS-like numeric output: no thousands sep, no forced decimals.
-        # If whole number, print as integer; otherwise print as plain float string.
-        amt_str = str(int(AMOUNT)) if float(AMOUNT).is_integer() else str(AMOUNT)
+        # Format amount without thousand separators
+        if float(AMOUNT).is_integer():
+            amt_str = str(int(AMOUNT))
+        else:
+            amt_str = f"{AMOUNT:.2f}".rstrip('0').rstrip('.') if AMOUNT != 0 else "0"
         f.write(f"{BNMCODE};{amt_str};\n")
 
 # Calculate totals for summary
 total_amount = NOTE_SUM['AMOUNT'].sum() if len(NOTE_SUM) > 0 else 0
+missing_count = len(rows) - len(NOTE_SUM)
 
 print("\n" + "=" * 70)
 print("PROCESSING COMPLETED SUCCESSFULLY")
@@ -344,6 +351,8 @@ print(f"\nOutput file: {NLFBT_TXT}")
 print(f"Summary Parquet: {NOTE_SUM_PARQUET}")
 print(f"Total BNM codes: {len(NOTE_SUM)}")
 print(f"Total amount: {total_amount:,.2f}")
+if missing_count > 0:
+    print(f"Records with missing remmth (code '07'): {missing_count}")
 
 # Close DuckDB connection
 con.close()
