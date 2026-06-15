@@ -123,8 +123,8 @@ warnings.filterwarnings('ignore')
 # PATH CONFIGURATION
 # ============================================================================
 BASE_DIR = Path(__file__).resolve().parent
-INPUT_DIR = BASE_DIR / "data"
-OUTPUT_DIR = BASE_DIR / "output"
+INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod"
+OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMABTL"
 
 # Output file
 NLFBT = OUTPUT_DIR / "nlfbt.txt"
@@ -200,7 +200,8 @@ def main(reptdate=None):
     try:
         # Step 1: Get report date
         if reptdate is None:
-            reptdate = date.today()
+            #reptdate = date.today()
+            reptdate = datetime(2026, 6, 8)
             print("\nTESTING MODE: Using today's date: {}".format(reptdate))
         
         # Derive macro variables
@@ -221,7 +222,7 @@ def main(reptdate=None):
         
         # Also try uppercase
         if not btrad_path.exists():
-            btrad_filename_upper = "BTRAD{}{}{}.sas7bdat".format(reptmon, nowk, yy_2digit)
+            btrad_filename_upper = "btrad{}{}{}.sas7bdat".format(reptmon, nowk, yy_2digit)
             btrad_path = INPUT_DIR / btrad_filename_upper
         
         print("\nLooking for BTRAD file: {}".format(btrad_path.name))
@@ -523,3 +524,16 @@ if __name__ == "__main__":
         print("No date provided - using today's date for testing")
     
     sys.exit(main(reptdate))
+
+
+
+Looking for BTRAD file: btrad06126.sas7bdat
+  Reading SAS file...
+  Total records read: 41554
+  Records after filtering: 19631
+
+ERROR: unsupported operand type(s) for -: 'datetime.datetime' and 'datetime.date'
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMABTL.py", line 303, in main
+    reptdate_sas = (reptdate - date(1960, 1, 1)).days
+TypeError: unsupported operand type(s) for -: 'datetime.datetime' and 'datetime.date'
