@@ -1,519 +1,293 @@
-#!/usr/bin/env python3
-"""
-File Name: EIBMABTL
-Loan Maturity Profile Processor (BT)
-Processes BTRAD loan data for BNM reporting
-Based on original SAS code with FCY support (PRODCD starting with '346')
-"""
 
-from datetime import date, datetime, timedelta
+from __future__ import annotations
+
 from pathlib import Path
-import calendar
-import sys
-import warnings
-
-import pyreadstat
+from datetime import datetime, date
+import pyarrow as pa
+import pyarrow.parquet as pq
+import duckdb
 import polars as pl
 
-warnings.filterwarnings('ignore')
+# ============================================
+# PATHS (adjust to your environment)
+# ============================================
+BASE_INPUT = Path("parquet_input")     # root for input Parquet
+BASE_OUT   = Path("parquet_output")    # for optional intermediate Parquet outputs
+BASE_TXT   = Path("text_output")       # final text output folder
+BASE_OUT.mkdir(parents=True, exist_ok=True)
+BASE_TXT.mkdir(parents=True, exist_ok=True)
 
+# Inputs corresponding to DD names:
+# - BNM1.REPTDATE  -> one-row parquet with column REPTDATE (date/datetime or yyyymmdd int/str)
+# - BNM1.IBTRAD&REPTMON&NOWK -> naming pattern; see below
+REPTDATE_PARQUET = BASE_INPUT / "BNM1_REPTDATE.parquet"
 
-# ============================================================================
-# PATH CONFIGURATION
-# ============================================================================
-BASE_DIR = Path(__file__).resolve().parent
-INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod"
-OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMABTL"
+# Output “host dataset” mirror
+NLFBT_TXT = BASE_TXT / "SAP.PIBB.ALM.NLFBT.TEXT.txt"
 
-# Output file
-NLFBT = OUTPUT_DIR / "nlfbt.txt"
+# ============================================
+# HELPERS: date handling & formats/macros
+# ============================================
 
-# Create output directory
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# ============================================================================
-# SAS DATE CONVERSION
-# ============================================================================
-BASE_SAS_DATE = date(1960, 1, 1)
-
-def sas_date_to_python(sas_days):
-    """Convert SAS numeric date (days since 1960-01-01) to Python date"""
-    if sas_days is None or sas_days <= 0:
+def _coerce_date(x) -> date | None:
+    if x is None:
         return None
-    return BASE_SAS_DATE + timedelta(days=int(sas_days))
+    if isinstance(x, date) and not isinstance(x, datetime):
+        return x
+    if isinstance(x, datetime):
+        return x.date()
+    s = str(x).strip()
+    if not s:
+        return None
+    # accept yyyymmdd
+    if s.isdigit() and len(s) == 8:
+        return date(int(s[:4]), int(s[4:6]), int(s[6:]))
+    # try ISO
+    try:
+        return datetime.fromisoformat(s).date()
+    except Exception:
+        return None
 
+def is_leap_sas_style(y: int) -> bool:
+    # SAS macro uses MOD(year,4)=0 in this job context
+    return (y % 4) == 0
 
-# ============================================================================
-# FORMAT DEFINITIONS (from SAS PROC FORMAT)
-# ============================================================================
+def LDAY_for(m: int, y: int) -> int:
+    # Mirrors RETAIN D1-D12 31; D4 D6 D9 D11 30; February special
+    if m == 2:
+        return 29 if is_leap_sas_style(y) else 28
+    return 30 if m in (4, 6, 9, 11) else 31
 
-def get_remfmt(remmth):
-    """
-    SAS REMFMT format - map remaining months to code
-    Based on the EIBMABTL format (different from EIBMLIBT)
-    """
-    if remmth is None:
-        return '07'
-    elif remmth <= 0.1:
-        return '01'
-    elif remmth <= 1:
-        return '02'
-    elif remmth <= 3:
-        return '03'
-    elif remmth <= 6:
-        return '04'
-    elif remmth <= 12:
-        return '05'
-    elif remmth <= 36:
-        return '06'
-    elif remmth <= 60:
-        return '07'
-    else:
-        return '08'
+# PROC FORMAT: REMFMT
+def REMFMT(x: float) -> str:
+    if x <= 0.1:  return "01"
+    if x <= 1:    return "02"
+    if x <= 3:    return "03"
+    if x <= 6:    return "04"
+    if x <= 12:   return "05"
+    if x <= 36:   return "06"
+    if x <= 60:   return "07"
+    return "08"
 
+# PROC FORMAT: PRDFMT (defined in SAS but not used by this program’s logic)
+HL_SET = {4,5,6,7,31,32,100,101,102,103,110,111,112,113,114,115,
+          116,170,200,201,204,205,209,210,211,212,214,215,219,220,
+          225,226,227,228,229,230,231,232,233,234}
+RC_SET = {350,910,925}
+def PRDFMT(product: int) -> str:
+    if product in HL_SET: return "HL"
+    if product in RC_SET: return "RC"
+    return "FL"
 
-def get_prdfmt(product):
-    """SAS PRDFMT format - map product to HL/RC/FL"""
-    hl_products = {4,5,6,7,31,32,100,101,102,103,110,111,112,113,114,115,
-                   116,170,200,201,204,205,209,210,211,212,214,215,219,220,
-                   225,226,227,228,229,230,231,232,233,234}
-    rc_products = {350,910,925}
-    
-    if product in hl_products:
-        return 'HL'
-    if product in rc_products:
-        return 'RC'
-    return 'FL'
-
-
-# ============================================================================
-# DATE HELPER FUNCTIONS (from PBBELF macros)
-# ============================================================================
-
-def get_days_in_month(year, month):
-    """Get days in month, accounting for leap year"""
-    if month == 2:
-        return 29 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 28
-    elif month in [4, 6, 9, 11]:
-        return 30
-    else:
-        return 31
-
-
-def calculate_next_bldate(bldate, issdte, payfreq, freq):
-    """SAS NXTBLDT macro - calculate next billing date"""
-    if payfreq == '6':
-        # Fortnightly - add 14 days
-        dd = bldate.day + 14
-        mm = bldate.month
-        yy = bldate.year
-        
-        days_in_month = get_days_in_month(yy, mm)
-        if dd > days_in_month:
-            dd = dd - days_in_month
+def NXTBLDT(BLDATE: date, PAYFREQ: str, FREQ: int, ISSDTE: date) -> date:
+    # SAS macro NXTBLDT
+    if PAYFREQ == "6":  # biweekly branch (kept though PAYFREQ='3' later)
+        dd = BLDATE.day + 14
+        mm = BLDATE.month
+        yy = BLDATE.year
+        if dd > LDAY_for(mm, yy):
+            dd -= LDAY_for(mm, yy)
             mm += 1
             if mm > 12:
-                mm = mm - 12
+                mm -= 12
                 yy += 1
-        return date(yy, mm, dd)
     else:
-        # Monthly/quarterly - use issue date day
-        dd = issdte.day
-        mm = bldate.month + freq
-        yy = bldate.year
-        
+        dd = ISSDTE.day
+        mm = BLDATE.month + FREQ
+        yy = BLDATE.year
         if mm > 12:
-            mm = mm - 12
+            mm -= 12
             yy += 1
-        
-        days_in_month = get_days_in_month(yy, mm)
-        if dd > days_in_month:
-            dd = days_in_month
-        
-        return date(yy, mm, dd)
+    if dd > LDAY_for(mm, yy):
+        dd = LDAY_for(mm, yy)
+    return date(yy, mm, dd)
 
+def REMMTH_fn(MATDT: date, RPYR: int, RPMTH: int, RPDAY: int) -> float:
+    # SAS macro REMMTH
+    MDYR, MDMTH, MDDAY = MATDT.year, MATDT.month, MATDT.day
+    rpdays_month_len = 29 if (RPMTH == 2 and is_leap_sas_style(RPYR)) else (30 if RPMTH in (4,6,9,11) else 31)
+    if MDDAY > rpdays_month_len:
+        MDDAY = rpdays_month_len
+    REMY = MDYR  - RPYR
+    REMM = MDMTH - RPMTH
+    REMD = MDDAY - RPDAY
+    return REMY*12 + REMM + (REMD / rpdays_month_len)
 
-def calculate_remmth(matdt, reptdate, rpyr, rpmth, rpday, rpdays):
-    """SAS REMMTH macro - calculate remaining months"""
-    mdyr = matdt.year
-    mdmth = matdt.month
-    mdday = matdt.day
-    
-    if mdday > rpdays:
-        mdday = rpdays
-    
-    remy = mdyr - rpyr
-    remm = mdmth - rpmth
-    remd = mdday - rpday
-    
-    return remy * 12 + remm + remd / rpdays
+# ============================================
+# 1) READ REPTDATE + derive macros
+# ============================================
+REPTDATE_DF = pl.read_parquet(REPTDATE_PARQUET)
+if REPTDATE_DF.height != 1:
+    raise RuntimeError("BNM1.REPTDATE must have exactly one row.")
 
+REPTDATE_VAL = REPTDATE_DF["REPTDATE"][0]
+repdt = _coerce_date(REPTDATE_VAL)
+if repdt is None:
+    raise RuntimeError("REPTDATE could not be parsed as a date.")
 
-def get_week_number(reptdate):
-    """Determine week number based on report day"""
-    day = reptdate.day
-    if day == 8:
-        return "1"
-    elif day == 15:
-        return "2"
-    elif day == 22:
-        return "3"
+REPTDAY = f"{repdt.day:02d}"
+REPTMON = f"{repdt.month:02d}"
+REPTYEAR = f"{repdt.year:04d}"
+if   repdt.day == 8:  NOWK = "1"
+elif repdt.day == 15: NOWK = "2"
+elif repdt.day == 22: NOWK = "3"
+else:                 NOWK = "4"
+RDATE = repdt.strftime("%d/%m/%y")  # DDMMYY8. equivalent
+
+# ============================================
+# 2) READ IBTRAD for the period (Parquet)
+#    Adjust path pattern to your partition layout
+# ============================================
+IBTRAD_PATH = BASE_INPUT / f"BNM1_IBTRAD_{REPTMON}_{NOWK}.parquet"
+IBTRAD = pl.read_parquet(IBTRAD_PATH)
+
+# ============================================
+# 3) DATA NOTE ... PROC SUMMARY NWAY
+#    We build NOTE rows in Python (SAS emits multiple outputs per record)
+# ============================================
+rows: list[dict] = []
+
+RPYR, RPMTH, RPDAY = repdt.year, repdt.month, repdt.day
+
+for rec in IBTRAD.iter_rows(named=True):
+    # SAS variable names preserved
+    PRODCD   = str(rec.get("PRODCD", "") or "")
+    PRODUCT  = int(rec.get("PRODUCT", 0) or 0)
+    CUSTCD   = str(rec.get("CUSTCD", "") or "")
+    BLDATE   = _coerce_date(rec.get("BLDATE", None))
+    EXPRDATE = _coerce_date(rec.get("EXPRDATE", None))
+    ISSDTE   = _coerce_date(rec.get("ISSDTE", None))
+    PAYAMT   = float(rec.get("PAYAMT", 0) or 0.0)
+    BALANCE  = float(rec.get("BALANCE", 0) or 0.0)
+
+    # IF SUBSTR(PRODCD,1,2)='34' OR PRODUCT IN (225,226);
+    if not (PRODCD[:2] == "34" or PRODUCT in (225, 226)):
+        continue
+
+    # CUST
+    if CUSTCD in {"77", "78", "95", "96"}:
+        CUST = "08"
     else:
-        return "4"
+        CUST = "09"
 
+    # PROD set to 'BT' per SAS (do not derive from PRDFMT)
+    PROD = "BT"
 
-# ============================================================================
-# MAIN PROCESSING
-# ============================================================================
-
-def main(reptdate=None):
-    """Main execution function - matches SAS DATA NOTE step"""
-    print("\n" + "=" * 70)
-    print("EIBMABTL - LOAN MATURITY PROFILE PROCESSOR")
-    print("=" * 70)
-
-    try:
-        # Step 1: Get report date
-        if reptdate is None:
-            reptdate = date(2026, 6, 8)
-            print("\nTESTING MODE: Using fixed date: {}".format(reptdate))
-        elif isinstance(reptdate, datetime):
-            reptdate = reptdate.date()
-        
-        # Derive macro variables
-        nowk = get_week_number(reptdate)
-        reptyear = reptdate.strftime('%Y')
-        reptmon = reptdate.strftime('%m')
-        reptday = reptdate.strftime('%d')
-        
-        # Calculate runoff date variables (for REMMTH macro)
-        rpyr = reptdate.year
-        rpmth = reptdate.month
-        rpday = reptdate.day
-        rpdays = get_days_in_month(rpyr, rpmth)
-        
-        print("\nReport Date: {}".format(reptdate.strftime('%d/%m/%Y')))
-        print("Week Number: {}".format(nowk))
-        print("Report Month: {}".format(reptmon))
-        print("Report Year: {}".format(reptyear))
-        
-        # Step 2: Build BTRAD filename: btrad{MM}{WK}.sas7bdat
-        btrad_filename = "btrad{}{}.sas7bdat".format(reptmon, nowk)
-        btrad_path = INPUT_DIR / btrad_filename
-        
-        if not btrad_path.exists():
-            btrad_filename_upper = "BTRAD{}{}.sas7bdat".format(reptmon, nowk)
-            btrad_path = INPUT_DIR / btrad_filename_upper
-        
-        print("\nLooking for BTRAD file: {}".format(btrad_path.name))
-        
-        if not btrad_path.exists():
-            raise FileNotFoundError("BTRAD file not found: {}".format(btrad_path))
-        
-        # Step 3: Read SAS file
-        print("  Reading SAS file...")
-        df, meta = pyreadstat.read_sas7bdat(str(btrad_path))
-        df_pl = pl.from_pandas(df)
-        print("  Total records read: {}".format(len(df_pl)))
-        
-        # Step 4: Filter for loan products
-        # SUBSTR(PRODCD,1,2) = '34' OR PRODUCT IN (225,226)
-        if "PRODUCT" in df_pl.columns:
-            df_note = df_pl.filter(
-                (pl.col("PRODCD").cast(pl.Utf8).str.slice(0, 2) == "34") | 
-                (pl.col("PRODUCT").is_in([225, 226]))
-            )
+    # ITEM selection mirrors SAS branches
+    if CUSTCD in {"77", "78", "95", "96"}:
+        if PROD == "HL":
+            ITEM = "214"
         else:
-            df_note = df_pl.filter(
-                (pl.col("PRODCD").cast(pl.Utf8).str.slice(0, 2) == "34") | 
-                (pl.col("PRODCD").cast(pl.Utf8).is_in(["225", "226"]))
-            )
-        print("  Records after filtering: {}".format(len(df_note)))
-        
-        if len(df_note) == 0:
-            print("  No records after filtering.")
-            return 0
-        
-        # Step 5: Process each record (matches SAS DATA NOTE step)
-        output_records = []
-        processed = 0
-        
-        for row in df_note.iter_rows(named=True):
-            # Get values
-            custcd = str(row.get("CUSTCD", ""))
-            prodcd = str(row.get("PRODCD", ""))
-            forcurr = str(row.get("FORCURR", ""))
-            
-            # Get product (try PRODUCT first, then PRODCD)
-            product = row.get("PRODUCT")
-            if product is None or product == 0:
-                try:
-                    product = int(prodcd) if prodcd else 0
-                except (ValueError, TypeError):
-                    product = 0
-            
-            balance = float(row.get("BALANCE", 0) or 0)
-            payamt = float(row.get("PAYAMT", 0) or 0)
-            
-            # Convert SAS dates to Python dates
-            bldate = sas_date_to_python(row.get("BLDATE"))
-            issdte = sas_date_to_python(row.get("ISSDTE"))
-            exprdate = sas_date_to_python(row.get("EXPRDATE"))
-            
-            if exprdate is None:
-                continue
-            
-            # Determine CUST (matches SAS logic)
-            if custcd in ['77', '78', '95', '96']:
-                cust = '08'
-            else:
-                cust = '09'
-            
-            # Determine PROD type using PRDFMT
-            prod_type = get_prdfmt(product)
-            
-            # Determine ITEM (matches SAS SELECT logic)
-            if custcd in ['77', '78', '95', '96']:
-                if prod_type == 'HL':
-                    item = '214'
-                else:
-                    item = '219'
-            else:
-                if prod_type == 'FL':
-                    item = '211'
-                elif prod_type == 'RC':
-                    item = '212'
-                else:
-                    item = '219'
-            
-            # Calculate DAYS past due (only if BLDATE > 0)
-            days = 0
-            if bldate is not None and bldate > 0:
-                days = (reptdate - bldate).days
-            
-            # Check if FCY (PRODCD starts with '346')
-            is_fcy = (prodcd[:3] == '346')
-            
-            # Initialize
-            remmth = None
-            
-            # Process maturity profile (matches SAS IF-ELSE logic)
-            if (exprdate - reptdate).days < 8:
-                remmth = 0.1
-            else:
-                payfreq = '3'
-                freq = 6  # For payfreq = '3'
-                
-                # RC products use expiry date as billing date
-                if product in [350, 910, 925]:
-                    bldate = exprdate
-                elif bldate is None or bldate <= 0:
-                    bldate = issdte
-                    if bldate is not None:
-                        while bldate <= reptdate:
-                            bldate = calculate_next_bldate(bldate, issdte, payfreq, freq)
-                
-                if payamt < 0:
-                    payamt = 0
-                
-                if bldate > exprdate or balance <= payamt:
-                    bldate = exprdate
-                
-                current_balance = balance
-                current_bldate = bldate
-                
-                # Process payment schedule
-                while current_bldate <= exprdate:
-                    # Calculate remaining months
-                    matdt = current_bldate
-                    remmth = calculate_remmth(matdt, reptdate, rpyr, rpmth, rpday, rpdays)
-                    
-                    if remmth > 12 or current_bldate == exprdate:
-                        break
-                    
-                    if payamt > 0:
-                        amount = payamt
-                        current_balance -= payamt
-                        
-                        if is_fcy:
-                            # FCY records use 96/94 prefixes
-                            bnmcode = "96{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
-                            output_records.append({
-                                "BNMCODE": bnmcode,
-                                "AMOUNT": amount,
-                                "AMTUSD": 0,
-                                "AMTSGD": 0
-                            })
-                            
-                            remmth_npl = 13 if days > 89 else remmth
-                            bnmcode = "94{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
-                            output_records.append({
-                                "BNMCODE": bnmcode,
-                                "AMOUNT": amount,
-                                "AMTUSD": 0,
-                                "AMTSGD": 0
-                            })
-                        else:
-                            # Local currency records use 95/93 prefixes
-                            bnmcode = "95{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
-                            output_records.append({
-                                "BNMCODE": bnmcode,
-                                "AMOUNT": amount,
-                                "AMTUSD": 0,
-                                "AMTSGD": 0
-                            })
-                            
-                            remmth_npl = 13 if days > 89 else remmth
-                            bnmcode = "93{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
-                            output_records.append({
-                                "BNMCODE": bnmcode,
-                                "AMOUNT": amount,
-                                "AMTUSD": 0,
-                                "AMTSGD": 0
-                            })
-                    
-                    # Calculate next billing date
-                    current_bldate = calculate_next_bldate(current_bldate, issdte, payfreq, freq)
-                    
-                    if current_bldate > exprdate or current_balance <= payamt:
-                        current_bldate = exprdate
-                
-                # Use final balance and billing date
-                balance = current_balance
-                bldate = current_bldate
-            
-            # Output final balance (matches final OUTPUT statements)
-            if is_fcy:
-                # FCY records
-                amtusd = balance if forcurr == 'USD' else 0
-                amtsgd = balance if forcurr == 'SGD' else 0
-                
-                bnmcode = "96{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
-                output_records.append({
-                    "BNMCODE": bnmcode,
-                    "AMOUNT": balance,
-                    "AMTUSD": amtusd,
-                    "AMTSGD": amtsgd
-                })
-                
-                remmth_npl = 13 if days > 89 else remmth
-                bnmcode = "94{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
-                output_records.append({
-                    "BNMCODE": bnmcode,
-                    "AMOUNT": balance,
-                    "AMTUSD": amtusd,
-                    "AMTSGD": amtsgd
-                })
-            else:
-                # Local currency records
-                bnmcode = "95{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
-                output_records.append({
-                    "BNMCODE": bnmcode,
-                    "AMOUNT": balance,
-                    "AMTUSD": 0,
-                    "AMTSGD": 0
-                })
-                
-                remmth_npl = 13 if days > 89 else remmth
-                bnmcode = "93{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
-                output_records.append({
-                    "BNMCODE": bnmcode,
-                    "AMOUNT": balance,
-                    "AMTUSD": 0,
-                    "AMTSGD": 0
-                })
-            
-            processed += 1
-            if processed % 1000 == 0:
-                print("  Processed {} records...".format(processed))
-        
-        print("\n  Total records processed: {}".format(processed))
-        print("  Output records created: {}".format(len(output_records)))
-        
-        if len(output_records) == 0:
-            print("  No output records generated.")
-            return 0
-        
-        # Step 6: Aggregate (matches PROC SUMMARY NWAY)
-        df_output = pl.DataFrame(output_records)
-        
-        df_summary = df_output.group_by('BNMCODE').agg([
-            pl.col('AMOUNT').sum(),
-            pl.col('AMTUSD').sum(),
-            pl.col('AMTSGD').sum()
-        ]).sort('BNMCODE')
-        
-        # Fill nulls with 0 (matches DATA step after SUMMARY)
-        df_summary = df_summary.with_columns([
-            pl.col('AMTUSD').fill_null(0),
-            pl.col('AMTSGD').fill_null(0)
-        ])
-        
-        # Filter out missing remmth (code '07')
-        df_summary = df_summary.filter(pl.col('BNMCODE').str.slice(7, 2) != '07')
-        
-        missing_count = len(df_output) - len(df_summary)
-        if missing_count > 0:
-            print("\n  Records with missing remmth (code '07'): {}".format(missing_count))
-        
-        # Step 7: Write output file (matches DATA _NULL_ step)
-        print("\nWriting output to: {}".format(NLFBT))
-        with open(NLFBT, 'w') as f:
-            # Write header: NLFBT{DD}{MM}{YYYY}
-            f.write("NLFBT{}{}{}\n".format(reptday, reptmon, reptyear))
-            
-            # Write data rows: BNMCODE;AMOUNT;
-            for row in df_summary.iter_rows(named=True):
-                f.write("{};{:.2f};\n".format(row['BNMCODE'], row['AMOUNT']))
-        
-        print("\n" + "=" * 70)
-        print("PROCESSING COMPLETED SUCCESSFULLY")
-        print("=" * 70)
-        print("\nOutput file: {}".format(NLFBT))
-        print("Total BNM codes: {}".format(len(df_summary)))
-        print("Total amount: {:.2f}".format(df_summary['AMOUNT'].sum()))
-        print("Total USD amount: {:.2f}".format(df_summary['AMTUSD'].sum()))
-        print("Total SGD amount: {:.2f}".format(df_summary['AMTSGD'].sum()))
-        
-        return 0
-        
-    except FileNotFoundError as e:
-        print("\nFILE NOT FOUND ERROR: {}".format(e), file=sys.stderr)
-        print("\nExpected file pattern: btrad{MM}{WK}.sas7bdat")
-        print("Example: btrad061.sas7bdat for Month=06, Week=1")
-        return 1
-    except Exception as exc:
-        print("\nERROR: {}".format(exc), file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return 1
-
-
-# ============================================================================
-# COMMAND LINE INTERFACE
-# ============================================================================
-if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(
-        description='EIBMABTL - Loan Maturity Profile Processor',
-        epilog='Example: python EIBMABTL.py 2026-06-08'
-    )
-    parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format')
-    
-    args = parser.parse_args()
-    
-    reptdate = None
-    if args.date:
-        try:
-            reptdate = datetime.strptime(args.date, '%Y-%m-%d').date()
-            print("Using command line date: {}".format(reptdate))
-        except ValueError:
-            print("Error: Invalid date format. Use YYYY-MM-DD")
-            sys.exit(1)
+            ITEM = "219"
     else:
-        print("No date provided - using June 8, 2026 for testing")
-        reptdate = date(2026, 6, 8)
-    
-    sys.exit(main(reptdate))
+        if   PROD == "FL": ITEM = "211"
+        elif PROD == "RC": ITEM = "212"
+        else:              ITEM = "219"
+
+    DAYS = None
+    if BLDATE is not None:
+        DAYS = (repdt - BLDATE).days
+
+    # --- SAS-faithful initialization to avoid undefined REMMTH when EXPRDATE is missing ---
+    REMMTH_val = 0.1  # safe default bucket, consistent with earliest range
+
+    # If expiry within <8 days, set REMMTH=0.1, else compute via loop/macro
+    if EXPRDATE is not None and (EXPRDATE - repdt).days < 8:
+        REMMTH_val = 0.1
+    else:
+        PAYFREQ = "3"
+        if   PAYFREQ == "1": FREQ = 1
+        elif PAYFREQ == "2": FREQ = 3
+        elif PAYFREQ == "3": FREQ = 6
+        elif PAYFREQ == "4": FREQ = 12
+        else:                FREQ = 6  # conservative default
+
+        if PRODUCT in (350, 910, 925):
+            BLDATE = EXPRDATE
+        elif BLDATE is None or BLDATE <= date(1600, 1, 1):  # emulate BLDATE<=0
+            BLDATE = ISSDTE
+            while BLDATE is not None and BLDATE <= repdt:
+                BLDATE = NXTBLDT(BLDATE, PAYFREQ, FREQ, ISSDTE)
+
+        if PAYAMT < 0:
+            PAYAMT = 0.0
+
+        if BLDATE is not None and EXPRDATE is not None:
+            if (BLDATE > EXPRDATE) or (BALANCE <= PAYAMT):
+                BLDATE = EXPRDATE
+
+        # DO WHILE (BLDATE <= EXPRDATE)
+        while BLDATE is not None and EXPRDATE is not None and BLDATE <= EXPRDATE:
+            MATDT = BLDATE
+            REMMTH_val = REMMTH_fn(MATDT, RPYR, RPMTH, RPDAY)
+            if (REMMTH_val > 60) or (BLDATE == EXPRDATE):
+                break
+
+            AMOUNT = PAYAMT
+            BALANCE = BALANCE - PAYAMT
+            BNMCODE = "95" + ITEM + CUST + REMFMT(REMMTH_val) + "0000Y"
+            rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
+
+            if (DAYS is not None) and (DAYS > 89):
+                REMMTH_tmp = 13
+            else:
+                REMMTH_tmp = REMMTH_val
+            BNMCODE = "93" + ITEM + CUST + REMFMT(REMMTH_tmp) + "0000Y"
+            rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
+
+            BLDATE = NXTBLDT(BLDATE, PAYFREQ, FREQ, ISSDTE)
+
+            if (BLDATE > EXPRDATE) or (BALANCE <= PAYAMT):
+                BLDATE = EXPRDATE
+
+    # Final two OUTPUTs after the loop (exactly as SAS)
+    AMOUNT = BALANCE
+    BNMCODE = "95" + ITEM + CUST + REMFMT(REMMTH_val) + "0000Y"
+    rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
+
+    if (DAYS is not None) and (DAYS > 89):
+        REMMTH_final = 13
+    else:
+        REMMTH_final = REMMTH_val
+    BNMCODE = "93" + ITEM + CUST + REMFMT(REMMTH_final) + "0000Y"
+    rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
+
+# Build NOTE (detail) as Arrow, then summarize with DuckDB to mirror PROC SUMMARY NWAY
+NOTE_arrow = pa.Table.from_pylist(rows, schema=pa.schema([
+    pa.field("BNMCODE", pa.string()),
+    pa.field("AMOUNT",  pa.float64()),
+]))
+
+con = duckdb.connect()
+con.register("note", NOTE_arrow)
+NOTE_SUM_arrow = con.execute("""
+    SELECT BNMCODE, SUM(AMOUNT) AS AMOUNT
+    FROM note
+    GROUP BY BNMCODE
+    ORDER BY BNMCODE
+""").arrow()
+
+# Save the summary as Parquet (optional)
+NOTE_SUM_PARQUET = BASE_OUT / "NOTE_SUM.parquet"
+pq.write_table(NOTE_SUM_arrow, NOTE_SUM_PARQUET)
+
+# Also hold as Polars if you want to reuse downstream
+NOTE_SUM = pl.from_arrow(NOTE_SUM_arrow)
+
+# ============================================
+# 4) Emit text file (header + BNMCODE;AMOUNT;)
+#    Faithful to SAS: no forced decimals / separators
+# ============================================
+with NLFBT_TXT.open("w", encoding="utf-8", newline="") as f:
+    # Header: INLFBT REPTDAY REPTMON REPTYEAR (spaces between, like SAS line)
+    f.write(f"INLFBT {REPTDAY} {REPTMON} {REPTYEAR}\n")
+    for r in NOTE_SUM.iter_rows(named=True):
+        BNMCODE = r["BNMCODE"]
+        AMOUNT  = r["AMOUNT"]
+        # SAS-like numeric output: no thousands sep, no forced decimals.
+        # If whole number, print as integer; otherwise print as plain float string.
+        amt_str = str(int(AMOUNT)) if float(AMOUNT).is_integer() else str(AMOUNT)
+        f.write(f"{BNMCODE};{amt_str};\n")
+
+print(f"Wrote summary parquet: {NOTE_SUM_PARQUET}")
+print(f"Wrote text file     : {NLFBT_TXT}")
