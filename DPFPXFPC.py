@@ -186,6 +186,7 @@ def main(reptdate=None):
         reptyear = reptdate.strftime('%Y')
         reptmon = reptdate.strftime('%m')
         reptday = reptdate.strftime('%d')
+        yy_2digit = reptdate.strftime('%y')  # 2-digit year for filename
         
         # Calculate runoff date variables (for REMMTH macro)
         rpyr = reptdate.year
@@ -197,13 +198,15 @@ def main(reptdate=None):
         print("Week Number: {}".format(nowk))
         print("Report Month: {}".format(reptmon))
         print("Report Year: {}".format(reptyear))
+        print("2-Digit Year: {}".format(yy_2digit))
         
-        # Step 2: Build IBTRAD filename: ibtrad{MM}{WK}.sas7bdat
-        ibtrad_filename = "ibtrad{}{}.sas7bdat".format(reptmon, nowk)
+        # Step 2: Build IBTRAD filename: ibtrad{MM}{WK}{YY}.sas7bdat
+        # Example: ibtrad08125.sas7bdat (Month=08, Week=1, Year=2025)
+        ibtrad_filename = "ibtrad{}{}{}.sas7bdat".format(reptmon, nowk, yy_2digit)
         ibtrad_path = INPUT_DIR / ibtrad_filename
         
         if not ibtrad_path.exists():
-            ibtrad_filename_upper = "IBTRAD{}{}.sas7bdat".format(reptmon, nowk)
+            ibtrad_filename_upper = "IBTRAD{}{}{}.sas7bdat".format(reptmon, nowk, yy_2digit)
             ibtrad_path = INPUT_DIR / ibtrad_filename_upper
         
         print("\nLooking for IBTRAD file: {}".format(ibtrad_path.name))
@@ -419,8 +422,8 @@ def main(reptdate=None):
         
     except FileNotFoundError as e:
         print("\nFILE NOT FOUND ERROR: {}".format(e), file=sys.stderr)
-        print("\nExpected file pattern: ibtrad{MM}{WK}.sas7bdat")
-        print("Example: ibtrad081.sas7bdat for Month=08, Week=1")
+        print("\nExpected file pattern: ibtrad{MM}{WK}{YY}.sas7bdat")
+        print("Example: ibtrad08125.sas7bdat for Month=08, Week=1, Year=2025")
         return 1
     except Exception as exc:
         print("\nERROR: {}".format(exc), file=sys.stderr)
