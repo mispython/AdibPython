@@ -1,358 +1,234 @@
-from __future__ import annotations
+//EIIMABTL JOB MIS,MISEIS,COND=(4,LT),CLASS=A,MSGCLASS=X,
+//         NOTIFY=&SYSUID
+//*
+//DELETE   EXEC PGM=IEFBR14
+//DD1      DD DISP=(MOD,DELETE,DELETE),
+//            SPACE=(TRK,(1,10)),
+//            DSN=SAP.PIBB.ALM.NLFBT.TEXT
+//*;
+//EIIMABTL EXEC SAS609,REGION=8M,WORK='120000,8000'
+//PGM      DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//BNM1     DD DSN=SAP.IBT.SASDATA,DISP=SHR
+//NLFBT    DD DSN=SAP.PIBB.ALM.NLFBT.TEXT,
+//            DISP=(NEW,CATLG,DELETE),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=6320),
+//            SPACE=(TRK,(5,5)),UNIT=SYSDA
+//SYSIN    DD *
 
-from pathlib import Path
-from datetime import datetime, date, timedelta
-import pyarrow as pa
-import pyarrow.parquet as pq
-import duckdb
-import polars as pl
+OPTIONS SORTDEV=3390 YEARCUTOFF=1960 NOCENTER;
+*;
+DATA REPTDATE;
+   SET BNM1.REPTDATE;
+   SELECT(DAY(REPTDATE));
+      WHEN (8)  CALL SYMPUT('NOWK',PUT('1',$1.));
+      WHEN (15) CALL SYMPUT('NOWK',PUT('2',$1.));
+      WHEN (22) CALL SYMPUT('NOWK',PUT('3',$1.));
+      OTHERWISE CALL SYMPUT('NOWK',PUT('4',$1.));
+   END;
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+RUN;
+*;
+%INC PGM(PBBLNFMT,PBBELF);
+*;
+PROC FORMAT;
+   VALUE REMFMT
+      LOW-0.1 = '01'   /*  UP TO 1 WK       */
+      0.1-1   = '02'   /*  >1 WK  - 1 MTH   */
+      1-3     = '03'   /*  >1 MTH - 3 MTH   */
+      3-6     = '04'   /*  >3 MTH - 6 MTH   */
+      6-12    = '05'   /*  >6 MTH - 1 YR    */
+      12-36   = '06'   /*  >1 YR  - 3 YR    */
+      36-60   = '07'   /*  >3 YR  - 5 YR    */
+      OTHER   = '08';  /*  >5 YR            */
+*;
+   VALUE PRDFMT
+      4,5,6,7,31,32,100,101,102,103,110,111,112,113,114,115,
+      116,170,200,201,204,205,209,210,
+      211,212,214,215,219,220,225,226,
+      227,228,229,230,231,232,233,234 = 'HL'
+      350,910,925 = 'RC'
+      OTHER = 'FL';
+*;
+%MACRO DCLVAR;
+   RETAIN D1-D12 31 D4 D6 D9 D11 30
+          RD1-RD12 MD1-MD12 31 RD2 MD2 28 RD4 RD6 RD9 RD11
+          MD4 MD6 MD9 MD11 30 RPYR RPMTH RPDAY;
+   ARRAY LDAY D1-D12;
+   ARRAY RPDAYS RD1-RD12;
+   ARRAY MDDAYS MD1-MD12;
+%MEND DCLVAR;
+*;
+ *------------------------------------------------*
+ *  MACRO TO CALCULATE NEXT BLDATE                *
+ *------------------------------------------------*;
+%MACRO NXTBLDT;
+   IF PAYFREQ = '6' THEN DO;
+      DD = DAY(BLDATE) + 14;
+      MM = MONTH(BLDATE);
+      YY = YEAR(BLDATE);
+      IF MM = 2 THEN
+         IF MOD(YY,4) = 0 THEN D2 = 29;
+         ELSE D2 = 28;
+      IF DD > LDAY(MM) THEN DO;
+         DD = DD - LDAY(MM);
+         MM + 1;
+         IF MM > 12 THEN DO;
+            MM = MM - 12; YY + 1;
+         END;
+      END;
+   END;
+   ELSE DO;
+      DD = DAY(ISSDTE);
+      MM = MONTH(BLDATE) + FREQ;
+      YY = YEAR(BLDATE);
+      IF MM > 12 THEN DO;
+         MM = MM - 12; YY + 1;
+      END;
+   END;
+   IF MM = 2 THEN
+      IF MOD(YY,4) = 0 THEN D2 = 29;
+      ELSE D2 = 28;
+   IF DD > LDAY(MM) THEN DD = LDAY(MM);
+   BLDATE = MDY(MM,DD,YY);
+%MEND NXTBLDT;
+*;
+ *------------------------------------------------*
+ *  MACRO TO CALCULATE REMAIN MONTH               *
+ *------------------------------------------------*;
+%MACRO REMMTH;
+   MDYR  = YEAR(MATDT);
+   MDMTH = MONTH(MATDT);
+   MDDAY = DAY(MATDT);
+   IF MDMTH = 2 THEN
+      IF MOD(MDYR,4) = 0 THEN MD2 = 29;
+      ELSE MD2 = 28;
+   IF MDDAY > RPDAYS(RPMTH) THEN MDDAY = RPDAYS(RPMTH);
+   REMY = MDYR - RPYR;
+   REMM = MDMTH - RPMTH;
+   REMD = MDDAY - RPDAY;
+   REMMTH = REMY*12 + REMM + REMD/RPDAYS(RPMTH);
+%MEND REMMTH;
+*;
+ *------------------------------------------------*
+ *  GET REPTDATE                                  *
+ *------------------------------------------------*;
+*;
+ *----------------------------------------------------------------*
+ *  BREAKDOWN BY MATURITY PROFILE (PART 1 & 2 - RM)               *
+ *----------------------------------------------------------------*;
+ *------------------------------------------------*
+ *  LOANS - FL/HL USE REPAYMENT DATE              *
+ *        - OD/RC USE EXPIRY DATE                 *
+ *------------------------------------------------*;
+DATA NOTE (KEEP=BNMCODE AMOUNT);
+   %DCLVAR
+   SET BNM1.IBTRAD&REPTMON&NOWK;
+   IF _N_ = 1 THEN DO;
+      SET REPTDATE;
+      RPYR  = YEAR(REPTDATE);
+      RPMTH = MONTH(REPTDATE);
+      RPDAY = DAY(REPTDATE);
+      IF MOD(RPYR,4) = 0 THEN RD2 = 29;
+   END;
+   IF SUBSTR(PRODCD,1,2) = '34' OR PRODUCT IN (225,226);
+   IF CUSTCD IN ('77','78','95','96') THEN CUST = '08';
+   ELSE CUST = '09';
+   PROD = 'BT';
+   IF CUSTCD IN ('77','78','95','96') THEN
+      SELECT (PROD);
+         WHEN ('HL') ITEM = '214';
+         OTHERWISE   ITEM = '219';
+      END;
+   ELSE SELECT (PROD);
+      WHEN ('FL') ITEM = '211';
+      WHEN ('RC') ITEM = '212';
+      OTHERWISE   ITEM = '219';
+   END;
 
-# ============================================
-# PATHS (adjust to your environment)
-# ============================================
-BASE_INPUT = Path("parquet_input")     # root for input Parquet
-BASE_OUT   = Path("parquet_output")    # for optional intermediate Parquet outputs
-BASE_TXT   = Path("text_output")       # final text output folder
-BASE_OUT.mkdir(parents=True, exist_ok=True)
-BASE_TXT.mkdir(parents=True, exist_ok=True)
+   IF BLDATE > 0 THEN DAYS = REPTDATE - BLDATE;
+   IF EXPRDATE - REPTDATE < 8 THEN REMMTH = 0.1;
+   ELSE DO;
+      PAYFREQ = '3';
+      SELECT (PAYFREQ);
+         WHEN ('1') FREQ = 1;
+         WHEN ('2') FREQ = 3;
+         WHEN ('3') FREQ = 6;
+         WHEN ('4') FREQ = 12;
+         OTHERWISE;
+      END;
+      IF PRODUCT IN (350,910,925) THEN
+         BLDATE = EXPRDATE;
+      ELSE IF BLDATE <= 0 THEN DO;
+         BLDATE = ISSDTE;
+         DO WHILE (BLDATE <= REPTDATE);
+            %NXTBLDT
+         END;
+      END;
+      IF PAYAMT < 0 THEN PAYAMT = 0;
+      IF BLDATE > EXPRDATE | BALANCE <= PAYAMT THEN BLDATE = EXPRDATE;
+      DO WHILE (BLDATE <= EXPRDATE);
+         MATDT = BLDATE;
+         %REMMTH
+         IF REMMTH > 60 OR BLDATE = EXPRDATE THEN LEAVE;
+         AMOUNT = PAYAMT;
+         BALANCE = BALANCE - PAYAMT;
+         BNMCODE = '95'||ITEM||CUST||PUT(REMMTH,REMFMT.)||'0000Y';
+         OUTPUT;
+         IF DAYS > 89 THEN REMMTH = 13;
+         BNMCODE = '93'||ITEM||CUST||PUT(REMMTH,REMFMT.)||'0000Y';
+         OUTPUT;
+         %NXTBLDT
+         IF BLDATE > EXPRDATE | BALANCE <= PAYAMT THEN
+            BLDATE = EXPRDATE;
+      END;
+   END;
+   AMOUNT = BALANCE;
+   BNMCODE = '95'||ITEM||CUST||PUT(REMMTH,REMFMT.)||'0000Y';
+   OUTPUT;
+   IF DAYS > 89 THEN REMMTH = 13;
+   BNMCODE = '93'||ITEM||CUST||PUT(REMMTH,REMFMT.)||'0000Y';
+   OUTPUT;
+*;
+PROC SUMMARY DATA=NOTE NWAY;
+   CLASS BNMCODE;
+   VAR AMOUNT;
+   OUTPUT OUT=NOTE(DROP=_TYPE_ _FREQ_) SUM=;
+*;
 
-# Input: BNM1.IBTRAD&REPTMON&NOWK -> naming pattern; see below
-# Output "host dataset" mirror
-NLFBT_TXT = BASE_TXT / "SAP.PIBB.ALM.NLFBT.TEXT.txt"
+DATA _NULL_;
+   SET NOTE;
+   FILE NLFBT;
+   IF _N_ = 1 THEN
+   PUT @1 'INLFBT' "&REPTDAY" "&REPTMON" "&REPTYEAR";
 
-# ============================================
-# HELPERS: date handling & formats/macros
-# ============================================
-
-def is_leap_sas_style(y: int) -> bool:
-    # SAS macro uses MOD(year,4)=0 in this job context
-    return (y % 4) == 0
-
-def LDAY_for(m: int, y: int) -> int:
-    # Mirrors RETAIN D1-D12 31; D4 D6 D9 D11 30; February special
-    if m == 2:
-        return 29 if is_leap_sas_style(y) else 28
-    return 30 if m in (4, 6, 9, 11) else 31
-
-# PROC FORMAT: REMFMT (Islamic version - same as EIBMABTL)
-def REMFMT(x: float) -> str:
-    if x is None:
-        return "07"
-    if x <= 0.1:  return "01"
-    if x <= 1:    return "02"
-    if x <= 3:    return "03"
-    if x <= 6:    return "04"
-    if x <= 12:   return "05"
-    if x <= 36:   return "06"
-    if x <= 60:   return "07"
-    return "08"
-
-# PROC FORMAT: PRDFMT (defined in SAS but not used by this program's logic)
-HL_SET = {4,5,6,7,31,32,100,101,102,103,110,111,112,113,114,115,
-          116,170,200,201,204,205,209,210,211,212,214,215,219,220,
-          225,226,227,228,229,230,231,232,233,234}
-RC_SET = {350,910,925}
-def PRDFMT(product: int) -> str:
-    if product in HL_SET: return "HL"
-    if product in RC_SET: return "RC"
-    return "FL"
-
-def NXTBLDT(BLDATE: date, PAYFREQ: str, FREQ: int, ISSDTE: date) -> date:
-    # SAS macro NXTBLDT
-    if PAYFREQ == "6":  # biweekly branch (kept though PAYFREQ='3' later)
-        dd = BLDATE.day + 14
-        mm = BLDATE.month
-        yy = BLDATE.year
-        if dd > LDAY_for(mm, yy):
-            dd -= LDAY_for(mm, yy)
-            mm += 1
-            if mm > 12:
-                mm -= 12
-                yy += 1
-    else:
-        dd = ISSDTE.day
-        mm = BLDATE.month + FREQ
-        yy = BLDATE.year
-        if mm > 12:
-            mm -= 12
-            yy += 1
-    if dd > LDAY_for(mm, yy):
-        dd = LDAY_for(mm, yy)
-    return date(yy, mm, dd)
-
-def REMMTH_fn(MATDT: date, RPYR: int, RPMTH: int, RPDAY: int) -> float:
-    # SAS macro REMMTH
-    MDYR, MDMTH, MDDAY = MATDT.year, MATDT.month, MATDT.day
-    rpdays_month_len = 29 if (RPMTH == 2 and is_leap_sas_style(RPYR)) else (30 if RPMTH in (4,6,9,11) else 31)
-    if MDDAY > rpdays_month_len:
-        MDDAY = rpdays_month_len
-    REMY = MDYR  - RPYR
-    REMM = MDMTH - RPMTH
-    REMD = MDDAY - RPDAY
-    return REMY*12 + REMM + (REMD / rpdays_month_len)
-
-def to_date(value):
-    """Convert SAS numeric date or datetime to Python date."""
-    if value is None:
-        return None
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, (int, float)):
-        if value <= 0:
-            return None
-        return date(1960, 1, 1) + timedelta(days=int(value))
-    return None
-
-
-# ============================================
-# 1) SET REPORT DATE (using datetime directly)
-# ============================================
-
-# ====================================================================
-# TESTING MODE - Use today's date minus 1 day
-# ====================================================================
-repdt = date.today() - timedelta(days=1)
-
-# ====================================================================
-# PRODUCTION MODE - Uncomment below for production use with specific date
-# ====================================================================
-# repdt = date(2026, 6, 8)  # Example: June 8, 2026
-
-# ====================================================================
-# End of date selection
-# ====================================================================
-
-REPTDAY = f"{repdt.day:02d}"
-REPTMON = f"{repdt.month:02d}"
-REPTYEAR = f"{repdt.year:04d}"
-if   repdt.day == 8:  NOWK = "1"
-elif repdt.day == 15: NOWK = "2"
-elif repdt.day == 22: NOWK = "3"
-else:                 NOWK = "4"
-RDATE = repdt.strftime("%d/%m/%y")  # DDMMYY8. equivalent
-
-print(f"\n{'='*70}")
-print(f"EIIMABTL - ISLAMIC LOAN MATURITY PROFILE PROCESSOR")
-print(f"{'='*70}")
-print(f"\nReport Date: {repdt.strftime('%d/%m/%Y')}")
-print(f"Week Number: {NOWK}")
-print(f"Report Month: {REPTMON}")
-print(f"Report Year: {REPTYEAR}")
-print(f"RDATE: {RDATE}")
-
-# ============================================
-# 2) READ IBTRAD for the period (Parquet)
-#    Adjust path pattern to your partition layout
-# ============================================
-IBTRAD_PATH = BASE_INPUT / f"BNM1_IBTRAD_{REPTMON}_{NOWK}.parquet"
-print(f"\nLooking for IBTRAD file: {IBTRAD_PATH.name}")
-
-if not IBTRAD_PATH.exists():
-    raise FileNotFoundError(f"IBTRAD file not found: {IBTRAD_PATH}")
-
-# Read SAS file if it's .sas7bdat, otherwise read parquet
-if IBTRAD_PATH.suffix == '.sas7bdat':
-    import pyreadstat
-    df, meta = pyreadstat.read_sas7bdat(str(IBTRAD_PATH))
-    IBTRAD = pl.from_pandas(df)
-else:
-    IBTRAD = pl.read_parquet(IBTRAD_PATH)
-
-print(f"Total records read: {len(IBTRAD)}")
-
-# ============================================
-# 3) DATA NOTE ... PROC SUMMARY NWAY
-#    We build NOTE rows in Python (SAS emits multiple outputs per record)
-# ============================================
-rows: list[dict] = []
-
-RPYR, RPMTH, RPDAY = repdt.year, repdt.month, repdt.day
-processed = 0
-
-for rec in IBTRAD.iter_rows(named=True):
-    # SAS variable names preserved
-    PRODCD   = str(rec.get("PRODCD", "") or "")
-    PRODUCT  = int(rec.get("PRODUCT", 0) or 0)
-    CUSTCD   = str(rec.get("CUSTCD", "") or "")
-    
-    # Convert dates from SAS numeric if needed
-    BLDATE_val = rec.get("BLDATE", None)
-    EXPRDATE_val = rec.get("EXPRDATE", None)
-    ISSDTE_val = rec.get("ISSDTE", None)
-    
-    BLDATE = to_date(BLDATE_val)
-    EXPRDATE = to_date(EXPRDATE_val)
-    ISSDTE = to_date(ISSDTE_val)
-    
-    PAYAMT   = float(rec.get("PAYAMT", 0) or 0.0)
-    BALANCE  = float(rec.get("BALANCE", 0) or 0.0)
-
-    # IF SUBSTR(PRODCD,1,2)='34' OR PRODUCT IN (225,226);
-    if not (PRODCD[:2] == "34" or PRODUCT in (225, 226)):
-        continue
-
-    # CUST
-    if CUSTCD in {"77", "78", "95", "96"}:
-        CUST = "08"
-    else:
-        CUST = "09"
-
-    # PROD set to 'BT' per SAS (do not derive from PRDFMT)
-    PROD = "BT"
-
-    # ITEM selection mirrors SAS branches
-    if CUSTCD in {"77", "78", "95", "96"}:
-        if PROD == "HL":
-            ITEM = "214"
-        else:
-            ITEM = "219"
-    else:
-        if   PROD == "FL": ITEM = "211"
-        elif PROD == "RC": ITEM = "212"
-        else:              ITEM = "219"
-
-    DAYS = None
-    if BLDATE is not None:
-        DAYS = (repdt - BLDATE).days
-
-    # --- SAS-faithful initialization ---
-    REMMTH_val = 0.1  # safe default bucket
-
-    # If expiry within <8 days, set REMMTH=0.1, else compute via loop/macro
-    if EXPRDATE is not None and (EXPRDATE - repdt).days < 8:
-        REMMTH_val = 0.1
-    elif EXPRDATE is not None:
-        PAYFREQ = "3"
-        if   PAYFREQ == "1": FREQ = 1
-        elif PAYFREQ == "2": FREQ = 3
-        elif PAYFREQ == "3": FREQ = 6
-        elif PAYFREQ == "4": FREQ = 12
-        else:                FREQ = 6
-
-        if PRODUCT in (350, 910, 925):
-            BLDATE = EXPRDATE
-        elif BLDATE is None or BLDATE <= date(1900, 1, 1):
-            BLDATE = ISSDTE
-            if BLDATE is not None:
-                while BLDATE <= repdt:
-                    BLDATE = NXTBLDT(BLDATE, PAYFREQ, FREQ, ISSDTE)
-
-        if PAYAMT < 0:
-            PAYAMT = 0.0
-
-        if BLDATE is not None:
-            if (BLDATE > EXPRDATE) or (BALANCE <= PAYAMT):
-                BLDATE = EXPRDATE
-
-        # DO WHILE (BLDATE <= EXPRDATE)
-        while BLDATE is not None and BLDATE <= EXPRDATE:
-            MATDT = BLDATE
-            REMMTH_val = REMMTH_fn(MATDT, RPYR, RPMTH, RPDAY)
-            if (REMMTH_val > 60) or (BLDATE == EXPRDATE):
-                break
-
-            AMOUNT = PAYAMT
-            BALANCE = BALANCE - PAYAMT
-            # Islamic version uses 95/93 prefixes
-            BNMCODE = "95" + ITEM + CUST + REMFMT(REMMTH_val) + "0000Y"
-            rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
-
-            if (DAYS is not None) and (DAYS > 89):
-                REMMTH_tmp = 13
-            else:
-                REMMTH_tmp = REMMTH_val
-            BNMCODE = "93" + ITEM + CUST + REMFMT(REMMTH_tmp) + "0000Y"
-            rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
-
-            BLDATE = NXTBLDT(BLDATE, PAYFREQ, FREQ, ISSDTE)
-
-            if (BLDATE > EXPRDATE) or (BALANCE <= PAYAMT):
-                BLDATE = EXPRDATE
-
-    # Final two OUTPUTs after the loop (exactly as SAS)
-    AMOUNT = BALANCE
-    BNMCODE = "95" + ITEM + CUST + REMFMT(REMMTH_val) + "0000Y"
-    rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
-
-    if (DAYS is not None) and (DAYS > 89):
-        REMMTH_final = 13
-    else:
-        REMMTH_final = REMMTH_val
-    BNMCODE = "93" + ITEM + CUST + REMFMT(REMMTH_final) + "0000Y"
-    rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
-    
-    processed += 1
-    if processed % 1000 == 0:
-        print(f"  Processed {processed} records...")
-
-print(f"\n  Total records processed: {processed}")
-print(f"  Output records created: {len(rows)}")
-
-if len(rows) == 0:
-    print("  No output records generated.")
-    sys.exit(0)
-
-# Build NOTE (detail) as Arrow, then summarize with DuckDB to mirror PROC SUMMARY NWAY
-NOTE_arrow = pa.Table.from_pylist(rows, schema=pa.schema([
-    pa.field("BNMCODE", pa.string()),
-    pa.field("AMOUNT",  pa.float64()),
-]))
-
-con = duckdb.connect()
-con.register("note", NOTE_arrow)
-NOTE_SUM_arrow = con.execute("""
-    SELECT BNMCODE, SUM(AMOUNT) AS AMOUNT
-    FROM note
-    GROUP BY BNMCODE
-    ORDER BY BNMCODE
-""").arrow()
-
-# Filter out missing remmth (code '07')
-NOTE_SUM_arrow = con.execute("""
-    SELECT BNMCODE, AMOUNT
-    FROM NOTE_SUM_arrow
-    WHERE SUBSTR(BNMCODE, 8, 2) != '07'
-""").arrow() if len(NOTE_SUM_arrow) > 0 else NOTE_SUM_arrow
-
-# Save the summary as Parquet (optional)
-NOTE_SUM_PARQUET = BASE_OUT / "NOTE_SUM_EIIMABTL.parquet"
-pq.write_table(NOTE_SUM_arrow, NOTE_SUM_PARQUET)
-
-# Also hold as Polars
-NOTE_SUM = pl.from_arrow(NOTE_SUM_arrow)
-
-# ============================================
-# 4) Emit text file (header + BNMCODE;AMOUNT;)
-# ============================================
-print(f"\nWriting output to: {NLFBT_TXT}")
-with NLFBT_TXT.open("w", encoding="utf-8", newline="") as f:
-    # Header: INLFBT REPTDAY REPTMON REPTYEAR
-    f.write(f"INLFBT {REPTDAY} {REPTMON} {REPTYEAR}\n")
-    for r in NOTE_SUM.iter_rows(named=True):
-        BNMCODE = r["BNMCODE"]
-        AMOUNT  = r["AMOUNT"]
-        # Format amount without thousand separators
-        if float(AMOUNT).is_integer():
-            amt_str = str(int(AMOUNT))
-        else:
-            amt_str = f"{AMOUNT:.2f}".rstrip('0').rstrip('.') if AMOUNT != 0 else "0"
-        f.write(f"{BNMCODE};{amt_str};\n")
-
-# Calculate totals for summary
-total_amount = NOTE_SUM['AMOUNT'].sum() if len(NOTE_SUM) > 0 else 0
-missing_count = len(rows) - len(NOTE_SUM)
-
-print("\n" + "=" * 70)
-print("PROCESSING COMPLETED SUCCESSFULLY")
-print("=" * 70)
-print(f"\nOutput file: {NLFBT_TXT}")
-print(f"Summary Parquet: {NOTE_SUM_PARQUET}")
-print(f"Total BNM codes: {len(NOTE_SUM)}")
-print(f"Total amount: {total_amount:,.2f}")
-if missing_count > 0:
-    print(f"Records with missing remmth (code '07'): {missing_count}")
-
-# Close DuckDB connection
-con.close()
+   PUT @1 BNMCODE $14. ';'
+          AMOUNT +(-1) ';'
+          ;
+RUN;
+//*----------------------------------------------
+//* FTP HOST DATASETS TO PBB DATAWAREHOUSE SERVER
+//*----------------------------------------------
+//*%OPC SCAN
+//*RUNSFTP  EXEC COZBATCH
+//*CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(CSASSFTP)
+//*           DD *
+//*lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+//*lzopts linerule=$lr
+//*CD TEXTFILE/RISKMGT/NLF/PIBB
+//*PUT //SAP.PIBB.ALM.NLFBT.TEXT IBTLIQ@%OMM.%OYY..TXT
+//*EOB
+//*----------------------------------------------------------
+//* FTP HOST DATASETS TO DATA REPORT REPOSITORY SYSTEM (DRR)
+//*----------------------------------------------------------
+//*%OPC SCAN
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(DRR#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+CD RMD-ALM/LIQ
+PUT //SAP.PIBB.ALM.NLFBT.TEXT IBTLIQ@%OMM.%OYY..TXT
+EOB
