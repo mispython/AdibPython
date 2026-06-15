@@ -176,7 +176,7 @@ def main(reptdate=None):
     try:
         # Step 1: Get report date
         if reptdate is None:
-            reptdate = date(2026, 6, 8)
+            reptdate = date(2025, 8, 8)
             print("\nTESTING MODE: Using fixed date: {}".format(reptdate))
         elif isinstance(reptdate, datetime):
             reptdate = reptdate.date()
@@ -186,6 +186,7 @@ def main(reptdate=None):
         reptyear = reptdate.strftime('%Y')
         reptmon = reptdate.strftime('%m')
         reptday = reptdate.strftime('%d')
+        yy_2digit = reptdate.strftime('%y')  # 2-digit year for filename
         
         # Calculate runoff date variables (for REMMTH macro)
         rpyr = reptdate.year
@@ -197,13 +198,15 @@ def main(reptdate=None):
         print("Week Number: {}".format(nowk))
         print("Report Month: {}".format(reptmon))
         print("Report Year: {}".format(reptyear))
+        print("2-Digit Year: {}".format(yy_2digit))
         
-        # Step 2: Build BTRAD filename: btrad{MM}{WK}.sas7bdat
-        btrad_filename = "btrad{}{}.sas7bdat".format(reptmon, nowk)
+        # Step 2: Build BTRAD filename: btrad{MM}{WK}{YY}.sas7bdat
+        # Example: btrad08125.sas7bdat (Month=08, Week=1, Year=2025)
+        btrad_filename = "btrad{}{}{}.sas7bdat".format(reptmon, nowk, yy_2digit)
         btrad_path = INPUT_DIR / btrad_filename
         
         if not btrad_path.exists():
-            btrad_filename_upper = "BTRAD{}{}.sas7bdat".format(reptmon, nowk)
+            btrad_filename_upper = "BTRAD{}{}{}.sas7bdat".format(reptmon, nowk, yy_2digit)
             btrad_path = INPUT_DIR / btrad_filename_upper
         
         print("\nLooking for BTRAD file: {}".format(btrad_path.name))
@@ -480,8 +483,8 @@ def main(reptdate=None):
         
     except FileNotFoundError as e:
         print("\nFILE NOT FOUND ERROR: {}".format(e), file=sys.stderr)
-        print("\nExpected file pattern: btrad{MM}{WK}.sas7bdat")
-        print("Example: btrad061.sas7bdat for Month=06, Week=1")
+        print("\nExpected file pattern: btrad{MM}{WK}{YY}.sas7bdat")
+        print("Example: btrad08125.sas7bdat for Month=08, Week=1, Year=2025")
         return 1
     except Exception as exc:
         print("\nERROR: {}".format(exc), file=sys.stderr)
@@ -498,7 +501,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(
         description='EIBMABTL - Loan Maturity Profile Processor',
-        epilog='Example: python EIBMABTL.py 2026-06-08'
+        epilog='Example: python EIBMABTL.py 2025-08-08'
     )
     parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format')
     
@@ -513,7 +516,7 @@ if __name__ == "__main__":
             print("Error: Invalid date format. Use YYYY-MM-DD")
             sys.exit(1)
     else:
-        print("No date provided - using June 8, 2026 for testing")
+        print("No date provided - using August 8, 2025 for testing")
         reptdate = date(2025, 8, 8)
     
     sys.exit(main(reptdate))
