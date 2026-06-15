@@ -1,8 +1,7 @@
-
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import pyarrow as pa
 import pyarrow.parquet as pq
 import duckdb
@@ -58,7 +57,7 @@ def LDAY_for(m: int, y: int) -> int:
         return 29 if is_leap_sas_style(y) else 28
     return 30 if m in (4, 6, 9, 11) else 31
 
-# PROC FORMAT: REMFMT
+# PROC FORMAT: REMFMT (Islamic version - same as EIBMABTL)
 def REMFMT(x: float) -> str:
     if x <= 0.1:  return "01"
     if x <= 1:    return "02"
@@ -116,14 +115,28 @@ def REMMTH_fn(MATDT: date, RPYR: int, RPMTH: int, RPDAY: int) -> float:
 # ============================================
 # 1) READ REPTDATE + derive macros
 # ============================================
-REPTDATE_DF = pl.read_parquet(REPTDATE_PARQUET)
-if REPTDATE_DF.height != 1:
-    raise RuntimeError("BNM1.REPTDATE must have exactly one row.")
 
-REPTDATE_VAL = REPTDATE_DF["REPTDATE"][0]
-repdt = _coerce_date(REPTDATE_VAL)
-if repdt is None:
-    raise RuntimeError("REPTDATE could not be parsed as a date.")
+# ====================================================================
+# TESTING MODE - Use today's date minus 1 day
+# ====================================================================
+# Uncomment the line below for testing
+repdt = date.today() - timedelta(days=1)
+
+# ====================================================================
+# PRODUCTION MODE - Uncomment below for production use
+# ====================================================================
+# REPTDATE_DF = pl.read_parquet(REPTDATE_PARQUET)
+# if REPTDATE_DF.height != 1:
+#     raise RuntimeError("BNM1.REPTDATE must have exactly one row.")
+# 
+# REPTDATE_VAL = REPTDATE_DF["REPTDATE"][0]
+# repdt = _coerce_date(REPTDATE_VAL)
+# if repdt is None:
+#     raise RuntimeError("REPTDATE could not be parsed as a date.")
+
+# ====================================================================
+# End of date selection
+# ====================================================================
 
 REPTDAY = f"{repdt.day:02d}"
 REPTMON = f"{repdt.month:02d}"
@@ -134,12 +147,27 @@ elif repdt.day == 22: NOWK = "3"
 else:                 NOWK = "4"
 RDATE = repdt.strftime("%d/%m/%y")  # DDMMYY8. equivalent
 
+print(f"\n{'='*70}")
+print(f"EIIMABTL - ISLAMIC LOAN MATURITY PROFILE PROCESSOR")
+print(f"{'='*70}")
+print(f"\nReport Date: {repdt.strftime('%d/%m/%Y')}")
+print(f"Week Number: {NOWK}")
+print(f"Report Month: {REPTMON}")
+print(f"Report Year: {REPTYEAR}")
+print(f"RDATE: {RDATE}")
+
 # ============================================
 # 2) READ IBTRAD for the period (Parquet)
 #    Adjust path pattern to your partition layout
 # ============================================
 IBTRAD_PATH = BASE_INPUT / f"BNM1_IBTRAD_{REPTMON}_{NOWK}.parquet"
+print(f"\nLooking for IBTRAD file: {IBTRAD_PATH.name}")
+
+if not IBTRAD_PATH.exists():
+    raise FileNotFoundError(f"IBTRAD file not found: {IBTRAD_PATH}")
+
 IBTRAD = pl.read_parquet(IBTRAD_PATH)
+print(f"Total records read: {len(IBTRAD)}")
 
 # ============================================
 # 3) DATA NOTE ... PROC SUMMARY NWAY
@@ -148,6 +176,7 @@ IBTRAD = pl.read_parquet(IBTRAD_PATH)
 rows: list[dict] = []
 
 RPYR, RPMTH, RPDAY = repdt.year, repdt.month, repdt.day
+processed = 0
 
 for rec in IBTRAD.iter_rows(named=True):
     # SAS variable names preserved
@@ -225,6 +254,7 @@ for rec in IBTRAD.iter_rows(named=True):
 
             AMOUNT = PAYAMT
             BALANCE = BALANCE - PAYAMT
+            # Islamic version uses 95/93 prefixes (same as conventional for this program)
             BNMCODE = "95" + ITEM + CUST + REMFMT(REMMTH_val) + "0000Y"
             rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
 
@@ -251,6 +281,13 @@ for rec in IBTRAD.iter_rows(named=True):
         REMMTH_final = REMMTH_val
     BNMCODE = "93" + ITEM + CUST + REMFMT(REMMTH_final) + "0000Y"
     rows.append({"BNMCODE": BNMCODE, "AMOUNT": AMOUNT})
+    
+    processed += 1
+    if processed % 1000 == 0:
+        print(f"  Processed {processed} records...")
+
+print(f"\n  Total records processed: {processed}")
+print(f"  Output records created: {len(rows)}")
 
 # Build NOTE (detail) as Arrow, then summarize with DuckDB to mirror PROC SUMMARY NWAY
 NOTE_arrow = pa.Table.from_pylist(rows, schema=pa.schema([
@@ -267,8 +304,15 @@ NOTE_SUM_arrow = con.execute("""
     ORDER BY BNMCODE
 """).arrow()
 
+# Filter out missing remmth (code '07')
+NOTE_SUM_arrow = con.execute("""
+    SELECT BNMCODE, AMOUNT
+    FROM NOTE_SUM_arrow
+    WHERE SUBSTR(BNMCODE, 8, 2) != '07'
+""").arrow() if len(NOTE_SUM_arrow) > 0 else NOTE_SUM_arrow
+
 # Save the summary as Parquet (optional)
-NOTE_SUM_PARQUET = BASE_OUT / "NOTE_SUM.parquet"
+NOTE_SUM_PARQUET = BASE_OUT / "NOTE_SUM_EIIMABTL.parquet"
 pq.write_table(NOTE_SUM_arrow, NOTE_SUM_PARQUET)
 
 # Also hold as Polars if you want to reuse downstream
@@ -278,6 +322,7 @@ NOTE_SUM = pl.from_arrow(NOTE_SUM_arrow)
 # 4) Emit text file (header + BNMCODE;AMOUNT;)
 #    Faithful to SAS: no forced decimals / separators
 # ============================================
+print(f"\nWriting output to: {NLFBT_TXT}")
 with NLFBT_TXT.open("w", encoding="utf-8", newline="") as f:
     # Header: INLFBT REPTDAY REPTMON REPTYEAR (spaces between, like SAS line)
     f.write(f"INLFBT {REPTDAY} {REPTMON} {REPTYEAR}\n")
@@ -289,5 +334,16 @@ with NLFBT_TXT.open("w", encoding="utf-8", newline="") as f:
         amt_str = str(int(AMOUNT)) if float(AMOUNT).is_integer() else str(AMOUNT)
         f.write(f"{BNMCODE};{amt_str};\n")
 
-print(f"Wrote summary parquet: {NOTE_SUM_PARQUET}")
-print(f"Wrote text file     : {NLFBT_TXT}")
+# Calculate totals for summary
+total_amount = NOTE_SUM['AMOUNT'].sum() if len(NOTE_SUM) > 0 else 0
+
+print("\n" + "=" * 70)
+print("PROCESSING COMPLETED SUCCESSFULLY")
+print("=" * 70)
+print(f"\nOutput file: {NLFBT_TXT}")
+print(f"Summary Parquet: {NOTE_SUM_PARQUET}")
+print(f"Total BNM codes: {len(NOTE_SUM)}")
+print(f"Total amount: {total_amount:,.2f}")
+
+# Close DuckDB connection
+con.close()
