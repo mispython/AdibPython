@@ -7,17 +7,18 @@ import pyarrow.parquet as pq
 import duckdb
 import polars as pl
 import sys
+import pyreadstat
 
 # ============================================
 # PATHS (adjust to your environment)
 # ============================================
-BASE_INPUT = Path("parquet_input")     # root for input Parquet
-BASE_OUT   = Path("parquet_output")    # for optional intermediate Parquet outputs
-BASE_TXT   = Path("text_output")       # final text output folder
+BASE_INPUT = Path("sas_input")       # root for input SAS files
+BASE_OUT   = Path("parquet_output")  # for optional intermediate Parquet outputs
+BASE_TXT   = Path("text_output")     # final text output folder
 BASE_OUT.mkdir(parents=True, exist_ok=True)
 BASE_TXT.mkdir(parents=True, exist_ok=True)
 
-# Input: BNM1.IBTRAD&REPTMON&NOWK -> naming pattern; see below
+# Input: BNM1.IBTRAD&REPTMON&NOWK.sas7bdat
 # Output "host dataset" mirror
 NLFBT_TXT = BASE_TXT / "SAP.PIBB.ALM.NLFBT.TEXT.txt"
 
@@ -35,7 +36,7 @@ def LDAY_for(m: int, y: int) -> int:
         return 29 if is_leap_sas_style(y) else 28
     return 30 if m in (4, 6, 9, 11) else 31
 
-# PROC FORMAT: REMFMT (from EIIMABTL - same as EIBMABTL)
+# PROC FORMAT: REMFMT (from EIIMABTL)
 def REMFMT(x: float) -> str:
     if x is None:
         return "07"
@@ -82,20 +83,11 @@ def REMMTH_fn(MATDT: date, RPYR: int, RPMTH: int, RPDAY: int) -> float:
     REMD = MDDAY - RPDAY
     return REMY * 12 + REMM + (REMD / rpdays_month_len)
 
-def to_date(value):
-    """Convert SAS numeric date to Python date."""
-    if value is None:
+def sas_date_to_python(sas_days):
+    """Convert SAS numeric date (days since 1960-01-01) to Python date"""
+    if sas_days is None or sas_days <= 0:
         return None
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, (int, float)):
-        if value <= 0:
-            return None
-        return date(1960, 1, 1) + timedelta(days=int(value))
-    return None
-
+    return date(1960, 1, 1) + timedelta(days=int(sas_days))
 
 # ============================================
 # 1) SET REPORT DATE (using datetime directly)
@@ -137,22 +129,20 @@ print(f"Report Month: {REPTMON}")
 print(f"Report Year: {REPTYEAR}")
 
 # ============================================
-# 2) READ IBTRAD for the period
+# 2) READ IBTRAD SAS file
 # ============================================
-IBTRAD_PATH = BASE_INPUT / f"BNM1_IBTRAD_{REPTMON}_{NOWK}.parquet"
+# Pattern: BNM1.IBTRAD&REPTMON&NOWK.sas7bdat
+IBTRAD_FILENAME = f"ibtra{REPTMON}{NOWK}.sas7bdat"
+IBTRAD_PATH = BASE_INPUT / IBTRAD_FILENAME
 print(f"\nLooking for IBTRAD file: {IBTRAD_PATH.name}")
 
 if not IBTRAD_PATH.exists():
     raise FileNotFoundError(f"IBTRAD file not found: {IBTRAD_PATH}")
 
-# Read SAS file if it's .sas7bdat, otherwise read parquet
-if IBTRAD_PATH.suffix == '.sas7bdat':
-    import pyreadstat
-    df, meta = pyreadstat.read_sas7bdat(str(IBTRAD_PATH))
-    IBTRAD = pl.from_pandas(df)
-else:
-    IBTRAD = pl.read_parquet(IBTRAD_PATH)
-
+# Read SAS file
+print("  Reading SAS file...")
+df, meta = pyreadstat.read_sas7bdat(str(IBTRAD_PATH))
+IBTRAD = pl.from_pandas(df)
 print(f"Total records read: {len(IBTRAD)}")
 
 # ============================================
@@ -170,10 +160,10 @@ for rec in IBTRAD.iter_rows(named=True):
     PRODUCT = int(rec.get("PRODUCT", 0) or 0)
     CUSTCD = str(rec.get("CUSTCD", "") or "")
     
-    # Convert dates from SAS numeric if needed
-    BLDATE = to_date(rec.get("BLDATE", None))
-    EXPRDATE = to_date(rec.get("EXPRDATE", None))
-    ISSDTE = to_date(rec.get("ISSDTE", None))
+    # Convert SAS numeric dates to Python dates
+    BLDATE = sas_date_to_python(rec.get("BLDATE", None))
+    EXPRDATE = sas_date_to_python(rec.get("EXPRDATE", None))
+    ISSDTE = sas_date_to_python(rec.get("ISSDTE", None))
     
     PAYAMT = float(rec.get("PAYAMT", 0) or 0.0)
     BALANCE = float(rec.get("BALANCE", 0) or 0.0)
@@ -323,7 +313,7 @@ NOTE_SUM_arrow = con.execute("""
     ORDER BY BNMCODE
 """).arrow()
 
-# Filter out missing remmth (code '07') - matches SAS where '07' is filtered out
+# Filter out missing remmth (code '07')
 NOTE_SUM_arrow = con.execute("""
     SELECT BNMCODE, AMOUNT
     FROM NOTE_SUM_arrow
@@ -343,9 +333,7 @@ NOTE_SUM = pl.from_arrow(NOTE_SUM_arrow)
 # ============================================
 print(f"\nWriting output to: {NLFBT_TXT}")
 with NLFBT_TXT.open("w", encoding="utf-8", newline="") as f:
-    # Header: INLFBT REPTDAY REPTMON REPTYEAR (no spaces in SAS? Check original)
-    # Original SAS: PUT @1 'INLFBT' "&REPTDAY" "&REPTMON" "&REPTYEAR";
-    # This puts them concatenated: INLFBTDDMMYYYY
+    # Header: INLFBT + REPTDAY + REPTMON + REPTYEAR (concatenated)
     f.write(f"INLFBT{REPTDAY}{REPTMON}{REPTYEAR}\n")
     
     # Data rows: BNMCODE;AMOUNT;
