@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-File Name: EIBMABTL
-Loan Maturity Profile Processor (BT)
-Processes BTRAD loan data for BNM reporting
-Based on original SAS code with FCY support (PRODCD starting with '346')
+File Name: EIIMABTL
+Islamic Loan Maturity Profile Processor (IBT)
+Processes IBTRAD loan data for BNM reporting
+Based on original SAS code for Islamic products
 """
 
 from datetime import date, datetime, timedelta
@@ -23,7 +23,7 @@ warnings.filterwarnings('ignore')
 # ============================================================================
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod"
-OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMABTL"
+OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIIMABTL"
 
 # Output file
 NLFBT = OUTPUT_DIR / "nlfbt.txt"
@@ -51,7 +51,7 @@ def sas_date_to_python(sas_days):
 def get_remfmt(remmth):
     """
     SAS REMFMT format - map remaining months to code
-    Based on the EIBMABTL format (different from EIBMLIBT)
+    Based on the EIIMABTL format (same as EIBMABTL but with different threshold in main logic)
     """
     if remmth is None:
         return '07'
@@ -168,15 +168,15 @@ def get_week_number(reptdate):
 # ============================================================================
 
 def main(reptdate=None):
-    """Main execution function - matches SAS DATA NOTE step"""
+    """Main execution function - matches SAS DATA NOTE step for Islamic products"""
     print("\n" + "=" * 70)
-    print("EIBMABTL - LOAN MATURITY PROFILE PROCESSOR")
+    print("EIIMABTL - ISLAMIC LOAN MATURITY PROFILE PROCESSOR")
     print("=" * 70)
 
     try:
         # Step 1: Get report date
         if reptdate is None:
-            reptdate = date(2026, 6, 8)
+            reptdate = date(2025, 8, 8)
             print("\nTESTING MODE: Using fixed date: {}".format(reptdate))
         elif isinstance(reptdate, datetime):
             reptdate = reptdate.date()
@@ -198,22 +198,22 @@ def main(reptdate=None):
         print("Report Month: {}".format(reptmon))
         print("Report Year: {}".format(reptyear))
         
-        # Step 2: Build BTRAD filename: btrad{MM}{WK}.sas7bdat
-        btrad_filename = "btrad{}{}.sas7bdat".format(reptmon, nowk)
-        btrad_path = INPUT_DIR / btrad_filename
+        # Step 2: Build IBTRAD filename: ibtrad{MM}{WK}.sas7bdat
+        ibtrad_filename = "ibtrad{}{}.sas7bdat".format(reptmon, nowk)
+        ibtrad_path = INPUT_DIR / ibtrad_filename
         
-        if not btrad_path.exists():
-            btrad_filename_upper = "BTRAD{}{}.sas7bdat".format(reptmon, nowk)
-            btrad_path = INPUT_DIR / btrad_filename_upper
+        if not ibtrad_path.exists():
+            ibtrad_filename_upper = "IBTRAD{}{}.sas7bdat".format(reptmon, nowk)
+            ibtrad_path = INPUT_DIR / ibtrad_filename_upper
         
-        print("\nLooking for BTRAD file: {}".format(btrad_path.name))
+        print("\nLooking for IBTRAD file: {}".format(ibtrad_path.name))
         
-        if not btrad_path.exists():
-            raise FileNotFoundError("BTRAD file not found: {}".format(btrad_path))
+        if not ibtrad_path.exists():
+            raise FileNotFoundError("IBTRAD file not found: {}".format(ibtrad_path))
         
         # Step 3: Read SAS file
         print("  Reading SAS file...")
-        df, meta = pyreadstat.read_sas7bdat(str(btrad_path))
+        df, meta = pyreadstat.read_sas7bdat(str(ibtrad_path))
         df_pl = pl.from_pandas(df)
         print("  Total records read: {}".format(len(df_pl)))
         
@@ -243,7 +243,6 @@ def main(reptdate=None):
             # Get values
             custcd = str(row.get("CUSTCD", ""))
             prodcd = str(row.get("PRODCD", ""))
-            forcurr = str(row.get("FORCURR", ""))
             
             # Get product (try PRODUCT first, then PRODCD)
             product = row.get("PRODUCT")
@@ -292,13 +291,11 @@ def main(reptdate=None):
             if bldate is not None and bldate > 0:
                 days = (reptdate - bldate).days
             
-            # Check if FCY (PRODCD starts with '346')
-            is_fcy = (prodcd[:3] == '346')
-            
             # Initialize
             remmth = None
             
             # Process maturity profile (matches SAS IF-ELSE logic)
+            # KEY DIFFERENCE: Islamic uses > 60 threshold (not > 12)
             if (exprdate - reptdate).days < 8:
                 remmth = 0.1
             else:
@@ -329,49 +326,27 @@ def main(reptdate=None):
                     matdt = current_bldate
                     remmth = calculate_remmth(matdt, reptdate, rpyr, rpmth, rpday, rpdays)
                     
-                    if remmth > 12 or current_bldate == exprdate:
+                    # KEY DIFFERENCE: Islamic uses > 60 (not > 12)
+                    if remmth > 60 or current_bldate == exprdate:
                         break
                     
                     if payamt > 0:
                         amount = payamt
                         current_balance -= payamt
                         
-                        if is_fcy:
-                            # FCY records use 96/94 prefixes
-                            bnmcode = "96{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
-                            output_records.append({
-                                "BNMCODE": bnmcode,
-                                "AMOUNT": amount,
-                                "AMTUSD": 0,
-                                "AMTSGD": 0
-                            })
-                            
-                            remmth_npl = 13 if days > 89 else remmth
-                            bnmcode = "94{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
-                            output_records.append({
-                                "BNMCODE": bnmcode,
-                                "AMOUNT": amount,
-                                "AMTUSD": 0,
-                                "AMTSGD": 0
-                            })
-                        else:
-                            # Local currency records use 95/93 prefixes
-                            bnmcode = "95{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
-                            output_records.append({
-                                "BNMCODE": bnmcode,
-                                "AMOUNT": amount,
-                                "AMTUSD": 0,
-                                "AMTSGD": 0
-                            })
-                            
-                            remmth_npl = 13 if days > 89 else remmth
-                            bnmcode = "93{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
-                            output_records.append({
-                                "BNMCODE": bnmcode,
-                                "AMOUNT": amount,
-                                "AMTUSD": 0,
-                                "AMTSGD": 0
-                            })
+                        # Islamic uses same 95/93 prefixes (no FCY distinction in this version)
+                        bnmcode = "95{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
+                        output_records.append({
+                            "BNMCODE": bnmcode,
+                            "AMOUNT": amount
+                        })
+                        
+                        remmth_npl = 13 if days > 89 else remmth
+                        bnmcode = "93{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
+                        output_records.append({
+                            "BNMCODE": bnmcode,
+                            "AMOUNT": amount
+                        })
                     
                     # Calculate next billing date
                     current_bldate = calculate_next_bldate(current_bldate, issdte, payfreq, freq)
@@ -384,45 +359,19 @@ def main(reptdate=None):
                 bldate = current_bldate
             
             # Output final balance (matches final OUTPUT statements)
-            if is_fcy:
-                # FCY records
-                amtusd = balance if forcurr == 'USD' else 0
-                amtsgd = balance if forcurr == 'SGD' else 0
-                
-                bnmcode = "96{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
-                output_records.append({
-                    "BNMCODE": bnmcode,
-                    "AMOUNT": balance,
-                    "AMTUSD": amtusd,
-                    "AMTSGD": amtsgd
-                })
-                
-                remmth_npl = 13 if days > 89 else remmth
-                bnmcode = "94{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
-                output_records.append({
-                    "BNMCODE": bnmcode,
-                    "AMOUNT": balance,
-                    "AMTUSD": amtusd,
-                    "AMTSGD": amtsgd
-                })
-            else:
-                # Local currency records
-                bnmcode = "95{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
-                output_records.append({
-                    "BNMCODE": bnmcode,
-                    "AMOUNT": balance,
-                    "AMTUSD": 0,
-                    "AMTSGD": 0
-                })
-                
-                remmth_npl = 13 if days > 89 else remmth
-                bnmcode = "93{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
-                output_records.append({
-                    "BNMCODE": bnmcode,
-                    "AMOUNT": balance,
-                    "AMTUSD": 0,
-                    "AMTSGD": 0
-                })
+            # Islamic uses same 95/93 prefixes
+            bnmcode = "95{}{}{}0000Y".format(item, cust, get_remfmt(remmth))
+            output_records.append({
+                "BNMCODE": bnmcode,
+                "AMOUNT": balance
+            })
+            
+            remmth_npl = 13 if days > 89 else remmth
+            bnmcode = "93{}{}{}0000Y".format(item, cust, get_remfmt(remmth_npl))
+            output_records.append({
+                "BNMCODE": bnmcode,
+                "AMOUNT": balance
+            })
             
             processed += 1
             if processed % 1000 == 0:
@@ -439,16 +388,8 @@ def main(reptdate=None):
         df_output = pl.DataFrame(output_records)
         
         df_summary = df_output.group_by('BNMCODE').agg([
-            pl.col('AMOUNT').sum(),
-            pl.col('AMTUSD').sum(),
-            pl.col('AMTSGD').sum()
+            pl.col('AMOUNT').sum()
         ]).sort('BNMCODE')
-        
-        # Fill nulls with 0 (matches DATA step after SUMMARY)
-        df_summary = df_summary.with_columns([
-            pl.col('AMTUSD').fill_null(0),
-            pl.col('AMTSGD').fill_null(0)
-        ])
         
         # Filter out missing remmth (code '07')
         df_summary = df_summary.filter(pl.col('BNMCODE').str.slice(7, 2) != '07')
@@ -460,8 +401,8 @@ def main(reptdate=None):
         # Step 7: Write output file (matches DATA _NULL_ step)
         print("\nWriting output to: {}".format(NLFBT))
         with open(NLFBT, 'w') as f:
-            # Write header: NLFBT{DD}{MM}{YYYY}
-            f.write("NLFBT{}{}{}\n".format(reptday, reptmon, reptyear))
+            # Write header: INLFBT{DD}{MM}{YYYY} (I for Islamic)
+            f.write("INLFBT{}{}{}\n".format(reptday, reptmon, reptyear))
             
             # Write data rows: BNMCODE;AMOUNT;
             for row in df_summary.iter_rows(named=True):
@@ -473,15 +414,13 @@ def main(reptdate=None):
         print("\nOutput file: {}".format(NLFBT))
         print("Total BNM codes: {}".format(len(df_summary)))
         print("Total amount: {:.2f}".format(df_summary['AMOUNT'].sum()))
-        print("Total USD amount: {:.2f}".format(df_summary['AMTUSD'].sum()))
-        print("Total SGD amount: {:.2f}".format(df_summary['AMTSGD'].sum()))
         
         return 0
         
     except FileNotFoundError as e:
         print("\nFILE NOT FOUND ERROR: {}".format(e), file=sys.stderr)
-        print("\nExpected file pattern: btrad{MM}{WK}.sas7bdat")
-        print("Example: btrad061.sas7bdat for Month=06, Week=1")
+        print("\nExpected file pattern: ibtrad{MM}{WK}.sas7bdat")
+        print("Example: ibtrad081.sas7bdat for Month=08, Week=1")
         return 1
     except Exception as exc:
         print("\nERROR: {}".format(exc), file=sys.stderr)
@@ -497,8 +436,8 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='EIBMABTL - Loan Maturity Profile Processor',
-        epilog='Example: python EIBMABTL.py 2026-06-08'
+        description='EIIMABTL - Islamic Loan Maturity Profile Processor',
+        epilog='Example: python EIIMABTL.py 2025-08-08'
     )
     parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format')
     
@@ -513,7 +452,7 @@ if __name__ == "__main__":
             print("Error: Invalid date format. Use YYYY-MM-DD")
             sys.exit(1)
     else:
-        print("No date provided - using June 8, 2026 for testing")
+        print("No date provided - using August 8, 2025 for testing")
         reptdate = date(2025, 8, 8)
     
     sys.exit(main(reptdate))
