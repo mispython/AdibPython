@@ -47,7 +47,7 @@ sdate_str = sdate.strftime("%Y%m%d")
 con = duckdb.connect()
 
 # Input file paths
-base_file = os.path.join(INPUT_PATHS['base'], f"btbase{prevmon}.parquet")
+base_file = os.path.join(INPUT_PATHS['btbase'], f"btbase{prevmon}.sas7bdat")
 btdtl_file = os.path.join(INPUT_PATHS['btdtl'], f"btdtl{reptyear}{reptmon}{reptday}.sas7bdat")
 
 # Check if files exist
@@ -56,15 +56,17 @@ if not os.path.exists(base_file):
 if not os.path.exists(btdtl_file):
     raise FileNotFoundError(f"BTDTL file not found: {btdtl_file}")
 
-# Read BASE parquet file
-base = pq.read_table(base_file)
-print(f"Loaded BASE file: {base_file}")
+# Read BTBASE SAS file using pyreadstat
+df_base, base_meta = pyreadstat.read_sas7bdat(base_file)
+base = pa.Table.from_pandas(df_base)
+print(f"Loaded BTBASE file: {base_file}")
+print(f"BTBASE metadata: {base_meta.column_names}")
 
 # Read BTDTL SAS file using pyreadstat
-df_btdtl, meta = pyreadstat.read_sas7bdat(btdtl_file)
+df_btdtl, btdtl_meta = pyreadstat.read_sas7bdat(btdtl_file)
 btdtl = pa.Table.from_pandas(df_btdtl)
 print(f"Loaded BTDTL file: {btdtl_file}")
-print(f"BTDTL metadata: {meta.column_names}")
+print(f"BTDTL metadata: {btdtl_meta.column_names}")
 
 # Register in DuckDB
 con.register("btbase", base)
@@ -75,7 +77,7 @@ con.register("btdtl", btdtl)
 # -------------------------
 base_trans = con.execute("""
     SELECT ACCTNO, TRANSREF, OUTSTAND AS PREOUTSTD
-    FROM base
+    FROM btbase
     GROUP BY ACCTNO, TRANSREF, OUTSTAND
 """).arrow()
 
@@ -115,7 +117,7 @@ combt = con.execute(f"""
         CAST(({sdate.toordinal()} - b.MATDATE) AS INT) AS OVERDUE,
         CAST((base.PREOUTSTD - b.OUTSTAND) AS DOUBLE) AS RECOVAMT,
         b.FACILITY
-    FROM base_trans base
+    FROM btbase_trans base
     INNER JOIN btdtl_trans b
     ON base.ACCTNO = b.ACCTNO
    AND base.TRANSREF = b.TRANSREF
