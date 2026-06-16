@@ -3,13 +3,25 @@
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pyreadstat
 from datetime import date, timedelta
+import os
+
+# -------------------------
+# Configuration Paths
+# -------------------------
+INPUT_PATHS = {
+    'btbase': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/', 
+    'btdtl': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/' 
+}
+
+OUTPUT_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/output'  
 
 # -------------------------
 # Step 1: Prepare report dates
 # -------------------------
 today = date.today()
-reptdate = today
+reptdate = today - timedelta(days=1)  # Using yesterday's date
 prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
 
 # Next month start
@@ -29,21 +41,41 @@ rdate = reptdate.strftime("%Y%m%d")
 prevmon = prevdate.strftime("%m")
 sdate_str = sdate.strftime("%Y%m%d")
 
+print(f"Report Date: {reptdate.strftime('%Y-%m-%d')}")
+print(f"Previous Month: {prevmon}")
+print(f"Next Month Start: {sdate_str}")
+
 # -------------------------
 # Step 2: Load Islamic BASE & BTDTL data
 # -------------------------
 con = duckdb.connect()
 
-# Replace with actual Islamic parquet file locations
-base_tbl = f"BASE_IBTBASE{prevmon}.parquet"
-btdtl_tbl = f"BT_IBTDTL{reptyear}{reptmon}{reptday}.parquet"
+# Input file paths - Islamic versions
+base_file = os.path.join(INPUT_PATHS['btbase'], f"BASE_IBTBASE{prevmon}.sas7bdat")
+btdtl_file = os.path.join(INPUT_PATHS['btdtl'], f"BT_IBTDTL{reptyear}{reptmon}{reptday}.sas7bdat")
 
-# Read into Arrow Tables
-base = pq.read_table(base_tbl)
-btdtl = pq.read_table(btdtl_tbl)
+# Check if files exist
+if not os.path.exists(base_file):
+    raise FileNotFoundError(f"Islamic BASE file not found: {base_file}")
+if not os.path.exists(btdtl_file):
+    raise FileNotFoundError(f"Islamic BTDTL file not found: {btdtl_file}")
+
+# Read Islamic BTBASE SAS file using pyreadstat
+df_base, base_meta = pyreadstat.read_sas7bdat(base_file)
+base = pa.Table.from_pandas(df_base)
+print(f"Loaded Islamic BTBASE file: {base_file}")
+print(f"Islamic BTBASE metadata: {base_meta.column_names}")
+print(f"Islamic BTBASE rows: {base.num_rows}")
+
+# Read Islamic BTDTL SAS file using pyreadstat
+df_btdtl, btdtl_meta = pyreadstat.read_sas7bdat(btdtl_file)
+btdtl = pa.Table.from_pandas(df_btdtl)
+print(f"Loaded Islamic BTDTL file: {btdtl_file}")
+print(f"Islamic BTDTL metadata: {btdtl_meta.column_names}")
+print(f"Islamic BTDTL rows: {btdtl.num_rows}")
 
 # Register in DuckDB
-con.register("base", base)
+con.register("btbase", base)
 con.register("btdtl", btdtl)
 
 # -------------------------
@@ -51,29 +83,104 @@ con.register("btdtl", btdtl)
 # -------------------------
 base_trans = con.execute("""
     SELECT ACCTNO, TRANSREF, OUTSTAND AS PREOUTSTD
-    FROM base
+    FROM btbase
     GROUP BY ACCTNO, TRANSREF, OUTSTAND
-""").arrow()
+""").fetch_arrow_table()
+
+print(f"Islamic BASE transformation complete. Rows: {base_trans.num_rows}")
 
 # -------------------------
 # Step 4: Transform BTDTL (assign PRODTYPE)
 # -------------------------
-btdtl_trans = con.execute("""
-    SELECT BRANCH, ACCTNO, TRANSREF,
-           CASE 
-             WHEN RETAILID = 'R' THEN 0
-             WHEN RETAILID = 'C' THEN 999
-             ELSE CAST(PRODTYPE AS INT)
-           END AS PRODTYPE,
-           OUTSTAND, MATDATE, FACILITY
-    FROM btdtl
-    GROUP BY BRANCH, ACCTNO, TRANSREF, PRODTYPE, OUTSTAND, MATDATE, FACILITY, RETAILID
-""").arrow()
+# Check if PRODTYPE exists in Islamic BTDTL, if not use PRODGRP or SUBPROD
+try:
+    # Try using PRODTYPE first
+    btdtl_trans = con.execute("""
+        SELECT BRANCH, ACCTNO, TRANSREF,
+               CASE 
+                 WHEN RETAILID = 'R' THEN 0
+                 WHEN RETAILID = 'C' THEN 999
+                 ELSE CAST(PRODTYPE AS INT)
+               END AS PRODTYPE_CALC,
+               OUTSTAND, MATDATE, FACILITY
+        FROM btdtl
+        GROUP BY BRANCH, ACCTNO, TRANSREF, 
+                 CASE 
+                   WHEN RETAILID = 'R' THEN 0
+                   WHEN RETAILID = 'C' THEN 999
+                   ELSE CAST(PRODTYPE AS INT)
+                 END,
+                 OUTSTAND, MATDATE, FACILITY, RETAILID
+    """).fetch_arrow_table()
+    print("Using PRODTYPE from Islamic BTDTL")
+except:
+    # If PRODTYPE doesn't exist, try SUBPROD
+    try:
+        print("PRODTYPE not found in Islamic BTDTL, trying SUBPROD")
+        btdtl_trans = con.execute("""
+            SELECT BRANCH, ACCTNO, TRANSREF,
+                   CASE 
+                     WHEN RETAILID = 'R' THEN 0
+                     WHEN RETAILID = 'C' THEN 999
+                     ELSE CAST(SUBPROD AS INT)
+                   END AS PRODTYPE_CALC,
+                   OUTSTAND, MATDATE, FACILITY
+            FROM btdtl
+            GROUP BY BRANCH, ACCTNO, TRANSREF, 
+                     CASE 
+                       WHEN RETAILID = 'R' THEN 0
+                       WHEN RETAILID = 'C' THEN 999
+                       ELSE CAST(SUBPROD AS INT)
+                     END,
+                     OUTSTAND, MATDATE, FACILITY, RETAILID
+        """).fetch_arrow_table()
+        print("Using SUBPROD for PRODTYPE in Islamic BTDTL")
+    except:
+        # If SUBPROD doesn't work, try PRODGRP with string handling
+        print("SUBPROD not suitable, trying PRODGRP with string handling")
+        try:
+            btdtl_trans = con.execute("""
+                SELECT BRANCH, ACCTNO, TRANSREF,
+                       CASE 
+                         WHEN RETAILID = 'R' THEN 0
+                         WHEN RETAILID = 'C' THEN 999
+                         WHEN PRODGRP IN ('SG', 'CG', 'IG', 'PG', 'RG', 'TG') THEN 100
+                         ELSE 999
+                       END AS PRODTYPE_CALC,
+                       OUTSTAND, MATDATE, FACILITY
+                FROM btdtl
+                GROUP BY BRANCH, ACCTNO, TRANSREF, 
+                         CASE 
+                           WHEN RETAILID = 'R' THEN 0
+                           WHEN RETAILID = 'C' THEN 999
+                           WHEN PRODGRP IN ('SG', 'CG', 'IG', 'PG', 'RG', 'TG') THEN 100
+                           ELSE 999
+                         END,
+                         OUTSTAND, MATDATE, FACILITY, RETAILID, PRODGRP
+            """).fetch_arrow_table()
+            print("Using PRODGRP with string handling for Islamic BTDTL")
+        except Exception as e:
+            # If all else fails, use a default value
+            print(f"Error with PRODGRP: {e}")
+            print("Using default PRODTYPE value of 999 for Islamic BTDTL")
+            btdtl_trans = con.execute("""
+                SELECT BRANCH, ACCTNO, TRANSREF,
+                       999 AS PRODTYPE_CALC,
+                       OUTSTAND, MATDATE, FACILITY
+                FROM btdtl
+                GROUP BY BRANCH, ACCTNO, TRANSREF, OUTSTAND, MATDATE, FACILITY
+            """).fetch_arrow_table()
+
+# Rename the column back to PRODTYPE
+btdtl_trans = btdtl_trans.rename_columns(['BRANCH', 'ACCTNO', 'TRANSREF', 'PRODTYPE', 
+                                          'OUTSTAND', 'MATDATE', 'FACILITY'])
+
+print(f"Islamic BTDTL transformation complete. Rows: {btdtl_trans.num_rows}")
 
 # -------------------------
 # Step 5: Merge BASE + BTDTL
 # -------------------------
-con.register("base_trans", base_trans)
+con.register("btbase_trans", base_trans)
 con.register("btdtl_trans", btdtl_trans)
 
 combt = con.execute(f"""
@@ -87,29 +194,47 @@ combt = con.execute(f"""
         CAST(({sdate.toordinal()} - b.MATDATE) AS INT) AS OVERDUE,
         CAST((base.PREOUTSTD - b.OUTSTAND) AS DOUBLE) AS RECOVAMT,
         b.FACILITY
-    FROM base_trans base
+    FROM btbase_trans base
     INNER JOIN btdtl_trans b
     ON base.ACCTNO = b.ACCTNO
    AND base.TRANSREF = b.TRANSREF
-""").arrow()
+""").fetch_arrow_table()
+
+print(f"Islamic merge complete. Combined rows: {combt.num_rows}")
 
 # -------------------------
-# Step 6: Export to fixed-width report (like SAS PUT)
+# Step 6: Export to fixed-width style file
 # -------------------------
-output_file = "DAYBTRD_ISLAMIC.txt"
+# Create output directory if it doesn't exist
+os.makedirs(OUTPUT_PATH, exist_ok=True)
+
+output_file = os.path.join(OUTPUT_PATH, f"DAYBTRD_ISLAMIC_{rdate}.txt")
 
 with open(output_file, "w") as f:
     for row in combt.to_pylist():
-        f.write(
-            f"{str(row['BRANCH']).rjust(5)}"
-            f"{str(row['ACCTNO']).rjust(10)}"
-            f"{str(row['TRANSREF']).rjust(10)}"
-            f"{str(row['PRODTYPE']).zfill(3)}"
-            f"{row['PREOUTSTD']:017.2f}"
-            f"{row['OUTSTAND']:017.2f}"
-            f"{str(row['OVERDUE']).rjust(10)}"
-            f"{row['RECOVAMT']:017.2f}"
-            f"{str(row['FACILITY']).ljust(5)}\n"
-        )
+        # Format each field according to specifications
+        branch = str(row['BRANCH']).rjust(5)
+        acctno = str(row['ACCTNO']).rjust(10)
+        transref = str(row['TRANSREF']).rjust(10)
+        prodtype = str(row['PRODTYPE']).zfill(3)
+        preoutstd = f"{row['PREOUTSTD']:017.2f}"
+        outstanding = f"{row['OUTSTAND']:017.2f}"
+        overdue = str(row['OVERDUE']).rjust(10)
+        recovamt = f"{row['RECOVAMT']:017.2f}"
+        facility = str(row['FACILITY']).ljust(5)
+        
+        f.write(f"{branch}{acctno}{transref}{prodtype}{preoutstd}{outstanding}{overdue}{recovamt}{facility}\n")
 
 print(f"Islamic BT Report generated: {output_file}")
+print(f"Total records written: {combt.num_rows}")
+
+# Optional: Display sample of output
+if combt.num_rows > 0:
+    print("\nSample output (first 5 rows):")
+    sample = combt.slice(0, min(5, combt.num_rows))
+    for row in sample.to_pylist():
+        print(f"ACCTNO: {row['ACCTNO']}, PRODTYPE: {row['PRODTYPE']}, "
+              f"PREOUTSTD: {row['PREOUTSTD']:.2f}, OUTSTAND: {row['OUTSTAND']:.2f}")
+
+# Close connection
+con.close()
