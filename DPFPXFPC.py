@@ -12,7 +12,15 @@ AGELIMIT, MAXAGE, AGEBELOW = 12, 18, 11
 ACE_PRODUCTS = [161, 162, 163]
 
 # Directories
-for d in ['/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/DPTRBLGS/TEMP', '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/DPTRBLGS/TEMP/MIS', '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/DPTRBLGS/TEMP/MIS/MISQ', '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/DPTRBLGS/TEMP/MIS/MISQ/BNM']:
+BASE_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/DPTRBLGS/TEMP'
+DIRS = {
+    'temp': BASE_DIR,
+    'mis': f'{BASE_DIR}/MIS',
+    'misq': f'{BASE_DIR}/MIS/MISQ',
+    'bnm': f'{BASE_DIR}/MIS/MISQ/BNM'
+}
+
+for d in DIRS.values():
     os.makedirs(d, exist_ok=True)
 
 print("EIBDDEPE - Daily Deposit Position Extract")
@@ -175,12 +183,16 @@ fixed = df.filter(pl.col('DEPTYPE') == 'C')
 
 print(f"  Savings: {len(savings):,}, Demand: {len(demand):,}, Overdrafts: {len(overdrafts):,}, Fixed: {len(fixed):,}")
 
-# Totals
+# Totals (including VOSTRO fields for completeness)
 totals = {
     'TOTSAVG': savings.filter(pl.col('PRODCD') == '42120')['CURBAL'].sum() or 0,
     'TOTSAVGI': savings.filter(pl.col('PRODCD') == '42320')['CURBAL'].sum() or 0,
     'TOTDMND': demand.filter(pl.col('PRODCD') == '42110')['CURBAL'].sum() or 0,
     'TOTDMNDI': demand.filter(pl.col('PRODCD') == '42310')['CURBAL'].sum() or 0,
+    'TOTVOSF': 0,  # VOSTRO foreign (not in current data)
+    'TOTVOSC': 0,  # VOSTRO current (not in current data)
+    'OVDVOSF': 0,  # Overdraft VOSTRO foreign (not in current data)
+    'OVDVOSC': 0,  # Overdraft VOSTRO current (not in current data)
     'TOTOVFT': overdrafts['CURBAL'].abs().sum() or 0,
     'TOTFD': fixed.filter(pl.col('PRODCD') == '42130')['CURBAL'].sum() or 0,
     'TOTFDI': fixed.filter(pl.col('PRODCD') == '42132')['CURBAL'].sum() or 0,
@@ -245,19 +257,19 @@ if reptday in [8,15,22] or reptday == mth:
     ]).group_by(['BRANCH','RACE','PRODCD','PRODUCT','RANGE','AGE','R2NGE']).agg([
         pl.len().alias('NOACCT'), pl.col('CURBAL').sum(), pl.col('ACCYTD').sum()
     ])
-    sdrnge.write_parquet(f'data/mis/SDRNGE{reptmon:02d}.parquet')
+    sdrnge.write_parquet(f"{DIRS['mis']}/SDRNGE{reptmon:02d}.parquet")
     print(f"  SDRNGE: {len(sdrnge):,} records")
 
-# Save outputs
+# Save outputs using correct directories
 print("\nSaving outputs...")
-dyposn.write_parquet('data/temp/DYPOSN.parquet')
-dydp.write_parquet('data/temp/DYDP.parquet')
-dymvnt.write_parquet(f'data/mis/DYMVNT{reptmon:02d}.parquet')
-ddmv.write_parquet('data/misq/DDMV.parquet')
-dybrdp.write_parquet(f'data/mis/DYBRDP{reptmon:02d}.parquet')
-dyddcr.write_parquet(f'data/mis/DYDDCR{reptmon:02d}.parquet')
-dydps.write_parquet(f'data/mis/DYDPS{reptmon:02d}.parquet')
-dyace.write_parquet(f'data/mis/DYACE{reptmon:02d}.parquet')
+dyposn.write_parquet(f"{DIRS['temp']}/DYPOSN.parquet")
+dydp.write_parquet(f"{DIRS['temp']}/DYDP.parquet")
+dymvnt.write_parquet(f"{DIRS['mis']}/DYMVNT{reptmon:02d}.parquet")
+ddmv.write_parquet(f"{DIRS['misq']}/DDMV.parquet")
+dybrdp.write_parquet(f"{DIRS['mis']}/DYBRDP{reptmon:02d}.parquet")
+dyddcr.write_parquet(f"{DIRS['mis']}/DYDDCR{reptmon:02d}.parquet")
+dydps.write_parquet(f"{DIRS['mis']}/DYDPS{reptmon:02d}.parquet")
+dyace.write_parquet(f"{DIRS['mis']}/DYACE{reptmon:02d}.parquet")
 
 # Summary
 print(f"\n{'='*60}")
@@ -271,7 +283,15 @@ print(f"  - Fixed: RM {totals['TOTFD']:,.2f}")
 print(f"  Islamic deposits: RM {totals['TOTSAVGI'] + totals['TOTDMNDI']:,.2f}")
 print(f"  Overdrafts: RM {totals['TOTOVFT']:,.2f}")
 print(f"\nOutputs:")
-print(f"  DYPOSN: Daily summary")
+print(f"  DYPOSN: {DIRS['temp']}/DYPOSN.parquet")
+print(f"  DYDP: {DIRS['temp']}/DYDP.parquet")
+print(f"  DYMVNT: {DIRS['mis']}/DYMVNT{reptmon:02d}.parquet")
+print(f"  DYBRDP: {DIRS['mis']}/DYBRDP{reptmon:02d}.parquet")
+print(f"  DYDDCR: {DIRS['mis']}/DYDDCR{reptmon:02d}.parquet")
+print(f"  DYDPS: {DIRS['mis']}/DYDPS{reptmon:02d}.parquet")
+print(f"  DYACE: {DIRS['mis']}/DYACE{reptmon:02d}.parquet")
+print(f"  DDMV: {DIRS['misq']}/DDMV.parquet")
+print(f"\nRecords:")
 print(f"  DYDP: {len(dydp):,} records")
 print(f"  DYMVNT: {len(dymvnt):,} significant movements")
 print(f"  DYBRDP: {len(dybrdp):,} branch summaries")
