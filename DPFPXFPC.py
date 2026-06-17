@@ -1,4 +1,4 @@
-# EIBDBT05_BANKTRADE_PM12.py
+# EIBDBT12_BANKTRADE_PM12.py
 # Production-Ready Conventional Version - Auto-determines everything
 
 import polars as pl
@@ -17,8 +17,8 @@ INPUT_BTFILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM12.
 # BASE file pattern - {PREVMON} will be auto-detected
 INPUT_BTBASE_FILE_PATTERN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/btbase{PREVMON}.sas7bdat"
 
-OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT05/DAYBTRD_PM12.txt"
-OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT05/DAYBTRD_PM12.parquet"
+OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.txt"
+OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.parquet"
 
 # --------------------------------------------------------------------
 # PRODUCTION CONFIGURATION - DO NOT HARDCODE DATES!
@@ -85,7 +85,7 @@ params = {
 }
 
 print("=" * 80)
-print("EIBDBT05 - Conventional Bank Trade Report (PRODUCTION)")
+print("EIBDBT12 - Conventional Bank Trade Report (PRODUCTION)")
 print("=" * 80)
 print(f"TODAY: {params['TODAY']}")
 print(f"REPTDATE: {params['REPTDATE']}")
