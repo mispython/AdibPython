@@ -1,66 +1,79 @@
-================================================================================
-EIBDBT12 - Bank Trade Report
-================================================================================
-REPTDATE: 2026-06-16
-PREVMON: 05
-SDATE_SAS: 24288
-================================================================================
-BTDTL: Parsed 870 records
-BTDTL after filter: 843 records
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 LS=132 PS=60 NOCENTER;
 
-Reading BASE: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/btbase05.sas7bdat
-BASE columns: ['TRANSREX', 'BRANCH', 'ACCTNO', 'OUTSTAND', 'TRANSREF', 'FACILITY', 'PRODTYPE', 'DAYS']
-BASE records: 137
-BASE after mapping: 137 records
-BASE sample (including DAYS):
-shape: (5, 5)
-┌────────────┬──────────┬───────────┬──────────┬──────┐
-│ ACCTNO     ┆ TRANSREF ┆ PREOUTSTD ┆ PRODTYPE ┆ DAYS │
-│ ---        ┆ ---      ┆ ---       ┆ ---      ┆ ---  │
-│ i64        ┆ str      ┆ f64       ┆ i64      ┆ i64  │
-╞════════════╪══════════╪═══════════╪══════════╪══════╡
-│ 2500667206 ┆ Y090778  ┆ 50906.19  ┆ 0        ┆ 66   │
-│ 2500667206 ┆ Y091056  ┆ 50450.78  ┆ 0        ┆ 33   │
-│ 2500830919 ┆ B604100  ┆ 63000.0   ┆ 0        ┆ -9   │
-│ 2500830919 ┆ B604114  ┆ 50000.0   ┆ 0        ┆ -9   │
-│ 2500830919 ┆ B604354  ┆ 80000.0   ┆ 0        ┆ -10  │
-└────────────┴──────────┴───────────┴──────────┴──────┘
+DATA REPTDATE;
+  REPTDATE = TODAY()-1;
+  PREVDATE=MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))-1;
+  RPTDT= PUT(REPTDATE, DDMMYY10.);
+  CURMM = SUBSTR(RPTDT,4,2);
+  CURYY = SUBSTR(RPTDT,9,2);
+  RDATEX=TRIM(LEFT(CURMM)) || TRIM(LEFT(CURYY));
+  IF MONTH(REPTDATE)+1 = 13 THEN DO;
+     MM = 1;
+     YY = YEAR(REPTDATE)+1;
+  END;
+  ELSE DO;
+     MM = MONTH(REPTDATE)+1;
+     YY = YEAR(REPTDATE);
+  END;
+  SDATE = MDY(MM,1,YY);
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('PREVMON',PUT(MONTH(PREVDATE),Z2.));
+  CALL SYMPUT('PREVDAY',PUT(DAY(PREVDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('RDATEX',PUT(RDATEX,$4.));
+  CALL SYMPUT('SDATE',PUT(SDATE,Z5.));
+RUN;
 
-After deduplication:
-  BASE: 137
-  BTDTL: 843
+%GLOBAL REPTMON REPTDAY PREVMON PREVDAY;
 
-After merge: 137 records
+%INC PGM(PBBBTFMT,PBBELF);
 
-Calculations complete
-  Records with OVERDUE > 0: 134
+DATA BTDTL(KEEP=BRANCH ACCTNO TRANSREF OUTSTAND
+           MATDATE FACILITY);
+   INFILE BTFILE FIRSTOBS=2;
+   INPUT @002 BRANCH      4.
+         @006 ACCTNO    $10.
+         @016 TRANSREF   $7.
+         @023 OUTSTAND   15.2
+         @038 MATDT       $6.
+         @043 LIABCODE   $3.
+         ;
+   FACILITY=PUT(LIABCODE,$LIAB.);
+   MATDATE = MDY(SUBSTR(MATDT,3,2),SUBSTR(MATDT,5,2),
+                 SUBSTR(MATDT,1,2));
+   IF  BRANCH > 3000 AND (2850000000<=ACCTNO<=2859999999) THEN OUTPUT;
+RUN;
 
-Output written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.txt (137 records)
-Parquet saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.parquet
+DATA BASE(KEEP=ACCTNO TRANSREF OUTSTAND PRODTYPE
+          RENAME=(OUTSTAND=PREOUTSTD));
+   SET BASE.IBTBASE&PREVMON;
+RUN;
 
-================================================================================
-VALIDATION AGAINST PRODUCTION
-================================================================================
+PROC SORT DATA=BASE NODUPKEY;BY ACCTNO TRANSREF;RUN;
+PROC SORT DATA=BTDTL NODUPKEY;BY ACCTNO TRANSREF;RUN;
 
-Comparing specific records:
+DATA COMBT;
+   FORMAT OVERDUE 10. RECOVAMT 17.2 RETAILID $1.;
+   MERGE BASE(IN=A) BTDTL(IN=B);BY ACCTNO TRANSREF;
+   IF A;
+   OVERDUE = (&SDATE+1)-MATDATE;
+   RECOVAMT = PREOUTSTD-OUTSTAND;
+   IF PRODTYPE = 000 THEN RETAILID='R';
+RUN;
 
-✗ FAIL ACCTNO: 2500667206, TRANSREF: Y090778
-  OVERDUE:   Expected=    67, Got=    67 ✓
-  RECOVAMT:  Expected=     -413.70, Got=       13.79 ✗
-  DAYS from BASE: 66
-
-✗ FAIL ACCTNO: 2505707731, TRANSREF: Y080273
-  OVERDUE:   Expected=  1180, Got=  1180 ✓
-  RECOVAMT:  Expected=     -562.80, Got=       18.76 ✗
-  DAYS from BASE: 1179
-
-✓ PASS ACCTNO: 2501873900, TRANSREF: Y011618
-  OVERDUE:   Expected=  7074, Got=  7074 ✓
-  RECOVAMT:  Expected=        0.00, Got=       -0.00 ✓
-  DAYS from BASE: 7073
-
-Validation Summary:
-  Matches: 1/3
-  ✗ SOME TESTS FAILED - Check the differences above
-
-================================================================================
+DATA _NULL_;
+   SET COMBT;
+   FILE DAYBTRD;
+   PUT @001 BRANCH      5.
+       @007 ACCTNO     10.
+       @018 TRANSREF   10.
+       @029 PRODTYPE   Z3.
+       @033 PREOUTSTD  17.2
+       @051 OUTSTAND   17.2
+       @069 OVERDUE    10.
+       @080 RECOVAMT   17.2
+       @098 FACILITY   $5.
+       ;
+RUN;
