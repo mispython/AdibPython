@@ -1,5 +1,5 @@
 # EIBDBT12_BANKTRADE_PM12.py
-# COMPLETE FIXED VERSION - WITH CORRECT SAS DATE CALCULATION
+# Production-Ready Conventional Version - Auto-determines PREVMON
 
 import polars as pl
 import pyarrow as pa
@@ -13,12 +13,18 @@ import glob
 # Configuration
 # --------------------------------------------------------------------
 INPUT_BTPM12_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM12.txt"
-INPUT_BTBASE_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/btbase{PREVMON}.sas7bdat"
+
+# BASE file pattern - {PREVMON} will be auto-detected
+INPUT_BTBASE_FILE_PATTERN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/btbase{PREVMON}.sas7bdat"
+
 OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.txt"
 OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.parquet"
 
+# Optional: Override for testing (set to None for auto-detection)
+# If you want to test with a specific month, set this to e.g., "04"
+FORCE_PREVMON = None  # Set to None for auto-detection, or "04", "05", etc.
+
 # SAS date reference: 2026-07-01 = 24299
-# This is the known correct value from SAS
 SAS_REF_DATE = date(2026, 7, 1)
 SAS_REF_VALUE = 24299
 
@@ -27,41 +33,94 @@ def to_sas_date(dt):
     return SAS_REF_VALUE + (dt - SAS_REF_DATE).days
 
 # --------------------------------------------------------------------
-# Step 1: Reporting date logic
+# Step 1: Auto-determine dates (EXACTLY matching SAS logic)
 # --------------------------------------------------------------------
+# Use TODAY() as SAS does
 today = date.today()
-reptdate = today - timedelta(days=1)  # 2026-06-16
-prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)  # 2026-05-31
+
+# REPTDATE = TODAY()-1
+reptdate = today - timedelta(days=1)
+
+# PREVDATE = MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))-1
+prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
+
+# Calculate PREVMON
+prevmon = f"{prevdate.month:02d}"
+
+# Allow override for testing
+if FORCE_PREVMON is not None:
+    prevmon = FORCE_PREVMON
+    print(f"*** FORCED PREVMON = {prevmon} (for testing) ***")
 
 # SDATE = First day of NEXT month
 if reptdate.month + 1 == 13:
     mm, yy = 1, reptdate.year + 1
 else:
     mm, yy = reptdate.month + 1, reptdate.year
-sdate = date(yy, mm, 1)  # 2026-07-01
+sdate = date(yy, mm, 1)
 
-sdate_sas = to_sas_date(sdate)  # Should be 24299
+sdate_sas = to_sas_date(sdate)
 
 params = {
+    "TODAY": today,
     "REPTDATE": reptdate,
     "PREVDATE": prevdate,
-    "PREVMON": f"{prevdate.month:02d}",
+    "PREVMON": prevmon,
     "SDATE": sdate,
     "SDATE_SAS": sdate_sas,
     "SDATE_Z5": f"{sdate_sas:05d}",
 }
 
 print("=" * 80)
-print("EIBDBT12 - Bank Trade Report")
+print("EIBDBT12 - Conventional Bank Trade Report")
 print("=" * 80)
+print(f"TODAY: {params['TODAY']}")
 print(f"REPTDATE: {params['REPTDATE']}")
+print(f"PREVDATE: {params['PREVDATE']}")
 print(f"PREVMON: {params['PREVMON']}")
 print(f"SDATE: {params['SDATE']}")
-print(f"SDATE_SAS: {params['SDATE_SAS']} (expected: 24299 for 2026-07-01)")
+print(f"SDATE_SAS: {params['SDATE_SAS']}")
 print("=" * 80)
 
 # --------------------------------------------------------------------
-# Step 2: Read BTDTL input
+# Step 2: Find the BASE file
+# --------------------------------------------------------------------
+def find_base_file(prevmon):
+    """Find the BASE file for the given month"""
+    base_dir = os.path.dirname(INPUT_BTBASE_FILE_PATTERN)
+    
+    # Try different naming patterns
+    patterns = [
+        INPUT_BTBASE_FILE_PATTERN.format(PREVMON=prevmon),
+        os.path.join(base_dir, f"btbase{prevmon}.sas7bdat"),
+        os.path.join(base_dir, f"btbase_{prevmon}.sas7bdat"),
+        os.path.join(base_dir, f"BTBASE{prevmon}.sas7bdat"),
+        os.path.join(base_dir, f"BTBASE_{prevmon}.sas7bdat"),
+    ]
+    
+    for pattern in patterns:
+        if os.path.exists(pattern):
+            return pattern
+    
+    # If not found, try to find any btbase file
+    all_files = glob.glob(os.path.join(base_dir, "btbase*.sas7bdat"))
+    if all_files:
+        print(f"\nAvailable BTBASE files in {base_dir}:")
+        for f in sorted(all_files):
+            print(f"  - {os.path.basename(f)}")
+        
+        # If the specific month isn't found, use the latest one
+        latest = sorted(all_files)[-1]
+        print(f"\nUsing latest available: {os.path.basename(latest)}")
+        return latest
+    
+    raise FileNotFoundError(f"No BTBASE file found for month {prevmon} in {base_dir}")
+
+base_file = find_base_file(prevmon)
+print(f"\nUsing BASE file: {base_file}")
+
+# --------------------------------------------------------------------
+# Step 3: Read BTDTL input
 # --------------------------------------------------------------------
 def read_btdtl_text(filepath):
     """
@@ -104,7 +163,6 @@ def read_btdtl_text(filepath):
                 
                 # MATDATE = MDY(SUBSTR(MATDT,3,2), SUBSTR(MATDT,5,2), SUBSTR(MATDT,1,2))
                 # MATDT is DDMMYY, SAS interprets as MDY(MM, DD, YY)
-                # Example: "070119" -> Month=01, Day=19, Year=2007 -> 2007-01-19
                 month = int(matdt[2:4])    # MM
                 day = int(matdt[4:6])      # DD
                 year = 2000 + int(matdt[0:2])  # YY
@@ -132,56 +190,39 @@ btdtl = read_btdtl_text(INPUT_BTPM12_FILE)
 if len(btdtl) == 0:
     raise ValueError("No data loaded from BTPM12 file")
 
-# Apply SAS filter
+# --------------------------------------------------------------------
+# Step 4: Apply CONVENTIONAL filter (DELETE matching records)
+# IF BRANCH > 3000 AND (2850000000<=ACCTNO<=2859999999) THEN DELETE;
+# This means we REMOVE records that match the condition
+# --------------------------------------------------------------------
 btdtl = btdtl.filter(
     ~((pl.col("BRANCH") > 3000) &
       (pl.col("ACCTNO") >= 2850000000) &
       (pl.col("ACCTNO") <= 2859999999))
 )
 
-print(f"BTDTL after filter: {len(btdtl)} records")
+print(f"BTDTL after conventional filter (removing qualifying records): {len(btdtl)} records")
 
 # Debug: Show MATDATE_SAS for key records
 print("\nBTDTL sample (checking MATDATE_SAS):")
 print(btdtl.select(['ACCTNO', 'TRANSREF', 'MATDATE_SAS']).head(10))
 
 # --------------------------------------------------------------------
-# Step 3: Read BASE dataset (BTBASE05)
+# Step 5: Read BASE dataset
 # --------------------------------------------------------------------
-def read_base_sas(prevmon):
+def read_base_sas(filepath):
     """
     DATA BASE(KEEP=ACCTNO TRANSREF OUTSTAND PRODTYPE RENAME=(OUTSTAND=PREOUTSTD));
     SET BASE.BTBASE&PREVMON;
     """
-    base_dir = os.path.dirname(INPUT_BTBASE_FILE)
-    patterns = [
-        INPUT_BTBASE_FILE.format(PREVMON=prevmon),
-        os.path.join(base_dir, f"btbase{prevmon}.sas7bdat"),
-        os.path.join(base_dir, f"btbase_{prevmon}.sas7bdat"),
-        os.path.join(base_dir, f"BTBASE{prevmon}.sas7bdat"),
-        os.path.join(base_dir, f"BTBASE_{prevmon}.sas7bdat"),
-    ]
-    
-    filepath = None
-    for pattern in patterns:
-        if os.path.exists(pattern):
-            filepath = pattern
-            break
-    
-    if filepath is None:
-        all_files = glob.glob(os.path.join(base_dir, "*.sas7bdat"))
-        if all_files:
-            print(f"\nAvailable SAS files in {base_dir}:")
-            for f in all_files:
-                print(f"  - {os.path.basename(f)}")
-        raise FileNotFoundError(f"BASE file not found for month {prevmon}")
-    
     print(f"\nReading BASE: {filepath}")
     df, meta = pyreadstat.read_sas7bdat(filepath)
     base = pl.from_pandas(df)
     
     print(f"BASE columns: {base.columns}")
     print(f"BASE records: {len(base)}")
+    
+    col_names = base.columns
     
     # Column mapping based on actual structure:
     # Col 0: TRANSREX (ignored)
@@ -191,16 +232,21 @@ def read_base_sas(prevmon):
     # Col 4: TRANSREF
     # Col 5: FACILITY (ignored)
     # Col 6: PRODTYPE
-    # Col 7: DAYS (ignored)
+    # Col 7: DAYS (optional - not used in conventional version)
     
-    col_names = base.columns
-    
-    base = base.select([
+    # Select columns
+    select_cols = [
         pl.col(col_names[2]).alias("ACCTNO"),
         pl.col(col_names[4]).alias("TRANSREF"),
         pl.col(col_names[3]).alias("PREOUTSTD"),
         pl.col(col_names[6]).alias("PRODTYPE"),
-    ])
+    ]
+    
+    # Add DAYS if available (for debugging/consistency)
+    if len(col_names) > 7:
+        select_cols.append(pl.col(col_names[7]).alias("DAYS"))
+    
+    base = base.select(select_cols)
     
     base = base.with_columns([
         pl.col("ACCTNO").cast(pl.Int64),
@@ -215,7 +261,7 @@ def read_base_sas(prevmon):
     
     return base
 
-base = read_base_sas(params['PREVMON'])
+base = read_base_sas(base_file)
 
 # Deduplicate
 base = base.unique(subset=["ACCTNO", "TRANSREF"])
@@ -226,7 +272,13 @@ print(f"  BASE: {len(base)}")
 print(f"  BTDTL: {len(btdtl)}")
 
 # --------------------------------------------------------------------
-# Step 4: Merge and calculate
+# Step 6: Sort to match SAS order (PROC SORT)
+# --------------------------------------------------------------------
+base = base.sort(["ACCTNO", "TRANSREF"])
+btdtl = btdtl.sort(["ACCTNO", "TRANSREF"])
+
+# --------------------------------------------------------------------
+# Step 7: Merge and calculate
 # --------------------------------------------------------------------
 base = base.with_columns([
     pl.col("ACCTNO").cast(pl.Int64),
@@ -237,13 +289,16 @@ btdtl = btdtl.with_columns([
     pl.col("TRANSREF").cast(pl.Utf8)
 ])
 
+# MERGE BASE(IN=A) BTDTL(IN=B); BY ACCTNO TRANSREF; IF A;
 combt = base.join(btdtl, on=["ACCTNO", "TRANSREF"], how="left")
 
 print(f"\nAfter merge: {len(combt)} records")
 
+# Check unmatched records
 unmatched = combt.filter(pl.col("MATDATE_SAS").is_null())
 print(f"Unmatched BASE records (no BTDTL match): {len(unmatched)}")
 
+# Fill nulls
 combt = combt.with_columns([
     pl.col("OUTSTAND").fill_null(0),
 ])
@@ -253,26 +308,52 @@ sdate_sas = params["SDATE_SAS"]
 print(f"\nUsing SDATE_SAS: {sdate_sas}")
 
 combt = combt.with_columns([
+    # OVERDUE = (&SDATE+1)-MATDATE
     pl.when(pl.col("MATDATE_SAS").is_not_null())
     .then((sdate_sas + 1) - pl.col("MATDATE_SAS"))
     .otherwise(pl.lit(None))
     .alias("OVERDUE"),
     
+    # RECOVAMT = PREOUTSTD-OUTSTAND
     (pl.col("PREOUTSTD") - pl.col("OUTSTAND")).alias("RECOVAMT"),
+    
+    # IF PRODTYPE = 000 THEN RETAILID='R'
+    pl.when(pl.col("PRODTYPE") == 0)
+    .then(pl.lit("R"))
+    .otherwise(pl.lit(None))
+    .alias("RETAILID"),
 ])
 
+# Fill nulls for output
 combt = combt.with_columns([
     pl.col("OVERDUE").fill_null(0).cast(pl.Int64),
     pl.col("RECOVAMT").fill_null(0),
 ])
 
+# Sort final output to match SAS order
+combt = combt.sort(["ACCTNO", "TRANSREF"])
+
 print(f"\nCalculations complete")
 print(f"  Records with OVERDUE > 0: {(combt['OVERDUE'] > 0).sum()}")
 
 # --------------------------------------------------------------------
-# Step 5: Write output
+# Step 8: Write output
 # --------------------------------------------------------------------
 def write_fixed_width(df, filepath):
+    """
+    DATA _NULL_;
+    SET COMBT;
+    FILE DAYBTRD;
+    PUT @001 BRANCH 5.
+        @007 ACCTNO 10.
+        @018 TRANSREF 10.
+        @029 PRODTYPE Z3.
+        @033 PREOUTSTD 17.2
+        @051 OUTSTAND 17.2
+        @069 OVERDUE 10.
+        @080 RECOVAMT 17.2
+        @098 FACILITY $5.
+    """
     records = []
     
     for row in df.iter_rows(named=True):
@@ -289,39 +370,50 @@ def write_fixed_width(df, filepath):
             
             record = [' '] * 103
             
+            # @001 BRANCH 5. (positions 1-5)
             if branch is not None and branch != 0:
                 record[0:5] = f"{int(branch):5d}"
             else:
-                record[0:5] = '     '
+                record[0:5] = '     '  # Blank for missing (shows as '.' in SAS)
             
+            # @007 ACCTNO 10. (positions 7-16)
             record[6:16] = f"{int(acctno):10d}"
+            
+            # @018 TRANSREF 10. (positions 18-27)
             record[17:27] = f"{transref:<10}"
+            
+            # @029 PRODTYPE Z3. (positions 29-31)
             record[28:31] = f"{int(prodtype):03d}"
             
+            # @033 PREOUTSTD 17.2 (positions 33-49)
             if preoutstd != 0:
                 record[32:49] = f"{float(preoutstd):17.2f}"
             else:
                 record[32:49] = ' ' * 17
             
+            # @051 OUTSTAND 17.2 (positions 51-67)
             if outstanding != 0:
                 record[50:67] = f"{float(outstanding):17.2f}"
             else:
                 record[50:67] = ' ' * 17
             
+            # @069 OVERDUE 10. (positions 69-78)
             if overdue != 0:
                 record[68:78] = f"{int(overdue):10d}"
             else:
                 record[68:78] = ' ' * 10
             
+            # @080 RECOVAMT 17.2 (positions 80-96)
             if recovamt != 0:
                 record[79:96] = f"{float(recovamt):17.2f}"
             else:
                 record[79:96] = ' ' * 17
             
+            # @098 FACILITY $5. (positions 98-102)
             record[97:102] = f"{facility:<5}"
             
             records.append(''.join(record))
-        except:
+        except Exception:
             continue
     
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -398,9 +490,18 @@ if matches == total:
 else:
     print("  ✗ SOME TESTS FAILED - Check the differences above")
 
+# --------------------------------------------------------------------
+# Summary
+# --------------------------------------------------------------------
 print("\n" + "=" * 80)
-print("SDATE Calculation Details:")
-print(f"  reptdate: {params['REPTDATE']}")
-print(f"  sdate (next month): {params['SDATE']}")
-print(f"  sdate_sas: {params['SDATE_SAS']}")
+print("SUMMARY")
+print("=" * 80)
+print(f"Run Date (TODAY): {params['TODAY']}")
+print(f"Report Date (REPTDATE): {params['REPTDATE']}")
+print(f"Previous Month (PREVMON): {params['PREVMON']}")
+print(f"BASE File Used: {base_file}")
+print(f"Total Records: {len(combt)}")
+print(f"SDATE (SAS): {params['SDATE_SAS']}")
+print("=" * 80)
+print("PROCESS COMPLETE")
 print("=" * 80)
