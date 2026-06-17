@@ -1,44 +1,79 @@
-Report Parameters: {'REPTYEAR': '26', 'REPTMON': '06', 'REPTDAY': '16', 'PREVMON': '05', 'PREVDAY': '31', 'RDATE': '16-06-2026', 'RDATEX': '0626', 'SDATE': '60701'}
-Parsed 870 records from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/BTPM12.txt
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 LS=132 PS=60 NOCENTER;
 
-Loaded 870 records from BTPM12
-Sample of loaded data:
-shape: (10, 6)
-┌────────┬────────────┬────────────┬──────────┬────────┬──────────┐
-│ BRANCH ┆ ACCTNO     ┆ TRANSREF   ┆ OUTSTAND ┆ MATDT  ┆ LIABCODE │
-│ ---    ┆ ---        ┆ ---        ┆ ---      ┆ ---    ┆ ---      │
-│ i64    ┆ i64        ┆ str        ┆ f64      ┆ str    ┆ str      │
-╞════════╪════════════╪════════════╪══════════╪════════╪══════════╡
-│ 20006  ┆ 2501873900 ┆ Y011618000 ┆ 33531.01 ┆ 070119 ┆ PBZ      │
-│ 20009  ┆ 2505605133 ┆ Y066656000 ┆ 40245.81 ┆ 180426 ┆ PBZ      │
-│ 20201  ┆ 2505707731 ┆ Y080273000 ┆ 69258.93 ┆ 230310 ┆ PBA      │
-│ 20201  ┆ 2505707731 ┆ Y080340000 ┆ 69128.29 ┆ 230317 ┆ PBA      │
-│ 20201  ┆ 2505707731 ┆ Y080415000 ┆ 68921.41 ┆ 230328 ┆ PBA      │
-│ 20201  ┆ 2505707731 ┆ Y080466000 ┆ 68790.27 ┆ 230404 ┆ PBA      │
-│ 20201  ┆ 2505707731 ┆ Y080602000 ┆ 68604.63 ┆ 230414 ┆ PBA      │
-│ 20201  ┆ 2505707731 ┆ Y080732000 ┆ 68342.76 ┆ 230428 ┆ PBA      │
-│ 20201  ┆ 2505707731 ┆ Y080733000 ┆ 68342.76 ┆ 230428 ┆ PBA      │
-│ 20201  ┆ 2505707731 ┆ Y080832000 ┆ 68138.75 ┆ 230509 ┆ PBA      │
-└────────┴────────────┴────────────┴──────────┴────────┴──────────┘
+DATA REPTDATE;
+  REPTDATE = TODAY()-1;
+  PREVDATE=MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))-1;
+  RPTDT= PUT(REPTDATE, DDMMYY10.);
+  CURMM = SUBSTR(RPTDT,4,2);
+  CURYY = SUBSTR(RPTDT,9,2);
+  RDATEX=TRIM(LEFT(CURMM)) || TRIM(LEFT(CURYY));
+  IF MONTH(REPTDATE)+1 = 13 THEN DO;
+     MM = 1;
+     YY = YEAR(REPTDATE)+1;
+  END;
+  ELSE DO;
+     MM = MONTH(REPTDATE)+1;
+     YY = YEAR(REPTDATE);
+  END;
+  SDATE = MDY(MM,1,YY);
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('PREVMON',PUT(MONTH(PREVDATE),Z2.));
+  CALL SYMPUT('PREVDAY',PUT(DAY(PREVDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('RDATEX',PUT(RDATEX,$4.));
+  CALL SYMPUT('SDATE',PUT(SDATE,Z5.));
+RUN;
 
-After date parsing, 870 records remain
-After filtering, 843 records remain
+%GLOBAL REPTMON REPTDAY PREVMON PREVDAY;
 
-Reading SAS dataset: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btbase_05.sas7bdat
-Warning: SAS file not found: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btbase_05.sas7bdat
-Created dummy base data with 20 records
+%INC PGM(PBBBTFMT,PBBELF);
 
-Base records after dedup: 20
-BTDTL records after dedup: 843
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDBT12.py", line 279, in <module>
-    combt = combt.with_columns([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ColumnNotFoundError: unable to find column "R"; valid columns: ["ACCTNO", "TRANSREF", "PREOUTSTD", "PRODTYPE", "BRANCH", "OUTSTAND", "MATDT", "LIABCODE", "day", "month", "year2", "year", "MATDATE"]
+DATA BTDTL(KEEP=BRANCH ACCTNO TRANSREF OUTSTAND
+           MATDATE FACILITY);
+   INFILE BTFILE FIRSTOBS=2;
+   INPUT @002 BRANCH      4.
+         @006 ACCTNO    $10.
+         @016 TRANSREF   $7.
+         @023 OUTSTAND   15.2
+         @038 MATDT       $6.
+         @043 LIABCODE   $3.
+         ;
+   FACILITY=PUT(LIABCODE,$LIAB.);
+   MATDATE = MDY(SUBSTR(MATDT,3,2),SUBSTR(MATDT,5,2),
+                 SUBSTR(MATDT,1,2));
+   IF  BRANCH > 3000 AND (2850000000<=ACCTNO<=2859999999) THEN DELETE;
+RUN;
+
+DATA BASE(KEEP=ACCTNO TRANSREF OUTSTAND PRODTYPE
+          RENAME=(OUTSTAND=PREOUTSTD));
+   SET BASE.BTBASE&PREVMON;
+RUN;
+
+PROC SORT DATA=BASE NODUPKEY;BY ACCTNO TRANSREF;RUN;
+PROC SORT DATA=BTDTL NODUPKEY;BY ACCTNO TRANSREF;RUN;
+
+DATA COMBT;
+   FORMAT OVERDUE 10. RECOVAMT 17.2 RETAILID $1.;
+   MERGE BASE(IN=A) BTDTL(IN=B);BY ACCTNO TRANSREF;
+   IF A;
+   OVERDUE = (&SDATE+1)-MATDATE;
+   RECOVAMT = PREOUTSTD-OUTSTAND;
+   IF PRODTYPE = 000 THEN RETAILID='R';
+RUN;
+
+DATA _NULL_;
+   SET COMBT;
+   FILE DAYBTRD;
+   PUT @001 BRANCH      5.
+       @007 ACCTNO     10.
+       @018 TRANSREF   10.
+       @029 PRODTYPE   Z3.
+       @033 PREOUTSTD  17.2
+       @051 OUTSTAND   17.2
+       @069 OVERDUE    10.
+       @080 RECOVAMT   17.2
+       @098 FACILITY   $5.
+       ;
+RUN;
