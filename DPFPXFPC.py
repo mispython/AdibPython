@@ -1,5 +1,5 @@
 # EIIDBT05_BANKTRADE_PM12.py
-# Production-Ready Islamic Version with Date Override Support
+# Production-Ready Islamic Version - Auto-determines everything
 
 import polars as pl
 import pyarrow as pa
@@ -21,19 +21,16 @@ OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/
 OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT05/DAYBTRD_PM12.parquet"
 
 # --------------------------------------------------------------------
-# DATE CONFIGURATION - CRITICAL FOR MATCHING PRODUCTION
+# PRODUCTION CONFIGURATION - DO NOT HARDCODE DATES!
 # --------------------------------------------------------------------
-# Option 1: Auto-detect (use today's date)
-# Option 2: Override to match production run date
-# Set USE_PRODUCTION_DATE = True to use the production run date
+# Set this to False for production (use today's date)
+USE_PRODUCTION_DATE = False  # False = use today, True = use fixed date for testing
 
-USE_PRODUCTION_DATE = True  # Set to True to match production, False for current date
+# Only used when USE_PRODUCTION_DATE = True (for testing only)
+PRODUCTION_RUN_DATE = date(2026, 5, 31)  # FOR TESTING ONLY - remove for production
 
-# If USE_PRODUCTION_DATE is True, use this date (when SAS job last ran)
-PRODUCTION_RUN_DATE = date(2026, 5, 31)  # The date the SAS job ran
-
-# Optional: Override PREVMON for testing (set to None for auto-detection)
-FORCE_PREVMON = None  # Set to None for auto-detection, or "04", "05", etc.
+# Optional: Override PREVMON for emergency testing (set to None for auto-detection)
+FORCE_PREVMON = None  # ALWAYS None for production
 
 # SAS date reference: 2026-07-01 = 24299
 SAS_REF_DATE = date(2026, 7, 1)
@@ -44,27 +41,29 @@ def to_sas_date(dt):
     return SAS_REF_VALUE + (dt - SAS_REF_DATE).days
 
 # --------------------------------------------------------------------
-# Step 1: Date logic
+# Step 1: Date logic - AUTO-DETECT for production
 # --------------------------------------------------------------------
 if USE_PRODUCTION_DATE:
-    # Use the production run date
+    # TESTING ONLY: Use fixed date
     today = PRODUCTION_RUN_DATE
-    reptdate = today - timedelta(days=1)
-    prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
-    print(f"*** USING PRODUCTION DATE: {today} ***")
+    print(f"*** WARNING: USING FIXED DATE FOR TESTING: {today} ***")
 else:
-    # Use today's date
+    # PRODUCTION: Use today's date
     today = date.today()
-    reptdate = today - timedelta(days=1)
-    prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
+
+# REPTDATE = TODAY()-1
+reptdate = today - timedelta(days=1)
+
+# PREVDATE = MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))-1
+prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
 
 # Calculate PREVMON
 prevmon = f"{prevdate.month:02d}"
 
-# Allow override for testing
+# Allow override for testing (only if FORCE_PREVMON is set)
 if FORCE_PREVMON is not None:
     prevmon = FORCE_PREVMON
-    print(f"*** FORCED PREVMON = {prevmon} (for testing) ***")
+    print(f"*** FORCED PREVMON = {prevmon} (for emergency testing) ***")
 
 # SDATE = First day of NEXT month
 if reptdate.month + 1 == 13:
@@ -83,11 +82,10 @@ params = {
     "SDATE": sdate,
     "SDATE_SAS": sdate_sas,
     "SDATE_Z5": f"{sdate_sas:05d}",
-    "USE_PRODUCTION_DATE": USE_PRODUCTION_DATE,
 }
 
 print("=" * 80)
-print("EIIDBT05 - Islamic Bank Trade Report")
+print("EIIDBT05 - Islamic Bank Trade Report (PRODUCTION)")
 print("=" * 80)
 print(f"TODAY: {params['TODAY']}")
 print(f"REPTDATE: {params['REPTDATE']}")
@@ -95,7 +93,6 @@ print(f"PREVDATE: {params['PREVDATE']}")
 print(f"PREVMON: {params['PREVMON']}")
 print(f"SDATE: {params['SDATE']}")
 print(f"SDATE_SAS: {params['SDATE_SAS']}")
-print(f"Using Production Date: {params['USE_PRODUCTION_DATE']}")
 print("=" * 80)
 
 # --------------------------------------------------------------------
@@ -190,7 +187,7 @@ if len(btdtl) == 0:
     raise ValueError("No data loaded from BTPM12 file")
 
 # --------------------------------------------------------------------
-# Step 4: Apply ISLAMIC filter (OUTPUT/KEEP matching records)
+# Step 4: Apply ISLAMIC filter
 # --------------------------------------------------------------------
 btdtl = btdtl.filter(
     (pl.col("BRANCH") > 3000) &
@@ -378,57 +375,8 @@ except Exception as e:
     print(f"Error writing Parquet: {e}")
 
 # --------------------------------------------------------------------
-# Validation against Production
+# Summary
 # --------------------------------------------------------------------
-print("\n" + "=" * 80)
-print("VALIDATION AGAINST PRODUCTION")
-print("=" * 80)
-
-test_cases = [
-    {"ACCTNO": 2850228011, "TRANSREF": "Y090755", "EXP_OVERDUE": 67},
-    {"ACCTNO": 2850331901, "TRANSREF": "Y090696", "EXP_OVERDUE": 70},
-    {"ACCTNO": 2850383833, "TRANSREF": "Y089246", "EXP_OVERDUE": 658},
-]
-
-print("\nComparing specific records:")
-matches = 0
-total = 0
-
-for test in test_cases:
-    match = combt.filter(
-        (pl.col("ACCTNO") == test["ACCTNO"]) & 
-        (pl.col("TRANSREF") == test["TRANSREF"])
-    )
-    
-    if len(match) > 0:
-        row = match.row(0, named=True)
-        total += 1
-        
-        overdue_match = row['OVERDUE'] == test["EXP_OVERDUE"]
-        
-        if overdue_match:
-            matches += 1
-            status = "✓ PASS"
-        else:
-            status = "✗ FAIL"
-        
-        print(f"\n{status} ACCTNO: {test['ACCTNO']}, TRANSREF: {test['TRANSREF']}")
-        print(f"  OVERDUE: Expected={test['EXP_OVERDUE']}, Got={row['OVERDUE']}")
-        if not overdue_match:
-            print(f"     SDATE_SAS: {params['SDATE_SAS']}")
-            print(f"     MATDATE_SAS: {row['MATDATE_SAS']}")
-            print(f"     Formula: ({params['SDATE_SAS']} + 1) - {row['MATDATE_SAS']} = {row['OVERDUE']}")
-    else:
-        print(f"\n✗ NOT FOUND: {test['ACCTNO']}")
-
-print(f"\nValidation Summary:")
-print(f"  Matches: {matches}/{total}")
-
-if matches == total:
-    print("  ✓ ALL TESTS PASSED!")
-else:
-    print("  ✗ SOME TESTS FAILED - Check the differences above")
-
 print("\n" + "=" * 80)
 print("SUMMARY")
 print("=" * 80)
@@ -436,6 +384,8 @@ print(f"Run Date (TODAY): {params['TODAY']}")
 print(f"Report Date (REPTDATE): {params['REPTDATE']}")
 print(f"Previous Month (PREVMON): {params['PREVMON']}")
 print(f"SDATE_SAS: {params['SDATE_SAS']}")
+print(f"BASE File Used: {base_file}")
+print(f"Total Records: {len(combt)}")
 print("=" * 80)
 print("PROCESS COMPLETE")
 print("=" * 80)
