@@ -1,388 +1,878 @@
-# EIBDBT12_BANKTRADE_PM12.py
-# Conversion of SAS job EIBDBT12 (calls EIBDBT05) into Python with Polars, DuckDB, PyArrow
-# Outputs both fixed-width .txt and Parquet
-
-import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
-from datetime import date, timedelta
-import pyreadstat  # For reading SAS .sas7bdat files
-import os
-
-# --------------------------------------------------------------------
-# Configuration: Input and Output Paths
-# --------------------------------------------------------------------
-# Input paths
-INPUT_BTPM12_FILE = "input/prod/BTPM12.txt"  # Text file containing BTDTL data
-INPUT_BTBASE_FILE = "BTBASE_{PREVMON}.sas7bdat"  # SAS dataset with month placeholder
-INPUT_BTBASE_PATH = None  # Set to specific path if different from current dir
-
-# Output paths
-OUTPUT_TEXT_FILE = "DAYBTRD_PM12.txt"
-OUTPUT_PARQUET_FILE = "DAYBTRD_PM12.parquet"
-
-# Optional: Set to False to use real data, True to use dummy data for testing
-USE_DUMMY_DATA = False
-
-# --------------------------------------------------------------------
-# Step 1: Reporting date logic (DATA REPTDATE equivalent)
-# --------------------------------------------------------------------
-today = date.today()
-reptdate = today - timedelta(days=1)
-prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
-
-rptdt = reptdate.strftime("%d-%m-%Y")
-curmm = rptdt[3:5]
-curyy = rptdt[8:10]
-rdatex = curmm + curyy
-
-# Next month calculation
-if reptdate.month + 1 == 13:
-    mm, yy = 1, reptdate.year + 1
-else:
-    mm, yy = reptdate.month + 1, reptdate.year
-sdate = date(yy, mm, 1)
-
-params = {
-    "REPTYEAR": f"{reptdate.year % 100:02d}",
-    "REPTMON": f"{reptdate.month:02d}",
-    "REPTDAY": f"{reptdate.day:02d}",
-    "PREVMON": f"{prevdate.month:02d}",
-    "PREVDAY": f"{prevdate.day:02d}",
-    "RDATE": reptdate.strftime("%d-%m-%Y"),
-    "RDATEX": rdatex,
-    "SDATE": f"{sdate.year}{sdate.month:02d}{sdate.day:02d}"[-5:],
-}
-
-print("Report Parameters:", params)
-
-# --------------------------------------------------------------------
-# Step 2: Read BTDTL input from text file with correct fixed-width format
-# --------------------------------------------------------------------
-def read_btdtl_text(filepath):
-    """
-    Read BTPM12 text file with fixed-width format.
-    Based on file inspection:
-    - BRANCH: positions 0-4 (5 chars)
-    - ACCTNO: positions 5-14 (10 chars)
-    - TRANSREF: positions 15-24 (10 chars)
-    - OUTSTAND: positions 25-41 (17 chars, with decimals)
-    - MATDT: positions 42-47 (6 chars, ddmmyy)
-    - LIABCODE: positions 48-52 (5 chars)
-    """
-    try:
-        data = []
-        with open(filepath, 'r') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.rstrip('\n').rstrip('\r')
-                
-                # Skip empty lines
-                if not line.strip():
-                    continue
-                
-                # Ensure line has minimum length
-                if len(line) < 53:
-                    print(f"Warning: Line {line_num} has length {len(line)}, skipping")
-                    continue
-                
-                try:
-                    # Extract fields based on inspection
-                    # Position: 0-4 = BRANCH, 5-14 = ACCTNO, 15-24 = TRANSREF
-                    # 25-41 = OUTSTAND, 42-47 = MATDT, 48-52 = LIABCODE
-                    branch_str = line[0:5].strip()
-                    acctno_str = line[5:15].strip()
-                    transref = line[15:25].strip()
-                    outstanding_str = line[25:42].strip()
-                    matdt = line[42:48].strip()
-                    liabcode = line[48:53].strip()
-                    
-                    # Skip header line (contains non-numeric data)
-                    if not acctno_str.isdigit() or len(acctno_str) != 10:
-                        continue
-                    
-                    # Convert with error handling
-                    branch = int(branch_str) if branch_str.isdigit() else 0
-                    acctno = int(acctno_str) if acctno_str.isdigit() else 0
-                    outstanding = float(outstanding_str) if outstanding_str else 0.0
-                    
-                    # Validate MATDT is 6 digits
-                    if len(matdt) == 6 and matdt.isdigit():
-                        data.append({
-                            'BRANCH': branch,
-                            'ACCTNO': acctno,
-                            'TRANSREF': transref,
-                            'OUTSTAND': outstanding,
-                            'MATDT': matdt,
-                            'LIABCODE': liabcode,
-                        })
-                    else:
-                        print(f"Warning: Line {line_num} has invalid MATDT: '{matdt}'")
-                        
-                except (ValueError, IndexError) as e:
-                    print(f"Warning: Error parsing line {line_num}: {e}")
-                    continue
-        
-        if not data:
-            raise ValueError(f"No valid data found in {filepath}")
-        
-        print(f"Successfully read {len(data)} records from {filepath}")
-        return pl.DataFrame(data)
-        
-    except FileNotFoundError:
-        print(f"File not found: {filepath}")
-        raise
-    except Exception as e:
-        print(f"Error reading {filepath}: {e}")
-        raise
-
-if USE_DUMMY_DATA:
-    print("Using dummy data for testing")
-    btdtl = pl.DataFrame({
-        "BRANCH": [2001, 3100, 2002],
-        "ACCTNO": [2850001111, 2860000001, 2870000001],
-        "TRANSREF": ["PM12A01", "PM12B02", "PM12C03"],
-        "OUTSTAND": [120000.00, 80000.00, 150000.00],
-        "MATDT": ["250125", "250630", "250331"],  # ddmmyy format
-        "LIABCODE": ["001", "002", "003"],
-    })
-else:
+Report Parameters: {'REPTYEAR': '26', 'REPTMON': '06', 'REPTDAY': '16', 'PREVMON': '05', 'PREVDAY': '31', 'RDATE': '16-06-2026', 'RDATEX': '0626', 'SDATE': '60701'}
+Warning: Line 2 has invalid MATDT: '9PBZ'
+Warning: Line 3 has invalid MATDT: '6PBZ'
+Warning: Line 4 has invalid MATDT: '0PBA'
+Warning: Line 5 has invalid MATDT: '7PBA'
+Warning: Line 6 has invalid MATDT: '8PBA'
+Warning: Line 7 has invalid MATDT: '4PBA'
+Warning: Line 8 has invalid MATDT: '4PBA'
+Warning: Line 9 has invalid MATDT: '8PBA'
+Warning: Line 10 has invalid MATDT: '8PBA'
+Warning: Line 11 has invalid MATDT: '9PBA'
+Warning: Line 12 has invalid MATDT: '8PBA'
+Warning: Line 13 has invalid MATDT: '6PBA'
+Warning: Line 14 has invalid MATDT: '9PBA'
+Warning: Line 15 has invalid MATDT: '0PBA'
+Warning: Line 16 has invalid MATDT: '1PBA'
+Warning: Line 17 has invalid MATDT: '2PBA'
+Warning: Line 18 has invalid MATDT: '3PBA'
+Warning: Line 19 has invalid MATDT: '7PBA'
+Warning: Line 20 has invalid MATDT: '8PBA'
+Warning: Line 21 has invalid MATDT: '0PBA'
+Warning: Line 22 has invalid MATDT: '1PBA'
+Warning: Line 23 has invalid MATDT: '4PBA'
+Warning: Line 24 has invalid MATDT: '7PBA'
+Warning: Line 25 has invalid MATDT: '5PBA'
+Warning: Line 26 has invalid MATDT: '2PBA'
+Warning: Line 27 has invalid MATDT: '3PBA'
+Warning: Line 28 has invalid MATDT: '6PBA'
+Warning: Line 29 has invalid MATDT: '3PBA'
+Warning: Line 30 has invalid MATDT: '7PBI'
+Warning: Line 31 has invalid MATDT: '8PBA'
+Warning: Line 32 has invalid MATDT: '3PBA'
+Warning: Line 33 has invalid MATDT: '5PBA'
+Warning: Line 34 has invalid MATDT: '5PBA'
+Warning: Line 35 has invalid MATDT: '2PBA'
+Warning: Line 36 has invalid MATDT: '9PBA'
+Warning: Line 37 has invalid MATDT: '5PBA'
+Warning: Line 38 has invalid MATDT: '4PBA'
+Warning: Line 39 has invalid MATDT: '2PBA'
+Warning: Line 40 has invalid MATDT: '9PBA'
+Warning: Line 41 has invalid MATDT: '2PBA'
+Warning: Line 42 has invalid MATDT: '2PBA'
+Warning: Line 43 has invalid MATDT: '4PBA'
+Warning: Line 44 has invalid MATDT: '9PBA'
+Warning: Line 45 has invalid MATDT: '9PBA'
+Warning: Line 46 has invalid MATDT: '4PBA'
+Warning: Line 47 has invalid MATDT: '3PBI'
+Warning: Line 48 has invalid MATDT: '0PBI'
+Warning: Line 49 has invalid MATDT: '4PBI'
+Warning: Line 50 has invalid MATDT: '8PBI'
+Warning: Line 51 has invalid MATDT: '9PBI'
+Warning: Line 52 has invalid MATDT: '2PBI'
+Warning: Line 53 has invalid MATDT: '1PBA'
+Warning: Line 54 has invalid MATDT: '3PBA'
+Warning: Line 55 has invalid MATDT: '4PBA'
+Warning: Line 56 has invalid MATDT: '9PBA'
+Warning: Line 57 has invalid MATDT: '5PBA'
+Warning: Line 58 has invalid MATDT: '4PBA'
+Warning: Line 59 has invalid MATDT: '8PBA'
+Warning: Line 60 has invalid MATDT: '0PBA'
+Warning: Line 61 has invalid MATDT: '1PBI'
+Warning: Line 62 has invalid MATDT: '2PBA'
+Warning: Line 63 has invalid MATDT: '2TFL'
+Warning: Line 64 has invalid MATDT: '5TLL'
+Warning: Line 65 has invalid MATDT: '6TLL'
+Warning: Line 66 has invalid MATDT: '8PBA'
+Warning: Line 67 has invalid MATDT: '6TLL'
+Warning: Line 68 has invalid MATDT: '6TLL'
+Warning: Line 69 has invalid MATDT: '9TLL'
+Warning: Line 70 has invalid MATDT: '5POS'
+Warning: Line 71 has invalid MATDT: '6TLL'
+Warning: Line 72 has invalid MATDT: '1PBA'
+Warning: Line 73 has invalid MATDT: '4TFL'
+Warning: Line 74 has invalid MATDT: '3TFL'
+Warning: Line 75 has invalid MATDT: '5TFL'
+Warning: Line 76 has invalid MATDT: '5TFL'
+Warning: Line 77 has invalid MATDT: '7TLL'
+Warning: Line 78 has invalid MATDT: '0TLL'
+Warning: Line 79 has invalid MATDT: '0TFL'
+Warning: Line 80 has invalid MATDT: '0TFL'
+Warning: Line 81 has invalid MATDT: '3TLL'
+Warning: Line 82 has invalid MATDT: '3TLL'
+Warning: Line 83 has invalid MATDT: '2TFL'
+Warning: Line 84 has invalid MATDT: '3TLL'
+Warning: Line 85 has invalid MATDT: '2TFL'
+Warning: Line 86 has invalid MATDT: '4TFL'
+Warning: Line 87 has invalid MATDT: '5TLL'
+Warning: Line 88 has invalid MATDT: '5TLL'
+Warning: Line 89 has invalid MATDT: '9TFL'
+Warning: Line 90 has invalid MATDT: '0TFL'
+Warning: Line 91 has invalid MATDT: '9TFL'
+Warning: Line 92 has invalid MATDT: '1TFL'
+Warning: Line 93 has invalid MATDT: '6TFL'
+Warning: Line 94 has invalid MATDT: '7PBA'
+Warning: Line 95 has invalid MATDT: '6TFL'
+Warning: Line 96 has invalid MATDT: '6TFL'
+Warning: Line 97 has invalid MATDT: '6TFL'
+Warning: Line 98 has invalid MATDT: '8TLL'
+Warning: Line 99 has invalid MATDT: '5FTI'
+Warning: Line 100 has invalid MATDT: '3FTI'
+Warning: Line 101 has invalid MATDT: '4TFL'
+Warning: Line 102 has invalid MATDT: '8TFL'
+Warning: Line 103 has invalid MATDT: '4TFL'
+Warning: Line 104 has invalid MATDT: '5TLL'
+Warning: Line 105 has invalid MATDT: '5TFL'
+Warning: Line 106 has invalid MATDT: '7TLL'
+Warning: Line 107 has invalid MATDT: '7TLL'
+Warning: Line 108 has invalid MATDT: '5TLL'
+Warning: Line 109 has invalid MATDT: '5TFL'
+Warning: Line 110 has invalid MATDT: '5TFL'
+Warning: Line 111 has invalid MATDT: '5TFL'
+Warning: Line 112 has invalid MATDT: '5FFU'
+Warning: Line 113 has invalid MATDT: '5TFL'
+Warning: Line 114 has invalid MATDT: '9TLL'
+Warning: Line 115 has invalid MATDT: '9TLL'
+Warning: Line 116 has invalid MATDT: '9TFL'
+Warning: Line 117 has invalid MATDT: '9TFL'
+Warning: Line 118 has invalid MATDT: '0TFL'
+Warning: Line 119 has invalid MATDT: '0TFL'
+Warning: Line 120 has invalid MATDT: '1TFL'
+Warning: Line 121 has invalid MATDT: '1FTI'
+Warning: Line 122 has invalid MATDT: '1TFL'
+Warning: Line 123 has invalid MATDT: '1TFL'
+Warning: Line 124 has invalid MATDT: '0TFL'
+Warning: Line 125 has invalid MATDT: '1TFL'
+Warning: Line 126 has invalid MATDT: '1TFL'
+Warning: Line 127 has invalid MATDT: '2TLL'
+Warning: Line 128 has invalid MATDT: '2TLI'
+Warning: Line 129 has invalid MATDT: '0TFL'
+Warning: Line 130 has invalid MATDT: '2TLL'
+Warning: Line 131 has invalid MATDT: '2TFL'
+Warning: Line 132 has invalid MATDT: '0TFL'
+Warning: Line 133 has invalid MATDT: '2TFL'
+Warning: Line 134 has invalid MATDT: '2TLL'
+Warning: Line 135 has invalid MATDT: '2TLL'
+Warning: Line 136 has invalid MATDT: '2FFU'
+Warning: Line 137 has invalid MATDT: '2TFL'
+Warning: Line 138 has invalid MATDT: '2TFL'
+Warning: Line 139 has invalid MATDT: '6TLL'
+Warning: Line 140 has invalid MATDT: '6TFL'
+Warning: Line 141 has invalid MATDT: '6TLL'
+Warning: Line 142 has invalid MATDT: '6TLL'
+Warning: Line 143 has invalid MATDT: '6TFL'
+Warning: Line 144 has invalid MATDT: '8FFU'
+Warning: Line 145 has invalid MATDT: '1FFU'
+Warning: Line 146 has invalid MATDT: '5FFU'
+Warning: Line 147 has invalid MATDT: '9TLL'
+Warning: Line 148 has invalid MATDT: '9TFL'
+Warning: Line 149 has invalid MATDT: '9TFL'
+Warning: Line 150 has invalid MATDT: '9TFL'
+Warning: Line 151 has invalid MATDT: '9TFL'
+Warning: Line 152 has invalid MATDT: '0PBA'
+Warning: Line 153 has invalid MATDT: '9TLL'
+Warning: Line 154 has invalid MATDT: '9TFL'
+Warning: Line 155 has invalid MATDT: '9TLL'
+Warning: Line 156 has invalid MATDT: '6FFU'
+Warning: Line 157 has invalid MATDT: '3TLL'
+Warning: Line 158 has invalid MATDT: '4TFL'
+Warning: Line 159 has invalid MATDT: '4TFL'
+Warning: Line 160 has invalid MATDT: '4TLL'
+Warning: Line 161 has invalid MATDT: '3TLL'
+Warning: Line 162 has invalid MATDT: '4TFL'
+Warning: Line 163 has invalid MATDT: '4TLL'
+Warning: Line 164 has invalid MATDT: '4TFL'
+Warning: Line 165 has invalid MATDT: '5TFL'
+Warning: Line 166 has invalid MATDT: '4TFL'
+Warning: Line 167 has invalid MATDT: '6FFU'
+Warning: Line 168 has invalid MATDT: '4TFL'
+Warning: Line 169 has invalid MATDT: '5TFL'
+Warning: Line 170 has invalid MATDT: '5TFL'
+Warning: Line 171 has invalid MATDT: '6TLL'
+Warning: Line 172 has invalid MATDT: '6DIL'
+Warning: Line 173 has invalid MATDT: '4FFU'
+Warning: Line 174 has invalid MATDT: '6FFU'
+Warning: Line 175 has invalid MATDT: '6FTI'
+Warning: Line 176 has invalid MATDT: '6TFL'
+Warning: Line 177 has invalid MATDT: '0FIL'
+Warning: Line 178 has invalid MATDT: '0TLL'
+Warning: Line 179 has invalid MATDT: '1TFL'
+Warning: Line 180 has invalid MATDT: '1FFU'
+Warning: Line 181 has invalid MATDT: '2TFL'
+Warning: Line 182 has invalid MATDT: '2TFL'
+Warning: Line 183 has invalid MATDT: '3FTI'
+Warning: Line 184 has invalid MATDT: '2TLL'
+Warning: Line 185 has invalid MATDT: '3TFL'
+Warning: Line 186 has invalid MATDT: '3FFU'
+Warning: Line 187 has invalid MATDT: '3TLL'
+Warning: Line 188 has invalid MATDT: '3TFL'
+Warning: Line 189 has invalid MATDT: '6PBA'
+Warning: Line 190 has invalid MATDT: '6TFL'
+Warning: Line 191 has invalid MATDT: '7TFL'
+Warning: Line 192 has invalid MATDT: '7TLL'
+Warning: Line 193 has invalid MATDT: '8TFL'
+Warning: Line 194 has invalid MATDT: '4FFU'
+Warning: Line 195 has invalid MATDT: '7TLL'
+Warning: Line 196 has invalid MATDT: '7TFL'
+Warning: Line 197 has invalid MATDT: '9TFL'
+Warning: Line 198 has invalid MATDT: '3DIL'
+Warning: Line 199 has invalid MATDT: '9TLL'
+Warning: Line 200 has invalid MATDT: '9TFL'
+Warning: Line 201 has invalid MATDT: '9FTI'
+Warning: Line 202 has invalid MATDT: '9TLL'
+Warning: Line 203 has invalid MATDT: '9TFL'
+Warning: Line 204 has invalid MATDT: '9TFL'
+Warning: Line 205 has invalid MATDT: '9TLL'
+Warning: Line 206 has invalid MATDT: '1PBA'
+Warning: Line 207 has invalid MATDT: '2TLL'
+Warning: Line 208 has invalid MATDT: '9TLL'
+Warning: Line 209 has invalid MATDT: '0TFL'
+Warning: Line 210 has invalid MATDT: '3FIL'
+Warning: Line 211 has invalid MATDT: '0TLL'
+Warning: Line 212 has invalid MATDT: '0TLL'
+Warning: Line 213 has invalid MATDT: '3FFU'
+Warning: Line 214 has invalid MATDT: '1TFL'
+Warning: Line 215 has invalid MATDT: '0TFL'
+Warning: Line 216 has invalid MATDT: '3PBA'
+Warning: Line 217 has invalid MATDT: '4TLL'
+Warning: Line 218 has invalid MATDT: '3TFL'
+Warning: Line 219 has invalid MATDT: '4TLL'
+Warning: Line 220 has invalid MATDT: '1TLL'
+Warning: Line 221 has invalid MATDT: '4TFL'
+Warning: Line 222 has invalid MATDT: '4TFL'
+Warning: Line 223 has invalid MATDT: '4TFL'
+Warning: Line 224 has invalid MATDT: '5TFL'
+Warning: Line 225 has invalid MATDT: '5TFL'
+Warning: Line 226 has invalid MATDT: '5TLL'
+Warning: Line 227 has invalid MATDT: '5FTI'
+Warning: Line 228 has invalid MATDT: '5FTI'
+Warning: Line 229 has invalid MATDT: '4TLL'
+Warning: Line 230 has invalid MATDT: '6TLL'
+Warning: Line 231 has invalid MATDT: '4FIL'
+Warning: Line 232 has invalid MATDT: '6TLL'
+Warning: Line 233 has invalid MATDT: '5TFL'
+Warning: Line 234 has invalid MATDT: '5TFL'
+Warning: Line 235 has invalid MATDT: '7TFL'
+Warning: Line 236 has invalid MATDT: '7TFL'
+Warning: Line 237 has invalid MATDT: '7TLL'
+Warning: Line 238 has invalid MATDT: '4TFL'
+Warning: Line 239 has invalid MATDT: '4TFL'
+Warning: Line 240 has invalid MATDT: '4TFL'
+Warning: Line 241 has invalid MATDT: '4TFL'
+Warning: Line 242 has invalid MATDT: '9PBA'
+Warning: Line 243 has invalid MATDT: '0TFL'
+Warning: Line 244 has invalid MATDT: '1TLL'
+Warning: Line 245 has invalid MATDT: '1TFL'
+Warning: Line 246 has invalid MATDT: '1TFL'
+Warning: Line 247 has invalid MATDT: '4PBA'
+Warning: Line 248 has invalid MATDT: '4PBI'
+Warning: Line 249 has invalid MATDT: '3TLL'
+Warning: Line 250 has invalid MATDT: '3TFL'
+Warning: Line 251 has invalid MATDT: '3TFL'
+Warning: Line 252 has invalid MATDT: '2TLL'
+Warning: Line 253 has invalid MATDT: '3TFL'
+Warning: Line 254 has invalid MATDT: '3TFL'
+Warning: Line 255 has invalid MATDT: '3TFL'
+Warning: Line 256 has invalid MATDT: '5PBA'
+Warning: Line 257 has invalid MATDT: '6PBA'
+Warning: Line 258 has invalid MATDT: '4TLL'
+Warning: Line 259 has invalid MATDT: '4TLL'
+Warning: Line 260 has invalid MATDT: '2TLL'
+Warning: Line 261 has invalid MATDT: '2TFL'
+Warning: Line 262 has invalid MATDT: '3TLL'
+Warning: Line 263 has invalid MATDT: '6PBA'
+Warning: Line 264 has invalid MATDT: '6PBA'
+Warning: Line 265 has invalid MATDT: '7PBA'
+Warning: Line 266 has invalid MATDT: '4TLL'
+Warning: Line 267 has invalid MATDT: '7PBI'
+Warning: Line 268 has invalid MATDT: '7PBA'
+Warning: Line 269 has invalid MATDT: '8DIL'
+Warning: Line 270 has invalid MATDT: '0TFL'
+Warning: Line 271 has invalid MATDT: '8TFL'
+Warning: Line 272 has invalid MATDT: '8TFL'
+Warning: Line 273 has invalid MATDT: '1TLL'
+Warning: Line 274 has invalid MATDT: '4FTI'
+Warning: Line 275 has invalid MATDT: '9TLL'
+Warning: Line 276 has invalid MATDT: '4TLL'
+Warning: Line 277 has invalid MATDT: '9TFL'
+Warning: Line 278 has invalid MATDT: '2FIL'
+Warning: Line 279 has invalid MATDT: '6TLL'
+Warning: Line 280 has invalid MATDT: '6TLL'
+Warning: Line 281 has invalid MATDT: '5FIL'
+Warning: Line 282 has invalid MATDT: '9TFL'
+Warning: Line 283 has invalid MATDT: '9TFL'
+Warning: Line 284 has invalid MATDT: '9TFL'
+Warning: Line 285 has invalid MATDT: '9TFL'
+Warning: Line 286 has invalid MATDT: '1PBA'
+Warning: Line 287 has invalid MATDT: '1PBA'
+Warning: Line 288 has invalid MATDT: '0TFL'
+Warning: Line 289 has invalid MATDT: '0FFU'
+Warning: Line 290 has invalid MATDT: '0FTI'
+Warning: Line 291 has invalid MATDT: '1PBI'
+Warning: Line 292 has invalid MATDT: '0TFL'
+Warning: Line 293 has invalid MATDT: '0TFL'
+Warning: Line 294 has invalid MATDT: '1PBA'
+Warning: Line 295 has invalid MATDT: '1PBA'
+Warning: Line 296 has invalid MATDT: '8TLL'
+Warning: Line 297 has invalid MATDT: '8TFL'
+Warning: Line 298 has invalid MATDT: '8TFL'
+Warning: Line 299 has invalid MATDT: '8TFL'
+Warning: Line 300 has invalid MATDT: '6FTI'
+Warning: Line 301 has invalid MATDT: '1TFL'
+Warning: Line 302 has invalid MATDT: '2PBI'
+Warning: Line 303 has invalid MATDT: '2PBA'
+Warning: Line 304 has invalid MATDT: '2PBA'
+Warning: Line 305 has invalid MATDT: '3PBA'
+Warning: Line 306 has invalid MATDT: '0TFL'
+Warning: Line 307 has invalid MATDT: '8TFL'
+Warning: Line 308 has invalid MATDT: '1TLL'
+Warning: Line 309 has invalid MATDT: '3TLL'
+Warning: Line 310 has invalid MATDT: '2FTI'
+Warning: Line 311 has invalid MATDT: '4TLL'
+Warning: Line 312 has invalid MATDT: '4TLL'
+Warning: Line 313 has invalid MATDT: '4TLL'
+Warning: Line 314 has invalid MATDT: '3TLL'
+Warning: Line 315 has invalid MATDT: '4TLL'
+Warning: Line 316 has invalid MATDT: '3TFL'
+Warning: Line 317 has invalid MATDT: '3FTI'
+Warning: Line 318 has invalid MATDT: '4TFL'
+Warning: Line 319 has invalid MATDT: '4TFL'
+Warning: Line 320 has invalid MATDT: '6FTI'
+Warning: Line 321 has invalid MATDT: '4TFL'
+Warning: Line 322 has invalid MATDT: '6PBA'
+Warning: Line 323 has invalid MATDT: '4TFL'
+Warning: Line 324 has invalid MATDT: '5TLL'
+Warning: Line 325 has invalid MATDT: '4TLL'
+Warning: Line 326 has invalid MATDT: '5TFL'
+Warning: Line 327 has invalid MATDT: '4TFL'
+Warning: Line 328 has invalid MATDT: '5TFL'
+Warning: Line 329 has invalid MATDT: '4TLL'
+Warning: Line 330 has invalid MATDT: '7PBA'
+Warning: Line 331 has invalid MATDT: '7PBA'
+Warning: Line 332 has invalid MATDT: '7PBA'
+Warning: Line 333 has invalid MATDT: '7PBA'
+Warning: Line 334 has invalid MATDT: '3TFL'
+Warning: Line 335 has invalid MATDT: '6TFL'
+Warning: Line 336 has invalid MATDT: '6TLL'
+Warning: Line 337 has invalid MATDT: '6TLL'
+Warning: Line 338 has invalid MATDT: '5TFL'
+Warning: Line 339 has invalid MATDT: '6TFL'
+Warning: Line 340 has invalid MATDT: '6TFL'
+Warning: Line 341 has invalid MATDT: '6TFL'
+Warning: Line 342 has invalid MATDT: '7TFL'
+Warning: Line 343 has invalid MATDT: '8TFL'
+Warning: Line 344 has invalid MATDT: '7TLL'
+Warning: Line 345 has invalid MATDT: '7TFL'
+Warning: Line 346 has invalid MATDT: '7TFL'
+Warning: Line 347 has invalid MATDT: '1FTI'
+Warning: Line 348 has invalid MATDT: '8POS'
+Warning: Line 349 has invalid MATDT: '6TFL'
+Warning: Line 350 has invalid MATDT: '7TFL'
+Warning: Line 351 has invalid MATDT: '7TLL'
+Warning: Line 352 has invalid MATDT: '1FTI'
+Warning: Line 353 has invalid MATDT: '7TLL'
+Warning: Line 354 has invalid MATDT: '7TLL'
+Warning: Line 355 has invalid MATDT: '7TLL'
+Warning: Line 356 has invalid MATDT: '7TLL'
+Warning: Line 357 has invalid MATDT: '7TFL'
+Warning: Line 358 has invalid MATDT: '7TFL'
+Warning: Line 359 has invalid MATDT: '0PBA'
+Warning: Line 360 has invalid MATDT: '0PBA'
+Warning: Line 361 has invalid MATDT: '0PBA'
+Warning: Line 362 has invalid MATDT: '0TFL'
+Warning: Line 363 has invalid MATDT: '0TFL'
+Warning: Line 364 has invalid MATDT: '6TFL'
+Warning: Line 365 has invalid MATDT: '4FIL'
+Warning: Line 366 has invalid MATDT: '1TFL'
+Warning: Line 367 has invalid MATDT: '1TFL'
+Warning: Line 368 has invalid MATDT: '1TFL'
+Warning: Line 369 has invalid MATDT: '1TFL'
+Warning: Line 370 has invalid MATDT: '6FTI'
+Warning: Line 371 has invalid MATDT: '0FTI'
+Warning: Line 372 has invalid MATDT: '5TLL'
+Warning: Line 373 has invalid MATDT: '2TFL'
+Warning: Line 374 has invalid MATDT: '2TLL'
+Warning: Line 375 has invalid MATDT: '5TLL'
+Warning: Line 376 has invalid MATDT: '4PBA'
+Warning: Line 377 has invalid MATDT: '9FTI'
+Warning: Line 378 has invalid MATDT: '2FTI'
+Warning: Line 379 has invalid MATDT: '4FTI'
+Warning: Line 380 has invalid MATDT: '2TLL'
+Warning: Line 381 has invalid MATDT: '6FTI'
+Warning: Line 382 has invalid MATDT: '1FTI'
+Warning: Line 383 has invalid MATDT: '4PBA'
+Warning: Line 384 has invalid MATDT: '4PBA'
+Warning: Line 385 has invalid MATDT: '4PBA'
+Warning: Line 386 has invalid MATDT: '3TFL'
+Warning: Line 387 has invalid MATDT: '2TLL'
+Warning: Line 388 has invalid MATDT: '2TLL'
+Warning: Line 389 has invalid MATDT: '2POS'
+Warning: Line 390 has invalid MATDT: '2POS'
+Warning: Line 391 has invalid MATDT: '3TLL'
+Warning: Line 392 has invalid MATDT: '1TFL'
+Warning: Line 393 has invalid MATDT: '3FFU'
+Warning: Line 394 has invalid MATDT: '3FTI'
+Warning: Line 395 has invalid MATDT: '3FTI'
+Warning: Line 396 has invalid MATDT: '3FFU'
+Warning: Line 397 has invalid MATDT: '3TFL'
+Warning: Line 398 has invalid MATDT: '3FFU'
+Warning: Line 399 has invalid MATDT: '3FFU'
+Warning: Line 400 has invalid MATDT: '3TFL'
+Warning: Line 401 has invalid MATDT: '4TLL'
+Warning: Line 402 has invalid MATDT: '7FIL'
+Warning: Line 403 has invalid MATDT: '4TFL'
+Warning: Line 404 has invalid MATDT: '0FIL'
+Warning: Line 405 has invalid MATDT: '5FIL'
+Warning: Line 406 has invalid MATDT: '3FIL'
+Warning: Line 407 has invalid MATDT: '5FIL'
+Warning: Line 408 has invalid MATDT: '6PBA'
+Warning: Line 409 has invalid MATDT: '6PBA'
+Warning: Line 410 has invalid MATDT: '6PBA'
+Warning: Line 411 has invalid MATDT: '6PBA'
+Warning: Line 412 has invalid MATDT: '6PBA'
+Warning: Line 413 has invalid MATDT: '7PBA'
+Warning: Line 414 has invalid MATDT: '7PBA'
+Warning: Line 415 has invalid MATDT: '7PBA'
+Warning: Line 416 has invalid MATDT: '4TFL'
+Warning: Line 417 has invalid MATDT: '4TLL'
+Warning: Line 418 has invalid MATDT: '4TFL'
+Warning: Line 419 has invalid MATDT: '4FTI'
+Warning: Line 420 has invalid MATDT: '4TFL'
+Warning: Line 421 has invalid MATDT: '7PBA'
+Warning: Line 422 has invalid MATDT: '4TFL'
+Warning: Line 423 has invalid MATDT: '4TFL'
+Warning: Line 424 has invalid MATDT: '4TFL'
+Warning: Line 425 has invalid MATDT: '4TFL'
+Warning: Line 426 has invalid MATDT: '8TLL'
+Warning: Line 427 has invalid MATDT: '0PBA'
+Warning: Line 428 has invalid MATDT: '4FIL'
+Warning: Line 429 has invalid MATDT: '9TFL'
+Warning: Line 430 has invalid MATDT: '9TLL'
+Warning: Line 431 has invalid MATDT: '1PBA'
+Warning: Line 432 has invalid MATDT: '1TLL'
+Warning: Line 433 has invalid MATDT: '1PBA'
+Warning: Line 434 has invalid MATDT: '1PBA'
+Warning: Line 435 has invalid MATDT: '1PBA'
+Warning: Line 436 has invalid MATDT: '1TLL'
+Warning: Line 437 has invalid MATDT: '4FTI'
+Warning: Line 438 has invalid MATDT: '1TFL'
+Warning: Line 439 has invalid MATDT: '8TLL'
+Warning: Line 440 has invalid MATDT: '8TFL'
+Warning: Line 441 has invalid MATDT: '9TLL'
+Warning: Line 442 has invalid MATDT: '0TFL'
+Warning: Line 443 has invalid MATDT: '0TFL'
+Warning: Line 444 has invalid MATDT: '0TFL'
+Warning: Line 445 has invalid MATDT: '0TFL'
+Warning: Line 446 has invalid MATDT: '0TFL'
+Warning: Line 447 has invalid MATDT: '0TFL'
+Warning: Line 448 has invalid MATDT: '0TFL'
+Warning: Line 449 has invalid MATDT: '0TFL'
+Warning: Line 450 has invalid MATDT: '0TFL'
+Warning: Line 451 has invalid MATDT: '2PBA'
+Warning: Line 452 has invalid MATDT: '2PBA'
+Warning: Line 453 has invalid MATDT: '2PBA'
+Warning: Line 454 has invalid MATDT: '2PBI'
+Warning: Line 455 has invalid MATDT: '0TLL'
+Warning: Line 456 has invalid MATDT: '1TFL'
+Warning: Line 457 has invalid MATDT: '6TFL'
+Warning: Line 458 has invalid MATDT: '1TFL'
+Warning: Line 459 has invalid MATDT: '1TFL'
+Warning: Line 460 has invalid MATDT: '1FTI'
+Warning: Line 461 has invalid MATDT: '3PBA'
+Warning: Line 462 has invalid MATDT: '3PBA'
+Warning: Line 463 has invalid MATDT: '1TFL'
+Warning: Line 464 has invalid MATDT: '9TLL'
+Warning: Line 465 has invalid MATDT: '9TLL'
+Warning: Line 466 has invalid MATDT: '1TLI'
+Warning: Line 467 has invalid MATDT: '0FTI'
+Warning: Line 468 has invalid MATDT: '0FTI'
+Warning: Line 469 has invalid MATDT: '1FTI'
+Warning: Line 470 has invalid MATDT: '1FTI'
+Warning: Line 471 has invalid MATDT: '4PBA'
+Warning: Line 472 has invalid MATDT: '4PBA'
+Warning: Line 473 has invalid MATDT: '4PBA'
+Warning: Line 474 has invalid MATDT: '4PBA'
+Warning: Line 475 has invalid MATDT: '4PBA'
+Warning: Line 476 has invalid MATDT: '7PBA'
+Warning: Line 477 has invalid MATDT: '7PBA'
+Warning: Line 478 has invalid MATDT: '5TFL'
+Warning: Line 479 has invalid MATDT: '8PBA'
+Warning: Line 480 has invalid MATDT: '8PBA'
+Warning: Line 481 has invalid MATDT: '6TLL'
+Warning: Line 482 has invalid MATDT: '5TFL'
+Warning: Line 483 has invalid MATDT: '6TLL'
+Warning: Line 484 has invalid MATDT: '6TFL'
+Warning: Line 485 has invalid MATDT: '6TFL'
+Warning: Line 486 has invalid MATDT: '0FTI'
+Warning: Line 487 has invalid MATDT: '5TFL'
+Warning: Line 488 has invalid MATDT: '2TFL'
+Warning: Line 489 has invalid MATDT: '8PBA'
+Warning: Line 490 has invalid MATDT: '8PBA'
+Warning: Line 491 has invalid MATDT: '8PBA'
+Warning: Line 492 has invalid MATDT: '8PBA'
+Warning: Line 493 has invalid MATDT: '8PBA'
+Warning: Line 494 has invalid MATDT: '8PBA'
+Warning: Line 495 has invalid MATDT: '6TFL'
+Warning: Line 496 has invalid MATDT: '4TLL'
+Warning: Line 497 has invalid MATDT: '6TLL'
+Warning: Line 498 has invalid MATDT: '7TFL'
+Warning: Line 499 has invalid MATDT: '6FIL'
+Warning: Line 500 has invalid MATDT: '8TLL'
+Warning: Line 501 has invalid MATDT: '7TLL'
+Warning: Line 502 has invalid MATDT: '9TFL'
+Warning: Line 503 has invalid MATDT: '2DIL'
+Warning: Line 504 has invalid MATDT: '5FTI'
+Warning: Line 505 has invalid MATDT: '9PBA'
+Warning: Line 506 has invalid MATDT: '9PBA'
+Warning: Line 507 has invalid MATDT: '9PBA'
+Warning: Line 508 has invalid MATDT: '9PBA'
+Warning: Line 509 has invalid MATDT: '8TFL'
+Warning: Line 510 has invalid MATDT: '8TFL'
+Warning: Line 511 has invalid MATDT: '9FTI'
+Warning: Line 512 has invalid MATDT: '4FTI'
+Warning: Line 513 has invalid MATDT: '8TFL'
+Warning: Line 514 has invalid MATDT: '8TFL'
+Warning: Line 515 has invalid MATDT: '8TFL'
+Warning: Line 516 has invalid MATDT: '8TFL'
+Warning: Line 517 has invalid MATDT: '7TLL'
+Warning: Line 518 has invalid MATDT: '8TFL'
+Warning: Line 519 has invalid MATDT: '8TFL'
+Warning: Line 520 has invalid MATDT: '0PBA'
+Warning: Line 521 has invalid MATDT: '0PBA'
+Warning: Line 522 has invalid MATDT: '8TFL'
+Warning: Line 523 has invalid MATDT: '0PBI'
+Warning: Line 524 has invalid MATDT: '0PBA'
+Warning: Line 525 has invalid MATDT: '0PBA'
+Warning: Line 526 has invalid MATDT: '0PBA'
+Warning: Line 527 has invalid MATDT: '0PBA'
+Warning: Line 528 has invalid MATDT: '0PBA'
+Warning: Line 529 has invalid MATDT: '0PBA'
+Warning: Line 530 has invalid MATDT: '1TLL'
+Warning: Line 531 has invalid MATDT: '1TLL'
+Warning: Line 532 has invalid MATDT: '8TLL'
+Warning: Line 533 has invalid MATDT: '0TFL'
+Warning: Line 534 has invalid MATDT: '5PBA'
+Warning: Line 535 has invalid MATDT: '9FTI'
+Warning: Line 536 has invalid MATDT: '2FTI'
+Warning: Line 537 has invalid MATDT: '2TFL'
+Warning: Line 538 has invalid MATDT: '2FTI'
+Warning: Line 539 has invalid MATDT: '5PBA'
+Warning: Line 540 has invalid MATDT: '3TFL'
+Warning: Line 541 has invalid MATDT: '8FTI'
+Warning: Line 542 has invalid MATDT: '2TFL'
+Warning: Line 543 has invalid MATDT: '8FTI'
+Warning: Line 544 has invalid MATDT: '5PBA'
+Warning: Line 545 has invalid MATDT: '1FTI'
+Warning: Line 546 has invalid MATDT: '5PBA'
+Warning: Line 547 has invalid MATDT: '2TFL'
+Warning: Line 548 has invalid MATDT: '5PBA'
+Warning: Line 549 has invalid MATDT: '2TLL'
+Warning: Line 550 has invalid MATDT: '6PBA'
+Warning: Line 551 has invalid MATDT: '6PBA'
+Warning: Line 552 has invalid MATDT: '6PBA'
+Warning: Line 553 has invalid MATDT: '3FIL'
+Warning: Line 554 has invalid MATDT: '3TFL'
+Warning: Line 555 has invalid MATDT: '4TFL'
+Warning: Line 556 has invalid MATDT: '3TFL'
+Warning: Line 557 has invalid MATDT: '3TFL'
+Warning: Line 558 has invalid MATDT: '3TFL'
+Warning: Line 559 has invalid MATDT: '3TFL'
+Warning: Line 560 has invalid MATDT: '3TFL'
+Warning: Line 561 has invalid MATDT: '6PBA'
+Warning: Line 562 has invalid MATDT: '5FTI'
+Warning: Line 563 has invalid MATDT: '4TFL'
+Warning: Line 564 has invalid MATDT: '5TFL'
+Warning: Line 565 has invalid MATDT: '7PBA'
+Warning: Line 566 has invalid MATDT: '4TFL'
+Warning: Line 567 has invalid MATDT: '7PBA'
+Warning: Line 568 has invalid MATDT: '8PBA'
+Warning: Line 569 has invalid MATDT: '4TFL'
+Warning: Line 570 has invalid MATDT: '4TLL'
+Warning: Line 571 has invalid MATDT: '4TLL'
+Warning: Line 572 has invalid MATDT: '4TLL'
+Warning: Line 573 has invalid MATDT: '4TFL'
+Warning: Line 574 has invalid MATDT: '4TFL'
+Warning: Line 575 has invalid MATDT: '4TFL'
+Warning: Line 576 has invalid MATDT: '4TFL'
+Warning: Line 577 has invalid MATDT: '4TFL'
+Warning: Line 578 has invalid MATDT: '8PBA'
+Warning: Line 579 has invalid MATDT: '8TFL'
+Warning: Line 580 has invalid MATDT: '8PBA'
+Warning: Line 581 has invalid MATDT: '4TFL'
+Warning: Line 582 has invalid MATDT: '8PBA'
+Warning: Line 583 has invalid MATDT: '8PBA'
+Warning: Line 584 has invalid MATDT: '4TFL'
+Warning: Line 585 has invalid MATDT: '8PBA'
+Warning: Line 586 has invalid MATDT: '8PBA'
+Warning: Line 587 has invalid MATDT: '8PBA'
+Warning: Line 588 has invalid MATDT: '8PBA'
+Warning: Line 589 has invalid MATDT: '8PBA'
+Warning: Line 590 has invalid MATDT: '8PBA'
+Warning: Line 591 has invalid MATDT: '8TLL'
+Warning: Line 592 has invalid MATDT: '8TFL'
+Warning: Line 593 has invalid MATDT: '8TLL'
+Warning: Line 594 has invalid MATDT: '8TFL'
+Warning: Line 595 has invalid MATDT: '9TLL'
+Warning: Line 596 has invalid MATDT: '5FTI'
+Warning: Line 597 has invalid MATDT: '9TFL'
+Warning: Line 598 has invalid MATDT: '7FFU'
+Warning: Line 599 has invalid MATDT: '6TLL'
+Warning: Line 600 has invalid MATDT: '9TFL'
+Warning: Line 601 has invalid MATDT: '9TFI'
+Warning: Line 602 has invalid MATDT: '9TFL'
+Warning: Line 603 has invalid MATDT: '9TFL'
+Warning: Line 604 has invalid MATDT: '9TFL'
+Warning: Line 605 has invalid MATDT: '9TFL'
+Warning: Line 606 has invalid MATDT: '9TFL'
+Warning: Line 607 has invalid MATDT: '2PBA'
+Warning: Line 608 has invalid MATDT: '2PBA'
+Warning: Line 609 has invalid MATDT: '2PBA'
+Warning: Line 610 has invalid MATDT: '2PBA'
+Warning: Line 611 has invalid MATDT: '2PBA'
+Warning: Line 612 has invalid MATDT: '2PBA'
+Warning: Line 613 has invalid MATDT: '3PBA'
+Warning: Line 614 has invalid MATDT: '3PBA'
+Warning: Line 615 has invalid MATDT: '0TLL'
+Warning: Line 616 has invalid MATDT: '1TFL'
+Warning: Line 617 has invalid MATDT: '2FIL'
+Warning: Line 618 has invalid MATDT: '0TFL'
+Warning: Line 619 has invalid MATDT: '9TFL'
+Warning: Line 620 has invalid MATDT: '0TLL'
+Warning: Line 621 has invalid MATDT: '0TLL'
+Warning: Line 622 has invalid MATDT: '0TLL'
+Warning: Line 623 has invalid MATDT: '3PBA'
+Warning: Line 624 has invalid MATDT: '0TFL'
+Warning: Line 625 has invalid MATDT: '9TFL'
+Warning: Line 626 has invalid MATDT: '1TFL'
+Warning: Line 627 has invalid MATDT: '3TFL'
+Warning: Line 628 has invalid MATDT: '8FTI'
+Warning: Line 629 has invalid MATDT: '1FTI'
+Warning: Line 630 has invalid MATDT: '2FTI'
+Warning: Line 631 has invalid MATDT: '4PBA'
+Warning: Line 632 has invalid MATDT: '2TFL'
+Warning: Line 633 has invalid MATDT: '1TLL'
+Warning: Line 634 has invalid MATDT: '1TLL'
+Warning: Line 635 has invalid MATDT: '4PBA'
+Warning: Line 636 has invalid MATDT: '4PBA'
+Warning: Line 637 has invalid MATDT: '4PBA'
+Warning: Line 638 has invalid MATDT: '4PBA'
+Warning: Line 639 has invalid MATDT: '4PBA'
+Warning: Line 640 has invalid MATDT: '4PBA'
+Warning: Line 641 has invalid MATDT: '2TLL'
+Warning: Line 642 has invalid MATDT: '1TLL'
+Warning: Line 643 has invalid MATDT: '1TLL'
+Warning: Line 644 has invalid MATDT: '1TLL'
+Warning: Line 645 has invalid MATDT: '3POS'
+Warning: Line 646 has invalid MATDT: '1FTI'
+Warning: Line 647 has invalid MATDT: '5PBA'
+Warning: Line 648 has invalid MATDT: '5PBA'
+Warning: Line 649 has invalid MATDT: '0FTI'
+Warning: Line 650 has invalid MATDT: '6FIL'
+Warning: Line 651 has invalid MATDT: '1TFL'
+Warning: Line 652 has invalid MATDT: '1TFL'
+Warning: Line 653 has invalid MATDT: '9FIL'
+Warning: Line 654 has invalid MATDT: '3FTI'
+Warning: Line 655 has invalid MATDT: '1FTI'
+Warning: Line 656 has invalid MATDT: '1TFL'
+Warning: Line 657 has invalid MATDT: '1TFL'
+Warning: Line 658 has invalid MATDT: '1TFL'
+Warning: Line 659 has invalid MATDT: '1TFL'
+Warning: Line 660 has invalid MATDT: '1TFL'
+Warning: Line 661 has invalid MATDT: '1TFL'
+Warning: Line 662 has invalid MATDT: '1TFL'
+Warning: Line 663 has invalid MATDT: '1FTI'
+Warning: Line 664 has invalid MATDT: '5PBA'
+Warning: Line 665 has invalid MATDT: '5PBA'
+Warning: Line 666 has invalid MATDT: '5PBA'
+Warning: Line 667 has invalid MATDT: '5PBA'
+Warning: Line 668 has invalid MATDT: '5PBA'
+Warning: Line 669 has invalid MATDT: '5PBA'
+Warning: Line 670 has invalid MATDT: '5PBA'
+Warning: Line 671 has invalid MATDT: '5PBA'
+Warning: Line 672 has invalid MATDT: '5PBA'
+Warning: Line 673 has invalid MATDT: '5PBA'
+Warning: Line 674 has invalid MATDT: '5PBA'
+Warning: Line 675 has invalid MATDT: '5PBA'
+Warning: Line 676 has invalid MATDT: '5PBI'
+Warning: Line 677 has invalid MATDT: '5PBA'
+Warning: Line 678 has invalid MATDT: '5PBA'
+Warning: Line 679 has invalid MATDT: '5TFL'
+Warning: Line 680 has invalid MATDT: '5TFL'
+Warning: Line 681 has invalid MATDT: '4TLL'
+Warning: Line 682 has invalid MATDT: '8PBA'
+Warning: Line 683 has invalid MATDT: '4TLL'
+Warning: Line 684 has invalid MATDT: '1TFL'
+Warning: Line 685 has invalid MATDT: '3FTI'
+Warning: Line 686 has invalid MATDT: '8PBA'
+Warning: Line 687 has invalid MATDT: '8PBA'
+Warning: Line 688 has invalid MATDT: '9PBA'
+Warning: Line 689 has invalid MATDT: '9PBA'
+Warning: Line 690 has invalid MATDT: '9PBA'
+Warning: Line 691 has invalid MATDT: '9PBA'
+Warning: Line 692 has invalid MATDT: '9PBA'
+Warning: Line 693 has invalid MATDT: '0TLL'
+Warning: Line 694 has invalid MATDT: '5TLL'
+Warning: Line 695 has invalid MATDT: '0TLL'
+Warning: Line 696 has invalid MATDT: '0TLL'
+Warning: Line 697 has invalid MATDT: '3FIL'
+Warning: Line 698 has invalid MATDT: '5TFL'
+Warning: Line 699 has invalid MATDT: '7TFL'
+Warning: Line 700 has invalid MATDT: '0PBA'
+Warning: Line 701 has invalid MATDT: '7TFL'
+Warning: Line 702 has invalid MATDT: '8POS'
+Warning: Line 703 has invalid MATDT: '7TFL'
+Warning: Line 704 has invalid MATDT: '7TFL'
+Warning: Line 705 has invalid MATDT: '7TFL'
+Warning: Line 706 has invalid MATDT: '7TFL'
+Warning: Line 707 has invalid MATDT: '0PBA'
+Warning: Line 708 has invalid MATDT: '0PBA'
+Warning: Line 709 has invalid MATDT: '0PBA'
+Warning: Line 710 has invalid MATDT: '0PBA'
+Warning: Line 711 has invalid MATDT: '0PBA'
+Warning: Line 712 has invalid MATDT: '0PBA'
+Warning: Line 713 has invalid MATDT: '0PBA'
+Warning: Line 714 has invalid MATDT: '1PBA'
+Warning: Line 715 has invalid MATDT: '1PBA'
+Warning: Line 716 has invalid MATDT: '1PBA'
+Warning: Line 717 has invalid MATDT: '1PBA'
+Warning: Line 718 has invalid MATDT: '8TFL'
+Warning: Line 719 has invalid MATDT: '8TLL'
+Warning: Line 720 has invalid MATDT: '2TFL'
+Warning: Line 721 has invalid MATDT: '9FTI'
+Warning: Line 722 has invalid MATDT: '8TFL'
+Warning: Line 723 has invalid MATDT: '0POS'
+Warning: Line 724 has invalid MATDT: '7TFL'
+Warning: Line 725 has invalid MATDT: '7TFL'
+Warning: Line 726 has invalid MATDT: '6FTI'
+Warning: Line 727 has invalid MATDT: '8TFL'
+Warning: Line 728 has invalid MATDT: '8TFL'
+Warning: Line 729 has invalid MATDT: '6TFL'
+Warning: Line 730 has invalid MATDT: '6TFL'
+Warning: Line 731 has invalid MATDT: '6TFL'
+Warning: Line 732 has invalid MATDT: '8TFL'
+Warning: Line 733 has invalid MATDT: '1PBA'
+Warning: Line 734 has invalid MATDT: '1PBI'
+Warning: Line 735 has invalid MATDT: '1PBA'
+Warning: Line 736 has invalid MATDT: '1PBA'
+Warning: Line 737 has invalid MATDT: '1PBA'
+Warning: Line 738 has invalid MATDT: '2PBA'
+Warning: Line 739 has invalid MATDT: '8FTI'
+Warning: Line 740 has invalid MATDT: '8TLL'
+Warning: Line 741 has invalid MATDT: '8TFL'
+Warning: Line 742 has invalid MATDT: '8TFL'
+Warning: Line 743 has invalid MATDT: '1TFL'
+Warning: Line 744 has invalid MATDT: '9FTL'
+Warning: Line 745 has invalid MATDT: '2PBA'
+Warning: Line 746 has invalid MATDT: '2PBA'
+Warning: Line 747 has invalid MATDT: '2PBA'
+Warning: Line 748 has invalid MATDT: '2PBA'
+Warning: Line 749 has invalid MATDT: '2PBA'
+Warning: Line 750 has invalid MATDT: '2PBA'
+Warning: Line 751 has invalid MATDT: '2PBA'
+Warning: Line 752 has invalid MATDT: '2PBA'
+Warning: Line 753 has invalid MATDT: '2PBA'
+Warning: Line 754 has invalid MATDT: '2PBA'
+Warning: Line 755 has invalid MATDT: '2PBA'
+Warning: Line 756 has invalid MATDT: '2PBI'
+Warning: Line 757 has invalid MATDT: '2PBI'
+Warning: Line 758 has invalid MATDT: '2TFL'
+Warning: Line 759 has invalid MATDT: '2TFL'
+Warning: Line 760 has invalid MATDT: '8TLL'
+Warning: Line 761 has invalid MATDT: '2TFL'
+Warning: Line 762 has invalid MATDT: '2TFL'
+Warning: Line 763 has invalid MATDT: '2TFL'
+Warning: Line 764 has invalid MATDT: '2TFL'
+Warning: Line 765 has invalid MATDT: '5PBA'
+Warning: Line 766 has invalid MATDT: '5PBA'
+Warning: Line 767 has invalid MATDT: '5PBA'
+Warning: Line 768 has invalid MATDT: '5PBA'
+Warning: Line 769 has invalid MATDT: '6PBA'
+Warning: Line 770 has invalid MATDT: '6PBA'
+Warning: Line 771 has invalid MATDT: '6PBA'
+Warning: Line 772 has invalid MATDT: '6PBA'
+Warning: Line 773 has invalid MATDT: '6PBA'
+Warning: Line 774 has invalid MATDT: '9FTI'
+Warning: Line 775 has invalid MATDT: '0TFL'
+Warning: Line 776 has invalid MATDT: '6PBA'
+Warning: Line 777 has invalid MATDT: '3TLL'
+Warning: Line 778 has invalid MATDT: '3FTI'
+Warning: Line 779 has invalid MATDT: '0TLL'
+Warning: Line 780 has invalid MATDT: '3TFL'
+Warning: Line 781 has invalid MATDT: '6PBA'
+Warning: Line 782 has invalid MATDT: '6PBI'
+Warning: Line 783 has invalid MATDT: '6PBA'
+Warning: Line 784 has invalid MATDT: '6PBA'
+Warning: Line 785 has invalid MATDT: '6PBA'
+Warning: Line 786 has invalid MATDT: '6PBA'
+Warning: Line 787 has invalid MATDT: '6PBA'
+Warning: Line 788 has invalid MATDT: '6PBA'
+Warning: Line 789 has invalid MATDT: '6PBA'
+Warning: Line 790 has invalid MATDT: '6PBA'
+Warning: Line 791 has invalid MATDT: '6PBA'
+Warning: Line 792 has invalid MATDT: '6PBA'
+Warning: Line 793 has invalid MATDT: '0DIL'
+Warning: Line 794 has invalid MATDT: '1FAS'
+Warning: Line 795 has invalid MATDT: '4TLL'
+Warning: Line 796 has invalid MATDT: '7TLL'
+Warning: Line 797 has invalid MATDT: '6TFL'
+Warning: Line 798 has invalid MATDT: '8PBA'
+Warning: Line 799 has invalid MATDT: '8PBA'
+Warning: Line 800 has invalid MATDT: '8PBA'
+Warning: Line 801 has invalid MATDT: '8PBA'
+Warning: Line 802 has invalid MATDT: '8PBA'
+Warning: Line 803 has invalid MATDT: '8PBA'
+Warning: Line 804 has invalid MATDT: '8PBA'
+Warning: Line 805 has invalid MATDT: '8PBA'
+Warning: Line 806 has invalid MATDT: '8PBA'
+Warning: Line 807 has invalid MATDT: '8PBA'
+Warning: Line 808 has invalid MATDT: '9PBA'
+Warning: Line 809 has invalid MATDT: '2FAS'
+Warning: Line 810 has invalid MATDT: '9PBA'
+Warning: Line 811 has invalid MATDT: '9PBA'
+Warning: Line 812 has invalid MATDT: '9PBA'
+Warning: Line 813 has invalid MATDT: '5TLL'
+Warning: Line 814 has invalid MATDT: '5TFL'
+Warning: Line 815 has invalid MATDT: '1TLL'
+Warning: Line 816 has invalid MATDT: '1TLL'
+Warning: Line 817 has invalid MATDT: '6TLL'
+Warning: Line 818 has invalid MATDT: '8POS'
+Warning: Line 819 has invalid MATDT: '5TFL'
+Warning: Line 820 has invalid MATDT: '6TLL'
+Warning: Line 821 has invalid MATDT: '9PBA'
+Warning: Line 822 has invalid MATDT: '1FTI'
+Warning: Line 823 has invalid MATDT: '9PBA'
+Warning: Line 824 has invalid MATDT: '9PBA'
+Warning: Line 825 has invalid MATDT: '9PBA'
+Warning: Line 826 has invalid MATDT: '7TFL'
+Warning: Line 827 has invalid MATDT: '5TFL'
+Warning: Line 828 has invalid MATDT: '5TFL'
+Warning: Line 829 has invalid MATDT: '9PBA'
+Warning: Line 830 has invalid MATDT: '9PBA'
+Warning: Line 831 has invalid MATDT: '9PBA'
+Warning: Line 832 has invalid MATDT: '6FDU'
+Warning: Line 833 has invalid MATDT: '9PBA'
+Warning: Line 834 has invalid MATDT: '9PBA'
+Warning: Line 835 has invalid MATDT: '9PBA'
+Warning: Line 836 has invalid MATDT: '9PBA'
+Warning: Line 837 has invalid MATDT: '9PBA'
+Warning: Line 838 has invalid MATDT: '9PBA'
+Warning: Line 839 has invalid MATDT: '9PBA'
+Warning: Line 840 has invalid MATDT: '9PBI'
+Warning: Line 841 has invalid MATDT: '9PBA'
+Warning: Line 842 has invalid MATDT: '9PBI'
+Warning: Line 843 has invalid MATDT: '9PBA'
+Warning: Line 844 has invalid MATDT: '9PBA'
+Warning: Line 845 has invalid MATDT: '9PBA'
+Warning: Line 846 has invalid MATDT: '9PBA'
+Warning: Line 847 has invalid MATDT: '9PBA'
+Warning: Line 848 has invalid MATDT: '9PBA'
+Warning: Line 849 has invalid MATDT: '9PBA'
+Warning: Line 850 has invalid MATDT: '9PBA'
+Warning: Line 851 has invalid MATDT: '9PBA'
+Warning: Line 852 has invalid MATDT: '9PBA'
+Warning: Line 853 has invalid MATDT: '9PBA'
+Warning: Line 854 has invalid MATDT: '9PBA'
+Warning: Line 855 has invalid MATDT: '9PBA'
+Warning: Line 856 has invalid MATDT: '9PBA'
+Warning: Line 857 has invalid MATDT: '9PBI'
+Warning: Line 858 has invalid MATDT: '9PBI'
+Warning: Line 859 has invalid MATDT: '9PBA'
+Warning: Line 860 has invalid MATDT: '9PBA'
+Warning: Line 861 has invalid MATDT: '9PBI'
+Warning: Line 862 has invalid MATDT: '9PBA'
+Warning: Line 863 has invalid MATDT: '9PBA'
+Warning: Line 864 has invalid MATDT: '9PBA'
+Warning: Line 865 has invalid MATDT: '9PBA'
+Warning: Line 866 has invalid MATDT: '9PBA'
+Warning: Line 867 has invalid MATDT: '9PBA'
+Warning: Line 868 has invalid MATDT: '9PBA'
+Warning: Line 869 has invalid MATDT: '9PBA'
+Warning: Line 870 has invalid MATDT: '9PBA'
+Warning: Line 871 has invalid MATDT: '9PBA'
+Error reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/BTPM12.txt: No valid data found in /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/BTPM12.txt
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDBT12.py", line 149, in <module>
     btdtl = read_btdtl_text(INPUT_BTPM12_FILE)
-
-# Check if we have data
-if len(btdtl) == 0:
-    raise ValueError("No data loaded from BTPM12 file")
-
-print(f"\nLoaded {len(btdtl)} records from BTPM12")
-print("Sample of loaded data:")
-print(btdtl.head(5))
-
-# Parse MATDATE from ddmmyy string
-# MATDT is in DDMMYY format
-btdtl = btdtl.with_columns([
-    pl.col("MATDT").str.slice(0, 2).cast(pl.Int32, strict=False).alias("day"),
-    pl.col("MATDT").str.slice(2, 2).cast(pl.Int32, strict=False).alias("month"),
-    pl.col("MATDT").str.slice(4, 2).cast(pl.Int32, strict=False).alias("year2")
-])
-
-# Filter out rows with invalid dates
-btdtl = btdtl.filter(
-    pl.col("day").is_not_null() & 
-    pl.col("month").is_not_null() & 
-    pl.col("year2").is_not_null() &
-    (pl.col("day") >= 1) & (pl.col("day") <= 31) &
-    (pl.col("month") >= 1) & (pl.col("month") <= 12)
-)
-
-if len(btdtl) == 0:
-    raise ValueError("No valid dates found in MATDT field")
-
-# Add century (2000 + year2)
-btdtl = btdtl.with_columns(
-    (pl.col("year2") + 2000).alias("year")
-)
-
-# Create datetime column
-btdtl = btdtl.with_columns(
-    pl.datetime("year", "month", "day").alias("MATDATE")
-)
-
-print(f"\nAfter date parsing, {len(btdtl)} records remain")
-
-# Apply SAS filter: remove if branch > 3000 and ACCTNO in range
-btdtl = btdtl.filter(
-    ~((pl.col("BRANCH") > 3000) &
-      (pl.col("ACCTNO") >= 2850000000) &
-      (pl.col("ACCTNO") <= 2859999999))
-)
-
-print(f"After filtering, {len(btdtl)} records remain")
-
-# --------------------------------------------------------------------
-# Step 3: Read BASE dataset (previous month snapshot from SAS)
-# --------------------------------------------------------------------
-def read_base_sas(prevmon):
-    """Read BTBASE SAS dataset for the previous month"""
-    try:
-        # Construct file path with month
-        filepath = INPUT_BTBASE_FILE.format(PREVMON=prevmon)
-        if INPUT_BTBASE_PATH:
-            filepath = os.path.join(INPUT_BTBASE_PATH, filepath)
-        
-        print(f"\nReading SAS dataset: {filepath}")
-        
-        # Check if file exists
-        if not os.path.exists(filepath):
-            print(f"Warning: SAS file not found: {filepath}")
-            print("Creating dummy base data for testing...")
-            return pl.DataFrame({
-                "ACCTNO": [2000625018, 2000925056, 2020125057],
-                "TRANSREF": ["Y011618000", "Y066656000", "Y080273000"],
-                "PREOUTSTD": [150000.0, 100000.0, 120000.0],
-                "PRODTYPE": [0, 200, 0],
-            })
-        
-        # Read SAS dataset using pyreadstat
-        df, meta = pyreadstat.read_sas7bdat(filepath)
-        
-        # Convert to Polars DataFrame
-        base = pl.from_pandas(df)
-        
-        # Ensure required columns exist
-        required_cols = ["ACCTNO", "TRANSREF", "PREOUTSTD", "PRODTYPE"]
-        for col in required_cols:
-            if col not in base.columns:
-                raise ValueError(f"Required column '{col}' not found in SAS dataset")
-        
-        print(f"Successfully read {len(base)} records from SAS dataset")
-        return base
-        
-    except Exception as e:
-        print(f"Error reading SAS dataset: {e}")
-        print("Creating dummy base data for testing...")
-        return pl.DataFrame({
-            "ACCTNO": [2000625018, 2000925056, 2020125057],
-            "TRANSREF": ["Y011618000", "Y066656000", "Y080273000"],
-            "PREOUTSTD": [150000.0, 100000.0, 120000.0],
-            "PRODTYPE": [0, 200, 0],
-        })
-
-if USE_DUMMY_DATA:
-    print("\nUsing dummy base data for testing")
-    base = pl.DataFrame({
-        "ACCTNO": [2850001111, 2860000001, 2870000001],
-        "TRANSREF": ["PM12A01", "PM12B02", "PM12C03"],
-        "PREOUTSTD": [150000.0, 100000.0, 120000.0],
-        "PRODTYPE": [0, 200, 0],
-    })
-else:
-    base = read_base_sas(params['PREVMON'])
-
-# Deduplicate
-base = base.unique(subset=["ACCTNO", "TRANSREF"])
-btdtl = btdtl.unique(subset=["ACCTNO", "TRANSREF"])
-
-print(f"\nBase records after dedup: {len(base)}")
-print(f"BTDTL records after dedup: {len(btdtl)}")
-
-# --------------------------------------------------------------------
-# Step 4: Merge BASE and BTDTL (BY ACCTNO TRANSREF)
-# --------------------------------------------------------------------
-# Ensure ACCTNO and TRANSREF are compatible types
-base = base.with_columns([
-    pl.col("ACCTNO").cast(pl.Int64),
-    pl.col("TRANSREF").cast(pl.Utf8)
-])
-btdtl = btdtl.with_columns([
-    pl.col("ACCTNO").cast(pl.Int64),
-    pl.col("TRANSREF").cast(pl.Utf8)
-])
-
-combt = base.join(btdtl, on=["ACCTNO", "TRANSREF"], how="left")
-
-# Compute OVERDUE and RECOVAMT
-# Convert MATDATE to ordinal for date calculation
-combt = combt.with_columns([
-    # Calculate overdue days
-    pl.when(pl.col("MATDATE").is_not_null())
-    .then((sdate.toordinal() + 1) - pl.col("MATDATE").dt.epoch("days"))
-    .otherwise(0)
-    .alias("OVERDUE"),
-    
-    # Calculate recovery amount
-    (pl.col("PREOUTSTD") - pl.col("OUTSTAND").fill_null(0)).alias("RECOVAMT"),
-    
-    # Retail ID indicator
-    pl.when(pl.col("PRODTYPE") == 0).then("R").otherwise(pl.lit(None)).alias("RETAILID"),
-])
-
-# Handle null values
-combt = combt.with_columns([
-    pl.col("OVERDUE").fill_null(0).cast(pl.Int64),
-    pl.col("RECOVAMT").fill_null(0),
-    pl.col("OUTSTAND").fill_null(0),
-])
-
-print(f"\nMerged records: {len(combt)}")
-
-# --------------------------------------------------------------------
-# Step 5: Write output (DAYBTRD fixed-width and Parquet)
-# --------------------------------------------------------------------
-def write_fixed_width(df, filepath):
-    """Write DataFrame to fixed-width text file"""
-    records = []
-    for row in df.iter_rows(named=True):
-        try:
-            # Ensure values are valid for formatting
-            branch = row.get('BRANCH', 0) or 0
-            acctno = row.get('ACCTNO', 0) or 0
-            transref = str(row.get('TRANSREF', '') or '')[:10]
-            prodtype = row.get('PRODTYPE', 0) or 0
-            preoutstd = row.get('PREOUTSTD', 0.0) or 0.0
-            outstanding = row.get('OUTSTAND', 0.0) or 0.0
-            overdue = row.get('OVERDUE', 0) or 0
-            recovamt = row.get('RECOVAMT', 0.0) or 0.0
-            liabcode = str(row.get('LIABCODE', '') or '')[:5]
-            
-            rec = (
-                f"{int(branch):05d}"
-                f"{int(acctno):010d}"
-                f"{transref:<10}"
-                f"{int(prodtype):03d}"
-                f"{float(preoutstd):017.2f}"
-                f"{float(outstanding):017.2f}"
-                f"{int(overdue):010d}"
-                f"{float(recovamt):017.2f}"
-                f"{liabcode:<5}"
-            )
-            records.append(rec)
-        except Exception as e:
-            print(f"Warning: Error formatting row: {e}")
-            continue
-    
-    # Write to text file
-    with open(filepath, "w") as f:
-        for r in records:
-            f.write(r + "\n")
-    
-    print(f"Text output written: {filepath} ({len(records)} records)")
-
-# Write text file
-write_fixed_width(combt, OUTPUT_TEXT_FILE)
-
-# Save to Parquet
-try:
-    table = pa.Table.from_pandas(combt.to_pandas())
-    pq.write_table(table, OUTPUT_PARQUET_FILE)
-    print(f"Parquet output written: {OUTPUT_PARQUET_FILE}")
-except Exception as e:
-    print(f"Error writing Parquet: {e}")
-
-# Display summary statistics
-print("\n--- Summary Statistics ---")
-print(f"Total records processed: {len(combt)}")
-print(f"Columns in output: {combt.columns}")
-print("\nPreview of first 5 rows:")
-print(combt.head(5))
-
-# --------------------------------------------------------------------
-# Optional: Additional validation and reporting
-# --------------------------------------------------------------------
-def validate_output():
-    """Validate that output files were created successfully"""
-    # Check text file
-    if os.path.exists(OUTPUT_TEXT_FILE):
-        size = os.path.getsize(OUTPUT_TEXT_FILE)
-        with open(OUTPUT_TEXT_FILE, 'r') as f:
-            line_count = sum(1 for _ in f)
-        print(f"✓ Text file created: {OUTPUT_TEXT_FILE} ({size:,} bytes, {line_count} lines)")
-    else:
-        print(f"✗ Text file not found: {OUTPUT_TEXT_FILE}")
-    
-    # Check Parquet file
-    if os.path.exists(OUTPUT_PARQUET_FILE):
-        size = os.path.getsize(OUTPUT_PARQUET_FILE)
-        print(f"✓ Parquet file created: {OUTPUT_PARQUET_FILE} ({size:,} bytes)")
-    else:
-        print(f"✗ Parquet file not found: {OUTPUT_PARQUET_FILE}")
-
-validate_output()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDBT12.py", line 126, in read_btdtl_text
+    raise ValueError(f"No valid data found in {filepath}")
+ValueError: No valid data found in /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/BTPM12.txt
