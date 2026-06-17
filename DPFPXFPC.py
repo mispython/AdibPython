@@ -6,6 +6,22 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 from datetime import date, timedelta
+import pyreadstat  # For reading SAS .sas7bdat files
+
+# --------------------------------------------------------------------
+# Configuration: Input and Output Paths
+# --------------------------------------------------------------------
+# Input paths
+INPUT_BTPM12_FILE = "BTPM12.txt"  # Text file containing BTDTL data
+INPUT_BTBASE_FILE = "BTBASE_{PREVMON}.sas7bdat"  # SAS dataset with month placeholder
+INPUT_BTBASE_PATH = None  # Set to specific path if different from current dir
+
+# Output paths
+OUTPUT_TEXT_FILE = "DAYBTRD_PM12.txt"
+OUTPUT_PARQUET_FILE = "DAYBTRD_PM12.parquet"
+
+# Optional: Set to False to use real data, True to use dummy data for testing
+USE_DUMMY_DATA = False
 
 # --------------------------------------------------------------------
 # Step 1: Reporting date logic (DATA REPTDATE equivalent)
@@ -40,12 +56,55 @@ params = {
 print("Report Parameters:", params)
 
 # --------------------------------------------------------------------
-# Step 2: Read BTDTL input (INFILE BTFILE equivalent)
+# Step 2: Read BTDTL input from text file
 # --------------------------------------------------------------------
-try:
-    btdtl = pl.read_parquet("BTPM12.parquet")
-except FileNotFoundError:
-    print("BTPM12.parquet not found, using dummy sample")
+def read_btdtl_text(filepath):
+    """Read BTPM12 text file with fixed-width format"""
+    try:
+        # Define column widths based on SAS INFILE specification
+        # Assuming format: BRANCH(5), ACCTNO(10), TRANSREF(10), OUTSTAND(17), MATDT(6), LIABCODE(5)
+        # Adjust widths as needed based on actual file format
+        col_specs = [
+            (0, 5),    # BRANCH
+            (5, 15),   # ACCTNO
+            (15, 25),  # TRANSREF
+            (25, 42),  # OUTSTAND
+            (42, 48),  # MATDT
+            (48, 53),  # LIABCODE
+        ]
+        
+        # Read the text file as fixed-width
+        df = pl.read_csv(
+            filepath,
+            has_header=False,
+            dtypes=[pl.Utf8, pl.Utf8, pl.Utf8, pl.Utf8, pl.Utf8, pl.Utf8],
+            newline_character='\n'
+        )
+        
+        # Parse the fixed-width columns
+        # This is a simplified approach - may need adjustment based on actual format
+        data = []
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.rstrip('\n')
+                if len(line) >= 53:  # Ensure minimum length
+                    data.append({
+                        'BRANCH': int(line[0:5].strip()),
+                        'ACCTNO': int(line[5:15].strip()),
+                        'TRANSREF': line[15:25].strip(),
+                        'OUTSTAND': float(line[25:42].strip()) if line[25:42].strip() else 0.0,
+                        'MATDT': line[42:48].strip(),
+                        'LIABCODE': line[48:53].strip(),
+                    })
+        
+        return pl.DataFrame(data)
+        
+    except FileNotFoundError:
+        print(f"{filepath} not found")
+        raise
+
+if USE_DUMMY_DATA:
+    print("Using dummy data for testing")
     btdtl = pl.DataFrame({
         "BRANCH": [2001, 3100],
         "ACCTNO": [2850001111, 2860000001],
@@ -54,6 +113,8 @@ except FileNotFoundError:
         "MATDT": ["250125", "250630"],  # ddmmyy format
         "LIABCODE": ["001", "002"],
     })
+else:
+    btdtl = read_btdtl_text(INPUT_BTPM12_FILE)
 
 # Parse MATDATE from ddmmyy string
 btdtl = btdtl.with_columns(
@@ -74,18 +135,45 @@ btdtl = btdtl.filter(
 )
 
 # --------------------------------------------------------------------
-# Step 3: Read BASE dataset (previous month snapshot)
+# Step 3: Read BASE dataset (previous month snapshot from SAS)
 # --------------------------------------------------------------------
-try:
-    base = pl.read_parquet(f"BTBASE_{params['PREVMON']}.parquet")
-except FileNotFoundError:
-    print("BTBASE parquet not found, using dummy")
+def read_base_sas(prevmon):
+    """Read BTBASE SAS dataset for the previous month"""
+    try:
+        # Construct file path with month
+        filepath = INPUT_BTBASE_FILE.format(PREVMON=prevmon)
+        if INPUT_BTBASE_PATH:
+            import os
+            filepath = os.path.join(INPUT_BTBASE_PATH, filepath)
+        
+        # Read SAS dataset using pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        
+        # Convert to Polars DataFrame
+        base = pl.from_pandas(df)
+        
+        # Ensure required columns exist
+        required_cols = ["ACCTNO", "TRANSREF", "PREOUTSTD", "PRODTYPE"]
+        for col in required_cols:
+            if col not in base.columns:
+                raise ValueError(f"Required column '{col}' not found in SAS dataset")
+        
+        return base
+        
+    except FileNotFoundError:
+        print(f"BTBASE SAS dataset not found for month {prevmon}")
+        raise
+
+if USE_DUMMY_DATA:
+    print("Using dummy base data for testing")
     base = pl.DataFrame({
         "ACCTNO": [2850001111, 2860000001],
         "TRANSREF": ["PM12A01", "PM12B02"],
         "PREOUTSTD": [150000.0, 100000.0],
         "PRODTYPE": [0, 200],
     })
+else:
+    base = read_base_sas(params['PREVMON'])
 
 base = base.unique(subset=["ACCTNO", "TRANSREF"])
 btdtl = btdtl.unique(subset=["ACCTNO", "TRANSREF"])
@@ -103,30 +191,82 @@ combt = combt.with_columns([
     pl.when(pl.col("PRODTYPE") == 0).then("R").otherwise(pl.lit(None)).alias("RETAILID"),
 ])
 
+# Handle null values in RECOVAMT and OVERDUE
+combt = combt.with_columns([
+    pl.col("OVERDUE").fill_null(0),
+    pl.col("RECOVAMT").fill_null(0),
+])
+
 # --------------------------------------------------------------------
 # Step 5: Write output (DAYBTRD fixed-width and Parquet)
 # --------------------------------------------------------------------
 records = []
 for row in combt.iter_rows(named=True):
+    # Ensure values are valid for formatting
+    branch = row.get('BRANCH', 0) or 0
+    acctno = row.get('ACCTNO', 0) or 0
+    transref = row.get('TRANSREF', '') or ''
+    prodtype = row.get('PRODTYPE', 0) or 0
+    preoutstd = row.get('PREOUTSTD', 0.0) or 0.0
+    outstanding = row.get('OUTSTAND', 0.0) or 0.0
+    overdue = row.get('OVERDUE', 0) or 0
+    recovamt = row.get('RECOVAMT', 0.0) or 0.0
+    liabcode = row.get('LIABCODE', '') or ''
+    
     rec = (
-        f"{row['BRANCH']:05d}"
-        f"{row['ACCTNO']:010d}"
-        f"{row['TRANSREF']:<10}"
-        f"{row['PRODTYPE']:03d}"
-        f"{row['PREOUTSTD']:017.2f}"
-        f"{row['OUTSTAND']:017.2f}"
-        f"{row['OVERDUE']:010d}"
-        f"{row['RECOVAMT']:017.2f}"
-        f"{row['LIABCODE']:<5}"
+        f"{int(branch):05d}"
+        f"{int(acctno):010d}"
+        f"{str(transref):<10}"
+        f"{int(prodtype):03d}"
+        f"{float(preoutstd):017.2f}"
+        f"{float(outstanding):017.2f}"
+        f"{int(overdue):010d}"
+        f"{float(recovamt):017.2f}"
+        f"{str(liabcode):<5}"
     )
     records.append(rec)
 
-with open("DAYBTRD_PM12.txt", "w") as f:
+# Write to text file
+with open(OUTPUT_TEXT_FILE, "w") as f:
     for r in records:
         f.write(r + "\n")
 
-# Save to Parquet
-table = pa.Table.from_pandas(combt.to_pandas())
-pq.write_table(table, "DAYBTRD_PM12.parquet")
+print(f"Text output written: {OUTPUT_TEXT_FILE}")
 
-print("Output written: DAYBTRD_PM12.txt and DAYBTRD_PM12.parquet")
+# Save to Parquet
+try:
+    table = pa.Table.from_pandas(combt.to_pandas())
+    pq.write_table(table, OUTPUT_PARQUET_FILE)
+    print(f"Parquet output written: {OUTPUT_PARQUET_FILE}")
+except Exception as e:
+    print(f"Error writing Parquet: {e}")
+
+# Display summary statistics
+print("\n--- Summary Statistics ---")
+print(f"Total records processed: {len(combt)}")
+print(f"Columns in output: {combt.columns}")
+print(f"Preview of first 5 rows:")
+print(combt.head(5))
+
+# --------------------------------------------------------------------
+# Optional: Additional validation and reporting
+# --------------------------------------------------------------------
+def validate_output():
+    """Validate that output files were created successfully"""
+    import os
+    
+    # Check text file
+    if os.path.exists(OUTPUT_TEXT_FILE):
+        size = os.path.getsize(OUTPUT_TEXT_FILE)
+        print(f"✓ Text file created: {OUTPUT_TEXT_FILE} ({size:,} bytes)")
+    else:
+        print(f"✗ Text file not found: {OUTPUT_TEXT_FILE}")
+    
+    # Check Parquet file
+    if os.path.exists(OUTPUT_PARQUET_FILE):
+        size = os.path.getsize(OUTPUT_PARQUET_FILE)
+        print(f"✓ Parquet file created: {OUTPUT_PARQUET_FILE} ({size:,} bytes)")
+    else:
+        print(f"✗ Parquet file not found: {OUTPUT_PARQUET_FILE}")
+
+validate_output()
