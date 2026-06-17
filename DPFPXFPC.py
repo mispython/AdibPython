@@ -1,5 +1,5 @@
-# EIBDBT12_BANKTRADE_PM12.py
-# Production-Ready Conventional Version - Auto-determines everything
+# EIIDBT12_BANKTRADE_PM12.py
+# Production-Ready Islamic Version - Auto-determines everything
 
 import polars as pl
 import pyarrow as pa
@@ -15,10 +15,10 @@ import glob
 INPUT_BTFILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM12.txt"
 
 # BASE file pattern - {PREVMON} will be auto-detected
-INPUT_BTBASE_FILE_PATTERN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/btbase{PREVMON}.sas7bdat"
+INPUT_IBTBASE_FILE_PATTERN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/ibtbase{PREVMON}.sas7bdat"
 
-OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.txt"
-OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.parquet"
+OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT12/DAYBTRD_PM12.txt"
+OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT12/DAYBTRD_PM12.parquet"
 
 # --------------------------------------------------------------------
 # PRODUCTION CONFIGURATION - DO NOT HARDCODE DATES!
@@ -85,7 +85,7 @@ params = {
 }
 
 print("=" * 80)
-print("EIBDBT12 - Conventional Bank Trade Report (PRODUCTION)")
+print("EIIDBT12 - Islamic Bank Trade Report (PRODUCTION)")
 print("=" * 80)
 print(f"TODAY: {params['TODAY']}")
 print(f"REPTDATE: {params['REPTDATE']}")
@@ -96,37 +96,37 @@ print(f"SDATE_SAS: {params['SDATE_SAS']}")
 print("=" * 80)
 
 # --------------------------------------------------------------------
-# Step 2: Find the BASE file
+# Step 2: Find the Islamic BASE file
 # --------------------------------------------------------------------
-def find_btbase_file(prevmon):
-    """Find the conventional BASE file for the given month"""
-    base_dir = os.path.dirname(INPUT_BTBASE_FILE_PATTERN)
+def find_ibtbase_file(prevmon):
+    """Find the Islamic BASE file for the given month"""
+    base_dir = os.path.dirname(INPUT_IBTBASE_FILE_PATTERN)
     
     patterns = [
-        INPUT_BTBASE_FILE_PATTERN.format(PREVMON=prevmon),
-        os.path.join(base_dir, f"btbase{prevmon}.sas7bdat"),
-        os.path.join(base_dir, f"btbase_{prevmon}.sas7bdat"),
-        os.path.join(base_dir, f"BTBASE{prevmon}.sas7bdat"),
-        os.path.join(base_dir, f"BTBASE_{prevmon}.sas7bdat"),
+        INPUT_IBTBASE_FILE_PATTERN.format(PREVMON=prevmon),
+        os.path.join(base_dir, f"ibtbase{prevmon}.sas7bdat"),
+        os.path.join(base_dir, f"ibtbase_{prevmon}.sas7bdat"),
+        os.path.join(base_dir, f"IBTBASE{prevmon}.sas7bdat"),
+        os.path.join(base_dir, f"IBTBASE_{prevmon}.sas7bdat"),
     ]
     
     for pattern in patterns:
         if os.path.exists(pattern):
             return pattern
     
-    all_files = glob.glob(os.path.join(base_dir, "btbase*.sas7bdat"))
+    all_files = glob.glob(os.path.join(base_dir, "ibtbase*.sas7bdat"))
     if all_files:
-        print(f"\nAvailable BTBASE files in {base_dir}:")
+        print(f"\nAvailable IBTBASE files in {base_dir}:")
         for f in sorted(all_files):
             print(f"  - {os.path.basename(f)}")
         latest = sorted(all_files)[-1]
         print(f"\nUsing latest available: {os.path.basename(latest)}")
         return latest
     
-    raise FileNotFoundError(f"No BTBASE file found for month {prevmon} in {base_dir}")
+    raise FileNotFoundError(f"No IBTBASE file found for month {prevmon} in {base_dir}")
 
-base_file = find_btbase_file(prevmon)
-print(f"\nUsing BASE file: {base_file}")
+base_file = find_ibtbase_file(prevmon)
+print(f"\nUsing Islamic BASE file: {base_file}")
 
 # --------------------------------------------------------------------
 # Step 3: Read BTDTL input
@@ -200,31 +200,31 @@ if len(btdtl) == 0:
     raise ValueError("No data loaded from BTPM12 file")
 
 # --------------------------------------------------------------------
-# Step 4: Apply CONVENTIONAL filter (DELETE matching records)
-# IF BRANCH > 3000 AND (2850000000<=ACCTNO<=2859999999) THEN DELETE;
-# This means we REMOVE records that match the condition
+# Step 4: Apply ISLAMIC filter (OUTPUT/KEEP matching records)
+# IF BRANCH > 3000 AND (2850000000<=ACCTNO<=2859999999) THEN OUTPUT;
+# This means we KEEP records that match the condition
 # --------------------------------------------------------------------
 btdtl = btdtl.filter(
-    ~((pl.col("BRANCH") > 3000) &
-      (pl.col("ACCTNO") >= 2850000000) &
-      (pl.col("ACCTNO") <= 2859999999))
+    (pl.col("BRANCH") > 3000) &
+    (pl.col("ACCTNO") >= 2850000000) &
+    (pl.col("ACCTNO") <= 2859999999)
 )
 
-print(f"BTDTL after conventional filter (removing qualifying records): {len(btdtl)} records")
+print(f"BTDTL after Islamic filter (keeping qualifying records): {len(btdtl)} records")
 
 # Debug: Show MATDATE_SAS for key records
 print("\nBTDTL sample (checking MATDATE_SAS):")
 print(btdtl.select(['ACCTNO', 'TRANSREF', 'MATDATE_SAS']).head(10))
 
 # --------------------------------------------------------------------
-# Step 5: Read BASE dataset
+# Step 5: Read Islamic BASE dataset (IBTBASE&PREVMON)
 # --------------------------------------------------------------------
-def read_btbase_sas(filepath):
+def read_ibtbase_sas(filepath):
     """
     DATA BASE(KEEP=ACCTNO TRANSREF OUTSTAND PRODTYPE RENAME=(OUTSTAND=PREOUTSTD));
-    SET BASE.BTBASE&PREVMON;
+    SET BASE.IBTBASE&PREVMON;
     """
-    print(f"\nReading BASE: {filepath}")
+    print(f"\nReading Islamic BASE: {filepath}")
     df, meta = pyreadstat.read_sas7bdat(filepath)
     base = pl.from_pandas(df)
     
@@ -233,35 +233,29 @@ def read_btbase_sas(filepath):
     
     col_names = base.columns
     
-    # Column mapping based on actual structure:
+    # Column mapping for IBTBASE (7 columns)
     # Col 0: TRANSREX (ignored)
     # Col 1: BRANCH (ignored)
     # Col 2: ACCTNO
     # Col 3: OUTSTAND -> PREOUTSTD
     # Col 4: TRANSREF
-    # Col 5: FACILITY (ignored)
-    # Col 6: PRODTYPE
-    # Col 7: DAYS (optional - not used in conventional version)
+    # Col 5: PRODTYPE
+    # Col 6: DAYS
     
-    # Select columns
-    select_cols = [
+    base = base.select([
         pl.col(col_names[2]).alias("ACCTNO"),
         pl.col(col_names[4]).alias("TRANSREF"),
         pl.col(col_names[3]).alias("PREOUTSTD"),
-        pl.col(col_names[6]).alias("PRODTYPE"),
-    ]
-    
-    # Add DAYS if available (for debugging/consistency)
-    if len(col_names) > 7:
-        select_cols.append(pl.col(col_names[7]).alias("DAYS"))
-    
-    base = base.select(select_cols)
+        pl.col(col_names[5]).alias("PRODTYPE"),
+        pl.col(col_names[6]).alias("DAYS"),
+    ])
     
     base = base.with_columns([
         pl.col("ACCTNO").cast(pl.Int64),
         pl.col("TRANSREF").cast(pl.Utf8),
         pl.col("PREOUTSTD").cast(pl.Float64),
         pl.col("PRODTYPE").cast(pl.Int64),
+        pl.col("DAYS").cast(pl.Int64),
     ])
     
     print(f"BASE after mapping: {len(base)} records")
@@ -270,7 +264,7 @@ def read_btbase_sas(filepath):
     
     return base
 
-base = read_btbase_sas(base_file)
+base = read_ibtbase_sas(base_file)
 
 # Deduplicate
 base = base.unique(subset=["ACCTNO", "TRANSREF"])
@@ -310,18 +304,16 @@ print(f"Unmatched BASE records (no BTDTL match): {len(unmatched)}")
 # Fill nulls
 combt = combt.with_columns([
     pl.col("OUTSTAND").fill_null(0),
+    pl.col("DAYS").fill_null(0),
 ])
 
-sdate_sas = params["SDATE_SAS"]
-
-print(f"\nUsing SDATE_SAS: {sdate_sas}")
-
+# --------------------------------------------------------------------
+# IMPORTANT: EIIDBT12 uses DAYS + 1 for OVERDUE
+# This is the key difference from conventional version
+# --------------------------------------------------------------------
 combt = combt.with_columns([
-    # OVERDUE = (&SDATE+1)-MATDATE
-    pl.when(pl.col("MATDATE_SAS").is_not_null())
-    .then((sdate_sas + 1) - pl.col("MATDATE_SAS"))
-    .otherwise(pl.lit(None))
-    .alias("OVERDUE"),
+    # OVERDUE = DAYS + 1 (Islamic version uses DAYS from BASE)
+    (pl.col("DAYS") + 1).alias("OVERDUE"),
     
     # RECOVAMT = PREOUTSTD-OUTSTAND
     (pl.col("PREOUTSTD") - pl.col("OUTSTAND")).alias("RECOVAMT"),
@@ -452,9 +444,9 @@ print("VALIDATION AGAINST PRODUCTION")
 print("=" * 80)
 
 test_cases = [
-    {"ACCTNO": 2500667206, "TRANSREF": "Y090778", "EXP_OVERDUE": 67, "EXP_RECOVAMT": -413.70},
-    {"ACCTNO": 2505707731, "TRANSREF": "Y080273", "EXP_OVERDUE": 1180, "EXP_RECOVAMT": -562.80},
-    {"ACCTNO": 2501873900, "TRANSREF": "Y011618", "EXP_OVERDUE": 7074, "EXP_RECOVAMT": 0.00},
+    {"ACCTNO": 2850228011, "TRANSREF": "Y090755", "EXP_OVERDUE": 67, "EXP_RECOVAMT": 25116.40},
+    {"ACCTNO": 2850331901, "TRANSREF": "Y090696", "EXP_OVERDUE": 70, "EXP_RECOVAMT": -112.80},
+    {"ACCTNO": 2850383833, "TRANSREF": "Y089246", "EXP_OVERDUE": 658, "EXP_RECOVAMT": -106.05},
 ]
 
 print("\nComparing specific records:")
@@ -483,11 +475,11 @@ for test in test_cases:
         print(f"\n{status} ACCTNO: {test['ACCTNO']}, TRANSREF: {test['TRANSREF']}")
         print(f"  OVERDUE:   Expected={test['EXP_OVERDUE']:>6d}, Got={row['OVERDUE']:>6d} {'✓' if overdue_match else '✗'}")
         print(f"  RECOVAMT:  Expected={test['EXP_RECOVAMT']:>12.2f}, Got={row['RECOVAMT']:>12.2f} {'✓' if recovamt_match else '✗'}")
+        print(f"  DAYS from BASE: {row.get('DAYS', 'N/A')}")
         
         if not overdue_match:
-            print(f"     SDATE_SAS: {params['SDATE_SAS']}")
-            print(f"     MATDATE_SAS: {row['MATDATE_SAS']}")
-            print(f"     Formula: ({params['SDATE_SAS']} + 1) - {row['MATDATE_SAS']} = {row['OVERDUE']}")
+            print(f"     The Islamic version uses DAYS + 1 for OVERDUE")
+            print(f"     DAYS: {row.get('DAYS', 'N/A')} -> OVERDUE: {row['OVERDUE']}")
     else:
         print(f"\n✗ NOT FOUND: ACCTNO={test['ACCTNO']}, TRANSREF={test['TRANSREF']}")
 
@@ -508,7 +500,7 @@ print("=" * 80)
 print(f"Run Date (TODAY): {params['TODAY']}")
 print(f"Report Date (REPTDATE): {params['REPTDATE']}")
 print(f"Previous Month (PREVMON): {params['PREVMON']}")
-print(f"BASE File Used: {base_file}")
+print(f"Islamic BASE File Used: {base_file}")
 print(f"Total Records: {len(combt)}")
 print(f"SDATE (SAS): {params['SDATE_SAS']}")
 print("=" * 80)
