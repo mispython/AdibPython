@@ -1,493 +1,914 @@
-# EIBDBT12_BANKTRADE_PM12.py
-# Conversion of SAS job EIBDBT12 (calls EIBDBT05) into Python with Polars, DuckDB, PyArrow
-# Outputs both fixed-width .txt and Parquet
+Report Parameters: {'REPTYEAR': '26', 'REPTMON': '06', 'REPTDAY': '16', 'PREVMON': '05', 'PREVDAY': '31', 'RDATE': '16-06-2026', 'RDATEX': '0626', 'SDATE': '60701'}
+Skipping header line 1
+Warning: Line 2 has only 46 chars, skipping
+Warning: Line 3 has only 46 chars, skipping
+Warning: Line 4 has only 46 chars, skipping
+Warning: Line 5 has only 46 chars, skipping
+Warning: Line 6 has only 46 chars, skipping
+Warning: Line 7 has only 46 chars, skipping
+Warning: Line 8 has only 46 chars, skipping
+Warning: Line 9 has only 46 chars, skipping
+Warning: Line 10 has only 46 chars, skipping
+Warning: Line 11 has only 46 chars, skipping
+Warning: Line 12 has only 46 chars, skipping
+Warning: Line 13 has only 46 chars, skipping
+Warning: Line 14 has only 46 chars, skipping
+Warning: Line 15 has only 46 chars, skipping
+Warning: Line 16 has only 46 chars, skipping
+Warning: Line 17 has only 46 chars, skipping
+Warning: Line 18 has only 46 chars, skipping
+Warning: Line 19 has only 46 chars, skipping
+Warning: Line 20 has only 46 chars, skipping
+Warning: Line 21 has only 46 chars, skipping
+Warning: Line 22 has only 46 chars, skipping
+Warning: Line 23 has only 46 chars, skipping
+Warning: Line 24 has only 46 chars, skipping
+Warning: Line 25 has only 46 chars, skipping
+Warning: Line 26 has only 46 chars, skipping
+Warning: Line 27 has only 46 chars, skipping
+Warning: Line 28 has only 46 chars, skipping
+Warning: Line 29 has only 46 chars, skipping
+Warning: Line 30 has only 46 chars, skipping
+Warning: Line 31 has only 46 chars, skipping
+Warning: Line 32 has only 46 chars, skipping
+Warning: Line 33 has only 46 chars, skipping
+Warning: Line 34 has only 46 chars, skipping
+Warning: Line 35 has only 46 chars, skipping
+Warning: Line 36 has only 46 chars, skipping
+Warning: Line 37 has only 46 chars, skipping
+Warning: Line 38 has only 46 chars, skipping
+Warning: Line 39 has only 46 chars, skipping
+Warning: Line 40 has only 46 chars, skipping
+Warning: Line 41 has only 46 chars, skipping
+Warning: Line 42 has only 46 chars, skipping
+Warning: Line 43 has only 46 chars, skipping
+Warning: Line 44 has only 46 chars, skipping
+Warning: Line 45 has only 46 chars, skipping
+Warning: Line 46 has only 46 chars, skipping
+Warning: Line 47 has only 46 chars, skipping
+Warning: Line 48 has only 46 chars, skipping
+Warning: Line 49 has only 46 chars, skipping
+Warning: Line 50 has only 46 chars, skipping
+Warning: Line 51 has only 46 chars, skipping
+Warning: Line 52 has only 46 chars, skipping
+Warning: Line 53 has only 46 chars, skipping
+Warning: Line 54 has only 46 chars, skipping
+Warning: Line 55 has only 46 chars, skipping
+Warning: Line 56 has only 46 chars, skipping
+Warning: Line 57 has only 46 chars, skipping
+Warning: Line 58 has only 46 chars, skipping
+Warning: Line 59 has only 46 chars, skipping
+Warning: Line 60 has only 46 chars, skipping
+Warning: Line 61 has only 46 chars, skipping
+Warning: Line 62 has only 46 chars, skipping
+Warning: Line 63 has only 46 chars, skipping
+Warning: Line 64 has only 46 chars, skipping
+Warning: Line 65 has only 46 chars, skipping
+Warning: Line 66 has only 46 chars, skipping
+Warning: Line 67 has only 46 chars, skipping
+Warning: Line 68 has only 46 chars, skipping
+Warning: Line 69 has only 46 chars, skipping
+Warning: Line 70 has only 46 chars, skipping
+Warning: Line 71 has only 46 chars, skipping
+Warning: Line 72 has only 46 chars, skipping
+Warning: Line 73 has only 46 chars, skipping
+Warning: Line 74 has only 46 chars, skipping
+Warning: Line 75 has only 46 chars, skipping
+Warning: Line 76 has only 46 chars, skipping
+Warning: Line 77 has only 46 chars, skipping
+Warning: Line 78 has only 46 chars, skipping
+Warning: Line 79 has only 46 chars, skipping
+Warning: Line 80 has only 46 chars, skipping
+Warning: Line 81 has only 46 chars, skipping
+Warning: Line 82 has only 46 chars, skipping
+Warning: Line 83 has only 46 chars, skipping
+Warning: Line 84 has only 46 chars, skipping
+Warning: Line 85 has only 46 chars, skipping
+Warning: Line 86 has only 46 chars, skipping
+Warning: Line 87 has only 46 chars, skipping
+Warning: Line 88 has only 46 chars, skipping
+Warning: Line 89 has only 46 chars, skipping
+Warning: Line 90 has only 46 chars, skipping
+Warning: Line 91 has only 46 chars, skipping
+Warning: Line 92 has only 46 chars, skipping
+Warning: Line 93 has only 46 chars, skipping
+Warning: Line 94 has only 46 chars, skipping
+Warning: Line 95 has only 46 chars, skipping
+Warning: Line 96 has only 46 chars, skipping
+Warning: Line 97 has only 46 chars, skipping
+Warning: Line 98 has only 46 chars, skipping
+Warning: Line 99 has only 46 chars, skipping
+Warning: Line 100 has only 46 chars, skipping
+Warning: Line 101 has only 46 chars, skipping
+Warning: Line 102 has only 46 chars, skipping
+Warning: Line 103 has only 46 chars, skipping
+Warning: Line 104 has only 46 chars, skipping
+Warning: Line 105 has only 46 chars, skipping
+Warning: Line 106 has only 46 chars, skipping
+Warning: Line 107 has only 46 chars, skipping
+Warning: Line 108 has only 46 chars, skipping
+Warning: Line 109 has only 46 chars, skipping
+Warning: Line 110 has only 46 chars, skipping
+Warning: Line 111 has only 46 chars, skipping
+Warning: Line 112 has only 46 chars, skipping
+Warning: Line 113 has only 46 chars, skipping
+Warning: Line 114 has only 46 chars, skipping
+Warning: Line 115 has only 46 chars, skipping
+Warning: Line 116 has only 46 chars, skipping
+Warning: Line 117 has only 46 chars, skipping
+Warning: Line 118 has only 46 chars, skipping
+Warning: Line 119 has only 46 chars, skipping
+Warning: Line 120 has only 46 chars, skipping
+Warning: Line 121 has only 46 chars, skipping
+Warning: Line 122 has only 46 chars, skipping
+Warning: Line 123 has only 46 chars, skipping
+Warning: Line 124 has only 46 chars, skipping
+Warning: Line 125 has only 46 chars, skipping
+Warning: Line 126 has only 46 chars, skipping
+Warning: Line 127 has only 46 chars, skipping
+Warning: Line 128 has only 46 chars, skipping
+Warning: Line 129 has only 46 chars, skipping
+Warning: Line 130 has only 46 chars, skipping
+Warning: Line 131 has only 46 chars, skipping
+Warning: Line 132 has only 46 chars, skipping
+Warning: Line 133 has only 46 chars, skipping
+Warning: Line 134 has only 46 chars, skipping
+Warning: Line 135 has only 46 chars, skipping
+Warning: Line 136 has only 46 chars, skipping
+Warning: Line 137 has only 46 chars, skipping
+Warning: Line 138 has only 46 chars, skipping
+Warning: Line 139 has only 46 chars, skipping
+Warning: Line 140 has only 46 chars, skipping
+Warning: Line 141 has only 46 chars, skipping
+Warning: Line 142 has only 46 chars, skipping
+Warning: Line 143 has only 46 chars, skipping
+Warning: Line 144 has only 46 chars, skipping
+Warning: Line 145 has only 46 chars, skipping
+Warning: Line 146 has only 46 chars, skipping
+Warning: Line 147 has only 46 chars, skipping
+Warning: Line 148 has only 46 chars, skipping
+Warning: Line 149 has only 46 chars, skipping
+Warning: Line 150 has only 46 chars, skipping
+Warning: Line 151 has only 46 chars, skipping
+Warning: Line 152 has only 46 chars, skipping
+Warning: Line 153 has only 46 chars, skipping
+Warning: Line 154 has only 46 chars, skipping
+Warning: Line 155 has only 46 chars, skipping
+Warning: Line 156 has only 46 chars, skipping
+Warning: Line 157 has only 46 chars, skipping
+Warning: Line 158 has only 46 chars, skipping
+Warning: Line 159 has only 46 chars, skipping
+Warning: Line 160 has only 46 chars, skipping
+Warning: Line 161 has only 46 chars, skipping
+Warning: Line 162 has only 46 chars, skipping
+Warning: Line 163 has only 46 chars, skipping
+Warning: Line 164 has only 46 chars, skipping
+Warning: Line 165 has only 46 chars, skipping
+Warning: Line 166 has only 46 chars, skipping
+Warning: Line 167 has only 46 chars, skipping
+Warning: Line 168 has only 46 chars, skipping
+Warning: Line 169 has only 46 chars, skipping
+Warning: Line 170 has only 46 chars, skipping
+Warning: Line 171 has only 46 chars, skipping
+Warning: Line 172 has only 46 chars, skipping
+Warning: Line 173 has only 46 chars, skipping
+Warning: Line 174 has only 46 chars, skipping
+Warning: Line 175 has only 46 chars, skipping
+Warning: Line 176 has only 46 chars, skipping
+Warning: Line 177 has only 46 chars, skipping
+Warning: Line 178 has only 46 chars, skipping
+Warning: Line 179 has only 46 chars, skipping
+Warning: Line 180 has only 46 chars, skipping
+Warning: Line 181 has only 46 chars, skipping
+Warning: Line 182 has only 46 chars, skipping
+Warning: Line 183 has only 46 chars, skipping
+Warning: Line 184 has only 46 chars, skipping
+Warning: Line 185 has only 46 chars, skipping
+Warning: Line 186 has only 46 chars, skipping
+Warning: Line 187 has only 46 chars, skipping
+Warning: Line 188 has only 46 chars, skipping
+Warning: Line 189 has only 46 chars, skipping
+Warning: Line 190 has only 46 chars, skipping
+Warning: Line 191 has only 46 chars, skipping
+Warning: Line 192 has only 46 chars, skipping
+Warning: Line 193 has only 46 chars, skipping
+Warning: Line 194 has only 46 chars, skipping
+Warning: Line 195 has only 46 chars, skipping
+Warning: Line 196 has only 46 chars, skipping
+Warning: Line 197 has only 46 chars, skipping
+Warning: Line 198 has only 46 chars, skipping
+Warning: Line 199 has only 46 chars, skipping
+Warning: Line 200 has only 46 chars, skipping
+Warning: Line 201 has only 46 chars, skipping
+Warning: Line 202 has only 46 chars, skipping
+Warning: Line 203 has only 46 chars, skipping
+Warning: Line 204 has only 46 chars, skipping
+Warning: Line 205 has only 46 chars, skipping
+Warning: Line 206 has only 46 chars, skipping
+Warning: Line 207 has only 46 chars, skipping
+Warning: Line 208 has only 46 chars, skipping
+Warning: Line 209 has only 46 chars, skipping
+Warning: Line 210 has only 46 chars, skipping
+Warning: Line 211 has only 46 chars, skipping
+Warning: Line 212 has only 46 chars, skipping
+Warning: Line 213 has only 46 chars, skipping
+Warning: Line 214 has only 46 chars, skipping
+Warning: Line 215 has only 46 chars, skipping
+Warning: Line 216 has only 46 chars, skipping
+Warning: Line 217 has only 46 chars, skipping
+Warning: Line 218 has only 46 chars, skipping
+Warning: Line 219 has only 46 chars, skipping
+Warning: Line 220 has only 46 chars, skipping
+Warning: Line 221 has only 46 chars, skipping
+Warning: Line 222 has only 46 chars, skipping
+Warning: Line 223 has only 46 chars, skipping
+Warning: Line 224 has only 46 chars, skipping
+Warning: Line 225 has only 46 chars, skipping
+Warning: Line 226 has only 46 chars, skipping
+Warning: Line 227 has only 46 chars, skipping
+Warning: Line 228 has only 46 chars, skipping
+Warning: Line 229 has only 46 chars, skipping
+Warning: Line 230 has only 46 chars, skipping
+Warning: Line 231 has only 46 chars, skipping
+Warning: Line 232 has only 46 chars, skipping
+Warning: Line 233 has only 46 chars, skipping
+Warning: Line 234 has only 46 chars, skipping
+Warning: Line 235 has only 46 chars, skipping
+Warning: Line 236 has only 46 chars, skipping
+Warning: Line 237 has only 46 chars, skipping
+Warning: Line 238 has only 46 chars, skipping
+Warning: Line 239 has only 46 chars, skipping
+Warning: Line 240 has only 46 chars, skipping
+Warning: Line 241 has only 46 chars, skipping
+Warning: Line 242 has only 46 chars, skipping
+Warning: Line 243 has only 46 chars, skipping
+Warning: Line 244 has only 46 chars, skipping
+Warning: Line 245 has only 46 chars, skipping
+Warning: Line 246 has only 46 chars, skipping
+Warning: Line 247 has only 46 chars, skipping
+Warning: Line 248 has only 46 chars, skipping
+Warning: Line 249 has only 46 chars, skipping
+Warning: Line 250 has only 46 chars, skipping
+Warning: Line 251 has only 46 chars, skipping
+Warning: Line 252 has only 46 chars, skipping
+Warning: Line 253 has only 46 chars, skipping
+Warning: Line 254 has only 46 chars, skipping
+Warning: Line 255 has only 46 chars, skipping
+Warning: Line 256 has only 46 chars, skipping
+Warning: Line 257 has only 46 chars, skipping
+Warning: Line 258 has only 46 chars, skipping
+Warning: Line 259 has only 46 chars, skipping
+Warning: Line 260 has only 46 chars, skipping
+Warning: Line 261 has only 46 chars, skipping
+Warning: Line 262 has only 46 chars, skipping
+Warning: Line 263 has only 46 chars, skipping
+Warning: Line 264 has only 46 chars, skipping
+Warning: Line 265 has only 46 chars, skipping
+Warning: Line 266 has only 46 chars, skipping
+Warning: Line 267 has only 46 chars, skipping
+Warning: Line 268 has only 46 chars, skipping
+Warning: Line 269 has only 46 chars, skipping
+Warning: Line 270 has only 46 chars, skipping
+Warning: Line 271 has only 46 chars, skipping
+Warning: Line 272 has only 46 chars, skipping
+Warning: Line 273 has only 46 chars, skipping
+Warning: Line 274 has only 46 chars, skipping
+Warning: Line 275 has only 46 chars, skipping
+Warning: Line 276 has only 46 chars, skipping
+Warning: Line 277 has only 46 chars, skipping
+Warning: Line 278 has only 46 chars, skipping
+Warning: Line 279 has only 46 chars, skipping
+Warning: Line 280 has only 46 chars, skipping
+Warning: Line 281 has only 46 chars, skipping
+Warning: Line 282 has only 46 chars, skipping
+Warning: Line 283 has only 46 chars, skipping
+Warning: Line 284 has only 46 chars, skipping
+Warning: Line 285 has only 46 chars, skipping
+Warning: Line 286 has only 46 chars, skipping
+Warning: Line 287 has only 46 chars, skipping
+Warning: Line 288 has only 46 chars, skipping
+Warning: Line 289 has only 46 chars, skipping
+Warning: Line 290 has only 46 chars, skipping
+Warning: Line 291 has only 46 chars, skipping
+Warning: Line 292 has only 46 chars, skipping
+Warning: Line 293 has only 46 chars, skipping
+Warning: Line 294 has only 46 chars, skipping
+Warning: Line 295 has only 46 chars, skipping
+Warning: Line 296 has only 46 chars, skipping
+Warning: Line 297 has only 46 chars, skipping
+Warning: Line 298 has only 46 chars, skipping
+Warning: Line 299 has only 46 chars, skipping
+Warning: Line 300 has only 46 chars, skipping
+Warning: Line 301 has only 46 chars, skipping
+Warning: Line 302 has only 46 chars, skipping
+Warning: Line 303 has only 46 chars, skipping
+Warning: Line 304 has only 46 chars, skipping
+Warning: Line 305 has only 46 chars, skipping
+Warning: Line 306 has only 46 chars, skipping
+Warning: Line 307 has only 46 chars, skipping
+Warning: Line 308 has only 46 chars, skipping
+Warning: Line 309 has only 46 chars, skipping
+Warning: Line 310 has only 46 chars, skipping
+Warning: Line 311 has only 46 chars, skipping
+Warning: Line 312 has only 46 chars, skipping
+Warning: Line 313 has only 46 chars, skipping
+Warning: Line 314 has only 46 chars, skipping
+Warning: Line 315 has only 46 chars, skipping
+Warning: Line 316 has only 46 chars, skipping
+Warning: Line 317 has only 46 chars, skipping
+Warning: Line 318 has only 46 chars, skipping
+Warning: Line 319 has only 46 chars, skipping
+Warning: Line 320 has only 46 chars, skipping
+Warning: Line 321 has only 46 chars, skipping
+Warning: Line 322 has only 46 chars, skipping
+Warning: Line 323 has only 46 chars, skipping
+Warning: Line 324 has only 46 chars, skipping
+Warning: Line 325 has only 46 chars, skipping
+Warning: Line 326 has only 46 chars, skipping
+Warning: Line 327 has only 46 chars, skipping
+Warning: Line 328 has only 46 chars, skipping
+Warning: Line 329 has only 46 chars, skipping
+Warning: Line 330 has only 46 chars, skipping
+Warning: Line 331 has only 46 chars, skipping
+Warning: Line 332 has only 46 chars, skipping
+Warning: Line 333 has only 46 chars, skipping
+Warning: Line 334 has only 46 chars, skipping
+Warning: Line 335 has only 46 chars, skipping
+Warning: Line 336 has only 46 chars, skipping
+Warning: Line 337 has only 46 chars, skipping
+Warning: Line 338 has only 46 chars, skipping
+Warning: Line 339 has only 46 chars, skipping
+Warning: Line 340 has only 46 chars, skipping
+Warning: Line 341 has only 46 chars, skipping
+Warning: Line 342 has only 46 chars, skipping
+Warning: Line 343 has only 46 chars, skipping
+Warning: Line 344 has only 46 chars, skipping
+Warning: Line 345 has only 46 chars, skipping
+Warning: Line 346 has only 46 chars, skipping
+Warning: Line 347 has only 46 chars, skipping
+Warning: Line 348 has only 46 chars, skipping
+Warning: Line 349 has only 46 chars, skipping
+Warning: Line 350 has only 46 chars, skipping
+Warning: Line 351 has only 46 chars, skipping
+Warning: Line 352 has only 46 chars, skipping
+Warning: Line 353 has only 46 chars, skipping
+Warning: Line 354 has only 46 chars, skipping
+Warning: Line 355 has only 46 chars, skipping
+Warning: Line 356 has only 46 chars, skipping
+Warning: Line 357 has only 46 chars, skipping
+Warning: Line 358 has only 46 chars, skipping
+Warning: Line 359 has only 46 chars, skipping
+Warning: Line 360 has only 46 chars, skipping
+Warning: Line 361 has only 46 chars, skipping
+Warning: Line 362 has only 46 chars, skipping
+Warning: Line 363 has only 46 chars, skipping
+Warning: Line 364 has only 46 chars, skipping
+Warning: Line 365 has only 46 chars, skipping
+Warning: Line 366 has only 46 chars, skipping
+Warning: Line 367 has only 46 chars, skipping
+Warning: Line 368 has only 46 chars, skipping
+Warning: Line 369 has only 46 chars, skipping
+Warning: Line 370 has only 46 chars, skipping
+Warning: Line 371 has only 46 chars, skipping
+Warning: Line 372 has only 46 chars, skipping
+Warning: Line 373 has only 46 chars, skipping
+Warning: Line 374 has only 46 chars, skipping
+Warning: Line 375 has only 46 chars, skipping
+Warning: Line 376 has only 46 chars, skipping
+Warning: Line 377 has only 46 chars, skipping
+Warning: Line 378 has only 46 chars, skipping
+Warning: Line 379 has only 46 chars, skipping
+Warning: Line 380 has only 46 chars, skipping
+Warning: Line 381 has only 46 chars, skipping
+Warning: Line 382 has only 46 chars, skipping
+Warning: Line 383 has only 46 chars, skipping
+Warning: Line 384 has only 46 chars, skipping
+Warning: Line 385 has only 46 chars, skipping
+Warning: Line 386 has only 46 chars, skipping
+Warning: Line 387 has only 46 chars, skipping
+Warning: Line 388 has only 46 chars, skipping
+Warning: Line 389 has only 46 chars, skipping
+Warning: Line 390 has only 46 chars, skipping
+Warning: Line 391 has only 46 chars, skipping
+Warning: Line 392 has only 46 chars, skipping
+Warning: Line 393 has only 46 chars, skipping
+Warning: Line 394 has only 46 chars, skipping
+Warning: Line 395 has only 46 chars, skipping
+Warning: Line 396 has only 46 chars, skipping
+Warning: Line 397 has only 46 chars, skipping
+Warning: Line 398 has only 46 chars, skipping
+Warning: Line 399 has only 46 chars, skipping
+Warning: Line 400 has only 46 chars, skipping
+Warning: Line 401 has only 46 chars, skipping
+Warning: Line 402 has only 46 chars, skipping
+Warning: Line 403 has only 46 chars, skipping
+Warning: Line 404 has only 46 chars, skipping
+Warning: Line 405 has only 46 chars, skipping
+Warning: Line 406 has only 46 chars, skipping
+Warning: Line 407 has only 46 chars, skipping
+Warning: Line 408 has only 46 chars, skipping
+Warning: Line 409 has only 46 chars, skipping
+Warning: Line 410 has only 46 chars, skipping
+Warning: Line 411 has only 46 chars, skipping
+Warning: Line 412 has only 46 chars, skipping
+Warning: Line 413 has only 46 chars, skipping
+Warning: Line 414 has only 46 chars, skipping
+Warning: Line 415 has only 46 chars, skipping
+Warning: Line 416 has only 46 chars, skipping
+Warning: Line 417 has only 46 chars, skipping
+Warning: Line 418 has only 46 chars, skipping
+Warning: Line 419 has only 46 chars, skipping
+Warning: Line 420 has only 46 chars, skipping
+Warning: Line 421 has only 46 chars, skipping
+Warning: Line 422 has only 46 chars, skipping
+Warning: Line 423 has only 46 chars, skipping
+Warning: Line 424 has only 46 chars, skipping
+Warning: Line 425 has only 46 chars, skipping
+Warning: Line 426 has only 46 chars, skipping
+Warning: Line 427 has only 46 chars, skipping
+Warning: Line 428 has only 46 chars, skipping
+Warning: Line 429 has only 46 chars, skipping
+Warning: Line 430 has only 46 chars, skipping
+Warning: Line 431 has only 46 chars, skipping
+Warning: Line 432 has only 46 chars, skipping
+Warning: Line 433 has only 46 chars, skipping
+Warning: Line 434 has only 46 chars, skipping
+Warning: Line 435 has only 46 chars, skipping
+Warning: Line 436 has only 46 chars, skipping
+Warning: Line 437 has only 46 chars, skipping
+Warning: Line 438 has only 46 chars, skipping
+Warning: Line 439 has only 46 chars, skipping
+Warning: Line 440 has only 46 chars, skipping
+Warning: Line 441 has only 46 chars, skipping
+Warning: Line 442 has only 46 chars, skipping
+Warning: Line 443 has only 46 chars, skipping
+Warning: Line 444 has only 46 chars, skipping
+Warning: Line 445 has only 46 chars, skipping
+Warning: Line 446 has only 46 chars, skipping
+Warning: Line 447 has only 46 chars, skipping
+Warning: Line 448 has only 46 chars, skipping
+Warning: Line 449 has only 46 chars, skipping
+Warning: Line 450 has only 46 chars, skipping
+Warning: Line 451 has only 46 chars, skipping
+Warning: Line 452 has only 46 chars, skipping
+Warning: Line 453 has only 46 chars, skipping
+Warning: Line 454 has only 46 chars, skipping
+Warning: Line 455 has only 46 chars, skipping
+Warning: Line 456 has only 46 chars, skipping
+Warning: Line 457 has only 46 chars, skipping
+Warning: Line 458 has only 46 chars, skipping
+Warning: Line 459 has only 46 chars, skipping
+Warning: Line 460 has only 46 chars, skipping
+Warning: Line 461 has only 46 chars, skipping
+Warning: Line 462 has only 46 chars, skipping
+Warning: Line 463 has only 46 chars, skipping
+Warning: Line 464 has only 46 chars, skipping
+Warning: Line 465 has only 46 chars, skipping
+Warning: Line 466 has only 46 chars, skipping
+Warning: Line 467 has only 46 chars, skipping
+Warning: Line 468 has only 46 chars, skipping
+Warning: Line 469 has only 46 chars, skipping
+Warning: Line 470 has only 46 chars, skipping
+Warning: Line 471 has only 46 chars, skipping
+Warning: Line 472 has only 46 chars, skipping
+Warning: Line 473 has only 46 chars, skipping
+Warning: Line 474 has only 46 chars, skipping
+Warning: Line 475 has only 46 chars, skipping
+Warning: Line 476 has only 46 chars, skipping
+Warning: Line 477 has only 46 chars, skipping
+Warning: Line 478 has only 46 chars, skipping
+Warning: Line 479 has only 46 chars, skipping
+Warning: Line 480 has only 46 chars, skipping
+Warning: Line 481 has only 46 chars, skipping
+Warning: Line 482 has only 46 chars, skipping
+Warning: Line 483 has only 46 chars, skipping
+Warning: Line 484 has only 46 chars, skipping
+Warning: Line 485 has only 46 chars, skipping
+Warning: Line 486 has only 46 chars, skipping
+Warning: Line 487 has only 46 chars, skipping
+Warning: Line 488 has only 46 chars, skipping
+Warning: Line 489 has only 46 chars, skipping
+Warning: Line 490 has only 46 chars, skipping
+Warning: Line 491 has only 46 chars, skipping
+Warning: Line 492 has only 46 chars, skipping
+Warning: Line 493 has only 46 chars, skipping
+Warning: Line 494 has only 46 chars, skipping
+Warning: Line 495 has only 46 chars, skipping
+Warning: Line 496 has only 46 chars, skipping
+Warning: Line 497 has only 46 chars, skipping
+Warning: Line 498 has only 46 chars, skipping
+Warning: Line 499 has only 46 chars, skipping
+Warning: Line 500 has only 46 chars, skipping
+Warning: Line 501 has only 46 chars, skipping
+Warning: Line 502 has only 46 chars, skipping
+Warning: Line 503 has only 46 chars, skipping
+Warning: Line 504 has only 46 chars, skipping
+Warning: Line 505 has only 46 chars, skipping
+Warning: Line 506 has only 46 chars, skipping
+Warning: Line 507 has only 46 chars, skipping
+Warning: Line 508 has only 46 chars, skipping
+Warning: Line 509 has only 46 chars, skipping
+Warning: Line 510 has only 46 chars, skipping
+Warning: Line 511 has only 46 chars, skipping
+Warning: Line 512 has only 46 chars, skipping
+Warning: Line 513 has only 46 chars, skipping
+Warning: Line 514 has only 46 chars, skipping
+Warning: Line 515 has only 46 chars, skipping
+Warning: Line 516 has only 46 chars, skipping
+Warning: Line 517 has only 46 chars, skipping
+Warning: Line 518 has only 46 chars, skipping
+Warning: Line 519 has only 46 chars, skipping
+Warning: Line 520 has only 46 chars, skipping
+Warning: Line 521 has only 46 chars, skipping
+Warning: Line 522 has only 46 chars, skipping
+Warning: Line 523 has only 46 chars, skipping
+Warning: Line 524 has only 46 chars, skipping
+Warning: Line 525 has only 46 chars, skipping
+Warning: Line 526 has only 46 chars, skipping
+Warning: Line 527 has only 46 chars, skipping
+Warning: Line 528 has only 46 chars, skipping
+Warning: Line 529 has only 46 chars, skipping
+Warning: Line 530 has only 46 chars, skipping
+Warning: Line 531 has only 46 chars, skipping
+Warning: Line 532 has only 46 chars, skipping
+Warning: Line 533 has only 46 chars, skipping
+Warning: Line 534 has only 46 chars, skipping
+Warning: Line 535 has only 46 chars, skipping
+Warning: Line 536 has only 46 chars, skipping
+Warning: Line 537 has only 46 chars, skipping
+Warning: Line 538 has only 46 chars, skipping
+Warning: Line 539 has only 46 chars, skipping
+Warning: Line 540 has only 46 chars, skipping
+Warning: Line 541 has only 46 chars, skipping
+Warning: Line 542 has only 46 chars, skipping
+Warning: Line 543 has only 46 chars, skipping
+Warning: Line 544 has only 46 chars, skipping
+Warning: Line 545 has only 46 chars, skipping
+Warning: Line 546 has only 46 chars, skipping
+Warning: Line 547 has only 46 chars, skipping
+Warning: Line 548 has only 46 chars, skipping
+Warning: Line 549 has only 46 chars, skipping
+Warning: Line 550 has only 46 chars, skipping
+Warning: Line 551 has only 46 chars, skipping
+Warning: Line 552 has only 46 chars, skipping
+Warning: Line 553 has only 46 chars, skipping
+Warning: Line 554 has only 46 chars, skipping
+Warning: Line 555 has only 46 chars, skipping
+Warning: Line 556 has only 46 chars, skipping
+Warning: Line 557 has only 46 chars, skipping
+Warning: Line 558 has only 46 chars, skipping
+Warning: Line 559 has only 46 chars, skipping
+Warning: Line 560 has only 46 chars, skipping
+Warning: Line 561 has only 46 chars, skipping
+Warning: Line 562 has only 46 chars, skipping
+Warning: Line 563 has only 46 chars, skipping
+Warning: Line 564 has only 46 chars, skipping
+Warning: Line 565 has only 46 chars, skipping
+Warning: Line 566 has only 46 chars, skipping
+Warning: Line 567 has only 46 chars, skipping
+Warning: Line 568 has only 46 chars, skipping
+Warning: Line 569 has only 46 chars, skipping
+Warning: Line 570 has only 46 chars, skipping
+Warning: Line 571 has only 46 chars, skipping
+Warning: Line 572 has only 46 chars, skipping
+Warning: Line 573 has only 46 chars, skipping
+Warning: Line 574 has only 46 chars, skipping
+Warning: Line 575 has only 46 chars, skipping
+Warning: Line 576 has only 46 chars, skipping
+Warning: Line 577 has only 46 chars, skipping
+Warning: Line 578 has only 46 chars, skipping
+Warning: Line 579 has only 46 chars, skipping
+Warning: Line 580 has only 46 chars, skipping
+Warning: Line 581 has only 46 chars, skipping
+Warning: Line 582 has only 46 chars, skipping
+Warning: Line 583 has only 46 chars, skipping
+Warning: Line 584 has only 46 chars, skipping
+Warning: Line 585 has only 46 chars, skipping
+Warning: Line 586 has only 46 chars, skipping
+Warning: Line 587 has only 46 chars, skipping
+Warning: Line 588 has only 46 chars, skipping
+Warning: Line 589 has only 46 chars, skipping
+Warning: Line 590 has only 46 chars, skipping
+Warning: Line 591 has only 46 chars, skipping
+Warning: Line 592 has only 46 chars, skipping
+Warning: Line 593 has only 46 chars, skipping
+Warning: Line 594 has only 46 chars, skipping
+Warning: Line 595 has only 46 chars, skipping
+Warning: Line 596 has only 46 chars, skipping
+Warning: Line 597 has only 46 chars, skipping
+Warning: Line 598 has only 46 chars, skipping
+Warning: Line 599 has only 46 chars, skipping
+Warning: Line 600 has only 46 chars, skipping
+Warning: Line 601 has only 46 chars, skipping
+Warning: Line 602 has only 46 chars, skipping
+Warning: Line 603 has only 46 chars, skipping
+Warning: Line 604 has only 46 chars, skipping
+Warning: Line 605 has only 46 chars, skipping
+Warning: Line 606 has only 46 chars, skipping
+Warning: Line 607 has only 46 chars, skipping
+Warning: Line 608 has only 46 chars, skipping
+Warning: Line 609 has only 46 chars, skipping
+Warning: Line 610 has only 46 chars, skipping
+Warning: Line 611 has only 46 chars, skipping
+Warning: Line 612 has only 46 chars, skipping
+Warning: Line 613 has only 46 chars, skipping
+Warning: Line 614 has only 46 chars, skipping
+Warning: Line 615 has only 46 chars, skipping
+Warning: Line 616 has only 46 chars, skipping
+Warning: Line 617 has only 46 chars, skipping
+Warning: Line 618 has only 46 chars, skipping
+Warning: Line 619 has only 46 chars, skipping
+Warning: Line 620 has only 46 chars, skipping
+Warning: Line 621 has only 46 chars, skipping
+Warning: Line 622 has only 46 chars, skipping
+Warning: Line 623 has only 46 chars, skipping
+Warning: Line 624 has only 46 chars, skipping
+Warning: Line 625 has only 46 chars, skipping
+Warning: Line 626 has only 46 chars, skipping
+Warning: Line 627 has only 46 chars, skipping
+Warning: Line 628 has only 46 chars, skipping
+Warning: Line 629 has only 46 chars, skipping
+Warning: Line 630 has only 46 chars, skipping
+Warning: Line 631 has only 46 chars, skipping
+Warning: Line 632 has only 46 chars, skipping
+Warning: Line 633 has only 46 chars, skipping
+Warning: Line 634 has only 46 chars, skipping
+Warning: Line 635 has only 46 chars, skipping
+Warning: Line 636 has only 46 chars, skipping
+Warning: Line 637 has only 46 chars, skipping
+Warning: Line 638 has only 46 chars, skipping
+Warning: Line 639 has only 46 chars, skipping
+Warning: Line 640 has only 46 chars, skipping
+Warning: Line 641 has only 46 chars, skipping
+Warning: Line 642 has only 46 chars, skipping
+Warning: Line 643 has only 46 chars, skipping
+Warning: Line 644 has only 46 chars, skipping
+Warning: Line 645 has only 46 chars, skipping
+Warning: Line 646 has only 46 chars, skipping
+Warning: Line 647 has only 46 chars, skipping
+Warning: Line 648 has only 46 chars, skipping
+Warning: Line 649 has only 46 chars, skipping
+Warning: Line 650 has only 46 chars, skipping
+Warning: Line 651 has only 46 chars, skipping
+Warning: Line 652 has only 46 chars, skipping
+Warning: Line 653 has only 46 chars, skipping
+Warning: Line 654 has only 46 chars, skipping
+Warning: Line 655 has only 46 chars, skipping
+Warning: Line 656 has only 46 chars, skipping
+Warning: Line 657 has only 46 chars, skipping
+Warning: Line 658 has only 46 chars, skipping
+Warning: Line 659 has only 46 chars, skipping
+Warning: Line 660 has only 46 chars, skipping
+Warning: Line 661 has only 46 chars, skipping
+Warning: Line 662 has only 46 chars, skipping
+Warning: Line 663 has only 46 chars, skipping
+Warning: Line 664 has only 46 chars, skipping
+Warning: Line 665 has only 46 chars, skipping
+Warning: Line 666 has only 46 chars, skipping
+Warning: Line 667 has only 46 chars, skipping
+Warning: Line 668 has only 46 chars, skipping
+Warning: Line 669 has only 46 chars, skipping
+Warning: Line 670 has only 46 chars, skipping
+Warning: Line 671 has only 46 chars, skipping
+Warning: Line 672 has only 46 chars, skipping
+Warning: Line 673 has only 46 chars, skipping
+Warning: Line 674 has only 46 chars, skipping
+Warning: Line 675 has only 46 chars, skipping
+Warning: Line 676 has only 46 chars, skipping
+Warning: Line 677 has only 46 chars, skipping
+Warning: Line 678 has only 46 chars, skipping
+Warning: Line 679 has only 46 chars, skipping
+Warning: Line 680 has only 46 chars, skipping
+Warning: Line 681 has only 46 chars, skipping
+Warning: Line 682 has only 46 chars, skipping
+Warning: Line 683 has only 46 chars, skipping
+Warning: Line 684 has only 46 chars, skipping
+Warning: Line 685 has only 46 chars, skipping
+Warning: Line 686 has only 46 chars, skipping
+Warning: Line 687 has only 46 chars, skipping
+Warning: Line 688 has only 46 chars, skipping
+Warning: Line 689 has only 46 chars, skipping
+Warning: Line 690 has only 46 chars, skipping
+Warning: Line 691 has only 46 chars, skipping
+Warning: Line 692 has only 46 chars, skipping
+Warning: Line 693 has only 46 chars, skipping
+Warning: Line 694 has only 46 chars, skipping
+Warning: Line 695 has only 46 chars, skipping
+Warning: Line 696 has only 46 chars, skipping
+Warning: Line 697 has only 46 chars, skipping
+Warning: Line 698 has only 46 chars, skipping
+Warning: Line 699 has only 46 chars, skipping
+Warning: Line 700 has only 46 chars, skipping
+Warning: Line 701 has only 46 chars, skipping
+Warning: Line 702 has only 46 chars, skipping
+Warning: Line 703 has only 46 chars, skipping
+Warning: Line 704 has only 46 chars, skipping
+Warning: Line 705 has only 46 chars, skipping
+Warning: Line 706 has only 46 chars, skipping
+Warning: Line 707 has only 46 chars, skipping
+Warning: Line 708 has only 46 chars, skipping
+Warning: Line 709 has only 46 chars, skipping
+Warning: Line 710 has only 46 chars, skipping
+Warning: Line 711 has only 46 chars, skipping
+Warning: Line 712 has only 46 chars, skipping
+Warning: Line 713 has only 46 chars, skipping
+Warning: Line 714 has only 46 chars, skipping
+Warning: Line 715 has only 46 chars, skipping
+Warning: Line 716 has only 46 chars, skipping
+Warning: Line 717 has only 46 chars, skipping
+Warning: Line 718 has only 46 chars, skipping
+Warning: Line 719 has only 46 chars, skipping
+Warning: Line 720 has only 46 chars, skipping
+Warning: Line 721 has only 46 chars, skipping
+Warning: Line 722 has only 46 chars, skipping
+Warning: Line 723 has only 46 chars, skipping
+Warning: Line 724 has only 46 chars, skipping
+Warning: Line 725 has only 46 chars, skipping
+Warning: Line 726 has only 46 chars, skipping
+Warning: Line 727 has only 46 chars, skipping
+Warning: Line 728 has only 46 chars, skipping
+Warning: Line 729 has only 46 chars, skipping
+Warning: Line 730 has only 46 chars, skipping
+Warning: Line 731 has only 46 chars, skipping
+Warning: Line 732 has only 46 chars, skipping
+Warning: Line 733 has only 46 chars, skipping
+Warning: Line 734 has only 46 chars, skipping
+Warning: Line 735 has only 46 chars, skipping
+Warning: Line 736 has only 46 chars, skipping
+Warning: Line 737 has only 46 chars, skipping
+Warning: Line 738 has only 46 chars, skipping
+Warning: Line 739 has only 46 chars, skipping
+Warning: Line 740 has only 46 chars, skipping
+Warning: Line 741 has only 46 chars, skipping
+Warning: Line 742 has only 46 chars, skipping
+Warning: Line 743 has only 46 chars, skipping
+Warning: Line 744 has only 46 chars, skipping
+Warning: Line 745 has only 46 chars, skipping
+Warning: Line 746 has only 46 chars, skipping
+Warning: Line 747 has only 46 chars, skipping
+Warning: Line 748 has only 46 chars, skipping
+Warning: Line 749 has only 46 chars, skipping
+Warning: Line 750 has only 46 chars, skipping
+Warning: Line 751 has only 46 chars, skipping
+Warning: Line 752 has only 46 chars, skipping
+Warning: Line 753 has only 46 chars, skipping
+Warning: Line 754 has only 46 chars, skipping
+Warning: Line 755 has only 46 chars, skipping
+Warning: Line 756 has only 46 chars, skipping
+Warning: Line 757 has only 46 chars, skipping
+Warning: Line 758 has only 46 chars, skipping
+Warning: Line 759 has only 46 chars, skipping
+Warning: Line 760 has only 46 chars, skipping
+Warning: Line 761 has only 46 chars, skipping
+Warning: Line 762 has only 46 chars, skipping
+Warning: Line 763 has only 46 chars, skipping
+Warning: Line 764 has only 46 chars, skipping
+Warning: Line 765 has only 46 chars, skipping
+Warning: Line 766 has only 46 chars, skipping
+Warning: Line 767 has only 46 chars, skipping
+Warning: Line 768 has only 46 chars, skipping
+Warning: Line 769 has only 46 chars, skipping
+Warning: Line 770 has only 46 chars, skipping
+Warning: Line 771 has only 46 chars, skipping
+Warning: Line 772 has only 46 chars, skipping
+Warning: Line 773 has only 46 chars, skipping
+Warning: Line 774 has only 46 chars, skipping
+Warning: Line 775 has only 46 chars, skipping
+Warning: Line 776 has only 46 chars, skipping
+Warning: Line 777 has only 46 chars, skipping
+Warning: Line 778 has only 46 chars, skipping
+Warning: Line 779 has only 46 chars, skipping
+Warning: Line 780 has only 46 chars, skipping
+Warning: Line 781 has only 46 chars, skipping
+Warning: Line 782 has only 46 chars, skipping
+Warning: Line 783 has only 46 chars, skipping
+Warning: Line 784 has only 46 chars, skipping
+Warning: Line 785 has only 46 chars, skipping
+Warning: Line 786 has only 46 chars, skipping
+Warning: Line 787 has only 46 chars, skipping
+Warning: Line 788 has only 46 chars, skipping
+Warning: Line 789 has only 46 chars, skipping
+Warning: Line 790 has only 46 chars, skipping
+Warning: Line 791 has only 46 chars, skipping
+Warning: Line 792 has only 46 chars, skipping
+Warning: Line 793 has only 46 chars, skipping
+Warning: Line 794 has only 46 chars, skipping
+Warning: Line 795 has only 46 chars, skipping
+Warning: Line 796 has only 46 chars, skipping
+Warning: Line 797 has only 46 chars, skipping
+Warning: Line 798 has only 46 chars, skipping
+Warning: Line 799 has only 46 chars, skipping
+Warning: Line 800 has only 46 chars, skipping
+Warning: Line 801 has only 46 chars, skipping
+Warning: Line 802 has only 46 chars, skipping
+Warning: Line 803 has only 46 chars, skipping
+Warning: Line 804 has only 46 chars, skipping
+Warning: Line 805 has only 46 chars, skipping
+Warning: Line 806 has only 46 chars, skipping
+Warning: Line 807 has only 46 chars, skipping
+Warning: Line 808 has only 46 chars, skipping
+Warning: Line 809 has only 46 chars, skipping
+Warning: Line 810 has only 46 chars, skipping
+Warning: Line 811 has only 46 chars, skipping
+Warning: Line 812 has only 46 chars, skipping
+Warning: Line 813 has only 46 chars, skipping
+Warning: Line 814 has only 46 chars, skipping
+Warning: Line 815 has only 46 chars, skipping
+Warning: Line 816 has only 46 chars, skipping
+Warning: Line 817 has only 46 chars, skipping
+Warning: Line 818 has only 46 chars, skipping
+Warning: Line 819 has only 46 chars, skipping
+Warning: Line 820 has only 46 chars, skipping
+Warning: Line 821 has only 46 chars, skipping
+Warning: Line 822 has only 46 chars, skipping
+Warning: Line 823 has only 46 chars, skipping
+Warning: Line 824 has only 46 chars, skipping
+Warning: Line 825 has only 46 chars, skipping
+Warning: Line 826 has only 46 chars, skipping
+Warning: Line 827 has only 46 chars, skipping
+Warning: Line 828 has only 46 chars, skipping
+Warning: Line 829 has only 46 chars, skipping
+Warning: Line 830 has only 46 chars, skipping
+Warning: Line 831 has only 46 chars, skipping
+Warning: Line 832 has only 46 chars, skipping
+Warning: Line 833 has only 46 chars, skipping
+Warning: Line 834 has only 46 chars, skipping
+Warning: Line 835 has only 46 chars, skipping
+Warning: Line 836 has only 46 chars, skipping
+Warning: Line 837 has only 46 chars, skipping
+Warning: Line 838 has only 46 chars, skipping
+Warning: Line 839 has only 46 chars, skipping
+Warning: Line 840 has only 46 chars, skipping
+Warning: Line 841 has only 46 chars, skipping
+Warning: Line 842 has only 46 chars, skipping
+Warning: Line 843 has only 46 chars, skipping
+Warning: Line 844 has only 46 chars, skipping
+Warning: Line 845 has only 46 chars, skipping
+Warning: Line 846 has only 46 chars, skipping
+Warning: Line 847 has only 46 chars, skipping
+Warning: Line 848 has only 46 chars, skipping
+Warning: Line 849 has only 46 chars, skipping
+Warning: Line 850 has only 46 chars, skipping
+Warning: Line 851 has only 46 chars, skipping
+Warning: Line 852 has only 46 chars, skipping
+Warning: Line 853 has only 46 chars, skipping
+Warning: Line 854 has only 46 chars, skipping
+Warning: Line 855 has only 46 chars, skipping
+Warning: Line 856 has only 46 chars, skipping
+Warning: Line 857 has only 46 chars, skipping
+Warning: Line 858 has only 46 chars, skipping
+Warning: Line 859 has only 46 chars, skipping
+Warning: Line 860 has only 46 chars, skipping
+Warning: Line 861 has only 46 chars, skipping
+Warning: Line 862 has only 46 chars, skipping
+Warning: Line 863 has only 46 chars, skipping
+Warning: Line 864 has only 46 chars, skipping
+Warning: Line 865 has only 46 chars, skipping
+Warning: Line 866 has only 46 chars, skipping
+Warning: Line 867 has only 46 chars, skipping
+Warning: Line 868 has only 46 chars, skipping
+Warning: Line 869 has only 46 chars, skipping
+Warning: Line 870 has only 46 chars, skipping
+Warning: Line 871 has only 46 chars, skipping
 
-import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
-from datetime import date, timedelta
-import pyreadstat
-import os
+Parsing summary:
+  Valid records: 0
+  Skipped records: 870
 
-# --------------------------------------------------------------------
-# Configuration: Input and Output Paths
-# --------------------------------------------------------------------
-INPUT_BTPM12_FILE = "input/prod/BTPM12.txt"
-INPUT_BTBASE_FILE = "BTBASE_{PREVMON}.sas7bdat"
-INPUT_BTBASE_PATH = None
-OUTPUT_TEXT_FILE = "DAYBTRD_PM12.txt"
-OUTPUT_PARQUET_FILE = "DAYBTRD_PM12.parquet"
-USE_DUMMY_DATA = False
+Trying alternative parsing approach...
+Alternative parsing found 870 records
 
-# Debug mode - set to True to see detailed parsing info
-DEBUG = True
+Loaded 870 records from BTPM12
+Sample of loaded data:
+shape: (10, 6)
+┌────────┬────────────┬────────────┬──────────┬────────┬──────────┐
+│ BRANCH ┆ ACCTNO     ┆ TRANSREF   ┆ OUTSTAND ┆ MATDT  ┆ LIABCODE │
+│ ---    ┆ ---        ┆ ---        ┆ ---      ┆ ---    ┆ ---      │
+│ i64    ┆ i64        ┆ str        ┆ f64      ┆ str    ┆ str      │
+╞════════╪════════════╪════════════╪══════════╪════════╪══════════╡
+│ 20006  ┆ 2501873900 ┆ Y011618000 ┆ 33531.01 ┆ 070119 ┆ PBZ      │
+│ 20009  ┆ 2505605133 ┆ Y066656000 ┆ 40245.81 ┆ 180426 ┆ PBZ      │
+│ 20201  ┆ 2505707731 ┆ Y080273000 ┆ 69258.93 ┆ 230310 ┆ PBA      │
+│ 20201  ┆ 2505707731 ┆ Y080340000 ┆ 69128.29 ┆ 230317 ┆ PBA      │
+│ 20201  ┆ 2505707731 ┆ Y080415000 ┆ 68921.41 ┆ 230328 ┆ PBA      │
+│ 20201  ┆ 2505707731 ┆ Y080466000 ┆ 68790.27 ┆ 230404 ┆ PBA      │
+│ 20201  ┆ 2505707731 ┆ Y080602000 ┆ 68604.63 ┆ 230414 ┆ PBA      │
+│ 20201  ┆ 2505707731 ┆ Y080732000 ┆ 68342.76 ┆ 230428 ┆ PBA      │
+│ 20201  ┆ 2505707731 ┆ Y080733000 ┆ 68342.76 ┆ 230428 ┆ PBA      │
+│ 20201  ┆ 2505707731 ┆ Y080832000 ┆ 68138.75 ┆ 230509 ┆ PBA      │
+└────────┴────────────┴────────────┴──────────┴────────┴──────────┘
 
-# --------------------------------------------------------------------
-# Step 1: Reporting date logic
-# --------------------------------------------------------------------
-today = date.today()
-reptdate = today - timedelta(days=1)
-prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
+After date parsing, 870 records remain
+After filtering, 843 records remain
 
-rptdt = reptdate.strftime("%d-%m-%Y")
-curmm = rptdt[3:5]
-curyy = rptdt[8:10]
-rdatex = curmm + curyy
+Reading SAS dataset: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btbase_05.sas7bdat
+Warning: SAS file not found: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btbase_05.sas7bdat
 
-if reptdate.month + 1 == 13:
-    mm, yy = 1, reptdate.year + 1
-else:
-    mm, yy = reptdate.month + 1, reptdate.year
-sdate = date(yy, mm, 1)
-
-params = {
-    "REPTYEAR": f"{reptdate.year % 100:02d}",
-    "REPTMON": f"{reptdate.month:02d}",
-    "REPTDAY": f"{reptdate.day:02d}",
-    "PREVMON": f"{prevdate.month:02d}",
-    "PREVDAY": f"{prevdate.day:02d}",
-    "RDATE": reptdate.strftime("%d-%m-%Y"),
-    "RDATEX": rdatex,
-    "SDATE": f"{sdate.year}{sdate.month:02d}{sdate.day:02d}"[-5:],
-}
-
-print("Report Parameters:", params)
-
-# --------------------------------------------------------------------
-# Step 2: Read BTDTL input from text file
-# --------------------------------------------------------------------
-def read_btdtl_text(filepath):
-    """
-    Read BTPM12 text file with fixed-width format.
-    
-    The file has lines with data at the beginning followed by many spaces.
-    Format (based on sample):
-    - Positions 0-4:   BRANCH (5 chars)
-    - Positions 5-14:  ACCTNO (10 chars)
-    - Positions 15-24: TRANSREF (10 chars)
-    - Positions 25-41: OUTSTAND (17 chars, with 2 decimals)
-    - Positions 42-47: MATDT (6 chars, DDMMYY)
-    - Positions 48-50: LIABCODE (3 chars)
-    """
-    try:
-        data = []
-        skipped_lines = 0
-        valid_lines = 0
-        debug_count = 0
-        
-        with open(filepath, 'r') as f:
-            for line_num, line in enumerate(f, 1):
-                # Strip trailing newline and carriage return, but keep spaces
-                line = line.rstrip('\n').rstrip('\r')
-                
-                # Skip empty lines
-                if not line.strip():
-                    continue
-                
-                # Skip header line (first line with "BKT")
-                if line.strip().startswith('1BKT'):
-                    print(f"Skipping header line {line_num}")
-                    continue
-                
-                # Get the actual data - remove trailing spaces
-                data_part = line.rstrip()
-                
-                # Ensure we have at least 51 characters of data
-                if len(data_part) < 51:
-                    print(f"Warning: Line {line_num} has only {len(data_part)} chars, skipping")
-                    skipped_lines += 1
-                    continue
-                
-                # Debug: show first few lines
-                if DEBUG and valid_lines < 3:
-                    print(f"\nDebug Line {line_num}:")
-                    print(f"  Full length: {len(data_part)}")
-                    print(f"  First 60 chars: '{data_part[:60]}'")
-                    print(f"  Positions 0-4: '{data_part[0:5]}'")
-                    print(f"  Positions 5-14: '{data_part[5:15]}'")
-                    print(f"  Positions 15-24: '{data_part[15:25]}'")
-                    print(f"  Positions 25-42: '{data_part[25:42]}'")
-                    print(f"  Positions 42-48: '{data_part[42:48]}'")
-                    print(f"  Positions 48-51: '{data_part[48:51]}'")
-                
-                try:
-                    # Extract fields based on fixed positions
-                    branch_str = data_part[0:5].strip()
-                    acctno_str = data_part[5:15].strip()
-                    transref = data_part[15:25].strip()
-                    outstanding_str = data_part[25:42].strip()
-                    matdt = data_part[42:48].strip()
-                    liabcode = data_part[48:51].strip()
-                    
-                    # Validate account number
-                    if not acctno_str.isdigit() or len(acctno_str) != 10:
-                        if DEBUG and skipped_lines < 5:
-                            print(f"  Invalid ACCTNO: '{acctno_str}'")
-                        skipped_lines += 1
-                        continue
-                    
-                    # Validate date
-                    if not matdt.isdigit() or len(matdt) != 6:
-                        if DEBUG and skipped_lines < 5:
-                            print(f"  Invalid MATDT: '{matdt}'")
-                        skipped_lines += 1
-                        continue
-                    
-                    # Convert fields
-                    branch = int(branch_str) if branch_str.isdigit() else 0
-                    acctno = int(acctno_str)
-                    outstanding = float(outstanding_str) if outstanding_str else 0.0
-                    
-                    data.append({
-                        'BRANCH': branch,
-                        'ACCTNO': acctno,
-                        'TRANSREF': transref,
-                        'OUTSTAND': outstanding,
-                        'MATDT': matdt,
-                        'LIABCODE': liabcode,
-                    })
-                    valid_lines += 1
-                    
-                    if DEBUG and valid_lines <= 3:
-                        print(f"  ✓ Successfully parsed record {valid_lines}")
-                    
-                except (ValueError, IndexError) as e:
-                    skipped_lines += 1
-                    if skipped_lines <= 5:
-                        print(f"Warning: Error parsing line {line_num}: {e}")
-                        print(f"  Data part: '{data_part[:60]}...'")
-                    continue
-                
-                # Limit debug output
-                if DEBUG and valid_lines >= 5 and debug_count == 0:
-                    debug_count = 1
-                    print("\n... (continuing processing, debug output limited) ...\n")
-        
-        print(f"\nParsing summary:")
-        print(f"  Valid records: {valid_lines}")
-        print(f"  Skipped records: {skipped_lines}")
-        
-        if not data:
-            # If no data was parsed, try an alternative approach - parse from the sample
-            print("\nTrying alternative parsing approach...")
-            return parse_alternative(filepath)
-        
-        return pl.DataFrame(data)
-        
-    except FileNotFoundError:
-        print(f"File not found: {filepath}")
-        raise
-    except Exception as e:
-        print(f"Error reading {filepath}: {e}")
-        raise
-
-def parse_alternative(filepath):
-    """
-    Alternative parsing method using regex to extract patterns.
-    """
-    import re
-    
-    data = []
-    valid_lines = 0
-    
-    # Pattern to match: branch(5) + acctno(10) + transref(10) + amount(17) + date(6) + liabcode(3)
-    # The pattern looks for 5 digits, 10 digits, alphanumeric, amount with decimal, 6 digits, 3 chars
-    pattern = r'(\d{5})(\d{10})([A-Z0-9]{10})(\d+\.\d{2})(\d{6})([A-Z]{3})'
-    
-    with open(filepath, 'r') as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.rstrip('\n').rstrip('\r')
-            
-            if not line.strip() or line.strip().startswith('1BKT'):
-                continue
-            
-            # Try to find the pattern in the line
-            match = re.search(pattern, line)
-            if match:
-                branch = int(match.group(1))
-                acctno = int(match.group(2))
-                transref = match.group(3)
-                outstanding = float(match.group(4))
-                matdt = match.group(5)
-                liabcode = match.group(6)
-                
-                data.append({
-                    'BRANCH': branch,
-                    'ACCTNO': acctno,
-                    'TRANSREF': transref,
-                    'OUTSTAND': outstanding,
-                    'MATDT': matdt,
-                    'LIABCODE': liabcode,
-                })
-                valid_lines += 1
-    
-    print(f"Alternative parsing found {valid_lines} records")
-    
-    if not data:
-        raise ValueError("No valid data found using alternative parsing")
-    
-    return pl.DataFrame(data)
-
-if USE_DUMMY_DATA:
-    print("Using dummy data for testing")
-    btdtl = pl.DataFrame({
-        "BRANCH": [2001, 3100, 2002],
-        "ACCTNO": [2850001111, 2860000001, 2870000001],
-        "TRANSREF": ["PM12A01", "PM12B02", "PM12C03"],
-        "OUTSTAND": [120000.00, 80000.00, 150000.00],
-        "MATDT": ["250125", "250630", "250331"],
-        "LIABCODE": ["001", "002", "003"],
-    })
-else:
-    btdtl = read_btdtl_text(INPUT_BTPM12_FILE)
-
-if len(btdtl) == 0:
-    raise ValueError("No data loaded from BTPM12 file")
-
-print(f"\nLoaded {len(btdtl)} records from BTPM12")
-print("Sample of loaded data:")
-print(btdtl.head(10))
-
-# Parse MATDATE from DDMMYY string
-btdtl = btdtl.with_columns([
-    pl.col("MATDT").str.slice(0, 2).cast(pl.Int32, strict=False).alias("day"),
-    pl.col("MATDT").str.slice(2, 2).cast(pl.Int32, strict=False).alias("month"),
-    pl.col("MATDT").str.slice(4, 2).cast(pl.Int32, strict=False).alias("year2")
-])
-
-# Filter out rows with invalid dates
-btdtl = btdtl.filter(
-    pl.col("day").is_not_null() & 
-    pl.col("month").is_not_null() & 
-    pl.col("year2").is_not_null() &
-    (pl.col("day") >= 1) & (pl.col("day") <= 31) &
-    (pl.col("month") >= 1) & (pl.col("month") <= 12)
-)
-
-if len(btdtl) == 0:
-    raise ValueError("No valid dates found in MATDT field")
-
-btdtl = btdtl.with_columns(
-    (pl.col("year2") + 2000).alias("year")
-).with_columns(
-    pl.datetime("year", "month", "day").alias("MATDATE")
-)
-
-print(f"\nAfter date parsing, {len(btdtl)} records remain")
-
-# Apply SAS filter: remove if branch > 3000 and ACCTNO in range
-btdtl = btdtl.filter(
-    ~((pl.col("BRANCH") > 3000) &
-      (pl.col("ACCTNO") >= 2850000000) &
-      (pl.col("ACCTNO") <= 2859999999))
-)
-
-print(f"After filtering, {len(btdtl)} records remain")
-
-# --------------------------------------------------------------------
-# Step 3: Read BASE dataset (previous month snapshot from SAS)
-# --------------------------------------------------------------------
-def read_base_sas(prevmon):
-    """Read BTBASE SAS dataset for the previous month"""
-    try:
-        filepath = INPUT_BTBASE_FILE.format(PREVMON=prevmon)
-        if INPUT_BTBASE_PATH:
-            filepath = os.path.join(INPUT_BTBASE_PATH, filepath)
-        
-        print(f"\nReading SAS dataset: {filepath}")
-        
-        if not os.path.exists(filepath):
-            print(f"Warning: SAS file not found: {filepath}")
-            # Create dummy base data with matching account numbers
-            sample_accts = btdtl['ACCTNO'].head(20).to_list()
-            if not sample_accts:
-                sample_accts = [2000625018, 2000925056, 2020125057]
-            
-            # Create dummy base data
-            base_data = []
-            for i, acct in enumerate(sample_accts):
-                base_data.append({
-                    "ACCTNO": acct,
-                    "TRANSREF": f"Y{str(i+1).zfill(9)}000",
-                    "PREOUTSTD": 150000.0 + (i * 10000),
-                    "PRODTYPE": 0 if i % 3 == 0 else 200,
-                })
-            
-            return pl.DataFrame(base_data)
-        
-        # Read SAS dataset using pyreadstat
-        df, meta = pyreadstat.read_sas7bdat(filepath)
-        base = pl.from_pandas(df)
-        
-        # Ensure required columns exist
-        required_cols = ["ACCTNO", "TRANSREF", "PREOUTSTD", "PRODTYPE"]
-        for col in required_cols:
-            if col not in base.columns:
-                raise ValueError(f"Required column '{col}' not found in SAS dataset")
-        
-        print(f"Successfully read {len(base)} records from SAS dataset")
-        return base
-        
-    except Exception as e:
-        print(f"Error reading SAS dataset: {e}")
-        print("Creating dummy base data for testing...")
-        sample_accts = btdtl['ACCTNO'].head(20).to_list()
-        if not sample_accts:
-            sample_accts = [2000625018, 2000925056, 2020125057]
-        
-        base_data = []
-        for i, acct in enumerate(sample_accts):
-            base_data.append({
-                "ACCTNO": acct,
-                "TRANSREF": f"Y{str(i+1).zfill(9)}000",
-                "PREOUTSTD": 150000.0 + (i * 10000),
-                "PRODTYPE": 0 if i % 3 == 0 else 200,
-            })
-        
-        return pl.DataFrame(base_data)
-
-if USE_DUMMY_DATA:
-    print("\nUsing dummy base data for testing")
-    base = pl.DataFrame({
-        "ACCTNO": [2850001111, 2860000001, 2870000001],
-        "TRANSREF": ["PM12A01", "PM12B02", "PM12C03"],
-        "PREOUTSTD": [150000.0, 100000.0, 120000.0],
-        "PRODTYPE": [0, 200, 0],
-    })
-else:
-    base = read_base_sas(params['PREVMON'])
-
-# Deduplicate
-base = base.unique(subset=["ACCTNO", "TRANSREF"])
-btdtl = btdtl.unique(subset=["ACCTNO", "TRANSREF"])
-
-print(f"\nBase records after dedup: {len(base)}")
-print(f"BTDTL records after dedup: {len(btdtl)}")
-
-# --------------------------------------------------------------------
-# Step 4: Merge BASE and BTDTL (BY ACCTNO TRANSREF)
-# --------------------------------------------------------------------
-# Ensure compatible types
-base = base.with_columns([
-    pl.col("ACCTNO").cast(pl.Int64),
-    pl.col("TRANSREF").cast(pl.Utf8)
-])
-btdtl = btdtl.with_columns([
-    pl.col("ACCTNO").cast(pl.Int64),
-    pl.col("TRANSREF").cast(pl.Utf8)
-])
-
-combt = base.join(btdtl, on=["ACCTNO", "TRANSREF"], how="left")
-
-# Compute OVERDUE and RECOVAMT
-combt = combt.with_columns([
-    # Calculate overdue days
-    pl.when(pl.col("MATDATE").is_not_null())
+Base records after dedup: 20
+BTDTL records after dedup: 843
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDBT12.py", line 386, in <module>
     .then((sdate.toordinal() + 1) - pl.col("MATDATE").dt.epoch("days"))
-    .otherwise(0)
-    .alias("OVERDUE"),
-    
-    # Calculate recovery amount
-    (pl.col("PREOUTSTD") - pl.col("OUTSTAND").fill_null(0)).alias("RECOVAMT"),
-    
-    # Retail ID indicator
-    pl.when(pl.col("PRODTYPE") == 0).then("R").otherwise(pl.lit(None)).alias("RETAILID"),
-])
-
-# Handle null values
-combt = combt.with_columns([
-    pl.col("OVERDUE").fill_null(0).cast(pl.Int64),
-    pl.col("RECOVAMT").fill_null(0),
-    pl.col("OUTSTAND").fill_null(0),
-])
-
-print(f"\nMerged records: {len(combt)}")
-
-# --------------------------------------------------------------------
-# Step 5: Write output (DAYBTRD fixed-width and Parquet)
-# --------------------------------------------------------------------
-def write_fixed_width(df, filepath):
-    """Write DataFrame to fixed-width text file"""
-    records = []
-    skipped_rows = 0
-    
-    for row in df.iter_rows(named=True):
-        try:
-            # Ensure values are valid for formatting
-            branch = row.get('BRANCH', 0) or 0
-            acctno = row.get('ACCTNO', 0) or 0
-            transref = str(row.get('TRANSREF', '') or '')[:10]
-            prodtype = row.get('PRODTYPE', 0) or 0
-            preoutstd = row.get('PREOUTSTD', 0.0) or 0.0
-            outstanding = row.get('OUTSTAND', 0.0) or 0.0
-            overdue = row.get('OVERDUE', 0) or 0
-            recovamt = row.get('RECOVAMT', 0.0) or 0.0
-            liabcode = str(row.get('LIABCODE', '') or '')[:5]
-            
-            rec = (
-                f"{int(branch):05d}"
-                f"{int(acctno):010d}"
-                f"{transref:<10}"
-                f"{int(prodtype):03d}"
-                f"{float(preoutstd):017.2f}"
-                f"{float(outstanding):017.2f}"
-                f"{int(overdue):010d}"
-                f"{float(recovamt):017.2f}"
-                f"{liabcode:<5}"
-            )
-            records.append(rec)
-        except Exception as e:
-            skipped_rows += 1
-            if skipped_rows <= 5:
-                print(f"Warning: Error formatting row: {e}")
-            continue
-    
-    # Write to text file
-    with open(filepath, "w") as f:
-        for r in records:
-            f.write(r + "\n")
-    
-    print(f"Text output written: {filepath} ({len(records)} records)")
-    if skipped_rows > 0:
-        print(f"  Skipped {skipped_rows} rows due to formatting errors")
-
-# Write text file
-write_fixed_width(combt, OUTPUT_TEXT_FILE)
-
-# Save to Parquet
-try:
-    table = pa.Table.from_pandas(combt.to_pandas())
-    pq.write_table(table, OUTPUT_PARQUET_FILE)
-    print(f"Parquet output written: {OUTPUT_PARQUET_FILE}")
-except Exception as e:
-    print(f"Error writing Parquet: {e}")
-
-# Display summary statistics
-print("\n--- Summary Statistics ---")
-print(f"Total records processed: {len(combt)}")
-print(f"Columns in output: {combt.columns}")
-print("\nPreview of first 5 rows:")
-print(combt.head(5))
-
-# --------------------------------------------------------------------
-# Optional: Additional validation and reporting
-# --------------------------------------------------------------------
-def validate_output():
-    """Validate that output files were created successfully"""
-    # Check text file
-    if os.path.exists(OUTPUT_TEXT_FILE):
-        size = os.path.getsize(OUTPUT_TEXT_FILE)
-        with open(OUTPUT_TEXT_FILE, 'r') as f:
-            line_count = sum(1 for _ in f)
-        print(f"✓ Text file created: {OUTPUT_TEXT_FILE} ({size:,} bytes, {line_count} lines)")
-    else:
-        print(f"✗ Text file not found: {OUTPUT_TEXT_FILE}")
-    
-    # Check Parquet file
-    if os.path.exists(OUTPUT_PARQUET_FILE):
-        size = os.path.getsize(OUTPUT_PARQUET_FILE)
-        print(f"✓ Parquet file created: {OUTPUT_PARQUET_FILE} ({size:,} bytes)")
-    else:
-        print(f"✗ Parquet file not found: {OUTPUT_PARQUET_FILE}")
-
-validate_output()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/expr/datetime.py", line 1800, in epoch
+    raise ValueError(msg)
+ValueError: `time_unit` must be one of {'ns', 'us', 'ms', 's', 'd'}, got 'days'
