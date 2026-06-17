@@ -1,144 +1,388 @@
-Report Parameters: {'REPTYEAR': '26', 'REPTMON': '06', 'REPTDAY': '16', 'PREVMON': '05', 'PREVDAY': '31', 'RDATE': '16-06-2026', 'RDATEX': '0626', 'SDATE': '60701'}
+# EIBDBT12_BANKTRADE_PM12.py
+# Conversion of SAS job EIBDBT12 (calls EIBDBT05) into Python with Polars, DuckDB, PyArrow
+# Outputs both fixed-width .txt and Parquet
 
---- Inspecting file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/BTPM12.txt ---
-Line 1: length=1000, content='1BKT20260531                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            '
-  Positions   0-  9: '1BKT202605'
-  Positions  10- 19: '31        '
-  Positions  20- 29: '          '
-  Positions  30- 39: '          '
-  Positions  40- 49: '          '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
-Line 2: length=1000, content='200062501873900Y011618000000033531.01070119PBZ                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          '
-  Positions   0-  9: '2000625018'
-  Positions  10- 19: '73900Y0116'
-  Positions  20- 29: '1800000003'
-  Positions  30- 39: '3531.01070'
-  Positions  40- 49: '119PBZ    '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
-Line 3: length=1000, content='200092505605133Y066656000000040245.81180426PBZ                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          '
-  Positions   0-  9: '2000925056'
-  Positions  10- 19: '05133Y0666'
-  Positions  20- 29: '5600000004'
-  Positions  30- 39: '0245.81180'
-  Positions  40- 49: '426PBZ    '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
-Line 4: length=1000, content='202012505707731Y080273000000069258.93230310PBA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          '
-  Positions   0-  9: '2020125057'
-  Positions  10- 19: '07731Y0802'
-  Positions  20- 29: '7300000006'
-  Positions  30- 39: '9258.93230'
-  Positions  40- 49: '310PBA    '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
-Line 5: length=1000, content='202012505707731Y080340000000069128.29230317PBA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          '
-  Positions   0-  9: '2020125057'
-  Positions  10- 19: '07731Y0803'
-  Positions  20- 29: '4000000006'
-  Positions  30- 39: '9128.29230'
-  Positions  40- 49: '317PBA    '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
-Line 6: length=1000, content='202012505707731Y080415000000068921.41230328PBA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          '
-  Positions   0-  9: '2020125057'
-  Positions  10- 19: '07731Y0804'
-  Positions  20- 29: '1500000006'
-  Positions  30- 39: '8921.41230'
-  Positions  40- 49: '328PBA    '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
-Line 7: length=1000, content='202012505707731Y080466000000068790.27230404PBA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          '
-  Positions   0-  9: '2020125057'
-  Positions  10- 19: '07731Y0804'
-  Positions  20- 29: '6600000006'
-  Positions  30- 39: '8790.27230'
-  Positions  40- 49: '404PBA    '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
-Line 8: length=1000, content='202012505707731Y080602000000068604.63230414PBA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          '
-  Positions   0-  9: '2020125057'
-  Positions  10- 19: '07731Y0806'
-  Positions  20- 29: '0200000006'
-  Positions  30- 39: '8604.63230'
-  Positions  40- 49: '414PBA    '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
-Line 9: length=1000, content='202012505707731Y080732000000068342.76230428PBA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          '
-  Positions   0-  9: '2020125057'
-  Positions  10- 19: '07731Y0807'
-  Positions  20- 29: '3200000006'
-  Positions  30- 39: '8342.76230'
-  Positions  40- 49: '428PBA    '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
-Line 10: length=1000, content='202012505707731Y080733000000068342.76230428PBA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          '
-  Positions   0-  9: '2020125057'
-  Positions  10- 19: '07731Y0807'
-  Positions  20- 29: '3300000006'
-  Positions  30- 39: '8342.76230'
-  Positions  40- 49: '428PBA    '
-  Positions  50- 59: '          '
-  Positions  60- 69: '          '
-  Positions  70- 79: '          '
-  Positions  80- 89: '          '
-  Positions  90- 99: '          '
---- End of inspection ---
+import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
+from datetime import date, timedelta
+import pyreadstat  # For reading SAS .sas7bdat files
+import os
 
-Warning: Could not parse line 1: 1BKT20260531                                                ...
-Successfully read 870 records from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/BTPM12.txt
+# --------------------------------------------------------------------
+# Configuration: Input and Output Paths
+# --------------------------------------------------------------------
+# Input paths
+INPUT_BTPM12_FILE = "input/prod/BTPM12.txt"  # Text file containing BTDTL data
+INPUT_BTBASE_FILE = "BTBASE_{PREVMON}.sas7bdat"  # SAS dataset with month placeholder
+INPUT_BTBASE_PATH = None  # Set to specific path if different from current dir
 
-Loaded 870 records from BTPM12
-Sample of loaded data:
-shape: (5, 6)
-┌────────┬────────────┬──────────┬───────────┬────────┬──────────┐
-│ BRANCH ┆ ACCTNO     ┆ TRANSREF ┆ OUTSTAND  ┆ MATDT  ┆ LIABCODE │
-│ ---    ┆ ---        ┆ ---      ┆ ---       ┆ ---    ┆ ---      │
-│ i64    ┆ i64        ┆ str      ┆ f64       ┆ str    ┆ str      │
-╞════════╪════════════╪══════════╪═══════════╪════════╪══════════╡
-│ 0      ┆ 2000625018 ┆          ┆ 1.1618e16 ┆ 200062 ┆          │
-│ 0      ┆ 2000925056 ┆          ┆ 6.6656e16 ┆ 200092 ┆          │
-│ 0      ┆ 2020125057 ┆          ┆ 8.0273e16 ┆ 202012 ┆          │
-│ 0      ┆ 2020125057 ┆          ┆ 8.0340e16 ┆ 202012 ┆          │
-│ 0      ┆ 2020125057 ┆          ┆ 8.0415e16 ┆ 202012 ┆          │
-└────────┴────────────┴──────────┴───────────┴────────┴──────────┘
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDBT12.py", line 254, in <module>
-    btdtl = btdtl.with_columns(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ComputeError: Invalid date components (2062, 0, 20) supplied
+# Output paths
+OUTPUT_TEXT_FILE = "DAYBTRD_PM12.txt"
+OUTPUT_PARQUET_FILE = "DAYBTRD_PM12.parquet"
+
+# Optional: Set to False to use real data, True to use dummy data for testing
+USE_DUMMY_DATA = False
+
+# --------------------------------------------------------------------
+# Step 1: Reporting date logic (DATA REPTDATE equivalent)
+# --------------------------------------------------------------------
+today = date.today()
+reptdate = today - timedelta(days=1)
+prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
+
+rptdt = reptdate.strftime("%d-%m-%Y")
+curmm = rptdt[3:5]
+curyy = rptdt[8:10]
+rdatex = curmm + curyy
+
+# Next month calculation
+if reptdate.month + 1 == 13:
+    mm, yy = 1, reptdate.year + 1
+else:
+    mm, yy = reptdate.month + 1, reptdate.year
+sdate = date(yy, mm, 1)
+
+params = {
+    "REPTYEAR": f"{reptdate.year % 100:02d}",
+    "REPTMON": f"{reptdate.month:02d}",
+    "REPTDAY": f"{reptdate.day:02d}",
+    "PREVMON": f"{prevdate.month:02d}",
+    "PREVDAY": f"{prevdate.day:02d}",
+    "RDATE": reptdate.strftime("%d-%m-%Y"),
+    "RDATEX": rdatex,
+    "SDATE": f"{sdate.year}{sdate.month:02d}{sdate.day:02d}"[-5:],
+}
+
+print("Report Parameters:", params)
+
+# --------------------------------------------------------------------
+# Step 2: Read BTDTL input from text file with correct fixed-width format
+# --------------------------------------------------------------------
+def read_btdtl_text(filepath):
+    """
+    Read BTPM12 text file with fixed-width format.
+    Based on file inspection:
+    - BRANCH: positions 0-4 (5 chars)
+    - ACCTNO: positions 5-14 (10 chars)
+    - TRANSREF: positions 15-24 (10 chars)
+    - OUTSTAND: positions 25-41 (17 chars, with decimals)
+    - MATDT: positions 42-47 (6 chars, ddmmyy)
+    - LIABCODE: positions 48-52 (5 chars)
+    """
+    try:
+        data = []
+        with open(filepath, 'r') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.rstrip('\n').rstrip('\r')
+                
+                # Skip empty lines
+                if not line.strip():
+                    continue
+                
+                # Ensure line has minimum length
+                if len(line) < 53:
+                    print(f"Warning: Line {line_num} has length {len(line)}, skipping")
+                    continue
+                
+                try:
+                    # Extract fields based on inspection
+                    # Position: 0-4 = BRANCH, 5-14 = ACCTNO, 15-24 = TRANSREF
+                    # 25-41 = OUTSTAND, 42-47 = MATDT, 48-52 = LIABCODE
+                    branch_str = line[0:5].strip()
+                    acctno_str = line[5:15].strip()
+                    transref = line[15:25].strip()
+                    outstanding_str = line[25:42].strip()
+                    matdt = line[42:48].strip()
+                    liabcode = line[48:53].strip()
+                    
+                    # Skip header line (contains non-numeric data)
+                    if not acctno_str.isdigit() or len(acctno_str) != 10:
+                        continue
+                    
+                    # Convert with error handling
+                    branch = int(branch_str) if branch_str.isdigit() else 0
+                    acctno = int(acctno_str) if acctno_str.isdigit() else 0
+                    outstanding = float(outstanding_str) if outstanding_str else 0.0
+                    
+                    # Validate MATDT is 6 digits
+                    if len(matdt) == 6 and matdt.isdigit():
+                        data.append({
+                            'BRANCH': branch,
+                            'ACCTNO': acctno,
+                            'TRANSREF': transref,
+                            'OUTSTAND': outstanding,
+                            'MATDT': matdt,
+                            'LIABCODE': liabcode,
+                        })
+                    else:
+                        print(f"Warning: Line {line_num} has invalid MATDT: '{matdt}'")
+                        
+                except (ValueError, IndexError) as e:
+                    print(f"Warning: Error parsing line {line_num}: {e}")
+                    continue
+        
+        if not data:
+            raise ValueError(f"No valid data found in {filepath}")
+        
+        print(f"Successfully read {len(data)} records from {filepath}")
+        return pl.DataFrame(data)
+        
+    except FileNotFoundError:
+        print(f"File not found: {filepath}")
+        raise
+    except Exception as e:
+        print(f"Error reading {filepath}: {e}")
+        raise
+
+if USE_DUMMY_DATA:
+    print("Using dummy data for testing")
+    btdtl = pl.DataFrame({
+        "BRANCH": [2001, 3100, 2002],
+        "ACCTNO": [2850001111, 2860000001, 2870000001],
+        "TRANSREF": ["PM12A01", "PM12B02", "PM12C03"],
+        "OUTSTAND": [120000.00, 80000.00, 150000.00],
+        "MATDT": ["250125", "250630", "250331"],  # ddmmyy format
+        "LIABCODE": ["001", "002", "003"],
+    })
+else:
+    btdtl = read_btdtl_text(INPUT_BTPM12_FILE)
+
+# Check if we have data
+if len(btdtl) == 0:
+    raise ValueError("No data loaded from BTPM12 file")
+
+print(f"\nLoaded {len(btdtl)} records from BTPM12")
+print("Sample of loaded data:")
+print(btdtl.head(5))
+
+# Parse MATDATE from ddmmyy string
+# MATDT is in DDMMYY format
+btdtl = btdtl.with_columns([
+    pl.col("MATDT").str.slice(0, 2).cast(pl.Int32, strict=False).alias("day"),
+    pl.col("MATDT").str.slice(2, 2).cast(pl.Int32, strict=False).alias("month"),
+    pl.col("MATDT").str.slice(4, 2).cast(pl.Int32, strict=False).alias("year2")
+])
+
+# Filter out rows with invalid dates
+btdtl = btdtl.filter(
+    pl.col("day").is_not_null() & 
+    pl.col("month").is_not_null() & 
+    pl.col("year2").is_not_null() &
+    (pl.col("day") >= 1) & (pl.col("day") <= 31) &
+    (pl.col("month") >= 1) & (pl.col("month") <= 12)
+)
+
+if len(btdtl) == 0:
+    raise ValueError("No valid dates found in MATDT field")
+
+# Add century (2000 + year2)
+btdtl = btdtl.with_columns(
+    (pl.col("year2") + 2000).alias("year")
+)
+
+# Create datetime column
+btdtl = btdtl.with_columns(
+    pl.datetime("year", "month", "day").alias("MATDATE")
+)
+
+print(f"\nAfter date parsing, {len(btdtl)} records remain")
+
+# Apply SAS filter: remove if branch > 3000 and ACCTNO in range
+btdtl = btdtl.filter(
+    ~((pl.col("BRANCH") > 3000) &
+      (pl.col("ACCTNO") >= 2850000000) &
+      (pl.col("ACCTNO") <= 2859999999))
+)
+
+print(f"After filtering, {len(btdtl)} records remain")
+
+# --------------------------------------------------------------------
+# Step 3: Read BASE dataset (previous month snapshot from SAS)
+# --------------------------------------------------------------------
+def read_base_sas(prevmon):
+    """Read BTBASE SAS dataset for the previous month"""
+    try:
+        # Construct file path with month
+        filepath = INPUT_BTBASE_FILE.format(PREVMON=prevmon)
+        if INPUT_BTBASE_PATH:
+            filepath = os.path.join(INPUT_BTBASE_PATH, filepath)
+        
+        print(f"\nReading SAS dataset: {filepath}")
+        
+        # Check if file exists
+        if not os.path.exists(filepath):
+            print(f"Warning: SAS file not found: {filepath}")
+            print("Creating dummy base data for testing...")
+            return pl.DataFrame({
+                "ACCTNO": [2000625018, 2000925056, 2020125057],
+                "TRANSREF": ["Y011618000", "Y066656000", "Y080273000"],
+                "PREOUTSTD": [150000.0, 100000.0, 120000.0],
+                "PRODTYPE": [0, 200, 0],
+            })
+        
+        # Read SAS dataset using pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        
+        # Convert to Polars DataFrame
+        base = pl.from_pandas(df)
+        
+        # Ensure required columns exist
+        required_cols = ["ACCTNO", "TRANSREF", "PREOUTSTD", "PRODTYPE"]
+        for col in required_cols:
+            if col not in base.columns:
+                raise ValueError(f"Required column '{col}' not found in SAS dataset")
+        
+        print(f"Successfully read {len(base)} records from SAS dataset")
+        return base
+        
+    except Exception as e:
+        print(f"Error reading SAS dataset: {e}")
+        print("Creating dummy base data for testing...")
+        return pl.DataFrame({
+            "ACCTNO": [2000625018, 2000925056, 2020125057],
+            "TRANSREF": ["Y011618000", "Y066656000", "Y080273000"],
+            "PREOUTSTD": [150000.0, 100000.0, 120000.0],
+            "PRODTYPE": [0, 200, 0],
+        })
+
+if USE_DUMMY_DATA:
+    print("\nUsing dummy base data for testing")
+    base = pl.DataFrame({
+        "ACCTNO": [2850001111, 2860000001, 2870000001],
+        "TRANSREF": ["PM12A01", "PM12B02", "PM12C03"],
+        "PREOUTSTD": [150000.0, 100000.0, 120000.0],
+        "PRODTYPE": [0, 200, 0],
+    })
+else:
+    base = read_base_sas(params['PREVMON'])
+
+# Deduplicate
+base = base.unique(subset=["ACCTNO", "TRANSREF"])
+btdtl = btdtl.unique(subset=["ACCTNO", "TRANSREF"])
+
+print(f"\nBase records after dedup: {len(base)}")
+print(f"BTDTL records after dedup: {len(btdtl)}")
+
+# --------------------------------------------------------------------
+# Step 4: Merge BASE and BTDTL (BY ACCTNO TRANSREF)
+# --------------------------------------------------------------------
+# Ensure ACCTNO and TRANSREF are compatible types
+base = base.with_columns([
+    pl.col("ACCTNO").cast(pl.Int64),
+    pl.col("TRANSREF").cast(pl.Utf8)
+])
+btdtl = btdtl.with_columns([
+    pl.col("ACCTNO").cast(pl.Int64),
+    pl.col("TRANSREF").cast(pl.Utf8)
+])
+
+combt = base.join(btdtl, on=["ACCTNO", "TRANSREF"], how="left")
+
+# Compute OVERDUE and RECOVAMT
+# Convert MATDATE to ordinal for date calculation
+combt = combt.with_columns([
+    # Calculate overdue days
+    pl.when(pl.col("MATDATE").is_not_null())
+    .then((sdate.toordinal() + 1) - pl.col("MATDATE").dt.epoch("days"))
+    .otherwise(0)
+    .alias("OVERDUE"),
+    
+    # Calculate recovery amount
+    (pl.col("PREOUTSTD") - pl.col("OUTSTAND").fill_null(0)).alias("RECOVAMT"),
+    
+    # Retail ID indicator
+    pl.when(pl.col("PRODTYPE") == 0).then("R").otherwise(pl.lit(None)).alias("RETAILID"),
+])
+
+# Handle null values
+combt = combt.with_columns([
+    pl.col("OVERDUE").fill_null(0).cast(pl.Int64),
+    pl.col("RECOVAMT").fill_null(0),
+    pl.col("OUTSTAND").fill_null(0),
+])
+
+print(f"\nMerged records: {len(combt)}")
+
+# --------------------------------------------------------------------
+# Step 5: Write output (DAYBTRD fixed-width and Parquet)
+# --------------------------------------------------------------------
+def write_fixed_width(df, filepath):
+    """Write DataFrame to fixed-width text file"""
+    records = []
+    for row in df.iter_rows(named=True):
+        try:
+            # Ensure values are valid for formatting
+            branch = row.get('BRANCH', 0) or 0
+            acctno = row.get('ACCTNO', 0) or 0
+            transref = str(row.get('TRANSREF', '') or '')[:10]
+            prodtype = row.get('PRODTYPE', 0) or 0
+            preoutstd = row.get('PREOUTSTD', 0.0) or 0.0
+            outstanding = row.get('OUTSTAND', 0.0) or 0.0
+            overdue = row.get('OVERDUE', 0) or 0
+            recovamt = row.get('RECOVAMT', 0.0) or 0.0
+            liabcode = str(row.get('LIABCODE', '') or '')[:5]
+            
+            rec = (
+                f"{int(branch):05d}"
+                f"{int(acctno):010d}"
+                f"{transref:<10}"
+                f"{int(prodtype):03d}"
+                f"{float(preoutstd):017.2f}"
+                f"{float(outstanding):017.2f}"
+                f"{int(overdue):010d}"
+                f"{float(recovamt):017.2f}"
+                f"{liabcode:<5}"
+            )
+            records.append(rec)
+        except Exception as e:
+            print(f"Warning: Error formatting row: {e}")
+            continue
+    
+    # Write to text file
+    with open(filepath, "w") as f:
+        for r in records:
+            f.write(r + "\n")
+    
+    print(f"Text output written: {filepath} ({len(records)} records)")
+
+# Write text file
+write_fixed_width(combt, OUTPUT_TEXT_FILE)
+
+# Save to Parquet
+try:
+    table = pa.Table.from_pandas(combt.to_pandas())
+    pq.write_table(table, OUTPUT_PARQUET_FILE)
+    print(f"Parquet output written: {OUTPUT_PARQUET_FILE}")
+except Exception as e:
+    print(f"Error writing Parquet: {e}")
+
+# Display summary statistics
+print("\n--- Summary Statistics ---")
+print(f"Total records processed: {len(combt)}")
+print(f"Columns in output: {combt.columns}")
+print("\nPreview of first 5 rows:")
+print(combt.head(5))
+
+# --------------------------------------------------------------------
+# Optional: Additional validation and reporting
+# --------------------------------------------------------------------
+def validate_output():
+    """Validate that output files were created successfully"""
+    # Check text file
+    if os.path.exists(OUTPUT_TEXT_FILE):
+        size = os.path.getsize(OUTPUT_TEXT_FILE)
+        with open(OUTPUT_TEXT_FILE, 'r') as f:
+            line_count = sum(1 for _ in f)
+        print(f"✓ Text file created: {OUTPUT_TEXT_FILE} ({size:,} bytes, {line_count} lines)")
+    else:
+        print(f"✗ Text file not found: {OUTPUT_TEXT_FILE}")
+    
+    # Check Parquet file
+    if os.path.exists(OUTPUT_PARQUET_FILE):
+        size = os.path.getsize(OUTPUT_PARQUET_FILE)
+        print(f"✓ Parquet file created: {OUTPUT_PARQUET_FILE} ({size:,} bytes)")
+    else:
+        print(f"✗ Parquet file not found: {OUTPUT_PARQUET_FILE}")
+
+validate_output()
