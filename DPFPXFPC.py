@@ -1,5 +1,5 @@
 # EIIDBT12_BANKTRADE_PM12.py
-# Complete Islamic Version with SAS-compatible sorting
+# Production-Ready Islamic Version - Auto-determines PREVMON
 
 import polars as pl
 import pyarrow as pa
@@ -14,11 +14,15 @@ import glob
 # --------------------------------------------------------------------
 INPUT_BTFILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM12.txt"
 
-# Use IBTBASE04 to match production (SAS ran on 2026-05-31)
-INPUT_BASE_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/ibtbase04.sas7bdat"
+# BASE file pattern - {PREVMON} will be auto-detected
+INPUT_BASE_FILE_PATTERN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/ibtbase{PREVMON}.sas7bdat"
 
 OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT12/DAYBTRD_PM12.txt"
 OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT12/DAYBTRD_PM12.parquet"
+
+# Optional: Override for testing (set to None for auto-detection)
+# If you want to test with a specific month, set this to e.g., "04"
+FORCE_PREVMON = None  # Set to None for auto-detection, or "04", "05", etc.
 
 # SAS epoch (days since 1960-01-01)
 SAS_EPOCH = date(1960, 1, 1)
@@ -27,21 +31,24 @@ def to_sas_date(dt):
     return (dt - SAS_EPOCH).days
 
 # --------------------------------------------------------------------
-# Step 1: Reporting date logic
+# Step 1: Auto-determine dates (EXACTLY matching SAS logic)
 # --------------------------------------------------------------------
-# Use the production run date (2026-05-31) to match output
-# If you want to use today's date, comment out the lines below
-# and uncomment the "today" section
+# Use TODAY() as SAS does
+today = date.today()
 
-# Option A: Use production run date (for matching existing output)
-production_run_date = date(2026, 5, 31)
-reptdate = production_run_date - timedelta(days=1)  # 2026-05-30
-prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)  # 2026-04-30
+# REPTDATE = TODAY()-1
+reptdate = today - timedelta(days=1)
 
-# Option B: Use today's date (for current runs)
-# today = date.today()
-# reptdate = today - timedelta(days=1)
-# prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
+# PREVDATE = MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))-1
+prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
+
+# Calculate PREVMON
+prevmon = f"{prevdate.month:02d}"
+
+# Allow override for testing
+if FORCE_PREVMON is not None:
+    prevmon = FORCE_PREVMON
+    print(f"*** FORCED PREVMON = {prevmon} (for testing) ***")
 
 # SDATE = First day of NEXT month
 if reptdate.month + 1 == 13:
@@ -53,9 +60,10 @@ sdate = date(yy, mm, 1)
 sdate_sas = to_sas_date(sdate)
 
 params = {
+    "TODAY": today,
     "REPTDATE": reptdate,
     "PREVDATE": prevdate,
-    "PREVMON": f"{prevdate.month:02d}",
+    "PREVMON": prevmon,
     "SDATE": sdate,
     "SDATE_SAS": sdate_sas,
 }
@@ -63,13 +71,53 @@ params = {
 print("=" * 80)
 print("EIIDBT12 - Islamic Bank Trade Report")
 print("=" * 80)
+print(f"TODAY: {params['TODAY']}")
 print(f"REPTDATE: {params['REPTDATE']}")
+print(f"PREVDATE: {params['PREVDATE']}")
 print(f"PREVMON: {params['PREVMON']}")
+print(f"SDATE: {params['SDATE']}")
 print(f"SDATE_SAS: {params['SDATE_SAS']}")
 print("=" * 80)
 
 # --------------------------------------------------------------------
-# Step 2: Read BTDTL input
+# Step 2: Find the BASE file
+# --------------------------------------------------------------------
+def find_base_file(prevmon):
+    """Find the BASE file for the given month"""
+    base_dir = os.path.dirname(INPUT_BASE_FILE_PATTERN)
+    
+    # Try different naming patterns
+    patterns = [
+        INPUT_BASE_FILE_PATTERN.format(PREVMON=prevmon),
+        os.path.join(base_dir, f"ibtbase{prevmon}.sas7bdat"),
+        os.path.join(base_dir, f"ibtbase_{prevmon}.sas7bdat"),
+        os.path.join(base_dir, f"IBTBASE{prevmon}.sas7bdat"),
+        os.path.join(base_dir, f"IBTBASE_{prevmon}.sas7bdat"),
+    ]
+    
+    for pattern in patterns:
+        if os.path.exists(pattern):
+            return pattern
+    
+    # If not found, try to find any ibtbase file
+    all_files = glob.glob(os.path.join(base_dir, "ibtbase*.sas7bdat"))
+    if all_files:
+        print(f"\nAvailable IBTBASE files in {base_dir}:")
+        for f in sorted(all_files):
+            print(f"  - {os.path.basename(f)}")
+        
+        # If the specific month isn't found, use the latest one
+        latest = sorted(all_files)[-1]
+        print(f"\nUsing latest available: {os.path.basename(latest)}")
+        return latest
+    
+    raise FileNotFoundError(f"No IBTBASE file found for month {prevmon} in {base_dir}")
+
+base_file = find_base_file(prevmon)
+print(f"\nUsing BASE file: {base_file}")
+
+# --------------------------------------------------------------------
+# Step 3: Read BTDTL input
 # --------------------------------------------------------------------
 def read_btdtl_text(filepath):
     data = []
@@ -127,7 +175,7 @@ if len(btdtl) == 0:
     raise ValueError("No data loaded from BTPM12 file")
 
 # --------------------------------------------------------------------
-# Step 3: Apply ISLAMIC filter
+# Step 4: Apply ISLAMIC filter
 # --------------------------------------------------------------------
 btdtl = btdtl.filter(
     (pl.col("BRANCH") > 3000) &
@@ -138,12 +186,9 @@ btdtl = btdtl.filter(
 print(f"BTDTL after Islamic filter: {len(btdtl)} records")
 
 # --------------------------------------------------------------------
-# Step 4: Read Islamic BASE dataset
+# Step 5: Read Islamic BASE dataset
 # --------------------------------------------------------------------
 def read_base_sas(filepath):
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Islamic BASE file not found: {filepath}")
-    
     print(f"\nReading Islamic BASE: {filepath}")
     df, meta = pyreadstat.read_sas7bdat(filepath)
     base = pl.from_pandas(df)
@@ -176,7 +221,7 @@ def read_base_sas(filepath):
     
     return base
 
-base = read_base_sas(INPUT_BASE_FILE)
+base = read_base_sas(base_file)
 
 # Deduplicate
 base = base.unique(subset=["ACCTNO", "TRANSREF"])
@@ -187,13 +232,13 @@ print(f"  BASE: {len(base)}")
 print(f"  BTDTL: {len(btdtl)}")
 
 # --------------------------------------------------------------------
-# Step 5: Sort to match SAS order (PROC SORT)
+# Step 6: Sort to match SAS order
 # --------------------------------------------------------------------
 base = base.sort(["ACCTNO", "TRANSREF"])
 btdtl = btdtl.sort(["ACCTNO", "TRANSREF"])
 
 # --------------------------------------------------------------------
-# Step 6: Merge and calculate
+# Step 7: Merge and calculate
 # --------------------------------------------------------------------
 base = base.with_columns([
     pl.col("ACCTNO").cast(pl.Int64),
@@ -224,13 +269,14 @@ combt = combt.with_columns([
     .alias("RETAILID"),
 ])
 
-# Sort final output to match SAS order
+# Sort final output
 combt = combt.sort(["ACCTNO", "TRANSREF"])
 
 print(f"\nCalculations complete")
+print(f"  Records with OVERDUE > 0: {(combt['OVERDUE'] > 0).sum()}")
 
 # --------------------------------------------------------------------
-# Step 7: Write output
+# Step 8: Write output
 # --------------------------------------------------------------------
 def write_fixed_width(df, filepath):
     records = []
@@ -303,6 +349,17 @@ try:
 except Exception as e:
     print(f"Error writing Parquet: {e}")
 
+# --------------------------------------------------------------------
+# Summary
+# --------------------------------------------------------------------
 print("\n" + "=" * 80)
+print("SUMMARY")
+print("=" * 80)
+print(f"Run Date (TODAY): {params['TODAY']}")
+print(f"Report Date (REPTDATE): {params['REPTDATE']}")
+print(f"Previous Month (PREVMON): {params['PREVMON']}")
+print(f"BASE File Used: {base_file}")
+print(f"Total Records: {len(combt)}")
+print("=" * 80)
 print("PROCESS COMPLETE")
 print("=" * 80)
