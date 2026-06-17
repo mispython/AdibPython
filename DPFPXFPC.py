@@ -1,538 +1,137 @@
-# EIBDBT12_BANKTRADE_PM12.py
-# Complete Python conversion of SAS job EIBDBT12
-# Matches production output exactly
-
-import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
-from datetime import date, timedelta
-import pyreadstat
-import os
-
-# --------------------------------------------------------------------
-# Configuration
-# --------------------------------------------------------------------
-INPUT_BTPM12_FILE = "input/prod/BTPM12.txt"
-INPUT_BTBASE_FILE = "input/prod/btbase05.sas7bdat"
-OUTPUT_TEXT_FILE = "DAYBTRD_PM12.txt"
-OUTPUT_PARQUET_FILE = "DAYBTRD_PM12.parquet"
-
-# SAS epoch (days since 1960-01-01)
-SAS_EPOCH = date(1960, 1, 1)
-
-def to_sas_date(dt):
-    """Convert Python date to SAS date (days since 1960-01-01)"""
-    return (dt - SAS_EPOCH).days
-
-# --------------------------------------------------------------------
-# Step 1: Reporting date logic (EXACTLY matching SAS)
-# --------------------------------------------------------------------
-today = date.today()
-reptdate = today - timedelta(days=1)  # Yesterday
-
-# PREVDATE = First day of current month - 1 (last day of previous month)
-prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
-
-# SDATE = First day of next month
-if reptdate.month + 1 == 13:
-    mm, yy = 1, reptdate.year + 1
-else:
-    mm, yy = reptdate.month + 1, reptdate.year
-sdate = date(yy, mm, 1)
-
-# Convert to SAS dates
-sdate_sas = to_sas_date(sdate)
-
-params = {
-    "REPTYEAR": f"{reptdate.year % 100:02d}",
-    "REPTMON": f"{reptdate.month:02d}",
-    "REPTDAY": f"{reptdate.day:02d}",
-    "PREVMON": f"{prevdate.month:02d}",
-    "PREVDAY": f"{prevdate.day:02d}",
-    "SDATE_SAS": sdate_sas,
-}
-
-print("=" * 80)
-print("EIBDBT12 - Bank Trade Report")
-print("=" * 80)
-print(f"Report Date: {reptdate}")
-print(f"Previous Month: {params['PREVMON']}")
-print(f"SDATE (SAS format): {sdate_sas}")
-print("=" * 80)
-
-# --------------------------------------------------------------------
-# Step 2: Read BTDTL input (matching SAS INFILE BTFILE)
-# --------------------------------------------------------------------
-def read_btdtl_text(filepath):
-    """
-    Read BTPM12 text file matching SAS INPUT:
-    @002 BRANCH 4.      (positions 1-4, 0-based: 1-4)
-    @006 ACCTNO $10.    (positions 5-14, 0-based: 5-14)
-    @016 TRANSREF $7.   (positions 15-21, 0-based: 15-21)
-    @023 OUTSTAND 15.2  (positions 22-36, 0-based: 22-36)
-    @038 MATDT $6.      (positions 37-42, 0-based: 37-42)
-    @043 LIABCODE $3.   (positions 42-44, 0-based: 42-44)
-    """
-    data = []
-    valid = 0
-    skipped = 0
-    
-    try:
-        with open(filepath, 'r') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.rstrip('\n').rstrip('\r')
-                
-                if not line.strip():
-                    continue
-                
-                # Skip header line (starts with 1BKT)
-                if line.strip().startswith('1BKT'):
-                    continue
-                
-                try:
-                    # Extract using SAS positions (1-based to 0-based)
-                    branch_str = line[1:5].strip()
-                    acctno_str = line[5:15].strip()
-                    transref = line[15:22].strip()
-                    outstanding_str = line[22:37].strip()
-                    matdt = line[37:43].strip()
-                    liabcode = line[42:45].strip()
-                    
-                    # Validate data
-                    if not acctno_str.isdigit() or len(acctno_str) != 10:
-                        skipped += 1
-                        continue
-                    
-                    if not matdt.isdigit() or len(matdt) != 6:
-                        skipped += 1
-                        continue
-                    
-                    # Convert fields
-                    branch = int(branch_str) if branch_str.isdigit() else 0
-                    acctno = int(acctno_str)
-                    outstanding = float(outstanding_str) if outstanding_str else 0.0
-                    
-                    # Parse MATDT: DDMMYY
-                    day = int(matdt[0:2])
-                    month = int(matdt[2:4])
-                    year = 2000 + int(matdt[4:6])
-                    
-                    # Create date and convert to SAS date
-                    matdate = date(year, month, day)
-                    matdate_sas = to_sas_date(matdate)
-                    
-                    data.append({
-                        'BRANCH': branch,
-                        'ACCTNO': acctno,
-                        'TRANSREF': transref,
-                        'OUTSTAND': outstanding,
-                        'MATDT': matdt,
-                        'MATDATE_SAS': matdate_sas,
-                        'LIABCODE': liabcode,
-                    })
-                    valid += 1
-                    
-                except (ValueError, IndexError) as e:
-                    skipped += 1
-                    if skipped <= 5:
-                        print(f"Warning: Line {line_num} error: {e}")
-                    continue
-        
-        print(f"\nBTDTL Read Summary:")
-        print(f"  Valid records: {valid}")
-        print(f"  Skipped records: {skipped}")
-        
-        if not data:
-            raise ValueError(f"No valid data found in {filepath}")
-        
-        return pl.DataFrame(data)
-        
-    except FileNotFoundError:
-        print(f"ERROR: File not found: {filepath}")
-        raise
-    except Exception as e:
-        print(f"ERROR reading {filepath}: {e}")
-        raise
-
-btdtl = read_btdtl_text(INPUT_BTPM12_FILE)
-
-if len(btdtl) == 0:
-    raise ValueError("No data loaded from BTPM12 file")
-
-print(f"\nBTDTL Sample (first 5 records):")
-print(btdtl.head(5))
-
-# Apply SAS filter: IF BRANCH > 3000 AND (2850000000<=ACCTNO<=2859999999) THEN DELETE
-btdtl = btdtl.filter(
-    ~((pl.col("BRANCH") > 3000) &
-      (pl.col("ACCTNO") >= 2850000000) &
-      (pl.col("ACCTNO") <= 2859999999))
-)
-
-print(f"BTDTL after filter: {len(btdtl)} records")
-
-# --------------------------------------------------------------------
-# Step 3: Read BASE dataset (BTBASE05)
-# --------------------------------------------------------------------
-def read_base_sas(filepath):
-    """
-    Read BTBASE05 SAS dataset.
-    
-    Column mapping based on actual data structure:
-    Col 0: TRANSREX (some reference, e.g., Y090778001)
-    Col 1: BRANCH (137)
-    Col 2: ACCTNO (2500667206)
-    Col 3: OUTSTAND (50906.19) -> this becomes PREOUTSTD
-    Col 4: TRANSREF (Y090778)
-    Col 5: FACILITY/MATDATE (34470 - SAS date format)
-    Col 6: PRODTYPE (0)
-    Col 7: DAYS (66)
-    """
-    if not os.path.exists(filepath):
-        print(f"\nERROR: BASE file not found: {filepath}")
-        raise FileNotFoundError(f"BASE file not found: {filepath}")
-    
-    print(f"\nReading BASE dataset: {filepath}")
-    
-    try:
-        df, meta = pyreadstat.read_sas7bdat(filepath)
-        base = pl.from_pandas(df)
-        
-        print(f"BASE columns: {base.columns}")
-        print(f"BASE records: {len(base)}")
-        print("\nBASE Sample (first 5 records):")
-        print(base.head(5))
-        
-        # Map columns based on position
-        # The columns are in order, so we can access by index
-        col_names = base.columns
-        
-        # Based on the actual data structure:
-        # Col 0: TRANSREX (some ID)
-        # Col 1: BRANCH
-        # Col 2: ACCTNO
-        # Col 3: OUTSTAND (this becomes PREOUTSTD)
-        # Col 4: TRANSREF
-        # Col 5: FACILITY (MATDATE in SAS format)
-        # Col 6: PRODTYPE
-        # Col 7: DAYS
-        
-        # Select and rename columns
-        base = base.select([
-            pl.col(col_names[2]).alias("ACCTNO"),      # ACCTNO
-            pl.col(col_names[4]).alias("TRANSREF"),    # TRANSREF
-            pl.col(col_names[3]).alias("PREOUTSTD"),   # OUTSTAND -> PREOUTSTD
-            pl.col(col_names[6]).alias("PRODTYPE"),    # PRODTYPE
-        ])
-        
-        # Convert types
-        base = base.with_columns([
-            pl.col("ACCTNO").cast(pl.Int64),
-            pl.col("TRANSREF").cast(pl.Utf8),
-            pl.col("PREOUTSTD").cast(pl.Float64),
-            pl.col("PRODTYPE").cast(pl.Int64),
-        ])
-        
-        print(f"\nBASE after mapping: {len(base)} records")
-        print("BASE Sample:")
-        print(base.head(5))
-        
-        return base
-        
-    except Exception as e:
-        print(f"ERROR reading BASE dataset: {e}")
-        raise
-
-base = read_base_sas(INPUT_BTBASE_FILE)
-
-# Deduplicate (PROC SORT NODUPKEY)
-base = base.unique(subset=["ACCTNO", "TRANSREF"])
-btdtl = btdtl.unique(subset=["ACCTNO", "TRANSREF"])
-
-print(f"\nAfter deduplication:")
-print(f"  BASE records: {len(base)}")
-print(f"  BTDTL records: {len(btdtl)}")
-
-# --------------------------------------------------------------------
-# Step 4: Merge BASE and BTDTL (matching SAS MERGE)
-# --------------------------------------------------------------------
-# Ensure compatible types
-base = base.with_columns([
-    pl.col("ACCTNO").cast(pl.Int64),
-    pl.col("TRANSREF").cast(pl.Utf8)
-])
-btdtl = btdtl.with_columns([
-    pl.col("ACCTNO").cast(pl.Int64),
-    pl.col("TRANSREF").cast(pl.Utf8)
-])
-
-# MERGE BASE(IN=A) BTDTL(IN=B); BY ACCTNO TRANSREF; IF A;
-combt = base.join(btdtl, on=["ACCTNO", "TRANSREF"], how="left")
-
-print(f"\nAfter merge: {len(combt)} records")
-
-# Check merge results
-matched = combt.filter(pl.col("MATDATE_SAS").is_not_null())
-unmatched = combt.filter(pl.col("MATDATE_SAS").is_null())
-
-print(f"  Matched with BTDTL: {len(matched)}")
-print(f"  Unmatched (BASE only): {len(unmatched)}")
-
-# --------------------------------------------------------------------
-# Step 5: Calculate OVERDUE and RECOVAMT
-# --------------------------------------------------------------------
-# Fill nulls for calculations
-combt = combt.with_columns([
-    pl.col("OUTSTAND").fill_null(0),
-])
-
-# Calculate using SAS date system
-sdate_sas = params["SDATE_SAS"]
-
-combt = combt.with_columns([
-    # OVERDUE = (&SDATE+1)-MATDATE
-    pl.when(pl.col("MATDATE_SAS").is_not_null())
-    .then((sdate_sas + 1) - pl.col("MATDATE_SAS"))
-    .otherwise(pl.lit(None))
-    .alias("OVERDUE"),
-    
-    # RECOVAMT = PREOUTSTD-OUTSTAND
-    (pl.col("PREOUTSTD") - pl.col("OUTSTAND")).alias("RECOVAMT"),
-])
-
-# Fill nulls for output
-combt = combt.with_columns([
-    pl.col("OVERDUE").fill_null(0).cast(pl.Int64),
-    pl.col("RECOVAMT").fill_null(0),
-])
-
-print(f"\nCalculations complete:")
-print(f"  Records with OVERDUE > 0: {(combt['OVERDUE'] > 0).sum()}")
-print(f"  Records with RECOVAMT != 0: {(combt['RECOVAMT'] != 0).sum()}")
-
-# --------------------------------------------------------------------
-# Step 6: Write output (matching SAS PUT statement)
-# --------------------------------------------------------------------
-def write_fixed_width(df, filepath):
-    """
-    Write DataFrame matching SAS PUT statement:
-    @001 BRANCH      5.  (positions 1-5)
-    @007 ACCTNO     10.  (positions 7-16)
-    @018 TRANSREF   10.  (positions 18-27)
-    @029 PRODTYPE   Z3.  (positions 29-31, with leading zeros)
-    @033 PREOUTSTD  17.2 (positions 33-49)
-    @051 OUTSTAND   17.2 (positions 51-67)
-    @069 OVERDUE    10.  (positions 69-78)
-    @080 RECOVAMT   17.2 (positions 80-96)
-    @098 FACILITY   $5.  (positions 98-102)
-    """
-    records = []
-    skipped = 0
-    
-    # FACILITY mapping (from PBBBTFMT)
-    facility_map = {
-        'PBZ': 'PBZ',
-        'PBA': 'PBA',
-        'PBI': 'PBI',
-        'PBT': 'PBT',
-        # Add more mappings as needed
-        # If not found, default to '99999'
-    }
-    
-    for row in df.iter_rows(named=True):
-        try:
-            # Get values with proper handling
-            branch = row.get('BRANCH')
-            acctno = row.get('ACCTNO', 0) or 0
-            transref = str(row.get('TRANSREF', '') or '')[:10]
-            prodtype = row.get('PRODTYPE', 0) or 0
-            preoutstd = row.get('PREOUTSTD', 0.0) or 0.0
-            outstanding = row.get('OUTSTAND', 0.0) or 0.0
-            overdue = row.get('OVERDUE', 0) or 0
-            recovamt = row.get('RECOVAMT', 0.0) or 0.0
-            liabcode = row.get('LIABCODE', '') or ''
-            facility = facility_map.get(liabcode, '99999')
-            
-            # Build record with exact SAS positions
-            record = [' '] * 103
-            
-            # @001 BRANCH 5. (positions 1-5)
-            # If branch is None or 0, leave blank (SAS shows '.')
-            if branch is not None and branch != 0:
-                record[0:5] = f"{int(branch):5d}"
-            else:
-                record[0:5] = '     '  # 5 spaces for missing
-            
-            # @007 ACCTNO 10. (positions 7-16)
-            record[6:16] = f"{int(acctno):10d}"
-            
-            # @018 TRANSREF 10. (positions 18-27)
-            record[17:27] = f"{transref:<10}"
-            
-            # @029 PRODTYPE Z3. (positions 29-31)
-            record[28:31] = f"{int(prodtype):03d}"
-            
-            # @033 PREOUTSTD 17.2 (positions 33-49)
-            # If PREOUTSTD is 0, leave blank
-            if preoutstd != 0:
-                record[32:49] = f"{float(preoutstd):17.2f}"
-            else:
-                record[32:49] = ' ' * 17
-            
-            # @051 OUTSTAND 17.2 (positions 51-67)
-            # If OUTSTAND is 0, leave blank
-            if outstanding != 0:
-                record[50:67] = f"{float(outstanding):17.2f}"
-            else:
-                record[50:67] = ' ' * 17
-            
-            # @069 OVERDUE 10. (positions 69-78)
-            # If OVERDUE is 0, leave blank
-            if overdue != 0:
-                record[68:78] = f"{int(overdue):10d}"
-            else:
-                record[68:78] = ' ' * 10
-            
-            # @080 RECOVAMT 17.2 (positions 80-96)
-            # If RECOVAMT is 0, leave blank
-            if recovamt != 0:
-                record[79:96] = f"{float(recovamt):17.2f}"
-            else:
-                record[79:96] = ' ' * 17
-            
-            # @098 FACILITY $5. (positions 98-102)
-            record[97:102] = f"{facility:<5}"
-            
-            records.append(''.join(record))
-            
-        except Exception as e:
-            skipped += 1
-            if skipped <= 5:
-                print(f"Warning: Error formatting row: {e}")
-            continue
-    
-    # Write to file
-    with open(filepath, "w") as f:
-        for r in records:
-            f.write(r + "\n")
-    
-    print(f"\nOutput written: {filepath}")
-    print(f"  Total records: {len(records)}")
-    if skipped > 0:
-        print(f"  Skipped rows: {skipped}")
-
-write_fixed_width(combt, OUTPUT_TEXT_FILE)
-
-# --------------------------------------------------------------------
-# Step 7: Save Parquet (additional output)
-# --------------------------------------------------------------------
-try:
-    table = pa.Table.from_pandas(combt.to_pandas())
-    pq.write_table(table, OUTPUT_PARQUET_FILE)
-    print(f"Parquet output written: {OUTPUT_PARQUET_FILE}")
-except Exception as e:
-    print(f"Error writing Parquet: {e}")
-
-# --------------------------------------------------------------------
-# Step 8: Validation against production
-# --------------------------------------------------------------------
-print("\n" + "=" * 80)
-print("VALIDATION AGAINST PRODUCTION")
-print("=" * 80)
-
-# Test cases from production output
-test_cases = [
-    {"ACCTNO": 2500667206, "TRANSREF": "Y090778", "EXP_OVERDUE": 67, "EXP_RECOVAMT": -413.70},
-    {"ACCTNO": 2505707731, "TRANSREF": "Y080273", "EXP_OVERDUE": 1180, "EXP_RECOVAMT": -562.80},
-    {"ACCTNO": 2501873900, "TRANSREF": "Y011618", "EXP_OVERDUE": 7074, "EXP_RECOVAMT": 0.00},
-    {"ACCTNO": 2501466705, "TRANSREF": "Y081465", "EXP_OVERDUE": 1048, "EXP_RECOVAMT": -597.00},
-    {"ACCTNO": 2505707731, "TRANSREF": "Y080340", "EXP_OVERDUE": 1173, "EXP_RECOVAMT": -561.90},
-]
-
-print("\nComparing specific records:")
-matches = 0
-total = 0
-
-for test in test_cases:
-    match = combt.filter(
-        (pl.col("ACCTNO") == test["ACCTNO"]) & 
-        (pl.col("TRANSREF") == test["TRANSREF"])
-    )
-    
-    if len(match) > 0:
-        row = match.row(0, named=True)
-        total += 1
-        
-        overdue_match = row['OVERDUE'] == test["EXP_OVERDUE"]
-        recovamt_match = abs(row['RECOVAMT'] - test["EXP_RECOVAMT"]) < 0.01
-        
-        if overdue_match and recovamt_match:
-            matches += 1
-            status = "✓ PASS"
-        else:
-            status = "✗ FAIL"
-        
-        print(f"\n{status} ACCTNO: {test['ACCTNO']}, TRANSREF: {test['TRANSREF']}")
-        print(f"  OVERDUE:   Expected={test['EXP_OVERDUE']:>6d}, Got={row['OVERDUE']:>6d} {'✓' if overdue_match else '✗'}")
-        print(f"  RECOVAMT:  Expected={test['EXP_RECOVAMT']:>12.2f}, Got={row['RECOVAMT']:>12.2f} {'✓' if recovamt_match else '✗'}")
-    else:
-        print(f"\n✗ NOT FOUND ACCTNO: {test['ACCTNO']}, TRANSREF: {test['TRANSREF']}")
-
-print(f"\nValidation Summary:")
-print(f"  Matches: {matches}/{total}")
-
-if matches == total:
-    print("  ✓ ALL TESTS PASSED!")
-else:
-    print("  ✗ SOME TESTS FAILED - Check the differences above")
-
-# --------------------------------------------------------------------
-# Step 9: Summary Statistics
-# --------------------------------------------------------------------
-print("\n" + "=" * 80)
-print("SUMMARY STATISTICS")
-print("=" * 80)
-
-print(f"Total records: {len(combt)}")
-print(f"Records with BTDTL match: {matched.count()}")
-print(f"Records without BTDTL match: {unmatched.count()}")
-
-print("\nOVERDUE statistics:")
-overdue_stats = combt['OVERDUE'].describe()
-print(overdue_stats)
-
-print("\nRECOVAMT statistics:")
-recovamt_stats = combt['RECOVAMT'].describe()
-print(recovamt_stats)
-
-print("\nPRODTYPE distribution:")
-prodtype_dist = combt.group_by('PRODTYPE').agg(pl.count().alias('count'))
-print(prodtype_dist)
-
-# --------------------------------------------------------------------
-# Step 10: Validate output file
-# --------------------------------------------------------------------
-def validate_output():
-    """Validate that output files were created successfully"""
-    if os.path.exists(OUTPUT_TEXT_FILE):
-        size = os.path.getsize(OUTPUT_TEXT_FILE)
-        with open(OUTPUT_TEXT_FILE, 'r') as f:
-            line_count = sum(1 for _ in f)
-        print(f"\n✓ Text file: {OUTPUT_TEXT_FILE}")
-        print(f"  Size: {size:,} bytes")
-        print(f"  Lines: {line_count}")
-    else:
-        print(f"\n✗ Text file not found: {OUTPUT_TEXT_FILE}")
-    
-    if os.path.exists(OUTPUT_PARQUET_FILE):
-        size = os.path.getsize(OUTPUT_PARQUET_FILE)
-        print(f"✓ Parquet file: {OUTPUT_PARQUET_FILE}")
-        print(f"  Size: {size:,} bytes")
-    else:
-        print(f"✗ Parquet file not found: {OUTPUT_PARQUET_FILE}")
-
-validate_output()
-
-print("\n" + "=" * 80)
-print("PROCESS COMPLETE")
-print("=" * 80)
+  130 2506023302 Y091090    000         153803.61         153761.95      -1394             41.66 99999 
+   24 2508982519 Y090806    000         152858.50         152817.10       9198             41.40 99999 
+   90 2501914307 Y091070    000          50437.12          50423.46      -1029             13.66 99999 
+  170 2500830919 Y090606    000         189174.17         189122.93       5577             51.24 99999 
+  154 2508102321 Y089382    000          53011.80          52997.44      -1211             14.36 99999 
+  201 2505707731 Y080466    000          68808.91          68790.27       8105             18.64 99999 
+    2 2501466705 Y081197    000          74078.67          74058.61       1835             20.06 99999 
+  198 2503245817 Y090957    000          81998.33          81976.12       3354             22.21 99999 
+  154 2508100100 Y084111    000          49222.15          49208.82       8440             13.33 99999 
+   24 2508982519 Y090747    000         122458.37         122425.20         98             33.17 99999 
+  274 2505369723 Y091050    000         192523.95         192471.80       -664             52.15 99999 
+  198 2503245817 Y090630    000          69496.35          69477.53       4846             18.82 99999 
+   21 2504465223 Y091037    000          50478.41          50464.74       -298             13.67 99999 
+  128 2504488231 Y089984    000          61020.52          61003.99      -2002             16.53 99999 
+   57 2507906822 Y089286    000          29751.43          29743.37       1711              8.06 99999 
+  170 2500830919 Y091337    000          50081.96          50068.30         37             13.66 99999 
+  198 2503245817 Y090904    000          80038.94          80017.26       4450             21.68 99999 
+   40 2507542008 Y091005    000           7076.71           7074.79       1528              1.92 99999 
+  168 2504444630 Y091065    000          50450.78          50437.12      -1029             13.66 99999 
+  130 2505031512 Y091032    000         120377.26         120344.41        797             32.85 99999 
+  292 2508295634 Y090887    000         130838.68         130803.24       5911             35.44 99999 
+  206 2503644002 Y089571    000         147628.16         147588.17       2776             39.99 99999 
+  231 2501139319 Y090963    000         100220.21         100193.06       3354             27.15 99999 
+   57 2507906822 Y089549    000          47503.33          47490.46       4237             12.87 99999 
+   57 2507906822 Y089307    000          48850.65          48837.42        981             13.23 99999 
+   21 2504465223 Y090910    000          25328.77          25321.91       4450              6.86 99999 
+   38 2504717506 Y091062    000         125118.33         125084.44      -1029             33.89 99999 
+    4 2503839424 Y090976    000          79908.22          79886.58       2258             21.64 99999 
+   92 2507631203 Y091004    000         115797.69         115766.33       1528             31.36 99999 
+   57 2507906822 Y089586    000          24239.94          24233.37       2045              6.57 99999 
+  122 2508153221 Y087592    000         425907.78         425792.42       6247            115.36 99999 
+    9 2505605133 Y066656    000          40245.81          40245.81         75                   99999 
+  130 2505031512 Y091044    000          99919.98          99892.92       -664             27.06 99999 
+   15 2501749902 Y083138    000          75877.40          75856.85       8894             20.55 99999 
+    2 2501466705 Y081502    000          73462.33          73442.43       1805             19.90 99999 
+   58 2502259609 Y090934    000         160565.74         160521.95       3719             43.79 99999 
+  183 2508978108 Y089339    000         130640.14         130604.76        615             35.38 99999 
+  201 2507656432 Y090952    000          50629.91          50616.20       3719             13.71 99999 
+   24 2508982519 Y090673    000         133076.93         133040.89       2655             36.04 99999 
+  198 2503245817 Y090958    000          51628.40          51614.42       3354             13.98 99999 
+   40 2504583305 Y091080    000         183591.34         183541.61      -1394             49.73 99999 
+  154 2508102321 Y088666    000          54046.28          54031.64       2503             14.64 99999 
+   78 2501312018 Y091029    000         211952.97         211895.56        797             57.41 99999 
+    2 2501466705 Y081465    000          73483.51          73463.61       2170             19.90 99999 
+  206 2503644002 Y089212    000         170331.79         170285.65       4268             46.14 99999 
+  136 2505217220 Y087659    000          59936.26          59920.03       4056             16.23 99999 
+   24 2508982519 Y090854    000          61407.01          61390.38       7007             16.63 99999 
+  173 2506473625 Y088714    000         133923.69         133887.42       1407             36.27 99999 
+  184 2509215409 Y090800    000         161704.43         161660.63      -1728             43.80 99999 
+   79 2505644207 Y090917    000          89157.33          89133.18       4450             24.15 99999 
+  198 2503245817 Y091081    000          87760.63          87736.86      -1394             23.77 99999 
+    4 2503839424 Y090994    000          84919.46          84896.46       1528             23.00 99999 
+  270 2508676017 Y087441    000         191688.14         191636.22        433             51.92 99999 
+  133 2507752307 Y091014    000          86527.85          86504.60       1163             23.25 99999 
+  130 2508649023 Y090897    000         456413.54         456289.92       5911            123.62 99999 
+  159 2503636812 Y090907    000          60789.20          60772.73       4450             16.47 99999 
+   95 2504239403 Y090942    000          14516.58          14512.65       3719              3.93 99999 
+  198 2503245817 Y090586    000         136185.87         136148.98       7403             36.89 99999 
+   21 2504465223 Y090794    000          30510.25          30501.99      -1728              8.26 99999 
+  282 2506018515 Y090983    000         130714.50         130679.10       1893             35.40 99999 
+      2500830919 B604354    000          80000.00                                       80000.00 99999 
+  154 2508100100 Y084625    000          60726.49          60710.04          8             16.45 99999 
+  184 2509215409 Y090828    000         145861.61         145822.10       8833             39.51 99999 
+  173 2506473625 Y088715    000         108003.02         107973.77       1407             29.25 99999 
+    2 2501466705 Y081176    000          74100.48          74080.41       2200             20.07 99999 
+  198 2503245817 Y090809    000          72187.75          72168.20       9198             19.55 99999 
+  157 2504073912 Y091096    000          50437.12          50423.46      -1394             13.66 99999 
+  137 2500667206 Y090778    000          50906.19          50892.40       -267             13.79 99999 
+  170 2500830919 Y091099    000          58507.19          58491.34      -1394             15.85 99999 
+  201 2505707731 Y080340    000          69147.02          69128.29       3388             18.73 99999 
+  201 2505707731 Y080732    000          68361.28          68342.76       -661             18.52 99999 
+  201 2505707731 Y080998    000          67833.69          67815.32         40             18.37 99999 
+  198 2503245817 Y090714    000         188454.85         188403.81        463             51.04 99999 
+  201 2505707731 Y080415    000          68940.08          68921.41       -630             18.67 99999 
+   57 2507906822 Y089169    000          41574.92          41563.66       6094             11.26 99999 
+   42 2506384721 Y090940    000         129700.27         129664.91       3719             35.36 99999 
+  130 2505031512 Y091042    000         118087.26         118055.28       -664             31.98 99999 
+  198 2503245817 Y090859    000          57859.45          57843.78       7007             15.67 99999 
+   40 2504583305 Y090751    000         103359.99         103331.78       -267             28.21 99999 
+  198 2503245817 Y091023    000          65675.74          65657.95        797             17.79 99999 
+  184 2509215409 Y090742    000         150131.98         150091.32         98             40.66 99999 
+   21 2504465223 Y090735    000          30552.12          30543.84         98              8.28 99999 
+  201 2505707731 Y080832    000          68157.21          68138.75       6249             18.46 99999 
+  201 2505707731 Y080952    000          67985.24          67966.83       2962             18.41 99999 
+  170 2500830919 Y090430    000         162402.09         162358.10       2318             43.99 99999 
+  136 2505217220 Y087379    000          60390.47          60374.11       2990             16.36 99999 
+  136 2505217220 Y088413    000          70796.16          70776.98       1438             19.18 99999 
+  122 2508153221 Y088835    000         330434.72         330345.22       7950             89.50 99999 
+  292 2508295634 Y090959    000          71875.03          71855.56       3354             19.47 99999 
+    2 2501460929 Y091012    000          45480.24          45467.92       1163             12.32 99999 
+  122 2508153221 Y087901    000         340098.11         340005.99       8042             92.12 99999 
+    2 2501460929 Y091052    000          57529.69          57514.11       -664             15.58 99999 
+  270 2508676017 Y087415    000         163048.24         163004.08       1164             44.16 99999 
+  137 2500667206 Y091056    000          50450.78          50437.12      -1029             13.66 99999 
+   78 2501312018 Y091030    000         375406.63         375304.95        797            101.68 99999 
+    6 2501873900 Y011618    000          33531.01          33531.01       2733             -0.00 99999 
+  282 2506018515 Y090850    000         274799.31         274724.88       7007             74.43 99999 
+   24 2508982519 Y090951    000          77970.17          77949.05       3719             21.12 99999 
+  130 2505031512 Y091041    000          98910.80          98884.01       -664             26.79 99999 
+  128 2502986928 Y090992    000         505611.25         505474.30       1893            136.95 99999 
+  173 2500846434 Y090693    000         134501.71         134465.28        828             36.43 99999 
+   24 2508982519 Y090825    000         163312.94         163268.71       8833             44.23 99999 
+  128 2504488231 Y090231    000          70882.00          70862.80       -208             19.20 99999 
+   15 2501749902 Y082587    000         257123.64         257054.00       7496             69.64 99999 
+  136 2505217220 Y087518    000          93572.72          93547.38       8804             25.34 99999 
+   57 2507906822 Y089459    000          51852.18          51838.14       7524             14.04 99999 
+   78 2501312018 Y091078    000         948117.53         947860.73      -1394            256.80 99999 
+  201 2505707731 Y080733    000          68361.28          68342.76       -661             18.52 99999 
+  130 2506023302 Y091031    000         202456.20         202401.36        797             54.84 99999 
+    4 2503839424 Y091038    000          50478.41          50464.74       -298             13.67 99999 
+  201 2505707731 Y080273    000          69277.69          69258.93       5945             18.76 99999 
+    2 2501466705 Y081450    000          69513.77          69494.94       2901             18.83 99999 
+  183 2508978108 Y089840    000         226990.98         226929.50       2746             61.48 99999 
+  170 2500830919 Y091100    000          55480.95          55465.92      -1394             15.03 99999 
+  157 2504073912 Y090991    000          50560.99          50547.30       1893             13.69 99999 
+      2500830919 B604100    000          63000.00                                       63000.00 99999 
+    2 2501466705 Y081438    000          69532.53          69513.70       3266             18.83 99999 
+  173 2500846434 Y091051    000          89827.16          89802.83       -664             24.33 99999 
+  130 2508649023 Y090895    000          92189.30          92164.14       5911             25.16 99999 
+    2 2501466705 Y081202    000          74059.33          74039.27       1470             20.06 99999 
+  130 2505031512 Y091043    000          94873.74          94848.04       -664             25.70 99999 
+   15 2501749902 Y082343    000         207311.18         207255.03       6796             56.15 99999 
+    2 2501466705 Y081170    000          31753.92          31745.32       2566              8.60 99999 
+  270 2508676017 Y087440    000         203426.73         203371.63        433             55.10 99999 
+    2 2501466705 Y081505    000          73400.60          73380.72        709             19.88 99999 
+   78 2501312018 Y090843    000         391520.80         391414.75       7372            106.05 99999 
+   21 2504465223 Y090990    000          50560.99          50547.30       1893             13.69 99999 
+    2 2501466705 Y081223    000          74037.52          74017.47       1105             20.05 99999 
+   21 2504465223 Y090847    000          35527.66          35518.04       7007              9.62 99999 
+   57 2507906822 Y089167    000          74621.45          74601.24       6094             20.21 99999 
+  154 2508100100 Y084868    000          60272.49          60256.16       1074             16.33 99999 
+  198 2503245817 Y091083    000          98856.95          98830.17      -1394             26.78 99999 
+  201 2505707731 Y080602    000          68623.22          68604.63       4453             18.59 99999 
+  206 2503644002 Y089689    000         105046.83         105018.38       8590             28.45 99999 
+    4 2503839424 Y091045    000          91845.86          91820.98       -664             24.88 99999 
+  198 2503245817 Y090834    000         107715.18         107686.00       8468             29.18 99999 
+      2500830919 B604114    000          50000.00                                       50000.00 99999 
