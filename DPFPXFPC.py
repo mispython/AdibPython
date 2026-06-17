@@ -1,6 +1,6 @@
 # EIBDBT12_BANKTRADE_PM12.py
 # Python conversion of SAS job EIBDBT12
-# Uses Polars for data manipulation
+# With proper integration of PBBBTFMT and PBBELF
 
 import polars as pl
 import pyarrow as pa
@@ -9,6 +9,27 @@ from datetime import date, timedelta
 import pyreadstat
 import os
 import re
+
+# Import format libraries
+try:
+    from PBBBTFMT import LIAB_FORMAT, apply_liab_format, PRODTYPE_FORMAT
+    print("Loaded PBBBTFMT successfully")
+except ImportError as e:
+    print(f"Warning: Could not import PBBBTFMT: {e}")
+    # Define fallback formats
+    LIAB_FORMAT = {}
+    def apply_liab_format(liabcode):
+        return '99999'
+    PRODTYPE_FORMAT = {}
+
+try:
+    from PBBELF import LIAB_CLASS, apply_format
+    print("Loaded PBBELF successfully")
+except ImportError as e:
+    print(f"Warning: Could not import PBBELF: {e}")
+    LIAB_CLASS = {}
+    def apply_format(value, format_name):
+        return value
 
 # --------------------------------------------------------------------
 # Configuration: Input and Output Paths
@@ -67,6 +88,9 @@ def read_btdtl_text(filepath):
         data = []
         valid_lines = 0
         
+        # Track which LIABCODEs are being used for debugging
+        liab_codes_used = set()
+        
         with open(filepath, 'r') as f:
             for line_num, line in enumerate(f, 1):
                 line = line.rstrip('\n').rstrip('\r')
@@ -80,12 +104,12 @@ def read_btdtl_text(filepath):
                 
                 # Use exact positions from SAS (converted to 0-based indexing)
                 try:
-                    # SAS @002 -> Python position 1 (2-1=1)
-                    # SAS @006 -> Python position 5 (6-1=5)
-                    # SAS @016 -> Python position 15 (16-1=15)
-                    # SAS @023 -> Python position 22 (23-1=22)
-                    # SAS @038 -> Python position 37 (38-1=37)
-                    # SAS @043 -> Python position 42 (43-1=42)
+                    # SAS @002 -> Python position 1
+                    # SAS @006 -> Python position 5
+                    # SAS @016 -> Python position 15
+                    # SAS @023 -> Python position 22
+                    # SAS @038 -> Python position 37
+                    # SAS @043 -> Python position 42
                     
                     branch_str = line[1:5].strip()          # @002 BRANCH 4.
                     acctno_str = line[5:15].strip()         # @006 ACCTNO $10.
@@ -106,16 +130,10 @@ def read_btdtl_text(filepath):
                     acctno = int(acctno_str)
                     outstanding = float(outstanding_str) if outstanding_str else 0.0
                     
-                    # Map LIABCODE to FACILITY (simplified mapping based on SAS format)
-                    # In the SAS code, FACILITY = PUT(LIABCODE,$LIAB.)
-                    # Based on the output, 99999 is used, so we'll use that as default
-                    facility_map = {
-                        'PBZ': 'PBZ',
-                        'PBA': 'PBA', 
-                        'PBI': 'PBI',
-                        'PBT': 'PBT',
-                    }
-                    facility = facility_map.get(liabcode, '99999')
+                    # Apply LIABCODE format - THIS IS THE KEY CHANGE
+                    # FACILITY = PUT(LIABCODE, $LIAB.)
+                    facility = apply_liab_format(liabcode)
+                    liab_codes_used.add(liabcode)
                     
                     data.append({
                         'BRANCH': branch,
@@ -132,6 +150,13 @@ def read_btdtl_text(filepath):
                     continue
         
         print(f"Parsed {valid_lines} records from {filepath}")
+        print(f"LIABCODEs found: {sorted(liab_codes_used)}")
+        
+        # Show which LIABCODEs are mapped vs using default
+        unmapped = [code for code in liab_codes_used if code not in LIAB_FORMAT]
+        if unmapped:
+            print(f"WARNING: These LIABCODEs are not mapped in LIAB_FORMAT: {unmapped}")
+            print("They will use the default '99999'")
         
         if not data:
             raise ValueError(f"No valid data found in {filepath}")
@@ -154,7 +179,7 @@ if USE_DUMMY_DATA:
         "OUTSTAND": [33531.01, 40245.81, 69258.93, 69128.29],
         "MATDT": ["070119", "180426", "230310", "230317"],
         "LIABCODE": ["PBZ", "PBZ", "PBA", "PBA"],
-        "FACILITY": ["PBZ", "PBZ", "PBA", "PBA"],
+        "FACILITY": ["99999", "99999", "99999", "99999"],
     })
 else:
     btdtl = read_btdtl_text(INPUT_BTPM12_FILE)
@@ -167,13 +192,9 @@ print("Sample of loaded data:")
 print(btdtl.head(10))
 
 # Parse MATDATE matching SAS: MDY(SUBSTR(MATDT,3,2), SUBSTR(MATDT,5,2), SUBSTR(MATDT,1,2))
-# MATDT is DDMMYY format
 btdtl = btdtl.with_columns([
-    # Day is first 2 chars (DD)
     pl.col("MATDT").str.slice(0, 2).cast(pl.Int32, strict=False).alias("day"),
-    # Month is next 2 chars (MM)
     pl.col("MATDT").str.slice(2, 2).cast(pl.Int32, strict=False).alias("month"),
-    # Year is last 2 chars (YY)
     pl.col("MATDT").str.slice(4, 2).cast(pl.Int32, strict=False).alias("year2")
 ])
 
@@ -189,7 +210,6 @@ btdtl = btdtl.filter(
 if len(btdtl) == 0:
     raise ValueError("No valid dates found in MATDT field")
 
-# Add century (2000 + year2)
 btdtl = btdtl.with_columns(
     (pl.col("year2") + 2000).alias("year")
 ).with_columns(
@@ -198,7 +218,7 @@ btdtl = btdtl.with_columns(
 
 print(f"\nAfter date parsing, {len(btdtl)} records remain")
 
-# Apply SAS filter: IF BRANCH > 3000 AND (2850000000<=ACCTNO<=2859999999) THEN DELETE
+# Apply SAS filter
 btdtl = btdtl.filter(
     ~((pl.col("BRANCH") > 3000) &
       (pl.col("ACCTNO") >= 2850000000) &
@@ -208,10 +228,9 @@ btdtl = btdtl.filter(
 print(f"After filtering, {len(btdtl)} records remain")
 
 # --------------------------------------------------------------------
-# Step 3: Read BASE dataset (matching SAS BASE.BTBASE&PREVMON)
+# Step 3: Read BASE dataset
 # --------------------------------------------------------------------
 def read_base_sas(prevmon):
-    """Read BTBASE SAS dataset for the previous month"""
     try:
         filepath = INPUT_BTBASE_FILE.format(PREVMON=prevmon)
         
@@ -219,7 +238,7 @@ def read_base_sas(prevmon):
         
         if not os.path.exists(filepath):
             print(f"Warning: SAS file not found: {filepath}")
-            # Create dummy base data with matching account numbers
+            # Create dummy base data
             sample_accts = btdtl['ACCTNO'].head(50).to_list()
             sample_transrefs = btdtl['TRANSREF'].head(50).to_list()
             
@@ -227,7 +246,6 @@ def read_base_sas(prevmon):
                 sample_accts = [2501873900, 2505605133, 2505707731]
                 sample_transrefs = ["Y011618", "Y066656", "Y080273"]
             
-            # Create dummy base data
             base_data = []
             for i in range(min(len(sample_accts), 50)):
                 acct = sample_accts[i]
@@ -243,11 +261,9 @@ def read_base_sas(prevmon):
             print(f"Created dummy base data with {len(base_df)} records")
             return base_df
         
-        # Read SAS dataset using pyreadstat
         df, meta = pyreadstat.read_sas7bdat(filepath)
         base = pl.from_pandas(df)
         
-        # Keep only required columns and rename OUTSTAND to PREOUTSTD
         required_cols = ["ACCTNO", "TRANSREF", "OUTSTAND", "PRODTYPE"]
         base = base.select(required_cols).rename({"OUTSTAND": "PREOUTSTD"})
         
@@ -289,7 +305,6 @@ if USE_DUMMY_DATA:
 else:
     base = read_base_sas(params['PREVMON'])
 
-# PROC SORT NODUPKEY equivalent
 base = base.unique(subset=["ACCTNO", "TRANSREF"])
 btdtl = btdtl.unique(subset=["ACCTNO", "TRANSREF"])
 
@@ -297,9 +312,8 @@ print(f"\nBase records after dedup: {len(base)}")
 print(f"BTDTL records after dedup: {len(btdtl)}")
 
 # --------------------------------------------------------------------
-# Step 4: Merge BASE and BTDTL (matching SAS MERGE)
+# Step 4: Merge BASE and BTDTL
 # --------------------------------------------------------------------
-# Ensure compatible types
 base = base.with_columns([
     pl.col("ACCTNO").cast(pl.Int64),
     pl.col("TRANSREF").cast(pl.Utf8)
@@ -309,36 +323,29 @@ btdtl = btdtl.with_columns([
     pl.col("TRANSREF").cast(pl.Utf8)
 ])
 
-# MERGE BASE(IN=A) BTDTL(IN=B); BY ACCTNO TRANSREF; IF A;
 combt = base.join(btdtl, on=["ACCTNO", "TRANSREF"], how="left")
 
-# Handle missing values
 combt = combt.with_columns([
     pl.col("OUTSTAND").fill_null(0),
     pl.col("PREOUTSTD").fill_null(0),
 ])
 
-# Compute OVERDUE and RECOVAMT (matching SAS DATA COMBT)
 sdate_ordinal = sdate.toordinal()
 
 combt = combt.with_columns([
-    # OVERDUE = (&SDATE+1)-MATDATE
     pl.when(pl.col("MATDATE").is_not_null())
     .then((sdate_ordinal + 1) - pl.col("MATDATE").dt.epoch("d"))
-    .otherwise(None)  # Keep as missing for non-matches
+    .otherwise(None)
     .alias("OVERDUE"),
     
-    # RECOVAMT = PREOUTSTD-OUTSTAND
     (pl.col("PREOUTSTD") - pl.col("OUTSTAND")).alias("RECOVAMT"),
     
-    # IF PRODTYPE = 000 THEN RETAILID='R'
     pl.when(pl.col("PRODTYPE") == 0)
     .then(pl.lit("R"))
     .otherwise(pl.lit(None))
     .alias("RETAILID"),
 ])
 
-# Fill nulls for output formatting
 combt = combt.with_columns([
     pl.col("OVERDUE").fill_null(0).cast(pl.Int64),
     pl.col("RECOVAMT").fill_null(0),
@@ -347,27 +354,14 @@ combt = combt.with_columns([
 print(f"\nMerged records: {len(combt)}")
 
 # --------------------------------------------------------------------
-# Step 5: Write output (matching SAS PUT statement exactly)
+# Step 5: Write output
 # --------------------------------------------------------------------
 def write_fixed_width(df, filepath):
-    """
-    Write DataFrame matching SAS PUT statement:
-    @001 BRANCH      5.  (positions 1-5)
-    @007 ACCTNO     10.  (positions 7-16)
-    @018 TRANSREF   10.  (positions 18-27)
-    @029 PRODTYPE   Z3.  (positions 29-31, with leading zeros)
-    @033 PREOUTSTD  17.2 (positions 33-49)
-    @051 OUTSTAND   17.2 (positions 51-67)
-    @069 OVERDUE    10.  (positions 69-78)
-    @080 RECOVAMT   17.2 (positions 80-96)
-    @098 FACILITY   $5.  (positions 98-102)
-    """
     records = []
     skipped_rows = 0
     
     for row in df.iter_rows(named=True):
         try:
-            # Extract values with defaults
             branch = row.get('BRANCH', 0) or 0
             acctno = row.get('ACCTNO', 0) or 0
             transref = str(row.get('TRANSREF', '') or '')[:10]
@@ -378,38 +372,18 @@ def write_fixed_width(df, filepath):
             recovamt = row.get('RECOVAMT', 0.0) or 0.0
             facility = str(row.get('FACILITY', '99999') or '99999')[:5]
             
-            # Build record with exact SAS positions
-            # Using string concatenation with exact positions
-            record = [' '] * 103  # Initialize with spaces
+            record = [' '] * 103
             
-            # @001 BRANCH 5. (positions 1-5, 0-based: 0-4)
             record[0:5] = f"{int(branch):5d}"
-            
-            # @007 ACCTNO 10. (positions 7-16, 0-based: 6-15)
             record[6:16] = f"{int(acctno):10d}"
-            
-            # @018 TRANSREF 10. (positions 18-27, 0-based: 17-26)
             record[17:27] = f"{transref:<10}"
-            
-            # @029 PRODTYPE Z3. (positions 29-31, 0-based: 28-30)
             record[28:31] = f"{int(prodtype):03d}"
-            
-            # @033 PREOUTSTD 17.2 (positions 33-49, 0-based: 32-48)
             record[32:49] = f"{float(preoutstd):17.2f}"
-            
-            # @051 OUTSTAND 17.2 (positions 51-67, 0-based: 50-66)
             record[50:67] = f"{float(outstanding):17.2f}"
-            
-            # @069 OVERDUE 10. (positions 69-78, 0-based: 68-77)
             record[68:78] = f"{int(overdue):10d}"
-            
-            # @080 RECOVAMT 17.2 (positions 80-96, 0-based: 79-95)
             record[79:96] = f"{float(recovamt):17.2f}"
-            
-            # @098 FACILITY $5. (positions 98-102, 0-based: 97-101)
             record[97:102] = f"{facility:<5}"
             
-            # Join and add newline
             records.append(''.join(record))
             
         except Exception as e:
@@ -418,7 +392,6 @@ def write_fixed_width(df, filepath):
                 print(f"Warning: Error formatting row: {e}")
             continue
     
-    # Write to text file
     with open(filepath, "w") as f:
         for r in records:
             f.write(r + "\n")
@@ -427,10 +400,8 @@ def write_fixed_width(df, filepath):
     if skipped_rows > 0:
         print(f"  Skipped {skipped_rows} rows due to formatting errors")
 
-# Write text file
 write_fixed_width(combt, OUTPUT_TEXT_FILE)
 
-# Save to Parquet (additional output for easier analysis)
 try:
     table = pa.Table.from_pandas(combt.to_pandas())
     pq.write_table(table, OUTPUT_PARQUET_FILE)
@@ -438,7 +409,7 @@ try:
 except Exception as e:
     print(f"Error writing Parquet: {e}")
 
-# Display summary statistics
+# Display summary
 print("\n--- Summary Statistics ---")
 print(f"Total records processed: {len(combt)}")
 print(f"Columns in output: {combt.columns}")
@@ -446,7 +417,6 @@ print(f"Columns in output: {combt.columns}")
 print("\nPreview of first 10 rows:")
 print(combt.head(10))
 
-# Validate output by checking first few lines
 print("\n--- First 10 lines of output file ---")
 with open(OUTPUT_TEXT_FILE, 'r') as f:
     for i in range(10):
@@ -455,7 +425,6 @@ with open(OUTPUT_TEXT_FILE, 'r') as f:
             print(f"Line {i+1}: {line.rstrip()}")
 
 def validate_output():
-    """Validate that output files were created successfully"""
     if os.path.exists(OUTPUT_TEXT_FILE):
         size = os.path.getsize(OUTPUT_TEXT_FILE)
         with open(OUTPUT_TEXT_FILE, 'r') as f:
