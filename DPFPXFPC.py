@@ -1,58 +1,376 @@
-my python output:
+# EIBDBT12_BANKTRADE_PM12_DEBUG.py
+# Debug version to compare with production output
 
-2 2501466705 Y081465    200         340000.00          73463.61     721333         266536.39 99999 
-  201 2505707731 Y080733    200         230000.00          68342.76     718502         161657.24 99999 
-  201 2505707731 Y080466    200         200000.00          68790.27     727268         131209.73 99999 
-  201 2505707731 Y080602    000         210000.00          68604.63     723616         141395.37 99999 
-  270 2508676017 Y087441    200         460000.00         191636.22     719596         268363.78 99999 
-  122 2508153221 Y087592    000         480000.00         425792.42     725410          54207.58 99999 
-  201 2505707731 Y080415    200         190000.00          68921.41     718533         121078.59 99999 
-  173 2506473625 Y088714    200         530000.00         133887.42     720570         396112.58 99999 
-  136 2505217220 Y087659    200         490000.00          59920.03     723219         430079.97 99999 
-  183 2508978108 Y089339    200         610000.00         130604.76     719778         479395.24 99999 
-   15 2501749902 Y083138    000         390000.00          75856.85     728057         314143.15 99999 
-   15 2501749902 Y082587    200         380000.00         257054.00     726659         122946.00 99999 
-  270 2508676017 Y087415    200         440000.00         163004.08     720327         276995.92 99999 
-   57 2507906822 Y089286    200         590000.00          29743.37     720874         560256.63 99999 
-  201 2505707731 Y080952    200         250000.00          67966.83     722125         182033.17 99999 
-    2 2501466705 Y081505    000         360000.00          73380.72     719872         286619.28 99999 
-   57 2507906822 Y089169    000         570000.00          41563.66     725257         528436.34 99999 
-   15 2501749902 Y082343    200         370000.00         207255.03     725959         162744.97 99999 
-  122 2508153221 Y088835    200         550000.00         330345.22     727113         219654.78 99999 
-    2 2501466705 Y081197    200         290000.00          74058.61     720998         215941.39 99999 
-    2 2501466705 Y081176    200         280000.00          74080.41     721363         205919.59 99999 
-  122 2508153221 Y087901    200         500000.00         340005.99     727205         159994.01 99999 
-  201 2505707731 Y080340    000         180000.00          69128.29     722551         110871.71 99999 
-    6 2501873900 Y011618    000         150000.00          33531.01     721896         116468.99 99999 
+import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
+from datetime import date, timedelta
+import pyreadstat
+import os
+import re
 
+# --------------------------------------------------------------------
+# Configuration
+# --------------------------------------------------------------------
+INPUT_BTPM12_FILE = "input/prod/BTPM12.txt"
+INPUT_BTBASE_FILE = "input/prod/btbase{PREVMON}.sas7bdat"  # Note: no underscore
+OUTPUT_TEXT_FILE = "DAYBTRD_PM12_DEBUG.txt"
+DEBUG = True
 
+# --------------------------------------------------------------------
+# Step 1: Reporting date logic
+# --------------------------------------------------------------------
+today = date.today()
+reptdate = today - timedelta(days=1)
+prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
 
+# Calculate SDATE (first day of next month)
+if reptdate.month + 1 == 13:
+    mm, yy = 1, reptdate.year + 1
+else:
+    mm, yy = reptdate.month + 1, reptdate.year
+sdate = date(yy, mm, 1)
 
+params = {
+    "REPTDATE": reptdate.strftime("%Y-%m-%d"),
+    "PREVDATE": prevdate.strftime("%Y-%m-%d"),
+    "PREVMON": f"{prevdate.month:02d}",
+    "SDATE": sdate.strftime("%Y-%m-%d"),
+    "SDATE_ORDINAL": sdate.toordinal(),
+}
 
+print("=" * 80)
+print("DEBUG: Report Parameters")
+print("=" * 80)
+for key, value in params.items():
+    print(f"  {key}: {value}")
+print("=" * 80)
 
-production output:
+# --------------------------------------------------------------------
+# Step 2: Read and debug BTDTL input
+# --------------------------------------------------------------------
+def read_and_debug_btdtl(filepath):
+    """Read BTPM12 with extensive debugging"""
+    print("\n" + "=" * 80)
+    print("DEBUG: Reading BTPM12.txt")
+    print("=" * 80)
+    
+    # First, let's look at the raw file structure
+    with open(filepath, 'r') as f:
+        lines = f.readlines()
+    
+    print(f"Total lines in file: {len(lines)}")
+    print("\nFirst 5 data lines (showing first 80 chars):")
+    for i, line in enumerate(lines[1:6], 1):  # Skip header
+        line = line.rstrip('\n')
+        print(f"  Line {i}: '{line[:80]}...' (length: {len(line)})")
+        # Show character positions
+        if len(line) >= 50:
+            print(f"    Positions 0-4 (BRANCH): '{line[0:5]}'")
+            print(f"    Positions 5-14 (ACCTNO): '{line[5:15]}'")
+            print(f"    Positions 15-21 (TRANSREF): '{line[15:22]}'")
+            print(f"    Positions 22-36 (OUTSTAND): '{line[22:37]}'")
+            print(f"    Positions 37-42 (MATDT): '{line[37:43]}'")
+            print(f"    Positions 42-44 (LIABCODE): '{line[42:45]}'")
+            print()
+    
+    # Now parse all records
+    data = []
+    for line_num, line in enumerate(lines, 1):
+        line = line.rstrip('\n').rstrip('\r')
+        
+        if not line.strip():
+            continue
+        if line.strip().startswith('1BKT'):
+            continue
+        
+        try:
+            # Extract using positions from SAS
+            branch_str = line[1:5].strip() if len(line) > 5 else ''
+            acctno_str = line[5:15].strip() if len(line) > 15 else ''
+            transref = line[15:22].strip() if len(line) > 22 else ''
+            outstanding_str = line[22:37].strip() if len(line) > 37 else ''
+            matdt = line[37:43].strip() if len(line) > 43 else ''
+            liabcode = line[42:45].strip() if len(line) > 45 else ''
+            
+            # Skip invalid records
+            if not acctno_str.isdigit() or len(acctno_str) != 10:
+                continue
+            if not matdt.isdigit() or len(matdt) != 6:
+                continue
+            
+            branch = int(branch_str) if branch_str.isdigit() else 0
+            acctno = int(acctno_str)
+            outstanding = float(outstanding_str) if outstanding_str else 0.0
+            
+            data.append({
+                'BRANCH': branch,
+                'ACCTNO': acctno,
+                'TRANSREF': transref,
+                'OUTSTAND': outstanding,
+                'MATDT': matdt,
+                'LIABCODE': liabcode,
+            })
+        except Exception as e:
+            if DEBUG and line_num <= 10:
+                print(f"Warning: Error on line {line_num}: {e}")
+    
+    print(f"\nParsed {len(data)} records from BTPM12")
+    return pl.DataFrame(data)
 
-    . 2500667206 Y090303    000          51197.51               .            .               .                               
-  137 2500667206 Y090778    000          50478.70          50892.40         67           -413.70 99999                       
-  170 2500830919 Y090430    000         161038.40         162358.10        102          -1319.70 99999                       
-  170 2500830919 Y090606    000         187585.73         189122.93         83          -1537.20 99999                       
-  173 2500846434 Y090693    000         133372.38         134465.28         70          -1092.90 99999                       
-    . 2501289929 Y090684    000         135459.16               .            .               .                               
-    2 2501466705 Y081170    000          31487.32          31745.32       1079           -258.00 99999                       
-    2 2501466705 Y081176    000          73478.31          74080.41       1078           -602.10 99999                       
-    2 2501466705 Y081197    000          73456.81          74058.61       1077           -601.80 99999                       
-    2 2501466705 Y081202    000          73437.47          74039.27       1076           -601.80 99999                       
-    2 2501466705 Y081223    000          73415.97          74017.47       1075           -601.50 99999                       
-    2 2501466705 Y081438    000          68948.80          69513.70       1051           -564.90 99999                       
-    2 2501466705 Y081450    000          68930.04          69494.94       1050           -564.90 99999                       
-    2 2501466705 Y081465    000          72866.61          73463.61       1048           -597.00 99999                       
-    2 2501466705 Y081502    000          72845.43          73442.43       1047           -597.00 99999                       
-    2 2501466705 Y081505    000          72784.32          73380.72       1044           -596.40 99999                       
-   15 2501749902 Y082343    000         205570.53         207255.03        938          -1684.50 99999                       
-   15 2501749902 Y082587    000         254964.80         257054.00        910          -2089.20 99999                       
-   15 2501749902 Y083138    000          75240.35          75856.85        851           -616.50 99999                       
-    . 2501775319 Y090431    000         312416.27               .            .               .                               
-    . 2501775319 Y090549    000          81770.76               .            .               .                               
-    . 2501833503 T109931    000         104616.04               .            .               .                               
-    . 2501833503 T109970    000          69175.13               .            .               .                               
-    6 2501873900 Y011618    000          33531.01          33531.01       7074              0.00 99999  
+btdtl = read_and_debug_btdtl(INPUT_BTPM12_FILE)
+
+if len(btdtl) == 0:
+    raise ValueError("No data loaded from BTPM12 file")
+
+print("\nBTDTL Sample (first 5 records):")
+print(btdtl.head(5))
+
+# --------------------------------------------------------------------
+# Step 3: Parse MATDATE (DDMMYY format)
+# --------------------------------------------------------------------
+print("\n" + "=" * 80)
+print("DEBUG: Parsing MATDATE")
+print("=" * 80)
+
+# MATDT is DDMMYY
+btdtl = btdtl.with_columns([
+    pl.col("MATDT").str.slice(0, 2).cast(pl.Int32).alias("day"),
+    pl.col("MATDT").str.slice(2, 2).cast(pl.Int32).alias("month"),
+    pl.col("MATDT").str.slice(4, 2).cast(pl.Int32).alias("year2")
+])
+
+# Add century
+btdtl = btdtl.with_columns(
+    (pl.col("year2") + 2000).alias("year")
+).with_columns(
+    pl.date("year", "month", "day").alias("MATDATE")
+)
+
+print("BTDTL with MATDATE (first 5):")
+print(btdtl.select(["MATDT", "day", "month", "year", "MATDATE"]).head(5))
+
+# Apply filter
+btdtl = btdtl.filter(
+    ~((pl.col("BRANCH") > 3000) &
+      (pl.col("ACCTNO") >= 2850000000) &
+      (pl.col("ACCTNO") <= 2859999999))
+)
+
+print(f"\nAfter filter: {len(btdtl)} records")
+print("BTDTL unique keys:", btdtl.select(["ACCTNO", "TRANSREF"]).n_unique())
+
+# --------------------------------------------------------------------
+# Step 4: Read BASE dataset
+# --------------------------------------------------------------------
+print("\n" + "=" * 80)
+print("DEBUG: Reading BASE dataset")
+print("=" * 80)
+
+def read_and_debug_base(prevmon):
+    """Read BASE dataset with debugging"""
+    # Try both naming conventions
+    filepaths = [
+        INPUT_BTBASE_FILE.format(PREVMON=prevmon),
+        f"input/prod/btbase_{prevmon}.sas7bdat",
+        f"input/prod/BTBASE{prevmon}.sas7bdat",
+        f"input/prod/BTBASE_{prevmon}.sas7bdat",
+    ]
+    
+    base_df = None
+    for filepath in filepaths:
+        if os.path.exists(filepath):
+            print(f"Found BASE file: {filepath}")
+            try:
+                df, meta = pyreadstat.read_sas7bdat(filepath)
+                base_df = pl.from_pandas(df)
+                print(f"Loaded {len(base_df)} records")
+                print(f"Columns: {base_df.columns}")
+                print("\nFirst 5 records from BASE:")
+                print(base_df.head(5))
+                return base_df
+            except Exception as e:
+                print(f"Error reading {filepath}: {e}")
+                continue
+    
+    if base_df is None:
+        print("ERROR: Could not find BASE dataset")
+        print("Tried these paths:")
+        for filepath in filepaths:
+            print(f"  - {filepath} (exists: {os.path.exists(filepath)})")
+        raise FileNotFoundError("BASE dataset not found")
+    
+    return base_df
+
+base = read_and_debug_base(params['PREVMON'])
+
+# Keep only required columns
+required_cols = ["ACCTNO", "TRANSREF", "OUTSTAND", "PRODTYPE"]
+available_cols = [col for col in required_cols if col in base.columns]
+if "OUTSTAND" not in available_cols and "PREOUTSTD" in base.columns:
+    base = base.rename({"PREOUTSTD": "OUTSTAND"})
+    available_cols = ["ACCTNO", "TRANSREF", "OUTSTAND", "PRODTYPE"]
+
+base = base.select(available_cols).rename({"OUTSTAND": "PREOUTSTD"})
+
+print(f"\nBASE after selection: {len(base)} records")
+print("BASE sample:")
+print(base.head(5))
+
+# Deduplicate
+base = base.unique(subset=["ACCTNO", "TRANSREF"])
+btdtl = btdtl.unique(subset=["ACCTNO", "TRANSREF"])
+
+print(f"\nBASE after dedup: {len(base)}")
+print(f"BTDTL after dedup: {len(btdtl)}")
+
+# --------------------------------------------------------------------
+# Step 5: Merge and calculate
+# --------------------------------------------------------------------
+print("\n" + "=" * 80)
+print("DEBUG: Merging and calculating")
+print("=" * 80)
+
+# Ensure types match
+base = base.with_columns([
+    pl.col("ACCTNO").cast(pl.Int64),
+    pl.col("TRANSREF").cast(pl.Utf8)
+])
+btdtl = btdtl.with_columns([
+    pl.col("ACCTNO").cast(pl.Int64),
+    pl.col("TRANSREF").cast(pl.Utf8)
+])
+
+# Perform merge
+combt = base.join(btdtl, on=["ACCTNO", "TRANSREF"], how="left")
+
+print(f"Merged records: {len(combt)}")
+
+# Check merge results
+matched = combt.filter(pl.col("MATDATE").is_not_null())
+unmatched = combt.filter(pl.col("MATDATE").is_null())
+
+print(f"Matched records: {len(matched)}")
+print(f"Unmatched records: {len(unmatched)}")
+
+if len(unmatched) > 0:
+    print("\nSample of unmatched records (BASE only):")
+    print(unmatched.select(["ACCTNO", "TRANSREF", "PREOUTSTD", "PRODTYPE"]).head(10))
+
+# Calculate OVERDUE and RECOVAMT
+sdate_ordinal = params["SDATE_ORDINAL"]
+print(f"\nSDATE ordinal: {sdate_ordinal}")
+
+combt = combt.with_columns([
+    # OVERDUE = (SDATE+1) - MATDATE
+    pl.when(pl.col("MATDATE").is_not_null())
+    .then((sdate_ordinal + 1) - pl.col("MATDATE").cast(pl.Int32).dt.epoch("d"))
+    .otherwise(pl.lit(None))
+    .alias("OVERDUE"),
+    
+    # RECOVAMT = PREOUTSTD - OUTSTAND
+    (pl.col("PREOUTSTD") - pl.col("OUTSTAND").fill_null(0)).alias("RECOVAMT"),
+])
+
+# Fill nulls
+combt = combt.with_columns([
+    pl.col("OVERDUE").fill_null(0).cast(pl.Int64),
+    pl.col("RECOVAMT").fill_null(0),
+    pl.col("OUTSTAND").fill_null(0),
+])
+
+print("\nSample of merged data with calculations:")
+print(combt.select(["ACCTNO", "TRANSREF", "PREOUTSTD", "OUTSTAND", "OVERDUE", "RECOVAMT", "PRODTYPE"]).head(10))
+
+# --------------------------------------------------------------------
+# Step 6: Compare with known production values
+# --------------------------------------------------------------------
+print("\n" + "=" * 80)
+print("DEBUG: Comparison with Production Data")
+print("=" * 80)
+
+# Known production values for specific accounts from your sample
+production_samples = [
+    {"BRANCH": 6, "ACCTNO": 2501873900, "TRANSREF": "Y011618", "PRODTYPE": 0, 
+     "PREOUTSTD": 33531.01, "OUTSTAND": 33531.01, "OVERDUE": 7074, "RECOVAMT": 0.00},
+    {"BRANCH": 2, "ACCTNO": 2501466705, "TRANSREF": "Y081465", "PRODTYPE": 0,
+     "PREOUTSTD": 72866.61, "OUTSTAND": 73463.61, "OVERDUE": 1048, "RECOVAMT": -597.00},
+    {"BRANCH": 201, "ACCTNO": 2505707731, "TRANSREF": "Y080273", "PRODTYPE": 0,
+     "PREOUTSTD": 68696.13, "OUTSTAND": 69258.93, "OVERDUE": 1180, "RECOVAMT": -562.80},
+]
+
+print("Comparing specific records:")
+for prod in production_samples:
+    acctno = prod["ACCTNO"]
+    transref = prod["TRANSREF"]
+    
+    # Find in our data
+    match = combt.filter(
+        (pl.col("ACCTNO") == acctno) & 
+        (pl.col("TRANSREF") == transref)
+    )
+    
+    if len(match) > 0:
+        row = match.row(0, named=True)
+        print(f"\nACCTNO: {acctno}, TRANSREF: {transref}")
+        print(f"  Production: PREOUTSTD={prod['PREOUTSTD']:>12.2f}, OUTSTAND={prod['OUTSTAND']:>12.2f}, OVERDUE={prod['OVERDUE']:>6d}, RECOVAMT={prod['RECOVAMT']:>12.2f}")
+        print(f"  Python:     PREOUTSTD={row['PREOUTSTD']:>12.2f}, OUTSTAND={row['OUTSTAND']:>12.2f}, OVERDUE={row['OVERDUE']:>6d}, RECOVAMT={row['RECOVAMT']:>12.2f}")
+        
+        # Check for differences
+        if row['PREOUTSTD'] != prod['PREOUTSTD']:
+            print(f"  DIFFERENCE: PREOUTSTD differs by {row['PREOUTSTD'] - prod['PREOUTSTD']:.2f}")
+        if row['OUTSTAND'] != prod['OUTSTAND']:
+            print(f"  DIFFERENCE: OUTSTAND differs by {row['OUTSTAND'] - prod['OUTSTAND']:.2f}")
+        if row['OVERDUE'] != prod['OVERDUE']:
+            print(f"  DIFFERENCE: OVERDUE differs by {row['OVERDUE'] - prod['OVERDUE']}")
+        if row['RECOVAMT'] != prod['RECOVAMT']:
+            print(f"  DIFFERENCE: RECOVAMT differs by {row['RECOVAMT'] - prod['RECOVAMT']:.2f}")
+    else:
+        print(f"\nACCTNO: {acctno}, TRANSREF: {transref} - NOT FOUND in merged data")
+
+# --------------------------------------------------------------------
+# Step 7: Write output
+# --------------------------------------------------------------------
+def write_fixed_width(df, filepath):
+    """Write matching SAS PUT statement"""
+    records = []
+    
+    for row in df.iter_rows(named=True):
+        try:
+            branch = row.get('BRANCH', 0) or 0
+            acctno = row.get('ACCTNO', 0) or 0
+            transref = str(row.get('TRANSREF', '') or '')[:10]
+            prodtype = row.get('PRODTYPE', 0) or 0
+            preoutstd = row.get('PREOUTSTD', 0.0) or 0.0
+            outstanding = row.get('OUTSTAND', 0.0) or 0.0
+            overdue = row.get('OVERDUE', 0) or 0
+            recovamt = row.get('RECOVAMT', 0.0) or 0.0
+            facility = '99999'  # Default, should come from format
+            
+            record = [' '] * 103
+            
+            record[0:5] = f"{int(branch):5d}"
+            record[6:16] = f"{int(acctno):10d}"
+            record[17:27] = f"{transref:<10}"
+            record[28:31] = f"{int(prodtype):03d}"
+            record[32:49] = f"{float(preoutstd):17.2f}"
+            record[50:67] = f"{float(outstanding):17.2f}"
+            record[68:78] = f"{int(overdue):10d}"
+            record[79:96] = f"{float(recovamt):17.2f}"
+            record[97:102] = f"{facility:<5}"
+            
+            records.append(''.join(record))
+        except Exception as e:
+            continue
+    
+    with open(filepath, "w") as f:
+        for r in records:
+            f.write(r + "\n")
+    
+    print(f"\nOutput written: {filepath} ({len(records)} records)")
+
+write_fixed_width(combt, OUTPUT_TEXT_FILE)
+
+print("\n" + "=" * 80)
+print("DEBUG COMPLETE")
+print("=" * 80)
