@@ -11,10 +11,10 @@ import os
 # --------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------
-INPUT_BTPM12_FILE = "input/prod/BTPM12.txt"
-INPUT_BTBASE_FILE = "input/prod/btbase05.sas7bdat"
-OUTPUT_TEXT_FILE = "DAYBTRD_PM12.txt"
-OUTPUT_PARQUET_FILE = "DAYBTRD_PM12.parquet"
+INPUT_BTPM12_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM12.txt"
+INPUT_BTBASE_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/btbase{PREVMON}.sas7bdat"
+OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.txt"
+OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.parquet"
 
 # SAS epoch (days since 1960-01-01)
 SAS_EPOCH = date(1960, 1, 1)
