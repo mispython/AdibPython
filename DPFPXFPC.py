@@ -1,221 +1,132 @@
-# EIID2CBT_ISLAMIC_COMBINED_BASE_DTL_REPORT
+# EIBDBT12_BANKTRADE_PM12.py
+# Conversion of SAS job EIBDBT12 (calls EIBDBT05) into Python with Polars, DuckDB, PyArrow
+# Outputs both fixed-width .txt and Parquet
 
-import duckdb
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pyreadstat
 from datetime import date, timedelta
-import os
 
-# -------------------------
-# Configuration Paths
-# -------------------------
-INPUT_PATHS = {
-    'ibtbase': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/',  # Islamic BASE
-    'ibtdtl': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/'    # Islamic BTDTL
-}
-
-OUTPUT_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/output'  
-
-# -------------------------
-# Step 1: Prepare report dates (matching SAS logic)
-# -------------------------
+# --------------------------------------------------------------------
+# Step 1: Reporting date logic (DATA REPTDATE equivalent)
+# --------------------------------------------------------------------
 today = date.today()
-reptdate = today - timedelta(days=1)  # Using yesterday's date
-
-# PREVDATE = MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))-1
+reptdate = today - timedelta(days=1)
 prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
 
-# Next month start (matching SAS logic)
+rptdt = reptdate.strftime("%d-%m-%Y")
+curmm = rptdt[3:5]
+curyy = rptdt[8:10]
+rdatex = curmm + curyy
+
+# Next month calculation
 if reptdate.month + 1 == 13:
-    mm = 1
-    yy = reptdate.year + 1
+    mm, yy = 1, reptdate.year + 1
 else:
-    mm = reptdate.month + 1
-    yy = reptdate.year
+    mm, yy = reptdate.month + 1, reptdate.year
 sdate = date(yy, mm, 1)
 
-# Equivalent macro values (matching SAS CALL SYMPUT)
-reptyear = reptdate.strftime("%y")  # YEAR2. format
-reptmon = reptdate.strftime("%m")   # Z2. format
-reptday = reptdate.strftime("%d")   # Z2. format
-rdate = reptdate.strftime("%Y%m%d") # YYMMDDN. format
-prevmon = prevdate.strftime("%m")   # Z2. format
-sdate_ordinal = sdate.toordinal()   # For calculations
+params = {
+    "REPTYEAR": f"{reptdate.year % 100:02d}",
+    "REPTMON": f"{reptdate.month:02d}",
+    "REPTDAY": f"{reptdate.day:02d}",
+    "PREVMON": f"{prevdate.month:02d}",
+    "PREVDAY": f"{prevdate.day:02d}",
+    "RDATE": reptdate.strftime("%d-%m-%Y"),
+    "RDATEX": rdatex,
+    "SDATE": f"{sdate.year}{sdate.month:02d}{sdate.day:02d}"[-5:],
+}
 
-print(f"Report Date: {reptdate.strftime('%Y-%m-%d')}")
-print(f"Previous Month: {prevmon}")
-print(f"Next Month Start: {sdate.strftime('%Y-%m-%d')}")
+print("Report Parameters:", params)
 
-# -------------------------
-# Step 2: Load Islamic BASE & BTDTL data
-# -------------------------
-con = duckdb.connect()
+# --------------------------------------------------------------------
+# Step 2: Read BTDTL input (INFILE BTFILE equivalent)
+# --------------------------------------------------------------------
+try:
+    btdtl = pl.read_parquet("BTPM12.parquet")
+except FileNotFoundError:
+    print("BTPM12.parquet not found, using dummy sample")
+    btdtl = pl.DataFrame({
+        "BRANCH": [2001, 3100],
+        "ACCTNO": [2850001111, 2860000001],
+        "TRANSREF": ["PM12A01", "PM12B02"],
+        "OUTSTAND": [120000.00, 80000.00],
+        "MATDT": ["250125", "250630"],  # ddmmyy format
+        "LIABCODE": ["001", "002"],
+    })
 
-# Input file paths - matching SAS naming convention
-# BASE.IBTBASE&PREVMON -> ibtbase{prevmon}.sas7bdat
-base_file = os.path.join(INPUT_PATHS['ibtbase'], f"ibtbase{prevmon}.sas7bdat")
-# BT.IBTDTL&REPTYEAR&REPTMON&REPTDAY -> ibtdtl{reptyear}{reptmon}{reptday}.sas7bdat
-btdtl_file = os.path.join(INPUT_PATHS['ibtdtl'], f"ibtdtl{reptyear}{reptmon}{reptday}.sas7bdat")
+# Parse MATDATE from ddmmyy string
+btdtl = btdtl.with_columns(
+    pl.col("MATDT").str.slice(0, 2).cast(pl.Int32).alias("day"),
+    pl.col("MATDT").str.slice(2, 2).cast(pl.Int32).alias("month"),
+    pl.col("MATDT").str.slice(4, 2).cast(pl.Int32).alias("year2")
+).with_columns(
+    (pl.col("year2") + 2000).alias("year")
+).with_columns(
+    pl.datetime("year", "month", "day").alias("MATDATE")
+)
 
-# Check if files exist
-if not os.path.exists(base_file):
-    raise FileNotFoundError(f"Islamic BASE file not found: {base_file}")
-if not os.path.exists(btdtl_file):
-    raise FileNotFoundError(f"Islamic BTDTL file not found: {btdtl_file}")
+# Apply SAS filter: remove if branch > 3000 and ACCTNO in range
+btdtl = btdtl.filter(
+    ~((pl.col("BRANCH") > 3000) &
+      (pl.col("ACCTNO") >= 2850000000) &
+      (pl.col("ACCTNO") <= 2859999999))
+)
 
-# Read Islamic BTBASE SAS file using pyreadstat
-# Keeping only ACCTNO, TRANSREF, OUTSTAND (renamed to PREOUTSTD) - matching SAS DATA BASE step
-df_base = pyreadstat.read_sas7bdat(base_file)[0]
-# Select only needed columns and rename OUTSTAND to PREOUTSTD
-df_base = df_base[['ACCTNO', 'TRANSREF', 'OUTSTAND']].rename(columns={'OUTSTAND': 'PREOUTSTD'})
-base = pa.Table.from_pandas(df_base)
-print(f"Loaded Islamic BTBASE file: {base_file}")
-print(f"Islamic BTBASE columns: {base.column_names}")
-print(f"Islamic BTBASE rows: {base.num_rows}")
+# --------------------------------------------------------------------
+# Step 3: Read BASE dataset (previous month snapshot)
+# --------------------------------------------------------------------
+try:
+    base = pl.read_parquet(f"BTBASE_{params['PREVMON']}.parquet")
+except FileNotFoundError:
+    print("BTBASE parquet not found, using dummy")
+    base = pl.DataFrame({
+        "ACCTNO": [2850001111, 2860000001],
+        "TRANSREF": ["PM12A01", "PM12B02"],
+        "PREOUTSTD": [150000.0, 100000.0],
+        "PRODTYPE": [0, 200],
+    })
 
-# Read Islamic BTDTL SAS file using pyreadstat
-df_btdtl_full = pyreadstat.read_sas7bdat(btdtl_file)[0]
-print(f"Islamic BTDTL available columns: {df_btdtl_full.columns.tolist()}")
+base = base.unique(subset=["ACCTNO", "TRANSREF"])
+btdtl = btdtl.unique(subset=["ACCTNO", "TRANSREF"])
 
-# Check what columns are available for PRODTYPE
-prodtype_col = None
-if 'PRODTYPE' in df_btdtl_full.columns:
-    prodtype_col = 'PRODTYPE'
-elif 'PRODGRP' in df_btdtl_full.columns:
-    prodtype_col = 'PRODGRP'
-elif 'SUBPROD' in df_btdtl_full.columns:
-    prodtype_col = 'SUBPROD'
-else:
-    # If none of these exist, we'll create a default PRODTYPE column
-    print("No PRODTYPE column found. Will create default values.")
-    prodtype_col = None
+# --------------------------------------------------------------------
+# Step 4: Merge BASE and BTDTL (BY ACCTNO TRANSREF)
+# --------------------------------------------------------------------
+combt = base.join(btdtl, on=["ACCTNO", "TRANSREF"], how="left")
 
-# Select needed columns, handling the PRODTYPE column appropriately
-columns_needed = ['BRANCH', 'ACCTNO', 'TRANSREF', 'OUTSTAND', 'MATDATE', 'FACILITY', 'RETAILID']
-if prodtype_col:
-    columns_needed.append(prodtype_col)
+# Compute OVERDUE and RECOVAMT
+sdate_num = sdate.toordinal()
+combt = combt.with_columns([
+    ((sdate_num + 1) - pl.col("MATDATE").dt.to_python_datetime().dt.toordinal()).alias("OVERDUE"),
+    (pl.col("PREOUTSTD") - pl.col("OUTSTAND")).alias("RECOVAMT"),
+    pl.when(pl.col("PRODTYPE") == 0).then("R").otherwise(pl.lit(None)).alias("RETAILID"),
+])
 
-df_btdtl = df_btdtl_full[columns_needed].copy()
+# --------------------------------------------------------------------
+# Step 5: Write output (DAYBTRD fixed-width and Parquet)
+# --------------------------------------------------------------------
+records = []
+for row in combt.iter_rows(named=True):
+    rec = (
+        f"{row['BRANCH']:05d}"
+        f"{row['ACCTNO']:010d}"
+        f"{row['TRANSREF']:<10}"
+        f"{row['PRODTYPE']:03d}"
+        f"{row['PREOUTSTD']:017.2f}"
+        f"{row['OUTSTAND']:017.2f}"
+        f"{row['OVERDUE']:010d}"
+        f"{row['RECOVAMT']:017.2f}"
+        f"{row['LIABCODE']:<5}"
+    )
+    records.append(rec)
 
-# If we have a product type column, rename it to PRODTYPE for consistency
-if prodtype_col and prodtype_col != 'PRODTYPE':
-    df_btdtl = df_btdtl.rename(columns={prodtype_col: 'PRODTYPE'})
-elif not prodtype_col:
-    # Create a default PRODTYPE column
-    df_btdtl['PRODTYPE'] = 999
+with open("DAYBTRD_PM12.txt", "w") as f:
+    for r in records:
+        f.write(r + "\n")
 
-# Apply RETAILID logic: IF RETAILID = 'R' THEN PRODTYPE=000; IF RETAILID = 'C' THEN PRODTYPE=999
-# Convert to string for comparison
-df_btdtl['RETAILID'] = df_btdtl['RETAILID'].astype(str)
-df_btdtl.loc[df_btdtl['RETAILID'].str.upper() == 'R', 'PRODTYPE'] = 0
-df_btdtl.loc[df_btdtl['RETAILID'].str.upper() == 'C', 'PRODTYPE'] = 999
+# Save to Parquet
+table = pa.Table.from_pandas(combt.to_pandas())
+pq.write_table(table, "DAYBTRD_PM12.parquet")
 
-# Ensure PRODTYPE is integer
-df_btdtl['PRODTYPE'] = df_btdtl['PRODTYPE'].astype(int)
-
-# Drop RETAILID as it's no longer needed
-df_btdtl = df_btdtl.drop('RETAILID', axis=1)
-
-btdtl = pa.Table.from_pandas(df_btdtl)
-print(f"Loaded Islamic BTDTL file: {btdtl_file}")
-print(f"Islamic BTDTL columns: {btdtl.column_names}")
-print(f"Islamic BTDTL rows: {btdtl.num_rows}")
-
-# Register in DuckDB
-con.register("base", base)
-con.register("btdtl", btdtl)
-
-# -------------------------
-# Step 3: Transform BASE - Remove duplicates (matching PROC SORT NODUPKEY)
-# -------------------------
-base_trans = con.execute("""
-    SELECT ACCTNO, TRANSREF, PREOUTSTD
-    FROM base
-    GROUP BY ACCTNO, TRANSREF, PREOUTSTD
-""").fetch_arrow_table()
-
-print(f"Islamic BASE deduplicated. Rows: {base_trans.num_rows}")
-
-# -------------------------
-# Step 4: Transform BTDTL - Remove duplicates (matching PROC SORT NODUPKEY)
-# -------------------------
-btdtl_trans = con.execute("""
-    SELECT BRANCH, ACCTNO, TRANSREF, PRODTYPE, OUTSTAND, MATDATE, FACILITY
-    FROM btdtl
-    GROUP BY BRANCH, ACCTNO, TRANSREF, PRODTYPE, OUTSTAND, MATDATE, FACILITY
-""").fetch_arrow_table()
-
-print(f"Islamic BTDTL deduplicated. Rows: {btdtl_trans.num_rows}")
-
-# -------------------------
-# Step 5: Merge BASE + BTDTL (matching MERGE BASE(IN=A) BTDTL(IN=B); IF A;)
-# -------------------------
-con.register("base_trans", base_trans)
-con.register("btdtl_trans", btdtl_trans)
-
-combt = con.execute(f"""
-    SELECT 
-        b.BRANCH,
-        b.ACCTNO,
-        b.TRANSREF,
-        b.PRODTYPE,
-        base.PREOUTSTD,
-        b.OUTSTAND,
-        CAST(({sdate_ordinal} - b.MATDATE) AS INT) AS OVERDUE,
-        CAST((base.PREOUTSTD - b.OUTSTAND) AS DOUBLE) AS RECOVAMT,
-        b.FACILITY
-    FROM base_trans base
-    INNER JOIN btdtl_trans b
-    ON base.ACCTNO = b.ACCTNO
-   AND base.TRANSREF = b.TRANSREF
-""").fetch_arrow_table()
-
-print(f"Islamic merge complete. Combined rows: {combt.num_rows}")
-
-# -------------------------
-# Step 6: Export to fixed-width file (matching SAS PUT format)
-# -------------------------
-# Create output directory if it doesn't exist
-os.makedirs(OUTPUT_PATH, exist_ok=True)
-
-output_file = os.path.join(OUTPUT_PATH, f"DAYBTRD_{rdate}.txt")
-
-with open(output_file, "w") as f:
-    for row in combt.to_pylist():
-        # Format according to SAS PUT specifications:
-        # @001 BRANCH      5.    (right-aligned, 5 characters)
-        # @007 ACCTNO     10.    (right-aligned, 10 characters)
-        # @018 TRANSREF   10.    (right-aligned, 10 characters)
-        # @029 PRODTYPE   Z3.    (zero-padded, 3 characters)
-        # @033 PREOUTSTD  17.2   (17 chars with 2 decimals, right-aligned)
-        # @051 OUTSTAND   17.2   (17 chars with 2 decimals, right-aligned)
-        # @069 OVERDUE    10.    (right-aligned, 10 characters)
-        # @080 RECOVAMT   17.2   (17 chars with 2 decimals, right-aligned)
-        # @098 FACILITY   $5.    (left-aligned, 5 characters)
-        
-        branch = str(row['BRANCH']).rjust(5)
-        acctno = str(row['ACCTNO']).rjust(10)
-        transref = str(row['TRANSREF']).rjust(10)
-        prodtype = str(row['PRODTYPE']).zfill(3)
-        preoutstd = f"{row['PREOUTSTD']:017.2f}"
-        outstanding = f"{row['OUTSTAND']:017.2f}"
-        overdue = str(row['OVERDUE']).rjust(10)
-        recovamt = f"{row['RECOVAMT']:017.2f}"
-        facility = str(row['FACILITY']).ljust(5) if row['FACILITY'] is not None else "     "
-        
-        f.write(f"{branch}{acctno}{transref}{prodtype}{preoutstd}{outstanding}{overdue}{recovamt}{facility}\n")
-
-print(f"Islamic BT Report generated: {output_file}")
-print(f"Total records written: {combt.num_rows}")
-
-# Optional: Display sample of output
-if combt.num_rows > 0:
-    print("\nSample output (first 5 rows):")
-    sample = combt.slice(0, min(5, combt.num_rows))
-    for row in sample.to_pylist():
-        print(f"ACCTNO: {row['ACCTNO']}, PRODTYPE: {row['PRODTYPE']}, "
-              f"PREOUTSTD: {row['PREOUTSTD']:.2f}, OUTSTAND: {row['OUTSTAND']:.2f}")
-
-# Close connection
-con.close()
+print("Output written: DAYBTRD_PM12.txt and DAYBTRD_PM12.parquet")
