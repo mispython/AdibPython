@@ -7,17 +7,11 @@ BASE_OUTPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/GOL
 BASE_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
 # File paths
-REPTDATE_FILE = BASE_INPUT_PATH / "DEPOSIT_REPTDATE.txt"
 EGOLD_FILE = BASE_INPUT_PATH / "EGOLD_TRX.txt"
 OTHER_FILE = BASE_INPUT_PATH / "EGOLD_OTHR.txt"
 
-# Existing MIS data for path (for appending)
-MIS_DATA_PATH = BASE_OUTPUT_PATH / "MIS"
-
-# Read REPTDATE and set variables
-REPTDATE_df = pl.read_csv("data/input/DEPOSIT_REPTDATE.txt")
-REPTDATE_value = REPTDATE_df["REPTDATE"][0]
-REPTDATE = datetime.strptime(REPTDATE_value, "%Y-%m-%d")
+# Use current datetime instead of reading from file
+REPTDATE = datetime.now().date()
 
 day = REPTDATE.day
 month = REPTDATE.month
@@ -40,7 +34,7 @@ REPTDT = REPTDATE.strftime("%Y%m%d") # 8.
 
 # Read EGOLD flat file
 EGOLD = pl.read_csv(
-    "GOLD_ETRX_20250715",
+    EGOLD_FILE,
     has_header=False,
     columns=[
         "TRXNYY", "TRXNMM", "TRXNDD", "ACCTNO ", "MPURCGM ", "MSALEGM", "BRANCH", "MPURCPR", "MPURCAMT", "MSALEPR", "MSALEAMT"
@@ -62,7 +56,7 @@ EGOLD = EGOLD.with_columns([
 
 # Read OTHER flat file
 OTHER = pl.read_csv(
-    "GOLD_ETRX_OTH_20250715",
+    OTHER_FILE,
     has_header=False,
     columns=[
         "TRXNYY", "TRXNMM", "TRXNDD", "ACCTNO ", "MPURCGM ", "MSALEGM", "BRANCH", "MPURCPR", "MPURCAMT", "MSALEPR", "MSALEAMT", "TRANCODE", "CHANNEL" 
@@ -85,24 +79,25 @@ GOLDTRAN = pl.concat([EGOLD, OTHER])
 
 # Append Logic
 target_name = f"MIS_GOLDTRAN{REPTMON}{NOWK}"
+parquet_file = BASE_OUTPUT_PATH / f"{target_name}.parquet"
+text_file = BASE_OUTPUT_PATH / f"{target_name}.txt"
 
-if{REPTDAY} == "01":
+if REPTDAY == "01":
     # Start new dataset
     MIS_GOLDTRAN = GOLDTRAN
 else:
-    # Load existing dataset
-    MIS_GOLDTRAN = pl.read.parquet(f"{target_name}.parquet")
-    # Remove duplicates for same REPTDATE
-    MIS_GOLDTRAN = MIS_GOLDTRAN.filter(pl.col("REPTDATE") != REPTDT)
-    # Append new
-    MIS_GOLDTRAN = pl.concat([MIS_GOLDTRAN, GOLDTRAN])
+    # Load existing dataset if it exists
+    if parquet_file.exists():
+        MIS_GOLDTRAN = pl.read_parquet(parquet_file)
+        # Remove duplicates for same REPTDATE
+        MIS_GOLDTRAN = MIS_GOLDTRAN.filter(pl.col("REPTDATE") != REPTDT)
+        # Append new
+        MIS_GOLDTRAN = pl.concat([MIS_GOLDTRAN, GOLDTRAN])
+    else:
+        MIS_GOLDTRAN = GOLDTRAN
 
-# Save back
-MIS_GOLDTRAN.write_parquet(f"{target_name}.parquet")
+# Save as parquet
+MIS_GOLDTRAN.write_parquet(parquet_file)
 
-# Save TEMP copy
-TEMP = f"TEMP_GOLDTRAN{REPTMON}{NOWK}{REPTYEAR}"
-MIS_GOLDTRAN.write.parquet(f"{TEMP}.parquet")
-
-# Export
-MIS_GOLDTRAN.write.csv("TRANFILE.csv.gz")
+# Save as text file (pipe-delimited)
+MIS_GOLDTRAN.write_csv(text_file, separator="|")
