@@ -2,13 +2,14 @@
 import polars as pl
 import pyarrow.parquet as pq
 import duckdb
-from datetime import date
+from datetime import date, timedelta
 import sas7bdat  # You'll need to install: pip install sas7bdat
 
 # -----------------------------
 # Step 1: Define report date (like SAS SET DEPOSIT.REPTDATE)
 # -----------------------------
 today = date.today()
+today = today - timedelta(days=3) #testing purposes
 REPTMON = f"{today.month:02d}"
 REPTDAY = f"{today.day:02d}"
 REPTDT = today.strftime("%Y-%m-%d")
@@ -32,7 +33,7 @@ print(f"Running EIBAEGLD for {REPTDT}, MON={REPTMON}, DAY={REPTDAY}, NOWK={NOWK}
 # SAS: MIS.GOLDTRAN&REPTMON&NOWK
 # Input format: goldtran{MONTH}{WEEK}.sas7bdat
 # Example: goldtran012.sas7bdat (month=01, week=2)
-mis_file = f"goldtran{REPTMON}{NOWK}.sas7bdat"
+mis_file = f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/gold/goldtran{REPTMON}{NOWK}.sas7bdat"
 
 print(f"Looking for input file: {mis_file}")
 
@@ -214,3 +215,34 @@ print(f"Input:  {mis_file} ({len(mis_goldtran)} rows)")
 print(f"Output: {len(temp_goldtran)} rows filtered for {REPTDT}")
 print(f"Files generated: 5 files (Parquet, TXT, CSV, metadata)")
 print("=" * 60)
+
+
+
+
+
+
+
+
+
+
+Running EIBAEGLD for 2026-06-15, MON=06, DAY=15, NOWK=2
+Looking for input file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/gold/goldtran062.sas7bdat
+[goldtran062.sas7bdat] header length 65536 != 8192
+Error reading SAS file: unexpected value while building Series of type Float64; found value of type String: "EBANKING"
+
+Hint: Try setting `strict=False` to allow passing data with mixed types.
+Successfully loaded using pandas fallback
+Loaded 8167 rows from SAS dataset: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/gold/goldtran062.sas7bdat
+Columns: ['TRXNYY', 'TRXNMM', 'TRXNDD', 'ACCTNO', 'MPURCGM', 'MSALEGM', 'BRANCH', 'MPURCPR', 'MPURCAMT', 'MSALEPR', 'MSALEAMT', 'TRXNDATE', 'REPTDATE', 'CHANNELIND', 'TRANCODE', 'CHANNEL']
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/CONVERTED JOBS/EIBAEGLD.py", line 101, in <module>
+    temp_goldtran = mis_goldtran.filter(pl.col("REPTDATE") == REPTDT)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 5325, in filter
+    self.lazy()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
+    return wrap_df(ldf.collect(engine, callback))
+polars.exceptions.ComputeError: cannot compare string with numeric type (f64)
