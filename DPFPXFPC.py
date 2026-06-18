@@ -38,32 +38,35 @@ mis_file = f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/gold/goldtr
 print(f"Looking for input file: {mis_file}")
 
 try:
-    # Option 1: Using sas7bdat library
-    with sas7bdat.SAS7BDAT(mis_file) as reader:
-        # Convert to list of dicts then to Polars DataFrame
-        data = list(reader)
-        mis_goldtran = pl.DataFrame(data)
+    # Using pandas to read SAS with proper type handling
+    import pandas as pd
     
-    # Option 2: Alternative using pandas (if sas7bdat gives issues)
-    # import pandas as pd
-    # df_pandas = pd.read_sas(mis_file, format='sas7bdat')
-    # mis_goldtran = pl.from_pandas(df_pandas)
+    # Read SAS file and ensure numeric columns are properly typed
+    df_pandas = pd.read_sas(mis_file, format='sas7bdat')
+    
+    # Convert to Polars DataFrame
+    mis_goldtran = pl.from_pandas(df_pandas)
+    print(f"Successfully loaded using pandas")
     
 except FileNotFoundError:
     raise FileNotFoundError(f"Missing input SAS file: {mis_file}")
 except Exception as e:
-    print(f"Error reading SAS file: {e}")
-    # Try alternative with pandas
+    print(f"Error reading SAS file with pandas: {e}")
+    # Fallback to sas7bdat library if pandas fails
     try:
-        import pandas as pd
-        df_pandas = pd.read_sas(mis_file, format='sas7bdat')
-        mis_goldtran = pl.from_pandas(df_pandas)
-        print(f"Successfully loaded using pandas fallback")
+        with sas7bdat.SAS7BDAT(mis_file) as reader:
+            data = list(reader)
+            mis_goldtran = pl.DataFrame(data)
+        print(f"Successfully loaded using sas7bdat library")
     except Exception as e2:
         raise Exception(f"Failed to load SAS file with both methods: {e2}")
 
 print(f"Loaded {len(mis_goldtran)} rows from SAS dataset: {mis_file}")
 print(f"Columns: {mis_goldtran.columns}")
+
+# Display data types to understand the columns
+print("\nColumn data types:")
+print(mis_goldtran.dtypes)
 
 # -----------------------------
 # Step 3: Filter by REPTDATE
@@ -72,40 +75,58 @@ print(f"Columns: {mis_goldtran.columns}")
 if "REPTDATE" not in mis_goldtran.columns:
     print("Warning: REPTDATE column not found. Available columns:")
     print(mis_goldtran.columns)
-    # If REPTDATE not found, you might need to use a different column name
-    # or skip filtering
     temp_goldtran = mis_goldtran.clone()
 else:
     # Check the data type of REPTDATE
-    if mis_goldtran["REPTDATE"].dtype in [pl.Int32, pl.Int64]:
+    repdate_dtype = mis_goldtran["REPTDATE"].dtype
+    
+    print(f"\nREPTDATE data type: {repdate_dtype}")
+    print(f"Sample REPTDATE values (first 5): {mis_goldtran['REPTDATE'].head(5).to_list()}")
+    
+    # Handle different data types
+    if repdate_dtype in [pl.Int32, pl.Int64, pl.Float32, pl.Float64]:
         # SAS date is days since 1960-01-01
         # Convert SAS numeric date to string format YYYY-MM-DD
-        from datetime import datetime, timedelta
+        from datetime import datetime
         sas_epoch = datetime(1960, 1, 1)
+        
+        # Handle float by converting to int first (rounding)
+        if repdate_dtype in [pl.Float32, pl.Float64]:
+            # Convert float to int (SAS dates are integers, but pandas may read as float)
+            mis_goldtran = mis_goldtran.with_columns(
+                pl.col("REPTDATE").cast(pl.Int64).alias("REPTDATE_INT")
+            )
+            repdate_col = "REPTDATE_INT"
+        else:
+            repdate_col = "REPTDATE"
+        
+        # Convert SAS numeric date to string
         mis_goldtran = mis_goldtran.with_columns(
-            pl.col("REPTDATE").map_elements(
-                lambda x: (sas_epoch + timedelta(days=x)).strftime("%Y-%m-%d") if x is not None else None,
+            pl.col(repdate_col).map_elements(
+                lambda x: (sas_epoch + timedelta(days=int(x))).strftime("%Y-%m-%d") if x is not None and not pd.isna(x) else None,
                 return_dtype=pl.Utf8
             ).alias("REPTDATE_STR")
         )
+        
+        # Filter by the string date
+        temp_goldtran = mis_goldtran.filter(pl.col("REPTDATE_STR") == REPTDT)
+        
+    elif repdate_dtype == pl.Date:
+        # Already a date type
+        mis_goldtran = mis_goldtran.with_columns(
+            pl.col("REPTDATE").cast(pl.Utf8).alias("REPTDATE_STR")
+        )
         temp_goldtran = mis_goldtran.filter(pl.col("REPTDATE_STR") == REPTDT)
     else:
-        # Assume it's already a string or date
-        # Convert to string if needed
-        if mis_goldtran["REPTDATE"].dtype == pl.Date:
-            mis_goldtran = mis_goldtran.with_columns(
-                pl.col("REPTDATE").cast(pl.Utf8).alias("REPTDATE_STR")
-            )
-            temp_goldtran = mis_goldtran.filter(pl.col("REPTDATE_STR") == REPTDT)
-        else:
-            temp_goldtran = mis_goldtran.filter(pl.col("REPTDATE") == REPTDT)
+        # Assume it's already a string
+        temp_goldtran = mis_goldtran.filter(pl.col("REPTDATE") == REPTDT)
 
-print(f"Filtered to {len(temp_goldtran)} rows for date {REPTDT}")
+print(f"\nFiltered to {len(temp_goldtran)} rows for date {REPTDT}")
 if len(temp_goldtran) > 0:
     print("Sample data (first 5 rows):")
     print(temp_goldtran.head())
 else:
-    print("WARNING: No records found for date {REPTDT}")
+    print(f"WARNING: No records found for date {REPTDT}")
 
 # -----------------------------
 # Step 4: Write to TEMP dataset
@@ -125,36 +146,37 @@ if len(temp_goldtran) > 0:
     # Write CSV (comma-delimited)
     temp_goldtran.write_csv(temp_file_csv)
     
-    print(f"TEMP dataset written to:")
+    print(f"\nTEMP dataset written to:")
     print(f"  - Parquet: {temp_file_parquet}")
     print(f"  - Text (pipe): {temp_file_txt}")
     print(f"  - CSV: {temp_file_csv}")
 else:
-    print("No data to write - creating empty files")
+    print("\nNo data to write - creating empty files")
     # Create empty files with headers
     if len(mis_goldtran.columns) > 0:
-        pl.DataFrame(columns=mis_goldtran.columns).write_parquet(temp_file_parquet)
-        pl.DataFrame(columns=mis_goldtran.columns).write_csv(temp_file_txt, separator='|')
-        pl.DataFrame(columns=mis_goldtran.columns).write_csv(temp_file_csv)
+        empty_df = pl.DataFrame(columns=mis_goldtran.columns)
+        empty_df.write_parquet(temp_file_parquet)
+        empty_df.write_csv(temp_file_txt, separator='|')
+        empty_df.write_csv(temp_file_csv)
 
 # -----------------------------
 # Step 5: Export for FTP (SAS CPORT replacement)
 # -----------------------------
-# SAS used PROC CPORT (binary SAS library dump). Here we export Parquet and TXT.
 export_parquet = "SAP_PBB_GOLD_GOLDFTPD.parquet"
 export_txt = "SAP_PBB_GOLD_GOLDFTPD.txt"
 
 if len(temp_goldtran) > 0:
     temp_goldtran.write_parquet(export_parquet)
     temp_goldtran.write_csv(export_txt, separator='|')
-    print(f"Export files ready for FTP:")
+    print(f"\nExport files ready for FTP:")
     print(f"  - Parquet: {export_parquet}")
     print(f"  - Text: {export_txt}")
 else:
-    print("No data to export - creating empty export files")
+    print("\nNo data to export - creating empty export files")
     if len(mis_goldtran.columns) > 0:
-        pl.DataFrame(columns=mis_goldtran.columns).write_parquet(export_parquet)
-        pl.DataFrame(columns=mis_goldtran.columns).write_csv(export_txt, separator='|')
+        empty_df = pl.DataFrame(columns=mis_goldtran.columns)
+        empty_df.write_parquet(export_parquet)
+        empty_df.write_csv(export_txt, separator='|')
 
 # -----------------------------
 # Step 6: Optional DuckDB for appending to MIS
@@ -165,13 +187,13 @@ try:
         duckdb.sql(f"""
             CREATE OR REPLACE TABLE goldtran AS SELECT * FROM read_parquet('{export_parquet}')
         """)
-        print("DuckDB table 'goldtran' created successfully")
+        print("\nDuckDB table 'goldtran' created successfully")
         result = duckdb.sql("SELECT COUNT(*) FROM goldtran").fetchall()
         print(f"Row count in DuckDB: {result[0][0]}")
     else:
-        print("No data to load into DuckDB")
+        print("\nNo data to load into DuckDB")
 except Exception as e:
-    print(f"DuckDB operation skipped: {e}")
+    print(f"\nDuckDB operation skipped: {e}")
 
 # -----------------------------
 # Step 7: Create a SAS-compatible text file with metadata
@@ -203,7 +225,7 @@ with open(metadata_file, 'w') as f:
     f.write(f"  - CSV: Comma-delimited with headers\n")
     f.write("=" * 60 + "\n")
 
-print(f"Metadata file created: {metadata_file}")
+print(f"\nMetadata file created: {metadata_file}")
 
 # -----------------------------
 # Step 8: Summary
@@ -215,34 +237,3 @@ print(f"Input:  {mis_file} ({len(mis_goldtran)} rows)")
 print(f"Output: {len(temp_goldtran)} rows filtered for {REPTDT}")
 print(f"Files generated: 5 files (Parquet, TXT, CSV, metadata)")
 print("=" * 60)
-
-
-
-
-
-
-
-
-
-
-Running EIBAEGLD for 2026-06-15, MON=06, DAY=15, NOWK=2
-Looking for input file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/gold/goldtran062.sas7bdat
-[goldtran062.sas7bdat] header length 65536 != 8192
-Error reading SAS file: unexpected value while building Series of type Float64; found value of type String: "EBANKING"
-
-Hint: Try setting `strict=False` to allow passing data with mixed types.
-Successfully loaded using pandas fallback
-Loaded 8167 rows from SAS dataset: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/gold/goldtran062.sas7bdat
-Columns: ['TRXNYY', 'TRXNMM', 'TRXNDD', 'ACCTNO', 'MPURCGM', 'MSALEGM', 'BRANCH', 'MPURCPR', 'MPURCAMT', 'MSALEPR', 'MSALEAMT', 'TRXNDATE', 'REPTDATE', 'CHANNELIND', 'TRANCODE', 'CHANNEL']
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/Job/CONVERTED JOBS/EIBAEGLD.py", line 101, in <module>
-    temp_goldtran = mis_goldtran.filter(pl.col("REPTDATE") == REPTDT)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 5325, in filter
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ComputeError: cannot compare string with numeric type (f64)
