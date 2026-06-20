@@ -12,6 +12,57 @@ input_file = Path("MAREMUCC5")
 output_path.mkdir(exist_ok=True)
 deposit_path.mkdir(exist_ok=True)
 
+# DATA REPTDATE (KEEP=REPTDATE);
+# REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+today = datetime.date.today()
+date_string = f"01{today.month:02d}{today.year}"
+reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
+
+# SELECT(DAY(REPTDATE)); logic
+reptday = reptdate.day
+if reptday == 8:
+    SDD, WK, WK1 = 1, '1', '4'
+elif reptday == 15:
+    SDD, WK, WK1 = 9, '2', '1'
+elif reptday == 22:
+    SDD, WK, WK1 = 16, '3', '2'
+else:
+    SDD, WK, WK1, WK2, WK3 = 23, '4', '3', '2', '1'
+
+MM = reptdate.month
+
+# IF WK = '1' THEN DO;
+if WK == '1':
+    MM1 = MM - 1
+    if MM1 == 0:
+        MM1 = 12
+else:
+    MM1 = MM
+
+# MM2 = MM - 1;
+MM2 = MM - 1
+if MM2 == 0:
+    MM2 = 12
+
+SDATE = datetime.date(reptdate.year, MM, SDD)
+SDESC = 'PUBLIC BANK BERHAD'
+
+# CALL SYMPUT equivalents
+NOWK = WK
+REPTMON = f"{MM:02d}"
+REPTYEAR = str(reptdate.year)  # <-- This was missing!
+
+print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
+print(f"SDESC: {SDESC}")
+print(f"REPTDATE: {reptdate}")
+print(f"SDATE: {SDATE}")
+
+# Create REPTDATE DataFrame (KEEP=REPTDATE)
+reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
+reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
+reptdate_df.write_csv(output_path / "REPTDATE.csv")
+
+# Rest of the functions and code...
 def unpack_packed_decimal(data):
     """
     Unpack a packed decimal (PD) field.
