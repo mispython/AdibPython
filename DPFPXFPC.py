@@ -5,9 +5,9 @@ import struct
 import codecs
 
 # Configuration
-deposit_path = Path("DEPOSIT")
-output_path = Path("output")
-input_file = Path("MAREMUC5")  # Note: The file is MAREMUC5, not MAREMUCC5
+deposit_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQPIUC")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQPIUC")
+input_file = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQPIUC/MAREMUC5") 
 
 output_path.mkdir(exist_ok=True)
 deposit_path.mkdir(exist_ok=True)
