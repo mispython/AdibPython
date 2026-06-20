@@ -1,102 +1,692 @@
-Current working directory: /sas/python/virt_edw/Data_Warehouse/MIS
-Deposit path exists: True
-MNI path exists: True
-IMNI path exists: True
-Output path exists: True
+import polars as pl
+import duckdb
+from pathlib import Path
+import datetime
+import pyreadstat
+import re
+import os
 
-Files in /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT:
-  - curn124.sas7bdat
-  - savg124.sas7bdat
-  - CURN124.parquet
-  - SAVG124.parquet
-  - MAREMORE
-  - REMIT.parquet
-  - REMIT.csv
-  - REMIT_sorted.parquet
-  - REMIT_sorted.csv
+# Configuration
+deposit_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT")
+mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT")
+imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQREMT")
+output_path.mkdir(exist_ok=True)
+deposit_path.mkdir(exist_ok=True)
 
-Files in /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT:
-  - curn124.sas7bdat
-  - savg124.sas7bdat
-  - CURN124.parquet
-  - SAVG124.parquet
-  - MAREMORE
-  - REMIT.parquet
-  - REMIT.csv
-  - REMIT_sorted.parquet
-  - REMIT_sorted.csv
+# Print current working directory and check files
+print(f"Current working directory: {os.getcwd()}")
+print(f"Deposit path exists: {deposit_path.exists()}")
+print(f"MNI path exists: {mni_path.exists()}")
+print(f"IMNI path exists: {imni_path.exists()}")
+print(f"Output path exists: {output_path.exists()}")
 
-Files in /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT:
-  - savg124.sas7bdat
-  - curn124.sas7bdat
-  - ISAVG124.parquet
-  - ICURN124.parquet
-*** TEST MODE - Using date: 2026-12-23 (December Week 4) ***
-NOWK: 4, REPTMON: 12, REPTYEAR: 2026
-SDESC: PUBLIC BANK BERHAD
-SDATE: 2026-12-23
-Created REPTDATE files in /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQREMT
+# List files in directories
+print(f"\nFiles in {deposit_path}:")
+if deposit_path.exists():
+    for file in deposit_path.glob("*"):
+        print(f"  - {file.name}")
 
-Looking for MAREMORE file at: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT/MAREMORE
-MAREMORE file found! Size: 3050850 bytes
+print(f"\nFiles in {mni_path}:")
+if mni_path.exists():
+    for file in mni_path.glob("*"):
+        print(f"  - {file.name}")
 
-Attempting to parse REMIT file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT/MAREMORE
-Read 11826 lines from REMIT file
-Created DataFrame with 11826 records
-After cleaning, 11638 records remain
-Successfully parsed 11638 records from MAREMORE
-Created REMIT with 8858 records and NONDEBIT with 2780 records
-Created REMIT_sorted with 8858 records
-Created NONDEBIT_sorted with 2780 records
-Created REMIT_FINAL with 4791 records
+print(f"\nFiles in {imni_path}:")
+if imni_path.exists():
+    for file in imni_path.glob("*"):
+        print(f"  - {file.name}")
 
-Looking for SAS files with pattern: *124*
-SAVG: savg124.sas7bdat
-CURN: curn124.sas7bdat
-ISAVG: savg124.sas7bdat
-ICURN: curn124.sas7bdat
+# DATA REPTDATE (KEEP=REPTDATE);
+# PRODUCTION DATE - COMMENTED OUT FOR TESTING
+# today = datetime.date.today()
+# date_string = f"01{today.month:02d}{today.year}"
+# reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
 
-Reading SAS files...
-Attempting to read: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT/savg124.sas7bdat
-  Successfully read /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT/savg124.sas7bdat, 4241108 rows, 25 columns
-  Selected columns: ['ACCTNO', 'PRODCD', 'COSTCTR']
-  Loaded SAVG with 4241108 records
-Attempting to read: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT/curn124.sas7bdat
-  Successfully read /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT/curn124.sas7bdat, 915692 rows, 29 columns
-  Selected columns: ['ACCTNO', 'PRODCD', 'COSTCTR']
-  Loaded CURN with 915692 records
-Attempting to read: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT/savg124.sas7bdat
-  Successfully read /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT/savg124.sas7bdat, 2262899 rows, 25 columns
-  Selected columns: ['ACCTNO', 'PRODCD', 'COSTCTR']
-  Loaded ISAVG with 2262899 records
-Attempting to read: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT/curn124.sas7bdat
-  Successfully read /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT/curn124.sas7bdat, 915692 rows, 29 columns
-  Selected columns: ['ACCTNO', 'PRODCD', 'COSTCTR']
-  Loaded ICURN with 915692 records
+# TEST DATE - December Week 4 (December 23, 2026)
+# For Week 4, the logic sets SDD=23, WK='4', WK1='3', WK2='2', WK3='1'
+reptdate = datetime.date(2026, 12, 23)  # December 23, 2026 (Week 4)
+print(f"*** TEST MODE - Using date: {reptdate} (December Week 4) ***")
 
-Combining 4 datasets...
-Combined DEP dataset with 8335391 records
-Filtered DEP with valid PRODCD: 8135928 records
-Unique DEP records by ACCTNO: 7284287 records
+# SELECT(DAY(REPTDATE)); logic
+reptday = reptdate.day
+if reptday == 8:
+    SDD, WK, WK1 = 1, '1', '4'
+elif reptday == 15:
+    SDD, WK, WK1 = 9, '2', '1'
+elif reptday == 22:
+    SDD, WK, WK1 = 16, '3', '2'
+else:
+    SDD, WK, WK1, WK2, WK3 = 23, '4', '3', '2', '1'
 
-Proceeding with merge and reporting...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBQREMT.py", line 438, in <module>
-    dep_merged = dep_deduped.join(remit_for_merge, on='ACCTNO', how='right', suffix='_remit')
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 8242, in join
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.SchemaError: datatypes of join keys don't match - `ACCTNO`: f64 on left does not match `ACCTNO`: i64 on right (and no other type was available to cast to)
+MM = reptdate.month
 
+# IF WK = '1' THEN DO;
+if WK == '1':
+    MM1 = MM - 1
+    if MM1 == 0:
+        MM1 = 12
+else:
+    MM1 = MM
 
+# MM2 = MM - 1;
+MM2 = MM - 1
+if MM2 == 0:
+    MM2 = 12
 
+SDATE = datetime.date(reptdate.year, MM, SDD)
+SDESC = 'PUBLIC BANK BERHAD'
 
+# CALL SYMPUT equivalent
+NOWK = WK
+REPTMON = f"{MM:02d}"
+REPTYEAR = str(reptdate.year)
 
-the savg and curn is in lowercase, isavg and icurn are both savg and curn, no i's, just different path
+print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
+print(f"SDESC: {SDESC}")
+print(f"SDATE: {SDATE}")
+
+# Create REPTDATE DataFrame
+reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
+reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
+reptdate_df.write_csv(output_path / "REPTDATE.csv")
+print(f"Created REPTDATE files in {output_path}")
+
+def clean_text(text):
+    """Remove non-printable characters except spaces and newlines"""
+    if text is None:
+        return ""
+    # Keep only printable characters (ASCII 32-126) and newlines
+    cleaned = ''.join(ch for ch in text if 31 < ord(ch) < 127 or ch == '\n' or ch == '\r')
+    return cleaned.strip()
+
+def parse_remit_file(filepath):
+    """Parse fixed-width REMIT file"""
+    records = []
+    
+    print(f"\nAttempting to parse REMIT file: {filepath}")
+    
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            line_count = 0
+            for line in f:
+                line_count += 1
+                # Clean the line but keep it as is for parsing
+                raw_line = line.rstrip('\n\r')
+                
+                # Skip empty lines
+                if not raw_line.strip():
+                    continue
+                
+                # Parse fixed-width fields based on SAS layout
+                try:
+                    # Extract fields (0-indexed positions)
+                    raw = raw_line
+                    line_len = len(raw)
+                    
+                    # Extract fields based on SAS positions
+                    acctno_raw = raw[2:9] if line_len > 9 else ""
+                    cheqno_raw = raw[8:14] if line_len > 14 else ""
+                    issyy_raw = raw[26:30] if line_len > 30 else ""
+                    issmm_raw = raw[31:33] if line_len > 33 else ""
+                    issdd_raw = raw[34:36] if line_len > 36 else ""
+                    issbranch_raw = raw[36:39] if line_len > 39 else ""
+                    ledgbal_raw = raw[39:48] if line_len > 48 else ""
+                    status_raw = raw[46:48] if line_len > 48 else ""
+                    paymode_raw = raw[54:64] if line_len > 64 else ""
+                    name_raw = raw[74:114] if line_len > 114 else ""
+                    
+                    # Clean each field
+                    acctno = clean_text(acctno_raw)
+                    cheqno = clean_text(cheqno_raw)
+                    issyy = clean_text(issyy_raw)
+                    issmm = clean_text(issmm_raw)
+                    issdd = clean_text(issdd_raw)
+                    issbranch = clean_text(issbranch_raw)
+                    ledgbal = clean_text(ledgbal_raw)
+                    status = clean_text(status_raw)
+                    paymode = clean_text(paymode_raw)
+                    name = clean_text(name_raw)
+                    
+                    # Clean the full line for debugging
+                    clean_line = clean_text(raw_line)
+                    
+                    # Try to extract ACCTNO from visible pattern if parsing failed
+                    if not acctno or len(acctno) < 6:
+                        # Try to find pattern like "N075422" or "075422"
+                        match = re.search(r'([0-9]{6,7})', raw)
+                        if match:
+                            acctno = match.group(1)
+                    
+                    # Only add if we have at least some data
+                    if acctno or name:
+                        records.append({
+                            'ACCTNO': acctno,
+                            'CHEQNO': cheqno,
+                            'ISSYY': issyy,
+                            'ISSMM': issmm,
+                            'ISSDD': issdd,
+                            'ISSBRANCH': issbranch,
+                            'LEDGBAL': ledgbal,
+                            'STATUS': status,
+                            'PAYMODE': paymode,
+                            'NAME': name,
+                            'RAW_LINE': clean_line[:100]  # Store first 100 chars for debugging
+                        })
+                        
+                except Exception as e:
+                    print(f"Error parsing line {line_count}: {e}")
+                    continue
+            
+            print(f"Read {line_count} lines from REMIT file")
+    
+    except FileNotFoundError:
+        print(f"ERROR: REMIT file not found at {filepath}")
+        return pl.DataFrame()
+    except Exception as e:
+        print(f"ERROR reading REMIT file: {e}")
+        return pl.DataFrame()
+    
+    if not records:
+        print("No records parsed from REMIT file")
+        return pl.DataFrame()
+    
+    # Create DataFrame
+    df = pl.DataFrame(records)
+    print(f"Created DataFrame with {df.height} records")
+    
+    # Convert numeric fields
+    df = df.with_columns([
+        pl.col('ACCTNO').cast(pl.Int64, strict=False).alias('ACCTNO'),
+        pl.col('CHEQNO').cast(pl.Int64, strict=False).alias('CHEQNO'),
+        pl.col('ISSBRANCH').cast(pl.Int64, strict=False).alias('ISSBRANCH'),
+        pl.col('LEDGBAL').cast(pl.Float64, strict=False).alias('LEDGBAL'),
+    ])
+    
+    # Remove rows with null ACCTNO
+    df = df.filter(pl.col('ACCTNO').is_not_null())
+    
+    print(f"After cleaning, {df.height} records remain")
+    return df
+
+# Check if MAREMORE file exists in the deposit path
+remit_file = deposit_path / "MAREMORE"
+print(f"\nLooking for MAREMORE file at: {remit_file}")
+if remit_file.exists():
+    print(f"MAREMORE file found! Size: {remit_file.stat().st_size} bytes")
+else:
+    print("MAREMORE file NOT found in deposit path")
+    # Also check current directory
+    if Path("MAREMORE").exists():
+        print("MAREMORE file found in current directory, copying to deposit path...")
+        import shutil
+        shutil.copy("MAREMORE", remit_file)
+        print(f"Copied MAREMORE to {remit_file}")
+    else:
+        print("MAREMORE file not found anywhere")
+
+# DATA DEPOSIT.REMIT(DROP=ISSMM ISSDD ISSYY) NONDEBIT;
+# INFILE MAREMORE;
+try:
+    # Parse the MAREMORE fixed-width file
+    remit_df = parse_remit_file(remit_file)
+    
+    if not remit_df.is_empty():
+        print(f"Successfully parsed {remit_df.height} records from MAREMORE")
+        
+        # Create ISSDTE = MDY(ISSMM,ISSDD,ISSYY)
+        remit_with_dates = remit_df.with_columns([
+            pl.when(
+                pl.col('ISSMM').is_not_null() & 
+                pl.col('ISSDD').is_not_null() & 
+                pl.col('ISSYY').is_not_null()
+            )
+            .then(
+                pl.concat_str([pl.col('ISSMM'), pl.col('ISSDD'), pl.col('ISSYY')], separator='')
+                .str.strptime(pl.Date, '%m%d%Y', strict=False)
+            )
+            .alias('ISSDTE')
+        ])
+        
+        # CATEGORY assignments
+        remit_with_category = remit_with_dates.with_columns([
+            pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4', '5', '6']))
+            .then(pl.lit('SA'))
+            .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['3']))
+            .then(pl.lit('CA'))
+            .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['1', '7']))
+            .then(pl.lit('FD'))
+            .otherwise(pl.lit('OTHER'))
+            .alias('CATEGORY')
+        ])
+        
+        # Split into REMIT and NONDEBIT based on PAYMODE
+        valid_paymodes = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+        
+        remit_valid = remit_with_category.filter(
+            pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
+        ).drop(['ISSMM', 'ISSDD', 'ISSYY'])  # DROP=ISSMM ISSDD ISSYY
+        
+        nondebit_invalid = remit_with_category.filter(
+            ~pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
+        )
+        
+        # Save datasets
+        remit_valid.write_parquet(deposit_path / "REMIT.parquet")
+        remit_valid.write_csv(deposit_path / "REMIT.csv")
+        nondebit_invalid.write_parquet(output_path / "NONDEBIT.parquet")
+        nondebit_invalid.write_csv(output_path / "NONDEBIT.csv")
+        
+        print(f"Created REMIT with {remit_valid.height} records and NONDEBIT with {nondebit_invalid.height} records")
+    else:
+        print("No valid records in MAREMORE file")
+        remit_valid = pl.DataFrame()
+        nondebit_invalid = pl.DataFrame()
+    
+except Exception as e:
+    print(f"Error processing MAREMORE file: {e}")
+    import traceback
+    traceback.print_exc()
+    remit_valid = pl.DataFrame()
+    nondebit_invalid = pl.DataFrame()
+
+# PROC SORT DATA=DEPOSIT.REMIT; BY PAYMODE;
+if not remit_valid.is_empty():
+    remit_sorted = remit_valid.sort('PAYMODE')
+    remit_sorted.write_parquet(deposit_path / "REMIT_sorted.parquet")
+    remit_sorted.write_csv(deposit_path / "REMIT_sorted.csv")
+    print(f"Created REMIT_sorted with {remit_sorted.height} records")
+else:
+    remit_sorted = pl.DataFrame()
+    print("REMIT_sorted is empty")
+
+# PROC SORT DATA=NONDEBIT; BY PAYMODE NAME;
+if not nondebit_invalid.is_empty():
+    nondebit_sorted = nondebit_invalid.sort(['PAYMODE', 'NAME'])
+    nondebit_sorted.write_parquet(output_path / "NONDEBIT_sorted.parquet")
+    nondebit_sorted.write_csv(output_path / "NONDEBIT_sorted.csv")
+    print(f"Created NONDEBIT_sorted with {nondebit_sorted.height} records")
+else:
+    nondebit_sorted = pl.DataFrame()
+    print("NONDEBIT_sorted is empty")
+
+# PROC SUMMARY DATA=DEPOSIT.REMIT; BY PAYMODE; VAR LEDGBAL;
+if not remit_valid.is_empty():
+    remit_summary = remit_valid.group_by('PAYMODE').agg([
+        pl.col('LEDGBAL').sum().alias('LEDGBAL_sum')
+    ])
+    
+    # OUTPUT OUT=REMIT(DROP=_FREQ_ _TYPE_) SUM=;
+    remit_summary_clean = remit_summary.rename({'LEDGBAL_sum': 'LEDGBAL'})
+    
+    # DATA REMIT; MERGE REMIT(IN=A) DEPOSIT.REMIT (IN=B DROP=LEDGBAL);
+    remit_deduped = remit_valid.unique(subset=['PAYMODE']).drop('LEDGBAL')
+    remit_merged = remit_deduped.join(remit_summary_clean, on='PAYMODE', how='inner')
+    
+    # PROC SORT DATA=REMIT NODUPKEYS; BY PAYMODE;
+    remit_final = remit_merged.unique(subset=['PAYMODE'])
+    remit_final.write_parquet(output_path / "REMIT_FINAL.parquet")
+    remit_final.write_csv(output_path / "REMIT_FINAL.csv")
+    print(f"Created REMIT_FINAL with {remit_final.height} records")
+else:
+    remit_final = pl.DataFrame()
+    print("REMIT_FINAL is empty - no valid REMIT records")
+
+# Load additional datasets from SAS files
+# For December Week 4 testing:
+# WK='4', REPTMON='12'
+# Note: Files are lowercase in the actual directory
+savg_filename = f"savg{REPTMON}{NOWK}.sas7bdat"  # savg124.sas7bdat (lowercase)
+curn_filename = f"curn{REPTMON}{NOWK}.sas7bdat"  # curn124.sas7bdat (lowercase)
+isavg_filename = f"savg{REPTMON}{NOWK}.sas7bdat"  # savg124.sas7bdat (lowercase, in IMNI path)
+icurn_filename = f"curn{REPTMON}{NOWK}.sas7bdat"  # curn124.sas7bdat (lowercase, in IMNI path)
+
+print(f"\nLooking for SAS files with pattern: *{REPTMON}{NOWK}*")
+print(f"SAVG: {savg_filename} (lowercase)")
+print(f"CURN: {curn_filename} (lowercase)")
+print(f"ISAVG: {isavg_filename} (lowercase, in IMNI)")
+print(f"ICURN: {icurn_filename} (lowercase, in IMNI)")
+
+datasets = []
+
+def read_sas_file(filepath, columns):
+    """Read SAS file and select specific columns"""
+    try:
+        print(f"Attempting to read: {filepath}")
+        if not filepath.exists():
+            print(f"  File not found: {filepath}")
+            return None
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        print(f"  Successfully read {filepath}, {df.shape[0]} rows, {df.shape[1]} columns")
+        pl_df = pl.DataFrame(df)
+        # Select only needed columns if they exist
+        existing_cols = [col for col in columns if col in pl_df.columns]
+        if existing_cols:
+            result = pl_df.select(existing_cols)
+            print(f"  Selected columns: {existing_cols}")
+            return result
+        else:
+            print(f"  Warning: None of the expected columns found in {filepath}")
+            print(f"  Available columns: {pl_df.columns}")
+            return None
+    except FileNotFoundError:
+        print(f"  NOTE: {filepath} not found")
+        return None
+    except Exception as e:
+        print(f"  Error reading {filepath}: {e}")
+        return None
+
+# Read SAS files
+print("\nReading SAS files...")
+savg_df = read_sas_file(mni_path / savg_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if savg_df is not None:
+    datasets.append(savg_df)
+    savg_df.write_parquet(mni_path / f"SAVG{REPTMON}{NOWK}.parquet")
+    savg_df.write_csv(mni_path / f"SAVG{REPTMON}{NOWK}.csv")
+    print(f"  Loaded SAVG with {savg_df.height} records")
+
+curn_df = read_sas_file(mni_path / curn_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if curn_df is not None:
+    datasets.append(curn_df)
+    curn_df.write_parquet(mni_path / f"CURN{REPTMON}{NOWK}.parquet")
+    curn_df.write_csv(mni_path / f"CURN{REPTMON}{NOWK}.csv")
+    print(f"  Loaded CURN with {curn_df.height} records")
+
+isavg_df = read_sas_file(imni_path / isavg_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if isavg_df is not None:
+    datasets.append(isavg_df)
+    isavg_df.write_parquet(imni_path / f"ISAVG{REPTMON}{NOWK}.parquet")
+    isavg_df.write_csv(imni_path / f"ISAVG{REPTMON}{NOWK}.csv")
+    print(f"  Loaded ISAVG with {isavg_df.height} records")
+
+icurn_df = read_sas_file(imni_path / icurn_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if icurn_df is not None:
+    datasets.append(icurn_df)
+    icurn_df.write_parquet(imni_path / f"ICURN{REPTMON}{NOWK}.parquet")
+    icurn_df.write_csv(imni_path / f"ICURN{REPTMON}{NOWK}.csv")
+    print(f"  Loaded ICURN with {icurn_df.height} records")
+
+# DATA DEP; SET all datasets;
+if datasets:
+    print(f"\nCombining {len(datasets)} datasets...")
+    dep_df = pl.concat(datasets, how="diagonal")
+    print(f"Combined DEP dataset with {dep_df.height} records")
+    
+    # IF PRODCD IN specified values;
+    valid_prodcd = ['42110', '42310', '42120', '42320', '42130', '42132', '42180', '42199', '42699']
+    dep_filtered = dep_df.filter(pl.col('PRODCD').is_in(valid_prodcd))
+    print(f"Filtered DEP with valid PRODCD: {dep_filtered.height} records")
+    
+    # PROC SORT DATA=DEP NODUPKEYS; BY ACCTNO;
+    dep_deduped = dep_filtered.unique(subset=['ACCTNO'])
+    dep_deduped.write_parquet(output_path / "DEP_deduped.parquet")
+    dep_deduped.write_csv(output_path / "DEP_deduped.csv")
+    print(f"Unique DEP records by ACCTNO: {dep_deduped.height} records")
+    
+    # IMPORTANT: Ensure ACCTNO is integer type for merge
+    # DEP ACCTNO might be float, convert to integer
+    dep_deduped = dep_deduped.with_columns([
+        pl.col('ACCTNO').cast(pl.Int64).alias('ACCTNO')
+    ])
+    print(f"Converted DEP ACCTNO to Int64")
+    
+else:
+    dep_deduped = pl.DataFrame()
+    print("No DEP datasets found - SAS files may be missing or have wrong naming pattern")
+
+# DATA REMIT; SET REMIT; FORMAT ACCTNO 10.; ACCTNO = PAYMODE;
+if not remit_final.is_empty() and not dep_deduped.is_empty():
+    print("\nProceeding with merge and reporting...")
+    
+    remit_for_merge = remit_final.with_columns([
+        pl.col('PAYMODE').cast(pl.Int64).alias('ACCTNO')
+    ])
+    
+    # DATA DEP; MERGE DEP(IN=A) REMIT(IN=B);
+    if not dep_deduped.is_empty():
+        # Now both are Int64, so merge should work
+        dep_merged = dep_deduped.join(remit_for_merge, on='ACCTNO', how='right', suffix='_remit')
+        
+        # BC assignment logic (IF A & B THEN BC='DEBITTED' ELSE BC='NOT_FOUND')
+        dep_with_bc = dep_merged.with_columns([
+            pl.when(pl.col('PRODCD').is_not_null() & pl.col('LEDGBAL').is_not_null())
+            .then(pl.lit('DEBITTED'))
+            .otherwise(pl.lit('NOT_FOUND'))
+            .alias('BC')
+        ]).filter(pl.col('LEDGBAL').is_not_null())  # IF B THEN OUTPUT;
+        
+        # Fill null values for missing DEP data
+        dep_with_bc = dep_with_bc.with_columns([
+            pl.col('PRODCD').fill_null('UNKNOWN'),
+            pl.col('COSTCTR').fill_null(0)
+        ])
+    else:
+        dep_with_bc = remit_for_merge.with_columns([
+            pl.lit('NOT_FOUND').alias('BC'),
+            pl.lit('UNKNOWN').alias('PRODCD'),
+            pl.lit(0).cast(pl.Int64).alias('COSTCTR')
+        ])
+    
+    # PROC SORT DATA=DEP; BY CATEGORY;
+    dep_sorted = dep_with_bc.sort('CATEGORY')
+    dep_sorted.write_parquet(output_path / "DEP_SORTED.parquet")
+    dep_sorted.write_csv(output_path / "DEP_SORTED.csv")
+    print(f"Created DEP_SORTED with {dep_sorted.height} records")
+    
+    # ============================================================
+    # REPORT 1: BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)
+    # ============================================================
+    print("\n" + "="*80)
+    print("REPORT 1: BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)")
+    print("="*80)
+    
+    # WHERE BC = 'DEBITTED' AND (COSTCTR < 3000 OR COSTCTR>3999)
+    debitted_filtered = dep_sorted.filter(
+        (pl.col('BC') == 'DEBITTED') & 
+        ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999))
+    )
+    
+    if not debitted_filtered.is_empty():
+        # Summary by CATEGORY
+        debitted_summary = debitted_filtered.group_by('CATEGORY').agg([
+            pl.col('LEDGBAL').sum().alias('LEDGBAL')
+        ]).sort('CATEGORY')
+        
+        print("\nSummary by Category:")
+        print(debitted_summary)
+        
+        # Calculate grand total
+        total_debitted = debitted_summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+        print(f"\nTOTAL BC/DD AMOUNT: {total_debitted:,.2f}")
+        
+        # Save detailed records
+        debitted_filtered.write_parquet(output_path / "DEBITTED_FILTERED.parquet")
+        debitted_filtered.write_csv(output_path / "DEBITTED_FILTERED.csv")
+        
+        # Save summary
+        debitted_summary.write_parquet(output_path / "DEBITTED_SUMMARY.parquet")
+        debitted_summary.write_csv(output_path / "DEBITTED_SUMMARY.csv")
+        
+        # Show sample records
+        print("\nSample Detailed Records (first 10):")
+        sample_records = debitted_filtered.select(['ACCTNO', 'PAYMODE', 'CATEGORY', 'LEDGBAL', 'NAME', 'COSTCTR']).head(10)
+        print(sample_records)
+    else:
+        print("No DEBITTED records found")
+    
+    # ============================================================
+    # REPORT 2: BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)
+    # ============================================================
+    print("\n" + "="*80)
+    print("REPORT 2: BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)")
+    print("="*80)
+    
+    # Complex WHERE condition for NOT_FOUND
+    notfound_filtered = dep_sorted.filter(
+        (pl.col('BC') == 'NOT_FOUND') &
+        ~(
+            ((pl.col('ACCTNO') > 3700000000) & (pl.col('ACCTNO') < 3999999999)) |
+            ((pl.col('ACCTNO') > 4700000000) & (pl.col('ACCTNO') < 4999999999)) |
+            ((pl.col('ACCTNO') > 6700000000) & (pl.col('ACCTNO') < 6999999999)) |
+            ((pl.col('ACCTNO') > 1700000000) & (pl.col('ACCTNO') < 1999999999)) |
+            ((pl.col('ACCTNO') > 7700000000) & (pl.col('ACCTNO') < 7999999999))
+        )
+    )
+    
+    if not notfound_filtered.is_empty():
+        # Summary by CATEGORY
+        notfound_summary = notfound_filtered.group_by('CATEGORY').agg([
+            pl.col('LEDGBAL').sum().alias('LEDGBAL')
+        ]).sort('CATEGORY')
+        
+        print("\nSummary by Category:")
+        print(notfound_summary)
+        
+        # Calculate grand total
+        total_notfound = notfound_summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+        print(f"\nTOTAL BC/DD AMOUNT: {total_notfound:,.2f}")
+        
+        # Save detailed records
+        notfound_filtered.write_parquet(output_path / "NOTFOUND_FILTERED.parquet")
+        notfound_filtered.write_csv(output_path / "NOTFOUND_FILTERED.csv")
+        
+        # Save summary
+        notfound_summary.write_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
+        notfound_summary.write_csv(output_path / "NOTFOUND_SUMMARY.csv")
+        
+        # Show sample records
+        print("\nSample Detailed Records (first 10):")
+        sample_records = notfound_filtered.select(['ACCTNO', 'PAYMODE', 'CATEGORY', 'LEDGBAL', 'NAME']).head(10)
+        print(sample_records)
+    else:
+        print("No NOT_FOUND records found")
+
+# ============================================================
+# REPORT 3: BANKERS CHEQUE WITH NON-DEBITTED A/C
+# ============================================================
+if not nondebit_invalid.is_empty():
+    print("\n" + "="*80)
+    print("REPORT 3: BANKERS CHEQUE WITH NON-DEBITTED A/C")
+    print("="*80)
+    
+    # DATA NONDEBIT; SET NONDEBIT; BC = 'NON_DEBIT'; ACCTNO = PAYMODE;
+    nondebit_processed = nondebit_invalid.with_columns([
+        pl.lit('NON_DEBIT').alias('BC'),
+        pl.col('PAYMODE').cast(pl.Int64).alias('ACCTNO')
+    ])
+    
+    # Summary by CATEGORY
+    nondebit_summary = nondebit_processed.group_by('CATEGORY').agg([
+        pl.col('LEDGBAL').sum().alias('LEDGBAL')
+    ]).sort('CATEGORY')
+    
+    print("\nSummary by Category:")
+    print(nondebit_summary)
+    
+    # Calculate grand total
+    total_non_debit = nondebit_summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+    print(f"\nTOTAL BC/DD AMOUNT: {total_non_debit:,.2f}")
+    
+    # Show sample records
+    print("\nSample Detailed Records (first 10):")
+    sample_records = nondebit_processed.select(['ACCTNO', 'PAYMODE', 'CATEGORY', 'LEDGBAL', 'NAME']).head(10)
+    print(sample_records)
+    
+    # Save datasets
+    nondebit_processed.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
+    nondebit_processed.write_csv(output_path / "NONDEBIT_PROCESSED.csv")
+    nondebit_summary.write_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
+    nondebit_summary.write_csv(output_path / "NONDEBIT_SUMMARY.csv")
+
+# ============================================================
+# FINAL SUMMARY REPORT
+# ============================================================
+print("\n" + "="*80)
+print("FINAL SUMMARY - ALL REPORTS")
+print("="*80)
+
+# Create a consolidated summary
+summary_data = []
+
+# Report 1: Debitted
+if 'debitted_summary' in locals() and not debitted_summary.is_empty():
+    for row in debitted_summary.rows():
+        summary_data.append({
+            'REPORT': 'DEBITTED A/C (CONVENTIONAL)',
+            'CATEGORY': row[0],
+            'LEDGBAL': row[1]
+        })
+
+# Report 2: Not Found
+if 'notfound_summary' in locals() and not notfound_summary.is_empty():
+    for row in notfound_summary.rows():
+        summary_data.append({
+            'REPORT': 'NOT FOUND IN FISS (CONV&ISLM)',
+            'CATEGORY': row[0],
+            'LEDGBAL': row[1]
+        })
+
+# Report 3: Non-Debit
+if 'nondebit_summary' in locals() and not nondebit_summary.is_empty():
+    for row in nondebit_summary.rows():
+        summary_data.append({
+            'REPORT': 'NON-DEBITTED A/C',
+            'CATEGORY': row[0],
+            'LEDGBAL': row[1]
+        })
+
+if summary_data:
+    final_summary = pl.DataFrame(summary_data)
+    print("\nConsolidated Summary:")
+    print(final_summary)
+    
+    # Save consolidated summary
+    final_summary.write_parquet(output_path / "FINAL_SUMMARY.parquet")
+    final_summary.write_csv(output_path / "FINAL_SUMMARY.csv")
+    
+    # Grand total across all reports
+    grand_total = final_summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+    print(f"\nGRAND TOTAL (ALL REPORTS): {grand_total:,.2f}")
+
+print("\n" + "="*80)
+print("PROCESSING COMPLETED SUCCESSFULLY")
+print("="*80)
+
+# At the end, list all files created
+print("\nALL FILES CREATED:")
+print("="*80)
+
+print(f"\nIn {deposit_path}:")
+for file in deposit_path.glob("*"):
+    print(f"  - {file.name}")
+
+print(f"\nIn {output_path}:")
+for file in output_path.glob("*"):
+    print(f"  - {file.name}")
+
+print(f"\nIn {mni_path} (converted from SAS):")
+for file in mni_path.glob("*.parquet"):
+    print(f"  - {file.name}")
+for file in mni_path.glob("*.csv"):
+    print(f"  - {file.name}")
+
+print(f"\nIn {imni_path} (converted from SAS):")
+for file in imni_path.glob("*.parquet"):
+    print(f"  - {file.name}")
+for file in imni_path.glob("*.csv"):
+    print(f"  - {file.name}")
+
+# Print test configuration summary
+print("\n" + "="*80)
+print("TEST CONFIGURATION SUMMARY")
+print("="*80)
+print(f"Test Date: {reptdate}")
+print(f"Week (WK): {NOWK}")
+print(f"Month (MM): {REPTMON}")
+print(f"Year: {REPTYEAR}")
+print(f"SDD: {SDD}")
+print(f"File patterns expected:")
+print(f"  - MNI: {savg_filename} (lowercase), {curn_filename} (lowercase)")
+print(f"  - IMNI: {isavg_filename} (lowercase, same name in IMNI), {icurn_filename} (lowercase, same name in IMNI)")
+print(f"  - REMIT file: MAREMORE")
+print("="*80)
