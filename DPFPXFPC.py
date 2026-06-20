@@ -14,9 +14,15 @@ output_path.mkdir(exist_ok=True)
 deposit_path.mkdir(exist_ok=True)
 
 # DATA REPTDATE (KEEP=REPTDATE);
-today = datetime.date.today()
-date_string = f"01{today.month:02d}{today.year}"
-reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
+# PRODUCTION DATE - COMMENTED OUT FOR TESTING
+# today = datetime.date.today()
+# date_string = f"01{today.month:02d}{today.year}"
+# reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
+
+# TEST DATE - December Week 4 (December 23, 2026)
+# For Week 4, the logic sets SDD=23, WK='4', WK1='3', WK2='2', WK3='1'
+reptdate = datetime.date(2026, 12, 23)  # December 23, 2026 (Week 4)
+print(f"*** TEST MODE - Using date: {reptdate} (December Week 4) ***")
 
 # SELECT(DAY(REPTDATE)); logic
 reptday = reptdate.day
@@ -54,6 +60,7 @@ REPTYEAR = str(reptdate.year)
 
 print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
 print(f"SDESC: {SDESC}")
+print(f"SDATE: {SDATE}")
 
 # Create REPTDATE DataFrame
 reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
@@ -83,42 +90,12 @@ def parse_remit_file(filepath):
                     continue
                 
                 # Parse fixed-width fields based on SAS layout
-                # Based on the sample, fields appear to be:
-                # Pos 0-1: Control characters (skip)
-                # Pos 2: Maybe 'N' or other identifier
-                # Pos 3-8: ACCTNO? (6 digits)
-                # Pos 9-20: Other fields
-                # Let's try to parse based on visible patterns
-                
                 try:
-                    # Extract based on visible patterns in your sample
-                    # The sample shows: "N075422          A 2025-07-22"
-                    # ACCTNO appears to be 6 digits starting after 'N'
-                    
-                    # First, clean the line for parsing
-                    clean_line = clean_text(raw_line)
-                    
-                    # Extract fields based on fixed positions from your SAS code
-                    # @003 ACCTNO PD6. (positions 3-9 in SAS 1-indexed)
-                    # @009 CHEQNO 6. (positions 9-15)
-                    # @027 ISSYY $4. (positions 27-31)
-                    # @032 ISSMM $2. (positions 32-34)
-                    # @035 ISSDD $2. (positions 35-37)
-                    # @037 ISSBRANCH PD3. (positions 37-40)
-                    # @040 LEDGBAL PD7.2 (positions 40-49)
-                    # @047 STATUS $2. (positions 47-49)
-                    # @055 PAYMODE $10. (positions 55-65)
-                    # @075 NAME $40. (positions 75-115)
-                    
-                    # But since there are control characters, we need to handle carefully
-                    # Let's use the raw_line with control characters preserved for position
-                    # and then clean each field
-                    
-                    # Get the raw line with control characters
+                    # Extract fields (0-indexed positions)
                     raw = raw_line
                     line_len = len(raw)
                     
-                    # Extract fields (0-indexed positions)
+                    # Extract fields based on SAS positions
                     acctno_raw = raw[2:9] if line_len > 9 else ""
                     cheqno_raw = raw[8:14] if line_len > 14 else ""
                     issyy_raw = raw[26:30] if line_len > 30 else ""
@@ -145,7 +122,6 @@ def parse_remit_file(filepath):
                     # Try to extract ACCTNO from visible pattern if parsing failed
                     if not acctno or len(acctno) < 6:
                         # Try to find pattern like "N075422" or "075422"
-                        import re
                         match = re.search(r'([0-9]{6,7})', raw)
                         if match:
                             acctno = match.group(1)
@@ -296,10 +272,18 @@ else:
     remit_final = pl.DataFrame()
 
 # Load additional datasets from SAS files
-savg_filename = f"SAVG{REPTMON}{NOWK}.sas7bdat"
-curn_filename = f"CURN{REPTMON}{NOWK}.sas7bdat"
-isavg_filename = f"ISAVG{REPTMON}{NOWK}.sas7bdat"
-icurn_filename = f"ICURN{REPTMON}{NOWK}.sas7bdat"
+# For December Week 4 testing:
+# WK='4', REPTMON='12'
+savg_filename = f"SAVG{REPTMON}{NOWK}.sas7bdat"  # SAVG124
+curn_filename = f"CURN{REPTMON}{NOWK}.sas7bdat"  # CURN124
+isavg_filename = f"ISAVG{REPTMON}{NOWK}.sas7bdat"  # ISAVG124
+icurn_filename = f"ICURN{REPTMON}{NOWK}.sas7bdat"  # ICURN124
+
+print(f"\nLooking for SAS files with pattern: *{REPTMON}{NOWK}*")
+print(f"SAVG: {savg_filename}")
+print(f"CURN: {curn_filename}")
+print(f"ISAVG: {isavg_filename}")
+print(f"ICURN: {icurn_filename}")
 
 datasets = []
 
@@ -505,3 +489,17 @@ for file in output_path.glob("*"):
     print(f"  - {file.name}")
 for file in deposit_path.glob("*"):
     print(f"  - {file.name}")
+
+# Print test configuration summary
+print("\n" + "="*80)
+print("TEST CONFIGURATION SUMMARY")
+print("="*80)
+print(f"Test Date: {reptdate}")
+print(f"Week (WK): {NOWK}")
+print(f"Month (MM): {REPTMON}")
+print(f"Year: {REPTYEAR}")
+print(f"SDD: {SDD}")
+print(f"File patterns expected:")
+print(f"  - MNI: SAVG{REPTMON}{NOWK}.sas7bdat, CURN{REPTMON}{NOWK}.sas7bdat")
+print(f"  - IMNI: ISAVG{REPTMON}{NOWK}.sas7bdat, ICURN{REPTMON}{NOWK}.sas7bdat")
+print("="*80)
