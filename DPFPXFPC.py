@@ -57,7 +57,7 @@ print(f"SDESC: {SDESC}")
 print(f"REPTDATE: {reptdate}")
 print(f"SDATE: {SDATE}")
 
-# Create REPTDATE DataFrame (KEEP=REPTDATE)
+# Create REPTDATE DataFrame (KEEP=REPTDATE) - save to output path
 reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
 reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
 reptdate_df.write_csv(output_path / "REPTDATE.csv")
@@ -272,7 +272,6 @@ if records:
     print(df.null_count())
     
     # Clean up - remove records with missing data
-    # Use the correct Polars syntax for combining conditions
     df = df.filter(
         pl.col('ACCTNO').is_not_null() & 
         pl.col('LEDGBAL').is_not_null() & 
@@ -317,15 +316,15 @@ if records:
             print(f"\nUNCLAIM valid records (PAYMODE 1-9): {len(unclaim_valid)}")
             print(f"NOTUNCLAIM invalid records: {len(notunclaim_invalid)}")
             
-            # Save the data - use 2025 since that's the data year
-            # The data is from 2024-2025 based on the sample
-            data_year = "2025"  # You can change this as needed
+            # Save the data to output_path
+            data_year = "2025"  # Using 2025 since that's the data year
             
             if not unclaim_valid.is_empty():
                 unclaim_sorted = unclaim_valid.sort('PAYMODE')
-                unclaim_sorted.write_parquet(deposit_path / f"UNCLAIM{data_year}.parquet")
-                unclaim_sorted.write_csv(deposit_path / f"UNCLAIM{data_year}.csv")
-                print(f"\nSaved UNCLAIM data with {len(unclaim_sorted)} records")
+                # Save to output_path
+                unclaim_sorted.write_parquet(output_path / f"UNCLAIM{data_year}.parquet")
+                unclaim_sorted.write_csv(output_path / f"UNCLAIM{data_year}.csv")
+                print(f"\nSaved UNCLAIM data to {output_path / f'UNCLAIM{data_year}.parquet'} with {len(unclaim_sorted)} records")
                 
                 # Summary by PAYMODE
                 unclaim_summary = unclaim_sorted.group_by('PAYMODE').agg([
@@ -338,7 +337,7 @@ if records:
                 total_ledgbal = unclaim_summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
                 print(f"\nUNCLAIM TOTAL LEDGBAL: {total_ledgbal:,.2f}")
                 
-                # Save summary
+                # Save summary to output_path
                 unclaim_summary.write_csv(output_path / f"UNCLAIM_Summary_{data_year}.csv")
                 
                 # Summary by CATEGORY
@@ -352,9 +351,10 @@ if records:
             
             if not notunclaim_invalid.is_empty():
                 notunclaim_sorted = notunclaim_invalid.sort(['PAYMODE', 'NAME'])
-                notunclaim_sorted.write_parquet(deposit_path / f"NOTUNCLAIM{data_year}.parquet")
-                notunclaim_sorted.write_csv(deposit_path / f"NOTUNCLAIM{data_year}.csv")
-                print(f"Saved NOTUNCLAIM data with {len(notunclaim_sorted)} records")
+                # Save to output_path
+                notunclaim_sorted.write_parquet(output_path / f"NOTUNCLAIM{data_year}.parquet")
+                notunclaim_sorted.write_csv(output_path / f"NOTUNCLAIM{data_year}.csv")
+                print(f"Saved NOTUNCLAIM data to {output_path / f'NOTUNCLAIM{data_year}.parquet'} with {len(notunclaim_sorted)} records")
                 
                 if not notunclaim_sorted.is_empty():
                     total_ledgbal = notunclaim_sorted.select(pl.col('LEDGBAL').sum()).row(0)[0]
@@ -383,15 +383,34 @@ if records:
             if not unclaim_valid.is_empty():
                 data_year = "2025"
                 unclaim_sorted = unclaim_valid.sort('PAYMODE')
-                unclaim_sorted.write_parquet(deposit_path / f"UNCLAIM{data_year}.parquet")
-                unclaim_sorted.write_csv(deposit_path / f"UNCLAIM{data_year}.csv")
-                print(f"Saved {len(unclaim_sorted)} records as UNCLAIM")
+                # Save to output_path
+                unclaim_sorted.write_parquet(output_path / f"UNCLAIM{data_year}.parquet")
+                unclaim_sorted.write_csv(output_path / f"UNCLAIM{data_year}.csv")
+                print(f"Saved {len(unclaim_sorted)} records as UNCLAIM to {output_path}")
+                
+                # Also save summary
+                unclaim_summary = unclaim_sorted.group_by('PAYMODE').agg([
+                    pl.col('LEDGBAL').sum().alias('LEDGBAL')
+                ])
+                unclaim_summary.write_csv(output_path / f"UNCLAIM_Summary_{data_year}.csv")
+                
+                category_summary = unclaim_sorted.group_by('CATEGORY').agg([
+                    pl.count().alias('COUNT'),
+                    pl.col('LEDGBAL').sum().alias('TOTAL_AMOUNT')
+                ])
+                category_summary.write_csv(output_path / f"Category_Summary_{data_year}.csv")
     else:
         print("No STATUS column found in data")
+    
+    # Also save the raw processed data for reference
+    df.write_parquet(output_path / "raw_processed_data.parquet")
+    df.write_csv(output_path / "raw_processed_data.csv")
+    print(f"\nSaved raw processed data to {output_path / 'raw_processed_data.parquet'}")
     
 else:
     print("No valid records were parsed from the file")
 
 print("\n" + "="*80)
+print(f"All output files saved to: {output_path}")
 print("PROCESSING COMPLETED SUCCESSFULLY")
 print("="*80)
