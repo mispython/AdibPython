@@ -1,5 +1,5 @@
 import polars as pl
-import duckdb
+import pyreadstat
 from pathlib import Path
 import datetime
 
@@ -52,6 +52,8 @@ REPTYEAR = str(reptdate.year)
 
 print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
 print(f"SDESC: {SDESC}")
+print(f"REPTDATE: {reptdate}")
+print(f"SDATE: {SDATE}")
 
 # Create REPTDATE DataFrame
 reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
@@ -64,135 +66,223 @@ nondebit_sorted = pl.DataFrame()
 unclaim_final = pl.DataFrame()
 dep_deduped = pl.DataFrame()
 
+def read_sas_dataset(filepath, columns=None):
+    """
+    Read a SAS7BDAT dataset and return as Polars DataFrame
+    """
+    try:
+        if columns:
+            df, meta = pyreadstat.read_sas7bdat(filepath, usecols=columns)
+        else:
+            df, meta = pyreadstat.read_sas7bdat(filepath)
+        
+        # Convert to Polars DataFrame
+        pl_df = pl.DataFrame(df)
+        
+        # Convert date columns if they exist (SAS dates are days since 1960-01-01)
+        for col in pl_df.columns:
+            if 'DATE' in col.upper() or 'DT' in col.upper():
+                try:
+                    # Check if it's a numeric column that might be a date
+                    if pl_df[col].dtype in [pl.Int64, pl.Float64]:
+                        # SAS dates are days since 1960-01-01
+                        pl_df = pl_df.with_columns([
+                            pl.when(pl.col(col) > 0)
+                            .then(pl.lit(datetime.date(1960, 1, 1)) + pl.duration(days=pl.col(col).cast(pl.Int64)))
+                            .otherwise(pl.col(col))
+                            .alias(col)
+                        ])
+                except:
+                    pass  # Keep as is if conversion fails
+        
+        return pl_df, meta
+    except Exception as e:
+        print(f"Error reading {filepath}: {e}")
+        return None, None
+
 # DATA UNCLAIM NONDEBIT;
 # SET UNCLAIM.UNCLAIM&REPTYEAR UNCLAIM.NOTUNCLAIM&REPTYEAR;
-filename_unclaim = f"UNCLAIM{REPTYEAR}.parquet"
-filename_notunclaim = f"NOTUNCLAIM{REPTYEAR}.parquet"
+filename_unclaim = f"UNCLAIM{REPTYEAR}.sas7bdat"
+filename_notunclaim = f"NOTUNCLAIM{REPTYEAR}.sas7bdat"
 
+print(f"\nLoading SAS7BDAT files:")
+print(f"  UNCLAIM: {filename_unclaim}")
+print(f"  NOTUNCLAIM: {filename_notunclaim}")
+
+# Load UNCLAIM
 try:
-    unclaim_df1 = pl.read_parquet(unclaim_path / filename_unclaim)
-    print(f"Loaded {filename_unclaim} with {len(unclaim_df1)} records")
+    unclaim_df1, meta1 = read_sas_dataset(unclaim_path / filename_unclaim)
+    if unclaim_df1 is not None:
+        print(f"Loaded {filename_unclaim} with {len(unclaim_df1)} records")
+    else:
+        unclaim_df1 = pl.DataFrame()
+        print(f"NOTE: {filename_unclaim} could not be loaded")
 except FileNotFoundError:
     unclaim_df1 = pl.DataFrame()
     print(f"NOTE: {filename_unclaim} not found")
+except Exception as e:
+    unclaim_df1 = pl.DataFrame()
+    print(f"Error loading {filename_unclaim}: {e}")
 
+# Load NOTUNCLAIM
 try:
-    unclaim_df2 = pl.read_parquet(unclaim_path / filename_notunclaim)
-    print(f"Loaded {filename_notunclaim} with {len(unclaim_df2)} records")
+    unclaim_df2, meta2 = read_sas_dataset(unclaim_path / filename_notunclaim)
+    if unclaim_df2 is not None:
+        print(f"Loaded {filename_notunclaim} with {len(unclaim_df2)} records")
+    else:
+        unclaim_df2 = pl.DataFrame()
+        print(f"NOTE: {filename_notunclaim} could not be loaded")
 except FileNotFoundError:
     unclaim_df2 = pl.DataFrame()
     print(f"NOTE: {filename_notunclaim} not found")
+except Exception as e:
+    unclaim_df2 = pl.DataFrame()
+    print(f"Error loading {filename_notunclaim}: {e}")
 
 # Combine both datasets
 if not unclaim_df1.is_empty() or not unclaim_df2.is_empty():
-    combined_unclaim = pl.concat([unclaim_df1, unclaim_df2], how="diagonal")
-    print(f"Combined dataset has {len(combined_unclaim)} records")
+    # Combine the dataframes
+    dfs_to_concat = []
+    if not unclaim_df1.is_empty():
+        dfs_to_concat.append(unclaim_df1)
+    if not unclaim_df2.is_empty():
+        dfs_to_concat.append(unclaim_df2)
     
-    # CATEGORY assignments
-    unclaim_with_category = combined_unclaim.with_columns([
-        pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4', '6']))
-        .then(pl.lit('SA'))
-        .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['3']))
-        .then(pl.lit('CA'))
-        .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['1', '7']))
-        .then(pl.lit('FD'))
-        .otherwise(pl.lit('OTHER'))
-        .alias('CATEGORY')
-    ])
-    
-    # Split into UNCLAIM and NONDEBIT based on PAYMODE
-    valid_paymodes = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
-    
-    unclaim_valid = unclaim_with_category.filter(
-        pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
-    )
-    
-    nondebit_invalid = unclaim_with_category.filter(
-        ~pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
-    )
-    
-    print(f"UNCLAIM records: {len(unclaim_valid)}")
-    print(f"NONDEBIT records: {len(nondebit_invalid)}")
-    
-    # PROC SORT DATA=UNCLAIM; BY PAYMODE;
-    if not unclaim_valid.is_empty():
-        unclaim_sorted = unclaim_valid.sort('PAYMODE')
-        unclaim_sorted.write_parquet(output_path / "UNCLAIM.parquet")
-        unclaim_sorted.write_csv(output_path / "UNCLAIM.csv")
-        print(f"Saved UNCLAIM with {len(unclaim_sorted)} records")
-    
-    # PROC SORT DATA=NONDEBIT; BY PAYMODE;
-    if not nondebit_invalid.is_empty():
-        nondebit_sorted = nondebit_invalid.sort('PAYMODE')
-        nondebit_sorted.write_parquet(output_path / "NONDEBIT.parquet")
-        nondebit_sorted.write_csv(output_path / "NONDEBIT.csv")
-        print(f"Saved NONDEBIT with {len(nondebit_sorted)} records")
-    
-    # PROC SUMMARY DATA=UNCLAIM; BY PAYMODE; VAR LEDGBAL;
-    if not unclaim_sorted.is_empty():
-        unclaim_summary = unclaim_sorted.group_by('PAYMODE').agg([
-            pl.col('LEDGBAL').sum().alias('LEDGBAL_sum')
+    if dfs_to_concat:
+        combined_unclaim = pl.concat(dfs_to_concat, how="diagonal")
+        print(f"Combined dataset has {len(combined_unclaim)} records")
+        
+        # Ensure PAYMODE is string type for string operations
+        if 'PAYMODE' in combined_unclaim.columns:
+            if combined_unclaim['PAYMODE'].dtype != pl.Utf8:
+                combined_unclaim = combined_unclaim.with_columns([
+                    pl.col('PAYMODE').cast(pl.Utf8)
+                ])
+        
+        # CATEGORY assignments
+        unclaim_with_category = combined_unclaim.with_columns([
+            pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4', '6']))
+            .then(pl.lit('SA'))
+            .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['3']))
+            .then(pl.lit('CA'))
+            .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['1', '7']))
+            .then(pl.lit('FD'))
+            .otherwise(pl.lit('OTHER'))
+            .alias('CATEGORY')
         ])
         
-        # OUTPUT OUT=UNCLAIMX(DROP=_FREQ_ _TYPE_) SUM=;
-        unclaim_summary_clean = unclaim_summary.rename({'LEDGBAL_sum': 'LEDGBAL'})
+        # Split into UNCLAIM and NONDEBIT based on PAYMODE
+        valid_paymodes = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
         
-        # DATA UNCLAIM; MERGE UNCLAIMX(IN=A) UNCLAIM (IN=B DROP=LEDGBAL);
-        unclaim_deduped = unclaim_sorted.unique(subset=['PAYMODE']).drop('LEDGBAL')
-        unclaim_merged = unclaim_deduped.join(unclaim_summary_clean, on='PAYMODE', how='inner')
+        unclaim_valid = unclaim_with_category.filter(
+            pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
+        )
         
-        # PROC SORT DATA=UNCLAIM NODUPKEYS; BY PAYMODE;
-        unclaim_final = unclaim_merged.unique(subset=['PAYMODE'])
-        unclaim_final.write_parquet(output_path / "UNCLAIM_FINAL.parquet")
-        unclaim_final.write_csv(output_path / "UNCLAIM_FINAL.csv")
-        print(f"Saved UNCLAIM_FINAL with {len(unclaim_final)} records")
+        nondebit_invalid = unclaim_with_category.filter(
+            ~pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
+        )
+        
+        print(f"UNCLAIM records: {len(unclaim_valid)}")
+        print(f"NONDEBIT records: {len(nondebit_invalid)}")
+        
+        # PROC SORT DATA=UNCLAIM; BY PAYMODE;
+        if not unclaim_valid.is_empty():
+            unclaim_sorted = unclaim_valid.sort('PAYMODE')
+            unclaim_sorted.write_parquet(output_path / "UNCLAIM.parquet")
+            unclaim_sorted.write_csv(output_path / "UNCLAIM.csv")
+            print(f"Saved UNCLAIM with {len(unclaim_sorted)} records")
+        
+        # PROC SORT DATA=NONDEBIT; BY PAYMODE;
+        if not nondebit_invalid.is_empty():
+            nondebit_sorted = nondebit_invalid.sort('PAYMODE')
+            nondebit_sorted.write_parquet(output_path / "NONDEBIT.parquet")
+            nondebit_sorted.write_csv(output_path / "NONDEBIT.csv")
+            print(f"Saved NONDEBIT with {len(nondebit_sorted)} records")
+        
+        # PROC SUMMARY DATA=UNCLAIM; BY PAYMODE; VAR LEDGBAL;
+        if not unclaim_sorted.is_empty():
+            unclaim_summary = unclaim_sorted.group_by('PAYMODE').agg([
+                pl.col('LEDGBAL').sum().alias('LEDGBAL_sum')
+            ])
+            
+            # OUTPUT OUT=UNCLAIMX(DROP=_FREQ_ _TYPE_) SUM=;
+            unclaim_summary_clean = unclaim_summary.rename({'LEDGBAL_sum': 'LEDGBAL'})
+            
+            # DATA UNCLAIM; MERGE UNCLAIMX(IN=A) UNCLAIM (IN=B DROP=LEDGBAL);
+            unclaim_deduped = unclaim_sorted.unique(subset=['PAYMODE']).drop('LEDGBAL')
+            unclaim_merged = unclaim_deduped.join(unclaim_summary_clean, on='PAYMODE', how='inner')
+            
+            # PROC SORT DATA=UNCLAIM NODUPKEYS; BY PAYMODE;
+            unclaim_final = unclaim_merged.unique(subset=['PAYMODE'])
+            unclaim_final.write_parquet(output_path / "UNCLAIM_FINAL.parquet")
+            unclaim_final.write_csv(output_path / "UNCLAIM_FINAL.csv")
+            print(f"Saved UNCLAIM_FINAL with {len(unclaim_final)} records")
+    else:
+        print("No data to combine")
 else:
     print("No UNCLAIM or NOTUNCLAIM data found")
 
-# Load additional datasets
-savg_filename = f"SAVG{REPTMON}{NOWK}.parquet"
-curn_filename = f"CURN{REPTMON}{NOWK}.parquet"
-isavg_filename = f"ISAVG{REPTMON}{NOWK}.parquet"
-icurn_filename = f"ICURN{REPTMON}{NOWK}.parquet"
+# Load additional datasets (SAS7BDAT format)
+savg_filename = f"SAVG{REPTMON}{NOWK}.sas7bdat"
+curn_filename = f"CURN{REPTMON}{NOWK}.sas7bdat"
+isavg_filename = f"ISAVG{REPTMON}{NOWK}.sas7bdat"
+icurn_filename = f"ICURN{REPTMON}{NOWK}.sas7bdat"
 
-print(f"\nLooking for files:")
+print(f"\nLooking for SAS7BDAT files:")
 print(f"  SAVG: {savg_filename}")
 print(f"  CURN: {curn_filename}")
 print(f"  ISAVG: {isavg_filename}")
 print(f"  ICURN: {icurn_filename}")
 
 datasets = []
+
+# Load SAVG
 try:
-    savg_df = pl.read_parquet(mni_path / savg_filename).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
-    datasets.append(savg_df)
-    print(f"Loaded {savg_filename} with {len(savg_df)} records")
+    savg_df, meta = read_sas_dataset(mni_path / savg_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if savg_df is not None:
+        datasets.append(savg_df)
+        print(f"Loaded {savg_filename} with {len(savg_df)} records")
+    else:
+        print(f"NOTE: {savg_filename} could not be loaded")
 except FileNotFoundError:
     print(f"NOTE: {savg_filename} not found")
 except Exception as e:
     print(f"Error loading {savg_filename}: {e}")
 
+# Load CURN
 try:
-    curn_df = pl.read_parquet(mni_path / curn_filename).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
-    datasets.append(curn_df)
-    print(f"Loaded {curn_filename} with {len(curn_df)} records")
+    curn_df, meta = read_sas_dataset(mni_path / curn_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if curn_df is not None:
+        datasets.append(curn_df)
+        print(f"Loaded {curn_filename} with {len(curn_df)} records")
+    else:
+        print(f"NOTE: {curn_filename} could not be loaded")
 except FileNotFoundError:
     print(f"NOTE: {curn_filename} not found")
 except Exception as e:
     print(f"Error loading {curn_filename}: {e}")
 
+# Load ISAVG
 try:
-    isavg_df = pl.read_parquet(imni_path / isavg_filename).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
-    datasets.append(isavg_df)
-    print(f"Loaded {isavg_filename} with {len(isavg_df)} records")
+    isavg_df, meta = read_sas_dataset(imni_path / isavg_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if isavg_df is not None:
+        datasets.append(isavg_df)
+        print(f"Loaded {isavg_filename} with {len(isavg_df)} records")
+    else:
+        print(f"NOTE: {isavg_filename} could not be loaded")
 except FileNotFoundError:
     print(f"NOTE: {isavg_filename} not found")
 except Exception as e:
     print(f"Error loading {isavg_filename}: {e}")
 
+# Load ICURN
 try:
-    icurn_df = pl.read_parquet(imni_path / icurn_filename).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
-    datasets.append(icurn_df)
-    print(f"Loaded {icurn_filename} with {len(icurn_df)} records")
+    icurn_df, meta = read_sas_dataset(imni_path / icurn_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if icurn_df is not None:
+        datasets.append(icurn_df)
+        print(f"Loaded {icurn_filename} with {len(icurn_df)} records")
+    else:
+        print(f"NOTE: {icurn_filename} could not be loaded")
 except FileNotFoundError:
     print(f"NOTE: {icurn_filename} not found")
 except Exception as e:
@@ -271,6 +361,9 @@ if not unclaim_final.is_empty():
             print(debitted_summary)
             total = debitted_summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
             print(f"\nTOTAL BC/DD AMOUNT: {total:,.2f}")
+            
+            # Save summary
+            debitted_summary.write_csv(output_path / "DEBITTED_Summary.csv")
         else:
             print("No debitted records found")
         
@@ -294,6 +387,9 @@ if not unclaim_final.is_empty():
             print(notfound_summary)
             total = notfound_summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
             print(f"\nTOTAL BC/DD AMOUNT: {total:,.2f}")
+            
+            # Save summary
+            notfound_summary.write_csv(output_path / "NOTFOUND_Summary.csv")
         else:
             print("No not-found records found")
     else:
@@ -326,6 +422,9 @@ if not nondebit_sorted.is_empty():
     print(nondebit_summary)
     total = nondebit_summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
     print(f"\nTOTAL BC/DD AMOUNT: {total:,.2f}")
+    
+    # Save summary
+    nondebit_summary.write_csv(output_path / "NONDEBIT_Summary.csv")
 else:
     print("No NONDEBIT data available for processing")
 
