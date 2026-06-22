@@ -57,48 +57,63 @@ reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
 reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
 reptdate_df.write_csv(output_path / "REPTDATE.csv")
 
-# DATA IBG NONDEBIT; INFILE IBGPIDM;
+# ============================================
+# READ IBG_YEAREND.txt FROM MNI PATH
+# ============================================
 try:
-    # Read IBGPIDM file (fixed-width format)
-    ibg_df = pl.read_csv("IBGPIDM", 
-                        has_header=False,
-                        new_columns=['raw_line'])
+    # Read IBGPIDM file from MNI path with correct filename
+    ibg_file_path = mni_path / "IBG_YEAREND.txt"
     
-    # Parse fixed-width format:
-    # @01 PAYMODE $10., @12 IBGAMT 16.2
-    ibg_parsed = ibg_df.with_columns([
-        pl.col('raw_line').str.slice(0, 10).str.strip().alias('PAYMODE'),      # @01 PAYMODE $10.
-        pl.col('raw_line').str.slice(11, 16).str.strip().cast(pl.Float64).alias('IBGAMT')  # @12 IBGAMT 16.2
-    ]).drop('raw_line')
-    
-    # CATEGORY assignments
-    ibg_with_category = ibg_parsed.with_columns([
-        pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4', '5', '6']))
-        .then(pl.lit('SA'))
-        .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['3']))
-        .then(pl.lit('CA'))
-        .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['1', '7']))
-        .then(pl.lit('FD'))
-        .otherwise(pl.lit('OTHER'))
-        .alias('CATEGORY')
-    ])
-    
-    # Split into IBG and NONDEBIT based on PAYMODE
-    valid_paymodes = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
-    
-    ibg_valid = ibg_with_category.filter(
-        pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
-    )
-    
-    nondebit_invalid = ibg_with_category.filter(
-        ~pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
-    )
-    
-    print(f"IBG records: {ibg_valid.height}")
-    print(f"NONDEBIT records: {nondebit_invalid.height}")
-    
-except FileNotFoundError:
-    print("NOTE: IBGPIDM file not found")
+    if not ibg_file_path.exists():
+        print(f"ERROR: IBG_YEAREND.txt not found at {ibg_file_path}")
+        ibg_valid = pl.DataFrame()
+        nondebit_invalid = pl.DataFrame()
+    else:
+        print(f"Reading IBG file from: {ibg_file_path}")
+        
+        # Read IBGPIDM file (fixed-width format)
+        ibg_df = pl.read_csv(ibg_file_path, 
+                            has_header=False,
+                            new_columns=['raw_line'])
+        
+        # Parse fixed-width format:
+        # @01 PAYMODE $10., @12 IBGAMT 16.2
+        ibg_parsed = ibg_df.with_columns([
+            pl.col('raw_line').str.slice(0, 10).str.strip().alias('PAYMODE'),      # @01 PAYMODE $10.
+            pl.col('raw_line').str.slice(11, 16).str.strip().cast(pl.Float64).alias('IBGAMT')  # @12 IBGAMT 16.2
+        ]).drop('raw_line')
+        
+        # CATEGORY assignments
+        ibg_with_category = ibg_parsed.with_columns([
+            pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4', '5', '6']))
+            .then(pl.lit('SA'))
+            .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['3']))
+            .then(pl.lit('CA'))
+            .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['1', '7']))
+            .then(pl.lit('FD'))
+            .otherwise(pl.lit('OTHER'))
+            .alias('CATEGORY')
+        ])
+        
+        # Split into IBG and NONDEBIT based on PAYMODE
+        valid_paymodes = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+        
+        ibg_valid = ibg_with_category.filter(
+            pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
+        )
+        
+        nondebit_invalid = ibg_with_category.filter(
+            ~pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
+        )
+        
+        print(f"IBG records: {ibg_valid.height}")
+        print(f"NONDEBIT records: {nondebit_invalid.height}")
+        
+        # Save raw parsed data for verification
+        ibg_parsed.write_csv(output_path / "IBGPIDM_PARSED.csv")
+        
+except Exception as e:
+    print(f"Error reading IBG_YEAREND.txt: {e}")
     ibg_valid = pl.DataFrame()
     nondebit_invalid = pl.DataFrame()
 
