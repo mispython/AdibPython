@@ -2,6 +2,7 @@ import polars as pl
 import duckdb
 from pathlib import Path
 import datetime
+import pyreadstat  # You'll need to install: pip install pyreadstat
 
 # Configuration
 mni_path = Path("MNI")
@@ -134,40 +135,52 @@ if not ibg_sorted.is_empty():
 else:
     ibg_final = pl.DataFrame()
 
-# Load additional datasets
-savg_filename = f"SAVG{REPTMON}{NOWK}.parquet"
-curn_filename = f"CURN{REPTMON}{NOWK}.parquet"
-isavg_filename = f"ISAVG{REPTMON}{NOWK}.parquet"
-icurn_filename = f"ICURN{REPTMON}{NOWK}.parquet"
+# Load additional datasets from SAS files
+savg_filename = f"SAVG{REPTMON}{NOWK}.sas7bdat"
+curn_filename = f"CURN{REPTMON}{NOWK}.sas7bdat"
+isavg_filename = f"ISAVG{REPTMON}{NOWK}.sas7bdat"
+icurn_filename = f"ICURN{REPTMON}{NOWK}.sas7bdat"
 
 datasets = []
-try:
-    savg_df = pl.read_parquet(mni_path / savg_filename).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
+
+def read_sas_file(filepath, columns=None):
+    """Read SAS file and return Polars DataFrame with selected columns"""
+    try:
+        if columns:
+            df, meta = pyreadstat.read_sas7bdat(filepath, columns=columns)
+        else:
+            df, meta = pyreadstat.read_sas7bdat(filepath)
+        return pl.DataFrame(df)
+    except FileNotFoundError:
+        print(f"NOTE: {filepath.name} not found")
+        return None
+    except Exception as e:
+        print(f"Error reading {filepath.name}: {e}")
+        return None
+
+# Try reading SAVG
+savg_df = read_sas_file(mni_path / savg_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if savg_df is not None:
     datasets.append(savg_df)
     print(f"SAVG records: {savg_df.height}")
-except FileNotFoundError:
-    print(f"NOTE: {savg_filename} not found")
 
-try:
-    curn_df = pl.read_parquet(mni_path / curn_filename).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
+# Try reading CURN
+curn_df = read_sas_file(mni_path / curn_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if curn_df is not None:
     datasets.append(curn_df)
     print(f"CURN records: {curn_df.height}")
-except FileNotFoundError:
-    print(f"NOTE: {curn_filename} not found")
 
-try:
-    isavg_df = pl.read_parquet(imni_path / isavg_filename).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
+# Try reading ISAVG
+isavg_df = read_sas_file(imni_path / isavg_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if isavg_df is not None:
     datasets.append(isavg_df)
     print(f"ISAVG records: {isavg_df.height}")
-except FileNotFoundError:
-    print(f"NOTE: {isavg_filename} not found")
 
-try:
-    icurn_df = pl.read_parquet(imni_path / icurn_filename).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
+# Try reading ICURN
+icurn_df = read_sas_file(imni_path / icurn_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if icurn_df is not None:
     datasets.append(icurn_df)
     print(f"ICURN records: {icurn_df.height}")
-except FileNotFoundError:
-    print(f"NOTE: {icurn_filename} not found")
 
 # DATA DEP; SET all datasets;
 if datasets:
@@ -180,6 +193,8 @@ if datasets:
     # PROC SORT DATA=DEP NODUPKEYS; BY ACCTNO;
     dep_deduped = dep_filtered.unique(subset=['ACCTNO'])
     dep_deduped.write_parquet(output_path / "DEP.parquet")
+    # Also write to CSV for verification
+    dep_deduped.write_csv(output_path / "DEP.csv")
     print(f"DEP records: {dep_deduped.height}")
 else:
     dep_deduped = pl.DataFrame()
@@ -212,6 +227,7 @@ if not ibg_final.is_empty():
     # PROC SORT DATA=DEP; BY CATEGORY;
     dep_sorted = dep_with_bc.sort('CATEGORY')
     dep_sorted.write_parquet(output_path / "DEP_FINAL.parquet")
+    dep_sorted.write_csv(output_path / "DEP_FINAL.csv")
     
     # TITLE1 'DEBITTED A/C';
     print("\n" + "="*50)
@@ -234,6 +250,7 @@ if not ibg_final.is_empty():
         
         # Save summary
         debitted_summary.write_parquet(output_path / "DEBITTED_SUMMARY.parquet")
+        debitted_summary.write_csv(output_path / "DEBITTED_SUMMARY.csv")
     else:
         print("No debitted records found")
     
@@ -258,6 +275,7 @@ if not ibg_final.is_empty():
         
         # Save summary
         notfound_summary.write_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
+        notfound_summary.write_csv(output_path / "NOTFOUND_SUMMARY.csv")
     else:
         print("No not-found records found")
 
@@ -268,6 +286,7 @@ if not nondebit_sorted.is_empty():
         pl.col('PAYMODE').cast(pl.Int64).alias('ACCTNO')
     ])
     nondebit_processed.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
+    nondebit_processed.write_csv(output_path / "NONDEBIT_PROCESSED.csv")
     
     print("\n" + "="*50)
     # TITLE1 'NON-DEBITTED A/C';
@@ -287,5 +306,44 @@ if not nondebit_sorted.is_empty():
     
     # Save summary
     nondebit_summary.write_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
+    nondebit_summary.write_csv(output_path / "NONDEBIT_SUMMARY.csv")
 
+# Generate text report
+print("\n" + "="*50)
+print("GENERATING TEXT REPORT")
+print("="*50)
+
+with open(output_path / "report.txt", 'w') as f:
+    f.write(f"REPORT DATE: {reptdate}\n")
+    f.write(f"PERIOD: {REPTMON}/{REPTYEAR}\n")
+    f.write(f"WEEK: {NOWK}\n")
+    f.write(f"DESCRIPTION: {SDESC}\n")
+    f.write("="*50 + "\n\n")
+    
+    # Write summaries to report
+    if Path(output_path / "DEBITTED_SUMMARY.parquet").exists():
+        deb_summary = pl.read_parquet(output_path / "DEBITTED_SUMMARY.parquet")
+        f.write("DEBITTED A/C SUMMARY\n")
+        f.write("-"*30 + "\n")
+        f.write(str(deb_summary))
+        total = deb_summary.select(pl.col('IBGAMT').sum()).row(0)[0]
+        f.write(f"\nTOTAL: {total:,.2f}\n\n")
+    
+    if Path(output_path / "NOTFOUND_SUMMARY.parquet").exists():
+        nf_summary = pl.read_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
+        f.write("NOT FOUND IN FISS SUMMARY\n")
+        f.write("-"*30 + "\n")
+        f.write(str(nf_summary))
+        total = nf_summary.select(pl.col('IBGAMT').sum()).row(0)[0]
+        f.write(f"\nTOTAL: {total:,.2f}\n\n")
+    
+    if Path(output_path / "NONDEBIT_SUMMARY.parquet").exists():
+        nd_summary = pl.read_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
+        f.write("NON-DEBITTED A/C SUMMARY\n")
+        f.write("-"*30 + "\n")
+        f.write(str(nd_summary))
+        total = nd_summary.select(pl.col('IBGAMT').sum()).row(0)[0]
+        f.write(f"\nTOTAL: {total:,.2f}\n")
+
+print(f"Report generated: {output_path / 'report.txt'}")
 print("\nPROCESSING COMPLETED SUCCESSFULLY")
