@@ -217,22 +217,19 @@ if not deposit_filtered.is_empty():
         )
         print(f"Merged DEPOSIT with FLOAT: {len(deposit_merged)} records")
         
-        # Apply transformations - FIXED: Keep FLOATORI as original CURBAL
+        # Apply transformations - EXACTLY matching SAS logic
         deposit_processed = deposit_merged.with_columns([
             # IF CURBAL < 0 THEN CURBAL = 0;
             pl.when(pl.col('curbal') < 0)
             .then(0)
             .otherwise(pl.col('curbal'))
-            .alias('curbal'),
-            
-            # Store original CURBAL for FLOATORI (before any adjustments)
-            pl.col('curbal').alias('floatori_original'),
+            .alias('curbal')
+        ]).with_columns([
+            # FLOATORI = CURBAL (set immediately after CURBAL adjustment)
+            pl.col('curbal').alias('floatori'),
             
             # AVBAL = SUM(CURBAL,(-1)*FLOAT);
-            (pl.col('curbal') + (-1) * pl.col('float')).alias('avbal'),
-            
-            # MINUSFLOAT = SUM(CURBAL,(-1)*FLOAT);
-            (pl.col('curbal') + (-1) * pl.col('float')).alias('minusfloat')
+            (pl.col('curbal') + (-1) * pl.col('float')).alias('avbal')
         ]).with_columns([
             # IF AVBAL < 0 THEN DO; FLOAT = CURBAL; AVBAL = 0; END;
             pl.when(pl.col('avbal') < 0)
@@ -249,15 +246,15 @@ if not deposit_filtered.is_empty():
             pl.col('adjustment').struct.field('float').alias('float'),
             pl.col('adjustment').struct.field('avbal').alias('avbal'),
             
-            # FLOATORI = CURBAL (original, not affected by AVBAL adjustment)
-            pl.col('floatori_original').alias('floatori'),
+            # MINUSFLOAT = SUM(CURBAL,(-1)*FLOAT) where FLOAT may be adjusted
+            (pl.col('curbal') + (-1) * pl.col('float')).alias('minusfloat'),
             
             # AVBALTT = SUM(AVBAL,INTPAYBL);
             (pl.col('avbal') + pl.col('intpaybl')).alias('avbaltt'),
             
             # CURBALTT = SUM(CURBAL,INTPAYBL);
             (pl.col('curbal') + pl.col('intpaybl')).alias('curbaltt')
-        ]).drop(['adjustment', 'floatori_original'])
+        ]).drop('adjustment')
         
         # Split into DEPOSIT and EXCEPT based on conditions
         # IF B AND NOT A THEN OUTPUT EXCEPT;
