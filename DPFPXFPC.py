@@ -1,15 +1,62 @@
-python output:
+OPTIONS YEARCUTOFF=1950 NOCENTER;
+PROC SORT DATA=IMNI.FDMTHLY
+  OUT=FDMTHLY (KEEP=ACCTNO BRANCH INTPLAN CURBAL BIC AMTIND INTPAY);
+  BY ACCTNO;
+RUN;
+DATA FDMTHLY;
+    SET FDMTHLY;
+    LEDGBAL = CURBAL;
+RUN;
+DATA CURN;
+   SET IMNI.CURN124;
+   IF  PRODUCT = 139 THEN DELETE;
+RUN;
+DATA DEPOSIT;
+  SET IMNI.SAVG124
+             (IN=A KEEP=ACCTNO PRODUCT CURBAL LEDGBAL PRODCD AMTIND
+                            INTPAYBL BRANCH)
+          CURN   (IN=B KEEP=ACCTNO PRODUCT CURBAL LEDGBAL PRODCD AMTIND
+                            INTPAYBL BRANCH)
+      FDMTHLY  (KEEP=ACCTNO INTPLAN  CURBAL LEDGBAL BIC AMTIND  INTPAY
+                     BRANCH RENAME=(BIC=PRODCD INTPLAN=PRODUCT
+                                 INTPAY=INTPAYBL));
+      IF PRODCD IN ('42110','42310','42120','42320','42130','42610',
+                    '42133','42132','42180','42199','42699');
+      IF PRODUCT = 166 THEN PRODCD = '42310';
+      IF PRODCD IN ('42199','42699') AND
+      PRODUCT NOT IN (72,413) THEN DELETE;
+      IF INTPAYBL < 0 THEN INTPAYBL = 0;
+RUN;
+  /* FLOAT */
+DATA FLOAT;
+   SET PIDMS.FLOAT;
+RUN;
+PROC SUMMARY DATA=FLOAT NWAY;
+  CLASS ACCTNO;
+  VAR FLOAT;
+OUTPUT OUT=FLOAT SUM=;
+RUN;
+PROC SORT DATA=DEPOSIT; BY ACCTNO;
 
-----------------------------------------------------------------------------------------------------
-                                       66,319,363.73       546,830,781.19     619,998,084.82
- ====================================================================================================
+DATA DEPOSIT EXCEPT;
+   MERGE DEPOSIT(IN=A) FLOAT(IN=B);
+   BY ACCTNO;
+   IF CURBAL < 0 THEN CURBAL = 0;
+   FLOATORI=CURBAL;
+   AVBAL = SUM(CURBAL,(-1)*FLOAT);
+   IF AVBAL < 0 THEN DO;
+      FLOAT = CURBAL;
+      AVBAL = 0;
+   END;
+   MINUSFLOAT=SUM(CURBAL,(-1)*FLOAT);
+   AVBALTT = SUM(AVBAL,INTPAYBL);
+   CURBALTT = SUM(CURBAL,INTPAYBL);
+   IF B AND NOT A THEN OUTPUT EXCEPT;
+   IF A AND B THEN OUTPUT DEPOSIT;
+RUN;
 
-
-production output:
-
-                                    ===========    ============    ============                                                                      
-                                     66319363.73    670237841.69    736557205.42                                                                      
-
-
-
-the FLOAT column seems correct, but why the other two is totally different?
+PROC SUMMARY DATA=DEPOSIT NWAY MISSING;
+CLASS BRANCH;
+VAR FLOAT MINUSFLOAT FLOATORI;
+OUTPUT OUT=XXX SUM=;
+RUN;PROC PRINT DATA=XXX;SUM FLOAT MINUSFLOAT FLOATORI;RUN;
