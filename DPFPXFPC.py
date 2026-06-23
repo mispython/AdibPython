@@ -298,38 +298,67 @@ if not deposit_filtered.is_empty():
                 'branch', '_TYPE_', '_FREQ_', 'float', 'minusfloat', 'floatori'
             ])
             
-            # Sort by branch
-            summary = summary.sort('branch')
+            # Sort by branch and convert branch to integer (remove decimals)
+            summary = summary.with_columns([
+                pl.col('branch').cast(pl.Int64).alias('branch')
+            ]).sort('branch')
             
             summary.write_parquet(output_path / "XXX.parquet")
             summary.write_csv(output_path / "XXX.txt")
             
             # PROC PRINT DATA=XXX; SUM FLOAT MINUSFLOAT FLOATORI;
-            print("\n" + "="*80)
-            print("SUMMARY BY BRANCH:")
-            print("="*80)
+            print("\n" + " " + " " * 60 + "The SAS System")
+            print(" " * 70 + "SUMMARY BY BRANCH (CONVENTIONAL)")
+            print()
+            print(" " + "-"*100)
+            print(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}")
+            print(" " + "-"*100)
             
-            # Format numbers for display
-            summary_display = summary.with_columns([
-                pl.col('float').map_elements(lambda x: f"{x:,.2f}", return_dtype=pl.Utf8).alias('float_formatted'),
-                pl.col('minusfloat').map_elements(lambda x: f"{x:,.2f}", return_dtype=pl.Utf8).alias('minusfloat_formatted'),
-                pl.col('floatori').map_elements(lambda x: f"{x:,.2f}", return_dtype=pl.Utf8).alias('floatori_formatted')
-            ]).select([
-                'branch', '_TYPE_', '_FREQ_', 
-                'float_formatted', 'minusfloat_formatted', 'floatori_formatted'
-            ])
+            # Format each row
+            for idx, row in enumerate(summary.iter_rows(), 1):
+                branch = int(row[0])  # Convert to integer to remove decimal
+                type_val = row[1]
+                freq = row[2]
+                float_val = row[3]
+                minusfloat_val = row[4]
+                floatori_val = row[5]
+                
+                print(f"{idx:4} {branch:8} {type_val:8} {freq:10} {float_val:18,.2f} {minusfloat_val:20,.2f} {floatori_val:18,.2f}")
             
-            print(summary_display)
+            print(" " + "-"*100)
             
             # Calculate totals
             total_float = summary.select(pl.col('float').sum()).row(0)[0]
             total_minusfloat = summary.select(pl.col('minusfloat').sum()).row(0)[0]
             total_floatori = summary.select(pl.col('floatori').sum()).row(0)[0]
             
-            print("\n" + "="*80)
-            print("TOTALS:")
-            print("="*80)
-            print(f"{total_float:,.2f} {total_minusfloat:,.2f} {total_floatori:,.2f}")
+            # Print totals with proper spacing
+            print(f"{'':>4} {'':>8} {'':>8} {'':>10} {total_float:18,.2f} {total_minusfloat:20,.2f} {total_floatori:18,.2f}")
+            print(" " + "="*100)
+            
+            # Save the formatted summary to a text file
+            with open(output_path / "XXX_FORMATTED.txt", 'w') as f:
+                f.write("\n" + " " * 60 + "The SAS System\n")
+                f.write(" " * 70 + "SUMMARY BY BRANCH (CONVENTIONAL)\n\n")
+                f.write(" " + "-"*100 + "\n")
+                f.write(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}\n")
+                f.write(" " + "-"*100 + "\n")
+                
+                for idx, row in enumerate(summary.iter_rows(), 1):
+                    branch = int(row[0])
+                    type_val = row[1]
+                    freq = row[2]
+                    float_val = row[3]
+                    minusfloat_val = row[4]
+                    floatori_val = row[5]
+                    
+                    f.write(f"{idx:4} {branch:8} {type_val:8} {freq:10} {float_val:18,.2f} {minusfloat_val:20,.2f} {floatori_val:18,.2f}\n")
+                
+                f.write(" " + "-"*100 + "\n")
+                f.write(f"{'':>4} {'':>8} {'':>8} {'':>10} {total_float:18,.2f} {total_minusfloat:20,.2f} {total_floatori:18,.2f}\n")
+                f.write(" " + "="*100 + "\n")
+            
+            print(f"\nFormatted summary saved to: {output_path / 'XXX_FORMATTED.txt'}")
             
         else:
             print("No DEPOSIT data for summary")
