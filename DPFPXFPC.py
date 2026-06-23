@@ -1,327 +1,63 @@
-import polars as pl
-import pyreadstat
-from pathlib import Path
-import datetime
+Loaded FDMTHLY with 2756145 records
+Saved FDMTHLY_SORTED with 2756145 records
+Saved FDMTHLY with 2756145 records
+Loaded CURN124 with 915692 records
+Saved CURN with 915427 records (after filtering)
+Loaded SAVG124 with 4241108 records
+Added CURN with 915427 records
+Added FDMTHLY with 2756145 records
+Combined DEPOSIT dataset has 7912680 records
+DEPOSIT records: 7836142
+Loaded FLOAT with 18927 records
+Saved FLOAT with 18927 records
+FLOAT summary records: 18927
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIPCBFLO.py:219: DeprecationWarning: use of `how='outer'` should be replaced with `how='full'`.
+(Deprecated in version 0.20.29)
+  deposit_merged = deposit_sorted.join(
+Merged DEPOSIT with FLOAT: 7839120 records
+DEPOSIT final records: 15949
+EXCEPT records: 2978
 
-# Configuration
-mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/MNI")
-pidms_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/PIDMS")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIPCBFLO")
-output_path.mkdir(exist_ok=True)
+================================================================================
+SUMMARY BY BRANCH:
+================================================================================
+shape: (260, 4)
+┌────────┬───────────┬────────────┬──────────┐
+│ branch ┆ float     ┆ minusfloat ┆ floatori │
+│ ---    ┆ ---       ┆ ---        ┆ ---      │
+│ f64    ┆ f64       ┆ f64        ┆ f64      │
+╞════════╪═══════════╪════════════╪══════════╡
+│ 2.0    ┆ 4.7103e6  ┆ 2.5918e7   ┆ 3.1314e7 │
+│ 3.0    ┆ 4.1853e6  ┆ 4.3775e7   ┆ 4.8000e7 │
+│ 4.0    ┆ 3.3917e6  ┆ 2.3338e7   ┆ 2.6974e7 │
+│ 5.0    ┆ 5.2849e6  ┆ 5.2625e7   ┆ 5.8229e7 │
+│ 6.0    ┆ 2.7937e6  ┆ 1.3765e7   ┆ 1.7404e7 │
+│ …      ┆ …         ┆ …          ┆ …        │
+│ 292.0  ┆ 1.6667e6  ┆ 1.2015e7   ┆ 1.3865e7 │
+│ 293.0  ┆ 1.8739e6  ┆ 1.5435e7   ┆ 1.7309e7 │
+│ 294.0  ┆ 2.0771e6  ┆ 7.1486e6   ┆ 9.2338e6 │
+│ 295.0  ┆ 202918.42 ┆ 2.0212e6   ┆ 2.2241e6 │
+│ 296.0  ┆ 236780.44 ┆ 7.6121e6   ┆ 7.8488e6 │
+└────────┴───────────┴────────────┴──────────┘
 
-def read_sas_dataset(filepath, columns=None):
-    """
-    Read a SAS7BDAT dataset and return as Polars DataFrame
-    """
-    try:
-        if columns:
-            df, meta = pyreadstat.read_sas7bdat(filepath, usecols=columns)
-        else:
-            df, meta = pyreadstat.read_sas7bdat(filepath)
-        
-        # Convert to Polars DataFrame
-        pl_df = pl.DataFrame(df)
-        
-        # Convert column names to lowercase
-        pl_df = pl_df.rename({col: col.lower() for col in pl_df.columns})
-        
-        # Convert date columns if they exist (SAS dates are days since 1960-01-01)
-        for col in pl_df.columns:
-            if 'date' in col.lower() or 'dt' in col.lower():
-                try:
-                    # Check if it's a numeric column that might be a date
-                    if pl_df[col].dtype in [pl.Int64, pl.Float64]:
-                        # SAS dates are days since 1960-01-01
-                        pl_df = pl_df.with_columns([
-                            pl.when(pl.col(col) > 0)
-                            .then(pl.lit(datetime.date(1960, 1, 1)) + pl.duration(days=pl.col(col).cast(pl.Int64)))
-                            .otherwise(pl.col(col))
-                            .alias(col)
-                        ])
-                except:
-                    pass  # Keep as is if conversion fails
-        
-        return pl_df, meta
-    except Exception as e:
-        print(f"Error reading {filepath}: {e}")
-        return None, None
+================================================================================
+TOTALS:
+================================================================================
+FLOAT: 468,933,840.14
+MINUSFLOAT: 5,753,653,745.83
+FLOATORI: 6,246,126,638.19
 
-# PROC SORT DATA=MNI.FDMTHLY OUT=FDMTHLY;
-try:
-    fdmthly_df, meta = read_sas_dataset(mni_path / "fdmthly.sas7bdat", 
-                                         columns=['ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'])
-    if fdmthly_df is not None:
-        print(f"Loaded FDMTHLY with {len(fdmthly_df)} records")
-        fdmthly_sorted = fdmthly_df.sort('acctno')
-        fdmthly_sorted.write_parquet(output_path / "FDMTHLY_SORTED.parquet")
-        fdmthly_sorted.write_csv(output_path / "FDMTHLY_SORTED.txt")
-        print(f"Saved FDMTHLY_SORTED with {len(fdmthly_sorted)} records")
-    else:
-        fdmthly_df = pl.DataFrame()
-        print("NOTE: MNI.FDMTHLY could not be loaded")
-except FileNotFoundError:
-    print("NOTE: MNI.FDMTHLY not found")
-    fdmthly_df = pl.DataFrame()
-except Exception as e:
-    print(f"Error loading FDMTHLY: {e}")
-    fdmthly_df = pl.DataFrame()
+================================================================================
+All output files saved to: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIPCBFLO
+PROCESSING COMPLETED SUCCESSFULLY
+================================================================================
 
-# DATA FDMTHLY; SET FDMTHLY; LEDGBAL = CURBAL;
-if not fdmthly_df.is_empty():
-    fdmthly_processed = fdmthly_df.with_columns([
-        pl.col('curbal').alias('ledgbal')
-    ])
-    fdmthly_processed.write_parquet(output_path / "FDMTHLY.parquet")
-    fdmthly_processed.write_csv(output_path / "FDMTHLY.txt")
-    print(f"Saved FDMTHLY with {len(fdmthly_processed)} records")
-else:
-    fdmthly_processed = pl.DataFrame()
 
-# DATA CURN; SET MNI.CURN124;
-try:
-    curn_df, meta = read_sas_dataset(mni_path / "curn124.sas7bdat")
-    if curn_df is not None:
-        print(f"Loaded CURN124 with {len(curn_df)} records")
-        # IF PRODUCT = 139 THEN DELETE;
-        curn_filtered = curn_df.filter(pl.col('product') != 139)
-        curn_filtered.write_parquet(output_path / "CURN.parquet")
-        curn_filtered.write_csv(output_path / "CURN.txt")
-        print(f"Saved CURN with {len(curn_filtered)} records (after filtering)")
-    else:
-        curn_filtered = pl.DataFrame()
-        print("NOTE: MNI.CURN124 could not be loaded")
-except FileNotFoundError:
-    print("NOTE: MNI.CURN124 not found")
-    curn_filtered = pl.DataFrame()
-except Exception as e:
-    print(f"Error loading CURN124: {e}")
-    curn_filtered = pl.DataFrame()
+summary of output:
 
-# DATA DEPOSIT; SET multiple datasets;
-datasets_to_combine = []
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIPCBFLO.py:219: DeprecationWarning: use of `how='outer'` should be replaced with `how='full'`.
+(Deprecated in version 0.20.29)
 
-# MNI.SAVG124
-try:
-    savg_df, meta = read_sas_dataset(mni_path / "savg124.sas7bdat", 
-                                      columns=['ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH'])
-    if savg_df is not None:
-        print(f"Loaded SAVG124 with {len(savg_df)} records")
-        datasets_to_combine.append(savg_df)
-    else:
-        print("NOTE: MNI.SAVG124 could not be loaded")
-except FileNotFoundError:
-    print("NOTE: MNI.SAVG124 not found")
-except Exception as e:
-    print(f"Error loading SAVG124: {e}")
+anything to be changed?
 
-# CURN
-if not curn_filtered.is_empty():
-    curn_selected = curn_filtered.select([
-        'acctno', 'product', 'curbal', 'ledgbal', 'prodcd', 'amtind', 'intpaybl', 'branch'
-    ])
-    datasets_to_combine.append(curn_selected)
-    print(f"Added CURN with {len(curn_selected)} records")
-
-# FDMTHLY with renames - FIXED: Keep all needed columns before renaming
-if not fdmthly_processed.is_empty():
-    # First, make sure we have all the columns we need
-    fdmthly_renamed = fdmthly_processed.with_columns([
-        pl.col('intplan').alias('product'),
-        pl.col('bic').alias('prodcd'),
-        pl.col('intpay').alias('intpaybl')
-    ]).select([
-        'acctno', 'branch', 'curbal', 'ledgbal', 'amtind',
-        'product', 'prodcd', 'intpaybl'
-    ])
-    datasets_to_combine.append(fdmthly_renamed)
-    print(f"Added FDMTHLY with {len(fdmthly_renamed)} records")
-
-# Combine all datasets and apply filters
-if datasets_to_combine:
-    deposit_combined = pl.concat(datasets_to_combine, how="diagonal")
-    print(f"Combined DEPOSIT dataset has {len(deposit_combined)} records")
-    
-    # Apply filters and transformations
-    valid_prodcd = [
-        '42110', '42310', '42120', '42320', '42130',
-        '42133', '42132', '42180', '42610', '42630', '34180',
-        '42199', '42699'
-    ]
-    
-    deposit_filtered = deposit_combined.filter(
-        pl.col('prodcd').is_in(valid_prodcd)
-    ).with_columns([
-        # IF PRODUCT = 166 THEN PRODCD = '42310';
-        pl.when(pl.col('product') == 166)
-        .then(pl.lit('42310'))
-        .otherwise(pl.col('prodcd'))
-        .alias('prodcd')
-    ]).filter(
-        # IF PRODCD IN ('42199','42699') AND PRODUCT NOT IN (72,413) THEN DELETE;
-        ~(
-            pl.col('prodcd').is_in(['42199', '42699']) & 
-            ~pl.col('product').is_in([72, 413])
-        )
-    ).filter(
-        # IF PRODUCT IN (30,31,32,33,34) THEN DELETE;
-        ~pl.col('product').is_in([30, 31, 32, 33, 34])
-    ).with_columns([
-        # IF INTPAYBL < 0 THEN INTPAYBL = 0;
-        pl.when(pl.col('intpaybl') < 0)
-        .then(0)
-        .otherwise(pl.col('intpaybl'))
-        .alias('intpaybl')
-    ])
-    
-    deposit_filtered.write_parquet(output_path / "DEPOSIT.parquet")
-    deposit_filtered.write_csv(output_path / "DEPOSIT.txt")
-    print(f"DEPOSIT records: {len(deposit_filtered)}")
-else:
-    deposit_filtered = pl.DataFrame()
-    print("No DEPOSIT data created")
-
-# DATA FLOAT; SET PIDMS.FLOAT;
-try:
-    float_df, meta = read_sas_dataset(pidms_path / "float.sas7bdat")
-    if float_df is not None:
-        print(f"Loaded FLOAT with {len(float_df)} records")
-        float_df.write_parquet(output_path / "FLOAT.parquet")
-        float_df.write_csv(output_path / "FLOAT.txt")
-        print(f"Saved FLOAT with {len(float_df)} records")
-    else:
-        float_df = pl.DataFrame()
-        print("NOTE: PIDMS.FLOAT could not be loaded")
-except FileNotFoundError:
-    print("NOTE: PIDMS.FLOAT not found")
-    float_df = pl.DataFrame()
-except Exception as e:
-    print(f"Error loading FLOAT: {e}")
-    float_df = pl.DataFrame()
-
-# PROC SUMMARY DATA=FLOAT NWAY; CLASS ACCTNO; VAR FLOAT; OUTPUT OUT=FLOAT SUM=;
-if not float_df.is_empty():
-    float_summary = float_df.group_by('acctno').agg([
-        pl.col('float').sum().alias('float')
-    ])
-    float_summary.write_parquet(output_path / "FLOAT_SUMMARY.parquet")
-    float_summary.write_csv(output_path / "FLOAT_SUMMARY.txt")
-    print(f"FLOAT summary records: {len(float_summary)}")
-else:
-    float_summary = pl.DataFrame()
-    print("No FLOAT data for summary")
-
-# PROC SORT DATA=DEPOSIT; BY ACCTNO;
-if not deposit_filtered.is_empty():
-    deposit_sorted = deposit_filtered.sort('acctno')
-    
-    # DATA DEPOSIT EXCEPT; MERGE DEPOSIT(IN=A) FLOAT(IN=B); BY ACCTNO;
-    if not float_summary.is_empty():
-        deposit_merged = deposit_sorted.join(
-            float_summary, on='acctno', how='outer', suffix='_float'
-        )
-        print(f"Merged DEPOSIT with FLOAT: {len(deposit_merged)} records")
-        
-        # Apply transformations
-        deposit_processed = deposit_merged.with_columns([
-            # IF CURBAL < 0 THEN CURBAL = 0;
-            pl.when(pl.col('curbal') < 0)
-            .then(0)
-            .otherwise(pl.col('curbal'))
-            .alias('curbal'),
-            
-            # FLOATORI = CURBAL;
-            pl.col('curbal').alias('floatori'),
-            
-            # AVBAL = SUM(CURBAL,(-1)*FLOAT);
-            (pl.col('curbal') + (-1) * pl.col('float')).alias('avbal'),
-            
-            # MINUSFLOAT = SUM(CURBAL,(-1)*FLOAT);
-            (pl.col('curbal') + (-1) * pl.col('float')).alias('minusfloat')
-        ]).with_columns([
-            # IF AVBAL < 0 THEN DO; FLOAT = CURBAL; AVBAL = 0; END;
-            pl.when(pl.col('avbal') < 0)
-            .then(pl.struct([
-                pl.col('curbal').alias('float'),
-                pl.lit(0).alias('avbal')
-            ]))
-            .otherwise(pl.struct([
-                pl.col('float').alias('float'),
-                pl.col('avbal').alias('avbal')
-            ]))
-            .alias('adjustment')
-        ]).with_columns([
-            pl.col('adjustment').struct.field('float').alias('float'),
-            pl.col('adjustment').struct.field('avbal').alias('avbal'),
-            
-            # AVBALTT = SUM(AVBAL,INTPAYBL);
-            (pl.col('avbal') + pl.col('intpaybl')).alias('avbaltt'),
-            
-            # CURBALTT = SUM(CURBAL,INTPAYBL);
-            (pl.col('curbal') + pl.col('intpaybl')).alias('curbaltt')
-        ]).drop('adjustment')
-        
-        # Split into DEPOSIT and EXCEPT based on conditions
-        # IF B AND NOT A THEN OUTPUT EXCEPT;
-        except_df = deposit_processed.filter(
-            pl.col('float').is_not_null() & 
-            (pl.col('curbal').is_null() | pl.col('product').is_null())
-        )
-        
-        # IF A AND B THEN OUTPUT DEPOSIT;
-        deposit_final = deposit_processed.filter(
-            pl.col('curbal').is_not_null() & 
-            pl.col('product').is_not_null() & 
-            pl.col('float').is_not_null()
-        )
-        
-        # Save outputs
-        deposit_final.write_parquet(output_path / "DEPOSIT_FINAL.parquet")
-        deposit_final.write_csv(output_path / "DEPOSIT_FINAL.txt")
-        
-        except_df.write_parquet(output_path / "EXCEPT.parquet")
-        except_df.write_csv(output_path / "EXCEPT.txt")
-        
-        print(f"DEPOSIT final records: {len(deposit_final)}")
-        print(f"EXCEPT records: {len(except_df)}")
-        
-        # PROC SUMMARY DATA=DEPOSIT NWAY MISSING; CLASS BRANCH;
-        if not deposit_final.is_empty():
-            summary = deposit_final.group_by('branch').agg([
-                pl.col('float').sum().alias('float'),
-                pl.col('minusfloat').sum().alias('minusfloat'),
-                pl.col('floatori').sum().alias('floatori')
-            ])
-            
-            summary.write_parquet(output_path / "XXX.parquet")
-            summary.write_csv(output_path / "XXX.txt")
-            
-            # PROC PRINT DATA=XXX; SUM FLOAT MINUSFLOAT FLOATORI;
-            print("\n" + "="*80)
-            print("SUMMARY BY BRANCH:")
-            print("="*80)
-            print(summary.sort('branch'))
-            
-            total_float = summary.select(pl.col('float').sum()).row(0)[0]
-            total_minusfloat = summary.select(pl.col('minusfloat').sum()).row(0)[0]
-            total_floatori = summary.select(pl.col('floatori').sum()).row(0)[0]
-            
-            print("\n" + "="*80)
-            print("TOTALS:")
-            print("="*80)
-            print(f"FLOAT: {total_float:,.2f}")
-            print(f"MINUSFLOAT: {total_minusfloat:,.2f}")
-            print(f"FLOATORI: {total_floatori:,.2f}")
-            
-        else:
-            print("No DEPOSIT data for summary")
-            
-    else:
-        print("No FLOAT data for merging")
-        
-else:
-    print("No DEPOSIT data for processing")
-
-print("\n" + "="*80)
-print(f"All output files saved to: {output_path}")
-print("PROCESSING COMPLETED SUCCESSFULLY")
-print("="*80)
+plus, the output seems to show in exponential number, i need normal numbers. no "e" something
