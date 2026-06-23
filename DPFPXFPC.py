@@ -1,336 +1,282 @@
-import polars as pl
-import pyreadstat
-from pathlib import Path
-import datetime
-
-# Configuration
-imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/IMNI")
-pidms_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/PIDMS")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIPCIFLO")
-output_path.mkdir(exist_ok=True)
-
-def read_sas_dataset(filepath, columns=None):
-    """
-    Read a SAS7BDAT dataset and return as Polars DataFrame
-    """
-    try:
-        if columns:
-            df, meta = pyreadstat.read_sas7bdat(filepath, usecols=columns)
-        else:
-            df, meta = pyreadstat.read_sas7bdat(filepath)
-        
-        # Convert to Polars DataFrame
-        pl_df = pl.DataFrame(df)
-        
-        # Convert column names to lowercase
-        pl_df = pl_df.rename({col: col.lower() for col in pl_df.columns})
-        
-        # Convert date columns if they exist (SAS dates are days since 1960-01-01)
-        for col in pl_df.columns:
-            if 'date' in col.lower() or 'dt' in col.lower():
-                try:
-                    # Check if it's a numeric column that might be a date
-                    if pl_df[col].dtype in [pl.Int64, pl.Float64]:
-                        # SAS dates are days since 1960-01-01
-                        pl_df = pl_df.with_columns([
-                            pl.when(pl.col(col) > 0)
-                            .then(pl.lit(datetime.date(1960, 1, 1)) + pl.duration(days=pl.col(col).cast(pl.Int64)))
-                            .otherwise(pl.col(col))
-                            .alias(col)
-                        ])
-                except:
-                    pass  # Keep as is if conversion fails
-        
-        return pl_df, meta
-    except Exception as e:
-        print(f"Error reading {filepath}: {e}")
-        return None, None
-
-# PROC SORT DATA=IMNI.FDMTHLY OUT=FDMTHLY;
-try:
-    fdmthly_df, meta = read_sas_dataset(imni_path / "fdmthly.sas7bdat", 
-                                         columns=['ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'])
-    if fdmthly_df is not None:
-        print(f"Loaded FDMTHLY with {len(fdmthly_df)} records")
-        fdmthly_sorted = fdmthly_df.sort('acctno')
-        fdmthly_sorted.write_parquet(output_path / "FDMTHLY_SORTED.parquet")
-        fdmthly_sorted.write_csv(output_path / "FDMTHLY_SORTED.txt")
-        print(f"Saved FDMTHLY_SORTED with {len(fdmthly_sorted)} records")
-    else:
-        fdmthly_df = pl.DataFrame()
-        print("NOTE: IMNI.FDMTHLY could not be loaded")
-except FileNotFoundError:
-    print("NOTE: IMNI.FDMTHLY not found")
-    fdmthly_df = pl.DataFrame()
-except Exception as e:
-    print(f"Error loading FDMTHLY: {e}")
-    fdmthly_df = pl.DataFrame()
-
-# DATA FDMTHLY; SET FDMTHLY; LEDGBAL = CURBAL;
-if not fdmthly_df.is_empty():
-    fdmthly_processed = fdmthly_df.with_columns([
-        pl.col('curbal').alias('ledgbal')
-    ])
-    fdmthly_processed.write_parquet(output_path / "FDMTHLY.parquet")
-    fdmthly_processed.write_csv(output_path / "FDMTHLY.txt")
-    print(f"Saved FDMTHLY with {len(fdmthly_processed)} records")
-else:
-    fdmthly_processed = pl.DataFrame()
-
-# DATA CURN; SET IMNI.CURN124;
-try:
-    curn_df, meta = read_sas_dataset(imni_path / "curn124.sas7bdat")
-    if curn_df is not None:
-        print(f"Loaded CURN124 with {len(curn_df)} records")
-        # IF PRODUCT = 139 THEN DELETE;
-        curn_filtered = curn_df.filter(pl.col('product') != 139)
-        curn_filtered.write_parquet(output_path / "CURN.parquet")
-        curn_filtered.write_csv(output_path / "CURN.txt")
-        print(f"Saved CURN with {len(curn_filtered)} records (after filtering)")
-    else:
-        curn_filtered = pl.DataFrame()
-        print("NOTE: IMNI.CURN124 could not be loaded")
-except FileNotFoundError:
-    print("NOTE: IMNI.CURN124 not found")
-    curn_filtered = pl.DataFrame()
-except Exception as e:
-    print(f"Error loading CURN124: {e}")
-    curn_filtered = pl.DataFrame()
-
-# DATA DEPOSIT; SET multiple datasets;
-datasets_to_combine = []
-
-# IMNI.SAVG124
-try:
-    savg_df, meta = read_sas_dataset(imni_path / "savg124.sas7bdat", 
-                                      columns=['ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH'])
-    if savg_df is not None:
-        print(f"Loaded SAVG124 with {len(savg_df)} records")
-        datasets_to_combine.append(savg_df)
-    else:
-        print("NOTE: IMNI.SAVG124 could not be loaded")
-except FileNotFoundError:
-    print("NOTE: IMNI.SAVG124 not found")
-except Exception as e:
-    print(f"Error loading SAVG124: {e}")
-
-# CURN
-if not curn_filtered.is_empty():
-    curn_selected = curn_filtered.select([
-        'acctno', 'product', 'curbal', 'ledgbal', 'prodcd', 'amtind', 'intpaybl', 'branch'
-    ])
-    datasets_to_combine.append(curn_selected)
-    print(f"Added CURN with {len(curn_selected)} records")
-
-# FDMTHLY with renames
-if not fdmthly_processed.is_empty():
-    # First, make sure we have all the columns we need
-    fdmthly_renamed = fdmthly_processed.with_columns([
-        pl.col('intplan').alias('product'),
-        pl.col('bic').alias('prodcd'),
-        pl.col('intpay').alias('intpaybl')
-    ]).select([
-        'acctno', 'branch', 'curbal', 'ledgbal', 'amtind',
-        'product', 'prodcd', 'intpaybl'
-    ])
-    datasets_to_combine.append(fdmthly_renamed)
-    print(f"Added FDMTHLY with {len(fdmthly_renamed)} records")
-
-# Combine all datasets and apply filters
-if datasets_to_combine:
-    deposit_combined = pl.concat(datasets_to_combine, how="diagonal")
-    print(f"Combined DEPOSIT dataset has {len(deposit_combined)} records")
-    
-    # Apply filters and transformations (Islamic version has slightly different PRODCD list)
-    valid_prodcd = [
-        '42110', '42310', '42120', '42320', '42130', '42610',
-        '42133', '42132', '42180', '42199', '42699'
-    ]
-    
-    deposit_filtered = deposit_combined.filter(
-        pl.col('prodcd').is_in(valid_prodcd)
-    ).with_columns([
-        # IF PRODUCT = 166 THEN PRODCD = '42310';
-        pl.when(pl.col('product') == 166)
-        .then(pl.lit('42310'))
-        .otherwise(pl.col('prodcd'))
-        .alias('prodcd')
-    ]).filter(
-        # IF PRODCD IN ('42199','42699') AND PRODUCT NOT IN (72,413) THEN DELETE;
-        ~(
-            pl.col('prodcd').is_in(['42199', '42699']) & 
-            ~pl.col('product').is_in([72, 413])
-        )
-    ).with_columns([
-        # IF INTPAYBL < 0 THEN INTPAYBL = 0;
-        pl.when(pl.col('intpaybl') < 0)
-        .then(0)
-        .otherwise(pl.col('intpaybl'))
-        .alias('intpaybl')
-    ])
-    
-    deposit_filtered.write_parquet(output_path / "DEPOSIT.parquet")
-    deposit_filtered.write_csv(output_path / "DEPOSIT.txt")
-    print(f"DEPOSIT records after filtering: {len(deposit_filtered)}")
-else:
-    deposit_filtered = pl.DataFrame()
-    print("No DEPOSIT data created")
-
-# DATA FLOAT; SET PIDMS.FLOAT;
-try:
-    float_df, meta = read_sas_dataset(pidms_path / "float.sas7bdat")
-    if float_df is not None:
-        print(f"Loaded FLOAT with {len(float_df)} records")
-        float_df.write_parquet(output_path / "FLOAT.parquet")
-        float_df.write_csv(output_path / "FLOAT.txt")
-        print(f"Saved FLOAT with {len(float_df)} records")
-    else:
-        float_df = pl.DataFrame()
-        print("NOTE: PIDMS.FLOAT could not be loaded")
-except FileNotFoundError:
-    print("NOTE: PIDMS.FLOAT not found")
-    float_df = pl.DataFrame()
-except Exception as e:
-    print(f"Error loading FLOAT: {e}")
-    float_df = pl.DataFrame()
-
-# PROC SUMMARY DATA=FLOAT NWAY; CLASS ACCTNO; VAR FLOAT; OUTPUT OUT=FLOAT SUM=;
-if not float_df.is_empty():
-    float_summary = float_df.group_by('acctno').agg([
-        pl.col('float').sum().alias('float')
-    ])
-    float_summary.write_parquet(output_path / "FLOAT_SUMMARY.parquet")
-    float_summary.write_csv(output_path / "FLOAT_SUMMARY.txt")
-    print(f"FLOAT summary records: {len(float_summary)}")
-else:
-    float_summary = pl.DataFrame()
-    print("No FLOAT data for summary")
-
-# PROC SORT DATA=DEPOSIT; BY ACCTNO;
-if not deposit_filtered.is_empty():
-    deposit_sorted = deposit_filtered.sort('acctno')
-    
-    # DATA DEPOSIT EXCEPT; MERGE DEPOSIT(IN=A) FLOAT(IN=B); BY ACCTNO;
-    if not float_summary.is_empty():
-        # Use 'full' instead of 'outer' to avoid deprecation warning
-        deposit_merged = deposit_sorted.join(
-            float_summary, on='acctno', how='full', suffix='_float'
-        )
-        print(f"Merged DEPOSIT with FLOAT: {len(deposit_merged)} records")
-        
-        # Apply transformations
-        deposit_processed = deposit_merged.with_columns([
-            # IF CURBAL < 0 THEN CURBAL = 0;
-            pl.when(pl.col('curbal') < 0)
-            .then(0)
-            .otherwise(pl.col('curbal'))
-            .alias('curbal'),
-            
-            # FLOATORI = CURBAL;
-            pl.col('curbal').alias('floatori'),
-            
-            # AVBAL = SUM(CURBAL,(-1)*FLOAT);
-            (pl.col('curbal') + (-1) * pl.col('float')).alias('avbal'),
-            
-            # MINUSFLOAT = SUM(CURBAL,(-1)*FLOAT);
-            (pl.col('curbal') + (-1) * pl.col('float')).alias('minusfloat')
-        ]).with_columns([
-            # IF AVBAL < 0 THEN DO; FLOAT = CURBAL; AVBAL = 0; END;
-            pl.when(pl.col('avbal') < 0)
-            .then(pl.struct([
-                pl.col('curbal').alias('float'),
-                pl.lit(0).alias('avbal')
-            ]))
-            .otherwise(pl.struct([
-                pl.col('float').alias('float'),
-                pl.col('avbal').alias('avbal')
-            ]))
-            .alias('adjustment')
-        ]).with_columns([
-            pl.col('adjustment').struct.field('float').alias('float'),
-            pl.col('adjustment').struct.field('avbal').alias('avbal'),
-            
-            # AVBALTT = SUM(AVBAL,INTPAYBL);
-            (pl.col('avbal') + pl.col('intpaybl')).alias('avbaltt'),
-            
-            # CURBALTT = SUM(CURBAL,INTPAYBL);
-            (pl.col('curbal') + pl.col('intpaybl')).alias('curbaltt')
-        ]).drop('adjustment')
-        
-        # Split into DEPOSIT and EXCEPT based on conditions
-        # IF B AND NOT A THEN OUTPUT EXCEPT;
-        except_df = deposit_processed.filter(
-            pl.col('float').is_not_null() & 
-            (pl.col('curbal').is_null() | pl.col('product').is_null())
-        )
-        
-        # IF A AND B THEN OUTPUT DEPOSIT;
-        deposit_final = deposit_processed.filter(
-            pl.col('curbal').is_not_null() & 
-            pl.col('product').is_not_null() & 
-            pl.col('float').is_not_null()
-        )
-        
-        # Save outputs
-        deposit_final.write_parquet(output_path / "DEPOSIT_FINAL.parquet")
-        deposit_final.write_csv(output_path / "DEPOSIT_FINAL.txt")
-        
-        except_df.write_parquet(output_path / "EXCEPT.parquet")
-        except_df.write_csv(output_path / "EXCEPT.txt")
-        
-        print(f"DEPOSIT final records: {len(deposit_final)}")
-        print(f"EXCEPT records: {len(except_df)}")
-        
-        # PROC SUMMARY DATA=DEPOSIT NWAY MISSING; CLASS BRANCH;
-        if not deposit_final.is_empty():
-            summary = deposit_final.group_by('branch').agg([
-                pl.col('float').sum().alias('float'),
-                pl.col('minusfloat').sum().alias('minusfloat'),
-                pl.col('floatori').sum().alias('floatori')
-            ])
-            
-            summary.write_parquet(output_path / "XXX.parquet")
-            summary.write_csv(output_path / "XXX.txt")
-            
-            # PROC PRINT DATA=XXX; SUM FLOAT MINUSFLOAT FLOATORI;
-            # Format numbers to show normal decimal format (no scientific notation)
-            print("\n" + "="*80)
-            print("SUMMARY BY BRANCH (ISLAMIC)")
-            print("="*80)
-            
-            # Create a formatted version for display
-            summary_display = summary.with_columns([
-                pl.col('float').map_elements(lambda x: f"{x:,.2f}", return_dtype=pl.Utf8).alias('float_formatted'),
-                pl.col('minusfloat').map_elements(lambda x: f"{x:,.2f}", return_dtype=pl.Utf8).alias('minusfloat_formatted'),
-                pl.col('floatori').map_elements(lambda x: f"{x:,.2f}", return_dtype=pl.Utf8).alias('floatori_formatted')
-            ]).select(['branch', 'float_formatted', 'minusfloat_formatted', 'floatori_formatted'])
-            
-            print(summary_display.sort('branch'))
-            
-            total_float = summary.select(pl.col('float').sum()).row(0)[0]
-            total_minusfloat = summary.select(pl.col('minusfloat').sum()).row(0)[0]
-            total_floatori = summary.select(pl.col('floatori').sum()).row(0)[0]
-            
-            print("\n" + "="*80)
-            print("TOTALS:")
-            print("="*80)
-            print(f"FLOAT: {total_float:,.2f}")
-            print(f"MINUSFLOAT: {total_minusfloat:,.2f}")
-            print(f"FLOATORI: {total_floatori:,.2f}")
-            
-            # Save summary to CSV for reporting
-            summary.write_csv(output_path / "ISLAMIC_FLOAT_SUMMARY.csv")
-            
-        else:
-            print("No DEPOSIT data for summary")
-            
-    else:
-        print("No FLOAT data for merging")
-        
-else:
-    print("No DEPOSIT data for processing")
-
-print("\n" + "="*80)
-print(f"All output files saved to: {output_path}")
-print("PROCESSING COMPLETED SUCCESSFULLY")
-print("="*80)
+The SAS System                                                                                    22:58 Friday, January 23, 2026   1                  
+                                                                                                                                                      
+Obs    BRANCH    _TYPE_    _FREQ_       FLOAT       MINUSFLOAT       FLOATORI                                                                         
+                                                                                                                                                      
+  1       2         1         63     4710252.48     40952659.70     45662912.18                                                                       
+  2       3         1         70     4185349.46     46238980.04     50424329.50                                                                       
+  3       4         1        114     3391650.28     28967102.46     32358752.74                                                                       
+  4       5         1        128     5284875.43     57268825.58     62553701.01                                                                       
+  5       6         1        142     2793745.53     34362923.57     37156669.10                                                                       
+  6       7         1        113     4613715.69    196223523.84    200837239.53                                                                       
+  7       8         1        108     4576682.05     33942428.17     38519110.22                                                                       
+  8       9         1        146     2536825.49     81200456.18     83737281.67                                                                       
+  9      10         1         76      942451.77     13048348.96     13990800.73                                                                       
+ 10      11         1         30      219358.15      4157720.96      4377079.11                                                                       
+ 11      13         1         97     2468124.57     34335458.31     36803582.88                                                                       
+ 12      14         1         20      525596.67      2883305.73      3408902.40                                                                       
+ 13      15         1        303     8264080.95    123013853.97    131277934.92                                                                       
+ 14      16         1         26      775004.47     11993601.36     12768605.83                                                                       
+ 15      17         1         39      591142.87      6419717.67      7010860.54                                                                       
+ 16      18         1         52     3473828.36     10927762.66     14401591.02                                                                       
+ 17      19         1        112     4092876.06     63018698.21     67111574.27                                                                       
+ 18      20         1         95     1987520.01     31176419.33     33163939.34                                                                       
+ 19      21         1        103     2237553.01     37663144.93     39900697.94                                                                       
+ 20      22         1         67     1014348.26     18904553.54     19918901.80                                                                       
+ 21      23         1         44     1086161.35     13391534.84     14477696.19                                                                       
+ 22      24         1         85     1886417.26     21354388.00     23240805.26                                                                       
+ 23      25         1         45     1547595.96     35773711.83     37321307.79                                                                       
+ 24      26         1        106     5986032.00     39031324.48     45017356.48                                                                       
+ 25      27         1         82     2642625.67     20081114.51     22723740.18                                                                       
+ 26      28         1        144     2843336.55     52489264.31     55332600.86                                                                       
+ 27      29         1         48     1308794.37     30435485.19     31744279.56                                                                       
+ 28      30         1         51      459200.95     11510629.41     11969830.36                                                                       
+ 29      31         1         30      370195.90      5559705.81      5929901.71                                                                       
+ 30      32         1         55     1605803.93     10935770.89     12541574.82                                                                       
+ 31      33         1         68      939327.03     24006929.43     24946256.46                                                                       
+ 32      34         1         23      307716.75      3060291.19      3368007.94                                                                       
+ 33      35         1         46      734348.85     21042769.02     21777117.87                                                                       
+ 34      36         1         98     4197760.42     47769226.55     51966986.97                                                                       
+ 35      37         1        107     4493933.00     51398350.45     55892283.45                                                                       
+ 36      38         1         82     4051951.10     39629388.44     43681339.54                                                                       
+ 37      39         1         11       61588.47       999865.84      1061454.31                                                                       
+ 38      40         1        116     2521339.10    112008508.03    114529847.13                                                                       
+ 39      41         1        123     2864540.35     35252503.62     38117043.97                                                                       
+ 40      42         1        104     2889123.00     42769110.01     45658233.01                                                                       
+ 41      43         1         72     6238681.94     18359664.22     24598346.16                                                                       
+ 42      44         1        104     1799534.96     19965051.16     21764586.12                                                                       
+ 43      45         1         67     1786252.95     13015145.42     14801398.37                                                                       
+ 44      46         1         52     1293040.98     20631245.31     21924286.29                                                                       
+ 45      47         1         79     3245835.77     22191923.53     25437759.30                                                                       
+ 46      48         1         32     2257387.05     11768227.39     14025614.44                                                                       
+ 47      49         1         61     1154564.36     11503730.36     12658294.72                                                                       
+ 48      50         1         94     3244567.41     26366079.90     29610647.31                                                                       
+ 49      51         1         27     1294574.60     34521637.43     35816212.03                                                                       
+ 50      52         1         56     1962390.05     30153992.32     32116382.37                                                                       
+ 51      53         1        107     2169044.17     57011303.17     59180347.34                                                                       
+ 52      54         1         34      765427.46     21131016.25     21896443.71                                                                       
+ 53      55         1         33      398190.74      9239613.45      9637804.19                                                                       
+ 54      56         1         85     2345881.06     35317124.88     37663005.94                                                                       
+ 55      57         1         67      672890.65      9899073.92     10571964.57                                                                       
+ 56      58         1        160     3769584.15     56210817.01     59980401.16                                                                       
+The SAS System                                                                                    22:58 Friday, January 23, 2026   2                  
+                                                                                                                                                      
+Obs    BRANCH    _TYPE_    _FREQ_       FLOAT       MINUSFLOAT       FLOATORI                                                                         
+                                                                                                                                                      
+ 57       59        1         54     1378342.50     37920576.83     39298919.33                                                                       
+ 58       60        1        115     3478678.25     23239904.62     26718582.87                                                                       
+ 59       61        1         82     4527861.36     48470124.46     52997985.82                                                                       
+ 60       62        1         43      671845.13     13356010.95     14027856.08                                                                       
+ 61       63        1         12       60678.20       699556.37       760234.57                                                                       
+ 62       64        1         33     1590864.72     14101952.06     15692816.78                                                                       
+ 63       65        1         34      383606.69     10462492.39     10846099.08                                                                       
+ 64       66        1         33     2648423.45     20708548.49     23356971.94                                                                       
+ 65       67        1         54     1867489.46     13359789.60     15227279.06                                                                       
+ 66       68        1        146     3808797.93     42728462.70     46537260.63                                                                       
+ 67       69        1         41      819737.72      6327185.00      7146922.72                                                                       
+ 68       70        1         15       76059.14      1826246.22      1902305.36                                                                       
+ 69       71        1         40      859794.64     11563319.49     12423114.13                                                                       
+ 70       72        1         11      187295.82       313760.73       501056.55                                                                       
+ 71       73        1         37      403173.96     10176511.31     10579685.27                                                                       
+ 72       74        1          4       35218.00       625128.60       660346.60                                                                       
+ 73       75        1          9       13684.50       168392.63       182077.13                                                                       
+ 74       76        1         32      582030.31      5908134.83      6490165.14                                                                       
+ 75       77        1         32      780297.27      9903630.80     10683928.07                                                                       
+ 76       78        1         86     1690579.22     65624113.86     67314693.08                                                                       
+ 77       79        1         76     1346963.38     27146520.56     28493483.94                                                                       
+ 78       80        1         87     1110334.07     24352875.06     25463209.13                                                                       
+ 79       81        1        127     2106823.62     71768082.85     73874906.47                                                                       
+ 80       83        1         29      910088.00     13539923.17     14450011.17                                                                       
+ 81       85        1         25      235683.06      6835366.89      7071049.95                                                                       
+ 82       86        1         10      373106.78      2220194.87      2593301.65                                                                       
+ 83       87        1         21      281259.99      2998921.55      3280181.54                                                                       
+ 84       88        1         54      843170.85      6691395.13      7534565.98                                                                       
+ 85       89        1         33     1011351.57     17837783.72     18849135.29                                                                       
+ 86       90        1        130     2543843.84     32951053.16     35494897.00                                                                       
+ 87       91        1        100     1010688.57     15329773.69     16340462.26                                                                       
+ 88       92        1        111     1614810.95     25099499.28     26714310.23                                                                       
+ 89       93        1         26      872973.99     18998523.85     19871497.84                                                                       
+ 90       94        1         56      795017.01     10081883.95     10876900.96                                                                       
+ 91       95        1         72     1095071.84     16153998.37     17249070.21                                                                       
+ 92       96        1        153     4816701.31     68782327.32     73599028.63                                                                       
+ 93       97        1         30     1857651.73     15662682.67     17520334.40                                                                       
+ 94      102        1         13     1408995.55      2921905.51      4330901.06                                                                       
+ 95      103        1        106     2018096.85     40648508.43     42666605.28                                                                       
+ 96      104        1         14      327394.00      1246239.52      1573633.52                                                                       
+ 97      105        1         41      738397.18      9879172.07     10617569.25                                                                       
+ 98      106        1         20     1825052.26      3203738.89      5028791.15                                                                       
+ 99      107        1         92     3524475.81     37735113.89     41259589.70                                                                       
+100      108        1         18      363649.53      7624928.38      7988577.91                                                                       
+101      109        1         27      360681.67      3703760.72      4064442.39                                                                       
+102      110        1        244     6694078.47    101722587.62    108416666.09                                                                       
+103      111        1         63     1341627.40     12895049.04     14236676.44                                                                       
+104      112        1         68     1759916.02     11496990.80     13256906.82                                                                       
+105      113        1         39      564305.07      6301434.64      6865739.71                                                                       
+106      114        1         62      789742.14     12044164.69     12833906.83                                                                       
+107      115        1         18       94406.46      4973884.75      5068291.21                                                                       
+108      116        1         21      238240.44      6401727.25      6639967.69                                                                       
+109      117        1          2       26937.90       307463.66       334401.56                                                                       
+110      118        1         35      990986.84     14536526.50     15527513.34                                                                       
+111      120        1         81     2809120.55     36320329.13     39129449.68                                                                       
+112      121        1         80     1613234.78     21268854.09     22882088.87                                                                       
+The SAS System                                                                                    22:58 Friday, January 23, 2026   3                  
+                                                                                                                                                      
+Obs    BRANCH    _TYPE_    _FREQ_       FLOAT        MINUSFLOAT      FLOATORI                                                                         
+                                                                                                                                                      
+113      122        1        153     2842219.45     61284050.02     64126269.47                                                                       
+114      123        1         58      740872.27     10537201.69     11278073.96                                                                       
+115      124        1         34     1375554.94     20580633.31     21956188.25                                                                       
+116      125        1         35      278170.27     16013798.19     16291968.46                                                                       
+117      126        1         45     9896857.00     14945835.07     24842692.07                                                                       
+118      127        1         96     2227985.93     71840354.87     74068340.80                                                                       
+119      128        1        150     5257209.23     72576006.98     77833216.21                                                                       
+120      129        1         44      848028.21     16528874.21     17376902.42                                                                       
+121      130        1        232     6089149.56     87595437.59     93684587.15                                                                       
+122      131        1         74     4149227.52     24666319.92     28815547.44                                                                       
+123      133        1         45     1178074.75     15724101.32     16902176.07                                                                       
+124      135        1         56     2226477.85    114629353.18    116855831.03                                                                       
+125      136        1         81     2037699.77     17706101.71     19743801.48                                                                       
+126      137        1         56      629754.67     11968972.83     12598727.50                                                                       
+127      138        1         31      417610.88      8435325.86      8852936.74                                                                       
+128      139        1         28      277018.80      3050839.01      3327857.81                                                                       
+129      140        1         34     1936297.61      4240903.56      6177201.17                                                                       
+130      141        1         65     1408225.71     30011390.20     31419615.91                                                                       
+131      142        1          3      122765.94         9215.56       131981.50                                                                       
+132      143        1         46      476554.45     11885488.85     12362043.30                                                                       
+133      144        1         14      779663.31      2232319.45      3011982.76                                                                       
+134      145        1        159     6616948.35     86639199.02     93256147.37                                                                       
+135      146        1         36      338183.36      5632746.99      5970930.35                                                                       
+136      147        1         32      508997.02      6275549.43      6784546.45                                                                       
+137      148        1         58     1964397.37     11953439.14     13917836.51                                                                       
+138      149        1         16      108299.78      1448684.74      1556984.52                                                                       
+139      150        1         69     1247023.96      9472617.77     10719641.73                                                                       
+140      151        1         96     3807462.09     40870241.78     44677703.87                                                                       
+141      152        1         29      634775.51      4443264.86      5078040.37                                                                       
+142      153        1         82     1408576.32     68408221.17     69816797.49                                                                       
+143      154        1         53     1682308.64      9345958.26     11028266.90                                                                       
+144      155        1        137     3237164.85     53457691.72     56694856.57                                                                       
+145      156        1         72     2634567.70     20862049.37     23496617.07                                                                       
+146      157        1        131     4163130.75     66771109.41     70934240.16                                                                       
+147      158        1         63     4198078.70     19546039.31     23744118.01                                                                       
+148      159        1         35      390948.84      9798480.73     10189429.57                                                                       
+149      160        1         31      214089.54      3675971.50      3890061.04                                                                       
+150      161        1         57     1537454.86     21106996.92     22644451.78                                                                       
+151      162        1         62      999226.44     35188648.76     36187875.20                                                                       
+152      163        1         68      873415.80     33782462.68     34655878.48                                                                       
+153      164        1         52     1247896.22     16139408.59     17387304.81                                                                       
+154      165        1         60      467131.32     14788075.63     15255206.95                                                                       
+155      167        1         31      978968.94      6490895.72      7469864.66                                                                       
+156      168        1         81     7638806.57    120523618.60    128162425.17                                                                       
+157      169        1         50      409325.91     19431543.01     19840868.92                                                                       
+158      170        1         71     1803110.22     20540324.57     22343434.79                                                                       
+159      171        1         44     1315246.21      8123779.77      9439025.98                                                                       
+160      172        1        150     5132853.36     41010017.91     46142871.27                                                                       
+161      173        1         74     2061206.57     30529951.86     32591158.43                                                                       
+162      174        1         61     1578421.19     34151800.63     35730221.82                                                                       
+163      175        1         10      321499.85      3470069.48      3791569.33                                                                       
+164      176        1         60     2183698.17     15877722.85     18061421.02                                                                       
+165      177        1        119     2244712.37     28255150.10     30499862.47                                                                       
+166      178        1         40      690392.30     11475824.51     12166216.81                                                                       
+167      179        1         75     2502289.33     39468619.86     41970909.19                                                                       
+168      180        1        117     2506758.12     55092210.76     57598968.88                                                                       
+The SAS System                                                                                    22:58 Friday, January 23, 2026   4                  
+                                                                                                                                                      
+Obs    BRANCH    _TYPE_    _FREQ_          FLOAT     MINUSFLOAT      FLOATORI                                                                         
+                                                                                                                                                      
+169      183        1        158      9118243.48    49504329.46    58622572.94                                                                        
+170      184        1         87      3177777.38    26040205.40    29217982.78                                                                        
+171      185        1        127      4654189.23    83379060.44    88033249.67                                                                        
+172      186        1        120      4034101.59    31827640.27    35861741.86                                                                        
+173      189        1          9       183320.59     1520674.21     1703994.80                                                                        
+174      190        1         13       261132.68     2240179.41     2501312.09                                                                        
+175      191        1          3       512015.95      453691.37      965707.32                                                                        
+176      192        1          2         1850.00       35166.51       37016.51                                                                        
+177      193        1          7       220684.39      882484.23     1103168.62                                                                        
+178      194        1         40       481397.66     6819750.70     7301148.36                                                                        
+179      195        1         15       794578.52     1095352.64     1889931.16                                                                        
+180      196        1         39      2349321.85    93993353.39    96342675.24                                                                        
+181      197        1         59      2621344.55    41006740.30    43628084.85                                                                        
+182      198        1         73      1737662.30    39765877.30    41503539.60                                                                        
+183      199        1        123      2914736.18    56662890.66    59577626.84                                                                        
+184      201        1        110      4187012.93    24147896.62    28334909.55                                                                        
+185      202        1         91      4946458.79    38692809.33    43639268.12                                                                        
+186      203        1         80      2699204.47    19843630.32    22542834.79                                                                        
+187      204        1        101     10821581.15    36958226.26    47779807.41                                                                        
+188      205        1         49      3123658.18    21473460.86    24597119.04                                                                        
+189      206        1        113      1828985.55    34755030.60    36584016.15                                                                        
+190      207        1        100      1279078.66    20787451.49    22066530.15                                                                        
+191      208        1         78      1757256.83    19112198.66    20869455.49                                                                        
+192      209        1         57      1701207.39    16946393.70    18647601.09                                                                        
+193      210        1         21       466276.75     3413786.17     3880062.92                                                                        
+194      211        1         29      1143232.47    11066575.07    12209807.54                                                                        
+195      216        1         41       856132.24     1762036.60     2618168.84                                                                        
+196      217        1         67      2470044.67    52536410.02    55006454.69                                                                        
+197      220        1          3       257632.00      353549.58      611181.58                                                                        
+198      221        1        104      2303429.82    29647626.36    31951056.18                                                                        
+199      222        1         92      2427584.99    33274898.43    35702483.42                                                                        
+200      224        1         76      1143241.69    15551641.98    16694883.67                                                                        
+201      225        1         80      1322743.25    31418824.68    32741567.93                                                                        
+202      226        1         25      1271627.07     9101300.92    10372927.99                                                                        
+203      228        1        130      4055417.65    52298398.42    56353816.07                                                                        
+204      230        1         70      1913201.12    20392379.69    22305580.81                                                                        
+205      231        1         61       657531.23     9618014.97    10275546.20                                                                        
+206      232        1         56      1437424.75    16222808.81    17660233.56                                                                        
+207      233        1         15       370016.47      534771.70      904788.17                                                                        
+208      234        1         41       953755.02    13353494.28    14307249.30                                                                        
+209      235        1         17       315875.25     1229143.47     1545018.72                                                                        
+210      237        1         15       294633.25      688111.96      982745.21                                                                        
+211      239        1          6        30813.20      528800.40      559613.60                                                                        
+212      240        1         53      1151813.93    12209080.90    13360894.83                                                                        
+213      241        1         36       593935.03    14491664.54    15085599.57                                                                        
+214      242        1         51       813947.93    18030610.42    18844558.35                                                                        
+215      243        1         11        26450.18     1466373.22     1492823.40                                                                        
+216      244        1         37       317411.57     7335456.58     7652868.15                                                                        
+217      245        1         19       316854.82     2520163.79     2837018.61                                                                        
+218      247        1         57      2183763.30    15734313.20    17918076.50                                                                        
+219      248        1         40       866947.52     6720368.63     7587316.15                                                                        
+220      249        1         44       255184.20     3175556.29     3430740.49                                                                        
+221      251        1         17       300099.03     4386083.67     4686182.70                                                                        
+222      252        1         53       998352.57     5438953.78     6437306.35                                                                        
+223      254        1         13       240428.27     5222035.80     5462464.07                                                                        
+224      256        1         21       137164.38     2811978.77     2949143.15                                                                        
+The SAS System                                                                                    22:58 Friday, January 23, 2026   5                  
+                                                                                                                                                      
+Obs    BRANCH    _TYPE_    _FREQ_           FLOAT      MINUSFLOAT        FLOATORI                                                                     
+                                                                                                                                                      
+225      257        1         30        320136.11       5846225.84       6166361.95                                                                   
+226      258        1         18        225729.68      10448768.73      10674498.41                                                                   
+227      259        1         12        322647.87       1725485.16       2048133.03                                                                   
+228      260        1          5         94508.60        485575.58        580084.18                                                                   
+229      261        1         19         93053.20       3503527.61       3596580.81                                                                   
+230      262        1         63       1834269.01      18046222.63      19880491.64                                                                   
+231      263        1          6         13432.00        702173.11        715605.11                                                                   
+232      264        1         67       2047007.24      14258500.63      16305507.87                                                                   
+233      265        1         30        287344.68       2721671.33       3009016.01                                                                   
+234      266        1         25        503364.63      11938221.61      12441586.24                                                                   
+235      267        1         30        397543.39       7344257.99       7741801.38                                                                   
+236      268        1         92       4027779.15      23444314.87      27472094.02                                                                   
+237      269        1         35        813604.00      17773479.31      18587083.31                                                                   
+238      270        1        137       4051082.59      47422898.09      51473980.68                                                                   
+239      273        1        113       2735863.22      30703003.64      33438866.86                                                                   
+240      274        1         73       1994275.91      16194781.00      18189056.91                                                                   
+241      275        1         46        831519.27      15578177.94      16409697.21                                                                   
+242      276        1         67       1160968.88      22969090.38      24130059.26                                                                   
+243      278        1         25        427440.77       9078469.60       9505910.37                                                                   
+244      280        1         56       2009798.21      80194071.22      82203869.43                                                                   
+245      281        1         58       3066986.01      17161608.68      20228594.69                                                                   
+246      282        1         16        648560.32       4170160.12       4818720.44                                                                   
+247      283        1         44        673251.71       7686113.07       8359364.78                                                                   
+248      284        1         18        332075.64       4265568.44       4597644.08                                                                   
+249      285        1         54       1958148.02      24089077.13      26047225.15                                                                   
+250      286        1         27        815026.69      15224684.52      16039711.21                                                                   
+251      287        1         82       3320529.62      37656866.16      40977395.78                                                                   
+252      288        1         21        555090.41       5179651.91       5734742.32                                                                   
+253      289        1         31        569932.01       8824529.69       9394461.70                                                                   
+254      290        1         74       2160497.55      22990089.76      25150587.31                                                                   
+255      291        1         21        382410.78       2406164.36       2788575.14                                                                   
+256      292        1         25       1666725.18      12198383.08      13865108.26                                                                   
+257      293        1         57       1873884.44      15435266.13      17309150.57                                                                   
+258      294        1         19       2077144.30       7180840.43       9257984.73                                                                   
+259      295        1         19        202918.42       2021213.87       2224132.29                                                                   
+260      296        1         19        236780.44       7612061.96       7848842.40                                                                   
+                                     ============    =============    =============                                                                   
+                                     468933840.14    6137123843.95    6606057684.09                                                                   
