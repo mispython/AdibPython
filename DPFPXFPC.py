@@ -4,9 +4,9 @@ from pathlib import Path
 import datetime
 
 # Configuration
-mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/MNI")
+imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/IMNI")
 pidms_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/PIDMS")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIPCBFLO")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIPCIFLO")
 output_path.mkdir(exist_ok=True)
 
 def read_sas_dataset(filepath, columns=None):
@@ -46,9 +46,9 @@ def read_sas_dataset(filepath, columns=None):
         print(f"Error reading {filepath}: {e}")
         return None, None
 
-# PROC SORT DATA=MNI.FDMTHLY OUT=FDMTHLY;
+# PROC SORT DATA=IMNI.FDMTHLY OUT=FDMTHLY;
 try:
-    fdmthly_df, meta = read_sas_dataset(mni_path / "fdmthly.sas7bdat", 
+    fdmthly_df, meta = read_sas_dataset(imni_path / "fdmthly.sas7bdat", 
                                          columns=['ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'])
     if fdmthly_df is not None:
         print(f"Loaded FDMTHLY with {len(fdmthly_df)} records")
@@ -58,9 +58,9 @@ try:
         print(f"Saved FDMTHLY_SORTED with {len(fdmthly_sorted)} records")
     else:
         fdmthly_df = pl.DataFrame()
-        print("NOTE: MNI.FDMTHLY could not be loaded")
+        print("NOTE: IMNI.FDMTHLY could not be loaded")
 except FileNotFoundError:
-    print("NOTE: MNI.FDMTHLY not found")
+    print("NOTE: IMNI.FDMTHLY not found")
     fdmthly_df = pl.DataFrame()
 except Exception as e:
     print(f"Error loading FDMTHLY: {e}")
@@ -77,9 +77,9 @@ if not fdmthly_df.is_empty():
 else:
     fdmthly_processed = pl.DataFrame()
 
-# DATA CURN; SET MNI.CURN124;
+# DATA CURN; SET IMNI.CURN124;
 try:
-    curn_df, meta = read_sas_dataset(mni_path / "curn124.sas7bdat")
+    curn_df, meta = read_sas_dataset(imni_path / "curn124.sas7bdat")
     if curn_df is not None:
         print(f"Loaded CURN124 with {len(curn_df)} records")
         # IF PRODUCT = 139 THEN DELETE;
@@ -89,9 +89,9 @@ try:
         print(f"Saved CURN with {len(curn_filtered)} records (after filtering)")
     else:
         curn_filtered = pl.DataFrame()
-        print("NOTE: MNI.CURN124 could not be loaded")
+        print("NOTE: IMNI.CURN124 could not be loaded")
 except FileNotFoundError:
-    print("NOTE: MNI.CURN124 not found")
+    print("NOTE: IMNI.CURN124 not found")
     curn_filtered = pl.DataFrame()
 except Exception as e:
     print(f"Error loading CURN124: {e}")
@@ -100,17 +100,17 @@ except Exception as e:
 # DATA DEPOSIT; SET multiple datasets;
 datasets_to_combine = []
 
-# MNI.SAVG124
+# IMNI.SAVG124
 try:
-    savg_df, meta = read_sas_dataset(mni_path / "savg124.sas7bdat", 
+    savg_df, meta = read_sas_dataset(imni_path / "savg124.sas7bdat", 
                                       columns=['ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH'])
     if savg_df is not None:
         print(f"Loaded SAVG124 with {len(savg_df)} records")
         datasets_to_combine.append(savg_df)
     else:
-        print("NOTE: MNI.SAVG124 could not be loaded")
+        print("NOTE: IMNI.SAVG124 could not be loaded")
 except FileNotFoundError:
-    print("NOTE: MNI.SAVG124 not found")
+    print("NOTE: IMNI.SAVG124 not found")
 except Exception as e:
     print(f"Error loading SAVG124: {e}")
 
@@ -140,11 +140,10 @@ if datasets_to_combine:
     deposit_combined = pl.concat(datasets_to_combine, how="diagonal")
     print(f"Combined DEPOSIT dataset has {len(deposit_combined)} records")
     
-    # Apply filters and transformations
+    # Apply filters and transformations (Islamic version - slightly different PRODCD list)
     valid_prodcd = [
-        '42110', '42310', '42120', '42320', '42130',
-        '42133', '42132', '42180', '42610', '42630', '34180',
-        '42199', '42699'
+        '42110', '42310', '42120', '42320', '42130', '42610',
+        '42133', '42132', '42180', '42199', '42699'
     ]
     
     deposit_filtered = deposit_combined.filter(
@@ -161,9 +160,6 @@ if datasets_to_combine:
             pl.col('prodcd').is_in(['42199', '42699']) & 
             ~pl.col('product').is_in([72, 413])
         )
-    ).filter(
-        # IF PRODUCT IN (30,31,32,33,34) THEN DELETE;
-        ~pl.col('product').is_in([30, 31, 32, 33, 34])
     ).with_columns([
         # IF INTPAYBL < 0 THEN INTPAYBL = 0;
         pl.when(pl.col('intpaybl') < 0)
@@ -307,8 +303,8 @@ if not deposit_filtered.is_empty():
             summary.write_csv(output_path / "XXX.txt")
             
             # PROC PRINT DATA=XXX; SUM FLOAT MINUSFLOAT FLOATORI;
-            print("\n" + " " + " " * 60 + "The SAS System")
-            print(" " * 70 + "SUMMARY BY BRANCH (CONVENTIONAL)")
+            print("\n" + " " * 60 + "The SAS System")
+            print(" " * 70 + "SUMMARY BY BRANCH (ISLAMIC)")
             print()
             print(" " + "-"*100)
             print(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}")
@@ -339,7 +335,7 @@ if not deposit_filtered.is_empty():
             # Save the formatted summary to a text file
             with open(output_path / "XXX_FORMATTED.txt", 'w') as f:
                 f.write("\n" + " " * 60 + "The SAS System\n")
-                f.write(" " * 70 + "SUMMARY BY BRANCH (CONVENTIONAL)\n\n")
+                f.write(" " * 70 + "SUMMARY BY BRANCH (ISLAMIC)\n\n")
                 f.write(" " + "-"*100 + "\n")
                 f.write(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}\n")
                 f.write(" " + "-"*100 + "\n")
