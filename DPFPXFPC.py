@@ -206,164 +206,172 @@ else:
     print("No FLOAT data for summary")
 
 # PROC SORT DATA=DEPOSIT; BY ACCTNO;
-if not deposit_filtered.is_empty():
+if not deposit_filtered.is_empty() and not float_summary.is_empty():
     deposit_sorted = deposit_filtered.sort('acctno')
     
     # DATA DEPOSIT EXCEPT; MERGE DEPOSIT(IN=A) FLOAT(IN=B); BY ACCTNO;
-    if not float_summary.is_empty():
-        # Use 'full' instead of 'outer' to avoid deprecation warning
-        deposit_merged = deposit_sorted.join(
-            float_summary, on='acctno', how='full', suffix='_float'
-        )
-        print(f"Merged DEPOSIT with FLOAT: {len(deposit_merged)} records")
-        
-        # Apply transformations - EXACTLY matching SAS logic
-        deposit_processed = deposit_merged.with_columns([
-            # IF CURBAL < 0 THEN CURBAL = 0;
-            pl.when(pl.col('curbal') < 0)
-            .then(0)
-            .otherwise(pl.col('curbal'))
-            .alias('curbal')
+    # Use right join to match SAS MERGE behavior (keep all from FLOAT that match DEPOSIT)
+    deposit_merged = deposit_sorted.join(
+        float_summary, on='acctno', how='right', suffix='_float'
+    )
+    print(f"Merged DEPOSIT with FLOAT: {len(deposit_merged)} records")
+    
+    # Apply transformations - EXACTLY matching SAS logic
+    # First: Adjust CURBAL (if negative, set to 0)
+    deposit_processed = deposit_merged.with_columns([
+        pl.when(pl.col('curbal') < 0)
+        .then(0)
+        .otherwise(pl.col('curbal'))
+        .alias('curbal')
+    ])
+    
+    # Second: Set FLOATORI = CURBAL (after CURBAL adjustment)
+    deposit_processed = deposit_processed.with_columns([
+        pl.col('curbal').alias('floatori')
+    ])
+    
+    # Third: Calculate AVBAL = CURBAL - FLOAT
+    deposit_processed = deposit_processed.with_columns([
+        (pl.col('curbal') - pl.col('float')).alias('avbal')
+    ])
+    
+    # Fourth: IF AVBAL < 0 THEN DO; FLOAT = CURBAL; AVBAL = 0; END;
+    # Use struct to handle conditional assignment
+    deposit_processed = deposit_processed.with_columns([
+        pl.when(pl.col('avbal') < 0)
+        .then(pl.struct([
+            pl.col('curbal').alias('new_float'),
+            pl.lit(0).alias('new_avbal')
+        ]))
+        .otherwise(pl.struct([
+            pl.col('float').alias('new_float'),
+            pl.col('avbal').alias('new_avbal')
+        ]))
+        .alias('adjusted')
+    ])
+    
+    # Fifth: Extract adjusted values and calculate MINUSFLOAT, AVBALTT, CURBALTT
+    deposit_processed = deposit_processed.with_columns([
+        # FLOAT = adjusted FLOAT
+        pl.col('adjusted').struct.field('new_float').alias('float'),
+        # AVBAL = adjusted AVBAL
+        pl.col('adjusted').struct.field('new_avbal').alias('avbal'),
+        # MINUSFLOAT = CURBAL - adjusted FLOAT
+        (pl.col('curbal') - pl.col('adjusted').struct.field('new_float')).alias('minusfloat'),
+        # AVBALTT = AVBAL + INTPAYBL
+        (pl.col('adjusted').struct.field('new_avbal') + pl.col('intpaybl')).alias('avbaltt'),
+        # CURBALTT = CURBAL + INTPAYBL
+        (pl.col('curbal') + pl.col('intpaybl')).alias('curbaltt')
+    ]).drop(['adjusted', 'new_float', 'new_avbal'])
+    
+    # Split into DEPOSIT and EXCEPT based on conditions
+    # IF A AND B THEN OUTPUT DEPOSIT (both exist)
+    deposit_final = deposit_processed.filter(
+        pl.col('curbal').is_not_null() & 
+        pl.col('product').is_not_null() & 
+        pl.col('float').is_not_null()
+    )
+    
+    # IF B AND NOT A THEN OUTPUT EXCEPT (float exists but deposit doesn't)
+    except_df = deposit_processed.filter(
+        pl.col('float').is_not_null() & 
+        (pl.col('curbal').is_null() | pl.col('product').is_null())
+    )
+    
+    # Save outputs
+    deposit_final.write_parquet(output_path / "DEPOSIT_FINAL.parquet")
+    deposit_final.write_csv(output_path / "DEPOSIT_FINAL.txt")
+    
+    except_df.write_parquet(output_path / "EXCEPT.parquet")
+    except_df.write_csv(output_path / "EXCEPT.txt")
+    
+    print(f"DEPOSIT final records: {len(deposit_final)}")
+    print(f"EXCEPT records: {len(except_df)}")
+    
+    # PROC SUMMARY DATA=DEPOSIT NWAY MISSING; CLASS BRANCH;
+    if not deposit_final.is_empty():
+        # Create summary with _TYPE_ and _FREQ_ to match SAS output
+        summary = deposit_final.group_by('branch').agg([
+            pl.len().alias('_FREQ_'),
+            pl.col('float').sum().alias('float'),
+            pl.col('minusfloat').sum().alias('minusfloat'),
+            pl.col('floatori').sum().alias('floatori')
         ]).with_columns([
-            # FLOATORI = CURBAL (set immediately after CURBAL adjustment)
-            pl.col('curbal').alias('floatori'),
-            
-            # AVBAL = SUM(CURBAL,(-1)*FLOAT);
-            (pl.col('curbal') + (-1) * pl.col('float')).alias('avbal')
-        ]).with_columns([
-            # IF AVBAL < 0 THEN DO; FLOAT = CURBAL; AVBAL = 0; END;
-            pl.when(pl.col('avbal') < 0)
-            .then(pl.struct([
-                pl.col('curbal').alias('float'),
-                pl.lit(0).alias('avbal')
-            ]))
-            .otherwise(pl.struct([
-                pl.col('float').alias('float'),
-                pl.col('avbal').alias('avbal')
-            ]))
-            .alias('adjustment')
-        ]).with_columns([
-            pl.col('adjustment').struct.field('float').alias('float'),
-            pl.col('adjustment').struct.field('avbal').alias('avbal'),
-            
-            # MINUSFLOAT = SUM(CURBAL,(-1)*FLOAT) where FLOAT may be adjusted
-            (pl.col('curbal') + (-1) * pl.col('float')).alias('minusfloat'),
-            
-            # AVBALTT = SUM(AVBAL,INTPAYBL);
-            (pl.col('avbal') + pl.col('intpaybl')).alias('avbaltt'),
-            
-            # CURBALTT = SUM(CURBAL,INTPAYBL);
-            (pl.col('curbal') + pl.col('intpaybl')).alias('curbaltt')
-        ]).drop('adjustment')
+            pl.lit(1).alias('_TYPE_')  # 1 = observation level summary
+        ]).select([
+            'branch', '_TYPE_', '_FREQ_', 'float', 'minusfloat', 'floatori'
+        ])
         
-        # Split into DEPOSIT and EXCEPT based on conditions
-        # IF B AND NOT A THEN OUTPUT EXCEPT;
-        except_df = deposit_processed.filter(
-            pl.col('float').is_not_null() & 
-            (pl.col('curbal').is_null() | pl.col('product').is_null())
-        )
+        # Sort by branch and convert branch to integer (remove decimals)
+        summary = summary.with_columns([
+            pl.col('branch').cast(pl.Int64).alias('branch')
+        ]).sort('branch')
         
-        # IF A AND B THEN OUTPUT DEPOSIT;
-        deposit_final = deposit_processed.filter(
-            pl.col('curbal').is_not_null() & 
-            pl.col('product').is_not_null() & 
-            pl.col('float').is_not_null()
-        )
+        summary.write_parquet(output_path / "XXX.parquet")
+        summary.write_csv(output_path / "XXX.txt")
         
-        # Save outputs
-        deposit_final.write_parquet(output_path / "DEPOSIT_FINAL.parquet")
-        deposit_final.write_csv(output_path / "DEPOSIT_FINAL.txt")
+        # PROC PRINT DATA=XXX; SUM FLOAT MINUSFLOAT FLOATORI;
+        print("\n" + " " * 60 + "The SAS System")
+        print(" " * 70 + "SUMMARY BY BRANCH (ISLAMIC)")
+        print()
+        print(" " + "-"*100)
+        print(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}")
+        print(" " + "-"*100)
         
-        except_df.write_parquet(output_path / "EXCEPT.parquet")
-        except_df.write_csv(output_path / "EXCEPT.txt")
-        
-        print(f"DEPOSIT final records: {len(deposit_final)}")
-        print(f"EXCEPT records: {len(except_df)}")
-        
-        # PROC SUMMARY DATA=DEPOSIT NWAY MISSING; CLASS BRANCH;
-        if not deposit_final.is_empty():
-            # Create summary with _TYPE_ and _FREQ_ to match SAS output
-            summary = deposit_final.group_by('branch').agg([
-                pl.len().alias('_FREQ_'),
-                pl.col('float').sum().alias('float'),
-                pl.col('minusfloat').sum().alias('minusfloat'),
-                pl.col('floatori').sum().alias('floatori')
-            ]).with_columns([
-                pl.lit(1).alias('_TYPE_')  # 1 = observation level summary
-            ]).select([
-                'branch', '_TYPE_', '_FREQ_', 'float', 'minusfloat', 'floatori'
-            ])
+        # Format each row
+        for idx, row in enumerate(summary.iter_rows(), 1):
+            branch = int(row[0])  # Convert to integer to remove decimal
+            type_val = row[1]
+            freq = row[2]
+            float_val = row[3]
+            minusfloat_val = row[4]
+            floatori_val = row[5]
             
-            # Sort by branch and convert branch to integer (remove decimals)
-            summary = summary.with_columns([
-                pl.col('branch').cast(pl.Int64).alias('branch')
-            ]).sort('branch')
+            print(f"{idx:4} {branch:8} {type_val:8} {freq:10} {float_val:18,.2f} {minusfloat_val:20,.2f} {floatori_val:18,.2f}")
+        
+        print(" " + "-"*100)
+        
+        # Calculate totals
+        total_float = summary.select(pl.col('float').sum()).row(0)[0]
+        total_minusfloat = summary.select(pl.col('minusfloat').sum()).row(0)[0]
+        total_floatori = summary.select(pl.col('floatori').sum()).row(0)[0]
+        
+        # Print totals with proper spacing (no commas, right-aligned)
+        print(f"{'':>4} {'':>8} {'':>8} {'':>10} {total_float:18,.2f} {total_minusfloat:20,.2f} {total_floatori:18,.2f}")
+        print(" " + "="*100)
+        
+        # Save the formatted summary to a text file
+        with open(output_path / "XXX_FORMATTED.txt", 'w') as f:
+            f.write("\n" + " " * 60 + "The SAS System\n")
+            f.write(" " * 70 + "SUMMARY BY BRANCH (ISLAMIC)\n\n")
+            f.write(" " + "-"*100 + "\n")
+            f.write(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}\n")
+            f.write(" " + "-"*100 + "\n")
             
-            summary.write_parquet(output_path / "XXX.parquet")
-            summary.write_csv(output_path / "XXX.txt")
-            
-            # PROC PRINT DATA=XXX; SUM FLOAT MINUSFLOAT FLOATORI;
-            print("\n" + " " * 60 + "The SAS System")
-            print(" " * 70 + "SUMMARY BY BRANCH (ISLAMIC)")
-            print()
-            print(" " + "-"*100)
-            print(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}")
-            print(" " + "-"*100)
-            
-            # Format each row
             for idx, row in enumerate(summary.iter_rows(), 1):
-                branch = int(row[0])  # Convert to integer to remove decimal
+                branch = int(row[0])
                 type_val = row[1]
                 freq = row[2]
                 float_val = row[3]
                 minusfloat_val = row[4]
                 floatori_val = row[5]
                 
-                print(f"{idx:4} {branch:8} {type_val:8} {freq:10} {float_val:18,.2f} {minusfloat_val:20,.2f} {floatori_val:18,.2f}")
+                f.write(f"{idx:4} {branch:8} {type_val:8} {freq:10} {float_val:18,.2f} {minusfloat_val:20,.2f} {floatori_val:18,.2f}\n")
             
-            print(" " + "-"*100)
-            
-            # Calculate totals
-            total_float = summary.select(pl.col('float').sum()).row(0)[0]
-            total_minusfloat = summary.select(pl.col('minusfloat').sum()).row(0)[0]
-            total_floatori = summary.select(pl.col('floatori').sum()).row(0)[0]
-            
-            # Print totals with proper spacing (no commas, right-aligned)
-            print(f"{'':>4} {'':>8} {'':>8} {'':>10} {total_float:18,.2f} {total_minusfloat:20,.2f} {total_floatori:18,.2f}")
-            print(" " + "="*100)
-            
-            # Save the formatted summary to a text file
-            with open(output_path / "XXX_FORMATTED.txt", 'w') as f:
-                f.write("\n" + " " * 60 + "The SAS System\n")
-                f.write(" " * 70 + "SUMMARY BY BRANCH (ISLAMIC)\n\n")
-                f.write(" " + "-"*100 + "\n")
-                f.write(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}\n")
-                f.write(" " + "-"*100 + "\n")
-                
-                for idx, row in enumerate(summary.iter_rows(), 1):
-                    branch = int(row[0])
-                    type_val = row[1]
-                    freq = row[2]
-                    float_val = row[3]
-                    minusfloat_val = row[4]
-                    floatori_val = row[5]
-                    
-                    f.write(f"{idx:4} {branch:8} {type_val:8} {freq:10} {float_val:18,.2f} {minusfloat_val:20,.2f} {floatori_val:18,.2f}\n")
-                
-                f.write(" " + "-"*100 + "\n")
-                f.write(f"{'':>4} {'':>8} {'':>8} {'':>10} {total_float:18,.2f} {total_minusfloat:20,.2f} {total_floatori:18,.2f}\n")
-                f.write(" " + "="*100 + "\n")
-            
-            print(f"\nFormatted summary saved to: {output_path / 'XXX_FORMATTED.txt'}")
-            
-        else:
-            print("No DEPOSIT data for summary")
-            
+            f.write(" " + "-"*100 + "\n")
+            f.write(f"{'':>4} {'':>8} {'':>8} {'':>10} {total_float:18,.2f} {total_minusfloat:20,.2f} {total_floatori:18,.2f}\n")
+            f.write(" " + "="*100 + "\n")
+        
+        print(f"\nFormatted summary saved to: {output_path / 'XXX_FORMATTED.txt'}")
+        
     else:
-        print("No FLOAT data for merging")
+        print("No DEPOSIT data for summary")
         
 else:
-    print("No DEPOSIT data for processing")
+    if deposit_filtered.is_empty():
+        print("No DEPOSIT data for processing")
+    else:
+        print("No FLOAT data for merging")
 
 print("\n" + "="*80)
 print(f"All output files saved to: {output_path}")
