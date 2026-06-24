@@ -1,91 +1,66 @@
-============================================================
-EIFLTEXP PROCESSING STARTED
-============================================================
-MNI Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/MNI
-IMNI Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/IMNI
-PIDM Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/PIDM
-Output Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIFLTEXP
-============================================================
+OPTIONS YEARCUTOFF=1950 NOCENTER;
+PROC SORT DATA=MNI.FDMTHLY
+  OUT=FDMTHLY (KEEP=ACCTNO BRANCH INTPLAN CURBAL BIC AMTIND INTPAY);
+  BY ACCTNO;
+PROC SORT DATA=IMNI.FDMTHLY
+  OUT=IFDMTHLY (KEEP=ACCTNO BRANCH INTPLAN CURBAL BIC AMTIND INTPAY);
+  BY ACCTNO;
+DATA FDMTHLY;
+    SET FDMTHLY IFDMTHLY;
+    LEDGBAL = CURBAL;
+RUN;
+DATA CURN;
+   SET MNI.CURN124
+       IMNI.CURN124;
+   IF  PRODUCT = 139 THEN DELETE;
+RUN;
+DATA DEPOSIT;
+  SET MNI.SAVG124
+             (IN=A KEEP=ACCTNO PRODUCT CURBAL LEDGBAL PRODCD AMTIND
+                            INTPAYBL BRANCH)
+      IMNI.SAVG124
+             (IN=A KEEP=ACCTNO PRODUCT CURBAL LEDGBAL PRODCD AMTIND
+                            INTPAYBL BRANCH)
+          CURN   (IN=B KEEP=ACCTNO PRODUCT CURBAL LEDGBAL PRODCD AMTIND
+                            INTPAYBL BRANCH)
+      FDMTHLY  (KEEP=ACCTNO INTPLAN  CURBAL LEDGBAL BIC AMTIND  INTPAY
+                     BRANCH RENAME=(BIC=PRODCD INTPLAN=PRODUCT
+                                 INTPAY=INTPAYBL));
+     IF PRODCD IN ('42110','42310','42120','42320','42130','42610',
+                   '42133','42132','42180','42610','42630','34180',
+                   '42199','42699');
+     IF PRODUCT = 166 THEN PRODCD = '42310';
+     IF PRODCD IN ('42199','42699') AND
+     PRODUCT NOT IN (72,413) THEN DELETE;
+     IF PRODUCT IN (30,31,32,33,34) THEN DELETE;
+     IF INTPAYBL < 0 THEN INTPAYBL = 0;
+RUN;
+  /* FLOAT */
+DATA FLOAT;
+   SET PIDMS.FLOAT;
+RUN;
+PROC SUMMARY DATA=FLOAT NWAY;
+  CLASS ACCTNO;
+  VAR FLOAT;
+OUTPUT OUT=FLOAT SUM=;
+RUN;
+PROC SORT DATA=DEPOSIT; BY ACCTNO;
+DATA DEPOSIT;
+   MERGE DEPOSIT(IN=A) FLOAT(IN=B);
+   BY ACCTNO;
+   IF CURBAL < 0 THEN CURBAL = 0;
 
-[STEP 1] Loading FDMTHLY data...
-  - MNI FDMTHLY loaded: 2756145 records
-  - IMNI FDMTHLY loaded: 431257 records
-  - Combined FDMTHLY: 3187402 records
-  - FDMTHLY saved
-
-[STEP 2] Loading CURN data...
-  - MNI CURN124 loaded: 915692 records
-  - IMNI CURN124 loaded: 154763 records
-  - Combined CURN: 1070455 records
-  - CURN filtered (removed PRODUCT=139): 1070184 records
-
-[STEP 3] Loading SAVG data...
-  - MNI SAVG124 loaded: 4241108 records
-  - IMNI SAVG124 loaded: 2262899 records
-
-[STEP 4] Adding CURN to dataset list...
-  - CURN added with 1070184 records
-
-[STEP 5] Adding FDMTHLY to dataset list...
-  - FDMTHLY added with 3187402 records
-
-[STEP 6] Combining all datasets...
-  - Total datasets to combine: 4
-    1. MNI SAVG124: 4241108 records
-    2. IMNI SAVG124: 2262899 records
-    3. CURN: 1070184 records
-    4. FDMTHLY: 3187402 records
-  - Combined data: 10761593 records
-
-[STEP 7] Applying filters and transformations...
-  - After PROGCD filter: 3187402 records
-  - After PRODUCT=166: 3187402 records
-  - After PROGCD special: 3187402 records
-  - After PRODUCT filter: 3187402 records
-  - After INTPAYBL: 3187402 records
-  - DEPOSIT saved with 3187402 records
-
-[STEP 8] Loading FLOAT data...
-  - FLOAT loaded: 18927 records
-  - FLOAT columns: ['acctno', 'float', 'branch']
-  - FLOAT_SUMMARY saved: 18927 records
-  - FLOAT_SUMMARY sample (formatted):
-    ACCTNO: 3169857307, FLOAT: 3373.30
-    ACCTNO: 3121206617, FLOAT: 1800.00
-    ACCTNO: 6041802210, FLOAT: 3000.00
-    ACCTNO: 3227820618, FLOAT: 1385.40
-    ACCTNO: 3212671123, FLOAT: 13315.00
-  - Sample DEPOSIT ACCTNO (formatted):
-    1000001725
-    1000002720
-    1000003230
-    1000003521
-    1000006118
-  - Sample FLOAT ACCTNO (formatted):
-    3060028907
-    3060030515
-    3060038803
-    3060046903
-    3060065215
-  - Common ACCTNO count: 0
-
-[STEP 9] Merging DEPOSIT with FLOAT...
-  - Merge completed: 3187402 records
-  - Records with FLOAT values: 0
-  - FLOAT_ONLY records: 0
-  - DEPOSIT_MERGED saved: 3187402 records
-  - FLOAT_ONLY saved: 0 records
-
-[STEP 10] Generating text report...
-  - Report saved to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIFLTEXP/EIFLTEXP_REPORT.txt
-
-============================================================
-DEPOSIT DATA WITH FLOAT SUMMARY
-============================================================
-Total FLOAT: 0.00
-Total AVBAL: 0.00
-Total Records: 3187402
-
-============================================================
-PROCESSING COMPLETED SUCCESSFULLY
-============================================================
+   AVBAL = SUM(CURBAL,(-1)*FLOAT);
+   /*
+   IF AVBAL < 0 THEN DO;
+      FLOAT = CURBAL;
+      AVBAL = 0;
+   END;
+   */
+   AVBALTT = SUM(AVBAL,INTPAYBL);
+   CURBALTT = SUM(CURBAL,INTPAYBL);
+   IF B AND NOT A;
+RUN;
+PROC PRINT DATA=DEPOSIT;
+SUM FLOAT;
+RUN;
