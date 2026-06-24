@@ -4,25 +4,52 @@ from pathlib import Path
 import pyreadstat
 import datetime
 
-# Configuration
-mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/MNI")
-imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/IMNI")
-pidms_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/PIDM")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIFLTEXP")
-output_path.mkdir(exist_ok=True)
-
-print("="*60)
-print("EIFLTEXP PROCESSING STARTED")
-print("="*60)
-print(f"MNI Path: {mni_path}")
-print(f"IMNI Path: {imni_path}")
-print(f"PIDM Path: {pidms_path}")
-print(f"Output Path: {output_path}")
-print("="*60)
-
 # ============================================
-# HELPER FUNCTION TO READ SAS FILES
+# HELPER FUNCTIONS (Define before use)
 # ============================================
+
+def generate_text_report(deposit_merged, float_only, output_path):
+    """Generate text report from merged data"""
+    print("\n[STEP 10] Generating text report...")
+    
+    report_path = output_path / "EIFLTEXP_REPORT.txt"
+    
+    with open(report_path, 'w') as f:
+        f.write("="*70 + "\n")
+        f.write("EIFLTEXP PROCESSING REPORT\n")
+        f.write(f"Generated: {datetime.datetime.now()}\n")
+        f.write("="*70 + "\n\n")
+        
+        # Summary statistics
+        f.write("SUMMARY STATISTICS\n")
+        f.write("-"*70 + "\n")
+        
+        if not deposit_merged.is_empty():
+            total_float = deposit_merged.select(pl.col('float').sum()).row(0)[0]
+            total_avbal = deposit_merged.select(pl.col('avbal').sum()).row(0)[0]
+            total_curbal = deposit_merged.select(pl.col('curbal').sum()).row(0)[0]
+            
+            f.write(f"Total Records: {deposit_merged.height:,}\n")
+            f.write(f"Total CURBAL: {total_curbal:,.2f}\n")
+            f.write(f"Total FLOAT: {total_float:,.2f}\n")
+            f.write(f"Total AVBAL: {total_avbal:,.2f}\n\n")
+        
+        # Float only records
+        f.write("FLOAT ONLY RECORDS (In FLOAT but not in DEPOSIT)\n")
+        f.write("-"*70 + "\n")
+        f.write(f"Total Records: {float_only.height:,}\n")
+        
+        if not float_only.is_empty():
+            f.write("\nTop 10 ACCTNO by FLOAT Amount:\n")
+            float_only_top = float_only.sort('float', descending=True).select(['acctno', 'float']).head(10)
+            for row in float_only_top.rows():
+                f.write(f"  ACCTNO: {row[0]}, FLOAT: {row[1]:,.2f}\n")
+        
+        f.write("\n" + "="*70 + "\n")
+        f.write("END OF REPORT\n")
+    
+    print(f"  - Report saved to {report_path}")
+
 def read_sas_file(filepath, columns=None):
     """Read SAS file and return Polars DataFrame with selected columns"""
     try:
@@ -55,9 +82,6 @@ def read_sas_file(filepath, columns=None):
         print(f"  - ERROR reading {filepath.name}: {e}")
         return None
 
-# ============================================
-# HELPER FUNCTION TO STANDARDIZE COLUMN NAMES
-# ============================================
 def standardize_columns(df):
     """Convert column names to lowercase and handle common variations"""
     if df.is_empty():
@@ -66,6 +90,26 @@ def standardize_columns(df):
     # Convert all column names to lowercase
     df = df.rename({col: col.lower() for col in df.columns})
     return df
+
+# ============================================
+# MAIN PROCESSING
+# ============================================
+
+# Configuration
+mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/MNI")
+imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/IMNI")
+pidms_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/PIDM")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIFLTEXP")
+output_path.mkdir(exist_ok=True)
+
+print("="*60)
+print("EIFLTEXP PROCESSING STARTED")
+print("="*60)
+print(f"MNI Path: {mni_path}")
+print(f"IMNI Path: {imni_path}")
+print(f"PIDM Path: {pidms_path}")
+print(f"Output Path: {output_path}")
+print("="*60)
 
 # ============================================
 # STEP 1: Load FDMTHLY from MNI and IMNI
@@ -393,7 +437,7 @@ if not deposit_filtered.is_empty():
         print(f"  - DEPOSIT_MERGED saved: {deposit_merged.height} records")
         print(f"  - FLOAT_ONLY saved: {float_only.height} records")
         
-        # Generate text report
+        # Generate text report (function is now defined at the top)
         generate_text_report(deposit_merged, float_only, output_path)
         
         # PROC PRINT DATA=DEPOSIT; SUM FLOAT;
@@ -422,48 +466,3 @@ else:
 print("\n" + "="*60)
 print("PROCESSING COMPLETED SUCCESSFULLY")
 print("="*60)
-
-# ============================================
-# HELPER FUNCTION: Generate Text Report
-# ============================================
-def generate_text_report(deposit_merged, float_only, output_path):
-    """Generate text report from merged data"""
-    print("\n[STEP 10] Generating text report...")
-    
-    report_path = output_path / "EIFLTEXP_REPORT.txt"
-    
-    with open(report_path, 'w') as f:
-        f.write("="*70 + "\n")
-        f.write("EIFLTEXP PROCESSING REPORT\n")
-        f.write(f"Generated: {datetime.datetime.now()}\n")
-        f.write("="*70 + "\n\n")
-        
-        # Summary statistics
-        f.write("SUMMARY STATISTICS\n")
-        f.write("-"*70 + "\n")
-        
-        if not deposit_merged.is_empty():
-            total_float = deposit_merged.select(pl.col('float').sum()).row(0)[0]
-            total_avbal = deposit_merged.select(pl.col('avbal').sum()).row(0)[0]
-            total_curbal = deposit_merged.select(pl.col('curbal').sum()).row(0)[0]
-            
-            f.write(f"Total Records: {deposit_merged.height:,}\n")
-            f.write(f"Total CURBAL: {total_curbal:,.2f}\n")
-            f.write(f"Total FLOAT: {total_float:,.2f}\n")
-            f.write(f"Total AVBAL: {total_avbal:,.2f}\n\n")
-        
-        # Float only records
-        f.write("FLOAT ONLY RECORDS (In FLOAT but not in DEPOSIT)\n")
-        f.write("-"*70 + "\n")
-        f.write(f"Total Records: {float_only.height:,}\n")
-        
-        if not float_only.is_empty():
-            f.write("\nTop 10 ACCTNO by FLOAT Amount:\n")
-            float_only_top = float_only.sort('float', descending=True).select(['acctno', 'float']).head(10)
-            for row in float_only_top.rows():
-                f.write(f"  ACCTNO: {row[0]}, FLOAT: {row[1]:,.2f}\n")
-        
-        f.write("\n" + "="*70 + "\n")
-        f.write("END OF REPORT\n")
-    
-    print(f"  - Report saved to {report_path}")
