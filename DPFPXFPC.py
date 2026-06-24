@@ -26,8 +26,6 @@ else:
     SDD, WK, WK1, WK2, WK3 = 23, '4', '3', '2', '1'
 
 MM = reptdate.month
-MM1 = MM - 1 if WK != '1' else (MM - 1 if MM > 1 else 12)
-MM2 = MM - 1 if MM > 1 else 12
 SDATE = datetime.date(reptdate.year, MM, SDD)
 REPTMON = f"{MM:02d}"
 REPTYEAR = str(reptdate.year)
@@ -152,78 +150,113 @@ dep_sorted = dep_with_bc.sort('category') if not dep_with_bc.is_empty() else pl.
 dep_sorted.write_parquet(output_path / "DEP_FINAL.parquet")
 print(f"DEP_FINAL records: {len(dep_sorted)}")
 
-# Generate reports and save to TXT files
-def print_and_save_summary_report(title, filename, data, label="BC/DD AMOUNT"):
-    """Generate summary report in required format and save to TXT file"""
-    
-    # Prepare the report content
+# Generate combined report with all three sections
+def generate_combined_report():
+    """Generate combined report with all three sections in production format"""
     lines = []
-    lines.append(f"\n{title}")
-    lines.append("="*80)
-    lines.append(f"{'CATEGORY':<10} {'_TYPE_':<10} {'_FREQ_':<10} {label:<15}")
-    lines.append("-"*45)
+    timestamp = datetime.datetime.now().strftime("%H:%M %A, %B %d, %Y")
+    page_num = 1
     
-    if data.is_empty():
-        lines.append("No data available")
-        total_amount = 0
-    else:
-        summary = data.group_by('category').agg([
+    # Report 1: DEBITTED
+    debitted = dep_sorted.filter(pl.col('bc') == 'DEBITTED')
+    if not debitted.is_empty():
+        lines.append(f"BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)                                                    {timestamp}   {page_num}")
+        lines.append(" ")
+        lines.append(" " * 38 + "BC/DD")
+        lines.append(f"{'Obs':<6} {'CATEGORY':<10} {'_TYPE_':<10} {'_FREQ_':<10} {'AMOUNT':>15}")
+        lines.append(" ")
+        
+        summary = debitted.group_by('category').agg([
             pl.count().alias('_FREQ_'),
             pl.col('ledgbal').sum().alias('ledgbal')
-        ]).with_columns(pl.lit(1).alias('_TYPE_'))
+        ]).with_columns(pl.lit(1).alias('_TYPE_')).sort('category')
         
         total_amount = 0
+        obs = 1
         for row in summary.rows():
             cat, freq, amount, type_val = row
-            lines.append(f"{cat if cat else '':<10} {type_val:<10} {freq:<10} {amount:>15,.2f}")
+            lines.append(f"{obs:<6} {cat if cat else '':<10} {type_val:<10} {freq:<10} {amount:>15,.2f}")
             total_amount += amount
+            obs += 1
+        
+        lines.append(" " * 37 + "==========")
+        lines.append(" " * 37 + f"{total_amount:>15,.2f}")
+        lines.append(" ")
+        page_num += 1
     
-    lines.append("-"*45)
-    lines.append(f"{'TOTAL':<10} {'':<10} {'':<10} {total_amount:>15,.2f}")
-    lines.append("="*80)
+    # Report 2: NOT FOUND
+    notfound = dep_sorted.filter(pl.col('bc') == 'NOT_FOUND')
+    if not notfound.is_empty():
+        lines.append(f"BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)                                     {timestamp}   {page_num}")
+        lines.append(" ")
+        lines.append(" " * 38 + "BC/DD")
+        lines.append(f"{'Obs':<6} {'CATEGORY':<10} {'_TYPE_':<10} {'_FREQ_':<10} {'AMOUNT':>15}")
+        lines.append(" ")
+        
+        summary = notfound.group_by('category').agg([
+            pl.count().alias('_FREQ_'),
+            pl.col('ledgbal').sum().alias('ledgbal')
+        ]).with_columns(pl.lit(1).alias('_TYPE_')).sort('category')
+        
+        total_amount = 0
+        obs = 1
+        for row in summary.rows():
+            cat, freq, amount, type_val = row
+            lines.append(f"{obs:<6} {cat if cat else '':<10} {type_val:<10} {freq:<10} {amount:>15,.2f}")
+            total_amount += amount
+            obs += 1
+        
+        lines.append(" " * 37 + "==========")
+        lines.append(" " * 37 + f"{total_amount:>15,.2f}")
+        lines.append(" ")
+        page_num += 1
     
-    # Print to console
-    for line in lines:
-        print(line)
+    # Report 3: NON-DEBITTED
+    if not nondebit.is_empty():
+        nondebit_processed = nondebit.with_columns([
+            pl.lit('NON_DEBIT').alias('bc'),
+            pl.col('acctno').cast(pl.Float64)
+        ])
+        
+        lines.append(f"BANKERS CHEQUE WITH NON-DEBITTED A/C                                                               {timestamp}   {page_num}")
+        lines.append(" ")
+        lines.append(" " * 38 + "BC/DD")
+        lines.append(f"{'Obs':<6} {'CATEGORY':<10} {'_TYPE_':<10} {'_FREQ_':<10} {'AMOUNT':>15}")
+        lines.append(" ")
+        
+        summary = nondebit_processed.group_by('category').agg([
+            pl.count().alias('_FREQ_'),
+            pl.col('ledgbal').sum().alias('ledgbal')
+        ]).with_columns(pl.lit(1).alias('_TYPE_')).sort('category')
+        
+        total_amount = 0
+        obs = 1
+        for row in summary.rows():
+            cat, freq, amount, type_val = row
+            lines.append(f"{obs:<6} {cat if cat else '':<10} {type_val:<10} {freq:<10} {amount:>15,.2f}")
+            total_amount += amount
+            obs += 1
+        
+        lines.append(" " * 37 + "==========")
+        lines.append(" " * 37 + f"{total_amount:>15,.2f}")
     
-    # Save to TXT file
-    with open(output_path / filename, 'w') as f:
-        for line in lines:
-            f.write(line + '\n')
-    
-    print(f"Report saved to: {output_path / filename}")
-    
-    return summary if not data.is_empty() else pl.DataFrame()
+    return "\n".join(lines)
 
-# Report 1: DEBITTED
-debitted = dep_sorted.filter(pl.col('bc') == 'DEBITTED')
-if not debitted.is_empty():
-    print_and_save_summary_report(
-        "BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)", 
-        "DEBITTED_Summary.txt", 
-        debitted
-    )
+# Generate and save combined report
+combined_report = generate_combined_report()
 
-# Report 2: NOT FOUND
-notfound = dep_sorted.filter(pl.col('bc') == 'NOT_FOUND')
-if not notfound.is_empty():
-    print_and_save_summary_report(
-        "BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)", 
-        "NOTFOUND_Summary.txt", 
-        notfound
-    )
+# Print to console
+print("\n" + "="*80)
+print("COMBINED SUMMARY REPORT")
+print("="*80)
+print(combined_report)
 
-# Report 3: NON-DEBITTED
-if not nondebit.is_empty():
-    nondebit_processed = nondebit.with_columns([
-        pl.lit('NON_DEBIT').alias('bc'),
-        pl.col('acctno').cast(pl.Float64)
-    ])
-    print_and_save_summary_report(
-        "BANKERS CHEQUE WITH NON-DEBITTED A/C", 
-        "NONDEBIT_Summary.txt", 
-        nondebit_processed
-    )
+# Save to single TXT file
+report_file = output_path / "BANKERS_CHEQUE_SUMMARY.txt"
+with open(report_file, 'w') as f:
+    f.write(combined_report)
+
+print(f"\nReport saved to: {report_file}")
 
 # Save processing summary
 with open(output_path / "PROCESSING_SUMMARY.txt", 'w') as f:
