@@ -49,6 +49,9 @@ REPTYEAR = str(reptdate.year)
 
 print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
 print(f"SDESC: {SDESC}")
+print(f"Report Date: {reptdate}")
+print(f"Start Date: {SDATE}")
+print("-" * 60)
 
 # Create REPTDATE DataFrame (KEEP=REPTDATE)
 reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
@@ -62,25 +65,39 @@ def process_text_file(input_filename, output_basename, deposit_path, reptmon, re
     Process fixed-width text file and output to Parquet format
     """
     filename_parquet = f"{output_basename}{reptmon}{repyear}.parquet"
+    full_input_path = Path(input_filename)
     
     try:
+        # Check if file exists
+        if not full_input_path.exists():
+            raise FileNotFoundError(f"Input file {input_filename} not found")
+        
         # Read text file
-        with open(input_filename, 'r') as f:
+        with open(full_input_path, 'r') as f:
             lines = f.readlines()
+        
+        print(f"Read {len(lines)} lines from {input_filename}")
         
         # Parse fixed-width format: @001 ACCTNO 10., @012 CURBAL 10.
         data = []
-        for line in lines:
+        skipped_lines = 0
+        for line_num, line in enumerate(lines, 1):
             # Remove newline and trailing spaces
             line = line.rstrip('\n\r')
             
             # Skip empty lines
             if not line.strip():
+                skipped_lines += 1
                 continue
             
             # Extract fields based on fixed positions
             # ACCTNO: positions 0-9 (10 characters)
             # CURBAL: positions 11-20 (10 characters) - note position 11 is index 11 (0-based)
+            if len(line) < 11:
+                print(f"Warning: Line {line_num} is too short: '{line}'")
+                skipped_lines += 1
+                continue
+                
             acctno_str = line[0:10].strip()
             curbal_str = line[11:21].strip() if len(line) > 11 else ''
             
@@ -98,6 +115,10 @@ def process_text_file(input_filename, output_basename, deposit_path, reptmon, re
             # Only add if ACCTNO is not null
             if acctno is not None:
                 data.append({'ACCTNO': acctno, 'CURBAL': curbal})
+            else:
+                skipped_lines += 1
+        
+        print(f"Successfully parsed {len(data)} records, skipped {skipped_lines} lines")
         
         # Create Polars DataFrame
         df = pl.DataFrame(data)
@@ -111,23 +132,34 @@ def process_text_file(input_filename, output_basename, deposit_path, reptmon, re
             
             # Print summary
             print(f"\n{output_basename} DATA SUMMARY:")
-            print(f"Total records: {len(df)}")
-            print(df.head(10))  # Show first 10 records
+            print(f"Total records after deduplication: {len(df)}")
+            print("\nFirst 10 records:")
+            print(df.head(10))
+            print("\nLast 10 records:")
+            print(df.tail(10))
+            
             total_curbal = df.select(pl.col('CURBAL').sum()).row(0)[0]
             if total_curbal is not None:
-                print(f"TOTAL CURBAL: {total_curbal:,.2f}")
+                print(f"\nTOTAL CURBAL: {total_curbal:,.2f}")
             else:
-                print(f"TOTAL CURBAL: 0.00")
-            print("-" * 50)
+                print(f"\nTOTAL CURBAL: 0.00")
+            
+            # Additional statistics
+            if len(df) > 0:
+                print(f"Minimum CURBAL: {df.select(pl.col('CURBAL').min()).row(0)[0]:,.2f}")
+                print(f"Maximum CURBAL: {df.select(pl.col('CURBAL').max()).row(0)[0]:,.2f}")
+                print(f"Average CURBAL: {df.select(pl.col('CURBAL').mean()).row(0)[0]:,.2f}")
+            print("-" * 60)
         
         # Save to Parquet
         df.write_parquet(deposit_path / filename_parquet)
-        print(f"Created {filename_parquet}")
+        print(f"Created {filename_parquet} ({len(df)} records)")
         
         return df
         
-    except FileNotFoundError:
-        print(f"NOTE: {input_filename} file not found, creating empty dataframe")
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
+        print(f"Creating empty dataframe for {output_basename}")
         empty_df = pl.DataFrame({'ACCTNO': [], 'CURBAL': []})
         
         # Save empty dataframe
@@ -137,26 +169,28 @@ def process_text_file(input_filename, output_basename, deposit_path, reptmon, re
         return empty_df
     except Exception as e:
         print(f"Error processing {input_filename}: {e}")
+        import traceback
+        traceback.print_exc()
         return pl.DataFrame({'ACCTNO': [], 'CURBAL': []})
 
-# Process PBB file
+# Process PBB file (PBB_ICR.txt)
 print("\n" + "="*60)
-print("Processing PBB_ICL.txt...")
+print("Processing PBB_ICR.txt...")
 print("="*60)
 pbb_df = process_text_file(
-    "PBB_ICL.txt", 
+    "PBB_ICR.txt", 
     "ICLPBB", 
     deposit_path, 
     REPTMON, 
     REPTYEAR
 )
 
-# Process PIBB file
+# Process PIBB file (PIBB_ICR.txt)
 print("\n" + "="*60)
-print("Processing PIBB_ICL.txt...")
+print("Processing PIBB_ICR.txt...")
 print("="*60)
 pibb_df = process_text_file(
-    "PIBB_ICL.txt", 
+    "PIBB_ICR.txt", 
     "ICLPIBB", 
     deposit_path, 
     REPTMON, 
@@ -166,10 +200,11 @@ pibb_df = process_text_file(
 print("\n" + "="*60)
 print("PROCESSING COMPLETED SUCCESSFULLY")
 print("="*60)
-print(f"Output Parquet files saved to: {deposit_path}")
-print(f"Additional outputs saved to: {output_path}")
-print(f"\nFiles created:")
-print(f"  - {deposit_path}/ICLPBB{REPTMON}{REPTYEAR}.parquet")
-print(f"  - {deposit_path}/ICLPIBB{REPTMON}{REPTYEAR}.parquet")
-print(f"  - {output_path}/REPTDATE.parquet")
-print(f"  - {output_path}/REPTDATE.csv")
+print(f"\nOutput files created:")
+print(f"  Parquet files (deposit path): {deposit_path}")
+print(f"    - ICLPBB{REPTMON}{REPTYEAR}.parquet ({len(pbb_df)} records)")
+print(f"    - ICLPIBB{REPTMON}{REPTYEAR}.parquet ({len(pibb_df)} records)")
+print(f"\n  Additional outputs (output path): {output_path}")
+print(f"    - REPTDATE.parquet")
+print(f"    - REPTDATE.csv")
+print("\n" + "="*60)
