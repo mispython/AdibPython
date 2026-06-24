@@ -1,6 +1,8 @@
 import polars as pl
 import duckdb
 from pathlib import Path
+import pyreadstat
+import datetime
 
 # Configuration
 mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/MNI")
@@ -19,32 +21,59 @@ print(f"Output Path: {output_path}")
 print("="*60)
 
 # ============================================
+# HELPER FUNCTION TO READ SAS FILES
+# ============================================
+def read_sas_file(filepath, columns=None):
+    """Read SAS file and return Polars DataFrame with selected columns"""
+    try:
+        if columns:
+            # Try different parameter names for different pyreadstat versions
+            try:
+                # Try with column_names parameter (newer versions)
+                df, meta = pyreadstat.read_sas7bdat(filepath, column_names=columns)
+            except TypeError:
+                # Try with columns parameter (older versions)
+                try:
+                    df, meta = pyreadstat.read_sas7bdat(filepath, columns=columns)
+                except TypeError:
+                    # Read all columns then select
+                    df, meta = pyreadstat.read_sas7bdat(filepath)
+                    # Filter to only columns that exist
+                    existing_cols = [col for col in columns if col in df.columns]
+                    if existing_cols:
+                        df = df[existing_cols]
+        else:
+            df, meta = pyreadstat.read_sas7bdat(filepath)
+        
+        # Convert to Polars DataFrame
+        return pl.DataFrame(df)
+        
+    except FileNotFoundError:
+        print(f"  - WARNING: {filepath.name} not found")
+        return None
+    except Exception as e:
+        print(f"  - ERROR reading {filepath.name}: {e}")
+        return None
+
+# ============================================
 # STEP 1: Load FDMTHLY from MNI and IMNI
 # ============================================
 print("\n[STEP 1] Loading FDMTHLY data...")
 
-try:
-    fdmthly_df = pl.read_parquet(mni_path / "FDMTHLY.parquet").select([
-        'ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'
-    ]).sort('ACCTNO')
+fdmthly_df = read_sas_file(mni_path / "FDMTHLY.sas7bdat", 
+                          ['ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'])
+if fdmthly_df is not None:
+    fdmthly_df = fdmthly_df.sort('ACCTNO')
     print(f"  - MNI FDMTHLY loaded: {fdmthly_df.height} records")
-except FileNotFoundError:
-    print(f"  - WARNING: MNI/FDMTHLY.parquet not found")
-    fdmthly_df = pl.DataFrame()
-except Exception as e:
-    print(f"  - ERROR reading MNI/FDMTHLY.parquet: {e}")
+else:
     fdmthly_df = pl.DataFrame()
 
-try:
-    ifdmthly_df = pl.read_parquet(imni_path / "FDMTHLY.parquet").select([
-        'ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'
-    ]).sort('ACCTNO')
+ifdmthly_df = read_sas_file(imni_path / "FDMTHLY.sas7bdat", 
+                           ['ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'])
+if ifdmthly_df is not None:
+    ifdmthly_df = ifdmthly_df.sort('ACCTNO')
     print(f"  - IMNI FDMTHLY loaded: {ifdmthly_df.height} records")
-except FileNotFoundError:
-    print(f"  - WARNING: IMNI/FDMTHLY.parquet not found")
-    ifdmthly_df = pl.DataFrame()
-except Exception as e:
-    print(f"  - ERROR reading IMNI/FDMTHLY.parquet: {e}")
+else:
     ifdmthly_df = pl.DataFrame()
 
 # DATA FDMTHLY; SET FDMTHLY IFDMTHLY;
@@ -66,24 +95,16 @@ else:
 # ============================================
 print("\n[STEP 2] Loading CURN data...")
 
-try:
-    curn1_df = pl.read_parquet(mni_path / "CURN124.parquet")
+curn1_df = read_sas_file(mni_path / "CURN124.sas7bdat")
+if curn1_df is not None:
     print(f"  - MNI CURN124 loaded: {curn1_df.height} records")
-except FileNotFoundError:
-    print(f"  - WARNING: MNI/CURN124.parquet not found")
-    curn1_df = pl.DataFrame()
-except Exception as e:
-    print(f"  - ERROR reading MNI/CURN124.parquet: {e}")
+else:
     curn1_df = pl.DataFrame()
 
-try:
-    curn2_df = pl.read_parquet(imni_path / "CURN124.parquet")
+curn2_df = read_sas_file(imni_path / "CURN124.sas7bdat")
+if curn2_df is not None:
     print(f"  - IMNI CURN124 loaded: {curn2_df.height} records")
-except FileNotFoundError:
-    print(f"  - WARNING: IMNI/CURN124.parquet not found")
-    curn2_df = pl.DataFrame()
-except Exception as e:
-    print(f"  - ERROR reading IMNI/CURN124.parquet: {e}")
+else:
     curn2_df = pl.DataFrame()
 
 curn_combined = pl.concat([curn1_df, curn2_df], how="diagonal")
@@ -91,7 +112,6 @@ print(f"  - Combined CURN: {curn_combined.height} records")
 
 # IF PRODUCT = 139 THEN DELETE;
 if not curn_combined.is_empty():
-    # Check if 'PRODUCT' column exists
     if 'PRODUCT' in curn_combined.columns:
         curn_filtered = curn_combined.filter(pl.col('PRODUCT') != 139)
         curn_filtered.write_parquet(output_path / "CURN.parquet")
@@ -113,36 +133,33 @@ datasets_to_combine = []
 dataset_names = []
 
 # MNI.SAVG124
-try:
-    savg1_df = pl.read_parquet(mni_path / "SAVG124.parquet")
+savg1_df = read_sas_file(mni_path / "SAVG124.sas7bdat")
+if savg1_df is not None:
     print(f"  - MNI SAVG124 loaded: {savg1_df.height} records")
-    # Check available columns
-    print(f"    Columns: {savg1_df.columns}")
-    
     # Select available columns
     available_cols = ['ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH']
     existing_cols = [col for col in available_cols if col in savg1_df.columns]
-    savg1_selected = savg1_df.select(existing_cols)
-    datasets_to_combine.append(savg1_selected)
-    dataset_names.append("MNI SAVG124")
-except FileNotFoundError:
-    print(f"  - WARNING: MNI/SAVG124.parquet not found")
-except Exception as e:
-    print(f"  - ERROR reading MNI/SAVG124.parquet: {e}")
+    if existing_cols:
+        savg1_selected = savg1_df.select(existing_cols)
+        datasets_to_combine.append(savg1_selected)
+        dataset_names.append("MNI SAVG124")
+        print(f"    - Selected columns: {existing_cols}")
+else:
+    print("  - MNI SAVG124 not loaded")
 
 # IMNI.SAVG124
-try:
-    savg2_df = pl.read_parquet(imni_path / "SAVG124.parquet")
+savg2_df = read_sas_file(imni_path / "SAVG124.sas7bdat")
+if savg2_df is not None:
     print(f"  - IMNI SAVG124 loaded: {savg2_df.height} records")
     available_cols = ['ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH']
     existing_cols = [col for col in available_cols if col in savg2_df.columns]
-    savg2_selected = savg2_df.select(existing_cols)
-    datasets_to_combine.append(savg2_selected)
-    dataset_names.append("IMNI SAVG124")
-except FileNotFoundError:
-    print(f"  - WARNING: IMNI/SAVG124.parquet not found")
-except Exception as e:
-    print(f"  - ERROR reading IMNI/SAVG124.parquet: {e}")
+    if existing_cols:
+        savg2_selected = savg2_df.select(existing_cols)
+        datasets_to_combine.append(savg2_selected)
+        dataset_names.append("IMNI SAVG124")
+        print(f"    - Selected columns: {existing_cols}")
+else:
+    print("  - IMNI SAVG124 not loaded")
 
 # ============================================
 # STEP 4: Add CURN to datasets
@@ -152,10 +169,14 @@ print("\n[STEP 4] Adding CURN to dataset list...")
 if not curn_filtered.is_empty():
     available_cols = ['ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH']
     existing_cols = [col for col in available_cols if col in curn_filtered.columns]
-    curn_selected = curn_filtered.select(existing_cols)
-    datasets_to_combine.append(curn_selected)
-    dataset_names.append("CURN")
-    print(f"  - CURN added with {curn_selected.height} records")
+    if existing_cols:
+        curn_selected = curn_filtered.select(existing_cols)
+        datasets_to_combine.append(curn_selected)
+        dataset_names.append("CURN")
+        print(f"  - CURN added with {curn_selected.height} records")
+        print(f"    - Selected columns: {existing_cols}")
+    else:
+        print("  - No matching columns found in CURN")
 else:
     print("  - No CURN data to add")
 
@@ -191,7 +212,7 @@ for i, name in enumerate(dataset_names):
 if datasets_to_combine:
     deposit_combined = pl.concat(datasets_to_combine, how="diagonal")
     print(f"  - Combined data: {deposit_combined.height} records")
-    print(f"  - Columns: {deposit_combined.columns}")
+    print(f"  - Columns: {deposit_combined.columns[:10]}...")  # Show first 10 columns
     
     # ============================================
     # STEP 7: Apply filters and transformations
@@ -210,16 +231,17 @@ if datasets_to_combine:
             '42199', '42699'
         ]
         
-        print(f"  - Valid PRODCD values: {valid_prodcd}")
+        print(f"  - Valid PRODCD values: {valid_prodcd[:5]}... (total {len(valid_prodcd)})")
         
-        # Apply filters
+        # Apply PRODCD filter
         deposit_filtered = deposit_combined.filter(
             pl.col('PRODCD').is_in(valid_prodcd)
         )
         print(f"  - After PRODCD filter: {deposit_filtered.height} records")
         
         # Check if 'PRODUCT' column exists for additional filters
-        if 'PRODUCT' in deposit_filtered.columns:
+        if 'PRODUCT' in deposit_filtered.columns and not deposit_filtered.is_empty():
+            # IF PRODUCT = 166 THEN PRODCD = '42310';
             deposit_filtered = deposit_filtered.with_columns([
                 pl.when(pl.col('PRODUCT') == 166)
                 .then(pl.lit('42310'))
@@ -228,6 +250,7 @@ if datasets_to_combine:
             ])
             print(f"  - After PRODUCT=166 transformation: {deposit_filtered.height} records")
             
+            # IF PRODCD IN ('42199','42699') AND PRODUCT NOT IN (72,413) THEN DELETE;
             deposit_filtered = deposit_filtered.filter(
                 ~(
                     pl.col('PRODCD').is_in(['42199', '42699']) & 
@@ -236,15 +259,19 @@ if datasets_to_combine:
             )
             print(f"  - After PRODCD special filter: {deposit_filtered.height} records")
             
+            # IF PRODUCT IN (30,31,32,33,34) THEN DELETE;
             deposit_filtered = deposit_filtered.filter(
                 ~pl.col('PRODUCT').is_in([30, 31, 32, 33, 34])
             )
             print(f"  - After PRODUCT filter: {deposit_filtered.height} records")
         else:
-            print("  - WARNING: 'PRODUCT' column not found, skipping PRODUCT-based filters")
+            if 'PRODUCT' not in deposit_filtered.columns:
+                print("  - WARNING: 'PRODUCT' column not found, skipping PRODUCT-based filters")
+            elif deposit_filtered.is_empty():
+                print("  - No records after PRODCD filter, skipping PRODUCT-based filters")
         
         # Handle INTPAYBL
-        if 'INTPAYBL' in deposit_filtered.columns:
+        if 'INTPAYBL' in deposit_filtered.columns and not deposit_filtered.is_empty():
             deposit_filtered = deposit_filtered.with_columns([
                 pl.when(pl.col('INTPAYBL') < 0)
                 .then(0)
@@ -267,8 +294,8 @@ else:
 # ============================================
 print("\n[STEP 8] Loading FLOAT data...")
 
-try:
-    float_df = pl.read_parquet(pidms_path / "FLOAT.parquet")
+float_df = read_sas_file(pidms_path / "FLOAT.sas7bdat")
+if float_df is not None:
     print(f"  - FLOAT loaded: {float_df.height} records")
     float_df.write_parquet(output_path / "FLOAT.parquet")
     
@@ -282,13 +309,7 @@ try:
     else:
         float_summary = pl.DataFrame()
         print("  - FLOAT column not found in FLOAT data")
-        
-except FileNotFoundError:
-    print(f"  - WARNING: {pidms_path / 'FLOAT.parquet'} not found")
-    float_df = pl.DataFrame()
-    float_summary = pl.DataFrame()
-except Exception as e:
-    print(f"  - ERROR reading FLOAT.parquet: {e}")
+else:
     float_df = pl.DataFrame()
     float_summary = pl.DataFrame()
 
@@ -301,6 +322,12 @@ if not deposit_filtered.is_empty():
     deposit_sorted = deposit_filtered.sort('ACCTNO')
     
     if not float_summary.is_empty():
+        # Ensure ACCTNO is same type for join
+        if deposit_sorted['ACCTNO'].dtype != float_summary['ACCTNO'].dtype:
+            deposit_sorted = deposit_sorted.with_columns([
+                pl.col('ACCTNO').cast(pl.Float64)
+            ])
+        
         deposit_merged = deposit_sorted.join(
             float_summary, on='ACCTNO', how='left', suffix='_float'
         )
@@ -330,12 +357,17 @@ if not deposit_filtered.is_empty():
         print(f"  - DEPOSIT_MERGED saved: {deposit_merged.height} records")
         print(f"  - FLOAT_ONLY saved: {float_only.height} records")
         
+        # Generate text report
+        generate_text_report(deposit_merged, float_only, output_path)
+        
         # PROC PRINT DATA=DEPOSIT; SUM FLOAT;
         print("\n" + "="*60)
         print("DEPOSIT DATA WITH FLOAT SUMMARY")
         print("="*60)
-        print(f"Total FLOAT: {deposit_merged.select(pl.col('FLOAT').sum()).row(0)[0]:,.2f}")
-        print(f"Total AVBAL: {deposit_merged.select(pl.col('AVBAL').sum()).row(0)[0]:,.2f}")
+        if not deposit_merged.is_empty():
+            print(f"Total FLOAT: {deposit_merged.select(pl.col('FLOAT').sum()).row(0)[0]:,.2f}")
+            print(f"Total AVBAL: {deposit_merged.select(pl.col('AVBAL').sum()).row(0)[0]:,.2f}")
+            print(f"Total Records: {deposit_merged.height}")
         
         print("\nFLOAT ONLY RECORDS (B AND NOT A):")
         print(f"  - Records: {float_only.height}")
@@ -352,3 +384,48 @@ else:
 print("\n" + "="*60)
 print("PROCESSING COMPLETED SUCCESSFULLY")
 print("="*60)
+
+# ============================================
+# HELPER FUNCTION: Generate Text Report
+# ============================================
+def generate_text_report(deposit_merged, float_only, output_path):
+    """Generate text report from merged data"""
+    print("\n[STEP 10] Generating text report...")
+    
+    report_path = output_path / "EIFLTEXP_REPORT.txt"
+    
+    with open(report_path, 'w') as f:
+        f.write("="*70 + "\n")
+        f.write("EIFLTEXP PROCESSING REPORT\n")
+        f.write(f"Generated: {datetime.datetime.now()}\n")
+        f.write("="*70 + "\n\n")
+        
+        # Summary statistics
+        f.write("SUMMARY STATISTICS\n")
+        f.write("-"*70 + "\n")
+        
+        if not deposit_merged.is_empty():
+            total_float = deposit_merged.select(pl.col('FLOAT').sum()).row(0)[0]
+            total_avbal = deposit_merged.select(pl.col('AVBAL').sum()).row(0)[0]
+            total_curbal = deposit_merged.select(pl.col('CURBAL').sum()).row(0)[0]
+            
+            f.write(f"Total Records: {deposit_merged.height:,}\n")
+            f.write(f"Total CURBAL: {total_curbal:,.2f}\n")
+            f.write(f"Total FLOAT: {total_float:,.2f}\n")
+            f.write(f"Total AVBAL: {total_avbal:,.2f}\n\n")
+        
+        # Float only records
+        f.write("FLOAT ONLY RECORDS (In FLOAT but not in DEPOSIT)\n")
+        f.write("-"*70 + "\n")
+        f.write(f"Total Records: {float_only.height:,}\n")
+        
+        if not float_only.is_empty():
+            f.write("\nTop 10 ACCTNO by FLOAT Amount:\n")
+            float_only_top = float_only.sort('FLOAT', descending=True).select(['ACCTNO', 'FLOAT']).head(10)
+            for row in float_only_top.rows():
+                f.write(f"  ACCTNO: {row[0]}, FLOAT: {row[1]:,.2f}\n")
+        
+        f.write("\n" + "="*70 + "\n")
+        f.write("END OF REPORT\n")
+    
+    print(f"  - Report saved to {report_path}")
