@@ -98,7 +98,6 @@ else:
 # Create REPTDATE DataFrame
 reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
 reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
-reptdate_df.write_csv(output_path / "REPTDATE.csv")
 
 # ============================================
 # READ IBG_YEAREND.txt FROM MNI PATH
@@ -151,10 +150,6 @@ try:
         
         print(f"IBG records: {ibg_valid.height}")
         print(f"NONDEBIT records: {nondebit_invalid.height}")
-        
-        # Save raw parsed data for verification
-        if not ibg_parsed.is_empty():
-            ibg_parsed.write_csv(output_path / "IBGPIDM_PARSED.csv")
         
 except Exception as e:
     print(f"Error reading IBG_YEAREND.txt: {e}")
@@ -294,8 +289,6 @@ if datasets:
     # PROC SORT DATA=DEP NODUPKEYS; BY ACCTNO;
     dep_deduped = dep_filtered.unique(subset=['ACCTNO'])
     dep_deduped.write_parquet(output_path / "DEP.parquet")
-    # Also write to CSV for verification
-    dep_deduped.write_csv(output_path / "DEP.csv")
     print(f"DEP records: {dep_deduped.height}")
 else:
     dep_deduped = pl.DataFrame()
@@ -336,7 +329,6 @@ if not ibg_final.is_empty():
     # PROC SORT DATA=DEP; BY CATEGORY;
     dep_sorted = dep_with_bc.sort('CATEGORY')
     dep_sorted.write_parquet(output_path / "DEP_FINAL.parquet")
-    dep_sorted.write_csv(output_path / "DEP_FINAL.csv")
     
     # TITLE1 'DEBITTED A/C';
     print("\n" + "="*50)
@@ -359,7 +351,6 @@ if not ibg_final.is_empty():
         
         # Save summary
         debitted_summary.write_parquet(output_path / "DEBITTED_SUMMARY.parquet")
-        debitted_summary.write_csv(output_path / "DEBITTED_SUMMARY.csv")
     else:
         print("No debitted records found")
     
@@ -384,7 +375,6 @@ if not ibg_final.is_empty():
         
         # Save summary
         notfound_summary.write_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
-        notfound_summary.write_csv(output_path / "NOTFOUND_SUMMARY.csv")
     else:
         print("No not-found records found")
 
@@ -395,7 +385,6 @@ if not nondebit_sorted.is_empty():
         pl.col('PAYMODE').cast(pl.Int64).alias('ACCTNO')
     ])
     nondebit_processed.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
-    nondebit_processed.write_csv(output_path / "NONDEBIT_PROCESSED.csv")
     
     print("\n" + "="*50)
     # TITLE1 'NON-DEBITTED A/C';
@@ -415,7 +404,6 @@ if not nondebit_sorted.is_empty():
     
     # Save summary
     nondebit_summary.write_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
-    nondebit_summary.write_csv(output_path / "NONDEBIT_SUMMARY.csv")
 
 # Generate text report
 print("\n" + "="*50)
