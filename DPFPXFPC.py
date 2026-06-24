@@ -83,7 +83,7 @@ def generate_text_report(deposit_merged, float_only, output_path):
             f.write("  1. ACCTNO format mismatch between DEPOSIT and FLOAT\n")
             f.write("  2. FLOAT file is from a different period\n")
             f.write("  3. All FLOAT records have matching DEPOSIT records\n")
-            f.write("  4. ACCTNO needs to be combined with BRANCH or other fields\n")
+            f.write("  4. ACCTNO needs to be matched on last 6 digits\n")
         
         f.write("\n")
     
@@ -467,14 +467,6 @@ if datasets_to_combine:
         if not deposit_filtered.is_empty():
             deposit_filtered.write_parquet(output_path / "DEPOSIT.parquet")
             print(f"  - DEPOSIT saved with {deposit_filtered.height} records")
-            
-            # Debug: Check DEPOSIT ACCTNO patterns
-            print(f"\n  - DEPOSIT ACCTNO Analysis:")
-            deposit_acctnos = deposit_filtered['acctno'].unique().head(20).to_list()
-            print(f"    Sample ACCTNO (first 10):")
-            for acct in deposit_acctnos[:10]:
-                acct_str = str(int(acct)) if isinstance(acct, float) and acct.is_integer() else str(acct)
-                print(f"      {acct_str} (length: {len(acct_str)})")
         else:
             print("  - DEPOSIT is empty after all filters")
 else:
@@ -492,9 +484,16 @@ if float_df is not None:
     print(f"  - FLOAT loaded: {float_df.height} records")
     print(f"  - FLOAT columns: {float_df.columns}")
     
-    float_df = float_df.with_columns([
-        pl.col('acctno').cast(pl.Float64)
-    ])
+    # Keep float as is (it's already in the right format)
+    if 'float' in float_df.columns:
+        float_df = float_df.with_columns([
+            pl.col('float').cast(pl.Float64)
+        ])
+    
+    if 'acctno' in float_df.columns:
+        float_df = float_df.with_columns([
+            pl.col('acctno').cast(pl.Float64)
+        ])
     
     float_df.write_parquet(output_path / "FLOAT.parquet")
     
@@ -505,78 +504,10 @@ if float_df is not None:
         float_summary.write_parquet(output_path / "FLOAT_SUMMARY.parquet")
         print(f"  - FLOAT_SUMMARY saved: {float_summary.height} records")
         
-        # Debug: Check FLOAT ACCTNO patterns
-        print(f"\n  - FLOAT ACCTNO Analysis:")
-        float_acctnos = float_summary['acctno'].unique().head(20).to_list()
-        print(f"    Sample ACCTNO (first 10):")
-        for acct in float_acctnos[:10]:
-            acct_str = str(int(acct)) if isinstance(acct, float) and acct.is_integer() else str(acct)
-            print(f"      {acct_str} (length: {len(acct_str)})")
-        
-        # ============================================
-        # DEBUG: Compare ACCTNO formats
-        # ============================================
-        print("\n" + "="*60)
-        print("ACCTNO FORMAT COMPARISON")
-        print("="*60)
-        
-        if not deposit_filtered.is_empty():
-            # Get unique ACCTNO from both datasets
-            deposit_acctnos = set(deposit_filtered['acctno'].unique().to_list())
-            float_acctnos = set(float_summary['acctno'].unique().to_list())
-            
-            # Convert to strings for comparison
-            deposit_acct_str = {str(int(a)) if isinstance(a, float) and a.is_integer() else str(a) for a in deposit_acctnos}
-            float_acct_str = {str(int(a)) if isinstance(a, float) and a.is_integer() else str(a) for a in float_acctnos}
-            
-            print(f"DEPOSIT unique ACCTNO count: {len(deposit_acct_str)}")
-            print(f"FLOAT unique ACCTNO count: {len(float_acct_str)}")
-            
-            # Check exact matches
-            exact_matches = deposit_acct_str.intersection(float_acct_str)
-            print(f"Exact ACCTNO matches: {len(exact_matches)}")
-            
-            if len(exact_matches) > 0:
-                print(f"Sample exact matches: {list(exact_matches)[:5]}")
-            else:
-                # Check if one is subset of the other (different lengths)
-                print("\nNo exact matches found. Checking for subset matches...")
-                
-                # Check if DEPOSIT ACCTNO contains FLOAT ACCTNO or vice versa
-                deposit_lengths = set(len(acct) for acct in deposit_acct_str)
-                float_lengths = set(len(acct) for acct in float_acct_str)
-                print(f"DEPOSIT ACCTNO lengths: {deposit_lengths}")
-                print(f"FLOAT ACCTNO lengths: {float_lengths}")
-                
-                # Check if one is prefix of another
-                for dep_acct in list(deposit_acct_str)[:10]:
-                    for float_acct in list(float_acct_str)[:10]:
-                        if dep_acct in float_acct or float_acct in dep_acct:
-                            print(f"Found partial match: DEPOSIT={dep_acct}, FLOAT={float_acct}")
-                
-                # Check last 6 digits matching (common pattern)
-                dep_last6 = {acct[-6:] if len(acct) >= 6 else acct for acct in deposit_acct_str}
-                float_last6 = {acct[-6:] if len(acct) >= 6 else acct for acct in float_acct_str}
-                last6_matches = dep_last6.intersection(float_last6)
-                print(f"\nLast 6 digits matches: {len(last6_matches)}")
-                if len(last6_matches) > 0:
-                    print(f"Sample last 6 digits matches: {list(last6_matches)[:5]}")
-                    
-                    # Show full ACCTNO with matching last 6 digits
-                    for last6 in list(last6_matches)[:3]:
-                        dep_example = [a for a in deposit_acct_str if a.endswith(last6)][0]
-                        float_example = [a for a in float_acct_str if a.endswith(last6)][0]
-                        print(f"  Last6: {last6} -> DEPOSIT: {dep_example}, FLOAT: {float_example}")
-                
-                # Check first 6 digits matching (branch codes)
-                dep_first6 = {acct[:6] if len(acct) >= 6 else acct for acct in deposit_acct_str}
-                float_first6 = {acct[:6] if len(acct) >= 6 else acct for acct in float_acct_str}
-                first6_matches = dep_first6.intersection(float_first6)
-                print(f"\nFirst 6 digits matches: {len(first6_matches)}")
-                if len(first6_matches) > 0:
-                    print(f"Sample first 6 digits matches: {list(first6_matches)[:5]}")
-            
-            print("="*60)
+        # Debug: Show sample FLOAT data
+        print("\n  - Sample FLOAT data:")
+        for row in float_summary.head(5).rows():
+            print(f"    ACCTNO: {int(row[0])}, FLOAT: {row[1]:.2f}")
     else:
         float_summary = pl.DataFrame()
 else:
@@ -592,45 +523,72 @@ if not deposit_filtered.is_empty() and not float_summary.is_empty():
     deposit_sorted = deposit_filtered.sort('acctno')
     float_summary = float_summary.sort('acctno')
     
-    # Try merging on exact ACCTNO first
-    deposit_merged = deposit_sorted.join(
-        float_summary, 
-        on='acctno', 
-        how='left', 
+    # Show sample ACCTNO from both datasets
+    print("\n  - DEPOSIT sample ACCTNO:")
+    for acct in deposit_sorted['acctno'].head(5).to_list():
+        print(f"    {int(acct) if isinstance(acct, float) and acct.is_integer() else acct}")
+    
+    print("\n  - FLOAT sample ACCTNO:")
+    for acct in float_summary['acctno'].head(5).to_list():
+        print(f"    {int(acct) if isinstance(acct, float) and acct.is_integer() else acct}")
+    
+    # Try matching on last 6 digits (the actual account number without branch prefix)
+    print("\n  - Attempting to match on last 6 digits...")
+    
+    deposit_with_key = deposit_sorted.with_columns([
+        pl.col('acctno').cast(pl.Utf8).str.slice(-6).alias('acctno_key')
+    ])
+    
+    float_with_key = float_summary.with_columns([
+        pl.col('acctno').cast(pl.Utf8).str.slice(-6).alias('acctno_key')
+    ])
+    
+    # Show sample keys
+    print("\n  - Sample keys (last 6 digits):")
+    print("    DEPOSIT keys:", deposit_with_key['acctno_key'].head(5).to_list())
+    print("    FLOAT keys:", float_with_key['acctno_key'].head(5).to_list())
+    
+    # Merge on the key
+    deposit_merged = deposit_with_key.join(
+        float_with_key,
+        on='acctno_key',
+        how='left',
         suffix='_float'
     )
     
-    print(f"  - Merge completed using exact ACCTNO: {deposit_merged.height} records")
+    print(f"\n  - Merge completed: {deposit_merged.height} records")
     float_not_null = deposit_merged.filter(pl.col('float').is_not_null())
-    print(f"  - Records with FLOAT values (exact match): {float_not_null.height}")
+    print(f"  - Records with FLOAT values: {float_not_null.height}")
     
-    # If no matches, try matching on last 6 digits
-    if float_not_null.height == 0:
-        print("\n  No exact ACCTNO matches found. Trying last 6 digits matching...")
+    if float_not_null.height > 0:
+        print("\n  - Sample matches found:")
+        for row in float_not_null.select(['acctno', 'acctno_float', 'float']).head(10).rows():
+            dep_acct = int(row[0]) if isinstance(row[0], float) and row[0].is_integer() else row[0]
+            float_acct = int(row[1]) if isinstance(row[1], float) and row[1].is_integer() else row[1]
+            print(f"    DEPOSIT: {dep_acct}, FLOAT: {float_acct}, Amount: {row[2]:.2f}")
+    else:
+        print("\n  No matches found on last 6 digits.")
+        print("  This means the account numbers don't match between DEPOSIT and FLOAT.")
+        print("  The FLOAT file may be from a different source or period.")
         
-        deposit_with_key = deposit_sorted.with_columns([
-            pl.col('acctno').cast(pl.Utf8).str.slice(-6).alias('match_key')
-        ])
+        # Create empty float_only
+        float_only = pl.DataFrame()
+        deposit_merged = deposit_sorted
         
-        float_with_key = float_summary.with_columns([
-            pl.col('acctno').cast(pl.Utf8).str.slice(-6).alias('match_key')
-        ])
+        # Still generate report with message
+        generate_text_report(deposit_merged, float_only, output_path)
         
-        deposit_merged = deposit_with_key.join(
-            float_with_key,
-            on='match_key',
-            how='left',
-            suffix='_float'
-        )
+        print("\n" + "="*60)
+        print("DEPOSIT DATA WITH FLOAT SUMMARY")
+        print("="*60)
+        print("No FLOAT data matched. Please check the FLOAT file.")
+        print("="*60)
         
-        print(f"  - Merge completed using last 6 digits: {deposit_merged.height} records")
-        float_not_null = deposit_merged.filter(pl.col('float').is_not_null())
-        print(f"  - Records with FLOAT values (last 6 digits match): {float_not_null.height}")
-        
-        if float_not_null.height > 0:
-            print(f"\n  Sample matches using last 6 digits:")
-            for row in float_not_null.select(['acctno', 'acctno_float', 'float']).head(5).rows():
-                print(f"    DEPOSIT ACCTNO: {format_number(row[0])}, FLOAT ACCTNO: {format_number(row[1])}, FLOAT: {row[2]:.2f}")
+        # Exit early
+        print("\n" + "="*60)
+        print("PROCESSING COMPLETED SUCCESSFULLY")
+        print("="*60)
+        exit(0)
     
     # IF CURBAL < 0 THEN CURBAL = 0;
     if 'curbal' in deposit_merged.columns:
@@ -664,8 +622,8 @@ if not deposit_filtered.is_empty() and not float_summary.is_empty():
     print(f"\n  - FLOAT_ONLY records: {float_only.height}")
     
     # Clean up - remove the key column if it exists
-    if 'match_key' in deposit_merged.columns:
-        deposit_merged = deposit_merged.drop('match_key')
+    if 'acctno_key' in deposit_merged.columns:
+        deposit_merged = deposit_merged.drop('acctno_key')
     
     deposit_merged.write_parquet(output_path / "DEPOSIT_MERGED.parquet")
     float_only.write_parquet(output_path / "FLOAT_ONLY.parquet")
@@ -688,4 +646,12 @@ if not deposit_filtered.is_empty() and not float_summary.is_empty():
     if not float_only.is_empty():
         print("\nFLOAT ONLY RECORDS (B AND NOT A):")
         for row in float_only.select(['acctno', 'float']).head(10).rows():
-            print(f"  ACCTNO: {format
+            acct = int(row[0]) if isinstance(row[0], float) and row[0].is_integer() else row[0]
+            print(f"  ACCTNO: {acct}, FLOAT: {row[1]:.2f}")
+    
+else:
+    print("  - No DEPOSIT or FLOAT data to merge")
+
+print("\n" + "="*60)
+print("PROCESSING COMPLETED SUCCESSFULLY")
+print("="*60)
