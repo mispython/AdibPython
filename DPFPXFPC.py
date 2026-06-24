@@ -21,22 +21,25 @@ def format_number(val):
     return str(val)
 
 def generate_text_report(float_only, output_path):
-    """Generate text report matching production SAS output format"""
+    """Generate text report matching production SAS output format exactly"""
     print("\n[STEP 10] Generating text report...")
     
     report_path = output_path / "EIFLTEXP_REPORT.txt"
     
     with open(report_path, 'w') as f:
+        # Header matching SAS output
         f.write("The Python Processing System\n")
         f.write(f"{datetime.datetime.now().strftime('%H:%M %A, %B %d, %Y')}\n")
         f.write(" " * 50 + "1\n")
         f.write("\n")
         
+        # Column headers
         f.write("Obs PRODCD AMTIND BRANCH   ACCTNO   LEDGBAL PRODUCT CURBAL INTPAYBL _TYPE_ _FREQ_   FLOAT    AVBAL    AVBALTT  CURBALTT\n")
         f.write("\n")
         
         if not float_only.is_empty():
-            float_only_sorted = float_only.sort('float', ascending=False)
+            # Sort by ACCTNO to match SAS output order
+            float_only_sorted = float_only.sort('acctno')
             
             obs_count = 0
             total_float = 0
@@ -44,7 +47,7 @@ def generate_text_report(float_only, output_path):
             for row in float_only_sorted.rows():
                 obs_count += 1
                 
-                # Extract values with defaults
+                # Extract values (matching SAS column order)
                 acctno = row[0] if len(row) > 0 else ''
                 float_val = row[1] if len(row) > 1 else 0
                 prodcd = row[2] if len(row) > 2 else ''
@@ -58,26 +61,26 @@ def generate_text_report(float_only, output_path):
                 avbaltt = row[10] if len(row) > 10 else 0
                 curbaltt = row[11] if len(row) > 11 else 0
                 
-                # Format values
+                # Format values exactly like SAS output
                 acctno_str = format_number(acctno)
-                prodcd_str = format_number(prodcd) if prodcd else ''
-                amtind_str = str(amtind) if amtind else ''
-                branch_str = format_number(branch) if branch else ''
-                ledgbal_str = f"{ledgbal:.2f}" if ledgbal else ''
-                product_str = format_number(product) if product else ''
-                curbal_str = f"{curbal:.2f}" if curbal else ''
-                intpaybl_str = f"{intpaybl:.2f}" if intpaybl else ''
-                float_str = f"{float_val:.2f}" if float_val else ''
-                avbal_str = f"{avbal:.2f}" if avbal else ''
-                avbaltt_str = f"{avbaltt:.2f}" if avbaltt else ''
-                curbaltt_str = f"{curbaltt:.2f}" if curbaltt else ''
+                prodcd_str = str(prodcd) if prodcd and not pd.isna(prodcd) else ''
+                amtind_str = str(amtind) if amtind and not pd.isna(amtind) else ''
+                branch_str = format_number(branch) if branch and not pd.isna(branch) else ''
+                ledgbal_str = f"{ledgbal:.2f}" if ledgbal and not pd.isna(ledgbal) else '.'
+                product_str = format_number(product) if product and not pd.isna(product) else ''
+                curbal_str = f"{curbal:.2f}" if curbal and not pd.isna(curbal) else '.'
+                intpaybl_str = f"{intpaybl:.2f}" if intpaybl and not pd.isna(intpaybl) else '.'
+                float_str = f"{float_val:.2f}" if float_val and not pd.isna(float_val) else ''
+                avbal_str = f"{avbal:.2f}" if avbal and not pd.isna(avbal) else ''
+                avbaltt_str = f"{avbaltt:.2f}" if avbaltt and not pd.isna(avbaltt) else ''
+                curbaltt_str = f"{curbaltt:.2f}" if curbaltt and not pd.isna(curbaltt) else ''
                 
-                # Write formatted row (matching SAS output format)
+                # Write formatted row with proper spacing (matching SAS)
                 f.write(f"{obs_count:3} {prodcd_str:>6} {amtind_str:>6} {branch_str:>6} {acctno_str:>10} {ledgbal_str:>10} {product_str:>7} {curbal_str:>10} {intpaybl_str:>8} {1:>6} {1:>6} {float_str:>10} {avbal_str:>10} {avbaltt_str:>10} {curbaltt_str:>10}\n")
                 
-                total_float += float_val if float_val else 0
+                total_float += float_val if float_val and not pd.isna(float_val) else 0
             
-            # Add separator and total
+            # Add separator and total (matching SAS)
             f.write(" " * 50 + "========\n")
             f.write(f"{' ' * 82}{total_float:.2f}\n")
         else:
@@ -87,6 +90,7 @@ def generate_text_report(float_only, output_path):
         f.write("\n")
     
     print(f"  - Report saved to {report_path}")
+    print(f"  - Total FLOAT in report: {total_float if not float_only.is_empty() else 0:.2f}")
 
 def read_sas_file(filepath, columns=None):
     """Read SAS file and return Polars DataFrame with selected columns"""
@@ -507,7 +511,7 @@ if float_df is not None:
         float_summary.write_parquet(output_path / "FLOAT_SUMMARY.parquet")
         print(f"  - FLOAT_SUMMARY saved: {float_summary.height} records")
         
-        print("\n  - Sample FLOAT data:")
+        print("\n  - Sample FLOAT data (first 5):")
         for row in float_summary.head(5).rows():
             print(f"    ACCTNO: {int(row[0])}, FLOAT: {row[1]:.2f}")
     else:
@@ -517,40 +521,40 @@ else:
     float_summary = pl.DataFrame()
 
 # ============================================
-# STEP 9: Merge DEPOSIT with FLOAT (B AND NOT A)
+# STEP 9: Find B AND NOT A (FLOAT not in DEPOSIT)
 # ============================================
-print("\n[STEP 9] Merging DEPOSIT with FLOAT...")
+print("\n[STEP 9] Finding FLOAT records not in DEPOSIT (B AND NOT A)...")
 
 if not deposit_filtered.is_empty() and not float_summary.is_empty():
-    deposit_sorted = deposit_filtered.sort('acctno')
-    float_summary = float_summary.sort('acctno')
-    
-    print(f"\n  - DEPOSIT unique ACCTNO count: {deposit_sorted.height}")
+    # Get unique ACCTNO from DEPOSIT
+    deposit_acctnos = set(deposit_filtered['acctno'].unique().to_list())
+    print(f"  - DEPOSIT unique ACCTNO count: {len(deposit_acctnos)}")
     print(f"  - FLOAT unique ACCTNO count: {float_summary.height}")
     
-    # Extract last 6 digits for matching
-    deposit_with_key = deposit_sorted.with_columns([
-        pl.col('acctno').cast(pl.Utf8).str.slice(-6).alias('acctno_key')
-    ])
+    # Show sample ACCTNO
+    print("\n  - Sample DEPOSIT ACCTNO:")
+    for acct in list(deposit_acctnos)[:5]:
+        print(f"    {int(acct) if isinstance(acct, float) and acct.is_integer() else acct}")
     
-    float_with_key = float_summary.with_columns([
-        pl.col('acctno').cast(pl.Utf8).str.slice(-6).alias('acctno_key')
-    ])
+    print("\n  - Sample FLOAT ACCTNO:")
+    for row in float_summary.head(5).rows():
+        print(f"    {int(row[0])}, FLOAT: {row[1]:.2f}")
     
-    # Get FLOAT keys that are NOT in DEPOSIT (B AND NOT A)
-    deposit_keys = set(deposit_with_key['acctno_key'].unique().to_list())
-    float_keys = set(float_with_key['acctno_key'].unique().to_list())
-    float_only_keys = float_keys - deposit_keys
+    # Find FLOAT records not in DEPOSIT (B AND NOT A)
+    float_only = float_summary.filter(
+        ~pl.col('acctno').is_in(list(deposit_acctnos))
+    )
     
-    print(f"\n  - FLOAT keys not in DEPOSIT: {len(float_only_keys)}")
+    print(f"\n  - FLOAT records not in DEPOSIT (B AND NOT A): {float_only.height}")
     
-    # Create FLOAT_ONLY records (matching SAS IF B AND NOT A)
-    if float_only_keys:
-        float_only = float_with_key.filter(
-            pl.col('acctno_key').is_in(list(float_only_keys))
-        ).select([
-            pl.col('acctno').alias('acctno'),
-            pl.col('float').alias('float'),
+    if not float_only.is_empty():
+        # Show sample of FLOAT_ONLY records
+        print("\n  - Sample FLOAT_ONLY records (B AND NOT A):")
+        for row in float_only.head(10).rows():
+            print(f"    ACCTNO: {int(row[0])}, FLOAT: {row[1]:.2f}")
+        
+        # Create output with proper columns (matching SAS output)
+        float_only_output = float_only.with_columns([
             pl.lit(None).cast(pl.Utf8).alias('progcd'),
             pl.lit(None).cast(pl.Utf8).alias('amtind'),
             pl.lit(None).cast(pl.Float64).alias('branch'),
@@ -558,85 +562,41 @@ if not deposit_filtered.is_empty() and not float_summary.is_empty():
             pl.lit(0).cast(pl.Float64).alias('product'),
             pl.lit(0).cast(pl.Float64).alias('curbal'),
             pl.lit(0).cast(pl.Float64).alias('intpaybl'),
-            (pl.col('float') * -1).alias('avbal'),  # AVBAL = -FLOAT (since CURBAL is 0)
-            (pl.col('float') * -1).alias('avbaltt'),  # AVBALTT = -FLOAT (since INTPAYBL is 0)
+            pl.col('float').alias('avbal'),  # AVBAL = FLOAT (since CURBAL is 0)
+            pl.col('float').alias('avbaltt'),  # AVBALTT = FLOAT
             pl.lit(0).cast(pl.Float64).alias('curbaltt')  # CURBALTT = 0
+        ]).select([
+            'acctno', 'float', 'progcd', 'amtind', 'branch', 
+            'ledgbal', 'product', 'curbal', 'intpaybl',
+            'avbal', 'avbaltt', 'curbaltt'
         ])
         
-        print(f"  - FLOAT_ONLY records: {float_only.height}")
-        
-        # Show sample of FLOAT_ONLY records
-        print("\n  - Sample FLOAT_ONLY records:")
-        for row in float_only.head(10).rows():
-            print(f"    ACCTNO: {int(row[0])}, FLOAT: {row[1]:.2f}")
-        
-        # Generate text report with only FLOAT_ONLY records
-        generate_text_report(float_only, output_path)
+        # Generate text report
+        generate_text_report(float_only_output, output_path)
         
         # Save FLOAT_ONLY records
-        float_only.write_parquet(output_path / "FLOAT_ONLY.parquet")
-        print(f"  - FLOAT_ONLY saved: {float_only.height} records")
+        float_only_output.write_parquet(output_path / "FLOAT_ONLY.parquet")
+        float_only_output.write_csv(output_path / "FLOAT_ONLY.csv")
+        print(f"\n  - FLOAT_ONLY saved: {float_only.height} records")
+        print(f"  - Total FLOAT amount in FLOAT_ONLY: {float_only['float'].sum():.2f}")
         
-        # Also create the merged dataset for completeness (but the report only shows FLOAT_ONLY)
-        float_aggregated = float_with_key.group_by('acctno_key').agg([
-            pl.col('float').sum().alias('float'),
-            pl.col('acctno').first().alias('acctno_original')
-        ])
-        
-        deposit_merged = deposit_with_key.join(
-            float_aggregated,
-            on='acctno_key',
-            how='left',
-            suffix='_float'
-        )
-        
-        # IF CURBAL < 0 THEN CURBAL = 0;
-        if 'curbal' in deposit_merged.columns:
-            deposit_merged = deposit_merged.with_columns([
-                pl.when(pl.col('curbal') < 0)
-                .then(0)
-                .otherwise(pl.col('curbal'))
-                .alias('curbal')
-            ])
-        
-        # AVBAL = SUM(CURBAL,(-1)*FLOAT);
-        if 'curbal' in deposit_merged.columns and 'float' in deposit_merged.columns:
-            deposit_merged = deposit_merged.with_columns([
-                (pl.col('curbal') + (-1) * pl.col('float')).alias('avbal')
-            ])
-        
-        # AVBALTT = SUM(AVBAL,INTPAYBL);
-        # CURBALTT = SUM(CURBAL,INTPAYBL);
-        if 'avbal' in deposit_merged.columns and 'curbal' in deposit_merged.columns and 'intpaybl' in deposit_merged.columns:
-            deposit_merged = deposit_merged.with_columns([
-                (pl.col('avbal') + pl.col('intpaybl')).alias('avbaltt'),
-                (pl.col('curbal') + pl.col('intpaybl')).alias('curbaltt')
-            ])
-        
-        # Clean up
-        if 'acctno_key' in deposit_merged.columns:
-            deposit_merged = deposit_merged.drop('acctno_key')
-        
-        deposit_merged.write_parquet(output_path / "DEPOSIT_MERGED.parquet")
-        print(f"  - DEPOSIT_MERGED saved: {deposit_merged.height} records")
-        
+        # Print summary
         print("\n" + "="*60)
-        print("DEPOSIT DATA WITH FLOAT SUMMARY")
+        print("B AND NOT A SUMMARY")
         print("="*60)
-        if not deposit_merged.is_empty():
-            total_float = deposit_merged.select(pl.col('float').sum()).row(0)[0]
-            total_avbal = deposit_merged.select(pl.col('avbal').sum()).row(0)[0]
-            print(f"Total FLOAT: {total_float:,.2f}")
-            print(f"Total AVBAL: {total_avbal:,.2f}")
-            print(f"Total Records: {deposit_merged.height}")
+        print(f"Total FLOAT_ONLY records: {float_only.height}")
+        print(f"Total FLOAT amount: {float_only['float'].sum():.2f}")
+        print("="*60)
         
     else:
-        print("  - No FLOAT_ONLY records found (all FLOAT records have matching DEPOSIT)")
-        float_only = pl.DataFrame()
-        generate_text_report(float_only, output_path)
+        print("\n  No FLOAT_ONLY records found (all FLOAT records have matching DEPOSIT)")
+        float_only_output = pl.DataFrame()
+        generate_text_report(float_only_output, output_path)
         
 else:
-    print("  - No DEPOSIT or FLOAT data to merge")
+    print("  - No DEPOSIT or FLOAT data to process")
+    float_only_output = pl.DataFrame()
+    generate_text_report(float_only_output, output_path)
 
 print("\n" + "="*60)
 print("PROCESSING COMPLETED SUCCESSFULLY")
