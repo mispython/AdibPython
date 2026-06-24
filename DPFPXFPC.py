@@ -1,9 +1,6 @@
 import polars as pl
-import duckdb
 from pathlib import Path
 import datetime
-import pandas as pd
-import pyreadstat
 
 # Configuration
 deposit_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/ICL_SASDATA")
@@ -57,19 +54,14 @@ print(f"SDESC: {SDESC}")
 reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
 reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
 reptdate_df.write_csv(output_path / "REPTDATE.csv")
+print(f"Created REPTDATE.parquet and REPTDATE.csv")
 
-# Convert to pandas for SAS export
-reptdate_pd = reptdate_df.to_pandas()
-# Use pyreadstat.write_sas7bdat correctly
-pyreadstat.write_sas7bdat(output_path / "REPTDATE.sas7bdat", reptdate_pd)
-
-# Function to process text files and output to SAS and Parquet
-def process_text_file(input_filename, output_basename, deposit_path, output_path, reptmon, repyear):
+# Function to process text files and output to Parquet
+def process_text_file(input_filename, output_basename, deposit_path, reptmon, repyear):
     """
-    Process fixed-width text file and output to SAS and Parquet formats
+    Process fixed-width text file and output to Parquet format
     """
     filename_parquet = f"{output_basename}{reptmon}{repyear}.parquet"
-    filename_sas = f"{output_basename}{reptmon}{repyear}.sas7bdat"
     
     try:
         # Read text file
@@ -81,6 +73,10 @@ def process_text_file(input_filename, output_basename, deposit_path, output_path
         for line in lines:
             # Remove newline and trailing spaces
             line = line.rstrip('\n\r')
+            
+            # Skip empty lines
+            if not line.strip():
+                continue
             
             # Extract fields based on fixed positions
             # ACCTNO: positions 0-9 (10 characters)
@@ -115,10 +111,11 @@ def process_text_file(input_filename, output_basename, deposit_path, output_path
             
             # Print summary
             print(f"\n{output_basename} DATA SUMMARY:")
-            print(df)
+            print(f"Total records: {len(df)}")
+            print(df.head(10))  # Show first 10 records
             total_curbal = df.select(pl.col('CURBAL').sum()).row(0)[0]
             if total_curbal is not None:
-                print(f"TOTAL CURBAL: {total_curbal:.2f}")
+                print(f"TOTAL CURBAL: {total_curbal:,.2f}")
             else:
                 print(f"TOTAL CURBAL: 0.00")
             print("-" * 50)
@@ -127,24 +124,15 @@ def process_text_file(input_filename, output_basename, deposit_path, output_path
         df.write_parquet(deposit_path / filename_parquet)
         print(f"Created {filename_parquet}")
         
-        # Convert to pandas and save as SAS
-        df_pd = df.to_pandas()
-        pyreadstat.write_sas7bdat(deposit_path / filename_sas, df_pd)
-        print(f"Created {filename_sas}")
-        
         return df
         
     except FileNotFoundError:
         print(f"NOTE: {input_filename} file not found, creating empty dataframe")
         empty_df = pl.DataFrame({'ACCTNO': [], 'CURBAL': []})
         
-        # Save empty dataframes
+        # Save empty dataframe
         empty_df.write_parquet(deposit_path / filename_parquet)
         print(f"Created empty {filename_parquet}")
-        
-        empty_pd = empty_df.to_pandas()
-        pyreadstat.write_sas7bdat(deposit_path / filename_sas, empty_pd)
-        print(f"Created empty {filename_sas}")
         
         return empty_df
     except Exception as e:
@@ -152,29 +140,36 @@ def process_text_file(input_filename, output_basename, deposit_path, output_path
         return pl.DataFrame({'ACCTNO': [], 'CURBAL': []})
 
 # Process PBB file
-print("\nProcessing PBB_ICL.txt...")
+print("\n" + "="*60)
+print("Processing PBB_ICL.txt...")
+print("="*60)
 pbb_df = process_text_file(
     "PBB_ICL.txt", 
     "ICLPBB", 
     deposit_path, 
-    output_path, 
     REPTMON, 
     REPTYEAR
 )
 
 # Process PIBB file
-print("\nProcessing PIBB_ICL.txt...")
+print("\n" + "="*60)
+print("Processing PIBB_ICL.txt...")
+print("="*60)
 pibb_df = process_text_file(
     "PIBB_ICL.txt", 
     "ICLPIBB", 
     deposit_path, 
-    output_path, 
     REPTMON, 
     REPTYEAR
 )
 
-print("\nPROCESSING COMPLETED SUCCESSFULLY")
-print(f"Output files saved to:")
-print(f"  - Parquet: {deposit_path}")
-print(f"  - SAS: {deposit_path}")
-print(f"  - Additional outputs: {output_path}")
+print("\n" + "="*60)
+print("PROCESSING COMPLETED SUCCESSFULLY")
+print("="*60)
+print(f"Output Parquet files saved to: {deposit_path}")
+print(f"Additional outputs saved to: {output_path}")
+print(f"\nFiles created:")
+print(f"  - {deposit_path}/ICLPBB{REPTMON}{REPTYEAR}.parquet")
+print(f"  - {deposit_path}/ICLPIBB{REPTMON}{REPTYEAR}.parquet")
+print(f"  - {output_path}/REPTDATE.parquet")
+print(f"  - {output_path}/REPTDATE.csv")
