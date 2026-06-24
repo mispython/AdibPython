@@ -442,10 +442,8 @@ with open(output_path / "report.txt", 'w') as f:
             obs_num += 1
         
         total = deb_summary.select(pl.col('IBGAMT').sum()).row(0)[0]
-        # Calculate how many asterisks needed (11 for 3-digit numbers, adjust based on total)
         total_str = f"{total:,.2f}"
-        asterisk_count = 11  # Standard width for 3-digit numbers
-        f.write(f"                                       {'*' * asterisk_count}=\n")
+        f.write(f"                                       {'=' * 11}\n")
         f.write(f"                                       {total_str:>15}\n")
     
     # Write second section header
@@ -471,8 +469,7 @@ with open(output_path / "report.txt", 'w') as f:
         
         total = nf_summary.select(pl.col('IBGAMT').sum()).row(0)[0]
         total_str = f"{total:,.2f}"
-        asterisk_count = 10  # Standard width for 2-digit numbers
-        f.write(f"                                       {'*' * asterisk_count}=\n")
+        f.write(f"                                       {'=' * 9}\n")
         f.write(f"                                       {total_str:>15}\n")
     
     # Write third section header
@@ -498,8 +495,7 @@ with open(output_path / "report.txt", 'w') as f:
         
         total = nd_summary.select(pl.col('BC/DD AMOUNT').sum()).row(0)[0]
         total_str = f"{total:,.2f}"
-        asterisk_count = 10  # Standard width for 2-digit numbers
-        f.write(f"                                       {'*' * asterisk_count}=\n")
+        f.write(f"                                       {'=' * 9}\n")
         f.write(f"                                       {total_str:>15}\n")
 
 print(f"Report generated: {output_path / 'report.txt'}")
