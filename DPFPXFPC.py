@@ -4,10 +4,67 @@ from pathlib import Path
 import datetime
 
 # Configuration
+unclaim_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQUCLM")
+mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/MNI")
 imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/IMNI")
-pidms_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/PIDMS")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIPCIFLO")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQUCLM")
 output_path.mkdir(exist_ok=True)
+
+# DATA REPTDATE (KEEP=REPTDATE);
+# REPTDATE=INPUT('01'||'01'||PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+today = datetime.date.today()
+date_string = f"0101{today.year}"  # Fixed '0101' + current year
+reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
+
+# SELECT(DAY(REPTDATE)); logic
+reptday = reptdate.day
+if reptday == 8:
+    SDD, WK, WK1 = 1, '1', '4'
+elif reptday == 15:
+    SDD, WK, WK1 = 9, '2', '1'
+elif reptday == 22:
+    SDD, WK, WK1 = 16, '3', '2'
+else:
+    SDD, WK, WK1, WK2, WK3 = 23, '4', '3', '2', '1'
+
+MM = reptdate.month
+
+# IF WK = '1' THEN DO;
+if WK == '1':
+    MM1 = MM - 1
+    if MM1 == 0:
+        MM1 = 12
+else:
+    MM1 = MM
+
+# MM2 = MM - 1;
+MM2 = MM - 1
+if MM2 == 0:
+    MM2 = 12
+
+SDATE = datetime.date(reptdate.year, MM, SDD)
+SDESC = 'PUBLIC BANK BERHAD'
+
+# CALL SYMPUT equivalent
+NOWK = WK
+REPTMON = f"{MM:02d}"
+REPTYEAR = str(reptdate.year)
+
+print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
+print(f"SDESC: {SDESC}")
+print(f"REPTDATE: {reptdate}")
+print(f"SDATE: {SDATE}")
+
+# Create REPTDATE DataFrame
+reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
+reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
+reptdate_df.write_csv(output_path / "REPTDATE.csv")
+
+# Initialize variables to avoid NameError
+unclaim_sorted = pl.DataFrame()
+nondebit_sorted = pl.DataFrame()
+unclaim_final = pl.DataFrame()
+dep_deduped = pl.DataFrame()
 
 def read_sas_dataset(filepath, columns=None):
     """
@@ -46,336 +103,385 @@ def read_sas_dataset(filepath, columns=None):
         print(f"Error reading {filepath}: {e}")
         return None, None
 
-# PROC SORT DATA=IMNI.FDMTHLY OUT=FDMTHLY;
+# DATA UNCLAIM NONDEBIT;
+# SET UNCLAIM.UNCLAIM&REPTYEAR UNCLAIM.NOTUNCLAIM&REPTYEAR;
+filename_unclaim = f"unclaim{REPTYEAR}.sas7bdat"
+filename_notunclaim = f"notunclaim{REPTYEAR}.sas7bdat"
+
+print(f"\nLoading SAS7BDAT files:")
+print(f"  UNCLAIM: {filename_unclaim}")
+print(f"  NOTUNCLAIM: {filename_notunclaim}")
+
+# Load UNCLAIM
 try:
-    fdmthly_df, meta = read_sas_dataset(imni_path / "fdmthly.sas7bdat", 
-                                         columns=['ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'])
-    if fdmthly_df is not None:
-        print(f"Loaded FDMTHLY with {len(fdmthly_df)} records")
-        fdmthly_sorted = fdmthly_df.sort('acctno')
-        fdmthly_sorted.write_parquet(output_path / "FDMTHLY_SORTED.parquet")
-        fdmthly_sorted.write_csv(output_path / "FDMTHLY_SORTED.txt")
-        print(f"Saved FDMTHLY_SORTED with {len(fdmthly_sorted)} records")
+    unclaim_df1, meta1 = read_sas_dataset(unclaim_path / filename_unclaim)
+    if unclaim_df1 is not None:
+        print(f"Loaded {filename_unclaim} with {len(unclaim_df1)} records")
+        print(f"Columns: {unclaim_df1.columns}")
+        print(f"Data types: {unclaim_df1.dtypes}")
     else:
-        fdmthly_df = pl.DataFrame()
-        print("NOTE: IMNI.FDMTHLY could not be loaded")
+        unclaim_df1 = pl.DataFrame()
+        print(f"NOTE: {filename_unclaim} could not be loaded")
 except FileNotFoundError:
-    print("NOTE: IMNI.FDMTHLY not found")
-    fdmthly_df = pl.DataFrame()
+    unclaim_df1 = pl.DataFrame()
+    print(f"NOTE: {filename_unclaim} not found")
 except Exception as e:
-    print(f"Error loading FDMTHLY: {e}")
-    fdmthly_df = pl.DataFrame()
+    unclaim_df1 = pl.DataFrame()
+    print(f"Error loading {filename_unclaim}: {e}")
 
-# DATA FDMTHLY; SET FDMTHLY; LEDGBAL = CURBAL;
-if not fdmthly_df.is_empty():
-    fdmthly_processed = fdmthly_df.with_columns([
-        pl.col('curbal').alias('ledgbal')
-    ])
-    fdmthly_processed.write_parquet(output_path / "FDMTHLY.parquet")
-    fdmthly_processed.write_csv(output_path / "FDMTHLY.txt")
-    print(f"Saved FDMTHLY with {len(fdmthly_processed)} records")
-else:
-    fdmthly_processed = pl.DataFrame()
-
-# DATA CURN; SET IMNI.CURN124;
+# Load NOTUNCLAIM
 try:
-    curn_df, meta = read_sas_dataset(imni_path / "curn124.sas7bdat")
-    if curn_df is not None:
-        print(f"Loaded CURN124 with {len(curn_df)} records")
-        # IF PRODUCT = 139 THEN DELETE;
-        curn_filtered = curn_df.filter(pl.col('product') != 139)
-        curn_filtered.write_parquet(output_path / "CURN.parquet")
-        curn_filtered.write_csv(output_path / "CURN.txt")
-        print(f"Saved CURN with {len(curn_filtered)} records (after filtering)")
+    unclaim_df2, meta2 = read_sas_dataset(unclaim_path / filename_notunclaim)
+    if unclaim_df2 is not None:
+        print(f"Loaded {filename_notunclaim} with {len(unclaim_df2)} records")
+        print(f"Columns: {unclaim_df2.columns}")
+        print(f"Data types: {unclaim_df2.dtypes}")
     else:
-        curn_filtered = pl.DataFrame()
-        print("NOTE: IMNI.CURN124 could not be loaded")
+        unclaim_df2 = pl.DataFrame()
+        print(f"NOTE: {filename_notunclaim} could not be loaded")
 except FileNotFoundError:
-    print("NOTE: IMNI.CURN124 not found")
-    curn_filtered = pl.DataFrame()
+    unclaim_df2 = pl.DataFrame()
+    print(f"NOTE: {filename_notunclaim} not found")
 except Exception as e:
-    print(f"Error loading CURN124: {e}")
-    curn_filtered = pl.DataFrame()
+    unclaim_df2 = pl.DataFrame()
+    print(f"Error loading {filename_notunclaim}: {e}")
 
-# DATA DEPOSIT; SET multiple datasets;
-datasets_to_combine = []
-
-# IMNI.SAVG124
-try:
-    savg_df, meta = read_sas_dataset(imni_path / "savg124.sas7bdat", 
-                                      columns=['ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH'])
-    if savg_df is not None:
-        print(f"Loaded SAVG124 with {len(savg_df)} records")
-        datasets_to_combine.append(savg_df)
-    else:
-        print("NOTE: IMNI.SAVG124 could not be loaded")
-except FileNotFoundError:
-    print("NOTE: IMNI.SAVG124 not found")
-except Exception as e:
-    print(f"Error loading SAVG124: {e}")
-
-# CURN
-if not curn_filtered.is_empty():
-    curn_selected = curn_filtered.select([
-        'acctno', 'product', 'curbal', 'ledgbal', 'prodcd', 'amtind', 'intpaybl', 'branch'
-    ])
-    datasets_to_combine.append(curn_selected)
-    print(f"Added CURN with {len(curn_selected)} records")
-
-# FDMTHLY with renames
-if not fdmthly_processed.is_empty():
-    fdmthly_renamed = fdmthly_processed.with_columns([
-        pl.col('intplan').alias('product'),
-        pl.col('bic').alias('prodcd'),
-        pl.col('intpay').alias('intpaybl')
-    ]).select([
-        'acctno', 'branch', 'curbal', 'ledgbal', 'amtind',
-        'product', 'prodcd', 'intpaybl'
-    ])
-    datasets_to_combine.append(fdmthly_renamed)
-    print(f"Added FDMTHLY with {len(fdmthly_renamed)} records")
-
-# Combine all datasets and apply filters
-if datasets_to_combine:
-    deposit_combined = pl.concat(datasets_to_combine, how="diagonal")
-    print(f"Combined DEPOSIT dataset has {len(deposit_combined)} records")
+# Combine both datasets
+if not unclaim_df1.is_empty() or not unclaim_df2.is_empty():
+    # Combine the dataframes
+    dfs_to_concat = []
+    if not unclaim_df1.is_empty():
+        dfs_to_concat.append(unclaim_df1)
+    if not unclaim_df2.is_empty():
+        dfs_to_concat.append(unclaim_df2)
     
-    # Apply filters and transformations (Islamic version)
-    valid_prodcd = [
-        '42110', '42310', '42120', '42320', '42130', '42610',
-        '42133', '42132', '42180', '42199', '42699'
-    ]
-    
-    deposit_filtered = deposit_combined.filter(
-        pl.col('prodcd').is_in(valid_prodcd)
-    ).with_columns([
-        # IF PRODUCT = 166 THEN PRODCD = '42310';
-        pl.when(pl.col('product') == 166)
-        .then(pl.lit('42310'))
-        .otherwise(pl.col('prodcd'))
-        .alias('prodcd')
-    ]).filter(
-        # IF PRODCD IN ('42199','42699') AND PRODUCT NOT IN (72,413) THEN DELETE;
-        ~(
-            pl.col('prodcd').is_in(['42199', '42699']) & 
-            ~pl.col('product').is_in([72, 413])
-        )
-    ).with_columns([
-        # IF INTPAYBL < 0 THEN INTPAYBL = 0;
-        pl.when(pl.col('intpaybl') < 0)
-        .then(0)
-        .otherwise(pl.col('intpaybl'))
-        .alias('intpaybl')
-    ])
-    
-    deposit_filtered.write_parquet(output_path / "DEPOSIT.parquet")
-    deposit_filtered.write_csv(output_path / "DEPOSIT.txt")
-    print(f"DEPOSIT records after filtering: {len(deposit_filtered)}")
-else:
-    deposit_filtered = pl.DataFrame()
-    print("No DEPOSIT data created")
-
-# DATA FLOAT; SET PIDMS.FLOAT;
-try:
-    float_df, meta = read_sas_dataset(pidms_path / "float.sas7bdat")
-    if float_df is not None:
-        print(f"Loaded FLOAT with {len(float_df)} records")
-        float_df.write_parquet(output_path / "FLOAT.parquet")
-        float_df.write_csv(output_path / "FLOAT.txt")
-        print(f"Saved FLOAT with {len(float_df)} records")
-    else:
-        float_df = pl.DataFrame()
-        print("NOTE: PIDMS.FLOAT could not be loaded")
-except FileNotFoundError:
-    print("NOTE: PIDMS.FLOAT not found")
-    float_df = pl.DataFrame()
-except Exception as e:
-    print(f"Error loading FLOAT: {e}")
-    float_df = pl.DataFrame()
-
-# PROC SUMMARY DATA=FLOAT NWAY; CLASS ACCTNO; VAR FLOAT; OUTPUT OUT=FLOAT SUM=;
-if not float_df.is_empty():
-    float_summary = float_df.group_by('acctno').agg([
-        pl.col('float').sum().alias('float')
-    ])
-    float_summary.write_parquet(output_path / "FLOAT_SUMMARY.parquet")
-    float_summary.write_csv(output_path / "FLOAT_SUMMARY.txt")
-    print(f"FLOAT summary records: {len(float_summary)}")
-else:
-    float_summary = pl.DataFrame()
-    print("No FLOAT data for summary")
-
-# PROC SORT DATA=DEPOSIT; BY ACCTNO;
-if not deposit_filtered.is_empty() and not float_summary.is_empty():
-    deposit_sorted = deposit_filtered.sort('acctno')
-    
-    # DATA DEPOSIT EXCEPT; MERGE DEPOSIT(IN=A) FLOAT(IN=B); BY ACCTNO;
-    # Use right join to match SAS MERGE behavior (keep all from FLOAT that match DEPOSIT)
-    deposit_merged = deposit_sorted.join(
-        float_summary, on='acctno', how='right', suffix='_float'
-    )
-    print(f"Merged DEPOSIT with FLOAT: {len(deposit_merged)} records")
-    
-    # Apply transformations - EXACTLY matching SAS logic
-    # Step 1: Adjust CURBAL (if negative, set to 0)
-    deposit_processed = deposit_merged.with_columns([
-        pl.when(pl.col('curbal') < 0)
-        .then(0)
-        .otherwise(pl.col('curbal'))
-        .alias('curbal')
-    ])
-    
-    # Step 2: Set FLOATORI = CURBAL (after CURBAL adjustment)
-    deposit_processed = deposit_processed.with_columns([
-        pl.col('curbal').alias('floatori')
-    ])
-    
-    # Step 3: Calculate AVBAL = CURBAL - FLOAT
-    deposit_processed = deposit_processed.with_columns([
-        (pl.col('curbal') - pl.col('float')).alias('avbal')
-    ])
-    
-    # Step 4: IF AVBAL < 0 THEN DO; FLOAT = CURBAL; AVBAL = 0; END;
-    # Use struct to handle conditional assignment
-    deposit_processed = deposit_processed.with_columns([
-        pl.when(pl.col('avbal') < 0)
-        .then(pl.struct([
-            pl.col('curbal').alias('new_float'),
-            pl.lit(0).alias('new_avbal')
-        ]))
-        .otherwise(pl.struct([
-            pl.col('float').alias('new_float'),
-            pl.col('avbal').alias('new_avbal')
-        ]))
-        .alias('adjusted')
-    ])
-    
-    # Step 5: Extract adjusted values and calculate MINUSFLOAT, AVBALTT, CURBALTT
-    # Use struct.field() to extract values from the struct
-    deposit_processed = deposit_processed.with_columns([
-        # FLOAT = adjusted FLOAT (extract from struct)
-        pl.col('adjusted').struct.field('new_float').alias('float'),
-        # AVBAL = adjusted AVBAL (extract from struct)
-        pl.col('adjusted').struct.field('new_avbal').alias('avbal'),
-        # MINUSFLOAT = CURBAL - adjusted FLOAT
-        (pl.col('curbal') - pl.col('adjusted').struct.field('new_float')).alias('minusfloat'),
-        # AVBALTT = AVBAL + INTPAYBL
-        (pl.col('adjusted').struct.field('new_avbal') + pl.col('intpaybl')).alias('avbaltt'),
-        # CURBALTT = CURBAL + INTPAYBL
-        (pl.col('curbal') + pl.col('intpaybl')).alias('curbaltt')
-    ])
-    
-    # Drop the temporary struct column
-    deposit_processed = deposit_processed.drop(['adjusted'])
-    
-    # Split into DEPOSIT and EXCEPT based on conditions
-    # IF A AND B THEN OUTPUT DEPOSIT (both exist)
-    deposit_final = deposit_processed.filter(
-        pl.col('curbal').is_not_null() & 
-        pl.col('product').is_not_null() & 
-        pl.col('float').is_not_null()
-    )
-    
-    # IF B AND NOT A THEN OUTPUT EXCEPT (float exists but deposit doesn't)
-    except_df = deposit_processed.filter(
-        pl.col('float').is_not_null() & 
-        (pl.col('curbal').is_null() | pl.col('product').is_null())
-    )
-    
-    # Save outputs
-    deposit_final.write_parquet(output_path / "DEPOSIT_FINAL.parquet")
-    deposit_final.write_csv(output_path / "DEPOSIT_FINAL.txt")
-    
-    except_df.write_parquet(output_path / "EXCEPT.parquet")
-    except_df.write_csv(output_path / "EXCEPT.txt")
-    
-    print(f"DEPOSIT final records: {len(deposit_final)}")
-    print(f"EXCEPT records: {len(except_df)}")
-    
-    # PROC SUMMARY DATA=DEPOSIT NWAY MISSING; CLASS BRANCH;
-    if not deposit_final.is_empty():
-        # Create summary with _TYPE_ and _FREQ_ to match SAS output
-        summary = deposit_final.group_by('branch').agg([
-            pl.len().alias('_FREQ_'),
-            pl.col('float').sum().alias('float'),
-            pl.col('minusfloat').sum().alias('minusfloat'),
-            pl.col('floatori').sum().alias('floatori')
-        ]).with_columns([
-            pl.lit(1).alias('_TYPE_')  # 1 = observation level summary
-        ]).select([
-            'branch', '_TYPE_', '_FREQ_', 'float', 'minusfloat', 'floatori'
+    if dfs_to_concat:
+        combined_unclaim = pl.concat(dfs_to_concat, how="diagonal")
+        print(f"Combined dataset has {len(combined_unclaim)} records")
+        
+        # Ensure PAYMODE is string type for string operations
+        if 'paymode' in combined_unclaim.columns:
+            if combined_unclaim['paymode'].dtype != pl.Utf8:
+                combined_unclaim = combined_unclaim.with_columns([
+                    pl.col('paymode').cast(pl.Utf8)
+                ])
+        
+        # Ensure ACCTNO is numeric for later joins
+        if 'acctno' in combined_unclaim.columns:
+            if combined_unclaim['acctno'].dtype not in [pl.Int64, pl.Float64]:
+                combined_unclaim = combined_unclaim.with_columns([
+                    pl.col('acctno').cast(pl.Float64)
+                ])
+        
+        # CATEGORY assignments
+        unclaim_with_category = combined_unclaim.with_columns([
+            pl.when(pl.col('paymode').str.slice(0, 1).is_in(['4', '6']))
+            .then(pl.lit('SA'))
+            .when(pl.col('paymode').str.slice(0, 1).is_in(['3']))
+            .then(pl.lit('CA'))
+            .when(pl.col('paymode').str.slice(0, 1).is_in(['1', '7']))
+            .then(pl.lit('FD'))
+            .otherwise(pl.lit('OTHER'))
+            .alias('category')
         ])
         
-        # Sort by branch and convert branch to integer (remove decimals)
-        summary = summary.with_columns([
-            pl.col('branch').cast(pl.Int64).alias('branch')
-        ]).sort('branch')
+        # Split into UNCLAIM and NONDEBIT based on PAYMODE
+        valid_paymodes = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
         
-        summary.write_parquet(output_path / "XXX.parquet")
-        summary.write_csv(output_path / "XXX.txt")
+        unclaim_valid = unclaim_with_category.filter(
+            pl.col('paymode').str.slice(0, 1).is_in(valid_paymodes)
+        )
         
-        # PROC PRINT DATA=XXX; SUM FLOAT MINUSFLOAT FLOATORI;
-        print("\n" + " " * 60 + "The SAS System")
-        print(" " * 70 + "SUMMARY BY BRANCH (ISLAMIC)")
-        print()
-        print(" " + "-"*100)
-        print(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}")
-        print(" " + "-"*100)
+        nondebit_invalid = unclaim_with_category.filter(
+            ~pl.col('paymode').str.slice(0, 1).is_in(valid_paymodes)
+        )
         
-        # Format each row
-        for idx, row in enumerate(summary.iter_rows(), 1):
-            branch = int(row[0])  # Convert to integer to remove decimal
-            type_val = row[1]
-            freq = row[2]
-            float_val = row[3]
-            minusfloat_val = row[4]
-            floatori_val = row[5]
+        print(f"UNCLAIM records: {len(unclaim_valid)}")
+        print(f"NONDEBIT records: {len(nondebit_invalid)}")
+        
+        # PROC SORT DATA=UNCLAIM; BY PAYMODE;
+        if not unclaim_valid.is_empty():
+            unclaim_sorted = unclaim_valid.sort('paymode')
+            unclaim_sorted.write_parquet(output_path / "UNCLAIM.parquet")
+            unclaim_sorted.write_csv(output_path / "UNCLAIM.csv")
+            print(f"Saved UNCLAIM with {len(unclaim_sorted)} records")
+        
+        # PROC SORT DATA=NONDEBIT; BY PAYMODE;
+        if not nondebit_invalid.is_empty():
+            nondebit_sorted = nondebit_invalid.sort('paymode')
+            nondebit_sorted.write_parquet(output_path / "NONDEBIT.parquet")
+            nondebit_sorted.write_csv(output_path / "NONDEBIT.csv")
+            print(f"Saved NONDEBIT with {len(nondebit_sorted)} records")
+        
+        # PROC SUMMARY DATA=UNCLAIM; BY PAYMODE; VAR LEDGBAL;
+        if not unclaim_sorted.is_empty():
+            unclaim_summary = unclaim_sorted.group_by('paymode').agg([
+                pl.col('ledgbal').sum().alias('ledgbal_sum')
+            ])
             
-            print(f"{idx:4} {branch:8} {type_val:8} {freq:10} {float_val:18,.2f} {minusfloat_val:20,.2f} {floatori_val:18,.2f}")
-        
-        print(" " + "-"*100)
-        
-        # Calculate totals
-        total_float = summary.select(pl.col('float').sum()).row(0)[0]
-        total_minusfloat = summary.select(pl.col('minusfloat').sum()).row(0)[0]
-        total_floatori = summary.select(pl.col('floatori').sum()).row(0)[0]
-        
-        # Print totals with proper spacing (no commas, right-aligned)
-        print(f"{'':>4} {'':>8} {'':>8} {'':>10} {total_float:18,.2f} {total_minusfloat:20,.2f} {total_floatori:18,.2f}")
-        print(" " + "="*100)
-        
-        # Save the formatted summary to a text file
-        with open(output_path / "XXX_FORMATTED.txt", 'w') as f:
-            f.write("\n" + " " * 60 + "The SAS System\n")
-            f.write(" " * 70 + "SUMMARY BY BRANCH (ISLAMIC)\n\n")
-            f.write(" " + "-"*100 + "\n")
-            f.write(f"{'OBS':>4} {'BRANCH':>8} {'_TYPE_':>8} {'_FREQ_':>10} {'FLOAT':>18} {'MINUSFLOAT':>20} {'FLOATORI':>18}\n")
-            f.write(" " + "-"*100 + "\n")
+            # OUTPUT OUT=UNCLAIMX(DROP=_FREQ_ _TYPE_) SUM=;
+            unclaim_summary_clean = unclaim_summary.rename({'ledgbal_sum': 'ledgbal'})
             
-            for idx, row in enumerate(summary.iter_rows(), 1):
-                branch = int(row[0])
-                type_val = row[1]
-                freq = row[2]
-                float_val = row[3]
-                minusfloat_val = row[4]
-                floatori_val = row[5]
-                
-                f.write(f"{idx:4} {branch:8} {type_val:8} {freq:10} {float_val:18,.2f} {minusfloat_val:20,.2f} {floatori_val:18,.2f}\n")
+            # DATA UNCLAIM; MERGE UNCLAIMX(IN=A) UNCLAIM (IN=B DROP=LEDGBAL);
+            unclaim_deduped = unclaim_sorted.unique(subset=['paymode']).drop('ledgbal')
+            unclaim_merged = unclaim_deduped.join(unclaim_summary_clean, on='paymode', how='inner')
             
-            f.write(" " + "-"*100 + "\n")
-            f.write(f"{'':>4} {'':>8} {'':>8} {'':>10} {total_float:18,.2f} {total_minusfloat:20,.2f} {total_floatori:18,.2f}\n")
-            f.write(" " + "="*100 + "\n")
-        
-        print(f"\nFormatted summary saved to: {output_path / 'XXX_FORMATTED.txt'}")
-        
+            # PROC SORT DATA=UNCLAIM NODUPKEYS; BY PAYMODE;
+            unclaim_final = unclaim_merged.unique(subset=['paymode'])
+            unclaim_final.write_parquet(output_path / "UNCLAIM_FINAL.parquet")
+            unclaim_final.write_csv(output_path / "UNCLAIM_FINAL.csv")
+            print(f"Saved UNCLAIM_FINAL with {len(unclaim_final)} records")
     else:
-        print("No DEPOSIT data for summary")
-        
+        print("No data to combine")
 else:
-    if deposit_filtered.is_empty():
-        print("No DEPOSIT data for processing")
+    print("No UNCLAIM or NOTUNCLAIM data found")
+
+# Load additional datasets (SAS7BDAT format)
+savg_filename = f"savg{REPTMON}{NOWK}.sas7bdat"
+curn_filename = f"curn{REPTMON}{NOWK}.sas7bdat"
+isavg_filename = f"savg{REPTMON}{NOWK}.sas7bdat"  # Note: ISAVG uses same filename pattern
+icurn_filename = f"curn{REPTMON}{NOWK}.sas7bdat"  # Note: ICURN uses same filename pattern
+
+print(f"\nLooking for SAS7BDAT files:")
+print(f"  SAVG: {savg_filename}")
+print(f"  CURN: {curn_filename}")
+print(f"  ISAVG: {isavg_filename}")
+print(f"  ICURN: {icurn_filename}")
+
+datasets = []
+
+# Load SAVG
+try:
+    savg_df, meta = read_sas_dataset(mni_path / savg_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if savg_df is not None:
+        # Convert column names to lowercase and ensure ACCTNO is float
+        savg_df = savg_df.rename({col: col.lower() for col in savg_df.columns})
+        if 'acctno' in savg_df.columns:
+            savg_df = savg_df.with_columns([
+                pl.col('acctno').cast(pl.Float64)
+            ])
+        datasets.append(savg_df)
+        print(f"Loaded {savg_filename} with {len(savg_df)} records")
     else:
-        print("No FLOAT data for merging")
+        print(f"NOTE: {savg_filename} could not be loaded")
+except FileNotFoundError:
+    print(f"NOTE: {savg_filename} not found")
+except Exception as e:
+    print(f"Error loading {savg_filename}: {e}")
+
+# Load CURN
+try:
+    curn_df, meta = read_sas_dataset(mni_path / curn_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if curn_df is not None:
+        curn_df = curn_df.rename({col: col.lower() for col in curn_df.columns})
+        if 'acctno' in curn_df.columns:
+            curn_df = curn_df.with_columns([
+                pl.col('acctno').cast(pl.Float64)
+            ])
+        datasets.append(curn_df)
+        print(f"Loaded {curn_filename} with {len(curn_df)} records")
+    else:
+        print(f"NOTE: {curn_filename} could not be loaded")
+except FileNotFoundError:
+    print(f"NOTE: {curn_filename} not found")
+except Exception as e:
+    print(f"Error loading {curn_filename}: {e}")
+
+# Load ISAVG
+try:
+    isavg_df, meta = read_sas_dataset(imni_path / isavg_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if isavg_df is not None:
+        isavg_df = isavg_df.rename({col: col.lower() for col in isavg_df.columns})
+        if 'acctno' in isavg_df.columns:
+            isavg_df = isavg_df.with_columns([
+                pl.col('acctno').cast(pl.Float64)
+            ])
+        datasets.append(isavg_df)
+        print(f"Loaded {isavg_filename} with {len(isavg_df)} records")
+    else:
+        print(f"NOTE: {isavg_filename} could not be loaded")
+except FileNotFoundError:
+    print(f"NOTE: {isavg_filename} not found")
+except Exception as e:
+    print(f"Error loading {isavg_filename}: {e}")
+
+# Load ICURN
+try:
+    icurn_df, meta = read_sas_dataset(imni_path / icurn_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if icurn_df is not None:
+        icurn_df = icurn_df.rename({col: col.lower() for col in icurn_df.columns})
+        if 'acctno' in icurn_df.columns:
+            icurn_df = icurn_df.with_columns([
+                pl.col('acctno').cast(pl.Float64)
+            ])
+        datasets.append(icurn_df)
+        print(f"Loaded {icurn_filename} with {len(icurn_df)} records")
+    else:
+        print(f"NOTE: {icurn_filename} could not be loaded")
+except FileNotFoundError:
+    print(f"NOTE: {icurn_filename} not found")
+except Exception as e:
+    print(f"Error loading {icurn_filename}: {e}")
+
+# DATA DEP; SET all datasets;
+if datasets:
+    dep_df = pl.concat(datasets, how="diagonal")
+    print(f"Combined DEP dataset has {len(dep_df)} records")
+    
+    # IF PRODCD IN specified values;
+    valid_prodcd = ['42110', '42310', '42120', '42320', '42130', '42132', '42180', '42199', '42699']
+    dep_filtered = dep_df.filter(pl.col('prodcd').is_in(valid_prodcd))
+    print(f"After filtering PRODCD: {len(dep_filtered)} records")
+    
+    # PROC SORT DATA=DEP NODUPKEYS; BY ACCTNO;
+    dep_deduped = dep_filtered.unique(subset=['acctno'])
+    # Ensure ACCTNO is float for consistency
+    dep_deduped = dep_deduped.with_columns([
+        pl.col('acctno').cast(pl.Float64)
+    ])
+    dep_deduped.write_parquet(output_path / "DEP.parquet")
+    dep_deduped.write_csv(output_path / "DEP.csv")
+    print(f"Saved DEP with {len(dep_deduped)} records")
+else:
+    dep_deduped = pl.DataFrame()
+    print("No DEP datasets loaded")
+
+# DATA UNCLAIM; SET UNCLAIM(DROP=ACCTNO); FORMAT ACCTNO 10.; ACCTNO = PAYMODE;
+if not unclaim_final.is_empty():
+    # Ensure paymode is numeric and consistent type
+    unclaim_for_merge = unclaim_final.drop('acctno').with_columns([
+        pl.col('paymode').cast(pl.Float64).alias('acctno')
+    ])
+    print(f"UNCLAIM for merge has {len(unclaim_for_merge)} records")
+    print(f"UNCLAIM acctno type: {unclaim_for_merge['acctno'].dtype}")
+    
+    # DATA DEP; MERGE DEP(IN=A) UNCLAIM(IN=B);
+    if not dep_deduped.is_empty():
+        # Ensure both have same type for ACCTNO
+        dep_deduped = dep_deduped.with_columns([
+            pl.col('acctno').cast(pl.Float64)
+        ])
+        
+        dep_merged = dep_deduped.join(unclaim_for_merge, on='acctno', how='right', suffix='_unclaim')
+        print(f"Merged dataset has {len(dep_merged)} records")
+        
+        # BC assignment logic
+        dep_with_bc = dep_merged.with_columns([
+            pl.when(pl.col('prodcd').is_not_null() & pl.col('ledgbal').is_not_null())
+            .then(pl.lit('DEBITTED'))
+            .otherwise(pl.lit('NOT_FOUND'))
+            .alias('bc')
+        ]).filter(pl.col('ledgbal').is_not_null())  # IF B THEN OUTPUT;
+        print(f"After BC assignment: {len(dep_with_bc)} records")
+    else:
+        dep_with_bc = unclaim_for_merge.with_columns([
+            pl.lit('NOT_FOUND').alias('bc'),
+            pl.lit(None).cast(pl.Utf8).alias('prodcd'),
+            pl.lit(None).cast(pl.Float64).alias('costctr')
+        ])
+        print(f"Using UNCLAIM only: {len(dep_with_bc)} records")
+    
+    # PROC SORT DATA=DEP; BY CATEGORY;
+    if not dep_with_bc.is_empty():
+        dep_sorted = dep_with_bc.sort('category')
+        dep_sorted.write_parquet(output_path / "DEP_FINAL.parquet")
+        dep_sorted.write_csv(output_path / "DEP_FINAL.csv")
+        print(f"Saved DEP_FINAL with {len(dep_sorted)} records")
+        
+        # TITLE1 'BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)';
+        print("\n" + "="*80)
+        print("BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)")
+        print("="*80)
+        
+        # WHERE BC = 'DEBITTED';
+        debitted_filtered = dep_sorted.filter(pl.col('bc') == 'DEBITTED')
+        
+        if not debitted_filtered.is_empty():
+            # PROC SUMMARY DATA=DEP NWAY MISSING; CLASS CATEGORY; VAR LEDGBAL;
+            debitted_summary = debitted_filtered.group_by('category').agg([
+                pl.col('ledgbal').sum().alias('ledgbal')
+            ])
+            
+            # PROC PRINT DATA=XXX LABEL; LABEL LEDGBAL = 'BC/DD AMOUNT'; SUM LEDGBAL;
+            print("\nBC/DD AMOUNT by Category (DEBITTED):")
+            print(debitted_summary)
+            total = debitted_summary.select(pl.col('ledgbal').sum()).row(0)[0]
+            print(f"\nTOTAL BC/DD AMOUNT: {total:,.2f}")
+            
+            # Save summary
+            debitted_summary.write_csv(output_path / "DEBITTED_Summary.csv")
+        else:
+            print("No debitted records found")
+        
+        print("\n" + "="*80)
+        
+        # TITLE1 'BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)';
+        print("BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)")
+        print("="*80)
+        
+        # WHERE BC = 'NOT_FOUND';
+        notfound_filtered = dep_sorted.filter(pl.col('bc') == 'NOT_FOUND')
+        
+        if not notfound_filtered.is_empty():
+            # PROC SUMMARY DATA=DEP NWAY MISSING; CLASS CATEGORY; VAR LEDGBAL;
+            notfound_summary = notfound_filtered.group_by('category').agg([
+                pl.col('ledgbal').sum().alias('ledgbal')
+            ])
+            
+            # PROC PRINT DATA=XXX LABEL; LABEL LEDGBAL = 'BC/DD AMOUNT'; SUM LEDGBAL;
+            print("\nBC/DD AMOUNT by Category (NOT FOUND):")
+            print(notfound_summary)
+            total = notfound_summary.select(pl.col('ledgbal').sum()).row(0)[0]
+            print(f"\nTOTAL BC/DD AMOUNT: {total:,.2f}")
+            
+            # Save summary
+            notfound_summary.write_csv(output_path / "NOTFOUND_Summary.csv")
+        else:
+            print("No not-found records found")
+    else:
+        print("No data in dep_sorted")
+else:
+    print("No UNCLAIM_FINAL data available for processing")
+
+# DATA NONDEBIT; SET NONDEBIT; BC = 'NON_DEBIT'; ACCTNO = PAYMODE;
+if not nondebit_sorted.is_empty():
+    # For NONDEBIT, keep paymode as string (since it contains non-numeric values)
+    # Use acctno from the original dataset instead of paymode
+    nondebit_processed = nondebit_sorted.with_columns([
+        pl.lit('NON_DEBIT').alias('bc'),
+        pl.col('acctno')  # Keep the original acctno as is
+    ])
+    
+    # Ensure acctno is float for consistency
+    if 'acctno' in nondebit_processed.columns:
+        nondebit_processed = nondebit_processed.with_columns([
+            pl.col('acctno').cast(pl.Float64)
+        ])
+    
+    nondebit_processed.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
+    nondebit_processed.write_csv(output_path / "NONDEBIT_PROCESSED.csv")
+    print(f"Saved NONDEBIT_PROCESSED with {len(nondebit_processed)} records")
+    
+    print("\n" + "="*80)
+    # TITLE1 'BANKERS CHEQUE WITH NON-DEBITTED A/C';
+    print("BANKERS CHEQUE WITH NON-DEBITTED A/C")
+    print("="*80)
+    
+    # PROC SUMMARY DATA=NONDEBIT NWAY MISSING; CLASS CATEGORY; VAR LEDGBAL;
+    nondebit_summary = nondebit_processed.group_by('category').agg([
+        pl.col('ledgbal').sum().alias('ledgbal')
+    ])
+    
+    # PROC PRINT DATA=XXX LABEL; LABEL LEDGBAL = 'BC/DD AMOUNT'; SUM LEDGBAL;
+    print("\nBC/DD AMOUNT by Category (NON-DEBITTED):")
+    print(nondebit_summary)
+    total = nondebit_summary.select(pl.col('ledgbal').sum()).row(0)[0]
+    print(f"\nTOTAL BC/DD AMOUNT: {total:,.2f}")
+    
+    # Save summary
+    nondebit_summary.write_csv(output_path / "NONDEBIT_Summary.csv")
+else:
+    print("No NONDEBIT data available for processing")
 
 print("\n" + "="*80)
 print(f"All output files saved to: {output_path}")
