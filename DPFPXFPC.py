@@ -152,44 +152,66 @@ dep_sorted = dep_with_bc.sort('category') if not dep_with_bc.is_empty() else pl.
 dep_sorted.write_parquet(output_path / "DEP_FINAL.parquet")
 print(f"DEP_FINAL records: {len(dep_sorted)}")
 
-# Generate reports
-def print_summary_report(title, data, label="BC/DD AMOUNT"):
-    """Generate summary report in required format"""
-    print(f"\n{title}")
-    print("="*80)
-    print(f"{'CATEGORY':<10} {'_TYPE_':<10} {'_FREQ_':<10} {label:<15}")
-    print("-"*45)
+# Generate reports and save to TXT files
+def print_and_save_summary_report(title, filename, data, label="BC/DD AMOUNT"):
+    """Generate summary report in required format and save to TXT file"""
+    
+    # Prepare the report content
+    lines = []
+    lines.append(f"\n{title}")
+    lines.append("="*80)
+    lines.append(f"{'CATEGORY':<10} {'_TYPE_':<10} {'_FREQ_':<10} {label:<15}")
+    lines.append("-"*45)
     
     if data.is_empty():
-        print("No data available")
-        return
+        lines.append("No data available")
+        total_amount = 0
+    else:
+        summary = data.group_by('category').agg([
+            pl.count().alias('_FREQ_'),
+            pl.col('ledgbal').sum().alias('ledgbal')
+        ]).with_columns(pl.lit(1).alias('_TYPE_'))
+        
+        total_amount = 0
+        for row in summary.rows():
+            cat, freq, amount, type_val = row
+            lines.append(f"{cat if cat else '':<10} {type_val:<10} {freq:<10} {amount:>15,.2f}")
+            total_amount += amount
     
-    summary = data.group_by('category').agg([
-        pl.count().alias('_FREQ_'),
-        pl.col('ledgbal').sum().alias('ledgbal')
-    ]).with_columns(pl.lit(1).alias('_TYPE_'))
+    lines.append("-"*45)
+    lines.append(f"{'TOTAL':<10} {'':<10} {'':<10} {total_amount:>15,.2f}")
+    lines.append("="*80)
     
-    total_amount = 0
-    for row in summary.rows():
-        cat, freq, amount, type_val = row
-        print(f"{cat if cat else '':<10} {type_val:<10} {freq:<10} {amount:>15,.2f}")
-        total_amount += amount
+    # Print to console
+    for line in lines:
+        print(line)
     
-    print("-"*45)
-    print(f"{'TOTAL':<10} {'':<10} {'':<10} {total_amount:>15,.2f}")
-    print("="*80)
+    # Save to TXT file
+    with open(output_path / filename, 'w') as f:
+        for line in lines:
+            f.write(line + '\n')
     
-    return summary
+    print(f"Report saved to: {output_path / filename}")
+    
+    return summary if not data.is_empty() else pl.DataFrame()
 
 # Report 1: DEBITTED
 debitted = dep_sorted.filter(pl.col('bc') == 'DEBITTED')
 if not debitted.is_empty():
-    print_summary_report("BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)", debitted)
+    print_and_save_summary_report(
+        "BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)", 
+        "DEBITTED_Summary.txt", 
+        debitted
+    )
 
 # Report 2: NOT FOUND
 notfound = dep_sorted.filter(pl.col('bc') == 'NOT_FOUND')
 if not notfound.is_empty():
-    print_summary_report("BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)", notfound)
+    print_and_save_summary_report(
+        "BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)", 
+        "NOTFOUND_Summary.txt", 
+        notfound
+    )
 
 # Report 3: NON-DEBITTED
 if not nondebit.is_empty():
@@ -197,7 +219,11 @@ if not nondebit.is_empty():
         pl.lit('NON_DEBIT').alias('bc'),
         pl.col('acctno').cast(pl.Float64)
     ])
-    print_summary_report("BANKERS CHEQUE WITH NON-DEBITTED A/C", nondebit_processed)
+    print_and_save_summary_report(
+        "BANKERS CHEQUE WITH NON-DEBITTED A/C", 
+        "NONDEBIT_Summary.txt", 
+        nondebit_processed
+    )
 
 # Save processing summary
 with open(output_path / "PROCESSING_SUMMARY.txt", 'w') as f:
