@@ -2,6 +2,8 @@ import polars as pl
 import duckdb
 from pathlib import Path
 import datetime
+import pandas as pd
+import pyreadstat
 
 # Configuration
 deposit_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/ICL_SASDATA")
@@ -56,84 +58,122 @@ reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
 reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
 reptdate_df.write_csv(output_path / "REPTDATE.csv")
 
-# DATA DEPOSIT.ICLPBB&REPTMON&REPTYEAR;
-# INFILE PBB;
-filename_pbb = f"ICLPBB{REPTMON}{REPTYEAR}.parquet"
-try:
-    # Read PBB file (assuming fixed-width format)
-    pbb_df = pl.read_csv("PBB", 
-                        has_header=False,
-                        new_columns=['raw_line'])
-    
-    # Parse fixed-width format: @001 ACCTNO 10., @012 CURBAL 10.
-    pbb_parsed = pbb_df.with_columns([
-        pl.col('raw_line').str.slice(0, 10).str.strip().cast(pl.Int64).alias('ACCTNO'),
-        pl.col('raw_line').str.slice(11, 10).str.strip().cast(pl.Float64).alias('CURBAL')
-    ]).drop('raw_line')
-    
-    # IF ACCTNO = . THEN DELETE;
-    pbb_filtered = pbb_parsed.filter(pl.col('ACCTNO').is_not_null())
-    
-    # Save to DEPOSIT path
-    pbb_filtered.write_parquet(deposit_path / filename_pbb)
-    print(f"Created {filename_pbb}")
-    
-except FileNotFoundError:
-    print("NOTE: PBB file not found, creating empty dataframe")
-    pbb_filtered = pl.DataFrame({'ACCTNO': [], 'CURBAL': []})
+# Convert to pandas for SAS export
+reptdate_pd = reptdate_df.to_pandas()
+pyreadstat.write_sas7bdat(reptdate_pd, output_path / "REPTDATE.sas7bdat")
 
-# PROC SORT DATA=DEPOSIT.ICLPBB&REPTMON&REPTYEAR NODUPKEYS; BY ACCTNO;
-if not pbb_filtered.is_empty():
-    pbb_sorted = pbb_filtered.unique(subset=['ACCTNO']).sort('ACCTNO')
-    pbb_sorted.write_parquet(deposit_path / filename_pbb)
+# Function to process text files and output to SAS and Parquet
+def process_text_file(input_filename, output_basename, deposit_path, output_path, reptmon, repyear):
+    """
+    Process fixed-width text file and output to SAS and Parquet formats
+    """
+    filename_parquet = f"{output_basename}{reptmon}{repyear}.parquet"
+    filename_sas = f"{output_basename}{reptmon}{repyear}.sas7bdat"
     
-    # PROC PRINT; SUM CURBAL;
-    print("PBB DATA SUMMARY:")
-    print(pbb_sorted)
-    total_curbal = pbb_sorted.select(pl.col('CURBAL').sum()).row(0)[0]
-    print(f"TOTAL CURBAL: {total_curbal:.2f}")
-    print("-" * 50)
+    try:
+        # Read text file
+        with open(input_filename, 'r') as f:
+            lines = f.readlines()
+        
+        # Parse fixed-width format: @001 ACCTNO 10., @012 CURBAL 10.
+        data = []
+        for line in lines:
+            # Remove newline and trailing spaces
+            line = line.rstrip('\n\r')
+            
+            # Extract fields based on fixed positions
+            # ACCTNO: positions 0-9 (10 characters)
+            # CURBAL: positions 11-20 (10 characters) - note position 11 is index 11 (0-based)
+            acctno_str = line[0:10].strip()
+            curbal_str = line[11:21].strip() if len(line) > 11 else ''
+            
+            # Convert to appropriate types
+            try:
+                acctno = int(acctno_str) if acctno_str else None
+            except ValueError:
+                acctno = None
+                
+            try:
+                curbal = float(curbal_str) if curbal_str else None
+            except ValueError:
+                curbal = None
+            
+            # Only add if ACCTNO is not null
+            if acctno is not None:
+                data.append({'ACCTNO': acctno, 'CURBAL': curbal})
+        
+        # Create Polars DataFrame
+        df = pl.DataFrame(data)
+        
+        if df.is_empty():
+            print(f"NOTE: No valid data found in {input_filename}, creating empty dataframe")
+            df = pl.DataFrame({'ACCTNO': [], 'CURBAL': []})
+        else:
+            # Remove duplicates and sort
+            df = df.unique(subset=['ACCTNO']).sort('ACCTNO')
+            
+            # Print summary
+            print(f"\n{output_basename} DATA SUMMARY:")
+            print(df)
+            total_curbal = df.select(pl.col('CURBAL').sum()).row(0)[0]
+            if total_curbal is not None:
+                print(f"TOTAL CURBAL: {total_curbal:.2f}")
+            else:
+                print(f"TOTAL CURBAL: 0.00")
+            print("-" * 50)
+        
+        # Save to Parquet
+        df.write_parquet(deposit_path / filename_parquet)
+        print(f"Created {filename_parquet}")
+        
+        # Convert to pandas and save as SAS
+        df_pd = df.to_pandas()
+        pyreadstat.write_sas7bdat(df_pd, deposit_path / filename_sas)
+        print(f"Created {filename_sas}")
+        
+        return df
+        
+    except FileNotFoundError:
+        print(f"NOTE: {input_filename} file not found, creating empty dataframe")
+        empty_df = pl.DataFrame({'ACCTNO': [], 'CURBAL': []})
+        
+        # Save empty dataframes
+        empty_df.write_parquet(deposit_path / filename_parquet)
+        print(f"Created empty {filename_parquet}")
+        
+        empty_pd = empty_df.to_pandas()
+        pyreadstat.write_sas7bdat(empty_pd, deposit_path / filename_sas)
+        print(f"Created empty {filename_sas}")
+        
+        return empty_df
+    except Exception as e:
+        print(f"Error processing {input_filename}: {e}")
+        return pl.DataFrame({'ACCTNO': [], 'CURBAL': []})
 
-# DATA DEPOSIT.ICLPIBB&REPTMON&REPTYEAR;
-# INFILE PIBB;
-filename_pibb = f"ICLPIBB{REPTMON}{REPTYEAR}.parquet"
-try:
-    # Read PIBB file (assuming fixed-width format)
-    pibb_df = pl.read_csv("PIBB", 
-                         has_header=False,
-                         new_columns=['raw_line'])
-    
-    # Parse fixed-width format: @001 ACCTNO 10., @012 CURBAL 10.
-    pibb_parsed = pibb_df.with_columns([
-        pl.col('raw_line').str.slice(0, 10).str.strip().cast(pl.Int64).alias('ACCTNO'),
-        pl.col('raw_line').str.slice(11, 10).str.strip().cast(pl.Float64).alias('CURBAL')
-    ]).drop('raw_line')
-    
-    # IF ACCTNO = . THEN DELETE;
-    pibb_filtered = pibb_parsed.filter(pl.col('ACCTNO').is_not_null())
-    
-    # Save to DEPOSIT path
-    pibb_filtered.write_parquet(deposit_path / filename_pibb)
-    print(f"Created {filename_pibb}")
-    
-except FileNotFoundError:
-    print("NOTE: PIBB file not found, creating empty dataframe")
-    pibb_filtered = pl.DataFrame({'ACCTNO': [], 'CURBAL': []})
+# Process PBB file
+print("\nProcessing PBB_ICL.txt...")
+pbb_df = process_text_file(
+    "PBB_ICL.txt", 
+    "ICLPBB", 
+    deposit_path, 
+    output_path, 
+    REPTMON, 
+    REPTYEAR
+)
 
-# PROC SORT DATA=DEPOSIT.ICLPIBB&REPTMON&REPTYEAR NODUPKEYS; BY ACCTNO;
-if not pibb_filtered.is_empty():
-    pibb_sorted = pibb_filtered.unique(subset=['ACCTNO']).sort('ACCTNO')
-    pibb_sorted.write_parquet(deposit_path / filename_pibb)
-    
-    # PROC PRINT; SUM CURBAL;
-    print("PIBB DATA SUMMARY:")
-    print(pibb_sorted)
-    total_curbal = pibb_sorted.select(pl.col('CURBAL').sum()).row(0)[0]
-    print(f"TOTAL CURBAL: {total_curbal:.2f}")
-    print("-" * 50)
+# Process PIBB file
+print("\nProcessing PIBB_ICL.txt...")
+pibb_df = process_text_file(
+    "PIBB_ICL.txt", 
+    "ICLPIBB", 
+    deposit_path, 
+    output_path, 
+    REPTMON, 
+    REPTYEAR
+)
 
-print("PROCESSING COMPLETED SUCCESSFULLY")
-
-
-
-THE INPUTS ARE IN .TXT FILE. and the file naming are PBB_ICL.txt and PIBB_ICL.txt
+print("\nPROCESSING COMPLETED SUCCESSFULLY")
+print(f"Output files saved to:")
+print(f"  - Parquet: {deposit_path}")
+print(f"  - SAS: {deposit_path}")
+print(f"  - Additional outputs: {output_path}")
