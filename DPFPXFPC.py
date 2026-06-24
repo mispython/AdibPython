@@ -58,7 +58,15 @@ print(f"SDATE: {SDATE}")
 # Create REPTDATE DataFrame
 reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
 reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
-reptdate_df.write_csv(output_path / "REPTDATE.csv")
+
+# Write REPTDATE to txt file
+with open(output_path / "REPTDATE.txt", 'w') as f:
+    f.write(f"REPTDATE: {reptdate}\n")
+    f.write(f"SDESC: {SDESC}\n")
+    f.write(f"SDATE: {SDATE}\n")
+    f.write(f"NOWK: {NOWK}\n")
+    f.write(f"REPTMON: {REPTMON}\n")
+    f.write(f"REPTYEAR: {REPTYEAR}\n")
 
 # Initialize variables to avoid NameError
 unclaim_sorted = pl.DataFrame()
@@ -203,14 +211,28 @@ if not unclaim_df1.is_empty() or not unclaim_df2.is_empty():
         if not unclaim_valid.is_empty():
             unclaim_sorted = unclaim_valid.sort('paymode')
             unclaim_sorted.write_parquet(output_path / "UNCLAIM.parquet")
-            unclaim_sorted.write_csv(output_path / "UNCLAIM.csv")
+            # Write summary to txt
+            with open(output_path / "UNCLAIM.txt", 'w') as f:
+                f.write(f"UNCLAIM Dataset Summary\n")
+                f.write(f"{'='*50}\n")
+                f.write(f"Total Records: {len(unclaim_sorted)}\n")
+                f.write(f"Columns: {', '.join(unclaim_sorted.columns)}\n")
+                f.write(f"\nFirst 5 records:\n")
+                f.write(str(unclaim_sorted.head(5)))
             print(f"Saved UNCLAIM with {len(unclaim_sorted)} records")
         
         # PROC SORT DATA=NONDEBIT; BY PAYMODE;
         if not nondebit_invalid.is_empty():
             nondebit_sorted = nondebit_invalid.sort('paymode')
             nondebit_sorted.write_parquet(output_path / "NONDEBIT.parquet")
-            nondebit_sorted.write_csv(output_path / "NONDEBIT.csv")
+            # Write summary to txt
+            with open(output_path / "NONDEBIT.txt", 'w') as f:
+                f.write(f"NONDEBIT Dataset Summary\n")
+                f.write(f"{'='*50}\n")
+                f.write(f"Total Records: {len(nondebit_sorted)}\n")
+                f.write(f"Columns: {', '.join(nondebit_sorted.columns)}\n")
+                f.write(f"\nFirst 5 records:\n")
+                f.write(str(nondebit_sorted.head(5)))
             print(f"Saved NONDEBIT with {len(nondebit_sorted)} records")
         
         # PROC SUMMARY DATA=UNCLAIM; BY PAYMODE; VAR LEDGBAL;
@@ -229,7 +251,14 @@ if not unclaim_df1.is_empty() or not unclaim_df2.is_empty():
             # PROC SORT DATA=UNCLAIM NODUPKEYS; BY PAYMODE;
             unclaim_final = unclaim_merged.unique(subset=['paymode'])
             unclaim_final.write_parquet(output_path / "UNCLAIM_FINAL.parquet")
-            unclaim_final.write_csv(output_path / "UNCLAIM_FINAL.csv")
+            # Write summary to txt
+            with open(output_path / "UNCLAIM_FINAL.txt", 'w') as f:
+                f.write(f"UNCLAIM_FINAL Dataset Summary\n")
+                f.write(f"{'='*50}\n")
+                f.write(f"Total Records: {len(unclaim_final)}\n")
+                f.write(f"Columns: {', '.join(unclaim_final.columns)}\n")
+                f.write(f"\nFirst 5 records:\n")
+                f.write(str(unclaim_final.head(5)))
             print(f"Saved UNCLAIM_FINAL with {len(unclaim_final)} records")
     else:
         print("No data to combine")
@@ -340,7 +369,14 @@ if datasets:
         pl.col('acctno').cast(pl.Float64)
     ])
     dep_deduped.write_parquet(output_path / "DEP.parquet")
-    dep_deduped.write_csv(output_path / "DEP.csv")
+    # Write summary to txt
+    with open(output_path / "DEP.txt", 'w') as f:
+        f.write(f"DEP Dataset Summary\n")
+        f.write(f"{'='*50}\n")
+        f.write(f"Total Records: {len(dep_deduped)}\n")
+        f.write(f"Columns: {', '.join(dep_deduped.columns)}\n")
+        f.write(f"\nFirst 5 records:\n")
+        f.write(str(dep_deduped.head(5)))
     print(f"Saved DEP with {len(dep_deduped)} records")
 else:
     dep_deduped = pl.DataFrame()
@@ -385,7 +421,14 @@ if not unclaim_final.is_empty():
     if not dep_with_bc.is_empty():
         dep_sorted = dep_with_bc.sort('category')
         dep_sorted.write_parquet(output_path / "DEP_FINAL.parquet")
-        dep_sorted.write_csv(output_path / "DEP_FINAL.csv")
+        # Write summary to txt
+        with open(output_path / "DEP_FINAL.txt", 'w') as f:
+            f.write(f"DEP_FINAL Dataset Summary\n")
+            f.write(f"{'='*50}\n")
+            f.write(f"Total Records: {len(dep_sorted)}\n")
+            f.write(f"Columns: {', '.join(dep_sorted.columns)}\n")
+            f.write(f"\nFirst 5 records:\n")
+            f.write(str(dep_sorted.head(5)))
         print(f"Saved DEP_FINAL with {len(dep_sorted)} records")
         
         # TITLE1 'BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)';
@@ -408,8 +451,16 @@ if not unclaim_final.is_empty():
             total = debitted_summary.select(pl.col('ledgbal').sum()).row(0)[0]
             print(f"\nTOTAL BC/DD AMOUNT: {total:,.2f}")
             
-            # Save summary
-            debitted_summary.write_csv(output_path / "DEBITTED_Summary.csv")
+            # Save summary to parquet
+            debitted_summary.write_parquet(output_path / "DEBITTED_Summary.parquet")
+            
+            # Write to txt file
+            with open(output_path / "DEBITTED_Summary.txt", 'w') as f:
+                f.write("BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)\n")
+                f.write("="*80 + "\n")
+                f.write("BC/DD AMOUNT by Category (DEBITTED):\n")
+                f.write(str(debitted_summary))
+                f.write(f"\n\nTOTAL BC/DD AMOUNT: {total:,.2f}\n")
         else:
             print("No debitted records found")
         
@@ -434,8 +485,16 @@ if not unclaim_final.is_empty():
             total = notfound_summary.select(pl.col('ledgbal').sum()).row(0)[0]
             print(f"\nTOTAL BC/DD AMOUNT: {total:,.2f}")
             
-            # Save summary
-            notfound_summary.write_csv(output_path / "NOTFOUND_Summary.csv")
+            # Save summary to parquet
+            notfound_summary.write_parquet(output_path / "NOTFOUND_Summary.parquet")
+            
+            # Write to txt file
+            with open(output_path / "NOTFOUND_Summary.txt", 'w') as f:
+                f.write("BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)\n")
+                f.write("="*80 + "\n")
+                f.write("BC/DD AMOUNT by Category (NOT FOUND):\n")
+                f.write(str(notfound_summary))
+                f.write(f"\n\nTOTAL BC/DD AMOUNT: {total:,.2f}\n")
         else:
             print("No not-found records found")
     else:
@@ -459,7 +518,14 @@ if not nondebit_sorted.is_empty():
         ])
     
     nondebit_processed.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
-    nondebit_processed.write_csv(output_path / "NONDEBIT_PROCESSED.csv")
+    # Write summary to txt
+    with open(output_path / "NONDEBIT_PROCESSED.txt", 'w') as f:
+        f.write(f"NONDEBIT_PROCESSED Dataset Summary\n")
+        f.write(f"{'='*50}\n")
+        f.write(f"Total Records: {len(nondebit_processed)}\n")
+        f.write(f"Columns: {', '.join(nondebit_processed.columns)}\n")
+        f.write(f"\nFirst 5 records:\n")
+        f.write(str(nondebit_processed.head(5)))
     print(f"Saved NONDEBIT_PROCESSED with {len(nondebit_processed)} records")
     
     print("\n" + "="*80)
@@ -478,10 +544,39 @@ if not nondebit_sorted.is_empty():
     total = nondebit_summary.select(pl.col('ledgbal').sum()).row(0)[0]
     print(f"\nTOTAL BC/DD AMOUNT: {total:,.2f}")
     
-    # Save summary
-    nondebit_summary.write_csv(output_path / "NONDEBIT_Summary.csv")
+    # Save summary to parquet
+    nondebit_summary.write_parquet(output_path / "NONDEBIT_Summary.parquet")
+    
+    # Write to txt file
+    with open(output_path / "NONDEBIT_Summary.txt", 'w') as f:
+        f.write("BANKERS CHEQUE WITH NON-DEBITTED A/C\n")
+        f.write("="*80 + "\n")
+        f.write("BC/DD AMOUNT by Category (NON-DEBITTED):\n")
+        f.write(str(nondebit_summary))
+        f.write(f"\n\nTOTAL BC/DD AMOUNT: {total:,.2f}\n")
 else:
     print("No NONDEBIT data available for processing")
+
+# Write final summary report
+with open(output_path / "PROCESSING_SUMMARY.txt", 'w') as f:
+    f.write("="*80 + "\n")
+    f.write("BANKERS CHEQUE PROCESSING SUMMARY\n")
+    f.write("="*80 + "\n\n")
+    f.write(f"Processing Date: {datetime.datetime.now()}\n")
+    f.write(f"Report Date: {reptdate}\n")
+    f.write(f"Report Month: {REPTMON}\n")
+    f.write(f"Report Year: {REPTYEAR}\n")
+    f.write(f"Week: {NOWK}\n")
+    f.write(f"Start Date: {SDATE}\n")
+    f.write(f"Description: {SDESC}\n\n")
+    f.write("="*80 + "\n")
+    f.write("OUTPUT FILES GENERATED:\n")
+    f.write("="*80 + "\n")
+    
+    # List all files in output directory
+    for file in sorted(output_path.glob("*")):
+        if file.is_file():
+            f.write(f"  {file.name}\n")
 
 print("\n" + "="*80)
 print(f"All output files saved to: {output_path}")
