@@ -2,6 +2,8 @@ import polars as pl
 import duckdb
 from pathlib import Path
 import datetime
+import pandas as pd
+import pyreadstat  # pip install pyreadstat
 
 # Configuration
 pidmfin_path = Path("PIDMFIN")
@@ -79,6 +81,22 @@ PRODFMI = {
 
 print("Formats created: JOINFMT, PRODFMD, PRODBRH, PRODFMI")
 
+# Function to read SAS file using pyreadstat and convert to Polars DataFrame
+def read_sas_to_polars(filepath):
+    """Read a SAS .sas7bdat file using pyreadstat and return as Polars DataFrame"""
+    try:
+        # Read SAS file with pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        
+        # Convert to Polars DataFrame
+        return pl.from_pandas(df)
+    except FileNotFoundError:
+        print(f"NOTE: {filepath} not found")
+        return pl.DataFrame()
+    except Exception as e:
+        print(f"Error reading {filepath}: {e}")
+        return pl.DataFrame()
+
 # OPTIONS equivalent
 # YEARCUTOFF=1950 - handled by Python's datetime
 # COMPRESS=YES - handled by Parquet compression
@@ -108,31 +126,43 @@ reptdate_df.write_csv(output_path / "REPTDATE.csv")
 
 # DATA TRUST(KEEP=BRANCH PRODCD INSURED RENAME=(INSURED=INSUREBR));
 try:
-    trust_df = pl.read_parquet(pidmfin_path / "CISDEPXN.parquet").filter(
-        (pl.col('ACCTYPE2').is_in([3, 7])) & 
-        (pl.col('BENEINT').is_not_null())
-    ).select([
-        'BRANCH', 'PRODCD', 'INSURED'
-    ]).rename({'INSURED': 'INSUREBR'})
+    # Read SAS file using pyreadstat
+    cisdepxn_df = read_sas_to_polars(pidmfin_path / "CISDEPXN.sas7bdat")
     
-    trust_df.write_parquet(output_path / "TRUST.parquet")
-    print(f"TRUST records: {trust_df.height}")
-    
+    if not cisdepxn_df.is_empty():
+        trust_df = cisdepxn_df.filter(
+            (pl.col('ACCTYPE2').is_in([3, 7])) & 
+            (pl.col('BENEINT').is_not_null())
+        ).select([
+            'BRANCH', 'PRODCD', 'INSURED'
+        ]).rename({'INSURED': 'INSUREBR'})
+        
+        trust_df.write_parquet(output_path / "TRUST.parquet")
+        trust_df.write_csv(output_path / "TRUST.csv")
+        print(f"TRUST records: {trust_df.height}")
+    else:
+        trust_df = pl.DataFrame()
+        print("NOTE: PIDMFIN.CISDEPXN is empty")
+        
 except FileNotFoundError:
-    print("NOTE: PIDMFIN.CISDEPXN not found")
+    print("NOTE: PIDMFIN.CISDEPXN.sas7bdat not found")
     trust_df = pl.DataFrame()
 
 # DATA RPT_BASE; SET TRUST DEPOSIT1.CISDEPD;
 try:
-    cisdepd_df = pl.read_parquet(deposit1_path / "CISDEPD.parquet")
+    # Read SAS file using pyreadstat
+    cisdepd_df = read_sas_to_polars(deposit1_path / "CISDEPD.sas7bdat")
+    if cisdepd_df.is_empty():
+        print("NOTE: DEPOSIT1.CISDEPD is empty")
 except FileNotFoundError:
-    print("NOTE: DEPOSIT1.CISDEPD not found")
+    print("NOTE: DEPOSIT1.CISDEPD.sas7bdat not found")
     cisdepd_df = pl.DataFrame()
 
 # Combine datasets
 if not trust_df.is_empty() or not cisdepd_df.is_empty():
     rpt_base = pl.concat([trust_df, cisdepd_df], how="diagonal")
     rpt_base.write_parquet(output_path / "RPT_BASE.parquet")
+    rpt_base.write_csv(output_path / "RPT_BASE.csv")
     print(f"RPT_BASE records: {rpt_base.height}")
 else:
     rpt_base = pl.DataFrame()
@@ -182,7 +212,7 @@ if not rpt_base.is_empty():
     for col in formatted_table.columns:
         if col != 'BRANCH' and formatted_table[col].dtype in [pl.Float64, pl.Int64]:
             formatted_table = formatted_table.with_columns([
-                pl.col(col).map_elements(lambda x: f"{x:,.2f}" if x is not None else "0.00").alias(col)
+                pl.col(col).map_elements(lambda x: f"{x:,.2f}" if x is not None else "0.00", return_dtype=pl.String).alias(col)
             ])
     
     # Display the table with proper formatting
@@ -222,7 +252,3 @@ else:
     print("No data available for tabulation")
 
 print("\nPROCESSING COMPLETED SUCCESSFULLY")
-
-
-
-all the inputs are in sas dataset sas7bdat, and output to text and parquet files. modify the code
