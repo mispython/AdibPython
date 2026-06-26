@@ -1,6 +1,8 @@
 import polars as pl
 import duckdb
 from pathlib import Path
+import pandas as pd
+import sas7bdat
 
 # Configuration
 mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/MNI")
@@ -9,64 +11,87 @@ pidms_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/PIDM"
 output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBFLOAT")
 output_path.mkdir(exist_ok=True)
 
+def read_sas_file(file_path):
+    """Read SAS .sas7bdat file and return polars DataFrame"""
+    try:
+        # Convert SAS file to pandas then to polars
+        with sas7bdat.SAS7BDAT(file_path) as reader:
+            df = reader.to_data_frame()
+        # Convert to polars and lowercase column names
+        pl_df = pl.from_pandas(df)
+        # Rename all columns to lowercase
+        pl_df = pl_df.rename({col: col.lower() for col in pl_df.columns})
+        return pl_df
+    except FileNotFoundError:
+        print(f"NOTE: {file_path} not found")
+        return pl.DataFrame()
+
+def write_parquet_file(df, file_path):
+    """Write polars DataFrame to Parquet file"""
+    if not df.is_empty():
+        df.write_parquet(file_path)
+        print(f"Parquet file created: {file_path}")
+
 def process_conventional_float():
     """Process conventional banking float data"""
     print("PROCESSING CONVENTIONAL BANKING FLOAT DATA")
     print("=" * 50)
     
     # PROC SORT DATA=MNI.FDMTHLY OUT=FDMTHLY;
-    try:
-        fdmthly_df = pl.read_parquet(mni_path / "FDMTHLY.parquet").select([
-            'ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'
-        ]).sort('ACCTNO')
-    except FileNotFoundError:
-        print("NOTE: MNI.FDMTHLY not found")
+    fdmthly_df = read_sas_file(mni_path / "fdmthly.sas7bdat")
+    if not fdmthly_df.is_empty():
+        fdmthly_df = fdmthly_df.select([
+            'acctno', 'branch', 'intplan', 'curbal', 'bic', 'amtind', 'intpay'
+        ]).sort('acctno')
+    else:
+        print("NOTE: MNI.fdmthly not found")
         fdmthly_df = pl.DataFrame()
 
     # DATA FDMTHLY; SET FDMTHLY; LEDGBAL = CURBAL;
     if not fdmthly_df.is_empty():
         fdmthly_processed = fdmthly_df.with_columns([
-            pl.col('CURBAL').alias('LEDGBAL')
+            pl.col('curbal').alias('ledgbal')
         ])
     else:
         fdmthly_processed = pl.DataFrame()
 
     # DATA CURN; SET MNI.CURN124;
-    try:
-        curn_df = pl.read_parquet(mni_path / "CURN124.parquet")
+    curn_df = read_sas_file(mni_path / "curn124.sas7bdat")
+    if not curn_df.is_empty():
         # IF PRODUCT = 139 THEN DELETE;
-        curn_filtered = curn_df.filter(pl.col('PRODUCT') != 139)
-    except FileNotFoundError:
-        print("NOTE: MNI.CURN124 not found")
+        curn_filtered = curn_df.filter(pl.col('product') != 139)
+    else:
+        print("NOTE: MNI.curn124 not found")
         curn_filtered = pl.DataFrame()
 
     # DATA DEPOSIT; SET multiple datasets;
     datasets_to_combine = []
 
     # MNI.SAVG124
-    try:
-        savg_df = pl.read_parquet(mni_path / "SAVG124.parquet").select([
-            'ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH'
+    savg_df = read_sas_file(mni_path / "savg124.sas7bdat")
+    if not savg_df.is_empty():
+        savg_df = savg_df.select([
+            'acctno', 'product', 'curbal', 'ledgbal', 'progcd', 'amtind', 'intpaybl', 'branch'
         ])
         datasets_to_combine.append(savg_df)
-    except FileNotFoundError:
-        print("NOTE: MNI.SAVG124 not found")
+    else:
+        print("NOTE: MNI.savg124 not found")
 
     # CURN
     if not curn_filtered.is_empty():
         curn_selected = curn_filtered.select([
-            'ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH'
+            'acctno', 'product', 'curbal', 'ledgbal', 'progcd', 'amtind', 'intpaybl', 'branch'
         ])
         datasets_to_combine.append(curn_selected)
 
     # FDMTHLY with renames
     if not fdmthly_processed.is_empty():
         fdmthly_renamed = fdmthly_processed.select([
-            'ACCTNO', 'BRANCH', 'CURBAL', 'LEDGBAL', 'AMTIND'
+            'acctno', 'branch', 'curbal', 'ledgbal', 'amtind'
         ]).with_columns([
-            pl.col('INTPLAN').alias('PRODUCT'),
-            pl.col('BIC').alias('PRODCD'),
-            pl.col('INTPAY').alias('INTPAYBL')
+            pl.col('intplan').alias('product'),
+            pl.col('bic').alias('progcd'),
+            pl.col('intpay').alias('intpaybl')
         ])
         datasets_to_combine.append(fdmthly_renamed)
 
@@ -75,35 +100,35 @@ def process_conventional_float():
         deposit_combined = pl.concat(datasets_to_combine, how="diagonal")
         
         # Apply filters and transformations
-        valid_prodcd = [
+        valid_progcd = [
             '42110', '42310', '42120', '42320', '42130',
             '42133', '42132', '42180', '42610', '42630', '34180',
             '42199', '42699'
         ]
         
         deposit_filtered = deposit_combined.filter(
-            pl.col('PRODCD').is_in(valid_prodcd)
+            pl.col('progcd').is_in(valid_progcd)
         ).with_columns([
-            # IF PRODUCT = 166 THEN PRODCD = '42310';
-            pl.when(pl.col('PRODUCT') == 166)
+            # IF PRODUCT = 166 THEN PROGCD = '42310';
+            pl.when(pl.col('product') == 166)
             .then(pl.lit('42310'))
-            .otherwise(pl.col('PRODCD'))
-            .alias('PRODCD')
+            .otherwise(pl.col('progcd'))
+            .alias('progcd')
         ]).filter(
-            # IF PRODCD IN ('42199','42699') AND PRODUCT NOT IN (72,413) THEN DELETE;
+            # IF PROGCD IN ('42199','42699') AND PRODUCT NOT IN (72,413) THEN DELETE;
             ~(
-                pl.col('PRODCD').is_in(['42199', '42699']) & 
-                ~pl.col('PRODUCT').is_in([72, 413])
+                pl.col('progcd').is_in(['42199', '42699']) & 
+                ~pl.col('product').is_in([72, 413])
             )
         ).filter(
             # IF PRODUCT IN (30,31,32,33,34) THEN DELETE;
-            ~pl.col('PRODUCT').is_in([30, 31, 32, 33, 34])
+            ~pl.col('product').is_in([30, 31, 32, 33, 34])
         ).with_columns([
             # IF INTPAYBL < 0 THEN INTPAYBL = 0;
-            pl.when(pl.col('INTPAYBL') < 0)
+            pl.when(pl.col('intpaybl') < 0)
             .then(0)
-            .otherwise(pl.col('INTPAYBL'))
-            .alias('INTPAYBL')
+            .otherwise(pl.col('intpaybl'))
+            .alias('intpaybl')
         ])
         
         print(f"Conventional DEPOSIT records: {deposit_filtered.height}")
@@ -112,86 +137,84 @@ def process_conventional_float():
         print("No conventional DEPOSIT data created")
 
     # DATA FLOAT; SET PIDMS.FLOAT;
-    try:
-        float_df = pl.read_parquet(pidms_path / "FLOAT.parquet")
-    except FileNotFoundError:
-        print("NOTE: PIDMS.FLOAT not found")
-        float_df = pl.DataFrame()
+    float_df = read_sas_file(pidms_path / "float.sas7bdat")
+    if float_df.is_empty():
+        print("NOTE: PIDMS.float not found")
 
     # PROC SUMMARY DATA=FLOAT NWAY; CLASS ACCTNO; VAR FLOAT; OUTPUT OUT=FLOAT SUM=;
     if not float_df.is_empty():
-        float_summary = float_df.group_by('ACCTNO').agg([
-            pl.col('FLOAT').sum().alias('FLOAT')
+        float_summary = float_df.group_by('acctno').agg([
+            pl.col('float').sum().alias('float')
         ])
     else:
         float_summary = pl.DataFrame()
 
     # PROC SORT DATA=DEPOSIT; BY ACCTNO;
     if not deposit_filtered.is_empty():
-        deposit_sorted = deposit_filtered.sort('ACCTNO')
+        deposit_sorted = deposit_filtered.sort('acctno')
         
         # DATA DEPOSIT EXCEPT; MERGE DEPOSIT(IN=A) FLOAT(IN=B); BY ACCTNO;
         if not float_summary.is_empty():
             deposit_merged = deposit_sorted.join(
-                float_summary, on='ACCTNO', how='outer', suffix='_float'
+                float_summary, on='acctno', how='outer', suffix='_float'
             )
             
             # Apply transformations
             deposit_processed = deposit_merged.with_columns([
                 # IF CURBAL < 0 THEN CURBAL = 0;
-                pl.when(pl.col('CURBAL') < 0)
+                pl.when(pl.col('curbal') < 0)
                 .then(0)
-                .otherwise(pl.col('CURBAL'))
-                .alias('CURBAL'),
+                .otherwise(pl.col('curbal'))
+                .alias('curbal'),
                 
                 # FLOATORI = CURBAL;
-                pl.col('CURBAL').alias('FLOATORI'),
+                pl.col('curbal').alias('floatori'),
                 
                 # AVBAL = SUM(CURBAL,(-1)*FLOAT);
-                (pl.col('CURBAL') + (-1) * pl.col('FLOAT')).alias('AVBAL'),
+                (pl.col('curbal') + (-1) * pl.col('float')).alias('avbal'),
                 
                 # MINUSFLOAT = SUM(CURBAL,(-1)*FLOAT);
-                (pl.col('CURBAL') + (-1) * pl.col('FLOAT')).alias('MINUSFLOAT')
+                (pl.col('curbal') + (-1) * pl.col('float')).alias('minusfloat')
             ]).with_columns([
                 # IF AVBAL < 0 THEN DO; FLOAT = CURBAL; AVBAL = 0; END;
-                pl.when(pl.col('AVBAL') < 0)
+                pl.when(pl.col('avbal') < 0)
                 .then(pl.struct([
-                    pl.col('CURBAL').alias('FLOAT'),
-                    pl.lit(0).alias('AVBAL')
+                    pl.col('curbal').alias('float'),
+                    pl.lit(0).alias('avbal')
                 ]))
                 .otherwise(pl.struct([
-                    pl.col('FLOAT').alias('FLOAT'),
-                    pl.col('AVBAL').alias('AVBAL')
+                    pl.col('float').alias('float'),
+                    pl.col('avbal').alias('avbal')
                 ]))
                 .alias('adjustment')
             ]).with_columns([
-                pl.col('adjustment').struct.field('FLOAT').alias('FLOAT'),
-                pl.col('adjustment').struct.field('AVBAL').alias('AVBAL'),
+                pl.col('adjustment').struct.field('float').alias('float'),
+                pl.col('adjustment').struct.field('avbal').alias('avbal'),
                 
                 # AVBALTT = SUM(AVBAL,INTPAYBL);
-                (pl.col('AVBAL') + pl.col('INTPAYBL')).alias('AVBALTT'),
+                (pl.col('avbal') + pl.col('intpaybl')).alias('avbaltt'),
                 
                 # CURBALTT = SUM(CURBAL,INTPAYBL);
-                (pl.col('CURBAL') + pl.col('INTPAYBL')).alias('CURBALTT')
+                (pl.col('curbal') + pl.col('intpaybl')).alias('curbaltt')
             ]).drop('adjustment')
             
             # Split into DEPOSIT and EXCEPT based on conditions
             # IF B AND NOT A THEN OUTPUT EXCEPT;
             except_df = deposit_processed.filter(
-                pl.col('FLOAT').is_not_null() & 
-                (pl.col('CURBAL').is_null() | pl.col('PRODUCT').is_null())
+                pl.col('float').is_not_null() & 
+                (pl.col('curbal').is_null() | pl.col('product').is_null())
             )
             
             # IF A AND B THEN OUTPUT DEPOSIT;
             deposit_final = deposit_processed.filter(
-                pl.col('CURBAL').is_not_null() & 
-                pl.col('PRODUCT').is_not_null() & 
-                pl.col('FLOAT').is_not_null()
+                pl.col('curbal').is_not_null() & 
+                pl.col('product').is_not_null() & 
+                pl.col('float').is_not_null()
             )
             
             # Save outputs
-            deposit_final.write_parquet(output_path / "DEPOSIT_CONVENTIONAL.parquet")
-            except_df.write_parquet(output_path / "EXCEPT_CONVENTIONAL.parquet")
+            write_parquet_file(deposit_final, output_path / "DEPOSIT_CONVENTIONAL.parquet")
+            write_parquet_file(except_df, output_path / "EXCEPT_CONVENTIONAL.parquet")
             
             print(f"Conventional DEPOSIT final records: {deposit_final.height}")
             print(f"Conventional EXCEPT records: {except_df.height}")
@@ -199,7 +222,7 @@ def process_conventional_float():
             # DATA _NULL_; SET DEPOSIT; FILE FLOAT;
             if not deposit_final.is_empty():
                 # Select only required columns for output
-                float_output = deposit_final.select(['ACCTNO', 'BRANCH', 'FLOAT'])
+                float_output = deposit_final.select(['acctno', 'branch', 'float'])
                 
                 # Write header
                 header = "ACCTNO\x05BRANCH\x05FLOAT\x05\n"
@@ -229,58 +252,60 @@ def process_islamic_float():
     print("=" * 50)
     
     # PROC SORT DATA=IMNI.FDMTHLY OUT=FDMTHLY;
-    try:
-        fdmthly_df = pl.read_parquet(imni_path / "FDMTHLY.parquet").select([
-            'ACCTNO', 'BRANCH', 'INTPLAN', 'CURBAL', 'BIC', 'AMTIND', 'INTPAY'
-        ]).sort('ACCTNO')
-    except FileNotFoundError:
-        print("NOTE: IMNI.FDMTHLY not found")
+    fdmthly_df = read_sas_file(imni_path / "fdmthly.sas7bdat")
+    if not fdmthly_df.is_empty():
+        fdmthly_df = fdmthly_df.select([
+            'acctno', 'branch', 'intplan', 'curbal', 'bic', 'amtind', 'intpay'
+        ]).sort('acctno')
+    else:
+        print("NOTE: IMNI.fdmthly not found")
         fdmthly_df = pl.DataFrame()
 
     # DATA FDMTHLY; SET FDMTHLY; LEDGBAL = CURBAL;
     if not fdmthly_df.is_empty():
         fdmthly_processed = fdmthly_df.with_columns([
-            pl.col('CURBAL').alias('LEDGBAL')
+            pl.col('curbal').alias('ledgbal')
         ])
     else:
         fdmthly_processed = pl.DataFrame()
 
     # DATA CURN; SET IMNI.CURN124;
-    try:
-        curn_df = pl.read_parquet(imni_path / "CURN124.parquet")
+    curn_df = read_sas_file(imni_path / "curn124.sas7bdat")
+    if not curn_df.is_empty():
         # IF PRODUCT = 139 THEN DELETE;
-        curn_filtered = curn_df.filter(pl.col('PRODUCT') != 139)
-    except FileNotFoundError:
-        print("NOTE: IMNI.CURN124 not found")
+        curn_filtered = curn_df.filter(pl.col('product') != 139)
+    else:
+        print("NOTE: IMNI.curn124 not found")
         curn_filtered = pl.DataFrame()
 
     # DATA DEPOSIT; SET multiple datasets;
     datasets_to_combine = []
 
     # IMNI.SAVG124
-    try:
-        savg_df = pl.read_parquet(imni_path / "SAVG124.parquet").select([
-            'ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH'
+    savg_df = read_sas_file(imni_path / "savg124.sas7bdat")
+    if not savg_df.is_empty():
+        savg_df = savg_df.select([
+            'acctno', 'product', 'curbal', 'ledgbal', 'progcd', 'amtind', 'intpaybl', 'branch'
         ])
         datasets_to_combine.append(savg_df)
-    except FileNotFoundError:
-        print("NOTE: IMNI.SAVG124 not found")
+    else:
+        print("NOTE: IMNI.savg124 not found")
 
     # CURN
     if not curn_filtered.is_empty():
         curn_selected = curn_filtered.select([
-            'ACCTNO', 'PRODUCT', 'CURBAL', 'LEDGBAL', 'PRODCD', 'AMTIND', 'INTPAYBL', 'BRANCH'
+            'acctno', 'product', 'curbal', 'ledgbal', 'progcd', 'amtind', 'intpaybl', 'branch'
         ])
         datasets_to_combine.append(curn_selected)
 
     # FDMTHLY with renames
     if not fdmthly_processed.is_empty():
         fdmthly_renamed = fdmthly_processed.select([
-            'ACCTNO', 'BRANCH', 'CURBAL', 'LEDGBAL', 'AMTIND'
+            'acctno', 'branch', 'curbal', 'ledgbal', 'amtind'
         ]).with_columns([
-            pl.col('INTPLAN').alias('PRODUCT'),
-            pl.col('BIC').alias('PRODCD'),
-            pl.col('INTPAY').alias('INTPAYBL')
+            pl.col('intplan').alias('product'),
+            pl.col('bic').alias('progcd'),
+            pl.col('intpay').alias('intpaybl')
         ])
         datasets_to_combine.append(fdmthly_renamed)
 
@@ -289,31 +314,31 @@ def process_islamic_float():
         deposit_combined = pl.concat(datasets_to_combine, how="diagonal")
         
         # Apply filters and transformations
-        valid_prodcd = [
+        valid_progcd = [
             '42110', '42310', '42120', '42320', '42130', '42610',
             '42133', '42132', '42180', '42199', '42699'
         ]
         
         deposit_filtered = deposit_combined.filter(
-            pl.col('PRODCD').is_in(valid_prodcd)
+            pl.col('progcd').is_in(valid_progcd)
         ).with_columns([
-            # IF PRODUCT = 166 THEN PRODCD = '42310';
-            pl.when(pl.col('PRODUCT') == 166)
+            # IF PRODUCT = 166 THEN PROGCD = '42310';
+            pl.when(pl.col('product') == 166)
             .then(pl.lit('42310'))
-            .otherwise(pl.col('PRODCD'))
-            .alias('PRODCD')
+            .otherwise(pl.col('progcd'))
+            .alias('progcd')
         ]).filter(
-            # IF PRODCD IN ('42199','42699') AND PRODUCT NOT IN (72,413) THEN DELETE;
+            # IF PROGCD IN ('42199','42699') AND PRODUCT NOT IN (72,413) THEN DELETE;
             ~(
-                pl.col('PRODCD').is_in(['42199', '42699']) & 
-                ~pl.col('PRODUCT').is_in([72, 413])
+                pl.col('progcd').is_in(['42199', '42699']) & 
+                ~pl.col('product').is_in([72, 413])
             )
         ).with_columns([
             # IF INTPAYBL < 0 THEN INTPAYBL = 0;
-            pl.when(pl.col('INTPAYBL') < 0)
+            pl.when(pl.col('intpaybl') < 0)
             .then(0)
-            .otherwise(pl.col('INTPAYBL'))
-            .alias('INTPAYBL')
+            .otherwise(pl.col('intpaybl'))
+            .alias('intpaybl')
         ])
         
         print(f"Islamic DEPOSIT records: {deposit_filtered.height}")
@@ -322,79 +347,77 @@ def process_islamic_float():
         print("No Islamic DEPOSIT data created")
 
     # DATA FLOAT; SET PIDMS.FLOAT;
-    try:
-        float_df = pl.read_parquet(pidms_path / "FLOAT.parquet")
-    except FileNotFoundError:
-        print("NOTE: PIDMS.FLOAT not found")
-        float_df = pl.DataFrame()
+    float_df = read_sas_file(pidms_path / "float.sas7bdat")
+    if float_df.is_empty():
+        print("NOTE: PIDMS.float not found")
 
     # PROC SUMMARY DATA=FLOAT NWAY; CLASS ACCTNO; VAR FLOAT; OUTPUT OUT=FLOAT SUM=;
     if not float_df.is_empty():
-        float_summary = float_df.group_by('ACCTNO').agg([
-            pl.col('FLOAT').sum().alias('FLOAT')
+        float_summary = float_df.group_by('acctno').agg([
+            pl.col('float').sum().alias('float')
         ])
     else:
         float_summary = pl.DataFrame()
 
     # PROC SORT DATA=DEPOSIT; BY ACCTNO;
     if not deposit_filtered.is_empty():
-        deposit_sorted = deposit_filtered.sort('ACCTNO')
+        deposit_sorted = deposit_filtered.sort('acctno')
         
         # DATA IDEPOSIT EXCEPT; MERGE DEPOSIT(IN=A) FLOAT(IN=B); BY ACCTNO;
         if not float_summary.is_empty():
             deposit_merged = deposit_sorted.join(
-                float_summary, on='ACCTNO', how='outer', suffix='_float'
+                float_summary, on='acctno', how='outer', suffix='_float'
             )
             
             # Apply transformations (same logic as conventional)
             deposit_processed = deposit_merged.with_columns([
-                pl.when(pl.col('CURBAL') < 0)
+                pl.when(pl.col('curbal') < 0)
                 .then(0)
-                .otherwise(pl.col('CURBAL'))
-                .alias('CURBAL'),
+                .otherwise(pl.col('curbal'))
+                .alias('curbal'),
                 
-                pl.col('CURBAL').alias('FLOATORI'),
+                pl.col('curbal').alias('floatori'),
                 
-                (pl.col('CURBAL') + (-1) * pl.col('FLOAT')).alias('AVBAL'),
+                (pl.col('curbal') + (-1) * pl.col('float')).alias('avbal'),
                 
-                (pl.col('CURBAL') + (-1) * pl.col('FLOAT')).alias('MINUSFLOAT')
+                (pl.col('curbal') + (-1) * pl.col('float')).alias('minusfloat')
             ]).with_columns([
-                pl.when(pl.col('AVBAL') < 0)
+                pl.when(pl.col('avbal') < 0)
                 .then(pl.struct([
-                    pl.col('CURBAL').alias('FLOAT'),
-                    pl.lit(0).alias('AVBAL')
+                    pl.col('curbal').alias('float'),
+                    pl.lit(0).alias('avbal')
                 ]))
                 .otherwise(pl.struct([
-                    pl.col('FLOAT').alias('FLOAT'),
-                    pl.col('AVBAL').alias('AVBAL')
+                    pl.col('float').alias('float'),
+                    pl.col('avbal').alias('avbal')
                 ]))
                 .alias('adjustment')
             ]).with_columns([
-                pl.col('adjustment').struct.field('FLOAT').alias('FLOAT'),
-                pl.col('adjustment').struct.field('AVBAL').alias('AVBAL'),
+                pl.col('adjustment').struct.field('float').alias('float'),
+                pl.col('adjustment').struct.field('avbal').alias('avbal'),
                 
-                (pl.col('AVBAL') + pl.col('INTPAYBL')).alias('AVBALTT'),
+                (pl.col('avbal') + pl.col('intpaybl')).alias('avbaltt'),
                 
-                (pl.col('CURBAL') + pl.col('INTPAYBL')).alias('CURBALTT')
+                (pl.col('curbal') + pl.col('intpaybl')).alias('curbaltt')
             ]).drop('adjustment')
             
             # Split into IDEPOSIT and EXCEPT based on conditions
             # IF B AND NOT A THEN OUTPUT EXCEPT;
             except_df = deposit_processed.filter(
-                pl.col('FLOAT').is_not_null() & 
-                (pl.col('CURBAL').is_null() | pl.col('PRODUCT').is_null())
+                pl.col('float').is_not_null() & 
+                (pl.col('curbal').is_null() | pl.col('product').is_null())
             )
             
             # IF A AND B THEN OUTPUT IDEPOSIT;
             ideposit_final = deposit_processed.filter(
-                pl.col('CURBAL').is_not_null() & 
-                pl.col('PRODUCT').is_not_null() & 
-                pl.col('FLOAT').is_not_null()
+                pl.col('curbal').is_not_null() & 
+                pl.col('product').is_not_null() & 
+                pl.col('float').is_not_null()
             )
             
             # Save outputs
-            ideposit_final.write_parquet(output_path / "IDEPOSIT_ISLAMIC.parquet")
-            except_df.write_parquet(output_path / "EXCEPT_ISLAMIC.parquet")
+            write_parquet_file(ideposit_final, output_path / "IDEPOSIT_ISLAMIC.parquet")
+            write_parquet_file(except_df, output_path / "EXCEPT_ISLAMIC.parquet")
             
             print(f"Islamic IDEPOSIT final records: {ideposit_final.height}")
             print(f"Islamic EXCEPT records: {except_df.height}")
@@ -402,7 +425,7 @@ def process_islamic_float():
             # DATA _NULL_; SET IDEPOSIT; FILE IFLOAT;
             if not ideposit_final.is_empty():
                 # Select only required columns for output
-                ifloat_output = ideposit_final.select(['ACCTNO', 'BRANCH', 'FLOAT'])
+                ifloat_output = ideposit_final.select(['acctno', 'branch', 'float'])
                 
                 # Write header
                 header = "ACCTNO\x05BRANCH\x05FLOAT\x05\n"
@@ -437,8 +460,3 @@ if __name__ == "__main__":
     print("="*80)
     print(f"Conventional records processed: {conventional_result.height if conventional_result is not None else 0}")
     print(f"Islamic records processed: {islamic_result.height if islamic_result is not None else 0}")
-
-
-all inputs are in sas dataset sas7bdat and all dataset naming are in lowercase, not uppercase.
-
-output then in text file and parquet file only
