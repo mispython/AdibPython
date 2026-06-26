@@ -1,5 +1,4 @@
 import polars as pl
-import duckdb
 from pathlib import Path
 import pyreadstat
 import datetime
@@ -12,7 +11,7 @@ import pandas as pd
 def format_number(val):
     """Format number to display without scientific notation"""
     if val is None or (isinstance(val, float) and pd.isna(val)):
-        return ''
+        return '.'
     if isinstance(val, float):
         if val.is_integer():
             return str(int(val))
@@ -33,9 +32,9 @@ def generate_text_report(float_only, output_path):
         f.write(" " * 50 + "1\n")
         f.write("\n")
         
-        # Column headers
+        # Column headers - exactly matching SAS
         f.write("Obs PRODCD AMTIND BRANCH   ACCTNO   LEDGBAL PRODUCT CURBAL INTPAYBL _TYPE_ _FREQ_   FLOAT    AVBAL    AVBALTT  CURBALTT\n")
-        f.write("\n")
+        f.write("                                                                                                                       \n")
         
         if not float_only.is_empty():
             # Sort by ACCTNO to match SAS output order
@@ -47,7 +46,7 @@ def generate_text_report(float_only, output_path):
             for row in float_only_sorted.rows():
                 obs_count += 1
                 
-                # Extract values (matching SAS column order)
+                # Extract values
                 acctno = row[0] if len(row) > 0 else ''
                 float_val = row[1] if len(row) > 1 else 0
                 prodcd = row[2] if len(row) > 2 else ''
@@ -63,17 +62,17 @@ def generate_text_report(float_only, output_path):
                 
                 # Format values exactly like SAS output
                 acctno_str = format_number(acctno)
-                prodcd_str = str(prodcd) if prodcd and not pd.isna(prodcd) else ''
-                amtind_str = str(amtind) if amtind and not pd.isna(amtind) else ''
-                branch_str = format_number(branch) if branch and not pd.isna(branch) else ''
-                ledgbal_str = f"{ledgbal:.2f}" if ledgbal and not pd.isna(ledgbal) else '.'
-                product_str = format_number(product) if product and not pd.isna(product) else ''
-                curbal_str = f"{curbal:.2f}" if curbal and not pd.isna(curbal) else '.'
-                intpaybl_str = f"{intpaybl:.2f}" if intpaybl and not pd.isna(intpaybl) else '.'
-                float_str = f"{float_val:.2f}" if float_val and not pd.isna(float_val) else ''
-                avbal_str = f"{avbal:.2f}" if avbal and not pd.isna(avbal) else ''
-                avbaltt_str = f"{avbaltt:.2f}" if avbaltt and not pd.isna(avbaltt) else ''
-                curbaltt_str = f"{curbaltt:.2f}" if curbaltt and not pd.isna(curbaltt) else ''
+                prodcd_str = format_number(prodcd) if prodcd and not pd.isna(prodcd) else '.'
+                amtind_str = format_number(amtind) if amtind and not pd.isna(amtind) else '.'
+                branch_str = format_number(branch) if branch and not pd.isna(branch) else '.'
+                ledgbal_str = format_number(ledgbal) if ledgbal and not pd.isna(ledgbal) else '.'
+                product_str = format_number(product) if product and not pd.isna(product) else '.'
+                curbal_str = format_number(curbal) if curbal and not pd.isna(curbal) else '0'
+                intpaybl_str = format_number(intpaybl) if intpaybl and not pd.isna(intpaybl) else '.'
+                float_str = format_number(float_val) if float_val and not pd.isna(float_val) else '.'
+                avbal_str = format_number(avbal) if avbal and not pd.isna(avbal) else '.'
+                avbaltt_str = format_number(avbaltt) if avbaltt and not pd.isna(avbaltt) else '.'
+                curbaltt_str = format_number(curbaltt) if curbaltt and not pd.isna(curbaltt) else '0'
                 
                 # Write formatted row with proper spacing (matching SAS)
                 f.write(f"{obs_count:3} {prodcd_str:>6} {amtind_str:>6} {branch_str:>6} {acctno_str:>10} {ledgbal_str:>10} {product_str:>7} {curbal_str:>10} {intpaybl_str:>8} {1:>6} {1:>6} {float_str:>10} {avbal_str:>10} {avbaltt_str:>10} {curbaltt_str:>10}\n")
@@ -82,7 +81,7 @@ def generate_text_report(float_only, output_path):
             
             # Add separator and total (matching SAS)
             f.write(" " * 50 + "========\n")
-            f.write(f"{' ' * 82}{total_float:.2f}\n")
+            f.write(f"{' ' * 87}{total_float:.2f}\n")
         else:
             f.write("No records found matching B AND NOT A condition.\n")
             f.write("All FLOAT records have matching DEPOSIT records.\n")
@@ -554,16 +553,17 @@ if not deposit_filtered.is_empty() and not float_summary.is_empty():
             print(f"    ACCTNO: {int(row[0])}, FLOAT: {row[1]:.2f}")
         
         # Create output with proper columns (matching SAS output)
+        # For B AND NOT A, CURBAL = 0, so AVBAL = -FLOAT
         float_only_output = float_only.with_columns([
             pl.lit(None).cast(pl.Utf8).alias('progcd'),
             pl.lit(None).cast(pl.Utf8).alias('amtind'),
             pl.lit(None).cast(pl.Float64).alias('branch'),
-            pl.lit(0).cast(pl.Float64).alias('ledgbal'),
-            pl.lit(0).cast(pl.Float64).alias('product'),
-            pl.lit(0).cast(pl.Float64).alias('curbal'),
-            pl.lit(0).cast(pl.Float64).alias('intpaybl'),
-            pl.col('float').alias('avbal'),  # AVBAL = FLOAT (since CURBAL is 0)
-            pl.col('float').alias('avbaltt'),  # AVBALTT = FLOAT
+            pl.lit(None).cast(pl.Float64).alias('ledgbal'),
+            pl.lit(None).cast(pl.Float64).alias('product'),
+            pl.lit(0).cast(pl.Float64).alias('curbal'),  # CURBAL = 0
+            pl.lit(None).cast(pl.Float64).alias('intpaybl'),
+            pl.col('float').alias('avbal'),  # AVBAL = FLOAT
+            (-pl.col('float')).alias('avbaltt'),  # AVBALTT = -FLOAT (since CURBAL=0)
             pl.lit(0).cast(pl.Float64).alias('curbaltt')  # CURBALTT = 0
         ]).select([
             'acctno', 'float', 'progcd', 'amtind', 'branch', 
@@ -601,46 +601,3 @@ else:
 print("\n" + "="*60)
 print("PROCESSING COMPLETED SUCCESSFULLY")
 print("="*60)
-
-
-my python output:
-
-The Python Processing System
-16:19 Thursday, June 25, 2026
-                                                  1
-
-Obs PRODCD AMTIND BRANCH   ACCTNO   LEDGBAL PRODUCT CURBAL INTPAYBL _TYPE_ _FREQ_   FLOAT    AVBAL    AVBALTT  CURBALTT
-
-  1                      3060028907          .                  .        .      1      1  101949.89  101949.89  101949.89           
-  2                      3060030515          .                  .        .      1      1 1074345.86 1074345.86 1074345.86           
-  3                      3060038803          .                  .        .      1      1   13949.50   13949.50   13949.50           
-  4                      3060046903          .                  .        .      1      1    8817.00    8817.00    8817.00           
-  5                      3060065215          .                  .        .      1      1   20000.00   20000.00   20000.00           
-  6                      3060092112          .                  .        .      1      1     703.00     703.00     703.00           
-  7                      3060094005          .                  .        .      1      1   34178.45   34178.45   34178.45           
-  8                      3060137409          .                  .        .      1      1    4000.00    4000.00    4000.00           
-  9                      3060243023          .                  .        .      1      1    1427.98    1427.98    1427.98           
- 10                      3060260800          .                  .        .      1      1   91477.03   91477.03   91477.03           
- 11                      3060267511          .                  .        .      1      1   24612.24   24612.24   24612.24           
- 12                      3060286636          .                  .        .      1      1   16500.00   16500.00   16500.00           
- 13                      3060288529          .                  .        .      1      1   11220.00   11220.00   11220.00           
- 14                      3060306801          .                  .        .      1      1    1865.60    1865.60    1865.60           
- 15                      3060339123          .                  .        .      1      1   15135.45   15135.45   15135.45           
- 16                      3060353333          .                  .        .      1      1   20970.00   20970.00   20970.00        
-
-
-
-
-the actual production output:
-
-The SAS System                                                                                    22:59 Friday, January 23, 2026   1                  
-                                                                                                                                                      
-Obs PRODCD AMTIND BRANCH   ACCTNO   LEDGBAL PRODUCT CURBAL INTPAYBL _TYPE_ _FREQ_   FLOAT    AVBAL    AVBALTT  CURBALTT                               
-                                                                                                                                                      
- 1                   .   3997501436    .       .       0       .       1      1   21461.38 -21461.38 -21461.38     0                                  
- 2                   .   3997589936    .       .       0       .       1      1   14025.00 -14025.00 -14025.00     0                                  
-                                                                                  ========                                                            
-                                                                                  35486.38                                                            
-
-
-now based on the codes and output given, can you help optimized/enhanced the codes so my python output could follow the production output. there is only 2 obs on production output, differs to my python output
