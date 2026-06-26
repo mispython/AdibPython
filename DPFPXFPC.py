@@ -39,18 +39,18 @@ def write_float_output(df, output_name, is_detail=False):
         with open(output_path / f"{output_name}.txt", "w") as f:
             f.write("ACCTNO\x05BRANCH\x05FLOAT\x05\n")
             for row in output_df.iter_rows():
-                f.write(f"{row[0]:.0f}\x05{row[1]:.0f}\x05{row[2]:.2f}\x05\n")
+                # Convert to integers for whole numbers
+                f.write(f"{int(row[0])}\x05{int(row[1])}\x05{row[2]:.2f}\x05\n")
         print(f"{output_name}.txt created (detail format)")
     else:
         # Summary format - matches SAS production output
-        # Calculate summary statistics by BRANCH
         summary = df.group_by('branch').agg([
             pl.len().alias('_FREQ_'),
             pl.col('float').sum().alias('FLOAT'),
             (pl.col('curbal') - pl.col('float')).sum().alias('MINUSFLOAT'),
             pl.col('curbal').sum().alias('FLOATORI')
         ]).with_columns([
-            pl.lit(1).alias('_TYPE_')  # Always 1 in the sample
+            pl.lit(1).alias('_TYPE_')
         ]).select([
             'branch', '_TYPE_', '_FREQ_', 'FLOAT', 'MINUSFLOAT', 'FLOATORI'
         ]).sort('branch')
@@ -64,8 +64,8 @@ def write_float_output(df, output_name, is_detail=False):
             # Write data rows
             for row in summary.iter_rows():
                 branch, type_, freq, float_val, minusfloat, floatori = row
-                # Format with proper spacing and decimal places
-                f.write(f"{branch:>8} {type_:>8} {freq:>9} {float_val:>12.2f} {minusfloat:>15.2f} {floatori:>15.2f}\n")
+                # Format with proper spacing - convert to integers for whole numbers
+                f.write(f"{int(branch):>8} {int(type_):>8} {int(freq):>9} {float_val:>12.2f} {minusfloat:>15.2f} {floatori:>15.2f}\n")
         
         print(f"{output_name}.txt created (summary format)")
 
@@ -181,8 +181,8 @@ def process_float_data(source_path, label):
     prefix = "I" if label == "ISLAMIC" else ""
     deposit_name = f"{prefix}DEPOSIT_{label}"
     except_name = f"EXCEPT_{label}"
-    float_detail_name = f"{prefix}FLOAT_DETAIL"  # Detail output with ACCTNO
-    float_summary_name = f"{prefix}FLOAT"        # Summary output by BRANCH (matches SAS production)
+    float_detail_name = f"{prefix}FLOAT_DETAIL"
+    float_summary_name = f"{prefix}FLOAT"
     
     # Write Parquet outputs
     write_parquet_output(final, deposit_name)
