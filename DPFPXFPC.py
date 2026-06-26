@@ -25,4 +25,24 @@ Obs    BRANCH    _TYPE_    _FREQ_       FLOAT       MINUSFLOAT       FLOATORI
 
 
 
-this is the sample of FLOAT output (actual production). need to follow its formatting for output (also make sure IFLOAT follows the same format)
+this is the sample of FLOAT output (actual production). need to follow its formatting for output (also make sure IFLOAT follows the same format). make sure the columns order, decimal points, spacing is similar
+
+
+while below is my python output
+
+ACCTNOBRANCHFLOAT
+3060028907.02.0101949.89
+3060030515.02.01074345.8599999999
+3060038803.02.013949.5
+3060046903.02.08817.0
+3060065215.02.020000.0
+3060092112.02.0703.0
+3060094005.02.034178.45
+3060137409.03.04000.0
+3060243023.04.01427.9799999999998
+3060260800.04.091477.03
+3060267511.04.024612.239999999998
+3060286636.04.00.0
+3060288529.04.011220.0
+3060306801.04.00.0
+3060339123.05.015135.449999999999
