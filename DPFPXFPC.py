@@ -4,44 +4,34 @@ import datetime
 import pyreadstat
 import logging
 
+# Import format definitions from PBBDPFMT
+import PBBDPFMT
+from PBBDPFMT import (
+    SADenomFormat, SAProductFormat,
+    FDDenomFormat, FDProductFormat,
+    CADenomFormat, CAProductFormat,
+    FCYTermFormat, fdorgmt_format,
+    ProductLists
+)
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('eibqfar2_processing.log'),
+        logging.FileHandler('eiq_fisf_processing.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 # Configuration
-pidmfin_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
-deposit1_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQFAR2")
+pidmfin_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQFISF")
+deposit1_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQFISF")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQFISF")
 output_path.mkdir(exist_ok=True, parents=True)
 
-# PROC FORMAT equivalent - Create mapping dictionaries
-PRODBRH = {
-    '42110': 'DDMAND',
-    '42310': 'DDMAND',
-    '34180': 'DDMAND',
-    '42199': 'DDMAND',
-    '42120': 'DSVING',
-    '42320': 'DSVING',
-    '42130': 'DFIXED',
-    '42132': 'DFIXED',
-    '42133': 'DFIXED',
-    '42180': 'DDMAND',
-    '42610': 'FDMAND',
-    '42699': 'FDMAND',
-    '42630': 'FFIXED',
-    '42XXX': 'ATM/SI (E)',
-    '46795': 'DEBIT CARD (E)',
-    'TRUST': 'TRUST ACCT'
-}
-
-logger.info("Format mappings created successfully")
+logger.info("PBBDPFMT formats loaded successfully")
 
 def read_sas_to_polars(filepath: Path) -> pl.DataFrame:
     """Read a SAS .sas7bdat file using pyreadstat and return as Polars DataFrame"""
@@ -69,63 +59,24 @@ def calculate_report_date() -> datetime.date:
         reptdate = today
     return reptdate
 
-def process_trust_data(pidmfin_path: Path) -> pl.DataFrame:
-    """Process TRUST data from CISDEPXN"""
-    logger.info("Processing TRUST data from cisdepxn.sas7bdat")
-    cisdepxn_df = read_sas_to_polars(pidmfin_path / "cisdepxn.sas7bdat")
-    
-    if cisdepxn_df.is_empty():
-        logger.warning("PIDMFIN.cisdepxn is empty or not found")
-        return pl.DataFrame()
-    
-    required_cols = ['ACCTYPE2', 'BENEINT', 'BRANCH', 'PRODCD', 'INSURED']
-    col_mapping = {col.lower(): col for col in cisdepxn_df.columns}
-    missing_cols = []
-    for col in required_cols:
-        if col.lower() not in col_mapping:
-            missing_cols.append(col)
-    
-    if missing_cols:
-        logger.warning(f"Missing columns in cisdepxn: {missing_cols}")
-        return pl.DataFrame()
-    
-    rename_dict = {}
-    for col in required_cols:
-        actual_col = col_mapping[col.lower()]
-        if actual_col != col:
-            rename_dict[actual_col] = col
-    
-    if rename_dict:
-        cisdepxn_df = cisdepxn_df.rename(rename_dict)
-    
-    trust_df = cisdepxn_df.filter(
-        (pl.col('ACCTYPE2').is_in([3, 7])) & 
-        (pl.col('BENEINT').is_not_null())
-    ).select([
-        'BRANCH', 'PRODCD', 'INSURED'
-    ]).rename({'INSURED': 'INSUREBR'})
-    
-    logger.info(f"TRUST records: {trust_df.height:,}")
-    return trust_df
-
-def process_deposit_data(deposit1_path: Path) -> pl.DataFrame:
-    """Process deposit data from CISDEPD"""
-    logger.info("Processing deposit data from cisdepd.sas7bdat")
-    cisdepd_df = read_sas_to_polars(deposit1_path / "cisdepd.sas7bdat")
+def process_islamic_deposit_data(deposit1_path: Path) -> pl.DataFrame:
+    """Process Islamic deposit data from CISDEPD"""
+    logger.info("Processing Islamic deposit data from cisdepi.sas7bdat")
+    cisdepd_df = read_sas_to_polars(deposit1_path / "cisdepi.sas7bdat")
     
     if cisdepd_df.is_empty():
-        logger.warning("DEPOSIT1.cisdepd is empty or not found")
+        logger.warning("DEPOSIT1.cisdepi is empty or not found")
         return pl.DataFrame()
     
     required_cols = ['BRANCH', 'PRODCD', 'INSUREBR']
-    col_mapping = {col.lower(): col for col in cisdepd_df.columns}
+    col_mapping = {col.lower(): col for col in cisdepi_df.columns}
     missing_cols = []
     for col in required_cols:
         if col.lower() not in col_mapping:
             missing_cols.append(col)
     
     if missing_cols:
-        logger.warning(f"Missing columns in cisdepd: {missing_cols}")
+        logger.warning(f"Missing columns in cisdepi: {missing_cols}")
         return pl.DataFrame()
     
     rename_dict = {}
@@ -137,46 +88,104 @@ def process_deposit_data(deposit1_path: Path) -> pl.DataFrame:
     if rename_dict:
         cisdepd_df = cisdepd_df.rename(rename_dict)
     
+    if 'PRODCD' in cisdepd_df.columns:
+        if cisdepd_df['PRODCD'].dtype == pl.String:
+            cisdepd_df = cisdepd_df.with_columns([
+                pl.col('PRODCD').cast(pl.Int64).alias('PRODCD')
+            ])
+    
     cisdepd_df = cisdepd_df.select(['BRANCH', 'PRODCD', 'INSUREBR'])
-    logger.info(f"DEPOSIT records: {cisdepd_df.height:,}")
+    logger.info(f"Islamic DEPOSIT records: {cisdepd_df.height:,}")
     return cisdepd_df
 
 def apply_format_mappings(df: pl.DataFrame) -> pl.DataFrame:
-    """Apply PRODBRH format mapping to PRODCD column"""
+    """Apply format mappings to PRODCD column using PBBDPFMT formats"""
     if 'PRODCD' in df.columns:
-        try:
+        if df['PRODCD'].dtype != pl.Int64:
             df = df.with_columns([
-                pl.col('PRODCD').replace(PRODBRH).alias('PRODCD_FORMATTED')
+                pl.col('PRODCD').cast(pl.Int64).alias('PRODCD')
             ])
-        except AttributeError:
-            df = df.with_columns([
-                pl.col('PRODCD').map_elements(
-                    lambda x: PRODBRH.get(x, str(x)), 
-                    return_dtype=pl.String
-                ).alias('PRODCD_FORMATTED')
-            ])
+        
+        logger.info("Applying product format mappings from PBBDPFMT")
+        
+        df = df.with_columns([
+            pl.col('PRODCD').map_elements(
+                lambda x: _get_product_format(x),
+                return_dtype=pl.String
+            ).alias('PRODCD_FORMATTED')
+        ])
+        
+        df = df.with_columns([
+            pl.col('PRODCD').map_elements(
+                lambda x: _get_denomination(x),
+                return_dtype=pl.String
+            ).alias('DENOMINATION')
+        ])
+    
     return df
+
+def _get_product_format(prodcd) -> str:
+    """Get product format from PBBDPFMT based on product code"""
+    if prodcd is None or prodcd == '':
+        return 'UNKNOWN'
+    
+    try:
+        prodcd_int = int(prodcd) if not isinstance(prodcd, int) else prodcd
+    except (ValueError, TypeError):
+        return str(prodcd)
+    
+    if prodcd_int in ProductLists.CURX_PRODUCTS:
+        return CAProductFormat.format(prodcd_int)
+    
+    if 200 <= prodcd_int <= 300:
+        return SAProductFormat.format(prodcd_int)
+    
+    if 229 <= prodcd_int <= 997:
+        return FDProductFormat.format(prodcd_int)
+    
+    return str(prodcd_int)
+
+def _get_denomination(prodcd) -> str:
+    """Get Islamic/Domestic denomination from PBBDPFMT"""
+    if prodcd is None or prodcd == '':
+        return 'UNKNOWN'
+    
+    try:
+        prodcd_int = int(prodcd) if not isinstance(prodcd, int) else prodcd
+    except (ValueError, TypeError):
+        return 'UNKNOWN'
+    
+    if prodcd_int in ProductLists.CURX_PRODUCTS:
+        return CADenomFormat.format(prodcd_int)
+    
+    if 200 <= prodcd_int <= 300:
+        return SADenomFormat.format(prodcd_int)
+    
+    if 229 <= prodcd_int <= 997:
+        return FDDenomFormat.format(prodcd_int)
+    
+    return 'UNKNOWN'
 
 def format_number(x):
     """Format number with commas and 2 decimal places, handle None/null"""
     if x is None or x == 0:
-        return "                 ."  # Empty cell with dots
-    return f"{x:>18,.2f}"
+        return "0.00"
+    return f"{x:,.2f}"
 
-def generate_conventional_txt_report(summary_df: pl.DataFrame, output_path: Path, report_date: datetime.date) -> None:
+def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, report_date: datetime.date) -> None:
     """
-    Generate TXT report in the exact format from the example
+    Generate TXT report for Islamic banking in the exact format from the example
     """
     if summary_df.is_empty():
         logger.warning("No data available for report generation")
         return
     
-    # Create pivot table - using 'on' instead of 'columns' (deprecated)
-    product_categories = ['DDMAND', 'DSVING', 'DFIXED', 'FDMAND', 'FFIXED', 'DEBIT CARD (E)']
+    # Create pivot table
+    product_categories = ['IR070', 'DDMAND', 'DSVING', 'DFIXED', 'FDMAND']
     
     pivot_table = summary_df.pivot(
         index='BRANCH',
-        on='PRODCD_FORMATTED',  # Fixed: using 'on' instead of 'columns'
+        columns='PRODCD_FORMATTED', 
         values='INSUREBR_SUM',
         aggregate_function='sum'
     ).fill_null(0)
@@ -202,32 +211,27 @@ def generate_conventional_txt_report(summary_df: pl.DataFrame, output_path: Path
     date_str = now.strftime("%I:%M %A, %B %d, %Y")
     
     # Prepare TXT file
-    txt_file = output_path / "EIBQFAR2_CONVENTIONAL_REPORT.txt"
+    txt_file = output_path / "EIIQFISF_ISLAMIC_REPORT.txt"
     
     with open(txt_file, 'w') as f:
         # Header - Page 1
-        f.write(" " * 35 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(CONVENTIONAL)     ")
+        f.write(" " * 38 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        ")
         f.write(f"{date_str}   1\n")
         f.write("\n" * 2)
-        f.write(" " * 60 + "-" * 60 + "\n")
+        f.write(" " * 13 + "-" * 73 + "\n")
         
         # Main table header
-        f.write("|BRANCH  |" + " " * 49 + "PRODUCT" + " " * 49 + "|\n")
-        f.write("|        |" + "-" * 49 + "+" + "-" * 49 + "|\n")
+        f.write(" " * 13 + "|BRANCH  |" + " " * 46 + "PRODUCT" + " " * 46 + "|\n")
+        f.write(" " * 13 + "|        |" + "-" * 46 + "+" + "-" * 46 + "|\n")
         
         # Product columns header - first row
-        f.write("|        |      DDMAND      |      DSVING      |      DFIXED      |")
-        f.write("      FDMAND      |      FFIXED      |  DEBIT CARD (E)  |\n")
+        f.write(" " * 13 + "|        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |\n")
         
         # Product columns header - second row (subheaders)
-        f.write("|        |------------------+------------------+------------------+")
-        f.write("------------------+------------------+------------------|\n")
-        f.write("|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |")
-        f.write("   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
-        f.write("|        |     INSURED      |     INSURED      |     INSURED      |")
-        f.write("     INSURED      |     INSURED      |     INSURED      |\n")
-        f.write("|--------+------------------+------------------+------------------+")
-        f.write("------------------+------------------+------------------|\n")
+        f.write(" " * 13 + "|        |------------------+------------------+------------------+------------------+------------------|\n")
+        f.write(" " * 13 + "|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
+        f.write(" " * 13 + "|        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |\n")
+        f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
         
         # Data rows
         row_count = 0
@@ -237,70 +241,61 @@ def generate_conventional_txt_report(summary_df: pl.DataFrame, output_path: Path
             if branch == 'UNKNOWN':
                 continue
             
-            # Format values - empty cells show dots
+            # Format values
             values = []
             for col in product_categories:
                 val = row.get(col, 0)
-                if val == 0:
-                    values.append("                 .")
-                else:
-                    values.append(f"{val:>18,.2f}")
+                values.append(format_number(val))
             
             # Write row
-            f.write(f"|{branch:<8}|{values[0]}|{values[1]}|{values[2]}|")
-            f.write(f"{values[3]}|{values[4]}|{values[5]}|\n")
-            f.write("|--------+------------------+------------------+------------------+")
-            f.write("------------------+------------------+------------------|\n")
+            f.write(" " * 13 + f"|{branch:<8}|{values[0]:>18}|{values[1]:>18}|{values[2]:>18}|")
+            f.write(f"{values[3]:>18}|{values[4]:>18}|\n")
+            f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
             
             row_count += 1
             
-            # Page break every 30 rows (as in example)
-            if row_count % 30 == 0 and row_count < len(pivot_table):
+            # Page break every 24 rows (as in example)
+            if row_count % 24 == 0 and row_count < len(pivot_table):
                 # Footer for current page
-                f.write("\n" + " " * 60 + "(Continued)\n")
-                f.write(" " * 35 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(CONVENTIONAL)     ")
-                f.write(f"{date_str}   {row_count//30 + 1}\n")
+                f.write("\n" + " " * 45 + "(Continued)\n")
+                f.write(" " * 38 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        ")
+                f.write(f"{date_str}   {row_count//24 + 1}\n")
                 f.write("\n" * 2)
-                f.write(" " * 60 + "-" * 60 + "\n")
+                f.write(" " * 13 + "-" * 73 + "\n")
                 
                 # Header repeated
-                f.write("|BRANCH  |" + " " * 49 + "PRODUCT" + " " * 49 + "|\n")
-                f.write("|        |" + "-" * 49 + "+" * 49 + "|\n")
-                f.write("|        |      DDMAND      |      DSVING      |      DFIXED      |")
-                f.write("      FDMAND      |      FFIXED      |  DEBIT CARD (E)  |\n")
-                f.write("|        |------------------+------------------+------------------+")
-                f.write("------------------+------------------+------------------|\n")
-                f.write("|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |")
-                f.write("   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
-                f.write("|        |     INSURED      |     INSURED      |     INSURED      |")
-                f.write("     INSURED      |     INSURED      |     INSURED      |\n")
-                f.write("|--------+------------------+------------------+------------------+")
-                f.write("------------------+------------------+------------------|\n")
+                f.write(" " * 13 + "|BRANCH  |" + " " * 46 + "PRODUCT" + " " * 46 + "|\n")
+                f.write(" " * 13 + "|        |" + "-" * 46 + "+" + "-" * 46 + "|\n")
+                f.write(" " * 13 + "|        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |\n")
+                f.write(" " * 13 + "|        |------------------+------------------+------------------+------------------+------------------|\n")
+                f.write(" " * 13 + "|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
+                f.write(" " * 13 + "|        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |\n")
+                f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
         
         # Grand total row
         total_values = []
         for col in product_categories:
             total_val = pivot_table.select(pl.col(col).sum()).row(0)[0]
-            total_values.append(f"{total_val:>18,.2f}")
+            total_values.append(format_number(total_val))
         
-        f.write(f"|TOTAL   |{total_values[0]}|{total_values[1]}|{total_values[2]}|")
-        f.write(f"{total_values[3]}|{total_values[4]}|{total_values[5]}|\n")
-        f.write("-" * 91 + "\n")
+        f.write(" " * 13 + f"|TOTAL   |{total_values[0]:>18}|{total_values[1]:>18}|{total_values[2]:>18}|")
+        f.write(f"{total_values[3]:>18}|{total_values[4]:>18}|\n")
+        f.write(" " * 13 + "-" * 73 + "\n")
     
-    logger.info(f"TXT report saved to: {txt_file}")
+    logger.info(f"Islamic TXT report saved to: {txt_file}")
     
     # Also save Parquet for data analysis
-    pivot_table.write_parquet(output_path / "EIBQFAR2_CONVENTIONAL_PIVOT.parquet")
-    summary_df.write_parquet(output_path / "EIBQFAR2_CONVENTIONAL_SUMMARY.parquet")
+    pivot_table.write_parquet(output_path / "EIIQFISF_ISLAMIC_PIVOT.parquet")
+    summary_df.write_parquet(output_path / "EIIQFISF_ISLAMIC_SUMMARY.parquet")
     
     logger.info(f"Parquet files saved to: {output_path}")
 
 def main():
-    """Main processing function"""
+    """Main processing function for EIIQFISF - Islamic banking report"""
     try:
         # Calculate report date
         reptdate = calculate_report_date()
-        SDESC = 'PUBLIC BANK BERHAD'
+        SDESC = 'PUBLIC BANK BERHAD (ISLAMIC)'
         REPTMON = f"{reptdate.month:02d}"
         REPTYEAR = reptdate.strftime('%y')
         
@@ -310,29 +305,23 @@ def main():
         
         # Create REPTDATE DataFrame
         reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
-        reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
-        reptdate_df.write_csv(output_path / "REPTDATE.csv")
+        reptdate_df.write_parquet(output_path / "REPTDATE_ISLAMIC.parquet")
+        reptdate_df.write_csv(output_path / "REPTDATE_ISLAMIC.csv")
         logger.info(f"REPTDATE saved to {output_path}")
         
-        # Process data sources
-        trust_df = process_trust_data(pidmfin_path)
-        deposit_df = process_deposit_data(deposit1_path)
+        # Process Islamic data sources
+        deposit_df = process_islamic_deposit_data(deposit1_path)
         
-        # Combine datasets
-        dataframes = [df for df in [trust_df, deposit_df] if not df.is_empty()]
-        
-        if not dataframes:
-            logger.warning("No data available for processing")
+        if deposit_df.is_empty():
+            logger.warning("No Islamic data available for processing")
             return
         
-        rpt_base = pl.concat(dataframes, how="diagonal")
-        
-        # Apply format mappings
-        rpt_base = apply_format_mappings(rpt_base)
+        # Apply format mappings from PBBDPFMT
+        rpt_base = apply_format_mappings(deposit_df)
         
         # Save base dataset
-        rpt_base.write_parquet(output_path / "RPT_BASE.parquet")
-        rpt_base.write_csv(output_path / "RPT_BASE.csv")
+        rpt_base.write_parquet(output_path / "RPT_BASE_ISLAMIC.parquet")
+        rpt_base.write_csv(output_path / "RPT_BASE_ISLAMIC.csv")
         
         logger.info(f"RPT_BASE records: {rpt_base.height:,}")
         
@@ -346,13 +335,21 @@ def main():
             pl.col('BRANCH').fill_null('UNKNOWN').cast(pl.String).alias('BRANCH')
         ])
         
-        # Generate TXT report
-        generate_conventional_txt_report(summary, output_path, reptdate)
+        # Calculate total
+        total_summary = rpt_base.group_by(['PRODCD_FORMATTED']).agg([
+            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
+        ]).with_columns([
+            pl.lit('TOTAL').cast(pl.String).alias('BRANCH')
+        ])
         
-        logger.info("PROCESSING COMPLETED SUCCESSFULLY")
+        # Combine and generate report
+        final_summary = pl.concat([summary, total_summary], how="diagonal")
+        generate_islamic_txt_report(final_summary, output_path, reptdate)
+        
+        logger.info("ISLAMIC PROCESSING COMPLETED SUCCESSFULLY")
         
     except Exception as e:
-        logger.error(f"Error in main processing: {e}", exc_info=True)
+        logger.error(f"Error in Islamic processing: {e}", exc_info=True)
         raise
 
 if __name__ == "__main__":
