@@ -1,183 +1,530 @@
+#!/usr/bin/env python3
+"""
+EIBQDISE Deposit Processing
+Processes saving, current, and fixed deposit accounts
+Creates monthly extracts for BNM reporting
+"""
 
-# eibdcitx.py
-import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
 import duckdb
-from datetime import date, datetime
+import polars as pl
+from datetime import datetime, timedelta
+from pathlib import Path
+import calendar
 
-# -------------------------------------------------------------------
-# Step 1: Reporting Date Setup
-# -------------------------------------------------------------------
-today = date.today()
-REPTDAY = f"{today.day:02d}"
-REPTMON = f"{today.month:02d}"
-REPTYEAR = f"{today.year % 100:02d}"
-RDATE = today.strftime("%d/%m/%Y")
 
-day = today.day
-if 1 <= day <= 8:
-    WK = "1"
-elif 9 <= day <= 15:
-    WK = "2"
-elif 16 <= day <= 22:
-    WK = "3"
+# ============================================================================
+# PATH SETUP
+# ============================================================================
+BASE_PATH = Path("/data")
+INPUT_PATH = BASE_PATH / "input"
+OUTPUT_PATH = BASE_PATH / "output"
+
+# Input files
+SAVING_FILE = INPUT_PATH / "saving.parquet"
+CURRENT_FILE = INPUT_PATH / "current.parquet"
+FD_FILE = INPUT_PATH / "fd.parquet"
+UMA_FILE = INPUT_PATH / "uma.parquet"
+
+# Output files (will be created as parquet)
+OUTPUT_SAVG_PATTERN = OUTPUT_PATH / "savg{month}{week}.parquet"
+OUTPUT_CURN_PATTERN = OUTPUT_PATH / "curn{month}{week}.parquet"
+OUTPUT_FCY_PATTERN = OUTPUT_PATH / "fcy{month}{week}.parquet"
+OUTPUT_DEPT_PATTERN = OUTPUT_PATH / "dept{month}{week}.parquet"
+OUTPUT_FDMTHLY = OUTPUT_PATH / "fdmthly.parquet"
+
+# Ensure output directory exists
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================================
+# INITIALIZE DUCKDB CONNECTION
+# ============================================================================
+con = duckdb.connect()
+
+
+# ============================================================================
+# CALCULATE REPORTING DATE AND PARAMETERS
+# ============================================================================
+
+# Get first day of current month minus 1 day (last day of previous month)
+today = datetime.now()
+first_of_month = datetime(today.year, today.month, 1)
+reptdate = first_of_month - timedelta(days=1)
+
+day = reptdate.day
+mm = reptdate.month
+
+# Determine week based on day
+if day == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+    wk2, wk3 = None, None
+elif day == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+    wk2, wk3 = None, None
+elif day == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+    wk2, wk3 = None, None
+else:  # day >= 23 (last day of month)
+    sdd, wk, wk1 = 23, '4', '3'
+    wk2, wk3 = '2', '1'
+
+# Calculate MM1 (previous month for week 1)
+if wk == '1':
+    mm1 = mm - 1 if mm > 1 else 12
 else:
-    WK = "4"
+    mm1 = mm
 
-print(f"Running EIBDCITX for {RDATE} (WK={WK})")
+sdate = datetime(reptdate.year, mm, sdd)
 
-# -------------------------------------------------------------------
-# Step 2: Load raw datasets (replace with actual paths)
-# -------------------------------------------------------------------
-dpfl = pl.read_csv("DPFL.csv")   # DCI Daily raw
-eqfl = pl.read_csv("EQFL.csv", separator="|")
-cra  = pl.read_csv("CRA.csv")
-eqrt = pl.read_csv("EQRATE.csv")
-mnitb_saving = pl.read_csv("MNITB_SAVING.csv")
-mnitb_current = pl.read_csv("MNITB_CURRENT.csv")
+# Format macro variables
+nowk = wk
+nowk1 = wk1
+nowk2 = wk2
+nowk3 = wk3
+reptmon = f"{mm:02d}"
+reptmon1 = f"{mm1:02d}"
+reptyear = reptdate.year
+reptday = f"{reptdate.day:02d}"
+rdate = reptdate.strftime("%d/%m/%y")
+sdate_str = sdate.strftime("%d/%m/%y")
 
-# -------------------------------------------------------------------
-# Step 3: DPST dataset
-# -------------------------------------------------------------------
-dpst = (
-    dpfl
-    .rename({"NEWIC":"ICNO"})  # rename if needed
-    .with_columns([
-        pl.col("ACCINT").cast(pl.Float64)
-    ])
+print(f"Report Date: {rdate}")
+print(f"Start Date: {sdate_str}")
+print(f"Week: {nowk}")
+print(f"Month: {reptmon}")
+print(f"Year: {reptyear}")
+print()
+
+# Constants
+AGELIMIT = 12
+MAXAGE = 18
+AGEBELOW = 11
+
+# ACE products (referenced in code)
+ACE_PRODUCTS = []  # Define based on requirements
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def calculate_age(bdate_val, reptdate, reptmon, reptday, reptyear):
+    """Calculate age based on birthdate"""
+    if bdate_val is None or bdate_val == 0:
+        return 0
+
+    try:
+        # Convert MMDDYYYY format to date
+        bdate_str = str(int(bdate_val)).zfill(11)[:8]
+        bdate = datetime.strptime(bdate_str, "%m%d%Y")
+
+        bday = bdate.day
+        bmonth = bdate.month
+        byear = bdate.year
+
+        age = reptyear - byear
+
+        # Age limit adjustments
+        if age == AGELIMIT:
+            if (bmonth == int(reptmon) and bday > int(reptday)) or bmonth > int(reptmon):
+                age = AGEBELOW
+        elif age == MAXAGE:
+            if (bmonth == int(reptmon) and bday > int(reptday)) or bmonth > int(reptmon):
+                age = AGELIMIT
+        elif age > MAXAGE:
+            age = MAXAGE
+        elif age < AGELIMIT:
+            age = AGEBELOW
+        else:
+            age = AGELIMIT
+
+        return age
+    except:
+        return 0
+
+
+def convert_opendt(opendt_val):
+    """Convert OPENDT from numeric to date"""
+    if opendt_val is None or opendt_val == 0:
+        return None
+    try:
+        opendt_str = str(int(opendt_val)).zfill(11)[:8]
+        return datetime.strptime(opendt_str, "%m%d%Y")
+    except:
+        return None
+
+
+# ============================================================================
+# PROCESS UMA DATA
+# ============================================================================
+
+print("Loading UMA data...")
+
+if UMA_FILE.exists():
+    uma = pl.read_parquet(UMA_FILE)
+    uma = uma.filter(pl.col("BNKIND") == "PBB")
+    print(f"✓ Loaded {len(uma)} UMA records")
+else:
+    uma = pl.DataFrame()
+    print("⚠ UMA file not found, creating empty dataset")
+
+
+# ============================================================================
+# PROCESS SAVING ACCOUNTS
+# ============================================================================
+
+print("Processing Saving Accounts...")
+
+# Load saving data
+saving = pl.read_parquet(SAVING_FILE)
+
+# Combine with UMA if exists
+if len(uma) > 0:
+    saving = pl.concat([saving, uma], how="diagonal")
+
+# Filter out closed/blocked accounts
+saving = saving.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
+
+# Apply transformations
+saving = saving.with_columns([
+    # Format assignments (simplified - would need actual format mappings)
+    pl.col("CUSTCODE").cast(pl.Utf8).str.slice(0, 2).alias("CUSTCD"),
+    pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATECD"),
+    pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 5).alias("PRODCD"),
+    pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 1).alias("AMTIND"),
+
+    # Convert OPENDT to date
+    pl.col("OPENDT").map_elements(convert_opendt, return_dtype=pl.Date).alias("OPENDATE"),
+
+    # Calculate RANGE (simplified)
+    pl.when(pl.col("CURBAL") < 1000).then(pl.lit("1"))
+    .when(pl.col("CURBAL") < 10000).then(pl.lit("2"))
+    .when(pl.col("CURBAL") < 50000).then(pl.lit("3"))
+    .otherwise(pl.lit("4"))
+    .alias("RANGE"),
+])
+
+# Calculate AGE
+saving = saving.with_columns([
+    pl.struct(["BDATE"]).map_elements(
+        lambda x: calculate_age(x["BDATE"], reptdate, reptmon, reptday, reptyear),
+        return_dtype=pl.Int64
+    ).alias("AGE")
+])
+
+print(f"✓ Processed {len(saving)} saving accounts")
+
+# Save output
+output_savg = OUTPUT_PATH / f"savg{reptmon}{nowk}.parquet"
+saving.write_parquet(output_savg)
+print(f"✓ Saved to: {output_savg}")
+
+
+# ============================================================================
+# PROCESS CURRENT ACCOUNTS
+# ============================================================================
+
+print("Processing Current Accounts...")
+
+# Load current data
+current = pl.read_parquet(CURRENT_FILE)
+
+# Remove duplicates (keep highest CURBAL per account)
+current = current.sort(["ACCTNO", "CURBAL"], descending=[False, True])
+current = current.unique(subset=["ACCTNO"], keep="first")
+
+# Filter out closed/blocked accounts
+current = current.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
+
+# Apply transformations
+current = current.with_columns([
+    # Convert foreign currency amounts if needed
+    pl.when(pl.col("CURCODE") != "MYR")
+    .then((pl.col("INTPAYBL") * pl.col("FORATE")).round(2))
+    .otherwise(pl.col("INTPAYBL"))
+    .alias("INTPAYBL_ADJ"),
+
+    # Format assignments
+    pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATECD"),
+    pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 5).alias("PRODCD"),
+    pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 1).alias("AMTIND"),
+
+    # Initialize balances
+    pl.lit(0.0).alias("CABAL"),
+    pl.lit(0.0).alias("SABAL"),
+
+    # RANGE calculations (simplified)
+    pl.when(pl.col("CURBAL") < 1000).then(pl.lit("1"))
+    .when(pl.col("CURBAL") < 10000).then(pl.lit("2"))
+    .when(pl.col("CURBAL") < 50000).then(pl.lit("3"))
+    .otherwise(pl.lit("4"))
+    .alias("RANGE"),
+
+    pl.when(pl.col("AVGAMT") < 1000).then(pl.lit("1"))
+    .when(pl.col("AVGAMT") < 10000).then(pl.lit("2"))
+    .when(pl.col("AVGAMT") < 50000).then(pl.lit("3"))
+    .otherwise(pl.lit("4"))
+    .alias("AVGRNGE"),
+])
+
+# Handle VOSTRO accounts
+current = current.with_columns([
+    pl.when(pl.col("PRODUCT") == 104)
+    .then(pl.lit("02"))
+    .when(pl.col("PRODUCT") == 105)
+    .then(pl.lit("81"))
+    .otherwise(pl.col("CUSTCODE").cast(pl.Utf8).str.slice(0, 2))
+    .alias("CUSTCD")
+])
+
+# Split into CURN and FCY based on product
+current_regular = current.filter(
+    ~pl.col("PRODUCT").is_in(ACE_PRODUCTS) &
+    ~pl.col("PRODUCT").is_between(400, 444)
 )
 
-# Simulate join with DCID
-dcid = pl.read_csv("DCID.csv").select(["TICKETNO","CUSTCODE"])
-dpst = dpst.join(dcid, on="TICKETNO", how="left")
+current_fcy = current.filter(pl.col("PRODUCT").is_between(400, 444))
 
-# -------------------------------------------------------------------
-# Step 4: EQC / EQI split
-# -------------------------------------------------------------------
-eq = eqfl.with_columns([
-    pl.col("ACCINTRM").abs(),
-    pl.col("ACCINTAMT").abs(),
-    pl.col("TOTINTAMT").abs(),
-    pl.col("PREMPAID").abs(),
-    pl.col("PREMREC").abs()
+# Handle FCY sector adjustments
+current_fcy = current_fcy.with_columns([
+    pl.when(pl.col("CUSTCD").is_in(['77', '78', '95']))
+    .then(
+        pl.when(pl.col("SECTOR").is_in([4, 5]))
+        .then(pl.col("SECTOR"))
+        .otherwise(pl.lit(1))
+    )
+    .otherwise(
+        pl.when(pl.col("SECTOR").is_in([1, 2, 3]))
+        .then(pl.lit(4))
+        .when(pl.col("SECTOR").is_in([4, 5]))
+        .then(pl.col("SECTOR"))
+        .otherwise(pl.lit(4))
+    )
+    .alias("SECTOR_ADJ")
 ])
 
-eq = eq.filter((pl.col("STARTDT") <= str(today)) & (pl.col("MATDT") >= str(today)))
-
-eqc = eq.filter(pl.col("TYPE")=="C")
-eqi = eq.filter(pl.col("TYPE")!="C")
-
-# -------------------------------------------------------------------
-# Step 5: Customer leg (EQC join DPST, CRA, DEPO)
-# -------------------------------------------------------------------
-eqdci = dpst.join(eqc, on="TICKETNO", how="inner")
-eqdci = eqdci.filter(pl.col("CUSTCODE") >= 80)
-
-# CRA feed
-dp_cra = cra.filter(pl.col("INV_STATUS").is_in(["ACT","CEP","CEU","CCU","CMU"]))
-dp_cra = dp_cra.with_columns([
-    pl.lit("Outstanding").alias("STATUSIND"),
-    pl.lit("MYR").alias("INVCURR"),
-    pl.lit(0).alias("PREMPAID")
+# Replace INTPAYBL with adjusted value
+current_regular = current_regular.with_columns([
+    pl.col("INTPAYBL_ADJ").alias("INTPAYBL")
+])
+current_fcy = current_fcy.with_columns([
+    pl.col("INTPAYBL_ADJ").alias("INTPAYBL"),
+    pl.col("SECTOR_ADJ").alias("SECTOR")
 ])
 
-# Merge deposits
-depo = (
-    pl.concat([mnitb_saving, mnitb_current])
-    .rename({"ACCTNO":"INVCURAC"})
-)
-dp_cra = dp_cra.join(depo, on="INVCURAC", how="inner").filter(pl.col("CUSTCODE")>=80)
+# Combine FCY back to regular current
+current_all = pl.concat([current_regular, current_fcy], how="diagonal")
 
-# Append
-eqdci = pl.concat([eqdci, dp_cra])
+print(f"✓ Processed {len(current_all)} current accounts")
+print(f"  - Regular: {len(current_regular)}")
+print(f"  - FCY: {len(current_fcy)}")
 
-# FX enrichment
-eqdci = eqdci.join(eqrt.rename({"CURRENCY":"INVCURR","SPOTRATE":"SPOTRT"}),
-                   on="INVCURR", how="left")
+# Save outputs
+output_curn = OUTPUT_PATH / f"curn{reptmon}{nowk}.parquet"
+output_fcy = OUTPUT_PATH / f"fcy{reptmon}{nowk}.parquet"
 
-eqdci = eqdci.with_columns([
-    (pl.col("ACCINT").round(0 if pl.col("INVCURR")=="JPY" else 2)).alias("ACCINTX"),
-    (pl.col("PREMPAID").round(0 if pl.col("INVCURR")=="JPY" else 2)).alias("PREMPAI"),
+current_all.write_parquet(output_curn)
+current_fcy.write_parquet(output_fcy)
+
+print(f"✓ Saved to: {output_curn}")
+print(f"✓ Saved to: {output_fcy}")
+
+
+# ============================================================================
+# SUMMARIZE AT BRANCH LEVEL FOR RDAL
+# ============================================================================
+
+print("Creating branch-level summaries...")
+
+# Summarize savings
+dept_savg = saving.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND"]).agg([
+    pl.col("CURBAL").sum().alias("CURBAL"),
+    pl.col("INTPAYBL").sum().alias("INTPAYBL")
 ])
 
-eqdci = eqdci.with_columns([
-    (pl.col("ACCINTX")*pl.col("SPOTRT")).alias("ACCINTRM"),
-    (pl.col("PREMPAI")*pl.col("SPOTRT")).alias("PREMPAIDRM")
+# Summarize current
+dept_curn = current_all.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "SECTOR", "AMTIND"]).agg([
+    pl.col("CURBAL").sum().alias("CURBAL"),
+    pl.col("INTPAYBL").sum().alias("INTPAYBL")
 ])
 
-cusmyr = eqdci.filter(pl.col("INVCURR")=="MYR")
-cusfcy = eqdci.filter(pl.col("INVCURR")!="MYR")
+# Combine department summaries
+dept_all = pl.concat([dept_savg, dept_curn], how="diagonal")
 
-# -------------------------------------------------------------------
-# Step 6: Interbank leg
-# -------------------------------------------------------------------
-eqdci_ib = eqi.filter(pl.col("FISSCODE") >= "80")
-eqdci_ib = eqdci_ib.join(eqrt.rename({"CURRENCY":"INVCURR","SPOTRATE":"SPOTRT"}),
-                         on="INVCURR", how="left")
-eqdci_ib = eqdci_ib.with_columns([
-    (pl.col("PREMREC").round(0 if pl.col("INVCURR")=="JPY" else 2)).alias("PREMREX"),
-    (pl.col("PREMREX")*pl.col("SPOTRT")).alias("PREMRECRM")
+output_dept = OUTPUT_PATH / f"dept{reptmon}{nowk}.parquet"
+dept_all.write_parquet(output_dept)
+
+print(f"✓ Created department summary: {output_dept}")
+
+
+# ============================================================================
+# PROCESS ACCOUNT COUNTS (293 REPORTS)
+# ============================================================================
+
+print("Processing account count summaries...")
+
+# Savings count
+save293 = saving.with_columns([
+    pl.lit(1).alias("OPENMH")
 ])
-ibnmyr = eqdci_ib.filter(pl.col("INVCURR")=="MYR")
-ibnfcy = eqdci_ib.filter(pl.col("INVCURR")!="MYR")
 
-# -------------------------------------------------------------------
-# Step 7: Build DCI
-# -------------------------------------------------------------------
-dcimyr = (
-    pl.concat([cusmyr, ibnmyr])
-    .with_columns([
-        pl.when(pl.col("TYPE")=="C").then(pl.col("PREMPAID")).otherwise(pl.col("PREMREC")).alias("PREMIUM"),
-        pl.lit(today).alias("REPTDATS")
-    ])
-)
+save293_sum = save293.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND"]).agg([
+    pl.col("OPENMH").sum().alias("OPENMH")
+])
 
-# Derive ELDAY
-def elday(d):
-    dd = d.day
-    mm = d.month
-    yy = d.year
-    if dd in (1,9,16,23): return "DAYA"
-    if dd in (2,10,17,24): return "DAYB"
-    if dd in (3,11,18,25): return "DAYC"
-    if dd in (4,12,19,26): return "DAYD"
-    if dd in (5,13,20,27): return "DAYE"
-    if dd in (6,14,21,28): return "DAYF"
-    if dd in (7,29): return "DAYG"
-    if dd == 30: return "DAYH"
-    if dd in (8,15,22,31): return "DAYI"
-    return "DAYX"
+# Current count
+curr293 = current.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
+curr293 = curr293.filter(pl.col("BRANCH") <= 900)
 
-dcimyr = dcimyr.with_columns(pl.col("REPTDATS").apply(elday).alias("ELDAY"))
+# Apply product code transformations
+curr293 = curr293.with_columns([
+    pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATECD"),
+    pl.lit("00").alias("CUSTCD"),
+    pl.lit(1).alias("OPENMH"),
 
-# Map to BNM codes
-records = []
-for row in dcimyr.iter_rows(named=True):
-    if row.get("ACCINTRM",0) not in (None,0):
-        records.append({"BNMCODE":"4911095000000Y","ELDAY":row["ELDAY"],
-                        "REPTDATS":row["REPTDATS"],"AMOUNT":row["ACCINTRM"]})
-    if row.get("PREMIUM",0) not in (None,0):
-        records.append({"BNMCODE":"4929996000000Y","ELDAY":row["ELDAY"],
-                        "REPTDATS":row["REPTDATS"],"AMOUNT":row["PREMIUM"]})
+    # Product code and amount indicator based on product
+    pl.when(pl.col("PRODUCT").is_in([160, 161, 162, 163, 164, 165, 166, 182]))
+    .then(pl.lit("42310"))
+    .otherwise(pl.lit("42110"))
+    .alias("PRODCD"),
 
-dci_final = pl.DataFrame(records)
+    pl.when(pl.col("PRODUCT").is_in([160, 161, 162, 163, 164, 165, 166, 182]))
+    .then(pl.lit("I"))
+    .otherwise(pl.lit("D"))
+    .alias("AMTIND")
+])
 
-# Aggregate
-dci_final = dci_final.group_by(["BNMCODE","ELDAY","REPTDATS"]).agg(
-    pl.sum("AMOUNT").alias("AMOUNT")
-)
+curr293_sum = curr293.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND"]).agg([
+    pl.col("OPENMH").sum().alias("OPENMH")
+])
 
-# -------------------------------------------------------------------
-# Step 8: Write outputs (Parquet)
-# -------------------------------------------------------------------
-out_file = f"DCI_{REPTYEAR}{REPTMON}{REPTDAY}.parquet"
-dci_final.write_parquet(out_file)
-print(f"Final DCI Parquet written: {out_file}")
+print(f"✓ Account count summaries created")
 
-# -------------------------------------------------------------------
-# Step 9: Register in DuckDB for analytics
-# -------------------------------------------------------------------
-duckdb.sql("INSTALL parquet; LOAD parquet;")
-duckdb.sql(f"CREATE TABLE dci AS SELECT * FROM read_parquet('{out_file}')")
-print("DuckDB table created. Rowcount:", duckdb.sql("SELECT COUNT(*) FROM dci").fetchall())
+
+# ============================================================================
+# PROCESS FIXED DEPOSITS
+# ============================================================================
+
+print("Processing Fixed Deposits...")
+
+# Load FD data
+fd = pl.read_parquet(FD_FILE)
+
+# Exclude certain account types
+fd = fd.filter(~pl.col("ACCTTYPE").is_in([397, 398]))
+
+# Apply transformations
+fd = fd.with_columns([
+    # Convert foreign currency amounts
+    pl.when(pl.col("CURCODE") != "MYR")
+    .then((pl.col("INTPAY") * pl.col("FORATE")).round(2))
+    .otherwise(pl.col("INTPAY"))
+    .alias("INTPAY_ADJ"),
+
+    # Format assignments
+    pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATE"),
+    pl.col("INTPLAN").cast(pl.Utf8).str.slice(0, 5).alias("BIC"),
+    pl.col("INTPLAN").cast(pl.Utf8).str.slice(0, 1).alias("AMTIND"),
+
+    # Initialize LSTMATDT
+    pl.lit(0).alias("LSTMATDT_INIT"),
+])
+
+# Convert LMATDATE
+fd = fd.with_columns([
+    pl.when(pl.col("LMATDATE") != 0)
+    .then(pl.col("LMATDATE"))
+    .otherwise(pl.lit(None))
+    .alias("LSTMATDT")
+])
+
+# Handle customer codes based on BIC
+fd = fd.with_columns([
+    pl.when(pl.col("BIC").is_in(["42130", "42630"]))
+    .then(pl.col("CUSTCD").cast(pl.Utf8).str.slice(0, 2))
+    .otherwise(pl.col("CUSTCD").cast(pl.Utf8).str.slice(0, 2))
+    .alias("CUSTCODE_FMT")
+])
+
+# Handle BIC = 42630 purpose codes
+fd = fd.with_columns([
+    pl.when(
+        (pl.col("BIC") == "42630") &
+        pl.col("CUSTCODE_FMT").is_in(['77', '78', '95'])
+    )
+    .then(
+        pl.when(pl.col("PURPOSE").is_in(['1', '2', '3']))
+        .then(pl.col("PURPOSE"))
+        .otherwise(pl.lit(1))
+    )
+    .when(pl.col("BIC") == "42630")
+    .then(
+        pl.when(pl.col("PURPOSE").is_in(['4', '5']))
+        .then(pl.col("PURPOSE"))
+        .otherwise(pl.lit(4))
+    )
+    .otherwise(pl.col("PURPOSE"))
+    .alias("PURPOSE_ADJ")
+])
+
+# Override BIC for certain account types
+fd = fd.with_columns([
+    pl.when(pl.col("ACCTTYPE").is_in([315, 394]))
+    .then(pl.lit("42132"))
+    .when(pl.col("ACCTTYPE").is_in([397, 398]))
+    .then(pl.lit("42199"))
+    .otherwise(pl.col("BIC"))
+    .alias("BIC_FINAL")
+])
+
+# Filter for open accounts
+fd_monthly = fd.filter(pl.col("OPENIND").is_in(['D', 'O']))
+
+# Replace adjusted columns
+fd_monthly = fd_monthly.with_columns([
+    pl.col("INTPAY_ADJ").alias("INTPAY"),
+    pl.col("CUSTCODE_FMT").alias("CUSTCODE"),
+    pl.col("PURPOSE_ADJ").alias("PURPOSE"),
+    pl.col("BIC_FINAL").alias("BIC")
+])
+
+# Select final columns
+fd_final = fd_monthly.select([
+    "BRANCH", "ACCTNO", "STATE", "CUSTCODE", "OPENIND", "CURBAL", "TERM",
+    "NAME", "AMTIND", "ORGDATE", "MATDATE", "RATE", "RENEWAL", "INTPLAN",
+    "INTPAY", "INTDATE", "BIC", "LASTACTV", "LSTMATDT", "PURPOSE", "FORATE",
+    "ACCTTYPE"
+])
+
+print(f"✓ Processed {len(fd_final)} fixed deposit accounts")
+
+# Save output
+fd_final.write_parquet(OUTPUT_FDMTHLY)
+print(f"✓ Saved to: {OUTPUT_FDMTHLY}")
+
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
+print()
+print("=" * 70)
+print("EIBQDISE Deposit Processing Complete!")
+print("=" * 70)
+print()
+print("Output Files Created:")
+print(f"  1. Savings:     {output_savg}")
+print(f"  2. Current:     {output_curn}")
+print(f"  3. FCY:         {output_fcy}")
+print(f"  4. Department:  {output_dept}")
+print(f"  5. FD Monthly:  {OUTPUT_FDMTHLY}")
+print()
+print("Record Counts:")
+print(f"  Savings:        {len(saving):,}")
+print(f"  Current:        {len(current_all):,}")
+print(f"  FCY:            {len(current_fcy):,}")
+print(f"  Fixed Deposit:  {len(fd_final):,}")
+print()
+
+# Close DuckDB connection
+con.close()
