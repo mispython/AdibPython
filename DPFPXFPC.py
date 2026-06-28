@@ -1,1377 +1,367 @@
-MY PYTHON OUTPUT:
+import polars as pl
+from pathlib import Path
+import datetime
+import pyreadstat
+import logging
 
+# Import format definitions from PBBDPFMT
+import PBBDPFMT
+from PBBDPFMT import (
+    SADenomFormat, SAProductFormat,
+    FDDenomFormat, FDProductFormat,
+    CADenomFormat, CAProductFormat,
+    FCYTermFormat, fdorgmt_format,
+    ProductLists
+)
 
-APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   1
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('eiq_fisf_processing.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
+# Configuration
+pidmfin_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQFISF")
+deposit1_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQFISF")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQFISF")
+output_path.mkdir(exist_ok=True, parents=True)
 
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |10.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |102.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |103.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |104.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |105.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |106.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |107.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |108.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |109.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |11.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |110.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |111.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |112.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |113.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |114.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |115.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |116.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |117.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |118.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |120.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |121.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |122.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |123.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |124.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
+# Islamic product format mappings - THIS IS THE KEY FIX
+# Map product codes to their display names
+ISLAMIC_PROD_FORMATS = {
+    'IR070': 'IR070',      # Islamic product code - keep as is
+    '42110': 'DDMAND',     # Current Account
+    '42310': 'DDMAND',     # Islamic Current Account
+    '34180': 'DDMAND',     # Current Account
+    '42199': 'DDMAND',     # Overdraft Current Account
+    '42610': 'FDMAND',     # Foreign Currency Current Account
+    '42699': 'FDMAND',     # Foreign Currency Overdraft
+    '42120': 'DSVING',     # Savings Account
+    '42320': 'DSVING',     # Islamic Savings Account
+    '42130': 'DFIXED',     # Fixed Deposit
+    '42132': 'DFIXED',     # Fixed Deposit
+    '42133': 'DFIXED',     # Fixed Deposit
+    '42630': 'FFIXED',     # Foreign Currency Fixed Deposit
+    '42180': 'DDMAND',     # Housing Development
+    '42XXX': 'ATM/SI (E)', # ATM/SI
+    '46795': 'DEBIT CARD (E)', # Debit Card
+}
 
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   2
+# Define the expected product categories in order
+PRODUCT_CATEGORIES = ['IR070', 'DDMAND', 'DSVING', 'DFIXED', 'FDMAND']
 
+logger.info("PBBDPFMT formats loaded successfully")
 
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |125.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |126.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |127.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |128.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |129.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |13.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |130.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |131.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |133.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |135.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |136.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |137.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |138.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |139.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |14.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |140.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |141.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |142.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |143.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |144.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |145.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |146.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |147.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |148.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
+def read_sas_to_polars(filepath: Path) -> pl.DataFrame:
+    """Read a SAS .sas7bdat file using pyreadstat and return as Polars DataFrame"""
+    try:
+        if not filepath.exists():
+            logger.warning(f"File not found: {filepath}")
+            return pl.DataFrame()
+        
+        logger.info(f"Reading SAS file: {filepath}")
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        pl_df = pl.from_pandas(df)
+        logger.info(f"Successfully read {filepath.name}: {len(pl_df):,} rows, {len(pl_df.columns)} columns")
+        return pl_df
+        
+    except Exception as e:
+        logger.error(f"Error reading {filepath}: {e}")
+        return pl.DataFrame()
 
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   3
+def calculate_report_date() -> datetime.date:
+    """Calculate report date based on SAS logic"""
+    today = datetime.date.today()
+    date_string = f"0101{today.year}"
+    reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
+    if today.month > 6:
+        reptdate = today
+    return reptdate
 
+def process_islamic_deposit_data(deposit1_path: Path) -> pl.DataFrame:
+    """Process Islamic deposit data from CISDEPI"""
+    logger.info("Processing Islamic deposit data from cisdepi.sas7bdat")
+    cisdepi_df = read_sas_to_polars(deposit1_path / "cisdepi.sas7bdat")
+    
+    if cisdepi_df.is_empty():
+        logger.warning("DEPOSIT1.cisdepi is empty or not found")
+        return pl.DataFrame()
+    
+    required_cols = ['BRANCH', 'PRODCD', 'INSUREBR']
+    col_mapping = {col.lower(): col for col in cisdepi_df.columns}
+    missing_cols = []
+    for col in required_cols:
+        if col.lower() not in col_mapping:
+            missing_cols.append(col)
+    
+    if missing_cols:
+        logger.warning(f"Missing columns in cisdepi: {missing_cols}")
+        return pl.DataFrame()
+    
+    rename_dict = {}
+    for col in required_cols:
+        actual_col = col_mapping[col.lower()]
+        if actual_col != col:
+            rename_dict[actual_col] = col
+    
+    if rename_dict:
+        cisdepi_df = cisdepi_df.rename(rename_dict)
+    
+    # Keep PRODCD as string - do NOT convert to integer
+    # Islamic product codes can be alphanumeric like "IR070"
+    
+    cisdepi_df = cisdepi_df.select(['BRANCH', 'PRODCD', 'INSUREBR'])
+    logger.info(f"Islamic DEPOSIT records: {cisdepi_df.height:,}")
+    return cisdepi_df
 
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |149.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |15.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |150.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |151.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |152.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |153.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |154.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |155.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |156.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |157.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |158.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |159.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |16.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |160.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |161.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |162.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |163.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |164.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |165.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |167.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |168.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |169.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |17.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |170.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
+def apply_format_mappings(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Apply format mappings to PRODCD column using Islamic product mappings
+    """
+    if 'PRODCD' in df.columns:
+        logger.info("Applying product format mappings")
+        
+        # Apply format using map_elements - KEY FIX: Use the ISLAMIC_PROD_FORMATS mapping
+        df = df.with_columns([
+            pl.col('PRODCD').map_elements(
+                lambda x: _get_product_format(x),
+                return_dtype=pl.String
+            ).alias('PRODCD_FORMATTED')
+        ])
+        
+        # Debug: Show unique formatted values
+        unique_formats = df['PRODCD_FORMATTED'].unique().to_list()
+        logger.info(f"Unique PRODCD_FORMATTED values: {unique_formats}")
+    
+    return df
 
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   4
+def _get_product_format(prodcd) -> str:
+    """
+    Get product format from Islamic product mappings
+    This is the key function - it needs to map product codes correctly
+    """
+    if prodcd is None or prodcd == '':
+        return 'UNKNOWN'
+    
+    # Convert to string for consistent handling
+    prodcd_str = str(prodcd).strip()
+    
+    # Check if it's an Islamic product code (like "IR070")
+    if prodcd_str in ISLAMIC_PROD_FORMATS:
+        return ISLAMIC_PROD_FORMATS[prodcd_str]
+    
+    # Try to convert to int for numeric product codes
+    try:
+        prodcd_int = int(prodcd_str)
+    except (ValueError, TypeError):
+        # If it's not a number and not in mapping, return as-is
+        logger.debug(f"Unknown product code: {prodcd_str}")
+        return prodcd_str
+    
+    # Check numeric product codes
+    if prodcd_int in ProductLists.CURX_PRODUCTS:
+        return 'DDMAND'  # Current Account
+    
+    if 200 <= prodcd_int <= 300:
+        return 'DSVING'  # Savings Account
+    
+    if 229 <= prodcd_int <= 997:
+        return 'DFIXED'  # Fixed Deposit
+    
+    # Default - return the product code as string
+    return prodcd_str
 
+def format_islamic_number(x):
+    """Format number for Islamic report - empty cells show dots"""
+    if x is None or x == 0:
+        return "                 ."
+    return f"{x:>18,.2f}"
 
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |171.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |172.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |173.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |174.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |175.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |176.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |177.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |178.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |179.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |18.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |180.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |183.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |184.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |185.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |186.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |189.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |19.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |190.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |191.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |192.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |193.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |194.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |195.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |196.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
+def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, report_date: datetime.date) -> None:
+    """
+    Generate TXT report for Islamic banking in the exact format from the example
+    """
+    if summary_df.is_empty():
+        logger.warning("No data available for report generation")
+        return
+    
+    # Create pivot table - using 'on' instead of 'columns' (deprecated)
+    pivot_table = summary_df.pivot(
+        index='BRANCH',
+        on='PRODCD_FORMATTED',
+        values='INSUREBR_SUM',
+        aggregate_function='sum'
+    ).fill_null(0)
+    
+    # Ensure all product categories exist
+    for col in PRODUCT_CATEGORIES:
+        if col not in pivot_table.columns:
+            pivot_table = pivot_table.with_columns(pl.lit(0.0).alias(col))
+    
+    # Calculate grand total
+    grand_total = summary_df.select(pl.col('INSUREBR_SUM').sum()).row(0)[0]
+    
+    # Handle null values in BRANCH
+    pivot_table = pivot_table.with_columns([
+        pl.col('BRANCH').fill_null('UNKNOWN').cast(pl.String).alias('BRANCH')
+    ])
+    
+    # Sort by BRANCH (numeric order)
+    pivot_table = pivot_table.sort(pl.col('BRANCH'))
+    
+    # Get current date/time for header
+    now = datetime.datetime.now()
+    date_str = now.strftime("%I:%M %A, %B %d, %Y")
+    
+    # Prepare TXT file
+    txt_file = output_path / "EIIQFISF_ISLAMIC_REPORT.txt"
+    
+    with open(txt_file, 'w') as f:
+        # Header - Page 1
+        f.write(" " * 38 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        ")
+        f.write(f"{date_str}   1\n")
+        f.write("\n" * 2)
+        f.write(" " * 13 + "-" * 73 + "\n")
+        
+        # Main table header
+        f.write(" " * 13 + "|BRANCH  |" + " " * 46 + "PRODUCT" + " " * 46 + "|\n")
+        f.write(" " * 13 + "|        |" + "-" * 46 + "+" + "-" * 46 + "|\n")
+        
+        # Product columns header - first row
+        f.write(" " * 13 + "|        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |\n")
+        
+        # Product columns header - second row (subheaders)
+        f.write(" " * 13 + "|        |------------------+------------------+------------------+------------------+------------------|\n")
+        f.write(" " * 13 + "|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
+        f.write(" " * 13 + "|        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |\n")
+        f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
+        
+        # Data rows
+        row_count = 0
+        
+        for row in pivot_table.iter_rows(named=True):
+            branch = str(row.get('BRANCH', 'UNKNOWN'))
+            if branch == 'UNKNOWN':
+                continue
+            
+            # Format values - empty cells show dots
+            values = []
+            for col in PRODUCT_CATEGORIES:
+                val = row.get(col, 0)
+                if val == 0:
+                    values.append("                 .")
+                else:
+                    values.append(f"{val:>18,.2f}")
+            
+            # Write row
+            f.write(" " * 13 + f"|{branch:<8}|{values[0]}|{values[1]}|{values[2]}|")
+            f.write(f"{values[3]}|{values[4]}|\n")
+            f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
+            
+            row_count += 1
+            
+            # Page break every 24 rows (as in example)
+            if row_count % 24 == 0 and row_count < len(pivot_table):
+                # Footer for current page
+                f.write("\n" + " " * 45 + "(Continued)\n")
+                f.write(" " * 38 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        ")
+                f.write(f"{date_str}   {row_count//24 + 1}\n")
+                f.write("\n" * 2)
+                f.write(" " * 13 + "-" * 73 + "\n")
+                
+                # Header repeated
+                f.write(" " * 13 + "|BRANCH  |" + " " * 46 + "PRODUCT" + " " * 46 + "|\n")
+                f.write(" " * 13 + "|        |" + "-" * 46 + "+" + "-" * 46 + "|\n")
+                f.write(" " * 13 + "|        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |\n")
+                f.write(" " * 13 + "|        |------------------+------------------+------------------+------------------+------------------|\n")
+                f.write(" " * 13 + "|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
+                f.write(" " * 13 + "|        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |\n")
+                f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
+        
+        # Grand total row
+        total_values = []
+        for col in PRODUCT_CATEGORIES:
+            total_val = pivot_table.select(pl.col(col).sum()).row(0)[0]
+            total_values.append(f"{total_val:>18,.2f}")
+        
+        f.write(" " * 13 + f"|TOTAL   |{total_values[0]}|{total_values[1]}|{total_values[2]}|")
+        f.write(f"{total_values[3]}|{total_values[4]}|\n")
+        f.write(" " * 13 + "-" * 73 + "\n")
+    
+    logger.info(f"Islamic TXT report saved to: {txt_file}")
+    
+    # Also save Parquet for data analysis
+    pivot_table.write_parquet(output_path / "EIIQFISF_ISLAMIC_PIVOT.parquet")
+    summary_df.write_parquet(output_path / "EIIQFISF_ISLAMIC_SUMMARY.parquet")
+    
+    logger.info(f"Parquet files saved to: {output_path}")
 
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   5
+def main():
+    """Main processing function for EIIQFISF - Islamic banking report"""
+    try:
+        # Calculate report date
+        reptdate = calculate_report_date()
+        SDESC = 'PUBLIC BANK BERHAD (ISLAMIC)'
+        REPTMON = f"{reptdate.month:02d}"
+        REPTYEAR = reptdate.strftime('%y')
+        
+        logger.info(f"Report Date: {reptdate}")
+        logger.info(f"REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
+        logger.info(f"SDESC: {SDESC}")
+        
+        # Create REPTDATE DataFrame
+        reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
+        reptdate_df.write_parquet(output_path / "REPTDATE_ISLAMIC.parquet")
+        reptdate_df.write_csv(output_path / "REPTDATE_ISLAMIC.csv")
+        logger.info(f"REPTDATE saved to {output_path}")
+        
+        # Process Islamic data sources
+        deposit_df = process_islamic_deposit_data(deposit1_path)
+        
+        if deposit_df.is_empty():
+            logger.warning("No Islamic data available for processing")
+            return
+        
+        # Apply format mappings from PBBDPFMT
+        rpt_base = apply_format_mappings(deposit_df)
+        
+        # Save base dataset
+        rpt_base.write_parquet(output_path / "RPT_BASE_ISLAMIC.parquet")
+        rpt_base.write_csv(output_path / "RPT_BASE_ISLAMIC.csv")
+        
+        logger.info(f"RPT_BASE records: {rpt_base.height:,}")
+        
+        # Generate summary
+        summary = rpt_base.group_by(['BRANCH', 'PRODCD_FORMATTED']).agg([
+            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
+        ]).sort(['BRANCH', 'PRODCD_FORMATTED'])
+        
+        # Convert BRANCH to string and handle nulls
+        summary = summary.with_columns([
+            pl.col('BRANCH').fill_null('UNKNOWN').cast(pl.String).alias('BRANCH')
+        ])
+        
+        # Calculate total
+        total_summary = rpt_base.group_by(['PRODCD_FORMATTED']).agg([
+            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
+        ]).with_columns([
+            pl.lit('TOTAL').cast(pl.String).alias('BRANCH')
+        ])
+        
+        # Combine and generate report
+        final_summary = pl.concat([summary, total_summary], how="diagonal")
+        generate_islamic_txt_report(final_summary, output_path, reptdate)
+        
+        logger.info("ISLAMIC PROCESSING COMPLETED SUCCESSFULLY")
+        
+    except Exception as e:
+        logger.error(f"Error in Islamic processing: {e}", exc_info=True)
+        raise
 
-
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |197.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |198.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |199.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |2.0     |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |20.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |201.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |202.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |203.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |204.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |205.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |206.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |207.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |208.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |209.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |21.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |210.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |211.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |216.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |217.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |22.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |220.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |221.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |222.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |224.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   6
-
-
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |225.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |226.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |228.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |23.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |230.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |231.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |232.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |233.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |234.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |235.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |237.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |239.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |24.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |240.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |241.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |242.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |243.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |244.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |245.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |247.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |248.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |249.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |25.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |251.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   7
-
-
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |252.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |254.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |256.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |257.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |258.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |259.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |26.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |260.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |261.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |262.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |263.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |264.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |265.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |266.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |267.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |268.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |269.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |27.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |270.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |273.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |274.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |275.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |276.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |278.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   8
-
-
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |28.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |280.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |281.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |282.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |283.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |284.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |285.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |286.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |287.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |288.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |289.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |29.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |290.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |291.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |292.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |293.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |294.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |295.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |296.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |3.0     |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |30.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |31.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |32.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |33.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   9
-
-
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |34.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |35.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |36.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |37.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |38.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |39.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |4.0     |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |40.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |41.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |42.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |43.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |44.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |45.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |46.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |47.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |48.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |49.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |5.0     |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |50.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |51.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |52.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |53.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |54.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |55.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   10
-
-
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |56.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |57.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |58.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |59.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |6.0     |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |60.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |61.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |62.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |63.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |64.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |65.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |66.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |67.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |68.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |69.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |7.0     |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |70.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |701.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |702.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |703.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |704.0   |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |71.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |72.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |73.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   11
-
-
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |74.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |75.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |76.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |77.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |78.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |79.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |8.0     |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |80.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |81.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |83.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |85.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |86.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |87.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |88.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |89.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |9.0     |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |90.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |91.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |92.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |93.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |94.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |95.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |96.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |97.0    |                 .|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-
-                                             (Continued)
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        05:06 Sunday, June 28, 2026   12
-
-
-             -------------------------------------------------------------------------
-             |BRANCH  |                                              PRODUCT                                              |
-             |        |----------------------------------------------+----------------------------------------------|
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |
-             |        |------------------+------------------+------------------+------------------+------------------|
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |TOTAL   |     10,857,365.97|                 .|                 .|                 .|                 .|
-             |--------+------------------+------------------+------------------+------------------+------------------|
-             |TOTAL   |     21,714,731.94|              0.00|              0.00|              0.00|              0.00|
-             -------------------------------------------------------------------------
-
-
-
-
-
-
-                 
-
-THE ACTUAL PRODUCTION OUTPUT:
-
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026   1                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |.       |     10,857,365.97|                 .|                 .|                 .|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |2       |                 .|      6,569,799.34|     24,384,063.81|     10,922,685.26|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |3       |                 .|      7,399,452.76|     17,705,695.87|    100,638,842.61|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |4       |                 .|     11,065,254.93|     41,138,143.16|     54,612,516.67|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |5       |                 .|      7,927,331.30|     46,087,381.31|     62,646,320.64|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |6       |                 .|     11,931,097.12|     38,812,643.66|    155,619,071.91|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |7       |                 .|     13,267,597.40|     52,768,558.59|     54,346,702.28|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |8       |                 .|     20,465,231.50|     26,849,846.52|    109,961,820.96|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |9       |                 .|     12,829,034.23|     36,144,878.72|    118,697,740.28|             47.59|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |10      |                 .|     19,781,904.81|     35,790,501.09|     44,306,054.99|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |11      |                 .|      8,419,511.46|     17,316,686.21|     49,987,907.26|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |13      |                 .|     48,626,405.14|     62,630,928.37|    113,924,183.79|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |14      |                 .|     38,356,036.63|     23,873,792.88|     31,998,948.15|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |15      |                 .|     21,131,120.17|     40,448,653.17|    135,726,765.40|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |16      |                 .|     14,567,368.34|     46,624,872.26|     35,559,200.88|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |17      |                 .|      4,677,909.28|     53,792,306.72|     40,521,826.72|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |18      |                 .|      4,670,321.20|     21,513,544.91|     35,079,884.61|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |19      |                 .|      9,554,411.86|     21,421,948.36|     55,211,985.38|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |20      |                 .|     10,867,586.40|     26,217,985.38|     83,679,285.22|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |21      |                 .|     18,406,641.85|     40,870,756.59|    100,847,308.44|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |22      |                 .|     19,694,085.36|     60,585,909.37|     43,693,687.02|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |23      |                 .|      9,239,831.43|     17,924,896.55|     48,534,183.81|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |24      |                 .|     45,458,739.52|     88,697,972.51|     52,018,559.89|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |25      |                 .|     25,659,646.62|     44,260,528.68|     12,661,823.62|        245,904.31|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026   2                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |26      |                 .|     13,494,026.59|     76,276,173.54|     79,410,714.00|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |27      |                 .|      6,376,101.31|     23,125,028.31|     57,752,441.89|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |28      |                 .|     20,154,072.83|     40,731,024.19|     93,900,781.78|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |29      |                 .|      9,873,530.51|     26,153,011.89|      8,566,458.44|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |30      |                 .|     65,304,177.37|     40,868,430.79|     38,510,939.79|          1,876.18|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |31      |                 .|      7,981,404.75|     28,847,948.68|     25,823,437.81|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |32      |                 .|     12,989,611.11|     19,992,276.61|     61,485,993.92|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |33      |                 .|      9,834,374.23|     50,218,690.42|    108,731,636.00|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |34      |                 .|     31,228,117.08|     25,382,075.68|     66,380,923.81|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |35      |                 .|     11,706,736.92|     17,264,436.10|     16,792,873.05|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |36      |                 .|      9,176,070.31|     38,066,325.22|    169,478,033.26|          7,884.88|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |37      |                 .|     12,268,921.74|     53,596,422.71|     59,389,900.54|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |38      |                 .|      8,867,346.33|     28,512,759.33|     45,963,389.99|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |39      |                 .|     12,569,107.33|     22,556,230.75|     26,124,619.74|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |40      |                 .|      9,721,124.39|     30,255,729.20|     42,924,974.41|            245.57|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |41      |                 .|     10,211,555.62|     21,919,806.02|     26,724,642.39|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |42      |                 .|     19,279,161.80|     58,774,282.67|    141,773,893.12|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |43      |                 .|     21,373,919.20|     58,708,357.71|     70,512,828.07|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |44      |                 .|     23,412,186.39|     62,358,684.23|     55,812,482.69|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |45      |                 .|     19,226,111.87|     58,116,092.34|     84,436,744.97|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |46      |                 .|     18,256,576.45|     24,419,688.22|     25,811,596.61|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |47      |                 .|     16,597,215.99|     45,588,295.11|    227,345,540.75|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |48      |                 .|      7,936,221.98|     33,877,283.62|     23,041,489.35|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |49      |                 .|     15,779,676.85|     54,554,379.96|     34,190,677.45|             12.51|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026   3                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |50      |                 .|     32,341,428.13|    119,015,070.20|     80,246,482.09|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |51      |                 .|     13,169,851.97|     29,301,271.65|     13,239,447.79|            204.31|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |52      |                 .|     11,397,170.59|     73,532,615.28|     29,344,987.95|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |53      |                 .|     17,982,024.77|     62,114,990.73|     46,410,630.37|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |54      |                 .|     14,509,351.55|     47,947,873.41|    116,987,829.26|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |55      |                 .|      8,706,247.03|     33,954,192.64|     17,080,896.03|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |56      |                 .|     12,995,179.56|     44,037,701.41|     61,934,331.06|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |57      |                 .|     22,814,406.34|     61,534,335.17|     95,776,895.64|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |58      |                 .|     21,735,276.28|     58,495,991.24|     99,293,261.01|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |59      |                 .|      6,906,012.36|     58,210,133.60|     49,063,869.56|          1,421.72|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |60      |                 .|     12,798,520.68|     29,261,325.84|     68,882,769.94|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |61      |                 .|     13,153,233.11|     55,439,098.29|     68,609,096.33|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |62      |                 .|     30,337,781.79|     42,280,434.98|     77,633,135.94|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |63      |                 .|      7,151,908.64|     23,889,209.45|     20,032,486.40|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |64      |                 .|     15,987,697.53|     34,174,096.58|     85,664,759.43|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |65      |                 .|     16,235,568.15|     53,033,964.00|     36,298,639.92|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |66      |                 .|     13,708,270.92|     13,733,007.75|     72,762,934.06|        189,205.93|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |67      |                 .|     11,985,325.68|     40,310,112.69|     27,090,580.41|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |68      |                 .|     16,936,670.86|     55,394,433.59|     48,536,286.30|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |69      |                 .|     12,216,649.05|     32,729,550.78|     22,499,290.64|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |70      |                 .|     14,487,971.76|     18,148,403.77|      6,397,405.19|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |71      |                 .|     18,449,318.12|     22,600,988.19|     52,333,325.84|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |72      |                 .|     18,909,085.22|     35,512,076.12|      8,213,598.23|         19,608.99|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |73      |                 .|      8,062,839.93|     44,102,797.31|     20,626,632.44|                 .|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026   4                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |74      |                 .|     12,727,693.63|     28,116,605.46|      6,549,755.54|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |75      |                 .|      2,740,586.91|     30,374,454.48|     19,384,791.21|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |76      |                 .|     19,011,553.56|     64,185,093.90|    111,235,276.95|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |77      |                 .|     31,678,878.08|     17,819,293.11|     24,237,192.68|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |78      |                 .|     11,218,089.15|     22,551,569.49|     54,851,937.87|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |79      |                 .|     11,807,080.01|     71,472,563.73|     18,027,686.77|            502.02|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |80      |                 .|     25,196,862.87|     69,551,870.86|    131,504,264.27|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |81      |                 .|     15,846,917.19|     47,505,638.15|     42,246,718.20|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |83      |                 .|     14,833,072.71|     13,474,452.43|     14,098,380.50|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |85      |                 .|     17,054,285.46|     70,399,205.47|     99,884,950.22|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |86      |                 .|      6,458,171.85|     11,664,429.12|      5,551,588.99|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |87      |                 .|      7,078,661.16|     18,154,755.90|     19,612,913.89|             90.68|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |88      |                 .|     11,607,029.07|     47,994,439.96|     76,356,628.01|              0.04|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |89      |                 .|     16,391,327.32|     19,725,074.80|      8,705,761.72|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |90      |                 .|     13,156,240.70|     32,218,044.82|     50,330,751.91|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |91      |                 .|     10,474,796.30|     33,138,426.53|     28,006,425.87|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |92      |                 .|      9,273,011.01|     25,658,176.31|     34,803,428.65|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |93      |                 .|      6,076,119.55|     28,269,363.89|     11,082,172.14|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |94      |                 .|     29,560,968.50|     74,395,516.05|     73,522,654.60|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |95      |                 .|     14,457,430.96|     62,411,832.41|    123,685,274.72|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |96      |                 .|     22,317,037.16|     36,134,873.29|     45,792,240.14|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |97      |                 .|     12,408,582.28|     16,602,475.69|     18,512,639.29|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |102     |                 .|     16,966,353.10|     26,676,701.14|     21,598,541.92|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |103     |                 .|      9,891,263.36|     38,049,312.13|     32,504,911.39|                 .|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026   5                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |104     |                 .|     12,606,516.00|     29,923,270.32|      7,944,485.30|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |105     |                 .|     11,187,120.15|     25,199,461.59|     21,499,583.31|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |106     |                 .|     24,139,278.94|     27,644,803.87|     26,726,184.55|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |107     |                 .|     36,550,939.00|     35,590,651.35|    222,710,236.94|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |108     |                 .|     11,978,011.39|     14,920,109.63|     13,952,065.46|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |109     |                 .|     12,103,179.80|     20,234,332.28|     53,994,875.41|         39,427.15|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |110     |                 .|     20,692,956.55|     73,989,223.13|    131,298,398.28|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |111     |                 .|     13,474,543.15|     23,240,828.68|     51,816,379.00|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |112     |                 .|     21,582,132.61|     46,908,334.77|    109,734,859.34|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |113     |                 .|     13,581,590.38|     29,354,612.96|     47,265,800.91|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |114     |                 .|      8,354,362.89|     68,761,775.65|    235,145,821.56|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |115     |                 .|     27,637,628.32|     30,672,242.13|     29,862,070.53|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |116     |                 .|     13,374,232.19|     52,672,873.68|     52,625,369.33|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |117     |                 .|     14,271,477.71|     11,171,963.13|      8,602,437.98|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |118     |                 .|     15,596,342.29|     29,127,398.23|     28,727,620.68|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |120     |                 .|      9,315,960.83|     35,765,287.48|     29,952,520.86|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |121     |                 .|      7,746,596.99|     46,345,189.63|     86,311,877.91|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |122     |                 .|     19,844,675.08|     84,795,618.78|     99,164,361.42|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |123     |                 .|     18,328,833.60|     49,776,128.87|    150,129,105.71|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |124     |                 .|      4,140,116.31|     31,313,399.81|     15,977,476.53|          1,004.69|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |125     |                 .|     10,574,608.02|     20,254,091.49|     27,736,992.18|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |126     |                 .|     17,590,171.32|     44,501,046.27|    218,271,605.43|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |127     |                 .|     12,539,862.52|     32,561,603.47|     32,308,543.64|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |128     |                 .|     29,776,270.56|     24,779,940.98|     27,973,359.38|                 .|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026   6                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |129     |                 .|      7,811,009.13|     17,848,050.01|     24,650,085.61|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |130     |                 .|     19,901,841.38|     51,203,180.47|     94,617,891.70|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |131     |                 .|     10,094,468.58|     25,705,745.88|     48,671,480.18|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |133     |                 .|     14,775,487.99|     29,643,014.36|     24,023,205.77|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |135     |                 .|     11,976,394.39|     38,629,990.09|     20,504,102.65|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |136     |                 .|     19,392,943.94|     50,355,476.58|     42,243,493.20|             22.05|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |137     |                 .|     18,720,959.63|     40,368,539.62|     48,897,920.16|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |138     |                 .|     11,646,418.05|     26,017,321.37|     32,451,167.67|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |139     |                 .|     16,467,384.37|     26,384,785.27|     18,087,365.90|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |140     |                 .|     16,729,426.50|     38,746,493.83|     13,485,930.86|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |141     |                 .|     11,003,435.69|     20,132,970.00|     34,271,283.82|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |142     |                 .|     35,637,283.59|     39,330,400.82|      9,503,191.13|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |143     |                 .|     27,622,051.88|     44,749,865.90|     19,527,778.13|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |144     |                 .|      5,965,178.74|     31,983,122.97|     36,742,883.36|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |145     |                 .|     17,939,902.66|     68,894,407.40|     88,899,228.03|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |146     |                 .|     26,683,201.43|     76,225,437.24|     76,380,169.10|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |147     |                 .|      5,606,874.35|     22,384,010.23|     12,608,273.36|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |148     |                 .|     14,252,847.45|     31,970,214.79|     64,332,565.56|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |149     |                 .|     20,388,563.66|     31,777,019.31|      8,010,015.29|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |150     |                 .|     25,639,232.59|     35,568,060.50|     88,210,682.76|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |151     |                 .|      8,927,869.01|     28,067,942.47|     18,029,029.65|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |152     |                 .|     11,489,168.38|     38,073,837.61|     71,831,285.94|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |153     |                 .|     16,906,027.16|     35,255,654.45|     42,012,436.46|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |154     |                 .|     11,817,335.62|     25,126,821.45|     24,064,540.15|          4,490.98|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026   7                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |155     |                 .|     13,449,955.83|     37,005,272.54|     27,305,803.22|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |156     |                 .|     10,119,211.85|     38,639,783.02|    104,616,885.63|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |157     |                 .|     44,520,645.89|     58,516,777.05|     71,705,320.16|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |158     |                 .|     13,257,007.89|     42,103,386.97|     30,459,151.53|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |159     |                 .|     19,736,325.31|     48,959,718.19|    144,965,138.90|          3,738.96|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |160     |                 .|     11,556,016.11|     29,100,906.68|     28,007,467.84|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |161     |                 .|     29,138,559.72|     53,263,187.81|     45,545,596.40|          4,601.74|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |162     |                 .|      6,580,628.62|     11,982,913.72|     40,294,512.70|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |163     |                 .|     14,494,028.49|     35,634,311.04|     38,939,049.22|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |164     |                 .|     21,042,263.73|     26,655,195.43|     33,180,128.58|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |165     |                 .|     36,994,966.64|     52,034,729.89|    170,230,388.57|        306,321.23|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |167     |                 .|     18,226,124.64|     28,560,407.51|     24,911,805.14|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |168     |                 .|     16,781,237.43|     42,741,741.50|     98,630,566.67|         24,533.11|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |169     |                 .|      7,589,377.71|     13,125,091.17|     17,646,150.34|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |170     |                 .|     15,548,100.13|     41,571,487.71|     50,431,108.14|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |171     |                 .|     20,564,095.05|     50,348,606.64|    107,837,993.42|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |172     |                 .|     19,827,498.27|     81,685,881.87|    113,619,401.97|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |173     |                 .|      9,301,711.88|     52,512,184.43|     38,398,006.31|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |174     |                 .|     19,953,523.31|     43,592,653.43|     57,581,542.07|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |175     |                 .|      6,561,056.77|     25,216,574.44|     11,747,267.15|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |176     |                 .|     27,159,984.29|     48,942,240.04|     67,394,037.08|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |177     |                 .|     11,655,025.25|     59,783,391.67|     92,166,055.86|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |178     |                 .|     15,796,858.06|     28,353,149.30|     30,331,056.21|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |179     |                 .|     10,906,471.46|     28,156,464.74|     62,290,706.59|                 .|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026   8                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |180     |                 .|     15,771,554.51|     28,995,805.76|     38,335,613.23|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |183     |                 .|     14,813,308.07|     52,627,001.06|     99,870,400.10|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |184     |                 .|     27,566,322.61|     41,841,593.73|     30,379,614.36|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |185     |                 .|     16,028,252.89|     25,510,394.89|     60,603,840.41|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |186     |                 .|     32,704,040.86|     38,074,691.54|     62,736,850.11|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |189     |                 .|     17,675,329.09|     31,114,249.72|     15,501,760.99|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |190     |                 .|     13,471,905.07|     29,177,551.81|     51,475,221.54|         21,631.16|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |191     |                 .|      6,672,280.52|     19,312,432.56|      7,381,100.01|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |192     |                 .|     19,852,149.81|     14,501,710.15|      6,134,338.12|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |193     |                 .|     10,517,056.23|     13,372,346.03|     18,914,241.80|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |194     |                 .|     20,615,863.88|     42,786,501.78|     46,835,699.14|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |195     |                 .|      5,984,642.50|     10,545,102.04|     14,436,346.36|         13,612.29|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |196     |                 .|      7,979,064.18|     13,001,312.25|     20,092,108.93|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |197     |                 .|     12,611,772.01|     15,177,310.33|     22,688,771.24|          3,976.73|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |198     |                 .|     40,015,196.73|     44,067,682.24|     89,418,100.93|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |199     |                 .|     18,540,242.50|     26,636,512.30|     39,894,986.19|          8,888.15|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |201     |                 .|     16,746,869.22|     30,208,082.96|     62,643,899.86|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |202     |                 .|     16,786,760.62|     66,586,586.88|     52,844,397.70|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |203     |                 .|      7,831,924.76|     40,048,169.99|     12,743,643.27|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |204     |                 .|     26,004,384.90|     26,249,909.36|     48,241,255.33|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |205     |                 .|      9,918,616.98|     22,902,830.09|    149,658,968.31|          5,042.87|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |206     |                 .|     13,526,665.72|     42,233,424.45|     54,039,064.58|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |207     |                 .|     20,422,646.86|     71,462,669.61|     55,895,028.31|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |208     |                 .|     11,995,952.18|     39,307,359.60|    101,000,903.99|                 .|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026   9                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |209     |                 .|     30,557,788.13|     65,766,640.30|    126,260,996.60|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |210     |                 .|      5,555,358.79|     21,249,441.78|     75,962,995.90|         55,614.39|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |211     |                 .|     15,919,109.96|     30,428,426.59|     31,372,462.63|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |216     |                 .|     19,953,858.73|     88,262,557.42|     49,736,439.43|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |217     |                 .|     21,561,046.50|     44,407,935.17|     94,681,274.20|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |220     |                 .|        165,776.85|      6,402,878.26|      6,355,725.99|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |221     |                 .|     12,669,397.58|     48,456,073.87|     23,514,907.74|              9.18|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |222     |                 .|     14,729,063.11|     34,989,697.44|     45,852,699.88|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |224     |                 .|     67,175,639.12|     82,765,869.80|    228,176,181.72|        376,954.98|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |225     |                 .|     12,557,850.46|     22,713,187.29|     24,118,980.77|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |226     |                 .|      6,702,658.52|     20,308,262.80|     33,653,602.37|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |228     |                 .|     43,840,618.10|     39,771,378.17|     78,630,054.61|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |230     |                 .|      5,988,539.63|     19,026,802.21|     23,439,899.77|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |231     |                 .|     11,103,325.22|     57,919,337.04|    180,171,297.56|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |232     |                 .|      6,095,156.21|     18,958,549.85|     59,774,640.08|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |233     |                 .|      1,659,581.51|     30,029,337.24|     47,004,031.19|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |234     |                 .|     12,579,790.78|     36,697,528.76|     61,719,186.88|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |235     |                 .|      5,490,070.18|     10,351,556.55|     25,278,713.20|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |237     |                 .|      5,979,725.59|     15,017,873.38|     17,349,535.90|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |239     |                 .|      2,995,828.29|     14,402,117.67|      7,310,959.55|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |240     |                 .|      5,542,320.99|     35,576,337.64|     20,643,220.19|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |241     |                 .|      2,829,910.04|     15,956,368.37|     51,773,919.14|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |242     |                 .|      2,945,011.78|     13,667,026.96|     41,410,312.91|             14.21|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |243     |                 .|      3,885,288.55|     16,795,994.05|     29,515,460.24|                 .|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026  10                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |244     |                 .|     16,336,940.98|     23,841,514.63|     34,063,054.17|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |245     |                 .|      4,514,566.70|     19,701,742.91|     33,464,158.62|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |247     |                 .|     15,527,082.95|     21,917,510.61|     48,757,118.27|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |248     |                 .|      6,086,071.25|     11,239,621.98|     11,087,606.50|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |249     |                 .|     19,131,749.02|     59,627,867.30|    163,585,798.50|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |251     |                 .|     20,016,318.26|     54,972,875.54|    146,327,759.81|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |252     |                 .|     16,405,195.81|     33,996,650.74|     64,055,668.77|         61,287.53|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |254     |                 .|     11,694,933.71|     13,432,277.23|      7,871,745.90|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |256     |                 .|      3,849,174.46|     20,130,030.71|     23,927,486.72|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |257     |                 .|     15,254,571.04|     51,063,315.84|     51,985,936.91|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |258     |                 .|     14,444,824.49|     21,713,089.99|     38,363,104.83|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |259     |                 .|     12,399,955.73|     18,942,046.80|     25,294,603.49|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |260     |                 .|     16,152,942.33|     15,907,170.75|     10,343,277.00|             10.96|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |261     |                 .|      9,959,271.89|      8,963,713.87|     14,313,159.75|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |262     |                 .|      6,288,611.93|     14,633,748.24|     65,183,639.12|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |263     |                 .|      5,555,070.32|     13,985,863.82|      7,769,651.18|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |264     |                 .|      8,818,424.90|     23,216,885.85|     72,616,539.12|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |265     |                 .|      2,855,003.55|     19,287,897.91|    136,269,971.55|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |266     |                 .|     10,378,710.48|     30,064,773.36|     42,204,952.63|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |267     |                 .|      5,692,566.72|     12,482,701.23|     27,628,763.91|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |268     |                 .|      9,897,315.37|     21,735,019.64|     71,206,967.21|         27,412.92|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |269     |                 .|      6,781,577.33|      7,255,262.49|     54,631,107.96|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |270     |                 .|     15,318,148.51|     31,122,884.36|     98,006,641.78|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |273     |                 .|     12,865,588.88|     22,945,567.58|    174,678,731.75|                 .|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026  11                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |274     |                 .|     14,486,000.95|     26,028,509.50|     70,721,060.46|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |275     |                 .|     34,557,288.42|     21,914,887.90|     43,517,716.62|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |276     |                 .|     24,334,368.38|     24,238,020.62|     43,393,596.36|         25,864.55|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |278     |                 .|     14,525,483.63|     24,191,027.07|     78,937,952.89|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |280     |                 .|     21,536,478.00|     21,730,656.77|     96,312,523.94|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |281     |                 .|     23,573,658.39|     79,864,542.11|    114,649,706.92|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |282     |                 .|      9,306,762.71|     13,212,497.40|     16,019,283.03|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |283     |                 .|     23,172,514.70|     46,936,585.43|    130,344,452.51|             61.28|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |284     |                 .|      9,621,381.80|     10,215,127.41|     27,488,069.59|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |285     |                 .|     10,089,843.92|     17,956,921.18|     81,095,740.31|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |286     |                 .|     16,854,492.41|     54,317,394.53|    101,531,424.42|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |287     |                 .|     19,528,172.49|     18,035,847.47|    108,469,089.03|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |288     |                 .|     16,332,048.75|     16,821,869.84|     41,966,132.26|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |289     |                 .|     19,826,684.25|     34,102,274.77|     71,350,677.66|         42,072.66|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |290     |                 .|      5,569,320.55|     18,478,969.45|     76,341,383.11|          6,722.90|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |291     |                 .|      2,381,155.16|      7,186,627.22|     66,131,935.34|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |292     |                 .|      1,098,729.76|     17,083,163.18|     58,381,223.49|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |293     |                 .|      6,593,311.18|      6,535,165.05|     81,459,378.66|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |294     |                 .|      6,642,197.98|      6,474,235.80|     93,231,614.34|        102,865.13|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |295     |                 .|     19,548,060.07|     14,105,100.78|     87,713,214.53|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |296     |                 .|      2,735,608.85|      3,521,107.12|     36,879,427.30|                 .|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |701     |                 .|     26,769,143.54|     21,269,039.47|     10,829,373.97|         99,027.44|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |702     |                 .|     26,376,711.33|     23,908,501.40|     10,883,064.41|         10,891.20|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |703     |                 .|     40,958,283.65|     27,223,118.46|     39,051,457.98|         51,360.60|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                            
-             (Continued)                                                                                                                                                                                                                                                                                    
-                                      APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        15:08 Monday, May 25, 2026  12                                                                                                                                                                        
-                                                                                                                                                                                                                                                                                                            
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-             |BRANCH  |                                           PRODUCT                                            |                                                                                                                                                                                      
-             |        |----------------------------------------------------------------------------------------------|                                                                                                                                                                                      
-             |        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |                                                                                                                                                                                      
-             |        |------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |                                                                                                                                                                                      
-             |        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |704     |                 .|     22,273,344.65|     31,624,514.33|     59,518,786.13|          1,961.91|                                                                                                                                                                                      
-             |--------+------------------+------------------+------------------+------------------+------------------|                                                                                                                                                                                      
-             |TOTAL   |     10,857,365.97|  4,107,988,036.00|  9,298,574,526.85| 15,254,483,340.66|      1,766,427.69|                                                                                                                                                                                      
-             ---------------------------------------------------------------------------------------------------------                                                                                                                                                                                      
-
-
-
-why does my python output is blank and no data report?
+if __name__ == "__main__":
+    main()
