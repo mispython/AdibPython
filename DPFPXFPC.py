@@ -60,11 +60,11 @@ def calculate_report_date() -> datetime.date:
     return reptdate
 
 def process_islamic_deposit_data(deposit1_path: Path) -> pl.DataFrame:
-    """Process Islamic deposit data from CISDEPD"""
+    """Process Islamic deposit data from CISDEPI"""
     logger.info("Processing Islamic deposit data from cisdepi.sas7bdat")
-    cisdepd_df = read_sas_to_polars(deposit1_path / "cisdepi.sas7bdat")
+    cisdepi_df = read_sas_to_polars(deposit1_path / "cisdepi.sas7bdat")
     
-    if cisdepd_df.is_empty():
+    if cisdepi_df.is_empty():
         logger.warning("DEPOSIT1.cisdepi is empty or not found")
         return pl.DataFrame()
     
@@ -86,17 +86,17 @@ def process_islamic_deposit_data(deposit1_path: Path) -> pl.DataFrame:
             rename_dict[actual_col] = col
     
     if rename_dict:
-        cisdepd_df = cisdepd_df.rename(rename_dict)
+        cisdepi_df = cisdepi_df.rename(rename_dict)
     
-    if 'PRODCD' in cisdepd_df.columns:
-        if cisdepd_df['PRODCD'].dtype == pl.String:
-            cisdepd_df = cisdepd_df.with_columns([
+    if 'PRODCD' in cisdepi_df.columns:
+        if cisdepi_df['PRODCD'].dtype == pl.String:
+            cisdepi_df = cisdepi_df.with_columns([
                 pl.col('PRODCD').cast(pl.Int64).alias('PRODCD')
             ])
     
-    cisdepd_df = cisdepd_df.select(['BRANCH', 'PRODCD', 'INSUREBR'])
-    logger.info(f"Islamic DEPOSIT records: {cisdepd_df.height:,}")
-    return cisdepd_df
+    cisdepi_df = cisdepi_df.select(['BRANCH', 'PRODCD', 'INSUREBR'])
+    logger.info(f"Islamic DEPOSIT records: {cisdepi_df.height:,}")
+    return cisdepi_df
 
 def apply_format_mappings(df: pl.DataFrame) -> pl.DataFrame:
     """Apply format mappings to PRODCD column using PBBDPFMT formats"""
@@ -172,6 +172,12 @@ def format_number(x):
         return "0.00"
     return f"{x:,.2f}"
 
+def format_islamic_number(x):
+    """Format number for Islamic report - empty cells show dots"""
+    if x is None or x == 0:
+        return "                 ."
+    return f"{x:>18,.2f}"
+
 def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, report_date: datetime.date) -> None:
     """
     Generate TXT report for Islamic banking in the exact format from the example
@@ -180,12 +186,12 @@ def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, rep
         logger.warning("No data available for report generation")
         return
     
-    # Create pivot table
+    # Create pivot table - using 'on' instead of 'columns' (deprecated)
     product_categories = ['IR070', 'DDMAND', 'DSVING', 'DFIXED', 'FDMAND']
     
     pivot_table = summary_df.pivot(
         index='BRANCH',
-        columns='PRODCD_FORMATTED', 
+        on='PRODCD_FORMATTED',  # Fixed: using 'on' instead of 'columns'
         values='INSUREBR_SUM',
         aggregate_function='sum'
     ).fill_null(0)
@@ -241,15 +247,18 @@ def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, rep
             if branch == 'UNKNOWN':
                 continue
             
-            # Format values
+            # Format values - empty cells show dots
             values = []
             for col in product_categories:
                 val = row.get(col, 0)
-                values.append(format_number(val))
+                if val == 0:
+                    values.append("                 .")
+                else:
+                    values.append(f"{val:>18,.2f}")
             
             # Write row
-            f.write(" " * 13 + f"|{branch:<8}|{values[0]:>18}|{values[1]:>18}|{values[2]:>18}|")
-            f.write(f"{values[3]:>18}|{values[4]:>18}|\n")
+            f.write(" " * 13 + f"|{branch:<8}|{values[0]}|{values[1]}|{values[2]}|")
+            f.write(f"{values[3]}|{values[4]}|\n")
             f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
             
             row_count += 1
@@ -276,10 +285,10 @@ def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, rep
         total_values = []
         for col in product_categories:
             total_val = pivot_table.select(pl.col(col).sum()).row(0)[0]
-            total_values.append(format_number(total_val))
+            total_values.append(f"{total_val:>18,.2f}")
         
-        f.write(" " * 13 + f"|TOTAL   |{total_values[0]:>18}|{total_values[1]:>18}|{total_values[2]:>18}|")
-        f.write(f"{total_values[3]:>18}|{total_values[4]:>18}|\n")
+        f.write(" " * 13 + f"|TOTAL   |{total_values[0]}|{total_values[1]}|{total_values[2]}|")
+        f.write(f"{total_values[3]}|{total_values[4]}|\n")
         f.write(" " * 13 + "-" * 73 + "\n")
     
     logger.info(f"Islamic TXT report saved to: {txt_file}")
