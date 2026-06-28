@@ -31,25 +31,24 @@ deposit1_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EI
 output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQFISF")
 output_path.mkdir(exist_ok=True, parents=True)
 
-# Islamic product format mappings - THIS IS THE KEY FIX
-# Map product codes to their display names
+# Islamic product format mappings
 ISLAMIC_PROD_FORMATS = {
-    'IR070': 'IR070',      # Islamic product code - keep as is
-    '42110': 'DDMAND',     # Current Account
-    '42310': 'DDMAND',     # Islamic Current Account
-    '34180': 'DDMAND',     # Current Account
-    '42199': 'DDMAND',     # Overdraft Current Account
-    '42610': 'FDMAND',     # Foreign Currency Current Account
-    '42699': 'FDMAND',     # Foreign Currency Overdraft
-    '42120': 'DSVING',     # Savings Account
-    '42320': 'DSVING',     # Islamic Savings Account
-    '42130': 'DFIXED',     # Fixed Deposit
-    '42132': 'DFIXED',     # Fixed Deposit
-    '42133': 'DFIXED',     # Fixed Deposit
-    '42630': 'FFIXED',     # Foreign Currency Fixed Deposit
-    '42180': 'DDMAND',     # Housing Development
-    '42XXX': 'ATM/SI (E)', # ATM/SI
-    '46795': 'DEBIT CARD (E)', # Debit Card
+    'IR070': 'IR070',
+    '42110': 'DDMAND',
+    '42310': 'DDMAND',
+    '34180': 'DDMAND',
+    '42199': 'DDMAND',
+    '42610': 'FDMAND',
+    '42699': 'FDMAND',
+    '42120': 'DSVING',
+    '42320': 'DSVING',
+    '42130': 'DFIXED',
+    '42132': 'DFIXED',
+    '42133': 'DFIXED',
+    '42630': 'FFIXED',
+    '42180': 'DDMAND',
+    '42XXX': 'ATM/SI (E)',
+    '46795': 'DEBIT CARD (E)',
 }
 
 # Define the expected product categories in order
@@ -112,21 +111,25 @@ def process_islamic_deposit_data(deposit1_path: Path) -> pl.DataFrame:
     if rename_dict:
         cisdepi_df = cisdepi_df.rename(rename_dict)
     
-    # Keep PRODCD as string - do NOT convert to integer
-    # Islamic product codes can be alphanumeric like "IR070"
-    
+    # Keep PRODCD as string
     cisdepi_df = cisdepi_df.select(['BRANCH', 'PRODCD', 'INSUREBR'])
+    
+    # Convert BRANCH to integer for proper sorting
+    if 'BRANCH' in cisdepi_df.columns:
+        if cisdepi_df['BRANCH'].dtype == pl.Float64:
+            cisdepi_df = cisdepi_df.with_columns([
+                pl.col('BRANCH').cast(pl.Int64).alias('BRANCH')
+            ])
+    
     logger.info(f"Islamic DEPOSIT records: {cisdepi_df.height:,}")
     return cisdepi_df
 
 def apply_format_mappings(df: pl.DataFrame) -> pl.DataFrame:
-    """
-    Apply format mappings to PRODCD column using Islamic product mappings
-    """
+    """Apply format mappings to PRODCD column using Islamic product mappings"""
     if 'PRODCD' in df.columns:
         logger.info("Applying product format mappings")
         
-        # Apply format using map_elements - KEY FIX: Use the ISLAMIC_PROD_FORMATS mapping
+        # Apply format using map_elements
         df = df.with_columns([
             pl.col('PRODCD').map_elements(
                 lambda x: _get_product_format(x),
@@ -141,10 +144,7 @@ def apply_format_mappings(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 def _get_product_format(prodcd) -> str:
-    """
-    Get product format from Islamic product mappings
-    This is the key function - it needs to map product codes correctly
-    """
+    """Get product format from Islamic product mappings"""
     if prodcd is None or prodcd == '':
         return 'UNKNOWN'
     
@@ -159,21 +159,18 @@ def _get_product_format(prodcd) -> str:
     try:
         prodcd_int = int(prodcd_str)
     except (ValueError, TypeError):
-        # If it's not a number and not in mapping, return as-is
-        logger.debug(f"Unknown product code: {prodcd_str}")
         return prodcd_str
     
     # Check numeric product codes
     if prodcd_int in ProductLists.CURX_PRODUCTS:
-        return 'DDMAND'  # Current Account
+        return 'DDMAND'
     
     if 200 <= prodcd_int <= 300:
-        return 'DSVING'  # Savings Account
+        return 'DSVING'
     
     if 229 <= prodcd_int <= 997:
-        return 'DFIXED'  # Fixed Deposit
+        return 'DFIXED'
     
-    # Default - return the product code as string
     return prodcd_str
 
 def format_islamic_number(x):
@@ -183,14 +180,12 @@ def format_islamic_number(x):
     return f"{x:>18,.2f}"
 
 def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, report_date: datetime.date) -> None:
-    """
-    Generate TXT report for Islamic banking in the exact format from the example
-    """
+    """Generate TXT report for Islamic banking in the exact format from the example"""
     if summary_df.is_empty():
         logger.warning("No data available for report generation")
         return
     
-    # Create pivot table - using 'on' instead of 'columns' (deprecated)
+    # Create pivot table
     pivot_table = summary_df.pivot(
         index='BRANCH',
         on='PRODCD_FORMATTED',
@@ -206,13 +201,15 @@ def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, rep
     # Calculate grand total
     grand_total = summary_df.select(pl.col('INSUREBR_SUM').sum()).row(0)[0]
     
-    # Handle null values in BRANCH
+    # Handle null values in BRANCH and convert to integer string
     pivot_table = pivot_table.with_columns([
-        pl.col('BRANCH').fill_null('UNKNOWN').cast(pl.String).alias('BRANCH')
+        pl.col('BRANCH').fill_null(0).cast(pl.Int64).cast(pl.String).alias('BRANCH')
     ])
     
-    # Sort by BRANCH (numeric order)
-    pivot_table = pivot_table.sort(pl.col('BRANCH'))
+    # Sort by BRANCH as integer (numeric order)
+    pivot_table = pivot_table.with_columns([
+        pl.col('BRANCH').cast(pl.Int64).alias('BRANCH_NUM')
+    ]).sort('BRANCH_NUM').drop('BRANCH_NUM')
     
     # Get current date/time for header
     now = datetime.datetime.now()
@@ -243,11 +240,10 @@ def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, rep
         
         # Data rows
         row_count = 0
+        total_rows = len(pivot_table)
         
         for row in pivot_table.iter_rows(named=True):
-            branch = str(row.get('BRANCH', 'UNKNOWN'))
-            if branch == 'UNKNOWN':
-                continue
+            branch = str(row.get('BRANCH', '0'))
             
             # Format values - empty cells show dots
             values = []
@@ -258,7 +254,7 @@ def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, rep
                 else:
                     values.append(f"{val:>18,.2f}")
             
-            # Write row
+            # Write row - branch as integer (no decimal point)
             f.write(" " * 13 + f"|{branch:<8}|{values[0]}|{values[1]}|{values[2]}|")
             f.write(f"{values[3]}|{values[4]}|\n")
             f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
@@ -266,7 +262,7 @@ def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, rep
             row_count += 1
             
             # Page break every 24 rows (as in example)
-            if row_count % 24 == 0 and row_count < len(pivot_table):
+            if row_count % 24 == 0 and row_count < total_rows:
                 # Footer for current page
                 f.write("\n" + " " * 45 + "(Continued)\n")
                 f.write(" " * 38 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        ")
@@ -336,14 +332,14 @@ def main():
         
         logger.info(f"RPT_BASE records: {rpt_base.height:,}")
         
-        # Generate summary
+        # Generate summary - group by BRANCH and PRODCD_FORMATTED
         summary = rpt_base.group_by(['BRANCH', 'PRODCD_FORMATTED']).agg([
             pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
-        ]).sort(['BRANCH', 'PRODCD_FORMATTED'])
+        ])
         
-        # Convert BRANCH to string and handle nulls
+        # Convert BRANCH to integer for proper sorting
         summary = summary.with_columns([
-            pl.col('BRANCH').fill_null('UNKNOWN').cast(pl.String).alias('BRANCH')
+            pl.col('BRANCH').cast(pl.Int64).alias('BRANCH')
         ])
         
         # Calculate total
@@ -355,6 +351,18 @@ def main():
         
         # Combine and generate report
         final_summary = pl.concat([summary, total_summary], how="diagonal")
+        
+        # Sort the non-total rows by BRANCH
+        # Separate totals and non-totals
+        non_totals = final_summary.filter(pl.col('BRANCH') != 'TOTAL')
+        totals = final_summary.filter(pl.col('BRANCH') == 'TOTAL')
+        
+        # Sort non-totals by BRANCH
+        non_totals = non_totals.sort('BRANCH')
+        
+        # Combine back
+        final_summary = pl.concat([non_totals, totals], how="diagonal")
+        
         generate_islamic_txt_report(final_summary, output_path, reptdate)
         
         logger.info("ISLAMIC PROCESSING COMPLETED SUCCESSFULLY")
