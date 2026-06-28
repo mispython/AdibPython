@@ -1,173 +1,338 @@
-2026-06-28 15:39:23,294 - INFO - Format mappings created successfully
-2026-06-28 15:39:23,295 - INFO - Report Date: 2025-12-31
-2026-06-28 15:39:23,295 - INFO - REPTMON: 12, REPTYEAR: 25
-2026-06-28 15:39:23,295 - INFO - SDESC: PUBLIC BANK BERHAD
-2026-06-28 15:39:23,295 - INFO - ⚠️  TEST MODE ENABLED: Will limit to 1,000 rows after reading
-2026-06-28 15:39:23,300 - INFO - REPTDATE saved to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQFAR2
-2026-06-28 15:39:23,300 - INFO - Processing TRUST data from cisdepxn.sas7bdat
-2026-06-28 15:39:23,300 - INFO - Reading SAS file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2/cisdepxn.sas7bdat
-2026-06-28 15:49:46,382 - INFO - TEST MODE: Limiting to first 1,000 rows (from 6,117,754)
-2026-06-28 15:49:46,439 - INFO - Successfully read cisdepxn.sas7bdat: 1,000 rows, 166 columns
-2026-06-28 15:50:41,422 - INFO - TRUST records: 0
-2026-06-28 15:50:41,435 - INFO - Processing deposit data from cisdepd.sas7bdat
-2026-06-28 15:50:41,441 - INFO - Reading SAS file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2/cisdepd.sas7bdat
-2026-06-28 15:54:53,146 - INFO - TEST MODE: Limiting to first 1,000 rows (from 7,733,240)
-2026-06-28 15:54:53,147 - INFO - Successfully read cisdepd.sas7bdat: 1,000 rows, 104 columns
-2026-06-28 15:54:56,527 - INFO - DEPOSIT records: 1,000
-2026-06-28 15:54:56,528 - INFO - Applying format mappings using replace() method
-2026-06-28 15:54:56,578 - INFO - RPT_BASE records: 1,000
+import polars as pl
+from pathlib import Path
+import datetime
+import pyreadstat
+import logging
 
-========================================================================================================================
-APPORTIONMENT OF PREMIUM PAID TO MDIC BY BRANCH (CONVENTIONAL)
-========================================================================================================================
-BRANCH              DDMAND              DEBIT CARD (E)      DFIXED              DSVING              FDMAND              FFIXED              
-------------------------------------------------------------------------------------------------------------------------
-UNKNOWN             0.00                490.42              0.00                0.00                0.00                0.00                
-2.0                 1,649.52            0.00                0.00                0.00                0.00                0.00                
-3.0                 11,311.25           0.00                0.00                0.00                653.40              0.00                
-4.0                 207,862.53          0.00                46,691.30           50,604.13           3,991.68            0.00                
-5.0                 28,644.18           0.00                55,115.48           71.98               0.00                0.00                
-6.0                 17.36               0.00                0.00                86,815.95           0.00                0.00                
-7.0                 841,421.30          0.00                903,042.72          1,608,420.08        0.00                0.00                
-8.0                 14,425.59           0.00                0.00                0.00                0.00                0.00                
-9.0                 17,003.88           0.00                0.00                0.00                0.00                0.00                
-15.0                0.00                0.00                0.00                3,968.86            0.00                0.00                
-16.0                0.00                0.00                0.00                522.66              0.00                0.00                
-18.0                235.15              0.00                0.00                36.49               0.00                0.00                
-19.0                331,131.12          0.00                100,307.10          17,266.17           515.10              0.00                
-20.0                2,812.25            0.00                0.00                0.00                0.00                0.00                
-21.0                2,135.22            0.00                0.00                0.00                0.00                0.00                
-25.0                268.69              0.00                0.00                0.00                0.00                0.00                
-26.0                5.85                0.00                0.00                10,704.02           0.00                0.00                
-28.0                543.51              0.00                35,152.49           0.00                0.00                0.00                
-32.0                0.00                0.00                0.00                4,504.62            0.00                0.00                
-33.0                75,107.71           0.00                11,292.57           113,637.60          0.00                0.00                
-36.0                274,094.81          0.00                0.00                6,889.85            0.00                0.00                
-37.0                104,417.64          0.00                391,906.57          320,710.96          0.00                0.00                
-40.0                7,165.27            0.00                0.00                0.00                0.00                0.00                
-41.0                65,117.85           0.00                0.00                0.00                0.00                0.00                
-42.0                0.00                0.00                0.00                13,709.59           0.00                0.00                
-44.0                55,392.10           0.00                120,673.65          2,640.78            0.00                0.00                
-45.0                0.00                0.00                37,429.18           212,570.82          64,924.92           0.00                
-46.0                1,314.71            0.00                0.00                2,813.54            0.00                0.00                
-47.0                0.00                0.00                0.00                11,610.29           0.00                0.00                
-50.0                20,959.71           0.00                154,916.07          89,453.91           0.00                0.00                
-52.0                285,935.05          0.00                8,689.27            18,904.05           0.00                0.00                
-53.0                524,932.52          0.00                318,863.50          13,381.55           0.00                0.00                
-55.0                8,672.66            0.00                0.00                73.96               0.00                0.00                
-57.0                7.13                0.00                0.00                22,537.33           0.00                0.00                
-59.0                0.00                0.00                0.00                7,004.41            0.00                0.00                
-60.0                3,608.66            0.00                0.00                0.00                4,165.41            0.00                
-61.0                115,104.58          0.00                233,442.84          122,662.76          0.00                0.00                
-64.0                2,912.71            0.00                0.00                0.00                0.00                0.00                
-66.0                34,722.94           0.00                209,134.51          45,897.65           0.00                0.00                
-68.0                0.00                0.00                0.00                20.12               0.00                0.00                
-72.0                10,688.18           0.00                0.00                0.00                0.00                0.00                
-77.0                26,663.98           0.00                181,227.65          42,227.91           0.00                0.00                
-78.0                19,006.78           0.00                0.00                17.33               0.00                0.00                
-79.0                574,156.27          0.00                256,474.48          12,843.40           0.00                0.00                
-81.0                0.00                0.00                0.00                14.67               0.00                0.00                
-83.0                250,000.00          0.00                0.00                0.00                0.00                0.00                
-89.0                158.28              0.00                0.00                89,277.68           0.00                0.00                
-90.0                1,149.87            0.00                0.00                45.06               0.00                0.00                
-91.0                3.78                0.00                0.00                1,616.80            0.00                0.00                
-92.0                0.00                0.00                0.00                2,015.43            0.00                0.00                
-94.0                0.00                0.00                0.00                194.13              0.00                0.00                
-96.0                0.00                0.00                0.00                4,408.28            0.00                0.00                
-97.0                1,703.77            0.00                0.00                8,392.43            0.00                0.00                
-102.0               0.00                0.00                0.00                21,353.11           0.00                0.00                
-104.0               0.00                0.00                143,577.25          163.63              0.00                0.00                
-107.0               3.11                0.00                0.00                0.00                0.00                0.00                
-110.0               446,947.37          0.00                20,013.43           16,121.07           0.00                0.00                
-111.0               6,493.26            0.00                0.00                0.00                0.00                0.00                
-112.0               4,146.82            0.00                0.00                0.00                0.00                0.00                
-114.0               2,892.29            0.00                0.00                1,641.33            0.00                0.00                
-115.0               15,207.07           0.00                0.00                0.00                0.00                0.00                
-120.0               0.00                0.00                0.00                20,111.78           0.00                0.00                
-121.0               108,113.47          0.00                0.00                33.27               60.28               0.00                
-122.0               0.00                0.00                0.00                16,537.78           0.00                0.00                
-124.0               0.00                0.00                0.00                459.69              0.00                0.00                
-125.0               0.00                0.00                0.00                6,376.29            0.00                0.00                
-126.0               606.73              0.00                0.00                1,566.92            0.00                0.00                
-127.0               27,507.15           0.00                0.00                225.04              0.00                0.00                
-128.0               2,439.62            0.00                0.00                523.66              0.00                0.00                
-129.0               24,071.59           0.00                200,212.60          0.00                0.00                0.00                
-130.0               5,225.48            0.00                245,039.06          1,180.90            0.00                0.00                
-131.0               10,788.30           0.00                0.00                0.00                0.00                0.00                
-135.0               253,984.47          0.00                0.00                39,034.14           0.00                0.00                
-138.0               3.26                0.00                0.00                0.00                0.00                0.00                
-140.0               11,110.34           0.00                0.00                2,078.80            3.72                0.00                
-141.0               260.17              0.00                249,739.83          0.00                0.00                0.00                
-144.0               0.00                0.00                0.00                2,000.00            0.00                0.00                
-147.0               16,957.04           0.00                0.00                0.00                0.03                0.00                
-148.0               0.00                0.00                0.00                13,111.64           0.00                0.00                
-150.0               0.00                0.00                0.00                1,188.02            0.00                0.00                
-151.0               3,287.68            0.00                106,772.92          0.00                0.00                0.00                
-153.0               0.56                0.00                0.00                5,106.58            0.00                0.00                
-155.0               222,027.63          0.00                0.00                0.00                0.00                0.00                
-156.0               9,081.59            0.00                239,601.49          8,835.66            0.00                0.00                
-157.0               1,635.76            0.00                202,593.76          0.00                0.00                0.00                
-161.0               250,073.56          0.00                0.00                0.00                0.00                0.00                
-162.0               94,838.44           0.00                0.00                0.00                0.00                0.00                
-163.0               0.00                0.00                23,415.26           0.00                0.00                0.00                
-165.0               2,409.56            0.00                0.00                1,476.31            0.00                0.00                
-168.0               62,109.46           0.00                966,165.95          240,767.15          4,261.04            0.00                
-169.0               58,942.38           0.00                110,456.82          8,911.98            4,633.26            0.00                
-170.0               0.00                0.00                103,143.30          40,090.70           0.00                0.00                
-171.0               4,061.60            0.00                0.00                1,230.03            0.00                0.00                
-172.0               200,828.32          0.00                0.00                14,182.95           0.00                0.00                
-173.0               131,538.45          0.00                0.00                2,818.97            1,675.25            0.00                
-174.0               86,569.21           0.00                0.00                3,427.27            0.00                0.00                
-175.0               79.16               0.00                0.00                28.43               0.00                0.00                
-176.0               61,242.48           0.00                709,465.99          251,177.94          0.00                0.00                
-179.0               232,987.42          0.00                0.00                0.00                0.00                0.00                
-180.0               14.08               0.00                0.00                106.31              0.00                0.00                
-185.0               0.00                0.00                0.00                8,013.20            1,881.91            0.00                
-186.0               0.00                0.00                0.00                3,450.51            0.00                0.00                
-195.0               0.00                0.00                0.00                7,942.69            0.00                0.00                
-196.0               1,423.44            0.00                0.00                193,626.49          0.00                0.00                
-197.0               1,417.54            0.00                0.00                0.00                0.00                0.00                
-198.0               19,926.42           0.00                677,734.12          392,189.18          0.00                0.00                
-201.0               250,144.79          0.00                324,231.86          28,858.40           594.12              98,023.09           
-204.0               5,338.06            0.00                0.00                12,323.75           0.00                0.00                
-205.0               0.00                0.00                273,120.98          13,808.88           0.00                0.00                
-206.0               0.00                0.00                0.00                988.23              0.00                0.00                
-207.0               8,730.36            0.00                142,527.19          4,279.11            0.00                0.00                
-208.0               1,414.93            0.00                166,240.34          0.00                0.00                0.00                
-216.0               43,638.77           0.00                236,183.06          108,443.96          0.00                0.00                
-217.0               130,105.03          0.00                5,889.69            506,225.49          0.00                0.00                
-222.0               197,970.09          0.00                555,289.73          13,250.13           269.84              0.00                
-225.0               1.85                0.00                141,157.65          27,265.93           0.00                0.00                
-226.0               995.70              0.00                100,153.42          6,468.03            0.00                0.00                
-228.0               18,498.89           0.00                0.00                71,453.09           0.00                0.00                
-230.0               16,706.15           0.00                0.00                0.00                0.00                0.00                
-231.0               0.00                0.00                0.00                14,006.50           0.00                0.00                
-232.0               113,314.95          0.00                93,225.89           141,731.30          0.00                0.00                
-241.0               4.54                0.00                0.00                0.00                0.00                0.00                
-244.0               0.00                0.00                0.00                3,308.71            0.00                0.00                
-248.0               3,224.13            0.00                180,019.75          203,451.89          0.00                0.00                
-249.0               0.00                0.00                0.00                5,602.81            0.00                0.00                
-251.0               0.00                0.00                0.00                5.80                0.00                0.00                
-252.0               0.00                0.00                0.00                6,991.13            0.00                0.00                
-262.0               12,498.25           0.00                0.00                0.00                0.00                0.00                
-266.0               1,607.15            0.00                0.00                64.83               0.00                0.00                
-267.0               232.90              0.00                0.00                0.00                0.00                0.00                
-269.0               254,025.85          0.00                182,712.91          75,709.56           0.00                0.00                
-270.0               3,636.80            0.00                240,863.45          58,282.24           0.00                0.00                
-273.0               447.98              0.00                0.00                0.00                0.00                0.00                
-280.0               0.00                0.00                0.00                3,809.78            9.34                0.00                
-281.0               0.00                0.00                118,621.68          1.52                0.00                0.00                
-282.0               0.01                0.00                0.00                0.00                0.00                0.00                
-283.0               56,893.09           0.00                0.00                193,497.67          0.00                0.00                
-285.0               0.00                0.00                0.00                103,728.27          0.00                0.00                
-286.0               99,394.51           0.00                567,576.46          197,692.64          0.00                0.00                
-287.0               15,965.86           0.00                292,127.69          39,525.24           0.00                0.00                
-290.0               267.40              0.00                0.00                5,047.28            0.00                0.00                
-292.0               0.00                0.00                0.00                180,783.88          0.00                0.00                
-TOTAL               7,538,774.67        490.42              10,682,232.91       6,302,182.70        87,639.30           98,023.09           
-------------------------------------------------------------------------------------------------------------------------
-GRAND TOTAL:        49,418,686.20
-========================================================================================================================
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('mdic_processing.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-2026-06-28 15:54:56,667 - INFO - Report saved to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQFAR2
-2026-06-28 15:54:56,667 - INFO - PROCESSING COMPLETED SUCCESSFULLY
+# Configuration
+pidmfin_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
+deposit1_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQFAR2")
+output_path.mkdir(exist_ok=True, parents=True)
+
+# PROC FORMAT equivalent - Create mapping dictionaries
+PRODBRH = {
+    '42110': 'DDMAND',
+    '42310': 'DDMAND',
+    '34180': 'DDMAND',
+    '42199': 'DDMAND',
+    '42120': 'DSVING',
+    '42320': 'DSVING',
+    '42130': 'DFIXED',
+    '42132': 'DFIXED',
+    '42133': 'DFIXED',
+    '42180': 'DDMAND',
+    '42610': 'FDMAND',
+    '42699': 'FDMAND',
+    '42630': 'FFIXED',
+    '42XXX': 'ATM/SI (E)',
+    '46795': 'DEBIT CARD (E)',
+    'TRUST': 'TRUST ACCT'
+}
+
+logger.info("Format mappings created successfully")
+
+def read_sas_to_polars(filepath: Path) -> pl.DataFrame:
+    """
+    Read a SAS .sas7bdat file using pyreadstat and return as Polars DataFrame
+    """
+    try:
+        if not filepath.exists():
+            logger.warning(f"File not found: {filepath}")
+            return pl.DataFrame()
+        
+        logger.info(f"Reading SAS file: {filepath}")
+        
+        # Read the full file
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        
+        # Convert to Polars DataFrame
+        pl_df = pl.from_pandas(df)
+        
+        logger.info(f"Successfully read {filepath.name}: {len(pl_df):,} rows, {len(pl_df.columns)} columns")
+        return pl_df
+        
+    except Exception as e:
+        logger.error(f"Error reading {filepath}: {e}")
+        return pl.DataFrame()
+
+def calculate_report_date() -> datetime.date:
+    """Calculate report date based on SAS logic"""
+    today = datetime.date.today()
+    date_string = f"0101{today.year}"
+    reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
+    
+    # IF MONTH(TODAY()) > 6 THEN REPTDATE = TODAY();
+    if today.month > 6:
+        reptdate = today
+        
+    return reptdate
+
+def process_trust_data(pidmfin_path: Path) -> pl.DataFrame:
+    """Process TRUST data from CISDEPXN"""
+    logger.info("Processing TRUST data from cisdepxn.sas7bdat")
+    
+    # Read SAS file
+    cisdepxn_df = read_sas_to_polars(pidmfin_path / "cisdepxn.sas7bdat")
+    
+    if cisdepxn_df.is_empty():
+        logger.warning("PIDMFIN.cisdepxn is empty or not found - skipping TRUST data")
+        return pl.DataFrame()
+    
+    # Check if required columns exist (case insensitive)
+    required_cols = ['ACCTYPE2', 'BENEINT', 'BRANCH', 'PRODCD', 'INSURED']
+    
+    # Create a mapping of lowercase column names to actual column names
+    col_mapping = {col.lower(): col for col in cisdepxn_df.columns}
+    
+    # Check if all required columns exist (case insensitive)
+    missing_cols = []
+    for col in required_cols:
+        if col.lower() not in col_mapping:
+            missing_cols.append(col)
+    
+    if missing_cols:
+        logger.warning(f"Missing columns in cisdepxn: {missing_cols}")
+        logger.info(f"Available columns: {list(cisdepxn_df.columns)[:10]}...")
+        return pl.DataFrame()
+    
+    # Rename columns to uppercase for consistency
+    rename_dict = {}
+    for col in required_cols:
+        actual_col = col_mapping[col.lower()]
+        if actual_col != col:
+            rename_dict[actual_col] = col
+    
+    if rename_dict:
+        cisdepxn_df = cisdepxn_df.rename(rename_dict)
+    
+    # Filter and select required columns
+    trust_df = cisdepxn_df.filter(
+        (pl.col('ACCTYPE2').is_in([3, 7])) & 
+        (pl.col('BENEINT').is_not_null())
+    ).select([
+        'BRANCH', 'PRODCD', 'INSURED'
+    ]).rename({'INSURED': 'INSUREBR'})
+    
+    logger.info(f"TRUST records: {trust_df.height:,}")
+    return trust_df
+
+def process_deposit_data(deposit1_path: Path) -> pl.DataFrame:
+    """Process deposit data from CISDEPD"""
+    logger.info("Processing deposit data from cisdepd.sas7bdat")
+    
+    # Read SAS file
+    cisdepd_df = read_sas_to_polars(deposit1_path / "cisdepd.sas7bdat")
+    
+    if cisdepd_df.is_empty():
+        logger.warning("DEPOSIT1.cisdepd is empty or not found")
+        return pl.DataFrame()
+    
+    # Check if required columns exist (case insensitive)
+    required_cols = ['BRANCH', 'PRODCD', 'INSUREBR']
+    
+    # Create a mapping of lowercase column names to actual column names
+    col_mapping = {col.lower(): col for col in cisdepd_df.columns}
+    
+    # Check if all required columns exist (case insensitive)
+    missing_cols = []
+    for col in required_cols:
+        if col.lower() not in col_mapping:
+            missing_cols.append(col)
+    
+    if missing_cols:
+        logger.warning(f"Missing columns in cisdepd: {missing_cols}")
+        logger.info(f"Available columns: {list(cisdepd_df.columns)[:10]}...")
+        return pl.DataFrame()
+    
+    # Rename columns to uppercase for consistency
+    rename_dict = {}
+    for col in required_cols:
+        actual_col = col_mapping[col.lower()]
+        if actual_col != col:
+            rename_dict[actual_col] = col
+    
+    if rename_dict:
+        cisdepd_df = cisdepd_df.rename(rename_dict)
+    
+    # Select required columns
+    cisdepd_df = cisdepd_df.select(['BRANCH', 'PRODCD', 'INSUREBR'])
+    
+    logger.info(f"DEPOSIT records: {cisdepd_df.height:,}")
+    return cisdepd_df
+
+def apply_format_mappings(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Apply PRODBRH format mapping to PRODCD column
+    """
+    if 'PRODCD' in df.columns:
+        try:
+            logger.info("Applying format mappings using replace() method")
+            df = df.with_columns([
+                pl.col('PRODCD').replace(PRODBRH).alias('PRODCD_FORMATTED')
+            ])
+        except AttributeError:
+            logger.info("Falling back to map_elements() method")
+            df = df.with_columns([
+                pl.col('PRODCD').map_elements(
+                    lambda x: PRODBRH.get(x, str(x)), 
+                    return_dtype=pl.String
+                ).alias('PRODCD_FORMATTED')
+            ])
+    return df
+
+def generate_tabular_report(summary_df: pl.DataFrame, output_path: Path) -> None:
+    """Generate and display tabular report similar to PROC TABULATE"""
+    if summary_df.is_empty():
+        logger.warning("No data available for tabulation")
+        return
+    
+    # Create pivot table
+    product_categories = summary_df['PRODCD_FORMATTED'].unique().sort()
+    
+    pivot_table = summary_df.pivot(
+        index='BRANCH',
+        columns='PRODCD_FORMATTED', 
+        values='INSUREBR_SUM',
+        aggregate_function='sum'
+    ).fill_null(0)
+    
+    # Calculate grand total
+    grand_total = summary_df.select(pl.col('INSUREBR_SUM').sum()).row(0)[0]
+    
+    # Handle null values in BRANCH column - replace with 'UNKNOWN'
+    pivot_table = pivot_table.with_columns([
+        pl.col('BRANCH').fill_null('UNKNOWN').cast(pl.String).alias('BRANCH')
+    ])
+    
+    # Format numbers for display
+    formatted_table = pivot_table.clone()
+    for col in formatted_table.columns:
+        if col != 'BRANCH' and formatted_table[col].dtype in [pl.Float64, pl.Int64]:
+            formatted_table = formatted_table.with_columns([
+                pl.col(col).map_elements(
+                    lambda x: f"{x:,.2f}" if x is not None else "0.00", 
+                    return_dtype=pl.String
+                ).alias(col)
+            ])
+    
+    # Display report
+    print("\n" + "="*120)
+    print("APPORTIONMENT OF PREMIUM PAID TO MDIC BY BRANCH (CONVENTIONAL)")
+    print("="*120)
+    
+    # Print header
+    header = "BRANCH".ljust(20)
+    for product in product_categories:
+        header += f"{product:<20}"
+    print(header)
+    print("-" * 120)
+    
+    # Print rows - handle None/Null values safely
+    for row in formatted_table.iter_rows(named=True):
+        # Ensure BRANCH is not None
+        branch = row.get('BRANCH', 'UNKNOWN')
+        if branch is None:
+            branch = 'UNKNOWN'
+        line = f"{str(branch):<20}"
+        
+        for product in product_categories:
+            value = row.get(product, "0.00")
+            if value is None:
+                value = "0.00"
+            line += f"{str(value):<20}"
+        print(line)
+    
+    print("-" * 120)
+    print(f"{'GRAND TOTAL:':<20}{grand_total:,.2f}")
+    print("="*120 + "\n")
+    
+    # Save detailed results
+    summary_df.write_csv(output_path / "CONVENTIONAL_INSURANCE_APPORTIONMENT.csv")
+    summary_df.write_parquet(output_path / "CONVENTIONAL_INSURANCE_APPORTIONMENT.parquet")
+    pivot_table.write_csv(output_path / "CONVENTIONAL_PIVOT_TABLE.csv")
+    pivot_table.write_parquet(output_path / "CONVENTIONAL_PIVOT_TABLE.parquet")
+    
+    logger.info(f"Report saved to {output_path}")
+
+def main():
+    """Main processing function"""
+    try:
+        # Calculate report date
+        reptdate = calculate_report_date()
+        SDESC = 'PUBLIC BANK BERHAD'
+        REPTMON = f"{reptdate.month:02d}"
+        REPTYEAR = reptdate.strftime('%y')
+        
+        logger.info(f"Report Date: {reptdate}")
+        logger.info(f"REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
+        logger.info(f"SDESC: {SDESC}")
+        
+        # Create REPTDATE DataFrame
+        reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
+        reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
+        reptdate_df.write_csv(output_path / "REPTDATE.csv")
+        logger.info(f"REPTDATE saved to {output_path}")
+        
+        # Process data sources
+        trust_df = process_trust_data(pidmfin_path)
+        deposit_df = process_deposit_data(deposit1_path)
+        
+        # Combine datasets
+        dataframes = [df for df in [trust_df, deposit_df] if not df.is_empty()]
+        
+        if not dataframes:
+            logger.warning("No data available for processing")
+            return
+        
+        rpt_base = pl.concat(dataframes, how="diagonal")
+        
+        # Apply format mappings
+        rpt_base = apply_format_mappings(rpt_base)
+        
+        # Save base dataset
+        rpt_base.write_parquet(output_path / "RPT_BASE.parquet")
+        rpt_base.write_csv(output_path / "RPT_BASE.csv")
+        
+        logger.info(f"RPT_BASE records: {rpt_base.height:,}")
+        
+        # Generate summary - ensure BRANCH is string type for consistency
+        summary = rpt_base.group_by(['BRANCH', 'PRODCD_FORMATTED']).agg([
+            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
+        ]).sort(['BRANCH', 'PRODCD_FORMATTED'])
+        
+        # Convert BRANCH to string and handle nulls
+        summary = summary.with_columns([
+            pl.col('BRANCH').fill_null('UNKNOWN').cast(pl.String).alias('BRANCH')
+        ])
+        
+        # Calculate total - ensure BRANCH is string type
+        total_summary = rpt_base.group_by(['PRODCD_FORMATTED']).agg([
+            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
+        ]).with_columns([
+            pl.lit('TOTAL').cast(pl.String).alias('BRANCH')
+        ])
+        
+        # Combine and generate report
+        final_summary = pl.concat([summary, total_summary], how="diagonal")
+        generate_tabular_report(final_summary, output_path)
+        
+        logger.info("PROCESSING COMPLETED SUCCESSFULLY")
+        
+    except Exception as e:
+        logger.error(f"Error in main processing: {e}", exc_info=True)
+        raise
+
+if __name__ == "__main__":
+    main()
