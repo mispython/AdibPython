@@ -6,9 +6,9 @@ import pandas as pd
 import pyreadstat  # pip install pyreadstat
 
 # Configuration
-pidmfin_path = Path("PIDMFIN")
-deposit1_path = Path("DEPOSIT1")
-output_path = Path("output")
+pidmfin_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
+deposit1_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQFAR2")
 output_path.mkdir(exist_ok=True)
 
 # PROC FORMAT equivalent - Create mapping dictionaries
@@ -252,3 +252,6 @@ else:
     print("No data available for tabulation")
 
 print("\nPROCESSING COMPLETED SUCCESSFULLY")
+
+
+all inputs are in sas dataset sas7bdat, may use pyreadstat. output in text and parquet files.
