@@ -1,365 +1,183 @@
+
+# eibdcitx.py
 import polars as pl
-from pathlib import Path
-import datetime
-import pyreadstat
-import logging
+import pyarrow as pa
+import pyarrow.parquet as pq
+import duckdb
+from datetime import date, datetime
 
-# Import format definitions from PBBDPFMT
-import PBBDPFMT
-from PBBDPFMT import (
-    SADenomFormat, SAProductFormat,
-    FDDenomFormat, FDProductFormat,
-    CADenomFormat, CAProductFormat,
-    FCYTermFormat, fdorgmt_format,
-    ProductLists
-)
+# -------------------------------------------------------------------
+# Step 1: Reporting Date Setup
+# -------------------------------------------------------------------
+today = date.today()
+REPTDAY = f"{today.day:02d}"
+REPTMON = f"{today.month:02d}"
+REPTYEAR = f"{today.year % 100:02d}"
+RDATE = today.strftime("%d/%m/%Y")
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('eiq_fisf_processing.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+day = today.day
+if 1 <= day <= 8:
+    WK = "1"
+elif 9 <= day <= 15:
+    WK = "2"
+elif 16 <= day <= 22:
+    WK = "3"
+else:
+    WK = "4"
 
-# Configuration
-pidmfin_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQFISF")
-deposit1_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQFISF")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQFISF")
-output_path.mkdir(exist_ok=True, parents=True)
+print(f"Running EIBDCITX for {RDATE} (WK={WK})")
 
-logger.info("PBBDPFMT formats loaded successfully")
+# -------------------------------------------------------------------
+# Step 2: Load raw datasets (replace with actual paths)
+# -------------------------------------------------------------------
+dpfl = pl.read_csv("DPFL.csv")   # DCI Daily raw
+eqfl = pl.read_csv("EQFL.csv", separator="|")
+cra  = pl.read_csv("CRA.csv")
+eqrt = pl.read_csv("EQRATE.csv")
+mnitb_saving = pl.read_csv("MNITB_SAVING.csv")
+mnitb_current = pl.read_csv("MNITB_CURRENT.csv")
 
-def read_sas_to_polars(filepath: Path) -> pl.DataFrame:
-    """Read a SAS .sas7bdat file using pyreadstat and return as Polars DataFrame"""
-    try:
-        if not filepath.exists():
-            logger.warning(f"File not found: {filepath}")
-            return pl.DataFrame()
-        
-        logger.info(f"Reading SAS file: {filepath}")
-        df, meta = pyreadstat.read_sas7bdat(filepath)
-        pl_df = pl.from_pandas(df)
-        logger.info(f"Successfully read {filepath.name}: {len(pl_df):,} rows, {len(pl_df.columns)} columns")
-        return pl_df
-        
-    except Exception as e:
-        logger.error(f"Error reading {filepath}: {e}")
-        return pl.DataFrame()
-
-def calculate_report_date() -> datetime.date:
-    """Calculate report date based on SAS logic"""
-    today = datetime.date.today()
-    date_string = f"0101{today.year}"
-    reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
-    if today.month > 6:
-        reptdate = today
-    return reptdate
-
-def process_islamic_deposit_data(deposit1_path: Path) -> pl.DataFrame:
-    """Process Islamic deposit data from CISDEPI"""
-    logger.info("Processing Islamic deposit data from cisdepi.sas7bdat")
-    cisdepi_df = read_sas_to_polars(deposit1_path / "cisdepi.sas7bdat")
-    
-    if cisdepi_df.is_empty():
-        logger.warning("DEPOSIT1.cisdepi is empty or not found")
-        return pl.DataFrame()
-    
-    required_cols = ['BRANCH', 'PRODCD', 'INSUREBR']
-    col_mapping = {col.lower(): col for col in cisdepi_df.columns}
-    missing_cols = []
-    for col in required_cols:
-        if col.lower() not in col_mapping:
-            missing_cols.append(col)
-    
-    if missing_cols:
-        logger.warning(f"Missing columns in cisdepi: {missing_cols}")
-        return pl.DataFrame()
-    
-    rename_dict = {}
-    for col in required_cols:
-        actual_col = col_mapping[col.lower()]
-        if actual_col != col:
-            rename_dict[actual_col] = col
-    
-    if rename_dict:
-        cisdepi_df = cisdepi_df.rename(rename_dict)
-    
-    if 'PRODCD' in cisdepi_df.columns:
-        if cisdepi_df['PRODCD'].dtype == pl.String:
-            cisdepi_df = cisdepi_df.with_columns([
-                pl.col('PRODCD').cast(pl.Int64).alias('PRODCD')
-            ])
-    
-    cisdepi_df = cisdepi_df.select(['BRANCH', 'PRODCD', 'INSUREBR'])
-    logger.info(f"Islamic DEPOSIT records: {cisdepi_df.height:,}")
-    return cisdepi_df
-
-def apply_format_mappings(df: pl.DataFrame) -> pl.DataFrame:
-    """Apply format mappings to PRODCD column using PBBDPFMT formats"""
-    if 'PRODCD' in df.columns:
-        if df['PRODCD'].dtype != pl.Int64:
-            df = df.with_columns([
-                pl.col('PRODCD').cast(pl.Int64).alias('PRODCD')
-            ])
-        
-        logger.info("Applying product format mappings from PBBDPFMT")
-        
-        df = df.with_columns([
-            pl.col('PRODCD').map_elements(
-                lambda x: _get_product_format(x),
-                return_dtype=pl.String
-            ).alias('PRODCD_FORMATTED')
-        ])
-        
-        df = df.with_columns([
-            pl.col('PRODCD').map_elements(
-                lambda x: _get_denomination(x),
-                return_dtype=pl.String
-            ).alias('DENOMINATION')
-        ])
-    
-    return df
-
-def _get_product_format(prodcd) -> str:
-    """Get product format from PBBDPFMT based on product code"""
-    if prodcd is None or prodcd == '':
-        return 'UNKNOWN'
-    
-    try:
-        prodcd_int = int(prodcd) if not isinstance(prodcd, int) else prodcd
-    except (ValueError, TypeError):
-        return str(prodcd)
-    
-    if prodcd_int in ProductLists.CURX_PRODUCTS:
-        return CAProductFormat.format(prodcd_int)
-    
-    if 200 <= prodcd_int <= 300:
-        return SAProductFormat.format(prodcd_int)
-    
-    if 229 <= prodcd_int <= 997:
-        return FDProductFormat.format(prodcd_int)
-    
-    return str(prodcd_int)
-
-def _get_denomination(prodcd) -> str:
-    """Get Islamic/Domestic denomination from PBBDPFMT"""
-    if prodcd is None or prodcd == '':
-        return 'UNKNOWN'
-    
-    try:
-        prodcd_int = int(prodcd) if not isinstance(prodcd, int) else prodcd
-    except (ValueError, TypeError):
-        return 'UNKNOWN'
-    
-    if prodcd_int in ProductLists.CURX_PRODUCTS:
-        return CADenomFormat.format(prodcd_int)
-    
-    if 200 <= prodcd_int <= 300:
-        return SADenomFormat.format(prodcd_int)
-    
-    if 229 <= prodcd_int <= 997:
-        return FDDenomFormat.format(prodcd_int)
-    
-    return 'UNKNOWN'
-
-def format_number(x):
-    """Format number with commas and 2 decimal places, handle None/null"""
-    if x is None or x == 0:
-        return "0.00"
-    return f"{x:,.2f}"
-
-def format_islamic_number(x):
-    """Format number for Islamic report - empty cells show dots"""
-    if x is None or x == 0:
-        return "                 ."
-    return f"{x:>18,.2f}"
-
-def generate_islamic_txt_report(summary_df: pl.DataFrame, output_path: Path, report_date: datetime.date) -> None:
-    """
-    Generate TXT report for Islamic banking in the exact format from the example
-    """
-    if summary_df.is_empty():
-        logger.warning("No data available for report generation")
-        return
-    
-    # Create pivot table - using 'on' instead of 'columns' (deprecated)
-    product_categories = ['IR070', 'DDMAND', 'DSVING', 'DFIXED', 'FDMAND']
-    
-    pivot_table = summary_df.pivot(
-        index='BRANCH',
-        on='PRODCD_FORMATTED',  # Fixed: using 'on' instead of 'columns'
-        values='INSUREBR_SUM',
-        aggregate_function='sum'
-    ).fill_null(0)
-    
-    # Ensure all product categories exist
-    for col in product_categories:
-        if col not in pivot_table.columns:
-            pivot_table = pivot_table.with_columns(pl.lit(0.0).alias(col))
-    
-    # Calculate grand total
-    grand_total = summary_df.select(pl.col('INSUREBR_SUM').sum()).row(0)[0]
-    
-    # Handle null values in BRANCH
-    pivot_table = pivot_table.with_columns([
-        pl.col('BRANCH').fill_null('UNKNOWN').cast(pl.String).alias('BRANCH')
+# -------------------------------------------------------------------
+# Step 3: DPST dataset
+# -------------------------------------------------------------------
+dpst = (
+    dpfl
+    .rename({"NEWIC":"ICNO"})  # rename if needed
+    .with_columns([
+        pl.col("ACCINT").cast(pl.Float64)
     ])
-    
-    # Sort by BRANCH (numeric order)
-    pivot_table = pivot_table.sort(pl.col('BRANCH'))
-    
-    # Get current date/time for header
-    now = datetime.datetime.now()
-    date_str = now.strftime("%I:%M %A, %B %d, %Y")
-    
-    # Prepare TXT file
-    txt_file = output_path / "EIIQFISF_ISLAMIC_REPORT.txt"
-    
-    with open(txt_file, 'w') as f:
-        # Header - Page 1
-        f.write(" " * 38 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        ")
-        f.write(f"{date_str}   1\n")
-        f.write("\n" * 2)
-        f.write(" " * 13 + "-" * 73 + "\n")
-        
-        # Main table header
-        f.write(" " * 13 + "|BRANCH  |" + " " * 46 + "PRODUCT" + " " * 46 + "|\n")
-        f.write(" " * 13 + "|        |" + "-" * 46 + "+" + "-" * 46 + "|\n")
-        
-        # Product columns header - first row
-        f.write(" " * 13 + "|        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |\n")
-        
-        # Product columns header - second row (subheaders)
-        f.write(" " * 13 + "|        |------------------+------------------+------------------+------------------+------------------|\n")
-        f.write(" " * 13 + "|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
-        f.write(" " * 13 + "|        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |\n")
-        f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
-        
-        # Data rows
-        row_count = 0
-        
-        for row in pivot_table.iter_rows(named=True):
-            branch = str(row.get('BRANCH', 'UNKNOWN'))
-            if branch == 'UNKNOWN':
-                continue
-            
-            # Format values - empty cells show dots
-            values = []
-            for col in product_categories:
-                val = row.get(col, 0)
-                if val == 0:
-                    values.append("                 .")
-                else:
-                    values.append(f"{val:>18,.2f}")
-            
-            # Write row
-            f.write(" " * 13 + f"|{branch:<8}|{values[0]}|{values[1]}|{values[2]}|")
-            f.write(f"{values[3]}|{values[4]}|\n")
-            f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
-            
-            row_count += 1
-            
-            # Page break every 24 rows (as in example)
-            if row_count % 24 == 0 and row_count < len(pivot_table):
-                # Footer for current page
-                f.write("\n" + " " * 45 + "(Continued)\n")
-                f.write(" " * 38 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(ISLAMIC)        ")
-                f.write(f"{date_str}   {row_count//24 + 1}\n")
-                f.write("\n" * 2)
-                f.write(" " * 13 + "-" * 73 + "\n")
-                
-                # Header repeated
-                f.write(" " * 13 + "|BRANCH  |" + " " * 46 + "PRODUCT" + " " * 46 + "|\n")
-                f.write(" " * 13 + "|        |" + "-" * 46 + "+" + "-" * 46 + "|\n")
-                f.write(" " * 13 + "|        |      IR070       |      DDMAND      |      DSVING      |      DFIXED      |      FDMAND      |\n")
-                f.write(" " * 13 + "|        |------------------+------------------+------------------+------------------+------------------|\n")
-                f.write(" " * 13 + "|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
-                f.write(" " * 13 + "|        |     INSURED      |     INSURED      |     INSURED      |     INSURED      |     INSURED      |\n")
-                f.write(" " * 13 + "|--------+------------------+------------------+------------------+------------------+------------------|\n")
-        
-        # Grand total row
-        total_values = []
-        for col in product_categories:
-            total_val = pivot_table.select(pl.col(col).sum()).row(0)[0]
-            total_values.append(f"{total_val:>18,.2f}")
-        
-        f.write(" " * 13 + f"|TOTAL   |{total_values[0]}|{total_values[1]}|{total_values[2]}|")
-        f.write(f"{total_values[3]}|{total_values[4]}|\n")
-        f.write(" " * 13 + "-" * 73 + "\n")
-    
-    logger.info(f"Islamic TXT report saved to: {txt_file}")
-    
-    # Also save Parquet for data analysis
-    pivot_table.write_parquet(output_path / "EIIQFISF_ISLAMIC_PIVOT.parquet")
-    summary_df.write_parquet(output_path / "EIIQFISF_ISLAMIC_SUMMARY.parquet")
-    
-    logger.info(f"Parquet files saved to: {output_path}")
+)
 
-def main():
-    """Main processing function for EIIQFISF - Islamic banking report"""
-    try:
-        # Calculate report date
-        reptdate = calculate_report_date()
-        SDESC = 'PUBLIC BANK BERHAD (ISLAMIC)'
-        REPTMON = f"{reptdate.month:02d}"
-        REPTYEAR = reptdate.strftime('%y')
-        
-        logger.info(f"Report Date: {reptdate}")
-        logger.info(f"REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
-        logger.info(f"SDESC: {SDESC}")
-        
-        # Create REPTDATE DataFrame
-        reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
-        reptdate_df.write_parquet(output_path / "REPTDATE_ISLAMIC.parquet")
-        reptdate_df.write_csv(output_path / "REPTDATE_ISLAMIC.csv")
-        logger.info(f"REPTDATE saved to {output_path}")
-        
-        # Process Islamic data sources
-        deposit_df = process_islamic_deposit_data(deposit1_path)
-        
-        if deposit_df.is_empty():
-            logger.warning("No Islamic data available for processing")
-            return
-        
-        # Apply format mappings from PBBDPFMT
-        rpt_base = apply_format_mappings(deposit_df)
-        
-        # Save base dataset
-        rpt_base.write_parquet(output_path / "RPT_BASE_ISLAMIC.parquet")
-        rpt_base.write_csv(output_path / "RPT_BASE_ISLAMIC.csv")
-        
-        logger.info(f"RPT_BASE records: {rpt_base.height:,}")
-        
-        # Generate summary
-        summary = rpt_base.group_by(['BRANCH', 'PRODCD_FORMATTED']).agg([
-            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
-        ]).sort(['BRANCH', 'PRODCD_FORMATTED'])
-        
-        # Convert BRANCH to string and handle nulls
-        summary = summary.with_columns([
-            pl.col('BRANCH').fill_null('UNKNOWN').cast(pl.String).alias('BRANCH')
-        ])
-        
-        # Calculate total
-        total_summary = rpt_base.group_by(['PRODCD_FORMATTED']).agg([
-            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
-        ]).with_columns([
-            pl.lit('TOTAL').cast(pl.String).alias('BRANCH')
-        ])
-        
-        # Combine and generate report
-        final_summary = pl.concat([summary, total_summary], how="diagonal")
-        generate_islamic_txt_report(final_summary, output_path, reptdate)
-        
-        logger.info("ISLAMIC PROCESSING COMPLETED SUCCESSFULLY")
-        
-    except Exception as e:
-        logger.error(f"Error in Islamic processing: {e}", exc_info=True)
-        raise
+# Simulate join with DCID
+dcid = pl.read_csv("DCID.csv").select(["TICKETNO","CUSTCODE"])
+dpst = dpst.join(dcid, on="TICKETNO", how="left")
 
-if __name__ == "__main__":
-    main()
+# -------------------------------------------------------------------
+# Step 4: EQC / EQI split
+# -------------------------------------------------------------------
+eq = eqfl.with_columns([
+    pl.col("ACCINTRM").abs(),
+    pl.col("ACCINTAMT").abs(),
+    pl.col("TOTINTAMT").abs(),
+    pl.col("PREMPAID").abs(),
+    pl.col("PREMREC").abs()
+])
+
+eq = eq.filter((pl.col("STARTDT") <= str(today)) & (pl.col("MATDT") >= str(today)))
+
+eqc = eq.filter(pl.col("TYPE")=="C")
+eqi = eq.filter(pl.col("TYPE")!="C")
+
+# -------------------------------------------------------------------
+# Step 5: Customer leg (EQC join DPST, CRA, DEPO)
+# -------------------------------------------------------------------
+eqdci = dpst.join(eqc, on="TICKETNO", how="inner")
+eqdci = eqdci.filter(pl.col("CUSTCODE") >= 80)
+
+# CRA feed
+dp_cra = cra.filter(pl.col("INV_STATUS").is_in(["ACT","CEP","CEU","CCU","CMU"]))
+dp_cra = dp_cra.with_columns([
+    pl.lit("Outstanding").alias("STATUSIND"),
+    pl.lit("MYR").alias("INVCURR"),
+    pl.lit(0).alias("PREMPAID")
+])
+
+# Merge deposits
+depo = (
+    pl.concat([mnitb_saving, mnitb_current])
+    .rename({"ACCTNO":"INVCURAC"})
+)
+dp_cra = dp_cra.join(depo, on="INVCURAC", how="inner").filter(pl.col("CUSTCODE")>=80)
+
+# Append
+eqdci = pl.concat([eqdci, dp_cra])
+
+# FX enrichment
+eqdci = eqdci.join(eqrt.rename({"CURRENCY":"INVCURR","SPOTRATE":"SPOTRT"}),
+                   on="INVCURR", how="left")
+
+eqdci = eqdci.with_columns([
+    (pl.col("ACCINT").round(0 if pl.col("INVCURR")=="JPY" else 2)).alias("ACCINTX"),
+    (pl.col("PREMPAID").round(0 if pl.col("INVCURR")=="JPY" else 2)).alias("PREMPAI"),
+])
+
+eqdci = eqdci.with_columns([
+    (pl.col("ACCINTX")*pl.col("SPOTRT")).alias("ACCINTRM"),
+    (pl.col("PREMPAI")*pl.col("SPOTRT")).alias("PREMPAIDRM")
+])
+
+cusmyr = eqdci.filter(pl.col("INVCURR")=="MYR")
+cusfcy = eqdci.filter(pl.col("INVCURR")!="MYR")
+
+# -------------------------------------------------------------------
+# Step 6: Interbank leg
+# -------------------------------------------------------------------
+eqdci_ib = eqi.filter(pl.col("FISSCODE") >= "80")
+eqdci_ib = eqdci_ib.join(eqrt.rename({"CURRENCY":"INVCURR","SPOTRATE":"SPOTRT"}),
+                         on="INVCURR", how="left")
+eqdci_ib = eqdci_ib.with_columns([
+    (pl.col("PREMREC").round(0 if pl.col("INVCURR")=="JPY" else 2)).alias("PREMREX"),
+    (pl.col("PREMREX")*pl.col("SPOTRT")).alias("PREMRECRM")
+])
+ibnmyr = eqdci_ib.filter(pl.col("INVCURR")=="MYR")
+ibnfcy = eqdci_ib.filter(pl.col("INVCURR")!="MYR")
+
+# -------------------------------------------------------------------
+# Step 7: Build DCI
+# -------------------------------------------------------------------
+dcimyr = (
+    pl.concat([cusmyr, ibnmyr])
+    .with_columns([
+        pl.when(pl.col("TYPE")=="C").then(pl.col("PREMPAID")).otherwise(pl.col("PREMREC")).alias("PREMIUM"),
+        pl.lit(today).alias("REPTDATS")
+    ])
+)
+
+# Derive ELDAY
+def elday(d):
+    dd = d.day
+    mm = d.month
+    yy = d.year
+    if dd in (1,9,16,23): return "DAYA"
+    if dd in (2,10,17,24): return "DAYB"
+    if dd in (3,11,18,25): return "DAYC"
+    if dd in (4,12,19,26): return "DAYD"
+    if dd in (5,13,20,27): return "DAYE"
+    if dd in (6,14,21,28): return "DAYF"
+    if dd in (7,29): return "DAYG"
+    if dd == 30: return "DAYH"
+    if dd in (8,15,22,31): return "DAYI"
+    return "DAYX"
+
+dcimyr = dcimyr.with_columns(pl.col("REPTDATS").apply(elday).alias("ELDAY"))
+
+# Map to BNM codes
+records = []
+for row in dcimyr.iter_rows(named=True):
+    if row.get("ACCINTRM",0) not in (None,0):
+        records.append({"BNMCODE":"4911095000000Y","ELDAY":row["ELDAY"],
+                        "REPTDATS":row["REPTDATS"],"AMOUNT":row["ACCINTRM"]})
+    if row.get("PREMIUM",0) not in (None,0):
+        records.append({"BNMCODE":"4929996000000Y","ELDAY":row["ELDAY"],
+                        "REPTDATS":row["REPTDATS"],"AMOUNT":row["PREMIUM"]})
+
+dci_final = pl.DataFrame(records)
+
+# Aggregate
+dci_final = dci_final.group_by(["BNMCODE","ELDAY","REPTDATS"]).agg(
+    pl.sum("AMOUNT").alias("AMOUNT")
+)
+
+# -------------------------------------------------------------------
+# Step 8: Write outputs (Parquet)
+# -------------------------------------------------------------------
+out_file = f"DCI_{REPTYEAR}{REPTMON}{REPTDAY}.parquet"
+dci_final.write_parquet(out_file)
+print(f"Final DCI Parquet written: {out_file}")
+
+# -------------------------------------------------------------------
+# Step 9: Register in DuckDB for analytics
+# -------------------------------------------------------------------
+duckdb.sql("INSTALL parquet; LOAD parquet;")
+duckdb.sql(f"CREATE TABLE dci AS SELECT * FROM read_parquet('{out_file}')")
+print("DuckDB table created. Rowcount:", duckdb.sql("SELECT COUNT(*) FROM dci").fetchall())
