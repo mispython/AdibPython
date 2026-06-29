@@ -13,12 +13,13 @@ from pathlib import Path
 import calendar
 import pyreadstat
 import os
+import re
 
 # ============================================================================
 # PATH SETUP
 # ============================================================================
-INPUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQDISE"
-OUTPUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQDISE"
+INPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQDISE")
+OUTPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQDISE")
 
 # Input files (SAS datasets)
 SAVING_FILE = INPUT_PATH / "saving.sas7bdat"
@@ -154,8 +155,12 @@ def calculate_age(bdate_val, reptdate, reptmon, reptday, reptyear):
 
     try:
         # Convert MMDDYYYY format to date
-        bdate_str = str(int(bdate_val)).zfill(11)[:8]
-        bdate = datetime.strptime(bdate_str, "%m%d%Y")
+        # Handle different formats: 12051996340.0 -> 12051996 (MMDDYYYY)
+        val_str = str(float(bdate_val)).split('.')[0].zfill(8)
+        # Take last 8 digits for MMDDYYYY
+        if len(val_str) > 8:
+            val_str = val_str[-8:]
+        bdate = datetime.strptime(val_str, "%m%d%Y")
 
         bday = bdate.day
         bmonth = bdate.month
@@ -182,14 +187,16 @@ def calculate_age(bdate_val, reptdate, reptmon, reptday, reptyear):
         return 0
 
 
-def convert_numeric_to_date(val):
-    """Convert numeric date (MMDDYYYY format) to date object"""
+def convert_sas_date_to_date(val):
+    """Convert SAS numeric date (MMDDYYYY format) to date object"""
     if val is None or val == 0 or pd.isna(val):
         return None
     try:
-        # Convert to string, ensure 8 digits for MMDDYYYY
-        val_str = str(int(val)).zfill(8)
-        # Parse as MMDDYYYY
+        # Convert to string and handle decimal
+        val_str = str(float(val)).split('.')[0].zfill(8)
+        # Take last 8 digits for MMDDYYYY
+        if len(val_str) > 8:
+            val_str = val_str[-8:]
         return datetime.strptime(val_str, "%m%d%Y").date()
     except:
         return None
@@ -229,7 +236,7 @@ else:
     # Filter out closed/blocked accounts
     saving = saving.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
 
-    # Apply transformations using Polars expressions (faster than Python UDFs)
+    # Convert OPENDT using map_elements with proper function
     saving = saving.with_columns([
         # Format assignments
         pl.col("CUSTCODE").cast(pl.Utf8).str.slice(0, 2).alias("CUSTCD"),
@@ -237,16 +244,11 @@ else:
         pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 5).alias("PRODCD"),
         pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 1).alias("AMTIND"),
 
-        # Convert OPENDT to date using Polars expressions (no Python UDF needed)
-        pl.when(pl.col("OPENDT") != 0)
-        .then(
-            pl.col("OPENDT")
-            .cast(pl.Utf8)
-            .str.zfill(8)
-            .str.strptime(pl.Date, "%m%d%Y")
-        )
-        .otherwise(pl.lit(None))
-        .alias("OPENDATE"),
+        # Convert OPENDT using map_elements
+        pl.col("OPENDT").map_elements(
+            convert_sas_date_to_date,
+            return_dtype=pl.Date
+        ).alias("OPENDATE"),
 
         # Calculate RANGE
         pl.when(pl.col("CURBAL") < 1000).then(pl.lit("1"))
@@ -256,8 +258,7 @@ else:
         .alias("RANGE"),
     ])
 
-    # Calculate AGE using map_elements (unavoidable due to complex logic)
-    # But we can optimize by pre-processing BDATE
+    # Calculate AGE using map_elements
     saving = saving.with_columns([
         pl.struct(["BDATE"]).map_elements(
             lambda x: calculate_age(x["BDATE"], reptdate, reptmon, reptday, reptyear),
@@ -499,17 +500,12 @@ else:
         pl.lit(0).alias("LSTMATDT_INIT"),
     ])
 
-    # Convert LMATDATE to date using Polars expressions
+    # Convert LMATDATE using map_elements
     fd = fd.with_columns([
-        pl.when(pl.col("LMATDATE") != 0)
-        .then(
-            pl.col("LMATDATE")
-            .cast(pl.Utf8)
-            .str.zfill(8)
-            .str.strptime(pl.Date, "%m%d%Y")
-        )
-        .otherwise(pl.lit(None))
-        .alias("LSTMATDT")
+        pl.col("LMATDATE").map_elements(
+            convert_sas_date_to_date,
+            return_dtype=pl.Date
+        ).alias("LSTMATDT")
     ])
 
     # Handle customer codes based on BIC
@@ -595,7 +591,8 @@ output_files = [
 ]
 
 for idx, (name, filename) in enumerate(output_files, 1):
-    if (OUTPUT_PATH / f"{filename}.parquet").exists():
+    parquet_file = OUTPUT_PATH / f"{filename}.parquet"
+    if parquet_file.exists():
         print(f"  {idx}. {name}: {OUTPUT_PATH / filename}")
     else:
         print(f"  {idx}. {name}: Not created")
@@ -614,34 +611,3 @@ print()
 
 # Close DuckDB connection
 con.close()
-
-
-
-
-errors:
-
-Report Date: 31/05/26
-Start Date: 23/05/26
-Week: 4
-Month: 05
-Year: 2026
-
-Loading UMA data...
-✓ Loaded 31915 UMA records
-Processing Saving Accounts...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBQDISE.py", line 234, in <module>
-    saving = saving.with_columns([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.InvalidOperationError: conversion from `str` to `date` failed in column 'OPENDT' for 4250603 out of 4250603 values: ["12051996340.0", "12091996344.0", … "12301996365.0"]
-
-You might want to try:
-- setting `strict=False` to set values that cannot be converted to `null`
-- using `str.strptime`, `str.to_date`, or `str.to_datetime` and providing a format string
