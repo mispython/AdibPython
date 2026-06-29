@@ -277,9 +277,21 @@ def safe_float(x):
         return 0.0
 
 def safe_int(x):
-    """Safe int conversion"""
+    """Safe int conversion - handles decimal strings like '42.0'"""
+    if x is None or x == '' or pd.isna(x):
+        return 0
     try:
-        return int(float(x)) if x not in (None, '', '') else 0
+        # If it's already a number, convert to int
+        if isinstance(x, (int, float)):
+            return int(x)
+        # If it's a string, try to convert
+        if isinstance(x, str):
+            # Remove any decimal points and trailing zeros
+            x = x.strip()
+            if '.' in x:
+                x = x.split('.')[0]
+            return int(x) if x else 0
+        return int(x)
     except:
         return 0
 
@@ -393,14 +405,20 @@ if not saving.is_empty() and not uma.is_empty():
 if not saving.is_empty():
     saving = saving.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
     
+    # First convert PRODUCT to int properly
+    saving = saving.with_columns([
+        pl.col("PRODUCT").map_elements(safe_int, return_dtype=pl.Int64).alias("PRODUCT_NUM")
+    ])
+    
     saving = saving.with_columns([
         pl.col("CUSTCODE").cast(pl.Utf8).str.slice(0, 2).alias("CUSTCD"),
         pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATECD"),
-        pl.col("PRODUCT").map_elements(
-            lambda x: SAVINGS_PROD_MAP.get(int(x) if x else 0, "42120"),
+        # Use PRODUCT_NUM for mapping
+        pl.col("PRODUCT_NUM").map_elements(
+            lambda x: SAVINGS_PROD_MAP.get(x, "42120"),
             return_dtype=pl.Utf8
         ).alias("PRODCD"),
-        pl.col("PRODUCT").map_elements(
+        pl.col("PRODUCT_NUM").map_elements(
             lambda x: get_amtind(x, 'savings'),
             return_dtype=pl.Utf8
         ).alias("AMTIND"),
@@ -450,7 +468,7 @@ if not current.is_empty():
     # Filter
     current = current.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
     
-    # Convert string columns to appropriate types for arithmetic
+    # Convert columns safely
     current = current.with_columns([
         pl.col("INTPAYBL").map_elements(safe_float, return_dtype=pl.Float64).alias("INTPAYBL_NUM"),
         pl.col("FORATE").map_elements(safe_float, return_dtype=pl.Float64).alias("FORATE_NUM"),
@@ -468,6 +486,7 @@ if not current.is_empty():
          .alias("INTPAYBL"),
         
         pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATECD"),
+        # Use PRODUCT_NUM for mapping
         pl.col("PRODUCT_NUM").map_elements(
             lambda x: CURRENT_PROD_MAP.get(x, "42110"),
             return_dtype=pl.Utf8
@@ -632,6 +651,7 @@ if not fd.is_empty():
          .alias("INTPAY"),
         
         pl.col("BRANCH").str.slice(0, 1).alias("STATE"),
+        # Use INTPLAN_NUM for mapping
         pl.col("INTPLAN_NUM").map_elements(
             lambda x: FD_PROD_MAP.get(x, "42130"),
             return_dtype=pl.Utf8
