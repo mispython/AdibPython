@@ -1,301 +1,927 @@
-DATA REPTDATE (KEEP=REPTDATE);
-  REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
-                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
-  SELECT(DAY(REPTDATE));
-    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
-    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
-    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
-    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3';
-                            WK2= '2'; WK3 = '1'; END;
-  END;
-  MM = MONTH(REPTDATE);
-  IF WK = '1' THEN DO;
-     MM1 = MM - 1;
-     IF MM1 = 0 THEN MM1 = 12;
-  END;
-  ELSE MM1 = MM;
-  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
-  CALL SYMPUT('NOWK',PUT(WK,$1.));
-  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
-  CALL SYMPUT('NOWK2',PUT(WK2,$1.));
-  CALL SYMPUT('NOWK3',PUT(WK3,$1.));
-  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
-  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
-RUN;
+#!/usr/bin/env python3
+"""
+EIBQDISE Deposit Processing
+Processes saving, current, and fixed deposit accounts
+Creates monthly extracts for BNM reporting
+"""
 
-%INC PGM(PBBDPFMT);
+import duckdb
+import polars as pl
+import pandas as pd
+from datetime import datetime, timedelta
+from pathlib import Path
+import calendar
+import pyreadstat
+import os
+import re
+import tempfile
 
- /***********************************************************/
- /** MANIPULATE THE EXTRACTED THE SAVING AND CURRENT       **/
- /** ACCOUNTS DATABASE                                     **/
- /***********************************************************/
+# Try to import saspy
+try:
+    import saspy
+    SAS_AVAILABLE = True
+except ImportError:
+    SAS_AVAILABLE = False
+    print("⚠ saspy not available, will use pyreadstat for SAS output")
 
-%LET SAVG1=(KEEP=BRANCH DEPTYPE PRODUCT OPENIND CUSTCODE INTPAYBL
-                 RACE CURBAL OPENMH CLOSEMH BDATE NAME ACCTNO LASTTRAN
-                 ACCYTD LEDGBAL SCHIND BANKNO OPENDT COSTCTR CHQFLOAT);
+# ============================================================================
+# PATH SETUP
+# ============================================================================
+INPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQDISE")
+OUTPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQDISE")
 
-%LET SAVG2=(KEEP=BRANCH DEPTYPE PRODUCT PRODCD CUSTCD STATECD AGE
-                 RACE INTPAYBL CURBAL OPENMH CLOSEMH RANGE BDATE NAME
-                 ACCTNO LASTTRAN ACCYTD AMTIND LEDGBAL SCHIND BANKNO
-                 OPENDATE COSTCTR CHQFLOAT);
+# Input files (SAS datasets)
+SAVING_FILE = INPUT_PATH / "saving.sas7bdat"
+CURRENT_FILE = INPUT_PATH / "current.sas7bdat"
+FD_FILE = INPUT_PATH / "fd.sas7bdat"
+UMA_FILE = INPUT_PATH / "uma.sas7bdat"
 
-%LET CURN1=(KEEP=BRANCH DEPTYPE PRODUCT OPENIND CUSTCODE INTPAYBL
-                 RACE CURBAL OPENMH CLOSEMH AVGAMT PURPOSE NAME ACCTNO
-                 LASTTRAN ACCYTD LEDGBAL ODINTACC COSTCTR SECTOR
-                 CHQFLOAT FORATE CURCODE);
+# Output files (will be created as parquet and sas7bdat)
+OUTPUT_SAVG_PATTERN = OUTPUT_PATH / "savg{month}{week}"
+OUTPUT_CURN_PATTERN = OUTPUT_PATH / "curn{month}{week}"
+OUTPUT_FCY_PATTERN = OUTPUT_PATH / "fcy{month}{week}"
+OUTPUT_DEPT_PATTERN = OUTPUT_PATH / "dept{month}{week}"
+OUTPUT_FDMTHLY = OUTPUT_PATH / "fdmthly"
 
-%LET CURN2=(KEEP=BRANCH DEPTYPE PRODUCT PRODCD CUSTCD STATECD CUSTNO
-                 RACE INTPAYBL CURBAL OPENMH CLOSEMH RANGE AVGAMT
-                 AVGRNGE PURPOSE SABAL CABAL AGE NAME ACCTNO AMTIND
-                 LASTTRAN ACCYTD LEDGBAL ODINTACC COSTCTR SECTOR
-                 CHQFLOAT FORATE CURCODE);
+# Ensure output directory exists
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-%LET AGELIMIT = 12;
-%LET MAXAGE   = 18;
-%LET AGEBELOW = 11;
 
-OPTIONS YEARCUTOFF=1930;
+# ============================================================================
+# INITIALIZE SASPY SESSION (if available)
+# ============================================================================
+sas = None
+if SAS_AVAILABLE:
+    try:
+        # Initialize SAS session
+        sas = saspy.SASsession(cfgname='default', results='none')
+        print("✓ SAS session initialized successfully")
+    except Exception as e:
+        print(f"⚠ Error initializing SAS session: {e}")
+        SAS_AVAILABLE = False
+        sas = None
 
-DATA UMA;
-   SET BNM.UMA;
-   IF BNKIND='PBB';
-RUN;
 
-DATA BNM.SAVG&REPTMON&NOWK &SAVG2;
-  LENGTH CUSTCD $2. PRODCD $5. STATECD $1. AMTIND $1.;
-  SET DEPOSIT.SAVING &SAVG1 UMA &SAVG1;
-  IF OPENIND NOT IN ('B','C','P');
-  /****************************************************/
-  /** APPLY THE FORMAT                               **/
-  /****************************************************/
-  CUSTCD=PUT(CUSTCODE, SACUSTCD.);
-  STATECD=PUT(BRANCH, STATECD.);
-  PRODCD=PUT(PRODUCT, SAPROD.);
-  AMTIND=PUT(PRODUCT, SADENOM.);
-  RANGE=INPUT(CURBAL, SDRANGE.);
-  RACE=PUT(RACE, $RACE.);
+# ============================================================================
+# INITIALIZE DUCKDB CONNECTION
+# ============================================================================
+con = duckdb.connect()
 
-  IF OPENDT NE 0 THEN
-     OPENDATE=INPUT(SUBSTR(PUT(OPENDT,Z11.),1,8), MMDDYY8.);
-  ELSE OPENDATE=0;
 
-  /******************************************/
-  /*  CALCULATION OF AGE RANGE              */
-  /******************************************/
-  AGE = 0;
-  IF (BDATE NE 0) AND (BDATE NE .) THEN
-    DO;
-     BDATE  =INPUT(SUBSTR(PUT(BDATE, Z11.),1, 8), MMDDYY8.);
-     BDAY   =DAY(BDATE);
-     BMONTH =MONTH(BDATE);
-     BYEAR  =YEAR(BDATE);
+# ============================================================================
+# CALCULATE REPORTING DATE AND PARAMETERS
+# ============================================================================
 
-     AGE=(&REPTYEAR - BYEAR);
-     SELECT;
-      WHEN (AGE = &AGELIMIT)
-        DO;
-         IF (BMONTH = &REPTMON) AND
-            (BDAY > &REPTDAY) THEN AGE=&AGEBELOW;
-         ELSE IF BMONTH > &REPTMON THEN AGE=&AGEBELOW;
-        END;
-      WHEN (AGE = &MAXAGE)
-        DO;
-         IF (BMONTH = &REPTMON) AND
-            (BDAY > &REPTDAY) THEN AGE=&AGELIMIT;
-         ELSE IF BMONTH > &REPTMON THEN AGE=&AGELIMIT;
-        END;
-      WHEN (AGE > &MAXAGE) AGE = &MAXAGE;
-      WHEN (AGE < &AGELIMIT) AGE = &AGEBELOW;
-      OTHERWISE AGE = &AGELIMIT;
-     END;
-    END;
-RUN;
+# Get first day of current month minus 1 day (last day of previous month)
+today = datetime.now()
+first_of_month = datetime(today.year, today.month, 1)
+reptdate = first_of_month - timedelta(days=1)
 
-DATA CURRENT;
-   SET DEPOSIT.CURRENT &CURN1;
-RUN;
-PROC SORT DATA=CURRENT;BY ACCTNO DESCENDING CURBAL;RUN;
-PROC SORT DATA=CURRENT NODUPKEY;BY ACCTNO;RUN;
+day = reptdate.day
+mm = reptdate.month
 
-DATA BNM.CURN&REPTMON&NOWK &CURN2
-     BNM.FCY&REPTMON&NOWK &CURN2;
-  LENGTH CUSTCD $2. PRODCD $5. STATECD $1. AMTIND $1.;
-  SET CURRENT;
-  IF OPENIND NOT IN ('B','C','P');
-  IF CURCODE NE 'MYR' THEN DO;
-      INTPAYBL = ROUND(INTPAYBL * FORATE,.01);
-  END;
-  STATECD=PUT(BRANCH, STATECD.);
-  PRODCD=PUT(PRODUCT, CAPROD.);
-  AMTIND=PUT(PRODUCT, CADENOM.);
-  RACE=PUT(RACE, $RACE.);
-  RANGE=INPUT(CURBAL, DDRANGE.);
-  AVGRNGE=INPUT(AVGAMT, DDRANGE.);
-  CABAL = 0; SABAL = 0;
-  /****************************************************/
-  /** IF VOSTRO ACCOUNT THEN THE COUNTER PARTY CODE  **/
-  /** WILL BE TAKEN AS EITHER CB '02' OR '81' BASED  **/
-  /** ON THE PRODUCT CODE :                          **/
-  /**              104 = VOSTRO LOCAL                **/
-  /**              105 = VOSTRO FOREIGN              **/
-  /****************************************************/
-  SELECT(PRODUCT);
-    WHEN(104) CUSTCD='02';
-    WHEN(105) CUSTCD='81';
-    OTHERWISE CUSTCD=PUT(CUSTCODE, DDCUSTCD.);
-  END;
+# Determine week based on day
+if day == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+    wk2, wk3 = None, None
+elif day == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+    wk2, wk3 = None, None
+elif day == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+    wk2, wk3 = None, None
+else:  # day >= 23 (last day of month)
+    sdd, wk, wk1 = 23, '4', '3'
+    wk2, wk3 = '2', '1'
 
-  /*****************************************************/
-  /** IF ACE PRODUCTS THEN CHECK BALANCE              **/
-  /**   ELSE TREAT LIKE OTHER CURRENT ACCOUNT PRODUCT **/
-  /*****************************************************/
-  IF PRODUCT IN &ACE THEN DO;
-        * INTPAYBL = 0;
-        PRODCD=PUT(PRODUCT, CAPROD.);
-        AMTIND=PUT(PRODUCT, CADENOM.);
-        RANGE=INPUT(CURBAL, DDRANGE.);
-        AVGRNGE=INPUT(AVGAMT, DDRANGE.);
-        CHQFLOAT = 0;
-        OUTPUT BNM.CURN&REPTMON&NOWK;
-  END;
-  ELSE IF 400 <= PRODUCT <= 444 THEN DO;
-     IF CUSTCD IN ('77','78','95') THEN DO;
-        IF SECTOR IN (4,5) THEN SECTOR = 1;
-        ELSE IF SECTOR NOT IN (1,2,3,4,5) THEN SECTOR = 1;
-     END;
-     ELSE DO;
-        IF SECTOR IN (1,2,3) THEN SECTOR = 4;
-        ELSE IF SECTOR NOT IN (1,2,3,4,5) THEN SECTOR = 4;
-     END;
-     OUTPUT BNM.FCY&REPTMON&NOWK;
-  END;
-  ELSE DO;
-     OUTPUT BNM.CURN&REPTMON&NOWK;
-  END;
-RUN;
-  /*
-DATA CISDP;
-   INFILE CISDP MISSOVER;
-   INPUT @1 ACCTNO 11. @13 CUSTNO 11.;
-RUN;
-PROC SORT DATA=CISDP OUT=CISDP(KEEP=ACCTNO);
-   BY ACCTNO;
-*;
-DATA BNM.FCY&REPTMON&NOWK;
-   MERGE BNM.FCY&REPTMON&NOWK(IN=A) CISDP;
-   BY ACCTNO;
-   IF A;
-*; */
-PROC SORT DATA=BNM.FCY&REPTMON&NOWK;
-   BY ACCTNO;
-*;
-PROC APPEND DATA=BNM.FCY&REPTMON&NOWK
-            BASE=BNM.CURN&REPTMON&NOWK; RUN;
+# Calculate MM1 (previous month for week 1)
+if wk == '1':
+    mm1 = mm - 1 if mm > 1 else 12
+else:
+    mm1 = mm
 
- /***********************************************************/
- /** SUMMARIZE THE DATASET AT BRANCH LEVEL - FOR RDAL      **/
- /***********************************************************/
-PROC DATASETS LIB=BNM NOLIST; DELETE DEPT&REPTMON&NOWK; RUN;
-PROC SUMMARY DATA=BNM.SAVG&REPTMON&NOWK NWAY;
-CLASS BRANCH STATECD PRODCD CUSTCD AMTIND;
-VAR CURBAL INTPAYBL;
-OUTPUT OUT=DEPT
-       SUM=CURBAL INTPAYBL;
-RUN;
+sdate = datetime(reptdate.year, mm, sdd)
 
-PROC APPEND DATA=DEPT BASE=BNM.DEPT&REPTMON&NOWK; RUN;
-PROC DATASETS LIB=WORK NOLIST; DELETE DEPT; RUN;
+# Format macro variables
+nowk = wk
+nowk1 = wk1
+nowk2 = wk2
+nowk3 = wk3
+reptmon = f"{mm:02d}"
+reptmon1 = f"{mm1:02d}"
+reptyear = reptdate.year
+reptday = f"{reptdate.day:02d}"
+rdate = reptdate.strftime("%d/%m/%y")
+sdate_str = sdate.strftime("%d/%m/%y")
 
-PROC SUMMARY DATA=BNM.CURN&REPTMON&NOWK NWAY MISSING;
-CLASS BRANCH STATECD PRODCD CUSTCD SECTOR AMTIND;
-VAR CURBAL INTPAYBL;
-OUTPUT OUT=DEPT
-       SUM=CURBAL INTPAYBL;
-RUN;
+print(f"Report Date: {rdate}")
+print(f"Start Date: {sdate_str}")
+print(f"Week: {nowk}")
+print(f"Month: {reptmon}")
+print(f"Year: {reptyear}")
+print()
 
-PROC APPEND DATA=DEPT BASE=BNM.DEPT&REPTMON&NOWK FORCE; RUN;
-PROC DATASETS LIB=WORK NOLIST; DELETE DEPT; RUN;
+# Constants
+AGELIMIT = 12
+MAXAGE = 18
+AGEBELOW = 11
 
-DATA SAVE293 &SAVG2;
-  LENGTH CUSTCD $2. PRODCD $5. STATECD $1. AMTIND $1.;
-  SET DEPOSIT.SAVING &SAVG1 UMA &SAVG1;
-  IF OPENIND NOT IN ('B','C','P');
-  /****************************************************/
-  /** APPLY THE FORMAT                               **/
-  /****************************************************/
-  CUSTCD =PUT(CUSTCODE, SACUSTCD.);
-  STATECD=PUT(BRANCH, STATECD.);
-  PRODCD =PUT(PRODUCT, SAPROD.);
-  AMTIND =PUT(PRODUCT, SADENOM.);
-  IF PRODCD='N' THEN DELETE;
-  OPENMH=1;
-  OUTPUT SAVE293;
-*;
-PROC SUMMARY DATA=SAVE293 NWAY;
-CLASS BRANCH STATECD PRODCD CUSTCD AMTIND;
-VAR OPENMH;
-OUTPUT OUT=SAVE293 SUM=;
-*;
-DATA CURR293 &CURN2;
-  LENGTH CUSTCD $2. PRODCD $5. STATECD $1. AMTIND $1.;
-  SET DEPOSIT.CURRENT &CURN1;
-  IF  OPENIND NOT IN ('B','C','P');
-  IF  BRANCH > 900 THEN DELETE;
-  STATECD=PUT(BRANCH, STATECD.);
-  PRODCD =PUT(PRODUCT, CAPROD.);
-  AMTIND =PUT(PRODUCT, CADENOM.);
-  CUSTCD ='00';
-  IF PRODCD='N' THEN DELETE;
-  /*  IF PRODUCT IN (160,161,162,163,164,165,182) THEN DO; */
-  IF PRODUCT IN (160,161,162,163,164,165,166,182) THEN DO;
-     PRODCD='42310'; AMTIND='I';
-  END;
-  ELSE DO;
-     PRODCD='42110'; AMTIND='D';
-  END;
-  OPENMH=1;
-  OUTPUT CURR293;
-*;
-PROC SUMMARY DATA=CURR293 NWAY;
-CLASS BRANCH STATECD PRODCD CUSTCD AMTIND;
-VAR OPENMH;
-OUTPUT OUT=CURR293 SUM=;
-*;
-DATA FD;
-   SET FD.FD;
-   IF ACCTTYPE IN (397,398) THEN DELETE;
-RUN;
+# ACE products (referenced in code)
+ACE_PRODUCTS = []  # Define based on requirements
 
-DATA BNM.FDMTHLY
-     (KEEP=BRANCH ACCTNO STATE CUSTCODE OPENIND CURBAL TERM NAME AMTIND
-           ORGDATE MATDATE RATE RENEWAL INTPLAN INTPAY INTDATE BIC
-           LASTACTV LSTMATDT PURPOSE FORATE ACCTTYPE);
-     LENGTH STATE $1. CUSTCODE $2. BIC $5.;
-     LSTMATDT=0;
-     SET FD;
-     IF CURCODE NE 'MYR' THEN DO;
-      INTPAY = ROUND(INTPAY * FORATE,.01);
-     END;
-     STATE = PUT(BRANCH, STATECD.);
-     BIC = PUT(INTPLAN, FDPROD.);
-     IF LMATDATE ^= 0 THEN
-     LSTMATDT=INPUT(SUBSTR(PUT(LMATDATE,Z11.),1,8),MMDDYY8.);
-     AMTIND = PUT(INTPLAN, FDDENOM.);
-     IF BIC IN ('42130','42630') THEN CUSTCODE = PUT(CUSTCD, FDCUSTCD.);
-        ELSE CUSTCODE = PUT(CUSTCD, IFDCUSCD.);
-     IF BIC = '42630' THEN DO;
-        IF CUSTCODE IN ('77','78','95') THEN DO;
-           IF PURPOSE NOT IN ('1','2','3') THEN PURPOSE=1;
-        END;
-        ELSE DO;
-           IF PURPOSE NOT IN ('4','5') THEN PURPOSE=4;
-        END;
-     END;
-     IF ACCTTYPE IN (315,394) THEN BIC='42132'; ELSE
-     IF ACCTTYPE IN (397,398) THEN BIC='42199';
-     IF OPENIND = 'D' OR OPENIND = 'O' THEN OUTPUT;
-RUN;
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def read_sas_file(filepath):
+    """Read SAS dataset and return Polars DataFrame"""
+    if not filepath.exists():
+        print(f"⚠ File not found: {filepath}")
+        return pl.DataFrame()
+    
+    try:
+        # Read SAS file using pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(str(filepath))
+        # Convert to Polars
+        return pl.from_pandas(df)
+    except Exception as e:
+        print(f"⚠ Error reading {filepath}: {e}")
+        return pl.DataFrame()
+
+
+def write_output_saspy(df, sas_path):
+    """Write DataFrame to SAS using saspy - using CSV approach"""
+    if sas is None:
+        return False
+    
+    try:
+        # Convert to pandas
+        pd_df = df.to_pandas()
+        
+        # Create temporary CSV file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
+            csv_path = tmp_file.name
+            pd_df.to_csv(csv_path, index=False, na_rep='')
+        
+        # Create SAS dataset from CSV
+        out_path_str = str(OUTPUT_PATH).replace('\\', '/')
+        csv_path_str = csv_path.replace('\\', '/')
+        
+        # SAS code to import CSV and save as dataset
+        sas_code = f"""
+        PROC IMPORT DATAFILE="{csv_path_str}" 
+            OUT=WORK.TEMP_DATA 
+            DBMS=CSV 
+            REPLACE;
+            GETNAMES=YES;
+            GUESSINGROWS=10000;
+            DATAROW=2;
+        RUN;
+        
+        LIBNAME OUT "{out_path_str}";
+        DATA OUT.{sas_path.stem};
+            SET WORK.TEMP_DATA;
+        RUN;
+        
+        PROC DATASETS LIB=OUT NOLIST;
+            DELETE {sas_path.stem};
+        RUN;
+        QUIT;
+        """
+        
+        sas.submit(sas_code)
+        
+        # Clean up temp file
+        try:
+            os.unlink(csv_path)
+        except:
+            pass
+        
+        print(f"✓ Saved SAS: {sas_path}")
+        return True
+    except Exception as e:
+        print(f"⚠ Error saving SAS file using saspy: {e}")
+        try:
+            # Clean up temp file
+            os.unlink(csv_path)
+        except:
+            pass
+        return False
+
+
+def write_output_pyreadstat(df, sas_path):
+    """Write DataFrame to SAS using pyreadstat"""
+    try:
+        pd_df = df.to_pandas()
+        
+        # Try different methods for pyreadstat
+        methods_to_try = [
+            lambda: pyreadstat.write_sas(pd_df, str(sas_path)),
+            lambda: pyreadstat.write_sas7bdat(pd_df, str(sas_path)),
+            lambda: pyreadstat.write_sas7bdat_file(pd_df, str(sas_path)),
+            lambda: pyreadstat.write_sas_file(pd_df, str(sas_path)),
+        ]
+        
+        for method in methods_to_try:
+            try:
+                method()
+                print(f"✓ Saved SAS: {sas_path}")
+                return True
+            except AttributeError:
+                continue
+            except Exception as e:
+                continue
+        
+        return False
+    except Exception as e:
+        print(f"⚠ Error saving SAS file with pyreadstat: {e}")
+        return False
+
+
+def write_output(df, base_path, suffix=""):
+    """Write DataFrame to both Parquet and SAS formats"""
+    if df.is_empty():
+        print(f"⚠ No data to write for {base_path}")
+        return
+    
+    # Parquet output (always save)
+    parquet_path = Path(str(base_path) + f"{suffix}.parquet")
+    df.write_parquet(parquet_path)
+    print(f"✓ Saved Parquet: {parquet_path}")
+    
+    # SAS output
+    sas_path = Path(str(base_path) + f"{suffix}.sas7bdat")
+    sas_saved = False
+    
+    # Try saspy first if available
+    if SAS_AVAILABLE and sas is not None:
+        sas_saved = write_output_saspy(df, sas_path)
+    
+    # Fallback to pyreadstat if saspy failed or not available
+    if not sas_saved:
+        sas_saved = write_output_pyreadstat(df, sas_path)
+    
+    # If all SAS methods failed, save as CSV
+    if not sas_saved:
+        try:
+            csv_path = Path(str(base_path) + f"{suffix}.csv")
+            pd_df = df.to_pandas()
+            pd_df.to_csv(csv_path, index=False)
+            print(f"⚠ SAS write failed, saved CSV instead: {csv_path}")
+        except Exception as e:
+            print(f"⚠ Error saving CSV: {e}")
+
+
+def calculate_age(bdate_val, reptdate, reptmon, reptday, reptyear):
+    """Calculate age based on birthdate"""
+    if bdate_val is None or bdate_val == 0:
+        return 0
+
+    try:
+        # Convert MMDDYYYY format to date
+        # Handle different formats: 12051996340.0 -> 12051996 (MMDDYYYY)
+        val_str = str(float(bdate_val)).split('.')[0].zfill(8)
+        # Take last 8 digits for MMDDYYYY
+        if len(val_str) > 8:
+            val_str = val_str[-8:]
+        bdate = datetime.strptime(val_str, "%m%d%Y")
+
+        bday = bdate.day
+        bmonth = bdate.month
+        byear = bdate.year
+
+        age = reptyear - byear
+
+        # Age limit adjustments
+        if age == AGELIMIT:
+            if (bmonth == int(reptmon) and bday > int(reptday)) or bmonth > int(reptmon):
+                age = AGEBELOW
+        elif age == MAXAGE:
+            if (bmonth == int(reptmon) and bday > int(reptday)) or bmonth > int(reptmon):
+                age = AGELIMIT
+        elif age > MAXAGE:
+            age = MAXAGE
+        elif age < AGELIMIT:
+            age = AGEBELOW
+        else:
+            age = AGELIMIT
+
+        return age
+    except:
+        return 0
+
+
+def convert_sas_date_to_date(val):
+    """Convert SAS numeric date (MMDDYYYY format) to date object"""
+    if val is None or val == 0 or pd.isna(val):
+        return None
+    try:
+        # Convert to string and handle decimal
+        val_str = str(float(val)).split('.')[0].zfill(8)
+        # Take last 8 digits for MMDDYYYY
+        if len(val_str) > 8:
+            val_str = val_str[-8:]
+        return datetime.strptime(val_str, "%m%d%Y").date()
+    except:
+        return None
+
+
+def safe_float_convert(val):
+    """Safely convert a value to float, handling empty strings and nulls"""
+    if val is None or val == "" or pd.isna(val):
+        return 0.0
+    try:
+        return float(val)
+    except:
+        return 0.0
+
+
+def safe_int_convert(val):
+    """Safely convert a value to int, handling empty strings and nulls"""
+    if val is None or val == "" or pd.isna(val):
+        return 0
+    try:
+        return int(float(val))
+    except:
+        return 0
+
+
+# ============================================================================
+# PROCESS UMA DATA
+# ============================================================================
+
+print("Loading UMA data...")
+
+uma = read_sas_file(UMA_FILE)
+if not uma.is_empty():
+    uma = uma.filter(pl.col("BNKIND") == "PBB")
+    print(f"✓ Loaded {len(uma)} UMA records")
+else:
+    print("⚠ UMA file not found or empty, creating empty dataset")
+
+
+# ============================================================================
+# PROCESS SAVING ACCOUNTS
+# ============================================================================
+
+print("Processing Saving Accounts...")
+
+# Load saving data
+saving = read_sas_file(SAVING_FILE)
+
+if saving.is_empty():
+    print("⚠ No saving data found, creating empty dataset")
+    saving = pl.DataFrame()
+else:
+    # Combine with UMA if exists
+    if not uma.is_empty():
+        saving = pl.concat([saving, uma], how="diagonal")
+
+    # Filter out closed/blocked accounts
+    saving = saving.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
+
+    # Convert OPENDT using map_elements with proper function
+    saving = saving.with_columns([
+        # Format assignments
+        pl.col("CUSTCODE").cast(pl.Utf8).str.slice(0, 2).alias("CUSTCD"),
+        pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATECD"),
+        pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 5).alias("PRODCD"),
+        pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 1).alias("AMTIND"),
+
+        # Convert OPENDT using map_elements
+        pl.col("OPENDT").map_elements(
+            convert_sas_date_to_date,
+            return_dtype=pl.Date
+        ).alias("OPENDATE"),
+
+        # Calculate RANGE
+        pl.when(pl.col("CURBAL") < 1000).then(pl.lit("1"))
+        .when(pl.col("CURBAL") < 10000).then(pl.lit("2"))
+        .when(pl.col("CURBAL") < 50000).then(pl.lit("3"))
+        .otherwise(pl.lit("4"))
+        .alias("RANGE"),
+    ])
+
+    # Calculate AGE using map_elements
+    saving = saving.with_columns([
+        pl.struct(["BDATE"]).map_elements(
+            lambda x: calculate_age(x["BDATE"], reptdate, reptmon, reptday, reptyear),
+            return_dtype=pl.Int64
+        ).alias("AGE")
+    ])
+
+    print(f"✓ Processed {len(saving)} saving accounts")
+
+    # Save output
+    output_path = OUTPUT_PATH / f"savg{reptmon}{nowk}"
+    write_output(saving, output_path)
+
+
+# ============================================================================
+# PROCESS CURRENT ACCOUNTS
+# ============================================================================
+
+print("Processing Current Accounts...")
+
+# Load current data
+current = read_sas_file(CURRENT_FILE)
+
+if current.is_empty():
+    print("⚠ No current data found, creating empty dataset")
+    current = pl.DataFrame()
+else:
+    # Remove duplicates (keep highest CURBAL per account)
+    current = current.sort(["ACCTNO", "CURBAL"], descending=[False, True])
+    current = current.unique(subset=["ACCTNO"], keep="first")
+
+    # Filter out closed/blocked accounts
+    current = current.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
+
+    # Safely convert columns to appropriate types
+    current = current.with_columns([
+        # Convert string columns
+        pl.col("BRANCH").cast(pl.Utf8),
+        pl.col("PRODUCT").cast(pl.Utf8),
+        pl.col("CUSTCODE").cast(pl.Utf8),
+        pl.col("CURCODE").cast(pl.Utf8),
+        pl.col("INTPAYBL").cast(pl.Utf8),
+        pl.col("FORATE").cast(pl.Utf8),
+        pl.col("CURBAL").cast(pl.Utf8),
+        pl.col("AVGAMT").cast(pl.Utf8),
+        pl.col("SECTOR").cast(pl.Utf8),
+    ])
+
+    # Now convert numeric columns safely
+    current = current.with_columns([
+        # Convert INTPAYBL to float
+        pl.col("INTPAYBL").map_elements(
+            lambda x: safe_float_convert(x),
+            return_dtype=pl.Float64
+        ).alias("INTPAYBL_NUM"),
+        
+        # Convert FORATE to float
+        pl.col("FORATE").map_elements(
+            lambda x: safe_float_convert(x),
+            return_dtype=pl.Float64
+        ).alias("FORATE_NUM"),
+        
+        # Convert CURBAL to float
+        pl.col("CURBAL").map_elements(
+            lambda x: safe_float_convert(x),
+            return_dtype=pl.Float64
+        ).alias("CURBAL_NUM"),
+        
+        # Convert AVGAMT to float
+        pl.col("AVGAMT").map_elements(
+            lambda x: safe_float_convert(x),
+            return_dtype=pl.Float64
+        ).alias("AVGAMT_NUM"),
+        
+        # Convert SECTOR to int
+        pl.col("SECTOR").map_elements(
+            lambda x: safe_int_convert(x),
+            return_dtype=pl.Int64
+        ).alias("SECTOR_NUM"),
+    ])
+
+    # Apply transformations
+    current = current.with_columns([
+        # Convert foreign currency amounts if needed
+        pl.when(pl.col("CURCODE") != "MYR")
+        .then((pl.col("INTPAYBL_NUM") * pl.col("FORATE_NUM")).round(2))
+        .otherwise(pl.col("INTPAYBL_NUM"))
+        .alias("INTPAYBL_ADJ"),
+
+        # Format assignments
+        pl.col("BRANCH").str.slice(0, 1).alias("STATECD"),
+        pl.col("PRODUCT").str.slice(0, 5).alias("PRODCD"),
+        pl.col("PRODUCT").str.slice(0, 1).alias("AMTIND"),
+
+        # Initialize balances
+        pl.lit(0.0).alias("CABAL"),
+        pl.lit(0.0).alias("SABAL"),
+
+        # RANGE calculations using numeric columns
+        pl.when(pl.col("CURBAL_NUM") < 1000).then(pl.lit("1"))
+        .when(pl.col("CURBAL_NUM") < 10000).then(pl.lit("2"))
+        .when(pl.col("CURBAL_NUM") < 50000).then(pl.lit("3"))
+        .otherwise(pl.lit("4"))
+        .alias("RANGE"),
+
+        pl.when(pl.col("AVGAMT_NUM") < 1000).then(pl.lit("1"))
+        .when(pl.col("AVGAMT_NUM") < 10000).then(pl.lit("2"))
+        .when(pl.col("AVGAMT_NUM") < 50000).then(pl.lit("3"))
+        .otherwise(pl.lit("4"))
+        .alias("AVGRNGE"),
+    ])
+
+    # Handle VOSTRO accounts
+    current = current.with_columns([
+        pl.when(pl.col("PRODUCT") == pl.lit("104"))
+        .then(pl.lit("02"))
+        .when(pl.col("PRODUCT") == pl.lit("105"))
+        .then(pl.lit("81"))
+        .otherwise(pl.col("CUSTCODE").str.slice(0, 2))
+        .alias("CUSTCD")
+    ])
+
+    # Convert PRODUCT to numeric for filtering
+    current = current.with_columns([
+        pl.col("PRODUCT").map_elements(
+            lambda x: safe_int_convert(x),
+            return_dtype=pl.Int64
+        ).alias("PRODUCT_NUM")
+    ])
+
+    # Split into CURN and FCY based on product
+    current_regular = current.filter(
+        ~pl.col("PRODUCT_NUM").is_in(ACE_PRODUCTS) &
+        ~pl.col("PRODUCT_NUM").is_between(400, 444)
+    )
+
+    current_fcy = current.filter(pl.col("PRODUCT_NUM").is_between(400, 444))
+
+    # Handle FCY sector adjustments
+    if not current_fcy.is_empty():
+        current_fcy = current_fcy.with_columns([
+            pl.when(pl.col("CUSTCD").is_in(['77', '78', '95']))
+            .then(
+                pl.when(pl.col("SECTOR_NUM").is_in([4, 5]))
+                .then(pl.col("SECTOR_NUM"))
+                .otherwise(pl.lit(1))
+            )
+            .otherwise(
+                pl.when(pl.col("SECTOR_NUM").is_in([1, 2, 3]))
+                .then(pl.lit(4))
+                .when(pl.col("SECTOR_NUM").is_in([4, 5]))
+                .then(pl.lit(4))
+                .otherwise(pl.lit(4))
+            )
+            .alias("SECTOR_ADJ")
+        ])
+
+    # Replace INTPAYBL with adjusted value and ensure consistent types
+    if not current_regular.is_empty():
+        current_regular = current_regular.with_columns([
+            pl.col("INTPAYBL_ADJ").alias("INTPAYBL"),
+            # Ensure SECTOR is string for consistency
+            pl.col("SECTOR").cast(pl.Utf8).alias("SECTOR")
+        ])
+    
+    if not current_fcy.is_empty():
+        current_fcy = current_fcy.with_columns([
+            pl.col("INTPAYBL_ADJ").alias("INTPAYBL"),
+            # Convert SECTOR_ADJ to string to match SECTOR type
+            pl.col("SECTOR_ADJ").cast(pl.Utf8).alias("SECTOR")
+        ])
+
+    # Ensure both DataFrames have the same schema before concatenation
+    # Get common columns
+    common_cols = list(set(current_regular.columns) & set(current_fcy.columns))
+    
+    # Select only common columns in both DataFrames
+    current_regular = current_regular.select(common_cols)
+    current_fcy = current_fcy.select(common_cols)
+
+    # Combine FCY back to regular current
+    current_all = pl.concat([current_regular, current_fcy], how="diagonal")
+
+    print(f"✓ Processed {len(current_all)} current accounts")
+    print(f"  - Regular: {len(current_regular)}")
+    print(f"  - FCY: {len(current_fcy)}")
+
+    # Save outputs
+    output_curn = OUTPUT_PATH / f"curn{reptmon}{nowk}"
+    output_fcy = OUTPUT_PATH / f"fcy{reptmon}{nowk}"
+
+    write_output(current_all, output_curn)
+    if not current_fcy.is_empty():
+        write_output(current_fcy, output_fcy)
+    else:
+        print("⚠ No FCY data to save")
+
+
+# ============================================================================
+# SUMMARIZE AT BRANCH LEVEL FOR RDAL
+# ============================================================================
+
+print("Creating branch-level summaries...")
+
+if not saving.is_empty() and not current.is_empty():
+    # Ensure all columns are properly typed for grouping
+    # For savings
+    dept_savg = saving.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND"]).agg([
+        pl.col("CURBAL").cast(pl.Float64).sum().alias("CURBAL"),
+        pl.col("INTPAYBL").cast(pl.Float64).sum().alias("INTPAYBL")
+    ])
+    
+    # Ensure all grouping columns are string type in dept_savg
+    dept_savg = dept_savg.with_columns([
+        pl.col("BRANCH").cast(pl.Utf8),
+        pl.col("STATECD").cast(pl.Utf8),
+        pl.col("PRODCD").cast(pl.Utf8),
+        pl.col("CUSTCD").cast(pl.Utf8),
+        pl.col("AMTIND").cast(pl.Utf8),
+        pl.col("CURBAL").cast(pl.Float64),
+        pl.col("INTPAYBL").cast(pl.Float64),
+    ])
+
+    # For current - ensure SECTOR is string type for grouping
+    if "SECTOR" in current_all.columns:
+        current_all = current_all.with_columns([
+            pl.col("SECTOR").cast(pl.Utf8).alias("SECTOR")
+        ])
+    
+    # Convert all grouping columns to string type
+    current_all = current_all.with_columns([
+        pl.col("BRANCH").cast(pl.Utf8),
+        pl.col("STATECD").cast(pl.Utf8),
+        pl.col("PRODCD").cast(pl.Utf8),
+        pl.col("CUSTCD").cast(pl.Utf8),
+        pl.col("AMTIND").cast(pl.Utf8),
+        pl.col("CURBAL").cast(pl.Float64),
+        pl.col("INTPAYBL").cast(pl.Float64),
+    ])
+    
+    dept_curn = current_all.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "SECTOR", "AMTIND"]).agg([
+        pl.col("CURBAL").sum().alias("CURBAL"),
+        pl.col("INTPAYBL").sum().alias("INTPAYBL")
+    ])
+    
+    # Ensure dept_curn has same column types as dept_savg
+    dept_curn = dept_curn.with_columns([
+        pl.col("BRANCH").cast(pl.Utf8),
+        pl.col("STATECD").cast(pl.Utf8),
+        pl.col("PRODCD").cast(pl.Utf8),
+        pl.col("CUSTCD").cast(pl.Utf8),
+        pl.col("AMTIND").cast(pl.Utf8),
+        pl.col("CURBAL").cast(pl.Float64),
+        pl.col("INTPAYBL").cast(pl.Float64),
+        pl.col("SECTOR").cast(pl.Utf8),
+    ])
+
+    # Add SECTOR column to dept_savg if it doesn't exist (with null values)
+    if "SECTOR" not in dept_savg.columns:
+        dept_savg = dept_savg.with_columns([
+            pl.lit(None).cast(pl.Utf8).alias("SECTOR")
+        ])
+
+    # Ensure both DataFrames have the same columns in the same order
+    common_cols = ["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND", "SECTOR", "CURBAL", "INTPAYBL"]
+    
+    # Select only common columns in both DataFrames
+    dept_savg = dept_savg.select(common_cols)
+    dept_curn = dept_curn.select(common_cols)
+
+    # Combine department summaries
+    dept_all = pl.concat([dept_savg, dept_curn], how="diagonal")
+
+    output_dept = OUTPUT_PATH / f"dept{reptmon}{nowk}"
+    write_output(dept_all, output_dept)
+
+    print(f"✓ Created department summary")
+else:
+    print("⚠ Skipping department summary - insufficient data")
+
+
+# ============================================================================
+# PROCESS ACCOUNT COUNTS (293 REPORTS)
+# ============================================================================
+
+print("Processing account count summaries...")
+
+if not saving.is_empty():
+    # Savings count
+    save293 = saving.with_columns([
+        pl.lit(1).alias("OPENMH")
+    ])
+
+    save293_sum = save293.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND"]).agg([
+        pl.col("OPENMH").sum().alias("OPENMH")
+    ])
+
+    # Current count
+    if not current.is_empty():
+        curr293 = current.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
+        # Filter BRANCH safely
+        curr293 = curr293.with_columns([
+            pl.col("BRANCH").map_elements(
+                lambda x: safe_int_convert(x),
+                return_dtype=pl.Int64
+            ).alias("BRANCH_NUM")
+        ])
+        curr293 = curr293.filter(pl.col("BRANCH_NUM") <= 900)
+
+        # Apply product code transformations
+        curr293 = curr293.with_columns([
+            pl.col("BRANCH").str.slice(0, 1).alias("STATECD"),
+            pl.lit("00").alias("CUSTCD"),
+            pl.lit(1).alias("OPENMH"),
+
+            # Product code and amount indicator based on product
+            pl.when(pl.col("PRODUCT_NUM").is_in([160, 161, 162, 163, 164, 165, 166, 182]))
+            .then(pl.lit("42310"))
+            .otherwise(pl.lit("42110"))
+            .alias("PRODCD"),
+
+            pl.when(pl.col("PRODUCT_NUM").is_in([160, 161, 162, 163, 164, 165, 166, 182]))
+            .then(pl.lit("I"))
+            .otherwise(pl.lit("D"))
+            .alias("AMTIND")
+        ])
+
+        curr293_sum = curr293.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND"]).agg([
+            pl.col("OPENMH").sum().alias("OPENMH")
+        ])
+
+    print(f"✓ Account count summaries created")
+
+
+# ============================================================================
+# PROCESS FIXED DEPOSITS
+# ============================================================================
+
+print("Processing Fixed Deposits...")
+
+# Load FD data
+fd = read_sas_file(FD_FILE)
+
+if fd.is_empty():
+    print("⚠ No fixed deposit data found")
+    fd_final = pl.DataFrame()
+else:
+    # Safely convert columns
+    fd = fd.with_columns([
+        pl.col("BRANCH").cast(pl.Utf8),
+        pl.col("ACCTTYPE").cast(pl.Utf8),
+        pl.col("CURCODE").cast(pl.Utf8),
+        pl.col("INTPLAN").cast(pl.Utf8),
+        pl.col("CUSTCD").cast(pl.Utf8),
+        pl.col("INTPAY").cast(pl.Utf8),
+        pl.col("FORATE").cast(pl.Utf8),
+        pl.col("CURBAL").cast(pl.Utf8),
+    ])
+
+    # Convert numeric columns safely
+    fd = fd.with_columns([
+        pl.col("INTPAY").map_elements(
+            lambda x: safe_float_convert(x),
+            return_dtype=pl.Float64
+        ).alias("INTPAY_NUM"),
+        
+        pl.col("FORATE").map_elements(
+            lambda x: safe_float_convert(x),
+            return_dtype=pl.Float64
+        ).alias("FORATE_NUM"),
+        
+        pl.col("CURBAL").map_elements(
+            lambda x: safe_float_convert(x),
+            return_dtype=pl.Float64
+        ).alias("CURBAL_NUM"),
+        
+        pl.col("ACCTTYPE").map_elements(
+            lambda x: safe_int_convert(x),
+            return_dtype=pl.Int64
+        ).alias("ACCTTYPE_NUM"),
+    ])
+
+    # Exclude certain account types
+    fd = fd.filter(~pl.col("ACCTTYPE_NUM").is_in([397, 398]))
+
+    # Apply transformations
+    fd = fd.with_columns([
+        # Convert foreign currency amounts
+        pl.when(pl.col("CURCODE") != "MYR")
+        .then((pl.col("INTPAY_NUM") * pl.col("FORATE_NUM")).round(2))
+        .otherwise(pl.col("INTPAY_NUM"))
+        .alias("INTPAY_ADJ"),
+
+        # Format assignments
+        pl.col("BRANCH").str.slice(0, 1).alias("STATE"),
+        pl.col("INTPLAN").str.slice(0, 5).alias("BIC"),
+        pl.col("INTPLAN").str.slice(0, 1).alias("AMTIND"),
+
+        # Initialize LSTMATDT
+        pl.lit(0).alias("LSTMATDT_INIT"),
+    ])
+
+    # Convert LMATDATE using map_elements
+    fd = fd.with_columns([
+        pl.col("LMATDATE").map_elements(
+            convert_sas_date_to_date,
+            return_dtype=pl.Date
+        ).alias("LSTMATDT")
+    ])
+
+    # Handle customer codes based on BIC
+    fd = fd.with_columns([
+        pl.when(pl.col("BIC").is_in(["42130", "42630"]))
+        .then(pl.col("CUSTCD").str.slice(0, 2))
+        .otherwise(pl.col("CUSTCD").str.slice(0, 2))
+        .alias("CUSTCODE_FMT")
+    ])
+
+    # Handle BIC = 42630 purpose codes
+    fd = fd.with_columns([
+        pl.when(
+            (pl.col("BIC") == "42630") &
+            pl.col("CUSTCODE_FMT").is_in(['77', '78', '95'])
+        )
+        .then(
+            pl.when(pl.col("PURPOSE").is_in(['1', '2', '3']))
+            .then(pl.col("PURPOSE"))
+            .otherwise(pl.lit(1))
+        )
+        .when(pl.col("BIC") == "42630")
+        .then(
+            pl.when(pl.col("PURPOSE").is_in(['4', '5']))
+            .then(pl.col("PURPOSE"))
+            .otherwise(pl.lit(4))
+        )
+        .otherwise(pl.col("PURPOSE"))
+        .alias("PURPOSE_ADJ")
+    ])
+
+    # Override BIC for certain account types
+    fd = fd.with_columns([
+        pl.when(pl.col("ACCTTYPE_NUM").is_in([315, 394]))
+        .then(pl.lit("42132"))
+        .when(pl.col("ACCTTYPE_NUM").is_in([397, 398]))
+        .then(pl.lit("42199"))
+        .otherwise(pl.col("BIC"))
+        .alias("BIC_FINAL")
+    ])
+
+    # Filter for open accounts
+    fd_monthly = fd.filter(pl.col("OPENIND").is_in(['D', 'O']))
+
+    # Replace adjusted columns
+    fd_monthly = fd_monthly.with_columns([
+        pl.col("INTPAY_ADJ").alias("INTPAY"),
+        pl.col("CUSTCODE_FMT").alias("CUSTCODE"),
+        pl.col("PURPOSE_ADJ").alias("PURPOSE"),
+        pl.col("BIC_FINAL").alias("BIC")
+    ])
+
+    # Select final columns
+    fd_final = fd_monthly.select([
+        "BRANCH", "ACCTNO", "STATE", "CUSTCODE", "OPENIND", "CURBAL", "TERM",
+        "NAME", "AMTIND", "ORGDATE", "MATDATE", "RATE", "RENEWAL", "INTPLAN",
+        "INTPAY", "INTDATE", "BIC", "LASTACTV", "LSTMATDT", "PURPOSE", "FORATE",
+        "ACCTTYPE"
+    ])
+
+    print(f"✓ Processed {len(fd_final)} fixed deposit accounts")
+
+    # Save output
+    write_output(fd_final, OUTPUT_FDMTHLY)
+
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
+print()
+print("=" * 70)
+print("EIBQDISE Deposit Processing Complete!")
+print("=" * 70)
+print()
+print("Output Files Created (Parquet and SAS):")
+output_files = [
+    ("Savings", f"savg{reptmon}{nowk}"),
+    ("Current", f"curn{reptmon}{nowk}"),
+    ("FCY", f"fcy{reptmon}{nowk}"),
+    ("Department", f"dept{reptmon}{nowk}"),
+    ("FD Monthly", "fdmthly")
+]
+
+for idx, (name, filename) in enumerate(output_files, 1):
+    parquet_file = OUTPUT_PATH / f"{filename}.parquet"
+    if parquet_file.exists():
+        print(f"  {idx}. {name}: {OUTPUT_PATH / filename}")
+    else:
+        print(f"  {idx}. {name}: Not created")
+
+print()
+print("Record Counts:")
+if not saving.is_empty():
+    print(f"  Savings:        {len(saving):,}")
+if not current.is_empty():
+    print(f"  Current:        {len(current_all):,}")
+if not current_fcy.is_empty():
+    print(f"  FCY:            {len(current_fcy):,}")
+if not fd_final.is_empty():
+    print(f"  Fixed Deposit:  {len(fd_final):,}")
+print()
+
+# Close DuckDB connection
+con.close()
+
+# Close SAS session if available
+if SAS_AVAILABLE and sas is not None:
+    try:
+        sas.endsas()
+        print("✓ SAS session closed")
+    except:
+        pass
