@@ -69,13 +69,17 @@ def read_sas(path):
 
 def safe_float(x):
     """Safe float conversion"""
-    try: return float(x) if x not in (None, '', '') else 0.0
-    except: return 0.0
+    try: 
+        return float(x) if x not in (None, '', '') else 0.0
+    except: 
+        return 0.0
 
 def safe_int(x):
     """Safe int conversion"""
-    try: return int(float(x)) if x not in (None, '', '') else 0
-    except: return 0
+    try: 
+        return int(float(x)) if x not in (None, '', '') else 0
+    except: 
+        return 0
 
 def to_date(val):
     """Convert SAS numeric date to date"""
@@ -99,8 +103,10 @@ def calc_age(bdate):
             age = AGEBELOW
         elif age == MAXAGE and (b.month > mm or (b.month == mm and b.day > day)):
             age = AGELIMIT
-        elif age > MAXAGE: age = MAXAGE
-        elif age < AGELIMIT: age = AGEBELOW
+        elif age > MAXAGE: 
+            age = MAXAGE
+        elif age < AGELIMIT: 
+            age = AGEBELOW
         return age
     except:
         return 0
@@ -121,14 +127,21 @@ def write_output(df, name):
         if SAS:
             with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
                 df.to_pandas().to_csv(f.name, index=False, na_rep='')
+                csv_file = f.name
+            
+            # Fix: Use variable for the path, not f-string with backslash
+            csv_path = csv_file.replace('\\', '/')
+            out_path = str(OUTPUT_PATH).replace('\\', '/')
+            
             SAS.submit(f"""
-                PROC IMPORT DATAFILE="{f.name.replace('\\','/')}" OUT=WORK.TEMP DBMS=CSV REPLACE; RUN;
-                LIBNAME OUT "{str(OUTPUT_PATH).replace('\\','/')}";
+                PROC IMPORT DATAFILE="{csv_path}" OUT=WORK.TEMP DBMS=CSV REPLACE; RUN;
+                LIBNAME OUT "{out_path}";
                 DATA OUT.{name}; SET WORK.TEMP; RUN;
             """)
-            os.unlink(f.name)
+            os.unlink(csv_file)
             print(f"✓ {name}.sas7bdat")
-    except:
+    except Exception as e:
+        print(f"⚠ SAS write failed: {e}")
         df.to_pandas().to_csv(OUTPUT_PATH / f"{name}.csv", index=False)
         print(f"⚠ {name}.csv (SAS fallback)")
 
