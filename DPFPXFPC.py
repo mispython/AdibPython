@@ -1,416 +1,530 @@
+#!/usr/bin/env python3
+"""
+EIBQDISE Deposit Processing
+Processes saving, current, and fixed deposit accounts
+Creates monthly extracts for BNM reporting
+"""
+
+import duckdb
 import polars as pl
+from datetime import datetime, timedelta
 from pathlib import Path
-import datetime
-import pyreadstat
-import logging
+import calendar
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('eibqfar2_processing.log'),
-        logging.StreamHandler()
-    ]
+
+# ============================================================================
+# PATH SETUP
+# ============================================================================
+BASE_PATH = Path("/data")
+INPUT_PATH = BASE_PATH / "input"
+OUTPUT_PATH = BASE_PATH / "output"
+
+# Input files
+SAVING_FILE = INPUT_PATH / "saving.parquet"
+CURRENT_FILE = INPUT_PATH / "current.parquet"
+FD_FILE = INPUT_PATH / "fd.parquet"
+UMA_FILE = INPUT_PATH / "uma.parquet"
+
+# Output files (will be created as parquet)
+OUTPUT_SAVG_PATTERN = OUTPUT_PATH / "savg{month}{week}.parquet"
+OUTPUT_CURN_PATTERN = OUTPUT_PATH / "curn{month}{week}.parquet"
+OUTPUT_FCY_PATTERN = OUTPUT_PATH / "fcy{month}{week}.parquet"
+OUTPUT_DEPT_PATTERN = OUTPUT_PATH / "dept{month}{week}.parquet"
+OUTPUT_FDMTHLY = OUTPUT_PATH / "fdmthly.parquet"
+
+# Ensure output directory exists
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================================
+# INITIALIZE DUCKDB CONNECTION
+# ============================================================================
+con = duckdb.connect()
+
+
+# ============================================================================
+# CALCULATE REPORTING DATE AND PARAMETERS
+# ============================================================================
+
+# Get first day of current month minus 1 day (last day of previous month)
+today = datetime.now()
+first_of_month = datetime(today.year, today.month, 1)
+reptdate = first_of_month - timedelta(days=1)
+
+day = reptdate.day
+mm = reptdate.month
+
+# Determine week based on day
+if day == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+    wk2, wk3 = None, None
+elif day == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+    wk2, wk3 = None, None
+elif day == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+    wk2, wk3 = None, None
+else:  # day >= 23 (last day of month)
+    sdd, wk, wk1 = 23, '4', '3'
+    wk2, wk3 = '2', '1'
+
+# Calculate MM1 (previous month for week 1)
+if wk == '1':
+    mm1 = mm - 1 if mm > 1 else 12
+else:
+    mm1 = mm
+
+sdate = datetime(reptdate.year, mm, sdd)
+
+# Format macro variables
+nowk = wk
+nowk1 = wk1
+nowk2 = wk2
+nowk3 = wk3
+reptmon = f"{mm:02d}"
+reptmon1 = f"{mm1:02d}"
+reptyear = reptdate.year
+reptday = f"{reptdate.day:02d}"
+rdate = reptdate.strftime("%d/%m/%y")
+sdate_str = sdate.strftime("%d/%m/%y")
+
+print(f"Report Date: {rdate}")
+print(f"Start Date: {sdate_str}")
+print(f"Week: {nowk}")
+print(f"Month: {reptmon}")
+print(f"Year: {reptyear}")
+print()
+
+# Constants
+AGELIMIT = 12
+MAXAGE = 18
+AGEBELOW = 11
+
+# ACE products (referenced in code)
+ACE_PRODUCTS = []  # Define based on requirements
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def calculate_age(bdate_val, reptdate, reptmon, reptday, reptyear):
+    """Calculate age based on birthdate"""
+    if bdate_val is None or bdate_val == 0:
+        return 0
+
+    try:
+        # Convert MMDDYYYY format to date
+        bdate_str = str(int(bdate_val)).zfill(11)[:8]
+        bdate = datetime.strptime(bdate_str, "%m%d%Y")
+
+        bday = bdate.day
+        bmonth = bdate.month
+        byear = bdate.year
+
+        age = reptyear - byear
+
+        # Age limit adjustments
+        if age == AGELIMIT:
+            if (bmonth == int(reptmon) and bday > int(reptday)) or bmonth > int(reptmon):
+                age = AGEBELOW
+        elif age == MAXAGE:
+            if (bmonth == int(reptmon) and bday > int(reptday)) or bmonth > int(reptmon):
+                age = AGELIMIT
+        elif age > MAXAGE:
+            age = MAXAGE
+        elif age < AGELIMIT:
+            age = AGEBELOW
+        else:
+            age = AGELIMIT
+
+        return age
+    except:
+        return 0
+
+
+def convert_opendt(opendt_val):
+    """Convert OPENDT from numeric to date"""
+    if opendt_val is None or opendt_val == 0:
+        return None
+    try:
+        opendt_str = str(int(opendt_val)).zfill(11)[:8]
+        return datetime.strptime(opendt_str, "%m%d%Y")
+    except:
+        return None
+
+
+# ============================================================================
+# PROCESS UMA DATA
+# ============================================================================
+
+print("Loading UMA data...")
+
+if UMA_FILE.exists():
+    uma = pl.read_parquet(UMA_FILE)
+    uma = uma.filter(pl.col("BNKIND") == "PBB")
+    print(f"✓ Loaded {len(uma)} UMA records")
+else:
+    uma = pl.DataFrame()
+    print("⚠ UMA file not found, creating empty dataset")
+
+
+# ============================================================================
+# PROCESS SAVING ACCOUNTS
+# ============================================================================
+
+print("Processing Saving Accounts...")
+
+# Load saving data
+saving = pl.read_parquet(SAVING_FILE)
+
+# Combine with UMA if exists
+if len(uma) > 0:
+    saving = pl.concat([saving, uma], how="diagonal")
+
+# Filter out closed/blocked accounts
+saving = saving.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
+
+# Apply transformations
+saving = saving.with_columns([
+    # Format assignments (simplified - would need actual format mappings)
+    pl.col("CUSTCODE").cast(pl.Utf8).str.slice(0, 2).alias("CUSTCD"),
+    pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATECD"),
+    pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 5).alias("PRODCD"),
+    pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 1).alias("AMTIND"),
+
+    # Convert OPENDT to date
+    pl.col("OPENDT").map_elements(convert_opendt, return_dtype=pl.Date).alias("OPENDATE"),
+
+    # Calculate RANGE (simplified)
+    pl.when(pl.col("CURBAL") < 1000).then(pl.lit("1"))
+    .when(pl.col("CURBAL") < 10000).then(pl.lit("2"))
+    .when(pl.col("CURBAL") < 50000).then(pl.lit("3"))
+    .otherwise(pl.lit("4"))
+    .alias("RANGE"),
+])
+
+# Calculate AGE
+saving = saving.with_columns([
+    pl.struct(["BDATE"]).map_elements(
+        lambda x: calculate_age(x["BDATE"], reptdate, reptmon, reptday, reptyear),
+        return_dtype=pl.Int64
+    ).alias("AGE")
+])
+
+print(f"✓ Processed {len(saving)} saving accounts")
+
+# Save output
+output_savg = OUTPUT_PATH / f"savg{reptmon}{nowk}.parquet"
+saving.write_parquet(output_savg)
+print(f"✓ Saved to: {output_savg}")
+
+
+# ============================================================================
+# PROCESS CURRENT ACCOUNTS
+# ============================================================================
+
+print("Processing Current Accounts...")
+
+# Load current data
+current = pl.read_parquet(CURRENT_FILE)
+
+# Remove duplicates (keep highest CURBAL per account)
+current = current.sort(["ACCTNO", "CURBAL"], descending=[False, True])
+current = current.unique(subset=["ACCTNO"], keep="first")
+
+# Filter out closed/blocked accounts
+current = current.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
+
+# Apply transformations
+current = current.with_columns([
+    # Convert foreign currency amounts if needed
+    pl.when(pl.col("CURCODE") != "MYR")
+    .then((pl.col("INTPAYBL") * pl.col("FORATE")).round(2))
+    .otherwise(pl.col("INTPAYBL"))
+    .alias("INTPAYBL_ADJ"),
+
+    # Format assignments
+    pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATECD"),
+    pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 5).alias("PRODCD"),
+    pl.col("PRODUCT").cast(pl.Utf8).str.slice(0, 1).alias("AMTIND"),
+
+    # Initialize balances
+    pl.lit(0.0).alias("CABAL"),
+    pl.lit(0.0).alias("SABAL"),
+
+    # RANGE calculations (simplified)
+    pl.when(pl.col("CURBAL") < 1000).then(pl.lit("1"))
+    .when(pl.col("CURBAL") < 10000).then(pl.lit("2"))
+    .when(pl.col("CURBAL") < 50000).then(pl.lit("3"))
+    .otherwise(pl.lit("4"))
+    .alias("RANGE"),
+
+    pl.when(pl.col("AVGAMT") < 1000).then(pl.lit("1"))
+    .when(pl.col("AVGAMT") < 10000).then(pl.lit("2"))
+    .when(pl.col("AVGAMT") < 50000).then(pl.lit("3"))
+    .otherwise(pl.lit("4"))
+    .alias("AVGRNGE"),
+])
+
+# Handle VOSTRO accounts
+current = current.with_columns([
+    pl.when(pl.col("PRODUCT") == 104)
+    .then(pl.lit("02"))
+    .when(pl.col("PRODUCT") == 105)
+    .then(pl.lit("81"))
+    .otherwise(pl.col("CUSTCODE").cast(pl.Utf8).str.slice(0, 2))
+    .alias("CUSTCD")
+])
+
+# Split into CURN and FCY based on product
+current_regular = current.filter(
+    ~pl.col("PRODUCT").is_in(ACE_PRODUCTS) &
+    ~pl.col("PRODUCT").is_between(400, 444)
 )
-logger = logging.getLogger(__name__)
 
-# Configuration
-pidmfin_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
-deposit1_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQFAR2")
-output_path.mkdir(exist_ok=True, parents=True)
+current_fcy = current.filter(pl.col("PRODUCT").is_between(400, 444))
 
-# PROC FORMAT equivalent - Create mapping dictionaries
-PRODBRH = {
-    '42110': 'DDMAND',
-    '42310': 'DDMAND',
-    '34180': 'DDMAND',
-    '42199': 'DDMAND',
-    '42120': 'DSVING',
-    '42320': 'DSVING',
-    '42130': 'DFIXED',
-    '42132': 'DFIXED',
-    '42133': 'DFIXED',
-    '42180': 'DDMAND',
-    '42610': 'FDMAND',
-    '42699': 'FDMAND',
-    '42630': 'FFIXED',
-    '42XXX': 'ATM/SI (E)',
-    '46795': 'DEBIT CARD (E)',
-    'TRUST': 'TRUST ACCT'
-}
+# Handle FCY sector adjustments
+current_fcy = current_fcy.with_columns([
+    pl.when(pl.col("CUSTCD").is_in(['77', '78', '95']))
+    .then(
+        pl.when(pl.col("SECTOR").is_in([4, 5]))
+        .then(pl.col("SECTOR"))
+        .otherwise(pl.lit(1))
+    )
+    .otherwise(
+        pl.when(pl.col("SECTOR").is_in([1, 2, 3]))
+        .then(pl.lit(4))
+        .when(pl.col("SECTOR").is_in([4, 5]))
+        .then(pl.col("SECTOR"))
+        .otherwise(pl.lit(4))
+    )
+    .alias("SECTOR_ADJ")
+])
 
-# Define product categories in order
-PRODUCT_CATEGORIES = ['DDMAND', 'DSVING', 'DFIXED', 'FDMAND', 'FFIXED', 'DEBIT CARD (E)']
+# Replace INTPAYBL with adjusted value
+current_regular = current_regular.with_columns([
+    pl.col("INTPAYBL_ADJ").alias("INTPAYBL")
+])
+current_fcy = current_fcy.with_columns([
+    pl.col("INTPAYBL_ADJ").alias("INTPAYBL"),
+    pl.col("SECTOR_ADJ").alias("SECTOR")
+])
 
-logger.info("Format mappings created successfully")
+# Combine FCY back to regular current
+current_all = pl.concat([current_regular, current_fcy], how="diagonal")
 
-def read_sas_to_polars(filepath: Path) -> pl.DataFrame:
-    """Read a SAS .sas7bdat file using pyreadstat and return as Polars DataFrame"""
-    try:
-        if not filepath.exists():
-            logger.warning(f"File not found: {filepath}")
-            return pl.DataFrame()
-        
-        logger.info(f"Reading SAS file: {filepath}")
-        df, meta = pyreadstat.read_sas7bdat(filepath)
-        pl_df = pl.from_pandas(df)
-        logger.info(f"Successfully read {filepath.name}: {len(pl_df):,} rows, {len(pl_df.columns)} columns")
-        return pl_df
-        
-    except Exception as e:
-        logger.error(f"Error reading {filepath}: {e}")
-        return pl.DataFrame()
+print(f"✓ Processed {len(current_all)} current accounts")
+print(f"  - Regular: {len(current_regular)}")
+print(f"  - FCY: {len(current_fcy)}")
 
-def calculate_report_date() -> datetime.date:
-    """Calculate report date based on SAS logic"""
-    today = datetime.date.today()
-    date_string = f"0101{today.year}"
-    reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
-    if today.month > 6:
-        reptdate = today
-    return reptdate
+# Save outputs
+output_curn = OUTPUT_PATH / f"curn{reptmon}{nowk}.parquet"
+output_fcy = OUTPUT_PATH / f"fcy{reptmon}{nowk}.parquet"
 
-def process_trust_data(pidmfin_path: Path) -> pl.DataFrame:
-    """Process TRUST data from CISDEPXN"""
-    logger.info("Processing TRUST data from cisdepxn.sas7bdat")
-    cisdepxn_df = read_sas_to_polars(pidmfin_path / "cisdepxn.sas7bdat")
-    
-    if cisdepxn_df.is_empty():
-        logger.warning("PIDMFIN.cisdepxn is empty or not found")
-        return pl.DataFrame()
-    
-    required_cols = ['ACCTYPE2', 'BENEINT', 'BRANCH', 'PRODCD', 'INSURED']
-    col_mapping = {col.lower(): col for col in cisdepxn_df.columns}
-    missing_cols = []
-    for col in required_cols:
-        if col.lower() not in col_mapping:
-            missing_cols.append(col)
-    
-    if missing_cols:
-        logger.warning(f"Missing columns in cisdepxn: {missing_cols}")
-        return pl.DataFrame()
-    
-    rename_dict = {}
-    for col in required_cols:
-        actual_col = col_mapping[col.lower()]
-        if actual_col != col:
-            rename_dict[actual_col] = col
-    
-    if rename_dict:
-        cisdepxn_df = cisdepxn_df.rename(rename_dict)
-    
-    trust_df = cisdepxn_df.filter(
-        (pl.col('ACCTYPE2').is_in([3, 7])) & 
-        (pl.col('BENEINT').is_not_null())
-    ).select([
-        'BRANCH', 'PRODCD', 'INSURED'
-    ]).rename({'INSURED': 'INSUREBR'})
-    
-    logger.info(f"TRUST records: {trust_df.height:,}")
-    return trust_df
+current_all.write_parquet(output_curn)
+current_fcy.write_parquet(output_fcy)
 
-def process_deposit_data(deposit1_path: Path) -> pl.DataFrame:
-    """Process deposit data from CISDEPD"""
-    logger.info("Processing deposit data from cisdepd.sas7bdat")
-    cisdepd_df = read_sas_to_polars(deposit1_path / "cisdepd.sas7bdat")
-    
-    if cisdepd_df.is_empty():
-        logger.warning("DEPOSIT1.cisdepd is empty or not found")
-        return pl.DataFrame()
-    
-    required_cols = ['BRANCH', 'PRODCD', 'INSUREBR']
-    col_mapping = {col.lower(): col for col in cisdepd_df.columns}
-    missing_cols = []
-    for col in required_cols:
-        if col.lower() not in col_mapping:
-            missing_cols.append(col)
-    
-    if missing_cols:
-        logger.warning(f"Missing columns in cisdepd: {missing_cols}")
-        return pl.DataFrame()
-    
-    rename_dict = {}
-    for col in required_cols:
-        actual_col = col_mapping[col.lower()]
-        if actual_col != col:
-            rename_dict[actual_col] = col
-    
-    if rename_dict:
-        cisdepd_df = cisdepd_df.rename(rename_dict)
-    
-    cisdepd_df = cisdepd_df.select(['BRANCH', 'PRODCD', 'INSUREBR'])
-    logger.info(f"DEPOSIT records: {cisdepd_df.height:,}")
-    return cisdepd_df
+print(f"✓ Saved to: {output_curn}")
+print(f"✓ Saved to: {output_fcy}")
 
-def apply_format_mappings(df: pl.DataFrame) -> pl.DataFrame:
-    """Apply PRODBRH format mapping to PRODCD column"""
-    if 'PRODCD' in df.columns:
-        try:
-            df = df.with_columns([
-                pl.col('PRODCD').replace(PRODBRH).alias('PRODCD_FORMATTED')
-            ])
-        except AttributeError:
-            df = df.with_columns([
-                pl.col('PRODCD').map_elements(
-                    lambda x: PRODBRH.get(x, str(x)), 
-                    return_dtype=pl.String
-                ).alias('PRODCD_FORMATTED')
-            ])
-    return df
 
-def clean_branch(branch_val) -> str:
-    """
-    Clean branch value - handle nulls, empty strings, and decimal points
-    """
-    if branch_val is None:
-        return '0'
-    
-    # Convert to string
-    branch_str = str(branch_val).strip()
-    
-    # Handle empty string
-    if branch_str == '' or branch_str == '.':
-        return '0'
-    
-    # Remove .0 if present (e.g., "59.0" -> "59")
-    if branch_str.endswith('.0'):
-        branch_str = branch_str[:-2]
-    
-    # If it's just a dot, return '0'
-    if branch_str == '.':
-        return '0'
-    
-    return branch_str
+# ============================================================================
+# SUMMARIZE AT BRANCH LEVEL FOR RDAL
+# ============================================================================
 
-def generate_conventional_txt_report(summary_df: pl.DataFrame, output_path: Path, report_date: datetime.date) -> None:
-    """
-    Generate TXT report in the exact format from the example
-    """
-    if summary_df.is_empty():
-        logger.warning("No data available for report generation")
-        return
-    
-    # Separate TOTAL from regular branches
-    total_rows = summary_df.filter(pl.col('BRANCH') == 'TOTAL')
-    regular_rows = summary_df.filter(pl.col('BRANCH') != 'TOTAL')
-    
-    # Create pivot table for regular rows (excluding TOTAL)
-    pivot_table = regular_rows.pivot(
-        index='BRANCH',
-        on='PRODCD_FORMATTED',
-        values='INSUREBR_SUM',
-        aggregate_function='sum'
-    ).fill_null(0)
-    
-    # Ensure all product categories exist
-    for col in PRODUCT_CATEGORIES:
-        if col not in pivot_table.columns:
-            pivot_table = pivot_table.with_columns(pl.lit(0.0).alias(col))
-    
-    # Clean BRANCH values - remove decimal points, handle nulls and empty strings
-    pivot_table = pivot_table.with_columns([
-        pl.col('BRANCH').map_elements(
-            lambda x: clean_branch(x),
-            return_dtype=pl.String
-        ).alias('BRANCH')
-    ])
-    
-    # Sort by BRANCH as integer (numeric order)
-    # Create a temporary numeric column for sorting
-    pivot_table = pivot_table.with_columns([
-        pl.col('BRANCH').cast(pl.Int64).alias('BRANCH_NUM')
-    ]).sort('BRANCH_NUM').drop('BRANCH_NUM')
-    
-    # Convert BRANCH back to string for display (no decimal point)
-    pivot_table = pivot_table.with_columns([
-        pl.col('BRANCH').cast(pl.String).alias('BRANCH')
-    ])
-    
-    # Get TOTAL row summary
-    if not total_rows.is_empty():
-        total_pivot = total_rows.pivot(
-            index='BRANCH',
-            on='PRODCD_FORMATTED',
-            values='INSUREBR_SUM',
-            aggregate_function='sum'
-        ).fill_null(0)
-        
-        # Ensure all product categories exist in total
-        for col in PRODUCT_CATEGORIES:
-            if col not in total_pivot.columns:
-                total_pivot = total_pivot.with_columns(pl.lit(0.0).alias(col))
-        
-        # Add TOTAL row to pivot table
-        total_pivot = total_pivot.with_columns([
-            pl.col('BRANCH').fill_null('TOTAL').cast(pl.String).alias('BRANCH')
-        ])
-        
-        # Append TOTAL row
-        pivot_table = pl.concat([pivot_table, total_pivot], how="diagonal")
-    
-    # Get current time for header
-    now = datetime.datetime.now()
-    time_str = now.strftime("%I:%M")
-    date_str = report_date.strftime("%A, %B %d, %Y")
-    header_date_str = f"{time_str} {date_str}"
-    
-    # Prepare TXT file
-    txt_file = output_path / "EIBQFAR2_CONVENTIONAL_REPORT.txt"
-    
-    with open(txt_file, 'w') as f:
-        # Header - Page 1
-        f.write(" " * 35 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(CONVENTIONAL)     ")
-        f.write(f"{header_date_str}   1\n")
-        f.write("\n" * 2)
-        f.write(" " * 60 + "-" * 60 + "\n")
-        
-        # Main table header
-        f.write("|BRANCH  |" + " " * 49 + "PRODUCT" + " " * 49 + "|\n")
-        f.write("|        |" + "-" * 49 + "+" + "-" * 49 + "|\n")
-        
-        # Product columns header - first row
-        f.write("|        |      DDMAND      |      DSVING      |      DFIXED      |")
-        f.write("      FDMAND      |      FFIXED      |  DEBIT CARD (E)  |\n")
-        
-        # Product columns header - second row (subheaders)
-        f.write("|        |------------------+------------------+------------------+")
-        f.write("------------------+------------------+------------------|\n")
-        f.write("|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |")
-        f.write("   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
-        f.write("|        |     INSURED      |     INSURED      |     INSURED      |")
-        f.write("     INSURED      |     INSURED      |     INSURED      |\n")
-        f.write("|--------+------------------+------------------+------------------+")
-        f.write("------------------+------------------+------------------|\n")
-        
-        # Data rows
-        row_count = 0
-        total_rows_count = len(pivot_table)
-        
-        for row in pivot_table.iter_rows(named=True):
-            branch = str(row.get('BRANCH', '0'))
-            
-            # Format values - empty cells show dots
-            values = []
-            for col in PRODUCT_CATEGORIES:
-                val = row.get(col, 0)
-                if val == 0:
-                    values.append("                 .")
-                else:
-                    values.append(f"{val:>18,.2f}")
-            
-            # Write row - branch as string (no decimal point)
-            f.write(f"|{branch:<8}|{values[0]}|{values[1]}|{values[2]}|")
-            f.write(f"{values[3]}|{values[4]}|{values[5]}|\n")
-            f.write("|--------+------------------+------------------+------------------+")
-            f.write("------------------+------------------+------------------|\n")
-            
-            row_count += 1
-            
-            # Page break every 30 rows (as in example)
-            if row_count % 30 == 0 and row_count < total_rows_count:
-                # Footer for current page
-                f.write("\n" + " " * 60 + "(Continued)\n")
-                f.write(" " * 35 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(CONVENTIONAL)     ")
-                f.write(f"{header_date_str}   {row_count//30 + 1}\n")
-                f.write("\n" * 2)
-                f.write(" " * 60 + "-" * 60 + "\n")
-                
-                # Header repeated
-                f.write("|BRANCH  |" + " " * 49 + "PRODUCT" + " " * 49 + "|\n")
-                f.write("|        |" + "-" * 49 + "+" + "-" * 49 + "|\n")
-                f.write("|        |      DDMAND      |      DSVING      |      DFIXED      |")
-                f.write("      FDMAND      |      FFIXED      |  DEBIT CARD (E)  |\n")
-                f.write("|        |------------------+------------------+------------------+")
-                f.write("------------------+------------------+------------------|\n")
-                f.write("|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |")
-                f.write("   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
-                f.write("|        |     INSURED      |     INSURED      |     INSURED      |")
-                f.write("     INSURED      |     INSURED      |     INSURED      |\n")
-                f.write("|--------+------------------+------------------+------------------+")
-                f.write("------------------+------------------+------------------|\n")
-    
-    logger.info(f"TXT report saved to: {txt_file}")
-    
-    # Also save Parquet for data analysis
-    pivot_table.write_parquet(output_path / "EIBQFAR2_CONVENTIONAL_PIVOT.parquet")
-    summary_df.write_parquet(output_path / "EIBQFAR2_CONVENTIONAL_SUMMARY.parquet")
-    
-    logger.info(f"Parquet files saved to: {output_path}")
+print("Creating branch-level summaries...")
 
-def main():
-    """Main processing function"""
-    try:
-        # Calculate report date
-        reptdate = calculate_report_date()
-        SDESC = 'PUBLIC BANK BERHAD'
-        REPTMON = f"{reptdate.month:02d}"
-        REPTYEAR = reptdate.strftime('%y')
-        
-        logger.info(f"Report Date: {reptdate}")
-        logger.info(f"REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
-        logger.info(f"SDESC: {SDESC}")
-        
-        # Create REPTDATE DataFrame
-        reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
-        reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
-        reptdate_df.write_csv(output_path / "REPTDATE.csv")
-        logger.info(f"REPTDATE saved to {output_path}")
-        
-        # Process data sources
-        trust_df = process_trust_data(pidmfin_path)
-        deposit_df = process_deposit_data(deposit1_path)
-        
-        # Combine datasets
-        dataframes = [df for df in [trust_df, deposit_df] if not df.is_empty()]
-        
-        if not dataframes:
-            logger.warning("No data available for processing")
-            return
-        
-        rpt_base = pl.concat(dataframes, how="diagonal")
-        
-        # Apply format mappings
-        rpt_base = apply_format_mappings(rpt_base)
-        
-        # Save base dataset
-        rpt_base.write_parquet(output_path / "RPT_BASE.parquet")
-        rpt_base.write_csv(output_path / "RPT_BASE.csv")
-        
-        logger.info(f"RPT_BASE records: {rpt_base.height:,}")
-        
-        # Generate summary
-        summary = rpt_base.group_by(['BRANCH', 'PRODCD_FORMATTED']).agg([
-            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
-        ])
-        
-        # Clean BRANCH values in summary
-        summary = summary.with_columns([
-            pl.col('BRANCH').map_elements(
-                lambda x: clean_branch(x),
-                return_dtype=pl.String
-            ).alias('BRANCH')
-        ])
-        
-        # Calculate total
-        total_summary = rpt_base.group_by(['PRODCD_FORMATTED']).agg([
-            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
-        ]).with_columns([
-            pl.lit('TOTAL').cast(pl.String).alias('BRANCH')
-        ])
-        
-        # Combine
-        final_summary = pl.concat([summary, total_summary], how="diagonal")
-        
-        # Generate TXT report
-        generate_conventional_txt_report(final_summary, output_path, reptdate)
-        
-        logger.info("PROCESSING COMPLETED SUCCESSFULLY")
-        
-    except Exception as e:
-        logger.error(f"Error in main processing: {e}", exc_info=True)
-        raise
+# Summarize savings
+dept_savg = saving.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND"]).agg([
+    pl.col("CURBAL").sum().alias("CURBAL"),
+    pl.col("INTPAYBL").sum().alias("INTPAYBL")
+])
 
-if __name__ == "__main__":
-    main()
+# Summarize current
+dept_curn = current_all.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "SECTOR", "AMTIND"]).agg([
+    pl.col("CURBAL").sum().alias("CURBAL"),
+    pl.col("INTPAYBL").sum().alias("INTPAYBL")
+])
+
+# Combine department summaries
+dept_all = pl.concat([dept_savg, dept_curn], how="diagonal")
+
+output_dept = OUTPUT_PATH / f"dept{reptmon}{nowk}.parquet"
+dept_all.write_parquet(output_dept)
+
+print(f"✓ Created department summary: {output_dept}")
+
+
+# ============================================================================
+# PROCESS ACCOUNT COUNTS (293 REPORTS)
+# ============================================================================
+
+print("Processing account count summaries...")
+
+# Savings count
+save293 = saving.with_columns([
+    pl.lit(1).alias("OPENMH")
+])
+
+save293_sum = save293.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND"]).agg([
+    pl.col("OPENMH").sum().alias("OPENMH")
+])
+
+# Current count
+curr293 = current.filter(~pl.col("OPENIND").is_in(['B', 'C', 'P']))
+curr293 = curr293.filter(pl.col("BRANCH") <= 900)
+
+# Apply product code transformations
+curr293 = curr293.with_columns([
+    pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATECD"),
+    pl.lit("00").alias("CUSTCD"),
+    pl.lit(1).alias("OPENMH"),
+
+    # Product code and amount indicator based on product
+    pl.when(pl.col("PRODUCT").is_in([160, 161, 162, 163, 164, 165, 166, 182]))
+    .then(pl.lit("42310"))
+    .otherwise(pl.lit("42110"))
+    .alias("PRODCD"),
+
+    pl.when(pl.col("PRODUCT").is_in([160, 161, 162, 163, 164, 165, 166, 182]))
+    .then(pl.lit("I"))
+    .otherwise(pl.lit("D"))
+    .alias("AMTIND")
+])
+
+curr293_sum = curr293.group_by(["BRANCH", "STATECD", "PRODCD", "CUSTCD", "AMTIND"]).agg([
+    pl.col("OPENMH").sum().alias("OPENMH")
+])
+
+print(f"✓ Account count summaries created")
+
+
+# ============================================================================
+# PROCESS FIXED DEPOSITS
+# ============================================================================
+
+print("Processing Fixed Deposits...")
+
+# Load FD data
+fd = pl.read_parquet(FD_FILE)
+
+# Exclude certain account types
+fd = fd.filter(~pl.col("ACCTTYPE").is_in([397, 398]))
+
+# Apply transformations
+fd = fd.with_columns([
+    # Convert foreign currency amounts
+    pl.when(pl.col("CURCODE") != "MYR")
+    .then((pl.col("INTPAY") * pl.col("FORATE")).round(2))
+    .otherwise(pl.col("INTPAY"))
+    .alias("INTPAY_ADJ"),
+
+    # Format assignments
+    pl.col("BRANCH").cast(pl.Utf8).str.slice(0, 1).alias("STATE"),
+    pl.col("INTPLAN").cast(pl.Utf8).str.slice(0, 5).alias("BIC"),
+    pl.col("INTPLAN").cast(pl.Utf8).str.slice(0, 1).alias("AMTIND"),
+
+    # Initialize LSTMATDT
+    pl.lit(0).alias("LSTMATDT_INIT"),
+])
+
+# Convert LMATDATE
+fd = fd.with_columns([
+    pl.when(pl.col("LMATDATE") != 0)
+    .then(pl.col("LMATDATE"))
+    .otherwise(pl.lit(None))
+    .alias("LSTMATDT")
+])
+
+# Handle customer codes based on BIC
+fd = fd.with_columns([
+    pl.when(pl.col("BIC").is_in(["42130", "42630"]))
+    .then(pl.col("CUSTCD").cast(pl.Utf8).str.slice(0, 2))
+    .otherwise(pl.col("CUSTCD").cast(pl.Utf8).str.slice(0, 2))
+    .alias("CUSTCODE_FMT")
+])
+
+# Handle BIC = 42630 purpose codes
+fd = fd.with_columns([
+    pl.when(
+        (pl.col("BIC") == "42630") &
+        pl.col("CUSTCODE_FMT").is_in(['77', '78', '95'])
+    )
+    .then(
+        pl.when(pl.col("PURPOSE").is_in(['1', '2', '3']))
+        .then(pl.col("PURPOSE"))
+        .otherwise(pl.lit(1))
+    )
+    .when(pl.col("BIC") == "42630")
+    .then(
+        pl.when(pl.col("PURPOSE").is_in(['4', '5']))
+        .then(pl.col("PURPOSE"))
+        .otherwise(pl.lit(4))
+    )
+    .otherwise(pl.col("PURPOSE"))
+    .alias("PURPOSE_ADJ")
+])
+
+# Override BIC for certain account types
+fd = fd.with_columns([
+    pl.when(pl.col("ACCTTYPE").is_in([315, 394]))
+    .then(pl.lit("42132"))
+    .when(pl.col("ACCTTYPE").is_in([397, 398]))
+    .then(pl.lit("42199"))
+    .otherwise(pl.col("BIC"))
+    .alias("BIC_FINAL")
+])
+
+# Filter for open accounts
+fd_monthly = fd.filter(pl.col("OPENIND").is_in(['D', 'O']))
+
+# Replace adjusted columns
+fd_monthly = fd_monthly.with_columns([
+    pl.col("INTPAY_ADJ").alias("INTPAY"),
+    pl.col("CUSTCODE_FMT").alias("CUSTCODE"),
+    pl.col("PURPOSE_ADJ").alias("PURPOSE"),
+    pl.col("BIC_FINAL").alias("BIC")
+])
+
+# Select final columns
+fd_final = fd_monthly.select([
+    "BRANCH", "ACCTNO", "STATE", "CUSTCODE", "OPENIND", "CURBAL", "TERM",
+    "NAME", "AMTIND", "ORGDATE", "MATDATE", "RATE", "RENEWAL", "INTPLAN",
+    "INTPAY", "INTDATE", "BIC", "LASTACTV", "LSTMATDT", "PURPOSE", "FORATE",
+    "ACCTTYPE"
+])
+
+print(f"✓ Processed {len(fd_final)} fixed deposit accounts")
+
+# Save output
+fd_final.write_parquet(OUTPUT_FDMTHLY)
+print(f"✓ Saved to: {OUTPUT_FDMTHLY}")
+
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
+print()
+print("=" * 70)
+print("EIBQDISE Deposit Processing Complete!")
+print("=" * 70)
+print()
+print("Output Files Created:")
+print(f"  1. Savings:     {output_savg}")
+print(f"  2. Current:     {output_curn}")
+print(f"  3. FCY:         {output_fcy}")
+print(f"  4. Department:  {output_dept}")
+print(f"  5. FD Monthly:  {OUTPUT_FDMTHLY}")
+print()
+print("Record Counts:")
+print(f"  Savings:        {len(saving):,}")
+print(f"  Current:        {len(current_all):,}")
+print(f"  FCY:            {len(current_fcy):,}")
+print(f"  Fixed Deposit:  {len(fd_final):,}")
+print()
+
+# Close DuckDB connection
+con.close()
