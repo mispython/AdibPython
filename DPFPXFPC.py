@@ -15,6 +15,14 @@ import pyreadstat
 import os
 import re
 
+# Try to import saspy
+try:
+    import saspy
+    SAS_AVAILABLE = True
+except ImportError:
+    SAS_AVAILABLE = False
+    print("⚠ saspy not available, will use pyreadstat for SAS output")
+
 # ============================================================================
 # PATH SETUP
 # ============================================================================
@@ -36,6 +44,19 @@ OUTPUT_FDMTHLY = OUTPUT_PATH / "fdmthly"
 
 # Ensure output directory exists
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================================
+# INITIALIZE SASPY SESSION (if available)
+# ============================================================================
+if SAS_AVAILABLE:
+    try:
+        # Initialize SAS session
+        sas = saspy.SASsession(cfgname='default', results='none')
+        print("✓ SAS session initialized successfully")
+    except Exception as e:
+        print(f"⚠ Error initializing SAS session: {e}")
+        SAS_AVAILABLE = False
 
 
 # ============================================================================
@@ -126,48 +147,92 @@ def read_sas_file(filepath):
         return pl.DataFrame()
 
 
+def write_output_saspy(df, sas_path):
+    """Write DataFrame to SAS using saspy"""
+    try:
+        # Convert to pandas
+        pd_df = df.to_pandas()
+        
+        # Create a temporary SAS dataset name
+        temp_ds = f"TEMP_{datetime.now().strftime('%H%M%S')}"
+        
+        # Upload to SAS
+        sas_df = sas.upload(pd_df, temp_ds)
+        
+        # Save to permanent location
+        sas.submit(f"""
+            LIBNAME OUT "{str(OUTPUT_PATH)}";
+            DATA OUT.{sas_path.stem};
+                SET {temp_ds};
+            RUN;
+            PROC DATASETS LIB=OUT NOLIST;
+                DELETE {temp_ds};
+            RUN;
+            QUIT;
+        """)
+        
+        # Clean up temporary dataset
+        sas.submit(f"PROC DATASETS LIB=WORK NOLIST; DELETE {temp_ds}; RUN;")
+        
+        print(f"✓ Saved SAS: {sas_path}")
+        return True
+    except Exception as e:
+        print(f"⚠ Error saving SAS file using saspy: {e}")
+        return False
+
+
+def write_output_pyreadstat(df, sas_path):
+    """Write DataFrame to SAS using pyreadstat"""
+    try:
+        pd_df = df.to_pandas()
+        pyreadstat.write_sas(pd_df, str(sas_path))
+        print(f"✓ Saved SAS: {sas_path}")
+        return True
+    except AttributeError:
+        try:
+            pyreadstat.write_sas7bdat(pd_df, str(sas_path))
+            print(f"✓ Saved SAS: {sas_path}")
+            return True
+        except Exception as e:
+            print(f"⚠ Error saving SAS file with pyreadstat: {e}")
+            return False
+    except Exception as e:
+        print(f"⚠ Error saving SAS file with pyreadstat: {e}")
+        return False
+
+
 def write_output(df, base_path, suffix=""):
     """Write DataFrame to both Parquet and SAS formats"""
     if df.is_empty():
         print(f"⚠ No data to write for {base_path}")
         return
     
-    # Parquet output
+    # Parquet output (always save)
     parquet_path = Path(str(base_path) + f"{suffix}.parquet")
     df.write_parquet(parquet_path)
     print(f"✓ Saved Parquet: {parquet_path}")
     
-    # SAS output (using pyreadstat)
-    try:
-        sas_path = Path(str(base_path) + f"{suffix}.sas7bdat")
-        # Convert to pandas for SAS writing
-        pd_df = df.to_pandas()
-        
-        # Try different methods for pyreadstat
-        try:
-            # Newer versions use write_sas
-            pyreadstat.write_sas(pd_df, str(sas_path))
-            print(f"✓ Saved SAS: {sas_path}")
-        except AttributeError:
-            try:
-                # Older versions use write_sas7bdat
-                pyreadstat.write_sas7bdat(pd_df, str(sas_path))
-                print(f"✓ Saved SAS: {sas_path}")
-            except AttributeError:
-                # Fallback: save as CSV if SAS writing fails
-                csv_path = Path(str(base_path) + f"{suffix}.csv")
-                pd_df.to_csv(csv_path, index=False)
-                print(f"⚠ SAS write not supported, saved CSV instead: {csv_path}")
-    except Exception as e:
-        print(f"⚠ Error saving SAS file {sas_path}: {e}")
-        # Fallback: save as CSV
+    # SAS output
+    sas_path = Path(str(base_path) + f"{suffix}.sas7bdat")
+    sas_saved = False
+    
+    # Try saspy first if available
+    if SAS_AVAILABLE:
+        sas_saved = write_output_saspy(df, sas_path)
+    
+    # Fallback to pyreadstat if saspy failed or not available
+    if not sas_saved:
+        sas_saved = write_output_pyreadstat(df, sas_path)
+    
+    # If all SAS methods failed, save as CSV
+    if not sas_saved:
         try:
             csv_path = Path(str(base_path) + f"{suffix}.csv")
             pd_df = df.to_pandas()
             pd_df.to_csv(csv_path, index=False)
-            print(f"⚠ Saved CSV instead: {csv_path}")
-        except Exception as e2:
-            print(f"⚠ Error saving CSV: {e2}")
+            print(f"⚠ SAS write failed, saved CSV instead: {csv_path}")
+        except Exception as e:
+            print(f"⚠ Error saving CSV: {e}")
 
 
 def calculate_age(bdate_val, reptdate, reptmon, reptday, reptyear):
@@ -452,7 +517,7 @@ else:
                 pl.when(pl.col("SECTOR_NUM").is_in([1, 2, 3]))
                 .then(pl.lit(4))
                 .when(pl.col("SECTOR_NUM").is_in([4, 5]))
-                .then(pl.col("SECTOR_NUM"))
+                .then(pl.lit(4))
                 .otherwise(pl.lit(4))
             )
             .alias("SECTOR_ADJ")
@@ -750,3 +815,11 @@ print()
 
 # Close DuckDB connection
 con.close()
+
+# Close SAS session if available
+if SAS_AVAILABLE:
+    try:
+        sas.endsas()
+        print("✓ SAS session closed")
+    except:
+        pass
