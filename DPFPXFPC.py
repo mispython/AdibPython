@@ -17,9 +17,8 @@ import os
 # ============================================================================
 # PATH SETUP
 # ============================================================================
-BASE_PATH = Path("/data")
-INPUT_PATH = BASE_PATH / "input"
-OUTPUT_PATH = BASE_PATH / "output"
+INPUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQDISE"
+OUTPUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQDISE"
 
 # Input files (SAS datasets)
 SAVING_FILE = INPUT_PATH / "saving.sas7bdat"
@@ -615,3 +614,34 @@ print()
 
 # Close DuckDB connection
 con.close()
+
+
+
+
+errors:
+
+Report Date: 31/05/26
+Start Date: 23/05/26
+Week: 4
+Month: 05
+Year: 2026
+
+Loading UMA data...
+✓ Loaded 31915 UMA records
+Processing Saving Accounts...
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBQDISE.py", line 234, in <module>
+    saving = saving.with_columns([
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
+    self.lazy()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
+    return wrap_df(ldf.collect(engine, callback))
+polars.exceptions.InvalidOperationError: conversion from `str` to `date` failed in column 'OPENDT' for 4250603 out of 4250603 values: ["12051996340.0", "12091996344.0", … "12301996365.0"]
+
+You might want to try:
+- setting `strict=False` to set values that cannot be converted to `null`
+- using `str.strptime`, `str.to_date`, or `str.to_datetime` and providing a format string
