@@ -1,398 +1,313 @@
-import polars as pl
-from pathlib import Path
-import datetime
-import pyreadstat
-import logging
+//EIBQDISE JOB MISEIS,EIBMTH1A,MSGCLASS=A,CLASS=A,NOTIFY=&SYSUID
+//*
+//EIBQDISE  EXEC SAS609,REGION=8M,WORK='250000,200000'
+//BNM1      DD DSN=SAP.PBB.DEPOSIT(0),DISP=SHR
+//BNM       DD DSN=SAP.PBB.DEPOSIT.DIS(0),DISP=OLD
+//FD        DD DSN=SAP.PBB.MNIFD(0),DISP=SHR
+//DEPOSIT   DD DSN=SAP.PBB.MNITB(0),DISP=SHR
+//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR
+//SYSIN     DD *
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('eibqfar2_processing.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 LS=132 PS=60 NOCENTER;
 
-# Configuration
-pidmfin_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
-deposit1_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQFAR2")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQFAR2")
-output_path.mkdir(exist_ok=True, parents=True)
+DATA REPTDATE (KEEP=REPTDATE);
+  REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+  SELECT(DAY(REPTDATE));
+    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
+    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
+    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
+    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3';
+                            WK2= '2'; WK3 = '1'; END;
+  END;
+  MM = MONTH(REPTDATE);
+  IF WK = '1' THEN DO;
+     MM1 = MM - 1;
+     IF MM1 = 0 THEN MM1 = 12;
+  END;
+  ELSE MM1 = MM;
+  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
+  CALL SYMPUT('NOWK',PUT(WK,$1.));
+  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
+  CALL SYMPUT('NOWK2',PUT(WK2,$1.));
+  CALL SYMPUT('NOWK3',PUT(WK3,$1.));
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
+RUN;
 
-# PROC FORMAT equivalent - Create mapping dictionaries
-PRODBRH = {
-    '42110': 'DDMAND',
-    '42310': 'DDMAND',
-    '34180': 'DDMAND',
-    '42199': 'DDMAND',
-    '42120': 'DSVING',
-    '42320': 'DSVING',
-    '42130': 'DFIXED',
-    '42132': 'DFIXED',
-    '42133': 'DFIXED',
-    '42180': 'DDMAND',
-    '42610': 'FDMAND',
-    '42699': 'FDMAND',
-    '42630': 'FFIXED',
-    '42XXX': 'ATM/SI (E)',
-    '46795': 'DEBIT CARD (E)',
-    'TRUST': 'TRUST ACCT'
-}
+%INC PGM(PBBDPFMT);
 
-# Define product categories in order
-PRODUCT_CATEGORIES = ['DDMAND', 'DSVING', 'DFIXED', 'FDMAND', 'FFIXED', 'DEBIT CARD (E)']
+ /***********************************************************/
+ /** MANIPULATE THE EXTRACTED THE SAVING AND CURRENT       **/
+ /** ACCOUNTS DATABASE                                     **/
+ /***********************************************************/
 
-logger.info("Format mappings created successfully")
+%LET SAVG1=(KEEP=BRANCH DEPTYPE PRODUCT OPENIND CUSTCODE INTPAYBL
+                 RACE CURBAL OPENMH CLOSEMH BDATE NAME ACCTNO LASTTRAN
+                 ACCYTD LEDGBAL SCHIND BANKNO OPENDT COSTCTR CHQFLOAT);
 
-def read_sas_to_polars(filepath: Path) -> pl.DataFrame:
-    """Read a SAS .sas7bdat file using pyreadstat and return as Polars DataFrame"""
-    try:
-        if not filepath.exists():
-            logger.warning(f"File not found: {filepath}")
-            return pl.DataFrame()
-        
-        logger.info(f"Reading SAS file: {filepath}")
-        df, meta = pyreadstat.read_sas7bdat(filepath)
-        pl_df = pl.from_pandas(df)
-        logger.info(f"Successfully read {filepath.name}: {len(pl_df):,} rows, {len(pl_df.columns)} columns")
-        return pl_df
-        
-    except Exception as e:
-        logger.error(f"Error reading {filepath}: {e}")
-        return pl.DataFrame()
+%LET SAVG2=(KEEP=BRANCH DEPTYPE PRODUCT PRODCD CUSTCD STATECD AGE
+                 RACE INTPAYBL CURBAL OPENMH CLOSEMH RANGE BDATE NAME
+                 ACCTNO LASTTRAN ACCYTD AMTIND LEDGBAL SCHIND BANKNO
+                 OPENDATE COSTCTR CHQFLOAT);
 
-def calculate_report_date() -> datetime.date:
-    """Calculate report date based on SAS logic"""
-    today = datetime.date.today()
-    date_string = f"0101{today.year}"
-    reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
-    if today.month > 6:
-        reptdate = today
-    return reptdate
+%LET CURN1=(KEEP=BRANCH DEPTYPE PRODUCT OPENIND CUSTCODE INTPAYBL
+                 RACE CURBAL OPENMH CLOSEMH AVGAMT PURPOSE NAME ACCTNO
+                 LASTTRAN ACCYTD LEDGBAL ODINTACC COSTCTR SECTOR
+                 CHQFLOAT FORATE CURCODE);
 
-def process_trust_data(pidmfin_path: Path) -> pl.DataFrame:
-    """Process TRUST data from CISDEPXN"""
-    logger.info("Processing TRUST data from cisdepxn.sas7bdat")
-    cisdepxn_df = read_sas_to_polars(pidmfin_path / "cisdepxn.sas7bdat")
-    
-    if cisdepxn_df.is_empty():
-        logger.warning("PIDMFIN.cisdepxn is empty or not found")
-        return pl.DataFrame()
-    
-    required_cols = ['ACCTYPE2', 'BENEINT', 'BRANCH', 'PRODCD', 'INSURED']
-    col_mapping = {col.lower(): col for col in cisdepxn_df.columns}
-    missing_cols = []
-    for col in required_cols:
-        if col.lower() not in col_mapping:
-            missing_cols.append(col)
-    
-    if missing_cols:
-        logger.warning(f"Missing columns in cisdepxn: {missing_cols}")
-        return pl.DataFrame()
-    
-    rename_dict = {}
-    for col in required_cols:
-        actual_col = col_mapping[col.lower()]
-        if actual_col != col:
-            rename_dict[actual_col] = col
-    
-    if rename_dict:
-        cisdepxn_df = cisdepxn_df.rename(rename_dict)
-    
-    trust_df = cisdepxn_df.filter(
-        (pl.col('ACCTYPE2').is_in([3, 7])) & 
-        (pl.col('BENEINT').is_not_null())
-    ).select([
-        'BRANCH', 'PRODCD', 'INSURED'
-    ]).rename({'INSURED': 'INSUREBR'})
-    
-    logger.info(f"TRUST records: {trust_df.height:,}")
-    return trust_df
+%LET CURN2=(KEEP=BRANCH DEPTYPE PRODUCT PRODCD CUSTCD STATECD CUSTNO
+                 RACE INTPAYBL CURBAL OPENMH CLOSEMH RANGE AVGAMT
+                 AVGRNGE PURPOSE SABAL CABAL AGE NAME ACCTNO AMTIND
+                 LASTTRAN ACCYTD LEDGBAL ODINTACC COSTCTR SECTOR
+                 CHQFLOAT FORATE CURCODE);
 
-def process_deposit_data(deposit1_path: Path) -> pl.DataFrame:
-    """Process deposit data from CISDEPD"""
-    logger.info("Processing deposit data from cisdepd.sas7bdat")
-    cisdepd_df = read_sas_to_polars(deposit1_path / "cisdepd.sas7bdat")
-    
-    if cisdepd_df.is_empty():
-        logger.warning("DEPOSIT1.cisdepd is empty or not found")
-        return pl.DataFrame()
-    
-    required_cols = ['BRANCH', 'PRODCD', 'INSUREBR']
-    col_mapping = {col.lower(): col for col in cisdepd_df.columns}
-    missing_cols = []
-    for col in required_cols:
-        if col.lower() not in col_mapping:
-            missing_cols.append(col)
-    
-    if missing_cols:
-        logger.warning(f"Missing columns in cisdepd: {missing_cols}")
-        return pl.DataFrame()
-    
-    rename_dict = {}
-    for col in required_cols:
-        actual_col = col_mapping[col.lower()]
-        if actual_col != col:
-            rename_dict[actual_col] = col
-    
-    if rename_dict:
-        cisdepd_df = cisdepd_df.rename(rename_dict)
-    
-    cisdepd_df = cisdepd_df.select(['BRANCH', 'PRODCD', 'INSUREBR'])
-    logger.info(f"DEPOSIT records: {cisdepd_df.height:,}")
-    return cisdepd_df
+%LET AGELIMIT = 12;
+%LET MAXAGE   = 18;
+%LET AGEBELOW = 11;
 
-def apply_format_mappings(df: pl.DataFrame) -> pl.DataFrame:
-    """Apply PRODBRH format mapping to PRODCD column"""
-    if 'PRODCD' in df.columns:
-        try:
-            df = df.with_columns([
-                pl.col('PRODCD').replace(PRODBRH).alias('PRODCD_FORMATTED')
-            ])
-        except AttributeError:
-            df = df.with_columns([
-                pl.col('PRODCD').map_elements(
-                    lambda x: PRODBRH.get(x, str(x)), 
-                    return_dtype=pl.String
-                ).alias('PRODCD_FORMATTED')
-            ])
-    return df
+OPTIONS YEARCUTOFF=1930;
 
-def generate_conventional_txt_report(summary_df: pl.DataFrame, output_path: Path, report_date: datetime.date) -> None:
-    """
-    Generate TXT report in the exact format from the example
-    """
-    if summary_df.is_empty():
-        logger.warning("No data available for report generation")
-        return
-    
-    # Separate TOTAL from regular branches
-    total_rows = summary_df.filter(pl.col('BRANCH') == 'TOTAL')
-    regular_rows = summary_df.filter(pl.col('BRANCH') != 'TOTAL')
-    
-    # Create pivot table for regular rows (excluding TOTAL)
-    pivot_table = regular_rows.pivot(
-        index='BRANCH',
-        on='PRODCD_FORMATTED',
-        values='INSUREBR_SUM',
-        aggregate_function='sum'
-    ).fill_null(0)
-    
-    # Ensure all product categories exist
-    for col in PRODUCT_CATEGORIES:
-        if col not in pivot_table.columns:
-            pivot_table = pivot_table.with_columns(pl.lit(0.0).alias(col))
-    
-    # Clean BRANCH values - remove decimal points and convert to string
-    # First, convert to string and replace ".0" with ""
-    pivot_table = pivot_table.with_columns([
-        pl.col('BRANCH').cast(pl.String).str.replace('.0', '').alias('BRANCH')
-    ])
-    
-    # Handle null values
-    pivot_table = pivot_table.with_columns([
-        pl.col('BRANCH').fill_null('0').alias('BRANCH')
-    ])
-    
-    # Sort by BRANCH as integer (numeric order)
-    # Create a temporary numeric column for sorting
-    pivot_table = pivot_table.with_columns([
-        pl.col('BRANCH').cast(pl.Int64).alias('BRANCH_NUM')
-    ]).sort('BRANCH_NUM').drop('BRANCH_NUM')
-    
-    # Convert BRANCH back to string for display (no decimal point)
-    pivot_table = pivot_table.with_columns([
-        pl.col('BRANCH').cast(pl.String).alias('BRANCH')
-    ])
-    
-    # Get TOTAL row summary
-    if not total_rows.is_empty():
-        total_pivot = total_rows.pivot(
-            index='BRANCH',
-            on='PRODCD_FORMATTED',
-            values='INSUREBR_SUM',
-            aggregate_function='sum'
-        ).fill_null(0)
-        
-        # Ensure all product categories exist in total
-        for col in PRODUCT_CATEGORIES:
-            if col not in total_pivot.columns:
-                total_pivot = total_pivot.with_columns(pl.lit(0.0).alias(col))
-        
-        # Add TOTAL row to pivot table
-        total_pivot = total_pivot.with_columns([
-            pl.col('BRANCH').fill_null('TOTAL').cast(pl.String).alias('BRANCH')
-        ])
-        
-        # Append TOTAL row
-        pivot_table = pl.concat([pivot_table, total_pivot], how="diagonal")
-    
-    # Get current time for header
-    now = datetime.datetime.now()
-    time_str = now.strftime("%I:%M")
-    date_str = report_date.strftime("%A, %B %d, %Y")
-    header_date_str = f"{time_str} {date_str}"
-    
-    # Prepare TXT file
-    txt_file = output_path / "EIBQFAR2_CONVENTIONAL_REPORT.txt"
-    
-    with open(txt_file, 'w') as f:
-        # Header - Page 1
-        f.write(" " * 35 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(CONVENTIONAL)     ")
-        f.write(f"{header_date_str}   1\n")
-        f.write("\n" * 2)
-        f.write(" " * 60 + "-" * 60 + "\n")
-        
-        # Main table header
-        f.write("|BRANCH  |" + " " * 49 + "PRODUCT" + " " * 49 + "|\n")
-        f.write("|        |" + "-" * 49 + "+" + "-" * 49 + "|\n")
-        
-        # Product columns header - first row
-        f.write("|        |      DDMAND      |      DSVING      |      DFIXED      |")
-        f.write("      FDMAND      |      FFIXED      |  DEBIT CARD (E)  |\n")
-        
-        # Product columns header - second row (subheaders)
-        f.write("|        |------------------+------------------+------------------+")
-        f.write("------------------+------------------+------------------|\n")
-        f.write("|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |")
-        f.write("   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
-        f.write("|        |     INSURED      |     INSURED      |     INSURED      |")
-        f.write("     INSURED      |     INSURED      |     INSURED      |\n")
-        f.write("|--------+------------------+------------------+------------------+")
-        f.write("------------------+------------------+------------------|\n")
-        
-        # Data rows
-        row_count = 0
-        total_rows_count = len(pivot_table)
-        
-        for row in pivot_table.iter_rows(named=True):
-            branch = str(row.get('BRANCH', '0'))
-            
-            # Format values - empty cells show dots
-            values = []
-            for col in PRODUCT_CATEGORIES:
-                val = row.get(col, 0)
-                if val == 0:
-                    values.append("                 .")
-                else:
-                    values.append(f"{val:>18,.2f}")
-            
-            # Write row - branch as string (no decimal point)
-            f.write(f"|{branch:<8}|{values[0]}|{values[1]}|{values[2]}|")
-            f.write(f"{values[3]}|{values[4]}|{values[5]}|\n")
-            f.write("|--------+------------------+------------------+------------------+")
-            f.write("------------------+------------------+------------------|\n")
-            
-            row_count += 1
-            
-            # Page break every 30 rows (as in example)
-            if row_count % 30 == 0 and row_count < total_rows_count:
-                # Footer for current page
-                f.write("\n" + " " * 60 + "(Continued)\n")
-                f.write(" " * 35 + "APPORTIONMENT OF PREMIUN PAID TO MDIC BY BRANCH(CONVENTIONAL)     ")
-                f.write(f"{header_date_str}   {row_count//30 + 1}\n")
-                f.write("\n" * 2)
-                f.write(" " * 60 + "-" * 60 + "\n")
-                
-                # Header repeated
-                f.write("|BRANCH  |" + " " * 49 + "PRODUCT" + " " * 49 + "|\n")
-                f.write("|        |" + "-" * 49 + "+" + "-" * 49 + "|\n")
-                f.write("|        |      DDMAND      |      DSVING      |      DFIXED      |")
-                f.write("      FDMAND      |      FFIXED      |  DEBIT CARD (E)  |\n")
-                f.write("|        |------------------+------------------+------------------+")
-                f.write("------------------+------------------+------------------|\n")
-                f.write("|        |   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |")
-                f.write("   AMOUNT TO BE   |   AMOUNT TO BE   |   AMOUNT TO BE   |\n")
-                f.write("|        |     INSURED      |     INSURED      |     INSURED      |")
-                f.write("     INSURED      |     INSURED      |     INSURED      |\n")
-                f.write("|--------+------------------+------------------+------------------+")
-                f.write("------------------+------------------+------------------|\n")
-    
-    logger.info(f"TXT report saved to: {txt_file}")
-    
-    # Also save Parquet for data analysis
-    pivot_table.write_parquet(output_path / "EIBQFAR2_CONVENTIONAL_PIVOT.parquet")
-    summary_df.write_parquet(output_path / "EIBQFAR2_CONVENTIONAL_SUMMARY.parquet")
-    
-    logger.info(f"Parquet files saved to: {output_path}")
+DATA UMA;
+   SET BNM.UMA;
+   IF BNKIND='PBB';
+RUN;
 
-def main():
-    """Main processing function"""
-    try:
-        # Calculate report date
-        reptdate = calculate_report_date()
-        SDESC = 'PUBLIC BANK BERHAD'
-        REPTMON = f"{reptdate.month:02d}"
-        REPTYEAR = reptdate.strftime('%y')
-        
-        logger.info(f"Report Date: {reptdate}")
-        logger.info(f"REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
-        logger.info(f"SDESC: {SDESC}")
-        
-        # Create REPTDATE DataFrame
-        reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
-        reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
-        reptdate_df.write_csv(output_path / "REPTDATE.csv")
-        logger.info(f"REPTDATE saved to {output_path}")
-        
-        # Process data sources
-        trust_df = process_trust_data(pidmfin_path)
-        deposit_df = process_deposit_data(deposit1_path)
-        
-        # Combine datasets
-        dataframes = [df for df in [trust_df, deposit_df] if not df.is_empty()]
-        
-        if not dataframes:
-            logger.warning("No data available for processing")
-            return
-        
-        rpt_base = pl.concat(dataframes, how="diagonal")
-        
-        # Apply format mappings
-        rpt_base = apply_format_mappings(rpt_base)
-        
-        # Save base dataset
-        rpt_base.write_parquet(output_path / "RPT_BASE.parquet")
-        rpt_base.write_csv(output_path / "RPT_BASE.csv")
-        
-        logger.info(f"RPT_BASE records: {rpt_base.height:,}")
-        
-        # Generate summary
-        summary = rpt_base.group_by(['BRANCH', 'PRODCD_FORMATTED']).agg([
-            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
-        ])
-        
-        # Convert BRANCH to string for consistent concatenation
-        # First, convert to string and clean up decimal points
-        summary = summary.with_columns([
-            pl.col('BRANCH').cast(pl.String).str.replace('.0', '').alias('BRANCH')
-        ])
-        
-        # Handle null values
-        summary = summary.with_columns([
-            pl.col('BRANCH').fill_null('0').alias('BRANCH')
-        ])
-        
-        # Calculate total
-        total_summary = rpt_base.group_by(['PRODCD_FORMATTED']).agg([
-            pl.col('INSUREBR').sum().alias('INSUREBR_SUM')
-        ]).with_columns([
-            pl.lit('TOTAL').cast(pl.String).alias('BRANCH')
-        ])
-        
-        # Combine
-        final_summary = pl.concat([summary, total_summary], how="diagonal")
-        
-        # Generate TXT report
-        generate_conventional_txt_report(final_summary, output_path, reptdate)
-        
-        logger.info("PROCESSING COMPLETED SUCCESSFULLY")
-        
-    except Exception as e:
-        logger.error(f"Error in main processing: {e}", exc_info=True)
-        raise
+DATA BNM.SAVG&REPTMON&NOWK &SAVG2;
+  LENGTH CUSTCD $2. PRODCD $5. STATECD $1. AMTIND $1.;
+  SET DEPOSIT.SAVING &SAVG1 UMA &SAVG1;
+  IF OPENIND NOT IN ('B','C','P');
+  /****************************************************/
+  /** APPLY THE FORMAT                               **/
+  /****************************************************/
+  CUSTCD=PUT(CUSTCODE, SACUSTCD.);
+  STATECD=PUT(BRANCH, STATECD.);
+  PRODCD=PUT(PRODUCT, SAPROD.);
+  AMTIND=PUT(PRODUCT, SADENOM.);
+  RANGE=INPUT(CURBAL, SDRANGE.);
+  RACE=PUT(RACE, $RACE.);
 
-if __name__ == "__main__":
-    main()
+  IF OPENDT NE 0 THEN
+     OPENDATE=INPUT(SUBSTR(PUT(OPENDT,Z11.),1,8), MMDDYY8.);
+  ELSE OPENDATE=0;
+
+  /******************************************/
+  /*  CALCULATION OF AGE RANGE              */
+  /******************************************/
+  AGE = 0;
+  IF (BDATE NE 0) AND (BDATE NE .) THEN
+    DO;
+     BDATE  =INPUT(SUBSTR(PUT(BDATE, Z11.),1, 8), MMDDYY8.);
+     BDAY   =DAY(BDATE);
+     BMONTH =MONTH(BDATE);
+     BYEAR  =YEAR(BDATE);
+
+     AGE=(&REPTYEAR - BYEAR);
+     SELECT;
+      WHEN (AGE = &AGELIMIT)
+        DO;
+         IF (BMONTH = &REPTMON) AND
+            (BDAY > &REPTDAY) THEN AGE=&AGEBELOW;
+         ELSE IF BMONTH > &REPTMON THEN AGE=&AGEBELOW;
+        END;
+      WHEN (AGE = &MAXAGE)
+        DO;
+         IF (BMONTH = &REPTMON) AND
+            (BDAY > &REPTDAY) THEN AGE=&AGELIMIT;
+         ELSE IF BMONTH > &REPTMON THEN AGE=&AGELIMIT;
+        END;
+      WHEN (AGE > &MAXAGE) AGE = &MAXAGE;
+      WHEN (AGE < &AGELIMIT) AGE = &AGEBELOW;
+      OTHERWISE AGE = &AGELIMIT;
+     END;
+    END;
+RUN;
+
+DATA CURRENT;
+   SET DEPOSIT.CURRENT &CURN1;
+RUN;
+PROC SORT DATA=CURRENT;BY ACCTNO DESCENDING CURBAL;RUN;
+PROC SORT DATA=CURRENT NODUPKEY;BY ACCTNO;RUN;
+
+DATA BNM.CURN&REPTMON&NOWK &CURN2
+     BNM.FCY&REPTMON&NOWK &CURN2;
+  LENGTH CUSTCD $2. PRODCD $5. STATECD $1. AMTIND $1.;
+  SET CURRENT;
+  IF OPENIND NOT IN ('B','C','P');
+  IF CURCODE NE 'MYR' THEN DO;
+      INTPAYBL = ROUND(INTPAYBL * FORATE,.01);
+  END;
+  STATECD=PUT(BRANCH, STATECD.);
+  PRODCD=PUT(PRODUCT, CAPROD.);
+  AMTIND=PUT(PRODUCT, CADENOM.);
+  RACE=PUT(RACE, $RACE.);
+  RANGE=INPUT(CURBAL, DDRANGE.);
+  AVGRNGE=INPUT(AVGAMT, DDRANGE.);
+  CABAL = 0; SABAL = 0;
+  /****************************************************/
+  /** IF VOSTRO ACCOUNT THEN THE COUNTER PARTY CODE  **/
+  /** WILL BE TAKEN AS EITHER CB '02' OR '81' BASED  **/
+  /** ON THE PRODUCT CODE :                          **/
+  /**              104 = VOSTRO LOCAL                **/
+  /**              105 = VOSTRO FOREIGN              **/
+  /****************************************************/
+  SELECT(PRODUCT);
+    WHEN(104) CUSTCD='02';
+    WHEN(105) CUSTCD='81';
+    OTHERWISE CUSTCD=PUT(CUSTCODE, DDCUSTCD.);
+  END;
+
+  /*****************************************************/
+  /** IF ACE PRODUCTS THEN CHECK BALANCE              **/
+  /**   ELSE TREAT LIKE OTHER CURRENT ACCOUNT PRODUCT **/
+  /*****************************************************/
+  IF PRODUCT IN &ACE THEN DO;
+        * INTPAYBL = 0;
+        PRODCD=PUT(PRODUCT, CAPROD.);
+        AMTIND=PUT(PRODUCT, CADENOM.);
+        RANGE=INPUT(CURBAL, DDRANGE.);
+        AVGRNGE=INPUT(AVGAMT, DDRANGE.);
+        CHQFLOAT = 0;
+        OUTPUT BNM.CURN&REPTMON&NOWK;
+  END;
+  ELSE IF 400 <= PRODUCT <= 444 THEN DO;
+     IF CUSTCD IN ('77','78','95') THEN DO;
+        IF SECTOR IN (4,5) THEN SECTOR = 1;
+        ELSE IF SECTOR NOT IN (1,2,3,4,5) THEN SECTOR = 1;
+     END;
+     ELSE DO;
+        IF SECTOR IN (1,2,3) THEN SECTOR = 4;
+        ELSE IF SECTOR NOT IN (1,2,3,4,5) THEN SECTOR = 4;
+     END;
+     OUTPUT BNM.FCY&REPTMON&NOWK;
+  END;
+  ELSE DO;
+     OUTPUT BNM.CURN&REPTMON&NOWK;
+  END;
+RUN;
+  /*
+DATA CISDP;
+   INFILE CISDP MISSOVER;
+   INPUT @1 ACCTNO 11. @13 CUSTNO 11.;
+RUN;
+PROC SORT DATA=CISDP OUT=CISDP(KEEP=ACCTNO);
+   BY ACCTNO;
+*;
+DATA BNM.FCY&REPTMON&NOWK;
+   MERGE BNM.FCY&REPTMON&NOWK(IN=A) CISDP;
+   BY ACCTNO;
+   IF A;
+*; */
+PROC SORT DATA=BNM.FCY&REPTMON&NOWK;
+   BY ACCTNO;
+*;
+PROC APPEND DATA=BNM.FCY&REPTMON&NOWK
+            BASE=BNM.CURN&REPTMON&NOWK; RUN;
+
+ /***********************************************************/
+ /** SUMMARIZE THE DATASET AT BRANCH LEVEL - FOR RDAL      **/
+ /***********************************************************/
+PROC DATASETS LIB=BNM NOLIST; DELETE DEPT&REPTMON&NOWK; RUN;
+PROC SUMMARY DATA=BNM.SAVG&REPTMON&NOWK NWAY;
+CLASS BRANCH STATECD PRODCD CUSTCD AMTIND;
+VAR CURBAL INTPAYBL;
+OUTPUT OUT=DEPT
+       SUM=CURBAL INTPAYBL;
+RUN;
+
+PROC APPEND DATA=DEPT BASE=BNM.DEPT&REPTMON&NOWK; RUN;
+PROC DATASETS LIB=WORK NOLIST; DELETE DEPT; RUN;
+
+PROC SUMMARY DATA=BNM.CURN&REPTMON&NOWK NWAY MISSING;
+CLASS BRANCH STATECD PRODCD CUSTCD SECTOR AMTIND;
+VAR CURBAL INTPAYBL;
+OUTPUT OUT=DEPT
+       SUM=CURBAL INTPAYBL;
+RUN;
+
+PROC APPEND DATA=DEPT BASE=BNM.DEPT&REPTMON&NOWK FORCE; RUN;
+PROC DATASETS LIB=WORK NOLIST; DELETE DEPT; RUN;
+
+DATA SAVE293 &SAVG2;
+  LENGTH CUSTCD $2. PRODCD $5. STATECD $1. AMTIND $1.;
+  SET DEPOSIT.SAVING &SAVG1 UMA &SAVG1;
+  IF OPENIND NOT IN ('B','C','P');
+  /****************************************************/
+  /** APPLY THE FORMAT                               **/
+  /****************************************************/
+  CUSTCD =PUT(CUSTCODE, SACUSTCD.);
+  STATECD=PUT(BRANCH, STATECD.);
+  PRODCD =PUT(PRODUCT, SAPROD.);
+  AMTIND =PUT(PRODUCT, SADENOM.);
+  IF PRODCD='N' THEN DELETE;
+  OPENMH=1;
+  OUTPUT SAVE293;
+*;
+PROC SUMMARY DATA=SAVE293 NWAY;
+CLASS BRANCH STATECD PRODCD CUSTCD AMTIND;
+VAR OPENMH;
+OUTPUT OUT=SAVE293 SUM=;
+*;
+DATA CURR293 &CURN2;
+  LENGTH CUSTCD $2. PRODCD $5. STATECD $1. AMTIND $1.;
+  SET DEPOSIT.CURRENT &CURN1;
+  IF  OPENIND NOT IN ('B','C','P');
+  IF  BRANCH > 900 THEN DELETE;
+  STATECD=PUT(BRANCH, STATECD.);
+  PRODCD =PUT(PRODUCT, CAPROD.);
+  AMTIND =PUT(PRODUCT, CADENOM.);
+  CUSTCD ='00';
+  IF PRODCD='N' THEN DELETE;
+  /*  IF PRODUCT IN (160,161,162,163,164,165,182) THEN DO; */
+  IF PRODUCT IN (160,161,162,163,164,165,166,182) THEN DO;
+     PRODCD='42310'; AMTIND='I';
+  END;
+  ELSE DO;
+     PRODCD='42110'; AMTIND='D';
+  END;
+  OPENMH=1;
+  OUTPUT CURR293;
+*;
+PROC SUMMARY DATA=CURR293 NWAY;
+CLASS BRANCH STATECD PRODCD CUSTCD AMTIND;
+VAR OPENMH;
+OUTPUT OUT=CURR293 SUM=;
+*;
+DATA FD;
+   SET FD.FD;
+   IF ACCTTYPE IN (397,398) THEN DELETE;
+RUN;
+
+DATA BNM.FDMTHLY
+     (KEEP=BRANCH ACCTNO STATE CUSTCODE OPENIND CURBAL TERM NAME AMTIND
+           ORGDATE MATDATE RATE RENEWAL INTPLAN INTPAY INTDATE BIC
+           LASTACTV LSTMATDT PURPOSE FORATE ACCTTYPE);
+     LENGTH STATE $1. CUSTCODE $2. BIC $5.;
+     LSTMATDT=0;
+     SET FD;
+     IF CURCODE NE 'MYR' THEN DO;
+      INTPAY = ROUND(INTPAY * FORATE,.01);
+     END;
+     STATE = PUT(BRANCH, STATECD.);
+     BIC = PUT(INTPLAN, FDPROD.);
+     IF LMATDATE ^= 0 THEN
+     LSTMATDT=INPUT(SUBSTR(PUT(LMATDATE,Z11.),1,8),MMDDYY8.);
+     AMTIND = PUT(INTPLAN, FDDENOM.);
+     IF BIC IN ('42130','42630') THEN CUSTCODE = PUT(CUSTCD, FDCUSTCD.);
+        ELSE CUSTCODE = PUT(CUSTCD, IFDCUSCD.);
+     IF BIC = '42630' THEN DO;
+        IF CUSTCODE IN ('77','78','95') THEN DO;
+           IF PURPOSE NOT IN ('1','2','3') THEN PURPOSE=1;
+        END;
+        ELSE DO;
+           IF PURPOSE NOT IN ('4','5') THEN PURPOSE=4;
+        END;
+     END;
+     IF ACCTTYPE IN (315,394) THEN BIC='42132'; ELSE
+     IF ACCTTYPE IN (397,398) THEN BIC='42199';
+     IF OPENIND = 'D' OR OPENIND = 'O' THEN OUTPUT;
+RUN;
