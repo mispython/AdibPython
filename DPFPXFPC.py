@@ -15,13 +15,13 @@ from pathlib import Path
 # Input Paths
 INPUT_PATHS = {
     # Main data files
-    "DPFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPFL.txt",           # NEED TO PUSH FROM HOST TO EDW
-    "EQFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/EQFL.txt",           # /sasdata/rawdata/eq
-    "CRA": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/CRA.txt",             # /sasdata/rawdata/deposit
-    "EQRATE": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/EQRATE",           # /dwh/eq_d
-    "MNITB_SAVING": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/MNITB_SAVING.txt", #/sas/deposit/dwh/integration
-    "MNITB_CURRENT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/MNITB_CURRENT.txt", #/sas/deposit/dwh/integration
-    "DCID": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/dcid0629.sas7bdat",               # Base name for DCID (date will be appended)
+    "DPFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPFL.txt",
+    "EQFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/UTSASDCID_{yyyy}{mm}{dd}.txt",
+    "CRA": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPCRATXT{yyyy}{mm}{dd}.txt",
+    "EQRATE": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/eqrate{yy}{mm}{dd}.sas7bdat",
+    "MNITB_SAVING": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/intg_dp_acct_saving.sas7bdat",
+    "MNITB_CURRENT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/intg_dp_acct_current.sas7bdat",
+    "DCID": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/dcid{mm}{dd}.sas7bdat",
 }
 
 # Output Paths
@@ -30,13 +30,6 @@ OUTPUT_PATHS = {
     "CSV": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.csv",
     "SAS": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI{mon}{wk}.sas7bdat",
     "TEXT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt",
-    "DUCKDB": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/dci_analytics.db",     # DuckDB database file
-}
-
-# Archive Paths (optional - for moving processed files)
-ARCHIVE_PATHS = {
-    "INPUT_ARCHIVE": "data/archive/input/",
-    "OUTPUT_ARCHIVE": "data/archive/output/",
 }
 
 # File format configurations
@@ -79,6 +72,7 @@ FILE_FORMATS = {
     },
     "EQFL": {
         "separator": "|",
+        "has_header": True,
         "dtypes": {
             'STARTDT': pl.Utf8,
             'MATDT': pl.Utf8,
@@ -139,37 +133,31 @@ def ensure_directory(path):
     """Ensure directory exists"""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
-def get_input_path(file_key, date_vars=None):
+def format_path_with_date(path, date_vars):
+    """Replace date placeholders in path with actual values"""
+    result = path
+    for key, value in date_vars.items():
+        result = result.replace(f'{{{key}}}', str(value))
+    return result
+
+def get_input_path(file_key, date_vars):
     """Get input file path with date substitutions"""
     path = INPUT_PATHS[file_key]
-    if date_vars and '{date}' in path:
-        return path.format(**date_vars)
-    return path
+    return format_path_with_date(path, date_vars)
 
-def get_output_path(file_key, date_vars=None):
+def get_output_path(file_key, date_vars):
     """Get output file path with date substitutions"""
     path = OUTPUT_PATHS[file_key]
-    if date_vars:
-        return path.format(**date_vars)
-    return path
+    return format_path_with_date(path, date_vars)
 
-def archive_file(file_path, archive_type='input'):
-    """Archive processed file"""
-    if not os.path.exists(file_path):
-        return
-    
-    archive_dir = ARCHIVE_PATHS[f"{archive_type.upper()}_ARCHIVE"]
-    ensure_directory(archive_dir)
-    
-    filename = os.path.basename(file_path)
-    archive_path = os.path.join(archive_dir, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}")
-    
+def load_sas_file(file_path, columns=None):
+    """Load SAS file using pyreadstat"""
     try:
-        import shutil
-        shutil.move(file_path, archive_path)
-        print(f"Archived: {file_path} -> {archive_path}")
+        df, meta = pyreadstat.read_sas7bdat(file_path)
+        return pl.DataFrame(df)
     except Exception as e:
-        print(f"Warning: Could not archive {file_path}: {e}")
+        print(f"Error loading SAS file {file_path}: {e}")
+        raise
 
 # ===================================================================
 # Main Processing
@@ -183,8 +171,8 @@ def main():
     REPTDAY = f"{today.day:02d}"
     REPTMON = f"{today.month:02d}"
     REPTYEAR = f"{today.year % 100:02d}"
+    REPTYEAR4 = f"{today.year:04d}"
     RDATE = today.strftime("%d/%m/%Y")
-    INDATES = today
 
     day = today.day
     if 1 <= day <= 8:
@@ -197,6 +185,10 @@ def main():
         WK = "4"
 
     date_vars = {
+        'yyyy': REPTYEAR4,
+        'yy': REPTYEAR,
+        'mm': REPTMON,
+        'dd': REPTDAY,
         'date': f"{REPTYEAR}{REPTMON}{REPTDAY}",
         'day': REPTDAY,
         'mon': REPTMON,
@@ -206,102 +198,110 @@ def main():
     }
 
     print(f"Running EIBDCITX for {RDATE} (WK={WK})")
-    print(f"Input path: {INPUT_PATHS}")
-    print(f"Output path: {OUTPUT_PATHS}")
+    print("=" * 80)
 
     # Ensure output directories exist
     for output_path in OUTPUT_PATHS.values():
-        if '{' in output_path:  # Skip template paths
-            continue
         ensure_directory(output_path)
 
     # -------------------------------------------------------------------
     # Step 2: Load raw datasets
     # -------------------------------------------------------------------
+    print("\nLoading input files...")
+    
     try:
         # Load DPFL (fixed width format)
-        dpfl_path = get_input_path("DPFL")
+        dpfl_path = get_input_path("DPFL", date_vars)
         dpfl = pl.read_csv(dpfl_path,
                           has_header=False,
                           schema=FILE_FORMATS["DPFL"]["dtypes"],
                           fixed_width=True,
                           widths=FILE_FORMATS["DPFL"]["widths"],
                           newline_character='\n')
-        print(f"Loaded DPFL: {len(dpfl)} rows")
+        print(f"  ✓ Loaded DPFL: {len(dpfl):,} rows from {dpfl_path}")
     except Exception as e:
-        print(f"Error loading DPFL: {e}")
+        print(f"  ✗ Error loading DPFL: {e}")
         return
 
     try:
         # Load EQFL (pipe delimited)
-        eqfl_path = get_input_path("EQFL")
+        eqfl_path = get_input_path("EQFL", date_vars)
         eqfl = pl.read_csv(eqfl_path, 
                           separator=FILE_FORMATS["EQFL"]["separator"],
+                          has_header=FILE_FORMATS["EQFL"].get("has_header", True),
                           schema_overrides=FILE_FORMATS["EQFL"]["dtypes"])
-        print(f"Loaded EQFL: {len(eqfl)} rows")
+        print(f"  ✓ Loaded EQFL: {len(eqfl):,} rows from {eqfl_path}")
     except Exception as e:
-        print(f"Error loading EQFL: {e}")
+        print(f"  ✗ Error loading EQFL: {e}")
         return
 
     try:
         # Load CRA (fixed width format)
-        cra_path = get_input_path("CRA")
+        cra_path = get_input_path("CRA", date_vars)
         cra = pl.read_csv(cra_path,
                          has_header=False,
                          fixed_width=True,
                          widths=FILE_FORMATS["CRA"]["widths"],
                          newline_character='\n',
                          schema=FILE_FORMATS["CRA"]["dtypes"])
-        print(f"Loaded CRA: {len(cra)} rows")
+        print(f"  ✓ Loaded CRA: {len(cra):,} rows from {cra_path}")
     except Exception as e:
-        print(f"Error loading CRA: {e}")
+        print(f"  ✗ Error loading CRA: {e}")
         return
 
     try:
         # Load EQRATE (SAS dataset)
-        eqrate_path = f"{INPUT_PATHS['EQRATE']}{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat"
-        eqrate, meta = pyreadstat.read_sas7bdat(eqrate_path)
-        eqrt = pl.DataFrame(eqrate)
-        print(f"Loaded EQRATE: {len(eqrt)} rows")
+        eqrate_path = get_input_path("EQRATE", date_vars)
+        eqrate_df, meta = pyreadstat.read_sas7bdat(eqrate_path)
+        eqrt = pl.DataFrame(eqrate_df)
+        print(f"  ✓ Loaded EQRATE: {len(eqrt):,} rows from {eqrate_path}")
     except Exception as e:
-        print(f"Error loading EQRATE: {e}")
+        print(f"  ✗ Error loading EQRATE: {e}")
         return
 
     try:
-        # Load MNITB datasets
-        mnitb_saving = pl.read_csv(INPUT_PATHS["MNITB_SAVING"], 
-                                   schema={'ACCTNO': pl.Int64, 'CUSTCODE': pl.Int64})
-        mnitb_current = pl.read_csv(INPUT_PATHS["MNITB_CURRENT"],
-                                   schema={'ACCTNO': pl.Int64, 'CUSTCODE': pl.Int64})
-        print(f"Loaded MNITB Saving: {len(mnitb_saving)} rows, Current: {len(mnitb_current)} rows")
+        # Load MNITB datasets (SAS datasets)
+        mnitb_saving_path = get_input_path("MNITB_SAVING", date_vars)
+        mnitb_saving_df, _ = pyreadstat.read_sas7bdat(mnitb_saving_path)
+        mnitb_saving = pl.DataFrame(mnitb_saving_df)
+        print(f"  ✓ Loaded MNITB Saving: {len(mnitb_saving):,} rows")
+        
+        mnitb_current_path = get_input_path("MNITB_CURRENT", date_vars)
+        mnitb_current_df, _ = pyreadstat.read_sas7bdat(mnitb_current_path)
+        mnitb_current = pl.DataFrame(mnitb_current_df)
+        print(f"  ✓ Loaded MNITB Current: {len(mnitb_current):,} rows")
     except Exception as e:
-        print(f"Error loading MNITB files: {e}")
+        print(f"  ✗ Error loading MNITB files: {e}")
         return
 
     try:
-        # Load DCID
-        dcid_path = f"{INPUT_PATHS['DCID']}{REPTMON}{REPTDAY}.txt"
-        dcid = pl.read_csv(dcid_path,
-                          schema={'TICKETNO': pl.Utf8, 'CUSTCODE': pl.Int64})
-        print(f"Loaded DCID: {len(dcid)} rows")
+        # Load DCID (SAS dataset)
+        dcid_path = get_input_path("DCID", date_vars)
+        dcid_df, _ = pyreadstat.read_sas7bdat(dcid_path)
+        dcid = pl.DataFrame(dcid_df)
+        print(f"  ✓ Loaded DCID: {len(dcid):,} rows from {dcid_path}")
     except Exception as e:
-        print(f"Error loading DCID: {e}")
+        print(f"  ✗ Error loading DCID: {e}")
         return
+
+    print("\n" + "=" * 80)
 
     # -------------------------------------------------------------------
     # Step 3: DPST dataset
     # -------------------------------------------------------------------
+    print("\nProcessing DPST...")
     dpst = dpfl.with_columns([
         pl.col("ACCINT").cast(pl.Float64)
     ])
 
     # Merge with DCID
     dpst = dpst.join(dcid, on="TICKETNO", how="left")
-    print(f"DPST after merge: {len(dpst)} rows")
+    print(f"  DPST after merge: {len(dpst):,} rows")
 
     # -------------------------------------------------------------------
     # Step 4: EQC / EQI split
     # -------------------------------------------------------------------
+    print("\nProcessing EQ data...")
     eq = eqfl.with_columns([
         pl.col("ACCINTRM").abs(),
         pl.col("ACCINTAMT").abs(),
@@ -312,6 +312,7 @@ def main():
 
     # Filter by date range
     eq = eq.filter((pl.col("STARTDT") <= str(today)) & (pl.col("MATDT") >= str(today)))
+    print(f"  EQ after date filter: {len(eq):,} rows")
 
     eqc = eq.filter(pl.col("TYPE") == "C")
     eqi = eq.filter(pl.col("TYPE") != "C")
@@ -319,14 +320,15 @@ def main():
     # Keep only necessary columns
     eqc = eqc.select(EQC_KEEP_COLS)
     eqi = eqi.select(EQI_KEEP_COLS)
-    print(f"EQC: {len(eqc)} rows, EQI: {len(eqi)} rows")
+    print(f"  EQC: {len(eqc):,} rows, EQI: {len(eqi):,} rows")
 
     # -------------------------------------------------------------------
     # Step 5: Customer leg (EQC join DPST, CRA, DEPO)
     # -------------------------------------------------------------------
+    print("\nProcessing Customer Leg...")
     eqdci = dpst.join(eqc, on="TICKETNO", how="inner")
     eqdci = eqdci.filter(pl.col("CUSTCODE") >= REPORT_CONFIG["MIN_CUSTCODE"])
-    print(f"EQDCI after join: {len(eqdci)} rows")
+    print(f"  EQDCI after join: {len(eqdci):,} rows")
 
     # CRA processing
     dp_cra = cra.filter(pl.col("INV_STATUS").is_in(REPORT_CONFIG["VALID_STATUSES"]))
@@ -340,14 +342,16 @@ def main():
     # Create DEPO dataset
     depo = pl.concat([mnitb_saving, mnitb_current])
     depo = depo.rename({"ACCTNO": "INVCURAC"})
+    print(f"  DEPO combined: {len(depo):,} rows")
 
     # Join CRA with DEPO
     dp_cra = dp_cra.join(depo, on="INVCURAC", how="inner")
     dp_cra = dp_cra.filter(pl.col("CUSTCODE") >= REPORT_CONFIG["MIN_CUSTCODE"])
-    print(f"CRA after processing: {len(dp_cra)} rows")
+    print(f"  CRA after processing: {len(dp_cra):,} rows")
 
     # Combine EQDCI with CRA
     eqdci = pl.concat([eqdci, dp_cra])
+    print(f"  Combined EQDCI: {len(eqdci):,} rows")
 
     # FX enrichment
     eqrt = eqrt.rename({"CURRENCY": "INVCURR", "SPOTRATE": "SPOTRT"})
@@ -373,12 +377,13 @@ def main():
     # Split into MYR and FCY
     cusmyr = eqdci.filter(pl.col("INVCURR") == REPORT_CONFIG["MYR_CURRENCY"])
     cusfcy = eqdci.filter(pl.col("INVCURR") != REPORT_CONFIG["MYR_CURRENCY"])
-    print(f"Customer MYR: {len(cusmyr)} rows, FCY: {len(cusfcy)} rows")
+    print(f"  Customer MYR: {len(cusmyr):,} rows, FCY: {len(cusfcy):,} rows")
 
     # Write text output for customer
-    text_path = get_output_path("TEXT")
+    text_path = get_output_path("TEXT", date_vars)
     ensure_directory(text_path)
     
+    print(f"\nWriting customer text output to {text_path}...")
     with open(text_path, "w") as f:
         # Customer MYR
         f.write("PUBLIC BANK BERHAD\n")
@@ -397,11 +402,10 @@ def main():
         for row in cusfcy.iter_rows(named=True):
             f.write(','.join([str(row.get(c, '')) for c in cols]) + '\n')
 
-    print(f"Customer text output written: {text_path}")
-
     # -------------------------------------------------------------------
     # Step 6: Interbank leg
     # -------------------------------------------------------------------
+    print("\nProcessing Interbank Leg...")
     eqdci_ib = eqi.filter(pl.col("FISSCODE") >= "80")
     eqdci_ib = eqdci_ib.join(eqrt.select(['INVCURR', 'SPOTRT']), on="INVCURR", how="left")
 
@@ -419,7 +423,7 @@ def main():
     # Split interbank
     ibnmyr = eqdci_ib.filter(pl.col("INVCURR") == REPORT_CONFIG["MYR_CURRENCY"])
     ibnfcy = eqdci_ib.filter(pl.col("INVCURR") != REPORT_CONFIG["MYR_CURRENCY"])
-    print(f"Interbank MYR: {len(ibnmyr)} rows, FCY: {len(ibnfcy)} rows")
+    print(f"  Interbank MYR: {len(ibnmyr):,} rows, FCY: {len(ibnfcy):,} rows")
 
     # Write text output for interbank
     with open(text_path, "a") as f:
@@ -440,11 +444,12 @@ def main():
         for row in ibnfcy.iter_rows(named=True):
             f.write(','.join([str(row.get(c, '')) for c in cols]) + '\n')
 
-    print(f"Interbank text output appended: {text_path}")
+    print(f"  ✓ Text output written to {text_path}")
 
     # -------------------------------------------------------------------
     # Step 7: Build DCI
     # -------------------------------------------------------------------
+    print("\nBuilding DCI final output...")
     dcimyr = pl.concat([cusmyr, ibnmyr])
 
     # Add PREMIUM column
@@ -511,16 +516,18 @@ def main():
     dci_final = dci_final.group_by(["BNMCODE", "ELDAY", "REPTDATS"]).agg(
         pl.sum("AMOUNT").alias("AMOUNT")
     )
-    print(f"DCI final: {len(dci_final)} rows")
+    print(f"  DCI final: {len(dci_final):,} aggregated records")
 
     # -------------------------------------------------------------------
     # Step 8: Write outputs
     # -------------------------------------------------------------------
+    print("\nWriting output files...")
+    
     # Write Parquet output
     parquet_path = get_output_path("PARQUET", date_vars)
     ensure_directory(parquet_path)
     dci_final.write_parquet(parquet_path)
-    print(f"Final DCI Parquet written: {parquet_path}")
+    print(f"  ✓ Parquet written: {parquet_path}")
 
     # Write SAS7bdat output
     sas_path = get_output_path("SAS", date_vars)
@@ -528,43 +535,19 @@ def main():
     try:
         dci_pd = dci_final.to_pandas()
         pyreadstat.write_sas7bdat(dci_pd, sas_path)
-        print(f"SAS dataset written: {sas_path}")
+        print(f"  ✓ SAS dataset written: {sas_path}")
     except Exception as e:
-        print(f"Could not write SAS dataset: {e}")
+        print(f"  ✗ Could not write SAS dataset: {e}")
 
     # Write CSV output
     csv_path = get_output_path("CSV", date_vars)
     ensure_directory(csv_path)
     dci_final.write_csv(csv_path)
-    print(f"CSV output written: {csv_path}")
+    print(f"  ✓ CSV written: {csv_path}")
 
-    # -------------------------------------------------------------------
-    # Step 9: Register in DuckDB for analytics
-    # -------------------------------------------------------------------
-    try:
-        db_path = OUTPUT_PATHS["DUCKDB"]
-        ensure_directory(db_path)
-        conn = duckdb.connect(db_path)
-        conn.execute("INSTALL parquet; LOAD parquet;")
-        conn.execute(f"CREATE OR REPLACE TABLE dci AS SELECT * FROM read_parquet('{parquet_path}')")
-        result = conn.execute("SELECT COUNT(*) FROM dci").fetchall()
-        print(f"DuckDB table created. Rowcount: {result[0][0]}")
-        conn.close()
-    except Exception as e:
-        print(f"DuckDB error: {e}")
-
-    # -------------------------------------------------------------------
-    # Step 10: Archive input files (optional)
-    # -------------------------------------------------------------------
-    if ARCHIVE_PATHS.get("INPUT_ARCHIVE"):
-        print("Archiving input files...")
-        for file_key in INPUT_PATHS:
-            if file_key not in ["EQRATE", "DCID"]:  # Skip template paths
-                file_path = get_input_path(file_key)
-                if os.path.exists(file_path):
-                    archive_file(file_path, 'input')
-
+    print("\n" + "=" * 80)
     print("EIBDCITX completed successfully!")
+    print("=" * 80)
 
 if __name__ == "__main__":
     main()
