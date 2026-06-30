@@ -395,6 +395,23 @@ def write_sas_file(df, file_path):
         print(f"  ✓ CSV fallback written: {csv_path}")
         return False
 
+def safe_concat(dfs):
+    """Safely concatenate DataFrames, ignoring empty ones"""
+    non_empty = [df for df in dfs if len(df) > 0]
+    if not non_empty:
+        return pl.DataFrame()
+    if len(non_empty) == 1:
+        return non_empty[0]
+    # Ensure all DataFrames have the same columns
+    common_cols = set(non_empty[0].columns)
+    for df in non_empty[1:]:
+        common_cols = common_cols.intersection(set(df.columns))
+    common_cols = list(common_cols)
+    
+    # Select only common columns
+    aligned_dfs = [df.select(common_cols) for df in non_empty]
+    return pl.concat(aligned_dfs)
+
 # ===================================================================
 # Main Processing
 # ===================================================================
@@ -756,7 +773,6 @@ def main():
         
         # Interbank MYR section (if any)
         if len(ibnmyr) > 0:
-            # Get next page number
             page_num = 3
             timestamp3 = datetime.now().strftime("%H:%M %A, %B %d, %Y")
             f.write(f"\n{' ' * 52}PUBLIC BANK BERHAD{' ' * 60}{timestamp3}   {page_num}\n")
@@ -828,37 +844,12 @@ def main():
     # -------------------------------------------------------------------
     print("\nBuilding DCI final output...")
     
-    # Combine customer and interbank data for DCI
-    dcimyr = pl.DataFrame()
-    if len(cusmyr) > 0 or len(ibnmyr) > 0:
-        # Define common columns for both dataframes
-        common_cols = []
-        if len(cusmyr) > 0 and len(ibnmyr) > 0:
-            common_cols = list(set(cusmyr.columns) & set(ibnmyr.columns))
-        elif len(cusmyr) > 0:
-            common_cols = cusmyr.columns
-        else:
-            common_cols = ibnmyr.columns
-        
-        # Select only common columns
-        cusmyr_aligned = cusmyr.select(common_cols) if len(cusmyr) > 0 else pl.DataFrame()
-        ibnmyr_aligned = ibnmyr.select(common_cols) if len(ibnmyr) > 0 else pl.DataFrame()
-        
-        # Concatenate
-        if len(cusmyr_aligned) > 0 or len(ibnmyr_aligned) > 0:
-            dcimyr = pl.concat([cusmyr_aligned, ibnmyr_aligned])
-            print(f"  Combined customer and interbank data: {len(dcimyr)} rows")
-        elif len(cusmyr) > 0:
-            dcimyr = cusmyr
-            print(f"  Using customer data only: {len(dcimyr)} rows")
-        elif len(ibnmyr) > 0:
-            dcimyr = ibnmyr
-            print(f"  Using interbank data only: {len(dcimyr)} rows")
-    else:
-        print("  No data available to build DCI")
-
-    # Process DCI
+    # Use safe_concat function to combine dataframes
+    dcimyr = safe_concat([cusmyr, ibnmyr])
+    
     if len(dcimyr) > 0:
+        print(f"  Combined data for DCI: {len(dcimyr)} rows")
+        
         # Add PREMIUM column
         dcimyr = dcimyr.with_columns([
             pl.when(pl.col("TYPE") == "C")
@@ -966,55 +957,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-Running EIBDCITX for 29/06/2026 (WK=4) - Processing YESTERDAY'S data
-================================================================================
-
-Loading input files...
-  ✓ Loaded DPFL: 89,493 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPFL.txt
-  ✓ Loaded EQFL: 421 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/UTSASDCID_20260629.txt
-  ✓ Loaded CRA: 1 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPCRATXT_20260629
-  Note: pyreadstat doesn't support column selection, loading full file then filtering...
-  ✓ Loaded EQRATE: 57 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/eqrate260629.sas7bdat
-  Loading MNITB Saving...
-  ✓ Loading from Parquet cache: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_saving.parquet
-  ✓ Loaded MNITB Saving: 6,634,478 rows
-  Loading MNITB Current...
-  ✓ Loading from Parquet cache: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_current.parquet
-  ✓ Loaded MNITB Current: 1,118,698 rows
-  Note: pyreadstat doesn't support column selection, loading full file then filtering...
-  ✓ Loaded DCID: 210 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/dcid0629.sas7bdat
-
-================================================================================
-
-Processing DPST...
-  DPST after merge: 89,493 rows
-
-Processing EQ data...
-  EQ after date filter: 300 rows
-  EQC: 150 rows, EQI: 150 rows
-
-Processing Customer Leg...
-  EQDCI after join: 5 rows
-  Note: No CRA records with valid status
-  DEPO combined: 7,753,176 rows
-  Note: No CRA or DEPO data to join
-  Combined EQDCI: 5 rows
-  Customer MYR: 4 rows, FCY: 1 rows
-
-Processing Interbank Leg...
-  Interbank MYR: 0 rows, FCY: 0 rows
-
-Writing DCITXT output to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt...
-  ✓ DCITXT written to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt
-
-Building DCI final output...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDCITX.py", line 968, in <module>
-    main()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDCITX.py", line 849, in main
-    dcimyr = pl.concat([cusmyr_aligned, ibnmyr_aligned])
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/functions/eager.py", line 234, in concat
-    out = wrap_df(plr.concat_df(elems))
-polars.exceptions.ShapeError: unable to append to a DataFrame of width 57 with a DataFrame of width 0
