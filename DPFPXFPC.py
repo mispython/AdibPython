@@ -1,344 +1,910 @@
-//EIBDCITX EXEC SAS609,OPTIONS='COMPRESS=YES'
-//MNITB    DD DISP=SHR,DSN=SAP.PBB.MNITB.DAILY(0)
-//CRA      DD DISP=SHR,DSN=RBP2.B033.UNLOAD.DPCRATXT.FB(0)
-//DPFL     DD DISP=SHR,DSN=RBP2.B033.DCI.DAILY.DATA(0)
-//EQFL     DD DISP=SHR,DSN=SAP.PBB.DCIDLY(0)
-//EQRT     DD DISP=SHR,DSN=SAP.PBB.EQUT(0)
-//BNMK     DD DISP=OLD,DSN=SAP.PBB.DKAPITI.SASDATA
-//D I      DD DSN=SAP.PBB.DCIWH.DAILY,DISP=SHR
-//DCITXT   DD DISP=(NEW,CATLG,DELETE),
-//            DCB=(RECFM=VB,LRECL=260,BLKSIZE=0),
-//            SPACE=(CYL,(50,50),RLSE),UNIT=(SYSDA,5),
-//            DSN=SAP.PBB.DCIDLY.TEXT
-//SASLIST  DD SYSOUT=X
-//SYSIN    DD *
+# eibdcitx.py - FIXED VERSION
+import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
+import duckdb
+from datetime import date, datetime, timedelta
+import pyreadstat
+import os
+from pathlib import Path
 
-OPTIONS SORTDEV=3390 YEARCUTOFF=1950 LS=256 MISSING='';
+# ===================================================================
+# PATH CONFIGURATION - Modify these paths as needed
+# ===================================================================
 
-DATA REPTDATE;
-  SET MNITB.REPTDATE;
-  SELECT;
-     WHEN  (01<=DAY(REPTDATE)<=08) DO; WK = '1'; END;
-     WHEN  (09<=DAY(REPTDATE)<=15) DO; WK = '2'; END;
-     WHEN  (16<=DAY(REPTDATE)<=22) DO; WK = '3'; END;
-     OTHERWISE DO; WK='4'; END;
-  END;
-  CALL SYMPUT('WK',PUT(WK,$1.));
-  CALL SYMPUT('INDATES', REPTDATE);
-  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
-  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
-  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
-RUN;
+# Input Paths
+INPUT_PATHS = {
+    "DPFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPFL.txt",
+    "EQFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/UTSASDCID_{yyyy}{mm}{dd}.txt",
+    "CRA": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPCRATXT_{yyyy}{mm}{dd}",
+    "EQRATE": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/eqrate{yy}{mm}{dd}.sas7bdat",
+    "MNITB_SAVING": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/intg_dp_acct_saving.sas7bdat",
+    "MNITB_CURRENT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/intg_dp_acct_current.sas7bdat",
+    "DCID": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/dcid{mm}{dd}.sas7bdat",
+}
 
-%LET EQCVAR=(KEEP=TICKETNO CUSTICKETNO BRANCH INVCURR ALTCURR
-                  INVAMT ALTAMT TENOR STATUSIND DCIRT STARTDT
-                  MATDT PREMPAID TYPE);
+# Parquet cache paths
+PARQUET_CACHE = {
+    "MNITB_SAVING": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_saving.parquet",
+    "MNITB_CURRENT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_current.parquet",
+}
 
-%LET EQIVAR=(KEEP=TICKETNO CUSTNAME CUSTRES CUSTLOC FISSCODE
-                  CUSTICKETNO BRANCH INVCURR ALTCURR EQCUSTYP
-                  INVAMT ALTAMT TENOR STATUSIND STARTDT
-                  MATDT PREMREC TYPE);
+# Output Paths
+OUTPUT_PATHS = {
+    "PARQUET": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.parquet",
+    "CSV": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.csv",
+    "SAS": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI{mon}{wk}.sas7bdat",
+    "TEXT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt",
+}
 
-DATA DPST;
-   INFILE DPFL FIRSTOBS=2;
-   INPUT @0001 TICKETNO    $7.  /* CUSTOMER CONTRACT NO        */
-         @0008 CUSTNAME   $26.  /* CUSTOMER NAME               */
-         @0034 NEWIC      $20.  /* NEW IC NUMBER               */
-         @0054 CUSTCODE     5.  /* CUSTOMER CODE               */
-         @0059 INVCURAC    11.  /* INVESTMENT CURRENCY ACCOUNT */
-         @0070 ALTCURAC    11.  /* ALTERNATE CURRENCY ACCOUNT  */
-         @0081 ACCINT      15.6 /* ACCRUAL INTEREST            */
-         ;
-RUN;
-PROC SORT DATA=DPST; BY TICKETNO; RUN;
-PROC SORT DATA=DCI.DCID&REPTMON&REPTDAY
- OUT=DCID(KEEP=TICKETNO CUSTCODE); BY TICKETNO; RUN;
+# File format configurations
+FILE_FORMATS = {
+    "DPFL": {
+        "fixed_width": True,
+        "widths": [7, 26, 20, 5, 11, 11, 15],
+        "columns": ['TICKETNO', 'CUSTNAME', 'NEWIC', 'CUSTCODE', 
+                   'INVCURAC', 'ALTCURAC', 'ACCINT'],
+        "dtypes": {
+            'TICKETNO': pl.Utf8,
+            'CUSTNAME': pl.Utf8,
+            'NEWIC': pl.Utf8,
+            'CUSTCODE': pl.Int64,
+            'INVCURAC': pl.Int64,
+            'ALTCURAC': pl.Int64,
+            'ACCINT': pl.Float64
+        }
+    },
+    "CRA": {
+        "fixed_width": True,
+        "encoding": "latin1",
+        "widths": [3, 60, 6, 140, 7, 10, 10, 7, 2, 3, 8, 2],
+        "columns": ['BRANCH', 'CUSTICKETNO', 'INVCURAC', 'CUSTNAME', 
+                   'INVAMT', 'STARTDT', 'MATDT', 'DCIRT', 'TENOR', 
+                   'INV_STATUS', 'ACCINT', 'CUSTCODE_DB2'],
+        "dtypes": {
+            'BRANCH': pl.Utf8,
+            'CUSTICKETNO': pl.Utf8,
+            'INVCURAC': pl.Int64,
+            'CUSTNAME': pl.Utf8,
+            'INVAMT': pl.Float64,
+            'STARTDT': pl.Utf8,
+            'MATDT': pl.Utf8,
+            'DCIRT': pl.Float64,
+            'TENOR': pl.Int64,
+            'INV_STATUS': pl.Utf8,
+            'ACCINT': pl.Float64,
+            'CUSTCODE_DB2': pl.Int64
+        }
+    },
+    "EQFL": {
+        "separator": "|",
+        "has_header": False,
+        "columns": [
+            'CUSTICKETNO', 'TICKETNO', 'BRANCH', 'CUSTNAME', 'DEALID',
+            'FISSCODE', 'CUSTRES', 'CUSTMNE', 'CUSTLOC', 'EQCUSTYP',
+            'PRODUCT', 'INVCURR', 'ALTCURR', 'INVAMT', 'INVAMTRM',
+            'ALTAMT', 'TRADEDT', 'STARTDT', 'FIXINGDT', 'MATDT',
+            'STOPDT', 'TENOR', 'STRIKERT', 'SPOTRT', 'DCIRT',
+            'ACCINTAMT', 'TOTINTAMT', 'ACCINTRM', 'MMRT', 'RSPOTRT',
+            'PREMREC', 'PREMPAID', 'PROFIT', 'PROFITMYR', 'UNWINDCOST',
+            'STATUSIND', 'STATUS', 'TYPE'
+        ],
+        "dtypes": {
+            'CUSTICKETNO': pl.Utf8,
+            'TICKETNO': pl.Utf8,
+            'BRANCH': pl.Utf8,
+            'CUSTNAME': pl.Utf8,
+            'DEALID': pl.Utf8,
+            'FISSCODE': pl.Utf8,
+            'CUSTRES': pl.Utf8,
+            'CUSTMNE': pl.Utf8,
+            'CUSTLOC': pl.Utf8,
+            'EQCUSTYP': pl.Utf8,
+            'PRODUCT': pl.Utf8,
+            'INVCURR': pl.Utf8,
+            'ALTCURR': pl.Utf8,
+            'INVAMT': pl.Float64,
+            'INVAMTRM': pl.Float64,
+            'ALTAMT': pl.Float64,
+            'TRADEDT': pl.Utf8,
+            'STARTDT': pl.Utf8,
+            'FIXINGDT': pl.Utf8,
+            'MATDT': pl.Utf8,
+            'STOPDT': pl.Utf8,
+            'TENOR': pl.Int64,
+            'STRIKERT': pl.Float64,
+            'SPOTRT': pl.Float64,
+            'DCIRT': pl.Float64,
+            'ACCINTAMT': pl.Float64,
+            'TOTINTAMT': pl.Float64,
+            'ACCINTRM': pl.Float64,
+            'MMRT': pl.Float64,
+            'RSPOTRT': pl.Float64,
+            'PREMREC': pl.Float64,
+            'PREMPAID': pl.Float64,
+            'PROFIT': pl.Float64,
+            'PROFITMYR': pl.Float64,
+            'UNWINDCOST': pl.Float64,
+            'STATUSIND': pl.Utf8,
+            'STATUS': pl.Utf8,
+            'TYPE': pl.Utf8
+        }
+    }
+}
 
-DATA DPST;
-  MERGE DPST (IN=A)
-        DCID;
-        BY TICKETNO;
-        IF A;
-RUN;
+# EQC keep columns (matching SAS EQCVAR)
+EQC_KEEP_COLS = ['TICKETNO', 'CUSTICKETNO', 'BRANCH', 'INVCURR', 'ALTCURR',
+                 'INVAMT', 'ALTAMT', 'TENOR', 'STATUSIND', 'DCIRT', 'STARTDT',
+                 'MATDT', 'PREMPAID', 'TYPE']
 
-PROC SORT DATA=DPST; BY TICKETNO; RUN;
+# EQI keep columns (matching SAS EQIVAR)
+EQI_KEEP_COLS = ['TICKETNO', 'CUSTNAME', 'CUSTRES', 'CUSTLOC', 'FISSCODE',
+                 'CUSTICKETNO', 'BRANCH', 'INVCURR', 'ALTCURR', 'EQCUSTYP',
+                 'INVAMT', 'ALTAMT', 'TENOR', 'STATUSIND', 'STARTDT',
+                 'MATDT', 'PREMREC', 'TYPE']
 
-DATA EQC EQI;
-   INFILE EQFL DELIMITER = '|' MISSOVER DSD FIRSTOBS=2;
-   INPUT CUSTICKETNO : $13.  /* CUSTOMER DEAL               */
-         TICKETNO    : $13.  /* I/BANK DEAL / TICKET NUMBER */
-         BRANCH      : $3.  /* BRANCH                      */
-         CUSTNAME    : $35.  /* CUSTOMER NAME               */
-         DEALID      : $10.  /* DEALER ID                   */
-         FISSCODE    :  $2.  /* FISS CUSTOMER TYPE          */
-         CUSTRES     :  $2.  /* RESIDENCE COUNTRY           */
-         CUSTMNE     :  $6.  /* CUSTOMER MNEMONIC           */
-         CUSTLOC     :  $3.  /* CUSTOMER LOCATION           */
-         EQCUSTYP    :  $3.  /* EQ CUSTOMER TYPE            */
-         PRODUCT     :  $3.  /* PRODUCT                     */
-         INVCURR     :  $3.  /* INVESTMENT CURRENCY         */
-         ALTCURR     :  $3.  /* ALTERNATE CURRENCY          */
-         INVAMT      : 15.2  /* INVESTMENT AMOUNT           */
-         INVAMTRM    : 15.2  /* INVESTMENT AMOUNT MYR       */
-         ALTAMT      : 15.2  /* ALTERNATE AMOUNT            */
-         TRADEDT     : YYMMDD10. /* TRADE DATE              */
-         STARTDT     : YYMMDD10. /* START DATE              */
-         FIXINGDT    : YYMMDD10. /* FIXING DATE             */
-         MATDT       : YYMMDD10. /* MATURITY DATE           */
-         STOPDT      : YYMMDD10. /* CANCELED/PREMATURE DATE */
-         TENOR       :   5.  /* TENOR (DAY)                 */
-         STRIKERT    : 11.7  /* STRIKE RATE                 */
-         SPOTRT      : 11.7  /* SPOT RATE                   */
-         DCIRT       : 11.4  /* DCI RATE                    */
-         ACCINTAMT   : 15.2  /* DCI DAILY INTEREST          */
-         TOTINTAMT   : 15.2  /* DCI INTEREST ACCRUED        */
-         ACCINTRM    : 15.2  /* ACCRUAL INTEREST (MYR)      */
-         MMRT        : 11.4  /* MONEY MARKET DEPOSIT RATE   */
-         RSPOTRT     : 11.7  /* REPORTING DATE'S SPOT RATE  */
-         PREMREC     : 15.2  /* PREMIUM RECEIVE FROM I/BANK */
-         PREMPAID    : 15.2  /* PREMIUM PAID TO CUSTOMER    */
-         PROFIT      : 15.2  /* PROFIT EARNED (BY THE BANK) */
-         PROFITMYR   : 15.2  /* PROFIT EARNED IN MYR        */
-         UNWINDCOST  : 15.2  /* UNWINDING COST              */
-         STATUSIND   : $20. /* REMARKS (FOR DCI TRAN.) */
-         STATUS      :  $1.  /* TRANSACTION STATUS          */
-         TYPE        :  $1.  /* TRANSACTION TYPE            */
-         ;
+# BNM Codes mapping
+BNM_CODES = {
+    "ACCINTRM": "4911095000000Y",
+    "PREMIUM": "4929996000000Y"
+}
 
-   IF ACCINTRM  < 0 THEN ACCINTRM  = ACCINTRM  * (-1);
-   IF ACCINTAMT < 0 THEN ACCINTAMT = ACCINTAMT * (-1);
-   IF TOTINTAMT < 0 THEN TOTINTAMT = TOTINTAMT * (-1);
-   IF PREMPAID  < 0 THEN PREMPAID  = PREMPAID  * (-1);
-   IF PREMREC   < 0 THEN PREMREC   = PREMREC   * (-1);
+# Reporting configuration
+REPORT_CONFIG = {
+    "MIN_CUSTCODE": 80,
+    "VALID_STATUSES": ["ACT", "CEP", "CEU", "CCU", "CMU"],
+    "JPY_CURRENCY": "JPY",
+    "MYR_CURRENCY": "MYR",
+    "DECIMAL_PLACES_JPY": 0,
+    "DECIMAL_PLACES_OTHER": 2
+}
 
-   IF STARTDT <= &INDATES <= MATDT;
+# ELDAY mapping
+ELDAY_MAPPING = {
+    1: 'DAYA', 9: 'DAYA', 16: 'DAYA', 23: 'DAYA',
+    2: 'DAYB', 10: 'DAYB', 17: 'DAYB', 24: 'DAYB',
+    3: 'DAYC', 11: 'DAYC', 18: 'DAYC', 25: 'DAYC',
+    4: 'DAYD', 12: 'DAYD', 19: 'DAYD', 26: 'DAYD',
+    5: 'DAYE', 13: 'DAYE', 20: 'DAYE', 27: 'DAYE',
+    6: 'DAYF', 14: 'DAYF', 21: 'DAYF', 28: 'DAYF',
+    7: 'DAYG', 29: 'DAYG',
+    30: 'DAYH',
+    8: 'DAYI', 15: 'DAYI', 22: 'DAYI', 31: 'DAYI'
+}
 
+# ===================================================================
+# Helper Functions
+# ===================================================================
 
-   IF TYPE = 'C' THEN OUTPUT EQC;
-                 ELSE OUTPUT EQI;
-RUN;
-PROC SORT DATA=EQC &EQCVAR; BY TICKETNO; RUN;
-PROC SORT DATA=EQI &EQIVAR; BY TICKETNO; RUN;
+def ensure_directory(path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
 
- /*** CUSTOMER LEG ***/
-DATA EQDCI;
-   MERGE DPST(IN=A) EQC(IN=B);
-   BY TICKETNO;
-   IF A AND B;
-   IF CUSTCODE >= 80;
-RUN;
+def format_path_with_date(path, date_vars):
+    result = path
+    for key, value in date_vars.items():
+        result = result.replace(f'{{{key}}}', str(value))
+    return result
 
- /*** CALLABLE RANGE ACCRUAL (CRA) ***/
-DATA DPCRA;
-   INFILE CRA;
-   INPUT @001 BRANCH            $3.
-         @007 CUSTICKETNO      $60.
-         @067 INVCURAC         PD6.
-         @073 CUSTNAME        $140.
-         @443 INVAMT           PD7.2
-         @450 STARTDT     YYMMDD10.
-         @460 MATDT       YYMMDD10.
-         @477 DCIRT            PD7.7
-         @486 TENOR            PD2.
-         @488 INV_STATUS        $3.
-         @494 ACCINT           PD8.6
-         @839 CUSTCODE_DB2       2.
-         ;
-   IF INV_STATUS IN ('ACT','CEP','CEU','CCU','CMU');
-   STATUSIND = 'Outstanding';
-   INVCURR   = 'MYR';
-   PREMPAID  = 0;
-RUN;
-PROC SORT DATA=DPCRA; BY INVCURAC; RUN;
+def get_input_path(file_key, date_vars):
+    path = INPUT_PATHS[file_key]
+    return format_path_with_date(path, date_vars)
 
-DATA DEPO(RENAME=(ACCTNO=INVCURAC));
-   SET MNITB.SAVING (KEEP=ACCTNO CUSTCODE)
-       MNITB.CURRENT(KEEP=ACCTNO CUSTCODE);
-RUN;
-PROC SORT DATA=DEPO; BY INVCURAC; RUN;
+def get_output_path(file_key, date_vars):
+    path = OUTPUT_PATHS[file_key]
+    return format_path_with_date(path, date_vars)
 
-DATA DPCRA;
-   MERGE DPCRA(IN=A) DEPO;
-   BY INVCURAC;
-   IF A;
-   IF CUSTCODE >= 80;
-RUN;
+def load_fixed_width_file(file_path, widths, columns, dtypes=None, encoding='utf-8'):
+    try:
+        with open(file_path, 'r', encoding=encoding) as f:
+            lines = f.readlines()
+    except UnicodeDecodeError:
+        print(f"  Warning: UTF-8 decoding failed, trying Latin-1 encoding for {file_path}")
+        with open(file_path, 'r', encoding='latin-1') as f:
+            lines = f.readlines()
+    except Exception:
+        print(f"  Warning: Reading as binary with Latin-1 decoding for {file_path}")
+        with open(file_path, 'rb') as f:
+            content = f.read()
+            text = content.decode('latin-1', errors='replace')
+            lines = text.splitlines(keepends=True)
+    
+    data = []
+    for line in lines:
+        if line.strip():
+            row = {}
+            start = 0
+            for i, width in enumerate(widths):
+                field = line[start:start+width].strip()
+                col_name = columns[i]
+                
+                if dtypes and col_name in dtypes:
+                    dtype = dtypes[col_name]
+                    if dtype == pl.Int64:
+                        try:
+                            row[col_name] = int(field) if field else None
+                        except:
+                            row[col_name] = None
+                    elif dtype == pl.Float64:
+                        try:
+                            row[col_name] = float(field) if field else None
+                        except:
+                            row[col_name] = None
+                    else:
+                        row[col_name] = field
+                else:
+                    row[col_name] = field
+                
+                start += width
+            data.append(row)
+    
+    return pl.DataFrame(data)
 
-DATA EQDCI;
-   SET DPCRA EQDCI;
-   ACCINT    = ROUND(ACCINT,.01);
-RUN;
-PROC SORT DATA=EQDCI; BY INVCURR; RUN;
+def load_sas_file_fast(file_path, columns_to_keep=None):
+    try:
+        try:
+            df, meta = pyreadstat.read_sas7bdat(file_path, columns=columns_to_keep)
+            return pl.DataFrame(df)
+        except TypeError:
+            print(f"  Note: pyreadstat doesn't support column selection, loading full file then filtering...")
+            df, meta = pyreadstat.read_sas7bdat(file_path)
+            pl_df = pl.DataFrame(df)
+            if columns_to_keep:
+                existing_cols = [col for col in columns_to_keep if col in pl_df.columns]
+                if existing_cols:
+                    return pl_df.select(existing_cols)
+            return pl_df
+    except Exception as e:
+        print(f"Error loading SAS file {file_path}: {e}")
+        raise
 
-PROC SORT DATA=EQRT.EQRATE&REPTYEAR&REPTMON&REPTDAY
-          OUT =EQRATE(RENAME=(CURRENCY=INVCURR SPOTRATE=SPOTRT));
-   BY CURRENCY;
-RUN;
+def load_mnitb_with_cache(file_path, cache_path, columns_to_keep=['ACCTNO', 'CUSTCODE']):
+    ensure_directory(cache_path)
+    
+    if os.path.exists(cache_path):
+        print(f"  ✓ Loading from Parquet cache: {cache_path}")
+        return pl.read_parquet(cache_path)
+    else:
+        print(f"  Converting SAS to Parquet (first time, this may take a moment)...")
+        try:
+            try:
+                df, meta = pyreadstat.read_sas7bdat(file_path, columns=columns_to_keep)
+                pl_df = pl.DataFrame(df)
+            except TypeError:
+                print(f"  Note: pyreadstat doesn't support column selection, loading full file then filtering...")
+                df, meta = pyreadstat.read_sas7bdat(file_path)
+                pl_df = pl.DataFrame(df)
+                existing_cols = [col for col in columns_to_keep if col in pl_df.columns]
+                if existing_cols:
+                    pl_df = pl_df.select(existing_cols)
+            
+            pl_df.write_parquet(cache_path)
+            print(f"  ✓ Converted and cached to Parquet: {cache_path}")
+            return pl_df
+        except Exception as e:
+            print(f"  ✗ Error loading SAS file {file_path}: {e}")
+            raise
 
-DATA EQDCI;
-   MERGE EQDCI(IN=A) EQRATE(KEEP=INVCURR SPOTRT);
-   BY INVCURR;
-   IF A;
-   IF INVCURR = 'JPY' THEN DO;
-      ACCINTX = ROUND(ACCINT,1.00);
-      PREMPAI = ROUND(PREMPAID,1.00);
-   END;
-   ELSE DO;
-      ACCINTX = ROUND(ACCINT,0.01);
-      PREMPAI = ROUND(PREMPAID,0.01);
-   END;
-   ACCINTRM   = ACCINTX * SPOTRT;
-   PREMPAIDRM = PREMPAI * SPOTRT;
-   DROP ACCINTX PREMPAI;
-RUN;
+def load_eqfl_file(file_path, separator='|', columns=None, dtypes=None):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    except UnicodeDecodeError:
+        with open(file_path, 'r', encoding='latin-1') as f:
+            lines = f.readlines()
+    
+    data = []
+    for line in lines:
+        line = line.strip()
+        if line:
+            fields = line.split(separator)
+            if len(fields) > len(columns):
+                fields = fields[:len(columns)]
+            elif len(fields) < len(columns):
+                fields.extend([None] * (len(columns) - len(fields)))
+            
+            row = {}
+            for i, col_name in enumerate(columns):
+                field = fields[i].strip() if i < len(fields) and fields[i] else ''
+                
+                if dtypes and col_name in dtypes:
+                    dtype = dtypes[col_name]
+                    if dtype == pl.Int64:
+                        try:
+                            row[col_name] = int(field) if field else None
+                        except:
+                            row[col_name] = None
+                    elif dtype == pl.Float64:
+                        try:
+                            row[col_name] = float(field) if field else None
+                        except:
+                            row[col_name] = None
+                    else:
+                        row[col_name] = field
+                else:
+                    row[col_name] = field
+            data.append(row)
+    
+    return pl.DataFrame(data)
 
-DATA CUSMYR CUSFCY;
-   SET EQDCI;
-   IF INVCURR = 'MYR' THEN OUTPUT CUSMYR;
-                      ELSE OUTPUT CUSFCY;
-RUN;
+def ensure_join_key_type(df, column_name, target_type=pl.Int64):
+    if column_name in df.columns:
+        return df.with_columns([
+            pl.col(column_name).cast(target_type)
+        ])
+    return df
 
-PROC PRINTTO PRINT=DCITXT NEW;
-%MACRO PRNRPT(DSN,TYPE,PROD);
-   PROC PRINT DATA=&DSN;
-      TITLE1 'PUBLIC BANK BERHAD';
-      TITLE2 "DAILY EXTRACTION OF &PROD CUSTOMER FOR "
-             "&TYPE" ' AS AT ' "&RDATE";
-      FORMAT CUSTICKETNO $30. TICKETNO $7.;
-      FORMAT CUSTNAME $27.;
-      FORMAT CUSTCODE 5.;
-      FORMAT BRANCH INVCURR ALTCURR $3.;
-      FORMAT INVCURAC ALTCURAC 11.;
-      FORMAT INVAMT ALTAMT ACCINT ACCINTRM PREMPAID PREMPAIDRM 10.2;
-      FORMAT TENOR 3.;
-      FORMAT SPOTRT 11.7;
-      FORMAT DCIRT 8.5;
-      FORMAT STATUSIND $15.;
-      FORMAT STARTDT MATDT DDMMYY8.;
-      VAR CUSTICKETNO TICKETNO CUSTNAME CUSTCODE BRANCH
-          INVCURAC ALTCURAC INVCURR ALTCURR INVAMT ALTAMT
-          TENOR SPOTRT DCIRT STATUSIND STARTDT MATDT
-          ACCINT ACCINTRM PREMPAID PREMPAIDRM;
-      SUM ACCINT ACCINTRM PREMPAID PREMPAIDRM;
-   RUN;
-%MEND;
-%PRNRPT(CUSMYR,MYR,DCI/CRA);
-%PRNRPT(CUSFCY,FCY,DCI);
+def write_sas_file(df, file_path):
+    try:
+        import saspy
+        print("  Connecting to SAS session...")
+        sas = saspy.SASsession()
+        
+        df_pd = df.to_pandas()
+        filename = os.path.basename(file_path)
+        dataset_name = filename.replace('.sas7bdat', '')
+        
+        print(f"  Writing SAS dataset: {dataset_name}...")
+        sas.df2sd(df_pd, table=dataset_name, libref='user')
+        
+        sas.submit(f'''
+            libname outlib "{os.path.dirname(file_path)}";
+            proc copy in=user out=outlib;
+                select {dataset_name};
+            run;
+        ''')
+        
+        print(f"  ✓ SAS dataset written using saspy: {file_path}")
+        return True
+        
+    except ImportError:
+        print("  ⚠ saspy not installed. Installing saspy...")
+        try:
+            import subprocess
+            subprocess.check_call(['pip', 'install', 'saspy'])
+            print("  ✓ saspy installed successfully!")
+            return write_sas_file(df, file_path)
+        except Exception as e:
+            print(f"  ✗ Could not install saspy: {e}")
+            csv_path = file_path.replace('.sas7bdat', '.csv')
+            df.write_csv(csv_path)
+            print(f"  ✓ CSV fallback written: {csv_path}")
+            return False
+    except Exception as e:
+        print(f"  ✗ Could not write SAS file with saspy: {e}")
+        csv_path = file_path.replace('.sas7bdat', '.csv')
+        df.write_csv(csv_path)
+        print(f"  ✓ CSV fallback written: {csv_path}")
+        return False
 
- /*** COUNTERPARTY LEG (INTERBANK) ***/
-DATA EQDCI;
-   SET EQI;
-   IF FISSCODE >= 80;
-RUN;
-PROC SORT DATA=EQDCI; BY INVCURR; RUN;
+def safe_concat(dfs):
+    non_empty = [df for df in dfs if len(df) > 0]
+    if not non_empty:
+        return pl.DataFrame()
+    if len(non_empty) == 1:
+        return non_empty[0]
+    common_cols = set(non_empty[0].columns)
+    for df in non_empty[1:]:
+        common_cols = common_cols.intersection(set(df.columns))
+    common_cols = list(common_cols)
+    aligned_dfs = [df.select(common_cols) for df in non_empty]
+    return pl.concat(aligned_dfs)
 
-DATA EQDCI;
-   MERGE EQDCI(IN=A) EQRATE(KEEP=INVCURR SPOTRT);
-   BY INVCURR;
-   IF A;
-   IF INVCURR = 'JPY' THEN DO;
-      PREMREX = ROUND(PREMREC,1.00);
-   END;
-   ELSE DO;
-      PREMREX = ROUND(PREMREC,0.01);
-   END;
-   PREMRECRM  = PREMREX * SPOTRT;
-   DROP PREMREX;
-RUN;
+def convert_sas_date(sas_date):
+    """Convert SAS date (days since 1960-01-01) to string format DD/MM/YY"""
+    if sas_date is None or sas_date == 0:
+        return ''
+    try:
+        base_date = datetime(1960, 1, 1)
+        target_date = base_date + timedelta(days=int(float(sas_date)))
+        return target_date.strftime("%d/%m/%y")
+    except:
+        return str(sas_date)
 
-DATA IBNMYR IBNFCY;
-   SET EQDCI;
-   IF INVCURR = 'MYR' THEN OUTPUT IBNMYR;
-                      ELSE OUTPUT IBNFCY;
-RUN;
+def format_date(val):
+    """Format date value for display"""
+    if val is None or val == '':
+        return ''
+    try:
+        if isinstance(val, str):
+            if val.isdigit():
+                return convert_sas_date(float(val))
+            return val
+        if isinstance(val, (int, float)):
+            return convert_sas_date(val)
+        return str(val)
+    except:
+        return str(val)
 
-%MACRO PRNRPT(DSN,TYPE);
-   PROC PRINT DATA=&DSN;
-      TITLE1 'PUBLIC BANK BERHAD';
-      TITLE2 'DAILY EXTRACTION OF DCI INTERBANK FOR '
-             "&TYPE" ' AS AT ' "&RDATE";
-      FORMAT CUSTICKETNO TICKETNO $7.;
-      FORMAT CUSTNAME $30.;
-      FORMAT CUSTRES FISSCODE $2.;
-      FORMAT CUSTLOC EQCUSTYP BRANCH INVCURR ALTCURR $3.;
-      FORMAT INVAMT ALTAMT PREMREC PREMRECRM 10.2;
-      FORMAT TENOR 3.;
-      FORMAT SPOTRT 11.7;
-      FORMAT STATUSIND $15.;
-      FORMAT STARTDT MATDT DDMMYY8.;
-      VAR CUSTICKETNO TICKETNO CUSTNAME CUSTRES CUSTLOC
-          FISSCODE EQCUSTYP BRANCH INVCURR ALTCURR INVAMT ALTAMT
-          TENOR SPOTRT STATUSIND STARTDT MATDT PREMREC PREMRECRM;
-      SUM PREMREC PREMRECRM;
-   RUN;
-%MEND;
-%PRNRPT(IBNMYR,MYR);
-%PRNRPT(IBNFCY,FCY);
+# ===================================================================
+# Main Processing
+# ===================================================================
 
-DATA DCIMYR;
-   SET CUSMYR IBNMYR;
-   IF TYPE = 'C' THEN PREMIUM = PREMPAID;
-                 ELSE PREMIUM = PREMREC;
-RUN;
+def main():
+    yesterday = date.today() - timedelta(days=1)
+    today = yesterday
+    REPTDAY = f"{today.day:02d}"
+    REPTMON = f"{today.month:02d}"
+    REPTYEAR = f"{today.year % 100:02d}"
+    REPTYEAR4 = f"{today.year:04d}"
+    RDATE = today.strftime("%d/%m/%Y")
 
-DATA DCI;
-   SET DCIMYR;
-   REPTDATS=&INDATES;
-   IF DAY(REPTDATS) IN (1,09,16,23)  THEN ELDAY='DAYA'; ELSE
-   IF DAY(REPTDATS) IN (2,10,17,24)  THEN ELDAY='DAYB'; ELSE
-   IF DAY(REPTDATS) IN (3,11,18,25)  THEN ELDAY='DAYC'; ELSE
-   IF DAY(REPTDATS) IN (4,12,19,26)  THEN ELDAY='DAYD'; ELSE
-   IF DAY(REPTDATS) IN (5,13,20,27)  THEN ELDAY='DAYE'; ELSE
-   IF DAY(REPTDATS) IN (6,14,21,28)  THEN ELDAY='DAYF'; ELSE
-   IF DAY(REPTDATS) IN (7,29)        THEN ELDAY='DAYG'; ELSE
-   IF DAY(REPTDATS) IN (30)          THEN ELDAY='DAYH'; ELSE
-   IF DAY(REPTDATS) IN (8,15,22,31)  THEN ELDAY='DAYI';
+    day = today.day
+    if 1 <= day <= 8:
+        WK = "1"
+    elif 9 <= day <= 15:
+        WK = "2"
+    elif 16 <= day <= 22:
+        WK = "3"
+    else:
+        WK = "4"
 
-   IF MONTH(REPTDATS) IN (4,6,9,11)  THEN DO;
-      IF DAY(REPTDATS)=30            THEN ELDAY='DAYI';
-   END;
+    date_vars = {
+        'yyyy': REPTYEAR4,
+        'yy': REPTYEAR,
+        'mm': REPTMON,
+        'dd': REPTDAY,
+        'date': f"{REPTYEAR}{REPTMON}{REPTDAY}",
+        'day': REPTDAY,
+        'mon': REPTMON,
+        'year': REPTYEAR,
+        'wk': WK,
+        'rdate': RDATE
+    }
 
-   YY=YEAR(REPTDATS);
-   IF MONTH(REPTDATS) EQ 2           THEN DO;
-      IF DAY(REPTDATS)=28            THEN ELDAY='DAYI';
-      IF MOD(YY,4)=0 THEN DO;
-         IF DAY(REPTDATS)=28         THEN ELDAY='DAYF'; ELSE
-         IF DAY(REPTDATS)=29         THEN ELDAY='DAYI';
-      END;
-   END;
+    print(f"Running EIBDCITX for {RDATE} (WK={WK}) - Processing YESTERDAY'S data")
+    print("=" * 80)
 
-   IF ACCINTRM NOT IN (.,0) THEN DO;
-      BNMCODE='4911095000000Y'; AMOUNT=ACCINTRM;
-      OUTPUT;
-   END;
+    for output_path in OUTPUT_PATHS.values():
+        ensure_directory(output_path)
 
-   IF PREMIUM NOT IN (.,0) THEN DO;
-      BNMCODE='4929996000000Y'; AMOUNT=PREMIUM;
-      OUTPUT;
-   END;
-RUN;
+    # -------------------------------------------------------------------
+    # Load raw datasets
+    # -------------------------------------------------------------------
+    print("\nLoading input files...")
+    
+    try:
+        dpfl_path = get_input_path("DPFL", date_vars)
+        dpfl = load_fixed_width_file(
+            dpfl_path,
+            FILE_FORMATS["DPFL"]["widths"],
+            FILE_FORMATS["DPFL"]["columns"],
+            FILE_FORMATS["DPFL"]["dtypes"]
+        )
+        print(f"  ✓ Loaded DPFL: {len(dpfl):,} rows from {dpfl_path}")
+    except Exception as e:
+        print(f"  ✗ Error loading DPFL: {e}")
+        return
 
-PROC SUMMARY DATA=DCI NWAY;
-CLASS  BNMCODE ELDAY REPTDATS;
-VAR    AMOUNT;
-OUTPUT OUT=DCI (DROP=_TYPE_ _FREQ_) SUM=;
+    try:
+        eqfl_path = get_input_path("EQFL", date_vars)
+        eqfl = load_eqfl_file(
+            eqfl_path,
+            separator=FILE_FORMATS["EQFL"]["separator"],
+            columns=FILE_FORMATS["EQFL"]["columns"],
+            dtypes=FILE_FORMATS["EQFL"]["dtypes"]
+        )
+        print(f"  ✓ Loaded EQFL: {len(eqfl):,} rows from {eqfl_path}")
+    except Exception as e:
+        print(f"  ✗ Error loading EQFL: {e}")
+        return
 
-%MACRO DELDUP;
-   %IF "&REPTDAY" EQ "01" OR
-       "&REPTDAY" EQ "09" OR
-       "&REPTDAY" EQ "16" OR
-       "&REPTDAY" EQ "23" %THEN %DO;
-      PROC DATASETS LIB=BNMK NOLIST;
-         DELETE DCI&REPTMON&WK;
-      RUN;
-   %END;
-   %ELSE %DO;
-      DATA BNMK.DCI&REPTMON&WK;
-         SET BNMK.DCI&REPTMON&WK;
-         IF REPTDATS = &INDATES THEN DELETE;
-      RUN;
-   %END;
-%MEND;
-%DELDUP;
-PROC APPEND DATA=DCI BASE=BNMK.DCI&REPTMON&WK; RUN;
+    try:
+        cra_path = get_input_path("CRA", date_vars)
+        if not os.path.exists(cra_path):
+            cra_path_txt = cra_path + ".txt"
+            if os.path.exists(cra_path_txt):
+                cra_path = cra_path_txt
+            else:
+                print(f"  ✗ CRA file not found")
+                return
+        
+        cra = load_fixed_width_file(
+            cra_path,
+            FILE_FORMATS["CRA"]["widths"],
+            FILE_FORMATS["CRA"]["columns"],
+            FILE_FORMATS["CRA"]["dtypes"],
+            encoding=FILE_FORMATS["CRA"].get("encoding", "latin1")
+        )
+        print(f"  ✓ Loaded CRA: {len(cra):,} rows from {cra_path}")
+        cra = ensure_join_key_type(cra, 'INVCURAC', pl.Int64)
+    except Exception as e:
+        print(f"  ✗ Error loading CRA: {e}")
+        return
+
+    try:
+        eqrate_path = get_input_path("EQRATE", date_vars)
+        eqrt = load_sas_file_fast(eqrate_path)
+        print(f"  ✓ Loaded EQRATE: {len(eqrt):,} rows from {eqrate_path}")
+    except Exception as e:
+        print(f"  ✗ Error loading EQRATE: {e}")
+        return
+
+    try:
+        mnitb_saving_path = get_input_path("MNITB_SAVING", date_vars)
+        mnitb_saving_cache = PARQUET_CACHE["MNITB_SAVING"]
+        print(f"  Loading MNITB Saving...")
+        mnitb_saving = load_mnitb_with_cache(
+            mnitb_saving_path, 
+            mnitb_saving_cache,
+            columns_to_keep=['ACCTNO', 'CUSTCODE']
+        )
+        print(f"  ✓ Loaded MNITB Saving: {len(mnitb_saving):,} rows")
+        
+        mnitb_current_path = get_input_path("MNITB_CURRENT", date_vars)
+        mnitb_current_cache = PARQUET_CACHE["MNITB_CURRENT"]
+        print(f"  Loading MNITB Current...")
+        mnitb_current = load_mnitb_with_cache(
+            mnitb_current_path,
+            mnitb_current_cache,
+            columns_to_keep=['ACCTNO', 'CUSTCODE']
+        )
+        print(f"  ✓ Loaded MNITB Current: {len(mnitb_current):,} rows")
+    except Exception as e:
+        print(f"  ✗ Error loading MNITB files: {e}")
+        return
+
+    try:
+        dcid_path = get_input_path("DCID", date_vars)
+        dcid = load_sas_file_fast(dcid_path)
+        print(f"  ✓ Loaded DCID: {len(dcid):,} rows from {dcid_path}")
+    except Exception as e:
+        print(f"  ✗ Error loading DCID: {e}")
+        return
+
+    print("\n" + "=" * 80)
+
+    # -------------------------------------------------------------------
+    # Process DPST
+    # -------------------------------------------------------------------
+    print("\nProcessing DPST...")
+    dpst = dpfl.with_columns([pl.col("ACCINT").cast(pl.Float64)])
+    dpst = dpst.join(dcid, on="TICKETNO", how="left")
+    print(f"  DPST after merge: {len(dpst):,} rows")
+
+    # -------------------------------------------------------------------
+    # Process EQ data
+    # -------------------------------------------------------------------
+    print("\nProcessing EQ data...")
+    
+    eq = eqfl.with_columns([
+        pl.col("ACCINTRM").abs(),
+        pl.col("ACCINTAMT").abs(),
+        pl.col("TOTINTAMT").abs(),
+        pl.col("PREMPAID").abs(),
+        pl.col("PREMREC").abs(),
+        pl.col("STARTDT").cast(pl.Utf8),
+        pl.col("MATDT").cast(pl.Utf8),
+    ])
+    
+    eq = eq.filter((pl.col("STARTDT") <= str(today)) & (pl.col("MATDT") >= str(today)))
+    print(f"  EQ after date filter: {len(eq):,} rows")
+
+    eqc = eq.filter(pl.col("TYPE") == "C")
+    eqi = eq.filter(pl.col("TYPE") != "C")
+    eqc = eqc.select(EQC_KEEP_COLS)
+    eqi = eqi.select(EQI_KEEP_COLS)
+    print(f"  EQC: {len(eqc):,} rows, EQI: {len(eqi):,} rows")
+
+    # -------------------------------------------------------------------
+    # Customer Leg
+    # -------------------------------------------------------------------
+    print("\nProcessing Customer Leg...")
+    eqdci = dpst.join(eqc, on="TICKETNO", how="inner")
+    eqdci = eqdci.filter(pl.col("CUSTCODE") >= REPORT_CONFIG["MIN_CUSTCODE"])
+    print(f"  EQDCI after join: {len(eqdci):,} rows")
+
+    dp_cra = cra.filter(pl.col("INV_STATUS").is_in(REPORT_CONFIG["VALID_STATUSES"]))
+    if len(dp_cra) == 0:
+        print("  Note: No CRA records with valid status")
+        dp_cra = pl.DataFrame({
+            'BRANCH': [], 'CUSTICKETNO': [], 'INVCURAC': [], 'CUSTNAME': [],
+            'INVAMT': [], 'STARTDT': [], 'MATDT': [], 'DCIRT': [],
+            'TENOR': [], 'INV_STATUS': [], 'ACCINT': [], 'CUSTCODE_DB2': []
+        })
+    
+    if len(dp_cra) > 0:
+        dp_cra = dp_cra.with_columns([
+            pl.lit("Outstanding").alias("STATUSIND"),
+            pl.lit(REPORT_CONFIG["MYR_CURRENCY"]).alias("INVCURR"),
+            pl.lit(0.0).alias("PREMPAID"),
+            pl.lit(0.0).alias("ACCINT")
+        ])
+
+    depo = pl.concat([mnitb_saving, mnitb_current])
+    depo = depo.rename({"ACCTNO": "INVCURAC"})
+    print(f"  DEPO combined: {len(depo):,} rows")
+    depo = ensure_join_key_type(depo, 'INVCURAC', pl.Int64)
+
+    if len(dp_cra) > 0 and len(depo) > 0:
+        dp_cra = dp_cra.join(depo, on="INVCURAC", how="inner")
+        dp_cra = dp_cra.filter(pl.col("CUSTCODE") >= REPORT_CONFIG["MIN_CUSTCODE"])
+        print(f"  CRA after processing: {len(dp_cra):,} rows")
+    else:
+        print("  Note: No CRA or DEPO data to join")
+        dp_cra = pl.DataFrame()
+
+    if len(dp_cra) > 0:
+        eqdci = pl.concat([eqdci, dp_cra])
+    print(f"  Combined EQDCI: {len(eqdci):,} rows")
+
+    # -------------------------------------------------------------------
+    # FX enrichment
+    # -------------------------------------------------------------------
+    eqrt = eqrt.rename({"CURRENCY": "INVCURR", "SPOTRATE": "SPOTRT"})
+    
+    # Create MYR row with all necessary columns
+    # Get the columns from eqrt
+    eqrt_cols = eqrt.columns
+    
+    # Create a dictionary for MYR row with null values for all columns except INVCURR and SPOTRT
+    myr_row_dict = {col: None for col in eqrt_cols}
+    myr_row_dict['INVCURR'] = 'MYR'
+    myr_row_dict['SPOTRT'] = 1.0000000
+    
+    # Create the MYR row as a DataFrame with the same columns as eqrt
+    myr_row = pl.DataFrame([myr_row_dict])
+    
+    # Concatenate
+    eqrt_with_myr = pl.concat([eqrt, myr_row])
+    eqrt_with_myr = eqrt_with_myr.unique(subset=['INVCURR'], keep='first')
+    
+    eqdci = eqdci.join(eqrt_with_myr.select(['INVCURR', 'SPOTRT']), on="INVCURR", how="left")
+
+    # Round based on currency
+    eqdci = eqdci.with_columns([
+        pl.when(pl.col("INVCURR") == REPORT_CONFIG["JPY_CURRENCY"])
+        .then(pl.col("ACCINT").round(REPORT_CONFIG["DECIMAL_PLACES_JPY"]))
+        .otherwise(pl.col("ACCINT").round(REPORT_CONFIG["DECIMAL_PLACES_OTHER"]))
+        .alias("ACCINTX"),
+        pl.when(pl.col("INVCURR") == REPORT_CONFIG["JPY_CURRENCY"])
+        .then(pl.col("PREMPAID").round(REPORT_CONFIG["DECIMAL_PLACES_JPY"]))
+        .otherwise(pl.col("PREMPAID").round(REPORT_CONFIG["DECIMAL_PLACES_OTHER"]))
+        .alias("PREMPAI")
+    ])
+
+    eqdci = eqdci.with_columns([
+        (pl.col("ACCINTX") * pl.col("SPOTRT")).alias("ACCINTRM"),
+        (pl.col("PREMPAI") * pl.col("SPOTRT")).alias("PREMPAIDRM")
+    ])
+
+    cusmyr = eqdci.filter(pl.col("INVCURR") == REPORT_CONFIG["MYR_CURRENCY"])
+    cusfcy = eqdci.filter(pl.col("INVCURR") != REPORT_CONFIG["MYR_CURRENCY"])
+    print(f"  Customer MYR: {len(cusmyr):,} rows, FCY: {len(cusfcy):,} rows")
+
+    # -------------------------------------------------------------------
+    # Interbank leg
+    # -------------------------------------------------------------------
+    print("\nProcessing Interbank Leg...")
+    ibnmyr = pl.DataFrame()
+    ibnfcy = pl.DataFrame()
+    
+    if len(eqi) > 0:
+        eqdci_ib = eqi.filter(pl.col("FISSCODE") >= "80")
+        eqdci_ib = eqdci_ib.join(eqrt_with_myr.select(['INVCURR', 'SPOTRT']), on="INVCURR", how="left")
+
+        eqdci_ib = eqdci_ib.with_columns([
+            pl.when(pl.col("INVCURR") == REPORT_CONFIG["JPY_CURRENCY"])
+            .then(pl.col("PREMREC").round(REPORT_CONFIG["DECIMAL_PLACES_JPY"]))
+            .otherwise(pl.col("PREMREC").round(REPORT_CONFIG["DECIMAL_PLACES_OTHER"]))
+            .alias("PREMREX")
+        ])
+
+        eqdci_ib = eqdci_ib.with_columns([
+            (pl.col("PREMREX") * pl.col("SPOTRT")).alias("PREMRECRM")
+        ])
+
+        ibnmyr = eqdci_ib.filter(pl.col("INVCURR") == REPORT_CONFIG["MYR_CURRENCY"])
+        ibnfcy = eqdci_ib.filter(pl.col("INVCURR") != REPORT_CONFIG["MYR_CURRENCY"])
+        print(f"  Interbank MYR: {len(ibnmyr):,} rows, FCY: {len(ibnfcy):,} rows")
+    else:
+        print("  No interbank data to process")
+
+    # -------------------------------------------------------------------
+    # Write DCITXT
+    # -------------------------------------------------------------------
+    text_path = get_output_path("TEXT", date_vars)
+    ensure_directory(text_path)
+    
+    print(f"\nWriting DCITXT output to {text_path}...")
+    timestamp = datetime.now().strftime("%H:%M %A, %B %d, %Y")
+    
+    with open(text_path, "w") as f:
+        # Customer MYR section
+        f.write(" " * 52 + "PUBLIC BANK BERHAD" + " " * 60 + f"{timestamp}   1\n")
+        f.write(f"{' ' * 82}DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR MYR AS AT {RDATE}\n")
+        f.write(" Obs CUSTICKETNO                    TICKETNO CUSTNAME                    CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     ACCINT   ACCINTRM   PREMPAID PREMPAIDRM\n")
+        
+        obs = 1
+        for row in cusmyr.iter_rows(named=True):
+            startdt = format_date(row.get('STARTDT', ''))
+            matdt = format_date(row.get('MATDT', ''))
+            
+            row_str = (f"{obs:>4} "
+                      f"{str(row.get('CUSTICKETNO', '')):>26} "
+                      f"{str(row.get('TICKETNO', '')):>10} "
+                      f"{str(row.get('CUSTNAME', '')):>30} "
+                      f"{row.get('CUSTCODE', 0):>8} "
+                      f"{str(row.get('BRANCH', '')):>8} "
+                      f"{str(row.get('INVCURAC', '')):>12} "
+                      f"{str(row.get('ALTCURAC', '')):>12} "
+                      f"{str(row.get('INVCURR', '')):>8} "
+                      f"{str(row.get('ALTCURR', '')):>8} "
+                      f"{row.get('INVAMT', 0):>12,.2f} "
+                      f"{row.get('ALTAMT', 0):>12,.2f} "
+                      f"{row.get('TENOR', 0):>6} "
+                      f"{row.get('SPOTRT', 0):>12.7f} "
+                      f"{row.get('DCIRT', 0):>8.5f} "
+                      f"{str(row.get('STATUSIND', '')):>12} "
+                      f"{startdt:>12} "
+                      f"{matdt:>12} "
+                      f"{row.get('ACCINT', 0):>10,.2f} "
+                      f"{row.get('ACCINTRM', 0):>10,.2f} "
+                      f"{row.get('PREMPAID', 0):>10,.2f} "
+                      f"{row.get('PREMPAIDRM', 0):>10,.2f}")
+            f.write(row_str + "\n")
+            obs += 1
+        
+        # Summary line for MYR
+        if len(cusmyr) > 0:
+            total_accint = cusmyr['ACCINT'].sum()
+            total_accintrm = cusmyr['ACCINTRM'].sum()
+            total_prempaid = cusmyr['PREMPAID'].sum()
+            total_prempaidrm = cusmyr['PREMPAIDRM'].sum()
+            
+            f.write(f"{' ' * 77}{'=' * 10} {'=' * 10} {'=' * 10} {'=' * 10}\n")
+            f.write(f"{' ' * 77}{total_accint:>10,.2f} {total_accintrm:>10,.2f} {total_prempaid:>10,.2f} {total_prempaidrm:>10,.2f}\n")
+        
+        # Customer FCY section
+        if len(cusfcy) > 0:
+            timestamp2 = datetime.now().strftime("%H:%M %A, %B %d, %Y")
+            f.write(f"\n{' ' * 52}PUBLIC BANK BERHAD{' ' * 60}{timestamp2}   2\n")
+            f.write(f"{' ' * 82}DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR FCY AS AT {RDATE}\n")
+            f.write(" Obs CUSTICKETNO                    TICKETNO CUSTNAME                    CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     ACCINT   ACCINTRM   PREMPAID PREMPAIDRM\n")
+            
+            obs = 1
+            for row in cusfcy.iter_rows(named=True):
+                startdt = format_date(row.get('STARTDT', ''))
+                matdt = format_date(row.get('MATDT', ''))
+                
+                row_str = (f"{obs:>4} "
+                          f"{str(row.get('CUSTICKETNO', '')):>26} "
+                          f"{str(row.get('TICKETNO', '')):>10} "
+                          f"{str(row.get('CUSTNAME', '')):>30} "
+                          f"{row.get('CUSTCODE', 0):>8} "
+                          f"{str(row.get('BRANCH', '')):>8} "
+                          f"{str(row.get('INVCURAC', '')):>12} "
+                          f"{str(row.get('ALTCURAC', '')):>12} "
+                          f"{str(row.get('INVCURR', '')):>8} "
+                          f"{str(row.get('ALTCURR', '')):>8} "
+                          f"{row.get('INVAMT', 0):>12,.2f} "
+                          f"{row.get('ALTAMT', 0):>12,.2f} "
+                          f"{row.get('TENOR', 0):>6} "
+                          f"{row.get('SPOTRT', 0):>12.7f} "
+                          f"{row.get('DCIRT', 0):>8.5f} "
+                          f"{str(row.get('STATUSIND', '')):>12} "
+                          f"{startdt:>12} "
+                          f"{matdt:>12} "
+                          f"{row.get('ACCINT', 0):>10,.2f} "
+                          f"{row.get('ACCINTRM', 0):>10,.2f} "
+                          f"{row.get('PREMPAID', 0):>10,.2f} "
+                          f"{row.get('PREMPAIDRM', 0):>10,.2f}")
+                f.write(row_str + "\n")
+                obs += 1
+            
+            total_accint = cusfcy['ACCINT'].sum()
+            total_accintrm = cusfcy['ACCINTRM'].sum()
+            total_prempaid = cusfcy['PREMPAID'].sum()
+            total_prempaidrm = cusfcy['PREMPAIDRM'].sum()
+            
+            f.write(f"{' ' * 77}{'=' * 10} {'=' * 10} {'=' * 10} {'=' * 10}\n")
+            f.write(f"{' ' * 77}{total_accint:>10,.2f} {total_accintrm:>10,.2f} {total_prempaid:>10,.2f} {total_prempaidrm:>10,.2f}\n")
+
+    print(f"  ✓ DCITXT written to {text_path}")
+
+    # -------------------------------------------------------------------
+    # Build DCI
+    # -------------------------------------------------------------------
+    print("\nBuilding DCI final output...")
+    
+    dcimyr = safe_concat([cusmyr, ibnmyr])
+    
+    if len(dcimyr) > 0:
+        print(f"  Combined data for DCI: {len(dcimyr)} rows")
+        
+        dcimyr = dcimyr.with_columns([
+            pl.when(pl.col("TYPE") == "C")
+            .then(pl.col("PREMPAID"))
+            .otherwise(pl.col("PREMREC"))
+            .alias("PREMIUM"),
+            pl.lit(today).alias("REPTDATS")
+        ])
+
+        def calc_elday(d):
+            dd = d.day
+            mm = d.month
+            yy = d.year
+            elday = ELDAY_MAPPING.get(dd, 'DAYX')
+            if mm in (4, 6, 9, 11) and dd == 30:
+                elday = 'DAYI'
+            if mm == 2:
+                if dd == 28:
+                    elday = 'DAYI'
+                    if yy % 4 == 0:
+                        elday = 'DAYF'
+                if dd == 29 and yy % 4 == 0:
+                    elday = 'DAYI'
+            return elday
+
+        dcimyr = dcimyr.with_columns([
+            pl.col("REPTDATS").map_elements(calc_elday).alias("ELDAY")
+        ])
+
+        records = []
+        for row in dcimyr.iter_rows(named=True):
+            accintrm = row.get("ACCINTRM", 0)
+            if accintrm not in (None, 0):
+                records.append({
+                    "BNMCODE": BNM_CODES["ACCINTRM"],
+                    "ELDAY": row["ELDAY"],
+                    "REPTDATS": row["REPTDATS"],
+                    "AMOUNT": accintrm
+                })
+            
+            premium = row.get("PREMIUM", 0)
+            if premium not in (None, 0):
+                records.append({
+                    "BNMCODE": BNM_CODES["PREMIUM"],
+                    "ELDAY": row["ELDAY"],
+                    "REPTDATS": row["REPTDATS"],
+                    "AMOUNT": premium
+                })
+
+        dci_final = pl.DataFrame(records)
+
+        if len(dci_final) > 0:
+            dci_final = dci_final.group_by(["BNMCODE", "ELDAY", "REPTDATS"]).agg(
+                pl.sum("AMOUNT").alias("AMOUNT")
+            )
+            print(f"  DCI final: {len(dci_final):,} aggregated records")
+        else:
+            dci_final = pl.DataFrame()
+            print("  No DCI records generated")
+    else:
+        dci_final = pl.DataFrame()
+        print("  No data available to build DCI")
+
+    # -------------------------------------------------------------------
+    # Write outputs
+    # -------------------------------------------------------------------
+    print("\nWriting output files...")
+    
+    parquet_path = get_output_path("PARQUET", date_vars)
+    ensure_directory(parquet_path)
+    if len(dci_final) > 0:
+        dci_final.write_parquet(parquet_path)
+        print(f"  ✓ Parquet written: {parquet_path}")
+    else:
+        print(f"  ⚠ No data to write to Parquet: {parquet_path}")
+
+    sas_path = get_output_path("SAS", date_vars)
+    ensure_directory(sas_path)
+    if len(dci_final) > 0:
+        print(f"\nWriting SAS dataset to {sas_path}...")
+        write_sas_file(dci_final, sas_path)
+    else:
+        print(f"  ⚠ No data to write to SAS: {sas_path}")
+
+    csv_path = get_output_path("CSV", date_vars)
+    ensure_directory(csv_path)
+    if len(dci_final) > 0:
+        dci_final.write_csv(csv_path)
+        print(f"  ✓ CSV written: {csv_path}")
+    else:
+        print(f"  ⚠ No data to write to CSV: {csv_path}")
+
+    print("\n" + "=" * 80)
+    print(f"EIBDCITX completed successfully for {RDATE} (Yesterday's data)!")
+    print("=" * 80)
+
+if __name__ == "__main__":
+    main()
