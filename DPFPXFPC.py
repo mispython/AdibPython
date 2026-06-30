@@ -1,344 +1,365 @@
-//EIBDCITX EXEC SAS609,OPTIONS='COMPRESS=YES'
-//MNITB    DD DISP=SHR,DSN=SAP.PBB.MNITB.DAILY(0)
-//CRA      DD DISP=SHR,DSN=RBP2.B033.UNLOAD.DPCRATXT.FB(0)
-//DPFL     DD DISP=SHR,DSN=RBP2.B033.DCI.DAILY.DATA(0)
-//EQFL     DD DISP=SHR,DSN=SAP.PBB.DCIDLY(0)
-//EQRT     DD DISP=SHR,DSN=SAP.PBB.EQUT(0)
-//BNMK     DD DISP=OLD,DSN=SAP.PBB.DKAPITI.SASDATA
-//DCI      DD DSN=SAP.PBB.DCIWH.DAILY,DISP=SHR
-//DCITXT   DD DISP=(NEW,CATLG,DELETE),
-//            DCB=(RECFM=VB,LRECL=260,BLKSIZE=0),
-//            SPACE=(CYL,(50,50),RLSE),UNIT=(SYSDA,5),
-//            DSN=SAP.PBB.DCIDLY.TEXT
-//SASLIST  DD SYSOUT=X
-//SYSIN    DD *
+# eibdcitx.py
+import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
+import duckdb
+from datetime import date, datetime
+import pyreadstat
+import os
 
-OPTIONS SORTDEV=3390 YEARCUTOFF=1950 LS=256 MISSING='';
+# -------------------------------------------------------------------
+# Step 1: Reporting Date Setup
+# -------------------------------------------------------------------
+today = date.today()
+REPTDAY = f"{today.day:02d}"
+REPTMON = f"{today.month:02d}"
+REPTYEAR = f"{today.year % 100:02d}"
+RDATE = today.strftime("%d/%m/%Y")
+INDATES = today
 
-DATA REPTDATE;
-  SET MNITB.REPTDATE;
-  SELECT;
-     WHEN  (01<=DAY(REPTDATE)<=08) DO; WK = '1'; END;
-     WHEN  (09<=DAY(REPTDATE)<=15) DO; WK = '2'; END;
-     WHEN  (16<=DAY(REPTDATE)<=22) DO; WK = '3'; END;
-     OTHERWISE DO; WK='4'; END;
-  END;
-  CALL SYMPUT('WK',PUT(WK,$1.));
-  CALL SYMPUT('INDATES', REPTDATE);
-  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
-  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
-  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
-RUN;
+day = today.day
+if 1 <= day <= 8:
+    WK = "1"
+elif 9 <= day <= 15:
+    WK = "2"
+elif 16 <= day <= 22:
+    WK = "3"
+else:
+    WK = "4"
 
-%LET EQCVAR=(KEEP=TICKETNO CUSTICKETNO BRANCH INVCURR ALTCURR
-                  INVAMT ALTAMT TENOR STATUSIND DCIRT STARTDT
-                  MATDT PREMPAID TYPE);
+print(f"Running EIBDCITX for {RDATE} (WK={WK})")
 
-%LET EQIVAR=(KEEP=TICKETNO CUSTNAME CUSTRES CUSTLOC FISSCODE
-                  CUSTICKETNO BRANCH INVCURR ALTCURR EQCUSTYP
-                  INVAMT ALTAMT TENOR STATUSIND STARTDT
-                  MATDT PREMREC TYPE);
+# -------------------------------------------------------------------
+# Step 2: Load raw datasets
+# -------------------------------------------------------------------
+# Load DPFL (fixed width format)
+dpfl = pl.read_csv("DPFL.txt", 
+                   has_header=False,
+                   schema={
+                       'TICKETNO': pl.Utf8,
+                       'CUSTNAME': pl.Utf8,
+                       'NEWIC': pl.Utf8,
+                       'CUSTCODE': pl.Int64,
+                       'INVCURAC': pl.Int64,
+                       'ALTCURAC': pl.Int64,
+                       'ACCINT': pl.Float64
+                   },
+                   fixed_width=True,
+                   widths=[7, 26, 20, 5, 11, 11, 15],
+                   newline_character='\n')
 
-DATA DPST;
-   INFILE DPFL FIRSTOBS=2;
-   INPUT @0001 TICKETNO    $7.  /* CUSTOMER CONTRACT NO        */
-         @0008 CUSTNAME   $26.  /* CUSTOMER NAME               */
-         @0034 NEWIC      $20.  /* NEW IC NUMBER               */
-         @0054 CUSTCODE     5.  /* CUSTOMER CODE               */
-         @0059 INVCURAC    11.  /* INVESTMENT CURRENCY ACCOUNT */
-         @0070 ALTCURAC    11.  /* ALTERNATE CURRENCY ACCOUNT  */
-         @0081 ACCINT      15.6 /* ACCRUAL INTEREST            */
-         ;
-RUN;
-PROC SORT DATA=DPST; BY TICKETNO; RUN;
-PROC SORT DATA=DCI.DCID&REPTMON&REPTDAY
- OUT=DCID(KEEP=TICKETNO CUSTCODE); BY TICKETNO; RUN;
+# Load EQFL (pipe delimited)
+eqfl = pl.read_csv("EQFL.txt", separator="|", 
+                   schema_overrides={
+                       'STARTDT': pl.Utf8,
+                       'MATDT': pl.Utf8,
+                       'ACCINTRM': pl.Float64,
+                       'ACCINTAMT': pl.Float64,
+                       'TOTINTAMT': pl.Float64,
+                       'PREMPAID': pl.Float64,
+                       'PREMREC': pl.Float64
+                   })
 
-DATA DPST;
-  MERGE DPST (IN=A)
-        DCID;
-        BY TICKETNO;
-        IF A;
-RUN;
+# Load CRA (fixed width format)
+cra = pl.read_csv("CRA.txt",
+                  has_header=False,
+                  fixed_width=True,
+                  widths=[3, 60, 6, 140, 7, 10, 10, 7, 2, 3, 8, 2],
+                  newline_character='\n',
+                  schema={
+                      'BRANCH': pl.Utf8,
+                      'CUSTICKETNO': pl.Utf8,
+                      'INVCURAC': pl.Int64,
+                      'CUSTNAME': pl.Utf8,
+                      'INVAMT': pl.Float64,
+                      'STARTDT': pl.Utf8,
+                      'MATDT': pl.Utf8,
+                      'DCIRT': pl.Float64,
+                      'TENOR': pl.Int64,
+                      'INV_STATUS': pl.Utf8,
+                      'ACCINT': pl.Float64,
+                      'CUSTCODE_DB2': pl.Int64
+                  })
 
-PROC SORT DATA=DPST; BY TICKETNO; RUN;
+# Load EQRATE (SAS dataset)
+eqrate, meta = pyreadstat.read_sas7bdat(f"EQRATE{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat")
+eqrt = pl.DataFrame(eqrate)
 
-DATA EQC EQI;
-   INFILE EQFL DELIMITER = '|' MISSOVER DSD FIRSTOBS=2;
-   INPUT CUSTICKETNO : $13.  /* CUSTOMER DEAL               */
-         TICKETNO    : $13.  /* I/BANK DEAL / TICKET NUMBER */
-         BRANCH      : $3.  /* BRANCH                      */
-         CUSTNAME    : $35.  /* CUSTOMER NAME               */
-         DEALID      : $10.  /* DEALER ID                   */
-         FISSCODE    :  $2.  /* FISS CUSTOMER TYPE          */
-         CUSTRES     :  $2.  /* RESIDENCE COUNTRY           */
-         CUSTMNE     :  $6.  /* CUSTOMER MNEMONIC           */
-         CUSTLOC     :  $3.  /* CUSTOMER LOCATION           */
-         EQCUSTYP    :  $3.  /* EQ CUSTOMER TYPE            */
-         PRODUCT     :  $3.  /* PRODUCT                     */
-         INVCURR     :  $3.  /* INVESTMENT CURRENCY         */
-         ALTCURR     :  $3.  /* ALTERNATE CURRENCY          */
-         INVAMT      : 15.2  /* INVESTMENT AMOUNT           */
-         INVAMTRM    : 15.2  /* INVESTMENT AMOUNT MYR       */
-         ALTAMT      : 15.2  /* ALTERNATE AMOUNT            */
-         TRADEDT     : YYMMDD10. /* TRADE DATE              */
-         STARTDT     : YYMMDD10. /* START DATE              */
-         FIXINGDT    : YYMMDD10. /* FIXING DATE             */
-         MATDT       : YYMMDD10. /* MATURITY DATE           */
-         STOPDT      : YYMMDD10. /* CANCELED/PREMATURE DATE */
-         TENOR       :   5.  /* TENOR (DAY)                 */
-         STRIKERT    : 11.7  /* STRIKE RATE                 */
-         SPOTRT      : 11.7  /* SPOT RATE                   */
-         DCIRT       : 11.4  /* DCI RATE                    */
-         ACCINTAMT   : 15.2  /* DCI DAILY INTEREST          */
-         TOTINTAMT   : 15.2  /* DCI INTEREST ACCRUED        */
-         ACCINTRM    : 15.2  /* ACCRUAL INTEREST (MYR)      */
-         MMRT        : 11.4  /* MONEY MARKET DEPOSIT RATE   */
-         RSPOTRT     : 11.7  /* REPORTING DATE'S SPOT RATE  */
-         PREMREC     : 15.2  /* PREMIUM RECEIVE FROM I/BANK */
-         PREMPAID    : 15.2  /* PREMIUM PAID TO CUSTOMER    */
-         PROFIT      : 15.2  /* PROFIT EARNED (BY THE BANK) */
-         PROFITMYR   : 15.2  /* PROFIT EARNED IN MYR        */
-         UNWINDCOST  : 15.2  /* UNWINDING COST              */
-         STATUSIND   : $20. /* REMARKS (FOR DCI TRAN.) */
-         STATUS      :  $1.  /* TRANSACTION STATUS          */
-         TYPE        :  $1.  /* TRANSACTION TYPE            */
-         ;
+# Load MNITB datasets
+mnitb_saving = pl.read_csv("MNITB_SAVING.txt", schema={'ACCTNO': pl.Int64, 'CUSTCODE': pl.Int64})
+mnitb_current = pl.read_csv("MNITB_CURRENT.txt", schema={'ACCTNO': pl.Int64, 'CUSTCODE': pl.Int64})
 
-   IF ACCINTRM  < 0 THEN ACCINTRM  = ACCINTRM  * (-1);
-   IF ACCINTAMT < 0 THEN ACCINTAMT = ACCINTAMT * (-1);
-   IF TOTINTAMT < 0 THEN TOTINTAMT = TOTINTAMT * (-1);
-   IF PREMPAID  < 0 THEN PREMPAID  = PREMPAID  * (-1);
-   IF PREMREC   < 0 THEN PREMREC   = PREMREC   * (-1);
+# Load DCID
+dcid = pl.read_csv(f"DCID{REPTMON}{REPTDAY}.txt", 
+                   schema={'TICKETNO': pl.Utf8, 'CUSTCODE': pl.Int64})
 
-   IF STARTDT <= &INDATES <= MATDT;
+# -------------------------------------------------------------------
+# Step 3: DPST dataset
+# -------------------------------------------------------------------
+dpst = dpfl.with_columns([
+    pl.col("ACCINT").cast(pl.Float64)
+])
 
+# Merge with DCID
+dpst = dpst.join(dcid, on="TICKETNO", how="left")
 
-   IF TYPE = 'C' THEN OUTPUT EQC;
-                 ELSE OUTPUT EQI;
-RUN;
-PROC SORT DATA=EQC &EQCVAR; BY TICKETNO; RUN;
-PROC SORT DATA=EQI &EQIVAR; BY TICKETNO; RUN;
+# -------------------------------------------------------------------
+# Step 4: EQC / EQI split
+# -------------------------------------------------------------------
+eq = eqfl.with_columns([
+    pl.col("ACCINTRM").abs(),
+    pl.col("ACCINTAMT").abs(),
+    pl.col("TOTINTAMT").abs(),
+    pl.col("PREMPAID").abs(),
+    pl.col("PREMREC").abs()
+])
 
- /*** CUSTOMER LEG ***/
-DATA EQDCI;
-   MERGE DPST(IN=A) EQC(IN=B);
-   BY TICKETNO;
-   IF A AND B;
-   IF CUSTCODE >= 80;
-RUN;
+# Filter by date range
+eq = eq.filter((pl.col("STARTDT") <= str(today)) & (pl.col("MATDT") >= str(today)))
 
- /*** CALLABLE RANGE ACCRUAL (CRA) ***/
-DATA DPCRA;
-   INFILE CRA;
-   INPUT @001 BRANCH            $3.
-         @007 CUSTICKETNO      $60.
-         @067 INVCURAC         PD6.
-         @073 CUSTNAME        $140.
-         @443 INVAMT           PD7.2
-         @450 STARTDT     YYMMDD10.
-         @460 MATDT       YYMMDD10.
-         @477 DCIRT            PD7.7
-         @486 TENOR            PD2.
-         @488 INV_STATUS        $3.
-         @494 ACCINT           PD8.6
-         @839 CUSTCODE_DB2       2.
-         ;
-   IF INV_STATUS IN ('ACT','CEP','CEU','CCU','CMU');
-   STATUSIND = 'Outstanding';
-   INVCURR   = 'MYR';
-   PREMPAID  = 0;
-RUN;
-PROC SORT DATA=DPCRA; BY INVCURAC; RUN;
+eqc = eq.filter(pl.col("TYPE") == "C")
+eqi = eq.filter(pl.col("TYPE") != "C")
 
-DATA DEPO(RENAME=(ACCTNO=INVCURAC));
-   SET MNITB.SAVING (KEEP=ACCTNO CUSTCODE)
-       MNITB.CURRENT(KEEP=ACCTNO CUSTCODE);
-RUN;
-PROC SORT DATA=DEPO; BY INVCURAC; RUN;
+# Keep only necessary columns for EQC
+eqc = eqc.select(['TICKETNO', 'CUSTICKETNO', 'BRANCH', 'INVCURR', 'ALTCURR',
+                  'INVAMT', 'ALTAMT', 'TENOR', 'STATUSIND', 'DCIRT', 'STARTDT',
+                  'MATDT', 'PREMPAID', 'TYPE'])
 
-DATA DPCRA;
-   MERGE DPCRA(IN=A) DEPO;
-   BY INVCURAC;
-   IF A;
-   IF CUSTCODE >= 80;
-RUN;
+# Keep only necessary columns for EQI
+eqi = eqi.select(['TICKETNO', 'CUSTNAME', 'CUSTRES', 'CUSTLOC', 'FISSCODE',
+                  'CUSTICKETNO', 'BRANCH', 'INVCURR', 'ALTCURR', 'EQCUSTYP',
+                  'INVAMT', 'ALTAMT', 'TENOR', 'STATUSIND', 'STARTDT',
+                  'MATDT', 'PREMREC', 'TYPE'])
 
-DATA EQDCI;
-   SET DPCRA EQDCI;
-   ACCINT    = ROUND(ACCINT,.01);
-RUN;
-PROC SORT DATA=EQDCI; BY INVCURR; RUN;
+# -------------------------------------------------------------------
+# Step 5: Customer leg (EQC join DPST, CRA, DEPO)
+# -------------------------------------------------------------------
+eqdci = dpst.join(eqc, on="TICKETNO", how="inner")
+eqdci = eqdci.filter(pl.col("CUSTCODE") >= 80)
 
-PROC SORT DATA=EQRT.EQRATE&REPTYEAR&REPTMON&REPTDAY
-          OUT =EQRATE(RENAME=(CURRENCY=INVCURR SPOTRATE=SPOTRT));
-   BY CURRENCY;
-RUN;
+# CRA processing
+dp_cra = cra.filter(pl.col("INV_STATUS").is_in(["ACT", "CEP", "CEU", "CCU", "CMU"]))
+dp_cra = dp_cra.with_columns([
+    pl.lit("Outstanding").alias("STATUSIND"),
+    pl.lit("MYR").alias("INVCURR"),
+    pl.lit(0.0).alias("PREMPAID"),
+    pl.lit(0.0).alias("ACCINT")  # ACCINT already exists but we keep it
+])
 
-DATA EQDCI;
-   MERGE EQDCI(IN=A) EQRATE(KEEP=INVCURR SPOTRT);
-   BY INVCURR;
-   IF A;
-   IF INVCURR = 'JPY' THEN DO;
-      ACCINTX = ROUND(ACCINT,1.00);
-      PREMPAI = ROUND(PREMPAID,1.00);
-   END;
-   ELSE DO;
-      ACCINTX = ROUND(ACCINT,0.01);
-      PREMPAI = ROUND(PREMPAID,0.01);
-   END;
-   ACCINTRM   = ACCINTX * SPOTRT;
-   PREMPAIDRM = PREMPAI * SPOTRT;
-   DROP ACCINTX PREMPAI;
-RUN;
+# Create DEPO dataset
+depo = pl.concat([mnitb_saving, mnitb_current])
+depo = depo.rename({"ACCTNO": "INVCURAC"})
 
-DATA CUSMYR CUSFCY;
-   SET EQDCI;
-   IF INVCURR = 'MYR' THEN OUTPUT CUSMYR;
-                      ELSE OUTPUT CUSFCY;
-RUN;
+# Join CRA with DEPO
+dp_cra = dp_cra.join(depo, on="INVCURAC", how="inner")
+dp_cra = dp_cra.filter(pl.col("CUSTCODE") >= 80)
 
-PROC PRINTTO PRINT=DCITXT NEW;
-%MACRO PRNRPT(DSN,TYPE,PROD);
-   PROC PRINT DATA=&DSN;
-      TITLE1 'PUBLIC BANK BERHAD';
-      TITLE2 "DAILY EXTRACTION OF &PROD CUSTOMER FOR "
-             "&TYPE" ' AS AT ' "&RDATE";
-      FORMAT CUSTICKETNO $30. TICKETNO $7.;
-      FORMAT CUSTNAME $27.;
-      FORMAT CUSTCODE 5.;
-      FORMAT BRANCH INVCURR ALTCURR $3.;
-      FORMAT INVCURAC ALTCURAC 11.;
-      FORMAT INVAMT ALTAMT ACCINT ACCINTRM PREMPAID PREMPAIDRM 10.2;
-      FORMAT TENOR 3.;
-      FORMAT SPOTRT 11.7;
-      FORMAT DCIRT 8.5;
-      FORMAT STATUSIND $15.;
-      FORMAT STARTDT MATDT DDMMYY8.;
-      VAR CUSTICKETNO TICKETNO CUSTNAME CUSTCODE BRANCH
-          INVCURAC ALTCURAC INVCURR ALTCURR INVAMT ALTAMT
-          TENOR SPOTRT DCIRT STATUSIND STARTDT MATDT
-          ACCINT ACCINTRM PREMPAID PREMPAIDRM;
-      SUM ACCINT ACCINTRM PREMPAID PREMPAIDRM;
-   RUN;
-%MEND;
-%PRNRPT(CUSMYR,MYR,DCI/CRA);
-%PRNRPT(CUSFCY,FCY,DCI);
+# Combine EQDCI with CRA
+eqdci = pl.concat([eqdci, dp_cra])
 
- /*** COUNTERPARTY LEG (INTERBANK) ***/
-DATA EQDCI;
-   SET EQI;
-   IF FISSCODE >= 80;
-RUN;
-PROC SORT DATA=EQDCI; BY INVCURR; RUN;
+# FX enrichment
+eqrt = eqrt.rename({"CURRENCY": "INVCURR", "SPOTRATE": "SPOTRT"})
+eqdci = eqdci.join(eqrt.select(['INVCURR', 'SPOTRT']), on="INVCURR", how="left")
 
-DATA EQDCI;
-   MERGE EQDCI(IN=A) EQRATE(KEEP=INVCURR SPOTRT);
-   BY INVCURR;
-   IF A;
-   IF INVCURR = 'JPY' THEN DO;
-      PREMREX = ROUND(PREMREC,1.00);
-   END;
-   ELSE DO;
-      PREMREX = ROUND(PREMREC,0.01);
-   END;
-   PREMRECRM  = PREMREX * SPOTRT;
-   DROP PREMREX;
-RUN;
+# Round based on currency
+eqdci = eqdci.with_columns([
+    pl.when(pl.col("INVCURR") == "JPY")
+    .then(pl.col("ACCINT").round(0))
+    .otherwise(pl.col("ACCINT").round(2))
+    .alias("ACCINTX"),
+    pl.when(pl.col("INVCURR") == "JPY")
+    .then(pl.col("PREMPAID").round(0))
+    .otherwise(pl.col("PREMPAID").round(2))
+    .alias("PREMPAI")
+])
 
-DATA IBNMYR IBNFCY;
-   SET EQDCI;
-   IF INVCURR = 'MYR' THEN OUTPUT IBNMYR;
-                      ELSE OUTPUT IBNFCY;
-RUN;
+eqdci = eqdci.with_columns([
+    (pl.col("ACCINTX") * pl.col("SPOTRT")).alias("ACCINTRM"),
+    (pl.col("PREMPAI") * pl.col("SPOTRT")).alias("PREMPAIDRM")
+])
 
-%MACRO PRNRPT(DSN,TYPE);
-   PROC PRINT DATA=&DSN;
-      TITLE1 'PUBLIC BANK BERHAD';
-      TITLE2 'DAILY EXTRACTION OF DCI INTERBANK FOR '
-             "&TYPE" ' AS AT ' "&RDATE";
-      FORMAT CUSTICKETNO TICKETNO $7.;
-      FORMAT CUSTNAME $30.;
-      FORMAT CUSTRES FISSCODE $2.;
-      FORMAT CUSTLOC EQCUSTYP BRANCH INVCURR ALTCURR $3.;
-      FORMAT INVAMT ALTAMT PREMREC PREMRECRM 10.2;
-      FORMAT TENOR 3.;
-      FORMAT SPOTRT 11.7;
-      FORMAT STATUSIND $15.;
-      FORMAT STARTDT MATDT DDMMYY8.;
-      VAR CUSTICKETNO TICKETNO CUSTNAME CUSTRES CUSTLOC
-          FISSCODE EQCUSTYP BRANCH INVCURR ALTCURR INVAMT ALTAMT
-          TENOR SPOTRT STATUSIND STARTDT MATDT PREMREC PREMRECRM;
-      SUM PREMREC PREMRECRM;
-   RUN;
-%MEND;
-%PRNRPT(IBNMYR,MYR);
-%PRNRPT(IBNFCY,FCY);
+# Split into MYR and FCY
+cusmyr = eqdci.filter(pl.col("INVCURR") == "MYR")
+cusfcy = eqdci.filter(pl.col("INVCURR") != "MYR")
 
-DATA DCIMYR;
-   SET CUSMYR IBNMYR;
-   IF TYPE = 'C' THEN PREMIUM = PREMPAID;
-                 ELSE PREMIUM = PREMREC;
-RUN;
+# Write text output for customer MYR
+with open("DCITXT.txt", "w") as f:
+    f.write("PUBLIC BANK BERHAD\n")
+    f.write(f"DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR MYR AS AT {RDATE}\n")
+    # Write header
+    cols = ['CUSTICKETNO', 'TICKETNO', 'CUSTNAME', 'CUSTCODE', 'BRANCH',
+            'INVCURAC', 'ALTCURAC', 'INVCURR', 'ALTCURR', 'INVAMT', 'ALTAMT',
+            'TENOR', 'SPOTRT', 'DCIRT', 'STATUSIND', 'STARTDT', 'MATDT',
+            'ACCINT', 'ACCINTRM', 'PREMPAID', 'PREMPAIDRM']
+    f.write(','.join(cols) + '\n')
+    
+    # Write data (simplified)
+    for row in cusmyr.iter_rows(named=True):
+        f.write(','.join([str(row.get(c, '')) for c in cols]) + '\n')
 
-DATA DCI;
-   SET DCIMYR;
-   REPTDATS=&INDATES;
-   IF DAY(REPTDATS) IN (1,09,16,23)  THEN ELDAY='DAYA'; ELSE
-   IF DAY(REPTDATS) IN (2,10,17,24)  THEN ELDAY='DAYB'; ELSE
-   IF DAY(REPTDATS) IN (3,11,18,25)  THEN ELDAY='DAYC'; ELSE
-   IF DAY(REPTDATS) IN (4,12,19,26)  THEN ELDAY='DAYD'; ELSE
-   IF DAY(REPTDATS) IN (5,13,20,27)  THEN ELDAY='DAYE'; ELSE
-   IF DAY(REPTDATS) IN (6,14,21,28)  THEN ELDAY='DAYF'; ELSE
-   IF DAY(REPTDATS) IN (7,29)        THEN ELDAY='DAYG'; ELSE
-   IF DAY(REPTDATS) IN (30)          THEN ELDAY='DAYH'; ELSE
-   IF DAY(REPTDATS) IN (8,15,22,31)  THEN ELDAY='DAYI';
+# Write text output for customer FCY
+with open("DCITXT.txt", "a") as f:
+    f.write("\nPUBLIC BANK BERHAD\n")
+    f.write(f"DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR FCY AS AT {RDATE}\n")
+    for row in cusfcy.iter_rows(named=True):
+        f.write(','.join([str(row.get(c, '')) for c in cols]) + '\n')
 
-   IF MONTH(REPTDATS) IN (4,6,9,11)  THEN DO;
-      IF DAY(REPTDATS)=30            THEN ELDAY='DAYI';
-   END;
+# -------------------------------------------------------------------
+# Step 6: Interbank leg
+# -------------------------------------------------------------------
+eqdci_ib = eqi.filter(pl.col("FISSCODE") >= "80")
+eqdci_ib = eqdci_ib.join(eqrt.select(['INVCURR', 'SPOTRT']), on="INVCURR", how="left")
 
-   YY=YEAR(REPTDATS);
-   IF MONTH(REPTDATS) EQ 2           THEN DO;
-      IF DAY(REPTDATS)=28            THEN ELDAY='DAYI';
-      IF MOD(YY,4)=0 THEN DO;
-         IF DAY(REPTDATS)=28         THEN ELDAY='DAYF'; ELSE
-         IF DAY(REPTDATS)=29         THEN ELDAY='DAYI';
-      END;
-   END;
+eqdci_ib = eqdci_ib.with_columns([
+    pl.when(pl.col("INVCURR") == "JPY")
+    .then(pl.col("PREMREC").round(0))
+    .otherwise(pl.col("PREMREC").round(2))
+    .alias("PREMREX")
+])
 
-   IF ACCINTRM NOT IN (.,0) THEN DO;
-      BNMCODE='4911095000000Y'; AMOUNT=ACCINTRM;
-      OUTPUT;
-   END;
+eqdci_ib = eqdci_ib.with_columns([
+    (pl.col("PREMREX") * pl.col("SPOTRT")).alias("PREMRECRM")
+])
 
-   IF PREMIUM NOT IN (.,0) THEN DO;
-      BNMCODE='4929996000000Y'; AMOUNT=PREMIUM;
-      OUTPUT;
-   END;
-RUN;
+# Split interbank
+ibnmyr = eqdci_ib.filter(pl.col("INVCURR") == "MYR")
+ibnfcy = eqdci_ib.filter(pl.col("INVCURR") != "MYR")
 
-PROC SUMMARY DATA=DCI NWAY;
-CLASS  BNMCODE ELDAY REPTDATS;
-VAR    AMOUNT;
-OUTPUT OUT=DCI (DROP=_TYPE_ _FREQ_) SUM=;
+# Write text output for interbank MYR
+with open("DCITXT.txt", "a") as f:
+    f.write("\nPUBLIC BANK BERHAD\n")
+    f.write(f"DAILY EXTRACTION OF DCI INTERBANK FOR MYR AS AT {RDATE}\n")
+    cols = ['CUSTICKETNO', 'TICKETNO', 'CUSTNAME', 'CUSTRES', 'CUSTLOC',
+            'FISSCODE', 'EQCUSTYP', 'BRANCH', 'INVCURR', 'ALTCURR',
+            'INVAMT', 'ALTAMT', 'TENOR', 'SPOTRT', 'STATUSIND',
+            'STARTDT', 'MATDT', 'PREMREC', 'PREMRECRM']
+    f.write(','.join(cols) + '\n')
+    for row in ibnmyr.iter_rows(named=True):
+        f.write(','.join([str(row.get(c, '')) for c in cols]) + '\n')
 
-%MACRO DELDUP;
-   %IF "&REPTDAY" EQ "01" OR
-       "&REPTDAY" EQ "09" OR
-       "&REPTDAY" EQ "16" OR
-       "&REPTDAY" EQ "23" %THEN %DO;
-      PROC DATASETS LIB=BNMK NOLIST;
-         DELETE DCI&REPTMON&WK;
-      RUN;
-   %END;
-   %ELSE %DO;
-      DATA BNMK.DCI&REPTMON&WK;
-         SET BNMK.DCI&REPTMON&WK;
-         IF REPTDATS = &INDATES THEN DELETE;
-      RUN;
-   %END;
-%MEND;
-%DELDUP;
-PROC APPEND DATA=DCI BASE=BNMK.DCI&REPTMON&WK; RUN;
+# Write text output for interbank FCY
+with open("DCITXT.txt", "a") as f:
+    f.write("\nPUBLIC BANK BERHAD\n")
+    f.write(f"DAILY EXTRACTION OF DCI INTERBANK FOR FCY AS AT {RDATE}\n")
+    for row in ibnfcy.iter_rows(named=True):
+        f.write(','.join([str(row.get(c, '')) for c in cols]) + '\n')
+
+# -------------------------------------------------------------------
+# Step 7: Build DCI
+# -------------------------------------------------------------------
+dcimyr = pl.concat([cusmyr, ibnmyr])
+
+# Add PREMIUM column
+dcimyr = dcimyr.with_columns([
+    pl.when(pl.col("TYPE") == "C")
+    .then(pl.col("PREMPAID"))
+    .otherwise(pl.col("PREMREC"))
+    .alias("PREMIUM"),
+    pl.lit(today).alias("REPTDATS")
+])
+
+# Derive ELDAY (matches SAS logic exactly)
+def calc_elday(d):
+    dd = d.day
+    mm = d.month
+    yy = d.year
+    
+    # Base mapping
+    if dd in (1, 9, 16, 23):
+        elday = 'DAYA'
+    elif dd in (2, 10, 17, 24):
+        elday = 'DAYB'
+    elif dd in (3, 11, 18, 25):
+        elday = 'DAYC'
+    elif dd in (4, 12, 19, 26):
+        elday = 'DAYD'
+    elif dd in (5, 13, 20, 27):
+        elday = 'DAYE'
+    elif dd in (6, 14, 21, 28):
+        elday = 'DAYF'
+    elif dd in (7, 29):
+        elday = 'DAYG'
+    elif dd == 30:
+        elday = 'DAYH'
+    elif dd in (8, 15, 22, 31):
+        elday = 'DAYI'
+    else:
+        elday = 'DAYX'
+    
+    # Month adjustments (SAS logic)
+    if mm in (4, 6, 9, 11) and dd == 30:
+        elday = 'DAYI'
+    
+    # February adjustments
+    if mm == 2:
+        if dd == 28:
+            elday = 'DAYI'
+            if yy % 4 == 0:  # Leap year
+                elday = 'DAYF'
+        if dd == 29 and yy % 4 == 0:
+            elday = 'DAYI'
+    
+    return elday
+
+dcimyr = dcimyr.with_columns([
+    pl.col("REPTDATS").map_elements(calc_elday).alias("ELDAY")
+])
+
+# Generate BNM records
+records = []
+for row in dcimyr.iter_rows(named=True):
+    accintrm = row.get("ACCINTRM", 0)
+    if accintrm not in (None, 0):
+        records.append({
+            "BNMCODE": "4911095000000Y",
+            "ELDAY": row["ELDAY"],
+            "REPTDATS": row["REPTDATS"],
+            "AMOUNT": accintrm
+        })
+    
+    premium = row.get("PREMIUM", 0)
+    if premium not in (None, 0):
+        records.append({
+            "BNMCODE": "4929996000000Y",
+            "ELDAY": row["ELDAY"],
+            "REPTDATS": row["REPTDATS"],
+            "AMOUNT": premium
+        })
+
+dci_final = pl.DataFrame(records)
+
+# Aggregate
+dci_final = dci_final.group_by(["BNMCODE", "ELDAY", "REPTDATS"]).agg(
+    pl.sum("AMOUNT").alias("AMOUNT")
+)
+
+# -------------------------------------------------------------------
+# Step 8: Write outputs
+# -------------------------------------------------------------------
+# Write Parquet output
+out_file = f"DCI_{REPTYEAR}{REPTMON}{REPTDAY}.parquet"
+dci_final.write_parquet(out_file)
+print(f"Final DCI Parquet written: {out_file}")
+
+# Write SAS7bdat output
+try:
+    # Convert to pandas for pyreadstat
+    dci_pd = dci_final.to_pandas()
+    pyreadstat.write_sas7bdat(dci_pd, f"BNMK_DCI{REPTMON}{WK}.sas7bdat")
+    print(f"SAS dataset written: BNMK_DCI{REPTMON}{WK}.sas7bdat")
+except Exception as e:
+    print(f"Could not write SAS dataset: {e}")
+
+# Write CSV output
+dci_final.write_csv(f"DCI_{REPTYEAR}{REPTMON}{REPTDAY}.csv")
+print(f"CSV output written: DCI_{REPTYEAR}{REPTMON}{REPTDAY}.csv")
+
+# -------------------------------------------------------------------
+# Step 9: Register in DuckDB for analytics
+# -------------------------------------------------------------------
+duckdb.sql("INSTALL parquet; LOAD parquet;")
+duckdb.sql(f"CREATE TABLE dci AS SELECT * FROM read_parquet('{out_file}')")
+result = duckdb.sql("SELECT COUNT(*) FROM dci").fetchall()
+print(f"DuckDB table created. Rowcount: {result[0][0]}")
+
+print("EIBDCITX completed successfully!")
