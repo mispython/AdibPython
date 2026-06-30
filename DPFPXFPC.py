@@ -249,11 +249,55 @@ def load_fixed_width_file(file_path, widths, columns, dtypes=None, encoding='utf
     
     return pl.DataFrame(data)
 
-def load_sas_file(file_path):
-    """Load SAS file using pyreadstat"""
+def load_sas_file(file_path, columns=None):
+    """
+    Load SAS file using pyreadstat with optional column selection for performance
+    """
     try:
-        df, meta = pyreadstat.read_sas7bdat(file_path)
+        if columns:
+            # Read only specific columns for better performance
+            df, meta = pyreadstat.read_sas7bdat(file_path, columns=columns)
+        else:
+            df, meta = pyreadstat.read_sas7bdat(file_path)
         return pl.DataFrame(df)
+    except Exception as e:
+        print(f"Error loading SAS file {file_path}: {e}")
+        raise
+
+def load_sas_file_optimized(file_path, columns=None, row_limit=None):
+    """
+    Load SAS file with optimization options:
+    - columns: list of column names to read (reduces memory)
+    - row_limit: max rows to read (for testing)
+    """
+    try:
+        # Use pyreadstat with column selection for better performance
+        if columns:
+            df, meta = pyreadstat.read_sas7bdat(file_path, columns=columns, row_limit=row_limit)
+        else:
+            df, meta = pyreadstat.read_sas7bdat(file_path, row_limit=row_limit)
+        return pl.DataFrame(df)
+    except Exception as e:
+        print(f"Error loading SAS file {file_path}: {e}")
+        raise
+
+def load_sas_file_chunked(file_path, columns=None, chunk_size=100000):
+    """
+    Load SAS file in chunks for large files to manage memory
+    """
+    try:
+        chunks = []
+        if columns:
+            for chunk in pyreadstat.read_sas7bdat(file_path, columns=columns, chunksize=chunk_size):
+                chunks.append(pl.DataFrame(chunk))
+        else:
+            for chunk in pyreadstat.read_sas7bdat(file_path, chunksize=chunk_size):
+                chunks.append(pl.DataFrame(chunk))
+        
+        if chunks:
+            return pl.concat(chunks)
+        else:
+            return pl.DataFrame()
     except Exception as e:
         print(f"Error loading SAS file {file_path}: {e}")
         raise
@@ -431,19 +475,22 @@ def main():
         return
 
     try:
-        # Load MNITB datasets (SAS datasets) - Select only needed columns
+        # Load MNITB datasets with optimized loading - only select needed columns
         mnitb_saving_path = get_input_path("MNITB_SAVING", date_vars)
-        mnitb_saving_df, _ = pyreadstat.read_sas7bdat(mnitb_saving_path)
-        mnitb_saving = pl.DataFrame(mnitb_saving_df)
-        # Keep only ACCTNO and CUSTCODE columns
-        mnitb_saving = mnitb_saving.select(['ACCTNO', 'CUSTCODE'])
+        print(f"  Loading MNITB Saving (this may take a moment)...")
+        # Only read ACCTNO and CUSTCODE columns for better performance
+        mnitb_saving = load_sas_file_optimized(
+            mnitb_saving_path, 
+            columns=['ACCTNO', 'CUSTCODE']
+        )
         print(f"  ✓ Loaded MNITB Saving: {len(mnitb_saving):,} rows")
         
         mnitb_current_path = get_input_path("MNITB_CURRENT", date_vars)
-        mnitb_current_df, _ = pyreadstat.read_sas7bdat(mnitb_current_path)
-        mnitb_current = pl.DataFrame(mnitb_current_df)
-        # Keep only ACCTNO and CUSTCODE columns
-        mnitb_current = mnitb_current.select(['ACCTNO', 'CUSTCODE'])
+        print(f"  Loading MNITB Current (this may take a moment)...")
+        mnitb_current = load_sas_file_optimized(
+            mnitb_current_path,
+            columns=['ACCTNO', 'CUSTCODE']
+        )
         print(f"  ✓ Loaded MNITB Current: {len(mnitb_current):,} rows")
     except Exception as e:
         print(f"  ✗ Error loading MNITB files: {e}")
