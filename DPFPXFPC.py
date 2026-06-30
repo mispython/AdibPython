@@ -249,66 +249,27 @@ def load_fixed_width_file(file_path, widths, columns, dtypes=None, encoding='utf
     
     return pl.DataFrame(data)
 
-def load_sas_file(file_path):
-    """Load SAS file using pyreadstat"""
-    try:
-        df, meta = pyreadstat.read_sas7bdat(file_path)
-        return pl.DataFrame(df)
-    except Exception as e:
-        print(f"Error loading SAS file {file_path}: {e}")
-        raise
-
-def load_sas_file_optimized(file_path, columns_to_keep=None):
+def load_sas_file_fast(file_path, columns_to_keep=None):
     """
-    Load SAS file and keep only specified columns for better performance
+    Load SAS file using pyreadstat with column filtering for performance
     """
     try:
-        # Load the full SAS file
-        df, meta = pyreadstat.read_sas7bdat(file_path)
-        
-        # Convert to Polars DataFrame
-        pl_df = pl.DataFrame(df)
-        
-        # If columns_to_keep specified, select only those columns
-        if columns_to_keep:
-            # Check which columns exist in the DataFrame
-            existing_cols = [col for col in columns_to_keep if col in pl_df.columns]
-            if existing_cols:
-                pl_df = pl_df.select(existing_cols)
-            else:
-                print(f"  Warning: None of the specified columns found in the file")
-        
-        return pl_df
-    except Exception as e:
-        print(f"Error loading SAS file {file_path}: {e}")
-        raise
-
-def load_sas_file_chunked(file_path, columns_to_keep=None, chunk_size=100000):
-    """
-    Load SAS file in chunks for large files to manage memory
-    """
-    try:
-        chunks = []
-        total_rows = 0
-        
-        # Read in chunks
-        for chunk in pyreadstat.read_sas7bdat(file_path, chunksize=chunk_size):
-            # Convert chunk to Polars DataFrame
-            pl_chunk = pl.DataFrame(chunk)
-            
-            # If columns_to_keep specified, select only those columns
+        # Try to read with column selection if pyreadstat supports it
+        try:
+            # Attempt to use columns parameter (newer versions)
+            df, meta = pyreadstat.read_sas7bdat(file_path, columns=columns_to_keep)
+            return pl.DataFrame(df)
+        except TypeError:
+            # Fallback: read full file then select columns
+            print(f"  Note: pyreadstat doesn't support column selection, loading full file then filtering...")
+            df, meta = pyreadstat.read_sas7bdat(file_path)
+            pl_df = pl.DataFrame(df)
             if columns_to_keep:
-                existing_cols = [col for col in columns_to_keep if col in pl_chunk.columns]
+                # Select only the columns we need
+                existing_cols = [col for col in columns_to_keep if col in pl_df.columns]
                 if existing_cols:
-                    pl_chunk = pl_chunk.select(existing_cols)
-            
-            chunks.append(pl_chunk)
-            total_rows += len(pl_chunk)
-        
-        if chunks:
-            return pl.concat(chunks)
-        else:
-            return pl.DataFrame()
+                    return pl_df.select(existing_cols)
+            return pl_df
     except Exception as e:
         print(f"Error loading SAS file {file_path}: {e}")
         raise
@@ -479,29 +440,29 @@ def main():
     try:
         # Load EQRATE (SAS dataset)
         eqrate_path = get_input_path("EQRATE", date_vars)
-        eqrt = load_sas_file(eqrate_path)
+        eqrt = load_sas_file_fast(eqrate_path)
         print(f"  ✓ Loaded EQRATE: {len(eqrt):,} rows from {eqrate_path}")
     except Exception as e:
         print(f"  ✗ Error loading EQRATE: {e}")
         return
 
     try:
-        # Load MNITB datasets with optimized loading - only keep needed columns
+        # Load MNITB datasets - FAST method with column filtering
         mnitb_saving_path = get_input_path("MNITB_SAVING", date_vars)
-        print(f"  Loading MNITB Saving (this may take a moment)...")
-        mnitb_saving = load_sas_file_optimized(
+        print(f"  Loading MNITB Saving (fast mode)...")
+        mnitb_saving = load_sas_file_fast(
             mnitb_saving_path, 
             columns_to_keep=['ACCTNO', 'CUSTCODE']
         )
-        print(f"  ✓ Loaded MNITB Saving: {len(mnitb_saving):,} rows")
+        print(f"  ✓ Loaded MNITB Saving: {len(mnitb_saving):,} rows (only 2 columns)")
         
         mnitb_current_path = get_input_path("MNITB_CURRENT", date_vars)
-        print(f"  Loading MNITB Current (this may take a moment)...")
-        mnitb_current = load_sas_file_optimized(
+        print(f"  Loading MNITB Current (fast mode)...")
+        mnitb_current = load_sas_file_fast(
             mnitb_current_path,
             columns_to_keep=['ACCTNO', 'CUSTCODE']
         )
-        print(f"  ✓ Loaded MNITB Current: {len(mnitb_current):,} rows")
+        print(f"  ✓ Loaded MNITB Current: {len(mnitb_current):,} rows (only 2 columns)")
     except Exception as e:
         print(f"  ✗ Error loading MNITB files: {e}")
         return
@@ -509,7 +470,7 @@ def main():
     try:
         # Load DCID (SAS dataset)
         dcid_path = get_input_path("DCID", date_vars)
-        dcid = load_sas_file(dcid_path)
+        dcid = load_sas_file_fast(dcid_path)
         print(f"  ✓ Loaded DCID: {len(dcid):,} rows from {dcid_path}")
     except Exception as e:
         print(f"  ✗ Error loading DCID: {e}")
@@ -570,7 +531,7 @@ def main():
         pl.lit(0.0).alias("ACCINT")
     ])
 
-    # Create DEPO dataset - Already have only ACCTNO and CUSTCODE
+    # Create DEPO dataset - Now both have same columns (ACCTNO, CUSTCODE)
     depo = pl.concat([mnitb_saving, mnitb_current])
     depo = depo.rename({"ACCTNO": "INVCURAC"})
     print(f"  DEPO combined: {len(depo):,} rows")
@@ -717,68 +678,4 @@ def main():
         return elday
 
     dcimyr = dcimyr.with_columns([
-        pl.col("REPTDATS").map_elements(calc_elday).alias("ELDAY")
-    ])
-
-    # Generate BNM records
-    records = []
-    for row in dcimyr.iter_rows(named=True):
-        accintrm = row.get("ACCINTRM", 0)
-        if accintrm not in (None, 0):
-            records.append({
-                "BNMCODE": BNM_CODES["ACCINTRM"],
-                "ELDAY": row["ELDAY"],
-                "REPTDATS": row["REPTDATS"],
-                "AMOUNT": accintrm
-            })
-        
-        premium = row.get("PREMIUM", 0)
-        if premium not in (None, 0):
-            records.append({
-                "BNMCODE": BNM_CODES["PREMIUM"],
-                "ELDAY": row["ELDAY"],
-                "REPTDATS": row["REPTDATS"],
-                "AMOUNT": premium
-            })
-
-    dci_final = pl.DataFrame(records)
-
-    # Aggregate
-    dci_final = dci_final.group_by(["BNMCODE", "ELDAY", "REPTDATS"]).agg(
-        pl.sum("AMOUNT").alias("AMOUNT")
-    )
-    print(f"  DCI final: {len(dci_final):,} aggregated records")
-
-    # -------------------------------------------------------------------
-    # Step 8: Write outputs
-    # -------------------------------------------------------------------
-    print("\nWriting output files...")
-    
-    # Write Parquet output
-    parquet_path = get_output_path("PARQUET", date_vars)
-    ensure_directory(parquet_path)
-    dci_final.write_parquet(parquet_path)
-    print(f"  ✓ Parquet written: {parquet_path}")
-
-    # Write SAS7bdat output
-    sas_path = get_output_path("SAS", date_vars)
-    ensure_directory(sas_path)
-    try:
-        dci_pd = dci_final.to_pandas()
-        pyreadstat.write_sas7bdat(dci_pd, sas_path)
-        print(f"  ✓ SAS dataset written: {sas_path}")
-    except Exception as e:
-        print(f"  ✗ Could not write SAS dataset: {e}")
-
-    # Write CSV output
-    csv_path = get_output_path("CSV", date_vars)
-    ensure_directory(csv_path)
-    dci_final.write_csv(csv_path)
-    print(f"  ✓ CSV written: {csv_path}")
-
-    print("\n" + "=" * 80)
-    print(f"EIBDCITX completed successfully for {RDATE} (Yesterday's data)!")
-    print("=" * 80)
-
-if __name__ == "__main__":
-    main()
+        pl.col("REPT
