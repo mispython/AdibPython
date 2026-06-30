@@ -3,7 +3,7 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import duckdb
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import pyreadstat
 import os
 from pathlib import Path
@@ -209,9 +209,13 @@ def load_sas_file(file_path):
 
 def main():
     # -------------------------------------------------------------------
-    # Step 1: Reporting Date Setup
+    # Step 1: Reporting Date Setup - Use YESTERDAY instead of today
     # -------------------------------------------------------------------
-    today = date.today()
+    # Get yesterday's date
+    yesterday = date.today() - timedelta(days=1)
+    
+    # Use yesterday for all date calculations
+    today = yesterday
     REPTDAY = f"{today.day:02d}"
     REPTMON = f"{today.month:02d}"
     REPTYEAR = f"{today.year % 100:02d}"
@@ -241,7 +245,7 @@ def main():
         'rdate': RDATE
     }
 
-    print(f"Running EIBDCITX for {RDATE} (WK={WK})")
+    print(f"Running EIBDCITX for {RDATE} (WK={WK}) - Processing YESTERDAY'S data")
     print("=" * 80)
 
     # Ensure output directories exist
@@ -350,7 +354,7 @@ def main():
         pl.col("PREMREC").abs()
     ])
 
-    # Filter by date range
+    # Filter by date range using yesterday's date
     eq = eq.filter((pl.col("STARTDT") <= str(today)) & (pl.col("MATDT") >= str(today)))
     print(f"  EQ after date filter: {len(eq):,} rows")
 
@@ -586,7 +590,7 @@ def main():
     print(f"  ✓ CSV written: {csv_path}")
 
     print("\n" + "=" * 80)
-    print("EIBDCITX completed successfully!")
+    print(f"EIBDCITX completed successfully for {RDATE} (Yesterday's data)!")
     print("=" * 80)
 
 if __name__ == "__main__":
