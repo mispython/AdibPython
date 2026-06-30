@@ -51,7 +51,7 @@ FILE_FORMATS = {
     "DPFL": {
         "fixed_width": True,
         "widths": [7, 26, 20, 5, 11, 11, 15],
-        "columns": ['TICKETNO', 'CUSTNAME', 'NEWIC', 'CUSTCODE', 
+        "columns": ['TICKETNO', 'CUSTNAME', 'NEWIC', 'CUSTCODE',
                    'INVCURAC', 'ALTCURAC', 'ACCINT'],
         "dtypes": {
             'TICKETNO': pl.Utf8,
@@ -67,8 +67,8 @@ FILE_FORMATS = {
         "fixed_width": True,
         "encoding": "latin1",
         "widths": [3, 60, 6, 140, 7, 10, 10, 7, 2, 3, 8, 2],
-        "columns": ['BRANCH', 'CUSTICKETNO', 'INVCURAC', 'CUSTNAME', 
-                   'INVAMT', 'STARTDT', 'MATDT', 'DCIRT', 'TENOR', 
+        "columns": ['BRANCH', 'CUSTICKETNO', 'INVCURAC', 'CUSTNAME',
+                   'INVAMT', 'STARTDT', 'MATDT', 'DCIRT', 'TENOR',
                    'INV_STATUS', 'ACCINT', 'CUSTCODE_DB2'],
         "dtypes": {
             'BRANCH': pl.Utf8,
@@ -221,7 +221,7 @@ def load_fixed_width_file(file_path, widths, columns, dtypes=None, encoding='utf
             content = f.read()
             text = content.decode('latin-1', errors='replace')
             lines = text.splitlines(keepends=True)
-    
+
     data = []
     for line in lines:
         if line.strip():
@@ -230,7 +230,7 @@ def load_fixed_width_file(file_path, widths, columns, dtypes=None, encoding='utf
             for i, width in enumerate(widths):
                 field = line[start:start+width].strip()
                 col_name = columns[i]
-                
+
                 if dtypes and col_name in dtypes:
                     dtype = dtypes[col_name]
                     if dtype == pl.Int64:
@@ -247,11 +247,16 @@ def load_fixed_width_file(file_path, widths, columns, dtypes=None, encoding='utf
                         row[col_name] = field
                 else:
                     row[col_name] = field
-                
+
                 start += width
             data.append(row)
-    
-    return pl.DataFrame(data)
+
+    if data:
+        return pl.DataFrame(data)
+    else:
+        # Preserve schema even when no rows were read
+        schema = {col: (dtypes[col] if dtypes and col in dtypes else pl.Utf8) for col in columns}
+        return pl.DataFrame(schema=schema)
 
 def load_sas_file_fast(file_path, columns_to_keep=None):
     """Load SAS file using pyreadstat with column filtering for performance"""
@@ -275,7 +280,7 @@ def load_sas_file_fast(file_path, columns_to_keep=None):
 def load_mnitb_with_cache(file_path, cache_path, columns_to_keep=['ACCTNO', 'CUSTCODE']):
     """Load MNITB file with Parquet caching for faster subsequent loads"""
     ensure_directory(cache_path)
-    
+
     if os.path.exists(cache_path):
         print(f"  ✓ Loading from Parquet cache: {cache_path}")
         return pl.read_parquet(cache_path)
@@ -292,7 +297,7 @@ def load_mnitb_with_cache(file_path, cache_path, columns_to_keep=['ACCTNO', 'CUS
                 existing_cols = [col for col in columns_to_keep if col in pl_df.columns]
                 if existing_cols:
                     pl_df = pl_df.select(existing_cols)
-            
+
             pl_df.write_parquet(cache_path)
             print(f"  ✓ Converted and cached to Parquet: {cache_path}")
             return pl_df
@@ -308,7 +313,7 @@ def load_eqfl_file(file_path, separator='|', columns=None, dtypes=None):
     except UnicodeDecodeError:
         with open(file_path, 'r', encoding='latin-1') as f:
             lines = f.readlines()
-    
+
     data = []
     for line in lines:
         line = line.strip()
@@ -318,11 +323,11 @@ def load_eqfl_file(file_path, separator='|', columns=None, dtypes=None):
                 fields = fields[:len(columns)]
             elif len(fields) < len(columns):
                 fields.extend([None] * (len(columns) - len(fields)))
-            
+
             row = {}
             for i, col_name in enumerate(columns):
                 field = fields[i].strip() if i < len(fields) and fields[i] else ''
-                
+
                 if dtypes and col_name in dtypes:
                     dtype = dtypes[col_name]
                     if dtype == pl.Int64:
@@ -340,8 +345,12 @@ def load_eqfl_file(file_path, separator='|', columns=None, dtypes=None):
                 else:
                     row[col_name] = field
             data.append(row)
-    
-    return pl.DataFrame(data)
+
+    if data:
+        return pl.DataFrame(data)
+    else:
+        schema = {col: (dtypes[col] if dtypes and col in dtypes else pl.Utf8) for col in columns}
+        return pl.DataFrame(schema=schema)
 
 def ensure_join_key_type(df, column_name, target_type=pl.Int64):
     """Ensure a column has the correct type for joining"""
@@ -357,24 +366,24 @@ def write_sas_file(df, file_path):
         import saspy
         print("  Connecting to SAS session...")
         sas = saspy.SASsession()
-        
+
         df_pd = df.to_pandas()
         filename = os.path.basename(file_path)
         dataset_name = filename.replace('.sas7bdat', '')
-        
+
         print(f"  Writing SAS dataset: {dataset_name}...")
         sas.df2sd(df_pd, table=dataset_name, libref='user')
-        
+
         sas.submit(f'''
             libname outlib "{os.path.dirname(file_path)}";
             proc copy in=user out=outlib;
                 select {dataset_name};
             run;
         ''')
-        
+
         print(f"  ✓ SAS dataset written using saspy: {file_path}")
         return True
-        
+
     except ImportError:
         print("  ⚠ saspy not installed. Installing saspy...")
         try:
@@ -395,22 +404,26 @@ def write_sas_file(df, file_path):
         print(f"  ✓ CSV fallback written: {csv_path}")
         return False
 
-def safe_concat(dfs):
-    """Safely concatenate DataFrames, ignoring empty ones"""
-    non_empty = [df for df in dfs if len(df) > 0]
-    if not non_empty:
+def safe_concat(frames):
+    """
+    Concatenate a list of Polars DataFrames safely.
+
+    Unlike a naive pl.concat(), this:
+      - Skips frames that have zero columns (no schema at all) since
+        those cannot be meaningfully combined with anything.
+      - Keeps frames that have zero ROWS but a valid schema, because
+        an empty-but-typed DataFrame is legitimate and must not be
+        silently dropped or substituted with a columnless pl.DataFrame().
+      - Uses 'vertical_relaxed' so minor dtype mismatches between
+        frames (e.g. Int64 vs Float64 from different empty-filter
+        paths) don't raise a SchemaError.
+    """
+    real_frames = [f for f in frames if f.width > 0]
+    if not real_frames:
         return pl.DataFrame()
-    if len(non_empty) == 1:
-        return non_empty[0]
-    # Ensure all DataFrames have the same columns
-    common_cols = set(non_empty[0].columns)
-    for df in non_empty[1:]:
-        common_cols = common_cols.intersection(set(df.columns))
-    common_cols = list(common_cols)
-    
-    # Select only common columns
-    aligned_dfs = [df.select(common_cols) for df in non_empty]
-    return pl.concat(aligned_dfs)
+    if len(real_frames) == 1:
+        return real_frames[0]
+    return pl.concat(real_frames, how="vertical_relaxed")
 
 # ===================================================================
 # Main Processing
@@ -461,7 +474,7 @@ def main():
     # Step 2: Load raw datasets
     # -------------------------------------------------------------------
     print("\nLoading input files...")
-    
+
     try:
         dpfl_path = get_input_path("DPFL", date_vars)
         dpfl = load_fixed_width_file(
@@ -497,7 +510,7 @@ def main():
             else:
                 print(f"  ✗ CRA file not found")
                 return
-        
+
         cra = load_fixed_width_file(
             cra_path,
             FILE_FORMATS["CRA"]["widths"],
@@ -524,12 +537,12 @@ def main():
         mnitb_saving_cache = PARQUET_CACHE["MNITB_SAVING"]
         print(f"  Loading MNITB Saving...")
         mnitb_saving = load_mnitb_with_cache(
-            mnitb_saving_path, 
+            mnitb_saving_path,
             mnitb_saving_cache,
             columns_to_keep=['ACCTNO', 'CUSTCODE']
         )
         print(f"  ✓ Loaded MNITB Saving: {len(mnitb_saving):,} rows")
-        
+
         mnitb_current_path = get_input_path("MNITB_CURRENT", date_vars)
         mnitb_current_cache = PARQUET_CACHE["MNITB_CURRENT"]
         print(f"  Loading MNITB Current...")
@@ -592,26 +605,28 @@ def main():
     dp_cra = cra.filter(pl.col("INV_STATUS").is_in(REPORT_CONFIG["VALID_STATUSES"]))
     if len(dp_cra) == 0:
         print("  Note: No CRA records with valid status")
-        dp_cra = pl.DataFrame({
-            'BRANCH': [], 'CUSTICKETNO': [], 'INVCURAC': [], 'CUSTNAME': [],
-            'INVAMT': [], 'STARTDT': [], 'MATDT': [], 'DCIRT': [],
-            'TENOR': [], 'INV_STATUS': [], 'ACCINT': [], 'CUSTCODE_DB2': []
+        # Preserve full schema (including columns added below) even when empty
+        dp_cra = pl.DataFrame(schema={
+            'BRANCH': pl.Utf8, 'CUSTICKETNO': pl.Utf8, 'INVCURAC': pl.Int64,
+            'CUSTNAME': pl.Utf8, 'INVAMT': pl.Float64, 'STARTDT': pl.Utf8,
+            'MATDT': pl.Utf8, 'DCIRT': pl.Float64, 'TENOR': pl.Int64,
+            'INV_STATUS': pl.Utf8, 'ACCINT': pl.Float64, 'CUSTCODE_DB2': pl.Int64
         })
-    
-    if len(dp_cra) > 0:
-        dp_cra = dp_cra.with_columns([
-            pl.lit("Outstanding").alias("STATUSIND"),
-            pl.lit(REPORT_CONFIG["MYR_CURRENCY"]).alias("INVCURR"),
-            pl.lit(0.0).alias("PREMPAID"),
-            pl.lit(0.0).alias("ACCINT")
-        ])
+
+    # Always add derived columns, whether dp_cra has rows or not
+    dp_cra = dp_cra.with_columns([
+        pl.lit("Outstanding").alias("STATUSIND"),
+        pl.lit(REPORT_CONFIG["MYR_CURRENCY"]).alias("INVCURR"),
+        pl.lit(0.0).alias("PREMPAID"),
+        pl.lit(0.0).alias("ACCINT")
+    ]) if dp_cra.width > 0 else dp_cra
 
     depo = pl.concat([mnitb_saving, mnitb_current])
     depo = depo.rename({"ACCTNO": "INVCURAC"})
     print(f"  DEPO combined: {len(depo):,} rows")
     depo = ensure_join_key_type(depo, 'INVCURAC', pl.Int64)
 
-    if len(dp_cra) > 0 and len(depo) > 0:
+    if dp_cra.width > 0 and depo.width > 0:
         dp_cra = dp_cra.join(depo, on="INVCURAC", how="inner")
         dp_cra = dp_cra.filter(pl.col("CUSTCODE") >= REPORT_CONFIG["MIN_CUSTCODE"])
         print(f"  CRA after processing: {len(dp_cra):,} rows")
@@ -619,8 +634,7 @@ def main():
         print("  Note: No CRA or DEPO data to join")
         dp_cra = pl.DataFrame()
 
-    if len(dp_cra) > 0:
-        eqdci = pl.concat([eqdci, dp_cra])
+    eqdci = safe_concat([eqdci, dp_cra])
     print(f"  Combined EQDCI: {len(eqdci):,} rows")
 
     # FX enrichment
@@ -653,7 +667,7 @@ def main():
     print("\nProcessing Interbank Leg...")
     ibnmyr = pl.DataFrame()
     ibnfcy = pl.DataFrame()
-    
+
     if len(eqi) > 0:
         eqdci_ib = eqi.filter(pl.col("FISSCODE") >= "80")
         eqdci_ib = eqdci_ib.join(eqrt.select(['INVCURR', 'SPOTRT']), on="INVCURR", how="left")
@@ -680,16 +694,16 @@ def main():
     # -------------------------------------------------------------------
     text_path = get_output_path("TEXT", date_vars)
     ensure_directory(text_path)
-    
+
     print(f"\nWriting DCITXT output to {text_path}...")
     timestamp = datetime.now().strftime("%H:%M %A, %B %d, %Y")
-    
+
     with open(text_path, "w") as f:
         # Customer MYR section
         f.write(" " * 52 + "PUBLIC BANK BERHAD" + " " * 60 + f"{timestamp}   1\n")
         f.write(f"{' ' * 82}DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR MYR AS AT {RDATE}\n")
         f.write(" Obs CUSTICKETNO                    TICKETNO CUSTNAME                    CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     ACCINT   ACCINTRM   PREMPAID PREMPAIDRM\n")
-        
+
         # Write data rows
         obs = 1
         for row in cusmyr.iter_rows(named=True):
@@ -717,24 +731,24 @@ def main():
                       f"{row.get('PREMPAIDRM', 0):>10,.2f}")
             f.write(row_str + "\n")
             obs += 1
-        
+
         # Summary line for MYR
         if len(cusmyr) > 0:
             total_accint = cusmyr['ACCINT'].sum()
             total_accintrm = cusmyr['ACCINTRM'].sum()
             total_prempaid = cusmyr['PREMPAID'].sum()
             total_prempaidrm = cusmyr['PREMPAIDRM'].sum()
-            
+
             f.write(f"{' ' * 77}{'=' * 10} {'=' * 10} {'=' * 10} {'=' * 10}\n")
             f.write(f"{' ' * 77}{total_accint:>10,.2f} {total_accintrm:>10,.2f} {total_prempaid:>10,.2f} {total_prempaidrm:>10,.2f}\n")
-        
+
         # Customer FCY section (if any)
         if len(cusfcy) > 0:
             timestamp2 = datetime.now().strftime("%H:%M %A, %B %d, %Y")
             f.write(f"\n{' ' * 52}PUBLIC BANK BERHAD{' ' * 60}{timestamp2}   2\n")
             f.write(f"{' ' * 82}DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR FCY AS AT {RDATE}\n")
             f.write(" Obs CUSTICKETNO                    TICKETNO CUSTNAME                    CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     ACCINT   ACCINTRM   PREMPAID PREMPAIDRM\n")
-            
+
             obs = 1
             for row in cusfcy.iter_rows(named=True):
                 row_str = (f"{obs:>4} "
@@ -761,24 +775,25 @@ def main():
                           f"{row.get('PREMPAIDRM', 0):>10,.2f}")
                 f.write(row_str + "\n")
                 obs += 1
-            
+
             # Summary for FCY
             total_accint = cusfcy['ACCINT'].sum()
             total_accintrm = cusfcy['ACCINTRM'].sum()
             total_prempaid = cusfcy['PREMPAID'].sum()
             total_prempaidrm = cusfcy['PREMPAIDRM'].sum()
-            
+
             f.write(f"{' ' * 77}{'=' * 10} {'=' * 10} {'=' * 10} {'=' * 10}\n")
             f.write(f"{' ' * 77}{total_accint:>10,.2f} {total_accintrm:>10,.2f} {total_prempaid:>10,.2f} {total_prempaidrm:>10,.2f}\n")
-        
+
         # Interbank MYR section (if any)
         if len(ibnmyr) > 0:
+            # Get next page number
             page_num = 3
             timestamp3 = datetime.now().strftime("%H:%M %A, %B %d, %Y")
             f.write(f"\n{' ' * 52}PUBLIC BANK BERHAD{' ' * 60}{timestamp3}   {page_num}\n")
             f.write(f"{' ' * 82}DAILY EXTRACTION OF DCI INTERBANK FOR MYR AS AT {RDATE}\n")
             f.write(" Obs CUSTICKETNO TICKETNO CUSTNAME                        CUSTRES CUSTLOC   FISSCODE  EQCUSTYP BRANCH   INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT STATUSIND    STARTDT    MATDT   PREMREC PREMRECRM\n")
-            
+
             obs = 1
             for row in ibnmyr.iter_rows(named=True):
                 row_str = (f"{obs:>4} "
@@ -811,7 +826,7 @@ def main():
             f.write(f"\n{' ' * 52}PUBLIC BANK BERHAD{' ' * 60}{timestamp4}   {page_num}\n")
             f.write(f"{' ' * 82}DAILY EXTRACTION OF DCI INTERBANK FOR FCY AS AT {RDATE}\n")
             f.write(" Obs CUSTICKETNO TICKETNO CUSTNAME                        CUSTRES CUSTLOC   FISSCODE  EQCUSTYP BRANCH   INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT STATUSIND    STARTDT    MATDT   PREMREC PREMRECRM\n")
-            
+
             obs = 1
             for row in ibnfcy.iter_rows(named=True):
                 row_str = (f"{obs:>4} "
@@ -843,13 +858,40 @@ def main():
     # Step 8: Build DCI
     # -------------------------------------------------------------------
     print("\nBuilding DCI final output...")
-    
-    # Use safe_concat function to combine dataframes
-    dcimyr = safe_concat([cusmyr, ibnmyr])
-    
+
+    # Combine customer and interbank data for DCI.
+    # FIX: previously this branched on len(df) > 0 (row count), which
+    # caused an empty-but-schema'd DataFrame (e.g. ibnmyr with 0 rows
+    # but 57 columns) to be replaced with a columnless pl.DataFrame(),
+    # crashing pl.concat with a ShapeError. We now branch on .width
+    # (column count) to detect "has a schema" vs "truly absent", and
+    # always select() / concat() against the common schema regardless
+    # of row count.
+    dcimyr = pl.DataFrame()
+    if cusmyr.width > 0 or ibnmyr.width > 0:
+        cus_cols = set(cusmyr.columns) if cusmyr.width > 0 else set()
+        ibn_cols = set(ibnmyr.columns) if ibnmyr.width > 0 else set()
+
+        if cus_cols and ibn_cols:
+            common_cols = list(cus_cols & ibn_cols)
+        elif cus_cols:
+            common_cols = list(cus_cols)
+        else:
+            common_cols = list(ibn_cols)
+
+        frames = []
+        if cus_cols:
+            frames.append(cusmyr.select(common_cols))
+        if ibn_cols:
+            frames.append(ibnmyr.select(common_cols))
+
+        dcimyr = safe_concat(frames)
+        print(f"  Combined customer and interbank data: {len(dcimyr)} rows")
+    else:
+        print("  No data available to build DCI")
+
+    # Process DCI
     if len(dcimyr) > 0:
-        print(f"  Combined data for DCI: {len(dcimyr)} rows")
-        
         # Add PREMIUM column
         dcimyr = dcimyr.with_columns([
             pl.when(pl.col("TYPE") == "C")
@@ -864,12 +906,12 @@ def main():
             dd = d.day
             mm = d.month
             yy = d.year
-            
+
             elday = ELDAY_MAPPING.get(dd, 'DAYX')
-            
+
             if mm in (4, 6, 9, 11) and dd == 30:
                 elday = 'DAYI'
-            
+
             if mm == 2:
                 if dd == 28:
                     elday = 'DAYI'
@@ -877,7 +919,7 @@ def main():
                         elday = 'DAYF'
                 if dd == 29 and yy % 4 == 0:
                     elday = 'DAYI'
-            
+
             return elday
 
         dcimyr = dcimyr.with_columns([
@@ -895,7 +937,7 @@ def main():
                     "REPTDATS": row["REPTDATS"],
                     "AMOUNT": accintrm
                 })
-            
+
             premium = row.get("PREMIUM", 0)
             if premium not in (None, 0):
                 records.append({
@@ -923,7 +965,7 @@ def main():
     # Step 9: Write outputs
     # -------------------------------------------------------------------
     print("\nWriting output files...")
-    
+
     # Write Parquet
     parquet_path = get_output_path("PARQUET", date_vars)
     ensure_directory(parquet_path)
