@@ -29,20 +29,35 @@ Processing Customer Leg...
   EQDCI after join: 5 rows
   Note: No CRA records with valid status
   DEPO combined: 7,753,176 rows
-  CRA after processing: 0 rows
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDCITX.py", line 1001, in <module>
-    main()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDCITX.py", line 637, in main
-    eqdci = safe_concat([eqdci, dp_cra])
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDCITX.py", line 426, in safe_concat
-    return pl.concat(real_frames, how="vertical_relaxed")
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/functions/eager.py", line 236, in concat
-    out = wrap_ldf(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ComputeError: schema lengths differ
+  Note: No CRA or DEPO data to join
+  Combined EQDCI: 5 rows
+  Customer MYR: 4 rows, FCY: 1 rows
+
+Processing Interbank Leg...
+  Interbank MYR: 0 rows, FCY: 0 rows
+
+Writing DCITXT output to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt...
+  ✓ DCITXT written to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt
+
+Building DCI final output...
+  Combined data for DCI: 4 rows
+  DCI final: 2 aggregated records
+
+Writing output files...
+  ✓ Parquet written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_260629.parquet
+
+Writing SAS dataset to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI064.sas7bdat...
+  Connecting to SAS session...
+Using SAS Config named: default
+SAS Connection established. Subprocess id is 949756
+
+  Writing SAS dataset: BNMK_DCI064...
+The libref specified is not assigned in this SAS Session.
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+  ✓ SAS dataset written using saspy: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI064.sas7bdat
+  ✓ CSV written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_260629.csv
+
+================================================================================
+EIBDCITX completed successfully for 29/06/2026 (Yesterday's data)!
+================================================================================
