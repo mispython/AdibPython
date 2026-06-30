@@ -15,22 +15,22 @@ from pathlib import Path
 # Input Paths
 INPUT_PATHS = {
     # Main data files
-    "DPFL": "data/input/DPFL.txt",           # DCI Daily raw (fixed width)
-    "EQFL": "data/input/EQFL.txt",           # EQ file (pipe delimited)
-    "CRA": "data/input/CRA.txt",             # Callable Range Accrual (fixed width)
-    "EQRATE": "data/input/EQRATE",           # Base name for EQRATE SAS dataset (date will be appended)
-    "MNITB_SAVING": "data/input/MNITB_SAVING.txt",
-    "MNITB_CURRENT": "data/input/MNITB_CURRENT.txt",
-    "DCID": "data/input/DCID",               # Base name for DCID (date will be appended)
+    "DPFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPFL.txt",           # NEED TO PUSH FROM HOST TO EDW
+    "EQFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/EQFL.txt",           # /sasdata/rawdata/eq
+    "CRA": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/CRA.txt",             # /sasdata/rawdata/deposit
+    "EQRATE": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/EQRATE",           # /dwh/eq_d
+    "MNITB_SAVING": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/MNITB_SAVING.txt", #/sas/deposit/dwh/integration
+    "MNITB_CURRENT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/MNITB_CURRENT.txt", #/sas/deposit/dwh/integration
+    "DCID": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/dcid0629.sas7bdat",               # Base name for DCID (date will be appended)
 }
 
 # Output Paths
 OUTPUT_PATHS = {
-    "PARQUET": "data/output/DCI_{date}.parquet",
-    "CSV": "data/output/DCI_{date}.csv",
-    "SAS": "data/output/BNMK_DCI{mon}{wk}.sas7bdat",
-    "TEXT": "data/output/DCITXT.txt",
-    "DUCKDB": "data/output/dci_analytics.db",     # DuckDB database file
+    "PARQUET": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.parquet",
+    "CSV": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.csv",
+    "SAS": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI{mon}{wk}.sas7bdat",
+    "TEXT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt",
+    "DUCKDB": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/dci_analytics.db",     # DuckDB database file
 }
 
 # Archive Paths (optional - for moving processed files)
