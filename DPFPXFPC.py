@@ -678,4 +678,68 @@ def main():
         return elday
 
     dcimyr = dcimyr.with_columns([
-        pl.col("REPT
+        pl.col("REPTDATS").map_elements(calc_elday).alias("ELDAY")
+    ])
+
+    # Generate BNM records
+    records = []
+    for row in dcimyr.iter_rows(named=True):
+        accintrm = row.get("ACCINTRM", 0)
+        if accintrm not in (None, 0):
+            records.append({
+                "BNMCODE": BNM_CODES["ACCINTRM"],
+                "ELDAY": row["ELDAY"],
+                "REPTDATS": row["REPTDATS"],
+                "AMOUNT": accintrm
+            })
+        
+        premium = row.get("PREMIUM", 0)
+        if premium not in (None, 0):
+            records.append({
+                "BNMCODE": BNM_CODES["PREMIUM"],
+                "ELDAY": row["ELDAY"],
+                "REPTDATS": row["REPTDATS"],
+                "AMOUNT": premium
+            })
+
+    dci_final = pl.DataFrame(records)
+
+    # Aggregate
+    dci_final = dci_final.group_by(["BNMCODE", "ELDAY", "REPTDATS"]).agg(
+        pl.sum("AMOUNT").alias("AMOUNT")
+    )
+    print(f"  DCI final: {len(dci_final):,} aggregated records")
+
+    # -------------------------------------------------------------------
+    # Step 8: Write outputs
+    # -------------------------------------------------------------------
+    print("\nWriting output files...")
+    
+    # Write Parquet output
+    parquet_path = get_output_path("PARQUET", date_vars)
+    ensure_directory(parquet_path)
+    dci_final.write_parquet(parquet_path)
+    print(f"  ✓ Parquet written: {parquet_path}")
+
+    # Write SAS7bdat output
+    sas_path = get_output_path("SAS", date_vars)
+    ensure_directory(sas_path)
+    try:
+        dci_pd = dci_final.to_pandas()
+        pyreadstat.write_sas7bdat(dci_pd, sas_path)
+        print(f"  ✓ SAS dataset written: {sas_path}")
+    except Exception as e:
+        print(f"  ✗ Could not write SAS dataset: {e}")
+
+    # Write CSV output
+    csv_path = get_output_path("CSV", date_vars)
+    ensure_directory(csv_path)
+    dci_final.write_csv(csv_path)
+    print(f"  ✓ CSV written: {csv_path}")
+
+    print("\n" + "=" * 80)
+    print(f"EIBDCITX completed successfully for {RDATE} (Yesterday's data)!")
+    print("=" * 80)
+
+if __name__ == "__main__":
+    main()
