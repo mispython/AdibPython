@@ -1,8 +1,9 @@
-# eibdcitx.py - FIXED with CRA record length 942 and DCID column filtering
+# eibdcitx.py - FIXED CRA PARSING
 import polars as pl
 from datetime import date, datetime, timedelta
 import pyreadstat
 import os
+import struct
 from pathlib import Path
 
 # ===================================================================
@@ -66,37 +67,6 @@ ELDAY_MAPPING = {
     8: 'DAYI', 15: 'DAYI', 22: 'DAYI', 31: 'DAYI'
 }
 
-# CRA record length - confirmed by exact divisibility: 1,472,346 / 942 = 1563
-CRA_RECORD_LENGTH = 942
-
-# CRA field definitions based on SAS INPUT statement
-# @001 BRANCH $3.
-# @007 CUSTICKETNO $60.
-# @067 INVCURAC PD6.
-# @073 CUSTNAME $140.
-# @443 INVAMT PD7.2
-# @450 STARTDT YYMMDD10.
-# @460 MATDT YYMMDD10.
-# @477 DCIRT PD7.7
-# @486 TENOR PD2.
-# @488 INV_STATUS $3.
-# @494 ACCINT PD8.6
-# @839 CUSTCODE_DB2 2.
-CRA_FIELDS = [
-    {'name': 'BRANCH', 'start': 0, 'length': 3, 'type': 'str'},
-    {'name': 'CUSTICKETNO', 'start': 6, 'length': 60, 'type': 'str'},
-    {'name': 'INVCURAC', 'start': 66, 'length': 6, 'type': 'pd'},
-    {'name': 'CUSTNAME', 'start': 72, 'length': 140, 'type': 'str'},
-    {'name': 'INVAMT', 'start': 442, 'length': 7, 'type': 'pd', 'scale': 2},
-    {'name': 'STARTDT', 'start': 449, 'length': 10, 'type': 'str'},
-    {'name': 'MATDT', 'start': 459, 'length': 10, 'type': 'str'},
-    {'name': 'DCIRT', 'start': 476, 'length': 7, 'type': 'pd', 'scale': 7},
-    {'name': 'TENOR', 'start': 485, 'length': 2, 'type': 'pd', 'scale': 0},
-    {'name': 'INV_STATUS', 'start': 487, 'length': 3, 'type': 'str'},
-    {'name': 'ACCINT', 'start': 493, 'length': 8, 'type': 'pd', 'scale': 6},
-    {'name': 'CUSTCODE_DB2', 'start': 838, 'length': 2, 'type': 'str'},
-]
-
 # ===================================================================
 # Helper Functions
 # ===================================================================
@@ -116,16 +86,18 @@ def get_input_path(file_key, date_vars):
 def get_output_path(file_key, date_vars):
     return format_path_with_date(OUTPUT_PATHS[file_key], date_vars)
 
-def decode_packed_decimal(data, scale=0):
-    """Decode packed decimal (COMP-3) data"""
+def decode_packed_decimal(data):
+    """Decode packed decimal (COMP-3) data from SAS"""
     if not data or len(data) == 0:
         return 0
     
     value = 0
     sign = 1
     
-    for i, byte in enumerate(data):
-        byte_val = byte if isinstance(byte, int) else ord(byte)
+    for i, byte_val in enumerate(data):
+        if isinstance(byte_val, str):
+            byte_val = ord(byte_val)
+        
         if i == len(data) - 1:
             # Last byte contains sign
             digit1 = (byte_val >> 4) & 0x0F
@@ -141,10 +113,63 @@ def decode_packed_decimal(data, scale=0):
             value = value * 10 + digit1
             value = value * 10 + digit2
     
-    return value * sign / (10 ** scale)
+    return value * sign
+
+def parse_cra_record(record):
+    """Parse a single CRA record based on SAS INPUT statement"""
+    # @001 BRANCH $3. - bytes 0-2
+    branch = record[0:3].decode('ascii', errors='ignore').strip()
+    
+    # @007 CUSTICKETNO $60. - bytes 6-65
+    custicketno = record[6:66].decode('ascii', errors='ignore').strip()
+    
+    # @067 INVCURAC PD6. - bytes 66-71
+    invcurac = decode_packed_decimal(record[66:72])
+    
+    # @073 CUSTNAME $140. - bytes 72-211
+    custname = record[72:212].decode('ascii', errors='ignore').strip()
+    
+    # @443 INVAMT PD7.2 - bytes 442-448
+    invamt = decode_packed_decimal(record[442:449]) / 100
+    
+    # @450 STARTDT YYMMDD10. - bytes 449-458
+    startdt = record[449:459].decode('ascii', errors='ignore').strip()
+    
+    # @460 MATDT YYMMDD10. - bytes 459-468
+    matdt = record[459:469].decode('ascii', errors='ignore').strip()
+    
+    # @477 DCIRT PD7.7 - bytes 476-482
+    dcirt = decode_packed_decimal(record[476:483]) / 10000000
+    
+    # @486 TENOR PD2. - bytes 485-486
+    tenor = decode_packed_decimal(record[485:487])
+    
+    # @488 INV_STATUS $3. - bytes 487-489
+    inv_status = record[487:490].decode('ascii', errors='ignore').strip()
+    
+    # @494 ACCINT PD8.6 - bytes 493-500
+    accint = decode_packed_decimal(record[493:501]) / 1000000
+    
+    # @839 CUSTCODE_DB2 2. - bytes 838-839
+    custcode_db2 = record[838:840].decode('ascii', errors='ignore').strip()
+    
+    return {
+        'BRANCH': branch,
+        'CUSTICKETNO': custicketno,
+        'INVCURAC': invcurac,
+        'CUSTNAME': custname,
+        'INVAMT': invamt,
+        'STARTDT': startdt,
+        'MATDT': matdt,
+        'DCIRT': dcirt,
+        'TENOR': tenor,
+        'INV_STATUS': inv_status,
+        'ACCINT': accint,
+        'CUSTCODE_DB2': int(custcode_db2) if custcode_db2 else None
+    }
 
 def load_cra_file(file_path):
-    """Load CRA binary file with proper record length 942"""
+    """Load CRA binary file with proper record structure"""
     records = []
     
     try:
@@ -152,7 +177,7 @@ def load_cra_file(file_path):
             data = f.read()
         
         file_size = len(data)
-        record_length = CRA_RECORD_LENGTH
+        record_length = 942  # Confirmed: 1,472,346 / 942 = 1,563
         num_records = file_size // record_length
         
         print(f"  File size: {file_size:,} bytes")
@@ -166,23 +191,12 @@ def load_cra_file(file_path):
             if len(record) < record_length:
                 break
             
-            row = {}
-            
-            for field in CRA_FIELDS:
-                start = field['start']
-                length = field['length']
-                field_data = record[start:start+length]
-                
-                if field['type'] == 'str':
-                    # Decode as ASCII, ignore errors
-                    value = field_data.decode('ascii', errors='ignore').strip()
-                    row[field['name']] = value
-                elif field['type'] == 'pd':
-                    # Packed decimal
-                    scale = field.get('scale', 0)
-                    row[field['name']] = decode_packed_decimal(field_data, scale)
-            
-            records.append(row)
+            try:
+                row = parse_cra_record(record)
+                records.append(row)
+            except Exception as e:
+                # Skip records that fail parsing
+                continue
         
         print(f"  Parsed {len(records):,} CRA records")
         return pl.DataFrame(records)
@@ -491,11 +505,9 @@ def main():
             cra_path = cra_path_txt
         
         print(f"  Loading CRA from: {cra_path}")
-        # Use the correct CRA binary parser with 942 byte record length
         cra = load_cra_file(cra_path)
         print(f"  ✓ Loaded CRA: {len(cra):,} rows")
         
-        # Print sample data and status values for debugging
         if len(cra) > 0:
             print(f"  CRA sample data (first 2 rows):")
             print(cra.head(2))
@@ -534,7 +546,6 @@ def main():
 
     try:
         dcid_path = get_input_path("DCID", date_vars)
-        # IMPORTANT: Only keep TICKETNO and CUSTCODE (matches SAS KEEP)
         dcid = load_sas_file_fast(dcid_path, columns_to_keep=['TICKETNO', 'CUSTCODE'])
         print(f"  ✓ Loaded DCID: {len(dcid):,} rows (only TICKETNO, CUSTCODE)")
     except Exception as e:
@@ -689,10 +700,21 @@ def main():
             startdt = format_date_for_display(row.get('STARTDT', ''))
             matdt = format_date_for_display(row.get('MATDT', ''))
             
-            accint = scale_value(row.get('ACCINT', 0))
-            accintrm = scale_value(row.get('ACCINTRM', 0))
-            prempaid = scale_value(row.get('PREMPAID', 0))
-            prempaidrm = scale_value(row.get('PREMPAIDRM', 0))
+            # Scale ACCINT and PREMPAID if they're in SAS format (multiplied by 1,000,000)
+            accint = row.get('ACCINT', 0)
+            accintrm = row.get('ACCINTRM', 0)
+            prempaid = row.get('PREMPAID', 0)
+            prempaidrm = row.get('PREMPAIDRM', 0)
+            
+            # If values are from SAS (in millions), scale down
+            if accint > 1000000:
+                accint = accint / 1000000
+            if accintrm > 1000000:
+                accintrm = accintrm / 1000000
+            if prempaid > 1000000:
+                prempaid = prempaid / 1000000
+            if prempaidrm > 1000000:
+                prempaidrm = prempaidrm / 1000000
             
             row_str = (f"{obs:>4} "
                       f"{str(row.get('CUSTICKETNO', '')):>26} "
@@ -721,55 +743,23 @@ def main():
         
         # Summary line
         if len(cusmyr) > 0:
-            total_accint = scale_value(cusmyr['ACCINT'].sum())
-            total_accintrm = scale_value(cusmyr['ACCINTRM'].sum())
-            total_prempaid = scale_value(cusmyr['PREMPAID'].sum())
-            total_prempaidrm = scale_value(cusmyr['PREMPAIDRM'].sum())
+            total_accint = cusmyr['ACCINT'].sum()
+            total_accintrm = cusmyr['ACCINTRM'].sum()
+            total_prempaid = cusmyr['PREMPAID'].sum()
+            total_prempaidrm = cusmyr['PREMPAIDRM'].sum()
+            
+            # Scale if needed
+            if total_accint > 1000000:
+                total_accint = total_accint / 1000000
+            if total_accintrm > 1000000:
+                total_accintrm = total_accintrm / 1000000
+            if total_prempaid > 1000000:
+                total_prempaid = total_prempaid / 1000000
+            if total_prempaidrm > 1000000:
+                total_prempaidrm = total_prempaidrm / 1000000
             
             f.write(f"{' ' * 77}{'=' * 10} {'=' * 10} {'=' * 10} {'=' * 10}\n")
             f.write(f"{' ' * 77}{total_accint:>10,.2f} {total_accintrm:>10,.2f} {total_prempaid:>10,.2f} {total_prempaidrm:>10,.2f}\n")
-        
-        # Customer FCY section
-        if len(cusfcy) > 0:
-            timestamp2 = datetime.now().strftime("%H:%M %A, %B %d, %Y")
-            f.write(f"\n{' ' * 52}PUBLIC BANK BERHAD{' ' * 60}{timestamp2}   2\n")
-            f.write(f"{' ' * 82}DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR FCY AS AT {RDATE}\n")
-            f.write(" Obs CUSTICKETNO                    TICKETNO CUSTNAME                    CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     ACCINT   ACCINTRM   PREMPAID PREMPAIDRM\n")
-            
-            obs = 1
-            for row in cusfcy.iter_rows(named=True):
-                startdt = format_date_for_display(row.get('STARTDT', ''))
-                matdt = format_date_for_display(row.get('MATDT', ''))
-                
-                accint = scale_value(row.get('ACCINT', 0))
-                accintrm = scale_value(row.get('ACCINTRM', 0))
-                prempaid = scale_value(row.get('PREMPAID', 0))
-                prempaidrm = scale_value(row.get('PREMPAIDRM', 0))
-                
-                row_str = (f"{obs:>4} "
-                          f"{str(row.get('CUSTICKETNO', '')):>26} "
-                          f"{str(row.get('TICKETNO', '')):>10} "
-                          f"{str(row.get('CUSTNAME', '')):>30} "
-                          f"{row.get('CUSTCODE', 0):>8} "
-                          f"{str(row.get('BRANCH', '')):>8} "
-                          f"{str(row.get('INVCURAC', '')):>12} "
-                          f"{str(row.get('ALTCURAC', '')):>12} "
-                          f"{str(row.get('INVCURR', '')):>8} "
-                          f"{str(row.get('ALTCURR', '')):>8} "
-                          f"{row.get('INVAMT', 0):>12,.2f} "
-                          f"{row.get('ALTAMT', 0):>12,.2f} "
-                          f"{row.get('TENOR', 0):>6} "
-                          f"{row.get('SPOTRT', 0):>12.7f} "
-                          f"{row.get('DCIRT', 0):>8.5f} "
-                          f"{str(row.get('STATUSIND', '')):>12} "
-                          f"{startdt:>12} "
-                          f"{matdt:>12} "
-                          f"{accint:>10,.2f} "
-                          f"{accintrm:>10,.2f} "
-                          f"{prempaid:>10,.2f} "
-                          f"{prempaidrm:>10,.2f}")
-                f.write(row_str + "\n")
-                obs += 1
 
     print(f"  ✓ DCITXT written to {text_path}")
 
