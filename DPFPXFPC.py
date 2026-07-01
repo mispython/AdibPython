@@ -1,17 +1,30 @@
-Processing date: 2026-07-01
-SAS date number: 24288
-REPTYEAR: 2026
-REPTMON: 07
-REPTDAY: 01
-RDATE: 26182 (YYDDD format)
-No data found for SAS date 24288 in BEHAVEINDFXFD
-No data found for SAS date 24288 in BEHAVENONFXFD
-No data found for SAS date 24288 in BEHAVEINDFXCA
-No data found for SAS date 24288 in BEHAVENONFXCA
+i used the datetime(2026, 6, 29), below is the output
 
-❌ No data found for date 2026-07-01 (SAS date: 24288)
-Available SAS dates in your files:
-  Date range: 2025-06-30 to 2026-06-29
-  Number of dates available: 49
-  First 10 dates: 2025-06-30, 2025-07-08, 2025-07-15, 2025-07-22, 2025-07-31, 2025-08-08, 2025-08-15, 2025-08-22, 2025-08-31, 2025-09-08
-  ...
+Processing date: 2026-06-29
+SAS date number: 24286
+REPTYEAR: 2026
+REPTMON: 06
+REPTDAY: 29
+RDATE: 26180 (YYDDD format)
+Loaded 1 records from BEHAVEINDFXFD
+Loaded 1 records from BEHAVENONFXFD
+Loaded 1 records from BEHAVEINDFXCA
+Loaded 1 records from BEHAVENONFXCA
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDMSFX.py:149: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  nlf_combined = pd.concat(nlf_data, ignore_index=True)
+
+Total records combined: 4
+
+Summary records: 1
+INDFXFDBAL Total: 4801495.00
+NONFXFDBAL Total: 22714832.00
+INDFXCABAL Total: 281353.00
+NONFXCABAL Total: 2800517.00
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDMSFX.py", line 254, in <module>
+    main()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDMSFX.py", line 216, in main
+    pyreadstat.write_sas7bdat(nlf_summary, output_sas_path)
+AttributeError: module 'pyreadstat' has no attribute 'write_sas7bdat'
+
+
