@@ -1,186 +1,985 @@
-Running EIBDCITX for 29/06/26 (WK=4) - Processing YESTERDAY'S data
-================================================================================
+# eibdcitx.py - FIXED DCITXT FORMATTING
+import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
+import duckdb
+from datetime import date, datetime, timedelta
+import pyreadstat
+import os
+from pathlib import Path
 
-Loading input files...
-  ✓ Loaded DPFL: 89,493 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPFL.txt
-  ✓ Loaded EQFL: 421 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/UTSASDCID_20260629.txt
-  ✓ Loaded CRA: 1,563 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPCRATXT_20260629
-  Note: pyreadstat doesn't support column selection, loading full file then filtering...
-  ✓ Loaded EQRATE: 57 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/eqrate260629.sas7bdat
-  Loading MNITB Saving...
-  ✓ Loading from Parquet cache: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_saving.parquet
-  ✓ Loaded MNITB Saving: 6,634,478 rows
-  Loading MNITB Current...
-  ✓ Loading from Parquet cache: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_current.parquet
-  ✓ Loaded MNITB Current: 1,118,698 rows
-  Note: pyreadstat doesn't support column selection, loading full file then filtering...
-  ✓ Loaded DCID: 210 rows from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/dcid0629.sas7bdat
+# ===================================================================
+# PATH CONFIGURATION - Modify these paths as needed
+# ===================================================================
 
-================================================================================
+INPUT_PATHS = {
+    "DPFL":         "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPFL.txt",
+    "EQFL":         "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/UTSASDCID_{yyyy}{mm}{dd}.txt",
+    "CRA":          "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPCRATXT_{yyyy}{mm}{dd}",
+    "EQRATE":       "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/eqrate{yy}{mm}{dd}.sas7bdat",
+    "MNITB_SAVING": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/intg_dp_acct_saving.sas7bdat",
+    "MNITB_CURRENT":"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/intg_dp_acct_current.sas7bdat",
+    "DCID":         "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/dcid{mm}{dd}.sas7bdat",
+}
 
-Processing DPST...
-  DPST after merge: 89,493 rows
+PARQUET_CACHE = {
+    "MNITB_SAVING":  "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_saving.parquet",
+    "MNITB_CURRENT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_current.parquet",
+}
 
-Processing EQ data...
-  EQ after date filter: 300 rows
-  EQC: 150 rows, EQI: 150 rows
+OUTPUT_PATHS = {
+    "PARQUET": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.parquet",
+    "CSV":     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.csv",
+    "SAS":     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI{mon}{wk}.sas7bdat",
+    "TEXT":    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt",
+}
 
-Processing Customer Leg...
-  EQDCI after join: 5 rows
-  DEPO combined: 7,753,176 rows
-  CRA after processing: 34 rows
-  Combined EQDCI: 39 rows
-  Customer MYR: 38 rows, FCY: 1 rows
+SAS_CONFIG = {
+    "sascfg": {
+        "saspath": "/usr/local/SASHome/SASFoundation/9.4/bin/sas",
+        "options": ["-fullstimer", "-nosyntaxcheck", "-sasuser", "work"],
+    }
+}
 
-Processing Interbank Leg...
-  Interbank MYR: 0 rows, FCY: 0 rows
+# ===================================================================
+# FILE FORMAT CONFIGURATIONS
+# ===================================================================
 
-Writing DCITXT output to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt...
-  ✓ DCITXT written to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt
+FILE_FORMATS = {
+    "DPFL": {
+        "fixed_width": True,
+        "widths":  [7, 26, 20, 5, 11, 11, 15],
+        "columns": ['TICKETNO', 'CUSTNAME', 'NEWIC', 'CUSTCODE',
+                    'INVCURAC', 'ALTCURAC', 'ACCINT'],
+        "dtypes": {
+            'TICKETNO': pl.Utf8,  'CUSTNAME': pl.Utf8,
+            'NEWIC':    pl.Utf8,  'CUSTCODE': pl.Int64,
+            'INVCURAC': pl.Int64, 'ALTCURAC': pl.Int64,
+            'ACCINT':   pl.Float64
+        },
+        "implied_decimals": {'ACCINT': 6}
+    },
+    "EQFL": {
+        "separator":  "|",
+        "has_header": False,
+        "columns": [
+            'CUSTICKETNO','TICKETNO','BRANCH','CUSTNAME','DEALID',
+            'FISSCODE','CUSTRES','CUSTMNE','CUSTLOC','EQCUSTYP',
+            'PRODUCT','INVCURR','ALTCURR','INVAMT','INVAMTRM',
+            'ALTAMT','TRADEDT','STARTDT','FIXINGDT','MATDT',
+            'STOPDT','TENOR','STRIKERT','SPOTRT','DCIRT',
+            'ACCINTAMT','TOTINTAMT','ACCINTRM','MMRT','RSPOTRT',
+            'PREMREC','PREMPAID','PROFIT','PROFITMYR','UNWINDCOST',
+            'STATUSIND','STATUS','TYPE'
+        ],
+        "dtypes": {
+            'CUSTICKETNO': pl.Utf8,  'TICKETNO':  pl.Utf8,
+            'BRANCH':      pl.Utf8,  'CUSTNAME':  pl.Utf8,
+            'DEALID':      pl.Utf8,  'FISSCODE':  pl.Utf8,
+            'CUSTRES':     pl.Utf8,  'CUSTMNE':   pl.Utf8,
+            'CUSTLOC':     pl.Utf8,  'EQCUSTYP':  pl.Utf8,
+            'PRODUCT':     pl.Utf8,  'INVCURR':   pl.Utf8,
+            'ALTCURR':     pl.Utf8,  'INVAMT':    pl.Float64,
+            'INVAMTRM':    pl.Float64,'ALTAMT':   pl.Float64,
+            'TRADEDT':     pl.Utf8,  'STARTDT':   pl.Utf8,
+            'FIXINGDT':    pl.Utf8,  'MATDT':     pl.Utf8,
+            'STOPDT':      pl.Utf8,  'TENOR':     pl.Int64,
+            'STRIKERT':    pl.Float64,'SPOTRT':   pl.Float64,
+            'DCIRT':       pl.Float64,'ACCINTAMT':pl.Float64,
+            'TOTINTAMT':   pl.Float64,'ACCINTRM': pl.Float64,
+            'MMRT':        pl.Float64,'RSPOTRT':  pl.Float64,
+            'PREMREC':     pl.Float64,'PREMPAID': pl.Float64,
+            'PROFIT':      pl.Float64,'PROFITMYR':pl.Float64,
+            'UNWINDCOST':  pl.Float64,'STATUSIND':pl.Utf8,
+            'STATUS':      pl.Utf8,  'TYPE':      pl.Utf8
+        }
+    }
+}
 
-Building DCI final output...
-  Combined customer and interbank data: 38 rows
-  DCI final: 2 aggregated records
+# EQC keep columns (matching SAS %LET EQCVAR)
+EQC_KEEP_COLS = ['TICKETNO','CUSTICKETNO','BRANCH','INVCURR','ALTCURR',
+                 'INVAMT','ALTAMT','TENOR','STATUSIND','DCIRT','STARTDT',
+                 'MATDT','PREMPAID','TYPE']
 
-Writing output files...
-  ✓ Parquet written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_260629.parquet
+# EQI keep columns (matching SAS %LET EQIVAR)
+EQI_KEEP_COLS = ['TICKETNO','CUSTNAME','CUSTRES','CUSTLOC','FISSCODE',
+                 'CUSTICKETNO','BRANCH','INVCURR','ALTCURR','EQCUSTYP',
+                 'INVAMT','ALTAMT','TENOR','STATUSIND','STARTDT',
+                 'MATDT','PREMREC','TYPE']
 
-Writing SAS dataset to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI064.sas7bdat...
-  Connecting to SAS session...
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 1054817
+BNM_CODES = {
+    "ACCINTRM": "4911095000000Y",
+    "PREMIUM":  "4929996000000Y"
+}
 
-  Writing SAS dataset: BNMK_DCI064...
-The libref specified is not assigned in this SAS Session.
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
-  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-  ✓ SAS dataset written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI064.sas7bdat
-  ✓ CSV written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_260629.csv
+REPORT_CONFIG = {
+    "MIN_CUSTCODE":       80,
+    "VALID_STATUSES":     ["ACT","CEP","CEU","CCU","CMU"],
+    "JPY_CURRENCY":       "JPY",
+    "MYR_CURRENCY":       "MYR",
+    "DECIMAL_PLACES_JPY": 0,
+    "DECIMAL_PLACES_OTHER": 2
+}
 
-================================================================================
-EIBDCITX completed successfully for 29/06/26 (Yesterday's data)!
-================================================================================
-SAS Connection terminated. Subprocess id was 1054817
+ELDAY_MAPPING = {
+    1:'DAYA', 9:'DAYA', 16:'DAYA', 23:'DAYA',
+    2:'DAYB',10:'DAYB', 17:'DAYB', 24:'DAYB',
+    3:'DAYC',11:'DAYC', 18:'DAYC', 25:'DAYC',
+    4:'DAYD',12:'DAYD', 19:'DAYD', 26:'DAYD',
+    5:'DAYE',13:'DAYE', 20:'DAYE', 27:'DAYE',
+    6:'DAYF',14:'DAYF', 21:'DAYF', 28:'DAYF',
+    7:'DAYG',29:'DAYG',
+    30:'DAYH',
+    8:'DAYI',15:'DAYI', 22:'DAYI', 31:'DAYI'
+}
 
+# ===================================================================
+# CRA EBCDIC / PACKED-DECIMAL LAYOUT
+# ===================================================================
+CRA_LAYOUT = [
+    ('BRANCH',              0,   3, 'text',   0),
+    ('CUSTICKETNO',         6,  60, 'text',   0),
+    ('INVCURAC',           66,   6, 'pd',     0),
+    ('CUSTNAME',           72, 140, 'text',   0),
+    ('INVAMT',            442,   7, 'pd',     2),
+    ('STARTDT',           449,  10, 'date',   0),
+    ('MATDT',             459,  10, 'date',   0),
+    ('DCIRT',             476,   7, 'pd',     7),
+    ('TENOR',             485,   2, 'pd',     0),
+    ('INV_STATUS',        487,   3, 'text',   0),
+    ('ACCINT',            493,   8, 'pd',     6),
+    ('CUSTCODE_DB2',      838,   2, 'zoned',  0),
+]
 
+CRA_RECORD_LENGTH = 942
 
-python output:
+# ===================================================================
+# HELPER FUNCTIONS
+# ===================================================================
 
-                                                    PUBLIC BANK BERHAD                                                            09:23 Wednesday, July 01, 2026   1
-                                                                                  DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR MYR AS AT 29/06/26
- Obs CUSTICKETNO                    TICKETNO CUSTNAME                    CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     ACCINT   ACCINTRM   PREMPAID PREMPAIDRM
-   1          SUA/CRA001/000001                              NG EK CHEONG     95.0      287   4353940104                   MYR            100,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-   2          SSH/CRA005/000005                            LADDA SAE-YUAN     96.0      230   4562117718                   MYR            100,000.00         0.00      3    1.0000000  4.06000  Outstanding     28/01/26     29/01/29     700.77     700.77       0.00       0.00
-   3          SMY/CRA006/000019                             YANG CHAO-WEN     96.0      022   4686513215                   MYR            200,000.00         0.00      4    1.0000000  4.10000  Outstanding     13/03/26     13/03/30     336.99     336.99       0.00       0.00
-   4          BSR/CRA001/000001                       LEOW KIM LENG WENDY     96.0      129   5021907425                   MYR            100,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-   5          PTS/CRA003/000015                                 LI YULING     95.0      126   5042180833                   MYR            450,000.00         0.00      5    1.0000000  4.20000  Outstanding     10/10/25     10/10/30   4,194.25   4,194.25       0.00       0.00
-   6          MKA/CRA001/000009                             WONG SIEW HWA     95.0      269   5047240203                   MYR            100,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-   7          KLC/CRA001/000016                              CHOU DACHANG     96.0      168   5047518128                   MYR            400,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-   8          KLC/CRA001/000017                                   GUO YUE     96.0      168   5051139819                   MYR            300,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-   9          TJJ/CRA007/000041                      SIM GUAY KEK JASMINE     95.0      110   5051621229                   MYR            100,000.00         0.00      4    1.0000000  4.20000  Outstanding     23/04/26     23/04/30     782.47     782.47       0.00       0.00
-  10          KLC/CRA001/000046                            SHUANGYAN QIAN     96.0      168   5054699212                   MYR            300,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-  11          KLC/CRA003/000072                            SHUANGYAN QIAN     96.0      168   5054699212                   MYR            200,000.00         0.00      5    1.0000000  4.20000  Outstanding     10/10/25     10/10/30   1,864.11   1,864.11       0.00       0.00
-  12          JRC/CRA005/000008                                  JIN, WEI     96.0      003   5069443023                   MYR            100,000.00         0.00      3    1.0000000  4.06000  Outstanding     28/01/26     29/01/29     700.77     700.77       0.00       0.00
-  13          JYK/CRA005/000098                              KHOO KIM KEE     95.0      009   5076602735                   MYR            100,000.00         0.00      3    1.0000000  4.06000  Outstanding     28/01/26     29/01/29     700.77     700.77       0.00       0.00
-  14          JYK/CRA006/000110                              KHOO KIM KEE     95.0      009   5076602735                   MYR            200,000.00         0.00      4    1.0000000  4.10000  Outstanding     13/03/26     13/03/30     336.99     336.99       0.00       0.00
-  15          JYK/CRA007/000115                              KHOO KIM KEE     95.0      009   5076602735                   MYR            200,000.00         0.00      4    1.0000000  4.20000  Outstanding     23/04/26     23/04/30   1,564.93   1,564.93       0.00       0.00
-  16          KLC/CRA001/000018                  CHOU, SA-LI @ SALLY CHOU     96.0      168   5087103233                   MYR          2,000,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-  17          JRC/CRA005/000009                                  SHEN JIA     96.0      003   5088021518                   MYR            100,000.00         0.00      3    1.0000000  4.06000  Outstanding     28/01/26     29/01/29     700.77     700.77       0.00       0.00
-  18          JRC/CRA006/000012                                 HU YANHUI     96.0      003   5096094209                   MYR            100,000.00         0.00      4    1.0000000  4.10000  Outstanding     13/03/26     13/03/30     168.49     168.49       0.00       0.00
-  19          KKU/CRA003/000019                                  CHEN YAN     96.0      033   5105402200                   MYR            100,000.00         0.00      5    1.0000000  4.20000  Outstanding     10/10/25     10/10/30     932.05     932.05       0.00       0.00
-  20          PSG/CRA001/000026                             LIEW HUN SANG     95.0      146   5106947033                   MYR            150,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-  21          PSG/CRA007/000038                             LIEW HUN SANG     95.0      146   5106947033                   MYR            100,000.00         0.00      4    1.0000000  4.20000  Outstanding     23/04/26     23/04/30     782.47     782.47       0.00       0.00
-  22          KLC/CRA003/000071                                   LI, YAN     96.0      168   5113263318                   MYR            500,000.00         0.00      5    1.0000000  4.20000  Outstanding     10/10/25     10/10/30   4,660.27   4,660.27       0.00       0.00
-  23          JRC/CRA006/000011                               LIU JIANMIN     96.0      003   5113353120                   MYR            100,000.00         0.00      4    1.0000000  4.10000  Outstanding     13/03/26     13/03/30     168.49     168.49       0.00       0.00
-  24          PTS/CRA006/000025                        AGNES KUA HUN CHOO     95.0      126   5119986028                   MYR            100,000.00         0.00      4    1.0000000  4.10000  Outstanding     13/03/26     13/03/30     168.49     168.49       0.00       0.00
-  25          TNM/CRA008/000001                             DENG JIANFENG     96.0      197   5121299507                   MYR            200,000.00         0.00      4    1.0000000  4.10000  Outstanding     20/05/26     20/05/30     921.10     921.10       0.00       0.00
-  26          MLB/CRA006/000006                           FOONG CHEE SING     95.0      080   5121486835                   MYR            200,000.00         0.00      4    1.0000000  4.10000  Outstanding     13/03/26     13/03/30     336.99     336.99       0.00       0.00
-  27          BPI/CRA008/000049                                LI HAIQING     96.0      270   6342159803                   MYR            100,000.00         0.00      4    1.0000000  4.10000  Outstanding     20/05/26     20/05/30     460.55     460.55       0.00       0.00
-  28          MKA/CRA001/000002                              YOO AEKYOUNG     95.0      269   6362746314                   MYR            100,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-  29          MKA/CRA006/000016                              YOO AEKYOUNG     95.0      269   6362746314                   MYR            750,000.00         0.00      4    1.0000000  4.10000  Outstanding     13/03/26     13/03/30   1,263.70   1,263.70       0.00       0.00
-  30          JYK/CRA008/000143                             LOOI WAN LIMM     95.0      009   6399781123                   MYR            100,000.00         0.00      4    1.0000000  4.10000  Outstanding     20/05/26     20/05/30     460.55     460.55       0.00       0.00
-  31          JYK/CRA008/000144                              TAN KWEE WAA     95.0      009   6476816310                   MYR            200,000.00         0.00      4    1.0000000  4.10000  Outstanding     20/05/26     20/05/30     921.10     921.10       0.00       0.00
-  32          SUA/CRA001/000003                                  AGUSTINA     96.0      287   6498056116                   MYR            100,000.00         0.00      5    1.0000000  0.00000  Outstanding     19/06/25     19/06/30       0.00       0.00       0.00       0.00
-  33          TJJ/CRA008/000047                             KOH CHIN MENG     95.0      110   3244592306                   MYR            200,000.00         0.00      4    1.0000000  4.10000  Outstanding     20/05/26     20/05/30     921.10     921.10       0.00       0.00
-  34          TJJ/CRA008/000046                              LUM PAK YUEN     95.0      110   3250550305                   MYR            500,000.00         0.00      4    1.0000000  4.10000  Outstanding     20/05/26     20/05/30   2,302.74   2,302.74       0.00       0.00
-  35                     Z29759     Z29758                      LI HUIMIN     96.0      168   5071525805   3599635531      MYR      EUR   300,000.00    64,377.68      7    1.0000000  5.00000  Outstanding     29/06/26     06/07/26      82.19      82.19     129.45     129.45
-  36                     Z29761     Z29760                CHONG POH KWANG     95.0      028   5114913203   3596806721      MYR      SGD   100,000.00    31,486.15      7    1.0000000  6.40000  Outstanding     29/06/26     06/07/26      35.07      35.07      70.00      70.00
-  37                     Z29183     Z29182                   RAKHEE SINGH     96.0      168   5073069010   3596280202      MYR      USD   113,876.00    28,299.20     30    1.0000000  4.20000  Outstanding     09/06/26     09/07/26     288.28     288.28     135.72     135.72
-  38                     Z29353     Z29352        YUAN XIONGBING/LIU HONG     96.0      126   5060004119   3595603734      MYR      USD   100,000.00    24,636.61     30    1.0000000  3.20000  Outstanding     15/06/26     15/07/26     140.27     140.27      36.99      36.99
-                                                                             ========== ========== ========== ==========
-                                                                              26,896.72  26,896.72     372.16     372.16
-                                                                              26,896.72  26,896.72     372.16     372.16
+def ensure_directory(path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
 
-                                                    PUBLIC BANK BERHAD                                                            09:23 Wednesday, July 01, 2026   2
-                                                                                  DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR FCY AS AT 29/06/26
- Obs CUSTICKETNO                    TICKETNO CUSTNAME                    CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     ACCINT   ACCINTRM   PREMPAID PREMPAIDRM
-   1                     Z29379     Z29378               CHIENG HOCK KOCK     95.0      126   3590115215   3114593916      SGD      MYR    40,000.00   126,760.00     30    3.1472033  1.70000  Outstanding     15/06/26     15/07/26      29.81      93.82      19.73      62.09
-                                                                             ========== ========== ========== ==========
-                                                                                  29.81      93.82      19.73      62.09
+def format_path_with_date(path, date_vars):
+    result = path
+    for key, value in date_vars.items():
+        result = result.replace(f'{{{key}}}', str(value))
+    return result
 
+def get_input_path(file_key, date_vars):
+    return format_path_with_date(INPUT_PATHS[file_key], date_vars)
 
-
-
-actual production output:
-
-                                                                                                                       PUBLIC BANK BERHAD                                                                                       08:00 Tuesday, June 30, 2026   1
-                                                                                                  DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR MYR AS AT 29/06/26
- Obs CUSTICKETNO                    TICKETNO CUSTNAME                    CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     ACCINT   ACCINTRM   PREMPAID PREMPAIDRM
-   1 TJJ/CRA008/000047                       KOH CHIN MENG                   95    110    3244592306               MYR            200000.00                4   1.0000000  4.10000 Outstanding     20/05/26 20/05/30     921.10     921.10       0.00       0.00
-   2 TJJ/CRA008/000046                       LUM PAK YUEN                    95    110    3250550305               MYR            500000.00                4   1.0000000  4.10000 Outstanding     20/05/26 20/05/30    2302.74    2302.74       0.00       0.00
-   3 SUA/CRA001/000001                       NG EK CHEONG                    95    287    4353940104               MYR            100000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-   4 SSH/CRA005/000005                       LADDA SAE-YUAN                  96    230    4562117718               MYR            100000.00                3   1.0000000  4.06000 Outstanding     28/01/26 29/01/29     700.77     700.77       0.00       0.00
-   5 SMY/CRA006/000019                       YANG CHAO-WEN                   96    022    4686513215               MYR            200000.00                4   1.0000000  4.10000 Outstanding     13/03/26 13/03/30     336.99     336.99       0.00       0.00
-   6 BSR/CRA001/000001                       LEOW KIM LENG WENDY             96    129    5021907425               MYR            100000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-   7 PTS/CRA003/000015                       LI YULING                       95    126    5042180833               MYR            450000.00                5   1.0000000  4.20000 Outstanding     10/10/25 10/10/30    4194.25    4194.25       0.00       0.00
-   8 MKA/CRA001/000009                       WONG SIEW HWA                   95    269    5047240203               MYR            100000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-   9 KLC/CRA001/000016                       CHOU DACHANG                    96    168    5047518128               MYR            400000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-  10 KLC/CRA001/000017                       GUO YUE                         96    168    5051139819               MYR            300000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-  11 TJJ/CRA007/000041                       SIM GUAY KEK JASMINE            95    110    5051621229               MYR            100000.00                4   1.0000000  4.20000 Outstanding     23/04/26 23/04/30     782.47     782.47       0.00       0.00
-  12 KLC/CRA001/000046                       SHUANGYAN QIAN                  96    168    5054699212               MYR            300000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-  13 KLC/CRA003/000072                       SHUANGYAN QIAN                  96    168    5054699212               MYR            200000.00                5   1.0000000  4.20000 Outstanding     10/10/25 10/10/30    1864.11    1864.11       0.00       0.00
-  14 JRC/CRA005/000008                       JIN, WEI                        96    003    5069443023               MYR            100000.00                3   1.0000000  4.06000 Outstanding     28/01/26 29/01/29     700.77     700.77       0.00       0.00
-  15 JYK/CRA005/000098                       KHOO KIM KEE                    95    009    5076602735               MYR            100000.00                3   1.0000000  4.06000 Outstanding     28/01/26 29/01/29     700.77     700.77       0.00       0.00
-  16 JYK/CRA006/000110                       KHOO KIM KEE                    95    009    5076602735               MYR            200000.00                4   1.0000000  4.10000 Outstanding     13/03/26 13/03/30     336.99     336.99       0.00       0.00
-  17 JYK/CRA007/000115                       KHOO KIM KEE                    95    009    5076602735               MYR            200000.00                4   1.0000000  4.20000 Outstanding     23/04/26 23/04/30    1564.93    1564.93       0.00       0.00
-  18 KLC/CRA001/000018                       CHOU, SA-LI @ SALLY CHOU        96    168    5087103233               MYR           2000000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-  19 JRC/CRA005/000009                       SHEN JIA                        96    003    5088021518               MYR            100000.00                3   1.0000000  4.06000 Outstanding     28/01/26 29/01/29     700.77     700.77       0.00       0.00
-  20 JRC/CRA006/000012                       HU YANHUI                       96    003    5096094209               MYR            100000.00                4   1.0000000  4.10000 Outstanding     13/03/26 13/03/30     168.49     168.49       0.00       0.00
-  21 KKU/CRA003/000019                       CHEN YAN                        96    033    5105402200               MYR            100000.00                5   1.0000000  4.20000 Outstanding     10/10/25 10/10/30     932.05     932.05       0.00       0.00
-  22 PSG/CRA001/000026                       LIEW HUN SANG                   95    146    5106947033               MYR            150000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-  23 PSG/CRA007/000038                       LIEW HUN SANG                   95    146    5106947033               MYR            100000.00                4   1.0000000  4.20000 Outstanding     23/04/26 23/04/30     782.47     782.47       0.00       0.00
-  24 KLC/CRA003/000071                       LI, YAN                         96    168    5113263318               MYR            500000.00                5   1.0000000  4.20000 Outstanding     10/10/25 10/10/30    4660.27    4660.27       0.00       0.00
-  25 JRC/CRA006/000011                       LIU JIANMIN                     96    003    5113353120               MYR            100000.00                4   1.0000000  4.10000 Outstanding     13/03/26 13/03/30     168.49     168.49       0.00       0.00
-  26 PTS/CRA006/000025                       AGNES KUA HUN CHOO              95    126    5119986028               MYR            100000.00                4   1.0000000  4.10000 Outstanding     13/03/26 13/03/30     168.49     168.49       0.00       0.00
-  27 TNM/CRA008/000001                       DENG JIANFENG                   96    197    5121299507               MYR            200000.00                4   1.0000000  4.10000 Outstanding     20/05/26 20/05/30     921.10     921.10       0.00       0.00
-  28 MLB/CRA006/000006                       FOONG CHEE SING                 95    080    5121486835               MYR            200000.00                4   1.0000000  4.10000 Outstanding     13/03/26 13/03/30     336.99     336.99       0.00       0.00
-  29 BPI/CRA008/000049                       LI HAIQING                      96    270    6342159803               MYR            100000.00                4   1.0000000  4.10000 Outstanding     20/05/26 20/05/30     460.55     460.55       0.00       0.00
-  30 MKA/CRA001/000002                       YOO AEKYOUNG                    95    269    6362746314               MYR            100000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-  31 MKA/CRA006/000016                       YOO AEKYOUNG                    95    269    6362746314               MYR            750000.00                4   1.0000000  4.10000 Outstanding     13/03/26 13/03/30    1263.70    1263.70       0.00       0.00
-  32 JYK/CRA008/000143                       LOOI WAN LIMM                   95    009    6399781123               MYR            100000.00                4   1.0000000  4.10000 Outstanding     20/05/26 20/05/30     460.55     460.55       0.00       0.00
-  33 JYK/CRA008/000144                       TAN KWEE WAA                    95    009    6476816310               MYR            200000.00                4   1.0000000  4.10000 Outstanding     20/05/26 20/05/30     921.10     921.10       0.00       0.00
-  34 SUA/CRA001/000003                       AGUSTINA                        96    287    6498056116               MYR            100000.00                5   1.0000000  0.00000 Outstanding     19/06/25 19/06/30       0.00       0.00       0.00       0.00
-  35 Z29183                         Z29182   RAKHEE SINGH                    96    168    5073069010  3596280202   MYR     USD    113876.00   28299.20    30   1.0000000  4.20000 Outstanding     09/06/26 09/07/26     288.28     288.28     135.72     135.72
-  36 Z29353                         Z29352   YUAN XIONGBING/LIU HONG         96    126    5060004119  3595603734   MYR     USD    100000.00   24636.61    30   1.0000000  3.20000 Outstanding     15/06/26 15/07/26     140.27     140.27      36.99      36.99
-  37 Z29759                         Z29758   LI HUIMIN                       96    168    5071525805  3599635531   MYR     EUR    300000.00   64377.68     7   1.0000000  5.00000 Outstanding     29/06/26 06/07/26      82.19      82.19     129.45     129.45
-  38 Z29761                         Z29760   CHONG POH KWANG                 95    028    5114913203  3596806721   MYR     SGD    100000.00   31486.15     7   1.0000000  6.40000 Outstanding     29/06/26 06/07/26      35.07      35.07      70.00      70.00
-                                                                                                                                                                                                                    ========== ========== ========== ==========
-                                                                                                                                                                                                                      26896.72   26896.72     372.16     372.16
-                                                                                                                       PUBLIC BANK BERHAD                                                                                       08:00 Tuesday, June 30, 2026   2
-                                                                                                  DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR FCY AS AT 29/06/26
- Obs CUSTICKETNO                    TICKETNO CUSTNAME                    CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     ACCINT   ACCINTRM   PREMPAID PREMPAIDRM
-  1  Z29379                         Z29378   CHIENG HOCK KOCK                95    126    3590115215  3114593916   SGD     MYR     40000.00  126760.00    30   3.1472033  1.70000 Outstanding     15/06/26 15/07/26      29.81      93.82      19.73      62.09
-  2  KLC/CRA004/000106                       SAYAKA UEMURA                   96    168    3593992027               USD            305000.00                5   4.0707500  5.00000 Outstanding     21/11/25 21/11/30    1694.44    6897.64       0.00       0.00
-  3  KLI/CRA004/000003                       CAI LI                          96    061    3594093907               USD             25000.00                5   4.0707500  5.00000 Outstanding     21/11/25 21/11/30     138.89     565.39       0.00       0.00
-  4  BDA/CRA004/000010                       HSIAO CHIH CHE                  96    066    3594932310               USD             35000.00                5   4.0707500  5.00000 Outstanding     21/11/25 21/11/30     194.44     791.52       0.00       0.00
-  5  KLC/CRA004/000109                       CHEN HUI                        96    168    3595661023               USD             25000.00                5   4.0707500  5.00000 Outstanding     21/11/25 21/11/30     138.89     565.39       0.00       0.00
-  6  KLC/CRA004/000113                       CHEN HUI                        96    168    3595661023               USD             25000.00                5   4.0707500  5.00000 Outstanding     21/11/25 21/11/30     138.89     565.39       0.00       0.00
-  7  JRC/CRA004/000006                       JIN, WEI                        96    003    3595972828               USD             25000.00                5   4.0707500  5.00000 Outstanding     21/11/25 21/11/30     138.89     565.39       0.00       0.00
-  8  KKM/CRA004/000012                       SELVIA CHANDRA                  96    294    3599041111               USD            505000.00                5   4.0707500  5.00000 Outstanding     21/11/25 21/11/30    2805.56   11420.73       0.00       0.00
-  9                                 X16      ANZ BANKING GROUP LTD MEL       84                                    USD           17117503.8             1826   4.0707500  3.53509 Outstanding     21/11/25 21/11/30  -16710.11  -68022.68       0.00       0.00
-                                                                                                                                                                                                                    ========== ========== ========== ==========
-                                                                                                                                                                                                                     -11430.30  -46557.42      19.73      62.09
+def get_output_path(file_key, date_vars):
+    return format_path_with_date(OUTPUT_PATHS[file_key], date_vars)
 
 
+def unpack_packed_decimal(raw_bytes, decimal_places=0):
+    """Decode IBM mainframe packed decimal (COMP-3 / PD) field."""
+    if not raw_bytes:
+        return None
+    digits = []
+    for b in raw_bytes[:-1]:
+        digits.append((b >> 4) & 0x0F)
+        digits.append(b & 0x0F)
+    last_byte = raw_bytes[-1]
+    digits.append((last_byte >> 4) & 0x0F)
+    sign_nibble = last_byte & 0x0F
+    if any(d > 9 for d in digits):
+        return None
+    digit_str = ''.join(str(d) for d in digits)
+    value = int(digit_str) if digit_str else 0
+    if sign_nibble == 0xD:
+        value = -value
+    if decimal_places > 0:
+        value = value / (10 ** decimal_places)
+    return value
 
-now it output the CUSTICKETNO, but just a bit difference on the value. why is that so? can you ensure that it is exactly similar to the production output?
+
+def decode_ebcdic_text(raw_bytes):
+    """Decode raw EBCDIC (cp037) byte slice to stripped Python string."""
+    try:
+        return raw_bytes.decode('cp037').strip()
+    except Exception:
+        return raw_bytes.decode('cp037', errors='replace').strip()
+
+
+def parse_ebcdic_yymmdd10(text):
+    """Convert EBCDIC YYMMDD10. date text to ISO 'YYYY-MM-DD'."""
+    text = text.strip()
+    if not text:
+        return None
+    text = text.replace('/', '-')
+    parts = text.split('-')
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        yyyy, mm, dd = parts
+        return f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}"
+    return text
+
+
+def load_cra_ebcdic_file(file_path, record_length=CRA_RECORD_LENGTH, layout=CRA_LAYOUT):
+    """Load the CRA mainframe file with EBCDIC and packed decimal fields."""
+    with open(file_path, 'rb') as f:
+        raw = f.read()
+
+    total_len = len(raw)
+    if total_len == 0:
+        print(f"  Warning: CRA file is empty: {file_path}")
+        schema = {}
+        for name, _, _, kind, _ in layout:
+            schema[name] = pl.Float64 if kind == 'pd' else (pl.Int64 if kind == 'zoned' else pl.Utf8)
+        return pl.DataFrame(schema=schema)
+
+    if total_len % record_length != 0:
+        print(f"  Warning: CRA file size ({total_len} bytes) is not an exact "
+              f"multiple of record_length={record_length}. "
+              f"({total_len / record_length:.2f} records).")
+
+    num_records = total_len // record_length
+    data = []
+
+    for i in range(num_records):
+        rec = raw[i * record_length: (i + 1) * record_length]
+        if not rec.strip(b'\x00'):
+            continue
+
+        row = {}
+        for field_name, start, length, kind, decimals in layout:
+            chunk = rec[start:start + length]
+            if kind == 'text':
+                row[field_name] = decode_ebcdic_text(chunk)
+            elif kind == 'date':
+                row[field_name] = parse_ebcdic_yymmdd10(decode_ebcdic_text(chunk))
+            elif kind == 'pd':
+                row[field_name] = unpack_packed_decimal(chunk, decimals)
+            elif kind == 'zoned':
+                text = decode_ebcdic_text(chunk)
+                try:
+                    row[field_name] = int(text) if text.strip() else None
+                except ValueError:
+                    row[field_name] = None
+        data.append(row)
+
+    if not data:
+        schema = {}
+        for name, _, _, kind, _ in layout:
+            schema[name] = pl.Float64 if kind == 'pd' else (pl.Int64 if kind == 'zoned' else pl.Utf8)
+        return pl.DataFrame(schema=schema)
+
+    df = pl.DataFrame(data)
+    if 'INVCURAC' in df.columns:
+        df = df.with_columns(pl.col('INVCURAC').cast(pl.Int64, strict=False))
+    if 'TENOR' in df.columns:
+        df = df.with_columns(pl.col('TENOR').cast(pl.Int64, strict=False))
+    return df
+
+
+def load_fixed_width_file(file_path, widths, columns, dtypes=None,
+                          encoding='utf-8', implied_decimals=None):
+    """Load a plain-text fixed-width file (e.g. DPFL)."""
+    implied_decimals = implied_decimals or {}
+    try:
+        with open(file_path, 'r', encoding=encoding) as f:
+            lines = f.readlines()
+    except UnicodeDecodeError:
+        print(f"  Warning: UTF-8 failed, retrying Latin-1: {file_path}")
+        with open(file_path, 'r', encoding='latin-1') as f:
+            lines = f.readlines()
+    except Exception:
+        print(f"  Warning: Reading as binary/Latin-1: {file_path}")
+        with open(file_path, 'rb') as f:
+            content = f.read()
+        lines = content.decode('latin-1', errors='replace').splitlines(keepends=True)
+
+    data = []
+    for line in lines:
+        if not line.strip():
+            continue
+        row = {}
+        start = 0
+        for i, width in enumerate(widths):
+            field    = line[start:start+width].strip()
+            col_name = columns[i]
+            decimals = implied_decimals.get(col_name)
+
+            if decimals is not None:
+                try:
+                    if field:
+                        sign       = -1 if field.startswith('-') else 1
+                        digits_str = field.lstrip('-').strip()
+                        row[col_name] = sign * int(digits_str) / (10 ** decimals) if digits_str else None
+                    else:
+                        row[col_name] = None
+                except Exception:
+                    row[col_name] = None
+            elif dtypes and col_name in dtypes:
+                dtype = dtypes[col_name]
+                if dtype == pl.Int64:
+                    try:
+                        row[col_name] = int(field) if field else None
+                    except Exception:
+                        row[col_name] = None
+                elif dtype == pl.Float64:
+                    try:
+                        row[col_name] = float(field) if field else None
+                    except Exception:
+                        row[col_name] = None
+                else:
+                    row[col_name] = field
+            else:
+                row[col_name] = field
+            start += width
+        data.append(row)
+
+    if data:
+        return pl.DataFrame(data)
+    schema = {col: (dtypes[col] if dtypes and col in dtypes else pl.Utf8) for col in columns}
+    return pl.DataFrame(schema=schema)
+
+
+def load_eqfl_file(file_path, separator='|', columns=None, dtypes=None):
+    """Load the pipe-delimited EQFL file (no header row)."""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    except UnicodeDecodeError:
+        with open(file_path, 'r', encoding='latin-1') as f:
+            lines = f.readlines()
+
+    data = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        fields = line.split(separator)
+        if len(fields) > len(columns):
+            fields = fields[:len(columns)]
+        elif len(fields) < len(columns):
+            fields.extend([None] * (len(columns) - len(fields)))
+
+        row = {}
+        for i, col_name in enumerate(columns):
+            field = fields[i].strip() if i < len(fields) and fields[i] else ''
+            if dtypes and col_name in dtypes:
+                dtype = dtypes[col_name]
+                if dtype == pl.Int64:
+                    try:
+                        row[col_name] = int(field) if field else None
+                    except Exception:
+                        row[col_name] = None
+                elif dtype == pl.Float64:
+                    try:
+                        row[col_name] = float(field) if field else None
+                    except Exception:
+                        row[col_name] = None
+                else:
+                    row[col_name] = field
+            else:
+                row[col_name] = field
+        data.append(row)
+
+    if data:
+        return pl.DataFrame(data)
+    schema = {col: (dtypes[col] if dtypes and col in dtypes else pl.Utf8) for col in columns}
+    return pl.DataFrame(schema=schema)
+
+
+def load_sas_file_fast(file_path, columns_to_keep=None):
+    """Load a SAS7BDAT file via pyreadstat, optionally keeping only named columns."""
+    try:
+        try:
+            df, _ = pyreadstat.read_sas7bdat(file_path, columns=columns_to_keep)
+            return pl.DataFrame(df)
+        except TypeError:
+            print(f"  Note: pyreadstat doesn't support column selection, loading full file then filtering...")
+            df, _ = pyreadstat.read_sas7bdat(file_path)
+            pl_df = pl.DataFrame(df)
+            if columns_to_keep:
+                existing = [c for c in columns_to_keep if c in pl_df.columns]
+                if existing:
+                    return pl_df.select(existing)
+            return pl_df
+    except Exception as e:
+        print(f"Error loading SAS file {file_path}: {e}")
+        raise
+
+
+def load_mnitb_with_cache(file_path, cache_path, columns_to_keep=None):
+    """Load MNITB SAS file with Parquet caching for faster subsequent loads."""
+    if columns_to_keep is None:
+        columns_to_keep = ['ACCTNO', 'CUSTCODE']
+    ensure_directory(cache_path)
+    if os.path.exists(cache_path):
+        print(f"  ✓ Loading from Parquet cache: {cache_path}")
+        return pl.read_parquet(cache_path)
+    print(f"  Converting SAS to Parquet (first time, this may take a moment)...")
+    try:
+        try:
+            df, _ = pyreadstat.read_sas7bdat(file_path, columns=columns_to_keep)
+            pl_df = pl.DataFrame(df)
+        except TypeError:
+            print(f"  Note: pyreadstat doesn't support column selection, loading full file then filtering...")
+            df, _ = pyreadstat.read_sas7bdat(file_path)
+            pl_df = pl.DataFrame(df)
+            existing = [c for c in columns_to_keep if c in pl_df.columns]
+            if existing:
+                pl_df = pl_df.select(existing)
+        pl_df.write_parquet(cache_path)
+        print(f"  ✓ Converted and cached: {cache_path}")
+        return pl_df
+    except Exception as e:
+        print(f"  ✗ Error loading SAS file {file_path}: {e}")
+        raise
+
+
+def ensure_join_key_type(df, column_name, target_type=pl.Int64):
+    if column_name in df.columns:
+        return df.with_columns([pl.col(column_name).cast(target_type)])
+    return df
+
+
+def format_ddmmyy8(date_str):
+    """
+    Convert an ISO 'YYYY-MM-DD' string to 'DD/MM/YY', matching
+    SAS FORMAT DDMMYY8. used in the DCITXT PROC PRINT.
+    """
+    if not date_str:
+        return ''
+    s = str(date_str).strip()
+    if not s:
+        return ''
+    # If already in DD/MM/YY format, return as-is
+    if len(s) == 8 and s[2] == '/' and s[5] == '/':
+        return s
+    s = s.replace('/', '-')
+    parts = s.split('-')
+    if len(parts) == 3 and all(p.strip().isdigit() for p in parts):
+        yyyy, mm, dd = parts
+        yy = yyyy[-2:] if len(yyyy) == 4 else yyyy.zfill(2)
+        return f"{dd.zfill(2)}/{mm.zfill(2)}/{yy}"
+    return s
+
+
+def safe_concat(frames, how="diagonal_relaxed"):
+    """Safely concatenate Polars DataFrames with diagonal alignment."""
+    real_frames = [f for f in frames if f.width > 0]
+    if not real_frames:
+        return pl.DataFrame()
+    if len(real_frames) == 1:
+        return real_frames[0]
+    return pl.concat(real_frames, how=how)
+
+
+def write_sas_file(df, file_path):
+    """Write DataFrame to SAS7BDAT using saspy, with CSV fallback."""
+    try:
+        import saspy
+        print("  Connecting to SAS session...")
+        sas = saspy.SASsession()
+        df_pd = df.to_pandas()
+        dataset_name = os.path.basename(file_path).replace('.sas7bdat', '')
+        print(f"  Writing SAS dataset: {dataset_name}...")
+        sas.df2sd(df_pd, table=dataset_name, libref='user')
+        sas.submit(f'''
+            libname outlib "{os.path.dirname(file_path)}";
+            proc copy in=user out=outlib; select {dataset_name}; run;
+        ''')
+        print(f"  ✓ SAS dataset written: {file_path}")
+        return True
+    except ImportError:
+        print("  ⚠ saspy not available.")
+    except Exception as e:
+        print(f"  ✗ saspy error: {e}")
+    csv_path = file_path.replace('.sas7bdat', '.csv')
+    df.write_csv(csv_path)
+    print(f"  ✓ CSV fallback written: {csv_path}")
+    return False
+
+
+# ===================================================================
+# DCITXT FORMATTING FUNCTIONS - EXACTLY MATCHING SAS PROC PRINT
+# ===================================================================
+
+def write_cus_row(f_obj, obs, row):
+    """Write a customer row matching SAS PROC PRINT format."""
+    # SAS $26. format LEFT-justifies, so use f-string with no > alignment
+    f_obj.write(
+        f"{obs:>4} "
+        f"{str(row.get('CUSTICKETNO','') or ''):<26} "
+        f"{str(row.get('TICKETNO','') or ''):<10} "
+        f"{str(row.get('CUSTNAME','') or ''):<30} "
+        f"{(row.get('CUSTCODE') or 0):>8} "
+        f"{str(row.get('BRANCH','') or ''):<8} "
+        f"{str(row.get('INVCURAC','') or ''):<12} "
+        f"{str(row.get('ALTCURAC','') or ''):<12} "
+        f"{str(row.get('INVCURR','') or ''):<8} "
+        f"{str(row.get('ALTCURR','') or ''):<8} "
+        f"{(row.get('INVAMT') or 0):>12,.2f} "
+        f"{(row.get('ALTAMT') or 0):>12,.2f} "
+        f"{(row.get('TENOR') or 0):>6} "
+        f"{(row.get('SPOTRT') or 0):>12.7f} "
+        f"{(row.get('DCIRT') or 0):>8.5f} "
+        f"{str(row.get('STATUSIND','') or ''):<12} "
+        f"{format_ddmmyy8(row.get('STARTDT','')):>12} "
+        f"{format_ddmmyy8(row.get('MATDT','')):>12} "
+        f"{(row.get('ACCINT') or 0):>10,.2f} "
+        f"{(row.get('ACCINTRM') or 0):>10,.2f} "
+        f"{(row.get('PREMPAID') or 0):>10,.2f} "
+        f"{(row.get('PREMPAIDRM') or 0):>10,.2f}\n"
+    )
+
+
+def write_ibn_row(f_obj, obs, row):
+    """Write an interbank row matching SAS PROC PRINT format."""
+    f_obj.write(
+        f"{obs:>4} "
+        f"{str(row.get('CUSTICKETNO','') or ''):<20} "
+        f"{str(row.get('TICKETNO','') or ''):<10} "
+        f"{str(row.get('CUSTNAME','') or ''):<30} "
+        f"{str(row.get('CUSTRES','') or ''):<8} "
+        f"{str(row.get('CUSTLOC','') or ''):<10} "
+        f"{str(row.get('FISSCODE','') or ''):<10} "
+        f"{str(row.get('EQCUSTYP','') or ''):<10} "
+        f"{str(row.get('BRANCH','') or ''):<8} "
+        f"{str(row.get('INVCURR','') or ''):<8} "
+        f"{str(row.get('ALTCURR','') or ''):<8} "
+        f"{(row.get('INVAMT') or 0):>12,.2f} "
+        f"{(row.get('ALTAMT') or 0):>12,.2f} "
+        f"{(row.get('TENOR') or 0):>6} "
+        f"{(row.get('SPOTRT') or 0):>12.7f} "
+        f"{str(row.get('STATUSIND','') or ''):<12} "
+        f"{format_ddmmyy8(row.get('STARTDT','')):>12} "
+        f"{format_ddmmyy8(row.get('MATDT','')):>12} "
+        f"{(row.get('PREMREC') or 0):>10,.2f} "
+        f"{(row.get('PREMRECRM') or 0):>10,.2f}\n"
+    )
+
+
+# ===================================================================
+# MAIN PROCESSING
+# ===================================================================
+
+def main():
+    # -------------------------------------------------------------------
+    # Step 1: Reporting Date Setup
+    # -------------------------------------------------------------------
+    today     = date.today() - timedelta(days=1)   # yesterday = reporting date
+    REPTDAY   = f"{today.day:02d}"
+    REPTMON   = f"{today.month:02d}"
+    REPTYEAR  = f"{today.year % 100:02d}"
+    REPTYEAR4 = f"{today.year:04d}"
+    RDATE     = today.strftime("%d/%m/%y")
+
+    day = today.day
+    if   1  <= day <=  8: WK = "1"
+    elif 9  <= day <= 15: WK = "2"
+    elif 16 <= day <= 22: WK = "3"
+    else:                 WK = "4"
+
+    date_vars = {
+        'yyyy': REPTYEAR4, 'yy': REPTYEAR, 'mm': REPTMON, 'dd': REPTDAY,
+        'date': f"{REPTYEAR}{REPTMON}{REPTDAY}",
+        'day': REPTDAY, 'mon': REPTMON, 'year': REPTYEAR,
+        'wk': WK, 'rdate': RDATE
+    }
+
+    print(f"Running EIBDCITX for {RDATE} (WK={WK}) - Processing YESTERDAY'S data")
+    print("=" * 80)
+
+    for output_path in OUTPUT_PATHS.values():
+        ensure_directory(output_path)
+
+    # -------------------------------------------------------------------
+    # Step 2: Load raw datasets
+    # -------------------------------------------------------------------
+    print("\nLoading input files...")
+
+    # DPFL
+    try:
+        dpfl_path = get_input_path("DPFL", date_vars)
+        dpfl = load_fixed_width_file(
+            dpfl_path,
+            FILE_FORMATS["DPFL"]["widths"],
+            FILE_FORMATS["DPFL"]["columns"],
+            FILE_FORMATS["DPFL"]["dtypes"],
+            implied_decimals=FILE_FORMATS["DPFL"].get("implied_decimals")
+        )
+        print(f"  ✓ Loaded DPFL: {len(dpfl):,} rows from {dpfl_path}")
+    except Exception as e:
+        print(f"  ✗ Error loading DPFL: {e}"); return
+
+    # EQFL
+    try:
+        eqfl_path = get_input_path("EQFL", date_vars)
+        eqfl = load_eqfl_file(
+            eqfl_path,
+            separator=FILE_FORMATS["EQFL"]["separator"],
+            columns=FILE_FORMATS["EQFL"]["columns"],
+            dtypes=FILE_FORMATS["EQFL"]["dtypes"]
+        )
+        print(f"  ✓ Loaded EQFL: {len(eqfl):,} rows from {eqfl_path}")
+    except Exception as e:
+        print(f"  ✗ Error loading EQFL: {e}"); return
+
+    # CRA
+    try:
+        cra_path = get_input_path("CRA", date_vars)
+        if not os.path.exists(cra_path):
+            cra_path_txt = cra_path + ".txt"
+            if os.path.exists(cra_path_txt):
+                cra_path = cra_path_txt
+            else:
+                print(f"  ✗ CRA file not found at {cra_path}"); return
+        cra = load_cra_ebcdic_file(cra_path)
+        print(f"  ✓ Loaded CRA: {len(cra):,} rows from {cra_path}")
+        cra = ensure_join_key_type(cra, 'INVCURAC', pl.Int64)
+    except Exception as e:
+        print(f"  ✗ Error loading CRA: {e}"); return
+
+    # EQRATE
+    try:
+        eqrate_path = get_input_path("EQRATE", date_vars)
+        eqrt = load_sas_file_fast(eqrate_path)
+        print(f"  ✓ Loaded EQRATE: {len(eqrt):,} rows from {eqrate_path}")
+    except Exception as e:
+        print(f"  ✗ Error loading EQRATE: {e}"); return
+
+    # MNITB Saving + Current
+    try:
+        print(f"  Loading MNITB Saving...")
+        mnitb_saving = load_mnitb_with_cache(
+            get_input_path("MNITB_SAVING", date_vars),
+            PARQUET_CACHE["MNITB_SAVING"],
+            columns_to_keep=['ACCTNO', 'CUSTCODE']
+        )
+        print(f"  ✓ Loaded MNITB Saving: {len(mnitb_saving):,} rows")
+
+        print(f"  Loading MNITB Current...")
+        mnitb_current = load_mnitb_with_cache(
+            get_input_path("MNITB_CURRENT", date_vars),
+            PARQUET_CACHE["MNITB_CURRENT"],
+            columns_to_keep=['ACCTNO', 'CUSTCODE']
+        )
+        print(f"  ✓ Loaded MNITB Current: {len(mnitb_current):,} rows")
+    except Exception as e:
+        print(f"  ✗ Error loading MNITB files: {e}"); return
+
+    # DCID
+    try:
+        dcid_path = get_input_path("DCID", date_vars)
+        dcid = load_sas_file_fast(dcid_path, columns_to_keep=['TICKETNO', 'CUSTCODE'])
+        print(f"  ✓ Loaded DCID: {len(dcid):,} rows from {dcid_path}")
+    except Exception as e:
+        print(f"  ✗ Error loading DCID: {e}"); return
+
+    print("\n" + "=" * 80)
+
+    # -------------------------------------------------------------------
+    # Step 3: DPST
+    # -------------------------------------------------------------------
+    print("\nProcessing DPST...")
+    dpst = dpfl.with_columns([pl.col("ACCINT").cast(pl.Float64)])
+    dpst = dpst.join(dcid, on="TICKETNO", how="left")
+    if 'CUSTCODE_right' in dpst.columns:
+        dpst = dpst.with_columns([
+            pl.coalesce([pl.col("CUSTCODE_right"), pl.col("CUSTCODE")]).alias("CUSTCODE")
+        ]).drop("CUSTCODE_right")
+    print(f"  DPST after merge: {len(dpst):,} rows")
+
+    # -------------------------------------------------------------------
+    # Step 4: EQC / EQI split
+    # -------------------------------------------------------------------
+    print("\nProcessing EQ data...")
+    eq = eqfl.with_columns([
+        pl.col("ACCINTRM").abs(),
+        pl.col("ACCINTAMT").abs(),
+        pl.col("TOTINTAMT").abs(),
+        pl.col("PREMPAID").abs(),
+        pl.col("PREMREC").abs()
+    ])
+    eq = eq.filter((pl.col("STARTDT") <= str(today)) & (pl.col("MATDT") >= str(today)))
+    print(f"  EQ after date filter: {len(eq):,} rows")
+
+    eqc = eq.filter(pl.col("TYPE") == "C").select(EQC_KEEP_COLS)
+    eqi = eq.filter(pl.col("TYPE") != "C").select(EQI_KEEP_COLS)
+    print(f"  EQC: {len(eqc):,} rows, EQI: {len(eqi):,} rows")
+
+    # -------------------------------------------------------------------
+    # Step 5: Customer leg
+    # -------------------------------------------------------------------
+    print("\nProcessing Customer Leg...")
+
+    eqdci = dpst.join(eqc, on="TICKETNO", how="inner")
+    eqdci = eqdci.filter(pl.col("CUSTCODE") >= REPORT_CONFIG["MIN_CUSTCODE"])
+    print(f"  EQDCI after join: {len(eqdci):,} rows")
+
+    dp_cra = cra.filter(pl.col("INV_STATUS").is_in(REPORT_CONFIG["VALID_STATUSES"]))
+    if len(dp_cra) == 0:
+        print("  Note: No CRA records with valid status")
+        dp_cra = pl.DataFrame(schema={
+            'BRANCH': pl.Utf8, 'CUSTICKETNO': pl.Utf8, 'INVCURAC': pl.Int64,
+            'CUSTNAME': pl.Utf8, 'INVAMT': pl.Float64, 'STARTDT': pl.Utf8,
+            'MATDT': pl.Utf8, 'DCIRT': pl.Float64, 'TENOR': pl.Int64,
+            'INV_STATUS': pl.Utf8, 'ACCINT': pl.Float64, 'CUSTCODE_DB2': pl.Int64,
+            'STATUSIND': pl.Utf8, 'INVCURR': pl.Utf8,
+            'PREMPAID': pl.Float64, 'TYPE': pl.Utf8
+        })
+    else:
+        dp_cra = dp_cra.with_columns([
+            pl.lit("Outstanding").alias("STATUSIND"),
+            pl.lit(REPORT_CONFIG["MYR_CURRENCY"]).alias("INVCURR"),
+            pl.lit(0.0).alias("PREMPAID"),
+            pl.lit(None).cast(pl.Utf8).alias("TYPE")
+        ])
+
+    depo = pl.concat([mnitb_saving, mnitb_current])
+    depo = depo.rename({"ACCTNO": "INVCURAC"})
+    depo = ensure_join_key_type(depo, 'INVCURAC', pl.Int64)
+    print(f"  DEPO combined: {len(depo):,} rows")
+
+    if dp_cra.width > 0 and depo.width > 0 and len(dp_cra) > 0:
+        dp_cra = dp_cra.join(depo, on="INVCURAC", how="inner")
+        if 'CUSTCODE_right' in dp_cra.columns:
+            dp_cra = dp_cra.with_columns([
+                pl.coalesce([pl.col("CUSTCODE_right"), pl.col("CUSTCODE")]).alias("CUSTCODE")
+            ]).drop("CUSTCODE_right")
+        dp_cra = dp_cra.filter(pl.col("CUSTCODE") >= REPORT_CONFIG["MIN_CUSTCODE"])
+        print(f"  CRA after processing: {len(dp_cra):,} rows")
+    else:
+        print("  Note: No CRA or DEPO data to join")
+        dp_cra = pl.DataFrame()
+
+    eqdci = safe_concat([dp_cra, eqdci])
+    print(f"  Combined EQDCI: {len(eqdci):,} rows")
+
+    eqdci = eqdci.with_columns([pl.col("ACCINT").round(2)])
+
+    eqrt = eqrt.rename({"CURRENCY": "INVCURR", "SPOTRATE": "SPOTRT"})
+    eqdci = eqdci.join(eqrt.select(['INVCURR', 'SPOTRT']), on="INVCURR", how="left")
+
+    eqdci = eqdci.with_columns([
+        pl.when(pl.col("INVCURR") == REPORT_CONFIG["JPY_CURRENCY"])
+          .then(pl.col("ACCINT").round(REPORT_CONFIG["DECIMAL_PLACES_JPY"]))
+          .otherwise(pl.col("ACCINT").round(REPORT_CONFIG["DECIMAL_PLACES_OTHER"]))
+          .alias("ACCINTX"),
+        pl.when(pl.col("INVCURR") == REPORT_CONFIG["JPY_CURRENCY"])
+          .then(pl.col("PREMPAID").round(REPORT_CONFIG["DECIMAL_PLACES_JPY"]))
+          .otherwise(pl.col("PREMPAID").round(REPORT_CONFIG["DECIMAL_PLACES_OTHER"]))
+          .alias("PREMPAI")
+    ])
+    eqdci = eqdci.with_columns([
+        (pl.col("ACCINTX") * pl.col("SPOTRT")).alias("ACCINTRM"),
+        (pl.col("PREMPAI") * pl.col("SPOTRT")).alias("PREMPAIDRM")
+    ])
+
+    cusmyr = eqdci.filter(pl.col("INVCURR") == REPORT_CONFIG["MYR_CURRENCY"])
+    cusfcy = eqdci.filter(pl.col("INVCURR") != REPORT_CONFIG["MYR_CURRENCY"])
+    print(f"  Customer MYR: {len(cusmyr):,} rows, FCY: {len(cusfcy):,} rows")
+
+    # -------------------------------------------------------------------
+    # Step 6: Interbank leg
+    # -------------------------------------------------------------------
+    print("\nProcessing Interbank Leg...")
+    ibnmyr = pl.DataFrame()
+    ibnfcy = pl.DataFrame()
+
+    if len(eqi) > 0:
+        eqdci_ib = eqi.filter(pl.col("FISSCODE") >= "80")
+        eqdci_ib = eqdci_ib.join(eqrt.select(['INVCURR', 'SPOTRT']), on="INVCURR", how="left")
+        eqdci_ib = eqdci_ib.with_columns([
+            pl.when(pl.col("INVCURR") == REPORT_CONFIG["JPY_CURRENCY"])
+              .then(pl.col("PREMREC").round(REPORT_CONFIG["DECIMAL_PLACES_JPY"]))
+              .otherwise(pl.col("PREMREC").round(REPORT_CONFIG["DECIMAL_PLACES_OTHER"]))
+              .alias("PREMREX")
+        ])
+        eqdci_ib = eqdci_ib.with_columns([
+            (pl.col("PREMREX") * pl.col("SPOTRT")).alias("PREMRECRM")
+        ])
+        ibnmyr = eqdci_ib.filter(pl.col("INVCURR") == REPORT_CONFIG["MYR_CURRENCY"])
+        ibnfcy = eqdci_ib.filter(pl.col("INVCURR") != REPORT_CONFIG["MYR_CURRENCY"])
+        print(f"  Interbank MYR: {len(ibnmyr):,} rows, FCY: {len(ibnfcy):,} rows")
+    else:
+        print("  No interbank data to process")
+
+    # -------------------------------------------------------------------
+    # Step 7: Write DCITXT (matching SAS PROC PRINT format)
+    # -------------------------------------------------------------------
+    text_path = get_output_path("TEXT", date_vars)
+    ensure_directory(text_path)
+    print(f"\nWriting DCITXT output to {text_path}...")
+    timestamp = datetime.now().strftime("%H:%M %A, %B %d, %Y")
+
+    CUS_HDR  = (" Obs CUSTICKETNO                    TICKETNO CUSTNAME                    "
+                "CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     "
+                "ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     "
+                "ACCINT   ACCINTRM   PREMPAID PREMPAIDRM\n")
+    IBN_HDR  = (" Obs CUSTICKETNO TICKETNO CUSTNAME                        CUSTRES CUSTLOC"
+                "   FISSCODE  EQCUSTYP BRANCH   INVCURR ALTCURR     INVAMT     ALTAMT "
+                "TENOR      SPOTRT STATUSIND    STARTDT    MATDT   PREMREC PREMRECRM\n")
+
+    with open(text_path, "w") as f:
+        page = 1
+
+        # Customer MYR
+        f.write(f"{' '*52}PUBLIC BANK BERHAD{' '*60}{timestamp}   {page}\n")
+        f.write(f"{' '*82}DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR MYR AS AT {RDATE}\n")
+        f.write(CUS_HDR)
+        for obs, row in enumerate(cusmyr.iter_rows(named=True), 1):
+            write_cus_row(f, obs, row)
+        if len(cusmyr) > 0:
+            f.write(f"{' '*77}{'='*10} {'='*10} {'='*10} {'='*10}\n")
+            f.write(f"{' '*77}"
+                    f"{cusmyr['ACCINT'].sum():>10,.2f} "
+                    f"{cusmyr['ACCINTRM'].sum():>10,.2f} "
+                    f"{cusmyr['PREMPAID'].sum():>10,.2f} "
+                    f"{cusmyr['PREMPAIDRM'].sum():>10,.2f}\n")
+
+        # Customer FCY
+        if len(cusfcy) > 0:
+            page += 1
+            ts = datetime.now().strftime("%H:%M %A, %B %d, %Y")
+            f.write(f"\n{' '*52}PUBLIC BANK BERHAD{' '*60}{ts}   {page}\n")
+            f.write(f"{' '*82}DAILY EXTRACTION OF DCI/CRA CUSTOMER FOR FCY AS AT {RDATE}\n")
+            f.write(CUS_HDR)
+            for obs, row in enumerate(cusfcy.iter_rows(named=True), 1):
+                write_cus_row(f, obs, row)
+            f.write(f"{' '*77}{'='*10} {'='*10} {'='*10} {'='*10}\n")
+            f.write(f"{' '*77}"
+                    f"{cusfcy['ACCINT'].sum():>10,.2f} "
+                    f"{cusfcy['ACCINTRM'].sum():>10,.2f} "
+                    f"{cusfcy['PREMPAID'].sum():>10,.2f} "
+                    f"{cusfcy['PREMPAIDRM'].sum():>10,.2f}\n")
+
+        # Interbank MYR
+        if len(ibnmyr) > 0:
+            page += 1
+            ts = datetime.now().strftime("%H:%M %A, %B %d, %Y")
+            f.write(f"\n{' '*52}PUBLIC BANK BERHAD{' '*60}{ts}   {page}\n")
+            f.write(f"{' '*82}DAILY EXTRACTION OF DCI INTERBANK FOR MYR AS AT {RDATE}\n")
+            f.write(IBN_HDR)
+            for obs, row in enumerate(ibnmyr.iter_rows(named=True), 1):
+                write_ibn_row(f, obs, row)
+
+        # Interbank FCY
+        if len(ibnfcy) > 0:
+            page += 1
+            ts = datetime.now().strftime("%H:%M %A, %B %d, %Y")
+            f.write(f"\n{' '*52}PUBLIC BANK BERHAD{' '*60}{ts}   {page}\n")
+            f.write(f"{' '*82}DAILY EXTRACTION OF DCI INTERBANK FOR FCY AS AT {RDATE}\n")
+            f.write(IBN_HDR)
+            for obs, row in enumerate(ibnfcy.iter_rows(named=True), 1):
+                write_ibn_row(f, obs, row)
+
+    print(f"  ✓ DCITXT written to {text_path}")
+
+    # -------------------------------------------------------------------
+    # Step 8: Build DCI final dataset
+    # -------------------------------------------------------------------
+    print("\nBuilding DCI final output...")
+
+    dcimyr = pl.DataFrame()
+    if cusmyr.width > 0 or ibnmyr.width > 0:
+        frames = []
+        if cusmyr.width > 0:
+            frames.append(cusmyr)
+        if ibnmyr.width > 0:
+            frames.append(ibnmyr)
+        dcimyr = safe_concat(frames)
+        print(f"  Combined customer and interbank data: {len(dcimyr)} rows")
+    else:
+        print("  No data available to build DCI")
+
+    dci_final = pl.DataFrame()
+    if len(dcimyr) > 0:
+        dcimyr = dcimyr.with_columns([
+            pl.when(pl.col("TYPE") == "C")
+              .then(pl.col("PREMPAID") if "PREMPAID" in dcimyr.columns else pl.lit(None).cast(pl.Float64))
+              .otherwise(pl.col("PREMREC") if "PREMREC" in dcimyr.columns else pl.lit(None).cast(pl.Float64))
+              .alias("PREMIUM"),
+            pl.lit(today).alias("REPTDATS")
+        ])
+
+        def calc_elday(d):
+            dd = d.day
+            mm = d.month
+            yy = d.year
+            elday = ELDAY_MAPPING.get(dd, 'DAYX')
+            if mm in (4, 6, 9, 11) and dd == 30:
+                elday = 'DAYI'
+            if mm == 2:
+                if dd == 28:
+                    elday = 'DAYI'
+                    if yy % 4 == 0:
+                        elday = 'DAYF'
+                if dd == 29 and yy % 4 == 0:
+                    elday = 'DAYI'
+            return elday
+
+        dcimyr = dcimyr.with_columns([
+            pl.col("REPTDATS").map_elements(calc_elday, return_dtype=pl.Utf8).alias("ELDAY")
+        ])
+
+        records = []
+        for row in dcimyr.iter_rows(named=True):
+            accintrm = row.get("ACCINTRM")
+            if accintrm not in (None, 0):
+                records.append({
+                    "BNMCODE":  BNM_CODES["ACCINTRM"],
+                    "ELDAY":    row["ELDAY"],
+                    "REPTDATS": row["REPTDATS"],
+                    "AMOUNT":   accintrm
+                })
+            premium = row.get("PREMIUM")
+            if premium not in (None, 0):
+                records.append({
+                    "BNMCODE":  BNM_CODES["PREMIUM"],
+                    "ELDAY":    row["ELDAY"],
+                    "REPTDATS": row["REPTDATS"],
+                    "AMOUNT":   premium
+                })
+
+        if records:
+            dci_final = (
+                pl.DataFrame(records)
+                  .group_by(["BNMCODE", "ELDAY", "REPTDATS"])
+                  .agg(pl.sum("AMOUNT").alias("AMOUNT"))
+            )
+            print(f"  DCI final: {len(dci_final):,} aggregated records")
+        else:
+            print("  No DCI records generated")
+
+    # -------------------------------------------------------------------
+    # Step 9: Write outputs
+    # -------------------------------------------------------------------
+    print("\nWriting output files...")
+
+    parquet_path = get_output_path("PARQUET", date_vars)
+    ensure_directory(parquet_path)
+    if len(dci_final) > 0:
+        dci_final.write_parquet(parquet_path)
+        print(f"  ✓ Parquet written: {parquet_path}")
+    else:
+        print(f"  ⚠ No data to write to Parquet: {parquet_path}")
+
+    sas_path = get_output_path("SAS", date_vars)
+    ensure_directory(sas_path)
+    if len(dci_final) > 0:
+        print(f"\nWriting SAS dataset to {sas_path}...")
+        write_sas_file(dci_final, sas_path)
+    else:
+        print(f"  ⚠ No data to write to SAS: {sas_path}")
+
+    csv_path = get_output_path("CSV", date_vars)
+    ensure_directory(csv_path)
+    if len(dci_final) > 0:
+        dci_final.write_csv(csv_path)
+        print(f"  ✓ CSV written: {csv_path}")
+    else:
+        print(f"  ⚠ No data to write to CSV: {csv_path}")
+
+    print("\n" + "=" * 80)
+    print(f"EIBDCITX completed successfully for {RDATE} (Yesterday's data)!")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()
