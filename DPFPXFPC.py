@@ -1,39 +1,12 @@
-import pyreadstat
-import os
-from datetime import datetime, timedelta
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDMSFX/behaveindfxfd.sas7bdat: 49 unique dates
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDMSFX/behavenonfxfd.sas7bdat: 49 unique dates
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDMSFX/behaveindfxca.sas7bdat: 49 unique dates
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDMSFX/behavenonfxca.sas7bdat: 49 unique dates
 
-def verify_all_dates():
-    """Verify all dates in the SAS files"""
-    
-    sas_files = [
-        'FINAL/behaveindfxfd.sas7bdat',
-        'FINAL/behavenonfxfd.sas7bdat',
-        'FINAL/behaveindfxca.sas7bdat',
-        'FINAL/behavenonfxca.sas7bdat'
-    ]
-    
-    all_dates = set()
-    
-    for filepath in sas_files:
-        if os.path.exists(filepath):
-            df, meta = pyreadstat.read_sas7bdat(filepath)
-            if 'DATE' in df.columns:
-                dates = set(df['DATE'].unique())
-                all_dates.update(dates)
-                print(f"{filepath}: {len(dates)} unique dates")
-    
-    sorted_dates = sorted(all_dates)
-    print(f"\nTotal unique dates: {len(sorted_dates)}")
-    print(f"Date range: {sorted_dates[0]} to {sorted_dates[-1]}")
-    
-    # Check specific dates
-    check_dates = [24258, 24259, 24260, 24286, 24287]
-    for date in check_dates:
-        if date in all_dates:
-            print(f"✅ {date} = {datetime(1960,1,1) + timedelta(days=date)} - EXISTS")
-        else:
-            print(f"❌ {date} - NOT FOUND")
-    
-    return sorted_dates
-
-verify_all_dates()
+Total unique dates: 49
+Date range: 23922.0 to 24287.0
+❌ 24258 - NOT FOUND
+❌ 24259 - NOT FOUND
+❌ 24260 - NOT FOUND
+❌ 24286 - NOT FOUND
+✅ 24287 = 2026-06-30 00:00:00 - EXISTS
