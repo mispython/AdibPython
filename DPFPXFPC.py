@@ -1,64 +1,303 @@
+# EIBDMSFX_NLF_PROCESSOR.py - Production Version with Auto-Fallback
 
-======================================================================
-DEBUG VERSION - Comparing Production vs Python Output
-======================================================================
+import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
+import os
+from datetime import datetime, timedelta
+import pyreadstat
+import pandas as pd
+import sys
 
-Production SAS Date: 24258 -> 2026-06-01
-Current SAS Date:    24288 -> 2026-07-01
+# Try to import saspy for SAS dataset writing
+try:
+    import saspy
+    SASPY_AVAILABLE = True
+except ImportError:
+    SASPY_AVAILABLE = False
+    print("Warning: saspy not available. SAS dataset output will be skipped.")
 
-======================================================================
-PROCESSING DATE: 2026-06-01 (SAS: 24258)
-======================================================================
+def main():
+    # Configuration
+    output_base_path = "MISFX"
+    final_base_path = "FINAL"
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_base_path, exist_ok=True)
+    
+    # Step 1: Get REPTDATE parameters
+    # Try to use today's date
+    reptdate = datetime.now()
+    sas_date_num = (reptdate - datetime(1960, 1, 1)).days
+    
+    # Check if date exists, if not, find the latest available
+    latest_date, latest_sas_num = get_latest_available_date(final_base_path)
+    
+    if latest_date and sas_date_num > latest_sas_num:
+        print(f"⚠️  Warning: Date {reptdate.strftime('%Y-%m-%d')} (SAS: {sas_date_num}) not available")
+        print(f"   Latest available date: {latest_date.strftime('%Y-%m-%d')} (SAS: {latest_sas_num})")
+        print(f"   Using latest available date instead...")
+        reptdate = latest_date
+        sas_date_num = latest_sas_num
+    elif not latest_date:
+        print("❌ No data files found!")
+        sys.exit(1)
+    
+    # Calculate SAS date parameters
+    rept_year = reptdate.year
+    rept_month = str(reptdate.month).zfill(2)
+    rept_day = str(reptdate.day).zfill(2)
+    rdate = str(reptdate.year)[2:] + str(reptdate.strftime('%j')).zfill(3)
+    
+    print(f"\n{'='*60}")
+    print(f"Processing date: {reptdate.strftime('%Y-%m-%d')}")
+    print(f"SAS date number: {sas_date_num}")
+    print(f"REPTYEAR: {rept_year}")
+    print(f"REPTMON: {rept_month}")
+    print(f"REPTDAY: {rept_day}")
+    print(f"RDATE: {rdate} (YYDDD format)")
+    print(f"{'='*60}\n")
+    
+    # Step 2: Create NLF dataset
+    conn = duckdb.connect()
+    
+    # Define SAS file paths (lowercase)
+    sas_files = {
+        'BEHAVEINDFXFD': f'{final_base_path}/behaveindfxfd.sas7bdat',
+        'BEHAVENONFXFD': f'{final_base_path}/behavenonfxfd.sas7bdat',
+        'BEHAVEINDFXCA': f'{final_base_path}/behaveindfxca.sas7bdat',
+        'BEHAVENONFXCA': f'{final_base_path}/behavenonfxca.sas7bdat'
+    }
+    
+    # Read each SAS file and filter by date
+    nlf_data = []
+    file_loaded = False
+    
+    for name, filepath in sas_files.items():
+        if not os.path.exists(filepath):
+            print(f"Warning: {filepath} not found, skipping...")
+            continue
+        
+        try:
+            # Read SAS file
+            df, meta = pyreadstat.read_sas7bdat(filepath)
+            
+            # Check if DATE column exists
+            if 'DATE' not in df.columns:
+                print(f"Warning: DATE column not found in {name}")
+                continue
+            
+            # Filter by SAS date number
+            df_filtered = df[df['DATE'] == sas_date_num].copy()
+            
+            if len(df_filtered) == 0:
+                print(f"No data found for SAS date {sas_date_num} in {name}")
+                continue
+            
+            # Rename BALANCE to appropriate column name
+            if name == 'BEHAVEINDFXFD':
+                df_filtered = df_filtered.rename(columns={
+                    'BALANCE': 'INDFXFDBAL',
+                    'DATE': 'REPTDATE'
+                })
+                df_filtered['NONFXFDBAL'] = None
+                df_filtered['INDFXCABAL'] = None
+                df_filtered['NONFXCABAL'] = None
+                
+            elif name == 'BEHAVENONFXFD':
+                df_filtered = df_filtered.rename(columns={
+                    'BALANCE': 'NONFXFDBAL',
+                    'DATE': 'REPTDATE'
+                })
+                df_filtered['INDFXFDBAL'] = None
+                df_filtered['INDFXCABAL'] = None
+                df_filtered['NONFXCABAL'] = None
+                
+            elif name == 'BEHAVEINDFXCA':
+                df_filtered = df_filtered.rename(columns={
+                    'BALANCE': 'INDFXCABAL',
+                    'DATE': 'REPTDATE'
+                })
+                df_filtered['INDFXFDBAL'] = None
+                df_filtered['NONFXFDBAL'] = None
+                df_filtered['NONFXCABAL'] = None
+                
+            elif name == 'BEHAVENONFXCA':
+                df_filtered = df_filtered.rename(columns={
+                    'BALANCE': 'NONFXCABAL',
+                    'DATE': 'REPTDATE'
+                })
+                df_filtered['INDFXFDBAL'] = None
+                df_filtered['NONFXFDBAL'] = None
+                df_filtered['INDFXCABAL'] = None
+            
+            # Keep only required columns
+            keep_cols = ['REPTDATE', 'INDFXFDBAL', 'NONFXFDBAL', 'INDFXCABAL', 'NONFXCABAL']
+            df_filtered = df_filtered[keep_cols]
+            
+            nlf_data.append(df_filtered)
+            file_loaded = True
+            print(f"✅ Loaded {len(df_filtered)} records from {name}")
+            
+        except Exception as e:
+            print(f"Error reading {filepath}: {e}")
+            continue
+    
+    if not file_loaded:
+        print(f"\n❌ No data found for date {reptdate.strftime('%Y-%m-%d')} (SAS date: {sas_date_num})")
+        conn.close()
+        sys.exit(1)
+    
+    # Combine all data
+    nlf_data_filtered = [df for df in nlf_data if len(df) > 0]
+    if nlf_data_filtered:
+        nlf_combined = pd.concat(nlf_data_filtered, ignore_index=True)
+        print(f"\n📊 Total records combined: {len(nlf_combined)}")
+    else:
+        print("\n❌ No data to combine")
+        conn.close()
+        sys.exit(1)
+    
+    # Step 3: PROC SUMMARY
+    summary_cols = ['INDFXFDBAL', 'NONFXFDBAL', 'INDFXCABAL', 'NONFXCABAL']
+    nlf_summary = nlf_combined.groupby('REPTDATE', as_index=False)[summary_cols].sum()
+    nlf_summary = nlf_summary.fillna(0)
+    
+    print(f"\n📊 Summary statistics:")
+    print(f"  Records: {len(nlf_summary)}")
+    if len(nlf_summary) > 0:
+        print(f"  INDFXFDBAL Total: {nlf_summary['INDFXFDBAL'].iloc[0]:.2f}")
+        print(f"  NONFXFDBAL Total: {nlf_summary['NONFXFDBAL'].iloc[0]:.2f}")
+        print(f"  INDFXCABAL Total: {nlf_summary['INDFXCABAL'].iloc[0]:.2f}")
+        print(f"  NONFXCABAL Total: {nlf_summary['NONFXCABAL'].iloc[0]:.2f}")
+    
+    # Step 4: APPEND macro
+    output_filename = f"NLF{rept_month}"
+    output_parquet_path = f"{output_base_path}/{output_filename}.parquet"
+    output_sas_path = f"{output_base_path}/{output_filename}.sas7bdat"
+    output_csv_path = f"{output_base_path}/{output_filename}.csv"
+    
+    nlf_summary_arrow = pa.Table.from_pandas(nlf_summary)
+    
+    if rept_day == "01":
+        # First day of month - create new files
+        pq.write_table(nlf_summary_arrow, output_parquet_path)
+        nlf_summary.to_csv(output_csv_path, index=False)
+        write_sas_dataset(nlf_summary, output_sas_path)
+        print(f"\n✅ Created new files:")
+        print(f"   {output_parquet_path}")
+        print(f"   {output_sas_path}")
+        print(f"   {output_csv_path}")
+    else:
+        # Other days - append to existing file
+        if os.path.exists(output_parquet_path):
+            try:
+                existing_df = pd.read_parquet(output_parquet_path)
+                print(f"\n📁 Existing records before update: {len(existing_df)}")
+                
+                # Remove existing record for the current date
+                existing_df = existing_df[existing_df['REPTDATE'] != sas_date_num]
+                print(f"   Records after removing date {sas_date_num}: {len(existing_df)}")
+                
+                # Append new data
+                combined_df = pd.concat([existing_df, nlf_summary], ignore_index=True)
+                print(f"   Total records after append: {len(combined_df)}")
+                
+                # Write combined data
+                combined_arrow = pa.Table.from_pandas(combined_df)
+                pq.write_table(combined_arrow, output_parquet_path)
+                combined_df.to_csv(output_csv_path, index=False)
+                write_sas_dataset(combined_df, output_sas_path)
+                
+                print(f"\n✅ Updated files:")
+                print(f"   {output_parquet_path}")
+                print(f"   {output_sas_path}")
+                print(f"   {output_csv_path}")
+                    
+            except Exception as e:
+                print(f"Error updating existing files: {e}")
+                # Fallback: create new file
+                pq.write_table(nlf_summary_arrow, output_parquet_path)
+                nlf_summary.to_csv(output_csv_path, index=False)
+                write_sas_dataset(nlf_summary, output_sas_path)
+                print(f"\n✅ Created new files (fallback):")
+                print(f"   {output_parquet_path}")
+                print(f"   {output_sas_path}")
+                print(f"   {output_csv_path}")
+        else:
+            # File doesn't exist, create new one
+            pq.write_table(nlf_summary_arrow, output_parquet_path)
+            nlf_summary.to_csv(output_csv_path, index=False)
+            write_sas_dataset(nlf_summary, output_sas_path)
+            print(f"\n✅ Created new files:")
+            print(f"   {output_parquet_path}")
+            print(f"   {output_sas_path}")
+            print(f"   {output_csv_path}")
+    
+    conn.close()
+    print(f"\n{'='*60}")
+    print(f"✅ Processing complete! Output saved to: {output_base_path}/")
+    print(f"{'='*60}")
 
-REPTYEAR: 2026
-REPTMON: 06
-REPTDAY: 01
-RDATE: 26152 (YYDDD format)
+def get_latest_available_date(final_base_path):
+    """Get the latest date available in the SAS files"""
+    sas_files = [
+        f'{final_base_path}/behaveindfxfd.sas7bdat',
+        f'{final_base_path}/behavenonfxfd.sas7bdat',
+        f'{final_base_path}/behaveindfxca.sas7bdat',
+        f'{final_base_path}/behavenonfxca.sas7bdat'
+    ]
+    
+    all_dates = []
+    for filepath in sas_files:
+        if os.path.exists(filepath):
+            try:
+                df, meta = pyreadstat.read_sas7bdat(filepath)
+                if 'DATE' in df.columns:
+                    all_dates.extend(df['DATE'].unique())
+            except:
+                pass
+    
+    if all_dates:
+        latest_sas = max(all_dates)
+        latest_date = datetime(1960, 1, 1) + timedelta(days=latest_sas)
+        return latest_date, latest_sas
+    else:
+        return None, None
 
-======================================================================
-DEBUG: Checking Available Dates in SAS Files
-======================================================================
+def write_sas_dataset(df, output_path):
+    """Write pandas DataFrame to SAS dataset using saspy or pyreadstat"""
+    sas = None
+    try:
+        if SASPY_AVAILABLE:
+            try:
+                sas = saspy.SASsession()
+                sas.dataframe2sasdata(df, table='NLF_TEMP')
+                
+                sas_code = f'''
+                    libname out "{os.path.dirname(output_path)}";
+                    data out.{os.path.basename(output_path).replace('.sas7bdat', '')};
+                        set work.NLF_TEMP;
+                    run;
+                    proc datasets lib=work;
+                        delete NLF_TEMP;
+                    run;
+                '''
+                sas.submit(sas_code)
+                sas.endsas()
+                print("   ✅ SAS dataset written successfully")
+                return True
+            except Exception as e:
+                print(f"   saspy method failed: {e}")
+                if sas:
+                    try:
+                        sas.endsas()
+                    except:
+                        pass
+        return False
+    except Exception as e:
+        print(f"⚠️  Warning: Could not write SAS file: {e}")
+        return False
 
-BEHAVEINDFXFD:
-  Total records: 49
-  Date range: 23922.0 to 24286.0
-  Number of unique dates: 49
-  ❌ Target date 24258 NOT FOUND in this file
-     Closest date before: 24257.0
-     Closest date after: 24265.0
-
-BEHAVENONFXFD:
-  Total records: 49
-  Date range: 23922.0 to 24286.0
-  Number of unique dates: 49
-  ❌ Target date 24258 NOT FOUND in this file
-     Closest date before: 24257.0
-     Closest date after: 24265.0
-
-BEHAVEINDFXCA:
-  Total records: 49
-  Date range: 23922.0 to 24286.0
-  Number of unique dates: 49
-  ❌ Target date 24258 NOT FOUND in this file
-     Closest date before: 24257.0
-     Closest date after: 24265.0
-
-BEHAVENONFXCA:
-  Total records: 49
-  Date range: 23922.0 to 24286.0
-  Number of unique dates: 49
-  ❌ Target date 24258 NOT FOUND in this file
-     Closest date before: 24257.0
-     Closest date after: 24265.0
-
-======================================================================
-DEBUG: Raw Data for SAS Date 24258
-======================================================================
-
-BEHAVEINDFXFD: No data for date 24258
-BEHAVENONFXFD: No data for date 24258
-BEHAVEINDFXCA: No data for date 24258
-BEHAVENONFXCA: No data for date 24258
-
-❌ No data found for SAS date 24258
-Cannot continue with summarization.
+if __name__ == "__main__":
+    main()
