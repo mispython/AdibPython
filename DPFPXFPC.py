@@ -1,38 +1,39 @@
-actual production output for nlf06:
+import pyreadstat
+import os
+from datetime import datetime, timedelta
 
-24258	4860344	23539949	282381	2564513
-24259	4860663	23543571	282381	2568625
-24260	4903611	23391428	287495	2633848
-24261	4914921	23115861	285905	2483146
-24262	4933325	23480125	288857	2385856
-24263	4933510	23480227	288857	2390357
-24264	4933833	23487896	288858	2394393
-24265	4958530	23814718	280019	2536339
-24266	4959136	23665304	276292	2510461
-24267	4961458	23716760	281678	2500733
-24268	4911624	23614887	281176	2516715
-24269	4903426	23432901	277688	2414729
-24270	4903605	23432968	277688	2420119
-24271	4903823	23439301	277688	2424493
-24272	4900929	23395057	278544	2410841
-24273	4918882	23488626	279680	2445229
-24274	4919187	23490375	279680	2450546
-24275	4951570	23983766	280959	2479017
-24276	4977185	24052263	283394	2449425
-24277	4977344	24052294	283394	2453718
-24278	4977571	24063902	283394	2457897
-24279	4965001	23198194	280390	2507282
-24280	4952243	23889602	281137	2459096
-24281	4910905	23709499	283033	2438003
-24282	4858861	23429853	276806	2528315
-24283	4828013	22955354	286334	2470398
-24284	4828381	22955440	286334	2476009
-24285	4828501	22957386	286334	2480745
-24286	4801495	22714832	281353	2800517
-24287	4811085	23217526	279525	2908128
+def verify_all_dates():
+    """Verify all dates in the SAS files"""
+    
+    sas_files = [
+        'FINAL/behaveindfxfd.sas7bdat',
+        'FINAL/behavenonfxfd.sas7bdat',
+        'FINAL/behaveindfxca.sas7bdat',
+        'FINAL/behavenonfxca.sas7bdat'
+    ]
+    
+    all_dates = set()
+    
+    for filepath in sas_files:
+        if os.path.exists(filepath):
+            df, meta = pyreadstat.read_sas7bdat(filepath)
+            if 'DATE' in df.columns:
+                dates = set(df['DATE'].unique())
+                all_dates.update(dates)
+                print(f"{filepath}: {len(dates)} unique dates")
+    
+    sorted_dates = sorted(all_dates)
+    print(f"\nTotal unique dates: {len(sorted_dates)}")
+    print(f"Date range: {sorted_dates[0]} to {sorted_dates[-1]}")
+    
+    # Check specific dates
+    check_dates = [24258, 24259, 24260, 24286, 24287]
+    for date in check_dates:
+        if date in all_dates:
+            print(f"✅ {date} = {datetime(1960,1,1) + timedelta(days=date)} - EXISTS")
+        else:
+            print(f"❌ {date} - NOT FOUND")
+    
+    return sorted_dates
 
-
-python output for nlf06
-
-24286	4801495	22714832	281353	2800517
-24287	4811085	23217526	279525	2908128
+verify_all_dates()
