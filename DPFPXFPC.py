@@ -1,12 +1,5 @@
-24265	4958530	23814718	280019	2536339
-24272	4900929	23395057	278544	2410841
-24279	4965001	23198194	280390	2507282
-24287	4811085	23217526	279525	2908128
-
-this is the output after i ran below code:
-
-# EIBDMSFX_NLF_PROCESSOR.py
-# Process ALL dates in a month
+# EIBDMSFX_NLF_PROCESSOR.py - Daily Version
+# This version processes ONE date per run (like production SAS)
 
 import os
 import sys
@@ -67,14 +60,17 @@ class DateUtils:
         return (date_obj - Config.SAS_BASE_DATE).days
     
     @staticmethod
-    def get_month_dates(sas_dates, target_month, target_year):
-        """Get all SAS dates in a specific month"""
-        month_dates = []
-        for sas_date in sas_dates:
-            date_obj = DateUtils.sas_to_date(sas_date)
-            if date_obj.year == target_year and date_obj.month == target_month:
-                month_dates.append(sas_date)
-        return sorted(month_dates)
+    def get_date_parameters(date_obj):
+        """Get all date parameters needed for processing"""
+        return {
+            'date': date_obj,
+            'sas_date': (date_obj - Config.SAS_BASE_DATE).days,
+            'year': date_obj.year,
+            'month': str(date_obj.month).zfill(2),
+            'day': str(date_obj.day).zfill(2),
+            'rdate': str(date_obj.year)[2:] + str(date_obj.strftime('%j')).zfill(3),
+            'is_first_day': date_obj.day == 1
+        }
 
 # ============================================================================
 # DATA LOADER
@@ -102,6 +98,33 @@ class DataLoader:
         
         self.available_dates = sorted(all_dates)
         return self.available_dates
+    
+    def get_processing_date(self, target_date=None):
+        """
+        Determine the correct processing date.
+        For daily runs, use the target date if available,
+        otherwise skip (don't create empty records).
+        """
+        available_dates = self.get_available_dates()
+        
+        if not available_dates:
+            return None, None
+        
+        # If no target date provided, use today
+        if target_date is None:
+            target_date = datetime.now()
+        
+        target_sas = DateUtils.date_to_sas(target_date)
+        
+        # Check if target date exists
+        if target_sas in available_dates:
+            return target_date, target_sas
+        else:
+            # For daily runs, return None if date doesn't exist
+            # This prevents creating empty records
+            print(f"\n⚠️  Date {target_date.strftime('%Y-%m-%d')} (SAS: {target_sas}) not available")
+            print(f"   Skipping - no data for this date")
+            return None, None
     
     def load_date_data(self, sas_date_num):
         """Load data for a specific SAS date from all source files"""
@@ -155,74 +178,79 @@ class NLFProcessor:
         self.output_path = output_path
         os.makedirs(output_path, exist_ok=True)
     
-    def process_month(self, year, month):
-        """Process ALL available dates in a month"""
+    def process_date(self, date_obj, sas_date):
+        """Process a SINGLE date (like production daily run)"""
+        
         loader = DataLoader(Config.FINAL_PATH)
         
-        # Get all available dates
-        all_dates = loader.get_available_dates()
-        if not all_dates:
-            print("❌ No data found!")
+        print(f"\n📅 Processing date: {date_obj.strftime('%Y-%m-%d')} (SAS: {sas_date})")
+        
+        # Load data for this date
+        raw_data = loader.load_date_data(sas_date)
+        if raw_data is None or len(raw_data) == 0:
+            print(f"  ⚠️  No data for this date")
             return False
         
-        # Get dates for this month
-        month_dates = DateUtils.get_month_dates(all_dates, month, year)
-        
-        if not month_dates:
-            print(f"❌ No data found for {year}-{month:02d}")
+        # Summarize
+        summary = self.summarize_data(raw_data)
+        if summary is None or len(summary) == 0:
+            print(f"  ⚠️  No summary for this date")
             return False
         
-        print(f"\n📅 Processing {len(month_dates)} dates for {year}-{month:02d}")
+        print(f"  ✅ Processed: {len(summary)} record(s)")
         
-        # Process each date
-        all_summaries = []
+        # Append to monthly file
+        return self.append_to_monthly(summary, date_obj)
+    
+    def append_to_monthly(self, summary_df, date_obj):
+        """Append a single record to the monthly file (like PROC APPEND)"""
         
-        for sas_date in month_dates:
-            date_obj = DateUtils.sas_to_date(sas_date)
-            print(f"  Processing: {date_obj.strftime('%Y-%m-%d')} (SAS: {sas_date})")
-            
-            # Load data
-            raw_data = loader.load_date_data(sas_date)
-            if raw_data is None or len(raw_data) == 0:
-                print(f"    ⚠️  No data for this date")
-                continue
-            
-            # Summarize
-            summary = self.summarize_data(raw_data)
-            if summary is not None and len(summary) > 0:
-                all_summaries.append(summary)
-                print(f"    ✅ Added: {len(summary)} record(s)")
-        
-        if not all_summaries:
-            print(f"❌ No data processed for {year}-{month:02d}")
-            return False
-        
-        # Combine all summaries
-        combined_df = pd.concat(all_summaries, ignore_index=True)
-        
-        # Sort by REPTDATE
-        combined_df = combined_df.sort_values('REPTDATE').reset_index(drop=True)
-        
-        print(f"\n📊 Total records: {len(combined_df)}")
-        
-        # Write output
-        output_filename = f"NLF{str(month).zfill(2)}"
+        month = str(date_obj.month).zfill(2)
+        output_filename = f"NLF{month}"
         output_parquet = os.path.join(self.output_path, f"{output_filename}.parquet")
         output_sas = os.path.join(self.output_path, f"{output_filename}.sas7bdat")
         output_csv = os.path.join(self.output_path, f"{output_filename}.csv")
         
+        # Check if this is the first day of the month
+        is_first_day = date_obj.day == 1
+        
+        if is_first_day or not os.path.exists(output_parquet):
+            # First day of month or file doesn't exist - create new
+            combined_df = summary_df
+            print(f"  📁 Creating new monthly file: {output_filename}")
+        else:
+            # Append to existing file
+            try:
+                existing_df = pd.read_parquet(output_parquet)
+                
+                # Check if record already exists for this date
+                sas_date = summary_df['REPTDATE'].iloc[0]
+                existing_df = existing_df[existing_df['REPTDATE'] != sas_date]
+                
+                # Append new data
+                combined_df = pd.concat([existing_df, summary_df], ignore_index=True)
+                combined_df = combined_df.sort_values('REPTDATE').reset_index(drop=True)
+                
+                print(f"  📁 Appending to existing file: {output_filename}")
+                print(f"     Existing: {len(existing_df)} records")
+                print(f"     After append: {len(combined_df)} records")
+                
+            except Exception as e:
+                print(f"  ⚠️  Error reading existing file: {e}")
+                combined_df = summary_df
+        
         # Write Parquet
         combined_arrow = pa.Table.from_pandas(combined_df)
         pq.write_table(combined_arrow, output_parquet)
-        print(f"  ✅ Created: {output_parquet}")
+        print(f"  ✅ Updated: {output_parquet}")
         
         # Write CSV
         combined_df.to_csv(output_csv, index=False)
-        print(f"  ✅ Created: {output_csv}")
+        print(f"  ✅ Updated: {output_csv}")
         
         # Write SAS
         if self._write_sas_dataset(combined_df, output_sas):
-            print(f"  ✅ Created: {output_sas}")
+            print(f"  ✅ Updated: {output_sas}")
         
         return True
     
@@ -269,36 +297,62 @@ class NLFProcessor:
 # MAIN EXECUTION
 # ============================================================================
 
+def print_header(title, char='='):
+    """Print a formatted header"""
+    print(f"\n{char*70}")
+    print(f"{title:^70}")
+    print(f"{char*70}\n")
+
 def main():
-    print("\n" + "="*70)
-    print("NLF PROCESSOR - Monthly Batch Processing".center(70))
-    print("="*70 + "\n")
+    """Main execution function - Daily run (like production)"""
     
-    # Get current date (or specify a specific date)
-    # For production, use today's date
-    #target_date = datetime.now()
+    print_header("NLF PROCESSOR - Daily Run")
     
-    # For testing specific months:
-    target_date = datetime(2026, 6, 30)  # Process June 2026
+    # Initialize loader
+    loader = DataLoader(Config.FINAL_PATH)
+    
+    # Get available dates
+    all_dates = loader.get_available_dates()
+    if not all_dates:
+        print("❌ No data found in FINAL directory!")
+        print("   Please check that SAS files exist in:", Config.FINAL_PATH)
+        sys.exit(1)
+    
+    print(f"📁 Data available from {DateUtils.sas_to_date(min(all_dates)).strftime('%Y-%m-%d')} to {DateUtils.sas_to_date(max(all_dates)).strftime('%Y-%m-%d')}")
+    print(f"   Total dates: {len(all_dates)}")
+    
+    # For daily runs, use today's date (like production)
+    # Or you can specify a date for testing
+    target_date = datetime.now()
+    
+    # For testing specific dates, uncomment:
+    # target_date = datetime(2026, 6, 8)  # Process June 8
     
     year = target_date.year
     month = target_date.month
+    day = target_date.day
     
-    print(f"📅 Processing month: {year}-{month:02d}")
+    print(f"📅 Target date: {target_date.strftime('%Y-%m-%d')}")
     
-    # Process the month
+    # Get the processing date (only if it exists in data)
+    process_date, sas_date = loader.get_processing_date(target_date)
+    
+    if process_date is None or sas_date is None:
+        print(f"\n⚠️  No data for {target_date.strftime('%Y-%m-%d')}")
+        print("   This is normal - the daily SAS job would also skip this date.")
+        print("   The monthly file will retain its existing records.")
+        sys.exit(0)  # Exit gracefully
+    
+    # Process the date
     processor = NLFProcessor(Config.OUTPUT_PATH)
-    success = processor.process_month(year, month)
+    success = processor.process_date(process_date, sas_date)
     
     if success:
-        print("\n" + "="*70)
-        print("✅ PROCESSING COMPLETE".center(70))
-        print(f"Output saved to: {Config.OUTPUT_PATH}/".center(70))
+        print_header("✅ PROCESSING COMPLETE")
+        print(f"Output saved to: {Config.OUTPUT_PATH}/")
         print("="*70 + "\n")
     else:
-        print("\n" + "="*70)
-        print("❌ PROCESSING FAILED".center(70))
-        print("="*70 + "\n")
+        print_header("❌ PROCESSING FAILED")
         sys.exit(1)
 
 if __name__ == "__main__":
