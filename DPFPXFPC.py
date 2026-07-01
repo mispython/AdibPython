@@ -1,107 +1,41 @@
-# eibdcitx.py - FIXED DCITXT FORMATTING
+# eibdcitx.py - FIXED DCITXT FORMATTING TO MATCH SAS PRODUCTION EXACTLY
 import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
-import duckdb
 from datetime import date, datetime, timedelta
 import pyreadstat
 import os
+import codecs
 from pathlib import Path
 
 # ===================================================================
-# PATH CONFIGURATION - Modify these paths as needed
+# PATH CONFIGURATION
 # ===================================================================
 
 INPUT_PATHS = {
-    "DPFL":         "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPFL.txt",
-    "EQFL":         "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/UTSASDCID_{yyyy}{mm}{dd}.txt",
-    "CRA":          "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPCRATXT_{yyyy}{mm}{dd}",
-    "EQRATE":       "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/eqrate{yy}{mm}{dd}.sas7bdat",
+    "DPFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPFL.txt",
+    "EQFL": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/UTSASDCID_{yyyy}{mm}{dd}.txt",
+    "CRA": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/DPCRATXT_{yyyy}{mm}{dd}",
+    "EQRATE": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/eqrate{yy}{mm}{dd}.sas7bdat",
     "MNITB_SAVING": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/intg_dp_acct_saving.sas7bdat",
-    "MNITB_CURRENT":"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/intg_dp_acct_current.sas7bdat",
-    "DCID":         "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/dcid{mm}{dd}.sas7bdat",
+    "MNITB_CURRENT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/intg_dp_acct_current.sas7bdat",
+    "DCID": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/dcid{mm}{dd}.sas7bdat",
 }
 
 PARQUET_CACHE = {
-    "MNITB_SAVING":  "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_saving.parquet",
+    "MNITB_SAVING": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_saving.parquet",
     "MNITB_CURRENT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDCITX/cache/intg_dp_acct_current.parquet",
 }
 
 OUTPUT_PATHS = {
     "PARQUET": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.parquet",
-    "CSV":     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.csv",
-    "SAS":     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI{mon}{wk}.sas7bdat",
-    "TEXT":    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt",
+    "CSV": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.csv",
+    "SAS": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/BNMK_DCI{mon}{wk}.sas7bdat",
+    "TEXT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt",
 }
 
-SAS_CONFIG = {
-    "sascfg": {
-        "saspath": "/usr/local/SASHome/SASFoundation/9.4/bin/sas",
-        "options": ["-fullstimer", "-nosyntaxcheck", "-sasuser", "work"],
-    }
-}
-
-# ===================================================================
-# FILE FORMAT CONFIGURATIONS
-# ===================================================================
-
-FILE_FORMATS = {
-    "DPFL": {
-        "fixed_width": True,
-        "widths":  [7, 26, 20, 5, 11, 11, 15],
-        "columns": ['TICKETNO', 'CUSTNAME', 'NEWIC', 'CUSTCODE',
-                    'INVCURAC', 'ALTCURAC', 'ACCINT'],
-        "dtypes": {
-            'TICKETNO': pl.Utf8,  'CUSTNAME': pl.Utf8,
-            'NEWIC':    pl.Utf8,  'CUSTCODE': pl.Int64,
-            'INVCURAC': pl.Int64, 'ALTCURAC': pl.Int64,
-            'ACCINT':   pl.Float64
-        },
-        "implied_decimals": {'ACCINT': 6}
-    },
-    "EQFL": {
-        "separator":  "|",
-        "has_header": False,
-        "columns": [
-            'CUSTICKETNO','TICKETNO','BRANCH','CUSTNAME','DEALID',
-            'FISSCODE','CUSTRES','CUSTMNE','CUSTLOC','EQCUSTYP',
-            'PRODUCT','INVCURR','ALTCURR','INVAMT','INVAMTRM',
-            'ALTAMT','TRADEDT','STARTDT','FIXINGDT','MATDT',
-            'STOPDT','TENOR','STRIKERT','SPOTRT','DCIRT',
-            'ACCINTAMT','TOTINTAMT','ACCINTRM','MMRT','RSPOTRT',
-            'PREMREC','PREMPAID','PROFIT','PROFITMYR','UNWINDCOST',
-            'STATUSIND','STATUS','TYPE'
-        ],
-        "dtypes": {
-            'CUSTICKETNO': pl.Utf8,  'TICKETNO':  pl.Utf8,
-            'BRANCH':      pl.Utf8,  'CUSTNAME':  pl.Utf8,
-            'DEALID':      pl.Utf8,  'FISSCODE':  pl.Utf8,
-            'CUSTRES':     pl.Utf8,  'CUSTMNE':   pl.Utf8,
-            'CUSTLOC':     pl.Utf8,  'EQCUSTYP':  pl.Utf8,
-            'PRODUCT':     pl.Utf8,  'INVCURR':   pl.Utf8,
-            'ALTCURR':     pl.Utf8,  'INVAMT':    pl.Float64,
-            'INVAMTRM':    pl.Float64,'ALTAMT':   pl.Float64,
-            'TRADEDT':     pl.Utf8,  'STARTDT':   pl.Utf8,
-            'FIXINGDT':    pl.Utf8,  'MATDT':     pl.Utf8,
-            'STOPDT':      pl.Utf8,  'TENOR':     pl.Int64,
-            'STRIKERT':    pl.Float64,'SPOTRT':   pl.Float64,
-            'DCIRT':       pl.Float64,'ACCINTAMT':pl.Float64,
-            'TOTINTAMT':   pl.Float64,'ACCINTRM': pl.Float64,
-            'MMRT':        pl.Float64,'RSPOTRT':  pl.Float64,
-            'PREMREC':     pl.Float64,'PREMPAID': pl.Float64,
-            'PROFIT':      pl.Float64,'PROFITMYR':pl.Float64,
-            'UNWINDCOST':  pl.Float64,'STATUSIND':pl.Utf8,
-            'STATUS':      pl.Utf8,  'TYPE':      pl.Utf8
-        }
-    }
-}
-
-# EQC keep columns (matching SAS %LET EQCVAR)
 EQC_KEEP_COLS = ['TICKETNO','CUSTICKETNO','BRANCH','INVCURR','ALTCURR',
                  'INVAMT','ALTAMT','TENOR','STATUSIND','DCIRT','STARTDT',
                  'MATDT','PREMPAID','TYPE']
 
-# EQI keep columns (matching SAS %LET EQIVAR)
 EQI_KEEP_COLS = ['TICKETNO','CUSTNAME','CUSTRES','CUSTLOC','FISSCODE',
                  'CUSTICKETNO','BRANCH','INVCURR','ALTCURR','EQCUSTYP',
                  'INVAMT','ALTAMT','TENOR','STATUSIND','STARTDT',
@@ -109,14 +43,14 @@ EQI_KEEP_COLS = ['TICKETNO','CUSTNAME','CUSTRES','CUSTLOC','FISSCODE',
 
 BNM_CODES = {
     "ACCINTRM": "4911095000000Y",
-    "PREMIUM":  "4929996000000Y"
+    "PREMIUM": "4929996000000Y"
 }
 
 REPORT_CONFIG = {
-    "MIN_CUSTCODE":       80,
-    "VALID_STATUSES":     ["ACT","CEP","CEU","CCU","CMU"],
-    "JPY_CURRENCY":       "JPY",
-    "MYR_CURRENCY":       "MYR",
+    "MIN_CUSTCODE": 80,
+    "VALID_STATUSES": ["ACT","CEP","CEU","CCU","CMU"],
+    "JPY_CURRENCY": "JPY",
+    "MYR_CURRENCY": "MYR",
     "DECIMAL_PLACES_JPY": 0,
     "DECIMAL_PLACES_OTHER": 2
 }
@@ -172,9 +106,7 @@ def get_input_path(file_key, date_vars):
 def get_output_path(file_key, date_vars):
     return format_path_with_date(OUTPUT_PATHS[file_key], date_vars)
 
-
 def unpack_packed_decimal(raw_bytes, decimal_places=0):
-    """Decode IBM mainframe packed decimal (COMP-3 / PD) field."""
     if not raw_bytes:
         return None
     digits = []
@@ -194,17 +126,13 @@ def unpack_packed_decimal(raw_bytes, decimal_places=0):
         value = value / (10 ** decimal_places)
     return value
 
-
 def decode_ebcdic_text(raw_bytes):
-    """Decode raw EBCDIC (cp037) byte slice to stripped Python string."""
     try:
         return raw_bytes.decode('cp037').strip()
     except Exception:
         return raw_bytes.decode('cp037', errors='replace').strip()
 
-
 def parse_ebcdic_yymmdd10(text):
-    """Convert EBCDIC YYMMDD10. date text to ISO 'YYYY-MM-DD'."""
     text = text.strip()
     if not text:
         return None
@@ -215,33 +143,23 @@ def parse_ebcdic_yymmdd10(text):
         return f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}"
     return text
 
-
 def load_cra_ebcdic_file(file_path, record_length=CRA_RECORD_LENGTH, layout=CRA_LAYOUT):
-    """Load the CRA mainframe file with EBCDIC and packed decimal fields."""
     with open(file_path, 'rb') as f:
         raw = f.read()
-
     total_len = len(raw)
     if total_len == 0:
-        print(f"  Warning: CRA file is empty: {file_path}")
         schema = {}
         for name, _, _, kind, _ in layout:
             schema[name] = pl.Float64 if kind == 'pd' else (pl.Int64 if kind == 'zoned' else pl.Utf8)
         return pl.DataFrame(schema=schema)
-
     if total_len % record_length != 0:
-        print(f"  Warning: CRA file size ({total_len} bytes) is not an exact "
-              f"multiple of record_length={record_length}. "
-              f"({total_len / record_length:.2f} records).")
-
+        print(f"  Warning: CRA file size ({total_len} bytes) not multiple of {record_length}")
     num_records = total_len // record_length
     data = []
-
     for i in range(num_records):
         rec = raw[i * record_length: (i + 1) * record_length]
         if not rec.strip(b'\x00'):
             continue
-
         row = {}
         for field_name, start, length, kind, decimals in layout:
             chunk = rec[start:start + length]
@@ -258,13 +176,11 @@ def load_cra_ebcdic_file(file_path, record_length=CRA_RECORD_LENGTH, layout=CRA_
                 except ValueError:
                     row[field_name] = None
         data.append(row)
-
     if not data:
         schema = {}
         for name, _, _, kind, _ in layout:
             schema[name] = pl.Float64 if kind == 'pd' else (pl.Int64 if kind == 'zoned' else pl.Utf8)
         return pl.DataFrame(schema=schema)
-
     df = pl.DataFrame(data)
     if 'INVCURAC' in df.columns:
         df = df.with_columns(pl.col('INVCURAC').cast(pl.Int64, strict=False))
@@ -272,24 +188,18 @@ def load_cra_ebcdic_file(file_path, record_length=CRA_RECORD_LENGTH, layout=CRA_
         df = df.with_columns(pl.col('TENOR').cast(pl.Int64, strict=False))
     return df
 
-
-def load_fixed_width_file(file_path, widths, columns, dtypes=None,
-                          encoding='utf-8', implied_decimals=None):
-    """Load a plain-text fixed-width file (e.g. DPFL)."""
+def load_fixed_width_file(file_path, widths, columns, dtypes=None, encoding='utf-8', implied_decimals=None):
     implied_decimals = implied_decimals or {}
     try:
         with open(file_path, 'r', encoding=encoding) as f:
             lines = f.readlines()
     except UnicodeDecodeError:
-        print(f"  Warning: UTF-8 failed, retrying Latin-1: {file_path}")
         with open(file_path, 'r', encoding='latin-1') as f:
             lines = f.readlines()
     except Exception:
-        print(f"  Warning: Reading as binary/Latin-1: {file_path}")
         with open(file_path, 'rb') as f:
             content = f.read()
         lines = content.decode('latin-1', errors='replace').splitlines(keepends=True)
-
     data = []
     for line in lines:
         if not line.strip():
@@ -297,14 +207,13 @@ def load_fixed_width_file(file_path, widths, columns, dtypes=None,
         row = {}
         start = 0
         for i, width in enumerate(widths):
-            field    = line[start:start+width].strip()
+            field = line[start:start+width].strip()
             col_name = columns[i]
             decimals = implied_decimals.get(col_name)
-
             if decimals is not None:
                 try:
                     if field:
-                        sign       = -1 if field.startswith('-') else 1
+                        sign = -1 if field.startswith('-') else 1
                         digits_str = field.lstrip('-').strip()
                         row[col_name] = sign * int(digits_str) / (10 ** decimals) if digits_str else None
                     else:
@@ -329,22 +238,18 @@ def load_fixed_width_file(file_path, widths, columns, dtypes=None,
                 row[col_name] = field
             start += width
         data.append(row)
-
     if data:
         return pl.DataFrame(data)
     schema = {col: (dtypes[col] if dtypes and col in dtypes else pl.Utf8) for col in columns}
     return pl.DataFrame(schema=schema)
 
-
 def load_eqfl_file(file_path, separator='|', columns=None, dtypes=None):
-    """Load the pipe-delimited EQFL file (no header row)."""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
     except UnicodeDecodeError:
         with open(file_path, 'r', encoding='latin-1') as f:
             lines = f.readlines()
-
     data = []
     for line in lines:
         line = line.strip()
@@ -355,7 +260,6 @@ def load_eqfl_file(file_path, separator='|', columns=None, dtypes=None):
             fields = fields[:len(columns)]
         elif len(fields) < len(columns):
             fields.extend([None] * (len(columns) - len(fields)))
-
         row = {}
         for i, col_name in enumerate(columns):
             field = fields[i].strip() if i < len(fields) and fields[i] else ''
@@ -376,15 +280,12 @@ def load_eqfl_file(file_path, separator='|', columns=None, dtypes=None):
             else:
                 row[col_name] = field
         data.append(row)
-
     if data:
         return pl.DataFrame(data)
     schema = {col: (dtypes[col] if dtypes and col in dtypes else pl.Utf8) for col in columns}
     return pl.DataFrame(schema=schema)
 
-
 def load_sas_file_fast(file_path, columns_to_keep=None):
-    """Load a SAS7BDAT file via pyreadstat, optionally keeping only named columns."""
     try:
         try:
             df, _ = pyreadstat.read_sas7bdat(file_path, columns=columns_to_keep)
@@ -402,9 +303,7 @@ def load_sas_file_fast(file_path, columns_to_keep=None):
         print(f"Error loading SAS file {file_path}: {e}")
         raise
 
-
 def load_mnitb_with_cache(file_path, cache_path, columns_to_keep=None):
-    """Load MNITB SAS file with Parquet caching for faster subsequent loads."""
     if columns_to_keep is None:
         columns_to_keep = ['ACCTNO', 'CUSTCODE']
     ensure_directory(cache_path)
@@ -430,24 +329,17 @@ def load_mnitb_with_cache(file_path, cache_path, columns_to_keep=None):
         print(f"  ✗ Error loading SAS file {file_path}: {e}")
         raise
 
-
 def ensure_join_key_type(df, column_name, target_type=pl.Int64):
     if column_name in df.columns:
         return df.with_columns([pl.col(column_name).cast(target_type)])
     return df
 
-
 def format_ddmmyy8(date_str):
-    """
-    Convert an ISO 'YYYY-MM-DD' string to 'DD/MM/YY', matching
-    SAS FORMAT DDMMYY8. used in the DCITXT PROC PRINT.
-    """
     if not date_str:
         return ''
     s = str(date_str).strip()
     if not s:
         return ''
-    # If already in DD/MM/YY format, return as-is
     if len(s) == 8 and s[2] == '/' and s[5] == '/':
         return s
     s = s.replace('/', '-')
@@ -458,19 +350,24 @@ def format_ddmmyy8(date_str):
         return f"{dd.zfill(2)}/{mm.zfill(2)}/{yy}"
     return s
 
-
-def safe_concat(frames, how="diagonal_relaxed"):
-    """Safely concatenate Polars DataFrames with diagonal alignment."""
+def safe_concat(frames):
+    """Safely concatenate with cast to Int64 for CUSTCODE to avoid float conversion"""
     real_frames = [f for f in frames if f.width > 0]
     if not real_frames:
         return pl.DataFrame()
     if len(real_frames) == 1:
         return real_frames[0]
-    return pl.concat(real_frames, how=how)
-
+    
+    # Ensure CUSTCODE is Int64 in all frames before concat
+    aligned_frames = []
+    for f in real_frames:
+        if 'CUSTCODE' in f.columns:
+            f = f.with_columns([pl.col('CUSTCODE').cast(pl.Int64, strict=False)])
+        aligned_frames.append(f)
+    
+    return pl.concat(aligned_frames, how="diagonal_relaxed")
 
 def write_sas_file(df, file_path):
-    """Write DataFrame to SAS7BDAT using saspy, with CSV fallback."""
     try:
         import saspy
         print("  Connecting to SAS session...")
@@ -494,42 +391,55 @@ def write_sas_file(df, file_path):
     print(f"  ✓ CSV fallback written: {csv_path}")
     return False
 
+# ===================================================================
+# DCITXT FORMATTING - EXACTLY MATCHING SAS PROC PRINT
+# ===================================================================
 
-# ===================================================================
-# DCITXT FORMATTING FUNCTIONS - EXACTLY MATCHING SAS PROC PRINT
-# ===================================================================
+def format_sas_number(value, width=10, decimals=2):
+    """Format number like SAS - no commas, blank for null/missing"""
+    if value is None or (isinstance(value, float) and value != value):  # NaN check
+        return ' ' * width
+    try:
+        val = float(value)
+        # Check for missing/null - SAS prints blanks
+        if val == 0 and str(value).strip() == '':
+            return ' ' * width
+        # Format without commas
+        formatted = f"{val:>{width}.{decimals}f}"
+        return formatted
+    except:
+        return ' ' * width
 
 def write_cus_row(f_obj, obs, row):
-    """Write a customer row matching SAS PROC PRINT format."""
-    # SAS $26. format LEFT-justifies, so use f-string with no > alignment
+    """Write a customer row - SAS left-aligns char, right-aligns numbers, no commas"""
+    # Left-justified character fields (SAS $ format left-justifies)
     f_obj.write(
         f"{obs:>4} "
         f"{str(row.get('CUSTICKETNO','') or ''):<26} "
         f"{str(row.get('TICKETNO','') or ''):<10} "
         f"{str(row.get('CUSTNAME','') or ''):<30} "
-        f"{(row.get('CUSTCODE') or 0):>8} "
+        f"{row.get('CUSTCODE', 0) if row.get('CUSTCODE') is not None else 0:>8} "
         f"{str(row.get('BRANCH','') or ''):<8} "
         f"{str(row.get('INVCURAC','') or ''):<12} "
         f"{str(row.get('ALTCURAC','') or ''):<12} "
         f"{str(row.get('INVCURR','') or ''):<8} "
         f"{str(row.get('ALTCURR','') or ''):<8} "
-        f"{(row.get('INVAMT') or 0):>12,.2f} "
-        f"{(row.get('ALTAMT') or 0):>12,.2f} "
-        f"{(row.get('TENOR') or 0):>6} "
-        f"{(row.get('SPOTRT') or 0):>12.7f} "
-        f"{(row.get('DCIRT') or 0):>8.5f} "
+        f"{row.get('INVAMT', 0):>12.2f} "
+        f"{row.get('ALTAMT', 0):>12.2f} "
+        f"{row.get('TENOR', 0):>6} "
+        f"{row.get('SPOTRT', 0):>12.7f} "
+        f"{row.get('DCIRT', 0):>8.5f} "
         f"{str(row.get('STATUSIND','') or ''):<12} "
         f"{format_ddmmyy8(row.get('STARTDT','')):>12} "
         f"{format_ddmmyy8(row.get('MATDT','')):>12} "
-        f"{(row.get('ACCINT') or 0):>10,.2f} "
-        f"{(row.get('ACCINTRM') or 0):>10,.2f} "
-        f"{(row.get('PREMPAID') or 0):>10,.2f} "
-        f"{(row.get('PREMPAIDRM') or 0):>10,.2f}\n"
+        f"{row.get('ACCINT', 0):>10.2f} "
+        f"{row.get('ACCINTRM', 0):>10.2f} "
+        f"{row.get('PREMPAID', 0):>10.2f} "
+        f"{row.get('PREMPAIDRM', 0):>10.2f}\n"
     )
 
-
 def write_ibn_row(f_obj, obs, row):
-    """Write an interbank row matching SAS PROC PRINT format."""
+    """Write an interbank row - SAS left-aligns char, right-aligns numbers, no commas"""
     f_obj.write(
         f"{obs:>4} "
         f"{str(row.get('CUSTICKETNO','') or ''):<20} "
@@ -542,38 +452,34 @@ def write_ibn_row(f_obj, obs, row):
         f"{str(row.get('BRANCH','') or ''):<8} "
         f"{str(row.get('INVCURR','') or ''):<8} "
         f"{str(row.get('ALTCURR','') or ''):<8} "
-        f"{(row.get('INVAMT') or 0):>12,.2f} "
-        f"{(row.get('ALTAMT') or 0):>12,.2f} "
-        f"{(row.get('TENOR') or 0):>6} "
-        f"{(row.get('SPOTRT') or 0):>12.7f} "
+        f"{row.get('INVAMT', 0):>12.2f} "
+        f"{row.get('ALTAMT', 0):>12.2f} "
+        f"{row.get('TENOR', 0):>6} "
+        f"{row.get('SPOTRT', 0):>12.7f} "
         f"{str(row.get('STATUSIND','') or ''):<12} "
         f"{format_ddmmyy8(row.get('STARTDT','')):>12} "
         f"{format_ddmmyy8(row.get('MATDT','')):>12} "
-        f"{(row.get('PREMREC') or 0):>10,.2f} "
-        f"{(row.get('PREMRECRM') or 0):>10,.2f}\n"
+        f"{row.get('PREMREC', 0):>10.2f} "
+        f"{row.get('PREMRECRM', 0):>10.2f}\n"
     )
-
 
 # ===================================================================
 # MAIN PROCESSING
 # ===================================================================
 
 def main():
-    # -------------------------------------------------------------------
-    # Step 1: Reporting Date Setup
-    # -------------------------------------------------------------------
-    today     = date.today() - timedelta(days=1)   # yesterday = reporting date
-    REPTDAY   = f"{today.day:02d}"
-    REPTMON   = f"{today.month:02d}"
-    REPTYEAR  = f"{today.year % 100:02d}"
+    today = date.today() - timedelta(days=1)
+    REPTDAY = f"{today.day:02d}"
+    REPTMON = f"{today.month:02d}"
+    REPTYEAR = f"{today.year % 100:02d}"
     REPTYEAR4 = f"{today.year:04d}"
-    RDATE     = today.strftime("%d/%m/%y")
+    RDATE = today.strftime("%d/%m/%y")
 
     day = today.day
-    if   1  <= day <=  8: WK = "1"
-    elif 9  <= day <= 15: WK = "2"
+    if 1 <= day <= 8: WK = "1"
+    elif 9 <= day <= 15: WK = "2"
     elif 16 <= day <= 22: WK = "3"
-    else:                 WK = "4"
+    else: WK = "4"
 
     date_vars = {
         'yyyy': REPTYEAR4, 'yy': REPTYEAR, 'mm': REPTMON, 'dd': REPTDAY,
@@ -582,68 +488,74 @@ def main():
         'wk': WK, 'rdate': RDATE
     }
 
-    print(f"Running EIBDCITX for {RDATE} (WK={WK}) - Processing YESTERDAY'S data")
+    print(f"Running EIBDCITX for {RDATE} (WK={WK})")
     print("=" * 80)
 
     for output_path in OUTPUT_PATHS.values():
         ensure_directory(output_path)
 
     # -------------------------------------------------------------------
-    # Step 2: Load raw datasets
+    # Load datasets
     # -------------------------------------------------------------------
     print("\nLoading input files...")
 
-    # DPFL
     try:
         dpfl_path = get_input_path("DPFL", date_vars)
         dpfl = load_fixed_width_file(
             dpfl_path,
-            FILE_FORMATS["DPFL"]["widths"],
-            FILE_FORMATS["DPFL"]["columns"],
-            FILE_FORMATS["DPFL"]["dtypes"],
-            implied_decimals=FILE_FORMATS["DPFL"].get("implied_decimals")
+            [7, 26, 20, 5, 11, 11, 15],
+            ['TICKETNO', 'CUSTNAME', 'NEWIC', 'CUSTCODE', 'INVCURAC', 'ALTCURAC', 'ACCINT'],
+            {'TICKETNO': pl.Utf8, 'CUSTNAME': pl.Utf8, 'NEWIC': pl.Utf8,
+             'CUSTCODE': pl.Int64, 'INVCURAC': pl.Int64, 'ALTCURAC': pl.Int64, 'ACCINT': pl.Float64},
+            implied_decimals={'ACCINT': 6}
         )
-        print(f"  ✓ Loaded DPFL: {len(dpfl):,} rows from {dpfl_path}")
+        print(f"  ✓ Loaded DPFL: {len(dpfl):,} rows")
     except Exception as e:
         print(f"  ✗ Error loading DPFL: {e}"); return
 
-    # EQFL
     try:
         eqfl_path = get_input_path("EQFL", date_vars)
         eqfl = load_eqfl_file(
             eqfl_path,
-            separator=FILE_FORMATS["EQFL"]["separator"],
-            columns=FILE_FORMATS["EQFL"]["columns"],
-            dtypes=FILE_FORMATS["EQFL"]["dtypes"]
+            separator='|',
+            columns=[
+                'CUSTICKETNO','TICKETNO','BRANCH','CUSTNAME','DEALID',
+                'FISSCODE','CUSTRES','CUSTMNE','CUSTLOC','EQCUSTYP',
+                'PRODUCT','INVCURR','ALTCURR','INVAMT','INVAMTRM',
+                'ALTAMT','TRADEDT','STARTDT','FIXINGDT','MATDT',
+                'STOPDT','TENOR','STRIKERT','SPOTRT','DCIRT',
+                'ACCINTAMT','TOTINTAMT','ACCINTRM','MMRT','RSPOTRT',
+                'PREMREC','PREMPAID','PROFIT','PROFITMYR','UNWINDCOST',
+                'STATUSIND','STATUS','TYPE'
+            ],
+            dtypes={'STARTDT': pl.Utf8, 'MATDT': pl.Utf8, 'ACCINTRM': pl.Float64,
+                    'ACCINTAMT': pl.Float64, 'TOTINTAMT': pl.Float64,
+                    'PREMPAID': pl.Float64, 'PREMREC': pl.Float64}
         )
-        print(f"  ✓ Loaded EQFL: {len(eqfl):,} rows from {eqfl_path}")
+        print(f"  ✓ Loaded EQFL: {len(eqfl):,} rows")
     except Exception as e:
         print(f"  ✗ Error loading EQFL: {e}"); return
 
-    # CRA
     try:
         cra_path = get_input_path("CRA", date_vars)
         if not os.path.exists(cra_path):
             cra_path_txt = cra_path + ".txt"
-            if os.path.exists(cra_path_txt):
-                cra_path = cra_path_txt
-            else:
-                print(f"  ✗ CRA file not found at {cra_path}"); return
+            if not os.path.exists(cra_path_txt):
+                print(f"  ✗ CRA file not found"); return
+            cra_path = cra_path_txt
         cra = load_cra_ebcdic_file(cra_path)
-        print(f"  ✓ Loaded CRA: {len(cra):,} rows from {cra_path}")
+        print(f"  ✓ Loaded CRA: {len(cra):,} rows")
         cra = ensure_join_key_type(cra, 'INVCURAC', pl.Int64)
     except Exception as e:
         print(f"  ✗ Error loading CRA: {e}"); return
 
-    # EQRATE
     try:
         eqrate_path = get_input_path("EQRATE", date_vars)
         eqrt = load_sas_file_fast(eqrate_path)
-        print(f"  ✓ Loaded EQRATE: {len(eqrt):,} rows from {eqrate_path}")
+        print(f"  ✓ Loaded EQRATE: {len(eqrt):,} rows")
     except Exception as e:
         print(f"  ✗ Error loading EQRATE: {e}"); return
 
-    # MNITB Saving + Current
     try:
         print(f"  Loading MNITB Saving...")
         mnitb_saving = load_mnitb_with_cache(
@@ -652,7 +564,7 @@ def main():
             columns_to_keep=['ACCTNO', 'CUSTCODE']
         )
         print(f"  ✓ Loaded MNITB Saving: {len(mnitb_saving):,} rows")
-
+        
         print(f"  Loading MNITB Current...")
         mnitb_current = load_mnitb_with_cache(
             get_input_path("MNITB_CURRENT", date_vars),
@@ -663,18 +575,17 @@ def main():
     except Exception as e:
         print(f"  ✗ Error loading MNITB files: {e}"); return
 
-    # DCID
     try:
         dcid_path = get_input_path("DCID", date_vars)
         dcid = load_sas_file_fast(dcid_path, columns_to_keep=['TICKETNO', 'CUSTCODE'])
-        print(f"  ✓ Loaded DCID: {len(dcid):,} rows from {dcid_path}")
+        print(f"  ✓ Loaded DCID: {len(dcid):,} rows")
     except Exception as e:
         print(f"  ✗ Error loading DCID: {e}"); return
 
     print("\n" + "=" * 80)
 
     # -------------------------------------------------------------------
-    # Step 3: DPST
+    # Process DPST
     # -------------------------------------------------------------------
     print("\nProcessing DPST...")
     dpst = dpfl.with_columns([pl.col("ACCINT").cast(pl.Float64)])
@@ -683,10 +594,13 @@ def main():
         dpst = dpst.with_columns([
             pl.coalesce([pl.col("CUSTCODE_right"), pl.col("CUSTCODE")]).alias("CUSTCODE")
         ]).drop("CUSTCODE_right")
+    # Ensure CUSTCODE is Int64
+    if 'CUSTCODE' in dpst.columns:
+        dpst = dpst.with_columns([pl.col("CUSTCODE").cast(pl.Int64, strict=False)])
     print(f"  DPST after merge: {len(dpst):,} rows")
 
     # -------------------------------------------------------------------
-    # Step 4: EQC / EQI split
+    # Process EQ data
     # -------------------------------------------------------------------
     print("\nProcessing EQ data...")
     eq = eqfl.with_columns([
@@ -704,7 +618,7 @@ def main():
     print(f"  EQC: {len(eqc):,} rows, EQI: {len(eqi):,} rows")
 
     # -------------------------------------------------------------------
-    # Step 5: Customer leg
+    # Customer Leg
     # -------------------------------------------------------------------
     print("\nProcessing Customer Leg...")
 
@@ -742,6 +656,8 @@ def main():
             dp_cra = dp_cra.with_columns([
                 pl.coalesce([pl.col("CUSTCODE_right"), pl.col("CUSTCODE")]).alias("CUSTCODE")
             ]).drop("CUSTCODE_right")
+        if 'CUSTCODE' in dp_cra.columns:
+            dp_cra = dp_cra.with_columns([pl.col("CUSTCODE").cast(pl.Int64, strict=False)])
         dp_cra = dp_cra.filter(pl.col("CUSTCODE") >= REPORT_CONFIG["MIN_CUSTCODE"])
         print(f"  CRA after processing: {len(dp_cra):,} rows")
     else:
@@ -776,7 +692,7 @@ def main():
     print(f"  Customer MYR: {len(cusmyr):,} rows, FCY: {len(cusfcy):,} rows")
 
     # -------------------------------------------------------------------
-    # Step 6: Interbank leg
+    # Interbank leg
     # -------------------------------------------------------------------
     print("\nProcessing Interbank Leg...")
     ibnmyr = pl.DataFrame()
@@ -801,20 +717,20 @@ def main():
         print("  No interbank data to process")
 
     # -------------------------------------------------------------------
-    # Step 7: Write DCITXT (matching SAS PROC PRINT format)
+    # Write DCITXT - EXACT SAS FORMAT
     # -------------------------------------------------------------------
     text_path = get_output_path("TEXT", date_vars)
     ensure_directory(text_path)
     print(f"\nWriting DCITXT output to {text_path}...")
     timestamp = datetime.now().strftime("%H:%M %A, %B %d, %Y")
 
-    CUS_HDR  = (" Obs CUSTICKETNO                    TICKETNO CUSTNAME                    "
-                "CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     "
-                "ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     "
-                "ACCINT   ACCINTRM   PREMPAID PREMPAIDRM\n")
-    IBN_HDR  = (" Obs CUSTICKETNO TICKETNO CUSTNAME                        CUSTRES CUSTLOC"
-                "   FISSCODE  EQCUSTYP BRANCH   INVCURR ALTCURR     INVAMT     ALTAMT "
-                "TENOR      SPOTRT STATUSIND    STARTDT    MATDT   PREMREC PREMRECRM\n")
+    CUS_HDR = (" Obs CUSTICKETNO                    TICKETNO CUSTNAME                    "
+               "CUSTCODE BRANCH    INVCURAC    ALTCURAC INVCURR ALTCURR     INVAMT     "
+               "ALTAMT TENOR      SPOTRT    DCIRT STATUSIND        STARTDT    MATDT     "
+               "ACCINT   ACCINTRM   PREMPAID PREMPAIDRM\n")
+    IBN_HDR = (" Obs CUSTICKETNO TICKETNO CUSTNAME                        CUSTRES CUSTLOC"
+               "   FISSCODE  EQCUSTYP BRANCH   INVCURR ALTCURR     INVAMT     ALTAMT "
+               "TENOR      SPOTRT STATUSIND    STARTDT    MATDT   PREMREC PREMRECRM\n")
 
     with open(text_path, "w") as f:
         page = 1
@@ -828,10 +744,10 @@ def main():
         if len(cusmyr) > 0:
             f.write(f"{' '*77}{'='*10} {'='*10} {'='*10} {'='*10}\n")
             f.write(f"{' '*77}"
-                    f"{cusmyr['ACCINT'].sum():>10,.2f} "
-                    f"{cusmyr['ACCINTRM'].sum():>10,.2f} "
-                    f"{cusmyr['PREMPAID'].sum():>10,.2f} "
-                    f"{cusmyr['PREMPAIDRM'].sum():>10,.2f}\n")
+                    f"{cusmyr['ACCINT'].sum():>10.2f} "
+                    f"{cusmyr['ACCINTRM'].sum():>10.2f} "
+                    f"{cusmyr['PREMPAID'].sum():>10.2f} "
+                    f"{cusmyr['PREMPAIDRM'].sum():>10.2f}\n")
 
         # Customer FCY
         if len(cusfcy) > 0:
@@ -842,12 +758,13 @@ def main():
             f.write(CUS_HDR)
             for obs, row in enumerate(cusfcy.iter_rows(named=True), 1):
                 write_cus_row(f, obs, row)
-            f.write(f"{' '*77}{'='*10} {'='*10} {'='*10} {'='*10}\n")
-            f.write(f"{' '*77}"
-                    f"{cusfcy['ACCINT'].sum():>10,.2f} "
-                    f"{cusfcy['ACCINTRM'].sum():>10,.2f} "
-                    f"{cusfcy['PREMPAID'].sum():>10,.2f} "
-                    f"{cusfcy['PREMPAIDRM'].sum():>10,.2f}\n")
+            if len(cusfcy) > 0:
+                f.write(f"{' '*77}{'='*10} {'='*10} {'='*10} {'='*10}\n")
+                f.write(f"{' '*77}"
+                        f"{cusfcy['ACCINT'].sum():>10.2f} "
+                        f"{cusfcy['ACCINTRM'].sum():>10.2f} "
+                        f"{cusfcy['PREMPAID'].sum():>10.2f} "
+                        f"{cusfcy['PREMPAIDRM'].sum():>10.2f}\n")
 
         # Interbank MYR
         if len(ibnmyr) > 0:
@@ -872,7 +789,7 @@ def main():
     print(f"  ✓ DCITXT written to {text_path}")
 
     # -------------------------------------------------------------------
-    # Step 8: Build DCI final dataset
+    # Build DCI
     # -------------------------------------------------------------------
     print("\nBuilding DCI final output...")
 
@@ -884,9 +801,9 @@ def main():
         if ibnmyr.width > 0:
             frames.append(ibnmyr)
         dcimyr = safe_concat(frames)
-        print(f"  Combined customer and interbank data: {len(dcimyr)} rows")
+        print(f"  Combined data: {len(dcimyr)} rows")
     else:
-        print("  No data available to build DCI")
+        print("  No data available")
 
     dci_final = pl.DataFrame()
     if len(dcimyr) > 0:
@@ -923,63 +840,49 @@ def main():
             accintrm = row.get("ACCINTRM")
             if accintrm not in (None, 0):
                 records.append({
-                    "BNMCODE":  BNM_CODES["ACCINTRM"],
-                    "ELDAY":    row["ELDAY"],
+                    "BNMCODE": BNM_CODES["ACCINTRM"],
+                    "ELDAY": row["ELDAY"],
                     "REPTDATS": row["REPTDATS"],
-                    "AMOUNT":   accintrm
+                    "AMOUNT": accintrm
                 })
             premium = row.get("PREMIUM")
             if premium not in (None, 0):
                 records.append({
-                    "BNMCODE":  BNM_CODES["PREMIUM"],
-                    "ELDAY":    row["ELDAY"],
+                    "BNMCODE": BNM_CODES["PREMIUM"],
+                    "ELDAY": row["ELDAY"],
                     "REPTDATS": row["REPTDATS"],
-                    "AMOUNT":   premium
+                    "AMOUNT": premium
                 })
 
         if records:
-            dci_final = (
-                pl.DataFrame(records)
-                  .group_by(["BNMCODE", "ELDAY", "REPTDATS"])
-                  .agg(pl.sum("AMOUNT").alias("AMOUNT"))
+            dci_final = pl.DataFrame(records).group_by(["BNMCODE", "ELDAY", "REPTDATS"]).agg(
+                pl.sum("AMOUNT").alias("AMOUNT")
             )
-            print(f"  DCI final: {len(dci_final):,} aggregated records")
-        else:
-            print("  No DCI records generated")
+            print(f"  DCI final: {len(dci_final):,} records")
 
     # -------------------------------------------------------------------
-    # Step 9: Write outputs
+    # Write outputs
     # -------------------------------------------------------------------
     print("\nWriting output files...")
 
     parquet_path = get_output_path("PARQUET", date_vars)
-    ensure_directory(parquet_path)
     if len(dci_final) > 0:
         dci_final.write_parquet(parquet_path)
         print(f"  ✓ Parquet written: {parquet_path}")
-    else:
-        print(f"  ⚠ No data to write to Parquet: {parquet_path}")
 
     sas_path = get_output_path("SAS", date_vars)
-    ensure_directory(sas_path)
     if len(dci_final) > 0:
         print(f"\nWriting SAS dataset to {sas_path}...")
         write_sas_file(dci_final, sas_path)
-    else:
-        print(f"  ⚠ No data to write to SAS: {sas_path}")
 
     csv_path = get_output_path("CSV", date_vars)
-    ensure_directory(csv_path)
     if len(dci_final) > 0:
         dci_final.write_csv(csv_path)
         print(f"  ✓ CSV written: {csv_path}")
-    else:
-        print(f"  ⚠ No data to write to CSV: {csv_path}")
 
     print("\n" + "=" * 80)
-    print(f"EIBDCITX completed successfully for {RDATE} (Yesterday's data)!")
+    print(f"EIBDCITX completed successfully for {RDATE}!")
     print("=" * 80)
-
 
 if __name__ == "__main__":
     main()
