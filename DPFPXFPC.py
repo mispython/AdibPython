@@ -5,8 +5,8 @@ import datetime
 import pyreadstat 
 
 # Configuration
-mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/MNI")
-imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/IMNI")
+mni_path = Path("/dwh/dp_sa")
+imni_path = Path("/dwh/idpd_sa")
 output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 
@@ -461,4 +461,4 @@ with open(output_path / "report.txt", 'w') as f:
         f.write(f"                                 {total_str:>15}\n")
 
 print(f"Report generated: {output_path / 'report.txt'}")
-print("\nPROCESSING COMPLETED SUCCESSFULLY")
+print("\nPROCESSING COMPLETED SUCCESSFULLY") 
