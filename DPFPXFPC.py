@@ -6,9 +6,11 @@ import re
 import os
 
 # Configuration
-deposit_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT")
-mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT")
-imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT")
+deposit_path = Path("/host_pq/mis/input")
+mni_sa_path = Path("/dwh/dp_sa")      # SAVG files
+mni_ca_path = Path("/dwh/dp_ca")      # CURN files
+imni_sa_path = Path("/dwh/idp_sa")    # ISAVG files
+imni_ca_path = Path("/dwh/idp_ca")    # ICURN files
 output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 deposit_path.mkdir(exist_ok=True)
@@ -118,7 +120,9 @@ if not remit_df.is_empty():
     
     # Save
     remit_valid.write_parquet(deposit_path / "REMIT.parquet")
+    remit_valid.write_csv(deposit_path / "REMIT.csv")
     nondebit_invalid.write_parquet(output_path / "NONDEBIT.parquet")
+    nondebit_invalid.write_csv(output_path / "NONDEBIT.csv")
     print(f"REMIT: {remit_valid.height}, NONDEBIT: {nondebit_invalid.height}")
     
     # Create REMIT_FINAL (summary by PAYMODE)
@@ -126,37 +130,61 @@ if not remit_df.is_empty():
                    .join(remit_valid.unique(subset=['PAYMODE']).drop('LEDGBAL'), on='PAYMODE', how='inner')
                    .unique(subset=['PAYMODE']))
     remit_final.write_parquet(output_path / "REMIT_FINAL.parquet")
+    remit_final.write_csv(output_path / "REMIT_FINAL.csv")
 else:
     remit_valid = nondebit_invalid = remit_final = pl.DataFrame()
 
 # Read SAS files
 def read_sas(filepath):
     try:
-        if not filepath.exists(): return None
+        if not filepath.exists(): 
+            print(f"File not found: {filepath}")
+            return None
         df, _ = pyreadstat.read_sas7bdat(filepath)
         return pl.DataFrame(df).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
     except Exception as e:
         print(f"Error reading {filepath.name}: {e}")
         return None
 
-# Load all SAS files (lowercase names)
-savg = read_sas(mni_path / f"savg{REPTMON}{NOWK}.sas7bdat")
-curn = read_sas(mni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
-isavg = read_sas(imni_path / f"savg{REPTMON}{NOWK}.sas7bdat")
-icurn = read_sas(imni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
+# Load all SAS files with new naming convention: sa{REPTMON}{NOWK}{REPTYEAR} and ca{REPTMON}{NOWK}{REPTYEAR}
+# Example: sa1242026.sas7bdat, ca1242026.sas7bdat
+savg_filename = f"sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+curn_filename = f"ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+isavg_filename = f"sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+icurn_filename = f"ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+
+print(f"\nLooking for SAS files:")
+print(f"SAVG: {savg_filename} in {mni_sa_path}")
+print(f"CURN: {curn_filename} in {mni_ca_path}")
+print(f"ISAVG: {isavg_filename} in {imni_sa_path}")
+print(f"ICURN: {icurn_filename} in {imni_ca_path}")
+
+savg = read_sas(mni_sa_path / savg_filename)
+curn = read_sas(mni_ca_path / curn_filename)
+isavg = read_sas(imni_sa_path / isavg_filename)
+icurn = read_sas(imni_ca_path / icurn_filename)
 
 # Combine and filter DEP
 loaded_dfs = [d for d in [savg, curn, isavg, icurn] if d is not None and not d.is_empty()]
 dep_deduped = pl.DataFrame()
 
 if loaded_dfs:
+    print(f"\nCombining {len(loaded_dfs)} datasets...")
     dep_df = pl.concat(loaded_dfs, how="diagonal")
+    print(f"Combined DEP dataset with {dep_df.height} records")
+    
     valid_prodcd = ['42110','42310','42120','42320','42130','42132','42180','42199','42699']
-    dep_deduped = dep_df.filter(pl.col('PRODCD').is_in(valid_prodcd)).unique(subset=['ACCTNO'])
+    dep_filtered = dep_df.filter(pl.col('PRODCD').is_in(valid_prodcd))
+    print(f"Filtered DEP with valid PRODCD: {dep_filtered.height} records")
+    
+    dep_deduped = dep_filtered.unique(subset=['ACCTNO'])
     if not dep_deduped.is_empty():
         dep_deduped = dep_deduped.with_columns(pl.col('ACCTNO').cast(pl.Int64))
         dep_deduped.write_parquet(output_path / "DEP_deduped.parquet")
+        dep_deduped.write_csv(output_path / "DEP_deduped.csv")
         print(f"DEP deduped: {dep_deduped.height} records")
+else:
+    print("No DEP datasets loaded")
 
 # Merge and generate reports
 if not remit_final.is_empty() and not dep_deduped.is_empty():
@@ -172,6 +200,7 @@ if not remit_final.is_empty() and not dep_deduped.is_empty():
               ]).sort('CATEGORY'))
     
     merged.write_parquet(output_path / "DEP_SORTED.parquet")
+    merged.write_csv(output_path / "DEP_SORTED.csv")
     
     # ============================================================
     # ISLAMIC REPORT 1: BANKERS CHEQUE WITH DEBITTED A/C (ISLAMIC)
@@ -190,7 +219,11 @@ if not remit_final.is_empty() and not dep_deduped.is_empty():
         total = summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
         print(f"TOTAL BC/DD AMOUNT: {total:,.2f}\n")
         summary.write_parquet(output_path / "ISLAMIC_DEBITTED_SUMMARY.parquet")
+        summary.write_csv(output_path / "ISLAMIC_DEBITTED_SUMMARY.csv")
         islamic_debitted.write_parquet(output_path / "ISLAMIC_DEBITTED_FILTERED.parquet")
+        islamic_debitted.write_csv(output_path / "ISLAMIC_DEBITTED_FILTERED.csv")
+    else:
+        print("No Islamic debitted records found")
     
     # ============================================================
     # REPORT 2: BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)
@@ -212,7 +245,11 @@ if not remit_final.is_empty() and not dep_deduped.is_empty():
         total = summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
         print(f"TOTAL BC/DD AMOUNT: {total:,.2f}\n")
         summary.write_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
+        summary.write_csv(output_path / "NOTFOUND_SUMMARY.csv")
         notfound.write_parquet(output_path / "NOTFOUND_FILTERED.parquet")
+        notfound.write_csv(output_path / "NOTFOUND_FILTERED.csv")
+    else:
+        print("No NOT FOUND records found")
 
 # ============================================================
 # REPORT 3: BANKERS CHEQUE WITH NON-DEBITTED A/C
@@ -228,7 +265,11 @@ if not nondebit_invalid.is_empty():
     total = summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
     print(f"TOTAL BC/DD AMOUNT: {total:,.2f}\n")
     summary.write_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
+    summary.write_csv(output_path / "NONDEBIT_SUMMARY.csv")
     nondebit.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
+    nondebit.write_csv(output_path / "NONDEBIT_PROCESSED.csv")
+else:
+    print("No NONDEBIT records found")
 
 # Create final consolidated summary
 all_summaries = []
@@ -250,6 +291,8 @@ if all_summaries:
     print(f"\nGRAND TOTAL: {total:,.2f}")
     final_summary.write_parquet(output_path / "FINAL_SUMMARY.parquet")
     final_summary.write_csv(output_path / "FINAL_SUMMARY.csv")
+else:
+    print("No summaries to consolidate")
 
 print("\n" + "="*80)
 print("ISLAMIC PROCESSING COMPLETED SUCCESSFULLY")
@@ -257,8 +300,12 @@ print("="*80)
 
 # List all output files
 print("\nOUTPUT FILES CREATED:")
-for path in [deposit_path, output_path]:
-    print(f"\nIn {path}:")
-    for file in sorted(path.glob("*")):
-        if file.suffix in ['.parquet', '.csv']:
-            print(f"  - {file.name}")
+print(f"\nIn {deposit_path}:")
+for file in sorted(deposit_path.glob("*")):
+    if file.suffix in ['.parquet', '.csv']:
+        print(f"  - {file.name}")
+
+print(f"\nIn {output_path}:")
+for file in sorted(output_path.glob("*")):
+    if file.suffix in ['.parquet', '.csv']:
+        print(f"  - {file.name}")
