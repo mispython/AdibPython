@@ -7,8 +7,10 @@ import os
 
 # Configuration
 deposit_path = Path("/host_pq/mis/input")
-mni_path = Path("/dwh/dp_sa")
-imni_path = Path("/dwh/idp_sa")
+mni_sa_path = Path("/dwh/dp_sa")      # SAVG files
+mni_ca_path = Path("/dwh/dp_ca")      # CURN files
+imni_sa_path = Path("/dwh/idp_sa")    # ISAVG files
+imni_ca_path = Path("/dwh/idp_ca")    # ICURN files
 output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 deposit_path.mkdir(exist_ok=True)
@@ -130,31 +132,54 @@ else:
 # Read SAS files
 def read_sas(filepath):
     try:
-        if not filepath.exists(): return None
+        if not filepath.exists(): 
+            print(f"File not found: {filepath}")
+            return None
         df, _ = pyreadstat.read_sas7bdat(filepath)
         return pl.DataFrame(df).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
     except Exception as e:
         print(f"Error reading {filepath.name}: {e}")
         return None
 
-# Load all SAS files (lowercase names)
-savg = read_sas(mni_path / f"savg{REPTMON}{NOWK}.sas7bdat")
-curn = read_sas(mni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
-isavg = read_sas(imni_path / f"savg{REPTMON}{NOWK}.sas7bdat")
-icurn = read_sas(imni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
+# Load all SAS files with new naming convention: sa{REPTMON}{NOWK}{REPTYEAR} and ca{REPTMON}{NOWK}{REPTYEAR}
+# Example: sa1242026.sas7bdat, ca1242026.sas7bdat
+savg_filename = f"sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+curn_filename = f"ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+isavg_filename = f"sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+icurn_filename = f"ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+
+print(f"\nLooking for SAS files:")
+print(f"SAVG: {savg_filename} in {mni_sa_path}")
+print(f"CURN: {curn_filename} in {mni_ca_path}")
+print(f"ISAVG: {isavg_filename} in {imni_sa_path}")
+print(f"ICURN: {icurn_filename} in {imni_ca_path}")
+
+savg = read_sas(mni_sa_path / savg_filename)
+curn = read_sas(mni_ca_path / curn_filename)
+isavg = read_sas(imni_sa_path / isavg_filename)
+icurn = read_sas(imni_ca_path / icurn_filename)
 
 # Combine and filter DEP - Check if any DataFrames were loaded
 loaded_dfs = [d for d in [savg, curn, isavg, icurn] if d is not None and not d.is_empty()]
 dep_deduped = pl.DataFrame()
 
 if loaded_dfs:
+    print(f"\nCombining {len(loaded_dfs)} datasets...")
     dep_df = pl.concat(loaded_dfs, how="diagonal")
+    print(f"Combined DEP dataset with {dep_df.height} records")
+    
     valid_prodcd = ['42110','42310','42120','42320','42130','42132','42180','42199','42699']
-    dep_deduped = dep_df.filter(pl.col('PRODCD').is_in(valid_prodcd)).unique(subset=['ACCTNO'])
+    dep_filtered = dep_df.filter(pl.col('PRODCD').is_in(valid_prodcd))
+    print(f"Filtered DEP with valid PRODCD: {dep_filtered.height} records")
+    
+    dep_deduped = dep_filtered.unique(subset=['ACCTNO'])
     if not dep_deduped.is_empty():
         dep_deduped = dep_deduped.with_columns(pl.col('ACCTNO').cast(pl.Int64))
         dep_deduped.write_parquet(output_path / "DEP_deduped.parquet")
+        dep_deduped.write_csv(output_path / "DEP_deduped.csv")
         print(f"DEP deduped: {dep_deduped.height} records")
+else:
+    print("No DEP datasets loaded")
 
 # Merge and generate reports
 if not remit_final.is_empty() and not dep_deduped.is_empty():
@@ -170,6 +195,7 @@ if not remit_final.is_empty() and not dep_deduped.is_empty():
               ]).sort('CATEGORY'))
     
     merged.write_parquet(output_path / "DEP_SORTED.parquet")
+    merged.write_csv(output_path / "DEP_SORTED.csv")
     
     # Report 1: Debitted
     debitted = merged.filter((pl.col('BC') == 'DEBITTED') & ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999)))
@@ -179,7 +205,9 @@ if not remit_final.is_empty() and not dep_deduped.is_empty():
         print(summary)
         print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
         summary.write_parquet(output_path / "DEBITTED_SUMMARY.parquet")
+        summary.write_csv(output_path / "DEBITTED_SUMMARY.csv")
         debitted.write_parquet(output_path / "DEBITTED_FILTERED.parquet")
+        debitted.write_csv(output_path / "DEBITTED_FILTERED.csv")
     
     # Report 2: Not Found
     notfound = merged.filter(
@@ -196,7 +224,9 @@ if not remit_final.is_empty() and not dep_deduped.is_empty():
         print(summary)
         print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
         summary.write_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
+        summary.write_csv(output_path / "NOTFOUND_SUMMARY.csv")
         notfound.write_parquet(output_path / "NOTFOUND_FILTERED.parquet")
+        notfound.write_csv(output_path / "NOTFOUND_FILTERED.csv")
 
 # Report 3: Non-Debit
 if not nondebit_invalid.is_empty():
@@ -209,7 +239,9 @@ if not nondebit_invalid.is_empty():
     print(summary)
     print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
     summary.write_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
+    summary.write_csv(output_path / "NONDEBIT_SUMMARY.csv")
     nondebit.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
+    nondebit.write_csv(output_path / "NONDEBIT_PROCESSED.csv")
 
 # Create final consolidated summary
 all_summaries = []
