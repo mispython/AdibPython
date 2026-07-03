@@ -11,89 +11,52 @@ output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 
 # ============================================
-# DATE LOGIC - TESTING MODE
+# PRODUCTION DATE LOGIC
 # ============================================
-# FOR TESTING: Hardcode to December Week 4 (December 23, 2025)
-# This matches the SAS files: savg124, curn124, etc.
-TEST_MODE = False  # Set to False for production
 
-if TEST_MODE:
-    print("="*50)
-    print("TEST MODE ENABLED - Using hardcoded test date")
-    print("="*50)
-    
-    # Hardcode to December 23, 2025 (Week 4)
-    reptdate = datetime.date(2025, 12, 23)
-    
-    # The week calculation for Dec 23 (Week 4)
-    SDD = 23
-    WK = '4'
-    WK1 = '3'
-    WK2 = '2'
-    WK3 = '1'
-    MM = 12
-    MM1 = 12  # Since WK != '1'
-    MM2 = 11  # MM - 1
-    
-    SDATE = datetime.date(2025, 12, 23)
-    SDESC = 'PUBLIC BANK BERHAD'
-    
-    NOWK = WK
-    REPTMON = f"{MM:02d}"
-    REPTYEAR = str(reptdate.year)
-    
-    print(f"TEST DATE: {reptdate}")
-    print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
-    print(f"SDESC: {SDESC}")
-    print("="*50 + "\n")
+# DATA REPTDATE (KEEP=REPTDATE);
+today = datetime.date.today()
+date_string = f"0101{today.year}"  # Fixed '0101' + current year
+reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
 
+# SELECT(DAY(REPTDATE)); logic
+reptday = reptdate.day
+if reptday == 8:
+    SDD, WK, WK1 = 1, '1', '4'
+elif reptday == 15:
+    SDD, WK, WK1 = 9, '2', '1'
+elif reptday == 22:
+    SDD, WK, WK1 = 16, '3', '2'
 else:
-    # ============================================
-    # PRODUCTION DATE LOGIC (COMMENTED OUT)
-    # ============================================
-    
-    # DATA REPTDATE (KEEP=REPTDATE);
-    today = datetime.date.today()
-    date_string = f"0101{today.year}"  # Fixed '0101' + current year
-    reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
-    
-    # SELECT(DAY(REPTDATE)); logic
-    reptday = reptdate.day
-    if reptday == 8:
-        SDD, WK, WK1 = 1, '1', '4'
-    elif reptday == 15:
-        SDD, WK, WK1 = 9, '2', '1'
-    elif reptday == 22:
-        SDD, WK, WK1 = 16, '3', '2'
-    else:
-        SDD, WK, WK1, WK2, WK3 = 23, '4', '3', '2', '1'
-    
-    MM = reptdate.month
-    
-    # IF WK = '1' THEN DO;
-    if WK == '1':
-        MM1 = MM - 1
-        if MM1 == 0:
-            MM1 = 12
-    else:
-        MM1 = MM
-    
-    # MM2 = MM - 1;
-    MM2 = MM - 1
-    if MM2 == 0:
-        MM2 = 12
-    
-    SDATE = datetime.date(reptdate.year, MM, SDD)
-    SDESC = 'PUBLIC BANK BERHAD'
-    
-    # CALL SYMPUT equivalent
-    NOWK = WK
-    REPTMON = f"{MM:02d}"
-    REPTYEAR = str(reptdate.year)
-    
-    print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
-    print(f"SDESC: {SDESC}")
-    
+    SDD, WK, WK1, WK2, WK3 = 23, '4', '3', '2', '1'
+
+MM = reptdate.month
+
+# IF WK = '1' THEN DO;
+if WK == '1':
+    MM1 = MM - 1
+    if MM1 == 0:
+        MM1 = 12
+else:
+    MM1 = MM
+
+# MM2 = MM - 1;
+MM2 = MM - 1
+if MM2 == 0:
+    MM2 = 12
+
+SDATE = datetime.date(reptdate.year, MM, SDD)
+SDESC = 'PUBLIC BANK BERHAD'
+
+# CALL SYMPUT equivalent
+NOWK = WK
+REPTMON = f"{MM:02d}"
+REPTYEAR = str(reptdate.year)
+
+print(f"REPTDATE: {reptdate}")
+print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
+print(f"SDESC: {SDESC}")
+print(f"SDATE: {SDATE}")
 
 # Create REPTDATE DataFrame
 reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
@@ -227,13 +190,12 @@ def read_sas_file(filepath, columns=None):
         return None
 
 # Load additional datasets from SAS files
-# These will look for savg124, curn124, etc. (December Week 4)
 savg_filename = f"savg{REPTMON}{NOWK}.sas7bdat"
 curn_filename = f"curn{REPTMON}{NOWK}.sas7bdat"
 isavg_filename = f"savg{REPTMON}{NOWK}.sas7bdat"
 icurn_filename = f"curn{REPTMON}{NOWK}.sas7bdat"
 
-print(f"\nLooking for SAS files with pattern: {REPTMON}{NOWK} (December Week 4)")
+print(f"\nLooking for SAS files with pattern: {REPTMON}{NOWK}")
 print(f"Expected files: savg{REPTMON}{NOWK}.sas7bdat, curn{REPTMON}{NOWK}.sas7bdat")
 
 datasets = []
