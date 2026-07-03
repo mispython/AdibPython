@@ -1,368 +1,242 @@
-# EIBDMSFX_NLF_PROCESSOR.py - Daily Version
-# This version processes ONE date per run (like production SAS)
-
-import os
-import sys
-import warnings
-from datetime import datetime, timedelta
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
+import polars as pl
+from pathlib import Path
+import datetime
 import pyreadstat
+import re
+import os
 
-# Suppress pandas warnings
-warnings.filterwarnings('ignore', category=FutureWarning)
+# Configuration
+deposit_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT")
+mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT")
+imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT")
+output_path = Path("/host/mis/output")
+output_path.mkdir(exist_ok=True)
+deposit_path.mkdir(exist_ok=True)
 
-# Try to import saspy for SAS dataset writing
-try:
-    import saspy
-    SASPY_AVAILABLE = True
-except ImportError:
-    SASPY_AVAILABLE = False
+# Test date - December Week 4
+reptdate = datetime.date(2026, 12, 23)
+print(f"*** TEST MODE - Date: {reptdate} (Dec Week 4) ***")
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+# Date logic
+reptday = reptdate.day
+if reptday == 8: SDD, WK = 1, '1'
+elif reptday == 15: SDD, WK = 9, '2'
+elif reptday == 22: SDD, WK = 16, '3'
+else: SDD, WK = 23, '4'
 
-class Config:
-    """Configuration settings for the NLF processor"""
-    FINAL_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDMSFX"
-    OUTPUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDMSFX"
-    SAS_BASE_DATE = datetime(1960, 1, 1)
-    
-    SAS_FILES = {
-        'INDFXFD': 'behaveindfxfd.sas7bdat',
-        'NONFXFD': 'behavenonfxfd.sas7bdat',
-        'INDFXCA': 'behaveindfxca.sas7bdat',
-        'NONFXCA': 'behavenonfxca.sas7bdat'
-    }
-    
-    COLUMN_MAPPINGS = {
-        'INDFXFD': {'BALANCE': 'INDFXFDBAL'},
-        'NONFXFD': {'BALANCE': 'NONFXFDBAL'},
-        'INDFXCA': {'BALANCE': 'INDFXCABAL'},
-        'NONFXCA': {'BALANCE': 'NONFXCABAL'}
-    }
-    
-    BALANCE_COLS = ['INDFXFDBAL', 'NONFXFDBAL', 'INDFXCABAL', 'NONFXCABAL']
+MM = reptdate.month
+NOWK, REPTMON, REPTYEAR = WK, f"{MM:02d}", str(reptdate.year)
+print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
 
-# ============================================================================
-# DATE UTILITIES
-# ============================================================================
+# Create REPTDATE
+pl.DataFrame({'REPTDATE': [reptdate]}).write_parquet(output_path / "REPTDATE.parquet")
+pl.DataFrame({'REPTDATE': [reptdate]}).write_csv(output_path / "REPTDATE.csv")
 
-class DateUtils:
-    @staticmethod
-    def sas_to_date(sas_date_num):
-        return Config.SAS_BASE_DATE + timedelta(days=sas_date_num)
-    
-    @staticmethod
-    def date_to_sas(date_obj):
-        return (date_obj - Config.SAS_BASE_DATE).days
-    
-    @staticmethod
-    def get_date_parameters(date_obj):
-        """Get all date parameters needed for processing"""
-        return {
-            'date': date_obj,
-            'sas_date': (date_obj - Config.SAS_BASE_DATE).days,
-            'year': date_obj.year,
-            'month': str(date_obj.month).zfill(2),
-            'day': str(date_obj.day).zfill(2),
-            'rdate': str(date_obj.year)[2:] + str(date_obj.strftime('%j')).zfill(3),
-            'is_first_day': date_obj.day == 1
-        }
+def clean_text(text):
+    return ''.join(ch for ch in text if 31 < ord(ch) < 127).strip() if text else ""
 
-# ============================================================================
-# DATA LOADER
-# ============================================================================
-
-class DataLoader:
-    def __init__(self, final_path):
-        self.final_path = final_path
-        self.available_dates = None
-    
-    def get_available_dates(self):
-        if self.available_dates is not None:
-            return self.available_dates
-        
-        all_dates = set()
-        for name, filename in Config.SAS_FILES.items():
-            filepath = os.path.join(self.final_path, filename)
-            if os.path.exists(filepath):
-                try:
-                    df, _ = pyreadstat.read_sas7bdat(filepath)
-                    if 'DATE' in df.columns:
-                        all_dates.update(df['DATE'].unique())
-                except Exception as e:
-                    print(f"⚠️  Warning: Could not read {filepath}: {e}")
-        
-        self.available_dates = sorted(all_dates)
-        return self.available_dates
-    
-    def get_processing_date(self, target_date=None):
-        """
-        Determine the correct processing date.
-        For daily runs, use the target date if available,
-        otherwise skip (don't create empty records).
-        """
-        available_dates = self.get_available_dates()
-        
-        if not available_dates:
-            return None, None
-        
-        # If no target date provided, use today
-        if target_date is None:
-            target_date = datetime.now()
-        
-        target_sas = DateUtils.date_to_sas(target_date)
-        
-        # Check if target date exists
-        if target_sas in available_dates:
-            return target_date, target_sas
-        else:
-            # For daily runs, return None if date doesn't exist
-            # This prevents creating empty records
-            print(f"\n⚠️  Date {target_date.strftime('%Y-%m-%d')} (SAS: {target_sas}) not available")
-            print(f"   Skipping - no data for this date")
-            return None, None
-    
-    def load_date_data(self, sas_date_num):
-        """Load data for a specific SAS date from all source files"""
-        all_data = []
-        
-        for source_name, filename in Config.SAS_FILES.items():
-            filepath = os.path.join(self.final_path, filename)
-            
-            if not os.path.exists(filepath):
-                continue
-            
-            try:
-                df, _ = pyreadstat.read_sas7bdat(filepath)
-                
-                if 'DATE' not in df.columns:
-                    continue
-                
-                df_filtered = df[df['DATE'] == sas_date_num].copy()
-                
-                if len(df_filtered) == 0:
-                    continue
-                
-                balance_col = Config.COLUMN_MAPPINGS[source_name]['BALANCE']
-                df_filtered = df_filtered.rename(columns={
-                    'BALANCE': balance_col,
-                    'DATE': 'REPTDATE'
-                })
-                
-                for col in Config.BALANCE_COLS:
-                    if col not in df_filtered.columns:
-                        df_filtered[col] = None
-                
-                df_filtered = df_filtered[['REPTDATE'] + Config.BALANCE_COLS]
-                all_data.append(df_filtered)
-                
-            except Exception as e:
-                continue
-        
-        if not all_data:
-            return None
-        
-        combined = pd.concat(all_data, ignore_index=True)
-        return combined
-
-# ============================================================================
-# NLF PROCESSOR
-# ============================================================================
-
-class NLFProcessor:
-    def __init__(self, output_path):
-        self.output_path = output_path
-        os.makedirs(output_path, exist_ok=True)
-    
-    def process_date(self, date_obj, sas_date):
-        """Process a SINGLE date (like production daily run)"""
-        
-        loader = DataLoader(Config.FINAL_PATH)
-        
-        print(f"\n📅 Processing date: {date_obj.strftime('%Y-%m-%d')} (SAS: {sas_date})")
-        
-        # Load data for this date
-        raw_data = loader.load_date_data(sas_date)
-        if raw_data is None or len(raw_data) == 0:
-            print(f"  ⚠️  No data for this date")
-            return False
-        
-        # Summarize
-        summary = self.summarize_data(raw_data)
-        if summary is None or len(summary) == 0:
-            print(f"  ⚠️  No summary for this date")
-            return False
-        
-        print(f"  ✅ Processed: {len(summary)} record(s)")
-        
-        # Append to monthly file
-        return self.append_to_monthly(summary, date_obj)
-    
-    def append_to_monthly(self, summary_df, date_obj):
-        """Append a single record to the monthly file (like PROC APPEND)"""
-        
-        month = str(date_obj.month).zfill(2)
-        output_filename = f"NLF{month}"
-        output_parquet = os.path.join(self.output_path, f"{output_filename}.parquet")
-        output_sas = os.path.join(self.output_path, f"{output_filename}.sas7bdat")
-        output_csv = os.path.join(self.output_path, f"{output_filename}.csv")
-        
-        # Check if this is the first day of the month
-        is_first_day = date_obj.day == 1
-        
-        if is_first_day or not os.path.exists(output_parquet):
-            # First day of month or file doesn't exist - create new
-            combined_df = summary_df
-            print(f"  📁 Creating new monthly file: {output_filename}")
-        else:
-            # Append to existing file
-            try:
-                existing_df = pd.read_parquet(output_parquet)
-                
-                # Check if record already exists for this date
-                sas_date = summary_df['REPTDATE'].iloc[0]
-                existing_df = existing_df[existing_df['REPTDATE'] != sas_date]
-                
-                # Append new data
-                combined_df = pd.concat([existing_df, summary_df], ignore_index=True)
-                combined_df = combined_df.sort_values('REPTDATE').reset_index(drop=True)
-                
-                print(f"  📁 Appending to existing file: {output_filename}")
-                print(f"     Existing: {len(existing_df)} records")
-                print(f"     After append: {len(combined_df)} records")
-                
-            except Exception as e:
-                print(f"  ⚠️  Error reading existing file: {e}")
-                combined_df = summary_df
-        
-        # Write Parquet
-        combined_arrow = pa.Table.from_pandas(combined_df)
-        pq.write_table(combined_arrow, output_parquet)
-        print(f"  ✅ Updated: {output_parquet}")
-        
-        # Write CSV
-        combined_df.to_csv(output_csv, index=False)
-        print(f"  ✅ Updated: {output_csv}")
-        
-        # Write SAS
-        if self._write_sas_dataset(combined_df, output_sas):
-            print(f"  ✅ Updated: {output_sas}")
-        
-        return True
-    
-    def summarize_data(self, df):
-        if df is None or len(df) == 0:
-            return None
-        
-        summary = df.groupby('REPTDATE', as_index=False)[Config.BALANCE_COLS].sum()
-        summary = summary.fillna(0)
-        return summary
-    
-    def _write_sas_dataset(self, df, output_path):
-        if not SASPY_AVAILABLE:
-            print("  ℹ️  saspy not available - skipping SAS dataset")
-            return False
-        
-        sas = None
-        try:
-            sas = saspy.SASsession()
-            sas.dataframe2sasdata(df, table='NLF_TEMP')
-            
-            sas_code = f'''
-                libname out "{os.path.dirname(output_path)}";
-                data out.{os.path.basename(output_path).replace('.sas7bdat', '')};
-                    set work.NLF_TEMP;
-                run;
-                proc datasets lib=work;
-                    delete NLF_TEMP;
-                run;
-            '''
-            sas.submit(sas_code)
-            sas.endsas()
-            return True
-        except Exception as e:
-            print(f"  ⚠️  Could not write SAS dataset: {e}")
-            if sas:
-                try:
-                    sas.endsas()
-                except:
-                    pass
-            return False
-
-# ============================================================================
-# MAIN EXECUTION
-# ============================================================================
-
-def print_header(title, char='='):
-    """Print a formatted header"""
-    print(f"\n{char*70}")
-    print(f"{title:^70}")
-    print(f"{char*70}\n")
-
-def main():
-    """Main execution function - Daily run (like production)"""
-    
-    print_header("NLF PROCESSOR - Daily Run")
-    
-    # Initialize loader
-    loader = DataLoader(Config.FINAL_PATH)
-    
-    # Get available dates
-    all_dates = loader.get_available_dates()
-    if not all_dates:
-        print("❌ No data found in FINAL directory!")
-        print("   Please check that SAS files exist in:", Config.FINAL_PATH)
-        sys.exit(1)
-    
-    print(f"📁 Data available from {DateUtils.sas_to_date(min(all_dates)).strftime('%Y-%m-%d')} to {DateUtils.sas_to_date(max(all_dates)).strftime('%Y-%m-%d')}")
-    print(f"   Total dates: {len(all_dates)}")
-    
-    # For daily runs, use today's date (like production)
-    # Or you can specify a date for testing
-    target_date = datetime.now()
-    
-    # For testing specific dates, uncomment:
-    # target_date = datetime(2026, 6, 8)  # Process June 8
-    
-    year = target_date.year
-    month = target_date.month
-    day = target_date.day
-    
-    print(f"📅 Target date: {target_date.strftime('%Y-%m-%d')}")
-    
-    # Get the processing date (only if it exists in data)
-    process_date, sas_date = loader.get_processing_date(target_date)
-    
-    if process_date is None or sas_date is None:
-        print(f"\n⚠️  No data for {target_date.strftime('%Y-%m-%d')}")
-        print("   This is normal - the daily SAS job would also skip this date.")
-        print("   The monthly file will retain its existing records.")
-        sys.exit(0)  # Exit gracefully
-    
-    # Process the date
-    processor = NLFProcessor(Config.OUTPUT_PATH)
-    success = processor.process_date(process_date, sas_date)
-    
-    if success:
-        print_header("✅ PROCESSING COMPLETE")
-        print(f"Output saved to: {Config.OUTPUT_PATH}/")
-        print("="*70 + "\n")
-    else:
-        print_header("❌ PROCESSING FAILED")
-        sys.exit(1)
-
-if __name__ == "__main__":
+def parse_remit_file(filepath):
+    """Parse fixed-width REMIT file (MAREMORE)"""
+    records = []
     try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Process interrupted by user")
-        sys.exit(1)
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                raw = line.rstrip('\n\r')
+                if not raw.strip(): continue
+                
+                # Extract fields based on SAS positions (0-indexed)
+                acctno = clean_text(raw[2:8]) if len(raw) > 8 else ""
+                cheqno = clean_text(raw[8:14]) if len(raw) > 14 else ""
+                issyy = clean_text(raw[26:30]) if len(raw) > 30 else ""
+                issmm = clean_text(raw[31:33]) if len(raw) > 33 else ""
+                issdd = clean_text(raw[34:36]) if len(raw) > 36 else ""
+                issbranch = clean_text(raw[36:39]) if len(raw) > 39 else ""
+                ledgbal_str = clean_text(raw[39:48]) if len(raw) > 48 else ""
+                status = clean_text(raw[46:48]) if len(raw) > 48 else ""
+                paymode = clean_text(raw[54:64]) if len(raw) > 64 else ""
+                name = clean_text(raw[74:114]) if len(raw) > 114 else ""
+                
+                # Try regex for ACCTNO if parsing failed
+                if not acctno or len(acctno) < 6:
+                    match = re.search(r'([0-9]{6,7})', raw)
+                    if match: acctno = match.group(1)
+                
+                # Parse LEDGBAL (PD7.2 format)
+                try:
+                    ledgbal = float(ledgbal_str) if ledgbal_str else 0.0
+                except:
+                    ledgbal = 0.0
+                
+                if acctno or name:
+                    records.append({'ACCTNO': acctno, 'CHEQNO': cheqno, 'ISSYY': issyy, 
+                                   'ISSMM': issmm, 'ISSDD': issdd, 'ISSBRANCH': issbranch,
+                                   'LEDGBAL': ledgbal, 'STATUS': status, 'PAYMODE': paymode, 'NAME': name})
+        
+        if not records: return pl.DataFrame()
+        
+        df = pl.DataFrame(records).with_columns([
+            pl.col('ACCTNO').cast(pl.Int64, strict=False),
+            pl.col('CHEQNO').cast(pl.Int64, strict=False),
+            pl.col('ISSBRANCH').cast(pl.Int64, strict=False)
+        ]).filter(pl.col('ACCTNO').is_not_null())
+        
+        print(f"Parsed {df.height} records from MAREMORE")
+        return df
     except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        print(f"Error parsing REMIT: {e}")
+        return pl.DataFrame()
+
+# Process REMIT file
+remit_file = deposit_path / "MAREMORE"
+remit_df = parse_remit_file(remit_file) if remit_file.exists() else pl.DataFrame()
+
+if not remit_df.is_empty():
+    # Create ISSDTE and CATEGORY
+    remit_df = remit_df.with_columns([
+        pl.when(pl.all_horizontal([pl.col('ISSMM').is_not_null(), pl.col('ISSDD').is_not_null(), 
+                                   pl.col('ISSYY').is_not_null()]))
+        .then(pl.concat_str(['ISSMM', 'ISSDD', 'ISSYY']).str.strptime(pl.Date, '%m%d%Y', strict=False))
+        .alias('ISSDTE'),
+        pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4','5','6'])).then(pl.lit('SA'))
+        .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['3'])).then(pl.lit('CA'))
+        .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['1','7'])).then(pl.lit('FD'))
+        .otherwise(pl.lit('OTHER')).alias('CATEGORY')
+    ])
+    
+    # Split into REMIT and NONDEBIT
+    valid_paymodes = ['1','2','3','4','5','6','7','8','9']
+    remit_valid = remit_df.filter(pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)).drop(['ISSMM','ISSDD','ISSYY'])
+    nondebit_invalid = remit_df.filter(~pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes))
+    
+    # Save
+    remit_valid.write_parquet(deposit_path / "REMIT.parquet")
+    nondebit_invalid.write_parquet(output_path / "NONDEBIT.parquet")
+    print(f"REMIT: {remit_valid.height}, NONDEBIT: {nondebit_invalid.height}")
+    
+    # Create REMIT_FINAL (summary by PAYMODE)
+    remit_final = (remit_valid.group_by('PAYMODE').agg(pl.col('LEDGBAL').sum().alias('LEDGBAL'))
+                   .join(remit_valid.unique(subset=['PAYMODE']).drop('LEDGBAL'), on='PAYMODE', how='inner')
+                   .unique(subset=['PAYMODE']))
+    remit_final.write_parquet(output_path / "REMIT_FINAL.parquet")
+else:
+    remit_valid = nondebit_invalid = remit_final = pl.DataFrame()
+
+# Read SAS files
+def read_sas(filepath):
+    try:
+        if not filepath.exists(): return None
+        df, _ = pyreadstat.read_sas7bdat(filepath)
+        return pl.DataFrame(df).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
+    except Exception as e:
+        print(f"Error reading {filepath.name}: {e}")
+        return None
+
+# Load all SAS files (lowercase names)
+savg = read_sas(mni_path / f"savg{REPTMON}{NOWK}.sas7bdat")
+curn = read_sas(mni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
+isavg = read_sas(imni_path / f"savg{REPTMON}{NOWK}.sas7bdat")
+icurn = read_sas(imni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
+
+# Combine and filter DEP - Check if any DataFrames were loaded
+loaded_dfs = [d for d in [savg, curn, isavg, icurn] if d is not None and not d.is_empty()]
+dep_deduped = pl.DataFrame()
+
+if loaded_dfs:
+    dep_df = pl.concat(loaded_dfs, how="diagonal")
+    valid_prodcd = ['42110','42310','42120','42320','42130','42132','42180','42199','42699']
+    dep_deduped = dep_df.filter(pl.col('PRODCD').is_in(valid_prodcd)).unique(subset=['ACCTNO'])
+    if not dep_deduped.is_empty():
+        dep_deduped = dep_deduped.with_columns(pl.col('ACCTNO').cast(pl.Int64))
+        dep_deduped.write_parquet(output_path / "DEP_deduped.parquet")
+        print(f"DEP deduped: {dep_deduped.height} records")
+
+# Merge and generate reports
+if not remit_final.is_empty() and not dep_deduped.is_empty():
+    # Merge DEP and REMIT
+    merged = (dep_deduped.join(remit_final.with_columns(pl.col('PAYMODE').cast(pl.Int64).alias('ACCTNO')), 
+                              on='ACCTNO', how='right')
+              .with_columns([
+                  pl.when(pl.col('PRODCD').is_not_null() & pl.col('LEDGBAL').is_not_null())
+                  .then(pl.lit('DEBITTED')).otherwise(pl.lit('NOT_FOUND')).alias('BC')
+              ]).with_columns([
+                  pl.col('PRODCD').fill_null('UNKNOWN'),
+                  pl.col('COSTCTR').fill_null(0)
+              ]).sort('CATEGORY'))
+    
+    merged.write_parquet(output_path / "DEP_SORTED.parquet")
+    
+    # Report 1: Debitted
+    debitted = merged.filter((pl.col('BC') == 'DEBITTED') & ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999)))
+    if not debitted.is_empty():
+        summary = debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
+        print("\n=== REPORT 1: DEBITTED A/C (CONVENTIONAL) ===")
+        print(summary)
+        print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
+        summary.write_parquet(output_path / "DEBITTED_SUMMARY.parquet")
+        debitted.write_parquet(output_path / "DEBITTED_FILTERED.parquet")
+    
+    # Report 2: Not Found
+    notfound = merged.filter(
+        (pl.col('BC') == 'NOT_FOUND') & 
+        ~((pl.col('ACCTNO') > 3700000000) & (pl.col('ACCTNO') < 3999999999) |
+          (pl.col('ACCTNO') > 4700000000) & (pl.col('ACCTNO') < 4999999999) |
+          (pl.col('ACCTNO') > 6700000000) & (pl.col('ACCTNO') < 6999999999) |
+          (pl.col('ACCTNO') > 1700000000) & (pl.col('ACCTNO') < 1999999999) |
+          (pl.col('ACCTNO') > 7700000000) & (pl.col('ACCTNO') < 7999999999))
+    )
+    if not notfound.is_empty():
+        summary = notfound.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
+        print("=== REPORT 2: NOT FOUND IN FISS ===")
+        print(summary)
+        print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
+        summary.write_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
+        notfound.write_parquet(output_path / "NOTFOUND_FILTERED.parquet")
+
+# Report 3: Non-Debit
+if not nondebit_invalid.is_empty():
+    nondebit = nondebit_invalid.with_columns([
+        pl.lit('NON_DEBIT').alias('BC'),
+        pl.col('PAYMODE').alias('ACCTNO')
+    ])
+    summary = nondebit.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
+    print("=== REPORT 3: NON-DEBITTED A/C ===")
+    print(summary)
+    print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
+    summary.write_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
+    nondebit.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
+
+# Create final consolidated summary
+all_summaries = []
+for name, df in [('DEBITTED A/C (CONVENTIONAL)', 'debitted'), 
+                  ('NOT FOUND IN FISS', 'notfound'), 
+                  ('NON-DEBITTED A/C', 'nondebit')]:
+    if name == 'DEBITTED A/C (CONVENTIONAL)' and 'debitted' in locals() and not debitted.is_empty():
+        all_summaries.append(debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).with_columns(pl.lit(name).alias('REPORT')))
+    elif name == 'NOT FOUND IN FISS' and 'notfound' in locals() and not notfound.is_empty():
+        all_summaries.append(notfound.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).with_columns(pl.lit(name).alias('REPORT')))
+    elif name == 'NON-DEBITTED A/C' and 'nondebit' in locals() and not nondebit.is_empty():
+        all_summaries.append(nondebit.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).with_columns(pl.lit(name).alias('REPORT')))
+
+if all_summaries:
+    final_summary = pl.concat(all_summaries)
+    print("\n=== FINAL CONSOLIDATED SUMMARY ===")
+    print(final_summary)
+    total = final_summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+    print(f"\nGRAND TOTAL: {total:,.2f}")
+    final_summary.write_parquet(output_path / "FINAL_SUMMARY.parquet")
+    final_summary.write_csv(output_path / "FINAL_SUMMARY.csv")
+
+print("\n" + "="*80)
+print("PROCESSING COMPLETED SUCCESSFULLY")
+print("="*80)
+
+# List all output files
+print("\nOUTPUT FILES CREATED:")
+for path in [deposit_path, output_path]:
+    print(f"\nIn {path}:")
+    for file in sorted(path.glob("*")):
+        if file.suffix in ['.parquet', '.csv']:
+            print(f"  - {file.name}")
+
+
+can you change the date to today's date for production, remopve the test mode
