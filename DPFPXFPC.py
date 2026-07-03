@@ -5,8 +5,10 @@ import datetime
 
 # Configuration
 unclaim_path = Path("/dwh/dwh_m/tempsource/pidm/recon")
-mni_path = Path("/dwh/dp_sa")
-imni_path = Path("/dwh/")
+mni_sa_path = Path("/dwh/dp_sa")
+imni_sa_path = Path("/dwh/idp_sa")
+mni_ca_path = Path("/dwh/dp_ca")
+imni_ca_path = Path("/dwh/idp_ca")
 output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 
@@ -103,21 +105,62 @@ else:
     unclaim_final = pl.DataFrame()
     nondebit = pl.DataFrame()
 
-# Load DEP datasets
+# Load DEP datasets with separate SA and CA paths
 print(f"\nLoading DEP datasets")
+print(f"  MNI SA path: {mni_sa_path}")
+print(f"  IMNI SA path: {imni_sa_path}")
+print(f"  MNI CA path: {mni_ca_path}")
+print(f"  IMNI CA path: {imni_ca_path}")
+
 datasets = []
-for path, filename in [(mni_path, f"savg{REPTMON}{WK}.sas7bdat"), 
-                       (mni_path, f"curn{REPTMON}{WK}.sas7bdat"),
-                       (imni_path, f"savg{REPTMON}{WK}.sas7bdat"),
-                       (imni_path, f"curn{REPTMON}{WK}.sas7bdat")]:
-    try:
-        df, _ = read_sas_dataset(path / filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
-        if df is not None:
-            df = df.with_columns(pl.col('acctno').cast(pl.Float64))
-            datasets.append(df)
-            print(f"Loaded {filename} with {len(df)} records")
-    except:
-        print(f"NOTE: {filename} not found")
+
+# Define filename patterns
+sa_filename = f"sa{REPTMON}{WK}{REPTYEAR}.sas7bdat"
+ca_filename = f"ca{REPTMON}{WK}{REPTYEAR}.sas7bdat"
+
+print(f"\nLooking for files:")
+print(f"  SA file: {sa_filename}")
+print(f"  CA file: {ca_filename}")
+
+# Try reading MNI SA
+try:
+    df, _ = read_sas_dataset(mni_sa_path / sa_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if df is not None and not df.is_empty():
+        df = df.with_columns(pl.col('acctno').cast(pl.Float64))
+        datasets.append(df)
+        print(f"Loaded MNI SA {sa_filename} with {len(df)} records")
+except Exception as e:
+    print(f"NOTE: MNI SA {sa_filename} not found: {e}")
+
+# Try reading IMNI SA
+try:
+    df, _ = read_sas_dataset(imni_sa_path / sa_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if df is not None and not df.is_empty():
+        df = df.with_columns(pl.col('acctno').cast(pl.Float64))
+        datasets.append(df)
+        print(f"Loaded IMNI SA {sa_filename} with {len(df)} records")
+except Exception as e:
+    print(f"NOTE: IMNI SA {sa_filename} not found: {e}")
+
+# Try reading MNI CA
+try:
+    df, _ = read_sas_dataset(mni_ca_path / ca_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if df is not None and not df.is_empty():
+        df = df.with_columns(pl.col('acctno').cast(pl.Float64))
+        datasets.append(df)
+        print(f"Loaded MNI CA {ca_filename} with {len(df)} records")
+except Exception as e:
+    print(f"NOTE: MNI CA {ca_filename} not found: {e}")
+
+# Try reading IMNI CA
+try:
+    df, _ = read_sas_dataset(imni_ca_path / ca_filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+    if df is not None and not df.is_empty():
+        df = df.with_columns(pl.col('acctno').cast(pl.Float64))
+        datasets.append(df)
+        print(f"Loaded IMNI CA {ca_filename} with {len(df)} records")
+except Exception as e:
+    print(f"NOTE: IMNI CA {ca_filename} not found: {e}")
 
 # Process DEP
 dep_df = pl.concat(datasets, how="diagonal") if datasets else pl.DataFrame()
