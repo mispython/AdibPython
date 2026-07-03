@@ -155,7 +155,7 @@ else:
     ibg_final = pl.DataFrame()
 
 # ============================================
-# READ SAS FILES
+# READ SAS FILES WITH NEW NAMING CONVENTION
 # ============================================
 def read_sas_file(filepath, columns=None):
     """Read SAS file and return Polars DataFrame with selected columns"""
@@ -189,56 +189,55 @@ def read_sas_file(filepath, columns=None):
         print(f"Error reading {filepath.name}: {e}")
         return None
 
-# Load additional datasets from SAS files
-savg_filename = f"savg{REPTMON}{NOWK}.sas7bdat"
-curn_filename = f"curn{REPTMON}{NOWK}.sas7bdat"
-isavg_filename = f"savg{REPTMON}{NOWK}.sas7bdat"
-icurn_filename = f"curn{REPTMON}{NOWK}.sas7bdat"
+# Load additional datasets from SAS files with new naming convention
+# Format: sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat and ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat
+sa_filename = f"sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+ca_filename = f"ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
 
-print(f"\nLooking for SAS files with pattern: {REPTMON}{NOWK}")
-print(f"Expected files: savg{REPTMON}{NOWK}.sas7bdat, curn{REPTMON}{NOWK}.sas7bdat")
+print(f"\nLooking for SAS files with pattern: sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat and ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat")
+print(f"Expected files: {sa_filename}, {ca_filename}")
 
 datasets = []
 
-# Try reading SAVG
-savg_df = read_sas_file(mni_path / savg_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
-if savg_df is not None and not savg_df.is_empty():
+# Try reading SA (from MNI)
+sa_df = read_sas_file(mni_path / sa_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if sa_df is not None and not sa_df.is_empty():
     # Ensure ACCTNO is integer type for consistency
-    savg_df = savg_df.with_columns([
+    sa_df = sa_df.with_columns([
         pl.col('ACCTNO').cast(pl.Int64)
     ])
-    datasets.append(savg_df)
-    print(f"SAVG records: {savg_df.height}")
+    datasets.append(sa_df)
+    print(f"SA records: {sa_df.height}")
 
-# Try reading CURN
-curn_df = read_sas_file(mni_path / curn_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
-if curn_df is not None and not curn_df.is_empty():
+# Try reading CA (from MNI)
+ca_df = read_sas_file(mni_path / ca_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if ca_df is not None and not ca_df.is_empty():
     # Ensure ACCTNO is integer type for consistency
-    curn_df = curn_df.with_columns([
+    ca_df = ca_df.with_columns([
         pl.col('ACCTNO').cast(pl.Int64)
     ])
-    datasets.append(curn_df)
-    print(f"CURN records: {curn_df.height}")
+    datasets.append(ca_df)
+    print(f"CA records: {ca_df.height}")
 
-# Try reading ISAVG
-isavg_df = read_sas_file(imni_path / isavg_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
-if isavg_df is not None and not isavg_df.is_empty():
+# Try reading ISA (from IMNI) - using same filename pattern but from IMNI path
+isa_df = read_sas_file(imni_path / sa_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if isa_df is not None and not isa_df.is_empty():
     # Ensure ACCTNO is integer type for consistency
-    isavg_df = isavg_df.with_columns([
+    isa_df = isa_df.with_columns([
         pl.col('ACCTNO').cast(pl.Int64)
     ])
-    datasets.append(isavg_df)
-    print(f"ISAVG records: {isavg_df.height}")
+    datasets.append(isa_df)
+    print(f"ISA records: {isa_df.height}")
 
-# Try reading ICURN
-icurn_df = read_sas_file(imni_path / icurn_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
-if icurn_df is not None and not icurn_df.is_empty():
+# Try reading ICA (from IMNI) - using same filename pattern but from IMNI path
+ica_df = read_sas_file(imni_path / ca_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if ica_df is not None and not ica_df.is_empty():
     # Ensure ACCTNO is integer type for consistency
-    icurn_df = icurn_df.with_columns([
+    ica_df = ica_df.with_columns([
         pl.col('ACCTNO').cast(pl.Int64)
     ])
-    datasets.append(icurn_df)
-    print(f"ICURN records: {icurn_df.height}")
+    datasets.append(ica_df)
+    print(f"ICA records: {ica_df.height}")
 
 # DATA DEP; SET all datasets;
 if datasets:
@@ -461,4 +460,4 @@ with open(output_path / "report.txt", 'w') as f:
         f.write(f"                                 {total_str:>15}\n")
 
 print(f"Report generated: {output_path / 'report.txt'}")
-print("\nPROCESSING COMPLETED SUCCESSFULLY") 
+print("\nPROCESSING COMPLETED SUCCESSFULLY")
