@@ -1,27 +1,20 @@
 import polars as pl
-import duckdb
+import pyreadstat
 from pathlib import Path
 import datetime
-import pyreadstat 
 
 # Configuration
-mni_sa_path = Path("/dwh/dp_sa")
-imni_sa_path = Path("/dwh/idp_sa")
-mni_ca_path = Path("/dwh/dp_ca")
-imni_ca_path = Path("/dwh/idp_ca")
+unclaim_path = Path("/dwh/dwh_m/tempsource/pidm/recon")
+mni_path = Path("/dwh/dp_sa")
+imni_path = Path("/dwh/")
 output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 
-# ============================================
-# PRODUCTION DATE LOGIC
-# ============================================
-
-# DATA REPTDATE (KEEP=REPTDATE);
+# Calculate report date
 today = datetime.date.today()
-date_string = f"0101{today.year}"  # Fixed '0101' + current year
-reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
+reptdate = datetime.datetime.strptime(f"0101{today.year}", '%d%m%Y').date() - datetime.timedelta(days=1)
 
-# SELECT(DAY(REPTDATE)); logic
+# Week calculation
 reptday = reptdate.day
 if reptday == 8:
     SDD, WK, WK1 = 1, '1', '4'
@@ -33,435 +26,257 @@ else:
     SDD, WK, WK1, WK2, WK3 = 23, '4', '3', '2', '1'
 
 MM = reptdate.month
-
-# IF WK = '1' THEN DO;
-if WK == '1':
-    MM1 = MM - 1
-    if MM1 == 0:
-        MM1 = 12
-else:
-    MM1 = MM
-
-# MM2 = MM - 1;
-MM2 = MM - 1
-if MM2 == 0:
-    MM2 = 12
-
 SDATE = datetime.date(reptdate.year, MM, SDD)
-SDESC = 'PUBLIC BANK BERHAD'
-
-# CALL SYMPUT equivalent
-NOWK = WK
 REPTMON = f"{MM:02d}"
 REPTYEAR = str(reptdate.year)
 
-print(f"REPTDATE: {reptdate}")
-print(f"NOWK: {NOWK}, REPTMON: {REPTMON}, REPTYEAR: {REPTYEAR}")
-print(f"SDESC: {SDESC}")
-print(f"SDATE: {SDATE}")
+print(f"REPTDATE: {reptdate}, SDATE: {SDATE}, WEEK: {WK}, MONTH: {REPTMON}")
 
-# Create REPTDATE DataFrame
-reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
-reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
-
-# ============================================
-# READ IBG_YEAREND.txt FROM MNI SA PATH
-# ============================================
-try:
-    # Read IBGPIDM file from MNI SA path with correct filename
-    ibg_file_path = mni_sa_path / "IBG_YEAREND.txt"
-    
-    if not ibg_file_path.exists():
-        print(f"ERROR: IBG_YEAREND.txt not found at {ibg_file_path}")
-        ibg_valid = pl.DataFrame()
-        nondebit_invalid = pl.DataFrame()
-    else:
-        print(f"Reading IBG file from: {ibg_file_path}")
-        
-        # Read IBGPIDM file (fixed-width format)
-        ibg_df = pl.read_csv(ibg_file_path, 
-                            has_header=False,
-                            new_columns=['raw_line'])
-        
-        # Parse fixed-width format:
-        # @01 PAYMODE $10., @12 IBGAMT 16.2
-        ibg_parsed = ibg_df.with_columns([
-            pl.col('raw_line').str.slice(0, 10).str.replace_all(' ', '').alias('PAYMODE'),
-            pl.col('raw_line').str.slice(11, 16).str.replace_all(' ', '').cast(pl.Float64).alias('IBGAMT')
-        ]).drop('raw_line')
-        
-        # CATEGORY assignments
-        ibg_with_category = ibg_parsed.with_columns([
-            pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4', '5', '6']))
-            .then(pl.lit('SA'))
-            .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['3']))
-            .then(pl.lit('CA'))
-            .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['1', '7']))
-            .then(pl.lit('FD'))
-            .otherwise(pl.lit('OTHER'))
-            .alias('CATEGORY')
-        ])
-        
-        # Split into IBG and NONDEBIT based on PAYMODE
-        valid_paymodes = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
-        
-        ibg_valid = ibg_with_category.filter(
-            pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
-        )
-        
-        nondebit_invalid = ibg_with_category.filter(
-            ~pl.col('PAYMODE').str.slice(0, 1).is_in(valid_paymodes)
-        )
-        
-        print(f"IBG records: {ibg_valid.height}")
-        print(f"NONDEBIT records: {nondebit_invalid.height}")
-        
-except Exception as e:
-    print(f"Error reading IBG_YEAREND.txt: {e}")
-    import traceback
-    traceback.print_exc()
-    ibg_valid = pl.DataFrame()
-    nondebit_invalid = pl.DataFrame()
-
-# PROC SORT DATA=IBG; BY PAYMODE;
-if not ibg_valid.is_empty():
-    ibg_sorted = ibg_valid.sort('PAYMODE')
-    ibg_sorted.write_parquet(output_path / "IBG.parquet")
-else:
-    ibg_sorted = pl.DataFrame()
-
-# PROC SORT DATA=NONDEBIT; BY PAYMODE;
-if not nondebit_invalid.is_empty():
-    nondebit_sorted = nondebit_invalid.sort('PAYMODE')
-    nondebit_sorted.write_parquet(output_path / "NONDEBIT.parquet")
-else:
-    nondebit_sorted = pl.DataFrame()
-
-# PROC SUMMARY DATA=IBG; BY PAYMODE; VAR IBGAMT;
-if not ibg_sorted.is_empty():
-    ibg_summary = ibg_sorted.group_by('PAYMODE').agg([
-        pl.col('IBGAMT').sum().alias('IBGAMT_sum')
-    ])
-    
-    # OUTPUT OUT=IBGX(DROP=_FREQ_ _TYPE_) SUM=;
-    ibg_summary_clean = ibg_summary.rename({'IBGAMT_sum': 'IBGAMT'})
-    
-    # DATA IBG; MERGE IBGX(IN=A) IBG (IN=B DROP=IBGAMT);
-    ibg_deduped = ibg_sorted.unique(subset=['PAYMODE']).drop('IBGAMT')
-    ibg_merged = ibg_deduped.join(ibg_summary_clean, on='PAYMODE', how='inner')
-    
-    # PROC SORT DATA=IBG NODUPKEYS; BY PAYMODE;
-    ibg_final = ibg_merged.unique(subset=['PAYMODE'])
-    ibg_final.write_parquet(output_path / "IBG_FINAL.parquet")
-else:
-    ibg_final = pl.DataFrame()
-
-# ============================================
-# READ SAS FILES WITH SEPARATE PATHS
-# ============================================
-def read_sas_file(filepath, columns=None):
-    """Read SAS file and return Polars DataFrame with selected columns"""
+def read_sas_dataset(filepath, columns=None):
+    """Read SAS7BDAT and return Polars DataFrame with lowercase columns"""
     try:
-        if columns:
-            # Try different parameter names for different pyreadstat versions
-            try:
-                # Try with column_names parameter (newer versions)
-                df, meta = pyreadstat.read_sas7bdat(filepath, column_names=columns)
-            except TypeError:
-                # Try with columns parameter (older versions)
-                try:
-                    df, meta = pyreadstat.read_sas7bdat(filepath, columns=columns)
-                except TypeError:
-                    # Read all columns then select
-                    df, meta = pyreadstat.read_sas7bdat(filepath)
-                    # Filter to only columns that exist
-                    existing_cols = [col for col in columns if col in df.columns]
-                    if existing_cols:
-                        df = df[existing_cols]
-        else:
-            df, meta = pyreadstat.read_sas7bdat(filepath)
-        
-        # Convert to Polars DataFrame
-        return pl.DataFrame(df)
-        
-    except FileNotFoundError:
-        print(f"NOTE: {filepath.name} not found")
-        return None
+        df, meta = pyreadstat.read_sas7bdat(filepath, usecols=columns)
+        pl_df = pl.DataFrame(df).rename({col: col.lower() for col in df.columns})
+        # Convert date columns
+        for col in pl_df.columns:
+            if 'date' in col.lower() or 'dt' in col.lower():
+                if pl_df[col].dtype in [pl.Int64, pl.Float64]:
+                    pl_df = pl_df.with_columns([
+                        pl.when(pl.col(col) > 0)
+                        .then(pl.lit(datetime.date(1960, 1, 1)) + pl.duration(days=pl.col(col).cast(pl.Int64)))
+                        .otherwise(pl.col(col))
+                        .alias(col)
+                    ])
+        return pl_df, meta
     except Exception as e:
-        print(f"Error reading {filepath.name}: {e}")
-        return None
+        print(f"Error reading {filepath}: {e}")
+        return None, None
 
-# Load additional datasets from SAS files with separate paths
-# Format: sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat and ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat
-sa_filename = f"sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
-ca_filename = f"ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+# Load UNCLAIM and NOTUNCLAIM
+print(f"\nLoading UNCLAIM and NOTUNCLAIM for year {REPTYEAR}")
+unclaim_df1, _ = read_sas_dataset(unclaim_path / f"unclaim{REPTYEAR}.sas7bdat")
+unclaim_df2, _ = read_sas_dataset(unclaim_path / f"notunclaim{REPTYEAR}.sas7bdat")
 
-print(f"\nLooking for SAS files:")
-print(f"  SA file: {sa_filename}")
-print(f"  CA file: {ca_filename}")
-print(f"\nPaths:")
-print(f"  MNI SA: {mni_sa_path}")
-print(f"  IMNI SA: {imni_sa_path}")
-print(f"  MNI CA: {mni_ca_path}")
-print(f"  IMNI CA: {imni_ca_path}")
-
-datasets = []
-
-# Try reading MNI SA
-sa_df = read_sas_file(mni_sa_path / sa_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
-if sa_df is not None and not sa_df.is_empty():
-    sa_df = sa_df.with_columns([
-        pl.col('ACCTNO').cast(pl.Int64)
-    ])
-    datasets.append(sa_df)
-    print(f"MNI SA records: {sa_df.height}")
-
-# Try reading IMNI SA
-isa_df = read_sas_file(imni_sa_path / sa_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
-if isa_df is not None and not isa_df.is_empty():
-    isa_df = isa_df.with_columns([
-        pl.col('ACCTNO').cast(pl.Int64)
-    ])
-    datasets.append(isa_df)
-    print(f"IMNI SA records: {isa_df.height}")
-
-# Try reading MNI CA
-ca_df = read_sas_file(mni_ca_path / ca_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
-if ca_df is not None and not ca_df.is_empty():
-    ca_df = ca_df.with_columns([
-        pl.col('ACCTNO').cast(pl.Int64)
-    ])
-    datasets.append(ca_df)
-    print(f"MNI CA records: {ca_df.height}")
-
-# Try reading IMNI CA
-ica_df = read_sas_file(imni_ca_path / ca_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
-if ica_df is not None and not ica_df.is_empty():
-    ica_df = ica_df.with_columns([
-        pl.col('ACCTNO').cast(pl.Int64)
-    ])
-    datasets.append(ica_df)
-    print(f"IMNI CA records: {ica_df.height}")
-
-# DATA DEP; SET all datasets;
-if datasets:
-    dep_df = pl.concat(datasets, how="diagonal")
+# Combine and process UNCLAIM/NONDEBIT
+if unclaim_df1 is not None or unclaim_df2 is not None:
+    combined = pl.concat([df for df in [unclaim_df1, unclaim_df2] if df is not None and not df.is_empty()], how="diagonal")
     
-    # IF PRODCD IN specified values;
-    valid_prodcd = ['42110', '42310', '42120', '42320', '42130', '42132', '42180', '42199', '42699']
-    dep_filtered = dep_df.filter(pl.col('PRODCD').is_in(valid_prodcd))
-    
-    # PROC SORT DATA=DEP NODUPKEYS; BY ACCTNO;
-    dep_deduped = dep_filtered.unique(subset=['ACCTNO'])
-    dep_deduped.write_parquet(output_path / "DEP.parquet")
-    print(f"DEP records: {dep_deduped.height}")
-else:
-    dep_deduped = pl.DataFrame()
-    print("No DEP data created")
-
-# DATA IBG; SET IBG; FORMAT ACCTNO 10.; ACCTNO = PAYMODE;
-if not ibg_final.is_empty():
-    # Ensure ACCTNO is integer type for consistency with DEP
-    ibg_for_merge = ibg_final.with_columns([
-        pl.col('PAYMODE').cast(pl.Int64).alias('ACCTNO')
-    ])
-    
-    # DATA DEP; MERGE DEP(IN=A) IBG(IN=B);
-    if not dep_deduped.is_empty():
-        # Cast ACCTNO in dep_deduped to Int64 if it's not already
-        if dep_deduped['ACCTNO'].dtype != pl.Int64:
-            dep_deduped = dep_deduped.with_columns([
-                pl.col('ACCTNO').cast(pl.Int64)
+    if not combined.is_empty():
+        # Convert types and add category
+        combined = combined.with_columns([
+            pl.col('paymode').cast(pl.Utf8),
+            pl.col('acctno').cast(pl.Float64),
+            pl.when(pl.col('paymode').str.slice(0, 1).is_in(['4', '6'])).then(pl.lit('SA'))
+            .when(pl.col('paymode').str.slice(0, 1).is_in(['3'])).then(pl.lit('CA'))
+            .when(pl.col('paymode').str.slice(0, 1).is_in(['1', '7'])).then(pl.lit('FD'))
+            .otherwise(pl.lit('OTHER')).alias('category')
+        ])
+        
+        # Split into UNCLAIM and NONDEBIT
+        valid_paymodes = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+        unclaim = combined.filter(pl.col('paymode').str.slice(0, 1).is_in(valid_paymodes))
+        nondebit = combined.filter(~pl.col('paymode').str.slice(0, 1).is_in(valid_paymodes))
+        
+        print(f"UNCLAIM records: {len(unclaim)}, NONDEBIT records: {len(nondebit)}")
+        
+        # Process UNCLAIM - summarize by paymode
+        if not unclaim.is_empty():
+            unclaim_summary = unclaim.group_by('paymode').agg([
+                pl.col('ledgbal').sum().alias('ledgbal')
             ])
-        
-        # Perform the join - both sides should now be Int64
-        dep_merged = dep_deduped.join(ibg_for_merge, on='ACCTNO', how='right', suffix='_ibg')
-        
-        # BC assignment logic
-        dep_with_bc = dep_merged.with_columns([
-            pl.when(pl.col('PRODCD').is_not_null() & pl.col('IBGAMT').is_not_null())
-            .then(pl.lit('DEBITTED'))
-            .otherwise(pl.lit('NOT_FOUND'))
-            .alias('BC')
-        ]).filter(pl.col('IBGAMT').is_not_null())  # IF B THEN OUTPUT;
+            unclaim_final = unclaim.drop('ledgbal').unique(subset=['paymode']).join(
+                unclaim_summary, on='paymode', how='inner'
+            ).unique(subset=['paymode'])
+            unclaim_final.write_parquet(output_path / "UNCLAIM_FINAL.parquet")
+            print(f"UNCLAIM_FINAL records: {len(unclaim_final)}")
+        else:
+            unclaim_final = pl.DataFrame()
+            
+        # Save NONDEBIT
+        if not nondebit.is_empty():
+            nondebit.sort('paymode').write_parquet(output_path / "NONDEBIT.parquet")
+            print(f"NONDEBIT records: {len(nondebit)}")
     else:
-        dep_with_bc = ibg_for_merge.with_columns([
-            pl.lit('NOT_FOUND').alias('BC'),
-            pl.lit(None).cast(pl.Utf8).alias('PRODCD'),
-            pl.lit(None).cast(pl.Int64).alias('COSTCTR')
-        ])
-    
-    # PROC SORT DATA=DEP; BY CATEGORY;
-    dep_sorted = dep_with_bc.sort('CATEGORY')
-    dep_sorted.write_parquet(output_path / "DEP_FINAL.parquet")
-    
-    # TITLE1 'DEBITTED A/C';
-    print("\n" + "="*50)
-    print("DEBITTED A/C")
-    print("="*50)
-    
-    # PROC SUMMARY DATA=DEP NWAY MISSING; WHERE BC = 'DEBITTED';
-    debitted_filtered = dep_sorted.filter(pl.col('BC') == 'DEBITTED')
-    
-    if not debitted_filtered.is_empty():
-        debitted_summary = debitted_filtered.group_by('CATEGORY').agg([
-            pl.col('IBGAMT').sum().alias('IBGAMT'),
-            pl.len().alias('_FREQ_')
-        ]).with_columns([
-            pl.lit(1).alias('_TYPE_')
-        ])
-        
-        # PROC PRINT DATA=XXX LABEL; SUM IBGAMT;
-        print("IBG AMOUNT by Category (Debitted):")
-        print(debitted_summary)
-        total = debitted_summary.select(pl.col('IBGAMT').sum()).row(0)[0]
-        print(f"TOTAL IBG AMOUNT: {total:,.2f}")
-        
-        # Save summary
-        debitted_summary.write_parquet(output_path / "DEBITTED_SUMMARY.parquet")
-    else:
-        print("No debitted records found")
-    
-    print("\n" + "="*50)
-    # TITLE1 'DEBITTED A/C NOT FOUND IN FISS';
-    print("DEBITTED A/C NOT FOUND IN FISS")
-    print("="*50)
-    
-    # PROC SUMMARY DATA=DEP NWAY MISSING; WHERE BC = 'NOT_FOUND';
-    notfound_filtered = dep_sorted.filter(pl.col('BC') == 'NOT_FOUND')
-    
-    if not notfound_filtered.is_empty():
-        notfound_summary = notfound_filtered.group_by('CATEGORY').agg([
-            pl.col('IBGAMT').sum().alias('IBGAMT'),
-            pl.len().alias('_FREQ_')
-        ]).with_columns([
-            pl.lit(1).alias('_TYPE_')
-        ])
-        
-        # PROC PRINT DATA=XXX LABEL; SUM IBGAMT;
-        print("IBG AMOUNT by Category (Not Found in FISS):")
-        print(notfound_summary)
-        total = notfound_summary.select(pl.col('IBGAMT').sum()).row(0)[0]
-        print(f"TOTAL IBG AMOUNT: {total:,.2f}")
-        
-        # Save summary
-        notfound_summary.write_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
-    else:
-        print("No not-found records found")
+        unclaim_final = pl.DataFrame()
+        nondebit = pl.DataFrame()
+else:
+    unclaim_final = pl.DataFrame()
+    nondebit = pl.DataFrame()
 
-# DATA NONDEBIT; SET NONDEBIT; BC = 'NON_DEBIT'; ACCTNO = PAYMODE;
-if not nondebit_sorted.is_empty():
-    nondebit_processed = nondebit_sorted.with_columns([
-        pl.lit('NON_DEBIT').alias('BC'),
-        pl.col('PAYMODE').cast(pl.Int64).alias('ACCTNO')
+# Load DEP datasets
+print(f"\nLoading DEP datasets")
+datasets = []
+for path, filename in [(mni_path, f"savg{REPTMON}{WK}.sas7bdat"), 
+                       (mni_path, f"curn{REPTMON}{WK}.sas7bdat"),
+                       (imni_path, f"savg{REPTMON}{WK}.sas7bdat"),
+                       (imni_path, f"curn{REPTMON}{WK}.sas7bdat")]:
+    try:
+        df, _ = read_sas_dataset(path / filename, columns=['ACCTNO', 'PRODCD', 'COSTCTR'])
+        if df is not None:
+            df = df.with_columns(pl.col('acctno').cast(pl.Float64))
+            datasets.append(df)
+            print(f"Loaded {filename} with {len(df)} records")
+    except:
+        print(f"NOTE: {filename} not found")
+
+# Process DEP
+dep_df = pl.concat(datasets, how="diagonal") if datasets else pl.DataFrame()
+valid_prodcd = ['42110', '42310', '42120', '42320', '42130', '42132', '42180', '42199', '42699']
+dep_filtered = dep_df.filter(pl.col('prodcd').is_in(valid_prodcd)) if not dep_df.is_empty() else pl.DataFrame()
+dep_deduped = dep_filtered.unique(subset=['acctno']) if not dep_filtered.is_empty() else pl.DataFrame()
+dep_deduped.write_parquet(output_path / "DEP.parquet")
+print(f"DEP records: {len(dep_deduped)}")
+
+# Merge UNCLAIM with DEP
+if not unclaim_final.is_empty() and not dep_deduped.is_empty():
+    unclaim_for_merge = unclaim_final.drop('acctno').with_columns([
+        pl.col('paymode').cast(pl.Float64).alias('acctno')
     ])
-    nondebit_processed.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
-    
-    print("\n" + "="*50)
-    # TITLE1 'NON-DEBITTED A/C';
-    print("NON-DEBITTED A/C")
-    print("="*50)
-    
-    # PROC SUMMARY DATA=NONDEBIT NWAY MISSING; CLASS CATEGORY; VAR IBGAMT;
-    nondebit_summary = nondebit_processed.group_by('CATEGORY').agg([
-        pl.col('IBGAMT').sum().alias('BC/DD AMOUNT'),
-        pl.len().alias('_FREQ_')
-    ]).with_columns([
-        pl.lit(1).alias('_TYPE_')
-    ])
-    
-    # PROC PRINT DATA=XXX LABEL; LABEL IBGAMT = 'BC/DD AMOUNT'; SUM IBGAMT;
-    print("IBG AMOUNT by Category (Non-Debitted):")
-    print(nondebit_summary)
-    total = nondebit_summary.select(pl.col('BC/DD AMOUNT').sum()).row(0)[0]
-    print(f"TOTAL IBG AMOUNT: {total:,.2f}")
-    
-    # Save summary
-    nondebit_summary.write_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
+    dep_merged = dep_deduped.join(unclaim_for_merge, on='acctno', how='right', suffix='_unclaim')
+    dep_with_bc = dep_merged.with_columns([
+        pl.when(pl.col('prodcd').is_not_null() & pl.col('ledgbal').is_not_null())
+        .then(pl.lit('DEBITTED'))
+        .otherwise(pl.lit('NOT_FOUND'))
+        .alias('bc')
+    ]).filter(pl.col('ledgbal').is_not_null())
+else:
+    dep_with_bc = unclaim_final.with_columns([
+        pl.lit('NOT_FOUND').alias('bc'),
+        pl.lit(None).cast(pl.Utf8).alias('prodcd'),
+        pl.lit(None).cast(pl.Float64).alias('costctr')
+    ]) if not unclaim_final.is_empty() else pl.DataFrame()
 
-# Generate text report matching production output format exactly
-print("\n" + "="*50)
-print("GENERATING TEXT REPORT")
-print("="*50)
+dep_sorted = dep_with_bc.sort('category') if not dep_with_bc.is_empty() else pl.DataFrame()
+dep_sorted.write_parquet(output_path / "DEP_FINAL.parquet")
+print(f"DEP_FINAL records: {len(dep_sorted)}")
 
-# Get current timestamp for report header
-current_time = datetime.datetime.now().strftime("%H:%M %A, %B %d, %Y")
+# Generate combined report with all three sections
+def generate_combined_report():
+    """Generate combined report with all three sections in production format"""
+    lines = []
+    timestamp = datetime.datetime.now().strftime("%H:%M %A, %B %d, %Y")
+    page_num = 1
+    
+    # Report 1: DEBITTED
+    debitted = dep_sorted.filter(pl.col('bc') == 'DEBITTED')
+    if not debitted.is_empty():
+        lines.append(f"BANKERS CHEQUE WITH DEBITTED A/C (CONVENTIONAL)                                                    {timestamp}   {page_num}")
+        lines.append(" ")
+        lines.append(" " * 38 + "BC/DD")
+        lines.append(f"{'Obs':<6} {'CATEGORY':<10} {'_TYPE_':<10} {'_FREQ_':<10} {'AMOUNT':>15}")
+        lines.append(" ")
+        
+        summary = debitted.group_by('category').agg([
+            pl.len().alias('_FREQ_'),
+            pl.col('ledgbal').sum().alias('ledgbal')
+        ]).with_columns(pl.lit(1).alias('_TYPE_')).sort('category')
+        
+        total_amount = 0
+        obs = 1
+        for row in summary.rows():
+            cat, freq, amount, type_val = row
+            lines.append(f"{obs:<6} {cat if cat else '':<10} {type_val:<10} {freq:<10} {amount:>15,.2f}")
+            total_amount += amount
+            obs += 1
+        
+        lines.append(" " * 43 + "============")
+        lines.append(" " * 40 + f"{total_amount:>15,.2f}")
+        lines.append(" ")
+        page_num += 1
+    
+    # Report 2: NOT FOUND
+    notfound = dep_sorted.filter(pl.col('bc') == 'NOT_FOUND')
+    if not notfound.is_empty():
+        lines.append(f"BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)                                     {timestamp}   {page_num}")
+        lines.append(" ")
+        lines.append(" " * 38 + "BC/DD")
+        lines.append(f"{'Obs':<6} {'CATEGORY':<10} {'_TYPE_':<10} {'_FREQ_':<10} {'AMOUNT':>15}")
+        lines.append(" ")
+        
+        summary = notfound.group_by('category').agg([
+            pl.len().alias('_FREQ_'),
+            pl.col('ledgbal').sum().alias('ledgbal')
+        ]).with_columns(pl.lit(1).alias('_TYPE_')).sort('category')
+        
+        total_amount = 0
+        obs = 1
+        for row in summary.rows():
+            cat, freq, amount, type_val = row
+            lines.append(f"{obs:<6} {cat if cat else '':<10} {type_val:<10} {freq:<10} {amount:>15,.2f}")
+            total_amount += amount
+            obs += 1
+        
+        lines.append(" " * 43 + "============")
+        lines.append(" " * 40 + f"{total_amount:>15,.2f}")
+        lines.append(" ")
+        page_num += 1
+    
+    # Report 3: NON-DEBITTED
+    if not nondebit.is_empty():
+        nondebit_processed = nondebit.with_columns([
+            pl.lit('NON_DEBIT').alias('bc'),
+            pl.col('acctno').cast(pl.Float64)
+        ])
+        
+        lines.append(f"BANKERS CHEQUE WITH NON-DEBITTED A/C                                                               {timestamp}   {page_num}")
+        lines.append(" ")
+        lines.append(" " * 38 + "BC/DD")
+        lines.append(f"{'Obs':<6} {'CATEGORY':<10} {'_TYPE_':<10} {'_FREQ_':<10} {'AMOUNT':>15}")
+        lines.append(" ")
+        
+        summary = nondebit_processed.group_by('category').agg([
+            pl.len().alias('_FREQ_'),
+            pl.col('ledgbal').sum().alias('ledgbal')
+        ]).with_columns(pl.lit(1).alias('_TYPE_')).sort('category')
+        
+        total_amount = 0
+        obs = 1
+        for row in summary.rows():
+            cat, freq, amount, type_val = row
+            lines.append(f"{obs:<6} {cat if cat else '':<10} {type_val:<10} {freq:<10} {amount:>15,.2f}")
+            total_amount += amount
+            obs += 1
+        
+        lines.append(" " * 43 + "============")
+        lines.append(" " * 40 + f"{total_amount:>15,.2f}")
+    
+    return "\n".join(lines)
 
-with open(output_path / "report.txt", 'w') as f:
-    # Write header for first section
-    f.write(f"DEBITTED A/C                                                                                       {current_time}   1\n")
-    f.write(" \n")
-    f.write(" \n")
-    f.write("Obs    CATEGORY    _TYPE_    _FREQ_       IBGAMT\n")
-    f.write(" \n")
-    
-    # Write debitted summary
-    if Path(output_path / "DEBITTED_SUMMARY.parquet").exists():
-        deb_summary = pl.read_parquet(output_path / "DEBITTED_SUMMARY.parquet")
-        # Sort by CATEGORY for consistent output
-        deb_summary = deb_summary.sort('CATEGORY')
-        
-        obs_num = 1
-        for row in deb_summary.iter_rows():
-            f.write(f"  {obs_num:<4} {row[0]:<8} {row[2]:<7} {row[3]:<8} {row[1]:>15,.2f}\n")
-            obs_num += 1
-        
-        total = deb_summary.select(pl.col('IBGAMT').sum()).row(0)[0]
-        total_str = f"{total:,.2f}"
-        f.write(f"                                     {'=' * 11}\n")
-        f.write(f"                                 {total_str:>15}\n")
-    
-    # Write second section header
-    f.write(f"DEBITTED A/C NOT FOUND IN FISS                                                                     {current_time}   2\n")
-    f.write(" \n")
-    f.write(" \n")
-    f.write("Obs    CATEGORY    _TYPE_    _FREQ_      IBGAMT\n")
-    f.write(" \n")
-    
-    # Write not found summary
-    if Path(output_path / "NOTFOUND_SUMMARY.parquet").exists():
-        nf_summary = pl.read_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
-        # Sort by CATEGORY for consistent output
-        nf_summary = nf_summary.sort('CATEGORY')
-        
-        obs_num = 1
-        for row in nf_summary.iter_rows():
-            if row[0] == '':  # Blank category
-                f.write(f"  {obs_num:<4} {row[0]:<9} {row[2]:<7} {row[3]:<8} {row[1]:>15,.2f}\n")
-            else:
-                f.write(f"  {obs_num:<4} {row[0]:<8} {row[2]:<7} {row[3]:<8} {row[1]:>15,.2f}\n")
-            obs_num += 1
-        
-        total = nf_summary.select(pl.col('IBGAMT').sum()).row(0)[0]
-        total_str = f"{total:,.2f}"
-        f.write(f"                                     {'=' * 11}\n")
-        f.write(f"                                 {total_str:>15}\n")
-    
-    # Write third section header
-    f.write(f"NON-DEBITTED A/C                                                                                   {current_time}   3\n")
-    f.write(" \n")
-    f.write("                                         BC/DD\n")
-    f.write("Obs    CATEGORY    _TYPE_    _FREQ_      AMOUNT\n")
-    f.write(" \n")
-    
-    # Write non-debitted summary
-    if Path(output_path / "NONDEBIT_SUMMARY.parquet").exists():
-        nd_summary = pl.read_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
-        # Sort by CATEGORY for consistent output
-        nd_summary = nd_summary.sort('CATEGORY')
-        
-        obs_num = 1
-        for row in nd_summary.iter_rows():
-            if row[0] == '':  # Blank category
-                f.write(f"  {obs_num:<4} {row[0]:<9} {row[2]:<7} {row[3]:<8} {row[1]:>15,.2f}\n")
-            else:
-                f.write(f"  {obs_num:<4} {row[0]:<8} {row[2]:<7} {row[3]:<8} {row[1]:>15,.2f}\n")
-            obs_num += 1
-        
-        total = nd_summary.select(pl.col('BC/DD AMOUNT').sum()).row(0)[0]
-        total_str = f"{total:,.2f}"
-        f.write(f"                                     {'=' * 11}\n")
-        f.write(f"                                 {total_str:>15}\n")
+# Generate and save combined report
+combined_report = generate_combined_report()
 
-print(f"Report generated: {output_path / 'report.txt'}")
-print("\nPROCESSING COMPLETED SUCCESSFULLY")
+# Print to console
+print("\n" + "="*80)
+print("COMBINED SUMMARY REPORT")
+print("="*80)
+print(combined_report)
+
+# Save to single TXT file
+report_file = output_path / "BANKERS_CHEQUE_SUMMARY.txt"
+with open(report_file, 'w') as f:
+    f.write(combined_report)
+
+print(f"\nReport saved to: {report_file}")
+
+# Save processing summary
+with open(output_path / "PROCESSING_SUMMARY.txt", 'w') as f:
+    f.write("="*80 + "\n")
+    f.write("BANKERS CHEQUE PROCESSING SUMMARY\n")
+    f.write("="*80 + "\n\n")
+    f.write(f"Processing Date: {datetime.datetime.now()}\n")
+    f.write(f"Report Date: {reptdate}\n")
+    f.write(f"Report Month: {REPTMON}\n")
+    f.write(f"Report Year: {REPTYEAR}\n")
+    f.write(f"Week: {WK}\n")
+    f.write(f"Start Date: {SDATE}\n\n")
+    f.write("="*80 + "\n")
+    f.write("OUTPUT FILES GENERATED:\n")
+    f.write("="*80 + "\n")
+    for file in sorted(output_path.glob("*")):
+        if file.is_file():
+            f.write(f"  {file.name}\n")
+
+print(f"\n{'='*80}")
+print(f"All output files saved to: {output_path}")
+print("PROCESSING COMPLETED SUCCESSFULLY")
+print("="*80)
