@@ -13,17 +13,23 @@ output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 deposit_path.mkdir(exist_ok=True)
 
-# Test date - December Week 4
-reptdate = datetime.date(2026, 12, 23)
-print(f"*** TEST MODE - Date: {reptdate} (Dec Week 4) ***")
+# Production date - Calculate based on today's date
+today = datetime.date.today()
+date_string = f"01{today.month:02d}{today.year}"
+reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
+print(f"*** PRODUCTION MODE - Date: {reptdate} ***")
 print("*** ISLAMIC VERSION (EIIQREMT) ***")
 
 # Date logic
 reptday = reptdate.day
-if reptday == 8: SDD, WK = 1, '1'
-elif reptday == 15: SDD, WK = 9, '2'
-elif reptday == 22: SDD, WK = 16, '3'
-else: SDD, WK = 23, '4'
+if reptday == 8: 
+    SDD, WK = 1, '1'
+elif reptday == 15: 
+    SDD, WK = 9, '2'
+elif reptday == 22: 
+    SDD, WK = 16, '3'
+else: 
+    SDD, WK = 23, '4'
 
 MM = reptdate.month
 NOWK, REPTMON, REPTYEAR = WK, f"{MM:02d}", str(reptdate.year)
