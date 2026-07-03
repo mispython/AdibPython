@@ -5,8 +5,10 @@ import datetime
 import pyreadstat 
 
 # Configuration
-mni_path = Path("/dwh/dp_sa")
-imni_path = Path("/dwh/idpd_sa")
+mni_sa_path = Path("/dwh/dp_sa")
+imni_sa_path = Path("/dwh/idp_sa")
+mni_ca_path = Path("/dwh/dp_ca")
+imni_ca_path = Path("/dwh/idp_ca")
 output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 
@@ -63,11 +65,11 @@ reptdate_df = pl.DataFrame({'REPTDATE': [reptdate]})
 reptdate_df.write_parquet(output_path / "REPTDATE.parquet")
 
 # ============================================
-# READ IBG_YEAREND.txt FROM MNI PATH
+# READ IBG_YEAREND.txt FROM MNI SA PATH
 # ============================================
 try:
-    # Read IBGPIDM file from MNI path with correct filename
-    ibg_file_path = mni_path / "IBG_YEAREND.txt"
+    # Read IBGPIDM file from MNI SA path with correct filename
+    ibg_file_path = mni_sa_path / "IBG_YEAREND.txt"
     
     if not ibg_file_path.exists():
         print(f"ERROR: IBG_YEAREND.txt not found at {ibg_file_path}")
@@ -155,7 +157,7 @@ else:
     ibg_final = pl.DataFrame()
 
 # ============================================
-# READ SAS FILES WITH NEW NAMING CONVENTION
+# READ SAS FILES WITH SEPARATE PATHS
 # ============================================
 def read_sas_file(filepath, columns=None):
     """Read SAS file and return Polars DataFrame with selected columns"""
@@ -189,55 +191,57 @@ def read_sas_file(filepath, columns=None):
         print(f"Error reading {filepath.name}: {e}")
         return None
 
-# Load additional datasets from SAS files with new naming convention
+# Load additional datasets from SAS files with separate paths
 # Format: sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat and ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat
 sa_filename = f"sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
 ca_filename = f"ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
 
-print(f"\nLooking for SAS files with pattern: sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat and ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat")
-print(f"Expected files: {sa_filename}, {ca_filename}")
+print(f"\nLooking for SAS files:")
+print(f"  SA file: {sa_filename}")
+print(f"  CA file: {ca_filename}")
+print(f"\nPaths:")
+print(f"  MNI SA: {mni_sa_path}")
+print(f"  IMNI SA: {imni_sa_path}")
+print(f"  MNI CA: {mni_ca_path}")
+print(f"  IMNI CA: {imni_ca_path}")
 
 datasets = []
 
-# Try reading SA (from MNI)
-sa_df = read_sas_file(mni_path / sa_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+# Try reading MNI SA
+sa_df = read_sas_file(mni_sa_path / sa_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
 if sa_df is not None and not sa_df.is_empty():
-    # Ensure ACCTNO is integer type for consistency
     sa_df = sa_df.with_columns([
         pl.col('ACCTNO').cast(pl.Int64)
     ])
     datasets.append(sa_df)
-    print(f"SA records: {sa_df.height}")
+    print(f"MNI SA records: {sa_df.height}")
 
-# Try reading CA (from MNI)
-ca_df = read_sas_file(mni_path / ca_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
-if ca_df is not None and not ca_df.is_empty():
-    # Ensure ACCTNO is integer type for consistency
-    ca_df = ca_df.with_columns([
-        pl.col('ACCTNO').cast(pl.Int64)
-    ])
-    datasets.append(ca_df)
-    print(f"CA records: {ca_df.height}")
-
-# Try reading ISA (from IMNI) - using same filename pattern but from IMNI path
-isa_df = read_sas_file(imni_path / sa_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+# Try reading IMNI SA
+isa_df = read_sas_file(imni_sa_path / sa_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
 if isa_df is not None and not isa_df.is_empty():
-    # Ensure ACCTNO is integer type for consistency
     isa_df = isa_df.with_columns([
         pl.col('ACCTNO').cast(pl.Int64)
     ])
     datasets.append(isa_df)
-    print(f"ISA records: {isa_df.height}")
+    print(f"IMNI SA records: {isa_df.height}")
 
-# Try reading ICA (from IMNI) - using same filename pattern but from IMNI path
-ica_df = read_sas_file(imni_path / ca_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+# Try reading MNI CA
+ca_df = read_sas_file(mni_ca_path / ca_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
+if ca_df is not None and not ca_df.is_empty():
+    ca_df = ca_df.with_columns([
+        pl.col('ACCTNO').cast(pl.Int64)
+    ])
+    datasets.append(ca_df)
+    print(f"MNI CA records: {ca_df.height}")
+
+# Try reading IMNI CA
+ica_df = read_sas_file(imni_ca_path / ca_filename, ['ACCTNO', 'PRODCD', 'COSTCTR'])
 if ica_df is not None and not ica_df.is_empty():
-    # Ensure ACCTNO is integer type for consistency
     ica_df = ica_df.with_columns([
         pl.col('ACCTNO').cast(pl.Int64)
     ])
     datasets.append(ica_df)
-    print(f"ICA records: {ica_df.height}")
+    print(f"IMNI CA records: {ica_df.height}")
 
 # DATA DEP; SET all datasets;
 if datasets:
