@@ -6,11 +6,9 @@ import re
 import os
 
 # Configuration
-deposit_path = Path("/host_pq/mis/input")
-mni_sa_path = Path("/dwh/dp_sa")      # SAVG files
-mni_ca_path = Path("/dwh/dp_ca")      # CURN files
-imni_sa_path = Path("/dwh/idp_sa")    # ISAVG files
-imni_ca_path = Path("/dwh/idp_ca")    # ICURN files
+deposit_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT")
+mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT")
+imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT")
 output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 deposit_path.mkdir(exist_ok=True)
@@ -20,6 +18,7 @@ today = datetime.date.today()
 date_string = f"01{today.month:02d}{today.year}"
 reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
 print(f"*** PRODUCTION MODE - Date: {reptdate} ***")
+print("*** ISLAMIC VERSION (EIIQREMT) ***")
 
 # Date logic
 reptday = reptdate.day
@@ -105,7 +104,8 @@ if not remit_df.is_empty():
                                    pl.col('ISSYY').is_not_null()]))
         .then(pl.concat_str(['ISSMM', 'ISSDD', 'ISSYY']).str.strptime(pl.Date, '%m%d%Y', strict=False))
         .alias('ISSDTE'),
-        pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4','5','6'])).then(pl.lit('SA'))
+        # Islamic version: SA for PAYMODE starting with '4' or '6' (not '5')
+        pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4','6'])).then(pl.lit('SA'))
         .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['3'])).then(pl.lit('CA'))
         .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['1','7'])).then(pl.lit('FD'))
         .otherwise(pl.lit('OTHER')).alias('CATEGORY')
@@ -132,54 +132,31 @@ else:
 # Read SAS files
 def read_sas(filepath):
     try:
-        if not filepath.exists(): 
-            print(f"File not found: {filepath}")
-            return None
+        if not filepath.exists(): return None
         df, _ = pyreadstat.read_sas7bdat(filepath)
         return pl.DataFrame(df).select(['ACCTNO', 'PRODCD', 'COSTCTR'])
     except Exception as e:
         print(f"Error reading {filepath.name}: {e}")
         return None
 
-# Load all SAS files with new naming convention: sa{REPTMON}{NOWK}{REPTYEAR} and ca{REPTMON}{NOWK}{REPTYEAR}
-# Example: sa1242026.sas7bdat, ca1242026.sas7bdat
-savg_filename = f"sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
-curn_filename = f"ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
-isavg_filename = f"sa{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
-icurn_filename = f"ca{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+# Load all SAS files (lowercase names)
+savg = read_sas(mni_path / f"savg{REPTMON}{NOWK}.sas7bdat")
+curn = read_sas(mni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
+isavg = read_sas(imni_path / f"savg{REPTMON}{NOWK}.sas7bdat")
+icurn = read_sas(imni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
 
-print(f"\nLooking for SAS files:")
-print(f"SAVG: {savg_filename} in {mni_sa_path}")
-print(f"CURN: {curn_filename} in {mni_ca_path}")
-print(f"ISAVG: {isavg_filename} in {imni_sa_path}")
-print(f"ICURN: {icurn_filename} in {imni_ca_path}")
-
-savg = read_sas(mni_sa_path / savg_filename)
-curn = read_sas(mni_ca_path / curn_filename)
-isavg = read_sas(imni_sa_path / isavg_filename)
-icurn = read_sas(imni_ca_path / icurn_filename)
-
-# Combine and filter DEP - Check if any DataFrames were loaded
+# Combine and filter DEP
 loaded_dfs = [d for d in [savg, curn, isavg, icurn] if d is not None and not d.is_empty()]
 dep_deduped = pl.DataFrame()
 
 if loaded_dfs:
-    print(f"\nCombining {len(loaded_dfs)} datasets...")
     dep_df = pl.concat(loaded_dfs, how="diagonal")
-    print(f"Combined DEP dataset with {dep_df.height} records")
-    
     valid_prodcd = ['42110','42310','42120','42320','42130','42132','42180','42199','42699']
-    dep_filtered = dep_df.filter(pl.col('PRODCD').is_in(valid_prodcd))
-    print(f"Filtered DEP with valid PRODCD: {dep_filtered.height} records")
-    
-    dep_deduped = dep_filtered.unique(subset=['ACCTNO'])
+    dep_deduped = dep_df.filter(pl.col('PRODCD').is_in(valid_prodcd)).unique(subset=['ACCTNO'])
     if not dep_deduped.is_empty():
         dep_deduped = dep_deduped.with_columns(pl.col('ACCTNO').cast(pl.Int64))
         dep_deduped.write_parquet(output_path / "DEP_deduped.parquet")
-        dep_deduped.write_csv(output_path / "DEP_deduped.csv")
         print(f"DEP deduped: {dep_deduped.height} records")
-else:
-    print("No DEP datasets loaded")
 
 # Merge and generate reports
 if not remit_final.is_empty() and not dep_deduped.is_empty():
@@ -195,40 +172,51 @@ if not remit_final.is_empty() and not dep_deduped.is_empty():
               ]).sort('CATEGORY'))
     
     merged.write_parquet(output_path / "DEP_SORTED.parquet")
-    merged.write_csv(output_path / "DEP_SORTED.csv")
     
-    # Report 1: Debitted
-    debitted = merged.filter((pl.col('BC') == 'DEBITTED') & ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999)))
-    if not debitted.is_empty():
-        summary = debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
-        print("\n=== REPORT 1: DEBITTED A/C (CONVENTIONAL) ===")
+    # ============================================================
+    # ISLAMIC REPORT 1: BANKERS CHEQUE WITH DEBITTED A/C (ISLAMIC)
+    # ============================================================
+    # WHERE BC = 'DEBITTED' AND 3000 < COSTCTR < 4999
+    islamic_debitted = merged.filter(
+        (pl.col('BC') == 'DEBITTED') & 
+        (pl.col('COSTCTR') > 3000) & 
+        (pl.col('COSTCTR') < 4999)
+    )
+    
+    if not islamic_debitted.is_empty():
+        summary = islamic_debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
+        print("\n=== REPORT 1: DEBITTED A/C (ISLAMIC) ===")
         print(summary)
-        print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
-        summary.write_parquet(output_path / "DEBITTED_SUMMARY.parquet")
-        summary.write_csv(output_path / "DEBITTED_SUMMARY.csv")
-        debitted.write_parquet(output_path / "DEBITTED_FILTERED.parquet")
-        debitted.write_csv(output_path / "DEBITTED_FILTERED.csv")
+        total = summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+        print(f"TOTAL BC/DD AMOUNT: {total:,.2f}\n")
+        summary.write_parquet(output_path / "ISLAMIC_DEBITTED_SUMMARY.parquet")
+        islamic_debitted.write_parquet(output_path / "ISLAMIC_DEBITTED_FILTERED.parquet")
     
-    # Report 2: Not Found
+    # ============================================================
+    # REPORT 2: BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)
+    # ============================================================
+    # WHERE BC = 'NOT_FOUND' AND ACCTNO in specific ranges
     notfound = merged.filter(
         (pl.col('BC') == 'NOT_FOUND') & 
-        ~((pl.col('ACCTNO') > 3700000000) & (pl.col('ACCTNO') < 3999999999) |
-          (pl.col('ACCTNO') > 4700000000) & (pl.col('ACCTNO') < 4999999999) |
-          (pl.col('ACCTNO') > 6700000000) & (pl.col('ACCTNO') < 6999999999) |
-          (pl.col('ACCTNO') > 1700000000) & (pl.col('ACCTNO') < 1999999999) |
-          (pl.col('ACCTNO') > 7700000000) & (pl.col('ACCTNO') < 7999999999))
+        ((pl.col('ACCTNO') > 3700000000) & (pl.col('ACCTNO') < 3999999999) |
+         (pl.col('ACCTNO') > 4700000000) & (pl.col('ACCTNO') < 4999999999) |
+         (pl.col('ACCTNO') > 6700000000) & (pl.col('ACCTNO') < 6999999999) |
+         (pl.col('ACCTNO') > 1700000000) & (pl.col('ACCTNO') < 1999999999) |
+         (pl.col('ACCTNO') > 7700000000) & (pl.col('ACCTNO') < 7999999999))
     )
+    
     if not notfound.is_empty():
         summary = notfound.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
-        print("=== REPORT 2: NOT FOUND IN FISS ===")
+        print("=== REPORT 2: NOT FOUND IN FISS (CONV&ISLM) ===")
         print(summary)
-        print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
+        total = summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+        print(f"TOTAL BC/DD AMOUNT: {total:,.2f}\n")
         summary.write_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
-        summary.write_csv(output_path / "NOTFOUND_SUMMARY.csv")
         notfound.write_parquet(output_path / "NOTFOUND_FILTERED.parquet")
-        notfound.write_csv(output_path / "NOTFOUND_FILTERED.csv")
 
-# Report 3: Non-Debit
+# ============================================================
+# REPORT 3: BANKERS CHEQUE WITH NON-DEBITTED A/C
+# ============================================================
 if not nondebit_invalid.is_empty():
     nondebit = nondebit_invalid.with_columns([
         pl.lit('NON_DEBIT').alias('BC'),
@@ -237,19 +225,18 @@ if not nondebit_invalid.is_empty():
     summary = nondebit.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
     print("=== REPORT 3: NON-DEBITTED A/C ===")
     print(summary)
-    print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
+    total = summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+    print(f"TOTAL BC/DD AMOUNT: {total:,.2f}\n")
     summary.write_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
-    summary.write_csv(output_path / "NONDEBIT_SUMMARY.csv")
     nondebit.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
-    nondebit.write_csv(output_path / "NONDEBIT_PROCESSED.csv")
 
 # Create final consolidated summary
 all_summaries = []
-for name, df in [('DEBITTED A/C (CONVENTIONAL)', 'debitted'), 
+for name, df in [('ISLAMIC DEBITTED A/C', 'islamic_debitted'), 
                   ('NOT FOUND IN FISS', 'notfound'), 
                   ('NON-DEBITTED A/C', 'nondebit')]:
-    if name == 'DEBITTED A/C (CONVENTIONAL)' and 'debitted' in locals() and not debitted.is_empty():
-        all_summaries.append(debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).with_columns(pl.lit(name).alias('REPORT')))
+    if name == 'ISLAMIC DEBITTED A/C' and 'islamic_debitted' in locals() and not islamic_debitted.is_empty():
+        all_summaries.append(islamic_debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).with_columns(pl.lit(name).alias('REPORT')))
     elif name == 'NOT FOUND IN FISS' and 'notfound' in locals() and not notfound.is_empty():
         all_summaries.append(notfound.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).with_columns(pl.lit(name).alias('REPORT')))
     elif name == 'NON-DEBITTED A/C' and 'nondebit' in locals() and not nondebit.is_empty():
@@ -265,7 +252,7 @@ if all_summaries:
     final_summary.write_csv(output_path / "FINAL_SUMMARY.csv")
 
 print("\n" + "="*80)
-print("PROCESSING COMPLETED SUCCESSFULLY")
+print("ISLAMIC PROCESSING COMPLETED SUCCESSFULLY")
 print("="*80)
 
 # List all output files
