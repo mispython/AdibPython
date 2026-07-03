@@ -6,29 +6,24 @@ import re
 import os
 
 # Configuration
-deposit_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT")
+deposit_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT")
 mni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQREMT")
 imni_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQREMT")
 output_path = Path("/host/mis/output")
 output_path.mkdir(exist_ok=True)
 deposit_path.mkdir(exist_ok=True)
 
-# Production date - Calculate based on today's date
-today = datetime.date.today()
-date_string = f"01{today.month:02d}{today.year}"
-reptdate = datetime.datetime.strptime(date_string, '%d%m%Y').date() - datetime.timedelta(days=1)
-print(f"*** PRODUCTION MODE - Date: {reptdate} ***")
+# Test date - December Week 4
+reptdate = datetime.date(2026, 12, 23)
+print(f"*** TEST MODE - Date: {reptdate} (Dec Week 4) ***")
+print("*** ISLAMIC VERSION (EIIQREMT) ***")
 
 # Date logic
 reptday = reptdate.day
-if reptday == 8: 
-    SDD, WK = 1, '1'
-elif reptday == 15: 
-    SDD, WK = 9, '2'
-elif reptday == 22: 
-    SDD, WK = 16, '3'
-else: 
-    SDD, WK = 23, '4'
+if reptday == 8: SDD, WK = 1, '1'
+elif reptday == 15: SDD, WK = 9, '2'
+elif reptday == 22: SDD, WK = 16, '3'
+else: SDD, WK = 23, '4'
 
 MM = reptdate.month
 NOWK, REPTMON, REPTYEAR = WK, f"{MM:02d}", str(reptdate.year)
@@ -103,7 +98,8 @@ if not remit_df.is_empty():
                                    pl.col('ISSYY').is_not_null()]))
         .then(pl.concat_str(['ISSMM', 'ISSDD', 'ISSYY']).str.strptime(pl.Date, '%m%d%Y', strict=False))
         .alias('ISSDTE'),
-        pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4','5','6'])).then(pl.lit('SA'))
+        # Islamic version: SA for PAYMODE starting with '4' or '6' (not '5')
+        pl.when(pl.col('PAYMODE').str.slice(0, 1).is_in(['4','6'])).then(pl.lit('SA'))
         .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['3'])).then(pl.lit('CA'))
         .when(pl.col('PAYMODE').str.slice(0, 1).is_in(['1','7'])).then(pl.lit('FD'))
         .otherwise(pl.lit('OTHER')).alias('CATEGORY')
@@ -143,7 +139,7 @@ curn = read_sas(mni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
 isavg = read_sas(imni_path / f"savg{REPTMON}{NOWK}.sas7bdat")
 icurn = read_sas(imni_path / f"curn{REPTMON}{NOWK}.sas7bdat")
 
-# Combine and filter DEP - Check if any DataFrames were loaded
+# Combine and filter DEP
 loaded_dfs = [d for d in [savg, curn, isavg, icurn] if d is not None and not d.is_empty()]
 dep_deduped = pl.DataFrame()
 
@@ -171,34 +167,50 @@ if not remit_final.is_empty() and not dep_deduped.is_empty():
     
     merged.write_parquet(output_path / "DEP_SORTED.parquet")
     
-    # Report 1: Debitted
-    debitted = merged.filter((pl.col('BC') == 'DEBITTED') & ((pl.col('COSTCTR') < 3000) | (pl.col('COSTCTR') > 3999)))
-    if not debitted.is_empty():
-        summary = debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
-        print("\n=== REPORT 1: DEBITTED A/C (CONVENTIONAL) ===")
-        print(summary)
-        print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
-        summary.write_parquet(output_path / "DEBITTED_SUMMARY.parquet")
-        debitted.write_parquet(output_path / "DEBITTED_FILTERED.parquet")
+    # ============================================================
+    # ISLAMIC REPORT 1: BANKERS CHEQUE WITH DEBITTED A/C (ISLAMIC)
+    # ============================================================
+    # WHERE BC = 'DEBITTED' AND 3000 < COSTCTR < 4999
+    islamic_debitted = merged.filter(
+        (pl.col('BC') == 'DEBITTED') & 
+        (pl.col('COSTCTR') > 3000) & 
+        (pl.col('COSTCTR') < 4999)
+    )
     
-    # Report 2: Not Found
+    if not islamic_debitted.is_empty():
+        summary = islamic_debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
+        print("\n=== REPORT 1: DEBITTED A/C (ISLAMIC) ===")
+        print(summary)
+        total = summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+        print(f"TOTAL BC/DD AMOUNT: {total:,.2f}\n")
+        summary.write_parquet(output_path / "ISLAMIC_DEBITTED_SUMMARY.parquet")
+        islamic_debitted.write_parquet(output_path / "ISLAMIC_DEBITTED_FILTERED.parquet")
+    
+    # ============================================================
+    # REPORT 2: BANKERS CHEQUE WITH DEBITTED A/C NOT FOUND IN FISS (CONV&ISLM)
+    # ============================================================
+    # WHERE BC = 'NOT_FOUND' AND ACCTNO in specific ranges
     notfound = merged.filter(
         (pl.col('BC') == 'NOT_FOUND') & 
-        ~((pl.col('ACCTNO') > 3700000000) & (pl.col('ACCTNO') < 3999999999) |
-          (pl.col('ACCTNO') > 4700000000) & (pl.col('ACCTNO') < 4999999999) |
-          (pl.col('ACCTNO') > 6700000000) & (pl.col('ACCTNO') < 6999999999) |
-          (pl.col('ACCTNO') > 1700000000) & (pl.col('ACCTNO') < 1999999999) |
-          (pl.col('ACCTNO') > 7700000000) & (pl.col('ACCTNO') < 7999999999))
+        ((pl.col('ACCTNO') > 3700000000) & (pl.col('ACCTNO') < 3999999999) |
+         (pl.col('ACCTNO') > 4700000000) & (pl.col('ACCTNO') < 4999999999) |
+         (pl.col('ACCTNO') > 6700000000) & (pl.col('ACCTNO') < 6999999999) |
+         (pl.col('ACCTNO') > 1700000000) & (pl.col('ACCTNO') < 1999999999) |
+         (pl.col('ACCTNO') > 7700000000) & (pl.col('ACCTNO') < 7999999999))
     )
+    
     if not notfound.is_empty():
         summary = notfound.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
-        print("=== REPORT 2: NOT FOUND IN FISS ===")
+        print("=== REPORT 2: NOT FOUND IN FISS (CONV&ISLM) ===")
         print(summary)
-        print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
+        total = summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+        print(f"TOTAL BC/DD AMOUNT: {total:,.2f}\n")
         summary.write_parquet(output_path / "NOTFOUND_SUMMARY.parquet")
         notfound.write_parquet(output_path / "NOTFOUND_FILTERED.parquet")
 
-# Report 3: Non-Debit
+# ============================================================
+# REPORT 3: BANKERS CHEQUE WITH NON-DEBITTED A/C
+# ============================================================
 if not nondebit_invalid.is_empty():
     nondebit = nondebit_invalid.with_columns([
         pl.lit('NON_DEBIT').alias('BC'),
@@ -207,17 +219,18 @@ if not nondebit_invalid.is_empty():
     summary = nondebit.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).sort('CATEGORY')
     print("=== REPORT 3: NON-DEBITTED A/C ===")
     print(summary)
-    print(f"TOTAL: {summary.select(pl.col('LEDGBAL').sum()).row(0)[0]:,.2f}\n")
+    total = summary.select(pl.col('LEDGBAL').sum()).row(0)[0]
+    print(f"TOTAL BC/DD AMOUNT: {total:,.2f}\n")
     summary.write_parquet(output_path / "NONDEBIT_SUMMARY.parquet")
     nondebit.write_parquet(output_path / "NONDEBIT_PROCESSED.parquet")
 
 # Create final consolidated summary
 all_summaries = []
-for name, df in [('DEBITTED A/C (CONVENTIONAL)', 'debitted'), 
+for name, df in [('ISLAMIC DEBITTED A/C', 'islamic_debitted'), 
                   ('NOT FOUND IN FISS', 'notfound'), 
                   ('NON-DEBITTED A/C', 'nondebit')]:
-    if name == 'DEBITTED A/C (CONVENTIONAL)' and 'debitted' in locals() and not debitted.is_empty():
-        all_summaries.append(debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).with_columns(pl.lit(name).alias('REPORT')))
+    if name == 'ISLAMIC DEBITTED A/C' and 'islamic_debitted' in locals() and not islamic_debitted.is_empty():
+        all_summaries.append(islamic_debitted.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).with_columns(pl.lit(name).alias('REPORT')))
     elif name == 'NOT FOUND IN FISS' and 'notfound' in locals() and not notfound.is_empty():
         all_summaries.append(notfound.group_by('CATEGORY').agg(pl.col('LEDGBAL').sum()).with_columns(pl.lit(name).alias('REPORT')))
     elif name == 'NON-DEBITTED A/C' and 'nondebit' in locals() and not nondebit.is_empty():
@@ -233,7 +246,7 @@ if all_summaries:
     final_summary.write_csv(output_path / "FINAL_SUMMARY.csv")
 
 print("\n" + "="*80)
-print("PROCESSING COMPLETED SUCCESSFULLY")
+print("ISLAMIC PROCESSING COMPLETED SUCCESSFULLY")
 print("="*80)
 
 # List all output files
