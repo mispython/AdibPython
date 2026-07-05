@@ -1,37 +1,36 @@
-2026-07-05 11:36:43,654 - INFO - ============================================================
-2026-07-05 11:36:43,654 - INFO - Starting REPO Processing Pipeline
-2026-07-05 11:36:43,654 - INFO - ============================================================
-2026-07-05 11:36:43,654 - INFO - STEP 1: Extracting dates from input files
-2026-07-05 11:36:43,654 - INFO - RPVBDATA date: 20251201
-2026-07-05 11:36:43,654 - INFO - SRSDATA date: 20251101
-2026-07-05 11:36:43,654 - INFO - STEP 2: Calculating report dates
-2026-07-05 11:36:43,654 - INFO - REPTDATE: 2025-11-30 (1125)
-2026-07-05 11:36:43,654 - INFO - PREVDATE: 2025-10-31 (1025)
-2026-07-05 11:36:43,654 - INFO - SRSDATE: 2025-11-01 (1125)
-2026-07-05 11:36:43,654 - INFO - STEP 3: Validating dates
-2026-07-05 11:36:43,654 - INFO - ✓ Date validation passed
-2026-07-05 11:36:43,654 - INFO - STEP 4: Parsing RPVB data
-2026-07-05 11:36:43,657 - INFO - Parsed 776 records from /sas/python/virt_edw/Data_Warehouse/MIS/Job/LOAN/input/RPVBDATA.txt
-2026-07-05 11:36:43,665 - INFO - Raw data: 776 records
-2026-07-05 11:36:43,665 - INFO - STEP 5: Processing RPVB data (UPCASE + dates)
-2026-07-05 11:36:43,678 - ERROR - Processing failed: conversion from `str` to `i32` failed in column 'MM1' for 14 out of 776 values: ["0.", "0.", … "0."]
-
-Did not show all failed cases as there were too many.
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMREPO.py", line 355, in <module>
-    results = main()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMREPO.py", line 261, in main
-    RPVB1 = process_rpvb_data(raw_data)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMREPO.py", line 145, in process_rpvb_data
-    df = df.with_columns([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.InvalidOperationError: conversion from `str` to `i32` failed in column 'MM1' for 14 out of 776 values: ["0.", "0.", … "0."]
-
-Did not show all failed cases as there were too many
+def parse_rpvdata() -> pl.DataFrame:
+    """Exact copy of your original working parsing logic"""
+    records = []
+    with open(RPVBDATA_PATH, 'r') as f:
+        lines = f.readlines()
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('0'):
+            continue
+        if line.startswith('1'):
+            parts = line.split()
+            if len(parts) >= 15:
+                record = {
+                    'MNIACTNO': parts[1] if len(parts) > 1 else '',
+                    'BRANCHNO': parts[2] if len(parts) > 2 else '',
+                    'NAME': ' '.join(parts[3:8]) if len(parts) > 8 else parts[3] if len(parts) > 3 else '',
+                    'ACCTSTA': parts[8] if len(parts) > 8 else '',
+                    'PRSTCOND': parts[9] if len(parts) > 9 else '',
+                    'REGCARD': parts[10] if len(parts) > 10 else '',
+                    'IGNTKEY': parts[11] if len(parts) > 11 else '',
+                    'ACCTWOFF': parts[12] if len(parts) > 12 else '',
+                    'MODEREPO': parts[13] if len(parts) > 13 else '',
+                    'REPOSTAT': parts[14] if len(parts) > 14 else '',
+                    'MODEDISP': parts[15] if len(parts) > 15 else '',
+                    'YY1': parts[16][:4] if len(parts) > 16 and len(parts[16]) >= 8 else None,
+                    'MM1': parts[16][4:6] if len(parts) > 16 and len(parts[16]) >= 8 else None,
+                    'DD1': parts[16][6:8] if len(parts) > 16 and len(parts[16]) >= 8 else None,
+                }
+                records.append(record)
+    
+    logger.info(f"Parsed {len(records)} records from {RPVBDATA_PATH}")
+    return pl.DataFrame(records)
+  
