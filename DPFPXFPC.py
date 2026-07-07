@@ -141,10 +141,14 @@ def calculate_next_bldate(bldate, issdte, payfreq, freq):
 
 def calculate_remmth(matdt, reptdate, rpyr, rpmth, rpday, rpdays):
     """SAS REMMTH macro - calculate remaining months"""
+    if matdt is None:
+        return None
+    
     mdyr = matdt.year
     mdmth = matdt.month
     mdday = matdt.day
     
+    # Adjust day if it exceeds days in month
     if mdday > rpdays:
         mdday = rpdays
     
@@ -179,9 +183,10 @@ def main(reptdate=None):
     print("=" * 70)
 
     try:
-        # Step 1: Get report date
+        # Step 1: Get report date - use today's date if not provided
         if reptdate is None:
-            reptdate = date(2026, 8, 8)  # As per your output
+            reptdate = datetime.now().date()
+            print(f"\nUsing today's date: {reptdate.strftime('%d/%m/%Y')}")
         elif isinstance(reptdate, datetime):
             reptdate = reptdate.date()
         
@@ -202,13 +207,19 @@ def main(reptdate=None):
         print(f"Report Month: {reptmon}")
         print(f"Report Year: {reptyear}")
         
-        # Step 2: Build BTRAD filename: btrad{MM}{WK}.sas7bdat
-        btrad_filename = f"btrad{reptmon}{nowk}.sas7bdat"
+        # Step 2: Build BTRAD filename: btrad{MM}{WK}{YY}.sas7bdat
+        # Format: btrad{MM}{WK}{YY} where YY is last 2 digits of year
+        year_suffix = reptyear[2:]  # Get last 2 digits of year
+        btrad_filename = f"btrad{reptmon}{nowk}{year_suffix}.sas7bdat"
         btrad_path = INPUT_DIR / btrad_filename
         
+        # Also try without year suffix for backward compatibility
         if not btrad_path.exists():
-            btrad_filename_upper = f"btrad{reptmon}{nowk}.sas7bdat"
-            btrad_path = INPUT_DIR / btrad_filename_upper
+            btrad_filename_alt = f"btrad{reptmon}{nowk}.sas7bdat"
+            btrad_path_alt = INPUT_DIR / btrad_filename_alt
+            if btrad_path_alt.exists():
+                btrad_path = btrad_path_alt
+                btrad_filename = btrad_filename_alt
         
         print(f"\nLooking for BTRAD file: {btrad_path.name}")
         
@@ -240,9 +251,19 @@ def main(reptdate=None):
             print("  No records after filtering.")
             return 0
         
+        # Debug: Check data types and values
+        print("\n  Debug - First few records:")
+        sample_rows = df_note.head(5)
+        for row in sample_rows.iter_rows(named=True):
+            print(f"    CUSTCD: {row.get('CUSTCD')}, PRODCD: {row.get('PRODCD')}, "
+                  f"PRODUCT: {row.get('PRODUCT')}, BALANCE: {row.get('BALANCE')}, "
+                  f"PAYAMT: {row.get('PAYAMT')}, BLDATE: {row.get('BLDATE')}, "
+                  f"ISSDTE: {row.get('ISSDTE')}, EXPRDATE: {row.get('EXPRDATE')}")
+        
         # Step 4: Process each record (matches SAS DATA NOTE step)
         output_records = []
         processed = 0
+        remmth_distribution = {}
         
         for row in df_note.iter_rows(named=True):
             # Get values
@@ -293,14 +314,18 @@ def main(reptdate=None):
             
             # Calculate DAYS past due (only if BLDATE > 0)
             days = 0
-            if bldate is not None and bldate > 0:
+            if bldate is not None:
                 days = (reptdate - bldate).days
             
-            # Initialize
+            # Initialize remmth
             remmth = None
             
+            # Calculate days to expiry
+            days_to_expiry = (exprdate - reptdate).days
+            
             # Process maturity profile (matches SAS IF-ELSE logic)
-            if (exprdate - reptdate).days < 8:
+            if days_to_expiry < 8:
+                # Less than 8 days to expiry
                 remmth = 0.1
             else:
                 payfreq = '3'
@@ -309,11 +334,17 @@ def main(reptdate=None):
                 # RC products use expiry date as billing date
                 if product in [350, 910, 925]:
                     bldate = exprdate
-                elif bldate is None or bldate <= 0:
+                elif bldate is None:
+                    # If no billing date, use issue date and calculate forward
                     bldate = issdte
                     if bldate is not None:
                         while bldate <= reptdate:
                             bldate = calculate_next_bldate(bldate, issdte, payfreq, freq)
+                
+                # Ensure bldate is not None
+                if bldate is None:
+                    # Use expiry date as fallback
+                    bldate = exprdate
                 
                 if payamt < 0:
                     payamt = 0
@@ -330,6 +361,9 @@ def main(reptdate=None):
                     matdt = current_bldate
                     remmth = calculate_remmth(matdt, reptdate, rpyr, rpmth, rpday, rpdays)
                     
+                    if remmth is None:
+                        break
+                    
                     if remmth > 12 or current_bldate == exprdate:
                         break
                     
@@ -338,8 +372,10 @@ def main(reptdate=None):
                         current_balance -= payamt
                         
                         # Part 2-RM (95)
-                        bnmcode = f"95{item}{cust}{get_remfmt(remmth)}0000Y"
+                        remfmt_code = get_remfmt(remmth)
+                        bnmcode = f"95{item}{cust}{remfmt_code}0000Y"
                         output_records.append({"BNMCODE": bnmcode, "AMOUNT": amount})
+                        remmth_distribution[remfmt_code] = remmth_distribution.get(remfmt_code, 0) + 1
                         
                         # Part 1-RM (93) - NPL if days > 89
                         remmth_npl = 13 if days > 89 else remmth
@@ -355,12 +391,20 @@ def main(reptdate=None):
                 # Use final balance and billing date
                 balance = current_balance
                 bldate = current_bldate
+                
+                # Calculate final remmth if not set
+                if remmth is None:
+                    remmth = calculate_remmth(bldate, reptdate, rpyr, rpmth, rpday, rpdays)
+                    if remmth is None:
+                        remmth = 0.1  # Default to 0.1 if still None
             
             # Output final balance (matches final OUTPUT statements)
             amount = balance
             if amount != 0:
-                bnmcode = f"95{item}{cust}{get_remfmt(remmth)}0000Y"
+                remfmt_code = get_remfmt(remmth)
+                bnmcode = f"95{item}{cust}{remfmt_code}0000Y"
                 output_records.append({"BNMCODE": bnmcode, "AMOUNT": amount})
+                remmth_distribution[remfmt_code] = remmth_distribution.get(remfmt_code, 0) + 1
                 
                 remmth_npl = 13 if days > 89 else remmth
                 bnmcode = f"93{item}{cust}{get_remfmt(remmth_npl)}0000Y"
@@ -373,12 +417,23 @@ def main(reptdate=None):
         print(f"\n  Total records processed: {processed}")
         print(f"  Output records created: {len(output_records)}")
         
+        # Print remmth distribution for debugging
+        print("\n  Remmth code distribution:")
+        for code, count in sorted(remmth_distribution.items()):
+            print(f"    Code {code}: {count} records")
+        
         if len(output_records) == 0:
             print("  No output records generated.")
             return 0
         
         # Step 5: Aggregate (matches PROC SUMMARY NWAY)
         df_output = pl.DataFrame(output_records)
+        
+        # Print unique BNMCODEs before filtering
+        print("\n  Unique BNMCODEs before filtering:")
+        unique_codes = df_output.select('BNMCODE').unique().sort('BNMCODE')
+        for row in unique_codes.iter_rows():
+            print(f"    {row[0]}")
         
         df_summary = df_output.group_by('BNMCODE').agg([
             pl.col('AMOUNT').sum()
@@ -390,6 +445,11 @@ def main(reptdate=None):
         missing_count = len(df_output) - len(df_summary)
         if missing_count > 0:
             print(f"\n  Records with missing remmth (code '07'): {missing_count}")
+        
+        # Print final summary
+        print("\n  Final aggregated records:")
+        for row in df_summary.iter_rows(named=True):
+            print(f"    {row['BNMCODE']}: {row['AMOUNT']:,.2f}")
         
         # Convert to pandas for SAS output
         df_pandas = df_summary.to_pandas()
@@ -491,8 +551,8 @@ def main(reptdate=None):
         
     except FileNotFoundError as e:
         print(f"\nFILE NOT FOUND ERROR: {e}", file=sys.stderr)
-        print("\nExpected file pattern: btrad{MM}{WK}.sas7bdat")
-        print("Example: btrad081.sas7bdat for Month=08, Week=1")
+        print("\nExpected file pattern: btrad{MM}{WK}{YY}.sas7bdat")
+        print("Example: btrad06426.sas7bdat for Month=06, Week=4, Year=2026")
         return 1
     except Exception as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
@@ -524,7 +584,8 @@ if __name__ == "__main__":
             print(f"Error: Invalid date format. Use YYYY-MM-DD")
             sys.exit(1)
     else:
-        print("No date provided - using August 8, 2026")
-        reptdate = date(2026, 8, 8)
+        # Use today's date when no date is provided
+        reptdate = datetime.now().date()
+        print(f"No date provided - using today's date: {reptdate.strftime('%Y-%m-%d')}")
     
     sys.exit(main(reptdate))
