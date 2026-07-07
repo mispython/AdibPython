@@ -29,10 +29,15 @@ warnings.filterwarnings('ignore')
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "/dwh/btrade"
 
-# Output files
-BT_SAS_PATH = "/host/mis/output/btrade/BT.sas7bdat"
-BT_PARQUET_PATH = "/host/mis/parquet/btrade/BT.parquet"
-BT_REPORT_PATH = "/host/mis/output/report/BT_REPORT.txt"
+# Output files - using full paths
+BT_SAS_PATH = Path("/host/mis/output/btrade/BT.sas7bdat")
+BT_PARQUET_PATH = Path("/host/mis/parquet/btrade/BT.parquet")
+BT_REPORT_PATH = Path("/host/mis/output/report/BT_REPORT.txt")
+
+# Create output directories
+BT_SAS_PATH.parent.mkdir(parents=True, exist_ok=True)
+BT_PARQUET_PATH.parent.mkdir(parents=True, exist_ok=True)
+BT_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================================
@@ -447,12 +452,13 @@ def main(reptdate=None):
             # Initialize SAS session
             sas = saspy.SASsession(cfgname='default')
             
-            # Method 1: Use the sasdata() method with DataFrame as first argument
+            # Use the sasdata() method with DataFrame as first argument
             sas.sasdata(df_pandas, 'BT', 'WORK')
             
             # Copy to permanent location
+            sas_path = str(BT_SAS_PATH.parent)
             sas.submit(f'''
-                libname out "{OUTPUT_DIR}";
+                libname out "{sas_path}";
                 data out.BT;
                     set WORK.BT;
                 run;
@@ -467,13 +473,14 @@ def main(reptdate=None):
             # Alternative: Use CSV import method
             try:
                 # Write CSV as intermediate
-                temp_csv = OUTPUT_DIR / "temp_BT.csv"
+                temp_csv = BT_SAS_PATH.parent / "temp_BT.csv"
                 df_pandas.to_csv(temp_csv, index=False)
                 
                 # If SAS session doesn't exist, create one
                 if sas is None:
                     sas = saspy.SASsession(cfgname='default')
                 
+                sas_path = str(BT_SAS_PATH.parent)
                 # Use SAS to read CSV and create dataset
                 sas.submit(f'''
                     proc import datafile="{temp_csv}"
@@ -482,7 +489,7 @@ def main(reptdate=None):
                         replace;
                     run;
                     
-                    libname out "{OUTPUT_DIR}";
+                    libname out "{sas_path}";
                     data out.BT;
                         set temp_data;
                     run;
@@ -578,10 +585,6 @@ if __name__ == "__main__":
     else:
         # Use today's date when no date is provided
         reptdate = datetime.now().date()
-        #reptdate = datetime(2026, 6, 6) testing only
         print(f"No date provided - using today's date: {reptdate.strftime('%Y-%m-%d')}")
     
     sys.exit(main(reptdate))
-
-
-is the output path correct
