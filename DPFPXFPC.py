@@ -4,6 +4,7 @@ File Name: EIBMLIBT
 Loan Maturity Profile Processor (BT)
 Processes BTRAD loan data for BNM reporting
 Based on original SAS code
+Outputs to SAS dataset and Parquet formats
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import warnings
 
 import pyreadstat
 import polars as pl
+import pandas as pd
 
 warnings.filterwarnings('ignore')
 
@@ -28,7 +30,8 @@ INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod"
 OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMLIBT"
 
 # Output files
-BT_OUTPUT_PATH = OUTPUT_DIR / "BT.txt"
+BT_SAS_PATH = OUTPUT_DIR / "BT.sas7bdat"
+BT_PARQUET_PATH = OUTPUT_DIR / "BT.parquet"
 BT_REPORT_PATH = OUTPUT_DIR / "BT_REPORT.txt"
 
 # Create output directory
@@ -45,6 +48,12 @@ def sas_date_to_python(sas_days):
     if sas_days is None or sas_days <= 0:
         return None
     return BASE_SAS_DATE + timedelta(days=int(sas_days))
+
+def python_date_to_sas(py_date):
+    """Convert Python date to SAS numeric date (days since 1960-01-01)"""
+    if py_date is None:
+        return None
+    return (py_date - BASE_SAS_DATE).days
 
 
 # ============================================================================
@@ -214,7 +223,6 @@ def main(reptdate=None):
         print(f"  Total records read: {len(df_pl)}")
         
         # Apply filter: SUBSTR(PRODCD,1,2) = '34' OR PRODUCT IN (225,226)
-        # Note: SAS uses PRODUCT, but your data has PRODCD. Using PRODCD as fallback
         if "PRODUCT" in df_pl.columns:
             df_note = df_pl.filter(
                 (pl.col("PRODCD").cast(pl.Utf8).str.slice(0, 2) == "34") | 
@@ -382,14 +390,27 @@ def main(reptdate=None):
         if missing_count > 0:
             print(f"\n  Records with missing remmth (code '07'): {missing_count}")
         
-        # Step 6: Write output
-        print(f"\nWriting output to: {BT_OUTPUT_PATH}")
-        with open(BT_OUTPUT_PATH, 'w') as f:
-            for row in df_summary.iter_rows(named=True):
-                f.write(f"{row['BNMCODE']}|{row['AMOUNT']:.2f}\n")
+        # Step 6: Write output to SAS dataset (sas7bdat)
+        print(f"\nWriting SAS dataset to: {BT_SAS_PATH}")
         
-        # Step 7: Generate report
-        print(f"Writing report to: {BT_REPORT_PATH}")
+        # Convert to pandas for pyreadstat
+        df_pandas = df_summary.to_pandas()
+        
+        # Write SAS dataset
+        pyreadstat.write_sas7bdat(
+            df_pandas,
+            str(BT_SAS_PATH),
+            column_names=df_pandas.columns.tolist()
+        )
+        print(f"  SAS dataset written successfully")
+        
+        # Step 7: Write output to Parquet
+        print(f"\nWriting Parquet file to: {BT_PARQUET_PATH}")
+        df_summary.write_parquet(BT_PARQUET_PATH)
+        print(f"  Parquet file written successfully")
+        
+        # Step 8: Generate report
+        print(f"\nWriting report to: {BT_REPORT_PATH}")
         with open(BT_REPORT_PATH, 'w') as f:
             f.write("1LOAN MATURITY PROFILE REPORT\n")
             f.write(" " + "=" * 60 + "\n")
@@ -409,7 +430,8 @@ def main(reptdate=None):
         print("\n" + "=" * 70)
         print("PROCESSING COMPLETED SUCCESSFULLY")
         print("=" * 70)
-        print(f"\nOutput file: {BT_OUTPUT_PATH}")
+        print(f"\nOutput SAS dataset: {BT_SAS_PATH}")
+        print(f"Output Parquet file: {BT_PARQUET_PATH}")
         print(f"Report file: {BT_REPORT_PATH}")
         print(f"Total BNM codes: {len(df_summary)}")
         print(f"Total amount: {total:,.2f}")
