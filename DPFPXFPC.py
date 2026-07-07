@@ -462,9 +462,9 @@ def main(reptdate=None):
             # Initialize SAS session
             sas = saspy.SASsession(cfgname='default')
             
-            # Method 1: Use sasdata with DataFrame as positional argument
-            # The sasdata() method accepts the DataFrame as the first positional argument
-            sas.sasdata(df_pandas, table='BT', libref='WORK')
+            # Method 1: Use the sasdata() method with DataFrame as first argument
+            # The correct signature is: sasdata(dataframe, table=None, libref=None)
+            sas.sasdata(df_pandas, 'BT', 'WORK')
             
             # Copy to permanent location
             sas.submit(f'''
