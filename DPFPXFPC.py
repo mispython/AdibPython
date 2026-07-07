@@ -295,25 +295,11 @@ def main(reptdate=None):
             else:
                 cust = '09'
             
-            # Determine PROD type using PRDFMT
-            prod_type = get_prdfmt(product)
-            
-            # Determine ITEM (matches SAS SELECT logic)
-            # For products starting with '34', use item '219' regardless of prod_type
-            if prodcd.startswith('34'):
-                item = '219'
-            elif custcd in ['77', '78', '95', '96']:
-                if prod_type == 'HL':
-                    item = '214'
-                else:
-                    item = '219'
-            else:
-                if prod_type == 'FL':
-                    item = '211'
-                elif prod_type == 'RC':
-                    item = '212'
-                else:
-                    item = '219'
+            # In the SAS code: PROD = 'BT' (hardcoded)
+            # Therefore, the item is always '219' because:
+            # - For CUST='08': PROD='BT' doesn't match 'HL' -> OTHERWISE -> '219'
+            # - For CUST='09': PROD='BT' doesn't match 'FL' or 'RC' -> OTHERWISE -> '219'
+            item = '219'
             
             # Calculate DAYS past due (only if BLDATE > 0)
             days = 0
