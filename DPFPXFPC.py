@@ -331,7 +331,7 @@ try:
     
     # Combine datasets
     accounts_df = pd.concat([saving_filtered, current_filtered], ignore_index=True)
-    print(f"Total accounts to process: {len(accounts_df)}")
+    print(f"Total accounts to process: {len(accounts_df):,}")
     
 except Exception as e:
     print(f"Error processing accounts: {e}")
@@ -393,7 +393,11 @@ print(f"Processed {len(processed_df):,} accounts")
 
 def generate_dataset(df, filter_condition, groupby_cols, agg_dict, dataset_name):
     """Generic function to generate aggregated datasets"""
-    filtered = df[filter_condition] if filter_condition is not None else df
+    if filter_condition is not None:
+        filtered = df[filter_condition]
+    else:
+        filtered = df
+    
     if len(filtered) > 0:
         result = filtered.groupby(groupby_cols).agg(agg_dict).reset_index()
     else:
@@ -402,10 +406,10 @@ def generate_dataset(df, filter_condition, groupby_cols, agg_dict, dataset_name)
     return result
 
 # Define all datasets
-datasets = [
+datasets_config = [
     {
         'name': f'awsa{reptmon:02d}',
-        'filter': df['product'].isin([204, 215]),
+        'filter': processed_df['product'].isin([204, 215]),
         'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
         'agg': {
             'noacct': ('product', 'count'),
@@ -417,7 +421,7 @@ datasets = [
     },
     {
         'name': f'awsb{reptmon:02d}',
-        'filter': df['product'] == 207,
+        'filter': processed_df['product'] == 207,
         'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
         'agg': {
             'noacct': ('product', 'count'),
@@ -429,7 +433,7 @@ datasets = [
     },
     {
         'name': f'awsc{reptmon:02d}',
-        'filter': df['product'] == 214,
+        'filter': processed_df['product'] == 214,
         'groupby': ['product', 'range', 'race', 'age', 'reptdate'],
         'agg': {
             'noacct': ('product', 'count'),
@@ -440,7 +444,7 @@ datasets = [
     },
     {
         'name': f'mudh{reptmon:02d}',
-        'filter': df['product'] == 214,
+        'filter': processed_df['product'] == 214,
         'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
         'agg': {
             'noacct': ('product', 'count'),
@@ -451,7 +455,7 @@ datasets = [
     },
     {
         'name': f'awca{reptmon:02d}',
-        'filter': (df['product'].isin([93, 96])) & (df['curbal'] > 0),
+        'filter': (processed_df['product'].isin([93, 96])) & (processed_df['curbal'] > 0),
         'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
         'agg': {
             'noacct': ('product', 'count'),
@@ -463,9 +467,9 @@ datasets = [
     },
     {
         'name': f'awcb{reptmon:02d}',
-        'filter': (df['product'].isin([160, 162, 164, 168, 182, 169])) & 
-                  (df['curbal'] > 0) & 
-                  (df['purpose'].isin(['1', '2', '4'])),
+        'filter': (processed_df['product'].isin([160, 162, 164, 168, 182, 169])) & 
+                  (processed_df['curbal'] > 0) & 
+                  (processed_df['purpose'].isin(['1', '2', '4'])),
         'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
         'agg': {
             'noacct': ('product', 'count'),
@@ -478,17 +482,25 @@ datasets = [
 ]
 
 # Generate each dataset
-for ds in datasets:
-    print(f"\nGenerating {ds['name']}...")
-    result = generate_dataset(processed_df, ds['filter'], ds['groupby'], ds['agg'], ds['name'])
+datasets_results = {}
+for ds_config in datasets_config:
+    print(f"\nGenerating {ds_config['name']}...")
+    result = generate_dataset(
+        processed_df, 
+        ds_config['filter'], 
+        ds_config['groupby'], 
+        ds_config['agg'], 
+        ds_config['name']
+    )
+    datasets_results[ds_config['name']] = result
     
     # Save SAS and Parquet
-    save_sas_dataset(result, ds['name'], OUTPUT_DIR)
-    result.to_parquet(f'{OUTPUT_DIR}/{ds["name"]}.parquet')
+    save_sas_dataset(result, ds_config['name'], OUTPUT_DIR)
+    result.to_parquet(f'{OUTPUT_DIR}/{ds_config["name"]}.parquet')
     
     # Print summary
-    total_accts = result['noacct'].sum() if len(result) > 0 else 0
-    print(f"  {ds['name']} - {total_accts:,} accounts, {len(result)} groups")
+    total_accts = result['noacct'].sum() if len(result) > 0 and 'noacct' in result.columns else 0
+    print(f"  {ds_config['name']} - {total_accts:,.0f} accounts, {len(result)} groups")
 
 # ============================================================================
 # SUMMARY
@@ -506,22 +518,22 @@ Output Datasets (SAS7BDAT + Parquet):
    Records: {len(dyibu)}
    
 2. AWSA{reptmon:02d}   - Products 204,215 (Regular Savings)
-   Records: {len(datasets[0]['result']) if 'result' in locals() else 0}
+   Records: {len(datasets_results.get(f'awsa{reptmon:02d}', pd.DataFrame()))}
    
 3. AWSB{reptmon:02d}   - Product 207 (Islamic Basic Savings)
-   Records: {len(datasets[1]['result']) if 'result' in locals() else 0}
+   Records: {len(datasets_results.get(f'awsb{reptmon:02d}', pd.DataFrame()))}
    
 4. AWSC{reptmon:02d}   - Product 214 (Mudharabah by Age/Race)
-   Records: {len(datasets[2]['result']) if 'result' in locals() else 0}
+   Records: {len(datasets_results.get(f'awsc{reptmon:02d}', pd.DataFrame()))}
    
 5. MUDH{reptmon:02d}   - Product 214 (Mudharabah by Purpose)
-   Records: {len(datasets[3]['result']) if 'result' in locals() else 0}
+   Records: {len(datasets_results.get(f'mudh{reptmon:02d}', pd.DataFrame()))}
    
 6. AWCA{reptmon:02d}   - Products 93,96 (Islamic Current Accounts)
-   Records: {len(datasets[4]['result']) if 'result' in locals() else 0}
+   Records: {len(datasets_results.get(f'awca{reptmon:02d}', pd.DataFrame()))}
    
 7. AWCB{reptmon:02d}   - Products 160,162,164,168,182,169 (Purpose 1,2,4 only)
-   Records: {len(datasets[5]['result']) if 'result' in locals() else 0}
+   Records: {len(datasets_results.get(f'awcb{reptmon:02d}', pd.DataFrame()))}
 
 Total Accounts Processed: {len(processed_df):,}
 
