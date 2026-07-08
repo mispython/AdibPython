@@ -1,391 +1,354 @@
 #!/usr/bin/env python3
 """
-EIBDAWSA - Average Savings Account Analysis
-Memory-optimized processing of DPTRBLGS parquet data for savings account statistics
+EIBDISLM - Islamic Banking Statistics
+Processes daily Islamic account balances and monthly summaries
 """
 
 import duckdb
-import pandas as pd
-import numpy as np
 from pathlib import Path
 from datetime import datetime
-import pyarrow as pa
-import pyarrow.parquet as pq
-import gc
-import warnings
-warnings.filterwarnings('ignore')
 
 BASE_DIR = Path('.')
-INPUT_DIR = BASE_DIR / 'data'
-OUTPUT_DIR = BASE_DIR / 'output'
+INPUT_DIR = BASE_DIR / '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDISLM'
+OUTPUT_DIR = BASE_DIR / '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 AGELIMIT = 12
 MAXAGE = 18
 AGEBELOW = 11
 
-# Format mappings
-SACUSTCD_MAP = {
-    '001': '01', '002': '02', '003': '03', '004': '04',
-}
+con = duckdb.connect()
 
-SAPROD_MAP = {
-    204: '20100', 207: '20200', 214: '20300', 215: '20400',
-}
-
-CAPROD_MAP = {
-    93: '10100',
-}
-
-SADENOM_MAP = {
-    204: 'D', 207: 'D', 214: 'I', 215: 'I',
-}
-
-CADENOM_MAP = {
-    93: 'D',
-}
-
-DDRANGE_MAP = [
-    (0, 1000, '< 1000'),
-    (1000, 5000, '1000 - 4999'),
-    (5000, 10000, '5000 - 9999'),
-    (10000, 50000, '10000 - 49999'),
-    (50000, float('inf'), '50000 & ABOVE'),
-]
-
-CARANGE_MAP = [
-    (0, 1000, '< 1000'),
-    (1000, 5000, '1000 - 4999'),
-    (5000, 10000, '5000 - 9999'),
-    (10000, 50000, '10000 - 49999'),
-    (50000, 100000, '50000 - 99999'),
-    (100000, float('inf'), '100000 & ABOVE'),
-]
-
-ISARANGE_MAP = [
-    (0, 1000, '< 1000'),
-    (1000, 5000, '1000 - 4999'),
-    (5000, 10000, '5000 - 9999'),
-    (10000, 50000, '10000 - 49999'),
-    (50000, 100000, '50000 - 99999'),
-    (100000, float('inf'), '100000 & ABOVE'),
-]
-
-IBWRNGE_MAP = [
-    (0, 1000, '< 1000'),
-    (1000, 5000, '1000 - 4999'),
-    (5000, 10000, '5000 - 9999'),
-    (10000, 50000, '10000 - 49999'),
-    (50000, 100000, '50000 - 99999'),
-    (100000, float('inf'), '100000 & ABOVE'),
-]
-
-def get_state_code(branch):
-    """Get state code from branch number"""
-    if branch is None or pd.isna(branch):
-        return 'XX'
-    try:
-        branch = int(branch)
-        if 100 <= branch <= 199:
-            return 'JH'
-        elif 200 <= branch <= 299:
-            return 'KD'
-        elif 300 <= branch <= 399:
-            return 'KL'
-        else:
-            return 'XX'
-    except:
-        return 'XX'
-
-def create_range_case_statement(range_map, column_name):
-    """Create a SQL CASE statement for range bucketing"""
-    cases = []
-    for low, high, label in range_map:
-        if high == float('inf'):
-            cases.append(f"WHEN {column_name} >= {low} THEN '{label}'")
-        else:
-            cases.append(f"WHEN {column_name} >= {low} AND {column_name} < {high} THEN '{label}'")
-    return f"CASE {' '.join(cases)} ELSE 'UNKNOWN' END"
-
-def process_with_duckdb(input_file, reptdate, reptmon, reptday, reptyear):
-    """Process data using DuckDB for memory efficiency"""
-    
-    print("Initializing DuckDB connection...")
-    con = duckdb.connect(':memory:')
-    con.execute("PRAGMA memory_limit='8GB'")
-    con.execute("PRAGMA threads=4")
-    
-    # Register the parquet file as a view
-    print("Registering parquet file...")
-    con.execute(f"""
-        CREATE OR REPLACE VIEW dptrblgs AS 
-        SELECT * FROM parquet_scan('{input_file}')
-    """)
-    
-    # Filter initial records to reduce data volume
-    print("Filtering records...")
-    con.execute("""
-        CREATE OR REPLACE VIEW filtered_records AS
-        SELECT 
-            BANKNO, REPTNO, FMTCODE, BRANCH, ACCTNO,
-            DEBIT, CREDIT, CLOSEDT, OPENDT, CUSTCODE,
-            PURPOSE, OPENIND, AVGAMT, PRODUCT, RACE,
-            DEPTYPE, INT1, CURBAL, INT2, APPRLIMT, BDATE
-        FROM dptrblgs
-        WHERE BANKNO = 33 
-          AND REPTNO = 1001 
-          AND FMTCODE = 1
-          AND OPENIND NOT IN ('B', 'C', 'P')
-          AND PRODUCT NOT IN (297, 298)
-    """)
-    
-    # Get count after filtering
-    count = con.execute("SELECT COUNT(*) FROM filtered_records").fetchone()[0]
-    print(f"Filtered records: {count:,}")
-    
-    if count == 0:
-        print("No records after filtering")
-        con.close()
-        return None
-    
-    print("Processing and aggregating data...")
-    
-    # Create range case statements
-    dd_range_case = create_range_case_statement(DDRANGE_MAP, 'AVGAMT')
-    ca_range_case = create_range_case_statement(CARANGE_MAP, 'CURBAL')
-    isa_range_case = create_range_case_statement(ISARANGE_MAP, 'CURBAL')
-    ibw_range_case = create_range_case_statement(IBWRNGE_MAP, 'CURBAL')
-    
-    # Process data using SQL with all logic in DuckDB
-    query = f"""
-    WITH processed AS (
-        SELECT 
-            PRODUCT,
-            BRANCH,
-            ACCTNO,
-            CASE 
-                WHEN PURPOSE IS NULL OR PURPOSE = '' THEN '0'
-                ELSE CAST(PURPOSE AS VARCHAR)
-            END AS PURPOSE,
-            CASE 
-                WHEN RACE IS NULL OR RACE = '' THEN '0'
-                ELSE CAST(RACE AS VARCHAR)
-            END AS RACE,
-            CASE 
-                WHEN CUSTCODE IS NULL THEN '99'
-                WHEN CUSTCODE = 1 THEN '01'
-                WHEN CUSTCODE = 2 THEN '02'
-                WHEN CUSTCODE = 3 THEN '03'
-                WHEN CUSTCODE = 4 THEN '04'
-                ELSE '99'
-            END AS CUSTCD,
-            {dd_range_case} AS AVGRNGE,
-            CURBAL,
-            AVGAMT,
-            CASE 
-                WHEN OPENDT != 0 AND CLOSEDT = 0 
-                     AND CAST(SUBSTR(CAST(OPENDT AS VARCHAR), 1, 2) AS INTEGER) = {reptyear - 2000}
-                THEN 1
-                ELSE 0
-            END AS ACCYTD,
-            CASE 
-                WHEN PRODUCT IN (204, 207) THEN 'ALWSA'
-                WHEN PRODUCT = 215 THEN 'ALWSS'
-                ELSE 'OTHER'
-            END AS TYPE,
-            CASE 
-                WHEN PRODUCT = 214 THEN {isa_range_case}
-                WHEN PRODUCT = 207 THEN {ibw_range_case}
-                ELSE {ca_range_case}
-            END AS DEPRANGE,
-            {reptday} AS REPTDAY,
-            {reptmon} AS REPTMON,
-            '{reptdate.strftime('%Y-%m-%d')}'::DATE AS REPTDATE
-        FROM filtered_records
-        WHERE PRODUCT IN (204, 207, 215)
-    )
-    SELECT 
-        PURPOSE,
-        RACE,
-        CUSTCD,
-        AVGRNGE,
-        DEPRANGE,
-        PRODUCT,
-        COUNT(ACCTNO) AS NOACCT,
-        SUM(CURBAL) AS CURBAL,
-        COUNT(AVGAMT) AS AVGACCT,
-        SUM(AVGAMT) AS AVGAMT,
-        SUM(ACCYTD) AS ACCYTD,
-        REPTDATE,
-        CASE 
-            WHEN PRODUCT = 204 THEN 'D'
-            WHEN PRODUCT = 207 THEN 'D'
-            WHEN PRODUCT = 214 THEN 'I'
-            WHEN PRODUCT = 215 THEN 'I'
-            ELSE 'D'
-        END AS DENOM,
-        CASE 
-            WHEN PRODUCT = 204 THEN '20100'
-            WHEN PRODUCT = 207 THEN '20200'
-            WHEN PRODUCT = 214 THEN '20300'
-            WHEN PRODUCT = 215 THEN '20400'
-            ELSE '00000'
-        END AS PRODCD
-    FROM processed
-    GROUP BY PURPOSE, RACE, CUSTCD, AVGRNGE, DEPRANGE, PRODUCT, REPTDATE
-    ORDER BY PRODUCT, PURPOSE, RACE, CUSTCD
-    """
-    
-    print("Executing aggregation query...")
-    aggregated = con.execute(query).fetchdf()
-    
-    print(f"Aggregated records: {len(aggregated):,}")
-    
-    # Clean up
-    con.close()
-    gc.collect()
-    
-    return aggregated
-
-def output_sas_dataset(df, dataset_name, output_dir):
-    """Output dataframe as SAS dataset using saspy"""
-    try:
-        print(f"Creating SAS dataset: {dataset_name}")
-        import saspy
-        sas = saspy.SASsession()
-        
-        # Convert to SAS dataset
-        sas_df = sas.dataframe2sasdata(df, table=dataset_name, libref='work')
-        
-        # Export to SAS
-        sas.saslib('outlib', path=str(output_dir), engine='base')
-        sas.submit(f"""
-            data outlib.{dataset_name};
-                set work.{dataset_name};
-            run;
-        """)
-        
-        print(f"SAS dataset created: {output_dir}/{dataset_name}.sas7bdat")
-        sas.endsas()
-        return True
-    except Exception as e:
-        print(f"Warning: Error creating SAS dataset: {e}")
-        print("Skipping SAS output...")
-        return False
-
-def output_parquet(df, dataset_name, output_dir):
-    """Output dataframe as parquet file"""
-    try:
-        parquet_path = output_dir / f"{dataset_name}.parquet"
-        df.to_parquet(parquet_path, index=False, engine='pyarrow', compression='snappy')
-        print(f"Parquet file created: {parquet_path}")
-        return True
-    except Exception as e:
-        print(f"Error creating parquet file: {e}")
-        return False
-
-def output_csv(df, dataset_name, output_dir):
-    """Output dataframe as CSV file (backup format)"""
-    try:
-        csv_path = output_dir / f"{dataset_name}.csv"
-        df.to_csv(csv_path, index=False)
-        print(f"CSV file created: {csv_path}")
-        return True
-    except Exception as e:
-        print(f"Error creating CSV file: {e}")
-        return False
-
-print("EIBDAWSA - Average Savings Account Analysis")
-print("="*80)
-
-# Get current date and time
-reptdate = datetime.now()
-day = reptdate.day
-
-# Determine week
-if 1 <= day <= 8:
-    nowk = '1'
-elif 9 <= day <= 15:
-    nowk = '2'
-elif 16 <= day <= 22:
-    nowk = '3'
-else:
-    nowk = '4'
-
-reptyear = reptdate.year
-reptmon = reptdate.month
-reptday = day
+reptdate = con.execute(f"SELECT reptdate FROM read_parquet('{INPUT_DIR}/deposit/reptdate.parquet')").fetchone()[0]
+reptyear, reptmon, reptday = reptdate.year, reptdate.month, reptdate.day
 rdate = reptdate.strftime('%d/%m/%Y')
+zdate = int(reptdate.strftime('%y%m%d'))
 
-print(f"Report Date: {rdate}")
-print(f"Week: {nowk}")
-print(f"Year: {reptyear}, Month: {reptmon:02d}, Day: {reptday:02d}")
+print(f"Islamic Banking Statistics - {rdate}")
 
-# Process DPTRBLGS parquet file
-input_file = INPUT_DIR / 'DPTRBLGS.parquet'
-if not input_file.exists():
-    print(f"Error: Input file {input_file} not found!")
-    exit(1)
+# ============================================================================
+# SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)
+# ============================================================================
 
-print(f"Input file: {input_file}")
-print(f"File size: {input_file.stat().st_size / (1024**3):.2f} GB")
+con.execute(f"""
+    CREATE TEMP TABLE dyibu_raw AS
+    SELECT branch, product, curbal, {zdate} reptdate
+    FROM read_parquet('{INPUT_DIR}/deposit/current.parquet')
+    WHERE openind NOT IN ('B','C','P')
+    UNION ALL
+    SELECT branch, product, curbal, {zdate} reptdate
+    FROM read_parquet('{INPUT_DIR}/deposit/saving.parquet')
+    WHERE openind NOT IN ('B','C','P')
+""")
 
-try:
-    # Process data using DuckDB
-    aggregated_df = process_with_duckdb(input_file, reptdate, reptmon, reptday, reptyear)
+con.execute("""
+    CREATE TEMP TABLE dyibu AS
+    SELECT 
+        branch,
+        reptdate,
+        SUM(CASE WHEN product IN (204,207,214,215) THEN curbal ELSE 0 END) sai,
+        SUM(CASE WHEN product IN (204,207,214,215) THEN 1 ELSE 0 END) saino,
+        SUM(CASE WHEN product = 214 THEN curbal ELSE 0 END) mbs,
+        SUM(CASE WHEN product = 214 THEN 1 ELSE 0 END) mbsno,
+        SUM(CASE WHEN product IN (60,61,63,64,70,71,93,94,160,161,162,163,164,166,169,66,67,168,167,182,183,184,73) 
+                 AND curbal > 0 AND product NOT IN (96,97,61,161,63,163) THEN curbal ELSE 0 END) cai,
+        SUM(CASE WHEN product IN (60,61,63,64,70,71,93,94,160,161,162,163,164,166,169,66,67,168,167,182,183,184,73) 
+                 AND curbal > 0 AND product NOT IN (96,97,61,161,63,163) THEN 1 ELSE 0 END) caino,
+        SUM(CASE WHEN product IN (96,97) AND curbal > 0 THEN curbal ELSE 0 END) ca96,
+        SUM(CASE WHEN product IN (96,97) AND curbal > 0 THEN 1 ELSE 0 END) cai96,
+        SUM(CASE WHEN product IN (61,161) AND curbal > 0 THEN curbal ELSE 0 END) caig,
+        SUM(CASE WHEN product IN (61,161) AND curbal > 0 THEN 1 ELSE 0 END) caigno,
+        SUM(CASE WHEN product IN (63,163) AND curbal > 0 THEN curbal ELSE 0 END) caih,
+        SUM(CASE WHEN product IN (63,163) AND curbal > 0 THEN 1 ELSE 0 END) caihno
+    FROM dyibu_raw
+    GROUP BY branch, reptdate
+""")
+
+con.execute(f"COPY dyibu TO '{OUTPUT_DIR}/dyibu{reptmon:02d}.parquet'")
+print(f"Section 1: DYIBU - {con.execute('SELECT COUNT(*) FROM dyibu').fetchone()[0]} branches")
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def calculate_age(bdate_str, reptdate, reptmon, reptday, reptyear):
+    if not bdate_str or bdate_str == '0':
+        return 0
+    try:
+        bdate = datetime.strptime(str(bdate_str)[:8], '%m%d%Y')
+        age = reptyear - bdate.year
+        if age == AGELIMIT:
+            if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
+                age = AGEBELOW
+        elif age == MAXAGE:
+            if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
+                age = AGELIMIT
+        elif age > MAXAGE:
+            age = MAXAGE
+        elif age < AGELIMIT:
+            age = AGEBELOW
+        else:
+            age = AGELIMIT
+        return age
+    except:
+        return 0
+
+def get_isa_range(curbal):
+    if curbal < 501: return 500
+    elif curbal < 2001: return 2000
+    elif curbal < 5001: return 5000
+    elif curbal < 10001: return 10000
+    elif curbal < 30001: return 30000
+    elif curbal < 50001: return 50000
+    elif curbal < 75001: return 75000
+    else: return 75001
+
+def get_range_bucket(curbal, product):
+    if product == 214:
+        return get_isa_range(curbal)
+    ranges = [(500, '< 500'), (1000, '< 1000'), (5000, '< 5000'), 
+              (10000, '< 10000'), (50000, '< 50000'), (100000, '< 100000'),
+              (500000, '< 500000'), (float('inf'), '>= 500000')]
+    for limit, label in ranges:
+        if curbal < limit:
+            return label
+    return '>= 500000'
+
+# ============================================================================
+# SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS
+# ============================================================================
+
+con.execute(f"""
+    CREATE TEMP TABLE accounts AS
+    SELECT branch, product, curbal, avgamt, opendt, closedt, bdate,
+           custcode, purpose, race, openind
+    FROM read_parquet('{INPUT_DIR}/deposit/saving.parquet')
+    WHERE openind NOT IN ('B','C','P') AND product NOT IN (297,298)
+    UNION ALL
+    SELECT branch, product, curbal, avgamt, opendt, closedt, bdate,
+           custcode, purpose, race, openind
+    FROM read_parquet('{INPUT_DIR}/deposit/current.parquet')
+    WHERE openind NOT IN ('B','C','P') AND product NOT IN (297,298)
+""")
+
+accounts = con.execute("SELECT * FROM accounts").fetchall()
+processed = []
+
+for row in accounts:
+    branch, product, curbal, avgamt, opendt, closedt, bdate, custcode, purpose, race, openind = row
     
-    if aggregated_df is not None and not aggregated_df.empty:
-        # Output monthly dataset
-        dataset_name = f"awsa{reptmon:02d}"
-        
-        # Output in multiple formats
-        output_parquet(aggregated_df, dataset_name, OUTPUT_DIR)
-        output_csv(aggregated_df, dataset_name, OUTPUT_DIR)
-        
-        # Try SAS output
+    accytd = 0
+    if opendt and opendt != 0 and (not closedt or closedt == 0):
         try:
-            output_sas_dataset(aggregated_df, dataset_name, OUTPUT_DIR)
-        except Exception as e:
-            print(f"SAS output skipped: {e}")
-        
-        print("\n" + "="*80)
-        print("AGGREGATION SUMMARY")
-        print("="*80)
-        print(f"Total accounts: {aggregated_df['NOACCT'].sum():,}")
-        print(f"Total balance: {aggregated_df['CURBAL'].sum():,.2f}")
-        print(f"Total average amount: {aggregated_df['AVGAMT'].sum():,.2f}")
-        print(f"New accounts this year: {aggregated_df['ACCYTD'].sum():,}")
-        print("\nProducts processed:")
-        product_summary = aggregated_df.groupby('PRODUCT')['NOACCT'].sum()
-        for prod, count in product_summary.items():
-            print(f"  Product {prod}: {count:,} accounts")
-        
-        # Show sample of output
-        print("\nSample output (first 5 rows):")
-        print(aggregated_df.head(5).to_string())
-        
-        print("\n" + "="*80)
-        print("OUTPUT STRUCTURE")
-        print("="*80)
-        print(f"""
-Dataset: {dataset_name} (Parquet, CSV, and SAS formats)
-Location: {OUTPUT_DIR}
-Fields: PURPOSE, RACE, CUSTCD, AVGRNGE, DEPRANGE, PRODUCT,
-        NOACCT, CURBAL, AVGACCT, AVGAMT, ACCYTD, REPTDATE,
-        DENOM, PRODCD
+            open_year = int(str(opendt)[:4]) if len(str(opendt)) >= 8 else 0
+            if open_year == reptyear:
+                accytd = 1
+        except:
+            pass
+    
+    age = calculate_age(str(bdate) if bdate else '0', reptdate, reptmon, reptday, reptyear)
+    purpose = purpose if purpose and purpose != ' ' else '0'
+    race = race if race and race != ' ' else '0'
+    
+    avgrnge = get_range_bucket(avgamt if avgamt else 0, 0)
+    range_val = get_range_bucket(curbal if curbal else 0, product)
+    
+    processed.append({
+        'product': product,
+        'branch': branch,
+        'curbal': curbal if curbal else 0,
+        'avgamt': avgamt if avgamt else 0,
+        'accytd': accytd,
+        'age': age,
+        'purpose': purpose,
+        'race': race,
+        'custcode': custcode,
+        'avgrnge': avgrnge,
+        'range': range_val,
+        'reptdate': zdate
+    })
 
-Products: 204, 207 (Savings), 215 (Special), 93 (Wadiah)
-Dimensions: PURPOSE × RACE × CUSTCD × AVGRNGE × DEPRANGE × PRODUCT
-        """)
-    else:
-        print("No data to output")
+con.execute("CREATE TEMP TABLE processed (product INT, branch INT, curbal DOUBLE, avgamt DOUBLE, accytd INT, age INT, purpose VARCHAR, race VARCHAR, custcode INT, avgrnge VARCHAR, range VARCHAR, reptdate INT)")
+con.executemany("INSERT INTO processed VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                [(p['product'], p['branch'], p['curbal'], p['avgamt'], p['accytd'], 
+                  p['age'], p['purpose'], p['race'], p['custcode'], p['avgrnge'], 
+                  p['range'], p['reptdate']) for p in processed])
 
-except MemoryError as e:
-    print(f"ERROR: Out of memory - {e}")
-    print("Try running with more memory or split the input file")
-except Exception as e:
-    print(f"ERROR: {e}")
-    import traceback
-    traceback.print_exc()
+# ============================================================================
+# ALWSA: Products 204, 215 (Regular Savings)
+# ============================================================================
 
-print(f"\nCompleted. Output files in: {OUTPUT_DIR}")
+con.execute("""
+    CREATE TEMP TABLE alwsa AS
+    SELECT 
+        purpose, race, custcode, avgrnge, range deprange, product,
+        COUNT(*) noacct,
+        SUM(curbal) curbal,
+        SUM(accytd) accytd,
+        COUNT(CASE WHEN avgamt > 0 THEN 1 END) avgacct,
+        SUM(avgamt) avgamt,
+        reptdate
+    FROM processed
+    WHERE product IN (204, 215)
+    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
+""")
+
+con.execute(f"COPY alwsa TO '{OUTPUT_DIR}/awsa{reptmon:02d}.parquet'")
+print(f"Section 2A: ALWSA - {con.execute('SELECT SUM(noacct) FROM alwsa').fetchone()[0]} accounts")
+
+# ============================================================================
+# ALWSB: Product 207 (Islamic Basic Savings)
+# ============================================================================
+
+con.execute("""
+    CREATE TEMP TABLE alwsb AS
+    SELECT 
+        purpose, race, custcode, avgrnge, range deprange, product,
+        COUNT(*) noacct,
+        SUM(curbal) curbal,
+        SUM(accytd) accytd,
+        COUNT(CASE WHEN avgamt > 0 THEN 1 END) avgacct,
+        SUM(avgamt) avgamt,
+        reptdate
+    FROM processed
+    WHERE product = 207
+    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
+""")
+
+con.execute(f"COPY alwsb TO '{OUTPUT_DIR}/awsb{reptmon:02d}.parquet'")
+print(f"Section 2B: ALWSB - {con.execute('SELECT SUM(noacct) FROM alwsb').fetchone()[0]} accounts")
+
+# ============================================================================
+# ALWSC: Product 214 (Mudharabah by Age/Race)
+# ============================================================================
+
+con.execute("""
+    CREATE TEMP TABLE alwsc AS
+    SELECT 
+        product prodcd, range, race, age,
+        COUNT(*) noacct,
+        SUM(curbal) curbal,
+        SUM(accytd) accytd,
+        SUM(avgamt) avgamt,
+        reptdate
+    FROM processed
+    WHERE product = 214
+    GROUP BY product, range, race, age, reptdate
+""")
+
+con.execute(f"COPY alwsc TO '{OUTPUT_DIR}/awsc{reptmon:02d}.parquet'")
+print(f"Section 2C: ALWSC - {con.execute('SELECT SUM(noacct) FROM alwsc').fetchone()[0]} accounts")
+
+# ============================================================================
+# MUDHA: Product 214 (Mudharabah by Purpose/Race/Customer)
+# ============================================================================
+
+con.execute("""
+    CREATE TEMP TABLE mudha AS
+    SELECT 
+        purpose, race, custcode, avgrnge, range deprange, product,
+        COUNT(*) noacct,
+        SUM(curbal) curbal,
+        SUM(accytd) accytd,
+        SUM(avgamt) avgamt,
+        reptdate
+    FROM processed
+    WHERE product = 214
+    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
+""")
+
+con.execute(f"COPY mudha TO '{OUTPUT_DIR}/mudh{reptmon:02d}.parquet'")
+print(f"Section 2D: MUDHA - {con.execute('SELECT SUM(noacct) FROM mudha').fetchone()[0]} accounts")
+
+# ============================================================================
+# ALWCA: Products 93, 96 (Islamic Current Accounts)
+# ============================================================================
+
+con.execute("""
+    CREATE TEMP TABLE alwca AS
+    SELECT 
+        purpose, race, custcode, avgrnge, range deprange, product,
+        COUNT(*) noacct,
+        SUM(curbal) curbal,
+        SUM(accytd) accytd,
+        COUNT(CASE WHEN avgamt > 0 THEN 1 END) avgacct,
+        SUM(avgamt) avgamt,
+        reptdate
+    FROM processed
+    WHERE product IN (93, 96) AND curbal > 0
+    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
+""")
+
+con.execute(f"COPY alwca TO '{OUTPUT_DIR}/awca{reptmon:02d}.parquet'")
+print(f"Section 2E: ALWCA - {con.execute('SELECT SUM(noacct) FROM alwca').fetchone()[0]} accounts")
+
+# ============================================================================
+# ALWCB: Products 160,162,164,168,182,169 (Specific Purpose Current Accounts)
+# ============================================================================
+
+con.execute("""
+    CREATE TEMP TABLE alwcb AS
+    SELECT 
+        purpose, race, custcode, avgrnge, range deprange, product,
+        COUNT(*) noacct,
+        SUM(curbal) curbal,
+        SUM(accytd) accytd,
+        COUNT(CASE WHEN avgamt > 0 THEN 1 END) avgacct,
+        SUM(avgamt) avgamt,
+        reptdate
+    FROM processed
+    WHERE product IN (160, 162, 164, 168, 182, 169)
+      AND curbal > 0
+      AND purpose IN ('1', '2', '4')
+    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
+""")
+
+con.execute(f"COPY alwcb TO '{OUTPUT_DIR}/awcb{reptmon:02d}.parquet'")
+print(f"Section 2F: ALWCB - {con.execute('SELECT SUM(noacct) FROM alwcb').fetchone()[0]} accounts")
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
+print("\n" + "="*80)
+print("ISLAMIC BANKING STATISTICS SUMMARY")
+print("="*80)
+print(f"""
+Date: {rdate}
+
+Output Datasets:
+1. DYIBU{reptmon:02d}  - Daily Islamic Balance Summary
+   Fields: BRANCH, SAI, SAINO, MBS, MBSNO, CAI, CAINO, CA96, CAI96, CAIG, CAIGNO, CAIH, CAIHNO
+   
+2. AWSA{reptmon:02d}   - Products 204,215 (Regular Savings)
+   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+   
+3. AWSB{reptmon:02d}   - Product 207 (Islamic Basic Savings)
+   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+   
+4. AWSC{reptmon:02d}   - Product 214 (Mudharabah by Age/Race)
+   Dimensions: PRODCD Ã— RANGE Ã— RACE Ã— AGE
+   
+5. MUDH{reptmon:02d}   - Product 214 (Mudharabah by Purpose)
+   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+   
+6. AWCA{reptmon:02d}   - Products 93,96 (Islamic Current Accounts)
+   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+   
+7. AWCB{reptmon:02d}   - Products 160,162,164,168,182,169 (Purpose 1,2,4 only)
+   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+
+Product Categories:
+- Savings: 204 (Regular), 207 (Basic), 214 (Mudharabah), 215 (Special)
+- Current: 93,96 (Basic Islamic), 160-169,182 (Specific Purpose)
+
+Metrics per Dataset:
+- NOACCT: Number of accounts
+- CURBAL: Total current balance
+- ACCYTD: Accounts opened year-to-date
+- AVGACCT: Count of accounts with average balance
+- AVGAMT: Total average amount
+""")
+
+con.close()
+print(f"\nCompleted: {OUTPUT_DIR}")
