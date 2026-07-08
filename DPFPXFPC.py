@@ -164,22 +164,42 @@ def get_week_number(reptdate):
 
 
 # ============================================================================
+# FORMAT AMOUNT
+# ============================================================================
+
+def format_amount(amount):
+    """
+    Format amount to match SAS output.
+    """
+    if amount is None or amount == 0:
+        return "0"
+    
+    # Format with 2 decimal places
+    return "{:.2f}".format(amount)
+
+
+# ============================================================================
 # MAIN PROCESSING
 # ============================================================================
 
-def main(reptdate=None):
+def main():
     """Main execution function - matches SAS DATA NOTE step for Islamic products"""
     print("\n" + "=" * 70)
     print("EIIMABTL - ISLAMIC LOAN MATURITY PROFILE PROCESSOR")
     print("=" * 70)
 
     try:
-        # Step 1: Get report date
-        if reptdate is None:
-            reptdate = date(2025, 8, 8)
-            print("\nTESTING MODE: Using fixed date: {}".format(reptdate))
-        elif isinstance(reptdate, datetime):
-            reptdate = reptdate.date()
+        # ====================================================================
+        # PRODUCTION: Get report date as today's date minus 1 day
+        # ====================================================================
+        reptdate = date.today() - timedelta(days=1)
+        
+        # ====================================================================
+        # For specific date testing, uncomment below and comment above
+        # ====================================================================
+        # reptdate = date(2025, 8, 8)  # Example: August 8, 2025
+        
+        print("\nReport Date (Today - 1 day): {}".format(reptdate.strftime('%d/%m/%Y')))
         
         # Derive macro variables
         nowk = get_week_number(reptdate)
@@ -194,7 +214,6 @@ def main(reptdate=None):
         rpday = reptdate.day
         rpdays = get_days_in_month(rpyr, rpmth)
         
-        print("\nReport Date: {}".format(reptdate.strftime('%d/%m/%Y')))
         print("Week Number: {}".format(nowk))
         print("Report Month: {}".format(reptmon))
         print("Report Year: {}".format(reptyear))
@@ -409,7 +428,9 @@ def main(reptdate=None):
             
             # Write data rows: BNMCODE;AMOUNT;
             for row in df_summary.iter_rows(named=True):
-                f.write("{};{:.2f};\n".format(row['BNMCODE'], row['AMOUNT']))
+                # Format amount to match SAS output
+                amount = float(row['AMOUNT'])
+                f.write("{};{};\n".format(row['BNMCODE'], format_amount(amount)))
         
         print("\n" + "=" * 70)
         print("PROCESSING COMPLETED SUCCESSFULLY")
@@ -436,26 +457,5 @@ def main(reptdate=None):
 # COMMAND LINE INTERFACE
 # ============================================================================
 if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(
-        description='EIIMABTL - Islamic Loan Maturity Profile Processor',
-        epilog='Example: python EIIMABTL.py 2025-08-08'
-    )
-    parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format')
-    
-    args = parser.parse_args()
-    
-    reptdate = None
-    if args.date:
-        try:
-            reptdate = datetime.strptime(args.date, '%Y-%m-%d').date()
-            print("Using command line date: {}".format(reptdate))
-        except ValueError:
-            print("Error: Invalid date format. Use YYYY-MM-DD")
-            sys.exit(1)
-    else:
-        print("No date provided - using August 8, 2025 for testing")
-        reptdate = date(2026, 6, 8)
-    
-    sys.exit(main(reptdate))
+    # No command line arguments needed - uses today's date minus 1 day
+    sys.exit(main())
