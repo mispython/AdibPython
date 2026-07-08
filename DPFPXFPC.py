@@ -10,7 +10,7 @@ import pyreadstat
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import saspy
 import os
 
@@ -26,14 +26,14 @@ AGEBELOW = 11
 # Initialize SAS connection for output
 sas = saspy.SASsession()
 
-# Read reptile date from SAS dataset
-reptdate_df, meta = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/reptdate.sas7bdat')
-reptdate = reptdate_df['reptdate'].iloc[0]
+# Hardcode reptdate as yesterday's date
+reptdate = datetime.now() - timedelta(days=1)
 reptyear, reptmon, reptday = reptdate.year, reptdate.month, reptdate.day
 rdate = reptdate.strftime('%d/%m/%Y')
 zdate = int(reptdate.strftime('%y%m%d'))
 
 print(f"Islamic Banking Statistics - {rdate}")
+print(f"Processing data for date: {reptdate.strftime('%Y-%m-%d')}")
 
 # ============================================================================
 # SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)
@@ -333,7 +333,8 @@ print("\n" + "="*80)
 print("ISLAMIC BANKING STATISTICS SUMMARY")
 print("="*80)
 print(f"""
-Date: {rdate}
+Date: {rdate} (Yesterday)
+Processing Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 Output Datasets:
 1. DYIBU{reptmon:02d}  - Daily Islamic Balance Summary (SAS + Parquet)
@@ -378,3 +379,4 @@ sas.endsas()
 
 print(f"\nCompleted: {OUTPUT_DIR}")
 print("Both SAS7BDAT and Parquet formats generated.")
+print(f"Data processed for date: {reptdate.strftime('%Y-%m-%d')}")
