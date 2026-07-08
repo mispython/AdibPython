@@ -2,11 +2,17 @@
 """
 EIBDISLM - Islamic Banking Statistics
 Processes daily Islamic account balances and monthly summaries
+Supports SAS7BDAT input/output and Parquet output
 """
 
 import duckdb
+import pyreadstat
+import pandas as pd
+import numpy as np
 from pathlib import Path
 from datetime import datetime
+import saspy
+import os
 
 BASE_DIR = Path('.')
 INPUT_DIR = BASE_DIR / '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDISLM'
@@ -17,9 +23,12 @@ AGELIMIT = 12
 MAXAGE = 18
 AGEBELOW = 11
 
-con = duckdb.connect()
+# Initialize SAS connection for output
+sas = saspy.SASsession()
 
-reptdate = con.execute(f"SELECT reptdate FROM read_parquet('{INPUT_DIR}/deposit/reptdate.parquet')").fetchone()[0]
+# Read reptile date from SAS dataset
+reptdate_df, meta = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/reptdate.sas7bdat')
+reptdate = reptdate_df['reptdate'].iloc[0]
 reptyear, reptmon, reptday = reptdate.year, reptdate.month, reptdate.day
 rdate = reptdate.strftime('%d/%m/%Y')
 zdate = int(reptdate.strftime('%y%m%d'))
@@ -30,68 +39,88 @@ print(f"Islamic Banking Statistics - {rdate}")
 # SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)
 # ============================================================================
 
-con.execute(f"""
-    CREATE TEMP TABLE dyibu_raw AS
-    SELECT branch, product, curbal, {zdate} reptdate
-    FROM read_parquet('{INPUT_DIR}/deposit/current.parquet')
-    WHERE openind NOT IN ('B','C','P')
-    UNION ALL
-    SELECT branch, product, curbal, {zdate} reptdate
-    FROM read_parquet('{INPUT_DIR}/deposit/saving.parquet')
-    WHERE openind NOT IN ('B','C','P')
-""")
+# Read current and saving datasets
+current_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/current.sas7bdat')
+saving_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/saving.sas7bdat')
 
-con.execute("""
-    CREATE TEMP TABLE dyibu AS
-    SELECT 
-        branch,
-        reptdate,
-        SUM(CASE WHEN product IN (204,207,214,215) THEN curbal ELSE 0 END) sai,
-        SUM(CASE WHEN product IN (204,207,214,215) THEN 1 ELSE 0 END) saino,
-        SUM(CASE WHEN product = 214 THEN curbal ELSE 0 END) mbs,
-        SUM(CASE WHEN product = 214 THEN 1 ELSE 0 END) mbsno,
-        SUM(CASE WHEN product IN (60,61,63,64,70,71,93,94,160,161,162,163,164,166,169,66,67,168,167,182,183,184,73) 
-                 AND curbal > 0 AND product NOT IN (96,97,61,161,63,163) THEN curbal ELSE 0 END) cai,
-        SUM(CASE WHEN product IN (60,61,63,64,70,71,93,94,160,161,162,163,164,166,169,66,67,168,167,182,183,184,73) 
-                 AND curbal > 0 AND product NOT IN (96,97,61,161,63,163) THEN 1 ELSE 0 END) caino,
-        SUM(CASE WHEN product IN (96,97) AND curbal > 0 THEN curbal ELSE 0 END) ca96,
-        SUM(CASE WHEN product IN (96,97) AND curbal > 0 THEN 1 ELSE 0 END) cai96,
-        SUM(CASE WHEN product IN (61,161) AND curbal > 0 THEN curbal ELSE 0 END) caig,
-        SUM(CASE WHEN product IN (61,161) AND curbal > 0 THEN 1 ELSE 0 END) caigno,
-        SUM(CASE WHEN product IN (63,163) AND curbal > 0 THEN curbal ELSE 0 END) caih,
-        SUM(CASE WHEN product IN (63,163) AND curbal > 0 THEN 1 ELSE 0 END) caihno
-    FROM dyibu_raw
-    GROUP BY branch, reptdate
-""")
+# Filter and combine datasets
+current_filtered = current_df[~current_df['openind'].isin(['B','C','P'])][['branch', 'product', 'curbal']].copy()
+saving_filtered = saving_df[~saving_df['openind'].isin(['B','C','P'])][['branch', 'product', 'curbal']].copy()
 
-con.execute(f"COPY dyibu TO '{OUTPUT_DIR}/dyibu{reptmon:02d}.parquet'")
-print(f"Section 1: DYIBU - {con.execute('SELECT COUNT(*) FROM dyibu').fetchone()[0]} branches")
+current_filtered['reptdate'] = zdate
+saving_filtered['reptdate'] = zdate
+
+dyibu_raw = pd.concat([current_filtered, saving_filtered], ignore_index=True)
+
+# Create product category flags
+dyibu_raw['sai'] = np.where(dyibu_raw['product'].isin([204,207,214,215]), dyibu_raw['curbal'], 0)
+dyibu_raw['saino'] = np.where(dyibu_raw['product'].isin([204,207,214,215]), 1, 0)
+dyibu_raw['mbs'] = np.where(dyibu_raw['product'] == 214, dyibu_raw['curbal'], 0)
+dyibu_raw['mbsno'] = np.where(dyibu_raw['product'] == 214, 1, 0)
+
+# CAI products (excluding certain products)
+cai_products = [60,61,63,64,70,71,93,94,160,161,162,163,164,166,169,66,67,168,167,182,183,184,73]
+exclude_products = [96,97,61,161,63,163]
+cai_condition = dyibu_raw['product'].isin(cai_products) & (dyibu_raw['curbal'] > 0) & ~dyibu_raw['product'].isin(exclude_products)
+dyibu_raw['cai'] = np.where(cai_condition, dyibu_raw['curbal'], 0)
+dyibu_raw['caino'] = np.where(cai_condition, 1, 0)
+
+dyibu_raw['ca96'] = np.where(dyibu_raw['product'].isin([96,97]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
+dyibu_raw['cai96'] = np.where(dyibu_raw['product'].isin([96,97]) & (dyibu_raw['curbal'] > 0), 1, 0)
+dyibu_raw['caig'] = np.where(dyibu_raw['product'].isin([61,161]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
+dyibu_raw['caigno'] = np.where(dyibu_raw['product'].isin([61,161]) & (dyibu_raw['curbal'] > 0), 1, 0)
+dyibu_raw['caih'] = np.where(dyibu_raw['product'].isin([63,163]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
+dyibu_raw['caihno'] = np.where(dyibu_raw['product'].isin([63,163]) & (dyibu_raw['curbal'] > 0), 1, 0)
+
+# Aggregate by branch
+dyibu = dyibu_raw.groupby(['branch', 'reptdate']).agg({
+    'sai': 'sum', 'saino': 'sum', 'mbs': 'sum', 'mbsno': 'sum',
+    'cai': 'sum', 'caino': 'sum', 'ca96': 'sum', 'cai96': 'sum',
+    'caig': 'sum', 'caigno': 'sum', 'caih': 'sum', 'caihno': 'sum'
+}).reset_index()
+
+# Save DYIBU as SAS and Parquet
+dyibu_sas_path = f'{OUTPUT_DIR}/dyibu{reptmon:02d}'
+sas.sasdata(dyibu, dyibu_sas_path)
+dyibu.to_parquet(f'{OUTPUT_DIR}/dyibu{reptmon:02d}.parquet')
+print(f"Section 1: DYIBU - {len(dyibu)} branches")
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
 def calculate_age(bdate_str, reptdate, reptmon, reptday, reptyear):
-    if not bdate_str or bdate_str == '0':
+    if pd.isna(bdate_str) or bdate_str == 0 or str(bdate_str).strip() == '' or str(bdate_str) == '0':
         return 0
     try:
-        bdate = datetime.strptime(str(bdate_str)[:8], '%m%d%Y')
-        age = reptyear - bdate.year
-        if age == AGELIMIT:
-            if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
+        bdate_str = str(bdate_str).strip()
+        # Handle different date formats
+        if len(bdate_str) >= 8:
+            # Try to parse as MMDDYYYY or YYYYMMDD
+            try:
+                bdate = datetime.strptime(bdate_str[:8], '%m%d%Y')
+            except:
+                try:
+                    bdate = datetime.strptime(bdate_str[:8], '%Y%m%d')
+                except:
+                    return 0
+            age = reptyear - bdate.year
+            if age == AGELIMIT:
+                if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
+                    age = AGEBELOW
+            elif age == MAXAGE:
+                if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
+                    age = AGELIMIT
+            elif age > MAXAGE:
+                age = MAXAGE
+            elif age < AGELIMIT:
                 age = AGEBELOW
-        elif age == MAXAGE:
-            if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
+            else:
                 age = AGELIMIT
-        elif age > MAXAGE:
-            age = MAXAGE
-        elif age < AGELIMIT:
-            age = AGEBELOW
-        else:
-            age = AGELIMIT
-        return age
+            return age
     except:
         return 0
+    return 0
 
 def get_isa_range(curbal):
     if curbal < 501: return 500
@@ -118,193 +147,183 @@ def get_range_bucket(curbal, product):
 # SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS
 # ============================================================================
 
-con.execute(f"""
-    CREATE TEMP TABLE accounts AS
-    SELECT branch, product, curbal, avgamt, opendt, closedt, bdate,
-           custcode, purpose, race, openind
-    FROM read_parquet('{INPUT_DIR}/deposit/saving.parquet')
-    WHERE openind NOT IN ('B','C','P') AND product NOT IN (297,298)
-    UNION ALL
-    SELECT branch, product, curbal, avgamt, opendt, closedt, bdate,
-           custcode, purpose, race, openind
-    FROM read_parquet('{INPUT_DIR}/deposit/current.parquet')
-    WHERE openind NOT IN ('B','C','P') AND product NOT IN (297,298)
-""")
+# Read and filter datasets
+saving_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/saving.sas7bdat')
+current_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/current.sas7bdat')
 
-accounts = con.execute("SELECT * FROM accounts").fetchall()
-processed = []
+saving_filtered = saving_df[(~saving_df['openind'].isin(['B','C','P'])) & (~saving_df['product'].isin([297,298]))]
+current_filtered = current_df[(~current_df['openind'].isin(['B','C','P'])) & (~current_df['product'].isin([297,298]))]
 
-for row in accounts:
-    branch, product, curbal, avgamt, opendt, closedt, bdate, custcode, purpose, race, openind = row
+# Combine datasets
+accounts_df = pd.concat([saving_filtered, current_filtered], ignore_index=True)
+
+# Process each account
+processed_data = []
+
+for idx, row in accounts_df.iterrows():
+    branch = row['branch']
+    product = row['product']
+    curbal = row['curbal'] if pd.notna(row['curbal']) else 0
+    avgamt = row['avgamt'] if pd.notna(row['avgamt']) else 0
+    opendt = row['opendt'] if pd.notna(row['opendt']) else 0
+    closedt = row['closedt'] if pd.notna(row['closedt']) else 0
+    bdate = row['bdate'] if pd.notna(row['bdate']) else 0
+    custcode = row['custcode'] if pd.notna(row['custcode']) else 0
+    purpose = row['purpose'] if pd.notna(row['purpose']) and str(row['purpose']).strip() != '' else '0'
+    race = row['race'] if pd.notna(row['race']) and str(row['race']).strip() != '' else '0'
+    openind = row['openind']
     
+    # Calculate accytd
     accytd = 0
-    if opendt and opendt != 0 and (not closedt or closedt == 0):
+    if opendt != 0 and (closedt == 0 or pd.isna(closedt)):
         try:
-            open_year = int(str(opendt)[:4]) if len(str(opendt)) >= 8 else 0
-            if open_year == reptyear:
-                accytd = 1
+            opendt_str = str(int(opendt))
+            if len(opendt_str) >= 4:
+                open_year = int(opendt_str[:4])
+                if open_year == reptyear:
+                    accytd = 1
         except:
             pass
     
-    age = calculate_age(str(bdate) if bdate else '0', reptdate, reptmon, reptday, reptyear)
-    purpose = purpose if purpose and purpose != ' ' else '0'
-    race = race if race and race != ' ' else '0'
+    # Calculate age
+    age = calculate_age(bdate, reptdate, reptmon, reptday, reptyear)
     
-    avgrnge = get_range_bucket(avgamt if avgamt else 0, 0)
-    range_val = get_range_bucket(curbal if curbal else 0, product)
+    # Get ranges
+    avgrnge = get_range_bucket(avgamt, 0)
+    range_val = get_range_bucket(curbal, product)
     
-    processed.append({
+    processed_data.append({
         'product': product,
         'branch': branch,
-        'curbal': curbal if curbal else 0,
-        'avgamt': avgamt if avgamt else 0,
+        'curbal': curbal,
+        'avgamt': avgamt,
         'accytd': accytd,
         'age': age,
-        'purpose': purpose,
-        'race': race,
+        'purpose': str(purpose),
+        'race': str(race),
         'custcode': custcode,
         'avgrnge': avgrnge,
         'range': range_val,
         'reptdate': zdate
     })
 
-con.execute("CREATE TEMP TABLE processed (product INT, branch INT, curbal DOUBLE, avgamt DOUBLE, accytd INT, age INT, purpose VARCHAR, race VARCHAR, custcode INT, avgrnge VARCHAR, range VARCHAR, reptdate INT)")
-con.executemany("INSERT INTO processed VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
-                [(p['product'], p['branch'], p['curbal'], p['avgamt'], p['accytd'], 
-                  p['age'], p['purpose'], p['race'], p['custcode'], p['avgrnge'], 
-                  p['range'], p['reptdate']) for p in processed])
+processed_df = pd.DataFrame(processed_data)
 
 # ============================================================================
 # ALWSA: Products 204, 215 (Regular Savings)
 # ============================================================================
 
-con.execute("""
-    CREATE TEMP TABLE alwsa AS
-    SELECT 
-        purpose, race, custcode, avgrnge, range deprange, product,
-        COUNT(*) noacct,
-        SUM(curbal) curbal,
-        SUM(accytd) accytd,
-        COUNT(CASE WHEN avgamt > 0 THEN 1 END) avgacct,
-        SUM(avgamt) avgamt,
-        reptdate
-    FROM processed
-    WHERE product IN (204, 215)
-    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
-""")
+alwsa = processed_df[processed_df['product'].isin([204, 215])].groupby(
+    ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
+).agg(
+    noacct=('product', 'count'),
+    curbal=('curbal', 'sum'),
+    accytd=('accytd', 'sum'),
+    avgacct=('avgamt', lambda x: (x > 0).sum()),
+    avgamt=('avgamt', 'sum')
+).reset_index()
 
-con.execute(f"COPY alwsa TO '{OUTPUT_DIR}/awsa{reptmon:02d}.parquet'")
-print(f"Section 2A: ALWSA - {con.execute('SELECT SUM(noacct) FROM alwsa').fetchone()[0]} accounts")
+alwsa_sas_path = f'{OUTPUT_DIR}/awsa{reptmon:02d}'
+sas.sasdata(alwsa, alwsa_sas_path)
+alwsa.to_parquet(f'{OUTPUT_DIR}/awsa{reptmon:02d}.parquet')
+print(f"Section 2A: ALWSA - {alwsa['noacct'].sum()} accounts")
 
 # ============================================================================
 # ALWSB: Product 207 (Islamic Basic Savings)
 # ============================================================================
 
-con.execute("""
-    CREATE TEMP TABLE alwsb AS
-    SELECT 
-        purpose, race, custcode, avgrnge, range deprange, product,
-        COUNT(*) noacct,
-        SUM(curbal) curbal,
-        SUM(accytd) accytd,
-        COUNT(CASE WHEN avgamt > 0 THEN 1 END) avgacct,
-        SUM(avgamt) avgamt,
-        reptdate
-    FROM processed
-    WHERE product = 207
-    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
-""")
+alwsb = processed_df[processed_df['product'] == 207].groupby(
+    ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
+).agg(
+    noacct=('product', 'count'),
+    curbal=('curbal', 'sum'),
+    accytd=('accytd', 'sum'),
+    avgacct=('avgamt', lambda x: (x > 0).sum()),
+    avgamt=('avgamt', 'sum')
+).reset_index()
 
-con.execute(f"COPY alwsb TO '{OUTPUT_DIR}/awsb{reptmon:02d}.parquet'")
-print(f"Section 2B: ALWSB - {con.execute('SELECT SUM(noacct) FROM alwsb').fetchone()[0]} accounts")
+alwsb_sas_path = f'{OUTPUT_DIR}/awsb{reptmon:02d}'
+sas.sasdata(alwsb, alwsb_sas_path)
+alwsb.to_parquet(f'{OUTPUT_DIR}/awsb{reptmon:02d}.parquet')
+print(f"Section 2B: ALWSB - {alwsb['noacct'].sum()} accounts")
 
 # ============================================================================
 # ALWSC: Product 214 (Mudharabah by Age/Race)
 # ============================================================================
 
-con.execute("""
-    CREATE TEMP TABLE alwsc AS
-    SELECT 
-        product prodcd, range, race, age,
-        COUNT(*) noacct,
-        SUM(curbal) curbal,
-        SUM(accytd) accytd,
-        SUM(avgamt) avgamt,
-        reptdate
-    FROM processed
-    WHERE product = 214
-    GROUP BY product, range, race, age, reptdate
-""")
+alwsc = processed_df[processed_df['product'] == 214].groupby(
+    ['product', 'range', 'race', 'age', 'reptdate']
+).agg(
+    noacct=('product', 'count'),
+    curbal=('curbal', 'sum'),
+    accytd=('accytd', 'sum'),
+    avgamt=('avgamt', 'sum')
+).reset_index()
 
-con.execute(f"COPY alwsc TO '{OUTPUT_DIR}/awsc{reptmon:02d}.parquet'")
-print(f"Section 2C: ALWSC - {con.execute('SELECT SUM(noacct) FROM alwsc').fetchone()[0]} accounts")
+alwsc_sas_path = f'{OUTPUT_DIR}/awsc{reptmon:02d}'
+sas.sasdata(alwsc, alwsc_sas_path)
+alwsc.to_parquet(f'{OUTPUT_DIR}/awsc{reptmon:02d}.parquet')
+print(f"Section 2C: ALWSC - {alwsc['noacct'].sum()} accounts")
 
 # ============================================================================
 # MUDHA: Product 214 (Mudharabah by Purpose/Race/Customer)
 # ============================================================================
 
-con.execute("""
-    CREATE TEMP TABLE mudha AS
-    SELECT 
-        purpose, race, custcode, avgrnge, range deprange, product,
-        COUNT(*) noacct,
-        SUM(curbal) curbal,
-        SUM(accytd) accytd,
-        SUM(avgamt) avgamt,
-        reptdate
-    FROM processed
-    WHERE product = 214
-    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
-""")
+mudha = processed_df[processed_df['product'] == 214].groupby(
+    ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
+).agg(
+    noacct=('product', 'count'),
+    curbal=('curbal', 'sum'),
+    accytd=('accytd', 'sum'),
+    avgamt=('avgamt', 'sum')
+).reset_index()
 
-con.execute(f"COPY mudha TO '{OUTPUT_DIR}/mudh{reptmon:02d}.parquet'")
-print(f"Section 2D: MUDHA - {con.execute('SELECT SUM(noacct) FROM mudha').fetchone()[0]} accounts")
+mudha_sas_path = f'{OUTPUT_DIR}/mudh{reptmon:02d}'
+sas.sasdata(mudha, mudha_sas_path)
+mudha.to_parquet(f'{OUTPUT_DIR}/mudh{reptmon:02d}.parquet')
+print(f"Section 2D: MUDHA - {mudha['noacct'].sum()} accounts")
 
 # ============================================================================
 # ALWCA: Products 93, 96 (Islamic Current Accounts)
 # ============================================================================
 
-con.execute("""
-    CREATE TEMP TABLE alwca AS
-    SELECT 
-        purpose, race, custcode, avgrnge, range deprange, product,
-        COUNT(*) noacct,
-        SUM(curbal) curbal,
-        SUM(accytd) accytd,
-        COUNT(CASE WHEN avgamt > 0 THEN 1 END) avgacct,
-        SUM(avgamt) avgamt,
-        reptdate
-    FROM processed
-    WHERE product IN (93, 96) AND curbal > 0
-    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
-""")
+alwca = processed_df[(processed_df['product'].isin([93, 96])) & (processed_df['curbal'] > 0)].groupby(
+    ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
+).agg(
+    noacct=('product', 'count'),
+    curbal=('curbal', 'sum'),
+    accytd=('accytd', 'sum'),
+    avgacct=('avgamt', lambda x: (x > 0).sum()),
+    avgamt=('avgamt', 'sum')
+).reset_index()
 
-con.execute(f"COPY alwca TO '{OUTPUT_DIR}/awca{reptmon:02d}.parquet'")
-print(f"Section 2E: ALWCA - {con.execute('SELECT SUM(noacct) FROM alwca').fetchone()[0]} accounts")
+alwca_sas_path = f'{OUTPUT_DIR}/awca{reptmon:02d}'
+sas.sasdata(alwca, alwca_sas_path)
+alwca.to_parquet(f'{OUTPUT_DIR}/awca{reptmon:02d}.parquet')
+print(f"Section 2E: ALWCA - {alwca['noacct'].sum()} accounts")
 
 # ============================================================================
 # ALWCB: Products 160,162,164,168,182,169 (Specific Purpose Current Accounts)
 # ============================================================================
 
-con.execute("""
-    CREATE TEMP TABLE alwcb AS
-    SELECT 
-        purpose, race, custcode, avgrnge, range deprange, product,
-        COUNT(*) noacct,
-        SUM(curbal) curbal,
-        SUM(accytd) accytd,
-        COUNT(CASE WHEN avgamt > 0 THEN 1 END) avgacct,
-        SUM(avgamt) avgamt,
-        reptdate
-    FROM processed
-    WHERE product IN (160, 162, 164, 168, 182, 169)
-      AND curbal > 0
-      AND purpose IN ('1', '2', '4')
-    GROUP BY purpose, race, custcode, avgrnge, range, product, reptdate
-""")
+alwcb = processed_df[
+    (processed_df['product'].isin([160, 162, 164, 168, 182, 169])) & 
+    (processed_df['curbal'] > 0) & 
+    (processed_df['purpose'].isin(['1', '2', '4']))
+].groupby(
+    ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
+).agg(
+    noacct=('product', 'count'),
+    curbal=('curbal', 'sum'),
+    accytd=('accytd', 'sum'),
+    avgacct=('avgamt', lambda x: (x > 0).sum()),
+    avgamt=('avgamt', 'sum')
+).reset_index()
 
-con.execute(f"COPY alwcb TO '{OUTPUT_DIR}/awcb{reptmon:02d}.parquet'")
-print(f"Section 2F: ALWCB - {con.execute('SELECT SUM(noacct) FROM alwcb').fetchone()[0]} accounts")
+alwcb_sas_path = f'{OUTPUT_DIR}/awcb{reptmon:02d}'
+sas.sasdata(alwcb, alwcb_sas_path)
+alwcb.to_parquet(f'{OUTPUT_DIR}/awcb{reptmon:02d}.parquet')
+print(f"Section 2F: ALWCB - {alwcb['noacct'].sum()} accounts")
 
 # ============================================================================
 # SUMMARY
@@ -317,26 +336,26 @@ print(f"""
 Date: {rdate}
 
 Output Datasets:
-1. DYIBU{reptmon:02d}  - Daily Islamic Balance Summary
+1. DYIBU{reptmon:02d}  - Daily Islamic Balance Summary (SAS + Parquet)
    Fields: BRANCH, SAI, SAINO, MBS, MBSNO, CAI, CAINO, CA96, CAI96, CAIG, CAIGNO, CAIH, CAIHNO
    
-2. AWSA{reptmon:02d}   - Products 204,215 (Regular Savings)
-   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+2. AWSA{reptmon:02d}   - Products 204,215 (Regular Savings) (SAS + Parquet)
+   Dimensions: PURPOSE × RACE × CUSTCD × AVGRNGE × DEPRANGE × PRODUCT
    
-3. AWSB{reptmon:02d}   - Product 207 (Islamic Basic Savings)
-   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+3. AWSB{reptmon:02d}   - Product 207 (Islamic Basic Savings) (SAS + Parquet)
+   Dimensions: PURPOSE × RACE × CUSTCD × AVGRNGE × DEPRANGE × PRODUCT
    
-4. AWSC{reptmon:02d}   - Product 214 (Mudharabah by Age/Race)
-   Dimensions: PRODCD Ã— RANGE Ã— RACE Ã— AGE
+4. AWSC{reptmon:02d}   - Product 214 (Mudharabah by Age/Race) (SAS + Parquet)
+   Dimensions: PRODCD × RANGE × RACE × AGE
    
-5. MUDH{reptmon:02d}   - Product 214 (Mudharabah by Purpose)
-   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+5. MUDH{reptmon:02d}   - Product 214 (Mudharabah by Purpose) (SAS + Parquet)
+   Dimensions: PURPOSE × RACE × CUSTCD × AVGRNGE × DEPRANGE × PRODUCT
    
-6. AWCA{reptmon:02d}   - Products 93,96 (Islamic Current Accounts)
-   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+6. AWCA{reptmon:02d}   - Products 93,96 (Islamic Current Accounts) (SAS + Parquet)
+   Dimensions: PURPOSE × RACE × CUSTCD × AVGRNGE × DEPRANGE × PRODUCT
    
-7. AWCB{reptmon:02d}   - Products 160,162,164,168,182,169 (Purpose 1,2,4 only)
-   Dimensions: PURPOSE Ã— RACE Ã— CUSTCD Ã— AVGRNGE Ã— DEPRANGE Ã— PRODUCT
+7. AWCB{reptmon:02d}   - Products 160,162,164,168,182,169 (Purpose 1,2,4 only) (SAS + Parquet)
+   Dimensions: PURPOSE × RACE × CUSTCD × AVGRNGE × DEPRANGE × PRODUCT
 
 Product Categories:
 - Savings: 204 (Regular), 207 (Basic), 214 (Mudharabah), 215 (Special)
@@ -348,7 +367,14 @@ Metrics per Dataset:
 - ACCYTD: Accounts opened year-to-date
 - AVGACCT: Count of accounts with average balance
 - AVGAMT: Total average amount
+
+Output Formats:
+- SAS7BDAT files in: {OUTPUT_DIR}
+- Parquet files in: {OUTPUT_DIR}
 """)
 
-con.close()
+# Close SAS connection
+sas.endsas()
+
 print(f"\nCompleted: {OUTPUT_DIR}")
+print("Both SAS7BDAT and Parquet formats generated.")
