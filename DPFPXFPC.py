@@ -1,567 +1,205 @@
-#!/usr/bin/env python3
-"""
-EIBDISLM - Islamic Banking Statistics
-Processes daily Islamic account balances and monthly summaries
-Supports SAS7BDAT input/output and Parquet output
-"""
+Islamic Banking Statistics - 07/07/2026
+Processing data for date: 2026-07-07
 
-import duckdb
-import pyreadstat
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from datetime import datetime, timedelta
-import os
-import sys
-import gc
-import warnings
-warnings.filterwarnings('ignore')
+================================================================================
+INSPECTING INPUT DATASETS
+================================================================================
 
-BASE_DIR = Path('.')
-INPUT_DIR = BASE_DIR / '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDISLM'
-OUTPUT_DIR = BASE_DIR / '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+SAVING dataset columns (first 20):
+  BANKNO, FMTCODE, BRANCH, ACCTNO, NAME, TAXNO, DEBIT, CREDIT, CLOSEDT, REOPENDT, CUSTCODE, ORGCODE, ORGTYPE, INTYTD, FEEPD, PURPOSE, SECTOR, USER2, USER3, RISKCODE
 
-AGELIMIT = 12
-MAXAGE = 18
-AGEBELOW = 11
+CURRENT dataset columns (first 20):
+  FMTCODE, BRANCH, ACCTNO, NAME, TAXNO, DEBIT, CREDIT, CLOSEDT, REOPENDT, CUSTCODE, ODPLAN, RATE1, RATE2, RATE3, RATE4, RATE5, TODRATE, FLATRATE, BASERATE, ODSTAT
 
-# Hardcode reptdate as yesterday's date
-reptdate = datetime.now() - timedelta(days=1)
-reptyear, reptmon, reptday = reptdate.year, reptdate.month, reptdate.day
-rdate = reptdate.strftime('%d/%m/%Y')
-zdate = int(reptdate.strftime('%y%m%d'))
+================================================================================
+SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)
+================================================================================
+Loaded CURRENT: 162640 rows, 147 columns
+Loaded SAVING: 2298576 rows, 88 columns
 
-print(f"Islamic Banking Statistics - {rdate}")
-print(f"Processing data for date: {reptdate.strftime('%Y-%m-%d')}")
+Using columns:
+  BRANCH: BRANCH
+  PRODUCT: PRODUCT
+  CURBAL: CURBAL
+  OPENIND: OPENIND
+Combined raw data: 2394211 rows
 
-# ============================================================================
-# FUNCTION TO SAVE SAS DATASET USING CORRECT SASKERNEL METHOD
-# ============================================================================
+Saving dyibu07...
+  ✓ Saved Parquet file: dyibu07.parquet
+  Creating SAS dataset: dyibu07
+SAS Connection established. Subprocess id is 203717
 
-def output_sas_dataset(df, dataset_name, output_dir):
-    """Output dataframe as SAS dataset using saspy"""
-    try:
-        print(f"  Creating SAS dataset: {dataset_name}")
-        import saspy
-        sas = saspy.SASsession(cfgname='default')
-        
-        # Convert column names to uppercase for SAS compatibility
-        df_sas = df.copy()
-        df_sas.columns = df_sas.columns.str.upper()
-        
-        # Convert numeric columns to appropriate types for SAS
-        for col in df_sas.columns:
-            if df_sas[col].dtype == 'object':
-                df_sas[col] = df_sas[col].astype(str)
-            elif df_sas[col].dtype in ['float64', 'float32']:
-                df_sas[col] = df_sas[col].fillna(0)
-            elif df_sas[col].dtype in ['int64', 'int32']:
-                df_sas[col] = df_sas[col].fillna(0).astype(int)
-        
-        # Use dataframe2sasdata method (correct approach)
-        sas_df = sas.dataframe2sasdata(df_sas, table=dataset_name, libref='work')
-        
-        # Export to SAS
-        sas.saslib('outlib', path=str(output_dir), engine='base')
-        sas.submit(f"""
-            data outlib.{dataset_name};
-                set work.{dataset_name};
-            run;
-        """)
-        
-        print(f"  ✓ SAS dataset created: {dataset_name}.sas7bdat")
-        sas.endsas()
-        return True
-    except Exception as e:
-        print(f"  ✗ Error creating SAS dataset: {e}")
-        print("  Saving as CSV backup...")
-        try:
-            df.to_csv(f'{output_dir}/{dataset_name}.csv', index=False)
-            print(f"  ✓ CSV file created: {dataset_name}.csv")
-        except:
-            pass
-        return False
 
-# ============================================================================
-# FUNCTION TO SAVE BOTH SAS AND PARQUET
-# ============================================================================
+80   
+81   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
+NOTE: Libref OUTLIB was successfully assigned as follows: 
+      Engine:        BASE 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
+82   
+  ✓ SAS dataset created: dyibu07.sas7bdat
+SAS Connection terminated. Subprocess id was 203717
+Section 1: DYIBU - 267 branches
 
-def save_datasets(df, dataset_name, output_dir):
-    """Save DataFrame as both SAS7BDAT and Parquet"""
-    print(f"\nSaving {dataset_name}...")
-    
-    # Save as Parquet
-    try:
-        df.to_parquet(f'{output_dir}/{dataset_name}.parquet')
-        print(f"  ✓ Saved Parquet file: {dataset_name}.parquet")
-    except Exception as e:
-        print(f"  ✗ Error saving Parquet {dataset_name}: {e}")
-    
-    # Save as SAS
-    output_sas_dataset(df, dataset_name, output_dir)
+================================================================================
+SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS
+================================================================================
+Total accounts to process: 2,394,211
+Processing accounts using vectorized operations...
+  Processed 500,000 accounts...
+  Processed 1,000,000 accounts...
+  Processed 1,500,000 accounts...
+  Processed 2,000,000 accounts...
+✓ Processed 2,394,211 accounts
 
-# ============================================================================
-# FUNCTION TO INSPECT DATASET COLUMNS
-# ============================================================================
+================================================================================
+GENERATING OUTPUT DATASETS (SAS7BDAT + PARQUET)
+================================================================================
 
-def inspect_dataset(filepath, dataset_name):
-    """Inspect and return column names of a SAS dataset"""
-    try:
-        df, meta = pyreadstat.read_sas7bdat(filepath)
-        print(f"\nColumns in {dataset_name} (first 20):")
-        cols = df.columns.tolist()
-        print(f"  {', '.join(cols[:20])}")
-        if len(cols) > 20:
-            print(f"  ... and {len(cols)-20} more columns")
-        print(f"  Total columns: {len(cols)}")
-        return df.columns.tolist()
-    except Exception as e:
-        print(f"Error reading {dataset_name}: {e}")
-        return []
+Generating awsa07 (Products 204,215 (Regular Savings))...
 
-# ============================================================================
-# INSPECT INPUT DATASETS
-# ============================================================================
+Saving awsa07...
+  ✓ Saved Parquet file: awsa07.parquet
+  Creating SAS dataset: awsa07
+SAS Connection established. Subprocess id is 204528
 
-print("\n" + "="*80)
-print("INSPECTING INPUT DATASETS")
-print("="*80)
 
-# Read a small sample to get column names
-try:
-    saving_sample, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/saving.sas7bdat')
-    current_sample, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/current.sas7bdat')
-    
-    print(f"\nSAVING dataset columns (first 20):")
-    saving_cols = saving_sample.columns.tolist()
-    print(f"  {', '.join(saving_cols[:20])}")
-    
-    print(f"\nCURRENT dataset columns (first 20):")
-    current_cols = current_sample.columns.tolist()
-    print(f"  {', '.join(current_cols[:20])}")
-    
-except Exception as e:
-    print(f"Error reading sample: {e}")
-    sys.exit(1)
+86   
+87   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
+NOTE: Libref OUTLIB was successfully assigned as follows: 
+      Engine:        BASE 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
+88   
+  ✓ SAS dataset created: awsa07.sas7bdat
+SAS Connection terminated. Subprocess id was 204528
+  awsa07 - 7,846 accounts, 389 groups
 
-# ============================================================================
-# SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)
-# ============================================================================
+Generating awsb07 (Product 207 (Islamic Basic Savings))...
 
-print("\n" + "="*80)
-print("SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)")
-print("="*80)
+Saving awsb07...
+  ✓ Saved Parquet file: awsb07.parquet
+  Creating SAS dataset: awsb07
+SAS Connection established. Subprocess id is 204569
 
-try:
-    current_df, current_meta = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/current.sas7bdat')
-    saving_df, saving_meta = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/saving.sas7bdat')
-    print(f"Loaded CURRENT: {len(current_df)} rows, {len(current_df.columns)} columns")
-    print(f"Loaded SAVING: {len(saving_df)} rows, {len(saving_df.columns)} columns")
-except Exception as e:
-    print(f"Error loading datasets: {e}")
-    sys.exit(1)
 
-# Determine column names
-branch_col = None
-for col in ['BRANCH', 'branch', 'Branch', 'BRANCH_NO', 'branch_no']:
-    if col in current_df.columns:
-        branch_col = col
-        break
+86   
+87   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
+NOTE: Libref OUTLIB was successfully assigned as follows: 
+      Engine:        BASE 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
+88   
+  ✓ SAS dataset created: awsb07.sas7bdat
+SAS Connection terminated. Subprocess id was 204569
+  awsb07 - 160 accounts, 27 groups
 
-product_col = None
-for col in ['PRODUCT', 'product', 'Product', 'PROD', 'prod']:
-    if col in current_df.columns:
-        product_col = col
-        break
+Generating awsc07 (Product 214 (Mudharabah by Age/Race))...
 
-curbal_col = None
-for col in ['CURBAL', 'curbal', 'CurBal', 'CURRENT_BAL', 'current_bal']:
-    if col in current_df.columns:
-        curbal_col = col
-        break
+Saving awsc07...
+  ✓ Saved Parquet file: awsc07.parquet
+  Creating SAS dataset: awsc07
+SAS Connection established. Subprocess id is 204594
 
-openind_col = None
-for col in ['OPENIND', 'openind', 'OPEN_IND', 'open_ind', 'OpenInd']:
-    if col in current_df.columns:
-        openind_col = col
-        break
 
-print(f"\nUsing columns:")
-print(f"  BRANCH: {branch_col}")
-print(f"  PRODUCT: {product_col}")
-print(f"  CURBAL: {curbal_col}")
-print(f"  OPENIND: {openind_col}")
+78   
+79   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
+NOTE: Libref OUTLIB was successfully assigned as follows: 
+      Engine:        BASE 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
+80   
+  ✓ SAS dataset created: awsc07.sas7bdat
+SAS Connection terminated. Subprocess id was 204594
+  awsc07 - 10 accounts, 7 groups
 
-if None in [branch_col, product_col, curbal_col]:
-    print(f"\nERROR: Could not find required columns")
-    print(f"Available columns in CURRENT: {current_df.columns.tolist()[:20]}")
-    sys.exit(1)
+Generating mudh07 (Product 214 (Mudharabah by Purpose))...
 
-# Filter out closed accounts
-if openind_col:
-    current_filtered = current_df[~current_df[openind_col].isin(['B','C','P'])][[branch_col, product_col, curbal_col]].copy()
-    saving_filtered = saving_df[~saving_df[openind_col].isin(['B','C','P'])][[branch_col, product_col, curbal_col]].copy()
-else:
-    current_filtered = current_df[[branch_col, product_col, curbal_col]].copy()
-    saving_filtered = saving_df[[branch_col, product_col, curbal_col]].copy()
+Saving mudh07...
+  ✓ Saved Parquet file: mudh07.parquet
+  Creating SAS dataset: mudh07
+SAS Connection established. Subprocess id is 204636
 
-# Rename columns to standard names
-current_filtered.columns = ['branch', 'product', 'curbal']
-saving_filtered.columns = ['branch', 'product', 'curbal']
 
-current_filtered['reptdate'] = zdate
-saving_filtered['reptdate'] = zdate
+84   
+85   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
+NOTE: Libref OUTLIB was successfully assigned as follows: 
+      Engine:        BASE 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
+86   
+  ✓ SAS dataset created: mudh07.sas7bdat
+SAS Connection terminated. Subprocess id was 204636
+  mudh07 - 10 accounts, 4 groups
 
-dyibu_raw = pd.concat([current_filtered, saving_filtered], ignore_index=True)
-print(f"Combined raw data: {len(dyibu_raw)} rows")
+Generating awca07 (Products 93,96 (Islamic Current Accounts))...
 
-# Create product category flags
-dyibu_raw['sai'] = np.where(dyibu_raw['product'].isin([204,207,214,215]), dyibu_raw['curbal'], 0)
-dyibu_raw['saino'] = np.where(dyibu_raw['product'].isin([204,207,214,215]), 1, 0)
-dyibu_raw['mbs'] = np.where(dyibu_raw['product'] == 214, dyibu_raw['curbal'], 0)
-dyibu_raw['mbsno'] = np.where(dyibu_raw['product'] == 214, 1, 0)
+Saving awca07...
+  ✓ Saved Parquet file: awca07.parquet
+  Creating SAS dataset: awca07
+SAS Connection established. Subprocess id is 204673
 
-# CAI products (excluding certain products)
-cai_products = [60,61,63,64,70,71,93,94,160,161,162,163,164,166,169,66,67,168,167,182,183,184,73]
-exclude_products = [96,97,61,161,63,163]
-cai_condition = dyibu_raw['product'].isin(cai_products) & (dyibu_raw['curbal'] > 0) & ~dyibu_raw['product'].isin(exclude_products)
-dyibu_raw['cai'] = np.where(cai_condition, dyibu_raw['curbal'], 0)
-dyibu_raw['caino'] = np.where(cai_condition, 1, 0)
 
-dyibu_raw['ca96'] = np.where(dyibu_raw['product'].isin([96,97]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
-dyibu_raw['cai96'] = np.where(dyibu_raw['product'].isin([96,97]) & (dyibu_raw['curbal'] > 0), 1, 0)
-dyibu_raw['caig'] = np.where(dyibu_raw['product'].isin([61,161]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
-dyibu_raw['caigno'] = np.where(dyibu_raw['product'].isin([61,161]) & (dyibu_raw['curbal'] > 0), 1, 0)
-dyibu_raw['caih'] = np.where(dyibu_raw['product'].isin([63,163]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
-dyibu_raw['caihno'] = np.where(dyibu_raw['product'].isin([63,163]) & (dyibu_raw['curbal'] > 0), 1, 0)
+102  
+103  libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
+NOTE: Libref OUTLIB was successfully assigned as follows: 
+      Engine:        BASE 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
+104  
+  ✓ SAS dataset created: awca07.sas7bdat
+SAS Connection terminated. Subprocess id was 204673
+  awca07 - 0 accounts, 0 groups
 
-# Aggregate by branch
-dyibu = dyibu_raw.groupby(['branch', 'reptdate']).agg({
-    'sai': 'sum', 'saino': 'sum', 'mbs': 'sum', 'mbsno': 'sum',
-    'cai': 'sum', 'caino': 'sum', 'ca96': 'sum', 'cai96': 'sum',
-    'caig': 'sum', 'caigno': 'sum', 'caih': 'sum', 'caihno': 'sum'
-}).reset_index()
+Generating awcb07 (Products 160,162,164,168,182,169 (Purpose 1,2,4 only))...
 
-# Save DYIBU as both SAS and Parquet
-dataset_name = f'dyibu{reptmon:02d}'
-save_datasets(dyibu, dataset_name, OUTPUT_DIR)
-print(f"Section 1: DYIBU - {len(dyibu)} branches")
+Saving awcb07...
+  ✓ Saved Parquet file: awcb07.parquet
+  Creating SAS dataset: awcb07
+SAS Connection established. Subprocess id is 204708
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
 
-def calculate_age(bdate_str, reptdate, reptmon, reptday, reptyear):
-    if pd.isna(bdate_str) or bdate_str == 0 or str(bdate_str).strip() == '' or str(bdate_str) == '0':
-        return 0
-    try:
-        bdate_str = str(bdate_str).strip()
-        # Handle different date formats
-        if len(bdate_str) >= 8:
-            # Try to parse as MMDDYYYY or YYYYMMDD
-            try:
-                bdate = datetime.strptime(bdate_str[:8], '%m%d%Y')
-            except:
-                try:
-                    bdate = datetime.strptime(bdate_str[:8], '%Y%m%d')
-                except:
-                    return 0
-            age = reptyear - bdate.year
-            if age == AGELIMIT:
-                if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
-                    age = AGEBELOW
-            elif age == MAXAGE:
-                if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
-                    age = AGELIMIT
-            elif age > MAXAGE:
-                age = MAXAGE
-            elif age < AGELIMIT:
-                age = AGEBELOW
-            else:
-                age = AGELIMIT
-            return age
-    except:
-        return 0
-    return 0
+86   
+87   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
+NOTE: Libref OUTLIB was successfully assigned as follows: 
+      Engine:        BASE 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
+88   
+  ✓ SAS dataset created: awcb07.sas7bdat
+SAS Connection terminated. Subprocess id was 204708
+  awcb07 - 234 accounts, 134 groups
 
-def get_isa_range(curbal):
-    if curbal < 501: return 500
-    elif curbal < 2001: return 2000
-    elif curbal < 5001: return 5000
-    elif curbal < 10001: return 10000
-    elif curbal < 30001: return 30000
-    elif curbal < 50001: return 50000
-    elif curbal < 75001: return 75000
-    else: return 75001
+================================================================================
+ISLAMIC BANKING STATISTICS - COMPLETED
+================================================================================
 
-def get_range_bucket(curbal, product):
-    if product == 214:
-        return get_isa_range(curbal)
-    ranges = [(500, '< 500'), (1000, '< 1000'), (5000, '< 5000'), 
-              (10000, '< 10000'), (50000, '< 50000'), (100000, '< 100000'),
-              (500000, '< 500000'), (float('inf'), '>= 500000')]
-    for limit, label in ranges:
-        if curbal < limit:
-            return label
-    return '>= 500000'
-
-# ============================================================================
-# SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS
-# ============================================================================
-
-print("\n" + "="*80)
-print("SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS")
-print("="*80)
-
-# Map all column names for both datasets
-column_map = {
-    'BRANCH': 'branch',
-    'branch': 'branch',
-    'PRODUCT': 'product',
-    'product': 'product',
-    'CURBAL': 'curbal',
-    'curbal': 'curbal',
-    'AVGAMT': 'avgamt',
-    'avgamt': 'avgamt',
-    'OPENDT': 'opendt',
-    'opendt': 'opendt',
-    'CLOSEDT': 'closedt',
-    'closedt': 'closedt',
-    'BDATE': 'bdate',
-    'bdate': 'bdate',
-    'CUSTCODE': 'custcode',
-    'custcode': 'custcode',
-    'PURPOSE': 'purpose',
-    'purpose': 'purpose',
-    'RACE': 'race',
-    'race': 'race',
-    'OPENIND': 'openind',
-    'openind': 'openind'
-}
-
-try:
-    # Read and filter datasets
-    saving_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/saving.sas7bdat')
-    current_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/current.sas7bdat')
-    
-    # Rename columns to standard names
-    for orig, new in column_map.items():
-        if orig in saving_df.columns:
-            saving_df.rename(columns={orig: new}, inplace=True)
-        if orig in current_df.columns:
-            current_df.rename(columns={orig: new}, inplace=True)
-    
-    # Filter with openind if it exists
-    if 'openind' in saving_df.columns:
-        saving_filtered = saving_df[(~saving_df['openind'].isin(['B','C','P'])) & (~saving_df['product'].isin([297,298]))]
-    else:
-        saving_filtered = saving_df[~saving_df['product'].isin([297,298])]
-        
-    if 'openind' in current_df.columns:
-        current_filtered = current_df[(~current_df['openind'].isin(['B','C','P'])) & (~current_df['product'].isin([297,298]))]
-    else:
-        current_filtered = current_df[~current_df['product'].isin([297,298])]
-    
-    # Combine datasets
-    accounts_df = pd.concat([saving_filtered, current_filtered], ignore_index=True)
-    print(f"Total accounts to process: {len(accounts_df):,}")
-    
-except Exception as e:
-    print(f"Error processing accounts: {e}")
-    sys.exit(1)
-
-# Process accounts using vectorized operations
-print("Processing accounts using vectorized operations...")
-
-# Pre-allocate dataframes for better performance
-processed_data = []
-
-# Process in chunks for memory efficiency
-chunk_size = 100000
-total_rows = len(accounts_df)
-
-for start_idx in range(0, total_rows, chunk_size):
-    end_idx = min(start_idx + chunk_size, total_rows)
-    chunk = accounts_df.iloc[start_idx:end_idx].copy()
-    
-    # Calculate accytd using vectorized operations
-    chunk['accytd'] = 0
-    mask = (chunk['opendt'] != 0) & (chunk['closedt'].isna() | (chunk['closedt'] == 0))
-    if mask.any():
-        try:
-            # Extract year from opendt
-            opendt_str = chunk.loc[mask, 'opendt'].astype(str).str[:4]
-            chunk.loc[mask, 'accytd'] = (opendt_str.astype(float) == reptyear).astype(int)
-        except:
-            pass
-    
-    # Calculate age
-    chunk['age'] = 0
-    for idx, row in chunk.iterrows():
-        chunk.loc[idx, 'age'] = calculate_age(row['bdate'], reptdate, reptmon, reptday, reptyear)
-    
-    # Get ranges
-    chunk['avgrnge'] = chunk['avgamt'].apply(lambda x: get_range_bucket(x, 0))
-    chunk['range'] = chunk.apply(lambda x: get_range_bucket(x['curbal'], x['product']), axis=1)
-    
-    # Select columns
-    chunk_processed = chunk[['product', 'branch', 'curbal', 'avgamt', 'accytd', 
-                            'age', 'purpose', 'race', 'custcode', 'avgrnge', 'range']].copy()
-    chunk_processed['reptdate'] = zdate
-    
-    processed_data.append(chunk_processed)
-    
-    if (start_idx + chunk_size) % 500000 == 0:
-        print(f"  Processed {min(end_idx, total_rows):,} accounts...")
-
-# Combine all chunks
-processed_df = pd.concat(processed_data, ignore_index=True)
-print(f"✓ Processed {len(processed_df):,} accounts")
-
-# ============================================================================
-# GENERATE ALL OUTPUT DATASETS (SAS + PARQUET)
-# ============================================================================
-
-print("\n" + "="*80)
-print("GENERATING OUTPUT DATASETS (SAS7BDAT + PARQUET)")
-print("="*80)
-
-def generate_dataset(df, filter_condition, groupby_cols, dataset_name):
-    """Generic function to generate aggregated datasets"""
-    if filter_condition is not None:
-        filtered = df[filter_condition]
-    else:
-        filtered = df
-    
-    if len(filtered) > 0:
-        # Perform aggregation with proper column references
-        result = filtered.groupby(groupby_cols).agg(
-            noacct=('product', 'count'),
-            curbal=('curbal', 'sum'),
-            accytd=('accytd', 'sum'),
-            avgamt=('avgamt', 'sum')
-        ).reset_index()
-        
-        # Add avgacct column (count of accounts with avgamt > 0)
-        result['avgacct'] = filtered.groupby(groupby_cols).apply(
-            lambda x: (x['avgamt'] > 0).sum()
-        ).reset_index(drop=True)
-        
-        return result
-    else:
-        # Create empty dataframe with correct columns
-        result = pd.DataFrame(columns=groupby_cols + ['noacct', 'curbal', 'accytd', 'avgamt', 'avgacct'])
-        return result
-
-# Define all datasets
-datasets_config = [
-    {
-        'name': f'awsa{reptmon:02d}',
-        'description': 'Products 204,215 (Regular Savings)',
-        'filter': processed_df['product'].isin([204, 215]),
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
-    },
-    {
-        'name': f'awsb{reptmon:02d}',
-        'description': 'Product 207 (Islamic Basic Savings)',
-        'filter': processed_df['product'] == 207,
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
-    },
-    {
-        'name': f'awsc{reptmon:02d}',
-        'description': 'Product 214 (Mudharabah by Age/Race)',
-        'filter': processed_df['product'] == 214,
-        'groupby': ['product', 'range', 'race', 'age', 'reptdate']
-    },
-    {
-        'name': f'mudh{reptmon:02d}',
-        'description': 'Product 214 (Mudharabah by Purpose)',
-        'filter': processed_df['product'] == 214,
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
-    },
-    {
-        'name': f'awca{reptmon:02d}',
-        'description': 'Products 93,96 (Islamic Current Accounts)',
-        'filter': (processed_df['product'].isin([93, 96])) & (processed_df['curbal'] > 0),
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
-    },
-    {
-        'name': f'awcb{reptmon:02d}',
-        'description': 'Products 160,162,164,168,182,169 (Purpose 1,2,4 only)',
-        'filter': (processed_df['product'].isin([160, 162, 164, 168, 182, 169])) & 
-                  (processed_df['curbal'] > 0) & 
-                  (processed_df['purpose'].isin(['1', '2', '4'])),
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate']
-    }
-]
-
-# Generate each dataset
-datasets_results = {}
-for ds_config in datasets_config:
-    print(f"\nGenerating {ds_config['name']} ({ds_config['description']})...")
-    result = generate_dataset(
-        processed_df, 
-        ds_config['filter'], 
-        ds_config['groupby'], 
-        ds_config['name']
-    )
-    datasets_results[ds_config['name']] = result
-    
-    # Save as both SAS and Parquet
-    save_datasets(result, ds_config['name'], OUTPUT_DIR)
-    
-    # Print summary
-    total_accts = result['noacct'].sum() if len(result) > 0 and 'noacct' in result.columns else 0
-    print(f"  {ds_config['name']} - {total_accts:,.0f} accounts, {len(result)} groups")
-
-# ============================================================================
-# SUMMARY
-# ============================================================================
-
-print("\n" + "="*80)
-print("ISLAMIC BANKING STATISTICS - COMPLETED")
-print("="*80)
-
-# Get file counts
-sas_files = list(OUTPUT_DIR.glob('*.sas7bdat'))
-parquet_files = list(OUTPUT_DIR.glob('*.parquet'))
-csv_files = list(OUTPUT_DIR.glob('*.csv'))
-
-print(f"""
-Processing Date: {rdate} (Yesterday)
-Completion Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Processing Date: 07/07/2026 (Yesterday)
+Completion Time: 2026-07-08 18:06:07
 
 OUTPUT DATASETS (SAS7BDAT + PARQUET):
-1. DYIBU{reptmon:02d}  - Daily Islamic Balance Summary
-   Records: {len(dyibu):,}
-   Files: dyibu{reptmon:02d}.sas7bdat, dyibu{reptmon:02d}.parquet
+1. DYIBU07  - Daily Islamic Balance Summary
+   Records: 267
+   Files: dyibu07.sas7bdat, dyibu07.parquet
    
-2. AWSA{reptmon:02d}   - {datasets_config[0]['description']}
-   Records: {len(datasets_results.get(f'awsa{reptmon:02d}', pd.DataFrame())):,}
+2. AWSA07   - Products 204,215 (Regular Savings)
+   Records: 389
    
-3. AWSB{reptmon:02d}   - {datasets_config[1]['description']}
-   Records: {len(datasets_results.get(f'awsb{reptmon:02d}', pd.DataFrame())):,}
+3. AWSB07   - Product 207 (Islamic Basic Savings)
+   Records: 27
    
-4. AWSC{reptmon:02d}   - {datasets_config[2]['description']}
-   Records: {len(datasets_results.get(f'awsc{reptmon:02d}', pd.DataFrame())):,}
+4. AWSC07   - Product 214 (Mudharabah by Age/Race)
+   Records: 7
    
-5. MUDH{reptmon:02d}   - {datasets_config[3]['description']}
-   Records: {len(datasets_results.get(f'mudh{reptmon:02d}', pd.DataFrame())):,}
+5. MUDH07   - Product 214 (Mudharabah by Purpose)
+   Records: 4
    
-6. AWCA{reptmon:02d}   - {datasets_config[4]['description']}
-   Records: {len(datasets_results.get(f'awca{reptmon:02d}', pd.DataFrame())):,}
+6. AWCA07   - Products 93,96 (Islamic Current Accounts)
+   Records: 0
    
-7. AWCB{reptmon:02d}   - {datasets_config[5]['description']}
-   Records: {len(datasets_results.get(f'awcb{reptmon:02d}', pd.DataFrame())):,}
+7. AWCB07   - Products 160,162,164,168,182,169 (Purpose 1,2,4 only)
+   Records: 134
 
-Total Accounts Processed: {len(processed_df):,}
+Total Accounts Processed: 2,394,211
 
 Output Files Generated:
-- SAS7BDAT files: {len(sas_files)}
-- Parquet files: {len(parquet_files)}
-- CSV files (backup): {len(csv_files)}
-- Output Directory: {OUTPUT_DIR}
+- SAS7BDAT files: 7
+- Parquet files: 7
+- CSV files (backup): 0
+- Output Directory: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
 
 Product Categories:
 - Savings: 204 (Regular), 207 (Basic), 214 (Mudharabah), 215 (Special)
@@ -573,8 +211,9 @@ Metrics per Dataset:
 - ACCYTD: Accounts opened year-to-date
 - AVGACCT: Count of accounts with average balance
 - AVGAMT: Total average amount
-""")
 
-print(f"\n✓ Processing completed successfully!")
-print(f"✓ Output directory: {OUTPUT_DIR}")
-print(f"✓ Data processed for date: {reptdate.strftime('%Y-%m-%d')}")
+
+✓ Processing completed successfully!
+✓ Output directory: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
+✓ Data processed for date: 2026-07-07
+You have mail in /var/spool/mail/sas_edw_dev
