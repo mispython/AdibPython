@@ -52,15 +52,45 @@ def save_sas_dataset(df, dataset_name, output_dir):
         df_sas = df.copy()
         df_sas.columns = df_sas.columns.str.upper()
         
-        # Create SAS dataset
+        # Convert numeric columns to appropriate types for SAS
+        for col in df_sas.columns:
+            if df_sas[col].dtype == 'object':
+                # Convert object columns to string
+                df_sas[col] = df_sas[col].astype(str)
+            elif df_sas[col].dtype in ['float64', 'float32']:
+                # Handle NaN values for float columns
+                df_sas[col] = df_sas[col].fillna(0)
+            elif df_sas[col].dtype in ['int64', 'int32']:
+                # Handle NaN values for integer columns
+                df_sas[col] = df_sas[col].fillna(0).astype(int)
+        
+        # Create SAS dataset in WORK library first
         sas_df = sas.sasdata(df_sas, dataset_name)
         
         # Save to permanent SAS dataset
         sas_df.to_file(f'{output_dir}/{dataset_name}.sas7bdat')
-        print(f"  Saved SAS dataset: {dataset_name}.sas7bdat")
+        print(f"  ✓ Saved SAS dataset: {dataset_name}.sas7bdat")
         return True
     except Exception as e:
-        print(f"  Error saving SAS dataset {dataset_name}: {e}")
+        print(f"  ✗ Error saving SAS dataset {dataset_name}: {e}")
+        return False
+
+# ============================================================================
+# FUNCTION TO SAVE BOTH SAS AND PARQUET
+# ============================================================================
+
+def save_datasets(df, dataset_name, output_dir):
+    """Save DataFrame as both SAS7BDAT and Parquet"""
+    # Save as SAS
+    sas_success = save_sas_dataset(df, dataset_name, output_dir)
+    
+    # Save as Parquet
+    try:
+        df.to_parquet(f'{output_dir}/{dataset_name}.parquet')
+        print(f"  ✓ Saved Parquet file: {dataset_name}.parquet")
+        return True
+    except Exception as e:
+        print(f"  ✗ Error saving Parquet {dataset_name}: {e}")
         return False
 
 # ============================================================================
@@ -207,11 +237,10 @@ dyibu = dyibu_raw.groupby(['branch', 'reptdate']).agg({
     'caig': 'sum', 'caigno': 'sum', 'caih': 'sum', 'caihno': 'sum'
 }).reset_index()
 
-# Save DYIBU as SAS and Parquet
+# Save DYIBU as both SAS and Parquet
 dataset_name = f'dyibu{reptmon:02d}'
-save_sas_dataset(dyibu, dataset_name, OUTPUT_DIR)
-dyibu.to_parquet(f'{OUTPUT_DIR}/{dataset_name}.parquet')
-print(f"  Saved Parquet file: {dataset_name}.parquet")
+print(f"\nSaving {dataset_name}...")
+save_datasets(dyibu, dataset_name, OUTPUT_DIR)
 print(f"Section 1: DYIBU - {len(dyibu)} branches")
 
 # ============================================================================
@@ -338,7 +367,7 @@ except Exception as e:
     sas.endsas()
     sys.exit(1)
 
-# Process each account - using vectorized operations for better performance
+# Process accounts using vectorized operations
 print("Processing accounts using vectorized operations...")
 
 # Pre-allocate dataframes for better performance
@@ -363,13 +392,12 @@ for start_idx in range(0, total_rows, chunk_size):
         except:
             pass
     
-    # Calculate age using vectorized operations
+    # Calculate age
     chunk['age'] = 0
-    # This is a simplified version - for complex logic, loop might be needed
     for idx, row in chunk.iterrows():
         chunk.loc[idx, 'age'] = calculate_age(row['bdate'], reptdate, reptmon, reptday, reptyear)
     
-    # Get ranges using vectorized operations
+    # Get ranges
     chunk['avgrnge'] = chunk['avgamt'].apply(lambda x: get_range_bucket(x, 0))
     chunk['range'] = chunk.apply(lambda x: get_range_bucket(x['curbal'], x['product']), axis=1)
     
@@ -380,16 +408,20 @@ for start_idx in range(0, total_rows, chunk_size):
     
     processed_data.append(chunk_processed)
     
-    if (start_idx + chunk_size) % 100000 == 0:
+    if (start_idx + chunk_size) % 500000 == 0:
         print(f"  Processed {min(end_idx, total_rows):,} accounts...")
 
 # Combine all chunks
 processed_df = pd.concat(processed_data, ignore_index=True)
-print(f"Processed {len(processed_df):,} accounts")
+print(f"✓ Processed {len(processed_df):,} accounts")
 
 # ============================================================================
-# Generate all output datasets
+# GENERATE ALL OUTPUT DATASETS (SAS + PARQUET)
 # ============================================================================
+
+print("\n" + "="*80)
+print("GENERATING OUTPUT DATASETS (SAS7BDAT + PARQUET)")
+print("="*80)
 
 def generate_dataset(df, filter_condition, groupby_cols, agg_dict, dataset_name):
     """Generic function to generate aggregated datasets"""
@@ -409,6 +441,7 @@ def generate_dataset(df, filter_condition, groupby_cols, agg_dict, dataset_name)
 datasets_config = [
     {
         'name': f'awsa{reptmon:02d}',
+        'description': 'Products 204,215 (Regular Savings)',
         'filter': processed_df['product'].isin([204, 215]),
         'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
         'agg': {
@@ -421,6 +454,7 @@ datasets_config = [
     },
     {
         'name': f'awsb{reptmon:02d}',
+        'description': 'Product 207 (Islamic Basic Savings)',
         'filter': processed_df['product'] == 207,
         'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
         'agg': {
@@ -433,6 +467,7 @@ datasets_config = [
     },
     {
         'name': f'awsc{reptmon:02d}',
+        'description': 'Product 214 (Mudharabah by Age/Race)',
         'filter': processed_df['product'] == 214,
         'groupby': ['product', 'range', 'race', 'age', 'reptdate'],
         'agg': {
@@ -444,6 +479,7 @@ datasets_config = [
     },
     {
         'name': f'mudh{reptmon:02d}',
+        'description': 'Product 214 (Mudharabah by Purpose)',
         'filter': processed_df['product'] == 214,
         'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
         'agg': {
@@ -455,6 +491,7 @@ datasets_config = [
     },
     {
         'name': f'awca{reptmon:02d}',
+        'description': 'Products 93,96 (Islamic Current Accounts)',
         'filter': (processed_df['product'].isin([93, 96])) & (processed_df['curbal'] > 0),
         'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
         'agg': {
@@ -467,6 +504,7 @@ datasets_config = [
     },
     {
         'name': f'awcb{reptmon:02d}',
+        'description': 'Products 160,162,164,168,182,169 (Purpose 1,2,4 only)',
         'filter': (processed_df['product'].isin([160, 162, 164, 168, 182, 169])) & 
                   (processed_df['curbal'] > 0) & 
                   (processed_df['purpose'].isin(['1', '2', '4'])),
@@ -484,7 +522,7 @@ datasets_config = [
 # Generate each dataset
 datasets_results = {}
 for ds_config in datasets_config:
-    print(f"\nGenerating {ds_config['name']}...")
+    print(f"\nGenerating {ds_config['name']} ({ds_config['description']})...")
     result = generate_dataset(
         processed_df, 
         ds_config['filter'], 
@@ -494,9 +532,8 @@ for ds_config in datasets_config:
     )
     datasets_results[ds_config['name']] = result
     
-    # Save SAS and Parquet
-    save_sas_dataset(result, ds_config['name'], OUTPUT_DIR)
-    result.to_parquet(f'{OUTPUT_DIR}/{ds_config["name"]}.parquet')
+    # Save as both SAS and Parquet
+    save_datasets(result, ds_config['name'], OUTPUT_DIR)
     
     # Print summary
     total_accts = result['noacct'].sum() if len(result) > 0 and 'noacct' in result.columns else 0
@@ -507,48 +544,72 @@ for ds_config in datasets_config:
 # ============================================================================
 
 print("\n" + "="*80)
-print("ISLAMIC BANKING STATISTICS SUMMARY")
+print("ISLAMIC BANKING STATISTICS - COMPLETED")
 print("="*80)
-print(f"""
-Date: {rdate} (Yesterday)
-Processing Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-Output Datasets (SAS7BDAT + Parquet):
+# Get file counts
+sas_files = list(OUTPUT_DIR.glob('*.sas7bdat'))
+parquet_files = list(OUTPUT_DIR.glob('*.parquet'))
+
+print(f"""
+Processing Date: {rdate} (Yesterday)
+Completion Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+OUTPUT DATASETS (SAS7BDAT + PARQUET):
 1. DYIBU{reptmon:02d}  - Daily Islamic Balance Summary
-   Records: {len(dyibu)}
+   Records: {len(dyibu):,}
+   Files: dyibu{reptmon:02d}.sas7bdat, dyibu{reptmon:02d}.parquet
    
-2. AWSA{reptmon:02d}   - Products 204,215 (Regular Savings)
-   Records: {len(datasets_results.get(f'awsa{reptmon:02d}', pd.DataFrame()))}
+2. AWSA{reptmon:02d}   - {datasets_config[0]['description']}
+   Records: {len(datasets_results.get(f'awsa{reptmon:02d}', pd.DataFrame())):,}
+   Files: awsa{reptmon:02d}.sas7bdat, awsa{reptmon:02d}.parquet
    
-3. AWSB{reptmon:02d}   - Product 207 (Islamic Basic Savings)
-   Records: {len(datasets_results.get(f'awsb{reptmon:02d}', pd.DataFrame()))}
+3. AWSB{reptmon:02d}   - {datasets_config[1]['description']}
+   Records: {len(datasets_results.get(f'awsb{reptmon:02d}', pd.DataFrame())):,}
+   Files: awsb{reptmon:02d}.sas7bdat, awsb{reptmon:02d}.parquet
    
-4. AWSC{reptmon:02d}   - Product 214 (Mudharabah by Age/Race)
-   Records: {len(datasets_results.get(f'awsc{reptmon:02d}', pd.DataFrame()))}
+4. AWSC{reptmon:02d}   - {datasets_config[2]['description']}
+   Records: {len(datasets_results.get(f'awsc{reptmon:02d}', pd.DataFrame())):,}
+   Files: awsc{reptmon:02d}.sas7bdat, awsc{reptmon:02d}.parquet
    
-5. MUDH{reptmon:02d}   - Product 214 (Mudharabah by Purpose)
-   Records: {len(datasets_results.get(f'mudh{reptmon:02d}', pd.DataFrame()))}
+5. MUDH{reptmon:02d}   - {datasets_config[3]['description']}
+   Records: {len(datasets_results.get(f'mudh{reptmon:02d}', pd.DataFrame())):,}
+   Files: mudh{reptmon:02d}.sas7bdat, mudh{reptmon:02d}.parquet
    
-6. AWCA{reptmon:02d}   - Products 93,96 (Islamic Current Accounts)
-   Records: {len(datasets_results.get(f'awca{reptmon:02d}', pd.DataFrame()))}
+6. AWCA{reptmon:02d}   - {datasets_config[4]['description']}
+   Records: {len(datasets_results.get(f'awca{reptmon:02d}', pd.DataFrame())):,}
+   Files: awca{reptmon:02d}.sas7bdat, awca{reptmon:02d}.parquet
    
-7. AWCB{reptmon:02d}   - Products 160,162,164,168,182,169 (Purpose 1,2,4 only)
-   Records: {len(datasets_results.get(f'awcb{reptmon:02d}', pd.DataFrame()))}
+7. AWCB{reptmon:02d}   - {datasets_config[5]['description']}
+   Records: {len(datasets_results.get(f'awcb{reptmon:02d}', pd.DataFrame())):,}
+   Files: awcb{reptmon:02d}.sas7bdat, awcb{reptmon:02d}.parquet
 
 Total Accounts Processed: {len(processed_df):,}
 
-Output Formats:
-- SAS7BDAT files in: {OUTPUT_DIR}
-- Parquet files in: {OUTPUT_DIR}
+Output Files Generated:
+- SAS7BDAT files: {len(sas_files)}
+- Parquet files: {len(parquet_files)}
+- Output Directory: {OUTPUT_DIR}
+
+Product Categories:
+- Savings: 204 (Regular), 207 (Basic), 214 (Mudharabah), 215 (Special)
+- Current: 93,96 (Basic Islamic), 160-169,182 (Specific Purpose)
+
+Metrics per Dataset:
+- NOACCT: Number of accounts
+- CURBAL: Total current balance
+- ACCYTD: Accounts opened year-to-date
+- AVGACCT: Count of accounts with average balance
+- AVGAMT: Total average amount
 """)
 
 # Close SAS connection
 try:
     sas.endsas()
-    print("SAS Connection closed successfully")
+    print("\n✓ SAS Connection closed successfully")
 except:
     pass
 
-print(f"\nCompleted: {OUTPUT_DIR}")
-print("Both SAS7BDAT and Parquet formats generated.")
-print(f"Data processed for date: {reptdate.strftime('%Y-%m-%d')}")
+print(f"\n✓ Processing completed successfully!")
+print(f"✓ Output directory: {OUTPUT_DIR}")
+print(f"✓ Data processed for date: {reptdate.strftime('%Y-%m-%d')}")
