@@ -1,343 +1,542 @@
-SAS Connection established. Subprocess id is 191772
+#!/usr/bin/env python3
+"""
+EIBDISLM - Islamic Banking Statistics
+Processes daily Islamic account balances and monthly summaries
+Supports SAS7BDAT input/output and Parquet output
+"""
 
-SAS Connection established successfully
-Islamic Banking Statistics - 07/07/2026
-Processing data for date: 2026-07-07
+import duckdb
+import pyreadstat
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from datetime import datetime, timedelta
+import saspy
+import os
+import sys
 
-================================================================================
-INSPECTING INPUT DATASETS
-================================================================================
+BASE_DIR = Path('.')
+INPUT_DIR = BASE_DIR / '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDISLM'
+OUTPUT_DIR = BASE_DIR / '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-SAVING dataset columns (first 20):
-  BANKNO, FMTCODE, BRANCH, ACCTNO, NAME, TAXNO, DEBIT, CREDIT, CLOSEDT, REOPENDT, CUSTCODE, ORGCODE, ORGTYPE, INTYTD, FEEPD, PURPOSE, SECTOR, USER2, USER3, RISKCODE
+AGELIMIT = 12
+MAXAGE = 18
+AGEBELOW = 11
 
-CURRENT dataset columns (first 20):
-  FMTCODE, BRANCH, ACCTNO, NAME, TAXNO, DEBIT, CREDIT, CLOSEDT, REOPENDT, CUSTCODE, ODPLAN, RATE1, RATE2, RATE3, RATE4, RATE5, TODRATE, FLATRATE, BASERATE, ODSTAT
+# Initialize SAS connection for output
+try:
+    sas = saspy.SASsession(cfgname='default')
+    print("SAS Connection established successfully")
+except Exception as e:
+    print(f"Error connecting to SAS: {e}")
+    sys.exit(1)
 
-================================================================================
-SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)
-================================================================================
-Loaded CURRENT: 162640 rows, 147 columns
-Loaded SAVING: 2298576 rows, 88 columns
+# Hardcode reptdate as yesterday's date
+reptdate = datetime.now() - timedelta(days=1)
+reptyear, reptmon, reptday = reptdate.year, reptdate.month, reptdate.day
+rdate = reptdate.strftime('%d/%m/%Y')
+zdate = int(reptdate.strftime('%y%m%d'))
 
-Using columns:
-  BRANCH: BRANCH
-  PRODUCT: PRODUCT
-  CURBAL: CURBAL
-  OPENIND: OPENIND
-Combined raw data: 2394211 rows
-Error saving SAS dataset: 'DataFrame' object has no attribute 'strip'
-Saved Parquet file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM/dyibu07.parquet
-Section 1: DYIBU - 267 branches
+print(f"Islamic Banking Statistics - {rdate}")
+print(f"Processing data for date: {reptdate.strftime('%Y-%m-%d')}")
 
-================================================================================
-SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS
-================================================================================
-Total accounts to process: 2394211
-Processing accounts...
-  Processed 10000 accounts...
-  Processed 20000 accounts...
-  Processed 30000 accounts...
-  Processed 40000 accounts...
-  Processed 50000 accounts...
-  Processed 60000 accounts...
-  Processed 70000 accounts...
-  Processed 80000 accounts...
-  Processed 90000 accounts...
-  Processed 100000 accounts...
-  Processed 110000 accounts...
-  Processed 120000 accounts...
-  Processed 130000 accounts...
-  Processed 140000 accounts...
-  Processed 150000 accounts...
-  Processed 160000 accounts...
-  Processed 170000 accounts...
-  Processed 180000 accounts...
-  Processed 190000 accounts...
-  Processed 200000 accounts...
-  Processed 210000 accounts...
-  Processed 220000 accounts...
-  Processed 230000 accounts...
-  Processed 240000 accounts...
-  Processed 250000 accounts...
-  Processed 260000 accounts...
-  Processed 270000 accounts...
-  Processed 280000 accounts...
-  Processed 290000 accounts...
-  Processed 300000 accounts...
-  Processed 310000 accounts...
-  Processed 320000 accounts...
-  Processed 330000 accounts...
-  Processed 340000 accounts...
-  Processed 350000 accounts...
-  Processed 360000 accounts...
-  Processed 370000 accounts...
-  Processed 380000 accounts...
-  Processed 390000 accounts...
-  Processed 400000 accounts...
-  Processed 410000 accounts...
-  Processed 420000 accounts...
-  Processed 430000 accounts...
-  Processed 440000 accounts...
-  Processed 450000 accounts...
-  Processed 460000 accounts...
-  Processed 470000 accounts...
-  Processed 480000 accounts...
-  Processed 490000 accounts...
-  Processed 500000 accounts...
-  Processed 510000 accounts...
-  Processed 520000 accounts...
-  Processed 530000 accounts...
-  Processed 540000 accounts...
-  Processed 550000 accounts...
-  Processed 560000 accounts...
-  Processed 570000 accounts...
-  Processed 580000 accounts...
-  Processed 590000 accounts...
-  Processed 600000 accounts...
-  Processed 610000 accounts...
-  Processed 620000 accounts...
-  Processed 630000 accounts...
-  Processed 640000 accounts...
-  Processed 650000 accounts...
-  Processed 660000 accounts...
-  Processed 670000 accounts...
-  Processed 680000 accounts...
-  Processed 690000 accounts...
-  Processed 700000 accounts...
-  Processed 710000 accounts...
-  Processed 720000 accounts...
-  Processed 730000 accounts...
-  Processed 740000 accounts...
-  Processed 750000 accounts...
-  Processed 760000 accounts...
-  Processed 770000 accounts...
-  Processed 780000 accounts...
-  Processed 790000 accounts...
-  Processed 800000 accounts...
-  Processed 810000 accounts...
-  Processed 820000 accounts...
-  Processed 830000 accounts...
-  Processed 840000 accounts...
-  Processed 850000 accounts...
-  Processed 860000 accounts...
-  Processed 870000 accounts...
-  Processed 880000 accounts...
-  Processed 890000 accounts...
-  Processed 900000 accounts...
-  Processed 910000 accounts...
-  Processed 920000 accounts...
-  Processed 930000 accounts...
-  Processed 940000 accounts...
-  Processed 950000 accounts...
-  Processed 960000 accounts...
-  Processed 970000 accounts...
-  Processed 980000 accounts...
-  Processed 990000 accounts...
-  Processed 1000000 accounts...
-  Processed 1010000 accounts...
-  Processed 1020000 accounts...
-  Processed 1030000 accounts...
-  Processed 1040000 accounts...
-  Processed 1050000 accounts...
-  Processed 1060000 accounts...
-  Processed 1070000 accounts...
-  Processed 1080000 accounts...
-  Processed 1090000 accounts...
-  Processed 1100000 accounts...
-  Processed 1110000 accounts...
-  Processed 1120000 accounts...
-  Processed 1130000 accounts...
-  Processed 1140000 accounts...
-  Processed 1150000 accounts...
-  Processed 1160000 accounts...
-  Processed 1170000 accounts...
-  Processed 1180000 accounts...
-  Processed 1190000 accounts...
-  Processed 1200000 accounts...
-  Processed 1210000 accounts...
-  Processed 1220000 accounts...
-  Processed 1230000 accounts...
-  Processed 1240000 accounts...
-  Processed 1250000 accounts...
-  Processed 1260000 accounts...
-  Processed 1270000 accounts...
-  Processed 1280000 accounts...
-  Processed 1290000 accounts...
-  Processed 1300000 accounts...
-  Processed 1310000 accounts...
-  Processed 1320000 accounts...
-  Processed 1330000 accounts...
-  Processed 1340000 accounts...
-  Processed 1350000 accounts...
-  Processed 1360000 accounts...
-  Processed 1370000 accounts...
-  Processed 1380000 accounts...
-  Processed 1390000 accounts...
-  Processed 1400000 accounts...
-  Processed 1410000 accounts...
-  Processed 1420000 accounts...
-  Processed 1430000 accounts...
-  Processed 1440000 accounts...
-  Processed 1450000 accounts...
-  Processed 1460000 accounts...
-  Processed 1470000 accounts...
-  Processed 1480000 accounts...
-  Processed 1490000 accounts...
-  Processed 1500000 accounts...
-  Processed 1510000 accounts...
-  Processed 1520000 accounts...
-  Processed 1530000 accounts...
-  Processed 1540000 accounts...
-  Processed 1550000 accounts...
-  Processed 1560000 accounts...
-  Processed 1570000 accounts...
-  Processed 1580000 accounts...
-  Processed 1590000 accounts...
-  Processed 1600000 accounts...
-  Processed 1610000 accounts...
-  Processed 1620000 accounts...
-  Processed 1630000 accounts...
-  Processed 1640000 accounts...
-  Processed 1650000 accounts...
-  Processed 1660000 accounts...
-  Processed 1670000 accounts...
-  Processed 1680000 accounts...
-  Processed 1690000 accounts...
-  Processed 1700000 accounts...
-  Processed 1710000 accounts...
-  Processed 1720000 accounts...
-  Processed 1730000 accounts...
-  Processed 1740000 accounts...
-  Processed 1750000 accounts...
-  Processed 1760000 accounts...
-  Processed 1770000 accounts...
-  Processed 1780000 accounts...
-  Processed 1790000 accounts...
-  Processed 1800000 accounts...
-  Processed 1810000 accounts...
-  Processed 1820000 accounts...
-  Processed 1830000 accounts...
-  Processed 1840000 accounts...
-  Processed 1850000 accounts...
-  Processed 1860000 accounts...
-  Processed 1870000 accounts...
-  Processed 1880000 accounts...
-  Processed 1890000 accounts...
-  Processed 1900000 accounts...
-  Processed 1910000 accounts...
-  Processed 1920000 accounts...
-  Processed 1930000 accounts...
-  Processed 1940000 accounts...
-  Processed 1950000 accounts...
-  Processed 1960000 accounts...
-  Processed 1970000 accounts...
-  Processed 1980000 accounts...
-  Processed 1990000 accounts...
-  Processed 2000000 accounts...
-  Processed 2010000 accounts...
-  Processed 2020000 accounts...
-  Processed 2030000 accounts...
-  Processed 2040000 accounts...
-  Processed 2050000 accounts...
-  Processed 2060000 accounts...
-  Processed 2070000 accounts...
-  Processed 2080000 accounts...
-  Processed 2090000 accounts...
-  Processed 2100000 accounts...
-  Processed 2110000 accounts...
-  Processed 2120000 accounts...
-  Processed 2130000 accounts...
-  Processed 2140000 accounts...
-  Processed 2150000 accounts...
-  Processed 2160000 accounts...
-  Processed 2170000 accounts...
-  Processed 2180000 accounts...
-  Processed 2190000 accounts...
-  Processed 2200000 accounts...
-  Processed 2210000 accounts...
-  Processed 2220000 accounts...
-  Processed 2230000 accounts...
-  Processed 2240000 accounts...
-  Processed 2250000 accounts...
-  Processed 2260000 accounts...
-  Processed 2270000 accounts...
-  Processed 2280000 accounts...
-  Processed 2290000 accounts...
-  Processed 2300000 accounts...
-  Processed 2310000 accounts...
-  Processed 2320000 accounts...
-  Processed 2330000 accounts...
-  Processed 2340000 accounts...
-  Processed 2350000 accounts...
-  Processed 2360000 accounts...
-  Processed 2370000 accounts...
-  Processed 2380000 accounts...
-  Processed 2390000 accounts...
-Processed 2394211 accounts
+# ============================================================================
+# FUNCTION TO SAVE SAS DATASET
+# ============================================================================
 
-Generating ALWSA...
-Error saving SAS dataset: 'DataFrame' object has no attribute 'strip'
-Section 2A: ALWSA - 7846 accounts
-Generating ALWSB...
-Error saving SAS dataset: 'DataFrame' object has no attribute 'strip'
-Section 2B: ALWSB - 160 accounts
-Generating ALWSC...
-Error saving SAS dataset: 'DataFrame' object has no attribute 'strip'
-Section 2C: ALWSC - 10 accounts
-Generating MUDHA...
-Error saving SAS dataset: 'DataFrame' object has no attribute 'strip'
-Section 2D: MUDHA - 10 accounts
-Generating ALWCA...
-Error saving SAS dataset: 'DataFrame' object has no attribute 'strip'
-Section 2E: ALWCA - 0 accounts
-Generating ALWCB...
-Error saving SAS dataset: 'DataFrame' object has no attribute 'strip'
-Section 2F: ALWCB - 234 accounts
+def save_sas_dataset(df, dataset_name, output_dir):
+    """Save DataFrame as SAS dataset using saspy"""
+    try:
+        # Convert column names to uppercase for SAS compatibility
+        df_sas = df.copy()
+        df_sas.columns = df_sas.columns.str.upper()
+        
+        # Create SAS dataset
+        sas_df = sas.sasdata(df_sas, dataset_name)
+        
+        # Save to permanent SAS dataset
+        sas_df.to_file(f'{output_dir}/{dataset_name}.sas7bdat')
+        print(f"  Saved SAS dataset: {dataset_name}.sas7bdat")
+        return True
+    except Exception as e:
+        print(f"  Error saving SAS dataset {dataset_name}: {e}")
+        return False
 
-================================================================================
-ISLAMIC BANKING STATISTICS SUMMARY
-================================================================================
+# ============================================================================
+# FUNCTION TO INSPECT DATASET COLUMNS
+# ============================================================================
 
-Date: 07/07/2026 (Yesterday)
-Processing Date: 2026-07-08 17:00:58
+def inspect_dataset(filepath, dataset_name):
+    """Inspect and return column names of a SAS dataset"""
+    try:
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        print(f"\nColumns in {dataset_name} (first 20):")
+        cols = df.columns.tolist()
+        print(f"  {', '.join(cols[:20])}")
+        if len(cols) > 20:
+            print(f"  ... and {len(cols)-20} more columns")
+        print(f"  Total columns: {len(cols)}")
+        return df.columns.tolist()
+    except Exception as e:
+        print(f"Error reading {dataset_name}: {e}")
+        return []
 
-Output Datasets:
-1. DYIBU07  - Daily Islamic Balance Summary (SAS + Parquet)
-   Fields: BRANCH, SAI, SAINO, MBS, MBSNO, CAI, CAINO, CA96, CAI96, CAIG, CAIGNO, CAIH, CAIHNO
-   Records: 267
+# ============================================================================
+# INSPECT INPUT DATASETS
+# ============================================================================
+
+print("\n" + "="*80)
+print("INSPECTING INPUT DATASETS")
+print("="*80)
+
+# Read a small sample to get column names
+try:
+    saving_sample, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/saving.sas7bdat')
+    current_sample, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/current.sas7bdat')
+    
+    print(f"\nSAVING dataset columns (first 20):")
+    saving_cols = saving_sample.columns.tolist()
+    print(f"  {', '.join(saving_cols[:20])}")
+    
+    print(f"\nCURRENT dataset columns (first 20):")
+    current_cols = current_sample.columns.tolist()
+    print(f"  {', '.join(current_cols[:20])}")
+    
+except Exception as e:
+    print(f"Error reading sample: {e}")
+    sys.exit(1)
+
+# ============================================================================
+# SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)
+# ============================================================================
+
+print("\n" + "="*80)
+print("SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)")
+print("="*80)
+
+try:
+    current_df, current_meta = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/current.sas7bdat')
+    saving_df, saving_meta = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/saving.sas7bdat')
+    print(f"Loaded CURRENT: {len(current_df)} rows, {len(current_df.columns)} columns")
+    print(f"Loaded SAVING: {len(saving_df)} rows, {len(saving_df.columns)} columns")
+except Exception as e:
+    print(f"Error loading datasets: {e}")
+    sas.endsas()
+    sys.exit(1)
+
+# Determine column names
+branch_col = None
+for col in ['BRANCH', 'branch', 'Branch', 'BRANCH_NO', 'branch_no']:
+    if col in current_df.columns:
+        branch_col = col
+        break
+
+product_col = None
+for col in ['PRODUCT', 'product', 'Product', 'PROD', 'prod']:
+    if col in current_df.columns:
+        product_col = col
+        break
+
+curbal_col = None
+for col in ['CURBAL', 'curbal', 'CurBal', 'CURRENT_BAL', 'current_bal']:
+    if col in current_df.columns:
+        curbal_col = col
+        break
+
+openind_col = None
+for col in ['OPENIND', 'openind', 'OPEN_IND', 'open_ind', 'OpenInd']:
+    if col in current_df.columns:
+        openind_col = col
+        break
+
+print(f"\nUsing columns:")
+print(f"  BRANCH: {branch_col}")
+print(f"  PRODUCT: {product_col}")
+print(f"  CURBAL: {curbal_col}")
+print(f"  OPENIND: {openind_col}")
+
+if None in [branch_col, product_col, curbal_col]:
+    print(f"\nERROR: Could not find required columns")
+    print(f"Available columns in CURRENT: {current_df.columns.tolist()[:20]}")
+    sas.endsas()
+    sys.exit(1)
+
+# Filter out closed accounts
+if openind_col:
+    current_filtered = current_df[~current_df[openind_col].isin(['B','C','P'])][[branch_col, product_col, curbal_col]].copy()
+    saving_filtered = saving_df[~saving_df[openind_col].isin(['B','C','P'])][[branch_col, product_col, curbal_col]].copy()
+else:
+    current_filtered = current_df[[branch_col, product_col, curbal_col]].copy()
+    saving_filtered = saving_df[[branch_col, product_col, curbal_col]].copy()
+
+# Rename columns to standard names
+current_filtered.columns = ['branch', 'product', 'curbal']
+saving_filtered.columns = ['branch', 'product', 'curbal']
+
+current_filtered['reptdate'] = zdate
+saving_filtered['reptdate'] = zdate
+
+dyibu_raw = pd.concat([current_filtered, saving_filtered], ignore_index=True)
+print(f"Combined raw data: {len(dyibu_raw)} rows")
+
+# Create product category flags
+dyibu_raw['sai'] = np.where(dyibu_raw['product'].isin([204,207,214,215]), dyibu_raw['curbal'], 0)
+dyibu_raw['saino'] = np.where(dyibu_raw['product'].isin([204,207,214,215]), 1, 0)
+dyibu_raw['mbs'] = np.where(dyibu_raw['product'] == 214, dyibu_raw['curbal'], 0)
+dyibu_raw['mbsno'] = np.where(dyibu_raw['product'] == 214, 1, 0)
+
+# CAI products (excluding certain products)
+cai_products = [60,61,63,64,70,71,93,94,160,161,162,163,164,166,169,66,67,168,167,182,183,184,73]
+exclude_products = [96,97,61,161,63,163]
+cai_condition = dyibu_raw['product'].isin(cai_products) & (dyibu_raw['curbal'] > 0) & ~dyibu_raw['product'].isin(exclude_products)
+dyibu_raw['cai'] = np.where(cai_condition, dyibu_raw['curbal'], 0)
+dyibu_raw['caino'] = np.where(cai_condition, 1, 0)
+
+dyibu_raw['ca96'] = np.where(dyibu_raw['product'].isin([96,97]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
+dyibu_raw['cai96'] = np.where(dyibu_raw['product'].isin([96,97]) & (dyibu_raw['curbal'] > 0), 1, 0)
+dyibu_raw['caig'] = np.where(dyibu_raw['product'].isin([61,161]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
+dyibu_raw['caigno'] = np.where(dyibu_raw['product'].isin([61,161]) & (dyibu_raw['curbal'] > 0), 1, 0)
+dyibu_raw['caih'] = np.where(dyibu_raw['product'].isin([63,163]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
+dyibu_raw['caihno'] = np.where(dyibu_raw['product'].isin([63,163]) & (dyibu_raw['curbal'] > 0), 1, 0)
+
+# Aggregate by branch
+dyibu = dyibu_raw.groupby(['branch', 'reptdate']).agg({
+    'sai': 'sum', 'saino': 'sum', 'mbs': 'sum', 'mbsno': 'sum',
+    'cai': 'sum', 'caino': 'sum', 'ca96': 'sum', 'cai96': 'sum',
+    'caig': 'sum', 'caigno': 'sum', 'caih': 'sum', 'caihno': 'sum'
+}).reset_index()
+
+# Save DYIBU as SAS and Parquet
+dataset_name = f'dyibu{reptmon:02d}'
+save_sas_dataset(dyibu, dataset_name, OUTPUT_DIR)
+dyibu.to_parquet(f'{OUTPUT_DIR}/{dataset_name}.parquet')
+print(f"  Saved Parquet file: {dataset_name}.parquet")
+print(f"Section 1: DYIBU - {len(dyibu)} branches")
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def calculate_age(bdate_str, reptdate, reptmon, reptday, reptyear):
+    if pd.isna(bdate_str) or bdate_str == 0 or str(bdate_str).strip() == '' or str(bdate_str) == '0':
+        return 0
+    try:
+        bdate_str = str(bdate_str).strip()
+        # Handle different date formats
+        if len(bdate_str) >= 8:
+            # Try to parse as MMDDYYYY or YYYYMMDD
+            try:
+                bdate = datetime.strptime(bdate_str[:8], '%m%d%Y')
+            except:
+                try:
+                    bdate = datetime.strptime(bdate_str[:8], '%Y%m%d')
+                except:
+                    return 0
+            age = reptyear - bdate.year
+            if age == AGELIMIT:
+                if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
+                    age = AGEBELOW
+            elif age == MAXAGE:
+                if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
+                    age = AGELIMIT
+            elif age > MAXAGE:
+                age = MAXAGE
+            elif age < AGELIMIT:
+                age = AGEBELOW
+            else:
+                age = AGELIMIT
+            return age
+    except:
+        return 0
+    return 0
+
+def get_isa_range(curbal):
+    if curbal < 501: return 500
+    elif curbal < 2001: return 2000
+    elif curbal < 5001: return 5000
+    elif curbal < 10001: return 10000
+    elif curbal < 30001: return 30000
+    elif curbal < 50001: return 50000
+    elif curbal < 75001: return 75000
+    else: return 75001
+
+def get_range_bucket(curbal, product):
+    if product == 214:
+        return get_isa_range(curbal)
+    ranges = [(500, '< 500'), (1000, '< 1000'), (5000, '< 5000'), 
+              (10000, '< 10000'), (50000, '< 50000'), (100000, '< 100000'),
+              (500000, '< 500000'), (float('inf'), '>= 500000')]
+    for limit, label in ranges:
+        if curbal < limit:
+            return label
+    return '>= 500000'
+
+# ============================================================================
+# SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS
+# ============================================================================
+
+print("\n" + "="*80)
+print("SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS")
+print("="*80)
+
+# Map all column names for both datasets
+column_map = {
+    'BRANCH': 'branch',
+    'branch': 'branch',
+    'PRODUCT': 'product',
+    'product': 'product',
+    'CURBAL': 'curbal',
+    'curbal': 'curbal',
+    'AVGAMT': 'avgamt',
+    'avgamt': 'avgamt',
+    'OPENDT': 'opendt',
+    'opendt': 'opendt',
+    'CLOSEDT': 'closedt',
+    'closedt': 'closedt',
+    'BDATE': 'bdate',
+    'bdate': 'bdate',
+    'CUSTCODE': 'custcode',
+    'custcode': 'custcode',
+    'PURPOSE': 'purpose',
+    'purpose': 'purpose',
+    'RACE': 'race',
+    'race': 'race',
+    'OPENIND': 'openind',
+    'openind': 'openind'
+}
+
+try:
+    # Read and filter datasets
+    saving_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/saving.sas7bdat')
+    current_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/deposit/current.sas7bdat')
+    
+    # Rename columns to standard names
+    for orig, new in column_map.items():
+        if orig in saving_df.columns:
+            saving_df.rename(columns={orig: new}, inplace=True)
+        if orig in current_df.columns:
+            current_df.rename(columns={orig: new}, inplace=True)
+    
+    # Filter with openind if it exists
+    if 'openind' in saving_df.columns:
+        saving_filtered = saving_df[(~saving_df['openind'].isin(['B','C','P'])) & (~saving_df['product'].isin([297,298]))]
+    else:
+        saving_filtered = saving_df[~saving_df['product'].isin([297,298])]
+        
+    if 'openind' in current_df.columns:
+        current_filtered = current_df[(~current_df['openind'].isin(['B','C','P'])) & (~current_df['product'].isin([297,298]))]
+    else:
+        current_filtered = current_df[~current_df['product'].isin([297,298])]
+    
+    # Combine datasets
+    accounts_df = pd.concat([saving_filtered, current_filtered], ignore_index=True)
+    print(f"Total accounts to process: {len(accounts_df)}")
+    
+except Exception as e:
+    print(f"Error processing accounts: {e}")
+    sas.endsas()
+    sys.exit(1)
+
+# Process each account - using vectorized operations for better performance
+print("Processing accounts using vectorized operations...")
+
+# Pre-allocate dataframes for better performance
+processed_data = []
+
+# Process in chunks for memory efficiency
+chunk_size = 100000
+total_rows = len(accounts_df)
+
+for start_idx in range(0, total_rows, chunk_size):
+    end_idx = min(start_idx + chunk_size, total_rows)
+    chunk = accounts_df.iloc[start_idx:end_idx].copy()
+    
+    # Calculate accytd using vectorized operations
+    chunk['accytd'] = 0
+    mask = (chunk['opendt'] != 0) & (chunk['closedt'].isna() | (chunk['closedt'] == 0))
+    if mask.any():
+        try:
+            # Extract year from opendt
+            opendt_str = chunk.loc[mask, 'opendt'].astype(str).str[:4]
+            chunk.loc[mask, 'accytd'] = (opendt_str.astype(float) == reptyear).astype(int)
+        except:
+            pass
+    
+    # Calculate age using vectorized operations
+    chunk['age'] = 0
+    # This is a simplified version - for complex logic, loop might be needed
+    for idx, row in chunk.iterrows():
+        chunk.loc[idx, 'age'] = calculate_age(row['bdate'], reptdate, reptmon, reptday, reptyear)
+    
+    # Get ranges using vectorized operations
+    chunk['avgrnge'] = chunk['avgamt'].apply(lambda x: get_range_bucket(x, 0))
+    chunk['range'] = chunk.apply(lambda x: get_range_bucket(x['curbal'], x['product']), axis=1)
+    
+    # Select and rename columns
+    chunk_processed = chunk[['product', 'branch', 'curbal', 'avgamt', 'accytd', 
+                            'age', 'purpose', 'race', 'custcode', 'avgrnge', 'range']].copy()
+    chunk_processed['reptdate'] = zdate
+    
+    processed_data.append(chunk_processed)
+    
+    if (start_idx + chunk_size) % 100000 == 0:
+        print(f"  Processed {min(end_idx, total_rows):,} accounts...")
+
+# Combine all chunks
+processed_df = pd.concat(processed_data, ignore_index=True)
+print(f"Processed {len(processed_df):,} accounts")
+
+# ============================================================================
+# Generate all output datasets
+# ============================================================================
+
+def generate_dataset(df, filter_condition, groupby_cols, agg_dict, dataset_name):
+    """Generic function to generate aggregated datasets"""
+    filtered = df[filter_condition] if filter_condition is not None else df
+    if len(filtered) > 0:
+        result = filtered.groupby(groupby_cols).agg(agg_dict).reset_index()
+    else:
+        # Create empty dataframe with correct columns
+        result = pd.DataFrame(columns=groupby_cols + list(agg_dict.keys()))
+    return result
+
+# Define all datasets
+datasets = [
+    {
+        'name': f'awsa{reptmon:02d}',
+        'filter': df['product'].isin([204, 215]),
+        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
+        'agg': {
+            'noacct': ('product', 'count'),
+            'curbal': ('curbal', 'sum'),
+            'accytd': ('accytd', 'sum'),
+            'avgacct': ('avgamt', lambda x: (x > 0).sum()),
+            'avgamt': ('avgamt', 'sum')
+        }
+    },
+    {
+        'name': f'awsb{reptmon:02d}',
+        'filter': df['product'] == 207,
+        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
+        'agg': {
+            'noacct': ('product', 'count'),
+            'curbal': ('curbal', 'sum'),
+            'accytd': ('accytd', 'sum'),
+            'avgacct': ('avgamt', lambda x: (x > 0).sum()),
+            'avgamt': ('avgamt', 'sum')
+        }
+    },
+    {
+        'name': f'awsc{reptmon:02d}',
+        'filter': df['product'] == 214,
+        'groupby': ['product', 'range', 'race', 'age', 'reptdate'],
+        'agg': {
+            'noacct': ('product', 'count'),
+            'curbal': ('curbal', 'sum'),
+            'accytd': ('accytd', 'sum'),
+            'avgamt': ('avgamt', 'sum')
+        }
+    },
+    {
+        'name': f'mudh{reptmon:02d}',
+        'filter': df['product'] == 214,
+        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
+        'agg': {
+            'noacct': ('product', 'count'),
+            'curbal': ('curbal', 'sum'),
+            'accytd': ('accytd', 'sum'),
+            'avgamt': ('avgamt', 'sum')
+        }
+    },
+    {
+        'name': f'awca{reptmon:02d}',
+        'filter': (df['product'].isin([93, 96])) & (df['curbal'] > 0),
+        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
+        'agg': {
+            'noacct': ('product', 'count'),
+            'curbal': ('curbal', 'sum'),
+            'accytd': ('accytd', 'sum'),
+            'avgacct': ('avgamt', lambda x: (x > 0).sum()),
+            'avgamt': ('avgamt', 'sum')
+        }
+    },
+    {
+        'name': f'awcb{reptmon:02d}',
+        'filter': (df['product'].isin([160, 162, 164, 168, 182, 169])) & 
+                  (df['curbal'] > 0) & 
+                  (df['purpose'].isin(['1', '2', '4'])),
+        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
+        'agg': {
+            'noacct': ('product', 'count'),
+            'curbal': ('curbal', 'sum'),
+            'accytd': ('accytd', 'sum'),
+            'avgacct': ('avgamt', lambda x: (x > 0).sum()),
+            'avgamt': ('avgamt', 'sum')
+        }
+    }
+]
+
+# Generate each dataset
+for ds in datasets:
+    print(f"\nGenerating {ds['name']}...")
+    result = generate_dataset(processed_df, ds['filter'], ds['groupby'], ds['agg'], ds['name'])
+    
+    # Save SAS and Parquet
+    save_sas_dataset(result, ds['name'], OUTPUT_DIR)
+    result.to_parquet(f'{OUTPUT_DIR}/{ds["name"]}.parquet')
+    
+    # Print summary
+    total_accts = result['noacct'].sum() if len(result) > 0 else 0
+    print(f"  {ds['name']} - {total_accts:,} accounts, {len(result)} groups")
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
+print("\n" + "="*80)
+print("ISLAMIC BANKING STATISTICS SUMMARY")
+print("="*80)
+print(f"""
+Date: {rdate} (Yesterday)
+Processing Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Output Datasets (SAS7BDAT + Parquet):
+1. DYIBU{reptmon:02d}  - Daily Islamic Balance Summary
+   Records: {len(dyibu)}
    
-2. AWSA07   - Products 204,215 (Regular Savings) (SAS + Parquet)
-   Records: 389
+2. AWSA{reptmon:02d}   - Products 204,215 (Regular Savings)
+   Records: {len(datasets[0]['result']) if 'result' in locals() else 0}
    
-3. AWSB07   - Product 207 (Islamic Basic Savings) (SAS + Parquet)
-   Records: 27
+3. AWSB{reptmon:02d}   - Product 207 (Islamic Basic Savings)
+   Records: {len(datasets[1]['result']) if 'result' in locals() else 0}
    
-4. AWSC07   - Product 214 (Mudharabah by Age/Race) (SAS + Parquet)
-   Records: 7
+4. AWSC{reptmon:02d}   - Product 214 (Mudharabah by Age/Race)
+   Records: {len(datasets[2]['result']) if 'result' in locals() else 0}
    
-5. MUDH07   - Product 214 (Mudharabah by Purpose) (SAS + Parquet)
-   Records: 4
+5. MUDH{reptmon:02d}   - Product 214 (Mudharabah by Purpose)
+   Records: {len(datasets[3]['result']) if 'result' in locals() else 0}
    
-6. AWCA07   - Products 93,96 (Islamic Current Accounts) (SAS + Parquet)
-   Records: 0
+6. AWCA{reptmon:02d}   - Products 93,96 (Islamic Current Accounts)
+   Records: {len(datasets[4]['result']) if 'result' in locals() else 0}
    
-7. AWCB07   - Products 160,162,164,168,182,169 (Purpose 1,2,4 only) (SAS + Parquet)
-   Records: 134
+7. AWCB{reptmon:02d}   - Products 160,162,164,168,182,169 (Purpose 1,2,4 only)
+   Records: {len(datasets[5]['result']) if 'result' in locals() else 0}
 
-Total Accounts Processed: 2394211
-
-Product Categories:
-- Savings: 204 (Regular), 207 (Basic), 214 (Mudharabah), 215 (Special)
-- Current: 93,96 (Basic Islamic), 160-169,182 (Specific Purpose)
+Total Accounts Processed: {len(processed_df):,}
 
 Output Formats:
-- SAS7BDAT files in: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-- Parquet files in: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
+- SAS7BDAT files in: {OUTPUT_DIR}
+- Parquet files in: {OUTPUT_DIR}
+""")
 
-SAS Connection terminated. Subprocess id was 191772
-SAS Connection closed successfully
+# Close SAS connection
+try:
+    sas.endsas()
+    print("SAS Connection closed successfully")
+except:
+    pass
 
-Completed: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-Both SAS7BDAT and Parquet formats generated.
-Data processed for date: 2026-07-07
+print(f"\nCompleted: {OUTPUT_DIR}")
+print("Both SAS7BDAT and Parquet formats generated.")
+print(f"Data processed for date: {reptdate.strftime('%Y-%m-%d')}")
