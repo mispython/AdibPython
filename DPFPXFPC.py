@@ -1,441 +1,370 @@
-Reading GL text file with encoding detection...
-Detected encoding: ascii
-Successfully read file with encoding: ascii
+import polars as pl
+from datetime import datetime, timedelta
+import sys
+import os
+import re
 
-Successfully read 74 lines with encoding: ascii
+# Constants
+GLFILE_TXT = 'data/glfile.txt'
+STORE_DIR = 'data/store/'
 
-Parsing 74 lines...
+# Use yesterday's date
+reptdate = datetime.now() - timedelta(days=1)
+reptyear = reptdate.strftime('%Y')
+reptmon = reptdate.strftime('%m')
+reptday = reptdate.strftime('%d')
+rdate = reptdate.strftime('%d%m%y')
 
-First 5 lines after decoding:
-Line 1: '20260708                                                                        '
-  Length: 133
-  Hex (first 20 chars): 32 30 32 36 30 37 30 38 20 20 20 20 20 20 20 20 20 20 20 20
+def read_gl_text_file(filepath):
+    """Read GL text file with proper parsing"""
+    
+    with open(filepath, 'r') as f:
+        lines = [line.rstrip('\n') for line in f.readlines() if line.strip()]
+    
+    print(f"Total lines: {len(lines)}")
+    
+    # Parse each line
+    data = []
+    header_date = None
+    
+    for line in lines:
+        # Skip empty lines
+        if not line.strip():
+            continue
+        
+        # Check if this is the header line (8 digits)
+        if line.strip().isdigit() and len(line.strip()) == 8:
+            header_date = line.strip()
+            print(f"Header date found: {header_date}")
+            continue
+        
+        # Extract GLITEM (positions 0-8)
+        glitem = line[0:8].strip() if len(line) > 8 else ''
+        
+        # Extract DATE (positions 20-28)
+        date = line[20:28].strip() if len(line) > 28 else ''
+        
+        # Extract BALANCE (positions 45-60)
+        balance_str = line[45:60].strip() if len(line) > 60 else ''
+        
+        # Check for sign at the end
+        sign = line[-1] if len(line) > 0 else ''
+        
+        # Skip if GLITEM is empty or just spaces
+        if not glitem or glitem == '08':
+            continue
+        
+        # Clean balance string
+        balance_str = balance_str.replace(',', '')
+        
+        # Convert to float
+        try:
+            balance = float(balance_str) if balance_str else 0.0
+        except ValueError:
+            balance = 0.0
+        
+        # Apply sign
+        if sign == '-':
+            balance = -balance
+        
+        # Get date from header
+        if header_date:
+            yy = header_date[0:2]
+            mm = header_date[2:4]
+            dd = header_date[4:6]
+        else:
+            yy = reptyear[2:4]
+            mm = reptmon
+            dd = reptday
+        
+        data.append({
+            'YY': yy,
+            'MM': mm,
+            'DD': dd,
+            'GLITEM': glitem,
+            'DATE': date,
+            'BALANCE': balance,
+            'SIGN': sign
+        })
+    
+    if data:
+        df = pl.DataFrame(data)
+        return df
+    else:
+        return None
 
-Line 2: '1F147600            08/07/26                             0.00                                                                        '
-  Length: 133
-  Hex (first 20 chars): 31 46 31 34 37 36 30 30 20 20 20 20 20 20 20 20 20 20 20 20
+def match_glitem(file_glitem, condition_glitem):
+    """Try to match file GLITEM with condition GLITEM"""
+    if not file_glitem or not condition_glitem:
+        return False
+    
+    # Direct match
+    if file_glitem == condition_glitem:
+        return True
+    
+    # Check if file GLITEM is a prefix of condition GLITEM
+    if condition_glitem.startswith(file_glitem):
+        return True
+    
+    # Check if condition GLITEM is a prefix of file GLITEM
+    if file_glitem.startswith(condition_glitem):
+        return True
+    
+    # Handle '1F' vs 'F' prefix
+    if file_glitem.startswith('1F') and condition_glitem.startswith('F'):
+        # Remove '1' from file and 'F' from condition
+        file_no_prefix = file_glitem[1:]
+        cond_no_prefix = condition_glitem[1:]
+        if file_no_prefix == cond_no_prefix:
+            return True
+        if cond_no_prefix.startswith(file_no_prefix):
+            return True
+        if file_no_prefix.startswith(cond_no_prefix):
+            return True
+    
+    return False
 
-Line 3: '1F142630C           08/07/26                             0.00                                                                        '
-  Length: 133
-  Hex (first 20 chars): 31 46 31 34 32 36 33 30 43 20 20 20 20 20 20 20 20 20 20 20
+def process_gl_data(df_gl, suffix):
+    """Process GL data for a given suffix (P1 or P2)"""
+    
+    print(f"\nProcessing {suffix}...")
+    
+    # Define GLITEM mappings for P1 and P2
+    if suffix == 'P1':
+        glitem_mappings = [
+            ('F142630C', 'B1.12'),
+            ('42699', 'B1.14'),
+            ('44111', 'A1.18'),
+            ('F147100', 'A1.18'),
+            ('F249299K', 'A1.20'),
+            ('49120', 'A1.20'),
+            ('42199', 'A1.20'),
+            ('49120NLF', 'A1.20'),
+            ('42190', 'A1.20'),
+            ('F144611FXSDC', 'B1.18'),
+            ('F147600', 'B1.18'),
+            ('F143110VCB', 'A2.21'),
+            ('F143110VFBI', 'A2.21'),
+            ('F143120ODNVB', 'A2.21'),
+            ('F143120ODNIB', 'A2.21'),
+            ('F143620FNFBI', 'B2.21'),
+            ('F133110ODVIB', 'A2.01'),
+            ('F13312002CB', 'A2.01'),
+            ('F132121BBNM', 'A2.01'),
+            ('37070', 'A2.08'),
+            ('F137610FXSH', 'B2.08'),
+            ('F137650FXCDS', 'B2.08'),
+            ('F133620FNFBI', 'B2.01')
+        ]
+    else:  # P2
+        glitem_mappings = [
+            ('F142630C', 'B1.12'),
+            ('42699', 'B1.14'),
+            ('44111', 'A1.18'),
+            ('F147100', 'A1.18'),
+            ('F147600', 'B1.18'),
+            ('F144611FXSDC', 'B1.18'),
+            ('F249299K', 'A1.20'),
+            ('49120', 'A1.20'),
+            ('42199', 'A1.20'),
+            ('49120NLF', 'A1.20'),
+            ('F143110VCB', 'A2.21'),
+            ('F143110VFBI', 'A2.21'),
+            ('F143120ODNVB', 'A2.21'),
+            ('F143120ODNIB', 'A2.21'),
+            ('F143620FNFBI', 'B2.21'),
+            ('F133110ODVIB', 'A2.01'),
+            ('F13312002CB', 'A2.01'),
+            ('F132121BBNM', 'A2.01'),
+            ('37070', 'A2.08'),
+            ('F137610FXSH', 'B2.08'),
+            ('F137650FXCDS', 'B2.08'),
+            ('F133620FNFBI', 'B2.01')
+        ]
+    
+    # Get unique GLITEMs from the file
+    file_glitems = df_gl['GLITEM'].unique().to_list()
+    
+    # Create a mapping from file GLITEM to condition GLITEM
+    mapping = {}
+    for file_glitem in file_glitems:
+        for cond_glitem, item_code in glitem_mappings:
+            if match_glitem(file_glitem, cond_glitem):
+                mapping[file_glitem] = (cond_glitem, item_code)
+                print(f"Matched: '{file_glitem}' -> '{cond_glitem}' ({item_code})")
+                break
+    
+    if not mapping:
+        print(f"No matches found for {suffix}")
+        return None, None, None, None, None
+    
+    # Process each matched GLITEM
+    rows = []
+    for file_glitem, (cond_glitem, item_code) in mapping.items():
+        filtered = df_gl.filter(pl.col('GLITEM') == file_glitem)
+        if len(filtered) > 0:
+            balance = filtered['BALANCE'].sum()
+            
+            # Determine which fields get the balance based on item code
+            week = 0
+            month = 0
+            last = 0
+            total = 0
+            
+            if item_code.startswith('B') and item_code not in ['B1.12', 'B1.14']:
+                week = balance
+                month = balance
+            elif item_code in ['B1.12', 'B1.14']:
+                last = balance
+            elif item_code.startswith('A'):
+                total = balance
+            
+            rows.append({
+                'ITEM': item_code,
+                'BALANCE': balance,
+                'WEEK': week,
+                'MONTH': month,
+                'QTR': 0,
+                'HALFYR': 0,
+                'YEAR': 0,
+                'LAST': last,
+                'TOTAL': total
+            })
+    
+    if not rows:
+        print(f"No data found for {suffix}")
+        return None, None, None, None, None
+    
+    glfilep = pl.DataFrame(rows)
+    print(f"Created DataFrame with {len(rows)} rows for {suffix}")
+    
+    # Group by ITEM and aggregate
+    glfilep = glfilep.group_by('ITEM').agg([
+        pl.col('WEEK').sum().alias('WEEK'),
+        pl.col('MONTH').sum().alias('MONTH'),
+        pl.col('QTR').sum().alias('QTR'),
+        pl.col('HALFYR').sum().alias('HALFYR'),
+        pl.col('YEAR').sum().alias('YEAR'),
+        pl.col('LAST').sum().alias('LAST'),
+        pl.col('TOTAL').sum().alias('TOTAL'),
+        pl.col('BALANCE').sum().alias('BALANCE')
+    ])
+    
+    # Convert to thousands
+    glfilep = glfilep.with_columns([
+        (pl.col('WEEK') / 1000).round(3).alias('WEEK'),
+        (pl.col('MONTH') / 1000).round(3).alias('MONTH'),
+        (pl.col('QTR') / 1000).round(3).alias('QTR'),
+        (pl.col('HALFYR') / 1000).round(3).alias('HALFYR'),
+        (pl.col('YEAR') / 1000).round(3).alias('YEAR'),
+        (pl.col('LAST') / 1000).round(3).alias('LAST'),
+        (pl.col('TOTAL') / 1000).round(3).alias('TOTAL'),
+        (pl.col('BALANCE') / 1000).round(3).alias('BALANCE')
+    ])
+    
+    print(f"\nProcessed data for {suffix}:")
+    print(glfilep)
+    
+    # Split into categories
+    glrmp = glfilep.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('1'))
+    glfxp = glfilep.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('1') & ~pl.col('ITEM').is_in(['B1.12', 'B1.14']))
+    glrmfxp = glfilep.filter(pl.col('ITEM').is_in(['B1.12', 'B1.14']))
+    glutrmp = glfilep.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('2'))
+    glutfxp = glfilep.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('2'))
+    
+    # Save files
+    os.makedirs(STORE_DIR, exist_ok=True)
+    
+    timestamp = f"{reptyear}{reptmon}{reptday}"
+    
+    # Save each dataset
+    datasets = [
+        (glrmp, f'GLRM{suffix}{timestamp}'),
+        (glfxp, f'GLFX{suffix}{timestamp}'),
+        (glrmfxp, f'GLRMFX{suffix}{timestamp}'),
+        (glutrmp, f'GLUTRM{suffix}{timestamp}'),
+        (glutfxp, f'GLUTFX{suffix}{timestamp}')
+    ]
+    
+    for df, name in datasets:
+        if len(df) > 0:
+            # Save as parquet
+            parquet_file = f'{STORE_DIR}{name}.parquet'
+            df.write_parquet(parquet_file)
+            print(f"Saved: {parquet_file}")
+            
+            # Save as SAS
+            save_to_sas(df, name)
+            
+            # Print
+            print(f"\n{name}:")
+            print(df)
+    
+    return glrmp, glfxp, glrmfxp, glutrmp, glutfxp
 
-Line 4: '142699              08/07/26                   224,458,779.12-                                                                       '
-  Length: 133
-  Hex (first 20 chars): 31 34 32 36 39 39 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+def save_to_sas(df, dataset_name):
+    """Save a Polars DataFrame to SAS dataset using saspy"""
+    if len(df) == 0:
+        return
+    
+    try:
+        import saspy
+        sas = saspy.SASsession()
+        
+        # Convert Polars DataFrame to pandas
+        df_pandas = df.to_pandas()
+        
+        # Create SAS dataset
+        sas.sasdata(df_pandas, table=dataset_name)
+        
+        # Save to permanent SAS dataset
+        sas.submit(f"""
+            libname out '{STORE_DIR}';
+            data out.{dataset_name};
+                set {dataset_name};
+            run;
+        """)
+        
+        print(f"SAS dataset saved: {STORE_DIR}{dataset_name}.sas7bdat")
+        
+    except ImportError:
+        print("saspy not installed. SAS datasets will not be created.")
+    except Exception as e:
+        print(f"Error creating SAS dataset {dataset_name}: {e}")
 
-Line 5: '144111              08/07/26                 4,997,935,844.48-                                                                       '
-  Length: 133
-  Hex (first 20 chars): 31 34 34 31 31 31 20 20 20 20 20 20 20 20 20 20 20 20 20 20
-
-Found header date: 20260708
-
-Parsed 67 rows of data
-Columns: ['YY', 'MM', 'DD', 'GLITEM', 'DATE', 'BALANCE', 'SIGN']
-
-Data sample:
-shape: (10, 7)
-┌─────┬─────┬─────┬─────────┬──────────┬───────────┬──────┐
-│ YY  ┆ MM  ┆ DD  ┆ GLITEM  ┆ DATE     ┆ BALANCE   ┆ SIGN │
-│ --- ┆ --- ┆ --- ┆ ---     ┆ ---      ┆ ---       ┆ ---  │
-│ str ┆ str ┆ str ┆ str     ┆ str      ┆ f64       ┆ str  │
-╞═════╪═════╪═════╪═════════╪══════════╪═══════════╪══════╡
-│ 20  ┆ 26  ┆ 07  ┆ 1F14760 ┆ 08/07/26 ┆ 0.0       ┆      │
-│ 20  ┆ 26  ┆ 07  ┆ 1F14263 ┆ 08/07/26 ┆ 0.0       ┆      │
-│ 20  ┆ 26  ┆ 07  ┆ 142699  ┆ 08/07/26 ┆ -2.2446e8 ┆ -    │
-│ 20  ┆ 26  ┆ 07  ┆ 144111  ┆ 08/07/26 ┆ -4.9979e9 ┆ -    │
-│ 20  ┆ 26  ┆ 07  ┆ 1F14710 ┆ 08/07/26 ┆ -0.0      ┆ -    │
-│ 20  ┆ 26  ┆ 07  ┆ 1F24929 ┆ 08/07/26 ┆ -9.0      ┆ -    │
-│ 20  ┆ 26  ┆ 07  ┆ 142199  ┆ 08/07/26 ┆ -3.7929e7 ┆ -    │
-│ 20  ┆ 26  ┆ 07  ┆ 1F14461 ┆ 08/07/26 ┆ 1.0       ┆      │
-│ 20  ┆ 26  ┆ 07  ┆ 149120N ┆ 08/07/26 ┆ -2.2252e8 ┆ -    │
-│ 20  ┆ 26  ┆ 07  ┆ 1F13460 ┆ 08/07/26 ┆ 64.0      ┆      │
-└─────┴─────┴─────┴─────────┴──────────┴───────────┴──────┘
-
-Unique GLITEMs in file (45):
-  132110
-  134200
-  137070
-  139110
-  142199
-  142699
-  142699S
-  142699U
-  144111
-  149120N
-  1F13211
-  1F13212
-  1F13311
-  1F13313
-  1F13314
-  1F13362
-  1F13364
-  1F13460
-  1F13701
-  1F13761
-  ... and 25 more
-
-============================================================
-Processing GL P1...
-============================================================
-
-Processing P1...
-DataFrame shape: (67, 7)
-
-Unique GLITEMs in file (45):
-  132110
-  134200
-  137070
-  139110
-  142199
-  142699
-  142699S
-  142699U
-  144111
-  149120N
-  1F13211
-  1F13212
-  1F13311
-  1F13313
-  1F13314
-  1F13362
-  1F13364
-  1F13460
-  1F13701
-  1F13761
-  1F13765
-  1F13911
-  1F13961
-  1F14130
-  1F14219
-  1F14251
-  1F14259
-  1F14260
-  1F14263
-  1F14269
-  1F14311
-  1F14312
-  1F14313
-  1F14362
-  1F14411
-  1F14414
-  1F14461
-  1F14710
-  1F14760
-  1F24761
-  1F24912
-  1F24923
-  1F24929
-  34111
-  34170
-Matched: '1F14760' -> 'F147600' (B1.18)
-Matched: '1F14362' -> 'F143620FNFBI' (B2.21)
-Matched: '1F14311' -> 'F143110VCB' (A2.21)
-Matched: '1F24929' -> 'F249299K' (A1.20)
-Matched: '149120N' -> '49120' (A1.20)
-Matched: '1F14710' -> 'F147100' (A1.18)
-Matched: '1F14312' -> 'F143120ODNVB' (A2.21)
-Matched: '1F13765' -> 'F137650FXCDS' (B2.08)
-Matched: '142699' -> '42699' (B1.14)
-Matched: '137070' -> '37070' (A2.08)
-Matched: '1F13311' -> 'F133110ODVIB' (A2.01)
-Matched: '1F13362' -> 'F133620FNFBI' (B2.01)
-Matched: '142699S' -> '42699' (B1.14)
-Matched: '142699U' -> '42699' (B1.14)
-Matched: '1F14263' -> 'F142630C' (B1.12)
-Matched: '1F13761' -> 'F137610FXSH' (B2.08)
-Matched: '144111' -> '44111' (A1.18)
-Matched: '142199' -> '42199' (A1.20)
-Matched: '1F13212' -> 'F132121BBNM' (A2.01)
-Matched: '1F14461' -> 'F144611FXSDC' (B1.18)
-Created DataFrame with 20 rows for P1
-
-Processed data for P1:
-shape: (11, 9)
-┌───────┬───────┬───────┬─────┬───┬──────┬─────────────┬─────────────┬─────────────┐
-│ ITEM  ┆ WEEK  ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST        ┆ TOTAL       ┆ BALANCE     │
-│ ---   ┆ ---   ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---         ┆ ---         ┆ ---         │
-│ str   ┆ f64   ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64         ┆ f64         ┆ f64         │
-╞═══════╪═══════╪═══════╪═════╪═══╪══════╪═════════════╪═════════════╪═════════════╡
-│ B2.21 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0         ┆ 0.0         │
-│ B2.01 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0         ┆ 0.0         │
-│ A2.21 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0         ┆ 0.0         │
-│ A2.08 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0         ┆ 0.0         │
-│ B1.12 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0         ┆ 0.0         │
-│ …     ┆ …     ┆ …     ┆ …   ┆ … ┆ …    ┆ …           ┆ …           ┆ …           │
-│ A1.20 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ -260449.742 ┆ -260449.742 │
-│ B1.18 ┆ 0.001 ┆ 0.001 ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0         ┆ 0.001       │
-│ A1.18 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ -4.9979e6   ┆ -4.9979e6   │
-│ B2.08 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0         ┆ 0.0         │
-│ B1.14 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ -428093.697 ┆ 0.0         ┆ -428093.697 │
-└───────┴───────┴───────┴─────┴───┴──────┴─────────────┴─────────────┴─────────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLRMP120260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275176
-
-Error creating SAS dataset GLRMP120260708: sasdata() got multiple values for argument 'table'
-
-GLRMP120260708:
-shape: (2, 9)
-┌───────┬──────┬───────┬─────┬───┬──────┬──────┬─────────────┬─────────────┐
-│ ITEM  ┆ WEEK ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST ┆ TOTAL       ┆ BALANCE     │
-│ ---   ┆ ---  ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---  ┆ ---         ┆ ---         │
-│ str   ┆ f64  ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64  ┆ f64         ┆ f64         │
-╞═══════╪══════╪═══════╪═════╪═══╪══════╪══════╪═════════════╪═════════════╡
-│ A1.20 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ -260449.742 ┆ -260449.742 │
-│ A1.18 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ -4.9979e6   ┆ -4.9979e6   │
-└───────┴──────┴───────┴─────┴───┴──────┴──────┴─────────────┴─────────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLFXP120260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275200
-
-Error creating SAS dataset GLFXP120260708: sasdata() got multiple values for argument 'table'
-
-GLFXP120260708:
-shape: (1, 9)
-┌───────┬───────┬───────┬─────┬───┬──────┬──────┬───────┬─────────┐
-│ ITEM  ┆ WEEK  ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST ┆ TOTAL ┆ BALANCE │
-│ ---   ┆ ---   ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---  ┆ ---   ┆ ---     │
-│ str   ┆ f64   ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64  ┆ f64   ┆ f64     │
-╞═══════╪═══════╪═══════╪═════╪═══╪══════╪══════╪═══════╪═════════╡
-│ B1.18 ┆ 0.001 ┆ 0.001 ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.001   │
-└───────┴───────┴───────┴─────┴───┴──────┴──────┴───────┴─────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLRMFXP120260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275220
-
-Error creating SAS dataset GLRMFXP120260708: sasdata() got multiple values for argument 'table'
-
-GLRMFXP120260708:
-shape: (2, 9)
-┌───────┬──────┬───────┬─────┬───┬──────┬─────────────┬───────┬─────────────┐
-│ ITEM  ┆ WEEK ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST        ┆ TOTAL ┆ BALANCE     │
-│ ---   ┆ ---  ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---         ┆ ---   ┆ ---         │
-│ str   ┆ f64  ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64         ┆ f64   ┆ f64         │
-╞═══════╪══════╪═══════╪═════╪═══╪══════╪═════════════╪═══════╪═════════════╡
-│ B1.12 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0   ┆ 0.0         │
-│ B1.14 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ -428093.697 ┆ 0.0   ┆ -428093.697 │
-└───────┴──────┴───────┴─────┴───┴──────┴─────────────┴───────┴─────────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLUTRMP120260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275240
-
-Error creating SAS dataset GLUTRMP120260708: sasdata() got multiple values for argument 'table'
-
-GLUTRMP120260708:
-shape: (3, 9)
-┌───────┬──────┬───────┬─────┬───┬──────┬──────┬───────┬─────────┐
-│ ITEM  ┆ WEEK ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST ┆ TOTAL ┆ BALANCE │
-│ ---   ┆ ---  ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---  ┆ ---   ┆ ---     │
-│ str   ┆ f64  ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64  ┆ f64   ┆ f64     │
-╞═══════╪══════╪═══════╪═════╪═══╪══════╪══════╪═══════╪═════════╡
-│ A2.21 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-│ A2.08 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-│ A2.01 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.001 ┆ 0.001   │
-└───────┴──────┴───────┴─────┴───┴──────┴──────┴───────┴─────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLUTFXP120260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275259
-
-Error creating SAS dataset GLUTFXP120260708: sasdata() got multiple values for argument 'table'
-
-GLUTFXP120260708:
-shape: (3, 9)
-┌───────┬──────┬───────┬─────┬───┬──────┬──────┬───────┬─────────┐
-│ ITEM  ┆ WEEK ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST ┆ TOTAL ┆ BALANCE │
-│ ---   ┆ ---  ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---  ┆ ---   ┆ ---     │
-│ str   ┆ f64  ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64  ┆ f64   ┆ f64     │
-╞═══════╪══════╪═══════╪═════╪═══╪══════╪══════╪═══════╪═════════╡
-│ B2.21 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-│ B2.01 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-│ B2.08 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-└───────┴──────┴───────┴─────┴───┴──────┴──────┴───────┴─────────┘
-
-============================================================
-Processing GL P2...
-============================================================
-
-Processing P2...
-DataFrame shape: (67, 7)
-
-Unique GLITEMs in file (45):
-  132110
-  134200
-  137070
-  139110
-  142199
-  142699
-  142699S
-  142699U
-  144111
-  149120N
-  1F13211
-  1F13212
-  1F13311
-  1F13313
-  1F13314
-  1F13362
-  1F13364
-  1F13460
-  1F13701
-  1F13761
-  1F13765
-  1F13911
-  1F13961
-  1F14130
-  1F14219
-  1F14251
-  1F14259
-  1F14260
-  1F14263
-  1F14269
-  1F14311
-  1F14312
-  1F14313
-  1F14362
-  1F14411
-  1F14414
-  1F14461
-  1F14710
-  1F14760
-  1F24761
-  1F24912
-  1F24923
-  1F24929
-  34111
-  34170
-Matched: '1F14461' -> 'F144611FXSDC' (B1.18)
-Matched: '142699U' -> '42699' (B1.14)
-Matched: '1F13761' -> 'F137610FXSH' (B2.08)
-Matched: '1F24929' -> 'F249299K' (A1.20)
-Matched: '142199' -> '42199' (A1.20)
-Matched: '1F13362' -> 'F133620FNFBI' (B2.01)
-Matched: '142699' -> '42699' (B1.14)
-Matched: '1F14710' -> 'F147100' (A1.18)
-Matched: '142699S' -> '42699' (B1.14)
-Matched: '1F14263' -> 'F142630C' (B1.12)
-Matched: '144111' -> '44111' (A1.18)
-Matched: '1F13765' -> 'F137650FXCDS' (B2.08)
-Matched: '1F13212' -> 'F132121BBNM' (A2.01)
-Matched: '1F14311' -> 'F143110VCB' (A2.21)
-Matched: '1F14760' -> 'F147600' (B1.18)
-Matched: '149120N' -> '49120' (A1.20)
-Matched: '1F14362' -> 'F143620FNFBI' (B2.21)
-Matched: '1F14312' -> 'F143120ODNVB' (A2.21)
-Matched: '137070' -> '37070' (A2.08)
-Matched: '1F13311' -> 'F133110ODVIB' (A2.01)
-Created DataFrame with 20 rows for P2
-
-Processed data for P2:
-shape: (11, 9)
-┌───────┬───────┬───────┬─────┬───┬──────┬─────────────┬───────────┬─────────────┐
-│ ITEM  ┆ WEEK  ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST        ┆ TOTAL     ┆ BALANCE     │
-│ ---   ┆ ---   ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---         ┆ ---       ┆ ---         │
-│ str   ┆ f64   ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64         ┆ f64       ┆ f64         │
-╞═══════╪═══════╪═══════╪═════╪═══╪══════╪═════════════╪═══════════╪═════════════╡
-│ B1.18 ┆ 0.001 ┆ 0.001 ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0       ┆ 0.001       │
-│ A2.01 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.001     ┆ 0.001       │
-│ B1.14 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ -428093.697 ┆ 0.0       ┆ -428093.697 │
-│ A2.08 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0       ┆ 0.0         │
-│ B2.21 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0       ┆ 0.0         │
-│ …     ┆ …     ┆ …     ┆ …   ┆ … ┆ …    ┆ …           ┆ …         ┆ …           │
-│ B1.12 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0       ┆ 0.0         │
-│ B2.01 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0       ┆ 0.0         │
-│ B2.08 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0       ┆ 0.0         │
-│ A1.18 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ -4.9979e6 ┆ -4.9979e6   │
-│ A2.21 ┆ 0.0   ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0       ┆ 0.0         │
-└───────┴───────┴───────┴─────┴───┴──────┴─────────────┴───────────┴─────────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLRMP220260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275278
-
-Error creating SAS dataset GLRMP220260708: sasdata() got multiple values for argument 'table'
-
-GLRMP220260708:
-shape: (2, 9)
-┌───────┬──────┬───────┬─────┬───┬──────┬──────┬─────────────┬─────────────┐
-│ ITEM  ┆ WEEK ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST ┆ TOTAL       ┆ BALANCE     │
-│ ---   ┆ ---  ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---  ┆ ---         ┆ ---         │
-│ str   ┆ f64  ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64  ┆ f64         ┆ f64         │
-╞═══════╪══════╪═══════╪═════╪═══╪══════╪══════╪═════════════╪═════════════╡
-│ A1.20 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ -260449.742 ┆ -260449.742 │
-│ A1.18 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ -4.9979e6   ┆ -4.9979e6   │
-└───────┴──────┴───────┴─────┴───┴──────┴──────┴─────────────┴─────────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLFXP220260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275298
-
-Error creating SAS dataset GLFXP220260708: sasdata() got multiple values for argument 'table'
-
-GLFXP220260708:
-shape: (1, 9)
-┌───────┬───────┬───────┬─────┬───┬──────┬──────┬───────┬─────────┐
-│ ITEM  ┆ WEEK  ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST ┆ TOTAL ┆ BALANCE │
-│ ---   ┆ ---   ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---  ┆ ---   ┆ ---     │
-│ str   ┆ f64   ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64  ┆ f64   ┆ f64     │
-╞═══════╪═══════╪═══════╪═════╪═══╪══════╪══════╪═══════╪═════════╡
-│ B1.18 ┆ 0.001 ┆ 0.001 ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.001   │
-└───────┴───────┴───────┴─────┴───┴──────┴──────┴───────┴─────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLRMFXP220260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275318
-
-Error creating SAS dataset GLRMFXP220260708: sasdata() got multiple values for argument 'table'
-
-GLRMFXP220260708:
-shape: (2, 9)
-┌───────┬──────┬───────┬─────┬───┬──────┬─────────────┬───────┬─────────────┐
-│ ITEM  ┆ WEEK ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST        ┆ TOTAL ┆ BALANCE     │
-│ ---   ┆ ---  ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---         ┆ ---   ┆ ---         │
-│ str   ┆ f64  ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64         ┆ f64   ┆ f64         │
-╞═══════╪══════╪═══════╪═════╪═══╪══════╪═════════════╪═══════╪═════════════╡
-│ B1.14 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ -428093.697 ┆ 0.0   ┆ -428093.697 │
-│ B1.12 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0         ┆ 0.0   ┆ 0.0         │
-└───────┴──────┴───────┴─────┴───┴──────┴─────────────┴───────┴─────────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLUTRMP220260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275337
-
-Error creating SAS dataset GLUTRMP220260708: sasdata() got multiple values for argument 'table'
-
-GLUTRMP220260708:
-shape: (3, 9)
-┌───────┬──────┬───────┬─────┬───┬──────┬──────┬───────┬─────────┐
-│ ITEM  ┆ WEEK ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST ┆ TOTAL ┆ BALANCE │
-│ ---   ┆ ---  ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---  ┆ ---   ┆ ---     │
-│ str   ┆ f64  ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64  ┆ f64   ┆ f64     │
-╞═══════╪══════╪═══════╪═════╪═══╪══════╪══════╪═══════╪═════════╡
-│ A2.01 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.001 ┆ 0.001   │
-│ A2.08 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-│ A2.21 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-└───────┴──────┴───────┴─────┴───┴──────┴──────┴───────┴─────────┘
-Saved: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGLGLUTFXP220260708.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 275356
-
-Error creating SAS dataset GLUTFXP220260708: sasdata() got multiple values for argument 'table'
-
-GLUTFXP220260708:
-shape: (3, 9)
-┌───────┬──────┬───────┬─────┬───┬──────┬──────┬───────┬─────────┐
-│ ITEM  ┆ WEEK ┆ MONTH ┆ QTR ┆ … ┆ YEAR ┆ LAST ┆ TOTAL ┆ BALANCE │
-│ ---   ┆ ---  ┆ ---   ┆ --- ┆   ┆ ---  ┆ ---  ┆ ---   ┆ ---     │
-│ str   ┆ f64  ┆ f64   ┆ f64 ┆   ┆ f64  ┆ f64  ┆ f64   ┆ f64     │
-╞═══════╪══════╪═══════╪═════╪═══╪══════╪══════╪═══════╪═════════╡
-│ B2.21 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-│ B2.01 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-│ B2.08 ┆ 0.0  ┆ 0.0   ┆ 0.0 ┆ … ┆ 0.0  ┆ 0.0  ┆ 0.0   ┆ 0.0     │
-└───────┴──────┴───────┴─────┴───┴──────┴──────┴───────┴─────────┘
-
-============================================================
-Processing complete!
-============================================================
-SAS Connection terminated. Subprocess id was 275356
-SAS Connection terminated. Subprocess id was 275337
-SAS Connection terminated. Subprocess id was 275318
-SAS Connection terminated. Subprocess id was 275298
-SAS Connection terminated. Subprocess id was 275278
-SAS Connection terminated. Subprocess id was 275259
-SAS Connection terminated. Subprocess id was 275240
-SAS Connection terminated. Subprocess id was 275220
-SAS Connection terminated. Subprocess id was 275200
-SAS Connection terminated. Subprocess id was 275176
+# Main execution
+if __name__ == "__main__":
+    os.makedirs(STORE_DIR, exist_ok=True)
+    
+    print("Reading GL text file...")
+    df_gl = read_gl_text_file(GLFILE_TXT)
+    
+    if df_gl is None:
+        print(f"ERROR: Could not read {GLFILE_TXT}")
+        sys.exit(77)
+    
+    print(f"\nSuccessfully read {df_gl.height} rows")
+    print(f"Columns: {df_gl.columns}")
+    print(f"\nData sample:")
+    print(df_gl.head(10))
+    
+    # Show unique GLITEMs
+    print(f"\nUnique GLITEMs in file ({df_gl['GLITEM'].n_unique()}):")
+    for glitem in sorted(df_gl['GLITEM'].unique().to_list())[:20]:
+        print(f"  {glitem}")
+    
+    # Process P1
+    print("\n" + "="*60)
+    print("Processing GL P1...")
+    print("="*60)
+    results_p1 = process_gl_data(df_gl, 'P1')
+    
+    # Process P2
+    print("\n" + "="*60)
+    print("Processing GL P2...")
+    print("="*60)
+    results_p2 = process_gl_data(df_gl, 'P2')
+    
+    print("\n" + "="*60)
+    print("Processing complete!")
+    print("="*60)
