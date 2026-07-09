@@ -1,433 +1,241 @@
+from __future__ import annotations
+from pathlib import Path
+from datetime import datetime, date
 import polars as pl
-from datetime import datetime, timedelta
-import sys
-import os
-import re
+import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-# Constants - FIXED PATH to match your actual output directory
-GLFILE_TXT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/data/glfile.txt'  # Adjust this path
-STORE_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNLGL/'
+# ----------------------------
+# Simple Paths
+# ----------------------------
+DEPOSIT_REPTDATE_PATH = Path("parquet_input/MNITB_DAILY_REPTDATE.parquet")   # DEPOSIT.REPTDATE
+GLFILE_PATH           = Path("parquet_input/FDP_APPL_PIBB_DAILY_NLF.parquet")# GLFILE
+STORE_DIR             = Path("parquet_output/PIBB_GL_NLF_DAILY")             # STORE.*
+STORE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Use yesterday's date
-reptdate = datetime.now() - timedelta(days=1)
-reptyear = reptdate.strftime('%Y')
-reptmon = reptdate.strftime('%m')
-reptday = reptdate.strftime('%d')
-rdate = reptdate.strftime('%d%m%y')
+# ----------------------------
+# Helpers
+# ----------------------------
+def _fmt_DDMMYY8(d: date) -> str:
+    # dd/mm/yy
+    return d.strftime("%d/%m/%y")
 
-def read_gl_text_file(filepath):
-    """Read GL text file with proper parsing"""
-    
-    with open(filepath, 'r') as f:
-        lines = [line.rstrip('\n') for line in f.readlines() if line.strip()]
-    
-    print(f"Total lines: {len(lines)}")
-    
-    # Parse each line
-    data = []
-    header_date = None
-    
-    for line in lines:
-        # Skip empty lines
-        if not line.strip():
-            continue
-        
-        # Check if this is the header line (8 digits followed by spaces)
-        stripped = line.strip()
-        if stripped.isdigit() and len(stripped) == 8:
-            header_date = stripped
-            print(f"Header date found: {header_date}")
-            continue
-        
-        # Extract GLITEM (positions 0-8)
-        glitem = line[0:8].strip() if len(line) > 8 else ''
-        
-        # Skip if GLITEM is empty or just spaces
-        if not glitem or glitem.isspace():
-            continue
-        
-        # Extract DATE (positions 20-28)
-        date = line[20:28].strip() if len(line) > 28 else ''
-        
-        # Extract BALANCE (positions 45-60)
-        balance_str = line[45:60].strip() if len(line) > 60 else ''
-        
-        # Check for sign at the end
-        sign = line[-1] if len(line) > 0 else ''
-        
-        # Clean balance string
-        balance_str = balance_str.replace(',', '')
-        
-        # Convert to float
+def _ensure_date(v) -> date:
+    if isinstance(v, date):
+        return v
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, str):
+        # try ISO first; if that fails, try dd/mm/yy
         try:
-            balance = float(balance_str) if balance_str else 0.0
-        except ValueError:
-            balance = 0.0
-        
-        # Apply sign
-        if sign == '-':
-            balance = -balance
-        
-        # Get date from header
-        if header_date:
-            yy = header_date[0:2]
-            mm = header_date[2:4]
-            dd = header_date[4:6]
-        else:
-            yy = reptyear[2:4]
-            mm = reptmon
-            dd = reptday
-        
-        # Only include if GLITEM looks valid (not just numbers that look like dates)
-        if glitem and glitem != '08':
-            data.append({
-                'YY': yy,
-                'MM': mm,
-                'DD': dd,
-                'GLITEM': glitem,
-                'DATE': date,
-                'BALANCE': balance,
-                'SIGN': sign
-            })
-    
-    if data:
-        df = pl.DataFrame(data)
-        return df
-    else:
-        return None
+            return datetime.fromisoformat(v).date()
+        except Exception:
+            return datetime.strptime(v, "%d/%m/%y").date()
+    raise ValueError("REPTDATE could not be parsed as a date")
 
-def match_glitem(file_glitem, condition_glitem):
-    """Try to match file GLITEM with condition GLITEM using flexible matching"""
-    if not file_glitem or not condition_glitem:
-        return False
-    
-    # Clean both
-    file_clean = file_glitem.strip()
-    cond_clean = condition_glitem.strip()
-    
-    # Direct match
-    if file_clean == cond_clean:
-        return True
-    
-    # Check if file is a prefix of condition (for truncated values)
-    if cond_clean.startswith(file_clean):
-        return True
-    
-    # Check if condition is a prefix of file (for extra characters)
-    if file_clean.startswith(cond_clean):
-        return True
-    
-    # Handle '1F' prefix vs 'F' prefix
-    if file_clean.startswith('1F') and cond_clean.startswith('F'):
-        # Remove prefix from both
-        file_no_prefix = file_clean[2:]  # Remove '1F'
-        cond_no_prefix = cond_clean[1:]   # Remove 'F'
-        if file_no_prefix == cond_no_prefix:
-            return True
-        if cond_no_prefix.startswith(file_no_prefix):
-            return True
-        if file_no_prefix.startswith(cond_no_prefix):
-            return True
-    
-    # Handle '1F' prefix vs no prefix in condition
-    if file_clean.startswith('1F'):
-        file_no_prefix = file_clean[2:]  # Remove '1F'
-        if file_no_prefix == cond_clean:
-            return True
-        if cond_clean.startswith(file_no_prefix):
-            return True
-        if file_no_prefix.startswith(cond_clean):
-            return True
-    
-    # Handle 'NL' suffix variations
-    if file_clean.endswith('NL') and not cond_clean.endswith('NL'):
-        file_no_suffix = file_clean[:-2]  # Remove 'NL'
-        if file_no_suffix == cond_clean:
-            return True
-        if cond_clean.startswith(file_no_suffix):
-            return True
-        if file_no_suffix.startswith(cond_clean):
-            return True
-    
-    # Check if the last 5-6 characters match (for partial matches)
-    if len(file_clean) >= 5 and len(cond_clean) >= 5:
-        file_suffix = file_clean[-5:]
-        cond_suffix = cond_clean[-5:]
-        if file_suffix == cond_suffix:
-            return True
-    
-    return False
+def _parse_DDMMYY8(s: str) -> date:
+    return datetime.strptime(s, "%d/%m/%y").date()
 
-def process_gl_data(df_gl, suffix):
-    """Process GL data for a given suffix (P1 or P2)"""
-    
-    print(f"\nProcessing {suffix}...")
-    print(f"DataFrame shape: {df_gl.shape}")
-    
-    # Define GLITEM mappings for P1 and P2
-    if suffix == 'P1':
-        glitem_mappings = [
-            ('F142630C', 'B1.12'),
-            ('42699', 'B1.14'),
-            ('44111', 'A1.18'),
-            ('F147100', 'A1.18'),
-            ('F249299K', 'A1.20'),
-            ('49120', 'A1.20'),
-            ('42199', 'A1.20'),
-            ('49120NLF', 'A1.20'),
-            ('42190', 'A1.20'),
-            ('F144611FXSDC', 'B1.18'),
-            ('F147600', 'B1.18'),
-            ('F143110VCB', 'A2.21'),
-            ('F143110VFBI', 'A2.21'),
-            ('F143120ODNVB', 'A2.21'),
-            ('F143120ODNIB', 'A2.21'),
-            ('F143620FNFBI', 'B2.21'),
-            ('F133110ODVIB', 'A2.01'),
-            ('F13312002CB', 'A2.01'),
-            ('F132121BBNM', 'A2.01'),
-            ('37070', 'A2.08'),
-            ('F137610FXSH', 'B2.08'),
-            ('F137650FXCDS', 'B2.08'),
-            ('F133620FNFBI', 'B2.01')
-        ]
-    else:  # P2
-        glitem_mappings = [
-            ('F142630C', 'B1.12'),
-            ('42699', 'B1.14'),
-            ('44111', 'A1.18'),
-            ('F147100', 'A1.18'),
-            ('F147600', 'B1.18'),
-            ('F144611FXSDC', 'B1.18'),
-            ('F249299K', 'A1.20'),
-            ('49120', 'A1.20'),
-            ('42199', 'A1.20'),
-            ('49120NLF', 'A1.20'),
-            ('F143110VCB', 'A2.21'),
-            ('F143110VFBI', 'A2.21'),
-            ('F143120ODNVB', 'A2.21'),
-            ('F143120ODNIB', 'A2.21'),
-            ('F143620FNFBI', 'B2.21'),
-            ('F133110ODVIB', 'A2.01'),
-            ('F13312002CB', 'A2.01'),
-            ('F132121BBNM', 'A2.01'),
-            ('37070', 'A2.08'),
-            ('F137610FXSH', 'B2.08'),
-            ('F137650FXCDS', 'B2.08'),
-            ('F133620FNFBI', 'B2.01')
-        ]
-    
-    # Get unique GLITEMs from the file
-    file_glitems = df_gl['GLITEM'].unique().to_list()
-    print(f"\nUnique GLITEMs in file ({len(file_glitems)}):")
-    for glitem in sorted(file_glitems)[:20]:
-        print(f"  {glitem}")
-    if len(file_glitems) > 20:
-        print(f"  ... and {len(file_glitems) - 20} more")
-    
-    # Create a mapping from file GLITEM to condition GLITEM
-    mapping = {}
-    for file_glitem in file_glitems:
-        for cond_glitem, item_code in glitem_mappings:
-            if match_glitem(file_glitem, cond_glitem):
-                mapping[file_glitem] = (cond_glitem, item_code)
-                print(f"Matched: '{file_glitem}' -> '{cond_glitem}' ({item_code})")
-                break
-    
-    if not mapping:
-        print(f"No matches found for {suffix}")
-        return None, None, None, None, None
-    
-    # Process each matched GLITEM
-    rows = []
-    for file_glitem, (cond_glitem, item_code) in mapping.items():
-        filtered = df_gl.filter(pl.col('GLITEM') == file_glitem)
-        if len(filtered) > 0:
-            balance = filtered['BALANCE'].sum()
-            
-            # Determine which fields get the balance based on item code
-            week = 0
-            month = 0
-            last = 0
-            total = 0
-            
-            if item_code.startswith('B') and item_code not in ['B1.12', 'B1.14']:
-                week = balance
-                month = balance
-            elif item_code in ['B1.12', 'B1.14']:
-                last = balance
-            elif item_code.startswith('A'):
-                total = balance
-            
-            rows.append({
-                'ITEM': item_code,
-                'BALANCE': balance,
-                'WEEK': week,
-                'MONTH': month,
-                'QTR': 0,
-                'HALFYR': 0,
-                'YEAR': 0,
-                'LAST': last,
-                'TOTAL': total
-            })
-    
-    if not rows:
-        print(f"No data found for {suffix}")
-        return None, None, None, None, None
-    
-    glfilep = pl.DataFrame(rows)
-    print(f"Created DataFrame with {len(rows)} rows for {suffix}")
-    
-    # Group by ITEM and aggregate
-    glfilep = glfilep.group_by('ITEM').agg([
-        pl.col('WEEK').sum().alias('WEEK'),
-        pl.col('MONTH').sum().alias('MONTH'),
-        pl.col('QTR').sum().alias('QTR'),
-        pl.col('HALFYR').sum().alias('HALFYR'),
-        pl.col('YEAR').sum().alias('YEAR'),
-        pl.col('LAST').sum().alias('LAST'),
-        pl.col('TOTAL').sum().alias('TOTAL'),
-        pl.col('BALANCE').sum().alias('BALANCE')
-    ])
-    
-    # Convert to thousands
-    glfilep = glfilep.with_columns([
-        (pl.col('WEEK') / 1000).round(3).alias('WEEK'),
-        (pl.col('MONTH') / 1000).round(3).alias('MONTH'),
-        (pl.col('QTR') / 1000).round(3).alias('QTR'),
-        (pl.col('HALFYR') / 1000).round(3).alias('HALFYR'),
-        (pl.col('YEAR') / 1000).round(3).alias('YEAR'),
-        (pl.col('LAST') / 1000).round(3).alias('LAST'),
-        (pl.col('TOTAL') / 1000).round(3).alias('TOTAL'),
-        (pl.col('BALANCE') / 1000).round(3).alias('BALANCE')
-    ])
-    
-    print(f"\nProcessed data for {suffix}:")
-    print(glfilep)
-    
-    # Split into categories
-    glrmp = glfilep.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('1'))
-    glfxp = glfilep.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('1') & ~pl.col('ITEM').is_in(['B1.12', 'B1.14']))
-    glrmfxp = glfilep.filter(pl.col('ITEM').is_in(['B1.12', 'B1.14']))
-    glutrmp = glfilep.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('2'))
-    glutfxp = glfilep.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('2'))
-    
-    # Save files - ensure directory exists
-    os.makedirs(STORE_DIR, exist_ok=True)
-    print(f"\nSaving files to: {STORE_DIR}")
-    
-    timestamp = f"{reptyear}{reptmon}{reptday}"
-    
-    # Save each dataset
-    datasets = [
-        (glrmp, f'GLRM{suffix}{timestamp}'),
-        (glfxp, f'GLFX{suffix}{timestamp}'),
-        (glrmfxp, f'GLRMFX{suffix}{timestamp}'),
-        (glutrmp, f'GLUTRM{suffix}{timestamp}'),
-        (glutfxp, f'GLUTFX{suffix}{timestamp}')
-    ]
-    
-    saved_files = []
-    for df, name in datasets:
-        if len(df) > 0:
-            # Save as parquet
-            parquet_file = os.path.join(STORE_DIR, f'{name}.parquet')
-            df.write_parquet(parquet_file)
-            print(f"✓ Saved: {parquet_file}")
-            saved_files.append(parquet_file)
-            
-            # Print sample
-            print(f"\n{name}:")
-            print(df)
-    
-    if saved_files:
-        print(f"\n✓ Successfully saved {len(saved_files)} parquet files to {STORE_DIR}")
-    else:
-        print(f"\n⚠ No files were saved to {STORE_DIR}")
-    
-    return glrmp, glfxp, glrmfxp, glutrmp, glutfxp
+def _round_thousands_div_thousand(expr: pl.Expr) -> pl.Expr:
+    # SAS: ROUND(x, 1000.) / 1000  ==> round to nearest 1000 then divide by 1000
+    # This equals (x/1000).round(0)
+    return (expr / 1000).round(0)
 
-def main():
-    """Main execution function"""
-    
-    # Ensure store directory exists
-    os.makedirs(STORE_DIR, exist_ok=True)
-    
-    print("="*60)
-    print("GL FILE PROCESSING STARTED")
-    print("="*60)
-    print(f"Processing date: {reptdate.strftime('%Y-%m-%d')}")
-    print(f"Store directory: {STORE_DIR}")
-    print(f"Input file: {GLFILE_TXT}")
-    print("="*60)
-    
-    # Check if input file exists
-    if not os.path.exists(GLFILE_TXT):
-        print(f"\nERROR: Input file not found: {GLFILE_TXT}")
-        print("Please check the file path and try again.")
-        sys.exit(77)
-    
-    # Read GL text file
-    print("\nReading GL text file...")
-    df_gl = read_gl_text_file(GLFILE_TXT)
-    
-    if df_gl is None:
-        print(f"ERROR: Could not read {GLFILE_TXT}")
-        sys.exit(77)
-    
-    print(f"\nSuccessfully read {df_gl.height} rows")
-    print(f"Columns: {df_gl.columns}")
-    print(f"\nData sample:")
-    print(df_gl.head(10))
-    
-    # Show unique GLITEMs
-    print(f"\nUnique GLITEMs in file ({df_gl['GLITEM'].n_unique()}):")
-    for glitem in sorted(df_gl['GLITEM'].unique().to_list())[:30]:
-        print(f"  {glitem}")
-    if df_gl['GLITEM'].n_unique() > 30:
-        print(f"  ... and {df_gl['GLITEM'].n_unique() - 30} more")
-    
-    # Process P1
-    print("\n" + "="*60)
-    print("Processing GL P1...")
-    print("="*60)
-    results_p1 = process_gl_data(df_gl, 'P1')
-    
-    # Process P2
-    print("\n" + "="*60)
-    print("Processing GL P2...")
-    print("="*60)
-    results_p2 = process_gl_data(df_gl, 'P2')
-    
-    print("\n" + "="*60)
-    print("PROCESSING COMPLETE!")
-    print("="*60)
-    print(f"\nOutput files saved to: {STORE_DIR}")
-    
-    # List all created parquet files
-    if os.path.exists(STORE_DIR):
-        parquet_files = [f for f in os.listdir(STORE_DIR) if f.endswith('.parquet')]
-        if parquet_files:
-            print(f"\n✓ {len(parquet_files)} parquet files created:")
-            for f in sorted(parquet_files):
-                file_path = os.path.join(STORE_DIR, f)
-                file_size = os.path.getsize(file_path)
-                print(f"  • {f} ({file_size:,} bytes)")
-        else:
-            print("\n⚠ No parquet files found in the output directory.")
-            print(f"  Please check if the directory {STORE_DIR} is writable.")
-    
-    print("\n" + "="*60)
+def _write_store(df: pl.DataFrame, name: str) -> None:
+    out = STORE_DIR / f"{name}.parquet"
+    df.write_parquet(out)
 
-# Main execution
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\nProcessing interrupted by user")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n\nERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+# ----------------------------
+# 1) DATA REPTDATE + macros
+# ----------------------------
+df_rep = pl.read_parquet(DEPOSIT_REPTDATE_PATH)
+if df_rep.height == 0:
+    raise RuntimeError("DEPOSIT.REPTDATE is empty.")
+REPTDATE: date = _ensure_date(df_rep.select("REPTDATE").row(0)[0])
+REPTYEAR = REPTDATE.strftime("%Y")
+REPTMON  = REPTDATE.strftime("%m")
+REPTDAY  = REPTDATE.strftime("%d")
+RDATE    = _fmt_DDMMYY8(REPTDATE)   # dd/mm/yy
+
+# ----------------------------
+# 2) Read GLFILE and derive GL date from first record
+# ----------------------------
+gl_df_raw = pl.read_parquet(GLFILE_PATH)
+
+if gl_df_raw.height == 0:
+    raise RuntimeError("GLFILE is empty.")
+
+# Expect DATEX like dd/mm/yy
+GLDATE = _parse_DDMMYY8(gl_df_raw.select("DATEX").row(0)[0])
+GL = _fmt_DDMMYY8(GLDATE)
+
+# ----------------------------
+# %MACRO PROCESS gate: proceed only if GL == RDATE; else ABORT 77
+# ----------------------------
+if GL != RDATE:
+    # Mimic: %PUT THE GLIFLE EXTRACTION IS NOT DATED &RDATE; ABORT 77;
+    raise SystemExit(77)
+
+# ----------------------------
+# Common transformation for both passes (base columns)
+# ----------------------------
+def _prep_base(gl: pl.DataFrame) -> pl.DataFrame:
+    # Mirror DATA step:
+    # DATE = INPUT(DATEX, DDMMYY8.)
+    # IF SIGN='-' THEN BALANCE = BALANCE*(-1)
+    # Initialize WEEK, MONTH, QTR, HALFYR, YEAR, LAST, TOTAL to 0 (SAS SUM treats missing as 0)
+    return (
+        gl.with_columns(
+            DATE = pl.col("DATEX").cast(pl.Utf8).map_elements(_parse_DDMMYY8),
+            BALANCE = pl.when(pl.col("SIGN") == "-")
+                        .then(pl.col("BALANCE") * -1)
+                        .otherwise(pl.col("BALANCE")),
+            WEEK    = pl.lit(0.0),
+            MONTH   = pl.lit(0.0),
+            QTR     = pl.lit(0.0),
+            HALFYR  = pl.lit(0.0),
+            YEAR    = pl.lit(0.0),
+            LAST    = pl.lit(0.0),
+            TOTAL   = pl.lit(0.0),
+            ITEM    = pl.lit(""),
+        )
+    )
+
+def _apply_mapping_pass1(df: pl.DataFrame) -> pl.DataFrame:
+    # P1 mapping (A2.21)
+    return (
+        df.with_columns(
+            ITEM = pl.when(pl.col("GLITEM").is_in(["49120", "49120NLF"]))
+                       .then(pl.lit("A1.20"))
+                 .when(pl.col("GLITEM").is_in(["F143120ODNCB", "F143120ODNIB"]))
+                       .then(pl.lit("A2.21"))
+                 .when(pl.col("GLITEM").is_in(["F13312002CB", "F132121BBNM"]))
+                       .then(pl.lit("A2.01"))
+                 .when(pl.col("GLITEM") == "37070")
+                       .then(pl.lit("A2.08"))
+                 .otherwise(pl.lit("")),
+            WEEK = pl.when(
+                        pl.col("GLITEM").is_in(
+                            ["49120","49120NLF","F143120ODNCB","F143120ODNIB",
+                             "F13312002CB","F132121BBNM","37070"]
+                        )
+                    ).then(pl.col("BALANCE"))
+                     .otherwise(pl.col("WEEK"))
+        )
+        .with_columns(
+            BALANCE = pl.col("WEEK") + pl.col("MONTH") + pl.col("QTR") +
+                      pl.col("HALFYR") + pl.col("YEAR") + pl.col("LAST") + pl.col("TOTAL")
+        )
+        .filter(pl.col("ITEM") != "")
+    )
+
+def _apply_mapping_pass2(df: pl.DataFrame) -> pl.DataFrame:
+    # P2 mapping (A2.14)
+    return (
+        df.with_columns(
+            ITEM = pl.when(pl.col("GLITEM").is_in(["49120", "49120NLF"]))
+                       .then(pl.lit("A1.20"))
+                 .when(pl.col("GLITEM").is_in(["F143120ODNCB", "F143120ODNIB"]))
+                       .then(pl.lit("A2.14"))
+                 .when(pl.col("GLITEM").is_in(["F13312002CB", "F132121BBNM"]))
+                       .then(pl.lit("A2.01"))
+                 .when(pl.col("GLITEM") == "37070")
+                       .then(pl.lit("A2.08"))
+                 .otherwise(pl.lit("")),
+            WEEK = pl.when(
+                        pl.col("GLITEM").is_in(
+                            ["49120","49120NLF","F143120ODNCB","F143120ODNIB",
+                             "F13312002CB","F132121BBNM","37070"]
+                        )
+                    ).then(pl.col("BALANCE"))
+                     .otherwise(pl.col("WEEK"))
+        )
+        .with_columns(
+            BALANCE = pl.col("WEEK") + pl.col("MONTH") + pl.col("QTR") +
+                      pl.col("HALFYR") + pl.col("YEAR") + pl.col("LAST") + pl.col("TOTAL")
+        )
+        .filter(pl.col("ITEM") != "")
+    )
+
+def _summary_by_item(df: pl.DataFrame) -> pl.DataFrame:
+    # PROC SUMMARY NWAY; CLASS ITEM; VAR WEEK MONTH QTR HALFYR YEAR LAST BALANCE; OUTPUT SUM=;
+    return (
+        df.group_by("ITEM")
+          .agg([
+              pl.col("WEEK").sum().alias("WEEK"),
+              pl.col("MONTH").sum().alias("MONTH"),
+              pl.col("QTR").sum().alias("QTR"),
+              pl.col("HALFYR").sum().alias("HALFYR"),
+              pl.col("YEAR").sum().alias("YEAR"),
+              pl.col("LAST").sum().alias("LAST"),
+              pl.col("BALANCE").sum().alias("BALANCE"),
+          ])
+          .sort("ITEM")
+    )
+
+def _apply_rounding_and_split(df: pl.DataFrame, pass_label: str) -> None:
+    """
+    Mirrors:
+      WEEK    = ROUND(WEEK,1000.)/1000;
+      ...
+      BALANCE = ROUND(BALANCE,1000.)/1000;
+      IF SUBSTR(ITEM,1,1)='A' THEN DO;
+         IF SUBSTR(ITEM,2,1)='1' THEN OUTPUT STORE.GLRMP{pass}
+         IF SUBSTR(ITEM,2,1)='2' THEN OUTPUT STORE.GLUTRMP{pass}
+      END;
+      ELSE DO;
+         IF SUBSTR(ITEM,2,1)='1' THEN OUTPUT STORE.GLFXP{pass}
+         IF SUBSTR(ITEM,2,1)='2' THEN OUTPUT STORE.GLUTFXP{pass}
+      END;
+    """
+    rounded = (
+        df.with_columns(
+            WEEK    = _round_thousands_div_thousand(pl.col("WEEK")),
+            MONTH   = _round_thousands_div_thousand(pl.col("MONTH")),
+            QTR     = _round_thousands_div_thousand(pl.col("QTR")),
+            HALFYR  = _round_thousands_div_thousand(pl.col("HALFYR")),
+            YEAR    = _round_thousands_div_thousand(pl.col("YEAR")),
+            LAST    = _round_thousands_div_thousand(pl.col("LAST")),
+            BALANCE = _round_thousands_div_thousand(pl.col("BALANCE")),
+        )
+    )
+
+    # Create selectors
+    first1 = rounded["ITEM"].str.slice(0, 1)
+    second1 = rounded["ITEM"].str.slice(1, 1)
+
+    # Partitions
+    A_mask   = first1 == "A"
+    notA     = first1 != "A"
+    sec_is_1 = second1 == "1"
+    sec_is_2 = second1 == "2"
+
+    YYYYMMDD = f"{REPTYEAR}{REPTMON}{REPTDAY}"
+
+    GLRMP  = rounded.filter(A_mask & sec_is_1)
+    GLUTRM = rounded.filter(A_mask & sec_is_2)
+    GLFXP  = rounded.filter(notA  & sec_is_1)
+    GLUTFX = rounded.filter(notA  & sec_is_2)
+
+    _write_store(GLRMP,  f"GLRMP{pass_label}{YYYYMMDD}")
+    _write_store(GLFXP,  f"GLFXP{pass_label}{YYYYMMDD}")
+    _write_store(GLUTRM, f"GLUTRMP{pass_label}{YYYYMMDD}")
+    _write_store(GLUTFX, f"GLUTFXP{pass_label}{YYYYMMDD}")
+
+# ----------------------------
+# Build both passes
+# ----------------------------
+base = _prep_base(gl_df_raw)
+
+# Pass 1
+p1 = _apply_mapping_pass1(base)
+p1_sum = _summary_by_item(p1)
+_apply_rounding_and_split(p1_sum, pass_label="1")
+
+# Pass 2
+p2 = _apply_mapping_pass2(base)
+p2_sum = _summary_by_item(p2)
+_apply_rounding_and_split(p2_sum, pass_label="2")
+
+# (PROC PRINT equivalents omitted—files are written as Parquet.)
