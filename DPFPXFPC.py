@@ -1,17 +1,16 @@
 from __future__ import annotations
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import polars as pl
-import duckdb
-import pyarrow as pa
-import pyarrow.parquet as pq
+import sys
+import os
+import re
 
 # ----------------------------
-# Simple Paths
+# Simple Paths - Islamic Version
 # ----------------------------
-DEPOSIT_REPTDATE_PATH = Path("parquet_input/MNITB_DAILY_REPTDATE.parquet")   # DEPOSIT.REPTDATE
-GLFILE_PATH           = Path("parquet_input/FDP_APPL_PIBB_DAILY_NLF.parquet")# GLFILE
-STORE_DIR             = Path("parquet_output/PIBB_GL_NLF_DAILY")             # STORE.*
+GLFILE_TXT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/data/glfile_islamic.txt")  # Islamic GL text file
+STORE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDNLGL/")
 STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ----------------------------
@@ -21,61 +20,152 @@ def _fmt_DDMMYY8(d: date) -> str:
     # dd/mm/yy
     return d.strftime("%d/%m/%y")
 
-def _ensure_date(v) -> date:
-    if isinstance(v, date):
-        return v
-    if isinstance(v, datetime):
-        return v.date()
-    if isinstance(v, str):
-        # try ISO first; if that fails, try dd/mm/yy
-        try:
-            return datetime.fromisoformat(v).date()
-        except Exception:
-            return datetime.strptime(v, "%d/%m/%y").date()
-    raise ValueError("REPTDATE could not be parsed as a date")
-
 def _parse_DDMMYY8(s: str) -> date:
     return datetime.strptime(s, "%d/%m/%y").date()
 
 def _round_thousands_div_thousand(expr: pl.Expr) -> pl.Expr:
     # SAS: ROUND(x, 1000.) / 1000  ==> round to nearest 1000 then divide by 1000
-    # This equals (x/1000).round(0)
     return (expr / 1000).round(0)
 
 def _write_store(df: pl.DataFrame, name: str) -> None:
     out = STORE_DIR / f"{name}.parquet"
     df.write_parquet(out)
+    print(f"✓ Saved: {out}")
 
 # ----------------------------
-# 1) DATA REPTDATE + macros
+# Read GL text file (fixed-width format)
 # ----------------------------
-df_rep = pl.read_parquet(DEPOSIT_REPTDATE_PATH)
-if df_rep.height == 0:
-    raise RuntimeError("DEPOSIT.REPTDATE is empty.")
-REPTDATE: date = _ensure_date(df_rep.select("REPTDATE").row(0)[0])
+def read_gl_text_file(filepath: Path):
+    """Read GL text file with fixed-width format for Islamic version"""
+    
+    if not filepath.exists():
+        raise FileNotFoundError(f"GL file not found: {filepath}")
+    
+    with open(filepath, 'r') as f:
+        lines = [line.rstrip('\n') for line in f.readlines() if line.strip()]
+    
+    print(f"Total lines: {len(lines)}")
+    
+    # Parse each line
+    data = []
+    header_date = None
+    
+    for line in lines:
+        # Skip empty lines
+        if not line.strip():
+            continue
+        
+        # Check if this is the header line (8 digits followed by spaces)
+        stripped = line.strip()
+        if stripped.isdigit() and len(stripped) == 8:
+            header_date = stripped
+            print(f"Header date found: {header_date}")
+            continue
+        
+        # Extract GLITEM (positions 0-8)
+        glitem = line[0:8].strip() if len(line) > 8 else ''
+        
+        # Skip if GLITEM is empty or just spaces
+        if not glitem or glitem.isspace() or glitem == '08':
+            continue
+        
+        # Extract DATE (positions 20-28)
+        date_str = line[20:28].strip() if len(line) > 28 else ''
+        
+        # Extract BALANCE (positions 45-60)
+        balance_str = line[45:60].strip() if len(line) > 60 else ''
+        
+        # Check for sign at the end
+        sign = line[-1] if len(line) > 0 else ''
+        
+        # Clean balance string
+        balance_str = balance_str.replace(',', '')
+        
+        # Convert to float
+        try:
+            balance = float(balance_str) if balance_str else 0.0
+        except ValueError:
+            balance = 0.0
+        
+        # Apply sign
+        if sign == '-':
+            balance = -balance
+        
+        # Get date from header
+        if header_date:
+            yy = header_date[0:2]
+            mm = header_date[2:4]
+            dd = header_date[4:6]
+            # Create date object from header
+            gl_date = date(int(f"20{yy}"), int(mm), int(dd))
+        else:
+            # Use yesterday's date as fallback
+            yesterday = datetime.now() - timedelta(days=1)
+            gl_date = yesterday.date()
+        
+        # Parse the date from the file if available
+        if date_str:
+            try:
+                datex = _parse_DDMMYY8(date_str)
+            except:
+                datex = gl_date
+        else:
+            datex = gl_date
+        
+        # Only include if GLITEM looks valid
+        if glitem and glitem != '20260708':
+            data.append({
+                'GLITEM': glitem,
+                'DATEX': gl_date.strftime("%d/%m/%y"),
+                'BALANCE': balance,
+                'SIGN': sign,
+                'DATE': datex
+            })
+    
+    if data:
+        df = pl.DataFrame(data)
+        return df
+    else:
+        raise RuntimeError("No data parsed from GL file")
+
+# ----------------------------
+# 1) Get REPTDATE (yesterday for Islamic version)
+# ----------------------------
+REPTDATE = datetime.now() - timedelta(days=1)
+REPTDATE = REPTDATE.date()
 REPTYEAR = REPTDATE.strftime("%Y")
-REPTMON  = REPTDATE.strftime("%m")
-REPTDAY  = REPTDATE.strftime("%d")
-RDATE    = _fmt_DDMMYY8(REPTDATE)   # dd/mm/yy
+REPTMON = REPTDATE.strftime("%m")
+REPTDAY = REPTDATE.strftime("%d")
+RDATE = _fmt_DDMMYY8(REPTDATE)  # dd/mm/yy
+
+print("="*60)
+print("ISLAMIC GL PROCESSING STARTED (EIIDNLGL)")
+print("="*60)
+print(f"Processing date: {REPTDATE}")
+print(f"Store directory: {STORE_DIR}")
+print("="*60)
 
 # ----------------------------
 # 2) Read GLFILE and derive GL date from first record
 # ----------------------------
-gl_df_raw = pl.read_parquet(GLFILE_PATH)
+gl_df_raw = read_gl_text_file(GLFILE_TXT)
 
 if gl_df_raw.height == 0:
     raise RuntimeError("GLFILE is empty.")
 
-# Expect DATEX like dd/mm/yy
+# Get GL date from first record's DATEX
 GLDATE = _parse_DDMMYY8(gl_df_raw.select("DATEX").row(0)[0])
 GL = _fmt_DDMMYY8(GLDATE)
+
+print(f"GL Date from file: {GL}")
+print(f"REPT Date: {RDATE}")
 
 # ----------------------------
 # %MACRO PROCESS gate: proceed only if GL == RDATE; else ABORT 77
 # ----------------------------
 if GL != RDATE:
-    # Mimic: %PUT THE GLIFLE EXTRACTION IS NOT DATED &RDATE; ABORT 77;
-    raise SystemExit(77)
+    print(f"THE GLFILE EXTRACTION IS NOT DATED {RDATE}")
+    sys.exit(77)
 
 # ----------------------------
 # Common transformation for both passes (base columns)
@@ -84,10 +174,10 @@ def _prep_base(gl: pl.DataFrame) -> pl.DataFrame:
     # Mirror DATA step:
     # DATE = INPUT(DATEX, DDMMYY8.)
     # IF SIGN='-' THEN BALANCE = BALANCE*(-1)
-    # Initialize WEEK, MONTH, QTR, HALFYR, YEAR, LAST, TOTAL to 0 (SAS SUM treats missing as 0)
+    # Initialize WEEK, MONTH, QTR, HALFYR, YEAR, LAST, TOTAL to 0
     return (
         gl.with_columns(
-            DATE = pl.col("DATEX").cast(pl.Utf8).map_elements(_parse_DDMMYY8),
+            DATE = pl.col("DATEX").map_elements(_parse_DDMMYY8, return_dtype=pl.Date),
             BALANCE = pl.when(pl.col("SIGN") == "-")
                         .then(pl.col("BALANCE") * -1)
                         .otherwise(pl.col("BALANCE")),
@@ -218,24 +308,86 @@ def _apply_rounding_and_split(df: pl.DataFrame, pass_label: str) -> None:
     GLFXP  = rounded.filter(notA  & sec_is_1)
     GLUTFX = rounded.filter(notA  & sec_is_2)
 
-    _write_store(GLRMP,  f"GLRMP{pass_label}{YYYYMMDD}")
-    _write_store(GLFXP,  f"GLFXP{pass_label}{YYYYMMDD}")
-    _write_store(GLUTRM, f"GLUTRMP{pass_label}{YYYYMMDD}")
-    _write_store(GLUTFX, f"GLUTFXP{pass_label}{YYYYMMDD}")
+    print(f"\nSaving Islamic version outputs for pass {pass_label}:")
+    
+    if GLRMP.height > 0:
+        _write_store(GLRMP,  f"GLRMP{pass_label}{YYYYMMDD}")
+        print(f"  GLRMP{pass_label}{YYYYMMDD}: {GLRMP.height} rows")
+        print(GLRMP)
+    
+    if GLFXP.height > 0:
+        _write_store(GLFXP,  f"GLFXP{pass_label}{YYYYMMDD}")
+        print(f"  GLFXP{pass_label}{YYYYMMDD}: {GLFXP.height} rows")
+        print(GLFXP)
+    
+    if GLUTRM.height > 0:
+        _write_store(GLUTRM, f"GLUTRMP{pass_label}{YYYYMMDD}")
+        print(f"  GLUTRMP{pass_label}{YYYYMMDD}: {GLUTRM.height} rows")
+        print(GLUTRM)
+    
+    if GLUTFX.height > 0:
+        _write_store(GLUTFX, f"GLUTFXP{pass_label}{YYYYMMDD}")
+        print(f"  GLUTFXP{pass_label}{YYYYMMDD}: {GLUTFX.height} rows")
+        print(GLUTFX)
 
 # ----------------------------
 # Build both passes
 # ----------------------------
+print("\n" + "="*60)
+print("Preparing base data...")
+print("="*60)
 base = _prep_base(gl_df_raw)
+print(f"Base data shape: {base.shape}")
 
 # Pass 1
+print("\n" + "="*60)
+print("Processing Islamic GL P1...")
+print("="*60)
 p1 = _apply_mapping_pass1(base)
-p1_sum = _summary_by_item(p1)
-_apply_rounding_and_split(p1_sum, pass_label="1")
+print(f"P1 mapped shape: {p1.shape}")
+
+if p1.height > 0:
+    p1_sum = _summary_by_item(p1)
+    print(f"P1 summary: {p1_sum.shape}")
+    print("\nP1 Summary Data:")
+    print(p1_sum)
+    _apply_rounding_and_split(p1_sum, pass_label="1")
+else:
+    print("No data for P1")
 
 # Pass 2
+print("\n" + "="*60)
+print("Processing Islamic GL P2...")
+print("="*60)
 p2 = _apply_mapping_pass2(base)
-p2_sum = _summary_by_item(p2)
-_apply_rounding_and_split(p2_sum, pass_label="2")
+print(f"P2 mapped shape: {p2.shape}")
 
-# (PROC PRINT equivalents omitted—files are written as Parquet.)
+if p2.height > 0:
+    p2_sum = _summary_by_item(p2)
+    print(f"P2 summary: {p2_sum.shape}")
+    print("\nP2 Summary Data:")
+    print(p2_sum)
+    _apply_rounding_and_split(p2_sum, pass_label="2")
+else:
+    print("No data for P2")
+
+# ----------------------------
+# Summary
+# ----------------------------
+print("\n" + "="*60)
+print("ISLAMIC PROCESSING COMPLETE!")
+print("="*60)
+print(f"\nOutput files saved to: {STORE_DIR}")
+
+# List all created parquet files
+if STORE_DIR.exists():
+    parquet_files = [f for f in STORE_DIR.iterdir() if f.suffix == '.parquet']
+    if parquet_files:
+        print(f"\n✓ {len(parquet_files)} parquet files created:")
+        for f in sorted(parquet_files):
+            file_size = f.stat().st_size
+            print(f"  • {f.name} ({file_size:,} bytes)")
+    else:
+        print("\n⚠ No parquet files found in the output directory.")
+
+print("\n" + "="*60)
