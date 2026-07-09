@@ -1,219 +1,223 @@
-Islamic Banking Statistics - 07/07/2026
-Processing data for date: 2026-07-07
+import polars as pl
+import duckdb
+from datetime import datetime
+import sys
 
-================================================================================
-INSPECTING INPUT DATASETS
-================================================================================
+DEPOSIT_REPTDATE = 'data/deposit_reptdate.parquet'
+GLFILE = 'data/glfile.parquet'
+STORE_DIR = 'data/store/'
 
-SAVING dataset columns (first 20):
-  BANKNO, FMTCODE, BRANCH, ACCTNO, NAME, TAXNO, DEBIT, CREDIT, CLOSEDT, REOPENDT, CUSTCODE, ORGCODE, ORGTYPE, INTYTD, FEEPD, PURPOSE, SECTOR, USER2, USER3, RISKCODE
+df_reptdate = pl.read_parquet(DEPOSIT_REPTDATE)
+reptdate = df_reptdate['REPTDATE'][0]
 
-CURRENT dataset columns (first 20):
-  FMTCODE, BRANCH, ACCTNO, NAME, TAXNO, DEBIT, CREDIT, CLOSEDT, REOPENDT, CUSTCODE, ODPLAN, RATE1, RATE2, RATE3, RATE4, RATE5, TODRATE, FLATRATE, BASERATE, ODSTAT
+reptyear = reptdate.strftime('%Y')
+reptmon = reptdate.strftime('%m')
+reptday = reptdate.strftime('%d')
+rdate = reptdate.strftime('%d%m%y')
 
-================================================================================
-SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)
-================================================================================
-Loaded CURRENT: 162640 rows, 147 columns
-Loaded SAVING: 2298576 rows, 88 columns
+df_glfile_header = pl.read_parquet(GLFILE).head(1)
+yy = int(df_glfile_header['YY'][0])
+mm = int(df_glfile_header['MM'][0])
+dd = int(df_glfile_header['DD'][0])
+gl_date = datetime(yy, mm, dd)
+gl = gl_date.strftime('%d%m%y')
 
-Using columns:
-  BRANCH: BRANCH
-  PRODUCT: PRODUCT
-  CURBAL: CURBAL
-  OPENIND: OPENIND
-Combined raw data: 2394211 rows
+if gl != rdate:
+    print(f"THE GLIFLE EXTRACTION IS NOT DATED {rdate}")
+    sys.exit(77)
 
-Saving dyibu07...
-  ✓ Saved Parquet file: dyibu07.parquet
-  Creating SAS dataset: dyibu07
-SAS Connection established. Subprocess id is 203717
+df_gl = pl.read_parquet(GLFILE)
 
+df_gl = df_gl.with_columns([
+    pl.col('DATE').alias('DATE'),
+    pl.when(pl.col('SIGN') == '-')
+      .then(pl.col('BALANCE') * -1)
+      .otherwise(pl.col('BALANCE'))
+      .alias('BALANCE')
+])
 
-80   
-81   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
-NOTE: Libref OUTLIB was successfully assigned as follows: 
-      Engine:        BASE 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-82   
-  ✓ SAS dataset created: dyibu07.sas7bdat
-SAS Connection terminated. Subprocess id was 203717
-Section 1: DYIBU - 267 branches
+conditions_p1 = [
+    (pl.col('GLITEM').is_in(['F142630C']), pl.lit('B1.12'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['42699']), pl.lit('B1.14'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['44111', 'F147100']), pl.lit('A1.18'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F249299K', '49120', '42199', '49120NLF', '42190']), pl.lit('A1.20'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F144611FXSDC', 'F147600']), pl.lit('B1.18'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F143110VCB', 'F143110VFBI', 'F143120ODNVB', 'F143120ODNIB']), pl.lit('A2.21'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F143620FNFBI']), pl.lit('B2.21'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F133110ODVIB', 'F13312002CB', 'F132121BBNM']), pl.lit('A2.01'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['37070']), pl.lit('A2.08'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F137610FXSH', 'F137650FXCDS']), pl.lit('B2.08'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F133620FNFBI']), pl.lit('B2.01'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'))
+]
 
-================================================================================
-SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS
-================================================================================
-Total accounts to process: 2,394,211
-Processing accounts using vectorized operations...
-  Processed 500,000 accounts...
-  Processed 1,000,000 accounts...
-  Processed 1,500,000 accounts...
-  Processed 2,000,000 accounts...
-✓ Processed 2,394,211 accounts
+rows_p1 = []
+for condition, item, week, month, qtr, halfyr, year, last, total in conditions_p1:
+    filtered = df_gl.filter(condition)
+    if len(filtered) > 0:
+        rows_p1.append(
+            filtered.select([
+                pl.lit(item).alias('ITEM'),
+                week.alias('WEEK') if week is not None else pl.lit(None).alias('WEEK'),
+                month.alias('MONTH') if month is not None else pl.lit(None).alias('MONTH'),
+                qtr.alias('QTR') if qtr is not None else pl.lit(None).alias('QTR'),
+                halfyr.alias('HALFYR') if halfyr is not None else pl.lit(None).alias('HALFYR'),
+                year.alias('YEAR') if year is not None else pl.lit(None).alias('YEAR'),
+                last.alias('LAST') if last is not None else pl.lit(None).alias('LAST'),
+                total.alias('TOTAL') if total is not None else pl.lit(None).alias('TOTAL')
+            ])
+        )
 
-================================================================================
-GENERATING OUTPUT DATASETS (SAS7BDAT + PARQUET)
-================================================================================
+glfilep1 = pl.concat(rows_p1) if rows_p1 else pl.DataFrame()
 
-Generating awsa07 (Products 204,215 (Regular Savings))...
+if len(glfilep1) > 0:
+    glfilep1 = glfilep1.with_columns([
+        (pl.col('WEEK').fill_null(0) + 
+         pl.col('MONTH').fill_null(0) + 
+         pl.col('QTR').fill_null(0) + 
+         pl.col('HALFYR').fill_null(0) + 
+         pl.col('YEAR').fill_null(0) + 
+         pl.col('LAST').fill_null(0) + 
+         pl.col('TOTAL').fill_null(0)).alias('BALANCE')
+    ])
+    
+    glfilep1 = glfilep1.filter(pl.col('ITEM').is_not_null() & (pl.col('ITEM') != ''))
+    
+    glfilep1 = glfilep1.group_by('ITEM').agg([
+        pl.col('WEEK').sum().alias('WEEK'),
+        pl.col('MONTH').sum().alias('MONTH'),
+        pl.col('QTR').sum().alias('QTR'),
+        pl.col('HALFYR').sum().alias('HALFYR'),
+        pl.col('YEAR').sum().alias('YEAR'),
+        pl.col('LAST').sum().alias('LAST'),
+        pl.col('BALANCE').sum().alias('BALANCE')
+    ])
+    
+    glfilep1 = glfilep1.with_columns([
+        (pl.col('WEEK').round(0) / 1000).round(3).alias('WEEK'),
+        (pl.col('MONTH').round(0) / 1000).round(3).alias('MONTH'),
+        (pl.col('QTR').round(0) / 1000).round(3).alias('QTR'),
+        (pl.col('HALFYR').round(0) / 1000).round(3).alias('HALFYR'),
+        (pl.col('YEAR').round(0) / 1000).round(3).alias('YEAR'),
+        (pl.col('LAST').round(0) / 1000).round(3).alias('LAST'),
+        (pl.col('BALANCE').round(0) / 1000).round(3).alias('BALANCE')
+    ])
+    
+    glrmp1 = glfilep1.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('1'))
+    glfxp1 = glfilep1.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('1') & ~pl.col('ITEM').is_in(['B1.12', 'B1.14']))
+    glrmfxp1 = glfilep1.filter(pl.col('ITEM').is_in(['B1.12', 'B1.14']))
+    glutrmp1 = glfilep1.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('2'))
+    glutfxp1 = glfilep1.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('2'))
+    
+    glrmp1.write_parquet(f'{STORE_DIR}GLRMP1{reptyear}{reptmon}{reptday}.parquet')
+    glfxp1.write_parquet(f'{STORE_DIR}GLFXP1{reptyear}{reptmon}{reptday}.parquet')
+    glrmfxp1.write_parquet(f'{STORE_DIR}GLRMFXP1{reptyear}{reptmon}{reptday}.parquet')
+    glutrmp1.write_parquet(f'{STORE_DIR}GLUTRMP1{reptyear}{reptmon}{reptday}.parquet')
+    glutfxp1.write_parquet(f'{STORE_DIR}GLUTFXP1{reptyear}{reptmon}{reptday}.parquet')
+    
+    print(f"\nGLRMP1{reptyear}{reptmon}{reptday}:")
+    print(glrmp1)
+    
+    print(f"\nGLFXP1{reptyear}{reptmon}{reptday}:")
+    print(glfxp1)
+    
+    print(f"\nGLRMFXP1{reptyear}{reptmon}{reptday}:")
+    print(glrmfxp1)
+    
+    print(f"\nGLUTRMP1{reptyear}{reptmon}{reptday}:")
+    print(glutrmp1)
+    
+    print(f"\nGLUTFXP1{reptyear}{reptmon}{reptday}:")
+    print(glutfxp1)
 
-Saving awsa07...
-  ✓ Saved Parquet file: awsa07.parquet
-  Creating SAS dataset: awsa07
-SAS Connection established. Subprocess id is 204528
+conditions_p2 = [
+    (pl.col('GLITEM').is_in(['F142630C']), pl.lit('B1.12'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['42699']), pl.lit('B1.14'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['44111', 'F147100']), pl.lit('A1.18'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F147600', 'F144611FXSDC']), pl.lit('B1.18'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F249299K', '49120', '42199', '49120NLF']), pl.lit('A1.20'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F143110VCB', 'F143110VFBI', 'F143120ODNVB', 'F143120ODNIB']), pl.lit('A2.21'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F143620FNFBI']), pl.lit('B2.21'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F133110ODVIB', 'F13312002CB', 'F132121BBNM']), pl.lit('A2.01'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['37070']), pl.lit('A2.08'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F137610FXSH', 'F137650FXCDS']), pl.lit('B2.08'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['F133620FNFBI']), pl.lit('B2.01'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'))
+]
 
+rows_p2 = []
+for condition, item, week, month, qtr, halfyr, year, last, total in conditions_p2:
+    filtered = df_gl.filter(condition)
+    if len(filtered) > 0:
+        rows_p2.append(
+            filtered.select([
+                pl.lit(item).alias('ITEM'),
+                week.alias('WEEK') if week is not None else pl.lit(None).alias('WEEK'),
+                month.alias('MONTH') if month is not None else pl.lit(None).alias('MONTH'),
+                qtr.alias('QTR') if qtr is not None else pl.lit(None).alias('QTR'),
+                halfyr.alias('HALFYR') if halfyr is not None else pl.lit(None).alias('HALFYR'),
+                year.alias('YEAR') if year is not None else pl.lit(None).alias('YEAR'),
+                last.alias('LAST') if last is not None else pl.lit(None).alias('LAST'),
+                total.alias('TOTAL') if total is not None else pl.lit(None).alias('TOTAL')
+            ])
+        )
 
-86   
-87   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
-NOTE: Libref OUTLIB was successfully assigned as follows: 
-      Engine:        BASE 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-88   
-  ✓ SAS dataset created: awsa07.sas7bdat
-SAS Connection terminated. Subprocess id was 204528
-  awsa07 - 7,846 accounts, 389 groups
+glfilep2 = pl.concat(rows_p2) if rows_p2 else pl.DataFrame()
 
-Generating awsb07 (Product 207 (Islamic Basic Savings))...
-
-Saving awsb07...
-  ✓ Saved Parquet file: awsb07.parquet
-  Creating SAS dataset: awsb07
-SAS Connection established. Subprocess id is 204569
-
-
-86   
-87   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
-NOTE: Libref OUTLIB was successfully assigned as follows: 
-      Engine:        BASE 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-88   
-  ✓ SAS dataset created: awsb07.sas7bdat
-SAS Connection terminated. Subprocess id was 204569
-  awsb07 - 160 accounts, 27 groups
-
-Generating awsc07 (Product 214 (Mudharabah by Age/Race))...
-
-Saving awsc07...
-  ✓ Saved Parquet file: awsc07.parquet
-  Creating SAS dataset: awsc07
-SAS Connection established. Subprocess id is 204594
-
-
-78   
-79   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
-NOTE: Libref OUTLIB was successfully assigned as follows: 
-      Engine:        BASE 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-80   
-  ✓ SAS dataset created: awsc07.sas7bdat
-SAS Connection terminated. Subprocess id was 204594
-  awsc07 - 10 accounts, 7 groups
-
-Generating mudh07 (Product 214 (Mudharabah by Purpose))...
-
-Saving mudh07...
-  ✓ Saved Parquet file: mudh07.parquet
-  Creating SAS dataset: mudh07
-SAS Connection established. Subprocess id is 204636
-
-
-84   
-85   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
-NOTE: Libref OUTLIB was successfully assigned as follows: 
-      Engine:        BASE 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-86   
-  ✓ SAS dataset created: mudh07.sas7bdat
-SAS Connection terminated. Subprocess id was 204636
-  mudh07 - 10 accounts, 4 groups
-
-Generating awca07 (Products 93,96 (Islamic Current Accounts))...
-
-Saving awca07...
-  ✓ Saved Parquet file: awca07.parquet
-  Creating SAS dataset: awca07
-SAS Connection established. Subprocess id is 204673
-
-
-102  
-103  libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
-NOTE: Libref OUTLIB was successfully assigned as follows: 
-      Engine:        BASE 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-104  
-  ✓ SAS dataset created: awca07.sas7bdat
-SAS Connection terminated. Subprocess id was 204673
-  awca07 - 0 accounts, 0 groups
-
-Generating awcb07 (Products 160,162,164,168,182,169 (Purpose 1,2,4 only))...
-
-Saving awcb07...
-  ✓ Saved Parquet file: awcb07.parquet
-  Creating SAS dataset: awcb07
-SAS Connection established. Subprocess id is 204708
-
-
-86   
-87   libname outlib base  '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'  ;
-NOTE: Libref OUTLIB was successfully assigned as follows: 
-      Engine:        BASE 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-88   
-  ✓ SAS dataset created: awcb07.sas7bdat
-SAS Connection terminated. Subprocess id was 204708
-  awcb07 - 234 accounts, 134 groups
-
-================================================================================
-ISLAMIC BANKING STATISTICS - COMPLETED
-================================================================================
-
-Processing Date: 07/07/2026 (Yesterday)
-Completion Time: 2026-07-08 18:06:07
-
-OUTPUT DATASETS (SAS7BDAT + PARQUET):
-1. DYIBU07  - Daily Islamic Balance Summary
-   Records: 267
-   Files: dyibu07.sas7bdat, dyibu07.parquet
-   
-2. AWSA07   - Products 204,215 (Regular Savings)
-   Records: 389
-   
-3. AWSB07   - Product 207 (Islamic Basic Savings)
-   Records: 27
-   
-4. AWSC07   - Product 214 (Mudharabah by Age/Race)
-   Records: 7
-   
-5. MUDH07   - Product 214 (Mudharabah by Purpose)
-   Records: 4
-   
-6. AWCA07   - Products 93,96 (Islamic Current Accounts)
-   Records: 0
-   
-7. AWCB07   - Products 160,162,164,168,182,169 (Purpose 1,2,4 only)
-   Records: 134
-
-Total Accounts Processed: 2,394,211
-
-Output Files Generated:
-- SAS7BDAT files: 7
-- Parquet files: 7
-- CSV files (backup): 0
-- Output Directory: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-
-Product Categories:
-- Savings: 204 (Regular), 207 (Basic), 214 (Mudharabah), 215 (Special)
-- Current: 93,96 (Basic Islamic), 160-169,182 (Specific Purpose)
-
-Metrics per Dataset:
-- NOACCT: Number of accounts
-- CURBAL: Total current balance
-- ACCYTD: Accounts opened year-to-date
-- AVGACCT: Count of accounts with average balance
-- AVGAMT: Total average amount
-
-
-✓ Processing completed successfully!
-✓ Output directory: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM
-✓ Data processed for date: 2026-07-07
-You have mail in /var/spool/mail/sas_edw_dev
+if len(glfilep2) > 0:
+    glfilep2 = glfilep2.with_columns([
+        (pl.col('WEEK').fill_null(0) + 
+         pl.col('MONTH').fill_null(0) + 
+         pl.col('QTR').fill_null(0) + 
+         pl.col('HALFYR').fill_null(0) + 
+         pl.col('YEAR').fill_null(0) + 
+         pl.col('LAST').fill_null(0) + 
+         pl.col('TOTAL').fill_null(0)).alias('BALANCE')
+    ])
+    
+    glfilep2 = glfilep2.filter(pl.col('ITEM').is_not_null() & (pl.col('ITEM') != ''))
+    
+    glfilep2 = glfilep2.group_by('ITEM').agg([
+        pl.col('WEEK').sum().alias('WEEK'),
+        pl.col('MONTH').sum().alias('MONTH'),
+        pl.col('QTR').sum().alias('QTR'),
+        pl.col('HALFYR').sum().alias('HALFYR'),
+        pl.col('YEAR').sum().alias('YEAR'),
+        pl.col('LAST').sum().alias('LAST'),
+        pl.col('BALANCE').sum().alias('BALANCE')
+    ])
+    
+    glfilep2 = glfilep2.with_columns([
+        (pl.col('WEEK').round(0) / 1000).round(3).alias('WEEK'),
+        (pl.col('MONTH').round(0) / 1000).round(3).alias('MONTH'),
+        (pl.col('QTR').round(0) / 1000).round(3).alias('QTR'),
+        (pl.col('HALFYR').round(0) / 1000).round(3).alias('HALFYR'),
+        (pl.col('YEAR').round(0) / 1000).round(3).alias('YEAR'),
+        (pl.col('LAST').round(0) / 1000).round(3).alias('LAST'),
+        (pl.col('BALANCE').round(0) / 1000).round(3).alias('BALANCE')
+    ])
+    
+    glrmp2 = glfilep2.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('1'))
+    glfxp2 = glfilep2.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('1') & ~pl.col('ITEM').is_in(['B1.12', 'B1.14']))
+    glrmfxp2 = glfilep2.filter(pl.col('ITEM').is_in(['B1.12', 'B1.14']))
+    glutrmp2 = glfilep2.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('2'))
+    glutfxp2 = glfilep2.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('2'))
+    
+    glrmp2.write_parquet(f'{STORE_DIR}GLRMP2{reptyear}{reptmon}{reptday}.parquet')
+    glfxp2.write_parquet(f'{STORE_DIR}GLFXP2{reptyear}{reptmon}{reptday}.parquet')
+    glrmfxp2.write_parquet(f'{STORE_DIR}GLRMFXP2{reptyear}{reptmon}{reptday}.parquet')
+    glutrmp2.write_parquet(f'{STORE_DIR}GLUTRMP2{reptyear}{reptmon}{reptday}.parquet')
+    glutfxp2.write_parquet(f'{STORE_DIR}GLUTFXP2{reptyear}{reptmon}{reptday}.parquet')
+    
+    print(f"\nGLRMP2{reptyear}{reptmon}{reptday}:")
+    print(glrmp2)
+    
+    print(f"\nGLFXP2{reptyear}{reptmon}{reptday}:")
+    print(glfxp2)
+    
+    print(f"\nGLRMFXP2{reptyear}{reptmon}{reptday}:")
+    print(glrmfxp2)
+    
+    print(f"\nGLUTRMP2{reptyear}{reptmon}{reptday}:")
+    print(glutrmp2)
+    
+    print(f"\nGLUTFXP2{reptyear}{reptmon}{reptday}:")
+    print(glutfxp2)
