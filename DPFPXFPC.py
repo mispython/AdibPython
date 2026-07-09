@@ -5,7 +5,7 @@ import sys
 import os
 
 # Constants
-GLFILE = 'data/glfile.parquet'
+GLFILE_TXT = 'data/glfile.txt'  # Changed to txt file
 STORE_DIR = 'data/store/'
 
 # Use yesterday's date
@@ -15,27 +15,82 @@ reptmon = reptdate.strftime('%m')
 reptday = reptdate.strftime('%d')
 rdate = reptdate.strftime('%d%m%y')
 
-# Read GL file
-df_gl_header = pl.read_parquet(GLFILE).head(1)
-yy = int(df_gl_header['YY'][0])
-mm = int(df_gl_header['MM'][0])
-dd = int(df_gl_header['DD'][0])
-gl_date = datetime(yy, mm, dd)
+# Read GL file directly from text
+def read_gl_text_file(filepath):
+    """Read GL text file with appropriate format"""
+    try:
+        # Try reading with tab separator (common for GL files)
+        df = pl.read_csv(
+            filepath, 
+            separator='\t', 
+            infer_schema=True,
+            ignore_errors=True
+        )
+        return df
+    except:
+        # If tab doesn't work, try comma or space
+        try:
+            df = pl.read_csv(
+                filepath, 
+                separator=',', 
+                infer_schema=True,
+                ignore_errors=True
+            )
+            return df
+        except:
+            # Try reading as fixed-width or space-separated
+            df = pl.read_csv(
+                filepath, 
+                separator=' ', 
+                infer_schema=True,
+                ignore_errors=True
+            )
+            return df
+
+# Read the text file
+df_gl = read_gl_text_file(GLFILE_TXT)
+
+if df_gl is None:
+    print(f"ERROR: Could not read {GLFILE_TXT}")
+    sys.exit(77)
+
+# Check if the data has the expected columns
+expected_columns = ['YY', 'MM', 'DD', 'DATE', 'GLITEM', 'SIGN', 'BALANCE']
+missing_cols = [col for col in expected_columns if col not in df_gl.columns]
+
+if missing_cols:
+    print(f"WARNING: Missing columns: {missing_cols}")
+    print(f"Available columns: {df_gl.columns}")
+    print("Attempting to continue with available columns...")
+
+# Get GL date from the first row
+df_gl_header = df_gl.head(1)
+yy = int(df_gl_header['YY'][0]) if 'YY' in df_gl_header.columns else 0
+mm = int(df_gl_header['MM'][0]) if 'MM' in df_gl_header.columns else 0
+dd = int(df_gl_header['DD'][0]) if 'DD' in df_gl_header.columns else 0
+
+if yy == 0 or mm == 0 or dd == 0:
+    print(f"WARNING: Could not parse YY/MM/DD from text file. Using yesterday's date.")
+    gl_date = reptdate
+else:
+    gl_date = datetime(yy, mm, dd)
+
 gl = gl_date.strftime('%d%m%y')
 
 if gl != rdate:
-    print(f"THE GLFILE EXTRACTION IS NOT DATED {rdate}")
+    print(f"THE GLFILE EXTRACTION IS NOT DATED {rdate} (found {gl})")
     sys.exit(77)
 
-df_gl = pl.read_parquet(GLFILE)
-
-df_gl = df_gl.with_columns([
-    pl.col('DATE').alias('DATE'),
-    pl.when(pl.col('SIGN') == '-')
-      .then(pl.col('BALANCE') * -1)
-      .otherwise(pl.col('BALANCE'))
-      .alias('BALANCE')
-])
+# Process BALANCE column
+if 'BALANCE' in df_gl.columns and 'SIGN' in df_gl.columns:
+    df_gl = df_gl.with_columns([
+        pl.when(pl.col('SIGN') == '-')
+          .then(pl.col('BALANCE') * -1)
+          .otherwise(pl.col('BALANCE'))
+          .alias('BALANCE')
+    ])
+else:
+    print("WARNING: SIGN or BALANCE columns not found. Continuing without sign adjustment.")
 
 def process_gl_data(df_gl, suffix):
     """Process GL data for a given suffix (P1 or P2)"""
@@ -113,6 +168,7 @@ def process_gl_data(df_gl, suffix):
         glutfxp = glfilep.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('2'))
         
         # Save parquet files
+        os.makedirs(STORE_DIR, exist_ok=True)
         glrmp.write_parquet(f'{STORE_DIR}GLRM{suffix}{reptyear}{reptmon}{reptday}.parquet')
         glfxp.write_parquet(f'{STORE_DIR}GLFX{suffix}{reptyear}{reptmon}{reptday}.parquet')
         glrmfxp.write_parquet(f'{STORE_DIR}GLRMFX{suffix}{reptyear}{reptmon}{reptday}.parquet')
@@ -170,26 +226,8 @@ def save_to_sas(df, dataset_name):
     except Exception as e:
         print(f"Error creating SAS dataset {dataset_name}: {e}")
 
-def read_txt_to_parquet(txt_file, parquet_file):
-    """Convert txt file to parquet format"""
-    try:
-        # Read txt file with appropriate delimiter
-        # Adjust delimiter and column names based on your actual txt file format
-        df = pl.read_csv(txt_file, separator='\t', infer_schema=True)
-        df.write_parquet(parquet_file)
-        print(f"Converted {txt_file} to {parquet_file}")
-        return df
-    except Exception as e:
-        print(f"Error converting {txt_file} to parquet: {e}")
-        return None
-
 # Main execution
 if __name__ == "__main__":
-    # If you need to convert txt to parquet first
-    # txt_file = 'data/glfile.txt'
-    # if os.path.exists(txt_file):
-    #     read_txt_to_parquet(txt_file, GLFILE)
-    
     # Ensure store directory exists
     os.makedirs(STORE_DIR, exist_ok=True)
     
@@ -197,7 +235,6 @@ if __name__ == "__main__":
     print("Processing GL P1...")
     results_p1 = process_gl_data(df_gl, 'P1')
     
-    # Process P2 (using conditions from your original code)
-    # Note: P2 conditions are slightly different from P1
+    # Process P2
     print("\nProcessing GL P2...")
     results_p2 = process_gl_data(df_gl, 'P2')
