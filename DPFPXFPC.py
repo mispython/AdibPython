@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 
 def eimhptop():
     base = Path.cwd()
-    loan_path = base / "LOAN"
-    cis_path = base / "CIS"
+    loan_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
+    cis_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
     
     # Hardcode REPTDATE (current date - 1 day)
     reptdate = datetime.now().date() - timedelta(days=1)
@@ -39,7 +39,7 @@ def eimhptop():
     
     # 1. CIS INFO - Read SAS dataset
     try:
-        cis_df, meta = pyreadstat.read_sas7bdat(str(cis_path / "LOAN.sas7bdat"))
+        cis_df, meta = pyreadstat.read_sas7bdat(str(cis_path / "loan.sas7bdat"))
         cis_df = pl.from_pandas(cis_df)
         
         hpcis_df = cis_df.filter(
@@ -58,7 +58,7 @@ def eimhptop():
     
     # 2. EXTRACT HP A/C with MTHARR calculation
     try:
-        hpacc_df, meta = pyreadstat.read_sas7bdat(str(loan_path / f"LOAN{reptmon}{wk}.sas7bdat"))
+        hpacc_df, meta = pyreadstat.read_sas7bdat(str(loan_path / f"loan{reptmon}{wk}.sas7bdat"))
         hpacc_df = pl.from_pandas(hpacc_df)
     except Exception as e:
         print(f"File not found or error reading: LOAN/LOAN{reptmon}{wk}.sas7bdat - {e}")
