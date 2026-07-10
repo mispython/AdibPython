@@ -1,4 +1,5 @@
 import polars as pl
+import pyreadstat
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -7,16 +8,8 @@ def eimhptop():
     loan_path = base / "LOAN"
     cis_path = base / "CIS"
     
-    # Execute external program
-    try:
-        from PBBLNFMT import process as pbblnfmt_process
-        pbblnfmt_process()
-    except ImportError:
-        print("Note: PGM(PBBLNFMT) not executed")
-    
-    # REPTDATE with week logic
-    reptdate_df = pl.read_parquet(loan_path / "REPTDATE.parquet")
-    reptdate = reptdate_df["REPTDATE"][0]
+    # Hardcode REPTDATE (current date - 1 day)
+    reptdate = datetime.now().date() - timedelta(days=1)
     reptday = reptdate.day
     
     # SAS SELECT logic for weeks
@@ -41,12 +34,14 @@ def eimhptop():
     
     print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, RDATE: {rdate}")
     
-    # HPD macro variable (assuming defined elsewhere)
-    hpd_products = ["'P1'", "'P2'", "'P3'"]  # Example - should come from macro
+    # HPD products (example - adjust as needed)
+    hpd_products = ["P1", "P2", "P3"]
     
-    # 1. CIS INFO
+    # 1. CIS INFO - Read SAS dataset
     try:
-        cis_df = pl.read_parquet(cis_path / "LOAN.parquet")
+        cis_df, meta = pyreadstat.read_sas7bdat(str(cis_path / "LOAN.sas7bdat"))
+        cis_df = pl.from_pandas(cis_df)
+        
         hpcis_df = cis_df.filter(
             (~pl.col("CACCCODE").is_in(["017", "021", "028"])) &
             (pl.col("SECCUST") == "901")
@@ -57,14 +52,16 @@ def eimhptop():
             .otherwise(pl.col("OLDIC"))
             .alias("ICNO")
         ).select(["ACCTNO", "ICNO", "CUSTNAME"])
-    except:
+    except Exception as e:
+        print(f"Error reading CIS: {e}")
         hpcis_df = pl.DataFrame({"ACCTNO": [], "ICNO": [], "CUSTNAME": []})
     
     # 2. EXTRACT HP A/C with MTHARR calculation
     try:
-        hpacc_df = pl.read_parquet(loan_path / f"LOAN{reptmon}{wk}.parquet")
-    except:
-        print(f"File not found: LOAN/LOAN{reptmon}{wk}.parquet")
+        hpacc_df, meta = pyreadstat.read_sas7bdat(str(loan_path / f"LOAN{reptmon}{wk}.sas7bdat"))
+        hpacc_df = pl.from_pandas(hpacc_df)
+    except Exception as e:
+        print(f"File not found or error reading: LOAN/LOAN{reptmon}{wk}.sas7bdat - {e}")
         return
     
     # Filter for HPD products and balance > 0
@@ -178,6 +175,7 @@ def eimhptop():
 def generate_hp_report(df, rdate):
     """Generate formatted report similar to SAS DATA _NULL_ with HEADER"""
     if df.is_empty():
+        print("No data to report")
         return
     
     # Group by BRANCH for page breaks
@@ -216,7 +214,7 @@ def generate_hp_report(df, rdate):
                     # Format values
                     acctno = str(row.get('ACCTNO', '')).ljust(12)
                     noteno = str(row.get('NOTENO', '')).ljust(6)
-                    custname = (row.get('CUSTNAME', '')[:30]).ljust(30)
+                    custname = (str(row.get('CUSTNAME', ''))[:30]).ljust(30)
                     product = str(row.get('PRODUCT', '')).ljust(4)
                     borstat = str(row.get('BORSTAT', '')).ljust(6)
                     balance = f"{row.get('BALANCE', 0):,.2f}".rjust(16)
@@ -224,12 +222,17 @@ def generate_hp_report(df, rdate):
                     
                     # Format date
                     issdate = "        "
-                    if 'ISSDTE' in row and row['ISSDTE']:
+                    if row.get('ISSDTE'):
                         try:
                             if isinstance(row['ISSDTE'], (datetime, pl.Date)):
                                 issdate = row['ISSDTE'].strftime("%d%b%y").upper()
                             else:
-                                issdate = str(row['ISSDTE'])[:8]
+                                # Try to parse as SAS date
+                                sas_base = datetime(1960, 1, 1)
+                                if isinstance(row['ISSDTE'], (int, float)) and row['ISSDTE'] > 0:
+                                    issdate = (sas_base + timedelta(days=int(row['ISSDTE']))).strftime("%d%b%y").upper()
+                                else:
+                                    issdate = str(row['ISSDTE'])[:8]
                         except:
                             issdate = "        "
                     
