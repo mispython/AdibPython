@@ -121,17 +121,59 @@ def eimhptop():
     ).select(["ACCTNO", "NOTENO", "PRODUCT", "BORSTAT", "BALANCE", 
               "BLDATE", "ISSDTE", "MTHARR", "BRANCH"])
     
-    # 3. Merge with BRANCH abbreviation
+    # 3. Merge with LKP_BRANCH flat file
     try:
-        with open(base / "BRHFILE", 'r') as f:
-            brh_lines = []
-            for line in f:
-                if len(line) >= 9:
-                    branch = int(line[1:4])
-                    brabbr = line[5:8].strip()
-                    brh_lines.append({"BRANCH": branch, "BRABBR": brabbr})
-        brhdata_df = pl.DataFrame(brh_lines)
-    except:
+        # Determine if LKP_BRANCH is a text file or SAS dataset
+        lkp_branch_path = base / "LKP_BRANCH"
+        
+        # Try to read as SAS dataset first
+        if lkp_branch_path.with_suffix('.sas7bdat').exists():
+            brhdata_df, meta = pyreadstat.read_sas7bdat(str(lkp_branch_path.with_suffix('.sas7bdat')))
+            brhdata_df = pl.from_pandas(brhdata_df)
+        else:
+            # Try reading as flat file (space/comma/tab delimited)
+            with open(lkp_branch_path, 'r') as f:
+                brh_lines = []
+                lines = f.readlines()
+                
+                # Check if header exists
+                first_line = lines[0].strip()
+                if 'BRANCH' in first_line.upper() or 'BRABBR' in first_line.upper():
+                    # Has header, skip it
+                    start_idx = 1
+                else:
+                    start_idx = 0
+                
+                for line in lines[start_idx:]:
+                    if line.strip():
+                        # Try different delimiters
+                        parts = None
+                        if '\t' in line:
+                            parts = line.strip().split('\t')
+                        elif ',' in line:
+                            parts = line.strip().split(',')
+                        else:
+                            # Space delimited - handle multiple spaces
+                            parts = [p for p in line.strip().split(' ') if p]
+                        
+                        if parts and len(parts) >= 2:
+                            try:
+                                # Assuming format: BRANCH_CODE BRABBR (or vice versa)
+                                # Try to determine which column is numeric
+                                if parts[0].isdigit():
+                                    branch = int(parts[0])
+                                    brabbr = parts[1].strip()
+                                else:
+                                    branch = int(parts[1])
+                                    brabbr = parts[0].strip()
+                                brh_lines.append({"BRANCH": branch, "BRABBR": brabbr})
+                            except ValueError:
+                                continue
+                
+                brhdata_df = pl.DataFrame(brh_lines)
+                
+    except Exception as e:
+        print(f"Error reading LKP_BRANCH: {e}")
         brhdata_df = pl.DataFrame({"BRANCH": [], "BRABBR": []})
     
     hpacc_df = hpacc_df.sort("BRANCH")
