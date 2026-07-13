@@ -6,15 +6,15 @@ from datetime import datetime, timedelta
 def eiihptop():
     """Islamic bank version of EIMHPTOP - using SAS datasets directly"""
     base = Path.cwd()
-    loan_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP/"
-    cis_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP/"
+    loan_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
+    cis_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
     
     # Define output path
-    output_path = base / "HPCOLD_ISLAMIC.txt"
+    output_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIHPTOP/HPCOLD_ISLAMIC.txt"
     print(f"Output will be saved to: {output_path}")
     
     # Hardcode REPTDATE (current date - 1 day)
-    reptdate = datetime.now().date() - timedelta(days=1)
+    reptdate = datetime.now().date() - timedelta(days=13)
     reptday = reptdate.day
     
     # SAS SELECT logic for weeks
@@ -424,12 +424,12 @@ def generate_islamic_hp_report(df, rdate, output_path):
                 
                 # ICNO total - exactly matching production alignment
                 f.write(f"                                                                 ----------------\n")
-                f.write(f"                                                          TOTAL: {ic_total:13,.2f}\n")
+                f.write(f"                                                          TOTAL: {ic_total:16,.2f}\n")
                 f.write(f"                                                                 ================\n")
             
             # Branch total - exactly matching production alignment
             f.write(f"                                                                 ----------------\n")
-            f.write(f"                                                   BRANCH TOTAL: {branch_total:13,.2f}\n")
+            f.write(f"                                                   BRANCH TOTAL: {branch_total:16,.2f}\n")
             f.write(f"                                                                 ================\n")
             
             # Page break
@@ -438,3 +438,35 @@ def generate_islamic_hp_report(df, rdate, output_path):
 
 if __name__ == "__main__":
     eiihptop()
+
+
+
+need to follow below actual production output format of alignment and spacing according to their columns
+
+1                                                                                                                                 
+ PUBLIC ISLAMIC BANK BERHAD                                                     30/06/26  PAGE NO : 1                             
+ TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT 30/06/26                                                             
+ REPORT ID: EIMHPTOP                                                                                                              
+0BRANCH CODE= 013                                                                                                                 
+0            NOTE                                 LOAN  BORROWER                  MONTH      ISSUE                                
+ MNI NO      NO     NAME                          TYPE  STATUS        NET BALANCE PASS DUE   DATE                                 
+ --------------------------------------------------------------------------------------------------------                         
+ 8890850308  94010  SITI ZALINA BINTI MAT SIN      128                  21,453.08      2     17NOV20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:        21,453.08                                                 
+                                                                 ================                                                 
+ 8862941712  94010  KAMALRUZAMAN BIN NORDIN        128                   2,926.83      0     17NOV20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:         2,926.83                                                 
+                                                                 ================                                                 
+ 8709015015  90010  SUHAIMI BIN MOHD NOOR          128                     152.65      0     05AUG15                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           152.65                                                 
+                                                                 ================                                                 
+ 8826241403  90010  MOHD SYAHMIN BIN MOHAMED OTHMA 128                     144.08      0     23JAN13                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           144.08                                                 
+                                                                 ================                                                 
+                                                                 ----------------                                                 
+                                                   BRANCH TOTAL:        24,676.64                                                 
+                                                                 ================
