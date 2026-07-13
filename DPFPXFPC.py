@@ -1,15 +1,22 @@
-# !/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Program Name: EIBAABBA.py
 """
 
-from datetime import datetime, timedelta
-from pathlib import Path
-
 import polars as pl
+import pyreadstat
+from pathlib import Path
+from datetime import datetime, timedelta
 
+# ---------------------------------------------------------------------------
+# Configuration - Define input and output paths at the beginning
+# ---------------------------------------------------------------------------
+BASE_PATH = Path.cwd()
+INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBAABBA/"
+OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBAABBA/ABBALST.txt"
 
 SAS_BASE_DATE = datetime(1960, 1, 1)
+
 COLLATER_GROUPS = {
     "29": {"001", "006", "007", "014", "016", "024", "025", "026", "046", "048", "049"},
     "70": {
@@ -83,11 +90,13 @@ COLLATER_GROUPS = {
     "81": {"108", "109"},
     "99": {"077"},
 }
+
 CCLASSC_TO_COLLATER = {
     cclassc: collater
     for collater, cclassc_values in COLLATER_GROUPS.items()
     for cclassc in cclassc_values
 }
+
 MTHARR_THRESHOLDS = [
     (698, 23),
     (668, 22),
@@ -115,10 +124,13 @@ MTHARR_THRESHOLDS = [
 ]
 
 
-def read_dataset(path: Path, file_name: str) -> pl.DataFrame:
+def read_sas_dataset(path: Path, file_name: str) -> pl.DataFrame:
+    """Read SAS dataset using pyreadstat"""
     try:
-        return pl.read_parquet(path / file_name)
-    except (TypeError, ValueError, FileNotFoundError):
+        df, meta = pyreadstat.read_sas7bdat(str(path / file_name))
+        return pl.from_pandas(df)
+    except Exception as e:
+        print(f"Error reading {file_name}: {e}")
         return pl.DataFrame()
 
 
@@ -178,8 +190,8 @@ def map_collater(cclassc) -> str | None:
     return CCLASSC_TO_COLLATER.get(str(cclassc).zfill(3))
 
 
-def process_abba_data(mniln_path: Path, snapshot_date: datetime) -> pl.DataFrame:
-    abba_df = read_dataset(mniln_path, "LNNOTE.parquet")
+def process_abba_data(input_path: Path, snapshot_date: datetime) -> pl.DataFrame:
+    abba_df = read_sas_dataset(input_path, "lnnote.sas7bdat")
     if abba_df.is_empty():
         return abba_df
 
@@ -189,7 +201,7 @@ def process_abba_data(mniln_path: Path, snapshot_date: datetime) -> pl.DataFrame
             & (((pl.col("LOANTYPE") >= 110) & (pl.col("LOANTYPE") <= 119)) | ((pl.col("LOANTYPE") >= 139) & (pl.col("LOANTYPE") <= 140)))
             & (pl.col("RISKRATE").is_in([2, 3, 4]))
         )
-       .with_columns(
+        .with_columns(
             pl.col("BIRTHDT").map_elements(lambda x: calculate_age(x, snapshot_date), return_dtype=pl.Int64).alias("AGE"),
             pl.col("PENDBRH").alias("BRANCH"),
             pl.col("COLLDESC").str.slice(0, 34).alias("COLLD"),
@@ -213,10 +225,14 @@ def process_abba_data(mniln_path: Path, snapshot_date: datetime) -> pl.DataFrame
     )
 
 
-def merge_sasb_data(abba_df: pl.DataFrame, sasd_path: Path, month: str, week: str, snapshot_date: datetime) -> pl.DataFrame:
-    sasb_df = read_dataset(sasd_path, f"LOAN{month}{week}.parquet")
+def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: str, snapshot_date: datetime) -> pl.DataFrame:
+    sasb_df = read_sas_dataset(input_path, f"loan{month}{week}.sas7bdat")
     if sasb_df.is_empty():
-        return abba_df.with_columns(pl.lit(None).alias("BALANCE"), pl.lit(None).alias("MTHARR"), pl.lit(None).alias("OVERDUE"))
+        return abba_df.with_columns(
+            pl.lit(None).alias("BALANCE"),
+            pl.lit(None).alias("MTHARR"),
+            pl.lit(None).alias("OVERDUE")
+        )
 
     sasb_df = (
         sasb_df.with_columns(
@@ -225,11 +241,29 @@ def merge_sasb_data(abba_df: pl.DataFrame, sasd_path: Path, month: str, week: st
         .select(["ACCTNO", "NOTENO", "BALANCE", "MTHARR"])
         .sort(["ACCTNO", "NOTENO"])
     )
-    return abba_df.join(sasb_df, on=["ACCTNO", "NOTENO"], how="left").with_columns((pl.col("PAYAMT") * pl.col("MTHARR")).alias("OVERDUE"))
+    
+    # Ensure numeric columns are properly typed
+    abba_df = abba_df.with_columns([
+        pl.col("PAYAMT").cast(pl.Float64),
+    ])
+    
+    result = abba_df.join(sasb_df, on=["ACCTNO", "NOTENO"], how="left")
+    result = result.with_columns(
+        (pl.col("PAYAMT") * pl.col("MTHARR")).alias("OVERDUE")
+    )
+    
+    # Fill null values
+    result = result.with_columns([
+        pl.col("BALANCE").fill_null(0),
+        pl.col("MTHARR").fill_null(0),
+        pl.col("OVERDUE").fill_null(0),
+    ])
+    
+    return result
 
 
-def merge_customer_data(abba_df: pl.DataFrame, cisln_path: Path) -> pl.DataFrame:
-    cisln_df = read_dataset(cisln_path, "LOAN.parquet")
+def merge_customer_data(abba_df: pl.DataFrame, input_path: Path) -> pl.DataFrame:
+    cisln_df = read_sas_dataset(input_path, "loan.sas7bdat")
     if cisln_df.is_empty():
         return abba_df.with_columns(
             pl.lit("").alias("CUSTNAME"),
@@ -255,20 +289,36 @@ def merge_customer_data(abba_df: pl.DataFrame, cisln_path: Path) -> pl.DataFrame
             "ADDRLN5",
         ]
     ).sort("ACCTNO")
+    
+    # Fill null customer fields
+    cisln_df = cisln_df.with_columns([
+        pl.col("CUSTNAME").fill_null(""),
+        pl.col("GENDER").fill_null(""),
+        pl.col("OCCUPAT").fill_null(""),
+        pl.col("ADDRLN1").fill_null(""),
+        pl.col("ADDRLN2").fill_null(""),
+        pl.col("ADDRLN3").fill_null(""),
+        pl.col("ADDRLN4").fill_null(""),
+        pl.col("ADDRLN5").fill_null(""),
+    ])
+    
     return abba_df.join(cisln_df, on="ACCTNO", how="left")
 
 
-def merge_collateral_data(abba_df: pl.DataFrame, coll_path: Path) -> pl.DataFrame:
-    coll_df = read_dataset(coll_path, "COLLATER.parquet")
+def merge_collateral_data(abba_df: pl.DataFrame, input_path: Path) -> pl.DataFrame:
+    coll_df = read_sas_dataset(input_path, "collater.sas7bdat")
     if coll_df.is_empty():
         return abba_df
 
     coll_df = (
-        coll_df.with_columns(pl.col("CCLASSC").map_elements(map_collater, return_dtype=pl.Utf8).alias("COLLATER"))
+        coll_df.with_columns(
+            pl.col("CCLASSC").map_elements(map_collater, return_dtype=pl.Utf8).alias("COLLATER")
+        )
         .select(["ACCTNO", "NOTENO", "COLLATER"])
         .rename({"COLLATER": "COLLD"})
         .sort(["ACCTNO", "NOTENO"])
     )
+    
     return (
         abba_df.join(
             coll_df.select(["ACCTNO", "NOTENO", "COLLD"]),
@@ -282,44 +332,64 @@ def merge_collateral_data(abba_df: pl.DataFrame, coll_path: Path) -> pl.DataFram
 
 
 def finalize_output(abba_df: pl.DataFrame) -> pl.DataFrame:
+    # Fill any remaining nulls
+    abba_df = abba_df.with_columns([
+        pl.col("COLLD").fill_null(""),
+        pl.col("SECTOR").fill_null(""),
+        pl.col("STATE").fill_null(""),
+    ])
+    
     return abba_df.unique(subset=["ACCTNO", "NOTENO"], keep="first").sort(["BRANCH", "ACCTNO", "NOTENO"])
 
 
 def eibaabba():
-    base = Path.cwd()
-    mniln_path = base / "MNILN"
-    sasd_path = base / "SASD"
-    cisln_path = base / "CISLN"
-    coll_path = base / "COLL"
-
-    reptdate_df = read_dataset(mniln_path, "REPTDATE.parquet")
-    if reptdate_df.is_empty():
-        print("No REPTDATE data found")
-        return
-
-    reptdate = reptdate_df["REPTDATE"][0]
+    """Main function for EIBAABBA - Account Analysis Report"""
+    input_path = INPUT_PATH
+    output_path = OUTPUT_PATH
+    
+    # Create output directory if it doesn't exist
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    print(f"EIBAABBA - Account Analysis Report")
+    print(f"Input path: {input_path}")
+    print(f"Output path: {output_path}")
+    
+    # Hardcode REPTDATE (current date - 1 day)
+    reptdate = datetime.now().date() - timedelta(days=1)
     context = compute_reporting_context(reptdate)
     snapshot_date = datetime.strptime(context["sdate"] + context["year"][-2:], "%d%m%y")
 
-    print("EIBAABBA - Account Analysis Report")
     print(f"Date: {context['sdate']}, Week: {context['week']}, SDD: {context['sdd']}")
 
-    abba_df = process_abba_data(mniln_path, snapshot_date)
+    # Process data
+    abba_df = process_abba_data(input_path, snapshot_date)
     if abba_df.is_empty():
         print("No LNNOTE data found")
         return
 
-    abba_df = merge_sasb_data(abba_df, sasd_path, context["month"], context["week"], snapshot_date)
-    abba_df = merge_customer_data(abba_df, cisln_path)
-    abba_df = merge_collateral_data(abba_df, coll_path)
+    print(f"After LNNOTE processing: {len(abba_df)} records")
+    
+    abba_df = merge_sasb_data(abba_df, input_path, context["month"], context["week"], snapshot_date)
+    print(f"After SASB merge: {len(abba_df)} records")
+    
+    abba_df = merge_customer_data(abba_df, input_path)
+    print(f"After customer merge: {len(abba_df)} records")
+    
+    abba_df = merge_collateral_data(abba_df, input_path)
+    print(f"After collateral merge: {len(abba_df)} records")
+    
     abba_df = finalize_output(abba_df)
+    print(f"Final records: {len(abba_df)}")
 
-    generate_abba_output(abba_df, base / "ABBALST.csv")
-    print(f"Processing complete. Records: {len(abba_df)}")
+    # Generate output
+    generate_abba_output(abba_df, output_path)
+    print(f"Processing complete. Report saved to: {output_path}")
 
 
 def generate_abba_output(df: pl.DataFrame, output_path: Path):
+    """Generate text file output"""
     if df.is_empty():
+        print("No data to output")
         return
     
     output_columns = [
@@ -345,8 +415,25 @@ def generate_abba_output(df: pl.DataFrame, output_path: Path):
         "ADDRLN4",
         "ADDRLN5",
     ]
-    output_df = df.select([column for column in output_columns if column in df.columns])
-    output_df.write_csv(output_path, separator=";")
+    
+    # Select only columns that exist
+    existing_columns = [col for col in output_columns if col in df.columns]
+    output_df = df.select(existing_columns)
+    
+    # Write to text file with header
+    with open(output_path, 'w') as f:
+        # Write header
+        f.write("|".join(existing_columns) + "\n")
+        
+        # Write data rows
+        for row in output_df.iter_rows(named=True):
+            row_values = []
+            for col in existing_columns:
+                val = row.get(col, '')
+                if val is None:
+                    val = ''
+                row_values.append(str(val))
+            f.write("|".join(row_values) + "\n")
     
     print(f"Output file created: {output_path}")
     if len(output_df) > 0:
@@ -354,13 +441,10 @@ def generate_abba_output(df: pl.DataFrame, output_path: Path):
         for row in output_df.head(3).iter_rows(named=True):
             print(
                 f"  ACCTNO: {row.get('ACCTNO', '')}, "
-                f"Customer: {row.get('CUSTNAME', '')[:20]}, "
+                f"Customer: {str(row.get('CUSTNAME', ''))[:20]}, "
                 f"Balance: {row.get('BALANCE', 0):,.2f}"
             )
 
 
 if __name__ == "__main__":
     eibaabba()
-
-
-for eibaabba, no need input for reptdate (hardcode just like before), all inputs in sas7bdat, output also in text file. configuration for input and output at the beginning
