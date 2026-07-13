@@ -1,21 +1,337 @@
-NOWK: 4, NOWK1: 3, REPTMON: 06, RDATE: 300626
-CIS sample size: 392 records
-HPACC sample size: 500 records
-HPACC columns: ['ACCTNO', 'NAME', 'CUSTCODE', 'NOTENO', 'ASSMDATE', 'CURBAL', 'INTAMT', 'APPVALUE', 'NOTETERM', 'COLLDESC', 'FLAG3', 'COMMNO', 'COSTCTR', 'CENSUS', 'BILLTYPE', 'PAIDIND', 'NETPROC', 'INTRATE', 'SPREAD', 'NTINT', 'REBATE', 'INTEARN', 'ACCRUAL', 'SECURE', 'LIABCODE', 'LOANSTAT', 'BORSTAT', 'MARKETVL', 'EARNTERM', 'USURYIDX', 'STATE', 'INTEARN2', 'INTEARN3', 'INTEARN4', 'PAYAMT', 'PAYFREQ', 'BILTOT', 'BILPAY', 'PAYTYPE', 'FEEAMT4', 'APPRDATE', 'TOTPDEOP', 'INTPDYTD', 'ACCRUYTD', 'ACCRUEOP', 'NTINDEX', 'REBATEI', 'ACCTYIND', 'HSTPRIN', 'CRISPURP', 'COSTFUND', 'ESCRACCT', 'RESTBALC', 'SIACCTNO', 'FRELEAS', 'CFINDEX', 'FDCERTNO', 'VB','ASCORE_PERM', 'ASCORE_LTST', 'ABM_HL', 'IA_LRU', 'CCRIS_INSTLAMT', 'ASCORE_COMM', 'INDUSTRIAL_SECTOR_CD', 'FDACCTNO', 'DNBFISME', 'CJFEE', 'FEEAMT', 'NXTBIL', 'BLDATE', 'BALANCE', 'OLDNOTEBLDATE', 'OLDNOTEDAYARR', 'WRITE_DOWN_BAL', 'SECTOLD', 'UNEARNED1', 'UNEARNED2', 'UNEARNED', 'ENTITY_CD', 'AMTIND', 'APPRLIM2', 'APPRLIMT', 'APPRLMTACCT', 'BALMNI', 'CENSUS4', 'CGCREF', 'CLOSEDTE', 'COLLCD', 'CUSTCD', 'CUSTIDNO', 'FISSPURP', 'INVALID_LOC', 'NEWSEC', 'ORIGMT', 'ORIGMX', 'PRODCD', 'PRODUCT', 'REMAINMH', 'REMAINMT', 'REMAINMX', 'RISKCD', 'RISKRTE', 'RLEASAMT', 'SECTORCD', 'SECTORMA', 'STATECD', 'UNDRAWN', 'BRANCH', 'SECTOR', 'ACCTYPE', 'AVGAMT', 'BASERATE', 'CENSUST', 'COL1', 'COL2', 'FLATRATE', 'LIMIT1', 'LIMIT2', 'ODINTACC', 'ODPLAN', 'ODSTAT', 'ORGCODE', 'RATE1', 'RATE2', 'TODRATE', 'CCRICODE', 'SECCUST', 'NEWICIND', 'BUSSIND', 'ISSUEDT', 'EIR_ADJ', 'EXPRDATE', 'DNBFI_ORI', 'APPR2FCY', 'APPRLIM2ORI', 'BAL_AFT_EIR', 'CCY', 'CUSTORI', 'EIRIND', 'FCYBAL', 'FISSPORI', 'FORATE', 'ORIBALANCE', 'ORIBALMNI', 'ORIBAL_AFT_EIR', 'PAYIND', 'REMMTH', 'SECTORCD_ORI', 'SECTORZ', 'SECTORZZ', 'SECTPORI', 'SECVALID', 'U2RACECO', 'PZIPCODE', 'CONTRTYPE', 'FLAG1', 'FLAG5', 'USER5', 'ECSRRSRV', 'DAYARR_MO', 'BONUSANO', 'PAYEFFDT', 'LASTTRAN', 'FCLOSUREDT', 'INTSTDTE', 'CPNSTDTE', 'VALUEDTE', 'COLLYEAR', 'MTD_GHARAMAH_AMT', 'MTD_TAWIDH_AMT', 'NUMCPNS', 'AKPK_RA_CUMM_INT_CAP_AMT', 'AKPK_RA_CUMM_INT_WAIVER_AMT', 'AKPK_RA_DIG_STATUS_CD', 'AKPK_RA_DIG_STATUS_DT', 'AKPK_RA_DLY_INT_ACCRUAL', 'AKPK_RA_END_DT', 'AKPK_RA_MTD_INT_ACCRUAL', 'AKPK_RA_MTH_INT_CAP_AMT', 'AKPK_RA_MTH_INT_WAIVER_AMT', 'AKPK_RA_ORIG_CEILING_RT', 'AKPK_RA_ORIG_SPREAD', 'AKPK_RA_START_DT', 'AKPK_RA_TAG', 'AKPK_RA_TAG_DT', 'AKPK_STATUS', 'AUTO_EXT_TAG', 'AUTO_EXT_TAG_DT', 'AUTO_REPRICE_DIFF_INSTL_AMT', 'AUTO_REPRICE_INSTL_AMT', 'BALLOON_REPAY_IND', 'BULLET_REPAY_IND', 'CASHPRICE', 'COMMNO_OLD', 'COM_FEE_NOTICE_IND', 'CORPCODE', 'COURT_ORDER_APPLY_DT', 'COURT_ORDER_OBTAIN_DT', 'CP', 'CUM_WRIOFF', 'DEALERNO', 'DELQCD', 'DIA_PAST01_MTH', 'DIA_PAST02_MTH', 'DIA_PAST03_MTH', 'DIA_PAST04_MTH', 'DIA_PAST05_MTH', 'DIA_PAST06_MTH', 'DIA_PAST07_MTH', 'DIA_PAST08_MTH', 'DIA_PAST09_MTH', 'DIA_PAST10_MTH', 'DIA_PAST11_MTH', 'DIA_PAST12_MTH', 'DIA_PAST13_MTH', 'DIA_PAST14_MTH', 'DIA_PAST15_MTH', 'DIA_PAST16_MTH', 'DIA_PAST17_MTH', 'DIA_PAST18_MTH', 'DIA_PAST19_MTH', 'DIA_PAST20_MTH', 'DIA_PAST21_MTH', 'DIA_PAST22_MTH', 'DIA_PAST23_MTH', 'DIA_PAST24_MTH', 'DIGITAL_RR_STATUS_CD', 'DIGITAL_RR_STATUS_DT', 'DISPOSED_AMT', 'DLVDATE', 'DSR', 'EARLY_SETTLE_FEE_CHARGE_FLG', 'FDB', 'INSOLVENCY_IND', 'INTBASIS', 'INTINYTD', 'LMOENDDATE', 'LMOSTDATE', 'LOCK_IN_END_DT', 'LSTTRNAM', 'LSTTRNCD', 'LTST_MGB_SCORE', 'MANUAL_RR_DT', 'MANUAL_RR_TAG', 'MARKED_PAYMENT_AMT', 'MARKED_PAYMENT_IND', 'MNIAPDTE', 'MNIAPLMT', 'MO_INSTL_ARR', 'MO_MAIN_DT', 'MO_TAG', 'MODELDES', 'MOENDDTE', 'MOSTDTE', 'MTD_REPAID_AMT', 'NACOSPADT', 'NPLCRR', 'NTAPR', 'NUM_MORA', 'NUM_REPO_ORDER_ISSUE', 'NURS_COUNTER', 'NURS_ENDDT', 'NURS_TAG', 'NURS_TAGDT', 'NUR_STARTDT', 'NXDUEDT', 'OLD_FI', 'OLD_MACC_NO', 'OLD_SUBACC_NO', 'OMNIBUS_FACILITY_IND', 'ORGBAL', 'ORIG_RESTIND', 'ORIGRATE', 'POINTAMT', 'POSTNTRN', 'PROMPT_PAY_TRACKER', 'PROP_DEVELOP_FIN_IND', 'PTMNATE', 'PURPOSE', 'REACCRUAL', 'REBIND', 'RECOVER_COST', 'REFINANC_LN', 'REPAY_PROPOSAL_CD', 'REPAY_PROPOSAL_DT', 'REPAY_SOURCE', 'REPAY_TYPE_CD', 'REPO_ORDER_ISSUE_DT', 'RESTIND', 'RESTIND_END_DT', 'RISK_GRADE_CLASS', 'RSN', 'SCORE1', 'SCORE2', 'SITYPE', 'STAFF_FREE_INT_IND', 'STAFF_FREE_INT_LOAN_AMT', 'TFA_DIG_STATUS_CD', 'TFA_DIG_STATUS_DT', 'TFA_NURS_COUNTER', 'TFA_NURS_END_DT', 'TFA_NURS_START_DT', 'TFA_NURS_TAG', 'TFA_NURS_TAG_DT', 'TIMES_RENEWED', 'TRA_EFF_DT', 'USMARGIN', 'VINNO', 'WRIOFF_AMT', 'WRIOFF_DT', 'YTDEARNS', 'INTAMT_ORIG', 'REBATE_ORIG', 'INTEARN2_ORIG', 'INTEARN3_ORIG', 'INTEARN4_ORIG', 'BANK_EQUITY_RATIO', 'TAKAFUL_AMT', 'TAKAFUL_COLLECT_ACCTNO', 'TAKAFUL_OPERAT', 'TIA_TAG_DATE', 'TIA_UTAG_DATE', 'NUM_PAY_BIL_INSTL', 'SCHBIL_INSTL_DT', 'SCHBIL_INT_DT', 'NUM_PAY_BIL_INT', 'LASTBIL_INSTL_DT', 'LASTBIL_INT_DT', 'MORA_BENCHMARK_AMT', 'TRA_RR_IND', 'TRA_RR_ACCEPT_DT', 'NUM_RR', 'INFEE', 'DAYARR_MORA', 'SPA_AMT', 'HI_TAG', 'HI_TAG_DT', 'HI_DIG_STATUS_CD', 'HI_DIG_STATUS_DT', 'REPO_ORDER_EXPIRY_DT', 'FLOOD_MO_TAG', 'FLOOD_MO_DT', 'IMPAIRED_HP_TAG', 'REPAY_MODE', 'RR_EREQUEST_NUM', 'RR_TYPE', 'RR_APPR_DATE', 'INDEX_PRICING', 'SCH_REPAY_TERM', 'LEGAL_NOTICE_INSTRUCT_DT', 'LEGAL_NOTICE_ISSUE_DT', 'PARAS_TAG', 'PARAS_TAG_DT', 'JUDGE_AMT', 'JUDGE_DT', 'JUDGE_MAINT_DT', 'PRE_BKRUPT_NOTICE_DT', 'PCT_INDEX_INTRATE', 'CURCODE', 'RR_APPL_DATE', 'HP_STAGE_TRSF_IND', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'CUMM_PAID_BILL_AMT', 'CUMM_PAID_BILL_PCT', 'AKPK_MATRIX_TYPE', 'AKPK_MATRIX_DATE', 'DEVIATION_CD', 'ACCTREVDT', 'COURT_ORDER_PERPETUAL_IND', 'FLOOD_MO_PACKAGE_CD', 'E_INVOICE_IND', 'INT_ADVICE_IND', 'LEGAL_MATURITY_DT', 'RR_IL_RECLASS_DT', 'FDB_SCORING_DT', 'FDB_TAG', 'FDB_TAG_DT', 'CLIMATE_MITIGATE_GP1_FLG', 'CLIMATE_ADAPT_GP2_FLG', 'CLIMATE_ENVIRONMT_GP3_FLG', 'CLIMATE_TRANSITION_GP4_FLG', 'CLIMATE_PROHIBIT_GP5_FLG', 'WOS_RECEIVED_DT', 'WOS_SETTLED_DT', 'WOS_TAG', 'FRAUD_TAG', 'FRAUD_TAG_DT', 'REMAIN_TERM_MATURITY', 'COURT_ORDER_UPDATE_DT', 'SOURCE_INCOME_CURRENCY_CD', 'VEHI_MAKE_CATEGORY', 'INT_JAN_TO_JUN_AMT', 'INT_JUL_TO_DEC_AMT', 'WRIOFF_CLOSE_FILE_TAG', 'WRIOFF_CLOSE_FILE_TAG_DT', 'RR_UNTAG_DATE', 'RR_UNTAG_REPAY_CNT', 'EARMARK_NOTICE_DT', 'EARMARK_AMT', 'MAILING_ADD_IND', 'BILLING_ADD_IND', 'PROP_ADD_IND', 'FLOOR_RT_UNDER', 'FLOOR_RT_OVER', 'STMT_GEN_IND', 'MULTI_CURRENCY_TAG', 'RRSTG1', 'AGING_FAST_TRACKER', 'GOODWILL_IND', 'GOODWILL_CURR_RATE', 'GOODWILL_CURR_AMT']
-PRODUCT column type: Float64
-PRODUCT sample values: [5.0, 5.0, 5.0, 247.0, 212.0]
-After filtering: 0 records
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMHPTOP.py", line 329, in <module>
+import polars as pl
+import pyreadstat
+from pathlib import Path
+from datetime import datetime, timedelta
+
+def eimhptop():
+    base = Path.cwd()
+    loan_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
+    cis_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
+    
+    # Hardcode REPTDATE (current date - 1 day)
+    reptdate = datetime.now().date() - timedelta(days=13)
+    reptday = reptdate.day
+    
+    # SAS SELECT logic for weeks
+    if reptday == 8:
+        wk, wk1 = '1', '4'
+    elif reptday == 15:
+        wk, wk1 = '2', '1'
+    elif reptday == 22:
+        wk, wk1 = '3', '2'
+    else:
+        wk, wk1 = '4', '3'
+    
+    mm = reptdate.month
+    if wk == '1':
+        mm1 = mm - 1 if mm > 1 else 12
+    else:
+        mm1 = mm
+    
+    reptmon = f"{mm:02d}"
+    reptmon1 = f"{mm1:02d}"
+    rdate = reptdate.strftime("%d%m%y")
+    
+    print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, RDATE: {rdate}")
+    
+    # HPD products - adjust based on actual product codes
+    # From sample values: 5.0, 247.0, 212.0 - these are likely the product codes
+    hpd_products = [5.0, 247.0, 212.0]  # Convert to float to match column type
+    # If there are more products, add them here
+    
+    # 1. CIS INFO - Read SAS dataset with sampling
+    try:
+        # Read only first 1000 rows for testing
+        cis_df, meta = pyreadstat.read_sas7bdat(
+            str(cis_path / "loan.sas7bdat"),
+            row_limit=1000  # Limit to 1000 rows for testing
+        )
+        cis_df = pl.from_pandas(cis_df)
+        
+        hpcis_df = cis_df.filter(
+            (~pl.col("CACCCODE").is_in(["017", "021", "028"])) &
+            (pl.col("SECCUST") == "901")
+        )
+        hpcis_df = hpcis_df.with_columns(
+            pl.when(pl.col("NEWIC") != "")
+            .then(pl.col("NEWIC"))
+            .otherwise(pl.col("OLDIC"))
+            .alias("ICNO")
+        ).select(["ACCTNO", "ICNO", "CUSTNAME"])
+        
+        print(f"CIS sample size: {len(hpcis_df)} records")
+    except Exception as e:
+        print(f"Error reading CIS: {e}")
+        hpcis_df = pl.DataFrame({"ACCTNO": [], "ICNO": [], "CUSTNAME": []})
+    
+    # 2. EXTRACT HP A/C with MTHARR calculation
+    try:
+        # Read only first 1000 rows for testing
+        hpacc_df, meta = pyreadstat.read_sas7bdat(
+            str(loan_path / f"loan{reptmon}{wk}.sas7bdat"),
+            row_limit=500  # Limit to 500 rows for testing
+        )
+        hpacc_df = pl.from_pandas(hpacc_df)
+        print(f"HPACC sample size: {len(hpacc_df)} records")
+        
+        # Check if MTHARR column already exists (it appears to in the columns list)
+        if 'MTHARR' in hpacc_df.columns:
+            print("MTHARR column already exists in the data")
+            # Use existing MTHARR column instead of calculating
+            hpacc_df = hpacc_df.select(["ACCTNO", "NOTENO", "PRODUCT", "BORSTAT", "BALANCE", 
+                                      "BLDATE", "ISSUEDT", "MTHARR", "BRANCH"])
+        else:
+            # Calculate MTHARR if it doesn't exist
+            thisdate = datetime.strptime(rdate, "%d%m%y")
+            
+            def calculate_mtharr(bldate):
+                if not bldate or bldate == 0:
+                    return 0
+                
+                try:
+                    if isinstance(bldate, (int, float)):
+                        # SAS date to Python date conversion
+                        sas_base = datetime(1960, 1, 1)
+                        bldate_dt = sas_base + timedelta(days=int(bldate))
+                    else:
+                        bldate_dt = bldate
+                    
+                    daydiff = (thisdate - bldate_dt).days
+                    
+                    # SAS IF-ELSE chain
+                    if daydiff > 729: return int((daydiff/365)*12)
+                    elif daydiff > 698: return 23
+                    elif daydiff > 668: return 22
+                    elif daydiff > 638: return 21
+                    elif daydiff > 608: return 20
+                    elif daydiff > 577: return 19
+                    elif daydiff > 547: return 18
+                    elif daydiff > 516: return 17
+                    elif daydiff > 486: return 16
+                    elif daydiff > 456: return 15
+                    elif daydiff > 424: return 14
+                    elif daydiff > 394: return 13
+                    elif daydiff > 364: return 12
+                    elif daydiff > 333: return 11
+                    elif daydiff > 303: return 10
+                    elif daydiff > 273: return 9
+                    elif daydiff > 243: return 8
+                    elif daydiff > 213: return 7
+                    elif daydiff > 182: return 6
+                    elif daydiff > 151: return 5
+                    elif daydiff > 121: return 4
+                    elif daydiff > 91: return 3
+                    elif daydiff > 61: return 2
+                    elif daydiff > 30: return 1
+                    else: return 0
+                except:
+                    return 0
+            
+            hpacc_df = hpacc_df.with_columns(
+                pl.col("BLDATE").map_elements(calculate_mtharr, return_dtype=pl.Int64).alias("MTHARR")
+            ).select(["ACCTNO", "NOTENO", "PRODUCT", "BORSTAT", "BALANCE", 
+                      "BLDATE", "ISSUEDT", "MTHARR", "BRANCH"])
+        
+        print(f"PRODUCT column type: {hpacc_df['PRODUCT'].dtype}")
+        print(f"PRODUCT unique values: {hpacc_df['PRODUCT'].unique().to_list()[:10]}")
+    except Exception as e:
+        print(f"File not found or error reading: LOAN/LOAN{reptmon}{wk}.sas7bdat - {e}")
+        return
+    
+    # Filter for HPD products and balance > 0
+    hpacc_df = hpacc_df.filter(
+        (pl.col("PRODUCT").is_in(hpd_products)) &
+        (pl.col("BALANCE") > 0)
+    )
+    
+    print(f"After filtering: {len(hpacc_df)} records")
+    
+    # If no records after filtering, return
+    if hpacc_df.is_empty():
+        print("No records match the product filters. Exiting.")
+        return
+    
+    # 3. Merge with LKP_BRANCH flat file
+    try:
+        # Determine if LKP_BRANCH is a text file or SAS dataset
+        lkp_branch_path = base / "LKP_BRANCH"
+        
+        # Try to read as SAS dataset first
+        if lkp_branch_path.with_suffix('.sas7bdat').exists():
+            brhdata_df, meta = pyreadstat.read_sas7bdat(str(lkp_branch_path.with_suffix('.sas7bdat')))
+            brhdata_df = pl.from_pandas(brhdata_df)
+        else:
+            # Try reading as flat file (space/comma/tab delimited)
+            with open(lkp_branch_path, 'r') as f:
+                brh_lines = []
+                lines = f.readlines()
+                
+                # Check if header exists
+                first_line = lines[0].strip()
+                if 'BRANCH' in first_line.upper() or 'BRABBR' in first_line.upper():
+                    # Has header, skip it
+                    start_idx = 1
+                else:
+                    start_idx = 0
+                
+                for line in lines[start_idx:]:
+                    if line.strip():
+                        # Try different delimiters
+                        parts = None
+                        if '\t' in line:
+                            parts = line.strip().split('\t')
+                        elif ',' in line:
+                            parts = line.strip().split(',')
+                        else:
+                            # Space delimited - handle multiple spaces
+                            parts = [p for p in line.strip().split(' ') if p]
+                        
+                        if parts and len(parts) >= 2:
+                            try:
+                                # Assuming format: BRANCH_CODE BRABBR (or vice versa)
+                                # Try to determine which column is numeric
+                                if parts[0].isdigit():
+                                    branch = int(parts[0])
+                                    brabbr = parts[1].strip()
+                                else:
+                                    branch = int(parts[1])
+                                    brabbr = parts[0].strip()
+                                brh_lines.append({"BRANCH": branch, "BRABBR": brabbr})
+                            except ValueError:
+                                continue
+                
+                brhdata_df = pl.DataFrame(brh_lines)
+                
+    except Exception as e:
+        print(f"Error reading LKP_BRANCH: {e}")
+        brhdata_df = pl.DataFrame({"BRANCH": [], "BRABBR": []})
+    
+    hpacc_df = hpacc_df.sort("BRANCH")
+    brhdata_df = brhdata_df.sort("BRANCH")
+    hpacc_df = hpacc_df.join(brhdata_df, on="BRANCH", how="left")
+    
+    # 4. Merge with CIS
+    hpcis_df = hpcis_df.sort("ACCTNO")
+    hpacc_df = hpacc_df.sort("ACCTNO")
+    hpacc_df = hpacc_df.join(hpcis_df, on="ACCTNO", how="inner")
+    
+    # Check if we have data after merge
+    if hpacc_df.is_empty():
+        print("No data after merging with CIS. Exiting.")
+        return
+    
+    # 5. Summarize by BRANCH and ICNO
+    hpacc_df = hpacc_df.sort(["BRANCH", "ICNO"])
+    hpic_df = hpacc_df.group_by(["BRANCH", "ICNO"]).agg(
+        pl.sum("BALANCE").alias("BALANCE_SUM")
+    )
+    
+    # 6. Top 10 customers per branch
+    hpic_df = hpic_df.sort(["BRANCH", "BALANCE_SUM"], descending=[False, True])
+    
+    # Add rank within each branch
+    hpic_df = hpic_df.with_columns(
+        pl.int_range(1, pl.count() + 1).over("BRANCH").alias("N")
+    ).filter(pl.col("N") <= 10)
+    
+    # Rename and merge back
+    hpic_df = hpic_df.rename({"BALANCE_SUM": "TOTBAL"}).sort(["BRANCH", "ICNO"])
+    hpacc_df = hpacc_df.sort(["BRANCH", "ICNO"])
+    hpacc1_df = hpacc_df.join(hpic_df.select(["BRANCH", "ICNO", "TOTBAL"]), 
+                             on=["BRANCH", "ICNO"], how="inner")
+    
+    # Final sort
+    hpacc1_df = hpacc1_df.sort(["BRANCH", "TOTBAL", "ICNO", "ACCTNO"], 
+                              descending=[False, True, False, False])
+    
+    # 7. Generate report
+    generate_hp_report(hpacc1_df, rdate)
+    
+    print(f"Processing complete. Top {len(hpacc1_df)} records identified.")
+
+def generate_hp_report(df, rdate):
+    """Generate formatted report similar to SAS DATA _NULL_ with HEADER"""
+    if df.is_empty():
+        print("No data to report")
+        return
+    
+    # Group by BRANCH for page breaks
+    branches = df["BRANCH"].unique().to_list()
+    
+    with open("HPCOLD.txt", 'w') as f:
+        page_num = 0
+        
+        for branch in branches:
+            branch_df = df.filter(pl.col("BRANCH") == branch).sort(
+                ["TOTBAL", "ICNO", "ACCTNO"], descending=[True, False, False]
+            )
+            
+            page_num += 1
+            # Header
+            f.write(f"PUBLIC BANK BERHAD{' ' * 58}{rdate}\n")
+            f.write(f"{' ' * 90}PAGE NO : {page_num}\n")
+            f.write(f"TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT {rdate}\n")
+            f.write(f"REPORT ID: EIMHPTOP\n")
+            f.write(f"\n")
+            f.write(f"BRANCH CODE= {branch:03d}\n")
+            f.write(f"\n")
+            f.write(f"{' ' * 12}NOTE{' ' * 30}LOAN{' ' * 5}BORROWER{' ' * 20}MONTH{' ' * 9}ISSUE\n")
+            f.write(f"MNI NO{' ' * 6}NO{' ' * 6}NAME{' ' * 25}TYPE{' ' * 5}STATUS{' ' * 8}NET BALANCE{' ' * 6}PASS DUE{' ' * 9}DATE\n")
+            f.write(f"{'-' * 42}{'-' * 42}{'-' * 20}\n")
+            
+            # Process each ICNO group within branch
+            branch_total = 0
+            icnos = branch_df["ICNO"].unique().to_list()
+            
+            for icno in icnos:
+                ic_df = branch_df.filter(pl.col("ICNO") == icno)
+                ic_total = 0
+                
+                for row in ic_df.iter_rows(named=True):
+                    # Format values
+                    acctno = str(row.get('ACCTNO', '')).ljust(12)
+                    noteno = str(row.get('NOTENO', '')).ljust(6)
+                    custname = (str(row.get('CUSTNAME', ''))[:30]).ljust(30)
+                    product = str(row.get('PRODUCT', '')).ljust(4)
+                    borstat = str(row.get('BORSTAT', '')).ljust(6)
+                    balance = f"{row.get('BALANCE', 0):,.2f}".rjust(16)
+                    mtharr = f"{row.get('MTHARR', 0):,.0f}".rjust(6)
+                    
+                    # Format date - using ISSUEDT instead of ISSDTE
+                    issdate = "        "
+                    if row.get('ISSUEDT'):
+                        try:
+                            if isinstance(row['ISSUEDT'], (datetime, pl.Date)):
+                                issdate = row['ISSUEDT'].strftime("%d%b%y").upper()
+                            else:
+                                # Try to parse as SAS date
+                                sas_base = datetime(1960, 1, 1)
+                                if isinstance(row['ISSUEDT'], (int, float)) and row['ISSUEDT'] > 0:
+                                    issdate = (sas_base + timedelta(days=int(row['ISSUEDT']))).strftime("%d%b%y").upper()
+                                else:
+                                    issdate = str(row['ISSUEDT'])[:8]
+                        except:
+                            issdate = "        "
+                    
+                    f.write(f"{acctno}{noteno}{custname}{product}{borstat}{balance}{mtharr}{issdate}\n")
+                    
+                    ic_total += row.get('BALANCE', 0)
+                    branch_total += row.get('BALANCE', 0)
+                
+                # ICNO total
+                f.write(f"{' ' * 57}----------------\n")
+                f.write(f"{' ' * 50}TOTAL: {ic_total:,.2f}\n".rjust(80))
+                f.write(f"{' ' * 57}================\n\n")
+            
+            # Branch total
+            f.write(f"{' ' * 57}----------------\n")
+            f.write(f"{' ' * 37}BRANCH TOTAL: {branch_total:,.2f}\n".rjust(80))
+            f.write(f"{' ' * 57}================\n\n")
+            
+            # Page break
+            f.write("\f\n")  # Form feed for new page
+    
+    print(f"Report saved to HPCOLD.txt")
+
+if __name__ == "__main__":
     eimhptop()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMHPTOP.py", line 141, in eimhptop
-    hpacc_df = hpacc_df.with_columns(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10148, in select
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ColumnNotFoundError: unable to find column "ISSDTE"; valid columns: ["ACCTNO", "NAME", "CUSTCODE", "NOTENO", "ASSMDATE", "CURBAL", "INTAMT", "APPVALUE", "NOTETERM", "COLLDESC", "FLAG3", "COMMNO", "COSTCTR", "CENSUS", "BILLTYPE", "PAIDIND", "NETPROC", "INTRATE", "SPREAD", "NTINT", "REBATE", "INTEARN", "ACCRUAL", "SECURE", "LIABCODE", "LOANSTAT", "BORSTAT", "MARKETVL", "EARNTERM", "USURYIDX", "STATE", "INTEARN2", "INTEARN3", "INTEARN4", "PAYAMT", "PAYFREQ", "BILTOT", "BILPAY", "PAYTYPE", "FEEAMT4", "APPRDATE", "TOTPDEOP", "INTPDYTD", "ACCRUYTD", "ACCRUEOP", "NTINDEX", "REBATEI", "ACCTYIND", "HSTPRIN", "CRISPURP", "COSTFUND", "ESCRACCT", "RESTBALC", "SIACCTNO", "FRELEAS", "CFINDEX", "FDCERTNO", "VB", "ASCORE_PERM", "ASCORE_LTST", "ABM_HL", "IA_LRU", "CCRIS_INSTLAMT", "ASCORE_COMM", "INDUSTRIAL_SECTOR_CD", "FDACCTNO", "DNBFISME", "CJFEE", "FEEAMT", "NXTBIL", "BLDATE", "BALANCE", "OLDNOTEBLDATE", "OLDNOTEDAYARR", "WRITE_DOWN_BAL", "SECTOLD", "UNEARNED1", "UNEARNED2", "UNEARNED", "ENTITY_CD", "AMTIND", "APPRLIM2", "APPRLIMT", "APPRLMTACCT", "BALMNI", "CENSUS4","CGCREF", "CLOSEDTE", "COLLCD", "CUSTCD", "CUSTIDNO", "FISSPURP", "INVALID_LOC", "NEWSEC", "ORIGMT", "ORIGMX", "PRODCD", "PRODUCT", "REMAINMH", "REMAINMT", "REMAINMX", "RISKCD", "RISKRTE", "RLEASAMT", "SECTORCD", "SECTORMA", "STATECD", "UNDRAWN", "BRANCH", "SECTOR", "ACCTYPE", "AVGAMT", "BASERATE", "CENSUST", "COL1", "COL2", "FLATRATE", "LIMIT1", "LIMIT2", "ODINTACC", "ODPLAN", "ODSTAT", "ORGCODE", "RATE1", "RATE2", "TODRATE", "CCRICODE", "SECCUST", "NEWICIND", "BUSSIND", "ISSUEDT", "EIR_ADJ", "EXPRDATE", "DNBFI_ORI", "APPR2FCY", "APPRLIM2ORI", "BAL_AFT_EIR", "CCY", "CUSTORI", "EIRIND", "FCYBAL", "FISSPORI", "FORATE", "ORIBALANCE", "ORIBALMNI", "ORIBAL_AFT_EIR", "PAYIND", "REMMTH", "SECTORCD_ORI", "SECTORZ", "SECTORZZ", "SECTPORI", "SECVALID", "U2RACECO", "PZIPCODE", "CONTRTYPE", "FLAG1", "FLAG5", "USER5", "ECSRRSRV", "DAYARR_MO", "BONUSANO", "PAYEFFDT", "LASTTRAN", "FCLOSUREDT", "INTSTDTE", "CPNSTDTE", "VALUEDTE", "COLLYEAR", "MTD_GHARAMAH_AMT", "MTD_TAWIDH_AMT", "NUMCPNS", "AKPK_RA_CUMM_INT_CAP_AMT", "AKPK_RA_CUMM_INT_WAIVER_AMT", "AKPK_RA_DIG_STATUS_CD", "AKPK_RA_DIG_STATUS_DT", "AKPK_RA_DLY_INT_ACCRUAL", "AKPK_RA_END_DT", "AKPK_RA_MTD_INT_ACCRUAL", "AKPK_RA_MTH_INT_CAP_AMT", "AKPK_RA_MTH_INT_WAIVER_AMT", "AKPK_RA_ORIG_CEILING_RT", "AKPK_RA_ORIG_SPREAD", "AKPK_RA_START_DT", "AKPK_RA_TAG", "AKPK_RA_TAG_DT", "AKPK_STATUS", "AUTO_EXT_TAG", "AUTO_EXT_TAG_DT", "AUTO_REPRICE_DIFF_INSTL_AMT", "AUTO_REPRICE_INSTL_AMT", "BALLOON_REPAY_IND", "BULLET_REPAY_IND", "CASHPRICE", "COMMNO_OLD", "COM_FEE_NOTICE_IND", "CORPCODE", "COURT_ORDER_APPLY_DT", "COURT_ORDER_OBTAIN_DT", "CP", "CUM_WRIOFF", "DEALERNO", "DELQCD", "DIA_PAST01_MTH", "DIA_PAST02_MTH", "DIA_PAST03_MTH", "DIA_PAST04_MTH", "DIA_PAST05_MTH", "DIA_PAST06_MTH", "DIA_PAST07_MTH", "DIA_PAST08_MTH", "DIA_PAST09_MTH", "DIA_PAST10_MTH", "DIA_PAST11_MTH", "DIA_PAST12_MTH", "DIA_PAST13_MTH", "DIA_PAST14_MTH", "DIA_PAST15_MTH", "DIA_PAST16_MTH", "DIA_PAST17_MTH", "DIA_PAST18_MTH", "DIA_PAST19_MTH", "DIA_PAST20_MTH", "DIA_PAST21_MTH", "DIA_PAST22_MTH", "DIA_PAST23_MTH", "DIA_PAST24_MTH", "DIGITAL_RR_STATUS_CD", "DIGITAL_RR_STATUS_DT", "DISPOSED_AMT", "DLVDATE", "DSR", "EARLY_SETTLE_FEE_CHARGE_FLG", "FDB", "INSOLVENCY_IND", "INTBASIS", "INTINYTD", "LMOENDDATE", "LMOSTDATE", "LOCK_IN_END_DT", "LSTTRNAM", "LSTTRNCD", "LTST_MGB_SCORE", "MANUAL_RR_DT", "MANUAL_RR_TAG", "MARKED_PAYMENT_AMT", "MARKED_PAYMENT_IND", "MNIAPDTE", "MNIAPLMT", "MO_INSTL_ARR", "MO_MAIN_DT", "MO_TAG", "MODELDES", "MOENDDTE", "MOSTDTE", "MTD_REPAID_AMT", "NACOSPADT", "NPLCRR", "NTAPR", "NUM_MORA", "NUM_REPO_ORDER_ISSUE", "NURS_COUNTER", "NURS_ENDDT", "NURS_TAG","NURS_TAGDT", "NUR_STARTDT", "NXDUEDT", "OLD_FI", "OLD_MACC_NO", "OLD_SUBACC_NO", "OMNIBUS_FACILITY_IND", "ORGBAL", "ORIG_RESTIND", "ORIGRATE", "POINTAMT", "POSTNTRN", "PROMPT_PAY_TRACKER", "PROP_DEVELOP_FIN_IND", "PTMNATE", "PURPOSE", "REACCRUAL", "REBIND", "RECOVER_COST", "REFINANC_LN", "REPAY_PROPOSAL_CD", "REPAY_PROPOSAL_DT", "REPAY_SOURCE", "REPAY_TYPE_CD", "REPO_ORDER_ISSUE_DT", "RESTIND", "RESTIND_END_DT", "RISK_GRADE_CLASS", "RSN", "SCORE1", "SCORE2", "SITYPE", "STAFF_FREE_INT_IND", "STAFF_FREE_INT_LOAN_AMT", "TFA_DIG_STATUS_CD", "TFA_DIG_STATUS_DT", "TFA_NURS_COUNTER", "TFA_NURS_END_DT", "TFA_NURS_START_DT", "TFA_NURS_TAG", "TFA_NURS_TAG_DT", "TIMES_RENEWED", "TRA_EFF_DT", "USMARGIN", "VINNO", "WRIOFF_AMT", "WRIOFF_DT", "YTDEARNS", "INTAMT_ORIG", "REBATE_ORIG", "INTEARN2_ORIG", "INTEARN3_ORIG", "INTEARN4_ORIG", "BANK_EQUITY_RATIO", "TAKAFUL_AMT", "TAKAFUL_COLLECT_ACCTNO", "TAKAFUL_OPERAT", "TIA_TAG_DATE", "TIA_UTAG_DATE", "NUM_PAY_BIL_INSTL", "SCHBIL_INSTL_DT", "SCHBIL_INT_DT", "NUM_PAY_BIL_INT", "LASTBIL_INSTL_DT", "LASTBIL_INT_DT", "MORA_BENCHMARK_AMT", "TRA_RR_IND", "TRA_RR_ACCEPT_DT", "NUM_RR", "INFEE", "DAYARR_MORA", "SPA_AMT", "HI_TAG", "HI_TAG_DT", "HI_DIG_STATUS_CD", "HI_DIG_STATUS_DT", "REPO_ORDER_EXPIRY_DT", "FLOOD_MO_TAG", "FLOOD_MO_DT", "IMPAIRED_HP_TAG", "REPAY_MODE", "RR_EREQUEST_NUM", "RR_TYPE", "RR_APPR_DATE", "INDEX_PRICING", "SCH_REPAY_TERM", "LEGAL_NOTICE_INSTRUCT_DT", "LEGAL_NOTICE_ISSUE_DT", "PARAS_TAG", "PARAS_TAG_DT", "JUDGE_AMT", "JUDGE_DT", "JUDGE_MAINT_DT", "PRE_BKRUPT_NOTICE_DT", "PCT_INDEX_INTRATE", "CURCODE", "RR_APPL_DATE", "HP_STAGE_TRSF_IND", "CLIMATE_PRIN_TAXONOMY_CLASS", "CUMM_PAID_BILL_AMT", "CUMM_PAID_BILL_PCT", "AKPK_MATRIX_TYPE", "AKPK_MATRIX_DATE", "DEVIATION_CD", "ACCTREVDT", "COURT_ORDER_PERPETUAL_IND", "FLOOD_MO_PACKAGE_CD", "E_INVOICE_IND", "INT_ADVICE_IND", "LEGAL_MATURITY_DT", "RR_IL_RECLASS_DT", "FDB_SCORING_DT", "FDB_TAG", "FDB_TAG_DT", "CLIMATE_MITIGATE_GP1_FLG", "CLIMATE_ADAPT_GP2_FLG", "CLIMATE_ENVIRONMT_GP3_FLG", "CLIMATE_TRANSITION_GP4_FLG", "CLIMATE_PROHIBIT_GP5_FLG", "WOS_RECEIVED_DT", "WOS_SETTLED_DT", "WOS_TAG", "FRAUD_TAG", "FRAUD_TAG_DT", "REMAIN_TERM_MATURITY", "COURT_ORDER_UPDATE_DT", "SOURCE_INCOME_CURRENCY_CD", "VEHI_MAKE_CATEGORY", "INT_JAN_TO_JUN_AMT", "INT_JUL_TO_DEC_AMT", "WRIOFF_CLOSE_FILE_TAG", "WRIOFF_CLOSE_FILE_TAG_DT", "RR_UNTAG_DATE", "RR_UNTAG_REPAY_CNT", "EARMARK_NOTICE_DT", "EARMARK_AMT", "MAILING_ADD_IND", "BILLING_ADD_IND", "PROP_ADD_IND", "FLOOR_RT_UNDER", "FLOOR_RT_OVER", "STMT_GEN_IND", "MULTI_CURRENCY_TAG", "RRSTG1", "AGING_FAST_TRACKER", "GOODWILL_IND", "GOODWILL_CURR_RATE", "GOODWILL_CURR_AMT", "MTHARR"]
