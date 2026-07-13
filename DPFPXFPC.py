@@ -43,11 +43,10 @@ def eiihptop():
     # HPD products
     hpd_products = [5.0, 15.0, 61.0, 70.0, 71.0, 200.0, 205.0, 210.0, 212.0, 216.0]
 
-    # 1. CIS INFO - Read SAS dataset
+    # 1. CIS INFO - Read SAS dataset (no row limit for production)
     try:
         cis_df, meta = pyreadstat.read_sas7bdat(
-            str(cis_path / "loan.sas7bdat"),
-            row_limit=1000
+            str(cis_path / "loan.sas7bdat")
         )
         cis_df = pl.from_pandas(cis_df)
 
@@ -67,11 +66,10 @@ def eiihptop():
         print(f"Error reading CIS: {e}")
         hpcis_df = pl.DataFrame({"ACCTNO": [], "ICNO": [], "CUSTNAME": []})
 
-    # 2. EXTRACT HP A/C with MTHARR calculation
+    # 2. EXTRACT HP A/C with MTHARR calculation (no row limit for production)
     try:
         hpacc_df, meta = pyreadstat.read_sas7bdat(
-            str(loan_path / f"loan{reptmon}{wk}.sas7bdat"),
-            row_limit=500
+            str(loan_path / f"loan{reptmon}{wk}.sas7bdat")
         )
         hpacc_df = pl.from_pandas(hpacc_df)
         print(f"HPACC sample size: {len(hpacc_df)} records")
