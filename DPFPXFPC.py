@@ -1,23 +1,399 @@
-NOWK: 4, NOWK1: 3, REPTMON: 06, RDATE: 300626
-CIS sample size: 694 records
-HPACC sample size: 500 records
-PRODUCT column type: Float64
-PRODUCT unique values: [5.0, 15.0, 61.0, 70.0, 71.0, 200.0, 205.0, 210.0, 212.0, 216.0]
-BRANCH unique values: [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
-After filtering: 83 records
-Found LKP_BRANCH at: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/LKP_BRANCH
-Found LKP_BRANCH at: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/LKP_BRANCH
-LKP_BRANCH file not found or empty - using branch codes without abbreviation
-Created default branch mapping with 23 records
-After CIS merge: 29 records
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMHPTOP.py:292: DeprecationWarning: `pl.count()` is deprecated. Please use `pl.len()` instead.
-(Deprecated in version 0.20.5)
-  pl.int_range(1, pl.count() + 1).over("BRANCH").alias("N")
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMHPTOP.py", line 395, in <module>
-    eimhptop()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMHPTOP.py", line 306, in eimhptop
+import polars as pl
+import pyreadstat
+from pathlib import Path
+from datetime import datetime, timedelta
+
+def eimhptop():
+    base = Path.cwd()
+    loan_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
+    cis_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
+    
+    # Hardcode REPTDATE (current date - 1 day)
+    reptdate = datetime.now().date() - timedelta(days=13)
+    reptday = reptdate.day
+    
+    # SAS SELECT logic for weeks
+    if reptday == 8:
+        wk, wk1 = '1', '4'
+    elif reptday == 15:
+        wk, wk1 = '2', '1'
+    elif reptday == 22:
+        wk, wk1 = '3', '2'
+    else:
+        wk, wk1 = '4', '3'
+    
+    mm = reptdate.month
+    if wk == '1':
+        mm1 = mm - 1 if mm > 1 else 12
+    else:
+        mm1 = mm
+    
+    reptmon = f"{mm:02d}"
+    reptmon1 = f"{mm1:02d}"
+    rdate = reptdate.strftime("%d%m%y")
+    
+    print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, RDATE: {rdate}")
+    
+    # HPD products - adjust based on actual product codes
+    hpd_products = [5.0, 15.0, 61.0, 70.0, 71.0, 200.0, 205.0, 210.0, 212.0, 216.0]
+    
+    # 1. CIS INFO - Read SAS dataset with sampling
+    try:
+        cis_df, meta = pyreadstat.read_sas7bdat(
+            str(cis_path / "loan.sas7bdat"),
+            row_limit=1000
+        )
+        cis_df = pl.from_pandas(cis_df)
+        
+        hpcis_df = cis_df.filter(
+            (~pl.col("CACCCODE").is_in(["017", "021", "028"])) &
+            (pl.col("SECCUST") == "901")
+        )
+        hpcis_df = hpcis_df.with_columns(
+            pl.when(pl.col("NEWIC") != "")
+            .then(pl.col("NEWIC"))
+            .otherwise(pl.col("OLDIC"))
+            .alias("ICNO")
+        ).select(["ACCTNO", "ICNO", "CUSTNAME"])
+        
+        print(f"CIS sample size: {len(hpcis_df)} records")
+    except Exception as e:
+        print(f"Error reading CIS: {e}")
+        hpcis_df = pl.DataFrame({"ACCTNO": [], "ICNO": [], "CUSTNAME": []})
+    
+    # 2. EXTRACT HP A/C with MTHARR calculation
+    try:
+        hpacc_df, meta = pyreadstat.read_sas7bdat(
+            str(loan_path / f"loan{reptmon}{wk}.sas7bdat"),
+            row_limit=500
+        )
+        hpacc_df = pl.from_pandas(hpacc_df)
+        print(f"HPACC sample size: {len(hpacc_df)} records")
+        
+        # Check if MTHARR column already exists
+        if 'MTHARR' in hpacc_df.columns:
+            print("MTHARR column already exists in the data")
+            hpacc_df = hpacc_df.select(["ACCTNO", "NOTENO", "PRODUCT", "BORSTAT", "BALANCE", 
+                                      "BLDATE", "ISSUEDT", "MTHARR", "BRANCH"])
+        else:
+            # Calculate MTHARR if it doesn't exist
+            thisdate = datetime.strptime(rdate, "%d%m%y")
+            
+            def calculate_mtharr(bldate):
+                if not bldate or bldate == 0:
+                    return 0
+                
+                try:
+                    if isinstance(bldate, (int, float)):
+                        sas_base = datetime(1960, 1, 1)
+                        bldate_dt = sas_base + timedelta(days=int(bldate))
+                    else:
+                        bldate_dt = bldate
+                    
+                    daydiff = (thisdate - bldate_dt).days
+                    
+                    if daydiff > 729: return int((daydiff/365)*12)
+                    elif daydiff > 698: return 23
+                    elif daydiff > 668: return 22
+                    elif daydiff > 638: return 21
+                    elif daydiff > 608: return 20
+                    elif daydiff > 577: return 19
+                    elif daydiff > 547: return 18
+                    elif daydiff > 516: return 17
+                    elif daydiff > 486: return 16
+                    elif daydiff > 456: return 15
+                    elif daydiff > 424: return 14
+                    elif daydiff > 394: return 13
+                    elif daydiff > 364: return 12
+                    elif daydiff > 333: return 11
+                    elif daydiff > 303: return 10
+                    elif daydiff > 273: return 9
+                    elif daydiff > 243: return 8
+                    elif daydiff > 213: return 7
+                    elif daydiff > 182: return 6
+                    elif daydiff > 151: return 5
+                    elif daydiff > 121: return 4
+                    elif daydiff > 91: return 3
+                    elif daydiff > 61: return 2
+                    elif daydiff > 30: return 1
+                    else: return 0
+                except:
+                    return 0
+            
+            hpacc_df = hpacc_df.with_columns(
+                pl.col("BLDATE").map_elements(calculate_mtharr, return_dtype=pl.Int64).alias("MTHARR")
+            ).select(["ACCTNO", "NOTENO", "PRODUCT", "BORSTAT", "BALANCE", 
+                      "BLDATE", "ISSUEDT", "MTHARR", "BRANCH"])
+        
+        print(f"PRODUCT column type: {hpacc_df['PRODUCT'].dtype}")
+        print(f"PRODUCT unique values: {hpacc_df['PRODUCT'].unique().to_list()[:10]}")
+        print(f"BRANCH unique values: {hpacc_df['BRANCH'].unique().to_list()[:10]}")
+    except Exception as e:
+        print(f"File not found or error reading: LOAN/LOAN{reptmon}{wk}.sas7bdat - {e}")
+        return
+    
+    # Filter for HPD products and balance > 0
+    hpacc_df = hpacc_df.filter(
+        (pl.col("PRODUCT").is_in(hpd_products)) &
+        (pl.col("BALANCE") > 0)
+    )
+    
+    print(f"After filtering: {len(hpacc_df)} records")
+    
+    # If no records after filtering, return
+    if hpacc_df.is_empty():
+        print("No records match the product filters. Exiting.")
+        return
+    
+    # 3. Merge with BRANCH abbreviation
+    brhdata_df = None
+    try:
+        lkp_branch_paths = [
+            base / "LKP_BRANCH",
+            base / "LKP_BRANCH.txt",
+            base / "LKP_BRANCH.dat",
+            loan_path / "LKP_BRANCH",
+            loan_path / "LKP_BRANCH.txt",
+            cis_path / "LKP_BRANCH",
+            cis_path / "LKP_BRANCH.txt",
+            base / "../LKP_BRANCH",
+            base / "../../LKP_BRANCH"
+        ]
+        
+        lkp_found = False
+        for lkp_branch_path in lkp_branch_paths:
+            if lkp_branch_path.exists():
+                print(f"Found LKP_BRANCH at: {lkp_branch_path}")
+                
+                # Try to read as SAS dataset first
+                if lkp_branch_path.suffix == '.sas7bdat' or lkp_branch_path.with_suffix('.sas7bdat').exists():
+                    try:
+                        if lkp_branch_path.suffix != '.sas7bdat':
+                            lkp_branch_path = lkp_branch_path.with_suffix('.sas7bdat')
+                        brhdata_df, meta = pyreadstat.read_sas7bdat(str(lkp_branch_path))
+                        brhdata_df = pl.from_pandas(brhdata_df)
+                        lkp_found = True
+                        print(f"Read LKP_BRANCH as SAS dataset with {len(brhdata_df)} records")
+                        break
+                    except Exception as e:
+                        print(f"Error reading as SAS: {e}")
+                        continue
+                else:
+                    # Try reading as flat file
+                    try:
+                        with open(lkp_branch_path, 'r') as f:
+                            brh_lines = []
+                            lines = f.readlines()
+                            
+                            first_line = lines[0].strip() if lines else ""
+                            if 'BRANCH' in first_line.upper() or 'BRABBR' in first_line.upper():
+                                start_idx = 1
+                            else:
+                                start_idx = 0
+                            
+                            for line in lines[start_idx:]:
+                                if line.strip():
+                                    if '\t' in line:
+                                        parts = line.strip().split('\t')
+                                    elif ',' in line:
+                                        parts = line.strip().split(',')
+                                    else:
+                                        parts = [p for p in line.strip().split(' ') if p]
+                                    
+                                    if parts and len(parts) >= 2:
+                                        try:
+                                            if parts[0].replace('.', '').isdigit():
+                                                branch = float(parts[0]) if '.' in parts[0] else int(parts[0])
+                                                brabbr = parts[1].strip()
+                                            else:
+                                                branch = float(parts[1]) if '.' in parts[1] else int(parts[1])
+                                                brabbr = parts[0].strip()
+                                            brh_lines.append({"BRANCH": branch, "BRABBR": brabbr})
+                                        except (ValueError, IndexError):
+                                            continue
+                            
+                            if brh_lines:
+                                brhdata_df = pl.DataFrame(brh_lines)
+                                lkp_found = True
+                                print(f"Read LKP_BRANCH as flat file with {len(brhdata_df)} records")
+                                break
+                    except Exception as e:
+                        print(f"Error reading as flat file: {e}")
+                        continue
+        
+        if not lkp_found or brhdata_df is None or brhdata_df.is_empty():
+            print("LKP_BRANCH file not found or empty - using branch codes without abbreviation")
+            unique_branches = hpacc_df["BRANCH"].unique().to_list()
+            brh_lines = []
+            for branch in unique_branches:
+                if branch is not None:
+                    # Convert to int if possible
+                    if isinstance(branch, float) and branch.is_integer():
+                        branch_int = int(branch)
+                    else:
+                        branch_int = branch
+                    brh_lines.append({"BRANCH": branch, "BRABBR": f"BR{branch_int}"})
+            brhdata_df = pl.DataFrame(brh_lines)
+            print(f"Created default branch mapping with {len(brhdata_df)} records")
+            
+    except Exception as e:
+        print(f"Error reading LKP_BRANCH: {e}")
+        unique_branches = hpacc_df["BRANCH"].unique().to_list()
+        brh_lines = []
+        for branch in unique_branches:
+            if branch is not None:
+                if isinstance(branch, float) and branch.is_integer():
+                    branch_int = int(branch)
+                else:
+                    branch_int = branch
+                brh_lines.append({"BRANCH": branch, "BRABBR": f"BR{branch_int}"})
+        brhdata_df = pl.DataFrame(brh_lines)
+        print(f"Created default branch mapping with {len(brhdata_df)} records")
+    
+    # Ensure BRANCH column types match
+    if brhdata_df is not None and not brhdata_df.is_empty():
+        brhdata_df = brhdata_df.with_columns(
+            pl.col("BRANCH").cast(pl.Float64)
+        )
+        
+        hpacc_df = hpacc_df.sort("BRANCH")
+        brhdata_df = brhdata_df.sort("BRANCH")
+        hpacc_df = hpacc_df.join(brhdata_df, on="BRANCH", how="left")
+    else:
+        hpacc_df = hpacc_df.with_columns(
+            pl.lit("UNK").alias("BRABBR")
+        )
+    
+    # 4. Merge with CIS
+    hpcis_df = hpcis_df.sort("ACCTNO")
+    hpacc_df = hpacc_df.sort("ACCTNO")
+    hpacc_df = hpacc_df.join(hpcis_df, on="ACCTNO", how="inner")
+    
+    # Check if we have data after merge
+    if hpacc_df.is_empty():
+        print("No data after merging with CIS. Exiting.")
+        return
+    
+    print(f"After CIS merge: {len(hpacc_df)} records")
+    
+    # 5. Summarize by BRANCH and ICNO
+    hpacc_df = hpacc_df.sort(["BRANCH", "ICNO"])
+    hpic_df = hpacc_df.group_by(["BRANCH", "ICNO"]).agg(
+        pl.sum("BALANCE").alias("BALANCE_SUM")
+    )
+    
+    # 6. Top 10 customers per branch
+    hpic_df = hpic_df.sort(["BRANCH", "BALANCE_SUM"], descending=[False, True])
+    
+    # Add rank within each branch - fixed deprecated pl.count() to pl.len()
+    hpic_df = hpic_df.with_columns(
+        pl.int_range(1, pl.len() + 1).over("BRANCH").alias("N")
+    ).filter(pl.col("N") <= 10)
+    
+    # Rename and merge back
+    hpic_df = hpic_df.rename({"BALANCE_SUM": "TOTBAL"}).sort(["BRANCH", "ICNO"])
+    hpacc_df = hpacc_df.sort(["BRANCH", "ICNO"])
+    hpacc1_df = hpacc_df.join(hpic_df.select(["BRANCH", "ICNO", "TOTBAL"]), 
+                             on=["BRANCH", "ICNO"], how="inner")
+    
+    # Final sort
+    hpacc1_df = hpacc1_df.sort(["BRANCH", "TOTBAL", "ICNO", "ACCTNO"], 
+                              descending=[False, True, False, False])
+    
+    # 7. Generate report
     generate_hp_report(hpacc1_df, rdate)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMHPTOP.py", line 334, in generate_hp_report
-    f.write(f"BRANCH CODE= {branch:03d}\n")
-ValueError: Unknown format code 'd' for object of type 'float'
+    
+    print(f"Processing complete. Top {len(hpacc1_df)} records identified.")
+
+def generate_hp_report(df, rdate):
+    """Generate formatted report similar to SAS DATA _NULL_ with HEADER"""
+    if df.is_empty():
+        print("No data to report")
+        return
+    
+    # Group by BRANCH for page breaks
+    branches = df["BRANCH"].unique().to_list()
+    
+    with open("HPCOLD.txt", 'w') as f:
+        page_num = 0
+        
+        for branch in branches:
+            branch_df = df.filter(pl.col("BRANCH") == branch).sort(
+                ["TOTBAL", "ICNO", "ACCTNO"], descending=[True, False, False]
+            )
+            
+            page_num += 1
+            # Header
+            f.write(f"PUBLIC BANK BERHAD{' ' * 58}{rdate}\n")
+            f.write(f"{' ' * 90}PAGE NO : {page_num}\n")
+            f.write(f"TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT {rdate}\n")
+            f.write(f"REPORT ID: EIMHPTOP\n")
+            f.write(f"\n")
+            
+            # Format branch code - handle float by converting to int
+            if isinstance(branch, float) and branch.is_integer():
+                branch_code = int(branch)
+            else:
+                branch_code = int(branch) if branch is not None else 0
+            
+            f.write(f"BRANCH CODE= {branch_code:03d}\n")
+            f.write(f"\n")
+            f.write(f"{' ' * 12}NOTE{' ' * 30}LOAN{' ' * 5}BORROWER{' ' * 20}MONTH{' ' * 9}ISSUE\n")
+            f.write(f"MNI NO{' ' * 6}NO{' ' * 6}NAME{' ' * 25}TYPE{' ' * 5}STATUS{' ' * 8}NET BALANCE{' ' * 6}PASS DUE{' ' * 9}DATE\n")
+            f.write(f"{'-' * 42}{'-' * 42}{'-' * 20}\n")
+            
+            # Process each ICNO group within branch
+            branch_total = 0
+            icnos = branch_df["ICNO"].unique().to_list()
+            
+            for icno in icnos:
+                ic_df = branch_df.filter(pl.col("ICNO") == icno)
+                ic_total = 0
+                
+                for row in ic_df.iter_rows(named=True):
+                    # Format values
+                    acctno = str(row.get('ACCTNO', '')).ljust(12)
+                    noteno = str(row.get('NOTENO', '')).ljust(6)
+                    custname = (str(row.get('CUSTNAME', ''))[:30]).ljust(30)
+                    product = str(row.get('PRODUCT', '')).ljust(4)
+                    borstat = str(row.get('BORSTAT', '')).ljust(6)
+                    balance = f"{row.get('BALANCE', 0):,.2f}".rjust(16)
+                    mtharr = f"{row.get('MTHARR', 0):,.0f}".rjust(6)
+                    
+                    # Format date - using ISSUEDT
+                    issdate = "        "
+                    if row.get('ISSUEDT'):
+                        try:
+                            if isinstance(row['ISSUEDT'], (datetime, pl.Date)):
+                                issdate = row['ISSUEDT'].strftime("%d%b%y").upper()
+                            else:
+                                sas_base = datetime(1960, 1, 1)
+                                if isinstance(row['ISSUEDT'], (int, float)) and row['ISSUEDT'] > 0:
+                                    issdate = (sas_base + timedelta(days=int(row['ISSUEDT']))).strftime("%d%b%y").upper()
+                                else:
+                                    issdate = str(row['ISSUEDT'])[:8]
+                        except:
+                            issdate = "        "
+                    
+                    f.write(f"{acctno}{noteno}{custname}{product}{borstat}{balance}{mtharr}{issdate}\n")
+                    
+                    ic_total += row.get('BALANCE', 0)
+                    branch_total += row.get('BALANCE', 0)
+                
+                # ICNO total
+                f.write(f"{' ' * 57}----------------\n")
+                f.write(f"{' ' * 50}TOTAL: {ic_total:,.2f}\n".rjust(80))
+                f.write(f"{' ' * 57}================\n\n")
+            
+            # Branch total
+            f.write(f"{' ' * 57}----------------\n")
+            f.write(f"{' ' * 37}BRANCH TOTAL: {branch_total:,.2f}\n".rjust(80))
+            f.write(f"{' ' * 57}================\n\n")
+            
+            # Page break
+            f.write("\f\n")  # Form feed for new page
+    
+    print(f"Report saved to HPCOLD.txt")
+
+if __name__ == "__main__":
+    eimhptop()
