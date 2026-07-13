@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 # Configuration - Define input and output paths at the beginning
 # ---------------------------------------------------------------------------
 BASE_PATH = Path.cwd()
-INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBAABBA/"
+INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/"
 OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBAABBA/ABBALST.txt"
 
 SAS_BASE_DATE = datetime(1960, 1, 1)
@@ -191,7 +191,7 @@ def map_collater(cclassc) -> str | None:
 
 
 def process_abba_data(input_path: Path, snapshot_date: datetime) -> pl.DataFrame:
-    abba_df = read_sas_dataset(input_path, "lnnote.sas7bdat")
+    abba_df = read_sas_dataset(input_path, "EIBAABBA/lnnote.sas7bdat")
     if abba_df.is_empty():
         return abba_df
 
@@ -226,7 +226,7 @@ def process_abba_data(input_path: Path, snapshot_date: datetime) -> pl.DataFrame
 
 
 def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: str, snapshot_date: datetime) -> pl.DataFrame:
-    sasb_df = read_sas_dataset(input_path, f"loan{month}{week}.sas7bdat")
+    sasb_df = read_sas_dataset(input_path, f"EIMHPTOP/loan{month}{week}.sas7bdat")
     if sasb_df.is_empty():
         return abba_df.with_columns(
             pl.lit(None).alias("BALANCE"),
@@ -263,7 +263,7 @@ def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: s
 
 
 def merge_customer_data(abba_df: pl.DataFrame, input_path: Path) -> pl.DataFrame:
-    cisln_df = read_sas_dataset(input_path, "loan.sas7bdat")
+    cisln_df = read_sas_dataset(input_path, "EIMHPTOP/loan.sas7bdat")
     if cisln_df.is_empty():
         return abba_df.with_columns(
             pl.lit("").alias("CUSTNAME"),
@@ -306,7 +306,7 @@ def merge_customer_data(abba_df: pl.DataFrame, input_path: Path) -> pl.DataFrame
 
 
 def merge_collateral_data(abba_df: pl.DataFrame, input_path: Path) -> pl.DataFrame:
-    coll_df = read_sas_dataset(input_path, "collater.sas7bdat")
+    coll_df = read_sas_dataset(input_path, "EIBAABBA/collater.sas7bdat")
     if coll_df.is_empty():
         return abba_df
 
@@ -448,3 +448,12 @@ def generate_abba_output(df: pl.DataFrame, output_path: Path):
 
 if __name__ == "__main__":
     eibaabba()
+
+above is updated code
+
+
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBAABBA.py", line 187, in <module>
+    def map_collater(cclassc) -> str | None:
+TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'
+You have mail in /var/spool/mail/sas_edw_dev
