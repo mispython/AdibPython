@@ -135,13 +135,13 @@ def read_sas_dataset(path: Path, file_name: str, limit: Optional[int] = None) ->
         if not full_path.exists():
             print(f"File not found: {full_path}")
             return pl.DataFrame()
-        
+
         # Read with row limit if specified
         if limit is not None:
             df, meta = pyreadstat.read_sas7bdat(str(full_path), row_limit=limit)
         else:
             df, meta = pyreadstat.read_sas7bdat(str(full_path))
-            
+
         return pl.from_pandas(df)
     except Exception as e:
         print(f"Error reading {file_name}: {e}")
@@ -208,10 +208,15 @@ def map_collater(cclassc) -> Optional[str]:
     return CCLASSC_TO_COLLATER.get(str(cclassc).zfill(3))
 
 
-def safe_cast_to_int(series, default_value=0):
-    """Safely cast a series to integer, replacing invalid values with default"""
-    # First convert to string, then replace empty strings with default, then cast
-    return series.cast(pl.Utf8).str.replace(r"^\s*$", str(default_value)).cast(pl.Int64)
+def safe_cast_to_int(series: pl.Series, default_value: int = 0) -> pl.Series:
+    """
+    Safely cast a series to Int64, replacing invalid/unparseable values
+    (empty strings, whitespace, non-numeric junk, nulls) with default_value.
+
+    Uses a non-strict cast so values that fail to parse become null instead
+    of raising, then fills those nulls with default_value.
+    """
+    return series.cast(pl.Int64, strict=False).fill_null(default_value)
 
 
 def process_abba_data(input_path: Path, snapshot_date: datetime, limit: Optional[int] = None) -> pl.DataFrame:
@@ -227,37 +232,32 @@ def process_abba_data(input_path: Path, snapshot_date: datetime, limit: Optional
     if missing_cols:
         print(f"Missing columns in LNNOTE: {missing_cols}")
         return pl.DataFrame()
-    
-    # Convert RISKRATE to numeric safely
+
+    # Convert RISKRATE to numeric safely.
+    # NOTE: pl.when/then/otherwise evaluates BOTH branches over the whole
+    # column before selecting per-row, so casting the raw string column
+    # inside `otherwise(...)` still blows up on empty/non-numeric strings
+    # even though those rows are meant to be replaced by `then(0)`.
+    # Fix: use a non-strict cast (invalid -> null) then fill nulls with 0.
     if abba_df["RISKRATE"].dtype == pl.Utf8:
-        # Replace empty strings with "0" and cast to Int64
         abba_df = abba_df.with_columns(
-            pl.when(pl.col("RISKRATE") == "")
-            .then(pl.lit(0))
-            .otherwise(pl.col("RISKRATE").cast(pl.Int64))
-            .alias("RISKRATE")
+            pl.col("RISKRATE").cast(pl.Int64, strict=False).fill_null(0).alias("RISKRATE")
         )
     else:
-        # Fill nulls with 0 and cast to Int64
         abba_df = abba_df.with_columns(
             pl.col("RISKRATE").fill_null(0).cast(pl.Int64)
         )
-    
-    # Convert LOANTYPE to numeric safely
+
+    # Convert LOANTYPE to numeric safely (same fix as RISKRATE above)
     if abba_df["LOANTYPE"].dtype == pl.Utf8:
-        # Replace empty strings with "0" and cast to Int64
         abba_df = abba_df.with_columns(
-            pl.when(pl.col("LOANTYPE") == "")
-            .then(pl.lit(0))
-            .otherwise(pl.col("LOANTYPE").cast(pl.Int64))
-            .alias("LOANTYPE")
+            pl.col("LOANTYPE").cast(pl.Int64, strict=False).fill_null(0).alias("LOANTYPE")
         )
     else:
-        # Fill nulls with 0 and cast to Int64
         abba_df = abba_df.with_columns(
             pl.col("LOANTYPE").fill_null(0).cast(pl.Int64)
         )
-    
+
     # Convert PAYAMT to Float64 safely
     if "PAYAMT" in abba_df.columns:
         abba_df = abba_df.with_columns(
@@ -311,7 +311,7 @@ def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: s
             pl.lit(0).alias("MTHARR"),
             pl.lit(0).alias("OVERDUE")
         ])
-    
+
     # Ensure ACCTNO and NOTENO are string type for join
     if sasb_df["ACCTNO"].dtype != pl.Utf8:
         sasb_df = sasb_df.with_columns(
@@ -321,7 +321,7 @@ def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: s
         sasb_df = sasb_df.with_columns(
             pl.col("NOTENO").cast(pl.Utf8)
         )
-    
+
     # Fill null values in BALANCE
     if "BALANCE" in sasb_df.columns:
         sasb_df = sasb_df.with_columns(
@@ -335,12 +335,12 @@ def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: s
         .select(["ACCTNO", "NOTENO", "BALANCE", "MTHARR"])
         .sort(["ACCTNO", "NOTENO"])
     )
-    
+
     # Ensure numeric columns are properly typed
     abba_df = abba_df.with_columns([
         pl.col("PAYAMT").cast(pl.Float64),
     ])
-    
+
     # Ensure ACCTNO and NOTENO are string type for join
     if abba_df["ACCTNO"].dtype != pl.Utf8:
         abba_df = abba_df.with_columns(
@@ -350,23 +350,23 @@ def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: s
         abba_df = abba_df.with_columns(
             pl.col("NOTENO").cast(pl.Utf8)
         )
-    
+
     result = abba_df.join(sasb_df, on=["ACCTNO", "NOTENO"], how="left")
-    
+
     # Fill null values and calculate OVERDUE
     result = result.with_columns([
         pl.col("BALANCE").fill_null(0),
         pl.col("MTHARR").fill_null(0),
     ])
-    
+
     result = result.with_columns(
         (pl.col("PAYAMT") * pl.col("MTHARR")).alias("OVERDUE")
     )
-    
+
     result = result.with_columns(
         pl.col("OVERDUE").fill_null(0)
     )
-    
+
     return result
 
 
@@ -391,29 +391,29 @@ def merge_customer_data(abba_df: pl.DataFrame, input_path: Path, limit: Optional
         cisln_df = cisln_df.with_columns(
             pl.col("ACCTNO").cast(pl.Utf8)
         )
-    
+
     # Select only available columns
     customer_cols = ["ACCTNO", "CUSTNAME", "GENDER", "OCCUPAT", "ADDRLN1", "ADDRLN2", "ADDRLN3", "ADDRLN4", "ADDRLN5"]
     available_cols = [col for col in customer_cols if col in cisln_df.columns]
-    
+
     cisln_df = cisln_df.select(available_cols).sort("ACCTNO")
-    
+
     # Fill null customer fields
     for col in available_cols:
         if col != "ACCTNO":
             cisln_df = cisln_df.with_columns(
                 pl.col(col).fill_null("")
             )
-    
+
     # Ensure ACCTNO is string type for join in abba_df
     if abba_df["ACCTNO"].dtype != pl.Utf8:
         abba_df = abba_df.with_columns(
             pl.col("ACCTNO").cast(pl.Utf8)
         )
-    
+
     # Merge
     result = abba_df.join(cisln_df, on="ACCTNO", how="left")
-    
+
     # Fill missing columns with empty strings
     for col in ["CUSTNAME", "GENDER", "OCCUPAT", "ADDRLN1", "ADDRLN2", "ADDRLN3", "ADDRLN4", "ADDRLN5"]:
         if col not in result.columns:
@@ -424,7 +424,7 @@ def merge_customer_data(abba_df: pl.DataFrame, input_path: Path, limit: Optional
             result = result.with_columns(
                 pl.col(col).fill_null("")
             )
-    
+
     return result
 
 
@@ -443,7 +443,7 @@ def merge_collateral_data(abba_df: pl.DataFrame, input_path: Path, limit: Option
         return abba_df.with_columns(
             pl.lit("").alias("COLLD")
         )
-    
+
     # Ensure ACCTNO and NOTENO are string type for join
     if coll_df["ACCTNO"].dtype != pl.Utf8:
         coll_df = coll_df.with_columns(
@@ -453,7 +453,7 @@ def merge_collateral_data(abba_df: pl.DataFrame, input_path: Path, limit: Option
         coll_df = coll_df.with_columns(
             pl.col("NOTENO").cast(pl.Utf8)
         )
-    
+
     # Ensure ACCTNO and NOTENO are string type for join in abba_df
     if abba_df["ACCTNO"].dtype != pl.Utf8:
         abba_df = abba_df.with_columns(
@@ -472,14 +472,14 @@ def merge_collateral_data(abba_df: pl.DataFrame, input_path: Path, limit: Option
         .rename({"COLLATER": "COLLD"})
         .sort(["ACCTNO", "NOTENO"])
     )
-    
+
     result = abba_df.join(
         coll_df.select(["ACCTNO", "NOTENO", "COLLD"]),
         on=["ACCTNO", "NOTENO"],
         how="left",
         suffix="_coll",
     )
-    
+
     # Coalesce COLLD columns
     if "COLLD_coll" in result.columns:
         result = result.with_columns(
@@ -489,7 +489,7 @@ def merge_collateral_data(abba_df: pl.DataFrame, input_path: Path, limit: Option
         result = result.with_columns(
             pl.col("COLLD").fill_null("")
         )
-    
+
     return result
 
 
@@ -502,7 +502,7 @@ def finalize_output(abba_df: pl.DataFrame) -> pl.DataFrame:
             abba_df = abba_df.with_columns(
                 pl.col(col).fill_null("")
             )
-    
+
     return abba_df.unique(subset=["ACCTNO", "NOTENO"], keep="first").sort(["BRANCH", "ACCTNO", "NOTENO"])
 
 
@@ -511,10 +511,10 @@ def eibaabba():
     input_path = INPUT_PATH
     output_path = OUTPUT_PATH
     test_limit = TEST_LIMIT
-    
+
     # Create output directory if it doesn't exist
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     print("=" * 60)
     print("EIBAABBA - Account Analysis Report")
     print("=" * 60)
@@ -525,7 +525,7 @@ def eibaabba():
     else:
         print(f"*** PRODUCTION MODE - No row limit ***")
     print()
-    
+
     # Hardcode REPTDATE (current date - 1 day)
     reptdate = datetime.now().date() - timedelta(days=1)
     context = compute_reporting_context(reptdate)
@@ -544,19 +544,19 @@ def eibaabba():
         return
 
     print(f"After LNNOTE processing: {len(abba_df):,} records")
-    
+
     print("Merging with SASB loan data...")
     abba_df = merge_sasb_data(abba_df, input_path, context["month"], context["week"], snapshot_date, test_limit)
     print(f"After SASB merge: {len(abba_df):,} records")
-    
+
     print("Merging with customer data...")
     abba_df = merge_customer_data(abba_df, input_path, test_limit)
     print(f"After customer merge: {len(abba_df):,} records")
-    
+
     print("Merging with collateral data...")
     abba_df = merge_collateral_data(abba_df, input_path, test_limit)
     print(f"After collateral merge: {len(abba_df):,} records")
-    
+
     print("Finalizing output...")
     abba_df = finalize_output(abba_df)
     print(f"Final records: {len(abba_df):,}")
@@ -573,7 +573,7 @@ def generate_abba_output(df: pl.DataFrame, output_path: Path):
     if df.is_empty():
         print("No data to output")
         return
-    
+
     output_columns = [
         "ACCTNO",
         "NOTENO",
@@ -597,16 +597,16 @@ def generate_abba_output(df: pl.DataFrame, output_path: Path):
         "ADDRLN4",
         "ADDRLN5",
     ]
-    
+
     # Select only columns that exist
     existing_columns = [col for col in output_columns if col in df.columns]
     output_df = df.select(existing_columns)
-    
+
     # Write to text file with header
     with open(output_path, 'w') as f:
         # Write header
         f.write("|".join(existing_columns) + "\n")
-        
+
         # Write data rows
         for row in output_df.iter_rows(named=True):
             row_values = []
@@ -616,10 +616,10 @@ def generate_abba_output(df: pl.DataFrame, output_path: Path):
                     val = ''
                 row_values.append(str(val))
             f.write("|".join(row_values) + "\n")
-    
+
     print(f"Output file created: {output_path}")
     print(f"Total records: {len(output_df):,}")
-    
+
     if len(output_df) > 0:
         print("\nSample records (first 3):")
         print("-" * 60)
@@ -633,37 +633,3 @@ def generate_abba_output(df: pl.DataFrame, output_path: Path):
 
 if __name__ == "__main__":
     eibaabba()
-
-
-the error:
-
-============================================================
-EIBAABBA - Account Analysis Report
-============================================================
-Input path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod
-Output path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBAABBA/ABBALST.txt
-*** TEST MODE - Row limit: 1000 per dataset ***
-
-Report Date: 12/07/2026
-Snapshot Date: 12/07/2026
-Week: 4, SDD: 23
-------------------------------------------------------------
-Reading LNNOTE data...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBAABBA.py", line 635, in <module>
-    eibaabba()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBAABBA.py", line 541, in eibaabba
-    abba_df = process_abba_data(input_path, snapshot_date, test_limit)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBAABBA.py", line 234, in process_abba_data
-    abba_df = abba_df.with_columns(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.InvalidOperationError: conversion from `str` to `i64` failed in column 'RISKRATE' for 853 out of 1000 values: ["", "", … ""]
-
-Did not show all failed cases as there were too many.
