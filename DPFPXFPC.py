@@ -37,9 +37,13 @@ def eimhptop():
     # HPD products (example - adjust as needed)
     hpd_products = ["P1", "P2", "P3"]
     
-    # 1. CIS INFO - Read SAS dataset
+    # 1. CIS INFO - Read SAS dataset with sampling
     try:
-        cis_df, meta = pyreadstat.read_sas7bdat(str(cis_path / "loan.sas7bdat"))
+        # Read only first 1000 rows for testing
+        cis_df, meta = pyreadstat.read_sas7bdat(
+            str(cis_path / "loan.sas7bdat"),
+            row_limit=1000  # Limit to 1000 rows for testing
+        )
         cis_df = pl.from_pandas(cis_df)
         
         hpcis_df = cis_df.filter(
@@ -52,14 +56,21 @@ def eimhptop():
             .otherwise(pl.col("OLDIC"))
             .alias("ICNO")
         ).select(["ACCTNO", "ICNO", "CUSTNAME"])
+        
+        print(f"CIS sample size: {len(hpcis_df)} records")
     except Exception as e:
         print(f"Error reading CIS: {e}")
         hpcis_df = pl.DataFrame({"ACCTNO": [], "ICNO": [], "CUSTNAME": []})
     
     # 2. EXTRACT HP A/C with MTHARR calculation
     try:
-        hpacc_df, meta = pyreadstat.read_sas7bdat(str(loan_path / f"loan{reptmon}{wk}.sas7bdat"))
+        # Read only first 1000 rows for testing
+        hpacc_df, meta = pyreadstat.read_sas7bdat(
+            str(loan_path / f"loan{reptmon}{wk}.sas7bdat"),
+            row_limit=1000  # Limit to 1000 rows for testing
+        )
         hpacc_df = pl.from_pandas(hpacc_df)
+        print(f"HPACC sample size: {len(hpacc_df)} records")
     except Exception as e:
         print(f"File not found or error reading: LOAN/LOAN{reptmon}{wk}.sas7bdat - {e}")
         return
@@ -300,7 +311,3 @@ def generate_hp_report(df, rdate):
 
 if __name__ == "__main__":
     eimhptop()
-
-
-
-for the sake of testing only, and since the dataset is large, can you change the observations of input to around 1000?
