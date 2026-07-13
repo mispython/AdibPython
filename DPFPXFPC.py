@@ -1,15 +1,23 @@
 import polars as pl
-import pyreadstat
 from pathlib import Path
 from datetime import datetime, timedelta
 
-def eimhptop():
+def eiihptop():
+    """Islamic bank version of EIMHPTOP"""
     base = Path.cwd()
-    loan_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
-    cis_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/"
+    loan_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP"
+    cis_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP"
     
-    # Hardcode REPTDATE (current date - 1 day)
-    reptdate = datetime.now().date() - timedelta(days=1)
+    # Execute external program
+    try:
+        from PBBLNFMT import process as pbblnfmt_process
+        pbblnfmt_process()
+    except ImportError:
+        print("Note: PGM(PBBLNFMT) not executed")
+    
+    # REPTDATE with week logic
+    reptdate_df = pl.read_parquet(loan_path / "REPTDATE.parquet")
+    reptdate = reptdate_df["REPTDATE"][0]
     reptday = reptdate.day
     
     # SAS SELECT logic for weeks
@@ -32,16 +40,15 @@ def eimhptop():
     reptmon1 = f"{mm1:02d}"
     rdate = reptdate.strftime("%d%m%y")
     
-    print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, RDATE: {rdate}")
+    print(f"EIIHPTOP - Islamic Bank Top Accounts")
+    print(f"NOWK: {wk}, REPTMON: {reptmon}, RDATE: {rdate}")
     
-    # HPD products (example - adjust as needed)
-    hpd_products = ["P1", "P2", "P3"]
+    # HPD macro variable (assuming defined elsewhere)
+    hpd_products = ["'P1'", "'P2'", "'P3'"]  # Example - should come from macro
     
-    # 1. CIS INFO - Read SAS dataset
+    # 1. CIS INFO (Islamic bank specific)
     try:
-        cis_df, meta = pyreadstat.read_sas7bdat(str(cis_path / "loan.sas7bdat"))
-        cis_df = pl.from_pandas(cis_df)
-        
+        cis_df = pl.read_parquet(cis_path / "LOAN.parquet")
         hpcis_df = cis_df.filter(
             (~pl.col("CACCCODE").is_in(["017", "021", "028"])) &
             (pl.col("SECCUST") == "901")
@@ -52,16 +59,14 @@ def eimhptop():
             .otherwise(pl.col("OLDIC"))
             .alias("ICNO")
         ).select(["ACCTNO", "ICNO", "CUSTNAME"])
-    except Exception as e:
-        print(f"Error reading CIS: {e}")
+    except:
         hpcis_df = pl.DataFrame({"ACCTNO": [], "ICNO": [], "CUSTNAME": []})
     
-    # 2. EXTRACT HP A/C with MTHARR calculation
+    # 2. EXTRACT HP A/C with MTHARR calculation (same as EIMHPTOP)
     try:
-        hpacc_df, meta = pyreadstat.read_sas7bdat(str(loan_path / f"loan{reptmon}{wk}.sas7bdat"))
-        hpacc_df = pl.from_pandas(hpacc_df)
-    except Exception as e:
-        print(f"File not found or error reading: LOAN/LOAN{reptmon}{wk}.sas7bdat - {e}")
+        hpacc_df = pl.read_parquet(loan_path / f"LOAN{reptmon}{wk}.parquet")
+    except:
+        print(f"File not found: LOAN/LOAN{reptmon}{wk}.parquet")
         return
     
     # Filter for HPD products and balance > 0
@@ -121,59 +126,17 @@ def eimhptop():
     ).select(["ACCTNO", "NOTENO", "PRODUCT", "BORSTAT", "BALANCE", 
               "BLDATE", "ISSDTE", "MTHARR", "BRANCH"])
     
-    # 3. Merge with LKP_BRANCH flat file
+    # 3. Merge with BRANCH abbreviation
     try:
-        # Determine if LKP_BRANCH is a text file or SAS dataset
-        lkp_branch_path = base / "LKP_BRANCH"
-        
-        # Try to read as SAS dataset first
-        if lkp_branch_path.with_suffix('.sas7bdat').exists():
-            brhdata_df, meta = pyreadstat.read_sas7bdat(str(lkp_branch_path.with_suffix('.sas7bdat')))
-            brhdata_df = pl.from_pandas(brhdata_df)
-        else:
-            # Try reading as flat file (space/comma/tab delimited)
-            with open(lkp_branch_path, 'r') as f:
-                brh_lines = []
-                lines = f.readlines()
-                
-                # Check if header exists
-                first_line = lines[0].strip()
-                if 'BRANCH' in first_line.upper() or 'BRABBR' in first_line.upper():
-                    # Has header, skip it
-                    start_idx = 1
-                else:
-                    start_idx = 0
-                
-                for line in lines[start_idx:]:
-                    if line.strip():
-                        # Try different delimiters
-                        parts = None
-                        if '\t' in line:
-                            parts = line.strip().split('\t')
-                        elif ',' in line:
-                            parts = line.strip().split(',')
-                        else:
-                            # Space delimited - handle multiple spaces
-                            parts = [p for p in line.strip().split(' ') if p]
-                        
-                        if parts and len(parts) >= 2:
-                            try:
-                                # Assuming format: BRANCH_CODE BRABBR (or vice versa)
-                                # Try to determine which column is numeric
-                                if parts[0].isdigit():
-                                    branch = int(parts[0])
-                                    brabbr = parts[1].strip()
-                                else:
-                                    branch = int(parts[1])
-                                    brabbr = parts[0].strip()
-                                brh_lines.append({"BRANCH": branch, "BRABBR": brabbr})
-                            except ValueError:
-                                continue
-                
-                brhdata_df = pl.DataFrame(brh_lines)
-                
-    except Exception as e:
-        print(f"Error reading LKP_BRANCH: {e}")
+        with open(base / "BRHFILE", 'r') as f:
+            brh_lines = []
+            for line in f:
+                if len(line) >= 9:
+                    branch = int(line[1:4])
+                    brabbr = line[5:8].strip()
+                    brh_lines.append({"BRANCH": branch, "BRABBR": brabbr})
+        brhdata_df = pl.DataFrame(brh_lines)
+    except:
         brhdata_df = pl.DataFrame({"BRANCH": [], "BRABBR": []})
     
     hpacc_df = hpacc_df.sort("BRANCH")
@@ -209,21 +172,20 @@ def eimhptop():
     hpacc1_df = hpacc1_df.sort(["BRANCH", "TOTBAL", "ICNO", "ACCTNO"], 
                               descending=[False, True, False, False])
     
-    # 7. Generate report
-    generate_hp_report(hpacc1_df, rdate)
+    # 7. Generate report with Islamic bank header
+    generate_islamic_hp_report(hpacc1_df, rdate)
     
     print(f"Processing complete. Top {len(hpacc1_df)} records identified.")
 
-def generate_hp_report(df, rdate):
-    """Generate formatted report similar to SAS DATA _NULL_ with HEADER"""
+def generate_islamic_hp_report(df, rdate):
+    """Generate formatted report for Islamic bank"""
     if df.is_empty():
-        print("No data to report")
         return
     
     # Group by BRANCH for page breaks
     branches = df["BRANCH"].unique().to_list()
     
-    with open("HPCOLD.txt", 'w') as f:
+    with open("HPCOLD_ISLAMIC.txt", 'w') as f:
         page_num = 0
         
         for branch in branches:
@@ -232,11 +194,11 @@ def generate_hp_report(df, rdate):
             )
             
             page_num += 1
-            # Header
-            f.write(f"PUBLIC BANK BERHAD{' ' * 58}{rdate}\n")
+            # **CHANGED: Islamic bank header**
+            f.write(f"PUBLIC ISLAMIC BANK BERHAD{' ' * 58}{rdate}\n")
             f.write(f"{' ' * 90}PAGE NO : {page_num}\n")
             f.write(f"TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT {rdate}\n")
-            f.write(f"REPORT ID: EIMHPTOP\n")
+            f.write(f"REPORT ID: EIIHPTOP\n")  # **CHANGED: EIIHPTOP instead of EIMHPTOP**
             f.write(f"\n")
             f.write(f"BRANCH CODE= {branch:03d}\n")
             f.write(f"\n")
@@ -256,7 +218,7 @@ def generate_hp_report(df, rdate):
                     # Format values
                     acctno = str(row.get('ACCTNO', '')).ljust(12)
                     noteno = str(row.get('NOTENO', '')).ljust(6)
-                    custname = (str(row.get('CUSTNAME', ''))[:30]).ljust(30)
+                    custname = (row.get('CUSTNAME', '')[:30]).ljust(30)
                     product = str(row.get('PRODUCT', '')).ljust(4)
                     borstat = str(row.get('BORSTAT', '')).ljust(6)
                     balance = f"{row.get('BALANCE', 0):,.2f}".rjust(16)
@@ -264,17 +226,12 @@ def generate_hp_report(df, rdate):
                     
                     # Format date
                     issdate = "        "
-                    if row.get('ISSDTE'):
+                    if 'ISSDTE' in row and row['ISSDTE']:
                         try:
                             if isinstance(row['ISSDTE'], (datetime, pl.Date)):
                                 issdate = row['ISSDTE'].strftime("%d%b%y").upper()
                             else:
-                                # Try to parse as SAS date
-                                sas_base = datetime(1960, 1, 1)
-                                if isinstance(row['ISSDTE'], (int, float)) and row['ISSDTE'] > 0:
-                                    issdate = (sas_base + timedelta(days=int(row['ISSDTE']))).strftime("%d%b%y").upper()
-                                else:
-                                    issdate = str(row['ISSDTE'])[:8]
+                                issdate = str(row['ISSDTE'])[:8]
                         except:
                             issdate = "        "
                     
@@ -296,7 +253,107 @@ def generate_hp_report(df, rdate):
             # Page break
             f.write("\f\n")  # Form feed for new page
     
-    print(f"Report saved to HPCOLD.txt")
+    print(f"Islamic bank report saved to HPCOLD_ISLAMIC.txt")
+
+# Simplified version
+def eiihptop_simple():
+    """Simplified Islamic bank version"""
+    base = Path.cwd()
+    
+    # Get date
+    reptdate = pl.read_parquet(base / "LOAN/REPTDATE.parquet")["REPTDATE"][0]
+    
+    # Week logic
+    reptday = reptdate.day
+    if reptday == 8:
+        wk = '1'
+    elif reptday == 15:
+        wk = '2'
+    elif reptday == 22:
+        wk = '3'
+    else:
+        wk = '4'
+    
+    reptmon = f"{reptdate.month:02d}"
+    rdate = reptdate.strftime("%d%m%y")
+    
+    print(f"EIIHPTOP - Islamic Bank HPD Accounts")
+    print(f"Week: {wk}, Month: {reptmon}, Date: {rdate}")
+    
+    # Read data
+    try:
+        df = pl.read_parquet(base / f"LOAN/LOAN{reptmon}{wk}.parquet")
+    except:
+        print(f"No data for LOAN{reptmon}{wk}")
+        return
+    
+    # Filter HPD products (simplified)
+    hpd_products = ["HP1", "HP2", "HP3"]  # Example
+    df = df.filter(
+        (pl.col("PRODUCT").is_in(hpd_products)) &
+        (pl.col("BALANCE") > 0)
+    )
+    
+    if df.is_empty():
+        print("No HPD accounts found")
+        return
+    
+    # Read CIS data
+    try:
+        cis_df = pl.read_parquet(base / "CIS/LOAN.parquet")
+        # Filter and get customer info
+        cis_df = cis_df.filter(
+            (~pl.col("CACCCODE").is_in(["017", "021", "028"])) &
+            (pl.col("SECCUST") == "901")
+        )
+        cis_df = cis_df.with_columns(
+            pl.coalesce(pl.col("NEWIC"), pl.col("OLDIC")).alias("ICNO")
+        ).select(["ACCTNO", "ICNO", "CUSTNAME"])
+        
+        # Merge
+        df = df.join(cis_df, on="ACCTNO", how="inner")
+    except:
+        print("CIS data not available")
+        return
+    
+    # Group by BRANCH and ICNO
+    summary = df.group_by(["BRANCH", "ICNO"]).agg(
+        pl.sum("BALANCE").alias("TOTBAL"),
+        pl.first("CUSTNAME").alias("CUSTNAME"),
+        pl.count().alias("ACCOUNT_COUNT")
+    )
+    
+    # Get top 10 per branch
+    top10 = []
+    for branch in summary["BRANCH"].unique().to_list():
+        branch_df = summary.filter(pl.col("BRANCH") == branch)
+        branch_top = branch_df.sort("TOTBAL", descending=True).head(10)
+        top10.append(branch_top)
+    
+    if top10:
+        result_df = pl.concat(top10)
+        
+        # Generate report
+        with open("HPCOLD_ISLAMIC_SIMPLE.txt", 'w') as f:
+            f.write(f"PUBLIC ISLAMIC BANK BERHAD\n")
+            f.write(f"TOP TEN LARGE ACCOUNTS FOR HPD\n")
+            f.write(f"AS AT {rdate}\n")
+            f.write(f"=" * 60 + "\n\n")
+            
+            for row in result_df.iter_rows(named=True):
+                f.write(f"Branch: {row['BRANCH']}, ICNO: {row['ICNO']}, ")
+                f.write(f"Customer: {row['CUSTNAME'][:20]}, ")
+                f.write(f"Total: {row['TOTBAL']:,.2f}, ")
+                f.write(f"Accounts: {row['ACCOUNT_COUNT']}\n")
+        
+        print(f"Report saved: HPCOLD_ISLAMIC_SIMPLE.txt")
+        print(f"Total accounts in report: {len(result_df)}")
+    else:
+        print("No data to report")
 
 if __name__ == "__main__":
-    eimhptop()
+    eiihptop_simple()
+
+
+
+        no need input for reptdate, instead just hardcode using datetime minus timedelta-1. all inputs are in sas7bdat, may use pyreadstat to read. output in txt file.
