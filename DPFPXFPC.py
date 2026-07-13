@@ -1,425 +1,252 @@
-import polars as pl
-import pyreadstat
-from pathlib import Path
-from datetime import datetime, timedelta
+PRODUCTION OUTPUT:
 
-def eiihptop():
-    """Islamic bank version of EIMHPTOP - using SAS datasets directly"""
-    base = Path.cwd()
-    loan_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP/"
-    cis_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP/"
-    
-    # Define output path
-    output_path = base / "HPCOLD_ISLAMIC.txt"
-    print(f"Output will be saved to: {output_path}")
-    
-    # Hardcode REPTDATE (current date - 1 day)
-    reptdate = datetime.now().date() - timedelta(days=1)
-    reptday = reptdate.day
-    
-    # SAS SELECT logic for weeks
-    if reptday == 8:
-        wk, wk1 = '1', '4'
-    elif reptday == 15:
-        wk, wk1 = '2', '1'
-    elif reptday == 22:
-        wk, wk1 = '3', '2'
-    else:
-        wk, wk1 = '4', '3'
-    
-    mm = reptdate.month
-    if wk == '1':
-        mm1 = mm - 1 if mm > 1 else 12
-    else:
-        mm1 = mm
-    
-    reptmon = f"{mm:02d}"
-    reptmon1 = f"{mm1:02d}"
-    rdate = reptdate.strftime("%d%m%y")
-    
-    print(f"EIIHPTOP - Islamic Bank Top Accounts")
-    print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, RDATE: {rdate}")
-    
-    # HPD products - adjust based on actual Islamic product codes
-    hpd_products = [5.0, 15.0, 61.0, 70.0, 71.0, 200.0, 205.0, 210.0, 212.0, 216.0]
-    
-    # 1. CIS INFO - Read SAS dataset
-    try:
-        cis_df, meta = pyreadstat.read_sas7bdat(
-            str(cis_path / "loan.sas7bdat"),
-            row_limit=1000  # Limit for testing
-        )
-        cis_df = pl.from_pandas(cis_df)
-        
-        hpcis_df = cis_df.filter(
-            (~pl.col("CACCCODE").is_in(["017", "021", "028"])) &
-            (pl.col("SECCUST") == "901")
-        )
-        hpcis_df = hpcis_df.with_columns(
-            pl.when(pl.col("NEWIC") != "")
-            .then(pl.col("NEWIC"))
-            .otherwise(pl.col("OLDIC"))
-            .alias("ICNO")
-        ).select(["ACCTNO", "ICNO", "CUSTNAME"])
-        
-        print(f"CIS sample size: {len(hpcis_df)} records")
-    except Exception as e:
-        print(f"Error reading CIS: {e}")
-        hpcis_df = pl.DataFrame({"ACCTNO": [], "ICNO": [], "CUSTNAME": []})
-    
-    # 2. EXTRACT HP A/C with MTHARR calculation
-    try:
-        hpacc_df, meta = pyreadstat.read_sas7bdat(
-            str(loan_path / f"loan{reptmon}{wk}.sas7bdat"),
-            row_limit=500  # Limit for testing
-        )
-        hpacc_df = pl.from_pandas(hpacc_df)
-        print(f"HPACC sample size: {len(hpacc_df)} records")
-        
-        # Check if MTHARR column already exists
-        if 'MTHARR' in hpacc_df.columns:
-            print("MTHARR column already exists in the data")
-            hpacc_df = hpacc_df.select(["ACCTNO", "NOTENO", "PRODUCT", "BORSTAT", "BALANCE", 
-                                      "BLDATE", "ISSUEDT", "MTHARR", "BRANCH"])
-        else:
-            # Calculate MTHARR if it doesn't exist
-            thisdate = datetime.strptime(rdate, "%d%m%y")
-            
-            def calculate_mtharr(bldate):
-                if not bldate or bldate == 0:
-                    return 0
-                
-                try:
-                    if isinstance(bldate, (int, float)):
-                        sas_base = datetime(1960, 1, 1)
-                        bldate_dt = sas_base + timedelta(days=int(bldate))
-                    else:
-                        bldate_dt = bldate
-                    
-                    daydiff = (thisdate - bldate_dt).days
-                    
-                    if daydiff > 729: return int((daydiff/365)*12)
-                    elif daydiff > 698: return 23
-                    elif daydiff > 668: return 22
-                    elif daydiff > 638: return 21
-                    elif daydiff > 608: return 20
-                    elif daydiff > 577: return 19
-                    elif daydiff > 547: return 18
-                    elif daydiff > 516: return 17
-                    elif daydiff > 486: return 16
-                    elif daydiff > 456: return 15
-                    elif daydiff > 424: return 14
-                    elif daydiff > 394: return 13
-                    elif daydiff > 364: return 12
-                    elif daydiff > 333: return 11
-                    elif daydiff > 303: return 10
-                    elif daydiff > 273: return 9
-                    elif daydiff > 243: return 8
-                    elif daydiff > 213: return 7
-                    elif daydiff > 182: return 6
-                    elif daydiff > 151: return 5
-                    elif daydiff > 121: return 4
-                    elif daydiff > 91: return 3
-                    elif daydiff > 61: return 2
-                    elif daydiff > 30: return 1
-                    else: return 0
-                except:
-                    return 0
-            
-            hpacc_df = hpacc_df.with_columns(
-                pl.col("BLDATE").map_elements(calculate_mtharr, return_dtype=pl.Int64).alias("MTHARR")
-            ).select(["ACCTNO", "NOTENO", "PRODUCT", "BORSTAT", "BALANCE", 
-                      "BLDATE", "ISSUEDT", "MTHARR", "BRANCH"])
-        
-        # Fill any null values in MTHARR with 0
-        hpacc_df = hpacc_df.with_columns(
-            pl.col("MTHARR").fill_null(0)
-        )
-        
-        print(f"PRODUCT column type: {hpacc_df['PRODUCT'].dtype}")
-        print(f"PRODUCT unique values: {hpacc_df['PRODUCT'].unique().to_list()[:10]}")
-        print(f"BRANCH unique values: {hpacc_df['BRANCH'].unique().to_list()[:10]}")
-    except Exception as e:
-        print(f"File not found or error reading: LOAN/LOAN{reptmon}{wk}.sas7bdat - {e}")
-        return
-    
-    # Filter for HPD products and balance > 0
-    hpacc_df = hpacc_df.filter(
-        (pl.col("PRODUCT").is_in(hpd_products)) &
-        (pl.col("BALANCE") > 0)
-    )
-    
-    print(f"After filtering: {len(hpacc_df)} records")
-    
-    # If no records after filtering, return
-    if hpacc_df.is_empty():
-        print("No records match the product filters. Exiting.")
-        return
-    
-    # 3. Merge with BRANCH abbreviation
-    brhdata_df = None
-    try:
-        lkp_branch_paths = [
-            base / "LKP_BRANCH",
-            base / "LKP_BRANCH.txt",
-            base / "LKP_BRANCH.dat",
-            loan_path / "LKP_BRANCH",
-            loan_path / "LKP_BRANCH.txt",
-            cis_path / "LKP_BRANCH",
-            cis_path / "LKP_BRANCH.txt",
-            base / "../LKP_BRANCH",
-            base / "../../LKP_BRANCH"
-        ]
-        
-        lkp_found = False
-        for lkp_branch_path in lkp_branch_paths:
-            if lkp_branch_path.exists():
-                print(f"Found LKP_BRANCH at: {lkp_branch_path}")
-                
-                # Try to read as SAS dataset first
-                if lkp_branch_path.suffix == '.sas7bdat' or lkp_branch_path.with_suffix('.sas7bdat').exists():
-                    try:
-                        if lkp_branch_path.suffix != '.sas7bdat':
-                            lkp_branch_path = lkp_branch_path.with_suffix('.sas7bdat')
-                        brhdata_df, meta = pyreadstat.read_sas7bdat(str(lkp_branch_path))
-                        brhdata_df = pl.from_pandas(brhdata_df)
-                        lkp_found = True
-                        print(f"Read LKP_BRANCH as SAS dataset with {len(brhdata_df)} records")
-                        break
-                    except Exception as e:
-                        print(f"Error reading as SAS: {e}")
-                        continue
-                else:
-                    # Try reading as flat file
-                    try:
-                        with open(lkp_branch_path, 'r') as f:
-                            brh_lines = []
-                            lines = f.readlines()
-                            
-                            first_line = lines[0].strip() if lines else ""
-                            if 'BRANCH' in first_line.upper() or 'BRABBR' in first_line.upper():
-                                start_idx = 1
-                            else:
-                                start_idx = 0
-                            
-                            for line in lines[start_idx:]:
-                                if line.strip():
-                                    if '\t' in line:
-                                        parts = line.strip().split('\t')
-                                    elif ',' in line:
-                                        parts = line.strip().split(',')
-                                    else:
-                                        parts = [p for p in line.strip().split(' ') if p]
-                                    
-                                    if parts and len(parts) >= 2:
-                                        try:
-                                            if parts[0].replace('.', '').isdigit():
-                                                branch = float(parts[0]) if '.' in parts[0] else int(parts[0])
-                                                brabbr = parts[1].strip()
-                                            else:
-                                                branch = float(parts[1]) if '.' in parts[1] else int(parts[1])
-                                                brabbr = parts[0].strip()
-                                            brh_lines.append({"BRANCH": branch, "BRABBR": brabbr})
-                                        except (ValueError, IndexError):
-                                            continue
-                            
-                            if brh_lines:
-                                brhdata_df = pl.DataFrame(brh_lines)
-                                lkp_found = True
-                                print(f"Read LKP_BRANCH as flat file with {len(brhdata_df)} records")
-                                break
-                    except Exception as e:
-                        print(f"Error reading as flat file: {e}")
-                        continue
-        
-        if not lkp_found or brhdata_df is None or brhdata_df.is_empty():
-            print("LKP_BRANCH file not found or empty - using branch codes without abbreviation")
-            unique_branches = hpacc_df["BRANCH"].unique().to_list()
-            brh_lines = []
-            for branch in unique_branches:
-                if branch is not None:
-                    if isinstance(branch, float) and branch.is_integer():
-                        branch_int = int(branch)
-                    else:
-                        branch_int = branch
-                    brh_lines.append({"BRANCH": branch, "BRABBR": f"BR{branch_int}"})
-            brhdata_df = pl.DataFrame(brh_lines)
-            print(f"Created default branch mapping with {len(brhdata_df)} records")
-            
-    except Exception as e:
-        print(f"Error reading LKP_BRANCH: {e}")
-        unique_branches = hpacc_df["BRANCH"].unique().to_list()
-        brh_lines = []
-        for branch in unique_branches:
-            if branch is not None:
-                if isinstance(branch, float) and branch.is_integer():
-                    branch_int = int(branch)
-                else:
-                    branch_int = branch
-                brh_lines.append({"BRANCH": branch, "BRABBR": f"BR{branch_int}"})
-        brhdata_df = pl.DataFrame(brh_lines)
-        print(f"Created default branch mapping with {len(brhdata_df)} records")
-    
-    # Ensure BRANCH column types match
-    if brhdata_df is not None and not brhdata_df.is_empty():
-        brhdata_df = brhdata_df.with_columns(
-            pl.col("BRANCH").cast(pl.Float64)
-        )
-        
-        hpacc_df = hpacc_df.sort("BRANCH")
-        brhdata_df = brhdata_df.sort("BRANCH")
-        hpacc_df = hpacc_df.join(brhdata_df, on="BRANCH", how="left")
-    else:
-        hpacc_df = hpacc_df.with_columns(
-            pl.lit("UNK").alias("BRABBR")
-        )
-    
-    # 4. Merge with CIS
-    hpcis_df = hpcis_df.sort("ACCTNO")
-    hpacc_df = hpacc_df.sort("ACCTNO")
-    hpacc_df = hpacc_df.join(hpcis_df, on="ACCTNO", how="inner")
-    
-    # Check if we have data after merge
-    if hpacc_df.is_empty():
-        print("No data after merging with CIS. Exiting.")
-        return
-    
-    print(f"After CIS merge: {len(hpacc_df)} records")
-    
-    # 5. Summarize by BRANCH and ICNO
-    hpacc_df = hpacc_df.sort(["BRANCH", "ICNO"])
-    hpic_df = hpacc_df.group_by(["BRANCH", "ICNO"]).agg(
-        pl.sum("BALANCE").alias("BALANCE_SUM")
-    )
-    
-    # 6. Top 10 customers per branch
-    hpic_df = hpic_df.sort(["BRANCH", "BALANCE_SUM"], descending=[False, True])
-    
-    # Add rank within each branch
-    hpic_df = hpic_df.with_columns(
-        pl.int_range(1, pl.len() + 1).over("BRANCH").alias("N")
-    ).filter(pl.col("N") <= 10)
-    
-    # Rename and merge back
-    hpic_df = hpic_df.rename({"BALANCE_SUM": "TOTBAL"}).sort(["BRANCH", "ICNO"])
-    hpacc_df = hpacc_df.sort(["BRANCH", "ICNO"])
-    hpacc1_df = hpacc_df.join(hpic_df.select(["BRANCH", "ICNO", "TOTBAL"]), 
-                             on=["BRANCH", "ICNO"], how="inner")
-    
-    # Fill any null values before generating report
-    hpacc1_df = hpacc1_df.with_columns([
-        pl.col("MTHARR").fill_null(0),
-        pl.col("BALANCE").fill_null(0),
-        pl.col("CUSTNAME").fill_null(""),
-        pl.col("PRODUCT").fill_null(""),
-        pl.col("BORSTAT").fill_null(""),
-        pl.col("ISSUEDT").fill_null(0),
-    ])
-    
-    # Final sort
-    hpacc1_df = hpacc1_df.sort(["BRANCH", "TOTBAL", "ICNO", "ACCTNO"], 
-                              descending=[False, True, False, False])
-    
-    # 7. Generate Islamic bank report
-    generate_islamic_hp_report(hpacc1_df, rdate, output_path)
-    
-    print(f"Processing complete. Top {len(hpacc1_df)} records identified.")
-    print(f"Report saved to: {output_path}")
+1                                                                                                                                 
+ PUBLIC ISLAMIC BANK BERHAD                                                     30/06/26  PAGE NO : 1                             
+ TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT 30/06/26                                                             
+ REPORT ID: EIMHPTOP                                                                                                              
+0BRANCH CODE= 013                                                                                                                 
+0            NOTE                                 LOAN  BORROWER                  MONTH      ISSUE                                
+ MNI NO      NO     NAME                          TYPE  STATUS        NET BALANCE PASS DUE   DATE                                 
+ --------------------------------------------------------------------------------------------------------                         
+ 8890850308  94010  SITI ZALINA BINTI MAT SIN      128                  21,453.08      2     17NOV20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:        21,453.08                                                 
+                                                                 ================                                                 
+ 8862941712  94010  KAMALRUZAMAN BIN NORDIN        128                   2,926.83      0     17NOV20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:         2,926.83                                                 
+                                                                 ================                                                 
+ 8709015015  90010  SUHAIMI BIN MOHD NOOR          128                     152.65      0     05AUG15                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           152.65                                                 
+                                                                 ================                                                 
+ 8826241403  90010  MOHD SYAHMIN BIN MOHAMED OTHMA 128                     144.08      0     23JAN13                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           144.08                                                 
+                                                                 ================                                                 
+                                                                 ----------------                                                 
+                                                   BRANCH TOTAL:        24,676.64                                                 
+                                                                 ================                                                 
+1                                                                                                                                 
+ PUBLIC ISLAMIC BANK BERHAD                                                     30/06/26  PAGE NO : 1                             
+ TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT 30/06/26                                                             
+ REPORT ID: EIMHPTOP                                                                                                              
+0BRANCH CODE= 014                                                                                                                 
+0            NOTE                                 LOAN  BORROWER                  MONTH      ISSUE                                
+ MNI NO      NO     NAME                          TYPE  STATUS        NET BALANCE PASS DUE   DATE                                 
+ --------------------------------------------------------------------------------------------------------                         
+ 8753199226  90010  MD TARMIZI BIN MD ZAIN         128                 101,152.95      0     14MAR19                              
+ 8758212823  90010  MD TARMIZI BIN MD ZAIN         128                  89,661.81      0     29JUL20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       190,814.76                                                 
+                                                                 ================                                                 
+ 8754335835  90010  RABIATU HASMAK BINTI GHANI     128                 143,813.54      0     16JUN19                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       143,813.54                                                 
+                                                                 ================                                                 
+ 8758212629  90010  AMIR MAHMUD BIN MOKHTAR        128                 141,853.17      0     09JUL20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       141,853.17                                                 
+                                                                 ================                                                 
+ 8758212726  90010  ANG BOON HUP                   128                 128,180.17      0     05AUG20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       128,180.17                                                 
+                                                                 ================                                                 
+ 8764830728  90010  GAM TONG KEONG                 128                 125,099.47      0     16DEC20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       125,099.47                                                 
+                                                                 ================                                                 
+ 8754339524  90010  FERDINAND BAKRI BIN YUSOFF     128                 115,550.22      0     14JAN20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       115,550.22                                                 
+                                                                 ================                                                 
+ 8762424032  90010  AMIRO BIN AWANG @ MAHMOOD      128                 114,587.44      0     01DEC20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       114,587.44                                                 
+                                                                 ================                                                 
+ 8764833034  90010  CHUAH CHING HOCK               128                 114,308.86      0     08FEB21                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       114,308.86                                                 
+                                                                 ================                                                 
+ 8762421204  90010  LUTFAN BIN DERAMAN @ MOHAMMAD  128                 114,291.44      0     28OCT20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       114,291.44                                                 
+                                                                 ================                                                 
+ 8758212532  90010  HAMDAN BIN MOHAMAD             128                  65,042.18      0     27JUL20                              
+ 8764832912  90010  HAMDAN BIN MOHAMAD             128                  44,201.57      0     14APR21                              
+                                                                 ----------------                                                 
+                                                          TOTAL:       109,243.75                                                 
+                                                                 ================                                                 
+                                                                 ----------------                                                 
+                                                   BRANCH TOTAL:     1,297,742.82                                                 
+                                                                 ================                                                 
+1                                                                                                                                 
+ PUBLIC ISLAMIC BANK BERHAD                                                     30/06/26  PAGE NO : 1                             
+ TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT 30/06/26                                                             
+ REPORT ID: EIMHPTOP                                                                                                              
+0BRANCH CODE= 017                                                                                                                 
+0            NOTE                                 LOAN  BORROWER                  MONTH      ISSUE                                
+ MNI NO      NO     NAME                          TYPE  STATUS        NET BALANCE PASS DUE   DATE                                 
+ --------------------------------------------------------------------------------------------------------                         
+ 8700573202  94010  NURUL AIN BT SAIDEN            128                  10,792.80      0     07OCT20                              
+                                                                 ----------------                                                 
+                                                          TOTAL:        10,792.80                                                 
+                                                                 ================                                                 
+ 8831103406  90010  NURUL AIN BINTI DAHARI         128                   1,108.96      0     08APR10                              
+                                                                 ----------------                                                 
+                                                          TOTAL:         1,108.96                                                 
+                                                                 ================                                                 
+ 8896710403  90010  CHONG CHEW FONG                128                     789.15      0     07NOV14                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           789.15                                                 
+                                                                 ================                                                 
+ 8889608530  90010  GOH CHA WEI                    128                     462.86      0     23JUN14                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           462.86                                                 
+                                                                 ================                                                 
+ 8840059131  90010  HEJUHARI BIN HARUN             128                     251.53      0     29NOV10                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           251.53                                                 
+                                                                 ================                                                 
+ 8847397003  90010  AINOL ANWAR BIN ABU BAKAR      128                     250.11      0     15AUG11                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           250.11                                                 
+                                                                 ================                                                 
+ 8822839527  90010  MOHAMAD HASWANDI BIN HJ HASRUD 128                     222.47      0     25AUG09                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           222.47                                                 
+                                                                 ================                                                 
+ 8831104535  90010  SITI ZUBAIDAH BINTI MOHD ZAINE 128                     186.09      0     04MAY10                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           186.09                                                 
+                                                                 ================                                                 
+ 8987057208  90010  SANISAH BINTI SAID             128                     155.06      0     22MAY07                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           155.06                                                 
+                                                                 ================                                                 
+ 8885205821  90010  NORFAIZA BINTI OTHMAN          128                     128.26      0     10DEC13                              
+                                                                 ----------------                                                 
+                                                          TOTAL:           128.26                                                 
+                                                                 ================                                                 
+                                                                 ----------------                                                 
+                                                   BRANCH TOTAL:        14,347.29                                                 
+                                                                 ================                                                 
 
-def generate_islamic_hp_report(df, rdate, output_path):
-    """Generate formatted report for Islamic bank"""
-    if df.is_empty():
-        print("No data to report")
-        return
-    
-    # Group by BRANCH for page breaks
-    branches = df["BRANCH"].unique().to_list()
-    
-    with open(output_path, 'w') as f:
-        page_num = 0
-        
-        for branch in branches:
-            branch_df = df.filter(pl.col("BRANCH") == branch).sort(
-                ["TOTBAL", "ICNO", "ACCTNO"], descending=[True, False, False]
-            )
-            
-            page_num += 1
-            # Islamic bank header
-            f.write(f"PUBLIC ISLAMIC BANK BERHAD{' ' * 58}{rdate}\n")
-            f.write(f"{' ' * 90}PAGE NO : {page_num}\n")
-            f.write(f"TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT {rdate}\n")
-            f.write(f"REPORT ID: EIIHPTOP\n")
-            f.write(f"\n")
-            
-            # Format branch code
-            if isinstance(branch, float) and branch.is_integer():
-                branch_code = int(branch)
-            else:
-                branch_code = int(branch) if branch is not None else 0
-            
-            f.write(f"BRANCH CODE= {branch_code:03d}\n")
-            f.write(f"\n")
-            f.write(f"{' ' * 12}NOTE{' ' * 30}LOAN{' ' * 5}BORROWER{' ' * 20}MONTH{' ' * 9}ISSUE\n")
-            f.write(f"MNI NO{' ' * 6}NO{' ' * 6}NAME{' ' * 25}TYPE{' ' * 5}STATUS{' ' * 8}NET BALANCE{' ' * 6}PASS DUE{' ' * 9}DATE\n")
-            f.write(f"{'-' * 42}{'-' * 42}{'-' * 20}\n")
-            
-            # Process each ICNO group within branch
-            branch_total = 0
-            icnos = branch_df["ICNO"].unique().to_list()
-            
-            for icno in icnos:
-                ic_df = branch_df.filter(pl.col("ICNO") == icno)
-                ic_total = 0
-                
-                for row in ic_df.iter_rows(named=True):
-                    # Format values with safe handling of None
-                    acctno = str(row.get('ACCTNO', '') or '').ljust(12)
-                    noteno = str(row.get('NOTENO', '') or '').ljust(6)
-                    custname = (str(row.get('CUSTNAME', '') or '')[:30]).ljust(30)
-                    product = str(row.get('PRODUCT', '') or '').ljust(4)
-                    borstat = str(row.get('BORSTAT', '') or '').ljust(6)
-                    
-                    # Safe balance formatting
-                    balance_val = row.get('BALANCE', 0) or 0
-                    balance = f"{balance_val:,.2f}".rjust(16)
-                    
-                    # Safe MTHARR formatting
-                    mtharr_val = row.get('MTHARR', 0) or 0
-                    mtharr = f"{mtharr_val:,.0f}".rjust(6)
-                    
-                    # Format date - using ISSUEDT
-                    issdate = "        "
-                    issuedt_val = row.get('ISSUEDT')
-                    if issuedt_val:
-                        try:
-                            if isinstance(issuedt_val, (datetime, pl.Date)):
-                                issdate = issuedt_val.strftime("%d%b%y").upper()
-                            else:
-                                sas_base = datetime(1960, 1, 1)
-                                if isinstance(issuedt_val, (int, float)) and issuedt_val > 0:
-                                    issdate = (sas_base + timedelta(days=int(issuedt_val))).strftime("%d%b%y").upper()
-                                else:
-                                    issdate = str(issuedt_val)[:8] if issuedt_val else "        "
-                        except:
-                            issdate = "        "
-                    
-                    f.write(f"{acctno}{noteno}{custname}{product}{borstat}{balance}{mtharr}{issdate}\n")
-                    
-                    ic_total += row.get('BALANCE', 0) or 0
-                    branch_total += row.get('BALANCE', 0) or 0
-                
-                # ICNO total
-                f.write(f"{' ' * 57}----------------\n")
-                f.write(f"{' ' * 50}TOTAL: {ic_total:,.2f}\n".rjust(80))
-                f.write(f"{' ' * 57}================\n\n")
-            
-            # Branch total
-            f.write(f"{' ' * 57}----------------\n")
-            f.write(f"{' ' * 37}BRANCH TOTAL: {branch_total:,.2f}\n".rjust(80))
-            f.write(f"{' ' * 57}================\n\n")
-            
-            # Page break
-            f.write("\f\n")  # Form feed for new page
 
-if __name__ == "__main__":
-    eiihptop()
+PYTHON OUTPUT:
+
+                                                               PUBLIC ISLAMIC BANK BERHAD                                                          300626
+                                                                                          PAGE NO : 1
+TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT 300626
+REPORT ID: EIIHPTOP
+
+BRANCH CODE= 002
+
+            NOTE                              LOAN     BORROWER                    MONTH         ISSUE
+MNI NO      NO      NAME                         TYPE     STATUS        NET BALANCE      PASS DUE         DATE
+--------------------------------------------------------------------------------------------------------
+2000079202.010013.0LOW SUAT LING                 70.0            119,710.60     016APR12
+                                                         ----------------
+                                                              TOTAL: 119,710.60
+                                                         ================
+
+2000003304.016.0  MOHD RAHIMI BIN MD RIDZUAN    5.0             195,183.64     021FEB12
+                                                         ----------------
+                                                              TOTAL: 195,183.64
+                                                         ================
+
+2000071727.012.0  PUTERI MAZLINA BT DAHALAN     70.0             67,776.49     013FEB09
+                                                         ----------------
+                                                               TOTAL: 67,776.49
+                                                         ================
+
+2000048810.030012.0IRENE LEE POH CHOO            5.0              48,333.23     026OCT05
+                                                         ----------------
+                                                               TOTAL: 48,333.23
+                                                         ================
+
+2000082521.020011.0NOR AZLIN BINTI MD ATAN       5.0              67,533.28     028SEP07
+                                                         ----------------
+                                                               TOTAL: 67,533.28
+                                                         ================
+
+2000004627.012.0  CHONG MOI LEE                 5.0              45,750.04     005AUG05
+                                                         ----------------
+                                                               TOTAL: 45,750.04
+                                                         ================
+
+2000046723.012.0  SUZANA BINTI ABU SAMAH        5.0              26,497.73     014JAN09
+                                                         ----------------
+                                                               TOTAL: 26,497.73
+                                                         ================
+
+2000006908.020010.0NORZARITA BINTI JAAFAR        212.0             25,339.01     025JAN00
+                                                         ----------------
+                                                               TOTAL: 25,339.01
+                                                         ================
+
+2000038235.030015.0MOHD ZAFRI BIN ISMAIL @ ABDUL 5.0              70,410.30     007AUG09
+                                                         ----------------
+                                                               TOTAL: 70,410.30
+                                                         ================
+
+2000001605.010014.0RAJAH A/L MANICKAM            5.0             358,535.09     006OCT15
+                                                         ----------------
+                                                              TOTAL: 358,535.09
+                                                         ================
+
+                                                         ----------------
+                                                     BRANCH TOTAL: 1,025,069.40
+                                                         ================
+
+
+PUBLIC ISLAMIC BANK BERHAD                                                          300626
+                                                                                          PAGE NO : 2
+TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT 300626
+REPORT ID: EIIHPTOP
+
+BRANCH CODE= 003
+
+            NOTE                              LOAN     BORROWER                    MONTH         ISSUE
+MNI NO      NO      NAME                         TYPE     STATUS        NET BALANCE      PASS DUE         DATE
+--------------------------------------------------------------------------------------------------------
+2000043022.020012.0TAN CHING SEIN                5.0              45,800.76     007FEB05
+                                                         ----------------
+                                                               TOTAL: 45,800.76
+                                                         ================
+
+                                                         ----------------
+                                                        BRANCH TOTAL: 45,800.76
+                                                         ================
+
+
+PUBLIC ISLAMIC BANK BERHAD                                                          300626
+                                                                                          PAGE NO : 3
+TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT 300626
+REPORT ID: EIIHPTOP
+
+BRANCH CODE= 029
+
+            NOTE                              LOAN     BORROWER                    MONTH         ISSUE
+MNI NO      NO      NAME                         TYPE     STATUS        NET BALANCE      PASS DUE         DATE
+--------------------------------------------------------------------------------------------------------
+2000008025.020012.0GANESAN A/L K SANJEEVI        5.0              30,557.23     019NOV10
+                                                         ----------------
+                                                               TOTAL: 30,557.23
+                                                         ================
+
+2000103524.030013.0SYARIZUL IKHWAN BIN YAHYA     5.0              61,466.92     017DEC08
+                                                         ----------------
+                                                               TOTAL: 61,466.92
+                                                         ================
+
+2000035735.030011.0TIONG MENG SIONG              5.0             408,169.79     006MAY11
+                                                         ----------------
+                                                              TOTAL: 408,169.79
+                                                         ================
+
+                                                         ----------------
+                                                       BRANCH TOTAL: 500,193.94
+                                                         ================
+
+
