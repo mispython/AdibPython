@@ -388,16 +388,15 @@ def generate_islamic_hp_report(df, rdate, output_path):
                     # BORSTAT - exactly 6 chars
                     borstat = str(row.get('BORSTAT', '') or '').ljust(6)
                     
-                    # Balance - right aligned with commas and 2 decimals
+                    # Balance - right aligned with commas and 2 decimals (14 chars total)
                     balance_val = row.get('BALANCE', 0) or 0
                     balance = f"{balance_val:,.2f}".rjust(14)
                     
-                    # MTHARR (Pass Due) - format with spaces before the number
-                    # Production format: 6 spaces, then the number at the 7th position
+                    # MTHARR (Pass Due) - right aligned with spaces (6 chars total)
                     mtharr_val = row.get('MTHARR', 0) or 0
                     mtharr = str(int(mtharr_val)).rjust(6)
                     
-                    # Issue Date - exactly 8 chars
+                    # Issue Date - exactly 8 chars (with spaces if empty)
                     issdate = "        "
                     issuedt_val = row.get('ISSUEDT')
                     if issuedt_val:
@@ -413,8 +412,15 @@ def generate_islamic_hp_report(df, rdate, output_path):
                         except:
                             issdate = "        "
                     
-                    # Write the detail line with exact column positions
-                    # Format: [space]ACCTNO(12)[noteno(6)][name(30)][type(4)][status(6)][balance(14)][passdue(6)][date(8)]
+                    # Write the detail line with EXACT column positions
+                    # ACCTNO: cols 1-12
+                    # NOTENO: cols 13-18
+                    # NAME: cols 19-48
+                    # TYPE: cols 49-52
+                    # STATUS: cols 53-58
+                    # BALANCE: cols 59-72 (14 chars, right aligned)
+                    # PASS DUE: cols 73-78 (6 chars, right aligned with spaces)
+                    # DATE: cols 79-86 (8 chars)
                     detail_line = f" {acctno}{noteno}{custname}{product}{borstat}{balance}{mtharr}{issdate}"
                     f.write(detail_line + "\n")
                     
