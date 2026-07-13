@@ -388,15 +388,15 @@ def generate_islamic_hp_report(df, rdate, output_path):
                     # BORSTAT - exactly 6 chars (left aligned)
                     borstat = str(row.get('BORSTAT', '') or '').ljust(6)
                     
-                    # NET BALANCE - right aligned with commas and 2 decimals (14 chars total)
-                    # This matches production: "         21,453.08" (14 chars)
+                    # NET BALANCE - right aligned with commas and 2 decimals (16 chars total)
+                    # This matches production: "           21,453.08" (16 chars)
                     balance_val = row.get('BALANCE', 0) or 0
-                    balance = f"{balance_val:14,.2f}"
+                    balance = f"{balance_val:16,.2f}"
                     
-                    # PASS DUE - right aligned with spaces (6 chars total)
-                    # Production has 4 spaces then the number: "     2" (6 chars)
+                    # PASS DUE - right aligned with spaces (8 chars total)
+                    # Production has spaces then the number: "       2" (8 chars)
                     mtharr_val = row.get('MTHARR', 0) or 0
-                    mtharr = f"{int(mtharr_val):>6}"
+                    mtharr = f"{int(mtharr_val):>8}"
                     
                     # Issue Date - exactly 8 chars
                     issdate = "        "
@@ -415,7 +415,7 @@ def generate_islamic_hp_report(df, rdate, output_path):
                             issdate = "        "
                     
                     # Write the detail line with EXACT column positions matching production
-                    # [space]ACCTNO(12)[NOTENO(6)][NAME(30)][TYPE(4)][STATUS(6)][BALANCE(14)][PASS DUE(6)][DATE(8)]
+                    # [space]ACCTNO(12)[NOTENO(6)][NAME(30)][TYPE(4)][STATUS(6)][BALANCE(16)][PASS DUE(8)][DATE(8)]
                     detail_line = f" {acctno}{noteno}{custname}{product}{borstat}{balance}{mtharr}{issdate}"
                     f.write(detail_line + "\n")
                     
