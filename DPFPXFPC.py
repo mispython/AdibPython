@@ -531,11 +531,29 @@ def eibaabba():
     # Process data
     print("Reading LNNOTE data...")
     abba_df = process_abba_data(input_path, snapshot_date, test_limit)
-    if abba_df.is_empty():
-        print("No LNNOTE data found")
+
+    # abba_df.width == 0 means process_abba_data hit a genuine failure
+    # (file not found, required columns missing) and returned a totally
+    # empty pl.DataFrame() with no schema at all. That's the Python
+    # equivalent of a SAS job that can't even open/read the source
+    # dataset - a real failure, not "zero matching observations". In
+    # that case there's nothing to build a report from, so we stop here
+    # and do NOT create an output file (matching a failed/aborted SAS run).
+    if abba_df.width == 0:
+        print("No LNNOTE data found - cannot proceed (missing file or required columns)")
         return
 
-    print(f"After LNNOTE processing: {len(abba_df):,} records")
+    # abba_df may still be empty here (0 rows) but with a valid schema -
+    # e.g. the filter simply matched no records for this snapshot. SAS
+    # would still run DATA AA over zero observations and produce an
+    # output file with zero PUT lines (i.e. an empty file). We replicate
+    # that by continuing through the full pipeline rather than exiting
+    # early, so generate_abba_output() still creates ABBALST.txt even
+    # when there's nothing to write into it.
+    if abba_df.is_empty():
+        print("No records matched LNNOTE filter criteria - will produce an empty output file")
+    else:
+        print(f"After LNNOTE processing: {len(abba_df):,} records")
 
     print("Merging with SASB loan data...")
     abba_df = merge_sasb_data(abba_df, input_path, context["month"], context["week"], snapshot_date, test_limit)
@@ -561,11 +579,27 @@ def eibaabba():
 
 
 def generate_abba_output(df: pl.DataFrame, output_path: Path):
-    """Generate text file output"""
-    if df.is_empty():
-        print("No data to output")
-        return
+    """
+    Generate text file output.
 
+    Matches SAS DATA AA behavior exactly:
+        DATA AA;
+          SET ABBA;
+          FILE ABBALST;
+          PUT @001 ACCTNO ';' NOTENO ';' ...
+
+    Two important details this mirrors:
+    - No header line. SAS never PUTs a header row here - only one
+      data line per observation in ABBA. If we wrote a header row,
+      every downstream consumer parsing this file would be off by
+      one line versus the real production file.
+    - The file is always created, even with zero data rows. If ABBA
+      has zero observations, SAS's DATA AA step still executes (it
+      just runs zero times through the implicit row loop), and the
+      FILE statement still creates ABBALST.txt - resulting in an
+      empty (0-byte) file rather than no file at all. We replicate
+      that by never early-returning before opening the file.
+    """
     output_columns = [
         "ACCTNO",
         "NOTENO",
@@ -592,17 +626,11 @@ def generate_abba_output(df: pl.DataFrame, output_path: Path):
 
     # Select only columns that exist
     existing_columns = [col for col in output_columns if col in df.columns]
-    output_df = df.select(existing_columns)
+    output_df = df.select(existing_columns) if existing_columns else df
 
-    # Write to text file with header.
-    # NOTE: the original SAS PUT statement joins fields with ';' -
-    #   PUT @001 ACCTNO ';' NOTENO ';' BRANCH ';' ...
-    # so the delimiter here must be ';' to match the production file format.
+    # Write to text file - no header, ';'-delimited data rows only,
+    # matching the SAS PUT statement's delimiter and lack of a header PUT.
     with open(output_path, 'w') as f:
-        # Write header
-        f.write(";".join(existing_columns) + "\n")
-
-        # Write data rows
         for row in output_df.iter_rows(named=True):
             row_values = []
             for col in existing_columns:
@@ -615,7 +643,9 @@ def generate_abba_output(df: pl.DataFrame, output_path: Path):
     print(f"Output file created: {output_path}")
     print(f"Total records: {len(output_df):,}")
 
-    if len(output_df) > 0:
+    if len(output_df) == 0:
+        print("(Empty file written - no records matched the report criteria for this run.)")
+    else:
         print("\nSample records (first 3):")
         print("-" * 60)
         for row in output_df.head(3).iter_rows(named=True):
