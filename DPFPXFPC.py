@@ -358,42 +358,45 @@ def generate_islamic_hp_report(df, rdate, output_path):
                 ic_total = 0
                 
                 for row in ic_df.iter_rows(named=True):
-                    # Format ACCTNO - remove decimal
+                    # Format ACCTNO - remove decimal, exactly 12 chars
                     acctno_raw = str(row.get('ACCTNO', '') or '')
                     if '.' in acctno_raw:
                         acctno = acctno_raw.split('.')[0]
                     else:
                         acctno = acctno_raw
+                    acctno = acctno.ljust(12)
                     
-                    # Format NOTENO - remove decimal
+                    # Format NOTENO - remove decimal, exactly 6 chars
                     noteno_raw = str(row.get('NOTENO', '') or '')
                     if '.' in noteno_raw:
                         noteno = noteno_raw.split('.')[0]
                     else:
                         noteno = noteno_raw
+                    noteno = noteno.ljust(6)
                     
                     # Customer name - exactly 30 chars
                     custname = (str(row.get('CUSTNAME', '') or '')[:30]).ljust(30)
                     
-                    # Product type - remove decimal
+                    # Product type - remove decimal, exactly 4 chars
                     product_raw = str(row.get('PRODUCT', '') or '')
                     if '.' in product_raw:
                         product = product_raw.split('.')[0]
                     else:
                         product = product_raw
+                    product = product.ljust(4)
                     
-                    # BORSTAT
+                    # BORSTAT - exactly 6 chars
                     borstat = str(row.get('BORSTAT', '') or '').ljust(6)
                     
-                    # Balance - right aligned with commas
+                    # Balance - right aligned to 14 chars with commas and 2 decimals
                     balance_val = row.get('BALANCE', 0) or 0
                     balance = f"{balance_val:14,.2f}"
                     
-                    # MTHARR (Pass Due) - integer
+                    # MTHARR (Pass Due) - integer, exactly 1 char (right aligned)
                     mtharr_val = row.get('MTHARR', 0) or 0
                     mtharr = f"{int(mtharr_val):1d}"
                     
-                    # Issue Date
+                    # Issue Date - exactly 8 chars
                     issdate = "        "
                     issuedt_val = row.get('ISSUEDT')
                     if issuedt_val:
@@ -409,18 +412,20 @@ def generate_islamic_hp_report(df, rdate, output_path):
                         except:
                             issdate = "        "
                     
-                    # Write the detail line with precise spacing
-                    # Format: space + ACCTNO(12) + NOTENO(6) + NAME(30) + TYPE(4) + STATUS(6) + BALANCE(14) + space + MTHARR(1) + space + DATE(8)
-                    f.write(f" {acctno:<12}{noteno:<6}{custname:<30}{product:<4}{borstat:<6}{balance} {mtharr} {issdate}\n")
+                    # Write the detail line with EXACT column positions
+                    # Column positions: ACCTNO(1-12), NOTENO(13-18), NAME(19-48), TYPE(49-52), STATUS(53-58), 
+                    # BALANCE(59-72), PASS DUE(73), DATE(74-81)
+                    # Note: Production has a space before ACCTNO
+                    f.write(f" {acctno}{noteno}{custname}{product}{borstat}{balance} {mtharr} {issdate}\n")
                     
                     ic_total += row.get('BALANCE', 0) or 0
                     branch_total += row.get('BALANCE', 0) or 0
                 
-                # ICNO total
+                # ICNO total - aligned with production
                 f.write(f"                                                                 ----------------\n")
                 f.write(f"                                                          TOTAL: {ic_total:13,.2f}\n")
                 f.write(f"                                                                 ================\n")
-                f.write(f"\n")  # Add blank line between customers as in production
+                f.write(f"\n")  # Blank line between customers
             
             # Branch total
             f.write(f"                                                                 ----------------\n")
