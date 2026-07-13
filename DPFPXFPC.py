@@ -16,6 +16,9 @@ BASE_PATH = Path.cwd()
 INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/"
 OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBAABBA/ABBALST.txt"
 
+# For testing - set to None for full production run
+TEST_LIMIT = 1000  # Set to None to disable limit
+
 SAS_BASE_DATE = datetime(1960, 1, 1)
 
 COLLATER_GROUPS = {
@@ -125,14 +128,20 @@ MTHARR_THRESHOLDS = [
 ]
 
 
-def read_sas_dataset(path: Path, file_name: str) -> pl.DataFrame:
-    """Read SAS dataset using pyreadstat"""
+def read_sas_dataset(path: Path, file_name: str, limit: Optional[int] = None) -> pl.DataFrame:
+    """Read SAS dataset using pyreadstat with optional row limit"""
     try:
         full_path = path / file_name
         if not full_path.exists():
             print(f"File not found: {full_path}")
             return pl.DataFrame()
-        df, meta = pyreadstat.read_sas7bdat(str(full_path))
+        
+        # Read with row limit if specified
+        if limit is not None:
+            df, meta = pyreadstat.read_sas7bdat(str(full_path), row_limit=limit)
+        else:
+            df, meta = pyreadstat.read_sas7bdat(str(full_path))
+            
         return pl.from_pandas(df)
     except Exception as e:
         print(f"Error reading {file_name}: {e}")
@@ -199,9 +208,9 @@ def map_collater(cclassc) -> Optional[str]:
     return CCLASSC_TO_COLLATER.get(str(cclassc).zfill(3))
 
 
-def process_abba_data(input_path: Path, snapshot_date: datetime) -> pl.DataFrame:
+def process_abba_data(input_path: Path, snapshot_date: datetime, limit: Optional[int] = None) -> pl.DataFrame:
     """Process LNNOTE data"""
-    abba_df = read_sas_dataset(input_path, "EIBAABBA/lnnote.sas7bdat")
+    abba_df = read_sas_dataset(input_path, "EIBAABBA/lnnote.sas7bdat", limit)
     if abba_df.is_empty():
         print("LNNOTE dataset is empty")
         return abba_df
@@ -241,9 +250,9 @@ def process_abba_data(input_path: Path, snapshot_date: datetime) -> pl.DataFrame
     )
 
 
-def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: str, snapshot_date: datetime) -> pl.DataFrame:
+def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: str, snapshot_date: datetime, limit: Optional[int] = None) -> pl.DataFrame:
     """Merge with SASB loan data"""
-    sasb_df = read_sas_dataset(input_path, f"EIMHPTOP/loan{month}{week}.sas7bdat")
+    sasb_df = read_sas_dataset(input_path, f"EIMHPTOP/loan{month}{week}.sas7bdat", limit)
     if sasb_df.is_empty():
         print(f"SASB data not found for month {month} week {week}")
         return abba_df.with_columns([
@@ -293,9 +302,9 @@ def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: s
     return result
 
 
-def merge_customer_data(abba_df: pl.DataFrame, input_path: Path) -> pl.DataFrame:
+def merge_customer_data(abba_df: pl.DataFrame, input_path: Path, limit: Optional[int] = None) -> pl.DataFrame:
     """Merge with customer data from CIS"""
-    cisln_df = read_sas_dataset(input_path, "EIMHPTOP/loan.sas7bdat")
+    cisln_df = read_sas_dataset(input_path, "EIMHPTOP/loan.sas7bdat", limit)
     if cisln_df.is_empty():
         print("Customer data not found")
         return abba_df.with_columns([
@@ -339,9 +348,9 @@ def merge_customer_data(abba_df: pl.DataFrame, input_path: Path) -> pl.DataFrame
     return result
 
 
-def merge_collateral_data(abba_df: pl.DataFrame, input_path: Path) -> pl.DataFrame:
+def merge_collateral_data(abba_df: pl.DataFrame, input_path: Path, limit: Optional[int] = None) -> pl.DataFrame:
     """Merge with collateral data"""
-    coll_df = read_sas_dataset(input_path, "EIBAABBA/collater.sas7bdat")
+    coll_df = read_sas_dataset(input_path, "EIBAABBA/collater.sas7bdat", limit)
     if coll_df.is_empty():
         print("Collateral data not found")
         return abba_df.with_columns(
@@ -401,6 +410,7 @@ def eibaabba():
     """Main function for EIBAABBA - Account Analysis Report"""
     input_path = INPUT_PATH
     output_path = OUTPUT_PATH
+    test_limit = TEST_LIMIT
     
     # Create output directory if it doesn't exist
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -410,6 +420,10 @@ def eibaabba():
     print("=" * 60)
     print(f"Input path: {input_path}")
     print(f"Output path: {output_path}")
+    if test_limit:
+        print(f"*** TEST MODE - Row limit: {test_limit} per dataset ***")
+    else:
+        print(f"*** PRODUCTION MODE - No row limit ***")
     print()
     
     # Hardcode REPTDATE (current date - 1 day)
@@ -424,7 +438,7 @@ def eibaabba():
 
     # Process data
     print("Reading LNNOTE data...")
-    abba_df = process_abba_data(input_path, snapshot_date)
+    abba_df = process_abba_data(input_path, snapshot_date, test_limit)
     if abba_df.is_empty():
         print("No LNNOTE data found")
         return
@@ -432,15 +446,15 @@ def eibaabba():
     print(f"After LNNOTE processing: {len(abba_df):,} records")
     
     print("Merging with SASB loan data...")
-    abba_df = merge_sasb_data(abba_df, input_path, context["month"], context["week"], snapshot_date)
+    abba_df = merge_sasb_data(abba_df, input_path, context["month"], context["week"], snapshot_date, test_limit)
     print(f"After SASB merge: {len(abba_df):,} records")
     
     print("Merging with customer data...")
-    abba_df = merge_customer_data(abba_df, input_path)
+    abba_df = merge_customer_data(abba_df, input_path, test_limit)
     print(f"After customer merge: {len(abba_df):,} records")
     
     print("Merging with collateral data...")
-    abba_df = merge_collateral_data(abba_df, input_path)
+    abba_df = merge_collateral_data(abba_df, input_path, test_limit)
     print(f"After collateral merge: {len(abba_df):,} records")
     
     print("Finalizing output...")
