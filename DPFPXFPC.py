@@ -9,6 +9,10 @@ def eiihptop():
     loan_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP/"
     cis_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP/"
     
+    # Define output path
+    output_path = base / "HPCOLD_ISLAMIC.txt"
+    print(f"Output will be saved to: {output_path}")
+    
     # Hardcode REPTDATE (current date - 1 day)
     reptdate = datetime.now().date() - timedelta(days=1)
     reptday = reptdate.day
@@ -37,8 +41,6 @@ def eiihptop():
     print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, RDATE: {rdate}")
     
     # HPD products - adjust based on actual Islamic product codes
-    # From the sample values seen in EIMHPTOP: [5.0, 15.0, 61.0, 70.0, 71.0, 200.0, 205.0, 210.0, 212.0, 216.0]
-    # Islamic products might have different codes - adjust as needed
     hpd_products = [5.0, 15.0, 61.0, 70.0, 71.0, 200.0, 205.0, 210.0, 212.0, 216.0]
     
     # 1. CIS INFO - Read SAS dataset
@@ -319,11 +321,12 @@ def eiihptop():
                               descending=[False, True, False, False])
     
     # 7. Generate Islamic bank report
-    generate_islamic_hp_report(hpacc1_df, rdate)
+    generate_islamic_hp_report(hpacc1_df, rdate, output_path)
     
     print(f"Processing complete. Top {len(hpacc1_df)} records identified.")
+    print(f"Report saved to: {output_path}")
 
-def generate_islamic_hp_report(df, rdate):
+def generate_islamic_hp_report(df, rdate, output_path):
     """Generate formatted report for Islamic bank"""
     if df.is_empty():
         print("No data to report")
@@ -332,7 +335,7 @@ def generate_islamic_hp_report(df, rdate):
     # Group by BRANCH for page breaks
     branches = df["BRANCH"].unique().to_list()
     
-    with open("HPCOLD_ISLAMIC.txt", 'w') as f:
+    with open(output_path, 'w') as f:
         page_num = 0
         
         for branch in branches:
@@ -345,7 +348,7 @@ def generate_islamic_hp_report(df, rdate):
             f.write(f"PUBLIC ISLAMIC BANK BERHAD{' ' * 58}{rdate}\n")
             f.write(f"{' ' * 90}PAGE NO : {page_num}\n")
             f.write(f"TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT {rdate}\n")
-            f.write(f"REPORT ID: EIIHPTOP\n")  # Islamic report ID
+            f.write(f"REPORT ID: EIIHPTOP\n")
             f.write(f"\n")
             
             # Format branch code
@@ -417,8 +420,6 @@ def generate_islamic_hp_report(df, rdate):
             
             # Page break
             f.write("\f\n")  # Form feed for new page
-    
-    print(f"Islamic bank report saved to HPCOLD_ISLAMIC.txt")
 
 if __name__ == "__main__":
     eiihptop()
