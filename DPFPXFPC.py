@@ -1,12 +1,14 @@
+updated code:
+
 import polars as pl
 import pyreadstat
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
 # ==================== SETUP ====================
-BASE_PATH = Path("/path/to/data")
-BNM_PATH = BASE_PATH / "bnm"
-OUTPUT_PATH = BASE_PATH / "output"
+BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/")
+BNM_PATH = BASE_PATH / "MNI"
+OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQSPEC"
 
 # ==================== FORMAT FUNCTIONS ====================
 def kremmth_format(value):
@@ -173,7 +175,7 @@ def calculate_remmth(row, reptdate_val):
 print("Processing FDMTHLY data...")
 
 # Read FDMTHLY from SAS file
-fdmthly_file = BNM_PATH / "FDMTHLY.sas7bdat"
+fdmthly_file = BNM_PATH / "fdmthly.sas7bdat"
 if not fdmthly_file.exists():
     print(f"FDMTHLY file not found at {fdmthly_file}")
     exit(1)
@@ -448,3 +450,33 @@ if len(almdept) > 0:
 print("\n" + "=" * 60)
 print("PROCESSING COMPLETE")
 print("=" * 60)
+
+error:
+
+
+Processing report date...
+Report Date: 13072026, Week: 4
+Processing FDMTHLY data...
+Read 2756145 records from FDMTHLY
+SAS metadata: 22 columns, 2756145 rows
+Calculating REMMTH...
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBQSPEC.py", line 194, in <module>
+    fdmthly = fdmthly.with_columns([
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
+    self.lazy()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
+    return wrap_df(ldf.collect(engine, callback))
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/functions/lazy.py", line 1088, in __call__
+    rv = self.function(slp, *args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/expr/expr.py", line 4655, in _wrap
+    return function(sl[0], *args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/expr/expr.py", line 4879, in wrap_f
+    return x.map_elements(
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/series/series.py", line 5838, in map_elements
+    self._s.map_elements(
+polars.exceptions.SchemaError: unexpected value while building Series of type Float64; found value of type Int64: -1
