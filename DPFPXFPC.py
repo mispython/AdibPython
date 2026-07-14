@@ -1,597 +1,332 @@
-//EIIDMELW JOB MISEIS,EIBDMELW,MSGCLASS=X,CLASS=A,REGION=8M,
-//         NOTIFY=&SYSUID,USER=OPCC
-/*JOBPARM S=S1M1
-//*
-//SAS609   EXEC SAS609,REGION=8M,WORK='120000,8000'
-//DPTRBL    DD DSN=RBP2.B033.DPTRBLGS,DISP=SHR
-//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR
-//SYSIN     DD *
+import polars as pl
+from datetime import datetime, date
+from pathlib import Path
 
-****************************************************
-* DAILY DEPOSIT EXTRACTION FOR BNM REPORTING       *
-* (EL COMPUTATION)                                 *
-****************************************************;
-OPTIONS YEARCUTOFF=1930 NOCENTER;
-%LET AGELIMIT = 12;
-%LET MAXAGE   = 18;
-%LET AGEBELOW = 11;
+# ==================== SETUP ====================
+BASE_PATH = Path("/path/to/data")
+DEP_PATH = BASE_PATH / "dep"
+BNM_PATH = BASE_PATH / "bnm"
+OUTPUT_PATH = BASE_PATH / "output"
 
-%INC PGM(PBBLNFMT);
-%INC PGM(PBBDPFMT);
+# ==================== FORMAT FUNCTIONS ====================
+def kremmth_format(value):
+    """Format remaining months to KREMMTH codes"""
+    if value < 0:
+        return '51'
+    elif 0 <= value < 1:
+        return '52'
+    elif 1 <= value < 2:
+        return '53'
+    elif 2 <= value < 3:
+        return '54'
+    elif 3 <= value < 4:
+        return '81'
+    elif 4 <= value < 5:
+        return '82'
+    elif 5 <= value < 6:
+        return '83'
+    elif 6 <= value < 7:
+        return '84'
+    elif 7 <= value < 8:
+        return '85'
+    elif 8 <= value < 9:
+        return '86'
+    elif 9 <= value < 10:
+        return '87'
+    elif 10 <= value < 11:
+        return '88'
+    elif 11 <= value < 12:
+        return '89'
+    else:
+        return '60'
 
-DATA REPTDATE;
-  INFILE DPTRBL LRECL=900 OBS=1;
-  INPUT @106 TBDATE PD6.;
-  REPTDATE=INPUT(SUBSTR(PUT(TBDATE, Z11.), 1, 8), MMDDYY8.);
-  SELECT;
-     WHEN(1 <= DAY(REPTDATE) <= 8) CALL SYMPUT('NOWK', PUT('1', $1.));
-     WHEN(9 <= DAY(REPTDATE) <= 15) CALL SYMPUT('NOWK', PUT('2', $1.));
-     WHEN(16 <= DAY(REPTDATE) <= 22) CALL SYMPUT('NOWK', PUT('3', $1.));
-     OTHERWISE CALL SYMPUT('NOWK', PUT('4', $1.));
-  END;
-  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));
-  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
-  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
-  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
-RUN;
+# ==================== DATE HELPER FUNCTIONS ====================
+def is_leap_year(year):
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
 
-LIBNAME BNM  "SAP.PIBB.D&REPTYEAR" DISP=OLD;
+def days_in_month(year, month):
+    if month == 2:
+        return 29 if is_leap_year(year) else 28
+    elif month in [4, 6, 9, 11]:
+        return 30
+    return 31
 
-PROC FORMAT;
- *----------------------------------------------------------
-     FORMAT APPLICABLE TO PDMD'S SUMMARY REPORT OF
-     DAILY DEMAND DEPOSIT MOVEMENT BY RANGE
- ----------------------------------------------------------;
-   INVALUE DDMOVE
-      LOW - < 300000  = 300000
-   300000 - < 500000  = 500000
-   500000 - <1000000  = 1000000
-  1000000 - <1500000  = 1500000
-  1500000 - <2000000  = 2000000
-  2000000 - <3000000  = 3000000
-  3000000 - <4000000  = 4000000
-  4000000 - <5000000  = 5000000
-  5000000 - <10000000 = 10000000
-  10000000 -  HIGH    = 10000001;
- *----------------------------------------------------------
-     FORMAT FOR PDMD'S DAILY SUMMARY REPORT ON DEPOSITS
-     MOVEMENT BY RANGE
- ----------------------------------------------------------;
-   INVALUE MVTDEP
-    LOW - 5000  = 5000
-   5000 - 10000 = 10000
-  10000 - 30000 = 30000
-  30000 - 50000 = 50000
-  50000 - 75000 = 75000
-  75000 - HIGH  = 80000;
+# ==================== REPTDATE PROCESSING ====================
+print("Processing report date...")
+reptdate_df = pl.read_parquet(DEP_PATH / "REPTDATE.parquet")
+reptdate_val = reptdate_df[0, "REPTDATE"]
 
-   INVALUE MVTACE
-    LOW - 5000  = 5000
-   5000 - 10000 = 10000
-  10000 - 30000 = 30000
-  30000 - 50000 = 50000
-  50000 - 75000 = 75000
- 75000 - 100000 = 100000
- 100000 - HIGH  = 200000;
-RUN;
+day_val = reptdate_val.day
+mm = reptdate_val.month
 
-DATA MELW1 (KEEP=INTP1-INTP999 MISC1-MISC999 SPTF1-SPTF999
-                 ODFIN1-ODFIN999 REPTDATE)
-     MELW12 (KEEP=SA1-SA999 SACAI1-SACAI999 CA1-CA999
-                 HDA1-HDA999 REPTDATE)
-     MELW13 (KEEP=ODCOM1-ODCOM999 ODIS1-ODIS999 ODMB1-ODMB999
-                 ODDH1-ODDH999 ODCAG1-ODCAG999 REPTDATE);
-  RETAIN REPTDATE;
-  ARRAY INTP{999};
-  ARRAY MISC{999};
-  ARRAY SPTF{999};
-  ARRAY ODFIN{999};
-  ARRAY SA{999};
-  ARRAY SACAI{999};
-  ARRAY CA{999};
-  ARRAY HDA{999};
-  ARRAY ODCOM{999};
-  ARRAY ODIS{999};
-  ARRAY ODMB{999};
-  ARRAY ODDH{999};
-  ARRAY ODCAG{999};
-  ARRAY SAI{999};
-  ARRAY MBS{999};
-  ARRAY CAI{999};
-  ARRAY CAIG{999};
-  ARRAY SNO{999};
-  ARRAY MBSNO{999};
-  ARRAY CNO{999};
-  ARRAY CGNO{999};
-  INFILE DPTRBL LRECL=900 END=LAST;
-  IF _N_=1 THEN DO;
-     INPUT @106 TBDATE PD6.;
-     REPTDATE=INPUT(SUBSTR(PUT(TBDATE, Z11.), 1, 8), MMDDYY8.);
-  END;
+# Determine week and start dates
+if day_val == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+elif day_val == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+elif day_val == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+else:
+    sdd, wk, wk1, wk2, wk3 = 23, '4', '3', '2', '1'
 
-  INPUT @3   BANKNO   PD2.
-        @24  REPTNO   PD3.
-        @27  FMTCODE  PD2. @;
+# Calculate previous months
+if wk == '1':
+    mm1 = mm - 1
+    if mm1 == 0:
+        mm1 = 12
+else:
+    mm1 = mm
 
-  IF BANKNO = 33 AND REPTNO = 1001 AND FMTCODE = 1 THEN DO;
-  INPUT @106 BRANCH PD4.
-        @110 ACCTNO PD6.
-        @116 NAME $15.
-        @143 DEBIT PD8.2
-        @151 CREDIT PD7.2
-        @158 CLOSEDT  PD6.
-        @164 OPENDT   PD6.
-        @176 CUSTCODE PD3.
-        @286 PURPOSE $1.
-        @338 OPENIND $1.
-        @399 RACE $1.
-        @397 PRODUCT PD2.
-        @431 DEPTYPE $1.
-        @432 INT1 PD6.2
-        @466 CURBAL PD7.2
-        @516 INT2 PD10.9
-        @566 APPRLIMT PD6.
-        @717 BDATE PD6.
-        @830 COSTCTR PD4.;
+mm2 = mm - 1
+if mm2 == 0:
+    mm2 = 12
 
-  INTPAYBL=SUM(INT1, INT2);
+sdate = date(reptdate_val.year, mm, sdd)
 
-  IF (3000<=COSTCTR<=3999);
+NOWK = wk
+NOWK1 = wk1
+NOWK2 = wk2 if 'wk2' in locals() else None
+NOWK3 = wk3 if 'wk3' in locals() else None
+REPTMON = f"{mm:02d}"
+REPTMON1 = f"{mm1:02d}"
+REPTMON2 = f"{mm2:02d}"
+REPTYEAR = str(reptdate_val.year)
+REPTDAY = f"{day_val:02d}"
+RDATE = reptdate_val.strftime("%d%m%Y")
+SDATE = sdate.strftime("%d%m%Y")
 
-  IF OPENIND NOT IN ('B','C','P') AND PRODUCT NOT IN (297,298) THEN DO;
-     DYDPBAL=CURBAL; /* TO REPORT AS ACE SAVINGS & CURRENT PORTION */
-     MOVEMENT=CREDIT-DEBIT;
-     IF PRODUCT IN &ACE THEN MVRANGE=INPUT(ABS(MOVEMENT), MVTACE.);
-     ELSE MVRANGE=INPUT(ABS(MOVEMENT), MVTDEP.);
+print(f"Report Date: {RDATE}, Week: {NOWK}")
 
-     ACCYTD = 0;
-     IF OPENDT NE 0  AND CLOSEDT EQ 0 THEN DO;
-     IF YEAR(INPUT(SUBSTR(PUT(OPENDT, Z11.),1, 8), MMDDYY8.)) EQ
-        YEAR(INPUT("&RDATE", DDMMYY8.)) THEN
-        ACCYTD = 1;
-     END;
+# ==================== REMMTH CALCULATION ====================
+def calculate_remmth(row, reptdate_val):
+    """Calculate remaining months"""
+    if row["OPENIND"] == "D":
+        return -1
+    
+    if row["OPENIND"] != "O":
+        return None
+    
+    # Parse maturity date
+    if not row["MATDATE"]:
+        return None
+    
+    try:
+        fddt = datetime.strptime(str(row["MATDATE"]).zfill(8), "%Y%m%d").date()
+    except:
+        return None
+    
+    # Get report date components
+    rpyr = reptdate_val.year
+    rpmth = reptdate_val.month
+    rpday = reptdate_val.day
+    
+    # Get maturity date components
+    fdyr = fddt.year
+    fdmth = fddt.month
+    fdday = fddt.day
+    
+    # Days in months
+    fd_days_in_month = days_in_month(fdyr, fdmth)
+    rp_days_in_month = days_in_month(rpyr, rpmth)
+    
+    # Adjust FDDAY if it equals days in FDMTH
+    if fdday == fd_days_in_month:
+        fdday = rp_days_in_month
+    
+    # Calculate differences
+    remy = fdyr - rpyr
+    remm = fdmth - rpmth
+    remd = fdday - rpday
+    
+    # Convert to months
+    return remy * 12 + remm + remd / rp_days_in_month
 
-  IF DEPTYPE='S' THEN DO;
-     PRODCD=PUT(PRODUCT, SAPROD.);
-     DPTYPE='S';
-     CUSTCD=PUT(CUSTCODE, SACUSTCD.);
-     IF CURBAL GE 0 THEN DO;
-       SELECT(PRODCD);
-         WHEN ('42120') DO;
-           TOTSAVG+CURBAL;
-           SA{BRANCH}+CURBAL;
-         END;
-         WHEN ('42320') DO;
-           TOTSAVGI+CURBAL;
-           SACAI{BRANCH}+CURBAL;
-           SAI{BRANCH}+CURBAL;
-           SNO{BRANCH}+1;
-           IF PRODUCT = 214 THEN DO;
-              TOTMBSA+CURBAL;
-              MBS{BRANCH}+CURBAL;
-              MBSNO{BRANCH}+1;
-           END;
-         END;
-         OTHERWISE;
-       END;
-  /*   OUTPUT TEMP.DYDP; */
-     END;
-     ELSE IF PRODCD = '42320' THEN DO;
-       SAI{BRANCH}+CURBAL;
-       SNO{BRANCH}+1;
-       IF PRODUCT = 214 THEN DO;
-          TOTMBSA+CURBAL;
-          MBS{BRANCH}+CURBAL;
-          MBSNO{BRANCH}+1;
-       END;
-     END;
-  END;
-  IF DEPTYPE IN ('D','N') THEN DO;
-     DPTYPE='D';
-     IF CURBAL GE 0 THEN DO;
-        PRODCD=PUT(PRODUCT, CAPROD.);
-        SELECT(PRODUCT);
-          WHEN(104) DO;
-            TOTVOSC+CURBAL;
-            CUSTCD='02';
-          END;
-          WHEN(105) DO;
-            TOTVOSF+CURBAL;
-            CUSTCD='81';
-          END;
-          OTHERWISE CUSTCD=PUT(CUSTCODE, DDCUSTCD.);
-        END;
-        SELECT(PRODCD);
-          WHEN ('42110') DO;
-             IF PRODUCT IN &ACE AND
-                (CURBAL > 5000) THEN DO;
-                SABAL = CURBAL - 5000;
-                ACESA+SABAL;
-                DYDPBAL = SABAL; DPTYPE='S';
-      /*        OUTPUT TEMP.DYDP;  */
-                CABAL = 5000;
-                DYDPBAL = CABAL; DPTYPE='D';
-      /*        OUTPUT TEMP.DYDP;  */
-                TOTSAVG+SABAL;
-                SA{BRANCH}+SABAL;
-                TOTDMND+CABAL;
-                ACECA+CABAL;
-                CA{BRANCH}+CABAL;
-             END;
-             ELSE DO;
-                IF PRODUCT IN &ACE THEN ACECA+CURBAL;
-                TOTDMND+CURBAL;
-                CA{BRANCH}+CURBAL;
-      /*        OUTPUT TEMP.DYDP;  */
-             END;
-          END;
-          WHEN ('42180') DO;
-            TOTDMND+CURBAL;
-            HDA{BRANCH}+CURBAL;
-      /*    OUTPUT TEMP.DYDP;  */
-          END;
-          WHEN ('42310') DO;
-            TOTDMNDI+CURBAL;
-            SACAI{BRANCH}+CURBAL;
-            CAI{BRANCH}+CURBAL;
-            CNO{BRANCH}+1;
-      /*    OUTPUT TEMP.DYDP;  */
-            IF PRODUCT = 161 THEN DO;
-               CAIG{BRANCH}+CURBAL;
-               CGNO{BRANCH}+1;
-            END;
-          END;
-          OTHERWISE;
-        END;
-     END;
-     ELSE DO;
-        PRODCD=PUT(PRODUCT, CAPROD.);
-        IF PRODCD = '42310' THEN DO;
-           CAI{BRANCH}+CURBAL;
-           CNO{BRANCH}+1;
-           IF PRODUCT = 161 THEN DO;
-              CAIG{BRANCH}+CURBAL;
-              CGNO{BRANCH}+1;
-           END;
-        END;
+# ==================== PROCESS FDMTHLY DATA ====================
+print("Processing FDMTHLY data...")
+fdmthly = pl.read_parquet(BNM_PATH / "FDMTHLY.parquet")
 
-        CURBAL=(-1)*CURBAL;
-        PRODCD=PUT(PRODUCT, ODPROD.);
-        SELECT(PRODUCT);
-          WHEN(104) DO;
-            OVDVOSC+CURBAL;
-            CUSTCD='02';
-          END;
-          WHEN(105) DO;
-            OVDVOSF+CURBAL;
-            CUSTCD='81';
-          END;
-          OTHERWISE CUSTCD=PUT(CUSTCODE, ODCUSTCD.);
-        END;
-        IF PRODCD='34240' THEN PRODCD = '34180';
-        IF PRODCD IN ('34180','34380') THEN TOTOVFT+CURBAL;
-     END;
-  END;
+# Filter open accounts
+fdmthly = fdmthly.filter(pl.col("OPENIND").is_in(["O", "D"]))
 
-  IF DEPTYPE IN ('C') THEN DO;
-     IF PRODUCT IN (318) THEN DELETE;
-     PRODCD=PUT(PRODUCT, FDPRODD.);
-     CUSTCD=PUT(CUSTCODE, FDCUSTCD.);
-     SELECT(PRODCD);
-        WHEN ('42130') TOTFD+CURBAL;
-        WHEN ('42132') TOTFDI+CURBAL;
-        OTHERWISE;
-     END;
-  END;
-  ELSE IF DEPTYPE IN ('S') THEN DO;
-     /* WEEKLY & MONTHEND PROCESSING FOR SDRNGE DATASET */
-     /* MAINLY FOR PDMD'S WISE PROFILE REPORT & OTHERS  */
-     MTHEND='N';
-     IF DAY(TODAY()) = 1 THEN MTHEND='Y';  /* MONTHEND CHECK */
-     IF ("&REPTDAY" IN ('08','15','22') OR MTHEND='Y') AND
-           CURBAL GE 0 THEN DO;
-        /****************************************************/
-        /** APPLY THE FORMAT                         **/
-        /****************************************************/
-        RACE=PUT(RACE, $RACE.);
-        RANGE=INPUT(CURBAL, SDRANGE.);
-        /******************************************/
-        /* CALCULATION OF AGE RANGE         */
-        /******************************************/
-        AGE = 0;
-        IF (BDATE NE 0) AND (BDATE NE .) THEN DO;
-           BDATE =INPUT(SUBSTR(PUT(BDATE, Z11.),1, 8), MMDDYY8.);
-           BDAY =DAY(BDATE);
-           BMONTH =MONTH(BDATE);
-           BYEAR =YEAR(BDATE);
+# Calculate REMMTH for each row
+fdmthly = fdmthly.with_columns([
+    pl.struct(["OPENIND", "MATDATE"]).apply(
+        lambda x: calculate_remmth(x, reptdate_val)
+    ).alias("REMMTH")
+])
 
-           AGE=(&REPTYEAR - BYEAR);
-           SELECT;
-              WHEN (AGE = &AGELIMIT) DO;
-                 IF (BMONTH = &REPTMON) AND
-                    (BDAY > &REPTDAY) THEN AGE=&AGEBELOW;
-                 ELSE IF BMONTH > &REPTMON THEN AGE=&AGEBELOW;
-              END;
-              WHEN (AGE = &MAXAGE) DO;
-                 IF (BMONTH = &REPTMON) AND
-                    (BDAY > &REPTDAY) THEN AGE=&AGELIMIT;
-                 ELSE IF BMONTH > &REPTMON THEN AGE=&AGELIMIT;
-              END;
-              WHEN (AGE > &MAXAGE) AGE = &MAXAGE;
-              WHEN (AGE < &AGELIMIT) AGE = &AGEBELOW;
-              OTHERWISE AGE = &AGELIMIT;
-           END;
-        END;
-        END;
-   /*   OUTPUT TEMP.SAVG;  */
-  END;
+# Select required columns
+alm = fdmthly.select(["BIC", "CUSTCODE", "REMMTH", "CURBAL"])
 
-  IF CUSTCD IN ('80','81','82','83','84','85','86','87','88','89',
-                '90','91','92','93','94','95','96','97','98','99')
-                AND DEPTYPE IN ('S','D','N','C') THEN DO;
-    SELECT(PRODCD);
-      WHEN('42110','42120','42130','42310','42320','42133')
-                    INTP{BRANCH}+INTPAYBL;
-      WHEN('42132') SPTF{BRANCH}+INTPAYBL;
-      OTHERWISE MISC{BRANCH}+INTPAYBL;
-    END;
-  END;
-  SELECT;
-    WHEN (PRODCD = '34180' AND CUSTCD = '02') ODCOM{BRANCH}+CURBAL;
-    WHEN (PRODCD = '34180' AND CUSTCD = '03') ODIS{BRANCH}+CURBAL;
-    WHEN (PRODCD = '34180' AND CUSTCD = '11') ODFIN{BRANCH}+CURBAL;
-    WHEN (PRODCD = '34180' AND CUSTCD = '12') ODMB{BRANCH}+CURBAL;
-    WHEN (PRODCD = '34180' AND CUSTCD = '13') ODDH{BRANCH}+CURBAL;
-    WHEN (PRODCD = '34180' AND CUSTCD = '17') ODCAG{BRANCH}+CURBAL;
-    OTHERWISE;
-  END;
-  END;
-  END;
-  IF LAST THEN OUTPUT MELW1 MELW12 MELW13;
-RUN;
+# ==================== SUMMARIZE DATA ====================
+print("Summarizing data...")
+alm_summary = alm.group_by(["BIC", "CUSTCODE", "REMMTH"]).agg([
+    pl.col("CURBAL").sum().alias("AMOUNT")
+])
 
-DATA MELW2  (KEEP=REPTDATE BRANCH ELDAY BNMCODE AMOUNT);
-  SET MELW1;
-  ARRAY INTP{999} INTP1-INTP999;
-  ARRAY MISC{999} MISC1-MISC999;
-  ARRAY SPTF{999} SPTF1-SPTF999;
-  ARRAY ODFIN{999} ODFIN1-ODFIN999;
-  SELECT("&NOWK");
-    WHEN('1') DO;
-      IF DAY(REPTDATE)=1 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=2 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=3 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=4 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=5 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=6 THEN ELDAY='DAYF';
-      IF DAY(REPTDATE)=7 THEN ELDAY='DAYG';
-      IF DAY(REPTDATE)=8 THEN ELDAY='DAYI';
-    END;
-    WHEN('2') DO;
-      IF DAY(REPTDATE)=9 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=10 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=11 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=12 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=13 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=14 THEN ELDAY='DAYF';
-      IF DAY(REPTDATE)=15 THEN ELDAY='DAYI';
-    END;
-    WHEN('3') DO;
-      IF DAY(REPTDATE)=16 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=17 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=18 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=19 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=20 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=21 THEN ELDAY='DAYF';
-      IF DAY(REPTDATE)=22 THEN ELDAY='DAYI';
-    END;
-    WHEN('4') DO;
-      IF DAY(REPTDATE)=23 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=24 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=25 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=26 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=27 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=28 THEN DO;
-         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
-         ELSE ELDAY='DAYF';
-      END;
-      IF DAY(REPTDATE)=29 THEN DO;
-         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
-         ELSE ELDAY='DAYG';
-      END;
-      IF DAY(REPTDATE)=30 THEN DO;
-         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
-         ELSE ELDAY='DAYH';
-      END;
-      IF DAY(REPTDATE)=31 THEN ELDAY='DAYI';
-    END;
-    OTHERWISE;
-  END;
-IF ELDAY NE ' ';
-  DO I=1 TO 999;
-    BRANCH=I;
-    BNMCODE='3410011000000Y'; AMOUNT=ODFIN{I};
-    IF AMOUNT NE . THEN OUTPUT MELW2;
-    BNMCODE='4911080000000Y'; AMOUNT=INTP{I};
-    IF AMOUNT NE . THEN OUTPUT MELW2;
-    BNMCODE='4929980000000D'; AMOUNT=MISC{I};
-    IF AMOUNT NE . THEN OUTPUT MELW2;
-    BRANCH=SUM(I,3000);
-    BNMCODE='4929980000000Y'; AMOUNT=SPTF{I};
-    IF AMOUNT NE . THEN OUTPUT MELW2;
-  END;
-RUN;
+# ==================== CREATE ALMDEPT DATASET ====================
+print("Creating BNM codes...")
+almdept = alm_summary.with_columns([
+    pl.col("REMMTH").map_elements(kremmth_format, return_dtype=pl.Utf8).alias("RM")
+]).with_columns([
+    pl.when(pl.col("CUSTCODE").is_in(["81", "82", "83", "84"]))
+    .then(pl.concat_str([pl.col("BIC"), pl.col("CUSTCODE"), pl.col("RM"), pl.lit("0000Y")], separator=""))
+    .when(pl.col("CUSTCODE").is_in(["85", "86", "90", "91", "92", "95", "96", "98", "99"]))
+    .then(pl.concat_str([pl.col("BIC"), pl.lit("85"), pl.col("RM"), pl.lit("0000Y")], separator=""))
+    .otherwise(None)
+    .alias("BNMCODE")
+]).filter(pl.col("BNMCODE").is_not_null()).select(["BNMCODE", "AMOUNT", "CUSTCODE", "REMMTH"])
 
-PROC DATASETS LIB=WORK NOLIST; DELETE MELW1; RUN;
+# ==================== GENERATE REPORTS ====================
+def generate_report(data, bic_prefix, title, report_type="special"):
+    """Generate formatted report for specific BIC prefix"""
+    report_data = data.filter(pl.col("BNMCODE").str.starts_with(bic_prefix))
+    
+    if len(report_data) == 0:
+        print(f"No data for {bic_prefix}")
+        return None
+    
+    # Summarize by BNMCODE
+    summary = report_data.group_by("BNMCODE").agg([
+        pl.col("AMOUNT").sum().alias("AMOUNT")
+    ]).sort("BNMCODE")
+    
+    total_amount = summary["AMOUNT"].sum()
+    
+    # Generate report file
+    if report_type == "special":
+        report_file = OUTPUT_PATH / f"SPECIAL_REPORT_{bic_prefix}_{RDATE}.txt"
+    else:
+        report_file = OUTPUT_PATH / f"FCY_FD_REPORT_{bic_prefix}_{RDATE}.txt"
+    
+    with open(report_file, 'w') as f:
+        if report_type == "special":
+            f.write(" " * 40 + "SPECIAL PURPOSE ITEMS (QUARTERLY): EXTERNAL LIABILITIES\n")
+            f.write(" " * 50 + f"AS AT {RDATE[:2]}/{RDATE[2:4]}/{RDATE[4:]}\n")
+            f.write(" " * 45 + f"{title}\n\n")
+        else:
+            f.write(" " * 40 + "REPORT ON EXTERNAL LIABILITIES FOR FCY FD FROM FNBE (85)\n")
+            f.write(" " * 50 + f"AS AT {RDATE[:2]}/{RDATE[2:4]}/{RDATE[4:]}\n\n")
+        
+        f.write("=" * 80 + "\n")
+        f.write(f"{'BNMCODE':<20} {'AMOUNT':>20}\n")
+        f.write("-" * 80 + "\n")
+        
+        for row in summary.iter_rows(named=True):
+            f.write(f"{row['BNMCODE']:<20} {row['AMOUNT']:>20,.2f}\n")
+        
+        f.write("-" * 80 + "\n")
+        f.write(f"{'TOTAL':<20} {total_amount:>20,.2f}\n")
+        f.write("=" * 80 + "\n")
+    
+    print(f"Report saved: {report_file}")
+    return summary, total_amount
 
-DATA MELW22 (KEEP=REPTDATE BRANCH ELDAY BNMCODE AMOUNT);
-  SET MELW12;
-  ARRAY SA{999}    SA1-SA999;
-  ARRAY SACAI{999} SACAI1-SACAI999;
-  ARRAY CA{999}    CA1-CA999;
-  ARRAY HDA{999}   HDA1-HDA999;
-  SELECT("&NOWK");
-    WHEN('1') DO;
-      IF DAY(REPTDATE)=1 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=2 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=3 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=4 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=5 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=6 THEN ELDAY='DAYF';
-      IF DAY(REPTDATE)=7 THEN ELDAY='DAYG';
-      IF DAY(REPTDATE)=8 THEN ELDAY='DAYI';
-    END;
-    WHEN('2') DO;
-      IF DAY(REPTDATE)=9 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=10 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=11 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=12 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=13 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=14 THEN ELDAY='DAYF';
-      IF DAY(REPTDATE)=15 THEN ELDAY='DAYI';
-    END;
-    WHEN('3') DO;
-      IF DAY(REPTDATE)=16 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=17 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=18 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=19 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=20 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=21 THEN ELDAY='DAYF';
-      IF DAY(REPTDATE)=22 THEN ELDAY='DAYI';
-    END;
-    WHEN('4') DO;
-      IF DAY(REPTDATE)=23 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=24 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=25 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=26 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=27 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=28 THEN DO;
-         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
-         ELSE ELDAY='DAYF';
-      END;
-      IF DAY(REPTDATE)=29 THEN DO;
-         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
-         ELSE ELDAY='DAYG';
-      END;
-      IF DAY(REPTDATE)=30 THEN DO;
-         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
-         ELSE ELDAY='DAYH';
-      END;
-      IF DAY(REPTDATE)=31 THEN ELDAY='DAYI';
-    END;
-    OTHERWISE;
-  END;
-IF ELDAY NE ' ';
-  DO I=1 TO 999;
-    BRANCH=I;
-    BNMCODE='4212000000000Y'; AMOUNT=SA{I};
-    IF AMOUNT NE . THEN OUTPUT;
-    BNMCODE='4230000000000Y'; AMOUNT=SACAI{I};
-    IF AMOUNT NE . THEN OUTPUT;
-    BNMCODE='4211000000000Y'; AMOUNT=CA{I};
-    IF AMOUNT NE . THEN OUTPUT;
-    BNMCODE='4218000000000Y'; AMOUNT=HDA{I};
-    IF AMOUNT NE . THEN OUTPUT;
-  END;
-RUN;
+# Generate reports for different BIC prefixes
+print("\nGenerating reports...")
 
-PROC APPEND DATA=MELW22 BASE=MELW2; RUN;
-PROC DATASETS LIB=WORK NOLIST; DELETE MELW12 MELW22; RUN;
+# Report for 42130
+print("Generating report for 42130...")
+report_42130, total_42130 = generate_report(
+    almdept, "42130", 
+    "CODE 81 & 85 FOR 42130-80-XX-0000Y", 
+    "special"
+)
 
-DATA MELW23 (KEEP=REPTDATE BRANCH ELDAY BNMCODE AMOUNT);
-  SET MELW13;
-  ARRAY ODCOM{999} ODCOM1-ODCOM999;
-  ARRAY ODIS{999}  ODIS1-ODIS999;
-  ARRAY ODMB{999}  ODMB1-ODMB999;
-  ARRAY ODDH{999}  ODDH1-ODDH999;
-  ARRAY ODCAG{999} ODCAG1-ODCAG999;
-  SELECT("&NOWK");
-    WHEN('1') DO;
-      IF DAY(REPTDATE)=1 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=2 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=3 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=4 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=5 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=6 THEN ELDAY='DAYF';
-      IF DAY(REPTDATE)=7 THEN ELDAY='DAYG';
-      IF DAY(REPTDATE)=8 THEN ELDAY='DAYI';
-    END;
-    WHEN('2') DO;
-      IF DAY(REPTDATE)=9 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=10 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=11 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=12 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=13 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=14 THEN ELDAY='DAYF';
-      IF DAY(REPTDATE)=15 THEN ELDAY='DAYI';
-    END;
-    WHEN('3') DO;
-      IF DAY(REPTDATE)=16 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=17 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=18 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=19 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=20 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=21 THEN ELDAY='DAYF';
-      IF DAY(REPTDATE)=22 THEN ELDAY='DAYI';
-    END;
-    WHEN('4') DO;
-      IF DAY(REPTDATE)=23 THEN ELDAY='DAYA';
-      IF DAY(REPTDATE)=24 THEN ELDAY='DAYB';
-      IF DAY(REPTDATE)=25 THEN ELDAY='DAYC';
-      IF DAY(REPTDATE)=26 THEN ELDAY='DAYD';
-      IF DAY(REPTDATE)=27 THEN ELDAY='DAYE';
-      IF DAY(REPTDATE)=28 THEN DO;
-         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
-         ELSE ELDAY='DAYF';
-      END;
-      IF DAY(REPTDATE)=29 THEN DO;
-         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
-         ELSE ELDAY='DAYG';
-      END;
-      IF DAY(REPTDATE)=30 THEN DO;
-         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
-         ELSE ELDAY='DAYH';
-      END;
-      IF DAY(REPTDATE)=31 THEN ELDAY='DAYI';
-    END;
-    OTHERWISE;
-  END;
-IF ELDAY NE ' ';
-  DO I=1 TO 999;
-    BRANCH=I;
-    BNMCODE='3410002000000Y'; AMOUNT=ODCOM{I};
-    IF AMOUNT NE . THEN OUTPUT;
-    BNMCODE='3410003000000Y'; AMOUNT=ODIS{I};
-    IF AMOUNT NE . THEN OUTPUT;
-    BNMCODE='3410012000000Y'; AMOUNT=ODMB{I};
-    IF AMOUNT NE . THEN OUTPUT;
-    BNMCODE='3410013000000Y'; AMOUNT=ODDH{I};
-    IF AMOUNT NE . THEN OUTPUT;
-    BNMCODE='3410017000000Y'; AMOUNT=ODCAG{I};
-    IF AMOUNT NE . THEN OUTPUT;
-  END;
-RUN;
+# Report for 42132
+print("Generating report for 42132...")
+report_42132, total_42132 = generate_report(
+    almdept, "42132", 
+    "CODE 81 & 85 FOR 42132-80-XX-0000Y", 
+    "special"
+)
 
-PROC APPEND DATA=MELW23 BASE=MELW2; RUN;
-PROC DATASETS LIB=WORK NOLIST; DELETE MELW13 MELW23; RUN;
-*;
-%MACRO APPEND;
-%IF "&REPTDAY" EQ "01" OR
-    "&REPTDAY" EQ "09" OR
-    "&REPTDAY" EQ "16" OR
-    "&REPTDAY" EQ "23" %THEN
-    %DO;
-      PROC DATASETS LIB=BNM NOLIST;
-        DELETE MELW&REPTMON&NOWK;
-      PROC APPEND DATA=MELW2 BASE=BNM.MELW&REPTMON&NOWK; RUN;
-    %END;
-%ELSE %DO;
-      DATA BNM.MELW&REPTMON&NOWK;
-        SET BNM.MELW&REPTMON&NOWK;
-        IF REPTDATE EQ INPUT("&RDATE", DDMMYY8.) THEN DELETE;
-      PROC APPEND DATA=MELW2 BASE=BNM.MELW&REPTMON&NOWK; RUN;
-%END;
-%MEND APPEND;
-%APPEND;
-*;
-//
+# Report for 42630 (FCY FD)
+print("Generating FCY FD report for 42630...")
+report_42630, total_42630 = generate_report(
+    almdept, "42630", 
+    "", 
+    "fcy"
+)
+
+# ==================== SAVE PROCESSED DATA ====================
+print("\nSaving processed data...")
+alm.write_parquet(OUTPUT_PATH / f"ALM_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
+alm_summary.write_parquet(OUTPUT_PATH / f"ALM_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
+almdept.write_parquet(OUTPUT_PATH / f"ALMDEPT_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
+
+# ==================== SUMMARY STATISTICS ====================
+print("\n" + "=" * 60)
+print("PROCESSING SUMMARY")
+print("=" * 60)
+print(f"Report Date: {reptdate_val.strftime('%d/%m/%Y')}")
+print(f"Week: {NOWK}, Month: {REPTMON}, Year: {REPTYEAR}")
+print(f"Total FDMTHLY records processed: {len(fdmthly):,}")
+print(f"Total ALM records: {len(alm):,}")
+print(f"Total ALMDEPT records: {len(almdept):,}")
+
+if len(almdept) > 0:
+    print("\nAMOUNT SUMMARY BY BIC PREFIX:")
+    print("-" * 40)
+    
+    prefixes = ["42130", "42132", "42630"]
+    totals = {}
+    
+    for prefix in prefixes:
+        total = almdept.filter(pl.col("BNMCODE").str.starts_with(prefix))["AMOUNT"].sum()
+        totals[prefix] = total
+        print(f"  {prefix}: {total:>20,.2f}")
+    
+    grand_total = almdept["AMOUNT"].sum()
+    print("-" * 40)
+    print(f"  GRAND TOTAL: {grand_total:>20,.2f}")
+    
+    # Distribution by CUSTCODE category
+    print("\nDISTRIBUTION BY CUSTOMER CODE CATEGORY:")
+    print("-" * 40)
+    
+    category_81_84 = almdept.filter(pl.col("CUSTCODE").is_in(["81", "82", "83", "84"]))["AMOUNT"].sum()
+    category_85_plus = almdept.filter(pl.col("CUSTCODE").is_in(["85", "86", "90", "91", "92", "95", "96", "98", "99"]))["AMOUNT"].sum()
+    
+    print(f"  Codes 81-84: {category_81_84:>20,.2f}")
+    print(f"  Codes 85+  : {category_85_plus:>20,.2f}")
+    
+    # REMMTH distribution
+    print("\nDISTRIBUTION BY MATURITY BUCKET:")
+    print("-" * 40)
+    
+    # Apply KREMMTH format to group
+    almdept_with_rm = almdept.with_columns([
+        pl.col("REMMTH").map_elements(kremmth_format, return_dtype=pl.Utf8).alias("RM_CODE")
+    ])
+    
+    rm_distribution = almdept_with_rm.group_by("RM_CODE").agg([
+        pl.col("AMOUNT").sum().alias("TOTAL")
+    ]).sort("RM_CODE")
+    
+    for row in rm_distribution.iter_rows(named=True):
+        rm_desc = {
+            '51': 'NEGATIVE',
+            '52': '0-1 MONTH',
+            '53': '1-2 MONTHS',
+            '54': '2-3 MONTHS',
+            '81': '3-4 MONTHS',
+            '82': '4-5 MONTHS',
+            '83': '5-6 MONTHS',
+            '84': '6-7 MONTHS',
+            '85': '7-8 MONTHS',
+            '86': '8-9 MONTHS',
+            '87': '9-10 MONTHS',
+            '88': '10-11 MONTHS',
+            '89': '11-12 MONTHS',
+            '60': '>12 MONTHS'
+        }.get(row['RM_CODE'], row['RM_CODE'])
+        
+        print(f"  {rm_desc:<15} {row['TOTAL']:>20,.2f}")
+
+print("\n" + "=" * 60)
+print("PROCESSING COMPLETE")
+print("=" * 60)
+
+
+no need input for the reptdate, just hardcode using datetime timedelta - 1. input for fdmthly is in sas dataset sas7bdat. output in text file. include the sas file PBBDPFMT
