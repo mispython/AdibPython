@@ -148,10 +148,11 @@ fd_df = fd_df.with_columns([
     .alias("REMMTH")
 ])
 
-# Map product code
+# Map product code to BIC - FIXED: Map 470-475 range to "42630"
 def map_bic(intplan):
     """Map INTPLAN to BIC - simplified version of FDPROD format"""
-    if intplan == 42630:
+    # Foreign currency FDs (INTPLAN range 470-475)
+    if 470 <= intplan <= 475:
         return "42630"
     # Add more mappings as needed
     return str(intplan)
@@ -189,7 +190,7 @@ fd1 = fd_df.select([
 # ==================== TABULATE REPORT ====================
 print("Generating tabulate report...")
 
-# Filter for BIC = 42630
+# Filter for BIC = 42630 (foreign currency)
 filtered_fd1 = fd1.filter(pl.col("BIC") == "42630")
 
 if len(filtered_fd1) > 0:
@@ -315,24 +316,3 @@ if len(filtered_fd1) > 0:
         print(f"  {row['REMMTH_FMT']}: {row['TOTAL']:>15,.2f} ({percentage:.1f}%)")
 
 print("\nProcessing complete!")
-
-
-
-
-Processing report date...
-Report Date: 13072026, Week: 4, Month: 07, Year: 2026
-Processing Fixed Deposits...
-Loaded 2845331 records from SAS file
-After filtering: 2680347 records
-Generating tabulate report...
-No foreign FD data found (BIC=42630)
-
-============================================================
-LIQUIDITY PROFILE SUMMARY
-============================================================
-Report Date: 13/07/2026
-Week: 4, Month: 07, Year: 2026
-Total FD records: 2,680,347
-Foreign FD records: 0
-
-Processing complete!
