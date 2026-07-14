@@ -1,10 +1,10 @@
 import polars as pl
-from datetime import datetime, date
+import pyreadstat
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 # ==================== SETUP ====================
 BASE_PATH = Path("/path/to/data")
-DEP_PATH = BASE_PATH / "dep"
 BNM_PATH = BASE_PATH / "bnm"
 OUTPUT_PATH = BASE_PATH / "output"
 
@@ -51,10 +51,23 @@ def days_in_month(year, month):
         return 30
     return 31
 
+# ==================== READ SAS FUNCTION ====================
+def read_sas_file(filepath):
+    """Read SAS7BDAT file using pyreadstat and return as Polars DataFrame"""
+    try:
+        # Read SAS file using pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        # Convert to Polars DataFrame
+        return pl.from_pandas(df), meta
+    except Exception as e:
+        print(f"Error reading SAS file {filepath}: {e}")
+        return None, None
+
 # ==================== REPTDATE PROCESSING ====================
 print("Processing report date...")
-reptdate_df = pl.read_parquet(DEP_PATH / "REPTDATE.parquet")
-reptdate_val = reptdate_df[0, "REPTDATE"]
+
+# Hardcode report date as yesterday
+reptdate_val = date.today() - timedelta(days=1)
 
 day_val = reptdate_val.day
 mm = reptdate_val.month
@@ -111,8 +124,23 @@ def calculate_remmth(row, reptdate_val):
         return None
     
     try:
-        fddt = datetime.strptime(str(row["MATDATE"]).zfill(8), "%Y%m%d").date()
-    except:
+        # Handle different date formats
+        matdate_val = row["MATDATE"]
+        if isinstance(matdate_val, (int, float)):
+            # If it's a numeric SAS date, convert it
+            try:
+                # SAS date is days since 1960-01-01
+                fddt = date(1960, 1, 1) + timedelta(days=int(matdate_val))
+            except:
+                # Try string format
+                fddt = datetime.strptime(str(int(matdate_val)).zfill(8), "%Y%m%d").date()
+        elif isinstance(matdate_val, (date, datetime)):
+            fddt = matdate_val
+        else:
+            # Try string format
+            fddt = datetime.strptime(str(matdate_val).zfill(8), "%Y%m%d").date()
+    except Exception as e:
+        print(f"Error parsing MATDATE {row['MATDATE']}: {e}")
         return None
     
     # Get report date components
@@ -143,15 +171,30 @@ def calculate_remmth(row, reptdate_val):
 
 # ==================== PROCESS FDMTHLY DATA ====================
 print("Processing FDMTHLY data...")
-fdmthly = pl.read_parquet(BNM_PATH / "FDMTHLY.parquet")
+
+# Read FDMTHLY from SAS file
+fdmthly_file = BNM_PATH / "FDMTHLY.sas7bdat"
+if not fdmthly_file.exists():
+    print(f"FDMTHLY file not found at {fdmthly_file}")
+    exit(1)
+
+fdmthly, meta_fdmthly = read_sas_file(fdmthly_file)
+if fdmthly is None:
+    print("Failed to read FDMTHLY data")
+    exit(1)
+
+print(f"Read {len(fdmthly)} records from FDMTHLY")
+print(f"SAS metadata: {meta_fdmthly.number_columns} columns, {meta_fdmthly.number_rows} rows")
 
 # Filter open accounts
 fdmthly = fdmthly.filter(pl.col("OPENIND").is_in(["O", "D"]))
 
-# Calculate REMMTH for each row
+# Calculate REMMTH for each row using vectorized approach
+print("Calculating REMMTH...")
 fdmthly = fdmthly.with_columns([
-    pl.struct(["OPENIND", "MATDATE"]).apply(
-        lambda x: calculate_remmth(x, reptdate_val)
+    pl.struct(["OPENIND", "MATDATE"]).map_elements(
+        lambda x: calculate_remmth(x, reptdate_val),
+        return_dtype=pl.Float64
     ).alias("REMMTH")
 ])
 
@@ -176,6 +219,53 @@ almdept = alm_summary.with_columns([
     .otherwise(None)
     .alias("BNMCODE")
 ]).filter(pl.col("BNMCODE").is_not_null()).select(["BNMCODE", "AMOUNT", "CUSTCODE", "REMMTH"])
+
+# ==================== PROCESS PBBDPFMT DATA ====================
+print("\nProcessing PBBDPFMT data...")
+
+# Read PBBDPFMT SAS file
+pbbdpfmt_file = BNM_PATH / "PBBDPFMT.sas7bdat"
+if pbbdpfmt_file.exists():
+    pbbdpfmt, meta_pbbdpfmt = read_sas_file(pbbdpfmt_file)
+    if pbbdpfmt is not None:
+        print(f"Read {len(pbbdpfmt)} records from PBBDPFMT")
+        print(f"SAS metadata: {meta_pbbdpfmt.number_columns} columns, {meta_pbbdpfmt.number_rows} rows")
+        
+        # Check columns before filtering
+        print(f"PBBDPFMT columns: {pbbdpfmt.columns}")
+        
+        # Filter for specific BIC prefixes if BIC column exists
+        if "BIC" in pbbdpfmt.columns:
+            pbbdpfmt_filtered = pbbdpfmt.filter(
+                pl.col("BIC").str.starts_with("42130") | 
+                pl.col("BIC").str.starts_with("42132") |
+                pl.col("BIC").str.starts_with("42630")
+            )
+            
+            # Process PBBDPFMT data
+            if "AMOUNT" in pbbdpfmt_filtered.columns and "CUSTCODE" in pbbdpfmt_filtered.columns:
+                pbbdpfmt_summary = pbbdpfmt_filtered.group_by("BIC").agg([
+                    pl.col("AMOUNT").sum().alias("TOTAL_AMOUNT"),
+                    pl.col("CUSTCODE").first().alias("CUSTCODE")
+                ])
+                
+                print(f"Processed {len(pbbdpfmt_filtered)} PBBDPFMT records")
+                
+                # Save PBBDPFMT summary
+                pbbdpfmt_summary.write_parquet(OUTPUT_PATH / f"PBBDPFMT_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
+                print(f"PBBDPFMT summary saved to parquet")
+                
+                # Also save as text for easy viewing
+                pbbdpfmt_summary.write_csv(OUTPUT_PATH / f"PBBDPFMT_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
+                print(f"PBBDPFMT summary saved to CSV")
+            else:
+                print("Required columns (AMOUNT, CUSTCODE) not found in PBBDPFMT")
+                print(f"Available columns: {pbbdpfmt.columns}")
+        else:
+            print("BIC column not found in PBBDPFMT")
+            print(f"Available columns: {pbbdpfmt.columns}")
+else:
+    print("PBBDPFMT file not found, continuing without it")
 
 # ==================== GENERATE REPORTS ====================
 def generate_report(data, bic_prefix, title, report_type="special"):
@@ -255,6 +345,37 @@ alm.write_parquet(OUTPUT_PATH / f"ALM_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
 alm_summary.write_parquet(OUTPUT_PATH / f"ALM_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
 almdept.write_parquet(OUTPUT_PATH / f"ALMDEPT_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
 
+# Save as CSV for easy viewing
+alm.write_csv(OUTPUT_PATH / f"ALM_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
+alm_summary.write_csv(OUTPUT_PATH / f"ALM_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
+almdept.write_csv(OUTPUT_PATH / f"ALMDEPT_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
+
+# Save text summary
+with open(OUTPUT_PATH / f"PROCESSING_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.txt", 'w') as f:
+    f.write("=" * 60 + "\n")
+    f.write("PROCESSING SUMMARY\n")
+    f.write("=" * 60 + "\n")
+    f.write(f"Report Date: {reptdate_val.strftime('%d/%m/%Y')}\n")
+    f.write(f"Week: {NOWK}, Month: {REPTMON}, Year: {REPTYEAR}\n")
+    f.write(f"Total FDMTHLY records processed: {len(fdmthly):,}\n")
+    f.write(f"Total ALM records: {len(alm):,}\n")
+    f.write(f"Total ALMDEPT records: {len(almdept):,}\n")
+    
+    if len(almdept) > 0:
+        f.write("\nAMOUNT SUMMARY BY BIC PREFIX:\n")
+        f.write("-" * 40 + "\n")
+        
+        prefixes = ["42130", "42132", "42630"]
+        for prefix in prefixes:
+            total = almdept.filter(pl.col("BNMCODE").str.starts_with(prefix))["AMOUNT"].sum()
+            f.write(f"  {prefix}: {total:>20,.2f}\n")
+        
+        grand_total = almdept["AMOUNT"].sum()
+        f.write("-" * 40 + "\n")
+        f.write(f"  GRAND TOTAL: {grand_total:>20,.2f}\n")
+
+print("\nAll files saved successfully!")
+
 # ==================== SUMMARY STATISTICS ====================
 print("\n" + "=" * 60)
 print("PROCESSING SUMMARY")
@@ -327,6 +448,3 @@ if len(almdept) > 0:
 print("\n" + "=" * 60)
 print("PROCESSING COMPLETE")
 print("=" * 60)
-
-
-no need input for the reptdate, just hardcode using datetime timedelta - 1. input for fdmthly is in sas dataset sas7bdat. output in text file. include the sas file PBBDPFMT
