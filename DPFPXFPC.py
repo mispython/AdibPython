@@ -1,660 +1,1061 @@
-#!/usr/bin/env python3
-"""
-Program Name: EIBAABBA.py
-"""
-
-import polars as pl
-import pyreadstat
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Optional
-
-# ---------------------------------------------------------------------------
-# Configuration - Define input and output paths at the beginning
-# ---------------------------------------------------------------------------
-BASE_PATH = Path.cwd()
-INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/"
-OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBAABBA/ABBALST.txt"
-
-# For testing - set to None for full production run
-TEST_LIMIT = 1000  # Set to None to disable limit
-
-SAS_BASE_DATE = datetime(1960, 1, 1)
-
-COLLATER_GROUPS = {
-    "29": {"001", "006", "007", "014", "016", "024", "025", "026", "046", "048", "049"},
-    "70": {
-        "000",
-        "011",
-        "012",
-        "013",
-        "017",
-        "018",
-        "019",
-        "021",
-        "027",
-        "028",
-        "029",
-        "030",
-        "031",
-        "105",
-        "106",
-    },
-    "90": {
-        "002",
-        "003",
-        "041",
-        "042",
-        "043",
-        "058",
-        "059",
-        "067",
-        "068",
-        "069",
-        "070",
-        "071",
-        "072",
-        "078",
-        "079",
-        "084",
-        "107",
-    },
-    "30": {"004", "005"},
-    "10": {
-        "032",
-        "033",
-        "034",
-        "035",
-        "036",
-        "037",
-        "038",
-        "039",
-        "040",
-        "044",
-        "050",
-        "051",
-        "052",
-        "053",
-        "054",
-        "055",
-        "056",
-        "057",
-        "060",
-        "061",
-        "062",
-    },
-    "40": {"065", "066", "075", "076", "082", "083", "093", "094", "095", "096", "097", "098", "101", "102", "103", "104"},
-    "60": {"063", "064", "073", "074", "080", "081"},
-    "50": {"010", "085", "086", "087", "088", "089", "090", "091", "092"},
-    "00": {"009", "022", "023"},
-    "21": {"008"},
-    "22": {"045", "047"},
-    "23": {"015"},
-    "80": {"020"},
-    "81": {"108", "109"},
-    "99": {"077"},
-}
-
-CCLASSC_TO_COLLATER = {
-    cclassc: collater
-    for collater, cclassc_values in COLLATER_GROUPS.items()
-    for cclassc in cclassc_values
-}
-
-MTHARR_THRESHOLDS = [
-    (698, 23),
-    (668, 22),
-    (638, 21),
-    (608, 20),
-    (577, 19),
-    (547, 18),
-    (516, 17),
-    (486, 16),
-    (456, 15),
-    (424, 14),
-    (394, 13),
-    (364, 12),
-    (333, 11),
-    (303, 10),
-    (273, 9),
-    (243, 8),
-    (213, 7),
-    (182, 6),
-    (151, 5),
-    (121, 4),
-    (89, 3),
-    (59, 2),
-    (30, 1),
-]
-
-
-def read_sas_dataset(path: Path, file_name: str, limit: Optional[int] = None) -> pl.DataFrame:
-    """Read SAS dataset using pyreadstat with optional row limit"""
-    try:
-        full_path = path / file_name
-        if not full_path.exists():
-            print(f"File not found: {full_path}")
-            return pl.DataFrame()
-
-        # Read with row limit if specified
-        if limit is not None:
-            df, meta = pyreadstat.read_sas7bdat(str(full_path), row_limit=limit)
-        else:
-            df, meta = pyreadstat.read_sas7bdat(str(full_path))
-
-        return pl.from_pandas(df)
-    except Exception as e:
-        print(f"Error reading {file_name}: {e}")
-        return pl.DataFrame()
-
-
-def compute_reporting_context(reptdate: datetime) -> dict:
-    week_map = {8: ("1", 1), 15: ("2", 9), 22: ("3", 16)}
-    week, sdd = week_map.get(reptdate.day, ("4", 23))
-    return {
-        "week": week,
-        "sdd": sdd,
-        "month": f"{reptdate.month:02d}",
-        "year": str(reptdate.year),
-        "sdate": f"{reptdate.day:02d}{reptdate.month:02d}",
-    }
-
-
-def to_datetime(value):
-    if value in (None, 0):
-        return None
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, (int, float)):
-        return SAS_BASE_DATE + timedelta(days=int(value))
-    try:
-        return datetime.strptime(str(value).zfill(8)[:8], "%m%d%Y")
-    except (ValueError, TypeError):
-        return None
-
-
-def calculate_age(birthdt, snapshot_date: datetime) -> int:
-    try:
-        bdate = to_datetime(birthdt)
-        if bdate is None:
-            return 0
-        return int(round((snapshot_date - bdate).days / 365))
-    except (TypeError, ValueError):
-        return 0
-
-
-def calculate_mtharr(bldate, snapshot_date: datetime) -> int:
-    try:
-        bldate_dt = to_datetime(bldate)
-        if bldate_dt is None:
-            return 0
-
-        days = (snapshot_date - bldate_dt).days + 1
-        if days > 729:
-            return int((days / 365) * 12)
-
-        for threshold, result in MTHARR_THRESHOLDS:
-            if days > threshold:
-                return result
-        return 0
-    except (TypeError, ValueError):
-        return 0
-
-
-def map_collater(cclassc) -> Optional[str]:
-    """Map CCLASSC to COLLATER group"""
-    if cclassc in (None, ""):
-        return None
-    return CCLASSC_TO_COLLATER.get(str(cclassc).zfill(3))
-
-
-def safe_cast_to_int(series: pl.Series, default_value: int = 0) -> pl.Series:
-    """
-    Safely cast a series to Int64, replacing invalid/unparseable values
-    (empty strings, whitespace, non-numeric junk, nulls) with default_value.
-
-    Uses a non-strict cast so values that fail to parse become null instead
-    of raising, then fills those nulls with default_value.
-    """
-    return series.cast(pl.Int64, strict=False).fill_null(default_value)
-
-
-def process_abba_data(input_path: Path, snapshot_date: datetime, limit: Optional[int] = None) -> pl.DataFrame:
-    """Process LNNOTE data"""
-    abba_df = read_sas_dataset(input_path, "EIBAABBA/lnnote.sas7bdat", limit)
-    if abba_df.is_empty():
-        print("LNNOTE dataset is empty")
-        return abba_df
-
-    # Check if required columns exist
-    required_cols = ["PAIDIND", "LOANTYPE", "RISKRATE", "BIRTHDT", "PENDBRH", "COLLDESC"]
-    missing_cols = [col for col in required_cols if col not in abba_df.columns]
-    if missing_cols:
-        print(f"Missing columns in LNNOTE: {missing_cols}")
-        return pl.DataFrame()
-
-    # Convert RISKRATE to numeric safely.
-    # NOTE: pl.when/then/otherwise evaluates BOTH branches over the whole
-    # column before selecting per-row, so casting the raw string column
-    # inside `otherwise(...)` still blows up on empty/non-numeric strings
-    # even though those rows are meant to be replaced by `then(0)`.
-    # Fix: use a non-strict cast (invalid -> null) then fill nulls with 0.
-    if abba_df["RISKRATE"].dtype == pl.Utf8:
-        abba_df = abba_df.with_columns(
-            pl.col("RISKRATE").cast(pl.Int64, strict=False).fill_null(0).alias("RISKRATE")
-        )
-    else:
-        abba_df = abba_df.with_columns(
-            pl.col("RISKRATE").fill_null(0).cast(pl.Int64)
-        )
-
-    # Convert LOANTYPE to numeric safely (same fix as RISKRATE above)
-    if abba_df["LOANTYPE"].dtype == pl.Utf8:
-        abba_df = abba_df.with_columns(
-            pl.col("LOANTYPE").cast(pl.Int64, strict=False).fill_null(0).alias("LOANTYPE")
-        )
-    else:
-        abba_df = abba_df.with_columns(
-            pl.col("LOANTYPE").fill_null(0).cast(pl.Int64)
-        )
-
-    # Convert PAYAMT to Float64 safely
-    if "PAYAMT" in abba_df.columns:
-        abba_df = abba_df.with_columns(
-            pl.col("PAYAMT").fill_null(0).cast(pl.Float64)
-        )
-
-    # --- Diagnostics: show why rows might be filtered out ---
-    # (Safe to remove once the filter is confirmed to be behaving as expected.)
-    total_rows = len(abba_df)
-    paidind_ok = abba_df.filter(pl.col("PAIDIND") != "P").height
-    loantype_ok = abba_df.filter(
-        ((pl.col("LOANTYPE") >= 110) & (pl.col("LOANTYPE") <= 119))
-        | ((pl.col("LOANTYPE") >= 139) & (pl.col("LOANTYPE") <= 140))
-    ).height
-    riskrate_ok = abba_df.filter(pl.col("RISKRATE").is_in([2, 3, 4])).height
-    print(f"  [diag] Total rows read: {total_rows:,}")
-    print(f"  [diag] Rows passing PAIDIND != 'P': {paidind_ok:,}")
-    print(f"  [diag] Rows passing LOANTYPE in [110-119, 139-140]: {loantype_ok:,}")
-    print(f"  [diag] Rows passing RISKRATE in [2,3,4]: {riskrate_ok:,}")
-    print(f"  [diag] LOANTYPE value counts (top 10):")
-    print(abba_df["LOANTYPE"].value_counts().sort("count", descending=True).head(10))
-    print(f"  [diag] RISKRATE value counts (top 10):")
-    print(abba_df["RISKRATE"].value_counts().sort("count", descending=True).head(10))
-    print(f"  [diag] PAIDIND value counts (top 10):")
-    print(abba_df["PAIDIND"].value_counts().sort("count", descending=True).head(10))
-    # --- End diagnostics ---
-
-    return (
-        abba_df.filter(
-            (pl.col("PAIDIND") != "P")
-            & (((pl.col("LOANTYPE") >= 110) & (pl.col("LOANTYPE") <= 119)) | ((pl.col("LOANTYPE") >= 139) & (pl.col("LOANTYPE") <= 140)))
-            & (pl.col("RISKRATE").is_in([2, 3, 4]))
-        )
-        .with_columns([
-            pl.col("BIRTHDT").map_elements(lambda x: calculate_age(x, snapshot_date), return_dtype=pl.Int64).alias("AGE"),
-            pl.col("PENDBRH").alias("BRANCH"),
-            pl.col("COLLDESC").str.slice(0, 34).alias("COLLD"),
-        ])
-        .select([
-            "ACCTNO",
-            "NOTENO",
-            "SECTOR",
-            "BRANCH",
-            "STATE",
-            "RISKRATE",
-            "BILLCNT",
-            "LOANTYPE",
-            "AGE",
-            "COLLD",
-            "PAYAMT",
-        ])
-        .sort(["ACCTNO", "NOTENO"])
-    )
-
-
-def merge_sasb_data(abba_df: pl.DataFrame, input_path: Path, month: str, week: str, snapshot_date: datetime, limit: Optional[int] = None) -> pl.DataFrame:
-    """Merge with SASB loan data"""
-    sasb_df = read_sas_dataset(input_path, f"EIMHPTOP/loan{month}{week}.sas7bdat", limit)
-    if sasb_df.is_empty():
-        print(f"SASB data not found for month {month} week {week}")
-        return abba_df.with_columns([
-            pl.lit(0).alias("BALANCE"),
-            pl.lit(0).alias("MTHARR"),
-            pl.lit(0).alias("OVERDUE")
-        ])
-
-    # Check if required columns exist
-    if "BLDATE" not in sasb_df.columns:
-        print("BLDATE column not found in SASB data")
-        return abba_df.with_columns([
-            pl.lit(0).alias("BALANCE"),
-            pl.lit(0).alias("MTHARR"),
-            pl.lit(0).alias("OVERDUE")
-        ])
-
-    # Ensure ACCTNO and NOTENO are string type for join
-    if sasb_df["ACCTNO"].dtype != pl.Utf8:
-        sasb_df = sasb_df.with_columns(
-            pl.col("ACCTNO").cast(pl.Utf8)
-        )
-    if sasb_df["NOTENO"].dtype != pl.Utf8:
-        sasb_df = sasb_df.with_columns(
-            pl.col("NOTENO").cast(pl.Utf8)
-        )
-
-    # Fill null values in BALANCE
-    if "BALANCE" in sasb_df.columns:
-        sasb_df = sasb_df.with_columns(
-            pl.col("BALANCE").fill_null(0).cast(pl.Float64)
-        )
-
-    sasb_df = (
-        sasb_df.with_columns(
-            pl.col("BLDATE").map_elements(lambda x: calculate_mtharr(x, snapshot_date), return_dtype=pl.Int64).alias("MTHARR")
-        )
-        .select(["ACCTNO", "NOTENO", "BALANCE", "MTHARR"])
-        .sort(["ACCTNO", "NOTENO"])
-    )
-
-    # Ensure numeric columns are properly typed
-    abba_df = abba_df.with_columns([
-        pl.col("PAYAMT").cast(pl.Float64),
-    ])
-
-    # Ensure ACCTNO and NOTENO are string type for join
-    if abba_df["ACCTNO"].dtype != pl.Utf8:
-        abba_df = abba_df.with_columns(
-            pl.col("ACCTNO").cast(pl.Utf8)
-        )
-    if abba_df["NOTENO"].dtype != pl.Utf8:
-        abba_df = abba_df.with_columns(
-            pl.col("NOTENO").cast(pl.Utf8)
-        )
-
-    result = abba_df.join(sasb_df, on=["ACCTNO", "NOTENO"], how="left")
-
-    # Fill null values and calculate OVERDUE
-    result = result.with_columns([
-        pl.col("BALANCE").fill_null(0),
-        pl.col("MTHARR").fill_null(0),
-    ])
-
-    result = result.with_columns(
-        (pl.col("PAYAMT") * pl.col("MTHARR")).alias("OVERDUE")
-    )
-
-    result = result.with_columns(
-        pl.col("OVERDUE").fill_null(0)
-    )
-
-    return result
-
-
-def merge_customer_data(abba_df: pl.DataFrame, input_path: Path, limit: Optional[int] = None) -> pl.DataFrame:
-    """Merge with customer data from CIS"""
-    cisln_df = read_sas_dataset(input_path, "EIMHPTOP/loan.sas7bdat", limit)
-    if cisln_df.is_empty():
-        print("Customer data not found")
-        return abba_df.with_columns([
-            pl.lit("").alias("CUSTNAME"),
-            pl.lit("").alias("GENDER"),
-            pl.lit("").alias("OCCUPAT"),
-            pl.lit("").alias("ADDRLN1"),
-            pl.lit("").alias("ADDRLN2"),
-            pl.lit("").alias("ADDRLN3"),
-            pl.lit("").alias("ADDRLN4"),
-            pl.lit("").alias("ADDRLN5"),
-        ])
-
-    # Ensure ACCTNO is string type for join
-    if cisln_df["ACCTNO"].dtype != pl.Utf8:
-        cisln_df = cisln_df.with_columns(
-            pl.col("ACCTNO").cast(pl.Utf8)
-        )
-
-    # Select only available columns
-    customer_cols = ["ACCTNO", "CUSTNAME", "GENDER", "OCCUPAT", "ADDRLN1", "ADDRLN2", "ADDRLN3", "ADDRLN4", "ADDRLN5"]
-    available_cols = [col for col in customer_cols if col in cisln_df.columns]
-
-    cisln_df = cisln_df.select(available_cols).sort("ACCTNO")
-
-    # Fill null customer fields
-    for col in available_cols:
-        if col != "ACCTNO":
-            cisln_df = cisln_df.with_columns(
-                pl.col(col).fill_null("")
-            )
-
-    # Ensure ACCTNO is string type for join in abba_df
-    if abba_df["ACCTNO"].dtype != pl.Utf8:
-        abba_df = abba_df.with_columns(
-            pl.col("ACCTNO").cast(pl.Utf8)
-        )
-
-    # Merge
-    result = abba_df.join(cisln_df, on="ACCTNO", how="left")
-
-    # Fill missing columns with empty strings
-    for col in ["CUSTNAME", "GENDER", "OCCUPAT", "ADDRLN1", "ADDRLN2", "ADDRLN3", "ADDRLN4", "ADDRLN5"]:
-        if col not in result.columns:
-            result = result.with_columns(
-                pl.lit("").alias(col)
-            )
-        else:
-            result = result.with_columns(
-                pl.col(col).fill_null("")
-            )
-
-    return result
-
-
-def merge_collateral_data(abba_df: pl.DataFrame, input_path: Path, limit: Optional[int] = None) -> pl.DataFrame:
-    """
-    'Merge' with collateral data.
-
-    IMPORTANT - matches actual SAS production behavior, not the apparent intent:
-
-    In the original SAS, the COLL step is:
-        DATA COLL;
-          KEEP ACCTNO NOTENO COLLCD;   <-- only these 3 columns survive
-          SET COLL.COLLATER;
-          IF CCLASSC IN (...) THEN COLLATER = '29'; ELSE ... (big ladder)
-          COLLD = COLLATER;
-
-    The KEEP statement only keeps ACCTNO, NOTENO, COLLCD - but COLLCD is
-    never assigned anywhere in the step. The CCLASSC -> COLLATER -> COLLD
-    ladder computes values that are immediately dropped by the KEEP before
-    the merge happens. So in current production, this file merge has NO
-    effect on the final COLLD column. COLLD in the report is set once,
-    upstream, in the LNNOTE step (COLLD = SUBSTR(COLLDESC, 1, 34)), and is
-    never touched again.
-
-    This function is therefore intentionally a no-op with respect to COLLD.
-    It's kept as a named step (rather than deleted outright) so the
-    pipeline structure still mirrors the SAS program 1:1, and so that if
-    the SAS program's dead code is ever fixed/reactivated, this is the
-    obvious place to reintroduce the CCLASSC mapping (map_collater /
-    CCLASSC_TO_COLLATER are still defined above for that purpose).
-    """
-    if "COLLD" not in abba_df.columns:
-        abba_df = abba_df.with_columns(pl.lit("").alias("COLLD"))
-    else:
-        abba_df = abba_df.with_columns(pl.col("COLLD").fill_null(""))
-
-    return abba_df
-
-
-def finalize_output(abba_df: pl.DataFrame) -> pl.DataFrame:
-    """Finalize output data"""
-    # Fill any remaining nulls
-    fill_cols = ["COLLD", "SECTOR", "STATE", "CUSTNAME", "GENDER", "OCCUPAT"]
-    for col in fill_cols:
-        if col in abba_df.columns:
-            abba_df = abba_df.with_columns(
-                pl.col(col).fill_null("")
-            )
-
-    return abba_df.unique(subset=["ACCTNO", "NOTENO"], keep="first").sort(["BRANCH", "ACCTNO", "NOTENO"])
-
-
-def eibaabba():
-    """Main function for EIBAABBA - Account Analysis Report"""
-    input_path = INPUT_PATH
-    output_path = OUTPUT_PATH
-    test_limit = TEST_LIMIT
-
-    # Create output directory if it doesn't exist
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    print("=" * 60)
-    print("EIBAABBA - Account Analysis Report")
-    print("=" * 60)
-    print(f"Input path: {input_path}")
-    print(f"Output path: {output_path}")
-    if test_limit:
-        print(f"*** TEST MODE - Row limit: {test_limit} per dataset ***")
-    else:
-        print(f"*** PRODUCTION MODE - No row limit ***")
-    print()
-
-    # Hardcode REPTDATE (current date - 1 day)
-    reptdate = datetime.now().date() - timedelta(days=1)
-    context = compute_reporting_context(reptdate)
-    snapshot_date = datetime.strptime(context["sdate"] + context["year"][-2:], "%d%m%y")
-
-    print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
-    print(f"Snapshot Date: {snapshot_date.strftime('%d/%m/%Y')}")
-    print(f"Week: {context['week']}, SDD: {context['sdd']}")
-    print("-" * 60)
-
-    # Process data
-    print("Reading LNNOTE data...")
-    abba_df = process_abba_data(input_path, snapshot_date, test_limit)
-
-    # abba_df.width == 0 means process_abba_data hit a genuine failure
-    # (file not found, required columns missing) and returned a totally
-    # empty pl.DataFrame() with no schema at all. That's the Python
-    # equivalent of a SAS job that can't even open/read the source
-    # dataset - a real failure, not "zero matching observations". In
-    # that case there's nothing to build a report from, so we stop here
-    # and do NOT create an output file (matching a failed/aborted SAS run).
-    if abba_df.width == 0:
-        print("No LNNOTE data found - cannot proceed (missing file or required columns)")
-        return
-
-    # abba_df may still be empty here (0 rows) but with a valid schema -
-    # e.g. the filter simply matched no records for this snapshot. SAS
-    # would still run DATA AA over zero observations and produce an
-    # output file with zero PUT lines (i.e. an empty file). We replicate
-    # that by continuing through the full pipeline rather than exiting
-    # early, so generate_abba_output() still creates ABBALST.txt even
-    # when there's nothing to write into it.
-    if abba_df.is_empty():
-        print("No records matched LNNOTE filter criteria - will produce an empty output file")
-    else:
-        print(f"After LNNOTE processing: {len(abba_df):,} records")
-
-    print("Merging with SASB loan data...")
-    abba_df = merge_sasb_data(abba_df, input_path, context["month"], context["week"], snapshot_date, test_limit)
-    print(f"After SASB merge: {len(abba_df):,} records")
-
-    print("Merging with customer data...")
-    abba_df = merge_customer_data(abba_df, input_path, test_limit)
-    print(f"After customer merge: {len(abba_df):,} records")
-
-    print("Merging with collateral data...")
-    abba_df = merge_collateral_data(abba_df, input_path, test_limit)
-    print(f"After collateral merge: {len(abba_df):,} records")
-
-    print("Finalizing output...")
-    abba_df = finalize_output(abba_df)
-    print(f"Final records: {len(abba_df):,}")
-    print("-" * 60)
-
-    # Generate output
-    generate_abba_output(abba_df, output_path)
-    print(f"\nProcessing complete. Report saved to: {output_path}")
-    print("=" * 60)
-
-
-def generate_abba_output(df: pl.DataFrame, output_path: Path):
-    """
-    Generate text file output.
-
-    Matches SAS DATA AA behavior exactly:
-        DATA AA;
-          SET ABBA;
-          FILE ABBALST;
-          PUT @001 ACCTNO ';' NOTENO ';' ...
-
-    Two important details this mirrors:
-    - No header line. SAS never PUTs a header row here - only one
-      data line per observation in ABBA. If we wrote a header row,
-      every downstream consumer parsing this file would be off by
-      one line versus the real production file.
-    - The file is always created, even with zero data rows. If ABBA
-      has zero observations, SAS's DATA AA step still executes (it
-      just runs zero times through the implicit row loop), and the
-      FILE statement still creates ABBALST.txt - resulting in an
-      empty (0-byte) file rather than no file at all. We replicate
-      that by never early-returning before opening the file.
-    """
-    output_columns = [
-        "ACCTNO",
-        "NOTENO",
-        "BRANCH",
-        "LOANTYPE",
-        "SECTOR",
-        "STATE",
-        "RISKRATE",
-        "COLLD",
-        "OVERDUE",
-        "BALANCE",
-        "MTHARR",
-        "BILLCNT",
-        "AGE",
-        "GENDER",
-        "OCCUPAT",
-        "CUSTNAME",
-        "ADDRLN1",
-        "ADDRLN2",
-        "ADDRLN3",
-        "ADDRLN4",
-        "ADDRLN5",
-    ]
-
-    # Select only columns that exist
-    existing_columns = [col for col in output_columns if col in df.columns]
-    output_df = df.select(existing_columns) if existing_columns else df
-
-    # Write to text file - no header, ';'-delimited data rows only,
-    # matching the SAS PUT statement's delimiter and lack of a header PUT.
-    with open(output_path, 'w') as f:
-        for row in output_df.iter_rows(named=True):
-            row_values = []
-            for col in existing_columns:
-                val = row.get(col, '')
-                if val is None:
-                    val = ''
-                row_values.append(str(val))
-            f.write(";".join(row_values) + "\n")
-
-    print(f"Output file created: {output_path}")
-    print(f"Total records: {len(output_df):,}")
-
-    if len(output_df) == 0:
-        print("(Empty file written - no records matched the report criteria for this run.)")
-    else:
-        print("\nSample records (first 3):")
-        print("-" * 60)
-        for row in output_df.head(3).iter_rows(named=True):
-            acctno = str(row.get('ACCTNO', ''))
-            custname = str(row.get('CUSTNAME', ''))[:30]
-            balance = row.get('BALANCE', 0) or 0
-            print(f"  ACCTNO: {acctno:<15} Customer: {custname:<30} Balance: {balance:>15,.2f}")
-        print("-" * 60)
-
-
-if __name__ == "__main__":
-    eibaabba()
+OPTIONS NOCENTER MPRINT;
+DATA REPTDATE;
+  SET DEPOSIT.REPTDATE;
+  LAST = PUT(DAY(INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1),Z2.);
+  REPTDAY = PUT(DAY(REPTDATE), Z2.);
+  IF REPTDAY IN ('08','15','22') THEN INSERT = 'Y';
+  ELSE IF REPTDAY = LAST & DAY(TODAY()) < 8 THEN INSERT = 'Y';
+  CALL SYMPUT('DATEX',PUT(REPTDATE,DDMMYY10.));
+  CALL SYMPUT('DATE',REPTDATE);
+  CALL SYMPUT('WKLYDATE',REPTDATE);
+  CALL SYMPUT('INSERT',INSERT);
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('REPTDATE',REPTDATE);
+RUN;
+  /** NO ISTIMA **/
+DATA NOTE;
+   SET STORE.NOTE&REPTYEAR&REPTMON&REPTDAY;
+   WHERE SUBSTR(BNMCODE,1,7) NOT IN ('9532908','9532909');
+RUN;
+PROC SUMMARY DATA=NOTE NWAY;
+CLASS BNMCODE;
+VAR   AMOUNT AMTUSD AMTSGD AMTHKD AMTAUD;
+OUTPUT OUT=NOTE (DROP=_TYPE_ _FREQ_) SUM=;
+
+DATA DEPOSIT;
+   SET NOTE;
+   PROD = SUBSTR(BNMCODE,1,7);
+   INDNON = SUBSTR(BNMCODE,6,2);
+   IF PROD = '9531508' THEN DESC = 'INDRMFD';
+   IF PROD = '9531509' THEN DESC = 'NONRMFD';
+   IF PROD = '9531208' THEN DESC = 'INDRMSA';
+   IF PROD = '9531209' THEN DESC = 'NONRMSA';
+   IF PROD = '9531308' THEN DESC = 'INDRMDD';
+   IF PROD = '9531309' THEN DESC = 'NONRMDD';
+   IF PROD = '9631108' THEN DESC = 'INDFXFD';
+   IF PROD = '9631109' THEN DESC = 'NONFXFD';
+   IF PROD = '9631308' THEN DESC = 'INDFXCA';
+   IF PROD = '9631309' THEN DESC = 'NONFXCA';
+   IF PROD = '9531708' THEN DESC = 'INDRMFD';
+   IF PROD = '9531709' THEN DESC = 'NONRMFD';
+   AMOUNT = ROUND(AMOUNT,1000.)/1000;
+RUN;
+
+PROC SORT DATA=DEPOSIT;BY PROD DESC;RUN;
+
+PROC TRANSPOSE DATA=DEPOSIT OUT=STORE.DEP
+   (RENAME=(COL1=WEEK COL2=MONTH COL3=QTR COL4=HALFYR COL5=YEAR
+            COL6=LAST));
+   BY PROD DESC;
+   VAR AMOUNT;
+RUN;
+   /** NO ISTIMA ENDS **/
+   /** ONLY ISTIMA   **/
+   /* REVISE CRITERIA VIA ESMR 2013-403
+DATA NOTE;
+   SET STORE.NOTE&REPTYEAR&REPTMON&REPTDAY;
+   WHERE SUBSTR(BNMCODE,1,7) IN ('9532908','9532909');
+RUN;
+PROC SUMMARY DATA=NOTE NWAY;
+CLASS BNMCODE;
+VAR   AMOUNT AMTUSD AMTSGD AMTHKD AMTAUD;
+OUTPUT OUT=NOTE (DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+DATA DEPOSIT;
+   SET NOTE;
+   PROD = SUBSTR(BNMCODE,1,7);
+   INDNON = SUBSTR(BNMCODE,6,2);
+   IF PROD ='9532908' THEN DO; DESC = 'INDRMFD'; END;
+   IF PROD ='9532909' THEN DO; DESC = 'NONRMFD'; END;
+   AMOUNT = ROUND(AMOUNT,1000.)/1000;
+RUN;
+
+PROC SORT DATA=DEPOSIT;BY PROD DESC;RUN;
+
+PROC TRANSPOSE DATA=DEPOSIT OUT=STORE.ISTIMA
+   (RENAME=(COL1=WEEK COL2=MONTH COL3=QTR COL4=HALFYR COL5=YEAR
+            COL6=LAST));
+   BY PROD DESC;
+   VAR AMOUNT;
+RUN;
+  */
+  /** ONLY ISTIMA ENDS  **/
+
+DATA STORE.DEPRMP2
+     STORE.DEPFXP2;
+   SET STORE.DEP; /* STORE.ISTIMA; */
+   IF PROD IN ('9531508','9531708') THEN DO;
+      DESC = 'INDRMFD';
+      ITEM = 'A1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD IN ('9531509','9531709') THEN DO;
+      DESC = 'NONRMFD';
+      ITEM = 'A1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9532908' THEN DO;
+      DESC = 'INDRMFD';
+      ITEM = 'A1.20';
+   END;
+   IF PROD = '9532909' THEN DO;
+      DESC = 'NONRMFD';
+      ITEM = 'A1.20';
+   END;
+   IF PROD = '9531208' THEN DO;
+      DESC = 'INDRMSA';
+      ITEM = 'A1.16';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9531209' THEN DO;
+      DESC = 'NONRMSA';
+      ITEM = 'A1.13';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9531308' THEN DO;
+      DESC = 'INDRMDD';
+      ITEM = 'A1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9531309' THEN DO;
+      DESC = 'NONRMDD';
+      ITEM = 'A1.14';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631108' THEN DO;
+      DESC = 'INDFXFD';
+      ITEM = 'B1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631109' THEN DO;
+      DESC = 'NONFXFD';
+      ITEM = 'B1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631308' THEN DO;
+      DESC = 'INDFXCA';
+      ITEM = 'B1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631309' THEN DO;
+      DESC = 'NONFXCA';
+      ITEM = 'B1.14';
+      ITEM4= '- CURRENT';
+   END;
+   /* IF PROD = '9531708' THEN DO;
+      DESC = 'INDRMCM';
+      ITEM = 'A1.17A';
+      ITEM4= '- FIXED';
+   END;
+   IF PROD = '9531709' THEN DO;
+      DESC = 'NONRMCM';
+      ITEM = 'A1.14A';
+      ITEM4= '- FIXED';
+   END; */
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);
+   INDNON = SUBSTR(PROD,6,2);
+   WEEK    = WEEK    * (-1);
+   MONTH   = MONTH   * (-1);
+   QTR     = QTR     * (-1);
+   HALFYR  = HALFYR  * (-1);
+   YEAR    = YEAR    * (-1);
+   LAST    = LAST    * (-1);
+   BALANCE = BALANCE * (-1);
+   DATEX = "&DATEX";
+   DATE = &DATE;
+   IF SUBSTR(PROD,1,2) = '95' THEN OUTPUT STORE.DEPRMP2;
+   ELSE IF SUBSTR(PROD,1,2) = '96' THEN OUTPUT STORE.DEPFXP2;
+RUN;
+DATA NOTE;
+   SET STORE.NOTE&REPTYEAR&REPTMON&REPTDAY;
+   IF SUBSTR(BNMCODE,1,5)='95317' THEN DO;
+      SECONDBNM = SUBSTR(BNMCODE,6,9);
+        BNMCODE = COMPRESS('95315'||SECONDBNM);
+   END;
+   IF BNMCODE = '9532908010000Y' THEN BNMCODE = '9531508010000Y';
+   IF BNMCODE = '9532908020000Y' THEN BNMCODE = '9531508020000Y';
+   IF BNMCODE = '9532908030000Y' THEN BNMCODE = '9531508030000Y';
+   IF BNMCODE = '9532908040000Y' THEN BNMCODE = '9531508040000Y';
+   IF BNMCODE = '9532908050000Y' THEN BNMCODE = '9531508050000Y';
+   IF BNMCODE = '9532908060000Y' THEN BNMCODE = '9531508060000Y';
+   IF BNMCODE = '9532909010000Y' THEN BNMCODE = '9531509010000Y';
+   IF BNMCODE = '9532909020000Y' THEN BNMCODE = '9531509020000Y';
+   IF BNMCODE = '9532909030000Y' THEN BNMCODE = '9531509030000Y';
+   IF BNMCODE = '9532909040000Y' THEN BNMCODE = '9531509040000Y';
+   IF BNMCODE = '9532909050000Y' THEN BNMCODE = '9531509050000Y';
+   IF BNMCODE = '9532909060000Y' THEN BNMCODE = '9531509060000Y';
+RUN;
+PROC SUMMARY DATA=NOTE NWAY;
+CLASS BNMCODE;
+VAR   AMOUNT AMTUSD AMTSGD AMTHKD AMTAUD;
+OUTPUT OUT=NOTE (DROP=_TYPE_ _FREQ_) SUM=;
+
+DATA DEPOSIT;
+   SET NOTE;
+   PROD = SUBSTR(BNMCODE,1,7);
+   INDNON = SUBSTR(BNMCODE,6,2);
+   IF PROD = '9531508' THEN DESC = 'INDRMFD';
+   IF PROD = '9531509' THEN DESC = 'NONRMFD';
+   IF PROD = '9531208' THEN DESC = 'INDRMSA';
+   IF PROD = '9531209' THEN DESC = 'NONRMSA';
+   IF PROD = '9531308' THEN DESC = 'INDRMDD';
+   IF PROD = '9531309' THEN DESC = 'NONRMDD';
+   IF PROD = '9631108' THEN DESC = 'INDFXFD';
+   IF PROD = '9631109' THEN DESC = 'NONFXFD';
+   IF PROD = '9631308' THEN DESC = 'INDFXCA';
+   IF PROD = '9631309' THEN DESC = 'NONFXCA';
+   AMOUNT = ROUND(AMOUNT,1000.)/1000;
+RUN;
+PROC SORT DATA=DEPOSIT;BY PROD DESC;RUN;
+
+PROC TRANSPOSE DATA=DEPOSIT OUT=DEPOSIT
+   (RENAME=(COL1=WEEK COL2=MONTH COL3=QTR COL4=HALFYR COL5=YEAR
+            COL6=LAST));
+   BY PROD DESC;
+   VAR AMOUNT;
+RUN;
+
+DATA BASE.DEPOSIT;
+   SET DEPOSIT;
+   IF PROD = '9531508' THEN DO;
+      DESC = 'INDRMFD';
+      ITEM = 'A1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9531509' THEN DO;
+      DESC = 'NONRMFD';
+      ITEM = 'A1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9532908' THEN DO;
+      DESC = 'INDRMFD';
+      ITEM = 'A1.20';
+   END;
+   IF PROD = '9532909' THEN DO;
+      DESC = 'NONRMFD';
+      ITEM = 'A1.20';
+   END;
+   IF PROD = '9531208' THEN DO;
+      DESC = 'INDRMSA';
+      ITEM = 'A1.16';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9531209' THEN DO;
+      DESC = 'NONRMSA';
+      ITEM = 'A1.13';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9531308' THEN DO;
+      DESC = 'INDRMDD';
+      ITEM = 'A1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9531309' THEN DO;
+      DESC = 'NONRMDD';
+      ITEM = 'A1.14';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631108' THEN DO;
+      DESC = 'INDFXFD';
+      ITEM = 'B1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631109' THEN DO;
+      DESC = 'NONFXFD';
+      ITEM = 'B1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631308' THEN DO;
+      DESC = 'INDFXCA';
+      ITEM = 'B1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631309' THEN DO;
+      DESC = 'NONFXCA';
+      ITEM = 'B1.14';
+      ITEM4= '- CURRENT';
+   END;
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);
+   INDNON = SUBSTR(PROD,6,2);
+   WEEK    = WEEK    * (-1);
+   MONTH   = MONTH   * (-1);
+   QTR     = QTR     * (-1);
+   HALFYR  = HALFYR  * (-1);
+   YEAR    = YEAR    * (-1);
+   LAST    = LAST    * (-1);
+   BALANCE = BALANCE * (-1);
+   DATEX = "&DATEX";
+   DATE = &DATE;
+RUN;
+  /** ISTIMA  ***/
+  /*
+DATA STORE.ISTIMA;
+   SET STORE.ISTIMA;
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);
+   INDNON = SUBSTR(PROD,6,2);
+   WEEK    = WEEK    * (-1);
+   MONTH   = MONTH   * (-1);
+   QTR     = QTR     * (-1);
+   HALFYR  = HALFYR  * (-1);
+   YEAR    = YEAR    * (-1);
+   LAST    = LAST    * (-1);
+   BALANCE = BALANCE * (-1);
+   DATEX = "&DATEX";
+   DATE = &DATE;
+RUN;
+PROC SUMMARY DATA=STORE.ISTIMA;
+WHERE PROD = '9532908';
+VAR BALANCE;
+OUTPUT OUT=ISTIMA SUM=;
+DATA _NULL_;
+   SET ISTIMA;
+   CALL SYMPUT('INDISTI',BALANCE);
+RUN;
+PROC SUMMARY DATA=STORE.ISTIMA;
+WHERE PROD = '9532909';
+VAR BALANCE;
+OUTPUT OUT=ISTIMA SUM=;
+DATA _NULL_;
+   SET ISTIMA;
+   CALL SYMPUT('NONISTI',BALANCE);
+RUN;
+    */
+    /** INPUT **/
+
+%MACRO MISAPPD;
+%IF "&INSERT" EQ "Y" %THEN
+    %DO;
+      DATA &PROD;
+         SET BASE.DEPOSIT;
+         WHERE DATE = &DATE & DESC = "&PROD";
+         BALANCE = BALANCE * (-1);
+         KEEP DATEX DATE BALANCE;
+      RUN;
+      DATA BASE.&PROD;
+         SET BASE.&PROD;
+         IF DATE EQ "&DATE" THEN DELETE;
+      RUN;
+      PROC SORT; BY DATE;
+    *  PROC PRINT;
+      PROC APPEND DATA=&PROD BASE=BASE.&PROD; RUN;
+      DATA STORE.&PROD;
+         SET BASE.&PROD;
+         WHERE DATE <= &DATE;
+    *  PROC PRINT;
+    %END;
+%ELSE %DO;
+      DATA &PROD;
+         SET BASE.DEPOSIT;
+         WHERE DATE = &DATE & DESC = "&PROD";
+         BALANCE = BALANCE * (-1);
+         KEEP DATEX DATE BALANCE;
+      RUN;
+      DATA STORE.&PROD;
+         SET BASE.&PROD &PROD;
+         WHERE DATE <= &DATE;
+      PROC SORT; BY DATE;
+    *  PROC PRINT;
+      RUN;
+%END;
+%MEND MISAPPD;
+RUN;
+DATA _NULL_;
+   PROD = 'INDRMDD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+DATA _NULL_;
+   PROD = 'INDRMFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+DATA _NULL_;
+   PROD = 'INDRMSA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+RUN;
+DATA _NULL_;
+   PROD = 'NONRMDD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+DATA _NULL_;
+   PROD = 'NONRMFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+DATA _NULL_;
+   PROD = 'NONRMSA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+RUN;
+   /* PART-1 */
+%MACRO REPORT;
+PROC DATASETS LIB=FINAL;
+  DELETE WEEKLY&PROD MONTHLY&PROD QTRLY&PROD
+         HALFYRLY&PROD YEARLY&PROD;
+RUN;
+
+DATA &PROD;
+   SET STORE.&PROD;
+   REPTDATE = &REPTDATE;
+   /*
+   REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+   */
+   * CALL SYMPUT('REPTDATE',REPTDATE);
+   QTR1X = MONTH(REPTDATE)-3;
+   QTR2X = MONTH(REPTDATE)-6;
+   QTR3X = MONTH(REPTDATE)-9;
+   IF QTR1X <=0 THEN QTR1 = 12 + QTR1X;
+   ELSE QTR1 = QTR1X;
+   IF QTR2X <=0 THEN QTR2 = 12 + QTR2X;
+   ELSE QTR2 = QTR2X;
+   IF QTR3X <=0 THEN QTR3 = 12 + QTR3X;
+   ELSE QTR3 = QTR3X;
+
+   CALL SYMPUT('QTR1',QTR1);
+   CALL SYMPUT('QTR2',QTR2);
+   CALL SYMPUT('QTR3',QTR3);
+RUN;
+DATA COUNT;
+   SET STORE.&PROD NOBS=COUNT;
+   CALL SYMPUT('COUNT',COUNT);
+   ACOUNT = COUNT - 49;
+   WKLYDAY= DAY(&WKLYDATE);
+   IF WKLYDAY <= 8      THEN WCOUNT = COUNT - 45;
+   ELSE IF WKLYDAY <=15 THEN WCOUNT = COUNT - 46;
+   ELSE WCOUNT = COUNT - 47;
+   MCOUNT = COUNT - 44;
+   QCOUNT = COUNT - 36;
+   HCOUNT = COUNT - 24;
+   YCOUNT = COUNT;
+   CALL SYMPUT('ACOUNT',ACOUNT);
+   CALL SYMPUT('WCOUNT',WCOUNT);
+   CALL SYMPUT('MCOUNT',MCOUNT);
+   CALL SYMPUT('QCOUNT',QCOUNT);
+   CALL SYMPUT('HCOUNT',HCOUNT);
+   CALL SYMPUT('YCOUNT',YCOUNT);
+RUN;
+
+DATA FINAL.BEHAVE&PROD;
+   SET STORE.&PROD END=EOF;
+      IF _N_ > &ACOUNT;
+      IF EOF THEN DO;
+       /*
+         IF "&PROD" = "INDRMFD" THEN FINBAL = BALANCE + &INDISTI;
+         ELSE
+         IF "&PROD" = "NONRMFD" THEN FINBAL = BALANCE + &NONISTI;
+         ELSE FINBAL = BALANCE;
+       */
+         FINBAL = BALANCE;
+      CALL SYMPUT('OUTSTAND',FINBAL);
+      END;
+RUN;
+
+%MACRO PROCESS;
+DATA GETBAL;
+   SET STORE.&PROD;
+   WHERE &WEEKSTDT <= DATE <= &WEEKEND ;
+   STATUS = "&STATUS";
+RUN;
+DATA LAST;
+   SET STORE.&PROD;
+   IF DATE = &LASTDT THEN CALL SYMPUT('LAST',BALANCE);
+RUN;
+PROC SORT DATA=GETBAL OUT=MIN;
+   BY BALANCE;
+PROC SORT DATA=GETBAL OUT=MAX;
+   BY DESCENDING BALANCE;
+RUN;
+DATA MIN(KEEP=STATUS MIN DATEMIN);
+   SET MIN;
+   IF _N_ = 1;
+   MIN = BALANCE;
+   DATEMIN = DATE;
+RUN;
+DATA MAX (KEEP=STATUS MAX DATEMAX);
+   SET MAX;
+   IF _N_ = 1;
+   MAX = BALANCE;
+   DATEMAX = DATE;
+RUN;
+DATA TEMP;
+  MERGE MAX MIN;
+  BY STATUS;
+  IF DATEMAX > DATEMIN THEN
+     PCTAGE = ROUND((((MAX - MIN) / &LAST) * 100),.01);
+  ELSE PCTAGE = ROUND((((MIN - MAX) / &LAST) * 100),.01);
+  DATE = &WEEKEND;
+RUN;
+PROC APPEND DATA=TEMP BASE=FINAL.&STATUS&PROD;
+%MEND PROCESS;
+*;
+%MACRO WEEKLY;
+   %DO I = &WCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTH = MONTH(DATE);
+   SETYEAR = YEAR(DATE);
+   IF SETDAY <= 8      THEN WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                                           PUT(SETYEAR,4.), DDMMYY8.)-1;
+   ELSE IF SETDAY <=15 THEN WEEKSTDT=INPUT('08'||PUT(SETMTH,Z2.)||
+                                           PUT(SETYEAR,4.), DDMMYY8.);
+   ELSE IF SETDAY <=22 THEN WEEKSTDT=INPUT('15'||PUT(SETMTH,Z2.)||
+                                           PUT(SETYEAR,4.), DDMMYY8.);
+   ELSE                     WEEKSTDT=INPUT('22'||PUT(SETMTH,Z2.)||
+                                           PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','WEEKLY');
+   CALL SYMPUT('LASTDT',WEEKSTDT);
+RUN;
+%PROCESS
+   %END;
+%MEND WEEKLY;
+*;
+%WEEKLY;
+RUN;
+*;
+DATA FINAL.WEEKLY&PROD;
+   SET FINAL.WEEKLY&PROD;
+   RENAME PCTAGE= WPCTAGE;
+     /*
+RUN;
+PROC PRINT DATA=FINAL.WEEKLY&PROD;
+  FORMAT DATE DDMMYY8.;
+RUN;
+     */
+
+%MACRO MONTHLY;
+   %DO I = &MCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTH = MONTH(DATE);
+   SETYEAR = YEAR(DATE);
+   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                   PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','MONTHLY');
+   CALL SYMPUT('LASTDT',LASTDT);
+RUN;
+%PROCESS
+   %END;
+%MEND MONTHLY;
+%MONTHLY
+
+PROC SORT DATA=FINAL.MONTHLY&PROD; BY DATE;
+DATA FINAL.MONTHLY&PROD;
+   SET FINAL.MONTHLY&PROD;
+   BY STATUS;
+   IF DAY(DATE) NOT IN (8,15,22) OR LAST.STATUS;
+   RENAME PCTAGE= MPCTAGE;
+RUN; /*
+PROC PRINT DATA=FINAL.MONTHLY&PROD;
+  FORMAT DATE DDMMYY8.;
+RUN;
+       */
+
+%MACRO QTRLY;
+   %DO I = &QCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTHX = MONTH(DATE)-2;
+   SETYEAR = YEAR(DATE);
+   IF SETMTHX <=0 THEN DO;
+      SETMTH = 12 + SETMTHX;
+      SETYEAR = SETYEAR - 1;
+   END;
+   ELSE SETMTH = SETMTHX;
+   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                  PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','QTRLY');
+   CALL SYMPUT('LASTDT',LASTDT);
+RUN;
+%PROCESS
+   %END;
+%MEND QTRLY;
+%QTRLY
+
+PROC SORT DATA=FINAL.QTRLY&PROD; BY DATE;
+
+DATA FINAL.QTRLY&PROD;
+   SET FINAL.QTRLY&PROD;
+   BY STATUS ;
+   IF LAST.STATUS OR
+      (DAY(DATE) NOT IN (8,15,22) AND
+      MONTH(DATE) IN (&QTR1,&QTR2,&QTR3));
+   RENAME PCTAGE= QPCTAGE;
+RUN;
+     /*
+
+PROC PRINT;
+  FORMAT DATE DATEMIN DATEMAX DDMMYY8.;
+       */
+
+%MACRO HALFYRLY;
+   %DO I = &HCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTHX = MONTH(DATE)-5;
+   SETYEAR = YEAR(DATE);
+   IF SETMTHX <=0 THEN DO;
+      SETMTH = 12 + SETMTHX;
+      SETYEAR = SETYEAR - 1;
+   END;
+   ELSE SETMTH = SETMTHX;
+   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                  PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','HALFYRLY');
+   CALL SYMPUT('LASTDT',LASTDT);
+%PROCESS
+   %END;
+%MEND HALFYRLY;
+%HALFYRLY
+DATA FINAL.HALFYRLY&PROD;
+   SET FINAL.HALFYRLY&PROD;
+   BY STATUS ;
+
+   IF LAST.STATUS OR
+      (DAY(DATE) NOT IN (8,15,22) AND
+      MONTH(DATE) IN (&QTR2));
+   RENAME PCTAGE= HPCTAGE;
+RUN; /*
+PROC PRINT;
+  FORMAT DATE DATEMIN DATEMAX DDMMYY8.;
+       */
+%MACRO YEARLY;
+   %DO I = &YCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTHX = MONTH(DATE)-11;
+   SETYEAR = YEAR(DATE);
+   IF SETMTHX <=0 THEN DO;
+      SETMTH = 12 + SETMTHX;
+      SETYEAR = SETYEAR - 1;
+   END;
+   ELSE SETMTH = SETMTHX;
+   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                  PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','YEARLY');
+   CALL SYMPUT('LASTDT',LASTDT);
+RUN;
+%PROCESS
+   %END;
+%MEND YEARLY;
+*;
+%YEARLY;
+RUN;
+*;
+DATA FINAL.YEARLY&PROD;
+   SET FINAL.YEARLY&PROD;
+   BY STATUS ;
+   IF LAST.STATUS;
+   RENAME PCTAGE= YPCTAGE;
+RUN; /*
+PROC PRINT DATA=FINAL.YEARLY&PROD;
+  FORMAT DATE DDMMYY8.;
+RUN; */
+
+PROC SORT DATA=FINAL.WEEKLY&PROD; BY DATE;
+PROC SORT DATA=FINAL.MONTHLY&PROD; BY DATE;
+PROC SORT DATA=FINAL.QTRLY&PROD; BY DATE;
+PROC SORT DATA=FINAL.HALFYRLY&PROD; BY DATE;
+PROC SORT DATA=FINAL.YEARLY&PROD; BY DATE;
+DATA FINAL.BEHAVE&PROD(KEEP=DATE WPCTAGE MPCTAGE QPCTAGE
+                       BALANCE HPCTAGE YPCTAGE);
+   MERGE FINAL.BEHAVE&PROD
+         FINAL.WEEKLY&PROD
+         FINAL.MONTHLY&PROD
+         FINAL.QTRLY&PROD
+         FINAL.HALFYRLY&PROD
+         FINAL.YEARLY&PROD
+   ;
+   BY DATE;
+RUN;
+TITLE1 &PROD 'BEHAVIORAL TABLE' &RDATE;
+PROC PRINT DATA=FINAL.BEHAVE&PROD;
+   FORMAT DATE DDMMYY8.;
+
+%MACRO HIGHLOW;
+   PROC SORT DATA=BEHAVE OUT=MIN;
+      BY PCTAGE;
+   PROC SORT DATA=BEHAVE OUT=MAX;
+      BY DESCENDING PCTAGE;
+   RUN;
+   DATA MIN(KEEP=STATUS &STATUS);
+      SET MIN;
+      IF _N_ = 1;
+      &STATUS = PCTAGE;
+      STATUS = 'LOWEST';
+   RUN;
+   DATA MAX (KEEP=STATUS &STATUS);
+      SET MAX;
+      IF _N_ = 1;
+      &STATUS = PCTAGE;
+      STATUS = 'HIGHEST';
+   RUN;
+   DATA &STATUS;
+      SET MAX MIN;
+      BY STATUS;
+   RUN;
+%MEND HIGHLOW;
+
+DATA BEHAVE;
+  SET FINAL.BEHAVE&PROD;
+  PCTAGE = WPCTAGE;
+  IF PCTAGE = . THEN DELETE;
+  CALL SYMPUT('STATUS','WEEK');
+RUN;
+%HIGHLOW
+DATA BEHAVE;
+   SET FINAL.BEHAVE&PROD;
+   PCTAGE = MPCTAGE;
+   IF PCTAGE = . THEN DELETE;
+   CALL SYMPUT('STATUS','MONTH');
+RUN;
+%HIGHLOW
+DATA BEHAVE;
+   SET FINAL.BEHAVE&PROD;
+   PCTAGE = QPCTAGE;
+   IF PCTAGE = . THEN DELETE;
+   CALL SYMPUT('STATUS','QTR');
+RUN;
+%HIGHLOW
+DATA BEHAVE;
+   SET FINAL.BEHAVE&PROD;
+   PCTAGE = HPCTAGE;
+   IF PCTAGE = . THEN DELETE;
+   CALL SYMPUT('STATUS','HALFYR');
+RUN;
+%HIGHLOW
+DATA BEHAVE;
+   SET FINAL.BEHAVE&PROD;
+   PCTAGE = YPCTAGE;
+   IF PCTAGE = . THEN DELETE;
+   CALL SYMPUT('STATUS','YEAR');
+RUN;
+%HIGHLOW
+DATA FINAL.HIGHLOW&PROD;
+   MERGE WEEK MONTH QTR HALFYR YEAR;
+   BY STATUS;
+RUN; /*
+PROC PRINT DATA=FINAL.HIGHLOW&PROD;
+    */
+DATA FINAL.HIGHLOW&PROD;
+   SET FINAL.HIGHLOW&PROD;
+   IF STATUS = 'HIGHEST' THEN DO;
+      IF WEEK  > MONTH THEN MONTH = WEEK;
+      IF MONTH > QTR THEN QTR = MONTH;
+      IF QTR > HALFYR THEN HALFYR = QTR;
+      IF HALFYR > YEAR THEN YEAR = HALFYR;
+      IF WEEK  > 100 THEN WEEK   = 100;
+      IF MONTH > 100 THEN MONTH  = 100;
+      IF QTR   > 100 THEN QTR    = 100;
+      IF HALFYR> 100 THEN HALFYR = 100;
+      IF YEAR  > 100 THEN YEAR   = 100;
+   END;
+   IF STATUS = 'LOWEST' THEN DO;
+      IF WEEK  < MONTH THEN MONTH = WEEK;
+      IF MONTH < QTR THEN QTR = MONTH;
+      IF QTR < HALFYR THEN HALFYR = QTR;
+      IF HALFYR < YEAR THEN YEAR = HALFYR;
+      IF WEEK  < -100 THEN WEEK   = -100;
+      IF MONTH < -100 THEN MONTH  = -100;
+      IF QTR   < -100 THEN QTR    = -100;
+      IF HALFYR< -100 THEN HALFYR = -100;
+      IF YEAR  < -100 THEN YEAR   = -100;
+   END;
+RUN;
+   /*
+DATA FINAL.HIGHLOW&PROD;
+   SET FINAL.HIGHLOW&PROD;
+      IF ABS(WEEK)  > ABS(MONTH) THEN MONTH = WEEK;
+      IF ABS(MONTH) > ABS(QTR) THEN QTR = MONTH;
+      IF ABS(QTR) > ABS(HALFYR) THEN HALFYR = QTR;
+      IF ABS(HALFYR) > ABS(YEAR) THEN YEAR = HALFYR;
+RUN;
+  */
+
+PROC PRINT DATA=FINAL.HIGHLOW&PROD;
+DATA HIGH (DROP=STATUS);
+  SET FINAL.HIGHLOW&PROD;
+  WHERE STATUS = 'HIGHEST';
+  FINALSTAT = 'FINAL';
+RUN;
+DATA LOW(DROP=STATUS);
+  SET FINAL.HIGHLOW&PROD(RENAME=(WEEK=WEEK1 MONTH=MONTH1
+                            QTR=QTR1 HALFYR=HALFYR1 YEAR=YEAR1));
+  WHERE STATUS = 'LOWEST';
+  FINALSTAT = 'FINAL';
+RUN;
+DATA FINAL.HIGHLOWRATE&PROD;
+   MERGE HIGH LOW;
+   BY FINALSTAT;
+   DESC = "&PROD";
+   IF ABS(WEEK1) > ABS(WEEK) THEN WEEK = ABS(WEEK1);
+   ELSE WEEK = ABS(WEEK);
+   IF ABS(MONTH1) > ABS(MONTH) THEN MONTH = ABS(MONTH1);
+   ELSE MONTH = ABS(MONTH);
+   IF ABS(QTR1) > ABS(QTR) THEN QTR = ABS(QTR1);
+   ELSE QTR = ABS(QTR);
+   IF ABS(HALFYR1) > ABS(HALFYR) THEN HALFYR = ABS(HALFYR1);
+   ELSE HALFYR = ABS(HALFYR);
+   IF ABS(YEAR1) > ABS(YEAR) THEN YEAR = ABS(YEAR1);
+   ELSE YEAR = ABS(YEAR);
+RUN;
+DATA FINAL.HIGHLOW&PROD;
+   MERGE HIGH LOW;
+   BY FINALSTAT;
+   DESC = "&PROD";
+   IF ABS(WEEK1) > ABS(WEEK) THEN WEEK = ABS(WEEK1);
+   ELSE WEEK = ABS(WEEK);
+   IF ABS(MONTH1) > ABS(MONTH) THEN MONTH = ABS(MONTH1);
+   ELSE MONTH = ABS(MONTH);
+   IF ABS(QTR1) > ABS(QTR) THEN QTR = ABS(QTR1);
+   ELSE QTR = ABS(QTR);
+   IF ABS(HALFYR1) > ABS(HALFYR) THEN HALFYR = ABS(HALFYR1);
+   ELSE HALFYR = ABS(HALFYR);
+   IF ABS(YEAR1) > ABS(YEAR) THEN YEAR = ABS(YEAR1);
+   ELSE YEAR = ABS(YEAR);
+   WEEK   = ROUND((WEEK * &OUTSTAND / 100),1.);
+   MONTH  = ROUND(((MONTH * &OUTSTAND / 100) - WEEK),1.);
+   QTR    = ROUND(((QTR * &OUTSTAND / 100) - SUM(WEEK,MONTH)),1.);
+   HALFYR = ROUND(((HALFYR * &OUTSTAND /100) - SUM(WEEK,MONTH,QTR)),1.);
+   YEAR   = ROUND(((YEAR * &OUTSTAND /100) -
+                    SUM(WEEK,MONTH,QTR,HALFYR)),1.);
+   LAST   = ROUND((&OUTSTAND - SUM(WEEK,MONTH,QTR,HALFYR,YEAR)),1.);
+   TOTAL  = ROUND(&OUTSTAND,1.);
+   IF WEEK   < 0 THEN WEEK   = 0;
+   IF MONTH  < 0 THEN MONTH  = 0;
+   IF QTR    < 0 THEN QTR    = 0;
+   IF HALFYR < 0 THEN HALFYR = 0;
+   IF YEAR   < 0 THEN YEAR   = 0;
+   DROP WEEK1 MONTH1 QTR1 HALFYR1 YEAR1;
+RUN;
+PROC PRINT DATA=FINAL.HIGHLOW&PROD;
+TITLE1 &PROD 'BEHAVIORAL FIGURE TO BE REPORTED' &RDATE ;
+RUN;
+%MEND REPORT;
+DATA _NULL_;
+   PROD = 'INDRMDD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+DATA _NULL_;
+   PROD = 'INDRMFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+DATA _NULL_;
+   PROD = 'INDRMSA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+RUN;
+DATA _NULL_;
+   PROD = 'NONRMDD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+DATA _NULL_;
+   PROD = 'NONRMFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+DATA _NULL_;
+   PROD = 'NONRMSA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+RUN;
+*;
+  /** ISTIMA FIGURE TO BE REPORTED **/
+  /*
+DATA FINAL.HIGHLOWINDISTI;
+   SET FINAL.HIGHLOWRATEINDRMFD;
+   DESC = "INDISTI";
+   AMOUNT = ABS(&INDISTI);
+   WEEK   = ROUND((WEEK * AMOUNT / 100),1.);
+   MONTH  = ROUND(((MONTH * AMOUNT / 100) - WEEK),1.);
+   QTR    = ROUND(((QTR * AMOUNT / 100) - SUM(WEEK,MONTH)),1.);
+   HALFYR = ROUND(((HALFYR * AMOUNT /100) - SUM(WEEK,MONTH,QTR)),1.);
+   YEAR   = ROUND(((YEAR * AMOUNT /100) -
+                    SUM(WEEK,MONTH,QTR,HALFYR)),1.);
+   LAST   = ROUND((AMOUNT - SUM(WEEK,MONTH,QTR,HALFYR,YEAR)),1.);
+   TOTAL  = ROUND(AMOUNT,1.);
+   IF WEEK   < 0 THEN WEEK   = 0;
+   IF MONTH  < 0 THEN MONTH  = 0;
+   IF QTR    < 0 THEN QTR    = 0;
+   IF HALFYR < 0 THEN HALFYR = 0;
+   IF YEAR   < 0 THEN YEAR   = 0;
+   DROP WEEK1 MONTH1 QTR1 HALFYR1 YEAR1;
+RUN;
+DATA FINAL.HIGHLOWNONISTI;
+   SET FINAL.HIGHLOWRATENONRMFD;
+   DESC = "NONISTI";
+   AMOUNT = ABS(&NONISTI);
+   WEEK   = ROUND((WEEK * AMOUNT / 100),1.);
+   MONTH  = ROUND(((MONTH * AMOUNT / 100) - WEEK),1.);
+   QTR    = ROUND(((QTR * AMOUNT / 100) - SUM(WEEK,MONTH)),1.);
+   HALFYR = ROUND(((HALFYR * AMOUNT /100) - SUM(WEEK,MONTH,QTR)),1.);
+   YEAR   = ROUND(((YEAR * AMOUNT /100) -
+                    SUM(WEEK,MONTH,QTR,HALFYR)),1.);
+   LAST   = ROUND((AMOUNT - SUM(WEEK,MONTH,QTR,HALFYR,YEAR)),1.);
+   TOTAL  = ROUND(AMOUNT,1.);
+   IF WEEK   < 0 THEN WEEK   = 0;
+   IF MONTH  < 0 THEN MONTH  = 0;
+   IF QTR    < 0 THEN QTR    = 0;
+   IF HALFYR < 0 THEN HALFYR = 0;
+   IF YEAR   < 0 THEN YEAR   = 0;
+   DROP WEEK1 MONTH1 QTR1 HALFYR1 YEAR1;
+RUN;
+*;
+  */
+  /**  NLB1  **/
+DATA STORE.BEHAVENOTE;
+   SET FINAL.HIGHLOWNONRMFD
+       FINAL.HIGHLOWNONRMSA
+       FINAL.HIGHLOWNONRMDD
+    /* FINAL.HIGHLOWNONISTI  */
+       FINAL.HIGHLOWINDRMFD
+       FINAL.HIGHLOWINDRMSA
+       FINAL.HIGHLOWINDRMDD;
+    /* FINAL.HIGHLOWINDISTI; */
+   IF DESC = 'INDRMFD' THEN PROD = '9331108';
+   IF DESC = 'NONRMFD' THEN PROD = '9331109';
+   IF DESC = 'INDRMSA' THEN PROD = '9331208';
+   IF DESC = 'NONRMSA' THEN PROD = '9331209';
+   IF DESC = 'INDRMDD' THEN PROD = '9331308';
+   IF DESC = 'NONRMDD' THEN PROD = '9331309';
+   IF DESC = 'INDFXFD' THEN PROD = '9431108';
+   IF DESC = 'NONFXFD' THEN PROD = '9431109';
+   IF DESC = 'INDFXDD' THEN PROD = '9431308';
+   IF DESC = 'NONFXDD' THEN PROD = '9431309';
+   IF DESC = 'INDISTI' THEN PROD = '9532908';
+   IF DESC = 'NONISTI' THEN PROD = '9532909';
+   INDNON = SUBSTR(BNMCODE,6,2);
+   AMOUNT = ROUND(AMOUNT,1000.)/1000;
+RUN;
+PROC SORT;
+   BY PROD DESC;
+RUN;
+DATA STORE.DEPRMP1
+     STORE.DEPFXP1;
+   SET STORE.BEHAVENOTE;
+   IF PROD = '9331108' THEN DO;
+      ITEM = 'A1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9331109' THEN DO;
+      ITEM = 'A1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9532908' THEN DO;
+      DESC = 'INDISIT';
+      ITEM = 'A1.20';
+   END;
+   IF PROD = '9532909' THEN DO;
+      DESC = 'NONISTI';
+      ITEM = 'A1.20';
+   END;
+   IF PROD = '9331208' THEN DO;
+      ITEM = 'A1.16';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9331209' THEN DO;
+      ITEM = 'A1.13';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9331308' THEN DO;
+      ITEM = 'A1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9331309' THEN DO;
+      ITEM = 'A1.14';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631108' THEN DO;
+      ITEM = 'B1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631109' THEN DO;
+      ITEM = 'B1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631308' THEN DO;
+      ITEM = 'B1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631309' THEN DO;
+      ITEM = 'B1.14';
+      ITEM4= '- CURRENT';
+   END;
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);
+   INDNON = SUBSTR(PROD,6,2);
+   WEEK    = WEEK    * (-1);
+   MONTH   = MONTH   * (-1);
+   QTR     = QTR     * (-1);
+   HALFYR  = HALFYR  * (-1);
+   YEAR    = YEAR    * (-1);
+   LAST    = LAST    * (-1);
+   BALANCE = BALANCE * (-1);
+   IF SUBSTR(PROD,1,2) IN ('93','95') THEN OUTPUT STORE.DEPRMP1;
+   ELSE IF SUBSTR(PROD,1,2) = '94' THEN OUTPUT STORE.DEPFXP1;
+RUN;
+PROC SORT DATA=STORE.DEPRMP1;
+  BY DESCENDING INDNON;
+  * PROC PRINT;
+PROC SORT DATA=STORE.DEPFXP1;
+  BY DESCENDING INDNON;
+  * PROC PRINT;
+  /**** REPORT ***/
+OPTIONS MISSING=0;
+DATA REPORT;
+   SET STORE.DEPRMP1;
+   ITEM2 = 'DEPOSIT :';
+   IF INDNON = '08' THEN      ITEM3 = 'INDIVIDUALS    ';
+   ELSE IF INDNON = '09' THEN ITEM3 = 'NON-INDIVUDUALS';
+   BALANCE = BALANCE * (-1);
+   WEEK    = WEEK    * (-1);
+   MONTH   = MONTH   * (-1);
+   QTR     = QTR     * (-1);
+   HALFYR  = HALFYR  * (-1);
+   YEAR    = YEAR    * (-1);
+   LAST    = LAST    * (-1);
+RUN;
+  * PROC PRINT;
+RUN;
