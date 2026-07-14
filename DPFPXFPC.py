@@ -6,7 +6,7 @@ from pathlib import Path
 # ==================== SETUP ====================
 BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/")
 FD_PATH = BASE_PATH / "EIBQDISE"
-OUTPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQLIQP")
+OUTPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQLIQP")
 
 # Ensure output directory exists
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
@@ -72,7 +72,7 @@ print(f"Report Date: {RDATE}, Week: {NOWK}, Month: {REPTMON}, Year: {REPTYEAR}")
 print("Processing Fixed Deposits...")
 
 # Read SAS dataset using pyreadstat
-sas_file = FD_PATH / "fdmthly.sas7bdat"
+sas_file = FD_PATH / "fd.sas7bdat"
 if not sas_file.exists():
     print(f"Error: SAS file not found at {sas_file}")
     print("Please ensure the file exists and update BASE_PATH if needed.")
@@ -315,3 +315,24 @@ if len(filtered_fd1) > 0:
         print(f"  {row['REMMTH_FMT']}: {row['TOTAL']:>15,.2f} ({percentage:.1f}%)")
 
 print("\nProcessing complete!")
+
+
+
+
+Processing report date...
+Report Date: 13072026, Week: 4, Month: 07, Year: 2026
+Processing Fixed Deposits...
+Loaded 2845331 records from SAS file
+After filtering: 2680347 records
+Generating tabulate report...
+No foreign FD data found (BIC=42630)
+
+============================================================
+LIQUIDITY PROFILE SUMMARY
+============================================================
+Report Date: 13/07/2026
+Week: 4, Month: 07, Year: 2026
+Total FD records: 2,680,347
+Foreign FD records: 0
+
+Processing complete!
