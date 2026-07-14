@@ -1,14 +1,24 @@
-updated code:
-
 import polars as pl
 import pyreadstat
 from datetime import datetime, date, timedelta
 from pathlib import Path
+import sys
+
+# Add the path to PBBDPFMT module if needed
+# sys.path.append("/path/to/module/directory")
+
+# Import PBBDPFMT module
+try:
+    import PBBDPFMT
+except ImportError:
+    print("PBBDPFMT module not found. Please ensure PBBDPFMT.py is in the Python path.")
+    # You can still continue without it
+    PBBDPFMT = None
 
 # ==================== SETUP ====================
 BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/")
 BNM_PATH = BASE_PATH / "MNI"
-OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQSPEC"
+OUTPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBQSPEC")
 
 # ==================== FORMAT FUNCTIONS ====================
 def kremmth_format(value):
@@ -114,9 +124,9 @@ print(f"Report Date: {RDATE}, Week: {NOWK}")
 
 # ==================== REMMTH CALCULATION ====================
 def calculate_remmth(row, reptdate_val):
-    """Calculate remaining months"""
+    """Calculate remaining months - always returns float"""
     if row["OPENIND"] == "D":
-        return -1
+        return -1.0  # Return as float
     
     if row["OPENIND"] != "O":
         return None
@@ -168,8 +178,8 @@ def calculate_remmth(row, reptdate_val):
     remm = fdmth - rpmth
     remd = fdday - rpday
     
-    # Convert to months
-    return remy * 12 + remm + remd / rp_days_in_month
+    # Convert to months (return as float)
+    return float(remy * 12 + remm + remd / rp_days_in_month)
 
 # ==================== PROCESS FDMTHLY DATA ====================
 print("Processing FDMTHLY data...")
@@ -222,52 +232,77 @@ almdept = alm_summary.with_columns([
     .alias("BNMCODE")
 ]).filter(pl.col("BNMCODE").is_not_null()).select(["BNMCODE", "AMOUNT", "CUSTCODE", "REMMTH"])
 
-# ==================== PROCESS PBBDPFMT DATA ====================
-print("\nProcessing PBBDPFMT data...")
+# ==================== PROCESS PBBDPFMT PROGRAM ====================
+print("\nProcessing PBBDPFMT program...")
 
-# Read PBBDPFMT SAS file
-pbbdpfmt_file = BNM_PATH / "PBBDPFMT.sas7bdat"
-if pbbdpfmt_file.exists():
-    pbbdpfmt, meta_pbbdpfmt = read_sas_file(pbbdpfmt_file)
-    if pbbdpfmt is not None:
-        print(f"Read {len(pbbdpfmt)} records from PBBDPFMT")
-        print(f"SAS metadata: {meta_pbbdpfmt.number_columns} columns, {meta_pbbdpfmt.number_rows} rows")
+# Check if PBBDPFMT module is available
+if PBBDPFMT is not None:
+    try:
+        # Call the main function from PBBDPFMT
+        # Assuming PBBDPFMT has a function that returns data
+        # You may need to adjust this based on the actual structure of PBBDPFMT.py
         
-        # Check columns before filtering
-        print(f"PBBDPFMT columns: {pbbdpfmt.columns}")
-        
-        # Filter for specific BIC prefixes if BIC column exists
-        if "BIC" in pbbdpfmt.columns:
-            pbbdpfmt_filtered = pbbdpfmt.filter(
-                pl.col("BIC").str.starts_with("42130") | 
-                pl.col("BIC").str.starts_with("42132") |
-                pl.col("BIC").str.starts_with("42630")
-            )
+        # Option 1: If PBBDPFMT has a function that returns a DataFrame
+        if hasattr(PBBDPFMT, 'get_pbbdpfmt_data'):
+            pbbdpfmt_data = PBBDPFMT.get_pbbdpfmt_data(reptdate_val)
+            print(f"Retrieved data from PBBDPFMT program")
             
-            # Process PBBDPFMT data
-            if "AMOUNT" in pbbdpfmt_filtered.columns and "CUSTCODE" in pbbdpfmt_filtered.columns:
-                pbbdpfmt_summary = pbbdpfmt_filtered.group_by("BIC").agg([
-                    pl.col("AMOUNT").sum().alias("TOTAL_AMOUNT"),
-                    pl.col("CUSTCODE").first().alias("CUSTCODE")
-                ])
-                
-                print(f"Processed {len(pbbdpfmt_filtered)} PBBDPFMT records")
-                
-                # Save PBBDPFMT summary
-                pbbdpfmt_summary.write_parquet(OUTPUT_PATH / f"PBBDPFMT_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
-                print(f"PBBDPFMT summary saved to parquet")
-                
-                # Also save as text for easy viewing
-                pbbdpfmt_summary.write_csv(OUTPUT_PATH / f"PBBDPFMT_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
-                print(f"PBBDPFMT summary saved to CSV")
+            # Convert to Polars DataFrame if needed
+            if isinstance(pbbdpfmt_data, pl.DataFrame):
+                pbbdpfmt_df = pbbdpfmt_data
+            elif isinstance(pbbdpfmt_data, pd.DataFrame):
+                pbbdpfmt_df = pl.from_pandas(pbbdpfmt_data)
             else:
-                print("Required columns (AMOUNT, CUSTCODE) not found in PBBDPFMT")
-                print(f"Available columns: {pbbdpfmt.columns}")
+                print(f"Unexpected data type from PBBDPFMT: {type(pbbdpfmt_data)}")
+                pbbdpfmt_df = None
+            
+            if pbbdpfmt_df is not None:
+                print(f"PBBDPFMT data has {len(pbbdpfmt_df)} records")
+                print(f"PBBDPFMT columns: {pbbdpfmt_df.columns}")
+                
+                # Filter for specific BIC prefixes
+                if "BIC" in pbbdpfmt_df.columns:
+                    pbbdpfmt_filtered = pbbdpfmt_df.filter(
+                        pl.col("BIC").str.starts_with("42130") | 
+                        pl.col("BIC").str.starts_with("42132") |
+                        pl.col("BIC").str.starts_with("42630")
+                    )
+                    
+                    # Process PBBDPFMT data
+                    if "AMOUNT" in pbbdpfmt_filtered.columns and "CUSTCODE" in pbbdpfmt_filtered.columns:
+                        pbbdpfmt_summary = pbbdpfmt_filtered.group_by("BIC").agg([
+                            pl.col("AMOUNT").sum().alias("TOTAL_AMOUNT"),
+                            pl.col("CUSTCODE").first().alias("CUSTCODE")
+                        ])
+                        
+                        print(f"Processed {len(pbbdpfmt_filtered)} PBBDPFMT records")
+                        
+                        # Save PBBDPFMT summary
+                        pbbdpfmt_summary.write_parquet(OUTPUT_PATH / f"PBBDPFMT_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
+                        print(f"PBBDPFMT summary saved to parquet")
+                        
+                        # Also save as text for easy viewing
+                        pbbdpfmt_summary.write_csv(OUTPUT_PATH / f"PBBDPFMT_SUMMARY_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
+                        print(f"PBBDPFMT summary saved to CSV")
+                    else:
+                        print("Required columns (AMOUNT, CUSTCODE) not found in PBBDPFMT data")
+                        print(f"Available columns: {pbbdpfmt_df.columns}")
+                else:
+                    print("BIC column not found in PBBDPFMT data")
+                    print(f"Available columns: {pbbdpfmt_df.columns}")
         else:
-            print("BIC column not found in PBBDPFMT")
-            print(f"Available columns: {pbbdpfmt.columns}")
+            print("PBBDPFMT module does not have 'get_pbbdpfmt_data' function")
+            print("Available attributes: ", [attr for attr in dir(PBBDPFMT) if not attr.startswith('_')])
+            
+            # Option 2: If PBBDPFMT is a script that runs and produces output
+            # You may need to run it as a subprocess or import specific functions
+            
+    except Exception as e:
+        print(f"Error processing PBBDPFMT: {e}")
+        import traceback
+        traceback.print_exc()
 else:
-    print("PBBDPFMT file not found, continuing without it")
+    print("PBBDPFMT module not available. Skipping PBBDPFMT processing.")
 
 # ==================== GENERATE REPORTS ====================
 def generate_report(data, bic_prefix, title, report_type="special"):
@@ -450,33 +485,3 @@ if len(almdept) > 0:
 print("\n" + "=" * 60)
 print("PROCESSING COMPLETE")
 print("=" * 60)
-
-error:
-
-
-Processing report date...
-Report Date: 13072026, Week: 4
-Processing FDMTHLY data...
-Read 2756145 records from FDMTHLY
-SAS metadata: 22 columns, 2756145 rows
-Calculating REMMTH...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBQSPEC.py", line 194, in <module>
-    fdmthly = fdmthly.with_columns([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/functions/lazy.py", line 1088, in __call__
-    rv = self.function(slp, *args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/expr/expr.py", line 4655, in _wrap
-    return function(sl[0], *args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/expr/expr.py", line 4879, in wrap_f
-    return x.map_elements(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/series/series.py", line 5838, in map_elements
-    self._s.map_elements(
-polars.exceptions.SchemaError: unexpected value while building Series of type Float64; found value of type Int64: -1
