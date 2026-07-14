@@ -6,7 +6,7 @@ from pathlib import Path
 # ==================== SETUP ====================
 BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/")
 FD_PATH = BASE_PATH / "EIBQDISE"
-OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQLIQP"
+OUTPUT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQLIQP")
 
 # Ensure output directory exists
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
@@ -90,10 +90,16 @@ fd_df = fd_df.filter(
     (~pl.col("OPENIND").is_in(["B", "C", "P"]))
 )
 
-# Parse maturity date
+# Parse maturity date - handle float values
 fd_df = fd_df.with_columns([
     pl.when(pl.col("MATDATE").is_not_null())
-    .then(pl.col("MATDATE").cast(pl.Utf8).str.strptime(pl.Date, "%Y%m%d"))
+    .then(
+        # Convert float to string, remove decimal, then parse as date
+        pl.col("MATDATE")
+        .cast(pl.Utf8)
+        .str.replace(r"\.0$", "")  # Remove .0 suffix
+        .str.strptime(pl.Date, "%Y%m%d")
+    )
     .otherwise(None)
     .alias("MATDT")
 ])
@@ -321,25 +327,3 @@ if len(filtered_fd1) > 0:
         print(f"  {row['REMMTH_FMT']}: {row['TOTAL']:>15,.2f} ({percentage:.1f}%)")
 
 print("\nIslamic processing complete!")
-
-
-Processing Islamic report date...
-Islamic Report Date: 13072026, Week: 4, Month: 07, Year: 2026
-Processing Islamic Fixed Deposits...
-Loaded 2845331 records from SAS file
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIQLIQP.py", line 94, in <module>
-    fd_df = fd_df.with_columns([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.InvalidOperationError: conversion from `str` to `date` failed in column 'MATDATE' for 2680347 out of 2680347 values: ["20260925.0", "20260811.0", … "20260716.0"]
-
-You might want to try:
-- setting `strict=False` to set values that cannot be converted to `null`
-- using `str.strptime`, `str.to_date`, or `str.to_datetime` and providing a format string
