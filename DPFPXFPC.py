@@ -1,250 +1,207 @@
-OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER MPRINT;
-*;
-%INC PGM(PBBELF,PBBDPFMT);
-*;
-PROC FORMAT;
-   VALUE REMFMT
-      LOW-0.1 = '01'   /*  UP TO 1 WK       */
-      0.1-1   = '02'   /*  >1 WK - 1 MTH    */
-      1-3     = '03'   /*  >1 MTH - 3 MTHS  */
-      3-6     = '04'   /*  >3 - 6 MTHS      */
-      6-12    = '05'   /*  >6 MTHS - 1 YR   */
-      OTHER   = '06';  /*  > 1 YEAR         */
-*------------------------------------------------*
-*  MACRO TO DECLARE VARIABLES                    *
-*------------------------------------------------*;
-%MACRO DCLVAR;
-   RETAIN D1-D12 31 D4 D6 D9 D11 30
-          RD1-RD12 MD1-MD12 31 RD2 MD2 28 RD4 RD6 RD9 RD11
-          MD4 MD6 MD9 MD11 30 RPYR RPMTH RPDAY;
-   ARRAY LDAY D1-D12;
-   ARRAY RPDAYS RD1-RD12;
-   ARRAY MDDAYS MD1-MD12;
-%MEND DCLVAR;
-*;
-*------------------------------------------------*
-*  MACRO TO CALCULATE NEXT BLDATE                *
-*------------------------------------------------*;
-%MACRO NXTBLDT;
-   IF PAYFREQ = '6' THEN DO;
-      DD = DAY(BLDATE) + 14;
-      MM = MONTH(BLDATE);
-      YY = YEAR(BLDATE);
-      IF MM = 2 THEN
-         IF MOD(YY,4) = 0 THEN D2 = 29;
-         ELSE D2 = 28;
-      IF DD > LDAY(MM) THEN DO;
-         DD = DD - LDAY(MM);
-         MM + 1;
-         IF MM > 12 THEN DO;
-            MM = MM - 12; YY + 1;
-         END;
-      END;
-   END;
-   ELSE DO;
-      DD = DAY(ISSDTE);
-      MM = MONTH(BLDATE) + FREQ;
-      YY = YEAR(BLDATE);
-      IF MM > 12 THEN DO;
-         MM = MM - 12; YY + 1;
-      END;
-   END;
-   IF MM = 2 THEN
-      IF MOD(YY,4) = 0 THEN D2 = 29;
-      ELSE D2 = 28;
-   IF DD > LDAY(MM) THEN DD = LDAY(MM);
-   BLDATE = MDY(MM,DD,YY);
-%MEND NXTBLDT;
-*;
-*------------------------------------------------*
-*  MACRO TO CALCULATE REMAIN MONTH               *
-*------------------------------------------------*;
-%MACRO REMMTH;
-   MDYR  = YEAR(MATDT);
-   MDMTH = MONTH(MATDT);
-   MDDAY = DAY(MATDT);
-   IF MDMTH = 2 THEN
-      IF MOD(MDYR,4) = 0 THEN MD2 = 29;
-      ELSE MD2 = 28;
-   IF MDDAY > RPDAYS(RPMTH) THEN MDDAY = RPDAYS(RPMTH);
-   REMY = MDYR - RPYR;
-   REMM = MDMTH - RPMTH;
-   REMD = MDDAY - RPDAY;
-   REMMTH = REMY*12 + REMM + REMD/RPDAYS(RPMTH);
-%MEND REMMTH;
-*;
-*------------------------------------------------*
-*  GET REPTDATE                                  *
-*------------------------------------------------*;
-DATA REPTDATE;
-   SET FD.REPTDATE;
-   SELECT(DAY(REPTDATE));
-      WHEN (8)  CALL SYMPUT('NOWK',PUT('1',$1.));
-      WHEN (15) CALL SYMPUT('NOWK',PUT('2',$1.));
-      WHEN (22) CALL SYMPUT('NOWK',PUT('3',$1.));
-      OTHERWISE CALL SYMPUT('NOWK',PUT('4',$1.));
-   END;
-   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
-   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-   CALL SYMPUT('REPTDATE',REPTDATE);
-RUN;
-*;
-PROC SORT DATA=CISAFD.DEPOSIT(KEEP=ACCTNO CUSTNAM1 NEWIC OLDIC BUSSREG
-                                   CUSTNO SECCUST)
-          OUT=CISFD;
-    WHERE SECCUST = '901';
-  *  WHERE SECCUST = '901' & NEWIC = '133606W';
-    BY ACCTNO; RUN;
-*;
-DATA FD;
-   SET FD.FD;
-   FORMAT TMATURITY $10.;
-   REPTDATE = &REPTDATE;
-   IF CURBAL > 0 AND CUSTCD NOT IN (77,78,95,96) AND CURCODE = 'MYR';
-   MATDT = INPUT(PUT(MATDATE,Z8.),YYMMDD8.);
-   MATURITY = MATDT - REPTDATE;
-   IF LMATDATE NE 0 THEN
-      LASTMAT = INPUT(SUBSTR(PUT(LMATDATE,Z11.),1,8),MMDDYY8.);
-   IF LASTMAT = REPTDATE THEN DO;
-      MATURITY = 0;
-      MATDT = LASTMAT;
-   END;
-   IF MATURITY = 0 THEN TMATURITY = '(T)';
-   ELSE TMATURITY = '(T+'||COMPRESS(MATURITY)||')';
-   RATEBAL = CURBAL * RATE;
-   DROP NAME;
-*;
-DATA FD;
-   MERGE FD(IN=A) CISFD(IN=B RENAME=(CUSTNAM1=NAME));
-   BY ACCTNO;
-   IF A & B;
-   IF BUSSREG NE ' ' THEN CUSTID = BUSSREG;
-   ELSE IF NEWIC NE ' ' THEN CUSTID = NEWIC;
-   ELSE IF OLDIC NE ' ' THEN CUSTID = OLDIC;
-   ELSE CUSTID = CUSTNO;
-RUN;
-PROC SORT; BY MATDT;
-*;
-PROC SORT; BY CUSTID MATDT;
-PROC SUMMARY DATA=FD;
-BY CUSTID MATDT;
-VAR CURBAL RATEBAL;
-OUTPUT OUT=FDTOTAL SUM=TOTAL TOTRATEBAL;
-*;
-PROC SORT DATA=FD NODUPKEYS; BY CUSTID MATDT;
-DATA FDTOTAL;
-   MERGE FD(IN=A) FDTOTAL(IN=B);
-   BY CUSTID MATDT;
-   * IF TOTAL > 1000000 THEN OUTPUT;
-RUN;
-DATA FDTOTAL(KEEP=NAME TOTAL AVGRATE MATDT MATURITY TMATURITY REPTDATE
-                  TOTRATEBAL);
-   FORMAT AVGRATE 5.2;
-   SET FDTOTAL;
-   AVGRATE = ROUND(TOTRATEBAL / TOTAL,.01);
-RUN;
-   /** TOTAL FD  **/
-DATA FD;
-   SET FD.FD;
-   WHERE CURBAL > 0 AND CUSTCD NOT IN (77,78,95,96) AND CURCODE = 'MYR';
-   RATEBAL = CURBAL * RATE;
-RUN;
-PROC SUMMARY DATA=FD NWAY;
-VAR CURBAL RATEBAL;
-OUTPUT OUT=TOTALFD SUM=;
-RUN;
-*;
-DATA TOTALFD;
-   FORMAT AVGRATE 5.2;
-   SET TOTALFD;
-   AVGRATE = ROUND(RATEBAL / CURBAL,.01);
-RUN;
-  DATA _NULL_;
-  FORMAT CURBAL1 10.3;
-  SET TOTALFD;
-  FILE OVER1M;
-  CURBAL1 = ROUND(CURBAL / 1000000,0.001);
-  IF _N_ = 1 THEN DO;
-   PUT @1 ' ';
-   PUT       'TOTAL NON-INDI FD (MIL)' ';'
-             'AVERAGE RATE'  ';'
-   ;
-   END;
-   PUT       CURBAL1          ';'
-             AVGRATE          ';'
-             ;
-RUN;
-DATA MATURE;
-   FORMAT TOTAL1 10.3;
-   SET FDTOTAL;
-   REPTDATE1 = COMPRESS(PUT(MATDT,DDMMYY10.) || TMATURITY);
-RUN;
-PROC SUMMARY DATA=MATURE NWAY;
-WHERE 0 <= MATURITY < 8;
-CLASS REPTDATE1;
-VAR TOTAL;
-OUTPUT OUT=TOTAL (DROP=_FREQ_ _TYPE_) SUM=;
-DATA _NULL_;
-  SET TOTAL;
-  FILE OVER1M;
-  CURBAL1 = ROUND(TOTAL / 1000000,0.001);
-  IF _N_ = 1 THEN DO;
-   PUT @1 ' ';
-   PUT       'MATURITY DATE' ';'
-             'TOTAL NON-INDI FD (MIL)'  ';'
-   ;
-   END;
-   PUT       REPTDATE1           ';'
-             CURBAL1             ';'
-             ;
-RUN;
-%MACRO PROCESS;
-   PROC SORT DATA=MATURE; BY DESCENDING TOTAL;
-   *;
-   TITLE1 'RM NON-INDI '&TMAT &DATE;
-   PROC PRINT;
-   *;
-  DATA _NULL_;
-  SET MATURE;
-  FILE OVER1M;
-  IF _N_ = 1 THEN DO;
-   PUT @1 ' ';
-   PUT @1 ' ';
-   PUT @1 ' ';
-   PUT @1 'RM NON-INDI FD DETAILS BY CUSTOMER MATURING '"&DATE &TMAT";
-   PUT @1 ' ';
-   PUT       'CUSTOMER'                 ';'
-             'SETTLEMENT AMOUNT(MIL.)'  ';'
-             'MATURITY DATE'            ';'
-             'AVERAGE RATE'             ';'
-   ;
-   END;
-   PUT       NAME            ';'
-             TOTAL1           ';'
-             REPTDATE1        ';'
-             AVGRATE          ';'
-             ;
-RUN;
-%MEND PROCESS;
-RUN;
-%MACRO MATURE;
-   %DO I = 0 %TO 7;
-   DATA MATURE;
-   FORMAT TOTAL1 10.3;
-      SET FDTOTAL;
-      IF MATURITY = &I;
-      REPTDATE1 = PUT(MATDT,DDMMYY10.);
-      TOTAL1 = ROUND(TOTAL / 1000000,0.001);
-   CALL SYMPUT('TMAT',TMATURITY);
-   CALL SYMPUT('DATE',REPTDATE1);
-   RUN;
-   %PROCESS
-   %END;
-%MEND MATURE;
-%MATURE
-*;
+import polars as pl
+from datetime import datetime, timedelta
 
+FD_REPTDATE = 'data/fd/reptdate.parquet'
+CISAFD_DEPOSIT = 'data/cisafd/deposit.parquet'
+FD_FD = 'data/fd/fd.parquet'
+OVER1M = 'data/over1m.txt'
 
-how many inputs do this program have that are using only
+df_reptdate = pl.read_parquet(FD_REPTDATE)
+reptdate = df_reptdate['REPTDATE'][0]
+
+day = reptdate.day
+if day == 8:
+    nowk = '1'
+elif day == 15:
+    nowk = '2'
+elif day == 22:
+    nowk = '3'
+else:
+    nowk = '4'
+
+reptyear = reptdate.strftime('%Y')
+reptmon = reptdate.strftime('%m')
+reptday = reptdate.strftime('%d')
+rdate = reptdate.strftime('%d%m%y')
+
+df_cisfd = pl.read_parquet(CISAFD_DEPOSIT)
+df_cisfd = df_cisfd.filter(pl.col('SECCUST') == '901').select([
+    'ACCTNO', 'CUSTNAM1', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'
+]).sort('ACCTNO').rename({'CUSTNAM1': 'NAME'})
+
+df_fd = pl.read_parquet(FD_FD)
+df_fd = df_fd.filter(
+    (pl.col('CURBAL') > 0) & 
+    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
+    (pl.col('CURCODE') == 'MYR')
+)
+
+df_fd = df_fd.with_columns([
+    pl.lit(reptdate).alias('REPTDATE')
+])
+
+def parse_matdate(matdate_val):
+    matdate_str = str(int(matdate_val)).zfill(8)
+    year = int(matdate_str[0:4])
+    month = int(matdate_str[4:6])
+    day = int(matdate_str[6:8])
+    return datetime(year, month, day)
+
+df_fd = df_fd.with_columns([
+    pl.col('MATDATE').map_elements(parse_matdate, return_dtype=pl.Datetime).dt.date().alias('MATDT')
+])
+
+df_fd = df_fd.with_columns([
+    (pl.col('MATDT').cast(pl.Date) - pl.lit(reptdate).cast(pl.Date)).dt.total_days().alias('MATURITY')
+])
+
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('LMATDATE') != 0)
+      .then(
+          pl.col('LMATDATE').cast(pl.Utf8).str.slice(0, 8).map_elements(
+              lambda x: datetime.strptime(x, '%m%d%Y').date() if len(x) == 8 else None,
+              return_dtype=pl.Date
+          )
+      )
+      .otherwise(pl.lit(None))
+      .alias('LASTMAT')
+])
+
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('LASTMAT') == reptdate)
+      .then(pl.lit(0))
+      .otherwise(pl.col('MATURITY'))
+      .alias('MATURITY'),
+    pl.when(pl.col('LASTMAT') == reptdate)
+      .then(pl.col('LASTMAT'))
+      .otherwise(pl.col('MATDT'))
+      .alias('MATDT')
+])
+
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('MATURITY') == 0)
+      .then(pl.lit('(T)'))
+      .otherwise(pl.concat_str([
+          pl.lit('(T+'),
+          pl.col('MATURITY').cast(pl.Utf8),
+          pl.lit(')')
+      ]))
+      .alias('TMATURITY')
+])
+
+df_fd = df_fd.with_columns([
+    (pl.col('CURBAL') * pl.col('RATE')).alias('RATEBAL')
+])
+
+df_fd = df_fd.drop('NAME')
+
+df_fd = df_fd.join(df_cisfd, on='ACCTNO', how='inner')
+
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('BUSSREG').str.strip_chars() != '')
+      .then(pl.col('BUSSREG'))
+      .when(pl.col('NEWIC').str.strip_chars() != '')
+      .then(pl.col('NEWIC'))
+      .when(pl.col('OLDIC').str.strip_chars() != '')
+      .then(pl.col('OLDIC'))
+      .otherwise(pl.col('CUSTNO'))
+      .alias('CUSTID')
+])
+
+df_fd = df_fd.sort('MATDT')
+
+df_fd = df_fd.sort(['CUSTID', 'MATDT'])
+
+df_fdtotal = df_fd.group_by(['CUSTID', 'MATDT']).agg([
+    pl.col('CURBAL').sum().alias('TOTAL'),
+    pl.col('RATEBAL').sum().alias('TOTRATEBAL')
+])
+
+df_fd_unique = df_fd.unique(subset=['CUSTID', 'MATDT'], keep='first')
+
+df_fdtotal = df_fd_unique.join(df_fdtotal, on=['CUSTID', 'MATDT'], how='inner')
+
+df_fdtotal = df_fdtotal.select([
+    'NAME', 'TOTAL', 'MATDT', 'MATURITY', 'TMATURITY', 'REPTDATE', 'TOTRATEBAL'
+])
+
+df_fdtotal = df_fdtotal.with_columns([
+    (pl.col('TOTRATEBAL') / pl.col('TOTAL')).round(2).alias('AVGRATE')
+])
+
+df_fd_all = pl.read_parquet(FD_FD)
+df_fd_all = df_fd_all.filter(
+    (pl.col('CURBAL') > 0) & 
+    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
+    (pl.col('CURCODE') == 'MYR')
+)
+
+df_fd_all = df_fd_all.with_columns([
+    (pl.col('CURBAL') * pl.col('RATE')).alias('RATEBAL')
+])
+
+df_totalfd = df_fd_all.select([
+    pl.col('CURBAL').sum(),
+    pl.col('RATEBAL').sum()
+])
+
+df_totalfd = df_totalfd.with_columns([
+    (pl.col('RATEBAL') / pl.col('CURBAL')).round(2).alias('AVGRATE')
+])
+
+lines = []
+lines.append(' ')
+lines.append('TOTAL NON-INDI FD (MIL);AVERAGE RATE;')
+
+total_fd = df_totalfd.to_dicts()[0]
+curbal1 = round(total_fd['CURBAL'] / 1000000, 3)
+lines.append(f"{curbal1:.3f};{total_fd['AVGRATE']:.2f};")
+
+df_mature = df_fdtotal.with_columns([
+    (pl.col('TOTAL') / 1000000).round(3).alias('TOTAL1'),
+    pl.concat_str([
+        pl.col('MATDT').dt.strftime('%d/%m/%Y'),
+        pl.col('TMATURITY')
+    ]).alias('REPTDATE1')
+])
+
+df_mature_summary = df_mature.filter(
+    (pl.col('MATURITY') >= 0) & (pl.col('MATURITY') < 8)
+).group_by('REPTDATE1').agg([
+    pl.col('TOTAL').sum()
+])
+
+lines.append(' ')
+lines.append('MATURITY DATE;TOTAL NON-INDI FD (MIL);')
+
+for row in df_mature_summary.iter_rows(named=True):
+    curbal1 = round(row['TOTAL'] / 1000000, 3)
+    lines.append(f"{row['REPTDATE1']};{curbal1:.3f};")
+
+for i in range(8):
+    df_mature_day = df_mature.filter(pl.col('MATURITY') == i)
+    
+    if len(df_mature_day) > 0:
+        df_mature_day = df_mature_day.sort('TOTAL', descending=True)
+        
+        first_row = df_mature_day.to_dicts()[0]
+        tmat = first_row['TMATURITY']
+        date_str = first_row['MATDT'].strftime('%d/%m/%Y')
+        
+        lines.append(' ')
+        lines.append(' ')
+        lines.append(' ')
+        lines.append(f"RM NON-INDI FD DETAILS BY CUSTOMER MATURING {date_str} {tmat}")
+        lines.append(' ')
+        lines.append('CUSTOMER;SETTLEMENT AMOUNT(MIL.);MATURITY DATE;AVERAGE RATE;')
+        
+        for row in df_mature_day.iter_rows(named=True):
+            lines.append(
+                f"{row['NAME']};{row['TOTAL1']:.3f};{row['REPTDATE1']};{row['AVGRATE']:.2f};"
+            )
+
+with open(OVER1M, 'w') as f:
+    for line in lines:
+        f.write(line + '\n')
+
+print(f"Report generated: {OVER1M}")
