@@ -1,122 +1,201 @@
 import polars as pl
 import pyreadstat
-from pathlib import Path
-import datetime
-import sys
+from datetime import datetime, timedelta
 
-# Configuration
-npl6_path = Path("NPL6")
-output_path = Path("output")
-output_path.mkdir(exist_ok=True)
+# Hardcode reptdate as yesterday
+reptdate = datetime.now().date() - timedelta(days=1)
 
-# Get current date and subtract 1 day (equivalent to REPTDATE)
-today = datetime.datetime.now()
-reptdate = today - datetime.timedelta(days=1)
+# SAS dataset paths
+CISAFD_DEPOSIT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/deposit.sas7bdat'
+FD_FD = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQDISE/fd.sas7bdat'
+OVER1M = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDFD1M/over1m.txt'
 
-# Extract parameters (equivalent to CALL SYMPUT)
-MM = f"{reptdate.month:02d}"   # Z2.
-YY = str(reptdate.year)        # YEAR4.
-DD = f"{reptdate.day:02d}"     # Z2.
-RDATE = reptdate.strftime('%d%m%y')  # DDMMYY8.
+# Read SAS datasets using pyreadstat
+df_cisfd, meta_cisfd = pyreadstat.read_sas7bdat(CISAFD_DEPOSIT)
+df_cisfd = pl.from_pandas(df_cisfd)
+df_cisfd = df_cisfd.filter(pl.col('SECCUST') == '901').select([
+    'ACCTNO', 'CUSTNAM1', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'
+]).sort('ACCTNO').rename({'CUSTNAM1': 'NAME'})
 
-# NPLDATE is the same as RDATE (since we're not reading from REPTDATE.sas7bdat)
-NPLDATE = RDATE
-
-print(f"MM: {MM}, YY: {YY}, DD: {DD}, RDATE: {RDATE}")
-print(f"NPLDATE: {NPLDATE}")
-
-# MACRO %PROCESS equivalent - always execute since NPLDATE == RDATE
-print("EXTRACT FROM AQ, SP2 & IIS")
-
-# Read SAS7BDAT files
-# PROC SORT DATA=NPL6.AQ OUT=AQ; BY ACCTNO NOTENO;
-aq_df, aq_meta = pyreadstat.read_sas7bdat(str(npl6_path / "AQ.sas7bdat"))
-aq_df = pl.from_pandas(aq_df).sort(['ACCTNO', 'NOTENO'])
-
-# PROC SORT DATA=NPL6.SP2 OUT=SP2(KEEP=ACCTNO NOTENO SP SPPL MARKETVL);
-sp2_df, sp2_meta = pyreadstat.read_sas7bdat(
-    str(npl6_path / "SP2.sas7bdat"),
-    columns=['ACCTNO', 'NOTENO', 'SP', 'SPPL', 'MARKETVL']
+df_fd, meta_fd = pyreadstat.read_sas7bdat(FD_FD)
+df_fd = pl.from_pandas(df_fd)
+df_fd = df_fd.filter(
+    (pl.col('CURBAL') > 0) & 
+    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
+    (pl.col('CURCODE') == 'MYR')
 )
-sp2_df = pl.from_pandas(sp2_df).sort(['ACCTNO', 'NOTENO'])
 
-# PROC SORT DATA=NPL6.IIS OUT=IIS(KEEP=ACCTNO NOTENO TOTIIS);
-iis_df, iis_meta = pyreadstat.read_sas7bdat(
-    str(npl6_path / "IIS.sas7bdat"),
-    columns=['ACCTNO', 'NOTENO', 'TOTIIS']
-)
-iis_df = pl.from_pandas(iis_df).sort(['ACCTNO', 'NOTENO'])
-
-# DATA AQ; MERGE AQ(IN=A) SP2 IIS; BY ACCTNO NOTENO;
-aq_merged = aq_df.join(sp2_df, on=['ACCTNO', 'NOTENO'], how='left') \
-                 .join(iis_df, on=['ACCTNO', 'NOTENO'], how='left')
-
-# Apply filters and transformations
-aq_processed = aq_merged.filter(
-    pl.col('LOANTYP').str.slice(0, 3) == 'HPD'
-).with_columns([
-    # IF SUBSTR(RISK,1,1) = 'S' THEN DO;
-    pl.when(pl.col('RISK').str.slice(0, 1) == 'S')
-    .then(
-        pl.when(pl.col('RISK') == 'SUBSTANDARD-1')
-        .then(pl.lit('S1'))
-        .otherwise(pl.lit('S2'))
-    )
-    .otherwise(pl.col('RISK').str.slice(0, 1))
-    .alias('RISKCD'),
-    
-    # SPAMT = SP;
-    pl.col('SP').alias('SPAMT'),
-    
-    # SPPLAMT = SPPL;
-    pl.col('SPPL').alias('SPPLAMT'),
-    
-    # IF SUBSTR(LOANTYP,1,9) = 'HPD AITAB' THEN LOANDESC = 'AITAB';
-    pl.when(pl.col('LOANTYP').str.slice(0, 9) == 'HPD AITAB')
-    .then(pl.lit('AITAB'))
-    .otherwise(pl.lit('HPD'))
-    .alias('LOANDESC'),
-    
-    # RPTDATE = MDY(&MM,&DD,&YY);
-    pl.datetime(int(YY), int(MM), int(DD)).alias('RPTDATE')
+df_fd = df_fd.with_columns([
+    pl.lit(reptdate).alias('REPTDATE')
 ])
 
-# PROC SORT DATA=AQ OUT=AQ; BY BRANCH LOANDESC RISKCD RPTDATE;
-aq_sorted = aq_processed.sort(['BRANCH', 'LOANDESC', 'RISKCD', 'RPTDATE'])
+def parse_matdate(matdate_val):
+    matdate_str = str(int(matdate_val)).zfill(8)
+    year = int(matdate_str[0:4])
+    month = int(matdate_str[4:6])
+    day = int(matdate_str[6:8])
+    return datetime(year, month, day)
 
-# PROC SUMMARY DATA=AQ NWAY;
-summary_columns = [
-    'NETBALP', 'NEWNPL', 'RECOVER', 'PL', 'NPLW', 'NPL', 
-    'TOTIIS', 'SPAMT', 'SPPLAMT', 'MARKETVL', 'ADJUST'
-]
-
-aq_summary = aq_sorted.group_by(['BRANCH', 'LOANDESC', 'RISKCD', 'RPTDATE']).agg([
-    pl.count().alias('NOACCT'),  # _FREQ_ renamed to NOACCT
-    *[pl.col(col).sum().alias(col) for col in summary_columns]
+df_fd = df_fd.with_columns([
+    pl.col('MATDATE').map_elements(parse_matdate, return_dtype=pl.Datetime).dt.date().alias('MATDT')
 ])
 
-# DATA _NULL_; SET AQ; FILE AQTXT NOTITLES;
-with open(output_path / "AQTXT.txt", "w") as f:
-    for row in aq_summary.iter_rows(named=True):
-        # Format each field according to SAS PUT specifications
-        line = (
-            f"{row['RPTDATE'].strftime('%d%m%Y'):>10}"      # @001 RPTDATE DDMMYY10.
-            f"{str(row.get('BRANCH', '')):>7}"              # @014 BRANCH $7.
-            f"{str(row.get('LOANDESC', '')):>5}"            # @023 LOANDESC $5.
-            f"{str(row.get('RISKCD', '')):>2}"              # @029 RISKCD $2.
-            f"{row.get('NETBALP', 0):13.2f}"               # @031 NETBALP 13.2
-            f"{row.get('NEWNPL', 0):13.2f}"                # @044 NEWNPL 13.2
-            f"{row.get('RECOVER', 0):13.2f}"               # @057 RECOVER 13.2
-            f"{row.get('PL', 0):13.2f}"                    # @070 PL 13.2
-            f"{row.get('NPLW', 0):13.2f}"                  # @083 NPLW 13.2
-            f"{row.get('NPL', 0):13.2f}"                   # @096 NPL 13.2
-            f"{row.get('TOTIIS', 0):13.2f}"                # @109 TOTIIS 13.2
-            f"{row.get('SPAMT', 0):13.2f}"                 # @122 SPAMT 13.2
-            f"{row.get('SPPLAMT', 0):13.2f}"               # @135 SPPLAMT 13.2
-            f"{row.get('MARKETVL', 0):13.2f}"              # @148 MARKETVL 13.2
-            f"{row.get('ADJUST', 0):13.2f}"                # @161 ADJUST 13.2
-        )
-        f.write(line + "\n")
+df_fd = df_fd.with_columns([
+    (pl.col('MATDT').cast(pl.Date) - pl.lit(reptdate).cast(pl.Date)).dt.total_days().alias('MATURITY')
+])
 
-print("AQTXT file generated successfully")
-print("PROCESSING COMPLETED SUCCESSFULLY")
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('LMATDATE') != 0)
+      .then(
+          pl.col('LMATDATE').cast(pl.Utf8).str.slice(0, 8).map_elements(
+              lambda x: datetime.strptime(x, '%m%d%Y').date() if len(x) == 8 else None,
+              return_dtype=pl.Date
+          )
+      )
+      .otherwise(pl.lit(None))
+      .alias('LASTMAT')
+])
+
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('LASTMAT') == reptdate)
+      .then(pl.lit(0))
+      .otherwise(pl.col('MATURITY'))
+      .alias('MATURITY'),
+    pl.when(pl.col('LASTMAT') == reptdate)
+      .then(pl.col('LASTMAT'))
+      .otherwise(pl.col('MATDT'))
+      .alias('MATDT')
+])
+
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('MATURITY') == 0)
+      .then(pl.lit('(T)'))
+      .otherwise(pl.concat_str([
+          pl.lit('(T+'),
+          pl.col('MATURITY').cast(pl.Utf8),
+          pl.lit(')')
+      ]))
+      .alias('TMATURITY')
+])
+
+df_fd = df_fd.with_columns([
+    (pl.col('CURBAL') * pl.col('RATE')).alias('RATEBAL')
+])
+
+df_fd = df_fd.drop('NAME')
+
+df_fd = df_fd.join(df_cisfd, on='ACCTNO', how='inner')
+
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('BUSSREG').str.strip_chars() != '')
+      .then(pl.col('BUSSREG'))
+      .when(pl.col('NEWIC').str.strip_chars() != '')
+      .then(pl.col('NEWIC'))
+      .when(pl.col('OLDIC').str.strip_chars() != '')
+      .then(pl.col('OLDIC'))
+      .otherwise(pl.col('CUSTNO'))
+      .alias('CUSTID')
+])
+
+df_fd = df_fd.sort('MATDT')
+df_fd = df_fd.sort(['CUSTID', 'MATDT'])
+
+df_fdtotal = df_fd.group_by(['CUSTID', 'MATDT']).agg([
+    pl.col('CURBAL').sum().alias('TOTAL'),
+    pl.col('RATEBAL').sum().alias('TOTRATEBAL')
+])
+
+df_fd_unique = df_fd.unique(subset=['CUSTID', 'MATDT'], keep='first')
+
+df_fdtotal = df_fd_unique.join(df_fdtotal, on=['CUSTID', 'MATDT'], how='inner')
+
+df_fdtotal = df_fdtotal.select([
+    'NAME', 'TOTAL', 'MATDT', 'MATURITY', 'TMATURITY', 'REPTDATE', 'TOTRATEBAL'
+])
+
+df_fdtotal = df_fdtotal.with_columns([
+    (pl.col('TOTRATEBAL') / pl.col('TOTAL')).round(2).alias('AVGRATE')
+])
+
+# Read FD again for total calculation
+df_fd_all, meta_fd_all = pyreadstat.read_sas7bdat(FD_FD)
+df_fd_all = pl.from_pandas(df_fd_all)
+df_fd_all = df_fd_all.filter(
+    (pl.col('CURBAL') > 0) & 
+    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
+    (pl.col('CURCODE') == 'MYR')
+)
+
+df_fd_all = df_fd_all.with_columns([
+    (pl.col('CURBAL') * pl.col('RATE')).alias('RATEBAL')
+])
+
+df_totalfd = df_fd_all.select([
+    pl.col('CURBAL').sum(),
+    pl.col('RATEBAL').sum()
+])
+
+df_totalfd = df_totalfd.with_columns([
+    (pl.col('RATEBAL') / pl.col('CURBAL')).round(2).alias('AVGRATE')
+])
+
+lines = []
+lines.append(' ')
+lines.append('TOTAL NON-INDI FD (MIL);AVERAGE RATE;')
+
+total_fd = df_totalfd.to_dicts()[0]
+curbal1 = round(total_fd['CURBAL'] / 1000000, 3)
+lines.append(f"{curbal1:.3f};{total_fd['AVGRATE']:.2f};")
+
+df_mature = df_fdtotal.with_columns([
+    (pl.col('TOTAL') / 1000000).round(3).alias('TOTAL1'),
+    pl.concat_str([
+        pl.col('MATDT').dt.strftime('%d/%m/%Y'),
+        pl.col('TMATURITY')
+    ]).alias('REPTDATE1')
+])
+
+df_mature_summary = df_mature.filter(
+    (pl.col('MATURITY') >= 0) & (pl.col('MATURITY') < 8)
+).group_by('REPTDATE1').agg([
+    pl.col('TOTAL').sum()
+])
+
+lines.append(' ')
+lines.append('MATURITY DATE;TOTAL NON-INDI FD (MIL);')
+
+for row in df_mature_summary.iter_rows(named=True):
+    curbal1 = round(row['TOTAL'] / 1000000, 3)
+    lines.append(f"{row['REPTDATE1']};{curbal1:.3f};")
+
+for i in range(8):
+    df_mature_day = df_mature.filter(pl.col('MATURITY') == i)
+    
+    if len(df_mature_day) > 0:
+        df_mature_day = df_mature_day.sort('TOTAL', descending=True)
+        
+        first_row = df_mature_day.to_dicts()[0]
+        tmat = first_row['TMATURITY']
+        date_str = first_row['MATDT'].strftime('%d/%m/%Y')
+        
+        lines.append(' ')
+        lines.append(' ')
+        lines.append(' ')
+        lines.append(f"RM NON-INDI FD DETAILS BY CUSTOMER MATURING {date_str} {tmat}")
+        lines.append(' ')
+        lines.append('CUSTOMER;SETTLEMENT AMOUNT(MIL.);MATURITY DATE;AVERAGE RATE;')
+        
+        for row in df_mature_day.iter_rows(named=True):
+            lines.append(
+                f"{row['NAME']};{row['TOTAL1']:.3f};{row['REPTDATE1']};{row['AVGRATE']:.2f};"
+            )
+
+with open(OVER1M, 'w') as f:
+    for line in lines:
+        f.write(line + '\n')
+
+print(f"Report generated: {OVER1M}")
+
+
+
+FOR TESTING PURPOSES, MAKE IT READ 10000 ROWS ONLY
