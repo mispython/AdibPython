@@ -3,12 +3,13 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 import shutil
 import pyreadstat
+import pandas as pd
 
 # ==================== SETUP ====================
-BASE_PATH = Path("/path/to/data")
-DEPOBACK_PATH = BASE_PATH / "depoback"
-BNM_PATH = BASE_PATH / "bnm"
-OUTPUT_PATH = BASE_PATH / "output"
+BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS")
+DEPOBACK_PATH = BASE_PATH / "/input/prod/MNI/"
+BNM_PATH = BASE_PATH / "/output/EIBQFDSP"
+OUTPUT_PATH = BASE_PATH / "/output/EIBQFDSP"
 
 # Create output directory if it doesn't exist
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
@@ -393,3 +394,25 @@ print("\nProcessing complete!")
 print("\nExporting to CSV for review...")
 alm.write_csv(OUTPUT_PATH / f"ALM_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
 almdept.write_csv(OUTPUT_PATH / f"ALMDEPT_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
+
+
+
+Traceback (most recent call last):
+  File "/usr/lib64/python3.9/pathlib.py", line 1251, in mkdir
+    self._accessor.mkdir(self, mode)
+FileNotFoundError: [Errno 2] No such file or directory: '/output/EIBQFDSP'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBQFDSP.py", line 15, in <module>
+    OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+  File "/usr/lib64/python3.9/pathlib.py", line 1255, in mkdir
+    self.parent.mkdir(parents=True, exist_ok=True)
+  File "/usr/lib64/python3.9/pathlib.py", line 1251, in mkdir
+    self._accessor.mkdir(self, mode)
+PermissionError: [Errno 13] Permission denied: '/output'
+
+
+
+BUT I already have the correct path directory
