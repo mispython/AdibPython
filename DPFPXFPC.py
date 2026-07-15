@@ -10,14 +10,14 @@ CISAFD_DEPOSIT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD
 FD_FD = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBQDISE/fd.sas7bdat'
 OVER1M = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDFD1M/over1m.txt'
 
-# Read SAS datasets using pyreadstat
-df_cisfd, meta_cisfd = pyreadstat.read_sas7bdat(CISAFD_DEPOSIT)
+# Read SAS datasets using pyreadstat - limit to 10000 rows for testing
+df_cisfd, meta_cisfd = pyreadstat.read_sas7bdat(CISAFD_DEPOSIT, row_limit=10000)
 df_cisfd = pl.from_pandas(df_cisfd)
 df_cisfd = df_cisfd.filter(pl.col('SECCUST') == '901').select([
     'ACCTNO', 'CUSTNAM1', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'
 ]).sort('ACCTNO').rename({'CUSTNAM1': 'NAME'})
 
-df_fd, meta_fd = pyreadstat.read_sas7bdat(FD_FD)
+df_fd, meta_fd = pyreadstat.read_sas7bdat(FD_FD, row_limit=10000)
 df_fd = pl.from_pandas(df_fd)
 df_fd = df_fd.filter(
     (pl.col('CURBAL') > 0) & 
@@ -117,8 +117,8 @@ df_fdtotal = df_fdtotal.with_columns([
     (pl.col('TOTRATEBAL') / pl.col('TOTAL')).round(2).alias('AVGRATE')
 ])
 
-# Read FD again for total calculation
-df_fd_all, meta_fd_all = pyreadstat.read_sas7bdat(FD_FD)
+# Read FD again for total calculation - limit to 10000 rows
+df_fd_all, meta_fd_all = pyreadstat.read_sas7bdat(FD_FD, row_limit=10000)
 df_fd_all = pl.from_pandas(df_fd_all)
 df_fd_all = df_fd_all.filter(
     (pl.col('CURBAL') > 0) & 
@@ -195,7 +195,3 @@ with open(OVER1M, 'w') as f:
         f.write(line + '\n')
 
 print(f"Report generated: {OVER1M}")
-
-
-
-FOR TESTING PURPOSES, MAKE IT READ 10000 ROWS ONLY
