@@ -1,30 +1,29 @@
 import polars as pl
-import duckdb
+import pyreadstat
 from pathlib import Path
 import datetime
 import sys
 
 # Configuration
-loan_path = Path("LOAN")
 npl6_path = Path("NPL6")
 output_path = Path("output")
 output_path.mkdir(exist_ok=True)
 
-# DATA REPTDATE;
-reptdate_df = pl.read_parquet(loan_path / "REPTDATE.parquet")
+# Get current date and subtract 1 day (equivalent to REPTDATE)
+today = datetime.datetime.now()
+reptdate = today - datetime.timedelta(days=1)
 
-# Extract parameters - CALL SYMPUT equivalent
-first_row = reptdate_df.row(0)
-MM = f"{first_row['REPTDATE'].month:02d}"  # Z2.
-YY = str(first_row['REPTDATE'].year)       # YEAR4.
-DD = f"{first_row['REPTDATE'].day:02d}"    # Z2.
-RDATE = first_row['REPTDATE'].strftime('%d%m%y')  # DDMMYY8.
+# Extract parameters (equivalent to CALL SYMPUT)
+MM = f"{reptdate.month:02d}"   # Z2.
+YY = str(reptdate.year)        # YEAR4.
+DD = f"{reptdate.day:02d}"     # Z2.
+RDATE = reptdate.strftime('%d%m%y')  # DDMMYY8.
 
 print(f"MM: {MM}, YY: {YY}, DD: {DD}, RDATE: {RDATE}")
 
-# DATA _NULL_ for NPLDATE
-npl_reptdate_df = pl.read_parquet(npl6_path / "REPTDATE.parquet")
-NPLDATE = npl_reptdate_df.row(0)['REPTDATE'].strftime('%d%m%y')  # DDMMYY8.
+# Load NPLDATE from NPL6.REPTDATE (SAS7BDAT format)
+npl_reptdate_df, npl_meta = pyreadstat.read_sas7bdat(str(npl6_path / "REPTDATE.sas7bdat"))
+NPLDATE = npl_reptdate_df['REPTDATE'].iloc[0].strftime('%d%m%y')  # DDMMYY8.
 
 print(f"NPLDATE: {NPLDATE}")
 print(f"RDATE: {RDATE}")
@@ -33,18 +32,24 @@ print(f"RDATE: {RDATE}")
 if NPLDATE == RDATE:
     print("EXTRACT FROM AQ, SP2 & IIS")
     
+    # Read SAS7BDAT files
     # PROC SORT DATA=NPL6.AQ OUT=AQ; BY ACCTNO NOTENO;
-    aq_df = pl.read_parquet(npl6_path / "AQ.parquet").sort(['ACCTNO', 'NOTENO'])
+    aq_df, aq_meta = pyreadstat.read_sas7bdat(str(npl6_path / "AQ.sas7bdat"))
+    aq_df = pl.from_pandas(aq_df).sort(['ACCTNO', 'NOTENO'])
     
     # PROC SORT DATA=NPL6.SP2 OUT=SP2(KEEP=ACCTNO NOTENO SP SPPL MARKETVL);
-    sp2_df = pl.read_parquet(npl6_path / "SP2.parquet").select([
-        'ACCTNO', 'NOTENO', 'SP', 'SPPL', 'MARKETVL'
-    ]).sort(['ACCTNO', 'NOTENO'])
+    sp2_df, sp2_meta = pyreadstat.read_sas7bdat(
+        str(npl6_path / "SP2.sas7bdat"),
+        columns=['ACCTNO', 'NOTENO', 'SP', 'SPPL', 'MARKETVL']
+    )
+    sp2_df = pl.from_pandas(sp2_df).sort(['ACCTNO', 'NOTENO'])
     
     # PROC SORT DATA=NPL6.IIS OUT=IIS(KEEP=ACCTNO NOTENO TOTIIS);
-    iis_df = pl.read_parquet(npl6_path / "IIS.parquet").select([
-        'ACCTNO', 'NOTENO', 'TOTIIS'
-    ]).sort(['ACCTNO', 'NOTENO'])
+    iis_df, iis_meta = pyreadstat.read_sas7bdat(
+        str(npl6_path / "IIS.sas7bdat"),
+        columns=['ACCTNO', 'NOTENO', 'TOTIIS']
+    )
+    iis_df = pl.from_pandas(iis_df).sort(['ACCTNO', 'NOTENO'])
     
     # DATA AQ; MERGE AQ(IN=A) SP2 IIS; BY ACCTNO NOTENO;
     aq_merged = aq_df.join(sp2_df, on=['ACCTNO', 'NOTENO'], how='left')\
@@ -94,10 +99,6 @@ if NPLDATE == RDATE:
         *[pl.col(col).sum().alias(col) for col in summary_columns]
     ])
     
-    # Save summary output
-    aq_summary.write_csv(output_path / "AQ.csv")
-    aq_summary.write_parquet(output_path / "AQ.parquet")
-    
     # DATA _NULL_; SET AQ; FILE AQTXT NOTITLES;
     with open(output_path / "AQTXT.txt", "w") as f:
         for row in aq_summary.iter_rows(named=True):
@@ -133,7 +134,3 @@ else:
     sys.exit(77)
 
 print("PROCESSING COMPLETED SUCCESSFULLY")
-
-
-
-rmeove the reptdate, use datetime timeldelta - 1 instead. all other inputs are in sas7bdat sas dataset. may use pyreadstat. output in text file
