@@ -1,12 +1,17 @@
 import polars as pl
 from datetime import datetime, date, timedelta
 from pathlib import Path
+import shutil
+import pyreadstat
 
 # ==================== SETUP ====================
 BASE_PATH = Path("/path/to/data")
 DEPOBACK_PATH = BASE_PATH / "depoback"
 BNM_PATH = BASE_PATH / "bnm"
 OUTPUT_PATH = BASE_PATH / "output"
+
+# Create output directory if it doesn't exist
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
 # ==================== REPTDATE CALCULATIONS ====================
 print("Calculating report dates...")
@@ -57,20 +62,24 @@ print(f"Report Date: {RDATE}, Week: {NOWK}")
 
 # ==================== COPY FILES ====================
 print("Copying files from DEPOBACK to BNM...")
-import shutil
 
-files_to_copy = ["FDWKLY.parquet", "FDMTHLY.parquet"]
+# Note: The SAS dataset names are lowercase in the actual files
+files_to_copy = ["fdwkly.sas7bdat", "fdmthly.sas7bdat"]
 for file in files_to_copy:
     src = DEPOBACK_PATH / file
     dst = BNM_PATH / file
     if src.exists():
         shutil.copy2(src, dst)
         print(f"Copied: {file}")
+    else:
+        print(f"Warning: {file} not found in {DEPOBACK_PATH}")
 
 # ==================== FORMAT FUNCTIONS ====================
 def kremmth_format(value):
     """Format remaining months to KREMMTH codes"""
-    if value < 0:
+    if value is None or pd.isna(value):
+        return None
+    elif value < 0:
         return '51'
     elif 0 <= value < 1:
         return '52'
@@ -110,21 +119,58 @@ def days_in_month(year, month):
         return 30
     return 31
 
+# ==================== READ SAS DATASET WITH PYREADSTAT ====================
+def read_sas_dataset(filepath):
+    """Read SAS dataset using pyreadstat and convert to Polars DataFrame"""
+    try:
+        # Read SAS file with pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        print(f"Read {len(df)} records from {filepath.name}")
+        print(f"Columns: {', '.join(df.columns.tolist())}")
+        
+        # Convert to Polars DataFrame
+        return pl.from_pandas(df)
+    except Exception as e:
+        print(f"Error reading {filepath}: {e}")
+        raise
+
 # ==================== REMMTH CALCULATION ====================
 def calculate_remmth(row, reptdate_val):
     """Calculate remaining months"""
-    if row["OPENIND"] == "D":
+    openind = row.get("OPENIND", "")
+    if openind == "D":
         return -1
     
-    if row["OPENIND"] != "O":
+    if openind != "O":
         return None
     
     # Parse maturity date
-    if not row["MATDATE"]:
+    matdate_val = row.get("MATDATE")
+    if matdate_val is None or pd.isna(matdate_val):
         return None
     
     try:
-        fddt = datetime.strptime(str(row["MATDATE"]).zfill(8), "%Y%m%d").date()
+        # Handle different date formats
+        if isinstance(matdate_val, (datetime, date)):
+            fddt = matdate_val
+        elif isinstance(matdate_val, (int, float)):
+            # Numeric SAS date (days since 1960-01-01)
+            fddt = datetime(1960, 1, 1) + timedelta(days=int(matdate_val))
+            fddt = fddt.date()
+        else:
+            # Try parsing as string
+            date_str = str(matdate_val).strip()
+            if len(date_str) >= 8:
+                # Try different formats
+                try:
+                    fddt = datetime.strptime(date_str[:8], "%Y%m%d").date()
+                except:
+                    try:
+                        fddt = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+                    except:
+                        return None
+            else:
+                return None
     except:
         return None
     
@@ -154,21 +200,76 @@ def calculate_remmth(row, reptdate_val):
 
 # ==================== PROCESS FDMTHLY DATA ====================
 print("Processing FDMTHLY data...")
-fdmthly = pl.read_parquet(BNM_PATH / "FDMTHLY.parquet")
+fdmthly_file = BNM_PATH / "fdmthly.sas7bdat"
 
-# Filter open accounts
-fdmthly = fdmthly.filter(pl.col("OPENIND").is_in(["O", "D"]))
+if not fdmthly_file.exists():
+    print(f"Error: {fdmthly_file} not found!")
+    exit(1)
+
+try:
+    fdmthly = read_sas_dataset(fdmthly_file)
+    print(f"Loaded {len(fdmthly)} records from fdmthly.sas7bdat")
+except Exception as e:
+    print(f"Error reading dataset: {e}")
+    exit(1)
+
+# Filter open accounts (using string values)
+open_inds = ["O", "D"]
+if "OPENIND" in fdmthly.columns:
+    # Handle different data types for OPENIND
+    fdmthly = fdmthly.with_columns([
+        pl.col("OPENIND").cast(pl.Utf8).str.strip()
+    ])
+    fdmthly = fdmthly.filter(pl.col("OPENIND").is_in(open_inds))
+else:
+    print("Warning: OPENIND column not found!")
 
 # Calculate REMMTH for each row
 reptdate_val = datetime.strptime(RDATE, "%d%m%Y").date()
+
+# Convert MATDATE to appropriate format if needed
+if "MATDATE" in fdmthly.columns:
+    # Ensure MATDATE is in a usable format
+    pass
+
+# Apply REMMTH calculation row by row
 fdmthly = fdmthly.with_columns([
-    pl.struct(["OPENIND", "MATDATE"]).apply(
-        lambda x: calculate_remmth(x, reptdate_val)
+    pl.struct(["OPENIND", "MATDATE"]).map_elements(
+        lambda x: calculate_remmth(x, reptdate_val),
+        return_dtype=pl.Float64
     ).alias("REMMTH")
 ])
 
-# Select required columns
-alm = fdmthly.select(["BIC", "CUSTCODE", "REMMTH", "CURBAL"])
+# Select required columns (use lowercase/uppercase column names as needed)
+columns_to_select = []
+for col in ["BIC", "CUSTCODE", "REMMTH", "CURBAL"]:
+    if col in fdmthly.columns:
+        columns_to_select.append(col)
+    else:
+        # Try uppercase versions
+        upper_col = col.upper()
+        if upper_col in fdmthly.columns:
+            columns_to_select.append(upper_col)
+        else:
+            print(f"Warning: Column {col} not found")
+
+if not columns_to_select:
+    print("Error: Required columns not found!")
+    print(f"Available columns: {fdmthly.columns}")
+    exit(1)
+
+alm = fdmthly.select(columns_to_select)
+
+# Rename columns to standard names if needed
+rename_dict = {}
+for col in alm.columns:
+    if col.upper() in ["BIC", "CUSTCODE", "CURBAL"]:
+        rename_dict[col] = col.upper()
+    elif col.upper() == "REMMTH":
+        rename_dict[col] = "REMMTH"
+
+if rename_dict:
+    alm = alm.rename(rename_dict)
 
 # ==================== SUMMARIZE DATA ====================
 print("Summarizing data...")
@@ -189,8 +290,13 @@ almdept = alm_summary.with_columns([
     .alias("BNMCODE")
 ]).filter(pl.col("BNMCODE").is_not_null()).select(["BNMCODE", "AMOUNT", "CUSTCODE", "REMMTH"])
 
+# Convert CUSTCODE to string for proper filtering
+almdept = almdept.with_columns([
+    pl.col("CUSTCODE").cast(pl.Utf8)
+])
+
 # ==================== GENERATE REPORTS ====================
-def generate_report(data, bic_prefix, title):
+def generate_report(data, bic_prefix, title, report_suffix=""):
     """Generate formatted report for specific BIC prefix"""
     report_data = data.filter(pl.col("BNMCODE").str.starts_with(bic_prefix))
     
@@ -203,8 +309,8 @@ def generate_report(data, bic_prefix, title):
         pl.col("AMOUNT").sum().alias("AMOUNT")
     ]).sort("BNMCODE")
     
-    # Generate report
-    report_file = OUTPUT_PATH / f"REPORT_{bic_prefix}_{RDATE}.txt"
+    # Generate report as text file
+    report_file = OUTPUT_PATH / f"REPORT_{bic_prefix}_{report_suffix}_{RDATE}.txt"
     total_amount = summary["AMOUNT"].sum()
     
     with open(report_file, 'w') as f:
@@ -229,10 +335,10 @@ def generate_report(data, bic_prefix, title):
 print("\nGenerating reports...")
 
 # Report for 42130
-report_42130 = generate_report(almdept, "42130", "CODE 81 & 85 FOR 42130-80-XX-0000Y")
+report_42130 = generate_report(almdept, "42130", "CODE 81 & 85 FOR 42130-80-XX-0000Y", "42130")
 
 # Report for 42132
-report_42132 = generate_report(almdept, "42132", "CODE 81 & 85 FOR 42132-80-XX-0000Y")
+report_42132 = generate_report(almdept, "42132", "CODE 81 & 85 FOR 42132-80-XX-0000Y", "42132")
 
 # Report for 42630
 print("Generating FCY FD report...")
@@ -283,5 +389,7 @@ if len(almdept) > 0:
 
 print("\nProcessing complete!")
 
-
-the fdmthly.sas7bdat is in sas dataset lowercase. output in text file. 
+# ==================== OPTIONAL: EXPORT TO CSV FOR REVIEW ====================
+print("\nExporting to CSV for review...")
+alm.write_csv(OUTPUT_PATH / f"ALM_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
+almdept.write_csv(OUTPUT_PATH / f"ALMDEPT_{REPTMON}_{NOWK}_{REPTYEAR}.csv")
