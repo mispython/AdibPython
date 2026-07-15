@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 INPUT_BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod")
 LOAN_PATH = INPUT_BASE_PATH / "EIPWRDAL"
 PBCS_PATH = INPUT_BASE_PATH / "EIPWRDAL"
-BNM_BASE_PATH = INPUT_BASE_PATH / "bnm/d2025"
+BNM_BASE_PATH = INPUT_BASE_PATH / "EIPWRDAL"
 
 # Output paths
 OUTPUT_BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIPWRDAL")
@@ -838,3 +838,7 @@ print("=" * 70)
 print(f"Output files:")
 print(f"  - RDAL: {RDAL_OUTPUT}")
 print(f"  - NSRS: {NSRS_OUTPUT}")
+
+
+
+for the lnnote, for the sake of testing, make it run for 10000 rows or obs only
