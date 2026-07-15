@@ -1,40 +1,40 @@
 import polars as pl
 from datetime import datetime, timedelta
+import saspy
 
-FD_REPTDATE = 'data/fd/reptdate.parquet'
-CISAFD_DEPOSIT = 'data/cisafd/deposit.parquet'
-FD_FD = 'data/fd/fd.parquet'
+# Hardcode reptdate as yesterday
+reptdate = datetime.now().date() - timedelta(days=1)
+
+# SAS dataset paths
+FD_REPTDATE = 'data/fd/reptdate.sas7bdat'  # Not actually used anymore
+CISAFD_DEPOSIT = 'data/cisafd/deposit.sas7bdat'
+FD_FD = 'data/fd/fd.sas7bdat'
 OVER1M = 'data/over1m.txt'
 
-df_reptdate = pl.read_parquet(FD_REPTDATE)
-reptdate = df_reptdate['REPTDATE'][0]
+# Connect to SAS
+sas = saspy.SASsession()
 
-day = reptdate.day
-if day == 8:
-    nowk = '1'
-elif day == 15:
-    nowk = '2'
-elif day == 22:
-    nowk = '3'
-else:
-    nowk = '4'
-
-reptyear = reptdate.strftime('%Y')
-reptmon = reptdate.strftime('%m')
-reptday = reptdate.strftime('%d')
-rdate = reptdate.strftime('%d%m%y')
-
-df_cisfd = pl.read_parquet(CISAFD_DEPOSIT)
+# Read SAS datasets
+df_cisfd = sas.read_sas(CISAFD_DEPOSIT)
+df_cisfd = pl.from_pandas(df_cisfd)
 df_cisfd = df_cisfd.filter(pl.col('SECCUST') == '901').select([
     'ACCTNO', 'CUSTNAM1', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'
 ]).sort('ACCTNO').rename({'CUSTNAM1': 'NAME'})
 
-df_fd = pl.read_parquet(FD_FD)
+df_fd = sas.read_sas(FD_FD)
+df_fd = pl.from_pandas(df_fd)
 df_fd = df_fd.filter(
     (pl.col('CURBAL') > 0) & 
     (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
     (pl.col('CURCODE') == 'MYR')
 )
+
+# Rest of the code remains the same from here...
+
+# Remove these lines as they're no longer needed:
+# day = reptdate.day
+# if day == 8: nowk = '1' ...
+# reptyear = reptdate.strftime('%Y') ...
 
 df_fd = df_fd.with_columns([
     pl.lit(reptdate).alias('REPTDATE')
@@ -109,7 +109,6 @@ df_fd = df_fd.with_columns([
 ])
 
 df_fd = df_fd.sort('MATDT')
-
 df_fd = df_fd.sort(['CUSTID', 'MATDT'])
 
 df_fdtotal = df_fd.group_by(['CUSTID', 'MATDT']).agg([
@@ -129,7 +128,9 @@ df_fdtotal = df_fdtotal.with_columns([
     (pl.col('TOTRATEBAL') / pl.col('TOTAL')).round(2).alias('AVGRATE')
 ])
 
-df_fd_all = pl.read_parquet(FD_FD)
+# Read FD again for total calculation
+df_fd_all = sas.read_sas(FD_FD)
+df_fd_all = pl.from_pandas(df_fd_all)
 df_fd_all = df_fd_all.filter(
     (pl.col('CURBAL') > 0) & 
     (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
