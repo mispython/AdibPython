@@ -4,6 +4,8 @@ from pathlib import Path
 import shutil
 import pyreadstat
 import pandas as pd
+import decimal
+from decimal import Decimal
 
 # ==================== SETUP ====================
 BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS")
@@ -63,37 +65,42 @@ for file in files_to_copy:
 
 # ==================== FUNCTIONS ====================
 def kremmth_format(value):
-    """Format remaining months to KREMMTH codes - matching SAS exactly"""
+    """
+    Format remaining months to KREMMTH codes - matching SAS exactly
+    SAS uses integer truncation for the format boundaries
+    """
     if value is None or pd.isna(value):
         return None
-    # Use a small epsilon to handle floating point boundaries
-    # This matches SAS behavior where values at boundaries are handled consistently
-    eps = 0.0000000001
-    if value < 0:
+    
+    # SAS uses exact comparisons, not floating point
+    # We'll use Decimal for exact comparison
+    v = Decimal(str(value))
+    
+    if v < 0:
         return '51'
-    elif 0 <= value < 1 - eps:
+    elif 0 <= v < 1:
         return '52'
-    elif 1 - eps <= value < 2 - eps:
+    elif 1 <= v < 2:
         return '53'
-    elif 2 - eps <= value < 3 - eps:
+    elif 2 <= v < 3:
         return '54'
-    elif 3 - eps <= value < 4 - eps:
+    elif 3 <= v < 4:
         return '81'
-    elif 4 - eps <= value < 5 - eps:
+    elif 4 <= v < 5:
         return '82'
-    elif 5 - eps <= value < 6 - eps:
+    elif 5 <= v < 6:
         return '83'
-    elif 6 - eps <= value < 7 - eps:
+    elif 6 <= v < 7:
         return '84'
-    elif 7 - eps <= value < 8 - eps:
+    elif 7 <= v < 8:
         return '85'
-    elif 8 - eps <= value < 9 - eps:
+    elif 8 <= v < 9:
         return '86'
-    elif 9 - eps <= value < 10 - eps:
+    elif 9 <= v < 10:
         return '87'
-    elif 10 - eps <= value < 11 - eps:
+    elif 10 <= v < 11:
         return '88'
-    elif 11 - eps <= value < 12 - eps:
+    elif 11 <= v < 12:
         return '89'
     else:
         return '60'
@@ -122,6 +129,7 @@ def yyyymmdd_to_date(yyyymmdd):
 def calculate_remmth(row, reptdate_val):
     """
     Calculate remaining months - matching SAS logic exactly
+    Using Decimal for exact precision matching SAS
     """
     openind = row.get("OPENIND", "")
     matdate = row.get("MATDATE_DATE")
@@ -142,16 +150,17 @@ def calculate_remmth(row, reptdate_val):
         if fdday == fd_days_in_month:
             fdday = rp_days_in_month
         
-        # Calculate differences
-        remy = fdyr - rpyr
-        remm = fdmth - rpmth
-        remd = fdday - rpday
+        # Calculate differences using Decimal for exact precision
+        remy = Decimal(fdyr - rpyr)
+        remm = Decimal(fdmth - rpmth)
+        remd = Decimal(fdday - rpday)
+        rp_days = Decimal(rp_days_in_month)
         
         # Calculate REMMTH
-        remmth = remy * 12 + remm + remd / rp_days_in_month
+        remmth = remy * 12 + remm + remd / rp_days
         
-        # Round to 10 decimal places to match SAS precision
-        return round(remmth, 10)
+        # Convert back to float for Polars
+        return float(remmth)
     except:
         return None
 
@@ -313,9 +322,12 @@ def generate_combined_report(data, report_date):
             f.write(" " * 25 + "=============\n")
             f.write(f"{' ':<8} {'TOTAL':<18} {total_amount:>20,.2f}\n")
             
-            # Add blank line between sections (production has 2 blank lines)
-            if section_idx < len(sections) - 1:
-                f.write("\n\n")
+            # Add blank line between sections
+            if section_idx < len(sections) - 1 and section_data.height > 0:
+                # Check if next section has data
+                next_section_data = data.filter(pl.col("BNMCODE").str.starts_with(sections[section_idx + 1]["prefix"]))
+                if next_section_data.height > 0:
+                    f.write("\n\n")
     
     print(f"Combined report saved: {report_file}")
     return report_file
