@@ -7,6 +7,7 @@ Processes banking data and generates RDAL and NSRS output files
 
 import duckdb
 import polars as pl
+import pyreadstat
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
@@ -123,17 +124,19 @@ def load_alw_data(dates):
     nowk = dates['nowk']
     reptyear = dates['reptyear']
 
-    bnm_path = BNM_BASE_PATH / f"D{reptyear}" / f"ALW{reptmon}{nowk}.parquet"
-    pbcs_path = PBCS_PATH / f"CCLW{reptmon}{nowk}.parquet"
+    bnm_path = BNM_BASE_PATH / f"D{reptyear}" / f"ALW{reptmon}{nowk}.sas7bdat"
+    pbcs_path = PBCS_PATH / f"CCLW{reptmon}{nowk}.sas7bdat"
 
     dfs = []
 
     if bnm_path.exists():
-        df_bnm = pl.read_parquet(bnm_path)
+        df_bnm, meta_bnm = pyreadstat.read_sas7bdat(bnm_path)
+        df_bnm = pl.from_pandas(df_bnm)
         dfs.append(df_bnm)
 
     if pbcs_path.exists():
-        df_pbcs = pl.read_parquet(pbcs_path)
+        df_pbcs, meta_pbcs = pyreadstat.read_sas7bdat(pbcs_path)
+        df_pbcs = pl.from_pandas(df_pbcs)
         dfs.append(df_pbcs)
 
     if dfs:
@@ -148,10 +151,11 @@ def load_alw_data(dates):
 
 def load_loan_data():
     """Load loan note data for CAG processing"""
-    loan_path = LOAN_PATH / "LNNOTE.parquet"
+    loan_path = LOAN_PATH / "LNNOTE.sas7bdat"
 
     if loan_path.exists():
-        return pl.read_parquet(loan_path)
+        df_loan, meta_loan = pyreadstat.read_sas7bdat(loan_path)
+        return pl.from_pandas(df_loan)
     else:
         return pl.DataFrame({
             'PZIPCODE': pl.Series([], dtype=pl.Int64),
@@ -217,16 +221,6 @@ else:
     })
 
 # Remove unwanted items
-# rdal = rdal.filter(
-#     ~(
-#             (pl.col('ITCODE').str.slice(0, 5).is_between('30221', '30228')) |
-#             (pl.col('ITCODE').str.slice(0, 5).is_between('30231', '30238')) |
-#             (pl.col('ITCODE').str.slice(0, 5).is_between('30091', '30098')) |
-#             (pl.col('ITCODE').str.slice(0, 5).is_between('40151', '40158')) |
-#             (pl.col('ITCODE').str.slice(0, 5) == 'NSSTS')
-#     )
-# )
-
 rdal = rdal.filter(
     ~(
         (pl.col('ITCODE').str.slice(0, 5).is_between(pl.lit('30221'), pl.lit('30228'))) |
@@ -236,19 +230,6 @@ rdal = rdal.filter(
         (pl.col('ITCODE').str.slice(0, 5) == 'NSSTS')
     )
 )
-
-# # Alternative - More like SAS logic
-# prefix5 = pl.col('ITCODE').str.slice(0, 5)
-#
-# rdal = rdal.filter(
-#     ~(
-#         ((prefix5 >= '30221') & (prefix5 <= '30228')) |
-#         ((prefix5 >= '30231') & (prefix5 <= '30238')) |
-#         ((prefix5 >= '30091') & (prefix5 <= '30098')) |
-#         ((prefix5 >= '40151') & (prefix5 <= '40158')) |
-#         (prefix5 == 'NSSTS')
-#     )
-# )
 
 
 # ============================================================================
@@ -665,27 +646,9 @@ def write_nsrs_file(al_data, ob_data, sp_data, dates, output_path):
 write_nsrs_file(al_data2, ob_data2, sp_data2, dates, NSRS_OUTPUT)
 print(f"NSRS file written to: {NSRS_OUTPUT}")
 
-
-# ============================================================================
-# GENERATE FTP SCRIPT
-# ============================================================================
-
-SFTP_OUTPUT = OUTPUT_BASE_PATH / "ftp_commands.txt"
-
-with open(SFTP_OUTPUT, 'w') as f:
-    ftp_filename = f"nsrs_EAB_PBCS_{dates['fdate']}.txt"
-    f.write(f"PUT //SAP.PBB.NSRS.RDAL.PBCS {ftp_filename}\n")
-
-print(f"FTP commands written to: {SFTP_OUTPUT}")
-
 print("\n" + "=" * 70)
 print("Processing complete!")
 print("=" * 70)
 print(f"Output files:")
 print(f"  - RDAL: {RDAL_OUTPUT}")
 print(f"  - NSRS: {NSRS_OUTPUT}")
-print(f"  - SFTP: {SFTP_OUTPUT}")
-
-
-
-all inputs are in sas7bdat instead of parquet. may use pyreadstat to read
