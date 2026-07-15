@@ -238,54 +238,79 @@ almdept = alm_summary.with_columns([
 
 print(f"ALMDEPT records: {almdept.height:,}")
 
-# ==================== GENERATE PRODUCTION-STYLE REPORTS ====================
-def generate_production_report(data, bic_prefix, title):
-    """Generate report matching production output exactly"""
+# ==================== GENERATE COMBINED PRODUCTION-STYLE REPORT ====================
+def generate_combined_report(data, report_date):
+    """Generate a single combined report with all BIC sections"""
     if data.height == 0:
-        print(f"No data for {bic_prefix}")
+        print("No data available!")
         return
     
-    report_data = data.filter(pl.col("BNMCODE").str.starts_with(bic_prefix))
-    if report_data.height == 0:
-        print(f"No data for {bic_prefix}")
-        return
+    report_file = OUTPUT_PATH / f"REPORT_EXTERNAL_LIABILITIES_{report_date}.txt"
     
-    # Summarize by BNMCODE
-    summary = report_data.group_by("BNMCODE").agg([
-        pl.col("AMOUNT").sum().alias("AMOUNT")
-    ]).sort("BNMCODE")
-    
-    report_file = OUTPUT_PATH / f"REPORT_{bic_prefix}_{RDATE}.txt"
-    total_amount = summary["AMOUNT"].sum()
+    # Define report sections
+    sections = [
+        {
+            "prefix": "42130",
+            "title": "CODE 81 & 85 FOR 42130-80-XX-0000Y"
+        },
+        {
+            "prefix": "42132",
+            "title": "CODE 81 & 85 FOR 42132-80-XX-0000Y"
+        },
+        {
+            "prefix": "42630",
+            "title": "REPORT ON EXTERNAL LIABILITIES FOR FCY FD FROM FNBE (85)"
+        }
+    ]
     
     with open(report_file, 'w') as f:
-        # Header - exactly like production
-        f.write(" " * 40 + "SPECIAL PURPOSE ITEMS (QUARTERLY): EXTERNAL LIABILITIES\n")
-        f.write(" " * 50 + f"AS AT {RDATE[:2]}/{RDATE[2:4]}/{RDATE[4:]}\n")
-        f.write(" " * 45 + f"{title}\n\n")
-        
-        # Column headers - exactly like production
-        f.write("Obs       BNMCODE            AMOUNT\n")
-        f.write(" " + "="*50 + "\n")
-        
-        # Data rows with observation numbers
-        for i, row in enumerate(summary.iter_rows(named=True), 1):
-            # Format amount with 2 decimal places
-            f.write(f"{i:>3}    {row['BNMCODE']:<18} {row['AMOUNT']:>20,.2f}\n")
-        
-        # Total line - exactly like production
-        f.write(" " + "="*50 + "\n")
-        f.write(f"{' ':<8} {'TOTAL':<18} {total_amount:>20,.2f}\n")
+        for section_idx, section in enumerate(sections):
+            prefix = section["prefix"]
+            title = section["title"]
+            
+            # Filter data for this section
+            section_data = data.filter(pl.col("BNMCODE").str.starts_with(prefix))
+            
+            if section_data.height == 0:
+                print(f"No data for {prefix}")
+                continue
+            
+            # Summarize by BNMCODE
+            summary = section_data.group_by("BNMCODE").agg([
+                pl.col("AMOUNT").sum().alias("AMOUNT")
+            ]).sort("BNMCODE")
+            
+            total_amount = summary["AMOUNT"].sum()
+            
+            # Header - exactly like production
+            f.write(" " * 40 + "SPECIAL PURPOSE ITEMS (QUARTERLY): EXTERNAL LIABILITIES\n")
+            f.write(" " * 50 + f"AS AT {report_date[:2]}/{report_date[2:4]}/{report_date[4:]}\n")
+            f.write(" " * 45 + f"{title}\n\n")
+            
+            # Column headers - exactly like production
+            f.write("Obs       BNMCODE            AMOUNT\n")
+            f.write(" " + "="*50 + "\n")
+            
+            # Data rows with observation numbers
+            obs_num = 1
+            for row in summary.iter_rows(named=True):
+                f.write(f"{obs_num:>3}    {row['BNMCODE']:<18} {row['AMOUNT']:>20,.2f}\n")
+                obs_num += 1
+            
+            # Total line - exactly like production
+            f.write(" " + "="*50 + "\n")
+            f.write(f"{' ':<8} {'TOTAL':<18} {total_amount:>20,.2f}\n")
+            
+            # Add blank line between sections (except after last section)
+            if section_idx < len(sections) - 1:
+                f.write("\n" * 2)
     
-    print(f"Report saved: {report_file}")
-    return summary
+    print(f"Combined report saved: {report_file}")
+    return report_file
 
-print("\nGenerating reports...")
-
-# Generate reports matching production format
-generate_production_report(almdept, "42130", "CODE 81 & 85 FOR 42130-80-XX-0000Y")
-generate_production_report(almdept, "42132", "CODE 81 & 85 FOR 42132-80-XX-0000Y")
-generate_production_report(almdept, "42630", "REPORT ON EXTERNAL LIABILITIES FOR FCY FD FROM FNBE (85)")
+# Generate combined report
+print("\nGenerating combined report...")
+generate_combined_report(almdept, RDATE)
 
 # ==================== SUMMARY ====================
 print("\n" + "="*60)
