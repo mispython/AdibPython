@@ -206,8 +206,8 @@ def load_alw_data(dates):
         })
 
 
-def load_loan_data():
-    """Load loan note data for CAG processing"""
+def load_loan_data(limit_rows=10000):
+    """Load loan note data for CAG processing with row limit for testing"""
     loan_paths = [
         LOAN_PATH / "LNNOTE.sas7bdat",
         LOAN_PATH / "lnnote.sas7bdat",
@@ -217,9 +217,18 @@ def load_loan_data():
         if loan_path.exists():
             logger.info(f"Loading loan data from: {loan_path}")
             try:
+                # Read SAS file
                 df_loan, meta_loan = pyreadstat.read_sas7bdat(loan_path)
                 df_loan = pl.from_pandas(df_loan)
-                logger.info(f"Loan data loaded: {len(df_loan)} rows, columns: {df_loan.columns}")
+                
+                # Limit rows for testing
+                if len(df_loan) > limit_rows:
+                    df_loan = df_loan.head(limit_rows)
+                    logger.info(f"Loan data limited to {limit_rows} rows for testing")
+                else:
+                    logger.info(f"Loan data loaded: {len(df_loan)} rows")
+                
+                logger.info(f"Loan columns: {df_loan.columns}")
                 return df_loan
             except Exception as e:
                 logger.error(f"Error loading loan file {loan_path}: {e}")
@@ -360,7 +369,8 @@ logger.info(f"RDAL after filtering unwanted: {len(rdal)} rows")
 # CAG PROCESSING (Loan Data)
 # ============================================================================
 
-loan_data = load_loan_data()
+# Load loan data with 10,000 row limit for testing
+loan_data = load_loan_data(limit_rows=10000)
 
 if len(loan_data) > 0:
     logger.info("Processing CAG loan data")
@@ -395,21 +405,24 @@ if len(loan_data) > 0:
         cag = loan_data.filter(pl.col('PZIPCODE').is_in(cag_zipcodes))
         logger.info(f"CAG filtered data: {len(cag)} rows")
 
-        # Apply formats and set ITCODE
-        cag = cag.with_columns([
-            pl.col('LOANTYPE').map_elements(apply_lnprod_format, return_dtype=pl.Utf8).alias('PRODCD'),
-            pl.col('LOANTYPE').map_elements(apply_lndenom_format, return_dtype=pl.Utf8).alias('AMTIND'),
-            pl.lit('7511100000000Y').alias('ITCODE')
-        ])
+        if len(cag) > 0:
+            # Apply formats and set ITCODE
+            cag = cag.with_columns([
+                pl.col('LOANTYPE').map_elements(apply_lnprod_format, return_dtype=pl.Utf8).alias('PRODCD'),
+                pl.col('LOANTYPE').map_elements(apply_lndenom_format, return_dtype=pl.Utf8).alias('AMTIND'),
+                pl.lit('7511100000000Y').alias('ITCODE')
+            ])
 
-        # Summarize by ITCODE and AMTIND
-        cag_summary = cag.group_by(['ITCODE', 'AMTIND']).agg([
-            pl.col('BALANCE').sum().alias('AMOUNT')
-        ])
+            # Summarize by ITCODE and AMTIND
+            cag_summary = cag.group_by(['ITCODE', 'AMTIND']).agg([
+                pl.col('BALANCE').sum().alias('AMOUNT')
+            ])
 
-        # Combine with RDAL
-        rdal = pl.concat([rdal, cag_summary])
-        logger.info(f"RDAL after CAG processing: {len(rdal)} rows")
+            # Combine with RDAL
+            rdal = pl.concat([rdal, cag_summary])
+            logger.info(f"RDAL after CAG processing: {len(rdal)} rows")
+        else:
+            logger.warning("No CAG records found for the specified zip codes")
     else:
         logger.warning(f"Loan data missing required columns. Found: {loan_data.columns}")
 else:
@@ -481,7 +494,8 @@ ssts_data = rdal_filtered.filter(
     pl.lit('4017000000000Y').alias('ITCODE')
 ])
 
-sp_data = pl.concat([sp_data, ssts_data])
+if len(ssts_data) > 0:
+    sp_data = pl.concat([sp_data, ssts_data])
 
 logger.info(f"AL data rows: {len(al_data)}")
 logger.info(f"OB data rows: {len(ob_data)}")
@@ -672,7 +686,8 @@ ssts_data2 = rdal_filtered2.filter(
     pl.lit('4017000000000Y').alias('ITCODE')
 ])
 
-sp_data2 = pl.concat([sp_data2, ssts_data2])
+if len(ssts_data2) > 0:
+    sp_data2 = pl.concat([sp_data2, ssts_data2])
 
 
 # ============================================================================
@@ -838,7 +853,3 @@ print("=" * 70)
 print(f"Output files:")
 print(f"  - RDAL: {RDAL_OUTPUT}")
 print(f"  - NSRS: {NSRS_OUTPUT}")
-
-
-
-for the lnnote, for the sake of testing, make it run for 10000 rows or obs only
