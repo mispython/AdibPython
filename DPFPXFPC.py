@@ -1,233 +1,380 @@
-Calculating report dates...
-Report Date: 30062026, Week: 4
-Reptdate: 2026-06-30
-Month: 6, Day: 30, Year: 2026
-Copying files from DEPOBACK to BNM...
-Copied: fdmthly.sas7bdat
+import polars as pl
+from datetime import datetime, date, timedelta
+from pathlib import Path
+import shutil
+import pyreadstat
+import pandas as pd
+import math
 
-Processing FDMTHLY data...
-Read 2,676,574 records from fdmthly.sas7bdat
-Loaded 2,676,574 records
+# ==================== SETUP ====================
+BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS")
+DEPOBACK_PATH = BASE_PATH / "input" / "prod" / "MNI"
+BNM_PATH = BASE_PATH / "output" / "EIBQFDSP"
+OUTPUT_PATH = BASE_PATH / "output" / "EIBQFDSP"
 
-Calculating REMMTH...
-Records with positive REMMTH: 2,676,568
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-============================================================
-DEBUG: REMMTH Analysis
-============================================================
+# ==================== REPTDATE CALCULATIONS ====================
+print("Calculating report dates...")
+today = date.today()
+reptdate = date(today.year, today.month, 1) - timedelta(days=1)
 
-REMMTH values near integer boundaries:
-shape: (20, 4)
-┌──────────┬───────┬──────────┬──────────┐
-│ REMMTH   ┆ BIC   ┆ CUSTCODE ┆ CURBAL   │
-│ ---      ┆ ---   ┆ ---      ┆ ---      │
-│ f64      ┆ str   ┆ str      ┆ f64      │
-╞══════════╪═══════╪══════════╪══════════╡
-│ 0.966667 ┆ 42130 ┆ 78       ┆ 3927.81  │
-│ 1.9      ┆ 42130 ┆ 78       ┆ 7217.41  │
-│ 4.1      ┆ 42130 ┆ 78       ┆ 2776.91  │
-│ 1.0      ┆ 42130 ┆ 78       ┆ 4644.11  │
-│ 3.0      ┆ 42130 ┆ 78       ┆ 12579.54 │
-│ …        ┆ …     ┆ …        ┆ …        │
-│ 3.0      ┆ 42130 ┆ 78       ┆ 25000.0  │
-│ 3.0      ┆ 42130 ┆ 78       ┆ 25000.0  │
-│ 4.1      ┆ 42130 ┆ 78       ┆ 10000.0  │
-│ 3.0      ┆ 42130 ┆ 78       ┆ 45361.8  │
-│ 3.933333 ┆ 42130 ┆ 78       ┆ 95878.09 │
-└──────────┴───────┴──────────┴──────────┘
+day_val = reptdate.day
+mm = reptdate.month
 
-Sample MATDATE values:
-shape: (20, 3)
-┌─────────────┬──────────────┬──────────┐
-│ MATDATE     ┆ MATDATE_DATE ┆ REMMTH   │
-│ ---         ┆ ---          ┆ ---      │
-│ f64         ┆ date         ┆ f64      │
-╞═════════════╪══════════════╪══════════╡
-│ 2.0260925e7 ┆ 2026-09-25   ┆ 2.833333 │
-│ 2.0260811e7 ┆ 2026-08-11   ┆ 1.366667 │
-│ 2.0260917e7 ┆ 2026-09-17   ┆ 2.566667 │
-│ 2.0260705e7 ┆ 2026-07-05   ┆ 0.166667 │
-│ 2.0260809e7 ┆ 2026-08-09   ┆ 1.3      │
-│ …           ┆ …            ┆ …        │
-│ 2.026082e7  ┆ 2026-08-20   ┆ 1.666667 │
-│ 2.0260721e7 ┆ 2026-07-21   ┆ 0.7      │
-│ 2.0260925e7 ┆ 2026-09-25   ┆ 2.833333 │
-│ 2.026113e7  ┆ 2026-11-30   ┆ 5.0      │
-│ 2.0260827e7 ┆ 2026-08-27   ┆ 1.9      │
-└─────────────┴──────────────┴──────────┘
-Records after BIC filter: 2,676,568
+if day_val == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+elif day_val == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+elif day_val == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+else:
+    sdd, wk, wk1, wk2, wk3 = 23, '4', '3', '2', '1'
 
-Summarizing data...
-Summary records: 7,216
+if wk == '1':
+    mm1 = mm - 1
+    if mm1 == 0:
+        mm1 = 12
+else:
+    mm1 = mm
 
-============================================================
-DEBUG: REMMTH distribution for BIC 42130
-============================================================
-REMMTH distribution:
-shape: (762, 3)
-┌───────────┬───────┬──────────────┐
-│ REMMTH    ┆ COUNT ┆ TOTAL_AMOUNT │
-│ ---       ┆ ---   ┆ ---          │
-│ f64       ┆ u32   ┆ f64          │
-╞═══════════╪═══════╪══════════════╡
-│ 0.033333  ┆ 27    ┆ 8.7325e8     │
-│ 0.066667  ┆ 27    ┆ 1.3672e9     │
-│ 0.1       ┆ 26    ┆ 1.0573e9     │
-│ 0.133333  ┆ 27    ┆ 9.6570e8     │
-│ 0.166667  ┆ 23    ┆ 1.0869e9     │
-│ …         ┆ …     ┆ …            │
-│ 59.2      ┆ 1     ┆ 8000.0       │
-│ 59.466667 ┆ 1     ┆ 30000.0      │
-│ 59.8      ┆ 1     ┆ 94633.99     │
-│ 59.966667 ┆ 1     ┆ 9000.0       │
-│ 60.0      ┆ 1     ┆ 5000.0       │
-└───────────┴───────┴──────────────┘
+mm2 = mm - 1
+if mm2 == 0:
+    mm2 = 12
 
-CUSTCODE distribution for 42130:
-shape: (41, 2)
-┌──────────┬───────┐
-│ CUSTCODE ┆ COUNT │
-│ ---      ┆ ---   │
-│ str      ┆ u32   │
-╞══════════╪═══════╡
-│ 06       ┆ 26    │
-│ 12       ┆ 52    │
-│ 30       ┆ 259   │
-│ 32       ┆ 1     │
-│ 33       ┆ 9     │
-│ …        ┆ …     │
-│ 84       ┆ 1     │
-│ 86       ┆ 40    │
-│ 95       ┆ 390   │
-│ 96       ┆ 392   │
-│ 99       ┆ 6     │
-└──────────┴───────┘
+sdate = date(reptdate.year, mm, sdd)
 
-============================================================
-TESTING DIFFERENT KREMMTH METHODS
-============================================================
+NOWK = wk
+REPTMON = f"{mm:02d}"
+REPTYEAR = str(reptdate.year)
+RDATE = reptdate.strftime("%d%m%Y")
+SDATE = sdate.strftime("%d%m%Y")
 
-Testing boundary values:
-Value                Method1    Method2    Method3   
---------------------------------------------------
-0.9999999999         52         52         52        
-1.0000000001         53         53         53        
-1.9999999999         53         53         53        
-2.0000000001         54         54         54        
-2.9999999999         54         54         54        
-3.0000000001         81         81         81        
+print(f"Report Date: {RDATE}, Week: {NOWK}")
+print(f"Reptdate: {reptdate}")
 
-Creating BNM codes with Method 1 (truncation)...
-ALMDEPT Method 1 records: 1,350
+# ==================== COPY FILES ====================
+print("Copying files from DEPOBACK to BNM...")
+files_to_copy = ["fdmthly.sas7bdat"]
+for file in files_to_copy:
+    src = DEPOBACK_PATH / file
+    dst = BNM_PATH / file
+    if src.exists():
+        shutil.copy2(src, dst)
+        print(f"Copied: {file}")
 
-Creating BNM codes with Method 2 (floor)...
-ALMDEPT Method 2 records: 1,350
+# ==================== FUNCTIONS ====================
+def is_leap_year(year):
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
 
-Creating BNM codes with Method 3 (round)...
-ALMDEPT Method 3 records: 1,350
+def days_in_month(year, month):
+    if month == 2:
+        return 29 if is_leap_year(year) else 28
+    elif month in [4, 6, 9, 11]:
+        return 30
+    return 31
 
-============================================================
-COMPARING METHODS FOR 42130
-============================================================
+def sas_date_to_python_date(yyyymmdd):
+    """Convert SAS YYYYMMDD numeric to Python date - matching SAS INPUT(PUT(MATDATE,Z8.),YYMMDD8.)"""
+    if yyyymmdd is None or pd.isna(yyyymmdd):
+        return None
+    try:
+        # SAS uses Z8. format which pads with zeros to 8 digits
+        # Then YYMMDD8. reads as YYYYMMDD
+        date_str = f"{int(yyyymmdd):08d}"
+        if len(date_str) == 8:
+            year = int(date_str[:4])
+            month = int(date_str[4:6])
+            day = int(date_str[6:8])
+            # Validate date
+            if 1 <= month <= 12 and 1 <= day <= days_in_month(year, month):
+                return date(year, month, day)
+        return None
+    except:
+        return None
 
-Method 1 total for 42130: 3,430,332,774.04
-Top 5 BNMCODEs:
-shape: (5, 2)
-┌────────────────┬───────────┐
-│ BNMCODE        ┆ AMOUNT    │
-│ ---            ┆ ---       │
-│ str            ┆ f64       │
-╞════════════════╪═══════════╡
-│ 4213084520000Y ┆ 310971.25 │
-│ 4213085520000Y ┆ 7.0707e8  │
-│ 4213085530000Y ┆ 4.1407e8  │
-│ 4213085540000Y ┆ 4.3727e8  │
-│ 4213085600000Y ┆ 1.3495e7  │
-└────────────────┴───────────┘
+def calculate_remmth_sas(row, reptdate_val):
+    """
+    Calculate remaining months - EXACTLY matching SAS logic
+    """
+    openind = row.get("OPENIND", "")
+    matdate = row.get("MATDATE")
+    
+    if openind == "D":
+        return -1.0
+    if openind != "O":
+        return None
+    
+    if matdate is None or pd.isna(matdate):
+        return None
+    
+    try:
+        # Convert SAS date using Z8. format (same as SAS)
+        fddt = sas_date_to_python_date(matdate)
+        if fddt is None:
+            return None
+        
+        rpyr, rpmth, rpday = reptdate_val.year, reptdate_val.month, reptdate_val.day
+        fdyr, fdmth, fdday = fddt.year, fddt.month, fddt.day
+        
+        # Get days in month for maturity date
+        fd_days_in_month = days_in_month(fdyr, fdmth)
+        # Get days in month for report date
+        rp_days_in_month = days_in_month(rpyr, rpmth)
+        
+        # SAS logic: IF FDDAY = FDDAYS(FDMTH) THEN FDDAY=RPDAYS(RPMTH)
+        if fdday == fd_days_in_month:
+            fdday = rp_days_in_month
+        
+        # Calculate differences
+        remy = fdyr - rpyr
+        remm = fdmth - rpmth
+        remd = fdday - rpday
+        
+        # Calculate REMMTH - use float with high precision
+        remmth = remy * 12 + remm + remd / rp_days_in_month
+        
+        return remmth
+    except:
+        return None
 
-Method 2 total for 42130: 3,430,332,774.04
-Top 5 BNMCODEs:
-shape: (5, 2)
-┌────────────────┬───────────┐
-│ BNMCODE        ┆ AMOUNT    │
-│ ---            ┆ ---       │
-│ str            ┆ f64       │
-╞════════════════╪═══════════╡
-│ 4213084520000Y ┆ 310971.25 │
-│ 4213085520000Y ┆ 7.0707e8  │
-│ 4213085530000Y ┆ 4.1407e8  │
-│ 4213085540000Y ┆ 4.3727e8  │
-│ 4213085600000Y ┆ 1.3495e7  │
-└────────────────┴───────────┘
+def kremmth_format(value):
+    """
+    Format remaining months to KREMMTH codes - matching SAS exactly
+    SAS uses exact comparisons with the value as calculated
+    """
+    if value is None or pd.isna(value):
+        return None
+    
+    # Use exact comparison - no truncation needed if calculation is correct
+    if value < 0:
+        return '51'
+    elif 0 <= value < 1:
+        return '52'
+    elif 1 <= value < 2:
+        return '53'
+    elif 2 <= value < 3:
+        return '54'
+    elif 3 <= value < 4:
+        return '81'
+    elif 4 <= value < 5:
+        return '82'
+    elif 5 <= value < 6:
+        return '83'
+    elif 6 <= value < 7:
+        return '84'
+    elif 7 <= value < 8:
+        return '85'
+    elif 8 <= value < 9:
+        return '86'
+    elif 9 <= value < 10:
+        return '87'
+    elif 10 <= value < 11:
+        return '88'
+    elif 11 <= value < 12:
+        return '89'
+    else:
+        return '60'
 
-Method 3 total for 42130: 3,430,332,774.04
-Top 5 BNMCODEs:
-shape: (5, 2)
-┌────────────────┬───────────┐
-│ BNMCODE        ┆ AMOUNT    │
-│ ---            ┆ ---       │
-│ str            ┆ f64       │
-╞════════════════╪═══════════╡
-│ 4213084520000Y ┆ 310971.25 │
-│ 4213085520000Y ┆ 7.0707e8  │
-│ 4213085530000Y ┆ 4.1407e8  │
-│ 4213085540000Y ┆ 4.3727e8  │
-│ 4213085600000Y ┆ 1.3495e7  │
-└────────────────┴───────────┘
+def read_sas_dataset(filepath):
+    try:
+        df, meta = pyreadstat.read_sas7bdat(filepath)
+        print(f"Read {len(df):,} records from {filepath.name}")
+        return pl.from_pandas(df)
+    except Exception as e:
+        print(f"Error reading {filepath}: {e}")
+        raise
 
-============================================================
-RECOMMENDATION: Check which method matches production
-============================================================
-Compare the output above with production to see which method
-produces the same distribution of amounts across BNMCODEs.
+# ==================== PROCESS DATA ====================
+print("\nProcessing FDMTHLY data...")
+fdmthly_file = BNM_PATH / "fdmthly.sas7bdat"
 
+if not fdmthly_file.exists():
+    print(f"Error: {fdmthly_file} not found!")
+    exit(1)
 
+fdmthly = read_sas_dataset(fdmthly_file)
+print(f"Loaded {fdmthly.height:,} records")
 
+# Filter open accounts
+if "OPENIND" in fdmthly.columns:
+    fdmthly = fdmthly.with_columns([
+        pl.col("OPENIND").cast(pl.Utf8).str.strip_chars()
+    ])
+    fdmthly = fdmthly.filter(pl.col("OPENIND").is_in(["O", "D"]))
 
+# Convert CUSTCODE to string
+if "CUSTCODE" in fdmthly.columns:
+    fdmthly = fdmthly.with_columns([
+        pl.col("CUSTCODE").cast(pl.Utf8).str.strip_chars().alias("CUSTCODE")
+    ])
 
+# Calculate REMMTH using SAS method
+reptdate_val = datetime.strptime(RDATE, "%d%m%Y").date()
 
-below is the production output:
+print("\nCalculating REMMTH using SAS method...")
+fdmthly = fdmthly.with_columns([
+    pl.struct(["OPENIND", "MATDATE"]).map_elements(
+        lambda x: calculate_remmth_sas(x, reptdate_val),
+        return_dtype=pl.Float64
+    ).alias("REMMTH")
+])
 
-SPECIAL PURPOSE ITEMS (QUARTERLY): EXTERNAL LIABILITIES                         
-AS AT  30/06/26                                                                 
-CODE 81 & 85 FOR 42130-80-XX-0000Y                                              
-                                                                                
-Obs       BNMCODE            AMOUNT                                             
-                                                                                
-  1    4213084520000Y        310971.25                                          
-  2    4213085520000Y     743344849.87                                          
-  3    4213085530000Y     381115195.01                                          
-  4    4213085540000Y     463849791.17                                          
-  5    4213085600000Y       4906542.74                                          
-  6    4213085810000Y     210031410.59                                          
-  7    4213085820000Y     273362135.27                                          
-  8    4213085830000Y     335213243.42                                          
-  9    4213085840000Y     146030259.60                                          
- 10    4213085850000Y     132906063.96                                          
- 11    4213085860000Y     146133082.33                                          
- 12    4213085870000Y     216694593.94                                          
- 13    4213085880000Y     177429310.47                                          
- 14    4213085890000Y     199005324.42                                          
-                         =============                                          
-                         3430332774.04                                          
-REPORT ON EXTERNAL LIABILITIES FOR FCY FD FROM FNBE (85)                        
-AS AT  30/06/26                                                                 
-                                                                                
-Obs       BNMCODE            AMOUNT                                             
-                                                                                
-  1    4263084520000Y       2296346.24                                          
-  2    4263084540000Y       2039979.60                                          
-  3    4263085520000Y     931918469.75                                          
-  4    4263085530000Y     462522041.68                                          
-  5    4263085540000Y     113023566.92                                          
-  6    4263085810000Y      30824177.02                                          
-  7    4263085820000Y     331151534.44                                          
-  8    4263085830000Y      40633267.82                                          
-  9    4263085840000Y      36984266.26                                          
- 10    4263085850000Y      23322681.66                                          
- 11    4263085860000Y      49854634.62                                          
- 12    4263085870000Y      23947006.06                                          
- 13    4263085880000Y      20679707.25                                          
- 14    4263085890000Y      30712100.78                                          
-                         =============                                          
-                         2099909780.10                                          
+# Keep only positive REMMTH
+fdmthly = fdmthly.filter(pl.col("REMMTH") >= 0)
+print(f"Records with positive REMMTH: {fdmthly.height:,}")
+
+# Select required columns
+alm = fdmthly.select(["BIC", "CUSTCODE", "REMMTH", "CURBAL"])
+
+# ==================== FILTER FOR RELEVANT BIC PREFIXES ====================
+alm = alm.filter(
+    pl.col("BIC").str.starts_with("42130") |
+    pl.col("BIC").str.starts_with("42132") |
+    pl.col("BIC").str.starts_with("42630")
+)
+print(f"Records after BIC filter: {alm.height:,}")
+
+# ==================== SUMMARIZE DATA ====================
+print("\nSummarizing data...")
+alm_summary = alm.group_by(["BIC", "CUSTCODE", "REMMTH"]).agg([
+    pl.col("CURBAL").sum().alias("AMOUNT")
+])
+print(f"Summary records: {alm_summary.height:,}")
+
+# ==================== CREATE ALMDEPT ====================
+print("\nCreating BNM codes...")
+alm_summary = alm_summary.with_columns([
+    pl.col("CUSTCODE").cast(pl.Utf8).str.strip_chars().alias("CUSTCODE_STR")
+])
+
+almdept = alm_summary.with_columns([
+    pl.col("REMMTH").map_elements(kremmth_format, return_dtype=pl.Utf8).alias("RM")
+]).with_columns([
+    # CUSTCODE 81-84: Keep original CUSTCODE
+    pl.when(pl.col("CUSTCODE_STR").is_in(["81", "82", "83", "84"]))
+    .then(pl.concat_str([pl.col("BIC"), pl.col("CUSTCODE_STR"), pl.col("RM"), pl.lit("0000Y")], separator=""))
+    # CUSTCODE 85-99: Map to 85
+    .when(pl.col("CUSTCODE_STR").is_in(["85", "86", "87", "88", "89", "90", "91", "92", "95", "96", "98", "99"]))
+    .then(pl.concat_str([pl.col("BIC"), pl.lit("85"), pl.col("RM"), pl.lit("0000Y")], separator=""))
+    .otherwise(None)
+    .alias("BNMCODE")
+]).filter(pl.col("BNMCODE").is_not_null()).select(["BNMCODE", "AMOUNT", "CUSTCODE", "REMMTH"])
+
+print(f"ALMDEPT records: {almdept.height:,}")
+
+# ==================== DEBUG: Show 42130 distribution ====================
+print("\n" + "="*60)
+print("42130 Distribution:")
+print("="*60)
+
+bic_42130 = almdept.filter(pl.col("BNMCODE").str.starts_with("42130"))
+if bic_42130.height > 0:
+    summary_42130 = bic_42130.group_by("BNMCODE").agg([
+        pl.col("AMOUNT").sum().alias("AMOUNT")
+    ]).sort("BNMCODE")
+    
+    print("BNMCODE and AMOUNT for 42130:")
+    for row in summary_42130.iter_rows(named=True):
+        print(f"{row['BNMCODE']}: {row['AMOUNT']:,.2f}")
+    
+    total = summary_42130["AMOUNT"].sum()
+    print(f"\nTotal: {total:,.2f}")
+
+# ==================== GENERATE PRODUCTION-STYLE REPORT ====================
+def generate_combined_report(data, report_date):
+    """Generate a single combined report matching production exactly"""
+    if data.height == 0:
+        print("No data available!")
+        return
+    
+    report_file = OUTPUT_PATH / f"REPORT_EXTERNAL_LIABILITIES_{report_date}.txt"
+    
+    # Define report sections
+    sections = [
+        {
+            "prefix": "42130",
+            "title": "CODE 81 & 85 FOR 42130-80-XX-0000Y"
+        },
+        {
+            "prefix": "42132",
+            "title": "CODE 81 & 85 FOR 42132-80-XX-0000Y"
+        },
+        {
+            "prefix": "42630",
+            "title": "REPORT ON EXTERNAL LIABILITIES FOR FCY FD FROM FNBE (85)"
+        }
+    ]
+    
+    with open(report_file, 'w') as f:
+        for section_idx, section in enumerate(sections):
+            prefix = section["prefix"]
+            title = section["title"]
+            
+            # Filter data for this section
+            section_data = data.filter(pl.col("BNMCODE").str.starts_with(prefix))
+            
+            if section_data.height == 0:
+                print(f"No data for {prefix}")
+                continue
+            
+            # Summarize by BNMCODE
+            summary = section_data.group_by("BNMCODE").agg([
+                pl.col("AMOUNT").sum().alias("AMOUNT")
+            ]).sort("BNMCODE")
+            
+            total_amount = summary["AMOUNT"].sum()
+            
+            # Header - exactly like production
+            f.write(" " * 40 + "SPECIAL PURPOSE ITEMS (QUARTERLY): EXTERNAL LIABILITIES\n")
+            f.write(" " * 50 + f"AS AT {report_date[:2]}/{report_date[2:4]}/{report_date[4:]}\n")
+            f.write(" " * 45 + f"{title}\n\n")
+            
+            # Column headers - exactly like production
+            f.write("Obs       BNMCODE            AMOUNT\n")
+            
+            # Data rows with observation numbers
+            obs_num = 1
+            for row in summary.iter_rows(named=True):
+                f.write(f"{obs_num:>3}    {row['BNMCODE']:<18} {row['AMOUNT']:>20,.2f}\n")
+                obs_num += 1
+            
+            # Total line - exactly like production with spacing
+            f.write(" " * 25 + "=============\n")
+            f.write(f"{' ':<8} {'TOTAL':<18} {total_amount:>20,.2f}\n")
+            
+            # Add blank line between sections
+            if section_idx < len(sections) - 1 and section_data.height > 0:
+                next_section_data = data.filter(pl.col("BNMCODE").str.starts_with(sections[section_idx + 1]["prefix"]))
+                if next_section_data.height > 0:
+                    f.write("\n\n")
+    
+    print(f"Combined report saved: {report_file}")
+    return report_file
+
+# Generate combined report
+print("\nGenerating combined report...")
+generate_combined_report(almdept, RDATE)
+
+# ==================== SUMMARY ====================
+print("\n" + "="*60)
+print("SUMMARY STATISTICS")
+print("="*60)
+print(f"Report Date: {RDATE[:2]}/{RDATE[2:4]}/{RDATE[4:]}")
+print(f"Week: {NOWK}, Month: {REPTMON}, Year: {REPTYEAR}")
+print(f"ALMDEPT records: {almdept.height:,}")
+
+if almdept.height > 0:
+    print("\nAmount Distribution by BNMCODE prefix:")
+    for prefix in ["42130", "42132", "42630"]:
+        amount = almdept.filter(pl.col("BNMCODE").str.starts_with(prefix))["AMOUNT"].sum()
+        if amount > 0:
+            print(f"  {prefix}: {amount:>20,.2f}")
+
+print("\nProcessing complete!")
+
+# Save outputs
+if alm.height > 0:
+    alm.write_parquet(OUTPUT_PATH / f"ALM_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
+if almdept.height > 0:
+    almdept.write_parquet(OUTPUT_PATH / f"ALMDEPT_{REPTMON}_{NOWK}_{REPTYEAR}.parquet")
