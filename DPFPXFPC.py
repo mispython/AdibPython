@@ -929,3 +929,89 @@ print("=" * 70)
 print(f"Output files:")
 print(f"  - RDAL: {RDAL_OUTPUT}")
 print(f"  - NSRS: {NSRS_OUTPUT}")
+
+
+Created PBBRDAL dataset with 44 records
+shape: (44, 1)
+┌────────────────┐
+│ ITCODE         │
+│ ---            │
+│ str            │
+╞════════════════╡
+│ 3313002000000Y │
+│ 3313003000000Y │
+│ 4019000000000Y │
+│ 4216060000000Y │
+│ 4261076000000Y │
+│ …              │
+│ 7318000000000Y │
+│ 7411000000000Y │
+│ 7412000000000Y │
+│ 7413000000000Y │
+│ 7414000000000Y │
+└────────────────┘
+Successfully imported PBBMRDLF with 44 records
+2026-07-17 09:44:29,055 - INFO - Processing for date: 30062026
+2026-07-17 09:44:29,055 - INFO - Report year: 2026, Month: 06, Week: 4
+2026-07-17 09:44:29,055 - INFO - Loading PBBRDAL reference data from PBBMRDLF
+2026-07-17 09:44:29,055 - INFO - PBBRDAL data loaded: 44 rows
+2026-07-17 09:44:29,055 - INFO - PBBRDAL columns: ['ITCODE']
+2026-07-17 09:44:29,055 - INFO - PBBRDAL data loaded: 44 rows
+2026-07-17 09:44:29,055 - INFO - PBBRDAL sample:
+shape: (5, 1)
+┌────────────────┐
+│ ITCODE         │
+│ ---            │
+│ str            │
+╞════════════════╡
+│ 3313002000000Y │
+│ 3313003000000Y │
+│ 4019000000000Y │
+│ 4216060000000Y │
+│ 4261076000000Y │
+└────────────────┘
+2026-07-17 09:44:29,058 - INFO - Loading BNM data from: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL/alw064.sas7bdat
+2026-07-17 09:44:29,097 - INFO - BNM data loaded: 14787 rows, columns: ['ITCODE', 'AMTIND', 'AMOUNT']
+2026-07-17 09:44:29,097 - INFO - Loading PBCS data from: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL/cclw064.sas7bdat
+2026-07-17 09:44:29,098 - INFO - PBCS data loaded: 5 rows, columns: ['ITCODE', 'AMTIND', 'AMOUNT']
+2026-07-17 09:44:29,098 - INFO - Combined data: 14792 rows
+2026-07-17 09:44:29,098 - INFO - ALW data loaded: 14792 rows
+2026-07-17 09:44:29,098 - INFO - ALW columns: ['ITCODE', 'AMTIND', 'AMOUNT']
+2026-07-17 09:44:29,098 - INFO - ALW sample:
+shape: (5, 3)
+┌────────────────┬────────┬───────────┐
+│ ITCODE         ┆ AMTIND ┆ AMOUNT    │
+│ ---            ┆ ---    ┆ ---       │
+│ str            ┆ str    ┆ f64       │
+╞════════════════╪════════╪═══════════╡
+│ NSSTS          ┆ D      ┆ 3.1592e9  │
+│ SSTS           ┆ D      ┆ 5.4823e10 │
+│ 3051000000000Y ┆        ┆ 3.3744e11 │
+│ 3051000000000Y ┆        ┆ 2.4079e8  │
+│ 3091000000000Y ┆        ┆ 1.9723e10 │
+└────────────────┴────────┴───────────┘
+2026-07-17 09:44:29,098 - INFO - Merging ALW and PBBRDAL1 data
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIPWRDAL.py:389: DeprecationWarning: use of `how='outer'` should be replaced with `how='full'`.
+(Deprecated in version 0.20.29)
+  rdal = alw.join(
+2026-07-17 09:44:29,104 - INFO - After merge: 14831 rows
+2026-07-17 09:44:29,177 - INFO - RDAL before filtering: 14831 rows
+2026-07-17 09:44:29,177 - INFO - RDAL sample:
+shape: (5, 3)
+┌────────────────┬────────┬───────────┐
+│ ITCODE         ┆ AMTIND ┆ AMOUNT    │
+│ ---            ┆ ---    ┆ ---       │
+│ str            ┆ str    ┆ f64       │
+╞════════════════╪════════╪═══════════╡
+│ NSSTS          ┆ D      ┆ 3.1592e9  │
+│ SSTS           ┆ D      ┆ 5.4823e10 │
+│ 3051000000000Y ┆        ┆ 3.3744e11 │
+│ 3051000000000Y ┆        ┆ 2.4079e8  │
+│ 3091000000000Y ┆        ┆ 1.9723e10 │
+└────────────────┴────────┴───────────┘
+2026-07-17 09:44:29,179 - INFO - RDAL after filtering unwanted: 14791 rows
+2026-07-17 09:44:29,179 - INFO - Loading loan data with filtering...
+2026-07-17 09:44:29,179 - INFO - Loading loan data from: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL/lnnote.sas7bdat
+2026-07-17 09:44:29,179 - INFO - Reading first 50000 rows with pandas...
+2026-07-17 09:44:29,179 - ERROR - Error loading loan file /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL/lnnote.sas7bdat: read_sas() got an unexpected keyword argument 'nrows'
+2026-07-17 09:44:29,179 - INFO - Trying pyreadstat without row limit...
