@@ -173,7 +173,7 @@ def load_alw_data(dates):
         BNM_BASE_PATH / f"ALW{reptmon}{nowk}.sas7bdat",
         BNM_BASE_PATH / f"D{reptyear}" / f"ALW{reptmon}{nowk}.sas7bdat",
     ]
-    
+
     pbcs_paths = [
         PBCS_PATH / f"cclw{reptmon}{nowk}.sas7bdat",
         PBCS_PATH / f"CCLW{reptmon}{nowk}.sas7bdat",
@@ -193,7 +193,7 @@ def load_alw_data(dates):
                 break
             except Exception as e:
                 logger.error(f"Error loading BNM file {bnm_path}: {e}")
-    
+
     # Try PBCS files
     for pbcs_path in pbcs_paths:
         if pbcs_path.exists():
@@ -223,10 +223,18 @@ def load_alw_data(dates):
         })
 
 
-def load_loan_data_filtered(limit_rows=50000):
+def load_loan_data_filtered(chunksize=50000):
     """
-    Load only the records we need from loan data using filtering
-    This is more efficient than loading everything
+    Load only the records we need from loan data.
+
+    NOTE: pandas.read_sas() does NOT accept an `nrows` keyword argument
+    (this was the bug in the original script - it raised:
+    "read_sas() got an unexpected keyword argument 'nrows'").
+    The correct way to read a bounded/streamed subset of a .sas7bdat file
+    with pandas is to use `chunksize` (which returns an iterator of
+    DataFrames) and filter/concatenate each chunk as we go. This keeps
+    memory bounded while still capturing every row that matches our
+    target zip codes (not just the first N rows).
     """
     loan_paths = [
         LOAN_PATH / "lnnote.sas7bdat",
@@ -243,52 +251,68 @@ def load_loan_data_filtered(limit_rows=50000):
         if loan_path.exists():
             logger.info(f"Loading loan data from: {loan_path}")
             try:
-                # Try reading with pandas first with nrows limit (more reliable)
                 import pandas as pd
-                logger.info(f"Reading first {limit_rows} rows with pandas...")
-                df_pd = pd.read_sas(loan_path, nrows=limit_rows)
-                df_loan = pl.from_pandas(df_pd)
-                logger.info(f"Loan data loaded: {len(df_loan)} rows (limited to {limit_rows})")
-                logger.info(f"Loan columns: {df_loan.columns}")
-                
-                # Try to find the right column names
+                logger.info(f"Reading in chunks of {chunksize} rows with pandas...")
+
                 zipcode_col = None
-                loantype_col = None
-                balance_col = None
-                
-                for col in df_loan.columns:
-                    col_upper = col.upper()
-                    if col_upper == 'PZIPCODE' or col_upper == 'ZIPCODE':
-                        zipcode_col = col
-                    elif col_upper == 'LOANTYPE' or col_upper == 'LOAN_TYPE':
-                        loantype_col = col
-                    elif col_upper == 'BALANCE' or col_upper == 'BAL' or col_upper == 'AMOUNT':
-                        balance_col = col
-                
-                if zipcode_col:
-                    logger.info(f"Found zipcode column: {zipcode_col}")
-                    # Filter to only the zip codes we need
-                    df_loan = df_loan.filter(pl.col(zipcode_col).is_in(cag_zipcodes))
-                    logger.info(f"Filtered loan data: {len(df_loan)} rows matching target zip codes")
+                filtered_chunks = []
+                total_rows_scanned = 0
+
+                # chunksize returns an iterator of DataFrames - no `nrows` needed
+                reader = pd.read_sas(loan_path, chunksize=chunksize)
+
+                for i, chunk_pd in enumerate(reader):
+                    df_chunk = pl.from_pandas(chunk_pd)
+                    total_rows_scanned += len(df_chunk)
+
+                    if i == 0:
+                        logger.info(f"Loan columns: {df_chunk.columns}")
+                        # Identify the relevant columns once, from the first chunk
+                        for col in df_chunk.columns:
+                            col_upper = col.upper()
+                            if col_upper in ('PZIPCODE', 'ZIPCODE'):
+                                zipcode_col = col
+
+                        if zipcode_col:
+                            logger.info(f"Found zipcode column: {zipcode_col}")
+                        else:
+                            logger.warning(f"PZIPCODE column not found. Available columns: {df_chunk.columns}")
+
+                    if zipcode_col:
+                        df_chunk = df_chunk.filter(pl.col(zipcode_col).is_in(cag_zipcodes))
+
+                    if len(df_chunk) > 0:
+                        filtered_chunks.append(df_chunk)
+
+                if filtered_chunks:
+                    df_loan = pl.concat(filtered_chunks, how="vertical_relaxed")
                 else:
-                    logger.warning(f"PZIPCODE column not found. Available columns: {df_loan.columns}")
-                
+                    df_loan = pl.DataFrame()
+
+                logger.info(f"Scanned {total_rows_scanned} total rows")
+                logger.info(f"Filtered loan data: {len(df_loan)} rows matching target zip codes")
                 return df_loan
-                
+
             except Exception as e:
-                logger.error(f"Error loading loan file {loan_path}: {e}")
-                # Fallback to pyreadstat without rows_limit
+                logger.error(f"Error loading loan file {loan_path} with chunked pandas read: {e}")
+                # Fallback to pyreadstat without a row limit
                 try:
                     logger.info("Trying pyreadstat without row limit...")
                     df_loan, meta_loan = pyreadstat.read_sas7bdat(loan_path)
                     df_loan = pl.from_pandas(df_loan)
-                    
-                    # Limit rows manually
-                    if len(df_loan) > limit_rows:
-                        df_loan = df_loan.head(limit_rows)
-                        logger.info(f"Limited to {limit_rows} rows")
-                    
-                    logger.info(f"Loan data loaded: {len(df_loan)} rows")
+
+                    zipcode_col = None
+                    for col in df_loan.columns:
+                        if col.upper() in ('PZIPCODE', 'ZIPCODE'):
+                            zipcode_col = col
+                            break
+
+                    if zipcode_col:
+                        df_loan = df_loan.filter(pl.col(zipcode_col).is_in(cag_zipcodes))
+                        logger.info(f"Filtered loan data (pyreadstat fallback): {len(df_loan)} rows")
+                    else:
+                        logger.warning(f"PZIPCODE column not found. Available columns: {df_loan.columns}")
+
                     return df_loan
                 except Exception as e2:
                     logger.error(f"Error with pyreadstat: {e2}")
@@ -341,7 +365,7 @@ if len(pbbrdal) > 0:
             pbbrdal = pbbrdal.with_columns([
                 pl.lit(0.0).alias('AMOUNT')
             ])
-        
+
         pbbrdal1 = pbbrdal.with_columns([
             pl.when(pl.col('ITCODE').str.slice(1, 1) == '0')
             .then(pl.lit(' '))
@@ -377,24 +401,24 @@ else:
 # Merge ALW and PBBRDAL1
 if len(alw) > 0 and len(pbbrdal1) > 0:
     logger.info("Merging ALW and PBBRDAL1 data")
-    
+
     alw_cols = alw.columns
     pbbrdal_cols = pbbrdal1.columns
-    
+
     if 'itcode' in alw_cols and 'ITCODE' not in alw_cols:
         logger.info("Converting column names to uppercase")
         alw = alw.rename({col: col.upper() for col in alw_cols})
         pbbrdal1 = pbbrdal1.rename({col: col.upper() for col in pbbrdal_cols})
-    
+
     rdal = alw.join(
         pbbrdal1,
         on=['ITCODE', 'AMTIND'],
-        how='outer',
+        how='full',
         suffix='_pbb'
     ).with_columns([
         pl.coalesce(['AMOUNT', 'AMOUNT_pbb', pl.lit(0.0)]).alias('AMOUNT')
     ]).select(['ITCODE', 'AMTIND', 'AMOUNT'])
-    
+
     logger.info(f"After merge: {len(rdal)} rows")
 elif len(alw) > 0:
     logger.info("Using ALW data only")
@@ -437,19 +461,19 @@ logger.info(f"RDAL after filtering unwanted: {len(rdal)} rows")
 # CAG PROCESSING (Loan Data) - Optimized
 # ============================================================================
 
-# Load only the loan data we need (filtered and limited)
+# Load only the loan data we need (filtered via chunked reads)
 logger.info("Loading loan data with filtering...")
-loan_data = load_loan_data_filtered(limit_rows=50000)
+loan_data = load_loan_data_filtered(chunksize=50000)
 
 if len(loan_data) > 0:
     logger.info("Processing CAG loan data")
     logger.info(f"Loan data columns: {loan_data.columns}")
-    
+
     # Find column names
     zipcode_col = None
     loantype_col = None
     balance_col = None
-    
+
     for col in loan_data.columns:
         col_upper = col.upper()
         if col_upper == 'PZIPCODE' or col_upper == 'ZIPCODE':
@@ -458,18 +482,18 @@ if len(loan_data) > 0:
             loantype_col = col
         elif col_upper == 'BALANCE' or col_upper == 'BAL' or col_upper == 'AMOUNT':
             balance_col = col
-    
+
     if zipcode_col and loantype_col and balance_col:
         logger.info(f"Found columns - ZIP: {zipcode_col}, LOAN: {loantype_col}, BAL: {balance_col}")
-        
+
         # Rename to standard names
         loan_data = loan_data.rename({
             zipcode_col: 'PZIPCODE',
             loantype_col: 'LOANTYPE',
             balance_col: 'BALANCE'
         })
-        
-        # Filter for specific zip codes (already filtered, but double-check)
+
+        # Filter for specific zip codes (already filtered during load, but double-check)
         cag_zipcodes = [2002, 2013, 3039, 3047, 800003098, 800003114,
                         800004016, 800004022, 800004029, 800040050,
                         800040053, 800050024, 800060024, 800060045,
@@ -494,7 +518,7 @@ if len(loan_data) > 0:
             # Combine with RDAL
             rdal = pl.concat([rdal, cag_summary])
             logger.info(f"RDAL after CAG processing: {len(rdal)} rows")
-            
+
             # Free memory
             del cag, cag_summary, loan_data
             gc.collect()
@@ -929,89 +953,3 @@ print("=" * 70)
 print(f"Output files:")
 print(f"  - RDAL: {RDAL_OUTPUT}")
 print(f"  - NSRS: {NSRS_OUTPUT}")
-
-
-Created PBBRDAL dataset with 44 records
-shape: (44, 1)
-┌────────────────┐
-│ ITCODE         │
-│ ---            │
-│ str            │
-╞════════════════╡
-│ 3313002000000Y │
-│ 3313003000000Y │
-│ 4019000000000Y │
-│ 4216060000000Y │
-│ 4261076000000Y │
-│ …              │
-│ 7318000000000Y │
-│ 7411000000000Y │
-│ 7412000000000Y │
-│ 7413000000000Y │
-│ 7414000000000Y │
-└────────────────┘
-Successfully imported PBBMRDLF with 44 records
-2026-07-17 09:44:29,055 - INFO - Processing for date: 30062026
-2026-07-17 09:44:29,055 - INFO - Report year: 2026, Month: 06, Week: 4
-2026-07-17 09:44:29,055 - INFO - Loading PBBRDAL reference data from PBBMRDLF
-2026-07-17 09:44:29,055 - INFO - PBBRDAL data loaded: 44 rows
-2026-07-17 09:44:29,055 - INFO - PBBRDAL columns: ['ITCODE']
-2026-07-17 09:44:29,055 - INFO - PBBRDAL data loaded: 44 rows
-2026-07-17 09:44:29,055 - INFO - PBBRDAL sample:
-shape: (5, 1)
-┌────────────────┐
-│ ITCODE         │
-│ ---            │
-│ str            │
-╞════════════════╡
-│ 3313002000000Y │
-│ 3313003000000Y │
-│ 4019000000000Y │
-│ 4216060000000Y │
-│ 4261076000000Y │
-└────────────────┘
-2026-07-17 09:44:29,058 - INFO - Loading BNM data from: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL/alw064.sas7bdat
-2026-07-17 09:44:29,097 - INFO - BNM data loaded: 14787 rows, columns: ['ITCODE', 'AMTIND', 'AMOUNT']
-2026-07-17 09:44:29,097 - INFO - Loading PBCS data from: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL/cclw064.sas7bdat
-2026-07-17 09:44:29,098 - INFO - PBCS data loaded: 5 rows, columns: ['ITCODE', 'AMTIND', 'AMOUNT']
-2026-07-17 09:44:29,098 - INFO - Combined data: 14792 rows
-2026-07-17 09:44:29,098 - INFO - ALW data loaded: 14792 rows
-2026-07-17 09:44:29,098 - INFO - ALW columns: ['ITCODE', 'AMTIND', 'AMOUNT']
-2026-07-17 09:44:29,098 - INFO - ALW sample:
-shape: (5, 3)
-┌────────────────┬────────┬───────────┐
-│ ITCODE         ┆ AMTIND ┆ AMOUNT    │
-│ ---            ┆ ---    ┆ ---       │
-│ str            ┆ str    ┆ f64       │
-╞════════════════╪════════╪═══════════╡
-│ NSSTS          ┆ D      ┆ 3.1592e9  │
-│ SSTS           ┆ D      ┆ 5.4823e10 │
-│ 3051000000000Y ┆        ┆ 3.3744e11 │
-│ 3051000000000Y ┆        ┆ 2.4079e8  │
-│ 3091000000000Y ┆        ┆ 1.9723e10 │
-└────────────────┴────────┴───────────┘
-2026-07-17 09:44:29,098 - INFO - Merging ALW and PBBRDAL1 data
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIPWRDAL.py:389: DeprecationWarning: use of `how='outer'` should be replaced with `how='full'`.
-(Deprecated in version 0.20.29)
-  rdal = alw.join(
-2026-07-17 09:44:29,104 - INFO - After merge: 14831 rows
-2026-07-17 09:44:29,177 - INFO - RDAL before filtering: 14831 rows
-2026-07-17 09:44:29,177 - INFO - RDAL sample:
-shape: (5, 3)
-┌────────────────┬────────┬───────────┐
-│ ITCODE         ┆ AMTIND ┆ AMOUNT    │
-│ ---            ┆ ---    ┆ ---       │
-│ str            ┆ str    ┆ f64       │
-╞════════════════╪════════╪═══════════╡
-│ NSSTS          ┆ D      ┆ 3.1592e9  │
-│ SSTS           ┆ D      ┆ 5.4823e10 │
-│ 3051000000000Y ┆        ┆ 3.3744e11 │
-│ 3051000000000Y ┆        ┆ 2.4079e8  │
-│ 3091000000000Y ┆        ┆ 1.9723e10 │
-└────────────────┴────────┴───────────┘
-2026-07-17 09:44:29,179 - INFO - RDAL after filtering unwanted: 14791 rows
-2026-07-17 09:44:29,179 - INFO - Loading loan data with filtering...
-2026-07-17 09:44:29,179 - INFO - Loading loan data from: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL/lnnote.sas7bdat
-2026-07-17 09:44:29,179 - INFO - Reading first 50000 rows with pandas...
-2026-07-17 09:44:29,179 - ERROR - Error loading loan file /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL/lnnote.sas7bdat: read_sas() got an unexpected keyword argument 'nrows'
-2026-07-17 09:44:29,179 - INFO - Trying pyreadstat without row limit...
