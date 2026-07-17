@@ -1,438 +1,149 @@
-"""
-EIBWKAPE - DAILY KAPITI STOCK / VARIANCE / REV REPO REPORTS
-Produces ONE formatted text file output
-"""
+few sample from production output:
 
-import pyreadstat
-import polars as pl
-from pathlib import Path
-from datetime import datetime, timedelta
-import pandas as pd
+PUBLIC BANK BERHAD                                                                                                                   
+DETAIL TOTAL ELIGIBLE LIABILITIES ITEMS FOR :  DAYA                                                                                  
+REPORT DATE :  08/07/26                                                                                                              
+                                                                                                                                     
+  FMTNAME  BNMCODE         DESC                                      SIGN                  AMOUNT                   TOTAL            
+  -----------------------------------------------------------------------------------------------------------------------            
+  A-RMEL   4211000000000Y  RM DEMAND DEPOSITS ACCEPTED               +          58,355,074,524.53       58,355,074,524.53            
+           4212000000000Y  RM SAVINGS DEPOSITS ACCEPTED              +          34,788,322,240.58       34,788,322,240.58            
+           4213000000000Y  RM FIXED DEPOSITS ACCEPTED                +         150,458,756,066.17      150,458,756,066.17            
+           4213100000000Y  RM SPECIAL INVESTMENT DEPOSIT ACCEPTED    +                       0.00                    0.00            
+           4213200000000Y  RM GENERAL INVESTMENT DEPOSIT ACCEPTED    +                       0.00                    0.00            
+           4213300000000Y  RM COMMODITY MURABAHAH                    +                       0.00                    0.00            
+           4215000000000Y  RM NID ISSUED                             +             900,000,000.00          900,000,000.00            
+           4216000000000Y  RM REPURCHASE AGREEMENTS                  +          11,622,078,998.66       11,622,078,998.66            
+           4217071000000Y  RM SPECIAL DEPOSITS                       +                       0.00                    0.00            
+           4218000000000Y  RM HOUSING DEVELOPMENT ACCOUNTS           +           1,712,725,630.10        1,712,725,630.10            
+           4219000000000Y  RM SHORT TERM DEPOSIT ACCEPTED            +          61,770,782,382.26       61,770,782,382.26            
+           4219100000000Y  RM INVESTMENT LINKED TO DERIVATIVES       +             386,914,369.00          386,914,369.00            
+           4219900000000Y  RM OTHER DEPOSITS ACCEPTED                +              37,646,848.06           37,646,848.06            
+           4310000000000Y  RM AMOUNT DUE TO DESIGNATED FI            +                       0.00                    0.00            
+           4311002000000Y  RM VOSTRO ACCOUNTS OF CB                  +                 486,854.46              486,854.46            
+           4311003000000Y  RM VOSTRO ACCOUNTS OF IB                  +              54,444,827.40           54,444,827.40            
+           4311081000000Y  RM VOSTRO ACCOUNTS OF FBI                 +             100,012,977.00          100,012,977.00            
+           4312002000000Y  RM OVERDRAWN NOSTRO ACCOUNTS WITH CB      +                       0.00                    0.00            
+           4312003000000Y  RM OVERDRAWN NOSTRO ACCOUNTS WITH IB      +                       0.00                    0.00            
+           4313000000000Y  RM DEFICIT IN SPICK                       +                       0.00                    0.00            
+           4313002000000Y  RM AMOUNT BORROWING FROM SPICK POOL CB    +                       0.00                    0.00            
+           4313003000000Y  RM AMOUNT BORROWING FROM SPICK POOL IB    +                       0.00                    0.00            
+           4314001000000Y  RM INTERBANK BORROWINGS FROM BNM          +             113,171,358.83          113,171,358.83            
+           4314002000000Y  RM INTERBANK BORROWINGS FROM CB           +           2,255,000,000.00        2,255,000,000.00            
+           4314003000000Y  RM INTERBANK BORROWINGS FROM IB           +                       0.00                    0.00            
+           4314011000000Y  RM INTERBANK BORROWINGS FROM FC           +                       0.00                    0.00            
+           4314012000000Y  RM INTERBANK BORROWINGS FROM MB           +                       0.00                    0.00            
+           4314013000000Y  RM INTERBANK BORROWINGS FROM DH           +                       0.00                    0.00            
+           4314017000000Y  O/W RM IBB FROM CAGAMAS           0.00    +                       0.00                    0.00            
+           4314020000000Y  RM INTERBANK BORROWINGS FROM DNBFI        +                       0.00                    0.00            
+           4314081100000Y  RM INTERBANK BORROWINGS FROM FBI <= 1 YR  +             150,000,000.00          150,000,000.00            
+           4410000000000Y  RM MISC BORROWINGS                        +          10,197,952,678.54       10,197,952,678.54            
+           4911080000000Y  RM INTEREST PAYABLE TO NON-RESIDENTS      +              53,372,766.43           53,372,766.43            
+           4911095000000Y  RM INTEREST PAYABLE TO NON-RES - DCI/CRA  +                  28,349.42               28,349.42            
+           4912080000000Y  RM BILLS PAYABLE TO NON-RESIDENTS         +                       0.00                    0.00            
+           4929980000000Y  OTHER RM MISC LIAB NIE DUE TO NON-RES     +                       0.00                    0.00            
+           4929995000000Y  RM GOLD INVESTMENT FROM NON-RESIDENTS     +              38,161,231.95           38,161,231.95            
+           4929996000000Y  OTHR RM MISC LIAB NIE DUE TO NON-RES-DCI  +                     583.12                  583.12            
+           4411100000000Y  RM SUBORDINATED DEBT CAPITAL              -           4,997,935,844.48        4,997,935,844.48            
+           4411200000000Y  RM EXEMPT SUBORDINATED DEBT CAPITAL       -                       0.00                    0.00         
 
-# ============================================
-# CONFIGURATION - INPUT/OUTPUT PATHS
-# ============================================
 
-BNMK_INPUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWKAPE"
-BNM_INPUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWKAPE"
 
-OUTPUT_BASE_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWKAPE"
-REPORTS_OUTPUT_PATH = f"{OUTPUT_BASE_PATH}/REPORTS"
 
-SAS_EXTENSION = ".sas7bdat"
-TEXT_EXTENSION = ".TXT"  # Single output file
+python output:
 
-USE_CURRENT_DATE = False
-CUSTOM_DATE = datetime(2026, 7, 16)
-DAYS_OFFSET = 1
+========================================================================================================================
+PUBLIC BANK BERHAD - DAILY KAPITI STOCK / VARIANCE / REV REPO REPORT
+Report Date: 16/07/26
+Report Period: Week 2, Month 07
+Generated: 2026-07-17 16:48:42
+========================================================================================================================
 
-# ============================================
-# FUNCTIONS
-# ============================================
+========================================================================================================================
+SECTION 1: DAILY KAPITI STOCK REPORT
+========================================================================================================================
 
-def read_sas7bdat(file_path):
-    """Read SAS7BDAT file and return as Polars DataFrame"""
-    try:
-        df, meta = pyreadstat.read_sas7bdat(file_path)
-        return pl.from_pandas(df)
-    except Exception as e:
-        print(f"Error reading {file_path}: {e}")
-        return pl.DataFrame()
+BNMCODG                  BNMCODE         AMOUNT              UTSTY       UTREF       ELDAY       
+-------------------------------------------------------------------------------------------------
+3721000000000Y-MGS AFS   3721000000000Y  7,694,996,662.00    MGS         AFS         DAYA        
+3721000000000Y-MGS AFS   3721000000000Y  7,694,996,662.00    MGS         AFS         DAYB        
+3721000000000Y-MGS AFS   3721000000000Y  7,694,996,662.00    MGS         AFS         DAYC        
+3721000000000Y-MGS AFS   3721000000000Y  7,694,996,662.00    MGS         AFS         DAYD        
+3721000000000Y-MGS AFS   3721000000000Y  7,851,922,162.00    MGS         AFS         DAYE        
+3721000000000Y-MGS AFS   3721000000000Y  7,500,978,162.00    MGS         AFS         DAYF        
+3721000000000Y-MGS AFS   3721000000000Y  7,500,978,162.00    MGS         AFS         DAYI        
+3721000000000Y-MGS AFSLI 3721000000000Y  6,136,116,580.40    MGS         AFSLIQ      DAYA        
+3721000000000Y-MGS AFSLI 3721000000000Y  6,329,126,580.40    MGS         AFSLIQ      DAYB        
+3721000000000Y-MGS AFSLI 3721000000000Y  6,329,126,580.40    MGS         AFSLIQ      DAYC        
+3721000000000Y-MGS AFSLI 3721000000000Y  6,329,126,580.40    MGS         AFSLIQ      DAYD        
+3721000000000Y-MGS AFSLI 3721000000000Y  6,309,132,980.40    MGS         AFSLIQ      DAYE        
+3721000000000Y-MGS AFSLI 3721000000000Y  6,152,916,980.40    MGS         AFSLIQ      DAYF        
+3721000000000Y-MGS AFSLI 3721000000000Y  5,961,140,480.40    MGS         AFSLIQ      DAYI        
+3721000000000Y-MGS DLG   3721000000000Y  1,157,243,500.00    MGS         DLG         DAYA        
+3721000000000Y-MGS DLG   3721000000000Y  1,084,630,400.00    MGS         DLG         DAYB        
+3721000000000Y-MGS DLG   3721000000000Y  1,084,630,400.00    MGS         DLG         DAYC        
+3721000000000Y-MGS DLG   3721000000000Y  1,084,630,400.00    MGS         DLG         DAYD        
+3721000000000Y-MGS DLG   3721000000000Y  1,033,920,600.00    MGS         DLG         DAYE        
+3721000000000Y-MGS DLG   3721000000000Y  1,033,920,600.00    MGS         DLG         DAYF        
+3721000000000Y-MGS DLG   3721000000000Y  733,603,600.00      MGS         DLG         DAYI        
+3721000000000Y-MGS INV   3721000000000Y  4,955,404,216.60    MGS         INV         DAYA        
+3721000000000Y-MGS INV   3721000000000Y  4,955,404,216.60    MGS         INV         DAYB        
+3721000000000Y-MGS INV   3721000000000Y  4,955,404,216.60    MGS         INV         DAYC        
+3721000000000Y-MGS INV   3721000000000Y  4,955,404,216.60    MGS         INV         DAYD        
+3721000000000Y-MGS INV   3721000000000Y  4,955,388,116.60    MGS         INV         DAYE        
+3721000000000Y-MGS INV   3721000000000Y  4,955,388,116.60    MGS         INV         DAYF        
+3721000000000Y-MGS INV   3721000000000Y  3,324,518,116.60    MGS         INV         DAYI        
+3722000000000Y-ITB AFS   3722000000000Y  231,830,158.62      ITB         AFS         DAYA        
+3722000000000Y-ITB AFS   3722000000000Y  231,830,158.62      ITB         AFS         DAYB        
+3722000000000Y-ITB AFS   3722000000000Y  231,830,158.62      ITB         AFS         DAYC        
+3722000000000Y-ITB AFS   3722000000000Y  231,830,158.62      ITB         AFS         DAYD        
+3722000000000Y-ITB AFS   3722000000000Y  231,830,158.62      ITB         AFS         DAYE        
+3722000000000Y-ITB AFS   3722000000000Y  231,830,158.62      ITB         AFS         DAYF        
+3722000000000Y-ITB AFS   3722000000000Y  231,830,158.62      ITB         AFS         DAYI        
+3722000000000Y-MTB DLG   3722000000000Y  196,991,780.80      MTB         DLG         DAYA        
+3722000000000Y-MTB DLG   3722000000000Y  196,991,780.80      MTB         DLG         DAYB        
+3722000000000Y-MTB DLG   3722000000000Y  196,991,780.80      MTB         DLG         DAYC        
+3722000000000Y-MTB DLG   3722000000000Y  196,991,780.80      MTB         DLG         DAYD        
+3722000000000Y-MTB DLG   3722000000000Y  196,991,780.80      MTB         DLG         DAYE        
+3722000000000Y-MTB DLG   3722000000000Y  196,991,780.80      MTB         DLG         DAYF        
+3722000000000Y-MTB DLG   3722000000000Y  196,991,780.80      MTB         DLG         DAYI        
+3723000000000Y-MGI AFS   3723000000000Y  6,686,568,608.90    MGI         AFS         DAYA        
+3723000000000Y-MGI AFS   3723000000000Y  6,686,568,608.90    MGI         AFS         DAYB        
+3723000000000Y-MGI AFS   3723000000000Y  6,686,568,608.90    MGI         AFS         DAYC        
+3723000000000Y-MGI AFS   3723000000000Y  6,686,568,608.90    MGI         AFS         DAYD        
+3723000000000Y-MGI AFS   3723000000000Y  6,686,568,608.90    MGI         AFS         DAYE        
+3723000000000Y-MGI AFS   3723000000000Y  6,686,568,608.90    MGI         AFS         DAYF        
+3723000000000Y-MGI AFS   3723000000000Y  6,686,568,608.90    MGI         AFS         DAYI        
+3723000000000Y-MGI AFSLI 3723000000000Y  5,285,092,981.40    MGI         AFSLIQ      DAYA        
+3723000000000Y-MGI AFSLI 3723000000000Y  5,308,719,481.40    MGI         AFSLIQ      DAYB        
+3723000000000Y-MGI AFSLI 3723000000000Y  5,308,719,481.40    MGI         AFSLIQ      DAYC        
+3723000000000Y-MGI AFSLI 3723000000000Y  5,308,719,481.40    MGI         AFSLIQ      DAYD        
+3723000000000Y-MGI AFSLI 3723000000000Y  5,048,395,481.40    MGI         AFSLIQ      DAYE        
+3723000000000Y-MGI AFSLI 3723000000000Y  5,048,395,481.40    MGI         AFSLIQ      DAYF        
+3723000000000Y-MGI AFSLI 3723000000000Y  5,095,963,497.60    MGI         AFSLIQ      DAYI        
+3723000000000Y-MGI DLG   3723000000000Y  927,171,200.00      MGI         DLG         DAYA        
+3723000000000Y-MGI DLG   3723000000000Y  906,816,200.00      MGI         DLG         DAYB        
+3723000000000Y-MGI DLG   3723000000000Y  906,816,200.00      MGI         DLG         DAYC        
+3723000000000Y-MGI DLG   3723000000000Y  906,816,200.00      MGI         DLG         DAYD        
+3723000000000Y-MGI DLG   3723000000000Y  806,327,000.00      MGI         DLG         DAYE        
+3723000000000Y-MGI DLG   3723000000000Y  806,327,000.00      MGI         DLG         DAYF        
+3723000000000Y-MGI DLG   3723000000000Y  872,918,230.40      MGI         DLG         DAYI        
+3723000000000Y-MGI INV   3723000000000Y  3,622,414,124.00    MGI         INV         DAYA        
+3723000000000Y-MGI INV   3723000000000Y  3,622,414,124.00    MGI         INV         DAYB        
+3723000000000Y-MGI INV   3723000000000Y  3,622,414,124.00    MGI         INV         DAYC        
+3723000000000Y-MGI INV   3723000000000Y  3,622,414,124.00    MGI         INV         DAYD        
+3723000000000Y-MGI INV   3723000000000Y  3,622,414,124.00    MGI         INV         DAYE        
+3723000000000Y-MGI INV   3723000000000Y  3,622,414,124.00    MGI         INV         DAYF        
+3723000000000Y-MGI INV   3723000000000Y  3,622,414,124.00    MGI         INV         DAYI        
+-------------------------------------------------------------------------------------------------
+TOTAL RECORDS:         70
+TOTAL AMOUNT:             255,151,873,235.63
+-------------------------------------------------------------------------------------------------
 
-def apply_utsty_filter(df):
-    """
-    Mirrors SAS:
-      IF UTSTY IN ('CB1','CF1','CNT','SAC','SMC','ISB') THEN DO;
-          IF UTREF NOT IN ('DLG','IDLG') THEN DELETE;
-      END;
-    """
-    if df.height == 0:
-        return df
-    return df.filter(
-        ~(
-            (pl.col("UTSTY").is_in(['CB1', 'CF1', 'CNT', 'SAC', 'SMC', 'ISB'])) &
-            (~pl.col("UTREF").is_in(['DLG', 'IDLG']))
-        )
-    )
+========================================================================================================================
+END OF REPORT
+========================================================================================================================
 
-def write_formatted_report(df_stock, df_variance, df_repo, output_file, title, report_date, period):
-    """
-    Write a single formatted text file with all report sections
-    Similar to SAS PROC REPORT output
-    """
-    
-    with open(output_file, 'w') as f:
-        # ========================================
-        # HEADER
-        # ========================================
-        f.write("=" * 120 + "\n")
-        f.write(f"{title}\n")
-        f.write(f"Report Date: {report_date}\n")
-        f.write(f"Report Period: {period}\n")
-        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write("=" * 120 + "\n\n")
-        
-        # ========================================
-        # SECTION 1: STOCK REPORT (REP2/REP4)
-        # ========================================
-        if df_stock.height > 0:
-            f.write("=" * 120 + "\n")
-            f.write("SECTION 1: DAILY KAPITI STOCK REPORT\n")
-            f.write("=" * 120 + "\n\n")
-            
-            # Get display columns
-            display_cols = ['BNMCODG', 'BNMCODE', 'AMOUNT', 'UTSTY', 'UTREF', 'ELDAY']
-            available_cols = [col for col in display_cols if col in df_stock.columns]
-            
-            # Calculate column widths
-            col_widths = {}
-            for col in available_cols:
-                max_width = max(len(col), 12)
-                if col in df_stock.columns:
-                    pdf_temp = df_stock[col].to_pandas()
-                    max_data = pdf_temp.astype(str).str.len().max()
-                    if pd.notna(max_data):
-                        max_width = max(max_width, min(max_data + 2, 25))
-                col_widths[col] = max_width
-            
-            # Header
-            header_line = ""
-            for col in available_cols:
-                header_line += f"{col:<{col_widths[col]}}"
-            f.write(header_line + "\n")
-            f.write("-" * len(header_line) + "\n")
-            
-            # Data rows
-            pdf_stock = df_stock[available_cols].to_pandas()
-            for _, row in pdf_stock.iterrows():
-                line = ""
-                for col in available_cols:
-                    val = row[col]
-                    if col == 'AMOUNT':
-                        val_str = f"{val:,.2f}" if pd.notna(val) else ""
-                    else:
-                        val_str = str(val) if pd.notna(val) else ""
-                    line += f"{val_str:<{col_widths[col]}}"
-                f.write(line + "\n")
-            
-            # Summary
-            f.write("-" * len(header_line) + "\n")
-            total_amount = df_stock['AMOUNT'].sum() if 'AMOUNT' in df_stock.columns else 0
-            f.write(f"TOTAL RECORDS: {df_stock.height:>10}\n")
-            f.write(f"TOTAL AMOUNT: {total_amount:>30,.2f}\n")
-            f.write("-" * len(header_line) + "\n\n")
-        
-        # ========================================
-        # SECTION 2: VARIANCE REPORT
-        # ========================================
-        if df_variance.height > 0:
-            f.write("=" * 120 + "\n")
-            f.write("SECTION 2: KAPITI WALKER VARIANCE REPORT\n")
-            f.write("=" * 120 + "\n\n")
-            
-            # Get display columns
-            display_cols = ['BNMCODE', 'ELDAY', 'AMOUNT_SUM', 'WALWAMT', 'VARIANC']
-            available_cols = [col for col in display_cols if col in df_variance.columns]
-            
-            # Calculate column widths
-            col_widths = {}
-            for col in available_cols:
-                max_width = max(len(col), 12)
-                if col in df_variance.columns:
-                    pdf_temp = df_variance[col].to_pandas()
-                    max_data = pdf_temp.astype(str).str.len().max()
-                    if pd.notna(max_data):
-                        max_width = max(max_width, min(max_data + 2, 25))
-                col_widths[col] = max_width
-            
-            # Header
-            header_line = ""
-            for col in available_cols:
-                header_line += f"{col:<{col_widths[col]}}"
-            f.write(header_line + "\n")
-            f.write("-" * len(header_line) + "\n")
-            
-            # Data rows
-            pdf_var = df_variance[available_cols].to_pandas()
-            for _, row in pdf_var.iterrows():
-                line = ""
-                for col in available_cols:
-                    val = row[col]
-                    if col in ['AMOUNT_SUM', 'WALWAMT', 'VARIANC']:
-                        val_str = f"{val:,.2f}" if pd.notna(val) else ""
-                    else:
-                        val_str = str(val) if pd.notna(val) else ""
-                    line += f"{val_str:<{col_widths[col]}}"
-                f.write(line + "\n")
-            
-            # Summary
-            f.write("-" * len(header_line) + "\n")
-            if 'AMOUNT_SUM' in df_variance.columns:
-                total_sum = df_variance['AMOUNT_SUM'].sum()
-                f.write(f"TOTAL AMOUNT_SUM: {total_sum:>27,.2f}\n")
-            if 'WALWAMT' in df_variance.columns:
-                total_walw = df_variance['WALWAMT'].sum()
-                f.write(f"TOTAL WALWAMT:    {total_walw:>27,.2f}\n")
-            if 'VARIANC' in df_variance.columns:
-                total_var = df_variance['VARIANC'].sum()
-                f.write(f"TOTAL VARIANCE:   {total_var:>27,.2f}\n")
-            f.write(f"TOTAL RECORDS: {df_variance.height:>30}\n")
-            f.write("-" * len(header_line) + "\n\n")
-        
-        # ========================================
-        # SECTION 3: REVERSE REPO REPORT
-        # ========================================
-        if df_repo.height > 0:
-            f.write("=" * 120 + "\n")
-            f.write("SECTION 3: REVERSE REPO PURCHASE PROCEEDS\n")
-            f.write("=" * 120 + "\n\n")
-            
-            # Get display columns
-            display_cols = ['BNMCODG', 'AMOUNT']
-            if 'NETAMT' in df_repo.columns:
-                display_cols.append('NETAMT')
-            if 'COSTDED' in df_repo.columns:
-                display_cols.append('COSTDED')
-            
-            available_cols = [col for col in display_cols if col in df_repo.columns]
-            
-            # Calculate column widths
-            col_widths = {}
-            for col in available_cols:
-                max_width = max(len(col), 12)
-                if col in df_repo.columns:
-                    pdf_temp = df_repo[col].to_pandas()
-                    max_data = pdf_temp.astype(str).str.len().max()
-                    if pd.notna(max_data):
-                        max_width = max(max_width, min(max_data + 2, 25))
-                col_widths[col] = max_width
-            
-            # Header
-            header_line = ""
-            for col in available_cols:
-                header_line += f"{col:<{col_widths[col]}}"
-            f.write(header_line + "\n")
-            f.write("-" * len(header_line) + "\n")
-            
-            # Data rows
-            pdf_repo = df_repo[available_cols].to_pandas()
-            for _, row in pdf_repo.iterrows():
-                line = ""
-                for col in available_cols:
-                    val = row[col]
-                    if col in ['AMOUNT', 'NETAMT', 'COSTDED']:
-                        val_str = f"{val:,.2f}" if pd.notna(val) else ""
-                    else:
-                        val_str = str(val) if pd.notna(val) else ""
-                    line += f"{val_str:<{col_widths[col]}}"
-                f.write(line + "\n")
-            
-            # Summary
-            f.write("-" * len(header_line) + "\n")
-            if 'AMOUNT' in df_repo.columns:
-                total_amount = df_repo['AMOUNT'].sum()
-                f.write(f"TOTAL AMOUNT: {total_amount:>30,.2f}\n")
-            if 'NETAMT' in df_repo.columns:
-                total_netamt = df_repo['NETAMT'].sum()
-                f.write(f"TOTAL NETAMT: {total_netamt:>30,.2f}\n")
-            if 'COSTDED' in df_repo.columns:
-                total_costded = df_repo['COSTDED'].sum()
-                f.write(f"TOTAL COSTDED: {total_costded:>30,.2f}\n")
-            f.write(f"TOTAL RECORDS: {df_repo.height:>30}\n")
-            f.write("-" * len(header_line) + "\n\n")
-        
-        # ========================================
-        # FOOTER
-        # ========================================
-        f.write("=" * 120 + "\n")
-        f.write("END OF REPORT\n")
-        f.write("=" * 120 + "\n")
 
-# ============================================
-# DATE PROCESSING
-# ============================================
 
-if USE_CURRENT_DATE:
-    REPTDATE_LOAN = datetime.now() - timedelta(days=DAYS_OFFSET)
-else:
-    REPTDATE_LOAN = CUSTOM_DATE
-
-print(f"Reporting Date: {REPTDATE_LOAN.strftime('%Y-%m-%d')}")
-
-SDESC = "PUBLIC BANK BERHAD"
-RDATE = REPTDATE_LOAN.strftime("%d/%m/%y")
-RYEAR = REPTDATE_LOAN.strftime("%Y")
-
-# Calculate week and month
-REPTDATE_BNMK = REPTDATE_LOAN
-MM = REPTDATE_BNMK.month
-DAY = REPTDATE_BNMK.day
-
-if 1 <= DAY <= 8:
-    WK = '4'
-elif 9 <= DAY <= 15:
-    WK = '1'
-elif 16 <= DAY <= 22:
-    WK = '2'
-else:
-    WK = '3'
-
-if WK == '4':
-    MM1 = MM - 1
-    if MM1 == 0:
-        MM1 = 12
-    MM = MM1
-    if MM == 12:
-        SXDATE = REPTDATE_BNMK.replace(month=1, day=1) - timedelta(days=1)
-    else:
-        SXDATE = REPTDATE_BNMK.replace(day=1) - timedelta(days=1)
-        SXDATE = SXDATE.replace(month=MM) if SXDATE.month != MM else SXDATE
-else:
-    SXDATE = REPTDATE_BNMK
-
-NOWK = WK
-REPTMON = f"{MM:02d}"
-
-print(f"Report Period: Week {WK}, Month {REPTMON}")
-
-# ============================================
-# LOAD AND PROCESS DATA
-# ============================================
-
-# Load REP2 and REP4
-rep2_file = f"{BNMK_INPUT_PATH}/rep2{REPTMON}{WK}{SAS_EXTENSION}"
-rep4_file = f"{BNMK_INPUT_PATH}/rep4{REPTMON}{WK}{SAS_EXTENSION}"
-
-print(f"Reading: {rep2_file}")
-REP2_RAW = read_sas7bdat(rep2_file)
-print(f"Reading: {rep4_file}")
-REP4_RAW = read_sas7bdat(rep4_file)
-
-# Apply filters
-REP2_FILTERED = apply_utsty_filter(REP2_RAW)
-REP4_FILTERED = apply_utsty_filter(REP4_RAW)
-
-print(f"REP2: {REP2_RAW.height} raw → {REP2_FILTERED.height} filtered")
-print(f"REP4: {REP4_RAW.height} raw → {REP4_FILTERED.height} filtered")
-
-# Combine
-frames = [d for d in (REP2_FILTERED, REP4_FILTERED) if d.height > 0]
-REP2_COMBINED = pl.concat(frames) if frames else pl.DataFrame()
-print(f"Combined: {REP2_COMBINED.height} records")
-
-if REP2_COMBINED.height > 0:
-    # Transform data
-    amount_col = "NETAMT" if "NETAMT" in REP2_COMBINED.columns else "AMOUNT"
-    
-    REP2_TRANSFORMED = REP2_COMBINED.with_columns([
-        pl.when(pl.col("BNMCODE") == '3250000000000Y')
-          .then(pl.lit('REV'))
-          .otherwise(pl.col("UTSTY"))
-          .alias("UTSTY"),
-        pl.when(pl.col("BNMCODE") == '3250000000000Y')
-          .then(pl.lit('REPO '))
-          .otherwise(pl.col("UTREF"))
-          .alias("UTREF"),
-        pl.when(pl.col("BNMCODE") == '3250000000000Y')
-          .then(pl.col(amount_col))
-          .otherwise(pl.col("AMOUNT"))
-          .alias("AMOUNT"),
-        pl.when(pl.col("BNMCODE") == '3752000000000Y')
-          .then(pl.lit('3552000000000Y'))
-          .otherwise(pl.col("BNMCODE"))
-          .alias("BNMCODE"),
-    ]).with_columns(
-        (pl.col("BNMCODE") + '-' + pl.col("UTSTY") + ' ' + pl.col("UTREF").str.slice(0, 5)).alias("BNMCODG")
-    )
-    
-    REP2_SORTED = REP2_TRANSFORMED.sort("BNMCODG")
-    
-    # Summary for variance
-    SUMMARY_DF = REP2_SORTED.group_by(["BNMCODE", "ELDAY"]).agg(
-        pl.col("AMOUNT").sum().alias("AMOUNT_SUM")
-    )
-    
-    # Load Walker (ELW)
-    walw_file = f"{BNM_INPUT_PATH}/elw{REPTMON}{WK}{SAS_EXTENSION}"
-    print(f"Reading: {walw_file}")
-    WALW_DF = read_sas7bdat(walw_file)
-    
-    if WALW_DF.height > 0:
-        WALW_PROCESSED = WALW_DF.with_columns([
-            pl.when(pl.col("BNMCODE") == '3250001000000Y')
-              .then(pl.lit('3250000000000Y'))
-              .otherwise(pl.col("BNMCODE"))
-              .alias("BNMCODE")
-        ])
-        
-        WALW_DUPLICATED = WALW_PROCESSED.filter(
-            pl.col("BNMCODE") == '3551000000000Y'
-        ).with_columns(pl.lit('3552000000000Y').alias("BNMCODE"))
-        
-        WALW_FINAL = pl.concat([WALW_PROCESSED, WALW_DUPLICATED])
-        
-        WALW_SUMMARY = WALW_FINAL.group_by(["BNMCODE", "ELDAY"]).agg(
-            pl.col("AMOUNT").sum().alias("WALWAMT")
-        )
-        
-        VARIANCE_DF = SUMMARY_DF.join(WALW_SUMMARY, on=["BNMCODE", "ELDAY"], how="left").with_columns(
-            (pl.col("AMOUNT_SUM") - pl.col("WALWAMT")).alias("VARIANC")
-        )
-    else:
-        VARIANCE_DF = pl.DataFrame()
-    
-    # Reverse Repo (REP0)
-    REP2_REFILTERED = apply_utsty_filter(REP2_RAW)
-    if REP2_REFILTERED.height > 0:
-        REP0_DF = REP2_REFILTERED.filter(
-            pl.col("BNMCODE") == '3250000000000Y'
-        ).with_columns(
-            (pl.col("BNMCODE") + '-' + pl.col("UTSTY") + ' ' + pl.col("UTREF").str.slice(0, 5)).alias("BNMCODG")
-        )
-    else:
-        REP0_DF = pl.DataFrame()
-    
-    # ============================================
-    # CREATE OUTPUT DIRECTORY
-    # ============================================
-    
-    Path(REPORTS_OUTPUT_PATH).mkdir(parents=True, exist_ok=True)
-    
-    # ============================================
-    # GENERATE SINGLE FORMATTED TEXT FILE
-    # ============================================
-    
-    output_filename = f"DAILY_KAPITI_REPORT_{REPTMON}{WK}_{RYEAR}{TEXT_EXTENSION}"
-    output_file = f"{REPORTS_OUTPUT_PATH}/{output_filename}"
-    
-    write_formatted_report(
-        df_stock=REP2_SORTED,
-        df_variance=VARIANCE_DF,
-        df_repo=REP0_DF,
-        output_file=output_file,
-        title=f"{SDESC} - DAILY KAPITI STOCK / VARIANCE / REV REPO REPORT",
-        report_date=RDATE,
-        period=f"Week {WK}, Month {REPTMON}"
-    )
-    
-    # ============================================
-    # COMPLETION MESSAGE
-    # ============================================
-    
-    print("\n" + "=" * 50)
-    print("PROCESSING COMPLETED SUCCESSFULLY!")
-    print("=" * 50)
-    print(f"Report Date: {REPTDATE_LOAN.strftime('%Y-%m-%d')}")
-    print(f"Report Period: Week {WK}, Month {REPTMON}")
-    print(f"Output file: {output_file}")
-    print(f"File size: {Path(output_file).stat().st_size:,} bytes")
-    if REP2_SORTED.height > 0:
-        print(f"Stock Records: {REP2_SORTED.height}")
-    if VARIANCE_DF.height > 0:
-        print(f"Variance Records: {VARIANCE_DF.height}")
-    if REP0_DF.height > 0:
-        print(f"Reverse Repo Records: {REP0_DF.height}")
-    print("=" * 50)
-
-else:
-    print("Error: No data available to process")
+why does it different? any clues?
