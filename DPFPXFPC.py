@@ -1,373 +1,309 @@
-import pandas as pd
-import numpy as np
-from functools import partial
-import warnings
-warnings.filterwarnings('ignore')
+"""
+EIBWKAPE - DAILY KAPITI STOCK / VARIANCE / REV REPO REPORTS
+Fixed version - corrects two bugs found against the original SAS source:
 
-# Configuration - these would be defined elsewhere in your Python environment
-REPTMON = '202401'  # Example value
-NOWK = '4'          # Example value (Week number)
-RDATE = '2024-01-31' # Report date
+  1. WALW (Walker) file name was hardcoded as 'elw071' instead of being
+     built dynamically as elw{REPTMON}{WK}, per SAS: BNM.ELW&REPTMON&WK
+  2. REP0 (Reverse Repo report) was being built from the RAW, unfiltered
+     REP2 read. SAS re-reads REP2 fresh and RE-APPLIES the UTSTY/UTREF
+     exclusion filter before building REP0. Python now does the same.
 
-# Define the main processing function
-def process_el_data(day, is_alternative=False):
+NOTE: This program does NOT include the PBBELQ "Detail Total Eligible
+Liabilities" report (%INC PGM(PBBELQ) in the SAS main program). That
+report needs a BNMCODE -> FMTNAME/DESC/SIGN/IDX lookup table (built by
+PBBELF, which references EL/ELI datasets not yet provided) plus TBL1,
+DCI, and GOLD source files. That is a separate deliverable once those
+are available.
+"""
+
+import pyreadstat
+import polars as pl
+from pathlib import Path
+from datetime import datetime, timedelta
+
+# ============================================
+# CONFIGURATION - INPUT/OUTPUT PATHS
+# ============================================
+
+BNMK_INPUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWKAPE"  # BNMK.* (REP2, REP4)
+BNM_INPUT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWKAPE"   # BNM.*  (ELW / Walker)
+
+OUTPUT_BASE_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWKAPE"
+REPORTS_OUTPUT_PATH = f"{OUTPUT_BASE_PATH}/REPORTS"
+SFTP_UPLOAD_PATH = "SFTP_UPLOAD"
+
+SAS_EXTENSION = ".sas7bdat"
+PARQUET_EXTENSION = ".PARQUET"
+TEXT_EXTENSION = ".TXT"
+
+USE_CURRENT_DATE = False
+CUSTOM_DATE = datetime(2026, 7, 16)
+DAYS_OFFSET = 1
+
+TEXT_SEPARATOR = '\t'
+
+# ============================================
+# FUNCTIONS
+# ============================================
+
+def read_sas7bdat(file_path):
+    """Read SAS7BDAT file and return as Polars DataFrame"""
+    try:
+        df, meta = pyreadstat.read_sas7bdat(file_path)
+        return pl.from_pandas(df)
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return pl.DataFrame()
+
+
+def write_to_text(df, filename, separator=TEXT_SEPARATOR):
+    """Write DataFrame to text file with specified separator"""
+    if df.height > 0:
+        pdf = df.to_pandas()
+        pdf.to_csv(filename, sep=separator, index=False)
+        print(f"Written: {filename} ({df.height} records)")
+    else:
+        print(f"Warning: No data to write to {filename}")
+
+
+def apply_utsty_filter(df):
     """
-    Process EL data for a specific day
-    is_alternative: boolean indicating if this is the alternative version (DAYI)
+    Mirrors SAS:
+      IF UTSTY IN ('CB1','CF1','CNT','SAC','SMC','ISB') THEN DO;
+          IF UTREF NOT IN ('DLG','IDLG') THEN DELETE;
+      END;
     """
-    
-    # Load datasets - these would be read from your data sources
-    # For demonstration, we'll create sample dataframes
-    def load_elg_gold(reptmon, nowk):
-        # Mock data - replace with actual data loading
-        return pd.DataFrame({
-            'ELDAY': ['DAYA', 'DAYA', 'DAYB', 'DAYC'],
-            'BNMCODE': ['4017100000000Y', '4019000000000Y', '4019100000000Y', '4013000000000Y'],
-            'AMOUNT': [1000, 2000, 3000, 4000],
-            'IDX': ['A', 'B', 'C', 'D'],
-            'SIGN': ['+', '-', '+', '+'],
-            'FMTNAME': ['RMEL', 'RMEL', 'RMEL', 'ELSRR'],
-            'DESC': ['Description1', 'Description2', 'Description3', 'Description4']
-        })
-    
-    def load_bnmk_tbl1(reptmon, nowk):
-        return pd.DataFrame({
-            'ELDAY': ['DAYA', 'DAYA', 'DAYB', 'DAYC'],
-            'BNMCODE': ['3250000000000Y', '4017100000000Y', '4411100000000Y', '4414000000000Y'],
-            'AMOUNT': [5000, 6000, 7000, 8000],
-            'NETAMT': [4500, 5500, 6500, 7500]
-        })
-    
-    def load_bnmk_dci(reptmon, nowk):
-        return pd.DataFrame({
-            'ELDAY': ['DAYA', 'DAYB', 'DAYC', 'DAYD'],
-            'BNMCODE': ['3219902000000Y', '3219903000000Y', '3219912000000Y', '3219910000000Y'],
-            'AMOUNT': [9000, 10000, 11000, 12000]
-        })
-    
-    def load_bnm_elw(reptmon, nowk):
-        return pd.DataFrame({
-            'ELDAY': ['DAYA', 'DAYA', 'DAYB', 'DAYC'],
-            'BNMCODE': ['4929980000000Y', '3219902000000Y', '4411100000000Y', '4019000000000Y'],
-            'AMOUNT': [-1000, -2000, -3000, -4000],
-            'BRANCH': [1000, 2000, 3500, 4000]
-        })
-    
-    def load_el_item():
-        return pd.DataFrame({
-            'BNMCODE': ['4017100000000Y', '4019000000000Y', '4019100000000Y', '4013000000000Y'],
-            'FMTNAME': ['A-RMEL', 'A-RMEL', 'B-RMEA', 'E-ELSRR'],
-            'IDX': ['A', 'B', 'C', 'D'],
-            'SIGN': ['+', '-', '+', '+'],
-            'DESC': ['RM Marketable Securities', 'EL Item 2', 'EL Item 3', 'ELSRR Item']
-        })
-    
-    # Load all datasets
-    elg = load_elg_gold(REPTMON, NOWK)
-    pmm_tbl1 = load_bnmk_tbl1(REPTMON, NOWK)
-    pmm_dci = load_bnmk_dci(REPTMON, NOWK)
-    elw1 = load_bnm_elw(REPTMON, NOWK)
-    el_item = load_el_item()
-    
-    # Filter by day
-    elg_day = elg[elg['ELDAY'] == day].copy()
-    
-    if is_alternative:
-        # Alternative version (DAYI) - REP7 dataset
-        pmm = pmm_tbl1[pmm_tbl1['ELDAY'] == day].copy()
-        dci_day = pmm_dci[pmm_dci['ELDAY'] == day].copy()
-        
-        # Process REP7
-        rep7 = pd.DataFrame()
-        rep2 = pd.DataFrame()  # Would be loaded from actual source
-        rep4 = pd.DataFrame()  # Would be loaded from actual source
-        
-        # For demonstration, create rep7 from pmm_tbl1
-        rep7 = pmm_tbl1[pmm_tbl1['ELDAY'] == day].copy()
-        rep7.loc[rep7['BNMCODE'] == '3250000000000Y', 'AMOUNT'] = rep7['NETAMT']
-        rep7['BNMCODE'] = '4017100000000Y'
-        
-        # Summarize REP7
-        rep7_summary = rep7.groupby('BNMCODE', as_index=False)['AMOUNT'].sum()
-        
-        # Process ELW1
-        elw_day = elw1[elw1['ELDAY'] == day][['BNMCODE', 'AMOUNT']].copy()
-        elw_day['AMOUNT'] = elw_day['AMOUNT'].abs()
-        
-        # Remove specific branch
-        elw_day = elw_day[~((elw_day['BNMCODE'] == '4929980000000Y') & 
-                           (elw1['BRANCH'] > 3000))]
-        
-        # Process specific BNMCODE mappings
-        def process_bnmcode_mapping(df):
-            rows_to_append = []
-            rows_to_remove = []
-            
-            for idx, row in df.iterrows():
-                bnmcode = row['BNMCODE']
-                if bnmcode in ['3219902000000Y', '3219903000000Y', '3219912000000Y']:
-                    row_new = row.copy()
-                    row_new['BNMCODE'] = '3219910000000Y'
-                    rows_to_append.append(row_new)
-                    rows_to_remove.append(idx)
-                elif bnmcode in ['4411100000000Y', '4414000000000Y', '4413000000000Y']:
-                    bnxcodes = {
-                        '4411100000000Y': '4411100000000Y',
-                        '4414000000000Y': '4414000000000Y',
-                        '4413000000000Y': None
-                    }
-                    for code in ['4411100000000Y', '4414000000000Y']:
-                        if code in bnxcodes and code != bnmcode:
-                            row_new = row.copy()
-                            row_new['BNMCODE'] = code
-                            rows_to_append.append(row_new)
-                    row_new = row.copy()
-                    row_new['BNMCODE'] = '4410000000000Y'
-                    rows_to_append.append(row_new)
-                    rows_to_remove.append(idx)
-                elif bnmcode == '4019000000000Y':
-                    row_new1 = row.copy()
-                    row_new1['BNMCODE'] = '4019100000000Y'
-                    rows_to_append.append(row_new1)
-                    row_new2 = row.copy()
-                    row_new2['BNMCODE'] = '4019000000000Y'
-                    row_new2['AMOUNT'] = 0.00
-                    rows_to_append.append(row_new2)
-                    rows_to_remove.append(idx)
-            
-            # Remove processed rows and append new ones
-            df_new = df.drop(rows_to_remove).copy()
-            for row in rows_to_append:
-                df_new = pd.concat([df_new, pd.DataFrame([row])], ignore_index=True)
-            
-            return df_new
-        
-        elw_day = process_bnmcode_mapping(elw_day)
-        
-        # Combine all datasets
-        elw_combined = pd.concat([
-            elw_day,
-            rep7_summary,
-            dci_day[['BNMCODE', 'AMOUNT']],
-            elg_day[['BNMCODE', 'AMOUNT']]
-        ], ignore_index=True)
-        
+    if df.height == 0:
+        return df
+    return df.filter(
+        ~(
+            (pl.col("UTSTY").is_in(['CB1', 'CF1', 'CNT', 'SAC', 'SMC', 'ISB'])) &
+            (~pl.col("UTREF").is_in(['DLG', 'IDLG']))
+        )
+    )
+
+
+# ============================================
+# DATE PROCESSING
+# ============================================
+
+if USE_CURRENT_DATE:
+    REPTDATE_LOAN = datetime.now() - timedelta(days=DAYS_OFFSET)
+else:
+    REPTDATE_LOAN = CUSTOM_DATE
+
+print(f"Reporting Date: {REPTDATE_LOAN.strftime('%Y-%m-%d')}")
+
+# REPTDAT1 FROM LOAN.REPTDATE
+SDESC = "PUBLIC BANK BERHAD"
+RDATE = REPTDATE_LOAN.strftime("%d/%m/%y")
+RYEAR = REPTDATE_LOAN.strftime("%Y")
+MTHNAM = REPTDATE_LOAN.strftime("%B")
+SDESC_FORMATTED = SDESC.ljust(26)[:26]
+
+# REPTDATE FROM BNMK.REPTDATE
+# NOTE: SAS reads a SEPARATE date value (SXDATE) from BNMK.REPTDATE here,
+# distinct from LOAN.REPTDATE. That source file has not been provided,
+# so this still assumes the same reporting date drives both. Flag this
+# if BNMK.REPTDATE ever diverges from LOAN.REPTDATE in production.
+REPTDATE_BNMK = REPTDATE_LOAN
+MM = REPTDATE_BNMK.month
+DAY = REPTDATE_BNMK.day
+
+if 1 <= DAY <= 8:
+    WK = '4'
+elif 9 <= DAY <= 15:
+    WK = '1'
+elif 16 <= DAY <= 22:
+    WK = '2'
+else:
+    WK = '3'
+
+if WK == '4':
+    MM1 = MM - 1
+    if MM1 == 0:
+        MM1 = 12
+    MM = MM1
+    if MM == 12:
+        SXDATE = REPTDATE_BNMK.replace(month=1, day=1) - timedelta(days=1)
     else:
-        # Original version
-        pmm = pd.concat([
-            pmm_tbl1[pmm_tbl1['ELDAY'] == day],
-            pmm_dci[pmm_dci['ELDAY'] == day]
-        ], ignore_index=True)
-        pmm = pmm[['BNMCODE', 'AMOUNT']]
-        
-        # Process REP6
-        rep6 = pd.DataFrame()  # Would be loaded from actual source
-        rep2 = pd.DataFrame()  # Would be loaded from actual source
-        rep4 = pd.DataFrame()  # Would be loaded from actual source
-        
-        # For demonstration, create rep6 from pmm_tbl1
-        rep6 = pmm_tbl1[pmm_tbl1['ELDAY'] == day].copy()
-        rep6.loc[rep6['BNMCODE'] == '3250000000000Y', 'AMOUNT'] = rep6['NETAMT']
-        rep6['BNMCODE'] = '4017100000000Y'
-        rep6 = rep6[['BNMCODE', 'AMOUNT']]
-        
-        # Process ELW1
-        elw_day = elw1[elw1['ELDAY'] == day][['BNMCODE', 'AMOUNT']].copy()
-        elw_day['AMOUNT'] = elw_day['AMOUNT'].abs()
-        
-        # Remove specific branch
-        elw_day = elw_day[~((elw_day['BNMCODE'] == '4929980000000Y') & 
-                           (elw1['BRANCH'] > 3000))]
-        
-        # Process specific BNMCODE mappings
-        def process_bnmcode_mapping(df):
-            rows_to_append = []
-            rows_to_remove = []
-            
-            for idx, row in df.iterrows():
-                bnmcode = row['BNMCODE']
-                if bnmcode in ['3219902000000Y', '3219903000000Y', '3219912000000Y']:
-                    row_new = row.copy()
-                    row_new['BNMCODE'] = '3219910000000Y'
-                    rows_to_append.append(row_new)
-                    rows_to_remove.append(idx)
-                elif bnmcode in ['4411100000000Y', '4414000000000Y', '4413000000000Y']:
-                    for code in ['4411100000000Y', '4414000000000Y']:
-                        if code != bnmcode:
-                            row_new = row.copy()
-                            row_new['BNMCODE'] = code
-                            rows_to_append.append(row_new)
-                    row_new = row.copy()
-                    row_new['BNMCODE'] = '4410000000000Y'
-                    rows_to_append.append(row_new)
-                    rows_to_remove.append(idx)
-                elif bnmcode == '4019000000000Y':
-                    row_new1 = row.copy()
-                    row_new1['BNMCODE'] = '4019100000000Y'
-                    rows_to_append.append(row_new1)
-                    row_new2 = row.copy()
-                    row_new2['BNMCODE'] = '4019000000000Y'
-                    row_new2['AMOUNT'] = 0.00
-                    rows_to_append.append(row_new2)
-                    rows_to_remove.append(idx)
-            
-            df_new = df.drop(rows_to_remove).copy()
-            for row in rows_to_append:
-                df_new = pd.concat([df_new, pd.DataFrame([row])], ignore_index=True)
-            
-            return df_new
-        
-        elw_day = process_bnmcode_mapping(elw_day)
-        
-        # Combine all datasets
-        elw_combined = pd.concat([
-            elw_day,
-            rep6,
-            pmm,
-            elg_day[['BNMCODE', 'AMOUNT']]
-        ], ignore_index=True)
-    
-    # Summarize by BNMCODE
-    elw_summary = elw_combined.groupby('BNMCODE', as_index=False)['AMOUNT'].sum()
-    
-    # Merge with ELITEM
-    el_item_sorted = el_item.sort_values('BNMCODE').reset_index(drop=True)
-    
-    # Merge and process
-    elw_final = el_item_sorted.merge(elw_summary, on='BNMCODE', how='inner')
-    elw_final['AMOUNT'] = elw_final['AMOUNT'].fillna(0.00)
-    elw_final['TOTAL'] = elw_final['AMOUNT']
-    
-    # Create FMTNAME
-    elw_final['FMTNAME'] = elw_final['IDX'] + '-' + elw_final['FMTNAME']
-    
-    # Special handling for specific BNMCODE
-    mask = elw_final['BNMCODE'] == '4314017000000Y'
-    if mask.any():
-        elw_final.loc[mask, 'DESC'] = 'O/W RM IBB FROM CAGAMAS ' + elw_final.loc[mask, 'AMOUNT'].apply(lambda x: f'{x:,.2f}')
-        elw_final.loc[mask, 'AMOUNT'] = 0.00
-        elw_final.loc[mask, 'TOTAL'] = 0.00
-    
-    # Calculate AMOUNX and TOTALX with sign handling
-    elw_final['AMOUNX'] = elw_final['AMOUNT']
-    elw_final['TOTALX'] = elw_final['TOTAL']
-    mask_neg = elw_final['SIGN'] == '-'
-    elw_final.loc[mask_neg, 'AMOUNX'] = -elw_final.loc[mask_neg, 'AMOUNT']
-    elw_final.loc[mask_neg, 'TOTALX'] = elw_final.loc[mask_neg, 'AMOUNX']
-    
-    # Set description for specific BNMCODE
-    mask_desc = elw_final['BNMCODE'] == '4017100000000Y'
-    if mask_desc.any():
-        elw_final.loc[mask_desc, 'DESC'] = 'TOTAL RM MARKETABLE SECURITIES'
-    
-    # Delete specific BNMCODEs based on week
-    if not is_alternative:
-        if NOWK != '4':
-            elw_final = elw_final[~elw_final['BNMCODE'].isin(['4019000000000Y', '4019100000000Y'])]
+        SXDATE = REPTDATE_BNMK.replace(day=1) - timedelta(days=1)
+        SXDATE = SXDATE.replace(month=MM) if SXDATE.month != MM else SXDATE
+else:
+    SXDATE = REPTDATE_BNMK
+
+NOWK = WK
+REPTMON = f"{MM:02d}"
+RPYEAR = SXDATE.strftime("%Y")
+REPTYEAR = SXDATE.strftime("%Y")
+
+print(f"Report Period: Week {WK}, Month {REPTMON}")
+print(f"Reading files: rep2{REPTMON}{WK}, rep4{REPTMON}{WK}, elw{REPTMON}{WK}")
+
+# ============================================
+# LOAD REP2 / REP4 (raw, kept for REP0 later)
+# ============================================
+
+rep2_file = f"{BNMK_INPUT_PATH}/rep2{REPTMON}{WK}{SAS_EXTENSION}"
+rep4_file = f"{BNMK_INPUT_PATH}/rep4{REPTMON}{WK}{SAS_EXTENSION}"
+
+print(f"Reading: {rep2_file}")
+REP2_RAW = read_sas7bdat(rep2_file)
+print(f"Reading: {rep4_file}")
+REP4_RAW = read_sas7bdat(rep4_file)
+
+REP2_FILTERED = apply_utsty_filter(REP2_RAW)
+REP4_FILTERED = apply_utsty_filter(REP4_RAW)
+
+print(f"REP2 raw: {REP2_RAW.height} | filtered: {REP2_FILTERED.height}")
+print(f"REP4 raw: {REP4_RAW.height} | filtered: {REP4_FILTERED.height}")
+
+# COMBINE REP2 + REP4 (filtered) for the stock/variance pipeline
+frames = [d for d in (REP2_FILTERED, REP4_FILTERED) if d.height > 0]
+REP2_COMBINED = pl.concat(frames) if frames else pl.DataFrame()
+print(f"Combined REP2+REP4 (filtered): {REP2_COMBINED.height} records")
+
+# ============================================
+# TRANSFORM DATA (DATA REP2; SET REP2 REP4; ... BNMCODG=...)
+# ============================================
+
+if REP2_COMBINED.height > 0:
+    amount_col = "NETAMT" if "NETAMT" in REP2_COMBINED.columns else "AMOUNT"
+
+    REP2_TRANSFORMED = REP2_COMBINED.with_columns([
+        pl.when(pl.col("BNMCODE") == '3250000000000Y')
+          .then(pl.lit('REV'))
+          .otherwise(pl.col("UTSTY"))
+          .alias("UTSTY"),
+        pl.when(pl.col("BNMCODE") == '3250000000000Y')
+          .then(pl.lit('REPO '))
+          .otherwise(pl.col("UTREF"))
+          .alias("UTREF"),
+        pl.when(pl.col("BNMCODE") == '3250000000000Y')
+          .then(pl.col(amount_col))
+          .otherwise(pl.col("AMOUNT"))
+          .alias("AMOUNT"),
+        pl.when(pl.col("BNMCODE") == '3752000000000Y')
+          .then(pl.lit('3552000000000Y'))
+          .otherwise(pl.col("BNMCODE"))
+          .alias("BNMCODE"),
+    ]).with_columns(
+        (pl.col("BNMCODE") + '-' + pl.col("UTSTY") + ' ' + pl.col("UTREF").str.slice(0, 5)).alias("BNMCODG")
+    )
+
+    REP2_SORTED = REP2_TRANSFORMED.sort("BNMCODG")
+    print(f"Transformed and sorted: {REP2_SORTED.height} records")
+
+    # ============================================
+    # SUMMARY (PROC SUMMARY BY BNMCODE ELDAY)
+    # ============================================
+
+    SUMMARY_DF = REP2_SORTED.group_by(["BNMCODE", "ELDAY"]).agg(
+        pl.col("AMOUNT").sum().alias("AMOUNT_SUM")
+    )
+    print(f"Summary records: {SUMMARY_DF.height}")
+
+    # ============================================
+    # WALW (Walker) - FIXED: dynamic file name, not hardcoded elw071
+    # ============================================
+
+    walw_file = f"{BNM_INPUT_PATH}/elw{REPTMON}{WK}{SAS_EXTENSION}"
+    print(f"Reading: {walw_file}")
+    WALW_DF = read_sas7bdat(walw_file)
+
+    if WALW_DF.height > 0:
+        print(f"WALW record count: {WALW_DF.height}")
+        WALW_PROCESSED = WALW_DF.with_columns([
+            pl.when(pl.col("BNMCODE") == '3250001000000Y')
+              .then(pl.lit('3250000000000Y'))
+              .otherwise(pl.col("BNMCODE"))
+              .alias("BNMCODE")
+        ])
+
+        WALW_DUPLICATED = WALW_PROCESSED.filter(
+            pl.col("BNMCODE") == '3551000000000Y'
+        ).with_columns(pl.lit('3552000000000Y').alias("BNMCODE"))
+
+        WALW_FINAL = pl.concat([WALW_PROCESSED, WALW_DUPLICATED])
+        print(f"WALW after processing: {WALW_FINAL.height} records")
+
+        WALW_SUMMARY = WALW_FINAL.group_by(["BNMCODE", "ELDAY"]).agg(
+            pl.col("AMOUNT").sum().alias("WALWAMT")
+        )
+        print(f"WALW summary records: {WALW_SUMMARY.height}")
+
+        MERGED_DF = SUMMARY_DF.join(WALW_SUMMARY, on=["BNMCODE", "ELDAY"], how="left")
+        VARIANCE_DF = MERGED_DF.with_columns(
+            (pl.col("AMOUNT_SUM") - pl.col("WALWAMT")).alias("VARIANC")
+        )
+        print(f"Variance records: {VARIANCE_DF.height}")
     else:
-        if NOWK != '4':
-            elw_final = elw_final[~elw_final['BNMCODE'].isin(['4019000000000Y', '4019100000000Y'])]
-    
-    # Create ELWT dataset
-    elwt = elw_final.copy()
-    elwt['BNMCODE'] = '4013000000000Y'
-    elwt['FMTNAME'] = 'E-ELSRR'
-    elwt['SIGN'] = '+'
-    elwt['DESC'] = 'ELIGIBLE LIABILITIES FOR SRR NEXT MONTH'
-    
-    # Handle sign conversion for specific IDX values
-    mask_idx = elwt['IDX'].isin(['B', 'D'])
-    elwt.loc[mask_idx, 'AMOUNX'] = -elwt.loc[mask_idx, 'AMOUNT']
-    elwt.loc[mask_idx, 'TOTALX'] = elwt.loc[mask_idx, 'AMOUNX']
-    
-    # Summarize ELWT
-    elwt_summary = elwt.groupby(['BNMCODE', 'FMTNAME', 'DESC', 'SIGN'], as_index=False).agg({
-        'AMOUNT': 'sum',
-        'TOTAL': 'sum',
-        'AMOUNX': 'sum',
-        'TOTALX': 'sum'
-    })
-    
-    # Finalize ELWT
-    elwt_final = elwt_summary.copy()
-    elwt_final['AMOUNT'] = elwt_final['AMOUNX']
-    elwt_final['TOTAL'] = elwt_final['TOTALX']
-    
-    # Combine ELWT and ELW
-    elw_final_combined = pd.concat([
-        elwt_final,
-        elw_final
-    ], ignore_index=True)
-    
-    # Sort
-    elw_final_combined = elw_final_combined.sort_values(['FMTNAME', 'SIGN', 'BNMCODE']).reset_index(drop=True)
-    
-    # Generate reports
-    generate_reports(elw_final_combined, day, is_alternative)
-    
-    return elw_final_combined
+        VARIANCE_DF = pl.DataFrame()
+        print(f"Warning: {walw_file} not found or empty")
 
-def generate_reports(df, day, is_alternative=False):
-    """Generate reports similar to SAS PROC REPORT"""
-    
-    print(f"\n{'='*80}")
-    if is_alternative:
-        print(f"DETAIL TOTAL ELIGIBLE LIABILITIES ITEMS FOR : {day}")
+    # ============================================
+    # REP0 - REVERSE REPO AT PURCHASE PROCEEDS
+    # FIXED: SAS re-reads REP2 fresh and RE-APPLIES the UTSTY/UTREF
+    # filter before subsetting to BNMCODE='3250000000000Y'. Previously
+    # this used the raw, unfiltered REP2 read.
+    # ============================================
+
+    REP2_REFILTERED = apply_utsty_filter(REP2_RAW)
+
+    if REP2_REFILTERED.height > 0:
+        REP0_DF = REP2_REFILTERED.filter(
+            pl.col("BNMCODE") == '3250000000000Y'
+        ).with_columns(
+            (pl.col("BNMCODE") + '-' + pl.col("UTSTY") + ' ' + pl.col("UTREF").str.slice(0, 5)).alias("BNMCODG")
+        )
+        # SAS report includes AMOUNT, COSTDED ("(-) PURC PROC."), NETAMT ("MARKET SEC")
+        missing = [c for c in ("COSTDED", "NETAMT") if c not in REP0_DF.columns]
+        if missing:
+            print(f"Warning: REP0 source is missing expected column(s) {missing}; "
+                  f"REV REPO report will omit them.")
+        print(f"Reverse Repo records: {REP0_DF.height}")
     else:
-        print(f"DETAIL TOTAL ELIGIBLE LIABILITIES ITEMS FOR : {day}")
-    print(f"REPORT DATE : {RDATE}")
-    print(f"{'='*80}\n")
-    
-    # Report 1: A-RMEL and B-RMEA
-    mask = df['FMTNAME'].isin(['A-RMEL', 'B-RMEA'])
-    report1 = df[mask].copy()
-    
-    if not report1.empty:
-        print("\n=== ELIGIBLE LIABILITIES DETAIL (A-RMEL, B-RMEA) ===\n")
-        print(f"{'FMTNAME':<10} {'BNMCODE':<15} {'DESC':<45} {'SIGN':<5} {'AMOUNT':>15} {'TOTAL':>15} {'AMOUNX':>15} {'TOTALX':>15}")
-        print("-" * 130)
-        
-        for _, row in report1.iterrows():
-            print(f"{row['FMTNAME']:<10} {row['BNMCODE']:<15} {row['DESC']:<45} "
-                  f"{row['SIGN']:<5} {row['AMOUNT']:>15,.2f} {row['TOTAL']:>15,.2f} "
-                  f"{row['AMOUNX']:>15,.2f} {row['TOTALX']:>15,.2f}")
-        
-        # Totals by FMTNAME
-        for fmtname in report1['FMTNAME'].unique():
-            subset = report1[report1['FMTNAME'] == fmtname]
-            if not subset.empty:
-                total_amounx = subset['AMOUNX'].sum()
-                total_totalx = subset['TOTALX'].sum()
-                print("-" * 130)
-                print(f"{'TOTAL FOR ' + fmtname:<50} {total_amounx:>30,.2f} {total_totalx:>30,.2f}")
-                print("-" * 130)
-    
-    # Report 2: All other FMTNAMEs
-    mask_other = ~df['FMTNAME'].isin(['A-RMEL', 'B-RMEA'])
-    report2 = df[mask_other].copy()
-    
-    if not report2.empty:
-        print("\n=== ELIGIBLE LIABILITIES DETAIL (Other) ===\n")
-        print(f"{'FMTNAME':<10} {'BNMCODE':<15} {'DESC':<45} {'SIGN':<5} {'AMOUNT':>15} {'TOTAL':>15}")
-        print("-" * 110)
-        
-        for _, row in report2.iterrows():
-            print(f"{row['FMTNAME']:<10} {row['BNMCODE']:<15} {row['DESC']:<45} "
-                  f"{row['SIGN']:<5} {row['AMOUNT']:>15,.2f} {row['TOTAL']:>15,.2f}")
+        REP0_DF = pl.DataFrame()
 
-# Process all days
-days = ['DAYA', 'DAYB', 'DAYC', 'DAYD', 'DAYE', 'DAYF', 'DAYG', 'DAYH']
+    # ============================================
+    # OUTPUT
+    # ============================================
 
-for day in days:
-    print(f"\n\n{'#'*80}")
-    print(f"Processing {day}")
-    print(f"{'#'*80}")
-    result = process_el_data(day, is_alternative=False)
+    Path(REPORTS_OUTPUT_PATH).mkdir(parents=True, exist_ok=True)
+    Path(SFTP_UPLOAD_PATH).mkdir(exist_ok=True)
 
-# Process DAYI with alternative version
-print(f"\n\n{'#'*80}")
-print("Processing DAYI (Alternative Version)")
-print(f"{'#'*80}")
-result_alt = process_el_data('DAYI', is_alternative=True)
+    print(f"\nOutput directory: {REPORTS_OUTPUT_PATH}")
+    print(f"SFTP upload directory: {SFTP_UPLOAD_PATH}")
+    print("\nWriting output files...")
 
-print("\nProcessing complete!")
+    if REP2_SORTED.height > 0:
+        filename_base = f"DAILY_KAPITI_STOCK_REPORT_{REPTMON}{WK}_{RYEAR}"
+        REP2_SORTED.write_parquet(f"{REPORTS_OUTPUT_PATH}/{filename_base}{PARQUET_EXTENSION}")
+        write_to_text(REP2_SORTED, f"{REPORTS_OUTPUT_PATH}/{filename_base}{TEXT_EXTENSION}")
+
+    if VARIANCE_DF.height > 0:
+        filename_base = f"KAPITI_WALKER_VARIANCE_REPORT_{REPTMON}{WK}_{RYEAR}"
+        VARIANCE_DF.write_parquet(f"{REPORTS_OUTPUT_PATH}/{filename_base}{PARQUET_EXTENSION}")
+        write_to_text(VARIANCE_DF, f"{REPORTS_OUTPUT_PATH}/{filename_base}{TEXT_EXTENSION}")
+
+    if REP0_DF.height > 0:
+        filename_base = f"REVERSE_REPO_PURCHASE_PROCEEDS_{REPTMON}{WK}_{RYEAR}"
+        REP0_DF.write_parquet(f"{REPORTS_OUTPUT_PATH}/{filename_base}{PARQUET_EXTENSION}")
+        write_to_text(REP0_DF, f"{REPORTS_OUTPUT_PATH}/{filename_base}{TEXT_EXTENSION}")
+
+    print("\n" + "=" * 50)
+    print("PROCESSING COMPLETED SUCCESSFULLY!")
+    print("=" * 50)
+    print(f"Report Date: {REPTDATE_LOAN.strftime('%Y-%m-%d')}")
+    print(f"Report Period: Week {WK}, Month {REPTMON}")
+    if REP2_SORTED.height > 0:
+        print(f"Stock Report: {REP2_SORTED.height} records")
+    if VARIANCE_DF.height > 0:
+        print(f"Variance Report: {VARIANCE_DF.height} records")
+    if REP0_DF.height > 0:
+        print(f"Reverse Repo: {REP0_DF.height} records")
+    print(f"Output location: {Path(REPORTS_OUTPUT_PATH).absolute()}")
+    print("=" * 50)
+
+else:
+    print("Error: No data available to process")
