@@ -112,38 +112,42 @@ REPTYEAR = SXDATE.strftime("%Y")
 YEAR_SHORT = SXDATE.strftime("%y")
 
 print(f"Report Period: Week {WK}, Month {REPTMON}")
-print(f"Reading files: rep{REPTMON}{WK}2, rep{REPTMON}{WK}4, ELW{REPTMON}{WK}")
+print(f"Reading files: rep2{REPTMON}{WK}, rep4{REPTMON}{WK}, elw{REPTMON}{WK}")
 
 # ============================================
 # PROCESS DATA FILES
 # ============================================
 
-# PROCESS REP2 DATA from SAS7BDAT (lowercase)
-rep2_file = f"{BNMK_INPUT_PATH}/rep{REPTMON}{WK}2{SAS_EXTENSION}"
+# PROCESS REP2 DATA from SAS7BDAT (lowercase, format: rep2{REPTMON}{WK})
+rep2_file = f"{BNMK_INPUT_PATH}/rep2{REPTMON}{WK}{SAS_EXTENSION}"
 print(f"Reading: {rep2_file}")
 REP2_DF = read_sas7bdat(rep2_file)
 
 if REP2_DF.height > 0:
     print(f"REP2 columns: {REP2_DF.columns}")
+    print(f"REP2 record count: {REP2_DF.height}")
     REP2_FILTERED = REP2_DF.filter(
         ~((pl.col("UTSTY").is_in(['CB1','CF1','CNT','SAC','SMC','ISB'])) & 
           (~pl.col("UTREF").is_in(['DLG','IDLG'])))
     )
+    print(f"REP2 after filter: {REP2_FILTERED.height} records")
 else:
     REP2_FILTERED = pl.DataFrame()
     print(f"Warning: {rep2_file} not found or empty")
 
-# PROCESS REP4 DATA from SAS7BDAT (lowercase)
-rep4_file = f"{BNMK_INPUT_PATH}/rep{REPTMON}{WK}4{SAS_EXTENSION}"
+# PROCESS REP4 DATA from SAS7BDAT (lowercase, format: rep4{REPTMON}{WK})
+rep4_file = f"{BNMK_INPUT_PATH}/rep4{REPTMON}{WK}{SAS_EXTENSION}"
 print(f"Reading: {rep4_file}")
 REP4_DF = read_sas7bdat(rep4_file)
 
 if REP4_DF.height > 0:
     print(f"REP4 columns: {REP4_DF.columns}")
+    print(f"REP4 record count: {REP4_DF.height}")
     REP4_FILTERED = REP4_DF.filter(
         ~((pl.col("UTSTY").is_in(['CB1','CF1','CNT','SAC','SMC','ISB'])) & 
           (~pl.col("UTREF").is_in(['DLG','IDLG'])))
     )
+    print(f"REP4 after filter: {REP4_FILTERED.height} records")
 else:
     REP4_FILTERED = pl.DataFrame()
     print(f"Warning: {rep4_file} not found or empty")
@@ -151,10 +155,13 @@ else:
 # COMBINE REP2 AND REP4
 if REP2_FILTERED.height > 0 and REP4_FILTERED.height > 0:
     REP2_COMBINED = pl.concat([REP2_FILTERED, REP4_FILTERED])
+    print(f"Combined REP2+REP4: {REP2_COMBINED.height} records")
 elif REP2_FILTERED.height > 0:
     REP2_COMBINED = REP2_FILTERED
+    print(f"Using only REP2: {REP2_COMBINED.height} records")
 elif REP4_FILTERED.height > 0:
     REP2_COMBINED = REP4_FILTERED
+    print(f"Using only REP4: {REP2_COMBINED.height} records")
 else:
     REP2_COMBINED = pl.DataFrame()
     print("Error: No data available from REP2 or REP4")
@@ -169,6 +176,7 @@ if REP2_COMBINED.height > 0:
     # Check if NETAMT exists, if not use AMOUNT
     if "NETAMT" in REP2_COMBINED.columns:
         amount_col = "NETAMT"
+        print("Using 'NETAMT' column for amount")
     else:
         amount_col = "AMOUNT"
         print("Note: 'NETAMT' column not found, using 'AMOUNT' instead")
@@ -195,17 +203,20 @@ if REP2_COMBINED.height > 0:
 
     # SORT DATA
     REP2_SORTED = REP2_TRANSFORMED.sort("BNMCODG")
+    print(f"Transformed and sorted: {REP2_SORTED.height} records")
 
     # CREATE SUMMARY
     SUMMARY_DF = REP2_SORTED.group_by(["BNMCODE", "ELDAY"]).agg(pl.col("AMOUNT").sum().alias("AMOUNT_SUM"))
+    print(f"Summary records: {SUMMARY_DF.height}")
 
-    # PROCESS WALW DATA from SAS7BDAT
-    walw_file = f"{BNM_INPUT_PATH}/elw{REPTMON}{WK}{SAS_EXTENSION}"  # lowercase
+    # PROCESS WALW DATA from SAS7BDAT (lowercase, format: elw{REPTMON}{WK})
+    walw_file = f"{BNM_INPUT_PATH}/elw{REPTMON}{WK}{SAS_EXTENSION}"
     print(f"Reading: {walw_file}")
     WALW_DF = read_sas7bdat(walw_file)
 
     if WALW_DF.height > 0:
         print(f"WALW columns: {WALW_DF.columns}")
+        print(f"WALW record count: {WALW_DF.height}")
         WALW_PROCESSED = WALW_DF.with_columns([
             pl.when(pl.col("BNMCODE") == '3250001000000Y')
               .then(pl.lit('3250000000000Y'))
@@ -218,15 +229,18 @@ if REP2_COMBINED.height > 0:
             pl.lit('3552000000000Y').alias("BNMCODE")
         )
         WALW_FINAL = pl.concat([WALW_PROCESSED, WALW_DUPLICATED])
+        print(f"WALW after processing: {WALW_FINAL.height} records")
 
         # CREATE WALW SUMMARY
         WALW_SUMMARY = WALW_FINAL.group_by(["BNMCODE", "ELDAY"]).agg(pl.col("AMOUNT").sum().alias("WALWAMT"))
+        print(f"WALW summary records: {WALW_SUMMARY.height}")
 
         # MERGE AND CALCULATE VARIANCE
         MERGED_DF = SUMMARY_DF.join(WALW_SUMMARY, on=["BNMCODE", "ELDAY"], how="left")
         VARIANCE_DF = MERGED_DF.with_columns(
             (pl.col("AMOUNT_SUM") - pl.col("WALWAMT")).alias("VARIANC")
         )
+        print(f"Variance records: {VARIANCE_DF.height}")
     else:
         VARIANCE_DF = pl.DataFrame()
         print(f"Warning: {walw_file} not found or empty")
@@ -236,6 +250,7 @@ if REP2_COMBINED.height > 0:
         REP0_DF = REP2_DF.filter(pl.col("BNMCODE") == '3250000000000Y').with_columns(
             (pl.col("BNMCODE") + '-' + pl.col("UTSTY") + ' ' + pl.col("UTREF").str.slice(0, 5)).alias("BNMCODG")
         )
+        print(f"Reverse Repo records: {REP0_DF.height}")
     else:
         REP0_DF = pl.DataFrame()
 
