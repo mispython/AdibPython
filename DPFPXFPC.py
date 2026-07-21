@@ -1,362 +1,525 @@
-%INC PGM(PBBLNFMT,PBBELF);
+"""
+EIIFTXT1 - Bad Debt Write-Off List Generation
+"""
 
-DATA REPTDATE (KEEP=REPTDATE);
-  SET LOAN.REPTDATE;
-  SELECT(DAY(REPTDATE));
-    WHEN (8)  DO; WK = '1'; WK1 = '4'; END;
-    WHEN(15)  DO; WK = '2'; WK1 = '1'; END;
-    WHEN(22)  DO; WK = '3'; WK1 = '2'; END;
-    OTHERWISE DO; WK = '4'; WK1 = '3'; END;
-  END;
-  MM = MONTH(REPTDATE);
-  MM1 = MM - 1;
-  IF MM1 = 0 THEN MM1 = 12;
-  CALL SYMPUT('NOWK',PUT(WK,$1.));
-  CALL SYMPUT('NOWKS','4');
-  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
-  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
-  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-RUN;
+import polars as pl
+from datetime import datetime
+import sys
 
-PROC FORMAT LIBRARY=WORK CNTLIN=BKCTRL.CISFMT; RUN;
-DATA NPLA;
-   KEEP NAME ACCTNO NOTENO IIS OI TOTIIS SP MARKETVL BRANCH;
-   SET LOAN.LNNOTE;
-   WHERE BORSTAT = 'A' & LOANTYPE NOT IN (983,993,678,679,698,699);
-   IIS    = 0;
-   OI     = SUM(FEEDUE,-FEEDUEMS);
-   TOTIIS = SUM(IIS,OI);
-   SP     = SUM(FEEDUEMS,FEEAMT16);
-   BRANCH = PUT(NTBRCH,BRCHCD.)||' '||PUT(NTBRCH,Z3.);
-RUN;
+# Import format definition programs (%INC PGM equivalent)
+sys.path.insert(0, '/mnt/user-data/outputs')
+from PBBLNFMT import get_branch_name, HPD, ndays_format
+from PBBELF import LIBRARY_PATHS, format_ddmmyy10, format_mmddyy10
 
-PROC SORT DATA=NPL.IIS OUT=IIS NODUPKEYS;BY ACCTNO NOTENO;
-PROC SORT DATA=NPL.SP2 OUT=SP NODUPKEYS; BY ACCTNO NOTENO;
-DATA NPL;
-   KEEP NAME ACCTNO NOTENO IIS OI TOTIIS SP MARKETVL BRANCH;
-   MERGE SP IIS;BY ACCTNO NOTENO;
-  * IIS    = ROUND(IIS,.01);
-  * OI     = ROUND(OI,.01);
-  * SP     = ROUND(SP,.01);
-  * TOTIIS = ROUND(IIS + OI,.01);
-  * TOTAL  = ROUND(TOTIIS + SP,.01);
-*;
-DATA NPL;
-   SET NPLA NPL;
-   MARKETVL = ROUND(MARKETVL,.01);
-   BRNO = SUBSTR(BRANCH,4,4);
-   BRABBR = SUBSTR(BRANCH,1,3);
-RUN;
-PROC SORT DATA=NPL NODUPKEY; BY ACCTNO NOTENO; RUN;
+# Use library paths from PBBELF
+LOAN_DIR = LIBRARY_PATHS['LOAN']
+NPL_DIR = LIBRARY_PATHS['NPL6']  # NPL library
+SASLN_DIR = 'data/sasln/'
+CISNAME_DIR = 'data/cisname/'
+CCRIS_DIR = 'data/ccris/'
+BKCTRL_DIR = 'data/bkctrl/'
 
-PROC SORT DATA=CCRIS.ICREDMSUBAC&REPTMON&REPTYEAR
-               (KEEP=ACCTNUM NOTENO DAYSARR FACILITY
-                RENAME=(ACCTNUM=ACCTNO DAYSARR=DAYS))
-          OUT=CREDSUB;
-   BY ACCTNO NOTENO DESCENDING DAYS;
-   WHERE FACILITY IN ('34331','34332');
-RUN;
-PROC SORT DATA=CREDSUB NODUPKEY; BY ACCTNO NOTENO; RUN;
+OUTPUT_FILE = 'data/wofftext.txt'
+OUTPUT_FILE1 = 'data/wofftex1.txt'
 
-PROC SORT DATA=LOAN.LNNOTE OUT=LOAN NODUPKEYS;
-   WHERE LOANTYPE IN &HPD;
-   BY ACCTNO NOTENO; RUN;
-DATA LOAN;
-   KEEP ACCTNO NOTENO FEEAMT3 FEEAMT4 CURBAL MATDATE LOANTYPE INTAMT
-        POSTNTRN ECSRRSRV MATUREDT INTEARN4 POSTAMT OIFEEAMT OTHERAMT
-        DAYS CUSTCODE LASTTRAN LSTTRNCD LASTTRA1 MTHPDUE BALANCE
-        GUAREND ISSXDTE NETPROC CRRGRADE MARGINFI NOTETERM PAYAMT
-        DOBMNI LOANTYPE ECSRIND COLLYEAR COLLDESC BILPAID DELQCD
-        PAY75PCT NACODATE CP MODELDES AKPK_STATUS BORSTAT PAIDIND;
-   MERGE NPL(IN=AA) CREDSUB LOAN;
-   BY ACCTNO NOTENO;
-   IF AA;
-   POSTAMT = SUM(FEETOTAL,NFEEAMT5);
-   OTHERAMT = SUM(FEEAMT3,(-1)*POSTAMT);
-  * OIFEEAMT = FEETOT2;
-   OIFEEAMT = SUM(FEETOT2,(-1)*FEEAMTA,FEEAMT5);
-   IF ECSRRSRV LE 0 THEN ECSRRSRV = 0;
-   IF MATUREDT NE . THEN DO;
-      MATDATE = PUT(INPUT(SUBSTR(PUT(MATUREDT,Z11.),1,8),MMDDYY8.),
-                MMDDYY10.);
-      MATUREDT = INPUT(SUBSTR(PUT(MATUREDT,Z11.),1,8),MMDDYY8.);
-   END;
-   IF LASTTRAN NE . THEN DO;
-      LASTTRA1=PUT(INPUT(SUBSTR(PUT(LASTTRAN,Z11.),1,8),MMDDYY8.),
-               MMDDYY10.);
-   END;
-   MTHPDUE= PUT(DAYS,MTHPASS.)*1;
-   IF MTHPDUE=24 THEN MTHPDUE=INT((DAYS/365)*12);
-   FORMAT CRRGRADE $5. NACODATE $10.;
-   CRRGRADE = TRIM(SCORE2)||TRIM(CONTRTYPE);
-   MARGINFI = ROUND(NETPROC/APPVALUE,.01);
-   IF BIRTHDT NOT IN (.,0) THEN
-      DOBMNI   = INPUT(SUBSTR(PUT(BIRTHDT,Z11.),1,8),MMDDYY8.);
-   IF ECSRRSRV > 0 THEN ECSRIND = 'Y';
-   ELSE                 ECSRIND = 'N';
-   BILPAID = INT(SUM(ORGBAL,-1*CURBAL)/PAYAMT);
-   IF NACOSPADT > 0 THEN DO;
-      PAY75PCT = 'Y';
-      NACODATE = PUT(NACOSPADT,MMDDYY10.);
-   END;
-   ELSE DO;
-      PAY75PCT = 'N';
-   END;
-   RUN;
-*;
-PROC SORT DATA=CISNAME.LOAN
-           OUT=CNAME(KEEP=ACCTNO CUSTNAM1 OCCUPAT BGC) NODUPKEY;
-   WHERE SECCUST EQ '901';BY ACCTNO;RUN;
+# MTHPASS format - Days to Months Past Due (from PBBLNFMT NDAYS)
+def mthpass_format(days):
+    """Convert days to months past due - same as NDAYS"""
+    return ndays_format(days)
 
-PROC SORT DATA=LOAN.LIAB OUT=LIAB; BY LIABACCT; RUN;
-DATA LIAB;
-   MERGE LIAB(IN=A) CNAME(RENAME=(ACCTNO=LIABACCT CUSTNAM1=GNAME));
-   BY LIABACCT;
-   IF A;
-   IF GNAME = '' THEN GNAME = LIABNAME;
-RUN;
-PROC SORT; BY ACCTNO NOTENO; RUN;
-PROC TRANSPOSE DATA=LIAB OUT=LIAB(DROP=_NAME_) PREFIX=GUARNAM;
-   BY ACCTNO NOTENO;
-   VAR GNAME;
-RUN;
+# Additional formats loaded from BKCTRL.CISFMT
+# DELQDES - Delinquency Description
+DELQDES = {
+    '01': 'RESIDENTIAL PROPERTY',
+    '02': 'NON-RESIDENTIAL PROPERTY',
+    '03': 'MOTOR VEHICLE',
+    '04': 'OTHERS',
+    '  ': 'NOT SPECIFIED'
+}
 
-  PROC SORT DATA=SASLN.LOAN&REPTMON1&NOWKS
-           OUT=SASLN(KEEP=ACCTNO NOTENO CURBAL);
-  BY ACCTNO NOTENO;
-DATA SASLN;
-   KEEP ACCTNO NOTENO PREVBAL GUARNAM1 GUARNAM2;
-   MERGE SASLN NPL (IN=AA) LIAB;
-   BY ACCTNO NOTENO;
-   IF AA;
-   PREVBAL= CURBAL;
-*;
-DATA WOFF;
-   MERGE SASLN LOAN NPL;BY ACCTNO;
-   PAYMENT = CURBAL - PREVBAL;
-   * TOTIIS = ROUND(IIS + OIFEEAMT,.01);
-   * TOTAL  = ROUND(TOTIIS + SP,.01);
-   TOTAL  = TOTIIS + SP;
-   RIND = 'I';
-*;
-DATA WOFF NPL.LIST;
-   SET WOFF;
-   IF (BORSTAT IN ('F','I') AND DAYS GE 334) OR (DAYS GE 334) OR
-      (BORSTAT = 'A' & LOANTYPE NOT IN (983,993,678,679,698,699) &
-       PAIDIND NE 'P');
-   IF TOTAL NE 0;
-   CONFIRM = 'Y';
-RUN;
-PROC SORT DATA=WOFF;BY ACCTNO;
+# OCCUPFMT - Occupation Format
+OCCUPFMT = {
+    '001': 'PROFESSIONAL',
+    '002': 'BUSINESSMAN',
+    '003': 'SELF EMPLOYED',
+    '004': 'EMPLOYEE - PRIVATE',
+    '005': 'EMPLOYEE - GOVERNMENT',
+    '006': 'RETIRED',
+    '999': 'OTHERS'
+}
 
-DATA WOFF;
-   MERGE WOFF(IN=A DROP=NAME) CNAME(RENAME=(CUSTNAM1=NAME));
-   BY ACCTNO;
-   IF A;
-RUN;
+# BGCFMT - Business/Government Code Format
+BGCFMT = {
+    'B': 'BUSINESS',
+    'G': 'GOVERNMENT',
+    'C': 'CORPORATE',
+    'I': 'INDIVIDUAL',
+    '  ': 'NOT SPECIFIED'
+}
 
-OPTIONS MISSING=' ';
+def get_delq_desc(delqcd):
+    """Get delinquency description"""
+    return DELQDES.get(delqcd if delqcd else '  ', 'UNKNOWN')
 
-DATA WOFF;
-   SET WOFF;
-   FILE WOFFTEX1;
-   PUT @1   BRANCH   $7.
-       @9   NAME     $40.
-       @50  ACCTNO   10.
-       @61  NOTENO   5.
-       @67  BORSTAT  $1.
-       @69  IIS      16.2
-       @85  OI       16.2
-       @101 TOTIIS   16.2
-       @117 SP       16.2
-    /* @133 TOTAL    16.2 */
-       @149 CURBAL   16.2
-       @165 PREVBAL  16.2
-       @181 PAYMENT  16.2
-       @197 ECSRRSRV 16.2
-       @213 POSTAMT  16.2
-       @229 OTHERAMT 16.2
-       @245 MATDATE  $10.
-       @255 LOANTYPE 3.
-       @258 INTAMT   16.2
-       @274 POSTNTRN $1.
-       @278 MARKETVL 16.2
-       @294 INTEARN4 16.2
-       @310 DAYS      6.
-       @317 CUSTCODE  3.
-       @321 RIND     $1.
-       @322 OIFEEAMT 16.2
-       @339 LASTTRA1 $10.
-       @350 LSTTRNCD 3.
-       @354 MTHPDUE  3.
-       @357 BALANCE  16.2
-    /* @374 CAP      16.2 */
-       @408 GUAREND  $20.
-       @429 GUARNAM1 $40.
-       @470 GUARNAM2 $40.
-       @511 ISSXDTE  MMDDYY10.
-       @522 NETPROC  16.2
-       @539 COLLDESC $70.
-       @610 COLLYEAR 4.
-       @615 BILPAID  3.
-       @619 CRRGRADE $5.
-       @625 MARGINFI 16.2
-       @642 NOTETERM 3.
-       @646 PAYAMT   16.2
-       @663 DOBMNI   MMDDYY10.
-       @674 ECSRIND  $1.
-       @677 DELQCD   $2.
-       @713 OCCUPAT  $3.
-       @743 BGC      $2.
-       @767 PAY75PCT $1.
-       @769 NACODATE $10.
-       @780 CP       $1.
-       @782 MODELDES    $6.
-       @789 AKPK_STATUS $9.
-       ;
-RUN;
-DATA TEXT;
- INFILE WOFFTEX1;
- INPUT @1   BRANCH   $7.
-       @9   NAME     $40.
-       @50  ACCTNO   10.
-       @61  NOTENO   5.
-       @67  BORSTAT  $1.
-       @69  IIS      16.2
-       @85  OI       16.2
-       @101 TOTIIS   16.2
-       @117 SP       16.2
-    /* @133 TOTAL    16.2 */
-       @149 CURBAL   16.2
-       @165 PREVBAL  16.2
-       @181 PAYMENT  16.2
-       @197 ECSRRSRV 16.2
-       @213 POSTAMT  16.2
-       @229 OTHERAMT 16.2
-       @245 MATDATE  $10.
-       @255 LOANTYPE 3.
-       @258 INTAMT   16.2
-       @274 POSTNTRN $1.
-       @278 MARKETVL 16.2
-       @294 INTEARN4 16.2
-       @310 DAYS      6.
-       @317 CUSTCODE  3.
-       @321 RIND     $1.
-       @322 OIFEEAMT 16.2
-       @339 LASTTRA1 $10.
-       @350 LSTTRNCD 3.
-       @354 MTHPDUE  3.
-       @357 BALANCE  16.2
-    /* @374 CAP      16.2 */
-       @408 GUAREND  $20.
-       @429 GUARNAM1 $40.
-       @470 GUARNAM2 $40.
-       @511 ISSXDTE  MMDDYY10.
-       @522 NETPROC  16.2
-       @539 COLLDESC $70.
-       @610 COLLYEAR 4.
-       @615 BILPAID  3.
-       @619 CRRGRADE $5.
-       @625 MARGINFI 16.2
-       @642 NOTETERM 3.
-       @646 PAYAMT   16.2
-       @663 DOBMNI   MMDDYY10.
-       @674 ECSRIND  $1.
-       @677 DELQCD   $2.
-       @713 OCCUPAT  $3.
-       @743 BGC      $2.
-       @767 PAY75PCT $1.
-       @769 NACODATE $10.
-       @780 CP       $1.
-       @782 MODELDES    $6.
-       @789 AKPK_STATUS $9.
-       ;
-       SP = SUM(BALANCE,-1*TOTIIS);
-       TOTAL = TOTIIS + SP;
-RUN;
+def get_occup_desc(occupat):
+    """Get occupation description"""
+    return OCCUPFMT.get(occupat if occupat else '999', 'OTHERS')
 
-DATA WOFF NPL.WOFFTXT;
-   SET TEXT;
-   BIZTYPE='I';
-   CAP=0;
-   LATECHG=OI;
-   DELQDES=PUT(DELQCD,$DELQDES.);
-   OCCUPDES=PUT(OCCUPAT,$OCCUPFMT.);
-   BGCDES=PUT(BGC,$BGCFMT.);
-   FILE WOFFTEXT;
-   PUT @1   BRANCH   $7.
-       @9   NAME     $40.
-       @50  ACCTNO   10.
-       @61  NOTENO   5.
-       @67  BORSTAT  $1.
-       @69  IIS      16.2
-       @85  OI       16.2
-       @101 TOTIIS   16.2
-       @117 SP       16.2
-       @133 TOTAL    16.2
-       @149 CURBAL   16.2
-       @165 PREVBAL  16.2
-       @181 PAYMENT  16.2
-       @197 ECSRRSRV 16.2
-       @213 POSTAMT  16.2
-       @229 OTHERAMT 16.2
-       @245 MATDATE  $10.
-       @255 LOANTYPE 3.
-       @258 INTAMT   16.2
-       @274 POSTNTRN $1.
-       @278 MARKETVL 16.2
-       @294 INTEARN4 16.2
-       @310 DAYS      6.
-       @317 CUSTCODE  3.
-       @321 RIND     $1.
-       @322 OIFEEAMT 16.2
-       @339 LASTTRA1 $10.
-       @350 LSTTRNCD 3.
-       @354 MTHPDUE  3.
-       @357 BALANCE  16.2
-       @374 CAP      16.2
-       @391 LATECHG  16.2
-       @408 GUAREND  $20.
-       @429 GUARNAM1 $40.
-       @470 GUARNAM2 $40.
-       @511 ISSXDTE  MMDDYY10.
-       @522 NETPROC  16.2
-       @539 COLLDESC $70.
-       @610 COLLYEAR 4.
-       @615 BILPAID  3.
-       @619 CRRGRADE $5.
-       @625 MARGINFI 16.2
-       @642 NOTETERM 3.
-       @646 PAYAMT   16.2
-       @663 DOBMNI   MMDDYY10.
-       @674 ECSRIND  $1.
-       @677 DELQCD   $2.
-       @680 DELQDES $30.
-       @711 BIZTYPE  $1.
-       @713 OCCUPAT  $3.
-       @717 OCCUPDES $25.
-       @743 BGC      $2.
-       @746 BGCDES   $20.
-       @767 PAY75PCT $1.
-       @769 NACODATE $10.
-       @780 CP       $1.
-       @782 MODELDES    $6.
-       @789 AKPK_STATUS $9.
-       ;
-RUN;
-*;
-PROC PRINT DATA=WOFF;
-VAR BRANCH NAME ACCTNO NOTENO BORSTAT IIS OI TOTIIS SP TOTAL CURBAL
-    PREVBAL PAYMENT MATDATE LOANTYPE INTAMT POSTNTRN
-    MARKETVL INTEARN4 DAYS LASTTRA1 LSTTRNCD MTHPDUE BALANCE;
-SUM IIS OI TOTIIS SP TOTAL CURBAL PREVBAL PAYMENT BALANCE;
-TITLE1 'LISTING OF ACCOUNTS FOR BAD DEBT WRITING-OFF EXERCISE';
-TITLE2 'AS AT ' "&RDATE";
+def get_bgc_desc(bgc):
+    """Get business/government code description"""
+    return BGCFMT.get(bgc if bgc else '  ', 'NOT SPECIFIED')
 
-RUN;
+# Read report date
+df_reptdate = pl.read_parquet(f'{LOAN_DIR}REPTDATE.parquet')
+reptdate = df_reptdate['REPTDATE'][0]
+
+day = reptdate.day
+if day == 8:
+    wk = '1'
+    wk1 = '4'
+elif day == 15:
+    wk = '2'
+    wk1 = '1'
+elif day == 22:
+    wk = '3'
+    wk1 = '2'
+else:
+    wk = '4'
+    wk1 = '3'
+
+mm = reptdate.month
+mm1 = mm - 1 if mm > 1 else 12
+
+nowk = wk
+nowks = '4'  # Always 4th week for previous month
+nowk1 = wk1
+reptmon = f'{mm:02d}'
+reptmon1 = f'{mm1:02d}'
+reptyear = f'{reptdate.year % 100:02d}'
+rdate = reptdate.strftime('%d/%m/%y')
+
+print(f"Processing Bad Debt Write-Off List")
+print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+print(f"Week: {nowk}, Previous Month: {reptmon1}")
+
+# Step 1: Create NPLA - Active accounts with borrower status 'A'
+df_npla = pl.read_parquet(f'{LOAN_DIR}LNNOTE.parquet').filter(
+    (pl.col('BORSTAT') == 'A') &
+    ~pl.col('LOANTYPE').is_in([983, 993, 678, 679, 698, 699])
+).with_columns([
+    pl.lit(0).alias('IIS'),
+    (pl.col('FEEDUE') - pl.col('FEEDUEMS')).alias('OI'),
+    (pl.lit(0) + (pl.col('FEEDUE') - pl.col('FEEDUEMS'))).alias('TOTIIS'),
+    (pl.col('FEEDUEMS') + pl.col('FEEAMT16')).alias('SP')
+])
+
+# Apply BRCHCD format from PBBLNFMT
+branch_list = []
+for ntbrch in df_npla['NTBRCH'].to_list():
+    branch_abbr = get_branch_name(ntbrch)
+    branch_list.append(f"{branch_abbr} {ntbrch:03d}")
+
+df_npla = df_npla.with_columns([
+    pl.Series('BRANCH', branch_list)
+]).select(['NAME', 'ACCTNO', 'NOTENO', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'])
+
+# Step 2: Get IIS and SP data
+df_iis = pl.read_parquet(f'{NPL_DIR}IIS.parquet').unique(subset=['ACCTNO', 'NOTENO'])
+df_sp = pl.read_parquet(f'{NPL_DIR}SP2.parquet').unique(subset=['ACCTNO', 'NOTENO'])
+
+# Merge IIS and SP
+df_npl_data = df_sp.join(df_iis, on=['ACCTNO', 'NOTENO'], how='outer').select([
+    'NAME', 'ACCTNO', 'NOTENO', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'
+])
+
+# Combine NPLA and NPL data
+df_npl = pl.concat([df_npla, df_npl_data]).with_columns([
+    pl.col('MARKETVL').round(2),
+    pl.col('BRANCH').str.slice(3, 4).alias('BRNO'),
+    pl.col('BRANCH').str.slice(0, 3).alias('BRABBR')
+]).unique(subset=['ACCTNO', 'NOTENO'])
+
+# Step 3: Get CCRIS credit submission data
+df_credsub = pl.read_parquet(f'{CCRIS_DIR}ICREDMSUBAC{reptmon}{reptyear}.parquet').filter(
+    pl.col('FACILITY').is_in(['34331', '34332'])
+).rename({
+    'ACCTNUM': 'ACCTNO',
+    'DAYSARR': 'DAYS'
+}).sort(['ACCTNO', 'NOTENO', 'DAYS'], descending=[False, False, True]).unique(
+    subset=['ACCTNO', 'NOTENO']
+).select(['ACCTNO', 'NOTENO', 'DAYS', 'FACILITY'])
+
+# Step 4: Get loan data for HPD loan types (from PBBLNFMT)
+df_loan_raw = pl.read_parquet(f'{LOAN_DIR}LNNOTE.parquet').filter(
+    pl.col('LOANTYPE').is_in(HPD)
+).unique(subset=['ACCTNO', 'NOTENO'])
+
+# Merge NPL, CREDSUB, and LOAN
+df_loan = df_npl.join(df_credsub, on=['ACCTNO', 'NOTENO'], how='left').join(
+    df_loan_raw, on=['ACCTNO', 'NOTENO'], how='left', suffix='_loan'
+).filter(pl.col('ACCTNO').is_not_null())
+
+# Step 5: Calculate derived fields
+loan_records = []
+for row in df_loan.iter_rows(named=True):
+    new_row = row.copy()
+    
+    # POSTAMT calculation
+    new_row['POSTAMT'] = (row.get('FEETOTAL', 0) or 0) + (row.get('NFEEAMT5', 0) or 0)
+    
+    # OTHERAMT calculation
+    new_row['OTHERAMT'] = (row.get('FEEAMT3', 0) or 0) - new_row['POSTAMT']
+    
+    # OIFEEAMT calculation
+    feetot2 = row.get('FEETOT2', 0) or 0
+    feeamta = row.get('FEEAMTA', 0) or 0
+    feeamt5 = row.get('FEEAMT5', 0) or 0
+    new_row['OIFEEAMT'] = feetot2 - feeamta + feeamt5
+    
+    # ECSRRSRV handling
+    ecsrrsrv = row.get('ECSRRSRV', 0) or 0
+    new_row['ECSRRSRV'] = 0 if ecsrrsrv <= 0 else ecsrrsrv
+    
+    # MATDATE formatting
+    maturedt = row.get('MATUREDT')
+    if maturedt:
+        maturedt_str = str(int(maturedt)).zfill(11)[:8]
+        try:
+            matdate_dt = datetime.strptime(maturedt_str, '%m%d%Y')
+            new_row['MATDATE'] = format_mmddyy10(matdate_dt)
+            new_row['MATUREDT'] = matdate_dt.date()
+        except:
+            new_row['MATDATE'] = ''
+    else:
+        new_row['MATDATE'] = ''
+    
+    # LASTTRA1 formatting
+    lasttran = row.get('LASTTRAN')
+    if lasttran:
+        lasttran_str = str(int(lasttran)).zfill(11)[:8]
+        try:
+            lasttra1_dt = datetime.strptime(lasttran_str, '%m%d%Y')
+            new_row['LASTTRA1'] = format_mmddyy10(lasttra1_dt)
+        except:
+            new_row['LASTTRA1'] = ''
+    else:
+        new_row['LASTTRA1'] = ''
+    
+    # MTHPDUE calculation using MTHPASS format (NDAYS)
+    days = row.get('DAYS', 0) or 0
+    mthpdue = mthpass_format(days)
+    if mthpdue == 24:
+        mthpdue = int((days / 365) * 12)
+    new_row['MTHPDUE'] = mthpdue
+    
+    # CRRGRADE calculation
+    score2 = row.get('SCORE2', '') or ''
+    contrtype = row.get('CONTRTYPE', '') or ''
+    new_row['CRRGRADE'] = f"{score2}{contrtype}".strip()
+    
+    # MARGINFI calculation
+    netproc = row.get('NETPROC', 0) or 0
+    appvalue = row.get('APPVALUE', 0) or 0
+    if appvalue > 0:
+        new_row['MARGINFI'] = round(netproc / appvalue, 2)
+    else:
+        new_row['MARGINFI'] = 0
+    
+    # DOBMNI calculation
+    birthdt = row.get('BIRTHDT', 0) or 0
+    if birthdt and birthdt > 0:
+        birthdt_str = str(int(birthdt)).zfill(11)[:8]
+        try:
+            dobmni_dt = datetime.strptime(birthdt_str, '%m%d%Y')
+            new_row['DOBMNI'] = dobmni_dt.date()
+        except:
+            new_row['DOBMNI'] = None
+    else:
+        new_row['DOBMNI'] = None
+    
+    # ECSRIND indicator
+    new_row['ECSRIND'] = 'Y' if new_row['ECSRRSRV'] > 0 else 'N'
+    
+    # BILPAID calculation
+    orgbal = row.get('ORGBAL', 0) or 0
+    curbal = row.get('CURBAL', 0) or 0
+    payamt = row.get('PAYAMT', 0) or 0
+    if payamt > 0:
+        new_row['BILPAID'] = int((orgbal - curbal) / payamt)
+    else:
+        new_row['BILPAID'] = 0
+    
+    # PAY75PCT and NACODATE
+    nacospadt = row.get('NACOSPADT', 0) or 0
+    if nacospadt > 0:
+        new_row['PAY75PCT'] = 'Y'
+        try:
+            new_row['NACODATE'] = format_mmddyy10(nacospadt)
+        except:
+            new_row['NACODATE'] = ''
+    else:
+        new_row['PAY75PCT'] = 'N'
+        new_row['NACODATE'] = ''
+    
+    loan_records.append(new_row)
+
+df_loan = pl.DataFrame(loan_records)
+
+# Step 6: Get customer names from CISNAME
+df_cname = pl.read_parquet(f'{CISNAME_DIR}LOAN.parquet').filter(
+    pl.col('SECCUST') == '901'
+).select(['ACCTNO', 'CUSTNAM1', 'OCCUPAT', 'BGC']).unique(subset=['ACCTNO'])
+
+# Step 7: Get guarantor information from LIAB
+df_liab = pl.read_parquet(f'{LOAN_DIR}LIAB.parquet').sort('LIABACCT')
+
+# Merge with guarantor names
+df_liab = df_liab.join(
+    df_cname.rename({'ACCTNO': 'LIABACCT', 'CUSTNAM1': 'GNAME'}),
+    on='LIABACCT',
+    how='left'
+).with_columns([
+    pl.when(pl.col('GNAME').is_null() | (pl.col('GNAME') == ''))
+    .then(pl.col('LIABNAME'))
+    .otherwise(pl.col('GNAME'))
+    .alias('GNAME')
+]).sort(['ACCTNO', 'NOTENO'])
+
+# Transpose guarantor names
+guarantor_data = {}
+for (acctno, noteno), group in df_liab.group_by(['ACCTNO', 'NOTENO']):
+    gnames = group['GNAME'].to_list()
+    guarantor_data[(acctno, noteno)] = {
+        'GUARNAM1': gnames[0] if len(gnames) > 0 else '',
+        'GUARNAM2': gnames[1] if len(gnames) > 1 else ''
+    }
+
+guarnam1_list = []
+guarnam2_list = []
+for row in df_loan.iter_rows(named=True):
+    key = (row['ACCTNO'], row['NOTENO'])
+    gdata = guarantor_data.get(key, {'GUARNAM1': '', 'GUARNAM2': ''})
+    guarnam1_list.append(gdata['GUARNAM1'])
+    guarnam2_list.append(gdata['GUARNAM2'])
+
+df_loan = df_loan.with_columns([
+    pl.Series('GUARNAM1', guarnam1_list),
+    pl.Series('GUARNAM2', guarnam2_list)
+])
+
+# Step 8: Get previous balance from SASLN
+df_sasln = pl.read_parquet(f'{SASLN_DIR}LOAN{reptmon1}{nowks}.parquet').select([
+    'ACCTNO', 'NOTENO', 'CURBAL'
+]).rename({'CURBAL': 'PREVBAL'}).sort(['ACCTNO', 'NOTENO'])
+
+df_sasln = df_sasln.join(df_npl.select(['ACCTNO', 'NOTENO']), on=['ACCTNO', 'NOTENO'], how='inner')
+df_sasln = df_sasln.join(
+    guarantor_data if guarantor_data else pl.DataFrame({'ACCTNO': [], 'NOTENO': [], 'GUARNAM1': [], 'GUARNAM2': []}),
+    on=['ACCTNO', 'NOTENO'],
+    how='left'
+)
+
+# Step 9: Final merge and calculations
+df_woff = df_sasln.join(df_loan, on=['ACCTNO', 'NOTENO'], how='outer').join(
+    df_npl, on='ACCTNO', how='outer', suffix='_npl'
+).with_columns([
+    (pl.col('CURBAL') - pl.col('PREVBAL')).alias('PAYMENT'),
+    (pl.col('TOTIIS') + pl.col('SP')).alias('TOTAL'),
+    pl.lit('I').alias('RIND')
+])
+
+# Step 10: Filter for write-off candidates
+df_woff = df_woff.filter(
+    (
+        ((pl.col('BORSTAT').is_in(['F', 'I'])) & (pl.col('DAYS') >= 334)) |
+        (pl.col('DAYS') >= 334) |
+        (
+            (pl.col('BORSTAT') == 'A') &
+            ~pl.col('LOANTYPE').is_in([983, 993, 678, 679, 698, 699]) &
+            (pl.col('PAIDIND') != 'P')
+        )
+    ) &
+    (pl.col('TOTAL') != 0)
+).with_columns([
+    pl.lit('Y').alias('CONFIRM')
+]).sort('ACCTNO')
+
+# Merge with customer names
+df_woff = df_woff.join(
+    df_cname.rename({'CUSTNAM1': 'NAME'}),
+    on='ACCTNO',
+    how='left',
+    suffix='_cname'
+)
+
+# Save to NPL.LIST
+df_woff.write_parquet(f'{NPL_DIR}LIST.parquet')
+
+print(f"\nBad Debt Write-Off List Generation Complete")
+
+# Step 11: Write fixed-width output file (WOFFTEX1)
+with open(OUTPUT_FILE1, 'w') as f:
+    for row in df_woff.iter_rows(named=True):
+        branch = (row.get('BRANCH', '') or '')[:7]
+        name = (row.get('NAME', '') or '')[:40]
+        acctno = row.get('ACCTNO', 0) or 0
+        noteno = row.get('NOTENO', 0) or 0
+        borstat = (row.get('BORSTAT', '') or '')[:1]
+        iis = row.get('IIS', 0) or 0
+        oi = row.get('OI', 0) or 0
+        totiis = row.get('TOTIIS', 0) or 0
+        sp = row.get('SP', 0) or 0
+        curbal = row.get('CURBAL', 0) or 0
+        prevbal = row.get('PREVBAL', 0) or 0
+        payment = row.get('PAYMENT', 0) or 0
+        ecsrrsrv = row.get('ECSRRSRV', 0) or 0
+        postamt = row.get('POSTAMT', 0) or 0
+        otheramt = row.get('OTHERAMT', 0) or 0
+        matdate = (row.get('MATDATE', '') or '')[:10]
+        loantype = row.get('LOANTYPE', 0) or 0
+        intamt = row.get('INTAMT', 0) or 0
+        postntrn = (row.get('POSTNTRN', '') or '')[:1]
+        marketvl = row.get('MARKETVL', 0) or 0
+        intearn4 = row.get('INTEARN4', 0) or 0
+        days = row.get('DAYS', 0) or 0
+        custcode = row.get('CUSTCODE', 0) or 0
+        rind = (row.get('RIND', '') or '')[:1]
+        oifeeamt = row.get('OIFEEAMT', 0) or 0
+        lasttra1 = (row.get('LASTTRA1', '') or '')[:10]
+        lsttrncd = row.get('LSTTRNCD', 0) or 0
+        mthpdue = row.get('MTHPDUE', 0) or 0
+        balance = row.get('BALANCE', 0) or 0
+        guarend = (row.get('GUAREND', '') or '')[:20]
+        guarnam1 = (row.get('GUARNAM1', '') or '')[:40]
+        guarnam2 = (row.get('GUARNAM2', '') or '')[:40]
+        
+        # Format ISSXDTE
+        issxdte = row.get('ISSXDTE', '')
+        if issxdte:
+            issxdte_str = format_mmddyy10(issxdte)[:10]
+        else:
+            issxdte_str = ' ' * 10
+        
+        netproc = row.get('NETPROC', 0) or 0
+        colldesc = (row.get('COLLDESC', '') or '')[:70]
+        collyear = row.get('COLLYEAR', 0) or 0
+        bilpaid = row.get('BILPAID', 0) or 0
+        crrgrade = (row.get('CRRGRADE', '') or '')[:5]
+        marginfi = row.get('MARGINFI', 0) or 0
+        noteterm = row.get('NOTETERM', 0) or 0
+        payamt = row.get('PAYAMT', 0) or 0
+        
+        # Format DOBMNI
+        dobmni = row.get('DOBMNI', '')
+        if dobmni:
+            dobmni_str = format_mmddyy10(dobmni)[:10]
+        else:
+            dobmni_str = ' ' * 10
+        
+        ecsrind = (row.get('ECSRIND', '') or '')[:1]
+        delqcd = (row.get('DELQCD', '') or '')[:2]
+        occupat = (row.get('OCCUPAT', '') or '')[:3]
+        bgc = (row.get('BGC', '') or '')[:2]
+        pay75pct = (row.get('PAY75PCT', '') or '')[:1]
+        nacodate = (row.get('NACODATE', '') or '')[:10]
+        cp = (row.get('CP', '') or '')[:1]
+        modeldes = (row.get('MODELDES', '') or '')[:6]
+        akpk_status = (row.get('AKPK_STATUS', '') or '')[:9]
+        
+        # Write fixed-width record
+        f.write(f"{branch:<7}{name:<40}{acctno:>10.0f}{noteno:>5.0f}{borstat:1}")
+        f.write(f"{iis:>16.2f}{oi:>16.2f}{totiis:>16.2f}{sp:>16.2f}")
+        f.write(f"{curbal:>16.2f}{prevbal:>16.2f}{payment:>16.2f}")
+        f.write(f"{ecsrrsrv:>16.2f}{postamt:>16.2f}{otheramt:>16.2f}")
+        f.write(f"{matdate:10}{loantype:>3d}{intamt:>16.2f}{postntrn:1}")
+        f.write(f"{marketvl:>16.2f}{intearn4:>16.2f}{days:>6d}{custcode:>3d}{rind:1}")
+        f.write(f"{oifeeamt:>16.2f}{lasttra1:10}{lsttrncd:>3d}{mthpdue:>3d}")
+        f.write(f"{balance:>16.2f}{guarend:20}{guarnam1:40}{guarnam2:40}")
+        f.write(f"{issxdte_str:10}{netproc:>16.2f}{colldesc:70}{collyear:>4d}")
+        f.write(f"{bilpaid:>3d}{crrgrade:5}{marginfi:>16.2f}{noteterm:>3d}")
+        f.write(f"{payamt:>16.2f}{dobmni_str:10}{ecsrind:1}{delqcd:2}")
+        f.write(f"{occupat:3}{bgc:2}{pay75pct:1}{nacodate:10}{cp:1}")
+        f.write(f"{modeldes:6}{akpk_status:9}\n")
+
+# Step 12: Re-read and recalculate SP
+text_records = []
+with open(OUTPUT_FILE1, 'r') as f:
+    for line in f:
+        # Parse fixed-width line
+        record = {
+            'BRANCH': line[0:7].strip(),
+            'NAME': line[8:48].strip(),
+            'ACCTNO': float(line[49:59]) if line[49:59].strip() else 0,
+            'NOTENO': float(line[60:65]) if line[60:65].strip() else 0,
+            'BORSTAT': line[66:67],
+            'IIS': float(line[68:84]) if line[68:84].strip() else 0,
+            'OI': float(line[84:100]) if line[84:100].strip() else 0,
+            'TOTIIS': float(line[100:116]) if line[100:116].strip() else 0,
+            'BALANCE': float(line[356:372]) if line[356:372].strip() else 0
+        }
+        
+        # Recalculate SP
+        record['SP'] = record['BALANCE'] - record['TOTIIS']
+        record['TOTAL'] = record['TOTIIS'] + record['SP']
+        
+        # Store full line for later output
+        record['_LINE'] = line
+        text_records.append(record)
+
+df_text = pl.DataFrame(text_records)
+
+# Step 13: Write final formatted output with descriptions
+with open(OUTPUT_FILE, 'w') as f:
+    for idx, row in enumerate(df_text.iter_rows(named=True)):
+        line = row['_LINE']
+        
+        # Apply format descriptions (PROC FORMAT from BKCTRL.CISFMT)
+        delqcd = line[676:678]
+        occupat = line[712:715]
+        bgc = line[742:744]
+        
+        delqdes = get_delq_desc(delqcd)
+        occupdes = get_occup_desc(occupat)
+        bgcdes = get_bgc_desc(bgc)
+        
+        # Additional fields
+        biztype = 'I'
+        cap = 0.0
+        latechg = row['OI']
+        sp_calc = row['SP']
+        total_calc = row['TOTAL']
+        
+        # Write formatted output with additional fields
+        f.write(line[:116])  # Up to and including TOTIIS
+        f.write(f"{sp_calc:>16.2f}")  # SP
+        f.write(f"{total_calc:>16.2f}")  # TOTAL
+        f.write(line[148:373])  # CURBAL through BALANCE
+        f.write(f"{cap:>16.2f}")  # CAP
+        f.write(f"{latechg:>16.2f}")  # LATECHG
+        f.write(line[407:679])  # GUAREND through DELQCD
+        f.write(f"{delqdes:30}")  # DELQDES
+        f.write(f"{biztype:1}")  # BIZTYPE
+        f.write(line[712:715])  # OCCUPAT
+        f.write(f"{occupdes:25}")  # OCCUPDES
+        f.write(line[742:744])  # BGC
+        f.write(f"{bgcdes:20}")  # BGCDES
+        f.write(line[766:])  # PAY75PCT through end
+
+# Save final dataset
+df_text.write_parquet(f'{NPL_DIR}WOFFTXT.parquet')
+
+print(f"\nOutput files generated:")
+print(f"  {OUTPUT_FILE} (Final formatted output)")
+print(f"  {OUTPUT_FILE1} (Intermediate output)")
+print(f"  {NPL_DIR}LIST.parquet (Data file)")
+print(f"  {NPL_DIR}WOFFTXT.parquet (Final dataset)")
+print(f"\nAccounts identified for write-off: {len(df_woff)}")
+print(f"Total exposure: RM {df_woff['TOTAL'].sum():,.2f}")
+print(f"\nCriteria:")
+print(f"  - DAYS >= 334 OR")
+print(f"  - BORSTAT F/I with DAYS >= 334 OR")
+print(f"  - Active accounts (BORSTAT='A', not written off, not paid)")
+print(f"  - TOTAL (TOTIIS + SP) != 0")
 
 
-
-how many inputs are actually being used in this program?
+no need input for reptdate, use datetime timedelta - 1 instead. all other inputs are in sas7bdat sas dataset, may use pyreadstat. output in text file and sas7bdat accordingly
