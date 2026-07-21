@@ -21,6 +21,10 @@ from PBBLNFMT import (
 # CONFIGURATION
 # ============================================================================
 
+# TESTING MODE - Set to True to limit rows, False for production
+TEST_MODE = True
+TEST_LIMIT = 500000
+
 # Get current script directory for relative paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS'
@@ -47,6 +51,8 @@ print(f"Script Directory: {SCRIPT_DIR}")
 print(f"Output Directory: {OUTPUT_DIR}")
 print(f"Output File 1: {OUTPUT_FILE1}")
 print(f"Output File 2: {OUTPUT_FILE}")
+if TEST_MODE:
+    print(f"*** TEST MODE: Limiting to {TEST_LIMIT} rows ***")
 print(f"{'='*60}\n")
 
 # Format mappings
@@ -79,17 +85,41 @@ def format_mmddyy10(date_obj):
         return date_obj.strftime('%m/%d/%Y')
     return ''
 
-def read_sas7bdat(filepath, columns=None):
-    """Read SAS dataset using pyreadstat."""
+def read_sas7bdat_fast(filepath, columns=None, row_limit=None):
+    """
+    Read SAS dataset quickly with limited rows using pyreadstat's row_limit parameter.
+    This is much faster than reading the entire file.
+    """
     try:
         if not os.path.exists(filepath):
             print(f"  Warning: File not found: {filepath}")
             return None
         
-        df, meta = pyreadstat.read_sas7bdat(filepath, usecols=columns)
+        start_time = time.time()
+        print(f"  Reading: {os.path.basename(filepath)}", end="", flush=True)
+        
+        # Use row_limit parameter to only read needed rows
+        if row_limit and row_limit > 0:
+            df, meta = pyreadstat.read_sas7bdat(
+                filepath, 
+                row_limit=row_limit,
+                usecols=columns if columns else None
+            )
+        else:
+            df, meta = pyreadstat.read_sas7bdat(
+                filepath,
+                usecols=columns if columns else None
+            )
+        
+        elapsed = time.time() - start_time
+        print(f" - {len(df)} rows, {elapsed:.1f}s")
+        
+        if len(df) == 0:
+            return None
+            
         return pl.from_pandas(df)
     except Exception as e:
-        print(f"  Error reading {filepath}: {e}")
+        print(f"\n  Error reading {filepath}: {e}")
         return None
 
 def write_sas7bdat(df, filepath):
@@ -170,6 +200,9 @@ print(f"{'='*60}\n")
 
 start_total = time.time()
 
+# Determine row limit based on test mode
+row_limit = TEST_LIMIT if TEST_MODE else None
+
 # ============================================================================
 # STEP 1: Read NPLA data - Active accounts with borrower status 'A'
 # ============================================================================
@@ -177,7 +210,11 @@ print("STEP 1: Reading NPLA data...")
 
 loan_columns = ['BORSTAT', 'LOANTYPE', 'NAME', 'ACCTNO', 'NOTENO', 
                 'FEEDUE', 'FEEDUEMS', 'FEEAMT16', 'MARKETVL', 'NTBRCH']
-df_npla_raw = read_sas7bdat(f'{LOAN_DIR}lnnote.sas7bdat', columns=loan_columns)
+df_npla_raw = read_sas7bdat_fast(
+    f'{LOAN_DIR}lnnote.sas7bdat', 
+    columns=loan_columns,
+    row_limit=row_limit
+)
 
 if df_npla_raw is None:
     raise Exception("Failed to read LOAN.LNNOTE")
@@ -236,8 +273,11 @@ if df_npla.height == 0:
 # ============================================================================
 print("STEP 2: Reading IIS and SP data...")
 
-df_iis = read_sas7bdat(f'{NPL_DIR}iis.sas7bdat', 
-    columns=['ACCTNO', 'NOTENO', 'NAME', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'])
+df_iis = read_sas7bdat_fast(
+    f'{NPL_DIR}iis.sas7bdat',
+    columns=['ACCTNO', 'NOTENO', 'NAME', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'],
+    row_limit=row_limit
+)
 if df_iis is not None:
     df_iis = standardize_schema(df_iis, {
         'ACCTNO': pl.Float64, 'NOTENO': pl.Float64, 'IIS': pl.Float64,
@@ -246,8 +286,11 @@ if df_iis is not None:
     })
     df_iis = df_iis.unique(subset=['ACCTNO', 'NOTENO'])
 
-df_sp = read_sas7bdat(f'{NPL_DIR}sp2.sas7bdat',
-    columns=['ACCTNO', 'NOTENO', 'NAME', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'])
+df_sp = read_sas7bdat_fast(
+    f'{NPL_DIR}sp2.sas7bdat',
+    columns=['ACCTNO', 'NOTENO', 'NAME', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'],
+    row_limit=row_limit
+)
 if df_sp is not None:
     df_sp = standardize_schema(df_sp, {
         'ACCTNO': pl.Float64, 'NOTENO': pl.Float64, 'IIS': pl.Float64,
@@ -306,7 +349,26 @@ print(f"  NPL combined rows: {df_npl.height}\n")
 print("STEP 4: Reading CCRIS data...")
 
 ccris_file = f'{CCRIS_DIR}icredmsubac{reptmon}{reptyear}.sas7bdat'
-df_credsub = read_sas7bdat(ccris_file, columns=None)
+print(f"  Looking for: {ccris_file}")
+
+# Try different naming patterns for CCRIS file
+ccris_file_patterns = [
+    f'{CCRIS_DIR}icredmsubac{reptmon}{reptyear}.sas7bdat',
+    f'{CCRIS_DIR}ICREDMSUBAC{reptmon}{reptyear}.sas7bdat',
+    f'{CCRIS_DIR}icredmsubac{reptmon}0{reptyear}.sas7bdat',
+    f'{CCRIS_DIR}ICREDMSUBAC{reptmon}0{reptyear}.sas7bdat',
+]
+
+df_credsub = None
+for pattern in ccris_file_patterns:
+    df_credsub = read_sas7bdat_fast(
+        pattern,
+        columns=None,
+        row_limit=row_limit
+    )
+    if df_credsub is not None:
+        print(f"  Found CCRIS file: {os.path.basename(pattern)}")
+        break
 
 if df_credsub is not None and df_credsub.height > 0:
     # Find column names (case-insensitive)
@@ -377,8 +439,11 @@ print(f"  CCRIS rows: {df_credsub.height}\n")
 # ============================================================================
 print("STEP 5: Reading HPD loan data...")
 
-df_loan_raw = read_sas7bdat(f'{LOAN_DIR}lnnote.sas7bdat',
-    columns=['ACCTNO', 'NOTENO', 'LOANTYPE'])
+df_loan_raw = read_sas7bdat_fast(
+    f'{LOAN_DIR}lnnote.sas7bdat',
+    columns=['ACCTNO', 'NOTENO', 'LOANTYPE'],
+    row_limit=row_limit
+)
 if df_loan_raw is not None:
     df_loan_raw = standardize_schema(df_loan_raw, {
         'ACCTNO': pl.Float64, 'NOTENO': pl.Float64, 'LOANTYPE': pl.Float64
@@ -438,7 +503,11 @@ if df_loan.height > 0:
                      'BORSTAT', 'PAIDIND', 'POSTNTRN', 'INTAMT', 'INTEARN4',
                      'CUSTCODE', 'LSTTRNCD']
     
-    df_extra = read_sas7bdat(f'{LOAN_DIR}lnnote.sas7bdat', columns=extra_columns)
+    df_extra = read_sas7bdat_fast(
+        f'{LOAN_DIR}lnnote.sas7bdat',
+        columns=extra_columns,
+        row_limit=row_limit
+    )
     
     if df_extra is not None:
         numeric_cols = ['ACCTNO', 'NOTENO', 'FEETOTAL', 'NFEEAMT5', 'FEEAMT3', 'FEETOT2',
@@ -572,8 +641,11 @@ print(f"  Loan records: {df_loan.height}\n")
 # ============================================================================
 print("STEP 8: Reading customer names...")
 
-df_cname = read_sas7bdat(f'{CISNAME_DIR}loan.sas7bdat',
-    columns=['ACCTNO', 'CUSTNAM1', 'OCCUPAT', 'BGC', 'SECCUST'])
+df_cname = read_sas7bdat_fast(
+    f'{CISNAME_DIR}loan.sas7bdat',
+    columns=['ACCTNO', 'CUSTNAM1', 'OCCUPAT', 'BGC', 'SECCUST'],
+    row_limit=row_limit
+)
 
 if df_cname is not None:
     df_cname = standardize_schema(df_cname, {'ACCTNO': pl.Float64})
@@ -593,8 +665,11 @@ print(f"  Customer names: {df_cname.height}\n")
 print("STEP 9: Reading guarantor information...")
 
 guarantor_data = {}
-df_liab = read_sas7bdat(f'{LOAN_DIR}lnliab07226.sas7bdat',
-    columns=['ACCTNO', 'NOTENO', 'LIABACCT', 'LIABNAME'])
+df_liab = read_sas7bdat_fast(
+    f'{LOAN_DIR}lnliab07226.sas7bdat',
+    columns=['ACCTNO', 'NOTENO', 'LIABACCT', 'LIABNAME'],
+    row_limit=row_limit
+)
 
 if df_liab is not None and df_cname.height > 0:
     df_liab = standardize_schema(df_liab, {
@@ -643,7 +718,11 @@ if df_loan.height > 0:
 print("STEP 10: Reading previous balance...")
 
 sasln_file = f'{SASLN_DIR}loan{reptmon1}{nowks}.sas7bdat'
-df_sasln = read_sas7bdat(sasln_file, columns=['ACCTNO', 'NOTENO', 'CURBAL'])
+df_sasln = read_sas7bdat_fast(
+    sasln_file,
+    columns=['ACCTNO', 'NOTENO', 'CURBAL'],
+    row_limit=row_limit
+)
 
 if df_sasln is not None:
     df_sasln = standardize_schema(df_sasln, {
