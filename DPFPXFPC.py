@@ -42,23 +42,23 @@ try:
 except ImportError:
     # Fallback definitions if PBBELF not available
     LIBRARY_PATHS = {
-        'LOAN': '/sas/data/loan/',
-        'NPL6': '/sas/data/npl/',
+        'LOAN': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/',
+        'NPL6': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/',
     }
     def format_ddmmyy10(date_obj):
         return date_obj.strftime('%d/%m/%Y') if date_obj else ''
     def format_mmddyy10(date_obj):
         return date_obj.strftime('%m/%d/%Y') if date_obj else ''
 
-LOAN_DIR = LIBRARY_PATHS.get('LOAN', '/sas/data/loan/')
-NPL_DIR = LIBRARY_PATHS.get('NPL6', '/sas/data/npl/')
-SASLN_DIR = '/sas/data/sasln/'
-CISNAME_DIR = '/sas/data/cisname/'
-CCRIS_DIR = '/sas/data/ccris/'
-BKCTRL_DIR = '/sas/data/bkctrl/'
+LOAN_DIR = LIBRARY_PATHS.get('LOAN', '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/')
+NPL_DIR = LIBRARY_PATHS.get('NPL6', '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/')
+SASLN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
+CISNAME_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
+CCRIS_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
+BKCTRL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
 
-OUTPUT_FILE = '/sas/data/output/wofftext.txt'
-OUTPUT_FILE1 = '/sas/data/output/wofftex1.txt'
+OUTPUT_FILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftext.txt'
+OUTPUT_FILE1 = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftex1.txt'
 
 # HPD from PBBLNFMT (Hire Purchase Active)
 HPD = HP_ACTIVE  # This is defined in PBBLNFMT
@@ -152,7 +152,7 @@ rdate = reptdate.strftime('%d/%m/%y')
 print(f"Week: {nowk}, Previous Month: {reptmon1}")
 
 # Step 1: Create NPLA - Active accounts with borrower status 'A'
-df_npla_raw = read_sas7bdat(f'{LOAN_DIR}LNNOTE.sas7bdat')
+df_npla_raw = read_sas7bdat(f'{LOAN_DIR}lnnote.sas7bdat')
 if df_npla_raw is not None:
     df_npla = df_npla_raw.filter(
         (pl.col('BORSTAT') == 'A') &
@@ -177,13 +177,13 @@ else:
     raise Exception("Failed to read LOAN.LNNOTE")
 
 # Step 2: Get IIS and SP data
-df_iis = read_sas7bdat(f'{NPL_DIR}IIS.sas7bdat')
+df_iis = read_sas7bdat(f'{NPL_DIR}iis.sas7bdat')
 if df_iis is not None:
     df_iis = df_iis.unique(subset=['ACCTNO', 'NOTENO'])
 else:
     df_iis = pl.DataFrame()
 
-df_sp = read_sas7bdat(f'{NPL_DIR}SP2.sas7bdat')
+df_sp = read_sas7bdat(f'{NPL_DIR}sp2.sas7bdat')
 if df_sp is not None:
     df_sp = df_sp.unique(subset=['ACCTNO', 'NOTENO'])
 else:
@@ -209,7 +209,7 @@ df_npl = pl.concat([df_npla, df_npl_data]).with_columns([
 ]).unique(subset=['ACCTNO', 'NOTENO'])
 
 # Step 3: Get CCRIS credit submission data
-ccris_file = f'{CCRIS_DIR}ICREDMSUBAC{reptmon}{reptyear}.sas7bdat'
+ccris_file = f'{CCRIS_DIR}icredmsubac{reptmon}{reptyear}.sas7bdat'
 df_credsub = read_sas7bdat(ccris_file)
 if df_credsub is not None:
     df_credsub = df_credsub.filter(
@@ -227,7 +227,7 @@ else:
     })
 
 # Step 4: Get loan data for HPD loan types (from PBBLNFMT)
-df_loan_raw = read_sas7bdat(f'{LOAN_DIR}LNNOTE.sas7bdat')
+df_loan_raw = read_sas7bdat(f'{LOAN_DIR}lnnote.sas7bdat')
 if df_loan_raw is not None:
     df_loan_raw = df_loan_raw.filter(
         pl.col('LOANTYPE').is_in(HPD)
@@ -356,7 +356,7 @@ else:
     df_loan = pl.DataFrame()
 
 # Step 6: Get customer names from CISNAME
-df_cname = read_sas7bdat(f'{CISNAME_DIR}LOAN.sas7bdat')
+df_cname = read_sas7bdat(f'{CISNAME_DIR}loan.sas7bdat')
 if df_cname is not None:
     df_cname = df_cname.filter(
         pl.col('SECCUST') == '901'
@@ -365,7 +365,7 @@ else:
     df_cname = pl.DataFrame()
 
 # Step 7: Get guarantor information from LIAB
-df_liab = read_sas7bdat(f'{LOAN_DIR}LIAB.sas7bdat')
+df_liab = read_sas7bdat(f'{LOAN_DIR}lnliab07226.sas7bdat')
 guarantor_data = {}
 if df_liab is not None and df_cname.height > 0:
     df_liab = df_liab.sort('LIABACCT')
@@ -404,7 +404,7 @@ if df_loan.height > 0:
     ])
 
 # Step 8: Get previous balance from SASLN
-sasln_file = f'{SASLN_DIR}LOAN{reptmon1}{nowks}.sas7bdat'
+sasln_file = f'{SASLN_DIR}loan{reptmon1}{nowks}.sas7bdat'
 df_sasln = read_sas7bdat(sasln_file)
 if df_sasln is not None:
     df_sasln = df_sasln.select([
@@ -659,3 +659,7 @@ print(f"  {OUTPUT_FILE1} (Intermediate output)")
 if df_woff.height > 0:
     print(f"  {NPL_DIR}LIST.sas7bdat (Data file)")
     print(f"  {NPL_DIR}WOFFTXT.sas7bdat (Final dataset)")
+
+
+
+for testing purpose, cut the row limit to 1000 only
