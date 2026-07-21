@@ -21,15 +21,33 @@ from PBBLNFMT import (
 # CONFIGURATION
 # ============================================================================
 
-# Library paths
-LOAN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
-NPL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
-SASLN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
-CISNAME_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
-CCRIS_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
+# Get current script directory for relative paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS'
 
-OUTPUT_FILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftext.txt'
-OUTPUT_FILE1 = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftex1.txt'
+# Library paths - try to use environment variables or relative paths
+LOAN_DIR = os.environ.get('LOAN_DIR', f'{BASE_DIR}/input/prod/EIIFTXT1/')
+NPL_DIR = os.environ.get('NPL_DIR', f'{BASE_DIR}/input/prod/EIIFTXT1/')
+SASLN_DIR = os.environ.get('SASLN_DIR', f'{BASE_DIR}/input/prod/EIIFTXT1/')
+CISNAME_DIR = os.environ.get('CISNAME_DIR', f'{BASE_DIR}/input/prod/EIIFTXT1/')
+CCRIS_DIR = os.environ.get('CCRIS_DIR', f'{BASE_DIR}/input/prod/EIIFTXT1/')
+
+# Output paths - ensure directories exist
+OUTPUT_DIR = f'{BASE_DIR}/output/EIIFTXT1/'
+OUTPUT_FILE = f'{OUTPUT_DIR}wofftext.txt'
+OUTPUT_FILE1 = f'{OUTPUT_DIR}wofftex1.txt'
+
+# Create output directory if it doesn't exist
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+print(f"\n{'='*60}")
+print(f"Bad Debt Write-Off List Generation")
+print(f"{'='*60}")
+print(f"Script Directory: {SCRIPT_DIR}")
+print(f"Output Directory: {OUTPUT_DIR}")
+print(f"Output File 1: {OUTPUT_FILE1}")
+print(f"Output File 2: {OUTPUT_FILE}")
+print(f"{'='*60}\n")
 
 # Format mappings
 OCCUPFMT = {
@@ -65,13 +83,13 @@ def read_sas7bdat(filepath, columns=None):
     """Read SAS dataset using pyreadstat."""
     try:
         if not os.path.exists(filepath):
-            print(f"Warning: File not found: {filepath}")
+            print(f"  Warning: File not found: {filepath}")
             return None
         
         df, meta = pyreadstat.read_sas7bdat(filepath, usecols=columns)
         return pl.from_pandas(df)
     except Exception as e:
-        print(f"Error reading {filepath}: {e}")
+        print(f"  Error reading {filepath}: {e}")
         return None
 
 def write_sas7bdat(df, filepath):
@@ -124,10 +142,6 @@ def create_empty_dataframe_with_schema(schema):
 # ============================================================================
 # MAIN PROCESSING
 # ============================================================================
-
-print(f"\n{'='*60}")
-print(f"Bad Debt Write-Off List Generation")
-print(f"{'='*60}")
 
 # Set report date to yesterday
 reptdate = datetime.now().date() - timedelta(days=1)
@@ -731,7 +745,10 @@ if df_woff.height > 0:
     print(f"Total exposure: RM {df_woff['TOTAL'].sum():,.2f}")
     
     # Write fixed-width output file (WOFFTEX1)
-    print(f"\nWriting output files...")
+    print(f"\nWriting output files to: {OUTPUT_DIR}")
+    print(f"  Output file 1: {OUTPUT_FILE1}")
+    print(f"  Output file 2: {OUTPUT_FILE}")
+    
     with open(OUTPUT_FILE1, 'w') as f:
         for idx, row in enumerate(df_woff.iter_rows(named=True)):
             if idx % 100 == 0 and idx > 0:
@@ -822,6 +839,7 @@ if df_woff.height > 0:
             f.write(f"{modeldes:6}{akpk_status:9}\n")
     
     print(f"\n  {OUTPUT_FILE1} written with {df_woff.height} rows")
+    print(f"  File size: {os.path.getsize(OUTPUT_FILE1):,} bytes")
     
     # Create final formatted output (WOFFTEXT)
     print("\nCreating final formatted output...")
@@ -881,10 +899,21 @@ if df_woff.height > 0:
         
         write_sas7bdat(df_text, f'{NPL_DIR}WOFFTXT.sas7bdat')
         print(f"\n  {OUTPUT_FILE} written with {len(text_records)} rows")
+        print(f"  File size: {os.path.getsize(OUTPUT_FILE):,} bytes")
         print(f"  {NPL_DIR}WOFFTXT.sas7bdat written")
 
 else:
     print("\nNo accounts identified for write-off")
+    print("Creating empty output files...")
+    
+    # Create empty files even if no accounts found
+    with open(OUTPUT_FILE1, 'w') as f:
+        f.write("")
+    print(f"  Created empty file: {OUTPUT_FILE1}")
+    
+    with open(OUTPUT_FILE, 'w') as f:
+        f.write("")
+    print(f"  Created empty file: {OUTPUT_FILE}")
 
 # ============================================================================
 # Summary
@@ -899,3 +928,5 @@ print(f"  {OUTPUT_FILE1} (Intermediate output)")
 if df_woff.height > 0:
     print(f"  {NPL_DIR}LIST.sas7bdat (Data file)")
     print(f"  {NPL_DIR}WOFFTXT.sas7bdat (Final dataset)")
+print(f"\nTo view output files:")
+print(f"  ls -la {OUTPUT_DIR}")
