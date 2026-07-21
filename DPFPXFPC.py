@@ -53,8 +53,15 @@ CISNAME_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/
 CCRIS_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
 BKCTRL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
 
-OUTPUT_FILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftext.txt'
-OUTPUT_FILE1 = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftex1.txt'
+OUTPUT_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/'
+OUTPUT_FILE = os.path.join(OUTPUT_DIR, 'wofftext.txt')
+OUTPUT_FILE1 = os.path.join(OUTPUT_DIR, 'wofftex1.txt')
+
+# Create output directory if it doesn't exist
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+print(f"Output directory: {OUTPUT_DIR}")
+print(f"Output file 1: {OUTPUT_FILE1}")
+print(f"Output file 2: {OUTPUT_FILE}")
 
 HPD = HP_ACTIVE
 
@@ -1048,7 +1055,7 @@ if df_woff.height > 0:
         (pl.col('PAIDIND') != 'P')
     )
     
-    # Option 1: Apply the filter with TOTAL != 0 (original SAS logic)
+    # Apply the filter with TOTAL != 0 (original SAS logic)
     df_woff = df_woff.filter(
         (borstat_condition | days_condition | active_condition) &
         (pl.col('TOTAL') != 0)
@@ -1067,11 +1074,18 @@ if df_woff.height > 0:
 print(f"  WOFF after filter: {df_woff.height}\n")
 
 # ============================================================================
-# STEP 13: Save outputs
+# STEP 13: Save outputs - ALWAYS CREATE FILES (even if empty)
 # ============================================================================
+print("STEP 13: Saving output files...")
+
+# Ensure output directory exists
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+print(f"  Output directory: {OUTPUT_DIR}")
+
 if df_woff.height > 0:
     # Save to NPL.LIST
     write_sas7bdat(df_woff, f'{NPL_DIR}LIST.sas7bdat')
+    
     print(f"\n{'='*60}")
     print(f"SUMMARY")
     print(f"{'='*60}")
@@ -1170,6 +1184,7 @@ if df_woff.height > 0:
             f.write(f"{modeldes:6}{akpk_status:9}\n")
     
     print(f"\n  {OUTPUT_FILE1} written with {df_woff.height} rows")
+    print(f"  File size: {os.path.getsize(OUTPUT_FILE1):,} bytes")
     
     # Create final formatted output
     print("\nCreating final formatted output...")
@@ -1231,10 +1246,21 @@ if df_woff.height > 0:
         
         write_sas7bdat(df_text, f'{NPL_DIR}WOFFTXT.sas7bdat')
         print(f"\n  {OUTPUT_FILE} written with {len(text_records)} rows")
+        print(f"  File size: {os.path.getsize(OUTPUT_FILE):,} bytes")
         print(f"  {NPL_DIR}WOFFTXT.sas7bdat written")
 
 else:
     print("\nNo accounts identified for write-off")
+    print("Creating empty output files...")
+    
+    # Create empty files even if no accounts found
+    with open(OUTPUT_FILE1, 'w') as f:
+        f.write("")
+    print(f"  Created empty file: {OUTPUT_FILE1}")
+    
+    with open(OUTPUT_FILE, 'w') as f:
+        f.write("")
+    print(f"  Created empty file: {OUTPUT_FILE}")
 
 # ============================================================================
 # Summary
@@ -1249,3 +1275,5 @@ print(f"  {OUTPUT_FILE1} (Intermediate output)")
 if df_woff.height > 0:
     print(f"  {NPL_DIR}LIST.sas7bdat (Data file)")
     print(f"  {NPL_DIR}WOFFTXT.sas7bdat (Final dataset)")
+print(f"\nTo view output files:")
+print(f"  ls -la {OUTPUT_DIR}")
