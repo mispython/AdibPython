@@ -19,6 +19,10 @@ from PBBLNFMT import (
     format_delqdes, format_statecd
 )
 
+# TESTING MODE - Limit to 1000 rows
+TEST_MODE = True
+TEST_LIMIT = 1000
+
 # Since get_branch_name is not in PBBLNFMT, define it here
 # This is based on the BRCHCD format that would typically be in PBBLNFMT
 def get_branch_name(branch_code):
@@ -150,10 +154,15 @@ reptyear = f'{reptdate.year % 100:02d}'
 rdate = reptdate.strftime('%d/%m/%y')
 
 print(f"Week: {nowk}, Previous Month: {reptmon1}")
+if TEST_MODE:
+    print(f"*** TEST MODE ENABLED - Limiting to {TEST_LIMIT} rows ***")
 
 # Step 1: Create NPLA - Active accounts with borrower status 'A'
 df_npla_raw = read_sas7bdat(f'{LOAN_DIR}lnnote.sas7bdat')
 if df_npla_raw is not None:
+    if TEST_MODE:
+        df_npla_raw = df_npla_raw.head(TEST_LIMIT)
+    
     df_npla = df_npla_raw.filter(
         (pl.col('BORSTAT') == 'A') &
         ~pl.col('LOANTYPE').is_in([983, 993, 678, 679, 698, 699])
@@ -176,18 +185,26 @@ if df_npla_raw is not None:
 else:
     raise Exception("Failed to read LOAN.LNNOTE")
 
+print(f"Step 1: NPLA rows: {df_npla.height}")
+
 # Step 2: Get IIS and SP data
 df_iis = read_sas7bdat(f'{NPL_DIR}iis.sas7bdat')
 if df_iis is not None:
+    if TEST_MODE:
+        df_iis = df_iis.head(TEST_LIMIT)
     df_iis = df_iis.unique(subset=['ACCTNO', 'NOTENO'])
 else:
     df_iis = pl.DataFrame()
 
 df_sp = read_sas7bdat(f'{NPL_DIR}sp2.sas7bdat')
 if df_sp is not None:
+    if TEST_MODE:
+        df_sp = df_sp.head(TEST_LIMIT)
     df_sp = df_sp.unique(subset=['ACCTNO', 'NOTENO'])
 else:
     df_sp = pl.DataFrame()
+
+print(f"Step 2: IIS rows: {df_iis.height}, SP rows: {df_sp.height}")
 
 # Merge IIS and SP
 if df_iis.height > 0 and df_sp.height > 0:
@@ -208,10 +225,14 @@ df_npl = pl.concat([df_npla, df_npl_data]).with_columns([
     pl.col('BRANCH').str.slice(0, 3).alias('BRABBR')
 ]).unique(subset=['ACCTNO', 'NOTENO'])
 
-# Step 3: Get CCRIS credit submission data
+print(f"Step 3: NPL combined rows: {df_npl.height}")
+
+# Step 4: Get CCRIS credit submission data
 ccris_file = f'{CCRIS_DIR}icredmsubac{reptmon}{reptyear}.sas7bdat'
 df_credsub = read_sas7bdat(ccris_file)
 if df_credsub is not None:
+    if TEST_MODE:
+        df_credsub = df_credsub.head(TEST_LIMIT)
     df_credsub = df_credsub.filter(
         pl.col('FACILITY').is_in(['34331', '34332'])
     ).rename({
@@ -226,14 +247,20 @@ else:
         'DAYS': pl.Float64, 'FACILITY': pl.Utf8
     })
 
-# Step 4: Get loan data for HPD loan types (from PBBLNFMT)
+print(f"Step 4: CCRIS rows: {df_credsub.height}")
+
+# Step 5: Get loan data for HPD loan types (from PBBLNFMT)
 df_loan_raw = read_sas7bdat(f'{LOAN_DIR}lnnote.sas7bdat')
 if df_loan_raw is not None:
+    if TEST_MODE:
+        df_loan_raw = df_loan_raw.head(TEST_LIMIT)
     df_loan_raw = df_loan_raw.filter(
         pl.col('LOANTYPE').is_in(HPD)
     ).unique(subset=['ACCTNO', 'NOTENO'])
 else:
     df_loan_raw = pl.DataFrame()
+
+print(f"Step 5: Loan raw rows: {df_loan_raw.height}")
 
 # Merge NPL, CREDSUB, and LOAN
 if df_npl.height > 0 and df_loan_raw.height > 0:
@@ -243,7 +270,9 @@ if df_npl.height > 0 and df_loan_raw.height > 0:
 else:
     df_loan = df_npl.clone() if df_npl.height > 0 else pl.DataFrame()
 
-# Step 5: Calculate derived fields
+print(f"Step 6: Loan combined rows: {df_loan.height}")
+
+# Step 6: Calculate derived fields
 if df_loan.height > 0:
     loan_records = []
     for row in df_loan.iter_rows(named=True):
@@ -355,19 +384,27 @@ if df_loan.height > 0:
 else:
     df_loan = pl.DataFrame()
 
-# Step 6: Get customer names from CISNAME
+print(f"Step 7: Loan records after calculation: {df_loan.height}")
+
+# Step 7: Get customer names from CISNAME
 df_cname = read_sas7bdat(f'{CISNAME_DIR}loan.sas7bdat')
 if df_cname is not None:
+    if TEST_MODE:
+        df_cname = df_cname.head(TEST_LIMIT)
     df_cname = df_cname.filter(
         pl.col('SECCUST') == '901'
     ).select(['ACCTNO', 'CUSTNAM1', 'OCCUPAT', 'BGC']).unique(subset=['ACCTNO'])
 else:
     df_cname = pl.DataFrame()
 
-# Step 7: Get guarantor information from LIAB
+print(f"Step 8: Customer names rows: {df_cname.height}")
+
+# Step 8: Get guarantor information from LIAB
 df_liab = read_sas7bdat(f'{LOAN_DIR}lnliab07226.sas7bdat')
 guarantor_data = {}
 if df_liab is not None and df_cname.height > 0:
+    if TEST_MODE:
+        df_liab = df_liab.head(TEST_LIMIT)
     df_liab = df_liab.sort('LIABACCT')
     
     df_liab = df_liab.join(
@@ -388,6 +425,8 @@ if df_liab is not None and df_cname.height > 0:
             'GUARNAM2': gnames[1] if len(gnames) > 1 else ''
         }
 
+print(f"Step 9: Guarantor entries: {len(guarantor_data)}")
+
 # Add guarantor names to loan data
 guarnam1_list = []
 guarnam2_list = []
@@ -403,10 +442,12 @@ if df_loan.height > 0:
         pl.Series('GUARNAM2', guarnam2_list)
     ])
 
-# Step 8: Get previous balance from SASLN
+# Step 9: Get previous balance from SASLN
 sasln_file = f'{SASLN_DIR}loan{reptmon1}{nowks}.sas7bdat'
 df_sasln = read_sas7bdat(sasln_file)
 if df_sasln is not None:
+    if TEST_MODE:
+        df_sasln = df_sasln.head(TEST_LIMIT)
     df_sasln = df_sasln.select([
         'ACCTNO', 'NOTENO', 'CURBAL'
     ]).rename({'CURBAL': 'PREVBAL'}).sort(['ACCTNO', 'NOTENO'])
@@ -428,7 +469,9 @@ if df_sasln is not None:
 else:
     df_sasln = pl.DataFrame()
 
-# Step 9: Final merge and calculations
+print(f"Step 10: SASLN rows: {df_sasln.height}")
+
+# Step 10: Final merge and calculations
 if df_sasln.height > 0 and df_loan.height > 0:
     df_woff = df_sasln.join(df_loan, on=['ACCTNO', 'NOTENO'], how='outer')
     if 'BRANCH' not in df_woff.columns:
@@ -442,7 +485,9 @@ if df_sasln.height > 0 and df_loan.height > 0:
 else:
     df_woff = pl.DataFrame()
 
-# Step 10: Filter for write-off candidates
+print(f"Step 11: WOFF rows before filter: {df_woff.height}")
+
+# Step 11: Filter for write-off candidates
 if df_woff.height > 0:
     required_cols = ['BORSTAT', 'DAYS', 'LOANTYPE', 'PAIDIND', 'TOTAL']
     for col in required_cols:
@@ -478,8 +523,15 @@ if df_woff.height > 0:
             on='ACCTNO',
             how='left'
         )
+    
+    # Apply test limit if enabled
+    if TEST_MODE and df_woff.height > TEST_LIMIT:
+        df_woff = df_woff.head(TEST_LIMIT)
+        print(f"*** TEST MODE: Limited to {TEST_LIMIT} rows ***")
 else:
     df_woff = pl.DataFrame()
+
+print(f"Step 12: WOFF rows after filter: {df_woff.height}")
 
 # Save to NPL.LIST
 if df_woff.height > 0:
@@ -497,8 +549,9 @@ else:
 
 print(f"\nBad Debt Write-Off List Generation Complete")
 
-# Step 11: Write fixed-width output file (WOFFTEX1)
+# Step 12: Write fixed-width output file (WOFFTEX1)
 if df_woff.height > 0:
+    print(f"\nWriting output files...")
     with open(OUTPUT_FILE1, 'w') as f:
         for row in df_woff.iter_rows(named=True):
             branch = (row.get('BRANCH', '') or '')[:7]
@@ -585,8 +638,10 @@ if df_woff.height > 0:
             f.write(f"{payamt:>16.2f}{dobmni_str:10}{ecsrind:1}{delqcd:2}")
             f.write(f"{occupat:3}{bgc:2}{pay75pct:1}{nacodate:10}{cp:1}")
             f.write(f"{modeldes:6}{akpk_status:9}\n")
+    
+    print(f"  {OUTPUT_FILE1} written with {df_woff.height} rows")
 
-    # Step 12: Re-read and recalculate SP
+    # Step 13: Re-read and recalculate SP
     text_records = []
     try:
         with open(OUTPUT_FILE1, 'r') as f:
@@ -650,6 +705,8 @@ if df_woff.height > 0:
                             f.write('\n')
             
             write_sas7bdat(df_text, f'{NPL_DIR}WOFFTXT.sas7bdat')
+            print(f"  {OUTPUT_FILE} written with {len(text_records)} rows")
+            print(f"  {NPL_DIR}WOFFTXT.sas7bdat written")
     except Exception as e:
         print(f"Warning: Error processing output files: {e}")
 
@@ -659,7 +716,3 @@ print(f"  {OUTPUT_FILE1} (Intermediate output)")
 if df_woff.height > 0:
     print(f"  {NPL_DIR}LIST.sas7bdat (Data file)")
     print(f"  {NPL_DIR}WOFFTXT.sas7bdat (Final dataset)")
-
-
-
-for testing purpose, cut the row limit to 1000 only
