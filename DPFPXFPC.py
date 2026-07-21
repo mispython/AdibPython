@@ -8,9 +8,8 @@ GENERATES FIXED-WIDTH TEXT FILE FOR REPORTING
 
 import duckdb
 from pathlib import Path
-from datetime import datetime
-import pyarrow as pa
-import pyarrow.parquet as pq
+from datetime import datetime, timedelta
+import pyreadstat
 import sys
 
 # INITIALIZE PATHS
@@ -30,26 +29,9 @@ print("EIIAQTXT - AQ NPL EXTRACT")
 print("="*80)
 
 # ============================================================================
-# READ LOAN REPTDATE
+# SET REPORT DATE - 1 DAY BEFORE TODAY
 # ============================================================================
-LOAN_REPTDATE_FILE = LOAN_DIR / "REPTDATE.parquet"
-
-if not LOAN_REPTDATE_FILE.exists():
-    print(f"ERROR: LOAN REPTDATE FILE NOT FOUND: {LOAN_REPTDATE_FILE}")
-    sys.exit(1)
-
-result = con.execute(f"""
-    SELECT REPTDATE 
-    FROM read_parquet('{LOAN_REPTDATE_FILE}')
-    LIMIT 1
-""").fetchone()
-
-REPTDATE = result[0]
-
-if isinstance(REPTDATE, (int, float)):
-    REPTDATE = datetime.strptime(str(int(REPTDATE)), '%Y%m%d').date()
-elif isinstance(REPTDATE, str):
-    REPTDATE = datetime.strptime(REPTDATE, '%Y-%m-%d').date()
+REPTDATE = datetime.now().date() - timedelta(days=1)
 
 # EXTRACT DATE COMPONENTS
 MM = str(REPTDATE.month).zfill(2)
@@ -60,28 +42,8 @@ RDATE = REPTDATE.strftime('%d%m%Y')
 print(f"\nLOAN REPORT DATE: {REPTDATE}")
 print(f"RDATE: {RDATE}")
 
-# ============================================================================
-# READ NPL6 REPTDATE
-# ============================================================================
-NPL6_REPTDATE_FILE = NPL6_DIR / "REPTDATE.parquet"
-
-if not NPL6_REPTDATE_FILE.exists():
-    print(f"ERROR: NPL6 REPTDATE FILE NOT FOUND: {NPL6_REPTDATE_FILE}")
-    sys.exit(1)
-
-result = con.execute(f"""
-    SELECT REPTDATE 
-    FROM read_parquet('{NPL6_REPTDATE_FILE}')
-    LIMIT 1
-""").fetchone()
-
-NPLDATE_DT = result[0]
-
-if isinstance(NPLDATE_DT, (int, float)):
-    NPLDATE_DT = datetime.strptime(str(int(NPLDATE_DT)), '%Y%m%d').date()
-elif isinstance(NPLDATE_DT, str):
-    NPLDATE_DT = datetime.strptime(NPLDATE_DT, '%Y-%m-%d').date()
-
+# NPL DATE IS THE SAME AS LOAN DATE
+NPLDATE_DT = REPTDATE
 NPLDATE = NPLDATE_DT.strftime('%d%m%Y')
 
 print(f"NPL6 REPORT DATE: {NPLDATE_DT}")
@@ -95,55 +57,51 @@ print("VALIDATING DATES")
 print("="*80)
 
 if NPLDATE != RDATE:
-    print(f"âœ— VALIDATION FAILED!")
+    print(f"✗ VALIDATION FAILED!")
     print(f"   NPL DATE: {NPLDATE}")
     print(f"   EXPECTED DATE: {RDATE}")
     print(f"\nSAP.PIBB.NPL.HP.SASDATA IS NOT DATED {RDATE}")
     print("ABORTING WITH EXIT CODE 77")
     sys.exit(77)
 
-print(f"âœ“ VALIDATION PASSED: NPL DATE ({NPLDATE}) MATCHES LOAN DATE ({RDATE})")
+print(f"✓ VALIDATION PASSED: NPL DATE ({NPLDATE}) MATCHES LOAN DATE ({RDATE})")
 
 # ============================================================================
 # EXTRACT FROM AQ, SP2 & IIS
 # ============================================================================
 print("\nPROCESSING NPL DATA...")
 
-AQ_FILE = NPL6_DIR / "AQ.parquet"
-SP2_FILE = NPL6_DIR / "SP2.parquet"
-IIS_FILE = NPL6_DIR / "IIS.parquet"
+AQ_FILE = NPL6_DIR / "AQ.sas7bdat"
+SP2_FILE = NPL6_DIR / "SP2.sas7bdat"
+IIS_FILE = NPL6_DIR / "IIS.sas7bdat"
 
-# SORT AND EXTRACT AQ
-con.execute(f"""
-    CREATE OR REPLACE TABLE AQ AS
-    SELECT *
-    FROM read_parquet('{AQ_FILE}')
-    ORDER BY ACCTNO, NOTENO
-""")
+# Check if files exist
+for file_path in [AQ_FILE, SP2_FILE, IIS_FILE]:
+    if not file_path.exists():
+        print(f"ERROR: FILE NOT FOUND: {file_path}")
+        sys.exit(1)
 
-# SORT AND EXTRACT SP2 (KEEP SPECIFIC COLUMNS)
-con.execute(f"""
-    CREATE OR REPLACE TABLE SP2 AS
-    SELECT 
-        ACCTNO,
-        NOTENO,
-        SP,
-        SPPL,
-        MARKETVL
-    FROM read_parquet('{SP2_FILE}')
-    ORDER BY ACCTNO, NOTENO
-""")
+# READ SAS FILES INTO DUCKDB TABLES
+print("Reading SAS files...")
 
-# SORT AND EXTRACT IIS (KEEP SPECIFIC COLUMNS)
-con.execute(f"""
-    CREATE OR REPLACE TABLE IIS AS
-    SELECT 
-        ACCTNO,
-        NOTENO,
-        TOTIIS
-    FROM read_parquet('{IIS_FILE}')
-    ORDER BY ACCTNO, NOTENO
-""")
+# Read AQ
+df_aq, meta_aq = pyreadstat.read_sas7bdat(str(AQ_FILE))
+con.register('AQ_DF', df_aq)
+con.execute("CREATE OR REPLACE TABLE AQ AS SELECT * FROM AQ_DF ORDER BY ACCTNO, NOTENO")
+
+# Read SP2 (keep specific columns)
+df_sp2, meta_sp2 = pyreadstat.read_sas7bdat(str(SP2_FILE))
+con.register('SP2_DF', df_sp2[['ACCTNO', 'NOTENO', 'SP', 'SPPL', 'MARKETVL']])
+con.execute("CREATE OR REPLACE TABLE SP2 AS SELECT * FROM SP2_DF ORDER BY ACCTNO, NOTENO")
+
+# Read IIS (keep specific columns)
+df_iis, meta_iis = pyreadstat.read_sas7bdat(str(IIS_FILE))
+con.register('IIS_DF', df_iis[['ACCTNO', 'NOTENO', 'TOTIIS']])
+con.execute("CREATE OR REPLACE TABLE IIS AS SELECT * FROM IIS_DF ORDER BY ACCTNO, NOTENO")
+
+print(f"AQ records: {len(df_aq):,}")
+print(f"SP2 records: {len(df_sp2):,}")
+print(f"IIS records: {len(df_iis):,}")
 
 # ============================================================================
 # MERGE AND PROCESS AQ DATA
@@ -255,16 +213,16 @@ with open(AQTXT_FILE, 'w') as f:
         
         # FORMAT NUMBERS AS 13.2 (11 digits + decimal + 2 decimals)
         def fmt_num(val):
-            if val is None:
+            if val is None or pd.isna(val):
                 val = 0.0
-            return f"{val:13.2f}"
+            return f"{float(val):13.2f}"
         
         # WRITE LINE WITH FIXED POSITIONS
         line = (
             f"{DATE_STR:>12}"                    # @001-012 RPTDATE
-            f" {BRANCH or '':>7}"                # @014-020 BRANCH
-            f"  {LOANDESC or '':>5}"             # @023-027 LOANDESC
-            f" {RISKCD or '':>2}"                # @029-030 RISKCD
+            f" {str(BRANCH or ''):>7}"           # @014-020 BRANCH
+            f"  {str(LOANDESC or ''):>5}"        # @023-027 LOANDESC
+            f" {str(RISKCD or ''):>2}"           # @029-030 RISKCD
             f"{fmt_num(NETBALP)}"                # @031-043 NETBALP
             f"{fmt_num(NEWNPL)}"                 # @044-056 NEWNPL
             f"{fmt_num(RECOVER)}"                # @057-069 RECOVER
