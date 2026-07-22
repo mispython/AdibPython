@@ -1,287 +1,46 @@
-# EIMREPOI_REPO_PROCESSOR.py
+EIMRESHI - HP Loan Summary & Detail Report (OPTIMIZED TEST MODE)
+============================================================
+Report Date: 21/07/2026
+Week: 4
+============================================================
 
-import duckdb
-import pyarrow as pa
-import pyarrow.parquet as pq
-import pyarrow.csv as csv
-from pathlib import Path
-import os
-from datetime import datetime, timedelta
-import pyreadstat
+Reading loan data from SAS files...
+  Reading loantemp.sas7bdat (limited rows)...
+  LOANTEMP after filtering: 0 rows
+  Unique accounts from LOANTEMP: 0
+  Reading lnnote.sas7bdat (limited rows)...
+  LNNOTE after filtering: 0 rows
+  Merging data...
+  HP Loans after merge: 0 accounts
 
-def main():
-    # Configuration using pathlib
-    base_path = Path(".")
-    loan_path = base_path / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI"
-    arrear_path = base_path / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI"
-    output_path = base_path / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOI"
-    
-    # Create output directory if it doesn't exist
-    output_path.mkdir(exist_ok=True)
-    
-    # Connect to DuckDB
-    conn = duckdb.connect()
-    
-    # Step 1: Calculate REPTDATE using current date minus 1 day
-    reptdate = datetime.now() - timedelta(days=1)
-    day = reptdate.day
-    month = reptdate.month
-    year = reptdate.year
-    
-    # Implement SELECT(DAY(REPTDATE)) logic
-    if day == 8:
-        sdd = 1
-        wk = '1'
-        wk1 = '4'
-    elif day == 15:
-        sdd = 9
-        wk = '2'
-        wk1 = '1'
-    elif day == 22:
-        sdd = 16
-        wk = '3'
-        wk1 = '2'
-    else:
-        sdd = 23
-        wk = '4'
-        wk1 = '3'
-    
-    # Calculate MM1
-    if wk == '1':
-        mm1 = month - 1
-        if mm1 == 0:
-            mm1 = 12
-    else:
-        mm1 = month
-    
-    # Calculate SDATE
-    sdate = datetime(year, month, sdd)
-    
-    # Set macro variables equivalent
-    nowk = wk
-    nowk1 = wk1
-    reptmon = f"{month:02d}"
-    reptmon1 = f"{mm1:02d}"
-    reperyear = reptdate.strftime('%Y')
-    reptday = f"{day:02d}"
-    rdate = reptdate.strftime('%d%m%y')
-    sdate_str = sdate.strftime('%d%m%y')
-    
-    print(f"Processing date: {reptdate}")
-    print(f"Week: {nowk}, Previous Week: {nowk1}")
-    print(f"Month: {reptmon}, Previous Month: {reptmon1}")
-    print(f"RDate: {rdate}, SDate: {sdate_str}")
-    
-    # Step 2: Read LNNOTE.sas7bdat with pyreadstat
-    lnnote_file = loan_path / "lnnote.sas7bdat"
-    lnnote_df, lnnote_meta = pyreadstat.read_sas7bdat(str(lnnote_file))
-    print(f"LNNOTE records before filtering: {len(lnnote_df)}")
-    
-    # Convert column names to lowercase for consistency
-    lnnote_df.columns = lnnote_df.columns.str.lower()
-    
-    # Note: &HP macro variable would need to be defined - using common values as example
-    hp_values = ['983', '993', '984', '994']  # Example HP loan types
-    
-    # Filter LNNOTE data
-    lnnote_filtered = lnnote_df[
-        (lnnote_df['loantype'].astype(str).isin(hp_values)) &
-        (lnnote_df['balance'] > 0) &
-        (~lnnote_df['borstat'].isin(['F', 'I', 'R']))
-    ]
-    
-    print(f"LNNOTE records after filtering: {len(lnnote_filtered)}")
-    
-    # Step 3: Read NAME8.sas7bdat with pyreadstat
-    name8_file = loan_path / "name8.sas7bdat"
-    name8_df, name8_meta = pyreadstat.read_sas7bdat(str(name8_file))
-    name8_df.columns = name8_df.columns.str.lower()
-    print(f"NAME8 records: {len(name8_df)}")
-    
-    # Step 4: Read ARREAR data from LOANTEMP.sas7bdat
-    arrear_file = arrear_path / "loantemp.sas7bdat"
-    arrear_df, arrear_meta = pyreadstat.read_sas7bdat(str(arrear_file))
-    arrear_df.columns = arrear_df.columns.str.lower()
-    print(f"ARREAR records: {len(arrear_df)}")
-    
-    # Step 5: Merge datasets using DuckDB for efficient joining
-    # Register DataFrames with DuckDB
-    conn.register('lnnote_filtered', lnnote_filtered)
-    conn.register('name8_df', name8_df)
-    conn.register('arrear_df', arrear_df)
-    
-    merge_query = f"""
-    WITH merged_data AS (
-        SELECT 
-            COALESCE(l.acctno, n.acctno, a.acctno) as acctno,
-            l.loantype,
-            l.ntbrch,
-            l.colldesc,
-            l.collyear,
-            n.linethre as engine,
-            n.linefour as chassis,
-            a.arrear
-        FROM lnnote_filtered l
-        LEFT JOIN name8_df n ON l.acctno = n.acctno
-        LEFT JOIN arrear_df a ON l.acctno = a.acctno
-    )
-    SELECT * FROM merged_data
-    """
-    
-    repo_df = conn.execute(merge_query).arrow()
-    print(f"Merged REPO records: {len(repo_df)}")
-    
-    # Step 6: Process REPO data - add derived fields
-    # This requires Python processing for string operations
-    repo_records = repo_df.to_pylist()
-    processed_records = []
-    
-    for record in repo_records:
-        # Extract BRABBR and CAC (would need lookup tables - using NTBRCH as placeholder)
-        brabbr = str(record['ntbrch'])[:3] if record['ntbrch'] else "000"
-        cac = f"BRANCH_{record['ntbrch']}" if record['ntbrch'] else "UNKNOWN"
-        
-        # Extract vehicle details from COLLDESC
-        coll_desc = record.get('colldesc', '')
-        if coll_desc is None:
-            coll_desc = ''
-        
-        make = str(coll_desc)[:16] if len(str(coll_desc)) >= 16 else str(coll_desc).ljust(16)
-        model = str(coll_desc)[16:37] if len(str(coll_desc)) >= 37 else ""
-        regno = str(coll_desc)[39:52] if len(str(coll_desc)) >= 52 else ""
-        
-        # Handle None values
-        engine = record.get('engine', '') or ''
-        chassis = record.get('chassis', '') or ''
-        collyear = record.get('collyear', '') or ''
-        arrear = record.get('arrear', 0) or 0
-        
-        processed_record = {
-            'acctno': record['acctno'],
-            'loantype': record['loantype'],
-            'ntbrch': record['ntbrch'],
-            'brabbr': brabbr,
-            'cac': cac,
-            'make': make,
-            'model': model,
-            'regno': regno,
-            'engine': engine,
-            'chassis': chassis,
-            'collyear': collyear,
-            'arrear': arrear
-        }
-        processed_records.append(processed_record)
-    
-    repo_processed_df = pa.Table.from_pylist(processed_records)
-    
-    # Step 7: Split into REPO and REPO1 based on conditions
-    repo_filtered_records = []
-    repo1_filtered_records = []
-    
-    for record in processed_records:
-        if record['arrear'] >= 10:
-            repo_filtered_records.append(record)
-            # Convert to int for comparison (handle potential string values)
-            loantype_val = record['loantype']
-            if loantype_val in [983, 993] or str(loantype_val) in ['983', '993']:
-                repo1_filtered_records.append(record)
-    
-    repo_final_df = pa.Table.from_pylist(repo_filtered_records)
-    repo1_final_df = pa.Table.from_pylist(repo1_filtered_records)
-    
-    print(f"REPO records (ARREAR >= 10): {len(repo_final_df)}")
-    print(f"REPO1 records (LOANTYPE 983,993): {len(repo1_final_df)}")
-    
-    # Step 8: Sort by REGNO
-    if len(repo_final_df) > 0:
-        conn.register('repo_final_df', repo_final_df)
-        repo_sorted_query = """
-        SELECT * FROM repo_final_df 
-        ORDER BY regno
-        """
-        repo_final_df = conn.execute(repo_sorted_query).arrow()
-    
-    if len(repo1_final_df) > 0:
-        conn.register('repo1_final_df', repo1_final_df)
-        repo1_sorted_query = """
-        SELECT * FROM repo1_final_df 
-        ORDER BY regno
-        """
-        repo1_final_df = conn.execute(repo1_sorted_query).arrow()
-    
-    # Step 9: Create fixed-width text output for REPO
-    repotxt_file = output_path / "REPOTXT.txt"
-    with open(repotxt_file, 'w') as f:
-        # Write header for first record
-        if len(repo_final_df) > 0:
-            f.write(f"{rdate}-REPOSSESSION LISTING\n")
-        
-        # Write data records
-        for i, record in enumerate(repo_final_df.to_pylist()):
-            line = (f"{record['brabbr']:3}"
-                   f"{record['cac']:20}"
-                   f"{record['regno']:13}"
-                   f"{record['make']:16}"
-                   f"{record['model']:21}"
-                   f"{record['engine']:40}"
-                   f"{record['chassis']:40}"
-                   f"{str(record['collyear'])[:4]:4}")
-            f.write(line + '\n')
-    
-    print(f"Created REPOTXT file: {repotxt_file}")
-    
-    # Step 10: Create fixed-width text output for REPO1
-    repotxt1_file = output_path / "REPOTXT1.txt"
-    with open(repotxt1_file, 'w') as f:
-        # Write header for first record
-        if len(repo1_final_df) > 0:
-            f.write(f"{rdate}-REPOSSESSION LISTING (983,993)\n")
-        
-        # Write data records
-        for i, record in enumerate(repo1_final_df.to_pylist()):
-            line = (f"{record['brabbr']:3}"
-                   f"{record['cac']:20}"
-                   f"{record['regno']:13}"
-                   f"{record['make']:16}"
-                   f"{record['model']:21}"
-                   f"{record['engine']:40}"
-                   f"{record['chassis']:40}"
-                   f"{str(record['collyear'])[:4]:4}")
-            f.write(line + '\n')
-    
-    print(f"Created REPOTXT1 file: {repotxt1_file}")
-    
-    # Step 11: Also save as Parquet and CSV for reference
-    if len(repo_final_df) > 0:
-        pq.write_table(repo_final_df, output_path / "REPO.parquet")
-        csv.write_csv(repo_final_df, output_path / "REPO.csv")
-    
-    if len(repo1_final_df) > 0:
-        pq.write_table(repo1_final_df, output_path / "REPO1.parquet")
-        csv.write_csv(repo1_final_df, output_path / "REPO1.csv")
-    
-    # Print summary statistics
-    print(f"\nProcessing completed successfully!")
-    print(f"Summary:")
-    print(f"  Total LNNOTE records: {len(lnnote_filtered)}")
-    print(f"  REPO records (ARREAR >= 10): {len(repo_final_df)}")
-    print(f"  REPO1 records (983,993): {len(repo1_final_df)}")
-    
-    # Loan type distribution
-    if len(repo_final_df) > 0:
-        loantype_summary = {}
-        for record in repo_final_df.to_pylist():
-            lt = record['loantype']
-            loantype_summary[lt] = loantype_summary.get(lt, 0) + 1
- 
-        print(f"\nLoan type distribution in REPO:")
-        for lt, count in sorted(loantype_summary.items()):
-            print(f"  {lt}: {count} records")
-    
-    conn.close()
+Processing HP loans...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHI.py:208: DeprecationWarning: the `default` parameter for `replace` is deprecated. Use `replace_strict` instead to set a default while replacing values.
+(Deprecated in version 1.0.0)
+  pl.col('STATE').cast(pl.Utf8).replace(STATE_MAP, default='OTHERS').alias('STATENM'),
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHI.py:217: DeprecationWarning: the `default` parameter for `replace` is deprecated. Use `replace_strict` instead to set a default while replacing values.
+(Deprecated in version 1.0.0)
+  pl.col('CENSUS9').str.slice(0, 2).str.strip_chars()
+  Processed: 0 HP loans
 
-if __name__ == "__main__":
-    main()
+Creating account groups...
+  HPLOAN1 (All): 0
+  HPLOAN2 (NPL): 0
+  HPLOAN3 (Restructured): 0
+  HPLOAN4 (Restructured NPL): 0
 
+Generating summary reports...
+  Generated 0 summary reports
 
-for testing purposes, limit the rows to 1000 since the lnnote got huge dataset and taking long time to test.
+Generating detail report...
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHI.py", line 558, in <module>
+    df_detail = df_hploan2.select([
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10148, in select
+    self.lazy()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
+    return wrap_df(ldf.collect(engine, callback))
+polars.exceptions.ColumnNotFoundError: unable to find column "BRABBR"; valid columns: ["ACCTNO", "NAME", "TAXNO", "ORGTYPE", "GUAREND", "BANKNO", "APPCODE", "ACCBRCH", "CUSTCODE", "PURPOSE", "FOREIGN", "BKRPTIND", "NOTENO", "REVERSED", "LOANTYPE", "NTBRCH", "PENDBRH", "ISSUEDT", "NOTEMAT", "ASSMDATE", "LASTTRAN", "LSTTRNCD", "CURBAL", "INTAMT", "PRINBNP", "APPVALUE", "NOTETERM", "COLLDESC", "FLAG3", "SYNDIND", "FLAG5", "MAILING_ADD_IND", "DLIVRYDT", "COMMNO", "CORPCODE", "COSTCTR", "PCOSTCTR", "SECTOR", "CENSUS", "BILLTYPE", "GRANTDT", "PAIDIND", "ORGBAL", "NETPROC", "FEEDUE", "INTRATE", "SPREAD", "NTINT", "INTMAINT", "REBATE", "INTEARN", "ACCRUAL", "RISKRATE", "SECURE", "LIABCODE", "FLAG1", "MORTGIND", "REFINANC", "SBA", "LOANSTAT", "NONACCR", "DEALERNO", "MATUREDT", "BORSTAT", "MARKETVL", "COLLMAKE", "EARNTERM", "USURYIDX", "STATE", "INTEARN2", "INTEARN3", "INTEARN4", "PAYAMT", "PAYFREQ", "FEETOTAL", "FEETOT2", "FEEAMTO", "FEEAMT2", "FEEAMT3", "NXDUEDT", "BILDUE", "BILTOT", "BILPAY", "BILPRIN", "HSTOTAMT", "PAYTYPE", "HSTOTPAY", "DISPYIND", "FEEAMT4", "REBIND", "APPRDATE", "POSTNTRN", "LSTTRNAM", "INTBNP", "NTAPR", "ORIGRATE", "VINNO", "RESTIND", "TOTPDEOP", "USER2", "USER3", "USER4", "POSTCODE", "INTPDYTD", "ACCRUYTD", "ACCRUEOP", "BIRTHDT", "NTINDEX", "MTDINT", "SCORE1", "REBATEI", "NUM_PAY_BIL_INSTL", "ACCTYIND", "ACCOSTCT", "INTINYTD", "BILLCNT", "PREVBRNO", "SCORE2", "HSTPRIN", "CRISPURP", "USER1", "ACCTPBRH", "HSTINT", "PAIDOFF", "FEEDUEMS", "NFEEAMT5", "NFEEAMT6", "NFEEAMT7", "NOOFPAY", "NDHISSDT", "NDPAYIND", "NDHEXPDT", "ROPAYIND", "PAIDTODT", "FEEYTD", "FEEPDYTD", "RSRVTERM", "BILPDYTD", "FEEYTDX", "FEPDYTDX", "FEEAMT8", "FEEAMT9", "MINIFEE", "FEEAMT13", "APPLDATE", "PZIPCODE", "FEEAMT10", "FEEAMT11", "FEEAMT12", "FEEAMT14", "FEEAMT15", "FEEAMT16", "FEEEARN1", "FEEEARN2", "COLLYEAR", "DISBIND1", "PRINPAID", "INTPAID", "HTOTAMT2", "HTOTPAY2", "PRINYTD", "OSTDAMT", "PAYNUM", "RSRVREBI", "TERMIDAT", "TMLATE15", "TMLATE30", "TMLATE60", "TMLATE90", "BONUSANO", "DELQCD", "FEEPLAN", "FEERATE", "WORDTYP", "HISPTDT", "STAFFNO", "PAYEFFDT","AANUMBR", "APPORMT", "ECSRRSRV", "COSTFUND", "POFFICER", "NPLCRR", "CUSTCDX", "FORM2", "FORM1", "STATUSDT", "INTBUYPD", "MODELDES", "YTDEARNS", "ESCRACCT", "RESTBALC", "INTRATE2", "RATELMT2", "PRMOFFHP", "POINTAMT", "CEILINGO", "CEILINGU", "BILDUE1", "MAILCODE", "NXBILDT", "PAYIND", "SITYPE", "SIACCTNO", "OLDUNPAID", "VARSTDTE", "USER5", "SENDNBL", "FRELEAS", "USMARGIN", "USEDIT", "FEECOMBIND", "CURCODE", "STOPDEBIT", "TAXEQIND", "SM_STATUS", "SPA_AMT", "CASHPRICE", "REACCRUAL", "LATENOTICE", "GUARNOTICE", "INTBASIS", "MEMOACC", "EXCESSPAY", "BILLEADDAY", "DEATHDATE", "INTSTDTE", "AUTNACCR", "CFINDEX", "EXRATIO", "CONTRTYPE", "BILDUEMIG", "NPLCRRBPA", "FDACCTNO_", "FDCERTNO", "FCLOSUREDT", "RRCYCLE", "VB", "CPNSTDTE", "INSOLVENCY_IND", "CURRILDTE", "FIRSILDTE", "NUMCPNS", "RSN", "PTMNATE", "OLDRR", "EARLY_SETTLE_FEE_CHARGE_FLG", "ACCTREVDT", "MNIAPLMT", "MNIAPDT", "ABM_HL", "IA_LRU", "COMMNO_OLD", "TIMES_RENEWED", "STAFF_FREE_INT_LOAN_AMT", "MARKED_PAYMENT_IND", "CCRIS_INSTLAMT", "NUM_PAY_BIL_INT", "NURS_TAG", "NUR_STARTDT", "NURS_TAGDT", "NURS_ENDDT", "NURS_COUNTER", "WRIOFF_DT", "WRIOFF_AMT", "CUM_WRIOFF", "RECOVER_COST", "ASCORE_COMM", "REPOSDTE", "VALUEDTE", "DISPOSED_AMT", "DSR", "REPAY_SOURCE", "REPAY_TYPE_CD", "MTD_REPAID_AMT", "MTD_TAWIDH_AMT", "MTD_GHARAMAH_AMT", "INDUSTRIAL_SECTOR_CD", "PROMPT_PAY_TRACKER", "MAN_REV_RATE", "MAN_REV_DATE", "SYS_REV_RATE", "SYS_REV_DATE", "REFINANC_LN", "OLD_FI", "OLD_MACC_NO", "OLD_SUBACC_NO", "TIA_TAG_DATE", "TIA_UTAG_DATE", "REPO_ORDER_ISSUE_DT", "NUM_REPO_ORDER_ISSUE", "COURT_ORDER_APPLY_DT", "COURT_ORDER_OBTAIN_DT", "AUTO_REPRICE_DIFF_INSTL_AMT", "RISK_GRADE_CLASS", "REPAY_PROPOSAL_CD", "LTST_MGB_SCORE", "SCH_REPAY_TERM", "PCT_INDEX_INTRATE", "REMAIN_TERM_MATURITY", "BILLING_ADD_IND", "PROP_ADD_IND", "FLOOR_RT_UNDER", "FLOOR_RT_OVER", "STMT_GEN_IND", "LMO_TAG", "LMO_MAINT_DT", "LMO_START_DT", "LMO_END_DT", "AKPK_STATUS", "DIGITAL_RR_STATUS_CD", "DRF_DATE", "MORA_BENCHMARK_AMT", "TAKAFUL_AMT", "TAKAFUL_OPERAT", "TAKAFUL_COLLECT_ACCTNO", "TFA_NURS_TAG", "TFA_NURS_TAG_DT", "TFA_NURS_START_DT", "TFA_NURS_END_DT", "TFA_NURS_COUNTER", "TFA_DIG_STATUS_CD", "TFA_DIG_STATUS_DT", "REPAY_PROPOSAL_DT", "MANUAL_RR_TAG", "MANUAL_RR_DT", "AUTO_EXT_TAG", "AUTO_EXT_TAG_DT", "AUTO_REPRICE_INSTL_AMT", "BULLET_REPAY_IND", "BALLOON_REPAY_IND", "PROP_DEVELOP_FIN_IND", "DIA_PAST01_MTH", "DIA_PAST02_MTH", "DIA_PAST03_MTH", "DIA_PAST04_MTH", "DIA_PAST05_MTH", "DIA_PAST06_MTH", "DIA_PAST07_MTH", "DIA_PAST08_MTH", "DIA_PAST09_MTH", "DIA_PAST10_MTH", "DIA_PAST11_MTH", "DIA_PAST12_MTH", "DIA_PAST13_MTH", "DIA_PAST14_MTH", "DIA_PAST15_MTH", "DIA_PAST16_MTH", "DIA_PAST17_MTH", "DIA_PAST18_MTH", "DIA_PAST19_MTH", "DIA_PAST20_MTH", "DIA_PAST21_MTH", "DIA_PAST22_MTH", "DIA_PAST23_MTH", "DIA_PAST24_MTH", "ORIG_RESTIND", "RESTIND_END_DT", "COM_FEE_NOTICE_IND", "NUM_MORA", "AKPK_RA_TAG", "AKPK_RA_TAG_DT", "AKPK_RA_DIG_STATUS_CD", "AKPK_RA_DIG_STATUS_DT", "AKPK_RA_START_DT", "AKPK_RA_END_DT", "AKPK_RA_ORIG_SPREAD", "AKPK_RA_DLY_INT_ACCRUAL", "AKPK_RA_MTD_INT_ACCRUAL", "AKPK_RA_MTH_INT_WAIVER_AMT", "AKPK_RA_CUMM_INT_WAIVER_AMT", "AKPK_RA_MTH_INT_CAP_AMT", "AKPK_RA_CUMM_INT_CAP_AMT", "AKPK_RA_ORIG_CEILING_RT", "TRA_RR_IND", "INDEX_PRICING", "NUM_RR", "DAYARR_MORA", "REPAY_MODE", "RR_EREQUEST_NUM", "RR_TYPE", "RR_APPR_DATE", "HI_TAG", "HI_TAG_DT", "HI_DIG_STATUS_CD", "HI_DIG_STATUS_DT", "REPO_ORDER_EXPIRY_DT", "FLOOD_MO_TAG", "FLOOD_MO_DT", "IMPAIRED_HP_TAG", "ASCORE_PERM", "ASCORE_LTST", "LEGAL_NOTICE_INSTRUCT_DT", "LEGAL_NOTICE_ISSUE_DT", "PARAS_TAG", "PARAS_TAG_DT", "JUDGE_AMT", "JUDGE_DT", "JUDGE_MAINT_DT", "PRE_BKRUPT_NOTICE_DT", "COURT_ORDER_PERPETUAL_IND", "HP_STAGE_TRSF_IND", "CUMM_PAID_BILL_AMT", "CUMM_PAID_BILL_PCT", "AKPK_MATRIX_TYPE", "AKPK_MATRIX_DATE", "DEVIATION_CD", "INT_ADVICE_IND", "FLOOD_MO_PACKAGE_CD", "FDB_TAG", "FDB_TAG_DT", "FDB_SCORING_DT", "MARKED_PAYMENT_AMT", "E_INVOICE_IND", "LEGAL_MATURITY_DT", "CLIMATE_PRIN_TAXONOMY_CLASS", "RR_IL_RECLASS_DT", "CLIMATE_MITIGATE_GP1_FLG", "CLIMATE_ADAPT_GP2_FLG", "CLIMATE_ENVIRONMT_GP3_FLG", "CLIMATE_TRANSITION_GP4_FLG", "CLIMATE_PROHIBIT_GP5_FLG", "WOS_RECEIVED_DT", "WOS_SETTLED_DT", "WOS_TAG", "COURT_ORDER_UPDATE_DT", "FRAUD_TAG", "FRAUD_TAG_DT", "SOURCE_INCOME_CURRENCY_CD", "WRIOFF_CLOSE_FILE_TAG", "VEHI_MAKE_CATEGORY", "INT_JAN_TO_JUN_AMT", "INT_JUL_TO_DEC_AMT", "RR_UNTAG_REPAY_CNT", "RR_UNTAG_DATE", "AGING_FAST_TRACKER", "EARMARK_NOTICE_DT", "EARMARK_AMT", "MULTI_CURRENCY_TAG", "GOODWILL_IND", "GOODWILL_CURR_RATE", "GOODWILL_CURR_AMT", "RRSTG1", "TRA_EFF_DT", "DIGITAL_RR_STATUS_DT", "LMOSTDATE", "LMOENDDATE", "TRA_RR_ACCEPT_DT", "RR_APPL_DATE", "WRIOFF_CLOSE_FILE_TAG_DT", "BANK_EQUITY_RATIO", "FDACCTNO", "NACOSPADT", "LOCK_IN_END_DT", "SCHBIL_INSTL_DT", "SCHBIL_INT_DT", "LASTBIL_INSTL_DT", "LASTBIL_INT_DT", "FDB", "CP", "SM_DATE", "STAFF_FREE_INT_IND", "OMNIBUS_FACILITY_IND", "INTPYTD1", "CUSTCDR", "DNBFISME", "SYNRATIO", "RESTRUCT", "FEEAMTA", "FEEAMTB", "FEEAMTC", "CJFEE", "INFEE", "DAYARR_MO", "MO_INSTL_ARR", "FEEAMT", "MNIAPDTE", "NXTBIL", "BLDATE", "DLVDATE", "BALANCE", "FEEAMT5", "NFEEAMT8", "NFEEAM10", "NFEEAM11", "NFEEAM12", "CURRATE", "USLIMIT", "OLDNOTEAPPVALUE", "OLDNOTELASTTRAN", "OLDNOTEBLDATE", "OLDNOTEISSUEDT", "ISSXDTE", "OLDNOTEDAYARR", "MO_TAG", "MOSTDTE", "MOENDDTE", "MO_MAIN_DT", "WRITE_DOWN_BAL", "ORICODE", "SPOTRATE","CAP", "NAME_right", "LSTTRNCD_right", "CURBAL_right", "COLLDESC_right", "CENSUS_right", "ORGBAL_right", "FEEDUE_right", "LOANSTAT_right", "BORSTAT_right", "PAYAMT_right", "BILDUE_right", "BILTOT_right", "BILPAY_right", "LSTTRNAM_right", "DELQCD_right", "USER5_right", "BLDATE_right", "BALANCE_right", "PRODUCT", "BRANCH", "ISSDTE", "NOISTLPD", "LASTRAN", "MATURDT", "THISDATE", "CHECKDT", "DAYDIFF", "ARREAR2", "ARREAR", "ISTLPD", "CRRISK", "MARGINF", "CENSUS9", "MGINGRP", "TERMGRP", "STATENM", "NATIONAL", "MAKE", "NEWSEC", "FINGRP", "SOURCE", "CARS", "GOODS", "MTHARR"]
