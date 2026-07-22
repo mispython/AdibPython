@@ -1,886 +1,588 @@
-OPTIONS YEARCUTOFF=1950 NOCENTER;
-%INC PGM(PBBELF);
-%INC PGM(PBBLNFMT);
-
-DATA REPTDATE;
-  SET LOAN.REPTDATE;
-  SELECT(DAY(REPTDATE));
-    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
-    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
-    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
-    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3'; END;
-  END;
-  MM = MONTH(REPTDATE);
-  IF WK = '1' THEN DO;
-     MM1 = MM - 1;
-     IF MM1 = 0 THEN MM1 = 12;
-  END;
-  ELSE MM1 = MM;
-  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
-  CALL SYMPUT('NOWK',PUT(WK,$1.));
-  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
-  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
-  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
-RUN;
-*;
-
-PROC SORT DATA=CCDTEMP.LOANTEMP OUT=HPLOAN;
-     WHERE PRODUCT IN &HPD AND BALANCE GT 0;
-     BY ACCTNO NOTENO;
-
-PROC SORT DATA=LOAN.LNNOTE OUT=LNNOTE
-     (KEEP=ACCTNO NOTENO LOANTYPE NETPROC APPVALUE NOTETERM STATE
-           DEALERNO SCORE2 ORGBAL CURBAL PAYAMT ISSUEDT);
-     WHERE LOANTYPE IN &HPD AND BALANCE GT 0;
-     BY ACCTNO NOTENO;
-
-DATA HPLOAN;
-     FORMAT MARGINF 3. MGINGRP $15. STATENM $15. TERMGRP $11.
-            FINGRP $20. MAKE $15. CARS $15. GOODS $10.
-            NEWSEC $10. SOURCE $11. ;
-     MERGE LNNOTE(IN=A) HPLOAN(IN=B);
-     BY ACCTNO NOTENO;
-     IF A AND B;
-
-     ISTLPD  = (ORGBAL-CURBAL)/PAYAMT;
-     ISSDTE  =INPUT(SUBSTR(PUT(ISSUEDT,Z11.),1,8),MMDDYY8.);
-     CRRISK = SUBSTR(SCORE2,1,1);
-     *** MARGIN OF FINANCE ***;
-     IF APPVALUE > 0 THEN
-        MARGINF = ROUND(((NETPROC / APPVALUE) * 100),1);
-     ELSE MARGINF = 0;
-     IF (MARGINF < 70)        THEN MGINGRP = 'E. <70%';
-     ELSE IF (70=<MARGINF<80) THEN MGINGRP = 'D. 70 TO <80%';
-     ELSE IF (80=<MARGINF<85) THEN MGINGRP = 'C. 80 TO <85%';
-     ELSE IF (85=<MARGINF<89) THEN MGINGRP = 'B. 85 TO <89%';
-     ELSE                          MGINGRP = 'A. 89% & ABV';
-     *** LOAN TERM ***;
-     IF (NOTETERM<=36)         THEN TERMGRP = 'A. <=3 YRS';
-     ELSE IF (36<NOTETERM<=48) THEN TERMGRP = 'B. 4 YRS';
-     ELSE IF (48<NOTETERM<=60) THEN TERMGRP = 'C. 5 YRS';
-     ELSE IF (60<NOTETERM<=72) THEN TERMGRP = 'D. 6 YRS';
-     ELSE IF (72<NOTETERM<=84) THEN TERMGRP = 'E. 7 YRS';
-     ELSE IF (84<NOTETERM<=96) THEN TERMGRP = 'F. 8 YRS';
-     ELSE                           TERMGRP = 'G. 9 YRS';
-     *** STATE ***;
-     SELECT(STATE);
-        WHEN ('1')    STATENM = 'JOHORE';
-        WHEN ('2')    STATENM = 'KEDAH';
-        WHEN ('3')    STATENM = 'KELANTAN';
-        WHEN ('4')    STATENM = 'MALACCA';
-        WHEN ('5')    STATENM = 'N.SEMBILAN';
-        WHEN ('6')    STATENM = 'PAHANG';
-        WHEN ('7')    STATENM = 'PENANG';
-        WHEN ('8')    STATENM = 'PERAK';
-        WHEN ('9')    STATENM = 'PERLIS';
-        WHEN ('10')   STATENM = 'SABAH';
-        WHEN ('11')   STATENM = 'SARAWAK';
-        WHEN ('12')   STATENM = 'SELANGOR';
-        WHEN ('13')   STATENM = 'TRENGGANU';
-        WHEN ('14')   STATENM = 'W.PERSEKUTUAN';
-        WHEN ('15')   STATENM = 'LABUAN';
-        OTHERWISE     STATENM = 'OTHERS';
-     END;
-     IF STATENM IN ('SABAH','SARAWAK','LABUAN') THEN
-        NATIONAL = 'EAST MALAYSIA';
-     ELSE NATIONAL = 'WEST MALAYSIA';
-     *** MAKE OF VEHICLE ***;
-     CENSUS9 = SUBSTR(PUT(CENSUS,7.2),1,7);
-     SELECT(SUBSTR(CENSUS9,1,2));
-        WHEN (' 1')  MAKE = 'PROTON';
-        WHEN (' 2')  MAKE = 'PERODUA';
-        WHEN (' 3')  MAKE = 'TOYOTA';
-        WHEN (' 4')  MAKE = 'NISSAN';
-        WHEN (' 5')  MAKE = 'HONDA';
-        WHEN (' 6')  MAKE = 'ISUZU';
-        WHEN (' 7')  MAKE = 'DAIHATSU';
-        WHEN (' 8')  MAKE = 'MITSUBISHI';
-        WHEN (' 9')  MAKE = 'FORD';
-        WHEN ('10')  MAKE = 'MERCEDES BENZ';
-        WHEN ('11')  MAKE = 'VOLVO';
-        WHEN ('13')  MAKE = 'BMW';
-        OTHERWISE    MAKE = 'OTHERS';
-     END;
-     IF MAKE IN ('PROTON','PERODUA') THEN CARS = 'NATIONAL';
-     ELSE CARS = 'NON NATIONAL';
-     IF MAKE = 'OTHERS' THEN DO;
-        IF PRODUCT IN (128,700) THEN GOODS = 'SCHEDULE';
-        ELSE GOODS = 'UNSCHEDULE';
-     END;
-     SELECT(SUBSTR(CENSUS9,4,1));
-        WHEN ('1')  NEWSEC = 'NEW';
-        WHEN ('2')  NEWSEC = 'NEW';
-        OTHERWISE   NEWSEC = 'SECONDHAND';
-     END;
-     *** AMT FINANCE ***;
-     IF (NETPROC<=30000)             THEN FINGRP='A. RM30K & BELOW';
-     ELSE IF(30000<NETPROC<=50000)   THEN FINGRP='B. >RM30K TO 50K';
-     ELSE IF(50000<NETPROC<=100000)  THEN FINGRP='C. >RM50K TO 100K';
-     ELSE IF(100000<NETPROC<=250000) THEN FINGRP='D. >RM100K TO 250K';
-     ELSE                                 FINGRP='E. >RM250K';
-     *** SOURCE OF BUSINESS ***;
-     IF DEALERNO > 0 THEN SOURCE = 'DEALERS';
-     ELSE SOURCE = 'NON DEALERS';
-     *** MTH IN ARREARS ***;
-     IF      (DAYDIFF>729) THEN MTHARR = INT((DAYDIFF/365)*12);
-     ELSE IF (DAYDIFF>698) THEN MTHARR = 23;
-     ELSE IF (DAYDIFF>668) THEN MTHARR = 22;
-     ELSE IF (DAYDIFF>638) THEN MTHARR = 21;
-     ELSE IF (DAYDIFF>608) THEN MTHARR = 20;
-     ELSE IF (DAYDIFF>577) THEN MTHARR = 19;
-     ELSE IF (DAYDIFF>547) THEN MTHARR = 18;
-     ELSE IF (DAYDIFF>516) THEN MTHARR = 17;
-     ELSE IF (DAYDIFF>486) THEN MTHARR = 16;
-     ELSE IF (DAYDIFF>456) THEN MTHARR = 15;
-     ELSE IF (DAYDIFF>424) THEN MTHARR = 14;
-     ELSE IF (DAYDIFF>394) THEN MTHARR = 13;
-     ELSE IF (DAYDIFF>364) THEN MTHARR = 12;
-     ELSE IF (DAYDIFF>333) THEN MTHARR = 11;
-     ELSE IF (DAYDIFF>303) THEN MTHARR = 10;
-     ELSE IF (DAYDIFF>273) THEN MTHARR = 9;
-     ELSE IF (DAYDIFF>243) THEN MTHARR = 8;
-     ELSE IF (DAYDIFF>213) THEN MTHARR = 7;
-     ELSE IF (DAYDIFF>182) THEN MTHARR = 6;
-     ELSE IF (DAYDIFF>151) THEN MTHARR = 5;
-     ELSE IF (DAYDIFF>121) THEN MTHARR = 4;
-     ELSE IF (DAYDIFF>91)  THEN MTHARR = 3;
-     ELSE IF (DAYDIFF>61)  THEN MTHARR = 2;
-     ELSE IF (DAYDIFF>30)  THEN MTHARR = 1;
-     ELSE                       MTHARR = 0;
-
-     IF BORSTAT = 'F' THEN MTHARR = 999;
-     /* EXCLUDE THE FOLLOWINGS A/CS
-     IF LOANTYPE IN (981,982,983,991,992,993) &
-        BORSTAT='F' THEN MTHARR=0;
-     IF BORSTAT = 'W' THEN MTHARR = 0;
-     IF LOANTYPE IN (981,982,983,991,992,993) OR
-        BORSTAT EQ 'W' THEN MTHARR = 0; */
-     BRABBR = PUT(BRANCH,BRCHCD.);
-RUN;
-
-*** REPORT FORMAT ***;
-%MACRO PRNTITLE;
-    PUT @001 'TOTAL POSITION FOR HPD (CONV & AITAB) AS AT '"&RDATE" ;
-    PUT @001 "&RPTITLE" ;
-    PUT @001 "&RPTITLE1" ;
-    PUT @001 'REPORT ID : EIMRESHP' ;
-    PUT 'GROUP BY'     ';'
-        '<3MTHS NO'    ';'  '<3MTHS AMT'     ';'
-        '3-6MTHS NO'   ';'  '3-6MTHS AMT'    ';'
-        '6-12MTHS NO'  ';'  '6-12MTHS AMT'   ';'
-        '12-24MTHS NO' ';'  '12-24MTHS AMT'  ';'
-        '24-36MTHS NO' ';'  '24-36MTHS AMT'  ';'
-        '>36MTHS NO'   ';'  '>36MTHS AMT'    ';'
-        'DEFICIT NO'   ';'  'DEFICIT AMT'    ';'
-        'TOTAL NO'     ';'  'TOTAL AMT'      ';' ;
-
-    DO I = 1 TO 16;
-       GRDTOT(I) = 0;
-    END;
-%MEND;
-
-%MACRO ZEROGRP1;
-    DO I = 1 TO 16;
-       GP1TOT(I) = 0;
-    END;
-%MEND;
-
-%MACRO ZEROGRP2;
-    DO I = 1 TO 16;
-       GP2TOT(I) = 0;
-    END;
-%MEND;
-
-%MACRO ZEROGRP3;
-    DO I = 1 TO 16;
-       GP3TOT(I) = 0;
-    END;
-%MEND;
-
-%MACRO ZEROGRP4;
-    DO I = 1 TO 16;
-       GP4TOT(I) = 0;
-    END;
-%MEND;
-
-%MACRO PRNGRP1;
-    PUT GROUP1     ';'
-        GP1TOT1    ';'   GP1TOT9     ';'
-        GP1TOT2    ';'   GP1TOT10    ';'
-        GP1TOT3    ';'   GP1TOT11    ';'
-        GP1TOT4    ';'   GP1TOT12    ';'
-        GP1TOT5    ';'   GP1TOT13    ';'
-        GP1TOT6    ';'   GP1TOT14    ';'
-        GP1TOT7    ';'   GP1TOT15    ';'
-        GP1TOT8    ';'   GP1TOT16    ';'  ;
-%MEND;
-
-%MACRO PRNGRP2;
-    PUT GROUP2     ';'
-        GP2TOT1    ';'   GP2TOT9     ';'
-        GP2TOT2    ';'   GP2TOT10    ';'
-        GP2TOT3    ';'   GP2TOT11    ';'
-        GP2TOT4    ';'   GP2TOT12    ';'
-        GP2TOT5    ';'   GP2TOT13    ';'
-        GP2TOT6    ';'   GP2TOT14    ';'
-        GP2TOT7    ';'   GP2TOT15    ';'
-        GP2TOT8    ';'   GP2TOT16    ';'  ;
-%MEND;
-
-%MACRO PRNGRP3;
-    PUT GROUP3     ';'
-        GP3TOT1    ';'   GP3TOT9     ';'
-        GP3TOT2    ';'   GP3TOT10    ';'
-        GP3TOT3    ';'   GP3TOT11    ';'
-        GP3TOT4    ';'   GP3TOT12    ';'
-        GP3TOT5    ';'   GP3TOT13    ';'
-        GP3TOT6    ';'   GP3TOT14    ';'
-        GP3TOT7    ';'   GP3TOT15    ';'
-        GP3TOT8    ';'   GP3TOT16    ';'  ;
-%MEND;
-
-%MACRO PRNGRP4;
-    PUT GROUP4     ';'
-        GP4TOT1    ';'   GP4TOT9     ';'
-        GP4TOT2    ';'   GP4TOT10    ';'
-        GP4TOT3    ';'   GP4TOT11    ';'
-        GP4TOT4    ';'   GP4TOT12    ';'
-        GP4TOT5    ';'   GP4TOT13    ';'
-        GP4TOT6    ';'   GP4TOT14    ';'
-        GP4TOT7    ';'   GP4TOT15    ';'
-        GP4TOT8    ';'   GP4TOT16    ';'  ;
-%MEND;
-
-%MACRO CUMGRP1;
-   *** CUMMULATING ***;
-   IF MTHARR LT 3 THEN DO;
-      GP1TOT1 + 1;        GRDTOT1 + 1;
-      GP1TOT9 + BALANCE;  GRDTOT9 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 3 AND MTHARR LT 6) THEN DO;
-      GP1TOT2  + 1;        GRDTOT2  + 1;
-      GP1TOT10 + BALANCE;  GRDTOT10 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 6 AND MTHARR LT 12) THEN DO;
-      GP1TOT3  + 1;        GRDTOT3  + 1;
-      GP1TOT11 + BALANCE;  GRDTOT11 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 12 AND MTHARR LT 24) THEN DO;
-      GP1TOT4  + 1;        GRDTOT4  + 1;
-      GP1TOT12 + BALANCE;  GRDTOT12 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 24 AND MTHARR LT 36) THEN DO;
-      GP1TOT5  + 1;        GRDTOT5  + 1;
-      GP1TOT13 + BALANCE;  GRDTOT13 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 36) THEN DO;
-      GP1TOT6  + 1;        GRDTOT6  + 1;
-      GP1TOT14 + BALANCE;  GRDTOT14 + BALANCE;
-   END;
-   IF BORSTAT = 'F' THEN DO;
-      GP1TOT7  + 1;        GRDTOT7  + 1;
-      GP1TOT15 + BALANCE;  GRDTOT15 + BALANCE;
-   END;
-   GP1TOT8  + 1;        GRDTOT8 + 1;
-   GP1TOT16 + BALANCE;  GRDTOT16 + BALANCE;
-%MEND;
-
-%MACRO CUMGRP2;
-   *** CUMMULATING ***;
-   IF MTHARR LT 3 THEN DO;
-      GP2TOT1 + 1;     GP2TOT9 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 3 AND MTHARR LT 6) THEN DO;
-      GP2TOT2  + 1;    GP2TOT10 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 6 AND MTHARR LT 12) THEN DO;
-      GP2TOT3  + 1;    GP2TOT11 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 12 AND MTHARR LT 24) THEN DO;
-      GP2TOT4  + 1;    GP2TOT12 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 24 AND MTHARR LT 36) THEN DO;
-      GP2TOT5  + 1;    GP2TOT13 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 36) THEN DO;
-      GP2TOT6  + 1;    GP2TOT14 + BALANCE;
-   END;
-   IF BORSTAT = 'F' THEN DO;
-      GP2TOT7  + 1;    GP2TOT15 + BALANCE;
-   END;
-   GP2TOT8  + 1;    GP2TOT16 + BALANCE;
-%MEND;
-
-%MACRO CUMGRP3;
-   *** CUMMULATING NO OF A/C ***;
-   IF MTHARR LT 3 THEN DO;
-      GP3TOT1 + 1;     GP3TOT9 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 3 AND MTHARR LT 6) THEN DO;
-      GP3TOT2  + 1;    GP3TOT10 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 6 AND MTHARR LT 12) THEN DO;
-      GP3TOT3  + 1;    GP3TOT11 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 12 AND MTHARR LT 24) THEN DO;
-      GP3TOT4  + 1;    GP3TOT12 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 24 AND MTHARR LT 36) THEN DO;
-      GP3TOT5  + 1;    GP3TOT13 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 36) THEN DO;
-      GP3TOT6  + 1;    GP3TOT14 + BALANCE;
-   END;
-   IF BORSTAT = 'F' THEN DO;
-      GP3TOT7  + 1;    GP3TOT15 + BALANCE;
-   END;
-   GP3TOT8  + 1;    GP3TOT16 + BALANCE;
-%MEND;
-
-%MACRO CUMGRP4;
-   *** CUMMULATING NO OF A/C ***;
-   IF MTHARR LT 3 THEN DO;
-      GP4TOT1 + 1;     GP4TOT9 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 3 AND MTHARR LT 6) THEN DO;
-      GP4TOT2  + 1;    GP4TOT10 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 6 AND MTHARR LT 12) THEN DO;
-      GP4TOT3  + 1;    GP4TOT11 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 12 AND MTHARR LT 24) THEN DO;
-      GP4TOT4  + 1;    GP4TOT12 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 24 AND MTHARR LT 36) THEN DO;
-      GP4TOT5  + 1;    GP4TOT13 + BALANCE;
-   END;
-   ELSE IF (MTHARR GE 36) THEN DO;
-      GP4TOT6  + 1;    GP4TOT14 + BALANCE;
-   END;
-   IF BORSTAT = 'F' THEN DO;
-      GP4TOT7  + 1;    GP4TOT15 + BALANCE;
-   END;
-   GP4TOT8  + 1;    GP4TOT16 + BALANCE;
-%MEND;
-
-%MACRO PRNGRD;
-    PUT 'GRD TOTAL'   ';'
-        GRDTOT1    ';'   GRDTOT9     ';'
-        GRDTOT2    ';'   GRDTOT10    ';'
-        GRDTOT3    ';'   GRDTOT11    ';'
-        GRDTOT4    ';'   GRDTOT12    ';'
-        GRDTOT5    ';'   GRDTOT13    ';'
-        GRDTOT6    ';'   GRDTOT14    ';'
-        GRDTOT7    ';'   GRDTOT15    ';'
-        GRDTOT8    ';'   GRDTOT16    ';'  ;
-    PUT ' ';
-%MEND;
-
-%MACRO GENRPT1;
-   PROC SORT DATA=HP; BY GROUP1 GROUP2;
-   DATA _NULL_;
-      ARRAY GP1TOT{16} GP1TOT1-GP1TOT16;
-      ARRAY GP2TOT{16} GP2TOT1-GP2TOT16;
-      ARRAY GRDTOT{16} GRDTOT1-GRDTOT16;
-      SET HP END=LAST;
-      BY GROUP1 GROUP2;
-      FILE CCDTXT1 NOTITLES;
-      IF _N_ = 1 THEN DO;
-         %PRNTITLE;
-      END;
-      IF FIRST.GROUP1 THEN DO;
-         %ZEROGRP1;
-      END;
-      IF FIRST.GROUP2 THEN DO;
-         %ZEROGRP2;
-      END;
-
-      %CUMGRP1;
-      %CUMGRP2;
-
-      IF LAST.GROUP2 THEN DO;
-         %PRNGRP2;
-      END;
-      IF LAST.GROUP1 THEN DO;
-         %PRNGRP1;
-      END;
-      IF LAST = 1 THEN DO;
-         %PRNGRD;
-      END;
-   RETURN;
-%MEND;
-
-%MACRO GENRPT2;
-   PROC SORT DATA=HP; BY GROUP1 GROUP2 GROUP3;
-   DATA _NULL_;
-      ARRAY GP1TOT{16} GP1TOT1-GP1TOT16;
-      ARRAY GP2TOT{16} GP2TOT1-GP2TOT16;
-      ARRAY GP3TOT{16} GP3TOT1-GP3TOT16;
-      ARRAY GRDTOT{16} GRDTOT1-GRDTOT16;
-      SET HP END=LAST;
-      BY GROUP1 GROUP2 GROUP3;
-      FILE CCDTXT1 NOTITLES;
-      IF _N_ = 1 THEN DO;
-         %PRNTITLE;
-      END;
-      IF FIRST.GROUP1 THEN DO;
-         %ZEROGRP1;
-      END;
-      IF FIRST.GROUP2 THEN DO;
-         %ZEROGRP2;
-      END;
-      IF FIRST.GROUP3 THEN DO;
-         %ZEROGRP3;
-      END;
-
-      %CUMGRP1;
-      %CUMGRP2;
-      %CUMGRP3;
-
-      IF LAST.GROUP3 THEN DO;
-         %PRNGRP3;
-      END;
-      IF LAST.GROUP2 THEN DO;
-         %PRNGRP2;
-      END;
-      IF LAST.GROUP1 THEN DO;
-         %PRNGRP1;
-      END;
-      IF LAST = 1 THEN DO;
-         %PRNGRD;
-      END;
-   RETURN;
-%MEND;
-
-%MACRO GENRPT3;
-   PROC SORT DATA=HP; BY GROUP1 GROUP2 GROUP3 GROUP4;
-   DATA _NULL_;
-      ARRAY GP1TOT{16} GP1TOT1-GP1TOT16;
-      ARRAY GP2TOT{16} GP2TOT1-GP2TOT16;
-      ARRAY GP3TOT{16} GP3TOT1-GP3TOT16;
-      ARRAY GP4TOT{16} GP4TOT1-GP4TOT16;
-      ARRAY GRDTOT{16} GRDTOT1-GRDTOT16;
-      SET HP END=LAST;
-      BY GROUP1 GROUP2 GROUP3 GROUP4;
-      FILE CCDTXT1 NOTITLES;
-      IF _N_ = 1 THEN DO;
-         %PRNTITLE;
-      END;
-      IF FIRST.GROUP1 THEN DO;
-         %ZEROGRP1;
-      END;
-      IF FIRST.GROUP2 THEN DO;
-         %ZEROGRP2;
-      END;
-      IF FIRST.GROUP3 THEN DO;
-         %ZEROGRP3;
-      END;
-      IF FIRST.GROUP4 THEN DO;
-         %ZEROGRP4;
-      END;
-
-      %CUMGRP1;
-      %CUMGRP2;
-      %CUMGRP3;
-      %CUMGRP4;
-
-      IF LAST.GROUP4 THEN DO;
-         %PRNGRP4;
-      END;
-      IF LAST.GROUP3 THEN DO;
-         %PRNGRP3;
-      END;
-      IF LAST.GROUP2 THEN DO;
-         %PRNGRP2;
-      END;
-      IF LAST.GROUP1 THEN DO;
-         %PRNGRP1;
-      END;
-      IF LAST = 1 THEN DO;
-         %PRNGRD;
-      END;
-   RETURN;
-%MEND;
-
-*** GROUP OF RECORD ***;
-DATA HPLOAN1;
-     SET HPLOAN;
-RUN;
-DATA HPLOAN2;
-     SET HPLOAN;
-     IF (MTHARR GE 3 OR BORSTAT IN ('F','I','R')) ;
-RUN;
-DATA HPLOAN3;
-     SET HPLOAN;
-     IF NOTENO GE 98010;
-RUN;
-DATA HPLOAN4;
-     SET HPLOAN;
-     IF NOTENO GE 98010 AND
-        (MTHARR GE 3 OR BORSTAT IN ('F','I','R')) ;
-RUN;
-
-*** GENERATE SUMMARY REPORT ***;
-
-*** CREDIT RISK SCORE ***;
-DATA HP;
-     SET HPLOAN1;
-     GROUP1 = CRRISK;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','CREDIT RISK SCORE');
-     CALL SYMPUT('RPTITLE1','PRODUCT 128,130,380,381,700,705');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN2;
-     GROUP1 = CRRISK;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','CREDIT RISK SCORE');
-     CALL SYMPUT('RPTITLE1','NPL ACCOUNT');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN3;
-     GROUP1 = CRRISK;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','CREDIT RISK SCORE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE ACCOUNT');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN4;
-     GROUP1 = CRRISK;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','CREDIT RISK SCORE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE NPL ACCOUNT');
-RUN;
-%GENRPT1;
-
-*** SOURCE OF BUSINESS ***;
-DATA HP;
-     SET HPLOAN1;
-     GROUP1 = SOURCE;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','SOURCE OF BUSINESS');
-     CALL SYMPUT('RPTITLE1','PRODUCT 128,130,380,381,700,705');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN2;
-     GROUP1 = SOURCE;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','SOURCE OF BUSINESS');
-     CALL SYMPUT('RPTITLE1','NPL ACCOUNT');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN3;
-     GROUP1 = SOURCE;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','SOURCE OF BUSINESS');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE ACCOUNT');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN4;
-     GROUP1 = SOURCE;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','SOURCE OF BUSINESS');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE NPL ACCOUNT');
-RUN;
-%GENRPT1;
-
-*** MARGIN OF FINANCE ***;
-DATA HP;
-     SET HPLOAN1;
-     GROUP1 = MGINGRP;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','MARGIN OF FINANCE');
-     CALL SYMPUT('RPTITLE1','PRODUCT 128,130,380,381,700,705');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN2;
-     GROUP1 = MGINGRP;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','MARGIN OF FINANCE');
-     CALL SYMPUT('RPTITLE1','NPL ACCOUNT');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN3;
-     GROUP1 = MGINGRP;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','MARGIN OF FINANCE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE ACCOUNT');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN4;
-     GROUP1 = MGINGRP;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','MARGIN OF FINANCE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE NPL ACCOUNT');
-RUN;
-%GENRPT1;
-
-*** LOAN TERM ***;
-DATA HP;
-     SET HPLOAN1;
-     GROUP1 = TERMGRP;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','LOAN TERM');
-     CALL SYMPUT('RPTITLE1','PRODUCT 128,130,380,381,700,705');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN2;
-     GROUP1 = TERMGRP;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','LOAN TERM');
-     CALL SYMPUT('RPTITLE1','NPL ACCOUNT');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN3;
-     GROUP1 = TERMGRP;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','LOAN TERM');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE ACCOUNT');
-RUN;
-%GENRPT1;
-
-DATA HP;
-     SET HPLOAN4;
-     GROUP1 = TERMGRP;
-     GROUP2 = BRABBR;
-     CALL SYMPUT('RPTITLE','LOAN TERM');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE NPL ACCOUNT');
-RUN;
-%GENRPT1;
-
-*** AMT FINANCE ***;
-DATA HP;
-     SET HPLOAN1;
-     GROUP1 = NEWSEC;
-     GROUP2 = FINGRP;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','AMT FINANCE');
-     CALL SYMPUT('RPTITLE1','PRODUCT 128,130,380,381,700,705');
-RUN;
-%GENRPT2;
-
-DATA HP;
-     SET HPLOAN2;
-     GROUP1 = NEWSEC;
-     GROUP2 = FINGRP;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','AMT FINANCE');
-     CALL SYMPUT('RPTITLE1','NPL ACCOUNT');
-RUN;
-%GENRPT2;
-
-DATA HP;
-     SET HPLOAN3;
-     GROUP1 = NEWSEC;
-     GROUP2 = FINGRP;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','AMT FINANCE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE ACCOUNT');
-RUN;
-%GENRPT2;
-
-DATA HP;
-     SET HPLOAN4;
-     GROUP1 = NEWSEC;
-     GROUP2 = FINGRP;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','AMT FINANCE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE NPL ACCOUNT');
-RUN;
-%GENRPT2;
-
-*** BY STATE ***;
-DATA HP;
-     SET HPLOAN1;
-     GROUP1 = NATIONAL;
-     GROUP2 = STATENM;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY STATE');
-     CALL SYMPUT('RPTITLE1','PRODUCT 128,130,380,381,700,705');
-RUN;
-%GENRPT2;
-
-DATA HP;
-     SET HPLOAN2;
-     GROUP1 = NATIONAL;
-     GROUP2 = STATENM;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY STATE');
-     CALL SYMPUT('RPTITLE1','NPL ACCOUNT');
-RUN;
-%GENRPT2;
-
-DATA HP;
-     SET HPLOAN3;
-     GROUP1 = NATIONAL;
-     GROUP2 = STATENM;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY STATE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE ACCOUNT');
-RUN;
-%GENRPT2;
-
-DATA HP;
-     SET HPLOAN4;
-     GROUP1 = NATIONAL;
-     GROUP2 = STATENM;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY STATE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE NPL ACCOUNT');
-RUN;
-%GENRPT2;
-
-*** BY MAKE OF VEHICLE ***;
-DATA HP;
-     SET HPLOAN1;
-     GROUP1 = NEWSEC;
-     GROUP2 = CARS;
-     GROUP3 = MAKE;
-     GROUP4 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY MAKE OF VEHICLE');
-     CALL SYMPUT('RPTITLE1','PRODUCT 128,130,380,381,700,705');
-RUN;
-%GENRPT3;
-
-DATA HP;
-     SET HPLOAN2;
-     GROUP1 = NEWSEC;
-     GROUP2 = CARS;
-     GROUP3 = MAKE;
-     GROUP4 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY MAKE OF VEHICLE');
-     CALL SYMPUT('RPTITLE1','NPL ACCOUNT');
-RUN;
-%GENRPT3;
-
-DATA HP;
-     SET HPLOAN3;
-     GROUP1 = NEWSEC;
-     GROUP2 = CARS;
-     GROUP3 = MAKE;
-     GROUP4 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY MAKE OF VEHICLE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE ACCOUNT');
-RUN;
-%GENRPT3;
-
-DATA HP;
-     SET HPLOAN4;
-     GROUP1 = NEWSEC;
-     GROUP2 = CARS;
-     GROUP3 = MAKE;
-     GROUP4 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY MAKE OF VEHICLE');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE NPL ACCOUNT');
-RUN;
-%GENRPT3;
-
-*** MAKE OF VEHICLE = OTHERS ***;
-DATA HP;
-     SET HPLOAN1;
-     IF MAKE = 'OTHERS';
-     GROUP1 = NEWSEC;
-     GROUP2 = GOODS;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY MAKE OF VEHICLE = OTHERS ');
-     CALL SYMPUT('RPTITLE1','PRODUCT 128,130,380,381,700,705');
-RUN;
-%GENRPT2;
-
-DATA HP;
-     SET HPLOAN2;
-     IF MAKE = 'OTHERS';
-     GROUP1 = NEWSEC;
-     GROUP2 = GOODS;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY MAKE OF VEHICLE = OTHERS ');
-     CALL SYMPUT('RPTITLE1','NPL ACCOUNT');
-RUN;
-%GENRPT2;
-
-DATA HP;
-     SET HPLOAN3;
-     IF MAKE = 'OTHERS';
-     GROUP1 = NEWSEC;
-     GROUP2 = GOODS;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY MAKE OF VEHICLE = OTHERS ');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE ACCOUNT');
-RUN;
-%GENRPT2;
-
-DATA HP;
-     SET HPLOAN4;
-     IF MAKE = 'OTHERS';
-     GROUP1 = NEWSEC;
-     GROUP2 = GOODS;
-     GROUP3 = BRABBR;
-     CALL SYMPUT('RPTITLE','BY MAKE OF VEHICLE = OTHERS ');
-     CALL SYMPUT('RPTITLE1','RESTRUCTURE NPL ACCOUNT');
-RUN;
-%GENRPT2;
-
-*** GENERATE DETAIL REPORT ***;
-PROC SORT DATA=HPLOAN2; BY ACCTNO NOTENO;
-
-DATA _NULL_;
-   SET HPLOAN2 END=LAST;
-   BY ACCTNO NOTENO;
-   CALL SYMPUT('RPTITLE','BY MAKE OF VEHICLE = OTHERS ');
-   CALL SYMPUT('RPTITLE1','RESTRUCTURE NPL ACCOUNT');
-   FILE CCDTXT2 NOTITLES;
-   IF _N_ = 1 THEN DO;
-      PUT 'MNI NO'         ';' 'NOTE NO'        ';'
-          'NAME'           ';' 'BRABBR'         ';'
-          'PRODUCT'        ';' 'BOR. STATUS'    ';'
-          'AMT FINANCE'    ';' 'NET BALANCE'    ';'
-          'MTH PASS DUE'   ';' 'MARGIN OF FIN.' ';'
-          'LOAN TERM'      ';' 'STATES'         ';'
-          'MAKE OF VEC.'   ';' 'NEW/SECONDHAND' ';'
-          'SOURCE OF BUS.' ';' 'CREDIT SCORE'   ';'
-          'NO ISTL PAID'   ';' 'ISSUE DATE'     ';' ;
-   END;
-   TOTACC + 1;
-   TOTAMT + BALANCE;
-   PUT   ACCTNO   ';' NOTENO  ';'
-         NAME     ';' BRABBR  ';'
-         PRODUCT  ';' BORSTAT ';'
-         NETPROC  ';' BALANCE ';'
-         MTHARR   ';' MARGINF ';'
-         NOTETERM ';' STATENM ';'
-         MAKE     ';' NEWSEC  ';'
-         SOURCE   ';' SCORE2  ';'
-         ISTLPD   ';' ISSDTE DATE8. ';' ;
-
-   IF LAST = 1 THEN DO;
-      PUT  'TOT NO OF A/C : ' ';' TOTACC ';'
-           'TOT NET BALANCE : ' ';' TOTAMT ';' ;
-   END;
-RETURN;
-
+"""
+EIMRESHI - HP/Hire Purchase Loan Summary & Detail Report
+Converted from SAS to Python
+
+This replicates the SAS program EIMRESHI which generates:
+- Summary reports for HP loans (Conv & Aitab) by various groupings
+- Track NPL accounts (>=3 months in arrears or F/I/R status)
+- Monitor restructured accounts (NOTENO >= 98010)
+- Detail report for NPL accounts
+
+HP Products: 128, 130, 380, 381, 700, 705
+"""
+
+import polars as pl
+import pyreadstat
+from datetime import datetime, timedelta
+import os
+import sys
+
+# Directories
+LOAN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/'
+CCDTEMP_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/'
+OUTPUT_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMRESHI/'
+
+for d in [OUTPUT_DIR]:
+    os.makedirs(d, exist_ok=True)
+
+print("EIMRESHI - HP Loan Summary & Detail Report")
+print("=" * 60)
+
+# HP Products (from SAS macro &HPD)
+HP_PRODUCTS = [128, 130, 380, 381, 700, 705]
+
+# Get report date (yesterday)
+reptdate = datetime.now() - timedelta(days=1)
+reptdate = reptdate.replace(hour=0, minute=0, second=0, microsecond=0)
+
+# Calculate week and other date variables (matches SAS logic)
+day = reptdate.day
+if day == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+elif day == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+elif day == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+else:
+    sdd, wk, wk1 = 23, '4', '3'
+
+mm = reptdate.month
+if wk == '1':
+    mm1 = mm - 1
+    if mm1 == 0:
+        mm1 = 12
+else:
+    mm1 = mm
+
+reptmon = f'{mm:02d}'
+reptmon1 = f'{mm1:02d}'
+reptyear = reptdate.year
+reptday = f'{day:02d}'
+rdate = reptdate.strftime('%d%m%y')
+
+print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+print(f"Week: {wk}")
+print(f"RDATE: {rdate}")
+print("=" * 60)
+
+# Make of vehicle mapping (matches SAS SELECT statement)
+MAKE_MAP = {
+    ' 1': 'PROTON', ' 2': 'PERODUA', ' 3': 'TOYOTA', ' 4': 'NISSAN',
+    ' 5': 'HONDA', ' 6': 'ISUZU', ' 7': 'DAIHATSU', ' 8': 'MITSUBISHI',
+    ' 9': 'FORD', '10': 'MERCEDES BENZ', '11': 'VOLVO', '13': 'BMW'
+}
+
+# State mapping (matches SAS SELECT statement)
+STATE_MAP = {
+    '1': 'JOHORE', '2': 'KEDAH', '3': 'KELANTAN', '4': 'MALACCA',
+    '5': 'N.SEMBILAN', '6': 'PAHANG', '7': 'PENANG', '8': 'PERAK',
+    '9': 'PERLIS', '10': 'SABAH', '11': 'SARAWAK', '12': 'SELANGOR',
+    '13': 'TRENGGANU', '14': 'W.PERSEKUTUAN', '15': 'LABUAN'
+}
+
+print("\nReading loan data from SAS files...")
+
+try:
+    # STEP 1: Read LOANTEMP (matches SAS: SET CCDTEMP.LOANTEMP)
+    print("  Reading loantemp.sas7bdat...")
+    df_loantemp, meta = pyreadstat.read_sas7bdat(
+        f'{CCDTEMP_DIR}loantemp.sas7bdat'
+    )
+    df_loantemp = pl.from_pandas(df_loantemp)
+    
+    print(f"  LOANTEMP raw rows: {len(df_loantemp):,}")
+    
+    # Filter: WHERE PRODUCT IN &HPD AND BALANCE GT 0
+    df_loantemp = df_loantemp.filter(
+        (pl.col('PRODUCT').is_in(HP_PRODUCTS)) & 
+        (pl.col('BALANCE') > 0)
+    )
+    
+    print(f"  LOANTEMP after filtering: {len(df_loantemp):,} rows")
+    
+    if len(df_loantemp) == 0:
+        print("  ERROR: No HP products found in LOANTEMP")
+        sys.exit(1)
+    
+    # STEP 2: Read LNNOTE (matches SAS: SET LOAN.LNNOTE)
+    print("  Reading lnnote.sas7bdat...")
+    df_lnnote, meta = pyreadstat.read_sas7bdat(
+        f'{LOAN_DIR}lnnote.sas7bdat'
+    )
+    df_lnnote = pl.from_pandas(df_lnnote)
+    
+    print(f"  LNNOTE raw rows: {len(df_lnnote):,}")
+    
+    # Keep only needed columns (matches SAS KEEP statement)
+    keep_cols = ['ACCTNO', 'NOTENO', 'LOANTYPE', 'NETPROC', 'APPVALUE', 
+                 'NOTETERM', 'STATE', 'DEALERNO', 'SCORE2', 'ORGBAL',
+                 'CURBAL', 'PAYAMT', 'ISSUEDT', 'BALANCE', 'BRANCH',
+                 'BORSTAT', 'DAYDIFF', 'CENSUS', 'NAME']
+    df_lnnote = df_lnnote.select([c for c in keep_cols if c in df_lnnote.columns])
+    
+    # Filter: WHERE LOANTYPE IN &HPD AND BALANCE GT 0
+    df_lnnote = df_lnnote.filter(
+        (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
+        (pl.col('BALANCE') > 0)
+    )
+    
+    print(f"  LNNOTE after filtering: {len(df_lnnote):,} rows")
+    
+    # STEP 3: Merge (matches SAS MERGE LNNOTE(IN=A) HPLOAN(IN=B); BY ACCTNO NOTENO; IF A AND B;)
+    print("  Merging data...")
+    df_hploan = df_lnnote.join(df_loantemp, on=['ACCTNO', 'NOTENO'], how='inner')
+    
+    print(f"  HP Loans after merge: {len(df_hploan):,} accounts")
+    
+    if len(df_hploan) == 0:
+        print("  ERROR: No matching records after merge")
+        sys.exit(1)
+    
+except Exception as e:
+    print(f"  Error: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+
+# Process HP loans (matches SAS DATA HPLOAN step)
+print("\nProcessing HP loans...")
+
+# Calculate derived fields (matches SAS logic exactly)
+df_hploan = df_hploan.with_columns([
+    # ISTLPD = (ORGBAL-CURBAL)/PAYAMT
+    ((pl.col('ORGBAL') - pl.col('CURBAL')) / pl.col('PAYAMT')).alias('ISTLPD'),
+    
+    # ISSDTE = INPUT(SUBSTR(PUT(ISSUEDT,Z11.),1,8),MMDDYY8.)
+    pl.col('ISSUEDT').cast(pl.Utf8).str.slice(0, 8).str.to_datetime('%m%d%Y').alias('ISSDTE'),
+    
+    # CRRISK = SUBSTR(SCORE2,1,1)
+    pl.col('SCORE2').cast(pl.Utf8).str.slice(0, 1).alias('CRRISK'),
+    
+    # MARGINF - Margin of Finance
+    pl.when(pl.col('APPVALUE') > 0)
+      .then(((pl.col('NETPROC') / pl.col('APPVALUE')) * 100).round(1))
+      .otherwise(0)
+      .alias('MARGINF'),
+    
+    # CENSUS9 = SUBSTR(PUT(CENSUS,7.2),1,7)
+    pl.col('CENSUS').cast(pl.Utf8).str.zfill(7).alias('CENSUS9')
+])
+
+# Categorize fields (matches SAS logic)
+df_hploan = df_hploan.with_columns([
+    # MGINGRP - Margin group (matches SAS IF/ELSE logic)
+    pl.when(pl.col('MARGINF') < 70).then(pl.lit('E. <70%'))
+      .when((pl.col('MARGINF') >= 70) & (pl.col('MARGINF') < 80)).then(pl.lit('D. 70 TO <80%'))
+      .when((pl.col('MARGINF') >= 80) & (pl.col('MARGINF') < 85)).then(pl.lit('C. 80 TO <85%'))
+      .when((pl.col('MARGINF') >= 85) & (pl.col('MARGINF') < 89)).then(pl.lit('B. 85 TO <89%'))
+      .otherwise(pl.lit('A. 89% & ABV'))
+      .alias('MGINGRP'),
+    
+    # TERMGRP - Term group (matches SAS IF/ELSE logic)
+    pl.when(pl.col('NOTETERM') <= 36).then(pl.lit('A. <=3 YRS'))
+      .when((pl.col('NOTETERM') > 36) & (pl.col('NOTETERM') <= 48)).then(pl.lit('B. 4 YRS'))
+      .when((pl.col('NOTETERM') > 48) & (pl.col('NOTETERM') <= 60)).then(pl.lit('C. 5 YRS'))
+      .when((pl.col('NOTETERM') > 60) & (pl.col('NOTETERM') <= 72)).then(pl.lit('D. 6 YRS'))
+      .when((pl.col('NOTETERM') > 72) & (pl.col('NOTETERM') <= 84)).then(pl.lit('E. 7 YRS'))
+      .when((pl.col('NOTETERM') > 84) & (pl.col('NOTETERM') <= 96)).then(pl.lit('F. 8 YRS'))
+      .otherwise(pl.lit('G. 9 YRS'))
+      .alias('TERMGRP'),
+    
+    # STATENM - State name (matches SAS SELECT)
+    pl.col('STATE').cast(pl.Utf8).replace_strict(STATE_MAP, default='OTHERS').alias('STATENM'),
+    
+    # NATIONAL - East/West Malaysia (matches SAS IF/ELSE)
+    pl.when(pl.col('STATENM').is_in(['SABAH', 'SARAWAK', 'LABUAN']))
+      .then(pl.lit('EAST MALAYSIA'))
+      .otherwise(pl.lit('WEST MALAYSIA'))
+      .alias('NATIONAL'),
+    
+    # MAKE - Make of vehicle (matches SAS SELECT)
+    pl.col('CENSUS9').str.slice(0, 2).str.strip_chars()
+      .replace_strict(MAKE_MAP, default='OTHERS')
+      .alias('MAKE'),
+    
+    # CARS - National/Non-National (matches SAS IF/ELSE)
+    pl.when(pl.col('MAKE').is_in(['PROTON', 'PERODUA']))
+      .then(pl.lit('NATIONAL'))
+      .otherwise(pl.lit('NON NATIONAL'))
+      .alias('CARS'),
+    
+    # GOODS - Schedule/Unschedule (matches SAS IF/ELSE)
+    pl.when((pl.col('MAKE') == 'OTHERS') & (pl.col('PRODUCT').is_in([128, 700])))
+      .then(pl.lit('SCHEDULE'))
+      .when(pl.col('MAKE') == 'OTHERS')
+      .then(pl.lit('UNSCHEDULE'))
+      .otherwise(pl.lit(''))
+      .alias('GOODS'),
+    
+    # NEWSEC - New/Secondhand (matches SAS SELECT on CENSUS9 position 4)
+    pl.when(pl.col('CENSUS9').str.slice(3, 1).is_in(['1', '2']))
+      .then(pl.lit('NEW'))
+      .otherwise(pl.lit('SECONDHAND'))
+      .alias('NEWSEC'),
+    
+    # FINGRP - Amount financed (matches SAS IF/ELSE)
+    pl.when(pl.col('NETPROC') <= 30000).then(pl.lit('A. RM30K & BELOW'))
+      .when((pl.col('NETPROC') > 30000) & (pl.col('NETPROC') <= 50000)).then(pl.lit('B. >RM30K TO 50K'))
+      .when((pl.col('NETPROC') > 50000) & (pl.col('NETPROC') <= 100000)).then(pl.lit('C. >RM50K TO 100K'))
+      .when((pl.col('NETPROC') > 100000) & (pl.col('NETPROC') <= 250000)).then(pl.lit('D. >RM100K TO 250K'))
+      .otherwise(pl.lit('E. >RM250K'))
+      .alias('FINGRP'),
+    
+    # SOURCE - Source of business (matches SAS IF/ELSE)
+    pl.when(pl.col('DEALERNO') > 0)
+      .then(pl.lit('DEALERS'))
+      .otherwise(pl.lit('NON DEALERS'))
+      .alias('SOURCE')
+])
+
+# Calculate MTHARR - Months in arrears (matches SAS IF/ELSE logic)
+df_hploan = df_hploan.with_columns([
+    pl.when(pl.col('DAYDIFF') > 729).then((pl.col('DAYDIFF') / 365 * 12).cast(pl.Int32))
+      .when(pl.col('DAYDIFF') > 698).then(pl.lit(23))
+      .when(pl.col('DAYDIFF') > 668).then(pl.lit(22))
+      .when(pl.col('DAYDIFF') > 638).then(pl.lit(21))
+      .when(pl.col('DAYDIFF') > 608).then(pl.lit(20))
+      .when(pl.col('DAYDIFF') > 577).then(pl.lit(19))
+      .when(pl.col('DAYDIFF') > 547).then(pl.lit(18))
+      .when(pl.col('DAYDIFF') > 516).then(pl.lit(17))
+      .when(pl.col('DAYDIFF') > 486).then(pl.lit(16))
+      .when(pl.col('DAYDIFF') > 456).then(pl.lit(15))
+      .when(pl.col('DAYDIFF') > 424).then(pl.lit(14))
+      .when(pl.col('DAYDIFF') > 394).then(pl.lit(13))
+      .when(pl.col('DAYDIFF') > 364).then(pl.lit(12))
+      .when(pl.col('DAYDIFF') > 333).then(pl.lit(11))
+      .when(pl.col('DAYDIFF') > 303).then(pl.lit(10))
+      .when(pl.col('DAYDIFF') > 273).then(pl.lit(9))
+      .when(pl.col('DAYDIFF') > 243).then(pl.lit(8))
+      .when(pl.col('DAYDIFF') > 213).then(pl.lit(7))
+      .when(pl.col('DAYDIFF') > 182).then(pl.lit(6))
+      .when(pl.col('DAYDIFF') > 151).then(pl.lit(5))
+      .when(pl.col('DAYDIFF') > 121).then(pl.lit(4))
+      .when(pl.col('DAYDIFF') > 91).then(pl.lit(3))
+      .when(pl.col('DAYDIFF') > 61).then(pl.lit(2))
+      .when(pl.col('DAYDIFF') > 30).then(pl.lit(1))
+      .otherwise(pl.lit(0))
+      .alias('MTHARR')
+])
+
+# If BORSTAT = 'F' THEN MTHARR = 999 (matches SAS logic)
+df_hploan = df_hploan.with_columns([
+    pl.when(pl.col('BORSTAT') == 'F')
+      .then(pl.lit(999))
+      .otherwise(pl.col('MTHARR'))
+      .alias('MTHARR')
+])
+
+# BRABBR = PUT(BRANCH,BRCHCD.) - format branch using BRCHCD format
+# For Python, we'll keep BRANCH as is since we don't have the format
+df_hploan = df_hploan.with_columns([
+    pl.col('BRANCH').cast(pl.Utf8).alias('BRABBR')
+])
+
+print(f"  Processed: {len(df_hploan):,} HP loans")
+
+# Create 4 account groups (matches SAS DATA HPLOAN1-HPLOAN4)
+print("\nCreating account groups...")
+
+df_hploan1 = df_hploan  # All accounts (matches HPLOAN1)
+df_hploan2 = df_hploan.filter(
+    (pl.col('MTHARR') >= 3) | (pl.col('BORSTAT').is_in(['F', 'I', 'R']))
+)  # NPL accounts (matches HPLOAN2)
+df_hploan3 = df_hploan.filter(pl.col('NOTENO') >= 98010)  # Restructured (matches HPLOAN3)
+df_hploan4 = df_hploan.filter(
+    (pl.col('NOTENO') >= 98010) & 
+    ((pl.col('MTHARR') >= 3) | (pl.col('BORSTAT').is_in(['F', 'I', 'R'])))
+)  # Restructured NPL (matches HPLOAN4)
+
+print(f"  HPLOAN1 (All): {len(df_hploan1):,}")
+print(f"  HPLOAN2 (NPL): {len(df_hploan2):,}")
+print(f"  HPLOAN3 (Restructured): {len(df_hploan3):,}")
+print(f"  HPLOAN4 (Restructured NPL): {len(df_hploan4):,}")
+
+# Generate summary reports
+print("\nGenerating summary reports...")
+
+def generate_summary_report(df, group_cols, title, subtitle, report_num):
+    """Generate summary report matching SAS GENRPT macros"""
+    
+    if len(df) == 0:
+        print(f"  Warning: No data for {title} - {subtitle}")
+        return
+    
+    # Create arrears buckets (matches SAS bucket logic)
+    df_summary = df.with_columns([
+        pl.when(pl.col('MTHARR') < 3).then(pl.lit('<3MTHS'))
+          .when((pl.col('MTHARR') >= 3) & (pl.col('MTHARR') < 6)).then(pl.lit('3-6MTHS'))
+          .when((pl.col('MTHARR') >= 6) & (pl.col('MTHARR') < 12)).then(pl.lit('6-12MTHS'))
+          .when((pl.col('MTHARR') >= 12) & (pl.col('MTHARR') < 24)).then(pl.lit('12-24MTHS'))
+          .when((pl.col('MTHARR') >= 24) & (pl.col('MTHARR') < 36)).then(pl.lit('24-36MTHS'))
+          .when(pl.col('MTHARR') >= 36).then(pl.lit('>36MTHS'))
+          .otherwise(pl.lit('UNKNOWN'))
+          .alias('BUCKET'),
+        
+        # Deficit flag (matches SAS DEFICIT logic)
+        pl.when(pl.col('BORSTAT') == 'F')
+          .then(pl.lit('DEFICIT'))
+          .otherwise(pl.lit(''))
+          .alias('DEFICIT_FLAG')
+    ])
+    
+    # Group and aggregate
+    agg_cols = group_cols + ['BUCKET']
+    
+    df_agg = df_summary.group_by(agg_cols).agg([
+        pl.count().alias('COUNT'),
+        pl.col('BALANCE').sum().alias('AMOUNT')
+    ])
+    
+    # Pivot by bucket
+    df_pivot = df_agg.pivot(
+        values=['COUNT', 'AMOUNT'],
+        index=group_cols,
+        columns='BUCKET'
+    )
+    
+    # Generate CSV-like output (matches SAS semicolon-delimited format)
+    lines = []
+    lines.append(f"TOTAL POSITION FOR HPD (CONV & AITAB) AS AT {rdate}")
+    lines.append(title)
+    lines.append(subtitle)
+    lines.append("REPORT ID : EIMRESHP")
+    
+    # Header (matches SAS PRNTITLE)
+    header = ['GROUP BY', '<3MTHS NO', '<3MTHS AMT', '3-6MTHS NO', '3-6MTHS AMT',
+              '6-12MTHS NO', '6-12MTHS AMT', '12-24MTHS NO', '12-24MTHS AMT',
+              '24-36MTHS NO', '24-36MTHS AMT', '>36MTHS NO', '>36MTHS AMT',
+              'DEFICIT NO', 'DEFICIT AMT', 'TOTAL NO', 'TOTAL AMT']
+    lines.append(';'.join(header))
+    
+    # Get bucket columns in order
+    bucket_order = ['<3MTHS', '3-6MTHS', '6-12MTHS', '12-24MTHS', '24-36MTHS', '>36MTHS']
+    
+    # Process data rows
+    if len(df_pivot) > 0:
+        # Calculate totals
+        total_count = len(df)
+        total_amount = df['BALANCE'].sum()
+        
+        # For each group combination
+        for row in df_pivot.iter_rows():
+            row_parts = []
+            # Group columns
+            for col in group_cols:
+                idx = df_pivot.columns.index(col) if col in df_pivot.columns else -1
+                if idx >= 0:
+                    row_parts.append(str(row[idx]))
+                else:
+                    row_parts.append('')
+            
+            # Add bucket data
+            for bucket in bucket_order:
+                count_col = f'COUNT_{bucket}'
+                amt_col = f'AMOUNT_{bucket}'
+                if count_col in df_pivot.columns:
+                    idx_count = df_pivot.columns.index(count_col)
+                    idx_amt = df_pivot.columns.index(amt_col)
+                    row_parts.append(str(row[idx_count] if row[idx_count] is not None else 0))
+                    row_parts.append(f"{row[idx_amt]:,.2f}" if row[idx_amt] is not None else "0.00")
+                else:
+                    row_parts.append('0')
+                    row_parts.append('0.00')
+            
+            # Add deficit (BORSTAT='F')
+            deficit_count = df.filter(pl.col('BORSTAT') == 'F').height
+            deficit_amount = df.filter(pl.col('BORSTAT') == 'F')['BALANCE'].sum() if deficit_count > 0 else 0
+            row_parts.append(str(deficit_count))
+            row_parts.append(f"{deficit_amount:,.2f}")
+            
+            # Add totals
+            row_parts.append(str(total_count))
+            row_parts.append(f"{total_amount:,.2f}")
+            
+            lines.append(';'.join(row_parts))
+    
+    # Write to file
+    filename = f"EIMRESHI_SUMMARY_{report_num:02d}_{title.replace(' ', '_')}.txt"
+    with open(f'{OUTPUT_DIR}{filename}', 'w') as f:
+        f.write('\n'.join(lines))
+    
+    print(f"  Generated: {filename}")
+
+# Define report configurations (matches SAS GENRPT calls)
+report_configs = []
+
+# Credit Risk Score (matches SAS GENRPT1 calls)
+for df, suffix in [(df_hploan1, 'PRODUCT 128,130,380,381,700,705'),
+                   (df_hploan2, 'NPL ACCOUNT'),
+                   (df_hploan3, 'RESTRUCTURE ACCOUNT'),
+                   (df_hploan4, 'RESTRUCTURE NPL ACCOUNT')]:
+    report_configs.append({
+        'df': df,
+        'groups': ['CRRISK', 'BRABBR'],
+        'title': 'CREDIT RISK SCORE',
+        'subtitle': suffix
+    })
+
+# Source of Business
+for df, suffix in [(df_hploan1, 'PRODUCT 128,130,380,381,700,705'),
+                   (df_hploan2, 'NPL ACCOUNT'),
+                   (df_hploan3, 'RESTRUCTURE ACCOUNT'),
+                   (df_hploan4, 'RESTRUCTURE NPL ACCOUNT')]:
+    report_configs.append({
+        'df': df,
+        'groups': ['SOURCE', 'BRABBR'],
+        'title': 'SOURCE OF BUSINESS',
+        'subtitle': suffix
+    })
+
+# Margin of Finance
+for df, suffix in [(df_hploan1, 'PRODUCT 128,130,380,381,700,705'),
+                   (df_hploan2, 'NPL ACCOUNT'),
+                   (df_hploan3, 'RESTRUCTURE ACCOUNT'),
+                   (df_hploan4, 'RESTRUCTURE NPL ACCOUNT')]:
+    report_configs.append({
+        'df': df,
+        'groups': ['MGINGRP', 'BRABBR'],
+        'title': 'MARGIN OF FINANCE',
+        'subtitle': suffix
+    })
+
+# Loan Term
+for df, suffix in [(df_hploan1, 'PRODUCT 128,130,380,381,700,705'),
+                   (df_hploan2, 'NPL ACCOUNT'),
+                   (df_hploan3, 'RESTRUCTURE ACCOUNT'),
+                   (df_hploan4, 'RESTRUCTURE NPL ACCOUNT')]:
+    report_configs.append({
+        'df': df,
+        'groups': ['TERMGRP', 'BRABBR'],
+        'title': 'LOAN TERM',
+        'subtitle': suffix
+    })
+
+# Amount Finance (3-level grouping - matches GENRPT2)
+for df, suffix in [(df_hploan1, 'PRODUCT 128,130,380,381,700,705'),
+                   (df_hploan2, 'NPL ACCOUNT'),
+                   (df_hploan3, 'RESTRUCTURE ACCOUNT'),
+                   (df_hploan4, 'RESTRUCTURE NPL ACCOUNT')]:
+    report_configs.append({
+        'df': df,
+        'groups': ['NEWSEC', 'FINGRP', 'BRABBR'],
+        'title': 'AMT FINANCE',
+        'subtitle': suffix
+    })
+
+# By State (3-level grouping)
+for df, suffix in [(df_hploan1, 'PRODUCT 128,130,380,381,700,705'),
+                   (df_hploan2, 'NPL ACCOUNT'),
+                   (df_hploan3, 'RESTRUCTURE ACCOUNT'),
+                   (df_hploan4, 'RESTRUCTURE NPL ACCOUNT')]:
+    report_configs.append({
+        'df': df,
+        'groups': ['NATIONAL', 'STATENM', 'BRABBR'],
+        'title': 'BY STATE',
+        'subtitle': suffix
+    })
+
+# By Make of Vehicle (4-level grouping - matches GENRPT3)
+for df, suffix in [(df_hploan1, 'PRODUCT 128,130,380,381,700,705'),
+                   (df_hploan2, 'NPL ACCOUNT'),
+                   (df_hploan3, 'RESTRUCTURE ACCOUNT'),
+                   (df_hploan4, 'RESTRUCTURE NPL ACCOUNT')]:
+    report_configs.append({
+        'df': df,
+        'groups': ['NEWSEC', 'CARS', 'MAKE', 'BRABBR'],
+        'title': 'BY MAKE OF VEHICLE',
+        'subtitle': suffix
+    })
+
+# Make of Vehicle = OTHERS (3-level grouping)
+for df, suffix in [(df_hploan1.filter(pl.col('MAKE') == 'OTHERS'), 'PRODUCT 128,130,380,381,700,705'),
+                   (df_hploan2.filter(pl.col('MAKE') == 'OTHERS'), 'NPL ACCOUNT'),
+                   (df_hploan3.filter(pl.col('MAKE') == 'OTHERS'), 'RESTRUCTURE ACCOUNT'),
+                   (df_hploan4.filter(pl.col('MAKE') == 'OTHERS'), 'RESTRUCTURE NPL ACCOUNT')]:
+    report_configs.append({
+        'df': df,
+        'groups': ['NEWSEC', 'GOODS', 'BRABBR'],
+        'title': 'BY MAKE OF VEHICLE = OTHERS',
+        'subtitle': suffix
+    })
+
+# Generate all reports
+summary_count = 0
+for i, config in enumerate(report_configs, 1):
+    if len(config['df']) > 0:
+        generate_summary_report(
+            config['df'],
+            config['groups'],
+            config['title'],
+            config['subtitle'],
+            i
+        )
+        summary_count += 1
+
+print(f"  Generated {summary_count} summary reports")
+
+# Generate detail report (matches SAS detail report)
+print("\nGenerating detail report...")
+
+if len(df_hploan2) > 0:
+    df_detail = df_hploan2.select([
+        'ACCTNO', 'NOTENO', 'NAME', 'BRABBR', 'PRODUCT', 'BORSTAT',
+        'NETPROC', 'BALANCE', 'MTHARR', 'MARGINF', 'NOTETERM',
+        'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE'
+    ]).sort(['ACCTNO', 'NOTENO'])
+    
+    detail_lines = []
+    # Header (matches SAS detail header)
+    header = ['MNI NO', 'NOTE NO', 'NAME', 'BRABBR', 'PRODUCT', 'BOR. STATUS',
+              'AMT FINANCE', 'NET BALANCE', 'MTH PASS DUE', 'MARGIN OF FIN.',
+              'LOAN TERM', 'STATES', 'MAKE OF VEC.', 'NEW/SECONDHAND',
+              'SOURCE OF BUS.', 'CREDIT SCORE', 'NO ISTL PAID', 'ISSUE DATE']
+    detail_lines.append(';'.join(header))
+    
+    # Data rows
+    for row in df_detail.iter_rows():
+        row_parts = []
+        for val in row:
+            if isinstance(val, (int, float)):
+                if isinstance(val, float):
+                    row_parts.append(f"{val:.2f}")
+                else:
+                    row_parts.append(str(val))
+            elif isinstance(val, datetime):
+                row_parts.append(val.strftime('%d%m%Y'))
+            else:
+                row_parts.append(str(val) if val is not None else '')
+        detail_lines.append(';'.join(row_parts))
+    
+    # Add totals (matches SAS totals)
+    tot_acc = len(df_detail)
+    tot_amt = df_detail['BALANCE'].sum()
+    detail_lines.append(f"TOT NO OF A/C : ;{tot_acc};TOT NET BALANCE : ;{tot_amt:,.2f};")
+    
+    # Save detail report
+    with open(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.txt', 'w') as f:
+        f.write('\n'.join(detail_lines))
+    
+    print(f"  Detail report: {tot_acc:,} NPL accounts")
+    print(f"  Total balance: {tot_amt:,.2f}")
+else:
+    print("  No NPL accounts found")
+    with open(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.txt', 'w') as f:
+        f.write(f"No NPL accounts found for report date {reptdate.strftime('%d/%m/%Y')}")
+
+print(f"\n{'='*60}")
+print(f"EIMRESHI Complete!")
+print(f"{'='*60}")
+print(f"\nData Statistics:")
+print(f"  Total HP loans processed: {len(df_hploan):,}")
+print(f"\n4 Account Groups:")
+print(f"  1. All HP accounts: {len(df_hploan1):,}")
+print(f"  2. NPL (>=3 months OR F/I/R): {len(df_hploan2):,}")
+print(f"  3. Restructured (NOTENO >= 98010): {len(df_hploan3):,}")
+print(f"  4. Restructured NPL: {len(df_hploan4):,}")
+print(f"\nOutput Directory: {OUTPUT_DIR}")
+print(f"  - {summary_count} summary reports")
+print(f"  - 1 detail report (NPL accounts)")
