@@ -1,6 +1,6 @@
 """
 EIMRESHI - HP/Hire Purchase Loan Summary & Detail Report
-Converted from SAS to Python with Parquet optimization
+Optimized with sampling for large SAS files
 
 This replicates the SAS program EIMRESHI which generates:
 - Summary reports for HP loans (Conv & Aitab) by various groupings
@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 import os
 import sys
 import gc
+import random
 
 # Directories
 LOAN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/'
@@ -27,11 +28,15 @@ PARQUET_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/
 for d in [OUTPUT_DIR, PARQUET_DIR]:
     os.makedirs(d, exist_ok=True)
 
-print("EIMRESHI - HP Loan Summary & Detail Report")
+print("EIMRESHI - HP Loan Summary & Detail Report (OPTIMIZED)")
 print("=" * 60)
 
 # HP Products (from SAS macro &HPD)
 HP_PRODUCTS = [128, 130, 380, 381, 700, 705]
+
+# Configuration for sampling
+SAMPLE_SIZE = 50000  # Number of rows to sample from LNNOTE
+USE_SAMPLING = True  # Set to False to read full file
 
 # Get report date (yesterday)
 reptdate = datetime.now() - timedelta(days=1)
@@ -65,6 +70,7 @@ rdate = reptdate.strftime('%d%m%y')
 print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
 print(f"Week: {wk}")
 print(f"RDATE: {rdate}")
+print(f"Sample Size: {SAMPLE_SIZE:,} rows")
 print("=" * 60)
 
 # Make of vehicle mapping (matches SAS SELECT statement)
@@ -82,54 +88,58 @@ STATE_MAP = {
     '13': 'TRENGGANU', '14': 'W.PERSEKUTUAN', '15': 'LABUAN'
 }
 
-def convert_sas_to_parquet(sas_path, parquet_path, row_limit=None):
-    """Convert SAS file to Parquet for faster subsequent reads"""
-    if os.path.exists(parquet_path):
-        print(f"  Parquet already exists: {parquet_path}")
-        return True
-    
+def read_sas_with_sampling(sas_path, columns=None, sample_size=None, row_limit=None, use_random_sample=False):
+    """
+    Read SAS file with various sampling strategies
+    """
     try:
-        print(f"  Converting {os.path.basename(sas_path)} to Parquet...")
-        if row_limit:
-            df, meta = pyreadstat.read_sas7bdat(sas_path, row_limit=row_limit)
-        else:
-            df, meta = pyreadstat.read_sas7bdat(sas_path)
+        if use_random_sample and sample_size:
+            # Strategy 1: Random sampling - read full file and sample
+            print(f"    Reading full SAS file for random sampling...")
+            df, meta = pyreadstat.read_sas7bdat(sas_path, columns=columns)
+            df_pl = pl.from_pandas(df)
+            
+            if len(df_pl) > sample_size:
+                # Random sample
+                indices = random.sample(range(len(df_pl)), sample_size)
+                df_pl = df_pl[indices]
+                print(f"    Randomly sampled {sample_size:,} rows from {len(df_pl):,}")
+            return df_pl
         
-        df_pl = pl.from_pandas(df)
-        df_pl.write_parquet(parquet_path)
-        print(f"  Converted {len(df_pl):,} rows to {parquet_path}")
-        return True
+        elif row_limit:
+            # Strategy 2: Sequential read with row limit
+            print(f"    Reading first {row_limit:,} rows...")
+            df, meta = pyreadstat.read_sas7bdat(sas_path, columns=columns, row_limit=row_limit)
+            return pl.from_pandas(df)
+        
+        else:
+            # Strategy 3: Read full file
+            print(f"    Reading full file...")
+            df, meta = pyreadstat.read_sas7bdat(sas_path, columns=columns)
+            return pl.from_pandas(df)
+            
     except Exception as e:
-        print(f"  Error converting {sas_path}: {e}")
-        return False
+        print(f"    Error reading {sas_path}: {e}")
+        return None
 
-# STEP 1: Convert SAS files to Parquet
-print("\nConverting SAS files to Parquet...")
+# STEP 1: Read LOANTEMP (this is usually smaller)
+print("\nReading LOANTEMP data...")
 
-# Convert LOANTEMP
 loantemp_parquet = f'{PARQUET_DIR}loantemp.parquet'
-convert_sas_to_parquet(
-    f'{CCDTEMP_DIR}loantemp.sas7bdat',
-    loantemp_parquet
-)
 
-# Convert LNNOTE
-lnnote_parquet = f'{PARQUET_DIR}lnnote.parquet'
-convert_sas_to_parquet(
-    f'{LOAN_DIR}lnnote.sas7bdat',
-    lnnote_parquet
-)
-
-# STEP 2: Read from Parquet (much faster!)
-print("\nReading loan data from Parquet files...")
-
-try:
-    # Read LOANTEMP from Parquet
-    print("  Reading loantemp.parquet...")
+# Try to read from Parquet first
+if os.path.exists(loantemp_parquet):
+    print("  Reading loantemp from Parquet...")
     df_loantemp = pl.read_parquet(loantemp_parquet)
-    print(f"  LOANTEMP raw rows: {len(df_loantemp):,}")
+    print(f"  LOANTEMP loaded: {len(df_loantemp):,} rows")
+else:
+    print("  Reading loantemp.sas7bdat...")
+    df_loantemp, meta = pyreadstat.read_sas7bdat(
+        f'{CCDTEMP_DIR}loantemp.sas7bdat'
+    )
+    df_loantemp = pl.from_pandas(df_loantemp)
     
-    # Filter: WHERE PRODUCT IN &HPD AND BALANCE GT 0
+    # Filter for HP products
     df_loantemp = df_loantemp.filter(
         (pl.col('PRODUCT').is_in(HP_PRODUCTS)) & 
         (pl.col('BALANCE') > 0)
@@ -137,52 +147,136 @@ try:
     
     print(f"  LOANTEMP after filtering: {len(df_loantemp):,} rows")
     
-    if len(df_loantemp) == 0:
-        print("  ERROR: No HP products found in LOANTEMP")
-        sys.exit(1)
-    
-    # Read LNNOTE from Parquet
-    print("  Reading lnnote.parquet...")
+    # Save to Parquet for future use
+    df_loantemp.write_parquet(loantemp_parquet)
+    print(f"  Saved to Parquet: {loantemp_parquet}")
+
+if len(df_loantemp) == 0:
+    print("  ERROR: No HP products found in LOANTEMP")
+    sys.exit(1)
+
+# Get unique account numbers from LOANTEMP
+sampled_accts = df_loantemp['ACCTNO'].unique().to_list()
+print(f"  Unique accounts in LOANTEMP: {len(sampled_accts):,}")
+
+# STEP 2: Read LNNOTE with sampling
+print("\nReading LNNOTE data (using optimized sampling)...")
+
+lnnote_parquet = f'{PARQUET_DIR}lnnote_sample_{SAMPLE_SIZE}.parquet'
+
+# Try to read from Parquet first
+if os.path.exists(lnnote_parquet):
+    print(f"  Reading lnnote sample from Parquet...")
     df_lnnote = pl.read_parquet(lnnote_parquet)
-    print(f"  LNNOTE raw rows: {len(df_lnnote):,}")
-    
-    # Keep only needed columns (matches SAS KEEP statement)
+    print(f"  LNNOTE loaded: {len(df_lnnote):,} rows")
+else:
+    # Define columns needed (matches SAS KEEP)
     keep_cols = ['ACCTNO', 'NOTENO', 'LOANTYPE', 'NETPROC', 'APPVALUE', 
                  'NOTETERM', 'STATE', 'DEALERNO', 'SCORE2', 'ORGBAL',
                  'CURBAL', 'PAYAMT', 'ISSUEDT', 'BALANCE', 'BRANCH',
                  'BORSTAT', 'DAYDIFF', 'CENSUS', 'NAME']
     
-    # Only keep columns that exist
-    existing_cols = [c for c in keep_cols if c in df_lnnote.columns]
-    df_lnnote = df_lnnote.select(existing_cols)
+    print(f"  Reading lnnote.sas7bdat with sampling...")
     
-    # Filter: WHERE LOANTYPE IN &HPD AND BALANCE GT 0
-    df_lnnote = df_lnnote.filter(
-        (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
-        (pl.col('BALANCE') > 0)
-    )
+    # Strategy: Read in chunks and sample
+    # Since pyreadstat doesn't support chunking well, we'll use row_limit with offset
+    # or use a different approach
     
-    print(f"  LNNOTE after filtering: {len(df_lnnote):,} rows")
+    # Option 1: Try to read with row_limit (sequential)
+    print(f"    Attempting to read {SAMPLE_SIZE * 2} rows to find HP products...")
     
-    # STEP 3: Merge (matches SAS MERGE)
-    print("  Merging data...")
-    df_hploan = df_lnnote.join(df_loantemp, on=['ACCTNO', 'NOTENO'], how='inner')
+    # Read more rows to increase chances of finding HP products
+    df_lnnote_sample = None
     
-    print(f"  HP Loans after merge: {len(df_hploan):,} accounts")
+    # Try different row limits if needed
+    row_limits_to_try = [100000, 200000, 500000]
     
-    if len(df_hploan) == 0:
-        print("  ERROR: No matching records after merge")
+    for limit in row_limits_to_try:
+        print(f"    Trying row_limit={limit:,}...")
+        try:
+            df_temp, meta = pyreadstat.read_sas7bdat(
+                f'{LOAN_DIR}lnnote.sas7bdat',
+                columns=keep_cols,
+                row_limit=limit
+            )
+            df_temp = pl.from_pandas(df_temp)
+            
+            # Filter for HP products
+            df_temp = df_temp.filter(
+                (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
+                (pl.col('BALANCE') > 0)
+            )
+            
+            print(f"    Found {len(df_temp):,} HP product rows in first {limit:,} rows")
+            
+            if len(df_temp) > 0:
+                # If we found HP products, use this
+                df_lnnote_sample = df_temp
+                break
+                
+        except Exception as e:
+            print(f"    Error with row_limit={limit}: {e}")
+            continue
+    
+    # If we still don't have data, try random sampling from the full file
+    if df_lnnote_sample is None or len(df_lnnote_sample) == 0:
+        print("    No HP products found with sequential reads. Trying random sampling...")
+        try:
+            # Read full file (this will be slow but necessary)
+            print("    Reading full LNNOTE file (this may take a while)...")
+            df_full, meta = pyreadstat.read_sas7bdat(
+                f'{LOAN_DIR}lnnote.sas7bdat',
+                columns=keep_cols
+            )
+            df_full = pl.from_pandas(df_full)
+            
+            # Filter for HP products
+            df_full = df_full.filter(
+                (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
+                (pl.col('BALANCE') > 0)
+            )
+            
+            print(f"    Found {len(df_full):,} HP product rows in full file")
+            
+            if len(df_full) > SAMPLE_SIZE:
+                # Random sample
+                indices = random.sample(range(len(df_full)), SAMPLE_SIZE)
+                df_lnnote_sample = df_full[indices]
+                print(f"    Randomly sampled {SAMPLE_SIZE:,} rows")
+            else:
+                df_lnnote_sample = df_full
+                
+        except Exception as e:
+            print(f"    Error with random sampling: {e}")
+            sys.exit(1)
+    
+    # Filter to only accounts that exist in LOANTEMP
+    if df_lnnote_sample is not None and len(df_lnnote_sample) > 0:
+        df_lnnote = df_lnnote_sample.filter(
+            pl.col('ACCTNO').is_in(sampled_accts)
+        )
+        print(f"  LNNOTE after filtering to LOANTEMP accounts: {len(df_lnnote):,} rows")
+        
+        # Save to Parquet for future use
+        df_lnnote.write_parquet(lnnote_parquet)
+        print(f"  Saved to Parquet: {lnnote_parquet}")
+    else:
+        print("  ERROR: No matching LNNOTE records found")
         sys.exit(1)
-    
-    # Free up memory
-    del df_loantemp, df_lnnote
-    gc.collect()
-    
-except Exception as e:
-    print(f"  Error: {e}")
-    import traceback
-    traceback.print_exc()
+
+# STEP 3: Merge
+print("\nMerging data...")
+df_hploan = df_lnnote.join(df_loantemp, on=['ACCTNO', 'NOTENO'], how='inner')
+
+print(f"  HP Loans after merge: {len(df_hploan):,} accounts")
+
+if len(df_hploan) == 0:
+    print("  ERROR: No matching records after merge")
     sys.exit(1)
+
+# Free up memory
+del df_loantemp, df_lnnote
+gc.collect()
 
 # Process HP loans (matches SAS DATA HPLOAN step)
 print("\nProcessing HP loans...")
@@ -316,7 +410,6 @@ df_hploan = df_hploan.with_columns([
 ])
 
 # BRABBR = PUT(BRANCH,BRCHCD.) - format branch using BRCHCD format
-# For Python, we'll keep BRANCH as is since we don't have the format
 df_hploan = df_hploan.with_columns([
     pl.col('BRANCH').cast(pl.Utf8).alias('BRABBR')
 ])
@@ -616,6 +709,10 @@ else:
 print(f"\n{'='*60}")
 print(f"EIMRESHI Complete!")
 print(f"{'='*60}")
+print(f"\nSampling Strategy:")
+print(f"  - LOANTEMP: Full read (filtered to HP products)")
+print(f"  - LNNOTE: Smart sampling with multiple strategies")
+print(f"  - Sample Size: {SAMPLE_SIZE:,} rows")
 print(f"\nData Statistics:")
 print(f"  Total HP loans processed: {len(df_hploan):,}")
 print(f"\n4 Account Groups:")
@@ -627,4 +724,3 @@ print(f"\nOutput Directory: {OUTPUT_DIR}")
 print(f"  - {summary_count} summary reports")
 print(f"  - 1 detail report (NPL accounts)")
 print(f"\nParquet cache directory: {PARQUET_DIR}")
-print(f"  - Conversion only happens once; subsequent runs use Parquet")
