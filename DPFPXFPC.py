@@ -43,7 +43,7 @@ OUTPUT_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMRESHI/'
 for d in [OUTPUT_DIR]:
     os.makedirs(d, exist_ok=True)
 
-print("EIMRESHI - HP Loan Summary & Detail Report (TEST MODE - Limited Rows)")
+print("EIMRESHI - HP Loan Summary & Detail Report (OPTIMIZED TEST MODE)")
 print("=" * 60)
 
 # HP Products (from PBBLNFMT)
@@ -92,62 +92,73 @@ STATE_MAP = {
     '13': 'TRENGGANU', '14': 'W.PERSEKUTUAN', '15': 'LABUAN'
 }
 
-# Read loan data from SAS files
+# Read loan data from SAS files with optimization
 print("\nReading loan data from SAS files...")
+
 try:
-    # Read LOANTEMP.sas7bdat
-    print("  Reading LOANTEMP.sas7bdat...")
-    df_loantemp, meta = pyreadstat.read_sas7bdat(f'{CCDTEMP_DIR}LOANTEMP.sas7bdat')
+    # STEP 1: Read only needed columns from LOANTEMP with row limit
+    print("  Reading LOANTEMP.sas7bdat (limited columns & rows)...")
+    
+    # First, read only the columns we need and limit rows
+    loantemp_cols_needed = ['ACCTNO', 'NOTENO', 'PRODUCT', 'BALANCE', 'BORSTAT', 
+                           'DAYDIFF', 'CENSUS', 'BRABBR', 'NAME']
+    
+    # Read with limited rows and only needed columns
+    df_loantemp, meta = pyreadstat.read_sas7bdat(
+        f'{CCDTEMP_DIR}LOANTEMP.sas7bdat',
+        columns=loantemp_cols_needed,
+        row_limit=10000  # Read only 10,000 rows for testing
+    )
     df_loantemp = pl.from_pandas(df_loantemp)
     
-    # Limit to 100,000 rows for testing (take random sample)
-    if len(df_loantemp) > 100000:
-        # Take a random sample
-        sample_indices = random.sample(range(len(df_loantemp)), 100000)
-        df_loantemp = df_loantemp[sample_indices]
-        print(f"  Sampled 100,000 rows from LOANTEMP")
-    
+    # Filter for HP products and positive balance
     df_loantemp = df_loantemp.filter(
         (pl.col('PRODUCT').is_in(HP_PRODUCTS)) & 
         (pl.col('BALANCE') > 0)
     )
     
-    # Read LNNOTE.sas7bdat
-    print("  Reading LNNOTE.sas7bdat...")
-    df_lnnote, meta = pyreadstat.read_sas7bdat(f'{LOAN_DIR}LNNOTE.sas7bdat')
+    print(f"  LOANTEMP after filtering: {len(df_loantemp):,} rows")
+    
+    # Get unique account numbers from LOANTEMP for filtering LNNOTE
+    sampled_accts = df_loantemp['ACCTNO'].unique().to_list()
+    print(f"  Unique accounts from LOANTEMP: {len(sampled_accts):,}")
+    
+    # STEP 2: Read LNNOTE with row limit and filtering
+    print("  Reading LNNOTE.sas7bdat (limited columns & rows)...")
+    
+    # Read only needed columns and limit rows
+    lnnote_cols_needed = ['ACCTNO', 'NOTENO', 'LOANTYPE', 'NETPROC', 'APPVALUE',
+                         'NOTETERM', 'STATE', 'DEALERNO', 'SCORE2', 'ORGBAL',
+                         'CURBAL', 'PAYAMT', 'ISSUEDT']
+    
+    # Read with limited rows
+    df_lnnote, meta = pyreadstat.read_sas7bdat(
+        f'{LOAN_DIR}LNNOTE.sas7bdat',
+        columns=lnnote_cols_needed,
+        row_limit=10000  # Read only 10,000 rows for testing
+    )
     df_lnnote = pl.from_pandas(df_lnnote)
     
-    # Limit LNNOTE to match LOANTEMP sample (keep only accounts in sampled LOANTEMP)
-    # First, get the list of ACCTNO from sampled LOANTEMP
-    sampled_accts = df_loantemp['ACCTNO'].unique().to_list()
+    # Filter for HP products and positive balance, and only accounts from LOANTEMP sample
     df_lnnote = df_lnnote.filter(
         (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
         (pl.col('BALANCE') > 0) &
         (pl.col('ACCTNO').is_in(sampled_accts))
     )
     
-    # If LNNOTE is still too large, limit it
-    if len(df_lnnote) > 100000:
-        sample_indices = random.sample(range(len(df_lnnote)), 100000)
-        df_lnnote = df_lnnote[sample_indices]
-        print(f"  Sampled 100,000 rows from LNNOTE")
+    print(f"  LNNOTE after filtering: {len(df_lnnote):,} rows")
     
-    df_lnnote = df_lnnote.select([
-        'ACCTNO', 'NOTENO', 'LOANTYPE', 'NETPROC', 'APPVALUE',
-        'NOTETERM', 'STATE', 'DEALERNO', 'SCORE2', 'ORGBAL',
-        'CURBAL', 'PAYAMT', 'ISSUEDT'
-    ])
-    
-    # Merge
+    # STEP 3: Merge the data
+    print("  Merging data...")
     df_hploan = df_lnnote.join(df_loantemp, on=['ACCTNO', 'NOTENO'], how='inner')
     
     print(f"  HP Loans after merge: {len(df_hploan):,} accounts")
     
-    # If still too many, limit to 100,000
-    if len(df_hploan) > 100000:
-        sample_indices = random.sample(range(len(df_hploan)), 100000)
+    # If still too many, limit further
+    if len(df_hploan) > 5000:
+        sample_indices = random.sample(range(len(df_hploan)), 5000)
         df_hploan = df_hploan[sample_indices]
-        print(f"  Further limited to 100,000 rows for testing")
+        print(f"  Further limited to 5,000 rows for testing")
     
 except Exception as e:
     print(f"  Error: {e}")
@@ -314,6 +325,9 @@ print("\nGenerating summary reports...")
 
 def generate_summary_text(df, group_cols, title, subtitle, report_num):
     """Generate summary report as formatted text"""
+    
+    if len(df) == 0:
+        return f"No data for {title} - {subtitle}"
     
     # Create arrears buckets
     df_summary = df.with_columns([
@@ -537,31 +551,25 @@ for i, report in enumerate(reports):
         with open(f'{OUTPUT_DIR}{filename}', 'w') as f:
             f.write(report_text)
         summary_count += 1
-        if i % 8 == 0:  # Print progress every 8 reports
-            print(f"  Generated {i+1} of {len(reports)} reports...")
+        if i % 8 == 0 and i > 0:  # Print progress every 8 reports
+            print(f"  Generated {i} of {len(reports)} reports...")
 
 print(f"  Generated {summary_count} summary reports")
 
 # Generate detail report for NPL accounts
 print("\nGenerating detail report...")
 
-# Limit detail report to 100,000 rows for testing
+# Limit detail report
 df_detail = df_hploan2.select([
     'ACCTNO', 'NOTENO', 'NAME', 'BRABBR', 'PRODUCT', 'BORSTAT',
     'NETPROC', 'BALANCE', 'MTHARR', 'MARGINF', 'NOTETERM',
     'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE'
 ]).sort(['ACCTNO', 'NOTENO'])
 
-# If detail has too many rows, limit it
-if len(df_detail) > 100000:
-    sample_indices = random.sample(range(len(df_detail)), 100000)
-    df_detail = df_detail[sample_indices]
-    print(f"  Limited detail report to 100,000 rows for testing")
-
 # Generate detail report as text
 detail_lines = []
 detail_lines.append("=" * 100)
-detail_lines.append("EIMRESHI DETAIL REPORT - NPL ACCOUNTS (TEST - LIMITED ROWS)")
+detail_lines.append("EIMRESHI DETAIL REPORT - NPL ACCOUNTS (OPTIMIZED TEST)")
 detail_lines.append("=" * 100)
 detail_lines.append(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
 detail_lines.append(f"Week: {wk}")
@@ -575,12 +583,8 @@ headers = ['ACCTNO', 'NOTENO', 'NAME', 'BRABBR', 'PRODUCT', 'BORSTAT',
 detail_lines.append(" | ".join(headers))
 detail_lines.append("-" * 150)
 
-# Data rows (limit display to first 1000 rows for readability)
-display_limit = min(1000, len(df_detail))
+# Display all rows (limited by the data size)
 for idx, row in enumerate(df_detail.iter_rows()):
-    if idx >= display_limit:
-        detail_lines.append(f"... and {len(df_detail) - display_limit} more rows ...")
-        break
     row_parts = []
     for i, val in enumerate(row):
         if isinstance(val, (int, float)):
@@ -605,12 +609,17 @@ detail_lines.append("=" * 100)
 with open(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.txt', 'w') as f:
     f.write("\n".join(detail_lines))
 
-print(f"  Detail report: {tot_acc:,} NPL accounts (showing first {display_limit:,})")
+print(f"  Detail report: {tot_acc:,} NPL accounts")
 print(f"  Total balance: {tot_amt:,.2f}")
 
 print(f"\n{'='*60}")
-print(f"EIMRESHI Complete! (TEST MODE - Limited to ~100,000 rows)")
+print(f"EIMRESHI Complete! (OPTIMIZED TEST MODE)")
 print(f"{'='*60}")
+print(f"\nOptimizations applied:")
+print(f"  - Read only needed columns from SAS files")
+print(f"  - Applied row limits at read time (10,000 rows each)")
+print(f"  - Filtered LNNOTE using accounts from LOANTEMP")
+print(f"  - Limited final dataset to 5,000 rows")
 print(f"\nOutputs:")
 print(f"  - {summary_count} summary reports (by category)")
 print(f"  - 1 detail report (NPL accounts)")
@@ -620,14 +629,4 @@ print(f"  1. All HP accounts: {len(df_hploan1):,}")
 print(f"  2. NPL (>=3 months OR F/I/R): {len(df_hploan2):,}")
 print(f"  3. Restructured (NOTENO >= 98010): {len(df_hploan3):,}")
 print(f"  4. Restructured NPL: {len(df_hploan4):,}")
-print(f"\nReport Categories:")
-print(f"  1. Credit Risk Score")
-print(f"  2. Source of Business")
-print(f"  3. Margin of Finance")
-print(f"  4. Loan Term")
-print(f"  5. Amount Financed")
-print(f"  6. By State")
-print(f"  7. By Make of Vehicle")
-print(f"  8. Make = OTHERS")
 print(f"\nOutput Directory: {OUTPUT_DIR}")
-print(f"\nNOTE: This is a TEST run with limited data (~100,000 rows)")
