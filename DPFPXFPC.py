@@ -30,7 +30,8 @@ Arrears Buckets:
 """
 
 import polars as pl
-from datetime import datetime
+import pyreadstat
+from datetime import datetime, timedelta
 import os
 
 # Directories
@@ -47,39 +48,32 @@ print("=" * 60)
 # HP Products (from PBBLNFMT)
 HP_PRODUCTS = [128, 130, 380, 381, 700, 705]
 
-# Read REPTDATE
-print("\nReading REPTDATE...")
-try:
-    df_reptdate = pl.read_parquet(f'{LOAN_DIR}REPTDATE.parquet')
-    reptdate = df_reptdate['REPTDATE'][0]
-    
-    day = reptdate.day
-    
-    # Week determination
-    if day == 8:
-        sdd, wk, wk1 = 1, '1', '4'
-    elif day == 15:
-        sdd, wk, wk1 = 9, '2', '1'
-    elif day == 22:
-        sdd, wk, wk1 = 16, '3', '2'
-    else:
-        sdd, wk, wk1 = 23, '4', '3'
-    
-    mm = reptdate.month
-    mm1 = 12 if (wk == '1' and mm == 1) else (mm - 1 if wk == '1' else mm)
-    
-    reptyear = reptdate.year
-    reptmon = f'{mm:02d}'
-    reptday = f'{day:02d}'
-    rdate = reptdate.strftime('%d%m%y')
-    
-    print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
-    print(f"Week: {wk}")
-except Exception as e:
-    print(f"Error: {e}")
-    import sys
-    sys.exit(1)
+# Use yesterday's date instead of REPTDATE
+reptdate = datetime.now() - timedelta(days=1)
+reptdate = reptdate.replace(hour=0, minute=0, second=0, microsecond=0)
 
+day = reptdate.day
+
+# Week determination
+if day == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+elif day == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+elif day == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+else:
+    sdd, wk, wk1 = 23, '4', '3'
+
+mm = reptdate.month
+mm1 = 12 if (wk == '1' and mm == 1) else (mm - 1 if wk == '1' else mm)
+
+reptyear = reptdate.year
+reptmon = f'{mm:02d}'
+reptday = f'{day:02d}'
+rdate = reptdate.strftime('%d%m%y')
+
+print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+print(f"Week: {wk}")
 print("=" * 60)
 
 # Make of vehicle mapping
@@ -97,18 +91,20 @@ STATE_MAP = {
     '13': 'TRENGGANU', '14': 'W.PERSEKUTUAN', '15': 'LABUAN'
 }
 
-# Read loan data
-print("\nReading loan data...")
+# Read loan data from SAS files
+print("\nReading loan data from SAS files...")
 try:
-    # Read LOANTEMP
-    df_loantemp = pl.read_parquet(f'{CCDTEMP_DIR}LOANTEMP.parquet')
+    # Read LOANTEMP.sas7bdat
+    df_loantemp, meta = pyreadstat.read_sas7bdat(f'{CCDTEMP_DIR}LOANTEMP.sas7bdat')
+    df_loantemp = pl.from_pandas(df_loantemp)
     df_loantemp = df_loantemp.filter(
         (pl.col('PRODUCT').is_in(HP_PRODUCTS)) & 
         (pl.col('BALANCE') > 0)
     )
     
-    # Read LNNOTE
-    df_lnnote = pl.read_parquet(f'{LOAN_DIR}LNNOTE.parquet')
+    # Read LNNOTE.sas7bdat
+    df_lnnote, meta = pyreadstat.read_sas7bdat(f'{LOAN_DIR}LNNOTE.sas7bdat')
+    df_lnnote = pl.from_pandas(df_lnnote)
     df_lnnote = df_lnnote.filter(
         (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
         (pl.col('BALANCE') > 0)
@@ -124,7 +120,7 @@ try:
     print(f"  HP Loans: {len(df_hploan):,} accounts")
     
 except Exception as e:
-    print(f"  âš  Error: {e}")
+    print(f"  Error: {e}")
     import sys
     sys.exit(1)
 
@@ -136,11 +132,11 @@ df_hploan = df_hploan.with_columns([
     # Installments paid
     ((pl.col('ORGBAL') - pl.col('CURBAL')) / pl.col('PAYAMT')).alias('ISTLPD'),
     
-    # Issue date
+    # Issue date (assuming ISSUEDT is in numeric format like MMDDYYYY)
     pl.col('ISSUEDT').cast(pl.Utf8).str.slice(0, 8).str.to_datetime('%m%d%Y').alias('ISSDTE'),
     
     # Credit risk (first character of SCORE2)
-    pl.col('SCORE2').str.slice(0, 1).alias('CRRISK'),
+    pl.col('SCORE2').cast(pl.Utf8).str.slice(0, 1).alias('CRRISK'),
     
     # Margin of finance
     pl.when(pl.col('APPVALUE') > 0)
@@ -173,10 +169,10 @@ df_hploan = df_hploan.with_columns([
       .alias('TERMGRP'),
     
     # State name
-    pl.col('STATE').replace(STATE_MAP, default='OTHERS').alias('STATENM'),
+    pl.col('STATE').cast(pl.Utf8).replace(STATE_MAP, default='OTHERS').alias('STATENM'),
     
     # National (East/West Malaysia)
-    pl.when(pl.col('STATE').is_in(['10', '11', '15']))
+    pl.when(pl.col('STATE').cast(pl.Utf8).is_in(['10', '11', '15']))
       .then(pl.lit('EAST MALAYSIA'))
       .otherwise(pl.lit('WEST MALAYSIA'))
       .alias('NATIONAL'),
@@ -263,7 +259,7 @@ df_hploan = df_hploan.with_columns([
       .alias('MTHARR')
 ])
 
-print(f"  âœ“ Processed: {len(df_hploan):,} HP loans")
+print(f"  Processed: {len(df_hploan):,} HP loans")
 
 # Create 4 account groups
 print("\nCreating account groups...")
@@ -283,11 +279,11 @@ print(f"  HPLOAN2 (NPL): {len(df_hploan2):,}")
 print(f"  HPLOAN3 (Restructured): {len(df_hploan3):,}")
 print(f"  HPLOAN4 (Restructured NPL): {len(df_hploan4):,}")
 
-# Generate summary reports
+# Generate summary reports as text files
 print("\nGenerating summary reports...")
 
-def generate_summary(df, group_cols, title, subtitle):
-    """Generate summary report by grouping"""
+def generate_summary_text(df, group_cols, title, subtitle, report_num):
+    """Generate summary report as formatted text"""
     
     # Create arrears buckets
     df_summary = df.with_columns([
@@ -321,7 +317,127 @@ def generate_summary(df, group_cols, title, subtitle):
         columns='BUCKET'
     )
     
-    return df_pivot
+    # Generate text report
+    report_lines = []
+    report_lines.append("=" * 100)
+    report_lines.append(f"EIMRESHI SUMMARY REPORT - {title}")
+    report_lines.append("=" * 100)
+    report_lines.append(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+    report_lines.append(f"Week: {wk}")
+    report_lines.append(f"Subtitle: {subtitle}")
+    report_lines.append("=" * 100)
+    report_lines.append("")
+    
+    # Add group descriptions
+    group_desc = {
+        'CRRISK': 'Credit Risk Score',
+        'SOURCE': 'Source of Business',
+        'MGINGRP': 'Margin of Finance',
+        'TERMGRP': 'Loan Term',
+        'FINGRP': 'Amount Financed',
+        'STATENM': 'State',
+        'NATIONAL': 'Region',
+        'MAKE': 'Make of Vehicle',
+        'CARS': 'Car Category',
+        'NEWSEC': 'New/Secondhand',
+        'GOODS': 'Goods Type',
+        'BRABBR': 'Branch'
+    }
+    
+    for col in group_cols:
+        if col in group_desc:
+            report_lines.append(f"Group By: {group_desc[col]}")
+    
+    report_lines.append("")
+    
+    # Define bucket order
+    bucket_order = ['<3MTHS', '3-6MTHS', '6-12MTHS', '12-24MTHS', '24-36MTHS', '>36MTHS', 'UNKNOWN']
+    
+    # Format the report
+    if len(df_pivot) > 0:
+        # Extract columns
+        count_cols = [f'COUNT_{b}' for b in bucket_order if f'COUNT_{b}' in df_pivot.columns]
+        amount_cols = [f'AMOUNT_{b}' for b in bucket_order if f'AMOUNT_{b}' in df_pivot.columns]
+        
+        # Calculate total count and amount
+        total_count = 0
+        total_amount = 0
+        for col in count_cols:
+            total_count += df_pivot[col].sum() if df_pivot[col].dtype in [pl.Int64, pl.Float64] else 0
+        for col in amount_cols:
+            total_amount += df_pivot[col].sum() if df_pivot[col].dtype in [pl.Int64, pl.Float64] else 0
+        
+        # Header
+        header_parts = []
+        for col in group_cols:
+            if col in group_desc:
+                header_parts.append(group_desc[col])
+            else:
+                header_parts.append(col)
+        header_parts.append('TOTAL COUNT')
+        header_parts.append('TOTAL AMOUNT')
+        
+        # Add bucket headers
+        for bucket in bucket_order:
+            if f'COUNT_{bucket}' in df_pivot.columns:
+                header_parts.append(f'COUNT_{bucket}')
+                header_parts.append(f'AMT_{bucket}')
+        
+        report_lines.append(" | ".join(header_parts))
+        report_lines.append("-" * len(" | ".join(header_parts)))
+        
+        # Data rows
+        for row in df_pivot.iter_rows():
+            row_parts = []
+            for col in group_cols:
+                val = row[df_pivot.columns.index(col)] if col in df_pivot.columns else ''
+                row_parts.append(str(val))
+            
+            # Add totals
+            row_count = 0
+            row_amount = 0
+            for col in count_cols:
+                idx = df_pivot.columns.index(col)
+                row_count += row[idx] if isinstance(row[idx], (int, float)) else 0
+            for col in amount_cols:
+                idx = df_pivot.columns.index(col)
+                row_amount += row[idx] if isinstance(row[idx], (int, float)) else 0
+            
+            row_parts.append(f"{row_count:,}")
+            row_parts.append(f"{row_amount:,.2f}")
+            
+            # Add bucket data
+            for bucket in bucket_order:
+                if f'COUNT_{bucket}' in df_pivot.columns:
+                    count_idx = df_pivot.columns.index(f'COUNT_{bucket}')
+                    amt_idx = df_pivot.columns.index(f'AMOUNT_{bucket}')
+                    row_parts.append(f"{row[count_idx]:,}")
+                    row_parts.append(f"{row[amt_idx]:,.2f}")
+            
+            report_lines.append(" | ".join(row_parts))
+        
+        report_lines.append("-" * len(" | ".join(header_parts)))
+        
+        # Add totals row
+        total_parts = ['TOTAL'] + [''] * (len(group_cols) - 1)
+        total_parts.append(f"{total_count:,}")
+        total_parts.append(f"{total_amount:,.2f}")
+        
+        for bucket in bucket_order:
+            if f'COUNT_{bucket}' in df_pivot.columns:
+                count_idx = df_pivot.columns.index(f'COUNT_{bucket}')
+                amt_idx = df_pivot.columns.index(f'AMOUNT_{bucket}')
+                total_parts.append(f"{df_pivot[count_idx].sum():,}")
+                total_parts.append(f"{df_pivot[amt_idx].sum():,.2f}")
+        
+        report_lines.append(" | ".join(total_parts))
+    
+    report_lines.append("")
+    report_lines.append(f"Total Accounts: {len(df):,}")
+    report_lines.append(f"Total Balance: {df['BALANCE'].sum():,.2f}")
+    report_lines.append("=" * 100)
+    
+    return "\n".join(report_lines)
 
 # Report configurations
 reports = [
@@ -374,22 +490,24 @@ reports = [
     {'df': df_hploan4.filter(pl.col('MAKE') == 'OTHERS'), 'groups': ['NEWSEC', 'GOODS', 'BRABBR'], 'title': 'BY MAKE OF VEHICLE = OTHERS', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'}
 ]
 
-# Generate all reports (simplified - production would create CSV files)
+# Generate all reports as text files
 summary_count = 0
 for i, report in enumerate(reports):
     if len(report['df']) > 0:
-        df_report = generate_summary(
+        report_text = generate_summary_text(
             report['df'], 
             report['groups'], 
             report['title'], 
-            report['subtitle']
+            report['subtitle'],
+            i + 1
         )
         
-        filename = f"EIMRESHI_SUMMARY_{i+1:02d}_{report['title'].replace(' ', '_')}.parquet"
-        df_report.write_parquet(f'{OUTPUT_DIR}{filename}')
+        filename = f"EIMRESHI_SUMMARY_{i+1:02d}_{report['title'].replace(' ', '_')}.txt"
+        with open(f'{OUTPUT_DIR}{filename}', 'w') as f:
+            f.write(report_text)
         summary_count += 1
 
-print(f"  âœ“ Generated {summary_count} summary reports")
+print(f"  Generated {summary_count} summary reports")
 
 # Generate detail report for NPL accounts
 print("\nGenerating detail report...")
@@ -400,17 +518,54 @@ df_detail = df_hploan2.select([
     'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE'
 ]).sort(['ACCTNO', 'NOTENO'])
 
-df_detail.write_csv(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.csv', separator=';')
+# Generate detail report as text
+detail_lines = []
+detail_lines.append("=" * 100)
+detail_lines.append("EIMRESHI DETAIL REPORT - NPL ACCOUNTS")
+detail_lines.append("=" * 100)
+detail_lines.append(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+detail_lines.append(f"Week: {wk}")
+detail_lines.append("=" * 100)
+detail_lines.append("")
 
-# Calculate totals
+# Headers
+headers = ['ACCTNO', 'NOTENO', 'NAME', 'BRABBR', 'PRODUCT', 'BORSTAT', 
+           'NETPROC', 'BALANCE', 'MTHARR', 'MARGINF', 'NOTETERM',
+           'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE']
+detail_lines.append(" | ".join(headers))
+detail_lines.append("-" * 150)
+
+# Data rows
+for row in df_detail.iter_rows():
+    row_parts = []
+    for i, val in enumerate(row):
+        if isinstance(val, (int, float)):
+            if headers[i] in ['NETPROC', 'BALANCE', 'MARGINF']:
+                row_parts.append(f"{val:,.2f}")
+            elif headers[i] in ['ISTLPD']:
+                row_parts.append(f"{val:.2f}")
+            else:
+                row_parts.append(str(val))
+        else:
+            row_parts.append(str(val) if val is not None else '')
+    detail_lines.append(" | ".join(row_parts))
+
+detail_lines.append("-" * 150)
 tot_acc = len(df_detail)
 tot_amt = df_detail['BALANCE'].sum()
+detail_lines.append(f"Total Accounts: {tot_acc:,}")
+detail_lines.append(f"Total Balance: {tot_amt:,.2f}")
+detail_lines.append("=" * 100)
 
-print(f"  âœ“ Detail report: {tot_acc:,} NPL accounts")
-print(f"  âœ“ Total balance: {tot_amt:,.2f}")
+# Save detail report
+with open(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.txt', 'w') as f:
+    f.write("\n".join(detail_lines))
+
+print(f"  Detail report: {tot_acc:,} NPL accounts")
+print(f"  Total balance: {tot_amt:,.2f}")
 
 print(f"\n{'='*60}")
-print(f"âœ“ EIMRESHI Complete!")
+print(f"EIMRESHI Complete!")
 print(f"{'='*60}")
 print(f"\nOutputs:")
 print(f"  - {summary_count} summary reports (by category)")
@@ -430,6 +585,4 @@ print(f"  5. Amount Financed")
 print(f"  6. By State")
 print(f"  7. By Make of Vehicle")
 print(f"  8. Make = OTHERS")
-
-
-remove the reptdate.parquet, replace with datetime timedelta - 1 instead. all inputs are in sas7bdat, may use pyreadstat. output in text file for report
+print(f"\nOutput Directory: {OUTPUT_DIR}")
