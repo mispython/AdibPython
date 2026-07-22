@@ -498,3 +498,6 @@ print(f"\nKey Difference from EIIFTXT1:")
 print(f"  - Filtered by existing NPL.LIST file")
 print(f"  - No LOANTYPE exclusion in NPLA WHERE clause")
 print(f"  - Only accounts previously identified for write-off")
+
+
+this is EIIFTXT2, slightly different then previous EIIFTXT1. change all inputs extension to sas7bdat instead of parquet, may use pyreadstat. may follow similar to the previous EIIFTXT1 if needed. output in text file and sas dataset if required.
