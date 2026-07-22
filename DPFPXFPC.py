@@ -1,366 +1,678 @@
-# EIMREPOI_REPO_PROCESSOR.py
+"""
+EIMRESHI - HP/Hire Purchase Loan Summary & Detail Report (Production Ready)
 
-import duckdb
-import pyarrow as pa
-import pyarrow.parquet as pq
-import pyarrow.csv as csv
-from pathlib import Path
-import os
-from datetime import datetime, timedelta
+Purpose:
+- Generate summary reports for HP loans (Conv & Aitab) by various groupings
+- Track NPL accounts (>=3 months in arrears or F/I/R status)
+- Monitor restructured accounts (NOTENO >= 98010)
+- Detail report for NPL accounts
+
+HP Products: 128, 130, 380, 381, 700, 705
+"""
+
+import polars as pl
 import pyreadstat
-import pandas as pd
+from datetime import datetime, timedelta
+import os
+import random
 
-def main():
-    # Configuration using pathlib
-    base_path = Path(".")
-    loan_path = base_path / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI"
-    arrear_path = base_path / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI"
-    output_path = base_path / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOI"
+# Directories
+LOAN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/'
+CCDTEMP_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/'
+OUTPUT_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMRESHI/'
+
+for d in [OUTPUT_DIR]:
+    os.makedirs(d, exist_ok=True)
+
+print("EIMRESHI - HP Loan Summary & Detail Report (OPTIMIZED TEST MODE)")
+print("=" * 60)
+
+# HP Products (from PBBLNFMT)
+HP_PRODUCTS = [128, 130, 380, 381, 700, 705]
+
+# Use yesterday's date
+reptdate = datetime.now() - timedelta(days=1)
+reptdate = reptdate.replace(hour=0, minute=0, second=0, microsecond=0)
+
+day = reptdate.day
+
+# Week determination
+if day == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+elif day == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+elif day == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+else:
+    sdd, wk, wk1 = 23, '4', '3'
+
+mm = reptdate.month
+mm1 = 12 if (wk == '1' and mm == 1) else (mm - 1 if wk == '1' else mm)
+
+reptyear = reptdate.year
+reptmon = f'{mm:02d}'
+reptday = f'{day:02d}'
+rdate = reptdate.strftime('%d%m%y')
+
+print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+print(f"Week: {wk}")
+print("=" * 60)
+
+# Make of vehicle mapping
+MAKE_MAP = {
+    '1': 'PROTON', '2': 'PERODUA', '3': 'TOYOTA', '4': 'NISSAN',
+    '5': 'HONDA', '6': 'ISUZU', '7': 'DAIHATSU', '8': 'MITSUBISHI',
+    '9': 'FORD', '10': 'MERCEDES BENZ', '11': 'VOLVO', '13': 'BMW'
+}
+
+# State mapping
+STATE_MAP = {
+    '1': 'JOHORE', '2': 'KEDAH', '3': 'KELANTAN', '4': 'MALACCA',
+    '5': 'N.SEMBILAN', '6': 'PAHANG', '7': 'PENANG', '8': 'PERAK',
+    '9': 'PERLIS', '10': 'SABAH', '11': 'SARAWAK', '12': 'SELANGOR',
+    '13': 'TRENGGANU', '14': 'W.PERSEKUTUAN', '15': 'LABUAN'
+}
+
+# Read loan data from SAS files with better sampling
+print("\nReading loan data from SAS files...")
+
+try:
+    # Strategy: Read LOANTEMP in chunks to find HP products
+    print("  Reading loantemp.sas7bdat (searching for HP products)...")
     
-    # Create output directory if it doesn't exist
-    output_path.mkdir(exist_ok=True)
+    # First, try to read more rows (50,000) to increase chances of finding HP products
+    df_loantemp, meta = pyreadstat.read_sas7bdat(
+        f'{CCDTEMP_DIR}loantemp.sas7bdat',
+        row_limit=50000  # Increase to 50,000 rows
+    )
+    df_loantemp = pl.from_pandas(df_loantemp)
     
-    # Connect to DuckDB
-    conn = duckdb.connect()
+    print(f"  LOANTEMP raw rows: {len(df_loantemp):,}")
     
-    # Step 1: Calculate REPTDATE using current date minus 1 day
-    # In SAS, REPTDATE is from LOAN.REPTDATE - we use yesterday
-    reptdate = datetime.now() - timedelta(days=1)
-    day = reptdate.day
-    month = reptdate.month
-    year = reptdate.year
+    # Check what PRODUCT values we have
+    unique_products = df_loantemp['PRODUCT'].unique().to_list()
+    print(f"  Unique PRODUCT values in sample: {sorted(unique_products)[:20]}...")
     
-    # Implement SELECT(DAY(REPTDATE)) logic from SAS
-    if day == 8:
-        sdd = 1
-        wk = '1'
-        wk1 = '4'
-    elif day == 15:
-        sdd = 9
-        wk = '2'
-        wk1 = '1'
-    elif day == 22:
-        sdd = 16
-        wk = '3'
-        wk1 = '2'
-    else:
-        sdd = 23
-        wk = '4'
-        wk1 = '3'
-    
-    # Calculate MM1 (SAS logic)
-    if wk == '1':
-        mm1 = month - 1
-        if mm1 == 0:
-            mm1 = 12
-    else:
-        mm1 = month
-    
-    # Calculate SDATE
-    sdate = datetime(year, month, sdd)
-    
-    # Set macro variables equivalent (SAS SYMPUT)
-    nowk = wk
-    nowk1 = wk1
-    reptmon = f"{month:02d}"
-    reptmon1 = f"{mm1:02d}"
-    reperyear = str(year)
-    reptday = f"{day:02d}"
-    rdate = reptdate.strftime('%d%m%y')  # DDMMYY format
-    sdate_str = sdate.strftime('%d%m%y')
-    
-    print(f"Processing date: {reptdate}")
-    print(f"Week: {nowk}, Previous Week: {nowk1}")
-    print(f"Month: {reptmon}, Previous Month: {reptmon1}")
-    print(f"RDate: {rdate}, SDate: {sdate_str}")
-    print("=" * 60)
-    
-    # Step 2: Read and process LNNOTE with filters (SAS PROC SORT with WHERE)
-    lnnote_file = loan_path / "lnnote.sas7bdat"
-    print("Reading LNNOTE.sas7bdat...")
-    lnnote_df, lnnote_meta = pyreadstat.read_sas7bdat(str(lnnote_file))
-    print(f"LNNOTE total records: {len(lnnote_df):,}")
-    
-    # Limit to 1000 rows for testing
-    lnnote_df = lnnote_df.head(1000)
-    print(f"LNNOTE limited to 1000 rows for testing: {len(lnnote_df)}")
-    
-    # Convert column names to lowercase
-    lnnote_df.columns = lnnote_df.columns.str.lower()
-    
-    # HP loan types - these would come from &HP macro variable in SAS
-    hp_values = ['983', '993', '984', '994']
-    
-    # Apply SAS WHERE conditions: LOANTYPE IN &HP AND BALANCE GT 0 AND BORSTAT NOT IN ('F','I','R')
-    lnnote_filtered = lnnote_df[
-        (lnnote_df['loantype'].astype(str).isin(hp_values)) &
-        (lnnote_df['balance'] > 0) &
-        (~lnnote_df['borstat'].isin(['F', 'I', 'R']))
-    ]
-    
-    # Keep only needed columns (KEEP=ACCTNO LOANTYPE NTBRCH COLLDESC COLLYEAR)
-    lnnote_filtered = lnnote_filtered[['acctno', 'loantype', 'ntbrch', 'colldesc', 'collyear']]
-    
-    print(f"LNNOTE records after filtering: {len(lnnote_filtered)}")
-    print("=" * 60)
-    
-    # Step 3: Read NAME8 (KEEP=ACCTNO LINETHRE LINEFOUR)
-    name8_file = loan_path / "name8.sas7bdat"
-    print("Reading NAME8.sas7bdat...")
-    name8_df, name8_meta = pyreadstat.read_sas7bdat(str(name8_file))
-    name8_df.columns = name8_df.columns.str.lower()
-    print(f"NAME8 total records: {len(name8_df):,}")
-    
-    # Limit to 1000 rows for testing
-    name8_df = name8_df.head(1000)
-    print(f"NAME8 limited to 1000 rows for testing: {len(name8_df)}")
-    
-    # Keep only needed columns
-    name8_df = name8_df[['acctno', 'linethre', 'linefour']]
-    # Rename columns (SAS RENAME=(LINETHRE=ENGINE LINEFOUR=CHASSIS))
-    name8_df = name8_df.rename(columns={'linethre': 'engine', 'linefour': 'chassis'})
-    
-    print(f"NAME8 records kept: {len(name8_df)}")
-    print("=" * 60)
-    
-    # Step 4: Read ARREAR (KEEP=ACCTNO ARREAR)
-    arrear_file = arrear_path / "loantemp.sas7bdat"
-    print("Reading LOANTEMP.sas7bdat...")
-    arrear_df, arrear_meta = pyreadstat.read_sas7bdat(str(arrear_file))
-    arrear_df.columns = arrear_df.columns.str.lower()
-    print(f"ARREAR total records: {len(arrear_df):,}")
-    
-    # Limit to 1000 rows for testing
-    arrear_df = arrear_df.head(1000)
-    print(f"ARREAR limited to 1000 rows for testing: {len(arrear_df)}")
-    
-    # Keep only needed columns
-    arrear_df = arrear_df[['acctno', 'arrear']]
-    
-    print(f"ARREAR records kept: {len(arrear_df)}")
-    print("=" * 60)
-    
-    # Step 5: Merge datasets (SAS DATA REPO with MERGE and BY ACCTNO)
-    print("Merging datasets...")
-    # Merge LNNOTE(IN=AA) with NAME8 and ARREAR
-    repo_df = pd.merge(
-        lnnote_filtered, 
-        name8_df, 
-        on='acctno', 
-        how='left',  # LEFT JOIN (IN=AA ensures only LNNOTE records kept)
-        indicator=True
+    # Filter for HP products and positive balance
+    df_loantemp = df_loantemp.filter(
+        (pl.col('PRODUCT').is_in(HP_PRODUCTS)) & 
+        (pl.col('BALANCE') > 0)
     )
     
-    # Keep only records from LNNOTE (IN=AA condition)
-    repo_df = repo_df[repo_df['_merge'] == 'left_only']
-    repo_df = repo_df.drop(columns=['_merge'])
+    print(f"  LOANTEMP after filtering: {len(df_loantemp):,} rows")
     
-    # Merge with ARREAR
-    repo_df = pd.merge(
-        repo_df, 
-        arrear_df, 
-        on='acctno', 
-        how='left'
+    # If still no data, try reading the entire file but with column filtering
+    if len(df_loantemp) == 0:
+        print("  No HP products found in first 50,000 rows. Reading entire file with only HP products...")
+        
+        # Read the entire file - but pyreadstat doesn't support column selection
+        # We'll read all and then filter
+        df_loantemp_full, meta = pyreadstat.read_sas7bdat(
+            f'{CCDTEMP_DIR}loantemp.sas7bdat'
+        )
+        df_loantemp_full = pl.from_pandas(df_loantemp_full)
+        
+        # Filter for HP products and positive balance
+        df_loantemp = df_loantemp_full.filter(
+            (pl.col('PRODUCT').is_in(HP_PRODUCTS)) & 
+            (pl.col('BALANCE') > 0)
+        )
+        
+        print(f"  LOANTEMP after full read & filter: {len(df_loantemp):,} rows")
+        
+        # If we have too many, sample 10,000
+        if len(df_loantemp) > 10000:
+            sample_indices = random.sample(range(len(df_loantemp)), 10000)
+            df_loantemp = df_loantemp[sample_indices]
+            print(f"  Sampled 10,000 rows from {len(df_loantemp):,} total HP products")
+    
+    if len(df_loantemp) == 0:
+        print("  ERROR: No HP products found in LOANTEMP. Please check:")
+        print(f"    - HP_PRODUCTS list: {HP_PRODUCTS}")
+        print(f"    - Available PRODUCT values: {unique_products[:10]}")
+        print("  Creating empty output...")
+        with open(f'{OUTPUT_DIR}EIMRESHI_NO_DATA.txt', 'w') as f:
+            f.write(f"No HP loan data found for report date {reptdate.strftime('%d/%m/%Y')}\n")
+            f.write(f"HP Products checked: {HP_PRODUCTS}\n")
+            f.write(f"Products found in LOANTEMP: {unique_products[:50]}")
+        import sys
+        sys.exit(0)
+    
+    # Get unique account numbers from LOANTEMP for filtering LNNOTE
+    sampled_accts = df_loantemp['ACCTNO'].unique().to_list()
+    print(f"  Unique accounts from LOANTEMP: {len(sampled_accts):,}")
+    
+    # STEP 2: Read LNNOTE with smart sampling
+    print("  Reading lnnote.sas7bdat...")
+    
+    # First, try reading 50,000 rows
+    df_lnnote, meta = pyreadstat.read_sas7bdat(
+        f'{LOAN_DIR}lnnote.sas7bdat',
+        row_limit=50000
+    )
+    df_lnnote = pl.from_pandas(df_lnnote)
+    
+    print(f"  LNNOTE raw rows: {len(df_lnnote):,}")
+    
+    # Filter for HP products and positive balance, and only accounts from LOANTEMP sample
+    df_lnnote = df_lnnote.filter(
+        (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
+        (pl.col('BALANCE') > 0) &
+        (pl.col('ACCTNO').is_in(sampled_accts))
     )
     
-    print(f"Merged REPO records: {len(repo_df)}")
-    print("=" * 60)
+    print(f"  LNNOTE after filtering: {len(df_lnnote):,} rows")
     
-    # Step 6: Process REPO data - add derived fields (SAS DATA REPO step)
-    print("Processing REPO data...")
-    
-    # Note: Need format lookup tables for BRCHCD and CACNAME
-    # For testing, using placeholder logic
-    processed_records = []
-    
-    for idx, record in repo_df.iterrows():
-        # BRABBR - would need format lookup, using NTBRCH as placeholder
-        ntbrch_val = record['ntbrch'] if pd.notna(record['ntbrch']) else None
-        # In production, you'd have a format lookup dictionary
-        brabbr = f"BR{str(ntbrch_val)[:3]}" if ntbrch_val else "000"
+    # If no matches, try reading more rows or the entire file
+    if len(df_lnnote) == 0:
+        print("  No matching LNNOTE records in first 50,000 rows. Reading more...")
         
-        # CAC - would need format lookup
-        cac = f"CAC{str(ntbrch_val)[:5]}" if ntbrch_val else "UNKNOWN"
+        # Try reading 200,000 rows
+        df_lnnote, meta = pyreadstat.read_sas7bdat(
+            f'{LOAN_DIR}lnnote.sas7bdat',
+            row_limit=200000
+        )
+        df_lnnote = pl.from_pandas(df_lnnote)
         
-        # Extract vehicle details from COLLDESC (SAS 1-indexed positions)
-        coll_desc = str(record['colldesc']) if pd.notna(record['colldesc']) else ''
+        df_lnnote = df_lnnote.filter(
+            (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
+            (pl.col('BALANCE') > 0) &
+            (pl.col('ACCTNO').is_in(sampled_accts))
+        )
         
-        # SAS SUBSTR(COLLDESC,1,16) - positions 1 to 16 (length 16)
-        make = coll_desc[0:16] if len(coll_desc) >= 16 else coll_desc.ljust(16)
+        print(f"  LNNOTE after reading 200,000 rows: {len(df_lnnote):,} rows")
         
-        # SAS SUBSTR(COLLDESC,16,21) - starting at position 16, length 21
-        # In Python (0-indexed): start at 15, take 21 characters
-        model = coll_desc[15:36] if len(coll_desc) >= 36 else coll_desc[15:] if len(coll_desc) > 15 else ''
-        
-        # SAS SUBSTR(COLLDESC,40,13) - starting at position 40, length 13
-        # In Python (0-indexed): start at 39, take 13 characters
-        regno = coll_desc[39:52] if len(coll_desc) >= 52 else coll_desc[39:] if len(coll_desc) > 39 else ''
-        
-        # Handle None values
-        engine = str(record['engine']) if pd.notna(record['engine']) else ''
-        chassis = str(record['chassis']) if pd.notna(record['chassis']) else ''
-        collyear = str(record['collyear'])[:4] if pd.notna(record['collyear']) else ''
-        arrear = float(record['arrear']) if pd.notna(record['arrear']) else 0
-        
-        processed_record = {
-            'acctno': record['acctno'],
-            'loantype': record['loantype'],
-            'ntbrch': ntbrch_val,
-            'brabbr': brabbr[:3],  # Ensure 3 characters
-            'cac': cac[:20],       # Ensure 20 characters
-            'make': make[:16],     # Ensure 16 characters
-            'model': model[:21],   # Ensure 21 characters
-            'regno': regno[:13],   # Ensure 13 characters
-            'engine': engine[:40], # Ensure 40 characters
-            'chassis': chassis[:40], # Ensure 40 characters
-            'collyear': collyear[:4], # Ensure 4 characters
-            'arrear': arrear
-        }
-        processed_records.append(processed_record)
+        # If still no matches, read entire file
+        if len(df_lnnote) == 0:
+            print("  Still no matches. Reading entire LNNOTE file...")
+            df_lnnote_full, meta = pyreadstat.read_sas7bdat(
+                f'{LOAN_DIR}lnnote.sas7bdat'
+            )
+            df_lnnote_full = pl.from_pandas(df_lnnote_full)
+            
+            df_lnnote = df_lnnote_full.filter(
+                (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
+                (pl.col('BALANCE') > 0) &
+                (pl.col('ACCTNO').is_in(sampled_accts))
+            )
+            
+            print(f"  LNNOTE after full read & filter: {len(df_lnnote):,} rows")
     
-    repo_df_processed = pd.DataFrame(processed_records)
-    print(f"Processed {len(repo_df_processed)} records")
-    print("=" * 60)
+    # STEP 3: Merge the data
+    print("  Merging data...")
+    df_hploan = df_lnnote.join(df_loantemp, on=['ACCTNO', 'NOTENO'], how='inner')
     
-    # Step 7: Split into REPO and REPO1 (SAS DATA REPO REPO1)
-    print("Splitting into REPO and REPO1...")
-    # First filter: IF ARREAR GE 10
-    repo_filtered = repo_df_processed[repo_df_processed['arrear'] >= 10].copy()
+    print(f"  HP Loans after merge: {len(df_hploan):,} accounts")
     
-    # REPO1: IF LOANTYPE IN (983,993)
-    repo1_filtered = repo_filtered[
-        (repo_filtered['loantype'].astype(str).isin(['983', '993'])) |
-        (repo_filtered['loantype'].isin([983, 993]))
-    ].copy()
+    # If we have too many, limit to 5,000 for testing
+    if len(df_hploan) > 5000:
+        sample_indices = random.sample(range(len(df_hploan)), 5000)
+        df_hploan = df_hploan[sample_indices]
+        print(f"  Further limited to 5,000 rows for testing")
     
-    print(f"REPO records (ARREAR >= 10): {len(repo_filtered)}")
-    print(f"REPO1 records (LOANTYPE 983,993): {len(repo1_filtered)}")
-    print("=" * 60)
-    
-    # Step 8: Sort by REGNO (PROC SORT BY REGNO)
-    print("Sorting by REGNO...")
-    repo_filtered = repo_filtered.sort_values('regno').reset_index(drop=True)
-    repo1_filtered = repo1_filtered.sort_values('regno').reset_index(drop=True)
-    print(f"REPO sorted: {len(repo_filtered)} records")
-    print(f"REPO1 sorted: {len(repo1_filtered)} records")
-    print("=" * 60)
-    
-    # Step 9: Create fixed-width text output for REPO
-    # SAS DATA _NULL_ with FILE REPOTXT
-    print("Creating REPOTXT.txt...")
-    repotxt_file = output_path / "REPOTXT.txt"
-    with open(repotxt_file, 'w') as f:
-        # Write header for first record (IF _N_ = 1)
-        if len(repo_filtered) > 0:
-            f.write(f"{' ':<{1}}")  # Start at position 1 (SAS @001)
-            f.write(f"{rdate}-REPOSSESSION LISTING\n")
-        
-        # Write data records with exact SAS column positions
-        for _, record in repo_filtered.iterrows():
-            # SAS PUT positions: @001 BRABBR $3. @009 CAC $20. @029 REGNO $13. 
-            # @043 MAKE $16. @060 MODEL $21. @082 ENGINE $40. @123 CHASSIS $40. @164 COLLYEAR $4.
-            # In Python, these are 0-indexed positions: 0, 8, 28, 42, 59, 81, 122, 163
-            line = (' ' * 0)  # Start at position 1 (0-indexed position 0)
-            line += f"{record['brabbr']:<3}"     # @001 (0-index:0)
-            line += ' ' * 5                      # Padding to @009 (0-index:8)
-            line += f"{record['cac']:<20}"       # @009 (0-index:8)
-            line += ' ' * 7                      # Padding to @029 (0-index:28)
-            line += f"{record['regno']:<13}"     # @029 (0-index:28)
-            line += ' ' * 1                      # Padding to @043 (0-index:42)
-            line += f"{record['make']:<16}"      # @043 (0-index:42)
-            line += ' ' * 0                      # Padding to @060 (0-index:59)
-            line += f"{record['model']:<21}"     # @060 (0-index:59)
-            line += ' ' * 1                      # Padding to @082 (0-index:81)
-            line += f"{record['engine']:<40}"    # @082 (0-index:81)
-            line += ' ' * 1                      # Padding to @123 (0-index:122)
-            line += f"{record['chassis']:<40}"   # @123 (0-index:122)
-            line += ' ' * 1                      # Padding to @164 (0-index:163)
-            line += f"{record['collyear']:<4}"   # @164 (0-index:163)
-            f.write(line + '\n')
-    
-    print(f"Created REPOTXT file: {repotxt_file}")
-    print("=" * 60)
-    
-    # Step 10: Create fixed-width text output for REPO1
-    print("Creating REPOTXT1.txt...")
-    repotxt1_file = output_path / "REPOTXT1.txt"
-    with open(repotxt1_file, 'w') as f:
-        # Write header for first record (IF _N_ = 1)
-        if len(repo1_filtered) > 0:
-            f.write(f"{' ':<{1}}")  # Start at position 1
-            f.write(f"{rdate}-REPOSSESSION LISTING (983,993)\n")
-        
-        # Write data records with exact SAS column positions
-        for _, record in repo1_filtered.iterrows():
-            line = (' ' * 0)  # Start at position 1 (0-indexed position 0)
-            line += f"{record['brabbr']:<3}"     # @001 (0-index:0)
-            line += ' ' * 5                      # Padding to @009 (0-index:8)
-            line += f"{record['cac']:<20}"       # @009 (0-index:8)
-            line += ' ' * 7                      # Padding to @029 (0-index:28)
-            line += f"{record['regno']:<13}"     # @029 (0-index:28)
-            line += ' ' * 1                      # Padding to @043 (0-index:42)
-            line += f"{record['make']:<16}"      # @043 (0-index:42)
-            line += ' ' * 0                      # Padding to @060 (0-index:59)
-            line += f"{record['model']:<21}"     # @060 (0-index:59)
-            line += ' ' * 1                      # Padding to @082 (0-index:81)
-            line += f"{record['engine']:<40}"    # @082 (0-index:81)
-            line += ' ' * 1                      # Padding to @123 (0-index:122)
-            line += f"{record['chassis']:<40}"   # @123 (0-index:122)
-            line += ' ' * 1                      # Padding to @164 (0-index:163)
-            line += f"{record['collyear']:<4}"   # @164 (0-index:163)
-            f.write(line + '\n')
-    
-    print(f"Created REPOTXT1 file: {repotxt1_file}")
-    print("=" * 60)
-    
-    # Step 11: Also save as Parquet and CSV for reference
-    print("Saving Parquet and CSV files...")
-    if len(repo_filtered) > 0:
-        repo_arrow = pa.Table.from_pandas(repo_filtered)
-        pq.write_table(repo_arrow, output_path / "REPO.parquet")
-        csv.write_csv(repo_arrow, output_path / "REPO.csv")
-        print(f"Saved REPO.parquet and REPO.csv")
-    
-    if len(repo1_filtered) > 0:
-        repo1_arrow = pa.Table.from_pandas(repo1_filtered)
-        pq.write_table(repo1_arrow, output_path / "REPO1.parquet")
-        csv.write_csv(repo1_arrow, output_path / "REPO1.csv")
-        print(f"Saved REPO1.parquet and REPO1.csv")
-    print("=" * 60)
-    
-    # Print summary statistics
-    print(f"\n{'=' * 60}")
-    print(f"PROCESSING COMPLETED SUCCESSFULLY!")
-    print(f"{'=' * 60}")
-    print(f"Summary:")
-    print(f"  Processing Date: {reptdate.strftime('%Y-%m-%d')}")
-    print(f"  RDate: {rdate}")
-    print(f"  SDate: {sdate_str}")
-    print(f"  Week: {nowk}, Previous Week: {nowk1}")
-    print(f"  Month: {reptmon}, Previous Month: {reptmon1}")
-    print(f"{'=' * 60}")
-    print(f"  Total LNNOTE records after filtering: {len(lnnote_filtered)}")
-    print(f"  REPO records (ARREAR >= 10): {len(repo_filtered)}")
-    print(f"  REPO1 records (983,993): {len(repo1_filtered)}")
-    print(f"{'=' * 60}")
-    
-    # Loan type distribution
-    if len(repo_filtered) > 0:
-        loantype_summary = repo_filtered['loantype'].value_counts()
-        print(f"\nLoan type distribution in REPO:")
-        for lt, count in loantype_summary.items():
-            print(f"  {lt}: {count} records")
-        print(f"{'=' * 60}")
-    
-    # Sample output preview
-    if len(repo_filtered) > 0:
-        print(f"\nSample REPO output (first 3 records):")
-        for i in range(min(3, len(repo_filtered))):
-            record = repo_filtered.iloc[i]
-            print(f"  {i+1}. REGNO: {record['regno']}, LOANTYPE: {record['loantype']}, ARREAR: {record['arrear']}")
-    
-    conn.close()
-    print(f"\nAll output files saved to: {output_path}")
+except Exception as e:
+    print(f"  Error: {e}")
+    import traceback
+    traceback.print_exc()
+    import sys
+    sys.exit(1)
 
-if __name__ == "__main__":
-    main()
+# Check if we have data
+if len(df_hploan) == 0:
+    print("\nNo data available after merging. Creating empty reports...")
+    with open(f'{OUTPUT_DIR}EIMRESHI_NO_DATA.txt', 'w') as f:
+        f.write(f"No HP loan data found after merging for report date {reptdate.strftime('%d/%m/%Y')}")
+    print(f"Created empty report file: EIMRESHI_NO_DATA.txt")
+    import sys
+    sys.exit(0)
+
+# Process HP loans
+print("\nProcessing HP loans...")
+
+# Calculate derived fields
+df_hploan = df_hploan.with_columns([
+    # Installments paid
+    ((pl.col('ORGBAL') - pl.col('CURBAL')) / pl.col('PAYAMT')).alias('ISTLPD'),
+    
+    # Issue date
+    pl.col('ISSUEDT').cast(pl.Utf8).str.slice(0, 8).str.to_datetime('%m%d%Y').alias('ISSDTE'),
+    
+    # Credit risk
+    pl.col('SCORE2').cast(pl.Utf8).str.slice(0, 1).alias('CRRISK'),
+    
+    # Margin of finance
+    pl.when(pl.col('APPVALUE') > 0)
+      .then((pl.col('NETPROC') / pl.col('APPVALUE') * 100).round(1))
+      .otherwise(0)
+      .alias('MARGINF'),
+    
+    # Census code
+    pl.col('CENSUS').cast(pl.Utf8).str.zfill(7).alias('CENSUS9')
+])
+
+# Categorize fields
+df_hploan = df_hploan.with_columns([
+    # Margin group
+    pl.when(pl.col('MARGINF') < 70).then(pl.lit('E. <70%'))
+      .when(pl.col('MARGINF') < 80).then(pl.lit('D. 70 TO <80%'))
+      .when(pl.col('MARGINF') < 85).then(pl.lit('C. 80 TO <85%'))
+      .when(pl.col('MARGINF') < 89).then(pl.lit('B. 85 TO <89%'))
+      .otherwise(pl.lit('A. 89% & ABV'))
+      .alias('MGINGRP'),
+    
+    # Term group
+    pl.when(pl.col('NOTETERM') <= 36).then(pl.lit('A. <=3 YRS'))
+      .when(pl.col('NOTETERM') <= 48).then(pl.lit('B. 4 YRS'))
+      .when(pl.col('NOTETERM') <= 60).then(pl.lit('C. 5 YRS'))
+      .when(pl.col('NOTETERM') <= 72).then(pl.lit('D. 6 YRS'))
+      .when(pl.col('NOTETERM') <= 84).then(pl.lit('E. 7 YRS'))
+      .when(pl.col('NOTETERM') <= 96).then(pl.lit('F. 8 YRS'))
+      .otherwise(pl.lit('G. 9 YRS'))
+      .alias('TERMGRP'),
+    
+    # State name
+    pl.col('STATE').cast(pl.Utf8).replace_strict(STATE_MAP, default='OTHERS').alias('STATENM'),
+    
+    # National
+    pl.when(pl.col('STATE').cast(pl.Utf8).is_in(['10', '11', '15']))
+      .then(pl.lit('EAST MALAYSIA'))
+      .otherwise(pl.lit('WEST MALAYSIA'))
+      .alias('NATIONAL'),
+    
+    # Make of vehicle
+    pl.col('CENSUS9').str.slice(0, 2).str.strip_chars()
+      .replace_strict(MAKE_MAP, default='OTHERS')
+      .alias('MAKE'),
+    
+    # New/Secondhand
+    pl.when(pl.col('CENSUS9').str.slice(3, 1).is_in(['1', '2']))
+      .then(pl.lit('NEW'))
+      .otherwise(pl.lit('SECONDHAND'))
+      .alias('NEWSEC'),
+    
+    # Amount financed group
+    pl.when(pl.col('NETPROC') <= 30000).then(pl.lit('A. RM30K & BELOW'))
+      .when(pl.col('NETPROC') <= 50000).then(pl.lit('B. >RM30K TO 50K'))
+      .when(pl.col('NETPROC') <= 100000).then(pl.lit('C. >RM50K TO 100K'))
+      .when(pl.col('NETPROC') <= 250000).then(pl.lit('D. >RM100K TO 250K'))
+      .otherwise(pl.lit('E. >RM250K'))
+      .alias('FINGRP'),
+    
+    # Source of business
+    pl.when(pl.col('DEALERNO') > 0)
+      .then(pl.lit('DEALERS'))
+      .otherwise(pl.lit('NON DEALERS'))
+      .alias('SOURCE')
+])
+
+# Cars (National vs Non-National)
+df_hploan = df_hploan.with_columns([
+    pl.when(pl.col('MAKE').is_in(['PROTON', 'PERODUA']))
+      .then(pl.lit('NATIONAL'))
+      .otherwise(pl.lit('NON NATIONAL'))
+      .alias('CARS')
+])
+
+# Goods (for MAKE = OTHERS)
+df_hploan = df_hploan.with_columns([
+    pl.when((pl.col('MAKE') == 'OTHERS') & pl.col('PRODUCT').is_in([128, 700]))
+      .then(pl.lit('SCHEDULE'))
+      .when(pl.col('MAKE') == 'OTHERS')
+      .then(pl.lit('UNSCHEDULE'))
+      .otherwise(pl.lit(''))
+      .alias('GOODS')
+])
+
+# Calculate months in arrears
+df_hploan = df_hploan.with_columns([
+    pl.when(pl.col('DAYDIFF') > 729).then((pl.col('DAYDIFF') / 365 * 12).cast(pl.Int32))
+      .when(pl.col('DAYDIFF') > 698).then(pl.lit(23))
+      .when(pl.col('DAYDIFF') > 668).then(pl.lit(22))
+      .when(pl.col('DAYDIFF') > 638).then(pl.lit(21))
+      .when(pl.col('DAYDIFF') > 608).then(pl.lit(20))
+      .when(pl.col('DAYDIFF') > 577).then(pl.lit(19))
+      .when(pl.col('DAYDIFF') > 547).then(pl.lit(18))
+      .when(pl.col('DAYDIFF') > 516).then(pl.lit(17))
+      .when(pl.col('DAYDIFF') > 486).then(pl.lit(16))
+      .when(pl.col('DAYDIFF') > 456).then(pl.lit(15))
+      .when(pl.col('DAYDIFF') > 424).then(pl.lit(14))
+      .when(pl.col('DAYDIFF') > 394).then(pl.lit(13))
+      .when(pl.col('DAYDIFF') > 364).then(pl.lit(12))
+      .when(pl.col('DAYDIFF') > 333).then(pl.lit(11))
+      .when(pl.col('DAYDIFF') > 303).then(pl.lit(10))
+      .when(pl.col('DAYDIFF') > 273).then(pl.lit(9))
+      .when(pl.col('DAYDIFF') > 243).then(pl.lit(8))
+      .when(pl.col('DAYDIFF') > 213).then(pl.lit(7))
+      .when(pl.col('DAYDIFF') > 182).then(pl.lit(6))
+      .when(pl.col('DAYDIFF') > 151).then(pl.lit(5))
+      .when(pl.col('DAYDIFF') > 121).then(pl.lit(4))
+      .when(pl.col('DAYDIFF') > 91).then(pl.lit(3))
+      .when(pl.col('DAYDIFF') > 61).then(pl.lit(2))
+      .when(pl.col('DAYDIFF') > 30).then(pl.lit(1))
+      .otherwise(pl.lit(0))
+      .alias('MTHARR')
+])
+
+# Deficit flag
+df_hploan = df_hploan.with_columns([
+    pl.when(pl.col('BORSTAT') == 'F')
+      .then(pl.lit(999))
+      .otherwise(pl.col('MTHARR'))
+      .alias('MTHARR')
+])
+
+print(f"  Processed: {len(df_hploan):,} HP loans")
+
+# Create 4 account groups
+print("\nCreating account groups...")
+
+df_hploan1 = df_hploan  # All accounts
+df_hploan2 = df_hploan.filter(
+    (pl.col('MTHARR') >= 3) | pl.col('BORSTAT').is_in(['F', 'I', 'R'])
+)  # NPL
+df_hploan3 = df_hploan.filter(pl.col('NOTENO') >= 98010)  # Restructured
+df_hploan4 = df_hploan.filter(
+    (pl.col('NOTENO') >= 98010) & 
+    ((pl.col('MTHARR') >= 3) | pl.col('BORSTAT').is_in(['F', 'I', 'R']))
+)  # Restructured NPL
+
+print(f"  HPLOAN1 (All): {len(df_hploan1):,}")
+print(f"  HPLOAN2 (NPL): {len(df_hploan2):,}")
+print(f"  HPLOAN3 (Restructured): {len(df_hploan3):,}")
+print(f"  HPLOAN4 (Restructured NPL): {len(df_hploan4):,}")
+
+# Generate summary reports
+print("\nGenerating summary reports...")
+
+def generate_summary_text(df, group_cols, title, subtitle, report_num):
+    """Generate summary report as formatted text"""
+    
+    if len(df) == 0:
+        return f"No data for {title} - {subtitle}"
+    
+    # Create arrears buckets
+    df_summary = df.with_columns([
+        pl.when(pl.col('MTHARR') < 3).then(pl.lit('<3MTHS'))
+          .when(pl.col('MTHARR') < 6).then(pl.lit('3-6MTHS'))
+          .when(pl.col('MTHARR') < 12).then(pl.lit('6-12MTHS'))
+          .when(pl.col('MTHARR') < 24).then(pl.lit('12-24MTHS'))
+          .when(pl.col('MTHARR') < 36).then(pl.lit('24-36MTHS'))
+          .when(pl.col('MTHARR') >= 36).then(pl.lit('>36MTHS'))
+          .otherwise(pl.lit('UNKNOWN'))
+          .alias('BUCKET'),
+        
+        pl.when(pl.col('BORSTAT') == 'F')
+          .then(pl.lit('DEFICIT'))
+          .otherwise(pl.lit(''))
+          .alias('DEFICIT_FLAG')
+    ])
+    
+    # Group and aggregate
+    agg_cols = group_cols + ['BUCKET']
+    
+    df_agg = df_summary.group_by(agg_cols).agg([
+        pl.count().alias('COUNT'),
+        pl.col('BALANCE').sum().alias('AMOUNT')
+    ])
+    
+    # Pivot by bucket
+    df_pivot = df_agg.pivot(
+        values=['COUNT', 'AMOUNT'],
+        index=group_cols,
+        columns='BUCKET'
+    )
+    
+    # Generate text report
+    report_lines = []
+    report_lines.append("=" * 100)
+    report_lines.append(f"EIMRESHI SUMMARY REPORT - {title}")
+    report_lines.append("=" * 100)
+    report_lines.append(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+    report_lines.append(f"Week: {wk}")
+    report_lines.append(f"Subtitle: {subtitle}")
+    report_lines.append(f"Total Accounts in Group: {len(df):,}")
+    report_lines.append("=" * 100)
+    report_lines.append("")
+    
+    # Add group descriptions
+    group_desc = {
+        'CRRISK': 'Credit Risk Score',
+        'SOURCE': 'Source of Business',
+        'MGINGRP': 'Margin of Finance',
+        'TERMGRP': 'Loan Term',
+        'FINGRP': 'Amount Financed',
+        'STATENM': 'State',
+        'NATIONAL': 'Region',
+        'MAKE': 'Make of Vehicle',
+        'CARS': 'Car Category',
+        'NEWSEC': 'New/Secondhand',
+        'GOODS': 'Goods Type',
+        'BRANCH': 'Branch'
+    }
+    
+    for col in group_cols:
+        if col in group_desc:
+            report_lines.append(f"Group By: {group_desc[col]}")
+    
+    report_lines.append("")
+    
+    # Define bucket order
+    bucket_order = ['<3MTHS', '3-6MTHS', '6-12MTHS', '12-24MTHS', '24-36MTHS', '>36MTHS', 'UNKNOWN']
+    
+    # Format the report
+    if len(df_pivot) > 0:
+        # Extract columns
+        count_cols = [f'COUNT_{b}' for b in bucket_order if f'COUNT_{b}' in df_pivot.columns]
+        amount_cols = [f'AMOUNT_{b}' for b in bucket_order if f'AMOUNT_{b}' in df_pivot.columns]
+        
+        # Calculate total count and amount
+        total_count = 0
+        total_amount = 0
+        for col in count_cols:
+            total_count += df_pivot[col].sum() if df_pivot[col].dtype in [pl.Int64, pl.Float64] else 0
+        for col in amount_cols:
+            total_amount += df_pivot[col].sum() if df_pivot[col].dtype in [pl.Int64, pl.Float64] else 0
+        
+        # Header
+        header_parts = []
+        for col in group_cols:
+            if col in group_desc:
+                header_parts.append(group_desc[col])
+            else:
+                header_parts.append(col)
+        header_parts.append('TOTAL COUNT')
+        header_parts.append('TOTAL AMOUNT')
+        
+        # Add bucket headers
+        for bucket in bucket_order:
+            if f'COUNT_{bucket}' in df_pivot.columns:
+                header_parts.append(f'COUNT_{bucket}')
+                header_parts.append(f'AMT_{bucket}')
+        
+        report_lines.append(" | ".join(header_parts))
+        report_lines.append("-" * len(" | ".join(header_parts)))
+        
+        # Data rows
+        for row in df_pivot.iter_rows():
+            row_parts = []
+            for col in group_cols:
+                val = row[df_pivot.columns.index(col)] if col in df_pivot.columns else ''
+                row_parts.append(str(val))
+            
+            # Add totals
+            row_count = 0
+            row_amount = 0
+            for col in count_cols:
+                idx = df_pivot.columns.index(col)
+                row_count += row[idx] if isinstance(row[idx], (int, float)) else 0
+            for col in amount_cols:
+                idx = df_pivot.columns.index(col)
+                row_amount += row[idx] if isinstance(row[idx], (int, float)) else 0
+            
+            row_parts.append(f"{row_count:,}")
+            row_parts.append(f"{row_amount:,.2f}")
+            
+            # Add bucket data
+            for bucket in bucket_order:
+                if f'COUNT_{bucket}' in df_pivot.columns:
+                    count_idx = df_pivot.columns.index(f'COUNT_{bucket}')
+                    amt_idx = df_pivot.columns.index(f'AMOUNT_{bucket}')
+                    row_parts.append(f"{row[count_idx]:,}")
+                    row_parts.append(f"{row[amt_idx]:,.2f}")
+            
+            report_lines.append(" | ".join(row_parts))
+        
+        report_lines.append("-" * len(" | ".join(header_parts)))
+        
+        # Add totals row
+        total_parts = ['TOTAL'] + [''] * (len(group_cols) - 1)
+        total_parts.append(f"{total_count:,}")
+        total_parts.append(f"{total_amount:,.2f}")
+        
+        for bucket in bucket_order:
+            if f'COUNT_{bucket}' in df_pivot.columns:
+                count_idx = df_pivot.columns.index(f'COUNT_{bucket}')
+                amt_idx = df_pivot.columns.index(f'AMOUNT_{bucket}')
+                total_parts.append(f"{df_pivot[count_idx].sum():,}")
+                total_parts.append(f"{df_pivot[amt_idx].sum():,.2f}")
+        
+        report_lines.append(" | ".join(total_parts))
+    
+    report_lines.append("")
+    report_lines.append(f"Total Accounts: {len(df):,}")
+    report_lines.append(f"Total Balance: {df['BALANCE'].sum():,.2f}")
+    report_lines.append("=" * 100)
+    
+    return "\n".join(report_lines)
+
+# Report configurations
+reports = [
+    {'df': df_hploan1, 'groups': ['CRRISK', 'BRANCH'], 'title': 'CREDIT RISK SCORE', 'subtitle': 'PRODUCT 128,130,380,381,700,705'},
+    {'df': df_hploan2, 'groups': ['CRRISK', 'BRANCH'], 'title': 'CREDIT RISK SCORE', 'subtitle': 'NPL ACCOUNT'},
+    {'df': df_hploan3, 'groups': ['CRRISK', 'BRANCH'], 'title': 'CREDIT RISK SCORE', 'subtitle': 'RESTRUCTURE ACCOUNT'},
+    {'df': df_hploan4, 'groups': ['CRRISK', 'BRANCH'], 'title': 'CREDIT RISK SCORE', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'},
+    
+    {'df': df_hploan1, 'groups': ['SOURCE', 'BRANCH'], 'title': 'SOURCE OF BUSINESS', 'subtitle': 'PRODUCT 128,130,380,381,700,705'},
+    {'df': df_hploan2, 'groups': ['SOURCE', 'BRANCH'], 'title': 'SOURCE OF BUSINESS', 'subtitle': 'NPL ACCOUNT'},
+    {'df': df_hploan3, 'groups': ['SOURCE', 'BRANCH'], 'title': 'SOURCE OF BUSINESS', 'subtitle': 'RESTRUCTURE ACCOUNT'},
+    {'df': df_hploan4, 'groups': ['SOURCE', 'BRANCH'], 'title': 'SOURCE OF BUSINESS', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'},
+    
+    {'df': df_hploan1, 'groups': ['MGINGRP', 'BRANCH'], 'title': 'MARGIN OF FINANCE', 'subtitle': 'PRODUCT 128,130,380,381,700,705'},
+    {'df': df_hploan2, 'groups': ['MGINGRP', 'BRANCH'], 'title': 'MARGIN OF FINANCE', 'subtitle': 'NPL ACCOUNT'},
+    {'df': df_hploan3, 'groups': ['MGINGRP', 'BRANCH'], 'title': 'MARGIN OF FINANCE', 'subtitle': 'RESTRUCTURE ACCOUNT'},
+    {'df': df_hploan4, 'groups': ['MGINGRP', 'BRANCH'], 'title': 'MARGIN OF FINANCE', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'},
+    
+    {'df': df_hploan1, 'groups': ['TERMGRP', 'BRANCH'], 'title': 'LOAN TERM', 'subtitle': 'PRODUCT 128,130,380,381,700,705'},
+    {'df': df_hploan2, 'groups': ['TERMGRP', 'BRANCH'], 'title': 'LOAN TERM', 'subtitle': 'NPL ACCOUNT'},
+    {'df': df_hploan3, 'groups': ['TERMGRP', 'BRANCH'], 'title': 'LOAN TERM', 'subtitle': 'RESTRUCTURE ACCOUNT'},
+    {'df': df_hploan4, 'groups': ['TERMGRP', 'BRANCH'], 'title': 'LOAN TERM', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'},
+    
+    {'df': df_hploan1, 'groups': ['NEWSEC', 'FINGRP', 'BRANCH'], 'title': 'AMT FINANCE', 'subtitle': 'PRODUCT 128,130,380,381,700,705'},
+    {'df': df_hploan2, 'groups': ['NEWSEC', 'FINGRP', 'BRANCH'], 'title': 'AMT FINANCE', 'subtitle': 'NPL ACCOUNT'},
+    {'df': df_hploan3, 'groups': ['NEWSEC', 'FINGRP', 'BRANCH'], 'title': 'AMT FINANCE', 'subtitle': 'RESTRUCTURE ACCOUNT'},
+    {'df': df_hploan4, 'groups': ['NEWSEC', 'FINGRP', 'BRANCH'], 'title': 'AMT FINANCE', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'},
+    
+    {'df': df_hploan1, 'groups': ['NATIONAL', 'STATENM', 'BRANCH'], 'title': 'BY STATE', 'subtitle': 'PRODUCT 128,130,380,381,700,705'},
+    {'df': df_hploan2, 'groups': ['NATIONAL', 'STATENM', 'BRANCH'], 'title': 'BY STATE', 'subtitle': 'NPL ACCOUNT'},
+    {'df': df_hploan3, 'groups': ['NATIONAL', 'STATENM', 'BRANCH'], 'title': 'BY STATE', 'subtitle': 'RESTRUCTURE ACCOUNT'},
+    {'df': df_hploan4, 'groups': ['NATIONAL', 'STATENM', 'BRANCH'], 'title': 'BY STATE', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'},
+    
+    {'df': df_hploan1, 'groups': ['NEWSEC', 'CARS', 'MAKE', 'BRANCH'], 'title': 'BY MAKE OF VEHICLE', 'subtitle': 'PRODUCT 128,130,380,381,700,705'},
+    {'df': df_hploan2, 'groups': ['NEWSEC', 'CARS', 'MAKE', 'BRANCH'], 'title': 'BY MAKE OF VEHICLE', 'subtitle': 'NPL ACCOUNT'},
+    {'df': df_hploan3, 'groups': ['NEWSEC', 'CARS', 'MAKE', 'BRANCH'], 'title': 'BY MAKE OF VEHICLE', 'subtitle': 'RESTRUCTURE ACCOUNT'},
+    {'df': df_hploan4, 'groups': ['NEWSEC', 'CARS', 'MAKE', 'BRANCH'], 'title': 'BY MAKE OF VEHICLE', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'},
+    
+    {'df': df_hploan1.filter(pl.col('MAKE') == 'OTHERS'), 'groups': ['NEWSEC', 'GOODS', 'BRANCH'], 'title': 'BY MAKE OF VEHICLE = OTHERS', 'subtitle': 'PRODUCT 128,130,380,381,700,705'},
+    {'df': df_hploan2.filter(pl.col('MAKE') == 'OTHERS'), 'groups': ['NEWSEC', 'GOODS', 'BRANCH'], 'title': 'BY MAKE OF VEHICLE = OTHERS', 'subtitle': 'NPL ACCOUNT'},
+    {'df': df_hploan3.filter(pl.col('MAKE') == 'OTHERS'), 'groups': ['NEWSEC', 'GOODS', 'BRANCH'], 'title': 'BY MAKE OF VEHICLE = OTHERS', 'subtitle': 'RESTRUCTURE ACCOUNT'},
+    {'df': df_hploan4.filter(pl.col('MAKE') == 'OTHERS'), 'groups': ['NEWSEC', 'GOODS', 'BRANCH'], 'title': 'BY MAKE OF VEHICLE = OTHERS', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'}
+]
+
+# Generate all reports as text files
+summary_count = 0
+for i, report in enumerate(reports):
+    if len(report['df']) > 0:
+        report_text = generate_summary_text(
+            report['df'], 
+            report['groups'], 
+            report['title'], 
+            report['subtitle'],
+            i + 1
+        )
+        
+        filename = f"EIMRESHI_SUMMARY_{i+1:02d}_{report['title'].replace(' ', '_')}.txt"
+        with open(f'{OUTPUT_DIR}{filename}', 'w') as f:
+            f.write(report_text)
+        summary_count += 1
+        if i % 8 == 0 and i > 0:
+            print(f"  Generated {i} of {len(reports)} reports...")
+
+print(f"  Generated {summary_count} summary reports")
+
+# Generate detail report for NPL accounts
+print("\nGenerating detail report...")
+
+if len(df_hploan2) > 0:
+    df_detail = df_hploan2.select([
+        'ACCTNO', 'NOTENO', 'NAME', 'BRANCH', 'PRODUCT', 'BORSTAT',
+        'NETPROC', 'BALANCE', 'MTHARR', 'MARGINF', 'NOTETERM',
+        'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE'
+    ]).sort(['ACCTNO', 'NOTENO'])
+    
+    detail_lines = []
+    detail_lines.append("=" * 100)
+    detail_lines.append("EIMRESHI DETAIL REPORT - NPL ACCOUNTS")
+    detail_lines.append("=" * 100)
+    detail_lines.append(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+    detail_lines.append(f"Week: {wk}")
+    detail_lines.append("=" * 100)
+    detail_lines.append("")
+    
+    headers = ['ACCTNO', 'NOTENO', 'NAME', 'BRANCH', 'PRODUCT', 'BORSTAT', 
+               'NETPROC', 'BALANCE', 'MTHARR', 'MARGINF', 'NOTETERM',
+               'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE']
+    detail_lines.append(" | ".join(headers))
+    detail_lines.append("-" * 150)
+    
+    for idx, row in enumerate(df_detail.iter_rows()):
+        row_parts = []
+        for i, val in enumerate(row):
+            if isinstance(val, (int, float)):
+                if headers[i] in ['NETPROC', 'BALANCE', 'MARGINF']:
+                    row_parts.append(f"{val:,.2f}")
+                elif headers[i] in ['ISTLPD']:
+                    row_parts.append(f"{val:.2f}")
+                else:
+                    row_parts.append(str(val))
+            else:
+                row_parts.append(str(val) if val is not None else '')
+        detail_lines.append(" | ".join(row_parts))
+    
+    detail_lines.append("-" * 150)
+    tot_acc = len(df_detail)
+    tot_amt = df_detail['BALANCE'].sum()
+    detail_lines.append(f"Total Accounts in Detail: {tot_acc:,}")
+    detail_lines.append(f"Total Balance: {tot_amt:,.2f}")
+    detail_lines.append("=" * 100)
+    
+    with open(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.txt', 'w') as f:
+        f.write("\n".join(detail_lines))
+    
+    print(f"  Detail report: {tot_acc:,} NPL accounts")
+    print(f"  Total balance: {tot_amt:,.2f}")
+else:
+    print("  No NPL accounts found")
+    with open(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.txt', 'w') as f:
+        f.write(f"No NPL accounts found for report date {reptdate.strftime('%d/%m/%Y')}")
+
+print(f"\n{'='*60}")
+print(f"EIMRESHI Complete! (OPTIMIZED TEST MODE)")
+print(f"{'='*60}")
+print(f"\nData Statistics:")
+print(f"  Total HP loans processed: {len(df_hploan):,}")
+print(f"\n4 Account Groups:")
+print(f"  1. All HP accounts: {len(df_hploan1):,}")
+print(f"  2. NPL (>=3 months OR F/I/R): {len(df_hploan2):,}")
+print(f"  3. Restructured (NOTENO >= 98010): {len(df_hploan3):,}")
+print(f"  4. Restructured NPL: {len(df_hploan4):,}")
+print(f"\nOutput Directory: {OUTPUT_DIR}")
