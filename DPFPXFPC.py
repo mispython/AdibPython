@@ -1,6 +1,6 @@
 """
 EIMRESHI - HP/Hire Purchase Loan Summary & Detail Report
-Converted from SAS to Python
+Converted from SAS to Python with Parquet optimization
 
 This replicates the SAS program EIMRESHI which generates:
 - Summary reports for HP loans (Conv & Aitab) by various groupings
@@ -16,13 +16,15 @@ import pyreadstat
 from datetime import datetime, timedelta
 import os
 import sys
+import gc
 
 # Directories
 LOAN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/'
 CCDTEMP_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/'
 OUTPUT_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMRESHI/'
+PARQUET_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/parquet/'
 
-for d in [OUTPUT_DIR]:
+for d in [OUTPUT_DIR, PARQUET_DIR]:
     os.makedirs(d, exist_ok=True)
 
 print("EIMRESHI - HP Loan Summary & Detail Report")
@@ -80,16 +82,51 @@ STATE_MAP = {
     '13': 'TRENGGANU', '14': 'W.PERSEKUTUAN', '15': 'LABUAN'
 }
 
-print("\nReading loan data from SAS files...")
+def convert_sas_to_parquet(sas_path, parquet_path, row_limit=None):
+    """Convert SAS file to Parquet for faster subsequent reads"""
+    if os.path.exists(parquet_path):
+        print(f"  Parquet already exists: {parquet_path}")
+        return True
+    
+    try:
+        print(f"  Converting {os.path.basename(sas_path)} to Parquet...")
+        if row_limit:
+            df, meta = pyreadstat.read_sas7bdat(sas_path, row_limit=row_limit)
+        else:
+            df, meta = pyreadstat.read_sas7bdat(sas_path)
+        
+        df_pl = pl.from_pandas(df)
+        df_pl.write_parquet(parquet_path)
+        print(f"  Converted {len(df_pl):,} rows to {parquet_path}")
+        return True
+    except Exception as e:
+        print(f"  Error converting {sas_path}: {e}")
+        return False
+
+# STEP 1: Convert SAS files to Parquet
+print("\nConverting SAS files to Parquet...")
+
+# Convert LOANTEMP
+loantemp_parquet = f'{PARQUET_DIR}loantemp.parquet'
+convert_sas_to_parquet(
+    f'{CCDTEMP_DIR}loantemp.sas7bdat',
+    loantemp_parquet
+)
+
+# Convert LNNOTE
+lnnote_parquet = f'{PARQUET_DIR}lnnote.parquet'
+convert_sas_to_parquet(
+    f'{LOAN_DIR}lnnote.sas7bdat',
+    lnnote_parquet
+)
+
+# STEP 2: Read from Parquet (much faster!)
+print("\nReading loan data from Parquet files...")
 
 try:
-    # STEP 1: Read LOANTEMP (matches SAS: SET CCDTEMP.LOANTEMP)
-    print("  Reading loantemp.sas7bdat...")
-    df_loantemp, meta = pyreadstat.read_sas7bdat(
-        f'{CCDTEMP_DIR}loantemp.sas7bdat'
-    )
-    df_loantemp = pl.from_pandas(df_loantemp)
-    
+    # Read LOANTEMP from Parquet
+    print("  Reading loantemp.parquet...")
+    df_loantemp = pl.read_parquet(loantemp_parquet)
     print(f"  LOANTEMP raw rows: {len(df_loantemp):,}")
     
     # Filter: WHERE PRODUCT IN &HPD AND BALANCE GT 0
@@ -104,13 +141,9 @@ try:
         print("  ERROR: No HP products found in LOANTEMP")
         sys.exit(1)
     
-    # STEP 2: Read LNNOTE (matches SAS: SET LOAN.LNNOTE)
-    print("  Reading lnnote.sas7bdat...")
-    df_lnnote, meta = pyreadstat.read_sas7bdat(
-        f'{LOAN_DIR}lnnote.sas7bdat'
-    )
-    df_lnnote = pl.from_pandas(df_lnnote)
-    
+    # Read LNNOTE from Parquet
+    print("  Reading lnnote.parquet...")
+    df_lnnote = pl.read_parquet(lnnote_parquet)
     print(f"  LNNOTE raw rows: {len(df_lnnote):,}")
     
     # Keep only needed columns (matches SAS KEEP statement)
@@ -118,7 +151,10 @@ try:
                  'NOTETERM', 'STATE', 'DEALERNO', 'SCORE2', 'ORGBAL',
                  'CURBAL', 'PAYAMT', 'ISSUEDT', 'BALANCE', 'BRANCH',
                  'BORSTAT', 'DAYDIFF', 'CENSUS', 'NAME']
-    df_lnnote = df_lnnote.select([c for c in keep_cols if c in df_lnnote.columns])
+    
+    # Only keep columns that exist
+    existing_cols = [c for c in keep_cols if c in df_lnnote.columns]
+    df_lnnote = df_lnnote.select(existing_cols)
     
     # Filter: WHERE LOANTYPE IN &HPD AND BALANCE GT 0
     df_lnnote = df_lnnote.filter(
@@ -128,7 +164,7 @@ try:
     
     print(f"  LNNOTE after filtering: {len(df_lnnote):,} rows")
     
-    # STEP 3: Merge (matches SAS MERGE LNNOTE(IN=A) HPLOAN(IN=B); BY ACCTNO NOTENO; IF A AND B;)
+    # STEP 3: Merge (matches SAS MERGE)
     print("  Merging data...")
     df_hploan = df_lnnote.join(df_loantemp, on=['ACCTNO', 'NOTENO'], how='inner')
     
@@ -137,6 +173,10 @@ try:
     if len(df_hploan) == 0:
         print("  ERROR: No matching records after merge")
         sys.exit(1)
+    
+    # Free up memory
+    del df_loantemp, df_lnnote
+    gc.collect()
     
 except Exception as e:
     print(f"  Error: {e}")
@@ -586,3 +626,5 @@ print(f"  4. Restructured NPL: {len(df_hploan4):,}")
 print(f"\nOutput Directory: {OUTPUT_DIR}")
 print(f"  - {summary_count} summary reports")
 print(f"  - 1 detail report (NPL accounts)")
+print(f"\nParquet cache directory: {PARQUET_DIR}")
+print(f"  - Conversion only happens once; subsequent runs use Parquet")
