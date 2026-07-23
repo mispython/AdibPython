@@ -1,80 +1,392 @@
-PROGRAM-ID:EIMAR301-A - BRANCH :  13      P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: 1                                                                                                                                
-                           AITAB 2 MTHS & ABOVE AND A/C PAID 2 ISTL AND BELOW AS AT 30/06/26                                                                                                                                                                    
-BRH NAME                NOTENO   ISSUE DT   LST TR DT       ISTL AMT       NO ISTL PD BORSTAT ARREARS             BALANCE                                                                                                                                       
-    ACC NO              PRODUCT  MATURE DT  LST TR AMT                                        DAYS ARR            DELQ REASON CODE                                                                                                                              
-    COLLATERAL DESC                                                                                                                                                                                                                                             
-----------------------------------------------------------------------------------------------------------------------------------                                                                                                                              
-KBU SITI ZALINA BINTI MA94010    17/11/20          05/06/26        1,189.00       67          2 - < 3 MTH                21,453.08                                                                                                                              
-    8890850308          128      17/11/27            450.00                                         74                                                                                                                                                          
-    TOYOTA          HARRIER              R DBQ212                    2362                                                                                                                                                                                       
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-    SUBTOTAL                            NO OF A/C :            1                                                         21,453.08                                                                                                                              
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-    BRANCH TOTAL                        NO OF A/C :            1                                                         21,453.08                                                                                                                              
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-PROGRAM-ID:EIMAR301-A - BRANCH :  14      P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: 2                                                                                                                                
-                           AITAB 2 MTHS & ABOVE AND A/C PAID 2 ISTL AND BELOW AS AT 30/06/26                                                                                                                                                                    
-BRH NAME                NOTENO   ISSUE DT   LST TR DT       ISTL AMT       NO ISTL PD BORSTAT ARREARS             BALANCE                                                                                                                                       
-    ACC NO              PRODUCT  MATURE DT  LST TR AMT                                        DAYS ARR            DELQ REASON CODE                                                                                                                              
-    COLLATERAL DESC                                                                                                                                                                                                                                             
-----------------------------------------------------------------------------------------------------------------------------------                                                                                                                              
-TMH NURSYAFIQAH BINTI RO90010    27/02/19          21/05/26        1,827.00       77          2 - < 3 MTH                58,199.26                                                                                                                              
-    8753198328          128      27/02/28          2,000.00                                         64                                                                                                                                                          
-    MERCEDES BENZ   E250                 R PBX88                     1991                                                                                                                                                                                       
-TMH SAW SAY HUA         98011    20/08/24          30/06/26          900.00       15          2 - < 3 MTH                55,753.73                                                                                                                              
-    8745478300          128      20/02/31            900.00                                         71                                                                                                                                                          
-    HONDA           CIVIC                N DDF1029                   1498                                                                                                                                                                                       
-TMH WAN SALOMA BINTI WAN94010    01/04/21          28/06/26          629.00       58          2 - < 3 MTH                50,529.89                                                                                                                              
-    8728327309          128      01/07/34            629.00                                         60                                                                                                                                                          
-    NISSAN          NAVARA               N DCW9262                   2488                                                                                                                                                                                       
-TMH MOHD SHARIFUDDIN BIN90010    09/09/20          07/05/26        1,062.00       66          2 - < 3 MTH                41,907.32                                                                                                                              
-    8760490514          128      09/09/29          2,134.00                                         82                                                                                                                                                          
-    NISSAN          NAVARA               N BQG308                    2488                                                                                                                                                                                       
-TMH TUAN AHMAD AMIRUL AS90010    28/09/20          25/06/26          742.00       63          2 - < 3 MTH                32,508.43                                                                                                                              
-    8760492832          128      28/09/29            750.00                                         63                                                                                                                                                          
-    ISUZU           DMAX                 N DDU7012                   1898                                                                                                                                                                                       
-TMH NIK NAWAWI BIN CHE D98010    30/09/19          03/06/26          491.00       63          2 - < 3 MTH                22,109.60                                                                                                                              
-    8896072003          128      30/09/28            500.00                                         61                                                                                                                                                          
-    PERODUA         ALZA                 N DCP5405                   1495                                                                                                                                                                                       
-TMH SANI BIN ABDUL KARIM90010    25/11/15          11/06/26        1,283.00      101          2 - < 3 MTH                13,033.89                                                                                                                              
-    8714385309          128      25/11/24          1,200.00                                         66                                                                                                                                                          
-    VOLKSWAGEN      JETTA                N WC3347E                   1390                                                                                                                                                                                       
-TMH NORUL IZHAM BIN CHE 90010    22/10/17          22/05/26          543.00       95          2 - < 3 MTH                 6,926.82                                                                                                                              
-    8743307608          128      22/10/26            600.00                                         69                                                                                                                                                          
-    PERODUA         MYVI                 N DDD5157                   1495                                                                                                                                                                                       
-TMH NASROSMAN BIN ZAKARI90010    28/08/17          30/06/26          455.00       97          2 - < 3 MTH                 5,202.96                                                                                                                              
-    8743306031          128      28/08/26            450.00                                         63                                                                                                                                                          
-    PERODUA         BEZZA                N DDC7419                   998                                                                                                                                                                                        
-TMH MOHD SYAFIQ BIN ANIZ90010    25/10/16          14/05/26          619.00      125          2 - < 3 MTH                 1,446.74                                                                                                                              
-    8731214305          128      25/10/25          1,200.00                                         66           21                                                                                                                                             
-    HONDA           JAZZ                 N CDU868                    1497                                                                                                                                                                                       
-TMH MOHD KHAIRUL ANWAR B90010    26/07/16          31/05/26          423.59      113          2 - < 3 MTH                   903.57                                                                                                                              
-    8724154631          128      26/07/25            450.00                                         65                                                                                                                                                          
-    PERODUA         AXIA                 N DCW6377                   998                                                                                                                                                                                        
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-    SUBTOTAL                            NO OF A/C :           11                                                        288,522.21                                                                                                                              
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-    BRANCH TOTAL                        NO OF A/C :           11                                                        288,522.21                                                                                                                              
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-PROGRAM-ID:EIMAR301-A - BRANCH :  31      P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: 3                                                                                                                                
-                           AITAB 2 MTHS & ABOVE AND A/C PAID 2 ISTL AND BELOW AS AT 30/06/26                                                                                                                                                                    
-BRH NAME                NOTENO   ISSUE DT   LST TR DT       ISTL AMT       NO ISTL PD BORSTAT ARREARS             BALANCE                                                                                                                                       
-    ACC NO              PRODUCT  MATURE DT  LST TR AMT                                        DAYS ARR            DELQ REASON CODE                                                                                                                              
-    COLLATERAL DESC                                                                                                                                                                                                                                             
-----------------------------------------------------------------------------------------------------------------------------------                                                                                                                              
-SKC MOHD AFFIQ NAQIUDDIN94010    27/10/20          27/06/26          442.00       65          2 - < 3 MTH                19,722.92                                                                                                                              
-    8893407835          128      27/10/29            500.00                                         64                                                                                                                                                          
-    TOYOTA          HILUX 2.5D           N BMU5179                   2494                                                                                                                                                                                       
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-    SUBTOTAL                            NO OF A/C :            1                                                         19,722.92                                                                                                                              
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-                                        ------------------------------------------------------------------------------------------                                                                                                                              
-    BRANCH TOTAL                        NO OF A/C :            1                                                         19,722.92                                                                                                                              
-                                        --------------------------------------------------------------------------
+%INC PGM(PBBLNFMT,PBBELF);
+
+DATA _NULL_;
+  SET BNM.REPTDATE;
+  IF MONTH(REPTDATE) EQ 1 THEN DO;
+     PMTH = 12;
+     PYEAR = YEAR(REPTDATE) - 1;
+  END;
+  ELSE DO;
+     PMTH = MONTH(REPTDATE) - 1;
+     PYEAR = YEAR(REPTDATE);
+  END;
+  PDATE = MDY(PMTH,1,PYEAR);
+  CALL SYMPUT('PREPTDTE',PDATE);
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
+RUN;
+
+PROC SORT DATA=BNM.LOANTEMP OUT=LNTEMP;
+  WHERE BALANCE > 0 AND BORSTAT NE 'Z' AND
+        PRODUCT IN &HPD;
+  BY BRANCH;
+RUN;
+
+DATA BRHDATA;
+   INFILE BRHFILE LRECL=80;
+   INPUT @2 BRANCH  3.
+         @6 BRHCODE $3.;
+RUN;
+PROC SORT DATA=BRHDATA; BY BRANCH; RUN;
+DATA LNTEMP;
+  MERGE LNTEMP(IN=PRESENT) BRHDATA;
+  BY BRANCH;
+  IF PRESENT=1 THEN OUTPUT LNTEMP;
+RUN;
 
 
-THIS IS THE PRODUCTION OUTPUT.
+*+---------------------------------------------------------------+
+ |  REPORTING...............                                     |
+ +---------------------------------------------------------------+;
+DATA LOAN;
+  SET LNTEMP;
+  IF ARREAR2 GE 3  OR BORSTAT = 'R' OR BORSTAT = 'I' OR
+     BORSTAT = 'F' OR BORSTAT = 'Y'
+     THEN OUTPUT;
+  IF ISSDTE GE &PREPTDTE AND DAYDIFF >= 8 THEN OUTPUT;
+RUN;
 
-make similar format for python output
+DATA LOAN1;
+  FORMAT  TYPE  $30.;
+  SET LOAN;
+  IF BORSTAT = 'F' THEN ARREAR2 = 15;
+  ARREARS=PUT(ARREAR2, ARRCLASS.);
+  CACBR=PUT(BRANCH, CACBRCH.);
+  * BLDATE2 =PUT(BLDATE,MMDDYY8.);
+  IF PRODUCT IN (380,381,700,705,720,725) THEN DO;
+     CAT  = 'A';
+     TYPE = 'HP DIRECT(CONV) ';
+     OUTPUT;
+  END;
+  IF PRODUCT IN (380,381) THEN DO;
+     CAT  = 'B';
+     TYPE = 'HP (380,381) ';
+     OUTPUT;
+  END;
+  IF PRODUCT IN (128,130,131,132) THEN DO;
+     CAT  = 'C';
+     TYPE = 'AITAB ';
+     OUTPUT;
+  END;
+RUN;
+
+PROC SORT DATA=LOAN1 OUT=LOAN1;
+  BY CAT BRANCH ARREAR2 DESCENDING BALANCE;
+RUN;
+
+*+---------------------------------------------------------------+
+ |  ONLY FOR HP PRODUCT                                          |
+ |  PLUS IT IS NOT UNDER CAC BRANCHES....                        |
+ +---------------------------------------------------------------+;
+DATA _NULL_;
+  SET LOAN1 END=LAST;
+  WHERE CACBR = '000';
+  BY CAT BRANCH ARREAR2 DESCENDING BALANCE;
+  FILE PRINT HEADER=NEWPAGE;
+
+  IF FIRST.CAT    THEN DO;
+     PAGECNT=0;
+     TOTAL=0;
+     TOTAC=0;
+  END;
+
+  IF FIRST.BRANCH THEN DO;
+     BRHAMT=0;
+     BRHAC=0;
+     PUT _PAGE_;
+  END;
+
+  IF FIRST.ARREAR2 THEN DO;
+     BRHARR=0;
+     BRHARRAC=0;
+  END;
+
+  PUT  @1   BRHCODE
+       @5   NAME                @25  NOTENO
+       @34  ISSDTE   DDMMYY8.   @52  LASTRAN  DDMMYY8.
+       @61  PAYAMT   COMMA15.2  @77  NOISTLPD COMMA8.
+       @87  BORSTAT             @95  ARREARS
+       @114 BALANCE  COMMA17.2  ;
+  PUT  @5   ACCTNO              @25  PRODUCT
+       @34  MATURDT  DDMMYY8.   @45  LSTTRNAM COMMA15.2
+       @95  DAYDIFF  COMMA8.    @114 DELQCD ;
+  PUT  @5   COLLDESC;
+  PUT  @1   ' ';
+  LINECNT + 4;
+  BRHARR + BALANCE;
+  BRHARRAC + 1;
+  BRHAMT + BALANCE;
+  BRHAC + 1;
+  TOTAL + BALANCE;
+  TOTAC + 1;
+
+  IF LINECNT > 56 THEN DO;
+     PUT _PAGE_;
+  END;
+
+  IF LAST.ARREAR2 THEN DO;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT  @5   'SUBTOTAL'     @41 'NO OF A/C : ' BRHARRAC  COMMA12.0
+          @114 BRHARR  COMMA17.2;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT;
+     LINECNT + 4;
+  END;
+
+  IF LINECNT > 56 THEN DO;
+     PUT _PAGE_;
+  END;
+
+  IF LAST.BRANCH THEN DO;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT  @5   'BRANCH TOTAL' @41 'NO OF A/C : ' BRHAC  COMMA12.0
+          @114 BRHAMT COMMA17.2;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT;
+  END;
+
+  IF LAST.CAT   THEN DO;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT  @5   'GRAND TOTAL' @41 'NO OF A/C : ' TOTAC  COMMA12.0
+          @114 TOTAL COMMA17.2;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT;
+  END;
+  RETURN;
+
+  NEWPAGE:
+    PAGECNT+1;
+    LINECNT=6;
+    PUT @1   'PROGRAM-ID:EIMAR301-A - BRANCH : ' BRANCH   3.
+        @43  'P U B L I C   I S L A M I C   B A N K   B E R H A D'
+        @118 'PAGE NO.: ' PAGECNT;
+    PUT @28  TYPE '2 MTHS & ABOVE AND A/C PAID 2 ISTL AND BELOW '
+             'AS AT ' "&RDATE";
+    PUT @1   ' ';
+    PUT @1   'BRH'
+        @5   'NAME'             @25  'NOTENO'
+        @34  'ISSUE DT'         @45  'LST TR DT'
+        @61  'ISTL AMT'         @76  'NO ISTL PD'
+        @87  'BORSTAT'          @95  'ARREARS'
+        @115 'BALANCE' ;
+    PUT @1   ' '
+        @5   'ACC NO'           @25  'PRODUCT'
+        @34  'MATURE DT'        @45  'LST TR AMT'
+        @95  'DAYS ARR'         @115 'DELQ REASON CODE' ;
+    PUT @5   'COLLATERAL DESC' ;
+    PUT @1   '----------------------------------------'
+        @41  '----------------------------------------'
+        @81  '----------------------------------------'
+        @121 '----------';
+  RETURN;
+RUN;
+//
+*+---------------------------------------------------------------+
+ |  DATE     : 16.02.2004                                        |
+ |  FUNCTION : DETAILS FOR NPL(3-8 MTHS) ACCOUNTS FOR CCD PFB.   |
+ |             (A MONTHLY REPORT)                                |
+ +---------------------------------------------------------------+;
+DATA _NULL_;
+  SET LOAN1 END=LAST;
+  WHERE (ARREAR2 >= 4 AND ARREAR2 < 10) AND
+        (BORSTAT NE 'F' AND BORSTAT NE 'I' AND
+         BORSTAT NE 'R');
+  BY CAT BRANCH ARREAR2 DESCENDING BALANCE;
+  FILE PRINT HEADER=NEWPAGE;
+
+  IF FIRST.CAT    THEN DO;
+     TOTAL=0;
+     TOTAC=0;
+     PAGECNT=0;
+  END;
+
+  IF FIRST.BRANCH THEN DO;
+     PAGECNT=0;
+     BRHAMT=0;
+     BRHAC=0;
+     PUT _PAGE_;
+  END;
+
+  IF FIRST.ARREAR2 THEN DO;
+     BRHARR=0;
+     BRHARRAC=0;
+  END;
+
+  PUT  @1   BRHCODE
+       @5   ACCTNO              @16  NAME
+       @41  NOTENO              @54  PRODUCT
+       @59  BORSTAT             @68  ISSDTE   DDMMYY8.
+       @79  DAYDIFF             @84  ARREARS
+       @100 BALANCE  COMMA17.2  @120 NOISTLPD COMMA10.;
+  PUT  @5   LASTRAN  DDMMYY8.   @16  MATURDT  DDMMYY8.
+       @29  LSTTRNAM COMMA17.2  @46  PAYAMT   COMMA11.2
+       @59  COLLDESC;
+  PUT  @1   ' ';
+  LINECNT + 3;
+  BRHARR + BALANCE;
+  BRHARRAC + 1;
+  BRHAMT + BALANCE;
+  BRHAC + 1;
+  TOTAL + BALANCE;
+  TOTAC + 1;
+
+  IF LINECNT > 56 THEN DO;
+     PUT _PAGE_;
+  END;
+
+  IF LAST.ARREAR2 THEN DO;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT  @5   'SUBTOTAL'     @41 'NO OF A/C : ' BRHARRAC  COMMA12.0
+          @100 BRHARR  COMMA17.2;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT;
+     LINECNT + 4;
+  END;
+
+  IF LINECNT > 56 THEN DO;
+     PUT _PAGE_;
+  END;
+
+  IF LAST.BRANCH THEN DO;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT  @5   'BRANCH TOTAL' @41 'NO OF A/C : ' BRHAC  COMMA12.0
+          @100 BRHAMT COMMA17.2;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT;
+  END;
+
+  IF LAST.CAT   THEN DO;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT  @5   'GRAND TOTAL' @41 'NO OF A/C : ' TOTAC  COMMA12.0
+          @100 TOTAL COMMA17.2;
+     PUT  @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT;
+     TOTAL = 0;
+  END;
+  RETURN;
+
+  NEWPAGE:
+    PAGECNT+1;
+    LINECNT=6;
+    PUT @1   'PROGRAM-ID:EIMAR301-B - BRANCH : ' BRANCH   3.
+        @43  'P U B L I C   I S L A M I C   B A N K   B E R H A D'
+        @110 'PAGE NO.: ' PAGECNT;
+    PUT @28  TYPE 'ACCOUNT WITH 3 - 8 MONTH IN ARREAR '
+             'AS AT ' "&RDATE";
+    PUT @1   ' ';
+    PUT @1   'BRH'
+        @5   'ACCTNO'           @16 'NAME'
+        @40  'NOTENO'           @50 'PRODUCT'
+        @59  'BORSTAT'          @68 'ISSUE DT'
+        @78  'DAYS'             @84 'ARREARS'
+        @110 'BALANCE'          @120 'NO ISTL PAID';
+    PUT @1   ' '
+        @5   'LST TR DT'        @16  'MAT. DATE'
+        @36  'LST TR AMT'       @49  'ISTL AMT'
+        @59  'COLLATERAL DESCRIPTION';
+    PUT @1   '----------------------------------------'
+        @41  '----------------------------------------'
+        @81  '----------------------------------------'
+        @121 '----------';
+  RETURN;
+RUN;
+
+PROC DATASETS LIB=WORK NOLIST; DELETE LOAN1; RUN;
+
+*+---------------------------------------------------------------+
+ |  DATE     : 6 APR 2005                                        |
+ |  FUNCTION : A/C RELEASE 2 MTHS FR REPORTING DATE.             |
+ +---------------------------------------------------------------+;
+DATA NEWREL;
+   SET LNTEMP;
+   IF ISSDTE GE &PREPTDTE AND DAYDIFF >= 8;
+   IF NOISTLPD LT 1 THEN PAYDESC = 'NO PAYMENT';
+   ELSE IF (NOISTLPD GE 1 AND NOISTLPD LT 2) THEN
+        PAYDESC = 'PAID 1 ISTL';
+   ELSE PAYDESC = 'PAID 2 ISTL';
+RUN;
+
+PROC SUMMARY DATA=NEWREL NWAY;
+     CLASS BRHCODE PAYDESC;
+     VAR BALANCE;
+     OUTPUT OUT=NEWREL (RENAME=(_FREQ_=NOACCT) DROP=_TYPE_)
+                  SUM=;
+RUN;
+
+PROC TABULATE DATA=NEWREL NOSEPS MISSING;
+  CLASS PAYDESC BRHCODE;
+  VAR NOACCT BALANCE;
+  TABLE BRHCODE=' ' ALL='TOTAL',
+        PAYDESC*(NOACCT='NO OF A/C'*F=COMMA8.0
+                 BALANCE='O/S BALANCE'*F=COMMA15.2)*SUM
+            ALL*(NOACCT='NO OF A/C'*F=COMMA8.0
+                 BALANCE='O/S BALANCE'*F=COMMA15.2)*SUM
+        / BOX='BRANCH' RTS=8;
+  TITLE1 'PROGRAM ID : EIMAR301-C';
+  TITLE2 'PUBLIC ISLAMIC BANK BERHAD';
+  TITLE3 'SUMMARY ON AC WITH PAYMENT OF 2 ISTL & BELOW AS AT ' "&RDATE";
+RUN;
+
+*+---------------------------------------------------------------+
+ |  DATE     : 6 APR 2005                                        |
+ |  FUNCTION : A/C WITH ONLY 2 INSTL PAID AS AT REPORTING DATE.  |
+ +---------------------------------------------------------------+;
+DATA ACCARR;
+   SET LNTEMP;
+   IF (2<=NOISTLPD<3) AND DAYDIFF >= 8;
+   PAYDESC = 'PAID 2 ISTL';
+RUN;
+
+PROC SUMMARY DATA=ACCARR NWAY;
+     CLASS BRHCODE PAYDESC;
+     VAR BALANCE;
+     OUTPUT OUT=ACCARR (RENAME=(_FREQ_=NOACCT) DROP=_TYPE_)
+                  SUM=;
+RUN;
+
+PROC TABULATE DATA=ACCARR NOSEPS MISSING;
+  CLASS PAYDESC BRHCODE;
+  VAR NOACCT BALANCE;
+  TABLE BRHCODE=' ' ALL='TOTAL',
+        PAYDESC*(NOACCT='NO OF A/C'*F=COMMA8.0
+                 BALANCE='O/S BALANCE'*F=COMMA15.2)*SUM
+          /*  ALL*(NOACCT='NO OF A/C'*F=COMMA8.0
+                 BALANCE='O/S BALANCE'*F=COMMA15.2)*SUM */
+        / BOX='BRANCH' RTS=8;
+  TITLE1 'PROGRAM ID : EIMAR301-D';
+  TITLE2 'PUBLIC ISLAMIC BANLK BERHAD';
+  TITLE3 'SUMMARY ON A/C IN ARREAR WITH 2 ISTL PAID ONLY AS AT '
+         "&RDATE";
+RUN;
+
+
+
+
+
+how many output it generate
