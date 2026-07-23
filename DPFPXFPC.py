@@ -89,7 +89,31 @@ def process_repdate() -> Dict[str, object]:
 # ============================================================================
 
 def load_branch_data() -> pl.DataFrame:
-    """Load branch lookup data from a flat text file (LKP_BRANCH)."""
+    """
+    Load branch lookup data from a flat text file (LKP_BRANCH).
+
+    The file has no extension and is not a clean single-character-delimited
+    file (pandas'/polars' generic CSV readers choke on it because at least
+    one column - almost certainly a trailing branch NAME - contains internal
+    spaces, so a naive whitespace split produces a variable number of
+    fields per line).
+
+    Parsing strategy (in priority order):
+      1. If USE_FIXED_WIDTH is True, use the exact column positions in
+         FIXED_WIDTH_SPECS (set these once you know the real layout -
+         this is the most reliable option for a legacy flat file).
+      2. Otherwise, try a small set of single-character delimiters.
+      3. Otherwise, fall back to manual line-by-line parsing: split each
+         line on whitespace with maxsplit=1, so only the FIRST token
+         (BRANCH) is peeled off as its own field and everything else on
+         the line becomes BRHCODE. This avoids the "Expected N fields,
+         saw M" error caused by embedded spaces later in the line.
+
+         If BRHCODE itself should only be the *second* token (with a
+         trailing NAME field after it that we don't need), change
+         maxsplit=1 below to maxsplit=2 and keep only the first two
+         parts - see the commented alternative in the code.
+    """
     if not LKP_BRANCH_PATH.exists():
         print(f"   WARNING: {LKP_BRANCH_PATH} not found - using empty branch lookup")
         return pl.DataFrame(schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8})
@@ -105,22 +129,40 @@ def load_branch_data() -> pl.DataFrame:
             pl.col("BRANCH").cast(pl.Int64, strict=False)
         )
 
-    # Try common delimiters in order; fall back to whitespace splitting.
+    # Try common single-character delimiters first.
+    df = None
     for delim in ["|", ",", ";", "\t"]:
         try:
-            df = pl.read_csv(LKP_BRANCH_PATH, separator=delim, has_header=True)
-            if df.width >= 2:
+            candidate = pl.read_csv(LKP_BRANCH_PATH, separator=delim, has_header=True)
+            if candidate.width >= 2:
+                df = candidate
                 break
         except Exception:
-            df = None
-    else:
-        df = None
+            continue
 
-    if df is None or df.width < 2:
-        # Fallback: whitespace-delimited flat file with no header
-        pdf = pd.read_csv(LKP_BRANCH_PATH, sep=r"\s+", header=None,
-                           names=["BRANCH", "BRHCODE"])
-        df = pl.from_pandas(pdf)
+    if df is None:
+        # Manual line-by-line parse: peel off BRANCH as the first
+        # whitespace-delimited token, keep the remainder (BRHCODE plus
+        # anything after it, e.g. a branch name) as BRHCODE.
+        #
+        # If your file is actually "BRANCH  BRHCODE  BRANCH NAME..."
+        # and you want BRHCODE isolated from the name, use this instead:
+        #
+        #     parts = line.split(None, 2)
+        #     branch, brhcode = parts[0], parts[1] if len(parts) > 1 else ""
+        #
+        rows = []
+        with open(LKP_BRANCH_PATH, "r", encoding="utf-8", errors="replace") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                parts = line.split(None, 1)
+                branch = parts[0]
+                brhcode = parts[1].strip() if len(parts) > 1 else ""
+                rows.append({"BRANCH": branch, "BRHCODE": brhcode})
+
+        df = pl.DataFrame(rows, schema={"BRANCH": pl.Utf8, "BRHCODE": pl.Utf8})
 
     # Normalize column names in case the source file uses different casing
     rename_map = {}
