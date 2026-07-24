@@ -1,17 +1,218 @@
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMIR201.py", line 155, in <module>
-    main()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMIR201.py", line 35, in main
+import duckdb
+import polars as pl
+import pandas as pd
+import pyreadstat
+from pathlib import Path
+from datetime import datetime, timedelta
+import numpy as np
+import os
+
+# Path configuration - use absolute paths based on your environment
+SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
+INPUT_PATH = SCRIPT_DIR / "input" / "prod" / "EIMIR201"
+OUTPUT_PATH = SCRIPT_DIR / "output"
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+
+# File paths
+LOANTEMP_FILE = INPUT_PATH / "bnm" / "loantemp.sas7bdat"
+BRHFILE_FILE = INPUT_PATH / "LKP_BRANCH"  # This is the actual file name
+
+# Alternative: if files are in different locations, you can specify them directly:
+# LOANTEMP_FILE = Path("/path/to/your/bnm/loantemp.sas7bdat")
+# BRHFILE_FILE = Path("/path/to/your/LKP_BRANCH")
+
+# Output file
+OUTPUT_FILE = OUTPUT_PATH / f"eimar201_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+def read_sas7bdat_with_pandas(filepath):
+    """Read SAS7BDAT file using pandas/pyreadstat"""
+    print(f"Reading SAS file: {filepath}")
+    if not filepath.exists():
+        raise FileNotFoundError(f"SAS file not found: {filepath}")
+    df, meta = pyreadstat.read_sas7bdat(str(filepath))
+    return df
+
+def main():
+    # Use current date minus 1 day
+    current_date = datetime.now() - timedelta(days=1)
+    rdate = current_date.strftime('%d%m%y')  # DDMMYY8 format
+    reptyear = current_date.strftime('%Y')    # YEAR4 format
+    reptmon = current_date.strftime('%m')     # Z2 format
+    reptday = current_date.strftime('%d')     # Z2 format
+    
+    print(f"Report date: {rdate}")
+    print(f"Input path: {INPUT_PATH}")
+    print(f"BRHFILE path: {BRHFILE_FILE}")
+    print(f"LOANTEMP path: {LOANTEMP_FILE}")
+
+    # Check if LKP_BRANCH file exists
+    if not BRHFILE_FILE.exists():
+        # Try to find the file
+        print(f"BRHFILE not found at {BRHFILE_FILE}")
+        # Try alternative locations
+        alt_paths = [
+            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/LKP_BRANCH"),
+            Path("input/prod/EIMIR201/LKP_BRANCH"),
+            Path("../input/prod/EIMIR201/LKP_BRANCH"),
+        ]
+        for alt_path in alt_paths:
+            if alt_path.exists():
+                print(f"Found BRHFILE at: {alt_path}")
+                brhfile_final = alt_path
+                break
+        else:
+            raise FileNotFoundError(f"BRHFILE not found. Please check the file path.")
+    else:
+        brhfile_final = BRHFILE_FILE
+
+    # Read BRHFILE (fixed-width text file) - it appears to be a flat file without extension
+    # Based on SAS code: INFILE BRHFILE LRECL=80; INPUT @2 BRANCH 3. @6 BRHCODE $3.;
+    # This means column 2-4 is BRANCH (3 chars) and column 6-8 is BRHCODE (3 chars)
     brhdata_df = pd.read_fwf(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/io/parsers/readers.py", line 1565, in read_fwf
-    return _read(filepath_or_buffer, kwds)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/io/parsers/readers.py", line 620, in _read
-    parser = TextFileReader(filepath_or_buffer, **kwds)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/io/parsers/readers.py", line 1620, in __init__
-    self._engine = self._make_engine(f, self.engine)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/io/parsers/readers.py", line 1880, in _make_engine
-    self.handles = get_handle(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/io/common.py", line 873, in get_handle
-    handle = open(
-FileNotFoundError: [Errno 2] No such file or directory: 'sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/LKP_BRANCH'
-You have mail in /var/spool/mail/sas_edw_dev
+        brhfile_final,
+        colspecs=[(1, 4), (5, 8)],  # @2 means starting at position 2, so colspecs are 1-based
+        names=['BRANCH', 'BRHCODE'],
+        dtype={'BRANCH': float, 'BRHCODE': str},
+        header=None
+    )
+    # Convert BRANCH to integer after handling any non-numeric values
+    brhdata_df['BRANCH'] = brhdata_df['BRANCH'].fillna(0).astype(int)
+    print(f"Read {len(brhdata_df)} branch records")
+
+    # Check if LOANTEMP file exists
+    if not LOANTEMP_FILE.exists():
+        alt_loantemp_paths = [
+            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
+            Path("input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
+        ]
+        for alt_path in alt_loantemp_paths:
+            if alt_path.exists():
+                print(f"Found LOANTEMP at: {alt_path}")
+                loantemp_file_final = alt_path
+                break
+        else:
+            raise FileNotFoundError(f"LOANTEMP file not found. Please check the file path.")
+    else:
+        loantemp_file_final = LOANTEMP_FILE
+
+    # Read LOANTEMP using pyreadstat
+    loantemp_df = read_sas7bdat_with_pandas(loantemp_file_final)
+    print(f"Read {len(loantemp_df)} loan records")
+
+    # Convert to DuckDB for processing
+    conn = duckdb.connect(':memory:')
+    conn.register('loantemp', loantemp_df)
+    conn.register('brhdata', brhdata_df)
+
+    # Create LOANTEM2 (equivalent to SAS DATA step)
+    loantem2_query = """
+    SELECT 
+        *,
+        CASE 
+            WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN 'A'
+            WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN 'B'
+            WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN 'C'
+            WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN 'D'
+        END AS CAT,
+        CASE 
+            WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN '(HPD-C)'
+            WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN '(HP 380/381)'
+            WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN '(AITAB)'
+            WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN '(-HPD-)'
+        END AS TYPE
+    FROM loantemp
+    WHERE (PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1)
+       OR (PRODUCT IN (380, 381) AND CHECKDT = 1)
+       OR (PRODUCT IN (128, 130) AND CHECKDT = 1)
+       OR (PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1)
+    """
+    
+    loantem2_df = conn.execute(loantem2_query).fetchdf()
+    print(f"Filtered to {len(loantem2_df)} records for reporting")
+    
+    # Merge with BRHDATA
+    loantemp_final_df = loantem2_df.merge(brhdata_df, on='BRANCH', how='inner')
+    loantemp_final_df = loantemp_final_df.sort_values(['CAT', 'BRANCH'])
+    print(f"Merged data: {len(loantemp_final_df)} records")
+    
+    # Generate report
+    with open(OUTPUT_FILE, 'w') as f:
+        pagecnt = 0
+        
+        for cat, cat_group in loantemp_final_df.groupby('CAT'):
+            if cat is None or pd.isna(cat):
+                continue
+                
+            # Initialize category-level arrays and totals
+            totamt = np.zeros(17)
+            totacc = np.zeros(17)
+            
+            first_branch_in_category = True
+            
+            for branch, branch_group in cat_group.groupby('BRANCH'):
+                brhamt = np.zeros(17)
+                noacc = np.zeros(17)
+                
+                # Process each row in branch
+                for _, row in branch_group.iterrows():
+                    if row['BALANCE'] > 0:
+                        arrears_idx = int(row['ARREAR']) - 1  # 1-based to 0-based
+                        if 0 <= arrears_idx < 17:
+                            brhamt[arrears_idx] += row['BALANCE']
+                            noacc[arrears_idx] += 1
+                
+                # Calculate subtotals
+                subbrh = np.sum(brhamt[3:])  # elements 4-17 (0-based index 3-16)
+                subbr2 = subbrh - brhamt[3] - brhamt[4] - brhamt[5]
+                subacc = np.sum(noacc[3:])
+                subac2 = subacc - noacc[3] - noacc[4] - noacc[5]
+                totbrh = subbrh + brhamt[0] + brhamt[1] + brhamt[2]
+                sotacc = subacc + noacc[0] + noacc[1] + noacc[2]
+                
+                # Update category totals
+                totamt += brhamt
+                totacc += noacc
+                
+                # Print page header if first branch in category
+                if first_branch_in_category:
+                    pagecnt += 1
+                    f.write(f"PROGRAM-ID : EIMAR201   P U B L I C   I S L A M I C   B A N K   B E R H A D                    PAGE NO.: {pagecnt}\n")
+                    cat_type = branch_group['TYPE'].iloc[0] if len(branch_group) > 0 else '          '
+                    f.write(f"                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998      {cat_type:<13} {rdate}\n")
+                    f.write("\n")
+                    f.write("BRH    NO          < 1 MTH     NO     1 TO < 2 MTH     NO     2 TO < 3 MTH        NO      3 TO < 4 MTH       NO      4 TO < 5 MTH\n")
+                    f.write("       NO     5 TO < 6 MTH     NO     6 TO < 7 MTH     NO     7 TO < 8 MTH        NO      8 TO < 9 MTH       NO     9 TO < 10 MTH\n")
+                    f.write("       NO   10 TO < 11 MTH     NO   11 TO < 12 MTH     NO   12 TO < 18 MTH        NO    18 TO < 24 MTH       NO    24 TO < 36 MTH\n")
+                    f.write("       NO         > 36 MTH     NO          DEFICIT     NO   SUBTOTAL >=3MTH        NO   SUBTOTAL >=6MTH       NO             TOTAL\n")
+                    f.write("-" * 41 + "-" * 41 + "-" * 41 + "-" * 10 + "\n")
+                    first_branch_in_category = False
+                
+                # Print branch detail lines
+                brhcode = branch_group['BRHCODE'].iloc[0] if len(branch_group) > 0 else '   '
+                f.write(f"{int(branch):3d}    {noacc[0]:>7,.0f} {brhamt[0]:>16,.2f}     {noacc[1]:>7,.0f} {brhamt[1]:>15,.2f}     {noacc[2]:>7,.0f} {brhamt[2]:>15,.2f}        {noacc[3]:>8,.0f} {brhamt[3]:>17,.2f}       {noacc[4]:>8,.0f} {brhamt[4]:>17,.2f}\n")
+                f.write(f"{brhcode:<3}   {noacc[5]:>7,.0f} {brhamt[5]:>16,.2f}     {noacc[6]:>7,.0f} {brhamt[6]:>15,.2f}     {noacc[7]:>7,.0f} {brhamt[7]:>15,.2f}        {noacc[8]:>8,.0f} {brhamt[8]:>17,.2f}       {noacc[9]:>8,.0f} {brhamt[9]:>17,.2f}\n")
+                f.write(f"    {noacc[10]:>7,.0f} {brhamt[10]:>16,.2f}     {noacc[11]:>7,.0f} {brhamt[11]:>15,.2f}     {noacc[12]:>7,.0f} {brhamt[12]:>15,.2f}        {noacc[13]:>8,.0f} {brhamt[13]:>17,.2f}       {noacc[14]:>8,.0f} {brhamt[14]:>17,.2f}\n")
+                f.write(f"    {noacc[15]:>7,.0f} {brhamt[15]:>16,.2f}     {noacc[16]:>7,.0f} {brhamt[16]:>15,.2f}     {subacc:>7,.0f} {subbrh:>15,.2f}        {subac2:>8,.0f} {subbr2:>17,.2f}       {sotacc:>8,.0f} {totbrh:>17,.2f}\n")
+            
+            # Calculate grand totals for category
+            sgtotbrh = np.sum(totamt[3:])
+            sgtotbr2 = sgtotbrh - totamt[3] - totamt[4] - totamt[5]
+            sgtotacc = np.sum(totacc[3:])
+            sgtotac2 = sgtotacc - totacc[3] - totacc[4] - totacc[5]
+            gtotbrh = sgtotbrh + totamt[0] + totamt[1] + totamt[2]
+            gtotacc = sgtotacc + totacc[0] + totacc[1] + totacc[2]
+            
+            # Print category totals
+            f.write("-" * 41 + "-" * 41 + "-" * 41 + "-" * 10 + "\n")
+            f.write(f"TOT   {totacc[0]:>7,.0f} {totamt[0]:>16,.2f}     {totacc[1]:>7,.0f} {totamt[1]:>15,.2f}     {totacc[2]:>7,.0f} {totamt[2]:>15,.2f}        {totacc[3]:>8,.0f} {totamt[3]:>17,.2f}       {totacc[4]:>8,.0f} {totamt[4]:>17,.2f}\n")
+            f.write(f"    {totacc[5]:>7,.0f} {totamt[5]:>16,.2f}     {totacc[6]:>7,.0f} {totamt[6]:>15,.2f}     {totacc[7]:>7,.0f} {totamt[7]:>15,.2f}        {totacc[8]:>8,.0f} {totamt[8]:>17,.2f}       {totacc[9]:>8,.0f} {totamt[9]:>17,.2f}\n")
+            f.write(f"    {totacc[10]:>7,.0f} {totamt[10]:>16,.2f}     {totacc[11]:>7,.0f} {totamt[11]:>15,.2f}     {totacc[12]:>7,.0f} {totamt[12]:>15,.2f}        {totacc[13]:>8,.0f} {totamt[13]:>17,.2f}       {totacc[14]:>8,.0f} {totamt[14]:>17,.2f}\n")
+            f.write(f"    {totacc[15]:>7,.0f} {totamt[15]:>16,.2f}     {totacc[16]:>7,.0f} {totamt[16]:>15,.2f}     {sgtotacc:>7,.0f} {sgtotbrh:>15,.2f}        {sgtotac2:>8,.0f} {sgtotbr2:>17,.2f}       {gtotacc:>8,.0f} {gtotbrh:>17,.2f}\n")
+            f.write("-" * 41 + "-" * 41 + "-" * 41 + "-" * 10 + "\n")
+            f.write("\n")
+    
+    print(f"Report generated: {OUTPUT_FILE}")
+    print(f"Report date (current date - 1 day): {rdate}")
+
+if __name__ == "__main__":
+    main()
