@@ -206,11 +206,12 @@ def main():
                     cat_type = branch_group['TYPE'].iloc[0] if len(branch_group) > 0 else '          '
                     f.write(f"                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998  {cat_type}       {rdate}\n")
                     f.write("\n")
-                    f.write("BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       NO      3 TO < 4 MTH       NO      4 TO < 5 MTH\n")
-                    f.write("       NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       NO      8 TO < 9 MTH       NO     9 TO < 10 MTH\n")
-                    f.write("       NO   10 TO < 11 MTH      NO   11 TO < 12 MTH      NO   12 TO < 18 MTH       NO    18 TO < 24 MTH       NO    24 TO < 36 MTH\n")
-                    f.write("       NO         > 36 MTH      NO          DEFICIT      NO   SUBTOTAL >=3MTH      NO   SUBTOTAL >=6MTH       NO             TOTAL\n")
-                    f.write("-" * 130 + "\n")
+                    # Shifted column headers 3-4 spaces to the right
+                    f.write("BRH       NO          < 1 MTH         NO     1 TO < 2 MTH         NO     2 TO < 3 MTH          NO      3 TO < 4 MTH          NO      4 TO < 5 MTH\n")
+                    f.write("          NO     5 TO < 6 MTH         NO     6 TO < 7 MTH         NO     7 TO < 8 MTH          NO      8 TO < 9 MTH          NO     9 TO < 10 MTH\n")
+                    f.write("          NO   10 TO < 11 MTH         NO   11 TO < 12 MTH         NO   12 TO < 18 MTH          NO    18 TO < 24 MTH          NO    24 TO < 36 MTH\n")
+                    f.write("          NO         > 36 MTH         NO          DEFICIT         NO   SUBTOTAL >=3MTH         NO   SUBTOTAL >=6MTH          NO             TOTAL\n")
+                    f.write("-" * 137 + "\n")
                     first_branch_in_category = False
                 
                 # Get BRHCODE
@@ -237,12 +238,12 @@ def main():
             gtotacc = sgtotacc + totacc[0] + totacc[1] + totacc[2]
             
             # Print category totals
-            f.write("-" * 130 + "\n")
+            f.write("-" * 137 + "\n")
             f.write(format_line1("TOT", [totacc[0], totamt[0], totacc[1], totamt[1], totacc[2], totamt[2], totacc[3], totamt[3], totacc[4], totamt[4]]) + "\n")
             f.write(format_line2("", [totacc[5], totamt[5], totacc[6], totamt[6], totacc[7], totamt[7], totacc[8], totamt[8], totacc[9], totamt[9]]) + "\n")
             f.write(format_line3([totacc[10], totamt[10], totacc[11], totamt[11], totacc[12], totamt[12], totacc[13], totamt[13], totacc[14], totamt[14]]) + "\n")
             f.write(format_line4([totacc[15], totamt[15], totacc[16], totamt[16], sgtotacc, sgtotbrh, sgtotac2, sgtotbr2, gtotacc, gtotbrh]) + "\n")
-            f.write("-" * 130 + "\n")
+            f.write("-" * 137 + "\n")
             f.write("\n")
     
     print(f"Report generated: {OUTPUT_FILE}")
