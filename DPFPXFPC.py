@@ -1,844 +1,241 @@
-"""
-EIMAR301 / EIMIR301 SAS to Python conversion
-Multi-report system for HP Direct / AITAB loan arrears analysis
-
-This version is rewritten directly against the original SAS source the user
-supplied. Key behavioral corrections vs. the earlier draft are called out
-in comments marked "CORRECTED:".
-
-TWO EXTERNAL SAS FORMATS - NOW RESOLVED
------------------------------------------
-The original SAS does `%INC PGM(PBBLNFMT,PBBELF);` which defines two
-PROC FORMAT catalogs used later:
-
-  - CACBRCH.  : BRANCH -> CAC branch code. Ported directly below from the
-                user-supplied PBBELF.format_cacbrch (KL/CC/SJ/PG/JB/KL2
-                branch lists -> '911'..'916', else '000').
-  - ARRCLASS. : ARREAR2 -> display label (e.g. "2 - < 3 MTH"). Ported
-                directly below from the user-supplied PBBLNFMT.ARRCLASS_MAP
-                (codes 1-15). This also confirms ARREAR2 is itself a coded
-                arrears bucket (1-15), not a raw count of months late.
-"""
-
-from pathlib import Path
-from datetime import date, timedelta
-import polars as pl
+import duckdb
 import pandas as pd
 import pyreadstat
-from typing import Dict, List, Optional
+from pathlib import Path
+from datetime import datetime, timedelta
+import numpy as np
+import os
 
-# ============================================================================
-# 0. Paths / configuration
-# ============================================================================
-
-BASE_PATH = Path(".")
-INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR301"
-OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR301"
+# Path configuration
+SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
+INPUT_PATH = SCRIPT_DIR / "input" / "prod" / "EIMIR201"
+OUTPUT_PATH = SCRIPT_DIR / "output"
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-LOANTEMP_PATH = INPUT_PATH / "BNM/LOANTEMP.sas7bdat"
-LKP_BRANCH_PATH = INPUT_PATH / "LKP_BRANCH"   # flat file, no extension
+# File paths
+LOANTEMP_FILE = INPUT_PATH / "bnm" / "loantemp.sas7bdat"
+BRHFILE_FILE = INPUT_PATH / "LKP_BRANCH"
 
-# HPD list (SAS macro variable &HPD). CORRECTED: must include every
-# product code that LOAN1's categorization logic (CAT A/B/C) selects on -
-# otherwise those loans get filtered out of LNTEMP before ever reaching
-# LOAN1, and LOAN1 ends up empty. This is the union of the HP and AITAB
-# product lists from PBBLNFMT's HP_ACTIVE.
-HPD_LIST = ["128", "130", "131", "132", "380", "381", "700", "705", "720", "725"]
+# Output file - only date, no timestamp
+OUTPUT_FILE = OUTPUT_PATH / f"eimar201_report_{datetime.now().strftime('%Y%m%d')}.txt"
 
-BANK_TITLE = "P U B L I C   I S L A M I C   B A N K   B E R H A D"
-LINE_WIDTH = 140
-
-
-# ============================================================================
-# 1. Real external formats, ported directly from the user's PBBLNFMT / PBBELF
-# ============================================================================
-
-# --- CACBRCH. (from PBBELF) -------------------------------------------------
-_CACBRCH_MAP = {
-    'KL': [2, 18, 35, 38, 40, 41, 53, 66, 120, 124, 128, 129, 141, 148,
-           169, 170, 225, 226, 230, 232, 236, 248, 262, 267, 802, 812, 816, 818],
-    'CC': [3, 15, 19, 22, 26, 29, 36, 46, 56, 69, 83, 94, 96, 97, 701, 118, 122, 125,
-           131, 132, 136, 138, 145, 151, 155, 157, 162, 163, 270, 167, 168, 173, 178,
-           179, 195, 198, 180, 196, 197, 202, 220, 229, 241, 252, 280, 811, 815, 822,
-           103, 821, 825, 269, 284, 285, 288, 289, 702],
-    'SJ': [27, 42, 60, 68, 88, 121, 154, 177, 204, 206, 255, 801, 826],
-    'PG': [6, 54, 107, 114, 126, 150, 159, 171, 205, 253, 265, 266, 808, 817],
-    'JB': [7, 37, 52, 59, 61, 79, 89, 105, 110, 147, 174, 176, 216, 217, 222, 286,
-           804, 805, 287, 290],
-    'KL2': [20, 25, 43, 78, 81, 92, 109, 127, 133, 135, 153, 199, 201, 203,
-            221, 240, 250, 268, 814, 820],
-}
-_CACBRCH_CODE = {'KL': '911', 'CC': '912', 'KL2': '913', 'JB': '914', 'PG': '915', 'SJ': '916'}
-
-
-def cacbrch_format(branch: Optional[int]) -> str:
-    """Real CACBRCH. mapping ported from PBBELF.format_cacbrch."""
-    if branch is None:
-        return "000"
-    for key, branches in _CACBRCH_MAP.items():
-        if branch in branches:
-            return _CACBRCH_CODE[key]
-    return "000"
-
-
-# --- ARRCLASS. (from PBBLNFMT) ----------------------------------------------
-_ARRCLASS_MAP = {
-    1:  '0 - < 1 MTH   ',
-    2:  '1 - < 2 MTH   ',
-    3:  '2 - < 3 MTH   ',
-    4:  '3 - < 4 MTH   ',
-    5:  '4 - < 5 MTH   ',
-    6:  '5 - < 6 MTH   ',
-    7:  '6 - < 7 MTH   ',
-    8:  '7 - < 8 MTH   ',
-    9:  '8 - < 9 MTH   ',
-    10: '9 - < 12 MTH  ',
-    11: '12 - < 18 MTH ',
-    12: '18 - < 24 MTH ',
-    13: '24 - < 36 MTH ',
-    14: '36 MTH & ABOVE',
-    15: 'DEFICIT       ',
-}
-
-
-def arrclass_format(arrear2: Optional[float]) -> str:
-    """Real ARRCLASS. mapping ported from PBBLNFMT.format_arrclass.
-    CONFIRMS: ARREAR2 is already a coded bucket (1-15), not a raw month
-    count - that's why filters like `ARREAR2 >= 4 AND < 10` line up with
-    Report B's title ("3-8 MONTH IN ARREAR"): codes 4-9 correspond to the
-    "3 - < 4 MTH" through "8 - < 9 MTH" buckets."""
-    if arrear2 is None:
-        return ""
-    return _ARRCLASS_MAP.get(int(arrear2), "")
-
-
-# ============================================================================
-# 2. REPTDATE Processing with Previous Month Calculation (no control file)
-# ============================================================================
-
-def process_repdate() -> Dict[str, object]:
-    """
-    Build the reporting-date variables using today's date instead of the
-    original BNM.REPTDATE control dataset. Previous month is derived with
-    plain date/timedelta arithmetic: take the 1st of the current month and
-    subtract one day to land on the last day of the previous month.
-    """
-    repdate = date.today()
-
-    first_of_this_month = repdate.replace(day=1)
-    last_day_prev_month = first_of_this_month - timedelta(days=1)
-
-    pmth = last_day_prev_month.month
-    pyear = last_day_prev_month.year
-    pdate = date(pyear, pmth, 1)
-
-    return {
-        'RDATE': repdate.strftime("%d/%m/%y"),
-        'REPTYEAR': str(repdate.year),
-        'REPTMON': f"{repdate.month:02d}",
-        'REPTDAY': f"{repdate.day:02d}",
-        'REPTDATE': repdate,
-        'PREPTDTE': pdate,
-        'PMTH': pmth,
-        'PYEAR': pyear,
-    }
-
-
-# ============================================================================
-# 3. Load branch lookup (fixed-width, confirmed layout)
-# ============================================================================
-
-def load_branch_data() -> pl.DataFrame:
-    """
-    CONFIRMED layout from the original SAS INPUT statement:
-        INPUT @2 BRANCH  3.
-              @6 BRHCODE $3.;
-    i.e. (1-indexed) columns 2-4 = numeric BRANCH, columns 6-8 = BRHCODE.
-    In 0-indexed Python slicing that's [1:4] and [5:8].
-    """
-    if not LKP_BRANCH_PATH.exists():
-        print(f"   WARNING: {LKP_BRANCH_PATH} not found - using empty branch lookup")
-        return pl.DataFrame(schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8})
-
-    rows = []
-    with open(LKP_BRANCH_PATH, "r", encoding="utf-8", errors="replace") as f:
-        for raw_line in f:
-            if len(raw_line) < 8:
-                continue
-            branch_str = raw_line[1:4].strip()
-            brhcode = raw_line[5:8].strip()
-            if not branch_str.isdigit():
-                continue
-            rows.append({"BRANCH": int(branch_str), "BRHCODE": brhcode})
-
-    df = pl.DataFrame(rows, schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8})
-
-    # SAFETY: a proper branch lookup should have exactly one row per BRANCH.
-    # If the flat file has been re-exported/appended over time and contains
-    # more than one line for the same branch code, a left join against it
-    # would silently fan out and duplicate every loan in that branch -
-    # producing exact duplicate account lines in the printed reports with
-    # no connection to the LOAN/LOAN1 filtering logic at all. Guard against
-    # that here by keeping only the first entry per BRANCH.
-    dup_branches = (
-        df.group_by("BRANCH").agg(pl.len().alias("n"))
-          .filter(pl.col("n") > 1)["BRANCH"].to_list()
-    )
-    if dup_branches:
-        print(f"   WARNING: LKP_BRANCH has duplicate entries for BRANCH(es) {sorted(dup_branches)} "
-              f"- keeping first occurrence only to prevent join fan-out")
-        df = df.unique(subset=["BRANCH"], keep="first")
-
+def read_sas7bdat_with_pandas(filepath):
+    """Read SAS7BDAT file using pandas/pyreadstat"""
+    print(f"Reading SAS file: {filepath}")
+    if not filepath.exists():
+        raise FileNotFoundError(f"SAS file not found: {filepath}")
+    df, meta = pyreadstat.read_sas7bdat(str(filepath))
     return df
 
-
-# ============================================================================
-# 4. LNTEMP: load loans, filter, left-join branch
-# ============================================================================
-
-def build_lntemp(hpd_list: List[str]) -> pl.DataFrame:
-    """
-    PROC SORT DATA=BNM.LOANTEMP OUT=LNTEMP;
-      WHERE BALANCE > 0 AND BORSTAT NE 'Z' AND PRODUCT IN &HPD;
-      BY BRANCH;
-    ...merged with BRHDATA by BRANCH, keeping every LNTEMP row
-    (IF PRESENT=1 THEN OUTPUT), which behaves like a LEFT JOIN off LNTEMP -
-    CORRECTED: earlier draft used an inner join, which silently dropped any
-    loan whose branch wasn't in the lookup file. A left join matches the
-    SAS semantics (all qualifying loans are kept; BRHCODE is blank if the
-    branch isn't found in the lookup).
-    """
-    loan_pdf, meta = pyreadstat.read_sas7bdat(str(LOANTEMP_PATH), dates_as_pandas_datetime=True)
-    loan_df = pl.from_pandas(loan_pdf)
-    loan_df = loan_df.rename({c: c.upper() for c in loan_df.columns})
-    loan_df = loan_df.with_columns(pl.col("BRANCH").cast(pl.Int64, strict=False))
-
-    hpd_numbers = [int(x.strip("'")) for x in hpd_list]
-
-    filtered = loan_df.filter(
-        (pl.col("BALANCE") > 0) &
-        (pl.col("BORSTAT") != "Z") &
-        (pl.col("PRODUCT").is_in(hpd_numbers))
-    ).sort("BRANCH")
-
-    branch_df = load_branch_data()
-
-    lntemp = filtered.join(branch_df, on="BRANCH", how="left").with_columns(
-        pl.col("BRHCODE").fill_null("")
-    )
-
-    return lntemp
-
-
-# ============================================================================
-# 5. LOAN: arrears / new-loan population (literal SAS semantics: duplicates
-#    are possible and intentional - a row satisfying both IF conditions is
-#    output twice)
-# ============================================================================
-
-def create_loan(lntemp: pl.DataFrame, variables: Dict) -> pl.DataFrame:
-    """
-    DATA LOAN;
-      SET LNTEMP;
-      IF ARREAR2 GE 3 OR BORSTAT IN ('R','I','F','Y') THEN OUTPUT;
-      IF ISSDTE GE &PREPTDTE AND DAYDIFF >= 8 THEN OUTPUT;
-    RUN;
-
-    CORRECTED: earlier draft applied .unique() across the two conditions.
-    The real SAS DATA step has two independent IF/OUTPUT statements, so a
-    row matching BOTH conditions is genuinely written twice. We preserve
-    that here (no dedup) to match production row counts.
-    """
-    prept_date = variables['PREPTDTE']
-
-    cond1 = lntemp.filter(
-        (pl.col("ARREAR2") >= 3) |
-        (pl.col("BORSTAT").is_in(["R", "I", "F", "Y"]))
-    )
-    cond2 = lntemp.filter(
-        (pl.col("ISSDTE") >= prept_date) &
-        (pl.col("DAYDIFF") >= 8)
-    )
-
-    # Diagnostic: show exactly how many accounts satisfy BOTH conditions
-    # (these are the ones that will legitimately print twice, matching
-    # literal SAS DATA step semantics) vs. each condition alone. If this
-    # overlap count looks too high (e.g. most/all of LNTEMP), that signals
-    # ISSDTE or DAYDIFF still aren't being read/compared correctly rather
-    # than genuine duplication.
-    if "ACCTNO" in lntemp.columns:
-        cond1_ids = set(cond1["ACCTNO"].to_list())
-        cond2_ids = set(cond2["ACCTNO"].to_list())
-        overlap = cond1_ids & cond2_ids
-        print(f"   [debug] cond1 (arrears/borstat) accounts: {len(cond1_ids)}")
-        print(f"   [debug] cond2 (new loan) accounts: {len(cond2_ids)}")
-        print(f"   [debug] accounts satisfying BOTH (will print twice): {len(overlap)}")
-        if overlap:
-            print(f"   [debug] sample overlapping ACCTNO(s): {sorted(overlap)[:5]}")
-
-    return pl.concat([cond1, cond2], how="diagonal")
-
-
-# ============================================================================
-# 6. LOAN1: category assignment (literal SAS semantics: only 3 IF blocks,
-#    each with its own OUTPUT - no default/"D" bucket, and a loan matching
-#    more than one block's condition is intentionally duplicated)
-# ============================================================================
-
-def create_loan1(loan_df: pl.DataFrame) -> pl.DataFrame:
-    """
-    DATA LOAN1;
-      SET LOAN;
-      IF BORSTAT = 'F' THEN ARREAR2 = 15;
-      ARREARS = PUT(ARREAR2, ARRCLASS.);
-      CACBR   = PUT(BRANCH, CACBRCH.);
-      IF PRODUCT IN (380,381,700,705,720,725) THEN DO;
-         CAT='A'; TYPE='HP DIRECT(CONV) '; OUTPUT;
-      END;
-      IF PRODUCT IN (380,381) THEN DO;
-         CAT='B'; TYPE='HP (380,381) '; OUTPUT;
-      END;
-      IF PRODUCT IN (128,130,131,132) THEN DO;
-         CAT='C'; TYPE='AITAB '; OUTPUT;
-      END;
-    RUN;
-
-    CORRECTED: earlier draft added a catch-all "D" category for anything
-    not matching A/B/C, and treated the three conditions as mutually
-    exclusive (if/elif). Neither is correct:
-      - A loan with PRODUCT in (380,381) matches BOTH the CAT-A list and
-        the CAT-B list, so it is intentionally emitted twice (once as A,
-        once as B).
-      - A loan with a PRODUCT not in any of the three lists is dropped
-        from LOAN1 entirely (no OUTPUT happens for it at all).
-    """
-    base = loan_df.with_columns(
-        pl.when(pl.col("BORSTAT") == "F")
-        .then(pl.lit(15))
-        .otherwise(pl.col("ARREAR2"))
-        .alias("ARREAR2")
-    )
-
-    base = base.with_columns([
-        pl.col("ARREAR2").map_elements(arrclass_format, return_dtype=pl.Utf8).alias("ARREARS"),
-        pl.col("BRANCH").map_elements(cacbrch_format, return_dtype=pl.Utf8).alias("CACBR"),
-    ])
-
-    cat_a = base.filter(pl.col("PRODUCT").is_in([380, 381, 700, 705, 720, 725])) \
-                .with_columns([pl.lit("A").alias("CAT"), pl.lit("HP DIRECT(CONV) ").alias("TYPE")])
-
-    cat_b = base.filter(pl.col("PRODUCT").is_in([380, 381])) \
-                .with_columns([pl.lit("B").alias("CAT"), pl.lit("HP (380,381) ").alias("TYPE")])
-
-    cat_c = base.filter(pl.col("PRODUCT").is_in([128, 130, 131, 132])) \
-                .with_columns([pl.lit("C").alias("CAT"), pl.lit("AITAB ").alias("TYPE")])
-
-    loan1 = pl.concat([cat_a, cat_b, cat_c], how="diagonal")
-
-    return loan1.sort(["CAT", "BRANCH", "ARREAR2", "BALANCE"], descending=[False, False, False, True])
-
-
-# ============================================================================
-# 7. Fixed-column text line helpers (mimic SAS PUT @col ... FORMAT.)
-# ============================================================================
-
-def fmt_id(value) -> str:
-    """Render numeric ID-like fields (NOTENO, ACCTNO, PRODUCT) without a
-    trailing '.0'. pyreadstat returns SAS numeric columns as float64 even
-    when they hold whole-number IDs, so str(value) alone produces ugly
-    output like '94010.0' instead of '94010'."""
-    if value is None:
-        return ""
-    try:
-        f = float(value)
-        if f == int(f):
-            return str(int(f))
-        return str(value)
-    except (TypeError, ValueError):
-        return str(value)
-
-
-def new_line(width: int = LINE_WIDTH) -> List[str]:
-    return [" "] * width
-
-
-def put_text(buf: List[str], col: int, text: str) -> None:
-    """Left-justified write starting at 1-indexed column `col`."""
-    text = "" if text is None else str(text)
-    start = col - 1
-    end = start + len(text)
-    if end > len(buf):
-        buf.extend([" "] * (end - len(buf)))
-    buf[start:end] = list(text)
-
-
-def put_num(buf: List[str], col: int, value, width: int, decimals: int = 0) -> None:
-    """Right-justified numeric write within a field of `width` chars
-    starting at 1-indexed column `col`, mimicking SAS COMMAw.d formats."""
-    if value is None:
-        formatted = ""
-    else:
-        formatted = f"{value:,.{decimals}f}"
-    formatted = formatted[-width:] if len(formatted) > width else formatted
-    put_text(buf, col + (width - len(formatted)), formatted)
-
-
-def put_date(buf: List[str], col: int, d) -> None:
-    """DDMMYY8. format: DD/MM/YY."""
-    if d is None:
-        return
-    try:
-        put_text(buf, col, d.strftime("%d/%m/%y"))
-    except Exception:
-        put_text(buf, col, "")
-
-
-def render(buf: List[str]) -> str:
-    return "".join(buf).rstrip()
-
-
-# ============================================================================
-# 8. Report A: AITAB/HP 2+ months arrears, non-CAC branches only
-# ============================================================================
-
-def generate_report_a(loan1_df: pl.DataFrame, variables: Dict) -> None:
-    """
-    WHERE CACBR = '000';
-    BY CAT BRANCH ARREAR2 DESCENDING BALANCE;
-    (loan1_df is already sorted this way from create_loan1)
-
-    NOTE: the original SAS also forces a new page whenever LINECNT > 56
-    mid-branch. That precise line-count-based repagination is NOT
-    replicated here - this writer starts a new page per BRANCH (matching
-    FIRST.BRANCH) but will not re-print the header mid-branch if a branch
-    has enough accounts to overflow one printed page. Flag if you need
-    that level of fidelity and it can be added.
-    """
-    data = loan1_df.filter(pl.col("CACBR") == "000")
-    lines: List[str] = []
-
-    if data.is_empty():
-        print("   No data for non-CAC branches in Report A")
-        (OUTPUT_PATH / "REPORT_A.txt").write_text("(no records)\n")
-        return
-
-    page = 0
-    for cat in sorted(data["CAT"].unique().to_list()):
-        cat_data = data.filter(pl.col("CAT") == cat)
-        cat_total = 0.0
-        cat_count = 0
-        report_type = cat_data["TYPE"][0]
-
-        for branch in sorted(cat_data["BRANCH"].unique().to_list()):
-            branch_data = cat_data.filter(pl.col("BRANCH") == branch)
-            brhcode = branch_data["BRHCODE"][0]
-            page += 1
-
-            # --- page header ---
-            b = new_line()
-            put_text(b, 1, f"PROGRAM-ID:EIMAR301-A - BRANCH : {branch:3d}")
-            put_text(b, 43, BANK_TITLE)
-            put_text(b, 118, f"PAGE NO.: {page}")
-            lines.append(render(b))
-
-            b = new_line()
-            put_text(b, 28, f"{report_type}2 MTHS & ABOVE AND A/C PAID 2 ISTL AND BELOW AS AT {variables['RDATE']}")
-            lines.append(render(b))
-            lines.append("")
-
-            b = new_line()
-            put_text(b, 1, "BRH"); put_text(b, 5, "NAME"); put_text(b, 25, "NOTENO")
-            put_text(b, 34, "ISSUE DT"); put_text(b, 45, "LST TR DT")
-            put_text(b, 61, "ISTL AMT"); put_text(b, 76, "NO ISTL PD")
-            put_text(b, 87, "BORSTAT"); put_text(b, 95, "ARREARS")
-            put_text(b, 115, "BALANCE")
-            lines.append(render(b))
-
-            b = new_line()
-            put_text(b, 5, "ACC NO"); put_text(b, 25, "PRODUCT")
-            put_text(b, 34, "MATURE DT"); put_text(b, 45, "LST TR AMT")
-            put_text(b, 95, "DAYS ARR"); put_text(b, 115, "DELQ REASON CODE")
-            lines.append(render(b))
-
-            lines.append("    COLLATERAL DESC")
-            lines.append("-" * 132)
-
-            branch_total = 0.0
-            branch_count = 0
-
-            for arrear in sorted(branch_data["ARREAR2"].unique().to_list()):
-                arrear_data = branch_data.filter(pl.col("ARREAR2") == arrear)
-                arr_total = 0.0
-                arr_count = 0
-
-                for row in arrear_data.iter_rows(named=True):
-                    b = new_line()
-                    put_text(b, 1, row.get("BRHCODE", ""))
-                    put_text(b, 5, row.get("NAME", ""))
-                    put_text(b, 25, fmt_id(row.get("NOTENO")))
-                    put_date(b, 34, row.get("ISSDTE"))
-                    put_date(b, 52, row.get("LASTRAN"))
-                    put_num(b, 61, row.get("PAYAMT"), 15, 2)
-                    put_num(b, 77, row.get("NOISTLPD"), 8, 0)
-                    put_text(b, 87, row.get("BORSTAT", ""))
-                    put_text(b, 95, row.get("ARREARS", ""))
-                    put_num(b, 114, row.get("BALANCE"), 17, 2)
-                    lines.append(render(b))
-
-                    b = new_line()
-                    put_text(b, 5, fmt_id(row.get("ACCTNO")))
-                    put_text(b, 25, fmt_id(row.get("PRODUCT")))
-                    put_date(b, 34, row.get("MATURDT"))
-                    put_num(b, 45, row.get("LSTTRNAM"), 15, 2)
-                    put_num(b, 95, row.get("DAYDIFF"), 8, 0)
-                    put_text(b, 114, row.get("DELQCD", ""))
-                    lines.append(render(b))
-
-                    lines.append(f"    {row.get('COLLDESC', '')}")
-
-                    arr_total += row.get("BALANCE") or 0
-                    arr_count += 1
-
-                lines.append(("-" * 40).rjust(40 + 40) + ("-" * 10).rjust(10))
-                b = new_line()
-                put_text(b, 5, "SUBTOTAL")
-                put_text(b, 41, f"NO OF A/C : {arr_count:>12,d}")
-                put_num(b, 114, arr_total, 17, 2)
-                lines.append(render(b))
-                lines.append("-" * 132)
-                lines.append("")
-
-                branch_total += arr_total
-                branch_count += arr_count
-
-            lines.append("-" * 132)
-            b = new_line()
-            put_text(b, 5, "BRANCH TOTAL")
-            put_text(b, 41, f"NO OF A/C : {branch_count:>12,d}")
-            put_num(b, 114, branch_total, 17, 2)
-            lines.append(render(b))
-            lines.append("-" * 132)
-            lines.append("")
-
-            cat_total += branch_total
-            cat_count += branch_count
-
-        lines.append("-" * 132)
-        b = new_line()
-        put_text(b, 5, "GRAND TOTAL")
-        put_text(b, 41, f"NO OF A/C : {cat_count:>12,d}")
-        put_num(b, 114, cat_total, 17, 2)
-        lines.append(render(b))
-        lines.append("-" * 132)
-        lines.append("")
-
-    (OUTPUT_PATH / "REPORT_A.txt").write_text("\n".join(lines) + "\n")
-    print(f"\u2713 Report A saved: {len(data)} accounts, {page} branch pages")
-
-
-# ============================================================================
-# 9. Report B: 3-8 months arrears, excludes BORSTAT F/I/R, ALL branches
-#    (no CACBR restriction)
-# ============================================================================
-
-def generate_report_b(loan1_df: pl.DataFrame, variables: Dict) -> None:
-    """
-    WHERE (ARREAR2 >= 4 AND ARREAR2 < 10) AND
-          (BORSTAT NE 'F' AND BORSTAT NE 'I' AND BORSTAT NE 'R');
-    BY CAT BRANCH ARREAR2 DESCENDING BALANCE;
-
-    CORRECTED: no CACBR='000' restriction here - Report B runs against the
-    full LOAN1 population (both CAC and non-CAC branches).
-    """
-    data = loan1_df.filter(
-        (pl.col("ARREAR2") >= 4) & (pl.col("ARREAR2") < 10) &
-        (~pl.col("BORSTAT").is_in(["F", "I", "R"]))
-    )
-    lines: List[str] = []
-
-    if data.is_empty():
-        print("   No data for Report B")
-        (OUTPUT_PATH / "REPORT_B.txt").write_text("(no records)\n")
-        return
-
-    page = 0
-    for cat in sorted(data["CAT"].unique().to_list()):
-        cat_data = data.filter(pl.col("CAT") == cat)
-        cat_total = 0.0
-        cat_count = 0
-        report_type = cat_data["TYPE"][0]
-
-        for branch in sorted(cat_data["BRANCH"].unique().to_list()):
-            branch_data = cat_data.filter(pl.col("BRANCH") == branch)
-            page += 1
-
-            b = new_line()
-            put_text(b, 1, f"PROGRAM-ID:EIMAR301-B - BRANCH : {branch:3d}")
-            put_text(b, 43, BANK_TITLE)
-            put_text(b, 110, f"PAGE NO.: {page}")
-            lines.append(render(b))
-
-            b = new_line()
-            put_text(b, 28, f"{report_type}ACCOUNT WITH 3 - 8 MONTH IN ARREAR AS AT {variables['RDATE']}")
-            lines.append(render(b))
-            lines.append("")
-
-            b = new_line()
-            put_text(b, 1, "BRH"); put_text(b, 5, "ACCTNO"); put_text(b, 16, "NAME")
-            put_text(b, 40, "NOTENO"); put_text(b, 50, "PRODUCT")
-            put_text(b, 59, "BORSTAT"); put_text(b, 68, "ISSUE DT")
-            put_text(b, 78, "DAYS"); put_text(b, 84, "ARREARS")
-            put_text(b, 110, "BALANCE"); put_text(b, 120, "NO ISTL PAID")
-            lines.append(render(b))
-
-            b = new_line()
-            put_text(b, 5, "LST TR DT"); put_text(b, 16, "MAT. DATE")
-            put_text(b, 36, "LST TR AMT"); put_text(b, 49, "ISTL AMT")
-            put_text(b, 59, "COLLATERAL DESCRIPTION")
-            lines.append(render(b))
-            lines.append("-" * 132)
-
-            branch_total = 0.0
-            branch_count = 0
-
-            for arrear in sorted(branch_data["ARREAR2"].unique().to_list()):
-                arrear_data = branch_data.filter(pl.col("ARREAR2") == arrear)
-                arr_total = 0.0
-                arr_count = 0
-
-                for row in arrear_data.iter_rows(named=True):
-                    b = new_line()
-                    put_text(b, 1, row.get("BRHCODE", ""))
-                    put_text(b, 5, fmt_id(row.get("ACCTNO")))
-                    put_text(b, 16, row.get("NAME", ""))
-                    put_text(b, 41, fmt_id(row.get("NOTENO")))
-                    put_text(b, 54, fmt_id(row.get("PRODUCT")))
-                    put_text(b, 59, row.get("BORSTAT", ""))
-                    put_date(b, 68, row.get("ISSDTE"))
-                    put_num(b, 79, row.get("DAYDIFF"), 5, 0)
-                    put_text(b, 84, row.get("ARREARS", ""))
-                    put_num(b, 100, row.get("BALANCE"), 17, 2)
-                    put_num(b, 120, row.get("NOISTLPD"), 10, 0)
-                    lines.append(render(b))
-
-                    b = new_line()
-                    put_date(b, 5, row.get("LASTRAN"))
-                    put_date(b, 16, row.get("MATURDT"))
-                    put_num(b, 29, row.get("LSTTRNAM"), 17, 2)
-                    put_num(b, 46, row.get("PAYAMT"), 11, 2)
-                    put_text(b, 59, row.get("COLLDESC", ""))
-                    lines.append(render(b))
-
-                    arr_total += row.get("BALANCE") or 0
-                    arr_count += 1
-
-                lines.append("-" * 132)
-                b = new_line()
-                put_text(b, 5, "SUBTOTAL")
-                put_text(b, 41, f"NO OF A/C : {arr_count:>12,d}")
-                put_num(b, 100, arr_total, 17, 2)
-                lines.append(render(b))
-                lines.append("-" * 132)
-                lines.append("")
-
-                branch_total += arr_total
-                branch_count += arr_count
-
-            lines.append("-" * 132)
-            b = new_line()
-            put_text(b, 5, "BRANCH TOTAL")
-            put_text(b, 41, f"NO OF A/C : {branch_count:>12,d}")
-            put_num(b, 100, branch_total, 17, 2)
-            lines.append(render(b))
-            lines.append("-" * 132)
-            lines.append("")
-
-            cat_total += branch_total
-            cat_count += branch_count
-
-        lines.append("-" * 132)
-        b = new_line()
-        put_text(b, 5, "GRAND TOTAL")
-        put_text(b, 41, f"NO OF A/C : {cat_count:>12,d}")
-        put_num(b, 100, cat_total, 17, 2)
-        lines.append(render(b))
-        lines.append("-" * 132)
-        lines.append("")
-
-    (OUTPUT_PATH / "REPORT_B.txt").write_text("\n".join(lines) + "\n")
-    print(f"\u2713 Report B saved: {len(data)} accounts, {page} branch pages")
-
-
-# ============================================================================
-# 10. Report C / D: PROC TABULATE-style crosstab from LNTEMP
-# ============================================================================
-
-def _payment_pivot(df: pl.DataFrame, variables: Dict, title2: str, title3_suffix: str,
-                    include_total_col: bool, out_name: str) -> None:
-    """Shared crosstab writer for Reports C and D: rows = BRHCODE (+ TOTAL),
-    columns = PAYDESC categories, cells = NO OF A/C and O/S BALANCE."""
-    if df.is_empty():
-        print(f"   No data for {out_name}")
-        (OUTPUT_PATH / f"{out_name}.txt").write_text("(no records)\n")
-        return
-
-    paydesc_order = [p for p in ["NO PAYMENT", "PAID 1 ISTL", "PAID 2 ISTL"]
-                      if p in df["PAYDESC"].unique().to_list()]
-
-    summary = df.group_by(["BRHCODE", "PAYDESC"]).agg([
-        pl.len().alias("NOACCT"),
-        pl.sum("BALANCE").alias("BAL"),
-    ])
-
-    branches = sorted(df["BRHCODE"].unique().to_list())
-
-    lines = []
-    lines.append(f"PROGRAM ID : {out_name.replace('REPORT_', 'EIMAR301-')}")
-    lines.append("PUBLIC ISLAMIC BANK BERHAD")
-    lines.append(f"{title2} AS AT {variables['RDATE']}")
-    lines.append("")
-
-    header = f"{'BRANCH':<8}"
-    for p in paydesc_order:
-        header += f"{p + ' NO OF A/C':>16}{p + ' O/S BAL':>18}"
-    if include_total_col:
-        header += f"{'TOTAL NO OF A/C':>18}{'TOTAL O/S BAL':>18}"
-    lines.append(header)
-    lines.append("-" * len(header))
-
-    grand_counts = {p: 0 for p in paydesc_order}
-    grand_bal = {p: 0.0 for p in paydesc_order}
-
-    for brh in branches:
-        row_str = f"{brh:<8}"
-        row_total_count = 0
-        row_total_bal = 0.0
-        for p in paydesc_order:
-            cell = summary.filter((pl.col("BRHCODE") == brh) & (pl.col("PAYDESC") == p))
-            cnt = cell["NOACCT"][0] if len(cell) > 0 else 0
-            bal = cell["BAL"][0] if len(cell) > 0 else 0.0
-            row_str += f"{cnt:>16,d}{bal:>18,.2f}"
-            row_total_count += cnt
-            row_total_bal += bal
-            grand_counts[p] += cnt
-            grand_bal[p] += bal
-        if include_total_col:
-            row_str += f"{row_total_count:>18,d}{row_total_bal:>18,.2f}"
-        lines.append(row_str)
-
-    total_row = f"{'TOTAL':<8}"
-    grand_total_count = 0
-    grand_total_bal = 0.0
-    for p in paydesc_order:
-        total_row += f"{grand_counts[p]:>16,d}{grand_bal[p]:>18,.2f}"
-        grand_total_count += grand_counts[p]
-        grand_total_bal += grand_bal[p]
-    if include_total_col:
-        total_row += f"{grand_total_count:>18,d}{grand_total_bal:>18,.2f}"
-    lines.append("-" * len(header))
-    lines.append(total_row)
-
-    (OUTPUT_PATH / f"{out_name}.txt").write_text("\n".join(lines) + "\n")
-    print(f"\u2713 {out_name} saved: {len(df)} accounts across {len(branches)} branches")
-
-
-def create_report_c_data(lntemp: pl.DataFrame, variables: Dict) -> pl.DataFrame:
-    """
-    DATA NEWREL; SET LNTEMP;
-      IF ISSDTE GE &PREPTDTE AND DAYDIFF >= 8;
-      IF NOISTLPD LT 1 THEN PAYDESC='NO PAYMENT';
-      ELSE IF (NOISTLPD GE 1 AND NOISTLPD LT 2) THEN PAYDESC='PAID 1 ISTL';
-      ELSE PAYDESC='PAID 2 ISTL';
-
-    CORRECTED: "PAID 2 ISTL" here has NO upper bound - any NOISTLPD >= 2
-    falls in this bucket (earlier draft implicitly assumed an upper cap).
-    """
-    new_rel = lntemp.filter(
-        (pl.col("ISSDTE") >= variables['PREPTDTE']) & (pl.col("DAYDIFF") >= 8)
-    )
-    return new_rel.with_columns(
-        pl.when(pl.col("NOISTLPD") < 1).then(pl.lit("NO PAYMENT"))
-        .when((pl.col("NOISTLPD") >= 1) & (pl.col("NOISTLPD") < 2)).then(pl.lit("PAID 1 ISTL"))
-        .otherwise(pl.lit("PAID 2 ISTL"))
-        .alias("PAYDESC")
-    )
-
-
-def create_report_d_data(lntemp: pl.DataFrame) -> pl.DataFrame:
-    """
-    DATA ACCARR; SET LNTEMP;
-      IF (2<=NOISTLPD<3) AND DAYDIFF >= 8;
-      PAYDESC = 'PAID 2 ISTL';
-
-    CORRECTED: filter is NOISTLPD in [2, 3) exactly - earlier draft used
-    NOISTLPD >= 2 with no upper bound, which overlapped with Report C's
-    open-ended "PAID 2 ISTL" bucket instead of matching this dataset's
-    narrower definition.
-    """
-    acc_arr = lntemp.filter(
-        (pl.col("NOISTLPD") >= 2) & (pl.col("NOISTLPD") < 3) & (pl.col("DAYDIFF") >= 8)
-    )
-    return acc_arr.with_columns(pl.lit("PAID 2 ISTL").alias("PAYDESC"))
-
-
-# ============================================================================
-# 11. Main Execution
-# ============================================================================
+def format_line1(branch, values):
+    """Format line 1: BRANCH + columns 1-5"""
+    return (f"{branch:>3}     {values[0]:>7,.0f} {values[1]:>16,.2f}     {values[2]:>7,.0f} {values[3]:>15,.2f}     "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}      {values[6]:>8,.0f} {values[7]:>17,.2f}     "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
+
+def format_line2(brhcode, values):
+    """Format line 2: BRHCODE + columns 6-10"""
+    return (f"{brhcode:<3}     {values[0]:>7,.0f} {values[1]:>16,.2f}     {values[2]:>7,.0f} {values[3]:>15,.2f}     "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}      {values[6]:>8,.0f} {values[7]:>17,.2f}     "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
+
+def format_line3(values):
+    """Format line 3: columns 11-15"""
+    return (f"        {values[0]:>7,.0f} {values[1]:>16,.2f}     {values[2]:>7,.0f} {values[3]:>15,.2f}     "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}      {values[6]:>8,.0f} {values[7]:>17,.2f}     "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
+
+def format_line4(values):
+    """Format line 4: columns 16-17 + subtotals"""
+    return (f"        {values[0]:>7,.0f} {values[1]:>16,.2f}     {values[2]:>7,.0f} {values[3]:>15,.2f}     "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}      {values[6]:>8,.0f} {values[7]:>17,.2f}     "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
 
 def main():
-    print("=" * 60)
-    print("EIMAR301 / EIMIR301 SAS to Python Conversion")
-    print("=" * 60)
+    # Use current date minus 1 day
+    current_date = datetime.now() - timedelta(days=1)
+    # Format as DD/MM/YY like SAS DDMMYY8 format
+    rdate = current_date.strftime('%d/%m/%y')
+    
+    print(f"Report date: {rdate}")
 
-    print("\n1. Processing REPTDATE with previous month...")
-    variables = process_repdate()
-    print(f"   Current Date: {variables['RDATE']}")
-    print(f"   Previous Month Date: {variables['PREPTDTE']}")
+    # Check and find BRHFILE
+    if not BRHFILE_FILE.exists():
+        alt_paths = [
+            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/LKP_BRANCH"),
+            Path("input/prod/EIMIR201/LKP_BRANCH"),
+            Path("../input/prod/EIMIR201/LKP_BRANCH"),
+        ]
+        for alt_path in alt_paths:
+            if alt_path.exists():
+                print(f"Found BRHFILE at: {alt_path}")
+                brhfile_final = alt_path
+                break
+        else:
+            raise FileNotFoundError(f"BRHFILE not found")
+    else:
+        brhfile_final = BRHFILE_FILE
 
-    print("\n2. Building LNTEMP (filtered loans + branch lookup)...")
-    lntemp = build_lntemp(HPD_LIST)
-    print(f"   LNTEMP rows: {len(lntemp)}")
-
-    print("\n3. Building LOAN (arrears / new-loan population, duplicates preserved)...")
-    loan = create_loan(lntemp, variables)
-    print(f"   LOAN rows: {len(loan)}")
-
-    print("\n4. Building LOAN1 (category assignment, duplicates preserved, no default cat)...")
-    loan1 = create_loan1(loan)
-    print(f"   LOAN1 rows: {len(loan1)}")
-
-    print("\n5. Generating Report A (EIMAR301-A, non-CAC branches only)...")
-    generate_report_a(loan1, variables)
-
-    print("\n6. Generating Report B (EIMAR301-B, all branches)...")
-    generate_report_b(loan1, variables)
-
-    print("\n7. Generating Report C (EIMAR301-C, new releases payment summary)...")
-    report_c_data = create_report_c_data(lntemp, variables)
-    _payment_pivot(
-        report_c_data, variables,
-        title2="SUMMARY ON AC WITH PAYMENT OF 2 ISTL & BELOW",
-        title3_suffix="",
-        include_total_col=True,
-        out_name="REPORT_C",
+    # Read BRHFILE with correct column specifications
+    brhdata_df = pd.read_fwf(
+        brhfile_final,
+        colspecs=[(1, 4), (5, 8)],
+        names=['BRANCH', 'BRHCODE'],
+        dtype={'BRANCH': str, 'BRHCODE': str},
+        header=None
     )
+    brhdata_df['BRANCH'] = brhdata_df['BRANCH'].str.strip()
+    brhdata_df['BRANCH_NUM'] = pd.to_numeric(brhdata_df['BRANCH'], errors='coerce').fillna(0).astype(int)
+    print(f"Read {len(brhdata_df)} branch records")
 
-    print("\n8. Generating Report D (EIMAR301-D, exactly 2 installments paid)...")
-    report_d_data = create_report_d_data(lntemp)
-    _payment_pivot(
-        report_d_data, variables,
-        title2="SUMMARY ON A/C IN ARREAR WITH 2 ISTL PAID ONLY",
-        title3_suffix="",
-        include_total_col=False,
-        out_name="REPORT_D",
+    # Check and find LOANTEMP file
+    if not LOANTEMP_FILE.exists():
+        alt_loantemp_paths = [
+            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
+            Path("input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
+        ]
+        for alt_path in alt_loantemp_paths:
+            if alt_path.exists():
+                print(f"Found LOANTEMP at: {alt_path}")
+                loantemp_file_final = alt_path
+                break
+        else:
+            raise FileNotFoundError(f"LOANTEMP file not found")
+    else:
+        loantemp_file_final = LOANTEMP_FILE
+
+    # Read LOANTEMP
+    loantemp_df = read_sas7bdat_with_pandas(loantemp_file_final)
+    print(f"Read {len(loantemp_df)} loan records")
+
+    # Convert to DuckDB for processing
+    conn = duckdb.connect(':memory:')
+    conn.register('loantemp', loantemp_df)
+    conn.register('brhdata', brhdata_df)
+
+    # Create LOANTEM2 with proper CAT ordering
+    loantem2_query = """
+    WITH categorized AS (
+        SELECT 
+            *,
+            CASE 
+                WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN 'A'
+                WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN 'B'
+                WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN 'C'
+                WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN 'D'
+            END AS CAT,
+            CASE 
+                WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN '(HPD-C)'
+                WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN '(HP 380/381)'
+                WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN '(AITAB)'
+                WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN '(-HPD-)'
+            END AS TYPE
+        FROM loantemp
+        WHERE (PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1)
+           OR (PRODUCT IN (380, 381) AND CHECKDT = 1)
+           OR (PRODUCT IN (128, 130) AND CHECKDT = 1)
+           OR (PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1)
     )
-
-    print("\n" + "=" * 60)
-    print("CONVERSION COMPLETE")
-    print("=" * 60)
-    print(f"Output saved to: {OUTPUT_PATH}")
-
+    SELECT * FROM categorized
+    WHERE CAT IS NOT NULL
+    """
+    
+    loantem2_df = conn.execute(loantem2_query).fetchdf()
+    print(f"Filtered to {len(loantem2_df)} records for reporting")
+    
+    # Merge with BRHDATA
+    loantemp_final_df = loantem2_df.merge(brhdata_df, left_on='BRANCH', right_on='BRANCH_NUM', how='inner')
+    loantemp_final_df = loantemp_final_df.sort_values(['CAT', 'BRANCH_NUM'])
+    print(f"Merged data: {len(loantemp_final_df)} records")
+    
+    # Generate report
+    with open(OUTPUT_FILE, 'w') as f:
+        pagecnt = 0
+        
+        # Process each CAT group
+        for cat, cat_group in loantemp_final_df.groupby('CAT'):
+            if cat is None or pd.isna(cat):
+                continue
+                
+            # Initialize category-level arrays and totals
+            totamt = np.zeros(17)
+            totacc = np.zeros(17)
+            
+            first_branch_in_category = True
+            
+            for branch, branch_group in cat_group.groupby('BRANCH_NUM'):
+                brhamt = np.zeros(17)
+                noacc = np.zeros(17)
+                
+                # Process each row in branch
+                for _, row in branch_group.iterrows():
+                    if row['BALANCE'] > 0:
+                        arrears_idx = int(row['ARREAR']) - 1
+                        if 0 <= arrears_idx < 17:
+                            brhamt[arrears_idx] += row['BALANCE']
+                            noacc[arrears_idx] += 1
+                
+                # Calculate subtotals
+                subbrh = np.sum(brhamt[3:])
+                subbr2 = subbrh - brhamt[3] - brhamt[4] - brhamt[5]
+                subacc = np.sum(noacc[3:])
+                subac2 = subacc - noacc[3] - noacc[4] - noacc[5]
+                totbrh = subbrh + brhamt[0] + brhamt[1] + brhamt[2]
+                sotacc = subacc + noacc[0] + noacc[1] + noacc[2]
+                
+                # Update category totals
+                totamt += brhamt
+                totacc += noacc
+                
+                # Print page header if first branch in category
+                if first_branch_in_category:
+                    pagecnt += 1
+                    f.write(f"PROGRAM-ID : EIMAR201                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {pagecnt}\n")
+                    cat_type = branch_group['TYPE'].iloc[0] if len(branch_group) > 0 else '          '
+                    f.write(f"                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998  {cat_type}       {rdate}\n")
+                    f.write("\n")
+                    # Column headers with proper spacing to match data columns
+                    f.write("BRH       NO          < 1 MTH         NO     1 TO < 2 MTH         NO     2 TO < 3 MTH          NO      3 TO < 4 MTH          NO      4 TO < 5 MTH\n")
+                    f.write("          NO     5 TO < 6 MTH         NO     6 TO < 7 MTH         NO     7 TO < 8 MTH          NO      8 TO < 9 MTH          NO     9 TO < 10 MTH\n")
+                    f.write("          NO   10 TO < 11 MTH         NO   11 TO < 12 MTH         NO   12 TO < 18 MTH          NO    18 TO < 24 MTH          NO    24 TO < 36 MTH\n")
+                    f.write("          NO         > 36 MTH         NO          DEFICIT         NO   SUBTOTAL >=3MTH         NO   SUBTOTAL >=6MTH          NO             TOTAL\n")
+                    f.write("-" * 145 + "\n")
+                    first_branch_in_category = False
+                
+                # Get BRHCODE
+                brhcode = branch_group['BRHCODE'].iloc[0] if len(branch_group) > 0 else '   '
+                
+                # Line 1: Branch number + columns 1-5
+                f.write(format_line1(branch, [noacc[0], brhamt[0], noacc[1], brhamt[1], noacc[2], brhamt[2], noacc[3], brhamt[3], noacc[4], brhamt[4]]) + "\n")
+                
+                # Line 2: BRHCODE + columns 6-10
+                f.write(format_line2(brhcode, [noacc[5], brhamt[5], noacc[6], brhamt[6], noacc[7], brhamt[7], noacc[8], brhamt[8], noacc[9], brhamt[9]]) + "\n")
+                
+                # Line 3: Columns 11-15
+                f.write(format_line3([noacc[10], brhamt[10], noacc[11], brhamt[11], noacc[12], brhamt[12], noacc[13], brhamt[13], noacc[14], brhamt[14]]) + "\n")
+                
+                # Line 4: Columns 16-17 + subtotals
+                f.write(format_line4([noacc[15], brhamt[15], noacc[16], brhamt[16], subacc, subbrh, subac2, subbr2, sotacc, totbrh]) + "\n")
+            
+            # Calculate grand totals for category
+            sgtotbrh = np.sum(totamt[3:])
+            sgtotbr2 = sgtotbrh - totamt[3] - totamt[4] - totamt[5]
+            sgtotacc = np.sum(totacc[3:])
+            sgtotac2 = sgtotacc - totacc[3] - totacc[4] - totacc[5]
+            gtotbrh = sgtotbrh + totamt[0] + totamt[1] + totamt[2]
+            gtotacc = sgtotacc + totacc[0] + totacc[1] + totacc[2]
+            
+            # Print category totals
+            f.write("-" * 145 + "\n")
+            f.write(format_line1("TOT", [totacc[0], totamt[0], totacc[1], totamt[1], totacc[2], totamt[2], totacc[3], totamt[3], totacc[4], totamt[4]]) + "\n")
+            f.write(format_line2("", [totacc[5], totamt[5], totacc[6], totamt[6], totacc[7], totamt[7], totacc[8], totamt[8], totacc[9], totamt[9]]) + "\n")
+            f.write(format_line3([totacc[10], totamt[10], totacc[11], totamt[11], totacc[12], totamt[12], totacc[13], totamt[13], totacc[14], totamt[14]]) + "\n")
+            f.write(format_line4([totacc[15], totamt[15], totacc[16], totamt[16], sgtotacc, sgtotbrh, sgtotac2, sgtotbr2, gtotacc, gtotbrh]) + "\n")
+            f.write("-" * 145 + "\n")
+            f.write("\n")
+    
+    print(f"Report generated: {OUTPUT_FILE}")
+    print(f"Report date (current date - 1 day): {rdate}")
 
 if __name__ == "__main__":
     main()
