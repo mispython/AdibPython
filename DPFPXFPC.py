@@ -1,218 +1,590 @@
-import duckdb
-import polars as pl
-import pandas as pd
-import pyreadstat
-from pathlib import Path
-from datetime import datetime, timedelta
-import numpy as np
-import os
+1PROGRAM-ID : EIMAR201                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: 1    
+                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998  (AITAB)       30/06/26                      
+0BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       NO      3 TO < 4 MTH       NO      4 TO < 5 MTH  
+        NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       NO      8 TO < 9 MTH       NO     9 TO < 10 MTH  
+        NO   10 TO < 11 MTH      NO   11 TO < 12 MTH      NO   12 TO < 18 MTH       NO    18 TO < 24 MTH       NO    24 TO < 36 MTH  
+        NO         > 36 MTH      NO          DEFICIT      NO   SUBTOTAL >=3MTH      NO   SUBTOTAL >=6MTH       NO             TOTAL  
+ ----------------------------------------------------------------------------------------------------------------------------------  
+ 013       3         3,223.56       0            0.00       1       21,453.08        0              0.00        0              0.00  
+ KBU       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        4         24,676.64  
+ 014     217     4,874,779.08      16      433,207.97      11      288,522.21        0              0.00        0              0.00  
+ TMH       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00      244      5,596,509.26  
+ 017      19        15,001.71       0            0.00       0            0.00        0              0.00        0              0.00  
+ TPN       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00       19         15,001.71  
+ 027      13         4,345.72       0            0.00       0            0.00        0              0.00        0              0.00  
+ NTL       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00       13          4,345.72  
+ 029       1           134.40       0            0.00       0            0.00        0              0.00        0              0.00  
+ JRL       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        1            134.40  
+ 031      49       261,811.66       2       17,467.30       1       19,722.92        0              0.00        0              0.00  
+ SKC       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00       52        299,001.88  
+ 048       3         1,275.49       0            0.00       0            0.00        0              0.00        0              0.00  
+ MTK       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        3          1,275.49  
+ 049       3        19,092.98       0            0.00       0            0.00        0              0.00        0              0.00  
+ JLP       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        3         19,092.98  
+ 052       3        22,353.26       0            0.00       0            0.00        0              0.00        0              0.00  
+ UTM       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        3         22,353.26  
+ 055     587    25,558,566.89      15      626,265.68       3      168,395.16        0              0.00        0              0.00  
+ LBN       0             0.00       0            0.00       1       44,333.86        0              0.00        0              0.00  
+           0             0.00       0            0.00       1       21,025.09        0              0.00        0              0.00  
+           0             0.00       0            0.00       2       65,358.95        2         65,358.95      607     26,418,586.68  
+ 059      16       165,615.39       0            0.00       1       91,240.54        0              0.00        0              0.00  
+ PKL       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00       17        256,855.93  
+ 063       7        45,921.75       0            0.00       0            0.00        0              0.00        0              0.00  
+ GMS       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        7         45,921.75  
+ 065      49       896,782.36       1       39,493.77       0            0.00        0              0.00        0              0.00  
+ BHU       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00       50        936,276.13  
+1PROGRAM-ID : EIMAR201                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: 2    
+                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998  (AITAB)       30/06/26                      
+0BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       NO      3 TO < 4 MTH       NO      4 TO < 5 MTH  
+        NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       NO      8 TO < 9 MTH       NO     9 TO < 10 MTH  
+        NO   10 TO < 11 MTH      NO   11 TO < 12 MTH      NO   12 TO < 18 MTH       NO    18 TO < 24 MTH       NO    24 TO < 36 MTH  
+        NO         > 36 MTH      NO          DEFICIT      NO   SUBTOTAL >=3MTH      NO   SUBTOTAL >=6MTH       NO             TOTAL  
+ ----------------------------------------------------------------------------------------------------------------------------------  
+ 069      10         6,466.80       0            0.00       0            0.00        0              0.00        0              0.00  
+ BKI       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00       10          6,466.80  
+ 070       1         1,109.01       0            0.00       0            0.00        0              0.00        0              0.00  
+ PSA       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        1          1,109.01  
+ 072      23        61,039.12       3       58,797.34       2       59,870.41        0              0.00        0              0.00  
+ PPR       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00       28        179,706.87  
+ 074       4        50,909.75       0            0.00       0            0.00        0              0.00        0              0.00  
+ SIK       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        4         50,909.75  
+ 075       1           135.37       0            0.00       0            0.00        0              0.00        0              0.00  
+ CAH       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        1            135.37  
+ 077     230     2,361,157.35      11      180,532.71       7      144,430.09        0              0.00        0              0.00  
+ PLI       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        1         14,911.75        2         42,961.70  
+           0             0.00       0            0.00       3       57,873.45        3         57,873.45      251      2,743,993.60  
+ 079       1         2,446.07       0            0.00       0            0.00        0              0.00        0              0.00  
+ MSI       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        1          2,446.07  
+ 085       4        14,709.03       0            0.00       0            0.00        0              0.00        0              0.00  
+ SST       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        4         14,709.03  
+ 086       1            57.39       0            0.00       0            0.00        0              0.00        0              0.00  
+ CLN       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        1             57.39  
+ 087       7         4,720.91       0            0.00       0            0.00        0              0.00        0              0.00  
+ MSG       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        7          4,720.91  
+ 092       1           118.04       0            0.00       0            0.00        0              0.00        0              0.00  
+ KLG       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        1            118.04  
+ 093      20        23,576.25       1       11,409.02       0            0.00        0              0.00        0              0.00  
+ EDU       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00       21         34,985.27  
+ 095   1,111    26,014,793.61      46    1,143,296.89       9      218,463.00        2         10,411.37        0              0.00  
+ TIN       0             0.00       0            0.00       1       75,404.97        0              0.00        0              0.00  
+           0             0.00       0            0.00       1        6,474.69        0              0.00        0              0.00  
+           1        10,889.20       0            0.00       5      103,180.23        3         92,768.86    1,171     27,479,733.73  
 
-# Path configuration - use absolute paths based on your environment
-SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
-INPUT_PATH = SCRIPT_DIR / "input" / "prod" / "EIMIR201"
-OUTPUT_PATH = SCRIPT_DIR / "output"
-OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-# File paths
-LOANTEMP_FILE = INPUT_PATH / "bnm" / "loantemp.sas7bdat"
-BRHFILE_FILE = INPUT_PATH / "LKP_BRANCH"  # This is the actual file name
+ABOVE IS FEW SAMPLES FROM PRODUCTION OUTPUT:
 
-# Alternative: if files are in different locations, you can specify them directly:
-# LOANTEMP_FILE = Path("/path/to/your/bnm/loantemp.sas7bdat")
-# BRHFILE_FILE = Path("/path/to/your/LKP_BRANCH")
+BELOW IS COMPLETE PYTHON OUTPUT FROM THE REPORT TEXT FILE:
 
-# Output file
-OUTPUT_FILE = OUTPUT_PATH / f"eimar201_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+PROGRAM-ID : EIMAR201   P U B L I C   I S L A M I C   B A N K   B E R H A D                    PAGE NO.: 1
+                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998      (AITAB)       230726
 
-def read_sas7bdat_with_pandas(filepath):
-    """Read SAS7BDAT file using pandas/pyreadstat"""
-    print(f"Reading SAS file: {filepath}")
-    if not filepath.exists():
-        raise FileNotFoundError(f"SAS file not found: {filepath}")
-    df, meta = pyreadstat.read_sas7bdat(str(filepath))
-    return df
-
-def main():
-    # Use current date minus 1 day
-    current_date = datetime.now() - timedelta(days=1)
-    rdate = current_date.strftime('%d%m%y')  # DDMMYY8 format
-    reptyear = current_date.strftime('%Y')    # YEAR4 format
-    reptmon = current_date.strftime('%m')     # Z2 format
-    reptday = current_date.strftime('%d')     # Z2 format
-    
-    print(f"Report date: {rdate}")
-    print(f"Input path: {INPUT_PATH}")
-    print(f"BRHFILE path: {BRHFILE_FILE}")
-    print(f"LOANTEMP path: {LOANTEMP_FILE}")
-
-    # Check if LKP_BRANCH file exists
-    if not BRHFILE_FILE.exists():
-        # Try to find the file
-        print(f"BRHFILE not found at {BRHFILE_FILE}")
-        # Try alternative locations
-        alt_paths = [
-            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/LKP_BRANCH"),
-            Path("input/prod/EIMIR201/LKP_BRANCH"),
-            Path("../input/prod/EIMIR201/LKP_BRANCH"),
-        ]
-        for alt_path in alt_paths:
-            if alt_path.exists():
-                print(f"Found BRHFILE at: {alt_path}")
-                brhfile_final = alt_path
-                break
-        else:
-            raise FileNotFoundError(f"BRHFILE not found. Please check the file path.")
-    else:
-        brhfile_final = BRHFILE_FILE
-
-    # Read BRHFILE (fixed-width text file) - it appears to be a flat file without extension
-    # Based on SAS code: INFILE BRHFILE LRECL=80; INPUT @2 BRANCH 3. @6 BRHCODE $3.;
-    # This means column 2-4 is BRANCH (3 chars) and column 6-8 is BRHCODE (3 chars)
-    brhdata_df = pd.read_fwf(
-        brhfile_final,
-        colspecs=[(1, 4), (5, 8)],  # @2 means starting at position 2, so colspecs are 1-based
-        names=['BRANCH', 'BRHCODE'],
-        dtype={'BRANCH': float, 'BRHCODE': str},
-        header=None
-    )
-    # Convert BRANCH to integer after handling any non-numeric values
-    brhdata_df['BRANCH'] = brhdata_df['BRANCH'].fillna(0).astype(int)
-    print(f"Read {len(brhdata_df)} branch records")
-
-    # Check if LOANTEMP file exists
-    if not LOANTEMP_FILE.exists():
-        alt_loantemp_paths = [
-            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
-            Path("input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
-        ]
-        for alt_path in alt_loantemp_paths:
-            if alt_path.exists():
-                print(f"Found LOANTEMP at: {alt_path}")
-                loantemp_file_final = alt_path
-                break
-        else:
-            raise FileNotFoundError(f"LOANTEMP file not found. Please check the file path.")
-    else:
-        loantemp_file_final = LOANTEMP_FILE
-
-    # Read LOANTEMP using pyreadstat
-    loantemp_df = read_sas7bdat_with_pandas(loantemp_file_final)
-    print(f"Read {len(loantemp_df)} loan records")
-
-    # Convert to DuckDB for processing
-    conn = duckdb.connect(':memory:')
-    conn.register('loantemp', loantemp_df)
-    conn.register('brhdata', brhdata_df)
-
-    # Create LOANTEM2 (equivalent to SAS DATA step)
-    loantem2_query = """
-    SELECT 
-        *,
-        CASE 
-            WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN 'A'
-            WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN 'B'
-            WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN 'C'
-            WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN 'D'
-        END AS CAT,
-        CASE 
-            WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN '(HPD-C)'
-            WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN '(HP 380/381)'
-            WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN '(AITAB)'
-            WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN '(-HPD-)'
-        END AS TYPE
-    FROM loantemp
-    WHERE (PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1)
-       OR (PRODUCT IN (380, 381) AND CHECKDT = 1)
-       OR (PRODUCT IN (128, 130) AND CHECKDT = 1)
-       OR (PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1)
-    """
-    
-    loantem2_df = conn.execute(loantem2_query).fetchdf()
-    print(f"Filtered to {len(loantem2_df)} records for reporting")
-    
-    # Merge with BRHDATA
-    loantemp_final_df = loantem2_df.merge(brhdata_df, on='BRANCH', how='inner')
-    loantemp_final_df = loantemp_final_df.sort_values(['CAT', 'BRANCH'])
-    print(f"Merged data: {len(loantemp_final_df)} records")
-    
-    # Generate report
-    with open(OUTPUT_FILE, 'w') as f:
-        pagecnt = 0
-        
-        for cat, cat_group in loantemp_final_df.groupby('CAT'):
-            if cat is None or pd.isna(cat):
-                continue
-                
-            # Initialize category-level arrays and totals
-            totamt = np.zeros(17)
-            totacc = np.zeros(17)
-            
-            first_branch_in_category = True
-            
-            for branch, branch_group in cat_group.groupby('BRANCH'):
-                brhamt = np.zeros(17)
-                noacc = np.zeros(17)
-                
-                # Process each row in branch
-                for _, row in branch_group.iterrows():
-                    if row['BALANCE'] > 0:
-                        arrears_idx = int(row['ARREAR']) - 1  # 1-based to 0-based
-                        if 0 <= arrears_idx < 17:
-                            brhamt[arrears_idx] += row['BALANCE']
-                            noacc[arrears_idx] += 1
-                
-                # Calculate subtotals
-                subbrh = np.sum(brhamt[3:])  # elements 4-17 (0-based index 3-16)
-                subbr2 = subbrh - brhamt[3] - brhamt[4] - brhamt[5]
-                subacc = np.sum(noacc[3:])
-                subac2 = subacc - noacc[3] - noacc[4] - noacc[5]
-                totbrh = subbrh + brhamt[0] + brhamt[1] + brhamt[2]
-                sotacc = subacc + noacc[0] + noacc[1] + noacc[2]
-                
-                # Update category totals
-                totamt += brhamt
-                totacc += noacc
-                
-                # Print page header if first branch in category
-                if first_branch_in_category:
-                    pagecnt += 1
-                    f.write(f"PROGRAM-ID : EIMAR201   P U B L I C   I S L A M I C   B A N K   B E R H A D                    PAGE NO.: {pagecnt}\n")
-                    cat_type = branch_group['TYPE'].iloc[0] if len(branch_group) > 0 else '          '
-                    f.write(f"                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998      {cat_type:<13} {rdate}\n")
-                    f.write("\n")
-                    f.write("BRH    NO          < 1 MTH     NO     1 TO < 2 MTH     NO     2 TO < 3 MTH        NO      3 TO < 4 MTH       NO      4 TO < 5 MTH\n")
-                    f.write("       NO     5 TO < 6 MTH     NO     6 TO < 7 MTH     NO     7 TO < 8 MTH        NO      8 TO < 9 MTH       NO     9 TO < 10 MTH\n")
-                    f.write("       NO   10 TO < 11 MTH     NO   11 TO < 12 MTH     NO   12 TO < 18 MTH        NO    18 TO < 24 MTH       NO    24 TO < 36 MTH\n")
-                    f.write("       NO         > 36 MTH     NO          DEFICIT     NO   SUBTOTAL >=3MTH        NO   SUBTOTAL >=6MTH       NO             TOTAL\n")
-                    f.write("-" * 41 + "-" * 41 + "-" * 41 + "-" * 10 + "\n")
-                    first_branch_in_category = False
-                
-                # Print branch detail lines
-                brhcode = branch_group['BRHCODE'].iloc[0] if len(branch_group) > 0 else '   '
-                f.write(f"{int(branch):3d}    {noacc[0]:>7,.0f} {brhamt[0]:>16,.2f}     {noacc[1]:>7,.0f} {brhamt[1]:>15,.2f}     {noacc[2]:>7,.0f} {brhamt[2]:>15,.2f}        {noacc[3]:>8,.0f} {brhamt[3]:>17,.2f}       {noacc[4]:>8,.0f} {brhamt[4]:>17,.2f}\n")
-                f.write(f"{brhcode:<3}   {noacc[5]:>7,.0f} {brhamt[5]:>16,.2f}     {noacc[6]:>7,.0f} {brhamt[6]:>15,.2f}     {noacc[7]:>7,.0f} {brhamt[7]:>15,.2f}        {noacc[8]:>8,.0f} {brhamt[8]:>17,.2f}       {noacc[9]:>8,.0f} {brhamt[9]:>17,.2f}\n")
-                f.write(f"    {noacc[10]:>7,.0f} {brhamt[10]:>16,.2f}     {noacc[11]:>7,.0f} {brhamt[11]:>15,.2f}     {noacc[12]:>7,.0f} {brhamt[12]:>15,.2f}        {noacc[13]:>8,.0f} {brhamt[13]:>17,.2f}       {noacc[14]:>8,.0f} {brhamt[14]:>17,.2f}\n")
-                f.write(f"    {noacc[15]:>7,.0f} {brhamt[15]:>16,.2f}     {noacc[16]:>7,.0f} {brhamt[16]:>15,.2f}     {subacc:>7,.0f} {subbrh:>15,.2f}        {subac2:>8,.0f} {subbr2:>17,.2f}       {sotacc:>8,.0f} {totbrh:>17,.2f}\n")
-            
-            # Calculate grand totals for category
-            sgtotbrh = np.sum(totamt[3:])
-            sgtotbr2 = sgtotbrh - totamt[3] - totamt[4] - totamt[5]
-            sgtotacc = np.sum(totacc[3:])
-            sgtotac2 = sgtotacc - totacc[3] - totacc[4] - totacc[5]
-            gtotbrh = sgtotbrh + totamt[0] + totamt[1] + totamt[2]
-            gtotacc = sgtotacc + totacc[0] + totacc[1] + totacc[2]
-            
-            # Print category totals
-            f.write("-" * 41 + "-" * 41 + "-" * 41 + "-" * 10 + "\n")
-            f.write(f"TOT   {totacc[0]:>7,.0f} {totamt[0]:>16,.2f}     {totacc[1]:>7,.0f} {totamt[1]:>15,.2f}     {totacc[2]:>7,.0f} {totamt[2]:>15,.2f}        {totacc[3]:>8,.0f} {totamt[3]:>17,.2f}       {totacc[4]:>8,.0f} {totamt[4]:>17,.2f}\n")
-            f.write(f"    {totacc[5]:>7,.0f} {totamt[5]:>16,.2f}     {totacc[6]:>7,.0f} {totamt[6]:>15,.2f}     {totacc[7]:>7,.0f} {totamt[7]:>15,.2f}        {totacc[8]:>8,.0f} {totamt[8]:>17,.2f}       {totacc[9]:>8,.0f} {totamt[9]:>17,.2f}\n")
-            f.write(f"    {totacc[10]:>7,.0f} {totamt[10]:>16,.2f}     {totacc[11]:>7,.0f} {totamt[11]:>15,.2f}     {totacc[12]:>7,.0f} {totamt[12]:>15,.2f}        {totacc[13]:>8,.0f} {totamt[13]:>17,.2f}       {totacc[14]:>8,.0f} {totamt[14]:>17,.2f}\n")
-            f.write(f"    {totacc[15]:>7,.0f} {totamt[15]:>16,.2f}     {totacc[16]:>7,.0f} {totamt[16]:>15,.2f}     {sgtotacc:>7,.0f} {sgtotbrh:>15,.2f}        {sgtotac2:>8,.0f} {sgtotbr2:>17,.2f}       {gtotacc:>8,.0f} {gtotbrh:>17,.2f}\n")
-            f.write("-" * 41 + "-" * 41 + "-" * 41 + "-" * 10 + "\n")
-            f.write("\n")
-    
-    print(f"Report generated: {OUTPUT_FILE}")
-    print(f"Report date (current date - 1 day): {rdate}")
-
-if __name__ == "__main__":
-    main()
+BRH    NO          < 1 MTH     NO     1 TO < 2 MTH     NO     2 TO < 3 MTH        NO      3 TO < 4 MTH       NO      4 TO < 5 MTH
+       NO     5 TO < 6 MTH     NO     6 TO < 7 MTH     NO     7 TO < 8 MTH        NO      8 TO < 9 MTH       NO     9 TO < 10 MTH
+       NO   10 TO < 11 MTH     NO   11 TO < 12 MTH     NO   12 TO < 18 MTH        NO    18 TO < 24 MTH       NO    24 TO < 36 MTH
+       NO         > 36 MTH     NO          DEFICIT     NO   SUBTOTAL >=3MTH        NO   SUBTOTAL >=6MTH       NO             TOTAL
+-------------------------------------------------------------------------------------------------------------------------------------
+ 13          3         3,223.56           0            0.00           1       21,453.08               0              0.00              0              0.00
+KBU         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              4         24,676.64
+ 14        217     4,874,779.08          16      433,207.97          11      288,522.21               0              0.00              0              0.00
+TMH         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00            244      5,596,509.26
+ 17         19        15,001.71           0            0.00           0            0.00               0              0.00              0              0.00
+TPN         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             19         15,001.71
+ 27         13         4,345.72           0            0.00           0            0.00               0              0.00              0              0.00
+NTL         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             13          4,345.72
+ 29          1           134.40           0            0.00           0            0.00               0              0.00              0              0.00
+JRL         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            134.40
+ 31         49       261,811.66           2       17,467.30           1       19,722.92               0              0.00              0              0.00
+SKC         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             52        299,001.88
+ 48          3         1,275.49           0            0.00           0            0.00               0              0.00              0              0.00
+MTK         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              3          1,275.49
+ 49          3        19,092.98           0            0.00           0            0.00               0              0.00              0              0.00
+JLP         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              3         19,092.98
+ 52          3        22,353.26           0            0.00           0            0.00               0              0.00              0              0.00
+UTM         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              3         22,353.26
+ 55        587    25,558,566.89          15      626,265.68           3      168,395.16               0              0.00              0              0.00
+LBN         0             0.00           0            0.00           1       44,333.86               0              0.00              0              0.00
+          0             0.00           0            0.00           1       21,025.09               0              0.00              0              0.00
+          0             0.00           0            0.00           2       65,358.95               2         65,358.95            607     26,418,586.68
+ 59         16       165,615.39           0            0.00           1       91,240.54               0              0.00              0              0.00
+PKL         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             17        256,855.93
+ 63          7        45,921.75           0            0.00           0            0.00               0              0.00              0              0.00
+GMS         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              7         45,921.75
+ 65         49       896,782.36           1       39,493.77           0            0.00               0              0.00              0              0.00
+BHU         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             50        936,276.13
+ 69         10         6,466.80           0            0.00           0            0.00               0              0.00              0              0.00
+BKI         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             10          6,466.80
+ 70          1         1,109.01           0            0.00           0            0.00               0              0.00              0              0.00
+PSA         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1          1,109.01
+ 72         23        61,039.12           3       58,797.34           2       59,870.41               0              0.00              0              0.00
+PPR         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             28        179,706.87
+ 74          4        50,909.75           0            0.00           0            0.00               0              0.00              0              0.00
+SIK         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              4         50,909.75
+ 75          1           135.37           0            0.00           0            0.00               0              0.00              0              0.00
+CAH         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            135.37
+ 77        230     2,361,157.35          11      180,532.71           7      144,430.09               0              0.00              0              0.00
+PLI         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               1         14,911.75              2         42,961.70
+          0             0.00           0            0.00           3       57,873.45               3         57,873.45            251      2,743,993.60
+ 79          1         2,446.07           0            0.00           0            0.00               0              0.00              0              0.00
+MSI         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1          2,446.07
+ 85          4        14,709.03           0            0.00           0            0.00               0              0.00              0              0.00
+SST         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              4         14,709.03
+ 86          1            57.39           0            0.00           0            0.00               0              0.00              0              0.00
+CLN         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1             57.39
+ 87          7         4,720.91           0            0.00           0            0.00               0              0.00              0              0.00
+MSG         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              7          4,720.91
+ 92          1           118.04           0            0.00           0            0.00               0              0.00              0              0.00
+KLG         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            118.04
+ 93         20        23,576.25           1       11,409.02           0            0.00               0              0.00              0              0.00
+EDU         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             21         34,985.27
+ 95      1,111    26,014,793.61          46    1,143,296.89           9      218,463.00               2         10,411.37              0              0.00
+TIN         0             0.00           0            0.00           1       75,404.97               0              0.00              0              0.00
+          0             0.00           0            0.00           1        6,474.69               0              0.00              0              0.00
+          1        10,889.20           0            0.00           5      103,180.23               3         92,768.86          1,171     27,479,733.73
+102          4        67,434.51           0            0.00           0            0.00               0              0.00              0              0.00
+PRJ         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              4         67,434.51
+105          6        30,795.00           0            0.00           0            0.00               0              0.00              0              0.00
+KTI         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          1        15,419.54           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           1       15,419.54               1         15,419.54              7         46,214.54
+106         33       396,908.89           1       35,088.15           1       17,988.40               0              0.00              0              0.00
+CKI         0             0.00           0            0.00           1        3,302.25               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           1        3,302.25               1          3,302.25             36        453,287.69
+107          2           232.07           0            0.00           0            0.00               0              0.00              0              0.00
+JLT         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              2            232.07
+112         10        51,335.06           0            0.00           0            0.00               0              0.00              0              0.00
+LDO         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           1        9,144.79               0              0.00              0              0.00
+          1        11,303.78           0            0.00           2       20,448.57               2         20,448.57             12         71,783.63
+115          1            42.22           0            0.00           0            0.00               0              0.00              0              0.00
+KNG         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1             42.22
+116          1           494.01           0            0.00           0            0.00               0              0.00              0              0.00
+TRI         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            494.01
+117        191     2,397,540.63          11      189,217.83           5       90,133.96               0              0.00              0              0.00
+KKI         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1         15,376.83
+          1        18,645.22           0            0.00           2       34,022.05               2         34,022.05            209      2,710,914.47
+130          3           282.00           0            0.00           0            0.00               0              0.00              0              0.00
+PDG         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              3            282.00
+137          1           134.68           0            0.00           0            0.00               0              0.00              0              0.00
+JPP         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            134.68
+139         30       311,294.23           0            0.00           0            0.00               0              0.00              0              0.00
+JRT         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             30        311,294.23
+142          1        23,935.88           0            0.00           0            0.00               0              0.00              0              0.00
+KBD         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1         23,935.88
+143        225     7,955,445.68           4       96,753.74           5      149,243.49               0              0.00              1         32,484.02
+LDU         0             0.00           0            0.00           1       75,081.33               0              0.00              0              0.00
+          0             0.00           0            0.00           1       12,540.80               0              0.00              0              0.00
+          0             0.00           0            0.00           3      120,106.15               2         87,622.13            237      8,321,549.06
+149         13        58,769.77           0            0.00           0            0.00               0              0.00              0              0.00
+BFT         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             13         58,769.77
+150          1           125.75           0            0.00           0            0.00               0              0.00              0              0.00
+LMM         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            125.75
+154          1           132.38           0            0.00           0            0.00               0              0.00              0              0.00
+BSJ         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            132.38
+159          2           243.52           0            0.00           0            0.00               0              0.00              0              0.00
+RLU         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              2            243.52
+161          2         1,637.45           0            0.00           0            0.00               0              0.00              0              0.00
+DGG         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              2          1,637.45
+169          1           115.00           0            0.00           0            0.00               0              0.00              0              0.00
+CTD         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            115.00
+171          3         2,979.04           0            0.00           0            0.00               0              0.00              0              0.00
+JMR         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              3          2,979.04
+178          1           103.19           0            0.00           0            0.00               0              0.00              0              0.00
+MIN         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            103.19
+183          1           124.48           0            0.00           0            0.00               0              0.00              0              0.00
+JCL         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            124.48
+189          3        41,108.01           0            0.00           0            0.00               0              0.00              0              0.00
+BNH         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              3         41,108.01
+194          2           260.34           0            0.00           0            0.00               0              0.00              0              0.00
+SRK         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              2            260.34
+196          1           125.00           0            0.00           0            0.00               0              0.00              0              0.00
+JHL         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            125.00
+203          1         1,565.26           0            0.00           0            0.00               0              0.00              0              0.00
+SJM         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1          1,565.26
+207          2       154,090.51           0            0.00           0            0.00               0              0.00              0              0.00
+BCM         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              2        154,090.51
+208          0             0.00           1       15,088.32           0            0.00               0              0.00              0              0.00
+JSI         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1         15,088.32
+210         51       234,235.53           3       86,416.74           0            0.00               0              0.00              0              0.00
+TMM         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             54        320,652.27
+221          1        27,647.24           0            0.00           0            0.00               0              0.00              0              0.00
+TSK         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1         27,647.24
+234         87     1,264,340.24           2       37,846.96           0            0.00               0              0.00              0              0.00
+SRM         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             89      1,302,187.20
+235         98     1,108,050.31           2        9,039.57           1       15,532.39               0              0.00              0              0.00
+SBM         1         2,752.51           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           1        2,752.51               0              0.00            102      1,135,374.78
+237         58     1,528,284.72           3       15,448.29           0            0.00               0              0.00              0              0.00
+KLS         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00             61      1,543,733.01
+243          2         3,191.05           0            0.00           0            0.00               0              0.00              0              0.00
+KKR         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              2          3,191.05
+245          5        62,932.64           1       14,987.42           0            0.00               0              0.00              0              0.00
+BDR         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              6         77,920.06
+251          4           346.66           0            0.00           0            0.00               0              0.00              0              0.00
+KPR         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              4            346.66
+254          2           240.20           0            0.00           0            0.00               0              0.00              0              0.00
+KPH         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              2            240.20
+256          3           362.54           0            0.00           0            0.00               0              0.00              0              0.00
+PBR         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              3            362.54
+259        117     3,817,935.07           3       89,183.60           1       60,403.26               0              0.00              0              0.00
+SAN         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          1         7,519.67           0            0.00           1        7,519.67               1          7,519.67            122      3,975,041.60
+260        185     4,500,206.39           4      112,877.94           3       41,451.23               0              0.00              0              0.00
+KDN         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00            192      4,654,535.56
+261         96     1,409,677.35           6       87,971.77           4       73,668.32               0              0.00              0              0.00
+GMG         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           1       12,382.40               0              0.00              0              0.00
+          0             0.00           0            0.00           1       12,382.40               1         12,382.40            107      1,583,699.84
+263          2         1,042.06           0            0.00           0            0.00               0              0.00              0              0.00
+BTA         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              2          1,042.06
+275          1           258.85           0            0.00           0            0.00               0              0.00              0              0.00
+MSL         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1            258.85
+287          4           380.52           0            0.00           0            0.00               0              0.00              0              0.00
+SUA         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              4            380.52
+800     10,150   470,188,121.17         295   13,115,415.72          40    1,632,521.68              10        205,378.08              7        115,350.52
+H01         5       138,980.37           3       54,380.20           3      109,861.67               6        128,914.82              2         23,889.24
+          5       134,306.12           2       27,311.98           8      322,556.65               2        119,845.33              1         20,083.14
+          1        11,691.26           0            0.00          55    1,412,549.38              33        952,840.41         10,540    486,348,607.95
+801     21,263   912,412,685.39         918   33,780,382.67         189    6,138,950.29              20        638,947.90             19        653,505.25
+H02         9       316,608.04          10      267,987.35           6      190,159.66              16        411,627.52              8        111,361.75
+          6       278,141.73           0            0.00          14      317,833.69               2         18,219.89              2         44,757.38
+          1        12,962.17           0            0.00         113    3,262,112.33              65      1,653,051.14         22,483    955,594,130.68
+802     31,689 1,595,751,604.90       1,140   50,762,750.01         238    8,779,167.21              19        676,863.75             21        616,239.71
+H03        15       743,600.54          17      714,664.91          11      443,052.35              16        659,425.01             12        262,819.41
+         14       423,451.19          15      460,275.85          17      419,156.76               8        282,304.25              3         50,741.31
+          3        42,651.43           0            0.00         171    5,795,246.47             116      3,758,542.47         33,238  1,661,088,768.59
+803      2,622   106,519,477.03          85    2,682,059.51          17      519,357.98               2         45,636.32              1         17,714.07
+H04         0             0.00           2       55,536.51           1        1,819.28               0              0.00              0              0.00
+          0             0.00           1       96,570.80           0            0.00               0              0.00              0              0.00
+          1        11,635.13           0            0.00           8      228,912.11               5        165,561.72          2,732    109,949,806.63
+804      8,812   512,754,727.84         248   13,320,892.23          52    2,903,518.97              11        622,489.95              9        650,907.95
+H05         3       127,203.26           4      216,194.31           3       68,738.31               2        191,548.59              1          9,223.71
+          3       143,233.99           3      139,120.56           4       75,996.15               0              0.00              0              0.00
+          0             0.00           0            0.00          43    2,244,656.78              20        844,055.62          9,155    531,223,795.82
+805      3,261   163,324,476.99          85    3,704,223.15          16      720,541.95               3         77,266.97              1        104,689.31
+H06         0             0.00           2       61,427.19           1        3,449.56               2         32,463.05              0              0.00
+          0             0.00           0            0.00           1       17,254.35               0              0.00              0              0.00
+          1        15,372.70           0            0.00          11      311,923.13               7        129,966.85          3,373    168,061,165.22
+806     20,415   911,054,832.57         591   21,313,761.58         129    4,120,890.88              12        325,484.14              5        122,234.83
+H07         8       161,046.05           5      152,361.74           7      102,130.39               3         62,432.48              2         31,238.86
+          3        74,585.26           2       41,594.17           4       54,455.12               3         23,817.64              1         38,026.21
+          7        69,190.82           0            0.00          62    1,258,597.71              37        649,832.69         21,197    937,748,082.74
+807     13,118   672,149,914.29         252   11,262,955.54          22      996,508.08               4        254,129.14              4         28,412.61
+H08         0             0.00           3      156,307.79           2      136,096.12               2         95,905.78              0              0.00
+          0             0.00           3       70,975.02           9      259,021.20               3         51,503.87              3         73,944.19
+          1         9,611.47           0            0.00          34    1,135,907.19              26        853,365.44         13,426    685,545,285.10
+808     17,039   781,531,144.79         621   21,585,121.40          96    2,578,727.81              13        325,309.99             13        389,592.97
+H09         5       152,322.09           6      116,627.64           7      172,712.45               5         67,431.41              3         21,612.43
+          2        44,425.82           4      146,867.76           6      162,948.95               7        103,473.65              5         49,572.70
+          4        50,628.32           0            0.00          80    1,803,526.18              49        936,301.13         17,836    807,498,520.18
+809     11,484   539,940,707.58         328   13,234,144.51          72    2,357,281.46              10        263,507.84             15        575,427.49
+H10         4       140,169.84           6      144,800.91           1       35,019.62               6         71,068.26              4          4,827.36
+          1         1,476.92           5      143,414.19           4       73,974.66               1         15,815.70              1         21,260.80
+          8        72,363.45           0            0.00          66    1,563,127.04              37        584,021.87         11,950    557,095,260.59
+811      9,016   433,828,162.50         448   16,939,468.62          97    2,548,233.47              14        234,150.09              9        140,303.50
+H11         5       175,547.11           7      157,716.96           2       90,862.55               2         84,967.83              2         14,802.20
+          5       152,242.08           5       77,516.18           5       38,539.98               0              0.00              1          1,928.85
+          3        43,900.75           0            0.00          60    1,212,478.08              32        662,477.38          9,621    454,528,342.67
+812      7,316   396,198,595.50         232    8,957,679.23          39    1,250,380.23               4        117,374.47              2         31,363.14
+H12         1        80,574.30           1       22,319.83           1        1,043.38               2         73,308.48              0              0.00
+          3        49,331.37           2      120,040.86           5      116,914.32               2         30,654.79              2         35,215.99
+          2        26,055.95           0            0.00          27      704,196.88              20        474,884.97          7,614    407,110,851.84
+813        817    33,209,499.23          33    1,415,314.94           5      107,643.62               0              0.00              1         40,789.65
+H13         0             0.00           0            0.00           0            0.00               0              0.00              1         14,969.75
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          1         8,514.52           0            0.00           3       64,273.92               2         23,484.27            858     34,796,731.71
+814     14,958   695,732,834.84         490   20,584,518.63         110    4,269,063.48              10        401,268.33              4        121,826.27
+H14         2        23,401.74           4      104,226.21           8      684,994.93               2         33,395.77              2         69,553.64
+          8       217,459.27           5      113,568.93           9      191,832.98               1         91,970.67              0              0.00
+          2        43,974.72           0            0.00          57    2,097,473.46              41      1,550,977.12         15,615    722,683,890.41
+816     11,028   523,359,788.15         434   17,635,513.57          67    2,256,095.49               9        109,356.93              6        286,777.89
+H16         5       184,127.91           3       72,136.79           4       96,956.97               6         38,350.62              2         59,852.52
+          3       256,695.69           6      138,569.00           3       55,870.68               0              0.00              1         26,586.75
+          2        23,450.88           0            0.00          50    1,348,732.63              30        768,469.90         11,579    544,600,129.84
+818     12,171   598,748,831.71         558   23,334,164.02         122    3,542,742.55              13        328,377.54             18        354,959.26
+H18         8       123,770.54           6      203,048.74           7      281,531.99               6        196,325.16              2         68,119.21
+          4        37,545.82           3       84,988.74           5       73,940.85               0              0.00              0              0.00
+          7       218,513.99           0            0.00          79    1,971,121.84              40      1,164,014.50         12,930    627,596,860.12
+819     14,398   750,014,207.62         574   30,402,419.52          97    4,221,452.23              12        486,394.42             10        575,699.45
+H19        13       710,827.99           5      124,869.36           7      139,225.11               5        295,437.82              4        107,512.41
+          3       134,254.67           6      220,703.61           9      154,659.00               1          9,775.37              1            125.47
+          1        46,959.17           0            0.00          77    3,006,443.85              42      1,233,521.99         15,146    787,644,523.22
+820     18,107   902,220,685.72         690   31,547,508.62         242    8,079,574.72              20        784,606.50             14        473,968.61
+H20         6       145,032.36           9      115,137.06           4      153,552.60               8         87,438.98              5        184,488.61
+          1         5,942.05           4      120,525.24          14      225,606.54               2         26,438.75              2         32,542.68
+          6        98,281.03           0            0.00          95    2,453,561.01              55      1,049,953.54         19,134    944,301,330.07
+821     10,616   590,131,925.37         563   27,916,726.24         150    5,346,655.34               9        209,747.00             11        636,106.69
+H21         6       111,358.79           7      259,611.21           6      151,396.81               3         20,129.14              3        113,663.43
+          2        38,089.41           4      135,543.78           3      116,453.15               1        189,285.98              0              0.00
+          3        93,163.23           0            0.00          58    2,074,548.62              32      1,117,336.14         11,387    625,469,855.57
+822      7,920   407,394,831.93         336   15,315,828.13          81    3,328,671.09               3        121,896.99              9        328,546.49
+H22         5       170,037.49           2        6,295.18           8      211,452.55               5        150,869.56              1         31,996.69
+          5        94,506.64           3      152,208.42           3      229,811.18               0              0.00              0              0.00
+          4        51,452.66           0            0.00          48    1,549,073.85              31        928,592.88          8,385    427,588,405.00
+824      9,816   436,798,286.13         253   10,249,899.66          34    1,296,142.66               4         45,696.22              7        230,606.25
+H24         2        45,380.59           0            0.00           1       12,149.32               1         21,606.30              2         20,778.08
+          5       241,758.12           4      255,325.31           1       15,250.41               1          2,072.43              2         11,326.70
+          3        37,587.89           0            0.00          33      939,537.62              20        617,854.56         10,136    449,283,866.07
+825      4,689   235,600,796.52         177    8,301,904.16          41    1,458,377.60               1          4,994.76              2        100,858.98
+H25         3        26,979.14           3       58,956.38           2       63,552.83               2         12,668.64              1          4,056.43
+          1        42,271.84           3      112,408.08           0            0.00               0              0.00              0              0.00
+          1         9,816.62           0            0.00          19      436,563.70              13        303,730.82          4,926    245,797,641.98
+826     10,985   454,219,387.34         518   18,841,356.76         137    3,860,422.85              12        242,921.98             11        218,551.90
+H26         6       107,957.09           2        4,377.09           4      168,402.41               4         61,301.27              4         90,648.27
+          2        48,944.20           3          915.58           5      314,714.22               1         38,256.68              0              0.00
+          0             0.00           0            0.00          54    1,296,990.69              25        727,559.72         11,694    478,218,157.64
+827     32,536 1,365,357,149.49       1,328   50,119,622.20         300   10,474,642.04              31      1,673,567.94             23      1,062,152.65
+H27         9       240,922.30           9      352,146.89          11      119,621.28               9        217,189.75              7        346,849.48
+         10       435,333.86           7      368,748.56          17      687,227.55               8        160,578.36              0              0.00
+          3        81,551.45           0            0.00         144    5,745,890.07              81      2,769,247.18         34,308  1,431,697,303.80
+828      4,307   236,931,410.60         167    7,475,112.05          45    1,604,505.85               1         16,626.83              3         74,035.26
+H28         3        95,973.94           1       24,006.83           1        8,084.47               0              0.00              1          2,484.41
+          0             0.00           1       29,014.25           2      100,851.74               1          2,953.24              0              0.00
+          1         9,694.60           0            0.00          15      363,725.57               8        177,089.54          4,534    246,374,754.07
+829        221    18,311,922.64           1       58,715.69           0            0.00               0              0.00              0              0.00
+H29         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00            222     18,370,638.33
+844      5,814   260,160,375.13         273   12,587,138.22          26    1,169,514.85               3        147,193.01              3        161,659.79
+H44         1         5,821.62           2       19,618.92           3       68,538.64               3         50,950.08              0              0.00
+          1        82,627.52           1        5,881.45           2       71,965.65               1         19,316.71              0              0.00
+          0             0.00           0            0.00          20      633,573.39              13        318,898.97          6,133    274,550,601.59
+846        953    50,075,994.68          10      295,665.06           1        9,401.74               0              0.00              0              0.00
+H46         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00            964     50,381,061.48
+847        431    21,050,726.03          14      682,868.30           0            0.00               0              0.00              0              0.00
+H47         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           1        7,828.48               0              0.00              0              0.00
+          0             0.00           0            0.00           1        7,828.48               1          7,828.48            446     21,741,422.81
+848        159     8,342,360.34           3       27,402.43           0            0.00               0              0.00              0              0.00
+H48         0             0.00           0            0.00           1       22,383.29               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              1         19,952.17
+          0             0.00           0            0.00           2       42,335.46               2         42,335.46            164      8,412,098.23
+849        773    38,767,458.86          28    1,263,387.99           6      222,432.33               1         91,559.63              0              0.00
+H49         1        55,664.92           0            0.00           0            0.00               0              0.00              1         22,795.47
+          0             0.00           1       28,934.36           1       53,649.63               0              0.00              0              0.00
+          0             0.00           0            0.00           5      252,604.01               3        105,379.46            812     40,505,883.19
+850        359    13,660,271.97           5       61,445.74           1        5,675.32               1          9,088.27              0              0.00
+H50         0             0.00           0            0.00           1       15,274.93               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           2       24,363.20               1         15,274.93            367     13,751,756.23
+852      3,612   150,756,655.02         136    5,783,825.06          25      904,068.35               1          1,384.41              0              0.00
+H52         3       111,791.36           2      112,175.37           1        4,736.77               0              0.00              0              0.00
+          0             0.00           0            0.00           1        1,296.49               0              0.00              1         13,100.01
+          0             0.00           0            0.00           9      244,484.41               5        131,308.64          3,782    157,689,032.84
+853      3,336   136,243,186.69         102    4,068,632.56          16      400,587.29               6        207,833.92              4        247,039.59
+H53         0             0.00           2       40,562.47           3       76,856.68               2         23,890.62              1         24,216.95
+          1        13,952.01           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00          19      634,352.24               9        179,478.73          3,473    141,346,758.78
+854      1,618    83,724,910.14          13      627,270.58           4      138,463.70               0              0.00              1         14,355.08
+H54         0             0.00           1       51,469.88           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           2       65,824.96               1         51,469.88          1,637     84,556,469.38
+855      1,874    90,082,400.93          58    2,614,374.02          12      372,750.36               2         74,436.33              2        106,879.39
+H55         1        55,340.55           0            0.00           1        3,881.52               0              0.00              0              0.00
+          0             0.00           0            0.00           0            0.00               1         49,102.37              0              0.00
+          0             0.00           0            0.00           7      289,640.16               2         52,983.89          1,951     93,359,165.47
+856      2,373   117,951,877.03          75    3,322,035.09          13      410,248.34               4         83,333.97              2         17,349.78
+H56         1        12,779.75           0            0.00           1        5,279.12               3         46,926.09              1         13,276.67
+          0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00          12      178,945.38               5         65,481.88          2,473    121,863,105.84
+857      5,439   249,252,946.00         199    7,818,651.28          40      916,002.55               4        161,102.07              7        316,225.68
+H57         3       288,836.94           1       25,996.44           0            0.00               2         28,604.20              3         15,063.86
+          4        62,644.16           0            0.00           4       72,288.95               1        108,791.99              0              0.00
+          0             0.00           0            0.00          29    1,079,554.29              15        313,389.60          5,707    259,067,154.12
+858      4,611   243,185,901.67         116    5,795,375.76          12      358,693.94               5        395,740.27              1         12,379.93
+H58         1        43,300.39           1       10,615.96           1       14,281.39               4        104,260.95              2         88,235.50
+          1        29,907.13           0            0.00           2       20,454.40               0              0.00              0              0.00
+          0             0.00           0            0.00          18      719,175.92              11        267,755.33          4,757    250,059,147.29
+859      4,651   199,252,836.72         109    4,892,422.48          27    1,345,552.37               4        229,053.38              1         11,457.09
+H59         3       130,185.98           1       10,042.93           1       65,296.25               1          7,889.39              0              0.00
+          0             0.00           1       24,090.85           3      127,688.78               0              0.00              1          9,235.33
+          2        23,412.10           0            0.00          18      638,352.08              10        267,655.63          4,805    206,129,163.65
+861      2,486   118,717,229.80          31    1,335,040.12          10      226,465.27               1         39,882.83              1          8,417.67
+H61         0             0.00           0            0.00           0            0.00               0              0.00              0              0.00
+          0             0.00           1       40,640.74           3      193,731.48               0              0.00              1         18,483.44
+          0             0.00           0            0.00           7      301,156.16               5        252,855.66          2,534    120,579,891.35
+862     16,942   757,783,611.79         957   39,612,227.91         202    7,715,348.39              15        569,769.66             19        802,407.30
+H62         8       403,979.39          18      849,531.99           8      278,138.25               4         66,210.19              5        175,224.08
+          8       309,059.60           2      130,589.54           8      389,293.69               1         42,269.08              0              0.00
+          0             0.00           0            0.00          96    4,016,472.77              54      2,240,316.42         18,197    809,127,660.86
+863      1,501    72,508,985.48          27      924,809.77           3      144,747.90               1         79,188.52              1         10,097.56
+H63         0             0.00           0            0.00           1          977.64               1          3,336.09              0              0.00
+          0             0.00           1       81,164.12           0            0.00               0              0.00              0              0.00
+          0             0.00           0            0.00           5      174,763.93               3         85,477.85          1,536     73,753,307.08
+-------------------------------------------------------------------------------------------------------------------------------------
+TOT   369,328 17,441,070,265.00      13,657  568,870,421.74       2,891  100,192,540.69             297     10,311,971.72            268      9,691,373.58
+        146     5,132,274.89         145    4,565,151.04         134    4,199,633.50             133      3,345,873.85             82      1,933,560.42
+        102     3,367,606.01          98    3,367,507.93         178    5,024,635.45              49      1,401,358.50             32        525,221.65
+         72     1,160,794.18           0            0.00       1,736   54,026,962.72           1,025     28,891,342.53        387,612 18,164,160,190.15
+-------------------------------------------------------------------------------------------------------------------------------------
