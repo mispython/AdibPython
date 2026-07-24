@@ -1,228 +1,155 @@
-TITLE;
-OPTIONS NONUMBER NODATE SORTDEV=3390 YEARCUTOFF=1950;
+import duckdb
+import polars as pl
+import pandas as pd
+import pyreadstat
+from pathlib import Path
+from datetime import datetime, timedelta
+import numpy as np
 
-DATA _NULL_;
-  SET BNM.REPTDATE;
-  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
-  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));
-  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
-  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
-RUN;
+# Path configuration
+INPUT_PATH = Path("./input")
+OUTPUT_PATH = Path("./output")
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-DATA BRHDATA;
-  INFILE BRHFILE LRECL=80;
-  INPUT @2 BRANCH  3.
-        @6 BRHCODE $3.;
-RUN;
+# File paths - removed REPTDATE file
+LOANTEMP_FILE = INPUT_PATH / "bnm" / "loantemp.sas7bdat"
+BRHFILE_FILE = INPUT_PATH / "brhfile.txt"
 
-*+---------------------------------------------------------------+
- |  THIS PART IS FOR HP DIRECT                                   |
- +---------------------------------------------------------------+;
-DATA LOANTEM2;
-  FORMAT TYPE  $13.;
-  SET BNM.LOANTEMP;
-  IF (PRODUCT = 380 OR PRODUCT = 381 OR
-      PRODUCT = 700 OR PRODUCT = 705)  AND CHECKDT = 1  THEN DO;
-     CAT  = 'A';
-     TYPE = '(HPD-C)';
-     OUTPUT;
-  END;
-  IF (PRODUCT = 380 OR PRODUCT = 381)  AND CHECKDT = 1  THEN DO;
-     CAT  = 'B';
-     TYPE = '(HP 380/381)';
-     OUTPUT;
-  END;
-  IF (PRODUCT = 128 OR PRODUCT = 130)  AND CHECKDT = 1  THEN DO;
-     CAT  = 'C';
-     TYPE = '(AITAB)';
-     OUTPUT;
-  END;
-  IF (PRODUCT = 128 OR PRODUCT = 130  OR
-     PRODUCT = 380 OR PRODUCT = 381  OR
-     PRODUCT = 700 OR PRODUCT = 705) AND CHECKDT = 1   THEN DO;
-     CAT  = 'D';
-     TYPE = '(-HPD-)';
-     OUTPUT;
-  END;
-RUN;
+# Output file
+OUTPUT_FILE = OUTPUT_PATH / f"eimar201_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
-PROC SORT DATA=LOANTEM2; BY BRANCH;
+def read_sas7bdat_with_pandas(filepath):
+    """Read SAS7BDAT file using pandas/pyreadstat"""
+    df, meta = pyreadstat.read_sas7bdat(str(filepath))
+    return df
 
-DATA LOANTEMP;
-  MERGE LOANTEM2(IN=PRESENT) BRHDATA;
-  BY BRANCH;
-  IF PRESENT=1 THEN OUTPUT LOANTEMP;
-RUN;
+def main():
+    # Use current date minus 1 day instead of REPTDATE
+    current_date = datetime.now() - timedelta(days=1)
+    rdate = current_date.strftime('%d%m%y')  # DDMMYY8 format
+    reptyear = current_date.strftime('%Y')    # YEAR4 format
+    reptmon = current_date.strftime('%m')     # Z2 format
+    reptday = current_date.strftime('%d')     # Z2 format
 
-PROC SORT DATA=LOANTEMP; BY CAT BRANCH;
+    # Read BRHFILE (fixed-width text file)
+    brhdata_df = pd.read_fwf(
+        BRHFILE_FILE,
+        colspecs=[(1, 4), (5, 8)],  # @2 BRANCH 3., @6 BRHCODE $3.
+        names=['BRANCH', 'BRHCODE'],
+        dtype={'BRANCH': int, 'BRHCODE': str}
+    )
 
-DATA TRY;
-  ARRAY BRHAMT{17} BRHAMT1-BRHAMT17;
-  ARRAY NOACC{17}  NOACC1-NOACC17;
-  ARRAY TOTAMT{17} TOTAMT1-TOTAMT17;
-  ARRAY TOTACC{17} TOTACC1-TOTACC17;
-  SET LOANTEMP END=LAST;
-  BY CAT BRANCH;
+    # Read LOANTEMP using pyreadstat
+    loantemp_df = read_sas7bdat_with_pandas(LOANTEMP_FILE)
 
-  FILE PRINT HEADER=NEWPAGE;
+    # Convert to DuckDB for processing
+    conn = duckdb.connect(':memory:')
+    conn.register('loantemp', loantemp_df)
+    conn.register('brhdata', brhdata_df)
 
-  IF FIRST.CAT    THEN DO;
-     PUT _PAGE_;
-     SGTOTBRH = 0;
-     SGTOTBR2 = 0;
-     SGTOTACC = 0;
-     SGTOTAC2 = 0;
-     GTOTBRH  = 0;
-     GTOTACC  = 0;
-     DO I = 1 TO 17;
-        TOTAMT(I) = 0;
-        BRHAMT(I) = 0;
-        TOTACC(I) = 0;
-        NOACC(I)  = 0;
-     END;
-  END;
+    # Create LOANTEM2 (equivalent to SAS DATA step)
+    loantem2_query = """
+    SELECT 
+        *,
+        CASE 
+            WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN 'A'
+            WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN 'B'
+            WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN 'C'
+            WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN 'D'
+        END AS CAT,
+        CASE 
+            WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN '(HPD-C)'
+            WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN '(HP 380/381)'
+            WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN '(AITAB)'
+            WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN '(-HPD-)'
+        END AS TYPE
+    FROM loantemp
+    WHERE (PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1)
+       OR (PRODUCT IN (380, 381) AND CHECKDT = 1)
+       OR (PRODUCT IN (128, 130) AND CHECKDT = 1)
+       OR (PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1)
+    """
+    
+    loantem2_df = conn.execute(loantem2_query).fetchdf()
+    
+    # Merge with BRHDATA
+    loantemp_final_df = loantem2_df.merge(brhdata_df, on='BRANCH', how='inner')
+    loantemp_final_df = loantemp_final_df.sort_values(['CAT', 'BRANCH'])
+    
+    # Generate report
+    with open(OUTPUT_FILE, 'w') as f:
+        pagecnt = 0
+        
+        for cat, cat_group in loantemp_final_df.groupby('CAT'):
+            # Initialize category-level arrays and totals
+            totamt = np.zeros(17)
+            totacc = np.zeros(17)
+            
+            for branch, branch_group in cat_group.groupby('BRANCH'):
+                brhamt = np.zeros(17)
+                noacc = np.zeros(17)
+                
+                # Process each row in branch
+                for _, row in branch_group.iterrows():
+                    if row['BALANCE'] > 0:
+                        arrears_idx = int(row['ARREAR']) - 1  # 1-based to 0-based
+                        if 0 <= arrears_idx < 17:
+                            brhamt[arrears_idx] += row['BALANCE']
+                            noacc[arrears_idx] += 1
+                
+                # Calculate subtotals
+                subbrh = np.sum(brhamt[3:])  # elements 4-17 (0-based index 3-16)
+                subbr2 = subbrh - brhamt[3] - brhamt[4] - brhamt[5]
+                subacc = np.sum(noacc[3:])
+                subac2 = subacc - noacc[3] - noacc[4] - noacc[5]
+                totbrh = subbrh + brhamt[0] + brhamt[1] + brhamt[2]
+                sotacc = subacc + noacc[0] + noacc[1] + noacc[2]
+                
+                # Update category totals
+                totamt += brhamt
+                totacc += noacc
+                
+                # Print page header if new page or first branch in category
+                if pagecnt == 0 or (branch == cat_group['BRANCH'].iloc[0] and pagecnt == 0):
+                    pagecnt += 1
+                    f.write(f"PROGRAM-ID : EIMAR201   P U B L I C   I S L A M I C   B A N K   B E R H A D                    PAGE NO.: {pagecnt}\n")
+                    cat_type = branch_group['TYPE'].iloc[0] if len(branch_group) > 0 else '          '
+                    f.write(f"                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998      {cat_type:<13} {rdate}\n")
+                    f.write("\n")
+                    f.write("BRH    NO          < 1 MTH     NO     1 TO < 2 MTH     NO     2 TO < 3 MTH        NO      3 TO < 4 MTH       NO      4 TO < 5 MTH\n")
+                    f.write("       NO     5 TO < 6 MTH     NO     6 TO < 7 MTH     NO     7 TO < 8 MTH        NO      8 TO < 9 MTH       NO     9 TO < 10 MTH\n")
+                    f.write("       NO   10 TO < 11 MTH     NO   11 TO < 12 MTH     NO   12 TO < 18 MTH        NO    18 TO < 24 MTH       NO    24 TO < 36 MTH\n")
+                    f.write("       NO         > 36 MTH     NO          DEFICIT     NO   SUBTOTAL >=3MTH        NO   SUBTOTAL >=6MTH       NO             TOTAL\n")
+                    f.write("-" * 41 + "-" * 41 + "-" * 41 + "-" * 10 + "\n")
+                
+                # Print branch detail lines
+                brhcode = branch_group['BRHCODE'].iloc[0]
+                f.write(f"{int(branch):3d}    {noacc[0]:>7,.0f} {brhamt[0]:>16,.2f}     {noacc[1]:>7,.0f} {brhamt[1]:>15,.2f}     {noacc[2]:>7,.0f} {brhamt[2]:>15,.2f}        {noacc[3]:>8,.0f} {brhamt[3]:>17,.2f}       {noacc[4]:>8,.0f} {brhamt[4]:>17,.2f}\n")
+                f.write(f"{brhcode:<3}   {noacc[5]:>7,.0f} {brhamt[5]:>16,.2f}     {noacc[6]:>7,.0f} {brhamt[6]:>15,.2f}     {noacc[7]:>7,.0f} {brhamt[7]:>15,.2f}        {noacc[8]:>8,.0f} {brhamt[8]:>17,.2f}       {noacc[9]:>8,.0f} {brhamt[9]:>17,.2f}\n")
+                f.write(f"    {noacc[10]:>7,.0f} {brhamt[10]:>16,.2f}     {noacc[11]:>7,.0f} {brhamt[11]:>15,.2f}     {noacc[12]:>7,.0f} {brhamt[12]:>15,.2f}        {noacc[13]:>8,.0f} {brhamt[13]:>17,.2f}       {noacc[14]:>8,.0f} {brhamt[14]:>17,.2f}\n")
+                f.write(f"    {noacc[15]:>7,.0f} {brhamt[15]:>16,.2f}     {noacc[16]:>7,.0f} {brhamt[16]:>15,.2f}     {subacc:>7,.0f} {subbrh:>15,.2f}        {subac2:>8,.0f} {subbr2:>17,.2f}       {sotacc:>8,.0f} {totbrh:>17,.2f}\n")
+            
+            # Calculate grand totals for category
+            sgtotbrh = np.sum(totamt[3:])
+            sgtotbr2 = sgtotbrh - totamt[3] - totamt[4] - totamt[5]
+            sgtotacc = np.sum(totacc[3:])
+            sgtotac2 = sgtotacc - totacc[3] - totacc[4] - totacc[5]
+            gtotbrh = sgtotbrh + totamt[0] + totamt[1] + totamt[2]
+            gtotacc = sgtotacc + totacc[0] + totacc[1] + totacc[2]
+            
+            # Print category totals
+            f.write("-" * 41 + "-" * 41 + "-" * 41 + "-" * 10 + "\n")
+            f.write(f"TOT   {totacc[0]:>7,.0f} {totamt[0]:>16,.2f}     {totacc[1]:>7,.0f} {totamt[1]:>15,.2f}     {totacc[2]:>7,.0f} {totamt[2]:>15,.2f}        {totacc[3]:>8,.0f} {totamt[3]:>17,.2f}       {totacc[4]:>8,.0f} {totamt[4]:>17,.2f}\n")
+            f.write(f"    {totacc[5]:>7,.0f} {totamt[5]:>16,.2f}     {totacc[6]:>7,.0f} {totamt[6]:>15,.2f}     {totacc[7]:>7,.0f} {totamt[7]:>15,.2f}        {totacc[8]:>8,.0f} {totamt[8]:>17,.2f}       {totacc[9]:>8,.0f} {totamt[9]:>17,.2f}\n")
+            f.write(f"    {totacc[10]:>7,.0f} {totamt[10]:>16,.2f}     {totacc[11]:>7,.0f} {totamt[11]:>15,.2f}     {totacc[12]:>7,.0f} {totamt[12]:>15,.2f}        {totacc[13]:>8,.0f} {totamt[13]:>17,.2f}       {totacc[14]:>8,.0f} {totamt[14]:>17,.2f}\n")
+            f.write(f"    {totacc[15]:>7,.0f} {totamt[15]:>16,.2f}     {totacc[16]:>7,.0f} {totamt[16]:>15,.2f}     {sgtotacc:>7,.0f} {sgtotbrh:>15,.2f}        {sgtotac2:>8,.0f} {sgtotbr2:>17,.2f}       {gtotacc:>8,.0f} {gtotbrh:>17,.2f}\n")
+            f.write("-" * 41 + "-" * 41 + "-" * 41 + "-" * 10 + "\n")
+            f.write("\n")
+            
+            pagecnt = 0  # Reset page count for new category
+    
+    print(f"Report generated: {OUTPUT_FILE}")
+    print(f"Report date (current date - 1 day): {rdate}")
 
-  IF FIRST.BRANCH THEN DO;
-     DO I = 1 TO 17;
-        BRHAMT(I)=0;
-        NOACC(I) =0;
-     END;
-     SUBBRH =0;   SUBACC=0;
-     SUBBR2 =0;   SUBAC2=0;
-     TOTBRH =0;   SOTACC=0;
-  END;
-
-  IF BALANCE GT 0   THEN DO;
-     BRHAMT(ARREAR) + BALANCE;
-     /* IF PRODUCT IN (110,115,700,705)   THEN DO;
-        IF BALANCE GT 200  THEN NOACC(ARREAR) + 1;
-     END; ELSE */ NOACC(ARREAR) + 1;
-  END;
-
-  IF LAST.BRANCH THEN DO;
-     DO I = 1 TO 17;
-        TOTAMT(I) + BRHAMT(I);
-        TOTACC(I) + NOACC(I);
-     END;
-
-     SUBBRH = SUM(BRHAMT4,BRHAMT5,BRHAMT6,BRHAMT7,BRHAMT8,BRHAMT9,
-                  BRHAMT10,BRHAMT11,BRHAMT12,BRHAMT13,
-                  BRHAMT14,BRHAMT15,BRHAMT16,BRHAMT17);
-     SUBBR2 = SUBBRH - BRHAMT4 - BRHAMT5 - BRHAMT6;
-     SUBACC = SUM(NOACC4,NOACC5,NOACC6,NOACC7,NOACC8,NOACC9,NOACC10,
-                  NOACC11,NOACC12,NOACC13,NOACC14,
-                  NOACC15,NOACC16,NOACC17);
-     SUBAC2 = SUBACC - NOACC4 - NOACC5 - NOACC6;
-     TOTBRH = SUM(SUBBRH,BRHAMT1,BRHAMT2,BRHAMT3);
-     SOTACC = SUM(SUBACC,NOACC1,NOACC2,NOACC3);
-
-     PUT  @1   BRANCH Z3.
-          @5   NOACC1 COMMA7.0  @13  BRHAMT1 COMMA16.2
-          @30  NOACC2 COMMA7.0  @38  BRHAMT2 COMMA15.2
-          @54  NOACC3 COMMA7.0  @62  BRHAMT3 COMMA15.2
-          @78  NOACC4 COMMA8.0  @87  BRHAMT4 COMMA17.2
-          @105 NOACC5 COMMA8.0  @114 BRHAMT5 COMMA17.2;
-     PUT  @1   BRHCODE
-          @5   NOACC6 COMMA7.0  @13  BRHAMT6 COMMA16.2
-          @30  NOACC7 COMMA7.0  @38  BRHAMT7 COMMA15.2
-          @54  NOACC8 COMMA7.0  @62  BRHAMT8 COMMA15.2
-          @78  NOACC9 COMMA8.0  @87  BRHAMT9 COMMA17.2
-          @105 NOACC10 COMMA8.0 @114 BRHAMT10 COMMA17.2;
-     PUT  @5   NOACC11 COMMA7.0 @13  BRHAMT11 COMMA16.2
-          @30  NOACC12 COMMA7.0 @38  BRHAMT12 COMMA15.2
-          @54  NOACC13 COMMA7.0 @62  BRHAMT13 COMMA15.2
-          @78  NOACC14 COMMA8.0 @87  BRHAMT14 COMMA17.2
-          @105 NOACC15 COMMA8.0 @114 BRHAMT15 COMMA17.2;
-     PUT  @5   NOACC16 COMMA7.0 @13  BRHAMT16 COMMA16.2
-          @30  NOACC17 COMMA7.0 @38  BRHAMT17 COMMA15.2
-          @54  SUBACC COMMA7.0  @62  SUBBRH  COMMA15.2
-          @78  SUBAC2 COMMA8.0  @87  SUBBR2  COMMA17.2
-          @105 SOTACC COMMA8.0  @114 TOTBRH  COMMA17.2;
-  END;
-
-  IF LAST.CAT THEN DO;
-     SGTOTBRH = SUM(TOTAMT4,TOTAMT5,TOTAMT6,TOTAMT7,TOTAMT8,
-                    TOTAMT9,TOTAMT10,TOTAMT11,TOTAMT12,
-                    TOTAMT13,TOTAMT14,TOTAMT15,TOTAMT16,TOTAMT17);
-     SGTOTBR2 = SGTOTBRH - TOTAMT4 - TOTAMT5 - TOTAMT6;
-     SGTOTACC = SUM(TOTACC4,TOTACC5,TOTACC6,TOTACC7,TOTACC8,TOTACC9,
-                    TOTACC10,TOTACC11,TOTACC12,TOTACC13,
-                    TOTACC14,TOTACC15,TOTACC16,TOTACC17);
-     SGTOTAC2 = SGTOTACC - TOTACC4 - TOTACC5 - TOTACC6;
-     GTOTBRH  = SUM(SGTOTBRH,TOTAMT1,TOTAMT2,TOTAMT3);
-     GTOTACC  = SUM(SGTOTACC,TOTACC1,TOTACC2,TOTACC3);
-
-     PUT  @1   '----------------------------------------'
-          @41  '----------------------------------------'
-          @81  '----------------------------------------'
-          @121 '----------';
-     PUT  @1  'TOT'
-          @5   TOTACC1 COMMA7.0  @13  TOTAMT1 COMMA16.2
-          @30  TOTACC2 COMMA7.0  @38  TOTAMT2 COMMA15.2
-          @54  TOTACC3 COMMA7.0  @62  TOTAMT3 COMMA15.2
-          @78  TOTACC4 COMMA8.0  @87  TOTAMT4 COMMA17.2
-          @105 TOTACC5 COMMA8.0  @114 TOTAMT5 COMMA17.2;
-     PUT  @5   TOTACC6 COMMA7.0  @13  TOTAMT6 COMMA16.2
-          @30  TOTACC7 COMMA7.0  @38  TOTAMT7 COMMA15.2
-          @54  TOTACC8 COMMA7.0  @62  TOTAMT8 COMMA15.2
-          @78  TOTACC9 COMMA8.0  @87  TOTAMT9 COMMA17.2
-          @105 TOTACC10 COMMA8.0 @114 TOTAMT10 COMMA17.2;
-     PUT  @5   TOTACC11 COMMA7.0 @13  TOTAMT11 COMMA16.2
-          @30  TOTACC12 COMMA7.0 @38  TOTAMT12 COMMA15.2
-          @54  TOTACC13 COMMA7.0 @62  TOTAMT13 COMMA15.2
-          @78  TOTACC14 COMMA8.0 @87  TOTAMT14 COMMA17.2
-          @105 TOTACC15 COMMA8.0 @114 TOTAMT15 COMMA17.2;
-     PUT  @5   TOTACC16 COMMA7.0 @13  TOTAMT16 COMMA16.2
-          @30  TOTACC17 COMMA7.0 @38  TOTAMT17 COMMA15.2
-          @54  SGTOTACC COMMA7.0 @62  SGTOTBRH COMMA15.2
-          @78  SGTOTAC2 COMMA8.0 @87  SGTOTBR2 COMMA17.2
-          @105 GTOTACC COMMA8.0  @114 GTOTBRH  COMMA17.2;
-     PUT  @1   '----------------------------------------'
-          @41  '----------------------------------------'
-          @81  '----------------------------------------'
-          @121 '----------';
-     PUT;
-     PAGECNT = 0;
-  END;
-  RETURN;
-
-  NEWPAGE:
-    PAGECNT+1;
-    PUT @1   'PROGRAM-ID : EIMAR201'
-        @43  'P U B L I C   I S L A M I C   B A N K   B E R H A D'
-        @118 'PAGE NO.: ' PAGECNT;
-    PUT @35  'OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998'
-        @89  TYPE  $13.
-        @103 "&RDATE";
-    PUT @1   ' ';
-    PUT @1   'BRH    NO          < 1 MTH'
-        @33         'NO     1 TO < 2 MTH'
-        @58         'NO     2 TO < 3 MTH'
-        @84        'NO      3 TO < 4 MTH'
-        @111       'NO      4 TO < 5 MTH';
-    PUT @1   '       NO     5 TO < 6 MTH'
-        @33         'NO     6 TO < 7 MTH'
-        @58         'NO     7 TO < 8 MTH'
-        @84        'NO      8 TO < 9 MTH'
-        @111       'NO     9 TO < 10 MTH';
-    PUT @1   '       NO   10 TO < 11 MTH'
-        @33         'NO   11 TO < 12 MTH'
-        @58         'NO   12 TO < 18 MTH'
-        @84        'NO    18 TO < 24 MTH'
-        @111       'NO    24 TO < 36 MTH';
-    PUT @1   '       NO         > 36 MTH'
-        @33         'NO          DEFICIT'
-        @58        'NO   SUBTOTAL >=3MTH'
-        @84        'NO   SUBTOTAL >=6MTH'
-        @111       'NO             TOTAL';
-    PUT @1   '----------------------------------------'
-        @41  '----------------------------------------'
-        @81  '----------------------------------------'
-        @121 '----------';
-  RETURN;
-RUN;
-
-PROC DATASETS LIB=WORK NOLIST; DELETE LOANTEMP LOANTEM2; RUN;
-
-
-convert this program into python using duckdb, reptdate change to use datetime timdelta - 1, polars, pandas, pyreadstat to read sas7bdat inputs, and pathlib for path configuration for the inputs and outputs at the beginning. output in text file. input in sas7bdat.
+if __name__ == "__main__":
+    main()
