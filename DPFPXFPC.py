@@ -16,8 +16,8 @@ OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 LOANTEMP_FILE = INPUT_PATH / "bnm" / "loantemp.sas7bdat"
 BRHFILE_FILE = INPUT_PATH / "LKP_BRANCH"
 
-# Output file
-OUTPUT_FILE = OUTPUT_PATH / f"eimar201_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+# Output file - only date, no timestamp
+OUTPUT_FILE = OUTPUT_PATH / f"eimar201_report_{datetime.now().strftime('%Y%m%d')}.txt"
 
 def read_sas7bdat_with_pandas(filepath):
     """Read SAS7BDAT file using pandas/pyreadstat"""
@@ -26,6 +26,42 @@ def read_sas7bdat_with_pandas(filepath):
         raise FileNotFoundError(f"SAS file not found: {filepath}")
     df, meta = pyreadstat.read_sas7bdat(str(filepath))
     return df
+
+def format_line1(branch, values):
+    """Format line 1: BRANCH + columns 1-5
+    SAS: @1 BRANCH Z3. @5 NOACC1 COMMA7.0 @13 BRHAMT1 COMMA16.2 @30 NOACC2 COMMA7.0 @38 BRHAMT2 COMMA15.2
+         @54 NOACC3 COMMA7.0 @62 BRHAMT3 COMMA15.2 @78 NOACC4 COMMA8.0 @87 BRHAMT4 COMMA17.2
+         @105 NOACC5 COMMA8.0 @114 BRHAMT5 COMMA17.2"""
+    return (f"{branch:>3}  {values[0]:>7,.0f} {values[1]:>16,.2f}  {values[2]:>7,.0f} {values[3]:>15,.2f}  "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}   {values[6]:>8,.0f} {values[7]:>17,.2f}  "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
+
+def format_line2(brhcode, values):
+    """Format line 2: BRHCODE + columns 6-10
+    SAS: @1 BRHCODE @5 NOACC6 COMMA7.0 @13 BRHAMT6 COMMA16.2 @30 NOACC7 COMMA7.0 @38 BRHAMT7 COMMA15.2
+         @54 NOACC8 COMMA7.0 @62 BRHAMT8 COMMA15.2 @78 NOACC9 COMMA8.0 @87 BRHAMT9 COMMA17.2
+         @105 NOACC10 COMMA8.0 @114 BRHAMT10 COMMA17.2"""
+    return (f"{brhcode:<3}  {values[0]:>7,.0f} {values[1]:>16,.2f}  {values[2]:>7,.0f} {values[3]:>15,.2f}  "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}   {values[6]:>8,.0f} {values[7]:>17,.2f}  "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
+
+def format_line3(values):
+    """Format line 3: columns 11-15
+    SAS: @5 NOACC11 COMMA7.0 @13 BRHAMT11 COMMA16.2 @30 NOACC12 COMMA7.0 @38 BRHAMT12 COMMA15.2
+         @54 NOACC13 COMMA7.0 @62 BRHAMT13 COMMA15.2 @78 NOACC14 COMMA8.0 @87 BRHAMT14 COMMA17.2
+         @105 NOACC15 COMMA8.0 @114 BRHAMT15 COMMA17.2"""
+    return (f"     {values[0]:>7,.0f} {values[1]:>16,.2f}  {values[2]:>7,.0f} {values[3]:>15,.2f}  "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}   {values[6]:>8,.0f} {values[7]:>17,.2f}  "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
+
+def format_line4(values):
+    """Format line 4: columns 16-17 + subtotals
+    SAS: @5 NOACC16 COMMA7.0 @13 BRHAMT16 COMMA16.2 @30 NOACC17 COMMA7.0 @38 BRHAMT17 COMMA15.2
+         @54 SUBACC COMMA7.0 @62 SUBBRH COMMA15.2 @78 SUBAC2 COMMA8.0 @87 SUBBR2 COMMA17.2
+         @105 SOTACC COMMA8.0 @114 TOTBRH COMMA17.2"""
+    return (f"     {values[0]:>7,.0f} {values[1]:>16,.2f}  {values[2]:>7,.0f} {values[3]:>15,.2f}  "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}   {values[6]:>8,.0f} {values[7]:>17,.2f}  "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
 
 def main():
     # Use current date minus 1 day
@@ -166,13 +202,10 @@ def main():
                 # Print page header if first branch in category
                 if first_branch_in_category:
                     pagecnt += 1
-                    # Header line 1
                     f.write(f"PROGRAM-ID : EIMAR201                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {pagecnt}\n")
                     cat_type = branch_group['TYPE'].iloc[0] if len(branch_group) > 0 else '          '
-                    # Header line 2 with date in DD/MM/YY format
                     f.write(f"                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998  {cat_type}       {rdate}\n")
                     f.write("\n")
-                    # Column headers
                     f.write("BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       NO      3 TO < 4 MTH       NO      4 TO < 5 MTH\n")
                     f.write("       NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       NO      8 TO < 9 MTH       NO     9 TO < 10 MTH\n")
                     f.write("       NO   10 TO < 11 MTH      NO   11 TO < 12 MTH      NO   12 TO < 18 MTH       NO    18 TO < 24 MTH       NO    24 TO < 36 MTH\n")
@@ -184,20 +217,16 @@ def main():
                 brhcode = branch_group['BRHCODE'].iloc[0] if len(branch_group) > 0 else '   '
                 
                 # Line 1: Branch number + columns 1-5
-                line1 = f" {branch:3d}    {noacc[0]:>7,.0f}       {brhamt[0]:>15,.2f}       {noacc[1]:>7,.0f}       {brhamt[1]:>15,.2f}       {noacc[2]:>7,.0f}       {brhamt[2]:>15,.2f}        {noacc[3]:>8,.0f}        {brhamt[3]:>17,.2f}        {noacc[4]:>8,.0f}        {brhamt[4]:>17,.2f}\n"
-                f.write(line1)
+                f.write(format_line1(branch, [noacc[0], brhamt[0], noacc[1], brhamt[1], noacc[2], brhamt[2], noacc[3], brhamt[3], noacc[4], brhamt[4]]) + "\n")
                 
                 # Line 2: BRHCODE + columns 6-10
-                line2 = f" {brhcode:<3}    {noacc[5]:>7,.0f}       {brhamt[5]:>15,.2f}       {noacc[6]:>7,.0f}       {brhamt[6]:>15,.2f}       {noacc[7]:>7,.0f}       {brhamt[7]:>15,.2f}        {noacc[8]:>8,.0f}        {brhamt[8]:>17,.2f}        {noacc[9]:>8,.0f}        {brhamt[9]:>17,.2f}\n"
-                f.write(line2)
+                f.write(format_line2(brhcode, [noacc[5], brhamt[5], noacc[6], brhamt[6], noacc[7], brhamt[7], noacc[8], brhamt[8], noacc[9], brhamt[9]]) + "\n")
                 
                 # Line 3: Columns 11-15
-                line3 = f"       {noacc[10]:>7,.0f}       {brhamt[10]:>15,.2f}       {noacc[11]:>7,.0f}       {brhamt[11]:>15,.2f}       {noacc[12]:>7,.0f}       {brhamt[12]:>15,.2f}        {noacc[13]:>8,.0f}        {brhamt[13]:>17,.2f}        {noacc[14]:>8,.0f}        {brhamt[14]:>17,.2f}\n"
-                f.write(line3)
+                f.write(format_line3([noacc[10], brhamt[10], noacc[11], brhamt[11], noacc[12], brhamt[12], noacc[13], brhamt[13], noacc[14], brhamt[14]]) + "\n")
                 
                 # Line 4: Columns 16-17 + subtotals
-                line4 = f"       {noacc[15]:>7,.0f}       {brhamt[15]:>15,.2f}       {noacc[16]:>7,.0f}       {brhamt[16]:>15,.2f}       {subacc:>7,.0f}       {subbrh:>15,.2f}        {subac2:>8,.0f}        {subbr2:>17,.2f}       {sotacc:>8,.0f}      {totbrh:>16,.2f}\n"
-                f.write(line4)
+                f.write(format_line4([noacc[15], brhamt[15], noacc[16], brhamt[16], subacc, subbrh, subac2, subbr2, sotacc, totbrh]) + "\n")
             
             # Calculate grand totals for category
             sgtotbrh = np.sum(totamt[3:])
@@ -209,14 +238,10 @@ def main():
             
             # Print category totals
             f.write("-" * 130 + "\n")
-            tot_line1 = f" TOT    {totacc[0]:>7,.0f}       {totamt[0]:>15,.2f}       {totacc[1]:>7,.0f}       {totamt[1]:>15,.2f}       {totacc[2]:>7,.0f}       {totamt[2]:>15,.2f}        {totacc[3]:>8,.0f}        {totamt[3]:>17,.2f}        {totacc[4]:>8,.0f}        {totamt[4]:>17,.2f}\n"
-            f.write(tot_line1)
-            tot_line2 = f"       {totacc[5]:>7,.0f}       {totamt[5]:>15,.2f}       {totacc[6]:>7,.0f}       {totamt[6]:>15,.2f}       {totacc[7]:>7,.0f}       {totamt[7]:>15,.2f}        {totacc[8]:>8,.0f}        {totamt[8]:>17,.2f}        {totacc[9]:>8,.0f}        {totamt[9]:>17,.2f}\n"
-            f.write(tot_line2)
-            tot_line3 = f"       {totacc[10]:>7,.0f}       {totamt[10]:>15,.2f}       {totacc[11]:>7,.0f}       {totamt[11]:>15,.2f}       {totacc[12]:>7,.0f}       {totamt[12]:>15,.2f}        {totacc[13]:>8,.0f}        {totamt[13]:>17,.2f}        {totacc[14]:>8,.0f}        {totamt[14]:>17,.2f}\n"
-            f.write(tot_line3)
-            tot_line4 = f"       {totacc[15]:>7,.0f}       {totamt[15]:>15,.2f}       {totacc[16]:>7,.0f}       {totamt[16]:>15,.2f}       {sgtotacc:>7,.0f}       {sgtotbrh:>15,.2f}        {sgtotac2:>8,.0f}        {sgtotbr2:>17,.2f}       {gtotacc:>8,.0f}      {gtotbrh:>16,.2f}\n"
-            f.write(tot_line4)
+            f.write(format_line1("TOT", [totacc[0], totamt[0], totacc[1], totamt[1], totacc[2], totamt[2], totacc[3], totamt[3], totacc[4], totamt[4]]) + "\n")
+            f.write(format_line2("", [totacc[5], totamt[5], totacc[6], totamt[6], totacc[7], totamt[7], totacc[8], totamt[8], totacc[9], totamt[9]]) + "\n")
+            f.write(format_line3([totacc[10], totamt[10], totacc[11], totamt[11], totacc[12], totamt[12], totacc[13], totamt[13], totacc[14], totamt[14]]) + "\n")
+            f.write(format_line4([totacc[15], totamt[15], totacc[16], totamt[16], sgtotacc, sgtotbrh, sgtotac2, sgtotbr2, gtotacc, gtotbrh]) + "\n")
             f.write("-" * 130 + "\n")
             f.write("\n")
     
