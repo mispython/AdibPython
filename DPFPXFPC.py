@@ -1,40 +1,101 @@
-OPTIONS NOCENTER YEARCUTOFF=1950;
+# ============================================================
+# JOB NAME : EIBNMMFR (Python)
+# INPUT    : Binary datasets
+# OUTPUT   : Parquet
+# PURPOSE  : Replace JCL + SAS job
+# ============================================================
 
-DATA REPTDATE;
-   REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
-            PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+import pandas as pd
+import pickle
+from datetime import date, timedelta
+from ftplib import FTP
+import os
 
-   CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR2.));
-   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
-   CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
-   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
-   CALL SYMPUT('REPTDATE',REPTDATE);
-RUN;
+# ============================================================
+# 1. REPORT DATE LOGIC (SAS REPTDATE)
+# ============================================================
 
-DATA PBB;
-  SET PBB.ALM_CR
-      PBB.MAST_BR;
+today = date.today()
+first_of_this_month = today.replace(day=1)
+REPTDATE = first_of_this_month - timedelta(days=1)
 
-  FORMAT REPTDATE DATE9.;
+REPTYEAR = REPTDATE.strftime("%y")
+REPTMON  = REPTDATE.strftime("%m")
+REPTDAY  = REPTDATE.strftime("%d")
+RDATE    = REPTDATE.strftime("%d%m%Y")
 
-  IF PRODESC IN ('BILLS RETAIL','TOTAL COMMERCIAL RETAILS');
-  REPTDATE = &REPTDATE;
-RUN;
+# ============================================================
+# 2. INPUT BINARY FILE PATHS
+# (sas dataset)
+# ============================================================
 
-DATA PIBB;
-  SET PIBB.ALM_CR
-      PIBB.MAST_BR;
+PBB_ALM_CR_BIN   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pbb_alm_cr.sas7bdat"
+PBB_MAST_BR_BIN  = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pbb_mast_br.sas7bdat"
+PIBB_ALM_CR_BIN  = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pibb_alm_cr.sas7bdat"
+PIBB_MAST_BR_BIN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pibb_mast_br.sas7bdat"
 
-  FORMAT REPTDATE DATE9.;
+# ============================================================
+# 3. LOAD BINARY INPUT
+# ============================================================
 
-  IF PRODESC IN ('BILLS RETAIL','TOTAL COMMERCIAL RETAILS');
-  REPTDATE = &REPTDATE;
-RUN;
+def load_binary(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
 
-DATA CRL;
-   SET PBB PIBB;
+pbb_alm_cr   = load_binary(PBB_ALM_CR_BIN)
+pbb_mast_br  = load_binary(PBB_MAST_BR_BIN)
+pibb_alm_cr  = load_binary(PIBB_ALM_CR_BIN)
+pibb_mast_br = load_binary(PIBB_MAST_BR_BIN)
 
-   KEEP ACCTNO NOTENO PRODESC REPTDATE;
-RUN;
+# ============================================================
+# 4. FILTER + PREPARE DATA (SAS DATA STEP)
+# ============================================================
 
-where does this output to, and what kind of file extension? text or sas dataset?
+VALID_PRODESC = [
+    "BILLS RETAIL",
+    "TOTAL COMMERCIAL RETAILS"
+]
+
+def prepare_df(df1, df2):
+    df = pd.concat([df1, df2], ignore_index=True)
+    df = df[df["PRODESC"].isin(VALID_PRODESC)].copy()
+    df["REPTDATE"] = pd.to_datetime(REPTDATE)
+    return df
+
+pbb  = prepare_df(pbb_alm_cr,  pbb_mast_br)
+pibb = prepare_df(pibb_alm_cr, pibb_mast_br)
+
+# ============================================================
+# 5. COMBINE PBB + PIBB
+# ============================================================
+
+crl = pd.concat([pbb, pibb], ignore_index=True)
+
+crl = crl[
+    ["ACCTNO", "NOTENO", "PRODESC", "REPTDATE"]
+]
+
+# ============================================================
+# 6. WRITE OUTPUT AS PARQUET
+# (SAS: SAP.MTH.MFRS.BNM01.DTLFTP)
+# ============================================================
+
+OUTPUT_PARQUET = "SAP.MTH.MFRS.BNM01.DTLFTP.parquet"
+
+crl.to_parquet(
+    OUTPUT_PARQUET,
+    engine="pyarrow",
+    compression="snappy",
+    index=False
+)
+
+
+
+# ============================================================
+# END OF JOB
+# ============================================================
+
+print("EIBNMMFR job completed successfully (Binary → Parquet).")
+
+
+input is in sas7bdat, can use pyreadstat. output in sas7bdat and parquet
