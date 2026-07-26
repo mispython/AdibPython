@@ -1,28 +1,28 @@
 """
-EIMIR102 SAS to Python Conversion
-Processes loan arrears reports with different bucket structures
-Matches exact SAS output format for CCDTXT2
+EIMIR103 SAS to Python conversion
+Processes NPL (Non-Performing Loan) reports with stricter criteria
 """
 
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date
 import polars as pl
-import pyreadstat
 from typing import Dict, List
 
 # Setup paths
 BASE_PATH = Path(".")
-INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR102"
-OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR102"
+INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR101 - 104"
+OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR103"
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# 1. REPTDATE Processing (using yesterday's date)
+# 1. REPTDATE Processing
 # ============================================================================
 
 def process_repdate() -> Dict[str, str]:
-    """Process REPTDATE using yesterday's date"""
-    repdate = datetime.now().date() - timedelta(days=1)
+    """Process REPTDATE and extract formatted variables"""
+    repdate_path = INPUT_PATH / "BNM/REPTDATE.parquet"
+    df = pl.read_parquet(repdate_path)
+    repdate = df["REPTDATE"][0]
     
     return {
         'RDATE': repdate.strftime("%d%m%y"),  # DDMMYY8.
@@ -37,67 +37,52 @@ def process_repdate() -> Dict[str, str]:
 # ============================================================================
 
 def load_branch_data() -> pl.DataFrame:
-    """Load branch header data from flatfile"""
-    branch_path = INPUT_PATH / "LKP_BRANCH"
+    """Load branch header data"""
+    branch_path = INPUT_PATH / "BRHFILE.parquet"
     if branch_path.exists():
-        try:
-            with open(branch_path, 'r') as f:
-                lines = f.readlines()
-            
-            data = []
-            for line in lines:
-                line = line.strip()
-                if line and not line.startswith('---') and not line.startswith('B00'):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        data.append(parts)
-            
-            if data:
-                df = pl.DataFrame({
-                    "BRHCODE": [row[0] for row in data],
-                    "BRANCH_NAME": [" ".join(row[1:]) for row in data if len(row) > 1]
-                })
-                df = df.with_columns(
-                    pl.Series("BRANCH", range(1, len(df) + 1)).cast(pl.Int64)
-                )
-                return df
-            else:
-                for sep in ['|', '\t', ',']:
-                    try:
-                        df = pl.read_csv(branch_path, separator=sep, has_header=False)
-                        if len(df.columns) >= 2:
-                            df = df.rename({df.columns[0]: "BRHCODE", df.columns[1]: "BRANCH_NAME"})
-                            df = df.with_columns(
-                                pl.Series("BRANCH", range(1, len(df) + 1)).cast(pl.Int64)
-                            )
-                            return df
-                    except:
-                        continue
-        except Exception as e:
-            print(f"Warning: Error reading branch file: {e}")
-    
-    return pl.DataFrame(schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8, "BRANCH_NAME": pl.Utf8})
-
-def load_loan_data() -> pl.DataFrame:
-    """Load loan data from SAS dataset"""
-    loan_path = INPUT_PATH / "loantemp.sas7bdat"
-    if loan_path.exists():
-        df, meta = pyreadstat.read_sas7bdat(str(loan_path))
-        return pl.from_pandas(df)
+        return pl.read_parquet(branch_path)
     else:
-        raise FileNotFoundError(f"Loan data file not found at {loan_path}")
+        return pl.DataFrame(schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8})
 
-def categorize_loans(loan_df: pl.DataFrame, hpd_list: List[str]) -> pl.DataFrame:
-    """Categorize loans into different types"""
+def extract_census9(census_value: float) -> str:
+    """Extract 7th character from formatted census (8.2 format)"""
+    # Simulating SUBSTR(PUT(CENSUS,8.2),7,1)
+    formatted = f"{census_value:8.2f}"  # 8.2 format with spaces
+    return formatted[6] if len(formatted) >= 7 else ' '  # 7th character (0-indexed 6)
+
+def categorize_npl_loans(loan_df: pl.DataFrame, hpd_list: List[str]) -> pl.DataFrame:
+    """Categorize NPL loans with stricter criteria"""
     
+    # Filter: BALANCE > 0 AND BORSTAT != 'Z'
     filtered_df = loan_df.filter(
         (pl.col("BALANCE") > 0) & (pl.col("BORSTAT") != "Z")
     )
     
+    # Add CENSUS9 column
+    filtered_df = filtered_df.with_columns(
+        pl.col("CENSUS").map_elements(extract_census9, return_dtype=pl.Utf8).alias("CENSUS9")
+    )
+    
+    # Main filter: ARREAR2 > 3 OR BORSTAT in R/I/F OR CENSUS9 = '9' OR USER5 = 'N'
+    npl_candidates = filtered_df.filter(
+        (pl.col("ARREAR2") > 3) |
+        (pl.col("BORSTAT").is_in(["R", "I", "F"])) |
+        (pl.col("CENSUS9") == "9") |
+        (pl.col("USER5") == "N")
+    )
+    
     categorized_rows = []
     
-    def create_category(df_condition, cat, type_name):
-        cat_df = filtered_df.filter(df_condition)
+    # Helper function for NPL categories
+    def create_npl_category(df_condition, cat, type_name, product_list):
+        # Additional filter: BORSTAT in R/I/F OR ARREAR2 > 3 OR USER5 = 'N'
+        final_condition = df_condition & (
+            pl.col("BORSTAT").is_in(["R", "I", "F"]) |
+            (pl.col("ARREAR2") > 3) |
+            (pl.col("USER5") == "N")
+        )
+        
+        cat_df = npl_candidates.filter(final_condition)
         if len(cat_df) > 0:
             return cat_df.with_columns([
                 pl.lit(cat).alias("CAT"),
@@ -106,181 +91,103 @@ def categorize_loans(loan_df: pl.DataFrame, hpd_list: List[str]) -> pl.DataFrame
         return None
     
     # Category A: (HPD-C)
-    cat_a = create_category(
+    cat_a = create_npl_category(
         pl.col("PRODUCT").is_in([380, 381, 700, 705, 720, 725]),
-        "A", "(HPD-C)"
+        "A", "(HPD-C)", [380, 381, 700, 705, 720, 725]
     )
     if cat_a is not None:
         categorized_rows.append(cat_a)
     
     # Category B: (HP 380/381)
-    cat_b = create_category(
+    cat_b = create_npl_category(
         pl.col("PRODUCT").is_in([380, 381]),
-        "B", "(HP 380/381)"
+        "B", "(HP 380/381)", [380, 381]
     )
     if cat_b is not None:
         categorized_rows.append(cat_b)
     
-    # Category C: (AITAB)
-    cat_c = create_category(
-        pl.col("PRODUCT").is_in([128, 130, 131, 132]),
-        "C", "(AITAB)"
+    # Category C: (AITAB) - Different product list for NPL
+    cat_c = create_npl_category(
+        pl.col("PRODUCT").is_in([103, 104, 107, 108, 128, 130, 131, 132]),
+        "C", "(AITAB)", [103, 104, 107, 108, 128, 130, 131, 132]
     )
     if cat_c is not None:
         categorized_rows.append(cat_c)
     
     # Category D: (-HPD-)
     hpd_numbers = [int(x.strip("'")) for x in hpd_list]
-    cat_d = create_category(
+    cat_d = create_npl_category(
         pl.col("PRODUCT").is_in(hpd_numbers),
-        "D", "(-HPD-)"
+        "D", "(-HPD-)", hpd_numbers
     )
     if cat_d is not None:
         categorized_rows.append(cat_d)
     
+    # Combine all categories
     if categorized_rows:
-        result = pl.concat(categorized_rows, how="vertical")
-        if result["BRANCH"].dtype != pl.Int64:
-            result = result.with_columns(pl.col("BRANCH").cast(pl.Int64))
-        return result.sort(["BRANCH"])
+        return pl.concat(categorized_rows, how="vertical").sort(["BRANCH"])
     else:
         return pl.DataFrame(schema=filtered_df.schema)
 
 # ============================================================================
-# 3. Calculate 17-Bucket Summaries
+# 3. Calculate 14-Bucket NPL Summaries
 # ============================================================================
 
-def calculate_17_bucket_summaries(loan_df: pl.DataFrame) -> Dict:
-    """Calculate 17-bucket arrears summaries"""
+def calculate_npl_summaries(loan_df: pl.DataFrame) -> Dict:
+    """Calculate 14-bucket NPL summaries"""
     
-    branch_summary = loan_df.group_by(["CAT", "BRANCH", "ARREAR"]).agg([
-        pl.col("BRHCODE").first().alias("BRHCODE"),
-        pl.col("TYPE").first().alias("TYPE"),
-        pl.col("BALANCE").sum().alias("BRHAMT"),
-        pl.len().alias("NOACC")
-    ])
-    
-    branch_summary = branch_summary.filter(
-        (pl.col("ARREAR") >= 1) & (pl.col("ARREAR") <= 17)
-    )
-    
-    result_dict = {}
-    for cat in branch_summary["CAT"].unique().to_list():
-        cat_data = branch_summary.filter(pl.col("CAT") == cat)
-        
-        totamt = [0.0] * 18
-        totacc = [0] * 18
-        branch_results = []
-        
-        for branch in cat_data["BRANCH"].unique().to_list():
-            branch_data = cat_data.filter(pl.col("BRANCH") == branch)
-            
-            branhamt = [0.0] * 18
-            noacc = [0] * 18
-            
-            for row in branch_data.iter_rows(named=True):
-                arrear = int(row["ARREAR"])
-                branhamt[arrear] = row["BRHAMT"]
-                noacc[arrear] = row["NOACC"]
-            
-            subbrh = sum(branhamt[4:18])
-            subbr2 = subbrh - sum(branhamt[4:7])
-            subacc = sum(noacc[4:18])
-            subac2 = subacc - sum(noacc[4:7])
-            totbrh = subbrh + sum(branhamt[1:4])
-            sotacc = subacc + sum(noacc[1:4])
-            
-            for i in range(1, 18):
-                totamt[i] += branhamt[i]
-                totacc[i] += noacc[i]
-            
-            branch_results.append({
-                "BRANCH": branch,
-                "BRHCODE": branch_data["BRHCODE"][0] if len(branch_data) > 0 else "",
-                "TYPE": branch_data["TYPE"][0] if len(branch_data) > 0 else "",
-                "NOACC": noacc,
-                "BRHAMT": branhamt,
-                "SUBBRH": subbrh,
-                "SUBBR2": subbr2,
-                "SUBACC": subacc,
-                "SUBAC2": subac2,
-                "TOTBRH": totbrh,
-                "SOTACC": sotacc
-            })
-        
-        sgtotbrh = sum(totamt[4:18])
-        sgtotbr2 = sgtotbrh - sum(totamt[4:7])
-        sgtotacc = sum(totacc[4:18])
-        sgtotac2 = sgtotacc - sum(totacc[4:7])
-        gtotbrh = sgtotbrh + sum(totamt[1:4])
-        gtotacc = sgtotacc + sum(totacc[1:4])
-        
-        result_dict[cat] = {
-            "branches": branch_results,
-            "totamt": totamt,
-            "totacc": totacc,
-            "sgtotbrh": sgtotbrh,
-            "sgtotbr2": sgtotbr2,
-            "sgtotacc": sgtotacc,
-            "sgtotac2": sgtotac2,
-            "gtotbrh": gtotbrh,
-            "gtotacc": gtotacc
-        }
-    
-    return result_dict
-
-# ============================================================================
-# 4. Calculate 15-Bucket Summaries
-# ============================================================================
-
-def calculate_15_bucket_summaries(loan_df: pl.DataFrame) -> Dict:
-    """Calculate 15-bucket arrears summaries for day 15"""
-    
+    # Group by CAT, BRANCH, ARREAR2
     branch_summary = loan_df.group_by(["CAT", "BRANCH", "ARREAR2"]).agg([
         pl.col("BRHCODE").first().alias("BRHCODE"),
         pl.col("TYPE").first().alias("TYPE"),
         pl.col("BALANCE").sum().alias("BRHAMT"),
-        pl.len().alias("NOACC")
+        pl.count().alias("NOACC")
     ])
     
+    # Filter ARREAR2 values 1-14 (but NPL focuses on >= 3 months)
     branch_summary = branch_summary.filter(
-        (pl.col("ARREAR2") >= 1) & (pl.col("ARREAR2") <= 15)
+        (pl.col("ARREAR2") >= 1) & (pl.col("ARREAR2") <= 14)
     )
     
     result_dict = {}
     for cat in branch_summary["CAT"].unique().to_list():
         cat_data = branch_summary.filter(pl.col("CAT") == cat)
         
-        totamt = [0.0] * 16
-        totacc = [0] * 16
+        # Initialize arrays
+        totamt = [0.0] * 15  # 1-14 (index 0 unused)
+        totacc = [0] * 15
         branch_results = []
         
+        # Process each branch
         for branch in cat_data["BRANCH"].unique().to_list():
             branch_data = cat_data.filter(pl.col("BRANCH") == branch)
             
-            branhamt = [0.0] * 16
-            noacc = [0] * 16
+            # Initialize branch arrays
+            branhamt = [0.0] * 15
+            noacc = [0] * 15
             
+            # Fill branch arrays
             for row in branch_data.iter_rows(named=True):
                 arrear = int(row["ARREAR2"])
                 branhamt[arrear] = row["BRHAMT"]
                 noacc[arrear] = row["NOACC"]
             
-            subbrh = sum(branhamt[4:16])
-            subbr2 = sum(branhamt[7:16])
-            subacc = sum(noacc[4:16])
-            subac2 = sum(noacc[7:16])
+            # Calculate subtotals (NPL specific)
+            subbrh = sum(branhamt[4:15])  # 4-14 (>=3 months)
+            subbr2 = sum(branhamt[7:15])  # 7-14 (>=6 months)
+            subacc = sum(noacc[4:15])
+            subac2 = sum(noacc[7:15])
             totbrh = subbrh + sum(branhamt[1:4])
             sotacc = subacc + sum(noacc[1:4])
             
-            for i in range(1, 16):
+            # Add to totals
+            for i in range(1, 15):
                 totamt[i] += branhamt[i]
                 totacc[i] += noacc[i]
             
             branch_results.append({
                 "BRANCH": branch,
-                "BRHCODE": branch_data["BRHCODE"][0] if len(branch_data) > 0 else "",
-                "TYPE": branch_data["TYPE"][0] if len(branch_data) > 0 else "",
+                "BRHCODE": branch_data["BRHCODE"][0],
                 "NOACC": noacc,
                 "BRHAMT": branhamt,
                 "SUBBRH": subbrh,
@@ -291,10 +198,11 @@ def calculate_15_bucket_summaries(loan_df: pl.DataFrame) -> Dict:
                 "SOTACC": sotacc
             })
         
-        sgtotbrh = sum(totamt[4:16])
-        sgtotbr2 = sum(totamt[7:16])
-        sgtotacc = sum(totacc[4:16])
-        sgtotac2 = sum(totacc[7:16])
+        # Calculate category totals
+        sgtotbrh = sum(totamt[4:15])
+        sgtotbr2 = sum(totamt[7:15])
+        sgtotacc = sum(totacc[4:15])
+        sgtotac2 = sum(totacc[7:15])
         gtotbrh = sgtotbrh + sum(totamt[1:4])
         gtotacc = sgtotacc + sum(totacc[1:4])
         
@@ -313,206 +221,130 @@ def calculate_15_bucket_summaries(loan_df: pl.DataFrame) -> Dict:
     return result_dict
 
 # ============================================================================
-# 5. Generate Report Outputs in SAS Format
+# 4. Generate NPL Report Outputs
 # ============================================================================
 
-def format_number(num, width, decimals=2):
-    """Format number with commas and specific width"""
-    if num == 0:
-        return f"{0:>{width}.{decimals}f}"
-    return f"{num:>{width},.{decimals}f}"
+def generate_npl_report_a(loan_df: pl.DataFrame, variables: Dict) -> pl.DataFrame:
+    """Generate first NPL report (EIMAR103-A) - All NPL data"""
+    report_df = loan_df.with_columns(
+        pl.lit("EIMAR103-A").alias("PROGID")
+    )
+    
+    # Save for processing
+    report_df.write_parquet(OUTPUT_PATH / "PRNDATA_A.parquet")
+    
+    return report_df
 
-def generate_17_bucket_report_sas_format(results: Dict, variables: Dict, output_file):
-    """Generate 17-bucket report in exact SAS format"""
+def generate_npl_report_b(loan_df: pl.DataFrame, variables: Dict, hpd_list: List[str]) -> pl.DataFrame:
+    """Generate second NPL report (EIMAR103-B) with exclusions"""
     
-    pagecnt = 0
+    # Convert HPD list
+    hpd_numbers = [int(x.strip("'")) for x in hpd_list]
     
-    for cat, cat_data in sorted(results.items()):
-        # Get the type
-        branch_type = cat_data['branches'][0].get('TYPE', 'Unknown') if cat_data['branches'] else 'Unknown'
-        
-        # New page for each category
-        pagecnt += 1
-        
-        # Header - Page 1
-        output_file.write(f"PROGRAM-ID : EIMAR102-A                   P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {pagecnt:>4}\n")
-        output_file.write(f"                                             OUTSTANDING LOANS IN ARREARS {branch_type:>13}       {variables['RDATE']}\n")
-        output_file.write(f"0BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       NO      3 TO < 4 MTH       NO      4 TO < 5 MTH\n")
-        output_file.write(f"        NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       NO      8 TO < 9 MTH       NO     9 TO < 10 MTH\n")
-        output_file.write(f"        NO   10 TO < 11 MTH      NO   11 TO < 12 MTH      NO   12 TO < 18 MTH       NO    18 TO < 24 MTH       NO    24 TO < 36 MTH\n")
-        output_file.write(f"        NO         > 36 MTH      NO          DEFICIT      NO   SUBTOTAL >=3MTH       NO   SUBTOTAL >=6MTH       NO             TOTAL\n")
-        output_file.write(f" ----------------------------------------------------------------------------------------------------------------------------------\n")
-        
-        # Write branch data
-        for branch in cat_data["branches"]:
-            # Line 1: BRANCH and first 5 buckets
-            output_file.write(
-                f" {branch['BRANCH']:>3}  "
-                f"{branch['NOACC'][1]:>7,}  {branch['BRHAMT'][1]:>15,.2f}  "
-                f"{branch['NOACC'][2]:>7,}  {branch['BRHAMT'][2]:>15,.2f}  "
-                f"{branch['NOACC'][3]:>7,}  {branch['BRHAMT'][3]:>15,.2f}  "
-                f"{branch['NOACC'][4]:>8,}  {branch['BRHAMT'][4]:>17,.2f}  "
-                f"{branch['NOACC'][5]:>8,}  {branch['BRHAMT'][5]:>17,.2f}\n"
-            )
-            
-            # Line 2: BRHCODE and next 5 buckets
-            output_file.write(
-                f" {branch['BRHCODE']:<4}  "
-                f"{branch['NOACC'][6]:>7,}  {branch['BRHAMT'][6]:>15,.2f}  "
-                f"{branch['NOACC'][7]:>7,}  {branch['BRHAMT'][7]:>15,.2f}  "
-                f"{branch['NOACC'][8]:>7,}  {branch['BRHAMT'][8]:>15,.2f}  "
-                f"{branch['NOACC'][9]:>8,}  {branch['BRHAMT'][9]:>17,.2f}  "
-                f"{branch['NOACC'][10]:>8,}  {branch['BRHAMT'][10]:>17,.2f}\n"
-            )
-            
-            # Line 3: next 5 buckets
-            output_file.write(
-                f"        "
-                f"{branch['NOACC'][11]:>7,}  {branch['BRHAMT'][11]:>15,.2f}  "
-                f"{branch['NOACC'][12]:>7,}  {branch['BRHAMT'][12]:>15,.2f}  "
-                f"{branch['NOACC'][13]:>7,}  {branch['BRHAMT'][13]:>15,.2f}  "
-                f"{branch['NOACC'][14]:>8,}  {branch['BRHAMT'][14]:>17,.2f}  "
-                f"{branch['NOACC'][15]:>8,}  {branch['BRHAMT'][15]:>17,.2f}\n"
-            )
-            
-            # Line 4: last 2 buckets and subtotals
-            output_file.write(
-                f"        "
-                f"{branch['NOACC'][16]:>7,}  {branch['BRHAMT'][16]:>15,.2f}  "
-                f"{branch['NOACC'][17]:>7,}  {branch['BRHAMT'][17]:>15,.2f}  "
-                f"{branch['SUBACC']:>7,}  {branch['SUBBRH']:>15,.2f}  "
-                f"{branch['SUBAC2']:>8,}  {branch['SUBBR2']:>17,.2f}  "
-                f"{branch['SOTACC']:>8,}  {branch['TOTBRH']:>17,.2f}\n"
-            )
-        
-        # Write category totals
-        output_file.write(" ----------------------------------------------------------------------------------------------------------------------------------\n")
-        output_file.write(
-            f" TOT  "
-            f"{cat_data['totacc'][1]:>7,}  {cat_data['totamt'][1]:>15,.2f}  "
-            f"{cat_data['totacc'][2]:>7,}  {cat_data['totamt'][2]:>15,.2f}  "
-            f"{cat_data['totacc'][3]:>7,}  {cat_data['totamt'][3]:>15,.2f}  "
-            f"{cat_data['totacc'][4]:>8,}  {cat_data['totamt'][4]:>17,.2f}  "
-            f"{cat_data['totacc'][5]:>8,}  {cat_data['totamt'][5]:>17,.2f}\n"
-        )
-        output_file.write(
-            f"        "
-            f"{cat_data['totacc'][6]:>7,}  {cat_data['totamt'][6]:>15,.2f}  "
-            f"{cat_data['totacc'][7]:>7,}  {cat_data['totamt'][7]:>15,.2f}  "
-            f"{cat_data['totacc'][8]:>7,}  {cat_data['totamt'][8]:>15,.2f}  "
-            f"{cat_data['totacc'][9]:>8,}  {cat_data['totamt'][9]:>17,.2f}  "
-            f"{cat_data['totacc'][10]:>8,}  {cat_data['totamt'][10]:>17,.2f}\n"
-        )
-        output_file.write(
-            f"        "
-            f"{cat_data['totacc'][11]:>7,}  {cat_data['totamt'][11]:>15,.2f}  "
-            f"{cat_data['totacc'][12]:>7,}  {cat_data['totamt'][12]:>15,.2f}  "
-            f"{cat_data['totacc'][13]:>7,}  {cat_data['totamt'][13]:>15,.2f}  "
-            f"{cat_data['totacc'][14]:>8,}  {cat_data['totamt'][14]:>17,.2f}  "
-            f"{cat_data['totacc'][15]:>8,}  {cat_data['totamt'][15]:>17,.2f}\n"
-        )
-        output_file.write(
-            f"        "
-            f"{cat_data['totacc'][16]:>7,}  {cat_data['totamt'][16]:>15,.2f}  "
-            f"{cat_data['totacc'][17]:>7,}  {cat_data['totamt'][17]:>15,.2f}  "
-            f"{cat_data['sgtotacc']:>7,}  {cat_data['sgtotbrh']:>15,.2f}  "
-            f"{cat_data['sgtotac2']:>8,}  {cat_data['sgtotbr2']:>17,.2f}  "
-            f"{cat_data['gtotacc']:>8,}  {cat_data['gtotbrh']:>17,.2f}\n"
-        )
-        output_file.write(" ----------------------------------------------------------------------------------------------------------------------------------\n\n")
+    # Filter: exclude certain types AND exclude BORSTAT F/I/R
+    filtered = loan_df.filter(
+        (~pl.col("TYPE").is_in(["(AITAB)", "(-HPD-)"])) &
+        (~pl.col("BORSTAT").is_in(["F", "I", "R"])) &
+        (pl.col("PRODUCT").is_in(hpd_numbers + [103, 104, 107, 108]))
+    )
+    
+    report_df = filtered.with_columns(
+        pl.lit("EIMAR103-B").alias("PROGID")
+    )
+    
+    # Save for processing
+    report_df.write_parquet(OUTPUT_PATH / "PRNDATA_B.parquet")
+    
+    return report_df
 
-def generate_15_bucket_report_sas_format(results: Dict, variables: Dict, output_file):
-    """Generate 15-bucket report in exact SAS format"""
+def create_npl_summary_output(results: Dict, report_type: str, variables: Dict):
+    """Create NPL summary output for a specific report type"""
     
-    pagecnt = 0
-    
-    for cat, cat_data in sorted(results.items()):
-        branch_type = cat_data['branches'][0].get('TYPE', 'Unknown') if cat_data['branches'] else 'Unknown'
-        
-        pagecnt += 1
-        
-        # Header - Page 1 (15-bucket format)
-        output_file.write(f"PROGRAM-ID : EIMAR102-B                   P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {pagecnt:>4}\n")
-        output_file.write(f"                                             OUTSTANDING LOANS IN ARREARS {branch_type:>13}       {variables['RDATE']}\n")
-        output_file.write(f"0BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       NO      3 TO < 4 MTH       NO      4 TO < 5 MTH\n")
-        output_file.write(f"        NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       NO      8 TO < 9 MTH       NO     9 TO < 12 MTH\n")
-        output_file.write(f"        NO   12 TO < 18 MTH      NO   18 TO < 24 MTH      NO   24 TO < 36 MTH       NO          > 36 MTH       NO           DEFICIT\n")
-        output_file.write(f"        NO   SUBTOTAL >=3MTH      NO   SUBTOTAL >=6MTH      NO             TOTAL\n")
-        output_file.write(f" ----------------------------------------------------------------------------------------------------------------------------------\n")
-        
-        # Write branch data
+    report_data = []
+    for cat, cat_data in results.items():
+        # Add branch data
         for branch in cat_data["branches"]:
-            # Line 1: BRANCH and first 5 buckets
-            output_file.write(
-                f" {branch['BRANCH']:>3}  "
-                f"{branch['NOACC'][1]:>7,}  {branch['BRHAMT'][1]:>15,.2f}  "
-                f"{branch['NOACC'][2]:>7,}  {branch['BRHAMT'][2]:>15,.2f}  "
-                f"{branch['NOACC'][3]:>7,}  {branch['BRHAMT'][3]:>15,.2f}  "
-                f"{branch['NOACC'][4]:>8,}  {branch['BRHAMT'][4]:>17,.2f}  "
-                f"{branch['NOACC'][5]:>8,}  {branch['BRHAMT'][5]:>17,.2f}\n"
-            )
-            
-            # Line 2: BRHCODE and next 5 buckets
-            output_file.write(
-                f" {branch['BRHCODE']:<4}  "
-                f"{branch['NOACC'][6]:>7,}  {branch['BRHAMT'][6]:>15,.2f}  "
-                f"{branch['NOACC'][7]:>7,}  {branch['BRHAMT'][7]:>15,.2f}  "
-                f"{branch['NOACC'][8]:>7,}  {branch['BRHAMT'][8]:>15,.2f}  "
-                f"{branch['NOACC'][9]:>8,}  {branch['BRHAMT'][9]:>17,.2f}  "
-                f"{branch['NOACC'][10]:>8,}  {branch['BRHAMT'][10]:>17,.2f}\n"
-            )
-            
-            # Line 3: next 5 buckets
-            output_file.write(
-                f"        "
-                f"{branch['NOACC'][11]:>7,}  {branch['BRHAMT'][11]:>15,.2f}  "
-                f"{branch['NOACC'][12]:>7,}  {branch['BRHAMT'][12]:>15,.2f}  "
-                f"{branch['NOACC'][13]:>7,}  {branch['BRHAMT'][13]:>15,.2f}  "
-                f"{branch['NOACC'][14]:>8,}  {branch['BRHAMT'][14]:>17,.2f}  "
-                f"{branch['NOACC'][15]:>8,}  {branch['BRHAMT'][15]:>17,.2f}\n"
-            )
-            
-            # Line 4: subtotals
-            output_file.write(
-                f"        "
-                f"{branch['SUBACC']:>7,}  {branch['SUBBRH']:>15,.2f}  "
-                f"{branch['SUBAC2']:>8,}  {branch['SUBBR2']:>17,.2f}  "
-                f"{branch['SOTACC']:>8,}  {branch['TOTBRH']:>17,.2f}\n"
-            )
+            report_data.append({
+                "REPORT_TYPE": report_type,
+                "CATEGORY": cat,
+                "PROGID": f"EIMAR103-{report_type[-1]}",
+                "BRANCH": branch["BRANCH"],
+                "BRHCODE": branch["BRHCODE"],
+                **{f"NOACC{i}": branch["NOACC"][i] for i in range(1, 15)},
+                **{f"BRHAMT{i}": branch["BRHAMT"][i] for i in range(1, 15)},
+                "SUBBRH": branch["SUBBRH"],
+                "SUBBR2": branch["SUBBR2"],
+                "SUBACC": branch["SUBACC"],
+                "SUBAC2": branch["SUBAC2"],
+                "TOTBRH": branch["TOTBRH"],
+                "SOTACC": branch["SotACC"]
+            })
         
-        # Write category totals
-        output_file.write(" ----------------------------------------------------------------------------------------------------------------------------------\n")
-        output_file.write(
-            f" TOT  "
-            f"{cat_data['totacc'][1]:>7,}  {cat_data['totamt'][1]:>15,.2f}  "
-            f"{cat_data['totacc'][2]:>7,}  {cat_data['totamt'][2]:>15,.2f}  "
-            f"{cat_data['totacc'][3]:>7,}  {cat_data['totamt'][3]:>15,.2f}  "
-            f"{cat_data['totacc'][4]:>8,}  {cat_data['totamt'][4]:>17,.2f}  "
-            f"{cat_data['totacc'][5]:>8,}  {cat_data['totamt'][5]:>17,.2f}\n"
-        )
-        output_file.write(
-            f"        "
-            f"{cat_data['totacc'][6]:>7,}  {cat_data['totamt'][6]:>15,.2f}  "
-            f"{cat_data['totacc'][7]:>7,}  {cat_data['totamt'][7]:>15,.2f}  "
-            f"{cat_data['totacc'][8]:>7,}  {cat_data['totamt'][8]:>15,.2f}  "
-            f"{cat_data['totacc'][9]:>8,}  {cat_data['totamt'][9]:>17,.2f}  "
-            f"{cat_data['totacc'][10]:>8,}  {cat_data['totamt'][10]:>17,.2f}\n"
-        )
-        output_file.write(
-            f"        "
-            f"{cat_data['totacc'][11]:>7,}  {cat_data['totamt'][11]:>15,.2f}  "
-            f"{cat_data['totacc'][12]:>7,}  {cat_data['totamt'][12]:>15,.2f}  "
-            f"{cat_data['totacc'][13]:>7,}  {cat_data['totamt'][13]:>15,.2f}  "
-            f"{cat_data['totacc'][14]:>8,}  {cat_data['totamt'][14]:>17,.2f}  "
-            f"{cat_data['totacc'][15]:>8,}  {cat_data['totamt'][15]:>17,.2f}\n"
-        )
-        output_file.write(
-            f"        "
-            f"{cat_data['sgtotacc']:>7,}  {cat_data['sgtotbrh']:>15,.2f}  "
-            f"{cat_data['sgtotac2']:>8,}  {cat_data['sgtotbr2']:>17,.2f}  "
-            f"{cat_data['gtotacc']:>8,}  {cat_data['gtotbrh']:>17,.2f}\n"
-        )
-        output_file.write(" ----------------------------------------------------------------------------------------------------------------------------------\n\n")
+        # Add category totals
+        report_data.append({
+            "REPORT_TYPE": f"{report_type}_TOTAL",
+            "CATEGORY": cat,
+            "PROGID": f"EIMAR103-{report_type[-1]}",
+            "BRANCH": "TOTAL",
+            "BRHCODE": "",
+            **{f"NOACC{i}": cat_data["totacc"][i] for i in range(1, 15)},
+            **{f"BRHAMT{i}": cat_data["totamt"][i] for i in range(1, 15)},
+            "SUBBRH": cat_data["sgtotbrh"],
+            "SUBBR2": cat_data["sgtotbr2"],
+            "SUBACC": cat_data["sgtotacc"],
+            "SUBAC2": cat_data["sgtotac2"],
+            "TOTBRH": cat_data["gtotbrh"],
+            "SOTACC": cat_data["gtotacc"]
+        })
+    
+    if report_data:
+        df = pl.DataFrame(report_data)
+        df.write_parquet(OUTPUT_PATH / f"NPL_{report_type}_REPORT.parquet")
+        print(f"âœ“ NPL {report_type} report saved: {len(df)} records")
+
+# ============================================================================
+# 5. NPL Specific Analysis
+# ============================================================================
+
+def analyze_npl_characteristics(loan_df: pl.DataFrame) -> Dict:
+    """Analyze NPL characteristics by category"""
+    
+    analysis_results = {}
+    
+    for cat in loan_df["CAT"].unique().to_list():
+        cat_data = loan_df.filter(pl.col("CAT") == cat)
+        
+        # Count by NPL reason
+        npl_by_reason = {
+            "ARREAR2_GT_3": len(cat_data.filter(pl.col("ARREAR2") > 3)),
+            "BORSTAT_RIF": len(cat_data.filter(pl.col("BORSTAT").is_in(["R", "I", "F"]))),
+            "CENSUS9_9": len(cat_data.filter(pl.col("CENSUS9") == "9")),
+            "USER5_N": len(cat_data.filter(pl.col("USER5") == "N"))
+        }
+        
+        # Overlap analysis (accounts may have multiple reasons)
+        total_accounts = len(cat_data)
+        
+        # Arrears distribution for NPL
+        arrears_dist = {}
+        for arrear in range(1, 15):
+            count = len(cat_data.filter(pl.col("ARREAR2") == arrear))
+            if count > 0:
+                arrears_dist[f"ARREAR{arrear}"] = count
+        
+        # Borrower status distribution
+        borstat_dist = cat_data.group_by("BORSTAT").agg(pl.count().alias("COUNT"))
+        
+        analysis_results[cat] = {
+            "total_accounts": total_accounts,
+            "total_balance": cat_data["BALANCE"].sum(),
+            "npl_by_reason": npl_by_reason,
+            "arrears_distribution": arrears_dist,
+            "borrower_status": borstat_dist.to_dicts(),
+            "avg_balance": cat_data["BALANCE"].mean() if total_accounts > 0 else 0
+        }
+    
+    return analysis_results
 
 # ============================================================================
 # 6. Main Execution
@@ -521,99 +353,184 @@ def generate_15_bucket_report_sas_format(results: Dict, variables: Dict, output_
 def main():
     """Main execution function"""
     print("=" * 60)
-    print("EIMIR102 SAS to Python Conversion")
+    print("EIMIR103 SAS to Python Conversion - NPL Report")
     print("=" * 60)
     
+    # HPD list (would come from macro variable &HPD)
     HPD_LIST = ["110", "115", "700", "705"]
     
     # 1. Process REPTDATE
     print("\n1. Processing REPTDATE...")
     variables = process_repdate()
     print(f"   Report Date: {variables['RDATE']}")
-    print(f"   Day of Month: {variables['REPTDAY']}")
     
-    # 2. Load data
-    print("\n2. Loading data...")
-    loan_df = load_loan_data()
+    # 2. Load and sort loan data
+    print("\n2. Loading and sorting loan data...")
+    loan_path = INPUT_PATH / "BNM/LOANTEMP.parquet"
+    loan_df = pl.read_parquet(loan_path).sort(["BRANCH", "ARREAR2"])
     branch_df = load_branch_data()
-    print(f"   Loans: {len(loan_df)}, Branches: {len(branch_df)}")
+    print(f"   Total loans: {len(loan_df)}")
+    print(f"   Total branches: {len(branch_df)}")
     
-    # 3. Categorize loans
-    print("\n3. Categorizing loans...")
-    categorized = categorize_loans(loan_df, HPD_LIST)
-    print(f"   Categorized records: {len(categorized)}")
+    # 3. Categorize NPL loans (stricter criteria)
+    print("\n3. Categorizing NPL loans...")
+    npl_categorized = categorize_npl_loans(loan_df, HPD_LIST)
+    print(f"   NPL candidates: {len(npl_categorized)}")
     
     # 4. Merge with branch data
     print("\n4. Merging with branch data...")
+    merged_npl = npl_categorized.join(
+        branch_df,
+        on="BRANCH",
+        how="inner"
+    ).sort(["CAT", "BRANCH", "ARREAR2"])
+    print(f"   Merged NPL records: {len(merged_npl)}")
     
-    # Create branch mapping
-    if len(branch_df) > 0:
-        branch_codes = branch_df["BRHCODE"].to_list()
-        branch_map = {i+1: code for i, code in enumerate(branch_codes)}
-        merged_data = categorized.with_columns(
-            pl.col("BRANCH").map_elements(
-                lambda x: branch_map.get(x, ""), 
-                return_dtype=pl.Utf8
-            ).alias("BRHCODE")
-        )
-    else:
-        merged_data = categorized.with_columns(pl.lit("").alias("BRHCODE"))
+    # Save NPL data
+    merged_npl.write_parquet(OUTPUT_PATH / "NPL_LOANS_CATEGORIZED.parquet")
     
-    print(f"   Merged records: {len(merged_data)}")
+    # 5. Generate Report A (All NPL data)
+    print("\n5. Generating Report A (EIMAR103-A)...")
+    report_a = generate_npl_report_a(merged_npl, variables)
+    results_a = calculate_npl_summaries(report_a)
+    create_npl_summary_output(results_a, "A", variables)
     
-    # 5. Generate reports in SAS format
-    print("\n5. Generating reports in SAS format...")
+    # 6. Generate Report B (Exclusions)
+    print("\n6. Generating Report B (EIMAR103-B)...")
+    report_b = generate_npl_report_b(merged_npl, variables, HPD_LIST)
+    results_b = calculate_npl_summaries(report_b)
+    create_npl_summary_output(results_b, "B", variables)
     
-    # Open output file in append mode (like SAS CCDTXT2 with DISP=MOD)
-    output_file = OUTPUT_PATH / "CCDTXT2_REPORT.txt"
+    # 7. Analyze NPL characteristics
+    print("\n7. Analyzing NPL characteristics...")
+    npl_analysis = analyze_npl_characteristics(merged_npl)
     
-    with open(output_file, 'w') as f:
-        # 17-bucket report (EIMAR102-A)
-        print("   Generating 17-bucket report (EIMAR102-A)...")
-        results_17 = calculate_17_bucket_summaries(merged_data)
-        generate_17_bucket_report_sas_format(results_17, variables, f)
-        print(f"   Categories processed: {len(results_17)}")
-        
-        # 15-bucket report only on day 15 (EIMAR102-B)
-        if variables['REPTDAY'] == '15':
-            print("   Day 15 detected - Generating 15-bucket report (EIMAR102-B)...")
-            results_15 = calculate_15_bucket_summaries(merged_data)
-            generate_15_bucket_report_sas_format(results_15, variables, f)
-            print(f"   Categories processed: {len(results_15)}")
-        else:
-            print("   Not day 15 - Skipping 15-bucket report")
+    # Save analysis results
+    analysis_data = []
+    for cat, analysis in npl_analysis.items():
+        analysis_data.append({
+            "CATEGORY": cat,
+            "TOTAL_ACCOUNTS": analysis["total_accounts"],
+            "TOTAL_BALANCE": analysis["total_balance"],
+            "AVG_BALANCE": analysis["avg_balance"],
+            "NPL_ARREAR_GT_3": analysis["npl_by_reason"]["ARREAR2_GT_3"],
+            "NPL_BORSTAT_RIF": analysis["npl_by_reason"]["BORSTAT_RIF"],
+            "NPL_CENSUS9_9": analysis["npl_by_reason"]["CENSUS9_9"],
+            "NPL_USER5_N": analysis["npl_by_reason"]["USER5_N"]
+        })
     
-    print(f"\n✓ Report saved to: {output_file}")
+    if analysis_data:
+        analysis_df = pl.DataFrame(analysis_data)
+        analysis_df.write_parquet(OUTPUT_PATH / "NPL_ANALYSIS.parquet")
+        print(f"âœ“ NPL analysis saved: {len(analysis_df)} categories")
     
-    # 6. Summary statistics
-    print("\n6. Creating summary statistics...")
-    summary_file = OUTPUT_PATH / "SUMMARY_STATISTICS.txt"
-    with open(summary_file, 'w') as f:
-        f.write("=" * 80 + "\n")
-        f.write("EIMIR102 - Summary Statistics\n")
-        f.write(f"Report Date: {variables['RDATE']}\n")
-        f.write("=" * 80 + "\n\n")
-        
-        for cat in sorted(merged_data["CAT"].unique().to_list()):
-            cat_data = merged_data.filter(pl.col("CAT") == cat)
-            total_balance = cat_data["BALANCE"].sum()
-            total_accounts = len(cat_data)
-            avg_balance = total_balance / total_accounts if total_accounts > 0 else 0
-            
-            f.write(f"Category {cat}: {cat_data['TYPE'][0]}\n")
-            f.write(f"  Total Accounts: {total_accounts:,}\n")
-            f.write(f"  Total Balance: {total_balance:,.2f}\n")
-            f.write(f"  Average Balance: {avg_balance:,.2f}\n\n")
+    # 8. Create summary statistics
+    print("\n8. Creating summary statistics...")
     
-    print(f"✓ Summary statistics saved: {summary_file}")
+    # Overall NPL statistics
+    total_npl_accounts = len(merged_npl)
+    total_npl_balance = merged_npl["BALANCE"].sum()
+    avg_npl_balance = total_npl_balance / total_npl_accounts if total_npl_accounts > 0 else 0
+    
+    # NPL by arrears bucket
+    npl_by_arrears = merged_npl.group_by("ARREAR2").agg([
+        pl.count().alias("ACCOUNT_COUNT"),
+        pl.sum("BALANCE").alias("TOTAL_BALANCE")
+    ]).sort("ARREAR2")
+    
+    npl_by_arrears.write_parquet(OUTPUT_PATH / "NPL_BY_ARREARS.parquet")
+    
+    # Save summary
+    summary = pl.DataFrame([{
+        "REPORT_DATE": variables["RDATE"],
+        "TOTAL_NPL_ACCOUNTS": total_npl_accounts,
+        "TOTAL_NPL_BALANCE": total_npl_balance,
+        "AVG_NPL_BALANCE": avg_npl_balance,
+        "NPL_CATEGORIES": len(npl_analysis),
+        "MAX_ARREAR": merged_npl["ARREAR2"].max() if total_npl_accounts > 0 else 0,
+        "AVG_ARREAR": merged_npl["ARREAR2"].mean() if total_npl_accounts > 0 else 0
+    }])
+    summary.write_parquet(OUTPUT_PATH / "NPL_SUMMARY.parquet")
+    
+    # 9. Save variables
+    variables_df = pl.DataFrame([variables])
+    variables_df.write_parquet(OUTPUT_PATH / "EIMIR103_VARIABLES.parquet")
     
     print("\n" + "=" * 60)
     print("CONVERSION COMPLETE")
     print("=" * 60)
-    print(f"Total loan records: {len(loan_df)}")
-    print(f"Categorized records: {len(merged_data)}")
-    print(f"Report day: {variables['REPTDAY']}")
+    print(f"Total loans processed: {len(loan_df)}")
+    print(f"NPL accounts identified: {total_npl_accounts}")
+    print(f"NPL balance: {total_npl_balance:,.2f}")
+    print(f"Categories: {len(npl_analysis)}")
     print(f"Output saved to: {OUTPUT_PATH}")
+
+# ============================================================================
+# 7. Run the conversion
+# ============================================================================
 
 if __name__ == "__main__":
     main()
+
+
+remove the reptdate, use datetime timedelta - 1 instead. loantemp.sas7bdat, use pyreadstat to read. branch input is LKP_BRANCH (flatfile no extension). output in textfile. output need to also have a textfile which appends to below existing output format (CCDTXT2)
+
+1PROGRAM-ID : EIMAR101-A                   P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: 1    
+                                             OUTSTANDING LOANS IN ARREARS (AITAB)       30/06/26                                     
+0BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       NO      3 TO < 4 MTH       NO      4 TO < 5 MTH  
+        NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       NO      8 TO < 9 MTH       NO     9 TO < 12 MTH  
+        NO   12 TO < 18 MTH      NO   18 TO < 24 MTH      NO   24 TO < 36 MTH       NO          > 36 MTH       NO   SUBTOTAL >=3MTH  
+                                                                                    NO   SUBTOTAL >=6MTH       NO             TOTAL  
+ ----------------------------------------------------------------------------------------------------------------------------------  
+ 013       3         3,223.56       0            0.00       1       21,453.08        0              0.00        0              0.00  
+ KBU       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00        4         24,676.64  
+ 014     217     4,874,779.08      16      433,207.97      11      288,522.21        0              0.00        0              0.00  
+ TMH       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00      244      5,596,509.26  
+ 017      19        15,001.71       0            0.00       0            0.00        0              0.00        0              0.00  
+ TPN       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00       19         15,001.71  
+ 027      13         4,345.72       0            0.00       0            0.00        0              0.00        0              0.00  
+ NTL       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00       13          4,345.72  
+ 029       1           134.40       0            0.00       0            0.00        0              0.00        0              0.00  
+ JRL       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00        1            134.40  
+ 031      49       261,811.66       2       17,467.30       1       19,722.92        0              0.00        0              0.00  
+ SKC       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00       52        299,001.88  
+ 048       3         1,275.49       0            0.00       0            0.00        0              0.00        0              0.00  
+ MTK       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00        3          1,275.49  
+ 049       3        19,092.98       0            0.00       0            0.00        0              0.00        0              0.00  
+ JLP       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00        3         19,092.98  
+ 052       3        22,353.26       0            0.00       0            0.00        0              0.00        0              0.00  
+ UTM       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00        3         22,353.26  
+ 055     587    25,558,566.89      15      626,265.68       3      168,395.16        0              0.00        0              0.00  
+ LBN       0             0.00       0            0.00       1       44,333.86        0              0.00        0              0.00  
+           1        21,025.09       0            0.00       0            0.00        0              0.00        2         65,358.95  
+                                                                                     2         65,358.95      607     26,418,586.68  
+ 059      16       165,615.39       0            0.00       1       91,240.54        0              0.00        0              0.00  
+ PKL       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00       17        256,855.93  
+ 063       7        45,921.75       0            0.00       0            0.00        0              0.00        0              0.00  
+ GMS       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00        7         45,921.75  
+ 065      49       896,782.36       1       39,493.77       0            0.00        0              0.00        0              0.00  
+ BHU       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
+                                                                                     0              0.00       50        936,276.13 
