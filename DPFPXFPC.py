@@ -10,7 +10,7 @@ import pyreadstat
 from datetime import date, timedelta
 import os
 import gc
-import subprocess
+import sys
 
 # ============================================================
 # 1. REPORT DATE LOGIC (SAS REPTDATE)
@@ -134,35 +134,48 @@ crl.to_parquet(
 print(f"  ✓ Parquet file size: {os.path.getsize(OUTPUT_PARQUET) / (1024**2):.2f} MB")
 
 # ============================================================
-# 8. WRITE OUTPUT AS SAS DATASET USING SASPY
+# 8. WRITE OUTPUT AS SAS DATASET USING SASPY (IMPROVED)
 # ============================================================
 
-def write_sas_dataset(df, output_path):
-    """Write DataFrame to SAS dataset using saspy"""
+def write_sas_with_saspy(df, output_path):
+    """Write DataFrame to SAS dataset using saspy with improved method"""
+    
+    # Check if saspy is available
     try:
         import saspy
-        print(f"\nCreating SAS dataset: {output_path}")
-        
-        # Start SAS session
+    except ImportError:
+        print("\n✗ saspy not installed. Skipping SAS dataset creation.")
+        return False
+    
+    print(f"\nCreating SAS dataset using saspy...")
+    
+    try:
+        # Start SAS session with verbose logging for debugging
+        print("  Starting SAS session...")
         sas = saspy.SASsession()
         
         # Convert REPTDATE to SAS date (numeric days since 1960-01-01)
         df_sas = df.copy()
         df_sas['REPTDATE'] = (REPTDATE - date(1960, 1, 1)).days
         
-        # Write to SAS WORK library
+        # Define SAS library for output
+        # Use the actual output directory as a SAS library
+        sas.submit(f'''
+            libname outlib "{OUTPUT_BASE}";
+        ''')
+        
+        # Write DataFrame directly to the permanent library
+        print(f"  Writing {len(df_sas):,} records to SAS dataset...")
         sas.dataframe2sasdata(
             df_sas,
             table='MFRS',
-            libref='WORK'
+            libref='outlib'  # Write directly to the output library
         )
         
-        # Copy to permanent location with proper libname
+        # Add formats and labels
         sas.submit(f'''
-            libname outlib "{OUTPUT_BASE}";
-            
             data outlib.MFRS;
-                set work.MFRS;
+                set outlib.MFRS;
                 format REPTDATE date9.;
             run;
             
@@ -177,44 +190,73 @@ def write_sas_dataset(df, output_path):
             quit;
         ''')
         
-        sas.endsas()
-        
-        # Verify file was created
+        # Verify the file was created
         if os.path.exists(output_path):
-            print(f"  ✓ SAS dataset created: {output_path}")
-            print(f"  ✓ SAS file size: {os.path.getsize(output_path) / (1024**2):.2f} MB")
+            file_size_mb = os.path.getsize(output_path) / (1024**2)
+            print(f"  ✓ SAS dataset created successfully!")
+            print(f"  ✓ File: {output_path}")
+            print(f"  ✓ Size: {file_size_mb:.2f} MB")
+            sas.endsas()
             return True
         else:
-            print(f"  ✗ SAS dataset not found at {output_path}")
+            print(f"  ✗ SAS dataset not found at: {output_path}")
+            # Check if it was created with a different name
+            print("  Checking for alternative filenames...")
+            for file in os.listdir(OUTPUT_BASE):
+                if file.endswith('.sas7bdat'):
+                    print(f"    Found: {file}")
+                    # Rename if needed
+                    if file != os.path.basename(output_path):
+                        alt_path = os.path.join(OUTPUT_BASE, file)
+                        print(f"    Renaming {file} to MFRS.sas7bdat...")
+                        os.rename(alt_path, output_path)
+                        print(f"  ✓ Renamed to: {output_path}")
+                        sas.endsas()
+                        return True
+            
+            # If we get here, check SAS log for errors
+            print("  Checking SAS log for errors...")
+            log = sas.lastLOG()
+            if log:
+                print("  SAS Log (last 20 lines):")
+                log_lines = log.split('\n')
+                for line in log_lines[-20:]:
+                    if line.strip():
+                        print(f"    {line}")
+            
+            sas.endsas()
             return False
             
-    except ImportError:
-        print("\n✗ saspy not available. SAS dataset will not be created.")
-        print("  To install: pip install saspy")
-        print("  Note: saspy requires SAS installed on the system")
-        return False
     except Exception as e:
-        print(f"\n✗ Error creating SAS dataset: {e}")
+        print(f"  ✗ Error creating SAS dataset: {e}")
+        print(f"  Error type: {type(e).__name__}")
         return False
 
-# Try to write SAS dataset
-sas_success = write_sas_dataset(crl, OUTPUT_SAS)
+# Try to create SAS dataset with saspy
+sas_created = write_sas_with_saspy(crl, OUTPUT_SAS)
 
 # ============================================================
-# 9. ALTERNATIVE: Use SAS script if saspy fails
+# 9. FALLBACK: SAS Script Method (if saspy fails)
 # ============================================================
 
-if not sas_success:
-    print("\nCreating SAS import script as fallback...")
+if not sas_created:
+    print("\n" + "="*60)
+    print("SASPY failed. Creating SAS script as fallback...")
+    print("="*60)
     
-    # Write temporary CSV for SAS import
+    # Write temporary CSV
     temp_csv = f"{OUTPUT_BASE}/temp_mfrs.csv"
+    print(f"  Writing temporary CSV: {temp_csv}")
     crl.to_csv(temp_csv, index=False, sep='|')
+    print(f"  ✓ Temporary CSV created ({os.path.getsize(temp_csv) / (1024**2):.2f} MB)")
     
-    # Create SAS script
-    sas_script = f'''/* SAS script to create MFRS.sas7bdat */
+    # Create SAS script that will create the SAS dataset and clean up
+    sas_script = f'''/* SAS script to create MFRS.sas7bdat from CSV */
+/* Generated: {date.today().strftime('%Y-%m-%d %H:%M:%S')} */
+
 libname outlib "{OUTPUT_BASE}";
 
+/* Import CSV */
 proc import datafile="{temp_csv}"
     out=outlib.MFRS
     dbms=dlm
@@ -224,11 +266,13 @@ proc import datafile="{temp_csv}"
     guessingrows=100000;
 run;
 
+/* Format date properly */
 data outlib.MFRS;
     set outlib.MFRS;
     format REPTDATE date9.;
 run;
 
+/* Add labels */
 proc datasets lib=outlib;
     modify MFRS;
     label 
@@ -239,14 +283,27 @@ proc datasets lib=outlib;
     ;
 quit;
 
-/* Clean up temp file */
+/* Clean up temporary CSV file */
 data _null_;
     rc = filename('tempfile', "{temp_csv}");
-    rc = fdelete('tempfile');
+    if rc = 0 then do;
+        rc = fdelete('tempfile');
+        if rc = 0 then 
+            put "✓ Temporary CSV file deleted successfully";
+        else
+            put "✗ Failed to delete temporary CSV file";
+    end;
 run;
 
+/* Verify output */
+proc contents data=outlib.MFRS;
+run;
+
+%put ==========================================;
 %put SAS dataset created successfully!;
+%put Dataset: {OUTPUT_SAS};
 %put Total records: {len(crl):,};
+%put ==========================================;
 '''
     
     sas_script_path = f"{OUTPUT_BASE}/create_sas.sas"
@@ -254,12 +311,13 @@ run;
         f.write(sas_script)
     
     print(f"  ✓ SAS script created: {sas_script_path}")
-    print(f"\nTo create SAS dataset, run:")
+    print("\n" + "="*60)
+    print("To create the SAS dataset, run:")
     print(f"  sas {sas_script_path}")
-    print(f"\nOr manually run the SAS script to convert to .sas7bdat")
+    print("="*60)
 
 # ============================================================
-# 10. PRINT SUMMARY
+# 10. FINAL SUMMARY
 # ============================================================
 
 print("\n" + "="*70)
@@ -274,14 +332,15 @@ print("Output files:")
 # Check Parquet
 if os.path.exists(OUTPUT_PARQUET):
     print(f"  ✓ Parquet : {OUTPUT_PARQUET}")
-else:
-    print(f"  ✗ Parquet : Not created")
+    print(f"    Size: {os.path.getsize(OUTPUT_PARQUET) / (1024**2):.2f} MB")
 
 # Check SAS
 if os.path.exists(OUTPUT_SAS):
     print(f"  ✓ SAS     : {OUTPUT_SAS}")
+    print(f"    Size: {os.path.getsize(OUTPUT_SAS) / (1024**2):.2f} MB")
 else:
-    print(f"  ⚠ SAS     : Not created (use SAS script to create)")
+    print(f"  ⚠ SAS     : Not created directly")
+    print(f"    Use SAS script to create: {OUTPUT_BASE}/create_sas.sas")
 
 print("="*70)
 
