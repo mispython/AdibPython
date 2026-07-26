@@ -16,7 +16,9 @@ import numpy as np
 BASE_PATH = Path(".")
 INPUT_PATH = BASE_PATH / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR101-104"
 OUTPUT_PATH = BASE_PATH / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR104"
+CCDTXT2_PATH = BASE_PATH / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR_CCDTXT2"
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+CCDTXT2_PATH.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
 # 1. REPTDATE Processing (using datetime - 1 day)
@@ -205,7 +207,7 @@ def generate_ccdtxt2_report(npl_df: pl.DataFrame, branch_df: pl.DataFrame,
             "total_amount": total_amount
         })
     
-    # Generate text output
+    # Generate text output - append to existing file
     with open(output_file, 'a') as f:  # 'a' for append mode
         # Header page
         _write_report_header(f, prog_id, category_type, report_date)
@@ -385,21 +387,40 @@ def main():
     npl_categorized = categorize_npl_loans_17bucket(loan_df, HPD_LIST)
     print(f"   NPL candidates: {len(npl_categorized)}")
     
-    # 5. Generate CCDTXT2 reports by category
-    print("\n5. Generating CCDTXT2 reports by category...")
+    # 5. Generate CCDTXT2 report - append to existing CCDTXT2.txt
+    print("\n5. Generating CCDTXT2 report and appending to existing CCDTXT2.txt...")
+    ccdtxt2_output = CCDTXT2_PATH / "CCDTXT2.txt"
     
+    # Process each category and append to CCDTXT2.txt
+    for cat in sorted(npl_categorized["CAT"].unique().to_list()):
+        cat_data = npl_categorized.filter(pl.col("CAT") == cat)
+        cat_type = cat_data["TYPE"].drop_nulls().first() if len(cat_data["TYPE"].drop_nulls()) > 0 else ""
+        
+        print(f"   Appending {cat_type} report to CCDTXT2.txt...")
+        generate_ccdtxt2_report(
+            npl_df=cat_data,
+            branch_df=branch_df,
+            category_type=cat_type,
+            report_date=variables['REPTDATE_DISPLAY'],
+            prog_id=f"EIMAR104-{cat}",
+            output_file=ccdtxt2_output
+        )
+    
+    print(f"   ✓ Report appended to: {ccdtxt2_output}")
+    
+    # 6. Also save individual category reports in EIMIR104 output for reference
+    print("\n6. Saving individual category reports for reference...")
     for cat in npl_categorized["CAT"].unique().to_list():
         cat_data = npl_categorized.filter(pl.col("CAT") == cat)
         cat_type = cat_data["TYPE"].drop_nulls().first() if len(cat_data["TYPE"].drop_nulls()) > 0 else ""
         
-        # Create output file for this category (append mode)
+        # Create output file for this category (overwrite mode)
         output_file = OUTPUT_PATH / f"EIMIR104_{cat}_CCDTXT2.txt"
         
         # Clear file if exists, or create new
         if output_file.exists():
             output_file.unlink()
         
-        print(f"   Generating {cat_type} report...")
         generate_ccdtxt2_report(
             npl_df=cat_data,
             branch_df=branch_df,
@@ -408,29 +429,7 @@ def main():
             prog_id=f"EIMAR104-{cat}",
             output_file=output_file
         )
-        print(f"   ✓ Report saved: {output_file}")
-    
-    # 6. Generate combined report (all categories)
-    print("\n6. Generating combined CCDTXT2 report...")
-    combined_output = OUTPUT_PATH / "EIMIR104_COMBINED_CCDTXT2.txt"
-    if combined_output.exists():
-        combined_output.unlink()
-    
-    # Process each category and append to combined file
-    for cat in sorted(npl_categorized["CAT"].unique().to_list()):
-        cat_data = npl_categorized.filter(pl.col("CAT") == cat)
-        cat_type = cat_data["TYPE"].drop_nulls().first() if len(cat_data["TYPE"].drop_nulls()) > 0 else ""
-        
-        generate_ccdtxt2_report(
-            npl_df=cat_data,
-            branch_df=branch_df,
-            category_type=cat_type,
-            report_date=variables['REPTDATE_DISPLAY'],
-            prog_id=f"EIMAR104-{cat}",
-            output_file=combined_output
-        )
-    
-    print(f"   ✓ Combined report saved: {combined_output}")
+        print(f"   ✓ Reference report saved: {output_file}")
     
     # 7. Save supporting data files
     print("\n7. Saving supporting data files...")
@@ -449,8 +448,8 @@ def main():
     print(f"Total loans processed: {len(loan_df)}")
     print(f"NPL accounts identified: {len(npl_categorized)}")
     print(f"Categories: {npl_categorized['CAT'].n_unique()}")
-    print(f"Output format: CCDTXT2 (text file)")
-    print(f"Output saved to: {OUTPUT_PATH}")
+    print(f"Output appended to: {ccdtxt2_output}")
+    print(f"Reference reports saved to: {OUTPUT_PATH}")
 
 # ============================================================================
 # 5. Run the conversion
