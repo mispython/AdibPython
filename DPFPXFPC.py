@@ -1,14 +1,13 @@
 # ============================================================
 # JOB NAME : EIBNMMFR (Python)
-# INPUT    : Binary datasets
-# OUTPUT   : Parquet
+# INPUT    : SAS datasets (.sas7bdat)
+# OUTPUT   : SAS dataset (.sas7bdat) and Parquet
 # PURPOSE  : Replace JCL + SAS job
 # ============================================================
 
 import pandas as pd
-import pickle
+import pyreadstat
 from datetime import date, timedelta
-from ftplib import FTP
 import os
 
 # ============================================================
@@ -25,30 +24,45 @@ REPTDAY  = REPTDATE.strftime("%d")
 RDATE    = REPTDATE.strftime("%d%m%Y")
 
 # ============================================================
-# 2. INPUT BINARY FILE PATHS
-# (sas dataset)
+# 2. INPUT SAS DATASET PATHS
 # ============================================================
 
-PBB_ALM_CR_BIN   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pbb_alm_cr.sas7bdat"
-PBB_MAST_BR_BIN  = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pbb_mast_br.sas7bdat"
-PIBB_ALM_CR_BIN  = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pibb_alm_cr.sas7bdat"
-PIBB_MAST_BR_BIN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pibb_mast_br.sas7bdat"
+INPUT_BASE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR"
+
+PBB_ALM_CR_PATH   = f"{INPUT_BASE}/pbb_alm_cr.sas7bdat"
+PBB_MAST_BR_PATH  = f"{INPUT_BASE}/pbb_mast_br.sas7bdat"
+PIBB_ALM_CR_PATH  = f"{INPUT_BASE}/pibb_alm_cr.sas7bdat"
+PIBB_MAST_BR_PATH = f"{INPUT_BASE}/pibb_mast_br.sas7bdat"
 
 # ============================================================
-# 3. LOAD BINARY INPUT
+# 3. OUTPUT PATHS
 # ============================================================
 
-def load_binary(path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
+OUTPUT_BASE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/ioutput/EIBNMMFR"
 
-pbb_alm_cr   = load_binary(PBB_ALM_CR_BIN)
-pbb_mast_br  = load_binary(PBB_MAST_BR_BIN)
-pibb_alm_cr  = load_binary(PIBB_ALM_CR_BIN)
-pibb_mast_br = load_binary(PIBB_MAST_BR_BIN)
+# Create output directory if it doesn't exist
+os.makedirs(OUTPUT_BASE, exist_ok=True)
+
+OUTPUT_SAS   = f"{OUTPUT_BASE}/SAP.MTH.MFRS.BNM01.DTLFTP.sas7bdat"
+OUTPUT_PARQUET = f"{OUTPUT_BASE}/SAP.MTH.MFRS.BNM01.DTLFTP.parquet"
 
 # ============================================================
-# 4. FILTER + PREPARE DATA (SAS DATA STEP)
+# 4. LOAD SAS DATASETS WITH PYREADSTAT
+# ============================================================
+
+def load_sas(path):
+    """Load SAS dataset using pyreadstat"""
+    df, meta = pyreadstat.read_sas7bdat(path)
+    return df
+
+print("Loading SAS datasets...")
+pbb_alm_cr   = load_sas(PBB_ALM_CR_PATH)
+pbb_mast_br  = load_sas(PBB_MAST_BR_PATH)
+pibb_alm_cr  = load_sas(PIBB_ALM_CR_PATH)
+pibb_mast_br = load_sas(PIBB_MAST_BR_PATH)
+
+# ============================================================
+# 5. FILTER + PREPARE DATA (SAS DATA STEP)
 # ============================================================
 
 VALID_PRODESC = [
@@ -57,31 +71,49 @@ VALID_PRODESC = [
 ]
 
 def prepare_df(df1, df2):
+    """Combine two dataframes, filter, and add REPTDATE"""
     df = pd.concat([df1, df2], ignore_index=True)
     df = df[df["PRODESC"].isin(VALID_PRODESC)].copy()
-    df["REPTDATE"] = pd.to_datetime(REPTDATE)
+    df["REPTDATE"] = REPTDATE
     return df
 
-pbb  = prepare_df(pbb_alm_cr,  pbb_mast_br)
+print("Preparing PBB data...")
+pbb = prepare_df(pbb_alm_cr, pbb_mast_br)
+
+print("Preparing PIBB data...")
 pibb = prepare_df(pibb_alm_cr, pibb_mast_br)
 
 # ============================================================
-# 5. COMBINE PBB + PIBB
+# 6. COMBINE PBB + PIBB
 # ============================================================
 
+print("Combining datasets...")
 crl = pd.concat([pbb, pibb], ignore_index=True)
 
-crl = crl[
-    ["ACCTNO", "NOTENO", "PRODESC", "REPTDATE"]
-]
+# Keep only required columns
+crl = crl[["ACCTNO", "NOTENO", "PRODESC", "REPTDATE"]]
 
 # ============================================================
-# 6. WRITE OUTPUT AS PARQUET
-# (SAS: SAP.MTH.MFRS.BNM01.DTLFTP)
+# 7. WRITE OUTPUT AS SAS DATASET (.sas7bdat)
 # ============================================================
 
-OUTPUT_PARQUET = "SAP.MTH.MFRS.BNM01.DTLFTP.parquet"
+print(f"Writing SAS output to: {OUTPUT_SAS}")
+pyreadstat.write_sas7bdat(
+    crl,
+    OUTPUT_SAS,
+    column_labels={
+        "ACCTNO": "Account Number",
+        "NOTENO": "Note Number",
+        "PRODESC": "Product Description",
+        "REPTDATE": "Report Date"
+    }
+)
 
+# ============================================================
+# 8. WRITE OUTPUT AS PARQUET
+# ============================================================
+
+print(f"Writing Parquet output to: {OUTPUT_PARQUET}")
 crl.to_parquet(
     OUTPUT_PARQUET,
     engine="pyarrow",
@@ -89,13 +121,19 @@ crl.to_parquet(
     index=False
 )
 
+# ============================================================
+# 9. PRINT SUMMARY
+# ============================================================
 
+print("\n" + "="*60)
+print("EIBNMMFR job completed successfully!")
+print("="*60)
+print(f"Report Date    : {REPTDATE.strftime('%d-%b-%Y')}")
+print(f"Total records  : {len(crl):,}")
+print(f"SAS output     : {OUTPUT_SAS}")
+print(f"Parquet output : {OUTPUT_PARQUET}")
+print("="*60)
 
 # ============================================================
 # END OF JOB
 # ============================================================
-
-print("EIBNMMFR job completed successfully (Binary → Parquet).")
-
-
-input is in sas7bdat, can use pyreadstat. output in sas7bdat and parquet
