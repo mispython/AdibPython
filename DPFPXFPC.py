@@ -1,328 +1,228 @@
-#!/usr/bin/env python3
-"""
-EIMIR202 - NPL HIRE PURCHASE DIRECT REPORT
-1:1 CONVERSION FROM SAS TO PYTHON
-REPORTS OUTSTANDING LOANS CLASSIFIED AS NPL FOR HP DIRECT PRODUCTS
-ISSUED FROM 1 JAN 1998, CATEGORIZED BY PRODUCT TYPE AND ARREARS BUCKET
-"""
+TITLE;
+OPTIONS NONUMBER NODATE SORTDEV=3390 YEARCUTOFF=1950;
 
-import duckdb
-from pathlib import Path
-from datetime import datetime, timedelta
-import pyreadstat
+DATA _NULL_;
+  SET BNM.REPTDATE;
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
+RUN;
 
-# INITIALIZE PATHS
-INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR202")
-OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR202")
+DATA BRHDATA;
+  INFILE BRHFILE LRECL=80;
+  INPUT @2 BRANCH  3.
+        @6 BRHCODE $3.;
+RUN;
 
-# CREATE DIRECTORIES
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+*+---------------------------------------------------------------+
+ |  THIS PART IS FOR HP DIRECT                                   |
+ +---------------------------------------------------------------+;
+DATA LOAN1;
+  FORMAT TYPE  $13.;
+  SET BNM.LOANTEMP;
+  IF ARREAR > 6 OR BORSTAT = 'R' OR BORSTAT = 'I'
+     OR BORSTAT = 'F'   THEN DO;
+     IF (PRODUCT = 380 OR PRODUCT = 381 OR
+         PRODUCT = 700 OR PRODUCT = 705) AND CHECKDT = 1   THEN DO;
+        CAT  = 'A';
+        TYPE = '(HPD-C)';
+        OUTPUT;
+     END;
+     IF (PRODUCT = 380 OR PRODUCT = 381) AND CHECKDT = 1    THEN DO;
+        CAT  = 'B';
+        TYPE = '(HP 380/381)';
+        OUTPUT;
+     END;
+     IF (PRODUCT = 128 OR PRODUCT = 130) AND CHECKDT = 1    THEN DO;
+        CAT  = 'C';
+        TYPE = '(AITAB)';
+        OUTPUT;
+     END;
+     IF (PRODUCT = 128 OR PRODUCT = 130  OR
+        PRODUCT = 380 OR PRODUCT = 381  OR
+        PRODUCT = 700 OR PRODUCT = 705) AND CHECKDT = 1   THEN DO;
+        CAT  = 'D';
+        TYPE = '(-HPD-)';
+        OUTPUT;
+     END;
+  END;
+RUN;
 
-# CONNECT TO DUCKDB
-con = duckdb.connect(":memory:")
+PROC SORT DATA=LOAN1; BY BRANCH;
 
-print("="*80)
-print("EIMIR202 - NPL HIRE PURCHASE DIRECT REPORT")
-print("="*80)
+DATA LOAN1;
+  MERGE LOAN1(IN=PRESENT) BRHDATA;
+  BY BRANCH;
+  IF PRESENT=1 THEN OUTPUT LOAN1;
+RUN;
 
-# ============================================================================
-# SET REPORT DATE (YESTERDAY)
-# ============================================================================
-REPTDATE = datetime.now().date() - timedelta(days=1)
-RDATE = REPTDATE.strftime('%d%m%Y')
-REPTYEAR = str(REPTDATE.year)
-REPTMON = str(REPTDATE.month).zfill(2)
-REPTDAY = str(REPTDATE.day).zfill(2)
+PROC SORT DATA=LOAN1; BY CAT BRANCH;
 
-print(f"REPORT DATE: {REPTDATE}")
-print(f"RDATE: {RDATE}")
+DATA TRY;
+  ARRAY BRHAMT{17} BRHAMT1-BRHAMT17;
+  ARRAY NOACC{17}  NOACC1-NOACC17;
+  ARRAY TOTAMT{17} TOTAMT1-TOTAMT17;
+  ARRAY TOTACC{17} TOTACC1-TOTACC17;
+  SET LOAN1 END=LAST;
+  BY CAT BRANCH;
 
-# ============================================================================
-# READ BRANCH DATA (LKP_BRANCH - FLAT FILE)
-# ============================================================================
-BRANCH_FILE = INPUT_DIR / "LKP_BRANCH"
+  FILE CCDTXT3 HEADER=NEWPAGE;
 
-if not BRANCH_FILE.exists():
-    print(f"ERROR: BRANCH FILE NOT FOUND: {BRANCH_FILE}")
-    exit(1)
+  IF FIRST.CAT    THEN DO;
+     PUT _PAGE_;
+     SGTOTBRH = 0;
+     SGTOTBR2 = 0;
+     SGTOTACC = 0;
+     SGTOTAC2 = 0;
+     GTOTBRH  = 0;
+     GTOTACC  = 0;
+     DO I = 1 TO 17;
+        TOTAMT(I) = 0;
+        BRHAMT(I) = 0;
+        TOTACC(I) = 0;
+        NOACC(I)  = 0;
+     END;
+  END;
 
-# Read flat file - assuming space or tab delimited
-with open(BRANCH_FILE, 'r') as f:
-    lines = f.readlines()
+  IF FIRST.BRANCH THEN DO;
+     DO I = 1 TO 17;
+        BRHAMT(I)=0;
+        NOACC(I) =0;
+     END;
+     SUBBRH =0;   SUBACC=0;
+     SUBBR2 =0;   SUBAC2=0;
+     TOTBRH =0;   SOTACC=0;
+  END;
 
-# Parse flat file - adjust based on your actual format
-branch_data = []
-for line in lines:
-    line = line.strip()
-    if line:
-        parts = line.split()
-        if len(parts) >= 2:
-            branch_data.append((str(parts[0]).strip(), str(parts[1]).strip()))
+  IF BALANCE GT 0   THEN DO;
+     BRHAMT(ARREAR) + BALANCE;
+     /* IF PRODUCT IN (110,115,700,705)   THEN DO;
+        IF BALANCE GT 200  THEN NOACC(ARREAR) + 1;
+     END; ELSE */   NOACC(ARREAR) + 1;
+  END;
 
-# Create branch table with VARCHAR type for BRANCH
-con.execute("""
-    CREATE OR REPLACE TABLE BRHDATA (
-        BRANCH VARCHAR,
-        BRHCODE VARCHAR
-    )
-""")
+  IF LAST.BRANCH THEN DO;
+     DO I = 1 TO 17;
+        TOTAMT(I) + BRHAMT(I);
+        TOTACC(I) + NOACC(I);
+     END;
 
-for branch, brhcode in branch_data:
-    con.execute(f"INSERT INTO BRHDATA VALUES ('{branch}', '{brhcode}')")
+     SUBBRH = SUM(BRHAMT4,BRHAMT5,BRHAMT6,BRHAMT7,BRHAMT8,BRHAMT9,
+                  BRHAMT10,BRHAMT11,BRHAMT12,BRHAMT13,
+                  BRHAMT14,BRHAMT15,BRHAMT16,BRHAMT17);
+     SUBBR2 = SUBBRH - BRHAMT4 - BRHAMT5 - BRHAMT6;
+     SUBACC = SUM(NOACC4,NOACC5,NOACC6,NOACC7,NOACC8,NOACC9,NOACC10,
+                  NOACC11,NOACC12,NOACC13,NOACC14,
+                  NOACC15,NOACC16,NOACC17);
+     SUBAC2 = SUBACC - NOACC4 - NOACC5 - NOACC6;
+     TOTBRH = SUM(SUBBRH,BRHAMT1,BRHAMT2,BRHAMT3);
+     SOTACC = SUM(SUBACC,NOACC1,NOACC2,NOACC3);
 
-branch_count = con.execute("SELECT COUNT(*) FROM BRHDATA").fetchone()[0]
-print(f"BRANCH RECORDS: {branch_count:,}")
+     PUT  @1   BRANCH Z3.
+          @5   NOACC1 COMMA7.0  @13  BRHAMT1 COMMA16.2
+          @30  NOACC2 COMMA7.0  @38  BRHAMT2 COMMA15.2
+          @54  NOACC3 COMMA7.0  @62  BRHAMT3 COMMA15.2
+          @78  NOACC4 COMMA8.0  @87  BRHAMT4 COMMA17.2
+          @105 NOACC5 COMMA8.0  @114 BRHAMT5 COMMA17.2;
+     PUT  @1   BRHCODE
+          @5   NOACC6 COMMA7.0  @13  BRHAMT6 COMMA16.2
+          @30  NOACC7 COMMA7.0  @38  BRHAMT7 COMMA15.2
+          @54  NOACC8 COMMA7.0  @62  BRHAMT8 COMMA15.2
+          @78  NOACC9 COMMA8.0  @87  BRHAMT9 COMMA17.2
+          @105 NOACC10 COMMA8.0 @114 BRHAMT10 COMMA17.2;
+     PUT  @5   NOACC11 COMMA7.0 @13  BRHAMT11 COMMA16.2
+          @30  NOACC12 COMMA7.0 @38  BRHAMT12 COMMA15.2
+          @54  NOACC13 COMMA7.0 @62  BRHAMT13 COMMA15.2
+          @78  NOACC14 COMMA8.0 @87  BRHAMT14 COMMA17.2
+          @105 NOACC15 COMMA8.0 @114 BRHAMT15 COMMA17.2;
+     PUT  @5   NOACC16 COMMA7.0 @13  BRHAMT16 COMMA16.2
+          @30  NOACC17 COMMA7.0 @38  BRHAMT17 COMMA15.2
+          @54  SUBACC  COMMA7.0 @62  SUBBRH   COMMA15.2
+          @78  SUBAC2  COMMA8.0 @87  SUBBR2   COMMA17.2
+          @105 SOTACC  COMMA8.0 @114 TOTBRH   COMMA17.2;
+  END;
 
-# ============================================================================
-# READ LOAN DATA (LOANTEMP.sas7bdat)
-# ============================================================================
-LOANTEMP_FILE = INPUT_DIR / "loantemp.sas7bdat"
+  IF LAST.CAT THEN DO;
+     SGTOTBRH = SUM(TOTAMT4,TOTAMT5,TOTAMT6,TOTAMT7,TOTAMT8,TOTAMT9,
+                    TOTAMT10,TOTAMT11,TOTAMT12,TOTAMT13,
+                    TOTAMT14,TOTAMT15,TOTAMT16,TOTAMT17);
+     SGTOTBR2 = SGTOTBRH - TOTAMT4 - TOTAMT5 - TOTAMT6;
+     SGTOTACC = SUM(TOTACC4,TOTACC5,TOTACC6,TOTACC7,TOTACC8,
+                    TOTACC9,TOTACC10,TOTACC11,TOTACC12,
+                    TOTACC13,TOTACC14,TOTACC15,TOTACC16,TOTACC17);
+     SGTOTAC2 = SGTOTACC - TOTACC4 - TOTACC5 - TOTACC6;
+     GTOTBRH  = SUM(SGTOTBRH,TOTAMT1,TOTAMT2,TOTAMT3);
+     GTOTACC  = SUM(SGTOTACC,TOTACC1,TOTACC2,TOTACC3);
 
-if not LOANTEMP_FILE.exists():
-    print(f"ERROR: LOANTEMP FILE NOT FOUND: {LOANTEMP_FILE}")
-    exit(1)
+     PUT  @1   '----------------------------------------'
+          @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT  @1  'TOT'
+          @5   TOTACC1 COMMA7.0  @13  TOTAMT1 COMMA16.2
+          @30  TOTACC2 COMMA7.0  @38  TOTAMT2 COMMA15.2
+          @54  TOTACC3 COMMA7.0  @62  TOTAMT3 COMMA15.2
+          @78  TOTACC4 COMMA8.0  @87  TOTAMT4 COMMA17.2
+          @105 TOTACC5 COMMA8.0  @114 TOTAMT5 COMMA17.2;
+     PUT  @5   TOTACC6 COMMA7.0  @13  TOTAMT6 COMMA16.2
+          @30  TOTACC7 COMMA7.0  @38  TOTAMT7 COMMA15.2
+          @54  TOTACC8 COMMA7.0  @62  TOTAMT8 COMMA15.2
+          @78  TOTACC9 COMMA8.0  @87  TOTAMT9 COMMA17.2
+          @105 TOTACC10 COMMA8.0 @114 TOTAMT10 COMMA17.2;
+     PUT  @5   TOTACC11 COMMA7.0 @13  TOTAMT11 COMMA16.2
+          @30  TOTACC12 COMMA7.0 @38  TOTAMT12 COMMA15.2
+          @54  TOTACC13 COMMA7.0 @62  TOTAMT13 COMMA15.2
+          @78  TOTACC14 COMMA8.0 @87  TOTAMT14 COMMA17.2
+          @105 TOTACC15 COMMA8.0 @114 TOTAMT15 COMMA17.2;
+     PUT  @5   TOTACC16 COMMA7.0 @13  TOTAMT16 COMMA16.2
+          @30  TOTACC17 COMMA7.0 @38  TOTAMT17 COMMA15.2
+          @54  SGTOTACC COMMA7.0 @62  SGTOTBRH COMMA15.2
+          @78  SGTOTAC2 COMMA8.0 @87  SGTOTBR2 COMMA17.2
+          @105 GTOTACC COMMA8.0  @114 GTOTBRH  COMMA17.2;
+     PUT  @1   '----------------------------------------'
+          @41  '----------------------------------------'
+          @81  '----------------------------------------'
+          @121 '----------';
+     PUT;
+     PAGECNT = 0;
+  END;
+  RETURN;
 
-print("\nREADING LOANTEMP.SAS7BDAT...")
-df, meta = pyreadstat.read_sas7bdat(str(LOANTEMP_FILE))
+  NEWPAGE:
+    PAGECNT+1;
+    PUT @1   'PROGRAM-ID : EIMAR202'
+        @43  'P U B L I C   I S L A M I C  B A N K   B E R H A D'
+        @118 'PAGE NO.: ' PAGECNT;
+    PUT @32  'OUTSTANDING LOANS CLASSIFIED AS NPL ISSUED FROM 1 JAN 98'
+        @90  TYPE  $13.
+        @104 "&RDATE";
+    PUT @1   ' ';
+    PUT @1   'BRH     NO         < 1 MTH'
+        @34         'NO     1 TO < 2 MTH'
+        @59         'NO     2 TO < 3 MTH'
+        @84        'NO      3 TO < 4 MTH'
+        @111       'NO      4 TO < 5 MTH';
+    PUT @1   '        NO    5 TO < 6 MTH'
+        @34         'NO     6 TO < 7 MTH'
+        @59         'NO     7 TO < 8 MTH'
+        @84        'NO      8 TO < 9 MTH'
+        @111       'NO     9 TO < 10 MTH';
+    PUT @1   '        NO  10 TO < 11 MTH'
+        @34         'NO   11 TO < 12 MTH'
+        @59         'NO   12 TO < 18 MTH'
+        @84        'NO    18 TO < 24 MTH'
+        @111       'NO    24 TO < 36 MTH';
+    PUT @1   '        NO        > 36 MTH'
+        @34         'NO          DEFICIT'
+        @59        'NO   SUBTOTAL >=3MTH'
+        @84        'NO   SUBTOTAL >=6MTH'
+        @111       'NO             TOTAL';
+    PUT @1   '----------------------------------------'
+        @41  '----------------------------------------'
+        @81  '----------------------------------------'
+        @121 '----------';
+  RETURN;
+RUN;
 
-# Register DataFrame as DuckDB table
-con.execute("CREATE OR REPLACE TABLE LOANTEMP AS SELECT * FROM df")
-
-print(f"LOANTEMP RECORDS: {con.execute('SELECT COUNT(*) FROM LOANTEMP').fetchone()[0]:,}")
-
-# ============================================================================
-# PROCESS LOAN DATA - CREATE CATEGORIES
-# ============================================================================
-print("\nPROCESSING LOAN DATA...")
-
-con.execute("""
-    CREATE OR REPLACE TABLE LOAN1_BASE AS
-    SELECT 
-        *,
-        CASE 
-            WHEN PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1 THEN 'A'
-            WHEN PRODUCT IN (380, 381) AND CHECKDT = 1 THEN 'B'
-            WHEN PRODUCT IN (128, 130) AND CHECKDT = 1 THEN 'C'
-            WHEN PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1 THEN 'D'
-        END AS CAT,
-        CASE 
-            WHEN PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1 THEN '(HPD-C)'
-            WHEN PRODUCT IN (380, 381) AND CHECKDT = 1 THEN '(HP 380/381)'
-            WHEN PRODUCT IN (128, 130) AND CHECKDT = 1 THEN '(AITAB)'
-            WHEN PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1 THEN '(-HPD-)'
-        END AS TYPE
-    FROM LOANTEMP
-    WHERE (ARREAR > 6 OR BORSTAT IN ('R', 'I', 'F'))
-        AND BALANCE > 0
-""")
-
-# EXPAND RECORDS FOR EACH CATEGORY
-con.execute("""
-    CREATE OR REPLACE TABLE LOAN1 AS
-    SELECT * FROM LOAN1_BASE WHERE CAT = 'A'
-    UNION ALL
-    SELECT * FROM LOAN1_BASE WHERE CAT = 'B'
-    UNION ALL
-    SELECT * FROM LOAN1_BASE WHERE CAT = 'C'
-    UNION ALL
-    SELECT * FROM LOAN1_BASE WHERE CAT = 'D'
-    ORDER BY CAT, BRANCH
-""")
-
-LOAN_COUNT = con.execute("SELECT COUNT(*) FROM LOAN1").fetchone()[0]
-print(f"LOAN1 RECORDS: {LOAN_COUNT:,}")
-
-# MERGE WITH BRANCH DATA
-con.execute("""
-    CREATE OR REPLACE TABLE LOAN1_FINAL AS
-    SELECT 
-        l.*,
-        b.BRHCODE
-    FROM LOAN1 l
-    LEFT JOIN BRHDATA b ON CAST(l.BRANCH AS VARCHAR) = CAST(b.BRANCH AS VARCHAR)
-    ORDER BY l.CAT, l.BRANCH
-""")
-
-unmatched = con.execute("""
-    SELECT COUNT(*) FROM LOAN1_FINAL WHERE BRHCODE IS NULL
-""").fetchone()[0]
-
-if unmatched > 0:
-    print(f"WARNING: {unmatched:,} records have no matching BRHCODE")
-
-# ============================================================================
-# AGGREGATE BY CATEGORY AND BRANCH WITH ARREARS BUCKETS
-# ============================================================================
-print("AGGREGATING BY ARREARS BUCKETS...")
-
-con.execute("""
-    CREATE OR REPLACE TABLE BRANCH_SUMMARY AS
-    SELECT 
-        CAT,
-        TYPE,
-        BRANCH,
-        BRHCODE,
-        ARREAR,
-        COUNT(*) AS NOACC,
-        SUM(BALANCE) AS BRHAMT
-    FROM LOAN1_FINAL
-    GROUP BY CAT, TYPE, BRANCH, BRHCODE, ARREAR
-    ORDER BY CAT, BRANCH, ARREAR
-""")
-
-# PIVOT TO CREATE 17 ARREARS COLUMNS
-con.execute("""
-    CREATE OR REPLACE TABLE BRANCH_PIVOT AS
-    SELECT 
-        CAT,
-        TYPE,
-        BRANCH,
-        BRHCODE,
-        SUM(CASE WHEN ARREAR = 1 THEN NOACC ELSE 0 END) AS NOACC1,
-        SUM(CASE WHEN ARREAR = 1 THEN BRHAMT ELSE 0 END) AS BRHAMT1,
-        SUM(CASE WHEN ARREAR = 2 THEN NOACC ELSE 0 END) AS NOACC2,
-        SUM(CASE WHEN ARREAR = 2 THEN BRHAMT ELSE 0 END) AS BRHAMT2,
-        SUM(CASE WHEN ARREAR = 3 THEN NOACC ELSE 0 END) AS NOACC3,
-        SUM(CASE WHEN ARREAR = 3 THEN BRHAMT ELSE 0 END) AS BRHAMT3,
-        SUM(CASE WHEN ARREAR = 4 THEN NOACC ELSE 0 END) AS NOACC4,
-        SUM(CASE WHEN ARREAR = 4 THEN BRHAMT ELSE 0 END) AS BRHAMT4,
-        SUM(CASE WHEN ARREAR = 5 THEN NOACC ELSE 0 END) AS NOACC5,
-        SUM(CASE WHEN ARREAR = 5 THEN BRHAMT ELSE 0 END) AS BRHAMT5,
-        SUM(CASE WHEN ARREAR = 6 THEN NOACC ELSE 0 END) AS NOACC6,
-        SUM(CASE WHEN ARREAR = 6 THEN BRHAMT ELSE 0 END) AS BRHAMT6,
-        SUM(CASE WHEN ARREAR = 7 THEN NOACC ELSE 0 END) AS NOACC7,
-        SUM(CASE WHEN ARREAR = 7 THEN BRHAMT ELSE 0 END) AS BRHAMT7,
-        SUM(CASE WHEN ARREAR = 8 THEN NOACC ELSE 0 END) AS NOACC8,
-        SUM(CASE WHEN ARREAR = 8 THEN BRHAMT ELSE 0 END) AS BRHAMT8,
-        SUM(CASE WHEN ARREAR = 9 THEN NOACC ELSE 0 END) AS NOACC9,
-        SUM(CASE WHEN ARREAR = 9 THEN BRHAMT ELSE 0 END) AS BRHAMT9,
-        SUM(CASE WHEN ARREAR = 10 THEN NOACC ELSE 0 END) AS NOACC10,
-        SUM(CASE WHEN ARREAR = 10 THEN BRHAMT ELSE 0 END) AS BRHAMT10,
-        SUM(CASE WHEN ARREAR = 11 THEN NOACC ELSE 0 END) AS NOACC11,
-        SUM(CASE WHEN ARREAR = 11 THEN BRHAMT ELSE 0 END) AS BRHAMT11,
-        SUM(CASE WHEN ARREAR = 12 THEN NOACC ELSE 0 END) AS NOACC12,
-        SUM(CASE WHEN ARREAR = 12 THEN BRHAMT ELSE 0 END) AS BRHAMT12,
-        SUM(CASE WHEN ARREAR = 13 THEN NOACC ELSE 0 END) AS NOACC13,
-        SUM(CASE WHEN ARREAR = 13 THEN BRHAMT ELSE 0 END) AS BRHAMT13,
-        SUM(CASE WHEN ARREAR = 14 THEN NOACC ELSE 0 END) AS NOACC14,
-        SUM(CASE WHEN ARREAR = 14 THEN BRHAMT ELSE 0 END) AS BRHAMT14,
-        SUM(CASE WHEN ARREAR = 15 THEN NOACC ELSE 0 END) AS NOACC15,
-        SUM(CASE WHEN ARREAR = 15 THEN BRHAMT ELSE 0 END) AS BRHAMT15,
-        SUM(CASE WHEN ARREAR = 16 THEN NOACC ELSE 0 END) AS NOACC16,
-        SUM(CASE WHEN ARREAR = 16 THEN BRHAMT ELSE 0 END) AS BRHAMT16,
-        SUM(CASE WHEN ARREAR = 17 THEN NOACC ELSE 0 END) AS NOACC17,
-        SUM(CASE WHEN ARREAR = 17 THEN BRHAMT ELSE 0 END) AS BRHAMT17
-    FROM BRANCH_SUMMARY
-    GROUP BY CAT, TYPE, BRANCH, BRHCODE
-    ORDER BY CAT, BRANCH
-""")
-
-# ============================================================================
-# CALCULATE SUBTOTALS AND TOTALS
-# ============================================================================
-con.execute("""
-    CREATE OR REPLACE TABLE REPORT_DATA AS
-    SELECT 
-        *,
-        (NOACC4 + NOACC5 + NOACC6 + NOACC7 + NOACC8 + NOACC9 + NOACC10 +
-         NOACC11 + NOACC12 + NOACC13 + NOACC14 + NOACC15 + NOACC16 + NOACC17) AS SUBACC,
-        (BRHAMT4 + BRHAMT5 + BRHAMT6 + BRHAMT7 + BRHAMT8 + BRHAMT9 + BRHAMT10 +
-         BRHAMT11 + BRHAMT12 + BRHAMT13 + BRHAMT14 + BRHAMT15 + BRHAMT16 + BRHAMT17) AS SUBBRH,
-        (NOACC7 + NOACC8 + NOACC9 + NOACC10 + NOACC11 + NOACC12 + 
-         NOACC13 + NOACC14 + NOACC15 + NOACC16 + NOACC17) AS SUBAC2,
-        (BRHAMT7 + BRHAMT8 + BRHAMT9 + BRHAMT10 + BRHAMT11 + BRHAMT12 + 
-         BRHAMT13 + BRHAMT14 + BRHAMT15 + BRHAMT16 + BRHAMT17) AS SUBBR2,
-        (NOACC1 + NOACC2 + NOACC3 + NOACC4 + NOACC5 + NOACC6 + NOACC7 + NOACC8 + NOACC9 +
-         NOACC10 + NOACC11 + NOACC12 + NOACC13 + NOACC14 + NOACC15 + NOACC16 + NOACC17) AS SOTACC,
-        (BRHAMT1 + BRHAMT2 + BRHAMT3 + BRHAMT4 + BRHAMT5 + BRHAMT6 + BRHAMT7 + BRHAMT8 + BRHAMT9 +
-         BRHAMT10 + BRHAMT11 + BRHAMT12 + BRHAMT13 + BRHAMT14 + BRHAMT15 + BRHAMT16 + BRHAMT17) AS TOTBRH
-    FROM BRANCH_PIVOT
-""")
-
-# ============================================================================
-# GENERATE FORMATTED TEXT REPORT
-# ============================================================================
-print("\nGENERATING FORMATTED REPORT...")
-
-OUTPUT_TXT = OUTPUT_DIR / f"EIMAR202_{REPTYEAR}{REPTMON}{REPTDAY}.txt"
-
-# GET DATA BY CATEGORY
-CATEGORIES = con.execute("SELECT DISTINCT CAT, TYPE FROM REPORT_DATA ORDER BY CAT").fetchall()
-
-with open(OUTPUT_TXT, 'w') as f:
-    for cat_idx, (CAT, TYPE) in enumerate(CATEGORIES):
-        # PAGE HEADER
-        PAGE_NUM = cat_idx + 1
-        f.write(f"PROGRAM-ID : EIMAR202                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {PAGE_NUM:>2}\n")
-        f.write(f"                                   OUTSTANDING LOANS CLASSIFIED AS NPL ISSUED FROM 1 JAN 1998        {TYPE:<13}       {RDATE}\n")
-        f.write("\n")
-        f.write("BRH     NO          < 1 MTH       NO     1 TO < 2 MTH       NO     2 TO < 3 MTH        NO      3 TO < 4 MTH        NO      4 TO < 5 MTH\n")
-        f.write("        NO     5 TO < 6 MTH       NO     6 TO < 7 MTH       NO     7 TO < 8 MTH        NO      8 TO < 9 MTH        NO     9 TO < 10 MTH\n")
-        f.write("        NO   10 TO < 11 MTH       NO   11 TO < 12 MTH       NO   12 TO < 18 MTH        NO    18 TO < 24 MTH        NO    24 TO < 36 MTH\n")
-        f.write("        NO         > 36 MTH       NO          DEFICIT       NO   SUBTOTAL >=3MTH       NO   SUBTOTAL >=6MTH        NO             TOTAL\n")
-        f.write("-" * 134 + "\n")
-        
-        # GET BRANCH DATA FOR THIS CATEGORY
-        branches = con.execute(f"""
-            SELECT * FROM REPORT_DATA 
-            WHERE CAT = '{CAT}'
-            ORDER BY BRANCH
-        """).fetchall()
-        
-        # CATEGORY TOTALS
-        TOTALS = [0] * 40
-        
-        for branch_row in branches:
-            BRANCH = str(int(float(branch_row[2]))).zfill(3)
-            BRHCODE = str(branch_row[3] or '').strip()
-            if not BRHCODE:
-                BRHCODE = '   '
-            
-            # LINE 1: <1 MTH, 1-2 MTH, 2-3 MTH, 3-4 MTH, 4-5 MTH
-            f.write(f"{BRANCH:<3} {branch_row[4]:>7,} {branch_row[5]:>14,.2f} {branch_row[6]:>7,} {branch_row[7]:>13,.2f} {branch_row[8]:>7,} {branch_row[9]:>13,.2f} {branch_row[10]:>8,} {branch_row[11]:>15,.2f} {branch_row[12]:>8,} {branch_row[13]:>15,.2f}\n")
-            
-            # LINE 2: 5-6 MTH, 6-7 MTH, 7-8 MTH, 8-9 MTH, 9-10 MTH
-            f.write(f"{BRHCODE:<3} {branch_row[14]:>7,} {branch_row[15]:>14,.2f} {branch_row[16]:>7,} {branch_row[17]:>13,.2f} {branch_row[18]:>7,} {branch_row[19]:>13,.2f} {branch_row[20]:>8,} {branch_row[21]:>15,.2f} {branch_row[22]:>8,} {branch_row[23]:>15,.2f}\n")
-            
-            # LINE 3: 10-11 MTH, 11-12 MTH, 12-18 MTH, 18-24 MTH, 24-36 MTH
-            f.write(f"    {branch_row[24]:>7,} {branch_row[25]:>14,.2f} {branch_row[26]:>7,} {branch_row[27]:>13,.2f} {branch_row[28]:>7,} {branch_row[29]:>13,.2f} {branch_row[30]:>8,} {branch_row[31]:>15,.2f} {branch_row[32]:>8,} {branch_row[33]:>15,.2f}\n")
-            
-            # LINE 4: >36 MTH, DEFICIT, SUBTOTAL >=3MTH, SUBTOTAL >=6MTH, TOTAL
-            SUBACC = branch_row[38]
-            SUBBRH = branch_row[39]
-            SUBAC2 = branch_row[40]
-            SUBBR2 = branch_row[41]
-            SOTACC = branch_row[42]
-            TOTBRH = branch_row[43]
-            
-            f.write(f"    {branch_row[34]:>7,} {branch_row[35]:>14,.2f} {branch_row[36]:>7,} {branch_row[37]:>13,.2f} {SUBACC:>7,} {SUBBRH:>13,.2f} {SUBAC2:>8,} {SUBBR2:>15,.2f} {SOTACC:>8,} {TOTBRH:>15,.2f}\n")
-            
-            # ACCUMULATE TOTALS
-            for i in range(4, 38):
-                TOTALS[i-4] += branch_row[i]
-            TOTALS[34] += SUBACC
-            TOTALS[35] += SUBBRH
-            TOTALS[36] += SUBAC2
-            TOTALS[37] += SUBBR2
-            TOTALS[38] += SOTACC
-            TOTALS[39] += TOTBRH
-        
-        # CATEGORY TOTALS
-        f.write("-" * 134 + "\n")
-        f.write(f"TOT {TOTALS[0]:>7,} {TOTALS[1]:>14,.2f} {TOTALS[2]:>7,} {TOTALS[3]:>13,.2f} {TOTALS[4]:>7,} {TOTALS[5]:>13,.2f} {TOTALS[6]:>8,} {TOTALS[7]:>15,.2f} {TOTALS[8]:>8,} {TOTALS[9]:>15,.2f}\n")
-        f.write(f"    {TOTALS[10]:>7,} {TOTALS[11]:>14,.2f} {TOTALS[12]:>7,} {TOTALS[13]:>13,.2f} {TOTALS[14]:>7,} {TOTALS[15]:>13,.2f} {TOTALS[16]:>8,} {TOTALS[17]:>15,.2f} {TOTALS[18]:>8,} {TOTALS[19]:>15,.2f}\n")
-        f.write(f"    {TOTALS[20]:>7,} {TOTALS[21]:>14,.2f} {TOTALS[22]:>7,} {TOTALS[23]:>13,.2f} {TOTALS[24]:>7,} {TOTALS[25]:>13,.2f} {TOTALS[26]:>8,} {TOTALS[27]:>15,.2f} {TOTALS[28]:>8,} {TOTALS[29]:>15,.2f}\n")
-        f.write(f"    {TOTALS[30]:>7,} {TOTALS[31]:>14,.2f} {TOTALS[32]:>7,} {TOTALS[33]:>13,.2f} {TOTALS[34]:>7,} {TOTALS[35]:>13,.2f} {TOTALS[36]:>8,} {TOTALS[37]:>15,.2f} {TOTALS[38]:>8,} {TOTALS[39]:>15,.2f}\n")
-        f.write("-" * 134 + "\n")
-        f.write("\n")
-        
-        if cat_idx < len(CATEGORIES) - 1:
-            f.write("\f")  # PAGE BREAK
-
-print(f"SAVED: {OUTPUT_TXT}")
-
-print("\n" + "="*80)
-print("REPORT COMPLETE")
-print("="*80)
-
-con.close()
+PROC DATASETS LIB=WORK NOLIST; DELETE LOAN1; RUN;
