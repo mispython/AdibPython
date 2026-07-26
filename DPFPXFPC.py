@@ -1,342 +1,231 @@
-#!/usr/bin/env python3
-"""
-EIMIR202 - NPL HIRE PURCHASE DIRECT REPORT
-1:1 CONVERSION FROM SAS TO PYTHON
-REPORTS OUTSTANDING LOANS CLASSIFIED AS NPL FOR HP DIRECT PRODUCTS
-ISSUED FROM 1 JAN 1998, CATEGORIZED BY PRODUCT TYPE AND ARREARS BUCKET
-"""
+PROGRAM-ID : EIMAR202                          P U B L I C   I S L A M I C  B A N K   B E R H A D         PAGE NO.: 1
+               OUTSTANDING LOANS CLASSIFIED AS NPL ISSUED FROM 1 JAN 98        (AITAB)        25072026
+ 
+BRH     NO         < 1 MTH              NO     1 TO < 2 MTH              NO     2 TO < 3 MTH              NO      3 TO < 4 MTH              NO      4 TO < 5 MTH
+        NO    5 TO < 6 MTH              NO     6 TO < 7 MTH              NO     7 TO < 8 MTH              NO      8 TO < 9 MTH              NO     9 TO < 10 MTH
+        NO  10 TO < 11 MTH              NO   11 TO < 12 MTH              NO   12 TO < 18 MTH              NO    18 TO < 24 MTH              NO    24 TO < 36 MTH
+        NO        > 36 MTH              NO          DEFICIT             NO   SUBTOTAL >=3MTH              NO   SUBTOTAL >=6MTH              NO             TOTAL
+----------------------------------------------------------------------------------------------------------------------------------
+55.0       0             0.00       0            0.00       2       56,842.77        0              0.00        0              0.00
+          0             0.00       0            0.00       1       44,333.86        0              0.00        0              0.00
+          0             0.00       0            0.00       1       21,025.09        0              0.00        0              0.00
+          0             0.00       0            0.00       2       65,358.95        2         65,358.95        4        122,201.72
+77.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        1         14,911.75        2         42,961.70
+          0             0.00       0            0.00       3       57,873.45        3         57,873.45        3         57,873.45
+95.0       2         5,462.52       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1       75,404.97        0              0.00        0              0.00
+          0             0.00       0            0.00       1        6,474.69        0              0.00        0              0.00
+          1        10,889.20       0            0.00       3       92,768.86        3         92,768.86        5         98,231.38
+105.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          1        15,419.54       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1       15,419.54        1         15,419.54        1         15,419.54
+106.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1        3,302.25        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1        3,302.25        1          3,302.25        1          3,302.25
+112.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1        9,144.79        0              0.00        0              0.00
+          1        11,303.78       0            0.00       2       20,448.57        2         20,448.57        2         20,448.57
+117.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        1         15,376.83
+          1        18,645.22       0            0.00       2       34,022.05        2         34,022.05        2         34,022.05
+143.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1       75,081.33        0              0.00        0              0.00
+          0             0.00       0            0.00       1       12,540.80        0              0.00        0              0.00
+          0             0.00       0            0.00       2       87,622.13        2         87,622.13        2         87,622.13
+234.0       1           307.10       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        1            307.10
+235.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          1         2,752.51       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1        2,752.51        0              0.00        1          2,752.51
+259.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          1         7,519.67       0            0.00       1        7,519.67        1          7,519.67        1          7,519.67
+261.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1       12,382.40        0              0.00        0              0.00
+          0             0.00       0            0.00       1       12,382.40        1         12,382.40        1         12,382.40
+800.0       4       110,667.67       0            0.00       2       67,783.06        2         60,886.96        2         35,922.54
+          2        24,858.84       3       54,380.20       3      109,861.67        6        128,914.82        2         23,889.24
+          5       134,306.12       2       27,311.98       8      322,556.65        2        119,845.33        1         20,083.14
+          1        11,691.26       0            0.00      39    1,074,508.75       33        952,840.41       45      1,252,959.48
+801.0       1           730.22       0            0.00       1        3,730.38        5        137,690.89        6         94,741.35
+          3        32,197.93      10      267,987.35       6      190,159.66       16        411,627.52        8        111,361.75
+          6       278,141.73       0            0.00      14      317,833.69        2         18,219.89        2         44,757.38
+          1        12,962.17       0            0.00      79    1,917,681.31       65      1,653,051.14       81      1,922,141.91
+802.0      11       103,171.38       1       15,842.89       4      293,916.40        6        166,780.87        8        111,032.81
+          6       268,372.86      17      714,664.91      11      443,052.35       16        659,425.01       12        262,819.41
+         14       423,451.19      15      460,275.85      17      419,156.76        8        282,304.25        3         50,741.31
+          3        42,651.43       0            0.00     136    4,304,729.01      116      3,758,542.47      152      4,717,659.68
+803.0       1           172.42       1        6,003.12       1       33,990.51        0              0.00        1         17,714.07
+          0             0.00       2       55,536.51       1        1,819.28        0              0.00        0              0.00
+          0             0.00       1       96,570.80       0            0.00        0              0.00        0              0.00
+          1        11,635.13       0            0.00       6      183,275.79        5        165,561.72        9        223,441.84
+804.0       2         2,442.61       0            0.00       2      153,309.72        3        102,799.87        3         52,656.68
+          2        41,250.65       4      216,194.31       3       68,738.31        2        191,548.59        1          9,223.71
+          3       143,233.99       3      139,120.56       4       75,996.15        0              0.00        0              0.00
+          0             0.00       0            0.00      28    1,040,762.82       20        844,055.62       32      1,196,515.15
+805.0       1           386.75       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       2       61,427.19       1        3,449.56        2         32,463.05        0              0.00
+          0             0.00       0            0.00       1       17,254.35        0              0.00        0              0.00
+          1        15,372.70       0            0.00       7      129,966.85        7        129,966.85        8        130,353.60
+806.0       4         4,602.55       0            0.00       0            0.00        2         53,989.85        1         15,604.14
+          1         9,761.61       5      152,361.74       7      102,130.39        3         62,432.48        2         31,238.86
+          3        74,585.26       2       41,594.17       4       54,455.12        3         23,817.64        1         38,026.21
+          7        69,190.82       0            0.00      41      729,188.29       37        649,832.69       45        733,790.84
+807.0       0             0.00       0            0.00       2       56,618.03        1         36,659.72        2         18,209.22
+          0             0.00       3      156,307.79       2      136,096.12        2         95,905.78        0              0.00
+          0             0.00       3       70,975.02       9      259,021.20        3         51,503.87        3         73,944.19
+          1         9,611.47       0            0.00      29      908,234.38       26        853,365.44       31        964,852.41
+808.0       2         4,106.58       0            0.00       2       86,881.36        4        126,366.87        4        149,500.44
+          3        67,208.14       6      116,627.64       7      172,712.45        5         67,431.41        3         21,612.43
+          2        44,425.82       4      146,867.76       6      162,948.95        7        103,473.65        5         49,572.70
+          4        50,628.32       0            0.00      60    1,279,376.58       49        936,301.13       64      1,370,364.52
+809.0       5        14,634.90       0            0.00       2      158,504.07        2        142,640.21        6        123,277.14
+          2        32,423.22       6      144,800.91       1       35,019.62        6         71,068.26        4          4,827.36
+          1         1,476.92       5      143,414.19       4       73,974.66        1         15,815.70        1         21,260.80
+          8        72,363.45       0            0.00      47      882,362.44       37        584,021.87       54      1,055,501.41
+811.0       6        79,089.86       0            0.00       1       23,954.36        3         75,623.28        3         89,070.84
+          1        66,700.23       7      157,716.96       2       90,862.55        2         84,967.83        2         14,802.20
+          5       152,242.08       5       77,516.18       5       38,539.98        0              0.00        1          1,928.85
+          3        43,900.75       0            0.00      39      893,871.73       32        662,477.38       46        996,915.95
+812.0       3         5,832.12       0            0.00       1       21,583.41        1         54,351.65        1         10,695.46
+          0             0.00       1       22,319.83       1        1,043.38        2         73,308.48        0              0.00
+          3        49,331.37       2      120,040.86       5      116,914.32        2         30,654.79        2         35,215.99
+          2        26,055.95       0            0.00      22      539,932.08       20        474,884.97       26        567,347.61
+813.0       0             0.00       0            0.00       1       28,891.07        0              0.00        1         40,789.65
+          0             0.00       0            0.00       0            0.00        0              0.00        1         14,969.75
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          1         8,514.52       0            0.00       3       64,273.92        2         23,484.27        4         93,164.99
+814.0       3         5,405.34       0            0.00       2       50,726.94        2         59,345.28        0              0.00
+          0             0.00       4      104,226.21       8      684,994.93        2         33,395.77        2         69,553.64
+          8       217,459.27       5      113,568.93       9      191,832.98        1         91,970.67        0              0.00
+          2        43,974.72       0            0.00      43    1,610,322.40       41      1,550,977.12       48      1,666,454.68
+816.0       3         7,061.66       0            0.00       1       49,037.60        3         66,866.29        3        209,060.73
+          1        15,498.33       3       72,136.79       4       96,956.97        6         38,350.62        2         59,852.52
+          3       256,695.69       6      138,569.00       3       55,870.68        0              0.00        1         26,586.75
+          2        23,450.88       0            0.00      37    1,059,895.25       30        768,469.90       41      1,115,994.51
+818.0       3        27,033.80       0            0.00       0            0.00        0              0.00        6        168,289.67
+          1        13,316.15       6      203,048.74       7      281,531.99        6        196,325.16        2         68,119.21
+          4        37,545.82       3       84,988.74       5       73,940.85        0              0.00        0              0.00
+          7       218,513.99       0            0.00      47    1,345,620.32       40      1,164,014.50       50      1,372,654.12
+819.0       0             0.00       0            0.00       2      144,644.64        3        152,206.53        1         95,293.23
+          3        64,479.70       5      124,869.36       7      139,225.11        5        295,437.82        4        107,512.41
+          3       134,254.67       6      220,703.61       9      154,659.00        1          9,775.37        1            125.47
+          1        46,959.17       0            0.00      49    1,545,501.45       42      1,233,521.99       51      1,690,146.09
+820.0       2         4,098.77       0            0.00       2       64,543.47        2        209,256.26        6        239,458.18
+          3        78,152.74       9      115,137.06       4      153,552.60        8         87,438.98        5        184,488.61
+          1         5,942.05       4      120,525.24      14      225,606.54        2         26,438.75        2         32,542.68
+          6        98,281.03       0            0.00      66    1,576,820.72       55      1,049,953.54       70      1,645,462.96
+821.0       2         3,027.42       0            0.00       1       47,930.28        0              0.00        4        349,847.36
+          4        86,076.95       7      259,611.21       6      151,396.81        3         20,129.14        3        113,663.43
+          2        38,089.41       4      135,543.78       3      116,453.15        1        189,285.98        0              0.00
+          3        93,163.23       0            0.00      40    1,553,260.45       32      1,117,336.14       43      1,604,218.15
+822.0       2         5,175.81       0            0.00       2      250,463.25        1         86,391.37        2         71,320.99
+          2        77,420.16       2        6,295.18       8      211,452.55        5        150,869.56        1         31,996.69
+          5        94,506.64       3      152,208.42       3      229,811.18        0              0.00        0              0.00
+          4        51,452.66       0            0.00      36    1,163,725.40       31        928,592.88       40      1,419,364.46
+824.0       4         6,867.70       0            0.00       1       27,657.95        2         31,851.04        0              0.00
+          0             0.00       0            0.00       1       12,149.32        1         21,606.30        2         20,778.08
+          5       241,758.12       4      255,325.31       1       15,250.41        1          2,072.43        2         11,326.70
+          3        37,587.89       0            0.00      22      649,705.60       20        617,854.56       27        684,231.25
+825.0       1         2,177.70       1       91,802.82       2       65,323.82        0              0.00        1         19,859.00
+          1        16,398.51       3       58,956.38       2       63,552.83        2         12,668.64        1          4,056.43
+          1        42,271.84       3      112,408.08       0            0.00        0              0.00        0              0.00
+          1         9,816.62       0            0.00      15      339,988.33       13        303,730.82       19        499,292.67
+826.0       3         3,202.28       0            0.00       0            0.00        4         63,786.40        3         64,356.26
+          3        19,893.52       2        4,377.09       4      168,402.41        4         61,301.27        4         90,648.27
+          2        48,944.20       3          915.58       5      314,714.22        1         38,256.68        0              0.00
+          0             0.00       0            0.00      35      875,595.90       25        727,559.72       38        878,798.18
+827.0       1         1,113.30       1      105,898.52       2      112,320.52        0              0.00        0              0.00
+          2        34,659.75       9      352,146.89      11      119,621.28        9        217,189.75        7        346,849.48
+         10       435,333.86       7      368,748.56      17      687,227.55        8        160,578.36        0              0.00
+          3        81,551.45       0            0.00      83    2,803,906.93       81      2,769,247.18       87      3,023,239.27
+828.0       2         1,367.54       0            0.00       2       66,491.17        0              0.00        1         17,131.30
+          1        40,625.13       1       24,006.83       1        8,084.47        0              0.00        1          2,484.41
+          0             0.00       1       29,014.25       2      100,851.74        1          2,953.24        0              0.00
+          1         9,694.60       0            0.00      10      234,845.97        8        177,089.54       14        302,704.68
+844.0       3         9,070.03       0            0.00       0            0.00        1         64,961.55        0              0.00
+          0             0.00       2       19,618.92       3       68,538.64        3         50,950.08        0              0.00
+          1        82,627.52       1        5,881.45       2       71,965.65        1         19,316.71        0              0.00
+          0             0.00       0            0.00      14      383,860.52       13        318,898.97       17        392,930.55
+847.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1        7,828.48        0              0.00        0              0.00
+          0             0.00       0            0.00       1        7,828.48        1          7,828.48        1          7,828.48
+848.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1       22,383.29        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        1         19,952.17
+          0             0.00       0            0.00       2       42,335.46        2         42,335.46        2         42,335.46
+849.0       0             0.00       0            0.00       0            0.00        1         91,559.63        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        1         22,795.47
+          0             0.00       1       28,934.36       1       53,649.63        0              0.00        0              0.00
+          0             0.00       0            0.00       4      196,939.09        3        105,379.46        4        196,939.09
+850.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1       15,274.93        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1       15,274.93        1         15,274.93        1         15,274.93
+852.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          1        22,551.06       2      112,175.37       1        4,736.77        0              0.00        0              0.00
+          0             0.00       0            0.00       1        1,296.49        0              0.00        1         13,100.01
+          0             0.00       0            0.00       6      153,859.70        5        131,308.64        6        153,859.70
+853.0       0             0.00       0            0.00       0            0.00        1         32,476.01        2         15,938.46
+          0             0.00       2       40,562.47       3       76,856.68        2         23,890.62        1         24,216.95
+          1        13,952.01       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00      12      227,893.20        9        179,478.73       12        227,893.20
+854.0       0             0.00       0            0.00       0            0.00        0              0.00        1         14,355.08
+          0             0.00       1       51,469.88       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       2       65,824.96        1         51,469.88        2         65,824.96
+855.0       0             0.00       0            0.00       0            0.00        0              0.00        1         19,747.98
+          0             0.00       0            0.00       1        3,881.52        0              0.00        0              0.00
+          0             0.00       0            0.00       0            0.00        1         49,102.37        0              0.00
+          0             0.00       0            0.00       3       72,731.87        2         52,983.89        3         72,731.87
+856.0       1         1,984.93       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1        5,279.12        3         46,926.09        1         13,276.67
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       5       65,481.88        5         65,481.88        6         67,466.81
+857.0       0             0.00       0            0.00       1       20,015.99        2        118,043.99        3        134,151.60
+          1        11,449.93       1       25,996.44       0            0.00        2         28,604.20        3         15,063.86
+          4        62,644.16       0            0.00       4       72,288.95        1        108,791.99        0              0.00
+          0             0.00       0            0.00      21      577,035.12       15        313,389.60       22        597,051.11
+858.0       0             0.00       1      175,671.00       0            0.00        2         50,142.65        1         12,379.93
+          1        43,300.39       1       10,615.96       1       14,281.39        4        104,260.95        2         88,235.50
+          1        29,907.13       0            0.00       2       20,454.40        0              0.00        0              0.00
+          0             0.00       0            0.00      15      373,578.30       11        267,755.33       16        549,249.30
+859.0       0             0.00       0            0.00       0            0.00        1         82,513.31        1         11,457.09
+          0             0.00       1       10,042.93       1       65,296.25        1          7,889.39        0              0.00
+          0             0.00       1       24,090.85       3      127,688.78        0              0.00        1          9,235.33
+          2        23,412.10       0            0.00      12      361,626.03       10        267,655.63       12        361,626.03
+861.0       0             0.00       0            0.00       0            0.00        0              0.00        1          8,417.67
+          0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       1       40,640.74       3      193,731.48        0              0.00        1         18,483.44
+          0             0.00       0            0.00       6      261,273.33        5        252,855.66        6        261,273.33
+862.0       0             0.00       0            0.00       0            0.00        2         26,454.98        2         41,585.76
+          1        43,277.11      18      849,531.99       8      278,138.25        4         66,210.19        5        175,224.08
+          8       309,059.60       2      130,589.54       8      389,293.69        1         42,269.08        0              0.00
+          0             0.00       0            0.00      59    2,351,634.27       54      2,240,316.42       59      2,351,634.27
+863.0       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       1          977.64        1          3,336.09        0              0.00
+          0             0.00       1       81,164.12       0            0.00        0              0.00        0              0.00
+          0             0.00       0            0.00       3       85,477.85        3         85,477.85        3         85,477.85
+----------------------------------------------------------------------------------------------------------------------------------
+TOT      73       409,192.96       5      395,218.35      39    1,885,160.77       56      2,093,645.46       77      2,251,864.63
+         46     1,112,625.42     145    4,565,151.04     134    4,199,633.50      133      3,345,873.85       82      1,933,560.42
+        102     3,367,606.01      98    3,367,507.93     178    5,024,635.45       49      1,401,358.50       32        525,221.65
+         72     1,160,794.18       0            0.00   1,204   34,349,478.04    1,025     28,891,342.53    1,321     37,039,050.12
+----------------------------------------------------------------------------------------------------------------------------------
 
-import duckdb
-from pathlib import Path
-from datetime import datetime, timedelta
-import pyreadstat
 
-# INITIALIZE PATHS
-INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR202")
-OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR202")
 
-# CREATE DIRECTORIES
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# CONNECT TO DUCKDB
-con = duckdb.connect(":memory:")
-
-print("="*80)
-print("EIMIR202 - NPL HIRE PURCHASE DIRECT REPORT")
-print("="*80)
-
-# ============================================================================
-# SET REPORT DATE (YESTERDAY)
-# ============================================================================
-REPTDATE = datetime.now().date() - timedelta(days=1)
-RDATE = REPTDATE.strftime('%d%m%Y')
-REPTYEAR = str(REPTDATE.year)
-REPTMON = str(REPTDATE.month).zfill(2)
-REPTDAY = str(REPTDATE.day).zfill(2)
-
-print(f"REPORT DATE: {REPTDATE}")
-print(f"RDATE: {RDATE}")
-
-# ============================================================================
-# READ BRANCH DATA (LKP_BRANCH - FLAT FILE)
-# ============================================================================
-BRANCH_FILE = INPUT_DIR / "LKP_BRANCH"
-
-if not BRANCH_FILE.exists():
-    print(f"ERROR: BRANCH FILE NOT FOUND: {BRANCH_FILE}")
-    exit(1)
-
-# Read flat file - assuming space or tab delimited
-with open(BRANCH_FILE, 'r') as f:
-    lines = f.readlines()
-
-# Parse flat file - adjust based on your actual format
-branch_data = []
-for line in lines:
-    line = line.strip()
-    if line:
-        # Split by whitespace (handles spaces or tabs)
-        parts = line.split()
-        if len(parts) >= 2:
-            # Store branch as string to match LOANTEMP
-            branch_data.append((str(parts[0]).strip(), str(parts[1]).strip()))
-
-# Create branch table with VARCHAR type for BRANCH
-con.execute("""
-    CREATE OR REPLACE TABLE BRHDATA (
-        BRANCH VARCHAR,
-        BRHCODE VARCHAR
-    )
-""")
-
-for branch, brhcode in branch_data:
-    con.execute(f"INSERT INTO BRHDATA VALUES ('{branch}', '{brhcode}')")
-
-branch_count = con.execute("SELECT COUNT(*) FROM BRHDATA").fetchone()[0]
-print(f"BRANCH RECORDS: {branch_count:,}")
-
-# ============================================================================
-# READ LOAN DATA (LOANTEMP.sas7bdat)
-# ============================================================================
-LOANTEMP_FILE = INPUT_DIR / "LOANTEMP.sas7bdat"
-
-if not LOANTEMP_FILE.exists():
-    print(f"ERROR: LOANTEMP FILE NOT FOUND: {LOANTEMP_FILE}")
-    exit(1)
-
-print("\nREADING LOANTEMP.SAS7BDAT...")
-df, meta = pyreadstat.read_sas7bdat(str(LOANTEMP_FILE))
-
-# Register DataFrame as DuckDB table
-con.execute("CREATE OR REPLACE TABLE LOANTEMP AS SELECT * FROM df")
-
-print(f"LOANTEMP RECORDS: {con.execute('SELECT COUNT(*) FROM LOANTEMP').fetchone()[0]:,}")
-
-# Check BRANCH data type in LOANTEMP
-branch_sample = con.execute("SELECT BRANCH FROM LOANTEMP LIMIT 5").fetchall()
-print(f"BRANCH sample from LOANTEMP: {branch_sample}")
-
-# ============================================================================
-# PROCESS LOAN DATA - CREATE CATEGORIES
-# ============================================================================
-print("\nPROCESSING LOAN DATA...")
-
-con.execute("""
-    CREATE OR REPLACE TABLE LOAN1_BASE AS
-    SELECT 
-        *,
-        CASE 
-            WHEN PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1 THEN 'A'
-            WHEN PRODUCT IN (380, 381) AND CHECKDT = 1 THEN 'B'
-            WHEN PRODUCT IN (128, 130) AND CHECKDT = 1 THEN 'C'
-            WHEN PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1 THEN 'D'
-        END AS CAT,
-        CASE 
-            WHEN PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1 THEN '(HPD-C)'
-            WHEN PRODUCT IN (380, 381) AND CHECKDT = 1 THEN '(HP 380/381)'
-            WHEN PRODUCT IN (128, 130) AND CHECKDT = 1 THEN '(AITAB)'
-            WHEN PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1 THEN '(-HPD-)'
-        END AS TYPE
-    FROM LOANTEMP
-    WHERE (ARREAR > 6 OR BORSTAT IN ('R', 'I', 'F'))
-        AND BALANCE > 0
-""")
-
-# EXPAND RECORDS FOR EACH CATEGORY (MIMICS MULTIPLE OUTPUT STATEMENTS)
-con.execute("""
-    CREATE OR REPLACE TABLE LOAN1 AS
-    SELECT * FROM LOAN1_BASE WHERE CAT = 'A'
-    UNION ALL
-    SELECT * FROM LOAN1_BASE WHERE CAT = 'B'
-    UNION ALL
-    SELECT * FROM LOAN1_BASE WHERE CAT = 'C'
-    UNION ALL
-    SELECT * FROM LOAN1_BASE WHERE CAT = 'D'
-    ORDER BY CAT, BRANCH
-""")
-
-LOAN_COUNT = con.execute("SELECT COUNT(*) FROM LOAN1").fetchone()[0]
-print(f"LOAN1 RECORDS: {LOAN_COUNT:,}")
-
-# MERGE WITH BRANCH DATA - Ensure BRANCH is treated as string
-con.execute("""
-    CREATE OR REPLACE TABLE LOAN1_FINAL AS
-    SELECT 
-        l.*,
-        b.BRHCODE
-    FROM LOAN1 l
-    LEFT JOIN BRHDATA b ON CAST(l.BRANCH AS VARCHAR) = CAST(b.BRANCH AS VARCHAR)
-    ORDER BY l.CAT, l.BRANCH
-""")
-
-# Check for unmatched branches
-unmatched = con.execute("""
-    SELECT COUNT(*) FROM LOAN1_FINAL WHERE BRHCODE IS NULL
-""").fetchone()[0]
-
-if unmatched > 0:
-    print(f"WARNING: {unmatched:,} records have no matching BRHCODE")
-    # Show sample of unmatched branches
-    sample_unmatched = con.execute("""
-        SELECT DISTINCT BRANCH FROM LOAN1_FINAL WHERE BRHCODE IS NULL LIMIT 10
-    """).fetchall()
-    print(f"Sample unmatched branches: {sample_unmatched}")
-
-# ============================================================================
-# AGGREGATE BY CATEGORY AND BRANCH WITH ARREARS BUCKETS
-# ============================================================================
-print("AGGREGATING BY ARREARS BUCKETS...")
-
-# CREATE SUMMARY BY CAT, BRANCH, AND ARREARS
-con.execute("""
-    CREATE OR REPLACE TABLE BRANCH_SUMMARY AS
-    SELECT 
-        CAT,
-        TYPE,
-        BRANCH,
-        BRHCODE,
-        ARREAR,
-        COUNT(*) AS NOACC,
-        SUM(BALANCE) AS BRHAMT
-    FROM LOAN1_FINAL
-    GROUP BY CAT, TYPE, BRANCH, BRHCODE, ARREAR
-    ORDER BY CAT, BRANCH, ARREAR
-""")
-
-# PIVOT TO CREATE 17 ARREARS COLUMNS
-con.execute("""
-    CREATE OR REPLACE TABLE BRANCH_PIVOT AS
-    SELECT 
-        CAT,
-        TYPE,
-        BRANCH,
-        BRHCODE,
-        SUM(CASE WHEN ARREAR = 1 THEN NOACC ELSE 0 END) AS NOACC1,
-        SUM(CASE WHEN ARREAR = 1 THEN BRHAMT ELSE 0 END) AS BRHAMT1,
-        SUM(CASE WHEN ARREAR = 2 THEN NOACC ELSE 0 END) AS NOACC2,
-        SUM(CASE WHEN ARREAR = 2 THEN BRHAMT ELSE 0 END) AS BRHAMT2,
-        SUM(CASE WHEN ARREAR = 3 THEN NOACC ELSE 0 END) AS NOACC3,
-        SUM(CASE WHEN ARREAR = 3 THEN BRHAMT ELSE 0 END) AS BRHAMT3,
-        SUM(CASE WHEN ARREAR = 4 THEN NOACC ELSE 0 END) AS NOACC4,
-        SUM(CASE WHEN ARREAR = 4 THEN BRHAMT ELSE 0 END) AS BRHAMT4,
-        SUM(CASE WHEN ARREAR = 5 THEN NOACC ELSE 0 END) AS NOACC5,
-        SUM(CASE WHEN ARREAR = 5 THEN BRHAMT ELSE 0 END) AS BRHAMT5,
-        SUM(CASE WHEN ARREAR = 6 THEN NOACC ELSE 0 END) AS NOACC6,
-        SUM(CASE WHEN ARREAR = 6 THEN BRHAMT ELSE 0 END) AS BRHAMT6,
-        SUM(CASE WHEN ARREAR = 7 THEN NOACC ELSE 0 END) AS NOACC7,
-        SUM(CASE WHEN ARREAR = 7 THEN BRHAMT ELSE 0 END) AS BRHAMT7,
-        SUM(CASE WHEN ARREAR = 8 THEN NOACC ELSE 0 END) AS NOACC8,
-        SUM(CASE WHEN ARREAR = 8 THEN BRHAMT ELSE 0 END) AS BRHAMT8,
-        SUM(CASE WHEN ARREAR = 9 THEN NOACC ELSE 0 END) AS NOACC9,
-        SUM(CASE WHEN ARREAR = 9 THEN BRHAMT ELSE 0 END) AS BRHAMT9,
-        SUM(CASE WHEN ARREAR = 10 THEN NOACC ELSE 0 END) AS NOACC10,
-        SUM(CASE WHEN ARREAR = 10 THEN BRHAMT ELSE 0 END) AS BRHAMT10,
-        SUM(CASE WHEN ARREAR = 11 THEN NOACC ELSE 0 END) AS NOACC11,
-        SUM(CASE WHEN ARREAR = 11 THEN BRHAMT ELSE 0 END) AS BRHAMT11,
-        SUM(CASE WHEN ARREAR = 12 THEN NOACC ELSE 0 END) AS NOACC12,
-        SUM(CASE WHEN ARREAR = 12 THEN BRHAMT ELSE 0 END) AS BRHAMT12,
-        SUM(CASE WHEN ARREAR = 13 THEN NOACC ELSE 0 END) AS NOACC13,
-        SUM(CASE WHEN ARREAR = 13 THEN BRHAMT ELSE 0 END) AS BRHAMT13,
-        SUM(CASE WHEN ARREAR = 14 THEN NOACC ELSE 0 END) AS NOACC14,
-        SUM(CASE WHEN ARREAR = 14 THEN BRHAMT ELSE 0 END) AS BRHAMT14,
-        SUM(CASE WHEN ARREAR = 15 THEN NOACC ELSE 0 END) AS NOACC15,
-        SUM(CASE WHEN ARREAR = 15 THEN BRHAMT ELSE 0 END) AS BRHAMT15,
-        SUM(CASE WHEN ARREAR = 16 THEN NOACC ELSE 0 END) AS NOACC16,
-        SUM(CASE WHEN ARREAR = 16 THEN BRHAMT ELSE 0 END) AS BRHAMT16,
-        SUM(CASE WHEN ARREAR = 17 THEN NOACC ELSE 0 END) AS NOACC17,
-        SUM(CASE WHEN ARREAR = 17 THEN BRHAMT ELSE 0 END) AS BRHAMT17
-    FROM BRANCH_SUMMARY
-    GROUP BY CAT, TYPE, BRANCH, BRHCODE
-    ORDER BY CAT, BRANCH
-""")
-
-# ============================================================================
-# CALCULATE SUBTOTALS AND TOTALS
-# ============================================================================
-con.execute("""
-    CREATE OR REPLACE TABLE REPORT_DATA AS
-    SELECT 
-        *,
-        -- SUBTOTAL >= 3 MTH (ARREARS 4-17)
-        (NOACC4 + NOACC5 + NOACC6 + NOACC7 + NOACC8 + NOACC9 + NOACC10 +
-         NOACC11 + NOACC12 + NOACC13 + NOACC14 + NOACC15 + NOACC16 + NOACC17) AS SUBACC,
-        (BRHAMT4 + BRHAMT5 + BRHAMT6 + BRHAMT7 + BRHAMT8 + BRHAMT9 + BRHAMT10 +
-         BRHAMT11 + BRHAMT12 + BRHAMT13 + BRHAMT14 + BRHAMT15 + BRHAMT16 + BRHAMT17) AS SUBBRH,
-        -- SUBTOTAL >= 6 MTH (ARREARS 7-17)
-        (NOACC7 + NOACC8 + NOACC9 + NOACC10 + NOACC11 + NOACC12 + 
-         NOACC13 + NOACC14 + NOACC15 + NOACC16 + NOACC17) AS SUBAC2,
-        (BRHAMT7 + BRHAMT8 + BRHAMT9 + BRHAMT10 + BRHAMT11 + BRHAMT12 + 
-         BRHAMT13 + BRHAMT14 + BRHAMT15 + BRHAMT16 + BRHAMT17) AS SUBBR2,
-        -- TOTAL (ALL ARREARS)
-        (NOACC1 + NOACC2 + NOACC3 + NOACC4 + NOACC5 + NOACC6 + NOACC7 + NOACC8 + NOACC9 +
-         NOACC10 + NOACC11 + NOACC12 + NOACC13 + NOACC14 + NOACC15 + NOACC16 + NOACC17) AS SOTACC,
-        (BRHAMT1 + BRHAMT2 + BRHAMT3 + BRHAMT4 + BRHAMT5 + BRHAMT6 + BRHAMT7 + BRHAMT8 + BRHAMT9 +
-         BRHAMT10 + BRHAMT11 + BRHAMT12 + BRHAMT13 + BRHAMT14 + BRHAMT15 + BRHAMT16 + BRHAMT17) AS TOTBRH
-    FROM BRANCH_PIVOT
-""")
-
-# ============================================================================
-# GENERATE FORMATTED TEXT REPORT
-# ============================================================================
-print("\nGENERATING FORMATTED REPORT...")
-
-OUTPUT_TXT = OUTPUT_DIR / f"EIMAR202_{REPTYEAR}{REPTMON}{REPTDAY}.txt"
-
-# GET DATA BY CATEGORY
-CATEGORIES = con.execute("SELECT DISTINCT CAT, TYPE FROM REPORT_DATA ORDER BY CAT").fetchall()
-
-with open(OUTPUT_TXT, 'w') as f:
-    for cat_idx, (CAT, TYPE) in enumerate(CATEGORIES):
-        # PAGE HEADER
-        PAGE_NUM = cat_idx + 1
-        f.write(f"PROGRAM-ID : EIMAR202{' '*26}P U B L I C   I S L A M I C  B A N K   B E R H A D{' '*9}PAGE NO.: {PAGE_NUM}\n")
-        f.write(f"{' '*15}OUTSTANDING LOANS CLASSIFIED AS NPL ISSUED FROM 1 JAN 98{' '*8}{TYPE:<13}{' '*2}{RDATE}\n")
-        f.write(" \n")
-        f.write("BRH     NO         < 1 MTH              NO     1 TO < 2 MTH              NO     2 TO < 3 MTH              NO      3 TO < 4 MTH              NO      4 TO < 5 MTH\n")
-        f.write("        NO    5 TO < 6 MTH              NO     6 TO < 7 MTH              NO     7 TO < 8 MTH              NO      8 TO < 9 MTH              NO     9 TO < 10 MTH\n")
-        f.write("        NO  10 TO < 11 MTH              NO   11 TO < 12 MTH              NO   12 TO < 18 MTH              NO    18 TO < 24 MTH              NO    24 TO < 36 MTH\n")
-        f.write("        NO        > 36 MTH              NO          DEFICIT             NO   SUBTOTAL >=3MTH              NO   SUBTOTAL >=6MTH              NO             TOTAL\n")
-        f.write("-"*40 + "-"*40 + "-"*40 + "-"*10 + "\n")
-        
-        # GET BRANCH DATA FOR THIS CATEGORY
-        branches = con.execute(f"""
-            SELECT * FROM REPORT_DATA 
-            WHERE CAT = '{CAT}'
-            ORDER BY BRANCH
-        """).fetchall()
-        
-        # CATEGORY TOTALS
-        TOTALS = [0] * 40  # 17 NOACC + 17 BRHAMT + 6 subtotals
-        
-        for branch_row in branches:
-            BRANCH = str(branch_row[2]).zfill(3)
-            BRHCODE = branch_row[3] or '   '
-            
-            # LINE 1
-            f.write(f"{BRANCH:<3} {branch_row[4]:>7,} {branch_row[5]:>16,.2f} {branch_row[6]:>7,} {branch_row[7]:>15,.2f} {branch_row[8]:>7,} {branch_row[9]:>15,.2f} {branch_row[10]:>8,} {branch_row[11]:>17,.2f} {branch_row[12]:>8,} {branch_row[13]:>17,.2f}\n")
-            
-            # LINE 2
-            f.write(f"{BRHCODE:<3} {branch_row[14]:>7,} {branch_row[15]:>16,.2f} {branch_row[16]:>7,} {branch_row[17]:>15,.2f} {branch_row[18]:>7,} {branch_row[19]:>15,.2f} {branch_row[20]:>8,} {branch_row[21]:>17,.2f} {branch_row[22]:>8,} {branch_row[23]:>17,.2f}\n")
-            
-            # LINE 3
-            f.write(f"    {branch_row[24]:>7,} {branch_row[25]:>16,.2f} {branch_row[26]:>7,} {branch_row[27]:>15,.2f} {branch_row[28]:>7,} {branch_row[29]:>15,.2f} {branch_row[30]:>8,} {branch_row[31]:>17,.2f} {branch_row[32]:>8,} {branch_row[33]:>17,.2f}\n")
-            
-            # LINE 4 (with subtotals)
-            SUBACC = branch_row[38]
-            SUBBRH = branch_row[39]
-            SUBAC2 = branch_row[40]
-            SUBBR2 = branch_row[41]
-            SOTACC = branch_row[42]
-            TOTBRH = branch_row[43]
-            
-            f.write(f"    {branch_row[34]:>7,} {branch_row[35]:>16,.2f} {branch_row[36]:>7,} {branch_row[37]:>15,.2f} {SUBACC:>7,} {SUBBRH:>15,.2f} {SUBAC2:>8,} {SUBBR2:>17,.2f} {SOTACC:>8,} {TOTBRH:>17,.2f}\n")
-            
-            # ACCUMULATE TOTALS
-            for i in range(4, 38):
-                TOTALS[i-4] += branch_row[i]
-            TOTALS[34] += SUBACC
-            TOTALS[35] += SUBBRH
-            TOTALS[36] += SUBAC2
-            TOTALS[37] += SUBBR2
-            TOTALS[38] += SOTACC
-            TOTALS[39] += TOTBRH
-        
-        # CATEGORY TOTALS
-        f.write("-"*40 + "-"*40 + "-"*40 + "-"*10 + "\n")
-        f.write(f"TOT {TOTALS[0]:>7,} {TOTALS[1]:>16,.2f} {TOTALS[2]:>7,} {TOTALS[3]:>15,.2f} {TOTALS[4]:>7,} {TOTALS[5]:>15,.2f} {TOTALS[6]:>8,} {TOTALS[7]:>17,.2f} {TOTALS[8]:>8,} {TOTALS[9]:>17,.2f}\n")
-        f.write(f"    {TOTALS[10]:>7,} {TOTALS[11]:>16,.2f} {TOTALS[12]:>7,} {TOTALS[13]:>15,.2f} {TOTALS[14]:>7,} {TOTALS[15]:>15,.2f} {TOTALS[16]:>8,} {TOTALS[17]:>17,.2f} {TOTALS[18]:>8,} {TOTALS[19]:>17,.2f}\n")
-        f.write(f"    {TOTALS[20]:>7,} {TOTALS[21]:>16,.2f} {TOTALS[22]:>7,} {TOTALS[23]:>15,.2f} {TOTALS[24]:>7,} {TOTALS[25]:>15,.2f} {TOTALS[26]:>8,} {TOTALS[27]:>17,.2f} {TOTALS[28]:>8,} {TOTALS[29]:>17,.2f}\n")
-        f.write(f"    {TOTALS[30]:>7,} {TOTALS[31]:>16,.2f} {TOTALS[32]:>7,} {TOTALS[33]:>15,.2f} {TOTALS[34]:>7,} {TOTALS[35]:>15,.2f} {TOTALS[36]:>8,} {TOTALS[37]:>17,.2f} {TOTALS[38]:>8,} {TOTALS[39]:>17,.2f}\n")
-        f.write("-"*40 + "-"*40 + "-"*40 + "-"*10 + "\n")
-        f.write("\n")
-        
-        if cat_idx < len(CATEGORIES) - 1:
-            f.write("\f")  # PAGE BREAK
-
-print(f"SAVED: {OUTPUT_TXT}")
-
-print("\n" + "="*80)
-print("REPORT COMPLETE")
-print("="*80)
-
-con.close()
+fixed the spacing and alignment so the data rows follows their title header columns respectively
