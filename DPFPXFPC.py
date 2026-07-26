@@ -87,7 +87,6 @@ def load_branch_data() -> pd.DataFrame:
             return pd.DataFrame()
     else:
         print("Branch file not found, creating default branch mapping")
-        # Create default branch mapping from loan data
         return pd.DataFrame()
 
 def create_default_branches(loan_df: pd.DataFrame) -> pd.DataFrame:
@@ -101,7 +100,7 @@ def create_default_branches(loan_df: pd.DataFrame) -> pd.DataFrame:
         if pd.notna(branch):
             branch_data.append({
                 'BRANCH': int(branch),
-                'BRHCODE': f"BR{int(branch):03d}"  # Default format
+                'BRHCODE': f"BR{int(branch):03d}"
             })
     
     df = pd.DataFrame(branch_data)
@@ -359,22 +358,11 @@ def calculate_totals(branch_summary: pd.DataFrame) -> Dict:
                 totacc[i] = cat_data[col_acc].sum()
         
         # Calculate subtotals (matching SAS logic)
-        # SUBBRH = SUM(BRHAMT4 through BRHAMT14)
         subbrh = sum(totamt[4:15])  # 4-14 inclusive
-        
-        # SUBBR2 = SUM(BRHAMT7 through BRHAMT14)
         subbr2 = sum(totamt[7:15])  # 7-14 inclusive
-        
-        # SUBACC = SUM(NOACC4 through NOACC14)
         subacc = sum(totacc[4:15])
-        
-        # SUBAC2 = SUM(NOACC7 through NOACC14)
         subac2 = sum(totacc[7:15])
-        
-        # TOTBRH = SUBBRH + BRHAMT1-3
         totbrh = subbrh + sum(totamt[1:4])
-        
-        # SOTACC = SUBACC + NOACC1-3
         sotacc = subacc + sum(totacc[1:4])
         
         # Category totals
@@ -413,10 +401,6 @@ def generate_report_a(loan_data: pd.DataFrame, variables: Dict) -> pd.DataFrame:
     """Generate first report (EIMAR101-A)"""
     report_df = loan_data.copy()
     report_df['PROGID'] = 'EIMAR101-A'
-    
-    # Save for later processing
-    report_df.to_parquet(OUTPUT_PATH / "PRNDATA_A.parquet")
-    
     return report_df
 
 def generate_report_b(loan_data: pd.DataFrame, variables: Dict, hpd_list: List[str]) -> pd.DataFrame:
@@ -436,86 +420,33 @@ def generate_report_b(loan_data: pd.DataFrame, variables: Dict, hpd_list: List[s
     filtered['PROGID'] = 'EIMAR101-B'
     print(f"Report B filtered records: {len(filtered)}")
     
-    # Save for later processing
-    filtered.to_parquet(OUTPUT_PATH / "PRNDATA_B.parquet")
-    
     return filtered
 
-def create_detailed_summary(report_df: pd.DataFrame) -> pd.DataFrame:
-    """Create detailed summary with all arrears buckets (LOAN7A equivalent)"""
-    
-    if report_df.empty:
-        return pd.DataFrame()
-    
-    # Calculate branch-level summaries
-    branch_summary = calculate_branch_summaries(report_df)
-    
-    if branch_summary.empty:
-        return pd.DataFrame()
-    
-    # Keep only the needed columns
-    keep_cols = []
-    if 'BRHCODE' in branch_summary.columns:
-        keep_cols.append('BRHCODE')
-    if 'TYPE' in branch_summary.columns:
-        keep_cols.append('TYPE')
-    
-    for i in range(1, 15):
-        keep_cols.extend([f'NOACC{i}', f'BRHAMT{i}'])
-    
-    # Get only columns that exist
-    available_cols = [col for col in keep_cols if col in branch_summary.columns]
-    detailed = branch_summary[available_cols].copy()
-    
-    detailed.to_parquet(OUTPUT_PATH / "LOAN7A_DETAILED.parquet")
-    
-    return detailed
+# ============================================================================
+# 8. Write Text Outputs
+# ============================================================================
 
-def write_txt_output(detailed_df: pd.DataFrame):
-    """Write text output (matching SAS FILE CCDTXT7A)"""
-    txt_path = OUTPUT_PATH / "EIMIR101_DETAILED.txt"
-    
-    if detailed_df.empty:
-        print("No data to write")
-        return
-    
-    with open(txt_path, 'w') as f:
-        # Write header
-        header = "BRHCODE\tTYPE"
-        for i in range(1, 15):
-            header += f"\tNOACC{i}\tBRHAMT{i}"
-        f.write(header + "\n")
-        
-        # Write data rows
-        for _, row in detailed_df.iterrows():
-            line = f"{row.get('BRHCODE', '')}\t{row.get('TYPE', '')}"
-            for i in range(1, 15):
-                noacc = row.get(f'NOACC{i}', 0)
-                brhamt = row.get(f'BRHAMT{i}', 0)
-                line += f"\t{noacc}\t{brhamt:,.2f}"
-            f.write(line + "\n")
-    
-    print(f"✓ Text output saved to: {txt_path}")
-
-def write_summary_txt(branch_summary: pd.DataFrame, report_name: str):
-    """Write summary report as text file"""
-    txt_path = OUTPUT_PATH / f"{report_name}_SUMMARY.txt"
+def write_report_txt(branch_summary: pd.DataFrame, report_name: str, variables: Dict):
+    """Write main report as text file"""
+    txt_path = OUTPUT_PATH / f"{report_name}.txt"
     
     if branch_summary.empty:
         print(f"No data for {report_name}")
         return
     
     with open(txt_path, 'w') as f:
-        f.write(f"{'='*80}\n")
-        f.write(f"{report_name} - Branch Summary Report\n")
-        f.write(f"{'='*80}\n\n")
-        
         # Write header
+        f.write("=" * 120 + "\n")
+        f.write(f"EIMIR101 {report_name} - Loan Arrears Report\n")
+        f.write(f"Report Date: {variables['RDATE']} ({variables['REPTDATE']})\n")
+        f.write("=" * 120 + "\n\n")
+        
+        # Write column headers
         header = "CAT\tBRANCH\tBRHCODE\tTYPE"
         for i in range(1, 15):
             header += f"\tNOACC{i}\tBRHAMT{i}"
         f.write(header + "\n")
-        f.write("-"*80 + "\n")
+        f.write("-" * 120 + "\n")
         
         # Write data rows
         for _, row in branch_summary.iterrows():
@@ -523,16 +454,109 @@ def write_summary_txt(branch_summary: pd.DataFrame, report_name: str):
             for i in range(1, 15):
                 noacc = row.get(f'NOACC{i}', 0)
                 brhamt = row.get(f'BRHAMT{i}', 0)
-                line += f"\t{noacc}\t{brhamt:,.2f}"
+                line += f"\t{int(noacc)}\t{brhamt:,.2f}"
             f.write(line + "\n")
         
-        f.write("-"*80 + "\n")
+        f.write("-" * 120 + "\n")
         f.write(f"Total branches: {len(branch_summary)}\n")
+        f.write("=" * 120 + "\n")
     
-    print(f"✓ Summary text saved to: {txt_path}")
+    print(f"✓ Report saved to: {txt_path}")
+
+def write_detailed_txt(branch_summary: pd.DataFrame, variables: Dict):
+    """Write detailed summary text file (LOAN7A equivalent)"""
+    txt_path = OUTPUT_PATH / "EIMIR101_DETAILED.txt"
+    
+    if branch_summary.empty:
+        print("No data for detailed summary")
+        return
+    
+    with open(txt_path, 'w') as f:
+        # Write header
+        f.write("=" * 120 + "\n")
+        f.write("EIMIR101 DETAILED - Loan Arrears Detailed Report\n")
+        f.write(f"Report Date: {variables['RDATE']} ({variables['REPTDATE']})\n")
+        f.write("=" * 120 + "\n\n")
+        
+        # Write column headers
+        header = "BRHCODE\tTYPE"
+        for i in range(1, 15):
+            header += f"\tNOACC{i}\tBRHAMT{i}"
+        f.write(header + "\n")
+        f.write("-" * 120 + "\n")
+        
+        # Write data rows (no CAT column, detailed by branch)
+        for _, row in branch_summary.iterrows():
+            line = f"{row.get('BRHCODE', '')}\t{row.get('TYPE', '')}"
+            for i in range(1, 15):
+                noacc = row.get(f'NOACC{i}', 0)
+                brhamt = row.get(f'BRHAMT{i}', 0)
+                line += f"\t{int(noacc)}\t{brhamt:,.2f}"
+            f.write(line + "\n")
+        
+        f.write("-" * 120 + "\n")
+        f.write(f"Total branches: {len(branch_summary)}\n")
+        f.write("=" * 120 + "\n")
+    
+    print(f"✓ Detailed report saved to: {txt_path}")
+
+def write_summary_txt(branch_summary: pd.DataFrame, totals: Dict, report_name: str, variables: Dict):
+    """Write summary with totals as text file"""
+    txt_path = OUTPUT_PATH / f"{report_name}_SUMMARY.txt"
+    
+    if branch_summary.empty:
+        print(f"No data for {report_name}")
+        return
+    
+    with open(txt_path, 'w') as f:
+        # Write header
+        f.write("=" * 120 + "\n")
+        f.write(f"EIMIR101 {report_name} - Summary Report with Totals\n")
+        f.write(f"Report Date: {variables['RDATE']} ({variables['REPTDATE']})\n")
+        f.write("=" * 120 + "\n\n")
+        
+        # Write summary by category
+        for cat, cat_totals in totals.items():
+            f.write(f"\nCategory {cat}: {cat_totals.get('branch_summary', pd.DataFrame())['TYPE'].iloc[0] if not cat_totals.get('branch_summary', pd.DataFrame()).empty else ''}\n")
+            f.write("-" * 80 + "\n")
+            
+            # Write arrears buckets
+            f.write("Arrears Bucket\t")
+            for i in range(1, 15):
+                f.write(f"{i}\t")
+            f.write("\n")
+            
+            f.write("Amount\t\t")
+            for i in range(1, 15):
+                f.write(f"{cat_totals['totamt'][i]:,.2f}\t")
+            f.write("\n")
+            
+            f.write("Count\t\t")
+            for i in range(1, 15):
+                f.write(f"{cat_totals['totacc'][i]}\t")
+            f.write("\n")
+            
+            # Write subtotals
+            f.write("\nSubtotals:\n")
+            f.write(f"  SUBBRH (Buckets 4-14): {cat_totals['subbrh']:,.2f}\n")
+            f.write(f"  SUBBR2 (Buckets 7-14): {cat_totals['subbr2']:,.2f}\n")
+            f.write(f"  SUBACC (Count 4-14): {cat_totals['subacc']}\n")
+            f.write(f"  SUBAC2 (Count 7-14): {cat_totals['subac2']}\n")
+            f.write(f"  TOTBRH (Buckets 1-14): {cat_totals['totbrh']:,.2f}\n")
+            f.write(f"  SOTACC (Count 1-14): {cat_totals['sotacc']}\n")
+            f.write(f"  GTOTBRH (Grand Total Amount): {cat_totals['gtotbrh']:,.2f}\n")
+            f.write(f"  GTOTACC (Grand Total Count): {cat_totals['gtotacc']}\n")
+            f.write("-" * 80 + "\n")
+        
+        f.write("\n" + "=" * 120 + "\n")
+        f.write(f"Total categories: {len(totals)}\n")
+        f.write(f"Total branches: {len(branch_summary)}\n")
+        f.write("=" * 120 + "\n")
+    
+    print(f"✓ Summary report saved to: {txt_path}")
 
 # ============================================================================
-# 8. Main Execution
+# 9. Main Execution
 # ============================================================================
 
 def main():
@@ -585,17 +609,24 @@ def main():
     totals_b = calculate_totals(summary_b)
     print(f"   Report B: {len(report_b)} records, {len(summary_b)} branch summaries")
     
-    # 7. Create detailed summary (from Report B)
-    print("\n7. Creating detailed summary...")
-    detailed_summary = create_detailed_summary(report_b)
+    # 7. Write text outputs
+    print("\n7. Writing text reports...")
     
-    # 8. Write text outputs
-    print("\n8. Writing text outputs...")
-    write_txt_output(detailed_summary)
-    write_summary_txt(summary_b, "EIMIR101-B")
+    # Write Report A
+    if not summary_a.empty:
+        write_report_txt(summary_a, "EIMIR101-A", variables)
+        write_summary_txt(summary_a, totals_a, "EIMIR101-A", variables)
     
-    # 9. Save additional outputs
-    print("\n9. Saving additional outputs...")
+    # Write Report B
+    if not summary_b.empty:
+        write_report_txt(summary_b, "EIMIR101-B", variables)
+        write_summary_txt(summary_b, totals_b, "EIMIR101-B", variables)
+        
+        # Write detailed report (from Report B)
+        write_detailed_txt(summary_b, variables)
+    
+    # 8. Save parquet outputs for reference (optional)
+    print("\n8. Saving parquet files for reference...")
     if not merged_data.empty:
         merged_data.to_parquet(OUTPUT_PATH / "LOANTEMP_CATEGORIZED.parquet")
     
@@ -635,14 +666,15 @@ def main():
     print(f"Report B records: {len(report_b)}")
     print(f"Categories processed: {len(totals_a) + len(totals_b)}")
     print(f"Output saved to: {OUTPUT_PATH}")
-    print("\nOutput files:")
-    for file in OUTPUT_PATH.glob("*.txt"):
+    print("\nText Report Files:")
+    for file in sorted(OUTPUT_PATH.glob("*.txt")):
         print(f"  - {file.name}")
-    for file in OUTPUT_PATH.glob("*.parquet"):
+    print("\nParquet Files (for reference):")
+    for file in sorted(OUTPUT_PATH.glob("*.parquet")):
         print(f"  - {file.name}")
 
 # ============================================================================
-# 9. Run the conversion
+# 10. Run the conversion
 # ============================================================================
 
 if __name__ == "__main__":
