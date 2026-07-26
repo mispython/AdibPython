@@ -8,14 +8,12 @@ ISSUED FROM 1 JAN 1998, CATEGORIZED BY PRODUCT TYPE AND ARREARS BUCKET
 
 import duckdb
 from pathlib import Path
-from datetime import datetime
-import pyarrow as pa
-import pyarrow.parquet as pq
+from datetime import datetime, timedelta
+import pyreadstat
 
 # INITIALIZE PATHS
 INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR202")
 OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR202")
-BNM_DIR = INPUT_DIR / "bnm"
 
 # CREATE DIRECTORIES
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -28,27 +26,9 @@ print("EIMIR202 - NPL HIRE PURCHASE DIRECT REPORT")
 print("="*80)
 
 # ============================================================================
-# READ REPORT DATE
+# SET REPORT DATE (YESTERDAY)
 # ============================================================================
-REPTDATE_FILE = BNM_DIR / "REPTDATE.parquet"
-
-if not REPTDATE_FILE.exists():
-    print(f"ERROR: REPTDATE FILE NOT FOUND: {REPTDATE_FILE}")
-    exit(1)
-
-result = con.execute(f"""
-    SELECT REPTDATE 
-    FROM read_parquet('{REPTDATE_FILE}')
-    LIMIT 1
-""").fetchone()
-
-REPTDATE = result[0]
-
-if isinstance(REPTDATE, (int, float)):
-    REPTDATE = datetime.strptime(str(int(REPTDATE)), '%Y%m%d').date()
-elif isinstance(REPTDATE, str):
-    REPTDATE = datetime.strptime(REPTDATE, '%Y-%m-%d').date()
-
+REPTDATE = datetime.now().date() - timedelta(days=1)
 RDATE = REPTDATE.strftime('%d%m%Y')
 REPTYEAR = str(REPTDATE.year)
 REPTMON = str(REPTDATE.month).zfill(2)
@@ -58,26 +38,60 @@ print(f"REPORT DATE: {REPTDATE}")
 print(f"RDATE: {RDATE}")
 
 # ============================================================================
-# READ BRANCH DATA
+# READ BRANCH DATA (LKP_BRANCH - FLAT FILE)
 # ============================================================================
-BRHFILE = INPUT_DIR / "brhfile.parquet"
+BRANCH_FILE = INPUT_DIR / "LKP_BRANCH"
 
-con.execute(f"""
-    CREATE OR REPLACE TABLE BRHDATA AS
-    SELECT 
-        BRANCH,
-        BRHCODE
-    FROM read_parquet('{BRHFILE}')
-""")
+if not BRANCH_FILE.exists():
+    print(f"ERROR: BRANCH FILE NOT FOUND: {BRANCH_FILE}")
+    exit(1)
+
+# Read flat file - assuming fixed width or delimited format
+# Adjust based on actual file structure
+with open(BRANCH_FILE, 'r') as f:
+    lines = f.readlines()
+
+# Parse flat file - this needs to match your actual format
+# Assuming format: BRANCH,BRHCODE with comma or tab delimiter
+branch_data = []
+for line in lines:
+    line = line.strip()
+    if line:
+        parts = line.split()  # Adjust delimiter as needed
+        if len(parts) >= 2:
+            branch_data.append((parts[0], parts[1]))
+
+# Create branch table
+con.execute("CREATE OR REPLACE TABLE BRHDATA (BRANCH VARCHAR, BRHCODE VARCHAR)")
+for branch, brhcode in branch_data:
+    con.execute(f"INSERT INTO BRHDATA VALUES ('{branch}', '{brhcode}')")
+
+branch_count = con.execute("SELECT COUNT(*) FROM BRHDATA").fetchone()[0]
+print(f"BRANCH RECORDS: {branch_count:,}")
+
+# ============================================================================
+# READ LOAN DATA (LOANTEMP.sas7bdat)
+# ============================================================================
+LOANTEMP_FILE = INPUT_DIR / "LOANTEMP.sas7bdat"
+
+if not LOANTEMP_FILE.exists():
+    print(f"ERROR: LOANTEMP FILE NOT FOUND: {LOANTEMP_FILE}")
+    exit(1)
+
+print("\nREADING LOANTEMP.SAS7BDAT...")
+df, meta = pyreadstat.read_sas7bdat(str(LOANTEMP_FILE))
+
+# Register DataFrame as DuckDB table
+con.execute("CREATE OR REPLACE TABLE LOANTEMP AS SELECT * FROM df")
+
+print(f"LOANTEMP RECORDS: {con.execute('SELECT COUNT(*) FROM LOANTEMP').fetchone()[0]:,}")
 
 # ============================================================================
 # PROCESS LOAN DATA - CREATE CATEGORIES
 # ============================================================================
 print("\nPROCESSING LOAN DATA...")
 
-LOANTEMP_FILE = BNM_DIR / "LOANTEMP.parquet"
-
-con.execute(f"""
+con.execute("""
     CREATE OR REPLACE TABLE LOAN1_BASE AS
     SELECT 
         *,
@@ -93,7 +107,7 @@ con.execute(f"""
             WHEN PRODUCT IN (128, 130) AND CHECKDT = 1 THEN '(AITAB)'
             WHEN PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1 THEN '(-HPD-)'
         END AS TYPE
-    FROM read_parquet('{LOANTEMP_FILE}')
+    FROM LOANTEMP
     WHERE (ARREAR > 6 OR BORSTAT IN ('R', 'I', 'F'))
         AND BALANCE > 0
 """)
@@ -249,7 +263,7 @@ with open(OUTPUT_TXT, 'w') as f:
         """).fetchall()
         
         # CATEGORY TOTALS
-        TOTALS = [0] * 34  # 17 NOACC + 17 BRHAMT
+        TOTALS = [0] * 40  # 17 NOACC + 17 BRHAMT + 6 subtotals
         
         for branch_row in branches:
             BRANCH = str(branch_row[2]).zfill(3)
@@ -298,18 +312,8 @@ with open(OUTPUT_TXT, 'w') as f:
 
 print(f"SAVED: {OUTPUT_TXT}")
 
-# ============================================================================
-# SAVE DATA FILES
-# ============================================================================
-OUTPUT_PARQUET = OUTPUT_DIR / f"EIMAR202_{REPTYEAR}{REPTMON}{REPTDAY}.parquet"
-pq.write_table(con.execute("SELECT * FROM REPORT_DATA").arrow(), OUTPUT_PARQUET)
-print(f"SAVED: {OUTPUT_PARQUET}")
-
 print("\n" + "="*80)
 print("REPORT COMPLETE")
 print("="*80)
 
 con.close()
-
-
-remove the reptdate input, no need since gonna be use datetime timedelta - 1 instead. output in text file. input for loantemp,sas7bdat is sas dataset, may use pyreadstat. and for branch input, the input is LKP_BRANCH (flat file no extension). only 2 inputs
