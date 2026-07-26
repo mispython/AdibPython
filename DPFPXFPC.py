@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+"""
+EIMIR202 - NPL HIRE PURCHASE DIRECT REPORT
+1:1 CONVERSION FROM SAS TO PYTHON
+REPORTS OUTSTANDING LOANS CLASSIFIED AS NPL FOR HP DIRECT PRODUCTS
+ISSUED FROM 1 JAN 1998, CATEGORIZED BY PRODUCT TYPE AND ARREARS BUCKET
+"""
+
 import duckdb
 import pandas as pd
 import pyreadstat
@@ -8,16 +16,16 @@ import os
 
 # Path configuration
 SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
-INPUT_PATH = SCRIPT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201"
-OUTPUT_PATH = SCRIPT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR201"
+INPUT_PATH = SCRIPT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR202"
+OUTPUT_PATH = SCRIPT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR202"
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
 # File paths
-LOANTEMP_FILE = INPUT_PATH / "loantemp.sas7bdat"
+LOANTEMP_FILE = INPUT_PATH / "LOANTEMP.sas7bdat"
 BRHFILE_FILE = INPUT_PATH / "LKP_BRANCH"
 
 # Output file - only date, no timestamp
-OUTPUT_FILE = OUTPUT_PATH / f"EIMIR201_REPORT_{datetime.now().strftime('%Y%m%d')}.txt"
+OUTPUT_FILE = OUTPUT_PATH / f"EIMIR202_REPORT_{datetime.now().strftime('%Y%m%d')}.txt"
 
 def read_sas7bdat_with_pandas(filepath):
     """Read SAS7BDAT file using pandas/pyreadstat"""
@@ -59,12 +67,12 @@ def main():
     
     print(f"Report date: {rdate}")
 
-    # Check and find BRHFILE
+    # Check and find BRHFILE (LKP_BRANCH)
     if not BRHFILE_FILE.exists():
         alt_paths = [
-            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/LKP_BRANCH"),
-            Path("input/prod/EIMIR201/LKP_BRANCH"),
-            Path("../input/prod/EIMIR201/LKP_BRANCH"),
+            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR202/LKP_BRANCH"),
+            Path("input/prod/EIMIR202/LKP_BRANCH"),
+            Path("../input/prod/EIMIR202/LKP_BRANCH"),
         ]
         for alt_path in alt_paths:
             if alt_path.exists():
@@ -91,8 +99,8 @@ def main():
     # Check and find LOANTEMP file
     if not LOANTEMP_FILE.exists():
         alt_loantemp_paths = [
-            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
-            Path("input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
+            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR202/LOANTEMP.sas7bdat"),
+            Path("input/prod/EIMIR202/LOANTEMP.sas7bdat"),
         ]
         for alt_path in alt_loantemp_paths:
             if alt_path.exists():
@@ -131,10 +139,8 @@ def main():
                 WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN '(-HPD-)'
             END AS TYPE
         FROM loantemp
-        WHERE (PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1)
-           OR (PRODUCT IN (380, 381) AND CHECKDT = 1)
-           OR (PRODUCT IN (128, 130) AND CHECKDT = 1)
-           OR (PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1)
+        WHERE (ARREAR > 6 OR BORSTAT IN ('R', 'I', 'F'))
+            AND BALANCE > 0
     )
     SELECT * FROM categorized
     WHERE CAT IS NOT NULL
@@ -190,9 +196,9 @@ def main():
                 # Print page header if first branch in category
                 if first_branch_in_category:
                     pagecnt += 1
-                    f.write(f"PROGRAM-ID : EIMAR201                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {pagecnt}\n")
+                    f.write(f"PROGRAM-ID : EIMAR202                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {pagecnt}\n")
                     cat_type = branch_group['TYPE'].iloc[0] if len(branch_group) > 0 else '          '
-                    f.write(f"                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998  {cat_type}       {rdate}\n")
+                    f.write(f"                                   OUTSTANDING LOANS CLASSIFIED AS NPL ISSUED FROM 1 JAN 1998  {cat_type}       {rdate}\n")
                     f.write("\n")
                     # Column headers with 2-3 spaces between columns
                     f.write("BRH     NO          < 1 MTH       NO     1 TO < 2 MTH       NO     2 TO < 3 MTH        NO      3 TO < 4 MTH        NO      4 TO < 5 MTH\n")
@@ -239,7 +245,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-need to adjust the reporting alignment and spacing for the title headers and data rows. above code is the sample that you may follow to implement in EIMIR202
