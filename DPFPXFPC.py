@@ -2,35 +2,37 @@
 EIMIR104 SAS to Python conversion
 Processes NPL (Non-Performing Loan) reports with 17-bucket structure
 Combines EIMIR103 NPL logic with EIMIR102 17-bucket format
+Output: Text file matching CCDTXT2 format
 """
 
 from pathlib import Path
-from datetime import date
+from datetime import datetime, timedelta
+import pyreadstat
 import polars as pl
-from typing import Dict, List
+from typing import Dict, List, Tuple
+import numpy as np
 
 # Setup paths
 BASE_PATH = Path(".")
-INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR101 - 104"
-OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR104"
+INPUT_PATH = BASE_PATH / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR101 - 104"
+OUTPUT_PATH = BASE_PATH / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR104"
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# 1. REPTDATE Processing
+# 1. REPTDATE Processing (using datetime - 1 day)
 # ============================================================================
 
 def process_repdate() -> Dict[str, str]:
-    """Process REPTDATE and extract formatted variables"""
-    repdate_path = INPUT_PATH / "BNM/REPTDATE.parquet"
-    df = pl.read_parquet(repdate_path)
-    repdate = df["REPTDATE"][0]
+    """Process REPTDATE using current date minus 1 day"""
+    repdate = datetime.now() - timedelta(days=1)
     
     return {
         'RDATE': repdate.strftime("%d%m%y"),  # DDMMYY8.
         'REPTYEAR': str(repdate.year),        # YEAR4.
         'REPTMON': f"{repdate.month:02d}",    # Z2.
         'REPTDAY': f"{repdate.day:02d}",      # Z2.
-        'REPTDATE': repdate
+        'REPTDATE': repdate.strftime("%d/%m/%Y"),  # DD/MM/YYYY for display
+        'REPTDATE_DISPLAY': repdate.strftime("%d/%m/%Y")  # For header
     }
 
 # ============================================================================
@@ -38,15 +40,35 @@ def process_repdate() -> Dict[str, str]:
 # ============================================================================
 
 def load_branch_data() -> pl.DataFrame:
-    """Load branch header data"""
-    branch_path = INPUT_PATH / "BRHFILE.parquet"
-    if branch_path.exists():
-        return pl.read_parquet(branch_path)
-    else:
-        return pl.DataFrame(schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8})
+    """Load branch header data from LKP_BRANCH flatfile"""
+    branch_path = INPUT_PATH / "LKP_BRANCH"
+    
+    # Read fixed-width flatfile
+    # Format: BRANCH (first 3 chars), BRHCODE (next 3 chars)
+    branches = []
+    with open(branch_path, 'r') as f:
+        for line in f:
+            if len(line.strip()) >= 6:
+                branch_code = line[0:3].strip()
+                brhcode = line[3:6].strip()
+                if branch_code and brhcode:
+                    branches.append({
+                        "BRANCH": int(branch_code),
+                        "BRHCODE": brhcode
+                    })
+    
+    return pl.DataFrame(branches)
+
+def read_sas_data(filename: str) -> pl.DataFrame:
+    """Read SAS dataset using pyreadstat"""
+    filepath = INPUT_PATH / "BNM" / filename
+    df, meta = pyreadstat.read_sas7bdat(str(filepath))
+    return pl.from_pandas(df)
 
 def extract_census9(census_value: float) -> str:
     """Extract 7th character from formatted census (8.2 format)"""
+    if census_value is None or np.isnan(census_value):
+        return ' '
     formatted = f"{census_value:8.2f}"  # 8.2 format with spaces
     return formatted[6] if len(formatted) >= 7 else ' '
 
@@ -130,334 +152,294 @@ def categorize_npl_loans_17bucket(loan_df: pl.DataFrame, hpd_list: List[str]) ->
         return pl.DataFrame(schema=filtered_df.schema)
 
 # ============================================================================
-# 3. Calculate 17-Bucket NPL Summaries
+# 3. Generate Text Report in CCDTXT2 Format
 # ============================================================================
 
-def calculate_17_bucket_npl_summaries(loan_df: pl.DataFrame) -> Dict:
-    """Calculate 17-bucket NPL summaries (combines NPL logic with 17 buckets)"""
+def generate_ccdtxt2_report(npl_df: pl.DataFrame, branch_df: pl.DataFrame, 
+                            category_type: str, report_date: str, 
+                            prog_id: str, output_file: Path):
+    """Generate report in CCDTXT2 format with 17-bucket structure"""
     
-    # Group by CAT, BRANCH, ARREAR (not ARREAR2)
-    branch_summary = loan_df.group_by(["CAT", "BRANCH", "ARREAR"]).agg([
-        pl.col("BRHCODE").first().alias("BRHCODE"),
-        pl.col("TYPE").first().alias("TYPE"),
-        pl.col("BALANCE").sum().alias("BRHAMT"),
-        pl.count().alias("NOACC")
-    ])
+    # Merge with branch data
+    merged_df = npl_df.join(branch_df, on="BRANCH", how="left")
     
-    # Filter ARREAR values 1-17
-    branch_summary = branch_summary.filter(
-        (pl.col("ARREAR") >= 1) & (pl.col("ARREAR") <= 17)
-    )
+    # Group by BRANCH and ARREAR bucket
+    bucket_data = merged_df.group_by(["BRANCH", "BRHCODE", "ARREAR"]).agg([
+        pl.count().alias("NOACC"),
+        pl.sum("BALANCE").alias("BALANCE")
+    ]).sort(["BRANCH", "ARREAR"])
     
-    result_dict = {}
-    for cat in branch_summary["CAT"].unique().to_list():
-        cat_data = branch_summary.filter(pl.col("CAT") == cat)
+    # Create branch-level summary with 17 buckets
+    branch_summaries = []
+    for branch in sorted(merged_df["BRANCH"].unique()):
+        branch_info = merged_df.filter(pl.col("BRANCH") == branch)
+        brhcode = branch_info["BRHCODE"].drop_nulls().first() if len(branch_info["BRHCODE"].drop_nulls()) > 0 else ""
         
-        # Initialize arrays for 17 buckets
-        totamt = [0.0] * 18  # 1-17 (index 0 unused)
-        totacc = [0] * 18
-        branch_results = []
+        # Initialize buckets 1-17
+        buckets = {i: {"count": 0, "amount": 0.0} for i in range(1, 18)}
         
-        # Process each branch
-        for branch in cat_data["BRANCH"].unique().to_list():
-            branch_data = cat_data.filter(pl.col("BRANCH") == branch)
-            
-            # Initialize branch arrays
-            branhamt = [0.0] * 18
-            noacc = [0] * 18
-            
-            # Fill branch arrays
-            for row in branch_data.iter_rows(named=True):
-                arrear = int(row["ARREAR"])
-                branhamt[arrear] = row["BRHAMT"]
-                noacc[arrear] = row["NOACC"]
-            
-            # Calculate subtotals (17-bucket logic from EIMIR102)
-            # SUBBRH = SUM(buckets 4-17)
-            subbrh = sum(branhamt[4:18])
-            # SUBBR2 = SUBBRH - buckets 4-6
-            subbr2 = subbrh - sum(branhamt[4:7])
-            subacc = sum(noacc[4:18])
-            subac2 = subacc - sum(noacc[4:7])
-            totbrh = subbrh + sum(branhamt[1:4])
-            sotacc = subacc + sum(noacc[1:4])
-            
-            # Add to totals
-            for i in range(1, 18):
-                totamt[i] += branhamt[i]
-                totacc[i] += noacc[i]
-            
-            branch_results.append({
-                "BRANCH": branch,
-                "BRHCODE": branch_data["BRHCODE"][0],
-                "NOACC": noacc,
-                "BRHAMT": branhamt,
-                "SUBBRH": subbrh,
-                "SUBBR2": subbr2,
-                "SUBACC": subacc,
-                "SUBAC2": subac2,
-                "TOTBRH": totbrh,
-                "SOTACC": sotacc
-            })
+        # Fill bucket data
+        for row in bucket_data.filter(pl.col("BRANCH") == branch).iter_rows(named=True):
+            bucket = int(row["ARREAR"])
+            if 1 <= bucket <= 17:
+                buckets[bucket]["count"] = row["NOACC"]
+                buckets[bucket]["amount"] = row["BALANCE"]
         
-        # Calculate category totals
-        sgtotbrh = sum(totamt[4:18])
-        sgtotbr2 = sgtotbrh - sum(totamt[4:7])
-        sgtotacc = sum(totacc[4:18])
-        sgtotac2 = sgtotacc - sum(totacc[4:7])
-        gtotbrh = sgtotbrh + sum(totamt[1:4])
-        gtotacc = sgtotacc + sum(totacc[1:4])
+        # Calculate subtotals
+        sub_ge3_count = sum(buckets[i]["count"] for i in range(4, 18))  # >= 3 months
+        sub_ge3_amount = sum(buckets[i]["amount"] for i in range(4, 18))
+        sub_ge6_count = sum(buckets[i]["count"] for i in range(7, 18))  # >= 6 months  
+        sub_ge6_amount = sum(buckets[i]["amount"] for i in range(7, 18))
+        total_count = sum(buckets[i]["count"] for i in range(1, 18))
+        total_amount = sum(buckets[i]["amount"] for i in range(1, 18))
         
-        result_dict[cat] = {
-            "branches": branch_results,
-            "totamt": totamt,
-            "totacc": totacc,
-            "sgtotbrh": sgtotbrh,
-            "sgtotbr2": sgtotbr2,
-            "sgtotacc": sgtotacc,
-            "sgtotac2": sgtotac2,
-            "gtotbrh": gtotbrh,
-            "gtotacc": gtotacc
-        }
-    
-    return result_dict
-
-# ============================================================================
-# 4. Generate 17-Bucket NPL Report Output
-# ============================================================================
-
-def create_17_bucket_npl_report(results: Dict, variables: Dict):
-    """Create 17-bucket NPL report output"""
-    
-    report_data = []
-    for cat, cat_data in results.items():
-        # Add branch data
-        for branch in cat_data["branches"]:
-            report_data.append({
-                "REPORT_TYPE": "17_BUCKET_NPL",
-                "PROGID": "EIMAR104",
-                "CATEGORY": cat,
-                "BRANCH": branch["BRANCH"],
-                "BRHCODE": branch["BRHCODE"],
-                **{f"NOACC{i}": branch["NOACC"][i] for i in range(1, 18)},
-                **{f"BRHAMT{i}": branch["BRHAMT"][i] for i in range(1, 18)},
-                "SUBBRH": branch["SUBBRH"],
-                "SUBBR2": branch["SUBBR2"],
-                "SUBACC": branch["SUBACC"],
-                "SUBAC2": branch["SUBAC2"],
-                "TOTBRH": branch["TOTBRH"],
-                "SOTACC": branch["SOTACC"]
-            })
-        
-        # Add category totals
-        report_data.append({
-            "REPORT_TYPE": "17_BUCKET_NPL_TOTAL",
-            "PROGID": "EIMAR104",
-            "CATEGORY": cat,
-            "BRANCH": "TOTAL",
-            "BRHCODE": "",
-            **{f"NOACC{i}": cat_data["totacc"][i] for i in range(1, 18)},
-            **{f"BRHAMT{i}": cat_data["totamt"][i] for i in range(1, 18)},
-            "SUBBRH": cat_data["sgtotbrh"],
-            "SUBBR2": cat_data["sgtotbr2"],
-            "SUBACC": cat_data["sgtotacc"],
-            "SUBAC2": cat_data["sgtotac2"],
-            "TOTBRH": cat_data["gtotbrh"],
-            "SOTACC": cat_data["gtotacc"]
+        branch_summaries.append({
+            "BRANCH": branch,
+            "BRHCODE": brhcode,
+            "buckets": buckets,
+            "sub_ge3_count": sub_ge3_count,
+            "sub_ge3_amount": sub_ge3_amount,
+            "sub_ge6_count": sub_ge6_count,
+            "sub_ge6_amount": sub_ge6_amount,
+            "total_count": total_count,
+            "total_amount": total_amount
         })
     
-    if report_data:
-        df = pl.DataFrame(report_data)
-        df.write_parquet(OUTPUT_PATH / "17_BUCKET_NPL_REPORT.parquet")
-        print(f"âœ“ 17-bucket NPL report saved: {len(df)} records")
-        return df
-    return None
+    # Generate text output
+    with open(output_file, 'a') as f:  # 'a' for append mode
+        # Header page
+        _write_report_header(f, prog_id, category_type, report_date)
+        
+        # Detail lines
+        for branch_sum in branch_summaries:
+            _write_branch_detail(f, branch_sum)
+        
+        # Grand totals
+        _write_grand_totals(f, branch_summaries)
+        
+        f.write("\f")  # Form feed for new page
+
+def _write_report_header(f, prog_id: str, category_type: str, report_date: str):
+    """Write CCDTXT2 format header"""
+    # Line 1: Program ID and title
+    title_line = f"1PROGRAM-ID : {prog_id:<20} P U B L I C   I S L A M I C   B A N K   B E R H A D"
+    f.write(f"{title_line:<120}PAGE NO.: 1\n")
+    
+    # Line 2: Report title and date (centered)
+    report_title = f"OUTSTANDING LOANS IN ARREARS ({category_type})"
+    date_part = report_date
+    # Center title with date on right
+    padding = 60 - len(report_title)
+    f.write(f"{' ' * padding}{report_title}{' ' * 10}{date_part}\n")
+    
+    # Line 3: Bucket headers - Line 1
+    header_line1 = ("0BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       "
+                    "NO      3 TO < 4 MTH       NO      4 TO < 5 MTH")
+    f.write(f"{header_line1}\n")
+    
+    # Line 4: Bucket headers - Line 2
+    header_line2 = ("        NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       "
+                    "NO      8 TO < 9 MTH       NO     9 TO < 12 MTH")
+    f.write(f"{header_line2}\n")
+    
+    # Line 5: Bucket headers - Line 3
+    header_line3 = ("        NO   12 TO < 18 MTH      NO   18 TO < 24 MTH      NO   24 TO < 36 MTH       "
+                    "NO          > 36 MTH       NO   SUBTOTAL >=3MTH")
+    f.write(f"{header_line3}\n")
+    
+    # Line 6: Bucket headers - Line 4
+    header_line4 = ("                                                                                    "
+                    "NO   SUBTOTAL >=6MTH       NO             TOTAL")
+    f.write(f"{header_line4}\n")
+    
+    # Line 7: Separator
+    f.write(" " + "-" * 98 + "\n")
+
+def _write_branch_detail(f, branch_sum: Dict):
+    """Write branch detail lines in CCDTXT2 format"""
+    b = branch_sum["buckets"]
+    
+    # Format numbers with commas for thousands
+    def fmt_num(n):
+        return f"{n:>7}" if n >= 0 else f"{n:>7}"
+    
+    def fmt_amt(a):
+        return f"{a:>12,.2f}" if a >= 0 else f"{a:>12,.2f}"
+    
+    # Line 1: Branch code + buckets 1-5
+    line1 = (f" {branch_sum['BRANCH']:>3}   {fmt_num(b[1]['count'])}  {fmt_amt(b[1]['amount'])}   "
+             f"{fmt_num(b[2]['count'])}  {fmt_amt(b[2]['amount'])}   "
+             f"{fmt_num(b[3]['count'])}  {fmt_amt(b[3]['amount'])}    "
+             f"{fmt_num(b[4]['count'])}  {fmt_amt(b[4]['amount'])}        "
+             f"{fmt_num(b[5]['count'])}  {fmt_amt(b[5]['amount'])}")
+    f.write(f"{line1}\n")
+    
+    # Line 2: BRHCODE + buckets 6-10
+    line2 = (f" {branch_sum['BRHCODE']:<3}   {fmt_num(b[6]['count'])}  {fmt_amt(b[6]['amount'])}   "
+             f"{fmt_num(b[7]['count'])}  {fmt_amt(b[7]['amount'])}   "
+             f"{fmt_num(b[8]['count'])}  {fmt_amt(b[8]['amount'])}    "
+             f"{fmt_num(b[9]['count'])}  {fmt_amt(b[9]['amount'])}        "
+             f"{fmt_num(b[10]['count'])}  {fmt_amt(b[10]['amount'])}")
+    f.write(f"{line2}\n")
+    
+    # Line 3: Empty BRH + buckets 11-15
+    line3 = (f"            {fmt_num(b[11]['count'])}  {fmt_amt(b[11]['amount'])}   "
+             f"{fmt_num(b[12]['count'])}  {fmt_amt(b[12]['amount'])}   "
+             f"{fmt_num(b[13]['count'])}  {fmt_amt(b[13]['amount'])}    "
+             f"{fmt_num(b[14]['count'])}  {fmt_amt(b[14]['amount'])}        "
+             f"{fmt_num(b[15]['count'])}  {fmt_amt(b[15]['amount'])}")
+    f.write(f"{line3}\n")
+    
+    # Line 4: Buckets 16-17 + subtotals
+    line4 = (f"                                                                                   "
+             f"{fmt_num(b[16]['count'])}  {fmt_amt(b[16]['amount'])}   "
+             f"{fmt_num(b[17]['count'])}  {fmt_amt(b[17]['amount'])}")
+    f.write(f"{line4}\n")
+    
+    # Line 5: Subtotals continued + total
+    line5 = (f"                                                                                  "
+             f"{fmt_num(branch_sum['sub_ge3_count'])}  {fmt_amt(branch_sum['sub_ge3_amount'])}   "
+             f"{fmt_num(branch_sum['sub_ge6_count'])}  {fmt_amt(branch_sum['sub_ge6_amount'])}       "
+             f"{fmt_num(branch_sum['total_count'])}  {fmt_amt(branch_sum['total_amount'])}")
+    f.write(f"{line5}\n")
+
+def _write_grand_totals(f, branch_summaries: List[Dict]):
+    """Write grand totals in CCDTXT2 format"""
+    # Calculate grand totals
+    tot_buckets = {i: {"count": 0, "amount": 0.0} for i in range(1, 18)}
+    total_sub_ge3_count = 0
+    total_sub_ge3_amount = 0.0
+    total_sub_ge6_count = 0
+    total_sub_ge6_amount = 0.0
+    total_all_count = 0
+    total_all_amount = 0.0
+    
+    for branch_sum in branch_summaries:
+        for i in range(1, 18):
+            tot_buckets[i]["count"] += branch_sum["buckets"][i]["count"]
+            tot_buckets[i]["amount"] += branch_sum["buckets"][i]["amount"]
+        total_sub_ge3_count += branch_sum["sub_ge3_count"]
+        total_sub_ge3_amount += branch_sum["sub_ge3_amount"]
+        total_sub_ge6_count += branch_sum["sub_ge6_count"]
+        total_sub_ge6_amount += branch_sum["sub_ge6_amount"]
+        total_all_count += branch_sum["total_count"]
+        total_all_amount += branch_sum["total_amount"]
+    
+    # Separator line
+    f.write(" " + "-" * 98 + "\n")
+    
+    # Grand total using same format as branch detail
+    grand_sum = {
+        "BRANCH": "",
+        "BRHCODE": "",
+        "buckets": tot_buckets,
+        "sub_ge3_count": total_sub_ge3_count,
+        "sub_ge3_amount": total_sub_ge3_amount,
+        "sub_ge6_count": total_sub_ge6_count,
+        "sub_ge6_amount": total_sub_ge6_amount,
+        "total_count": total_all_count,
+        "total_amount": total_all_amount
+    }
+    
+    _write_branch_detail(f, grand_sum)
 
 # ============================================================================
-# 5. NPL Bucket Analysis
-# ============================================================================
-
-def analyze_npl_by_buckets(loan_df: pl.DataFrame) -> Dict:
-    """Analyze NPL distribution across 17 buckets"""
-    
-    analysis_results = {}
-    
-    for cat in loan_df["CAT"].unique().to_list():
-        cat_data = loan_df.filter(pl.col("CAT") == cat)
-        
-        # Distribution across buckets 1-17
-        bucket_dist = {}
-        for bucket in range(1, 18):
-            bucket_data = cat_data.filter(pl.col("ARREAR") == bucket)
-            if len(bucket_data) > 0:
-                bucket_dist[f"BUCKET_{bucket}"] = {
-                    "ACCOUNT_COUNT": len(bucket_data),
-                    "TOTAL_BALANCE": bucket_data["BALANCE"].sum(),
-                    "AVG_BALANCE": bucket_data["BALANCE"].mean()
-                }
-        
-        # Focus on NPL buckets (4-17)
-        npl_buckets = {}
-        for bucket in range(4, 18):
-            bucket_data = cat_data.filter(pl.col("ARREAR") == bucket)
-            if len(bucket_data) > 0:
-                npl_buckets[f"BUCKET_{bucket}"] = len(bucket_data)
-        
-        # Severe NPL buckets (7-17)
-        severe_npl_buckets = {}
-        for bucket in range(7, 18):
-            bucket_data = cat_data.filter(pl.col("ARREAR") == bucket)
-            if len(bucket_data) > 0:
-                severe_npl_buckets[f"BUCKET_{bucket}"] = len(bucket_data)
-        
-        analysis_results[cat] = {
-            "total_accounts": len(cat_data),
-            "total_balance": cat_data["BALANCE"].sum(),
-            "bucket_distribution": bucket_dist,
-            "npl_accounts_buckets_4_17": sum(npl_buckets.values()),
-            "severe_npl_accounts_buckets_7_17": sum(severe_npl_buckets.values()),
-            "avg_arrear": cat_data["ARREAR"].mean() if len(cat_data) > 0 else 0,
-            "max_arrear": cat_data["ARREAR"].max() if len(cat_data) > 0 else 0
-        }
-    
-    return analysis_results
-
-# ============================================================================
-# 6. Main Execution
+# 4. Main Execution
 # ============================================================================
 
 def main():
     """Main execution function"""
     print("=" * 60)
     print("EIMIR104 SAS to Python Conversion - 17-Bucket NPL Report")
+    print("CCDTXT2 Format Output")
     print("=" * 60)
     
     # HPD list (would come from macro variable &HPD)
     HPD_LIST = ["110", "115", "700", "705"]
     
-    # 1. Process REPTDATE
+    # 1. Process REPTDATE (current date - 1 day)
     print("\n1. Processing REPTDATE...")
     variables = process_repdate()
     print(f"   Report Date: {variables['RDATE']}")
     
-    # 2. Load loan data
-    print("\n2. Loading loan data...")
-    loan_path = INPUT_PATH / "BNM/LOANTEMP.parquet"
-    loan_df = pl.read_parquet(loan_path)
-    branch_df = load_branch_data()
-    print(f"   Total loans: {len(loan_df)}")
-    print(f"   Total branches: {len(branch_df)}")
+    # 2. Load loan data from SAS file
+    print("\n2. Loading loan data from SAS file...")
+    try:
+        loan_df = read_sas_data("LOANTEMP.sas7bdat")
+        print(f"   Total loans loaded: {len(loan_df)}")
+    except Exception as e:
+        print(f"   Error reading SAS file: {e}")
+        return
     
-    # 3. Categorize NPL loans for 17-bucket report
-    print("\n3. Categorizing NPL loans (17-bucket)...")
+    # 3. Load branch data from flatfile
+    print("\n3. Loading branch data from LKP_BRANCH...")
+    try:
+        branch_df = load_branch_data()
+        print(f"   Total branches loaded: {len(branch_df)}")
+    except Exception as e:
+        print(f"   Error reading branch file: {e}")
+        branch_df = pl.DataFrame(schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8})
+    
+    # 4. Categorize NPL loans
+    print("\n4. Categorizing NPL loans (17-bucket)...")
     npl_categorized = categorize_npl_loans_17bucket(loan_df, HPD_LIST)
     print(f"   NPL candidates: {len(npl_categorized)}")
     
-    # 4. Merge with branch data
-    print("\n4. Merging with branch data...")
-    merged_npl = npl_categorized.join(
-        branch_df,
-        on="BRANCH",
-        how="inner"
-    ).sort(["CAT", "BRANCH"])
-    print(f"   Merged NPL records: {len(merged_npl)}")
+    # 5. Generate CCDTXT2 reports by category
+    print("\n5. Generating CCDTXT2 reports by category...")
+    
+    for cat in npl_categorized["CAT"].unique().to_list():
+        cat_data = npl_categorized.filter(pl.col("CAT") == cat)
+        cat_type = cat_data["TYPE"].drop_nulls().first() if len(cat_data["TYPE"].drop_nulls()) > 0 else ""
+        
+        # Create output file for this category (append mode)
+        output_file = OUTPUT_PATH / f"EIMIR104_{cat}_CCDTXT2.txt"
+        
+        # Clear file if exists, or create new
+        if output_file.exists():
+            output_file.unlink()
+        
+        print(f"   Generating {cat_type} report...")
+        generate_ccdtxt2_report(
+            npl_df=cat_data,
+            branch_df=branch_df,
+            category_type=cat_type,
+            report_date=variables['REPTDATE_DISPLAY'],
+            prog_id=f"EIMAR104-{cat}",
+            output_file=output_file
+        )
+        print(f"   ✓ Report saved: {output_file}")
+    
+    # 6. Generate combined report (all categories)
+    print("\n6. Generating combined CCDTXT2 report...")
+    combined_output = OUTPUT_PATH / "EIMIR104_COMBINED_CCDTXT2.txt"
+    if combined_output.exists():
+        combined_output.unlink()
+    
+    # Process each category and append to combined file
+    for cat in sorted(npl_categorized["CAT"].unique().to_list()):
+        cat_data = npl_categorized.filter(pl.col("CAT") == cat)
+        cat_type = cat_data["TYPE"].drop_nulls().first() if len(cat_data["TYPE"].drop_nulls()) > 0 else ""
+        
+        generate_ccdtxt2_report(
+            npl_df=cat_data,
+            branch_df=branch_df,
+            category_type=cat_type,
+            report_date=variables['REPTDATE_DISPLAY'],
+            prog_id=f"EIMAR104-{cat}",
+            output_file=combined_output
+        )
+    
+    print(f"   ✓ Combined report saved: {combined_output}")
+    
+    # 7. Save supporting data files
+    print("\n7. Saving supporting data files...")
     
     # Save merged data
+    merged_npl = npl_categorized.join(branch_df, on="BRANCH", how="left")
     merged_npl.write_parquet(OUTPUT_PATH / "NPL_17BUCKET_CATEGORIZED.parquet")
     
-    # 5. Calculate 17-bucket NPL summaries
-    print("\n5. Calculating 17-bucket NPL summaries...")
-    npl_summaries = calculate_17_bucket_npl_summaries(merged_npl)
-    print(f"   Categories processed: {len(npl_summaries)}")
-    
-    # 6. Generate 17-bucket NPL report
-    print("\n6. Generating 17-bucket NPL report (EIMAR104)...")
-    report_df = create_17_bucket_npl_report(npl_summaries, variables)
-    
-    # 7. Analyze NPL by buckets
-    print("\n7. Analyzing NPL distribution by buckets...")
-    bucket_analysis = analyze_npl_by_buckets(merged_npl)
-    
-    # Save bucket analysis
-    analysis_data = []
-    for cat, analysis in bucket_analysis.items():
-        analysis_data.append({
-            "CATEGORY": cat,
-            "TOTAL_ACCOUNTS": analysis["total_accounts"],
-            "TOTAL_BALANCE": analysis["total_balance"],
-            "AVG_ARREAR": analysis["avg_arrear"],
-            "MAX_ARREAR": analysis["max_arrear"],
-            "NPL_ACCOUNTS_BUCKETS_4_17": analysis["npl_accounts_buckets_4_17"],
-            "SEVERE_NPL_ACCOUNTS_BUCKETS_7_17": analysis["severe_npl_accounts_buckets_7_17"],
-            "NPL_PERCENTAGE": (analysis["npl_accounts_buckets_4_17"] / analysis["total_accounts"] * 100) 
-                              if analysis["total_accounts"] > 0 else 0,
-            "SEVERE_NPL_PERCENTAGE": (analysis["severe_npl_accounts_buckets_7_17"] / analysis["total_accounts"] * 100)
-                                     if analysis["total_accounts"] > 0 else 0
-        })
-    
-    if analysis_data:
-        analysis_df = pl.DataFrame(analysis_data)
-        analysis_df.write_parquet(OUTPUT_PATH / "NPL_BUCKET_ANALYSIS.parquet")
-        print(f"âœ“ NPL bucket analysis saved: {len(analysis_df)} categories")
-    
-    # 8. Create detailed bucket breakdown
-    print("\n8. Creating detailed bucket breakdown...")
-    
-    # Create bucket-level summary
-    bucket_summary_data = []
-    for cat in merged_npl["CAT"].unique().to_list():
-        cat_data = merged_npl.filter(pl.col("CAT") == cat)
-        
-        for bucket in range(1, 18):
-            bucket_data = cat_data.filter(pl.col("ARREAR") == bucket)
-            if len(bucket_data) > 0:
-                bucket_summary_data.append({
-                    "CATEGORY": cat,
-                    "TYPE": bucket_data["TYPE"][0],
-                    "BUCKET": bucket,
-                    "ACCOUNT_COUNT": len(bucket_data),
-                    "TOTAL_BALANCE": bucket_data["BALANCE"].sum(),
-                    "AVG_BALANCE": bucket_data["BALANCE"].mean(),
-                    "BUCKET_LABEL": get_bucket_label(bucket)
-                })
-    
-    if bucket_summary_data:
-        bucket_summary_df = pl.DataFrame(bucket_summary_data)
-        bucket_summary_df.write_parquet(OUTPUT_PATH / "NPL_DETAILED_BUCKET_SUMMARY.parquet")
-        print(f"âœ“ Detailed bucket summary saved: {len(bucket_summary_df)} rows")
-    
-    # 9. Create overall summary
-    print("\n9. Creating overall summary...")
-    
-    total_npl_accounts = len(merged_npl)
-    total_npl_balance = merged_npl["BALANCE"].sum()
-    
-    # NPL by category summary
-    category_summary = merged_npl.group_by(["CAT", "TYPE"]).agg([
-        pl.count().alias("ACCOUNT_COUNT"),
-        pl.sum("BALANCE").alias("TOTAL_BALANCE"),
-        pl.mean("BALANCE").alias("AVG_BALANCE"),
-        pl.mean("ARREAR").alias("AVG_ARREAR"),
-        pl.max("ARREAR").alias("MAX_ARREAR")
-    ])
-    
-    category_summary.write_parquet(OUTPUT_PATH / "NPL_CATEGORY_SUMMARY.parquet")
-    
-    # Overall summary
-    overall_summary = pl.DataFrame([{
-        "REPORT_DATE": variables["RDATE"],
-        "PROGID": "EIMAR104",
-        "TOTAL_NPL_ACCOUNTS": total_npl_accounts,
-        "TOTAL_NPL_BALANCE": total_npl_balance,
-        "AVG_NPL_BALANCE": total_npl_balance / total_npl_accounts if total_npl_accounts > 0 else 0,
-        "CATEGORIES_COUNT": len(npl_summaries),
-        "BRANCHES_COUNT": merged_npl["BRANCH"].n_unique(),
-        "AVG_ARREAR": merged_npl["ARREAR"].mean() if total_npl_accounts > 0 else 0,
-        "MAX_ARREAR": merged_npl["ARREAR"].max() if total_npl_accounts > 0 else 0
-    }])
-    overall_summary.write_parquet(OUTPUT_PATH / "NPL_OVERALL_SUMMARY.parquet")
-    
-    # 10. Save variables
+    # Save variables
     variables_df = pl.DataFrame([variables])
     variables_df.write_parquet(OUTPUT_PATH / "EIMIR104_VARIABLES.parquet")
     
@@ -465,101 +447,14 @@ def main():
     print("CONVERSION COMPLETE")
     print("=" * 60)
     print(f"Total loans processed: {len(loan_df)}")
-    print(f"NPL accounts identified: {total_npl_accounts}")
-    print(f"NPL balance: {total_npl_balance:,.2f}")
-    print(f"Categories: {len(npl_summaries)}")
-    print(f"17-bucket NPL report generated: {len(report_df) if report_df is not None else 0} records")
+    print(f"NPL accounts identified: {len(npl_categorized)}")
+    print(f"Categories: {npl_categorized['CAT'].n_unique()}")
+    print(f"Output format: CCDTXT2 (text file)")
     print(f"Output saved to: {OUTPUT_PATH}")
 
-def get_bucket_label(bucket: int) -> str:
-    """Get bucket label for 17-bucket structure"""
-    labels = {
-        1: "< 1 MTH",
-        2: "1 TO < 2 MTH",
-        3: "2 TO < 3 MTH",
-        4: "3 TO < 4 MTH",
-        5: "4 TO < 5 MTH",
-        6: "5 TO < 6 MTH",
-        7: "6 TO < 7 MTH",
-        8: "7 TO < 8 MTH",
-        9: "8 TO < 9 MTH",
-        10: "9 TO < 10 MTH",
-        11: "10 TO < 11 MTH",
-        12: "11 TO < 12 MTH",
-        13: "12 TO < 18 MTH",
-        14: "18 TO < 24 MTH",
-        15: "24 TO < 36 MTH",
-        16: "> 36 MTH",
-        17: "DEFICIT"
-    }
-    return labels.get(bucket, f"BUCKET_{bucket}")
-
 # ============================================================================
-# 7. Run the conversion
+# 5. Run the conversion
 # ============================================================================
 
 if __name__ == "__main__":
     main()
-
-
-    remove the reptdate, use datetime timedelta - 1 instead. loantemp.sas7bdat, use pyreadstat to read. branch input is LKP_BRANCH (flatfile no extension). output in textfile. output need to also have a textfile which appends to below existing output format (CCDTXT2)
-
-1PROGRAM-ID : EIMAR101-A                   P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: 1    
-                                             OUTSTANDING LOANS IN ARREARS (AITAB)       30/06/26                                     
-0BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       NO      3 TO < 4 MTH       NO      4 TO < 5 MTH  
-        NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       NO      8 TO < 9 MTH       NO     9 TO < 12 MTH  
-        NO   12 TO < 18 MTH      NO   18 TO < 24 MTH      NO   24 TO < 36 MTH       NO          > 36 MTH       NO   SUBTOTAL >=3MTH  
-                                                                                    NO   SUBTOTAL >=6MTH       NO             TOTAL  
- ----------------------------------------------------------------------------------------------------------------------------------  
- 013       3         3,223.56       0            0.00       1       21,453.08        0              0.00        0              0.00  
- KBU       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00        4         24,676.64  
- 014     217     4,874,779.08      16      433,207.97      11      288,522.21        0              0.00        0              0.00  
- TMH       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00      244      5,596,509.26  
- 017      19        15,001.71       0            0.00       0            0.00        0              0.00        0              0.00  
- TPN       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00       19         15,001.71  
- 027      13         4,345.72       0            0.00       0            0.00        0              0.00        0              0.00  
- NTL       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00       13          4,345.72  
- 029       1           134.40       0            0.00       0            0.00        0              0.00        0              0.00  
- JRL       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00        1            134.40  
- 031      49       261,811.66       2       17,467.30       1       19,722.92        0              0.00        0              0.00  
- SKC       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00       52        299,001.88  
- 048       3         1,275.49       0            0.00       0            0.00        0              0.00        0              0.00  
- MTK       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00        3          1,275.49  
- 049       3        19,092.98       0            0.00       0            0.00        0              0.00        0              0.00  
- JLP       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00        3         19,092.98  
- 052       3        22,353.26       0            0.00       0            0.00        0              0.00        0              0.00  
- UTM       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00        3         22,353.26  
- 055     587    25,558,566.89      15      626,265.68       3      168,395.16        0              0.00        0              0.00  
- LBN       0             0.00       0            0.00       1       44,333.86        0              0.00        0              0.00  
-           1        21,025.09       0            0.00       0            0.00        0              0.00        2         65,358.95  
-                                                                                     2         65,358.95      607     26,418,586.68  
- 059      16       165,615.39       0            0.00       1       91,240.54        0              0.00        0              0.00  
- PKL       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00       17        256,855.93  
- 063       7        45,921.75       0            0.00       0            0.00        0              0.00        0              0.00  
- GMS       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00        7         45,921.75  
- 065      49       896,782.36       1       39,493.77       0            0.00        0              0.00        0              0.00  
- BHU       0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-           0             0.00       0            0.00       0            0.00        0              0.00        0              0.00  
-                                                                                     0              0.00       50        936,276.13 
