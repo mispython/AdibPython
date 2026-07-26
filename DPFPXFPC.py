@@ -1,12 +1,16 @@
 """
-EIMIR101 SAS to Python conversion
+EIMIR101 SAS to Python Conversion
 Processes loan arrears reports with branch-level summaries
 """
 
 from pathlib import Path
-from datetime import date
-import polars as pl
-from typing import Dict, List, Optional
+from datetime import date, timedelta
+import pandas as pd
+import pyreadstat
+import numpy as np
+from typing import Dict, List, Optional, Tuple
+import warnings
+warnings.filterwarnings('ignore')
 
 # Setup paths
 BASE_PATH = Path(".")
@@ -15,14 +19,12 @@ OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/E
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# 1. REPTDATE Processing
+# 1. REPTDATE Processing (using yesterday's date)
 # ============================================================================
 
 def process_repdate() -> Dict[str, str]:
-    """Process REPTDATE and extract formatted variables"""
-    repdate_path = INPUT_PATH / "BNM/REPTDATE.parquet"
-    df = pl.read_parquet(repdate_path)
-    repdate = df["REPTDATE"][0]
+    """Process REPTDATE using yesterday's date"""
+    repdate = date.today() - timedelta(days=1)
     
     return {
         'RDATE': repdate.strftime("%d%m%y"),  # DDMMYY8.
@@ -36,165 +38,215 @@ def process_repdate() -> Dict[str, str]:
 # 2. Load and Process Loan Data
 # ============================================================================
 
-def load_loan_data() -> pl.DataFrame:
-    """Load and sort loan data"""
+def load_loan_data() -> pd.DataFrame:
+    """Load loan data from SAS file using pyreadstat"""
     loan_path = INPUT_PATH / "loantemp.sas7bdat"
-    loan_df = pl.read_parquet(loan_path)
     
-    # Sort by BRANCH, ARREAR2 (matching PROC SORT)
-    return loan_df.sort(["BRANCH", "ARREAR2"])
+    try:
+        df, meta = pyreadstat.read_sas7bdat(loan_path)
+        print(f"Loaded {len(df)} records from loantemp.sas7bdat")
+        print(f"Columns: {df.columns.tolist()}")
+        return df
+    except Exception as e:
+        print(f"Error loading SAS file: {e}")
+        # Return empty DataFrame with expected columns
+        return pd.DataFrame()
 
-def load_branch_data() -> pl.DataFrame:
-    """Load branch header data from fixed-width file"""
-    # Simulating INFILE BRHFILE LRECL=80
-    # In reality, you'd parse a text file, but here we'll assume parquet
+def load_branch_data() -> pd.DataFrame:
+    """Load branch header data from fixed-width flat file"""
     branch_path = INPUT_PATH / "LKP_BRANCH"
+    
     if branch_path.exists():
-        return pl.read_parquet(branch_path)
+        try:
+            # Parse fixed-width file (LRECL=80)
+            with open(branch_path, 'r') as f:
+                lines = f.readlines()
+            
+            # Parse each line based on fixed-width format
+            # Assuming format: BRANCH (positions 1-3), BRHCODE (positions 4-10)
+            data = []
+            for line in lines:
+                # Strip newline and ensure it's exactly 80 chars
+                line = line.strip('\n').ljust(80)
+                
+                # Extract fields based on positions (adjust as needed)
+                branch = line[0:3].strip()
+                brhcode = line[3:10].strip()
+                
+                if branch and brhcode:
+                    try:
+                        data.append({
+                            'BRANCH': int(branch),
+                            'BRHCODE': brhcode
+                        })
+                    except ValueError:
+                        continue
+            
+            df = pd.DataFrame(data)
+            print(f"Loaded {len(df)} records from LKP_BRANCH")
+            return df
+        except Exception as e:
+            print(f"Error loading branch file: {e}")
+            return pd.DataFrame()
     else:
-        # Create empty if not exists
-        return pl.DataFrame(schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8})
+        print("Branch file not found, creating empty dataframe")
+        return pd.DataFrame(columns=['BRANCH', 'BRHCODE'])
 
 # ============================================================================
 # 3. Categorize Loans
 # ============================================================================
 
-def categorize_loans(loan_df: pl.DataFrame, hpd_list: List[str]) -> pl.DataFrame:
+def categorize_loans(loan_df: pd.DataFrame, hpd_list: List[str]) -> pd.DataFrame:
     """Categorize loans into different types (A,B,C,D)"""
     
+    if loan_df.empty:
+        return pd.DataFrame()
+    
     # Filter: BALANCE > 0 AND BORSTAT != 'Z'
-    filtered_df = loan_df.filter(
-        (pl.col("BALANCE") > 0) & (pl.col("BORSTAT") != "Z")
-    )
+    filtered_df = loan_df[
+        (loan_df.get('BALANCE', 0) > 0) & 
+        (loan_df.get('BORSTAT', '') != 'Z')
+    ].copy()
+    
+    if filtered_df.empty:
+        return pd.DataFrame()
+    
+    # Prepare HPD numbers
+    hpd_numbers = [int(x.strip("'")) for x in hpd_list]
     
     # Create categorized rows (multiple rows per loan for different categories)
     categorized_rows = []
     
-    # Category A: (HPD-C)
-    cat_a = filtered_df.filter(pl.col("PRODUCT").is_in([380, 381, 700, 705, 720, 725]))
-    if len(cat_a) > 0:
-        cat_a_df = cat_a.with_columns([
-            pl.lit("A").alias("CAT"),
-            pl.lit("(HPD-C)").alias("TYPE")
-        ])
-        categorized_rows.append(cat_a_df)
+    # Category A: (HPD-C) - Products 380, 381, 700, 705, 720, 725
+    cat_a = filtered_df[filtered_df['PRODUCT'].isin([380, 381, 700, 705, 720, 725])].copy()
+    if not cat_a.empty:
+        cat_a['CAT'] = 'A'
+        cat_a['TYPE'] = '(HPD-C)'
+        categorized_rows.append(cat_a)
     
     # Category B: (HP 380/381)
-    cat_b = filtered_df.filter(pl.col("PRODUCT").is_in([380, 381]))
-    if len(cat_b) > 0:
-        cat_b_df = cat_b.with_columns([
-            pl.lit("B").alias("CAT"),
-            pl.lit("(HP 380/381)").alias("TYPE")
-        ])
-        categorized_rows.append(cat_b_df)
+    cat_b = filtered_df[filtered_df['PRODUCT'].isin([380, 381])].copy()
+    if not cat_b.empty:
+        cat_b['CAT'] = 'B'
+        cat_b['TYPE'] = '(HP 380/381)'
+        categorized_rows.append(cat_b)
     
     # Category C: (AITAB)
-    cat_c = filtered_df.filter(pl.col("PRODUCT").is_in([128, 130, 131, 132]))
-    if len(cat_c) > 0:
-        cat_c_df = cat_c.with_columns([
-            pl.lit("C").alias("CAT"),
-            pl.lit("(AITAB)").alias("TYPE")
-        ])
-        categorized_rows.append(cat_c_df)
+    cat_c = filtered_df[filtered_df['PRODUCT'].isin([128, 130, 131, 132])].copy()
+    if not cat_c.empty:
+        cat_c['CAT'] = 'C'
+        cat_c['TYPE'] = '(AITAB)'
+        categorized_rows.append(cat_c)
     
     # Category D: (-HPD-)
-    # Convert HPD list from string format like ('110','115') to numbers
-    hpd_numbers = [int(x.strip("'")) for x in hpd_list]
-    cat_d = filtered_df.filter(pl.col("PRODUCT").is_in(hpd_numbers))
-    if len(cat_d) > 0:
-        cat_d_df = cat_d.with_columns([
-            pl.lit("D").alias("CAT"),
-            pl.lit("(-HPD-)").alias("TYPE")
-        ])
-        categorized_rows.append(cat_d_df)
+    cat_d = filtered_df[filtered_df['PRODUCT'].isin(hpd_numbers)].copy()
+    if not cat_d.empty:
+        cat_d['CAT'] = 'D'
+        cat_d['TYPE'] = '(-HPD-)'
+        categorized_rows.append(cat_d)
     
     # Combine all categories
     if categorized_rows:
-        combined = pl.concat(categorized_rows, how="vertical")
-        return combined.sort(["BRANCH"])
+        combined = pd.concat(categorized_rows, ignore_index=True)
+        return combined.sort_values(['BRANCH', 'ARREAR2'] if 'ARREAR2' in combined.columns else ['BRANCH'])
     else:
-        return pl.DataFrame(schema=filtered_df.schema)
+        return pd.DataFrame()
 
 # ============================================================================
 # 4. Merge with Branch Data
 # ============================================================================
 
-def merge_branch_data(loan_df: pl.DataFrame, branch_df: pl.DataFrame) -> pl.DataFrame:
+def merge_branch_data(loan_df: pd.DataFrame, branch_df: pd.DataFrame) -> pd.DataFrame:
     """Merge loan data with branch header data"""
-    # Keep only loans with matching branch data (IF PRESENT=1)
-    merged = loan_df.join(
-        branch_df,
-        on="BRANCH",
-        how="inner"
-    )
+    if loan_df.empty or branch_df.empty:
+        return loan_df
     
-    return merged.sort(["CAT", "BRANCH", "ARREAR2"])
+    # Inner join on BRANCH
+    merged = loan_df.merge(branch_df, on='BRANCH', how='inner')
+    
+    if 'CAT' in merged.columns:
+        return merged.sort_values(['CAT', 'BRANCH', 'ARREAR2'] if 'ARREAR2' in merged.columns else ['CAT', 'BRANCH'])
+    else:
+        return merged
 
 # ============================================================================
 # 5. Create Branch-Level Summaries
 # ============================================================================
 
-def calculate_branch_summaries(loan_df: pl.DataFrame) -> pl.DataFrame:
+def calculate_branch_summaries(loan_df: pd.DataFrame) -> pd.DataFrame:
     """Calculate branch-level summaries for arrears buckets"""
     
-    # Group by CAT, BRANCH, ARREAR2 and calculate counts and sums
-    summary = loan_df.group_by(["CAT", "BRANCH", "ARREAR2"]).agg([
-        pl.col("BRHCODE").first().alias("BRHCODE"),
-        pl.col("TYPE").first().alias("TYPE"),
-        pl.col("BALANCE").sum().alias("BRHAMT"),
-        pl.count().alias("NOACC")
-    ])
+    if loan_df.empty or 'ARREAR2' not in loan_df.columns:
+        return pd.DataFrame()
     
-    # Pivot to get arrears buckets (1-14) as columns
-    # First, ensure ARREAR2 is between 1 and 14
-    summary = summary.filter(
-        (pl.col("ARREAR2") >= 1) & (pl.col("ARREAR2") <= 14)
-    )
+    # Filter arrears buckets 1-14
+    filtered = loan_df[
+        (loan_df['ARREAR2'] >= 1) & (loan_df['ARREAR2'] <= 14)
+    ]
     
-    # Pivot to get matrix format
-    amount_pivot = summary.pivot(
-        values="BRHAMT",
-        index=["CAT", "BRANCH", "BRHCODE", "TYPE"],
-        columns="ARREAR2",
-        aggregate_function="sum"
-    )
+    if filtered.empty:
+        return pd.DataFrame()
     
-    count_pivot = summary.pivot(
-        values="NOACC",
-        index=["CAT", "BRANCH", "BRHCODE", "TYPE"],
-        columns="ARREAR2",
-        aggregate_function="sum"
-    )
+    # Group by CAT, BRANCH, ARREAR2
+    grouped = filtered.groupby(['CAT', 'BRANCH', 'ARREAR2']).agg({
+        'BRHCODE': 'first',
+        'TYPE': 'first',
+        'BALANCE': 'sum',
+        'ACCOUNT_NO': 'count'  # Assuming there's an account number column
+    }).reset_index()
     
-    # Merge amount and count pivots
-    result = amount_pivot.join(
+    grouped.columns = ['CAT', 'BRANCH', 'ARREAR2', 'BRHCODE', 'TYPE', 'BRHAMT', 'NOACC']
+    
+    # Pivot to get arrears buckets as columns
+    # Amount pivot
+    amount_pivot = grouped.pivot_table(
+        index=['CAT', 'BRANCH', 'BRHCODE', 'TYPE'],
+        columns='ARREAR2',
+        values='BRHAMT',
+        fill_value=0
+    ).reset_index()
+    
+    # Count pivot
+    count_pivot = grouped.pivot_table(
+        index=['CAT', 'BRANCH', 'BRHCODE', 'TYPE'],
+        columns='ARREAR2',
+        values='NOACC',
+        fill_value=0
+    ).reset_index()
+    
+    # Rename columns
+    amount_pivot.columns = ['CAT', 'BRANCH', 'BRHCODE', 'TYPE'] + [f'BRHAMT{i}' for i in range(1, 15) if i in amount_pivot.columns]
+    count_pivot.columns = ['CAT', 'BRANCH', 'BRHCODE', 'TYPE'] + [f'NOACC{i}' for i in range(1, 15) if i in count_pivot.columns]
+    
+    # Merge amount and count
+    result = amount_pivot.merge(
         count_pivot,
-        on=["CAT", "BRANCH", "BRHCODE", "TYPE"],
-        suffix="_count"
+        on=['CAT', 'BRANCH', 'BRHCODE', 'TYPE']
     )
     
-    # Fill nulls with 0 and rename columns
+    # Ensure all columns exist (1-14)
     for i in range(1, 15):
-        amt_col = f"{i}"
-        cnt_col = f"{i}_count"
-        result = result.with_columns([
-            pl.col(amt_col).fill_null(0).alias(f"BRHAMT{i}"),
-            pl.col(cnt_col).fill_null(0).alias(f"NOACC{i}")
-        ]).drop([amt_col, cnt_col])
+        if f'BRHAMT{i}' not in result.columns:
+            result[f'BRHAMT{i}'] = 0
+        if f'NOACC{i}' not in result.columns:
+            result[f'NOACC{i}'] = 0
     
-    return result.sort(["CAT", "BRANCH"])
+    return result.sort_values(['CAT', 'BRANCH'])
 
 # ============================================================================
 # 6. Calculate Subtotals and Totals
 # ============================================================================
 
-def calculate_totals(branch_summary: pl.DataFrame) -> Dict:
+def calculate_totals(branch_summary: pd.DataFrame) -> Dict:
     """Calculate various subtotals and totals"""
+    
+    if branch_summary.empty:
+        return {}
     
     results = {}
     
-    for cat in branch_summary["CAT"].unique().to_list():
-        cat_data = branch_summary.filter(pl.col("CAT") == cat)
+    for cat in branch_summary['CAT'].unique():
+        cat_data = branch_summary[branch_summary['CAT'] == cat]
         
         # Initialize arrays for totals
         totamt = [0.0] * 15  # 1-14 (index 0 unused)
@@ -202,10 +254,8 @@ def calculate_totals(branch_summary: pl.DataFrame) -> Dict:
         
         # Sum across all branches in category
         for i in range(1, 15):
-            if f"BRHAMT{i}" in cat_data.columns:
-                totamt[i] = cat_data[f"BRHAMT{i}"].sum()
-            if f"NOACC{i}" in cat_data.columns:
-                totacc[i] = cat_data[f"NOACC{i}"].sum()
+            totamt[i] = cat_data[f'BRHAMT{i}'].sum()
+            totacc[i] = cat_data[f'NOACC{i}'].sum()
         
         # Calculate subtotals (matching SAS logic)
         # SUBBRH = SUM(BRHAMT4 through BRHAMT14)
@@ -258,67 +308,121 @@ def calculate_totals(branch_summary: pl.DataFrame) -> Dict:
 # 7. Generate Reports
 # ============================================================================
 
-def generate_report_a(loan_data: pl.DataFrame, variables: Dict) -> pl.DataFrame:
+def generate_report_a(loan_data: pd.DataFrame, variables: Dict) -> pd.DataFrame:
     """Generate first report (EIMAR101-A)"""
-    # All data for first report
-    report_df = loan_data.with_columns(
-        pl.lit("EIMAR101-A").alias("PROGID")
-    )
+    report_df = loan_data.copy()
+    report_df['PROGID'] = 'EIMAR101-A'
     
     # Save for later processing
-    report_df.write_parquet(OUTPUT_PATH / "PRNDATA_A.parquet")
+    report_df.to_parquet(OUTPUT_PATH / "PRNDATA_A.parquet")
     
     return report_df
 
-def generate_report_b(loan_data: pl.DataFrame, variables: Dict, hpd_list: List[str]) -> pl.DataFrame:
+def generate_report_b(loan_data: pd.DataFrame, variables: Dict, hpd_list: List[str]) -> pd.DataFrame:
     """Generate second report (EIMAR101-B) with exclusions"""
     
-    # Filter: exclude certain types and borrower statuses
+    if loan_data.empty:
+        return pd.DataFrame()
+    
     hpd_numbers = [int(x.strip("'")) for x in hpd_list]
     
-    filtered = loan_data.filter(
-        (~pl.col("TYPE").is_in(["(AITAB)", "(-HPD-)"])) &
-        (~pl.col("BORSTAT").is_in(["F", "I", "R"])) &
-        (pl.col("PRODUCT").is_in(hpd_numbers))
-    )
+    filtered = loan_data[
+        (~loan_data['TYPE'].isin(['(AITAB)', '(-HPD-)'])) &
+        (~loan_data['BORSTAT'].isin(['F', 'I', 'R'])) &
+        (loan_data['PRODUCT'].isin(hpd_numbers))
+    ].copy()
     
-    report_df = filtered.with_columns(
-        pl.lit("EIMAR101-B").alias("PROGID")
-    )
+    filtered['PROGID'] = 'EIMAR101-B'
     
     # Save for later processing
-    report_df.write_parquet(OUTPUT_PATH / "PRNDATA_B.parquet")
+    filtered.to_parquet(OUTPUT_PATH / "PRNDATA_B.parquet")
     
-    return report_df
+    return filtered
 
-def create_detailed_summary(report_df: pl.DataFrame) -> pl.DataFrame:
+def create_detailed_summary(report_df: pd.DataFrame) -> pd.DataFrame:
     """Create detailed summary with all arrears buckets (LOAN7A equivalent)"""
+    
+    if report_df.empty:
+        return pd.DataFrame()
     
     # Calculate branch-level summaries
     branch_summary = calculate_branch_summaries(report_df)
     
-    # Keep only the needed columns
-    keep_cols = ["BRHCODE", "TYPE"]
-    for i in range(1, 15):
-        keep_cols.extend([f"NOACC{i}", f"BRHAMT{i}"])
+    if branch_summary.empty:
+        return pd.DataFrame()
     
-    detailed = branch_summary.select(keep_cols)
-    detailed.write_parquet(OUTPUT_PATH / "LOAN7A_DETAILED.parquet")
+    # Keep only the needed columns
+    keep_cols = ['BRHCODE', 'TYPE']
+    for i in range(1, 15):
+        keep_cols.extend([f'NOACC{i}', f'BRHAMT{i}'])
+    
+    # Get only columns that exist
+    available_cols = [col for col in keep_cols if col in branch_summary.columns]
+    detailed = branch_summary[available_cols].copy()
+    
+    detailed.to_parquet(OUTPUT_PATH / "LOAN7A_DETAILED.parquet")
     
     return detailed
 
-def write_csv_output(detailed_df: pl.DataFrame):
-    """Write CSV output (matching SAS FILE CCDTXT7A)"""
-    csv_path = OUTPUT_PATH / "EIMIR101_DETAILED.csv"
+def write_txt_output(detailed_df: pd.DataFrame):
+    """Write text output (matching SAS FILE CCDTXT7A)"""
+    txt_path = OUTPUT_PATH / "EIMIR101_DETAILED.txt"
     
-    # Build header row
-    header_cols = ["BRHCODE", "TYPE"]
-    for i in range(1, 15):
-        header_cols.extend([f"NOACC{i}", f"BRHAMT{i}"])
+    if detailed_df.empty:
+        print("No data to write")
+        return
     
-    # Write to CSV
-    detailed_df.write_csv(csv_path)
-    print(f"âœ“ CSV output saved to: {csv_path}")
+    with open(txt_path, 'w') as f:
+        # Write header
+        header = "BRHCODE\tTYPE"
+        for i in range(1, 15):
+            header += f"\tNOACC{i}\tBRHAMT{i}"
+        f.write(header + "\n")
+        
+        # Write data rows
+        for _, row in detailed_df.iterrows():
+            line = f"{row.get('BRHCODE', '')}\t{row.get('TYPE', '')}"
+            for i in range(1, 15):
+                noacc = row.get(f'NOACC{i}', 0)
+                brhamt = row.get(f'BRHAMT{i}', 0)
+                line += f"\t{noacc}\t{brhamt:,.2f}"
+            f.write(line + "\n")
+    
+    print(f"✓ Text output saved to: {txt_path}")
+
+def write_summary_txt(branch_summary: pd.DataFrame, report_name: str):
+    """Write summary report as text file"""
+    txt_path = OUTPUT_PATH / f"{report_name}_SUMMARY.txt"
+    
+    if branch_summary.empty:
+        print(f"No data for {report_name}")
+        return
+    
+    with open(txt_path, 'w') as f:
+        f.write(f"{'='*80}\n")
+        f.write(f"{report_name} - Branch Summary Report\n")
+        f.write(f"{'='*80}\n\n")
+        
+        # Write header
+        header = "CAT\tBRANCH\tBRHCODE\tTYPE"
+        for i in range(1, 15):
+            header += f"\tNOACC{i}\tBRHAMT{i}"
+        f.write(header + "\n")
+        f.write("-"*80 + "\n")
+        
+        # Write data rows
+        for _, row in branch_summary.iterrows():
+            line = f"{row.get('CAT', '')}\t{row.get('BRANCH', '')}\t{row.get('BRHCODE', '')}\t{row.get('TYPE', '')}"
+            for i in range(1, 15):
+                noacc = row.get(f'NOACC{i}', 0)
+                brhamt = row.get(f'BRHAMT{i}', 0)
+                line += f"\t{noacc}\t{brhamt:,.2f}"
+            f.write(line + "\n")
+        
+        f.write("-"*80 + "\n")
+        f.write(f"Total branches: {len(branch_summary)}\n")
+    
+    print(f"✓ Summary text saved to: {txt_path}")
 
 # ============================================================================
 # 8. Main Execution
@@ -331,13 +435,12 @@ def main():
     print("=" * 60)
     
     # HPD list (would come from macro variable &HPD)
-    # Example: ("110","115","700","705")
-    HPD_LIST = ["110", "115", "700", "705"]
+    HPD_LIST = ["110", "115", "700", "705", "720", "725"]
     
-    # 1. Process REPTDATE
-    print("\n1. Processing REPTDATE...")
+    # 1. Process REPTDATE (using yesterday)
+    print("\n1. Processing REPTDATE (yesterday)...")
     variables = process_repdate()
-    print(f"   Report Date: {variables['RDATE']}")
+    print(f"   Report Date: {variables['RDATE']} ({variables['REPTDATE']})")
     
     # 2. Load data
     print("\n2. Loading data...")
@@ -345,10 +448,18 @@ def main():
     branch_df = load_branch_data()
     print(f"   Loans: {len(loan_df)}, Branches: {len(branch_df)}")
     
+    if loan_df.empty:
+        print("ERROR: No loan data loaded")
+        return
+    
     # 3. Categorize loans
     print("\n3. Categorizing loans...")
     categorized = categorize_loans(loan_df, HPD_LIST)
     print(f"   Categorized records: {len(categorized)}")
+    
+    if categorized.empty:
+        print("ERROR: No categorized records")
+        return
     
     # 4. Merge with branch data
     print("\n4. Merging with branch data...")
@@ -360,37 +471,38 @@ def main():
     report_a = generate_report_a(merged_data, variables)
     summary_a = calculate_branch_summaries(report_a)
     totals_a = calculate_totals(summary_a)
-    print(f"   Report A: {len(report_a)} records")
+    print(f"   Report A: {len(report_a)} records, {len(summary_a)} branch summaries")
     
     # 6. Generate Report B
     print("\n6. Generating Report B (EIMAR101-B)...")
     report_b = generate_report_b(merged_data, variables, HPD_LIST)
     summary_b = calculate_branch_summaries(report_b)
     totals_b = calculate_totals(summary_b)
-    print(f"   Report B: {len(report_b)} records")
+    print(f"   Report B: {len(report_b)} records, {len(summary_b)} branch summaries")
     
-    # 7. Create detailed summary
+    # 7. Create detailed summary (from Report B)
     print("\n7. Creating detailed summary...")
     detailed_summary = create_detailed_summary(report_b)
     
-    # 8. Write CSV output
-    print("\n8. Writing CSV output...")
-    write_csv_output(detailed_summary)
+    # 8. Write text outputs
+    print("\n8. Writing text outputs...")
+    write_txt_output(detailed_summary)
+    write_summary_txt(summary_b, "EIMIR101-B")
     
-    # ========================================================================
-    # 9. Save Outputs
-    # ========================================================================
-    
+    # 9. Save additional outputs
+    print("\n9. Saving additional outputs...")
     # Save categorized data
-    merged_data.write_parquet(OUTPUT_PATH / "LOANTEMP_CATEGORIZED.parquet")
+    merged_data.to_parquet(OUTPUT_PATH / "LOANTEMP_CATEGORIZED.parquet")
     
     # Save summaries
-    summary_a.write_parquet(OUTPUT_PATH / "REPORT_A_SUMMARY.parquet")
-    summary_b.write_parquet(OUTPUT_PATH / "REPORT_B_SUMMARY.parquet")
+    if not summary_a.empty:
+        summary_a.to_parquet(OUTPUT_PATH / "REPORT_A_SUMMARY.parquet")
+    if not summary_b.empty:
+        summary_b.to_parquet(OUTPUT_PATH / "REPORT_B_SUMMARY.parquet")
     
     # Save variables
-    variables_df = pl.DataFrame([variables])
-    variables_df.write_parquet(OUTPUT_PATH / "EIMIR101_VARIABLES.parquet")
+    variables_df = pd.DataFrame([variables])
+    variables_df.to_parquet(OUTPUT_PATH / "EIMIR101_VARIABLES.parquet")
     
     # Save totals calculations
     totals_data = []
@@ -409,8 +521,8 @@ def main():
         })
     
     if totals_data:
-        totals_df = pl.DataFrame(totals_data)
-        totals_df.write_parquet(OUTPUT_PATH / "TOTALS_CALCULATIONS.parquet")
+        totals_df = pd.DataFrame(totals_data)
+        totals_df.to_parquet(OUTPUT_PATH / "TOTALS_CALCULATIONS.parquet")
     
     print("\n" + "=" * 60)
     print("CONVERSION COMPLETE")
@@ -419,14 +531,15 @@ def main():
     print(f"Report B records: {len(report_b)}")
     print(f"Categories processed: {len(totals_a) + len(totals_b)}")
     print(f"Output saved to: {OUTPUT_PATH}")
+    print("\nOutput files:")
+    for file in OUTPUT_PATH.glob("*.txt"):
+        print(f"  - {file.name}")
+    for file in OUTPUT_PATH.glob("*.parquet"):
+        print(f"  - {file.name}")
 
 # ============================================================================
-# 10. Run the conversion
+# 9. Run the conversion
 # ============================================================================
 
 if __name__ == "__main__":
     main()
-
-
-
-loantemp.sas7bdat, may use pyreadstat, LKP_BRANCH is flatfile. output in text file. remove the reptdate input, use datetime timedelta - 1
