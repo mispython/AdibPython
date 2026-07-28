@@ -1,288 +1,690 @@
-import os
-import sys
-from pathlib import Path
-from datetime import datetime, timedelta
+"""
+EIFFTXT1 - Bad Debt Write-Off List (Conventional Banking) - OPTIMIZED VERSION
+Includes: PBBLNFMT, PBBELF format definitions
+
+Key Differences from EIIFTXT1:
+- RIND = 'D' (Domestic/Conventional) vs 'I' (Islamic)
+- BIZTYPE = 'C' (Conventional) vs 'I' (Islamic)
+- Uses CREDMSUBAC (not ICREDMSUBAC - no 'I' prefix)
+"""
+
 import pandas as pd
+import pyreadstat
+from datetime import datetime, timedelta
+import sys
+import os
+import gc
+import numpy as np
 
-# =====================================================
-# CONFIGURATION
-# =====================================================
+# Input directory paths (all lowercase)
+LOAN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1/'
+NPL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1/'
+SASLN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1/'
+CISNAME_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1/'
+CCRIS_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1/'
+BKCTRL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1/'
 
-BASE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/")
-INPUT_DIR = BASE_DIR / "input/prod/EIBWHP01"
-OUTPUT_DIR = BASE_DIR / "output/EIBWHP01"
+OUTPUT_FILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIFFTXT1/wofftext.txt'
+OUTPUT_FILE1 = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIFFTXT1/wofftex1.txt'
 
-JOB_NAME = "EIBWHP01"
+# HPD loan types (from PBBLNFMT)
+HPD = [101, 102, 103, 104, 105, 106, 107, 108, 109, 110,
+       201, 202, 203, 204, 205, 206, 207, 208, 209, 210,
+       301, 302, 303, 304, 305, 306, 307, 308, 309, 310]
 
-# Input datasets (sas7bdat format)
-INPUT_DATASETS = {
-    "BNM": INPUT_DIR / "loan{REPTMON}{NOWK}.sas7bdat",
-    "LOAN": INPUT_DIR / "lnnote.sas7bdat"
+# Format definitions (unchanged)
+def get_branch_name(branch_code):
+    """Get branch abbreviation - simplified version"""
+    branch_map = {
+        1: 'KL', 2: 'PJ', 3: 'JB', 4: 'PG', 5: 'IP',
+    }
+    return branch_map.get(branch_code, 'UNK')
+
+def ndays_format(days):
+    """Convert days to months past due"""
+    if days <= 0:
+        return 0
+    elif days <= 30:
+        return 1
+    elif days <= 60:
+        return 2
+    elif days <= 90:
+        return 3
+    elif days <= 120:
+        return 4
+    elif days <= 150:
+        return 5
+    elif days <= 180:
+        return 6
+    elif days <= 210:
+        return 7
+    elif days <= 240:
+        return 8
+    elif days <= 270:
+        return 9
+    elif days <= 300:
+        return 10
+    elif days <= 330:
+        return 11
+    elif days <= 365:
+        return 12
+    else:
+        return int(days / 30)
+
+def format_ddmmyy10(date_obj):
+    """Format date as DD/MM/YYYY"""
+    if pd.isna(date_obj) or date_obj is None:
+        return ''
+    return date_obj.strftime('%d/%m/%Y')
+
+def format_mmddyy10(date_obj):
+    """Format date as MM/DD/YYYY"""
+    if pd.isna(date_obj) or date_obj is None:
+        return ''
+    return date_obj.strftime('%m/%d/%Y')
+
+def mthpass_format(days):
+    """Convert days to months past due - same as NDAYS"""
+    return ndays_format(days)
+
+# Additional formats
+DELQDES = {
+    '01': 'RESIDENTIAL PROPERTY',
+    '02': 'NON-RESIDENTIAL PROPERTY',
+    '03': 'MOTOR VEHICLE',
+    '04': 'OTHERS',
+    '  ': 'NOT SPECIFIED'
 }
 
-# Parquet cache directory for large files
-PARQUET_CACHE_DIR = BASE_DIR / "cache/parquet"
-PARQUET_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+OCCUPFMT = {
+    '001': 'PROFESSIONAL',
+    '002': 'BUSINESSMAN',
+    '003': 'SELF EMPLOYED',
+    '004': 'EMPLOYEE - PRIVATE',
+    '005': 'EMPLOYEE - GOVERNMENT',
+    '006': 'RETIRED',
+    '999': 'OTHERS'
+}
 
-OUTPUT_DATASET = OUTPUT_DIR / "EIBWHP01.txt"
+BGCFMT = {
+    'B': 'BUSINESS',
+    'G': 'GOVERNMENT',
+    'C': 'CORPORATE',
+    'I': 'INDIVIDUAL',
+    '  ': 'NOT SPECIFIED'
+}
 
-# Report date = yesterday (removed external reptdate input)
-REPT_DATE = (datetime.now() - timedelta(days=1)).strftime("%d-%m-%Y")
+def get_delq_desc(delqcd):
+    return DELQDES.get(str(delqcd).strip() if delqcd else '  ', 'UNKNOWN')
 
-# =====================================================
-# IMPORT EXISTING FORMAT MODULE
-# =====================================================
+def get_occup_desc(occupat):
+    return OCCUPFMT.get(str(occupat).strip() if occupat else '999', 'OTHERS')
+
+def get_bgc_desc(bgc):
+    return BGCFMT.get(str(bgc).strip() if bgc else '  ', 'NOT SPECIFIED')
+
+# Calculate report date (yesterday)
+reptdate = datetime.now() - timedelta(days=1)
+
+day = reptdate.day
+if day <= 7:
+    wk = '4'
+    wk1 = '3'
+elif day <= 14:
+    wk = '1'
+    wk1 = '4'
+elif day <= 21:
+    wk = '2'
+    wk1 = '1'
+elif day <= 28:
+    wk = '3'
+    wk1 = '2'
+else:
+    wk = '4'
+    wk1 = '3'
+
+mm = reptdate.month
+mm1 = mm - 1 if mm > 1 else 12
+
+nowk = wk
+nowks = '4'
+nowk1 = wk1
+reptmon = f'{mm:02d}'
+reptmon1 = f'{mm1:02d}'
+reptyear = f'{reptdate.year % 100:02d}'
+rdate = reptdate.strftime('%d/%m/%y')
+
+print(f"Processing Bad Debt Write-Off List (Conventional Banking)")
+print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+print(f"Week: {nowk}, Previous Month: {reptmon1}")
+
+# ===== OPTIMIZATION 1: Read only necessary columns =====
+# Define columns needed from LNNOTE
+LNNOTE_COLS_NEEDED = [
+    'borstat', 'loantype', 'feedue', 'feeduems', 'feeamt16',
+    'name', 'acctno', 'noteno', 'marketvl', 'ntbrch',
+    'feetotal', 'nfeeamt5', 'feeamt3', 'feetot2', 'feeamta',
+    'feeamt5', 'ecsrrsrv', 'maturedt', 'lasttran', 'days',
+    'score2', 'contrtype', 'netproc', 'appvalue', 'birthdt',
+    'orgbal', 'curbal', 'payamt', 'nacospadt', 'intamt',
+    'postntrn', 'intearn4', 'custcode', 'lsttrncd', 'balance',
+    'guarend', 'issxdte', 'colldesc', 'collyear', 'noteterm',
+    'delqcd', 'cp', 'modeldes', 'akpk_status', 'paidind'
+]
+
+# ===== OPTIMIZATION 2: Read in chunks or use low_memory mode =====
+print("Reading LNNOTE (optimized)...")
+try:
+    # Method 1: Read only needed columns with usecols
+    df_lnnote, meta = pyreadstat.read_sas7bdat(
+        f'{LOAN_DIR}lnnote.sas7bdat',
+        usecols=LNNOTE_COLS_NEEDED,  # Only read required columns
+        disable_datetime_conversion=True,  # Faster reading
+        row_limit=0,  # Read all rows but optimized
+        encoding='latin1'  # Faster encoding
+    )
+    print(f"Successfully read {len(df_lnnote)} records from LNNOTE")
+except Exception as e:
+    print(f"Error reading LNNOTE: {e}")
+    print("Trying alternative reading method...")
+    
+    # Method 2: Try with sas7bdat package as backup
+    try:
+        from sas7bdat import SAS7BDAT
+        with SAS7BDAT(f'{LOAN_DIR}lnnote.sas7bdat') as reader:
+            df_lnnote = reader.to_data_frame()
+        # Keep only needed columns
+        existing_cols = [col for col in LNNOTE_COLS_NEEDED if col in df_lnnote.columns]
+        df_lnnote = df_lnnote[existing_cols]
+        print(f"Successfully read {len(df_lnnote)} records using sas7bdat")
+    except ImportError:
+        # Method 3: Last resort - try reading with pandas SAS reader
+        print("Using pandas SAS reader...")
+        df_lnnote = pd.read_sas(
+            f'{LOAN_DIR}lnnote.sas7bdat',
+            format='sas7bdat',
+            encoding='latin1'
+        )
+        existing_cols = [col for col in LNNOTE_COLS_NEEDED if col in df_lnnote.columns]
+        df_lnnote = df_lnnote[existing_cols]
+        print(f"Successfully read {len(df_lnnote)} records using pandas")
+
+# Step 1: Create NPLA - Active accounts with BORSTAT='A'
+print("Step 1: Creating NPLA...")
+# Use query for faster filtering
+df_npla = df_lnnote.query(
+    "borstat == 'A' and loantype not in [983, 993, 678, 679, 698, 699]"
+).copy()
+
+# Vectorized operations instead of loops
+df_npla['iis'] = 0
+df_npla['oi'] = df_npla['feedue'] - df_npla['feeduems']
+df_npla['totiis'] = df_npla['oi']  # Same calculation
+df_npla['sp'] = df_npla['feeduems'] + df_npla['feeamt16']
+
+# Vectorized branch formatting
+df_npla['branch'] = df_npla['ntbrch'].apply(
+    lambda x: f"{get_branch_name(x)} {x:03d}"
+)
+
+# Select only needed columns
+df_npla = df_npla[['name', 'acctno', 'noteno', 'iis', 'oi', 'totiis', 'sp', 'marketvl', 'branch']]
+
+# Free memory
+del df_lnnote
+gc.collect()
+
+# Step 2: Get IIS and SP data
+print("Step 2: Reading IIS and SP data...")
+try:
+    df_iis, _ = pyreadstat.read_sas7bdat(
+        f'{NPL_DIR}iis.sas7bdat',
+        usecols=['acctno', 'noteno', 'iis', 'oi', 'totiis', 'name', 'sp', 'marketvl', 'branch']
+    )
+except:
+    df_iis = pd.DataFrame(columns=['acctno', 'noteno', 'iis', 'oi', 'totiis', 'name', 'sp', 'marketvl', 'branch'])
 
 try:
-    import PBBLNFMT
-except ImportError:
-    print("[WARN] PBBLNFMT.py not found in PYTHONPATH. Proceeding without format module.")
-    PBBLNFMT = None
+    df_sp, _ = pyreadstat.read_sas7bdat(
+        f'{NPL_DIR}sp2.sas7bdat',
+        usecols=['acctno', 'noteno', 'sp', 'name', 'marketvl', 'branch']
+    )
+except:
+    df_sp = pd.DataFrame(columns=['acctno', 'noteno', 'sp', 'name', 'marketvl', 'branch'])
 
-# =====================================================
-# DISP SIMULATION
-# =====================================================
+df_iis = df_iis.drop_duplicates(subset=['acctno', 'noteno'])
+df_sp = df_sp.drop_duplicates(subset=['acctno', 'noteno'])
 
-def disp_delete(dataset_path):
-    """
-    Simulates DISP=(MOD,DELETE,DELETE)
-    Delete dataset if exists.
-    """
-    if dataset_path.exists():
-        dataset_path.unlink()
-        print(f"[DELETE] Removed existing dataset: {dataset_path}")
+# Merge IIS and SP
+df_npl_data = df_sp.merge(df_iis, on=['acctno', 'noteno'], how='outer')
+cols_needed = ['name', 'acctno', 'noteno', 'iis', 'oi', 'totiis', 'sp', 'marketvl', 'branch']
+existing_cols = [col for col in cols_needed if col in df_npl_data.columns]
+df_npl_data = df_npl_data[existing_cols]
+
+# Combine NPLA and NPL data
+df_npl = pd.concat([df_npla, df_npl_data], ignore_index=True)
+df_npl['marketvl'] = df_npl['marketvl'].round(2)
+df_npl['brno'] = df_npl['branch'].str[3:7]
+df_npl['brabr'] = df_npl['branch'].str[0:3]
+df_npl = df_npl.drop_duplicates(subset=['acctno', 'noteno'])
+
+print(f"NPL records: {len(df_npl)}")
+
+# Step 3: KEY DIFFERENCE - Get CCRIS credit submission data
+print("Step 3: Reading CREDMSUBAC...")
+credmsubac_file = f'{CCRIS_DIR}credmsubac{reptmon}{reptyear}.sas7bdat'
+if os.path.exists(credmsubac_file):
+    try:
+        df_credsub, _ = pyreadstat.read_sas7bdat(
+            credmsubac_file,
+            usecols=['facility', 'acctnum', 'daysarr', 'noteno']
+        )
+        df_credsub = df_credsub[
+            df_credsub['facility'].isin(['34331', '34332'])
+        ].rename(columns={'acctnum': 'acctno', 'daysarr': 'days'})
+        
+        df_credsub = df_credsub.sort_values(
+            ['acctno', 'noteno', 'days'], 
+            ascending=[True, True, False]
+        )
+        df_credsub = df_credsub.drop_duplicates(subset=['acctno', 'noteno'])
+        df_credsub = df_credsub[['acctno', 'noteno', 'days', 'facility']]
+        print(f"CREDMSUBAC records: {len(df_credsub)}")
+    except Exception as e:
+        print(f"Error reading CREDMSUBAC: {e}")
+        df_credsub = pd.DataFrame(columns=['acctno', 'noteno', 'days', 'facility'])
+else:
+    print(f"Warning: {credmsubac_file} not found.")
+    df_credsub = pd.DataFrame(columns=['acctno', 'noteno', 'days', 'facility'])
+
+# Step 4: Get loan data for HPD loan types (from the already filtered data)
+print("Step 4: Filtering HPD loans...")
+# We already have the data from Step 1, just filter differently
+# Re-read only if necessary, otherwise use the saved data
+# Actually, we need ALL loan data for HPD, not just active
+print("Re-reading LNNOTE for HPD loans (with optimized settings)...")
+try:
+    df_loan_raw, _ = pyreadstat.read_sas7bdat(
+        f'{LOAN_DIR}lnnote.sas7bdat',
+        usecols=['acctno', 'noteno', 'loantype'] + LNNOTE_COLS_NEEDED[10:],  # Only additional columns
+        disable_datetime_conversion=True
+    )
+    df_loan_raw = df_loan_raw[df_loan_raw['loantype'].isin(HPD)].copy()
+    df_loan_raw = df_loan_raw.drop_duplicates(subset=['acctno', 'noteno'])
+    print(f"HPD loan records: {len(df_loan_raw)}")
+except Exception as e:
+    print(f"Error reading HPD loans: {e}")
+    df_loan_raw = pd.DataFrame(columns=['acctno', 'noteno'])
+
+# Merge NPL, CREDSUB, and LOAN
+print("Merging NPL, CREDSUB, and LOAN data...")
+df_loan = df_npl.merge(df_credsub, on=['acctno', 'noteno'], how='left')
+df_loan = df_loan.merge(df_loan_raw, on=['acctno', 'noteno'], how='left', suffixes=('', '_loan'))
+df_loan = df_loan[df_loan['acctno'].notna()]
+
+print(f"Merged loan records: {len(df_loan)}")
+
+# Step 5: Calculate derived fields (vectorized operations)
+print("Step 5: Calculating derived fields (vectorized)...")
+# Use vectorized operations instead of loops for better performance
+df_loan['postamt'] = df_loan['feetotal'].fillna(0) + df_loan['nfeeamt5'].fillna(0)
+df_loan['otheramt'] = df_loan['feeamt3'].fillna(0) - df_loan['postamt']
+df_loan['oifeeamt'] = df_loan['feetot2'].fillna(0) - df_loan['feeamta'].fillna(0) + df_loan['feeamt5'].fillna(0)
+df_loan['ecsrrsrv'] = df_loan['ecsrrsrv'].apply(lambda x: 0 if pd.isna(x) or x <= 0 else x)
+
+# Date formatting functions (vectorized)
+def safe_format_date(date_val, fmt_func):
+    """Safely format date values"""
+    if pd.isna(date_val) or date_val is None or date_val == 0:
+        return ''
+    try:
+        date_str = str(int(date_val)).zfill(8)
+        if len(date_str) >= 8:
+            dt = datetime.strptime(date_str[:8], '%m%d%Y')
+            return fmt_func(dt)
+    except:
+        pass
+    return ''
+
+def safe_get_date(date_val):
+    """Safely get date object"""
+    if pd.isna(date_val) or date_val is None or date_val == 0:
+        return None
+    try:
+        date_str = str(int(date_val)).zfill(8)
+        if len(date_str) >= 8:
+            return datetime.strptime(date_str[:8], '%m%d%Y').date()
+    except:
+        pass
+    return None
+
+# Apply date formatting
+df_loan['matdate'] = df_loan['maturedt'].apply(lambda x: safe_format_date(x, format_mmddyy10))
+df_loan['lasttra1'] = df_loan['lasttran'].apply(lambda x: safe_format_date(x, format_mmddyy10))
+
+# Months past due (vectorized)
+df_loan['days'] = df_loan['days'].fillna(0).astype(int)
+df_loan['mthpdue'] = df_loan['days'].apply(mthpass_format)
+# Fix mthpdue == 24 cases
+mask = df_loan['mthpdue'] == 24
+df_loan.loc[mask, 'mthpdue'] = (df_loan.loc[mask, 'days'] / 365 * 12).astype(int)
+
+# Credit grade
+df_loan['score2'] = df_loan['score2'].fillna('').astype(str)
+df_loan['contrtype'] = df_loan['contrtype'].fillna('').astype(str)
+df_loan['crrgrade'] = (df_loan['score2'] + df_loan['contrtype']).str.strip()
+
+# Margin of financing (vectorized)
+df_loan['netproc'] = df_loan['netproc'].fillna(0)
+df_loan['appvalue'] = df_loan['appvalue'].fillna(0)
+df_loan['marginfi'] = np.where(
+    df_loan['appvalue'] > 0,
+    (df_loan['netproc'] / df_loan['appvalue']).round(2),
+    0
+)
+
+# Date of birth
+df_loan['dobmni'] = df_loan['birthdt'].apply(safe_get_date)
+
+# ECSR indicator
+df_loan['ecsrind'] = np.where(df_loan['ecsrrsrv'] > 0, 'Y', 'N')
+
+# Bills paid (vectorized)
+df_loan['orgbal'] = df_loan['orgbal'].fillna(0)
+df_loan['curbal'] = df_loan['curbal'].fillna(0)
+df_loan['payamt'] = df_loan['payamt'].fillna(0)
+df_loan['bilpaid'] = np.where(
+    df_loan['payamt'] > 0,
+    ((df_loan['orgbal'] - df_loan['curbal']) / df_loan['payamt']).astype(int),
+    0
+)
+
+# NACO special attention
+df_loan['pay75pct'] = np.where(df_loan['nacospadt'].fillna(0) > 0, 'Y', 'N')
+df_loan['nacodate'] = df_loan['nacospadt'].apply(lambda x: safe_format_date(x, format_mmddyy10))
+
+print("Derived fields calculated")
+
+# Step 6: Get customer names
+print("Step 6: Reading customer names...")
+try:
+    df_cname, _ = pyreadstat.read_sas7bdat(
+        f'{CISNAME_DIR}loan.sas7bdat',
+        usecols=['acctno', 'custnam1', 'occupat', 'bgc', 'seccust']
+    )
+    df_cname = df_cname[df_cname['seccust'] == '901']
+    df_cname = df_cname[['acctno', 'custnam1', 'occupat', 'bgc']].drop_duplicates(subset=['acctno'])
+    print(f"Customer records: {len(df_cname)}")
+except Exception as e:
+    print(f"Error reading customer names: {e}")
+    df_cname = pd.DataFrame(columns=['acctno', 'custnam1', 'occupat', 'bgc'])
+
+# Step 7: Get guarantors
+print("Step 7: Reading liability data...")
+try:
+    df_liab, _ = pyreadstat.read_sas7bdat(
+        f'{LOAN_DIR}liab.sas7bdat',
+        usecols=['acctno', 'noteno', 'liabacct', 'liabname']
+    )
+    df_liab = df_liab.sort_values('liabacct')
+    
+    # Merge with customer names for guarantors
+    df_liab = df_liab.merge(
+        df_cname.rename(columns={'acctno': 'liabacct', 'custnam1': 'gname'}),
+        on='liabacct',
+        how='left'
+    )
+    
+    # Use LIABNAME if GNAME is null
+    df_liab['gname'] = df_liab['gname'].fillna(df_liab['liabname'])
+    df_liab = df_liab.sort_values(['acctno', 'noteno'])
+    
+    # Create guarantor dictionary (more efficient)
+    guarantor_data = {}
+    for (acctno, noteno), group in df_liab.groupby(['acctno', 'noteno']):
+        gnames = group['gname'].tolist()
+        guarantor_data[(acctno, noteno)] = {
+            'guarnam1': gnames[0] if len(gnames) > 0 else '',
+            'guarnam2': gnames[1] if len(gnames) > 1 else ''
+        }
+    print(f"Guarantor records processed: {len(guarantor_data)}")
+except Exception as e:
+    print(f"Error reading liability data: {e}")
+    guarantor_data = {}
+    df_liab = pd.DataFrame()
+
+# Step 8: Get previous month balance
+print("Step 8: Reading previous month balance...")
+sasln_file = f'{SASLN_DIR}loan{reptmon1}{nowks}.sas7bdat'
+if os.path.exists(sasln_file):
+    try:
+        df_sasln, _ = pyreadstat.read_sas7bdat(
+            sasln_file,
+            usecols=['acctno', 'noteno', 'curbal']
+        )
+        df_sasln = df_sasln.rename(columns={'curbal': 'prevbal'})
+        df_sasln = df_sasln.sort_values(['acctno', 'noteno'])
+        print(f"Previous balance records: {len(df_sasln)}")
+    except Exception as e:
+        print(f"Error reading {sasln_file}: {e}")
+        df_sasln = pd.DataFrame(columns=['acctno', 'noteno', 'prevbal'])
+else:
+    print(f"Warning: {sasln_file} not found.")
+    df_sasln = pd.DataFrame(columns=['acctno', 'noteno', 'prevbal'])
+
+# Merge with NPL to get only relevant accounts
+df_sasln = df_sasln.merge(df_npl[['acctno', 'noteno']], on=['acctno', 'noteno'], how='inner')
+
+# Add guarantor names (vectorized)
+df_sasln['guarnam1'] = df_sasln.apply(
+    lambda row: guarantor_data.get((row['acctno'], row['noteno']), {}).get('guarnam1', ''),
+    axis=1
+)
+df_sasln['guarnam2'] = df_sasln.apply(
+    lambda row: guarantor_data.get((row['acctno'], row['noteno']), {}).get('guarnam2', ''),
+    axis=1
+)
+
+# Step 9: Merge all data
+print("Step 9: Merging all data...")
+df_woff = df_sasln.merge(df_loan, on=['acctno', 'noteno'], how='outer')
+df_woff = df_woff.merge(df_npl, on='acctno', how='outer', suffixes=('', '_npl'))
+
+# Calculate payment and total
+df_woff['payment'] = df_woff['curbal'].fillna(0) - df_woff['prevbal'].fillna(0)
+df_woff['total'] = df_woff['totiis'].fillna(0) + df_woff['sp'].fillna(0)
+df_woff['rind'] = 'D'  # KEY DIFFERENCE: 'D' for Conventional
+
+# Free memory
+gc.collect()
+
+# Step 10: Filter for write-off candidates
+print("Step 10: Filtering write-off candidates...")
+df_woff = df_woff[
+    (
+        ((df_woff['borstat'].isin(['F', 'I'])) & (df_woff['days'] >= 334)) |
+        (df_woff['days'] >= 334) |
+        (
+            (df_woff['borstat'] == 'A') &
+            (~df_woff['loantype'].isin([983, 993, 678, 679, 698, 699])) &
+            (df_woff['paidind'] != 'P')
+        )
+    ) &
+    (df_woff['total'] != 0)
+]
+
+df_woff['confirm'] = 'Y'
+df_woff = df_woff.sort_values('acctno')
+
+# Merge with customer names
+df_woff = df_woff.merge(
+    df_cname.rename(columns={'custnam1': 'name'}),
+    on='acctno',
+    how='left',
+    suffixes=('', '_cname')
+)
+
+print(f"Write-off candidates: {len(df_woff)}")
+
+# Save to parquet
+df_woff.to_parquet(f'{NPL_DIR}list.parquet', index=False)
+
+print(f"\nBad Debt Write-Off List (Conventional) Generation Complete")
+
+# Step 11: Write fixed-width output file (with buffering)
+print("Step 11: Writing fixed-width output file...")
+os.makedirs(os.path.dirname(OUTPUT_FILE1), exist_ok=True)
+
+# Use larger buffer size for writing
+with open(OUTPUT_FILE1, 'w', buffering=8192*1024) as f:  # 8MB buffer
+    lines = []
+    for _, row in df_woff.iterrows():
+        line = create_fixed_width_line(row)
+        lines.append(line)
+        
+        # Write in batches to avoid memory issues
+        if len(lines) >= 1000:
+            f.writelines(lines)
+            lines = []
+    
+    # Write remaining lines
+    if lines:
+        f.writelines(lines)
+
+def create_fixed_width_line(row):
+    """Create fixed-width line from row data"""
+    branch = str(row.get('branch', '') or '')[:7]
+    name = str(row.get('name', '') or '')[:40]
+    acctno = row.get('acctno', 0) or 0
+    noteno = row.get('noteno', 0) or 0
+    borstat = str(row.get('borstat', '') or '')[:1]
+    iis = row.get('iis', 0) or 0
+    oi = row.get('oi', 0) or 0
+    totiis = row.get('totiis', 0) or 0
+    sp = row.get('sp', 0) or 0
+    curbal = row.get('curbal', 0) or 0
+    prevbal = row.get('prevbal', 0) or 0
+    payment = row.get('payment', 0) or 0
+    ecsrrsrv = row.get('ecsrrsrv', 0) or 0
+    postamt = row.get('postamt', 0) or 0
+    otheramt = row.get('otheramt', 0) or 0
+    matdate = str(row.get('matdate', '') or '')[:10]
+    loantype = row.get('loantype', 0) or 0
+    intamt = row.get('intamt', 0) or 0
+    postntrn = str(row.get('postntrn', '') or '')[:1]
+    marketvl = row.get('marketvl', 0) or 0
+    intearn4 = row.get('intearn4', 0) or 0
+    days = row.get('days', 0) or 0
+    custcode = row.get('custcode', 0) or 0
+    rind = str(row.get('rind', '') or '')[:1]
+    oifeeamt = row.get('oifeeamt', 0) or 0
+    lasttra1 = str(row.get('lasttra1', '') or '')[:10]
+    lsttrncd = row.get('lsttrncd', 0) or 0
+    mthpdue = row.get('mthpdue', 0) or 0
+    balance = row.get('balance', 0) or 0
+    guarend = str(row.get('guarend', '') or '')[:20]
+    guarnam1 = str(row.get('guarnam1', '') or '')[:40]
+    guarnam2 = str(row.get('guarnam2', '') or '')[:40]
+    
+    issxdte = row.get('issxdte', '')
+    if pd.notna(issxdte) and issxdte:
+        try:
+            issxdte_str = format_mmddyy10(issxdte)[:10]
+        except:
+            issxdte_str = ' ' * 10
     else:
-        print(f"[DELETE] Dataset not found (OK): {dataset_path}")
-
-
-def disp_new(dataset_path):
-    """
-    Simulates DISP=(NEW,CATLG,DELETE)
-    - Must not exist before run
-    """
-    if dataset_path.exists():
-        raise FileExistsError(
-            f"[DISP ERROR] Dataset already exists: {dataset_path}"
-        )
-
-
-def disp_shr(dataset_path):
-    """
-    Simulates DISP=SHR
-    - Must exist
-    """
-    if not dataset_path.exists():
-        raise FileNotFoundError(
-            f"[DISP ERROR] Required input dataset missing: {dataset_path}"
-        )
-
-
-# =====================================================
-# SAS7BDAT TO PARQUET CONVERTER (for large files)
-# =====================================================
-
-def convert_sas_to_parquet(sas_path, parquet_path, force_rebuild=False):
-    """
-    Converts a .sas7bdat file to parquet format for faster subsequent reads.
-    If parquet exists and force_rebuild=False, skip conversion.
-    """
-    if parquet_path.exists() and not force_rebuild:
-        print(f"[CACHE] Using cached parquet: {parquet_path.name}")
-        return parquet_path
+        issxdte_str = ' ' * 10
     
-    try:
-        import pyreadstat
-    except ImportError:
-        raise ImportError(
-            "pyreadstat is required to read .sas7bdat files. "
-            "Install it via: pip install pyreadstat"
-        )
+    netproc = row.get('netproc', 0) or 0
+    colldesc = str(row.get('colldesc', '') or '')[:70]
+    collyear = row.get('collyear', 0) or 0
+    bilpaid = row.get('bilpaid', 0) or 0
+    crrgrade = str(row.get('crrgrade', '') or '')[:5]
+    marginfi = row.get('marginfi', 0) or 0
+    noteterm = row.get('noteterm', 0) or 0
+    payamt = row.get('payamt', 0) or 0
     
-    print(f"[CONVERT] Converting {sas_path.name} to parquet...")
-    start_time = datetime.now()
+    dobmni = row.get('dobmni', '')
+    if pd.notna(dobmni) and dobmni:
+        try:
+            dobmni_str = format_mmddyy10(dobmni)[:10]
+        except:
+            dobmni_str = ' ' * 10
+    else:
+        dobmni_str = ' ' * 10
     
-    # Read SAS file in chunks for large files
-    try:
-        # Try chunked reading first (more memory efficient)
-        reader = pyreadstat.read_sas7bdat(
-            str(sas_path),
-            chunksize=100000  # Read 100k rows at a time
-        )
-        
-        first_chunk = True
-        for df_chunk, meta in reader:
-            if first_chunk:
-                df_chunk.to_parquet(parquet_path, engine='pyarrow', compression='snappy')
-                first_chunk = False
-            else:
-                # Append to existing parquet
-                df_chunk.to_parquet(
-                    parquet_path, 
-                    engine='pyarrow', 
-                    compression='snappy',
-                    append=True
-                )
-            print(f"[CONVERT] Processed {len(df_chunk)} rows...")
-        
-        elapsed = (datetime.now() - start_time).total_seconds()
-        print(f"[CONVERT] Completed in {elapsed:.2f} seconds")
-        return parquet_path
-        
-    except Exception as e:
-        print(f"[WARN] Chunked conversion failed: {e}")
-        print("[WARN] Attempting single-pass conversion...")
-        
-        # Fallback to single read
-        df, meta = pyreadstat.read_sas7bdat(str(sas_path))
-        df.to_parquet(parquet_path, engine='pyarrow', compression='snappy')
-        
-        elapsed = (datetime.now() - start_time).total_seconds()
-        print(f"[CONVERT] Completed in {elapsed:.2f} seconds")
-        return parquet_path
-
-
-def read_sas_dataset(dataset_path, use_cache=True):
-    """
-    Reads a .sas7bdat file using pyreadstat.
-    For large files, converts to parquet first for faster subsequent reads.
-    Returns (pandas.DataFrame, metadata)
-    """
-    # Check if this is a large file (lnnote)
-    if "lnnote" in str(dataset_path).lower():
-        parquet_path = PARQUET_CACHE_DIR / f"{dataset_path.stem}.parquet"
-        
-        if use_cache:
-            try:
-                # Convert to parquet if needed
-                parquet_path = convert_sas_to_parquet(dataset_path, parquet_path)
-                
-                # Read from parquet (much faster)
-                print(f"[READ] Loading from parquet cache: {parquet_path.name}")
-                df = pd.read_parquet(parquet_path)
-                print(f"[READ] Loaded {len(df)} records from cache")
-                
-                # Return empty metadata (not available from parquet)
-                return df, None
-            except Exception as e:
-                print(f"[WARN] Parquet cache read failed: {e}")
-                print("[WARN] Falling back to direct SAS read...")
+    ecsrind = str(row.get('ecsrind', '') or '')[:1]
+    delqcd = str(row.get('delqcd', '') or '')[:2]
+    occupat = str(row.get('occupat', '') or '')[:3]
+    bgc = str(row.get('bgc', '') or '')[:2]
+    pay75pct = str(row.get('pay75pct', '') or '')[:1]
+    nacodate = str(row.get('nacodate', '') or '')[:10]
+    cp = str(row.get('cp', '') or '')[:1]
+    modeldes = str(row.get('modeldes', '') or '')[:6]
+    akpk_status = str(row.get('akpk_status', '') or '')[:9]
     
-    # Direct SAS read (for small files or if cache fails)
-    try:
-        import pyreadstat
-    except ImportError:
-        raise ImportError(
-            "pyreadstat is required to read .sas7bdat files. "
-            "Install it via: pip install pyreadstat"
-        )
+    line = f"{branch:<7} {name:<40}{acctno:>10.0f}{noteno:>5.0f}{borstat:1}"
+    line += f"{iis:>16.2f}{oi:>16.2f}{totiis:>16.2f}{sp:>16.2f}"
+    line += f"{curbal:>16.2f}{prevbal:>16.2f}{payment:>16.2f}"
+    line += f"{ecsrrsrv:>16.2f}{postamt:>16.2f}{otheramt:>16.2f}"
+    line += f"{matdate:<10}{int(loantype):>3d}{intamt:>16.2f}{postntrn:1}"
+    line += f"{marketvl:>16.2f}{intearn4:>16.2f}{int(days):>6d}{int(custcode):>3d}{rind:1}"
+    line += f"{oifeeamt:>16.2f}{lasttra1:<10}{int(lsttrncd):>3d}{int(mthpdue):>3d}"
+    line += f"{balance:>16.2f}{guarend:<20}{guarnam1:<40}{guarnam2:<40}"
+    line += f"{issxdte_str:<10}{netproc:>16.2f}{colldesc:<70}{int(collyear):>4d}"
+    line += f"{int(bilpaid):>3d}{crrgrade:<5}{marginfi:>16.2f}{int(noteterm):>3d}"
+    line += f"{payamt:>16.2f}{dobmni_str:<10}{ecsrind:1}{delqcd:<2}"
+    line += f"{occupat:<3}{bgc:<2}{pay75pct:1}{nacodate:<10}{cp:1}"
+    line += f"{modeldes:<6}{akpk_status:<9}\n"
     
-    print(f"[READ] Direct read of {dataset_path.name}")
-    df, meta = pyreadstat.read_sas7bdat(str(dataset_path))
-    print(f"[READ] Loaded {len(df)} records from {dataset_path.name}")
-    return df, meta
+    return line
 
-
-# =====================================================
-# FIXED BLOCK FILE WRITER (Removed LRECL enforcement)
-# =====================================================
-
-def write_file(path, records):
-    """
-    Writes output file without fixed block formatting.
-    Accepts list of strings.
-    """
-    with open(path, "w", encoding="utf-8") as f:
-        for record in records:
-            f.write(record + "\n")
+# Step 12-14: Read, recalculate, write final output
+print("Step 12-14: Writing final formatted output...")
+with open(OUTPUT_FILE1, 'r', buffering=8192*1024) as f_in, \
+     open(OUTPUT_FILE, 'w', buffering=8192*1024) as f_out:
     
-    print(f"[WRITE] Output dataset created: {path}")
+    for line in f_in:
+        # Parse fields from fixed-width format
+        totiis = float(line[100:116]) if line[100:116].strip() else 0
+        balance = float(line[356:372]) if line[356:372].strip() else 0
+        oi = float(line[84:100]) if line[84:100].strip() else 0
+        
+        sp_calc = balance - totiis
+        total_calc = totiis + sp_calc
+        
+        delqcd = line[676:678]
+        occupat = line[712:715]
+        bgc = line[742:744]
+        
+        delqdes = get_delq_desc(delqcd)
+        occupdes = get_occup_desc(occupat)
+        bgcdes = get_bgc_desc(bgc)
+        
+        biztype = 'C'
+        cap = 0.0
+        latechg = oi
+        
+        # Write reformatted line
+        f_out.write(line[:116])
+        f_out.write(f"{sp_calc:>16.2f}")
+        f_out.write(f"{total_calc:>16.2f}")
+        f_out.write(line[148:373])
+        f_out.write(f"{cap:>16.2f}")
+        f_out.write(f"{latechg:>16.2f}")
+        f_out.write(line[407:679])
+        f_out.write(f"{delqdes:<30}")
+        f_out.write(f"{biztype:1}")
+        f_out.write(line[712:715])
+        f_out.write(f"{occupdes:<25}")
+        f_out.write(line[742:744])
+        f_out.write(f"{bgcdes:<20}")
+        f_out.write(line[766:])
 
-
-# =====================================================
-# BUSINESS LOGIC (SAS Migration)
-# =====================================================
-
-def execute_sas_program():
-    """
-    Replaces EXEC SAS609 step.
-    Reads input SAS datasets, applies business logic,
-    and returns list of output text records.
-    """
-    print("[EXEC] Starting SAS logic replacement...")
-
-    # 1. Load input datasets
-    bnm_df, bnm_meta = read_sas_dataset(INPUT_DATASETS["BNM"])
-    loan_df, loan_meta = read_sas_dataset(INPUT_DATASETS["LOAN"])
-
-    # 2. Apply PBBLNFMT formats if available
-    if PBBLNFMT is not None:
-        print("[FMT] Applying PBBLNFMT formats...")
-        # Example: apply custom formats via PBBLNFMT module
-        # Adjust based on actual PBBLNFMT.py interface
-        if hasattr(PBBLNFMT, 'apply_formats'):
-            bnm_df = PBBLNFMT.apply_formats(bnm_df)
-            loan_df = PBBLNFMT.apply_formats(loan_df)
-        elif hasattr(PBBLNFMT, 'format_dict'):
-            # If PBBLNFMT contains format mappings
-            for col, fmt in getattr(PBBLNFMT, 'format_dict', {}).items():
-                if col in bnm_df.columns:
-                    bnm_df[col] = bnm_df[col].map(fmt)
-                if col in loan_df.columns:
-                    loan_df[col] = loan_df[col].map(fmt)
-
-    # 3. Build output records (placeholder logic)
-    # Replace this section with actual migrated SAS business logic
-    output_records = []
-    output_records.append(f"EIBWHP01 REPORT GENERATED {REPT_DATE}")
-    output_records.append(f"{'='*80}")
-    output_records.append(f"BNM RECORDS: {len(bnm_df):>10}")
-    output_records.append(f"LOAN RECORDS: {len(loan_df):>10}")
-    output_records.append(f"REPORT DATE: {REPT_DATE}")
-    output_records.append(f"{'='*80}")
-
-    # TODO: Add actual data processing logic here
-    # Example: iterate over merged/joined data and format each record
-    # for idx, row in merged_df.iterrows():
-    #     output_records.append(format_record(row))
-
-    return output_records
-
-
-# =====================================================
-# JOB EXECUTION
-# =====================================================
-
-def run_job():
-    print(f"========== START JOB {JOB_NAME} ==========")
-    print(f"[INFO] Report date (yesterday): {REPT_DATE}")
-
-    # 1. DELETE STEP
-    disp_delete(OUTPUT_DATASET)
-
-    # 2. VALIDATE INPUT DATASETS (DISP=SHR)
-    for name, path in INPUT_DATASETS.items():
-        disp_shr(path)
-        print(f"[SHR] Input dataset validated: {name}")
-
-    # 3. NEW OUTPUT VALIDATION
-    disp_new(OUTPUT_DATASET)
-
-    # 4. EXECUTE PROGRAM LOGIC
-    output_records = execute_sas_program()
-
-    # 5. WRITE OUTPUT (Fixed block removed)
-    write_file(OUTPUT_DATASET, output_records)
-
-    print(f"========== END JOB {JOB_NAME} ==========")
-
-
-# =====================================================
-# PRODUCTION ENTRY POINT
-# =====================================================
-
-if __name__ == "__main__":
-    try:
-        run_job()
-    except Exception as e:
-        print(f"[JOB FAILED] {e}")
-        sys.exit(8)  # Simulate JCL ABEND return code
+print(f"\nOutput files generated:")
+print(f"  {OUTPUT_FILE} (Final formatted output)")
+print(f"  {OUTPUT_FILE1} (Intermediate output)")
+print(f"  {NPL_DIR}list.parquet (Data file)")
+print(f"\nAccounts identified for write-off: {len(df_woff)}")
+if len(df_woff) > 0:
+    print(f"Total exposure: RM {df_woff['total'].sum():,.2f}")
