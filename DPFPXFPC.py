@@ -16,8 +16,8 @@ LRECL = 133  # Define output record length
 
 # Input datasets (sas7bdat format)
 INPUT_DATASETS = {
-    "BNM": INPUT_DIR / "SAP.PBB.SASDATA.sas7bdat",
-    "LOAN": INPUT_DIR / "SAP.PBB.MNILN_0.sas7bdat"
+    "BNM": INPUT_DIR / "loan{REPTMON}{NOWK}.sas7bdat",
+    "LOAN": INPUT_DIR / "lnnote.sas7bdat"
 }
 
 OUTPUT_DATASET = OUTPUT_DIR / "EIBWHP01.txt"
@@ -207,3 +207,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[JOB FAILED] {e}")
         sys.exit(8)  # Simulate JCL ABEND return code
+
+
+NO NEED the LRECL. may remove it
