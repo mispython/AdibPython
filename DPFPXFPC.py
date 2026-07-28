@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 import pandas as pd
+import re
 
 # =====================================================
 # CONFIGURATION
@@ -14,9 +15,19 @@ OUTPUT_DIR = BASE_DIR / "output/EIBWHP01"
 
 JOB_NAME = "EIBWHP01"
 
-# Input datasets (sas7bdat format)
+# Report date = yesterday (removed external reptdate input)
+REPT_DATE = (datetime.now() - timedelta(days=1)).strftime("%d-%m-%Y")
+
+# Generate REPTMON and NOWK based on current date
+REPTMON = (datetime.now() - timedelta(days=1)).strftime("%Y%m")  # YYYYMM format
+NOWK = (datetime.now() - timedelta(days=1)).strftime("%W")  # Week number
+# Alternatively, if you need a specific format for NOWK, adjust accordingly
+
+print(f"[CONFIG] REPTMON: {REPTMON}, NOWK: {NOWK}")
+
+# Input datasets (sas7bdat format) - with dynamic naming
 INPUT_DATASETS = {
-    "BNM": INPUT_DIR / "loan{REPTMON}{NOWK}.sas7bdat",
+    "BNM": INPUT_DIR / f"loan{REPTMON}{NOWK}.sas7bdat",
     "LOAN": INPUT_DIR / "lnnote.sas7bdat"
 }
 
@@ -25,9 +36,6 @@ PARQUET_CACHE_DIR = BASE_DIR / "cache/parquet"
 PARQUET_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 OUTPUT_DATASET = OUTPUT_DIR / "EIBWHP01.txt"
-
-# Report date = yesterday (removed external reptdate input)
-REPT_DATE = (datetime.now() - timedelta(days=1)).strftime("%d-%m-%Y")
 
 # =====================================================
 # IMPORT EXISTING FORMAT MODULE
@@ -38,6 +46,70 @@ try:
 except ImportError:
     print("[WARN] PBBLNFMT.py not found in PYTHONPATH. Proceeding without format module.")
     PBBLNFMT = None
+
+# =====================================================
+# UTILITY FUNCTIONS
+# =====================================================
+
+def find_latest_file(directory, pattern):
+    """
+    Find the most recent file matching a pattern with date variables.
+    Handles cases where the exact filename with REPTMON/NOWK might not exist.
+    """
+    # Try exact match first
+    exact_match = directory / pattern
+    if exact_match.exists():
+        return exact_match
+    
+    # If not found, try to find the latest file with similar pattern
+    # Extract base pattern without date variables
+    base_pattern = pattern.replace("{REPTMON}", "").replace("{NOWK}", "")
+    if "loan" in base_pattern:
+        # Look for any loan*.sas7bdat files
+        matching_files = list(directory.glob("loan*.sas7bdat"))
+        if matching_files:
+            # Return the most recent file
+            latest_file = max(matching_files, key=lambda x: x.stat().st_mtime)
+            print(f"[WARN] Exact match not found. Using latest file: {latest_file.name}")
+            return latest_file
+    
+    # If still not found, raise error
+    raise FileNotFoundError(
+        f"No matching file found for pattern: {pattern} in {directory}"
+    )
+
+
+def determine_reptmon_nowk():
+    """
+    Determine REPTMON and NOWK values with fallback options.
+    Returns tuple (reptmon, nowk)
+    """
+    today = datetime.now()
+    yesterday = today - timedelta(days=1)
+    
+    # REPTMON: YYYYMM format
+    reptmon = yesterday.strftime("%Y%m")
+    
+    # NOWK: Week number (various formats possible)
+    # Option 1: ISO week number (01-53)
+    nowk_iso = yesterday.strftime("%V")
+    
+    # Option 2: Simple week number (0-53, where Monday is first day of week)
+    nowk_simple = yesterday.strftime("%W")
+    
+    # Option 3: SAS week number (1-53, where week starts on Sunday)
+    # You might need to calculate this differently based on your SAS logic
+    
+    # For now, using ISO week number
+    nowk = nowk_iso
+    
+    # Log the determined values
+    print(f"[DATE] Report date: {REPT_DATE}")
+    print(f"[DATE] REPTMON: {reptmon}")
+    print(f"[DATE] NOWK: {nowk}")
+    
+    return reptmon, nowk
+
 
 # =====================================================
 # DISP SIMULATION
@@ -183,7 +255,7 @@ def read_sas_dataset(dataset_path, use_cache=True):
 
 
 # =====================================================
-# FIXED BLOCK FILE WRITER (Removed LRECL enforcement)
+# FILE WRITER (Removed LRECL enforcement)
 # =====================================================
 
 def write_file(path, records):
@@ -210,8 +282,25 @@ def execute_sas_program():
     """
     print("[EXEC] Starting SAS logic replacement...")
 
+    # Get the resolved BNM path (with REPTMON and NOWK)
+    bnm_path = INPUT_DATASETS["BNM"]
+    
+    # Check if the BNM file exists, if not try to find alternative
+    if not bnm_path.exists():
+        print(f"[WARN] BNM file not found: {bnm_path}")
+        # Try to find alternative loan files
+        alternative_files = list(INPUT_DIR.glob("loan*.sas7bdat"))
+        if alternative_files:
+            bnm_path = max(alternative_files, key=lambda x: x.stat().st_mtime)
+            print(f"[WARN] Using alternative file: {bnm_path.name}")
+        else:
+            raise FileNotFoundError(f"No loan*.sas7bdat files found in {INPUT_DIR}")
+
     # 1. Load input datasets
-    bnm_df, bnm_meta = read_sas_dataset(INPUT_DATASETS["BNM"])
+    print(f"[INFO] Loading BNM dataset: {bnm_path}")
+    bnm_df, bnm_meta = read_sas_dataset(bnm_path)
+    
+    print(f"[INFO] Loading LOAN dataset: {INPUT_DATASETS['LOAN']}")
     loan_df, loan_meta = read_sas_dataset(INPUT_DATASETS["LOAN"])
 
     # 2. Apply PBBLNFMT formats if available
@@ -234,6 +323,7 @@ def execute_sas_program():
     # Replace this section with actual migrated SAS business logic
     output_records = []
     output_records.append(f"EIBWHP01 REPORT GENERATED {REPT_DATE}")
+    output_records.append(f"REPTMON: {REPTMON}, NOWK: {NOWK}")
     output_records.append(f"{'='*80}")
     output_records.append(f"BNM RECORDS: {len(bnm_df):>10}")
     output_records.append(f"LOAN RECORDS: {len(loan_df):>10}")
@@ -253,16 +343,55 @@ def execute_sas_program():
 # =====================================================
 
 def run_job():
+    global REPTMON, NOWK  # Allow modification of globals
+    
     print(f"========== START JOB {JOB_NAME} ==========")
+    
+    # Determine REPTMON and NOWK
+    REPTMON, NOWK = determine_reptmon_nowk()
+    
+    # Update INPUT_DATASETS with actual values
+    INPUT_DATASETS["BNM"] = INPUT_DIR / f"loan{REPTMON}{NOWK}.sas7bdat"
+    
+    print(f"[INFO] Looking for BNM file: {INPUT_DATASETS['BNM']}")
     print(f"[INFO] Report date (yesterday): {REPT_DATE}")
 
     # 1. DELETE STEP
     disp_delete(OUTPUT_DATASET)
 
     # 2. VALIDATE INPUT DATASETS (DISP=SHR)
+    # For BNM, we'll try to find the file with fallback logic
+    bnm_path = INPUT_DATASETS["BNM"]
+    if not bnm_path.exists():
+        print(f"[WARN] BNM file not found at expected path: {bnm_path}")
+        # Try to find any loan file
+        loan_files = list(INPUT_DIR.glob("loan*.sas7bdat"))
+        if loan_files:
+            latest_loan = max(loan_files, key=lambda x: x.stat().st_mtime)
+            print(f"[WARN] Using alternative file: {latest_loan.name}")
+            INPUT_DATASETS["BNM"] = latest_loan
+        else:
+            raise FileNotFoundError(f"No loan*.sas7bdat files found in {INPUT_DIR}")
+    
+    # Validate all input datasets
     for name, path in INPUT_DATASETS.items():
-        disp_shr(path)
-        print(f"[SHR] Input dataset validated: {name}")
+        try:
+            disp_shr(path)
+            print(f"[SHR] Input dataset validated: {name} -> {path.name}")
+        except FileNotFoundError as e:
+            if name == "BNM":
+                print(f"[WARN] {e}")
+                print("[WARN] Attempting to continue with available BNM file...")
+                # Try one more time with different pattern
+                loan_files = list(INPUT_DIR.glob("loan*.sas7bdat"))
+                if loan_files:
+                    INPUT_DATASETS["BNM"] = max(loan_files, key=lambda x: x.stat().st_mtime)
+                    disp_shr(INPUT_DATASETS["BNM"])
+                    print(f"[SHR] Using {INPUT_DATASETS['BNM'].name} as BNM")
+                else:
+                    raise
+            else:
+                raise
 
     # 3. NEW OUTPUT VALIDATION
     disp_new(OUTPUT_DATASET)
@@ -285,7 +414,6 @@ if __name__ == "__main__":
         run_job()
     except Exception as e:
         print(f"[JOB FAILED] {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(8)  # Simulate JCL ABEND return code
-
-
-adjust the loan reptmon and nowk
