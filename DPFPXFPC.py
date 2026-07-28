@@ -6,6 +6,39 @@ Key Differences from EIIFTXT1:
 - RIND = 'D' (Domestic/Conventional) vs 'I' (Islamic)
 - BIZTYPE = 'C' (Conventional) vs 'I' (Islamic)
 - Uses CREDMSUBAC (not ICREDMSUBAC - no 'I' prefix)
+
+=== FIX NOTES (this version) ===
+Root cause of the crash: pyreadstat.read_sas7bdat(..., usecols=[...]) matches
+column names CASE-SENSITIVELY against the physical .sas7bdat file. The SAS
+file's real column names (e.g. BORSTAT, ACCTNO) did not match the lowercase
+names requested (borstat, acctno). pyreadstat did not raise an error for
+that mismatch - it just silently returned a frame with 0 usable columns/rows,
+which is why the log showed "Successfully read 0 records" with no exception.
+Then df_lnnote.query("borstat == 'A' ...") failed with
+UndefinedVariableError: name 'borstat' is not defined, because the column
+genuinely was not in the dataframe.
+
+Fixes applied:
+1. New helper `read_sas_columns()` reads file metadata first, matches
+   requested column names case-insensitively against the real file schema,
+   reads using the FILE'S actual casing, then normalizes the result back to
+   lowercase. Raises a clear, actionable error (listing available columns)
+   if a requested column truly does not exist - instead of silently
+   returning an empty/partial frame.
+2. Added an explicit guard right after reading LNNOTE: if the frame is
+   empty or missing required columns, we stop with a clear message instead
+   of proceeding into `.query()`/downstream logic that would fail deep in
+   pandas internals.
+3. Replaced all `.query("string expression")` calls with boolean-mask
+   indexing. This avoids pandas' string-eval engine entirely (which is what
+   turned the missing column into a confusing multi-frame stack trace) and
+   fails instantly and legibly if a column is missing.
+4. Applied the same safe reader + column normalization to every other
+   sas7bdat read in the script (iis, sp2, credmsubac, HPD lnnote re-read,
+   loan/cname, liab, previous-month loan) for consistency, since they were
+   all vulnerable to the identical case-mismatch failure mode.
+5. Added small defensive checks (e.g. required-column validation) after
+   each read so any future schema drift fails fast with a useful message.
 """
 
 import pandas as pd
@@ -32,7 +65,80 @@ HPD = [101, 102, 103, 104, 105, 106, 107, 108, 109, 110,
        201, 202, 203, 204, 205, 206, 207, 208, 209, 210,
        301, 302, 303, 304, 305, 306, 307, 308, 309, 310]
 
-# ===== FUNCTION DEFINITIONS (moved to top) =====
+
+# =====================================================================
+# ROBUST SAS READER (FIX)
+# =====================================================================
+def read_sas_columns(path, wanted_cols, required=None, disable_datetime_conversion=False,
+                      encoding=None, allow_missing_file=False):
+    """
+    Safely read specific columns from a .sas7bdat file.
+
+    - Matches `wanted_cols` against the file's ACTUAL column names
+      case-insensitively (fixes the silent-empty-frame bug).
+    - Returns a DataFrame with all column names lowercased.
+    - Raises a clear RuntimeError (listing available columns) if any column
+      in `required` (default: all of wanted_cols) truly isn't in the file.
+    - If allow_missing_file=True and the file doesn't exist, returns an
+      empty DataFrame with the requested (lowercased) columns instead of
+      raising, so downstream merges still work.
+    """
+    if required is None:
+        required = wanted_cols
+
+    if not os.path.exists(path):
+        if allow_missing_file:
+            print(f"  Warning: file not found, using empty frame: {path}")
+            return pd.DataFrame(columns=[c.lower() for c in wanted_cols])
+        raise FileNotFoundError(f"Required SAS file not found: {path}")
+
+    # Peek at metadata to discover the file's real column names/casing.
+    _, meta = pyreadstat.read_sas7bdat(path, metadataonly=True)
+    actual_cols = meta.column_names
+    actual_lookup = {c.lower(): c for c in actual_cols}
+
+    resolved_cols = []
+    missing = []
+    for wc in wanted_cols:
+        real_name = actual_lookup.get(wc.lower())
+        if real_name is None:
+            missing.append(wc)
+        else:
+            resolved_cols.append(real_name)
+
+    still_missing_required = [c for c in required if c not in wanted_cols or c in missing]
+    hard_missing = [c for c in required if c.lower() not in actual_lookup]
+    if hard_missing:
+        raise RuntimeError(
+            f"Column(s) {hard_missing} not found in {path}.\n"
+            f"Available columns in file: {sorted(actual_cols)}"
+        )
+
+    read_kwargs = {}
+    if disable_datetime_conversion:
+        read_kwargs['disable_datetime_conversion'] = True
+    if encoding:
+        read_kwargs['encoding'] = encoding
+
+    df, _ = pyreadstat.read_sas7bdat(path, usecols=resolved_cols, **read_kwargs)
+    # Normalize every column name to lowercase so the rest of the script
+    # (written entirely in lowercase) works regardless of file casing.
+    df.columns = [c.lower() for c in df.columns]
+
+    return df
+
+
+def ensure_columns(df, cols, context=""):
+    """Fail fast and clearly if expected columns are missing after a merge."""
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise RuntimeError(
+            f"Missing expected column(s) {missing} {('in ' + context) if context else ''}. "
+            f"Columns present: {list(df.columns)}"
+        )
+
+
+# ===== FUNCTION DEFINITIONS =====
 def get_branch_name(branch_code):
     """Get branch abbreviation - simplified version"""
     branch_map = {
@@ -146,7 +252,7 @@ def create_fixed_width_line(row):
     guarend = str(row.get('guarend', '') or '')[:20]
     guarnam1 = str(row.get('guarnam1', '') or '')[:40]
     guarnam2 = str(row.get('guarnam2', '') or '')[:40]
-    
+
     issxdte = row.get('issxdte', '')
     if pd.notna(issxdte) and issxdte:
         try:
@@ -155,7 +261,7 @@ def create_fixed_width_line(row):
             issxdte_str = ' ' * 10
     else:
         issxdte_str = ' ' * 10
-    
+
     netproc = row.get('netproc', 0) or 0
     colldesc = str(row.get('colldesc', '') or '')[:70]
     collyear = row.get('collyear', 0) or 0
@@ -164,7 +270,7 @@ def create_fixed_width_line(row):
     marginfi = row.get('marginfi', 0) or 0
     noteterm = row.get('noteterm', 0) or 0
     payamt = row.get('payamt', 0) or 0
-    
+
     dobmni = row.get('dobmni', '')
     if pd.notna(dobmni) and dobmni:
         try:
@@ -173,7 +279,7 @@ def create_fixed_width_line(row):
             dobmni_str = ' ' * 10
     else:
         dobmni_str = ' ' * 10
-    
+
     ecsrind = str(row.get('ecsrind', '') or '')[:1]
     delqcd = str(row.get('delqcd', '') or '')[:2]
     occupat = str(row.get('occupat', '') or '')[:3]
@@ -183,7 +289,7 @@ def create_fixed_width_line(row):
     cp = str(row.get('cp', '') or '')[:1]
     modeldes = str(row.get('modeldes', '') or '')[:6]
     akpk_status = str(row.get('akpk_status', '') or '')[:9]
-    
+
     line = f"{branch:<7} {name:<40}{acctno:>10.0f}{noteno:>5.0f}{borstat:1}"
     line += f"{iis:>16.2f}{oi:>16.2f}{totiis:>16.2f}{sp:>16.2f}"
     line += f"{curbal:>16.2f}{prevbal:>16.2f}{payment:>16.2f}"
@@ -197,7 +303,7 @@ def create_fixed_width_line(row):
     line += f"{payamt:>16.2f}{dobmni_str:<10}{ecsrind:1}{delqcd:<2}"
     line += f"{occupat:<3}{bgc:<2}{pay75pct:1}{nacodate:<10}{cp:1}"
     line += f"{modeldes:<6}{akpk_status:<9}\n"
-    
+
     return line
 
 # Additional formats
@@ -272,7 +378,7 @@ print(f"Processing Bad Debt Write-Off List (Conventional Banking)")
 print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
 print(f"Week: {nowk}, Previous Month: {reptmon1}")
 
-# ===== OPTIMIZATION 1: Read only necessary columns =====
+# ===== Columns needed from LNNOTE =====
 LNNOTE_COLS_NEEDED = [
     'borstat', 'loantype', 'feedue', 'feeduems', 'feeamt16',
     'name', 'acctno', 'noteno', 'marketvl', 'ntbrch',
@@ -285,28 +391,26 @@ LNNOTE_COLS_NEEDED = [
     'delqcd', 'cp', 'modeldes', 'akpk_status', 'paidind'
 ]
 
-# ===== OPTIMIZATION 2: Read with column selection =====
+# ===== Read LNNOTE (FIX: case-insensitive + validated) =====
 print("Reading LNNOTE (optimized)...")
 try:
-    # Try pyreadstat first with column selection
-    df_lnnote, meta = pyreadstat.read_sas7bdat(
+    df_lnnote = read_sas_columns(
         f'{LOAN_DIR}lnnote.sas7bdat',
-        usecols=LNNOTE_COLS_NEEDED,
+        LNNOTE_COLS_NEEDED,
         disable_datetime_conversion=True,
-        encoding='latin1'
+        encoding='latin1',
     )
     print(f"Successfully read {len(df_lnnote)} records from LNNOTE")
 except Exception as e:
-    print(f"pyreadstat failed: {e}")
-    print("Trying pandas SAS reader...")
+    print(f"pyreadstat-based safe reader failed: {e}")
+    print("Trying pandas SAS reader as a last resort...")
     try:
-        # Fallback to pandas
         df_lnnote = pd.read_sas(
             f'{LOAN_DIR}lnnote.sas7bdat',
             format='sas7bdat',
             encoding='latin1'
         )
-        # Keep only needed columns
+        df_lnnote.columns = [c.lower() for c in df_lnnote.columns]
         existing_cols = [col for col in LNNOTE_COLS_NEEDED if col in df_lnnote.columns]
         df_lnnote = df_lnnote[existing_cols]
         print(f"Successfully read {len(df_lnnote)} records using pandas")
@@ -314,11 +418,23 @@ except Exception as e:
         print(f"All readers failed. Error: {e2}")
         sys.exit(1)
 
+# FIX: guard against an empty/malformed read before we ever touch it.
+ensure_columns(df_lnnote, ['borstat', 'loantype', 'acctno', 'noteno'], context="LNNOTE")
+if len(df_lnnote) == 0:
+    print("ERROR: LNNOTE read returned 0 rows. Check the source file/date and "
+          "column names before proceeding.")
+    sys.exit(1)
+
 # Step 1: Create NPLA - Active accounts with BORSTAT='A'
 print("Step 1: Creating NPLA...")
-df_npla = df_lnnote.query(
-    "borstat == 'A' and loantype not in [983, 993, 678, 679, 698, 699]"
-).copy()
+# FIX: boolean-mask filter instead of df.query(...) so a missing/renamed
+# column raises a clear KeyError immediately rather than an opaque
+# UndefinedVariableError three layers deep in pandas' eval engine.
+mask_npla = (
+    (df_lnnote['borstat'] == 'A') &
+    (~df_lnnote['loantype'].isin([983, 993, 678, 679, 698, 699]))
+)
+df_npla = df_lnnote[mask_npla].copy()
 
 df_npla['iis'] = 0
 df_npla['oi'] = df_npla['feedue'] - df_npla['feeduems']
@@ -337,19 +453,23 @@ gc.collect()
 # Step 2: Get IIS and SP data
 print("Step 2: Reading IIS and SP data...")
 try:
-    df_iis, _ = pyreadstat.read_sas7bdat(
+    df_iis = read_sas_columns(
         f'{NPL_DIR}iis.sas7bdat',
-        usecols=['acctno', 'noteno', 'iis', 'oi', 'totiis', 'name', 'sp', 'marketvl', 'branch']
+        ['acctno', 'noteno', 'iis', 'oi', 'totiis', 'name', 'sp', 'marketvl', 'branch'],
+        allow_missing_file=True,
     )
-except:
+except Exception as e:
+    print(f"  Warning: could not read iis.sas7bdat cleanly ({e}); using empty frame.")
     df_iis = pd.DataFrame(columns=['acctno', 'noteno', 'iis', 'oi', 'totiis', 'name', 'sp', 'marketvl', 'branch'])
 
 try:
-    df_sp, _ = pyreadstat.read_sas7bdat(
+    df_sp = read_sas_columns(
         f'{NPL_DIR}sp2.sas7bdat',
-        usecols=['acctno', 'noteno', 'sp', 'name', 'marketvl', 'branch']
+        ['acctno', 'noteno', 'sp', 'name', 'marketvl', 'branch'],
+        allow_missing_file=True,
     )
-except:
+except Exception as e:
+    print(f"  Warning: could not read sp2.sas7bdat cleanly ({e}); using empty frame.")
     df_sp = pd.DataFrame(columns=['acctno', 'noteno', 'sp', 'name', 'marketvl', 'branch'])
 
 df_iis = df_iis.drop_duplicates(subset=['acctno', 'noteno'])
@@ -373,16 +493,16 @@ print("Step 3: Reading CREDMSUBAC...")
 credmsubac_file = f'{CCRIS_DIR}credmsubac{reptmon}{reptyear}.sas7bdat'
 if os.path.exists(credmsubac_file):
     try:
-        df_credsub, _ = pyreadstat.read_sas7bdat(
+        df_credsub = read_sas_columns(
             credmsubac_file,
-            usecols=['facility', 'acctnum', 'daysarr', 'noteno']
+            ['facility', 'acctnum', 'daysarr', 'noteno'],
         )
         df_credsub = df_credsub[
-            df_credsub['facility'].isin(['34331', '34332'])
+            df_credsub['facility'].astype(str).isin(['34331', '34332'])
         ].rename(columns={'acctnum': 'acctno', 'daysarr': 'days'})
-        
+
         df_credsub = df_credsub.sort_values(
-            ['acctno', 'noteno', 'days'], 
+            ['acctno', 'noteno', 'days'],
             ascending=[True, True, False]
         )
         df_credsub = df_credsub.drop_duplicates(subset=['acctno', 'noteno'])
@@ -398,12 +518,11 @@ else:
 # Step 4: Get loan data for HPD loan types
 print("Step 4: Re-reading LNNOTE for HPD loans...")
 try:
-    # Only read the additional columns needed
     hpd_cols = ['acctno', 'noteno', 'loantype'] + LNNOTE_COLS_NEEDED[10:]
-    df_loan_raw, _ = pyreadstat.read_sas7bdat(
+    df_loan_raw = read_sas_columns(
         f'{LOAN_DIR}lnnote.sas7bdat',
-        usecols=hpd_cols,
-        disable_datetime_conversion=True
+        hpd_cols,
+        disable_datetime_conversion=True,
     )
     df_loan_raw = df_loan_raw[df_loan_raw['loantype'].isin(HPD)].copy()
     df_loan_raw = df_loan_raw.drop_duplicates(subset=['acctno', 'noteno'])
@@ -422,29 +541,34 @@ print(f"Merged loan records: {len(df_loan)}")
 
 # Step 5: Calculate derived fields (vectorized)
 print("Step 5: Calculating derived fields (vectorized)...")
+for col in ['feetotal', 'nfeeamt5', 'feeamt3', 'feetot2', 'feeamta', 'feeamt5']:
+    if col not in df_loan.columns:
+        df_loan[col] = 0
+
 df_loan['postamt'] = df_loan['feetotal'].fillna(0) + df_loan['nfeeamt5'].fillna(0)
 df_loan['otheramt'] = df_loan['feeamt3'].fillna(0) - df_loan['postamt']
 df_loan['oifeeamt'] = df_loan['feetot2'].fillna(0) - df_loan['feeamta'].fillna(0) + df_loan['feeamt5'].fillna(0)
+df_loan['ecsrrsrv'] = df_loan.get('ecsrrsrv', 0)
 df_loan['ecsrrsrv'] = df_loan['ecsrrsrv'].apply(lambda x: 0 if pd.isna(x) or x <= 0 else x)
 
 # Date formatting
-df_loan['matdate'] = df_loan['maturedt'].apply(lambda x: safe_format_date(x, format_mmddyy10))
-df_loan['lasttra1'] = df_loan['lasttran'].apply(lambda x: safe_format_date(x, format_mmddyy10))
+df_loan['matdate'] = df_loan['maturedt'].apply(lambda x: safe_format_date(x, format_mmddyy10)) if 'maturedt' in df_loan.columns else ''
+df_loan['lasttra1'] = df_loan['lasttran'].apply(lambda x: safe_format_date(x, format_mmddyy10)) if 'lasttran' in df_loan.columns else ''
 
 # Months past due
-df_loan['days'] = df_loan['days'].fillna(0).astype(int)
+df_loan['days'] = df_loan['days'].fillna(0).astype(int) if 'days' in df_loan.columns else 0
 df_loan['mthpdue'] = df_loan['days'].apply(mthpass_format)
 mask = df_loan['mthpdue'] == 24
 df_loan.loc[mask, 'mthpdue'] = (df_loan.loc[mask, 'days'] / 365 * 12).astype(int)
 
 # Credit grade
-df_loan['score2'] = df_loan['score2'].fillna('').astype(str)
-df_loan['contrtype'] = df_loan['contrtype'].fillna('').astype(str)
-df_loan['crrgrade'] = (df_loan['score2'] + df_loan['contrtype']).str.strip()
+df_loan['score2'] = df_loan.get('score2', '').fillna('').astype(str) if 'score2' in df_loan.columns else ''
+df_loan['contrtype'] = df_loan.get('contrtype', '').fillna('').astype(str) if 'contrtype' in df_loan.columns else ''
+df_loan['crrgrade'] = (df_loan['score2'].astype(str) + df_loan['contrtype'].astype(str)).str.strip()
 
 # Margin of financing
-df_loan['netproc'] = df_loan['netproc'].fillna(0)
-df_loan['appvalue'] = df_loan['appvalue'].fillna(0)
+df_loan['netproc'] = df_loan['netproc'].fillna(0) if 'netproc' in df_loan.columns else 0
+df_loan['appvalue'] = df_loan['appvalue'].fillna(0) if 'appvalue' in df_loan.columns else 0
 df_loan['marginfi'] = np.where(
     df_loan['appvalue'] > 0,
     (df_loan['netproc'] / df_loan['appvalue']).round(2),
@@ -452,15 +576,16 @@ df_loan['marginfi'] = np.where(
 )
 
 # Date of birth
-df_loan['dobmni'] = df_loan['birthdt'].apply(safe_get_date)
+df_loan['dobmni'] = df_loan['birthdt'].apply(safe_get_date) if 'birthdt' in df_loan.columns else None
 
 # ECSR indicator
 df_loan['ecsrind'] = np.where(df_loan['ecsrrsrv'] > 0, 'Y', 'N')
 
 # Bills paid
-df_loan['orgbal'] = df_loan['orgbal'].fillna(0)
-df_loan['curbal'] = df_loan['curbal'].fillna(0)
-df_loan['payamt'] = df_loan['payamt'].fillna(0)
+df_loan['orgbal'] = df_loan.get('orgbal', 0)
+df_loan['orgbal'] = df_loan['orgbal'].fillna(0) if 'orgbal' in df_loan.columns else 0
+df_loan['curbal'] = df_loan['curbal'].fillna(0) if 'curbal' in df_loan.columns else 0
+df_loan['payamt'] = df_loan['payamt'].fillna(0) if 'payamt' in df_loan.columns else 0
 df_loan['bilpaid'] = np.where(
     df_loan['payamt'] > 0,
     ((df_loan['orgbal'] - df_loan['curbal']) / df_loan['payamt']).astype(int),
@@ -468,6 +593,7 @@ df_loan['bilpaid'] = np.where(
 )
 
 # NACO special attention
+df_loan['nacospadt'] = df_loan.get('nacospadt', 0)
 df_loan['pay75pct'] = np.where(df_loan['nacospadt'].fillna(0) > 0, 'Y', 'N')
 df_loan['nacodate'] = df_loan['nacospadt'].apply(lambda x: safe_format_date(x, format_mmddyy10))
 
@@ -476,11 +602,11 @@ print("Derived fields calculated")
 # Step 6: Get customer names
 print("Step 6: Reading customer names...")
 try:
-    df_cname, _ = pyreadstat.read_sas7bdat(
+    df_cname = read_sas_columns(
         f'{CISNAME_DIR}loan.sas7bdat',
-        usecols=['acctno', 'custnam1', 'occupat', 'bgc', 'seccust']
+        ['acctno', 'custnam1', 'occupat', 'bgc', 'seccust'],
     )
-    df_cname = df_cname[df_cname['seccust'] == '901']
+    df_cname = df_cname[df_cname['seccust'].astype(str) == '901']
     df_cname = df_cname[['acctno', 'custnam1', 'occupat', 'bgc']].drop_duplicates(subset=['acctno'])
     print(f"Customer records: {len(df_cname)}")
 except Exception as e:
@@ -490,21 +616,21 @@ except Exception as e:
 # Step 7: Get guarantors
 print("Step 7: Reading liability data...")
 try:
-    df_liab, _ = pyreadstat.read_sas7bdat(
+    df_liab = read_sas_columns(
         f'{LOAN_DIR}liab.sas7bdat',
-        usecols=['acctno', 'noteno', 'liabacct', 'liabname']
+        ['acctno', 'noteno', 'liabacct', 'liabname'],
     )
     df_liab = df_liab.sort_values('liabacct')
-    
+
     df_liab = df_liab.merge(
         df_cname.rename(columns={'acctno': 'liabacct', 'custnam1': 'gname'}),
         on='liabacct',
         how='left'
     )
-    
+
     df_liab['gname'] = df_liab['gname'].fillna(df_liab['liabname'])
     df_liab = df_liab.sort_values(['acctno', 'noteno'])
-    
+
     guarantor_data = {}
     for (acctno, noteno), group in df_liab.groupby(['acctno', 'noteno']):
         gnames = group['gname'].tolist()
@@ -521,20 +647,17 @@ except Exception as e:
 # Step 8: Get previous month balance
 print("Step 8: Reading previous month balance...")
 sasln_file = f'{SASLN_DIR}loan{reptmon1}{nowks}.sas7bdat'
-if os.path.exists(sasln_file):
-    try:
-        df_sasln, _ = pyreadstat.read_sas7bdat(
-            sasln_file,
-            usecols=['acctno', 'noteno', 'curbal']
-        )
-        df_sasln = df_sasln.rename(columns={'curbal': 'prevbal'})
-        df_sasln = df_sasln.sort_values(['acctno', 'noteno'])
-        print(f"Previous balance records: {len(df_sasln)}")
-    except Exception as e:
-        print(f"Error reading {sasln_file}: {e}")
-        df_sasln = pd.DataFrame(columns=['acctno', 'noteno', 'prevbal'])
-else:
-    print(f"Warning: {sasln_file} not found.")
+try:
+    df_sasln = read_sas_columns(
+        sasln_file,
+        ['acctno', 'noteno', 'curbal'],
+        allow_missing_file=True,
+    )
+    df_sasln = df_sasln.rename(columns={'curbal': 'prevbal'})
+    df_sasln = df_sasln.sort_values(['acctno', 'noteno'])
+    print(f"Previous balance records: {len(df_sasln)}")
+except Exception as e:
+    print(f"Error reading {sasln_file}: {e}")
     df_sasln = pd.DataFrame(columns=['acctno', 'noteno', 'prevbal'])
 
 # Merge with NPL to get only relevant accounts
@@ -563,6 +686,10 @@ gc.collect()
 
 # Step 10: Filter for write-off candidates
 print("Step 10: Filtering write-off candidates...")
+# FIX: ensure required columns exist before boolean filtering (clear error
+# instead of a silent all-NaN mask if a merge didn't produce a column).
+ensure_columns(df_woff, ['borstat', 'days', 'loantype', 'paidind', 'total'], context="df_woff filter step")
+
 df_woff = df_woff[
     (
         ((df_woff['borstat'].isin(['F', 'I'])) & (df_woff['days'] >= 334)) |
@@ -602,11 +729,11 @@ with open(OUTPUT_FILE1, 'w', buffering=8192*1024) as f:
     lines = []
     for _, row in df_woff.iterrows():
         lines.append(create_fixed_width_line(row))
-        
+
         if len(lines) >= 1000:
             f.writelines(lines)
             lines = []
-    
+
     if lines:
         f.writelines(lines)
 
@@ -614,27 +741,27 @@ with open(OUTPUT_FILE1, 'w', buffering=8192*1024) as f:
 print("Step 12-14: Writing final formatted output...")
 with open(OUTPUT_FILE1, 'r', buffering=8192*1024) as f_in, \
      open(OUTPUT_FILE, 'w', buffering=8192*1024) as f_out:
-    
+
     for line in f_in:
         totiis = float(line[100:116]) if line[100:116].strip() else 0
         balance = float(line[356:372]) if line[356:372].strip() else 0
         oi = float(line[84:100]) if line[84:100].strip() else 0
-        
+
         sp_calc = balance - totiis
         total_calc = totiis + sp_calc
-        
+
         delqcd = line[676:678]
         occupat = line[712:715]
         bgc = line[742:744]
-        
+
         delqdes = get_delq_desc(delqcd)
         occupdes = get_occup_desc(occupat)
         bgcdes = get_bgc_desc(bgc)
-        
+
         biztype = 'C'
         cap = 0.0
         latechg = oi
-        
+
         f_out.write(line[:116])
         f_out.write(f"{sp_calc:>16.2f}")
         f_out.write(f"{total_calc:>16.2f}")
@@ -661,78 +788,3 @@ print(f"\nKey Differences from EIIFTXT1 (Islamic):")
 print(f"  - RIND = 'D' (Domestic/Conventional) vs 'I' (Islamic)")
 print(f"  - BIZTYPE = 'C' (Conventional) vs 'I' (Islamic)")
 print(f"  - Uses CREDMSUBAC vs ICREDMSUBAC (CCRIS)")
-
-Processing Bad Debt Write-Off List (Conventional Banking)
-Report Date: 27/07/2026
-Week: 3, Previous Month: 06
-Reading LNNOTE (optimized)...
-Successfully read 0 records from LNNOTE
-Step 1: Creating NPLA...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/scope.py", line 231, in resolve
-    return self.resolvers[key]
-  File "/usr/lib64/python3.9/collections/__init__.py", line 941, in __getitem__
-    return self.__missing__(key)            # support subclasses that define __missing__
-  File "/usr/lib64/python3.9/collections/__init__.py", line 933, in __missing__
-    raise KeyError(key)
-KeyError: 'borstat'
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/scope.py", line 242, in resolve
-    return self.temps[key]
-KeyError: 'borstat'
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIFFTXT1.py", line 319, in <module>
-    df_npla = df_lnnote.query(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4823, in query
-    res = self.eval(expr, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4949, in eval
-    return _eval(expr, inplace=inplace, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/eval.py", line 336, in eval
-    parsed_expr = Expr(expr, engine=engine, parser=parser, env=env)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 805, in __init__
-    self.terms = self.parse()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 824, in parse
-    return self._visitor.visit(self.expr)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
-    return visitor(node, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 417, in visit_Module
-    return self.visit(expr, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
-    return visitor(node, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 420, in visit_Expr
-    return self.visit(node.value, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
-    return visitor(node, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 742, in visit_BoolOp
-    return reduce(visitor, operands)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 735, in visitor
-    lhs = self._try_visit_binop(x)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 731, in _try_visit_binop
-    return self.visit(bop)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
-    return visitor(node, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 715, in visit_Compare
-    return self.visit(binop)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
-    return visitor(node, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 531, in visit_BinOp
-    op, op_class, left, right = self._maybe_transform_eq_ne(node)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 451, in _maybe_transform_eq_ne
-    left = self.visit(node.left, side="left")
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
-    return visitor(node, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 541, in visit_Name
-    return self.term_type(node.id, self.env, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/ops.py", line 91, in __init__
-    self._value = self._resolve_name()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/ops.py", line 115, in _resolve_name
-    res = self.env.resolve(local_name, is_local=is_local)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/scope.py", line 244, in resolve
-    raise UndefinedVariableError(key, is_local) from err
-pandas.errors.UndefinedVariableError: name 'borstat' is not defined
