@@ -1,35 +1,118 @@
-def read_sas_dataset(dataset_path, chunksize=None):
+import os
+import sys
+from pathlib import Path
+from datetime import datetime
+
+# =====================================================
+# CONFIGURATION
+# =====================================================
+
+BASE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/")
+INPUT_DIR = BASE_DIR / "input/prod/EIBWHP02"
+
+SPOOL_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP02"
+
+JOB_NAME = "EIBWHP02"
+
+INPUT_DATASETS = {
+    "BNM": INPUT_DIR / "SAP.PBB.SASDATA"
+}
+
+# SYSOUT simulation file
+SPOOL_FILE = SPOOL_DIR / f"{JOB_NAME}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.lst"
+
+# =====================================================
+# DISP SIMULATION
+# =====================================================
+
+def disp_shr(dataset_path):
     """
-    Reads a .sas7bdat file using pyreadstat.
-    If chunksize is provided, reads in chunks.
-    Returns (pandas.DataFrame, metadata)
+    Simulates DISP=SHR
+    Must exist before execution.
     """
-    try:
-        import pyreadstat
-    except ImportError:
-        raise ImportError(
-            "pyreadstat is required to read .sas7bdat files. "
-            "Install it via: pip install pyreadstat"
+    if not dataset_path.exists():
+        raise FileNotFoundError(
+            f"[DISP ERROR] Required dataset missing: {dataset_path}"
         )
-    
-    print(f"[READ] Reading {dataset_path.name}...")
-    start_time = datetime.now()
-    
-    # For large files, read in chunks
-    if chunksize and "lnnote" in str(dataset_path).lower():
-        print(f"[READ] Reading in chunks of {chunksize} rows...")
-        reader = pyreadstat.read_sas7bdat(str(dataset_path), chunksize=chunksize)
-        df_list = []
-        for df_chunk, meta in reader:
-            df_list.append(df_chunk)
-            print(f"[READ] Read chunk with {len(df_chunk)} rows")
-        df = pd.concat(df_list, ignore_index=True)
-        meta = None  # Metadata not available from chunks
-    else:
-        # Direct read
-        df, meta = pyreadstat.read_sas7bdat(str(dataset_path))
-    
-    elapsed = (datetime.now() - start_time).total_seconds()
-    print(f"[READ] Loaded {len(df)} records from {dataset_path.name} in {elapsed:.2f} seconds")
-    
-    return df, meta
+
+
+# =====================================================
+# SYSOUT SIMULATION
+# =====================================================
+
+def write_sysout(records):
+    """
+    Simulates SASLIST DD SYSOUT
+    Writes to spool file.
+    """
+    SPOOL_DIR.mkdir(parents=True, exist_ok=True)
+
+    with open(SPOOL_FILE, "w", encoding="utf-8") as f:
+        for line in records:
+            f.write(line + "\n")
+
+    print(f"[SYSOUT] Report written to spool: {SPOOL_FILE}")
+
+
+# =====================================================
+# SAS EXECUTION WRAPPER (PLACEHOLDER)
+# =====================================================
+
+def execute_sas_program():
+    """
+    Simulates SAS logic execution.
+    Replace this with actual migrated Python logic later.
+    """
+
+    print("[EXEC] Running business logic...")
+
+    # Placeholder report output
+    report_lines = [
+        "EIBWHP02: SMI (CUSTCD 66,67,68,69) BY BRANCH",
+        f"Generated at {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}",
+        "-" * 80,
+        "BRANCH      DISBURSE",
+        "001         1000000.00",
+        "002         850000.00",
+        "-" * 80,
+        "END OF REPORT"
+    ]
+
+    return report_lines
+
+
+# =====================================================
+# JOB EXECUTION
+# =====================================================
+
+def run_job():
+
+    print(f"========== START JOB {JOB_NAME} ==========")
+
+    # Validate DISP=SHR datasets
+    for name, path in INPUT_DATASETS.items():
+        disp_shr(path)
+        print(f"[SHR] Validated input dataset: {name}")
+
+    # Execute SAS replacement logic
+    report_output = execute_sas_program()
+
+    # Write SYSOUT spool file
+    write_sysout(report_output)
+
+    print(f"========== END JOB {JOB_NAME} ==========")
+
+
+# =====================================================
+# ENTRY POINT
+# =====================================================
+
+if __name__ == "__main__":
+    try:
+        run_job()
+    except Exception as e:
+        print(f"[JOB FAILED] {e}")
+        sys.exit(8)  # Simulate mainframe ABEND
+
+
+inputs are in sas7bdat. read by pyreadstat. loan{reptmon}{nowk}.sas7bdat and uloan{reptmon}{nowk}.sas7bdat. use datetime timedelta - 1 instead of reptdate input
