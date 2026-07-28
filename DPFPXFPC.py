@@ -1,99 +1,171 @@
-%INC PGM(PBBLNFMT);
-DATA REPTDATE (KEEP=REPTDATE);
-  SET BNM.REPTDATE;
-  SELECT(DAY(REPTDATE));
-    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
-    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
-    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
-    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3'; END;
-  END;
-  MM = MONTH(REPTDATE);
-  IF WK = '1' THEN DO;
-     MM1 = MM - 1;
-     IF MM1 = 0 THEN MM1 = 12;
-  END;
-  ELSE MM1 = MM;
-  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
-  CALL SYMPUT('NOWK',PUT(WK,$1.));
-  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
-  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
-  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
-RUN;
-PROC SORT DATA=BNM.LOAN&REPTMON1&NOWK1 OUT=ALW1
-(KEEP=ACCTNO NOTENO SECTORCD PRODUCT NOTETERM BALANCE PRODCD CUSTCD
-      AMTIND ISSDTE BRANCH);
-   BY ACCTNO NOTENO SECTORCD;
-   WHERE PRODUCT IN (131,132,720,725);
-RUN;
-*;
-PROC SORT DATA=BNM.LOAN&REPTMON&NOWK OUT=ALW
-(KEEP=ACCTNO NOTENO SECTORCD PRODUCT NOTETERM EARNTERM BALANCE
-      APPRDATE APPRLIM2 PRODCD CUSTCD AMTIND ISSDTE BRANCH);
-   BY ACCTNO NOTENO SECTORCD;
-   WHERE PRODUCT IN (131,132,720,725);
-RUN;
-*;
-DATA ALW;
-   KEEP SECTCD DISBURSE REPAID APPRLIM2 AMTIND CUSTCD NOACCT
-    PRODCD BRANCH;
-   MERGE ALW1(IN=A RENAME=(BALANCE=LASTBAL NOTETERM=LASTNOTE))
-         ALW(IN=B);
-   BY ACCTNO NOTENO SECTORCD;
-   /*
-   IF MONTH(ISSDTE)=MONTH(INPUT("&RDATE", DDMMYY8.)) AND
-      YEAR(ISSDTE)=YEAR(INPUT("&RDATE", DDMMYY8.)) THEN
-      NOACCT = 1;
-   IF APPRDATE <= INPUT("&RDATE",DDMMYY8.);
-   IF APPRDATE < INPUT("&SDATE",DDMMYY8.) THEN APPRLIM2 = 0;
-   IF PRODCD IN ('34190') & NOTETERM ^= EARNTERM &
-      NOTETERM ^= LASTNOTE THEN ROLLOVER = BALANCE;
-   ELSE ROLLOVER = 0;
-   */
-   NOACCT=1;
-   DISBURSE = 0; REPAID = 0;
-   IF A & B THEN DO;
-      IF LASTBAL > BALANCE THEN REPAID = LASTBAL - BALANCE;
-      ELSE DISBURSE = BALANCE - LASTBAL;
-   END;
-   IF ^B THEN REPAID = LASTBAL;
-   IF ^A THEN DISBURSE = BALANCE;
-   SECTCD = PUT(SECTORCD,$SECTA.);
-   IF SECTCD ^= ' ' THEN OUTPUT;
-   SECTCD = PUT(SECTORCD,$SECTB.);
-   IF SECTCD ^= ' ' THEN OUTPUT;
-*;
-DATA UALW;
-   KEEP SECTCD DISBURSE REPAID APPRLIM2 AMTIND CUSTCD BRANCH;
-   RETAIN DISBURSE REPAID 0;
-   SET BNM.ULOAN&REPTMON&NOWK;
-*  IF INPUT("&SDATE",DDMMYY8.) <= APPRDATE <= INPUT("&RDATE",DDMMYY8.);
-   SECTCD = PUT(SECTORCD,$SECTA.);
-   IF SECTCD ^= ' ' THEN OUTPUT;
-   SECTCD = PUT(SECTORCD,$SECTB.);
-   IF SECTCD ^= ' ' THEN OUTPUT;
-*;
-PROC APPEND BASE=ALW DATA=UALW;
-*;
-PROC SUMMARY DATA=ALW NWAY;
-CLASS BRANCH CUSTCD AMTIND;
-VAR DISBURSE REPAID APPRLIM2 NOACCT;
-WHERE SUBSTR(PRODCD, 1, 3) IN ('341','342','343','344') AND
-      SECTCD NE '0210';
-OUTPUT OUT=ALWX
-       SUM=;
-RUN;
-PROC SUMMARY DATA=ALWX NWAY;
-WHERE CUSTCD IN ('66','67','68','69');
-CLASS BRANCH;
-VAR DISBURSE;
-OUTPUT OUT=ALWLOAN (DROP=_TYPE_) SUM=;
-RUN;
-*;
-PROC PRINT;
-TITLE1 'EIBWHP02: SMI (CUSTCD 66,67,68,69) BY BRANCH AS AT ' &RDATE;
-TITLE2 'FOR LOANS PRODUCTS 131,132,720,725';
-RUN;
+EIBWHP01 REPORT GENERATED 27-07-2026
+REPTMON: 07, NOWK: 4
+================================================================================
+BNM RECORDS:     623910
+LOAN RECORDS:    6232608
+REPORT DATE: 27-07-2026
+================================================================================
+
+EIBWHP01: REPORT ON PRODUCTS 131,132,720,725 AS AT 27/07/26
+
+Obs    BNMCODE                         AMOUNT          WEIGHTED
+
+   1  6734000001111Y                  0.00             .
+   2  6734000001112Y                  0.00             .
+   3  6734000001113Y                  0.00             .
+   4  6734000001114Y                  0.00             .
+   5  6734000001117Y                  0.00             .
+   6  6734000001119Y                  0.00             .
+   7  6734000001120Y                  0.00             .
+   8  6734000001130Y                  0.00             .
+   9  6734000001200Y                  0.00             .
+  10  6734000001300Y                  0.00             .
+  11  6734000001400Y                  0.00             .
+  12  6734000002100Y                  0.00             .
+  13  6734000002210Y                  0.00             .
+  14  6734000002220Y                  0.00             .
+  15  6734000002301Y                  0.00             .
+  16  6734000002303Y                  0.00             .
+  17  6734000002900Y                  0.00             .
+  18  6734000003110Y                  0.00             .
+  19  6734000003111Y                  0.00             .
+  20  6734000003112Y                  0.00             .
+  21  6734000003113Y                  0.00             .
+  22  6734000003114Y                  0.00             .
+  23  6734000003115Y                  0.00             .
+  24  6734000003211Y                  0.00             .
+  25  6734000003219Y                  0.00             .
+  26  6734000003221Y                  0.00             .
+  27  6734000003232Y                  0.00             .
+  28  6734000003241Y                  0.00             .
+  29  6734000003242Y                  0.00             .
+  30  6734000003250Y                  0.00             .
+  31  6734000003271Y                  0.00             .
+  32  6734000003272Y                  0.00             .
+  33  6734000003273Y                  0.00             .
+  34  6734000003280Y                  0.00             .
+  35  6734000003311Y                  0.00             .
+  36  6734000003312Y                  0.00             .
+  37  6734000003313Y                  0.00             .
+  38  6734000003432Y                  0.00             .
+  39  6734000003551Y                  0.00             .
+  40  6734000003552Y                  0.00             .
+  41  6734000003611Y                  0.00             .
+  42  6734000003619Y                  0.00             .
+  43  6734000003710Y                  0.00             .
+  44  6734000003720Y                  0.00             .
+  45  6734000003721Y                  0.00             .
+  46  6734000003731Y                  0.00             .
+  47  6734000003732Y                  0.00             .
+  48  6734000003811Y                  0.00             .
+  49  6734000003813Y                  0.00             .
+  50  6734000003814Y                  0.00             .
+  51  6734000003819Y                  0.00             .
+  52  6734000003825Y                  0.00             .
+  53  6734000003832Y                  0.00             .
+  54  6734000003833Y                  0.00             .
+  55  6734000003834Y                  0.00             .
+  56  6734000003835Y                  0.00             .
+  57  6734000003842Y                  0.00             .
+  58  6734000003844Y                  0.00             .
+  59  6734000003851Y                  0.00             .
+  60  6734000003852Y                  0.00             .
+  61  6734000003861Y                  0.00             .
+  62  6734000003862Y                  0.00             .
+  63  6734000003863Y                  0.00             .
+  64  6734000003864Y                  0.00             .
+  65  6734000003865Y                  0.00             .
+  66  6734000003866Y                  0.00             .
+  67  6734000003871Y                  0.00             .
+  68  6734000003872Y                  0.00             .
+  69  6734000003873Y                  0.00             .
+  70  6734000003891Y                  0.00             .
+  71  6734000003894Y                  0.00             .
+  72  6734000003911Y                  0.00             .
+  73  6734000003919Y                  0.00             .
+  74  6734000003953Y                  0.00             .
+  75  6734000003957Y                  0.00             .
+  76  6734000003960Y                  0.00             .
+  77  6734000004010Y                  0.00             .
+  78  6734000004020Y                  0.00             .
+  79  6734000005001Y                  0.00             .
+  80  6734000005002Y                  0.00             .
+  81  6734000005003Y                  0.00             .
+  82  6734000005004Y                  0.00             .
+  83  6734000005006Y                  0.00             .
+  84  6734000005008Y                  0.00             .
+  85  6734000005020Y                  0.00             .
+  86  6734000005030Y                  0.00             .
+  87  6734000005040Y                  0.00             .
+  88  6734000005050Y                  0.00             .
+  89  6734000005999Y                  0.00             .
+  90  6734000006110Y                  0.00             .
+  91  6734000006120Y                  0.00             .
+  92  6734000006130Y                  0.00             .
+  93  6734000006310Y                  0.00             .
+  94  6734000006320Y                  0.00             .
+  95  6734000007111Y                  0.00             .
+  96  6734000007112Y                  0.00             .
+  97  6734000007113Y                  0.00             .
+  98  6734000007114Y                  0.00             .
+  99  6734000007115Y                  0.00             .
+ 100  6734000007116Y                  0.00             .
+ 101  6734000007121Y                  0.00             .
+ 102  6734000007122Y                  0.00             .
+ 103  6734000007123Y                  0.00             .
+ 104  6734000007124Y                  0.00             .
+ 105  6734000007191Y                  0.00             .
+ 106  6734000007192Y                  0.00             .
+ 107  6734000007193Y                  0.00             .
+ 108  6734000007199Y                  0.00             .
+ 109  6734000007210Y                  0.00             .
+ 110  6734000007220Y                  0.00             .
+ 111  6734000008110Y                  0.00             .
+ 112  6734000008120Y                  0.00             .
+ 113  6734000008130Y                  0.00             .
+ 114  6734000008310Y                  0.00             .
+ 115  6734000008320Y                  0.00             .
+ 116  6734000008321Y                  0.00             .
+ 117  6734000008331Y                  0.00             .
+ 118  6734000008332Y                  0.00             .
+ 119  6734000008333Y                  0.00             .
+ 120  6734000008340Y                  0.00             .
+ 121  6734000008413Y                  0.00             .
+ 122  6734000008414Y                  0.00             .
+ 123  6734000008416Y                  0.00             .
+ 124  6734000008910Y                  0.00             .
+ 125  6734000008911Y                  0.00             .
+ 126  6734000008912Y                  0.00             .
+ 127  6734000008913Y                  0.00             .
+ 128  6734000008914Y                  0.00             .
+ 129  6734000008921Y                  0.00             .
+ 130  6734000008922Y                  0.00             .
+ 131  6734000008932Y                  0.00             .
+ 132  6734000008991Y                  0.00             .
+ 133  6734000008999Y                  0.00             .
+ 134  6734000009101Y                  0.00             .
+ 135  6734000009201Y                  0.00             .
+ 136  6734000009202Y                  0.00             .
+ 137  6734000009203Y                  0.00             .
+ 138  6734000009311Y                  0.00             .
+ 139  6734000009312Y                  0.00             .
+ 140  6734000009313Y                  0.00             .
+ 141  6734000009314Y                  0.00             .
+ 142  6734000009410Y                  0.00             .
+ 143  6734000009420Y                  0.00             .
+ 144  6734000009430Y                  0.00             .
+ 145  6734000009431Y                  0.00             .
+ 146  6734000009435Y                  0.00             .
+ 147  6734000009440Y                  0.00             .
+ 148  6734000009450Y                  0.00             .
+ 149  6734000009499Y                  0.00             .
+ 150  6734000009500Y                  0.00             .
+ 151  6734000009700Y                  0.00             .
+ 152  6734000009999Y                  0.00             .
+
+EIBWHP01: SMI ACCTS (CUSTCD 66,67,68,69) AS AT 27/07/26
+
+Obs    BNMCODE                         AMOUNT          WEIGHTED
+
+  No records found
+
