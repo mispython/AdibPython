@@ -45,4 +45,4 @@ Key Differences from EIIFTXT1 (Islamic):
 You have mail in /var/spool/mail/sas_edw_dev
 
 
-the not found liab, actually the file naming is lnliab.sas7bdat
+the not found liab, actually the file naming is lnliab{reptmon}{nowk}{reptyear}.sas7bdat
