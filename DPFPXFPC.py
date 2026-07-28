@@ -661,3 +661,78 @@ print(f"\nKey Differences from EIIFTXT1 (Islamic):")
 print(f"  - RIND = 'D' (Domestic/Conventional) vs 'I' (Islamic)")
 print(f"  - BIZTYPE = 'C' (Conventional) vs 'I' (Islamic)")
 print(f"  - Uses CREDMSUBAC vs ICREDMSUBAC (CCRIS)")
+
+Processing Bad Debt Write-Off List (Conventional Banking)
+Report Date: 27/07/2026
+Week: 3, Previous Month: 06
+Reading LNNOTE (optimized)...
+Successfully read 0 records from LNNOTE
+Step 1: Creating NPLA...
+Traceback (most recent call last):
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/scope.py", line 231, in resolve
+    return self.resolvers[key]
+  File "/usr/lib64/python3.9/collections/__init__.py", line 941, in __getitem__
+    return self.__missing__(key)            # support subclasses that define __missing__
+  File "/usr/lib64/python3.9/collections/__init__.py", line 933, in __missing__
+    raise KeyError(key)
+KeyError: 'borstat'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/scope.py", line 242, in resolve
+    return self.temps[key]
+KeyError: 'borstat'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIFFTXT1.py", line 319, in <module>
+    df_npla = df_lnnote.query(
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4823, in query
+    res = self.eval(expr, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4949, in eval
+    return _eval(expr, inplace=inplace, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/eval.py", line 336, in eval
+    parsed_expr = Expr(expr, engine=engine, parser=parser, env=env)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 805, in __init__
+    self.terms = self.parse()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 824, in parse
+    return self._visitor.visit(self.expr)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 417, in visit_Module
+    return self.visit(expr, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 420, in visit_Expr
+    return self.visit(node.value, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 742, in visit_BoolOp
+    return reduce(visitor, operands)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 735, in visitor
+    lhs = self._try_visit_binop(x)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 731, in _try_visit_binop
+    return self.visit(bop)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 715, in visit_Compare
+    return self.visit(binop)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 531, in visit_BinOp
+    op, op_class, left, right = self._maybe_transform_eq_ne(node)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 451, in _maybe_transform_eq_ne
+    left = self.visit(node.left, side="left")
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 541, in visit_Name
+    return self.term_type(node.id, self.env, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/ops.py", line 91, in __init__
+    self._value = self._resolve_name()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/ops.py", line 115, in _resolve_name
+    res = self.env.resolve(local_name, is_local=is_local)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/scope.py", line 244, in resolve
+    raise UndefinedVariableError(key, is_local) from err
+pandas.errors.UndefinedVariableError: name 'borstat' is not defined
