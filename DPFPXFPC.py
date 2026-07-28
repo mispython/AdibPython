@@ -1,173 +1,313 @@
-ACTUAL PRODUCTION OUTPUT:
+#!/usr/bin/env python3
+"""
+EIBWHP01 - Products 131,132,720,725 Report (All & SMI)
+"""
 
-EIBWHP01: REPORT ON PRODUCTS 131,132,720,725 AS AT  22/07/26                                       07:14 Thursday, July 23, 2026   1 
-ALL CUSTOMERS                                                                                                                        
-                                                                                                                                     
-Obs       BNMCODE                           AMOUNT      WEIGHTED                                                                     
-                                                                                                                                     
-  1    6734000001000Y                 1,557,814.51    .                                                                              
-  2    6734000002000Y                   811,104.87    .                                                                              
-  3    6734000003000Y                 4,581,562.30             0                                                                     
-  4    6734000005001Y                 3,074,040.01    .                                                                              
-  5    6734000005002Y                   238,229.58    .                                                                              
-  6    6734000005003Y                   162,661.89    .                                                                              
-  7    6734000005004Y                   487,947.92    .                                                                              
-  8    6734000005006Y                   249,561.53    .                                                                              
-  9    6734000006100Y                28,861,403.92    .000005587                                                                     
- 10    6734000006300Y                 1,566,435.02    .                                                                              
- 11    6734000007000Y                 5,250,959.23             0                                                                     
- 12    6734000008310Y                   925,716.68    .                                                                              
- 13    6734000008320Y                       118.60    .                                                                              
- 14    6734000009000Y                 3,225,819.38    .                                                                              
+import os
+import sys
+import gc
+import pandas as pd
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+from pathlib import Path
+from datetime import datetime, timedelta
 
+BASE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/")
+INPUT_DIR = BASE_DIR / "input/prod/EIBWHP01"
+OUTPUT_DIR = BASE_DIR / "output/EIBWHP01"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-PYTHON OUTPUT:
+CACHE_DIR = BASE_DIR / "cache" / "EIBWHP01"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-EIBWHP01 REPORT GENERATED 27-07-2026
-REPTMON: 202607, NOWK: 31
-================================================================================
-BNM RECORDS:     623910
-LOAN RECORDS:    6232608
-REPORT DATE: 27-07-2026
-================================================================================
+OUTPUT_FILE = OUTPUT_DIR / "EIBWHP01.txt"
+CHUNK_ROWS = 500_000
+ROW_LIMIT = int(os.environ.get("ROW_LIMIT", 0))
 
+try:
+    import PBBLNFMT
+    SECTCD = PBBLNFMT.SECTCD
+    SECTA = PBBLNFMT.SECTA
+    SECTB = PBBLNFMT.SECTB
+except ImportError:
+    print("[WARN] PBBLNFMT not found – sector formats unavailable.")
+    SECTCD = SECTA = SECTB = {}
 
-ORIGINAL SAS PROGRAM:
+# ----------------------------------------------------------------------
+# Date logic (replicates SAS DATA REPTDATE)
+# ----------------------------------------------------------------------
 
-%INC PGM(PBBLNFMT);
-DATA REPTDATE (KEEP=REPTDATE);
-  SET BNM.REPTDATE;
-  SELECT(DAY(REPTDATE));
-    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
-    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
-    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
-    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3'; END;
-  END;
-  MM = MONTH(REPTDATE);
-  IF WK = '1' THEN DO;
-     MM1 = MM - 1;
-     IF MM1 = 0 THEN MM1 = 12;
-  END;
-  ELSE MM1 = MM;
-  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
-  CALL SYMPUT('NOWK',PUT(WK,$1.));
-  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
-  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
-  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
-RUN;
-*;
-DATA LOAN (KEEP=ACCTNO NOTENO EFFAPR SECTORCD);
-      SET LOAN.LNNOTE;
-      IF  LOANTYPE IN (131,132,720,725);
-      SECTORCD=PUT(SECTOR, $SECTCD.);
+def get_sas_macros(reptdate):
+    day = reptdate.day
+    if day == 8:
+        sdd, wk, wk1 = 1, '1', '4'
+    elif day == 15:
+        sdd, wk, wk1 = 9, '2', '1'
+    elif day == 22:
+        sdd, wk, wk1 = 16, '3', '2'
+    else:
+        sdd, wk, wk1 = 23, '4', '3'
 
-      IF INTAMT LE 0.01 THEN
-         INTAMT = (INTRATE*NETPROC*NOTETERM/1200)-INTEARN2;
-      IF NOTETERM > 12 THEN TERM = 12; ELSE TERM = NOTETERM;
-         EFFFACT = (100*TERM*(INTAMT))/
-                   (NOTETERM*(NETPROC+INTEARN2));
-      EFFAPR=(NOTETERM*EFFFACT*(300*TERM+NOTETERM*EFFFACT))/
-             ((NOTETERM*NOTETERM*EFFFACT)+(150*TERM*(NOTETERM+1)));
-RUN;
-*;
-PROC SORT DATA=BNM.LOAN&REPTMON1&NOWK1 OUT=ALW1
-(KEEP=ACCTNO NOTENO SECTORCD PRODUCT NOTETERM BALANCE PRODCD CUSTCD
-      AMTIND ISSDTE INTRATE);
-   BY ACCTNO NOTENO SECTORCD;
-   WHERE PRODUCT IN (131,132,720,725);
-RUN;
-*;
-PROC SORT DATA=BNM.LOAN&REPTMON&NOWK OUT=ALW
-(KEEP=ACCTNO NOTENO SECTORCD PRODUCT NOTETERM EARNTERM BALANCE
-      APPRDATE APPRLIM2 PRODCD CUSTCD AMTIND ISSDTE INTRATE);
-   BY ACCTNO NOTENO SECTORCD;
-   WHERE PRODUCT IN (131,132,720,725);
-RUN;
-*;
-DATA ALW;
-   MERGE ALW(IN=A) LOAN; BY ACCTNO NOTENO SECTORCD;
-   IF A;
-RUN;
-*;
-DATA ALW;
-   KEEP SECTCD DISBURSE REPAID APPRLIM2 AMTIND CUSTCD NOACCT
-        PRODUCT;
-   MERGE ALW1(IN=A RENAME=(BALANCE=LASTBAL NOTETERM=LASTNOTE))
-         ALW(IN=B);
-   BY ACCTNO NOTENO SECTORCD;
-   /*
-   IF MONTH(ISSDTE)=MONTH(INPUT("&RDATE", DDMMYY8.)) AND
-      YEAR(ISSDTE)=YEAR(INPUT("&RDATE", DDMMYY8.)) THEN
-      NOACCT = 1;
-   IF APPRDATE <= INPUT("&RDATE",DDMMYY8.);
-   IF APPRDATE < INPUT("&SDATE",DDMMYY8.) THEN APPRLIM2 = 0;
-   */
-   NOACCT=1;
-   DISBURSE=0; REPAID=0;
-   IF A & B THEN DO;
-      IF LASTBAL > BALANCE THEN REPAID = LASTBAL - BALANCE;
-      ELSE DISBURSE = BALANCE - LASTBAL;
-   END;
-   IF ^B THEN REPAID = LASTBAL;
-   IF ^A THEN DISBURSE = BALANCE;
-   PRODUCT = DISBURSE * EFFAPR;
-   SECTCD = PUT(SECTORCD,$SECTA.);
-   IF SECTCD ^= ' ' THEN OUTPUT;
-   SECTCD = PUT(SECTORCD,$SECTB.);
-   IF SECTCD ^= ' ' THEN OUTPUT;
-*;
-PROC  SORT DATA=ALW; BY SECTCD;
-PROC  SUMMARY DATA=ALW NWAY;
-CLASS SECTCD;
-VAR   DISBURSE PRODUCT;
-OUTPUT OUT=ALWLOAN (DROP=_TYPE_) SUM=;
-RUN;
-*;
-DATA ALWLOAN;
-   KEEP BNMCODE AMTIND AMOUNT WEIGHTED;
-   LENGTH BNMCODE $14.;
-   SET ALWLOAN;
-   WEIGHTED = PRODUCT / DISBURSE;
-   BNMCODE = '673400000'||SECTCD||'Y';
-   AMOUNT = DISBURSE; OUTPUT;
-RUN;
-*;
-PROC SUMMARY DATA=ALWLOAN NWAY;
-CLASS BNMCODE;
-VAR AMOUNT WEIGHTED;
-OUTPUT OUT=LALW&REPTMON&NOWK (DROP=_TYPE_ _FREQ_ ) SUM=;
-RUN;
-TITLE1 'EIBWHP01: REPORT ON PRODUCTS 131,132,720,725 AS AT ' &RDATE;
-TITLE2 'ALL CUSTOMERS';
-PROC PRINT DATA=LALW&REPTMON&NOWK;
-FORMAT AMOUNT COMMA25.2;
-RUN;
-*;
-PROC SUMMARY DATA=ALW NWAY;
-WHERE CUSTCD IN ('66','67','68','69');
-CLASS SECTCD;
-VAR   DISBURSE PRODUCT;
-OUTPUT OUT=ALWSMI (DROP=_FREQ_ _TYPE_) SUM=;
-RUN;
-*;
-DATA ALWSMI;
-   KEEP BNMCODE AMOUNT WEIGHTED DISBURSE;
-   LENGTH BNMCODE $14.;
-   SET ALWSMI;
-   WEIGHTED = PRODUCT / DISBURSE;
-   BNMCODE = '673400000'||SECTCD||'Y';
-   AMOUNT = DISBURSE; OUTPUT;
-RUN;
-PROC SUMMARY DATA=ALWSMI NWAY;
-CLASS BNMCODE;
-VAR DISBURSE WEIGHTED;
-OUTPUT OUT=LALW&REPTMON&NOWK (DROP=_TYPE_ _FREQ_ ) SUM=;
-RUN;
-TITLE 'EIBWHP01: SMI ACCTS (CUSTCD 66,67,68,69) AS AT ' &RDATE;
-PROC PRINT DATA=LALW&REPTMON&NOWK;
-FORMAT AMOUNT COMMA25.2;
-RUN;
+    mm = reptdate.month
+    mm1 = mm - 1 if wk == '1' else mm
+    if mm1 == 0:
+        mm1 = 12
+
+    start = datetime(reptdate.year, mm, 1)
+    sdate = start + timedelta(days=sdd - 1)
+
+    return {
+        'NOWK': wk, 'NOWK1': wk1,
+        'REPTMON': f"{mm:02d}", 'REPTMON1': f"{mm1:02d}",
+        'REPTDAY': f"{day:02d}",
+        'RDATE': reptdate.strftime("%d/%m/%y"),
+        'SDATE': sdate.strftime("%d/%m/%y")
+    }
+
+# ----------------------------------------------------------------------
+# Parquet caching helpers
+# ----------------------------------------------------------------------
+
+def cache_fresh(sas_path, cache_path):
+    return cache_path.exists() and cache_path.stat().st_mtime >= sas_path.stat().st_mtime
+
+def sas_to_parquet(sas_path, cache_path, tag):
+    print(f"  [{tag}] Converting {sas_path.name} -> {cache_path.name} ...")
+    writer = None
+    schema = None
+    total = 0
+    rows_read = 0
+    reader = pd.read_sas(sas_path, encoding="latin1", chunksize=CHUNK_ROWS)
+    for chunk in reader:
+        if ROW_LIMIT and rows_read >= ROW_LIMIT:
+            break
+        if ROW_LIMIT:
+            chunk = chunk.iloc[:ROW_LIMIT - rows_read]
+        rows_read += len(chunk)
+        table = pa.Table.from_pandas(chunk, preserve_index=False)
+        if schema is None:
+            schema = table.schema
+            writer = pq.ParquetWriter(cache_path, schema, compression="snappy")
+        else:
+            cast_arrays = []
+            for i, field in enumerate(schema):
+                col = table.column(field.name)
+                if col.type != field.type:
+                    try:
+                        col = col.cast(field.type, safe=False)
+                    except:
+                        col = pa.nulls(len(col), type=field.type)
+                cast_arrays.append(col)
+            table = pa.Table.from_arrays(cast_arrays, schema=schema)
+        writer.write_table(table)
+        total += len(chunk)
+        del chunk, table
+        gc.collect()
+    writer.close()
+    print(f"  [{tag}] Done – {total:,} rows.")
+
+def read_sas_cached(sas_path):
+    cache_path = CACHE_DIR / f"{sas_path.stem}.parquet"
+    if cache_fresh(sas_path, cache_path):
+        print(f"[READ] Using cache: {cache_path.name}")
+        return pd.read_parquet(cache_path)
+    sas_to_parquet(sas_path, cache_path, sas_path.stem.upper())
+    return pd.read_parquet(cache_path)
+
+# ----------------------------------------------------------------------
+# EFFAPR calculation
+# ----------------------------------------------------------------------
+
+def compute_effapr(row):
+    intamt = row.get('INTAMT', 0.0)
+    intrate = row.get('INTRATE', 0.0)
+    netproc = row.get('NETPROC', 0.0)
+    noteterm = row.get('NOTETERM', 0)
+    intearn2 = row.get('INTEARN2', 0.0)
+
+    if intamt <= 0.01:
+        intamt = (intrate * netproc * noteterm / 1200) - intearn2
+
+    term = 12 if noteterm > 12 else noteterm
+    efffact = (100 * term * intamt) / (noteterm * (netproc + intearn2))
+    denom = (noteterm * noteterm * efffact) + (150 * term * (noteterm + 1))
+    return 0.0 if denom == 0 else (noteterm * efffact * (300 * term + noteterm * efffact)) / denom
+
+def add_effapr(df):
+    df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+    return df
+
+# ----------------------------------------------------------------------
+# Core processing
+# ----------------------------------------------------------------------
+
+def build_expanded(lnnote, curr, prev):
+    # LNNOTE: map SECTOR -> SECTORCD
+    lnnote['SECTORCD'] = lnnote['SECTOR'].map(SECTCD)
+    lnnote = lnnote.dropna(subset=['SECTORCD']).copy()
+    lnnote = add_effapr(lnnote)
+    keep = ['ACCTNO', 'NOTENO', 'SECTORCD', 'EFFAPR']
+    lnnote = lnnote[keep]
+
+    # Merge current and previous with lnnote
+    curr_merged = curr.merge(lnnote, on=['ACCTNO', 'NOTENO', 'SECTORCD'], how='left')
+    curr_merged['EFFAPR'] = curr_merged['EFFAPR'].fillna(0.0)
+
+    prev_merged = prev.rename(columns={'BALANCE': 'LASTBAL', 'NOTETERM': 'LASTNOTE'})
+    prev_merged = prev_merged.merge(lnnote, on=['ACCTNO', 'NOTENO', 'SECTORCD'], how='left')
+    prev_merged['EFFAPR'] = prev_merged['EFFAPR'].fillna(0.0)
+
+    # Full outer merge
+    merged = pd.merge(
+        prev_merged[['ACCTNO', 'NOTENO', 'SECTORCD', 'LASTBAL', 'EFFAPR']],
+        curr_merged[['ACCTNO', 'NOTENO', 'SECTORCD', 'BALANCE', 'EFFAPR',
+                     'CUSTCD', 'AMTIND', 'APPRLIM2']],
+        on=['ACCTNO', 'NOTENO', 'SECTORCD'],
+        how='outer',
+        suffixes=('_prev', '_curr')
+    )
+
+    # Determine flags
+    merged['A'] = merged['LASTBAL'].notna()
+    merged['B'] = merged['BALANCE'].notna()
+
+    # Compute DISBURSE / REPAID
+    merged['DISBURSE'] = 0.0
+    merged['REPAID'] = 0.0
+
+    mask_ab = merged['A'] & merged['B']
+    merged.loc[mask_ab, 'REPAID'] = np.where(
+        merged.loc[mask_ab, 'LASTBAL'] > merged.loc[mask_ab, 'BALANCE'],
+        merged.loc[mask_ab, 'LASTBAL'] - merged.loc[mask_ab, 'BALANCE'],
+        0.0
+    )
+    merged.loc[mask_ab, 'DISBURSE'] = np.where(
+        merged.loc[mask_ab, 'LASTBAL'] > merged.loc[mask_ab, 'BALANCE'],
+        0.0,
+        merged.loc[mask_ab, 'BALANCE'] - merged.loc[mask_ab, 'LASTBAL']
+    )
+
+    mask_only_prev = merged['A'] & ~merged['B']
+    merged.loc[mask_only_prev, 'REPAID'] = merged.loc[mask_only_prev, 'LASTBAL']
+
+    mask_only_curr = ~merged['A'] & merged['B']
+    merged.loc[mask_only_curr, 'DISBURSE'] = merged.loc[mask_only_curr, 'BALANCE']
+
+    # PRODUCT = DISBURSE * EFFAPR (use current if available)
+    merged['EFFAPR'] = merged['EFFAPR_curr'].fillna(merged['EFFAPR_prev'])
+    merged['PRODUCT'] = merged['DISBURSE'] * merged['EFFAPR']
+
+    # Expand by SECTA and SECTB
+    rows = []
+    for _, row in merged.iterrows():
+        sectcd = row['SECTORCD']
+        a = SECTA.get(sectcd, '')
+        b = SECTB.get(sectcd, '')
+        if a:
+            rows.append({
+                'SECTCD': a,
+                'DISBURSE': row['DISBURSE'],
+                'PRODUCT': row['PRODUCT'],
+                'CUSTCD': row.get('CUSTCD', ''),
+                'AMTIND': row.get('AMTIND', 0.0),
+                'APPRLIM2': row.get('APPRLIM2', 0.0)
+            })
+        if b:
+            rows.append({
+                'SECTCD': b,
+                'DISBURSE': row['DISBURSE'],
+                'PRODUCT': row['PRODUCT'],
+                'CUSTCD': row.get('CUSTCD', ''),
+                'AMTIND': row.get('AMTIND', 0.0),
+                'APPRLIM2': row.get('APPRLIM2', 0.0)
+            })
+    return pd.DataFrame(rows)
+
+def summarise(expanded, label, custcd_filter=None):
+    if custcd_filter is not None:
+        expanded = expanded[expanded['CUSTCD'].isin(custcd_filter)].copy()
+    summary = expanded.groupby('SECTCD', as_index=False).agg({
+        'DISBURSE': 'sum',
+        'PRODUCT': 'sum'
+    })
+    summary['WEIGHTED'] = summary['PRODUCT'] / summary['DISBURSE']
+    summary['WEIGHTED'] = summary['WEIGHTED'].fillna(0.0)
+    summary['BNMCODE'] = '673400000' + summary['SECTCD'] + 'Y'
+    summary['AMOUNT'] = summary['DISBURSE']
+    summary = summary[['BNMCODE', 'AMOUNT', 'WEIGHTED']].sort_values('BNMCODE').reset_index(drop=True)
+    return summary
+
+# ----------------------------------------------------------------------
+# Report generation
+# ----------------------------------------------------------------------
+
+def write_report(df, title, rdate, fh):
+    fh.write(f"EIBWHP01: {title} AS AT {rdate}\n")
+    fh.write("\n")
+    fh.write("Obs    BNMCODE                         AMOUNT          WEIGHTED\n")
+    fh.write("\n")
+    for i, row in df.iterrows():
+        amt = f"{row['AMOUNT']:,.2f}"
+        wgt = f"{row['WEIGHTED']:.6f}" if row['WEIGHTED'] != 0 else "."
+        fh.write(f"{i+1:>4}  {row['BNMCODE']:<14}  {amt:>20}  {wgt:>12}\n")
+    fh.write("\n")
+
+# ----------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------
+
+def main():
+    print(f"========== START JOB EIBWHP01 ==========")
+
+    reptdate = datetime.now() - timedelta(days=1)
+    macros = get_sas_macros(reptdate)
+    print(f"[DATE] Report: {macros['RDATE']}")
+
+    # Build file paths
+    curr_path = INPUT_DIR / f"loan{macros['REPTMON']}{macros['NOWK']}.sas7bdat"
+    prev_path = INPUT_DIR / f"loan{macros['REPTMON1']}{macros['NOWK1']}.sas7bdat"
+    lnnote_path = INPUT_DIR / "lnnote.sas7bdat"
+
+    if not curr_path.exists():
+        candidates = list(INPUT_DIR.glob("loan*.sas7bdat"))
+        if candidates:
+            curr_path = max(candidates, key=lambda p: p.stat().st_mtime)
+            print(f"[WARN] Using latest loan as current: {curr_path.name}")
+        else:
+            raise FileNotFoundError("No loan file found")
+    if not prev_path.exists():
+        raise FileNotFoundError(f"Previous BNM not found: {prev_path}")
+    if not lnnote_path.exists():
+        raise FileNotFoundError(f"LNNOTE not found: {lnnote_path}")
+
+    print("[READ] Loading files (parquet cache)...")
+    lnnote = read_sas_cached(lnnote_path)
+    curr = read_sas_cached(curr_path)
+    prev = read_sas_cached(prev_path)
+
+    print("[PROCESS] Building expanded loan data...")
+    expanded = build_expanded(lnnote, curr, prev)
+
+    print("[PROCESS] Summarising all customers...")
+    all_summary = summarise(expanded, "ALL")
+
+    print("[PROCESS] Summarising SMI (CUSTCD 66-69)...")
+    smi_summary = summarise(expanded, "SMI", custcd_filter=['66','67','68','69'])
+
+    print("[OUTPUT] Writing report...")
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        write_report(all_summary, "REPORT ON PRODUCTS 131,132,720,725", macros['RDATE'], f)
+        write_report(smi_summary, "SMI ACCTS (CUSTCD 66,67,68,69)", macros['RDATE'], f)
+
+    print(f"  Output written: {OUTPUT_FILE}")
+    print("========== END JOB EIBWHP01 ==========")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"[JOB FAILED] {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(8)
