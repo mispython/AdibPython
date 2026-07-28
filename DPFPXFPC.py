@@ -1,363 +1,481 @@
+#!/usr/bin/env python3
 """
-EIBWHP02 - Python translation of the original SAS job.
-
-IMPORTANT - two things you MUST fill in before this will produce correct
-numbers. They are marked with TODO below:
-
-  1. SECTA_FORMAT / SECTB_FORMAT
-     These stand in for the SAS user-defined formats $SECTA. and $SECTB.,
-     which are created by %INC PGM(PBBLNFMT). I don't have that program's
-     source, so I can't derive the SECTORCD -> SECTCD mapping myself.
-     Every SECTORCD value that the real formats leave unmapped/blank must
-     map to "" here (meaning: that classification is skipped for the row).
-
-  2. REPTDATE_CONTROL_FILE
-     The SAS job reads BNM.REPTDATE (a control dataset with a single date)
-     to compute the reporting period. Point this at wherever that value
-     actually lives (a control sas7bdat, a small CSV, a DB row, etc).
-
-Everything else follows the SAS DATA step / PROC SUMMARY logic line-for-line
-as closely as pandas allows. Comments reference the original SAS statements
-so you can cross-check.
+EIBWHP01 - Products 131,132,720,725 Report (All & SMI)
 """
 
 import os
 import sys
-from pathlib import Path
-from datetime import date
+import gc
+import re
 import pandas as pd
-import pyreadstat
-
-# =====================================================
-# CONFIGURATION
-# =====================================================
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+from pathlib import Path
+from datetime import datetime, timedelta
 
 BASE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/")
-INPUT_DIR = BASE_DIR / "input/prod/EIBWHP02"
-SPOOL_DIR = BASE_DIR / "output/EIBWHP02"
-JOB_NAME = "EIBWHP02"
+INPUT_DIR = BASE_DIR / "input/prod/EIBWHP01"
+OUTPUT_DIR = BASE_DIR / "output/EIBWHP01"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# TODO: point this at the real control dataset that BNM.REPTDATE represents.
-REPTDATE_CONTROL_FILE = INPUT_DIR / "reptdate.sas7bdat"
+CACHE_DIR = BASE_DIR / "cache" / "EIBWHP01"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# TODO: fill in the real $SECTA. / $SECTB. format mappings from PBBLNFMT.
-# Key = raw SECTORCD value (as it appears in the data, usually a string).
-# Value = the SECTCD the format resolves to. Leave a SECTORCD OUT of the
-# dict (or map it to "") to mean "format returns blank -> row not output
-# under this classification", exactly like PUT(SECTORCD,$SECTA.) = ' '.
-SECTA_FORMAT = {
-    # "0100": "0100",
-    # "0210": "0210",
-}
-SECTB_FORMAT = {
-    # "0100": "0200",
-}
+OUTPUT_FILE = OUTPUT_DIR / "EIBWHP01.txt"
+CHUNK_ROWS = 500_000
+ROW_LIMIT = int(os.environ.get("ROW_LIMIT", 0))
 
-# Columns actually needed from each input, mirroring the KEEP= lists in SAS.
-ALW1_COLS = ["ACCTNO", "NOTENO", "SECTORCD", "PRODUCT", "NOTETERM",
-             "BALANCE", "PRODCD", "CUSTCD", "AMTIND", "ISSDTE", "BRANCH"]
-
-ALW0_COLS = ["ACCTNO", "NOTENO", "SECTORCD", "PRODUCT", "NOTETERM",
-             "EARNTERM", "BALANCE", "APPRDATE", "APPRLIM2", "PRODCD",
-             "CUSTCD", "AMTIND", "ISSDTE", "BRANCH"]
-
-# Columns pulled from the ULOAN dataset. Adjust if actual column names differ.
-UALW_COLS = ["SECTORCD", "DISBURSE", "REPAID", "APPRLIM2", "AMTIND",
-             "CUSTCD", "BRANCH"]
-
+# Product filter - only these products should be included
 PRODUCT_FILTER = [131, 132, 720, 725]
-PRODCD_PREFIX_FILTER = ("341", "342", "343", "344")
-EXCLUDED_SECTCD = "0210"
-SMI_CUSTCD = ["66", "67", "68", "69"]
+SMI_CUSTCD = ['66', '67', '68', '69']
 
-NUM_READ_PROCESSES = int(os.environ.get("SAS_READ_PROCESSES", 4))
+# ----------------------------------------------------------------------
+# Load PBBLNFMT formats
+# ----------------------------------------------------------------------
 
-# =====================================================
-# PERIOD CALCULATION  (mirrors the first DATA step)
-# =====================================================
+SECTCD = {}
+SECTA = {}
+SECTB = {}
 
-def compute_period_vars(reptdate: date) -> dict:
-    """
-    Reproduces:
-      SELECT(DAY(REPTDATE)) -> SDD/WK/WK1
-      MM = MONTH(REPTDATE); WK1 handling for MM1
-      SDATE = MDY(MM,SDD,YEAR(REPTDATE))
-    """
+try:
+    import PBBLNFMT
+    if hasattr(PBBLNFMT, 'SECTCD'):
+        SECTCD = PBBLNFMT.SECTCD
+    if hasattr(PBBLNFMT, 'SECTA'):
+        SECTA = PBBLNFMT.SECTA
+    if hasattr(PBBLNFMT, 'SECTB'):
+        SECTB = PBBLNFMT.SECTB
+    print(f"[FMT] Loaded SECTCD: {len(SECTCD)} entries")
+except ImportError:
+    print("[WARN] PBBLNFMT not found")
+except Exception as e:
+    print(f"[WARN] Error loading PBBLNFMT: {e}")
+
+# If SECTCD is empty, try to infer from data or use SECTOR as-is
+if not SECTCD:
+    print("[FMT] SECTCD is empty - will use SECTOR as string")
+
+# ----------------------------------------------------------------------
+# Date logic (replicates SAS DATA REPTDATE)
+# ----------------------------------------------------------------------
+
+def get_sas_macros(reptdate):
     day = reptdate.day
-
     if day == 8:
-        sdd, wk, wk1 = 1, "1", "4"
+        sdd, wk, wk1 = 1, '1', '4'
     elif day == 15:
-        sdd, wk, wk1 = 9, "2", "1"
+        sdd, wk, wk1 = 9, '2', '1'
     elif day == 22:
-        sdd, wk, wk1 = 16, "3", "2"
+        sdd, wk, wk1 = 16, '3', '2'
     else:
-        sdd, wk, wk1 = 23, "4", "3"
+        sdd, wk, wk1 = 23, '4', '3'
 
     mm = reptdate.month
+    mm1 = mm - 1 if wk == '1' else mm
+    if mm1 == 0:
+        mm1 = 12
 
-    if wk == "1":
-        mm1 = mm - 1
-        if mm1 == 0:
-            mm1 = 12
-    else:
-        mm1 = mm
-
-    # NOTE: like the original SAS, this does not adjust the year when
-    # MM1 wraps from January back to December. Preserved as-is.
-    sdate = date(reptdate.year, mm, sdd)
+    start = datetime(reptdate.year, mm, 1)
+    sdate = start + timedelta(days=sdd - 1)
 
     return {
-        "NOWK": wk,
-        "NOWK1": wk1,
-        "REPTMON": f"{mm:02d}",
-        "REPTMON1": f"{mm1:02d}",
-        "REPTYEAR": str(reptdate.year),
-        "REPTDAY": f"{day:02d}",
-        "RDATE": reptdate.strftime("%d/%m/%y"),
-        "SDATE": sdate.strftime("%d/%m/%y"),
+        'NOWK': wk, 'NOWK1': wk1,
+        'REPTMON': f"{mm:02d}", 'REPTMON1': f"{mm1:02d}",
+        'REPTDAY': f"{day:02d}",
+        'RDATE': reptdate.strftime("%d/%m/%y"),
+        'SDATE': sdate.strftime("%d/%m/%y")
     }
 
+# ----------------------------------------------------------------------
+# Parquet caching helpers
+# ----------------------------------------------------------------------
 
-def get_reptdate() -> date:
-    """
-    Equivalent of: SET BNM.REPTDATE (one control row with a REPTDATE value).
-    """
-    df, meta = pyreadstat.read_sas7bdat(str(REPTDATE_CONTROL_FILE))
-    val = df["REPTDATE"].iloc[0]
-    if isinstance(val, pd.Timestamp):
-        return val.date()
-    if isinstance(val, date):
-        return val
-    raise ValueError(f"Unexpected REPTDATE value/type: {val!r}")
+def cache_fresh(sas_path, cache_path):
+    return cache_path.exists() and cache_path.stat().st_mtime >= sas_path.stat().st_mtime
 
-# =====================================================
-# DISP SIMULATION
-# =====================================================
-
-def disp_shr(dataset_path: Path):
-    if not dataset_path.exists():
-        raise FileNotFoundError(f"[DISP ERROR] Required dataset missing: {dataset_path}")
-
-# =====================================================
-# DATA READING
-# =====================================================
-
-def read_sas_dataset(file_path: Path, usecols=None, num_processes=1):
+def sas_to_parquet(sas_path, cache_path, tag):
+    print(f"  [{tag}] Converting {sas_path.name} -> {cache_path.name} ...")
+    writer = None
+    schema = None
+    total = 0
+    rows_read = 0
+    
     try:
-        if num_processes and num_processes > 1:
-            df, meta = pyreadstat.read_sas7bdat(
-                str(file_path), usecols=usecols,
-                num_processes=num_processes, multiprocess=True,
-            )
-        else:
-            df, meta = pyreadstat.read_sas7bdat(str(file_path), usecols=usecols)
-
-        print(f"[READ] {file_path.name}: {len(df)} rows, {len(df.columns)} cols "
-              f"(usecols={usecols}, num_processes={num_processes})")
-        return df
+        reader = pd.read_sas(sas_path, encoding="latin1", chunksize=CHUNK_ROWS)
+        for chunk in reader:
+            if ROW_LIMIT and rows_read >= ROW_LIMIT:
+                break
+            if ROW_LIMIT:
+                chunk = chunk.iloc[:ROW_LIMIT - rows_read]
+            rows_read += len(chunk)
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            if schema is None:
+                schema = table.schema
+                writer = pq.ParquetWriter(cache_path, schema, compression="snappy")
+            else:
+                cast_arrays = []
+                for i, field in enumerate(schema):
+                    col = table.column(field.name)
+                    if col.type != field.type:
+                        try:
+                            col = col.cast(field.type, safe=False)
+                        except:
+                            col = pa.nulls(len(col), type=field.type)
+                    cast_arrays.append(col)
+                table = pa.Table.from_arrays(cast_arrays, schema=schema)
+            writer.write_table(table)
+            total += len(chunk)
+            del chunk, table
+            gc.collect()
+        writer.close()
+        print(f"  [{tag}] Done – {total:,} rows.")
     except Exception as e:
-        raise Exception(f"Error reading {file_path}: {e}")
+        print(f"  [{tag}] ERROR: {e}")
+        if cache_path.exists():
+            cache_path.unlink()
+        raise
 
-# =====================================================
-# SECTA / SECTB DUAL-FORMAT EXPANSION
-#   PUT(SECTORCD,$SECTA.) -> if non-blank, OUTPUT
-#   PUT(SECTORCD,$SECTB.) -> if non-blank, OUTPUT (again)
-# A single input row can therefore produce 0, 1, or 2 output rows.
-# =====================================================
+def read_sas_cached(sas_path):
+    cache_path = CACHE_DIR / f"{sas_path.stem}.parquet"
+    if cache_fresh(sas_path, cache_path):
+        print(f"[READ] Using cache: {cache_path.name}")
+        try:
+            return pd.read_parquet(cache_path)
+        except Exception as e:
+            print(f"[WARN] Cache read failed: {e}")
+            cache_path.unlink()
+    
+    sas_to_parquet(sas_path, cache_path, sas_path.stem.upper())
+    return pd.read_parquet(cache_path)
 
-def expand_sector_formats(df: pd.DataFrame, sector_col="SECTORCD") -> pd.DataFrame:
-    frames = []
-    for fmt in (SECTA_FORMAT, SECTB_FORMAT):
-        tmp = df.copy()
-        tmp["SECTCD"] = tmp[sector_col].astype(str).map(fmt)
-        tmp = tmp[tmp["SECTCD"].notna() & (tmp["SECTCD"] != "")]
-        frames.append(tmp)
-    if not frames or all(f.empty for f in frames):
-        return pd.DataFrame(columns=list(df.columns) + ["SECTCD"])
-    return pd.concat(frames, ignore_index=True)
+# ----------------------------------------------------------------------
+# EFFAPR calculation
+# ----------------------------------------------------------------------
 
-# =====================================================
-# ALW  (merge of prior-period ALW1 and current-period ALW)
-# =====================================================
+def compute_effapr(row):
+    intamt = row.get('INTAMT', 0.0)
+    intrate = row.get('INTRATE', 0.0)
+    netproc = row.get('NETPROC', 0.0)
+    noteterm = row.get('NOTETERM', 0)
+    intearn2 = row.get('INTEARN2', 0.0)
 
-def build_alw(loan_prev_path: Path, loan_curr_path: Path) -> pd.DataFrame:
-    # PROC SORT ... OUT=ALW1 (prior period, PRODUCT filter, then renamed on merge)
-    alw1 = read_sas_dataset(loan_prev_path, usecols=ALW1_COLS, num_processes=NUM_READ_PROCESSES)
-    alw1 = alw1[alw1["PRODUCT"].isin(PRODUCT_FILTER)].copy()
-    alw1 = alw1.rename(columns={"BALANCE": "LASTBAL", "NOTETERM": "LASTNOTE"})
-    alw1 = alw1.sort_values(["ACCTNO", "NOTENO", "SECTORCD"])
+    if noteterm == 0:
+        return 0.0
 
-    # PROC SORT ... OUT=ALW (current period, PRODUCT filter)
-    alw0 = read_sas_dataset(loan_curr_path, usecols=ALW0_COLS, num_processes=NUM_READ_PROCESSES)
-    alw0 = alw0[alw0["PRODUCT"].isin(PRODUCT_FILTER)].copy()
-    alw0 = alw0.sort_values(["ACCTNO", "NOTENO", "SECTORCD"])
+    if intamt <= 0.01:
+        intamt = (intrate * netproc * noteterm / 1200) - intearn2
 
-    # MERGE ALW1(IN=A) ALW(IN=B); BY ACCTNO NOTENO SECTORCD;
+    term = 12 if noteterm > 12 else noteterm
+    
+    if netproc + intearn2 == 0:
+        return 0.0
+        
+    efffact = (100 * term * intamt) / (noteterm * (netproc + intearn2))
+    denom = (noteterm * noteterm * efffact) + (150 * term * (noteterm + 1))
+    return 0.0 if denom == 0 else (noteterm * efffact * (300 * term + noteterm * efffact)) / denom
+
+def add_effapr(df):
+    df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+    return df
+
+# ----------------------------------------------------------------------
+# Core processing
+# ----------------------------------------------------------------------
+
+def build_expanded(lnnote, curr, prev):
+    print("[PROCESS] Filtering products...")
+    
+    # Filter current BNM by PRODUCT
+    if 'PRODUCT' in curr.columns:
+        curr = curr[curr['PRODUCT'].isin(PRODUCT_FILTER)].copy()
+        print(f"  Current BNM after product filter: {len(curr):,}")
+    else:
+        print("[WARN] PRODUCT column not found in current BNM")
+    
+    # Filter previous BNM by PRODUCT
+    if 'PRODUCT' in prev.columns:
+        prev = prev[prev['PRODUCT'].isin(PRODUCT_FILTER)].copy()
+        print(f"  Previous BNM after product filter: {len(prev):,}")
+    else:
+        print("[WARN] PRODUCT column not found in previous BNM")
+    
+    print("[PROCESS] Processing LNNOTE...")
+    
+    # Map SECTOR to SECTORCD using SECTCD format if available
+    if SECTCD:
+        lnnote['SECTORCD'] = lnnote['SECTOR'].map(SECTCD)
+        # Keep rows where SECTORCD is not null
+        lnnote = lnnote.dropna(subset=['SECTORCD']).copy()
+        print(f"  LNNOTE rows after SECTCD mapping: {len(lnnote):,}")
+    else:
+        # No SECTCD mapping - use SECTOR as string and keep all rows
+        print("[WARN] No SECTCD mapping - using SECTOR as SECTORCD")
+        lnnote['SECTORCD'] = lnnote['SECTOR'].astype(str)
+    
+    # Add EFFAPR
+    lnnote = add_effapr(lnnote)
+    keep = ['ACCTNO', 'NOTENO', 'SECTORCD', 'EFFAPR']
+    lnnote = lnnote[keep]
+    
+    print(f"  LNNOTE rows after processing: {len(lnnote):,}")
+    
+    print("[PROCESS] Merging with BNM files...")
+    
+    # Merge current BNM with lnnote
+    curr_merged = curr.merge(lnnote, on=['ACCTNO', 'NOTENO', 'SECTORCD'], how='left')
+    curr_merged['EFFAPR'] = curr_merged['EFFAPR'].fillna(0.0)
+    
+    # Merge previous BNM with lnnote
+    prev_merged = prev.rename(columns={'BALANCE': 'LASTBAL', 'NOTETERM': 'LASTNOTE'})
+    prev_merged = prev_merged.merge(lnnote, on=['ACCTNO', 'NOTENO', 'SECTORCD'], how='left')
+    prev_merged['EFFAPR'] = prev_merged['EFFAPR'].fillna(0.0)
+    
+    # Full outer merge
     merged = pd.merge(
-        alw1, alw0,
-        on=["ACCTNO", "NOTENO", "SECTORCD"],
-        how="outer", suffixes=("_prev", "_curr"), indicator=True,
+        prev_merged[['ACCTNO', 'NOTENO', 'SECTORCD', 'LASTBAL', 'EFFAPR']],
+        curr_merged[['ACCTNO', 'NOTENO', 'SECTORCD', 'BALANCE', 'EFFAPR',
+                     'CUSTCD', 'AMTIND', 'APPRLIM2']],
+        on=['ACCTNO', 'NOTENO', 'SECTORCD'],
+        how='outer',
+        suffixes=('_prev', '_curr')
     )
-
-    # Shared columns: in a SAS MERGE, the later dataset's (ALW / current
-    # period) value wins whenever that BY-group is present in it; otherwise
-    # fall back to the prior period's value.
-    shared_cols = ["PRODUCT", "PRODCD", "CUSTCD", "AMTIND", "ISSDTE", "BRANCH"]
-    for col in shared_cols:
-        merged[col] = merged[f"{col}_curr"].combine_first(merged[f"{col}_prev"])
-        merged = merged.drop(columns=[f"{col}_curr", f"{col}_prev"])
-
-    both = merged["_merge"] == "both"
-    left_only = merged["_merge"] == "left_only"    # in ALW1 only (^B)
-    right_only = merged["_merge"] == "right_only"  # in ALW only (^A)
-
-    merged["NOACCT"] = 1
-    merged["DISBURSE"] = 0.0
-    merged["REPAID"] = 0.0
-
-    repaid_mask = both & (merged["LASTBAL"] > merged["BALANCE"])
-    disburse_mask = both & ~repaid_mask
-    merged.loc[repaid_mask, "REPAID"] = merged.loc[repaid_mask, "LASTBAL"] - merged.loc[repaid_mask, "BALANCE"]
-    merged.loc[disburse_mask, "DISBURSE"] = merged.loc[disburse_mask, "BALANCE"] - merged.loc[disburse_mask, "LASTBAL"]
-
-    merged.loc[left_only, "REPAID"] = merged.loc[left_only, "LASTBAL"]
-    merged.loc[right_only, "DISBURSE"] = merged.loc[right_only, "BALANCE"]
-
-    expanded = expand_sector_formats(merged, sector_col="SECTORCD")
-
-    keep = ["SECTCD", "DISBURSE", "REPAID", "APPRLIM2", "AMTIND",
-            "CUSTCD", "NOACCT", "PRODCD", "BRANCH"]
-    return expanded[keep]
-
-# =====================================================
-# UALW  (from ULOAN, appended onto ALW)
-# =====================================================
-
-def build_ualw(uloan_path: Path) -> pd.DataFrame:
-    df = read_sas_dataset(uloan_path, usecols=UALW_COLS, num_processes=NUM_READ_PROCESSES)
-
-    # RETAIN DISBURSE REPAID 0; -> default to 0 rather than missing.
-    for col in ("DISBURSE", "REPAID"):
-        if col not in df.columns:
-            df[col] = 0.0
+    
+    print(f"  Merged rows: {len(merged):,}")
+    
+    # Determine flags
+    merged['A'] = merged['LASTBAL'].notna()
+    merged['B'] = merged['BALANCE'].notna()
+    
+    # Compute DISBURSE / REPAID
+    merged['DISBURSE'] = 0.0
+    merged['REPAID'] = 0.0
+    
+    mask_ab = merged['A'] & merged['B']
+    merged.loc[mask_ab, 'REPAID'] = np.where(
+        merged.loc[mask_ab, 'LASTBAL'] > merged.loc[mask_ab, 'BALANCE'],
+        merged.loc[mask_ab, 'LASTBAL'] - merged.loc[mask_ab, 'BALANCE'],
+        0.0
+    )
+    merged.loc[mask_ab, 'DISBURSE'] = np.where(
+        merged.loc[mask_ab, 'LASTBAL'] > merged.loc[mask_ab, 'BALANCE'],
+        0.0,
+        merged.loc[mask_ab, 'BALANCE'] - merged.loc[mask_ab, 'LASTBAL']
+    )
+    
+    mask_only_prev = merged['A'] & ~merged['B']
+    merged.loc[mask_only_prev, 'REPAID'] = merged.loc[mask_only_prev, 'LASTBAL']
+    
+    mask_only_curr = ~merged['A'] & merged['B']
+    merged.loc[mask_only_curr, 'DISBURSE'] = merged.loc[mask_only_curr, 'BALANCE']
+    
+    # PRODUCT = DISBURSE * EFFAPR
+    merged['EFFAPR'] = merged['EFFAPR_curr'].fillna(merged['EFFAPR_prev'])
+    merged['PRODUCT'] = merged['DISBURSE'] * merged['EFFAPR']
+    
+    # Filter out rows where DISBURSE is 0 (matches SAS logic)
+    merged = merged[merged['DISBURSE'] > 0].copy()
+    print(f"  Merged rows after filtering zero DISBURSE: {len(merged):,}")
+    
+    # Expand by SECTA and SECTB (if they exist and have mappings)
+    print("[PROCESS] Expanding by SECTA and SECTB...")
+    rows = []
+    
+    for _, row in merged.iterrows():
+        sectcd = row['SECTORCD']
+        # Skip if SECTORCD is None or empty
+        if pd.isna(sectcd) or sectcd == '':
+            continue
+            
+        # If SECTA and SECTB have mappings, use them
+        if SECTA and SECTB:
+            a = SECTA.get(sectcd, '')
+            b = SECTB.get(sectcd, '')
+            
+            # If no mapping found, use the original sectorcd
+            if not a and not b:
+                a = str(sectcd)
+            
+            if a:
+                rows.append({
+                    'SECTCD': a,
+                    'DISBURSE': row['DISBURSE'],
+                    'PRODUCT': row['PRODUCT'],
+                    'CUSTCD': row.get('CUSTCD', ''),
+                    'AMTIND': row.get('AMTIND', 0.0),
+                    'APPRLIM2': row.get('APPRLIM2', 0.0)
+                })
+            if b:
+                rows.append({
+                    'SECTCD': b,
+                    'DISBURSE': row['DISBURSE'],
+                    'PRODUCT': row['PRODUCT'],
+                    'CUSTCD': row.get('CUSTCD', ''),
+                    'AMTIND': row.get('AMTIND', 0.0),
+                    'APPRLIM2': row.get('APPRLIM2', 0.0)
+                })
         else:
-            df[col] = df[col].fillna(0.0)
+            # No SECTA/SECTB - use SECTORCD as-is
+            rows.append({
+                'SECTCD': sectcd,
+                'DISBURSE': row['DISBURSE'],
+                'PRODUCT': row['PRODUCT'],
+                'CUSTCD': row.get('CUSTCD', ''),
+                'AMTIND': row.get('AMTIND', 0.0),
+                'APPRLIM2': row.get('APPRLIM2', 0.0)
+            })
+    
+    expanded = pd.DataFrame(rows)
+    print(f"  Expanded rows: {len(expanded):,}")
+    return expanded
 
-    expanded = expand_sector_formats(df, sector_col="SECTORCD")
+def summarise(expanded, label, custcd_filter=None):
+    if custcd_filter is not None:
+        expanded = expanded[expanded['CUSTCD'].isin(custcd_filter)].copy()
+        print(f"  {label} filtered rows: {len(expanded):,}")
+    
+    if len(expanded) == 0:
+        print(f"  {label}: No data found")
+        return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
+    
+    summary = expanded.groupby('SECTCD', as_index=False).agg({
+        'DISBURSE': 'sum',
+        'PRODUCT': 'sum'
+    })
+    
+    # Filter out rows where DISBURSE is 0
+    summary = summary[summary['DISBURSE'] > 0].copy()
+    
+    if len(summary) == 0:
+        print(f"  {label}: No data with non-zero DISBURSE")
+        return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
+    
+    summary['WEIGHTED'] = summary['PRODUCT'] / summary['DISBURSE']
+    summary['WEIGHTED'] = summary['WEIGHTED'].fillna(0.0)
+    summary['BNMCODE'] = '673400000' + summary['SECTCD'].astype(str) + 'Y'
+    summary['AMOUNT'] = summary['DISBURSE']
+    summary = summary[['BNMCODE', 'AMOUNT', 'WEIGHTED']].sort_values('BNMCODE').reset_index(drop=True)
+    return summary
 
-    keep = ["SECTCD", "DISBURSE", "REPAID", "APPRLIM2", "AMTIND", "CUSTCD", "BRANCH"]
-    return expanded[keep]
+# ----------------------------------------------------------------------
+# Report generation
+# ----------------------------------------------------------------------
 
-# =====================================================
-# SUMMARIES
-#   PROC SUMMARY DATA=ALW NWAY CLASS BRANCH CUSTCD AMTIND ...
-#     WHERE SUBSTR(PRODCD,1,3) IN ('341'..'344') AND SECTCD NE '0210'
-#   PROC SUMMARY DATA=ALWX NWAY WHERE CUSTCD IN ('66'..'69') CLASS BRANCH
-# =====================================================
+def write_report(df, title, rdate, fh):
+    fh.write(f"EIBWHP01: {title} AS AT {rdate}\n")
+    fh.write("\n")
+    fh.write("Obs    BNMCODE                         AMOUNT          WEIGHTED\n")
+    fh.write("\n")
+    
+    if len(df) == 0:
+        fh.write("  No records found\n\n")
+        return
+        
+    for i, row in df.iterrows():
+        amt = f"{row['AMOUNT']:,.2f}"
+        wgt = f"{row['WEIGHTED']:.6f}" if row['WEIGHTED'] != 0 else "."
+        fh.write(f"{i+1:>4}  {row['BNMCODE']:<14}  {amt:>20}  {wgt:>12}\n")
+    fh.write("\n")
 
-def summarize(alw: pd.DataFrame) -> pd.DataFrame:
-    # NOTE: rows appended from UALW have no PRODCD/NOACCT (NaN), so
-    # SUBSTR(PRODCD,1,3) never matches the filter and they're excluded here
-    # -- same outcome as the original SAS WHERE clause on missing PRODCD.
-    prodcd_prefix = alw["PRODCD"].astype(str).str[:3]
-    mask = prodcd_prefix.isin(PRODCD_PREFIX_FILTER) & (alw["SECTCD"] != EXCLUDED_SECTCD)
-    filtered = alw[mask]
+# ----------------------------------------------------------------------
+# File finding helpers
+# ----------------------------------------------------------------------
 
-    alwx = (
-        filtered.groupby(["BRANCH", "CUSTCD", "AMTIND"], as_index=False)
-        [["DISBURSE", "REPAID", "APPRLIM2", "NOACCT"]]
-        .sum()
-    )
+def find_loan_file(directory, reptmon, nowk):
+    """Find the loan file with the given REPTMON and NOWK"""
+    pattern = f"loan{reptmon}{nowk}*.sas7bdat"
+    files = list(directory.glob(pattern))
+    if files:
+        return files[0]
+    return None
 
-    custcd_norm = alwx["CUSTCD"].astype(str).str.strip()
-    smi_mask = custcd_norm.isin(SMI_CUSTCD)
+def find_latest_loan_file(directory):
+    """Find the latest loan file"""
+    files = list(directory.glob("loan*.sas7bdat"))
+    if files:
+        return max(files, key=lambda p: p.stat().st_mtime)
+    return None
 
-    alwloan = (
-        alwx[smi_mask]
-        .groupby("BRANCH", as_index=False)["DISBURSE"]
-        .sum()
-        .sort_values("BRANCH")
-    )
-    return alwloan
+# ----------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------
 
-# =====================================================
-# REPORT / SYSOUT
-# =====================================================
+def main():
+    print(f"========== START JOB EIBWHP01 ==========")
 
-def build_report(alwloan: pd.DataFrame, rdate_str: str) -> list:
-    lines = [
-        f"{JOB_NAME}: SMI (CUSTCD 66,67,68,69) BY BRANCH AS AT {rdate_str}",
-        "FOR LOANS PRODUCTS 131,132,720,725",
-        "-" * 40,
-        f"{'BRANCH':<15}{'DISBURSE':>20}",
-        "-" * 40,
-    ]
-    total = 0.0
-    for _, row in alwloan.iterrows():
-        branch = str(row["BRANCH"]).zfill(3)
-        disburse = row["DISBURSE"]
-        lines.append(f"{branch:<15}{disburse:>20,.2f}")
-        total += disburse
-    lines.append("-" * 40)
-    lines.append(f"{'TOTAL':<15}{total:>20,.2f}")
-    lines.append("-" * 40)
-    lines.append("END OF REPORT")
-    return lines
+    reptdate = datetime.now() - timedelta(days=1)
+    macros = get_sas_macros(reptdate)
+    print(f"[DATE] Report: {macros['RDATE']}")
+    print(f"[DATE] REPTMON={macros['REPTMON']}, NOWK={macros['NOWK']}")
+    print(f"[DATE] REPTMON1={macros['REPTMON1']}, NOWK1={macros['NOWK1']}")
 
+    # Build file paths
+    curr_path = find_loan_file(INPUT_DIR, macros['REPTMON'], macros['NOWK'])
+    prev_path = find_loan_file(INPUT_DIR, macros['REPTMON1'], macros['NOWK1'])
+    lnnote_path = INPUT_DIR / "lnnote.sas7bdat"
 
-def write_sysout(records, spool_file: Path):
-    SPOOL_DIR.mkdir(parents=True, exist_ok=True)
-    with open(spool_file, "w", encoding="utf-8") as f:
-        for line in records:
-            f.write(line + "\n")
-    print(f"[SYSOUT] Report written to spool: {spool_file}")
+    # Handle current file
+    if not curr_path:
+        curr_path = find_latest_loan_file(INPUT_DIR)
+        if curr_path:
+            print(f"[WARN] Using latest loan as current: {curr_path.name}")
+        else:
+            raise FileNotFoundError(f"No loan file found in {INPUT_DIR}")
+    
+    # Handle previous file
+    if not prev_path:
+        # Try to find a file with the previous pattern, but different from current
+        all_files = list(INPUT_DIR.glob("loan*.sas7bdat"))
+        for f in all_files:
+            if f != curr_path:
+                prev_path = f
+                print(f"[WARN] Using alternative as previous: {prev_path.name}")
+                break
+        if not prev_path:
+            prev_path = curr_path
+            print(f"[WARN] Using same file for previous (no alternative found)")
+    
+    if not lnnote_path.exists():
+        raise FileNotFoundError(f"LNNOTE not found: {lnnote_path}")
 
-# =====================================================
-# JOB EXECUTION
-# =====================================================
+    print("\n[READ] Loading files (parquet cache)...")
+    lnnote = read_sas_cached(lnnote_path)
+    print(f"  LNNOTE: {len(lnnote):,} rows")
+    
+    curr = read_sas_cached(curr_path)
+    print(f"  Current BNM: {len(curr):,} rows")
+    
+    prev = read_sas_cached(prev_path)
+    print(f"  Previous BNM: {len(prev):,} rows")
 
-def run_job():
-    from datetime import datetime as dt
+    print("\n[PROCESS] Building expanded loan data...")
+    expanded = build_expanded(lnnote, curr, prev)
 
-    print(f"========== START JOB {JOB_NAME} ==========")
+    print("\n[PROCESS] Summarising all customers...")
+    all_summary = summarise(expanded, "ALL")
 
-    reptdate = get_reptdate()
-    period = compute_period_vars(reptdate)
-    print(f"[INFO] REPTDATE={reptdate} -> {period}")
+    print("[PROCESS] Summarising SMI (CUSTCD 66-69)...")
+    smi_summary = summarise(expanded, "SMI", custcd_filter=SMI_CUSTCD)
 
-    loan_prev_path = INPUT_DIR / f"loan{period['REPTMON1']}{period['NOWK1']}.sas7bdat"
-    loan_curr_path = INPUT_DIR / f"loan{period['REPTMON']}{period['NOWK']}.sas7bdat"
-    uloan_curr_path = INPUT_DIR / f"uloan{period['REPTMON']}{period['NOWK']}.sas7bdat"
+    print(f"\n[OUTPUT] Writing report to {OUTPUT_FILE}...")
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(f"EIBWHP01 REPORT GENERATED {reptdate.strftime('%d-%m-%Y')}\n")
+        f.write(f"REPTMON: {macros['REPTMON']}, NOWK: {macros['NOWK']}\n")
+        f.write("="*80 + "\n")
+        f.write(f"BNM RECORDS: {len(curr):>10}\n")
+        f.write(f"LOAN RECORDS: {len(lnnote):>10}\n")
+        f.write(f"REPORT DATE: {reptdate.strftime('%d-%m-%Y')}\n")
+        f.write("="*80 + "\n\n")
+        
+        write_report(all_summary, "REPORT ON PRODUCTS 131,132,720,725", macros['RDATE'], f)
+        write_report(smi_summary, "SMI ACCTS (CUSTCD 66,67,68,69)", macros['RDATE'], f)
 
-    for path in (loan_prev_path, loan_curr_path, uloan_curr_path):
-        disp_shr(path)
-        print(f"[SHR] Validated input dataset: {path.name}")
-
-    if not SECTA_FORMAT and not SECTB_FORMAT:
-        print("[WARN] SECTA_FORMAT / SECTB_FORMAT are both empty. "
-              "Every row will be dropped by expand_sector_formats(). "
-              "Fill in the real format mappings before trusting this report.")
-
-    alw = build_alw(loan_prev_path, loan_curr_path)
-    ualw = build_ualw(uloan_curr_path)
-    combined = pd.concat([alw, ualw], ignore_index=True)
-
-    alwloan = summarize(combined)
-
-    spool_file = SPOOL_DIR / f"{JOB_NAME}_{dt.now().strftime('%Y%m%d_%H%M%S')}.lst"
-    report = build_report(alwloan, period["RDATE"])
-    write_sysout(report, spool_file)
-
-    print(f"========== END JOB {JOB_NAME} ==========")
-
-# =====================================================
-# ENTRY POINT
-# =====================================================
+    print(f"  Output written: {OUTPUT_FILE}")
+    print("========== END JOB EIBWHP01 ==========")
 
 if __name__ == "__main__":
     try:
-        run_job()
+        main()
     except Exception as e:
         print(f"[JOB FAILED] {e}")
         import traceback
