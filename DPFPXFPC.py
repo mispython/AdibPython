@@ -1,41 +1,482 @@
-Loaded format_secta and format_sectb from PBBLNFMT.py
-Reading previous period...
-  Previous period loans: 4,295
-  Sample SECTORCD -> SECTA/SECTB:
-    9700 -> []
-    6120 -> ['6100']
-    5008 -> []
-    8999 -> []
-    5001 -> ['5001']
-    7199 -> ['7000']
-    9201 -> ['9000']
-    6130 -> ['6100']
-    6310 -> ['6300']
-    8331 -> []
-Processing current period...
-  Chunks: 20, Records: 8
-  Chunks: 30, Records: 166
-  Chunks: 40, Records: 7,595
-  Chunks: 50, Records: 7,625
-  Total current records: 7,652
-Processing paid-off loans...
-  Paid-off records added: 2
-Processing ULOAN...
-  ULOAN records added: 25,115
-  Distinct SECTCD values: 16
-  Samples: ['1000', '2000', '3000', '5001', '5002', '5003', '5004', '5005', '5006', '6100', '6300', '7000', '8310', '8320', '9000', '9999']
-Aggregating...
-Generating BNM records...
-  Final records: 48
+DATA LONPAC.REPTDATE;                                                   00310002
+   REPTDATE=TODAY();                                                    00320002
+   SELECT;                                                              00330002
+      WHEN(8 <= DAY(REPTDATE) <= 14) DO;                                00340002
+         REPTDATE=INPUT('08'||PUT(MONTH(REPTDATE), Z2.)||               00350002
+                  PUT(YEAR(REPTDATE), 4.), DDMMYY8.);                   00360002
+         WK      ='1';                                                  00370002
+         MM1 = MONTH(REPTDATE)-1;                                       00380002
+         YY1 = YEAR(REPTDATE);                                          00390002
+         IF MM1 = 0 THEN DO;                                            00400002
+         MM1 = 12;                                                      00410002
+         YY1=YEAR(REPTDATE)-1;                                          00420002
+        END;                                                            00430002
+      END;                                                              00440002
+      WHEN(15 <= DAY(REPTDATE) <= 21) DO;                               00450002
+         REPTDATE=INPUT('15'||PUT(MONTH(REPTDATE), Z2.)||               00460002
+                  PUT(YEAR(REPTDATE), 4.), DDMMYY8.);                   00470002
+         WK      ='2';                                                  00480002
+      END;                                                              00490002
+      WHEN(22 <= DAY(REPTDATE) <= 27) DO;                               00500002
+         REPTDATE=INPUT('22'||PUT(MONTH(REPTDATE), Z2.)||               00510002
+                  PUT(YEAR(REPTDATE), 4.), DDMMYY8.);                   00520002
+         WK      ='3';                                                  00530002
+      END;                                                              00540002
+      OTHERWISE DO;                                                     00550002
+         REPTDATE=INPUT('01'||PUT(MONTH(REPTDATE), Z2.)||               00560002
+                  PUT(YEAR(REPTDATE), 4.), DDMMYY8.)-1;                 00570002
+         WK      ='4';                                                  00580002
+      END;                                                              00590002
+   END;                                                                 00600002
+   PREVDATE=MDY(MM1,01,YY1);                                            00610002
+   CALL SYMPUT('NOWK',PUT(WK,$1.));                                     00620002
+   CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));                       00630002
+   CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));                   00640002
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                        00650002
+   CALL SYMPUT('REPTYEAR4',PUT(REPTDATE,YEAR4.));                       00660002
+   CALL SYMPUT('LASTMON',PUT(MM1,Z2.));                                 00670002
+   CALL SYMPUT('LASTYEAR',PUT(PREVDATE,YEAR2.));                        00680002
+RUN;                                                                    00690002
+                                                                        00700002
+%LET PACUST=(KEEP=NAME POLICYNO NEWIC OLDIC REGNO GENDER RACE MARITAL
+             DOB TELNO ADDRESS TOWN POSTCODE IC AGE REGNO_NEW);
+%LET PAPROD=(KEEP=AGENTNO POLICYNO BRANCH ACCTNO NOTENO INSURED ISSUEDT
+             EXPIRYDT PREMIUM PRODUCT PROD_CODE PROD_DESC
+             PROCESS_MTH SUBMITDT PROPOSAL_DT POLICYNO_OLD
+             AUTO_RENEWAL_IND);
+%LET MOTORCUST=(KEEP=POLICYNO NAME NEWIC OLDIC REGNO GENDER RACE
+                MARITAL DOB TELNO ADDRESS TOWN POSTCODE AGE IC
+                REGNO_NEW);
+%LET MOTORPROD=(KEEP=AGENTNO POLICYNO CREGNO BRANCH INSURED
+                 ISSUEDT EXPIRYDT PREMIUM PRODUCT PROD_CODE PROD_DESC
+                 PROCESS_MTH SUBMITDT PROPOSAL_DT POLICYNO_OLD);
+%LET MISCCUST=(KEEP=POLICYNO NAME NEWIC OLDIC REGNO GENDER RACE
+                DOB TELNO ADDRESS TOWN POSTCODE AGE IC REGNO_NEW);
+%LET MISCPROD=(KEEP=AGENTNO POLICYNO BRANCH INSURED
+                 ISSUEDT EXPIRYDT PREMIUM PRODUCT PROD_CODE PROD_DESC
+                 PROCESS_MTH SUBMITDT PROPOSAL_DT POLICYNO_OLD);
+%LET FIRECUST=(KEEP=POLICYNO NAME NEWIC OLDIC REGNO GENDER RACE
+               MARITAL DOB TELNO ADDRESS TOWN POSTCODE AGE IC
+               REGNO_NEW);
+%LET FIREPROD=(KEEP=AGENTNO POLICYNO BRANCH ACCTNO NOTENO INSURED
+               ISSUEDT EXPIRYDT PRODUCT PREMIUM PROD_CODE PROD_DESC
+               PROCESS_MTH SUBMITDT PROPOSAL_DT POLICYNO_OLD
+               CCOLLNO AUTO_DEBIT_IND AUTO_RENEWAL_IND
+               PROP_INS_ADDRESS TOT_STOREY);
+%LET HIRECUST=(KEEP=NAME POLICYNO NEWIC OLDIC REGNO GENDER RACE
+               MARITAL DOB TELNO ADDRESS TOWN POSTCODE AGE IC
+               REGNO_NEW);
+%LET HIREPROD=(KEEP=AGENTNO POLICYNO CREGNO INSURED ISSUEDT EXPIRYDT
+               PREMIUM AGENTNO CARREG CREGNO PRODUCT PROD_CODE
+               PROD_DESC PROCESS_MTH SUBMITDT PROPOSAL_DT POLICYNO_OLD);
 
-Sample output (first 10):
-  6734000001000Y;30845;0;220;0
-  6734000002000Y;6823;0;50;0
-  6734000003000Y;123268;120;854;2
-  6734000005001Y;74314;42;566;3
-  6734000005002Y;1283;0;9;0
-  6734000005003Y;3663;0;26;0
-  6734000005004Y;9764;0;77;0
-  6734000005005Y;0;0;0;0
-  6734000005006Y;6541;0;40;0
-  6734000006100Y;560545;43;4240;10
+ DATA LONPAC.PAPROD &PAPROD
+      PACUST;
+  INFILE PA DELIMITER = '|' MISSOVER DSD LRECL=1500 FIRSTOBS=6 END=EOF;
+      INPUT   POLICYNO    :   $16.
+              NAME        :   $150.
+              NEWIC       :   $16.
+              OLDIC       :   $15.
+              REGNO       :   $20.
+              DOBX        :   $10.
+              GENDER      :   $1.
+              AGENTNO     :   $10.
+              BRANCH      :   4.
+              ACCTNOX     :   $20.
+              RACE        :   $1.
+              MARITAL     :   $1.
+              INSURED     :   $20.
+              ISSUEDTX    :   $10.
+              EXPDT       :   $10.
+              PREMIUM     :   $15.
+              TELNO       :   $60.
+              ADDRESS     :   $90.
+              TOWN        :   $25.
+              POSTCODE    :   $10.
+              PROD_CODE   :   $4.
+              PROD_DESC   :   $60.
+              PROCESS_MTH :   $6.
+              SUBMITDX    :   $10.
+              PROPOSALDT  :   $10.
+              POLICYNO_OLD :  $19.
+              REGNO_NEW   :   $12.
+              AUTO_RENEWAL_IND : $1.
+         ;
+         DD1 = SUBSTR(ISSUEDTX,1,2);
+         MM1 = SUBSTR(ISSUEDTX,4,2);
+         YY1 = SUBSTR(ISSUEDTX,7,4);
+         ISSUEDT = MDY(MM1,DD1,YY1);
+
+         DD2 = SUBSTR(EXPDT,1,2);
+         MM2 = SUBSTR(EXPDT,4,2);
+         YY2 = SUBSTR(EXPDT,7,4);
+         EXPIRYDT = MDY(MM2,DD2,YY2);
+
+         SUBMITDT = INPUT(SUBMITDX,DDMMYY10.);
+         PROPOSAL_DT = INPUT(PROPOSALDT,DDMMYY10.);
+
+         IF AGENTNO = ' '  THEN DELETE;
+         PRODUCT = 'LONPAC_PA';                                         00719902
+         IF POLICYNO = ' ' THEN DELETE;
+         NOTENO = SUBSTR(ACCTNOX,14,5);
+         ACCTNO = SUBSTR(ACCTNOX,1,12);
+         ACCTNO=COMPRESS(ACCTNO,'-');
+RUN;
+
+DATA LONPAC.PACUST &PACUST;
+   SET PACUST;
+   IF NAME= '' THEN DELETE;
+   DD = SUBSTR(DOBX,1,2);
+   MM = SUBSTR(DOBX,4,2);
+   YY = SUBSTR(DOBX,7,4);
+   DOB = MDY(MM,DD,YY);
+   AGE = &REPTYEAR4 - YY;
+   IC = COMPRESS(NEWIC,'-');
+   IF POLICYNO = ' ' THEN DELETE;
+RUN;
+
+DATA LONPAC.MOTORPROD &MOTORPROD                                        01210002
+     MOTORCUST;
+INFILE MOTOR DELIMITER = '|' MISSOVER DSD LRECL=1500 FIRSTOBS=6 END=EOF;01220002
+    INPUT   POLICYNO    :   $16.
+            NAME        :   $150.
+            NEWIC       :   $16.                                        01230002
+            OLDIC       :   $15.
+            REGNO       :   $20.                                        01240002
+            CREGNO      :   $18.                                        01250002
+            DOBX        :   $10.                                        01251002
+            GENDER      :   $1.                                         01252002
+            AGENTNO     :   $10.                                        01253002
+            BRANCH      :   4.                                          01254002
+            RACE        :   $1.                                         01255002
+            MARITAL     :   $1.                                         01256002
+            INSURED     :   $20.
+            ISSUEDTX    :   $10.
+            EXPDT       :   $10.
+            PREMIUM     :   $15.
+            TELNO       :   $60.
+            ADDRESS     :   $90.
+            TOWN        :   $25.
+            POSTCODE    :   $10.
+            PROD_CODE   :   $4.
+            PROD_DESC   :   $60.
+            PROCESS_MTH :   $6.
+            SUBMITDX    :   $10.
+            PROPOSALDT  :   $10.
+            POLICYNO_OLD :  $19.
+            REGNO_NEW   :   $12.
+              ;                                                         01259402
+              DD1 = SUBSTR(ISSUEDTX,1,2);
+              MM1 = SUBSTR(ISSUEDTX,4,2);
+              YY1 = SUBSTR(ISSUEDTX,7,4);
+              ISSUEDT = MDY(MM1,DD1,YY1);
+
+              DD2 = SUBSTR(EXPDT,1,2);
+              MM2 = SUBSTR(EXPDT,4,2);
+              YY2 = SUBSTR(EXPDT,7,4);
+              EXPIRYDT = MDY(MM2,DD2,YY2);
+
+              SUBMITDT = INPUT(SUBMITDX,DDMMYY10.);
+              PROPOSAL_DT = INPUT(PROPOSALDT,DDMMYY10.);
+
+             IF AGENTNO = ' ' OR POLICYNO = ' ' THEN DELETE;
+             PRODUCT = PUT('LONPAC_MOTOR',$15.);                        01259702
+             CREGNO=COMPRESS(CREGNO,' ');
+RUN;
+
+DATA LONPAC.MOTORCUST &MOTORCUST;
+   SET MOTORCUST;
+   IF NAME = '' THEN DELETE;
+   DD = SUBSTR(DOBX,1,2);
+   MM = SUBSTR(DOBX,4,2);
+   YY = SUBSTR(DOBX,7,4);
+   DOB = MDY(MM,DD,YY);
+   AGE = &REPTYEAR4 - YY;
+   IC = COMPRESS(NEWIC,'-');
+   IF POLICYNO = ' ' THEN DELETE;
+RUN;
+
+ DATA MISCPROD &MISCPROD                                                01210002
+      MISCCUST;
+ INFILE MISC DELIMITER = '|' MISSOVER DSD LRECL=1500 FIRSTOBS=6 END=EOF;01220002
+    INPUT   POLICYNO    :   $16.
+            NAME        :   $150.
+            NEWIC       :   $16.                                        01230002
+            OLDIC       :   $15.
+            REGNO       :   $20.                                        01240002
+            DOBX        :   $10.                                        01251002
+            GENDER      :   $1.                                         01252002
+            AGENTNO     :   $10.                                        01253002
+            BRANCH      :   4.                                          01254002
+            RACE        :   $1.                                         01255002
+            INSURED     :   $20.
+            ISSUEDTX    :   $10.
+            EXPDT       :   $10.
+            PREMIUM     :   $15.
+            TELNO       :   $60.
+            ADDRESS     :   $90.
+            TOWN        :   $25.
+            POSTCODE    :   $10.
+            PROD_CODE   :   $4.
+            PROD_DESC   :   $60.
+            PROCESS_MTH :   $6.
+            SUBMITDX    :   $10.
+            PROPOSALDT  :   $10.
+            POLICYNO_OLD :  $19.
+            REGNO_NEW   :   $12.
+              ;                                                         01259402
+              DD1 = SUBSTR(ISSUEDTX,1,2);
+              MM1 = SUBSTR(ISSUEDTX,4,2);
+              YY1 = SUBSTR(ISSUEDTX,7,4);
+              ISSUEDT = MDY(MM1,DD1,YY1);
+
+              DD2 = SUBSTR(EXPDT,1,2);
+              MM2 = SUBSTR(EXPDT,4,2);
+              YY2 = SUBSTR(EXPDT,7,4);
+              EXPIRYDT = MDY(MM2,DD2,YY2);
+
+              SUBMITDT = INPUT(SUBMITDX,DDMMYY10.);
+              PROPOSAL_DT = INPUT(PROPOSALDT,DDMMYY10.);
+
+             IF AGENTNO = ' ' OR POLICYNO = ' ' THEN DELETE;
+             PRODUCT = PUT('LONPAC_MOTOR',$15.);                        01259702
+ RUN;
+
+ DATA MISCCUST &MISCCUST;
+    SET MISCCUST;
+    IF NAME = '' THEN DELETE;
+    DD = SUBSTR(DOBX,1,2);
+    MM = SUBSTR(DOBX,4,2);
+    YY = SUBSTR(DOBX,7,4);
+    DOB = MDY(MM,DD,YY);
+    AGE = &REPTYEAR4 - YY;
+    IC = COMPRESS(NEWIC,'-');
+    IF POLICYNO = ' ' THEN DELETE;
+ RUN;                                                                   01259802
+
+ DATA LONPAC.FIREPROD &FIREPROD                                         01269902
+      FIRECUST;
+ INFILE FIRE DELIMITER = '|' MISSOVER DSD LRECL=1500 FIRSTOBS=6 END=EOF;01270002
+     INPUT    POLICYNO    :   $16.
+              NAME        :   $150.
+              NEWIC       :   $16.                                      01271002
+              OLDIC       :   $15.                                      01272002
+              REGNO       :   $20.
+              DOBX        :   $10.
+              GENDER      :   $1.                                       01273002
+              AGENTNO     :   $10.                                      01274002
+              BRANCH      :   4.                                        01275002
+              ACCTNOX     :   $20.                                      01276002
+              RACE        :   $1.                                       01277002
+              MARITAL     :   $1.                                       01278002
+              INSURED     :   $20.                                      01279002
+              ISSUEDTX    :   $10.                                      01279102
+              EXPDT       :   $10.
+              PREMIUM     :   $15.
+              TELNO       :   $60.
+              ADDRESS     :   $90.
+              TOWN        :   $25.
+              POSTCODE    :   $10.
+              PROD_CODE   :   $4.
+              PROD_DESC   :   $60.
+              PROCESS_MTH :   $6.
+              SUBMITDX    :   $10.
+              PROPOSALDT  :   $10.
+              POLICYNO_OLD :  $19.
+              REGNO_NEW   :   $12.
+              CCOLLNO     :   30.
+              AUTO_DEBIT_IND  :  $1.
+              AUTO_RENEWAL_IND  :  $1.
+              PROP_INS_ADDRESS  :  $200.
+              TOT_STOREY  :   3.
+              ;                                                         01279302
+              DD1 = SUBSTR(ISSUEDTX,1,2);
+              MM1 = SUBSTR(ISSUEDTX,4,2);
+              YY1 = SUBSTR(ISSUEDTX,7,4);
+              ISSUEDT = MDY(MM1,DD1,YY1);
+
+              DD2 = SUBSTR(EXPDT,1,2);
+              MM2 = SUBSTR(EXPDT,4,2);
+              YY2 = SUBSTR(EXPDT,7,4);
+              EXPIRYDT = MDY(MM2,DD2,YY2);
+
+              SUBMITDT = INPUT(SUBMITDX,DDMMYY10.);
+              PROPOSAL_DT = INPUT(PROPOSALDT,DDMMYY10.);
+
+      IF POLICYNO='F.ENDT.MAS......' OR POLICYNO =  ' ' THEN DELETE;
+      IF AGENTNO = ' '  THEN DELETE;
+      PRODUCT=PUT('LONPAC_FIRE',$15.);                                  01279602
+      NOTENO = SUBSTR(ACCTNOX,14,5);
+      ACCTNO = SUBSTR(ACCTNOX,1,12);
+      ACCTNO=COMPRESS(ACCTNO,'-');
+RUN;
+
+ DATA LONPAC.FIRECUST &FIRECUST;
+    SET FIRECUST;
+    IF POLICYNO='F.ENDT.MAS......' OR POLICYNO =  ' ' THEN DELETE;
+    IF NAME= '' THEN DELETE;
+    DD = SUBSTR(DOBX,1,2);
+    MM = SUBSTR(DOBX,4,2);
+    YY = SUBSTR(DOBX,7,4);
+    DOB = MDY(MM,DD,YY);
+    AGE = &REPTYEAR4 - YY;
+    IC = COMPRESS(NEWIC,'-');
+ RUN;
+     *;                                                                 01289802
+ DATA LONPAC.HIREPROD &HIREPROD                                         01289902
+      HIRECUST;
+ INFILE HIRE DELIMITER = '|'MISSOVER DSD LRECL=1500 FIRSTOBS=9 END=EOF; 01290002
+      INPUT    POLICYNO    :   $16.
+               NAME        :   $150.
+               NEWIC       :   $15.
+               OLDIC       :   $15.
+               REGNO       :   $20.
+               CREGNO      :   $20.
+               DOBX        :   $10.
+               GENDER      :   $1.
+               AGENTNO     :   $10.
+               RACE        :   $1.
+               MARITAL     :   $1.
+               INSURED     :   $20.
+               ISSUEDTX    :   $10.
+               EXPDT       :   $10.
+               PREMIUM     :   $15.
+               TELNO       :   $60.
+               ADDRESS     :   $90.
+               TOWN        :   $19.
+               POSTCODE    :   $10.
+               PROD_CODE   :   $4.
+               PROD_DESC   :   $60.
+               PROCESS_MTH :   $6.
+               SUBMITDX    :   $10.
+               PROPOSALDT  :   $10.
+               POLICYNO_OLD :  $19.
+               REGNO_NEW   :   $12.
+              ;                                                         01299302
+           IF AGENTNO='' OR POLICYNO = ' ' THEN DELETE;
+                                                                        01299402
+           DD1 = SUBSTR(ISSUEDTX,1,2);
+           MM1 = SUBSTR(ISSUEDTX,4,2);
+           YY1 = SUBSTR(ISSUEDTX,7,4);
+           ISSUEDT = MDY(MM1,DD1,YY1);
+
+           DD2 = SUBSTR(EXPDT,1,2);
+           MM2 = SUBSTR(EXPDT,4,2);
+           YY2 = SUBSTR(EXPDT,7,4);
+           EXPIRYDT = MDY(MM2,DD2,YY2);
+
+           SUBMITDT = INPUT(SUBMITDX,DDMMYY10.);
+           PROPOSAL_DT = INPUT(PROPOSALDT,DDMMYY10.);
+
+           PRODUCT = 'LONPAC_HP';                                       01299602
+           CARREG=COMPRESS(CREGNO);
+           CREGNO=COMPRESS(CREGNO,' ');
+ RUN;
+
+ DATA LONPAC.HIRECUST &HIRECUST;
+    SET HIRECUST;
+    IF POLICYNO='F.ENDT.MAS......' OR POLICYNO = ' ' THEN DELETE;
+    DD = SUBSTR(DOBX,1,2);
+    MM = SUBSTR(DOBX,4,2);
+    YY = SUBSTR(DOBX,7,4);
+    DOB = MDY(MM,DD,YY);
+    AGE = &REPTYEAR4 - YY;
+    IC = COMPRESS(NEWIC,'-');
+    IF NAME=' ' THEN DELETE;
+ RUN;
+
+ DATA LONPAC.NONHIREPROD &HIREPROD                                      01289902
+      NONHIRECUST;
+ INFILE NHIRE DELIMITER = '|'MISSOVER DSD LRECL=1500 FIRSTOBS=9 END=EOF;01290002
+      INPUT    POLICYNO    :   $16.
+               NAME        :   $150.
+               NEWIC       :   $15.
+               OLDIC       :   $15.
+               REGNO       :   $20.
+               CREGNO      :   $20.
+               DOBX        :   $10.
+               GENDER      :   $1.
+               AGENTNO     :   $10.
+               RACE        :   $1.
+               MARITAL     :   $1.
+               INSURED     :   $20.
+               ISSUEDTX    :   $10.
+               EXPDT       :   $10.
+               PREMIUM     :   $15.
+               TELNO       :   $60.
+               ADDRESS     :   $90.
+               TOWN        :   $19.
+               POSTCODE    :   $10.
+               PROD_CODE   :   $4.
+               PROD_DESC   :   $60.
+               PROCESS_MTH :   $6.
+               SUBMITDX    :   $10.
+               PROPOSALDT  :   $10.
+               POLICYNO_OLD :  $19.
+               REGNO_NEW   :   $12.
+              ;                                                         01299302
+           IF AGENTNO='' OR POLICYNO = ' ' THEN DELETE;
+                                                                        01299402
+           DD1 = SUBSTR(ISSUEDTX,1,2);
+           MM1 = SUBSTR(ISSUEDTX,4,2);
+           YY1 = SUBSTR(ISSUEDTX,7,4);
+           ISSUEDT = MDY(MM1,DD1,YY1);
+
+           DD2 = SUBSTR(EXPDT,1,2);
+           MM2 = SUBSTR(EXPDT,4,2);
+           YY2 = SUBSTR(EXPDT,7,4);
+           EXPIRYDT = MDY(MM2,DD2,YY2);
+
+           SUBMITDT = INPUT(SUBMITDX,DDMMYY10.);
+           PROPOSAL_DT = INPUT(PROPOSALDT,DDMMYY10.);
+
+           PRODUCT = 'LONPAC_HP';                                       01299602
+           CARREG=COMPRESS(CREGNO);
+           CREGNO=COMPRESS(CREGNO,' ');
+ RUN;
+
+DATA LONPAC.NONHIRECUST &HIRECUST;
+   SET NONHIRECUST;
+   IF POLICYNO='F.ENDT.MAS......' OR POLICYNO = ' ' THEN DELETE;
+   DD = SUBSTR(DOBX,1,2);
+   MM = SUBSTR(DOBX,4,2);
+   YY = SUBSTR(DOBX,7,4);
+   DOB = MDY(MM,DD,YY);
+   AGE = &REPTYEAR4 - YY;
+   IC = COMPRESS(NEWIC,'-');
+   IF NAME=' ' THEN DELETE;
+RUN;
+
+DATA LONPAC.MOTORCUST;
+   SET LONPAC.MOTORCUST MISCCUST;
+RUN;
+
+DATA LONPAC.MOTORPROD;
+   SET LONPAC.MOTORPROD MISCPROD;
+RUN;
+     *;                                                                 01299702
+       PROC SORT DATA=LONPAC.PACUST; BY POLICYNO; RUN;                  01299803
+       PROC SORT DATA=LONPAC.MOTORCUST; BY POLICYNO; RUN;               01299903
+       PROC SORT DATA=LONPAC.FIRECUST; BY POLICYNO; RUN;                01300003
+       PROC SORT DATA=LONPAC.HIRECUST; BY POLICYNO; RUN;                01300003
+       PROC SORT DATA=LONPAC.NONHIRECUST; BY POLICYNO; RUN;             01300003
+                                                                        01301003
+     DATA LONPAC.CUST;                                                  01310003
+ MERGE LONPAC.PACUST LONPAC.MOTORCUST LONPAC.FIRECUST LONPAC.HIRECUST   01320003
+       LONPAC.NONHIRECUST;
+      BY POLICYNO;                                                      01330003
+      IF POLICYNO=' ' THEN DELETE;                                      01330003
+      IF POLICYNO='Policy issued by' THEN DELETE;                       01330003
+      RUN;                                                              01340003
+     *;                                                                 01350003
+       PROC SORT DATA=LONPAC.PAPROD; BY POLICYNO; RUN;                  01299803
+       PROC SORT DATA=LONPAC.MOTORPROD; BY POLICYNO; RUN;               01299903
+       PROC SORT DATA=LONPAC.FIREPROD; BY POLICYNO; RUN;                01300003
+     *;                                                                 01300003
+     DATA LONPAC.PROD;                                                  01310003
+      FORMAT PRODUCT $15.;                                              01310003
+      MERGE LONPAC.PAPROD LONPAC.MOTORPROD LONPAC.FIREPROD;             01320003
+      BY POLICYNO;                                                      01330003
+      IF POLICYNO=' ' THEN DELETE;                                      01330003
+      RUN;                                                              01340003
+     *;       
