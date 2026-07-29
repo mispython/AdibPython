@@ -1,6 +1,8 @@
 import polars as pl
+import pandas as pd
 from pathlib import Path
 from datetime import datetime, timedelta
+import pyreadstat  # For writing SAS .sas7bdat files
 
 def calculate_report_dates():
     """Calculate report dates based on current date and week logic"""
@@ -43,7 +45,7 @@ def calculate_report_dates():
 
 def parse_date(date_str: str) -> datetime:
     """Parse date string in DD/MM/YYYY format"""
-    if not date_str or date_str.strip() == '':
+    if not date_str or date_str.strip() == '' or date_str.strip().upper() == 'NULL':
         return None
     try:
         parts = date_str.split('/')
@@ -53,33 +55,60 @@ def parse_date(date_str: str) -> datetime:
         return None
     return None
 
-def read_and_rename_csv(file_path: Path, expected_columns: list, skip_rows: int = 5) -> pl.DataFrame:
-    """Helper function to read CSV and rename columns dynamically"""
-    df = pl.read_csv(
-        file_path,
-        separator='|',
-        has_header=False,
-        skip_rows=skip_rows,
-        truncate_ragged_lines=True,
-        ignore_errors=True,
-        infer_schema_length=0
+def write_sas_dataset(df: pl.DataFrame, file_path: Path):
+    """Write Polars DataFrame to SAS .sas7bdat format"""
+    # Convert datetime columns to pandas datetime
+    pandas_df = df.to_pandas()
+    
+    # Handle datetime columns
+    for col in pandas_df.columns:
+        if pandas_df[col].dtype == 'datetime64[ns]':
+            # Convert to pandas datetime with proper format
+            pandas_df[col] = pd.to_datetime(pandas_df[col])
+    
+    # Write to SAS .sas7bdat
+    pyreadstat.write_sas7bdat(
+        pandas_df,
+        str(file_path),
+        compression=None
     )
+
+def read_txt_file(file_path: Path, expected_columns: list, skip_rows: int = 5) -> pl.DataFrame:
+    """Helper function to read TXT file with pipe delimiter"""
+    if not file_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
     
-    # Rename columns based on position
-    actual_cols = df.columns
-    rename_map = {actual_cols[i]: expected_columns[i] for i in range(min(len(actual_cols), len(expected_columns)))}
-    df = df.rename(rename_map)
-    
-    # Add missing columns
-    for col in expected_columns:
-        if col not in df.columns:
-            df = df.with_columns(pl.lit(None).alias(col))
-    
-    return df
+    # Try to read with proper column names
+    try:
+        df = pl.read_csv(
+            file_path,
+            separator='|',
+            has_header=False,
+            skip_rows=skip_rows,
+            truncate_ragged_lines=True,
+            ignore_errors=True,
+            infer_schema_length=0,
+            encoding='utf8'
+        )
+        
+        # Rename columns based on position
+        actual_cols = df.columns
+        rename_map = {actual_cols[i]: expected_columns[i] for i in range(min(len(actual_cols), len(expected_columns)))}
+        df = df.rename(rename_map)
+        
+        # Add missing columns
+        for col in expected_columns:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None).alias(col))
+        
+        return df
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        # Return empty DataFrame with expected columns
+        return pl.DataFrame({col: [] for col in expected_columns})
 
 def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int):
     """Process Personal Accident (PA) product data"""
-    # Define column names from SAS INPUT statement
     pa_columns = [
         "POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "DOBX", "GENDER", 
         "AGENTNO", "BRANCH", "ACCTNOX", "RACE", "MARITAL", "INSURED", 
@@ -88,52 +117,38 @@ def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int):
         "PROPOSALDT", "POLICYNO_OLD", "REGNO_NEW", "AUTO_RENEWAL_IND"
     ]
     
-    input_file = input_dir / "LONPAC_PA"
-    if input_file.with_suffix('.parquet').exists():
-        df = pl.read_parquet(input_file.with_suffix('.parquet'))
-    else:
-        df = pl.read_csv(
-            input_file,
-            separator='|',
-            has_header=False,  # No headers in the file!
-            new_columns=pa_columns,
-            skip_rows=5,  # FIRSTOBS=6 in SAS
-            truncate_ragged_lines=True,
-            ignore_errors=True
-        )
+    input_file = input_dir / "LONPAC_PA.txt"
+    df = read_txt_file(input_file, pa_columns, skip_rows=5)
     
-    # Handle missing columns by adding them with null values if needed
-    for col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
-        if col not in df.columns:
-            df = df.with_columns(pl.lit(None).alias(col))
+    # Parse dates
+    for date_col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
+        if date_col in df.columns:
+            df = df.with_columns(
+                pl.col(date_col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(date_col.replace('X', ''))
+            )
     
-    df = df.with_columns([
-        pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
-        pl.col("EXPDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("EXPIRYDT"),
-        pl.col("SUBMITDX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("SUBMITDT"),
-        pl.col("PROPOSALDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("PROPOSAL_DT"),
-        pl.col("DOBX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("DOB"),
-    ])
-    
+    # Filter records
     df = df.filter(
         (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "") &
         (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
     )
     
+    # Add derived columns
     df = df.with_columns([
         pl.lit("LONPAC_PA").alias("PRODUCT"),
         pl.col("ACCTNOX").str.slice(13, 5).alias("NOTENO"),
         pl.col("ACCTNOX").str.slice(0, 12).str.replace_all("-", "").alias("ACCTNO")
     ])
     
+    # Product dataset
     prod_cols = ["AGENTNO", "POLICYNO", "BRANCH", "ACCTNO", "NOTENO", "INSURED", 
                  "ISSUEDT", "EXPIRYDT", "PREMIUM", "PRODUCT", "PROD_CODE", "PROD_DESC",
                  "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD", "AUTO_RENEWAL_IND"]
+    df_prod = df.select(prod_cols)
     
+    # Customer dataset
     cust_cols = ["NAME", "POLICYNO", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE", 
                  "MARITAL", "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_prod = df.select(prod_cols)
     df_cust = df.select(cust_cols).filter(
         (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
     )
@@ -143,8 +158,9 @@ def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int):
         pl.col("NEWIC").str.replace_all("-", "").alias("IC")
     ])
     
-    df_prod.write_parquet(output_dir / "lonpac_paprod.parquet")
-    df_cust.write_parquet(output_dir / "lonpac_pacust.parquet")
+    # Write to SAS .sas7bdat
+    write_sas_dataset(df_prod, output_dir / "paprod.sas7bdat")
+    write_sas_dataset(df_cust, output_dir / "pacust.sas7bdat")
     
     return df_prod, df_cust
 
@@ -158,38 +174,37 @@ def process_motor_data(input_dir: Path, output_dir: Path, reptyear4: int):
         "PROPOSALDT", "POLICYNO_OLD", "REGNO_NEW"
     ]
     
-    input_file = input_dir / "LONPAC_MOTOR"
-    if input_file.with_suffix('.parquet').exists():
-        df = pl.read_parquet(input_file.with_suffix('.parquet'))
-    else:
-        df = read_and_rename_csv(input_file, motor_columns, skip_rows=5)
+    input_file = input_dir / "LONPAC_MOTOR.txt"
+    df = read_txt_file(input_file, motor_columns, skip_rows=5)
     
-    df = df.with_columns([
-        pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
-        pl.col("EXPDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("EXPIRYDT"),
-        pl.col("SUBMITDX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("SUBMITDT"),
-        pl.col("PROPOSALDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("PROPOSAL_DT"),
-        pl.col("DOBX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("DOB"),
-    ])
+    # Parse dates
+    for date_col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
+        if date_col in df.columns:
+            df = df.with_columns(
+                pl.col(date_col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(date_col.replace('X', ''))
+            )
     
+    # Filter records
     df = df.filter(
         (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "") &
         (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
     )
     
+    # Add derived columns
     df = df.with_columns([
         pl.lit("LONPAC_MOTOR").alias("PRODUCT"),
         pl.col("CREGNO").str.replace_all(" ", "").alias("CREGNO")
     ])
     
+    # Product dataset
     prod_cols = ["AGENTNO", "POLICYNO", "CREGNO", "BRANCH", "INSURED",
                  "ISSUEDT", "EXPIRYDT", "PREMIUM", "PRODUCT", "PROD_CODE", "PROD_DESC",
                  "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD"]
+    df_prod = df.select(prod_cols)
     
+    # Customer dataset
     cust_cols = ["POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE",
                  "MARITAL", "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_prod = df.select(prod_cols)
     df_cust = df.select(cust_cols).filter(
         (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
     )
@@ -199,8 +214,9 @@ def process_motor_data(input_dir: Path, output_dir: Path, reptyear4: int):
         pl.col("NEWIC").str.replace_all("-", "").alias("IC")
     ])
     
-    df_prod.write_parquet(output_dir / "lonpac_motorprod.parquet")
-    df_cust.write_parquet(output_dir / "lonpac_motorcust.parquet")
+    # Write to SAS .sas7bdat
+    write_sas_dataset(df_prod, output_dir / "motorprod.sas7bdat")
+    write_sas_dataset(df_cust, output_dir / "motorcust.sas7bdat")
     
     return df_prod, df_cust
 
@@ -214,35 +230,34 @@ def process_misc_data(input_dir: Path, output_dir: Path, reptyear4: int):
         "POLICYNO_OLD", "REGNO_NEW"
     ]
     
-    input_file = input_dir / "LONPAC_MISC"
-    if input_file.with_suffix('.parquet').exists():
-        df = pl.read_parquet(input_file.with_suffix('.parquet'))
-    else:
-        df = read_and_rename_csv(input_file, misc_columns, skip_rows=5)
+    input_file = input_dir / "LONPAC_MISC.txt"
+    df = read_txt_file(input_file, misc_columns, skip_rows=5)
     
-    df = df.with_columns([
-        pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
-        pl.col("EXPDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("EXPIRYDT"),
-        pl.col("SUBMITDX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("SUBMITDT"),
-        pl.col("PROPOSALDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("PROPOSAL_DT"),
-        pl.col("DOBX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("DOB"),
-    ])
+    # Parse dates
+    for date_col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
+        if date_col in df.columns:
+            df = df.with_columns(
+                pl.col(date_col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(date_col.replace('X', ''))
+            )
     
+    # Filter records
     df = df.filter(
         (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "") &
         (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
     )
     
+    # Add derived columns
     df = df.with_columns(pl.lit("LONPAC_MOTOR").alias("PRODUCT"))
     
+    # Product dataset
     prod_cols = ["AGENTNO", "POLICYNO", "BRANCH", "INSURED",
                  "ISSUEDT", "EXPIRYDT", "PREMIUM", "PRODUCT", "PROD_CODE", "PROD_DESC",
                  "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD"]
+    df_prod = df.select(prod_cols)
     
+    # Customer dataset
     cust_cols = ["POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE",
                  "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_prod = df.select(prod_cols)
     df_cust = df.select(cust_cols).filter(
         (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
     )
@@ -251,6 +266,10 @@ def process_misc_data(input_dir: Path, output_dir: Path, reptyear4: int):
         (pl.lit(reptyear4) - pl.col("DOB").dt.year()).alias("AGE"),
         pl.col("NEWIC").str.replace_all("-", "").alias("IC")
     ])
+    
+    # Write to SAS .sas7bdat
+    write_sas_dataset(df_prod, output_dir / "miscprod.sas7bdat")
+    write_sas_dataset(df_cust, output_dir / "misccust.sas7bdat")
     
     return df_prod, df_cust
 
@@ -265,41 +284,40 @@ def process_fire_data(input_dir: Path, output_dir: Path, reptyear4: int):
         "AUTO_DEBIT_IND", "AUTO_RENEWAL_IND", "PROP_INS_ADDRESS", "TOT_STOREY"
     ]
     
-    input_file = input_dir / "LONPAC_FIRE"
-    if input_file.with_suffix('.parquet').exists():
-        df = pl.read_parquet(input_file.with_suffix('.parquet'))
-    else:
-        df = read_and_rename_csv(input_file, fire_columns, skip_rows=5)
+    input_file = input_dir / "LONPAC_FIRE.txt"
+    df = read_txt_file(input_file, fire_columns, skip_rows=5)
     
-    df = df.with_columns([
-        pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
-        pl.col("EXPDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("EXPIRYDT"),
-        pl.col("SUBMITDX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("SUBMITDT"),
-        pl.col("PROPOSALDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("PROPOSAL_DT"),
-        pl.col("DOBX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("DOB"),
-    ])
+    # Parse dates
+    for date_col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
+        if date_col in df.columns:
+            df = df.with_columns(
+                pl.col(date_col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(date_col.replace('X', ''))
+            )
     
+    # Filter records
     df = df.filter(
         (pl.col("POLICYNO") != "F.ENDT.MAS......") &
         (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "") &
         (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "")
     )
     
+    # Add derived columns
     df = df.with_columns([
         pl.lit("LONPAC_FIRE").alias("PRODUCT"),
         pl.col("ACCTNOX").str.slice(13, 5).alias("NOTENO"),
         pl.col("ACCTNOX").str.slice(0, 12).str.replace_all("-", "").alias("ACCTNO")
     ])
     
+    # Product dataset
     prod_cols = ["AGENTNO", "POLICYNO", "BRANCH", "ACCTNO", "NOTENO", "INSURED",
                  "ISSUEDT", "EXPIRYDT", "PRODUCT", "PREMIUM", "PROD_CODE", "PROD_DESC",
                  "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD",
                  "CCOLLNO", "AUTO_DEBIT_IND", "AUTO_RENEWAL_IND", "PROP_INS_ADDRESS", "TOT_STOREY"]
+    df_prod = df.select(prod_cols)
     
+    # Customer dataset
     cust_cols = ["POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE",
                  "MARITAL", "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_prod = df.select(prod_cols)
     df_cust = df.select(cust_cols).filter(
         (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
     )
@@ -309,8 +327,9 @@ def process_fire_data(input_dir: Path, output_dir: Path, reptyear4: int):
         pl.col("NEWIC").str.replace_all("-", "").alias("IC")
     ])
     
-    df_prod.write_parquet(output_dir / "lonpac_fireprod.parquet")
-    df_cust.write_parquet(output_dir / "lonpac_firecust.parquet")
+    # Write to SAS .sas7bdat
+    write_sas_dataset(df_prod, output_dir / "fireprod.sas7bdat")
+    write_sas_dataset(df_cust, output_dir / "firecust.sas7bdat")
     
     return df_prod, df_cust
 
@@ -324,39 +343,38 @@ def process_hire_data(input_dir: Path, output_dir: Path, file_name: str, output_
         "POLICYNO_OLD", "REGNO_NEW"
     ]
     
-    input_file = input_dir / file_name
-    if input_file.with_suffix('.parquet').exists():
-        df = pl.read_parquet(input_file.with_suffix('.parquet'))
-    else:
-        df = read_and_rename_csv(input_file, hire_columns, skip_rows=8)  # FIRSTOBS=9
+    input_file = input_dir / f"{file_name}.txt"
+    df = read_txt_file(input_file, hire_columns, skip_rows=8)  # FIRSTOBS=9 in SAS
     
-    df = df.with_columns([
-        pl.col("ISSUEDTX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("ISSUEDT"),
-        pl.col("EXPDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("EXPIRYDT"),
-        pl.col("SUBMITDX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("SUBMITDT"),
-        pl.col("PROPOSALDT").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("PROPOSAL_DT"),
-        pl.col("DOBX").map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias("DOB"),
-    ])
+    # Parse dates
+    for date_col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
+        if date_col in df.columns:
+            df = df.with_columns(
+                pl.col(date_col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(date_col.replace('X', ''))
+            )
     
+    # Filter records
     df = df.filter(
         (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "") &
         (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
     )
     
+    # Add derived columns
     df = df.with_columns([
         pl.lit("LONPAC_HP").alias("PRODUCT"),
         pl.col("CREGNO").str.replace_all(" ", "").alias("CARREG"),
         pl.col("CREGNO").str.replace_all(" ", "").alias("CREGNO")
     ])
     
+    # Product dataset
     prod_cols = ["AGENTNO", "POLICYNO", "CREGNO", "INSURED", "ISSUEDT", "EXPIRYDT",
-                 "PREMIUM", "AGENTNO", "CARREG", "CREGNO", "PRODUCT", "PROD_CODE",
+                 "PREMIUM", "CARREG", "PRODUCT", "PROD_CODE",
                  "PROD_DESC", "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD"]
+    df_prod = df.select(prod_cols)
     
+    # Customer dataset
     cust_cols = ["NAME", "POLICYNO", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE",
                  "MARITAL", "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_prod = df.select(prod_cols)
     df_cust = df.select(cust_cols).filter(
         (pl.col("POLICYNO") != "F.ENDT.MAS......") &
         (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
@@ -367,52 +385,49 @@ def process_hire_data(input_dir: Path, output_dir: Path, file_name: str, output_
         pl.col("NEWIC").str.replace_all("-", "").alias("IC")
     ])
     
-    df_prod.write_parquet(output_dir / f"lonpac_{output_prefix}prod.parquet")
-    df_cust.write_parquet(output_dir / f"lonpac_{output_prefix}cust.parquet")
+    # Write to SAS .sas7bdat
+    write_sas_dataset(df_prod, output_dir / f"{output_prefix}prod.sas7bdat")
+    write_sas_dataset(df_cust, output_dir / f"{output_prefix}cust.sas7bdat")
     
     return df_prod, df_cust
 
 def merge_all_data(output_dir: Path):
     """Merge all customer and product data"""
-    pacust = pl.read_parquet(output_dir / "lonpac_pacust.parquet")
+    # Read all customer datasets
+    pacust = pl.read_parquet(output_dir / "pacust.parquet") if (output_dir / "pacust.parquet").exists() else None
+    motorcust = pl.read_parquet(output_dir / "motorcust.parquet") if (output_dir / "motorcust.parquet").exists() else None
+    firecust = pl.read_parquet(output_dir / "firecust.parquet") if (output_dir / "firecust.parquet").exists() else None
+    hirecust = pl.read_parquet(output_dir / "hirecust.parquet") if (output_dir / "hirecust.parquet").exists() else None
+    nonhirecust = pl.read_parquet(output_dir / "nonhirecust.parquet") if (output_dir / "nonhirecust.parquet").exists() else None
     
-    motorcust = pl.read_parquet(output_dir / "lonpac_motorcust.parquet")
-    misccust_path = output_dir / "lonpac_misccust.parquet"
-    if misccust_path.exists():
-        misccust = pl.read_parquet(misccust_path)
-        motorcust = pl.concat([motorcust, misccust])
+    # Concatenate all customer datasets
+    all_cust_dfs = [df for df in [pacust, motorcust, firecust, hirecust, nonhirecust] if df is not None]
+    if all_cust_dfs:
+        all_cust = pl.concat(all_cust_dfs, how="diagonal")
+        all_cust = all_cust.filter(
+            (pl.col("POLICYNO").is_not_null()) & 
+            (pl.col("POLICYNO") != "") &
+            (pl.col("POLICYNO") != "Policy issued by")
+        ).unique(subset=["POLICYNO"])
+        
+        # Write merged customer dataset
+        write_sas_dataset(all_cust, output_dir / "cust.sas7bdat")
     
-    firecust = pl.read_parquet(output_dir / "lonpac_firecust.parquet")
-    hirecust = pl.read_parquet(output_dir / "lonpac_hirecust.parquet")
-    nonhirecust = pl.read_parquet(output_dir / "lonpac_nonhirecust.parquet")
+    # Read all product datasets
+    paprod = pl.read_parquet(output_dir / "paprod.parquet") if (output_dir / "paprod.parquet").exists() else None
+    motorprod = pl.read_parquet(output_dir / "motorprod.parquet") if (output_dir / "motorprod.parquet").exists() else None
+    fireprod = pl.read_parquet(output_dir / "fireprod.parquet") if (output_dir / "fireprod.parquet").exists() else None
     
-    all_cust = pl.concat([pacust, motorcust, firecust, hirecust, nonhirecust], how="diagonal")
-    all_cust = all_cust.filter(
-        (pl.col("POLICYNO").is_not_null()) & 
-        (pl.col("POLICYNO") != "") &
-        (pl.col("POLICYNO") != "Policy issued by")
-    ).unique(subset=["POLICYNO"])
-    
-    all_cust.write_parquet(output_dir / "lonpac_cust.parquet")
-    
-    paprod = pl.read_parquet(output_dir / "lonpac_paprod.parquet")
-    motorprod = pl.read_parquet(output_dir / "lonpac_motorprod.parquet")
-    miscprod_path = output_dir / "lonpac_miscprod.parquet"
-    if miscprod_path.exists():
-        miscprod = pl.read_parquet(miscprod_path)
-        motorprod = pl.concat([motorprod, miscprod])
-    
-    fireprod = pl.read_parquet(output_dir / "lonpac_fireprod.parquet")
-    
-    # SAS only merges PA, MOTOR, and FIRE into PROD (NOT hire/nonhire)
-    all_prod = pl.concat([paprod, motorprod, fireprod], how="diagonal")
-    all_prod = all_prod.filter(
-        (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
-    ).unique(subset=["POLICYNO"])
-    
-    all_prod.write_parquet(output_dir / "lonpac_prod.parquet")
-    
-    return all_cust, all_prod
+    # Concatenate product datasets (only PA, MOTOR, and FIRE as per SAS)
+    all_prod_dfs = [df for df in [paprod, motorprod, fireprod] if df is not None]
+    if all_prod_dfs:
+        all_prod = pl.concat(all_prod_dfs, how="diagonal")
+        all_prod = all_prod.filter(
+            (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
+        ).unique(subset=["POLICYNO"])
+        
+        # Write merged product dataset
+        write_sas_dataset(all_prod, output_dir / "prod.sas7bdat")
 
 def process_lonpac_data(input_dir: str, output_dir: str):
     """Main function to process all LONPAC data"""
@@ -425,31 +440,38 @@ def process_lonpac_data(input_dir: str, output_dir: str):
     reptyear4 = dates['reptyear4']
     
     print("Starting LONPAC data processing...")
+    print(f"Reading from: {input_path}")
+    print(f"Writing to: {output_path}")
     
-    print("Processing PA data...")
-    process_pa_data(input_path, output_path, reptyear4)
-    
-    print("Processing Motor data...")
-    process_motor_data(input_path, output_path, reptyear4)
-    
-    print("Processing Misc data...")
-    misc_prod, misc_cust = process_misc_data(input_path, output_path, reptyear4)
-    misc_prod.write_parquet(output_path / "lonpac_miscprod.parquet")
-    misc_cust.write_parquet(output_path / "lonpac_misccust.parquet")
-    
-    print("Processing Fire data...")
-    process_fire_data(input_path, output_path, reptyear4)
-    
-    print("Processing Hire Purchase data...")
-    process_hire_data(input_path, output_path, "LONPAC_HIRE", "hire", reptyear4)
-    
-    print("Processing Non-Hire Purchase data...")
-    process_hire_data(input_path, output_path, "LONPAC_NONHIRE", "nonhire", reptyear4)
-    
-    print("Merging all datasets...")
-    merge_all_data(output_path)
-    
-    print("Processing complete!")
+    try:
+        print("Processing PA data...")
+        process_pa_data(input_path, output_path, reptyear4)
+        
+        print("Processing Motor data...")
+        process_motor_data(input_path, output_path, reptyear4)
+        
+        print("Processing Misc data...")
+        process_misc_data(input_path, output_path, reptyear4)
+        
+        print("Processing Fire data...")
+        process_fire_data(input_path, output_path, reptyear4)
+        
+        print("Processing Hire Purchase data...")
+        process_hire_data(input_path, output_path, "LONPAC_HIRE", "hire", reptyear4)
+        
+        print("Processing Non-Hire Purchase data...")
+        process_hire_data(input_path, output_path, "LONPAC_NONHIRE", "nonhire", reptyear4)
+        
+        print("Merging all datasets...")
+        merge_all_data(output_path)
+        
+        print("Processing complete!")
+        print(f"Output files are in SAS .sas7bdat format at: {output_path}")
+        
+    except Exception as e:
+        print(f"Error during processing: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Usage
 if __name__ == "__main__":
@@ -457,6 +479,3 @@ if __name__ == "__main__":
         input_dir="/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMLNPC",
         output_dir="/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMLNPC"
     )
-
-
-ALL FILE IN .TXT FILE FOR THE INPUTS. output in sas dataset sas7bdat.
