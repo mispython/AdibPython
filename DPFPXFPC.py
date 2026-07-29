@@ -1,162 +1,269 @@
-import os
-import sys
-from pathlib import Path
-from datetime import datetime
+[FMT] Loaded SECTCD: 0 entries
+========== START JOB EIBWHP01 ==========
+[DATE] Report: 28/07/26
+[DATE] REPTMON=07, NOWK=4
+[DATE] REPTMON1=07, NOWK1=3
+[WARN] Using latest loan as current: loan064.sas7bdat
+[WARN] Using same file for previous (no alternative found)
 
-# =====================================================
-# CONFIGURATION
-# =====================================================
+[READ] Loading files to parquet cache (if needed)...
+[READ] Using cache: loan064.parquet
+[READ] Using cache: loan064.parquet
+[READ] Using cache: lnnote.parquet
+  Current BNM: 623,910 rows
+  Previous BNM: 623,910 rows
+  LNNOTE: 6,232,608 rows
+[PROCESS] Starting DuckDB processing...
+[PROCESS] Filtering products and computing EFFAPR...
+  Current BNM filtered: 4,295
+  Previous BNM filtered: 4,295
+[PROCESS] Computing EFFAPR for LNNOTE...
+100% ▕██████████████████████████████████████▏ (00:00:03.10 elapsed)     
+  Processing LNNOTE chunk 1/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-BASE_DIR = Path(".")
-INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP03"
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 2/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP03"
-SPOOL_DIR = BASE_DIR / "spool"
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 3/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-JOB_NAME = "EIBWHP03"
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 4/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-LRECL = 80
-RECFM = "FB"
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 5/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-INPUT_DATASETS = {
-    "BNM": INPUT_DIR / "SAP.PBB.SASDATA"
-}
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 6/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-OUTPUT_DATASET = OUTPUT_DIR / "SAP.PBB.FISS.HP03"
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 7/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-SPOOL_FILE = SPOOL_DIR / f"{JOB_NAME}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.lst"
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 8/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 9/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-# =====================================================
-# DISP SIMULATION
-# =====================================================
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 10/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-def disp_delete(path):
-    if path.exists():
-        path.unlink()
-        print(f"[DELETE] Removed dataset: {path}")
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 11/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 12/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-def disp_shr(path):
-    if not path.exists():
-        raise FileNotFoundError(f"[DISP ERROR] Missing input dataset: {path}")
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 13/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 14/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-def disp_new(path):
-    if path.exists():
-        raise FileExistsError(f"[DISP ERROR] Dataset already exists: {path}")
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 15/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 16/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-# =====================================================
-# FIXED BLOCK WRITER (FB LRECL=80)
-# =====================================================
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 17/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-def write_fixed_block(path, records, lrecl):
-    with open(path, "wb") as f:
-        for record in records:
-            if isinstance(record, str):
-                record = record.encode("utf-8")
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 18/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-            if len(record) > lrecl:
-                record = record[:lrecl]
-            elif len(record) < lrecl:
-                record = record.ljust(lrecl, b" ")
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 19/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-            f.write(record)
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 20/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-    print(f"[WRITE] FB dataset created: {path}")
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 21/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 22/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-# =====================================================
-# SYSOUT WRITER
-# =====================================================
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 23/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-def write_sysout(lines):
-    SPOOL_DIR.mkdir(parents=True, exist_ok=True)
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 24/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-    with open(SPOOL_FILE, "w", encoding="utf-8") as f:
-        for line in lines:
-            f.write(line + "\n")
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 25/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-    print(f"[SYSOUT] Spool file created: {SPOOL_FILE}")
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 26/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 27/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-# =====================================================
-# SAS BUSINESS LOGIC PLACEHOLDER
-# =====================================================
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 28/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-def execute_business_logic():
-    """
-    Replace with full migrated Python logic later.
-    """
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 29/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-    print("[EXEC] Executing EIBWHP03 business logic...")
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 30/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-    # Simulated SP dataset output records (semicolon separated)
-    sp_records = [
-        "6734061000000Y;120;45;12;3",
-        "6734065000000Y;500;200;50;20"
-    ]
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 31/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-    # Simulated SYSOUT lines
-    spool_lines = [
-        "EIBWHP03 REPORT",
-        "SMI (CUSTCD 66,67,68,69)",
-        "-" * 60,
-        "BNMCODE         AMOUNT",
-        "6734061000000Y  120000",
-        "6734065000000Y  500000",
-        "-" * 60,
-        "END OF REPORT"
-    ]
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  Processing LNNOTE chunk 32/32...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
 
-    return sp_records, spool_lines
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
+  LNNOTE processed: 6,232,608
+[PROCESS] Merging data...
+  Merged rows: 4,295
+[PROCESS] Computing DISBURSE/REPAID...
+  After filtering zero DISBURSE: 0
+[PROCESS] Expanding by SECTA/SECTB...
+  Expanded rows: 0
 
-
-# =====================================================
-# JOB EXECUTION
-# =====================================================
-
-def run_job():
-
-    print(f"========== START JOB {JOB_NAME} ==========")
-
-    # 1️⃣ DELETE old dataset
-    disp_delete(OUTPUT_DATASET)
-
-    # 2️⃣ Validate input datasets (DISP=SHR)
-    for name, path in INPUT_DATASETS.items():
-        disp_shr(path)
-        print(f"[SHR] Validated input dataset: {name}")
-
-    # 3️⃣ Validate NEW dataset
-    disp_new(OUTPUT_DATASET)
-
-    # 4️⃣ Execute logic
-    sp_records, spool_lines = execute_business_logic()
-
-    # 5️⃣ Write FB dataset (LRECL=80)
-    write_fixed_block(OUTPUT_DATASET, sp_records, LRECL)
-
-    # 6️⃣ Write spool report
-    write_sysout(spool_lines)
-
-    print(f"========== END JOB {JOB_NAME} ==========")
-
-
-# =====================================================
-# ENTRY POINT
-# =====================================================
-
-if __name__ == "__main__":
-    try:
-        run_job()
-    except Exception as e:
-        print(f"[JOB FAILED] {e}")
-        sys.exit(8)  # Simulate ABEND
-
-
-REMOVE THE LRECL, remove the reptdate as we use datetime timedelta - 1 instead. output in text file. apply the PBBLNFMT.py. 
-
-all inputs are in sas7bdat dataset. loan{reptmon}{nowk}.sas7bdat, loan{reptmon1}{nowk1}.sas7bdat, uloan{reptmon}{nowk}.sas7bdat
-
+[PROCESS] Summarising all customers...
+  ALL: No data found
+[PROCESS] Summarising SMI (CUSTCD 66-69)...
+[JOB FAILED] 'CUSTCD'
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py", line 518, in <module>
+    main()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py", line 493, in main
+    smi_summary = summarise(expanded, "SMI", custcd_filter=SMI_CUSTCD)
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py", line 386, in summarise
+    expanded = expanded[expanded['CUSTCD'].isin(custcd_filter)].copy()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4102, in __getitem__
+    indexer = self.columns.get_loc(key)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/indexes/range.py", line 417, in get_loc
+    raise KeyError(key)
+KeyError: 'CUSTCD'
