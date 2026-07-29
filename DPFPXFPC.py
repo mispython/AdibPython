@@ -1,401 +1,547 @@
+#!/usr/bin/env python3
+"""
+EIBWHP01 - Products 131,132,720,725 Report (All & SMI)
+Optimized for memory efficiency using DuckDB and chunking
+"""
+
 import os
 import sys
+import gc
+import duckdb
 import pandas as pd
-import pyreadstat
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pathlib import Path
 from datetime import datetime, timedelta
 
-# =====================================================
-# CONFIGURATION
-# =====================================================
+BASE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/")
+INPUT_DIR = BASE_DIR / "input/prod/EIBWHP01"
+OUTPUT_DIR = BASE_DIR / "output/EIBWHP01"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-BASE_DIR = Path(".")
-INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP03"
-OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP03"
+CACHE_DIR = BASE_DIR / "cache" / "EIBWHP01"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-JOB_NAME = "EIBWHP03"
+OUTPUT_FILE = OUTPUT_DIR / "EIBWHP01.txt"
+CHUNK_ROWS = 200_000
+ROW_LIMIT = int(os.environ.get("ROW_LIMIT", 0))
 
-# Calculate report date (yesterday)
-REPORT_DATE = datetime.now() - timedelta(days=1)
-REPORT_MONTH = REPORT_DATE.strftime("%m")  # Month in MM format
-REPORT_WEEK = str((REPORT_DATE.day - 1) // 7 + 1)  # Week number
+PRODUCT_FILTER = [131, 132, 720, 725]
+SMI_CUSTCD = ['66', '67', '68', '69']
 
-# Input SAS7BDAT files with dynamic naming
-INPUT_DATASETS = {
-    "LOAN_CURRENT": INPUT_DIR / f"loan{REPORT_MONTH}{REPORT_WEEK}.sas7bdat",
-    "LOAN_PREVIOUS": INPUT_DIR / f"loan{REPORT_MONTH}{int(REPORT_WEEK)-1}.sas7bdat" if int(REPORT_WEEK) > 1 else INPUT_DIR / f"loan{int(REPORT_MONTH)-1:02d}4.sas7bdat",
-    "ULOAN_CURRENT": INPUT_DIR / f"uloan{REPORT_MONTH}{REPORT_WEEK}.sas7bdat"
-}
+# ----------------------------------------------------------------------
+# Load PBBLNFMT formats
+# ----------------------------------------------------------------------
 
-OUTPUT_FILE = OUTPUT_DIR / f"{JOB_NAME}_{REPORT_DATE.strftime('%Y%m%d')}.txt"
+SECTCD = {}
+SECTA = {}
+SECTB = {}
 
+try:
+    import PBBLNFMT
+    if hasattr(PBBLNFMT, 'SECTCD'):
+        SECTCD = PBBLNFMT.SECTCD
+    if hasattr(PBBLNFMT, 'SECTA'):
+        SECTA = PBBLNFMT.SECTA
+    if hasattr(PBBLNFMT, 'SECTB'):
+        SECTB = PBBLNFMT.SECTB
+    print(f"[FMT] Loaded SECTCD: {len(SECTCD)} entries")
+except ImportError:
+    print("[WARN] PBBLNFMT not found")
+except Exception as e:
+    print(f"[WARN] Error loading PBBLNFMT: {e}")
 
-# =====================================================
-# DISP SIMULATION
-# =====================================================
+# ----------------------------------------------------------------------
+# Date logic
+# ----------------------------------------------------------------------
 
-def disp_delete(path):
-    if path.exists():
-        path.unlink()
-        print(f"[DELETE] Removed file: {path}")
-
-
-def disp_shr(path):
-    if not path.exists():
-        raise FileNotFoundError(f"[DISP ERROR] Missing input dataset: {path}")
-
-
-def disp_new(path):
-    if path.exists():
-        raise FileExistsError(f"[DISP ERROR] File already exists: {path}")
-
-
-# =====================================================
-# PBBLNFMT.PY - FORMATTING LOGIC
-# =====================================================
-
-def apply_pbblnfmt(value, field_type="amount"):
-    """
-    Apply PBBLNFMT formatting similar to SAS PBBLNFMT.
-    """
-    if pd.isna(value) or value is None:
-        return " " * 15  # Return blanks for missing values
-    
-    # Convert to string if not already
-    value_str = str(value)
-    
-    if field_type == "amount":
-        # Format amounts: PBBLNFMT typically right-aligns with leading zeros
-        # Example: 120000 -> "0000000120000"
-        # Remove any decimal points and format as integer
-        try:
-            # Handle both integer and decimal values
-            if isinstance(value, (int, float)):
-                # Remove decimal and format as integer
-                int_val = int(value)
-                formatted = f"{int_val:012d}"  # 12 digits with leading zeros
-                return formatted[:15].rjust(15)  # Ensure 15 characters total
-            else:
-                # Try to clean the string
-                clean_str = ''.join(filter(str.isdigit, value_str))
-                if clean_str:
-                    int_val = int(clean_str)
-                    formatted = f"{int_val:012d}"
-                    return formatted[:15].rjust(15)
-                return " " * 15
-        except:
-            return value_str[:15].ljust(15)
-    
-    elif field_type == "code":
-        # Format codes: left-justified with trailing blanks
-        return value_str[:15].ljust(15)
-    
-    elif field_type == "account":
-        # Format account numbers: right-justified with leading zeros
-        clean_str = ''.join(filter(str.isdigit, value_str))
-        if clean_str:
-            return clean_str[:15].zfill(15)  # Pad with zeros to 15 chars
-        return value_str[:15].rjust(15)
-    
+def get_sas_macros(reptdate):
+    day = reptdate.day
+    if day == 8:
+        sdd, wk, wk1 = 1, '1', '4'
+    elif day == 15:
+        sdd, wk, wk1 = 9, '2', '1'
+    elif day == 22:
+        sdd, wk, wk1 = 16, '3', '2'
     else:
-        # Default formatting
-        return value_str[:15].ljust(15)
+        sdd, wk, wk1 = 23, '4', '3'
 
+    mm = reptdate.month
+    mm1 = mm - 1 if wk == '1' else mm
+    if mm1 == 0:
+        mm1 = 12
 
-def format_record(record, record_type):
-    """
-    Apply PBBLNFMT formatting to entire record.
-    This mimics the SAS PBBLNFMT format.
-    """
-    formatted_record = []
+    start = datetime(reptdate.year, mm, 1)
+    sdate = start + timedelta(days=sdd - 1)
+
+    return {
+        'NOWK': wk, 'NOWK1': wk1,
+        'REPTMON': f"{mm:02d}", 'REPTMON1': f"{mm1:02d}",
+        'REPTDAY': f"{day:02d}",
+        'RDATE': reptdate.strftime("%d/%m/%y"),
+        'SDATE': sdate.strftime("%d/%m/%y")
+    }
+
+# ----------------------------------------------------------------------
+# Parquet caching helpers
+# ----------------------------------------------------------------------
+
+def cache_fresh(sas_path, cache_path):
+    return cache_path.exists() and cache_path.stat().st_mtime >= sas_path.stat().st_mtime
+
+def sas_to_parquet(sas_path, cache_path, tag):
+    print(f"  [{tag}] Converting {sas_path.name} -> {cache_path.name} ...")
+    writer = None
+    schema = None
+    total = 0
+    rows_read = 0
     
-    if record_type == "LOAN":
-        # Expected format: BNMCODE, AMOUNT, OTHER_FIELDS
-        # Apply formatting based on field type
-        if len(record) >= 2:
-            # Format BNMCODE (account number)
-            formatted_record.append(apply_pbblnfmt(record[0], "account"))
-            # Format AMOUNT
-            formatted_record.append(apply_pbblnfmt(record[1], "amount"))
-            # Format any remaining fields as generic
-            for field in record[2:]:
-                formatted_record.append(apply_pbblnfmt(field, "code"))
-        else:
-            # If record doesn't match expected format, apply generic
-            for field in record:
-                formatted_record.append(apply_pbblnfmt(field, "code"))
-    
-    elif record_type == "ULOAN":
-        # Similar formatting for unsecured loans
-        if len(record) >= 2:
-            formatted_record.append(apply_pbblnfmt(record[0], "account"))
-            formatted_record.append(apply_pbblnfmt(record[1], "amount"))
-            for field in record[2:]:
-                formatted_record.append(apply_pbblnfmt(field, "code"))
-        else:
-            for field in record:
-                formatted_record.append(apply_pbblnfmt(field, "code"))
-    
-    else:
-        # Default formatting for other record types
-        for field in record:
-            formatted_record.append(apply_pbblnfmt(field, "code"))
-    
-    return formatted_record
-
-
-# =====================================================
-# TEXT FILE WRITER
-# =====================================================
-
-def write_text_file(path, records, delimiter="|"):
-    """
-    Write records to a text file with proper formatting.
-    """
-    with open(path, "w", encoding="utf-8") as f:
-        for record in records:
-            if isinstance(record, list):
-                # Join fields with delimiter
-                f.write(delimiter.join(record) + "\n")
-            elif isinstance(record, str):
-                f.write(record + "\n")
-            else:
-                f.write(str(record) + "\n")
-    
-    print(f"[WRITE] Text file created: {path}")
-    print(f"[INFO] Total records written: {len(records)}")
-
-
-# =====================================================
-# SAS DATA READER USING PYREADSTAT
-# =====================================================
-
-def read_sas7bdat(file_path):
-    """
-    Read SAS7BDAT file using pyreadstat and return pandas DataFrame.
-    pyreadstat is faster and more reliable than sas7bdat library.
-    """
     try:
-        # Read SAS file with pyreadstat
-        df, meta = pyreadstat.read_sas7bdat(file_path)
-        
-        # Print metadata for debugging
-        print(f"[READ] Successfully read: {file_path.name}")
-        print(f"[INFO] Records: {len(df)}, Columns: {len(df.columns)}")
-        print(f"[INFO] Column names: {', '.join(df.columns[:5])}{'...' if len(df.columns) > 5 else ''}")
-        print(f"[INFO] File encoding: {meta.encoding}")
-        
-        return df
-    
-    except FileNotFoundError:
-        raise FileNotFoundError(f"SAS file not found: {file_path}")
+        reader = pd.read_sas(sas_path, encoding="latin1", chunksize=CHUNK_ROWS)
+        for chunk in reader:
+            if ROW_LIMIT and rows_read >= ROW_LIMIT:
+                break
+            if ROW_LIMIT:
+                chunk = chunk.iloc[:ROW_LIMIT - rows_read]
+            rows_read += len(chunk)
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            if schema is None:
+                schema = table.schema
+                writer = pq.ParquetWriter(cache_path, schema, compression="snappy")
+            else:
+                cast_arrays = []
+                for i, field in enumerate(schema):
+                    col = table.column(field.name)
+                    if col.type != field.type:
+                        try:
+                            col = col.cast(field.type, safe=False)
+                        except:
+                            col = pa.nulls(len(col), type=field.type)
+                    cast_arrays.append(col)
+                table = pa.Table.from_arrays(cast_arrays, schema=schema)
+            writer.write_table(table)
+            total += len(chunk)
+            del chunk, table
+            gc.collect()
+        writer.close()
+        print(f"  [{tag}] Done – {total:,} rows.")
     except Exception as e:
-        raise Exception(f"Error reading SAS7BDAT file {file_path} with pyreadstat: {e}")
+        print(f"  [{tag}] ERROR: {e}")
+        if cache_path.exists():
+            cache_path.unlink()
+        raise
 
+def read_sas_cached(sas_path):
+    cache_path = CACHE_DIR / f"{sas_path.stem}.parquet"
+    if cache_fresh(sas_path, cache_path):
+        print(f"[READ] Using cache: {cache_path.name}")
+        return cache_path
+    sas_to_parquet(sas_path, cache_path, sas_path.stem.upper())
+    return cache_path
 
-def read_sas7bdat_with_options(file_path, usecols=None, row_limit=None):
-    """
-    Read SAS7BDAT file with additional options.
+# ----------------------------------------------------------------------
+# File finding helpers
+# ----------------------------------------------------------------------
+
+def find_loan_file(directory, reptmon, nowk):
+    pattern = f"loan{reptmon}{nowk}*.sas7bdat"
+    files = list(directory.glob(pattern))
+    if files:
+        return files[0]
+    return None
+
+def find_latest_loan_file(directory):
+    files = list(directory.glob("loan*.sas7bdat"))
+    if files:
+        return max(files, key=lambda p: p.stat().st_mtime)
+    return None
+
+# ----------------------------------------------------------------------
+# EFFAPR calculation
+# ----------------------------------------------------------------------
+
+def compute_effapr(intamt, intrate, netproc, noteterm, intearn2):
+    if noteterm == 0:
+        return 0.0
+
+    if intamt <= 0.01:
+        intamt = (intrate * netproc * noteterm / 1200) - intearn2
+
+    term = 12 if noteterm > 12 else noteterm
     
-    Parameters:
-    - file_path: Path to SAS file
-    - usecols: List of column names to read (optional)
-    - row_limit: Maximum number of rows to read (optional)
-    """
-    try:
-        # Read SAS file with options
-        df, meta = pyreadstat.read_sas7bdat(
-            file_path,
-            usecols=usecols,
-            row_limit=row_limit
+    if netproc + intearn2 == 0:
+        return 0.0
+        
+    efffact = (100 * term * intamt) / (noteterm * (netproc + intearn2))
+    denom = (noteterm * noteterm * efffact) + (150 * term * (noteterm + 1))
+    return 0.0 if denom == 0 else (noteterm * efffact * (300 * term + noteterm * efffact)) / denom
+
+# ----------------------------------------------------------------------
+# Main processing using DuckDB
+# ----------------------------------------------------------------------
+
+def process_with_duckdb(curr_path, prev_path, lnnote_path):
+    """Process data using DuckDB to minimize memory usage"""
+    
+    print("[PROCESS] Starting DuckDB processing...")
+    con = duckdb.connect(database=":memory:")
+    
+    # Register parquet files as views
+    con.execute(f"CREATE VIEW curr_bnm AS SELECT * FROM read_parquet('{curr_path}')")
+    con.execute(f"CREATE VIEW prev_bnm AS SELECT * FROM read_parquet('{prev_path}')")
+    con.execute(f"CREATE VIEW lnnote_view AS SELECT * FROM read_parquet('{lnnote_path}')")
+    
+    print("[PROCESS] Filtering products...")
+    
+    # Step 1: Filter and prepare current BNM with ALL needed columns
+    curr_filtered = con.execute(f"""
+        SELECT 
+            ACCTNO, 
+            NOTENO, 
+            SECTORCD, 
+            BALANCE, 
+            CUSTCD,
+            AMTIND, 
+            APPRLIM2
+        FROM curr_bnm
+        WHERE PRODUCT IN ({','.join(map(str, PRODUCT_FILTER))})
+    """).df()
+    print(f"  Current BNM filtered: {len(curr_filtered):,}")
+    
+    # Step 2: Filter and prepare previous BNM
+    prev_filtered = con.execute(f"""
+        SELECT 
+            ACCTNO, 
+            NOTENO, 
+            SECTORCD, 
+            BALANCE as LASTBAL,
+            CUSTCD,
+            AMTIND, 
+            APPRLIM2
+        FROM prev_bnm
+        WHERE PRODUCT IN ({','.join(map(str, PRODUCT_FILTER))})
+    """).df()
+    print(f"  Previous BNM filtered: {len(prev_filtered):,}")
+    
+    # Step 3: Get LNNOTE data
+    print("[PROCESS] Getting LNNOTE data...")
+    lnnote_cols = con.execute("""
+        SELECT ACCTNO, NOTENO, SECTOR, INTAMT, INTRATE, NETPROC, NOTETERM, INTEARN2
+        FROM lnnote_view
+    """).df()
+    print(f"  LNNOTE rows: {len(lnnote_cols):,}")
+    
+    # Step 4: Compute EFFAPR for LNNOTE in chunks
+    print("[PROCESS] Computing EFFAPR for LNNOTE...")
+    
+    chunk_size = 200000
+    lnnote_processed = []
+    total_chunks = (len(lnnote_cols) + chunk_size - 1) // chunk_size
+    
+    for i in range(0, len(lnnote_cols), chunk_size):
+        chunk = lnnote_cols.iloc[i:i+chunk_size].copy()
+        chunk['EFFAPR'] = chunk.apply(
+            lambda row: compute_effapr(
+                row['INTAMT'], row['INTRATE'], row['NETPROC'], 
+                row['NOTETERM'], row['INTEARN2']
+            ), axis=1
         )
-        
-        print(f"[READ] Read {len(df)} rows from {file_path.name}")
-        return df, meta
+        lnnote_processed.append(chunk[['ACCTNO', 'NOTENO', 'SECTOR', 'EFFAPR']])
+        if (i // chunk_size + 1) % 5 == 0:
+            print(f"  Processed chunk {i//chunk_size + 1}/{total_chunks}")
+        gc.collect()
     
-    except Exception as e:
-        raise Exception(f"Error reading SAS7BDAT file {file_path} with pyreadstat: {e}")
-
-
-# =====================================================
-# SAS BUSINESS LOGIC
-# =====================================================
-
-def execute_business_logic():
-    """
-    Execute the business logic using SAS7BDAT inputs.
-    """
-    print("[EXEC] Executing EIBWHP03 business logic...")
-
-    # Read SAS datasets using pyreadstat
-    data_frames = {}
-    for name, path in INPUT_DATASETS.items():
-        if path.exists():
-            data_frames[name] = read_sas7bdat(path)
+    lnnote = pd.concat(lnnote_processed, ignore_index=True)
+    del lnnote_cols, lnnote_processed
+    gc.collect()
+    
+    # Map SECTOR to SECTORCD
+    if SECTCD:
+        lnnote['SECTORCD'] = lnnote['SECTOR'].map(SECTCD)
+        lnnote = lnnote.dropna(subset=['SECTORCD']).copy()
+    else:
+        lnnote['SECTORCD'] = lnnote['SECTOR'].astype(str)
+    
+    lnnote = lnnote[['ACCTNO', 'NOTENO', 'SECTORCD', 'EFFAPR']]
+    print(f"  LNNOTE processed: {len(lnnote):,}")
+    
+    # Step 5: Merge with BNM data
+    print("[PROCESS] Merging data...")
+    
+    # Merge current with lnnote
+    curr_merged = curr_filtered.merge(lnnote, on=['ACCTNO', 'NOTENO', 'SECTORCD'], how='left')
+    curr_merged['EFFAPR'] = curr_merged['EFFAPR'].fillna(0.0)
+    
+    # Merge previous with lnnote
+    prev_merged = prev_filtered.merge(lnnote, on=['ACCTNO', 'NOTENO', 'SECTORCD'], how='left')
+    prev_merged['EFFAPR'] = prev_merged['EFFAPR'].fillna(0.0)
+    
+    # Clean up
+    del lnnote
+    gc.collect()
+    
+    # Step 6: Full outer merge
+    merged = pd.merge(
+        prev_merged[['ACCTNO', 'NOTENO', 'SECTORCD', 'LASTBAL', 'EFFAPR', 'CUSTCD']],
+        curr_merged[['ACCTNO', 'NOTENO', 'SECTORCD', 'BALANCE', 'EFFAPR', 'CUSTCD']],
+        on=['ACCTNO', 'NOTENO', 'SECTORCD'],
+        how='outer',
+        suffixes=('_prev', '_curr')
+    )
+    
+    del curr_filtered, prev_filtered, curr_merged, prev_merged
+    gc.collect()
+    
+    print(f"  Merged rows: {len(merged):,}")
+    
+    # Step 7: Compute DISBURSE/REPAID
+    print("[PROCESS] Computing DISBURSE/REPAID...")
+    
+    # Fill NaN values
+    merged['LASTBAL'] = merged['LASTBAL'].fillna(0.0)
+    merged['BALANCE'] = merged['BALANCE'].fillna(0.0)
+    merged['CUSTCD'] = merged['CUSTCD_curr'].fillna(merged['CUSTCD_prev']).fillna('')
+    merged['EFFAPR'] = merged['EFFAPR_curr'].fillna(merged['EFFAPR_prev'])
+    
+    # Compute DISBURSE and REPAID
+    merged['DISBURSE'] = 0.0
+    merged['REPAID'] = 0.0
+    
+    # Case 1: Both previous and current exist
+    mask_both = (merged['LASTBAL'] > 0) & (merged['BALANCE'] > 0)
+    merged.loc[mask_both, 'REPAID'] = np.where(
+        merged.loc[mask_both, 'LASTBAL'] > merged.loc[mask_both, 'BALANCE'],
+        merged.loc[mask_both, 'LASTBAL'] - merged.loc[mask_both, 'BALANCE'],
+        0.0
+    )
+    merged.loc[mask_both, 'DISBURSE'] = np.where(
+        merged.loc[mask_both, 'LASTBAL'] > merged.loc[mask_both, 'BALANCE'],
+        0.0,
+        merged.loc[mask_both, 'BALANCE'] - merged.loc[mask_both, 'LASTBAL']
+    )
+    
+    # Case 2: Only previous exists
+    mask_prev_only = (merged['LASTBAL'] > 0) & (merged['BALANCE'] == 0)
+    merged.loc[mask_prev_only, 'REPAID'] = merged.loc[mask_prev_only, 'LASTBAL']
+    
+    # Case 3: Only current exists
+    mask_curr_only = (merged['LASTBAL'] == 0) & (merged['BALANCE'] > 0)
+    merged.loc[mask_curr_only, 'DISBURSE'] = merged.loc[mask_curr_only, 'BALANCE']
+    
+    # Compute PRODUCT
+    merged['PRODUCT'] = merged['DISBURSE'] * merged['EFFAPR']
+    
+    # Filter out zero DISBURSE
+    merged = merged[merged['DISBURSE'] > 0].copy()
+    print(f"  After filtering zero DISBURSE: {len(merged):,}")
+    
+    if len(merged) == 0:
+        print("[WARN] No records with DISBURSE > 0")
+        return pd.DataFrame(columns=['SECTCD', 'DISBURSE', 'PRODUCT', 'CUSTCD'])
+    
+    # Step 8: Expand by SECTA and SECTB
+    print("[PROCESS] Expanding by SECTA/SECTB...")
+    rows = []
+    
+    for _, row in merged.iterrows():
+        sectcd = row['SECTORCD']
+        if pd.isna(sectcd) or sectcd == '':
+            continue
+            
+        if SECTA and SECTB:
+            a = SECTA.get(sectcd, '')
+            b = SECTB.get(sectcd, '')
+            
+            if not a and not b:
+                a = str(sectcd)
+            
+            if a:
+                rows.append({
+                    'SECTCD': a,
+                    'DISBURSE': row['DISBURSE'],
+                    'PRODUCT': row['PRODUCT'],
+                    'CUSTCD': row.get('CUSTCD', '')
+                })
+            if b:
+                rows.append({
+                    'SECTCD': b,
+                    'DISBURSE': row['DISBURSE'],
+                    'PRODUCT': row['PRODUCT'],
+                    'CUSTCD': row.get('CUSTCD', '')
+                })
         else:
-            print(f"[WARNING] Input dataset missing: {name} - {path}")
-            data_frames[name] = None
+            rows.append({
+                'SECTCD': sectcd,
+                'DISBURSE': row['DISBURSE'],
+                'PRODUCT': row['PRODUCT'],
+                'CUSTCD': row.get('CUSTCD', '')
+            })
+    
+    expanded = pd.DataFrame(rows)
+    print(f"  Expanded rows: {len(expanded):,}")
+    
+    # Clean up
+    del merged
+    gc.collect()
+    con.close()
+    
+    return expanded
 
-    # Process loan datasets
-    processed_records = []
-    spool_lines = []
+# ----------------------------------------------------------------------
+# Summarise function
+# ----------------------------------------------------------------------
 
-    # Header lines for output
-    spool_lines.append(f"{JOB_NAME} REPORT")
-    spool_lines.append(f"Report Date: {REPORT_DATE.strftime('%Y-%m-%d')}")
-    spool_lines.append(f"Report Month: {REPORT_MONTH}")
-    spool_lines.append(f"Report Week: {REPORT_WEEK}")
-    spool_lines.append("-" * 80)
-    spool_lines.append("BNMCODE                    AMOUNT         STATUS")
-    spool_lines.append("-" * 80)
-
-    # Process LOAN_CURRENT if available
-    if data_frames.get("LOAN_CURRENT") is not None:
-        df = data_frames["LOAN_CURRENT"]
-        print(f"[PROCESS] Processing LOAN_CURRENT - {len(df)} records")
+def summarise(expanded, label, custcd_filter=None):
+    if len(expanded) == 0:
+        print(f"  {label}: No data found")
+        return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
+    
+    # Check if CUSTCD column exists
+    if 'CUSTCD' not in expanded.columns:
+        print(f"  {label}: CUSTCD column not found - treating all as non-SMI")
+        if custcd_filter is not None:
+            print(f"  {label}: SMI filter skipped - CUSTCD missing")
+            return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
+    
+    # Apply SMI filter if specified
+    if custcd_filter is not None and 'CUSTCD' in expanded.columns:
+        expanded = expanded[expanded['CUSTCD'].astype(str).isin(custcd_filter)].copy()
+        print(f"  {label} filtered rows: {len(expanded):,}")
         
-        # Get column names for reference
-        col_names = df.columns.tolist()
-        print(f"[INFO] LOAN_CURRENT columns: {col_names}")
+        if len(expanded) == 0:
+            print(f"  {label}: No SMI records found")
+            return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
+    
+    # Summarise
+    summary = expanded.groupby('SECTCD', as_index=False).agg({
+        'DISBURSE': 'sum',
+        'PRODUCT': 'sum'
+    })
+    
+    summary = summary[summary['DISBURSE'] > 0].copy()
+    
+    if len(summary) == 0:
+        print(f"  {label}: No data with non-zero DISBURSE")
+        return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
+    
+    summary['WEIGHTED'] = summary['PRODUCT'] / summary['DISBURSE']
+    summary['WEIGHTED'] = summary['WEIGHTED'].fillna(0.0)
+    summary['BNMCODE'] = '673400000' + summary['SECTCD'].astype(str) + 'Y'
+    summary['AMOUNT'] = summary['DISBURSE']
+    summary = summary[['BNMCODE', 'AMOUNT', 'WEIGHTED']].sort_values('BNMCODE').reset_index(drop=True)
+    return summary
+
+# ----------------------------------------------------------------------
+# Report generation
+# ----------------------------------------------------------------------
+
+def write_report(df, title, rdate, fh):
+    fh.write(f"EIBWHP01: {title} AS AT {rdate}\n")
+    fh.write("\n")
+    fh.write("Obs    BNMCODE                         AMOUNT          WEIGHTED\n")
+    fh.write("\n")
+    
+    if len(df) == 0:
+        fh.write("  No records found\n\n")
+        return
         
-        for idx, row in df.iterrows():
-            # Extract fields from DataFrame - first column is usually BNMCODE, second is AMOUNT
-            bnmcode = str(row.iloc[0]) if len(row) > 0 else ""
-            amount = row.iloc[1] if len(row) > 1 else 0
-            
-            # Create record and apply PBBLNFMT
-            record = [bnmcode, amount]
-            formatted_record = format_record(record, "LOAN")
-            
-            # Format for output
-            output_line = "|".join(formatted_record)
-            processed_records.append(output_line)
-            
-            # Add to spool for reporting (limit to first 100 records for readability)
-            if idx < 100:
-                spool_lines.append(f"{formatted_record[0]}  {formatted_record[1]}  PROCESSED")
+    for i, row in df.iterrows():
+        amt = f"{row['AMOUNT']:,.2f}"
+        wgt = f"{row['WEIGHTED']:.6f}" if row['WEIGHTED'] != 0 else "."
+        fh.write(f"{i+1:>4}  {row['BNMCODE']:<14}  {amt:>20}  {wgt:>12}\n")
+    fh.write("\n")
 
-    # Process ULOAN_CURRENT if available
-    if data_frames.get("ULOAN_CURRENT") is not None:
-        df = data_frames["ULOAN_CURRENT"]
-        print(f"[PROCESS] Processing ULOAN_CURRENT - {len(df)} records")
+# ----------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------
+
+def main():
+    print(f"========== START JOB EIBWHP01 ==========")
+
+    reptdate = datetime.now() - timedelta(days=1)
+    macros = get_sas_macros(reptdate)
+    print(f"[DATE] Report: {macros['RDATE']}")
+    print(f"[DATE] REPTMON={macros['REPTMON']}, NOWK={macros['NOWK']}")
+    print(f"[DATE] REPTMON1={macros['REPTMON1']}, NOWK1={macros['NOWK1']}")
+
+    # Find input files
+    curr_path = find_loan_file(INPUT_DIR, macros['REPTMON'], macros['NOWK'])
+    prev_path = find_loan_file(INPUT_DIR, macros['REPTMON1'], macros['NOWK1'])
+    lnnote_path = INPUT_DIR / "lnnote.sas7bdat"
+
+    # Handle current file
+    if not curr_path:
+        curr_path = find_latest_loan_file(INPUT_DIR)
+        if curr_path:
+            print(f"[WARN] Using latest loan as current: {curr_path.name}")
+        else:
+            raise FileNotFoundError(f"No loan file found in {INPUT_DIR}")
+    
+    # Handle previous file
+    if not prev_path:
+        all_files = list(INPUT_DIR.glob("loan*.sas7bdat"))
+        for f in all_files:
+            if f != curr_path:
+                prev_path = f
+                print(f"[WARN] Using alternative as previous: {prev_path.name}")
+                break
+        if not prev_path:
+            prev_path = curr_path
+            print(f"[WARN] Using same file for previous (no alternative found)")
+    
+    if not lnnote_path.exists():
+        raise FileNotFoundError(f"LNNOTE not found: {lnnote_path}")
+
+    print("\n[READ] Loading files to parquet cache (if needed)...")
+    curr_parquet = read_sas_cached(curr_path)
+    prev_parquet = read_sas_cached(prev_path)
+    lnnote_parquet = read_sas_cached(lnnote_path)
+    
+    # Get row counts
+    curr_count = pd.read_parquet(curr_parquet).shape[0]
+    prev_count = pd.read_parquet(prev_parquet).shape[0]
+    lnnote_count = pd.read_parquet(lnnote_parquet).shape[0]
+    
+    print(f"  Current BNM: {curr_count:,} rows")
+    print(f"  Previous BNM: {prev_count:,} rows")
+    print(f"  LNNOTE: {lnnote_count:,} rows")
+
+    # Process using DuckDB
+    expanded = process_with_duckdb(curr_parquet, prev_parquet, lnnote_parquet)
+
+    print("\n[PROCESS] Summarising all customers...")
+    all_summary = summarise(expanded, "ALL")
+
+    print("[PROCESS] Summarising SMI (CUSTCD 66-69)...")
+    smi_summary = summarise(expanded, "SMI", custcd_filter=SMI_CUSTCD)
+
+    print(f"\n[OUTPUT] Writing report to {OUTPUT_FILE}...")
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(f"EIBWHP01 REPORT GENERATED {reptdate.strftime('%d-%m-%Y')}\n")
+        f.write(f"REPTMON: {macros['REPTMON']}, NOWK: {macros['NOWK']}\n")
+        f.write("="*80 + "\n")
+        f.write(f"BNM RECORDS: {curr_count:>10}\n")
+        f.write(f"LOAN RECORDS: {lnnote_count:>10}\n")
+        f.write(f"REPORT DATE: {reptdate.strftime('%d-%m-%Y')}\n")
+        f.write("="*80 + "\n\n")
         
-        col_names = df.columns.tolist()
-        print(f"[INFO] ULOAN_CURRENT columns: {col_names}")
-        
-        for idx, row in df.iterrows():
-            bnmcode = str(row.iloc[0]) if len(row) > 0 else ""
-            amount = row.iloc[1] if len(row) > 1 else 0
-            
-            record = [bnmcode, amount]
-            formatted_record = format_record(record, "ULOAN")
-            
-            output_line = "|".join(formatted_record)
-            processed_records.append(output_line)
-            
-            if idx < 100:
-                spool_lines.append(f"{formatted_record[0]}  {formatted_record[1]}  UNSECURED")
+        write_report(all_summary, "REPORT ON PRODUCTS 131,132,720,725", macros['RDATE'], f)
+        write_report(smi_summary, "SMI ACCTS (CUSTCD 66,67,68,69)", macros['RDATE'], f)
 
-    # Process LOAN_PREVIOUS if available (for comparison)
-    if data_frames.get("LOAN_PREVIOUS") is not None:
-        df = data_frames["LOAN_PREVIOUS"]
-        print(f"[PROCESS] Processing LOAN_PREVIOUS - {len(df)} records")
-        spool_lines.append("-" * 80)
-        spool_lines.append("PREVIOUS WEEK DATA")
-        spool_lines.append("-" * 80)
-        
-        for idx, row in df.iterrows():
-            bnmcode = str(row.iloc[0]) if len(row) > 0 else ""
-            amount = row.iloc[1] if len(row) > 1 else 0
-            
-            record = [bnmcode, amount]
-            formatted_record = format_record(record, "LOAN")
-            
-            if idx < 100:
-                spool_lines.append(f"{formatted_record[0]}  {formatted_record[1]}  PREVIOUS")
-
-    # Footer
-    spool_lines.append("-" * 80)
-    spool_lines.append(f"TOTAL RECORDS PROCESSED: {len(processed_records)}")
-    spool_lines.append(f"END OF {JOB_NAME} REPORT")
-
-    return processed_records, spool_lines
-
-
-# =====================================================
-# JOB EXECUTION
-# =====================================================
-
-def run_job():
-
-    print(f"========== START JOB {JOB_NAME} ==========")
-    print(f"Report Date: {REPORT_DATE.strftime('%Y-%m-%d')}")
-    print(f"Report Month: {REPORT_MONTH}")
-    print(f"Report Week: {REPORT_WEEK}")
-    print(f"Python version: {sys.version}")
-
-    # 1️⃣ Ensure output directory exists
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 2️⃣ DELETE old output file
-    disp_delete(OUTPUT_FILE)
-
-    # 3️⃣ Validate input datasets (DISP=SHR)
-    for name, path in INPUT_DATASETS.items():
-        disp_shr(path)
-        print(f"[SHR] Validated input dataset: {name} - {path.name}")
-
-    # 4️⃣ Validate NEW output file
-    disp_new(OUTPUT_FILE)
-
-    # 5️⃣ Execute business logic
-    processed_records, spool_lines = execute_business_logic()
-
-    # 6️⃣ Write output to text file
-    write_text_file(OUTPUT_FILE, processed_records)
-
-    # 7️⃣ Write spool/report information to a separate file
-    spool_file = OUTPUT_DIR / f"{JOB_NAME}_REPORT_{REPORT_DATE.strftime('%Y%m%d')}.txt"
-    write_text_file(spool_file, spool_lines)
-
-    # 8️⃣ Print summary
-    print("-" * 60)
-    print("JOB SUMMARY:")
-    print(f"Output file: {OUTPUT_FILE}")
-    print(f"Report file: {spool_file}")
-    print(f"Total records written: {len(processed_records)}")
-    print(f"Output file size: {OUTPUT_FILE.stat().st_size / 1024:.2f} KB" if OUTPUT_FILE.exists() else "Output file not created")
-    print("-" * 60)
-
-    print(f"========== END JOB {JOB_NAME} ==========")
-
-
-# =====================================================
-# ALTERNATIVE: Read specific columns using pyreadstat
-# =====================================================
-
-def read_specific_columns(file_path, columns):
-    """
-    Read only specific columns from SAS file using pyreadstat.
-    This is more efficient for large files.
-    """
-    try:
-        df, meta = pyreadstat.read_sas7bdat(file_path, usecols=columns)
-        return df
-    except Exception as e:
-        print(f"[ERROR] Failed to read specific columns: {e}")
-        return None
-
-
-# =====================================================
-# ENTRY POINT
-# =====================================================
+    print(f"  Output written: {OUTPUT_FILE}")
+    
+    # Clean up
+    del expanded, all_summary, smi_summary
+    gc.collect()
+    
+    print("========== END JOB EIBWHP01 ==========")
 
 if __name__ == "__main__":
     try:
-        run_job()
+        main()
     except Exception as e:
         print(f"[JOB FAILED] {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(8)  # Simulate ABEND
+        sys.exit(8)
