@@ -1,269 +1,401 @@
-[FMT] Loaded SECTCD: 0 entries
-========== START JOB EIBWHP01 ==========
-[DATE] Report: 28/07/26
-[DATE] REPTMON=07, NOWK=4
-[DATE] REPTMON1=07, NOWK1=3
-[WARN] Using latest loan as current: loan064.sas7bdat
-[WARN] Using same file for previous (no alternative found)
+import os
+import sys
+import pandas as pd
+import pyreadstat
+from pathlib import Path
+from datetime import datetime, timedelta
 
-[READ] Loading files to parquet cache (if needed)...
-[READ] Using cache: loan064.parquet
-[READ] Using cache: loan064.parquet
-[READ] Using cache: lnnote.parquet
-  Current BNM: 623,910 rows
-  Previous BNM: 623,910 rows
-  LNNOTE: 6,232,608 rows
-[PROCESS] Starting DuckDB processing...
-[PROCESS] Filtering products and computing EFFAPR...
-  Current BNM filtered: 4,295
-  Previous BNM filtered: 4,295
-[PROCESS] Computing EFFAPR for LNNOTE...
-100% ▕██████████████████████████████████████▏ (00:00:03.10 elapsed)     
-  Processing LNNOTE chunk 1/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+# =====================================================
+# CONFIGURATION
+# =====================================================
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 2/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+BASE_DIR = Path(".")
+INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP03"
+OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP03"
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 3/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+JOB_NAME = "EIBWHP03"
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 4/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+# Calculate report date (yesterday)
+REPORT_DATE = datetime.now() - timedelta(days=1)
+REPORT_MONTH = REPORT_DATE.strftime("%m")  # Month in MM format
+REPORT_WEEK = str((REPORT_DATE.day - 1) // 7 + 1)  # Week number
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 5/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+# Input SAS7BDAT files with dynamic naming
+INPUT_DATASETS = {
+    "LOAN_CURRENT": INPUT_DIR / f"loan{REPORT_MONTH}{REPORT_WEEK}.sas7bdat",
+    "LOAN_PREVIOUS": INPUT_DIR / f"loan{REPORT_MONTH}{int(REPORT_WEEK)-1}.sas7bdat" if int(REPORT_WEEK) > 1 else INPUT_DIR / f"loan{int(REPORT_MONTH)-1:02d}4.sas7bdat",
+    "ULOAN_CURRENT": INPUT_DIR / f"uloan{REPORT_MONTH}{REPORT_WEEK}.sas7bdat"
+}
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 6/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+OUTPUT_FILE = OUTPUT_DIR / f"{JOB_NAME}_{REPORT_DATE.strftime('%Y%m%d')}.txt"
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 7/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 8/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+# =====================================================
+# DISP SIMULATION
+# =====================================================
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 9/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+def disp_delete(path):
+    if path.exists():
+        path.unlink()
+        print(f"[DELETE] Removed file: {path}")
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 10/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 11/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+def disp_shr(path):
+    if not path.exists():
+        raise FileNotFoundError(f"[DISP ERROR] Missing input dataset: {path}")
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 12/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 13/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+def disp_new(path):
+    if path.exists():
+        raise FileExistsError(f"[DISP ERROR] File already exists: {path}")
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 14/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 15/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+# =====================================================
+# PBBLNFMT.PY - FORMATTING LOGIC
+# =====================================================
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 16/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+def apply_pbblnfmt(value, field_type="amount"):
+    """
+    Apply PBBLNFMT formatting similar to SAS PBBLNFMT.
+    """
+    if pd.isna(value) or value is None:
+        return " " * 15  # Return blanks for missing values
+    
+    # Convert to string if not already
+    value_str = str(value)
+    
+    if field_type == "amount":
+        # Format amounts: PBBLNFMT typically right-aligns with leading zeros
+        # Example: 120000 -> "0000000120000"
+        # Remove any decimal points and format as integer
+        try:
+            # Handle both integer and decimal values
+            if isinstance(value, (int, float)):
+                # Remove decimal and format as integer
+                int_val = int(value)
+                formatted = f"{int_val:012d}"  # 12 digits with leading zeros
+                return formatted[:15].rjust(15)  # Ensure 15 characters total
+            else:
+                # Try to clean the string
+                clean_str = ''.join(filter(str.isdigit, value_str))
+                if clean_str:
+                    int_val = int(clean_str)
+                    formatted = f"{int_val:012d}"
+                    return formatted[:15].rjust(15)
+                return " " * 15
+        except:
+            return value_str[:15].ljust(15)
+    
+    elif field_type == "code":
+        # Format codes: left-justified with trailing blanks
+        return value_str[:15].ljust(15)
+    
+    elif field_type == "account":
+        # Format account numbers: right-justified with leading zeros
+        clean_str = ''.join(filter(str.isdigit, value_str))
+        if clean_str:
+            return clean_str[:15].zfill(15)  # Pad with zeros to 15 chars
+        return value_str[:15].rjust(15)
+    
+    else:
+        # Default formatting
+        return value_str[:15].ljust(15)
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 17/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 18/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+def format_record(record, record_type):
+    """
+    Apply PBBLNFMT formatting to entire record.
+    This mimics the SAS PBBLNFMT format.
+    """
+    formatted_record = []
+    
+    if record_type == "LOAN":
+        # Expected format: BNMCODE, AMOUNT, OTHER_FIELDS
+        # Apply formatting based on field type
+        if len(record) >= 2:
+            # Format BNMCODE (account number)
+            formatted_record.append(apply_pbblnfmt(record[0], "account"))
+            # Format AMOUNT
+            formatted_record.append(apply_pbblnfmt(record[1], "amount"))
+            # Format any remaining fields as generic
+            for field in record[2:]:
+                formatted_record.append(apply_pbblnfmt(field, "code"))
+        else:
+            # If record doesn't match expected format, apply generic
+            for field in record:
+                formatted_record.append(apply_pbblnfmt(field, "code"))
+    
+    elif record_type == "ULOAN":
+        # Similar formatting for unsecured loans
+        if len(record) >= 2:
+            formatted_record.append(apply_pbblnfmt(record[0], "account"))
+            formatted_record.append(apply_pbblnfmt(record[1], "amount"))
+            for field in record[2:]:
+                formatted_record.append(apply_pbblnfmt(field, "code"))
+        else:
+            for field in record:
+                formatted_record.append(apply_pbblnfmt(field, "code"))
+    
+    else:
+        # Default formatting for other record types
+        for field in record:
+            formatted_record.append(apply_pbblnfmt(field, "code"))
+    
+    return formatted_record
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 19/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 20/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+# =====================================================
+# TEXT FILE WRITER
+# =====================================================
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 21/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+def write_text_file(path, records, delimiter="|"):
+    """
+    Write records to a text file with proper formatting.
+    """
+    with open(path, "w", encoding="utf-8") as f:
+        for record in records:
+            if isinstance(record, list):
+                # Join fields with delimiter
+                f.write(delimiter.join(record) + "\n")
+            elif isinstance(record, str):
+                f.write(record + "\n")
+            else:
+                f.write(str(record) + "\n")
+    
+    print(f"[WRITE] Text file created: {path}")
+    print(f"[INFO] Total records written: {len(records)}")
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 22/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 23/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+# =====================================================
+# SAS DATA READER USING PYREADSTAT
+# =====================================================
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 24/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+def read_sas7bdat(file_path):
+    """
+    Read SAS7BDAT file using pyreadstat and return pandas DataFrame.
+    pyreadstat is faster and more reliable than sas7bdat library.
+    """
+    try:
+        # Read SAS file with pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(file_path)
+        
+        # Print metadata for debugging
+        print(f"[READ] Successfully read: {file_path.name}")
+        print(f"[INFO] Records: {len(df)}, Columns: {len(df.columns)}")
+        print(f"[INFO] Column names: {', '.join(df.columns[:5])}{'...' if len(df.columns) > 5 else ''}")
+        print(f"[INFO] File encoding: {meta.encoding}")
+        
+        return df
+    
+    except FileNotFoundError:
+        raise FileNotFoundError(f"SAS file not found: {file_path}")
+    except Exception as e:
+        raise Exception(f"Error reading SAS7BDAT file {file_path} with pyreadstat: {e}")
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 25/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 26/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+def read_sas7bdat_with_options(file_path, usecols=None, row_limit=None):
+    """
+    Read SAS7BDAT file with additional options.
+    
+    Parameters:
+    - file_path: Path to SAS file
+    - usecols: List of column names to read (optional)
+    - row_limit: Maximum number of rows to read (optional)
+    """
+    try:
+        # Read SAS file with options
+        df, meta = pyreadstat.read_sas7bdat(
+            file_path,
+            usecols=usecols,
+            row_limit=row_limit
+        )
+        
+        print(f"[READ] Read {len(df)} rows from {file_path.name}")
+        return df, meta
+    
+    except Exception as e:
+        raise Exception(f"Error reading SAS7BDAT file {file_path} with pyreadstat: {e}")
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 27/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 28/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+# =====================================================
+# SAS BUSINESS LOGIC
+# =====================================================
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 29/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+def execute_business_logic():
+    """
+    Execute the business logic using SAS7BDAT inputs.
+    """
+    print("[EXEC] Executing EIBWHP03 business logic...")
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 30/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+    # Read SAS datasets using pyreadstat
+    data_frames = {}
+    for name, path in INPUT_DATASETS.items():
+        if path.exists():
+            data_frames[name] = read_sas7bdat(path)
+        else:
+            print(f"[WARNING] Input dataset missing: {name} - {path}")
+            data_frames[name] = None
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 31/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+    # Process loan datasets
+    processed_records = []
+    spool_lines = []
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  Processing LNNOTE chunk 32/32...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py:212: SettingWithCopyWarning: 
-A value is trying to be set on a copy of a slice from a DataFrame.
-Try using .loc[row_indexer,col_indexer] = value instead
+    # Header lines for output
+    spool_lines.append(f"{JOB_NAME} REPORT")
+    spool_lines.append(f"Report Date: {REPORT_DATE.strftime('%Y-%m-%d')}")
+    spool_lines.append(f"Report Month: {REPORT_MONTH}")
+    spool_lines.append(f"Report Week: {REPORT_WEEK}")
+    spool_lines.append("-" * 80)
+    spool_lines.append("BNMCODE                    AMOUNT         STATUS")
+    spool_lines.append("-" * 80)
 
-See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
-  df['EFFAPR'] = df.apply(compute_effapr, axis=1)
-  LNNOTE processed: 6,232,608
-[PROCESS] Merging data...
-  Merged rows: 4,295
-[PROCESS] Computing DISBURSE/REPAID...
-  After filtering zero DISBURSE: 0
-[PROCESS] Expanding by SECTA/SECTB...
-  Expanded rows: 0
+    # Process LOAN_CURRENT if available
+    if data_frames.get("LOAN_CURRENT") is not None:
+        df = data_frames["LOAN_CURRENT"]
+        print(f"[PROCESS] Processing LOAN_CURRENT - {len(df)} records")
+        
+        # Get column names for reference
+        col_names = df.columns.tolist()
+        print(f"[INFO] LOAN_CURRENT columns: {col_names}")
+        
+        for idx, row in df.iterrows():
+            # Extract fields from DataFrame - first column is usually BNMCODE, second is AMOUNT
+            bnmcode = str(row.iloc[0]) if len(row) > 0 else ""
+            amount = row.iloc[1] if len(row) > 1 else 0
+            
+            # Create record and apply PBBLNFMT
+            record = [bnmcode, amount]
+            formatted_record = format_record(record, "LOAN")
+            
+            # Format for output
+            output_line = "|".join(formatted_record)
+            processed_records.append(output_line)
+            
+            # Add to spool for reporting (limit to first 100 records for readability)
+            if idx < 100:
+                spool_lines.append(f"{formatted_record[0]}  {formatted_record[1]}  PROCESSED")
 
-[PROCESS] Summarising all customers...
-  ALL: No data found
-[PROCESS] Summarising SMI (CUSTCD 66-69)...
-[JOB FAILED] 'CUSTCD'
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py", line 518, in <module>
-    main()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py", line 493, in main
-    smi_summary = summarise(expanded, "SMI", custcd_filter=SMI_CUSTCD)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP01.py", line 386, in summarise
-    expanded = expanded[expanded['CUSTCD'].isin(custcd_filter)].copy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4102, in __getitem__
-    indexer = self.columns.get_loc(key)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/indexes/range.py", line 417, in get_loc
-    raise KeyError(key)
-KeyError: 'CUSTCD'
+    # Process ULOAN_CURRENT if available
+    if data_frames.get("ULOAN_CURRENT") is not None:
+        df = data_frames["ULOAN_CURRENT"]
+        print(f"[PROCESS] Processing ULOAN_CURRENT - {len(df)} records")
+        
+        col_names = df.columns.tolist()
+        print(f"[INFO] ULOAN_CURRENT columns: {col_names}")
+        
+        for idx, row in df.iterrows():
+            bnmcode = str(row.iloc[0]) if len(row) > 0 else ""
+            amount = row.iloc[1] if len(row) > 1 else 0
+            
+            record = [bnmcode, amount]
+            formatted_record = format_record(record, "ULOAN")
+            
+            output_line = "|".join(formatted_record)
+            processed_records.append(output_line)
+            
+            if idx < 100:
+                spool_lines.append(f"{formatted_record[0]}  {formatted_record[1]}  UNSECURED")
+
+    # Process LOAN_PREVIOUS if available (for comparison)
+    if data_frames.get("LOAN_PREVIOUS") is not None:
+        df = data_frames["LOAN_PREVIOUS"]
+        print(f"[PROCESS] Processing LOAN_PREVIOUS - {len(df)} records")
+        spool_lines.append("-" * 80)
+        spool_lines.append("PREVIOUS WEEK DATA")
+        spool_lines.append("-" * 80)
+        
+        for idx, row in df.iterrows():
+            bnmcode = str(row.iloc[0]) if len(row) > 0 else ""
+            amount = row.iloc[1] if len(row) > 1 else 0
+            
+            record = [bnmcode, amount]
+            formatted_record = format_record(record, "LOAN")
+            
+            if idx < 100:
+                spool_lines.append(f"{formatted_record[0]}  {formatted_record[1]}  PREVIOUS")
+
+    # Footer
+    spool_lines.append("-" * 80)
+    spool_lines.append(f"TOTAL RECORDS PROCESSED: {len(processed_records)}")
+    spool_lines.append(f"END OF {JOB_NAME} REPORT")
+
+    return processed_records, spool_lines
+
+
+# =====================================================
+# JOB EXECUTION
+# =====================================================
+
+def run_job():
+
+    print(f"========== START JOB {JOB_NAME} ==========")
+    print(f"Report Date: {REPORT_DATE.strftime('%Y-%m-%d')}")
+    print(f"Report Month: {REPORT_MONTH}")
+    print(f"Report Week: {REPORT_WEEK}")
+    print(f"Python version: {sys.version}")
+
+    # 1️⃣ Ensure output directory exists
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 2️⃣ DELETE old output file
+    disp_delete(OUTPUT_FILE)
+
+    # 3️⃣ Validate input datasets (DISP=SHR)
+    for name, path in INPUT_DATASETS.items():
+        disp_shr(path)
+        print(f"[SHR] Validated input dataset: {name} - {path.name}")
+
+    # 4️⃣ Validate NEW output file
+    disp_new(OUTPUT_FILE)
+
+    # 5️⃣ Execute business logic
+    processed_records, spool_lines = execute_business_logic()
+
+    # 6️⃣ Write output to text file
+    write_text_file(OUTPUT_FILE, processed_records)
+
+    # 7️⃣ Write spool/report information to a separate file
+    spool_file = OUTPUT_DIR / f"{JOB_NAME}_REPORT_{REPORT_DATE.strftime('%Y%m%d')}.txt"
+    write_text_file(spool_file, spool_lines)
+
+    # 8️⃣ Print summary
+    print("-" * 60)
+    print("JOB SUMMARY:")
+    print(f"Output file: {OUTPUT_FILE}")
+    print(f"Report file: {spool_file}")
+    print(f"Total records written: {len(processed_records)}")
+    print(f"Output file size: {OUTPUT_FILE.stat().st_size / 1024:.2f} KB" if OUTPUT_FILE.exists() else "Output file not created")
+    print("-" * 60)
+
+    print(f"========== END JOB {JOB_NAME} ==========")
+
+
+# =====================================================
+# ALTERNATIVE: Read specific columns using pyreadstat
+# =====================================================
+
+def read_specific_columns(file_path, columns):
+    """
+    Read only specific columns from SAS file using pyreadstat.
+    This is more efficient for large files.
+    """
+    try:
+        df, meta = pyreadstat.read_sas7bdat(file_path, usecols=columns)
+        return df
+    except Exception as e:
+        print(f"[ERROR] Failed to read specific columns: {e}")
+        return None
+
+
+# =====================================================
+# ENTRY POINT
+# =====================================================
+
+if __name__ == "__main__":
+    try:
+        run_job()
+    except Exception as e:
+        print(f"[JOB FAILED] {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(8)  # Simulate ABEND
