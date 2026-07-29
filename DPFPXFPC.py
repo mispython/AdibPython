@@ -1,8 +1,8 @@
-
 import sys
 import logging
+import pandas as pd
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # =====================================================
 # CONFIGURATION
@@ -11,23 +11,25 @@ from datetime import datetime
 JOB_NAME = "EIBWHP04"
 
 BASE_DIR = Path(".")
-INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04"
-OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04"
+INPUT_DIR = BASE_DIR / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04"
+OUTPUT_DIR = BASE_DIR / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04"
 
+# Calculate previous business day
+PREV_DATE = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
 
 INPUT_DATASETS = {
-    "LOAN": INPUT_DIR / "SAP.PBB.MNILN_0",
-    "BNM": INPUT_DIR / "SAP.PBB.SASDATA"
+    "LOAN": INPUT_DIR / "SAP.PBB.MNILN_0.sas7bdat",
+    "BNM": INPUT_DIR / "SAP.PBB.SASDATA.sas7bdat"
 }
 
-OUTPUT_DATASET = OUTPUT_DIR / "EIBWHP04.txt"
-LOG_FILE = LOG_DIR / f"{JOB_NAME}_{datetime.now():%Y%m%d}.log"
+OUTPUT_DATASET = OUTPUT_DIR / f"EIBWHP04_{PREV_DATE}.txt"
+LOG_FILE = OUTPUT_DIR / f"{JOB_NAME}_{PREV_DATE}.log"
 
 # =====================================================
 # LOGGING
 # =====================================================
 
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     filename=LOG_FILE,
@@ -55,45 +57,66 @@ def disp_new(path: Path):
     logging.info(f"Validated NEW dataset: {path}")
 
 # =====================================================
-# FIXED BLOCK WRITER (FB LRECL=80)
+# SAS7BDAT READER
 # =====================================================
 
-def write_fixed_block(path: Path, records, lrecl: int):
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def read_sas7bdat(path: Path):
+    """Read SAS7BDAT file and return pandas DataFrame"""
+    logging.info(f"Reading SAS7BDAT: {path}")
+    df = pd.read_sas(path, format='sas7bdat', encoding='utf-8')
+    logging.info(f"Read {len(df)} rows from {path}")
+    return df
 
-    with open(path, "wb") as f:
+# =====================================================
+# TEXT FILE WRITER
+# =====================================================
+
+def write_text_file(path: Path, records):
+    """Write records to text file"""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    
+    with open(path, "w", encoding="utf-8") as f:
         for record in records:
             if isinstance(record, str):
-                record = record.encode("utf-8")
-
-            if len(record) > lrecl:
-                record = record[:lrecl]
-            elif len(record) < lrecl:
-                record = record.ljust(lrecl, b" ")
-
-            f.write(record)
-
-    logging.info(f"FB dataset created: {path}")
+                f.write(record + "\n")
+            else:
+                f.write(str(record) + "\n")
+    
+    logging.info(f"Text file created: {path}")
 
 # =====================================================
-# BUSINESS LOGIC PLACEHOLDER
+# BUSINESS LOGIC (Using PBBLNFMT.py)
 # =====================================================
 
 def execute_business_logic():
     """
-    Replace with full migrated Python logic later.
-    Must return FB record list (semicolon separated).
+    Execute EIBWHP04 business logic using PBBLNFMT formatting.
+    Reads SAS7BDAT inputs and applies formatting rules.
     """
-
+    
     logging.info("Executing EIBWHP04 business logic...")
-
-    # Simulated output records (semicolon-separated)
-    records = [
-        "6734000000000Y;100;40;10;5",
-        "7734000000000Y;20;5;2;1",
-        "8715000000000Y;300;0;15;0"
-    ]
-
+    
+    # Import PBBLNFMT formatting module
+    sys.path.append(str(Path(__file__).parent))
+    from PBBLNFMT import format_loan_record  # Assuming this function exists
+    
+    # Read input datasets
+    loan_df = read_sas7bdat(INPUT_DATASETS["LOAN"])
+    bnm_df = read_sas7bdat(INPUT_DATASETS["BNM"])
+    
+    # Process records (placeholder - replace with actual logic)
+    records = []
+    
+    for _, row in loan_df.iterrows():
+        try:
+            # Apply PBBLNFMT formatting
+            formatted_record = format_loan_record(row, bnm_df)
+            records.append(formatted_record)
+        except Exception as e:
+            logging.warning(f"Skipping record due to error: {e}")
+            continue
+    
+    logging.info(f"Processed {len(records)} records")
     return records
 
 # =====================================================
@@ -102,23 +125,24 @@ def execute_business_logic():
 
 def run_job():
     logging.info(f"========== START JOB {JOB_NAME} ==========")
-
+    logging.info(f"Processing date: {PREV_DATE}")
+    
     # DELETE STEP
     disp_delete(OUTPUT_DATASET)
-
+    
     # SHR VALIDATION
     for name, path in INPUT_DATASETS.items():
         disp_shr(path)
-
+    
     # NEW VALIDATION
     disp_new(OUTPUT_DATASET)
-
+    
     # EXECUTE LOGIC
     records = execute_business_logic()
-
-    # WRITE FB DATASET
-    write_fixed_block(OUTPUT_DATASET, records, LRECL)
-
+    
+    # WRITE TEXT FILE
+    write_text_file(OUTPUT_DATASET, records)
+    
     logging.info(f"========== END JOB {JOB_NAME} ==========")
 
 # =====================================================
@@ -130,9 +154,5 @@ if __name__ == "__main__":
         run_job()
         sys.exit(0)   # RC=0 success
     except Exception as e:
-        logging.error(f"JOB FAILED: {e}")
+        logging.error(f"JOB FAILED: {e}", exc_info=True)
         sys.exit(8)   # RC=8 failure
-
-
-
-remove lrecl and logs dir, rmeove reptdate, replace with datetime timedelta -1, all inputs are in sas7bdat. output in text file. include the PBBLNFMT.py
