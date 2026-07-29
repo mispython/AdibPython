@@ -14,16 +14,29 @@ BASE_DIR = Path(".")
 INPUT_DIR = BASE_DIR / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04"
 OUTPUT_DIR = BASE_DIR / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04"
 
-# Calculate previous business day
-PREV_DATE = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+# Calculate dates for file naming
+PREV_DATE = datetime.now() - timedelta(days=1)
+REPTMON = PREV_DATE.strftime("%Y%m")  # YYYYMM format
+NOWK = PREV_DATE.strftime("%W")       # Week number
 
+# Calculate previous month and its week
+if PREV_DATE.month == 1:
+    PREV_MONTH_DATE = PREV_DATE.replace(year=PREV_DATE.year - 1, month=12)
+else:
+    PREV_MONTH_DATE = PREV_DATE.replace(month=PREV_DATE.month - 1)
+
+REPTMON1 = PREV_MONTH_DATE.strftime("%Y%m")
+NOWK1 = PREV_MONTH_DATE.strftime("%W")
+
+# Input files with dynamic naming
 INPUT_DATASETS = {
-    "LOAN": INPUT_DIR / "SAP.PBB.MNILN_0.sas7bdat",
-    "BNM": INPUT_DIR / "SAP.PBB.SASDATA.sas7bdat"
+    "LOAN_CURRENT": INPUT_DIR / f"loan{REPTMON}{NOWK}.sas7bdat",
+    "LOAN_PREVIOUS": INPUT_DIR / f"loan{REPTMON1}{NOWK1}.sas7bdat",
+    "ULOAN": INPUT_DIR / f"uloan{REPTMON}{NOWK}.sas7bdat"
 }
 
-OUTPUT_DATASET = OUTPUT_DIR / f"EIBWHP04_{PREV_DATE}.txt"
-LOG_FILE = OUTPUT_DIR / f"{JOB_NAME}_{PREV_DATE}.log"
+OUTPUT_DATASET = OUTPUT_DIR / f"EIBWHP04_{PREV_DATE.strftime('%Y%m%d')}.txt"
+LOG_FILE = OUTPUT_DIR / f"{JOB_NAME}_{PREV_DATE.strftime('%Y%m%d')}.log"
 
 # =====================================================
 # LOGGING
@@ -95,22 +108,30 @@ def execute_business_logic():
     """
     
     logging.info("Executing EIBWHP04 business logic...")
+    logging.info(f"Input files: {', '.join(str(p.name) for p in INPUT_DATASETS.values())}")
     
     # Import PBBLNFMT formatting module
     sys.path.append(str(Path(__file__).parent))
     from PBBLNFMT import format_loan_record  # Assuming this function exists
     
     # Read input datasets
-    loan_df = read_sas7bdat(INPUT_DATASETS["LOAN"])
-    bnm_df = read_sas7bdat(INPUT_DATASETS["BNM"])
+    loan_current_df = read_sas7bdat(INPUT_DATASETS["LOAN_CURRENT"])
+    loan_previous_df = read_sas7bdat(INPUT_DATASETS["LOAN_PREVIOUS"])
+    uloan_df = read_sas7bdat(INPUT_DATASETS["ULOAN"])
     
     # Process records (placeholder - replace with actual logic)
     records = []
     
-    for _, row in loan_df.iterrows():
+    # Example: Process current month loans
+    for _, row in loan_current_df.iterrows():
         try:
-            # Apply PBBLNFMT formatting
-            formatted_record = format_loan_record(row, bnm_df)
+            # Apply PBBLNFMT formatting with all required dataframes
+            formatted_record = format_loan_record(
+                row, 
+                loan_current_df=loan_current_df,
+                loan_previous_df=loan_previous_df,
+                uloan_df=uloan_df
+            )
             records.append(formatted_record)
         except Exception as e:
             logging.warning(f"Skipping record due to error: {e}")
@@ -125,7 +146,9 @@ def execute_business_logic():
 
 def run_job():
     logging.info(f"========== START JOB {JOB_NAME} ==========")
-    logging.info(f"Processing date: {PREV_DATE}")
+    logging.info(f"Processing date: {PREV_DATE.strftime('%Y-%m-%d')}")
+    logging.info(f"Current month: {REPTMON}, Week: {NOWK}")
+    logging.info(f"Previous month: {REPTMON1}, Week: {NOWK1}")
     
     # DELETE STEP
     disp_delete(OUTPUT_DATASET)
