@@ -1,53 +1,131 @@
-DEBUG: Created/verified output directory: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04
-2026-07-29 14:59:09,873 - INFO - [EIBWHP04.py:403] - ============================================================
-2026-07-29 14:59:09,873 - INFO - [EIBWHP04.py:404] - Starting EIBWHP04 script execution
-2026-07-29 14:59:09,873 - INFO - [EIBWHP04.py:405] - ============================================================
-2026-07-29 14:59:09,873 - INFO - [EIBWHP04.py:331] - ========== START JOB EIBWHP04 ==========
-2026-07-29 14:59:09,873 - DEBUG - [EIBWHP04.py:72] - ============================================================
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:73] - DEBUG INFORMATION:
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:74] - Python version: 3.9.25 (main, Nov 26 2025, 08:47:37) 
-[GCC 8.5.0 20210514 (Red Hat 8.5.0-28)]
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:75] - Current working directory: /sas/python/virt_edw/Data_Warehouse/MIS
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:76] - Script location: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP04.py
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:77] - BASE_DIR: /sas/python/virt_edw/Data_Warehouse/MIS
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:78] - INPUT_DIR: /sas/python/virt_edw/Data_Warehouse/MIS/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:79] - OUTPUT_DIR: /sas/python/virt_edw/Data_Warehouse/MIS/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:80] - PREV_DATE: 2026-07-28 14:59:09.873530
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:81] - REPTMON: 202607, NOWK: 30
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:82] - REPTMON1: 202606, NOWK1: 25
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:83] - LOG_FILE: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04/EIBWHP04_20260728.log
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:84] - OUTPUT_DATASET: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04/EIBWHP04_20260728.txt
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:85] - Input datasets:
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:87] -   LOAN_CURRENT: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04/loan20260730.sas7bdat
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:88] -     Exists: False
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:89] -     Size: N/A bytes
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:87] -   LOAN_PREVIOUS: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04/loan20260625.sas7bdat
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:88] -     Exists: False
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:89] -     Size: N/A bytes
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:87] -   ULOAN: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04/uloan20260730.sas7bdat
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:88] -     Exists: False
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:89] -     Size: N/A bytes
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:90] - ============================================================
-2026-07-29 14:59:09,874 - INFO - [EIBWHP04.py:337] - Processing date: 2026-07-28
-2026-07-29 14:59:09,874 - INFO - [EIBWHP04.py:338] - Current month: 202607, Week: 30
-2026-07-29 14:59:09,874 - INFO - [EIBWHP04.py:339] - Previous month: 202606, Week: 25
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:342] - Starting DELETE STEP
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:98] - DISP DELETE - Attempting to delete: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04/EIBWHP04_20260728.txt
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:111] - File does not exist, nothing to delete: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04/EIBWHP04_20260728.txt
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:344] - DELETE STEP completed
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:347] - Starting SHR VALIDATION
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:349] - Validating LOAN_CURRENT...
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:115] - DISP SHR - Validating: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04/loan20260730.sas7bdat
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:116] -   Absolute path: /sas/python/virt_edw/Data_Warehouse/MIS/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04/loan20260730.sas7bdat
-2026-07-29 14:59:09,874 - DEBUG - [EIBWHP04.py:117] -   Parent directory exists: False
-2026-07-29 14:59:09,874 - ERROR - [EIBWHP04.py:121] - Parent directory does not exist: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04
-2026-07-29 14:59:09,874 - ERROR - [EIBWHP04.py:373] - FILE NOT FOUND ERROR: Parent directory does not exist: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04
-2026-07-29 14:59:09,875 - DEBUG - [EIBWHP04.py:374] - Stack trace:
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP04.py", line 350, in run_job
-    disp_shr(path)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWHP04.py", line 122, in disp_shr
-    raise FileNotFoundError(error_msg)
-FileNotFoundError: Parent directory does not exist: sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP04
+OPTIONS YEARCUTOFF=1950 NOCENTER;
+*;
+%INC PGM(PBBLNFMT);
+*;
+DATA REPTDATE (KEEP=REPTDATE);
+  SET LOAN.REPTDATE;
+  SELECT(DAY(REPTDATE));
+    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
+    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
+    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
+    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3'; END;
+  END;
+  MM = MONTH(REPTDATE);
+  IF WK = '1' THEN DO;
+     MM1 = MM - 1;
+     IF MM1 = 0 THEN MM1 = 12;
+  END;
+  ELSE MM1 = MM;
+  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
+  CALL SYMPUT('NOWK',PUT(WK,$1.));
+  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
+RUN;
+PROC SORT DATA=BNM.LOAN&REPTMON1&NOWK1 OUT=ALW1
+(KEEP=ACCTNO NOTENO SECTORCD PRODUCT NOTETERM BALANCE PRODCD CUSTCD
+      AMTIND ISSDTE);
+   BY ACCTNO NOTENO SECTORCD;
+   WHERE PRODUCT IN (131,132,720,725);
+RUN;
+*;
+PROC SORT DATA=BNM.LOAN&REPTMON&NOWK OUT=ALW
+(KEEP=ACCTNO NOTENO SECTORCD PRODUCT NOTETERM EARNTERM BALANCE
+      APPRDATE APPRLIM2 PRODCD CUSTCD AMTIND ISSDTE);
+   BY ACCTNO NOTENO SECTORCD;
+   WHERE PRODUCT IN (131,132,720,725);
+RUN;
+*;
+DATA ALW;
+   KEEP SECTCD DISBURSE REPAID APPRLIM2 AMTIND CUSTCD NOACCT;
+   MERGE ALW1(IN=A RENAME=(BALANCE=LASTBAL NOTETERM=LASTNOTE))
+         ALW(IN=B);
+   BY ACCTNO NOTENO SECTORCD;
+   /*
+   IF MONTH(ISSDTE)=MONTH(INPUT("&RDATE", DDMMYY8.)) AND
+      YEAR(ISSDTE)=YEAR(INPUT("&RDATE", DDMMYY8.)) THEN
+      NOACCT = 1;
+   IF APPRDATE <= INPUT("&RDATE",DDMMYY8.);
+   IF APPRDATE < INPUT("&SDATE",DDMMYY8.) THEN APPRLIM2 = 0;
+   */
+   NOACCT=1;
+   DISBURSE=0; REPAID=0;
+   IF A & B THEN DO;
+      IF LASTBAL > BALANCE THEN REPAID = LASTBAL - BALANCE;
+      ELSE DISBURSE = BALANCE - LASTBAL;
+   END;
+   IF ^B THEN REPAID = LASTBAL;
+   IF ^A THEN DISBURSE = BALANCE;
+   SECTCD = PUT(SECTORCD,$SECTA.);
+   IF SECTCD ^= ' ' THEN OUTPUT;
+   SECTCD = PUT(SECTORCD,$SECTB.);
+   IF SECTCD ^= ' ' THEN OUTPUT;
+*;
+DATA UALW;
+   KEEP SECTCD DISBURSE REPAID APPRLIM2 AMTIND CUSTCD;
+   RETAIN DISBURSE REPAID;
+   SET BNM.ULOAN&REPTMON&NOWK;
+*  IF INPUT("&SDATE",DDMMYY8.) <= APPRDATE <= INPUT("&RDATE",DDMMYY8.);
+   SECTCD = PUT(SECTORCD,$SECTA.);
+   IF SECTCD ^= ' ' THEN OUTPUT;
+   SECTCD = PUT(SECTORCD,$SECTB.);
+   IF SECTCD ^= ' ' THEN OUTPUT;
+*;
+PROC APPEND BASE=ALW DATA=UALW;
+*;
+PROC SUMMARY DATA=ALW NWAY;
+CLASS SECTCD AMTIND;
+VAR DISBURSE REPAID APPRLIM2 NOACCT;
+OUTPUT OUT=ALWLOAN (DROP=_TYPE_) SUM=;
+RUN;
+*;
+DATA ALWLOAN;
+   KEEP BNMCODE AMTIND AMOUNT NOACCT;
+   LENGTH BNMCODE $14.;
+   SET ALWLOAN;
+   BNMCODE='673400000'||SECTCD||'Y';
+   AMOUNT =DISBURSE; OUTPUT;
+   BNMCODE='773400000'||SECTCD||'Y';
+   AMOUNT =REPAID;
+   IF REPAID=0        THEN NOACCT=0;
+   OUTPUT;
+   IF SECTCD = '0000' THEN BNMCODE='871500000'||SECTCD||'Y';
+                      ELSE BNMCODE='871510000'||SECTCD||'Y';
+   AMOUNT = APPRLIM2; OUTPUT;
+RUN;
+*;
+PROC SUMMARY DATA=ALWLOAN NWAY;
+CLASS BNMCODE AMTIND;
+VAR   AMOUNT NOACCT;
+OUTPUT OUT=LALW&REPTMON&NOWK (DROP=_TYPE_ _FREQ_ ) SUM=;
+RUN;
+* PROC PRINT DATA=LALW&REPTMON&NOWK;
+* FORMAT AMOUNT COMMA25.2;
+*;
+DATA _NULL_;
+   SET LALW&REPTMON&NOWK;
+   BY BNMCODE;
+   FILE SP;
+   RETAIN AMOUNTD AMOUNTI NOACCTD NOACCTI 0;
+   IF AMTIND='D' THEN DO;
+      AMOUNTD+ROUND(AMOUNT/1000);
+      NOACCTD+ROUND(NOACCT);
+   END;
+   ELSE IF AMTIND='I' THEN DO;
+      AMOUNTI+ROUND(AMOUNT/1000);
+      NOACCTI+ROUND(NOACCT);
+   END;
 
-2026-07-29 14:59:09,875 - INFO - [EIBWHP04.py:409] - Script completed with exit code: 8
+   IF LAST.BNMCODE THEN DO;
+      AMOUNTD=AMOUNTD+AMOUNTI;
+      NOACCTD=NOACCTD+NOACCTI;
+      PUT @1 BNMCODE +(-1) ';' AMOUNTD +(-1) ';' AMOUNTI +(-1) ';'
+             NOACCTD +(-1) ';' NOACCTI +(-1);
+      AMOUNTD=0; AMOUNTI=0; NOACCTD=0; NOACCTI=0;
+   END;
+RUN;
+*;
