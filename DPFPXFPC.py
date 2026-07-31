@@ -23,13 +23,13 @@ import sys
 # SAS PGM(PBBDPFMT) -> Python program for format processing
 
 ROOT = Path(".")
-SACA   = ROOT / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBMTRUT" / "conv" 
-ISACA  = ROOT / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBMTRUT" / "islamic" 
-FDLIB  = ROOT / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBMTRUT" / "fd"  
-IFDLIB = ROOT / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBMTRUT" / "ifd"
-PGM    = ROOT / "parquet_input" / "PGM"  / "PBBDPFMT"  # PBBDPFMT.py location
-HOST   = ROOT / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "output" / "EIBMTRUT"
-CLIENT_RPT = ROOT / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBMTRUT" / "CLIENT.txt"
+SACA   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/conv/" 
+ISACA  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/islamic" 
+FDLIB  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/fd"  
+IFDLIB = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/ifd"
+PGM    = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/"  # PBBDPFMT.py location
+HOST   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTRUT"
+CLIENT_RPT = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/" / "CLIENT.txt"
 
 HOST.mkdir(parents=True, exist_ok=True)
 
@@ -446,3 +446,83 @@ print(f"  {ipc_path}")
 print(f"\nReport Date (current date - 1 day): {REPTDATE.strftime('%Y-%m-%d')}")
 print(f"Report Month: {REPTMON}")
 print(f"Report Year: {REPTYEAR}")
+
+
+dont change the path
+
+Processing for month: 07 (Report Date: 2026-07-30)
+Report Date based on: current date minus 1 day
+PBBDPFMT output for SAPROD: Format Examples:
+SADENOM(200) = D
+SADENOM(204) = I
+SAPROD(200)  = 42120
+SAPROD(204)  = 42320
+FDDENOM(229) = I
+FDDENOM(233) = D
+FDPROD(229)  = 42133
+FDPRD(300)   = N
+FDPRD(340)   = M
+FDPRD(320)   = L
+CAPROD(104)  = 43110
+CAPROD(166)  = 42110
+CADENOM(60)  = I
+CADENOM(50)  = D
+FCYTERM(470) = 1
+FCYTERM(472) = 3
+FDORGMT(0.5) = 12
+FDORGMT(1.5) = 13
+FDORGMT(2.5) = 14
+FDORGMT(5.0) = 15
+FDORGMT(8.0) = 16
+FDORGMT(11.0)= 17
+FDORGMT(13.0)= 21
+FDORGMT(20.0)= 23
+FDORGMT(61.0)= 30
+FDRMMT(0.0)  = 51
+FDRMMT(0.5)  = 52
+FDRMMT(13.0) = 61
+DPCUSTCD(77) = 77
+SACUSTCD(77) = 77
+FDCUSTCD(70) = 71
+DDCUSTCD(65) = 44
+STATECD(5)   = A
+BRANCHCD(5)  = IPOH MAIN OFFICE
+SDRANGE(750) = 1000.0
+DDRANGE(1500)= 2000.0
+RACE('1')    = 1
+RACE('9')    = 0
+RMFDORGMT(272)= 12
+ACE Products: {181, 150, 151, 40, 42, 43, 152}
+FCY Products: {352, 353, 354, 355, 356, 357, 358, 360, 361, 362, 350, 351}
+
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMTRUT.py", line 195, in <module>
+    SA = apply_format_import(SA, source_col="PRODUCT", format_name="SAPROD", out_col="PRODCD")
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMTRUT.py", line 129, in apply_format_import
+    return pbbdpfmt.apply_format(df, source_col, format_name, out_col)
+TypeError: apply_format() takes 2 positional arguments but 4 were given
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMTRUT.py", line 197, in <module>
+    SA = apply_format_pgm(SA, source_col="PRODUCT", format_name="SAPROD", out_col="PRODCD", temp_dir=HOST / "temp")
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMTRUT.py", line 103, in apply_format_pgm
+    formatted_df = pl.read_parquet(temp_output)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/io/parquet/functions.py", line 289, in read_parquet
+    return lf.collect()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
+    return wrap_df(ldf.collect(engine, callback))
+FileNotFoundError: No such file or directory (os error 2): .../python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTRUT/temp/temp_output_SAPROD.parquet (set POLARS_VERBOSE=1 to see full path)
+
+This error occurred with the following context stack:
+        [1] 'parquet scan'
+        [2] 'sink'
