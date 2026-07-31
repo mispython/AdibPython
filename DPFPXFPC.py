@@ -1,23 +1,10 @@
-import pyreadstat
-from pathlib import Path
+variable_to_label (format name attached to LOANTYPE): None
+variable_value_labels['LOANTYPE']: None
 
-filepath = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMBRAS/pbb/lnnote.sas7bdat")
+Files alongside lnnote.sas7bdat:
+  lnnote.sas7bdat
 
-# 1. Metadata - value label catalog attached directly to the sas7bdat, if any
-_, meta = pyreadstat.read_sas7bdat(str(filepath), metadataonly=True)
+Distinct LOANTYPE codes seen in first 5000 rows:
+[4.0, 5.0, 6.0, 15.0, 20.0, 25.0, 26.0, 30.0, 31.0, 32.0, 34.0, 61.0, 70.0, 71.0, 72.0, 73.0, 78.0, 200.0, 201.0, 204.0, 205.0, 209.0, 210.0, 211.0, 212.0, 214.0, 215.0, 219.0, 225.0, 227.0, 228.0, 231.0, 233.0, 234.0, 235.0, 236.0, 240.0, 245.0, 246.0, 247.0, 248.0, 300.0, 301.0, 303.0, 305.0, 309.0, 311.0, 315.0, 320.0, 348.0, 350.0, 356.0, 358.0, 359.0, 360.0, 361.0, 363.0, 505.0, 510.0, 518.0, 521.0, 533.0, 565.0, 568.0, 569.0, 570.0, 600.0, 601.0, 602.0, 606.0, 609.0, 634.0, 700.0, 900.0, 901.0, 910.0, 915.0, 993.0]
 
-print("variable_to_label (format name attached to LOANTYPE):",
-      meta.variable_to_label.get('LOANTYPE') if hasattr(meta, 'variable_to_label') else 'n/a')
-print("variable_value_labels['LOANTYPE']:", meta.variable_value_labels.get('LOANTYPE'))
-
-# 2. If the block above is empty, the labels likely live in a separate
-#    catalog file (commonly named the same as the library, e.g. FORMATS.sas7bcat,
-#    sitting alongside the .sas7bdat). List the directory to check.
-print("\nFiles alongside lnnote.sas7bdat:")
-for f in filepath.parent.iterdir():
-    print(" ", f.name)
-
-# 3. Raw sample of LOANTYPE values regardless, so we can see the actual codes in use
-df_sample, _ = pyreadstat.read_sas7bdat(str(filepath), usecols=['LOANTYPE'], row_limit=5000)
-print("\nDistinct LOANTYPE codes seen in first 5000 rows:")
-print(sorted(df_sample['LOANTYPE'].dropna().unique().tolist()))
+btw both lnnote are in lowercase
