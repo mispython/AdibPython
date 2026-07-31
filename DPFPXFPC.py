@@ -1,214 +1,190 @@
-import polars as pl
-import duckdb
-from pathlib import Path
-import datetime
-import pyreadstat
-import numpy as np
-from typing import Iterator, Dict, Any
-import gc
+EIMRESHP - HP Loan Summary & Detail Report
+============================================================
 
-# Configuration
-loan_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOS")
-arrear_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOS")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOS")
-output_path.mkdir(exist_ok=True)
+Determining report date...
+Report Date: 30/07/2026
+Week: 4
+============================================================
 
-# Calculate dates using datetime (replacing REPTDATE logic)
-today = datetime.date.today()
-yesterday = today - datetime.timedelta(days=1)
+Reading LOANTEMP.sas7bdat...
+  LOANTEMP records: 387,612
 
-# Determine week parameters based on yesterday's date
-day = yesterday.day
-month = yesterday.month
-year = yesterday.year
+Reading LNNOTE.sas7bdat...
+  LNNOTE records: 386,949
 
-if day == 8:
-    sdd, wk, wk1 = 1, '1', '4'
-elif day == 15:
-    sdd, wk, wk1 = 9, '2', '1'
-elif day == 22:
-    sdd, wk, wk1 = 16, '3', '2'
-else:
-    sdd, wk, wk1 = 23, '4', '3'
+Merging loan data...
+  Merged HP Loans: 386,249 accounts
 
-mm = month
-mm1 = 12 if (wk == '1' and month == 1) else (month - 1 if wk == '1' else month)
-sdate = datetime.date(year, month, sdd)
+Processing HP loans...
+  Step 1 complete - Basic calculations done
+  Step 2 complete - Categorizations done
+  Step 3 complete - Vehicle classifications done
+  Step 4 complete - Arrears calculation done
+  Processed: 386,249 HP loans
 
-# Extract parameters
-nowk = wk
-nowk1 = wk1
-reptmon = f"{mm:02d}"
-reptmon1 = f"{mm1:02d}"
-reptyear = str(year)
-reptday = f"{day:02d}"
-rdate = yesterday.strftime('%d%m%y')
-sdate_str = sdate.strftime('%d%m%y')
+Creating account groups...
+  HPLOAN1 (All): 386,249
+  HPLOAN2 (NPL): 1,824
+  HPLOAN3 (Restructured): 4,305
+  HPLOAN4 (Restructured NPL): 209
 
-print(f"NOWK: {nowk}, NOWK1: {nowk1}, REPTMON: {reptmon}, REPTMON1: {reptmon1}")
-print(f"REPTYEAR: {reptyear}, REPTDAY: {reptday}, RDATE: {rdate}, SDATE: {sdate_str}")
+Generating summary reports...
+  Generating report 1/36: CREDIT RISK SCORE - PRODUCT 128,130,380,381,700,705...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 1: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(505, 1)
+  Generating report 2/36: CREDIT RISK SCORE - NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 2: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(180, 1)
+  Generating report 3/36: CREDIT RISK SCORE - RESTRUCTURE ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 3: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(223, 1)
+  Generating report 4/36: CREDIT RISK SCORE - RESTRUCTURE NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 4: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(75, 1)
+  Generating report 5/36: SOURCE OF BUSINESS - PRODUCT 128,130,380,381,700,705...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 5: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(157, 1)
+  Generating report 6/36: SOURCE OF BUSINESS - NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 6: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(68, 1)
+  Generating report 7/36: SOURCE OF BUSINESS - RESTRUCTURE ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 7: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(71, 1)
+  Generating report 8/36: SOURCE OF BUSINESS - RESTRUCTURE NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 8: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(37, 1)
+  Generating report 9/36: MARGIN OF FINANCE - PRODUCT 128,130,380,381,700,705...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 9: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(412, 1)
+  Generating report 10/36: MARGIN OF FINANCE - NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 10: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(194, 1)
+  Generating report 11/36: MARGIN OF FINANCE - RESTRUCTURE ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 11: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(127, 1)
+  Generating report 12/36: MARGIN OF FINANCE - RESTRUCTURE NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 12: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(58, 1)
+  Generating report 13/36: LOAN TERM - PRODUCT 128,130,380,381,700,705...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 13: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(503, 1)
+  Generating report 14/36: LOAN TERM - NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 14: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(211, 1)
+  Generating report 15/36: LOAN TERM - RESTRUCTURE ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 15: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(292, 1)
+  Generating report 16/36: LOAN TERM - RESTRUCTURE NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 16: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(112, 1)
+  Generating report 17/36: AMT FINANCE - PRODUCT 128,130,380,381,700,705...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 17: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(673, 1)
+  Generating report 18/36: AMT FINANCE - NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 18: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(285, 1)
+  Generating report 19/36: AMT FINANCE - RESTRUCTURE ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 19: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(324, 1)
+  Generating report 20/36: AMT FINANCE - RESTRUCTURE NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 20: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(121, 1)
+  Generating report 21/36: BY STATE - PRODUCT 128,130,380,381,700,705...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 21: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(378, 1)
+  Generating report 22/36: BY STATE - NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 22: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(115, 1)
+  Generating report 23/36: BY STATE - RESTRUCTURE ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 23: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(179, 1)
+  Generating report 24/36: BY STATE - RESTRUCTURE NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 24: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(61, 1)
+  Generating report 25/36: BY MAKE OF VEHICLE - PRODUCT 128,130,380,381,700,705...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 25: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(472, 1)
+  Generating report 26/36: BY MAKE OF VEHICLE - NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 26: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(175, 1)
+  Generating report 27/36: BY MAKE OF VEHICLE - RESTRUCTURE ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 27: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(217, 1)
+  Generating report 28/36: BY MAKE OF VEHICLE - RESTRUCTURE NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 28: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(76, 1)
+  Generating report 29/36: BY MAKE OF VEHICLE = OTHERS - PRODUCT 128,130,380,381,700,705...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 29: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(231, 1)
+  Generating report 30/36: BY MAKE OF VEHICLE = OTHERS - NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 30: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(87, 1)
+  Generating report 31/36: BY MAKE OF VEHICLE = OTHERS - RESTRUCTURE ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 31: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(100, 1)
+  Generating report 32/36: BY MAKE OF VEHICLE = OTHERS - RESTRUCTURE NPL ACCOUNT...
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py:340: DeprecationWarning: the argument `columns` for `DataFrame.pivot` is deprecated. It was renamed to `on` in version 1.0.0.
+  df_pivot = df_agg.pivot(
+    Warning: Failed to generate report 32: can only call `.item()` without "row" or "column" values if the DataFrame has a single element; shape=(50, 1)
+  Generated 0 summary reports
 
-# Define chunked reader for large SAS files
-def read_sas_chunked(file_path: Path, columns: list = None, chunksize: int = 100000) -> Iterator[pl.DataFrame]:
-    """Read SAS file in chunks to handle large files efficiently"""
-    reader = pyreadstat.read_file_in_chunks(
-        pyreadstat.read_sas7bdat,
-        str(file_path),
-        chunksize=chunksize,
-        usecols=columns
-    )
-    
-    for df_chunk, meta in reader:
-        # Convert all columns to appropriate types immediately
-        chunk_df = pl.from_pandas(df_chunk)
-        
-        # Convert ALL columns to string first to avoid type issues
-        for col in chunk_df.columns:
-            chunk_df = chunk_df.with_columns(pl.col(col).cast(pl.Utf8))
-        
-        yield chunk_df
+Generating detail report...
+  Detail report: 1,824 NPL accounts
+  Total balance: RM 56,223,885.12
 
-# Process LNNOTE in chunks (large 20GB file)
-print("Processing LNNOTE (large file) in chunks...")
-hp_values = ['HP']
+============================================================
+EIMRESHP Complete!
+============================================================
 
-# Initialize empty list to collect filtered data
-lnnote_chunks = []
+Outputs:
+  - 0 summary reports (by category)
+  - 1 detail report (NPL accounts)
 
-# Read and filter in chunks
-chunk_count = 0
-for chunk in read_sas_chunked(loan_path / "lnnote.sas7bdat", 
-                              columns=['ACCTNO', 'LOANTYPE', 'NTBRCH', 'COLLDESC', 'COLLYEAR', 'BALANCE', 'BORSTAT'],
-                              chunksize=100000):
-    chunk_count += 1
-    if chunk_count % 10 == 0:
-        print(f"Processed {chunk_count} chunks from LNNOTE...")
-        gc.collect()  # Free memory
-    
-    # Filter chunk - all columns are now strings
-    filtered_chunk = chunk.filter(
-        (pl.col('LOANTYPE').is_in(hp_values)) &
-        (pl.col('BALANCE').cast(pl.Float64, strict=False).fill_null(0) > 0) &
-        (~pl.col('BORSTAT').is_in(['F', 'I', 'R']))
-    ).select([
-        'ACCTNO', 'LOANTYPE', 'NTBRCH', 'COLLDESC', 'COLLYEAR'
-    ])
-    
-    if filtered_chunk.height > 0:
-        lnnote_chunks.append(filtered_chunk)
+HP Products: [128, 130, 380, 381, 700, 705]
 
-# Combine all filtered chunks
-if lnnote_chunks:
-    lnnote_df = pl.concat(lnnote_chunks).unique(subset=['ACCTNO']).sort('ACCTNO')
-else:
-    lnnote_df = pl.DataFrame(schema={'ACCTNO': pl.Utf8, 'LOANTYPE': pl.Utf8, 'NTBRCH': pl.Utf8, 
-                                     'COLLDESC': pl.Utf8, 'COLLYEAR': pl.Utf8})
+4 Account Groups:
+  1. All HP accounts: 386,249
+  2. NPL (>=3 months OR F/I/R): 1,824
+  3. Restructured (NOTENO >= 98010): 4,305
+  4. Restructured NPL: 209
 
-print(f"LNNOTE filtered: {lnnote_df.height} rows")
-del lnnote_chunks
-gc.collect()
-
-# Read NAME8 (typically smaller file)
-print("Processing NAME8...")
-try:
-    name8_pandas = pyreadstat.read_sas7bdat(str(loan_path / "name8.sas7bdat"), 
-                                           usecols=['ACCTNO', 'LINETHRE', 'LINEFOUR'])[0]
-    name8_df = pl.from_pandas(name8_pandas).select([
-        'ACCTNO', 'LINETHRE', 'LINEFOUR'
-    ]).with_columns([
-        pl.col('ACCTNO').cast(pl.Utf8),
-        pl.col('LINETHRE').cast(pl.Utf8),
-        pl.col('LINEFOUR').cast(pl.Utf8)
-    ]).sort('ACCTNO')
-except Exception as e:
-    print(f"Error reading NAME8: {e}")
-    name8_df = pl.DataFrame(schema={'ACCTNO': pl.Utf8, 'LINETHRE': pl.Utf8, 'LINEFOUR': pl.Utf8})
-
-# Read LOANTEMP (arrears file)
-print("Processing LOANTEMP...")
-try:
-    arrear_pandas = pyreadstat.read_sas7bdat(str(arrear_path / "loantemp.sas7bdat"), 
-                                            usecols=['ACCTNO', 'ARREAR'])[0]
-    arrear_df = pl.from_pandas(arrear_pandas).select([
-        'ACCTNO', 'ARREAR'
-    ]).with_columns([
-        pl.col('ACCTNO').cast(pl.Utf8),
-        pl.col('ARREAR').cast(pl.Float64, strict=False).fill_null(0)
-    ]).sort('ACCTNO')
-except Exception as e:
-    print(f"Warning: LOANTEMP file not found or error: {e}, creating empty dataframe")
-    arrear_df = pl.DataFrame(schema={'ACCTNO': pl.Utf8, 'ARREAR': pl.Float64})
-
-# DATA REPO; MERGE LNNOTE(IN=AA) NAME8 ARREAR;
-print("Merging datasets...")
-repo_df = lnnote_df.join(
-    name8_df.rename({'LINETHRE': 'ENGINE', 'LINEFOUR': 'CHASSIS'}), 
-    on='ACCTNO', how='inner'
-).join(
-    arrear_df, on='ACCTNO', how='left'
-).with_columns([
-    # BRABBR and CAC - simplified branch conversion
-    pl.col('NTBRCH').cast(pl.Utf8).alias('BRABBR'),
-    pl.col('NTBRCH').cast(pl.Utf8).alias('CAC'),
-    
-    # MAKE, MODEL, REGNO from COLLDESC
-    pl.col('COLLDESC').str.slice(0, 16).alias('MAKE'),
-    pl.col('COLLDESC').str.slice(16, 21).alias('MODEL'),
-    pl.col('COLLDESC').str.slice(40, 13).alias('REGNO'),
-    
-    # Handle missing ARREAR and COLLYEAR
-    pl.col('ARREAR').fill_null(0),
-    pl.col('COLLYEAR').fill_null('')
-])
-
-# Filter and create REPO datasets
-repo_filtered = repo_df.filter(pl.col('ARREAR') >= 10).sort('REGNO')
-repo1_filtered = repo_filtered.filter(
-    pl.col('LOANTYPE').is_in(['983', '993'])
-).sort('REGNO')
-
-print(f"REPO records: {repo_filtered.height}")
-print(f"REPO1 records: {repo1_filtered.height}")
-
-# Generate text output file (REPOTXT.txt)
-print("Generating REPOTXT.txt...")
-with open(output_path / "repotxt.txt", "w") as f:
-    f.write(f"{rdate}-REPOSSESSION LISTING\n")
-    
-    for row in repo_filtered.iter_rows(named=True):
-        # Format according to fixed-width specifications
-        line = (
-            f"{str(row.get('BRABBR', ''))[:3]:<3}"      # @001 BRABBR $3.
-            f"{str(row.get('CAC', ''))[:20]:<20}"        # @009 CAC $20.
-            f"{str(row.get('REGNO', ''))[:13]:<13}"      # @029 REGNO $13.
-            f"{str(row.get('MAKE', ''))[:16]:<16}"       # @043 MAKE $16.
-            f"{str(row.get('MODEL', ''))[:21]:<21}"      # @060 MODEL $21.
-            f"{str(row.get('ENGINE', ''))[:40]:<40}"     # @082 ENGINE $40.
-            f"{str(row.get('CHASSIS', ''))[:40]:<40}"    # @123 CHASSIS $40.
-            f"{str(row.get('COLLYEAR', ''))[:4]:<4}\n"    # @164 COLLYEAR $4.
-        )
-        f.write(line)
-
-print("REPOTXT.txt generated successfully")
-
-# Generate REPOTXT1.txt for REPO1 (983,993)
-print("Generating REPOTXT1.txt...")
-with open(output_path / "repotxt1.txt", "w") as f:
-    f.write(f"{rdate}-REPOSSESSION LISTING (983,993)\n")
-    
-    for row in repo1_filtered.iter_rows(named=True):
-        # Same format as REPOTXT but for filtered dataset
-        line = (
-            f"{str(row.get('BRABBR', ''))[:3]:<3}"
-            f"{str(row.get('CAC', ''))[:20]:<20}"
-            f"{str(row.get('REGNO', ''))[:13]:<13}"
-            f"{str(row.get('MAKE', ''))[:16]:<16}"
-            f"{str(row.get('MODEL', ''))[:21]:<21}"
-            f"{str(row.get('ENGINE', ''))[:40]:<40}"
-            f"{str(row.get('CHASSIS', ''))[:40]:<40}"
-            f"{str(row.get('COLLYEAR', ''))[:4]:<4}\n"
-        )
-        f.write(line)
-
-print("REPOTXT1.txt generated successfully")
-print("PROCESSING COMPLETED SUCCESSFULLY")
+Report Categories:
+  1. Credit Risk Score
+  2. Source of Business
+  3. Margin of Finance
+  4. Loan Term
+  5. Amount Financed
+  6. By State
+  7. By Make of Vehicle
+  8. Make = OTHERS
