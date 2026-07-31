@@ -1,25 +1,10 @@
-EIMRESHP - HP Loan Summary & Detail Report
-============================================================
-
-Determining report date...
-Report Date: 30/07/2026
-Week: 4
-============================================================
-
-Reading LOANTEMP.sas7bdat...
-  LOANTEMP records: 387,612
-
-Reading LNNOTE.sas7bdat...
-  LNNOTE records: 386,949
-
-Merging loan data...
-  Merged HP Loans: 386,249 accounts
-
-Processing HP loans...
+NOWK: 4, NOWK1: 3, REPTMON: 07, REPTMON1: 07
+REPTYEAR: 2026, REPTDAY: 30, RDATE: 300726, SDATE: 230726
+Processing LNNOTE (large file) in chunks...
 Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMRESHP.py", line 150, in <module>
-    df_hploan = df_hploan.with_columns([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMREPOS.py", line 83, in <module>
+    filtered_chunk = chunk.filter(
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 5325, in filter
     self.lazy()
   File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
     return function(*args, **kwargs)
@@ -27,4 +12,4 @@ Traceback (most recent call last):
     return function(*args, **kwargs)
   File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
     return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.SchemaError: invalid series dtype: expected `String`, got `duration[ms]` for series with name `ISSUEDT`
+polars.exceptions.InvalidOperationError: 'is_in' cannot check for List(String) values in Float64 data
