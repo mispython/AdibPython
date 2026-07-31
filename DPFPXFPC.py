@@ -1,99 +1,94 @@
-NOWK: 4, NOWK1: 3, REPTMON: 07, REPTMON1: 07
-REPTYEAR: 2026, REPTDAY: 30, RDATE: 300726, SDATE: 230726
-Processing LNNOTE (large file) in chunks...
-Processed 10 chunks from LNNOTE...
-LNNOTE filtered: 0 rows
-Processing NAME8...
-Processing LOANTEMP...
-Merging datasets...
-REPO records: 0
-REPO1 records: 0
-Generating REPOTXT.txt...
-REPOTXT.txt generated successfully
-Generating REPOTXT1.txt...
-REPOTXT1.txt generated successfully
-PROCESSING COMPLETED SUCCESSFULLY
+EIMRESHP - HP Loan Summary & Detail Report
+============================================================
 
+Determining report date...
+Report Date: 30/07/2026
+Week: 4
+============================================================
 
-python output:
+Reading LOANTEMP.sas7bdat...
+  LOANTEMP records: 387,612
 
-repottxt
-300726-REPOSSESSION LISTING
-repotxt1
-300726-REPOSSESSION LISTING (983,993)
+Reading LNNOTE.sas7bdat...
+  LNNOTE records: 386,949
 
+Merging loan data...
+  Merged HP Loans: 386,249 accounts
 
-production actual output (just few samples):
+Processing HP loans...
+  Step 1 complete - Basic calculations done
+  Step 2 complete - Categorizations done
+  Step 3 complete - Vehicle classifications done
+  Step 4 complete - Arrears calculation done
+  Processed: 386,249 HP loans
 
-30/06/26-REPOSSESSION LISTING                                                                                                                                                       
-H08     NON CAC                           N/A                                                                                                                      2003             
-H11     CAC-CITY CENTRE                   PROTON TIARA 1.1 1 (M) G.L                                                                                                  0             
-JRL     CAC-CITY CENTRE                   MODENAS  JAGUH B BN175A  S WHJ2237  00                                                                                      0             
-H24     NON CAC                                                                                                                                                       0             
-SBU     NON CAC                                                                                                                                                       0             
-SBU     NON CAC                                                                                                                                                       0             
-SBU     NON CAC                                                                                                                                                       0             
-SBU     NON CAC                                                                                                                                                       0             
-SBU     NON CAC                                                                                                                                                       0             
-SBU     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-H49     NON CAC                                                                                                                                                       0             
-BWK     CAC-CITY CENTRE                   MEDICAL           MEDICAL CLINIC SETS                                                                                       0             
-BWK     CAC-CITY CENTRE                   SONOACE/PC/PRTR   E88P/INTEC/HP DESKJE S/N:88-P-T032451                         31600/13019/0246                            0             
-H05     CAC-JOHOR BAHRU                   AB DICK OFFSETT   9820                                                                                                      0             
-JTZ     NON CAC                                                                                                                                                       0             
-H20     CAC-KELANG                                                                                                                                                    0             
-H20     CAC-KELANG                                                                                                                                                    0             
-PLT     NON CAC                           ONE UNIT HEWLETT T PACKARD             SG92103629/3590/3643/3635                KR91167481/68069/67446450                   0             
-PLT     NON CAC                           INSPECTION EQUIP PMENTS                                                                                                     0             
-PLT     NON CAC                           MONITORING EQUIP PMENTS                                                                                                     0             
-PLT     NON CAC                           ABSEILING EQUIPM MENTS                                                                                                      0             
-PLT     NON CAC                           CORROSION EQUIPM MENTS                                                                                                      0             
-PLT     NON CAC                           1 EPOH III U/SON NIC P/METRIC 2300                                                                                          0             
-PLT     NON CAC                           1 B-SCAN S/WARE- -P/METRIC EPOCH III                                                                                        0             
-H11     CAC-CITY CENTRE                   1 UNIT OF NEW PR ROTON WIRA 1.6        4G92P-GY2943                             PL1C98LNRYB480593                        2000             
-PIH     CAC-K. LUMPUR                                                                                                                                                 0             
-H12     CAC-K. LUMPUR                     AS PER APPENDIX                                                                                                          1996             
-H56     NON CAC                           YAMAHA            UPRIGHT PIANO        706882                                   90010                                    1997             
-H12     CAC-K. LUMPUR                     MACHINERY & EQU                        %                                        123456789                                   0             
-H22     CAC-CITY CENTRE                   JMM CARCOSA       BOWL TYPE COLD DRINK S1-N240926-N240935                       S2-N239380-239390                        1998             
-H22     CAC-CITY CENTRE                   JMM CARCOSA BOW   JMM                  S1-N244101-N244110 ,                     S1-N240021-N240040                       1998             
-H10     NON CAC                           YAMAHA            PIANO LX110T         1433674                                  90010                                    1997             
-PBR     NON CAC                           YAMAHA ORGAN      EL-3                                                                                                   1997             
-H14     CAC-KELANG                        CONCRETE BLOCK    MACHINE C/W UT 4 SA                                           P19743                                   1999             
-H21     CAC-CITY CENTRE                   GESTETNER         201CD PRESS MACHINE                                           2684                                        0             
-H11     CAC-CITY CENTRE                                     COMPUTER CLOTHING DE                                          C319660163                                  0             
-H22     CAC-CITY CENTRE                   .                 DISPENSING MACHINE                                            582010582011582012                          0             
-JRT     NON CAC                           MICRO PENTIUM     P100 COMPUTER & HP5L %                                        605DOFA12038                             1996             
-H25     CAC-CITY CENTRE                   PRESS MACHINE     SV-160               003693                                   3693                                     1997             
-H09     CAC-PENANG                        ALPHASTATION      250/266UNIXW/STATION KAWASAN MIEL                             BAYAN LEPAS PULAU PINANG 11900           1996             
-H20     CAC-KELANG                        AS PER APPENDIX   ATTACHED                                                                                                  0             
-H07     NON CAC                           SIMULATOR                              00000000                                 SEGA00518110                                0             
-H07     NON CAC                           SIMULATOR                                                                       NAMCO938255                                 0             
-H07     NON CAC                           SIMULATOR                                                                       NAMCO937829                                 0             
-H24     NON CAC                           MACHINERY                                                                                                                1996             
-H09     CAC-PENANG                        CAKE SHOWCASE     AND 10 OTHERS                                                                                             0             
-H08     NON CAC                           BOHEMIA           UPRIGHT PIANO                                                 63270                                    1997             
-H08     NON CAC                           BOHEMIA UPRIGHT   PIANO MODEL: 125                                              55819                                    1995             
-H09     CAC-PENANG                        YAMAHA ELECTONE   EL27                                                          601399                                   1997             
-H14     CAC-KELANG                        WEINBACH          UPRIGHT PIANO                                                 258274                                      0             
-H07     NON CAC                           BOHEMIA           118 MODERNA          000000000                                60424                                       0             
-H16     CAC-K. LUMPUR                     TECHNICS          SX-GA3 ORGAN         %                                        394A1414                                 1996             
-H47     NON CAC                           YANMAR AG55S      GENERATOR SET        6T95L00436                               DH141065                                    0             
-H05     CAC-JOHOR BAHRU                   OTHERS            KMD A6004501                                                  281196                                   1997             
-H04     NON CAC                           SPECTROCHECK      SPECTROMETER                                                  786496                                      0             
-H04     NON CAC                                                                  %                                    
+Creating account groups...
+  HPLOAN1 (All): 386,249
+  HPLOAN2 (NPL): 1,824
+  HPLOAN3 (Restructured): 4,305
+  HPLOAN4 (Restructured NPL): 209
+
+Generating summary reports...
+  Generating report 1/36: CREDIT RISK SCORE - PRODUCT 128,130,380,381,700,705...
+  Generating report 2/36: CREDIT RISK SCORE - NPL ACCOUNT...
+  Generating report 3/36: CREDIT RISK SCORE - RESTRUCTURE ACCOUNT...
+  Generating report 4/36: CREDIT RISK SCORE - RESTRUCTURE NPL ACCOUNT...
+  Generating report 5/36: SOURCE OF BUSINESS - PRODUCT 128,130,380,381,700,705...
+  Generating report 6/36: SOURCE OF BUSINESS - NPL ACCOUNT...
+  Generating report 7/36: SOURCE OF BUSINESS - RESTRUCTURE ACCOUNT...
+  Generating report 8/36: SOURCE OF BUSINESS - RESTRUCTURE NPL ACCOUNT...
+  Generating report 9/36: MARGIN OF FINANCE - PRODUCT 128,130,380,381,700,705...
+  Generating report 10/36: MARGIN OF FINANCE - NPL ACCOUNT...
+  Generating report 11/36: MARGIN OF FINANCE - RESTRUCTURE ACCOUNT...
+  Generating report 12/36: MARGIN OF FINANCE - RESTRUCTURE NPL ACCOUNT...
+  Generating report 13/36: LOAN TERM - PRODUCT 128,130,380,381,700,705...
+  Generating report 14/36: LOAN TERM - NPL ACCOUNT...
+  Generating report 15/36: LOAN TERM - RESTRUCTURE ACCOUNT...
+  Generating report 16/36: LOAN TERM - RESTRUCTURE NPL ACCOUNT...
+  Generating report 17/36: AMT FINANCE - PRODUCT 128,130,380,381,700,705...
+  Generating report 18/36: AMT FINANCE - NPL ACCOUNT...
+  Generating report 19/36: AMT FINANCE - RESTRUCTURE ACCOUNT...
+  Generating report 20/36: AMT FINANCE - RESTRUCTURE NPL ACCOUNT...
+  Generating report 21/36: BY STATE - PRODUCT 128,130,380,381,700,705...
+  Generating report 22/36: BY STATE - NPL ACCOUNT...
+  Generating report 23/36: BY STATE - RESTRUCTURE ACCOUNT...
+  Generating report 24/36: BY STATE - RESTRUCTURE NPL ACCOUNT...
+  Generating report 25/36: BY MAKE OF VEHICLE - PRODUCT 128,130,380,381,700,705...
+  Generating report 26/36: BY MAKE OF VEHICLE - NPL ACCOUNT...
+  Generating report 27/36: BY MAKE OF VEHICLE - RESTRUCTURE ACCOUNT...
+  Generating report 28/36: BY MAKE OF VEHICLE - RESTRUCTURE NPL ACCOUNT...
+  Generating report 29/36: BY MAKE OF VEHICLE = OTHERS - PRODUCT 128,130,380,381,700,705...
+  Generating report 30/36: BY MAKE OF VEHICLE = OTHERS - NPL ACCOUNT...
+  Generating report 31/36: BY MAKE OF VEHICLE = OTHERS - RESTRUCTURE ACCOUNT...
+  Generating report 32/36: BY MAKE OF VEHICLE = OTHERS - RESTRUCTURE NPL ACCOUNT...
+  Generated 32 summary reports
+
+Generating detail report...
+  Detail report: 1,824 NPL accounts
+  Total balance: RM 56,223,885.12
+
+============================================================
+EIMRESHP Complete!
+============================================================
+
+Outputs:
+  - 32 summary reports (by category)
+  - 1 detail report (NPL accounts)
+
+HP Products: [128, 130, 380, 381, 700, 705]
+
+4 Account Groups:
+  1. All HP accounts: 386,249
+  2. NPL (>=3 months OR F/I/R): 1,824
+  3. Restructured (NOTENO >= 98010): 4,305
+  4. Restructured NPL: 209
+
+Report Categories:
+  1. Credit Risk Score
+  2. Source of Business
+  3. Margin of Finance
+  4. Loan Term
+  5. Amount Financed
+  6. By State
+  7. By Make of Vehicle
+  8. Make = OTHERS
