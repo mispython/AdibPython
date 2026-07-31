@@ -8,20 +8,12 @@ import pyarrow.ipc as ipc
 import polars as pl
 import pandas as pd
 import pyreadstat
-import subprocess
+import importlib.util
 import sys
 
 # ============================================
 # LIBRARY MAPPINGS (adjust to your environment)
 # ============================================
-# SAS LIBNAME SACA  -> folder with SAS7BDAT tables for PBB MNITB
-# SAS LIBNAME ISACA -> folder with SAS7BDAT tables for PIBB MNITB
-# SAS LIBNAME FD    -> folder with SAS7BDAT tables for PBB MNIFD
-# SAS LIBNAME IFD   -> folder with SAS7BDAT tables for PIBB MNIFD
-# SAS LIBNAME HOST  -> output folder representing SAP.PBB.QRF.DP.LIST
-# SAS DD CLIENT     -> fixed-width text file SAP.B033.DP.SOLCA.RPT
-# SAS PGM(PBBDPFMT) -> Python program for format processing
-
 ROOT = Path(".")
 SACA   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/conv/" 
 ISACA  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/islamic" 
@@ -62,59 +54,10 @@ def write_sas7bdat(df: pl.DataFrame, filepath: Path):
 
 
 # ==================================================
-# Call PBBDPFMT.py program for format processing
+# Import PBBDPFMT.py format dictionaries
 # ==================================================
-def apply_format_pgm(df: pl.DataFrame, source_col: str, format_name: str, out_col: str, temp_dir: Path) -> pl.DataFrame:
-    """
-    Apply SAS format by calling PBBDPFMT.py program
-    """
-    # Create temporary files for data exchange
-    temp_input = temp_dir / f"temp_input_{format_name}.parquet"
-    temp_output = temp_dir / f"temp_output_{format_name}.parquet"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save the input dataframe to parquet
-    df.write_parquet(temp_input)
-    
-    # Call PBBDPFMT.py program
-    pgm_path = PGM / "PBBDPFMT.py"
-    if not pgm_path.exists():
-        raise FileNotFoundError(f"PBBDPFMT.py not found: {pgm_path}")
-    
-    # Execute the format program
-    cmd = [
-        sys.executable,
-        str(pgm_path),
-        "--input", str(temp_input),
-        "--output", str(temp_output),
-        "--format", format_name,
-        "--source-col", source_col,
-        "--target-col", out_col
-    ]
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        print(f"PBBDPFMT output for {format_name}: {result.stdout}")
-    except subprocess.CalledProcessError as e:
-        print(f"Error calling PBBDPFMT.py: {e.stderr}")
-        raise
-    
-    # Read the formatted output
-    formatted_df = pl.read_parquet(temp_output)
-    
-    # Clean up temp files
-    temp_input.unlink(missing_ok=True)
-    temp_output.unlink(missing_ok=True)
-    
-    return formatted_df
-
-
-def apply_format_import(df: pl.DataFrame, source_col: str, format_name: str, out_col: str) -> pl.DataFrame:
-    """
-    Apply SAS format by importing and calling PBBDPFMT.py functions directly
-    """
-    import importlib.util
-    
+def load_pbbdpfmt():
+    """Load format dictionaries from PBBDPFMT.py"""
     pgm_path = PGM / "PBBDPFMT.py"
     if not pgm_path.exists():
         raise FileNotFoundError(f"PBBDPFMT.py not found: {pgm_path}")
@@ -124,48 +67,58 @@ def apply_format_import(df: pl.DataFrame, source_col: str, format_name: str, out
     pbbdpfmt = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(pbbdpfmt)
     
-    # Call the format function if it exists
-    if hasattr(pbbdpfmt, 'apply_format'):
-        return pbbdpfmt.apply_format(df, source_col, format_name, out_col)
-    elif hasattr(pbbdpfmt, format_name):
-        # If it provides format dictionaries
-        format_dict = getattr(pbbdpfmt, format_name)
-        if isinstance(format_dict, dict):
-            return apply_format_dict(df, source_col, format_dict, out_col)
-    
-    raise AttributeError(f"PBBDPFMT.py doesn't have required format function or dictionary for {format_name}")
+    return pbbdpfmt
+
+# Load formats once
+pbbdpfmt = load_pbbdpfmt()
 
 
-def apply_format_dict(df: pl.DataFrame, source_col: str, format_dict: dict, out_col: str) -> pl.DataFrame:
+def apply_sas_format(df: pl.DataFrame, source_col: str, format_dict, out_col: str) -> pl.DataFrame:
     """
-    Apply SAS format using dictionary mapping
+    Apply SAS format using dictionary mapping.
+    Handles both direct dictionaries and callable format functions.
     """
-    fmt_df = pl.DataFrame({
-        "key": list(format_dict.keys()),
-        "value": list(format_dict.values())
-    })
+    # If format_dict is a function/callable, apply it directly
+    if callable(format_dict):
+        # Apply the format function to each value
+        return df.with_columns(
+            pl.col(source_col).map_elements(
+                lambda x: format_dict(x) if x is not None else None,
+                return_dtype=pl.Utf8
+            ).alias(out_col)
+        )
     
-    src_dtype = df.schema[source_col]
-    if src_dtype == pl.Utf8:
-        fmt_df = fmt_df.with_columns(pl.col("key").cast(pl.Utf8))
-    else:
-        fmt_df = fmt_df.with_columns(pl.col("key").cast(pl.Float64))
-        df = df.with_columns(pl.col(source_col).cast(pl.Float64))
+    # If it's a dictionary, use lookup
+    if isinstance(format_dict, dict):
+        # Convert format dict to DataFrame for joining
+        fmt_items = list(format_dict.items())
+        fmt_df = pl.DataFrame({
+            "key": [str(k) for k, v in fmt_items],
+            "value": [str(v) for k, v in fmt_items]
+        })
+        
+        # Convert source column to string for matching
+        df = df.with_columns(pl.col(source_col).cast(pl.Utf8).alias(f"_{source_col}_str"))
+        
+        # Perform left join
+        result = df.join(
+            fmt_df,
+            left_on=f"_{source_col}_str",
+            right_on="key",
+            how="left"
+        ).drop(["key", f"_{source_col}_str"])
+        
+        # Rename value column to out_col
+        result = result.rename({"value": out_col})
+        
+        return result
     
-    result = df.join(
-        fmt_df.rename({"value": out_col}),
-        left_on=source_col,
-        right_on="key",
-        how="left"
-    ).drop("key")
-    
-    return result
+    raise ValueError(f"Unsupported format type: {type(format_dict)}")
 
 
 # =========================
 # 1) REPTDATE - Use current date minus 1 day
 # =========================
-# Instead of reading REPTDATE.sas7bdat, use datetime.now() - timedelta(days=1)
 REPTDATE = datetime.now() - timedelta(days=1)
 REPTYEAR = f"{REPTDATE.year:04d}"
 REPTMON  = f"{REPTDATE.month:02d}"
@@ -176,11 +129,6 @@ print(f"Report Date based on: current date minus 1 day")
 # =========================
 # 2) SA - Saving accounts with SAPROD format
 # =========================
-# DATA SA(KEEP=ACCTNO PRODCD PURPOSE PRODUCT);
-#    SET SACA.SAVING ISACA.SAVING;
-#    WHERE OPENIND NOT IN ('B','C','P');
-#    PRODCD=PUT(PRODUCT, SAPROD.);
-# RUN;
 saving_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
 SA = (
     pl.concat([
@@ -190,22 +138,13 @@ SA = (
     .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
 )
 
-# Apply SAPROD format using PBBDPFMT.py
-try:
-    SA = apply_format_import(SA, source_col="PRODUCT", format_name="SAPROD", out_col="PRODCD")
-except:
-    SA = apply_format_pgm(SA, source_col="PRODUCT", format_name="SAPROD", out_col="PRODCD", temp_dir=HOST / "temp")
-
+# Apply SAPROD format
+SA = apply_sas_format(SA, source_col="PRODUCT", format_dict=pbbdpfmt.SAPROD, out_col="PRODCD")
 SA = SA.select(["ACCTNO","PRODCD","PURPOSE","PRODUCT"])
 
 # =========================
 # 3) CA - Current accounts with CAPROD format
 # =========================
-# DATA CA(KEEP=ACCTNO PRODCD PURPOSE PRODUCT);
-#    SET SACA.CURRENT ISACA.CURRENT;
-#    WHERE OPENIND NOT IN ('B','C','P');
-#    PRODCD=PUT(PRODUCT, CAPROD.);
-# RUN;
 current_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
 CA = (
     pl.concat([
@@ -215,21 +154,13 @@ CA = (
     .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
 )
 
-# Apply CAPROD format using PBBDPFMT.py
-try:
-    CA = apply_format_import(CA, source_col="PRODUCT", format_name="CAPROD", out_col="PRODCD")
-except:
-    CA = apply_format_pgm(CA, source_col="PRODUCT", format_name="CAPROD", out_col="PRODCD", temp_dir=HOST / "temp")
-
+# Apply CAPROD format
+CA = apply_sas_format(CA, source_col="PRODUCT", format_dict=pbbdpfmt.CAPROD, out_col="PRODCD")
 CA = CA.select(["ACCTNO","PRODCD","PURPOSE","PRODUCT"])
 
 # =========================
 # 4) FD - Fixed Deposit base
 # =========================
-# DATA FD(KEEP=ACCTNO PURPOSE PRODUCT);
-#    SET SACA.FD ISACA.FD;
-# RUN;
-# PROC SORT DATA=FD; BY ACCTNO;RUN;
 fd_base_cols = ["ACCTNO","PURPOSE","PRODUCT"]
 FD_base = (
     pl.concat([
@@ -242,13 +173,6 @@ FD_base = (
 # =========================
 # 5) FDCD - Fixed Deposit product codes
 # =========================
-# DATA FDCD(KEEP=ACCTNO PRODCD);
-#    SET FD.FD IFD.FD;
-#    WHERE ACCTTYPE NOT IN (397,398) AND OPENIND IN ('D','O');
-#    PRODCD = PUT(INTPLAN, FDPROD.);
-#    IF ACCTTYPE IN (315,394) THEN PRODCD='42132'; ELSE
-#    IF ACCTTYPE IN (397,398) THEN PRODCD='42199';
-# RUN;
 fdcd_cols = ["ACCTNO","ACCTTYPE","OPENIND","INTPLAN"]
 FDCD_union = pl.concat([
     read_sas7bdat(FDLIB / "fd.sas7bdat").select(fdcd_cols),
@@ -260,11 +184,8 @@ FDCD = (
     .filter(~pl.col("ACCTTYPE").is_in([397,398]) & pl.col("OPENIND").is_in(["D","O"]))
 )
 
-# Apply FDPROD format using PBBDPFMT.py
-try:
-    FDCD = apply_format_import(FDCD, source_col="INTPLAN", format_name="FDPROD", out_col="PRODCD")
-except:
-    FDCD = apply_format_pgm(FDCD, source_col="INTPLAN", format_name="FDPROD", out_col="PRODCD", temp_dir=HOST / "temp")
+# Apply FDPROD format
+FDCD = apply_sas_format(FDCD, source_col="INTPLAN", format_dict=pbbdpfmt.FDPROD, out_col="PRODCD")
 
 # Apply overrides (matching SAS IF/ELSE logic)
 FDCD = FDCD.with_columns(
@@ -286,24 +207,11 @@ FDCD = (
 # =========================
 # 6) FD - Merge base with product codes
 # =========================
-# DATA FD;
-#    MERGE FD(IN=A) FDCD(IN=B);
-#    BY ACCTNO;
-#    IF A AND B;
-# RUN;
 FD = FD_base.join(FDCD, on="ACCTNO", how="inner")
 
 # =========================
 # 7) DEP - Combined deposits with filters
 # =========================
-# DATA DEP;
-#    SET SA CA FD;
-#    IF PRODCD IN ('42110','42310','42120','42320','42130',
-#                  '42133','42132','42180','42610','42630','34180',
-#                  '42199','42699');
-#    IF PRODCD IN ('42199','42699') AND PRODUCT NOT IN (72,413)
-#       THEN DELETE;
-# RUN;
 DEP = pl.concat([SA, CA, FD], how="vertical_relaxed")
 
 valid_prodcd = ['42110','42310','42120','42320','42130',
@@ -324,24 +232,11 @@ DEP = DEP.sort("ACCTNO")
 # =========================
 # 8) MERGEX - Deposits with PURPOSE in ('5','6')
 # =========================
-# DATA MERGEX;
-#    SET DEP;
-#    WHERE PURPOSE IN ('5','6');
-# RUN;
 MERGEX = DEP.filter(pl.col("PURPOSE").is_in(["5","6"]))
 
 # =========================
 # 9) CLIENT - Parse fixed-width text file
 # =========================
-# DATA CLIENT;
-#   INFILE CLIENT;
-#   INPUT @002 ACCTNO  10. @;
-#   IF COMPRESS(ACCTNO, "1234567890") = ' ' THEN DO;
-#      INPUT @021 NAME    $40.;
-#      OUTPUT;
-#   END;
-#   KEY = SUBSTR(NAME,1,10);
-# RUN;
 def parse_client_fixed_width(path: Path) -> pl.DataFrame:
     rows = []
     with path.open("r", encoding="latin1", errors="ignore") as f:
@@ -386,9 +281,6 @@ CLIENT = CLIENT.join(DEP.select("ACCTNO").unique(), on="ACCTNO", how="inner")
 # =========================
 # 10) HOST.TRUST&REPTMON - Trust accounts
 # =========================
-# DATA HOST.TRUST&REPTMON(KEEP=ACCTNO);
-#    SET MERGEX CLIENT;
-# RUN;
 TRUST = pl.concat([
     MERGEX.select(["ACCTNO"]),
     CLIENT.select(["ACCTNO"])
@@ -397,11 +289,6 @@ TRUST = pl.concat([
 # =========================
 # 11) HOST.FDCD&REPTMON - FD entity mapping
 # =========================
-# DATA HOST.FDCD&REPTMON(KEEP=ACCTNO ENTITY);
-#    SET FD.FD(IN=A) IFD.FD(IN=B);
-#    IF B THEN ENTITY = 'PIBB ';
-#    ELSE      ENTITY = 'PBB ';
-# RUN;
 FD_PBB  = read_sas7bdat(FDLIB / "fd.sas7bdat").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PBB "))
 FD_PIBB = read_sas7bdat(IFDLIB / "fd.sas7bdat").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PIBB "))
 FDCD_MONTH = pl.concat([FD_PBB, FD_PIBB], how="vertical_relaxed").select(["ACCTNO","ENTITY"])
@@ -431,12 +318,6 @@ with pa.ipc.new_file(ipc_path, tables[f"TRUST{REPTMON}"].schema) as writer:
     for name, table in tables.items():
         writer.write_table(table, name)
 
-# Clean up temp directory if exists
-temp_dir = HOST / "temp"
-if temp_dir.exists():
-    import shutil
-    shutil.rmtree(temp_dir)
-
 print(f"\nOutput files:")
 print(f"  {trust_path}.parquet")
 print(f"  {trust_path}.sas7bdat")
@@ -446,83 +327,3 @@ print(f"  {ipc_path}")
 print(f"\nReport Date (current date - 1 day): {REPTDATE.strftime('%Y-%m-%d')}")
 print(f"Report Month: {REPTMON}")
 print(f"Report Year: {REPTYEAR}")
-
-
-dont change the path
-
-Processing for month: 07 (Report Date: 2026-07-30)
-Report Date based on: current date minus 1 day
-PBBDPFMT output for SAPROD: Format Examples:
-SADENOM(200) = D
-SADENOM(204) = I
-SAPROD(200)  = 42120
-SAPROD(204)  = 42320
-FDDENOM(229) = I
-FDDENOM(233) = D
-FDPROD(229)  = 42133
-FDPRD(300)   = N
-FDPRD(340)   = M
-FDPRD(320)   = L
-CAPROD(104)  = 43110
-CAPROD(166)  = 42110
-CADENOM(60)  = I
-CADENOM(50)  = D
-FCYTERM(470) = 1
-FCYTERM(472) = 3
-FDORGMT(0.5) = 12
-FDORGMT(1.5) = 13
-FDORGMT(2.5) = 14
-FDORGMT(5.0) = 15
-FDORGMT(8.0) = 16
-FDORGMT(11.0)= 17
-FDORGMT(13.0)= 21
-FDORGMT(20.0)= 23
-FDORGMT(61.0)= 30
-FDRMMT(0.0)  = 51
-FDRMMT(0.5)  = 52
-FDRMMT(13.0) = 61
-DPCUSTCD(77) = 77
-SACUSTCD(77) = 77
-FDCUSTCD(70) = 71
-DDCUSTCD(65) = 44
-STATECD(5)   = A
-BRANCHCD(5)  = IPOH MAIN OFFICE
-SDRANGE(750) = 1000.0
-DDRANGE(1500)= 2000.0
-RACE('1')    = 1
-RACE('9')    = 0
-RMFDORGMT(272)= 12
-ACE Products: {181, 150, 151, 40, 42, 43, 152}
-FCY Products: {352, 353, 354, 355, 356, 357, 358, 360, 361, 362, 350, 351}
-
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMTRUT.py", line 195, in <module>
-    SA = apply_format_import(SA, source_col="PRODUCT", format_name="SAPROD", out_col="PRODCD")
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMTRUT.py", line 129, in apply_format_import
-    return pbbdpfmt.apply_format(df, source_col, format_name, out_col)
-TypeError: apply_format() takes 2 positional arguments but 4 were given
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMTRUT.py", line 197, in <module>
-    SA = apply_format_pgm(SA, source_col="PRODUCT", format_name="SAPROD", out_col="PRODCD", temp_dir=HOST / "temp")
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMTRUT.py", line 103, in apply_format_pgm
-    formatted_df = pl.read_parquet(temp_output)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/io/parquet/functions.py", line 289, in read_parquet
-    return lf.collect()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-FileNotFoundError: No such file or directory (os error 2): .../python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTRUT/temp/temp_output_SAPROD.parquet (set POLARS_VERBOSE=1 to see full path)
-
-This error occurred with the following context stack:
-        [1] 'parquet scan'
-        [2] 'sink'
