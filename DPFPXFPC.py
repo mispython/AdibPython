@@ -1,488 +1,343 @@
-"""
-EIBWHP02 - Python translation of the original SAS job.
+from __future__ import annotations
 
-Sector classification now uses the real $SECTA./$SECTB. logic, ported from
-the PBBLNFMT SAS format library into pbblnfmt.py (format_secta/format_sectb).
-Make sure pbblnfmt.py sits next to this file (or is on PYTHONPATH).
-
-Note on REPTDATE: rather than reading the BNM.REPTDATE control dataset,
-this uses yesterday's date (datetime.now() - timedelta(days=1)), same as
-the original standalone Python script. See get_reptdate().
-
-Everything else follows the SAS DATA step / PROC SUMMARY logic line-for-line
-as closely as pandas allows. Comments reference the original SAS statements
-so you can cross-check.
-"""
-
-import os
-import sys
 from pathlib import Path
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pyarrow.ipc as ipc
+import polars as pl
 import pandas as pd
 import pyreadstat
+import importlib.util
+import sys
 
-from pbblnfmt import format_secta, format_sectb
+# ============================================
+# LIBRARY MAPPINGS (adjust to your environment)
+# ============================================
+ROOT = Path(".")
+SACA   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/conv/" 
+ISACA  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/islamic" 
+FDLIB  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/fd"  
+IFDLIB = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/ifd"
+PGM    = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/"  # PBBDPFMT.py location
+HOST   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTRUT"
+CLIENT_RPT = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/" / "CLIENT.txt"
 
-# =====================================================
-# CONFIGURATION
-# =====================================================
-
-BASE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/")
-INPUT_DIR = BASE_DIR / "input/prod/EIBWHP02"
-SPOOL_DIR = BASE_DIR / "output/EIBWHP02"
-JOB_NAME = "EIBWHP02"
-
-# Columns actually needed from each input, mirroring the KEEP= lists in SAS.
-ALW1_COLS = ["ACCTNO", "NOTENO", "SECTORCD", "PRODUCT", "NOTETERM",
-             "BALANCE", "PRODCD", "CUSTCD", "AMTIND", "ISSDTE", "BRANCH"]
-
-ALW0_COLS = ["ACCTNO", "NOTENO", "SECTORCD", "PRODUCT", "NOTETERM",
-             "EARNTERM", "BALANCE", "APPRDATE", "APPRLIM2", "PRODCD",
-             "CUSTCD", "AMTIND", "ISSDTE", "BRANCH"]
-
-# Columns pulled from the ULOAN dataset. Confirmed against real data:
-# ULOAN only carries SECTORCD, AMTIND, CUSTCD, BRANCH. DISBURSE, REPAID,
-# and APPRLIM2 do not exist on this input at all -- in the original SAS,
-# DISBURSE/REPAID are defaulted to 0 via RETAIN, and APPRLIM2 is left
-# uninitialized (missing, which sums as 0 downstream). See build_ualw().
-UALW_COLS = ["SECTORCD", "AMTIND", "CUSTCD", "BRANCH"]
-
-PRODUCT_FILTER = [131, 132, 720, 725]
-PRODCD_PREFIX_FILTER = ("341", "342", "343", "344")
-EXCLUDED_SECTCD = "0210"
-# The original SAS filtered CUSTCD IN ('66','67','68','69') under an OLDER
-# customer-code scheme:
-#   66 = Bumiputra-controlled SMI, 67 = Non-Bumiputra-controlled SMI,
-#   68 = Non-resident-controlled SMI, 69 = Government-controlled SMI
-# The live data now stores CUSTCD under a NEWER scheme (confirmed against
-# actual loan/uloan data -- CUSTCD values are 41/42/43/44/46/47/48/49/51/...,
-# never 66-69). Per pbblnfmt.CUSTCD_BASE_MAP, those four old codes map
-# one-to-one onto the new codes below, preserving the original four-way
-# split with no further micro/small/medium subdivision:
-#   66->41, 67->44, 68->48, 69->52
-SMI_CUSTCD = ["41", "44", "48", "52"]
-
-NUM_READ_PROCESSES = int(os.environ.get("SAS_READ_PROCESSES", 4))
-DEBUG = os.environ.get("EIBWHP02_DEBUG", "0") == "1"
+HOST.mkdir(parents=True, exist_ok=True)
 
 
-def _debug(msg: str):
-    if DEBUG:
-        print(msg)
+# ==================================================
+# Helper to read SAS7BDAT files using pyreadstat
+# ==================================================
+def read_sas7bdat(filepath: Path) -> pl.DataFrame:
+    """Read SAS7BDAT file and convert to Polars DataFrame using pyreadstat"""
+    sas_path = filepath if filepath.suffix == '.sas7bdat' else filepath.with_suffix('.sas7bdat')
+    if not sas_path.exists():
+        raise FileNotFoundError(f"SAS7BDAT file not found: {sas_path}")
+    
+    # Read SAS file with metadata
+    df, meta = pyreadstat.read_sas7bdat(str(sas_path))
+    
+    # Convert to Polars DataFrame
+    return pl.from_pandas(df)
 
-# =====================================================
-# PERIOD CALCULATION  (mirrors the first DATA step)
-# =====================================================
 
-def compute_period_vars(reptdate: date) -> dict:
+# ==================================================
+# Helper to write SAS7BDAT files using pyreadstat
+# ==================================================
+def write_sas7bdat(df: pl.DataFrame, filepath: Path):
+    """Write DataFrame to SAS7BDAT format using pyreadstat"""
+    sas_path = filepath if filepath.suffix == '.sas7bdat' else filepath.with_suffix('.sas7bdat')
+    # Convert to pandas for pyreadstat writing
+    pd_df = df.to_pandas()
+    pyreadstat.write_sas7bdat(pd_df, str(sas_path))
+
+
+# ==================================================
+# Import PBBDPFMT.py and use its format functions
+# ==================================================
+def load_pbbdpfmt():
+    """Load format functions from PBBDPFMT.py"""
+    pgm_path = PGM / "PBBDPFMT.py"
+    if not pgm_path.exists():
+        raise FileNotFoundError(f"PBBDPFMT.py not found: {pgm_path}")
+    
+    # Import the module
+    spec = importlib.util.spec_from_file_location("PBBDPFMT", pgm_path)
+    pbbdpfmt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pbbdpfmt)
+    
+    return pbbdpfmt
+
+# Load formats once
+pbbdpfmt = load_pbbdpfmt()
+
+
+def apply_sas_format(df: pl.DataFrame, source_col: str, format_func, out_col: str) -> pl.DataFrame:
     """
-    Reproduces:
-      SELECT(DAY(REPTDATE)) -> SDD/WK/WK1
-      MM = MONTH(REPTDATE); WK1 handling for MM1
-      SDATE = MDY(MM,SDD,YEAR(REPTDATE))
+    Apply SAS format using a format function from PBBDPFMT.py
     """
-    day = reptdate.day
-
-    if day == 8:
-        sdd, wk, wk1 = 1, "1", "4"
-    elif day == 15:
-        sdd, wk, wk1 = 9, "2", "1"
-    elif day == 22:
-        sdd, wk, wk1 = 16, "3", "2"
-    else:
-        sdd, wk, wk1 = 23, "4", "3"
-
-    mm = reptdate.month
-
-    if wk == "1":
-        mm1 = mm - 1
-        if mm1 == 0:
-            mm1 = 12
-    else:
-        mm1 = mm
-
-    # NOTE: like the original SAS, this does not adjust the year when
-    # MM1 wraps from January back to December. Preserved as-is.
-    sdate = date(reptdate.year, mm, sdd)
-
-    return {
-        "NOWK": wk,
-        "NOWK1": wk1,
-        "REPTMON": f"{mm:02d}",
-        "REPTMON1": f"{mm1:02d}",
-        "REPTYEAR": str(reptdate.year),
-        "REPTDAY": f"{day:02d}",
-        "RDATE": reptdate.strftime("%d/%m/%y"),
-        "SDATE": sdate.strftime("%d/%m/%y"),
-    }
-
-
-def get_reptdate() -> date:
-    """
-    Uses yesterday's date instead of reading the BNM.REPTDATE control
-    dataset (matches the date logic from the original standalone Python
-    script: datetime.now() - timedelta(days=1)).
-    """
-    return (datetime.now() - timedelta(days=1)).date()
-
-# =====================================================
-# DISP SIMULATION
-# =====================================================
-
-def disp_shr(dataset_path: Path):
-    if not dataset_path.exists():
-        raise FileNotFoundError(f"[DISP ERROR] Required dataset missing: {dataset_path}")
-
-# =====================================================
-# DATA READING
-# =====================================================
-
-def read_sas_dataset(file_path: Path, usecols=None, num_processes=1):
-    try:
-        if num_processes and num_processes > 1:
-            # Newer pyreadstat versions don't accept num_processes/multiprocess
-            # directly on read_sas7bdat() -- multiprocessing goes through the
-            # separate read_file_multiprocessing() wrapper instead.
-            df, meta = pyreadstat.read_file_multiprocessing(
-                pyreadstat.read_sas7bdat,
-                str(file_path),
-                usecols=usecols,
-                num_processes=num_processes,
-            )
-        else:
-            df, meta = pyreadstat.read_sas7bdat(str(file_path), usecols=usecols)
-
-        print(f"[READ] {file_path.name}: {len(df)} rows, {len(df.columns)} cols "
-              f"(usecols={usecols}, num_processes={num_processes})")
-
-        if usecols:
-            missing = [c for c in usecols if c not in df.columns]
-            if missing:
-                print(f"[WARN] {file_path.name}: requested column(s) not found and "
-                      f"silently dropped by pyreadstat: {missing}. "
-                      f"Check for a naming mismatch (case, abbreviation, etc). "
-                      f"Actual columns present: {list(df.columns)}")
-        return df
-    except TypeError as e:
-        # Fallback for pyreadstat versions that support neither API variant
-        # for multiprocessing -- just read single-process rather than fail.
-        print(f"[WARN] Multiprocessing read unavailable ({e}); falling back to single-process read.")
-        df, meta = pyreadstat.read_sas7bdat(str(file_path), usecols=usecols)
-        print(f"[READ] {file_path.name}: {len(df)} rows, {len(df.columns)} cols "
-              f"(usecols={usecols}, num_processes=1 [fallback])")
-        if usecols:
-            missing = [c for c in usecols if c not in df.columns]
-            if missing:
-                print(f"[WARN] {file_path.name}: requested column(s) not found and "
-                      f"silently dropped by pyreadstat: {missing}. "
-                      f"Actual columns present: {list(df.columns)}")
-        return df
-    except Exception as e:
-        raise Exception(f"Error reading {file_path}: {e}")
-
-# =====================================================
-# SECTA / SECTB DUAL-FORMAT EXPANSION
-#   PUT(SECTORCD,$SECTA.) -> if non-blank, OUTPUT
-#   PUT(SECTORCD,$SECTB.) -> if non-blank, OUTPUT (again)
-# A single input row can therefore produce 0, 1, or 2 output rows.
-#
-# format_secta/format_sectb do string RANGE comparisons on 4-character
-# zero-padded sector codes (e.g. '0110' <= c <= '0139'). If SECTORCD comes
-# through as a number (e.g. 110 instead of '0110'), naive str() gives
-# "110" and every range comparison silently breaks -- so raw values are
-# normalized to zero-padded strings before being handed to the format
-# functions.
-# =====================================================
-
-def _sectorcd_to_str(val) -> str:
-    if val is None:
-        return ""
-    if isinstance(val, float):
-        if pd.isna(val):
-            return ""
-        if val.is_integer():
-            return str(int(val)).zfill(4)
-        return str(val).strip()
-    if isinstance(val, int):
-        return str(val).zfill(4)
-    s = str(val).strip()
-    # A purely numeric string (e.g. '110' instead of '0110') needs the same
-    # zero-padding as the int/float cases above -- SAS character columns
-    # aren't guaranteed to already carry leading zeros.
-    if s.isdigit():
-        return s.zfill(4)
-    return s
-
-
-def expand_sector_formats(df: pd.DataFrame, sector_col="SECTORCD") -> pd.DataFrame:
-    normalized = df[sector_col].apply(_sectorcd_to_str)
-
-    frames = []
-    for fmt_func in (format_secta, format_sectb):
-        tmp = df.copy()
-        tmp["SECTCD"] = normalized.apply(fmt_func)
-        tmp["SECTCD"] = tmp["SECTCD"].str.strip()
-        tmp = tmp[tmp["SECTCD"] != ""]
-        frames.append(tmp)
-
-    if not frames or all(f.empty for f in frames):
-        return pd.DataFrame(columns=list(df.columns) + ["SECTCD"])
-    return pd.concat(frames, ignore_index=True)
-
-# =====================================================
-# ALW  (merge of prior-period ALW1 and current-period ALW)
-# =====================================================
-
-def build_alw(loan_prev_path: Path, loan_curr_path: Path) -> pd.DataFrame:
-    # PROC SORT ... OUT=ALW1 (prior period, PRODUCT filter, then renamed on merge)
-    alw1_raw = read_sas_dataset(loan_prev_path, usecols=ALW1_COLS, num_processes=NUM_READ_PROCESSES)
-    _debug(f"[DEBUG] alw1 (prior period) raw rows: {len(alw1_raw)}; "
-          f"PRODUCT sample: {alw1_raw['PRODUCT'].dropna().unique()[:10].tolist()}")
-    alw1 = alw1_raw[alw1_raw["PRODUCT"].isin(PRODUCT_FILTER)].copy()
-    _debug(f"[DEBUG] alw1 after PRODUCT filter {PRODUCT_FILTER}: {len(alw1)} rows")
-    alw1 = alw1.rename(columns={"BALANCE": "LASTBAL", "NOTETERM": "LASTNOTE"})
-    alw1 = alw1.sort_values(["ACCTNO", "NOTENO", "SECTORCD"])
-
-    # PROC SORT ... OUT=ALW (current period, PRODUCT filter)
-    alw0_raw = read_sas_dataset(loan_curr_path, usecols=ALW0_COLS, num_processes=NUM_READ_PROCESSES)
-    _debug(f"[DEBUG] alw0 (current period) raw rows: {len(alw0_raw)}; "
-          f"PRODUCT sample: {alw0_raw['PRODUCT'].dropna().unique()[:10].tolist()}")
-    alw0 = alw0_raw[alw0_raw["PRODUCT"].isin(PRODUCT_FILTER)].copy()
-    _debug(f"[DEBUG] alw0 after PRODUCT filter {PRODUCT_FILTER}: {len(alw0)} rows")
-    alw0 = alw0.sort_values(["ACCTNO", "NOTENO", "SECTORCD"])
-
-    # MERGE ALW1(IN=A) ALW(IN=B); BY ACCTNO NOTENO SECTORCD;
-    merged = pd.merge(
-        alw1, alw0,
-        on=["ACCTNO", "NOTENO", "SECTORCD"],
-        how="outer", suffixes=("_prev", "_curr"), indicator=True,
+    return df.with_columns(
+        pl.col(source_col).map_elements(
+            lambda x: format_func(x) if x is not None else '',
+            return_dtype=pl.Utf8
+        ).alias(out_col)
     )
-    _debug(f"[DEBUG] merged rows: {len(merged)}; "
-          f"_merge counts: {merged['_merge'].value_counts().to_dict()}")
 
-    # Shared columns: in a SAS MERGE, the later dataset's (ALW / current
-    # period) value wins whenever that BY-group is present in it; otherwise
-    # fall back to the prior period's value.
-    #
-    # NOTE: pandas only suffixes a column with _prev/_curr when that column
-    # name exists in BOTH input frames. If one side is missing a requested
-    # column entirely (see the [WARN] at read time), it shows up here
-    # unsuffixed instead -- handled below rather than assumed away.
-    shared_cols = ["PRODUCT", "PRODCD", "CUSTCD", "AMTIND", "ISSDTE", "BRANCH"]
-    for col in shared_cols:
-        prev_col = f"{col}_prev"
-        curr_col = f"{col}_curr"
-        has_prev = prev_col in merged.columns
-        has_curr = curr_col in merged.columns
 
-        if has_prev and has_curr:
-            merged[col] = merged[curr_col].combine_first(merged[prev_col])
-            merged = merged.drop(columns=[curr_col, prev_col])
-        elif col in merged.columns:
-            # Only one of the two frames had this column, so pandas never
-            # suffixed it -- already in its final form, nothing to do.
-            pass
-        elif has_curr:
-            merged[col] = merged[curr_col]
-            merged = merged.drop(columns=[curr_col])
-        elif has_prev:
-            merged[col] = merged[prev_col]
-            merged = merged.drop(columns=[prev_col])
-        else:
-            print(f"[WARN] Column '{col}' not present in either period's data; filling with NaN.")
-            merged[col] = pd.NA
+def safe_select(df: pl.DataFrame, cols: list) -> pl.DataFrame:
+    """Select only columns that exist in the DataFrame"""
+    available_cols = [c for c in cols if c in df.columns]
+    return df.select(available_cols)
 
-    both = merged["_merge"] == "both"
-    left_only = merged["_merge"] == "left_only"    # in ALW1 only (^B)
-    right_only = merged["_merge"] == "right_only"  # in ALW only (^A)
 
-    merged["NOACCT"] = 1
-    merged["DISBURSE"] = 0.0
-    merged["REPAID"] = 0.0
+# =========================
+# 1) REPTDATE - Use current date minus 1 day
+# =========================
+REPTDATE = datetime.now() - timedelta(days=1)
+REPTYEAR = f"{REPTDATE.year:04d}"
+REPTMON  = f"{REPTDATE.month:02d}"
 
-    repaid_mask = both & (merged["LASTBAL"] > merged["BALANCE"])
-    disburse_mask = both & ~repaid_mask
-    merged.loc[repaid_mask, "REPAID"] = merged.loc[repaid_mask, "LASTBAL"] - merged.loc[repaid_mask, "BALANCE"]
-    merged.loc[disburse_mask, "DISBURSE"] = merged.loc[disburse_mask, "BALANCE"] - merged.loc[disburse_mask, "LASTBAL"]
+print(f"Processing for month: {REPTMON} (Report Date: {REPTDATE.strftime('%Y-%m-%d')})")
+print(f"Report Date based on: current date minus 1 day")
 
-    merged.loc[left_only, "REPAID"] = merged.loc[left_only, "LASTBAL"]
-    merged.loc[right_only, "DISBURSE"] = merged.loc[right_only, "BALANCE"]
+# Define the consistent column order for DEP
+DEP_COLS = ["ACCTNO", "PRODCD", "PURPOSE", "PRODUCT"]
 
-    _debug(f"[DEBUG] merged SECTORCD sample (raw): {merged['SECTORCD'].dropna().unique()[:10].tolist()}")
-    _debug(f"[DEBUG] merged SECTORCD normalized sample: "
-          f"{merged['SECTORCD'].apply(_sectorcd_to_str).unique()[:10].tolist()}")
+# =========================
+# 2) SA - Saving accounts with SAPROD format
+# =========================
+print("\nLoading SA data...")
+saving_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
 
-    expanded = expand_sector_formats(merged, sector_col="SECTORCD")
-    _debug(f"[DEBUG] alw after SECTA/SECTB expansion: {len(expanded)} rows "
-          f"(from {len(merged)} pre-expansion rows)")
-    if len(expanded) > 0:
-        _debug(f"[DEBUG] alw SECTCD value counts (top 10): "
-              f"{expanded['SECTCD'].value_counts().head(10).to_dict()}")
+sa_saca = read_sas7bdat(SACA / "saving.sas7bdat")
+sa_isaca = read_sas7bdat(ISACA / "saving.sas7bdat")
 
-    keep = ["SECTCD", "DISBURSE", "REPAID", "APPRLIM2", "AMTIND",
-            "CUSTCD", "NOACCT", "PRODCD", "BRANCH"]
-    result = expanded[keep].copy()
-    # Use pandas' nullable dtypes for the two columns ULOAN doesn't have
-    # (PRODCD, NOACCT). Giving them well-defined dtypes here -- rather than
-    # leaving pandas to infer across an all-NaN column during concat --
-    # avoids the "empty/all-NA entries" FutureWarning when alw and ualw
-    # are combined later.
-    result["PRODCD"] = result["PRODCD"].astype("string")
-    result["NOACCT"] = result["NOACCT"].astype("Int64")
-    return result
+SA = (
+    pl.concat([
+        safe_select(sa_saca, saving_cols),
+        safe_select(sa_isaca, saving_cols),
+    ], how="vertical_relaxed")
+    .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
+)
 
-# =====================================================
-# UALW  (from ULOAN, appended onto ALW)
-# =====================================================
+# Apply SAPROD format
+SA = apply_sas_format(SA, source_col="PRODUCT", format_func=pbbdpfmt.saprod_format, out_col="PRODCD")
+# Select and order columns consistently
+SA = SA.select(DEP_COLS)
 
-def build_ualw(uloan_path: Path) -> pd.DataFrame:
-    df = read_sas_dataset(uloan_path, usecols=UALW_COLS, num_processes=NUM_READ_PROCESSES)
-    _debug(f"[DEBUG] uloan raw rows: {len(df)}; "
-          f"SECTORCD sample: {df['SECTORCD'].dropna().unique()[:10].tolist()}")
+# =========================
+# 3) CA - Current accounts with CAPROD format
+# =========================
+print("\nLoading CA data...")
+current_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
 
-    # RETAIN DISBURSE REPAID 0; -> ULOAN has no DISBURSE/REPAID columns at
-    # all, so SAS defaults every row to 0 for both. Confirmed against the
-    # real file (see UALW_COLS comment).
-    df["DISBURSE"] = 0.0
-    df["REPAID"] = 0.0
+ca_saca = read_sas7bdat(SACA / "current.sas7bdat")
+ca_isaca = read_sas7bdat(ISACA / "current.sas7bdat")
 
-    # APPRLIM2 isn't on ULOAN and isn't RETAINed either, so in the original
-    # SAS every row comes out missing (.) for it. PROC SUMMARY treats
-    # missing as 0 when summing, so NaN here reproduces that behavior via
-    # pandas' default sum-skips-NaN.
-    df["APPRLIM2"] = pd.NA
+CA = (
+    pl.concat([
+        safe_select(ca_saca, current_cols),
+        safe_select(ca_isaca, current_cols),
+    ], how="vertical_relaxed")
+    .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
+)
 
-    expanded = expand_sector_formats(df, sector_col="SECTORCD")
-    _debug(f"[DEBUG] ualw after SECTA/SECTB expansion: {len(expanded)} rows "
-          f"(from {len(df)} pre-expansion rows)")
+# Apply CAPROD format
+CA = apply_sas_format(CA, source_col="PRODUCT", format_func=pbbdpfmt.caprod_format, out_col="PRODCD")
+# Select and order columns consistently
+CA = CA.select(DEP_COLS)
 
-    keep = ["SECTCD", "DISBURSE", "REPAID", "APPRLIM2", "AMTIND", "CUSTCD", "BRANCH"]
-    result = expanded[keep].copy()
-    # ULOAN has no PRODCD or NOACCT at all. Add them explicitly with the
-    # same nullable dtypes used on the ALW side (see build_alw) so the
-    # later pd.concat([alw, ualw]) sees two well-typed all-NA columns
-    # instead of triggering pandas' "empty/all-NA entries" FutureWarning.
-    result["PRODCD"] = pd.array([pd.NA] * len(result), dtype="string")
-    result["NOACCT"] = pd.array([pd.NA] * len(result), dtype="Int64")
-    return result
+# =========================
+# 4) FD - Fixed Deposit base
+# =========================
+print("\nLoading FD base data...")
+fd_saca = read_sas7bdat(SACA / "fd.sas7bdat")
+fd_isaca = read_sas7bdat(ISACA / "fd.sas7bdat")
 
-# =====================================================
-# SUMMARIES
-#   PROC SUMMARY DATA=ALW NWAY CLASS BRANCH CUSTCD AMTIND ...
-#     WHERE SUBSTR(PRODCD,1,3) IN ('341'..'344') AND SECTCD NE '0210'
-#   PROC SUMMARY DATA=ALWX NWAY WHERE CUSTCD IN ('66'..'69') CLASS BRANCH
-# =====================================================
+# FD doesn't have PRODUCT column, use ACCTTYPE as PRODUCT
+if "PRODUCT" in fd_saca.columns:
+    fd_saca_prod = fd_saca.select(["ACCTNO", "PURPOSE", "PRODUCT"])
+else:
+    print("Using ACCTTYPE as PRODUCT for FD base (SACA)")
+    fd_saca_prod = fd_saca.select(["ACCTNO", "PURPOSE", "ACCTTYPE"]).rename({"ACCTTYPE": "PRODUCT"})
 
-def summarize(alw: pd.DataFrame) -> pd.DataFrame:
-    _debug(f"[DEBUG] combined (alw+ualw) rows entering summarize: {len(alw)}")
-    if len(alw) > 0:
-        _debug(f"[DEBUG] combined PRODCD sample: {alw['PRODCD'].dropna().unique()[:10].tolist()}")
-        _debug(f"[DEBUG] combined CUSTCD sample: {alw['CUSTCD'].dropna().unique()[:15].tolist()}")
+if "PRODUCT" in fd_isaca.columns:
+    fd_isaca_prod = fd_isaca.select(["ACCTNO", "PURPOSE", "PRODUCT"])
+else:
+    print("Using ACCTTYPE as PRODUCT for FD base (ISACA)")
+    fd_isaca_prod = fd_isaca.select(["ACCTNO", "PURPOSE", "ACCTTYPE"]).rename({"ACCTTYPE": "PRODUCT"})
 
-    # NOTE: rows appended from UALW have no PRODCD/NOACCT (NaN), so
-    # SUBSTR(PRODCD,1,3) never matches the filter and they're excluded here
-    # -- same outcome as the original SAS WHERE clause on missing PRODCD.
-    prodcd_prefix = alw["PRODCD"].astype(str).str[:3]
-    _debug(f"[DEBUG] PRODCD prefix value counts (top 10): {prodcd_prefix.value_counts().head(10).to_dict()}")
-    mask = prodcd_prefix.isin(PRODCD_PREFIX_FILTER) & (alw["SECTCD"] != EXCLUDED_SECTCD)
-    filtered = alw[mask]
-    _debug(f"[DEBUG] rows after PRODCD prefix {PRODCD_PREFIX_FILTER} + SECTCD!={EXCLUDED_SECTCD} filter: {len(filtered)}")
+FD_base = (
+    pl.concat([fd_saca_prod, fd_isaca_prod], how="vertical_relaxed")
+    .sort("ACCTNO")
+)
 
-    alwx = (
-        filtered.groupby(["BRANCH", "CUSTCD", "AMTIND"], as_index=False)
-        [["DISBURSE", "REPAID", "APPRLIM2", "NOACCT"]]
-        .sum()
+# =========================
+# 5) FDCD - Fixed Deposit product codes
+# =========================
+print("\nLoading FDCD data...")
+fdcd_cols = ["ACCTNO","ACCTTYPE","OPENIND","INTPLAN"]
+
+fdcd_fdlib = read_sas7bdat(FDLIB / "fd.sas7bdat")
+fdcd_ifdlib = read_sas7bdat(IFDLIB / "fd.sas7bdat")
+
+FDCD_union = pl.concat([
+    safe_select(fdcd_fdlib, fdcd_cols),
+    safe_select(fdcd_ifdlib, fdcd_cols),
+], how="vertical_relaxed")
+
+FDCD = (
+    FDCD_union
+    .filter(~pl.col("ACCTTYPE").is_in([397,398]) & pl.col("OPENIND").is_in(["D","O"]))
+)
+
+# Apply FDPROD format
+FDCD = apply_sas_format(FDCD, source_col="INTPLAN", format_func=pbbdpfmt.fdprod_format, out_col="PRODCD")
+
+# Apply overrides
+FDCD = FDCD.with_columns(
+    pl.when(pl.col("ACCTTYPE").is_in([315,394]))
+    .then(pl.lit("42132"))
+    .when(pl.col("ACCTTYPE").is_in([397,398]))
+    .then(pl.lit("42199"))
+    .otherwise(pl.col("PRODCD"))
+    .alias("PRODCD")
+)
+
+# PROC SORT DATA=FDCD NODUPKEYS; BY ACCTNO;RUN;
+FDCD = (
+    FDCD.sort(["ACCTNO"])
+    .unique(subset=["ACCTNO"], keep="first")
+    .select(["ACCTNO","PRODCD"])
+)
+
+# =========================
+# 6) FD - Merge base with product codes
+# =========================
+FD = FD_base.join(FDCD, on="ACCTNO", how="inner")
+# Select and order columns consistently
+FD = FD.select(DEP_COLS)
+
+# =========================
+# 7) DEP - Combined deposits with filters
+# =========================
+print("\nCombining deposits...")
+DEP = pl.concat([SA, CA, FD], how="vertical_relaxed")
+
+valid_prodcd = ['42110','42310','42120','42320','42130',
+                '42133','42132','42180','42610','42630','34180',
+                '42199','42699']
+DEP = DEP.filter(pl.col("PRODCD").is_in(valid_prodcd))
+
+# Apply PRODUCT filter
+DEP = DEP.filter(
+    ~(
+        pl.col("PRODCD").is_in(["42199","42699"])
+        & ~pl.col("PRODUCT").is_in([72,413])
     )
-    _debug(f"[DEBUG] alwx (first summary) rows: {len(alwx)}")
-    if len(alwx) > 0:
-        _debug(f"[DEBUG] alwx CUSTCD sample: {alwx['CUSTCD'].astype(str).unique()[:15].tolist()}")
+)
 
-    custcd_norm = alwx["CUSTCD"].astype(str).str.strip()
-    smi_mask = custcd_norm.isin(SMI_CUSTCD)
-    _debug(f"[DEBUG] rows matching SMI_CUSTCD {SMI_CUSTCD}: {smi_mask.sum()} of {len(alwx)}")
+# PROC SORT DATA=DEP; BY ACCTNO;RUN;
+DEP = DEP.sort("ACCTNO")
 
-    alwloan = (
-        alwx[smi_mask]
-        .groupby("BRANCH", as_index=False)["DISBURSE"]
-        .sum()
-        .sort_values("BRANCH")
-    )
-    return alwloan
+# =========================
+# 8) MERGEX - Deposits with PURPOSE in ('5','6')
+# =========================
+MERGEX = DEP.filter(pl.col("PURPOSE").is_in(["5","6"]))
 
-# =====================================================
-# REPORT / SYSOUT
-# =====================================================
+# =========================
+# 9) CLIENT - Parse fixed-width text file
+# =========================
+print("\nParsing CLIENT file...")
+def parse_client_fixed_width(path: Path) -> pl.DataFrame:
+    rows = []
+    if not path.exists():
+        print(f"Warning: CLIENT file not found: {path}")
+        return pl.DataFrame({
+            "ACCTNO": pl.Series([], dtype=pl.Int64),
+            "NAME": pl.Series([], dtype=pl.Utf8),
+            "KEY": pl.Series([], dtype=pl.Utf8)
+        })
+    
+    with path.open("r", encoding="latin1", errors="ignore") as f:
+        for line in f:
+            acct_str = line[1:11] if len(line) >= 11 else ""
+            acct_str = acct_str.strip()
+            
+            if acct_str and all(c in "0123456789" for c in acct_str):
+                name_str = line[20:60] if len(line) >= 60 else ""
+                name_str = name_str.rstrip()
+                key = name_str[:10] if name_str else ""
+                rows.append({
+                    "ACCTNO": int(acct_str),
+                    "NAME": name_str,
+                    "KEY": key
+                })
+    
+    if not rows:
+        return pl.DataFrame({
+            "ACCTNO": pl.Series([], dtype=pl.Int64),
+            "NAME": pl.Series([], dtype=pl.Utf8),
+            "KEY": pl.Series([], dtype=pl.Utf8)
+        })
+    return pl.DataFrame(rows)
 
-def build_report(alwloan: pd.DataFrame, rdate_str: str) -> list:
-    lines = [
-        f"{JOB_NAME}: SMI (CUSTCD 41,44,48,52 - new scheme equiv. of 66,67,68,69) BY BRANCH AS AT {rdate_str}",
-        "FOR LOANS PRODUCTS 131,132,720,725",
-        "-" * 40,
-        f"{'BRANCH':<15}{'DISBURSE':>20}",
-        "-" * 40,
-    ]
-    total = 0.0
-    for _, row in alwloan.iterrows():
-        branch = str(row["BRANCH"]).zfill(3)
-        disburse = row["DISBURSE"]
-        lines.append(f"{branch:<15}{disburse:>20,.2f}")
-        total += disburse
-    lines.append("-" * 40)
-    lines.append(f"{'TOTAL':<15}{total:>20,.2f}")
-    lines.append("-" * 40)
-    lines.append("END OF REPORT")
-    return lines
+CLIENT = parse_client_fixed_width(CLIENT_RPT)
 
+if len(CLIENT) > 0:
+    CLIENT = CLIENT.sort("ACCTNO").unique(subset=["ACCTNO"], keep="first")
+    CLIENT = CLIENT.join(DEP.select("ACCTNO").unique(), on="ACCTNO", how="inner")
 
-def write_sysout(records, spool_file: Path):
-    SPOOL_DIR.mkdir(parents=True, exist_ok=True)
-    with open(spool_file, "w", encoding="utf-8") as f:
-        for line in records:
-            f.write(line + "\n")
-    print(f"[SYSOUT] Report written to spool: {spool_file}")
+# =========================
+# 10) HOST.TRUST&REPTMON - Trust accounts
+# =========================
+TRUST = pl.concat([
+    MERGEX.select(["ACCTNO"]),
+    CLIENT.select(["ACCTNO"])
+], how="vertical_relaxed")
 
-# =====================================================
-# JOB EXECUTION
-# =====================================================
+# =========================
+# 11) HOST.FDCD&REPTMON - FD entity mapping
+# =========================
+print("\nCreating FDCD_MONTH...")
+FD_PBB  = read_sas7bdat(FDLIB / "fd.sas7bdat").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PBB "))
+FD_PIBB = read_sas7bdat(IFDLIB / "fd.sas7bdat").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PIBB "))
+FDCD_MONTH = pl.concat([FD_PBB, FD_PIBB], how="vertical_relaxed").select(["ACCTNO","ENTITY"])
 
-def run_job():
-    from datetime import datetime as dt
+# =========================
+# 12) Write outputs in both SAS7BDAT and Parquet formats
+# =========================
 
-    print(f"========== START JOB {JOB_NAME} ==========")
+# Write TRUST dataset
+trust_path = HOST / f"TRUST{REPTMON}"
+TRUST.write_parquet(trust_path.with_suffix('.parquet'))
+write_sas7bdat(TRUST, trust_path.with_suffix('.sas7bdat'))
 
-    reptdate = get_reptdate()
-    period = compute_period_vars(reptdate)
-    print(f"[INFO] REPTDATE={reptdate} -> {period}")
+# Write FDCD_MONTH dataset
+fdcd_path = HOST / f"FDCD{REPTMON}"
+FDCD_MONTH.write_parquet(fdcd_path.with_suffix('.parquet'))
+write_sas7bdat(FDCD_MONTH, fdcd_path.with_suffix('.sas7bdat'))
 
-    loan_prev_path = INPUT_DIR / f"loan{period['REPTMON1']}{period['NOWK1']}.sas7bdat"
-    loan_curr_path = INPUT_DIR / f"loan{period['REPTMON']}{period['NOWK']}.sas7bdat"
-    uloan_curr_path = INPUT_DIR / f"uloan{period['REPTMON']}{period['NOWK']}.sas7bdat"
+# Build Arrow IPC transport file
+tables = {
+    f"TRUST{REPTMON}": TRUST.to_arrow(),
+    f"FDCD{REPTMON}": FDCD_MONTH.to_arrow(),
+}
 
-    for path in (loan_prev_path, loan_curr_path, uloan_curr_path):
-        disp_shr(path)
-        print(f"[SHR] Validated input dataset: {path.name}")
+ipc_path = HOST / f"TRUST_FDCD_{REPTMON}.arrow"
+with pa.ipc.new_file(ipc_path, tables[f"TRUST{REPTMON}"].schema) as writer:
+    for name, table in tables.items():
+        writer.write_table(table, name)
 
-    alw = build_alw(loan_prev_path, loan_curr_path)
-    ualw = build_ualw(uloan_curr_path)
-    combined = pd.concat([alw, ualw], ignore_index=True)
-
-    alwloan = summarize(combined)
-
-    spool_file = SPOOL_DIR / f"{JOB_NAME}_{dt.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    report = build_report(alwloan, period["RDATE"])
-    write_sysout(report, spool_file)
-
-    print(f"========== END JOB {JOB_NAME} ==========")
-
-# =====================================================
-# ENTRY POINT
-# =====================================================
-
-if __name__ == "__main__":
-    try:
-        run_job()
-    except Exception as e:
-        print(f"[JOB FAILED] {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(8)
+print(f"\nOutput files:")
+print(f"  {trust_path}.parquet")
+print(f"  {trust_path}.sas7bdat")
+print(f"  {fdcd_path}.parquet")
+print(f"  {fdcd_path}.sas7bdat")
+print(f"  {ipc_path}")
+print(f"\nReport Date (current date - 1 day): {REPTDATE.strftime('%Y-%m-%d')}")
+print(f"Report Month: {REPTMON}")
+print(f"Report Year: {REPTYEAR}")
+print(f"TRUST records: {len(TRUST)}")
+print(f"FDCD_MONTH records: {len(FDCD_MONTH)}")
