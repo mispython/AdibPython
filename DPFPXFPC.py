@@ -3,6 +3,7 @@ import pyreadstat
 from pathlib import Path
 import datetime
 import sys
+import os
 
 # TODO: adjust this path if PBBELF.py lives somewhere else relative to this script
 sys.path.insert(0, "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS")
@@ -24,15 +25,23 @@ LNNOTE_COLUMNS = ["ISSUEDT", "LOANTYPE", "PAIDIND", "BALANCE", "NTBRCH", "COLLDE
 # based on available RAM - 500k rows x ~8 columns is a small, safe chunk.
 CHUNKSIZE = 500_000
 
-HPD_VALUES = []  # TODO: UNRESOLVED - the real numeric LOANTYPE codes for "HPD" loans
-                  # were defined in a SAS macro (%LET HPD = ...) that wasn't available
-                  # when this was translated. As-is, this filters out ALL rows (empty
-                  # result) rather than silently using wrong codes. Replace with the
-                  # real list, e.g. HPD_VALUES = [4, 5, 6, 15, 20, ...], before relying
-                  # on this script's output.
+# In the original SAS, &HPD was never defined inside this DATA step - it was
+# a macro variable set externally by whatever job/driver invoked this program
+# (e.g. a %LET HPD = (...) elsewhere, or a parameter passed at submit time).
+# Mirror that here: read it from an environment variable instead of hardcoding
+# it in this script, so the caller supplies it the same way SAS expected.
+#
+#   Example (bash), before running this script:
+#       export HPD_CODES="4,5,6,15,20,25,26,30,31,32,34,61,70,71,72,73,78"
+#       python3 EIBMBRAS.py
+#
+_hpd_raw = os.environ.get("HPD_CODES", "")
+HPD_VALUES = [int(v.strip()) for v in _hpd_raw.split(",") if v.strip()]
 if not HPD_VALUES:
-    print("WARNING: HPD_VALUES is empty - LOANTYPE filter will match 0 rows until "
-          "the real HPD code list is supplied.")
+    print("WARNING: HPD_CODES environment variable is not set (or empty) - "
+          "LOANTYPE filter will match 0 rows. Set HPD_CODES to a comma-separated "
+          "list of numeric loan-type codes before running this script, e.g.:\n"
+          '  export HPD_CODES="4,5,6,15,20,..."')
 
 
 # ---------------------------------------------------------------------------
