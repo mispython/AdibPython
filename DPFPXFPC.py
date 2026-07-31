@@ -1,665 +1,285 @@
-import polars as pl
-import pandas as pd
+from __future__ import annotations
+
 from pathlib import Path
-from datetime import datetime, timedelta
-import saspy
+from datetime import datetime
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pyarrow.ipc as ipc
+import duckdb
+import polars as pl
 
-def calculate_report_dates():
-    """Calculate report dates based on current date and week logic"""
-    today = datetime.now()
-    day = today.day
-    
-    if 8 <= day <= 14:
-        reptdate = datetime(today.year, today.month, 8)
-        wk = '1'
-        if today.month == 1:
-            mm1 = 12
-            yy1 = today.year - 1
-        else:
-            mm1 = today.month - 1
-            yy1 = today.year
-    elif 15 <= day <= 21:
-        reptdate = datetime(today.year, today.month, 15)
-        wk = '2'
-        mm1 = today.month
-        yy1 = today.year
-    elif 22 <= day <= 27:
-        reptdate = datetime(today.year, today.month, 22)
-        wk = '3'
-        mm1 = today.month
-        yy1 = today.year
-    else:
-        reptdate = datetime(today.year, today.month, 1) - timedelta(days=1)
-        wk = '4'
-        mm1 = reptdate.month
-        yy1 = reptdate.year
-    
-    return {
-        'reptdate': reptdate,
-        'wk': wk,
-        'reptyear4': reptdate.year,
-        'reptmon': str(reptdate.month).zfill(2),
-        'mm1': mm1,
-        'yy1': yy1
-    }
+# ============================================
+# LIBRARY MAPPINGS (adjust to your environment)
+# ============================================
+# SAS LIBNAME SACA  -> folder with Parquet tables for PBB MNITB
+# SAS LIBNAME ISACA -> folder with Parquet tables for PIBB MNITB
+# SAS LIBNAME FD    -> folder with Parquet tables for PBB MNIFD
+# SAS LIBNAME IFD   -> folder with Parquet tables for PIBB MNIFD
+# SAS LIBNAME HOST  -> output folder representing SAP.PBB.QRF.DP.LIST
+# SAS DD CLIENT     -> fixed-width text file SAP.B033.DP.SOLCA.RPT
+# SAS PGM(PBBDPFMT) -> CNTLOUT-like parquet(s) for formats (SAPROD, CAPROD, FDPROD)
 
-def parse_date(date_str: str) -> datetime:
-    """Parse date string in DD/MM/YYYY format"""
-    if not date_str or date_str.strip() == '' or date_str.strip().upper() == 'NULL':
-        return None
-    try:
-        date_str = date_str.strip()
-        # Handle multiple date formats
-        for sep in ['/', '-', '.']:
-            if sep in date_str:
-                parts = date_str.split(sep)
-                if len(parts) == 3:
-                    # Try to determine format
-                    if len(parts[0]) == 4:  # YYYY/MM/DD
-                        return datetime(int(parts[0]), int(parts[1]), int(parts[2]))
-                    else:  # DD/MM/YYYY
-                        return datetime(int(parts[2]), int(parts[1]), int(parts[0]))
-        return None
-    except:
-        return None
+ROOT = Path(".")  # repo root
+SACA   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT" / "conv" 
+ISACA  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT" / "islamic" 
+FDLIB  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT" / "fd"  
+IFDLIB = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT" / "ifd"
+PGM    = ROOT / "parquet_input" / "PGM"  / "PBBDPFMT"  # PROC FORMAT cntlout parquet(s)
+HOST   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTRUT"
+CLIENT_RPT = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT" / "CLIENT.txt"  # TEXT FILE
 
-def read_txt_file_robust(file_path: Path, expected_columns: list, skip_rows: int = 5) -> pl.DataFrame:
-    """Robust helper function to read TXT file with pipe delimiter"""
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    
-    try:
-        # Read file line by line to handle malformed data better
-        lines = []
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            # Skip header rows
-            for _ in range(skip_rows):
-                next(f, None)
-            
-            # Read the rest of the lines
-            for line in f:
-                line = line.strip()
-                if line:  # Skip empty lines
-                    # Handle quoted fields with pipe delimiter
-                    parts = []
-                    current = []
-                    in_quotes = False
-                    for char in line:
-                        if char == '"' and not in_quotes:
-                            in_quotes = True
-                            current.append(char)
-                        elif char == '"' and in_quotes:
-                            in_quotes = False
-                            current.append(char)
-                        elif char == '|' and not in_quotes:
-                            parts.append(''.join(current))
-                            current = []
-                        else:
-                            current.append(char)
-                    parts.append(''.join(current))
-                    lines.append(parts)
-        
-        # Convert to polars DataFrame
-        if not lines:
-            return pl.DataFrame({col: [] for col in expected_columns})
-        
-        # Determine max columns
-        max_cols = max(len(line) for line in lines)
-        
-        # Pad lines to max columns
-        padded_lines = [line + [''] * (max_cols - len(line)) for line in lines]
-        
-        # Create DataFrame
-        df = pl.DataFrame(padded_lines)
-        
-        # Rename columns based on position
-        actual_cols = df.columns
-        rename_map = {actual_cols[i]: expected_columns[i] for i in range(min(len(actual_cols), len(expected_columns)))}
-        df = df.rename(rename_map)
-        
-        # Add missing columns
-        for col in expected_columns:
-            if col not in df.columns:
-                df = df.with_columns(pl.lit(None).alias(col))
-        
-        # Remove any extra columns
-        df = df.select(expected_columns)
-        
-        return df
-    except Exception as e:
-        print(f"Error reading {file_path}: {e}")
-        return pl.DataFrame({col: [] for col in expected_columns})
+HOST.mkdir(parents=True, exist_ok=True)
 
-def write_sas_dataset_saspy(df: pl.DataFrame, libref: str, table_name: str, sas_session):
-    """Write Polars DataFrame to SAS .sas7bdat using saspy"""
-    if df.is_empty():
-        print(f"Warning: DataFrame for {table_name} is empty, skipping...")
-        return
-    
-    # Convert to pandas
-    pandas_df = df.to_pandas()
-    
-    # Convert datetime columns to string for SAS compatibility
-    for col in pandas_df.columns:
-        if pd.api.types.is_datetime64_any_dtype(pandas_df[col]):
-            pandas_df[col] = pandas_df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-        elif pandas_df[col].dtype == 'object':
-            # Convert strings to proper format
-            pandas_df[col] = pandas_df[col].astype(str)
-    
-    # Write to SAS using df2sd
-    try:
-        sas_session.df2sd(pandas_df, table=table_name, libref=libref)
-        print(f"Successfully wrote {table_name} to {libref}")
-    except Exception as e:
-        print(f"Error writing {table_name}: {e}")
-        # Try alternative method using SAS code
-        try:
-            # Use SAS code to create dataset
-            sas_code = f"""
-            data {libref}.{table_name};
-            set work.{table_name};
-            run;
-            """
-            sas_session.submit(sas_code)
-            print(f"Successfully wrote {table_name} to {libref} using SAS code")
-        except Exception as e2:
-            print(f"Alternative method also failed: {e2}")
 
-def safe_str_replace(df: pl.DataFrame, col_name: str, old: str, new: str) -> pl.DataFrame:
-    """Safely replace string in a column if it exists"""
-    if col_name in df.columns:
-        return df.with_columns(
-            pl.col(col_name).str.replace_all(old, new).alias(col_name)
-        )
+# ==================================================
+# Helpers to apply PROC FORMAT (PGM concern-resolved)
+# ==================================================
+# Expect CNTLOUT-like parquet per format with columns at least:
+# FMTNAME, START, END, LABEL (numeric/char START/END; inclusive range)
+# LOW/HIGH are pre-resolved to numeric/char bounds in these files.
+
+def load_format(fmtname: str) -> pl.DataFrame:
+    # load corresponding parquet; you can also consolidate all formats in one file and filter by FMTNAME
+    path = PGM / f"{fmtname}.parquet"
+    if not path.exists():
+        raise FileNotFoundError(f"Missing CNTLOUT parquet for format {fmtname}: {path}")
+    df = pl.read_parquet(path)
+    # Normalize columns
+    expected = {"FMTNAME","START","END","LABEL"}
+    missing = expected - set(df.columns)
+    if missing:
+        raise ValueError(f"{fmtname} parquet missing columns: {missing}")
     return df
 
-def safe_str_slice(df: pl.DataFrame, col_name: str, start: int, length: int) -> pl.DataFrame:
-    """Safely slice string in a column if it exists"""
-    if col_name in df.columns:
-        return df.with_columns(
-            pl.col(col_name).str.slice(start, length).alias(col_name)
-        )
-    return df
-
-def process_pa_data(input_dir: Path, output_dir: Path, reptyear4: int, sas_session, libref: str):
-    """Process Personal Accident (PA) product data"""
-    print("  Reading PA data...")
-    pa_columns = [
-        "POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "DOBX", "GENDER", 
-        "AGENTNO", "BRANCH", "ACCTNOX", "RACE", "MARITAL", "INSURED", 
-        "ISSUEDTX", "EXPDT", "PREMIUM", "TELNO", "ADDRESS", "TOWN", 
-        "POSTCODE", "PROD_CODE", "PROD_DESC", "PROCESS_MTH", "SUBMITDX", 
-        "PROPOSALDT", "POLICYNO_OLD", "REGNO_NEW", "AUTO_RENEWAL_IND"
-    ]
-    
-    input_file = input_dir / "LONPAC_PA.txt"
-    df = read_txt_file_robust(input_file, pa_columns, skip_rows=5)
-    
-    print(f"  PA data: {df.height} rows read")
-    
-    if df.height == 0:
-        print("  No data to process")
-        return
-    
-    # Parse dates
-    for col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
-        if col in df.columns:
-            new_col = col.replace('X', '') if col.endswith('X') else col + '_DT'
-            df = df.with_columns(
-                pl.col(col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(new_col)
-            )
-    
-    # Filter records
-    df = df.filter(
-        (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "") &
-        (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
-    )
-    
-    # Add derived columns
-    df = df.with_columns(pl.lit("LONPAC_PA").alias("PRODUCT"))
-    
-    if "ACCTNOX" in df.columns:
-        df = df.with_columns([
-            pl.col("ACCTNOX").str.slice(13, 5).alias("NOTENO"),
-            pl.col("ACCTNOX").str.slice(0, 12).str.replace_all("-", "").alias("ACCTNO")
-        ])
-    
-    # Product dataset
-    prod_cols = ["AGENTNO", "POLICYNO", "BRANCH", "ACCTNO", "NOTENO", "INSURED", 
-                 "ISSUEDT", "EXPIRYDT", "PREMIUM", "PRODUCT", "PROD_CODE", "PROD_DESC",
-                 "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD", "AUTO_RENEWAL_IND"]
-    
-    available_cols = [col for col in prod_cols if col in df.columns]
-    df_prod = df.select(available_cols)
-    
-    # Customer dataset
-    cust_cols = ["NAME", "POLICYNO", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE", 
-                 "MARITAL", "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_cust = df.select([col for col in cust_cols if col in df.columns])
-    df_cust = df_cust.filter(
-        (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
-    )
-    
-    if "DOB" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            (pl.lit(reptyear4) - pl.col("DOB").dt.year()).alias("AGE")
-        )
-    
-    if "NEWIC" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            pl.col("NEWIC").str.replace_all("-", "").alias("IC")
-        )
-    
-    # Write to SAS
-    print("  Writing PA product data...")
-    write_sas_dataset_saspy(df_prod, libref, "PAPROD", sas_session)
-    print("  Writing PA customer data...")
-    write_sas_dataset_saspy(df_cust, libref, "PACUST", sas_session)
-    
-    return df_prod, df_cust
-
-def process_motor_data(input_dir: Path, output_dir: Path, reptyear4: int, sas_session, libref: str):
-    """Process Motor product data"""
-    print("  Reading Motor data...")
-    motor_columns = [
-        "POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "CREGNO", "DOBX", 
-        "GENDER", "AGENTNO", "BRANCH", "RACE", "MARITAL", "INSURED", 
-        "ISSUEDTX", "EXPDT", "PREMIUM", "TELNO", "ADDRESS", "TOWN", 
-        "POSTCODE", "PROD_CODE", "PROD_DESC", "PROCESS_MTH", "SUBMITDX", 
-        "PROPOSALDT", "POLICYNO_OLD", "REGNO_NEW"
-    ]
-    
-    input_file = input_dir / "LONPAC_MOTOR.txt"
-    df = read_txt_file_robust(input_file, motor_columns, skip_rows=5)
-    print(f"  Motor data: {df.height} rows read")
-    
-    if df.height == 0:
-        print("  No data to process")
-        return
-    
-    # Parse dates
-    for col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
-        if col in df.columns:
-            new_col = col.replace('X', '') if col.endswith('X') else col + '_DT'
-            df = df.with_columns(
-                pl.col(col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(new_col)
-            )
-    
-    df = df.filter(
-        (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "") &
-        (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
-    )
-    
-    df = df.with_columns(pl.lit("LONPAC_MOTOR").alias("PRODUCT"))
-    
-    if "CREGNO" in df.columns:
-        df = df.with_columns(
-            pl.col("CREGNO").str.replace_all(" ", "").alias("CREGNO")
-        )
-    
-    prod_cols = ["AGENTNO", "POLICYNO", "CREGNO", "BRANCH", "INSURED",
-                 "ISSUEDT", "EXPIRYDT", "PREMIUM", "PRODUCT", "PROD_CODE", "PROD_DESC",
-                 "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD"]
-    
-    available_cols = [col for col in prod_cols if col in df.columns]
-    df_prod = df.select(available_cols)
-    
-    cust_cols = ["POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE",
-                 "MARITAL", "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_cust = df.select([col for col in cust_cols if col in df.columns])
-    df_cust = df_cust.filter(
-        (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
-    )
-    
-    if "DOB" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            (pl.lit(reptyear4) - pl.col("DOB").dt.year()).alias("AGE")
-        )
-    
-    if "NEWIC" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            pl.col("NEWIC").str.replace_all("-", "").alias("IC")
-        )
-    
-    print("  Writing Motor product data...")
-    write_sas_dataset_saspy(df_prod, libref, "MOTORPROD", sas_session)
-    print("  Writing Motor customer data...")
-    write_sas_dataset_saspy(df_cust, libref, "MOTORCUST", sas_session)
-    
-    return df_prod, df_cust
-
-def process_misc_data(input_dir: Path, output_dir: Path, reptyear4: int, sas_session, libref: str):
-    """Process Miscellaneous product data"""
-    print("  Reading Misc data...")
-    misc_columns = [
-        "POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "DOBX", "GENDER", 
-        "AGENTNO", "BRANCH", "RACE", "INSURED", "ISSUEDTX", "EXPDT", 
-        "PREMIUM", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "PROD_CODE", 
-        "PROD_DESC", "PROCESS_MTH", "SUBMITDX", "PROPOSALDT", 
-        "POLICYNO_OLD", "REGNO_NEW"
-    ]
-    
-    input_file = input_dir / "LONPAC_MISC.txt"
-    df = read_txt_file_robust(input_file, misc_columns, skip_rows=5)
-    print(f"  Misc data: {df.height} rows read")
-    
-    if df.height == 0:
-        print("  No data to process")
-        return
-    
-    # Parse dates
-    for col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
-        if col in df.columns:
-            new_col = col.replace('X', '') if col.endswith('X') else col + '_DT'
-            df = df.with_columns(
-                pl.col(col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(new_col)
-            )
-    
-    df = df.filter(
-        (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "") &
-        (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
-    )
-    
-    df = df.with_columns(pl.lit("LONPAC_MOTOR").alias("PRODUCT"))
-    
-    prod_cols = ["AGENTNO", "POLICYNO", "BRANCH", "INSURED",
-                 "ISSUEDT", "EXPIRYDT", "PREMIUM", "PRODUCT", "PROD_CODE", "PROD_DESC",
-                 "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD"]
-    
-    available_cols = [col for col in prod_cols if col in df.columns]
-    df_prod = df.select(available_cols)
-    
-    cust_cols = ["POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE",
-                 "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_cust = df.select([col for col in cust_cols if col in df.columns])
-    df_cust = df_cust.filter(
-        (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
-    )
-    
-    if "DOB" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            (pl.lit(reptyear4) - pl.col("DOB").dt.year()).alias("AGE")
-        )
-    
-    if "NEWIC" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            pl.col("NEWIC").str.replace_all("-", "").alias("IC")
-        )
-    
-    print("  Writing Misc product data...")
-    write_sas_dataset_saspy(df_prod, libref, "MISCPROD", sas_session)
-    print("  Writing Misc customer data...")
-    write_sas_dataset_saspy(df_cust, libref, "MISCCUST", sas_session)
-    
-    return df_prod, df_cust
-
-def process_fire_data(input_dir: Path, output_dir: Path, reptyear4: int, sas_session, libref: str):
-    """Process Fire product data"""
-    print("  Reading Fire data...")
-    fire_columns = [
-        "POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "DOBX", "GENDER", 
-        "AGENTNO", "BRANCH", "ACCTNOX", "RACE", "MARITAL", "INSURED", 
-        "ISSUEDTX", "EXPDT", "PREMIUM", "TELNO", "ADDRESS", "TOWN", 
-        "POSTCODE", "PROD_CODE", "PROD_DESC", "PROCESS_MTH", "SUBMITDX", 
-        "PROPOSALDT", "POLICYNO_OLD", "REGNO_NEW", "CCOLLNO", 
-        "AUTO_DEBIT_IND", "AUTO_RENEWAL_IND", "PROP_INS_ADDRESS", "TOT_STOREY"
-    ]
-    
-    input_file = input_dir / "LONPAC_FIRE.txt"
-    df = read_txt_file_robust(input_file, fire_columns, skip_rows=5)
-    print(f"  Fire data: {df.height} rows read")
-    
-    if df.height == 0:
-        print("  No data to process")
-        return
-    
-    # Parse dates
-    for col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
-        if col in df.columns:
-            new_col = col.replace('X', '') if col.endswith('X') else col + '_DT'
-            df = df.with_columns(
-                pl.col(col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(new_col)
-            )
-    
-    df = df.filter(
-        (pl.col("POLICYNO") != "F.ENDT.MAS......") &
-        (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "") &
-        (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "")
-    )
-    
-    df = df.with_columns(pl.lit("LONPAC_FIRE").alias("PRODUCT"))
-    
-    if "ACCTNOX" in df.columns:
-        df = df.with_columns([
-            pl.col("ACCTNOX").str.slice(13, 5).alias("NOTENO"),
-            pl.col("ACCTNOX").str.slice(0, 12).str.replace_all("-", "").alias("ACCTNO")
-        ])
-    
-    prod_cols = ["AGENTNO", "POLICYNO", "BRANCH", "ACCTNO", "NOTENO", "INSURED",
-                 "ISSUEDT", "EXPIRYDT", "PRODUCT", "PREMIUM", "PROD_CODE", "PROD_DESC",
-                 "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD",
-                 "CCOLLNO", "AUTO_DEBIT_IND", "AUTO_RENEWAL_IND", "PROP_INS_ADDRESS", "TOT_STOREY"]
-    
-    available_cols = [col for col in prod_cols if col in df.columns]
-    df_prod = df.select(available_cols)
-    
-    cust_cols = ["POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE",
-                 "MARITAL", "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_cust = df.select([col for col in cust_cols if col in df.columns])
-    df_cust = df_cust.filter(
-        (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
-    )
-    
-    if "DOB" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            (pl.lit(reptyear4) - pl.col("DOB").dt.year()).alias("AGE")
-        )
-    
-    if "NEWIC" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            pl.col("NEWIC").str.replace_all("-", "").alias("IC")
-        )
-    
-    print("  Writing Fire product data...")
-    write_sas_dataset_saspy(df_prod, libref, "FIREPROD", sas_session)
-    print("  Writing Fire customer data...")
-    write_sas_dataset_saspy(df_cust, libref, "FIRECUST", sas_session)
-    
-    return df_prod, df_cust
-
-def process_hire_data(input_dir: Path, output_dir: Path, file_name: str, output_prefix: str, reptyear4: int, sas_session, libref: str):
-    """Process Hire Purchase data (both HIRE and NHIRE)"""
-    print(f"  Reading {file_name} data...")
-    hire_columns = [
-        "POLICYNO", "NAME", "NEWIC", "OLDIC", "REGNO", "CREGNO", "DOBX", 
-        "GENDER", "AGENTNO", "RACE", "MARITAL", "INSURED", "ISSUEDTX", 
-        "EXPDT", "PREMIUM", "TELNO", "ADDRESS", "TOWN", "POSTCODE", 
-        "PROD_CODE", "PROD_DESC", "PROCESS_MTH", "SUBMITDX", "PROPOSALDT", 
-        "POLICYNO_OLD", "REGNO_NEW"
-    ]
-    
-    input_file = input_dir / f"{file_name}.txt"
-    df = read_txt_file_robust(input_file, hire_columns, skip_rows=8)  # FIRSTOBS=9 in SAS
-    print(f"  {file_name} data: {df.height} rows read")
-    
-    if df.height == 0:
-        print("  No data to process")
-        return
-    
-    # Parse dates
-    for col in ["ISSUEDTX", "EXPDT", "SUBMITDX", "PROPOSALDT", "DOBX"]:
-        if col in df.columns:
-            new_col = col.replace('X', '') if col.endswith('X') else col + '_DT'
-            df = df.with_columns(
-                pl.col(col).map_elements(lambda x: parse_date(x), return_dtype=pl.Datetime).alias(new_col)
-            )
-    
-    df = df.filter(
-        (pl.col("AGENTNO").is_not_null()) & (pl.col("AGENTNO") != "") &
-        (pl.col("POLICYNO").is_not_null()) & (pl.col("POLICYNO") != "")
-    )
-    
-    df = df.with_columns(pl.lit("LONPAC_HP").alias("PRODUCT"))
-    
-    if "CREGNO" in df.columns:
-        df = df.with_columns([
-            pl.col("CREGNO").str.replace_all(" ", "").alias("CARREG"),
-            pl.col("CREGNO").str.replace_all(" ", "").alias("CREGNO")
-        ])
-    
-    prod_cols = ["AGENTNO", "POLICYNO", "CREGNO", "INSURED", "ISSUEDT", "EXPIRYDT",
-                 "PREMIUM", "CARREG", "PRODUCT", "PROD_CODE",
-                 "PROD_DESC", "PROCESS_MTH", "SUBMITDT", "PROPOSAL_DT", "POLICYNO_OLD"]
-    
-    available_cols = [col for col in prod_cols if col in df.columns]
-    df_prod = df.select(available_cols)
-    
-    cust_cols = ["NAME", "POLICYNO", "NEWIC", "OLDIC", "REGNO", "GENDER", "RACE",
-                 "MARITAL", "DOB", "TELNO", "ADDRESS", "TOWN", "POSTCODE", "REGNO_NEW"]
-    
-    df_cust = df.select([col for col in cust_cols if col in df.columns])
-    df_cust = df_cust.filter(
-        (pl.col("POLICYNO") != "F.ENDT.MAS......") &
-        (pl.col("NAME").is_not_null()) & (pl.col("NAME") != "")
-    )
-    
-    if "DOB" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            (pl.lit(reptyear4) - pl.col("DOB").dt.year()).alias("AGE")
-        )
-    
-    if "NEWIC" in df_cust.columns:
-        df_cust = df_cust.with_columns(
-            pl.col("NEWIC").str.replace_all("-", "").alias("IC")
-        )
-    
-    # Determine table names
-    prod_table = f"{output_prefix.upper()}PROD"
-    cust_table = f"{output_prefix.upper()}CUST"
-    
-    print(f"  Writing {file_name} product data...")
-    write_sas_dataset_saspy(df_prod, libref, prod_table, sas_session)
-    print(f"  Writing {file_name} customer data...")
-    write_sas_dataset_saspy(df_cust, libref, cust_table, sas_session)
-    
-    return df_prod, df_cust
-
-def merge_all_data(sas_session, libref: str):
-    """Merge all customer and product data using SAS"""
-    print("Merging all datasets...")
-    
-    # Merge customer data
-    sas_code = f"""
-    proc sort data={libref}.PACUST; by POLICYNO; run;
-    proc sort data={libref}.MOTORCUST; by POLICYNO; run;
-    proc sort data={libref}.FIRECUST; by POLICYNO; run;
-    proc sort data={libref}.HIRECUST; by POLICYNO; run;
-    proc sort data={libref}.NONHIRECUST; by POLICYNO; run;
-    
-    data {libref}.CUST;
-        merge {libref}.PACUST 
-              {libref}.MOTORCUST 
-              {libref}.FIRECUST 
-              {libref}.HIRECUST 
-              {libref}.NONHIRECUST;
-        by POLICYNO;
-        if POLICYNO = '' then delete;
-        if POLICYNO = 'Policy issued by' then delete;
-    run;
-    
-    proc sort data={libref}.PAPROD; by POLICYNO; run;
-    proc sort data={libref}.MOTORPROD; by POLICYNO; run;
-    proc sort data={libref}.FIREPROD; by POLICYNO; run;
-    
-    data {libref}.PROD;
-        format PRODUCT $15.;
-        merge {libref}.PAPROD 
-              {libref}.MOTORPROD 
-              {libref}.FIREPROD;
-        by POLICYNO;
-        if POLICYNO = '' then delete;
-    run;
+def apply_format_range(df: pl.DataFrame, source_col: str, fmtname: str, out_col: str) -> pl.DataFrame:
     """
-    
-    try:
-        result = sas_session.submit(sas_code)
-        if result['LOG']:
-            print("SAS merge completed successfully")
-        else:
-            print("Warning: SAS merge may not have completed properly")
-    except Exception as e:
-        print(f"Error during merge: {e}")
+    Faithfully reproduces SAS PUT(x, fmt.) with range handling via non-equi join:
+    - JOIN on START <= x <= END
+    - If overlapping rules exist, Polars' asof-style approach isn’t enough; we do explicit filter join.
+    - Assumes START/END types match the source column's logical type.
+    """
+    fmt = load_format(fmtname)
 
-def process_lonpac_data(input_dir: str, output_dir: str):
-    """Main function to process all LONPAC data"""
-    input_path = Path(input_dir)
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Calculate report dates
-    dates = calculate_report_dates()
-    reptyear4 = dates['reptyear4']
-    
-    print("Starting LONPAC data processing...")
-    print(f"Reading from: {input_path}")
-    print(f"Writing to: {output_path}")
-    
-    # Initialize SAS session
-    print("Initializing SAS session...")
-    sas = saspy.SASsession()
-    
-    # Define libref
-    libref = "LONPAC"
-    
-    try:
-        # Assign libref
-        print(f"Assigning libref {libref}...")
-        sas.submit(f"libname {libref} '{output_path}';")
-        
-        print("Processing PA data...")
-        process_pa_data(input_path, output_path, reptyear4, sas, libref)
-        
-        print("Processing Motor data...")
-        process_motor_data(input_path, output_path, reptyear4, sas, libref)
-        
-        print("Processing Misc data...")
-        process_misc_data(input_path, output_path, reptyear4, sas, libref)
-        
-        print("Processing Fire data...")
-        process_fire_data(input_path, output_path, reptyear4, sas, libref)
-        
-        print("Processing Hire Purchase data...")
-        process_hire_data(input_path, output_path, "LONPAC_HIRE", "hire", reptyear4, sas, libref)
-        
-        print("Processing Non-Hire Purchase data...")
-        process_hire_data(input_path, output_path, "LONPAC_NONHIRE", "nonhire", reptyear4, sas, libref)
-        
-        # Merge all datasets
-        merge_all_data(sas, libref)
-        
-        print("Processing complete!")
-        print(f"Output files are in SAS .sas7bdat format at: {output_path}")
-        
-    except Exception as e:
-        print(f"Error during processing: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # Clean up SAS session
-        print("Cleaning up SAS session...")
-        try:
-            sas.disconnect()
-        except:
-            pass
+    # Ensure numeric-vs-string alignment. In practice your CNTLOUT exports should already match.
+    # We'll coerce based on dtype of source column.
+    src_dtype = df.schema[source_col]
+    if src_dtype == pl.Utf8:
+        fmt = fmt.with_columns(
+            START=pl.col("START").cast(pl.Utf8),
+            END  = pl.col("END").cast(pl.Utf8),
+        )
+    else:
+        # numeric
+        fmt = fmt.with_columns(
+            START=pl.col("START").cast(pl.Float64),
+            END  = pl.col("END").cast(pl.Float64),
+        )
+        df = df.with_columns(pl.col(source_col).cast(pl.Float64))
 
-# Usage
-if __name__ == "__main__":
-    process_lonpac_data(
-        input_dir="/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMLNPC",
-        output_dir="/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMLNPC"
+    # Perform non-equi join by expanding then filtering; to stay scalable, we use a cross-filter trick in DuckDB.
+    # (DuckDB helps for correctness/clarity; still Parquet in/out; logic preserved.)
+    con = duckdb.connect()
+    con.register("df_src", df.to_arrow())
+    con.register("df_fmt", fmt.to_arrow())
+    res = con.execute(f"""
+        SELECT s.*, f.LABEL AS {out_col}
+        FROM df_src s
+        JOIN df_fmt f
+          ON s.{source_col} >= f.START
+         AND s.{source_col} <= f.END
+    """).arrow()
+    con.close()
+    return pl.from_arrow(res)
+
+# =========================
+# 1) REPTDATE, &REPTMON
+# =========================
+# SACA.REPTDATE is assumed to be a single row with column REPTDATE (date or yyyymmdd int/str)
+reptdate_tbl = SACA / "REPTDATE.parquet"
+reptdate_df = pl.read_parquet(reptdate_tbl)
+
+# Coerce to date; support int YYYYMMDD or string
+def to_date_expr(col: pl.Expr) -> pl.Expr:
+    return (
+        pl.when(col.is_dtype(pl.Date))
+        .then(col)
+        .when(col.is_dtype(pl.Int64) | col.is_dtype(pl.Int32))
+        .then(pl.datetime(
+            (col // 10000).cast(pl.Int32),
+            ((col % 10000) // 100).cast(pl.Int32),
+            (col % 100).cast(pl.Int32)
+        ).cast(pl.Date))
+        .otherwise(pl.col("REPTDATE").str.strptime(pl.Date, fmt="%Y-%m-%d", strict=False))
     )
+
+reptdate_df = reptdate_df.with_columns(REPTDATE=to_date_expr(pl.col("REPTDATE")))
+REPTDATE = reptdate_df.select(pl.col("REPTDATE")).item(0, 0)
+REPTYEAR = f"{REPTDATE.year:04d}"
+REPTMON  = f"{REPTDATE.month:02d}"
+
+# =========================
+# 2) SA and CA (PUT with formats)
+# =========================
+# SA: from SACA.SAVING and ISACA.SAVING; filter OPENIND NOT IN ('B','C','P'); PRODCD=PUT(PRODUCT,SAPROD.)
+saving_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
+SA = (
+    pl.concat([
+        pl.read_parquet(SACA / "SAVING.parquet").select(saving_cols),
+        pl.read_parquet(ISACA / "SAVING.parquet").select(saving_cols),
+    ], how="vertical_relaxed")
+    .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
+)
+SA = apply_format_range(SA, source_col="PRODUCT", fmtname="SAPROD", out_col="PRODCD") \
+        .select(["ACCTNO","PRODCD","PURPOSE","PRODUCT"])
+
+# CA: from SACA.CURRENT and ISACA.CURRENT; same filter; PRODCD=PUT(PRODUCT,CAPROD.)
+current_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
+CA = (
+    pl.concat([
+        pl.read_parquet(SACA / "CURRENT.parquet").select(current_cols),
+        pl.read_parquet(ISACA / "CURRENT.parquet").select(current_cols),
+    ], how="vertical_relaxed")
+    .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
+)
+CA = apply_format_range(CA, source_col="PRODUCT", fmtname="CAPROD", out_col="PRODCD") \
+        .select(["ACCTNO","PRODCD","PURPOSE","PRODUCT"])
+
+# =========================
+# 3) FD (base) and FDCD (product coding from FD libs)
+# =========================
+# Base FD (keep ACCTNO PURPOSE PRODUCT) from SACA.FD and ISACA.FD
+fd_base_cols = ["ACCTNO","PURPOSE","PRODUCT"]
+FD_base = pl.concat([
+    pl.read_parquet(SACA / "FD.parquet").select(fd_base_cols),
+    pl.read_parquet(ISACA / "FD.parquet").select(fd_base_cols),
+], how="vertical_relaxed").sort("ACCTNO")
+
+# FDCD: from FD.FD and IFD.FD; filters & mappings
+fdcd_cols = ["ACCTNO","ACCTTYPE","OPENIND","INTPLAN"]
+FDCD_union = pl.concat([
+    pl.read_parquet(FDLIB  / "FD.parquet").select(fdcd_cols).with_columns(ENTITY_SRC=pl.lit("PBB")),
+    pl.read_parquet(IFDLIB / "FD.parquet").select(fdcd_cols).with_columns(ENTITY_SRC=pl.lit("PIBB")),
+], how="vertical_relaxed")
+
+FDCD = (
+    FDCD_union
+    .filter(~pl.col("ACCTTYPE").is_in([397,398]) & pl.col("OPENIND").is_in(["D","O"]))
+)
+# PRODCD = PUT(INTPLAN, FDPROD.)
+FDCD = apply_format_range(FDCD, source_col="INTPLAN", fmtname="FDPROD", out_col="PRODCD")
+
+# Overrides:
+FDCD = FDCD.with_columns(
+    pl.when(pl.col("ACCTTYPE").is_in([315,394])).then(pl.lit("42132"))
+     .when(pl.col("ACCTTYPE").is_in([397,398])).then(pl.lit("42199"))
+     .otherwise(pl.col("PRODCD"))
+     .alias("PRODCD")
+)
+
+# NODUPKEYS by ACCTNO — keep first occurrence
+FDCD = (
+    FDCD.sort(["ACCTNO"])  # SAS PROC SORT before NODUPKEYS keeps first by BY key
+         .unique(subset=["ACCTNO"], keep="first")
+         .select(["ACCTNO","PRODCD"])
+)
+
+# Merge FD = FD_base inner join FDCD by ACCTNO; keep only matches (IF A AND B)
+FD = (
+    FD_base.join(FDCD, on="ACCTNO", how="inner")
+)
+
+# =========================
+# 4) DEP = SA ∪ CA ∪ FD with filters on PRODCD, PRODUCT
+# =========================
+DEP = pl.concat([SA, CA, FD], how="vertical_relaxed")
+
+valid_prodcd = ['42110','42310','42120','42320','42130',
+                '42133','42132','42180','42610','42630','34180',
+                '42199','42699']
+DEP = DEP.filter(pl.col("PRODCD").is_in(valid_prodcd))
+
+DEP = DEP.filter(
+    ~(
+        pl.col("PRODCD").is_in(["42199","42699"])
+        & ~pl.col("PRODUCT").is_in([72,413])
+    )
+)
+
+DEP = DEP.sort("ACCTNO")
+
+# =========================
+# 5) MERGEX = DEP where PURPOSE in ('5','6')
+# =========================
+MERGEX = DEP.filter(pl.col("PURPOSE").is_in(["5","6"]))
+
+# =========================
+# 6) CLIENT fixed-width parse + join with DEP
+# =========================
+# SAS:
+#   @002 ACCTNO 10.   (positions 2-11, 1-based)
+#   @021 NAME $40.    (positions 21-60, 1-based)
+#   Keep record only if ACCTNO contains digits only.
+def parse_client_fixed_width(path: Path) -> pl.DataFrame:
+    rows = []
+    with path.open("r", encoding="latin1", errors="ignore") as f:
+        for line in f:
+            # Convert to 0-based slices; end exclusive
+            acct_str = line[1:11] if len(line) >= 11 else ""
+            acct_str = acct_str.strip()
+            if acct_str and acct_str.isdigit():
+                name_str = line[20:60] if len(line) >= 60 else ""
+                name_str = name_str.rstrip()
+                rows.append({"ACCTNO": int(acct_str), "NAME": name_str, "KEY": name_str[:10]})
+    if not rows:
+        return pl.DataFrame({"ACCTNO": pl.Series([], dtype=pl.Int64),
+                             "NAME": pl.Series([], dtype=pl.Utf8),
+                             "KEY":  pl.Series([], dtype=pl.Utf8)})
+    return pl.DataFrame(rows)
+
+CLIENT = parse_client_fixed_width(CLIENT_RPT)
+
+# PROC SORT NODUPKEYS BY ACCTNO
+CLIENT = CLIENT.sort("ACCTNO").unique(subset=["ACCTNO"], keep="first")
+
+# MERGE CLIENT(IN=A) with DEP(KEEP=ACCTNO) (IN=B); IF A & B
+CLIENT = CLIENT.join(DEP.select("ACCTNO").unique(), on="ACCTNO", how="inner")
+
+# =========================
+# 7) HOST.TRUST&REPTMON (KEEP=ACCTNO)  = MERGEX stacked on CLIENT
+# =========================
+TRUST = pl.concat([
+    MERGEX.select(["ACCTNO"]),
+    CLIENT.select(["ACCTNO"])
+], how="vertical_relaxed")
+# Note: SAS does not de-duplicate here; we keep as-is.
+
+# =========================
+# 8) HOST.FDCD&REPTMON (KEEP=ACCTNO, ENTITY) from FD.FD and IFD.FD (entity tagging)
+# =========================
+FD_PBB  = pl.read_parquet(FDLIB  / "FD.parquet").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PBB "))
+FD_PIBB = pl.read_parquet(IFDLIB / "FD.parquet").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PIBB "))
+FDCD_MONTH = pl.concat([FD_PBB, FD_PIBB], how="vertical_relaxed").select(["ACCTNO","ENTITY"])
+
+# =========================
+# 9) Write outputs (mirror of HOST library members)
+# =========================
+trust_path = HOST / f"TRUST{REPTMON}.parquet"
+fdcd_path  = HOST / f"FDCD{REPTMON}.parquet"
+
+TRUST.write_parquet(trust_path)
+FDCD_MONTH.write_parquet(fdcd_path)
+
+# Also build a single Arrow IPC transport (mirror of PROC CPORT)
+# — pack both tables into one file (for shipping)
+tables = {
+    f"TRUST{REPTMON}": TRUST.to_arrow(),
+    f"FDCD{REPTMON}":  FDCD_MONTH.to_arrow(),
+}
+
+
+print(f"Written: {trust_path}")
+print(f"Written: {fdcd_path}")
+
+
+
+all inputs are in sas7bdat sas dataset, the pgm is PBBDPFMT.py which already existed. output in sas7bdat and parquet. use datetime timedelta - 1 instead.
