@@ -2,8 +2,10 @@ import polars as pl
 import duckdb
 from pathlib import Path
 import datetime
-import sys
-import importlib
+import pyreadstat
+import numpy as np
+from typing import Iterator, Dict, Any
+import gc
 
 # Configuration
 loan_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOS")
@@ -11,172 +13,183 @@ arrear_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOS
 output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOS")
 output_path.mkdir(exist_ok=True)
 
-# Execute external programs - %INC PGM equivalent
-try:
-    pbbelf = importlib.import_module('PBBELF')
-    pbbelf.process()
-except ImportError:
-    print("NOTE: PBBELF not available")
+# Calculate dates using datetime (replacing REPTDATE logic)
+today = datetime.date.today()
+yesterday = today - datetime.timedelta(days=1)
 
-try:
-    pbblnfmt = importlib.import_module('PBBLNFMT') 
-    pbblnfmt.process()
-except ImportError:
-    print("NOTE: PBBLNFMT not available")
+# Determine week parameters based on yesterday's date
+day = yesterday.day
+month = yesterday.month
+year = yesterday.year
 
-# DATA REPTDATE;
-reptdate_df = pl.read_parquet(loan_path / "REPTDATE.parquet")
+if day == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+elif day == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+elif day == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+else:
+    sdd, wk, wk1 = 23, '4', '3'
 
-# Process REPTDATE with SELECT/WHEN logic
-processed_reptdate = reptdate_df.with_columns([
-    pl.col('REPTDATE').dt.day().alias('day'),
-    pl.col('REPTDATE').dt.month().alias('month'),
-    pl.col('REPTDATE').dt.year().alias('year')
-]).with_columns([
-    pl.when(pl.col('day') == 8).then(pl.struct([
-        pl.lit(1).alias('sdd'),
-        pl.lit('1').alias('wk'),
-        pl.lit('4').alias('wk1')
-    ]))
-    .when(pl.col('day') == 15).then(pl.struct([
-        pl.lit(9).alias('sdd'),
-        pl.lit('2').alias('wk'),
-        pl.lit('1').alias('wk1')
-    ]))
-    .when(pl.col('day') == 22).then(pl.struct([
-        pl.lit(16).alias('sdd'),
-        pl.lit('3').alias('wk'),
-        pl.lit('2').alias('wk1')
-    ]))
-    .otherwise(pl.struct([
-        pl.lit(23).alias('sdd'),
-        pl.lit('4').alias('wk'),
-        pl.lit('3').alias('wk1')
-    ])).alias('week_info')
-]).with_columns([
-    pl.col('week_info').struct.field('sdd').alias('SDD'),
-    pl.col('week_info').struct.field('wk').alias('WK'),
-    pl.col('week_info').struct.field('wk1').alias('WK1'),
-    pl.col('month').alias('MM'),
-    pl.when(pl.col('WK') == '1').then(
-        pl.when(pl.col('month') == 1).then(12).otherwise(pl.col('month') - 1)
-    ).otherwise(pl.col('month')).alias('MM1'),
-    pl.datetime(pl.col('year'), pl.col('month'), pl.col('SDD')).alias('SDATE')
-]).drop(['day', 'month', 'year', 'week_info'])
+mm = month
+mm1 = 12 if (wk == '1' and month == 1) else (month - 1 if wk == '1' else month)
+sdate = datetime.date(year, month, sdd)
 
-# Extract parameters - CALL SYMPUT equivalent
-first_row = processed_reptdate.row(0)
-NOWK = first_row['WK']
-NOWK1 = first_row['WK1']
-REPTMON = f"{first_row['MM']:02d}"
-REPTMON1 = f"{first_row['MM1']:02d}"
-REPTYEAR = str(first_row['REPTDATE'].year)
-REPTDAY = f"{first_row['REPTDATE'].day:02d}"
-RDATE = first_row['REPTDATE'].strftime('%d%m%y')
-SDATE = first_row['SDATE'].strftime('%d%m%y')
+# Extract parameters
+nowk = wk
+nowk1 = wk1
+reptmon = f"{mm:02d}"
+reptmon1 = f"{mm1:02d}"
+reptyear = str(year)
+reptday = f"{day:02d}"
+rdate = yesterday.strftime('%d%m%y')
+sdate_str = sdate.strftime('%d%m%y')
 
-print(f"NOWK: {NOWK}, NOWK1: {NOWK1}, REPTMON: {REPTMON}, REPTMON1: {REPTMON1}")
-print(f"REPTYEAR: {REPTYEAR}, REPTDAY: {REPTDAY}, RDATE: {RDATE}, SDATE: {SDATE}")
+print(f"NOWK: {nowk}, NOWK1: {nowk1}, REPTMON: {reptmon}, REPTMON1: {reptmon1}")
+print(f"REPTYEAR: {reptyear}, REPTDAY: {reptday}, RDATE: {rdate}, SDATE: {sdate_str}")
 
-# PROC SORT DATA=LOAN.LNNOTE OUT=LNNOTE
-hp_values = ['HP']  # Replace with actual &HP values from SAS
-lnnote_df = pl.read_parquet(loan_path / "LNNOTE.parquet").filter(
-    (pl.col('LOANTYPE').is_in(hp_values)) &
-    (pl.col('BALANCE') > 0) &
-    (~pl.col('BORSTAT').is_in(['F', 'I', 'R']))
+# Define chunked reader for large SAS files
+def read_sas_chunked(file_path: Path, columns: list = None, chunksize: int = 100000) -> Iterator[pl.DataFrame]:
+    """Read SAS file in chunks to handle large files efficiently"""
+    reader = pyreadstat.read_file_in_chunks(
+        pyreadstat.read_sas7bdat,
+        str(file_path),
+        chunksize=chunksize,
+        usecols=columns
+    )
+    
+    for df_chunk, meta in reader:
+        # Convert to Polars DataFrame for consistency
+        yield pl.from_pandas(df_chunk)
+
+# Process LNNOTE in chunks (large 20GB file)
+print("Processing LNNOTE (large file) in chunks...")
+hp_values = ['HP']
+
+# Initialize empty list to collect filtered data
+lnnote_chunks = []
+
+# Read and filter in chunks
+chunk_count = 0
+for chunk in read_sas_chunked(loan_path / "lnnote.sas7bdat", 
+                              columns=['ACCTNO', 'LOANTYPE', 'NTBRCH', 'COLLDESC', 'COLLYEAR', 'BALANCE', 'BORSTAT'],
+                              chunksize=100000):
+    chunk_count += 1
+    if chunk_count % 10 == 0:
+        print(f"Processed {chunk_count} chunks from LNNOTE...")
+        gc.collect()  # Free memory
+    
+    # Filter chunk
+    filtered_chunk = chunk.filter(
+        (pl.col('LOANTYPE').is_in(hp_values)) &
+        (pl.col('BALANCE') > 0) &
+        (~pl.col('BORSTAT').is_in(['F', 'I', 'R']))
+    ).select([
+        'ACCTNO', 'LOANTYPE', 'NTBRCH', 'COLLDESC', 'COLLYEAR'
+    ])
+    
+    if filtered_chunk.height > 0:
+        lnnote_chunks.append(filtered_chunk)
+
+# Combine all filtered chunks
+if lnnote_chunks:
+    lnnote_df = pl.concat(lnnote_chunks).unique(subset=['ACCTNO']).sort('ACCTNO')
+else:
+    lnnote_df = pl.DataFrame(schema=['ACCTNO', 'LOANTYPE', 'NTBRCH', 'COLLDESC', 'COLLYEAR'])
+
+print(f"LNNOTE filtered: {lnnote_df.height} rows")
+del lnnote_chunks
+gc.collect()
+
+# Read NAME8 (typically smaller file)
+print("Processing NAME8...")
+name8_df = pl.from_pandas(
+    pyreadstat.read_sas7bdat(str(loan_path / "name8.sas7bdat"), 
+                            usecols=['ACCTNO', 'LINETHRE', 'LINEFOUR'])[0]
 ).select([
-    'ACCTNO', 'LOANTYPE', 'NTBRCH', 'COLLDESC', 'COLLYEAR'
-]).sort('ACCTNO')
-
-# PROC SORT DATA=LOAN.NAME8 OUT=NAME8
-name8_df = pl.read_parquet(loan_path / "NAME8.parquet").select([
     'ACCTNO', 'LINETHRE', 'LINEFOUR'
 ]).sort('ACCTNO')
 
-# PROC SORT DATA=ARREAR.LOANTEMP OUT=ARREAR
-arrear_df = pl.read_parquet(arrear_path / "LOANTEMP.parquet").select([
-    'ACCTNO', 'ARREAR'
-]).sort('ACCTNO')
+# Read LOANTEMP (arrears file)
+print("Processing LOANTEMP...")
+try:
+    arrear_df = pl.from_pandas(
+        pyreadstat.read_sas7bdat(str(arrear_path / "loantemp.sas7bdat"), 
+                                usecols=['ACCTNO', 'ARREAR'])[0]
+    ).select([
+        'ACCTNO', 'ARREAR'
+    ]).sort('ACCTNO')
+except:
+    print("Warning: LOANTEMP file not found, creating empty dataframe")
+    arrear_df = pl.DataFrame(schema=['ACCTNO', 'ARREAR'])
 
 # DATA REPO; MERGE LNNOTE(IN=AA) NAME8 ARREAR;
+print("Merging datasets...")
 repo_df = lnnote_df.join(
     name8_df.rename({'LINETHRE': 'ENGINE', 'LINEFOUR': 'CHASSIS'}), 
     on='ACCTNO', how='inner'
 ).join(
     arrear_df, on='ACCTNO', how='left'
 ).with_columns([
-    # BRABBR = PUT(NTBRCH,BRCHCD.);
-    pl.col('NTBRCH').cast(pl.Utf8).alias('BRABBR'),  # Simplified branch conversion
+    # BRABBR and CAC - simplified branch conversion
+    pl.col('NTBRCH').cast(pl.Utf8).alias('BRABBR'),
+    pl.col('NTBRCH').cast(pl.Utf8).alias('CAC'),
     
-    # CAC = PUT(NTBRCH,CACNAME.);
-    pl.col('NTBRCH').cast(pl.Utf8).alias('CAC'),  # Simplified CAC conversion
-    
-    # MAKE = SUBSTR(COLLDESC,1,16);
+    # MAKE, MODEL, REGNO from COLLDESC
     pl.col('COLLDESC').str.slice(0, 16).alias('MAKE'),
-    
-    # MODEL = SUBSTR(COLLDESC,16,21);
     pl.col('COLLDESC').str.slice(16, 21).alias('MODEL'),
+    pl.col('COLLDESC').str.slice(40, 13).alias('REGNO'),
     
-    # REGNO = SUBSTR(COLLDESC,40,13);
-    pl.col('COLLDESC').str.slice(40, 13).alias('REGNO')
+    # Handle missing ARREAR
+    pl.col('ARREAR').fill_null(0)
 ])
 
-# DATA REPO REPO1; SET REPO;
-repo_filtered = repo_df.filter(pl.col('ARREAR') >= 10)
-repo1_filtered = repo_filtered.filter(pl.col('LOANTYPE').is_in([983, 993]))
+# Filter and create REPO datasets
+repo_filtered = repo_df.filter(pl.col('ARREAR') >= 10).sort('REGNO')
+repo1_filtered = repo_filtered.filter(pl.col('LOANTYPE').is_in([983, 993])).sort('REGNO')
 
-# PROC SORT DATA=REPO OUT=REPO; BY REGNO;
-repo_sorted = repo_filtered.sort('REGNO')
+print(f"REPO records: {repo_filtered.height}")
+print(f"REPO1 records: {repo1_filtered.height}")
 
-# PROC SORT DATA=REPO1 OUT=REPO1; BY REGNO;
-repo1_sorted = repo1_filtered.sort('REGNO')
-
-# Save datasets
-repo_sorted.write_csv(output_path / "REPO.csv")
-repo_sorted.write_parquet(output_path / "REPO.parquet")
-repo1_sorted.write_csv(output_path / "REPO1.csv")
-repo1_sorted.write_parquet(output_path / "REPO1.parquet")
-
-# DATA _NULL_; SET REPO; FILE REPOTXT NOTITLES;
-with open(output_path / "REPOTXT.txt", "w") as f:
-    for i, row in enumerate(repo_sorted.iter_rows(named=True)):
-        if i == 0:
-            f.write(f"{RDATE}-REPOSSESSION LISTING\n")
-        
+# Generate text output file (REPOTXT.txt)
+print("Generating REPOTXT.txt...")
+with open(output_path / "repotxt.txt", "w") as f:
+    f.write(f"{rdate}-REPOSSESSION LISTING\n")
+    
+    for row in repo_filtered.iter_rows(named=True):
+        # Format according to fixed-width specifications
         line = (
-            f"{str(row.get('BRABBR', '')):>3}"          # @001 BRABBR $3.
-            f"{str(row.get('CAC', '')):>20}"            # @009 CAC $20.
-            f"{str(row.get('REGNO', '')):>13}"          # @029 REGNO $13.
-            f"{str(row.get('MAKE', '')):>16}"           # @043 MAKE $16.
-            f"{str(row.get('MODEL', '')):>21}"          # @060 MODEL $21.
-            f"{str(row.get('ENGINE', '')):>40}"         # @082 ENGINE $40.
-            f"{str(row.get('CHASSIS', '')):>40}"        # @123 CHASSIS $40.
-            f"{str(row.get('COLLYEAR', '')):>4}"        # @164 COLLYEAR $4.
+            f"{str(row.get('BRABBR', ''))[:3]:<3}"      # @001 BRABBR $3.
+            f"{str(row.get('CAC', ''))[:20]:<20}"        # @009 CAC $20.
+            f"{str(row.get('REGNO', ''))[:13]:<13}"      # @029 REGNO $13.
+            f"{str(row.get('MAKE', ''))[:16]:<16}"       # @043 MAKE $16.
+            f"{str(row.get('MODEL', ''))[:21]:<21}"      # @060 MODEL $21.
+            f"{str(row.get('ENGINE', ''))[:40]:<40}"     # @082 ENGINE $40.
+            f"{str(row.get('CHASSIS', ''))[:40]:<40}"    # @123 CHASSIS $40.
+            f"{str(row.get('COLLYEAR', ''))[:4]:<4}\n"    # @164 COLLYEAR $4.
         )
-        f.write(line + "\n")
+        f.write(line)
 
-print("REPOTXT file generated successfully")
+print("REPOTXT.txt generated successfully")
 
-# DATA _NULL_; SET REPO1; FILE REPOTXT1 NOTITLES;
-with open(output_path / "REPOTXT1.txt", "w") as f:
-    for i, row in enumerate(repo1_sorted.iter_rows(named=True)):
-        if i == 0:
-            f.write(f"{RDATE}-REPOSSESSION LISTING (983,993)\n")
-        
+# Generate REPOTXT1.txt for REPO1 (983,993)
+print("Generating REPOTXT1.txt...")
+with open(output_path / "repotxt1.txt", "w") as f:
+    f.write(f"{rdate}-REPOSSESSION LISTING (983,993)\n")
+    
+    for row in repo1_filtered.iter_rows(named=True):
+        # Same format as REPOTXT but for filtered dataset
         line = (
-            f"{str(row.get('BRABBR', '')):>3}"          # @001 BRABBR $3.
-            f"{str(row.get('CAC', '')):>20}"            # @009 CAC $20.
-            f"{str(row.get('REGNO', '')):>13}"          # @029 REGNO $13.
-            f"{str(row.get('MAKE', '')):>16}"           # @043 MAKE $16.
-            f"{str(row.get('MODEL', '')):>21}"          # @060 MODEL $21.
-            f"{str(row.get('ENGINE', '')):>40}"         # @082 ENGINE $40.
-            f"{str(row.get('CHASSIS', '')):>40}"        # @123 CHASSIS $40.
-            f"{str(row.get('COLLYEAR', '')):>4}"        # @164 COLLYEAR $4.
+            f"{str(row.get('BRABBR', ''))[:3]:<3}"
+            f"{str(row.get('CAC', ''))[:20]:<20}"
+            f"{str(row.get('REGNO', ''))[:13]:<13}"
+            f"{str(row.get('MAKE', ''))[:16]:<16}"
+            f"{str(row.get('MODEL', ''))[:21]:<21}"
+            f"{str(row.get('ENGINE', ''))[:40]:<40}"
+            f"{str(row.get('CHASSIS', ''))[:40]:<40}"
+            f"{str(row.get('COLLYEAR', ''))[:4]:<4}\n"
         )
-        f.write(line + "\n")
+        f.write(line)
 
-print("REPOTXT1 file generated successfully")
+print("REPOTXT1.txt generated successfully")
 print("PROCESSING COMPLETED SUCCESSFULLY")
-
-
-REMOVE the reptdate. use datetime timedelta - 1 instead. all inputs in sas7bdat and all lowercase. lnnote, loantemp and name8.sas7bdat. output in text file. read the sas file using pyreadstat. lnnote dataset is huge 20gb, 6 millioon rows. maybe can divide it by chunks for faster read
