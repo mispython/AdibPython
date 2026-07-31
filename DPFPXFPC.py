@@ -1,21 +1,20 @@
-Global variables: {'NOWK': '4', 'NOWK1': '3', 'REPTMON': '07', 'REPTMON1': '07', 'REPTYEAR': '2026', 'REPTDAY': '30', 'RDATE': '300726', 'SDATE': '230726'}
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMBRAS.py", line 136, in <module>
-    lnnote_pbb = read_lnnote(input_pbb_path / "lnnote.sas7bdat", reptmon_int, reptyear_int)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMBRAS.py", line 117, in read_lnnote
-    filtered = filter_lnnote_chunk(pdf_chunk, reptmon, reptyear)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMBRAS.py", line 79, in filter_lnnote_chunk
-    df = df.with_columns(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.InvalidOperationError: conversion from `str` to `date` failed in column 'ISSUEDT' for 369391 out of 500000 values: ["12420000", "71019991", … "11920040"]
+import pyreadstat
+from pathlib import Path
 
-You might want to try:
-- setting `strict=False` to set values that cannot be converted to `null`
-- using `str.strptime`, `str.to_date`, or `str.to_datetime` and providing a format string
+filepath = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMBRAS/pbb/lnnote.sas7bdat")
+
+# 1. Metadata only - tells us the SAS format attached to ISSUEDT (if any),
+#    and the raw storage type pyreadstat detected.
+_, meta = pyreadstat.read_sas7bdat(str(filepath), metadataonly=True)
+
+print("Column names:", meta.column_names[:20])
+print("readstat_variable_types['ISSUEDT']:", meta.readstat_variable_types.get('ISSUEDT'))
+print("original_variable_types['ISSUEDT']:", meta.original_variable_types.get('ISSUEDT'))
+print("variable_format['ISSUEDT']:", meta.variable_format.get('ISSUEDT') if hasattr(meta, 'variable_format') else meta.__dict__.get('variable_format'))
+
+# 2. Pull a tiny real sample (first 20 rows) of the raw column so we can see
+#    the actual values and python dtype pyreadstat hands back.
+df_sample, _ = pyreadstat.read_sas7bdat(str(filepath), usecols=['ISSUEDT'], row_limit=20)
+print("\nSample ISSUEDT values and dtype:")
+print(df_sample['ISSUEDT'].dtype)
+print(df_sample['ISSUEDT'].to_list())
