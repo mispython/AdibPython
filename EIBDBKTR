@@ -1,102 +1,399 @@
-//EIBDBKTR JOB MISEIS,EIBWBKTR,MSGCLASS=A,CLASS=A,NOTIFY=&SYSUID        JOB30156
-//*JOBPARM S=S1M1                                                               
-//*                                                                             
-//* BANKTRADE PROCESSING. DEPENDENCIES.                                         
-//*                       BANK TRADE JOBS (11.00 PM)                            
-//*                       EIBDLNEX (1.00 AM NEXT DAY)                           
-//*                       EIBDBKTR (7.00 AM NEXT DAY)                           
-//*                                                                             
-//EIBDBKTR EXEC SAS609                                                          
-//LOAN      DD DSN=SAP.PBB.MNILN.DAILY(0),DISP=SHR                              
-//PGM       DD DSN=SAP.BNM.PROGRAM,DISP=SHR                                     
-//*EXTAVDB   DD DISP=SHR,DSN=SAP.PBB.BTRADE.ADB                                 
-//EXTCOMM   DD DISP=SHR,DSN=SAP.PBB.BTRADE.CRFCOMD                              
-//*EXTHIST   DD DISP=SHR,DSN=SAP.PBB.BTRADE.CRFHIST                             
-//EXCREPOS  DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXCREPOS                             
-//EXPROV    DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXPROV                               
-//EXTMAST   DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXTMAST                              
-//EXTMAST2  DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXTMAST2                             
-//EXTSUBAC  DD DISP=SHR,DSN=SAP.PBB.BTRADE.EXTSUBAC                             
-//OBTRSA    DD DSN=SAP.PBB.BTRADE.SASDATA.DAILY(0),DISP=SHR                     
-//BTRSA     DD DSN=SAP.PBB.BTRADE.SASDATA.DAILY(+1),                            
-//             DISP=(NEW,CATLG,DELETE),                                         
-//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
-//             SPACE=(CYL,(30,20),RLSE),UNIT=(SYSDA,8)                          
-//OIBTRSA   DD DSN=SAP.PIBB.BTRADE.SASDATA.DAILY(0),DISP=SHR                    
-//IBTRSA    DD DSN=SAP.PIBB.BTRADE.SASDATA.DAILY(+1),                           
-//             DISP=(NEW,CATLG,DELETE),                                         
-//             DCB=(RECFM=FS,LRECL=27648,BLKSIZE=27648),                        
-//             SPACE=(CYL,(30,20),RLSE),UNIT=(SYSDA,8)                          
-//SASLIST   DD SYSOUT=X                                                         
-//SYSIN     DD *                                                                
-                                                                                
-OPTIONS SORTDEV=3390 YEARCUTOFF=1950 LS=132 PS=60 NOCENTER;                     
-                                                                                
-DATA BTRSA.REPTDATE (KEEP=REPTDATE)                                             
-     IBTRSA.REPTDATE (KEEP=REPTDATE);                                           
-  REPTDATE = TODAY()-1;                                                         
-  PREVDATE=REPTDATE-1;                                                          
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                                 
-  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));                              
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                                
-  CALL SYMPUT('PREVMON',PUT(MONTH(PREVDATE),Z2.));                              
-  CALL SYMPUT('PREVDAY',PUT(DAY(PREVDATE),Z2.));                                
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                                  
-RUN;                                                                            
-%GLOBAL REPTMON REPTDAY PREVMON PREVDAY;                                        
-*;                                                                              
-DATA _NULL_;                                                                    
-  INFILE EXTMAST OBS=1;                                                         
-  INPUT @05 REPTDATE YYMMDD8.;                                                  
-  CALL SYMPUT('MAST', PUT(REPTDATE, DDMMYY8.));                                 
-RUN;                                                                            
-*;                                                                              
-DATA _NULL_;                                                                    
-  INFILE EXTSUBAC  OBS=1;                                                       
-  INPUT @05 REPTDATE YYMMDD8.;                                                  
-  CALL SYMPUT('SUBA', PUT(REPTDATE, DDMMYY8.));                                 
-RUN;                                                                            
-*;                                                                              
-DATA _NULL_;                                                                    
-  INFILE EXCREPOS  OBS=1;                                                       
-  INPUT @05 REPTDATE YYMMDD8.;                                                  
-  CALL SYMPUT('CRED', PUT(REPTDATE, DDMMYY8.));                                 
-RUN;                                                                            
-*;                                                                              
-DATA _NULL_;                                                                    
-  INFILE EXPROV    OBS=1;                                                       
-  INPUT @05 REPTDATE YYMMDD8.;                                                  
-  CALL SYMPUT('PROV', PUT(REPTDATE, DDMMYY8.));                                 
-RUN;                                                                            
-*;                                                                              
-DATA _NULL_;                                                                    
-  INFILE EXTCOMM OBS=1;                                                         
-  INPUT @05 REPTDATE YYMMDD8.;                                                  
-  CALL SYMPUT('COMM', PUT(REPTDATE, DDMMYY8.));                                 
-RUN;                                                                            
-                                                                                
-%MACRO PROCESS;                                                                 
-   %IF "&MAST"="&RDATE" AND "&SUBA"="&RDATE" AND                                
-       "&CRED"="&RDATE" AND "&PROV"="&RDATE" AND                                
-       "&COMM"="&RDATE" %THEN %DO;                                              
-      %INC PGM(EIBDBTCC);                                                       
-   %END;                                                                        
-   %ELSE %DO;                                                                   
-      %IF "&MAST" NE "&RDATE" %THEN                                             
-         %PUT BANKTRADE MASTER FILE IS NOT DATED &RDATE;                        
-      %IF "&SUBA" NE "&RDATE" %THEN                                             
-         %PUT BANKTRADE SUBACCT FILE IS NOT DATED &RDATE;                       
-      %IF "&CRED" NE "&RDATE" %THEN                                             
-         %PUT BANKTRADE CREDIT FILE IS NOT DATED &RDATE;                        
-      %IF "&PROV" NE "&RDATE" %THEN                                             
-         %PUT BANKTRADE PROVISION FILE IS NOT DATED &RDATE;                     
-      %IF "&COMM" NE "&RDATE" %THEN                                             
-         %PUT BANKTRADE CRFCOMM FILE IS NOT DATED &RDATE;                       
-      %PUT THE JOB IS NOT DONE !!;                                              
-      %DO;                                                                      
-         DATA A;                                                                
-            ABORT 77;                                                           
-      %END;                                                                     
-   %END;                                                                        
-%MEND;                                                                          
-%PROCESS;                                                                       
+from __future__ import annotations
+
+from pathlib import Path
+from datetime import datetime, timedelta
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pyarrow.ipc as ipc
+import polars as pl
+import pandas as pd
+import pyreadstat
+import importlib.util
+import sys
+
+# ============================================
+# LIBRARY MAPPINGS (adjust to your environment)
+# ============================================
+ROOT = Path(".")
+SACA   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/conv/" 
+ISACA  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/islamic" 
+FDLIB  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/fd"  
+IFDLIB = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/ifd"
+PGM    = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/"  # PBBDPFMT.py location
+HOST   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTRUT"
+CLIENT_RPT = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/" / "CLIENT.txt"
+
+HOST.mkdir(parents=True, exist_ok=True)
+
+
+# ==================================================
+# Helper to read SAS7BDAT files using pyreadstat
+# ==================================================
+def read_sas7bdat(filepath: Path) -> pl.DataFrame:
+    """Read SAS7BDAT file and convert to Polars DataFrame using pyreadstat"""
+    sas_path = filepath if filepath.suffix == '.sas7bdat' else filepath.with_suffix('.sas7bdat')
+    if not sas_path.exists():
+        raise FileNotFoundError(f"SAS7BDAT file not found: {sas_path}")
+    
+    # Read SAS file with metadata
+    df, meta = pyreadstat.read_sas7bdat(str(sas_path))
+    
+    # Convert to Polars DataFrame
+    return pl.from_pandas(df)
+
+
+# ==================================================
+# Helper to write SAS7BDAT files using pyreadstat
+# ==================================================
+def write_sas7bdat(df: pl.DataFrame, filepath: Path):
+    """Write DataFrame to SAS7BDAT format using pyreadstat"""
+    sas_path = filepath if filepath.suffix == '.sas7bdat' else filepath.with_suffix('.sas7bdat')
+    # Convert to pandas for pyreadstat writing
+    pd_df = df.to_pandas()
+    pyreadstat.write_sas7bdat(pd_df, str(sas_path))
+
+
+# ==================================================
+# Import PBBDPFMT.py and inspect available formats
+# ==================================================
+def load_pbbdpfmt():
+    """Load format dictionaries from PBBDPFMT.py"""
+    pgm_path = PGM / "PBBDPFMT.py"
+    if not pgm_path.exists():
+        raise FileNotFoundError(f"PBBDPFMT.py not found: {pgm_path}")
+    
+    # Import the module
+    spec = importlib.util.spec_from_file_location("PBBDPFMT", pgm_path)
+    pbbdpfmt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pbbdpfmt)
+    
+    # Print available attributes to debug
+    print("Available attributes in PBBDPFMT:")
+    for attr in dir(pbbdpfmt):
+        if not attr.startswith('_'):
+            obj = getattr(pbbdpfmt, attr)
+            if isinstance(obj, dict):
+                print(f"  {attr}: dict with {len(obj)} items")
+            elif callable(obj):
+                print(f"  {attr}: function")
+            else:
+                print(f"  {attr}: {type(obj).__name__}")
+    
+    return pbbdpfmt
+
+# Load formats once
+pbbdpfmt = load_pbbdpfmt()
+
+
+def apply_sas_format(df: pl.DataFrame, source_col: str, format_dict, out_col: str) -> pl.DataFrame:
+    """
+    Apply SAS format using dictionary mapping.
+    Handles both direct dictionaries and callable format functions.
+    """
+    # If format_dict is a function/callable, apply it directly
+    if callable(format_dict):
+        # Apply the format function to each value
+        return df.with_columns(
+            pl.col(source_col).map_elements(
+                lambda x: format_dict(x) if x is not None else None,
+                return_dtype=pl.Utf8
+            ).alias(out_col)
+        )
+    
+    # If it's a dictionary, use lookup
+    if isinstance(format_dict, dict):
+        # Convert format dict to DataFrame for joining
+        fmt_items = list(format_dict.items())
+        fmt_df = pl.DataFrame({
+            "key": [str(k) for k, v in fmt_items],
+            "value": [str(v) for k, v in fmt_items]
+        })
+        
+        # Convert source column to string for matching
+        df = df.with_columns(pl.col(source_col).cast(pl.Utf8).alias(f"_{source_col}_str"))
+        
+        # Perform left join
+        result = df.join(
+            fmt_df,
+            left_on=f"_{source_col}_str",
+            right_on="key",
+            how="left"
+        ).drop(["key", f"_{source_col}_str"])
+        
+        # Rename value column to out_col
+        result = result.rename({"value": out_col})
+        
+        return result
+    
+    raise ValueError(f"Unsupported format type: {type(format_dict)}")
+
+
+# Look for format dictionaries - they might be nested or named differently
+# Based on the output we saw, try to find the format mappings
+def find_format_dict(module, format_name):
+    """Find a format dictionary in the module, checking various possibilities"""
+    # Check direct attribute
+    if hasattr(module, format_name):
+        return getattr(module, format_name)
+    
+    # Check if there's a formats dictionary
+    if hasattr(module, 'formats') and isinstance(module.formats, dict):
+        if format_name in module.formats:
+            return module.formats[format_name]
+    
+    # Check if there's a get_format function
+    if hasattr(module, 'get_format') and callable(module.get_format):
+        try:
+            return module.get_format(format_name)
+        except:
+            pass
+    
+    # Check if apply_format function exists with different signature
+    if hasattr(module, 'apply_format') and callable(module.apply_format):
+        # Try to use apply_format directly
+        return module.apply_format
+    
+    # Print all dict attributes for debugging
+    print(f"\nCould not find {format_name}. Available dict attributes:")
+    for attr in dir(module):
+        if not attr.startswith('_'):
+            obj = getattr(module, attr)
+            if isinstance(obj, dict):
+                print(f"  {attr}: {list(obj.keys())[:5]}...")
+    
+    return None
+
+
+# Try to get format dictionaries - adapt based on what's available
+SAPROD = find_format_dict(pbbdpfmt, 'SAPROD')
+CAPROD = find_format_dict(pbbdpfmt, 'CAPROD')
+FDPROD = find_format_dict(pbbdpfmt, 'FDPROD')
+
+# If formats are callable (functions), we'll use them directly
+# If they're dictionaries, we'll use the lookup method
+
+# =========================
+# 1) REPTDATE - Use current date minus 1 day
+# =========================
+REPTDATE = datetime.now() - timedelta(days=1)
+REPTYEAR = f"{REPTDATE.year:04d}"
+REPTMON  = f"{REPTDATE.month:02d}"
+
+print(f"\nProcessing for month: {REPTMON} (Report Date: {REPTDATE.strftime('%Y-%m-%d')})")
+print(f"Report Date based on: current date minus 1 day")
+
+# =========================
+# 2) SA - Saving accounts with SAPROD format
+# =========================
+saving_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
+SA = (
+    pl.concat([
+        read_sas7bdat(SACA / "saving.sas7bdat").select(saving_cols),
+        read_sas7bdat(ISACA / "saving.sas7bdat").select(saving_cols),
+    ], how="vertical_relaxed")
+    .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
+)
+
+# Apply SAPROD format
+if SAPROD is not None:
+    SA = apply_sas_format(SA, source_col="PRODUCT", format_dict=SAPROD, out_col="PRODCD")
+else:
+    print("WARNING: SAPROD format not found, creating PRODCD as empty string")
+    SA = SA.with_columns(pl.lit("").alias("PRODCD"))
+
+SA = SA.select(["ACCTNO","PRODCD","PURPOSE","PRODUCT"])
+
+# =========================
+# 3) CA - Current accounts with CAPROD format
+# =========================
+current_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
+CA = (
+    pl.concat([
+        read_sas7bdat(SACA / "current.sas7bdat").select(current_cols),
+        read_sas7bdat(ISACA / "current.sas7bdat").select(current_cols),
+    ], how="vertical_relaxed")
+    .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
+)
+
+# Apply CAPROD format
+if CAPROD is not None:
+    CA = apply_sas_format(CA, source_col="PRODUCT", format_dict=CAPROD, out_col="PRODCD")
+else:
+    print("WARNING: CAPROD format not found, creating PRODCD as empty string")
+    CA = CA.with_columns(pl.lit("").alias("PRODCD"))
+
+CA = CA.select(["ACCTNO","PRODCD","PURPOSE","PRODUCT"])
+
+# =========================
+# 4) FD - Fixed Deposit base
+# =========================
+fd_base_cols = ["ACCTNO","PURPOSE","PRODUCT"]
+FD_base = (
+    pl.concat([
+        read_sas7bdat(SACA / "fd.sas7bdat").select(fd_base_cols),
+        read_sas7bdat(ISACA / "fd.sas7bdat").select(fd_base_cols),
+    ], how="vertical_relaxed")
+    .sort("ACCTNO")
+)
+
+# =========================
+# 5) FDCD - Fixed Deposit product codes
+# =========================
+fdcd_cols = ["ACCTNO","ACCTTYPE","OPENIND","INTPLAN"]
+FDCD_union = pl.concat([
+    read_sas7bdat(FDLIB / "fd.sas7bdat").select(fdcd_cols),
+    read_sas7bdat(IFDLIB / "fd.sas7bdat").select(fdcd_cols),
+], how="vertical_relaxed")
+
+FDCD = (
+    FDCD_union
+    .filter(~pl.col("ACCTTYPE").is_in([397,398]) & pl.col("OPENIND").is_in(["D","O"]))
+)
+
+# Apply FDPROD format
+if FDPROD is not None:
+    FDCD = apply_sas_format(FDCD, source_col="INTPLAN", format_dict=FDPROD, out_col="PRODCD")
+else:
+    print("WARNING: FDPROD format not found, creating PRODCD as empty string")
+    FDCD = FDCD.with_columns(pl.lit("").alias("PRODCD"))
+
+# Apply overrides (matching SAS IF/ELSE logic)
+FDCD = FDCD.with_columns(
+    pl.when(pl.col("ACCTTYPE").is_in([315,394]))
+    .then(pl.lit("42132"))
+    .when(pl.col("ACCTTYPE").is_in([397,398]))
+    .then(pl.lit("42199"))
+    .otherwise(pl.col("PRODCD"))
+    .alias("PRODCD")
+)
+
+# PROC SORT DATA=FDCD NODUPKEYS; BY ACCTNO;RUN;
+FDCD = (
+    FDCD.sort(["ACCTNO"])
+    .unique(subset=["ACCTNO"], keep="first")
+    .select(["ACCTNO","PRODCD"])
+)
+
+# =========================
+# 6) FD - Merge base with product codes
+# =========================
+FD = FD_base.join(FDCD, on="ACCTNO", how="inner")
+
+# =========================
+# 7) DEP - Combined deposits with filters
+# =========================
+DEP = pl.concat([SA, CA, FD], how="vertical_relaxed")
+
+valid_prodcd = ['42110','42310','42120','42320','42130',
+                '42133','42132','42180','42610','42630','34180',
+                '42199','42699']
+DEP = DEP.filter(pl.col("PRODCD").is_in(valid_prodcd))
+
+DEP = DEP.filter(
+    ~(
+        pl.col("PRODCD").is_in(["42199","42699"])
+        & ~pl.col("PRODUCT").is_in([72,413])
+    )
+)
+
+# PROC SORT DATA=DEP; BY ACCTNO;RUN;
+DEP = DEP.sort("ACCTNO")
+
+# =========================
+# 8) MERGEX - Deposits with PURPOSE in ('5','6')
+# =========================
+MERGEX = DEP.filter(pl.col("PURPOSE").is_in(["5","6"]))
+
+# =========================
+# 9) CLIENT - Parse fixed-width text file
+# =========================
+def parse_client_fixed_width(path: Path) -> pl.DataFrame:
+    rows = []
+    with path.open("r", encoding="latin1", errors="ignore") as f:
+        for line in f:
+            # @002 ACCTNO 10. (positions 2-11, 1-based)
+            acct_str = line[1:11] if len(line) >= 11 else ""
+            acct_str = acct_str.strip()
+            
+            # IF COMPRESS(ACCTNO, "1234567890") = ' ' - check if all digits
+            if acct_str and all(c in "0123456789" for c in acct_str):
+                # @021 NAME $40. (positions 21-60, 1-based)
+                name_str = line[20:60] if len(line) >= 60 else ""
+                name_str = name_str.rstrip()
+                # KEY = SUBSTR(NAME,1,10)
+                key = name_str[:10] if name_str else ""
+                rows.append({
+                    "ACCTNO": int(acct_str),
+                    "NAME": name_str,
+                    "KEY": key
+                })
+    
+    if not rows:
+        return pl.DataFrame({
+            "ACCTNO": pl.Series([], dtype=pl.Int64),
+            "NAME": pl.Series([], dtype=pl.Utf8),
+            "KEY": pl.Series([], dtype=pl.Utf8)
+        })
+    return pl.DataFrame(rows)
+
+CLIENT = parse_client_fixed_width(CLIENT_RPT)
+
+# PROC SORT DATA=CLIENT NODUPKEYS; BY ACCTNO;
+CLIENT = CLIENT.sort("ACCTNO").unique(subset=["ACCTNO"], keep="first")
+
+# DATA CLIENT;
+#    MERGE CLIENT(IN=A) DEP (IN=B KEEP=ACCTNO);
+#    BY ACCTNO;
+#    IF A & B;
+# RUN;
+CLIENT = CLIENT.join(DEP.select("ACCTNO").unique(), on="ACCTNO", how="inner")
+
+# =========================
+# 10) HOST.TRUST&REPTMON - Trust accounts
+# =========================
+TRUST = pl.concat([
+    MERGEX.select(["ACCTNO"]),
+    CLIENT.select(["ACCTNO"])
+], how="vertical_relaxed")
+
+# =========================
+# 11) HOST.FDCD&REPTMON - FD entity mapping
+# =========================
+FD_PBB  = read_sas7bdat(FDLIB / "fd.sas7bdat").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PBB "))
+FD_PIBB = read_sas7bdat(IFDLIB / "fd.sas7bdat").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PIBB "))
+FDCD_MONTH = pl.concat([FD_PBB, FD_PIBB], how="vertical_relaxed").select(["ACCTNO","ENTITY"])
+
+# =========================
+# 12) Write outputs in both SAS7BDAT and Parquet formats
+# =========================
+
+# Write TRUST dataset
+trust_path = HOST / f"TRUST{REPTMON}"
+TRUST.write_parquet(trust_path.with_suffix('.parquet'))
+write_sas7bdat(TRUST, trust_path.with_suffix('.sas7bdat'))
+
+# Write FDCD_MONTH dataset
+fdcd_path = HOST / f"FDCD{REPTMON}"
+FDCD_MONTH.write_parquet(fdcd_path.with_suffix('.parquet'))
+write_sas7bdat(FDCD_MONTH, fdcd_path.with_suffix('.sas7bdat'))
+
+# Build Arrow IPC transport file (mirror of PROC CPORT)
+tables = {
+    f"TRUST{REPTMON}": TRUST.to_arrow(),
+    f"FDCD{REPTMON}": FDCD_MONTH.to_arrow(),
+}
+
+ipc_path = HOST / f"TRUST_FDCD_{REPTMON}.arrow"
+with pa.ipc.new_file(ipc_path, tables[f"TRUST{REPTMON}"].schema) as writer:
+    for name, table in tables.items():
+        writer.write_table(table, name)
+
+print(f"\nOutput files:")
+print(f"  {trust_path}.parquet")
+print(f"  {trust_path}.sas7bdat")
+print(f"  {fdcd_path}.parquet")
+print(f"  {fdcd_path}.sas7bdat")
+print(f"  {ipc_path}")
+print(f"\nReport Date (current date - 1 day): {REPTDATE.strftime('%Y-%m-%d')}")
+print(f"Report Month: {REPTMON}")
+print(f"Report Year: {REPTYEAR}")
