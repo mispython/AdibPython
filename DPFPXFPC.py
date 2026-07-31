@@ -30,8 +30,10 @@ Arrears Buckets:
 """
 
 import polars as pl
-from datetime import datetime
+import pyreadstat
+from datetime import datetime, timedelta
 import os
+import sys
 
 # Directories
 LOAN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHP'
@@ -47,38 +49,31 @@ print("=" * 60)
 # HP Products (from PBBLNFMT)
 HP_PRODUCTS = [128, 130, 380, 381, 700, 705]
 
-# Read REPTDATE
-print("\nReading REPTDATE...")
-try:
-    df_reptdate = pl.read_parquet(f'{LOAN_DIR}REPTDATE.parquet')
-    reptdate = df_reptdate['REPTDATE'][0]
-    
-    day = reptdate.day
-    
-    # Week determination
-    if day == 8:
-        sdd, wk, wk1 = 1, '1', '4'
-    elif day == 15:
-        sdd, wk, wk1 = 9, '2', '1'
-    elif day == 22:
-        sdd, wk, wk1 = 16, '3', '2'
-    else:
-        sdd, wk, wk1 = 23, '4', '3'
-    
-    mm = reptdate.month
-    mm1 = 12 if (wk == '1' and mm == 1) else (mm - 1 if wk == '1' else mm)
-    
-    reptyear = reptdate.year
-    reptmon = f'{mm:02d}'
-    reptday = f'{day:02d}'
-    rdate = reptdate.strftime('%d%m%y')
-    
-    print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
-    print(f"Week: {wk}")
-except Exception as e:
-    print(f"Error: {e}")
-    import sys
-    sys.exit(1)
+# Use yesterday's date as report date
+print("\nDetermining report date...")
+reptdate = datetime.now() - timedelta(days=1)
+day = reptdate.day
+
+# Week determination
+if day <= 7:
+    sdd, wk, wk1 = 1, '1', '4'
+elif day <= 14:
+    sdd, wk, wk1 = 9, '2', '1'
+elif day <= 21:
+    sdd, wk, wk1 = 16, '3', '2'
+else:
+    sdd, wk, wk1 = 23, '4', '3'
+
+mm = reptdate.month
+mm1 = 12 if (wk == '1' and mm == 1) else (mm - 1 if wk == '1' else mm)
+
+reptyear = reptdate.year
+reptmon = f'{mm:02d}'
+reptday = f'{day:02d}'
+rdate = reptdate.strftime('%d%m%y')
+
+print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+print(f"Week: {wk}")
 
 print("=" * 60)
 
@@ -97,18 +92,29 @@ STATE_MAP = {
     '13': 'TRENGGANU', '14': 'W.PERSEKUTUAN', '15': 'LABUAN'
 }
 
-# Read loan data
-print("\nReading loan data...")
+# Read loan data from SAS7BDAT files
+print("\nReading LOANTEMP.sas7bdat...")
 try:
-    # Read LOANTEMP
-    df_loantemp = pl.read_parquet(f'{CCDTEMP_DIR}LOANTEMP.parquet')
+    df_loantemp, meta_loantemp = pyreadstat.read_sas7bdat(f'{CCDTEMP_DIR}/LOANTEMP.sas7bdat')
+    df_loantemp = pl.from_pandas(df_loantemp)
+    
+    # Filter HP products with balance > 0
     df_loantemp = df_loantemp.filter(
         (pl.col('PRODUCT').is_in(HP_PRODUCTS)) & 
         (pl.col('BALANCE') > 0)
     )
+    print(f"  LOANTEMP records: {len(df_loantemp):,}")
     
-    # Read LNNOTE
-    df_lnnote = pl.read_parquet(f'{LOAN_DIR}LNNOTE.parquet')
+except Exception as e:
+    print(f"  Error reading LOANTEMP.sas7bdat: {e}")
+    sys.exit(1)
+
+print("\nReading LNNOTE.sas7bdat...")
+try:
+    df_lnnote, meta_lnnote = pyreadstat.read_sas7bdat(f'{LOAN_DIR}/LNNOTE.sas7bdat')
+    df_lnnote = pl.from_pandas(df_lnnote)
+    
+    # Filter HP products with balance > 0
     df_lnnote = df_lnnote.filter(
         (pl.col('LOANTYPE').is_in(HP_PRODUCTS)) & 
         (pl.col('BALANCE') > 0)
@@ -117,15 +123,24 @@ try:
         'NOTETERM', 'STATE', 'DEALERNO', 'SCORE2', 'ORGBAL',
         'CURBAL', 'PAYAMT', 'ISSUEDT'
     ])
-    
-    # Merge
-    df_hploan = df_lnnote.join(df_loantemp, on=['ACCTNO', 'NOTENO'], how='inner')
-    
-    print(f"  HP Loans: {len(df_hploan):,} accounts")
+    print(f"  LNNOTE records: {len(df_lnnote):,}")
     
 except Exception as e:
-    print(f"  âš  Error: {e}")
-    import sys
+    print(f"  Error reading LNNOTE.sas7bdat: {e}")
+    sys.exit(1)
+
+# Merge loan data
+print("\nMerging loan data...")
+try:
+    df_hploan = df_lnnote.join(
+        df_loantemp, 
+        on=['ACCTNO', 'NOTENO'], 
+        how='inner'
+    )
+    print(f"  Merged HP Loans: {len(df_hploan):,} accounts")
+    
+except Exception as e:
+    print(f"  Error merging data: {e}")
     sys.exit(1)
 
 # Process HP loans
@@ -136,11 +151,13 @@ df_hploan = df_hploan.with_columns([
     # Installments paid
     ((pl.col('ORGBAL') - pl.col('CURBAL')) / pl.col('PAYAMT')).alias('ISTLPD'),
     
-    # Issue date
-    pl.col('ISSUEDT').cast(pl.Utf8).str.slice(0, 8).str.to_datetime('%m%d%Y').alias('ISSDTE'),
+    # Convert SAS date to datetime (SAS dates are days since 1960-01-01)
+    (pl.lit(datetime(1960, 1, 1)).dt.offset_by(
+        pl.col('ISSUEDT').cast(pl.Duration('ms'))
+    )).alias('ISSDTE'),
     
     # Credit risk (first character of SCORE2)
-    pl.col('SCORE2').str.slice(0, 1).alias('CRRISK'),
+    pl.col('SCORE2').cast(pl.Utf8).str.slice(0, 1).alias('CRRISK'),
     
     # Margin of finance
     pl.when(pl.col('APPVALUE') > 0)
@@ -173,10 +190,10 @@ df_hploan = df_hploan.with_columns([
       .alias('TERMGRP'),
     
     # State name
-    pl.col('STATE').replace(STATE_MAP, default='OTHERS').alias('STATENM'),
+    pl.col('STATE').cast(pl.Utf8).replace(STATE_MAP, default='OTHERS').alias('STATENM'),
     
     # National (East/West Malaysia)
-    pl.when(pl.col('STATE').is_in(['10', '11', '15']))
+    pl.when(pl.col('STATE').cast(pl.Utf8).is_in(['10', '11', '15']))
       .then(pl.lit('EAST MALAYSIA'))
       .otherwise(pl.lit('WEST MALAYSIA'))
       .alias('NATIONAL'),
@@ -263,7 +280,7 @@ df_hploan = df_hploan.with_columns([
       .alias('MTHARR')
 ])
 
-print(f"  âœ“ Processed: {len(df_hploan):,} HP loans")
+print(f"  Processed: {len(df_hploan):,} HP loans")
 
 # Create 4 account groups
 print("\nCreating account groups...")
@@ -323,6 +340,33 @@ def generate_summary(df, group_cols, title, subtitle):
     
     return df_pivot
 
+def write_summary_to_text(df_pivot, group_cols, title, subtitle, filename):
+    """Write summary report to formatted text file"""
+    
+    with open(filename, 'w') as f:
+        # Header
+        f.write("=" * 100 + "\n")
+        f.write(f"EIMRESHP - HIRE PURCHASE LOAN SUMMARY REPORT\n")
+        f.write(f"REPORT TITLE: {title}\n")
+        f.write(f"SUB TITLE: {subtitle}\n")
+        f.write(f"REPORT DATE: {reptdate.strftime('%d/%m/%Y')}\n")
+        f.write("=" * 100 + "\n\n")
+        
+        # Convert to pandas for easier text formatting
+        df_display = df_pivot.to_pandas()
+        
+        # Write column headers
+        header_cols = group_cols + ['<3MTHS_CNT', '<3MTHS_AMT', '3-6MTHS_CNT', '3-6MTHS_AMT',
+                                     '6-12MTHS_CNT', '6-12MTHS_AMT', '12-24MTHS_CNT', '12-24MTHS_AMT',
+                                     '24-36MTHS_CNT', '24-36MTHS_AMT', '>36MTHS_CNT', '>36MTHS_AMT',
+                                     'TOTAL_CNT', 'TOTAL_AMT']
+        
+        # Write data
+        f.write(df_display.to_string(index=False))
+        f.write("\n\n")
+        f.write("=" * 100 + "\n")
+        f.write("END OF REPORT\n")
+
 # Report configurations
 reports = [
     # Credit Risk Score
@@ -374,10 +418,12 @@ reports = [
     {'df': df_hploan4.filter(pl.col('MAKE') == 'OTHERS'), 'groups': ['NEWSEC', 'GOODS', 'BRABBR'], 'title': 'BY MAKE OF VEHICLE = OTHERS', 'subtitle': 'RESTRUCTURE NPL ACCOUNT'}
 ]
 
-# Generate all reports (simplified - production would create CSV files)
+# Generate all reports
 summary_count = 0
 for i, report in enumerate(reports):
     if len(report['df']) > 0:
+        print(f"  Generating report {i+1}/36: {report['title']} - {report['subtitle']}...")
+        
         df_report = generate_summary(
             report['df'], 
             report['groups'], 
@@ -385,11 +431,17 @@ for i, report in enumerate(reports):
             report['subtitle']
         )
         
-        filename = f"EIMRESHP_SUMMARY_{i+1:02d}_{report['title'].replace(' ', '_')}.parquet"
-        df_report.write_parquet(f'{OUTPUT_DIR}{filename}')
+        filename = f"{OUTPUT_DIR}/EIMRESHP_SUMMARY_{i+1:02d}_{report['title'].replace(' ', '_')}.txt"
+        write_summary_to_text(
+            df_report,
+            report['groups'],
+            report['title'],
+            report['subtitle'],
+            filename
+        )
         summary_count += 1
 
-print(f"  âœ“ Generated {summary_count} summary reports")
+print(f"  Generated {summary_count} summary reports")
 
 # Generate detail report for NPL accounts
 print("\nGenerating detail report...")
@@ -400,17 +452,40 @@ df_detail = df_hploan2.select([
     'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE'
 ]).sort(['ACCTNO', 'NOTENO'])
 
-df_detail.write_csv(f'{OUTPUT_DIR}EIMRESHP_DETAIL_NPL.csv', separator=';')
+# Write detail report to text file
+detail_file = f'{OUTPUT_DIR}/EIMRESHP_DETAIL_NPL.txt'
+with open(detail_file, 'w') as f:
+    f.write("=" * 120 + "\n")
+    f.write("EIMRESHP - HIRE PURCHASE NPL DETAIL REPORT\n")
+    f.write(f"REPORT DATE: {reptdate.strftime('%d/%m/%Y')}\n")
+    f.write("=" * 120 + "\n\n")
+    
+    # Convert to pandas for formatting
+    df_detail_pd = df_detail.to_pandas()
+    
+    # Write header
+    headers = ['ACCTNO', 'NOTENO', 'NAME', 'BRABBR', 'PROD', 'BORSTAT', 
+               'NETPROC', 'BALANCE', 'MTHARR', 'MARGINF%', 'TERM',
+               'STATE', 'MAKE', 'NEW/SEC', 'SOURCE', 'SCORE', 'INSTPD', 'ISSUEDT']
+    
+    header_line = f"{'ACCTNO':<12} {'NOTENO':<8} {'NAME':<30} {'BRABBR':<6} {'PROD':<5} {'BORSTAT':<8} {'NETPROC':<12} {'BALANCE':<12} {'MTHARR':<7} {'MARGINF%':<10} {'TERM':<5} {'STATE':<15} {'MAKE':<15} {'NEW/SEC':<10} {'SOURCE':<12} {'SCORE':<6} {'INSTPD':<8} {'ISSUEDT':<10}\n"
+    f.write(header_line)
+    f.write("-" * 120 + "\n")
+    
+    # Write data lines
+    for row in df_detail_pd.itertuples():
+        line = f"{row.ACCTNO:<12} {row.NOTENO:<8} {str(row.NAME)[:30]:<30} {str(row.BRABBR):<6} {row.PRODUCT:<5} {str(row.BORSTAT):<8} {row.NETPROC:<12,.2f} {row.BALANCE:<12,.2f} {row.MTHARR:<7} {row.MARGINF:<10.1f} {row.NOTETERM:<5} {str(row.STATENM):<15} {str(row.MAKE):<15} {str(row.NEWSEC):<10} {str(row.SOURCE):<12} {str(row.SCORE2):<6} {row.ISTLPD:<8.1f} {str(row.ISSDTE)[:10]:<10}\n"
+        f.write(line)
 
 # Calculate totals
 tot_acc = len(df_detail)
 tot_amt = df_detail['BALANCE'].sum()
 
-print(f"  âœ“ Detail report: {tot_acc:,} NPL accounts")
-print(f"  âœ“ Total balance: {tot_amt:,.2f}")
+print(f"  Detail report: {tot_acc:,} NPL accounts")
+print(f"  Total balance: {tot_amt:,.2f}")
 
 print(f"\n{'='*60}")
-print(f"âœ“ EIMRESHP Complete!")
+print(f"EIMRESHP Complete!")
 print(f"{'='*60}")
 print(f"\nOutputs:")
 print(f"  - {summary_count} summary reports (by category)")
@@ -430,7 +505,3 @@ print(f"  5. Amount Financed")
 print(f"  6. By State")
 print(f"  7. By Make of Vehicle")
 print(f"  8. Make = OTHERS")
-
-
-
-REMOVE the reptdate.parquet. use datetime timedelta - 1 instead. all inputs in sas7bdat. read using pyreadstat. output in text file. inputs are lnnote.sas7bdat and loantemp.sas7bdat
