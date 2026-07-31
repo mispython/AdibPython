@@ -1,17 +1,23 @@
-Global variables: {'NOWK': '4', 'NOWK1': '3', 'REPTMON': '07', 'REPTMON1': '07', 'REPTYEAR': '2026', 'REPTDAY': '30', 'RDATE': '300726', 'SDATE': '230726'}
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMBRAS.py", line 144, in <module>
-    lnnote_pbb = read_lnnote(input_pbb_path / "lnnote.sas7bdat", reptmon_int, reptyear_int)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMBRAS.py", line 125, in read_lnnote
-    filtered = filter_lnnote_chunk(pdf_chunk, reptmon, reptyear)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMBRAS.py", line 95, in filter_lnnote_chunk
-    df = df.filter(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 5325, in filter
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.InvalidOperationError: 'is_in' cannot check for List(String) values in Float64 data
+import pyreadstat
+from pathlib import Path
+
+filepath = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMBRAS/pbb/lnnote.sas7bdat")
+
+# 1. Metadata - value label catalog attached directly to the sas7bdat, if any
+_, meta = pyreadstat.read_sas7bdat(str(filepath), metadataonly=True)
+
+print("variable_to_label (format name attached to LOANTYPE):",
+      meta.variable_to_label.get('LOANTYPE') if hasattr(meta, 'variable_to_label') else 'n/a')
+print("variable_value_labels['LOANTYPE']:", meta.variable_value_labels.get('LOANTYPE'))
+
+# 2. If the block above is empty, the labels likely live in a separate
+#    catalog file (commonly named the same as the library, e.g. FORMATS.sas7bcat,
+#    sitting alongside the .sas7bdat). List the directory to check.
+print("\nFiles alongside lnnote.sas7bdat:")
+for f in filepath.parent.iterdir():
+    print(" ", f.name)
+
+# 3. Raw sample of LOANTYPE values regardless, so we can see the actual codes in use
+df_sample, _ = pyreadstat.read_sas7bdat(str(filepath), usecols=['LOANTYPE'], row_limit=5000)
+print("\nDistinct LOANTYPE codes seen in first 5000 rows:")
+print(sorted(df_sample['LOANTYPE'].dropna().unique().tolist()))
