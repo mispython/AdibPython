@@ -76,10 +76,10 @@ ILN_NOTE   = BASE / "islamic" / "lnnote.sas7bdat"
 # BASE/<source>/<file> pattern as everything else.
 CRMA_TXT     = BASE / "crma" / "crma.txt"
 
-# TODO: source this from wherever $FORATE format is actually defined
-# (MISCA library). Expected shape: two columns CURCODE (str) and FORATE
-# (float). If this file doesn't exist, conversion is skipped with a warning.
-FORATE_SRC   = BASE / "misca" / "forate.csv"
+# TODO: confirm real filename/subfolder. This is a .sas7bdat -- either a
+# CNTLOUT-style format-catalog dump (FMTNAME/START/LABEL/...) or a
+# pre-filtered CURCODE/FORATE table; load_forate_lookup() handles either.
+FORATE_SRC   = BASE / "misca" / "forate.sas7bdat"
 
 OUT_BEP    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWCRMA")
 OUT_BEP.mkdir(parents=True, exist_ok=True)
@@ -192,14 +192,50 @@ def read_crma_raw(path: Path, encoding: str = "latin-1") -> pl.DataFrame:
 # ============================================================================
 
 def load_forate_lookup(path: Path) -> pl.DataFrame:
-    """Expected columns: CURCODE (str), FORATE (float). Returns an empty
-    (CURCODE, FORATE) frame if the source doesn't exist yet, so joins still
-    work -- just with null rates -- rather than crashing."""
-    if path.exists():
-        return pl.read_csv(path, schema_overrides={"CURCODE": pl.Utf8, "FORATE": pl.Float64})
-    print(f"[WARN] FORATE source not found at {path} -- "
-          f"non-MYR currency conversion will be skipped (FORATE will be null).")
-    return pl.DataFrame({"CURCODE": [], "FORATE": []}, schema={"CURCODE": pl.Utf8, "FORATE": pl.Float64})
+    """FORATE_SRC is a .sas7bdat -- either:
+      (a) the raw CNTLOUT dump of the MISCA format library (PROC FORMAT
+          LIB=MISCA CNTLOUT=FOFMT), which holds EVERY format in the library
+          with standard columns FMTNAME/START/END/LABEL/TYPE/..., or
+      (b) an already-filtered CURCODE/FORATE table.
+    We detect which shape we got and normalize to (CURCODE, FORATE)."""
+    empty = pl.DataFrame({"CURCODE": [], "FORATE": []}, schema={"CURCODE": pl.Utf8, "FORATE": pl.Float64})
+
+    if not path.exists():
+        print(f"[WARN] FORATE source not found at {path} -- "
+              f"non-MYR currency conversion will be skipped (FORATE will be null).")
+        return empty
+
+    df = read_sas7bdat(path)
+
+    if {"CURCODE", "FORATE"}.issubset(df.columns):
+        # Already pre-filtered to the shape we need.
+        return df.select([
+            pl.col("CURCODE").str.strip_chars(),
+            pl.col("FORATE").cast(pl.Float64, strict=False),
+        ]).unique(subset=["CURCODE"], keep="first")
+
+    if {"FMTNAME", "START", "LABEL"}.issubset(df.columns):
+        # Standard PROC FORMAT CNTLOUT structure -- filter to just the
+        # FORATE format (format names are stored without the leading '$').
+        out = (
+            df.filter(pl.col("FMTNAME").str.to_uppercase() == "FORATE")
+              .select([
+                  pl.col("START").str.strip_chars().alias("CURCODE"),
+                  pl.col("LABEL").cast(pl.Float64, strict=False).alias("FORATE"),
+              ])
+              .unique(subset=["CURCODE"], keep="first")
+        )
+        if out.height == 0:
+            print(f"[WARN] {path} read OK but no FMTNAME='FORATE' rows found -- "
+                  f"check the format name/case, or that this catalog dump actually "
+                  f"includes it. Available FMTNAME values: "
+                  f"{df.select('FMTNAME').unique().to_series().to_list()[:20]}")
+        return out
+
+    print(f"[WARN] FORATE source at {path} has unrecognized columns {df.columns} -- "
+          f"expected either (CURCODE, FORATE) or a CNTLOUT-style "
+          f"(FMTNAME, START, LABEL, ...) catalog dump. Skipping conversion.")
+    return empty
 
 
 FORATE_LOOKUP = load_forate_lookup(FORATE_SRC)
