@@ -1,112 +1,12 @@
-OPTIONS YEARCUTOFF=1950 NOCENTER;
-%INC PGM(PBBELF);
-%INC PGM(PBBLNFMT);
-
-DATA REPTDATE;
-  SET MNILN.REPTDATE;
-  SELECT(DAY(REPTDATE));
-    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
-    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
-    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
-    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3'; END;
-  END;
-  MM = MONTH(REPTDATE);
-  IF WK = '1' THEN DO;
-     MM1 = MM - 1;
-     IF MM1 = 0 THEN MM1 = 12;
-  END;
-  ELSE MM1 = MM;
-  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
-  CALL SYMPUT('NOWK',PUT(WK,$1.));
-  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
-  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
-  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
-RUN;
-*;
-*** A/C RELEASED FOR THE MTH ***;
-DATA LNNOTE;
-     SET MNILN.LNNOTE MNILNI.LNNOTE;
-     ISSDT  = INPUT(SUBSTR(PUT(ISSUEDT,Z11.),1,8), MMDDYY8.);
-     ISSMTH = PUT(MONTH(ISSDT),Z2.);
-     ISSYR  = PUT(ISSDT,YEAR4.);
-     IF LOANTYPE IN &HPD AND PAIDIND NE 'P' AND BALANCE GT 0 AND
-        ISSMTH = &REPTMON AND ISSYR = &REPTYEAR;
-RUN;
-
-DATA LOAN;
-     SET LNNOTE;
-     IF SUBSTR(COLLDESC,38,1) IN ('N','R') THEN
-        NEWSEC = 'N';
-     ELSE NEWSEC = 'S';
-     BRABBR = PUT(NTBRCH,BRCHCD.);
-RUN;
-
-*** AVERAGE PER BR BASE ON 30% OF TOTAL ***;
-DATA BRHDATA;
-  INFILE BRHFILE LRECL=80;
-  INPUT @2 BRANCH  3.
-        @6 BRABBR  $3.;
-  IF BRANCH LT 900 AND BRANCH NOT IN (1,99,100,218);
-RUN;
-PROC SUMMARY DATA=BRHDATA NWAY;
-     OUTPUT OUT=BR (RENAME=(_FREQ_=NOBR) DROP=_TYPE_);
-RUN;
-DATA _NULL_;
-  SET BR;
-  CALL SYMPUT('NOBCH',PUT(NOBR,8.));
-RUN;
-
-PROC SUMMARY DATA=LOAN NWAY;
-     OUTPUT OUT=LN1 (RENAME=(_FREQ_=NOACCT) DROP=_TYPE_);
-RUN;
-DATA _NULL_;
-  SET LN1;
-  CALL SYMPUT('NOACREL',PUT(ROUND(NOACCT*0.3/&NOBCH,1),8.));
-RUN;
-
-*** COMPARE RELEASE PER BR AND AVERAGE PER BR ***;
-PROC SORT DATA=LOAN OUT=LOAN1; BY BRABBR; RUN;
-PROC SUMMARY DATA=LOAN1;
-   BY BRABBR;
-   OUTPUT OUT=LOAN11
-   (RENAME=(_FREQ_=NOACCT) DROP=_TYPE_);
-RUN;
-DATA LOAN11;
-   SET LOAN11;
-   AVGNO = PUT(ROUND(NOACCT * 0.3,1),Z2.);
-   IF AVGNO LT &NOACREL THEN AVGNO = &NOACREL ;
-RUN;
-
-*** GENERATE TEXT FILE TO LOTUS NOTES SERVER ***;
-PROC SORT DATA=LOAN11 OUT=LOAN11; BY BRABBR; RUN;
-
-DATA LOAN1;
-   MERGE LOAN1 LOAN11;
-   BY BRABBR;
-RUN;
-
-DATA _NULL_;
-   SET LOAN1 END=LAST;
-   BY BRABBR;` 
-   FILE BRTXT1;
-   IF FIRST.BRABBR THEN DO;
-      AVGACC = 0 ;
-   END;
-   AVGACC + 1;
-   IF AVGACC LE AVGNO THEN DO;
-      PUT @1   ISSMTH
-          @3   ISSYR
-          @7   ACCTNO
-          @17  NAME           $30.
-          @47  ISSDT     DDMMYY10.
-          @57  BRABBR
-          @60 NEWSEC    ;
-   END;
-   RETURN;
-RUN;
-
-
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWCRMA.py", line 163, in <module>
+    DEPOSIT = DEPOSIT.with_columns([
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
+    self.lazy()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
+    return wrap_df(ldf.collect(engine, callback))
+polars.exceptions.ColumnNotFoundError: unable to find column "OPENDT"; valid columns: ["ACCTNO", "CUSTNAM1", "NEWIC", "OLDIC", "BRANCH", "OPENIND", "CURBAL", "CURCODE", "NRICCIS"]
