@@ -52,11 +52,6 @@ def write_textfile(df: pl.DataFrame, path: Path, delimiter: str = '|'):
     """Write DataFrame to delimited text file"""
     df.write_csv(path, separator=delimiter)
 
-def ddmmyy8_to_date(s: str) -> date:
-    dd, mm, yy2 = int(s[0:2]), int(s[2:4]), int(s[4:6])
-    yy = 1900 + yy2 if yy2 >= 50 else 2000 + yy2
-    return date(yy, mm, dd)
-
 def z11_first8_to_mmddyyyy_date(n) -> date | None:
     if n is None:
         return None
@@ -78,41 +73,23 @@ REPTMON  = f"{REPTDATE.month:02d}"
 RDATE    = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year%100:02d}"
 NOWK     = "1" if REPTDATE.day == 8 else "2" if REPTDATE.day == 15 else "3" if REPTDATE.day == 22 else "4"
 
-
 # ---- SAVING (DEPO + IDEPO) ----
 SAVING = pl.concat([read_sas7bdat(DEPO_SAV), read_sas7bdat(IDEPO_SAV)], how="vertical", rechunk=True)
-SAVING = SAVING.join(FORATE_MAP, on="CURCODE", how="left").with_columns([
-    pl.when(pl.col("CURCODE") != "MYR").then(pl.col("FORATE")).otherwise(pl.lit(1.0)).alias("FORATE"),
-    pl.when(pl.col("CURCODE") != "MYR").then(pl.col("CURBAL")).otherwise(pl.lit(None)).alias("FORBAL"),
-]).with_columns([
-    pl.when(pl.col("CURCODE") != "MYR").then(pl.col("CURBAL") * pl.col("FORATE")).otherwise(pl.col("CURBAL")).alias("CURBAL"),
-    pl.when((pl.col("CURCODE") != "MYR") & (pl.col("CURCODE") != "XAU"))
-      .then(pl.col("MTDAVBAL") * pl.col("FORATE")).otherwise(pl.col("MTDAVBAL")).alias("MTDAVBAL"),
-]).select([
+SAVING = SAVING.select([
     "BRANCH","ACCTNO","MTDAVBAL","PRODUCT","OPENDT","OPENIND","CLOSEDT","CURBAL",
     "AVGAMT","INACTIVE","FORBAL","FORATE","CURCODE"
 ]).unique(subset=["ACCTNO"], keep="first")
 
 # ---- CURRENT (DEPO + IDEPO) ----
 CURRENT = pl.concat([read_sas7bdat(DEPO_CUR), read_sas7bdat(IDEPO_CUR)], how="vertical", rechunk=True)
-CURRENT = CURRENT.join(FORATE_MAP, on="CURCODE", how="left").with_columns([
-    pl.when(pl.col("CURCODE") != "MYR").then(pl.col("FORATE")).otherwise(pl.lit(1.0)).alias("FORATE"),
-    pl.lit(None).alias("FORBAL"),  # ensure column exists like SAS KEEP
-]).with_columns([
-    pl.when(pl.col("CURCODE") != "MYR").then(pl.col("MTDAVBAL") * pl.col("FORATE")).otherwise(pl.col("MTDAVBAL")).alias("MTDAVBAL"),
-]).select([
+CURRENT = CURRENT.select([
     "BRANCH","ACCTNO","MTDAVBAL","PRODUCT","OPENDT","OPENIND","CLOSEDT","CURBAL",
     "AVGAMT","INACTIVE","FORBAL","FORATE","CURCODE"
 ]).unique(subset=["ACCTNO"], keep="first")
 
 # ---- FD (DEPO + IDEPO) ----
 FD = pl.concat([read_sas7bdat(DEPO_FD), read_sas7bdat(IDEPO_FD)], how="vertical", rechunk=True)
-FD = FD.join(FORATE_MAP, on="CURCODE", how="left").with_columns([
-    pl.when(pl.col("CURCODE") != "MYR").then(pl.col("FORATE")).otherwise(pl.lit(1.0)).alias("FORATE"),
-    pl.lit(None).alias("FORBAL"),  # ensure column exists like SAS KEEP
-]).with_columns([
-    pl.when(pl.col("CURCODE") != "MYR").then(pl.col("MTDAVBAL") * pl.col("FORATE")).otherwise(pl.col("MTDAVBAL")).alias("MTDAVBAL"),
-]).select([
+FD = FD.select([
     "BRANCH","ACCTNO","MTDAVBAL","PRODUCT","OPENDT","OPENIND","CLOSEDT","CURBAL",
     "AVGAMT","INACTIVE","FORBAL","FORATE","CURCODE"
 ]).unique(subset=["ACCTNO"], keep="first")
@@ -149,13 +126,20 @@ DEPOSIT = DEPOSIT.with_columns([
     pl.col("CLOSEDT").map_elements(z11_first8_to_mmddyyyy_date).alias("CLOSEDT"),
 ]).unique(subset=["ACCTNO"], keep="first").sort("ACCTNO")
 
-# ---- join to EXTCRMA ----
-EXTCRMA = EXTCRMA.join(DEPOSIT, on="ACCTNO", how="left").with_columns([
-    pl.when(pl.all_horizontal(pl.col("ACCTNO").is_not_null(), pl.col("BRANCH").is_not_null()))
-      .then(pl.lit("M")).otherwise(pl.lit("F")).alias("MATCHIND"),
-    pl.when((pl.col("INACTIVE") == "") & (pl.col("MATCHIND") == "M"))
+# ---- EXTCRMA creation (since we don't have CRMA_PATH) ----
+# Create EXTCRMA from DEPOSIT data
+EXTCRMA = DEPOSIT.select([
+    "ACCTNO","CUSTNAM1","NRICCIS","BRANCH","MTDAVBAL","PRODUCT",
+    "OPENDT","OPENIND","CLOSEDT","CURBAL","AVGAMT","INACTIVE"
+]).with_columns([
+    pl.lit("M").alias("MATCHIND"),  # Since all are matched deposits
+    pl.col("NRICCIS").alias("NRICNO"),
+    pl.lit(None).cast(pl.Int64).alias("CNTIC"),
+    pl.lit(None).cast(pl.Int64).alias("CNTAC"),
+    pl.lit(None).cast(pl.Utf8).alias("AANO"),
+    pl.when((pl.col("INACTIVE") == ""))
       .then(pl.lit("A")).otherwise(pl.col("INACTIVE")).alias("INACTIVE"),
-]).sort("AANO")
+]).sort("ACCTNO")
 
 # ---- match with LOAN ----
 LOAN = pl.concat([read_sas7bdat(LN_NOTE), read_sas7bdat(ILN_NOTE)], how="vertical", rechunk=True) \
@@ -213,7 +197,3 @@ write_textfile(EXTMIS, OUT_BEP / f"{base_name_mis}.txt")
 write_sas7bdat(EXTMIS, OUT_BEP / f"{base_name_mis}.sas7bdat")
 # Parquet file
 write_parquet(EXTMIS, OUT_BEP / f"{base_name_mis}.parquet")
-
-
-
-update this
