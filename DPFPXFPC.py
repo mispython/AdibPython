@@ -6,27 +6,24 @@ import pyarrow.parquet as pq
 import pyreadstat
 import saspy
 
-BASE = Path("Data_Warehouse")
+BASE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWCRMA")
 
 # ---- paths ----
-DEPO_SAV   = BASE / "SAP.PBB.MNITB" / "SAVING.sas7bdat"
-DEPO_CUR   = BASE / "SAP.PBB.MNITB" / "CURRENT.sas7bdat"
-DEPO_FD    = BASE / "SAP.PBB.MNITB" / "FD.sas7bdat"
+DEPO_SAV   = BASE / "conv" / "saving.sas7bdat"
+DEPO_CUR   = BASE / "conv" / "current.sas7bdat"
+DEPO_FD    = BASE / "conv" / "fd.sas7bdat"
 
-IDEPO_SAV  = BASE / "SAP.PIBB.MNITB" / "SAVING.sas7bdat"
-IDEPO_CUR  = BASE / "SAP.PIBB.MNITB" / "CURRENT.sas7bdat"
-IDEPO_FD   = BASE / "SAP.PIBB.MNITB" / "FD.sas7bdat"
+IDEPO_SAV  = BASE / "islamic" / "saving.sas7bdat"
+IDEPO_CUR  = BASE / "islamic" / "current.sas7bdat"
+IDEPO_FD   = BASE / "islamic" / "fd.sas7bdat"
 
-CISCA_DEP  = BASE / "SAP.PBB.CISBEXT.DP" / "DEPOSIT.sas7bdat"
-CISDP_DEP  = BASE / "SAP.PBB.CRM.CISBEXT" / "DEPOSIT.sas7bdat"
+CISCA_DEP  = BASE / "cisca" / "deposit.sas7bdat"
+CISDP_DEP  = BASE / "cisdp" / "deposit.sas7bdat"
 
-LN_NOTE    = BASE / "SAP.PBB.MNILN" / "LNNOTE.sas7bdat"
-ILN_NOTE   = BASE / "SAP.PIBB.MNILN" / "LNNOTE.sas7bdat"
+LN_NOTE    = BASE / "conv" / "lnnote.sas7bdat"
+ILN_NOTE   = BASE / "islamic" / "lnnote.sas7bdat"
 
-CRMA_PATH  = BASE / "SAP.PBB.CRMA2MIS.TEXT.sas7bdat"
-FOFMT_PATH = BASE / "SAP.PBB.FCYCA" / "FOFMT.sas7bdat"  # PROC FORMAT CNTLOUT (must contain $FORATE.)
-
-OUT_BEP    = BASE / "SAP.PBB.BEP.SASDATA"
+OUT_BEP    = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWCRMA"
 OUT_BEP.mkdir(parents=True, exist_ok=True)
 
 # ---- helpers ----
@@ -81,24 +78,6 @@ REPTMON  = f"{REPTDATE.month:02d}"
 RDATE    = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year%100:02d}"
 NOWK     = "1" if REPTDATE.day == 8 else "2" if REPTDATE.day == 15 else "3" if REPTDATE.day == 22 else "4"
 
-# ---- EXTCRMA (from CRMA) ----
-EXTCRMA = read_sas7bdat(CRMA_PATH).select(
-    pl.col("NRICNO").cast(pl.Utf8),
-    pl.col("CNTIC").cast(pl.Int64),
-    pl.col("ACCTNO").cast(pl.Int64),
-    pl.col("CNTAC").cast(pl.Int64),
-    pl.col("AANO").cast(pl.Utf8),
-).sort("ACCTNO")
-
-# ---- PROC FORMAT: $FORATE. via CNTLOUT ----
-FOFMT = read_sas7bdat(FOFMT_PATH)
-FORATE_MAP = (
-    FOFMT.filter(pl.col("FMTNAME") == "$FORATE")
-         .select(pl.col("START").alias("CURCODE"), pl.col("LABEL").alias("FORATE_LABEL"))
-         .with_columns(pl.col("CURCODE").cast(pl.Utf8),
-                       pl.col("FORATE_LABEL").str.replace_all(",", "").cast(pl.Float64).alias("FORATE"))
-         .select("CURCODE", "FORATE")
-)
 
 # ---- SAVING (DEPO + IDEPO) ----
 SAVING = pl.concat([read_sas7bdat(DEPO_SAV), read_sas7bdat(IDEPO_SAV)], how="vertical", rechunk=True)
@@ -234,3 +213,7 @@ write_textfile(EXTMIS, OUT_BEP / f"{base_name_mis}.txt")
 write_sas7bdat(EXTMIS, OUT_BEP / f"{base_name_mis}.sas7bdat")
 # Parquet file
 write_parquet(EXTMIS, OUT_BEP / f"{base_name_mis}.parquet")
+
+
+
+update this
