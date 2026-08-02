@@ -1,34 +1,60 @@
 from __future__ import annotations
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime, timedelta
 import polars as pl
 import pyarrow.parquet as pq
+import pyreadstat
+import saspy
 
 BASE = Path("Data_Warehouse")
 
 # ---- paths ----
-DEPO_RPT   = BASE / "SAP.PBB.MNITB" / "REPTDATE.parquet"
-DEPO_SAV   = BASE / "SAP.PBB.MNITB" / "SAVING.parquet"
-DEPO_CUR   = BASE / "SAP.PBB.MNITB" / "CURRENT.parquet"
-DEPO_FD    = BASE / "SAP.PBB.MNITB" / "FD.parquet"
+DEPO_SAV   = BASE / "SAP.PBB.MNITB" / "SAVING.sas7bdat"
+DEPO_CUR   = BASE / "SAP.PBB.MNITB" / "CURRENT.sas7bdat"
+DEPO_FD    = BASE / "SAP.PBB.MNITB" / "FD.sas7bdat"
 
-IDEPO_SAV  = BASE / "SAP.PIBB.MNITB" / "SAVING.parquet"
-IDEPO_CUR  = BASE / "SAP.PIBB.MNITB" / "CURRENT.parquet"
-IDEPO_FD   = BASE / "SAP.PIBB.MNITB" / "FD.parquet"
+IDEPO_SAV  = BASE / "SAP.PIBB.MNITB" / "SAVING.sas7bdat"
+IDEPO_CUR  = BASE / "SAP.PIBB.MNITB" / "CURRENT.sas7bdat"
+IDEPO_FD   = BASE / "SAP.PIBB.MNITB" / "FD.sas7bdat"
 
-CISCA_DEP  = BASE / "SAP.PBB.CISBEXT.DP" / "DEPOSIT.parquet"
-CISDP_DEP  = BASE / "SAP.PBB.CRM.CISBEXT" / "DEPOSIT.parquet"
+CISCA_DEP  = BASE / "SAP.PBB.CISBEXT.DP" / "DEPOSIT.sas7bdat"
+CISDP_DEP  = BASE / "SAP.PBB.CRM.CISBEXT" / "DEPOSIT.sas7bdat"
 
-LN_NOTE    = BASE / "SAP.PBB.MNILN" / "LNNOTE.parquet"
-ILN_NOTE   = BASE / "SAP.PIBB.MNILN" / "LNNOTE.parquet"
+LN_NOTE    = BASE / "SAP.PBB.MNILN" / "LNNOTE.sas7bdat"
+ILN_NOTE   = BASE / "SAP.PIBB.MNILN" / "LNNOTE.sas7bdat"
 
-CRMA_PATH  = BASE / "SAP.PBB.CRMA2MIS.TEXT.parquet"
-FOFMT_PATH = BASE / "SAP.PBB.FCYCA" / "FOFMT.parquet"  # PROC FORMAT CNTLOUT (must contain $FORATE.)
+CRMA_PATH  = BASE / "SAP.PBB.CRMA2MIS.TEXT.sas7bdat"
+FOFMT_PATH = BASE / "SAP.PBB.FCYCA" / "FOFMT.sas7bdat"  # PROC FORMAT CNTLOUT (must contain $FORATE.)
 
 OUT_BEP    = BASE / "SAP.PBB.BEP.SASDATA"
 OUT_BEP.mkdir(parents=True, exist_ok=True)
 
 # ---- helpers ----
+def read_sas7bdat(path: Path) -> pl.DataFrame:
+    """Read SAS7BDAT file and convert to Polars DataFrame"""
+    df, meta = pyreadstat.read_sas7bdat(str(path))
+    return pl.from_pandas(df)
+
+def write_sas7bdat(df: pl.DataFrame, path: Path):
+    """Write DataFrame to SAS7BDAT format using saspy"""
+    sas = saspy.SASsession()
+    # Convert to pandas for SAS transfer
+    pdf = df.to_pandas()
+    # Upload to SAS
+    sas.df2sd(pdf, table='temp_table')
+    # Export as sas7bdat
+    sas.submit(f"""
+        PROC EXPORT DATA=temp_table
+            OUTFILE="{path}"
+            DBMS=SAS7BDAT REPLACE;
+        RUN;
+    """)
+    sas.endsas()
+
+def write_textfile(df: pl.DataFrame, path: Path, delimiter: str = '|'):
+    """Write DataFrame to delimited text file"""
+    df.write_csv(path, separator=delimiter)
+
 def ddmmyy8_to_date(s: str) -> date:
     dd, mm, yy2 = int(s[0:2]), int(s[2:4]), int(s[4:6])
     yy = 1900 + yy2 if yy2 >= 50 else 2000 + yy2
@@ -46,16 +72,17 @@ def z11_first8_to_mmddyyyy_date(n) -> date | None:
 def write_parquet(df: pl.DataFrame, path: Path):
     pq.write_table(df.to_arrow(), path)
 
-# ---- OPTIONS/REPTDATE/NOWK ----
-RPT = pl.read_parquet(DEPO_RPT).with_columns(pl.col("REPTDATE").cast(pl.Date))
-REPTDATE = RPT.select("REPTDATE").row(0)[0]
+# ---- REPTDATE using datetime.now() - 1 day ----
+NOW = datetime.now()
+YESTERDAY = NOW - timedelta(days=1)
+REPTDATE = YESTERDAY.date()
 REPTYEAR = f"{REPTDATE.year:04d}"
 REPTMON  = f"{REPTDATE.month:02d}"
 RDATE    = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year%100:02d}"
 NOWK     = "1" if REPTDATE.day == 8 else "2" if REPTDATE.day == 15 else "3" if REPTDATE.day == 22 else "4"
 
 # ---- EXTCRMA (from CRMA) ----
-EXTCRMA = pl.read_parquet(CRMA_PATH).select(
+EXTCRMA = read_sas7bdat(CRMA_PATH).select(
     pl.col("NRICNO").cast(pl.Utf8),
     pl.col("CNTIC").cast(pl.Int64),
     pl.col("ACCTNO").cast(pl.Int64),
@@ -64,7 +91,7 @@ EXTCRMA = pl.read_parquet(CRMA_PATH).select(
 ).sort("ACCTNO")
 
 # ---- PROC FORMAT: $FORATE. via CNTLOUT ----
-FOFMT = pl.read_parquet(FOFMT_PATH)
+FOFMT = read_sas7bdat(FOFMT_PATH)
 FORATE_MAP = (
     FOFMT.filter(pl.col("FMTNAME") == "$FORATE")
          .select(pl.col("START").alias("CURCODE"), pl.col("LABEL").alias("FORATE_LABEL"))
@@ -74,7 +101,7 @@ FORATE_MAP = (
 )
 
 # ---- SAVING (DEPO + IDEPO) ----
-SAVING = pl.concat([pl.read_parquet(DEPO_SAV), pl.read_parquet(IDEPO_SAV)], how="vertical", rechunk=True)
+SAVING = pl.concat([read_sas7bdat(DEPO_SAV), read_sas7bdat(IDEPO_SAV)], how="vertical", rechunk=True)
 SAVING = SAVING.join(FORATE_MAP, on="CURCODE", how="left").with_columns([
     pl.when(pl.col("CURCODE") != "MYR").then(pl.col("FORATE")).otherwise(pl.lit(1.0)).alias("FORATE"),
     pl.when(pl.col("CURCODE") != "MYR").then(pl.col("CURBAL")).otherwise(pl.lit(None)).alias("FORBAL"),
@@ -88,7 +115,7 @@ SAVING = SAVING.join(FORATE_MAP, on="CURCODE", how="left").with_columns([
 ]).unique(subset=["ACCTNO"], keep="first")
 
 # ---- CURRENT (DEPO + IDEPO) ----
-CURRENT = pl.concat([pl.read_parquet(DEPO_CUR), pl.read_parquet(IDEPO_CUR)], how="vertical", rechunk=True)
+CURRENT = pl.concat([read_sas7bdat(DEPO_CUR), read_sas7bdat(IDEPO_CUR)], how="vertical", rechunk=True)
 CURRENT = CURRENT.join(FORATE_MAP, on="CURCODE", how="left").with_columns([
     pl.when(pl.col("CURCODE") != "MYR").then(pl.col("FORATE")).otherwise(pl.lit(1.0)).alias("FORATE"),
     pl.lit(None).alias("FORBAL"),  # ensure column exists like SAS KEEP
@@ -100,7 +127,7 @@ CURRENT = CURRENT.join(FORATE_MAP, on="CURCODE", how="left").with_columns([
 ]).unique(subset=["ACCTNO"], keep="first")
 
 # ---- FD (DEPO + IDEPO) ----
-FD = pl.concat([pl.read_parquet(DEPO_FD), pl.read_parquet(IDEPO_FD)], how="vertical", rechunk=True)
+FD = pl.concat([read_sas7bdat(DEPO_FD), read_sas7bdat(IDEPO_FD)], how="vertical", rechunk=True)
 FD = FD.join(FORATE_MAP, on="CURCODE", how="left").with_columns([
     pl.when(pl.col("CURCODE") != "MYR").then(pl.col("FORATE")).otherwise(pl.lit(1.0)).alias("FORATE"),
     pl.lit(None).alias("FORBAL"),  # ensure column exists like SAS KEEP
@@ -112,16 +139,16 @@ FD = FD.join(FORATE_MAP, on="CURCODE", how="left").with_columns([
 ]).unique(subset=["ACCTNO"], keep="first")
 
 # ---- CIS filters (SECCUST='901') ----
-CISCA = (pl.read_parquet(CISCA_DEP)
+CISCA = (read_sas7bdat(CISCA_DEP)
            .filter(pl.col("SECCUST") == "901")
            .select(["ACCTNO","CUSTNAM1","NEWIC","OLDIC"])
            .unique(subset=["ACCTNO"], keep="first"))
-CISDP = (pl.read_parquet(CISDP_DEP)
+CISDP = (read_sas7bdat(CISDP_DEP)
            .filter(pl.col("SECCUST") == "901")
            .select(["ACCTNO","CUSTNAM1","NEWIC","OLDIC"])
            .unique(subset=["ACCTNO"], keep="first"))
 
-# ---- merges like SAS (IF A;)
+# ---- merges like SAS (IF A;) ----
 SAVING  = SAVING.join(CISDP, on="ACCTNO", how="inner")
 CURRENT = CURRENT.join(CISCA, on="ACCTNO", how="inner")
 FD      = FD.join(CISDP, on="ACCTNO", how="inner")
@@ -152,7 +179,7 @@ EXTCRMA = EXTCRMA.join(DEPOSIT, on="ACCTNO", how="left").with_columns([
 ]).sort("AANO")
 
 # ---- match with LOAN ----
-LOAN = pl.concat([pl.read_parquet(LN_NOTE), pl.read_parquet(ILN_NOTE)], how="vertical", rechunk=True) \
+LOAN = pl.concat([read_sas7bdat(LN_NOTE), read_sas7bdat(ILN_NOTE)], how="vertical", rechunk=True) \
          .filter(pl.col("VINNO") != "") \
          .select(pl.col("VINNO").alias("AANO"), pl.col("ESCRACCT"))
 EXTCRMA = EXTCRMA.join(LOAN, on="AANO", how="left")
@@ -183,19 +210,27 @@ EXTCRMA = EXTCRMA.with_columns([
 ]).sort("ACCTNO")
 
 # ---- write outputs ----
-# 1) EXTCRMA dataset (since SAS also creates BEP.EXTCRMA&REPTMON&NOWK)
-write_parquet(EXTCRMA, OUT_BEP / f"EXTCRMA{REPTMON}{NOWK}.parquet")
+# 1) EXTCRMA dataset
+base_name = f"EXTCRMA{REPTMON}{NOWK}"
+# Text file (pipe-delimited)
+write_textfile(EXTCRMA, OUT_BEP / f"{base_name}.txt")
+# SAS7BDAT file
+write_sas7bdat(EXTCRMA, OUT_BEP / f"{base_name}.sas7bdat")
+# Parquet file
+write_parquet(EXTCRMA, OUT_BEP / f"{base_name}.parquet")
 
-# 2) EXTMIS (fields listed in PUT @...; include CLOSEDD now)
+# 2) EXTMIS dataset
 EXTMIS = EXTCRMA.select([
     "NRICNO","CNTIC","ACCTNO","CNTAC","AANO","MATCHIND",
     "MTDAVBAL","PRODUCT","PRODTYPE","OPENYY","OPENMM","OPENDD",
     "OPENIND","INACTIVE","CLOSEYY","CLOSEMM","CLOSEDD",
     "CURBAL","AVGAMT","BRANCH","ESCRACCT","CUSTNAM1","NRICCIS"
 ])
-write_parquet(EXTMIS, OUT_BEP / f"EXTMIS{REPTMON}{NOWK}.parquet")
 
-remove the reptdate.parquet. use datetime timedelta - 1 instead.
-
-all inputs are in sas7bdat. use pyreadstat to read.
-output in textfile (and sas7bdat write with saspy and parquet if needed)
+base_name_mis = f"EXTMIS{REPTMON}{NOWK}"
+# Text file (pipe-delimited)
+write_textfile(EXTMIS, OUT_BEP / f"{base_name_mis}.txt")
+# SAS7BDAT file
+write_sas7bdat(EXTMIS, OUT_BEP / f"{base_name_mis}.sas7bdat")
+# Parquet file
+write_parquet(EXTMIS, OUT_BEP / f"{base_name_mis}.parquet")
