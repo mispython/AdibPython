@@ -271,6 +271,31 @@ def load_forate_lookup(path: Path, as_of: date) -> pl.DataFrame:
     print(f"[WARN] FORATE source at {path} has unrecognized columns {df.columns} -- "
           f"skipping conversion.")
     return empty
+
+
+# ============================================================================
+# REPTDATE
+# ============================================================================
+# TODO: SAS reads this from DEPO.REPTDATE (a business-date table), not
+# simply "yesterday" -- replace if that source is available to you.
+NOW = datetime.now()
+YESTERDAY = NOW - timedelta(days=1)
+REPTDATE = YESTERDAY.date()
+REPTYEAR = f"{REPTDATE.year:04d}"
+REPTMON = f"{REPTDATE.month:02d}"
+RDATE = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year % 100:02d}"
+NOWK = "1" if REPTDATE.day == 8 else "2" if REPTDATE.day == 15 else "3" if REPTDATE.day == 22 else "4"
+
+# ============================================================================
+# Load FORATE_LOOKUP (must be loaded before the functions that use it)
+# ============================================================================
+FORATE_LOOKUP = load_forate_lookup(FORATE_SRC, REPTDATE)
+
+# ============================================================================
+# Deposit table building functions
+# ============================================================================
+
+# Source columns from the SAS7BDAT files (these are what we read in --
 # NOT source columns -- they're derived inside the SAS DATA step, which is
 # why including them in an intersection check silently broke things).
 SOURCE_COLS = ["BRANCH", "ACCTNO", "MTDAVBAL", "PRODUCT", "OPENDT", "OPENIND",
@@ -333,20 +358,6 @@ def build_deposit_table(depo_path: Path, idepo_path: Path, table_type: str) -> p
     combined = pl.concat([depo, idepo], how="vertical", rechunk=True)
     combined = apply_currency_conversion(combined, table_type)
     return combined.unique(subset=["ACCTNO"], keep="first")
-
-
-# ============================================================================
-# REPTDATE
-# ============================================================================
-# TODO: SAS reads this from DEPO.REPTDATE (a business-date table), not
-# simply "yesterday" -- replace if that source is available to you.
-NOW = datetime.now()
-YESTERDAY = NOW - timedelta(days=1)
-REPTDATE = YESTERDAY.date()
-REPTYEAR = f"{REPTDATE.year:04d}"
-REPTMON = f"{REPTDATE.month:02d}"
-RDATE = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year % 100:02d}"
-NOWK = "1" if REPTDATE.day == 8 else "2" if REPTDATE.day == 15 else "3" if REPTDATE.day == 22 else "4"
 
 
 # ============================================================================
