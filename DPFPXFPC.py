@@ -1,137 +1,208 @@
-"""
-FIX for: polars.exceptions.ColumnNotFoundError: unable to find column "OPENDT"
-Root cause: the original script builds column lists via set-intersection
-(DEPO vs IDEPO per product, then again across SAVING/CURRENT/FD). If ANY one
-source file is missing/renames a column, it silently disappears from ALL
-downstream frames, even ones that do have it. align_to_schema() below fixes
-that by adding missing columns as nulls instead of dropping shared ones.
+OPTIONS NOCENTER NODATE NONUMBER MISSING=0;
+%INC PGM(PBBELF);
 
----
-Drop-in replacement for the LN_NOTE / LOAN section of the pipeline.
+DATA REPTDATE;
+   SET DEPO.REPTDATE;
+   SELECT(DAY(REPTDATE));
+      WHEN(8)   CALL SYMPUT('NOWK', PUT('1', $1.));
+      WHEN(15)  CALL SYMPUT('NOWK', PUT('2', $1.));
+      WHEN(22)  CALL SYMPUT('NOWK', PUT('3', $1.));
+      OTHERWISE CALL SYMPUT('NOWK', PUT('4', $1.));
+   END;
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDT',REPTDATE);
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+RUN;
 
-Why this is faster and won't crash:
-  - pyreadstat.read_sas7bdat() reads ALL columns into memory before you can
-    filter or select anything. For a 20GB / 6M-row file that's the crash.
-  - usecols=[...] tells the underlying reader to only materialize the columns
-    you actually need (VINNO, ESCRACCT), which for a wide loan-note table can
-    cut bytes read by 10-50x on its own.
-  - read_file_in_chunks() streams the file in row-batches (generator), so you
-    filter (VINNO != "") and drop each batch immediately. Peak memory becomes
-    "one chunk" + "accumulated filtered rows" instead of "whole file".
-"""
+DATA EXTCRMA BEP.EXTCRMA&REPTMON&NOWK;
+  INFILE CRMA;
+  INPUT  @001 NRICNO  $20.
+         @021 CNTIC     5.
+         @026 ACCTNO   10.
+         @046 CNTAC     5.
+         @051 AANO    $13.
+         ;
+RUN;
+PROC SORT DATA=EXTCRMA; BY ACCTNO; RUN;
 
-from __future__ import annotations
-import gc
-import multiprocessing
-import polars as pl
-import pyreadstat
+PROC FORMAT LIB=MISCA CNTLOUT=FOFMT;RUN;
+PROC FORMAT CNTLIN=FOFMT;RUN;
 
+*** MATCH WITH DEPOSIT INFORMATION ***;
+DATA SAVING;
+   SET DEPO.SAVING IDEPO.SAVING;
+   KEEP BRANCH ACCTNO MTDAVBAL PRODUCT OPENDT OPENIND CLOSEDT CURBAL
+        AVGAMT INACTIVE FORBAL FORATE;
+   IF CURCODE NE 'MYR' THEN DO;
+      FORATE   = PUT(CURCODE,$FORATE.);
+      FORBAL   = CURBAL;
+      CURBAL   = CURBAL  *FORATE;         /* GIA PRODUCT 480-482  */
+      IF CURCODE NE 'XAU' THEN            /* GIA MTDAVBAL IN GRAM */
+         MTDAVBAL = MTDAVBAL*FORATE;
+   END;
+RUN;
+PROC SORT DATA=SAVING NODUPKEY; BY ACCTNO; RUN;
 
-def read_sas_chunked(
-    path,
-    usecols: list[str] | None = None,
-    chunksize: int = 500_000,
-    filter_expr: pl.Expr | None = None,
-) -> pl.DataFrame:
-    """Stream a large .sas7bdat in row-chunks, selecting only usecols and
-    applying filter_expr per chunk so memory stays bounded."""
-    chunks: list[pl.DataFrame] = []
-    reader = pyreadstat.read_file_in_chunks(
-        pyreadstat.read_sas7bdat,
-        str(path),
-        chunksize=chunksize,
-        usecols=usecols,
-    )
-    for df_chunk, _meta in reader:
-        pl_chunk = pl.from_pandas(df_chunk)
-        if filter_expr is not None:
-            pl_chunk = pl_chunk.filter(filter_expr)
-        if pl_chunk.height:
-            chunks.append(pl_chunk)
-        del df_chunk, pl_chunk
-    gc.collect()
-    return pl.concat(chunks, how="vertical", rechunk=True) if chunks else pl.DataFrame(schema=usecols)
+DATA CURRENT;
+   SET DEPO.CURRENT IDEPO.CURRENT;
+   KEEP BRANCH ACCTNO MTDAVBAL PRODUCT OPENDT OPENIND CLOSEDT CURBAL
+        AVGAMT INACTIVE FORBAL FORATE;
+   IF CURCODE NE 'MYR' THEN DO;
+      FORATE   = PUT(CURCODE,$FORATE.);
+      MTDAVBAL = MTDAVBAL*FORATE;
+   END;
+RUN;
+PROC SORT DATA=CURRENT NODUPKEY; BY ACCTNO; RUN;
 
+DATA FD;
+   SET DEPO.FD IDEPO.FD;
+   KEEP BRANCH ACCTNO MTDAVBAL PRODUCT OPENDT OPENIND CLOSEDT CURBAL
+        AVGAMT INACTIVE FORBAL FORATE;
+   IF CURCODE NE 'MYR' THEN DO;
+      FORATE   = PUT(CURCODE,$FORATE.);
+      MTDAVBAL = MTDAVBAL*FORATE;
+   END;
+RUN;
+PROC SORT DATA=FD NODUPKEY; BY ACCTNO; RUN;
 
-def read_sas_parallel(
-    path,
-    usecols: list[str] | None = None,
-    num_processes: int | None = None,
-) -> pl.DataFrame:
-    """Alternative: parallel read across CPU cores. Use when the file fits in
-    RAM once column-pruned, and you want wall-clock speed rather than a hard
-    memory ceiling. Don't combine both chunked+parallel unless you also
-    filter afterwards, since this one materializes the full (pruned) result
-    at once."""
-    df, _meta = pyreadstat.read_file_multiprocessing(
-        pyreadstat.read_sas7bdat,
-        str(path),
-        usecols=usecols,
-        num_processes=num_processes or multiprocessing.cpu_count(),
-    )
-    return pl.from_pandas(df)
+PROC SORT DATA=CISCA.DEPOSIT
+          OUT=CISCA(KEEP=ACCTNO CUSTNAM1 NEWIC OLDIC) NODUPKEY;
+   BY ACCTNO;
+   WHERE SECCUST = '901';
+RUN;
 
+PROC SORT DATA=CISDP.DEPOSIT
+          OUT=CISDP(KEEP=ACCTNO CUSTNAM1 NEWIC OLDIC) NODUPKEY;
+   BY ACCTNO;
+   WHERE SECCUST = '901';
+RUN;
 
-def align_to_schema(df: pl.DataFrame, cols: list[str]) -> pl.DataFrame:
-    """Select `cols` from df, adding any missing ones as typed nulls instead
-    of silently dropping columns that OTHER frames in the union still have.
-    This replaces the "find common columns" pattern that caused the
-    ColumnNotFoundError -- one source missing a column no longer wipes it
-    out for everyone."""
-    exprs = []
-    for c in cols:
-        if c in df.columns:
-            exprs.append(pl.col(c))
-        else:
-            exprs.append(pl.lit(None).alias(c))
-    return df.select(exprs)
+DATA SAVING;
+   MERGE SAVING(IN=A) CISDP;
+   BY ACCTNO;
+   IF A;
+RUN;
 
+DATA CURRENT;
+   MERGE CURRENT(IN=A) CISCA;
+   BY ACCTNO;
+   IF A;
+RUN;
 
-# ---- Replace the SAVING/CURRENT/FD column-selection logic like this ----
-#
-# Instead of:
-#   common_saving_cols = [c for c in COMMON_COLS if c in SAVING_DEPO.columns and c in SAVING_IDEPO.columns]
-#   SAVING_DEPO = SAVING_DEPO.select(common_saving_cols)
-#   SAVING_IDEPO = SAVING_IDEPO.select(common_saving_cols)
-#
-# Do:
-#   SAVING_DEPO  = align_to_schema(SAVING_DEPO,  COMMON_COLS)
-#   SAVING_IDEPO = align_to_schema(SAVING_IDEPO, COMMON_COLS)
-#   (repeat for CURRENT_DEPO/IDEPO and FD_DEPO/IDEPO)
-#
-# Then SAVING, CURRENT, FD all guaranteed to have every column in COMMON_COLS
-# (nulls where a source lacked it) -- no more surprise drops in the later
-# "common_deposit_cols = set(SAVING.columns) & set(CURRENT.columns) & ..."
-# step either; you can just union COMMON_COLS + key_cols directly there too:
-#
-#   common_deposit_cols = key_cols + [c for c in COMMON_COLS if c not in key_cols]
-#   SAVING  = align_to_schema(SAVING,  common_deposit_cols)
-#   CURRENT = align_to_schema(CURRENT, common_deposit_cols)
-#   FD      = align_to_schema(FD,      common_deposit_cols)
+DATA FD;
+   MERGE FD(IN=A) CISDP;
+   BY ACCTNO;
+   IF A;
+RUN;
 
+DATA DEPOSIT;
+   SET SAVING CURRENT FD;
+   IF NEWIC      NOT IN ('','00000000000','0','-') THEN
+      NRICCIS = NEWIC;
+   ELSE IF OLDIC NOT IN ('','00000000000','0','-') THEN
+      NRICCIS = OLDIC;
+   ELSE
+      NRICCIS = '';
+   IF OPENDT NOT IN (.,0) THEN
+      OPENDT  = INPUT(SUBSTR(PUT(OPENDT,Z11.),1,8),MMDDYY8.);
+   IF CLOSEDT NOT IN (.,0) THEN
+      CLOSEDT = INPUT(SUBSTR(PUT(CLOSEDT,Z11.),1,8),MMDDYY8.);
+RUN;
+PROC SORT DATA=DEPOSIT NODUPKEY; BY ACCTNO; RUN;
 
-# ---- replace the original LOAN block with this ----
-LN_NOTE_COLS = ["VINNO", "ESCRACCT"]
+DATA EXTCRMA;
+   MERGE EXTCRMA(IN=A) DEPOSIT(IN=B);
+   BY ACCTNO;
+   IF A;
+   IF (A AND B) THEN MATCHIND = 'M';
+   ELSE              MATCHIND = 'F';
+   IF (INACTIVE = '' AND MATCHIND='M') THEN INACTIVE='A';
+RUN;
+PROC SORT DATA=EXTCRMA; BY AANO; RUN;
 
-def load_loan(ln_note_path, iln_note_path, chunksize: int = 500_000) -> pl.DataFrame:
-    conv_loan = read_sas_chunked(
-        ln_note_path,
-        usecols=LN_NOTE_COLS,
-        chunksize=chunksize,
-        filter_expr=pl.col("VINNO") != "",
-    )
-    islamic_loan = read_sas_chunked(
-        iln_note_path,
-        usecols=LN_NOTE_COLS,
-        chunksize=chunksize,
-        filter_expr=pl.col("VINNO") != "",
-    )
-    return (
-        pl.concat([conv_loan, islamic_loan], how="vertical", rechunk=True)
-        .rename({"VINNO": "AANO"})
-        .unique(subset=["AANO"], keep="first")
-    )
+*** MATCH WITH LOAN INFORMATION ***;
+DATA LOAN(KEEP=AANO ESCRACCT);
+   SET LN.LNNOTE ILN.LNNOTE;
+   WHERE VINNO NE '';
+   RENAME VINNO=AANO;
+RUN;
+PROC SORT DATA=LOAN NODUPKEY; BY AANO; RUN;
 
-# usage in the main script:
-# LOAN = load_loan(LN_NOTE, ILN_NOTE)
-# EXTCRMA = EXTCRMA.join(LOAN, on="AANO", how="left")
+DATA EXTCRMA;
+   MERGE EXTCRMA(IN=A) LOAN;
+   BY AANO;
+   IF A;
+   FORMAT PRODTYPE $5.;
+
+   OPENDD=0;  OPENMM=0;  OPENYY=0;
+   CLOSEDD=0; CLOSEMM=0; CLOSEYY=0;
+
+   IF OPENDT NOT IN (0,.) THEN DO;
+      OPENDD = DAY(OPENDT);
+      OPENMM = MONTH(OPENDT);
+      OPENYY = YEAR(OPENDT);
+   END;
+   IF CLOSEDT NOT IN (0,.) THEN DO;
+      CLOSEDD = DAY(CLOSEDT);
+      CLOSEMM = MONTH(CLOSEDT);
+      CLOSEYY = YEAR(CLOSEDT);
+   END;
+
+   MTDAVBAL = ROUND(MTDAVBAL,.01)*100;
+   AVGAMT   = ROUND(AVGAMT,.01)  *100;
+   CURBAL   = ROUND(CURBAL,.01)  *100;
+
+   IF      (4000000000<=ACCTNO<=4999999999) OR
+           (5000000000<=ACCTNO<=5999999999) OR
+           (6000000000<=ACCTNO<=6589999999) OR
+           (6600000000<=ACCTNO<=6999999999) THEN
+      PRODTYPE = 'SA';
+   ELSE IF (3000000000<=ACCTNO<=3589999999) OR
+           (3600000000<=ACCTNO<=3999999999) THEN
+      PRODTYPE = 'CA';
+   ELSE IF (1000000000<=ACCTNO<=1589999999) OR
+           (1600000000<=ACCTNO<=1999999999) OR
+           (7000000000<=ACCTNO<=7999999999) THEN
+      PRODTYPE = 'FD';
+   ELSE IF (1590000000<=ACCTNO<=1599999999) OR
+           (1689999999<=ACCTNO<=1699999999) OR
+           (1789999999<=ACCTNO<=1799999999) THEN
+      PRODTYPE = 'FCYFD';
+   ELSE IF (3590000000<=ACCTNO<=3599999999) OR
+           (3790000000<=ACCTNO<=3799999999) THEN
+      PRODTYPE = 'FCYCA';
+   ELSE IF (6590000000<=ACCTNO<=6599999999) THEN
+      PRODTYPE = 'GIA';
+RUN;
+PROC SORT DATA=EXTCRMA; BY ACCTNO; RUN;
+
+DATA BEP.EXTMIS&REPTMON&NOWK;
+   SET EXTCRMA;
+   FILE SASLIST;
+   PUT @001 NRICNO    $20.
+       @021 CNTIC       5.
+      
+       @026 ACCTNO     20.
+       @046 CNTAC       5.
+       @051 AANO      $13.
+       @065 MATCHIND   $1.
+       @067 MTDAVBAL  Z16.
+       @084 PRODUCT    Z3.
+       @088 PRODTYPE   $5.
+       @094 OPENYY     Z4.
+       @098 OPENMM     Z2.
+       @100 OPENDD     Z2.
+       @103 OPENIND    $1.
+       @105 INACTIVE   $1.
+       @107 CLOSEYY    Z4.
+       @111 CLOSEMM    Z2.
+       @113 CLOSEDD    Z2.
+       @116 CURBAL    Z16.
+       @133 AVGAMT    Z16.
+       @150 BRANCH     Z3.
+       @154 ESCRACCT   20.
+       @175 CUSTNAM1  $40.
+       @216 NRICCIS   $20.
+       ;
+RUN;
