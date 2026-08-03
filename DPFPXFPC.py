@@ -582,3 +582,22 @@ base_name_mis = f"EXTMIS{REPTMON}{NOWK}"
 write_extmis_fixed_width(EXTMIS, OUT_BEP / f"{base_name_mis}.txt")
 write_sas7bdat(EXTMIS, OUT_BEP / f"{base_name_mis}.sas7bdat")
 write_parquet(EXTMIS, OUT_BEP / f"{base_name_mis}.parquet")
+
+
+output:
+
+[WARN] /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWCRMA/forate.sas7bdat: using a rate older than 2026-08-02 for some currencies (most recent available on/before that date): [{'CURCODE': 'CHF', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'NOK', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'CNY', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'FJD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'INR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'KHR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'TWD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'FRF', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'BEF', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'SGD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'PHP', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'DEM', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'NZD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'PKR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'ZAR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'HKD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'LKR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'XAT', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'JPY', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'BND', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'GBP', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'VND', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'SAR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'LAK', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'BDT', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'ESP', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'IDR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'CAD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'AUD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'EUR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'KRW', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'ATS', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'FIM', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'XAU', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'ITL', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'NLG', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'IRR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'XEU', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'AED', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'USD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'THB', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'SEK', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'DKK', 'REPTDATE': datetime.date(2026, 8, 1)}]
+Using SAS Config named: default
+SAS Connection established. Subprocess id is 4075718
+
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 4075718
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWCRMA.py", line 582, in <module>
+    write_extmis_fixed_width(EXTMIS, OUT_BEP / f"{base_name_mis}.txt")
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWCRMA.py", line 575, in write_extmis_fixed_width
+    s = fmt_fn[kind](row.get(name), width)
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWCRMA.py", line 562, in _fmt_z
+    ival = 0 if value is None else int(value)
+ValueError: invalid literal for int() with base 10: '117.0'
