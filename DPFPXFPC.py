@@ -6,50 +6,28 @@ KNOWN OPEN ITEMS -- confirm these before running in production:
 ============================================================================
 1. CRMA_TXT path/filename below is a guess (same BASE, following the
    conv/islamic/cisca/cisdp folder pattern). Update to the real path.
-2. FORATE_SRC: the $FORATE SAS format (currency code -> FX rate) lives in
-   the MISCA format library and isn't available here. Until you supply a
-   real CURCODE->FORATE mapping (see load_forate_lookup), non-MYR accounts
-   will get FORATE = null and MTDAVBAL/CURBAL will NOT be converted. The
-   script prints a warning listing which CURCODE values were affected so
-   you can see the blast radius.
-3. REPTDATE: SAS reads this from a DEPO.REPTDATE dataset (an actual
+2. REPTDATE: SAS reads this from a DEPO.REPTDATE dataset (an actual
    business-date table), not simply "yesterday". This script still uses
-   datetime.now() - 1 day as the earlier version did. If DEPO.REPTDATE
-   reflects a business calendar (skips weekends/holidays), this will
-   diverge on Mondays / after holidays. Replace REPTDATE below with a real
-   read from that source if available.
-4. Encoding of CRMA_TXT assumed latin-1 (permissive). Confirm if NRICNO /
+   datetime.now() - 1 day. If DEPO.REPTDATE reflects a business calendar
+   (skips weekends/holidays), this will diverge on Mondays / after
+   holidays. Replace REPTDATE below with a real read from that source if
+   available.
+3. Encoding of CRMA_TXT assumed latin-1 (permissive). Confirm if NRICNO /
    AANO ever contain non-ASCII characters.
+4. SOURCE_COLS dtypes for BRANCH/PRODUCT are best-guess (currently Utf8).
+   The EXTMIS output formats them with Z-format (zero-padded numeric),
+   which strongly suggests they're numeric in the real source schema.
+   Check the [WARN] output from write_extmis_fixed_width on your next run
+   -- if BRANCH/PRODUCT show up in the bad-field counts, switch their
+   dtype here to pl.Int64/pl.Float64.
 ============================================================================
-
-FIXES applied vs. the earlier draft:
-- CRMA is now read as the actual raw fixed-width base file (previously the
-  script incorrectly built EXTCRMA from DEPOSIT itself, silently dropping
-  any CRMA record with no deposit match and hardcoding MATCHIND='M').
-- SAVING/CURRENT/FD column selection uses the real, fixed KEEP list (no
-  more set-intersection across DEPO/IDEPO pairs -- that's what silently
-  dropped OPENDT/CLOSEDT/MTDAVBAL/etc. before).
-- CURCODE-based currency conversion (FORBAL/FORATE/CURBAL/MTDAVBAL) is
-  implemented, matching the SAS DATA step logic exactly (SAVING converts
-  CURBAL and preserves FORBAL; CURRENT/FD only convert MTDAVBAL; GIA/XAU
-  balances are excluded from the MTDAVBAL conversion).
-- CIS merges (SAVING/CURRENT/FD + CISDP/CISCA) changed from inner join to
-  LEFT join. SAS's "MERGE X(IN=A) CIS; IF A;" keeps ALL of X regardless of
-  a CIS match -- the earlier inner join was silently dropping every
-  deposit account whose customer didn't have a matching SECCUST='901' CIS
-  record. This was a real data-loss bug.
-- LN_NOTE (20GB/6M rows) read via chunked, column-pruned pyreadstat instead
-  of loading the whole file into memory.
-- EXTMIS output written as a true fixed-width file matching the SAS PUT
-  statement's exact column positions/formats, not pipe-delimited CSV
-  (the earlier delimited version would have broken any downstream fixed-
-  width consumer of this file).
 """
 
 from __future__ import annotations
 from pathlib import Path
 from datetime import date, datetime, timedelta
 import gc
+import multiprocessing
 import polars as pl
 import pyarrow.parquet as pq
 import pyreadstat
@@ -72,14 +50,13 @@ CISDP_DEP  = BASE / "cisdp" / "deposit.sas7bdat"
 LN_NOTE    = BASE / "conv" / "lnnote.sas7bdat"
 ILN_NOTE   = BASE / "islamic" / "lnnote.sas7bdat"
 
-# TODO: confirm real filename/subfolder -- guessed to follow the same
-# BASE/<source>/<file> pattern as everything else.
-CRMA_TXT     = BASE / "crma" / "crma.txt"
+# TODO: confirm real filename/subfolder
+CRMA_TXT     = BASE / "crma.txt"
 
-# TODO: confirm real filename/subfolder. This is a .sas7bdat -- either a
-# CNTLOUT-style format-catalog dump (FMTNAME/START/LABEL/...) or a
-# pre-filtered CURCODE/FORATE table; load_forate_lookup() handles either.
-FORATE_SRC   = BASE / "misca" / "forate.sas7bdat"
+# TODO: confirm real filename/subfolder -- this is a .sas7bdat, either a
+# CNTLOUT-style format-catalog dump, a pre-filtered CURCODE/FORATE table,
+# or (as confirmed) a daily (CURCODE, SPOTRATE, REPTDATE) rate table.
+FORATE_SRC   = BASE / "forate.sas7bdat"
 
 OUT_BEP    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWCRMA")
 OUT_BEP.mkdir(parents=True, exist_ok=True)
@@ -102,8 +79,9 @@ def read_sas_chunked(
     filter_expr: pl.Expr | None = None,
 ) -> pl.DataFrame:
     """Stream a large .sas7bdat in row-chunks, selecting only usecols and
-    applying filter_expr per chunk so memory stays bounded. Use this for
-    LN_NOTE (20GB / 6M rows) instead of read_sas7bdat."""
+    applying filter_expr per chunk so memory stays bounded. Kept as a
+    fallback for genuinely wide/huge reads; LN_NOTE now uses the faster
+    parallel reader below since it only needs 2 narrow columns."""
     chunks: list[pl.DataFrame] = []
     reader = pyreadstat.read_file_in_chunks(
         pyreadstat.read_sas7bdat, str(path), chunksize=chunksize, usecols=usecols,
@@ -119,11 +97,23 @@ def read_sas_chunked(
     return pl.concat(chunks, how="vertical", rechunk=True) if chunks else pl.DataFrame(schema=usecols)
 
 
-def align_to_schema(df: pl.DataFrame, cols: list[str]) -> pl.DataFrame:
-    """Select `cols`, adding any genuinely-missing ones as typed nulls
-    instead of silently dropping columns other frames still have."""
-    exprs = [pl.col(c) if c in df.columns else pl.lit(None).alias(c) for c in cols]
-    return df.select(exprs)
+def read_sas_parallel(
+    path: Path,
+    usecols: list[str] | None = None,
+    num_processes: int | None = None,
+) -> pl.DataFrame:
+    """Read a .sas7bdat across multiple CPU cores in parallel. Safe to use
+    here (rather than the chunked reader) because usecols narrows LN_NOTE
+    down to 2 small string columns -- the full 6M-row result for just
+    those columns is small enough to hold in memory outright, so we can
+    trade the chunk-by-chunk memory discipline for wall-clock speed."""
+    df, _meta = pyreadstat.read_file_multiprocessing(
+        pyreadstat.read_sas7bdat,
+        str(path),
+        usecols=usecols,
+        num_processes=num_processes or multiprocessing.cpu_count(),
+    )
+    return pl.from_pandas(df)
 
 
 def write_sas7bdat(df: pl.DataFrame, path: Path):
@@ -131,12 +121,16 @@ def write_sas7bdat(df: pl.DataFrame, path: Path):
     sas = saspy.SASsession()
     pdf = df.to_pandas()
     sas.df2sd(pdf, table="temp_table")
-    sas.submit(f"""
+    result = sas.submit(f"""
         PROC EXPORT DATA=temp_table
             OUTFILE="{path}"
             DBMS=SAS7BDAT REPLACE;
         RUN;
     """)
+    if "ERROR" in result.get("LOG", ""):
+        print(result["LOG"])
+        sas.endsas()
+        raise RuntimeError(f"SAS export to {path} failed -- see log above")
     sas.endsas()
 
 
@@ -188,14 +182,14 @@ def read_crma_raw(path: Path, encoding: str = "latin-1") -> pl.DataFrame:
 
 
 # ============================================================================
-# FORATE (FX rate) lookup -- placeholder until MISCA source is located
+# FORATE (FX rate) lookup
 # ============================================================================
 
 def sas_days_to_date(v) -> date | None:
-    """SAS dates are stored as days-since-1960-01-01. Use this only if
-    pyreadstat returns REPTDATE as a raw number rather than already
-    converting it to a python date (it converts automatically when the
-    source column carries a SAS date format -- this is a fallback)."""
+    """SAS dates are stored as days-since-1960-01-01. Fallback only -- used
+    if pyreadstat returns REPTDATE as a raw number rather than already
+    converting it (it converts automatically when the source column
+    carries a SAS date format)."""
     if v is None:
         return None
     try:
@@ -208,9 +202,10 @@ def load_forate_lookup(path: Path, as_of: date) -> pl.DataFrame:
     """FORATE_SRC is a .sas7bdat. Handles three possible shapes:
       (a) pre-filtered (CURCODE, FORATE) static table
       (b) CNTLOUT format-catalog dump (FMTNAME/START/LABEL/...)
-      (c) daily FX rate table (CURCODE, SPOTRATE, REPTDATE) -- picks the
-          most recent SPOTRATE on or before `as_of` per currency, since a
-          rate may not be published every single day (weekends/holidays)."""
+      (c) daily FX rate table (CURCODE, SPOTRATE, REPTDATE) -- confirmed
+          shape in production. Picks the most recent SPOTRATE on or before
+          `as_of` per currency, since a rate may not be published every
+          single day (weekends/holidays)."""
     empty = pl.DataFrame({"CURCODE": [], "FORATE": []}, schema={"CURCODE": pl.Utf8, "FORATE": pl.Float64})
 
     if not path.exists():
@@ -219,12 +214,6 @@ def load_forate_lookup(path: Path, as_of: date) -> pl.DataFrame:
         return empty
 
     df = read_sas7bdat(path)
-
-    if {"CURCODE", "FORATE"}.issubset(df.columns):
-        return df.select([
-            pl.col("CURCODE").str.strip_chars(),
-            pl.col("FORATE").cast(pl.Float64, strict=False),
-        ]).unique(subset=["CURCODE"], keep="first")
 
     if {"CURCODE", "SPOTRATE", "REPTDATE"}.issubset(df.columns):
         if df.schema["REPTDATE"] not in (pl.Date, pl.Datetime):
@@ -254,6 +243,12 @@ def load_forate_lookup(path: Path, as_of: date) -> pl.DataFrame:
                   f"(most recent available on/before that date): {stale}")
         return out
 
+    if {"CURCODE", "FORATE"}.issubset(df.columns):
+        return df.select([
+            pl.col("CURCODE").str.strip_chars(),
+            pl.col("FORATE").cast(pl.Float64, strict=False),
+        ]).unique(subset=["CURCODE"], keep="first")
+
     if {"FMTNAME", "START", "LABEL"}.issubset(df.columns):
         out = (
             df.filter(pl.col("FMTNAME").str.to_uppercase() == "FORATE")
@@ -271,17 +266,59 @@ def load_forate_lookup(path: Path, as_of: date) -> pl.DataFrame:
     print(f"[WARN] FORATE source at {path} has unrecognized columns {df.columns} -- "
           f"skipping conversion.")
     return empty
-# NOT source columns -- they're derived inside the SAS DATA step, which is
-# why including them in an intersection check silently broke things).
-SOURCE_COLS = ["BRANCH", "ACCTNO", "MTDAVBAL", "PRODUCT", "OPENDT", "OPENIND",
-               "CLOSEDT", "CURBAL", "AVGAMT", "INACTIVE", "CURCODE"]
 
-# Final KEEP list per SAS (FORBAL/FORATE added after conversion logic runs)
+
+# ============================================================================
+# REPTDATE
+# ============================================================================
+NOW = datetime.now()
+YESTERDAY = NOW - timedelta(days=1)
+REPTDATE = YESTERDAY.date()
+REPTYEAR = f"{REPTDATE.year:04d}"
+REPTMON = f"{REPTDATE.month:02d}"
+RDATE = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year % 100:02d}"
+NOWK = "1" if REPTDATE.day == 8 else "2" if REPTDATE.day == 15 else "3" if REPTDATE.day == 22 else "4"
+
+FORATE_LOOKUP = load_forate_lookup(FORATE_SRC, REPTDATE)
+
+
+# ============================================================================
+# Deposit table building
+# ============================================================================
+
+# Source columns from the SAS7BDAT files with their expected types.
+# BRANCH/PRODUCT dtypes are a best guess -- see KNOWN OPEN ITEMS #4 above.
+SOURCE_COLS = {
+    "BRANCH": pl.Utf8,
+    "ACCTNO": pl.Int64,
+    "MTDAVBAL": pl.Float64,
+    "PRODUCT": pl.Utf8,
+    "OPENDT": pl.Float64,
+    "OPENIND": pl.Utf8,
+    "CLOSEDT": pl.Float64,
+    "CURBAL": pl.Float64,
+    "AVGAMT": pl.Float64,
+    "INACTIVE": pl.Utf8,
+    "CURCODE": pl.Utf8,
+}
+
 FINAL_DEPOSIT_COLS = ["BRANCH", "ACCTNO", "MTDAVBAL", "PRODUCT", "OPENDT", "OPENIND",
                       "CLOSEDT", "CURBAL", "AVGAMT", "INACTIVE", "FORBAL", "FORATE"]
 
 
-def apply_currency_conversion(df: pl.DataFrame, table_type: str) -> pl.DataFrame:
+def align_to_schema(df: pl.DataFrame, col_specs: dict[str, pl.DataType]) -> pl.DataFrame:
+    """Select columns, adding any genuinely-missing ones as typed nulls
+    with the correct dtype instead of silently dropping columns."""
+    exprs = []
+    for col, dtype in col_specs.items():
+        if col in df.columns:
+            exprs.append(pl.col(col).cast(dtype, strict=False))
+        else:
+            exprs.append(pl.lit(None).cast(dtype).alias(col))
+    return df.select(exprs)
+
+
+def apply_currency_conversion(df: pl.DataFrame, table_type: str, forate_lookup: pl.DataFrame) -> pl.DataFrame:
     """Mirrors SAS:
       SAVING:
         IF CURCODE NE 'MYR':
@@ -291,13 +328,18 @@ def apply_currency_conversion(df: pl.DataFrame, table_type: str) -> pl.DataFrame
         IF CURCODE NE 'MYR':
            FORATE = lookup(CURCODE); MTDAVBAL = MTDAVBAL*FORATE
            (CURBAL, FORBAL untouched)
+
+    forate_lookup is passed explicitly (rather than read as a module
+    global) so this function has no forward-reference to a name defined
+    later in the module -- avoids the "possibly unbound" warning your
+    editor was flagging on the old FORATE_LOOKUP global reference.
     """
-    df = df.join(FORATE_LOOKUP, on="CURCODE", how="left")
+    df = df.join(forate_lookup, on="CURCODE", how="left")
     is_foreign = pl.col("CURCODE") != "MYR"
 
     if table_type == "saving":
         df = df.with_columns([
-            pl.when(is_foreign).then(pl.col("CURBAL")).otherwise(pl.lit(None)).alias("FORBAL"),
+            pl.when(is_foreign).then(pl.col("CURBAL")).otherwise(pl.lit(None).cast(pl.Float64)).alias("FORBAL"),
             pl.when(is_foreign).then(pl.col("CURBAL") * pl.col("FORATE")).otherwise(pl.col("CURBAL")).alias("CURBAL"),
             pl.when(is_foreign & (pl.col("CURCODE") != "XAU"))
               .then(pl.col("MTDAVBAL") * pl.col("FORATE"))
@@ -310,12 +352,10 @@ def apply_currency_conversion(df: pl.DataFrame, table_type: str) -> pl.DataFrame
               .otherwise(pl.col("MTDAVBAL")).alias("MTDAVBAL"),
         ])
 
-    # FORATE stays null for MYR rows (matches SAS leaving it uninitialized/missing)
     df = df.with_columns(
-        pl.when(is_foreign).then(pl.col("FORATE")).otherwise(pl.lit(None)).alias("FORATE")
+        pl.when(is_foreign).then(pl.col("FORATE")).otherwise(pl.lit(None).cast(pl.Float64)).alias("FORATE")
     )
 
-    # Surface which currencies had no rate available, if FORATE_LOOKUP is empty/incomplete
     unmatched = (
         df.filter(is_foreign & pl.col("FORATE").is_null())
           .select("CURCODE").unique().to_series().to_list()
@@ -327,35 +367,18 @@ def apply_currency_conversion(df: pl.DataFrame, table_type: str) -> pl.DataFrame
     return df.select(FINAL_DEPOSIT_COLS)
 
 
-def build_deposit_table(depo_path: Path, idepo_path: Path, table_type: str) -> pl.DataFrame:
-    depo = align_to_schema(read_sas7bdat(depo_path, usecols=SOURCE_COLS), SOURCE_COLS)
-    idepo = align_to_schema(read_sas7bdat(idepo_path, usecols=SOURCE_COLS), SOURCE_COLS)
+def build_deposit_table(depo_path: Path, idepo_path: Path, table_type: str, forate_lookup: pl.DataFrame) -> pl.DataFrame:
+    usecols = list(SOURCE_COLS.keys())
+    depo = align_to_schema(read_sas7bdat(depo_path, usecols=usecols), SOURCE_COLS)
+    idepo = align_to_schema(read_sas7bdat(idepo_path, usecols=usecols), SOURCE_COLS)
     combined = pl.concat([depo, idepo], how="vertical", rechunk=True)
-    combined = apply_currency_conversion(combined, table_type)
+    combined = apply_currency_conversion(combined, table_type, forate_lookup)
     return combined.unique(subset=["ACCTNO"], keep="first")
 
 
-# ============================================================================
-# REPTDATE
-# ============================================================================
-# TODO: SAS reads this from DEPO.REPTDATE (a business-date table), not
-# simply "yesterday" -- replace if that source is available to you.
-NOW = datetime.now()
-YESTERDAY = NOW - timedelta(days=1)
-REPTDATE = YESTERDAY.date()
-REPTYEAR = f"{REPTDATE.year:04d}"
-REPTMON = f"{REPTDATE.month:02d}"
-RDATE = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year % 100:02d}"
-NOWK = "1" if REPTDATE.day == 8 else "2" if REPTDATE.day == 15 else "3" if REPTDATE.day == 22 else "4"
-
-
-# ============================================================================
-# Build SAVING / CURRENT / FD
-# ============================================================================
-
-SAVING = build_deposit_table(DEPO_SAV, IDEPO_SAV, "saving")
-CURRENT = build_deposit_table(DEPO_CUR, IDEPO_CUR, "current")
-FD = build_deposit_table(DEPO_FD, IDEPO_FD, "fd")
+SAVING = build_deposit_table(DEPO_SAV, IDEPO_SAV, "saving", FORATE_LOOKUP)
+CURRENT = build_deposit_table(DEPO_CUR, IDEPO_CUR, "current", FORATE_LOOKUP)
+FD = build_deposit_table(DEPO_FD, IDEPO_FD, "fd", FORATE_LOOKUP)
 
 
 # ============================================================================
@@ -365,16 +388,16 @@ FD = build_deposit_table(DEPO_FD, IDEPO_FD, "fd")
 CISCA = (read_sas7bdat(CISCA_DEP)
            .filter(pl.col("SECCUST") == "901")
            .select(["ACCTNO", "CUSTNAM1", "NEWIC", "OLDIC"])
+           .with_columns(pl.col("ACCTNO").cast(pl.Int64, strict=False))
            .unique(subset=["ACCTNO"], keep="first"))
 CISDP = (read_sas7bdat(CISDP_DEP)
            .filter(pl.col("SECCUST") == "901")
            .select(["ACCTNO", "CUSTNAM1", "NEWIC", "OLDIC"])
+           .with_columns(pl.col("ACCTNO").cast(pl.Int64, strict=False))
            .unique(subset=["ACCTNO"], keep="first"))
 
-# FIX: SAS "MERGE X(IN=A) CIS; IF A;" keeps ALL of X regardless of a CIS
-# match -- this is a LEFT join, not inner. The earlier draft used an inner
-# join here, which silently dropped every deposit account whose customer
-# had no matching SECCUST='901' CIS record.
+# LEFT join: SAS "MERGE X(IN=A) CIS; IF A;" keeps ALL of X regardless of a
+# CIS match.
 SAVING = SAVING.join(CISDP, on="ACCTNO", how="left")
 CURRENT = CURRENT.join(CISCA, on="ACCTNO", how="left")
 FD = FD.join(CISDP, on="ACCTNO", how="left")
@@ -417,16 +440,29 @@ EXTCRMA = EXTCRMA.sort("AANO")
 
 
 # ============================================================================
-# LOAN match (chunked, column-pruned read of the large lnnote files)
+# LOAN match -- FAST parallel read of the large lnnote files
 # ============================================================================
 
 LN_NOTE_COLS = ["VINNO", "ESCRACCT"]
 
-def load_loan(ln_note_path: Path, iln_note_path: Path, chunksize: int = 500_000) -> pl.DataFrame:
-    conv_loan = read_sas_chunked(ln_note_path, usecols=LN_NOTE_COLS, chunksize=chunksize,
-                                  filter_expr=pl.col("VINNO") != "")
-    islamic_loan = read_sas_chunked(iln_note_path, usecols=LN_NOTE_COLS, chunksize=chunksize,
-                                     filter_expr=pl.col("VINNO") != "")
+def load_loan(ln_note_path: Path, iln_note_path: Path, num_processes: int | None = None) -> pl.DataFrame:
+    """Reads both lnnote files with pyreadstat's multiprocessing reader,
+    splitting the row range across CPU cores. This replaces the earlier
+    sequential chunked read -- safe to do because usecols already narrows
+    each file down to 2 small string columns, so holding the full 6M-row
+    result in memory isn't a concern; the remaining cost is pure read/parse
+    time, which parallelizes well across cores.
+
+    If you're on a shared/constrained box, pass num_processes explicitly
+    (e.g. multiprocessing.cpu_count() // 2) to avoid starving other jobs.
+    """
+    n = num_processes or multiprocessing.cpu_count()
+    conv_loan = read_sas_parallel(ln_note_path, usecols=LN_NOTE_COLS, num_processes=n)
+    islamic_loan = read_sas_parallel(iln_note_path, usecols=LN_NOTE_COLS, num_processes=n)
+
+    conv_loan = conv_loan.filter(pl.col("VINNO") != "")
+    islamic_loan = islamic_loan.filter(pl.col("VINNO") != "")
+
     return (
         pl.concat([conv_loan, islamic_loan], how="vertical", rechunk=True)
         .rename({"VINNO": "AANO"})
@@ -516,11 +552,9 @@ _EXTMIS_LEN = max(c[1] + c[2] - 1 for c in _EXTMIS_SPEC)
 
 def _to_number(value):
     """Best-effort numeric coercion. Returns 0 for None, passes through
-    int/float, and handles numeric strings including ones with a stray
-    trailing '.0' (e.g. from a column that got cast to Utf8 upstream but
-    is really numeric, like BRANCH/PRODUCT here). Returns None if the
-    value genuinely can't be interpreted as a number, so callers can
-    decide how to handle/log that instead of crashing."""
+    int/float, and handles numeric strings including a stray trailing
+    '.0' (e.g. from a column cast to Utf8 upstream that's really numeric).
+    Returns None if the value genuinely can't be interpreted as a number."""
     if value is None:
         return 0
     if isinstance(value, int):
@@ -586,8 +620,7 @@ def write_extmis_fixed_width(df: pl.DataFrame, path: Path):
         print(f"[WARN] {bad_rows} total EXTMIS rows had at least one non-numeric "
               f"field coerced to 0. Per-field counts: {bad_fields}. "
               f"If BRANCH/PRODUCT show up here, their SOURCE_COLS dtype "
-              f"guess (currently pl.Utf8) is likely wrong -- check the real "
-              f"source schema and switch to pl.Float64/pl.Int64 there instead.")
+              f"guess (currently pl.Utf8) is likely wrong.")
 
 
 base_name_mis = f"EXTMIS{REPTMON}{NOWK}"
