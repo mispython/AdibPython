@@ -70,16 +70,16 @@ CISCA_DEP  = BASE / "cisca" / "deposit.sas7bdat"
 CISDP_DEP  = BASE / "cisdp" / "deposit.sas7bdat"
 
 LN_NOTE    = BASE / "conv" / "lnnote.sas7bdat"
-ILN_NOTE   = BASE / "islamic" / "lnnote.sas7bdaz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  t"
+ILN_NOTE   = BASE / "islamic" / "lnnote.sas7bdat"
 
 # TODO: confirm real filename/subfolder -- guessed to follow the same
 # BASE/<source>/<file> pattern as everything else.
-CRMA_TXT     = BASE / "crma.txt"
+CRMA_TXT     = BASE / "crma" / "crma.txt"
 
 # TODO: confirm real filename/subfolder. This is a .sas7bdat -- either a
-# CNTLOUT-style format-catalog dump (FMTNAME/START/LABEL/...) or  a
+# CNTLOUT-style format-catalog dump (FMTNAME/START/LABEL/...) or a
 # pre-filtered CURCODE/FORATE table; load_forate_lookup() handles either.
-FORATE_SRC   = BASE / "forate.sas7bdat"
+FORATE_SRC   = BASE / "misca" / "forate.sas7bdat"
 
 OUT_BEP    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWCRMA")
 OUT_BEP.mkdir(parents=True, exist_ok=True)
@@ -117,6 +117,13 @@ def read_sas_chunked(
         del df_chunk, pl_chunk
     gc.collect()
     return pl.concat(chunks, how="vertical", rechunk=True) if chunks else pl.DataFrame(schema=usecols)
+
+
+def align_to_schema(df: pl.DataFrame, cols: list[str]) -> pl.DataFrame:
+    """Select `cols`, adding any genuinely-missing ones as typed nulls
+    instead of silently dropping columns other frames still have."""
+    exprs = [pl.col(c) if c in df.columns else pl.lit(None).alias(c) for c in cols]
+    return df.select(exprs)
 
 
 def write_sas7bdat(df: pl.DataFrame, path: Path):
@@ -264,60 +271,14 @@ def load_forate_lookup(path: Path, as_of: date) -> pl.DataFrame:
     print(f"[WARN] FORATE source at {path} has unrecognized columns {df.columns} -- "
           f"skipping conversion.")
     return empty
-
-
-# ============================================================================
-# REPTDATE
-# ============================================================================
-# TODO: SAS reads this from DEPO.REPTDATE (a business-date table), not
-# simply "yesterday" -- replace if that source is available to you.
-NOW = datetime.now()
-YESTERDAY = NOW - timedelta(days=1)
-REPTDATE = YESTERDAY.date()
-REPTYEAR = f"{REPTDATE.year:04d}"
-REPTMON = f"{REPTDATE.month:02d}"
-RDATE = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year % 100:02d}"
-NOWK = "1" if REPTDATE.day == 8 else "2" if REPTDATE.day == 15 else "3" if REPTDATE.day == 22 else "4"
-
-# ============================================================================
-# Load FORATE_LOOKUP (must be loaded before the functions that use it)
-# ============================================================================
-FORATE_LOOKUP = load_forate_lookup(FORATE_SRC, REPTDATE)
-
-# ============================================================================
-# Deposit table building functions
-# ============================================================================
-
-# Source columns from the SAS7BDAT files with their expected types
-SOURCE_COLS = {
-    "BRANCH": pl.Utf8,
-    "ACCTNO": pl.Int64,
-    "MTDAVBAL": pl.Float64,
-    "PRODUCT": pl.Utf8,
-    "OPENDT": pl.Float64,  # numeric in SAS, will be converted to date later
-    "OPENIND": pl.Utf8,
-    "CLOSEDT": pl.Float64,  # numeric in SAS, will be converted to date later
-    "CURBAL": pl.Float64,
-    "AVGAMT": pl.Float64,
-    "INACTIVE": pl.Utf8,
-    "CURCODE": pl.Utf8,
-}
+# NOT source columns -- they're derived inside the SAS DATA step, which is
+# why including them in an intersection check silently broke things).
+SOURCE_COLS = ["BRANCH", "ACCTNO", "MTDAVBAL", "PRODUCT", "OPENDT", "OPENIND",
+               "CLOSEDT", "CURBAL", "AVGAMT", "INACTIVE", "CURCODE"]
 
 # Final KEEP list per SAS (FORBAL/FORATE added after conversion logic runs)
 FINAL_DEPOSIT_COLS = ["BRANCH", "ACCTNO", "MTDAVBAL", "PRODUCT", "OPENDT", "OPENIND",
                       "CLOSEDT", "CURBAL", "AVGAMT", "INACTIVE", "FORBAL", "FORATE"]
-
-
-def align_to_schema(df: pl.DataFrame, col_specs: dict[str, pl.DataType]) -> pl.DataFrame:
-    """Select columns, adding any genuinely-missing ones as typed nulls
-    with the correct dtype instead of silently dropping columns."""
-    exprs = []
-    for col, dtype in col_specs.items():
-        if col in df.columns:
-            exprs.append(pl.col(col).cast(dtype, strict=False))
-        else:
-            exprs.append(pl.lit(None).cast(dtype).alias(col))
-    return df.select(exprs)
 
 
 def apply_currency_conversion(df: pl.DataFrame, table_type: str) -> pl.DataFrame:
@@ -336,7 +297,7 @@ def apply_currency_conversion(df: pl.DataFrame, table_type: str) -> pl.DataFrame
 
     if table_type == "saving":
         df = df.with_columns([
-            pl.when(is_foreign).then(pl.col("CURBAL")).otherwise(pl.lit(None).cast(pl.Float64)).alias("FORBAL"),
+            pl.when(is_foreign).then(pl.col("CURBAL")).otherwise(pl.lit(None)).alias("FORBAL"),
             pl.when(is_foreign).then(pl.col("CURBAL") * pl.col("FORATE")).otherwise(pl.col("CURBAL")).alias("CURBAL"),
             pl.when(is_foreign & (pl.col("CURCODE") != "XAU"))
               .then(pl.col("MTDAVBAL") * pl.col("FORATE"))
@@ -351,7 +312,7 @@ def apply_currency_conversion(df: pl.DataFrame, table_type: str) -> pl.DataFrame
 
     # FORATE stays null for MYR rows (matches SAS leaving it uninitialized/missing)
     df = df.with_columns(
-        pl.when(is_foreign).then(pl.col("FORATE")).otherwise(pl.lit(None).cast(pl.Float64)).alias("FORATE")
+        pl.when(is_foreign).then(pl.col("FORATE")).otherwise(pl.lit(None)).alias("FORATE")
     )
 
     # Surface which currencies had no rate available, if FORATE_LOOKUP is empty/incomplete
@@ -367,18 +328,25 @@ def apply_currency_conversion(df: pl.DataFrame, table_type: str) -> pl.DataFrame
 
 
 def build_deposit_table(depo_path: Path, idepo_path: Path, table_type: str) -> pl.DataFrame:
-    # Read only the columns we need (use the keys of SOURCE_COLS)
-    usecols = list(SOURCE_COLS.keys())
-    depo = read_sas7bdat(depo_path, usecols=usecols)
-    idepo = read_sas7bdat(idepo_path, usecols=usecols)
-    
-    # Align both to the same schema with correct types
-    depo = align_to_schema(depo, SOURCE_COLS)
-    idepo = align_to_schema(idepo, SOURCE_COLS)
-    
+    depo = align_to_schema(read_sas7bdat(depo_path, usecols=SOURCE_COLS), SOURCE_COLS)
+    idepo = align_to_schema(read_sas7bdat(idepo_path, usecols=SOURCE_COLS), SOURCE_COLS)
     combined = pl.concat([depo, idepo], how="vertical", rechunk=True)
     combined = apply_currency_conversion(combined, table_type)
     return combined.unique(subset=["ACCTNO"], keep="first")
+
+
+# ============================================================================
+# REPTDATE
+# ============================================================================
+# TODO: SAS reads this from DEPO.REPTDATE (a business-date table), not
+# simply "yesterday" -- replace if that source is available to you.
+NOW = datetime.now()
+YESTERDAY = NOW - timedelta(days=1)
+REPTDATE = YESTERDAY.date()
+REPTYEAR = f"{REPTDATE.year:04d}"
+REPTMON = f"{REPTDATE.month:02d}"
+RDATE = f"{REPTDATE.day:02d}{REPTDATE.month:02d}{REPTDATE.year % 100:02d}"
+NOWK = "1" if REPTDATE.day == 8 else "2" if REPTDATE.day == 15 else "3" if REPTDATE.day == 22 else "4"
 
 
 # ============================================================================
@@ -397,12 +365,10 @@ FD = build_deposit_table(DEPO_FD, IDEPO_FD, "fd")
 CISCA = (read_sas7bdat(CISCA_DEP)
            .filter(pl.col("SECCUST") == "901")
            .select(["ACCTNO", "CUSTNAM1", "NEWIC", "OLDIC"])
-           .with_columns(pl.col("ACCTNO").cast(pl.Int64, strict=False))
            .unique(subset=["ACCTNO"], keep="first"))
 CISDP = (read_sas7bdat(CISDP_DEP)
            .filter(pl.col("SECCUST") == "901")
            .select(["ACCTNO", "CUSTNAM1", "NEWIC", "OLDIC"])
-           .with_columns(pl.col("ACCTNO").cast(pl.Int64, strict=False))
            .unique(subset=["ACCTNO"], keep="first"))
 
 # FIX: SAS "MERGE X(IN=A) CIS; IF A;" keeps ALL of X regardless of a CIS
@@ -439,7 +405,6 @@ DEPOSIT = DEPOSIT.with_columns([
 
 EXTCRMA_BASE = read_crma_raw(CRMA_TXT).sort("ACCTNO")
 
-# Ensure ACCTNO types match for join (CRMA already has Int64 from read_crma_raw)
 EXTCRMA = EXTCRMA_BASE.join(DEPOSIT, on="ACCTNO", how="left")
 EXTCRMA = EXTCRMA.with_columns([
     pl.when(pl.col("PRODUCT").is_not_null()).then(pl.lit("M")).otherwise(pl.lit("F")).alias("MATCHIND"),
@@ -549,55 +514,83 @@ _EXTMIS_SPEC = [
 _EXTMIS_LEN = max(c[1] + c[2] - 1 for c in _EXTMIS_SPEC)
 
 
+def _to_number(value):
+    """Best-effort numeric coercion. Returns 0 for None, passes through
+    int/float, and handles numeric strings including ones with a stray
+    trailing '.0' (e.g. from a column that got cast to Utf8 upstream but
+    is really numeric, like BRANCH/PRODUCT here). Returns None if the
+    value genuinely can't be interpreted as a number, so callers can
+    decide how to handle/log that instead of crashing."""
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return 0 if value != value else value  # NaN check
+    s = str(value).strip()
+    if s == "":
+        return 0
+    try:
+        return int(s)
+    except ValueError:
+        try:
+            return int(float(s))
+        except ValueError:
+            return None
+
+
 def _fmt_s(value, width):
     s = "" if value is None else str(value)
     return s[:width].ljust(width)
 
 def _fmt_n(value, width):
-    ival = 0 if value is None else int(value)
-    s = str(ival)
+    num = _to_number(value)
+    if num is None:
+        num = 0
+    s = str(num)
     return s[-width:] if len(s) > width else s.rjust(width)
 
 def _fmt_z(value, width):
-    ival = 0 if value is None else int(value)
-    sign = "-" if ival < 0 else ""
-    digits = str(abs(ival)).zfill(width - len(sign))
+    num = _to_number(value)
+    if num is None:
+        num = 0
+    sign = "-" if num < 0 else ""
+    digits = str(abs(num)).zfill(width - len(sign))
     s = sign + digits
     return s[-width:] if len(s) > width else s
 
 
 def write_extmis_fixed_width(df: pl.DataFrame, path: Path):
     fmt_fn = {"s": _fmt_s, "n": _fmt_n, "z": _fmt_z}
+    bad_rows = 0
+    bad_fields: dict[str, int] = {}
     with open(path, "w") as f:
         for row in df.to_dicts():
             line = [" "] * _EXTMIS_LEN
+            row_had_issue = False
             for name, start, width, kind in _EXTMIS_SPEC:
-                s = fmt_fn[kind](row.get(name), width)
+                raw = row.get(name)
+                s = fmt_fn[kind](raw, width)
+                if kind in ("n", "z") and _to_number(raw) is None:
+                    bad_fields[name] = bad_fields.get(name, 0) + 1
+                    row_had_issue = True
                 idx = start - 1
                 line[idx: idx + width] = list(s)
+            if row_had_issue:
+                bad_rows += 1
+                if bad_rows <= 20:
+                    print(f"[WARN] EXTMIS row ACCTNO={row.get('ACCTNO')} had "
+                          f"non-numeric value(s) coerced to 0 -- check source data.")
             f.write("".join(line) + "\n")
+    if bad_rows:
+        print(f"[WARN] {bad_rows} total EXTMIS rows had at least one non-numeric "
+              f"field coerced to 0. Per-field counts: {bad_fields}. "
+              f"If BRANCH/PRODUCT show up here, their SOURCE_COLS dtype "
+              f"guess (currently pl.Utf8) is likely wrong -- check the real "
+              f"source schema and switch to pl.Float64/pl.Int64 there instead.")
 
 
 base_name_mis = f"EXTMIS{REPTMON}{NOWK}"
 write_extmis_fixed_width(EXTMIS, OUT_BEP / f"{base_name_mis}.txt")
 write_sas7bdat(EXTMIS, OUT_BEP / f"{base_name_mis}.sas7bdat")
 write_parquet(EXTMIS, OUT_BEP / f"{base_name_mis}.parquet")
-
-
-output:
-
-[WARN] /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWCRMA/forate.sas7bdat: using a rate older than 2026-08-02 for some currencies (most recent available on/before that date): [{'CURCODE': 'CHF', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'NOK', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'CNY', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'FJD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'INR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'KHR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'TWD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'FRF', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'BEF', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'SGD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'PHP', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'DEM', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'NZD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'PKR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'ZAR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'HKD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'LKR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'XAT', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'JPY', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'BND', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'GBP', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'VND', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'SAR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'LAK', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'BDT', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'ESP', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'IDR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'CAD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'AUD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'EUR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'KRW', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'ATS', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'FIM', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'XAU', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'ITL', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'NLG', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'IRR', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'XEU', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'AED', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'USD', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'THB', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'SEK', 'REPTDATE': datetime.date(2026, 8, 1)}, {'CURCODE': 'DKK', 'REPTDATE': datetime.date(2026, 8, 1)}]
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 4075718
-
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
-  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-SAS Connection terminated. Subprocess id was 4075718
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWCRMA.py", line 582, in <module>
-    write_extmis_fixed_width(EXTMIS, OUT_BEP / f"{base_name_mis}.txt")
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWCRMA.py", line 575, in write_extmis_fixed_width
-    s = fmt_fn[kind](row.get(name), width)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWCRMA.py", line 562, in _fmt_z
-    ival = 0 if value is None else int(value)
-ValueError: invalid literal for int() with base 10: '117.0'
