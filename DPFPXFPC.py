@@ -4,7 +4,7 @@ File Name: EIBMLIBT
 Loan Maturity Profile Processor (BT)
 Processes BTRAD loan data for BNM reporting
 Based on original SAS code
-Outputs to SAS dataset and Parquet formats
+Outputs to SAS dataset (.sas7bdat), Parquet, and a text report
 """
 
 from __future__ import annotations
@@ -18,7 +18,15 @@ import warnings
 import pyreadstat
 import polars as pl
 import pandas as pd
-import saspy
+
+# saspy is optional at import time so the rest of the pipeline still works
+# (Parquet/report output) even if saspy / a SAS session isn't available.
+try:
+    import saspy
+    SASPY_AVAILABLE = True
+except ImportError:
+    saspy = None
+    SASPY_AVAILABLE = False
 
 warnings.filterwarnings('ignore')
 
@@ -33,11 +41,24 @@ INPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/
 BT_SAS_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMLIBT/bt.sas7bdat")
 BT_PARQUET_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMLIBT/EIBMLIBT_BT.parquet")
 BT_REPORT_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMLIBT/EIBMLIBT_BT_REPORT.txt")
+BT_LOG_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBMLIBT/EIBMLIBT_processing.log")
 
 # Create output directories
 BT_SAS_PATH.parent.mkdir(parents=True, exist_ok=True)
 BT_PARQUET_PATH.parent.mkdir(parents=True, exist_ok=True)
 BT_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# --- saspy configuration ---
+# Name of the SAS config entry defined in your sascfg_personal.py
+# (e.g. "default", "oda", "iomlinux" etc.). Override via --sas-cfg on CLI.
+SAS_CONFIG_NAME = "default"
+
+# Libref/dataset name to use for the SAS-side output dataset
+SAS_OUTPUT_LIBREF = "XMISOUT"
+SAS_OUTPUT_DSNAME = "BT"
+
+# Whether to attempt writing the .sas7bdat output by default
+WRITE_SAS7BDAT = True
 
 
 # ============================================================================
@@ -174,11 +195,77 @@ def get_week_number(reptdate):
 
 
 # ============================================================================
+# SAS7BDAT OUTPUT VIA SASPY
+# ============================================================================
+def write_sas7bdat(result_pdf: pd.DataFrame, output_dir: Path, libref: str,
+                    dsname: str, cfgname: str, log_path: Path):
+    """
+    Write the final pandas DataFrame out as a native .sas7bdat file using
+    saspy. Starts a SAS session, assigns a library pointing at `output_dir`,
+    uploads the data as a SAS dataset via df2sd, then ends the session.
+    The library assignment (libname pointing at output_dir) is what causes
+    SAS to physically write <dsname>.sas7bdat into that folder.
+    """
+    if not SASPY_AVAILABLE:
+        msg = "  WARNING: saspy is not installed - skipping .sas7bdat output."
+        print(msg)
+        with open(log_path, 'a') as log:
+            log.write(f"{datetime.now()}: {msg}\n")
+        return False
+
+    if result_pdf is None or len(result_pdf) == 0:
+        print("  No records to write - skipping .sas7bdat output.")
+        return False
+
+    sas = None
+    try:
+        print(f"\n  Starting SAS session (cfgname='{cfgname}')...")
+        sas = saspy.SASsession(cfgname=cfgname)
+
+        print(f"  Assigning library {libref} -> {output_dir}")
+        lib_rc = sas.saslib(libref, path=str(output_dir))
+        if lib_rc is not None and getattr(sas, "SYSERR", 0) not in (0, None):
+            print(f"  WARNING: libname assignment may have issues (SYSERR={sas.SYSERR})")
+
+        print(f"  Uploading DataFrame to SAS dataset {libref}.{dsname} "
+              f"({len(result_pdf)} rows)...")
+        sas.df2sd(df=result_pdf, table=dsname, libref=libref)
+
+        out_file = output_dir / f"{dsname.lower()}.sas7bdat"
+        if out_file.exists():
+            print(f"  SAS dataset written: {out_file}")
+            return True
+        else:
+            print(f"  WARNING: Expected output file not found at {out_file}")
+            return False
+
+    except Exception as e:
+        print(f"  SAS7BDAT Write Error: {e}")
+        import traceback
+        traceback.print_exc()
+        with open(log_path, 'a') as log:
+            log.write(f"{datetime.now()}: SAS7BDAT write failed: {e}\n")
+        return False
+
+    finally:
+        if sas is not None:
+            try:
+                sas.endsas()
+            except Exception:
+                pass
+
+
+# ============================================================================
 # MAIN PROCESSING
 # ============================================================================
 
-def main(reptdate=None):
+def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
     """Main execution function - matches SAS DATA NOTE step"""
+    if write_sas7bdat_flag is None:
+        write_sas7bdat_flag = WRITE_SAS7BDAT
+    if sas_cfgname is None:
+        sas_cfgname = SAS_CONFIG_NAME
+
     print("\n" + "=" * 70)
     print("EIBMLIBT - LOAN MATURITY PROFILE PROCESSOR")
     print("=" * 70)
@@ -441,71 +528,23 @@ def main(reptdate=None):
         for row in df_summary.iter_rows(named=True):
             print(f"    {row['BNMCODE']}: {row['AMOUNT']:,.2f}")
         
-        # Convert to pandas for SAS output
+        # Convert to pandas for SAS/report output
         df_pandas = df_summary.to_pandas()
         
         # Step 6: Write output to SAS dataset using saspy
-        print(f"\nWriting SAS dataset to: {BT_SAS_PATH}")
-        
-        sas = None
-        try:
-            # Initialize SAS session
-            sas = saspy.SASsession(cfgname='default')
-            
-            # Use the sasdata() method with DataFrame as first argument
-            sas.sasdata(df_pandas, 'BT', 'WORK')
-            
-            # Copy to permanent location
-            sas_path = str(BT_SAS_PATH.parent)
-            sas.submit(f'''
-                libname out "{sas_path}";
-                data out.BT;
-                    set WORK.BT;
-                run;
-            ''')
-            
-            print(f"  SAS dataset written successfully using saspy")
-            
-        except Exception as e:
-            print(f"  Warning: Could not write SAS dataset using saspy: {e}")
-            print(f"  Attempting alternative method...")
-            
-            # Alternative: Use CSV import method
-            try:
-                # Write CSV as intermediate
-                temp_csv = BT_SAS_PATH.parent / "temp_BT.csv"
-                df_pandas.to_csv(temp_csv, index=False)
-                
-                # If SAS session doesn't exist, create one
-                if sas is None:
-                    sas = saspy.SASsession(cfgname='default')
-                
-                sas_path = str(BT_SAS_PATH.parent)
-                # Use SAS to read CSV and create dataset
-                sas.submit(f'''
-                    proc import datafile="{temp_csv}"
-                        out=temp_data
-                        dbms=csv
-                        replace;
-                    run;
-                    
-                    libname out "{sas_path}";
-                    data out.BT;
-                        set temp_data;
-                    run;
-                    
-                    proc datasets library=work nolist;
-                        delete temp_data;
-                    run;
-                ''')
-                
-                # Clean up temp file
-                temp_csv.unlink()
-                print(f"  SAS dataset written successfully using CSV import")
-                
-            except Exception as e2:
-                print(f"  Error writing SAS dataset: {e2}")
-                print("  Continuing with Parquet output only...")
+        sas7bdat_ok = False
+        if write_sas7bdat_flag:
+            print(f"\nWriting SAS dataset to: {BT_SAS_PATH}")
+            sas7bdat_ok = write_sas7bdat(
+                result_pdf=df_pandas,
+                output_dir=BT_SAS_PATH.parent,
+                libref=SAS_OUTPUT_LIBREF,
+                dsname=SAS_OUTPUT_DSNAME,
+                cfgname=sas_cfgname,
+                log_path=BT_LOG_PATH,
+            )
+        else:
+            print("\nSkipping SAS7BDAT output (disabled).")
         
         # Step 7: Write output to Parquet
         print(f"\nWriting Parquet file to: {BT_PARQUET_PATH}")
@@ -533,18 +572,11 @@ def main(reptdate=None):
         print("\n" + "=" * 70)
         print("PROCESSING COMPLETED SUCCESSFULLY")
         print("=" * 70)
-        print(f"\nOutput SAS dataset: {BT_SAS_PATH}")
+        print(f"\nOutput SAS dataset: {BT_SAS_PATH} [{'OK' if sas7bdat_ok else 'FAILED/SKIPPED'}]")
         print(f"Output Parquet file: {BT_PARQUET_PATH}")
         print(f"Report file: {BT_REPORT_PATH}")
         print(f"Total BNM codes: {len(df_summary)}")
         print(f"Total amount: {total:,.2f}")
-        
-        # Clean up SAS session if it exists
-        if sas is not None:
-            try:
-                sas.terminate()
-            except:
-                pass
         
         return 0
         
@@ -571,6 +603,10 @@ if __name__ == "__main__":
         epilog='Example: python EIBMLIBT.py 2026-08-08'
     )
     parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format')
+    parser.add_argument('--no-sas7bdat', action='store_true',
+                         help='Skip writing the .sas7bdat output via saspy')
+    parser.add_argument('--sas-cfg', default=SAS_CONFIG_NAME,
+                         help=f'saspy config name to use (default: {SAS_CONFIG_NAME})')
     
     args = parser.parse_args()
     
@@ -587,4 +623,8 @@ if __name__ == "__main__":
         reptdate = datetime.now().date()
         print(f"No date provided - using today's date: {reptdate.strftime('%Y-%m-%d')}")
     
-    sys.exit(main(reptdate))
+    sys.exit(main(
+        reptdate,
+        write_sas7bdat_flag=not args.no_sas7bdat,
+        sas_cfgname=args.sas_cfg,
+    ))
