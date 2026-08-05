@@ -13,20 +13,22 @@ SAS parity implemented:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
-import duckdb
-import polars as pl
+import pandas as pd
+import pyreadstat
+import saspy
 
 
 # =============================================================================
 # PATH CONFIGURATION
 # =============================================================================
 BASE_PATH = Path(".")
-INPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIAWOF14"
-OUTPUT_PATH = BASE_PATH / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIAWOF14"
+INPUT_PATH = BASE_PATH / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIAWOF14"
+OUTPUT_PATH = BASE_PATH / "sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIAWOF14"
 
 NPL_INPUT_PATH = INPUT_PATH / "npl"
 NPL1_OUTPUT_PATH = OUTPUT_PATH / "npl1"
@@ -35,9 +37,13 @@ WMIS_INPUT_PATH = INPUT_PATH / "wmis.txt"
 WIIS_INPUT = NPL_INPUT_PATH / "wiis.sas7bdat"
 WSP2_INPUT = NPL_INPUT_PATH / "wsp2.sas7bdat"
 WAQ_INPUT = NPL_INPUT_PATH / "waq.sas7bdat"
-WOFFTOT_OUTPUT = NPL1_OUTPUT_PATH / "WOFFTOT.parquet"
+WOFFTOT_OUTPUT_PARQUET = NPL1_OUTPUT_PATH / "WOFFTOT.parquet"
+WOFFTOT_OUTPUT_SAS = NPL1_OUTPUT_PATH / "WOFFTOT.sas7bdat"
 
 NPL1_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+
+# Initialize SAS session
+sas = saspy.SASsession()
 
 
 @dataclass(frozen=True)
@@ -60,27 +66,56 @@ WMIS_LAYOUT: tuple[FieldSpec, ...] = (
 )
 
 
+def read_sas7bdat(file_path: Path) -> pd.DataFrame:
+    """Read SAS7BDAT file using pyreadstat."""
+    if not file_path.exists():
+        raise FileNotFoundError(f"Required input SAS dataset not found: {file_path}")
+    
+    df, meta = pyreadstat.read_sas7bdat(str(file_path))
+    
+    # Remove REPTDATE if it exists and replace with current date - 1
+    if 'REPTDATE' in df.columns:
+        df = df.drop(columns=['REPTDATE'])
+    
+    # Add REPTDATE as current date minus 1 day
+    df['REPTDATE'] = datetime.now() - timedelta(days=1)
+    
+    return df
+
+
+def write_sas7bdat(df: pd.DataFrame, file_path: Path, table_name: str = None) -> None:
+    """Write DataFrame to SAS7BDAT using saspy."""
+    # Upload DataFrame to SAS
+    sas_df = sas.df2sd(df, table_name or file_path.stem)
+    
+    # Write to SAS7BDAT using SAS
+    sas_code = f"""
+    LIBNAME outlib "{str(file_path.parent)}";
+    DATA outlib.{file_path.stem};
+        SET {table_name or file_path.stem};
+    RUN;
+    """
+    sas.submit(sas_code)
+
+
 def copy_base_tables() -> None:
-    """Copy WIIS/WSP2/WAQ from NPL input to NPL1 output using DuckDB parquet scan."""
-    conn = duckdb.connect()
+    """Copy WIIS/WSP2/WAQ from NPL input to NPL1 output."""
     copies = {
-        WIIS_INPUT: NPL1_OUTPUT_PATH / "WIIS.parquet",
-        WSP2_INPUT: NPL1_OUTPUT_PATH / "WSP2.parquet",
-        WAQ_INPUT: NPL1_OUTPUT_PATH / "WAQ.parquet",
+        WIIS_INPUT: "WIIS",
+        WSP2_INPUT: "WSP2",
+        WAQ_INPUT: "WAQ",
     }
 
-    for src, dst in copies.items():
-        if not src.exists():
-            raise FileNotFoundError(f"Required input parquet not found: {src}")
-        conn.execute(
-            """
-            COPY (
-                SELECT *
-                FROM read_parquet(?)
-            ) TO ? (FORMAT PARQUET)
-            """,
-            [str(src), str(dst)],
-        )
+    for src, table_name in copies.items():
+        # Read with pyreadstat
+        df = read_sas7bdat(src)
+        
+        # Write as both parquet and SAS7BDAT
+        parquet_path = NPL1_OUTPUT_PATH / f"{table_name}.parquet"
+        sas_path = NPL1_OUTPUT_PATH / f"{table_name}.sas7bdat"
+        
+        df.to_parquet(parquet_path)
+        write_sas7bdat(df, sas_path, table_name)
 
 
 def _slice_text(line: str, start: int, width: int) -> str:
@@ -147,7 +182,7 @@ def parse_wmis_records(lines: Iterable[str]) -> list[dict]:
     return records
 
 
-def build_woff_from_wmis() -> pl.DataFrame:
+def build_woff_from_wmis() -> pd.DataFrame:
     """Create WOFF dataframe from raw WMIS fixed-width input."""
     if not WMIS_INPUT_PATH.exists():
         raise FileNotFoundError(f"Required WMIS input not found: {WMIS_INPUT_PATH}")
@@ -156,50 +191,50 @@ def build_woff_from_wmis() -> pl.DataFrame:
         records = parse_wmis_records(f)
 
     if not records:
-        return pl.DataFrame(
-            schema={
-                "ACCTNO": pl.Int64,
-                "NOTENO": pl.Int64,
-                "IISWOFF": pl.Decimal(18, 2),
-                "SPWOFF": pl.Decimal(18, 2),
-                "WOFFDT": pl.Utf8,
-                "CAPBAL": pl.Decimal(18, 2),
-            }
-        )
+        return pd.DataFrame(columns=["ACCTNO", "NOTENO", "IISWOFF", "SPWOFF", "WOFFDT", "CAPBAL"])
 
-    return pl.DataFrame(records).with_columns(
-        pl.col("IISWOFF").cast(pl.Decimal(18, 2)),
-        pl.col("SPWOFF").cast(pl.Decimal(18, 2)),
-        pl.col("CAPBAL").cast(pl.Decimal(18, 2)),
-    )
+    df = pd.DataFrame(records)
+    
+    # Convert decimal columns to float for SAS compatibility
+    for col in ["IISWOFF", "SPWOFF", "CAPBAL"]:
+        df[col] = df[col].apply(lambda x: float(x) if x is not None else None)
+    
+    return df
 
 
-def append_and_deduplicate_wofftot(woff: pl.DataFrame) -> pl.DataFrame:
+def append_and_deduplicate_wofftot(woff: pd.DataFrame) -> pd.DataFrame:
     """Append WOFF to WOFFTOT then deduplicate on ACCTNO/NOTENO."""
-    if WOFFTOT_OUTPUT.exists():
-        existing = pl.read_parquet(WOFFTOT_OUTPUT)
-        combined = pl.concat([existing, woff], how="diagonal_relaxed")
+    if WOFFTOT_OUTPUT_PARQUET.exists():
+        existing = pd.read_parquet(WOFFTOT_OUTPUT_PARQUET)
+        combined = pd.concat([existing, woff], ignore_index=True)
     else:
         combined = woff
 
+    # Sort and deduplicate
     deduped = (
         combined
-        .sort(["ACCTNO", "NOTENO"], maintain_order=True)
-        .unique(subset=["ACCTNO", "NOTENO"], keep="first", maintain_order=True)
+        .sort_values(["ACCTNO", "NOTENO"])
+        .drop_duplicates(subset=["ACCTNO", "NOTENO"], keep="first")
+        .reset_index(drop=True)
     )
 
-    deduped.write_parquet(WOFFTOT_OUTPUT)
+    # Write outputs
+    deduped.to_parquet(WOFFTOT_OUTPUT_PARQUET)
+    write_sas7bdat(deduped, WOFFTOT_OUTPUT_SAS, "WOFFTOT")
+    
     return deduped
 
 
 def main() -> None:
-    copy_base_tables()
-    woff = build_woff_from_wmis()
-    append_and_deduplicate_wofftot(woff)
+    try:
+        copy_base_tables()
+        woff = build_woff_from_wmis()
+        result = append_and_deduplicate_wofftot(woff)
+        print(f"Successfully processed {len(result)} records")
+    finally:
+        # Clean up SAS session
+        sas.endsas()
 
 
 if __name__ == "__main__":
     main()
-
-
-        all inputs are in sas7bdat sas dataset. use pyreadstat to read remove reptdate, use datetime timedelta - 1 instead. output in sas7bdat and parquet files. write out using saspy
