@@ -2,9 +2,10 @@ import polars as pl
 import pyreadstat
 from datetime import datetime, timedelta
 import os
+import sys
 
 # Configuration
-GLFILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNLGL/glfile.sas7bdat'
+GLFILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNLGL/glfile.txt'
 STORE_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNLGL'
 OUTPUT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMNLGL/'
 
@@ -15,13 +16,11 @@ reptmon = reptdate.strftime('%m')
 reptday = reptdate.strftime('%d')
 rdate = reptdate.strftime('%d%m%y')
 
-# Read GL file using pyreadstat
-df_gl, meta = pyreadstat.read_sas7bdat(GLFILE)
-
-# Get date from first row
-yy = int(df_gl['YY'][0])
-mm = int(df_gl['MM'][0])
-dd = int(df_gl['DD'][0])
+# Read GL file (text file) - read header first to get date
+df_glfile_header = pl.read_csv(GLFILE, separator='\t', n_rows=1)  # Adjust separator as needed
+yy = int(df_glfile_header['YY'][0])
+mm = int(df_glfile_header['MM'][0])
+dd = int(df_glfile_header['DD'][0])
 gl_date = datetime(yy, mm, dd)
 gl = gl_date.strftime('%d%m%y')
 
@@ -29,8 +28,8 @@ if gl != rdate:
     print(f"THE GLIFLE EXTRACTION IS NOT DATED {rdate}")
     sys.exit(77)
 
-# Convert to Polars DataFrame
-df_gl = pl.from_pandas(df_gl)
+# Read the full GL file
+df_gl = pl.read_csv(GLFILE, separator='\t')  # Adjust separator as needed
 
 # Apply SIGN logic
 df_gl = df_gl.with_columns([
@@ -105,16 +104,10 @@ def process_gl_data(df_gl, conditions, suffix):
             f'GLUTFX{suffix}': glfile.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('2'))
         }
         
-        # Save files
+        # Save files as SAS7BDAT
         date_str = f"{reptyear}{reptmon}{reptday}"
         for name, data in subsets.items():
             filename = f"{name}{date_str}"
-            
-            # Save as Parquet
-            parquet_path = os.path.join(STORE_DIR, f"{filename}.parquet")
-            data.write_parquet(parquet_path)
-            
-            # Save as SAS7BDAT using saspy
             sas_path = os.path.join(STORE_DIR, f"{filename}.sas7bdat")
             save_as_sas(data, sas_path, filename)
             
@@ -151,7 +144,11 @@ def save_as_sas(df_polars, sas_path, dataset_name):
         print(f"Saved SAS dataset: {sas_path}")
         
     except ImportError:
-        print("saspy not installed. Skipping SAS output.")
+        print("saspy not installed. Saving as CSV instead...")
+        # Fallback: save as CSV if saspy is not available
+        csv_path = sas_path.replace('.sas7bdat', '.csv')
+        df_polars.write_csv(csv_path)
+        print(f"Saved CSV file: {csv_path}")
     except Exception as e:
         print(f"Error saving SAS file: {e}")
 
