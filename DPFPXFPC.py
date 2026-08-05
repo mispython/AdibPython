@@ -1,15 +1,274 @@
-Reading GL file header...
-First line: 20260731                                                                        
-Second line: 149120              31/07/26                   150,169,113.86-
-Assuming space delimiter
-Failed with delimiter ' ': found more fields than defined in 'Schema'
+import polars as pl
+from datetime import datetime, timedelta
+import os
+import sys
 
-Consider setting 'truncate_ragged_lines=True'.
-Read without header
-First row (potential headers): ('20260731', None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,None, None, None, None, None, None, None, '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
-Second row: ('149120', None, None, None, None, None, None, None, None, None, None, None, None, None, '31/07/26', None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, '150,169,113.86-', None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
+# Configuration
+GLFILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNLGL/glfile.txt'
+STORE_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNLGL'
+OUTPUT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMNLGL/'
 
-Searching for date columns...
-Trying partial matches...
-Could not find all date columns. Available columns: ['column_1', 'column_2', 'column_3', 'column_4', 'column_5', 'column_6', 'column_7', 'column_8', 'column_9', 'column_10', 'column_11', 'column_12', 'column_13', 'column_14', 'column_15', 'column_16', 'column_17', 'column_18', 'column_19', 'column_20', 'column_21', 'column_22', 'column_23', 'column_24', 'column_25', 'column_26', 'column_27', 'column_28', 'column_29', 'column_30', 'column_31', 'column_32', 'column_33', 'column_34', 'column_35', 'column_36', 'column_37', 'column_38', 'column_39', 'column_40', 'column_41', 'column_42', 'column_43', 'column_44', 'column_45', 'column_46','column_47', 'column_48', 'column_49', 'column_50', 'column_51', 'column_52', 'column_53', 'column_54', 'column_55', 'column_56', 'column_57', 'column_58', 'column_59', 'column_60', 'column_61', 'column_62', 'column_63', 'column_64', 'column_65', 'column_66', 'column_67', 'column_68', 'column_69', 'column_70', 'column_71', 'column_72', 'column_73', 'column_74', 'column_75', 'column_76', 'column_77', 'column_78', 'column_79', 'column_80', 'column_81', 'column_82', 'column_83', 'column_84', 'column_85', 'column_86', 'column_87', 'column_88', 'column_89', 'column_90', 'column_91', 'column_92', 'column_93', 'column_94', 'column_95', 'column_96', 'column_97', 'column_98', 'column_99', 'column_100', 'column_101', 'column_102', 'column_103', 'column_104', 'column_105', 'column_106', 'column_107', 'column_108', 'column_109', 'column_110', 'column_111', 'column_112', 'column_113', 'column_114', 'column_115', 'column_116', 'column_117', 'column_118', 'column_119', 'column_120', 'column_121', 'column_122', 'column_123', 'column_124', 'column_125', 'column_126', 'column_127', 'column_128', 'column_129', 'column_130', 'column_131', 'column_132', 'column_133', 'column_134']
-Please specify the column names for year, month, and day
+# Calculate reptdate as yesterday
+reptdate = datetime.now() - timedelta(days=1)
+reptyear = reptdate.strftime('%Y')
+reptmon = reptdate.strftime('%m')
+reptday = reptdate.strftime('%d')
+rdate = reptdate.strftime('%d%m%y')
+
+# Read the file manually to understand structure
+print("Reading GL file...")
+with open(GLFILE, 'r') as f:
+    lines = f.readlines()
+
+# First line contains the date (YYYYMMDD format)
+if len(lines) > 0:
+    date_str = lines[0].strip()
+    print(f"Date from file header: {date_str}")
+    
+    # Parse date from first line (YYYYMMDD)
+    if len(date_str) >= 8:
+        yy = int(date_str[0:4])
+        mm = int(date_str[4:6])
+        dd = int(date_str[6:8])
+        gl_date = datetime(yy, mm, dd)
+        gl = gl_date.strftime('%d%m%y')
+        
+        if gl != rdate:
+            print(f"THE GLIFLE EXTRACTION IS NOT DATED {rdate}")
+            sys.exit(77)
+        
+        print(f"GL date: {gl}, Expected date: {rdate}")
+    else:
+        print("First line doesn't contain valid date")
+        sys.exit(1)
+
+# Process data lines (skip first line which is the date)
+data_lines = lines[1:]
+print(f"Processing {len(data_lines)} data lines")
+
+# Parse fixed-width data based on the sample
+# From the sample: 
+# Column 1: GLITEM (e.g., "149120") - appears to be at position 0
+# Column 2: Date (e.g., "31/07/26") - appears to be at position around 20
+# Column 3: Balance (e.g., "150,169,113.86-") - appears to be around position 35
+# SIGN is indicated by '-' at the end of balance
+
+records = []
+for line in data_lines:
+    line = line.strip()
+    if not line:
+        continue
+    
+    # Parse the line - split by whitespace since fields are space-separated
+    parts = line.split()
+    
+    if len(parts) >= 3:
+        glitem = parts[0]
+        date_str = parts[1]
+        
+        # The balance might be split if it contains commas
+        # Join the remaining parts to get the full balance
+        balance_str = ' '.join(parts[2:])
+        
+        # Remove commas and determine sign
+        sign = '+'
+        if balance_str.endswith('-'):
+            sign = '-'
+            balance_str = balance_str[:-1]  # Remove trailing minus
+        elif balance_str.endswith('+'):
+            balance_str = balance_str[:-1]  # Remove trailing plus
+        
+        # Remove commas from balance
+        balance_str = balance_str.replace(',', '')
+        
+        try:
+            balance = float(balance_str)
+            records.append({
+                'GLITEM': glitem,
+                'DATE': date_str,
+                'SIGN': sign,
+                'BALANCE': balance,
+                'YY': yy,
+                'MM': mm,
+                'DD': dd
+            })
+        except ValueError as e:
+            print(f"Could not parse balance: {balance_str} in line: {line}")
+            continue
+
+# Create DataFrame
+if records:
+    df_gl = pl.DataFrame(records)
+    print(f"Created DataFrame with {len(df_gl)} records")
+    print(f"Columns: {df_gl.columns}")
+    print(f"First few rows:")
+    print(df_gl.head(3))
+else:
+    print("No records found in the file")
+    sys.exit(1)
+
+# Apply SIGN logic
+df_gl = df_gl.with_columns([
+    pl.when(pl.col('SIGN') == '-')
+      .then(pl.col('BALANCE') * -1)
+      .otherwise(pl.col('BALANCE'))
+      .alias('BALANCE')
+])
+
+def process_gl_data(df_gl, conditions, suffix):
+    """Process GL data with given conditions"""
+    rows = []
+    for condition, item, week, month, qtr, halfyr, year, last, total in conditions:
+        filtered = df_gl.filter(condition)
+        if len(filtered) > 0:
+            rows.append(
+                filtered.select([
+                    pl.lit(item).alias('ITEM'),
+                    week.alias('WEEK') if week is not None else pl.lit(None).alias('WEEK'),
+                    month.alias('MONTH') if month is not None else pl.lit(None).alias('MONTH'),
+                    qtr.alias('QTR') if qtr is not None else pl.lit(None).alias('QTR'),
+                    halfyr.alias('HALFYR') if halfyr is not None else pl.lit(None).alias('HALFYR'),
+                    year.alias('YEAR') if year is not None else pl.lit(None).alias('YEAR'),
+                    last.alias('LAST') if last is not None else pl.lit(None).alias('LAST'),
+                    total.alias('TOTAL') if total is not None else pl.lit(None).alias('TOTAL')
+                ])
+            )
+    
+    glfile = pl.concat(rows) if rows else pl.DataFrame()
+    
+    if len(glfile) > 0:
+        # Calculate BALANCE
+        glfile = glfile.with_columns([
+            (pl.col('WEEK').fill_null(0) + 
+             pl.col('MONTH').fill_null(0) + 
+             pl.col('QTR').fill_null(0) + 
+             pl.col('HALFYR').fill_null(0) + 
+             pl.col('YEAR').fill_null(0) + 
+             pl.col('LAST').fill_null(0) + 
+             pl.col('TOTAL').fill_null(0)).alias('BALANCE')
+        ])
+        
+        # Filter and group
+        glfile = glfile.filter(pl.col('ITEM').is_not_null() & (pl.col('ITEM') != ''))
+        glfile = glfile.group_by('ITEM').agg([
+            pl.col('WEEK').sum().alias('WEEK'),
+            pl.col('MONTH').sum().alias('MONTH'),
+            pl.col('QTR').sum().alias('QTR'),
+            pl.col('HALFYR').sum().alias('HALFYR'),
+            pl.col('YEAR').sum().alias('YEAR'),
+            pl.col('LAST').sum().alias('LAST'),
+            pl.col('BALANCE').sum().alias('BALANCE')
+        ])
+        
+        # Round values
+        glfile = glfile.with_columns([
+            (pl.col('WEEK').round(0) / 1000).round(3).alias('WEEK'),
+            (pl.col('MONTH').round(0) / 1000).round(3).alias('MONTH'),
+            (pl.col('QTR').round(0) / 1000).round(3).alias('QTR'),
+            (pl.col('HALFYR').round(0) / 1000).round(3).alias('HALFYR'),
+            (pl.col('YEAR').round(0) / 1000).round(3).alias('YEAR'),
+            (pl.col('LAST').round(0) / 1000).round(3).alias('LAST'),
+            (pl.col('BALANCE').round(0) / 1000).round(3).alias('BALANCE')
+        ])
+        
+        # Create subsets
+        subsets = {
+            f'GLRM{suffix}': glfile.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('1')),
+            f'GLFX{suffix}': glfile.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('1') & ~pl.col('ITEM').is_in(['B1.12', 'B1.14'])),
+            f'GLRMFX{suffix}': glfile.filter(pl.col('ITEM').is_in(['B1.12', 'B1.14'])),
+            f'GLUTRM{suffix}': glfile.filter(pl.col('ITEM').str.starts_with('A') & pl.col('ITEM').str.slice(1, 1).eq('2')),
+            f'GLUTFX{suffix}': glfile.filter(pl.col('ITEM').str.starts_with('B') & pl.col('ITEM').str.slice(1, 1).eq('2'))
+        }
+        
+        # Save files as SAS7BDAT
+        date_str = f"{reptyear}{reptmon}{reptday}"
+        for name, data in subsets.items():
+            filename = f"{name}{date_str}"
+            sas_path = os.path.join(STORE_DIR, f"{filename}.sas7bdat")
+            save_as_sas(data, sas_path, filename)
+            
+            # Print results
+            print(f"\n{filename}:")
+            print(data)
+        
+        return subsets
+    
+    return {}
+
+def save_as_sas(df_polars, sas_path, dataset_name):
+    """Save Polars DataFrame as SAS dataset using saspy"""
+    try:
+        import saspy
+        
+        # Convert Polars to Pandas
+        df_pandas = df_polars.to_pandas()
+        
+        # Initialize SAS session
+        sas = saspy.SASsession()
+        
+        # Upload dataframe to SAS
+        sas_df = sas.df2sd(df_pandas, dataset_name)
+        
+        # Save as permanent SAS dataset
+        sas.saslib('mylib', path=os.path.dirname(sas_path))
+        sas.submit(f"""
+            data mylib.{dataset_name};
+                set {dataset_name};
+            run;
+        """)
+        
+        print(f"Saved SAS dataset: {sas_path}")
+        
+    except ImportError:
+        print("saspy not installed. Saving as CSV instead...")
+        # Fallback: save as CSV if saspy is not available
+        csv_path = sas_path.replace('.sas7bdat', '.csv')
+        df_polars.write_csv(csv_path)
+        print(f"Saved CSV file: {csv_path}")
+    except Exception as e:
+        print(f"Error saving SAS file: {e}")
+        # Try saving as CSV as fallback
+        try:
+            csv_path = sas_path.replace('.sas7bdat', '.csv')
+            df_polars.write_csv(csv_path)
+            print(f"Saved CSV file as fallback: {csv_path}")
+        except:
+            print("Could not save file in any format")
+
+# Define conditions for P1 and P2
+conditions_p1 = [
+    (pl.col('GLITEM').is_in(['F142630C']), pl.lit('B1.12'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE')),
+    (pl.col('GLITEM').is_in(['42699']), pl.lit('B1.14'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['44111', 'F147100']), pl.lit('A1.18'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F249299K', '49120', '42199', '49120NLF', '42190']), pl.lit('A1.20'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F144611FXSDC', 'F147600']), pl.lit('B1.18'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F143110VCB', 'F143110VFBI', 'F143120ODNVB', 'F143120ODNIB']), pl.lit('A2.21'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F143620FNFBI']), pl.lit('B2.21'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F133110ODVIB', 'F13312002CB', 'F132121BBNM']), pl.lit('A2.01'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['37070']), pl.lit('A2.08'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F137610FXSH', 'F137650FXCDS']), pl.lit('B2.08'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F133620FNFBI']), pl.lit('B2.01'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None))
+]
+
+conditions_p2 = [
+    (pl.col('GLITEM').is_in(['F142630C']), pl.lit('B1.12'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['42699']), pl.lit('B1.14'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['44111', 'F147100']), pl.lit('A1.18'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F147600', 'F144611FXSDC']), pl.lit('B1.18'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.col('BALANCE'), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F249299K', '49120', '42199', '49120NLF']), pl.lit('A1.20'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F143110VCB', 'F143110VFBI', 'F143120ODNVB', 'F143120ODNIB']), pl.lit('A2.21'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F143620FNFBI']), pl.lit('B2.21'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F133110ODVIB', 'F13312002CB', 'F132121BBNM']), pl.lit('A2.01'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['37070']), pl.lit('A2.08'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F137610FXSH', 'F137650FXCDS']), pl.lit('B2.08'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None)),
+    (pl.col('GLITEM').is_in(['F133620FNFBI']), pl.lit('B2.01'), pl.col('BALANCE'), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None), pl.lit(None))
+]
+
+# Process both sets of conditions
+print("\nProcessing P1 conditions...")
+results_p1 = process_gl_data(df_gl, conditions_p1, 'P1')
+
+print("\nProcessing P2 conditions...")
+results_p2 = process_gl_data(df_gl, conditions_p2, 'P2')
+
+print("\nProcessing complete!")
