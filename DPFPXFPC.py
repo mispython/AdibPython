@@ -1,90 +1,159 @@
-Current date: 2026-08-05
-Report date (yesterday): 2026-08-04
-Expected date format (DDMMYY): 040826
+OPTIONS NOCENTER;
+DATA REPTDATE;
+  SET DEPOSIT.REPTDATE;
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
 
-Reading GL file...
-File date: 2026-07-31 (DDMMYY: 310726)
-Expected date (DDMMYY): 040826
-WARNING: GL file extraction date (310726) does not match expected date (040826)
-Using file date for processing...
+DATA _NULL_;
+  INFILE GLFILE OBS=1;
+  INPUT @007 DD    2.
+        @005 MM    2.
+        @001 YY    4.;
+  REPTDATE=MDY(MM,DD,YY);
+  CALL SYMPUT('GL', PUT(REPTDATE,DDMMYY8.));
+RUN;
+%MACRO PROCESS;
+  %IF "&GL"="&RDATE" %THEN %DO;
 
-Processing 17 data lines
-Line 6: Not enough parts (1): -
-Line 16: Not enough parts (1): -
+DATA GLFILEP1;
+    INFILE GLFILE;
+    INPUT @002 GLITEM     $15.
+          @021 DATEX      $8.
+          @045 BALANCE    COMMA17.2
+          @062 SIGN       $1.;
+    DATE = INPUT(DATEX,DDMMYY8.);
+    IF SIGN = '-' THEN BALANCE = BALANCE *(-1);
+    IF GLITEM IN ('49120','49120NLF') THEN DO;
+       ITEM = 'A1.20';
+       WEEK = BALANCE;
+    END;
+    IF GLITEM IN ('F143120ODNCB','F143120ODNIB') THEN DO;
+       ITEM = 'A2.21';
+       WEEK = BALANCE;
+    END;
+    IF GLITEM IN ('F13312002CB','F132121BBNM') THEN DO;
+       ITEM = 'A2.01';
+       WEEK = BALANCE;
+    END;
+    IF GLITEM IN ('37070') THEN DO;
+       ITEM = 'A2.08';
+       WEEK = BALANCE;
+    END;
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST,TOTAL);
+   IF ITEM = ' ' THEN DELETE;
+RUN;
+PROC SUMMARY DATA=GLFILEP1 NWAY;
+CLASS ITEM;
+VAR WEEK MONTH QTR HALFYR YEAR LAST BALANCE;
+OUTPUT OUT=GLFILEP1 SUM=;
+RUN;
+DATA STORE.GLRMP1&REPTYEAR&REPTMON&REPTDAY
+     STORE.GLFXP1&REPTYEAR&REPTMON&REPTDAY
+     STORE.GLUTRMP1&REPTYEAR&REPTMON&REPTDAY
+     STORE.GLUTFXP1&REPTYEAR&REPTMON&REPTDAY;
+   SET GLFILEP1;
+   WEEK    = ROUND(WEEK,1000.)/1000;
+   MONTH   = ROUND(MONTH,1000.)/1000;
+   QTR     = ROUND(QTR,1000.)/1000;
+   HALFYR  = ROUND(HALFYR,1000.)/1000;
+   YEAR    = ROUND(YEAR,1000.)/1000;
+   LAST    = ROUND(LAST,1000.)/1000;
+   BALANCE = ROUND(BALANCE,1000.)/1000;
+   IF SUBSTR(ITEM,1,1) = 'A' THEN DO;
+      IF SUBSTR(ITEM,2,1) = '1' THEN OUTPUT
+         STORE.GLRMP1&REPTYEAR&REPTMON&REPTDAY;
+      IF SUBSTR(ITEM,2,1) = '2' THEN OUTPUT
+         STORE.GLUTRMP1&REPTYEAR&REPTMON&REPTDAY;
+   END;
+   ELSE DO;
+      IF SUBSTR(ITEM,2,1) = '1' THEN OUTPUT
+         STORE.GLFXP1&REPTYEAR&REPTMON&REPTDAY;
+      IF SUBSTR(ITEM,2,1) = '2' THEN OUTPUT
+         STORE.GLUTFXP1&REPTYEAR&REPTMON&REPTDAY;
+   END;
 
-Created DataFrame with 13 records
-Sample GLITEMs: ['F142199C', '132110', 'F132121BBNM', 'F143130', 'F249120BP', '139110', '149120', 'F147100', 'F142199E', '137070']
+PROC PRINT DATA=STORE.GLRMP1&REPTYEAR&REPTMON&REPTDAY;
+PROC PRINT DATA=STORE.GLFXP1&REPTYEAR&REPTMON&REPTDAY;
+PROC PRINT DATA=STORE.GLUTRMP1&REPTYEAR&REPTMON&REPTDAY;
+PROC PRINT DATA=STORE.GLUTFXP1&REPTYEAR&REPTMON&REPTDAY;
 
-First few rows:
-shape: (5, 4)
-┌─────────────┬──────────┬──────┬───────────┐
-│ GLITEM      ┆ DATEX    ┆ SIGN ┆ BALANCE   │
-│ ---         ┆ ---      ┆ ---  ┆ ---       │
-│ str         ┆ str      ┆ str  ┆ f64       │
-╞═════════════╪══════════╪══════╪═══════════╡
-│ 137070      ┆ 31/07/26 ┆ +    ┆ 0.0       │
-│ 132110      ┆ 31/07/26 ┆ +    ┆ 1.0089e9  │
-│ 139110      ┆ 31/07/26 ┆ +    ┆ 1.6607e7  │
-│ 149120      ┆ 31/07/26 ┆ -    ┆ 570339.41 │
-│ F132121BBNM ┆ 31/07/26 ┆ +    ┆ 1.0154e7  │
-└─────────────┴──────────┴──────┴───────────┘
+DATA GLFILEP2;
+    INFILE GLFILE;
+    INPUT @002 GLITEM     $15.
+          @021 DATEX      $8.
+          @045 BALANCE    COMMA17.2
+          @062 SIGN       $1.;
+    DATE = INPUT(DATEX,DDMMYY8.);
+    IF SIGN = '-' THEN BALANCE = BALANCE *(-1);
+    IF GLITEM IN ('49120','49120NLF') THEN DO;
+       ITEM = 'A1.20';
+       WEEK = BALANCE;
+    END;
+    IF GLITEM IN ('F143120ODNCB','F143120ODNIB') THEN DO;
+       ITEM = 'A2.14';
+       WEEK = BALANCE;
+    END;
+    IF GLITEM IN ('F13312002CB','F132121BBNM') THEN DO;
+       ITEM = 'A2.01';
+       WEEK = BALANCE;
+    END;
+    IF GLITEM IN ('37070') THEN DO;
+       ITEM = 'A2.08';
+       WEEK = BALANCE;
+    END;
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST,TOTAL);
+   IF ITEM = ' ' THEN DELETE;
+RUN;
+PROC SUMMARY DATA=GLFILEP2 NWAY;
+CLASS ITEM;
+VAR WEEK MONTH QTR HALFYR YEAR LAST BALANCE;
+OUTPUT OUT=GLFILEP2 SUM=;
+RUN;
+DATA STORE.GLRMP2&REPTYEAR&REPTMON&REPTDAY
+     STORE.GLFXP2&REPTYEAR&REPTMON&REPTDAY
+     STORE.GLUTRMP2&REPTYEAR&REPTMON&REPTDAY
+     STORE.GLUTFXP2&REPTYEAR&REPTMON&REPTDAY;
+   SET GLFILEP2;
+   WEEK    = ROUND(WEEK,1000.)/1000;
+   MONTH   = ROUND(MONTH,1000.)/1000;
+   QTR     = ROUND(QTR,1000.)/1000;
+   HALFYR  = ROUND(HALFYR,1000.)/1000;
+   YEAR    = ROUND(YEAR,1000.)/1000;
+   LAST    = ROUND(LAST,1000.)/1000;
+   BALANCE = ROUND(BALANCE,1000.)/1000;
+   IF SUBSTR(ITEM,1,1) = 'A' THEN DO;
+      IF SUBSTR(ITEM,2,1) = '1' THEN OUTPUT
+         STORE.GLRMP2&REPTYEAR&REPTMON&REPTDAY;
+      IF SUBSTR(ITEM,2,1) = '2' THEN OUTPUT
+         STORE.GLUTRMP2&REPTYEAR&REPTMON&REPTDAY;
+   END;
+   ELSE DO;
+      IF SUBSTR(ITEM,2,1) = '1' THEN OUTPUT
+         STORE.GLFXP2&REPTYEAR&REPTMON&REPTDAY;
+      IF SUBSTR(ITEM,2,1) = '2' THEN OUTPUT
+         STORE.GLUTFXP2&REPTYEAR&REPTMON&REPTDAY;
+   END;
 
-Processing Pass 1 (A2.21)...
-No data for GLRMP120260731
-No data for GLFXP120260731
-Saved Parquet: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMNLGL/GLUTRMP120260731.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 218316
+
+PROC PRINT DATA=STORE.GLRMP2&REPTYEAR&REPTMON&REPTDAY;
+PROC PRINT DATA=STORE.GLFXP2&REPTYEAR&REPTMON&REPTDAY;
+PROC PRINT DATA=STORE.GLUTRMP2&REPTYEAR&REPTMON&REPTDAY;
+PROC PRINT DATA=STORE.GLUTFXP2&REPTYEAR&REPTMON&REPTDAY;
+  %END;
+%ELSE %DO;
+        %IF "&GL" NE "&RDATE" %THEN
+            %PUT THE GLIFLE EXTRACTION IS NOT DATED &RDATE;
+        %DO;
+           DATA A;
+              ABORT 77;
+        %END;
+  %END;
+%MEND;
+%PROCESS;
+/*
+//
 
 
-61   
-62   libname mylib    '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMNLGL'  ;
-NOTE: Libref MYLIB was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMNLGL
-63   
-Saved SAS dataset: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMNLGL/GLUTRMP120260731.sas7bdat
-SAS Connection terminated. Subprocess id was 218316
-
-GLUTRMP120260731:
-shape: (2, 8)
-┌───────┬───────────┬───────┬─────┬────────┬──────┬──────┬───────────┐
-│ ITEM  ┆ WEEK      ┆ MONTH ┆ QTR ┆ HALFYR ┆ YEAR ┆ LAST ┆ BALANCE   │
-│ ---   ┆ ---       ┆ ---   ┆ --- ┆ ---    ┆ ---  ┆ ---  ┆ ---       │
-│ str   ┆ f64       ┆ f64   ┆ f64 ┆ f64    ┆ f64  ┆ f64  ┆ f64       │
-╞═══════╪═══════════╪═══════╪═════╪════════╪══════╪══════╪═══════════╡
-│ A2.01 ┆ 10154.309 ┆ 0.0   ┆ 0.0 ┆ 0.0    ┆ 0.0  ┆ 0.0  ┆ 10154.309 │
-│ A2.08 ┆ 0.0       ┆ 0.0   ┆ 0.0 ┆ 0.0    ┆ 0.0  ┆ 0.0  ┆ 0.0       │
-└───────┴───────────┴───────┴─────┴────────┴──────┴──────┴───────────┘
-No data for GLUTFXP120260731
-
-Processing Pass 2 (A2.14)...
-No data for GLRMP220260731
-No data for GLFXP220260731
-Saved Parquet: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMNLGL/GLUTRMP220260731.parquet
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 218361
-
-
-61   
-62   libname mylib    '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMNLGL'  ;
-NOTE: Libref MYLIB was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMNLGL
-63   
-Saved SAS dataset: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMNLGL/GLUTRMP220260731.sas7bdat
-SAS Connection terminated. Subprocess id was 218361
-
-GLUTRMP220260731:
-shape: (2, 8)
-┌───────┬───────────┬───────┬─────┬────────┬──────┬──────┬───────────┐
-│ ITEM  ┆ WEEK      ┆ MONTH ┆ QTR ┆ HALFYR ┆ YEAR ┆ LAST ┆ BALANCE   │
-│ ---   ┆ ---       ┆ ---   ┆ --- ┆ ---    ┆ ---  ┆ ---  ┆ ---       │
-│ str   ┆ f64       ┆ f64   ┆ f64 ┆ f64    ┆ f64  ┆ f64  ┆ f64       │
-╞═══════╪═══════════╪═══════╪═════╪════════╪══════╪══════╪═══════════╡
-│ A2.01 ┆ 10154.309 ┆ 0.0   ┆ 0.0 ┆ 0.0    ┆ 0.0  ┆ 0.0  ┆ 10154.309 │
-│ A2.08 ┆ 0.0       ┆ 0.0   ┆ 0.0 ┆ 0.0    ┆ 0.0  ┆ 0.0  ┆ 0.0       │
-└───────┴───────────┴───────┴─────┴────────┴──────┴──────┴───────────┘
-No data for GLUTFXP220260731
-
-Processing complete!
+this is the original sas code, does it need to adjust any GLITEM mapping?
