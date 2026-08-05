@@ -1,4 +1,4 @@
-# !/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Program Name: EIBMCOSR
 Purpose: Generate Transaction Volume & Cost Analysis Report for Public Bank Berhad (PBB)
@@ -7,29 +7,29 @@ Purpose: Generate Transaction Volume & Cost Analysis Report for Public Bank Berh
          - Identifies missing account names and unknown transaction type exceptions
 """
 
-import duckdb
+import pyreadstat
 import polars as pl
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import os
+import glob
 
 # =============================================================================
 # PATH CONFIGURATION
 # =============================================================================
 
-# Input parquet paths (COST library)
-COST_REPTDATE_PARQUET  = "input/cost/reptdate.parquet"
-COST_NAME_PARQUET      = "input/cost/name.parquet"
-COST_ESMR_PARQUET      = "input/cost/esmr.parquet"
-COST_OTHCOST_PARQUET   = "input/cost/othcost.parquet"
+# Input SAS7BDAT paths (COST library)
+COST_NAME_SAS7BDAT      = "input/cost/name.sas7bdat"
+COST_ESMR_SAS7BDAT      = "input/cost/esmr.sas7bdat"
+COST_OTHCOST_SAS7BDAT   = "input/cost/othcost.sas7bdat"
 
-# Monthly data parquet prefix patterns (e.g. cost/rate01.parquet .. rate12.parquet)
-COST_RATE_PREFIX       = "input/cost/rate"        # rate01..rate12
-COST_STBK_PREFIX       = "input/cost/stbk"        # stbk01..stbk12
-COST_DPCOL_PREFIX      = "input/cost/dpcol"       # dpcol01..dpcol12
-COST_DPECP_PREFIX      = "input/cost/dpecp"       # dpecp01..dpecp12
-COST_DPDDS_PREFIX      = "input/cost/dpdds"       # dpdds01..dpdds12
-COST_DPMISC_PREFIX     = "input/cost/dpmisc"      # dpmisc01..dpmisc12
-COST_DPBAL_PREFIX      = "input/cost/dpbal"       # dpbal01..dpbal12
+# Monthly data SAS7BDAT prefix patterns (e.g. cost/rate01.sas7bdat .. rate12.sas7bdat)
+COST_RATE_PREFIX       = "input/cost/rate"        # rate01..rate12.sas7bdat
+COST_STBK_PREFIX       = "input/cost/stbk"        # stbk01..stbk12.sas7bdat
+COST_DPCOL_PREFIX      = "input/cost/dpcol"       # dpcol01..dpcol12.sas7bdat
+COST_DPECP_PREFIX      = "input/cost/dpecp"       # dpecp01..dpecp12.sas7bdat
+COST_DPDDS_PREFIX      = "input/cost/dpdds"       # dpdds01..dpdds12.sas7bdat
+COST_DPMISC_PREFIX     = "input/cost/dpmisc"      # dpmisc01..dpmisc12.sas7bdat
+COST_DPBAL_PREFIX      = "input/cost/dpbal"       # dpbal01..dpbal12.sas7bdat
 
 # Output paths
 COSTXT01_TXT  = "output/cost01_text.txt"           # SAP.PBB.COST01.TEXT
@@ -43,11 +43,15 @@ os.makedirs("output", exist_ok=True)
 # =============================================================================
 
 def sas_date_to_pydate(val):
-    """Convert SAS date integer (days since 1960-01-01) or string to Python date."""
+    """Convert SAS date (datetime.date or other) to Python date."""
     if val is None:
         return None
+    if isinstance(val, date):
+        return val
+    if isinstance(val, datetime):
+        return val.date()
     if isinstance(val, (int, float)):
-        return date(1960, 1, 1) + __import__('datetime').timedelta(days=int(val))
+        return date(1960, 1, 1) + timedelta(days=int(val))
     if isinstance(val, str):
         return datetime.strptime(val, '%Y-%m-%d').date()
     return val
@@ -112,25 +116,30 @@ def coalesce(val, default=0.0):
     return val
 
 # =============================================================================
-# REPORT DATE VARIABLES
+# SAS7BDAT READER HELPER
 # =============================================================================
 
-def get_report_vars(reptdate_parquet):
+def read_sas7bdat(filepath: str) -> pl.DataFrame:
+    """Read a SAS7BDAT file using pyreadstat and return a Polars DataFrame."""
+    if not os.path.exists(filepath):
+        return pl.DataFrame()
+    df, meta = pyreadstat.read_sas7bdat(filepath)
+    return pl.from_pandas(df)
+
+# =============================================================================
+# REPORT DATE VARIABLES (using datetime.timedelta - 1)
+# =============================================================================
+
+def get_report_vars():
     """
-    Read REPTDATE, compute all macro variables.
+    Compute all macro variables based on current date minus 1 day.
     Returns dict with: noofday, reptday, reptmon, reptyear, rdate, sdate, smon, emon
     """
-    con = duckdb.connect()
-    row = con.execute(
-        f"SELECT reptdate FROM read_parquet('{reptdate_parquet}') LIMIT 1"
-    ).fetchone()
-    con.close()
-
-    reptdate = sas_date_to_pydate(row[0])
+    # Get yesterday's date (timedelta - 1)
+    reptdate = date.today() - timedelta(days=1)
 
     # SRPTDATE logic
-    # *** SRPTDATE = MDY(MM1,1,YY1); -- commented in original
-    # Active: SRPTDATE = MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))
+    # *** SRPTDATE = MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))
     srptdate = date(reptdate.year, reptdate.month, 1)
 
     noofday  = reptdate.day
@@ -159,20 +168,18 @@ def get_report_vars(reptdate_parquet):
 # MONTHLY DATA LOADER (replaces %MACRO loops with PROC APPEND)
 # =============================================================================
 
-def load_monthly_parquets(prefix: str, smon: int, emon: int) -> pl.DataFrame:
+def load_monthly_sas7bdat(prefix: str, smon: int, emon: int) -> pl.DataFrame:
     """
-    Load and union monthly parquet files from smon to emon.
+    Load and union monthly SAS7BDAT files from smon to emon.
     Equivalent to the %DO I=&SMON %TO &EMON macro loops with PROC APPEND.
     """
     frames = []
-    con = duckdb.connect()
     for i in range(smon, emon + 1):
         month_str = str(i).zfill(2)
-        path = f"{prefix}{month_str}.parquet"
+        path = f"{prefix}{month_str}.sas7bdat"
         if os.path.exists(path):
-            df = con.execute(f"SELECT * FROM read_parquet('{path}')").pl()
+            df = read_sas7bdat(path)
             frames.append(df)
-    con.close()
     if not frames:
         return pl.DataFrame()
     return pl.concat(frames, how='diagonal')
@@ -182,10 +189,19 @@ def load_monthly_parquets(prefix: str, smon: int, emon: int) -> pl.DataFrame:
 # =============================================================================
 
 def load_rate(smon: int, emon: int) -> pl.DataFrame:
-    """Load all rate monthly parquets, sort BY TRANDT."""
-    rate = load_monthly_parquets(COST_RATE_PREFIX, smon, emon)
+    """Load all rate monthly SAS7BDAT files, sort BY TRANDT."""
+    rate = load_monthly_sas7bdat(COST_RATE_PREFIX, smon, emon)
     if rate.is_empty():
         return rate
+    # Convert TRANDT to proper date if it's numeric
+    if 'trandt' in rate.columns:
+        if rate['trandt'].dtype in [pl.Float64, pl.Int64]:
+            rate = rate.with_columns(
+                pl.col('trandt').map_elements(
+                    lambda v: sas_date_to_pydate(v) if v is not None else None,
+                    return_dtype=pl.Date
+                )
+            )
     return rate.sort('trandt')
 
 # =============================================================================
@@ -206,18 +222,29 @@ def process_main(rv: dict, rate: pl.DataFrame) -> tuple:
     reptyear   = int(rv['reptyear'])
 
     # *** 1. STOCK BANKING ***
-    stbk  = load_monthly_parquets(COST_STBK_PREFIX,  smon, emon)
+    stbk  = load_monthly_sas7bdat(COST_STBK_PREFIX,  smon, emon)
     # *** 2. DEPOSIT COLLECTION ***
-    dpcol = load_monthly_parquets(COST_DPCOL_PREFIX, smon, emon)
+    dpcol = load_monthly_sas7bdat(COST_DPCOL_PREFIX, smon, emon)
     # *** 3. DEPOSIT ECP/FDS ***
-    dpecp = load_monthly_parquets(COST_DPECP_PREFIX, smon, emon)
+    dpecp = load_monthly_sas7bdat(COST_DPECP_PREFIX, smon, emon)
     # *** 4. DEPOSIT DDS ***
-    dpdds = load_monthly_parquets(COST_DPDDS_PREFIX, smon, emon)
+    dpdds = load_monthly_sas7bdat(COST_DPDDS_PREFIX, smon, emon)
     # *** 5. DEPOSIT MISC ***
-    dpmisc = load_monthly_parquets(COST_DPMISC_PREFIX, smon, emon)
+    dpmisc = load_monthly_sas7bdat(COST_DPMISC_PREFIX, smon, emon)
 
     # DATA TOTSUM: SET STBK DPCOL DPECP DPDDS DPMISC;
     totsum = pl.concat([stbk, dpcol, dpecp, dpdds, dpmisc], how='diagonal')
+    
+    # Convert TRANDT to date if needed
+    if 'trandt' in totsum.columns:
+        if totsum['trandt'].dtype in [pl.Float64, pl.Int64]:
+            totsum = totsum.with_columns(
+                pl.col('trandt').map_elements(
+                    lambda v: sas_date_to_pydate(v) if v is not None else None,
+                    return_dtype=pl.Date
+                )
+            )
+    
     totsum = totsum.sort('trandt')
 
     # DATA EXCEPT: rows where SVTYPE not in the known list
@@ -240,7 +267,7 @@ def process_main(rv: dict, rate: pl.DataFrame) -> tuple:
                   .alias(col)
             ).drop(rate_col)
 
-    # Compute CNT/COS columns per SVTYPE using a row-wise approach
+    # Compute CNT/COS columns per SVTYPE
     cnt_cos_cols = [
         'cntfds','cosfds','cntecp','cosecp','cntdds','cosdds','cntebk','cosebk',
         'cnttel','costel','cntatm','cosatm','cntotc','cosotc','cntesi','cosesi',
@@ -252,57 +279,7 @@ def process_main(rv: dict, rate: pl.DataFrame) -> tuple:
         if c not in totsum.columns:
             totsum = totsum.with_columns(pl.lit(None).cast(pl.Float64).alias(c))
 
-    # Use map_rows to apply the SELECT(SVTYPE) logic
-    def apply_svtype(rows):
-        results = []
-        for row in rows:
-            r = dict(zip(totsum.columns, row))
-            svtype   = r.get('svtype', '')
-            count    = coalesce(r.get('count', 0), 0.0)
-            miscrate = coalesce(r.get('miscrate', 0.0))
-            debrate  = coalesce(r.get('debrate',  0.0))
-            pberate  = coalesce(r.get('pberate',  0.0))
-            telerate = coalesce(r.get('telerate', 0.0))
-            atmrate  = coalesce(r.get('atmrate',  0.0))
-            otcrate  = coalesce(r.get('otcrate',  0.0))
-
-            out = {c: None for c in cnt_cos_cols}
-            if   svtype in ('FDSIBG','FDSIBK'):
-                out['cntfds']   = count; out['cosfds']   = count * miscrate
-            elif svtype == 'ECP':
-                out['cntecp']   = count; out['cosecp']   = count * miscrate
-            elif svtype == 'DDS':
-                out['cntdds']   = count; out['cosdds']   = count * debrate
-            elif svtype == 'EBK':
-                out['cntebk']   = count; out['cosebk']   = count * pberate
-            elif svtype == 'TEL':
-                out['cnttel']   = count; out['costel']   = count * telerate
-            elif svtype == 'ATM':
-                out['cntatm']   = count; out['cosatm']   = count * atmrate
-            elif svtype == 'OTC':
-                out['cntotc']   = count; out['cosotc']   = count * otcrate
-            elif svtype == 'ESI':
-                out['cntesi']   = count; out['cosesi']   = count * miscrate
-            elif svtype in ('PREATM','PRESMS','PREEBK','STM','MTN','MIS'):
-                out['cntmisc']  = count; out['cosmisc']  = count * miscrate
-            elif svtype == 'FPXCOL':
-                out['cntfpxco'] = count; out['cosfpxco'] = count * miscrate
-            elif svtype == 'FPXPYM':
-                out['cntfpxpy'] = count; out['cosfpxpy'] = count * miscrate
-            elif svtype == 'PAG':
-                out['cntpag']   = count; out['cospag']   = count * miscrate
-            elif svtype == 'CDT':
-                out['cntcdt']   = count; out['coscdt']   = count * miscrate
-            elif svtype == 'CDM':
-                out['cntcdm']   = count; out['coscdm']   = count * miscrate
-            elif svtype == 'MBK':
-                out['cntmbk']   = count; out['cosmbk']   = count * miscrate
-
-            results.append(tuple(out[c] for c in cnt_cos_cols))
-        return results
-
-    # Apply row-by-row (using with_columns with map_elements per column is complex;
-    # use to_dicts approach for correctness)
+    # Apply row-wise SVTYPE logic
     rows_data = totsum.to_dicts()
     cnt_cos_values = {c: [] for c in cnt_cos_cols}
     for row in rows_data:
@@ -357,37 +334,39 @@ def process_main(rv: dict, rate: pl.DataFrame) -> tuple:
         (pl.col('feeamt1').fill_null(0.0) + pl.col('feeamt2').fill_null(0.0)).alias('totfee')
     )
 
-    # PROC SORT DATA=COST.NAME OUT=NAME NODUPKEYS; BY ACCTNO;
-    con = duckdb.connect()
-    name_df = con.execute(
-        f"SELECT * FROM read_parquet('{COST_NAME_PARQUET}') ORDER BY acctno"
-    ).pl().unique(subset=['acctno'], keep='first').sort('acctno')
-    con.close()
+    # Load NAME dataset
+    name_df = read_sas7bdat(COST_NAME_SAS7BDAT)
+    if not name_df.is_empty():
+        name_df = name_df.unique(subset=['acctno'], keep='first').sort('acctno')
 
     # Sort TOTSUM BY ACCTNO
     totsum = totsum.sort('acctno')
 
     # *** A/C NOT FOUND IN CONTROL FILE (ESMR) ***
-    missname = totsum.join(name_df, on='acctno', how='anti')
+    missname = pl.DataFrame()
+    if not name_df.is_empty():
+        missname = totsum.join(name_df, on='acctno', how='anti')
 
     # MERGE TOTSUM + NAME BY ACCTNO, keep IF A
-    totsum = totsum.join(name_df, on='acctno', how='left', suffix='_name')
-    for col in ['nmabbr', 'custname']:
-        name_col = f"{col}_name"
-        if name_col in totsum.columns:
-            totsum = totsum.with_columns(
-                pl.when(pl.col(name_col).is_not_null())
-                  .then(pl.col(name_col))
-                  .otherwise(pl.col(col) if col in totsum.columns else pl.lit(None))
-                  .alias(col)
-            ).drop(name_col)
+    if not name_df.is_empty():
+        totsum = totsum.join(name_df, on='acctno', how='left', suffix='_name')
+        for col in ['nmabbr', 'custname']:
+            name_col = f"{col}_name"
+            if name_col in totsum.columns:
+                totsum = totsum.with_columns(
+                    pl.when(pl.col(name_col).is_not_null())
+                      .then(pl.col(name_col))
+                      .otherwise(pl.col(col) if col in totsum.columns else pl.lit(None))
+                      .alias(col)
+                ).drop(name_col)
 
     # PROC MEANS BY NMABBR SUM -> aggregate all cnt/cos + totfee columns
     agg_cols = cnt_cos_cols + ['totfee']
-    totsum = totsum.sort('nmabbr').group_by('nmabbr', maintain_order=True).agg(
-        [pl.col(c).sum().alias(c) for c in agg_cols if c in totsum.columns] +
-        [pl.col('custname').first().alias('custname')]
-    )
+    if not totsum.is_empty() and 'nmabbr' in totsum.columns:
+        totsum = totsum.sort('nmabbr').group_by('nmabbr', maintain_order=True).agg(
+            [pl.col(c).sum().alias(c) for c in agg_cols if c in totsum.columns] +
+            [pl.col('custname').first().alias('custname')]
+        )
 
     return totsum, missname, except_df
 
@@ -404,39 +383,28 @@ def process_esmr(rv: dict, rate: pl.DataFrame) -> tuple:
     emon    = rv['emon']
     sdate_d = parse_ddmmyy8(rv['sdate'])
 
-    con = duckdb.connect()
-    esmr_raw = con.execute(f"SELECT * FROM read_parquet('{COST_ESMR_PARQUET}')").pl()
-    con.close()
+    esmr_raw = read_sas7bdat(COST_ESMR_SAS7BDAT)
+    if esmr_raw.is_empty():
+        return pl.DataFrame(), pl.DataFrame()
 
-    # Convert expdt
-    if 'expdt' in esmr_raw.columns:
-        esmr_raw = esmr_raw.with_columns(
-            pl.col('expdt').map_elements(
-                lambda v: sas_date_to_pydate(v) if v is not None else None,
-                return_dtype=pl.Date
+    # Convert expdt and trandt from SAS numeric to date
+    for col in ['expdt', 'trandt']:
+        if col in esmr_raw.columns:
+            esmr_raw = esmr_raw.with_columns(
+                pl.col(col).map_elements(
+                    lambda v: sas_date_to_pydate(v) if v is not None else None,
+                    return_dtype=pl.Date
+                )
             )
-        )
-    if 'trandt' in esmr_raw.columns:
-        esmr_raw = esmr_raw.with_columns(
-            pl.col('trandt').map_elements(
-                lambda v: sas_date_to_pydate(v) if v is not None else None,
-                return_dtype=pl.Date
-            )
-        )
 
     # IF EXPDT GE SDATE
     esmr_raw = esmr_raw.filter(pl.col('expdt') >= sdate_d)
 
     # MERGE ESMR + RATE BY TRANDT (left join)
-    rate_conv = rate.with_columns(
-        pl.col('trandt').map_elements(
-            lambda v: sas_date_to_pydate(v) if v is not None else None,
-            return_dtype=pl.Date
-        )
-    ) if rate.schema.get('trandt') != pl.Date else rate
-
-    esmr_merged = esmr_raw.sort('trandt').join(rate_conv.sort('trandt'), on='trandt', how='left', suffix='_rate')
-    for col in rate_conv.columns:
+    esmr_merged = esmr_raw.sort('trandt').join(
+        rate.sort('trandt'), on='trandt', how='left', suffix='_rate'
+    )
+    for col in rate.columns:
         rate_col = f"{col}_rate"
         if rate_col in esmr_merged.columns:
             esmr_merged = esmr_merged.with_columns(
@@ -467,12 +435,13 @@ def process_esmr(rv: dict, rate: pl.DataFrame) -> tuple:
         frames.append(subset)
     esmr2 = pl.concat(frames, how='diagonal') if frames else pl.DataFrame()
 
-    # PROC SORT COST.NAME NODUPKEYS BY ACCTNO
-    con2 = duckdb.connect()
-    name_df = con2.execute(
-        f"SELECT * FROM read_parquet('{COST_NAME_PARQUET}') ORDER BY acctno"
-    ).pl().unique(subset=['acctno'], keep='first').sort('acctno')
-    con2.close()
+    # Load NAME dataset
+    name_df = read_sas7bdat(COST_NAME_SAS7BDAT)
+    if not name_df.is_empty():
+        name_df = name_df.unique(subset=['acctno'], keep='first').sort('acctno')
+
+    if name_df.is_empty():
+        return esmr2, pl.DataFrame()
 
     esmr2 = esmr2.sort('acctno')
 
@@ -513,11 +482,11 @@ def process_othercost(rv: dict) -> tuple:
     sdate_d = parse_ddmmyy8(rv['sdate'])
     rdate_d = parse_ddmmyy8(rv['rdate'])
 
-    con = duckdb.connect()
-    othcost_raw = con.execute(f"SELECT * FROM read_parquet('{COST_OTHCOST_PARQUET}')").pl()
-    con.close()
+    othcost_raw = read_sas7bdat(COST_OTHCOST_SAS7BDAT)
+    if othcost_raw.is_empty():
+        return pl.DataFrame(), pl.DataFrame()
 
-    # Convert dates
+    # Convert dates from SAS numeric to Python date
     for dcol in ['expdt', 'trandt']:
         if dcol in othcost_raw.columns:
             othcost_raw = othcost_raw.with_columns(
@@ -580,11 +549,12 @@ def process_othercost(rv: dict) -> tuple:
     othcost2 = pl.concat(frames, how='diagonal') if frames else pl.DataFrame()
 
     # NAME lookup
-    con2 = duckdb.connect()
-    name_df = con2.execute(
-        f"SELECT * FROM read_parquet('{COST_NAME_PARQUET}') ORDER BY acctno"
-    ).pl().unique(subset=['acctno'], keep='first').sort('acctno')
-    con2.close()
+    name_df = read_sas7bdat(COST_NAME_SAS7BDAT)
+    if not name_df.is_empty():
+        name_df = name_df.unique(subset=['acctno'], keep='first').sort('acctno')
+
+    if name_df.is_empty():
+        return othcost2, pl.DataFrame()
 
     othcost2 = othcost2.sort('acctno')
 
@@ -628,14 +598,18 @@ def process_depbal(rv: dict, rate: pl.DataFrame) -> tuple:
     noofday  = rv['noofday']
     reptyear = int(rv['reptyear'])
 
-    dpbal = load_monthly_parquets(COST_DPBAL_PREFIX, smon, emon)
+    dpbal = load_monthly_sas7bdat(COST_DPBAL_PREFIX, smon, emon)
     if dpbal.is_empty():
         return pl.DataFrame(), pl.DataFrame()
 
     dpbal = dpbal.sort('trandt')
 
     # MERGE DPBAL + RATE (KEEP=TRANDT FLOAT) BY TRANDT
-    rate_float = rate.select(['trandt', 'float']) if 'float' in rate.columns else rate.select(['trandt'])
+    if 'float' in rate.columns:
+        rate_float = rate.select(['trandt', 'float'])
+    else:
+        rate_float = rate.select(['trandt'])
+    
     dpbal = dpbal.join(rate_float, on='trandt', how='left', suffix='_rate')
     if 'float_rate' in dpbal.columns:
         dpbal = dpbal.with_columns(
@@ -662,11 +636,12 @@ def process_depbal(rv: dict, rate: pl.DataFrame) -> tuple:
     dpbal  = dpbal.with_columns(pl.Series('floamt', floams, dtype=pl.Float64))
 
     # NAME lookup
-    con = duckdb.connect()
-    name_df = con.execute(
-        f"SELECT * FROM read_parquet('{COST_NAME_PARQUET}') ORDER BY acctno"
-    ).pl().unique(subset=['acctno'], keep='first').sort('acctno')
-    con.close()
+    name_df = read_sas7bdat(COST_NAME_SAS7BDAT)
+    if not name_df.is_empty():
+        name_df = name_df.unique(subset=['acctno'], keep='first').sort('acctno')
+
+    if name_df.is_empty():
+        return dpbal, pl.DataFrame()
 
     dpbal = dpbal.sort('acctno')
 
@@ -705,12 +680,11 @@ def build_grand_total(totsum: pl.DataFrame, esmr2: pl.DataFrame,
     """
     rdate_d = parse_ddmmyy8(rv['rdate'])
 
-    # PROC SORT NAME NODUPKEYS BY NMABBR
-    con = duckdb.connect()
-    name_df = con.execute(
-        f"SELECT custname, nmabbr FROM read_parquet('{COST_NAME_PARQUET}') ORDER BY nmabbr"
-    ).pl().unique(subset=['nmabbr'], keep='first').sort('nmabbr')
-    con.close()
+    # Load NAME sorted by NMABBR
+    name_df = read_sas7bdat(COST_NAME_SAS7BDAT)
+    if not name_df.is_empty():
+        name_df = name_df.unique(subset=['nmabbr'], keep='first').sort('nmabbr')
+        name_df = name_df.select(['custname', 'nmabbr'])
 
     # Prepare join frames (select only needed columns)
     esmr_join    = esmr2.select(['nmabbr','cosesmr'])    if not esmr2.is_empty()    and 'cosesmr'  in esmr2.columns    else pl.DataFrame(schema={'nmabbr': pl.Utf8})
@@ -718,11 +692,16 @@ def build_grand_total(totsum: pl.DataFrame, esmr2: pl.DataFrame,
     othcost_cols = ['nmabbr'] + [c for c in ['hware','datacomm'] if c in othcost2.columns]
     othcost_join = othcost2.select(othcost_cols)         if not othcost2.is_empty() else pl.DataFrame(schema={'nmabbr': pl.Utf8})
 
-    # MERGE TOTSUM + ESMR2 + OTHCOST2 + DPBAL + NAME BY NMABBR (IF A OR B)
-    merged = totsum.join(esmr_join,    on='nmabbr', how='outer', suffix='_esmr')
-    merged = merged.join(othcost_join, on='nmabbr', how='left',  suffix='_oth')
-    merged = merged.join(dpbal_join,   on='nmabbr', how='left',  suffix='_bal')
-    merged = merged.join(name_df,      on='nmabbr', how='left',  suffix='_name')
+    # MERGE TOTSUM + ESMR2 + OTHCOST2 + DPBAL + NAME BY NMABBR
+    merged = totsum
+    if not esmr_join.is_empty():
+        merged = merged.join(esmr_join, on='nmabbr', how='outer', suffix='_esmr')
+    if not othcost_join.is_empty():
+        merged = merged.join(othcost_join, on='nmabbr', how='left', suffix='_oth')
+    if not dpbal_join.is_empty():
+        merged = merged.join(dpbal_join, on='nmabbr', how='left', suffix='_bal')
+    if not name_df.is_empty():
+        merged = merged.join(name_df, on='nmabbr', how='left', suffix='_name')
 
     # Resolve cosesmr
     if 'cosesmr_esmr' in merged.columns:
@@ -786,28 +765,20 @@ def build_grand_total(totsum: pl.DataFrame, esmr2: pl.DataFrame,
     ])
 
     # TRANDT = RDATE
-    rdate_int = (rdate_d - date(1960, 1, 1)).days
     merged = merged.with_columns(pl.lit(rdate_d).alias('trandt'))
 
     # MERGE TOTSUM + RATE BY TRANDT (left join)
-    rate_conv = rate
-    if rate_conv.schema.get('trandt') != pl.Date:
-        rate_conv = rate_conv.with_columns(
-            pl.col('trandt').map_elements(
-                lambda v: sas_date_to_pydate(v) if v is not None else None,
-                return_dtype=pl.Date
-            )
-        )
-    merged = merged.join(rate_conv, on='trandt', how='left', suffix='_rate')
-    for col in rate_conv.columns:
-        rate_col = f"{col}_rate"
-        if rate_col in merged.columns:
-            merged = merged.with_columns(
-                pl.when(pl.col(rate_col).is_not_null())
-                  .then(pl.col(rate_col))
-                  .otherwise(pl.col(col) if col in merged.columns else pl.lit(None))
-                  .alias(col)
-            ).drop(rate_col)
+    if not rate.is_empty():
+        merged = merged.join(rate, on='trandt', how='left', suffix='_rate')
+        for col in rate.columns:
+            rate_col = f"{col}_rate"
+            if rate_col in merged.columns:
+                merged = merged.with_columns(
+                    pl.when(pl.col(rate_col).is_not_null())
+                      .then(pl.col(rate_col))
+                      .otherwise(pl.col(col) if col in merged.columns else pl.lit(None))
+                      .alias(col)
+                ).drop(rate_col)
 
     # Replace nulls with 0 for all numeric report columns
     zero_cols = [
@@ -821,7 +792,10 @@ def build_grand_total(totsum: pl.DataFrame, esmr2: pl.DataFrame,
         if c in merged.columns:
             merged = merged.with_columns(pl.col(c).fill_null(0.0))
 
-    return merged.sort('custname')
+    if 'custname' in merged.columns:
+        merged = merged.sort('custname')
+
+    return merged
 
 # =============================================================================
 # OUTPUT: COSTXT01 — CSV text file
@@ -1099,6 +1073,9 @@ def write_print_report(totsum: pl.DataFrame, rv: dict, output_path: str):
         f.write(' ' + finalize_line(line, PAGE_WIDTH) + '\n')
 
     with open(output_path, 'w', encoding='ascii', errors='replace') as f:
+        if not rows:
+            return
+            
         rate_row = rows[0] if rows else {}
 
         for idx, row in enumerate(rows):
@@ -1227,8 +1204,8 @@ def write_missname_report(missname: pl.DataFrame, output_path: str):
 def main():
     print("EIBMCOSR: Starting cost analysis processing...")
 
-    # Read report date variables
-    rv = get_report_vars(COST_REPTDATE_PARQUET)
+    # Get report date variables (using datetime.timedelta - 1)
+    rv = get_report_vars()
     print(f"  Report date: {rv['rdate']}, Period: {rv['sdate']} to {rv['rdate']}, "
           f"Months: {rv['smon']} to {rv['emon']}")
 
@@ -1290,7 +1267,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-all inputs are in sas7bdat. read using pyreadstat. remove the reptdate, use datetime timedelta - 1 instead. outputs in text files.
