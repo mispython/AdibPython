@@ -1,276 +1,40 @@
-original sas code:
+"""
+CAMV / FDMV Movement Reports
+=============================
+Python re-implementation of the original SAS program.
 
-*;
-DATA REPTDATE;
-   SET MNITB.REPTDATE;
-   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
-   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-RUN;
-PROC PRINT; FORMAT REPTDATE DDMMYY10.;
-%INC PGM(PBBDPFMT,PBBELF);
-*;
-DATA CAMII CAMIC
-     CAMCI CAMCC
-     CAMFYI CAMFYC;
-  SET OMY.CAMV&REPTDAY&REPTMON;
-  BRABV=PUT(BRANCH,BRCHCD.);
-  CUSTCD = PUT(CUSTCODE,DDCUSTCD.);
-  IF PRODUCT NOT IN (79,80,413) AND
-     CUSTCD NOT IN (02,03,07,10,12,81,82,83,84);
-  IF PRODUCT IN (400:411,420:431,432:434) AND CURCODE NE 'MYR' THEN DO;
-     IF CUSTCODE IN (77,78,95,96) THEN OUTPUT CAMFYI;
-                                  ELSE OUTPUT CAMFYC;
-  END;
-  ELSE DO;
-     IF CUSTCODE IN (77,78,95,96) THEN DO;
-        IF (3000<=COSTCTR<=3999)  THEN OUTPUT CAMII;
-                                  ELSE OUTPUT CAMIC;
-     END;
-     ELSE DO;
-        IF (3000<=COSTCTR<=3999) AND
-                NOT (3790000000<=ACCTNO<=3799999999) THEN OUTPUT CAMCI;
-        ELSE IF NOT (3000<=COSTCTR<=3999) AND
-                NOT (3590000000<=ACCTNO<=3599999999)
-                                                     THEN OUTPUT CAMCC;
-     END;
-  END;
-*;
-DATA CAMFYI;
-   SET CAMFYI END=LAST;
-   FILE CAMFYI;
-   IF _N_=1 THEN DO;
-   PUT @001 'CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @058 'BY BRANCH (FOREIGN CURRENCY) INDIVIDUAL';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALC;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   TNETBALC+NETBALC;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALC ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP ';' TNETBALC;
-   END;
-*;
-DATA CAMFYC;
-   SET CAMFYC END=LAST;
-   FILE CAMFYC;
-   IF _N_=1 THEN DO;
-   PUT @001 'CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @058 'BY BRANCH (FOREIGN CURRENCY) CORPORATE';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALC;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   TNETBALC+NETBALC;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALC ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP ';' TNETBALC;
-   END;
-*;
-DATA CAMII;
-   SET CAMII END=LAST;
-   FILE CAMII;
-   IF _N_=1 THEN DO;
-   PUT @001 'CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @058 'BY BRANCH (INDIVIDUAL CUSTOMERS - ISLAMIC)';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALC;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALC ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
-*;
-DATA CAMIC;
-   SET CAMIC END=LAST;
-   FILE CAMIC;
-   IF _N_=1 THEN DO;
-   PUT @001 'CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @058 'BY BRANCH (INDIVIDUAL CUSTOMERS-CONVENTIONAL)';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALC;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALC ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
-*;
-DATA CAMCI;
-   SET CAMCI END=LAST;
-   FILE CAMCI;
-   IF _N_=1 THEN DO;
-   PUT @001 'CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @058 'BY BRANCH (CORPORATE CUSTOMERS - ISLAMIC)';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALC;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALC ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
-*;
-DATA CAMCC;
-   SET CAMCC END=LAST;
-   FILE CAMCC;
-   IF _N_=1 THEN DO;
-   PUT @001 'CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @058 'BY BRANCH (CORPORATE CUSTOMERS - CONVENTIONAL)';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALC;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALC ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
-*;
-DATA FDMII FDMIC
-     FDMCI FDMCC
-     FDMFYI FDMFYC;
-  SET OMY.FDMV&REPTDAY&REPTMON;
-  BRABV=PUT(BRANCH,BRCHCD.);
-  IF (350<=PRODUCT<=362)  THEN DO;
-     IF CUSTCODE IN (77,78,95,96) THEN OUTPUT FDMFYI;
-                                  ELSE OUTPUT FDMFYC;
-  END;
-  ELSE DO;
-     IF CUSTCODE IN (77,78,95,96) THEN DO;
-        IF (3000<=COSTCTR<=3999)  THEN OUTPUT FDMII;
-                                  ELSE OUTPUT FDMIC;
-     END;
-     ELSE DO;
-        IF (3000<=COSTCTR<=3999)  THEN OUTPUT FDMCI;
-                                  ELSE OUTPUT FDMCC;
-     END;
-  END;
-*;
-DATA FDMFYI;
-   SET FDMFYI END=LAST;
-   FILE FDMFYI;
-   IF _N_=1 THEN DO;
-   PUT @001 'FIXED DEPOSIT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @058 'BY BRANCH (FOREIGN CURRENCY) INDIVIDUAL';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALC;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALF ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
-*;
-DATA FDMFYC;
-   SET FDMFYC END=LAST;
-   FILE FDMFYC;
-   IF _N_=1 THEN DO;
-   PUT @001 'FIXED DEPOSIT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @058 'BY BRANCH (FOREIGN CURRENCY) CORPORATE';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALC;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALF ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
-*;
-DATA FDMII;
-   SET FDMII END=LAST;
-   FILE FDMII;
-   IF _N_=1 THEN DO;
-   PUT @001 'FD ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @058 'BY BRANCH (INDIVIDUAL CUSTOMERS - ISLAMIC)';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALF;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALF ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
-*;
-DATA FDMIC;
-   SET FDMIC END=LAST;
-   FILE FDMIC;
-   IF _N_=1 THEN DO;
-   PUT @001 'FD ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @054 'BY BRANCH (INDIVIDUAL CUSTOMERS - CONVENTIONAL)';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALF;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALF ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
-*;
-DATA FDMCI;
-   SET FDMCI END=LAST;
-   FILE FDMCI;
-   IF _N_=1 THEN DO;
-   PUT @001 'FD ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @054 'BY BRANCH (CORPORATE CUSTOMERS - ISLAMIC)';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALF;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALF ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
-*;
-DATA FDMCC;
-   SET FDMCC END=LAST;
-   FILE FDMCC;
-   IF _N_=1 THEN DO;
-   PUT @001 'FD ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT'
-       @054 'BY BRANCH (CORPORATE CUSTOMERS - CONVENTIONAL)';
-   PUT @001 'AS AT ' "&RDATE";
-   PUT @001 'BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALF;CUSTCODE';
-   END;
-   TCURBAL+CURBAL;
-   TCURBALP+PCURBAL;
-   PUT @001 BRANCH ';' BRABV ';' NAME ';' ACCTNO ';' CURBAL ';'
-            PCURBAL ';' NETBALF ';' CUSTCODE;
-   IF LAST THEN DO;
-      PUT @001 ';;;;' TCURBAL ';' TCURBALP;
-   END;
+Changes from the previous conversion, per request:
+  1. Inputs are read directly from SAS datasets (.sas7bdat) using pyreadstat,
+     instead of pre-staged parquet files read via DuckDB.
+  2. The MNITB.REPTDATE lookup dataset has been removed entirely. The
+     reporting date is now derived programmatically as "yesterday"
+     (datetime.now() - timedelta(days=1)), matching how REPTDATE was used
+     downstream (to build the &REPTDAY/&REPTMON dataset-name suffix and the
+     "AS AT" date shown on each report).
+  3. Output is written as plain, semicolon-delimited text files (.txt)
+     instead of .csv, mirroring the SAS FILE/PUT-based text output.
 
-*;
+Notes / assumptions carried over from the SAS source (flagged inline):
+  - BRCHCD and DDCUSTCD are SAS format catalogs (%INC PGM(PBBDPFMT,PBBELF))
+    that are not available here. They must be populated with the real
+    code -> label mappings before this script is used in production.
+  - In the original SAS, CUSTCD = PUT(CUSTCODE, DDCUSTCD.) is a *character*
+    formatted value that is then compared against the numeric literal list
+    (02,03,07,10,12,81,82,83,84). Without the format catalog it's not
+    possible to know what DDCUSTCD. actually produces, so - consistent with
+    the prior conversion - this script compares CUSTCODE directly against
+    that numeric list. Revisit this if DDCUSTCD. does anything other than a
+    straight passthrough of the code.
+  - FDMFYI / FDMFYC report a header column labelled "NETBALC" but the SAS
+    PUT statement for those two datasets actually writes the NETBALF value
+    on each detail line. That mismatch exists in the original SAS code and
+    is intentionally preserved here rather than "fixed".
+"""
 
-
-
-converted python equivalent:
-
-import duckdb
+import pyreadstat
+import pandas as pd
 from pathlib import Path
+from datetime import datetime, timedelta
 
 # ============================================================================
 # CONFIGURATION
@@ -281,131 +45,214 @@ INPUT_DIR = BASE_DIR / 'data'
 OUTPUT_DIR = BASE_DIR / 'output'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Format mappings (PBBDPFMT, PBBELF)
-BRCHCD = {}      # Branch code to abbreviation
-DDCUSTCD = {}    # Customer code format
+# Format mappings (previously %INC PGM(PBBDPFMT,PBBELF)).
+# Populate these with the real branch / customer-code label mappings.
+BRCHCD: dict = {}     # branch code -> branch abbreviation (PUT(BRANCH,BRCHCD.))
+DDCUSTCD: dict = {}   # custcode    -> formatted code      (PUT(CUSTCODE,DDCUSTCD.))
 
-con = duckdb.connect()
+EXCLUDED_CUSTCODES = {2, 3, 7, 10, 12, 81, 82, 83, 84}
+ISLAMIC_CUSTCODES = {77, 78, 95, 96}
+
+
+def fmt_branch(code):
+    """Mimics PUT(BRANCH, BRCHCD.). Falls back to the raw code if unmapped."""
+    return BRCHCD.get(code, str(code))
+
+
+def fmt_num(x):
+    """Render numbers the way SAS's default PUT would - no trailing '.0'
+    for whole numbers, but keep decimals when present."""
+    if pd.isna(x):
+        return ""
+    if isinstance(x, float) and x.is_integer():
+        return str(int(x))
+    return str(x)
+
 
 # ============================================================================
-# GET REPORTING DATE
+# REPORTING DATE
+# (REPTDATE dataset removed - use "yesterday" via datetime/timedelta)
 # ============================================================================
 
-reptdate = con.execute(f"SELECT reptdate FROM read_parquet('{INPUT_DIR}/mnitb/reptdate.parquet')").fetchone()[0]
-reptyear, reptmon, reptday = str(reptdate.year), f"{reptdate.month:02d}", f"{reptdate.day:02d}"
-rdate = reptdate.strftime('%d/%m/%Y')
+reptdate = datetime.now() - timedelta(days=1)
+reptyear = reptdate.strftime('%Y')
+reptmon = reptdate.strftime('%m')
+reptday = reptdate.strftime('%d')
+rdate = reptdate.strftime('%d/%m/%y')  # equivalent to SAS DDMMYY8.
 
 print(f"Report Date: {rdate}")
+
+
+# ============================================================================
+# HELPERS
+# ============================================================================
+
+def read_sas(path: Path) -> pd.DataFrame:
+    df, _meta = pyreadstat.read_sas7bdat(str(path))
+    df.columns = [c.upper() for c in df.columns]
+    return df
+
+
+def write_report(df: pd.DataFrame, out_path: Path, title: str, subtitle: str,
+                  subtitle_col: int, header_net_label: str, net_field: str,
+                  include_net_total: bool):
+    """Writes one text report, mirroring the SAS FILE/PUT block:
+       line 1: title @001, subtitle @<subtitle_col>
+       line 2: AS AT <rdate>
+       line 3: column header row
+       body:   one ';'-delimited detail line per record
+       last:   totals line
+    """
+    with open(out_path, 'w') as f:
+        header_line = title.ljust(subtitle_col - 1) + subtitle
+        f.write(header_line + "\n")
+        f.write(f"AS AT {rdate}\n")
+        f.write(f"BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;{header_net_label};CUSTCODE\n")
+
+        tcurbal = tcurbalp = tnetbal = 0.0
+        for _, r in df.iterrows():
+            curbal = r['CURBAL']
+            pcurbal = r['PCURBAL']
+            netbal = r[net_field]
+
+            f.write(
+                f"{fmt_num(r['BRANCH'])};{r['BRABV']};{r['NAME']};{fmt_num(r['ACCTNO'])};"
+                f"{fmt_num(curbal)};{fmt_num(pcurbal)};{fmt_num(netbal)};{fmt_num(r['CUSTCODE'])}\n"
+            )
+
+            tcurbal += 0 if pd.isna(curbal) else curbal
+            tcurbalp += 0 if pd.isna(pcurbal) else pcurbal
+            tnetbal += 0 if pd.isna(netbal) else netbal
+
+        if include_net_total:
+            f.write(f";;;;{fmt_num(tcurbal)};{fmt_num(tcurbalp)};{fmt_num(tnetbal)}\n")
+        else:
+            f.write(f";;;;{fmt_num(tcurbal)};{fmt_num(tcurbalp)}\n")
+
 
 # ============================================================================
 # PROCESS CURRENT ACCOUNT MOVEMENTS (CAMV)
 # ============================================================================
 
-con.execute(f"""
-    CREATE TEMP TABLE camv AS
-    SELECT *, 
-           branch brabv,  -- Apply BRCHCD format if available
-           CASE WHEN custcode IN (2,3,7,10,12,81,82,83,84) THEN 1 ELSE 0 END exclude,
-           CASE WHEN product BETWEEN 400 AND 411 OR product BETWEEN 420 AND 431 OR product BETWEEN 432 AND 434
-                THEN 1 ELSE 0 END fy_product,
-           CASE WHEN custcode IN (77,78,95,96) THEN 'I' ELSE 'C' END cust_type,
-           CASE WHEN costctr BETWEEN 3000 AND 3999 THEN 'I' ELSE 'C' END bank_type
-    FROM read_parquet('{INPUT_DIR}/omy/camv{reptday}{reptmon}.parquet')
-    WHERE product NOT IN (79,80,413)
-      AND custcode NOT IN (2,3,7,10,12,81,82,83,84)
-""")
+def process_camv():
+    path = INPUT_DIR / 'omy' / f'CAMV{reptday}{reptmon}.sas7bdat'
+    df = read_sas(path)
 
-# Split into 6 categories
-categories = {
-    'CAMFYI': ('fy_product=1 AND curcode!=\'MYR\' AND cust_type=\'I\'', 
-               'FOREIGN CURRENCY) INDIVIDUAL', 'NETBALC'),
-    'CAMFYC': ('fy_product=1 AND curcode!=\'MYR\' AND cust_type=\'C\'', 
-               'FOREIGN CURRENCY) CORPORATE', 'NETBALC'),
-    'CAMII':  ('fy_product=0 AND cust_type=\'I\' AND bank_type=\'I\'', 
-               'INDIVIDUAL CUSTOMERS - ISLAMIC)', 'NETBALC'),
-    'CAMIC':  ('fy_product=0 AND cust_type=\'I\' AND bank_type=\'C\'', 
-               'INDIVIDUAL CUSTOMERS-CONVENTIONAL)', 'NETBALC'),
-    'CAMCI':  ('fy_product=0 AND cust_type=\'C\' AND bank_type=\'I\' AND acctno NOT BETWEEN 3790000000 AND 3799999999', 
-               'CORPORATE CUSTOMERS - ISLAMIC)', 'NETBALC'),
-    'CAMCC':  ('fy_product=0 AND cust_type=\'C\' AND bank_type=\'C\' AND acctno NOT BETWEEN 3590000000 AND 3599999999', 
-               'CORPORATE CUSTOMERS - CONVENTIONAL)', 'NETBALC')
-}
+    df['BRABV'] = df['BRANCH'].apply(fmt_branch)
 
-for fname, (cond, desc, netcol) in categories.items():
-    data = con.execute(f"SELECT * FROM camv WHERE {cond}").fetchall()
-    
-    with open(OUTPUT_DIR/f'{fname.lower()}.csv', 'w') as f:
-        f.write(f"CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT BY BRANCH ({desc}\n")
-        f.write(f"AS AT {rdate}\n")
-        f.write("BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALC;CUSTCODE\n")
-        
-        tcurbal = tpcurbal = tnetbal = 0.0
-        for r in data:
-            f.write(f"{r[1]};{r[-4]};{r[2]};{r[0]};{r[3]};{r[4]};{r[5]};{r[6]}\n")
-            tcurbal += r[3]
-            tpcurbal += r[4]
-            if netcol == 'NETBALC':
-                tnetbal += r[5]
-        
-        if netcol == 'NETBALC':
-            f.write(f";;;;{tcurbal};{tpcurbal};{tnetbal}\n")
+    # Subsetting IF: drop excluded products / customer codes up front.
+    df = df[~df['PRODUCT'].isin([79, 80, 413])]
+    df = df[~df['CUSTCODE'].isin(EXCLUDED_CUSTCODES)]
+
+    def classify(row):
+        is_fy_product = (
+            400 <= row['PRODUCT'] <= 411
+            or 420 <= row['PRODUCT'] <= 431
+            or 432 <= row['PRODUCT'] <= 434
+        )
+        if is_fy_product and row['CURCODE'] != 'MYR':
+            return 'CAMFYI' if row['CUSTCODE'] in ISLAMIC_CUSTCODES else 'CAMFYC'
+
+        if row['CUSTCODE'] in ISLAMIC_CUSTCODES:
+            return 'CAMII' if 3000 <= row['COSTCTR'] <= 3999 else 'CAMIC'
+
+        # non-Islamic-code, non-FY records
+        if 3000 <= row['COSTCTR'] <= 3999:
+            if not (3790000000 <= row['ACCTNO'] <= 3799999999):
+                return 'CAMCI'
+            return None  # matches implicit SAS drop (no ELSE branch)
         else:
-            f.write(f";;;;{tcurbal};{tpcurbal}\n")
-    
-    print(f"{fname}: {len(data)} records")
+            if not (3590000000 <= row['ACCTNO'] <= 3599999999):
+                return 'CAMCC'
+            return None  # matches implicit SAS drop (no ELSE branch)
+
+    df['CATEGORY'] = df.apply(classify, axis=1)
+    df = df[df['CATEGORY'].notna()]
+
+    # (title, subtitle, subtitle start column, include NETBALC total row)
+    specs = {
+        'CAMFYI': ('CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (FOREIGN CURRENCY) INDIVIDUAL', 58, True),
+        'CAMFYC': ('CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (FOREIGN CURRENCY) CORPORATE', 58, True),
+        'CAMII':  ('CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (INDIVIDUAL CUSTOMERS - ISLAMIC)', 58, False),
+        'CAMIC':  ('CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (INDIVIDUAL CUSTOMERS-CONVENTIONAL)', 58, False),
+        'CAMCI':  ('CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (CORPORATE CUSTOMERS - ISLAMIC)', 58, False),
+        'CAMCC':  ('CURRENT ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (CORPORATE CUSTOMERS - CONVENTIONAL)', 58, False),
+    }
+
+    for cat, (title, subtitle, subcol, include_net_total) in specs.items():
+        sub = df[df['CATEGORY'] == cat]
+        write_report(
+            sub, OUTPUT_DIR / f'{cat.lower()}.txt',
+            title, subtitle, subcol,
+            header_net_label='NETBALC',
+            net_field='NETBALC',
+            include_net_total=include_net_total,
+        )
+        print(f"{cat}: {len(sub)} records")
+
 
 # ============================================================================
 # PROCESS FIXED DEPOSIT MOVEMENTS (FDMV)
 # ============================================================================
 
-con.execute(f"""
-    CREATE TEMP TABLE fdmv AS
-    SELECT *, 
-           branch brabv,
-           CASE WHEN product BETWEEN 350 AND 362 THEN 1 ELSE 0 END fy_product,
-           CASE WHEN custcode IN (77,78,95,96) THEN 'I' ELSE 'C' END cust_type,
-           CASE WHEN costctr BETWEEN 3000 AND 3999 THEN 'I' ELSE 'C' END bank_type
-    FROM read_parquet('{INPUT_DIR}/omy/fdmv{reptday}{reptmon}.parquet')
-""")
+def process_fdmv():
+    path = INPUT_DIR / 'omy' / f'FDMV{reptday}{reptmon}.sas7bdat'
+    df = read_sas(path)
 
-fd_categories = {
-    'FDMFYI': ('fy_product=1 AND cust_type=\'I\'', 
-               'FOREIGN CURRENCY) INDIVIDUAL'),
-    'FDMFYC': ('fy_product=1 AND cust_type=\'C\'', 
-               'FOREIGN CURRENCY) CORPORATE'),
-    'FDMII':  ('fy_product=0 AND cust_type=\'I\' AND bank_type=\'I\'', 
-               'INDIVIDUAL CUSTOMERS - ISLAMIC)'),
-    'FDMIC':  ('fy_product=0 AND cust_type=\'I\' AND bank_type=\'C\'', 
-               'INDIVIDUAL CUSTOMERS - CONVENTIONAL)'),
-    'FDMCI':  ('fy_product=0 AND cust_type=\'C\' AND bank_type=\'I\'', 
-               'CORPORATE CUSTOMERS - ISLAMIC)'),
-    'FDMCC':  ('fy_product=0 AND cust_type=\'C\' AND bank_type=\'C\'', 
-               'CORPORATE CUSTOMERS - CONVENTIONAL)')
-}
+    df['BRABV'] = df['BRANCH'].apply(fmt_branch)
 
-for fname, (cond, desc) in fd_categories.items():
-    data = con.execute(f"SELECT * FROM fdmv WHERE {cond}").fetchall()
-    
-    title = 'FIXED DEPOSIT' if fname.startswith('FDMFY') else 'FD ACCOUNT'
-    
-    with open(OUTPUT_DIR/f'{fname.lower()}.csv', 'w') as f:
-        f.write(f"{title} MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT BY BRANCH ({desc}\n")
-        f.write(f"AS AT {rdate}\n")
-        f.write("BRANCH;BRABV;NAME;ACCTNO;CURBAL;PCURBAL;NETBALF;CUSTCODE\n")
-        
-        tcurbal = tpcurbal = 0.0
-        for r in data:
-            f.write(f"{r[1]};{r[-3]};{r[2]};{r[0]};{r[3]};{r[4]};{r[5]};{r[6]}\n")
-            tcurbal += r[3]
-            tpcurbal += r[4]
-        
-        f.write(f";;;;{tcurbal};{tpcurbal}\n")
-    
-    print(f"{fname}: {len(data)} records")
+    def classify(row):
+        if 350 <= row['PRODUCT'] <= 362:
+            return 'FDMFYI' if row['CUSTCODE'] in ISLAMIC_CUSTCODES else 'FDMFYC'
 
-con.close()
-print(f"\nCompleted: 12 CSV reports generated in {OUTPUT_DIR}")
+        if row['CUSTCODE'] in ISLAMIC_CUSTCODES:
+            return 'FDMII' if 3000 <= row['COSTCTR'] <= 3999 else 'FDMIC'
+
+        return 'FDMCI' if 3000 <= row['COSTCTR'] <= 3999 else 'FDMCC'
+
+    df['CATEGORY'] = df.apply(classify, axis=1)
+
+    # (title, subtitle, subtitle start column, header net-column label)
+    # NOTE: FDMFYI/FDMFYC header label of "NETBALC" (instead of NETBALF)
+    # replicates a mismatch present in the original SAS PUT statement.
+    specs = {
+        'FDMFYI': ('FIXED DEPOSIT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (FOREIGN CURRENCY) INDIVIDUAL', 58, 'NETBALC'),
+        'FDMFYC': ('FIXED DEPOSIT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (FOREIGN CURRENCY) CORPORATE', 58, 'NETBALC'),
+        'FDMII':  ('FD ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (INDIVIDUAL CUSTOMERS - ISLAMIC)', 58, 'NETBALF'),
+        'FDMIC':  ('FD ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (INDIVIDUAL CUSTOMERS - CONVENTIONAL)', 54, 'NETBALF'),
+        'FDMCI':  ('FD ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (CORPORATE CUSTOMERS - ISLAMIC)', 54, 'NETBALF'),
+        'FDMCC':  ('FD ACCOUNT MOVEMENTS OF RM 1MIL & ABOVE PER ACCOUNT',
+                   'BY BRANCH (CORPORATE CUSTOMERS - CONVENTIONAL)', 54, 'NETBALF'),
+    }
+
+    for cat, (title, subtitle, subcol, header_net_label) in specs.items():
+        sub = df[df['CATEGORY'] == cat]
+        write_report(
+            sub, OUTPUT_DIR / f'{cat.lower()}.txt',
+            title, subtitle, subcol,
+            header_net_label=header_net_label,
+            net_field='NETBALF',
+            include_net_total=False,
+        )
+        print(f"{cat}: {len(sub)} records")
 
 
-  
-proceed with the python program but change and modify some. all inputs are in sas7bdat sas dataset. use pyreadstat to read remove reptdate, use datetime timedelta - 1 instead. output in text files
+# ============================================================================
+# MAIN
+# ============================================================================
+
+if __name__ == '__main__':
+    process_camv()
+    process_fdmv()
+    print(f"\nCompleted: 12 text reports generated in {OUTPUT_DIR}")
