@@ -1,125 +1,109 @@
-updated python output:
+templ.txt:
 
-PUBLIC BANK BERHAD
- LIQUIDITY COVERAGE RATIO (LCR) TABLE 4 AS AT 31/07/2026
- CONCENTRATION OF FUNDING
- 
- 1) Total Liabilities of the Banking Instituition                                                                        
- Deposit Typeup to 1 week> 1 wk - 1 mth> 1 - 3 mths> 3 - 6 mths> 6 mths -  1 yr> 1 yearNo specific maturityTotal
-       1 	RM Fixed Deposits                                                                                              7,763,958,597.3329,324,688,927.4939,103,140,061.8531,940,505,214.7342,364,554,930.412,056,633,239.840.00152,553,480,971.65
-       2 	RM Savings Deposits                                                                                            0.000.000.000.000.000.0034,903,024,242.1934,903,024,242.19
-       3 	RM Demand Deposits                                                                                             0.000.000.000.000.000.0060,793,459,088.5260,793,459,088.52
-       4 	RM Interbank Borrowing                                                                                         180,000,000.00165,000,000.001,240,000,000.000.000.000.000.001,585,000,000.00
-       5 	RM Repos                                                                                                       0.00929,786,544.032,061,992,928.192,108,826,960.910.000.000.005,100,606,433.13
-       6 	RM Short Term Deposits                                                                                         11,894,453,801.159,472,223,899.1313,512,117,727.9111,060,963,744.0312,619,406,205.460.000.0058,559,165,377.68
-       7 	RM NID Issued                                                                                                  0.000.00700,000,000.000.000.000.000.00700,000,000.00
-       8 	RM Dual Currency Investments (DCI)                                                                             17,624,681.007,261,287.00880,000.000.000.000.000.0025,765,968.00
-       9 	RM BAs Payable                                                                                                 
-       10	RM Vostro                                                                                                      0.000.000.000.000.000.00279,884,695.76279,884,695.76
-       11	RM Deficit in SPICK                                                                                            0.000.000.000.000.000.0089,603,179.4889,603,179.48
-       12	RM Debts Securities Issued                                                                                     0.000.000.000.000.0012,428,573,372.110.0012,428,573,372.11
-       13	RM HL Sold to Cagamas                                                                                          0.000.000.000.000.005,200,016,837.330.005,200,016,837.33
-       14	RM Gold Investment                                                                                             0.000.000.000.000.000.001,967,109,360.031,967,109,360.03
-       15	RM Bills Payable                                                                                               0.000.000.000.000.000.00150,169,113.86150,169,113.86
-       16	RM Other Deposit Accepted                                                                                      0.000.000.000.0022,139,708.530.0014,332,240.2536,471,948.78
-       17	RM EL Exempt Deposits                                                                                          0.000.000.000.000.000.00745,316,722.90745,316,722.90
-       18	RM Miscellaneous Liabilities                                                                                   
-       i 	Total RM Liabilities of the Banking Instituition                                                               19,856,037,079.4839,898,960,657.6556,618,130,717.9545,110,295,919.6755,006,100,844.4019,685,223,449.2898,942,898,642.99335,117,647,311.42
-       19	FCY Fixed Deposit                                                                                              3,838,720,788.515,760,355,564.4011,925,232,314.535,610,904,285.491,070,984,596.040.000.0028,206,197,548.97
-       20	FCY Demand Deposits                                                                                            0.000.000.000.000.000.002,750,150,406.322,750,150,406.32
-       21	FCY Interbank Borrowing                                                                                        1,881,639,365.561,208,711,462.991,966,019,574.71825,518,085.111,409,300,542.990.000.007,291,189,031.36
-       22	FCY Repos                                                                                                      
-       23	FCY Short Term Deposits                                                                                        
-       24	FCY NID Issued                                                                                                 
-       25	FCY Dual Currency Investments (DCI)                                                                            11,594,340.269,245,315.662,864,303.830.000.000.000.0023,703,959.75
-       26	FCY BAs Payable                                                                                                
-       27	FCY Other Amount Due                                                                                           0.000.000.000.000.000.00179,329,307.46179,329,307.46
-       28	FCY Overdrawn Nostro                                                                                           0.000.000.000.000.000.0044,861,543.2644,861,543.26
-       29	FCY Debts Securities Issued                                                                                    0.000.000.000.000.000.000.000.00
-       30	FCY Other Deposit Accepted                                                                                     0.000.000.000.000.000.006,028.896,028.89
-       31	FCY Miscellaneous Liabilities                                                                                  
-       ii	Total FCY Liabilities of the Banking Instituition                                                              5,731,954,494.336,978,312,343.0513,894,116,193.076,436,422,370.602,480,285,139.030.002,974,347,285.9338,495,437,826.01
-         	Total Liabilities of the Banking Instituition                                                                  25,587,991,573.8146,877,273,000.7070,512,246,911.0251,546,718,290.2757,486,385,983.4319,685,223,449.28101,917,245,928.92373,613,085,137.43
- 
- 2) Intra Group Deposits                                                                                                 
- Deposit Typeup to 1 week> 1 wk - 1 mth> 1 - 3 mths> 3 - 6 mths> 6 mths -  1 yr> 1 yearNo specific maturityTotal
-       1 	RM Fixed Deposits                                                                                              10,199,825.27481,798,457.1513,867,411.366,855,180.1839,533,559.400.000.00552,254,433.36
-       2 	RM Savings Deposits                                                                                            0.000.000.000.000.000.0023,209.4123,209.41
-       3 	RM Demand Deposits                                                                                             0.000.000.000.000.000.00135,787,907.20135,787,907.20
-       4 	RM Interbank Borrowing                                                                                         
-       5 	RM Repos                                                                                                       
-       6 	RM Short Term Deposits                                                                                         409,863,000.00160,654,000.00532,459,000.00235,693,000.000.000.000.001,338,669,000.00
-       7 	RM NID Issued                                                                                                  
-       8 	RM Dual Currency Investments (DCI)                                                                             
-       9 	RM Vostro                                                                                                      0.000.000.000.000.000.00168,533,667.05168,533,667.05
-       10	RM Debts Securities Issued                                                                                     
-       11	RM Miscellaneous Liabilities                                                                                   
-       i 	Total RM Intra Group Deposits                                                                                  420,062,825.27642,452,457.15546,326,411.36242,548,180.1839,533,559.400.00304,344,783.662,195,268,217.02
-       12	FCY Fixed Deposit                                                                                              0.0017,961.10352,738.790.00127,421.430.000.00498,121.32
-       13	FCY Demand Deposits                                                                                            0.000.000.000.000.000.00281,623,454.76281,623,454.76
-       14	FCY Interbank Borrowing                                                                                        1,609,884,000.00907,092,000.00723,222,000.00694,620,000.001,389,240,000.000.000.005,324,058,000.00
-       15	FCY Repos                                                                                                      
-       16	FCY Short Term Deposits                                                                                        
-       17	FCY NID Issued                                                                                                 
-       18	FCY Dual Currency Investments (DCI)                                                                            
-       19	FCY Debts Securities Issued                                                                                    
-       20	FCY Other Deposit Accepted                                                                                     
-       21	FCY Miscellaneous Liabilities                                                                                  
-       22	FCY Vostro                                                                                                     0.000.000.000.000.000.00173,723,697.01173,723,697.01
-       ii	Total FCY Intra Group Deposits                                                                                 1,609,884,000.00907,109,961.10723,574,738.79694,620,000.001,389,367,421.430.00455,347,151.775,779,903,273.09
-         	Total  Intra Group Deposits                                                                                    2,029,946,825.271,549,562,418.251,269,901,150.15937,168,180.181,428,900,980.830.00759,691,935.437,975,171,490.11
- 
- 3) Deposits From Related Parties                                                                                        
- Deposit Typeup to 1 week> 1 wk - 1 mth> 1 - 3 mths> 3 - 6 mths> 6 mths -  1 yr> 1 yearNo specific maturityTotal
-       1 	RM Fixed Deposit                                                                                               5,595,407.523,000,000.0032,238,964.6212,222,983.2211,818,880.610.000.0064,876,235.97
-       2 	RM Savings Deposits                                                                                            0.000.000.000.000.000.004,861,579.264,861,579.26
-       3 	RM Demand Deposits                                                                                             0.000.000.000.000.000.0010,503,318.8710,503,318.87
-       4 	RM Short Term Deposits                                                                                         66,147,634.7118,137,732.871,656,792,699.241,107,931,295.725,230,225,639.140.000.008,079,235,001.68
-       5 	RM NID Issued                                                                                                  
-       6 	RM Dual Currency Investments (DCI)                                                                             
-       7 	RM Gold Investment                                                                                             0.000.000.000.000.000.002,050,261.322,050,261.32
-       8 	RM Debts Securities Issued                                                                                     
-       9 	RM Unclaimed Monies                                                                                            
-       10	RM Miscellaneous Liabilities                                                                                   
-       i 	Total RM Deposits From Related Parties                                                                         71,743,042.2321,137,732.871,689,031,663.861,120,154,278.945,242,044,519.750.0017,415,159.458,161,526,397.10
-       11	FCY Term Deposit-i                                                                                             210,542,384.79240,283.9377,670.490.000.000.000.00210,860,339.21
-       12	FCY Demand Deposits                                                                                            0.000.000.000.000.000.0020,356.0720,356.07
-       13	FCY Short Term Deposits                                                                                        
-       14	FCY NID Issued                                                                                                 
-       15	FCY Dual Currency Investments (DCI)                                                                            
-       16	FCY Debts Securities Issued                                                                                    
-       17	FCY Miscellaneous Liabilities                                                                                  
-       ii	Total FCY Deposits From Related Parties                                                                        210,542,384.79240,283.9377,670.490.000.000.0020,356.07210,880,695.28
-         	Total Deposits From Related Parties                                                                            282,285,427.0221,378,016.801,689,109,334.351,120,154,278.945,242,044,519.750.0017,435,515.528,372,407,092.38
- 
- 4) COF by Significant Instrument / Product - Retail Funding                                                             5,510,382,279.7619,346,491,746.9929,962,608,079.8725,614,690,661.0837,728,552,488.102,048,140,020.2945,478,285,094.43165,689,150,370.52
- Deposit Typeup to 1 week> 1 wk - 1 mth> 1 - 3 mths> 3 - 6 mths> 6 mths -  1 yr> 1 yearNo specific maturityTotal
-       1 	RM Fixed Deposits                                                                                              5,510,382,279.7619,346,491,746.9929,962,608,079.8725,614,690,661.0837,728,552,488.102,048,140,020.290.00120,210,865,276.09
-       2 	RM Savings Deposits                                                                                            0.000.000.000.000.000.0034,843,332,314.4234,843,332,314.42
-       3 	RM Demand Deposits                                                                                             0.000.000.000.000.000.0010,634,952,780.0110,634,952,780.01
-         	Total RM Retail Funding                                                                                        5,510,382,279.7619,346,491,746.9929,962,608,079.8725,614,690,661.0837,728,552,488.102,048,140,020.2945,478,285,094.43165,689,150,370.52
- 
- 5) COF by Significant Instrument / Product - Wholesale Funding                                                          2,253,576,317.579,978,197,180.509,140,531,981.986,325,814,553.654,636,002,442.318,493,219.5550,158,506,308.5182,501,122,004.07
- Deposit Typeup to 1 week> 1 wk - 1 mth> 1 - 3 mths> 3 - 6 mths> 6 mths -  1 yr> 1 yearNo specific maturityTotal
-       1 	RM Fixed Deposits                                                                                              2,253,576,317.579,978,197,180.509,140,531,981.986,325,814,553.654,636,002,442.318,493,219.550.0032,342,615,695.56
-       2 	RM Demand Deposits                                                                                             0.000.000.000.000.000.0035,152,385,749.1535,152,385,749.15
-       3 	RM Operational Deposits                                                                                        0.000.000.000.000.000.0015,006,120,559.3615,006,120,559.36
-       4 	Total RM Operational Deposits                                                                                  11,567,774,576.8110,458,128,518.5113,293,278,006.8611,851,186,931.595,074,291,788.690.0011,834,254.0052,256,494,076.46
-            	i   RM Interbank Borrowing                                                                                  180,000,000.00165,000,000.001,240,000,000.000.000.000.000.001,585,000,000.00
-            	ii  RM Repos                                                                                                0.00929,786,544.032,061,992,928.192,108,826,960.910.000.000.005,100,606,433.13
-            	iii RM Short Term Deposits                                                                                  11,382,842,326.819,362,781,974.489,291,285,078.679,742,359,970.685,074,291,788.690.000.0044,853,561,139.33
-            	iv  RM NID Issued                                                                                           0.000.00700,000,000.000.000.000.000.00700,000,000.00
-            	v   RM Dual Currency Investments (DCI)                                                                      4,932,250.00560,000.000.000.000.000.000.005,492,250.00
-            	vi  RM BAs Payable                                                                                          
-            	vii RM Gold Investment                                                                                      0.000.000.000.000.000.0011,834,254.0011,834,254.00
-       5 	Total FCY Non - Operational Deposits :                                                                         1,882,101,083.561,209,616,692.411,966,019,574.71825,518,085.111,409,300,542.990.000.007,292,555,978.78
-            	i   RM Interbank Borrowing                                                                                  1,881,639,365.561,208,711,462.991,966,019,574.71825,518,085.111,409,300,542.990.000.007,291,189,031.36
-            	ii  RM Repos                                                                                                
-            	iii RM Short Term Deposits                                                                                  
-            	iv  RM NID Issued                                                                                           
-            	v   RM Dual Currency Investments (DCI)                                                                      461,718.00905,229.420.000.000.000.000.001,366,947.42
-            	vi  RM BAs Payable                                                                                          
-         	Total RM Wholesale Funding                                                                                     15,703,451,977.9421,645,942,391.4224,399,829,563.5519,002,519,570.3511,119,594,773.998,493,219.5550,170,340,562.51142,050,172,059.31
-
-
-
+1.00     1) Total Liabilities of the Banking Instituition                                                                                                                                               
+1.01i          1 	RM Fixed Deposits                                                                                                                                                                     
+1.02i          2 	RM Savings Deposits                                                                                                                                                                   
+1.03i          3 	RM Demand Deposits                                                                                                                                                                    
+1.04i          4 	RM Interbank Borrowing                                                                                                                                                                
+1.05i          5 	RM Repos                                                                                                                                                                              
+1.06i          6 	RM Short Term Deposits                                                                                                                                                                
+1.07i          7 	RM NID Issued                                                                                                                                                                         
+1.08i          8 	RM Dual Currency Investments (DCI)                                                                                                                                                    
+1.09i          9 	RM BAs Payable                                                                                                                                                                        
+1.10i          10	RM Vostro                                                                                                                                                                             
+1.11i          11	RM Deficit in SPICK                                                                                                                                                                   
+1.12i          12	RM Debts Securities Issued                                                                                                                                                            
+1.13i          13	RM HL Sold to Cagamas                                                                                                                                                                 
+1.14i          14	RM Gold Investment                                                                                                                                                                    
+1.15i          15	RM Bills Payable                                                                                                                                                                      
+1.16i          16	RM Other Deposit Accepted                                                                                                                                                             
+1.17i          17	RM EL Exempt Deposits                                                                                                                                                                 
+1.18i          18	RM Miscellaneous Liabilities                                                                                                                                                          
+1.00i          i 	Total RM Liabilities of the Banking Instituition                                                                                                                                      
+1.19ii         19	FCY Fixed Deposit                                                                                                                                                                     
+1.20ii         20	FCY Demand Deposits                                                                                                                                                                   
+1.21ii         21	FCY Interbank Borrowing                                                                                                                                                               
+1.22ii         22	FCY Repos                                                                                                                                                                             
+1.23ii         23	FCY Short Term Deposits                                                                                                                                                               
+1.24ii         24	FCY NID Issued                                                                                                                                                                        
+1.25ii         25	FCY Dual Currency Investments (DCI)                                                                                                                                                   
+1.26ii         26	FCY BAs Payable                                                                                                                                                                       
+1.27ii         27	FCY Other Amount Due                                                                                                                                                                  
+1.28ii         28	FCY Overdrawn Nostro                                                                                                                                                                  
+1.29ii         29	FCY Debts Securities Issued                                                                                                                                                           
+1.30ii         30	FCY Other Deposit Accepted                                                                                                                                                            
+1.31ii         31	FCY Miscellaneous Liabilities                                                                                                                                                         
+1.00ii         ii	Total FCY Liabilities of the Banking Instituition                                                                                                                                     
+1.99             	Total Liabilities of the Banking Instituition                                                                                                                                         
+2.00     2) Intra Group Deposits                                                                                                                                                                        
+2.01i          1 	RM Fixed Deposits                                                                                                                                                                     
+2.02i          2 	RM Savings Deposits                                                                                                                                                                   
+2.03i          3 	RM Demand Deposits                                                                                                                                                                    
+2.04i          4 	RM Interbank Borrowing                                                                                                                                                                
+2.05i          5 	RM Repos                                                                                                                                                                              
+2.06i          6 	RM Short Term Deposits                                                                                                                                                                
+2.07i          7 	RM NID Issued                                                                                                                                                                         
+2.08i          8 	RM Dual Currency Investments (DCI)                                                                                                                                                    
+2.09i          9 	RM Vostro                                                                                                                                                                             
+2.10i          10	RM Debts Securities Issued                                                                                                                                                            
+2.11i          11	RM Miscellaneous Liabilities                                                                                                                                                          
+2.00i          i 	Total RM Intra Group Deposits                                                                                                                                                         
+2.12ii         12	FCY Fixed Deposit                                                                                                                                                                     
+2.13ii         13	FCY Demand Deposits                                                                                                                                                                   
+2.14ii         14	FCY Interbank Borrowing                                                                                                                                                               
+2.15ii         15	FCY Repos                                                                                                                                                                             
+2.16ii         16	FCY Short Term Deposits                                                                                                                                                               
+2.17ii         17	FCY NID Issued                                                                                                                                                                        
+2.18ii         18	FCY Dual Currency Investments (DCI)                                                                                                                                                   
+2.19ii         19	FCY Debts Securities Issued                                                                                                                                                           
+2.20ii         20	FCY Other Deposit Accepted                                                                                                                                                            
+2.21ii         21	FCY Miscellaneous Liabilities                                                                                                                                                         
+2.22ii         22	FCY Vostro                                                                                                                                                                            
+2.00ii         ii	Total FCY Intra Group Deposits                                                                                                                                                        
+2.99             	Total  Intra Group Deposits                                                                                                                                                           
+3.00     3) Deposits From Related Parties                                                                                                                                                               
+3.01i          1 	RM Fixed Deposit                                                                                                                                                                      
+3.02i          2 	RM Savings Deposits                                                                                                                                                                   
+3.03i          3 	RM Demand Deposits                                                                                                                                                                    
+3.04i          4 	RM Short Term Deposits                                                                                                                                                                
+3.05i          5 	RM NID Issued                                                                                                                                                                         
+3.06i          6 	RM Dual Currency Investments (DCI)                                                                                                                                                    
+3.07i          7 	RM Gold Investment                                                                                                                                                                    
+3.08i          8 	RM Debts Securities Issued                                                                                                                                                            
+3.09i          9 	RM Unclaimed Monies                                                                                                                                                                   
+3.10i          10	RM Miscellaneous Liabilities                                                                                                                                                          
+3.00i          i 	Total RM Deposits From Related Parties                                                                                                                                                
+3.11ii         11	FCY Term Deposit-i                                                                                                                                                                    
+3.12ii         12	FCY Demand Deposits                                                                                                                                                                   
+3.13ii         13	FCY Short Term Deposits                                                                                                                                                               
+3.14ii         14	FCY NID Issued                                                                                                                                                                        
+3.15ii         15	FCY Dual Currency Investments (DCI)                                                                                                                                                   
+3.16ii         16	FCY Debts Securities Issued                                                                                                                                                           
+3.17ii         17	FCY Miscellaneous Liabilities                                                                                                                                                         
+3.00ii         ii	Total FCY Deposits From Related Parties                                                                                                                                               
+3.99             	Total Deposits From Related Parties                                                                                                                                                   
+4.00     4) COF by Significant Instrument / Product - Retail Funding                                                                                                                                    
+4.01           1 	RM Fixed Deposits                                                                                                                                                                     
+4.02           2 	RM Savings Deposits                                                                                                                                                                   
+4.03           3 	RM Demand Deposits                                                                                                                                                                    
+4.99             	Total RM Retail Funding                                                                                                                                                               
+5.00     5) COF by Significant Instrument / Product - Wholesale Funding                                                                                                                                 
+5.01           1 	RM Fixed Deposits                                                                                                                                                                     
+5.02           2 	RM Demand Deposits                                                                                                                                                                    
+5.03           3 	RM Operational Deposits                                                                                                                                                               
+5.04           4 	Total RM Operational Deposits                                                                                                                                                         
+5.04i               	i   RM Interbank Borrowing                                                                                                                                                         
+5.04ii              	ii  RM Repos                                                                                                                                                                       
+5.04iii             	iii RM Short Term Deposits                                                                                                                                                         
+5.04iv              	iv  RM NID Issued                                                                                                                                                                  
+5.04v               	v   RM Dual Currency Investments (DCI)                                                                                                                                             
+5.04vi              	vi  RM BAs Payable                                                                                                                                                                 
+5.04vii             	vii RM Gold Investment                                                                                                                                                             
+5.05           5 	Total FCY Non - Operational Deposits :                                                                                                                                                
+5.05i               	i   RM Interbank Borrowing                                                                                                                                                         
+5.05ii              	ii  RM Repos                                                                                                                                                                       
+5.05iii             	iii RM Short Term Deposits                                                                                                                                                         
+5.05iv              	iv  RM NID Issued                                                                                                                                                                  
+5.05v               	v   RM Dual Currency Investments (DCI)                                                                                                                                             
+5.05vi              	vi  RM BAs Payable                                                                                                                                                                 
+5.99             	Total RM Wholesale Funding                                                                                                                                                            
