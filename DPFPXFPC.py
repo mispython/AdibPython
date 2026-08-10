@@ -428,12 +428,16 @@ def read_cof_data(reptmon):
     # Combine datasets
     df = pl.concat([df_cmm, df_equ], how='diagonal_relaxed')
 
+    # Convert AMOUNT to integer cents immediately, before any summing, so
+    # every downstream aggregation is exact integer addition.
+    df = df.with_columns(to_cents_expr('AMOUNT'))
+
     # Add TAG = 1 (TOTAL LIABILITIES)
     df = df.with_columns(pl.lit(1).alias('TAG'))
 
     # Aggregate by CMMCODE and TAG
     df = df.group_by(['CMMCODE', 'TAG']).agg([
-        pl.col('AMOUNT').sum()
+        sum_null_aware('AMOUNT')
     ])
 
     print(f"COF records (TAG=1): {len(df)}")
@@ -517,6 +521,9 @@ def create_cof23(reptmon, lists):
     # Combine datasets
     df = pl.concat([df_cmm, df_equ], how='diagonal_relaxed')
 
+    # Convert AMOUNT to integer cents immediately, before any summing.
+    df = df.with_columns(to_cents_expr('AMOUNT'))
+
     # Create TAG based on conditions
     def assign_tag(row):
         custno = row.get('CUSTNO')
@@ -549,7 +556,7 @@ def create_cof23(reptmon, lists):
 
     # Aggregate by CMMCODE and TAG
     df = df.group_by(['CMMCODE', 'TAG']).agg([
-        pl.col('AMOUNT').sum()
+        sum_null_aware('AMOUNT')
     ])
 
     print(f"COF23 records: {len(df)}")
@@ -602,10 +609,8 @@ def create_cof123(cof, cof23):
         .alias('REM')
     )
 
-    # Round AMOUNT
-    df = df.with_columns(
-        pl.col('AMOUNT').round(2)
-    )
+    # AMOUNT is already integer cents (converted at read time in
+    # read_cof_data/create_cof23), so no further rounding is needed here.
 
     # Allocate AMOUNT to buckets based on REM
     df = df.with_columns([
@@ -690,6 +695,9 @@ def process_vostro(lists):
     df = df.with_columns(pl.Series('_KEEP', keep_flags))
     df = df.filter(pl.col('_KEEP'))
 
+    # Convert AMOUNT to integer cents before it's used as BUC7.
+    df = df.with_columns(to_cents_expr('AMOUNT'))
+
     # Create output columns
     df = df.with_columns([
         pl.lit('2.09I').alias('ITEM'),
@@ -717,16 +725,17 @@ def create_summaries(cof_combined):
         pl.col('ITEM').str.slice(0, 4).alias('PREFIX'),
     ])
 
-    # COFITEM - Item level summary
+    # COFITEM - Item level summary (null-aware: a bucket untouched by any
+    # contributing record for this item stays blank rather than "0.00")
     cofitem = cof_combined.group_by('ITEM').agg([
-        pl.col('AMOUNT').sum(),
-        pl.col('BUC1').sum(),
-        pl.col('BUC2').sum(),
-        pl.col('BUC3').sum(),
-        pl.col('BUC4').sum(),
-        pl.col('BUC5').sum(),
-        pl.col('BUC6').sum(),
-        pl.col('BUC7').sum(),
+        sum_null_aware('AMOUNT'),
+        sum_null_aware('BUC1'),
+        sum_null_aware('BUC2'),
+        sum_null_aware('BUC3'),
+        sum_null_aware('BUC4'),
+        sum_null_aware('BUC5'),
+        sum_null_aware('BUC6'),
+        sum_null_aware('BUC7'),
     ])
 
     # COFSUBTOT - Subtotal by PART1 and PART2
@@ -739,40 +748,40 @@ def create_summaries(cof_combined):
     # match SAS's behavior. Without this, an "X.00"-coded template row
     # (e.g. a section header) can wrongly pick up a real total.
     cofsubtot = cof_combined.filter(pl.col('PART2') != '').group_by(['PART1', 'PART2']).agg([
-        pl.col('AMOUNT').sum(),
-        pl.col('BUC1').sum(),
-        pl.col('BUC2').sum(),
-        pl.col('BUC3').sum(),
-        pl.col('BUC4').sum(),
-        pl.col('BUC5').sum(),
-        pl.col('BUC6').sum(),
-        pl.col('BUC7').sum(),
+        sum_null_aware('AMOUNT'),
+        sum_null_aware('BUC1'),
+        sum_null_aware('BUC2'),
+        sum_null_aware('BUC3'),
+        sum_null_aware('BUC4'),
+        sum_null_aware('BUC5'),
+        sum_null_aware('BUC6'),
+        sum_null_aware('BUC7'),
     ])
 
     # COFTOT - Total by PART1
     coftot = cof_combined.group_by('PART1').agg([
-        pl.col('AMOUNT').sum(),
-        pl.col('BUC1').sum(),
-        pl.col('BUC2').sum(),
-        pl.col('BUC3').sum(),
-        pl.col('BUC4').sum(),
-        pl.col('BUC5').sum(),
-        pl.col('BUC6').sum(),
-        pl.col('BUC7').sum(),
+        sum_null_aware('AMOUNT'),
+        sum_null_aware('BUC1'),
+        sum_null_aware('BUC2'),
+        sum_null_aware('BUC3'),
+        sum_null_aware('BUC4'),
+        sum_null_aware('BUC5'),
+        sum_null_aware('BUC6'),
+        sum_null_aware('BUC7'),
     ])
 
     # COFSPCL - Special summary for operational/non-operational
     cofspcl = cof_combined.filter(
         pl.col('PREFIX').is_in(['5.04', '5.05'])
     ).group_by('PREFIX').agg([
-        pl.col('AMOUNT').sum(),
-        pl.col('BUC1').sum(),
-        pl.col('BUC2').sum(),
-        pl.col('BUC3').sum(),
-        pl.col('BUC4').sum(),
-        pl.col('BUC5').sum(),
-        pl.col('BUC6').sum(),
-        pl.col('BUC7').sum(),
+        sum_null_aware('AMOUNT'),
+        sum_null_aware('BUC1'),
+        sum_null_aware('BUC2'),
+        sum_null_aware('BUC3'),
+        sum_null_aware('BUC4'),
+        sum_null_aware('BUC5'),
+        sum_null_aware('BUC6'),
+        sum_null_aware('BUC7'),
     ])
 
     # Create ITEM for totals
@@ -828,8 +837,19 @@ def generate_report(template, cofitem, coftot_combined, rdate):
     # Sort by RECNO
     df = df.sort('RECNO')
 
-    # Write output with ASA carriage control
-    delimiter = chr(0x05)
+    # Write output as comma-delimited text (matches production output).
+    # NOTE: the original SAS used a non-printable ASCII 0x05 (ENQ) byte as
+    # the field delimiter (`DLM='05'X`). That control character renders as
+    # a stray box/garbled symbol in ordinary text viewers and doesn't match
+    # production's actual output, which is comma-delimited with numeric
+    # fields quoted (since the numbers themselves contain thousand-separator
+    # commas). We use a real comma here and quote only the numeric fields.
+    delimiter = ','
+
+    def quoted(value):
+        """Wrap a formatted number in quotes if non-empty, else leave blank
+        (matches production: quotes appear only where a value is present)."""
+        return f'"{value}"' if value else ''
 
     with open(COF_OUTPUT_PATH, 'w') as f:
         # Header lines with ASA carriage control
@@ -850,21 +870,21 @@ def generate_report(template, cofitem, coftot_combined, rdate):
                 ' ',  # ASA carriage control (space = single spacing)
                 idesc if idesc else '',
                 delimiter,
-                format_number(row.get('BUC1')),
+                quoted(format_number(row.get('BUC1'))),
                 delimiter,
-                format_number(row.get('BUC2')),
+                quoted(format_number(row.get('BUC2'))),
                 delimiter,
-                format_number(row.get('BUC3')),
+                quoted(format_number(row.get('BUC3'))),
                 delimiter,
-                format_number(row.get('BUC4')),
+                quoted(format_number(row.get('BUC4'))),
                 delimiter,
-                format_number(row.get('BUC5')),
+                quoted(format_number(row.get('BUC5'))),
                 delimiter,
-                format_number(row.get('BUC6')),
+                quoted(format_number(row.get('BUC6'))),
                 delimiter,
-                format_number(row.get('BUC7')),
+                quoted(format_number(row.get('BUC7'))),
                 delimiter,
-                format_number(row.get('AMOUNT')),
+                quoted(format_number(row.get('AMOUNT'))),
                 delimiter,
             ]
             f.write(''.join(line_parts) + '\n')
@@ -873,8 +893,6 @@ def generate_report(template, cofitem, coftot_combined, rdate):
             if idesc and len(idesc) >= 2 and idesc[0:2].strip():
                 header_parts = [
                     ' ',  # ASA carriage control
-                    '',
-                    delimiter,
                     'Deposit Type',
                     delimiter,
                     'up to 1 week',
@@ -892,7 +910,6 @@ def generate_report(template, cofitem, coftot_combined, rdate):
                     'No specific maturity',
                     delimiter,
                     'Total',
-                    delimiter,
                 ]
                 f.write(''.join(header_parts) + '\n')
 
