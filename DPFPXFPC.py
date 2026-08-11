@@ -6,15 +6,15 @@ import datetime
 import polars as pl
 
 # -----------------------------------------------------------
-# 1. Equivalent of: DATA ADDR.REPTDATE;
+# 1. Use datetime timedelta - 1 (yesterday's date)
 # -----------------------------------------------------------
-REPTDATE = datetime.date.today()
+REPTDATE = datetime.date.today() - datetime.timedelta(days=1)
 
 # -----------------------------------------------------------
-# 2. INPUT fixed-width DPADDR file (convert EBCDIC to ASCII if needed)
+# 2. INPUT fixed-width DPADDR file (text file)
 # -----------------------------------------------------------
 
-DPADDR_FILE = "DPADDR.dat"   # input file
+DPADDR_FILE = "DPADDR.txt"   # input text file
 OUTPUT_PARQUET = "ADDR_SAVINGS.parquet"
 OUTPUT_CSV = "ADDR_SAVINGS.csv"
 
@@ -75,35 +75,25 @@ def read_fixed_width(file_path, layout):
             data.append(row)
     return data
 
-
 records = read_fixed_width(DPADDR_FILE, fwf_layout)
 
 # -----------------------------------------------------------
-# 4. Convert to Arrow Table (via Polars if available)
+# 4. Convert to Arrow Table
 # -----------------------------------------------------------
 pl_df = pl.DataFrame(records)
 arrow_table = pl_df.to_arrow()
 
 # -----------------------------------------------------------
-# 5. Store REPTDATE (like DATA ADDR.REPTDATE)
-# -----------------------------------------------------------
-reptdate_table = pa.table({"REPTDATE": [REPTDATE.isoformat()]})
-
-# -----------------------------------------------------------
-# 6. Write to Parquet and CSV (ADDR.SAVINGS)
+# 5. Write to Parquet and CSV (ADDR.SAVINGS)
 # -----------------------------------------------------------
 pq.write_table(arrow_table, OUTPUT_PARQUET)
 csv.write_csv(arrow_table, OUTPUT_CSV)
 
 # -----------------------------------------------------------
-# 7. Optional validation with DuckDB
+# 6. Optional validation with DuckDB
 # -----------------------------------------------------------
 con = duckdb.connect(database=":memory:")
 con.register("savings", arrow_table)
 print("Row count:", con.execute("SELECT COUNT(*) FROM savings").fetchone()[0])
 print("Sample rows:")
 print(con.execute("SELECT * FROM savings LIMIT 5").fetch_df())
-
-
-DPADDR_FILE = "DPADDR.dat"   should be in parquet file.
-remove reptdate, use datetime timedelta - 1 instead. 
