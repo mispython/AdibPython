@@ -1,1144 +1,797 @@
 """
-EIBMTLCR - Top Depositors Report
-Generates top depositor reports by:
-- Individual/Corporate categories (Top 50 each)
-- Product breakdown (Top 100)
-- Contractual maturity (Top 100)
+File Name: EIIMTCOF
+Islamic Bank LCR Concentration of Funding Report
+Generates LCR Table 4 - Concentration of Funding report for Public Islamic Bank Berhad
 """
 
-import pyreadstat
 import polars as pl
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 import sys
-import os
 
-# Import PBBLNFMT format module from same directory
-try:
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "pbblnfmt", 
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "PBBLNFMT.py")
-    )
-    PBBLNFMT = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(PBBLNFMT)
-    print("✓ PBBLNFMT module loaded successfully")
-except Exception as e:
-    PBBLNFMT = None
-    print(f"Warning: PBBLNFMT module not found or error loading: {e}")
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-PATHS = {
-    'LCR': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTLCR/',
-    'LIST': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTLCR/list/',
-    'TEMPLATE': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTLCR/templ.txt',
-    'OUTPUT': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTLCR/'
+# ============================================================================
+# PATH CONFIGURATION
+# ============================================================================
+INPUT_DIR = Path("/path/to/input")
+OUTPUT_DIR = Path("/path/to/output")
+LIST_DIR = Path("/path/to/list")
+
+# Input files
+REPTDATE_PATH = INPUT_DIR / "REPTDATE.parquet"
+CMM_PATH_TEMPLATE = INPUT_DIR / "CMM{}.parquet"
+EQU_PATH_TEMPLATE = INPUT_DIR / "EQU{}.parquet"
+TEMPLATE_PATH = INPUT_DIR / "TEMPL.txt"
+WALK_PATH = INPUT_DIR / "WALK.txt"
+
+# List files
+INTRA_GROUP_PATH = LIST_DIR / "ICOF_MNI_INTRA_GROUP.parquet"
+RELATED_PARTY_PATH = LIST_DIR / "ICOF_MNI_RELATED_PARTY.parquet"
+EQU_INTRA_GROUP_PATH = LIST_DIR / "ICOF_EQU_INTRA_GROUP.parquet"
+EQU_RELATED_PARTY_PATH = LIST_DIR / "ICOF_EQU_RELATED_PARTY.parquet"
+
+# Output files
+COF_OUTPUT_PATH = OUTPUT_DIR / "ICOF_OUTPUT.txt"
+SFTP_SCRIPT_PATH = OUTPUT_DIR / "SFTP_SCRIPT.txt"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================================
+# FORMAT DEFINITIONS - ISLAMIC BANK
+# ============================================================================
+
+COFF1FMT = {
+    '95315': '1.01I   ',
+    '95317': '1.02I   ',
+    '95312': '1.03I   ',
+    '95313': '1.04I   ',
+    '95810': '1.05I   ',
+    '95820': '1.06I   ',
+    '95830': '1.07I   ',
+    '95840': '1.08I   ',
+    '95850': '1.10I   ',
+    '96317': '1.20II  ',
+    '96313': '1.21II  ',
+    '96810': '1.22II  ',
+    '96820': '1.23II  ',
+    '96830': '1.24II  ',
+    '96840': '1.25II  ',
+    '96850': '1.27II  ',
 }
 
-for path in PATHS.values():
-    if path.endswith('.txt'):
-        Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
-    else:
-        Path(path).mkdir(parents=True, exist_ok=True)
-
-# BIC to item mapping ($BICTAG format)
-BIC_TAG = {
-    '95311': 'A1.01', '95312': 'A1.02', '95313': 'A1.03',
-    '95810': 'A1.04', '95820': 'A1.05', '95830': 'A1.06',
-    '9583X': 'A1.06', '95840': 'A1.07', '95329': 'A1.08',
-    '953XX': 'A1.09', '9531X': 'A1.10', '96311': 'B1.01',
-    '96313': 'B1.02', '96810': 'B1.03', '96820': 'B1.04',
-    '96830': 'B1.05', '9683X': 'B1.05', '96840': 'B1.06',
-    '96329': 'B1.07'
+COFF2FMT = {
+    '95315': '2.01I   ',
+    '95317': '2.02I   ',
+    '95312': '2.03I   ',
+    '95313': '2.04I   ',
+    '95810': '2.05I   ',
+    '95820': '2.06I   ',
+    '95830': '2.07I   ',
+    '95840': '2.08I   ',
+    '96317': '2.13II  ',
+    '96313': '2.14II  ',
+    '96810': '2.15II  ',
+    '96820': '2.16II  ',
+    '96830': '2.17II  ',
+    '96840': '2.18II  ',
 }
 
-# =============================================================================
+COFF3FMT = {
+    '95315': '3.01I   ',
+    '95317': '3.02I   ',
+    '95312': '3.03I   ',
+    '95313': '3.04I   ',
+    '95830': '3.05I   ',
+    '95840': '3.06I   ',
+    '96317': '3.10II  ',
+    '96313': '3.11II  ',
+    '96830': '3.12II  ',
+    '96840': '3.13II  ',
+}
+
+COFF4FMT = {
+    '95315': '4.01    ',
+    '95317': '4.02    ',
+    '95312': '4.03    ',
+    '95313': '4.04    ',
+}
+
+COFF5FMT = {
+    '95315': '5.01    ',
+    '95317': '5.02    ',
+    '95313': '5.03    ',
+    '95810': '5.05I   ',
+    '95820': '5.05II  ',
+    '95830': '5.05III ',
+    '95840': '5.05IV  ',
+}
+
+GLCOFFMT = {
+    'F143130': '1.12I   ',
+    'F144111': '1.13I   ',
+    'F147100': '1.13I   ',
+    'F249120BP': '1.16I   ',
+    'F142199C': '1.17I   ',
+    'F142199D': '1.17I   ',
+    'F142199E': '1.17I   ',
+    'F142510FDA': '1.18I   ',
+    'F142600A': '1.31II  ',
+}
+
+
+# ============================================================================
 # HELPER FUNCTIONS
-# =============================================================================
-def read_sas7bdat(filepath):
-    """Read SAS dataset using pyreadstat"""
-    try:
-        df, meta = pyreadstat.read_sas7bdat(filepath)
-        df.columns = [col.upper() for col in df.columns]
-        return pl.from_pandas(df)
-    except Exception as e:
-        print(f"Warning: Could not read {filepath}: {e}")
-        return pl.DataFrame()
+# ============================================================================
 
-def safe_str(value):
-    """Safely convert a value to string, handling lists and None"""
-    if value is None:
+def apply_format(value, format_dict):
+    """Apply SAS-style format mapping."""
+    return format_dict.get(value, '').ljust(8)
+
+
+def format_number(value):
+    """Format number with comma separators and 2 decimal places."""
+    if value is None or (isinstance(value, float) and (value != value)):
         return ''
-    if isinstance(value, list):
-        return str(value[0]) if value else ''
-    return str(value)
-
-def safe_float(value, default=0.0):
-    """Safely convert a value to float, handling lists and None"""
-    if value is None:
-        return default
-    if isinstance(value, list):
-        try:
-            return float(value[0]) if value else default
-        except (ValueError, TypeError):
-            return default
     try:
-        return float(value)
+        return f"{float(value):,.2f}"
     except (ValueError, TypeError):
-        return default
+        return ''
 
-def fmt_amount(value):
-    """Format amount with comma separator for CSV output"""
-    return f"{safe_float(value):,.2f}"
 
-def get_column_type(df, col_name):
-    """Get the data type of a column from a DataFrame"""
-    if col_name in df.columns:
-        return df[col_name].dtype
-    return None
+# ============================================================================
+# READ REPTDATE AND CALCULATE PARAMETERS
+# ============================================================================
 
-def align_columns(df1, df2):
-    """Align two DataFrames to have the same columns for concatenation."""
-    if df1.is_empty() and df2.is_empty():
-        return df1, df2
-    if df1.is_empty():
-        return df1, df2
-    if df2.is_empty():
-        return df1, df2
-    
-    all_columns = list(set(list(df1.columns) + list(df2.columns)))
-    
-    for col in all_columns:
-        if col not in df1.columns:
-            col_type = get_column_type(df2, col)
-            if col_type == pl.Utf8 or col_type == pl.Categorical:
-                df1 = df1.with_columns(pl.lit("").cast(pl.Utf8).alias(col))
-            elif col_type in [pl.Float64, pl.Float32]:
-                df1 = df1.with_columns(pl.lit(0.0).alias(col))
-            elif col_type in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
-                df1 = df1.with_columns(pl.lit(0).alias(col))
-            else:
-                df1 = df1.with_columns(pl.lit(None).cast(col_type).alias(col))
-    
-    for col in all_columns:
-        if col not in df2.columns:
-            col_type = get_column_type(df1, col)
-            if col_type == pl.Utf8 or col_type == pl.Categorical:
-                df2 = df2.with_columns(pl.lit("").cast(pl.Utf8).alias(col))
-            elif col_type in [pl.Float64, pl.Float32]:
-                df2 = df2.with_columns(pl.lit(0.0).alias(col))
-            elif col_type in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
-                df2 = df2.with_columns(pl.lit(0).alias(col))
-            else:
-                df2 = df2.with_columns(pl.lit(None).cast(col_type).alias(col))
-    
-    df1 = df1.select(all_columns)
-    df2 = df2.select(all_columns)
-    
-    return df1, df2
+def read_reptdate():
+    """Read reptdate and calculate reporting parameters."""
+    print("Reading REPTDATE...")
 
-def safe_concat(dfs):
-    """Safely concatenate a list of DataFrames with column alignment."""
-    if not dfs:
-        return pl.DataFrame()
-    
-    non_empty = [df for df in dfs if not df.is_empty()]
-    
-    if not non_empty:
-        return pl.DataFrame()
-    
-    if len(non_empty) == 1:
-        return non_empty[0]
-    
-    result = non_empty[0]
-    for i in range(1, len(non_empty)):
-        result, non_empty[i] = align_columns(result, non_empty[i])
-        result = pl.concat([result, non_empty[i]])
-    
-    return result
+    print("REPTDATE_PATH =", REPTDATE_PATH)
+    print("Exists?", REPTDATE_PATH.exists())
 
-# =============================================================================
-# DATE AND REPORT VARIABLES
-# =============================================================================
-def get_report_vars():
-    """Get report date variables using yesterday's date"""
-    reptdate = datetime.now() - timedelta(days=1)
-    
-    return {
-        'reptyear': str(reptdate.year),
-        'reptmon': f"{reptdate.month:02d}",
-        'reptday': f"{reptdate.day:02d}",
-        'rptdt': reptdate.strftime('%y%m%d'),
-        'fildt': reptdate.strftime('%d%m%y'),
-        'rdate': reptdate.strftime('%d/%m/%Y')
-    }
+    df = pl.read_parquet(REPTDATE_PATH)
+    reptdate = df['REPTDATE'][0]
 
-# =============================================================================
-# EXCLUSION LISTS
-# =============================================================================
-def get_exclusion_lists():
-    """Get exclusion lists from SAS datasets"""
-    excl_cis = []
-    excl_equ = []
-    
-    try:
-        df_cis = read_sas7bdat(f"{PATHS['LIST']}keep_top_dep_excl_pbb.sas7bdat")
-        if not df_cis.is_empty() and 'CUSTNO' in df_cis.columns:
-            excl_cis = [str(r) for r in df_cis.filter(pl.col('CUSTNO') > 0)['CUSTNO'].to_list()]
-        print(f"  Loaded CIS exclusions: {len(excl_cis)} records")
-    except Exception as e:
-        print(f"Warning loading CIS exclusions: {e}")
-    
-    try:
-        df_equ = read_sas7bdat(f"{PATHS['LIST']}keep_top_dep_excl_equ_pbb.sas7bdat")
-        if not df_equ.is_empty() and 'CUSTNO' in df_equ.columns:
-            excl_equ = [str(r) for r in df_equ.filter(pl.col('CUSTNO').ne(''))['CUSTNO'].to_list()]
-        print(f"  Loaded EQU exclusions: {len(excl_equ)} records")
-    except Exception as e:
-        print(f"Warning loading EQU exclusions: {e}")
-    
-    return excl_cis, excl_equ
+    if isinstance(reptdate, str):
+        reptdate = datetime.strptime(reptdate, "%Y-%m-%d").date()
 
-# =============================================================================
-# M&I (Monetary & Islamic) PROCESSING
-# =============================================================================
-def process_mni(rep_vars, excl_cis):
-    """Process M&I source data"""
-    
-    # Read CMM first to get its column structure
-    try:
-        cmm_file = f"{PATHS['LCR']}cmm{rep_vars['reptmon']}.sas7bdat"
-        print(f"  Reading CMM: {cmm_file}")
-        cmm = read_sas7bdat(cmm_file)
-        print(f"  CMM loaded: {len(cmm)} records, {len(cmm.columns)} columns")
-    except Exception as e:
-        print(f"  Warning reading CMM: {e}")
-        cmm = pl.DataFrame()
-    
-    # Read VOSTRO
-    try:
-        print(f"  Reading VOSTRO: {PATHS['LCR']}vostro.sas7bdat")
-        vostro = read_sas7bdat(f"{PATHS['LCR']}vostro.sas7bdat")
-        print(f"  VOSTRO loaded: {len(vostro)} records, {len(vostro.columns)} columns")
-    except Exception as e:
-        print(f"  Warning reading VOSTRO: {e}")
-        vostro = pl.DataFrame()
-    
-    # Sort VOSTRO by ACCTNO
-    if not vostro.is_empty() and 'ACCTNO' in vostro.columns:
-        vostro = vostro.sort('ACCTNO')
-    
-    # Merge VOSTRO with CISINFO
-    if not vostro.is_empty():
-        try:
-            cisinfo = read_sas7bdat(f"{PATHS['LCR']}cisinfo.sas7bdat")
-            if not cisinfo.is_empty():
-                print(f"  CISINFO loaded: {len(cisinfo)} records")
-                cisinfo_cols = ['ACCTNO', 'CUSTCD', 'CUSTNAME', 'PRODUCT', 
-                               'CURCODE', 'CUSTNO', 'NEWIC']
-                available_cis_cols = [c for c in cisinfo_cols if c in cisinfo.columns]
-                cisinfo = cisinfo.select(available_cis_cols)
-                
-                vostro_cols_before = set(vostro.columns)
-                common_cols = vostro_cols_before.intersection(set(cisinfo.columns) - {'ACCTNO'})
-                
-                if common_cols:
-                    drop_cols = [c for c in common_cols if c != 'ACCTNO']
-                    vostro = vostro.drop(drop_cols)
-                
-                vostro = vostro.join(cisinfo, on='ACCTNO', how='left')
-                print(f"  VOSTRO after CISINFO merge: {len(vostro)} records")
-        except Exception as e:
-            print(f"  Warning merging CISINFO: {e}")
-    
-    # Add CMMCODE to VOSTRO
-    if not vostro.is_empty():
-        if 'CMMCODE' in vostro.columns:
-            vostro = vostro.with_columns([
-                pl.when(pl.col('CMMCODE').is_null() | (pl.col('CMMCODE') == ''))
-                .then(pl.lit('953XX'))
-                .otherwise(pl.col('CMMCODE')).alias('CMMCODE')
-            ])
-        else:
-            vostro = vostro.with_columns([pl.lit('953XX').alias('CMMCODE')])
-    
-    # Combine CMM and VOSTRO
-    cmm = safe_concat([cmm, vostro])
-    print(f"  Combined CMM+VOSTRO: {len(cmm)} records, {len(cmm.columns)} columns")
-    
-    if cmm.is_empty():
-        print("  No CMM or VOSTRO data")
-        return pl.DataFrame(), pl.DataFrame()
-    
-    # Sort by NEWIC
-    if 'NEWIC' in cmm.columns:
-        cmm = cmm.sort('NEWIC')
-    
-    # Read COF_MNI_DEPOSITOR_LIST
-    cof_idno = pl.DataFrame()
-    try:
-        cof = read_sas7bdat(f"{PATHS['LIST']}cof_mni_depositor_list.sas7bdat")
-        if not cof.is_empty():
-            print(f"  COF_MNI_DEPOSITOR_LIST loaded: {len(cof)} records")
-            if 'BUSSREG' in cof.columns:
-                cof_idno = cof.unique(subset=['BUSSREG'])
-                keep_cols = ['DEPID', 'DEPGRP', 'BUSSREG']
-                available_cols = [c for c in keep_cols if c in cof_idno.columns]
-                cof_idno = cof_idno.select(available_cols)
-                cof_idno = cof_idno.rename({'BUSSREG': 'NEWIC'})
-                print(f"  COF_IDNO for NEWIC merge: {len(cof_idno)} records")
-    except Exception as e:
-        print(f"  Warning loading COF_MNI_DEPOSITOR_LIST: {e}")
-    
-    # First merge by NEWIC
-    mni1 = cmm.clone()
-    if not cof_idno.is_empty() and 'NEWIC' in cmm.columns:
-        for col in ['DEPID', 'DEPGRP']:
-            if col in mni1.columns:
-                mni1 = mni1.drop(col)
-        mni1 = mni1.join(cof_idno, on='NEWIC', how='left')
-        print(f"  After NEWIC merge: {len(mni1)} records")
-    
-    # Add EXCL flag
-    if not mni1.is_empty() and 'CUSTNO' in mni1.columns:
-        if excl_cis:
-            mni1 = mni1.with_columns([
-                pl.when(pl.col('CUSTNO').cast(pl.Utf8).is_in(excl_cis))
-                .then(pl.lit('Y')).otherwise(pl.lit('N')).alias('EXCL')
-            ])
-        else:
-            mni1 = mni1.with_columns([pl.lit('N').alias('EXCL')])
-    
-    # Split matched/unmatched
-    mni1_matched = pl.DataFrame()
-    mni1_unmatched = pl.DataFrame()
-    
-    if not mni1.is_empty() and 'DEPID' in mni1.columns:
-        mni1_matched = mni1.filter(pl.col('DEPID').is_not_null() & (pl.col('DEPID') > 0))
-        mni1_unmatched = mni1.filter(pl.col('DEPID').is_null() | (pl.col('DEPID') == 0))
-        print(f"  First match: {len(mni1_matched)} matched, {len(mni1_unmatched)} unmatched")
-    elif not mni1.is_empty():
-        mni1_unmatched = mni1
-        print(f"  No DEPID column, all {len(mni1_unmatched)} unmatched")
-    
-    # Second merge by CUSTNO
-    mni2_matched = pl.DataFrame()
-    mni2_unmatched = mni1_unmatched.clone() if not mni1_unmatched.is_empty() else pl.DataFrame()
-    
-    if not mni1_unmatched.is_empty() and 'CUSTNO' in mni1_unmatched.columns:
-        try:
-            cof_cust = read_sas7bdat(f"{PATHS['LIST']}cof_mni_depositor_list.sas7bdat")
-            if not cof_cust.is_empty() and 'CUSTNO' in cof_cust.columns:
-                cof_cust = cof_cust.unique(subset=['CUSTNO'])
-                keep_cols = ['DEPID', 'DEPGRP', 'CUSTNO']
-                available_cols = [c for c in keep_cols if c in cof_cust.columns]
-                cof_cust = cof_cust.select(available_cols)
-                
-                mni2_input = mni1_unmatched.clone()
-                for col in ['DEPID', 'DEPGRP']:
-                    if col in mni2_input.columns:
-                        mni2_input = mni2_input.drop(col)
-                
-                mni2 = mni2_input.join(cof_cust, on='CUSTNO', how='left')
-                
-                if 'DEPID' in mni2.columns:
-                    mni2_matched = mni2.filter(pl.col('DEPID').is_not_null() & (pl.col('DEPID') > 0))
-                    mni2_unmatched = mni2.filter(pl.col('DEPID').is_null() | (pl.col('DEPID') == 0))
-                    print(f"  Second match: {len(mni2_matched)} matched, {len(mni2_unmatched)} unmatched")
-                else:
-                    mni2_unmatched = mni2
-        except Exception as e:
-            print(f"  Warning in second merge: {e}")
-    
-    # Assign new DEPID for unmatched records
-    mni3 = pl.DataFrame()
-    if not mni2_unmatched.is_empty() and 'CUSTNO' in mni2_unmatched.columns:
-        mni3 = mni2_unmatched.clone()
-        
-        unique_cust = mni3.select('CUSTNO').unique().sort('CUSTNO')
-        if not unique_cust.is_empty():
-            unique_cust = unique_cust.with_columns([
-                (pl.arange(0, len(unique_cust)) + 5001).cast(pl.Float64).alias('DEPID_NEW')
-            ])
-            
-            mni3 = mni3.join(unique_cust, on='CUSTNO', how='left')
-            
-            if 'DEPID' in mni3.columns:
-                mni3 = mni3.with_columns([
-                    pl.coalesce(['DEPID', 'DEPID_NEW']).alias('DEPID')
-                ])
-            else:
-                mni3 = mni3.with_columns([
-                    pl.col('DEPID_NEW').alias('DEPID')
-                ])
-            
-            if 'CUSTNAME' in mni3.columns:
-                mni3 = mni3.with_columns([
-                    pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
-                    .then(pl.col('CUSTNAME').cast(pl.Utf8))
-                    .otherwise(pl.col('DEPGRP').cast(pl.Utf8)).alias('DEPGRP')
-                ])
-            else:
-                mni3 = mni3.with_columns([
-                    pl.col('DEPGRP').cast(pl.Utf8).alias('DEPGRP')
-                ])
-            
-            mni3 = mni3.drop(['DEPID_NEW'], strict=False)
-            print(f"  Assigned new DEPIDs: {len(mni3)} records")
-    
-    # Combine all M&I records
-    mni_all = safe_concat([mni1_matched, mni2_matched, mni3])
-    
-    if mni_all.is_empty():
-        print("  No M&I records after merge")
-        return pl.DataFrame(), pl.DataFrame()
-    
-    print(f"  Total M&I records: {len(mni_all)}")
-    
-    # Classify by product type
-    if 'CMMCODE' in mni_all.columns:
-        mni_all = mni_all.with_columns([
-            pl.col('CMMCODE').cast(pl.Utf8).str.slice(0, 5).alias('BIC')
-        ])
-        
-        amount_col = 'AMOUNT' if 'AMOUNT' in mni_all.columns else None
-        if amount_col is None:
-            print("  Warning: No AMOUNT column found in M&I data")
-            return pl.DataFrame(), mni_all
-        
-        mni_all = mni_all.with_columns([
-            pl.when(pl.col('BIC').is_in(['95311', '96311'])).then(pl.col(amount_col)).otherwise(0.0).alias('FD'),
-            pl.when(pl.col('BIC') == '95312').then(pl.col(amount_col)).otherwise(0.0).alias('SA'),
-            pl.when(pl.col('BIC').is_in(['95313', '96313'])).then(pl.col(amount_col)).otherwise(0.0).alias('CA'),
-            pl.when(pl.col('BIC') == '953XX').then(pl.col(amount_col)).otherwise(0.0).alias('VOST'),
-            pl.when(pl.col('BIC') == '9531X').then(pl.col(amount_col)).otherwise(0.0).alias('GOLD'),
-            pl.when(pl.col('BIC').is_in(['95840', '96840'])).then(pl.col(amount_col)).otherwise(0.0).alias('RNID'),
-        ])
-        
-        if 'EXCL' in mni_all.columns:
-            mni_all = mni_all.with_columns([
-                pl.when((pl.col('BIC').is_in(['95311', '96311'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('FD2'),
-                pl.when((pl.col('BIC') == '95312') & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('SA2'),
-                pl.when((pl.col('BIC').is_in(['95313', '96313'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('CA2'),
-                pl.when((pl.col('BIC').is_in(['95840', '96840'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('RNID2')
-            ])
-        else:
-            mni_all = mni_all.with_columns([
-                pl.col('FD').alias('FD2'), pl.col('SA').alias('SA2'),
-                pl.col('CA').alias('CA2'), pl.col('RNID').alias('RNID2')
-            ])
-        
-        if 'CUSTCD' in mni_all.columns:
-            mni_all = mni_all.with_columns([
-                pl.when(pl.col('CUSTCD').cast(pl.Utf8).is_in(['77', '78', '95', '96']))
-                .then(pl.lit('I')).otherwise(pl.lit('C')).alias('CUSTYPE')
-            ])
-        else:
-            mni_all = mni_all.with_columns([pl.lit('C').alias('CUSTYPE')])
-        
-        product_bics = ['95311', '96311', '95312', '95313', '96313', '953XX', '9531X', '95840', '96840']
-        mni_all = mni_all.filter(pl.col('BIC').is_in(product_bics))
-        print(f"  M&I records after product filter: {len(mni_all)}")
-        
-        if not mni_all.is_empty():
-            group_cols = ['DEPID', 'DEPGRP', 'CUSTYPE']
-            available_group_cols = [c for c in group_cols if c in mni_all.columns]
-            
-            agg_cols = ['FD', 'SA', 'CA', 'VOST', 'GOLD', 'RNID', 'FD2', 'SA2', 'CA2', 'RNID2']
-            available_agg_cols = [c for c in agg_cols if c in mni_all.columns]
-            
-            if available_group_cols and available_agg_cols:
-                mni_sum = mni_all.group_by(available_group_cols).agg([
-                    pl.col(c).sum() for c in available_agg_cols
-                ]).sort(available_group_cols)
-                print(f"  M&I summary: {len(mni_sum)} groups")
-            else:
-                mni_sum = pl.DataFrame()
-        else:
-            mni_sum = pl.DataFrame()
-    else:
-        mni_sum = pl.DataFrame()
-    
-    return mni_sum, mni_all
+    reptmon = f"{reptdate.month:02d}"
+    fildt = reptdate.strftime("%d%m%y")
+    rdate = reptdate.strftime("%d/%m/%Y")
 
-# =============================================================================
-# EQUITY PROCESSING
-# =============================================================================
-def process_equity(rep_vars, excl_equ):
-    """Process Equity source data"""
-    
-    equ = pl.DataFrame()
-    try:
-        equ_file = f"{PATHS['LCR']}equ{rep_vars['reptmon']}.sas7bdat"
-        print(f"  Reading EQU: {equ_file}")
-        equ = read_sas7bdat(equ_file)
-        print(f"  EQU loaded: {len(equ)} records, {len(equ.columns)} columns")
-        
-        if not equ.is_empty() and 'CUSTNO' in equ.columns:
-            equ = equ.filter(pl.col('CUSTNO').cast(pl.Utf8).ne(''))
-            print(f"  EQU after CUSTNO filter: {len(equ)} records")
-            
-            if excl_equ:
-                equ = equ.with_columns([
-                    pl.when(pl.col('CUSTNO').cast(pl.Utf8).is_in(excl_equ))
-                    .then(pl.lit('Y')).otherwise(pl.lit('N')).alias('EXCL')
-                ])
-            else:
-                equ = equ.with_columns([pl.lit('N').alias('EXCL')])
-    except Exception as e:
-        print(f"  Warning reading EQU: {e}")
-        return pl.DataFrame(), pl.DataFrame()
-    
-    if equ.is_empty():
-        return pl.DataFrame(), pl.DataFrame()
-    
-    equ = equ.sort('CUSTNO')
-    
-    cof = pl.DataFrame()
-    try:
-        cof = read_sas7bdat(f"{PATHS['LIST']}cof_equ_depositor_list.sas7bdat")
-        if not cof.is_empty():
-            print(f"  COF_EQU_DEPOSITOR_LIST loaded: {len(cof)} records")
-            if 'CUSTNO' in cof.columns:
-                cof = cof.unique(subset=['CUSTNO'])
-                keep_cols = ['DEPID', 'DEPGRP', 'CUSTNO', 'LINKID']
-                available_cols = [c for c in keep_cols if c in cof.columns]
-                cof = cof.select(available_cols)
-                print(f"  COF_EQU for merge: {len(cof)} records")
-    except Exception as e:
-        print(f"  Warning loading COF_EQU_DEPOSITOR_LIST: {e}")
-    
-    equ_matched = pl.DataFrame()
-    equ_unmatched = pl.DataFrame()
-    
-    if not cof.is_empty() and 'CUSTNO' in equ.columns:
-        equ_input = equ.clone()
-        for col in ['DEPID', 'DEPGRP', 'LINKID']:
-            if col in equ_input.columns:
-                equ_input = equ_input.drop(col)
-        
-        equ1 = equ_input.join(cof, on='CUSTNO', how='left')
-        
-        if 'DEPID' in equ1.columns:
-            equ_matched = equ1.filter(pl.col('DEPID').is_not_null() & (pl.col('DEPID') > 0))
-            equ_unmatched = equ1.filter(pl.col('DEPID').is_null() | (pl.col('DEPID') == 0))
-            print(f"  EQU match: {len(equ_matched)} matched, {len(equ_unmatched)} unmatched")
-        else:
-            equ_unmatched = equ1
-    else:
-        equ_unmatched = equ
-        print(f"  EQU all unmatched: {len(equ_unmatched)} records")
-    
-    equ2 = pl.DataFrame()
-    if not equ_unmatched.is_empty() and 'CUSTNO' in equ_unmatched.columns:
-        equ2 = equ_unmatched.clone()
-        
-        unique_cust = equ2.select('CUSTNO').unique().sort('CUSTNO')
-        if not unique_cust.is_empty():
-            unique_cust = unique_cust.with_columns([
-                (pl.arange(0, len(unique_cust)) + 50005001).cast(pl.Float64).alias('DEPID_NEW')
-            ])
-            
-            equ2 = equ2.join(unique_cust, on='CUSTNO', how='left')
-            
-            if 'DEPID' in equ2.columns:
-                equ2 = equ2.with_columns([
-                    pl.coalesce(['DEPID', 'DEPID_NEW']).alias('DEPID')
-                ])
-            else:
-                equ2 = equ2.with_columns([
-                    pl.col('DEPID_NEW').alias('DEPID')
-                ])
-            
-            if 'CUSTNAME' in equ2.columns:
-                equ2 = equ2.with_columns([
-                    pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
-                    .then(pl.col('CUSTNAME').cast(pl.Utf8))
-                    .otherwise(pl.col('DEPGRP').cast(pl.Utf8)).alias('DEPGRP')
-                ])
-                equ2 = equ2.with_columns([
-                    pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
-                    .then(pl.col('CUSTNO').cast(pl.Utf8))
-                    .otherwise(pl.col('DEPGRP')).alias('DEPGRP')
-                ])
-            else:
-                equ2 = equ2.with_columns([
-                    pl.col('DEPGRP').cast(pl.Utf8).alias('DEPGRP')
-                ])
-            
-            equ2 = equ2.drop(['DEPID_NEW'], strict=False)
-            print(f"  Assigned new EQU DEPIDs: {len(equ2)} records")
-    
-    equ_all = safe_concat([equ_matched, equ2])
-    
-    if equ_all.is_empty():
-        print("  No EQU records found")
-        return pl.DataFrame(), pl.DataFrame()
-    
-    print(f"  Total EQU records: {len(equ_all)}")
-    
-    if 'CMMCODE' in equ_all.columns:
-        equ_all = equ_all.with_columns([
-            pl.col('CMMCODE').cast(pl.Utf8).str.slice(0, 5).alias('BIC')
-        ])
-        
-        equ_all = equ_all.filter(~pl.col('BIC').is_in(['95850', '96850']))
-        
-        amount_col = 'AMOUNT' if 'AMOUNT' in equ_all.columns else None
-        if amount_col is None:
-            print("  Warning: No AMOUNT column found in EQU data")
-            return pl.DataFrame(), equ_all
-        
-        if 'LINKID' not in equ_all.columns:
-            equ_all = equ_all.with_columns([pl.lit(None).cast(pl.Float64).alias('LINKID')])
-        
-        equ_all = equ_all.with_columns([
-            pl.when(pl.col('LINKID').is_null() | (pl.col('LINKID') == 0))
-            .then(50000000.0 + pl.col('DEPID').cast(pl.Float64))
-            .otherwise(pl.col('LINKID').cast(pl.Float64)).alias('LINKID')
-        ])
-        
-        equ_all = equ_all.with_columns([
-            pl.when(pl.col('BIC').is_in(['95830', '96830', '9583X', '9683X'])).then(pl.col(amount_col)).otherwise(0.0).alias('STD'),
-            pl.when(pl.col('BIC').is_in(['95840', '96840'])).then(pl.col(amount_col)).otherwise(0.0).alias('NID'),
-            pl.when(pl.col('BIC').is_in(['95810', '96810'])).then(pl.col(amount_col)).otherwise(0.0).alias('IBB'),
-            pl.when(pl.col('BIC').is_in(['95820', '96820'])).then(pl.col(amount_col)).otherwise(0.0).alias('REPO'),
-            pl.when(pl.col('BIC').is_in(['95329', '96329'])).then(pl.col(amount_col)).otherwise(0.0).alias('DCI'),
-        ])
-        
-        if 'EXCL' in equ_all.columns:
-            equ_all = equ_all.with_columns([
-                pl.when((pl.col('BIC').is_in(['95830', '96830', '9583X', '9683X'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('STD2'),
-                pl.when((pl.col('BIC').is_in(['95840', '96840'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('NID2'),
-                pl.when((pl.col('BIC').is_in(['95329', '96329'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('DCI2')
-            ])
-        else:
-            equ_all = equ_all.with_columns([
-                pl.col('STD').alias('STD2'), pl.col('NID').alias('NID2'), pl.col('DCI').alias('DCI2')
-            ])
-        
-        if 'CUSTFISS' in equ_all.columns:
-            equ_all = equ_all.with_columns([
-                pl.when(pl.col('CUSTFISS').cast(pl.Utf8).is_in(['77', '78', '95', '96']))
-                .then(pl.lit('I')).otherwise(pl.lit('C')).alias('CUSTYPE')
-            ])
-        else:
-            equ_all = equ_all.with_columns([pl.lit('C').alias('CUSTYPE')])
-        
-        product_bics = ['95830', '96830', '9583X', '9683X', '95840', '96840', 
-                       '95810', '96810', '95820', '96820', '95329', '96329']
-        equ_all = equ_all.filter(pl.col('BIC').is_in(product_bics))
-        print(f"  EQU records after product filter: {len(equ_all)}")
-        
-        if not equ_all.is_empty():
-            group_cols = ['LINKID', 'DEPGRP', 'CUSTYPE']
-            available_group_cols = [c for c in group_cols if c in equ_all.columns]
-            
-            agg_cols = ['STD', 'NID', 'IBB', 'REPO', 'DCI', 'STD2', 'NID2', 'DCI2']
-            available_agg_cols = [c for c in agg_cols if c in equ_all.columns]
-            
-            if available_group_cols and available_agg_cols:
-                equ_sum = equ_all.group_by(available_group_cols).agg([
-                    pl.col(c).sum() for c in available_agg_cols
-                ]).sort(available_group_cols)
-                equ_sum = equ_sum.rename({'LINKID': 'DEPID'})
-                print(f"  EQU summary: {len(equ_sum)} groups")
-            else:
-                equ_sum = pl.DataFrame()
-        else:
-            equ_sum = pl.DataFrame()
-    else:
-        equ_sum = pl.DataFrame()
-    
-    return equ_sum, equ_all
+    print(f"Report Date: {rdate}")
+    print(f"Report Month: {reptmon}")
 
-# =============================================================================
-# CONSOLIDATION
-# =============================================================================
-def consolidate_sources(mni_sum, equ_sum):
-    """Consolidate M&I and Equity sources"""
-    if mni_sum.is_empty() and equ_sum.is_empty():
-        print("  Both M&I and Equity are empty")
-        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
-    
-    mni_prep = mni_sum.clone() if not mni_sum.is_empty() else pl.DataFrame()
-    equ_prep = equ_sum.clone() if not equ_sum.is_empty() else pl.DataFrame()
-    
-    if not mni_prep.is_empty() and not equ_prep.is_empty():
-        equ_subset = equ_prep.select([
-            'DEPID', 
-            pl.col('DEPGRP').alias('DEPGRPEQ'),
-            pl.col('CUSTYPE').alias('CUSTYPEQ'),
-            'STD', 'NID', 'IBB', 'REPO', 'DCI',
-            'STD2', 'NID2', 'DCI2'
-        ])
-        allsrc = mni_prep.join(equ_subset, on='DEPID', how='full')
-    elif not mni_prep.is_empty():
-        allsrc = mni_prep.with_columns([
-            pl.lit("").cast(pl.Utf8).alias('DEPGRPEQ'),
-            pl.lit("").cast(pl.Utf8).alias('CUSTYPEQ'),
-            pl.lit(0.0).alias('STD'), pl.lit(0.0).alias('NID'),
-            pl.lit(0.0).alias('IBB'), pl.lit(0.0).alias('REPO'),
-            pl.lit(0.0).alias('DCI'), pl.lit(0.0).alias('STD2'),
-            pl.lit(0.0).alias('NID2'), pl.lit(0.0).alias('DCI2')
-        ])
-    else:
-        allsrc = equ_prep.with_columns([
-            pl.lit("").cast(pl.Utf8).alias('DEPGRPEQ'),
-            pl.lit("").cast(pl.Utf8).alias('CUSTYPEQ'),
-            pl.lit(0.0).alias('FD'), pl.lit(0.0).alias('SA'),
-            pl.lit(0.0).alias('CA'), pl.lit(0.0).alias('VOST'),
-            pl.lit(0.0).alias('GOLD'), pl.lit(0.0).alias('RNID'),
-            pl.lit(0.0).alias('FD2'), pl.lit(0.0).alias('SA2'),
-            pl.lit(0.0).alias('CA2'), pl.lit(0.0).alias('RNID2')
-        ])
-        allsrc = allsrc.with_columns([pl.col('DEPGRP').alias('DEPGRPEQ')])
-    
-    if allsrc.is_empty():
-        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
-    
-    allsrc = allsrc.with_columns([
-        pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
-        .then(pl.col('DEPGRPEQ')).otherwise(pl.col('DEPGRP')).alias('DEPGRP'),
-        pl.when(pl.col('CUSTYPE').is_null() | (pl.col('CUSTYPE') == ''))
-        .then(pl.col('CUSTYPEQ')).otherwise(pl.col('CUSTYPE')).alias('CUSTYPE')
-    ])
-    
-    numeric_cols = ['FD', 'SA', 'CA', 'VOST', 'GOLD', 'RNID', 
-                   'FD2', 'SA2', 'CA2', 'RNID2',
-                   'STD', 'NID', 'IBB', 'REPO', 'DCI',
-                   'STD2', 'NID2', 'DCI2']
-    for col in numeric_cols:
-        if col in allsrc.columns:
-            allsrc = allsrc.with_columns([pl.col(col).fill_null(0.0)])
-    
-    allsrc = allsrc.with_columns([
-        (pl.col('NID') + pl.col('RNID')).alias('NID_COMB')
-    ])
-    
-    allsrc = allsrc.with_columns([
-        (pl.col('FD') + pl.col('SA') + pl.col('GOLD') + pl.col('CA') + 
-         pl.col('STD') + pl.col('NID_COMB') + pl.col('IBB') + pl.col('REPO') + 
-         pl.col('DCI') + pl.col('VOST')).alias('TOT'),
-        (pl.col('FD2') + pl.col('SA2') + pl.col('CA2') + pl.col('RNID2')).alias('MNI'),
-        (pl.col('STD2') + pl.col('NID2') + pl.col('DCI2')).alias('EQU'),
-        (pl.col('FD2') + pl.col('SA2') + pl.col('CA2') + pl.col('RNID2') + 
-         pl.col('STD2') + pl.col('NID2') + pl.col('DCI2')).alias('TOT2')
-    ])
-    
-    alltot2 = allsrc.group_by(['DEPID', 'DEPGRP', 'CUSTYPE']).agg([
-        pl.col('TOT2').sum(), pl.col('MNI').sum(), pl.col('EQU').sum()
-    ]).sort(['CUSTYPE', 'TOT2'], descending=[False, True])
-    
-    alltot = allsrc.group_by(['DEPID', 'DEPGRP']).agg([
-        pl.col('TOT').sum(), pl.col('FD').sum(), pl.col('SA').sum(),
-        pl.col('GOLD').sum(), pl.col('CA').sum(), pl.col('STD').sum(),
-        pl.col('NID_COMB').alias('NID'), pl.col('IBB').sum(),
-        pl.col('REPO').sum(), pl.col('DCI').sum(), pl.col('VOST').sum()
-    ]).sort('TOT', descending=True)
-    
-    print(f"  TOT2 summary: {len(alltot2)} groups")
-    print(f"  Product summary: {len(alltot)} groups")
-    
-    return allsrc, alltot2, alltot
+    return reptdate, reptmon, fildt, rdate
 
-# =============================================================================
-# REPORT GENERATION FUNCTIONS
-# =============================================================================
-def generate_top50_report(alltot2, cust_type, desc, rep_vars, output_path):
-    """Generate Top 50 report for a customer type"""
-    lines = []
-    dlm = ","
-    
-    top50 = alltot2.filter(pl.col('CUSTYPE') == cust_type).head(50)
-    
-    if top50.is_empty():
-        print(f"  No {desc} depositors found")
-        return lines, pl.DataFrame()
-    
-    top50 = top50.with_columns([(pl.arange(0, len(top50)) + 1).alias('RANK')])
-    
-    # Header - SAS format with leading comma from @001 DLM
-    lines.append(f"PUBLIC BANK BERHAD")
-    lines.append(f"TOP 50 LARGEST DEPOSITORS AS AT {rep_vars['rdate']}")
-    lines.append(f"")
-    lines.append(f"(i) Top 50 {desc} Depositors by Sources")
-    lines.append(f"")
-    # Simulate SAS: @001 DLM 'NOBS' DLM 'DEPOSITORS' ... 
-    # This produces: ,NOBS,DEPOSITORS,TOTAL BALANCE,M&I,EQUATION
-    lines.append(f",NOBS,DEPOSITORS,TOTAL BALANCE,M&I,EQUATION")
-    
-    for row in top50.iter_rows(named=True):
-        depgrp_val = safe_str(row['DEPGRP'])
-        rank_val = safe_float(row['RANK'], 0)
-        tot2_val = safe_float(row['TOT2'], 0)
-        mni_val = safe_float(row['MNI'], 0)
-        equ_val = safe_float(row['EQU'], 0)
-        
-        # SAS: @001 DLM _N_ DLM DEPGRP DLM TOT2 DLM MNI DLM EQU
-        # Produces: ,1,DEPOSITOR NAME,"1,234,567.89","500,000.00","734,567.89"
-        lines.append(f",{rank_val:.0f},{depgrp_val},{fmt_amount(tot2_val)},{fmt_amount(mni_val)},{fmt_amount(equ_val)}")
-    
-    print(f"  Generated {len(top50)} {desc} records")
-    return lines, top50
 
-def generate_detail_listing(top50, mni_detail, equ_detail, desc, output_path):
-    """Generate detailed account listing for top depositors"""
-    lines = []
-    dlm = ","
-    
-    if top50.is_empty():
-        return lines
-    
-    lines.append("")
-    lines.append(f"(ii) Detail Accounts Listing for Top 50 {desc} Depositors")
-    lines.append("")
-    
-    for row in top50.iter_rows(named=True):
-        depid = safe_float(row['DEPID'])
-        rank = safe_float(row['RANK'], 0)
-        depgrp = safe_str(row['DEPGRP'])
-        
-        # SAS: @001 RANK DLM DEPGRP '(' DEPID ')' DLM
-        lines.append(f",{rank:.0f},{depgrp} ({depid:.0f})")
-        lines.append("")
-        
-        # M&I Source section
-        lines.append(",Source: M&I")
-        lines.append("")
-        # SAS header: @001 DLM 'NO' DLM 'BRANCH' DLM 'ACCTNO' DLM ...
-        lines.append(",NO,BRANCH,ACCTNO,CUSTNAME,CUSTNO,BUSSREG,CUSTCD,PRODUCT,BALANCE")
-        
-        if not mni_detail.is_empty() and 'DEPID' in mni_detail.columns:
-            mni_det = mni_detail.filter(
-                pl.col('DEPID').is_not_null() & (pl.col('DEPID') == depid) & 
-                pl.col('AMOUNT').is_not_null() & (pl.col('AMOUNT') > 0) & 
-                pl.col('EXCL').is_not_null() & (pl.col('EXCL') != 'Y') &
-                pl.col('BIC').is_not_null() & (~pl.col('BIC').is_in(['953XX', '9531X']))
-            ).sort('ACCTNO')
-            
-            cnt = 0
-            totbal = 0.0
-            
-            for det_row in mni_det.iter_rows(named=True):
-                cnt += 1
-                amount = safe_float(det_row.get('AMOUNT'))
-                totbal += amount
-                
-                # SAS: @001 DLM CNT DLM BRANCH DLM ACCTNO DLM ... DLM CURBAL
-                lines.append(f",{cnt},"
-                           f"{safe_str(det_row.get('BRANCH'))},"
-                           f"{safe_str(det_row.get('ACCTNO'))},"
-                           f"{safe_str(det_row.get('CUSTNAME'))},"
-                           f"{safe_str(det_row.get('CUSTNO'))},"
-                           f"{safe_str(det_row.get('NEWIC'))},"
-                           f"{safe_str(det_row.get('CUSTCD'))},"
-                           f"{safe_str(det_row.get('PRODUCT'))},"
-                           f"{fmt_amount(amount)}")
-            
-            if cnt > 0:
-                # Total line with trailing commas for empty fields
-                lines.append(f",,,,,,,,,{fmt_amount(totbal)}")
-                lines.append("")
-        
-        lines.append("")
-        
-        # Equity section
-        lines.append(",Source: EQU")
-        lines.append("")
-        lines.append(",NO,DEALREF,DEALTYPE,NAME,CUST MNEMONIC,AMOUNT")
-        
-        if not equ_detail.is_empty() and 'LINKID' in equ_detail.columns:
-            linkid = 50000000 + depid if depid else None
-            
-            if linkid:
-                equ_det = equ_detail.filter(
-                    pl.col('LINKID').is_not_null() & (pl.col('LINKID') == linkid) & 
-                    pl.col('AMOUNT').is_not_null() & (pl.col('AMOUNT') > 0) & 
-                    pl.col('EXCL').is_not_null() & (pl.col('EXCL') != 'Y') &
-                    pl.col('BIC').is_not_null() & (~pl.col('BIC').is_in(['95810', '96810', '95820', '96820']))
-                )
-                
-                cnt = 0
-                totbal = 0.0
-                
-                for det_row in equ_det.iter_rows(named=True):
-                    cnt += 1
-                    amount = safe_float(det_row.get('AMOUNT'))
-                    totbal += amount
-                    
-                    lines.append(f",{cnt},"
-                               f"{safe_str(det_row.get('DEALREF'))},"
-                               f"{safe_str(det_row.get('DEALTYPE'))},"
-                               f"{safe_str(det_row.get('CUSTNAME'))},"
-                               f"{safe_str(det_row.get('CUSTNO'))},"
-                               f"{fmt_amount(amount)}")
-                
-                if cnt > 0:
-                    lines.append(f",,,,,{fmt_amount(totbal)}")
-                    lines.append("")
-        
-        lines.append("")
-    
-    return lines
+# ============================================================================
+# READ TEMPLATE FILE
+# ============================================================================
 
-def generate_top100_by_product(alltot, mni_detail, equ_detail, rep_vars, output_path):
-    """Generate Top 100 report by product"""
-    lines = []
-    dlm = ","
-    
-    top100 = alltot.head(100) if not alltot.is_empty() else pl.DataFrame()
-    
-    if top100.is_empty():
-        print("  No product records found")
-        return lines, pl.DataFrame()
-    
-    top100 = top100.with_columns([(pl.arange(0, len(top100)) + 1).alias('RANK')])
-    
-    lines.append(f"PUBLIC BANK BERHAD")
-    lines.append(f"TOP 100 LARGEST DEPOSITORS AS AT {rep_vars['rdate']}")
-    lines.append("")
-    lines.append("(i) Top 100 Depositors by Products")
-    lines.append("")
-    lines.append(",NOBS,DEPOSITORS,TOTAL BALANCE,FIXED DEPOSIT,SAVINGS,DEMAND DEPOSIT,"
-                "SHORT TERM DEPOSIT,NID ISSUED,INTERBANK BORROWING,"
-                "REPOS,DUAL CURRENCY INVESTMENT,GOLD INVESTMENT,VOSTRO")
-    
-    for row in top100.iter_rows(named=True):
-        depgrp_val = safe_str(row['DEPGRP'])
-        rank_val = safe_float(row['RANK'], 0)
-        
-        lines.append(f",{rank_val:.0f},{depgrp_val},"
-                    f"{fmt_amount(row.get('TOT'))},"
-                    f"{fmt_amount(row.get('FD'))},"
-                    f"{fmt_amount(row.get('SA'))},"
-                    f"{fmt_amount(row.get('CA'))},"
-                    f"{fmt_amount(row.get('STD'))},"
-                    f"{fmt_amount(row.get('NID'))},"
-                    f"{fmt_amount(row.get('IBB'))},"
-                    f"{fmt_amount(row.get('REPO'))},"
-                    f"{fmt_amount(row.get('DCI'))},"
-                    f"{fmt_amount(row.get('GOLD'))},"
-                    f"{fmt_amount(row.get('VOST'))}")
-    
-    lines.append("")
-    lines.append("(ii) Detail Accounts Listing for Top 100 Depositors")
-    lines.append("")
-    
-    for row in top100.iter_rows(named=True):
-        depid = safe_float(row['DEPID'])
-        rank = safe_float(row['RANK'], 0)
-        depgrp = safe_str(row['DEPGRP'])
-        
-        lines.append(f",{rank:.0f},{depgrp} ({depid:.0f})")
-        lines.append("")
-        lines.append(",Source: M&I")
-        lines.append("")
-        lines.append(",NO,BRANCH,ACCTNO,CUSTNAME,CUSTNO,BUSSREG,CUSTCD,PRODUCT,BALANCE")
-        
-        if not mni_detail.is_empty() and 'DEPID' in mni_detail.columns:
-            mni_det = mni_detail.filter(
-                pl.col('DEPID').is_not_null() & (pl.col('DEPID') == depid) & 
-                pl.col('AMOUNT').is_not_null() & (pl.col('AMOUNT') > 0)
-            ).sort('ACCTNO')
-            
-            cnt = 0
-            totbal = 0.0
-            
-            for det_row in mni_det.iter_rows(named=True):
-                cnt += 1
-                amount = safe_float(det_row.get('AMOUNT'))
-                totbal += amount
-                
-                lines.append(f",{cnt},"
-                           f"{safe_str(det_row.get('BRANCH'))},"
-                           f"{safe_str(det_row.get('ACCTNO'))},"
-                           f"{safe_str(det_row.get('CUSTNAME'))},"
-                           f"{safe_str(det_row.get('CUSTNO'))},"
-                           f"{safe_str(det_row.get('NEWIC'))},"
-                           f"{safe_str(det_row.get('CUSTCD'))},"
-                           f"{safe_str(det_row.get('PRODUCT'))},"
-                           f"{fmt_amount(amount)}")
-            
-            if cnt > 0:
-                lines.append(f",,,,,,,,,{fmt_amount(totbal)}")
-                lines.append("")
-        
-        lines.append("")
-        lines.append(",Source: EQU")
-        lines.append("")
-        lines.append(",NO,DEALREF,DEALTYPE,NAME,CUST MNEMONIC,AMOUNT")
-        
-        if not equ_detail.is_empty() and 'LINKID' in equ_detail.columns:
-            linkid = 50000000 + depid if depid else None
-            
-            if linkid:
-                equ_det = equ_detail.filter(
-                    pl.col('LINKID').is_not_null() & (pl.col('LINKID') == linkid) & 
-                    pl.col('AMOUNT').is_not_null() & (pl.col('AMOUNT') > 0)
-                )
-                
-                cnt = 0
-                totbal = 0.0
-                
-                for det_row in equ_det.iter_rows(named=True):
-                    cnt += 1
-                    amount = safe_float(det_row.get('AMOUNT'))
-                    totbal += amount
-                    
-                    lines.append(f",{cnt},"
-                               f"{safe_str(det_row.get('DEALREF'))},"
-                               f"{safe_str(det_row.get('DEALTYPE'))},"
-                               f"{safe_str(det_row.get('CUSTNAME'))},"
-                               f"{safe_str(det_row.get('CUSTNO'))},"
-                               f"{fmt_amount(amount)}")
-                
-                if cnt > 0:
-                    lines.append(f",,,,,{fmt_amount(totbal)}")
-                    lines.append("")
-        
-        lines.append("")
-    
-    print(f"  Generated Top 100: {len(top100)} records")
-    return lines, top100
+def read_template():
+    """Read template file with item descriptions."""
+    print("Reading template...")
 
-def generate_maturity_report(top100, allsrc, rep_vars, output_path):
-    """Generate contractual maturity report"""
-    lines = []
-    dlm = ","
-    
-    if top100.is_empty():
-        return lines
-    
-    lines.append(f"PUBLIC BANK BERHAD")
-    lines.append(f"TOP 100 DEPOSITORS BY CONTRACTUAL MATURITY AS AT {rep_vars['rdate']}")
-    lines.append("")
-    lines.append("(iii) Top 100 Depositors by Contractual Maturity")
-    
-    template_items = [
-        ('A1.01', 'FIXED DEPOSIT'), ('A1.02', 'SAVINGS'),
-        ('A1.03', 'DEMAND DEPOSIT'), ('A1.04', 'REPO'),
-        ('A1.05', 'INTERBANK BORROWING'), ('A1.06', 'SHORT TERM DEPOSIT'),
-        ('A1.07', 'NID ISSUED'), ('A1.08', 'DUAL CURRENCY INVESTMENT'),
-        ('A1.09', 'VOSTRO'), ('A1.10', 'GOLD INVESTMENT'),
-        ('B1.01', 'FIXED DEPOSIT'), ('B1.02', 'DEMAND DEPOSIT'),
-        ('B1.03', 'REPO'), ('B1.04', 'INTERBANK BORROWING'),
-        ('B1.05', 'SHORT TERM DEPOSIT'), ('B1.06', 'NID ISSUED'),
-        ('B1.07', 'DUAL CURRENCY INVESTMENT'),
-    ]
-    
-    for row in top100.iter_rows(named=True):
-        rank = safe_float(row['RANK'], 0)
-        depgrp = safe_str(row['DEPGRP'])
-        
-        lines.append("")
-        lines.append(f",{rank:.0f},{depgrp}")
-        lines.append(",DEPOSIT TYPE,UP TO 1 WEEK,> 1 WK - 1 MTH,"
-                    "> 1 - 3 MTHS,> 3 - 6 MTHS,> 6 MTHS -  1 YR,"
-                    "> 1 YEAR,NO SPECIFIC MATURITY,TOTAL")
-        
-        for item_code, desc in template_items:
-            lines.append(f",{desc},0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00")
-        
-        lines.append(",RETAIL SUBTOTAL,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00")
-        lines.append(",WHOLESALE SUBTOTAL,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00")
-        lines.append(",GRAND TOTAL,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00")
-    
-    return lines
+    template_data = []
+    recno = 1
 
-# =============================================================================
-# MAIN
-# =============================================================================
-def main():
-    print("=" * 60)
-    print("EIBMTLCR - Top Depositors Report")
-    print("=" * 60)
-    
-    rep_vars = get_report_vars()
-    print(f"\nReport Date: {rep_vars['rdate']}")
-    print(f"Report Month: {rep_vars['reptmon']}")
-    
-    print("\nLoading exclusion lists...")
-    excl_cis, excl_equ = get_exclusion_lists()
-    print(f"Exclusions: CIS={len(excl_cis)}, EQU={len(excl_equ)}")
-    
-    print("\n" + "=" * 40)
-    print("Processing M&I...")
-    print("=" * 40)
-    mni_sum, mni_detail = process_mni(rep_vars, excl_cis)
-    print(f"M&I Summary: {len(mni_sum)} groups")
-    print(f"M&I Detail: {len(mni_detail)} records")
-    
-    print("\n" + "=" * 40)
-    print("Processing Equity...")
-    print("=" * 40)
-    equ_sum, equ_detail = process_equity(rep_vars, excl_equ)
-    print(f"Equity Summary: {len(equ_sum)} groups")
-    print(f"Equity Detail: {len(equ_detail)} records")
-    
-    print("\n" + "=" * 40)
-    print("Consolidating...")
-    print("=" * 40)
-    allsrc, alltot2, alltot = consolidate_sources(mni_sum, equ_sum)
-    print(f"Consolidated Detail: {len(allsrc)} records")
-    print(f"TOT2 Summary: {len(alltot2)} groups")
-    print(f"Product Summary: {len(alltot)} groups")
-    
-    print("\n" + "=" * 40)
-    print("Generating reports...")
-    print("=" * 40)
-    
-    ind_lines, ind_top = generate_top50_report(alltot2, 'I', 'Individual', rep_vars, f"{PATHS['OUTPUT']}COFOUTI.txt")
-    corp_lines, corp_top = generate_top50_report(alltot2, 'C', 'Corporate', rep_vars, f"{PATHS['OUTPUT']}COFOUTC.txt")
-    ind_detail = generate_detail_listing(ind_top, mni_detail, equ_detail, 'Individual', f"{PATHS['OUTPUT']}COFOUTI.txt")
-    corp_detail = generate_detail_listing(corp_top, mni_detail, equ_detail, 'Corporate', f"{PATHS['OUTPUT']}COFOUTC.txt")
-    
-    prod_lines, prod_top = generate_top100_by_product(alltot, mni_detail, equ_detail, rep_vars, f"{PATHS['OUTPUT']}COFOUT1.txt")
-    prod_detail = generate_detail_listing(prod_top, mni_detail, equ_detail, 'Product', f"{PATHS['OUTPUT']}COFOUT2.txt")
-    maturity_lines = generate_maturity_report(prod_top, allsrc, rep_vars, f"{PATHS['OUTPUT']}COFOUT3.txt")
-    
-    print("\n" + "=" * 40)
-    print("Writing output files...")
-    print("=" * 40)
-    
-    output_files = {
-        'COFOUTI.txt': ind_lines + ind_detail,
-        'COFOUTC.txt': corp_lines + corp_detail,
-        'COFOUT1.txt': prod_lines,
-        'COFOUT2.txt': prod_detail,
-        'COFOUT3.txt': maturity_lines
-    }
-    
-    for fname, content in output_files.items():
-        fpath = os.path.join(PATHS['OUTPUT'], fname)
-        with open(fpath, 'w', encoding='utf-8') as f:
-            for line in content:
-                f.write(f"{line}\n")
-        print(f"✓ {fpath} - {len(content)} lines")
-    
-    if PBBLNFMT:
-        print("\n" + "=" * 40)
-        print("Applying PBBLNFMT formatting...")
-        print("=" * 40)
-        for fname in output_files.keys():
-            fpath = os.path.join(PATHS['OUTPUT'], fname)
-            if os.path.exists(fpath):
+    with open(TEMPLATE_PATH, 'r') as f:
+        for line in f:
+            if len(line) >= 10:
+                item = line[0:8].strip().upper()
+                idesc = line[9:129] if len(line) >= 129 else line[9:].rstrip('\n')
+                template_data.append({
+                    'ITEM': item,
+                    'IDESC': idesc,
+                    'RECNO': recno,
+                    'AMOUNT': None,
+                    'BUC1': None,
+                    'BUC2': None,
+                    'BUC3': None,
+                    'BUC4': None,
+                    'BUC5': None,
+                    'BUC6': None,
+                    'BUC7': None,
+                })
+                recno += 1
+
+    df = pl.DataFrame(template_data)
+    print(f"Template records: {len(df)}")
+    return df
+
+
+# ============================================================================
+# READ AND PROCESS GL (WALK FILE)
+# ============================================================================
+
+def read_gl():
+    """Read and process GL data from WALK file starting from line 2."""
+    print("Reading GL data...")
+
+    gl_data = []
+
+    with open(WALK_PATH, 'r') as f:
+        # Skip first line (FIRSTOBS=2)
+        next(f)
+
+        for line in f:
+            if len(line) >= 62:
+                set_id = line[1:20].strip()
+                amount_str = line[41:61].strip()
+                sign = line[61:62]
+
                 try:
-                    if hasattr(PBBLNFMT, 'apply_format'):
-                        PBBLNFMT.apply_format(fpath)
-                        print(f"  ✓ Formatted: {fpath}")
-                    elif hasattr(PBBLNFMT, 'main'):
-                        PBBLNFMT.main(fpath)
-                        print(f"  ✓ Formatted: {fpath}")
-                except Exception as e:
-                    print(f"  Warning formatting {fpath}: {e}")
-    
-    print("\n" + "=" * 60)
-    print("✓ EIBMTLCR Complete")
-    print(f"Output directory: {PATHS['OUTPUT']}")
-    print("=" * 60)
+                    amount = float(amount_str.replace(',', ''))
+                    if sign == ' ':
+                        amount = -1 * amount
+                except (ValueError, AttributeError):
+                    amount = 0.0
+
+                item = apply_format(set_id, GLCOFFMT)
+
+                if item.strip():
+                    buc5 = amount if set_id in ('F142199C', 'F142199D') else None
+                    buc6 = amount if set_id in ('F144111', 'F147100') else None
+                    buc7 = amount if buc5 is None and buc6 is None else None
+
+                    gl_data.append({
+                        'SET_ID': set_id,
+                        'AMOUNT': amount,
+                        'ITEM': item.strip(),
+                        'BUC1': None,
+                        'BUC2': None,
+                        'BUC3': None,
+                        'BUC4': None,
+                        'BUC5': buc5,
+                        'BUC6': buc6,
+                        'BUC7': buc7,
+                    })
+
+    df = pl.DataFrame(gl_data)
+
+    # Add PART1 and PART2
+    df = df.with_columns([
+        pl.col('ITEM').str.slice(0, 1).alias('PART1'),
+        pl.col('ITEM').str.slice(4, 4).alias('PART2'),
+    ])
+
+    # Aggregate by ITEM
+    df = df.group_by('ITEM').agg([
+        pl.col('AMOUNT').sum(),
+        pl.col('BUC1').sum(),
+        pl.col('BUC2').sum(),
+        pl.col('BUC3').sum(),
+        pl.col('BUC4').sum(),
+        pl.col('BUC5').sum(),
+        pl.col('BUC6').sum(),
+        pl.col('BUC7').sum(),
+        pl.col('PART1').first(),
+        pl.col('PART2').first(),
+    ])
+
+    print(f"GL records: {len(df)}")
+    return df
+
+
+# ============================================================================
+# READ AND PROCESS COF DATA
+# ============================================================================
+
+def read_cof_data(reptmon):
+    """Read CMM and EQU data and create initial COF dataset."""
+    print("Reading COF data (CMM and EQU)...")
+
+    cmm_path = Path(str(CMM_PATH_TEMPLATE).format(reptmon))
+    equ_path = Path(str(EQU_PATH_TEMPLATE).format(reptmon))
+
+    # Read CMM data
+    df_cmm = pl.read_parquet(cmm_path)
+
+    # Read EQU data and rename CUSTNO to CUSTEQNO
+    df_equ = pl.read_parquet(equ_path)
+    df_equ = df_equ.rename({'CUSTNO': 'CUSTEQNO'})
+
+    # Combine datasets
+    df = pl.concat([df_cmm, df_equ])
+
+    # Add TAG = 1 (TOTAL LIABILITIES)
+    df = df.with_columns(pl.lit(1).alias('TAG'))
+
+    # Aggregate by CMMCODE and TAG
+    df = df.group_by(['CMMCODE', 'TAG']).agg([
+        pl.col('AMOUNT').sum()
+    ])
+
+    print(f"COF records (TAG=1): {len(df)}")
+    return df
+
+
+# ============================================================================
+# READ LIST FILES AND CREATE EXCLUSION/INCLUSION LISTS
+# ============================================================================
+
+def read_list_files():
+    """Read list files and create customer/IC lists."""
+    print("Reading list files...")
+
+    # INTRA GROUP - INTRAIC
+    df_intra = pl.read_parquet(INTRA_GROUP_PATH)
+    intraic = df_intra.filter(pl.col('BUSSREG') != '').select('BUSSREG')['BUSSREG'].to_list()
+
+    # INTRA GROUP - INTRACUS
+    intracus = df_intra.filter(pl.col('CUSTNO').is_not_null()).select('CUSTNO')['CUSTNO'].to_list()
+
+    # RELATED PARTY - RELCUS
+    df_related = pl.read_parquet(RELATED_PARTY_PATH)
+    relcus = df_related.filter(pl.col('CUSTNO').is_not_null()).select('CUSTNO')['CUSTNO'].to_list()
+
+    # RELATED PARTY - XRELCUS (exclusions)
+    xrelcus = df_related.filter(
+        pl.col('ICNEW').str.slice(0, 1) == '-'
+    ).select('CUSTNO')['CUSTNO'].to_list()
+
+    # RELATED PARTY - RELIC
+    relic = df_related.filter(pl.col('ICNEW') != '').select('ICNEW')['ICNEW'].to_list()
+
+    # EQU INTRA GROUP - INTRAEQ
+    df_equ_intra = pl.read_parquet(EQU_INTRA_GROUP_PATH)
+    intraeq = df_equ_intra.filter(pl.col('CUSTNO') != '').select('CUSTNO')['CUSTNO'].to_list()
+
+    # EQU RELATED PARTY - RELEQ
+    df_equ_related = pl.read_parquet(EQU_RELATED_PARTY_PATH)
+    releq = df_equ_related.filter(pl.col('CUSTNO') != '').select('CUSTNO')['CUSTNO'].to_list()
+
+    print(f"INTRAIC: {len(intraic)}, INTRACUS: {len(intracus)}")
+    print(f"RELCUS: {len(relcus)}, XRELCUS: {len(xrelcus)}, RELIC: {len(relic)}")
+    print(f"INTRAEQ: {len(intraeq)}, RELEQ: {len(releq)}")
+
+    return {
+        'INTRAIC': set(intraic),
+        'INTRACUS': set(intracus),
+        'RELCUS': set(relcus),
+        'XRELCUS': set(xrelcus),
+        'RELIC': set(relic),
+        'INTRAEQ': set(intraeq),
+        'RELEQ': set(releq),
+    }
+
+
+# ============================================================================
+# CREATE COF23 (TAG 2 AND 3)
+# ============================================================================
+
+def create_cof23(reptmon, lists):
+    """Create COF data with TAG 2 (INTRA GROUP) and TAG 3 (RELATED PARTY)."""
+    print("Creating COF23 (TAG 2 and 3)...")
+
+    cmm_path = Path(str(CMM_PATH_TEMPLATE).format(reptmon))
+    equ_path = Path(str(EQU_PATH_TEMPLATE).format(reptmon))
+
+    # Read CMM data
+    df_cmm = pl.read_parquet(cmm_path)
+
+    # Read EQU data and rename CUSTNO to CUSTEQNO
+    df_equ = pl.read_parquet(equ_path)
+    df_equ = df_equ.rename({'CUSTNO': 'CUSTEQNO'})
+
+    # Combine datasets
+    df = pl.concat([df_cmm, df_equ])
+
+    # Create TAG based on conditions
+    def assign_tag(row):
+        custno = row.get('CUSTNO')
+        custeqno = row.get('CUSTEQNO')
+        newic = row.get('NEWIC', '')
+
+        # TAG 3: RELATED PARTY
+        if (custno in lists['RELCUS'] or
+                newic in lists['RELIC'] or
+                custeqno in lists['RELEQ']):
+            return 3
+
+        # TAG 2: INTRA GROUP
+        if (custno in lists['INTRACUS'] or
+                (newic in lists['INTRAIC'] and custno not in lists['XRELCUS']) or
+                custeqno in lists['INTRAEQ']):
+            return 2
+
+        return None
+
+    # Apply tag assignment
+    tags = []
+    for row in df.iter_rows(named=True):
+        tags.append(assign_tag(row))
+
+    df = df.with_columns(pl.Series('TAG', tags))
+
+    # Filter only records with TAG 2 or 3
+    df = df.filter(pl.col('TAG').is_in([2, 3]))
+
+    # Aggregate by CMMCODE and TAG
+    df = df.group_by(['CMMCODE', 'TAG']).agg([
+        pl.col('AMOUNT').sum()
+    ])
+
+    print(f"COF23 records: {len(df)}")
+    return df
+
+
+# ============================================================================
+# CREATE COF123 (COMBINE AND PROCESS)
+# ============================================================================
+
+def create_cof123(cof, cof23):
+    """Combine COF and COF23, apply formatting and bucket allocation."""
+    print("Creating COF123...")
+
+    # Combine datasets
+    df = pl.concat([cof, cof23])
+
+    # Extract parts of CMMCODE
+    df = df.with_columns([
+        pl.col('CMMCODE').str.slice(0, 5).alias('BIC'),
+        pl.col('CMMCODE').str.slice(5, 2).alias('CUST'),
+        pl.col('CMMCODE').str.slice(7, 2).alias('REM'),
+        pl.col('CMMCODE').str.slice(9, 2).alias('ECP'),
+    ])
+
+    # Apply format based on TAG
+    def get_item(bic, tag):
+        if tag == 1:
+            return apply_format(bic, COFF1FMT)
+        elif tag == 2:
+            return apply_format(bic, COFF2FMT)
+        elif tag == 3:
+            return apply_format(bic, COFF3FMT)
+        return ''
+
+    items = []
+    for row in df.iter_rows(named=True):
+        items.append(get_item(row['BIC'], row['TAG']))
+
+    df = df.with_columns(pl.Series('ITEM', items))
+
+    # Filter only records with valid ITEM
+    df = df.filter(pl.col('ITEM') != '')
+
+    # Override REM for specific BICs
+    df = df.with_columns(
+        pl.when(pl.col('BIC').is_in(['95312', '95313', '96313', '9531X']))
+        .then(pl.lit('07'))
+        .otherwise(pl.col('REM'))
+        .alias('REM')
+    )
+
+    # Round AMOUNT
+    df = df.with_columns(
+        pl.col('AMOUNT').round(2)
+    )
+
+    # Allocate AMOUNT to buckets based on REM
+    df = df.with_columns([
+        pl.when(pl.col('REM') == '01').then(pl.col('AMOUNT')).otherwise(None).alias('BUC1'),
+        pl.when(pl.col('REM') == '02').then(pl.col('AMOUNT')).otherwise(None).alias('BUC2'),
+        pl.when(pl.col('REM') == '03').then(pl.col('AMOUNT')).otherwise(None).alias('BUC3'),
+        pl.when(pl.col('REM') == '04').then(pl.col('AMOUNT')).otherwise(None).alias('BUC4'),
+        pl.when(pl.col('REM') == '05').then(pl.col('AMOUNT')).otherwise(None).alias('BUC5'),
+        pl.when(pl.col('REM') == '06').then(pl.col('AMOUNT')).otherwise(None).alias('BUC6'),
+        pl.when(pl.col('REM') == '07').then(pl.col('AMOUNT')).otherwise(None).alias('BUC7'),
+    ])
+
+    print(f"COF123 records: {len(df)}")
+    return df
+
+
+# ============================================================================
+# CREATE COF45 (RETAIL/WHOLESALE BREAKDOWN)
+# ============================================================================
+
+def create_cof45(cof123):
+    """Create COF45 for retail/wholesale funding breakdown."""
+    print("Creating COF45...")
+
+    # Filter TAG = 1 only
+    df = cof123.filter(pl.col('TAG') == 1)
+
+    # Apply format based on CUST
+    def get_item_45(bic, cust, ecp):
+        if cust == '08':
+            item = apply_format(bic, COFF4FMT)
+        else:
+            item = apply_format(bic, COFF5FMT)
+
+        # Operational adjustment
+        if item.strip() == '5.03' and ecp == '01':
+            item = '5.04    '
+
+        return item
+
+    items = []
+    for row in df.iter_rows(named=True):
+        items.append(get_item_45(row['BIC'], row['CUST'], row['ECP']))
+
+    df = df.with_columns(pl.Series('ITEM', items))
+
+    # Filter only records with valid ITEM
+    df = df.filter(pl.col('ITEM') != '')
+
+    print(f"COF45 records: {len(df)}")
+    return df
+
+
+# ============================================================================
+# AGGREGATE AND CREATE SUMMARIES
+# ============================================================================
+
+def create_summaries(cof_combined):
+    """Create item-level, subtotal, and total summaries."""
+    print("Creating summaries...")
+
+    # Add derived columns
+    cof_combined = cof_combined.with_columns([
+        pl.col('ITEM').str.slice(0, 1).alias('PART1'),
+        pl.col('ITEM').str.slice(4, 4).alias('PART2'),
+        pl.col('ITEM').str.slice(0, 4).alias('PREFIX'),
+    ])
+
+    # COFITEM - Item level summary
+    cofitem = cof_combined.group_by('ITEM').agg([
+        pl.col('AMOUNT').sum(),
+        pl.col('BUC1').sum(),
+        pl.col('BUC2').sum(),
+        pl.col('BUC3').sum(),
+        pl.col('BUC4').sum(),
+        pl.col('BUC5').sum(),
+        pl.col('BUC6').sum(),
+        pl.col('BUC7').sum(),
+    ])
+
+    # COFSUBTOT - Subtotal by PART1 and PART2
+    cofsubtot = cof_combined.group_by(['PART1', 'PART2']).agg([
+        pl.col('AMOUNT').sum(),
+        pl.col('BUC1').sum(),
+        pl.col('BUC2').sum(),
+        pl.col('BUC3').sum(),
+        pl.col('BUC4').sum(),
+        pl.col('BUC5').sum(),
+        pl.col('BUC6').sum(),
+        pl.col('BUC7').sum(),
+    ])
+
+    # COFTOT - Total by PART1
+    coftot = cof_combined.group_by('PART1').agg([
+        pl.col('AMOUNT').sum(),
+        pl.col('BUC1').sum(),
+        pl.col('BUC2').sum(),
+        pl.col('BUC3').sum(),
+        pl.col('BUC4').sum(),
+        pl.col('BUC5').sum(),
+        pl.col('BUC6').sum(),
+        pl.col('BUC7').sum(),
+    ])
+
+    # COFSPCL - Special summary for operational/non-operational
+    cofspcl = cof_combined.filter(
+        pl.col('PREFIX').is_in(['5.04', '5.05'])
+    ).group_by('PREFIX').agg([
+        pl.col('AMOUNT').sum(),
+        pl.col('BUC1').sum(),
+        pl.col('BUC2').sum(),
+        pl.col('BUC3').sum(),
+        pl.col('BUC4').sum(),
+        pl.col('BUC5').sum(),
+        pl.col('BUC6').sum(),
+        pl.col('BUC7').sum(),
+    ])
+
+    # Create ITEM for totals
+    coftot = coftot.with_columns(
+        (pl.col('PART1') + pl.lit('.99')).alias('ITEM')
+    )
+
+    cofsubtot = cofsubtot.with_columns(
+        (pl.col('PART1') + pl.lit('.00') + pl.col('PART2')).alias('ITEM')
+    )
+
+    cofspcl = cofspcl.with_columns(
+        pl.col('PREFIX').alias('ITEM')
+    )
+
+    # Combine all totals
+    coftot_combined = pl.concat([
+        coftot.select(['ITEM', 'AMOUNT', 'BUC1', 'BUC2', 'BUC3', 'BUC4', 'BUC5', 'BUC6', 'BUC7']),
+        cofsubtot.select(['ITEM', 'AMOUNT', 'BUC1', 'BUC2', 'BUC3', 'BUC4', 'BUC5', 'BUC6', 'BUC7']),
+        cofspcl.select(['ITEM', 'AMOUNT', 'BUC1', 'BUC2', 'BUC3', 'BUC4', 'BUC5', 'BUC6', 'BUC7']),
+    ])
+
+    print(f"COFITEM: {len(cofitem)}, COFTOT: {len(coftot_combined)}")
+    return cofitem, coftot_combined
+
+
+# ============================================================================
+# GENERATE REPORT
+# ============================================================================
+
+def generate_report(template, cofitem, coftot_combined, rdate):
+    """Generate final COF report with ASA carriage control."""
+    print("Generating report...")
+
+    # Merge template with item and total data
+    df = template.join(cofitem, on='ITEM', how='left', suffix='_item')
+    df = df.join(coftot_combined, on='ITEM', how='left', suffix='_tot')
+
+    # Coalesce columns (prefer item values, then tot values, then template defaults)
+    for col in ['AMOUNT', 'BUC1', 'BUC2', 'BUC3', 'BUC4', 'BUC5', 'BUC6', 'BUC7']:
+        item_col = f'{col}_item' if f'{col}_item' in df.columns else col
+        tot_col = f'{col}_tot' if f'{col}_tot' in df.columns else None
+
+        if tot_col and tot_col in df.columns:
+            df = df.with_columns(
+                pl.coalesce([item_col, tot_col, pl.col(col)]).alias(col)
+            )
+        elif item_col in df.columns:
+            df = df.with_columns(
+                pl.coalesce([item_col, pl.col(col)]).alias(col)
+            )
+
+    # Sort by RECNO
+    df = df.sort('RECNO')
+
+    # Write output with ASA carriage control
+    delimiter = chr(0x05)
+
+    with open(COF_OUTPUT_PATH, 'w') as f:
+        # Header lines with ASA carriage control
+        f.write(' PUBLIC ISLAMIC BANK BERHAD\n')
+        f.write(f' LIQUIDITY COVERAGE RATIO (LCR) TABLE 4 AS AT {rdate}\n')
+        f.write(' CONCENTRATION OF FUNDING\n')
+
+        # Data rows
+        for row in df.iter_rows(named=True):
+            idesc = row['IDESC']
+
+            # Print blank line if IDESC starts with non-blank
+            if idesc and len(idesc) >= 2 and idesc[0:2].strip():
+                f.write(' \n')
+
+            # Print data line
+            line_parts = [
+                ' ',  # ASA carriage control (space = single spacing)
+                idesc if idesc else '',
+                delimiter,
+                format_number(row.get('BUC1')),
+                delimiter,
+                format_number(row.get('BUC2')),
+                delimiter,
+                format_number(row.get('BUC3')),
+                delimiter,
+                format_number(row.get('BUC4')),
+                delimiter,
+                format_number(row.get('BUC5')),
+                delimiter,
+                format_number(row.get('BUC6')),
+                delimiter,
+                format_number(row.get('BUC7')),
+                delimiter,
+                format_number(row.get('AMOUNT')),
+                delimiter,
+            ]
+            f.write(''.join(line_parts) + '\n')
+
+            # Print column headers if IDESC starts with non-blank
+            if idesc and len(idesc) >= 2 and idesc[0:2].strip():
+                header_parts = [
+                    ' ',  # ASA carriage control
+                    '',
+                    delimiter,
+                    'Deposit Type',
+                    delimiter,
+                    'up to 1 week',
+                    delimiter,
+                    '> 1 wk - 1 mth',
+                    delimiter,
+                    '> 1 - 3 mths',
+                    delimiter,
+                    '> 3 - 6 mths',
+                    delimiter,
+                    '> 6 mths -  1 yr',
+                    delimiter,
+                    '> 1 year',
+                    delimiter,
+                    'No specific maturity',
+                    delimiter,
+                    'Total',
+                    delimiter,
+                ]
+                f.write(''.join(header_parts) + '\n')
+
+    print(f"Report written to {COF_OUTPUT_PATH}")
+
+
+# ============================================================================
+# GENERATE SFTP SCRIPT
+# ============================================================================
+
+def generate_sftp_script(fildt):
+    """Generate SFTP script file."""
+    print("Generating SFTP script...")
+
+    with open(SFTP_SCRIPT_PATH, 'w') as f:
+        f.write(f"put //SAP.PIBB.LCR.COF.TEXT  ICOF_{fildt}.XLS\n")
+
+    print(f"SFTP script written to {SFTP_SCRIPT_PATH}")
+
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+def main():
+    """Main execution function."""
+    try:
+        print("=" * 80)
+        print("Islamic Bank LCR Concentration of Funding Report Generator")
+        print("=" * 80)
+
+        # Read reptdate
+        reptdate, reptmon, fildt, rdate = read_reptdate()
+
+        # Read template
+        template = read_template()
+
+        # Read GL data
+        gl = read_gl()
+
+        # Read COF data
+        cof = read_cof_data(reptmon)
+
+        # Read list files
+        lists = read_list_files()
+
+        # Create COF23
+        cof23 = create_cof23(reptmon, lists)
+
+        # Create COF123
+        cof123 = create_cof123(cof, cof23)
+
+        # Create COF45
+        cof45 = create_cof45(cof123)
+
+        # Combine all COF data
+        cof_combined = pl.concat([
+            cof123.select(['ITEM', 'AMOUNT', 'BUC1', 'BUC2', 'BUC3', 'BUC4', 'BUC5', 'BUC6', 'BUC7']),
+            cof45.select(['ITEM', 'AMOUNT', 'BUC1', 'BUC2', 'BUC3', 'BUC4', 'BUC5', 'BUC6', 'BUC7']),
+            gl.select(['ITEM', 'AMOUNT', 'BUC1', 'BUC2', 'BUC3', 'BUC4', 'BUC5', 'BUC6', 'BUC7']),
+        ])
+
+        print(f"Total COF combined records: {len(cof_combined)}")
+
+        # Create summaries
+        cofitem, coftot_combined = create_summaries(cof_combined)
+
+        # Generate report
+        generate_report(template, cofitem, coftot_combined, rdate)
+
+        # Generate SFTP script
+        generate_sftp_script(fildt)
+
+        print("=" * 80)
+        print("Processing completed successfully!")
+        print("=" * 80)
+
+        return 0
+
+    except Exception as e:
+        print(f"\nERROR: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
+
+
