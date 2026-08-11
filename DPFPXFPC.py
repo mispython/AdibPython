@@ -1,5 +1,5 @@
 """
-EIBMTLCR - Top Depositors Report (FINAL CORRECTED VERSION)
+EIBMTLCR - Top Depositors Report
 Generates top depositor reports by:
 - Individual/Corporate categories (Top 50 each)
 - Product breakdown (Top 100)
@@ -198,25 +198,550 @@ def get_exclusion_lists():
     return excl_cis, excl_equ
 
 # =============================================================================
-# M&I PROCESSING (same as before, working correctly)
+# M&I (Monetary & Islamic) PROCESSING
 # =============================================================================
-# [process_mni function - same as previous working version]
-# ... (previous process_mni code here)
+def process_mni(rep_vars, excl_cis):
+    """Process M&I source data"""
+    
+    # Read CMM first to get its column structure
+    try:
+        cmm_file = f"{PATHS['LCR']}cmm{rep_vars['reptmon']}.sas7bdat"
+        print(f"  Reading CMM: {cmm_file}")
+        cmm = read_sas7bdat(cmm_file)
+        print(f"  CMM loaded: {len(cmm)} records, {len(cmm.columns)} columns")
+    except Exception as e:
+        print(f"  Warning reading CMM: {e}")
+        cmm = pl.DataFrame()
+    
+    # Read VOSTRO
+    try:
+        print(f"  Reading VOSTRO: {PATHS['LCR']}vostro.sas7bdat")
+        vostro = read_sas7bdat(f"{PATHS['LCR']}vostro.sas7bdat")
+        print(f"  VOSTRO loaded: {len(vostro)} records, {len(vostro.columns)} columns")
+    except Exception as e:
+        print(f"  Warning reading VOSTRO: {e}")
+        vostro = pl.DataFrame()
+    
+    # Sort VOSTRO by ACCTNO
+    if not vostro.is_empty() and 'ACCTNO' in vostro.columns:
+        vostro = vostro.sort('ACCTNO')
+    
+    # Merge VOSTRO with CISINFO
+    if not vostro.is_empty():
+        try:
+            cisinfo = read_sas7bdat(f"{PATHS['LCR']}cisinfo.sas7bdat")
+            if not cisinfo.is_empty():
+                print(f"  CISINFO loaded: {len(cisinfo)} records")
+                cisinfo_cols = ['ACCTNO', 'CUSTCD', 'CUSTNAME', 'PRODUCT', 
+                               'CURCODE', 'CUSTNO', 'NEWIC']
+                available_cis_cols = [c for c in cisinfo_cols if c in cisinfo.columns]
+                cisinfo = cisinfo.select(available_cis_cols)
+                
+                vostro_cols_before = set(vostro.columns)
+                common_cols = vostro_cols_before.intersection(set(cisinfo.columns) - {'ACCTNO'})
+                
+                if common_cols:
+                    drop_cols = [c for c in common_cols if c != 'ACCTNO']
+                    vostro = vostro.drop(drop_cols)
+                
+                vostro = vostro.join(cisinfo, on='ACCTNO', how='left')
+                print(f"  VOSTRO after CISINFO merge: {len(vostro)} records")
+        except Exception as e:
+            print(f"  Warning merging CISINFO: {e}")
+    
+    # Add CMMCODE to VOSTRO
+    if not vostro.is_empty():
+        if 'CMMCODE' in vostro.columns:
+            vostro = vostro.with_columns([
+                pl.when(pl.col('CMMCODE').is_null() | (pl.col('CMMCODE') == ''))
+                .then(pl.lit('953XX'))
+                .otherwise(pl.col('CMMCODE')).alias('CMMCODE')
+            ])
+        else:
+            vostro = vostro.with_columns([pl.lit('953XX').alias('CMMCODE')])
+    
+    # Combine CMM and VOSTRO
+    cmm = safe_concat([cmm, vostro])
+    print(f"  Combined CMM+VOSTRO: {len(cmm)} records, {len(cmm.columns)} columns")
+    
+    if cmm.is_empty():
+        print("  No CMM or VOSTRO data")
+        return pl.DataFrame(), pl.DataFrame()
+    
+    # Sort by NEWIC
+    if 'NEWIC' in cmm.columns:
+        cmm = cmm.sort('NEWIC')
+    
+    # Read COF_MNI_DEPOSITOR_LIST
+    cof_idno = pl.DataFrame()
+    try:
+        cof = read_sas7bdat(f"{PATHS['LIST']}cof_mni_depositor_list.sas7bdat")
+        if not cof.is_empty():
+            print(f"  COF_MNI_DEPOSITOR_LIST loaded: {len(cof)} records")
+            if 'BUSSREG' in cof.columns:
+                cof_idno = cof.unique(subset=['BUSSREG'])
+                keep_cols = ['DEPID', 'DEPGRP', 'BUSSREG']
+                available_cols = [c for c in keep_cols if c in cof_idno.columns]
+                cof_idno = cof_idno.select(available_cols)
+                cof_idno = cof_idno.rename({'BUSSREG': 'NEWIC'})
+                print(f"  COF_IDNO for NEWIC merge: {len(cof_idno)} records")
+    except Exception as e:
+        print(f"  Warning loading COF_MNI_DEPOSITOR_LIST: {e}")
+    
+    # First merge by NEWIC
+    mni1 = cmm.clone()
+    if not cof_idno.is_empty() and 'NEWIC' in cmm.columns:
+        for col in ['DEPID', 'DEPGRP']:
+            if col in mni1.columns:
+                mni1 = mni1.drop(col)
+        mni1 = mni1.join(cof_idno, on='NEWIC', how='left')
+        print(f"  After NEWIC merge: {len(mni1)} records")
+    
+    # Add EXCL flag
+    if not mni1.is_empty() and 'CUSTNO' in mni1.columns:
+        if excl_cis:
+            mni1 = mni1.with_columns([
+                pl.when(pl.col('CUSTNO').cast(pl.Utf8).is_in(excl_cis))
+                .then(pl.lit('Y')).otherwise(pl.lit('N')).alias('EXCL')
+            ])
+        else:
+            mni1 = mni1.with_columns([pl.lit('N').alias('EXCL')])
+    
+    # Split matched/unmatched
+    mni1_matched = pl.DataFrame()
+    mni1_unmatched = pl.DataFrame()
+    
+    if not mni1.is_empty() and 'DEPID' in mni1.columns:
+        mni1_matched = mni1.filter(pl.col('DEPID').is_not_null() & (pl.col('DEPID') > 0))
+        mni1_unmatched = mni1.filter(pl.col('DEPID').is_null() | (pl.col('DEPID') == 0))
+        print(f"  First match: {len(mni1_matched)} matched, {len(mni1_unmatched)} unmatched")
+    elif not mni1.is_empty():
+        mni1_unmatched = mni1
+        print(f"  No DEPID column, all {len(mni1_unmatched)} unmatched")
+    
+    # Second merge by CUSTNO
+    mni2_matched = pl.DataFrame()
+    mni2_unmatched = mni1_unmatched.clone() if not mni1_unmatched.is_empty() else pl.DataFrame()
+    
+    if not mni1_unmatched.is_empty() and 'CUSTNO' in mni1_unmatched.columns:
+        try:
+            cof_cust = read_sas7bdat(f"{PATHS['LIST']}cof_mni_depositor_list.sas7bdat")
+            if not cof_cust.is_empty() and 'CUSTNO' in cof_cust.columns:
+                cof_cust = cof_cust.unique(subset=['CUSTNO'])
+                keep_cols = ['DEPID', 'DEPGRP', 'CUSTNO']
+                available_cols = [c for c in keep_cols if c in cof_cust.columns]
+                cof_cust = cof_cust.select(available_cols)
+                
+                mni2_input = mni1_unmatched.clone()
+                for col in ['DEPID', 'DEPGRP']:
+                    if col in mni2_input.columns:
+                        mni2_input = mni2_input.drop(col)
+                
+                mni2 = mni2_input.join(cof_cust, on='CUSTNO', how='left')
+                
+                if 'DEPID' in mni2.columns:
+                    mni2_matched = mni2.filter(pl.col('DEPID').is_not_null() & (pl.col('DEPID') > 0))
+                    mni2_unmatched = mni2.filter(pl.col('DEPID').is_null() | (pl.col('DEPID') == 0))
+                    print(f"  Second match: {len(mni2_matched)} matched, {len(mni2_unmatched)} unmatched")
+                else:
+                    mni2_unmatched = mni2
+        except Exception as e:
+            print(f"  Warning in second merge: {e}")
+    
+    # Assign new DEPID for unmatched records
+    mni3 = pl.DataFrame()
+    if not mni2_unmatched.is_empty() and 'CUSTNO' in mni2_unmatched.columns:
+        mni3 = mni2_unmatched.clone()
+        
+        unique_cust = mni3.select('CUSTNO').unique().sort('CUSTNO')
+        if not unique_cust.is_empty():
+            unique_cust = unique_cust.with_columns([
+                (pl.arange(0, len(unique_cust)) + 5001).cast(pl.Float64).alias('DEPID_NEW')
+            ])
+            
+            mni3 = mni3.join(unique_cust, on='CUSTNO', how='left')
+            
+            if 'DEPID' in mni3.columns:
+                mni3 = mni3.with_columns([
+                    pl.coalesce(['DEPID', 'DEPID_NEW']).alias('DEPID')
+                ])
+            else:
+                mni3 = mni3.with_columns([
+                    pl.col('DEPID_NEW').alias('DEPID')
+                ])
+            
+            if 'CUSTNAME' in mni3.columns:
+                mni3 = mni3.with_columns([
+                    pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
+                    .then(pl.col('CUSTNAME').cast(pl.Utf8))
+                    .otherwise(pl.col('DEPGRP').cast(pl.Utf8)).alias('DEPGRP')
+                ])
+            else:
+                mni3 = mni3.with_columns([
+                    pl.col('DEPGRP').cast(pl.Utf8).alias('DEPGRP')
+                ])
+            
+            mni3 = mni3.drop(['DEPID_NEW'], strict=False)
+            print(f"  Assigned new DEPIDs: {len(mni3)} records")
+    
+    # Combine all M&I records
+    mni_all = safe_concat([mni1_matched, mni2_matched, mni3])
+    
+    if mni_all.is_empty():
+        print("  No M&I records after merge")
+        return pl.DataFrame(), pl.DataFrame()
+    
+    print(f"  Total M&I records: {len(mni_all)}")
+    
+    # Classify by product type
+    if 'CMMCODE' in mni_all.columns:
+        mni_all = mni_all.with_columns([
+            pl.col('CMMCODE').cast(pl.Utf8).str.slice(0, 5).alias('BIC')
+        ])
+        
+        amount_col = 'AMOUNT' if 'AMOUNT' in mni_all.columns else None
+        if amount_col is None:
+            print("  Warning: No AMOUNT column found in M&I data")
+            return pl.DataFrame(), mni_all
+        
+        mni_all = mni_all.with_columns([
+            pl.when(pl.col('BIC').is_in(['95311', '96311'])).then(pl.col(amount_col)).otherwise(0.0).alias('FD'),
+            pl.when(pl.col('BIC') == '95312').then(pl.col(amount_col)).otherwise(0.0).alias('SA'),
+            pl.when(pl.col('BIC').is_in(['95313', '96313'])).then(pl.col(amount_col)).otherwise(0.0).alias('CA'),
+            pl.when(pl.col('BIC') == '953XX').then(pl.col(amount_col)).otherwise(0.0).alias('VOST'),
+            pl.when(pl.col('BIC') == '9531X').then(pl.col(amount_col)).otherwise(0.0).alias('GOLD'),
+            pl.when(pl.col('BIC').is_in(['95840', '96840'])).then(pl.col(amount_col)).otherwise(0.0).alias('RNID'),
+        ])
+        
+        if 'EXCL' in mni_all.columns:
+            mni_all = mni_all.with_columns([
+                pl.when((pl.col('BIC').is_in(['95311', '96311'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('FD2'),
+                pl.when((pl.col('BIC') == '95312') & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('SA2'),
+                pl.when((pl.col('BIC').is_in(['95313', '96313'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('CA2'),
+                pl.when((pl.col('BIC').is_in(['95840', '96840'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('RNID2')
+            ])
+        else:
+            mni_all = mni_all.with_columns([
+                pl.col('FD').alias('FD2'), pl.col('SA').alias('SA2'),
+                pl.col('CA').alias('CA2'), pl.col('RNID').alias('RNID2')
+            ])
+        
+        if 'CUSTCD' in mni_all.columns:
+            mni_all = mni_all.with_columns([
+                pl.when(pl.col('CUSTCD').cast(pl.Utf8).is_in(['77', '78', '95', '96']))
+                .then(pl.lit('I')).otherwise(pl.lit('C')).alias('CUSTYPE')
+            ])
+        else:
+            mni_all = mni_all.with_columns([pl.lit('C').alias('CUSTYPE')])
+        
+        product_bics = ['95311', '96311', '95312', '95313', '96313', '953XX', '9531X', '95840', '96840']
+        mni_all = mni_all.filter(pl.col('BIC').is_in(product_bics))
+        print(f"  M&I records after product filter: {len(mni_all)}")
+        
+        if not mni_all.is_empty():
+            group_cols = ['DEPID', 'DEPGRP', 'CUSTYPE']
+            available_group_cols = [c for c in group_cols if c in mni_all.columns]
+            
+            agg_cols = ['FD', 'SA', 'CA', 'VOST', 'GOLD', 'RNID', 'FD2', 'SA2', 'CA2', 'RNID2']
+            available_agg_cols = [c for c in agg_cols if c in mni_all.columns]
+            
+            if available_group_cols and available_agg_cols:
+                mni_sum = mni_all.group_by(available_group_cols).agg([
+                    pl.col(c).sum() for c in available_agg_cols
+                ]).sort(available_group_cols)
+                print(f"  M&I summary: {len(mni_sum)} groups")
+            else:
+                mni_sum = pl.DataFrame()
+        else:
+            mni_sum = pl.DataFrame()
+    else:
+        mni_sum = pl.DataFrame()
+    
+    return mni_sum, mni_all
 
 # =============================================================================
-# EQUITY PROCESSING (same as before, working correctly)
+# EQUITY PROCESSING
 # =============================================================================
-# [process_equity function - same as previous working version]
-# ... (previous process_equity code here)
+def process_equity(rep_vars, excl_equ):
+    """Process Equity source data"""
+    
+    equ = pl.DataFrame()
+    try:
+        equ_file = f"{PATHS['LCR']}equ{rep_vars['reptmon']}.sas7bdat"
+        print(f"  Reading EQU: {equ_file}")
+        equ = read_sas7bdat(equ_file)
+        print(f"  EQU loaded: {len(equ)} records, {len(equ.columns)} columns")
+        
+        if not equ.is_empty() and 'CUSTNO' in equ.columns:
+            equ = equ.filter(pl.col('CUSTNO').cast(pl.Utf8).ne(''))
+            print(f"  EQU after CUSTNO filter: {len(equ)} records")
+            
+            if excl_equ:
+                equ = equ.with_columns([
+                    pl.when(pl.col('CUSTNO').cast(pl.Utf8).is_in(excl_equ))
+                    .then(pl.lit('Y')).otherwise(pl.lit('N')).alias('EXCL')
+                ])
+            else:
+                equ = equ.with_columns([pl.lit('N').alias('EXCL')])
+    except Exception as e:
+        print(f"  Warning reading EQU: {e}")
+        return pl.DataFrame(), pl.DataFrame()
+    
+    if equ.is_empty():
+        return pl.DataFrame(), pl.DataFrame()
+    
+    equ = equ.sort('CUSTNO')
+    
+    cof = pl.DataFrame()
+    try:
+        cof = read_sas7bdat(f"{PATHS['LIST']}cof_equ_depositor_list.sas7bdat")
+        if not cof.is_empty():
+            print(f"  COF_EQU_DEPOSITOR_LIST loaded: {len(cof)} records")
+            if 'CUSTNO' in cof.columns:
+                cof = cof.unique(subset=['CUSTNO'])
+                keep_cols = ['DEPID', 'DEPGRP', 'CUSTNO', 'LINKID']
+                available_cols = [c for c in keep_cols if c in cof.columns]
+                cof = cof.select(available_cols)
+                print(f"  COF_EQU for merge: {len(cof)} records")
+    except Exception as e:
+        print(f"  Warning loading COF_EQU_DEPOSITOR_LIST: {e}")
+    
+    equ_matched = pl.DataFrame()
+    equ_unmatched = pl.DataFrame()
+    
+    if not cof.is_empty() and 'CUSTNO' in equ.columns:
+        equ_input = equ.clone()
+        for col in ['DEPID', 'DEPGRP', 'LINKID']:
+            if col in equ_input.columns:
+                equ_input = equ_input.drop(col)
+        
+        equ1 = equ_input.join(cof, on='CUSTNO', how='left')
+        
+        if 'DEPID' in equ1.columns:
+            equ_matched = equ1.filter(pl.col('DEPID').is_not_null() & (pl.col('DEPID') > 0))
+            equ_unmatched = equ1.filter(pl.col('DEPID').is_null() | (pl.col('DEPID') == 0))
+            print(f"  EQU match: {len(equ_matched)} matched, {len(equ_unmatched)} unmatched")
+        else:
+            equ_unmatched = equ1
+    else:
+        equ_unmatched = equ
+        print(f"  EQU all unmatched: {len(equ_unmatched)} records")
+    
+    equ2 = pl.DataFrame()
+    if not equ_unmatched.is_empty() and 'CUSTNO' in equ_unmatched.columns:
+        equ2 = equ_unmatched.clone()
+        
+        unique_cust = equ2.select('CUSTNO').unique().sort('CUSTNO')
+        if not unique_cust.is_empty():
+            unique_cust = unique_cust.with_columns([
+                (pl.arange(0, len(unique_cust)) + 50005001).cast(pl.Float64).alias('DEPID_NEW')
+            ])
+            
+            equ2 = equ2.join(unique_cust, on='CUSTNO', how='left')
+            
+            if 'DEPID' in equ2.columns:
+                equ2 = equ2.with_columns([
+                    pl.coalesce(['DEPID', 'DEPID_NEW']).alias('DEPID')
+                ])
+            else:
+                equ2 = equ2.with_columns([
+                    pl.col('DEPID_NEW').alias('DEPID')
+                ])
+            
+            if 'CUSTNAME' in equ2.columns:
+                equ2 = equ2.with_columns([
+                    pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
+                    .then(pl.col('CUSTNAME').cast(pl.Utf8))
+                    .otherwise(pl.col('DEPGRP').cast(pl.Utf8)).alias('DEPGRP')
+                ])
+                equ2 = equ2.with_columns([
+                    pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
+                    .then(pl.col('CUSTNO').cast(pl.Utf8))
+                    .otherwise(pl.col('DEPGRP')).alias('DEPGRP')
+                ])
+            else:
+                equ2 = equ2.with_columns([
+                    pl.col('DEPGRP').cast(pl.Utf8).alias('DEPGRP')
+                ])
+            
+            equ2 = equ2.drop(['DEPID_NEW'], strict=False)
+            print(f"  Assigned new EQU DEPIDs: {len(equ2)} records")
+    
+    equ_all = safe_concat([equ_matched, equ2])
+    
+    if equ_all.is_empty():
+        print("  No EQU records found")
+        return pl.DataFrame(), pl.DataFrame()
+    
+    print(f"  Total EQU records: {len(equ_all)}")
+    
+    if 'CMMCODE' in equ_all.columns:
+        equ_all = equ_all.with_columns([
+            pl.col('CMMCODE').cast(pl.Utf8).str.slice(0, 5).alias('BIC')
+        ])
+        
+        equ_all = equ_all.filter(~pl.col('BIC').is_in(['95850', '96850']))
+        
+        amount_col = 'AMOUNT' if 'AMOUNT' in equ_all.columns else None
+        if amount_col is None:
+            print("  Warning: No AMOUNT column found in EQU data")
+            return pl.DataFrame(), equ_all
+        
+        if 'LINKID' not in equ_all.columns:
+            equ_all = equ_all.with_columns([pl.lit(None).cast(pl.Float64).alias('LINKID')])
+        
+        equ_all = equ_all.with_columns([
+            pl.when(pl.col('LINKID').is_null() | (pl.col('LINKID') == 0))
+            .then(50000000.0 + pl.col('DEPID').cast(pl.Float64))
+            .otherwise(pl.col('LINKID').cast(pl.Float64)).alias('LINKID')
+        ])
+        
+        equ_all = equ_all.with_columns([
+            pl.when(pl.col('BIC').is_in(['95830', '96830', '9583X', '9683X'])).then(pl.col(amount_col)).otherwise(0.0).alias('STD'),
+            pl.when(pl.col('BIC').is_in(['95840', '96840'])).then(pl.col(amount_col)).otherwise(0.0).alias('NID'),
+            pl.when(pl.col('BIC').is_in(['95810', '96810'])).then(pl.col(amount_col)).otherwise(0.0).alias('IBB'),
+            pl.when(pl.col('BIC').is_in(['95820', '96820'])).then(pl.col(amount_col)).otherwise(0.0).alias('REPO'),
+            pl.when(pl.col('BIC').is_in(['95329', '96329'])).then(pl.col(amount_col)).otherwise(0.0).alias('DCI'),
+        ])
+        
+        if 'EXCL' in equ_all.columns:
+            equ_all = equ_all.with_columns([
+                pl.when((pl.col('BIC').is_in(['95830', '96830', '9583X', '9683X'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('STD2'),
+                pl.when((pl.col('BIC').is_in(['95840', '96840'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('NID2'),
+                pl.when((pl.col('BIC').is_in(['95329', '96329'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0.0).alias('DCI2')
+            ])
+        else:
+            equ_all = equ_all.with_columns([
+                pl.col('STD').alias('STD2'), pl.col('NID').alias('NID2'), pl.col('DCI').alias('DCI2')
+            ])
+        
+        if 'CUSTFISS' in equ_all.columns:
+            equ_all = equ_all.with_columns([
+                pl.when(pl.col('CUSTFISS').cast(pl.Utf8).is_in(['77', '78', '95', '96']))
+                .then(pl.lit('I')).otherwise(pl.lit('C')).alias('CUSTYPE')
+            ])
+        else:
+            equ_all = equ_all.with_columns([pl.lit('C').alias('CUSTYPE')])
+        
+        product_bics = ['95830', '96830', '9583X', '9683X', '95840', '96840', 
+                       '95810', '96810', '95820', '96820', '95329', '96329']
+        equ_all = equ_all.filter(pl.col('BIC').is_in(product_bics))
+        print(f"  EQU records after product filter: {len(equ_all)}")
+        
+        if not equ_all.is_empty():
+            group_cols = ['LINKID', 'DEPGRP', 'CUSTYPE']
+            available_group_cols = [c for c in group_cols if c in equ_all.columns]
+            
+            agg_cols = ['STD', 'NID', 'IBB', 'REPO', 'DCI', 'STD2', 'NID2', 'DCI2']
+            available_agg_cols = [c for c in agg_cols if c in equ_all.columns]
+            
+            if available_group_cols and available_agg_cols:
+                equ_sum = equ_all.group_by(available_group_cols).agg([
+                    pl.col(c).sum() for c in available_agg_cols
+                ]).sort(available_group_cols)
+                equ_sum = equ_sum.rename({'LINKID': 'DEPID'})
+                print(f"  EQU summary: {len(equ_sum)} groups")
+            else:
+                equ_sum = pl.DataFrame()
+        else:
+            equ_sum = pl.DataFrame()
+    else:
+        equ_sum = pl.DataFrame()
+    
+    return equ_sum, equ_all
 
 # =============================================================================
-# CONSOLIDATION (same as before, working correctly)
+# CONSOLIDATION
 # =============================================================================
-# [consolidate_sources function - same as previous working version]
-# ... (previous consolidate_sources code here)
+def consolidate_sources(mni_sum, equ_sum):
+    """Consolidate M&I and Equity sources"""
+    if mni_sum.is_empty() and equ_sum.is_empty():
+        print("  Both M&I and Equity are empty")
+        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+    
+    mni_prep = mni_sum.clone() if not mni_sum.is_empty() else pl.DataFrame()
+    equ_prep = equ_sum.clone() if not equ_sum.is_empty() else pl.DataFrame()
+    
+    if not mni_prep.is_empty() and not equ_prep.is_empty():
+        equ_subset = equ_prep.select([
+            'DEPID', 
+            pl.col('DEPGRP').alias('DEPGRPEQ'),
+            pl.col('CUSTYPE').alias('CUSTYPEQ'),
+            'STD', 'NID', 'IBB', 'REPO', 'DCI',
+            'STD2', 'NID2', 'DCI2'
+        ])
+        allsrc = mni_prep.join(equ_subset, on='DEPID', how='full')
+    elif not mni_prep.is_empty():
+        allsrc = mni_prep.with_columns([
+            pl.lit("").cast(pl.Utf8).alias('DEPGRPEQ'),
+            pl.lit("").cast(pl.Utf8).alias('CUSTYPEQ'),
+            pl.lit(0.0).alias('STD'), pl.lit(0.0).alias('NID'),
+            pl.lit(0.0).alias('IBB'), pl.lit(0.0).alias('REPO'),
+            pl.lit(0.0).alias('DCI'), pl.lit(0.0).alias('STD2'),
+            pl.lit(0.0).alias('NID2'), pl.lit(0.0).alias('DCI2')
+        ])
+    else:
+        allsrc = equ_prep.with_columns([
+            pl.lit("").cast(pl.Utf8).alias('DEPGRPEQ'),
+            pl.lit("").cast(pl.Utf8).alias('CUSTYPEQ'),
+            pl.lit(0.0).alias('FD'), pl.lit(0.0).alias('SA'),
+            pl.lit(0.0).alias('CA'), pl.lit(0.0).alias('VOST'),
+            pl.lit(0.0).alias('GOLD'), pl.lit(0.0).alias('RNID'),
+            pl.lit(0.0).alias('FD2'), pl.lit(0.0).alias('SA2'),
+            pl.lit(0.0).alias('CA2'), pl.lit(0.0).alias('RNID2')
+        ])
+        allsrc = allsrc.with_columns([pl.col('DEPGRP').alias('DEPGRPEQ')])
+    
+    if allsrc.is_empty():
+        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+    
+    allsrc = allsrc.with_columns([
+        pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
+        .then(pl.col('DEPGRPEQ')).otherwise(pl.col('DEPGRP')).alias('DEPGRP'),
+        pl.when(pl.col('CUSTYPE').is_null() | (pl.col('CUSTYPE') == ''))
+        .then(pl.col('CUSTYPEQ')).otherwise(pl.col('CUSTYPE')).alias('CUSTYPE')
+    ])
+    
+    numeric_cols = ['FD', 'SA', 'CA', 'VOST', 'GOLD', 'RNID', 
+                   'FD2', 'SA2', 'CA2', 'RNID2',
+                   'STD', 'NID', 'IBB', 'REPO', 'DCI',
+                   'STD2', 'NID2', 'DCI2']
+    for col in numeric_cols:
+        if col in allsrc.columns:
+            allsrc = allsrc.with_columns([pl.col(col).fill_null(0.0)])
+    
+    allsrc = allsrc.with_columns([
+        (pl.col('NID') + pl.col('RNID')).alias('NID_COMB')
+    ])
+    
+    allsrc = allsrc.with_columns([
+        (pl.col('FD') + pl.col('SA') + pl.col('GOLD') + pl.col('CA') + 
+         pl.col('STD') + pl.col('NID_COMB') + pl.col('IBB') + pl.col('REPO') + 
+         pl.col('DCI') + pl.col('VOST')).alias('TOT'),
+        (pl.col('FD2') + pl.col('SA2') + pl.col('CA2') + pl.col('RNID2')).alias('MNI'),
+        (pl.col('STD2') + pl.col('NID2') + pl.col('DCI2')).alias('EQU'),
+        (pl.col('FD2') + pl.col('SA2') + pl.col('CA2') + pl.col('RNID2') + 
+         pl.col('STD2') + pl.col('NID2') + pl.col('DCI2')).alias('TOT2')
+    ])
+    
+    alltot2 = allsrc.group_by(['DEPID', 'DEPGRP', 'CUSTYPE']).agg([
+        pl.col('TOT2').sum(), pl.col('MNI').sum(), pl.col('EQU').sum()
+    ]).sort(['CUSTYPE', 'TOT2'], descending=[False, True])
+    
+    alltot = allsrc.group_by(['DEPID', 'DEPGRP']).agg([
+        pl.col('TOT').sum(), pl.col('FD').sum(), pl.col('SA').sum(),
+        pl.col('GOLD').sum(), pl.col('CA').sum(), pl.col('STD').sum(),
+        pl.col('NID_COMB').alias('NID'), pl.col('IBB').sum(),
+        pl.col('REPO').sum(), pl.col('DCI').sum(), pl.col('VOST').sum()
+    ]).sort('TOT', descending=True)
+    
+    print(f"  TOT2 summary: {len(alltot2)} groups")
+    print(f"  Product summary: {len(alltot)} groups")
+    
+    return allsrc, alltot2, alltot
 
 # =============================================================================
-# REPORT GENERATION FUNCTIONS (CORRECTED)
+# REPORT GENERATION FUNCTIONS
 # =============================================================================
 def generate_top50_report(alltot2, cust_type, desc, rep_vars, output_path):
     """Generate Top 50 report for a customer type"""
@@ -384,7 +909,6 @@ def generate_top100_by_product(alltot, mni_detail, equ_detail, rep_vars, output_
                     f"{safe_float(row.get('GOLD')):,.2f}{dlm}"
                     f"{safe_float(row.get('VOST')):,.2f}")
     
-    # Detail listing
     lines.append("")
     lines.append("(ii) Detail Accounts Listing for Top 100 Depositors")
     lines.append("")
@@ -493,7 +1017,6 @@ def generate_maturity_report(top100, allsrc, rep_vars, output_path):
     ]
     
     for row in top100.iter_rows(named=True):
-        depid = safe_float(row['DEPID'])
         rank = safe_float(row['RANK'], 0)
         depgrp = safe_str(row['DEPGRP'])
         
