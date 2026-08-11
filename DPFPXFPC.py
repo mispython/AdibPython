@@ -73,7 +73,11 @@ def align_columns(df1, df2):
     Align two DataFrames to have the same columns for concatenation.
     Missing columns are filled with None/Null.
     """
-    if df1.is_empty() or df2.is_empty():
+    if df1.is_empty() and df2.is_empty():
+        return df1, df2
+    if df1.is_empty():
+        return df1, df2
+    if df2.is_empty():
         return df1, df2
     
     # Get union of all columns
@@ -149,7 +153,6 @@ def process_mni(rep_vars, excl_cis):
         print(f"  Reading CMM: {cmm_file}")
         cmm = read_sas7bdat(cmm_file)
         print(f"  CMM loaded: {len(cmm)} records, {len(cmm.columns)} columns")
-        print(f"  CMM columns: {cmm.columns}")
     except Exception as e:
         print(f"  Warning reading CMM: {e}")
         cmm = pl.DataFrame()
@@ -159,7 +162,6 @@ def process_mni(rep_vars, excl_cis):
         print(f"  Reading VOSTRO: {PATHS['LCR']}vostro.sas7bdat")
         vostro = read_sas7bdat(f"{PATHS['LCR']}vostro.sas7bdat")
         print(f"  VOSTRO loaded: {len(vostro)} records, {len(vostro.columns)} columns")
-        print(f"  VOSTRO columns: {vostro.columns}")
     except Exception as e:
         print(f"  Warning reading VOSTRO: {e}")
         vostro = pl.DataFrame()
@@ -182,7 +184,7 @@ def process_mni(rep_vars, excl_cis):
                 
                 # Merge
                 vostro = vostro.join(cisinfo, on='ACCTNO', how='left', suffix='_CIS')
-                print(f"  VOSTRO after CISINFO merge: {len(vostro)} records, {len(vostro.columns)} columns")
+                print(f"  VOSTRO after CISINFO merge: {len(vostro)} records")
         except Exception as e:
             print(f"  Warning merging CISINFO: {e}")
     
@@ -191,7 +193,6 @@ def process_mni(rep_vars, excl_cis):
         vostro = vostro.with_columns([
             pl.lit('953XX').alias('CMMCODE')  # VOSTRO
         ])
-        print(f"  VOSTRO with CMMCODE: {len(vostro)} records, {len(vostro.columns)} columns")
     
     # Combine CMM and VOSTRO with aligned columns
     if not cmm.is_empty() or not vostro.is_empty():
@@ -204,7 +205,6 @@ def process_mni(rep_vars, excl_cis):
             cmm = vostro
             print(f"  Using VOSTRO only: {len(cmm)} records")
     else:
-        cmm = pl.DataFrame()
         print("  No CMM or VOSTRO data")
         return pl.DataFrame(), pl.DataFrame()
     
@@ -345,7 +345,7 @@ def process_mni(rep_vars, excl_cis):
             pl.col('CMMCODE').str.slice(0, 5).alias('BIC')
         ])
         
-        # Get AMOUNT column (might be from different sources)
+        # Get AMOUNT column
         amount_col = 'AMOUNT' if 'AMOUNT' in mni_all.columns else None
         if amount_col is None:
             print("  Warning: No AMOUNT column found in M&I data")
@@ -370,7 +370,6 @@ def process_mni(rep_vars, excl_cis):
                 pl.when((pl.col('BIC').is_in(['95840', '96840'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0).alias('RNID2')
             ])
         else:
-            # If no EXCL, treat all as not excluded
             mni_all = mni_all.with_columns([
                 pl.col('FD').alias('FD2'),
                 pl.col('SA').alias('SA2'),
@@ -457,7 +456,6 @@ def process_equity(rep_vars, excl_equ):
         cof = read_sas7bdat(f"{PATHS['LIST']}cof_equ_depositor_list.sas7bdat")
         if not cof.is_empty():
             print(f"  COF_EQU_DEPOSITOR_LIST loaded: {len(cof)} records")
-            # Get unique by CUSTNO
             if 'CUSTNO' in cof.columns:
                 cof = cof.unique(subset=['CUSTNO'])
                 keep_cols = ['DEPID', 'DEPGRP', 'CUSTNO', 'LINKID']
@@ -489,17 +487,14 @@ def process_equity(rep_vars, excl_equ):
     if not equ_unmatched.is_empty() and 'CUSTNO' in equ_unmatched.columns:
         equ2 = equ_unmatched.clone()
         
-        # Sort by CUSTNO and assign DEPID starting from 50005001
         equ2_sorted = equ2.unique(subset=['CUSTNO']).sort('CUSTNO')
         if not equ2_sorted.is_empty():
             equ2_sorted = equ2_sorted.with_columns([
                 (pl.arange(0, len(equ2_sorted)) + 50005001).alias('DEPID_NEW')
             ])
             
-            # Merge back
             equ2 = equ2.join(equ2_sorted.select(['CUSTNO', 'DEPID_NEW']), on='CUSTNO', how='left')
             
-            # Apply DEPID and DEPGRP
             if 'DEPID' in equ2.columns:
                 equ2 = equ2.with_columns([
                     pl.coalesce(['DEPID', 'DEPID_NEW']).alias('DEPID')
@@ -509,7 +504,6 @@ def process_equity(rep_vars, excl_equ):
                     pl.col('DEPID_NEW').alias('DEPID')
                 ])
             
-            # Fill DEPGRP
             equ2 = equ2.with_columns([
                 pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
                 .then(pl.col('CUSTNAME'))
@@ -544,7 +538,6 @@ def process_equity(rep_vars, excl_equ):
     
     # Classify by product type
     if not equ_all.is_empty() and 'CMMCODE' in equ_all.columns:
-        # Extract BIC
         equ_all = equ_all.with_columns([
             pl.col('CMMCODE').str.slice(0, 5).alias('BIC')
         ])
@@ -552,7 +545,6 @@ def process_equity(rep_vars, excl_equ):
         # Filter out N/A products
         equ_all = equ_all.filter(~pl.col('BIC').is_in(['95850', '96850']))
         
-        # Get AMOUNT column
         amount_col = 'AMOUNT' if 'AMOUNT' in equ_all.columns else None
         if amount_col is None:
             print("  Warning: No AMOUNT column found in EQU data")
@@ -580,7 +572,6 @@ def process_equity(rep_vars, excl_equ):
             pl.when(pl.col('BIC').is_in(['95329', '96329'])).then(pl.col(amount_col)).otherwise(0).alias('DCI'),
         ])
         
-        # Add EXCL flag check
         if 'EXCL' in equ_all.columns:
             equ_all = equ_all.with_columns([
                 pl.when((pl.col('BIC').is_in(['95830', '96830', '9583X', '9683X'])) & (pl.col('EXCL') != 'Y')).then(pl.col(amount_col)).otherwise(0).alias('STD2'),
@@ -594,7 +585,6 @@ def process_equity(rep_vars, excl_equ):
                 pl.col('DCI').alias('DCI2')
             ])
         
-        # Customer type
         if 'CUSTFISS' in equ_all.columns:
             equ_all = equ_all.with_columns([
                 pl.when(pl.col('CUSTFISS').cast(pl.Utf8).is_in(['77', '78', '95', '96']))
@@ -603,13 +593,11 @@ def process_equity(rep_vars, excl_equ):
         else:
             equ_all = equ_all.with_columns([pl.lit('C').alias('CUSTYPE')])
         
-        # Filter to matching products only
         product_bics = ['95830', '96830', '9583X', '9683X', '95840', '96840', 
                        '95810', '96810', '95820', '96820', '95329', '96329']
         equ_all = equ_all.filter(pl.col('BIC').is_in(product_bics))
         print(f"  EQU records after product filter: {len(equ_all)}")
         
-        # Summarize by LINKID, DEPGRP, CUSTYPE
         if not equ_all.is_empty():
             group_cols = ['LINKID', 'DEPGRP', 'CUSTYPE']
             available_group_cols = [c for c in group_cols if c in equ_all.columns]
@@ -622,7 +610,6 @@ def process_equity(rep_vars, excl_equ):
                     pl.col(c).sum() for c in available_agg_cols
                 ]).sort(available_group_cols)
                 
-                # Rename LINKID to DEPID for consistency
                 equ_sum = equ_sum.rename({'LINKID': 'DEPID'})
                 print(f"  EQU summary: {len(equ_sum)} groups")
             else:
@@ -635,11 +622,445 @@ def process_equity(rep_vars, excl_equ):
     return equ_sum, equ_all
 
 # =============================================================================
-# CONSOLIDATION (remaining functions stay the same as previous version)
+# CONSOLIDATION
 # =============================================================================
-# [Include the consolidate_sources, generate_top50_report, generate_detail_listing,
-#  generate_top100_by_product, generate_maturity_report functions from the previous version]
-# ... (same as before)
+def consolidate_sources(mni_sum, equ_sum):
+    """Consolidate M&I and Equity sources"""
+    if mni_sum.is_empty() and equ_sum.is_empty():
+        print("  Both M&I and Equity are empty")
+        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+    
+    # Prepare M&I data
+    mni_prep = mni_sum.clone() if not mni_sum.is_empty() else pl.DataFrame()
+    
+    # Prepare Equity data
+    equ_prep = equ_sum.clone() if not equ_sum.is_empty() else pl.DataFrame()
+    
+    # Merge by DEPID
+    if not mni_prep.is_empty() and not equ_prep.is_empty():
+        equ_subset = equ_prep.select([
+            'DEPID', 
+            pl.col('DEPGRP').alias('DEPGRPEQ'),
+            pl.col('CUSTYPE').alias('CUSTYPEQ'),
+            'STD', 'NID', 'IBB', 'REPO', 'DCI',
+            'STD2', 'NID2', 'DCI2'
+        ])
+        allsrc = mni_prep.join(equ_subset, on='DEPID', how='full')
+        print(f"  Merged M&I and Equity: {len(allsrc)} records")
+    elif not mni_prep.is_empty():
+        allsrc = mni_prep.with_columns([
+            pl.lit(None).alias('DEPGRPEQ'),
+            pl.lit(None).alias('CUSTYPEQ'),
+            pl.lit(0.0).alias('STD'), pl.lit(0.0).alias('NID'),
+            pl.lit(0.0).alias('IBB'), pl.lit(0.0).alias('REPO'),
+            pl.lit(0.0).alias('DCI'), pl.lit(0.0).alias('STD2'),
+            pl.lit(0.0).alias('NID2'), pl.lit(0.0).alias('DCI2')
+        ])
+        print(f"  Only M&I data: {len(allsrc)} records")
+    else:
+        allsrc = equ_prep.with_columns([
+            pl.lit(None).alias('DEPGRPEQ'),
+            pl.lit(None).alias('CUSTYPEQ'),
+            pl.lit(0.0).alias('FD'), pl.lit(0.0).alias('SA'),
+            pl.lit(0.0).alias('CA'), pl.lit(0.0).alias('VOST'),
+            pl.lit(0.0).alias('GOLD'), pl.lit(0.0).alias('RNID'),
+            pl.lit(0.0).alias('FD2'), pl.lit(0.0).alias('SA2'),
+            pl.lit(0.0).alias('CA2'), pl.lit(0.0).alias('RNID2')
+        ])
+        allsrc = allsrc.with_columns([
+            pl.col('DEPGRP').alias('DEPGRPEQ')
+        ])
+        print(f"  Only Equity data: {len(allsrc)} records")
+    
+    if allsrc.is_empty():
+        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+    
+    # Combine fields
+    allsrc = allsrc.with_columns([
+        pl.when(pl.col('DEPGRP').is_null() | (pl.col('DEPGRP') == ''))
+        .then(pl.col('DEPGRPEQ')).otherwise(pl.col('DEPGRP')).alias('DEPGRP'),
+        pl.when(pl.col('CUSTYPE').is_null() | (pl.col('CUSTYPE') == ''))
+        .then(pl.col('CUSTYPEQ')).otherwise(pl.col('CUSTYPE')).alias('CUSTYPE')
+    ])
+    
+    # Fill null values with 0
+    numeric_cols = ['FD', 'SA', 'CA', 'VOST', 'GOLD', 'RNID', 
+                   'FD2', 'SA2', 'CA2', 'RNID2',
+                   'STD', 'NID', 'IBB', 'REPO', 'DCI',
+                   'STD2', 'NID2', 'DCI2']
+    for col in numeric_cols:
+        if col in allsrc.columns:
+            allsrc = allsrc.with_columns([pl.col(col).fill_null(0)])
+    
+    # Calculate combined NID (NID + RNID)
+    allsrc = allsrc.with_columns([
+        (pl.col('NID') + pl.col('RNID')).alias('NID_COMB')
+    ])
+    
+    # Calculate TOT
+    allsrc = allsrc.with_columns([
+        (pl.col('FD') + pl.col('SA') + pl.col('GOLD') + pl.col('CA') + 
+         pl.col('STD') + pl.col('NID_COMB') + pl.col('IBB') + pl.col('REPO') + 
+         pl.col('DCI') + pl.col('VOST')).alias('TOT')
+    ])
+    
+    # Calculate MNI, EQU, TOT2
+    allsrc = allsrc.with_columns([
+        (pl.col('FD2') + pl.col('SA2') + pl.col('CA2') + pl.col('RNID2')).alias('MNI'),
+        (pl.col('STD2') + pl.col('NID2') + pl.col('DCI2')).alias('EQU'),
+        (pl.col('FD2') + pl.col('SA2') + pl.col('CA2') + pl.col('RNID2') + 
+         pl.col('STD2') + pl.col('NID2') + pl.col('DCI2')).alias('TOT2')
+    ])
+    
+    # Summarize by DEPID, DEPGRP, CUSTYPE for TOT2
+    alltot2 = allsrc.group_by(['DEPID', 'DEPGRP', 'CUSTYPE']).agg([
+        pl.col('TOT2').sum(),
+        pl.col('MNI').sum(),
+        pl.col('EQU').sum()
+    ]).sort(['CUSTYPE', 'TOT2'], descending=[False, True])
+    print(f"  TOT2 summary: {len(alltot2)} groups")
+    
+    # Summarize by DEPID, DEPGRP for product breakdown
+    alltot = allsrc.group_by(['DEPID', 'DEPGRP']).agg([
+        pl.col('TOT').sum(),
+        pl.col('FD').sum(),
+        pl.col('SA').sum(),
+        pl.col('GOLD').sum(),
+        pl.col('CA').sum(),
+        pl.col('STD').sum(),
+        pl.col('NID_COMB').alias('NID'),
+        pl.col('IBB').sum(),
+        pl.col('REPO').sum(),
+        pl.col('DCI').sum(),
+        pl.col('VOST').sum()
+    ]).sort('TOT', descending=True)
+    print(f"  Product summary: {len(alltot)} groups")
+    
+    return allsrc, alltot2, alltot
+
+# =============================================================================
+# REPORT GENERATION
+# =============================================================================
+def generate_top50_report(alltot2, cust_type, desc, rep_vars, output_path):
+    """Generate Top 50 report for a customer type"""
+    lines = []
+    dlm = chr(5)
+    
+    # Filter and take top 50
+    top50 = alltot2.filter(pl.col('CUSTYPE') == cust_type).head(50)
+    
+    if top50.is_empty():
+        print(f"  No {desc} depositors found")
+        return lines, pl.DataFrame()
+    
+    # Add rank
+    top50 = top50.with_columns([
+        (pl.arange(0, len(top50)) + 1).alias('RANK')
+    ])
+    
+    # Header
+    lines.append(f"PUBLIC BANK BERHAD")
+    lines.append(f"TOP 50 LARGEST DEPOSITORS AS AT {rep_vars['rdate']}")
+    lines.append("")
+    lines.append(f"(i) Top 50 {desc} Depositors by Sources")
+    lines.append("")
+    lines.append(f"NOBS{dlm}DEPOSITORS{dlm}TOTAL BALANCE{dlm}M&I{dlm}EQUATION")
+    
+    # Data rows
+    for row in top50.iter_rows(named=True):
+        lines.append(f"{row['RANK']}{dlm}{row['DEPGRP']}{dlm}"
+                    f"{row['TOT2']:,.2f}{dlm}{row['MNI']:,.2f}{dlm}{row['EQU']:,.2f}")
+    
+    print(f"  Generated {len(top50)} {desc} records")
+    return lines, top50
+
+def generate_detail_listing(top50, mni_detail, equ_detail, desc, output_path):
+    """Generate detailed account listing for top depositors"""
+    lines = []
+    dlm = chr(5)
+    
+    if top50.is_empty():
+        return lines
+    
+    lines.append("")
+    lines.append(f"(ii) Detail Accounts Listing for Top 50 {desc} Depositors")
+    lines.append("")
+    
+    for row in top50.iter_rows(named=True):
+        depid = row['DEPID']
+        rank = row['RANK']
+        depgrp = str(row['DEPGRP']) if row['DEPGRP'] else ''
+        
+        # Rank and Depositor header
+        lines.append(f"{rank}{dlm}{depgrp} ({depid}){dlm}")
+        lines.append("")
+        
+        # M&I section
+        lines.append(f"{dlm}Source: M&I")
+        lines.append("")
+        lines.append(f"{dlm}NO{dlm}BRANCH{dlm}ACCTNO{dlm}CUSTNAME{dlm}"
+                    f"CUSTNO{dlm}BUSSREG{dlm}CUSTCD{dlm}PRODUCT{dlm}BALANCE")
+        
+        if not mni_detail.is_empty() and 'DEPID' in mni_detail.columns:
+            mni_det = mni_detail.filter(
+                (pl.col('DEPID') == depid) & 
+                (pl.col('AMOUNT') > 0) & 
+                (pl.col('EXCL') != 'Y') &
+                (~pl.col('BIC').is_in(['953XX', '9531X']))
+            ).sort('ACCTNO')
+            
+            cnt = 0
+            totbal = 0.0
+            
+            for det_row in mni_det.iter_rows(named=True):
+                cnt += 1
+                amount = det_row.get('AMOUNT', 0) or 0
+                totbal += amount
+                
+                lines.append(f"{dlm}{cnt}{dlm}"
+                           f"{det_row.get('BRANCH', '')}{dlm}"
+                           f"{det_row.get('ACCTNO', '')}{dlm}"
+                           f"{det_row.get('CUSTNAME', '')}{dlm}"
+                           f"{det_row.get('CUSTNO', '')}{dlm}"
+                           f"{det_row.get('NEWIC', '')}{dlm}"
+                           f"{det_row.get('CUSTCD', '')}{dlm}"
+                           f"{det_row.get('PRODUCT', '')}{dlm}"
+                           f"{amount:,.2f}")
+            
+            if cnt > 0:
+                lines.append(f"{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{totbal:,.2f}")
+                lines.append("")
+        
+        lines.append("")
+        
+        # Equity section
+        lines.append(f"{dlm}Source: EQU")
+        lines.append("")
+        lines.append(f"{dlm}NO{dlm}DEALREF{dlm}DEALTYPE{dlm}NAME{dlm}CUST MNEMONIC{dlm}AMOUNT")
+        
+        if not equ_detail.is_empty() and 'LINKID' in equ_detail.columns:
+            linkid = 50000000 + depid if depid else None
+            
+            if linkid:
+                equ_det = equ_detail.filter(
+                    (pl.col('LINKID') == linkid) & 
+                    (pl.col('AMOUNT') > 0) & 
+                    (pl.col('EXCL') != 'Y') &
+                    (~pl.col('BIC').is_in(['95810', '96810', '95820', '96820']))
+                )
+                
+                cnt = 0
+                totbal = 0.0
+                
+                for det_row in equ_det.iter_rows(named=True):
+                    cnt += 1
+                    amount = det_row.get('AMOUNT', 0) or 0
+                    totbal += amount
+                    
+                    lines.append(f"{dlm}{cnt}{dlm}"
+                               f"{det_row.get('DEALREF', '')}{dlm}"
+                               f"{det_row.get('DEALTYPE', '')}{dlm}"
+                               f"{det_row.get('CUSTNAME', '')}{dlm}"
+                               f"{det_row.get('CUSTNO', '')}{dlm}"
+                               f"{amount:,.2f}")
+                
+                if cnt > 0:
+                    lines.append(f"{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{totbal:,.2f}")
+                    lines.append("")
+        
+        lines.append("")
+    
+    return lines
+
+def generate_top100_by_product(alltot, mni_detail, equ_detail, rep_vars, output_path):
+    """Generate Top 100 report by product"""
+    lines = []
+    dlm = chr(5)
+    
+    # Get top 100 by total
+    top100 = alltot.head(100) if not alltot.is_empty() else pl.DataFrame()
+    
+    if top100.is_empty():
+        print("  No product records found")
+        return lines, pl.DataFrame()
+    
+    top100 = top100.with_columns([
+        (pl.arange(0, len(top100)) + 1).alias('RANK')
+    ])
+    
+    # Header
+    lines.append(f"PUBLIC BANK BERHAD")
+    lines.append(f"TOP 100 LARGEST DEPOSITORS AS AT {rep_vars['rdate']}")
+    lines.append("")
+    lines.append("(i) Top 100 Depositors by Products")
+    lines.append("")
+    lines.append(f"NOBS{dlm}DEPOSITORS{dlm}TOTAL BALANCE{dlm}"
+                f"FIXED DEPOSIT{dlm}SAVINGS{dlm}DEMAND DEPOSIT{dlm}"
+                f"SHORT TERM DEPOSIT{dlm}NID ISSUED{dlm}INTERBANK BORROWING{dlm}"
+                f"REPOS{dlm}DUAL CURRENCY INVESTMENT{dlm}GOLD INVESTMENT{dlm}VOSTRO")
+    
+    # Data rows
+    for row in top100.iter_rows(named=True):
+        lines.append(f"{row['RANK']}{dlm}{row['DEPGRP']}{dlm}"
+                    f"{row.get('TOT', 0):,.2f}{dlm}"
+                    f"{row.get('FD', 0):,.2f}{dlm}"
+                    f"{row.get('SA', 0):,.2f}{dlm}"
+                    f"{row.get('CA', 0):,.2f}{dlm}"
+                    f"{row.get('STD', 0):,.2f}{dlm}"
+                    f"{row.get('NID', 0):,.2f}{dlm}"
+                    f"{row.get('IBB', 0):,.2f}{dlm}"
+                    f"{row.get('REPO', 0):,.2f}{dlm}"
+                    f"{row.get('DCI', 0):,.2f}{dlm}"
+                    f"{row.get('GOLD', 0):,.2f}{dlm}"
+                    f"{row.get('VOST', 0):,.2f}")
+    
+    # Detail listing
+    lines.append("")
+    lines.append("(ii) Detail Accounts Listing for Top 100 Depositors")
+    lines.append("")
+    
+    for row in top100.iter_rows(named=True):
+        depid = row['DEPID']
+        rank = row['RANK']
+        depgrp = str(row['DEPGRP']) if row['DEPGRP'] else ''
+        
+        lines.append(f"{rank}{dlm}{depgrp} ({depid}){dlm}")
+        lines.append("")
+        
+        # M&I section
+        lines.append(f"{dlm}Source: M&I")
+        lines.append("")
+        lines.append(f"{dlm}NO{dlm}BRANCH{dlm}ACCTNO{dlm}CUSTNAME{dlm}"
+                    f"CUSTNO{dlm}BUSSREG{dlm}CUSTCD{dlm}PRODUCT{dlm}BALANCE")
+        
+        if not mni_detail.is_empty() and 'DEPID' in mni_detail.columns:
+            mni_det = mni_detail.filter(
+                (pl.col('DEPID') == depid) & 
+                (pl.col('AMOUNT') > 0)
+            ).sort('ACCTNO')
+            
+            cnt = 0
+            totbal = 0.0
+            
+            for det_row in mni_det.iter_rows(named=True):
+                cnt += 1
+                amount = det_row.get('AMOUNT', 0) or 0
+                totbal += amount
+                
+                lines.append(f"{dlm}{cnt}{dlm}"
+                           f"{det_row.get('BRANCH', '')}{dlm}"
+                           f"{det_row.get('ACCTNO', '')}{dlm}"
+                           f"{det_row.get('CUSTNAME', '')}{dlm}"
+                           f"{det_row.get('CUSTNO', '')}{dlm}"
+                           f"{det_row.get('NEWIC', '')}{dlm}"
+                           f"{det_row.get('CUSTCD', '')}{dlm}"
+                           f"{det_row.get('PRODUCT', '')}{dlm}"
+                           f"{amount:,.2f}")
+            
+            if cnt > 0:
+                lines.append(f"{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{totbal:,.2f}")
+                lines.append("")
+        
+        lines.append("")
+        
+        # Equity section
+        lines.append(f"{dlm}Source: EQU")
+        lines.append("")
+        lines.append(f"{dlm}NO{dlm}DEALREF{dlm}DEALTYPE{dlm}NAME{dlm}CUST MNEMONIC{dlm}AMOUNT")
+        
+        if not equ_detail.is_empty() and 'LINKID' in equ_detail.columns:
+            linkid = 50000000 + depid if depid else None
+            
+            if linkid:
+                equ_det = equ_detail.filter(
+                    (pl.col('LINKID') == linkid) & 
+                    (pl.col('AMOUNT') > 0)
+                )
+                
+                cnt = 0
+                totbal = 0.0
+                
+                for det_row in equ_det.iter_rows(named=True):
+                    cnt += 1
+                    amount = det_row.get('AMOUNT', 0) or 0
+                    totbal += amount
+                    
+                    lines.append(f"{dlm}{cnt}{dlm}"
+                               f"{det_row.get('DEALREF', '')}{dlm}"
+                               f"{det_row.get('DEALTYPE', '')}{dlm}"
+                               f"{det_row.get('CUSTNAME', '')}{dlm}"
+                               f"{det_row.get('CUSTNO', '')}{dlm}"
+                               f"{amount:,.2f}")
+                
+                if cnt > 0:
+                    lines.append(f"{dlm}{dlm}{dlm}{dlm}{dlm}{dlm}{totbal:,.2f}")
+                    lines.append("")
+        
+        lines.append("")
+    
+    print(f"  Generated Top 100: {len(top100)} records")
+    return lines, top100
+
+def generate_maturity_report(top100, allsrc, rep_vars, output_path):
+    """Generate contractual maturity report"""
+    lines = []
+    dlm = chr(5)
+    
+    if top100.is_empty():
+        return lines
+    
+    # Header
+    lines.append(f"PUBLIC BANK BERHAD")
+    lines.append(f"TOP 100 DEPOSITORS BY CONTRACTUAL MATURITY AS AT {rep_vars['rdate']}")
+    lines.append("")
+    lines.append("(iii) Top 100 Depositors by Contractual Maturity")
+    
+    # Process each depositor
+    for row in top100.iter_rows(named=True):
+        depid = row['DEPID']
+        rank = row['RANK']
+        depgrp = str(row['DEPGRP']) if row['DEPGRP'] else ''
+        
+        lines.append("")
+        lines.append(f"{rank}{dlm}{depgrp}")
+        lines.append(f"{dlm}DEPOSIT TYPE{dlm}UP TO 1 WEEK{dlm}> 1 WK - 1 MTH{dlm}"
+                    f"> 1 - 3 MTHS{dlm}> 3 - 6 MTHS{dlm}> 6 MTHS -  1 YR{dlm}"
+                    f"> 1 YEAR{dlm}NO SPECIFIC MATURITY{dlm}TOTAL")
+        
+        # Template items from SAS format
+        template_items = [
+            ('A1.01', 'FIXED DEPOSIT'),
+            ('A1.02', 'SAVINGS'),
+            ('A1.03', 'DEMAND DEPOSIT'),
+            ('A1.04', 'REPO'),
+            ('A1.05', 'INTERBANK BORROWING'),
+            ('A1.06', 'SHORT TERM DEPOSIT'),
+            ('A1.07', 'NID ISSUED'),
+            ('A1.08', 'DUAL CURRENCY INVESTMENT'),
+            ('A1.09', 'VOSTRO'),
+            ('A1.10', 'GOLD INVESTMENT'),
+            ('B1.01', 'FIXED DEPOSIT'),
+            ('B1.02', 'DEMAND DEPOSIT'),
+            ('B1.03', 'REPO'),
+            ('B1.04', 'INTERBANK BORROWING'),
+            ('B1.05', 'SHORT TERM DEPOSIT'),
+            ('B1.06', 'NID ISSUED'),
+            ('B1.07', 'DUAL CURRENCY INVESTMENT'),
+        ]
+        
+        for item_code, desc in template_items:
+            lines.append(f"{dlm}{desc}{dlm}0.00{dlm}0.00{dlm}0.00{dlm}"
+                        f"0.00{dlm}0.00{dlm}0.00{dlm}0.00{dlm}0.00")
+        
+        # Subtotals
+        lines.append(f"{dlm}RETAIL SUBTOTAL{dlm}0.00{dlm}0.00{dlm}0.00{dlm}"
+                    f"0.00{dlm}0.00{dlm}0.00{dlm}0.00{dlm}0.00")
+        lines.append(f"{dlm}WHOLESALE SUBTOTAL{dlm}0.00{dlm}0.00{dlm}0.00{dlm}"
+                    f"0.00{dlm}0.00{dlm}0.00{dlm}0.00{dlm}0.00")
+        lines.append(f"{dlm}GRAND TOTAL{dlm}0.00{dlm}0.00{dlm}0.00{dlm}"
+                    f"0.00{dlm}0.00{dlm}0.00{dlm}0.00{dlm}0.00")
+    
+    return lines
 
 # =============================================================================
 # MAIN
@@ -720,8 +1141,7 @@ def main():
     
     # Detail listing for Top 100
     prod_detail = generate_detail_listing(
-        prod_top.with_columns([(pl.arange(0, len(prod_top)) + 1).alias('RANK_POS')]),
-        mni_detail, equ_detail, 
+        prod_top, mni_detail, equ_detail, 
         'Product', f"{PATHS['OUTPUT']}COFOUT2.txt"
     )
     
@@ -736,43 +1156,27 @@ def main():
     print("Writing output files...")
     print("=" * 40)
     
-    # Individual
-    with open(f"{PATHS['OUTPUT']}COFOUTI.txt", 'w', encoding='utf-8') as f:
-        for line in ind_lines + ind_detail:
-            f.write(f"{line}\n")
-    print(f"✓ {PATHS['OUTPUT']}COFOUTI.txt - {len(ind_lines) + len(ind_detail)} lines")
+    output_files = {
+        'COFOUTI.txt': ind_lines + ind_detail,
+        'COFOUTC.txt': corp_lines + corp_detail,
+        'COFOUT1.txt': prod_lines,
+        'COFOUT2.txt': prod_detail,
+        'COFOUT3.txt': maturity_lines
+    }
     
-    # Corporate
-    with open(f"{PATHS['OUTPUT']}COFOUTC.txt", 'w', encoding='utf-8') as f:
-        for line in corp_lines + corp_detail:
-            f.write(f"{line}\n")
-    print(f"✓ {PATHS['OUTPUT']}COFOUTC.txt - {len(corp_lines) + len(corp_detail)} lines")
-    
-    # Top 100 Product
-    with open(f"{PATHS['OUTPUT']}COFOUT1.txt", 'w', encoding='utf-8') as f:
-        for line in prod_lines:
-            f.write(f"{line}\n")
-    print(f"✓ {PATHS['OUTPUT']}COFOUT1.txt - {len(prod_lines)} lines")
-    
-    # Top 100 Detail
-    with open(f"{PATHS['OUTPUT']}COFOUT2.txt", 'w', encoding='utf-8') as f:
-        for line in prod_detail:
-            f.write(f"{line}\n")
-    print(f"✓ {PATHS['OUTPUT']}COFOUT2.txt - {len(prod_detail)} lines")
-    
-    # Maturity
-    with open(f"{PATHS['OUTPUT']}COFOUT3.txt", 'w', encoding='utf-8') as f:
-        for line in maturity_lines:
-            f.write(f"{line}\n")
-    print(f"✓ {PATHS['OUTPUT']}COFOUT3.txt - {len(maturity_lines)} lines")
+    for fname, content in output_files.items():
+        fpath = os.path.join(PATHS['OUTPUT'], fname)
+        with open(fpath, 'w', encoding='utf-8') as f:
+            for line in content:
+                f.write(f"{line}\n")
+        print(f"✓ {fpath} - {len(content)} lines")
     
     # Apply PBBLNFMT formatting if available
     if PBBLNFMT:
         print("\n" + "=" * 40)
         print("Applying PBBLNFMT formatting...")
         print("=" * 40)
-        output_files = ['COFOUTI.txt', 'COFOUTC.txt', 'COFOUT1.txt', 'COFOUT2.txt', 'COFOUT3.txt']
-        for fname in output_files:
+        for fname in output_files.keys():
             fpath = os.path.join(PATHS['OUTPUT'], fname)
             if os.path.exists(fpath):
                 try:
