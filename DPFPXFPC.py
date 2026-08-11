@@ -1,42 +1,84 @@
-PUBLIC BANK BERHAD
-TOP 100 LARGEST DEPOSITORS AS AT 31/07/2026
+✓ PBBLNFMT module loaded successfully
+============================================================
+EIBMTLCR - Top Depositors Report
+============================================================
 
-(i) Top 100 Depositors by Products
+Report Date: 31/07/2026
+Report Month: 07
 
-NOBSDEPOSITORSTOTAL BALANCEFIXED DEPOSITSAVINGSDEMAND DEPOSITSHORT TERM DEPOSITNID ISSUEDINTERBANK BORROWINGREPOSDUAL CURRENCY INVESTMENTGOLD INVESTMENTVOSTRO
-1PETRONAS GROUP30,881,463,862.8225,575,331,637.830.0038.545,306,132,186.450.000.000.000.000.000.00
-2HSBC GROUP8,412,658,899.740.000.000.007,506,133,786.90400,000,000.000.00506,525,112.840.000.000.00
-3DIONA TEH LI SHIAN7,951,997,011.66211,506,564.080.004,856,947.587,735,633,500.000.000.000.000.000.000.00
-4PB GROUP7,640,089,783.66552,752,554.6823,209.41422,797,602.081,338,669,000.000.005,324,058,000.000.000.001,742,125.8747,291.62
-5AMANAHRAYA GROUP5,837,975,608.610.000.0082,450,415.715,755,525,192.900.000.000.000.000.000.00
-6CITI GROUP4,552,890,824.2516,255,166.480.002,904,280.481,942,896,500.380.000.002,590,834,876.910.000.000.00
-7HONG LEONG GROUP4,195,920,555.25261,549,370.660.0017,136,060.383,917,235,124.210.000.000.000.000.000.00
-8KWSP4,066,267,926.48680,748,648.660.000.003,385,519,277.820.000.000.000.000.000.00
-9DEUTSCHE GROUP3,206,835,245.150.000.000.003,206,835,245.150.000.000.000.000.000.00
-10SURUHANJAYA KOMUNIKASI & MULTIMEDIA2,327,189,025.662,326,963,285.160.00225,740.500.000.000.000.000.000.000.00
-11YAO SU JUNG1,906,727,693.6810,190,103.233,867,292.19242,961.311,892,374,100.000.000.000.000.0053,236.950.00
-12AIA GROUP1,506,324,315.960.000.0031,017,315.961,475,307,000.000.000.000.000.000.000.00
-13TEH LEE PANG WILLIAM1,427,165,795.28106,751,670.830.0072,040,258.901,248,373,865.550.000.000.000.000.000.00
-14ALLIANZ GROUP1,215,482,819.5420,406,080.500.0019,433.001,195,057,306.040.000.000.000.000.000.00
-15KOLEJ UNIVERSITI TUNKU ABDUL RAHMAN1,122,310,029.611,024,197,526.220.0017,612,503.3980,500,000.000.000.000.000.000.000.00
-16BANK NEGARA MALAYSIA1,072,995,703.640.000.0073,069.780.000.000.001,072,922,633.860.000.000.00
-17LYNAS MALAYSIA SDN BHD1,004,097,192.09965,052,000.000.0039,045,192.090.000.000.000.000.000.000.00
-18TEH LI MING LILLIAN900,046,342.94390,641,713.31228,751.4326,930,871.35482,245,006.850.000.000.000.000.000.00
-19JPMORGAN CHASE BANK BHD871,736,505.910.000.000.000.000.000.00871,736,505.910.000.000.00
-20CIMB GROUP856,523,203.210.000.002,018,427.25854,504,775.960.000.000.000.000.000.00
+Loading exclusion lists...
+  Loaded CIS exclusions: 99 records
+  Loaded EQU exclusions: 62 records
+Exclusions: CIS=99, EQU=62
 
-this is the python output, can you remove the symbol so it is gonna look like below production output format:
+========================================
+Processing M&I...
+========================================
+  Reading CMM: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTLCR/cmm07.sas7bdat
+  CMM loaded: 8968532 records, 26 columns
+  Reading VOSTRO: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTLCR/vostro.sas7bdat
+  VOSTRO loaded: 26 records, 6 columns
+  CISINFO loaded: 9771249 records
+  VOSTRO after CISINFO merge: 26 records
+  Combined CMM+VOSTRO: 8968558 records, 26 columns
+  COF_MNI_DEPOSITOR_LIST loaded: 2558 records
+  COF_IDNO for NEWIC merge: 1236 records
+  After NEWIC merge: 8968558 records
+  First match: 6477 matched, 8962081 unmatched
+  Second match: 916 matched, 8961165 unmatched
+  Assigned new DEPIDs: 8961165 records
+  Total M&I records: 8968558
+  M&I records after product filter: 8968558
+  M&I summary: 4341087 groups
+M&I Summary: 4341087 groups
+M&I Detail: 8968558 records
 
-PUBLIC BANK BERHAD                                                      
-TOP 100 LARGEST DEPOSITORS AS AT 31/07/2026                             
-                                                                        
-(i) Top 100 Depositors by Products                                      
-                                                                        
-,NOBS,DEPOSITORS,TOTAL BALANCE,FIXED DEPOSIT,SAVINGS,DEMAND DEPOSIT,SHOR
-,1,PETRONAS GROUP,"30,881,463,862.82","25,575,331,637.83",,38.54,"5,306,
-,2,HSBC GROUP,"8,412,658,899.74",,,,"7,506,133,786.90","400,000,000.00",
-,3,DIONA TEH LI SHIAN,"7,951,997,011.66","211,506,564.08",,"4,856,947.58
-,4,PB GROUP,"7,640,089,783.66","552,752,554.68","23,209.41","422,797,602
-,5,AMANAHRAYA GROUP,"5,837,975,608.61",,,"82,450,415.71","5,755,525,192.
-,6,CITI GROUP,"4,552,890,824.25","16,255,166.48",,"2,904,280.48","1,942,
-,7,HONG LEONG GROUP,"4,201,580,555.25","261,549,370.66",,"17,136,060.38"
+========================================
+Processing Equity...
+========================================
+  Reading EQU: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTLCR/equ07.sas7bdat
+  EQU loaded: 6455 records, 21 columns
+  EQU after CUSTNO filter: 6283 records
+  COF_EQU_DEPOSITOR_LIST loaded: 2750 records
+  COF_EQU for merge: 2749 records
+  EQU match: 4869 matched, 1414 unmatched
+  Assigned new EQU DEPIDs: 1414 records
+  Total EQU records: 6283
+  EQU records after product filter: 4723
+  EQU summary: 655 groups
+Equity Summary: 655 groups
+Equity Detail: 4723 records
+
+========================================
+Consolidating...
+========================================
+  TOT2 summary: 4341678 groups
+  Product summary: 4341654 groups
+Consolidated Detail: 4341686 records
+TOT2 Summary: 4341678 groups
+Product Summary: 4341654 groups
+
+========================================
+Generating reports...
+========================================
+  Generated 50 Individual records
+  Generated 50 Corporate records
+  Generated Top 100: 100 records
+
+========================================
+Writing output files...
+========================================
+✓ /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTLCR/COFOUTI.txt - 3809 lines
+✓ /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTLCR/COFOUTC.txt - 5304 lines
+✓ /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTLCR/COFOUT1.txt - 8181 lines
+✓ /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTLCR/COFOUT2.txt - 7349 lines
+✓ /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTLCR/COFOUT3.txt - 2304 lines
+
+========================================
+Applying PBBLNFMT formatting...
+========================================
+
+============================================================
+✓ EIBMTLCR Complete
+Output directory: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTLCR/
+============================================================
