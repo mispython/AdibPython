@@ -4,7 +4,6 @@ import pyarrow.csv as csv
 import polars as pl
 import datetime
 import duckdb
-import re
 
 # -----------------------------------------------------------
 # CONFIGURATION
@@ -106,7 +105,6 @@ def unpack_packed_decimal(byte_array, decimals=0):
     
     # Valid packed decimal signs
     if sign not in ('C', 'D', 'F', 'A', 'B', 'E') or not digits:
-        # Might not be packed decimal - try to interpret as plain bytes
         try:
             return int(byte_array.hex(), 16)
         except:
@@ -114,7 +112,7 @@ def unpack_packed_decimal(byte_array, decimals=0):
     
     try:
         value = int(digits)
-        if sign in ('D', 'B'):  # D and B are negative signs
+        if sign in ('D', 'B'):
             value = -value
         if decimals > 0:
             value = value / (10 ** decimals)
@@ -128,7 +126,7 @@ def clean_string(byte_array):
     if byte_array is None or len(byte_array) == 0:
         return ""
     
-    # Remove null bytes and control characters (except newlines which we'll handle)
+    # Remove null bytes and control characters
     cleaned = bytes(b for b in byte_array if b >= 32 or b in (10, 13))
     
     # Decode as ASCII
@@ -140,7 +138,7 @@ def clean_string(byte_array):
         except:
             return ""
     
-    # Replace \r\n with space
+    # Replace control characters with space
     text = text.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
     
     # Remove multiple spaces
@@ -183,20 +181,24 @@ print("=" * 60)
 print("STEP 3: Writing output files...")
 print("=" * 60)
 
-# Create ADDR.SAVINGS (main dataset)
+# Create ADDR.SAVINGS (main dataset) - equivalent to DATA ADDR.SAVINGS
 arrow_table = df.to_arrow()
+
+# Write ADDR.SAVINGS as Parquet
 pq.write_table(arrow_table, OUTPUT_PARQUET)
-print(f"✓ ADDR.SAVINGS Parquet: {OUTPUT_PARQUET}")
+print(f"✓ ADDR.SAVINGS (Parquet): {OUTPUT_PARQUET}")
 
+# Write ADDR.SAVINGS as CSV
 csv.write_csv(arrow_table, OUTPUT_CSV)
-print(f"✓ ADDR.SAVINGS CSV: {OUTPUT_CSV}")
+print(f"✓ ADDR.SAVINGS (CSV): {OUTPUT_CSV}")
 
-# Create ADDR.REPTDATE (equivalent to DATA ADDR.REPTDATE)
-reptdate_df = pl.DataFrame({"REPTDATE": [REPTDATE.isoformat()]})
-reptdate_table = reptdate_df.to_arrow()
+# Create ADDR.REPTDATE - equivalent to DATA ADDR.REPTDATE
+reptdate_table = pa.table({"REPTDATE": [REPTDATE.isoformat()]})
+
+# Write REPTDATE dataset
 pq.write_table(reptdate_table, REPTDATE_PARQUET)
-print(f"✓ ADDR.REPTDATE Parquet: {REPTDATE_PARQUET}")
-print(f"  REPTDATE = {REPTDATE}\n")
+print(f"✓ ADDR.REPTDATE (Parquet): {REPTDATE_PARQUET}")
+print(f"  REPTDATE value: {REPTDATE}\n")
 
 # -----------------------------------------------------------
 # STEP 4: Validation
@@ -206,16 +208,14 @@ print("STEP 4: Validation...")
 print("=" * 60)
 
 con = duckdb.connect(database=":memory:")
-con.register("savings", arrow_table)
 
+# Validate ADDR.SAVINGS
+con.register("savings", arrow_table)
 row_count = con.execute("SELECT COUNT(*) FROM savings").fetchone()[0]
-print(f"Total rows: {row_count:,}")
-print(f"REPTDATE: {REPTDATE}")
+print(f"ADDR.SAVINGS - Total rows: {row_count:,}")
 
 # Show clean samples
-print("\n" + "=" * 60)
-print("SAMPLE - Records with valid ACCTNO (> 0):")
-print("=" * 60)
+print("\nSample records with valid ACCTNO:")
 sample_df = con.execute("""
     SELECT 
         BANKNO, APPCODE, ACCTNO, BRANCH,
@@ -224,25 +224,25 @@ sample_df = con.execute("""
         OPENDATE, PRODUCT
     FROM savings 
     WHERE ACCTNO > 0
-    LIMIT 10
+    LIMIT 5
 """).fetch_df()
 print(sample_df)
 
 # Statistics
-print("\n" + "=" * 60)
-print("STATISTICS:")
-print("=" * 60)
+print("\nADDR.SAVINGS Statistics:")
 stats = con.execute("""
     SELECT 
         COUNT(*) as total_records,
         COUNT(CASE WHEN ACCTNO > 0 THEN 1 END) as valid_accounts,
         COUNT(CASE WHEN NAME != '' THEN 1 END) as with_names,
-        COUNT(DISTINCT ACCTNO) as unique_accounts,
-        AVG(CASE WHEN LEDGBAL > 0 THEN LEDGBAL END) as avg_positive_balance,
-        SUM(CASE WHEN CURBAL > 0 THEN 1 ELSE 0 END) as positive_balances
+        AVG(CASE WHEN LEDGBAL > 0 THEN LEDGBAL END) as avg_positive_balance
     FROM savings
 """).fetch_df()
 print(stats)
+
+# Validate ADDR.REPTDATE
+con.register("reptdate", reptdate_table)
+print(f"\nADDR.REPTDATE value: {con.execute('SELECT REPTDATE FROM reptdate').fetchone()[0]}")
 
 print("\n" + "=" * 60)
 print("PROGRAM COMPLETED SUCCESSFULLY!")
