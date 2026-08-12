@@ -11,7 +11,6 @@ import duckdb
 DPADDR_FILE = "DPADDR.txt"              # Input fixed-width file (ASCII)
 OUTPUT_PARQUET = "ADDR_SAVINGS.parquet" # Final output parquet
 OUTPUT_CSV = "ADDR_SAVINGS.csv"         # Final output CSV
-REPTDATE_PARQUET = "ADDR_REPTDATE.parquet" # REPTDATE dataset
 
 REPTDATE = datetime.date.today() - datetime.timedelta(days=1)
 
@@ -181,24 +180,18 @@ print("=" * 60)
 print("STEP 3: Writing output files...")
 print("=" * 60)
 
-# Create ADDR.SAVINGS (main dataset) - equivalent to DATA ADDR.SAVINGS
+# Create ADDR.SAVINGS
 arrow_table = df.to_arrow()
 
-# Write ADDR.SAVINGS as Parquet
+# Write to Parquet
 pq.write_table(arrow_table, OUTPUT_PARQUET)
-print(f"✓ ADDR.SAVINGS (Parquet): {OUTPUT_PARQUET}")
+print(f"✓ Parquet saved: {OUTPUT_PARQUET}")
 
-# Write ADDR.SAVINGS as CSV
+# Write to CSV
 csv.write_csv(arrow_table, OUTPUT_CSV)
-print(f"✓ ADDR.SAVINGS (CSV): {OUTPUT_CSV}")
+print(f"✓ CSV saved: {OUTPUT_CSV}")
 
-# Create ADDR.REPTDATE - equivalent to DATA ADDR.REPTDATE
-reptdate_table = pa.table({"REPTDATE": [REPTDATE.isoformat()]})
-
-# Write REPTDATE dataset
-pq.write_table(reptdate_table, REPTDATE_PARQUET)
-print(f"✓ ADDR.REPTDATE (Parquet): {REPTDATE_PARQUET}")
-print(f"  REPTDATE value: {REPTDATE}\n")
+print(f"\nREPTDATE (yesterday): {REPTDATE}\n")
 
 # -----------------------------------------------------------
 # STEP 4: Validation
@@ -208,11 +201,10 @@ print("STEP 4: Validation...")
 print("=" * 60)
 
 con = duckdb.connect(database=":memory:")
-
-# Validate ADDR.SAVINGS
 con.register("savings", arrow_table)
+
 row_count = con.execute("SELECT COUNT(*) FROM savings").fetchone()[0]
-print(f"ADDR.SAVINGS - Total rows: {row_count:,}")
+print(f"Total rows: {row_count:,}")
 
 # Show clean samples
 print("\nSample records with valid ACCTNO:")
@@ -229,7 +221,7 @@ sample_df = con.execute("""
 print(sample_df)
 
 # Statistics
-print("\nADDR.SAVINGS Statistics:")
+print("\nStatistics:")
 stats = con.execute("""
     SELECT 
         COUNT(*) as total_records,
@@ -239,10 +231,6 @@ stats = con.execute("""
     FROM savings
 """).fetch_df()
 print(stats)
-
-# Validate ADDR.REPTDATE
-con.register("reptdate", reptdate_table)
-print(f"\nADDR.REPTDATE value: {con.execute('SELECT REPTDATE FROM reptdate').fetchone()[0]}")
 
 print("\n" + "=" * 60)
 print("PROGRAM COMPLETED SUCCESSFULLY!")
