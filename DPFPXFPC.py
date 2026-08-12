@@ -1,79 +1,336 @@
-============================================================
-STEP 0: Analyzing file format...
-============================================================
-Record length: 428
-Total records: 434,285
+DATA REPTDATE;
+   SET LCR.REPTDATE;
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('FILDT',PUT(REPTDATE,DDMMYYN6.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY10.));
+RUN;
 
-Record 1:
-  Full hex (first 100 bytes): 031a4401000001caac0000000754414e2041482043484f4f2020202020202020202020202037363534303032202020207f97197018a4900f203132202043861219e5081a007fb1343730363132303135353530000001e803ee40000001e803ee40000003
-  ASCII: D��TAN AH CHOO             7654002    �p�� 12  C��470612015550��@��@
+PROC FORMAT;
+   VALUE $COFF1FMT         /* TOTAL LIABILITIES */
+       '95315'             = '1.01I   '
+       '95317'             = '1.02I   '
+       '95312'             = '1.03I   '
+       '95313'             = '1.04I   '
+       '95810'             = '1.05I   '
+       '95820'             = '1.06I   '
+       '95830'             = '1.07I   '
+       '95840'             = '1.08I   '
+       '95850'             = '1.10I   '
+       '96317'             = '1.20II  '
+       '96313'             = '1.21II  '
+       '96810'             = '1.22II  '
+       '96820'             = '1.23II  '
+       '96830'             = '1.24II  '
+       '96840'             = '1.25II  '
+       '96850'             = '1.27II  '
+       OTHER               = '        '
+       ;
 
-  BANKNO (0:2): hex=031a, ascii=''
-  APPCODE (2:3): hex=44, ascii='D'
-  ACCTNO (3:9): hex=01000001caac, ascii='��'
-  BRANCH (9:13): hex=00000007, ascii=''
-  NAME (13:37): hex=54414e2041482043484f4f20202020202020202020202020, ascii='TAN AH CHOO             '
-  LEDGBAL (83:90): hex=000001e803ee40
-  CURBAL (90:97): hex=000001e803ee40
+   VALUE $COFF2FMT         /* INTRA GROUP */
+       '95315'             = '2.01I   '
+       '95317'             = '2.02I   '
+       '95312'             = '2.03I   '
+       '95313'             = '2.04I   '
+       '95810'             = '2.05I   '
+       '95820'             = '2.06I   '
+       '95830'             = '2.07I   '
+       '95840'             = '2.08I   '
+       '96317'             = '2.13II  '
+       '96313'             = '2.14II  '
+       '96810'             = '2.15II  '
+       '96820'             = '2.16II  '
+       '96830'             = '2.17II  '
+       '96840'             = '2.18II  '
+       OTHER               = '        '
+       ;
 
-Record 2:
-  Full hex (first 100 bytes): 20534f4f4b204d554e2020202020202020202020202020202020202020202020202020202020313231204a4c4e20544d5036202020202020202020202020202020202020202020202020202020204d55544941524120505543484f4e4720202020202020
-  ASCII:  SOOK MUN                             121 JLN TMP6                            MUTIARA PUCHONG       
+   VALUE $COFF3FMT         /* RELATED PARTY */
+       '95315'             = '3.01I   '
+       '95317'             = '3.02I   '
+       '95312'             = '3.03I   '
+       '95313'             = '3.04I   '
+       '95830'             = '3.05I   '
+       '95840'             = '3.06I   '
+       '96317'             = '3.10II  '
+       '96313'             = '3.11II  '
+       '96830'             = '3.12II  '
+       '96840'             = '3.13II  '
+       OTHER               = '        '
+       ;
 
-  BANKNO (0:2): hex=2053, ascii=' S'
-  APPCODE (2:3): hex=4f, ascii='O'
-  ACCTNO (3:9): hex=4f4b204d554e, ascii='OK MUN'
-  BRANCH (9:13): hex=20202020, ascii='    '
-  NAME (13:37): hex=202020202020202020202020202020202020202020202020, ascii='                        '
-  LEDGBAL (83:90): hex=52412050554348
-  CURBAL (90:97): hex=4f4e4720202020
+   VALUE $COFF4FMT         /* RETAIL FUNDING */
+       '95315'             = '4.01    '
+       '95317'             = '4.02    '
+       '95312'             = '4.03    '
+       '95313'             = '4.04    '
+       OTHER               = '        '
+       ;
 
-Record 3:
-  Full hex (first 100 bytes): 20202020202020204d414c41595349410d0a031a4401000003830f00000007415a4d414e204441564944534f4e20202620434f20434c4930303030303030303030307f97197018a4900f20383020204300000000000f0086072020202020202020202020
-  ASCII:         MALAYSIA
-D�AZMAN DAVIDSON  & CO CLI00000000000�p�� 80  C�           
+   VALUE $COFF5FMT         /* WHOLESALE FUNDING */
+       '95315'             = '5.01    '
+       '95317'             = '5.02    '
+       '95313'             = '5.03    '
+       '95810'             = '5.05I   '
+       '95820'             = '5.05II  '
+       '95830'             = '5.05III '
+       '95840'             = '5.05IV  '
+       OTHER               = '        '
+       ;
 
-  BANKNO (0:2): hex=2020, ascii='  '
-  APPCODE (2:3): hex=20, ascii=' '
-  ACCTNO (3:9): hex=20202020204d, ascii='     M'
-  BRANCH (9:13): hex=414c4159, ascii='ALAY'
-  NAME (13:37): hex=5349410d0a031a4401000003830f00000007415a4d414e20, ascii='SIA
-D�AZMAN '
-  LEDGBAL (83:90): hex=00000f00860720
-  CURBAL (90:97): hex=20202020202020
+   VALUE $GLCOFFMT
+       'F143130'                         = '1.12I   '
+       'F144111','F147100'               = '1.13I   '
+       'F249120BP'                       = '1.16I   '
+       'F142199C','F142199D','F142199E'  = '1.17I   '
+       'F142510FDA'                      = '1.18I   '
+       'F142600A'                        = '1.31II  '
+       OTHER                             = '        '
+       ;
+RUN;
 
-Record 4:
-  Full hex (first 100 bytes): 202020202020202020202020202020203139204a4c4e204a454e4a41524f4d202020202020202020202020202020202020202020202020203538303030204b55414c41204c554d505552202020202020202020202020202020202020202020204d414c41
-  ASCII:                 19 JLN JENJAROM                         58000 KUALA LUMPUR                      MALA
+DATA TEMPLATE;
+   INFILE TEMPL;
+   INPUT @1  ITEM           $8.
+         @10 IDESC    $CHAR120.
+         ;
+   ITEM = UPCASE(ITEM);
+   RECNO=_N_;
+   FORMAT AMOUNT BUC1-BUC7 COMMA20.2;
+RUN;
+PROC SORT; BY ITEM; RUN;
 
-  BANKNO (0:2): hex=2020, ascii='  '
-  APPCODE (2:3): hex=20, ascii=' '
-  ACCTNO (3:9): hex=202020202020, ascii='      '
-  BRANCH (9:13): hex=20202020, ascii='    '
-  NAME (13:37): hex=2020203139204a4c4e204a454e4a41524f4d202020202020, ascii='   19 JLN JENJAROM      '
-  LEDGBAL (83:90): hex=20202020202020
-  CURBAL (90:97): hex=2020202020204d
+DATA GL;
+    INFILE WALK FIRSTOBS=2;
+    INPUT @2   SET_ID        $19.
+          @42  AMOUNT    COMMA20.2
+          @62  SIGN           $1.
+          ;
+    FORMAT ITEM $8. BUC1-BUC7 COMMA20.2;
+    IF SIGN = ' ' THEN AMOUNT = -1*AMOUNT;
+    ITEM = PUT(SET_ID,$GLCOFFMT.);
+    IF ITEM NE '';
+    IF      SET_ID IN ('F142199C','F142199D') THEN BUC5 = AMOUNT;
+    ELSE IF SET_ID IN ('F144111','F147100')   THEN BUC6 = AMOUNT;
+    ELSE                                           BUC7 = AMOUNT;
+    PART1=SUBSTR(ITEM,1,1);
+    PART2=SUBSTR(ITEM,5,4);
+RUN;
+PROC SORT DATA=GL; BY ITEM; RUN;
 
-Record 5:
-  Full hex (first 100 bytes): 00000f007fa420202020202020202020202000000483c1122a00000483c1122a0000cc7feceee10c810731504552204255444448495354204d20424847204b4c2f5347522020202020202020202020202020205749534d41204255444448495354202020
-  ASCII: �            ��*��*����
-                                �1PER BUDDHIST M BHG KL/SGR               WISMA BUDDHIST   
+PROC SUMMARY DATA=GL NWAY;
+   BY ITEM;
+   VAR AMOUNT BUC1-BUC7;
+   OUTPUT OUT=GL(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
 
-  BANKNO (0:2): hex=0000, ascii=''
-  APPCODE (2:3): hex=0f, ascii=''
-  ACCTNO (3:9): hex=007fa4202020, ascii='�   '
-  BRANCH (9:13): hex=20202020, ascii='    '
-  NAME (13:37): hex=202020202000000483c1122a00000483c1122a0000cc7fec, ascii='     ��*��*��'
-  LEDGBAL (83:90): hex=5749534d412042
-  CURBAL (90:97): hex=55444448495354
+DATA COF;
+   SET LCR.CMM&REPTMON LCR.EQU&REPTMON(RENAME=(CUSTNO=CUSTEQNO));
+   TAG = 1; /* TOTAL LIABILITIES */
+RUN;
+PROC SORT DATA=COF; BY CMMCODE TAG; RUN;
 
-============================================================
-Checking if numeric fields are plain text...
-============================================================
-BANKNO is not plain text
-ACCTNO is not plain text
-BRANCH is not plain text
-LEDGBAL is not plain text
+PROC SUMMARY DATA=COF NWAY;
+   BY CMMCODE TAG;
+   VAR AMOUNT;
+   OUTPUT OUT=COF(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
 
-It appears the file might be completely ASCII with zoned decimal numbers,
-not packed decimal. The SAS PD format might be reading zoned decimal fields.
+%LET INTRAIC=%STR();
+PROC SQL;
+   SELECT COMPRESS(CAT("'",BUSSREG,"'")) INTO :INTRAIC SEPARATED BY ','
+      FROM LIST.ICOF_MNI_INTRA_GROUP
+      WHERE BUSSREG NE '';
+   QUIT;
+RUN;
+%PUT (&INTRAIC);
+
+%LET INTRACUS=%STR();
+PROC SQL;
+   SELECT CUSTNO INTO :INTRACUS SEPARATED BY ','
+      FROM LIST.ICOF_MNI_INTRA_GROUP
+      WHERE CUSTNO NE .;
+   QUIT;
+RUN;
+%PUT (&INTRACUS);
+
+%LET RELCUS=%STR();
+PROC SQL;
+   SELECT CUSTNO INTO :RELCUS SEPARATED BY ','
+      FROM LIST.ICOF_MNI_RELATED_PARTY
+      WHERE CUSTNO NE .;
+   QUIT;
+RUN;
+%PUT (&RELCUS);
+
+%LET XRELCUS=%STR();
+PROC SQL;
+   SELECT CUSTNO INTO :XRELCUS SEPARATED BY ','
+      FROM LIST.ICOF_MNI_RELATED_PARTY
+      WHERE SUBSTR(ICNEW,1,1) = '-';
+   QUIT;
+RUN;
+%PUT (&XRELCUS);
+
+%LET RELIC=%STR();
+PROC SQL;
+   SELECT COMPRESS(CAT("'",ICNEW,"'")) INTO :RELIC SEPARATED BY ','
+      FROM LIST.ICOF_MNI_RELATED_PARTY
+      WHERE ICNEW NE '';
+   QUIT;
+RUN;
+%PUT (&RELIC);
+
+%LET INTRAEQ=%STR();
+PROC SQL;
+   SELECT COMPRESS(CAT("'",CUSTNO,"'")) INTO :INTRAEQ SEPARATED BY ','
+      FROM LIST.ICOF_EQU_INTRA_GROUP
+      WHERE CUSTNO NE '';
+   QUIT;
+RUN;
+%PUT (&INTRAEQ);
+
+%LET RELEQ=%STR();
+PROC SQL;
+   SELECT COMPRESS(CAT("'",CUSTNO,"'")) INTO :RELEQ SEPARATED BY ','
+      FROM LIST.ICOF_EQU_RELATED_PARTY
+      WHERE CUSTNO NE '';
+   QUIT;
+RUN;
+%PUT (&RELEQ);
+
+DATA COF23;
+   SET LCR.CMM&REPTMON LCR.EQU&REPTMON(RENAME=(CUSTNO=CUSTEQNO));
+   IF      CUSTNO IN (&RELCUS) OR NEWIC IN (&RELIC) OR
+           CUSTEQNO IN (&RELEQ) THEN
+      TAG=3; /* RELATED PARTY */
+   ELSE IF CUSTNO IN (&INTRACUS) OR (NEWIC IN (&INTRAIC) AND
+           CUSTNO NOT IN (&XRELCUS)) OR CUSTEQNO IN (&INTRAEQ) THEN
+      TAG=2; /* INTRA GROUP   */
+RUN;
+PROC SORT DATA=COF23; BY CMMCODE TAG; RUN;
+
+PROC SUMMARY DATA=COF23 NWAY;
+   BY CMMCODE TAG;
+   VAR AMOUNT;
+   OUTPUT OUT=COF23(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA COF123;
+   SET COF COF23;
+   BIC  = SUBSTR(CMMCODE,1,5);
+   CUST = SUBSTR(CMMCODE,6,2);
+   REM  = SUBSTR(CMMCODE,8,2);
+   ECP  = SUBSTR(CMMCODE,10,2);
+   IF      TAG = 1 THEN ITEM = PUT(BIC,$COFF1FMT.);
+   ELSE IF TAG = 2 THEN ITEM = PUT(BIC,$COFF2FMT.);
+   ELSE IF TAG = 3 THEN ITEM = PUT(BIC,$COFF3FMT.);
+   IF ITEM NE '';
+   IF BIC IN ('95312','95313','96313','9531X') THEN REM='07';
+   AMOUNT = ROUND(AMOUNT,.01);
+   SELECT(REM);
+      WHEN(01) BUC1=AMOUNT;
+      WHEN(02) BUC2=AMOUNT;
+      WHEN(03) BUC3=AMOUNT;
+      WHEN(04) BUC4=AMOUNT;
+      WHEN(05) BUC5=AMOUNT;
+      WHEN(06) BUC6=AMOUNT;
+      WHEN(07) BUC7=AMOUNT;
+      OTHERWISE;
+   END;
+RUN;
+
+DATA COF45;
+   SET COF123;
+   WHERE TAG = 1; /* > BREAKDOWN BY RETAIL/NON-RETAIL */
+   ITEM = ''; *REFRESH;
+   IF CUST = '08' THEN ITEM = PUT(BIC,$COFF4FMT.);
+   ELSE                ITEM = PUT(BIC,$COFF5FMT.);
+   IF ITEM = '5.03' AND ECP = '01' THEN ITEM = '5.04'; *OPERATIONAL;
+   IF ITEM NE '';
+RUN;
+
+DATA COF;
+   SET COF123 COF45 GL;
+   PART1  = SUBSTR(ITEM,1,1);
+   PART2  = SUBSTR(ITEM,5,4);
+   PREFIX = SUBSTR(ITEM,1,4);
+RUN;
+PROC SORT DATA=COF; BY ITEM; RUN;
+
+PROC SUMMARY DATA=COF NWAY;
+   BY ITEM;
+   VAR AMOUNT BUC1-BUC7;
+   OUTPUT OUT=COFITEM(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+PROC SORT DATA=COFITEM; BY ITEM; RUN;
+
+PROC SUMMARY DATA=COF NWAY;
+   CLASS PART1 PART2;
+   VAR AMOUNT BUC1-BUC7;
+   OUTPUT OUT=COFSUBTOT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+PROC SUMMARY DATA=COF NWAY;
+   CLASS PART1;
+   VAR AMOUNT BUC1-BUC7;
+   OUTPUT OUT=COFTOT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+PROC SUMMARY DATA=COF NWAY;
+   WHERE PREFIX IN ('5.04','5.05'); /* OPERATIONAL & NON-OPERATIONAL */
+   CLASS PREFIX;
+   VAR AMOUNT BUC1-BUC7;
+   OUTPUT OUT=COFSPCL(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA COFTOT;
+   SET COFTOT(IN=A) COFSUBTOT(IN=B) COFSPCL(IN=C);
+   FORMAT ITEM $8.;
+   IF      A THEN ITEM = COMPRESS(PART1 || '.99');  *TOTAL;
+   ELSE IF B THEN ITEM = COMPRESS(PART1 || '.00' || PART2);
+   ELSE           ITEM = PREFIX;
+RUN;
+PROC SORT DATA=COFTOT; BY ITEM; RUN;
+
+DATA COF;
+   MERGE TEMPLATE(IN=A) COFITEM COFTOT;
+   BY ITEM;
+   IF A;
+RUN;
+PROC SORT; BY RECNO; RUN;
+
+DATA _NULL_;
+   SET COF;
+   DLM='05'X;
+   FILE COFOUT;
+   IF _N_=1 THEN DO;
+      PUT @001 'PUBLIC ISLAMIC BANK BERHAD'
+          /    "LIQUIDITY COVERAGE RATIO (LCR) TABLE 4 AS AT &RDATE"
+          /    "CONCENTRATION OF FUNDING"
+          ;
+   END;
+   FORMAT AMOUNT BUC1-BUC7 COMMA20.2;
+   IF SUBSTR(UPCASE(IDESC),1,2) NE '' THEN PUT ;
+   PUT @001  IDESC        $CHAR120.          DLM
+             BUC1                            DLM
+             BUC2                            DLM
+             BUC3                            DLM
+             BUC4                            DLM
+             BUC5                            DLM
+             BUC6                            DLM
+             BUC7                            DLM
+             AMOUNT                          DLM
+       ;
+   IF SUBSTR(UPCASE(IDESC),1,2) NE '' THEN
+      PUT @001                                    DLM
+                'Deposit Type'                    DLM
+                'up to 1 week'                    DLM
+                '> 1 wk - 1 mth'                  DLM
+                '> 1 - 3 mths'                    DLM
+                '> 3 - 6 mths'                    DLM
+                '> 6 mths -  1 yr'                DLM
+                '> 1 year'                        DLM
+                'No specific maturity'            DLM
+                'Total'                           DLM
+          ;
+RUN;
