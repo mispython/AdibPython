@@ -1,88 +1,79 @@
-import pyarrow as pa
-import pyarrow.parquet as pq
-import pyarrow.csv as csv
-import polars as pl
-import datetime
-import duckdb
+============================================================
+STEP 0: Analyzing file format...
+============================================================
+Record length: 428
+Total records: 434,285
 
-# -----------------------------------------------------------
-# CONFIGURATION
-# -----------------------------------------------------------
-DPADDR_FILE = "DPADDR.txt"              # Input fixed-width file (ASCII)
-OUTPUT_PARQUET = "ADDR_SAVINGS.parquet" # Final output parquet
-OUTPUT_CSV = "ADDR_SAVINGS.csv"         # Final output CSV
+Record 1:
+  Full hex (first 100 bytes): 031a4401000001caac0000000754414e2041482043484f4f2020202020202020202020202037363534303032202020207f97197018a4900f203132202043861219e5081a007fb1343730363132303135353530000001e803ee40000001e803ee40000003
+  ASCII: D��TAN AH CHOO             7654002    �p�� 12  C��470612015550��@��@
 
-REPTDATE = datetime.date.today() - datetime.timedelta(days=1)
+  BANKNO (0:2): hex=031a, ascii=''
+  APPCODE (2:3): hex=44, ascii='D'
+  ACCTNO (3:9): hex=01000001caac, ascii='��'
+  BRANCH (9:13): hex=00000007, ascii=''
+  NAME (13:37): hex=54414e2041482043484f4f20202020202020202020202020, ascii='TAN AH CHOO             '
+  LEDGBAL (83:90): hex=000001e803ee40
+  CURBAL (90:97): hex=000001e803ee40
 
-# -----------------------------------------------------------
-# STEP 0: Analyze the file format
-# -----------------------------------------------------------
-print("=" * 60)
-print("STEP 0: Analyzing file format...")
-print("=" * 60)
+Record 2:
+  Full hex (first 100 bytes): 20534f4f4b204d554e2020202020202020202020202020202020202020202020202020202020313231204a4c4e20544d5036202020202020202020202020202020202020202020202020202020204d55544941524120505543484f4e4720202020202020
+  ASCII:  SOOK MUN                             121 JLN TMP6                            MUTIARA PUCHONG       
 
-with open(DPADDR_FILE, "rb") as f:
-    raw_data = f.read()
+  BANKNO (0:2): hex=2053, ascii=' S'
+  APPCODE (2:3): hex=4f, ascii='O'
+  ACCTNO (3:9): hex=4f4b204d554e, ascii='OK MUN'
+  BRANCH (9:13): hex=20202020, ascii='    '
+  NAME (13:37): hex=202020202020202020202020202020202020202020202020, ascii='                        '
+  LEDGBAL (83:90): hex=52412050554348
+  CURBAL (90:97): hex=4f4e4720202020
 
-record_length = 428
-num_records = len(raw_data) // record_length
+Record 3:
+  Full hex (first 100 bytes): 20202020202020204d414c41595349410d0a031a4401000003830f00000007415a4d414e204441564944534f4e20202620434f20434c4930303030303030303030307f97197018a4900f20383020204300000000000f0086072020202020202020202020
+  ASCII:         MALAYSIA
+D�AZMAN DAVIDSON  & CO CLI00000000000�p�� 80  C�           
 
-# Analyze first few records
-print(f"Record length: {record_length}")
-print(f"Total records: {num_records:,}")
-print()
+  BANKNO (0:2): hex=2020, ascii='  '
+  APPCODE (2:3): hex=20, ascii=' '
+  ACCTNO (3:9): hex=20202020204d, ascii='     M'
+  BRANCH (9:13): hex=414c4159, ascii='ALAY'
+  NAME (13:37): hex=5349410d0a031a4401000003830f00000007415a4d414e20, ascii='SIA
+D�AZMAN '
+  LEDGBAL (83:90): hex=00000f00860720
+  CURBAL (90:97): hex=20202020202020
 
-for rec_num in range(min(5, num_records)):
-    start = rec_num * record_length
-    record = raw_data[start:start+record_length]
-    
-    print(f"Record {rec_num + 1}:")
-    print(f"  Full hex (first 100 bytes): {record[:100].hex()}")
-    print(f"  ASCII: {record[:100].decode('ascii', errors='replace')}")
-    print()
-    
-    # Check specific fields
-    print(f"  BANKNO (0:2): hex={record[0:2].hex()}, ascii='{record[0:2].decode('ascii', errors='replace')}'")
-    print(f"  APPCODE (2:3): hex={record[2:3].hex()}, ascii='{record[2:3].decode('ascii', errors='replace')}'")
-    print(f"  ACCTNO (3:9): hex={record[3:9].hex()}, ascii='{record[3:9].decode('ascii', errors='replace')}'")
-    print(f"  BRANCH (9:13): hex={record[9:13].hex()}, ascii='{record[9:13].decode('ascii', errors='replace')}'")
-    print(f"  NAME (13:37): hex={record[13:37].hex()}, ascii='{record[13:37].decode('ascii', errors='replace')}'")
-    print(f"  LEDGBAL (83:90): hex={record[83:90].hex()}")
-    print(f"  CURBAL (90:97): hex={record[90:97].hex()}")
-    print()
+Record 4:
+  Full hex (first 100 bytes): 202020202020202020202020202020203139204a4c4e204a454e4a41524f4d202020202020202020202020202020202020202020202020203538303030204b55414c41204c554d505552202020202020202020202020202020202020202020204d414c41
+  ASCII:                 19 JLN JENJAROM                         58000 KUALA LUMPUR                      MALA
 
-# Based on analysis, it seems the "packed decimal" fields might actually be zoned decimal (ASCII numbers)
-# Let's check if they're readable as numbers
-print("=" * 60)
-print("Checking if numeric fields are plain text...")
-print("=" * 60)
+  BANKNO (0:2): hex=2020, ascii='  '
+  APPCODE (2:3): hex=20, ascii=' '
+  ACCTNO (3:9): hex=202020202020, ascii='      '
+  BRANCH (9:13): hex=20202020, ascii='    '
+  NAME (13:37): hex=2020203139204a4c4e204a454e4a41524f4d202020202020, ascii='   19 JLN JENJAROM      '
+  LEDGBAL (83:90): hex=20202020202020
+  CURBAL (90:97): hex=2020202020204d
 
-test_record = raw_data[:record_length]
+Record 5:
+  Full hex (first 100 bytes): 00000f007fa420202020202020202020202000000483c1122a00000483c1122a0000cc7feceee10c810731504552204255444448495354204d20424847204b4c2f5347522020202020202020202020202020205749534d41204255444448495354202020
+  ASCII: �            ��*��*����
+                                �1PER BUDDHIST M BHG KL/SGR               WISMA BUDDHIST   
 
-# Try reading fields as ASCII numbers
-try:
-    bankno = test_record[0:2].decode('ascii').strip()
-    print(f"BANKNO as text: '{bankno}' -> {int(bankno) if bankno else 0}")
-except:
-    print("BANKNO is not plain text")
+  BANKNO (0:2): hex=0000, ascii=''
+  APPCODE (2:3): hex=0f, ascii=''
+  ACCTNO (3:9): hex=007fa4202020, ascii='�   '
+  BRANCH (9:13): hex=20202020, ascii='    '
+  NAME (13:37): hex=202020202000000483c1122a00000483c1122a0000cc7fec, ascii='     ��*��*��'
+  LEDGBAL (83:90): hex=5749534d412042
+  CURBAL (90:97): hex=55444448495354
 
-try:
-    acctno = test_record[3:9].decode('ascii').strip()
-    print(f"ACCTNO as text: '{acctno}' -> {int(acctno) if acctno else 0}")
-except:
-    print("ACCTNO is not plain text")
+============================================================
+Checking if numeric fields are plain text...
+============================================================
+BANKNO is not plain text
+ACCTNO is not plain text
+BRANCH is not plain text
+LEDGBAL is not plain text
 
-try:
-    branch = test_record[9:13].decode('ascii').strip()
-    print(f"BRANCH as text: '{branch}' -> {int(branch) if branch else 0}")
-except:
-    print("BRANCH is not plain text")
-
-try:
-    ledgbal = test_record[83:90].decode('ascii').strip()
-    print(f"LEDGBAL as text: '{ledgbal}'")
-except:
-    print("LEDGBAL is not plain text")
-
-print("\nIt appears the file might be completely ASCII with zoned decimal numbers,")
-print("not packed decimal. The SAS PD format might be reading zoned decimal fields.")
+It appears the file might be completely ASCII with zoned decimal numbers,
+not packed decimal. The SAS PD format might be reading zoned decimal fields.
