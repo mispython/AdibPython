@@ -1,88 +1,225 @@
-OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER NODATE MISSING=' '
-        NOSORTBLKMODE SORTPARM='HIPRMAX=0,MOSIZE=0';
+this is the KALMLIQ original program.
 
-%INC PGM(PBBELF,PBLCRFMT);
-
-DATA LCR.REPTDATE REPTDATE;
-   SET DEPOSIT.REPTDATE;
-   SELECT;
-      WHEN (01<=DAY(REPTDATE)<=08) DO; NOWK = '1'; END;
-      WHEN (09<=DAY(REPTDATE)<=15) DO; NOWK = '2'; END;
-      WHEN (16<=DAY(REPTDATE)<=22) DO; NOWK = '3'; END;
-      OTHERWISE                    DO; NOWK = '4'; END;
+        DATA K1TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT GWCCY
+                 GWSHN GWC2R GWDLP GWDLR);
+   SET BNMK.K1TBL&REPTMON&NOWK (RENAME=(GWMDT=MATDT GWBALC=AMOUNT
+                                        GWSDT=ISSDT));
+   IF GWMVT = 'P';
+   IF GWOCY='XAU' THEN DELETE;
+   IF GWCCY='XAU' THEN DELETE;
+   IF GWOCY='XAT' THEN DELETE;
+   IF GWCCY='XAT' THEN DELETE;
+   IF GWCCY  = 'MYR' THEN DO;
+      PART = '95';
+      AMTUSD = 0;
+      AMTSGD = 0;
+      IF GWMVTS = 'M' THEN DO;
+         IF GWDLP IN ('BCD','BCI','BCS','BCQ','BCT','BCW','BQD')
+         THEN DO;
+            ITEM = '830'; OUTPUT;
+         END;
+         IF SUBSTR(GWCTP,1,1) = 'B' THEN
+            SELECT (GWDLP);
+               WHEN ('LO','LC','LF','LS','LOI','LSI','LSC','LSW',
+                     'FDA','FDB','FDS','FDL','LOC','LOW') DO;
+                  ITEM = '610'; OUTPUT;
+               END;
+               WHEN ('BO','BF','BOI','BFI','BSC','BSW','BOC','BOW') DO;
+                  ITEM = '810'; OUTPUT;
+               END;
+               OTHERWISE;
+            END;
+         SELECT (SUBSTR(GWDLP,2,2));
+            WHEN ('MI','MT') DO;
+               ITEM = '820';
+               OUTPUT;
+            END;
+            WHEN ('XI','XT') DO;
+               ITEM = '620'; OUTPUT;
+            END;
+            OTHERWISE;
+         END;
+      END;
+      /*
+      ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
+         'FF1','FF2') THEN DO;
+         IF GWMVTS = 'P' THEN ITEM = '711';
+         ELSE IF GWMVTS = 'S' THEN ITEM = '911';
+         OUTPUT;
+      END;
+      */
    END;
-   CALL SYMPUT('NOWK',PUT(NOWK,$1.));
-   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
-   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-   CALL SYMPUT('RPTDT',PUT(REPTDATE,YYMMDDN6.));
-   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-   CALL SYMPUT('TDATE',REPTDATE);
-RUN;
+*;
+   ELSE DO;
+      PART = '96';
+      IF GWCCY = 'USD' THEN AMTUSD = AMOUNT;
+      ELSE AMTUSD = 0;
+      IF GWCCY = 'SGD' THEN AMTSGD = AMOUNT;
+      ELSE AMTSGD = 0;
+      IF GWMVTS = 'M' THEN DO;
+         IF SUBSTR(GWCTP,1,1) = 'B' AND GWCTP ^= 'BW' THEN
+            SELECT (GWDLP);
+               WHEN ('LO','LC','LS','LF','LOI','LSI','LSC','LOC',
+                    'FDA','FDB','FDS','FDL','LOW','LSW') DO;
+                  ITEM = '610'; OUTPUT;
+               END;
+               WHEN ('BC','BF','BO','BSC','BOW','BSW') DO;
+                  IF SUBSTR(GWSHN,1,6) ^= 'FCY-FD' THEN DO;
+                     ITEM = '810'; OUTPUT;
+                  END;
+               END;
+               WHEN ('BOC') DO;
+                     ITEM = '810'; OUTPUT;
+                  END;
+               OTHERWISE;
+            END;
+      END;
+      /*
+      ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
+         'FF1','FF2') AND GWACT NOT IN ('RV','RW') THEN DO;
+         IF GWMVTS = 'P' THEN ITEM = '711';
+         ELSE IF GWMVTS = 'S' THEN ITEM = '911';
+         OUTPUT;
+      END;
+      */
+   END;
+*;
+*;
+%INC PGM(KAMLIQX);
+*;
+DATA K3TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT UTCCY
+                 UTCUS UTCTP UTSTY UTDLR UTDLP);
+   RETAIN PART '95';
+   SET BNMK.K3TBL&REPTMON&NOWK;
+   AMOUNT = UTAMOC - UTDPF;
+   IF UTSTY='IDC' THEN AMOUNT=UTAMOC + UTDPF;
+   IF &INST='PBB' THEN DO;
+      IF UTCCY = 'USD' THEN AMTUSD = AMOUNT;
+      ELSE AMTUSD = 0;
+      IF UTCCY = 'SGD' THEN AMTSGD = AMOUNT;
+      ELSE AMTSGD = 0;
+   END;
+   ELSE DO;
+      AMTUSD = 0;
+      AMTSGD = 0;
+   END;
+*  IF UTREF IN ('INV','TRD','TAP') THEN DO;
+   IF UTREF IN ('INV','DRI','DLG','AFSLIQ','AFSBOND','IAFSLIQ','AFS',
+                'IAFS') THEN DO;
+      SELECT (UTSTY);
+         WHEN ('CB1','CB2','CF1','CF2','CNT','MGS','MTB','BNB','BNN',
+               'ITB','SAC','BMN','BMC','BMF','SCD','SCM',
+               'CMB','MGI','SMC') DO;
+            ITEM = '631';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = AMOUNT + UTAICT;
+            END;
+            OUTPUT;
+         END;
 
-*------------------------------------------------*
-*  MACRO TO DECLARE VARIABLES                    *
-*------------------------------------------------*;
-%MACRO DCLVAR;
-   RETAIN D1-D12 31 D4 D6 D9 D11 30
-          RD1-RD12 MD1-MD12 31 RD2 MD2 28 RD4 RD6 RD9 RD11
-          MD4 MD6 MD9 MD11 30 RPYR RPMTH RPDAY;
-   ARRAY LDAY D1-D12;
-   ARRAY RPDAYS RD1-RD12;
-   ARRAY MDDAYS MD1-MD12;
-%MEND DCLVAR;
+         WHEN ('SDC') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = (UTAMOC*(UTPCP/100))+UTDPEY+UTDPE;
+            END;
+            OUTPUT;
+         END;
+         WHEN ('LDC') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = AMOUNT + UTAICT;
+            END;
+            OUTPUT;
+         END;
 
-*------------------------------------------------*
-*  MACRO TO CALCULATE REMAIN MONTH               *
-*------------------------------------------------*;
-%MACRO REMMTH;
-   MDYR  = YEAR(MATDT);
-   MDMTH = MONTH(MATDT);
-   MDDAY = DAY(MATDT);
-   IF MDMTH = 2 THEN
-      IF MOD(MDYR,4) = 0 THEN MD2 = 29;
-      ELSE MD2 = 28;
-   IF MDDAY > RPDAYS(RPMTH) THEN MDDAY = RPDAYS(RPMTH);
-   REMY = MDYR - RPYR;
-   REMM = MDMTH - RPMTH;
-   REMD = MDDAY - RPDAY;
-   REMMTH = REMY*12 + REMM + REMD/RPDAYS(RPMTH);
-   REM30D = (MATDT-REPTDATE)/30;
-%MEND REMMTH;
+         WHEN ('SLD','SSD') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = (UTAMOC*(UTPCP/100))+UTAICY+UTAIT;
+            END;
+            OUTPUT;
+         END;
 
-DATA TEMPLATE;
-   INFILE TEMPL;
-   INPUT @1 ITEM           $5.
-         @8 IDESC    $CHAR120.
-         ;
-   FORMAT FD95311RM1 FD95311RM2 FD95311RM  FD96311FX1 FD96311FX2
-          FD96311FX  SA95312RM  CA95313RM  CA96313FX  STD95830V1
-          STD95830V2 STD95830   STD95830Q1 STD95830Q2 STD95830Q
-          GLD9531X   NID95840V1 NID95840V2 NID95840V3 NID95840V4
-          NID95840V5 NID95840V6 NID95840   IBB9X810V1 IBB9X810V2
-          IBB9X810V3 IBB9X810V4 IBB9X810V5 IBB9X810V6 IBB9X810
-          DCI9X329V1 DCI9X329V2 DCI9X329V3 DCI9X329V4 DCI9X329V5
-          DCI9X329V6 DCI9X329   IBR95820V1 IBR95820V2 IBR95820V3
-          IBR95820V4 IBR95820V5 IBR95820V6 IBR95820   BAP95850V1
-          BAP95850V2 BAP95850V3 BAP95850V4 BAP95850V5 BAP95850V6
-          BAP95850   OTHSOURCE  TOTALV1    TOTALDP    FDPLEDGE1
-          FDPLEDGE2  FXPLEDGE1 FXPLEDGE2 COMMA20.2;
-RUN;
-PROC SORT; BY ITEM; RUN;
+         WHEN ('SFD','SZD') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = AMOUNT + UTAICT;
+            END;
+            OUTPUT;
+         END;
 
-PROC FORMAT LIB=FORATE CNTLOUT=FOFMT;RUN;
-PROC FORMAT CNTLIN=FOFMT;RUN;
+         WHEN ('SBA') DO;
+            IF UTDLP NOT IN ('MOS','MSS') THEN DO;
+               ITEM = '633'; OUTPUT;
+            END;
+         END;
+         WHEN ('ISB','DHB','KHA','PNB') DO;
+            ITEM = '636'; OUTPUT;
+         END;
+         WHEN ('IDS') DO;
+            ITEM = '635'; OUTPUT;
+         END;
+         WHEN ('DBD') DO;
+            ITEM = '634'; OUTPUT;
+         END;
+         WHEN ('DMB','DBD','GRL','MTL','RUL') DO;
+            ITEM = '635'; OUTPUT;
+         END;
+         WHEN ('PBA') DO;
+            IF UTDLP IN ('MOS','MSS') THEN DO;
+               ITEM = '850'; OUTPUT;
+            END;
+         END;
+         OTHERWISE;
+      END;
+   END;
+   ELSE IF UTREF IN ('PFD','PLD','PSD','PZD','PDC') THEN DO;
+      IF UTSTY IN ('IFD','ILD','ISD','IZD','IDC','IDP','IZP') THEN DO;
+         ITEM = '840'; OUTPUT;
+      END;
+   END;
+*  ELSE IF UTREF IN ('IINV','ITRD','ITAP') THEN DO;
+   ELSE IF UTREF IN ('IINV','IDRI','IDLG') THEN DO;
+      IF UTSTY IN ('SBA') AND UTDLP IN ('IOP') THEN DO;
+         ITEM = '633'; OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('SDC','LDC') THEN DO;
+         ITEM  = '632'; OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('CB1','CB2','CF1','CF2','CNT','MGI',
+                        'ITB','SAC','BMN','BMC','BMF','SCD','SCM',
+                        'MGS','MTB','BNB','BNN','CMB','SMC') THEN DO;
+         ITEM = '631';
+         IF &INST='PBB' THEN DO;
+            AMOUNT = AMOUNT + UTAICT;
+         END;
+         OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('ISB','IDS','IBZ','ICN') THEN DO;
+              IF UTMM1 = 'GGB' THEN ITEM = '636';
+              ELSE IF UTMM1 = 'NGB' THEN ITEM = '635';
+              AMOUNT = AMOUNT + UTAICT;
+              OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('DHB','KHA') THEN DO;
+         ITEM = '636'; OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('DBD') THEN DO;
+         ITEM = '634'; OUTPUT;
+      END;
+   END;
+   IF UTSTY IN ('SIP') THEN DO;
+      ITEM='610'; OUTPUT;
+   END;
+*;
+%INC PGM(KALMLIQ4);
+*;
 
-*------------------------------------------------*
-*  TREASURY (KAPITI)                             *
-*------------------------------------------------*;
-%LET INST = 'PBB';
-%INC PGM(KALMLIQ);
-
-DATA DCI (KEEP=BNMCODE AMOUNT AMTUSD AMTSGD AMTHKD AMTAUD CURCODE
-               CUSTNAME CUSTFISS DEALTYPE DEALREF REMMTH REM30D);
+DATA KTBL (KEEP=BNMCODE AMOUNT AMTUSD AMTSGD) KTBLALL;
    %DCLVAR
-   SET DCIWH.DCID&REPTMON&REPTDAY (DROP=SPOTRT);
-   AMTUSD=0; AMTSGD=0; AMTHKD=0; AMTAUD=0;
+   SET K1TBL(IN=A) K3TBL(IN=B) K1TBX;
+   IF      A THEN TBL = '1';
+   ELSE IF B THEN TBL = '3';
    IF _N_ = 1 THEN DO;
       SET REPTDATE;
       RPYR  = YEAR(REPTDATE);
@@ -90,643 +227,61 @@ DATA DCI (KEEP=BNMCODE AMOUNT AMTUSD AMTSGD AMTHKD AMTAUD CURCODE
       RPDAY = DAY(REPTDATE);
       IF MOD(RPYR,4) = 0 THEN RD2 = 29;
    END;
-   IF MATDT > REPTDATE AND STARTDT <= REPTDATE;
+   IF ITEM ^= ' ';
    IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1;
    ELSE DO;
       %REMMTH
    END;
-   CUSTFISS = PUT(CUSTCODE,Z2.);
-   IF INVCURR = 'MYR' THEN DO;
-      SPOTRT  = 1;
-      AMOUNT  = INVAMT;
-      BNMCODE = '9532900'||PUT(REMMTH,REMFMT.)||'0000Y'; OUTPUT;
-   END;
-   ELSE DO;
-      SPOTRT = PUT(INVCURR,$FORATE.);
-      IF INVCURR = 'JPY' THEN INVAMT = ROUND(INVAMT,1.00);
-                         ELSE INVAMT = ROUND(INVAMT,0.01);
-      AMOUNT  = INVAMT * SPOTRT;
-      IF INVCURR = 'USD' THEN AMTUSD = AMOUNT;
-      IF INVCURR = 'SGD' THEN AMTSGD = AMOUNT;
-      IF INVCURR = 'HKD' THEN AMTHKD = AMOUNT;
-      IF INVCURR = 'AUD' THEN AMTAUD = AMOUNT;
-      BNMCODE = '9632900'||PUT(REMMTH,REMFMT.)||'0000Y'; OUTPUT;
-   END;
-   RENAME INVCURR=CURCODE PRODUCT=DEALTYPE TICKETNO=DEALREF;
+   IF MATDT - ISSDT    < 8 THEN ORI30D = 0.1;
+   ELSE                         ORI30D = (MATDT-ISSDT)/30;
+   BNMCODE = PART||ITEM||'00'||PUT(REMMTH,REMFMT.)||'0000Y';
+   OUTPUT;
+   *------------------------------------------------*
+   *  DUPLICATE ANOTHER SET FOR PART 1              *
+   *  95 = PART 2-RM, 96 = PART 2-FX                *
+   *  93 = PART 1-RM, 94 = PART 1-FX                *
+   *------------------------------------------------*;
+   IF PART = '95' THEN SUBSTR(BNMCODE,1,2) = '93';
+   ELSE SUBSTR(BNMCODE,1,2) = '94';
+   OUTPUT;
 RUN;
 
-DATA K1TBL(RENAME=(GWCCY=CURCODE GWDLP=DEALTYPE GWDLR=DEALREF
-                   GWC2R=CUSTFISS))
-     K3TBL(RENAME=(UTCCY=CURCODE UTSTY=DEALTYPE UTDLR=DEALREF
-                   UTCUS=CUSTNO));
-   SET KTBLALL;
-   IF      TBL = '1' THEN OUTPUT K1TBL;
-   ELSE IF TBL = '3' THEN OUTPUT K3TBL;
-   DROP D1-D12 RD1-RD12 MD1-MD12 RPYR RPMTH RPDAY MDYR MDMTH MDDAY
-        REMY REMM REMD;
-RUN;
 
-DATA CISEQ(RENAME=(CUSTNO=CISNO CUSTNAME=CISNAME));
-   SET CIS.CUSTDLY;
-   WHERE ACCTCODE = 'EQC' AND PRISEC=901;
-   IF NEWIC = '' OR SUBSTR(NEWIC,1,5) IN ('99999') THEN
-      ICNO  = COMPRESS(ALIASKEY||PUT(CUSTNO,20.));
-   ELSE
-      ICNO =  COMPRESS(ALIASKEY||ALIAS);
-   KEEP ACCTNO CUSTNO PRISEC ALIASKEY ALIAS CUSTNAME ICNO;
-RUN;
-PROC SORT DATA=CISEQ OUT=LCR.CISEQ; BY ACCTNO; RUN;
-
-%LET UTVAR=(KEEP=DEALREF DEALTYPE CUSTFISS CUSTNO CUSTNAME CUSTEQNO
-                 CUSTID);
-
-DATA UTSAS(RENAME=(CUSTEQNO=ACCTNO));
-   SET EQUA.UTMS&RPTDT &UTVAR
-       EQUA.UTFX&RPTDT &UTVAR
-       EQUA.UTRP&RPTDT &UTVAR;
-RUN;
-PROC SORT DATA=UTSAS; BY ACCTNO; RUN;
-
-DATA UTSAS LCRM.UTSAS&REPTMON;
-   MERGE UTSAS(IN=A) LCR.CISEQ;
-   BY ACCTNO;
-   IF A;
-RUN;
-PROC SORT DATA=UTSAS NODUPKEY; BY DEALREF; RUN;
-
-DATA ALLEQU;
-   SET K1TBL K3TBL DCI;
-RUN;
-PROC SORT DATA=ALLEQU NODUPKEY; BY DEALREF; RUN;
-
-DATA ALLEQU LCR.EQU&REPTDAY;
-   MERGE ALLEQU(IN=A) UTSAS;
-   BY DEALREF;
-   IF A;
-   IF CUSTFISS = . AND UTCTP NE '' THEN CUSTFISS=PUT(UTCTP,$CTYPE.);
-   IF CUSTNAME = '' THEN DO;
-      IF GWSHN   ^= '' THEN CUSTNAME = GWSHN;
-      IF CUSTNAME = '' THEN CUSTNAME = CUSTNO;
-   END;
-
-   *15-894;
-   IF   CUSTNO IN ('KWSP','KWAP','KWAN','LEMTAB')   THEN CUST='39';
-   ELSE IF CUSTFISS IN (76,77,78,95,96)             THEN CUST='08';
-   ELSE IF CUSTFISS IN (41,42,43,44,46,47,48,49,51,
-                        52,53,54,65,66,67,68,69)    THEN CUST='19';
-   ELSE IF CUSTFISS IN (00,45,57,59,60,61,62,63,64,
-                        75,79,85,86,87,88,89,98,99) THEN CUST='29';
-   ELSE IF CUSTFISS IN (01,71,72,73,74,90,91,92)    THEN CUST='39';
-   ELSE IF CUSTFISS IN (02,03,07,12,81,82,83,84)    THEN CUST='49';
-   ELSE IF CUSTFISS IN (04,05,06,13,20,30:40,17)    THEN CUST='59';
-   ELSE                                                  CUST='29';
-
-   IF REM30D = . THEN REM30D = REMMTH;
-   IF REM30D > 1 AND REMMTH > 1 THEN REM30D = REMMTH;
-
-   FORMAT BIC $5. CMMCODE $14.;
-   BIC = SUBSTR(BNMCODE,1,5);
-   IF BIC = '95830' AND DEALTYPE IN ('BCQ','BCT','BCW') THEN
-      BIC = '9583X'; *PQMMD;
-   BNMCODE = BIC||CUST||PUT(REM30D,REMFMT.)||'0000Y';
-   CMMCODE = BIC||CUST||PUT(REMMTH,CMMFMT.)||'0000Y';
-
-   *15-1789;
-   IF CUSTNO IN ('AIM','PBL','PBLEUR','PBLNID','PBLUSD','PIVMYR','IPBB')
-      AND CUST='49' AND BIC IN ('95840','96840') THEN DO;
-      IF PUT(ORI30D,REMFMT.) > 5 AND PUT(REM30D,REMFMT.) > 1 THEN
-         BNMCODE = SUBSTR(BNMCODE,1,9)||'0200Y';
-   END;
-   FORMAT ICGRP $400.;
-   IF CUSTID NE '' THEN ICGRP = COMPRESS(CUSTID);
-   ELSE                 ICGRP = COMPRESS(ICNO);
-   KEEP BIC BNMCODE CMMCODE CURCODE AMOUNT DEALREF DEALTYPE CUSTFISS
-        CUSTNO CUSTNAME REM30D REMMTH ORI30D MATDT CUSTID ICNO ACCTNO
-        CISNO CISNAME ICGRP;
-RUN;
-PROC SORT DATA=ALLEQU; BY BNMCODE CURCODE; RUN;
-
-PROC SUMMARY DATA=ALLEQU NWAY;
-   BY BNMCODE CURCODE;
-   VAR AMOUNT;
-   OUTPUT OUT=EQUTOT(DROP=_TYPE_ _FREQ_) SUM=;
-RUN;
-
-PROC SORT DATA=ALLEQU; BY ICGRP; RUN;
-
-PROC SUMMARY DATA=ALLEQU NWAY;
-   WHERE SUBSTR(BIC,3,3) IN ('810','820','830','83X','840','850');
-   BY ICGRP;
-   VAR AMOUNT;
-   OUTPUT OUT=TOTEQU(DROP=_TYPE_ _FREQ_) SUM=TOTICEQBAL;
-RUN;
-
+*----------------------------------------------------------------*
+*  DISTRIBUTION PROFILE OF CUSTOMER DEPOSITS (PART 3)            *
+*----------------------------------------------------------------*;
 *------------------------------------------------*
-*  CORE BANKING                                  *
+*  NON-INTERBANK REPOS                           *
 *------------------------------------------------*;
-DATA ALLMNI;
-   SET LCR.FD&REPTDAY(RENAME=(CUSTCD=CUSTCDX) IN=FD)
-       LCR.SA&REPTDAY
-       LCR.CA&REPTDAY
-       LCR.FCYCA&REPTDAY;
-   IF FD THEN CUSTCD = PUT(CUSTCDX,Z2.);
-   IF      CUSTCD IN (76,77,78,95,96)             THEN CUST='08';
-   ELSE IF CUSTCD IN (41,42,43,44,46,47,48,49,51,
-                      52,53,54,65,66,67,68,69)    THEN CUST='19';
-   ELSE IF CUSTCD IN (00,45,57,59,60,61,62,63,64,
-                      75,79,85,86,87,88,89,98,99) THEN CUST='29';
-   ELSE IF CUSTCD IN (01,71,72,73,74,90,91,92)    THEN CUST='39';
-   ELSE IF CUSTCD IN (02,03,07,12,81,82,83,84)    THEN CUST='49';
-   ELSE IF CUSTCD IN (04,05,06,13,20,30:40,17)    THEN CUST='59';
-   ELSE                                                CUST='29';
-
-   IF REM30D = . THEN REM30D = REMMTH;
-   IF REM30D > 1 AND REMMTH > 1 THEN REM30D = REMMTH; *15-2370;
-RUN;
-PROC SORT DATA=ALLMNI; BY ACCTNO; RUN;
-
-DATA CISINFO;
-   SET CISDP.DEPOSIT(KEEP=ACCTNO CUSTNO SECCUST NEWIC OLDIC CUSTNAME)
-       CISCA.DEPOSIT(KEEP=ACCTNO CUSTNO SECCUST NEWIC OLDIC CUSTNAME);
-   WHERE SECCUST='901';
-RUN;
-PROC SORT DATA=CISINFO OUT=LCR.CISINFO; BY ACCTNO; RUN;
-
-PROC SORT DATA=LIST.LCR_ECP OUT=LCR.ECP NODUPKEY; BY ACCTNO; RUN;
-
-DATA ALLMNI;
-   MERGE ALLMNI(IN=A) LCR.CISINFO LCRM.TRNSCISIC LCR.ECP LCRM.SME;
-   BY ACCTNO;
-   IF A;
-   IF ECP = '' THEN ECP = '00';
-   IF ECP = '01' THEN DO;
-      IF INTRATE < OPRRATE THEN ECP = '01';        *OPERATIONAL;
-      ELSE IF INTRATE >= OPRRATE THEN ECP = '00';  *NON-OPERATIONAL;
-   END;
-   IF BILLERIND = 'Y' OR PBMERCH = 'Y' THEN
-      ECP = '01'; *16-2778/4738/17-754/17-2026;
-   IF PRODUCT IN (106,151,158,97,164,201,215) OR
-      INTPLAN IN (400:419,600:658,720:740,864:890,941:967) OR
-     (SOURCE NE 'PGD' AND
-      DTSIGNED > 0 AND YRDIF(DTSIGNED,&TDATE,'ACT/ACT') >= 1) THEN
-      SIGN= 'R '; *17-2949/4521;
-   IF CUSTNO IN ( 4391161, 2115999,12579649,13468207,14300254,
-                 14675929,15327497,17104931,12677444, 3703533,
-                  5978659,16185090,2558344,10819745) THEN CUST='39';
-   FORMAT BIC $5. CMMCODE $14.;
-   BIC = SUBSTR(BNMCODE,1,5);
-   BNMCODE = BIC||CUST||'02'||'0000Y';
-   CMMCODE = BIC||CUST||PUT(REMMTH,CMMFMT.)||'0000Y';
-   IF CURCODE = 'XAU' THEN DO;
-      BIC = '9531X'; /* GOLD */
-      BNMCODE = BIC||CUST||'10'||'0000Y';
-      CMMCODE = BIC||CUST||PUT(REMMTH,CMMFMT.)||'0000Y';
-      AMOUNT  = AMOUNT*PUT(CURCODE,$FORATE.);
-   END;
-RUN;
-PROC SORT DATA=ALLMNI; BY ICGRP; RUN;
-
-PROC SUMMARY DATA=ALLMNI NWAY;
-   BY ICGRP;
-   VAR AMOUNT;
-   OUTPUT OUT=TOTMNI(DROP=_TYPE_ _FREQ_) SUM=TOTICBAL;
-RUN;
-
-DATA ALLMNI
-     LCR.CMM&REPTDAY(KEEP=BIC BNMCODE CMMCODE BRANCH ACCTNO CUSTCD
-                          PRODUCT CURCODE AMOUNT CUSTNO NEWIC OLDIC
-                          CUSTNAME REM30D REMMTH ECP CDNO MATDT
-                          BILLERIND TOTDPBAL TOTICBAL TOTICEQBAL
-                          SME_TAG PBMERCH INTPLAN);
-   MERGE ALLMNI(IN=A) TOTMNI TOTEQU;
-   BY ICGRP;
-   IF A;
-   IF (CUSTNO NOT IN (14094942,16557696,3728510,11335374,16265490,
-                      3523050,11880426,16771972,15241330,16500538) AND
-      SUBSTR(BNMCODE,6,2) = '29') OR CUSTCD IN (72,73,74) THEN DO;
-      TOTDPBAL = SUM(TOTICBAL,TOTICEQBAL); *16-3319;
-      IF TOTDPBAL < 5000000 THEN DO; *15-1076;
-         BNMCODE = BIC||'19'||SUBSTR(BNMCODE,8,7);
-         CMMCODE = BIC||'19'||SUBSTR(CMMCODE,8,7);
-      END;
-   END;
-   *16-4512;
-   ELSE IF SUBSTR(BNMCODE,6,2) = '19' AND SME_TAG = 'N' THEN DO;
-      TOTDPBAL = SUM(TOTICBAL,TOTICEQBAL);
-      IF TOTDPBAL => 5000000 THEN DO;
-         BNMCODE = BIC||'29'||SUBSTR(BNMCODE,8,7);
-         CMMCODE = BIC||'29'||SUBSTR(CMMCODE,8,7);
-      END;
-   END;
-   IF SUBSTR(BNMCODE,6,2) IN ('08','19') AND BIC NE '9531X' THEN DO;
-      IF      TRX  IN (1)        THEN TAG = '01';
-      ELSE IF SIGN IN ('R','R ') THEN TAG = '02';
-      ELSE                            TAG = '03';
-      BNMCODE = SUBSTR(BNMCODE,1,7)||TAG||'0000Y';
-   END;
-   /* OPERATIONAL DEPOSIT - LCR_ECP UNDER EGS_FD */
-   IF BIC IN ('95313','96313') THEN DO;
-      BNMCODE = SUBSTR(BNMCODE,1,9)||ECP||'00Y';
-      CMMCODE = SUBSTR(CMMCODE,1,9)||ECP||'00Y';
-   END;
-   IF TOTICBAL > 250000 THEN DO; /* PROPORTION INSURED/UNINSURED */
-      IF SUBSTR(BNMCODE,6,2) IN ('29','39') AND ECP NE '01' THEN DO;
-         BNMCODE = SUBSTR(BNMCODE,1,7)||'10'||SUBSTR(BNMCODE,10,5);
-         OUTPUT;                    /* NOT FULLY COVERED */
-      END;
-      ELSE DO;
-         CURBAL  = AMOUNT;
-         AMOUNT  = (CURBAL/TOTICBAL)*250000;
-         OUTPUT;                    /* INSURED   */
-         AMOUNT  = SUM(CURBAL,-1*AMOUNT);
-         BNMCODE = SUBSTR(BNMCODE,1,7)||'10'||SUBSTR(BNMCODE,10,5);
-         OUTPUT;                    /* UNINSURED */
-      END;
-   END;
-   ELSE
-      OUTPUT;                    /* INSURED   */
-RUN;
-
-DATA ALLMNI FDHOLD(KEEP=BNMCODE CURCODE AMOUNT);
-   SET ALLMNI;
-   IF BIC IN ('95311','96311') THEN DO;
-      IF REM30D <= 1 THEN BNMCODE = SUBSTR(BNMCODE,1,9)||'0100Y';
-      ELSE                BNMCODE = SUBSTR(BNMCODE,1,9)||'0200Y';
-      IF FDHOLD = 'Y' THEN DO;
-         OUTPUT FDHOLD;
-         BNMCODE = SUBSTR(BNMCODE,1,7)||'20'||SUBSTR(BNMCODE,10,5);
-      END;
-   END;
-   OUTPUT ALLMNI;
-RUN;
-PROC SORT DATA=ALLMNI; BY BNMCODE CURCODE; RUN;
-
-PROC SUMMARY DATA=ALLMNI NWAY;
-   BY BNMCODE CURCODE;
-   VAR AMOUNT;
-   OUTPUT OUT=MNITOT(DROP=_TYPE_ _FREQ_) SUM=;
-RUN;
-
+DATA K1TBL;
+   KEEP CAT NAME AMOUNT;
+   LENGTH CAT $20 NAME $24;
+   SET BNMK.K1TBL&REPTMON&NOWK (RENAME=(GWBALC=AMOUNT GWSHN=NAME));
+   IF GWCCY = 'MYR' AND GWMVT = 'P' AND GWMVTS = 'M';
+   IF SUBSTR(GWCTP,1,1) ^= 'B' AND SUBSTR(GWDLP,2,2) IN ('MI','MT');
+   CAT = 'NON-INTERBANK REPOS';
+*;
 *------------------------------------------------*
-*  FD PLEDGED                                    *
+*  NON-INTERBANK NIDS                            *
 *------------------------------------------------*;
-PROC SORT DATA=FDHOLD; BY BNMCODE CURCODE; RUN;
-PROC SUMMARY DATA=FDHOLD NWAY;
-   BY BNMCODE CURCODE;
+DATA K3TBL;
+   KEEP CAT NAME AMOUNT;
+   LENGTH CAT $20 NAME $24;
+   SET BNMK.K3TBL&REPTMON&NOWK;
+   IF SUBSTR(UTCTP,1,1) ^= 'B' AND
+      UTREF IN ('PFD','PLD','PSD','PZD','PDC') AND
+      UTSTY IN ('IFD','ILD','ISD','IZD','IDC','IDP','IZP');
+   AMOUNT = UTAMOC - UTDPF;
+   NAME = UTCUS || UTCLC;
+   CAT = 'NON-INTERBANK NIDS';
+*;
+PROC APPEND BASE=K1TBL DATA=K3TBL;
+*;
+PROC SUMMARY DATA=K1TBL NWAY;
+   CLASS CAT NAME;
    VAR AMOUNT;
-   OUTPUT OUT=FDHOLD(DROP=_TYPE_ _FREQ_) SUM=;
-RUN;
-
-DATA FDHOLD;
-   SET FDHOLD;
-   ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNI.);
-   IF ITEM NE '';
-   IF SUBSTR(BNMCODE,10,2) = '01' THEN  /*REM30D<=1*/
-      IF CURCODE = 'MYR' THEN FDPLEDGE1 = AMOUNT;
-      ELSE                    FXPLEDGE1 = AMOUNT;
-   ELSE
-      IF CURCODE = 'MYR' THEN FDPLEDGE2 = AMOUNT;
-      ELSE                    FXPLEDGE2 = AMOUNT;
-RUN;
-PROC SORT DATA=FDHOLD OUT=LCR.FDHOLD; BY ITEM; RUN;
-
-PROC SUMMARY DATA=LCR.FDHOLD NWAY;
-   BY ITEM;
-   VAR FDPLEDGE1 FDPLEDGE2 FXPLEDGE1 FXPLEDGE2;
-   OUTPUT OUT=FDHOLD(DROP=_TYPE_ _FREQ_) SUM=;
-RUN;
-
-*------------------------------------------------*
-*  SUMMARISE AND CONSOLIDATE                     *
-*------------------------------------------------*;
-DATA LCR.ALLSRC;
-   SET MNITOT(IN=A) EQUTOT;
-   FORMAT COLNAME $15.;
-   BIC     = SUBSTR(BNMCODE,1,5);
-   COLNAME = PUT(BIC,$COLID.);
-   ECP     = SUBSTR(BNMCODE,10,2);
-   IF A THEN DO;
-      IF BIC IN ('95313','96313') AND ECP = '01' THEN
-         ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNIOPR.);
-      IF ITEM = '' THEN
-         ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNI.);
-      REMMTH = SUBSTR(BNMCODE,10,2);
-   END;
-   ELSE      DO;
-      ITEM   = PUT(SUBSTR(BNMCODE,6,2),$LCRCDEQU.);
-      IF BIC IN ('95820') THEN ITEM = 'C1.11'; *16-250;
-      REMMTH = SUBSTR(BNMCODE,8,2);
-      ORIMTH = SUBSTR(BNMCODE,10,2); *15-1789;
-      IF ITEM = 'B3.30' AND ORIMTH = '02' THEN ITEM = 'B6.30';
-   END;
-   IF COLNAME NE '' AND ITEM NE ''; *CONTROLLER;
-
-   AMOUNT = ABS(ROUND(AMOUNT/1000,.01));
-   IF SUBSTR(COLNAME,1,2)= 'FD' OR SUBSTR(COLNAME,1,3) IN ('STD') THEN
-         IF REMMTH=1 THEN COLNAME = COMPRESS(COLNAME||'1');
-         ELSE             COLNAME = COMPRESS(COLNAME||'2');
-   ELSE IF SUBSTR(COLNAME,1,3) IN ('NID','DCI','IBB','IBR','BAP') THEN
-      DO I = 1 TO 6;
-         IF REMMTH=I THEN COLNAME = COMPRESS(COLNAME||'V'||I);
-      END;
-   DROP I;
-RUN;
-PROC SORT DATA=LCR.ALLSRC OUT=DEPOSIT; BY ITEM COLNAME; RUN;
-
-PROC SUMMARY DATA=DEPOSIT NWAY;
-   BY ITEM COLNAME;
-   VAR AMOUNT;
-   OUTPUT OUT=DEPOSIT(DROP=_TYPE_ _FREQ_) SUM=;
-RUN;
-
-PROC TRANSPOSE DATA=DEPOSIT OUT=DEPOSIT(DROP=_NAME_ _LABEL_);
-   BY ITEM;
-   ID COLNAME;
-   VAR AMOUNT;
-RUN;
-
-*------------------------------------------------*
-*  WALKER GL                                     *
-*------------------------------------------------*;
-DATA LCR.GL&REPTDAY;
-   INFILE WALK;
-   INPUT @002 SET_ID         $19.
-         @042 AMOUNT     COMMA20.2
-         @062 SIGN            $1.
-         ;
-   FORMAT ITEM $5.;
-   IF SIGN = '' THEN AMOUNT = -1*AMOUNT;
-   ITEM    = PUT(SET_ID,$LCRCDGL.);
-RUN;
-PROC SORT DATA=LCR.GL&REPTDAY OUT=GL NODUPKEY; BY SET_ID; RUN;
-
-DATA GL;
-  SET GL;
-  OUTPUT;
-   /* SPECIAL MAPPING - SAME SET_ID MAP TO MULTIPLE ITEMS */
-   IF SET_ID = 'F142699OPE' THEN DO;
-      ITEM = 'B3.30';
-      IF SIGN = '-' THEN AMOUNT = -1*AMOUNT;
-      OUTPUT;
-   END;
-RUN;
-
-PROC SORT DATA=GL; BY ITEM; WHERE ITEM NE ''; RUN;
-
-PROC SUMMARY DATA=GL NWAY;
-   BY ITEM;
-   VAR AMOUNT;
-   OUTPUT OUT=GL SUM=OTHSOURCE;
-RUN;
-
-*------------------------------------------------*
-*  LCR REPORTING                                 *
-*------------------------------------------------*;
-DATA REPORT;
-   MERGE DEPOSIT FDHOLD GL;
-   BY ITEM;
-   PART=SUBSTR(ITEM,1,1);
-   FDPLEDGE1 = ABS(ROUND(FDPLEDGE1/1000,.01));
-   FDPLEDGE2 = ABS(ROUND(FDPLEDGE2/1000,.01));
-   FXPLEDGE1 = ABS(ROUND(FXPLEDGE1/1000,.01));
-   FXPLEDGE2 = ABS(ROUND(FXPLEDGE2/1000,.01));
-   OTHSOURCE = ABS(ROUND(OTHSOURCE/1000,.01));
-RUN;
-PROC SORT DATA=REPORT OUT=SREPORT; BY PART; RUN;
-
-PROC SUMMARY DATA=SREPORT NWAY;
-   BY PART;
-   VAR _NUMERIC_;
-   OUTPUT OUT=SREPORT(DROP=_TYPE_ _FREQ_) SUM=;
-RUN;
-
-DATA SREPORT;
-   SET SREPORT;
-   IF PART = 'A'      THEN ITEM = 'A9.01';
-   ELSE IF PART = 'B' THEN ITEM = 'B9.01';
-   ELSE IF PART = 'C' THEN ITEM = 'C9.01';
-RUN;
-PROC SORT DATA=SREPORT; BY ITEM; RUN;
-
-DATA LCR.LCR&REPTDAY;
-   MERGE TEMPLATE(IN=A) REPORT SREPORT;
-   BY ITEM;
-   IF A;
-   DLM='05'X;
-   FILE LCROUT;
-   IF _N_=1 THEN DO;
-      PUT @001 'PUBLIC BANK BERHAD'
-          /    "LIQUIDITY COVERAGE RATIO (LCR) AS AT &RDATE"
-          /
-           ;
-      PUT @125                                              DLM
-                                                            DLM
-                                                            DLM
-                'FD (P)'                                    DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                'SA (Q)'                                    DLM
-                'CA (R)'                                    DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                'SHORT TERM DEPOSIT'                        DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                'GOLD (U)'                                  DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                'RM&FX NID ISSUED **'                       DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                'RM&FX INTERBANK BORROWINGS (IBB) **'       DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                'DUAL CURRENCY INVESTMENTS (DCI) **'        DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                'RM&FX INTERBANK REPOS **'                  DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                'RM&FX BAS PAYABLE **'                      DLM
-                                                            DLM
-                                                            DLM
-                                                            DLM
-                'OTHER SOURCE'                              DLM
-                'TOTAL'                                     DLM
-                'TOTAL'                                     DLM
-                'FD PLEDGED'                                DLM
-                ;
-      PUT @125                                              DLM
-                '<= 30 DAYS (O1)'                           DLM
-                ' > 30 DAYS (O2)'                           DLM
-                'TOTAL (RM) (O)=(O1+O2)'                    DLM
-                '<= 30 DAYS (P1)'                           DLM
-                ' > 30 DAYS (P2)'                           DLM
-                'TOTAL (FX) (P)=(P1+P2)'                    DLM
-                                                            DLM
-                'RM'                                        DLM
-                'FX'                                        DLM
-                '<= 30 DAYS (S1)'                           DLM
-                ' > 30 DAYS (S2)'                           DLM
-                'TOTAL (RM) (S)=(S1+S2)'                    DLM
-                '<= 30 DAYS (T1)'                           DLM
-                ' > 30 DAYS (T2)'                           DLM
-                'TOTAL (FX) (T)=(T1+T2)'                    DLM
-                                                            DLM
-                '<= 30 DAYS (V1)'                           DLM
-                '> 30 DAYS-3 MTHS (V2)'                     DLM
-                '> 3-6 MTHS (V3)'                           DLM
-                '> 6-9 MTHS (V4)'                           DLM
-                '> 9-12 MTHS (V5)'                          DLM
-                '> 1 YEAR (V6)'                             DLM
-                'TOTAL (V)'                                 DLM
-                '<= 30 DAYS (W1)'                           DLM
-                '> 30 DAYS-3 MTHS (W2)'                     DLM
-                '> 3-6 MTHS (W3)'                           DLM
-                '> 6-9 MTHS (W4)'                           DLM
-                '> 9-12 MTHS (W5)'                          DLM
-                '> 1 YEAR (W6)'                             DLM
-                'TOTAL (W)'                                 DLM
-                '<= 30 DAYS (X1)'                           DLM
-                '> 30 DAYS-3 MTHS (X2)'                     DLM
-                '> 3-6 MTHS (X3)'                           DLM
-                '> 6-9 MTHS (X4)'                           DLM
-                '> 9-12 MTHS (X5)'                          DLM
-                '> 1 YEAR (X6)'                             DLM
-                'TOTAL (X)'                                 DLM
-                '<= 30 DAYS (Y1)'                           DLM
-                '> 30 DAYS-3 MTHS (Y2)'                     DLM
-                '> 3-6 MTHS (Y3)'                           DLM
-                '> 6-9 MTHS (Y4)'                           DLM
-                '> 9-12 MTHS (Y5)'                          DLM
-                '> 1 YEAR (Y6)'                             DLM
-                'TOTAL (Y)'                                 DLM
-                '<= 30 DAYS (Z1)'                           DLM
-                '> 30 DAYS-3 MTHS (Z2)'                     DLM
-                '> 3-6 MTHS (Z3)'                           DLM
-                '> 6-9 MTHS (Z4)'                           DLM
-                '> 9-12 MTHS (Z5)'                          DLM
-                '> 1 YEAR (Z6)'                             DLM
-                'TOTAL (Z)'                                 DLM
-                '(GL)'                                      DLM
-                '(O1+P1+Q+R+S+T1+U+V+W1+X1+Y1+Z+GL)'        DLM
-                '(O+P+Q+R+S+T+U+V+W+X+Y+Z+GL)'              DLM
-                '<= 30 DAYS (RM)'                           DLM
-                ' > 30 DAYS (RM)'                           DLM
-                '<= 30 DAYS (FX)'                           DLM
-                ' > 30 DAYS (FX)'                           DLM
-          ;
-   END;
-   FORMAT FD95311RM1 FD95311RM2 FD95311RM  FD96311FX1 FD96311FX2
-          FD96311FX  SA95312RM  CA95313RM  CA96313FX  STD95830V1
-          STD95830V2 STD95830   STD95830Q1 STD95830Q2 STD95830Q
-          GLD9531X   NID95840V1 NID95840V2 NID95840V3 NID95840V4
-          NID95840V5 NID95840V6 NID95840   IBB9X810V1 IBB9X810V2
-          IBB9X810V3 IBB9X810V4 IBB9X810V5 IBB9X810V6 IBB9X810
-          DCI9X329V1 DCI9X329V2 DCI9X329V3 DCI9X329V4 DCI9X329V5
-          DCI9X329V6 DCI9X329   IBR95820V1 IBR95820V2 IBR95820V3
-          IBR95820V4 IBR95820V5 IBR95820V6 IBR95820   BAP95850V1
-          BAP95850V2 BAP95850V3 BAP95850V4 BAP95850V5 BAP95850V6
-          BAP95850   OTHSOURCE  TOTALV1    TOTALDP    FDPLEDGE1
-          FDPLEDGE2  FXPLEDGE1 FXPLEDGE2 COMMA20.2;
-
-   FD95311RM = SUM(FD95311RM1,FD95311RM2);  *SUM(OF FD95311RM:);
-   FD96311FX = SUM(FD96311FX1,FD96311FX2);  *SUM(OF FD96311FX:);
-   STD95830  = SUM(OF STD95830V:);
-   STD95830Q = SUM(OF STD95830Q:);
-   NID95840  = SUM(OF NID95840V:);
-   IBB9X810  = SUM(OF IBB9X810V:);
-   DCI9X329  = SUM(OF DCI9X329V:);
-   IBR95820  = SUM(OF IBR95820V:);
-   BAP95850  = SUM(OF BAP95850V:);
-   TOTALV1   = SUM(FD95311RM1,FD96311FX1,SA95312RM,CA95313RM,CA96313FX,
-                   STD95830  ,STD95830Q1,GLD9531X ,NID95840 ,IBB9X810V1,
-                   DCI9X329V1,IBR95820V1,BAP95850 ,OTHSOURCE);
-   TOTALDP   = SUM(FD95311RM ,FD96311FX ,SA95312RM,CA95313RM,CA96313FX,
-                   STD95830  ,STD95830Q ,GLD9531X ,NID95840 ,IBB9X810,
-                   DCI9X329  ,IBR95820  ,BAP95850 ,OTHSOURCE);
-   IF SUBSTR(UPCASE(IDESC),1,2)='B)' THEN PUT ;
-   PUT @001  IDESC        $CHAR120.          DLM
-       @125  FD95311RM1                      DLM
-             FD95311RM2                      DLM
-             FD95311RM                       DLM
-             FD96311FX1                      DLM
-             FD96311FX2                      DLM
-             FD96311FX                       DLM
-             SA95312RM                       DLM
-             CA95313RM                       DLM
-             CA96313FX                       DLM
-             STD95830V1                      DLM
-             STD95830V2                      DLM
-             STD95830                        DLM
-             STD95830Q1                      DLM
-             STD95830Q2                      DLM
-             STD95830Q                       DLM
-             GLD9531X                        DLM
-             NID95840V1                      DLM
-             NID95840V2                      DLM
-             NID95840V3                      DLM
-             NID95840V4                      DLM
-             NID95840V5                      DLM
-             NID95840V6                      DLM
-             NID95840                        DLM
-             IBB9X810V1                      DLM
-             IBB9X810V2                      DLM
-             IBB9X810V3                      DLM
-             IBB9X810V4                      DLM
-             IBB9X810V5                      DLM
-             IBB9X810V6                      DLM
-             IBB9X810                        DLM
-             DCI9X329V1                      DLM
-             DCI9X329V2                      DLM
-             DCI9X329V3                      DLM
-             DCI9X329V4                      DLM
-             DCI9X329V5                      DLM
-             DCI9X329V6                      DLM
-             DCI9X329                        DLM
-             IBR95820V1                      DLM
-             IBR95820V2                      DLM
-             IBR95820V3                      DLM
-             IBR95820V4                      DLM
-             IBR95820V5                      DLM
-             IBR95820V6                      DLM
-             IBR95820                        DLM
-             BAP95850V1                      DLM
-             BAP95850V2                      DLM
-             BAP95850V3                      DLM
-             BAP95850V4                      DLM
-             BAP95850V5                      DLM
-             BAP95850V6                      DLM
-             BAP95850                        DLM
-             OTHSOURCE                       DLM
-             TOTALV1                         DLM
-             TOTALDP                         DLM
-             FDPLEDGE1                       DLM
-             FDPLEDGE2                       DLM
-             FXPLEDGE1                       DLM
-             FXPLEDGE2                       DLM
-       ;
+   OUTPUT OUT=K1TBL (DROP=_TYPE_ _FREQ_) SUM=;
 RUN;
 
 
-this is the original sas code for ur reference. does the fofmt and ktblall count as inputs?
+is it better to include in the program directly? or should it be ignore?
