@@ -13,7 +13,7 @@ Python conversion of SAS EIIMLCRM program
 import pyreadstat
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 from pathlib import Path
 
@@ -74,7 +74,7 @@ MGIA_PRODUCTS = [302, 315, 394, 396]
 # =============================================================================
 def get_report_date():
     """Calculate report date as yesterday (SAS equivalent of REPTDATE)"""
-    reptdate = datetime.now() - timedelta(days=14)
+    reptdate = datetime.now() - timedelta(days=1)
     day = reptdate.day
     
     if day <= 8:
@@ -190,6 +190,27 @@ def format_mth_bucket_sas(months):
         return '05'
     else:
         return '10'
+
+def convert_sas_date_to_python(sas_date):
+    """Convert SAS date (days since 1960-01-01) to Python date"""
+    if pd.isna(sas_date):
+        return None
+    try:
+        if isinstance(sas_date, (datetime, date)):
+            return sas_date
+        if isinstance(sas_date, (int, float)):
+            return datetime(1960, 1, 1) + timedelta(days=int(sas_date))
+        return None
+    except:
+        return None
+
+def is_valid_date(value):
+    """Check if value is a valid date (not NaN, not zero)"""
+    if pd.isna(value):
+        return False
+    if isinstance(value, (int, float)) and value <= 0:
+        return False
+    return True
 
 # =============================================================================
 # TREASURY PROCESSING - Matching SAS ALLEQU DATA step
@@ -320,7 +341,7 @@ def process_treasury(rep_date):
         # ICGRP: IF CUSTID NE '' THEN ICGRP = COMPRESS(CUSTID); ELSE ICGRP = COMPRESS(ICNO);
         custid = str(row.get('CUSTID', '')).replace(' ', '')
         icno = str(row.get('ICNO', '')).replace(' ', '')
-        icgrp = custid if custid != '' else icno
+        icgrp = custid if custid != '' and custid != 'nan' else icno
         
         records.append({
             'BIC': bic,
@@ -441,11 +462,14 @@ def process_banking(rep_date):
             sme_df = sme_df.drop_duplicates(subset=['ACCTNO'], keep='first')
     
     # Merge all: MERGE ALLMNI(IN=A) LCR.CISINFO LCR.TRNSCISIC ECP LCR.SME; BY ACCTNO; IF A;
+    print("  Merging CIS/ECP/SME data...")
     allmni = allmni.merge(cisinfo, on='ACCTNO', how='left', suffixes=('', '_CIS'))
     if not ecp_df.empty:
         allmni = allmni.merge(ecp_df, on='ACCTNO', how='left', suffixes=('', '_ECP'))
     if not sme_df.empty:
         allmni = allmni.merge(sme_df, on='ACCTNO', how='left', suffixes=('', '_SME'))
+    
+    print("  Processing records...")
     
     # Special customer lists from SAS
     special_39 = [4391161, 2115999, 12579649, 13468207, 14300254,
@@ -459,9 +483,12 @@ def process_banking(rep_date):
     
     # Process records matching SAS logic
     records = []
-    for _, row in allmni.iterrows():
+    for idx, row in allmni.iterrows():
         custcd_str = str(row.get('CUSTCD', '00'))
-        custcd_int = int(float(custcd_str)) if custcd_str.isdigit() else 0
+        try:
+            custcd_int = int(float(custcd_str))
+        except:
+            custcd_int = 0
         
         # Customer categorization matching SAS IF/ELSE
         if custcd_int in [76,77,78,95,96]:
@@ -512,9 +539,11 @@ def process_banking(rep_date):
             ecp_val = '00'
         
         if ecp_val == '01':
-            intrate = float(row.get('INTRATE', 0)) if pd.notna(row.get('INTRATE')) else 0
-            oprrate = float(row.get('OPRRATE', 0)) if pd.notna(row.get('OPRRATE')) else 0
-            if intrate < oprrate:
+            intrate = row.get('INTRATE', 0)
+            oprrate = row.get('OPRRATE', 0)
+            intrate_val = float(intrate) if pd.notna(intrate) else 0
+            oprrate_val = float(oprrate) if pd.notna(oprrate) else 0
+            if intrate_val < oprrate_val:
                 ecp_val = '01'
             else:
                 ecp_val = '00'
@@ -529,7 +558,7 @@ def process_banking(rep_date):
         product = row.get('PRODUCT', 0)
         intplan = row.get('INTPLAN', 0)
         source = str(row.get('SOURCE', '')).strip()
-        dtsigned = row.get('DTSIGNED', 0)
+        dtsigned = row.get('DTSIGNED', None)
         
         if (product in [106,151,158,97,164,201,215] or
             (pd.notna(intplan) and (
@@ -540,12 +569,20 @@ def process_banking(rep_date):
                 (941 <= intplan <= 967)
             ))):
             sign = 'R '
-        elif (source != 'PGD' and pd.notna(dtsigned) and dtsigned > 0):
+        elif source != 'PGD' and dtsigned is not None and pd.notna(dtsigned):
+            # Handle both SAS numeric dates and Python date objects
             try:
-                dtsigned_date = datetime(1960, 1, 1) + timedelta(days=int(dtsigned))
-                years_diff = (rep_date['tdatetime'] - dtsigned_date).days / 365.25
-                if years_diff >= 1:
-                    sign = 'R '
+                if isinstance(dtsigned, (datetime, date)):
+                    dtsigned_date = dtsigned
+                elif isinstance(dtsigned, (int, float)) and dtsigned > 0:
+                    dtsigned_date = datetime(1960, 1, 1) + timedelta(days=int(dtsigned))
+                else:
+                    dtsigned_date = None
+                
+                if dtsigned_date:
+                    years_diff = (rep_date['tdatetime'] - dtsigned_date).days / 365.25
+                    if years_diff >= 1:
+                        sign = 'R '
             except:
                 pass
         
@@ -599,6 +636,10 @@ def process_banking(rep_date):
             'DTSIGNED': dtsigned,
             'TRX': row.get('TRX', 0)
         })
+        
+        # Progress indicator
+        if (idx + 1) % 500000 == 0:
+            print(f"    Processed {idx + 1:,} records...")
     
     df_result = pd.DataFrame(records)
     print(f"  Banking processed: {len(df_result)} records")
@@ -611,15 +652,6 @@ def process_banking(rep_date):
 def apply_sme_reclassification_and_insurance(df):
     """
     Apply SME reclassification and insurance split.
-    
-    SAS equivalent:
-    PROC SUMMARY DATA=ALLMNI NWAY; BY ICGRP; VAR AMOUNT; OUTPUT OUT=TOTMNI SUM=TOTICBAL;
-    PROC SUMMARY DATA=ALLEQU NWAY; WHERE SUBSTR(BIC,3,3) IN (...); BY ICGRP; VAR AMOUNT; OUTPUT OUT=TOTEQU SUM=TOTICEQBAL;
-    
-    DATA ALLMNI;
-       MERGE ALLMNI TOTMNI TOTEQU; BY ICGRP;
-       ...
-    RUN;
     """
     print("Applying SME reclassification and insurance split...")
     
@@ -661,7 +693,6 @@ def apply_sme_reclassification_and_insurance(df):
         totdpbal = toticbal + toticeqbal
         
         # Reclassify retail to SME if total deposits < 5M
-        # IF (CUSTNO NOT IN (...) AND SUBSTR(BNMCODE,6,2) = '29') OR CUSTCD IN (72,73,74) THEN DO;
         if (custno not in special_custnos and bnmcode[5:7] == '29') or custcd in ['72', '73', '74']:
             if totdpbal < 5000000:
                 r['BNMCODE'] = bic + '19' + bnmcode[7:]
@@ -669,7 +700,6 @@ def apply_sme_reclassification_and_insurance(df):
                 r['NSFCODE'] = bic + '19' + r.get('NSFCODE', '')[7:]
         
         # Reclassify SME to retail if total deposits >= 5M and not SME tagged
-        # ELSE IF SUBSTR(BNMCODE,6,2) = '19' AND SME_TAG = 'N' THEN DO;
         elif bnmcode[5:7] == '19' and sme_tag == 'N':
             if totdpbal >= 5000000:
                 r['BNMCODE'] = bic + '29' + bnmcode[7:]
@@ -677,7 +707,6 @@ def apply_sme_reclassification_and_insurance(df):
                 r['NSFCODE'] = bic + '29' + r.get('NSFCODE', '')[7:]
         
         # Apply TAG for 08/19 categories
-        # IF SUBSTR(BNMCODE,6,2) IN ('08','19') THEN DO;
         if r['BNMCODE'][5:7] in ['08', '19']:
             trx = r.get('TRX', 0)
             sign = r.get('SIGN', '')
@@ -693,7 +722,6 @@ def apply_sme_reclassification_and_insurance(df):
             r['NSFCODE'] = r['NSFCODE'][:7] + tag + '0000Y'
         
         # Apply ECP for CA accounts
-        # IF BIC IN ('95313','96313') THEN DO;
         ecp = r.get('ECP', '00')
         if bic in ['95313', '96313']:
             r['BNMCODE'] = r['BNMCODE'][:9] + ecp + '00Y'
@@ -701,7 +729,6 @@ def apply_sme_reclassification_and_insurance(df):
             r['NSFCODE'] = r['NSFCODE'][:9] + ecp + '00Y'
         
         # Insurance split logic
-        # IF TOTICBAL > 250000 THEN DO;
         if toticbal > 250000:
             curbal = r['AMOUNT']
             bnm = r['BNMCODE']
@@ -741,17 +768,10 @@ def apply_sme_reclassification_and_insurance(df):
 
 # =============================================================================
 # NSFR AND FD HOLD PROCESSING
-# Matching SAS:
-#   DATA LCR.NSFR&REPTMON; SET ALLMNI; IF BIC IN ('95315','95317') THEN DO; ...
-#   DATA ALLMNI FDHOLD; SET ALLMNI; IF BIC IN ('95315','95317') THEN DO; ...
 # =============================================================================
 def process_nsfr_fdhold(df):
     """
     Process NSFR codes and FD hold flags.
-    
-    SAS processes this in two DATA steps:
-    1. DATA LCR.NSFR&REPTMON - NSFR output with REMFMT for maturity
-    2. DATA ALLMNI FDHOLD - LCR BNMCODE and FDHOLD extraction
     """
     print("Processing NSFR and FD hold...")
     
@@ -768,14 +788,13 @@ def process_nsfr_fdhold(df):
             remmth = r.get('REMMTH', 1)
             fdhold = str(r.get('FDHOLD', 'N')).strip().upper()
             
-            # NSFR processing: NSFCODE = SUBSTR(NSFCODE,1,9)||PUT(REMMTH,REMFMX.)||'00Y';
+            # NSFR processing
             r['NSFCODE'] = r['NSFCODE'][:9] + format_mth_bucket_sas(remmth) + '00Y'
             
-            # IF FDHOLD = 'Y' THEN NSFCODE = SUBSTR(NSFCODE,1,7)||'20'||SUBSTR(NSFCODE,10,5);
             if fdhold == 'Y':
                 r['NSFCODE'] = r['NSFCODE'][:7] + '20' + r['NSFCODE'][10:]
             
-            # LCR processing: IF REM30D <= 1 THEN BNMCODE = ... ELSE BNMCODE = ...;
+            # LCR processing
             if rem30d <= 1:
                 r['BNMCODE'] = r['BNMCODE'][:9] + '0100Y'
             else:
@@ -789,12 +808,11 @@ def process_nsfr_fdhold(df):
                     'AMOUNT': r['AMOUNT'],
                     'BIC': bic
                 })
-                # OUTPUT FDHOLD; then modify BNMCODE
                 r['BNMCODE'] = r['BNMCODE'][:7] + '20' + r['BNMCODE'][10:]
         
         all_records.append(r)
     
-    # Process FDHOLD records matching SAS FDHOLD DATA step
+    # Process FDHOLD records
     fdhold_processed = []
     if fdhold_records:
         fdhold_df = pd.DataFrame(fdhold_records)
@@ -802,7 +820,6 @@ def process_nsfr_fdhold(df):
         
         for _, row in fdhold_grouped.iterrows():
             bnmcode = row['BNMCODE']
-            # ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNI.);
             item_raw = lcrcdmni_fmt(bnmcode[5:9])
             item = item_raw.strip() if item_raw else ''
             
@@ -810,7 +827,6 @@ def process_nsfr_fdhold(df):
                 bic = row['BIC']
                 amount = row['AMOUNT']
                 
-                # IF SUBSTR(BNMCODE,10,2) = '01' THEN /*REM30D<=1*/
                 if len(bnmcode) >= 11 and bnmcode[9:11] == '01':
                     if bic == '95315':
                         fdhold_processed.append({
@@ -841,27 +857,11 @@ def process_nsfr_fdhold(df):
     return pd.DataFrame(all_records), fdhold_processed
 
 # =============================================================================
-# SHAREX FORMATTING - Matching SAS %SHAREX macro
+# SHAREX FORMATTING
 # =============================================================================
 def apply_sharex_format(df):
     """
     Apply SHAREX macro logic.
-    
-    SAS %SHAREX macro:
-    %MACRO SHAREX;
-       FORMAT COLNAME $15.;
-       BIC = SUBSTR(BNMCODE,1,5);
-       COLNAME = PUT(BIC,$COLID.);
-       ...
-       IF A THEN DO; /* Banking */
-          IF BIC IN ('95313','96313') AND ECP = '01' THEN ITEM = PUT(...,$LCRCDMNIOPR.);
-          IF ITEM = '' THEN ITEM = PUT(...,$LCRCDMNI.);
-       END;
-       ELSE DO; /* Treasury */
-          IF DLTYPE = '01' THEN COLNAME = 'STQ95830';
-          ITEM = PUT(...,$LCRCDEQU.);
-       END;
-    %MEND;
     """
     print("Applying SHAREX format...")
     
@@ -874,13 +874,11 @@ def apply_sharex_format(df):
         amount = abs(round(row['AMOUNT'] / 1000, 2))
         
         if row['SRC'] == 'BANKING':
-            # COLNAME = PUT(BIC,$COLID.);
             colname_raw = colid_fmt(bic)
             colname = colname_raw.strip() if colname_raw else ''
             
             ecp = bnmcode[9:11] if len(bnmcode) > 11 else '00'
             
-            # IF BIC IN ('95313','96313') AND ECP = '01' THEN ITEM = PUT(...,$LCRCDMNIOPR.);
             if bic in ['95313', '96313'] and ecp == '01':
                 item_raw = lcrcdmniopr_fmt(bnmcode[5:9])
             else:
@@ -888,7 +886,6 @@ def apply_sharex_format(df):
             
             item = item_raw.strip() if item_raw else ''
             
-            # IF ITEM = '' THEN ITEM = PUT(...,$LCRCDMNI.);
             if not item:
                 item_raw = lcrcdmni_fmt(bnmcode[5:9])
                 item = item_raw.strip() if item_raw else ''
@@ -896,7 +893,6 @@ def apply_sharex_format(df):
             remmth = bnmcode[9:11] if len(bnmcode) > 11 else '00'
             
         else:  # TREASURY
-            # IF DLTYPE = '01' THEN COLNAME = 'STQ95830';
             dltype = bnmcode[11:13] if len(bnmcode) > 12 else '00'
             if dltype == '01':
                 colname = 'STQ95830'
@@ -904,27 +900,21 @@ def apply_sharex_format(df):
                 colname_raw = colid_fmt(bic)
                 colname = colname_raw.strip() if colname_raw else ''
             
-            # ITEM = PUT(SUBSTR(BNMCODE,6,2),$LCRCDEQU.);
             item_raw = lcrcdequ_fmt(bnmcode[5:7])
             item = item_raw.strip() if item_raw else ''
             
             remmth = bnmcode[7:9] if len(bnmcode) > 9 else '00'
             orimth = bnmcode[9:11] if len(bnmcode) > 10 else '00'
             
-            # IF ITEM = 'B3.30' AND ORIMTH = '02' THEN ITEM = 'B6.30';
             if item == 'B3.30' and orimth == '02':
                 item = 'B6.30'
         
-        # IF COLNAME NE '' AND ITEM NE '';
         if colname and item:
-            # Apply maturity suffix
-            # IF SUBSTR(COLNAME,1,2)= 'FD' OR SUBSTR(COLNAME,1,3) IN ('STD','STQ') THEN
             if colname[:2] == 'FD' or colname[:3] in ['STD', 'STQ']:
                 if remmth == '01':
                     colname = colname + '1'
                 else:
                     colname = colname + '2'
-            # ELSE IF SUBSTR(COLNAME,1,3) IN ('NID','IBB') THEN
             elif colname[:3] in ['NID', 'IBB']:
                 try:
                     rem_idx = int(remmth)
@@ -948,16 +938,6 @@ def apply_sharex_format(df):
 def process_gl():
     """
     Process WALK.TXT for GL data.
-    
-    SAS:
-    DATA LCR.GL;
-       INFILE WALK;
-       INPUT @002 SET_ID $19. @042 AMOUNT COMMA20.2 @062 SIGN $1.;
-       IF SIGN = '' THEN AMOUNT = -1*AMOUNT;
-       ITEM = PUT(SET_ID,$LCRCDIGL.);
-       CURCODE = PUT(SET_ID,$LCRCDIGLCCY.);
-       IF ITEM = '' AND CURCODE NE '' THEN ITEM = PUT(SET_ID,$LCRCDGLOTH.);
-    RUN;
     """
     print("Processing GL data (WALK.TXT)...")
     
@@ -971,30 +951,19 @@ def process_gl():
         print("  No GL data")
         return pd.DataFrame()
     
-    # ITEM = PUT(SET_ID,$LCRCDIGL.);
     gl['ITEM'] = gl['SET_ID'].apply(lambda x: lcrcdigl_fmt(x).strip())
-    
-    # CURCODE = PUT(SET_ID,$LCRCDIGLCCY.);
     gl['CURCODE'] = gl['SET_ID'].apply(lambda x: lcrcdiglccy_fmt(x).strip())
     
-    # IF ITEM = '' AND CURCODE NE '' THEN ITEM = PUT(SET_ID,$LCRCDGLOTH.);
     mask = (gl['ITEM'] == '') & (gl['CURCODE'] != '')
     gl.loc[mask, 'ITEM'] = gl.loc[mask, 'SET_ID'].apply(lambda x: lcrcdgloth_fmt(x).strip())
     
-    # Also try lcrcdgl_fmt for main mapping
     mask_still = gl['ITEM'] == ''
     gl.loc[mask_still, 'ITEM'] = gl.loc[mask_still, 'SET_ID'].apply(lambda x: lcrcdgl_fmt(x).strip())
     
-    # Filter valid items
     gl = gl[gl['ITEM'] != '']
-    
-    # PROC SORT NODUPKEY; BY SET_ID;
     gl = gl.drop_duplicates(subset=['SET_ID'], keep='first')
-    
-    # PROC SORT; BY ITEM CURCODE; WHERE ITEM NE '';
     gl = gl.sort_values(['ITEM', 'CURCODE'])
     
-    # PROC SUMMARY NWAY; BY ITEM CURCODE; VAR AMOUNT; OUTPUT SUM=OTHSOURCE;
     if not gl.empty:
         gl_summary = gl.groupby(['ITEM', 'CURCODE'])['AMOUNT'].sum().reset_index()
         gl_summary.rename(columns={'AMOUNT': 'OTHSOURCE'}, inplace=True)
@@ -1009,12 +978,6 @@ def process_gl():
 def generate_reports(sharex_df, fdhold_data, gl_data, rep_date):
     """
     Generate LCR reports matching SAS %LCRPRINT macro.
-    
-    Outputs:
-    - LCRMTH{mon}.txt (all currencies)
-    - LCRUSD{mon}.txt (USD only)
-    - LCRSGD{mon}.txt (SGD only)
-    - LCRMYR{mon}.txt (MYR only)
     """
     print("Generating LCR reports...")
     
@@ -1022,10 +985,8 @@ def generate_reports(sharex_df, fdhold_data, gl_data, rep_date):
         print("  No SHAREX data")
         return
     
-    # PROC SUMMARY DATA=DEPOSIT NWAY; BY ITEM CURCODE COLNAME; VAR AMOUNT;
     deposit = sharex_df.groupby(['ITEM', 'CURCODE', 'COLNAME'])['AMOUNT'].sum().reset_index()
     
-    # PROC TRANSPOSE DATA=DEPOSIT OUT=DEPOSIT; BY ITEM CURCODE; ID COLNAME; VAR AMOUNT;
     deposit_wide = deposit.pivot_table(
         index=['ITEM', 'CURCODE'],
         columns='COLNAME',
@@ -1034,27 +995,23 @@ def generate_reports(sharex_df, fdhold_data, gl_data, rep_date):
         fill_value=0
     ).reset_index()
     
-    # Merge FDHOLD data
     if fdhold_data:
         fdhold_df = pd.DataFrame(fdhold_data)
         if not fdhold_df.empty:
             fdhold_summary = fdhold_df.groupby(['ITEM', 'CURCODE']).sum().reset_index()
             deposit_wide = deposit_wide.merge(fdhold_summary, on=['ITEM', 'CURCODE'], how='left')
     
-    # Fill missing columns
     for col in ['FDPLEDGE1', 'FDPLEDGE2', 'TDPLEDGE1', 'TDPLEDGE2']:
         if col not in deposit_wide.columns:
             deposit_wide[col] = 0
         deposit_wide[col] = deposit_wide[col].fillna(0)
     
-    # Merge GL data
     if not gl_data.empty:
         deposit_wide = deposit_wide.merge(gl_data, on=['ITEM', 'CURCODE'], how='outer')
     if 'OTHSOURCE' not in deposit_wide.columns:
         deposit_wide['OTHSOURCE'] = 0
     deposit_wide['OTHSOURCE'] = deposit_wide['OTHSOURCE'].fillna(0)
     
-    # Generate reports for each currency configuration
     configs = [
         ('MTH', 'LCRMTH', None),
         ('USD', 'LCRUSD', ['USD']),
@@ -1064,12 +1021,10 @@ def generate_reports(sharex_df, fdhold_data, gl_data, rep_date):
     
     for suffix, prefix, currencies in configs:
         if currencies:
-            # IF CURCODE IN &CCY;
             df_curr = deposit_wide[deposit_wide['CURCODE'].isin(currencies)].copy()
         else:
             df_curr = deposit_wide.copy()
         
-        # For MTH: IF GL AND CURCODE IN ('USD','SGD') THEN OTHSOURCE = 0;
         if suffix == 'MTH':
             df_curr.loc[df_curr['CURCODE'].isin(['USD', 'SGD']), 'OTHSOURCE'] = 0
         
@@ -1082,7 +1037,6 @@ def write_report(df_data, suffix, prefix, rep_date):
     
     output_file = f"{PATHS['OUTPUT']}{prefix}{rep_date['mon']}.txt"
     
-    # Read template file
     template_file = f"{PATHS['TEMPLATE']}templ.txt"
     template_items = []
     try:
@@ -1096,7 +1050,6 @@ def write_report(df_data, suffix, prefix, rep_date):
         print(f"  Template not found: {template_file}")
         template_items = []
     
-    # Column order matching SAS output positions (@125 onwards)
     columns = [
         'FD95315RM1', 'FD95315RM2', 'FD95315RM',
         'FD95317RM1', 'FD95317RM2', 'FD95317RM',
@@ -1112,26 +1065,21 @@ def write_report(df_data, suffix, prefix, rep_date):
         'FDPLEDGE1', 'FDPLEDGE2', 'TDPLEDGE1', 'TDPLEDGE2'
     ]
     
-    delim = '\t'  # DLM='05'X
+    delim = '\t'
     
     with open(output_file, 'w') as f:
-        # Header lines
         f.write(f'PUBLIC ISLAMIC BANK BERHAD\n')
         f.write(f'LIQUIDITY COVERAGE RATIO (LCR) AS AT {rep_date["rdate"]}\n')
         
-        # Process each template item
         for template_row in template_items:
             item = template_row['ITEM']
             idesc = template_row['IDESC']
             
-            # IF SUBSTR(UPCASE(IDESC),1,2)='B)' THEN PUT;
             if idesc.upper().startswith('B)'):
                 f.write('\n')
             
-            # Get data for this item
             item_data = df_data[df_data['ITEM'] == item]
             
-            # Build values
             values = []
             for col in columns:
                 if col is None:
@@ -1147,7 +1095,6 @@ def write_report(df_data, suffix, prefix, rep_date):
                 else:
                     values.append('')
             
-            # Write output line
             f.write(f'{idesc}{delim}')
             f.write(delim.join(values))
             f.write('\n')
@@ -1163,14 +1110,12 @@ def main():
     print("Python conversion of SAS EIIMLCRM program")
     print("=" * 70)
     
-    # Get report date (yesterday)
     rep_date = get_report_date()
     print(f"\nReport Date: {rep_date['date'].strftime('%d/%m/%Y')}")
     print(f"Week of Month: {rep_date['nowk']}")
     print(f"Month: {rep_date['mon']}")
     print(f"Year: {rep_date['year']}")
     
-    # Process data sources
     treasury_df = process_treasury(rep_date)
     banking_df = process_banking(rep_date)
     
@@ -1178,26 +1123,19 @@ def main():
         print("\nNo data found!")
         return
     
-    # Combine
     all_data = pd.concat([treasury_df, banking_df], ignore_index=True)
     print(f"\nTotal combined records: {len(all_data):,}")
     
-    # SME Reclassification and Insurance Split
     all_data = apply_sme_reclassification_and_insurance(all_data)
     
-    # NSFR and FD Hold processing
     all_data, fdhold_data = process_nsfr_fdhold(all_data)
     
-    # SHAREX formatting
     sharex_df = apply_sharex_format(all_data)
     
-    # GL processing
     gl_data = process_gl()
     
-    # Generate reports
     generate_reports(sharex_df, fdhold_data, gl_data, rep_date)
     
-    # Summary
     print("\n" + "=" * 70)
     print("PROCESSING SUMMARY")
     print("=" * 70)
@@ -1221,33 +1159,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-output:
-
-======================================================================
-EIIMLCRM - BNM LCR Reporting (Islamic Banking)
-Python conversion of SAS EIIMLCRM program
-======================================================================
-
-Report Date: 31/07/2026
-Week of Month: 4
-Month: 07
-Year: 26
-Processing Treasury (ALLEQU)...
-  UTSAS: 2917 records
-  Combined K1TBL+K3TBL: 1162 records
-  Treasury processed: 1162 records
-Processing Core Banking (ALLMNI)...
-  Combined banking: 2792341 records
-  CIS info: 9771249 accounts
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIMLCRM.py", line 1223, in <module>
-    main()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIMLCRM.py", line 1175, in main
-    banking_df = process_banking(rep_date)
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIMLCRM.py", line 543, in process_banking
-    elif (source != 'PGD' and pd.notna(dtsigned) and dtsigned > 0):
-TypeError: '>' not supported between instances of 'datetime.date' and 'int'
