@@ -782,3 +782,11 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+all inputs are in sas7bdat sas dataset. all in lowercase.
+use pyreadstat to read.
+only walk.txt and templ.txt uses text file.
+remove reptdate, use datetime timedelta - 1 instead. 
+output in text files
