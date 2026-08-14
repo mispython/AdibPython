@@ -6,10 +6,12 @@ Outputs: LCR reports with customer categorization (08/19/29/39/49/59)
 """
 
 import polars as pl
-from datetime import datetime, date
+import pyreadstat
+from datetime import datetime, date, timedelta
 import os
 from pathlib import Path
 import calendar
+import glob
 
 # =============================================================================
 # CONFIGURATION
@@ -52,9 +54,8 @@ SPECIAL_CUST = {
 # UTILITY FUNCTIONS
 # =============================================================================
 def get_report_date():
-    """Read report date and set macro variables"""
-    df = pl.read_parquet(f"{PATHS['DEPOSIT']}REPTDATE.parquet")
-    reptdate = df['REPTDATE'][0]
+    """Get report date as yesterday's date"""
+    reptdate = date.today() - timedelta(days=1)
     
     # Week of month (1-4)
     day = reptdate.day
@@ -78,6 +79,48 @@ def get_report_date():
         'days_in_month': days_in_month,
         'days_in_cur_month': days_in_month[reptdate.month - 1]
     }
+
+def read_sas_file(filepath, columns=None):
+    """Read SAS dataset using pyreadstat and return polars DataFrame"""
+    try:
+        if columns:
+            df, meta = pyreadstat.read_sas7bdat(filepath, usecols=columns)
+        else:
+            df, meta = pyreadstat.read_sas7bdat(filepath)
+        return pl.from_pandas(df)
+    except Exception as e:
+        print(f"  Warning: Could not read {filepath}: {e}")
+        return None
+
+def read_walk_file(filepath):
+    """Read WALK.TXT file (fixed width format)"""
+    records = []
+    try:
+        with open(filepath, 'r') as f:
+            for line in f:
+                if len(line) >= 18:
+                    records.append({
+                        'ACCTNO': int(line[0:11].strip()) if line[0:11].strip() else None,
+                        'CUSTNO': int(line[11:18].strip()) if line[11:18].strip() else None
+                    })
+    except Exception as e:
+        print(f"  Warning: Could not read {filepath}: {e}")
+    return records
+
+def read_templ_file(filepath):
+    """Read TEMPL.TXT file (fixed width format)"""
+    records = []
+    try:
+        with open(filepath, 'r') as f:
+            for line in f:
+                if len(line) >= 14:
+                    records.append({
+                        'TAG': line[0:2].strip(),
+                        'DESC': line[2:14].strip()
+                    })
+    except Exception as e:
+        print(f"  Warning: Could not read {filepath}: {e}")
+    return records
 
 def get_customer_category(code, mapping, special=None, is_custno=False):
     """Get customer category from code"""
@@ -145,7 +188,19 @@ def process_dci(rep_date, fx_rates):
     records = []
     
     try:
-        df = pl.read_parquet(f"{PATHS['DCIWH']}DCID{rep_date['mon']}{rep_date['day']}.parquet")
+        # Find the latest DCI file
+        dci_pattern = f"{PATHS['DCIWH']}DCID*.sas7bdat"
+        dci_files = glob.glob(dci_pattern)
+        if not dci_files:
+            print(f"  No DCI files found")
+            return records
+        
+        # Use the most recent file
+        dci_file = max(dci_files)
+        df = read_sas_file(dci_file)
+        
+        if df is None:
+            return records
         
         for row in df.iter_rows(named=True):
             matdt = row.get('MATDT')
@@ -221,7 +276,10 @@ def process_treasury_k1k3(rep_date):
     records = []
     
     try:
-        df = pl.read_parquet(f"{PATHS['LCR']}KTBLALL.parquet")
+        df = read_sas_file(f"{PATHS['LCR']}KTBLALL.sas7bdat")
+        
+        if df is None:
+            return records
         
         for row in df.iter_rows(named=True):
             tbl = row.get('TBL')
@@ -257,12 +315,16 @@ def process_cis_equity():
     records = []
     
     try:
-        df = pl.read_parquet(f"{PATHS['CIS']}CUSTDLY.parquet")
+        df = read_sas_file(f"{PATHS['CIS']}CUSTDLY.sas7bdat")
+        
+        if df is None:
+            return records
+        
         df = df.filter((pl.col('ACCTCODE') == 'EQC') & (pl.col('PRISEC') == 901))
         
         for row in df.iter_rows(named=True):
             newic = row.get('NEWIC', '')
-            if not newic or (len(newic) >= 5 and newic[:5] == '99999'):
+            if not newic or (len(str(newic)) >= 5 and str(newic)[:5] == '99999'):
                 icno = f"{row.get('ALIASKEY', '')}{row.get('CUSTNO', 0)}".replace(' ', '')
             else:
                 icno = f"{row.get('ALIASKEY', '')}{row.get('ALIAS', '')}".replace(' ', '')
@@ -287,14 +349,18 @@ def process_utsas(rep_date):
     
     try:
         for prefix in ['UTMS', 'UTFX', 'UTRP']:
-            df = pl.read_parquet(f"{PATHS['EQUA']}{prefix}{rep_date['rptdt']}.parquet")
-            # Select only required columns if they exist
-            keep_cols = [c for c in utvar if c in df.columns]
-            if keep_cols:
-                df = df.select(keep_cols)
-                if 'CUSTEQNO' in df.columns:
-                    df = df.rename({'CUSTEQNO': 'ACCTNO'})
-                records.extend(df.rows(named=True))
+            file_pattern = f"{PATHS['EQUA']}{prefix}*.sas7bdat"
+            files = glob.glob(file_pattern)
+            for filepath in files:
+                df = read_sas_file(filepath)
+                if df is not None:
+                    # Select only required columns if they exist
+                    keep_cols = [c for c in utvar if c in df.columns]
+                    if keep_cols:
+                        df = df.select(keep_cols)
+                        if 'CUSTEQNO' in df.columns:
+                            df = df.rename({'CUSTEQNO': 'ACCTNO'})
+                        records.extend(df.rows(named=True))
     except Exception as e:
         print(f"  UTSAS warning: {e}")
     
@@ -309,63 +375,92 @@ def process_core_banking(rep_date):
     
     try:
         for tbl in ['FD', 'SA', 'CA', 'FCYCA']:
-            df = pl.read_parquet(f"{PATHS['LCR']}{tbl}{rep_date['day']}.parquet")
+            file_pattern = f"{PATHS['LCR']}{tbl}*.sas7bdat"
+            files = glob.glob(file_pattern)
             
-            for row in df.iter_rows(named=True):
-                custcd = row.get('CUSTCD', 0)
-                if tbl == 'FD':
-                    custcd = row.get('CUSTCDX', 0)
+            for filepath in files:
+                df = read_sas_file(filepath)
+                if df is None:
+                    continue
                 
-                # Customer category
-                cust = get_customer_category(custcd, CUST_MAP)
-                
-                # Maturity
-                rem30d = row.get('REM30D', row.get('REMMTH', 1))
-                remmth = row.get('REMMTH', 1)
-                
-                if rem30d is None:
-                    rem30d = remmth
-                
-                # Build BIC
-                bic = row['BNMCODE'][:5]
-                
-                records.append({
-                    'src': f'BANKING_{tbl}',
-                    'bic': bic,
-                    'bnmcode': f"{bic}{cust}020000Y",
-                    'cmmcode': f"{bic}{cust}{format_mth_bucket(remmth)}0000Y",
-                    'cur': row.get('CURCODE', 'MYR'),
-                    'amt': row.get('AMOUNT', 0),
-                    'acctno': row.get('ACCTNO', 0),
-                    'custno': row.get('CUSTNO', 0),
-                    'custcd': custcd,
-                    'rem30d': rem30d,
-                    'remmth': remmth,
-                    'ecp': '00',
-                    'product': row.get('PRODUCT', 0),
-                    'billerind': row.get('BILLERIND', 'N'),
-                    'pbmerch': row.get('PBMERCH', 'N'),
-                    'intrate': row.get('INTRATE', 0),
-                    'oprrate': row.get('OPRRATE', 0),
-                    'source': row.get('SOURCE', ''),
-                    'dtsigned': row.get('DTSIGNED'),
-                    'intplan': row.get('INTPLAN', 0),
-                    'sme_tag': row.get('SME_TAG', ''),
-                    'fdhold': row.get('FDHOLD', 'N'),
-                    'trx': row.get('TRX', 0),
-                    'sign': ''
-                })
+                for row in df.iter_rows(named=True):
+                    custcd = row.get('CUSTCD', 0)
+                    if tbl == 'FD':
+                        custcd = row.get('CUSTCDX', 0)
+                    
+                    # Customer category
+                    cust = get_customer_category(custcd, CUST_MAP)
+                    
+                    # Maturity
+                    rem30d = row.get('REM30D', row.get('REMMTH', 1))
+                    remmth = row.get('REMMTH', 1)
+                    
+                    if rem30d is None:
+                        rem30d = remmth
+                    
+                    # Build BIC
+                    bic = row['BNMCODE'][:5] if row.get('BNMCODE') else '95311'
+                    
+                    records.append({
+                        'src': f'BANKING_{tbl}',
+                        'bic': bic,
+                        'bnmcode': f"{bic}{cust}020000Y",
+                        'cmmcode': f"{bic}{cust}{format_mth_bucket(remmth)}0000Y",
+                        'cur': row.get('CURCODE', 'MYR'),
+                        'amt': row.get('AMOUNT', 0),
+                        'acctno': row.get('ACCTNO', 0),
+                        'custno': row.get('CUSTNO', 0),
+                        'custcd': custcd,
+                        'rem30d': rem30d,
+                        'remmth': remmth,
+                        'ecp': '00',
+                        'product': row.get('PRODUCT', 0),
+                        'billerind': row.get('BILLERIND', 'N'),
+                        'pbmerch': row.get('PBMERCH', 'N'),
+                        'intrate': row.get('INTRATE', 0),
+                        'oprrate': row.get('OPRRATE', 0),
+                        'source': row.get('SOURCE', ''),
+                        'dtsigned': row.get('DTSIGNED'),
+                        'intplan': row.get('INTPLAN', 0),
+                        'sme_tag': row.get('SME_TAG', ''),
+                        'fdhold': row.get('FDHOLD', 'N'),
+                        'trx': row.get('TRX', 0),
+                        'sign': ''
+                    })
     except Exception as e:
         print(f"  Core banking warning: {e}")
     
     return records
 
+def read_walk_and_templ():
+    """Read WALK.TXT and TEMPL.TXT files"""
+    walk_records = []
+    templ_records = []
+    
+    # Read WALK.TXT
+    walk_files = glob.glob(f"{PATHS['LIST']}WALK*.TXT")
+    if walk_files:
+        walk_records = read_walk_file(walk_files[0])
+        print(f"  WALK: {len(walk_records)} records")
+    
+    # Read TEMPL.TXT
+    templ_files = glob.glob(f"{PATHS['LIST']}TEMPL*.TXT")
+    if templ_files:
+        templ_records = read_templ_file(templ_files[0])
+        print(f"  TEMPL: {len(templ_records)} records")
+    
+    return walk_records, templ_records
+
 # =============================================================================
 # INSURED/UNINSURED SPLIT
 # =============================================================================
-def apply_insurance_split(records):
+def apply_insurance_split(records, walk_records, templ_records):
     """Split insured/uninsured portions for amounts > 250K"""
     result = []
+    
+    # Build lookup dicts
+    walk_dict = {r['ACCTNO']: r for r in walk_records if r.get('ACCTNO')}
+    templ_tags = {r['TAG']: r['DESC'] for r in templ_records if r.get('TAG')}
     
     # Group by ICGRP to get totals
     icgrp_totals = {}
@@ -377,6 +472,12 @@ def apply_insurance_split(records):
     for r in records:
         icgrp = r.get('icgrp', '')
         toticbal = icgrp_totals.get(icgrp, 0)
+        
+        # Check if account is in WALK
+        acctno = r.get('acctno')
+        if acctno in walk_dict:
+            # Add WALK attributes
+            r['walk_custno'] = walk_dict[acctno].get('CUSTNO')
         
         if toticbal > 250000 and r.get('bic') not in ['9531X']:
             # Need to split
@@ -480,6 +581,62 @@ def apply_column_mapping(row, is_banking):
     
     return item, colname, row['amt_k']
 
+def write_text_report(report_data, rep_date):
+    """Write report to text files"""
+    if not report_data:
+        print("  No report data to write")
+        return
+    
+    # Create output directory
+    output_dir = PATHS['OUTPUT']
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Convert to DataFrame and pivot
+    report_df = pl.DataFrame(report_data)
+    
+    # Summarize by item and column
+    final = report_df.group_by(['item', 'colname']).agg([
+        pl.col('amount').sum()
+    ])
+    
+    # Get unique items and columns
+    items = sorted(final['item'].unique().to_list())
+    columns = sorted(final['colname'].unique().to_list())
+    
+    # Write to text file (tab-delimited)
+    filename = f"LCR{rep_date['day']}.txt"
+    filepath = f"{output_dir}{filename}"
+    
+    with open(filepath, 'w') as f:
+        # Write header
+        f.write("ITEM\t" + "\t".join(columns) + "\n")
+        
+        # Write data
+        for item in items:
+            row_data = [item]
+            for col in columns:
+                # Find the amount for this item and column
+                mask = (final['item'] == item) & (final['colname'] == col)
+                if mask.any():
+                    amount = final.filter(mask)['amount'].sum()
+                    row_data.append(f"{amount:.2f}")
+                else:
+                    row_data.append("0.00")
+            f.write("\t".join(row_data) + "\n")
+    
+    print(f"  ✓ {filename}: {len(items)} items x {len(columns)} columns")
+    
+    # Also write a detailed report
+    detail_filename = f"LCR_DETAIL{rep_date['day']}.txt"
+    detail_filepath = f"{output_dir}{detail_filename}"
+    
+    with open(detail_filepath, 'w') as f:
+        f.write("ITEM\tCOLNAME\tAMOUNT\tCURRENCY\n")
+        for row in report_data:
+            f.write(f"{row['item']}\t{row['colname']}\t{row['amount']:.2f}\t{row.get('cur', 'MYR')}\n")
+    
+    print(f"  ✓ {detail_filename}")
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -488,7 +645,7 @@ def main():
     print("EIBDLCRM - BNM LCR Reporting (Conventional Banking)")
     print("=" * 60)
     
-    # Get report date
+    # Get report date (yesterday)
     rep_date = get_report_date()
     print(f"\nReport Date: {rep_date['date'].strftime('%d/%m/%Y')}")
     print(f"Week: {rep_date['nowk']}, Month: {rep_date['mon']}")
@@ -497,15 +654,20 @@ def main():
     print("\nLoading FX rates...")
     fx_rates = {'MYR': 1.0}
     try:
-        # Read format catalog
-        fmt_df = pl.read_parquet(f"{PATHS['FORATE']}FOFMT.parquet")
-        for row in fmt_df.iter_rows(named=True):
-            if row.get('FMTNAME') == 'FORATE':
-                fx_rates[row['START']] = row['LABEL']
-        print(f"  Loaded {len(fx_rates)} currencies")
-    except:
+        df = read_sas_file(f"{PATHS['FORATE']}FOFMT.sas7bdat")
+        if df is not None:
+            for row in df.iter_rows(named=True):
+                if row.get('FMTNAME') == 'FORATE':
+                    fx_rates[row['START']] = row['LABEL']
+            print(f"  Loaded {len(fx_rates)} currencies")
+    except Exception as e:
+        print(f"  Warning: Could not load FX rates: {e}")
         print("  Using default rates")
         fx_rates.update({'USD': 4.0, 'SGD': 3.0, 'HKD': 0.5, 'AUD': 3.0, 'JPY': 0.03, 'XAU': 200.0})
+    
+    # Read WALK.TXT and TEMPL.TXT
+    print("\nLoading WALK and TEMPL files...")
+    walk_records, templ_records = read_walk_and_templ()
     
     # Process DCI
     print("\nProcessing DCI...")
@@ -594,7 +756,8 @@ def main():
             'custno': custno,
             'icgrp': icgrp,
             'rem30d': rem30d,
-            'remmth': remmth
+            'remmth': remmth,
+            'acctno': acctno
         })
     
     # Process Core Banking
@@ -603,12 +766,12 @@ def main():
     
     # Merge with CIS and ECP for banking
     try:
-        cis_info = pl.read_parquet(f"{PATHS['LCR']}CISINFO.parquet")
-        ecp = pl.read_parquet(f"{PATHS['LIST']}LCR_ECP.parquet").unique(subset=['ACCTNO'])
+        cis_info = read_sas_file(f"{PATHS['LCR']}CISINFO.sas7bdat")
+        ecp = read_sas_file(f"{PATHS['LIST']}LCR_ECP.sas7bdat")
         
         # Create lookup dicts
-        cis_dict = {r['ACCTNO']: r for r in cis_info.rows(named=True)}
-        ecp_dict = {r['ACCTNO']: r['ECP'] for r in ecp.rows(named=True) if 'ECP' in r}
+        cis_dict = {r['ACCTNO']: r for r in cis_info.rows(named=True)} if cis_info is not None else {}
+        ecp_dict = {r['ACCTNO']: r['ECP'] for r in ecp.rows(named=True) if 'ECP' in r} if ecp is not None else {}
     except:
         cis_dict = {}
         ecp_dict = {}
@@ -713,9 +876,9 @@ def main():
             r['bnmcode'] = r['bnmcode'][:9] + r['ecp'] + '00Y'
             r['cmmcode'] = r['cmmcode'][:9] + r['ecp'] + '00Y'
     
-    # Apply insurance split
+    # Apply insurance split with WALK and TEMPL data
     print("\nApplying insurance split...")
-    banking_split = apply_insurance_split(enhanced_banking)
+    banking_split = apply_insurance_split(enhanced_banking, walk_records, templ_records)
     
     # Combine all sources
     all_data = enhanced_treasury + banking_split
@@ -726,10 +889,10 @@ def main():
     summary = consolidate_data(all_data)
     print(f"  {len(summary):,} BNM code x currency combinations")
     
-    # Generate report
-    print("\nGenerating LCR report...")
+    # Generate report as text
+    print("\nGenerating LCR report (text format)...")
     
-    # Group by ITEM and COLNAME (simplified)
+    # Group by ITEM and COLNAME
     report_data = []
     for row in summary.rows(named=True):
         # Banking or treasury?
@@ -738,29 +901,12 @@ def main():
         report_data.append({
             'item': item,
             'colname': colname,
-            'amount': amount
+            'amount': amount,
+            'cur': row['cur']
         })
     
     if report_data:
-        report_df = pl.DataFrame(report_data)
-        
-        # Summarize by item and column
-        final = report_df.group_by(['item', 'colname']).agg([
-            pl.col('amount').sum()
-        ])
-        
-        # Pivot to get columns as fields
-        pivot = final.pivot(
-            index='item',
-            columns='colname',
-            values='amount',
-            aggregate_function='sum'
-        )
-        
-        # Save
-        filename = f"LCR{rep_date['day']}.parquet"
-        pivot.write_parquet(f"{PATHS['OUTPUT']}{filename}")
-        print(f"  âœ“ {filename}: {len(pivot):,} items")
+        write_text_report(report_data, rep_date)
     
     # Summary statistics
     print("\n" + "=" * 60)
@@ -777,16 +923,8 @@ def main():
         print(f"  {row[0]}: RM {row[1]:,.0f}K")
     
     print("\n" + "=" * 60)
-    print("âœ“ EIBDLCRM Complete")
+    print("✓ EIBDLCRM Complete")
     print("=" * 60)
 
 if __name__ == "__main__":
     main()
-
-
-
-all inputs are in sas7bdat sas dataset. all in lowercase.
-use pyreadstat to read.
-only walk.txt and templ.txt uses text file.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in text files
