@@ -17,25 +17,25 @@ import glob
 # CONFIGURATION
 # =============================================================================
 PATHS = {
-    'LCR': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/lcr/',
-    'LCRM': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/lcrm/',
-    'FORATE': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/',
-    'CISDP': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/cisdp/',
-    'CISCA': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/cisca/',
-    'CIS': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/cis/',
-    'DCIWH': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/dciwh/',
-    'EQUA': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/equa/',
-    'LIST': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/list/',
-    'OUTPUT': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDLCRM/'
+    'lcr': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibdlcrm/lcr/',
+    'lcrm': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibdlcrm/lcrm/',
+    'forate': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibdlcrm/',
+    'cisdp': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibdlcrm/cisdp/',
+    'cisca': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibdlcrm/cisca/',
+    'cis': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibdlcrm/cis/',
+    'dciwh': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibdlcrm/dciwh/',
+    'equa': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibdlcrm/equa/',
+    'list': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibdlcrm/list/',
+    'output': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/eibdlcrm/'
 }
 
 for path in PATHS.values():
     Path(path).mkdir(parents=True, exist_ok=True)
 
-INST = 'PBB'  # Institution code
+inst = 'PBB'  # Institution code
 
 # Customer category mappings (LCR)
-CUST_MAP = {
+cust_map = {
     '08': [76, 77, 78, 95, 96],  # Central banks/governments
     '19': [41,42,43,44,46,47,48,49,51,52,53,54,65,66,67,68,69],  # SME
     '29': [0,45,57,59,60,61,62,63,64,75,79,85,86,87,88,89,98,99],  # Other retail
@@ -45,9 +45,9 @@ CUST_MAP = {
 }
 
 # Special customers
-SPECIAL_CUST = {
-    '39': ['KWSP', 'KWAP', 'KWAN', 'LEMTAB'],
-    '49': ['AIM', 'PBL', 'PBLEUR', 'PBLNID', 'PBLUSD', 'PIVMYR', 'IPBB']
+special_cust = {
+    '39': ['kwsp', 'kwap', 'kwan', 'lemtab'],
+    '49': ['aim', 'pbl', 'pbleur', 'pblnid', 'pblusd', 'pivmyr', 'ipbb']
 }
 
 # =============================================================================
@@ -92,6 +92,14 @@ def read_sas_file(filepath, columns=None):
         print(f"  Warning: Could not read {filepath}: {e}")
         return None
 
+def read_parquet_file(filepath):
+    """Read parquet file and return polars DataFrame"""
+    try:
+        return pl.read_parquet(filepath)
+    except Exception as e:
+        print(f"  Warning: Could not read {filepath}: {e}")
+        return None
+
 def read_walk_file(filepath):
     """Read WALK.TXT file (fixed width format)"""
     records = []
@@ -100,8 +108,8 @@ def read_walk_file(filepath):
             for line in f:
                 if len(line) >= 18:
                     records.append({
-                        'ACCTNO': int(line[0:11].strip()) if line[0:11].strip() else None,
-                        'CUSTNO': int(line[11:18].strip()) if line[11:18].strip() else None
+                        'acctno': int(line[0:11].strip()) if line[0:11].strip() else None,
+                        'custno': int(line[11:18].strip()) if line[11:18].strip() else None
                     })
     except Exception as e:
         print(f"  Warning: Could not read {filepath}: {e}")
@@ -115,8 +123,8 @@ def read_templ_file(filepath):
             for line in f:
                 if len(line) >= 14:
                     records.append({
-                        'TAG': line[0:2].strip(),
-                        'DESC': line[2:14].strip()
+                        'tag': line[0:2].strip(),
+                        'desc': line[2:14].strip()
                     })
     except Exception as e:
         print(f"  Warning: Could not read {filepath}: {e}")
@@ -189,7 +197,7 @@ def process_dci(rep_date, fx_rates):
     
     try:
         # Find the latest DCI file
-        dci_pattern = f"{PATHS['DCIWH']}DCID*.sas7bdat"
+        dci_pattern = f"{PATHS['dciwh']}dcid*.sas7bdat"
         dci_files = glob.glob(dci_pattern)
         if not dci_files:
             print(f"  No DCI files found")
@@ -203,8 +211,8 @@ def process_dci(rep_date, fx_rates):
             return records
         
         for row in df.iter_rows(named=True):
-            matdt = row.get('MATDT')
-            startdt = row.get('STARTDT')
+            matdt = row.get('matdt')
+            startdt = row.get('startdt')
             
             if matdt and startdt and matdt > rep_date['date'] and startdt <= rep_date['date']:
                 # Calculate remaining months
@@ -215,8 +223,8 @@ def process_dci(rep_date, fx_rates):
                         matdt, rep_date['date'], rep_date['days_in_month']
                     )
                 
-                invamt = row.get('INVAMT', 0)
-                invccy = row.get('INVCURR', 'MYR')
+                invamt = row.get('invamt', 0)
+                invccy = row.get('invcurr', 'MYR')
                 spotrt = fx_rates.get(invccy, 1.0)
                 
                 # Round based on currency
@@ -231,7 +239,7 @@ def process_dci(rep_date, fx_rates):
                 if invccy == 'MYR':
                     bnmcode = f"9532900{remth_bucket}0000Y"
                     records.append({
-                        'src': 'DCI',
+                        'src': 'dci',
                         'bnmcode': bnmcode,
                         'cur': 'MYR',
                         'amt': amount,
@@ -239,16 +247,16 @@ def process_dci(rep_date, fx_rates):
                         'amt_sgd': 0,
                         'amt_hkd': 0,
                         'amt_aud': 0,
-                        'custfiss': f"{row.get('CUSTCODE', 0):02d}",
-                        'dealtype': row.get('PRODUCT'),
-                        'dealref': row.get('TICKETNO'),
+                        'custfiss': f"{row.get('custcode', 0):02d}",
+                        'dealtype': row.get('product'),
+                        'dealref': row.get('ticketno'),
                         'remmth': remmth,
                         'rem30d': rem30d
                     })
                 else:
                     bnmcode = f"9632900{remth_bucket}0000Y"
                     record = {
-                        'src': 'DCI',
+                        'src': 'dci',
                         'bnmcode': bnmcode,
                         'cur': invccy,
                         'amt': amount,
@@ -256,9 +264,9 @@ def process_dci(rep_date, fx_rates):
                         'amt_sgd': amount if invccy == 'SGD' else 0,
                         'amt_hkd': amount if invccy == 'HKD' else 0,
                         'amt_aud': amount if invccy == 'AUD' else 0,
-                        'custfiss': f"{row.get('CUSTCODE', 0):02d}",
-                        'dealtype': row.get('PRODUCT'),
-                        'dealref': row.get('TICKETNO'),
+                        'custfiss': f"{row.get('custcode', 0):02d}",
+                        'dealtype': row.get('product'),
+                        'dealref': row.get('ticketno'),
                         'remmth': remmth,
                         'rem30d': rem30d
                     }
@@ -276,34 +284,34 @@ def process_treasury_k1k3(rep_date):
     records = []
     
     try:
-        df = read_sas_file(f"{PATHS['LCR']}KTBLALL.sas7bdat")
+        df = read_sas_file(f"{PATHS['lcr']}ktblall.sas7bdat")
         
         if df is None:
             return records
         
         for row in df.iter_rows(named=True):
-            tbl = row.get('TBL')
+            tbl = row.get('tbl')
             if tbl == '1':
                 records.append({
-                    'src': 'K1TBL',
-                    'bnmcode': row.get('BNMCODE'),
-                    'cur': row.get('GWCCY'),
-                    'amt': row.get('GWAMT', 0),
-                    'dealtype': row.get('GWDLP'),
-                    'dealref': row.get('GWDLR'),
-                    'custfiss': row.get('GWC2R'),
+                    'src': 'k1tbl',
+                    'bnmcode': row.get('bnmcode'),
+                    'cur': row.get('gwccy'),
+                    'amt': row.get('gwamt', 0),
+                    'dealtype': row.get('gwdlp'),
+                    'dealref': row.get('gwdlr'),
+                    'custfiss': row.get('gwc2r'),
                     'custno': None
                 })
             elif tbl == '3':
                 records.append({
-                    'src': 'K3TBL',
-                    'bnmcode': row.get('BNMCODE'),
-                    'cur': row.get('UTCCY'),
-                    'amt': row.get('UTAMT', 0),
-                    'dealtype': row.get('UTSTY'),
-                    'dealref': row.get('UTDLR'),
+                    'src': 'k3tbl',
+                    'bnmcode': row.get('bnmcode'),
+                    'cur': row.get('utccy'),
+                    'amt': row.get('utamt', 0),
+                    'dealtype': row.get('utsty'),
+                    'dealref': row.get('utdlr'),
                     'custfiss': None,
-                    'custno': row.get('UTCUS')
+                    'custno': row.get('utcus')
                 })
     except Exception as e:
         print(f"  K1/K3 warning: {e}")
@@ -311,29 +319,39 @@ def process_treasury_k1k3(rep_date):
     return records
 
 def process_cis_equity():
-    """Process CIS equity data"""
+    """Process CIS equity data from parquet file"""
     records = []
     
     try:
-        df = read_sas_file(f"{PATHS['CIS']}CUSTDLY.sas7bdat")
+        # Find the CIS parquet file
+        cis_pattern = f"{PATHS['cis']}custdly*.parquet"
+        cis_files = glob.glob(cis_pattern)
+        if not cis_files:
+            print(f"  No CIS parquet files found")
+            return records
+        
+        # Use the most recent file
+        cis_file = max(cis_files)
+        df = read_parquet_file(cis_file)
         
         if df is None:
             return records
         
-        df = df.filter((pl.col('ACCTCODE') == 'EQC') & (pl.col('PRISEC') == 901))
+        # Filter for equity accounts
+        df = df.filter((pl.col('acctcode') == 'EQC') & (pl.col('prisec') == 901))
         
         for row in df.iter_rows(named=True):
-            newic = row.get('NEWIC', '')
+            newic = row.get('newic', '')
             if not newic or (len(str(newic)) >= 5 and str(newic)[:5] == '99999'):
-                icno = f"{row.get('ALIASKEY', '')}{row.get('CUSTNO', 0)}".replace(' ', '')
+                icno = f"{row.get('aliaskey', '')}{row.get('custno', 0)}".replace(' ', '')
             else:
-                icno = f"{row.get('ALIASKEY', '')}{row.get('ALIAS', '')}".replace(' ', '')
+                icno = f"{row.get('aliaskey', '')}{row.get('alias', '')}".replace(' ', '')
             
             records.append({
-                'acctno': row.get('ACCTNO'),
-                'custno': row.get('CUSTNO'),
-                'cisno': row.get('CUSTNO'),
-                'cisname': row.get('CUSTNAME'),
+                'acctno': row.get('acctno'),
+                'custno': row.get('custno'),
+                'cisno': row.get('custno'),
+                'cisname': row.get('custname'),
                 'icno': icno
             })
     except Exception as e:
@@ -345,11 +363,11 @@ def process_utsas(rep_date):
     """Process UTSAS from EQUA tables"""
     records = []
     
-    utvar = ['DEALREF', 'DEALTYPE', 'CUSTFISS', 'CUSTNO', 'CUSTNAME', 'CUSTEQNO', 'CUSTID']
+    utvar = ['dealref', 'dealtype', 'custfiss', 'custno', 'custname', 'custeqno', 'custid']
     
     try:
-        for prefix in ['UTMS', 'UTFX', 'UTRP']:
-            file_pattern = f"{PATHS['EQUA']}{prefix}*.sas7bdat"
+        for prefix in ['utms', 'utfx', 'utrp']:
+            file_pattern = f"{PATHS['equa']}{prefix}*.sas7bdat"
             files = glob.glob(file_pattern)
             for filepath in files:
                 df = read_sas_file(filepath)
@@ -358,8 +376,8 @@ def process_utsas(rep_date):
                     keep_cols = [c for c in utvar if c in df.columns]
                     if keep_cols:
                         df = df.select(keep_cols)
-                        if 'CUSTEQNO' in df.columns:
-                            df = df.rename({'CUSTEQNO': 'ACCTNO'})
+                        if 'custeqno' in df.columns:
+                            df = df.rename({'custeqno': 'acctno'})
                         records.extend(df.rows(named=True))
     except Exception as e:
         print(f"  UTSAS warning: {e}")
@@ -374,8 +392,8 @@ def process_core_banking(rep_date):
     records = []
     
     try:
-        for tbl in ['FD', 'SA', 'CA', 'FCYCA']:
-            file_pattern = f"{PATHS['LCR']}{tbl}*.sas7bdat"
+        for tbl in ['fd', 'sa', 'ca', 'fcyca']:
+            file_pattern = f"{PATHS['lcr']}{tbl}*.sas7bdat"
             files = glob.glob(file_pattern)
             
             for filepath in files:
@@ -384,47 +402,47 @@ def process_core_banking(rep_date):
                     continue
                 
                 for row in df.iter_rows(named=True):
-                    custcd = row.get('CUSTCD', 0)
-                    if tbl == 'FD':
-                        custcd = row.get('CUSTCDX', 0)
+                    custcd = row.get('custcd', 0)
+                    if tbl == 'fd':
+                        custcd = row.get('custcdx', 0)
                     
                     # Customer category
-                    cust = get_customer_category(custcd, CUST_MAP)
+                    cust = get_customer_category(custcd, cust_map)
                     
                     # Maturity
-                    rem30d = row.get('REM30D', row.get('REMMTH', 1))
-                    remmth = row.get('REMMTH', 1)
+                    rem30d = row.get('rem30d', row.get('remmth', 1))
+                    remmth = row.get('remmth', 1)
                     
                     if rem30d is None:
                         rem30d = remmth
                     
                     # Build BIC
-                    bic = row['BNMCODE'][:5] if row.get('BNMCODE') else '95311'
+                    bic = row['bnmcode'][:5] if row.get('bnmcode') else '95311'
                     
                     records.append({
-                        'src': f'BANKING_{tbl}',
+                        'src': f'banking_{tbl}',
                         'bic': bic,
                         'bnmcode': f"{bic}{cust}020000Y",
                         'cmmcode': f"{bic}{cust}{format_mth_bucket(remmth)}0000Y",
-                        'cur': row.get('CURCODE', 'MYR'),
-                        'amt': row.get('AMOUNT', 0),
-                        'acctno': row.get('ACCTNO', 0),
-                        'custno': row.get('CUSTNO', 0),
+                        'cur': row.get('curcode', 'MYR'),
+                        'amt': row.get('amount', 0),
+                        'acctno': row.get('acctno', 0),
+                        'custno': row.get('custno', 0),
                         'custcd': custcd,
                         'rem30d': rem30d,
                         'remmth': remmth,
                         'ecp': '00',
-                        'product': row.get('PRODUCT', 0),
-                        'billerind': row.get('BILLERIND', 'N'),
-                        'pbmerch': row.get('PBMERCH', 'N'),
-                        'intrate': row.get('INTRATE', 0),
-                        'oprrate': row.get('OPRRATE', 0),
-                        'source': row.get('SOURCE', ''),
-                        'dtsigned': row.get('DTSIGNED'),
-                        'intplan': row.get('INTPLAN', 0),
-                        'sme_tag': row.get('SME_TAG', ''),
-                        'fdhold': row.get('FDHOLD', 'N'),
-                        'trx': row.get('TRX', 0),
+                        'product': row.get('product', 0),
+                        'billerind': row.get('billerind', 'N'),
+                        'pbmerch': row.get('pbmerch', 'N'),
+                        'intrate': row.get('intrate', 0),
+                        'oprrate': row.get('oprrate', 0),
+                        'source': row.get('source', ''),
+                        'dtsigned': row.get('dtsigned'),
+                        'intplan': row.get('intplan', 0),
+                        'sme_tag': row.get('sme_tag', ''),
+                        'fdhold': row.get('fdhold', 'N'),
+                        'trx': row.get('trx', 0),
                         'sign': ''
                     })
     except Exception as e:
@@ -438,13 +456,13 @@ def read_walk_and_templ():
     templ_records = []
     
     # Read WALK.TXT
-    walk_files = glob.glob(f"{PATHS['LIST']}WALK*.TXT")
+    walk_files = glob.glob(f"{PATHS['list']}walk*.txt")
     if walk_files:
         walk_records = read_walk_file(walk_files[0])
         print(f"  WALK: {len(walk_records)} records")
     
     # Read TEMPL.TXT
-    templ_files = glob.glob(f"{PATHS['LIST']}TEMPL*.TXT")
+    templ_files = glob.glob(f"{PATHS['list']}templ*.txt")
     if templ_files:
         templ_records = read_templ_file(templ_files[0])
         print(f"  TEMPL: {len(templ_records)} records")
@@ -459,8 +477,8 @@ def apply_insurance_split(records, walk_records, templ_records):
     result = []
     
     # Build lookup dicts
-    walk_dict = {r['ACCTNO']: r for r in walk_records if r.get('ACCTNO')}
-    templ_tags = {r['TAG']: r['DESC'] for r in templ_records if r.get('TAG')}
+    walk_dict = {r['acctno']: r for r in walk_records if r.get('acctno')}
+    templ_tags = {r['tag']: r['desc'] for r in templ_records if r.get('tag')}
     
     # Group by ICGRP to get totals
     icgrp_totals = {}
@@ -477,7 +495,7 @@ def apply_insurance_split(records, walk_records, templ_records):
         acctno = r.get('acctno')
         if acctno in walk_dict:
             # Add WALK attributes
-            r['walk_custno'] = walk_dict[acctno].get('CUSTNO')
+            r['walk_custno'] = walk_dict[acctno].get('custno')
         
         if toticbal > 250000 and r.get('bic') not in ['9531X']:
             # Need to split
@@ -536,23 +554,23 @@ def apply_column_mapping(row, is_banking):
     
     # Column name from BIC (simplified)
     col_map = {
-        '95311': 'FD95311RM',
-        '95312': 'SA95312RM',
-        '95313': 'CA95313RM',
-        '95830': 'STD95830',
-        '95840': 'NID95840',
-        '9X810': 'IBB9X810',
-        '9X329': 'DCI9X329',
-        '95820': 'IBR95820',
-        '95850': 'BAP95850',
-        '9531X': 'GLD9531X'
+        '95311': 'fd95311rm',
+        '95312': 'sa95312rm',
+        '95313': 'ca95313rm',
+        '95830': 'std95830',
+        '95840': 'nid95840',
+        '9x810': 'ibb9x810',
+        '9x329': 'dci9x329',
+        '95820': 'ibr95820',
+        '95850': 'bap95850',
+        '9531x': 'gld9531x'
     }
-    colname = col_map.get(bic[:5], '')
+    colname = col_map.get(bic[:5].lower(), '')
     
     if is_banking:
         # Banking logic
         ecp = bnmcode[9:11]
-        if bic in ['95313', '96313'] and ecp == '01':
+        if bic.lower() in ['95313', '96313'] and ecp == '01':
             # Would use LCRCDMNIOPR format
             item = bnmcode[5:9]
         else:
@@ -571,12 +589,12 @@ def apply_column_mapping(row, is_banking):
             item = 'B6.30'
     
     # Adjust column name based on maturity
-    if colname[:3] in ['FD9', 'STD']:
+    if colname[:3].lower() in ['fd9', 'std']:
         colname = f"{colname}{'1' if remmth == '1' else '2'}"
-    elif colname[:3] in ['NID', 'DCI', 'IBB', 'IBR', 'BAP']:
+    elif colname[:3].lower() in ['nid', 'dci', 'ibb', 'ibr', 'bap']:
         for i in range(1, 7):
             if str(i) == remmth:
-                colname = f"{colname}V{i}"
+                colname = f"{colname}v{i}"
                 break
     
     return item, colname, row['amt_k']
@@ -588,7 +606,7 @@ def write_text_report(report_data, rep_date):
         return
     
     # Create output directory
-    output_dir = PATHS['OUTPUT']
+    output_dir = PATHS['output']
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     # Convert to DataFrame and pivot
@@ -604,12 +622,12 @@ def write_text_report(report_data, rep_date):
     columns = sorted(final['colname'].unique().to_list())
     
     # Write to text file (tab-delimited)
-    filename = f"LCR{rep_date['day']}.txt"
+    filename = f"lcr{rep_date['day']}.txt"
     filepath = f"{output_dir}{filename}"
     
     with open(filepath, 'w') as f:
         # Write header
-        f.write("ITEM\t" + "\t".join(columns) + "\n")
+        f.write("item\t" + "\t".join(columns) + "\n")
         
         # Write data
         for item in items:
@@ -627,11 +645,11 @@ def write_text_report(report_data, rep_date):
     print(f"  ✓ {filename}: {len(items)} items x {len(columns)} columns")
     
     # Also write a detailed report
-    detail_filename = f"LCR_DETAIL{rep_date['day']}.txt"
+    detail_filename = f"lcr_detail{rep_date['day']}.txt"
     detail_filepath = f"{output_dir}{detail_filename}"
     
     with open(detail_filepath, 'w') as f:
-        f.write("ITEM\tCOLNAME\tAMOUNT\tCURRENCY\n")
+        f.write("item\tcolname\tamount\tcurrency\n")
         for row in report_data:
             f.write(f"{row['item']}\t{row['colname']}\t{row['amount']:.2f}\t{row.get('cur', 'MYR')}\n")
     
@@ -654,11 +672,11 @@ def main():
     print("\nLoading FX rates...")
     fx_rates = {'MYR': 1.0}
     try:
-        df = read_sas_file(f"{PATHS['FORATE']}FOFMT.sas7bdat")
+        df = read_sas_file(f"{PATHS['forate']}fofmt.sas7bdat")
         if df is not None:
             for row in df.iter_rows(named=True):
-                if row.get('FMTNAME') == 'FORATE':
-                    fx_rates[row['START']] = row['LABEL']
+                if row.get('fmtname') == 'FORATE':
+                    fx_rates[row['start']] = row['label']
             print(f"  Loaded {len(fx_rates)} currencies")
     except Exception as e:
         print(f"  Warning: Could not load FX rates: {e}")
@@ -679,7 +697,7 @@ def main():
     treasury_records = process_treasury_k1k3(rep_date)
     print(f"  {len(treasury_records):,} treasury records")
     
-    # Process CIS Equity
+    # Process CIS Equity from parquet
     print("\nProcessing CIS Equity...")
     cis_records = process_cis_equity()
     cis_dict = {r['acctno']: r for r in cis_records if r.get('acctno')}
@@ -688,7 +706,7 @@ def main():
     # Process UTSAS
     print("\nProcessing UTSAS...")
     utsas_records = process_utsas(rep_date)
-    utsas_dict = {r['DEALREF']: r for r in utsas_records if r.get('DEALREF')}
+    utsas_dict = {r['dealref']: r for r in utsas_records if r.get('dealref')}
     print(f"  {len(utsas_dict):,} UTSAS records")
     
     # Combine treasury and DCI
@@ -702,7 +720,7 @@ def main():
             ut = utsas_dict[dealref]
             r.update(ut)
         
-        acctno = r.get('acctno') or r.get('CUSTEQNO')
+        acctno = r.get('acctno') or r.get('custeqno')
         if acctno and acctno in cis_dict:
             ci = cis_dict[acctno]
             r['cisno'] = ci.get('cisno')
@@ -718,8 +736,8 @@ def main():
                 custfiss = 0
         
         custno = r.get('custno', '')
-        cust = get_customer_category(custfiss, CUST_MAP, SPECIAL_CUST, 
-                                     is_custno=(custno in SPECIAL_CUST.get('39', [])))
+        cust = get_customer_category(custfiss, cust_map, special_cust, 
+                                     is_custno=(custno in special_cust.get('39', [])))
         
         # BIC handling
         bic = r['bnmcode'][:5]
@@ -737,7 +755,7 @@ def main():
         cmmcode = f"{bic}{cust}{format_mth_bucket(remmth)}0000Y"
         
         # Special handling for AIM/PBL
-        if custno in SPECIAL_CUST.get('49', []) and cust == '49' and bic in ['95840', '96840']:
+        if custno in special_cust.get('49', []) and cust == '49' and bic in ['95840', '96840']:
             ori30d = r.get('ori30d', 0)
             if format_day_bucket(ori30d) > '05' and format_day_bucket(rem30d) > '01':
                 bnmcode = bnmcode[:9] + '0200Y'
@@ -766,12 +784,12 @@ def main():
     
     # Merge with CIS and ECP for banking
     try:
-        cis_info = read_sas_file(f"{PATHS['LCR']}CISINFO.sas7bdat")
-        ecp = read_sas_file(f"{PATHS['LIST']}LCR_ECP.sas7bdat")
+        cis_info = read_sas_file(f"{PATHS['lcr']}cisinfo.sas7bdat")
+        ecp = read_sas_file(f"{PATHS['list']}lcr_ecp.sas7bdat")
         
         # Create lookup dicts
-        cis_dict = {r['ACCTNO']: r for r in cis_info.rows(named=True)} if cis_info is not None else {}
-        ecp_dict = {r['ACCTNO']: r['ECP'] for r in ecp.rows(named=True) if 'ECP' in r} if ecp is not None else {}
+        cis_dict = {r['acctno']: r for r in cis_info.rows(named=True)} if cis_info is not None else {}
+        ecp_dict = {r['acctno']: r['ecp'] for r in ecp.rows(named=True) if 'ecp' in r} if ecp is not None else {}
     except:
         cis_dict = {}
         ecp_dict = {}
@@ -783,9 +801,9 @@ def main():
         # Apply CIS
         if acctno in cis_dict:
             ci = cis_dict[acctno]
-            r['newic'] = ci.get('NEWIC')
-            r['oldic'] = ci.get('OLDIC')
-            r['custname'] = ci.get('CUSTNAME')
+            r['newic'] = ci.get('newic')
+            r['oldic'] = ci.get('oldic')
+            r['custname'] = ci.get('custname')
         
         # Apply ECP
         if acctno in ecp_dict:
