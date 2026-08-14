@@ -1,1161 +1,732 @@
-"""
-EIIMLCRM - BNM LCR (Liquidity Coverage Ratio) Reporting for Islamic Banking
-Consolidates Islamic deposits & treasury positions for BNM LCR reporting.
-Outputs: LCR reports by currency with customer categorization (08/19/29/39/49/59)
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER NODATE MISSING=' '
+        NOSORTBLKMODE SORTPARM='HIPRMAX=0,MOSIZE=0';
 
-Python conversion of SAS EIIMLCRM program
-- Uses pyreadstat to read .sas7bdat files
-- Uses PBBELF.py and PBLCRFMT.py for format definitions
-- Reports calculated from datetime.now() - timedelta(days=1)
-- Outputs tab-delimited text files
-"""
+%INC PGM(PBBELF,PBLCRFMT);
 
-import pyreadstat
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta, date
-import os
-from pathlib import Path
+DATA LCR.REPTDATE REPTDATE;
+   SET DEPOSIT.REPTDATE;
+   SELECT;
+      WHEN (01<=DAY(REPTDATE)<=08) DO; NOWK = '1'; END;
+      WHEN (09<=DAY(REPTDATE)<=15) DO; NOWK = '2'; END;
+      WHEN (16<=DAY(REPTDATE)<=22) DO; NOWK = '3'; END;
+      OTHERWISE                    DO; NOWK = '4'; END;
+   END;
+   CALL SYMPUT('NOWK',PUT(NOWK,$1.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('RPTDT',PUT(REPTDATE,YYMMDDN6.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+   CALL SYMPUT('TDATE',REPTDATE);
+RUN;
 
-# Import from existing format libraries
-from PBBELF import format_ctype, format_brchcd
-from PBLCRFMT import (
-    remfmt, cmmfmt, remfmx,
-    lcrcdequ_fmt, lcrcdmni_fmt, lcrcdmniopr_fmt,
-    lcrcdgl_fmt, lcrcdglccy_fmt, lcrcdgloth_fmt,
-    lcrcdigl_fmt, lcrcdiglccy_fmt, colid_fmt, bnmcd_fmt
-)
+*------------------------------------------------*
+*  MACRO TO DECLARE VARIABLES                    *
+*------------------------------------------------*;
+%MACRO DCLVAR;
+   RETAIN D1-D12 31 D4 D6 D9 D11 30
+          RD1-RD12 MD1-MD12 31 RD2 MD2 28 RD4 RD6 RD9 RD11
+          MD4 MD6 MD9 MD11 30 RPYR RPMTH RPDAY;
+   ARRAY LDAY D1-D12;
+   ARRAY RPDAYS RD1-RD12;
+   ARRAY MDDAYS MD1-MD12;
+%MEND DCLVAR;
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-PATHS = {
-    'LCR': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/lcr/',
-    'CISDP': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/cisdp/',
-    'CISCA': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/cisca/',
-    'LIST': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/list/',
-    'SME': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/',
-    'OUTPUT': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIMLCRM/',
-    'TEMPLATE': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/'
-}
+*------------------------------------------------*
+*  MACRO TO CALCULATE REMAIN MONTH               *
+*------------------------------------------------*;
+%MACRO REMMTH;
+   MDYR  = YEAR(MATDT);
+   MDMTH = MONTH(MATDT);
+   MDDAY = DAY(MATDT);
+   IF MDMTH = 2 THEN
+      IF MOD(MDYR,4) = 0 THEN MD2 = 29;
+      ELSE MD2 = 28;
+   IF MDDAY > RPDAYS(RPMTH) THEN MDDAY = RPDAYS(RPMTH);
+   REMY = MDYR - RPYR;
+   REMM = MDMTH - RPMTH;
+   REMD = MDDAY - RPDAY;
+   REMMTH = REMY*12 + REMM + REMD/RPDAYS(RPMTH);
+   REM30D = (MATDT-REPTDATE)/30;
+%MEND REMMTH;
 
-for path in PATHS.values():
-    Path(path).mkdir(parents=True, exist_ok=True)
+DATA TEMPLATE;
+   INFILE TEMPL;
+   INPUT @1 ITEM           $5.
+         @8 IDESC    $CHAR120.
+         ;
+   FORMAT FD95311RM1 FD95311RM2 FD95311RM  FD96311FX1 FD96311FX2
+          FD96311FX  SA95312RM  CA95313RM  CA96313FX  STD95830V1
+          STD95830V2 STD95830   STD95830Q1 STD95830Q2 STD95830Q
+          GLD9531X   NID95840V1 NID95840V2 NID95840V3 NID95840V4
+          NID95840V5 NID95840V6 NID95840   IBB9X810V1 IBB9X810V2
+          IBB9X810V3 IBB9X810V4 IBB9X810V5 IBB9X810V6 IBB9X810
+          DCI9X329V1 DCI9X329V2 DCI9X329V3 DCI9X329V4 DCI9X329V5
+          DCI9X329V6 DCI9X329   IBR95820V1 IBR95820V2 IBR95820V3
+          IBR95820V4 IBR95820V5 IBR95820V6 IBR95820   BAP95850V1
+          BAP95850V2 BAP95850V3 BAP95850V4 BAP95850V5 BAP95850V6
+          BAP95850   OTHSOURCE  TOTALV1    TOTALDP    FDPLEDGE1
+          FDPLEDGE2  FXPLEDGE1 FXPLEDGE2 COMMA20.2;
+RUN;
+PROC SORT; BY ITEM; RUN;
 
-# =============================================================================
-# CUSTOMER CATEGORY MAPPINGS (from original SAS code)
-# =============================================================================
-# LCR Customer mappings (CUST)
-CUST_MAP = [
-    (['KWSP', 'KWAP', 'KWAN', 'LEMTAB'], None, '39'),  # Special treasury
-    ([76, 77, 78, 95, 96], None, '08'),
-    ([41, 42, 43, 44, 46, 47, 48, 49, 51, 52, 53, 54, 65, 66, 67, 68, 69], None, '19'),
-    ([0, 45, 57, 59, 60, 61, 62, 63, 64, 75, 79, 85, 86, 87, 88, 89, 98, 99], None, '29'),
-    ([1, 71, 72, 73, 74, 90, 91, 92], None, '39'),
-    ([2, 3, 7, 12, 81, 82, 83, 84], None, '49'),
-    ([4, 5, 6, 13, 20] + list(range(30, 41)) + [17], None, '59'),
-]
+PROC FORMAT LIB=FORATE CNTLOUT=FOFMT;RUN;
+PROC FORMAT CNTLIN=FOFMT;RUN;
 
-# NSFR Customer mappings (CUSX)
-CUSX_MAP = [
-    (['KWSP', 'KWSPKL', 'KWAP', 'KWAPKL', 'KWAN', 'KWANKL', 'LEMTAB', 'LEMTABKL'], None, '49'),
-    ([76, 77, 78, 95, 96], None, '08'),
-    ([41, 42, 43, 44, 46, 47, 48, 49, 51, 52, 53, 54, 65, 66, 67, 68, 69], None, '19'),
-    ([0, 17, 45, 57, 59, 60, 61, 62, 63, 64, 75, 79, 85, 86, 87, 88, 89, 98, 99], None, '29'),
-    ([1, 91], None, '39'),
-    ([71, 72, 73, 74, 90, 92], None, '49'),
-    ([2, 3, 4, 5, 6, 7, 12, 13, 20] + list(range(30, 41)) + [81, 82, 83, 84], None, '59'),
-]
+*------------------------------------------------*
+*  TREASURY (KAPITI)                             *
+*------------------------------------------------*;
+%LET INST = 'PBB';
+%INC PGM(KALMLIQ);
 
-MGIA_PRODUCTS = [302, 315, 394, 396]
+DATA DCI (KEEP=BNMCODE AMOUNT AMTUSD AMTSGD AMTHKD AMTAUD CURCODE
+               CUSTNAME CUSTFISS DEALTYPE DEALREF REMMTH REM30D);
+   %DCLVAR
+   SET DCIWH.DCID&REPTMON&REPTDAY (DROP=SPOTRT);
+   AMTUSD=0; AMTSGD=0; AMTHKD=0; AMTAUD=0;
+   IF _N_ = 1 THEN DO;
+      SET REPTDATE;
+      RPYR  = YEAR(REPTDATE);
+      RPMTH = MONTH(REPTDATE);
+      RPDAY = DAY(REPTDATE);
+      IF MOD(RPYR,4) = 0 THEN RD2 = 29;
+   END;
+   IF MATDT > REPTDATE AND STARTDT <= REPTDATE;
+   IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1;
+   ELSE DO;
+      %REMMTH
+   END;
+   CUSTFISS = PUT(CUSTCODE,Z2.);
+   IF INVCURR = 'MYR' THEN DO;
+      SPOTRT  = 1;
+      AMOUNT  = INVAMT;
+      BNMCODE = '9532900'||PUT(REMMTH,REMFMT.)||'0000Y'; OUTPUT;
+   END;
+   ELSE DO;
+      SPOTRT = PUT(INVCURR,$FORATE.);
+      IF INVCURR = 'JPY' THEN INVAMT = ROUND(INVAMT,1.00);
+                         ELSE INVAMT = ROUND(INVAMT,0.01);
+      AMOUNT  = INVAMT * SPOTRT;
+      IF INVCURR = 'USD' THEN AMTUSD = AMOUNT;
+      IF INVCURR = 'SGD' THEN AMTSGD = AMOUNT;
+      IF INVCURR = 'HKD' THEN AMTHKD = AMOUNT;
+      IF INVCURR = 'AUD' THEN AMTAUD = AMOUNT;
+      BNMCODE = '9632900'||PUT(REMMTH,REMFMT.)||'0000Y'; OUTPUT;
+   END;
+   RENAME INVCURR=CURCODE PRODUCT=DEALTYPE TICKETNO=DEALREF;
+RUN;
 
-# =============================================================================
-# UTILITY FUNCTIONS
-# =============================================================================
-def get_report_date():
-    """Calculate report date as yesterday (SAS equivalent of REPTDATE)"""
-    reptdate = datetime.now() - timedelta(days=1)
-    day = reptdate.day
-    
-    if day <= 8:
-        nowk = '1'
-    elif day <= 15:
-        nowk = '2'
-    elif day <= 22:
-        nowk = '3'
-    else:
-        nowk = '4'
-    
-    return {
-        'date': reptdate,
-        'nowk': nowk,
-        'mon': f"{reptdate.month:02d}",
-        'day': f"{reptdate.day:02d}",
-        'year': str(reptdate.year % 100).zfill(2),
-        'rdate': reptdate.strftime('%d%m%y'),
-        'fildt': reptdate.strftime('%d%m%y'),
-        'reptmon': f"{reptdate.month:02d}",
-        'reptyear': str(reptdate.year % 100).zfill(2),
-        'tdatetime': reptdate  # SAS &TDATE equivalent
-    }
+DATA K1TBL(RENAME=(GWCCY=CURCODE GWDLP=DEALTYPE GWDLR=DEALREF
+                   GWC2R=CUSTFISS))
+     K3TBL(RENAME=(UTCCY=CURCODE UTSTY=DEALTYPE UTDLR=DEALREF
+                   UTCUS=CUSTNO));
+   SET KTBLALL;
+   IF      TBL = '1' THEN OUTPUT K1TBL;
+   ELSE IF TBL = '3' THEN OUTPUT K3TBL;
+   DROP D1-D12 RD1-RD12 MD1-MD12 RPYR RPMTH RPDAY MDYR MDMTH MDDAY
+        REMY REMM REMD;
+RUN;
 
-def read_sas7bdat(filepath):
-    """Read SAS dataset using pyreadstat"""
-    try:
-        if not os.path.exists(filepath):
-            print(f"  File not found: {filepath}")
-            return pd.DataFrame()
-        df, meta = pyreadstat.read_sas7bdat(filepath)
-        df.columns = [c.upper() for c in df.columns]
-        return df
-    except Exception as e:
-        print(f"  Warning: Cannot read {filepath}: {e}")
-        return pd.DataFrame()
+DATA CISEQ(RENAME=(CUSTNO=CISNO CUSTNAME=CISNAME));
+   SET CIS.CUSTDLY;
+   WHERE ACCTCODE = 'EQC' AND PRISEC=901;
+   IF NEWIC = '' OR SUBSTR(NEWIC,1,5) IN ('99999') THEN
+      ICNO  = COMPRESS(ALIASKEY||PUT(CUSTNO,20.));
+   ELSE
+      ICNO =  COMPRESS(ALIASKEY||ALIAS);
+   KEEP ACCTNO CUSTNO PRISEC ALIASKEY ALIAS CUSTNAME ICNO;
+RUN;
+PROC SORT DATA=CISEQ OUT=LCR.CISEQ; BY ACCTNO; RUN;
 
-def read_walk_file(filepath):
-    """Read WALK.TXT file matching SAS INFILE WALK logic"""
-    records = []
-    try:
-        with open(filepath, 'r') as f:
-            for line in f:
-                if len(line) >= 62:
-                    set_id = line[1:20].strip()       # @002 SET_ID $19.
-                    amount_str = line[41:61].strip()   # @042 AMOUNT COMMA20.2
-                    sign = line[61:62].strip() if len(line) > 61 else ''  # @062 SIGN $1.
-                    
-                    try:
-                        amount = float(amount_str.replace(',', ''))
-                    except:
-                        amount = 0
-                    
-                    if sign == '':
-                        amount = -amount
-                    
-                    records.append({
-                        'SET_ID': set_id,
-                        'AMOUNT': amount,
-                        'SIGN': sign
-                    })
-    except Exception as e:
-        print(f"  Warning: Cannot read WALK.TXT: {e}")
-    
-    return pd.DataFrame(records)
+%LET UTVAR=(KEEP=DEALREF DEALTYPE CUSTFISS CUSTNO CUSTNAME CUSTEQNO
+                 CUSTID);
 
-def get_cust_category(custno, custfiss, mapping, is_treasury=False):
-    """
-    Apply customer category mapping matching SAS IF/ELSE logic.
-    Checks special customer names first, then custfiss codes.
-    """
-    custno_upper = str(custno).upper().strip() if custno else ''
-    
-    try:
-        custfiss_int = int(float(custfiss)) if pd.notna(custfiss) else -1
-    except (ValueError, TypeError):
-        custfiss_int = -1
-    
-    for names_or_codes, _, category in mapping:
-        if names_or_codes and isinstance(names_or_codes[0], str):
-            # Special customer name check
-            if custno_upper in [n.upper() for n in names_or_codes]:
-                return category
-        elif custfiss_int in names_or_codes:
-            return category
-    
-    return '29'  # Default
+DATA UTSAS(RENAME=(CUSTEQNO=ACCTNO));
+   SET EQUA.UTMS&RPTDT &UTVAR
+       EQUA.UTFX&RPTDT &UTVAR
+       EQUA.UTRP&RPTDT &UTVAR;
+RUN;
+PROC SORT DATA=UTSAS; BY ACCTNO; RUN;
 
-def format_day_bucket_sas(days):
-    """Matching SAS REMFMT for day bucket"""
-    try:
-        d = float(days)
-    except:
-        d = 0
-    return '01' if d <= 1 else '02'
+DATA UTSAS LCRM.UTSAS&REPTMON;
+   MERGE UTSAS(IN=A) LCR.CISEQ;
+   BY ACCTNO;
+   IF A;
+RUN;
+PROC SORT DATA=UTSAS NODUPKEY; BY DEALREF; RUN;
 
-def format_mth_bucket_sas(months):
-    """Matching SAS CMMFMT for month bucket"""
-    try:
-        m = float(months)
-    except:
-        m = 0
-    
-    if m <= 1:
-        return '01'
-    elif m <= 3:
-        return '02'
-    elif m <= 6:
-        return '03'
-    elif m <= 9:
-        return '04'
-    elif m <= 12:
-        return '05'
-    else:
-        return '10'
+DATA ALLEQU;
+   SET K1TBL K3TBL DCI;
+RUN;
+PROC SORT DATA=ALLEQU NODUPKEY; BY DEALREF; RUN;
 
-def convert_sas_date_to_python(sas_date):
-    """Convert SAS date (days since 1960-01-01) to Python date"""
-    if pd.isna(sas_date):
-        return None
-    try:
-        if isinstance(sas_date, (datetime, date)):
-            return sas_date
-        if isinstance(sas_date, (int, float)):
-            return datetime(1960, 1, 1) + timedelta(days=int(sas_date))
-        return None
-    except:
-        return None
+DATA ALLEQU LCR.EQU&REPTDAY;
+   MERGE ALLEQU(IN=A) UTSAS;
+   BY DEALREF;
+   IF A;
+   IF CUSTFISS = . AND UTCTP NE '' THEN CUSTFISS=PUT(UTCTP,$CTYPE.);
+   IF CUSTNAME = '' THEN DO;
+      IF GWSHN   ^= '' THEN CUSTNAME = GWSHN;
+      IF CUSTNAME = '' THEN CUSTNAME = CUSTNO;
+   END;
 
-def is_valid_date(value):
-    """Check if value is a valid date (not NaN, not zero)"""
-    if pd.isna(value):
-        return False
-    if isinstance(value, (int, float)) and value <= 0:
-        return False
-    return True
+   *15-894;
+   IF   CUSTNO IN ('KWSP','KWAP','KWAN','LEMTAB')   THEN CUST='39';
+   ELSE IF CUSTFISS IN (76,77,78,95,96)             THEN CUST='08';
+   ELSE IF CUSTFISS IN (41,42,43,44,46,47,48,49,51,
+                        52,53,54,65,66,67,68,69)    THEN CUST='19';
+   ELSE IF CUSTFISS IN (00,45,57,59,60,61,62,63,64,
+                        75,79,85,86,87,88,89,98,99) THEN CUST='29';
+   ELSE IF CUSTFISS IN (01,71,72,73,74,90,91,92)    THEN CUST='39';
+   ELSE IF CUSTFISS IN (02,03,07,12,81,82,83,84)    THEN CUST='49';
+   ELSE IF CUSTFISS IN (04,05,06,13,20,30:40,17)    THEN CUST='59';
+   ELSE                                                  CUST='29';
 
-# =============================================================================
-# TREASURY PROCESSING - Matching SAS ALLEQU DATA step
-# =============================================================================
-def process_treasury(rep_date):
-    """
-    Process Treasury data.
-    
-    SAS equivalent:
-    DATA ALLEQU;
-       SET LCR.K1TBL LCR.K3TBL;
-    RUN;
-    PROC SORT NODUPKEY; BY DEALREF; RUN;
-    
-    DATA ALLEQU LCR.EQU&REPTMON;
-       MERGE ALLEQU(IN=A) UTSAS;
-       BY DEALREF;
-       IF A;
-       ...
-    RUN;
-    """
-    print("Processing Treasury (ALLEQU)...")
-    
-    # Read UTSAS first (PROC SORT NODUPKEY; BY DEALREF;)
-    utsas_file = f"{PATHS['LCR']}utsas{rep_date['reptmon']}.sas7bdat"
-    utsas = read_sas7bdat(utsas_file)
-    if not utsas.empty:
-        utsas = utsas.drop_duplicates(subset=['DEALREF'], keep='first')
-        utsas = utsas.sort_values('DEALREF')
-        print(f"  UTSAS: {len(utsas)} records")
-    
-    # Read K1TBL and K3TBL (SET LCR.K1TBL LCR.K3TBL)
-    dfs = []
-    for tbl in ['k1tbl', 'k3tbl']:
-        df = read_sas7bdat(f"{PATHS['LCR']}{tbl}.sas7bdat")
-        if not df.empty:
-            dfs.append(df)
-    
-    if not dfs:
-        print("  No treasury data found")
-        return pd.DataFrame()
-    
-    allequ = pd.concat(dfs, ignore_index=True)
-    
-    # PROC SORT NODUPKEY; BY DEALREF;
-    allequ = allequ.drop_duplicates(subset=['DEALREF'], keep='first')
-    allequ = allequ.sort_values('DEALREF')
-    print(f"  Combined K1TBL+K3TBL: {len(allequ)} records")
-    
-    # MERGE ALLEQU(IN=A) UTSAS; BY DEALREF; IF A;
-    if not utsas.empty:
-        allequ = allequ.merge(utsas, on='DEALREF', how='left', suffixes=('', '_UTSAS'))
-    
-    # Process each record matching SAS DATA step logic
-    records = []
-    for _, row in allequ.iterrows():
-        custno = str(row.get('CUSTNO', '')).strip()
-        custfiss = row.get('CUSTFISS', np.nan)
-        
-        # IF CUSTFISS = . AND UTCTP NE '' THEN CUSTFISS=PUT(UTCTP,$CTYPE.);
-        if pd.isna(custfiss) and 'UTCTP' in row.index:
-            utctp = str(row.get('UTCTP', '')).strip()
-            if utctp:
-                formatted = format_ctype(utctp)
-                try:
-                    custfiss = int(formatted.strip())
-                except:
-                    custfiss = 0
-        
-        # CUSTNAME handling
-        custname = str(row.get('CUSTNAME', '')).strip()
-        if custname == '':
-            gwsname = str(row.get('GWSHN', '')).strip()
-            if gwsname:
-                custname = gwsname
-            else:
-                custname = custno
-        
-        # Customer categories (LCR - 15-894)
-        cust = get_cust_category(custno, custfiss, CUST_MAP, is_treasury=True)
-        
-        # Customer categories (NSFR)
-        cusx = get_cust_category(custno, custfiss, CUSX_MAP, is_treasury=True)
-        
-        # Maturity handling: IF REM30D = . THEN REM30D = REMMTH;
-        rem30d = row.get('REM30D', np.nan)
-        remmth = row.get('REMMTH', 1)
-        ori30d = row.get('ORI30D', np.nan)
-        
-        if pd.isna(rem30d):
-            rem30d = remmth
-        
-        # IF REM30D > 1 AND REMMTH > 1 THEN REM30D = REMMTH;
-        if rem30d > 1 and remmth > 1:
-            rem30d = remmth
-        
-        # Deal type: IF DEALTYPE = 'BQD' THEN DLTYPE = '01';
-        dltype = '01' if str(row.get('DEALTYPE', '')).strip() == 'BQD' else '00'
-        
-        # BIC: BIC = SUBSTR(BNMCODE,1,5);
-        bnmcode_raw = str(row.get('BNMCODE', ''))
-        bic = bnmcode_raw[:5] if len(bnmcode_raw) >= 5 else bnmcode_raw
-        
-        rem30d_bucket = format_day_bucket_sas(rem30d)
-        
-        # Special handling 15-1789
-        if (custno.upper() in ['AIM','PBL','PBLEUR','PBLNID','PBLUSD','PIVMYR','PBB',
-                                'PBBMYR','PBBUSD','CUST'] and 
-            cust == '49' and bic in ['95840','96840']):
-            
-            if not pd.isna(ori30d):
-                ori30d_bucket = format_day_bucket_sas(ori30d)
-                if ori30d_bucket > '05' and rem30d_bucket > '01':
-                    bnmcode = f"{bic}{cust}020200Y"
-                    nsfcode = f"{bic}{cusx}020200Y"
-                else:
-                    bnmcode = f"{bic}{cust}{rem30d_bucket}00{dltype}Y"
-                    nsfcode = f"{bic}{cusx}{rem30d_bucket}00{dltype}Y"
-            else:
-                bnmcode = f"{bic}{cust}{rem30d_bucket}00{dltype}Y"
-                nsfcode = f"{bic}{cusx}{rem30d_bucket}00{dltype}Y"
-        else:
-            bnmcode = f"{bic}{cust}{rem30d_bucket}00{dltype}Y"
-            nsfcode = f"{bic}{cusx}{rem30d_bucket}00{dltype}Y"
-        
-        cmmcode = f"{bic}{cust}{format_mth_bucket_sas(remmth)}00{dltype}Y"
-        
-        # ICGRP: IF CUSTID NE '' THEN ICGRP = COMPRESS(CUSTID); ELSE ICGRP = COMPRESS(ICNO);
-        custid = str(row.get('CUSTID', '')).replace(' ', '')
-        icno = str(row.get('ICNO', '')).replace(' ', '')
-        icgrp = custid if custid != '' and custid != 'nan' else icno
-        
-        records.append({
-            'BIC': bic,
-            'BNMCODE': bnmcode,
-            'CMMCODE': cmmcode,
-            'CURCODE': str(row.get('CURCODE', 'MYR')).strip(),
-            'AMOUNT': float(row.get('AMOUNT', 0)),
-            'DEALREF': str(row.get('DEALREF', '')).strip(),
-            'DEALTYPE': dltype,
-            'CUSTFISS': custfiss if not pd.isna(custfiss) else 0,
-            'CUSTNO': custno,
-            'CUSTNAME': custname,
-            'REM30D': rem30d,
-            'REMMTH': remmth,
-            'ORI30D': ori30d if not pd.isna(ori30d) else 0,
-            'MATDT': str(row.get('MATDT', '')).strip(),
-            'CUSTID': custid,
-            'ICNO': icno,
-            'ACCTNO': str(row.get('ACCTNO', '')).strip(),
-            'CISNO': str(row.get('CISNO', '')).strip(),
-            'CISNAME': str(row.get('CISNAME', '')).strip(),
-            'ICGRP': icgrp,
-            'NSFCODE': nsfcode,
-            'SRC': 'TREASURY'
-        })
-    
-    df_result = pd.DataFrame(records)
-    print(f"  Treasury processed: {len(df_result)} records")
-    return df_result
+   IF REM30D = . THEN REM30D = REMMTH;
+   IF REM30D > 1 AND REMMTH > 1 THEN REM30D = REMMTH;
 
-# =============================================================================
-# BANKING PROCESSING - Matching SAS ALLMNI DATA step
-# =============================================================================
-def process_banking(rep_date):
-    """
-    Process Core Banking data.
-    
-    SAS equivalent:
-    DATA ALLMNI;
-       SET LCR.FD(RENAME=(CUSTCD=CUSTCDX) IN=FD)
-           LCR.SA
-           LCR.CA
-           LCR.FCYCA;
-       IF FD THEN CUSTCD = PUT(CUSTCDX,Z2.);
-       ...
-    RUN;
-    """
-    print("Processing Core Banking (ALLMNI)...")
-    
-    # Read banking tables
-    dfs = []
-    for tbl in ['fd', 'sa', 'ca', 'fcyca']:
-        filepath = f"{PATHS['LCR']}{tbl}.sas7bdat"
-        df = read_sas7bdat(filepath)
-        if not df.empty:
-            if tbl == 'fd' and 'CUSTCD' in df.columns:
-                # IF FD THEN CUSTCD = PUT(CUSTCDX,Z2.);
-                df['CUSTCDX'] = df['CUSTCD']
-                df['CUSTCD'] = df['CUSTCDX'].apply(
-                    lambda x: str(int(x)).zfill(2) if pd.notna(x) else '00'
-                )
-            dfs.append(df)
-    
-    if not dfs:
-        print("  No banking data found")
-        return pd.DataFrame()
-    
-    allmni = pd.concat(dfs, ignore_index=True)
-    print(f"  Combined banking: {len(allmni)} records")
-    
-    # Ensure CUSTCD is string
-    if 'CUSTCD' in allmni.columns:
-        allmni['CUSTCD'] = allmni['CUSTCD'].astype(str).str.zfill(2)
-    else:
-        allmni['CUSTCD'] = '00'
-    
-    # REM30D handling: IF REM30D = . THEN REM30D = REMMTH;
-    allmni['REM30D'] = allmni['REM30D'].fillna(allmni['REMMTH'])
-    mask = (allmni['REM30D'] > 1) & (allmni['REMMTH'] > 1)
-    allmni.loc[mask, 'REM30D'] = allmni.loc[mask, 'REMMTH']
-    
-    # Sort by ACCTNO for merging
-    allmni = allmni.sort_values('ACCTNO')
-    
-    # Read CIS info: SET CISDP.DEPOSIT CISCA.DEPOSIT; WHERE SECCUST='901';
-    cis_dfs = []
-    for path_key in ['CISDP', 'CISCA']:
-        cis_file = f"{PATHS[path_key]}deposit.sas7bdat"
-        if os.path.exists(cis_file):
-            cis = read_sas7bdat(cis_file)
-            if not cis.empty:
-                keep_cols = ['ACCTNO', 'CUSTNO', 'SECCUST', 'NEWIC', 'OLDIC', 'CUSTNAME', 'BUSSREG']
-                available = [c for c in keep_cols if c in cis.columns]
-                cis_dfs.append(cis[available])
-    
-    cisinfo = pd.DataFrame()
-    if cis_dfs:
-        cisinfo = pd.concat(cis_dfs, ignore_index=True)
-        if 'SECCUST' in cisinfo.columns:
-            cisinfo = cisinfo[cisinfo['SECCUST'] == '901']
-        cisinfo = cisinfo.drop_duplicates(subset=['ACCTNO'], keep='first')
-        print(f"  CIS info: {len(cisinfo)} accounts")
-    
-    # Read ECP
-    ecp_df = pd.DataFrame()
-    ecp_file = f"{PATHS['LIST']}lcr_ecp_{rep_date['reptmon']}.sas7bdat"
-    if os.path.exists(ecp_file):
-        ecp_df = read_sas7bdat(ecp_file)
-        if not ecp_df.empty:
-            ecp_df = ecp_df.drop_duplicates(subset=['ACCTNO'], keep='first')
-    
-    # Read SME
-    sme_df = pd.DataFrame()
-    sme_file = f"{PATHS['SME']}ibaselsme{rep_date['reptmon']}{rep_date['reptyear']}.sas7bdat"
-    if os.path.exists(sme_file):
-        sme_df = read_sas7bdat(sme_file)
-        if not sme_df.empty:
-            sme_df = sme_df.drop_duplicates(subset=['ACCTNO'], keep='first')
-    
-    # Merge all: MERGE ALLMNI(IN=A) LCR.CISINFO LCR.TRNSCISIC ECP LCR.SME; BY ACCTNO; IF A;
-    print("  Merging CIS/ECP/SME data...")
-    allmni = allmni.merge(cisinfo, on='ACCTNO', how='left', suffixes=('', '_CIS'))
-    if not ecp_df.empty:
-        allmni = allmni.merge(ecp_df, on='ACCTNO', how='left', suffixes=('', '_ECP'))
-    if not sme_df.empty:
-        allmni = allmni.merge(sme_df, on='ACCTNO', how='left', suffixes=('', '_SME'))
-    
-    print("  Processing records...")
-    
-    # Special customer lists from SAS
-    special_39 = [4391161, 2115999, 12579649, 13468207, 14300254,
-                  14675929, 15327497, 17104931, 12677444, 3703533,
-                  5978659, 16185090, 2558344, 10819745]
-    special_49 = [4391161, 2115999, 12579649, 13468207, 14675929,
-                  15327497, 17104931, 12677444, 3703533, 5978659,
-                  16185090, 10819745, 2558344]
-    special_59 = [9888664, 11565156, 170458, 17835250, 12078514, 12542063]
-    special_reg = ['061904X', '186852H', '211510H', '685480K', '643815V', '734789U']
-    
-    # Process records matching SAS logic
-    records = []
-    for idx, row in allmni.iterrows():
-        custcd_str = str(row.get('CUSTCD', '00'))
-        try:
-            custcd_int = int(float(custcd_str))
-        except:
-            custcd_int = 0
-        
-        # Customer categorization matching SAS IF/ELSE
-        if custcd_int in [76,77,78,95,96]:
-            cust = '08'
-        elif custcd_int in [41,42,43,44,46,47,48,49,51,52,53,54,65,66,67,68,69]:
-            cust = '19'
-        elif custcd_int in [0,45,57,59,60,61,62,63,64,75,79,85,86,87,88,89,98,99]:
-            cust = '29'
-        elif custcd_int in [1,71,72,73,74,90,91,92]:
-            cust = '39'
-        elif custcd_int in [2,3,7,12,81,82,83,84]:
-            cust = '49'
-        elif custcd_int in [4,5,6,13,20] + list(range(30,41)) + [17]:
-            cust = '59'
-        else:
-            cust = '29'
-        
-        # NSFR categorization
-        if custcd_int in [76,77,78,95,96]:
-            cusx = '08'
-        elif custcd_int in [41,42,43,44,46,47,48,49,51,52,53,54,65,66,67,68,69]:
-            cusx = '19'
-        elif custcd_int in [0,45,57,59,60,61,62,63,64,75,79,85,86,87,88,89,98,99]:
-            cusx = '29'
-        elif custcd_int in [1,91]:
-            cusx = '39'
-        elif custcd_int in [71,72,73,74,90,92]:
-            cusx = '49'
-        elif custcd_int in [2,3,4,5,6,7,12,13,17,20] + list(range(30,41)) + [81,82,83,84]:
-            cusx = '59'
-        else:
-            cusx = '29'
-        
-        custno = row.get('CUSTNO', 0)
-        
-        # Special customer overrides (matching SAS exactly)
-        if custno in special_39:
-            cust = '39'
-        if custno in special_49:
-            cusx = '49'
-        if custno in special_59 or str(row.get('BUSSREG', '')).strip() in special_reg:
-            cust = '59'
-            cusx = '59'
-        
-        # ECP logic matching SAS
-        ecp_val = str(row.get('ECP', '00')).strip()
-        if ecp_val == '' or ecp_val == 'nan':
-            ecp_val = '00'
-        
-        if ecp_val == '01':
-            intrate = row.get('INTRATE', 0)
-            oprrate = row.get('OPRRATE', 0)
-            intrate_val = float(intrate) if pd.notna(intrate) else 0
-            oprrate_val = float(oprrate) if pd.notna(oprrate) else 0
-            if intrate_val < oprrate_val:
-                ecp_val = '01'
-            else:
-                ecp_val = '00'
-        
-        billerind = str(row.get('BILLERIND', '')).strip()
-        pbmerch = str(row.get('PBMERCH', '')).strip()
-        if billerind == 'Y' or pbmerch == 'Y':
-            ecp_val = '01'
-        
-        # SIGN logic matching SAS
-        sign = ''
-        product = row.get('PRODUCT', 0)
-        intplan = row.get('INTPLAN', 0)
-        source = str(row.get('SOURCE', '')).strip()
-        dtsigned = row.get('DTSIGNED', None)
-        
-        if (product in [106,151,158,97,164,201,215] or
-            (pd.notna(intplan) and (
-                (400 <= intplan <= 419) or
-                (600 <= intplan <= 658) or
-                (720 <= intplan <= 740) or
-                (864 <= intplan <= 890) or
-                (941 <= intplan <= 967)
-            ))):
-            sign = 'R '
-        elif source != 'PGD' and dtsigned is not None and pd.notna(dtsigned):
-            # Handle both SAS numeric dates and Python date objects
-            try:
-                if isinstance(dtsigned, (datetime, date)):
-                    dtsigned_date = dtsigned
-                elif isinstance(dtsigned, (int, float)) and dtsigned > 0:
-                    dtsigned_date = datetime(1960, 1, 1) + timedelta(days=int(dtsigned))
-                else:
-                    dtsigned_date = None
-                
-                if dtsigned_date:
-                    years_diff = (rep_date['tdatetime'] - dtsigned_date).days / 365.25
-                    if years_diff >= 1:
-                        sign = 'R '
-            except:
-                pass
-        
-        # BIC: IF BIC = '95317' AND PRODUCT IN (302,315,394,396) THEN BIC = '95315';
-        bnmcode_raw = str(row.get('BNMCODE', ''))
-        bic = bnmcode_raw[:5] if len(bnmcode_raw) >= 5 else bnmcode_raw
-        if bic == '95317' and product in MGIA_PRODUCTS:
-            bic = '95315'
-        
-        remmth = row.get('REMMTH', 1)
-        
-        # Build codes
-        bnmcode = f"{bic}{cust}020000Y"
-        cmmcode = f"{bic}{cust}{format_mth_bucket_sas(remmth)}0000Y"
-        nsfcode = f"{bic}{cusx}020000Y"
-        
-        # ICGRP from NEWIC/OLDIC
-        newic = str(row.get('NEWIC', '')).strip()
-        oldic = str(row.get('OLDIC', '')).strip()
-        icgrp = newic.replace(' ', '') if newic and newic != 'nan' else oldic.replace(' ', '')
-        
-        records.append({
-            'BIC': bic,
-            'BNMCODE': bnmcode,
-            'CMMCODE': cmmcode,
-            'BRANCH': str(row.get('BRANCH', '')).strip(),
-            'ACCTNO': str(row.get('ACCTNO', '')).strip(),
-            'CUSTCD': custcd_str,
-            'PRODUCT': product,
-            'CURCODE': str(row.get('CURCODE', 'MYR')).strip(),
-            'AMOUNT': float(row.get('AMOUNT', 0)),
-            'CUSTNO': custno,
-            'NEWIC': newic,
-            'OLDIC': oldic,
-            'CUSTNAME': str(row.get('CUSTNAME', '')).strip(),
-            'REM30D': row.get('REM30D', 1),
-            'REMMTH': remmth,
-            'ECP': ecp_val,
-            'CDNO': str(row.get('CDNO', '')).strip(),
-            'MATDT': str(row.get('MATDT', '')).strip(),
-            'BILLERIND': billerind,
-            'SME_TAG': str(row.get('SME_TAG', '')).strip(),
-            'PBMERCH': pbmerch,
-            'INTPLAN': intplan,
-            'ICGRP': icgrp,
-            'FDHOLD': str(row.get('FDHOLD', 'N')).strip(),
-            'SIGN': sign,
-            'NSFCODE': nsfcode,
-            'SRC': 'BANKING',
-            'SOURCE': source,
-            'DTSIGNED': dtsigned,
-            'TRX': row.get('TRX', 0)
-        })
-        
-        # Progress indicator
-        if (idx + 1) % 500000 == 0:
-            print(f"    Processed {idx + 1:,} records...")
-    
-    df_result = pd.DataFrame(records)
-    print(f"  Banking processed: {len(df_result)} records")
-    return df_result
+   FORMAT BIC $5. CMMCODE $14.;
+   BIC = SUBSTR(BNMCODE,1,5);
+   IF BIC = '95830' AND DEALTYPE IN ('BCQ','BCT','BCW') THEN
+      BIC = '9583X'; *PQMMD;
+   BNMCODE = BIC||CUST||PUT(REM30D,REMFMT.)||'0000Y';
+   CMMCODE = BIC||CUST||PUT(REMMTH,CMMFMT.)||'0000Y';
 
-# =============================================================================
-# SME RECLASSIFICATION AND INSURANCE SPLIT
-# Matching SAS: DATA ALLMNI / MERGE ALLMNI TOTMNI TOTEQU; BY ICGRP;
-# =============================================================================
-def apply_sme_reclassification_and_insurance(df):
-    """
-    Apply SME reclassification and insurance split.
-    """
-    print("Applying SME reclassification and insurance split...")
-    
-    # Calculate TOTICBAL from banking records
-    banking = df[df['SRC'] == 'BANKING']
-    toticbal = banking.groupby('ICGRP')['AMOUNT'].sum().reset_index()
-    toticbal.columns = ['ICGRP', 'TOTICBAL']
-    
-    # Calculate TOTICEQBAL from treasury records WHERE SUBSTR(BIC,3,3) IN ('810','820','830','83X','840','850')
-    treasury = df[df['SRC'] == 'TREASURY']
-    bic_condition = treasury['BIC'].str[2:5].isin(['810', '820', '830', '83X', '840', '850'])
-    toticeqbal = treasury[bic_condition].groupby('ICGRP')['AMOUNT'].sum().reset_index()
-    toticeqbal.columns = ['ICGRP', 'TOTICEQBAL']
-    
-    # Merge totals into main dataframe
-    df = df.merge(toticbal, on='ICGRP', how='left')
-    df = df.merge(toticeqbal, on='ICGRP', how='left')
-    df['TOTICBAL'] = df['TOTICBAL'].fillna(0)
-    df['TOTICEQBAL'] = df['TOTICEQBAL'].fillna(0)
-    
-    special_custnos = [14094942, 16557696, 3728510, 11335374, 16265490,
-                      3523050, 11880426, 16771972, 15241330, 16500538]
-    
-    result = []
-    for _, row in df.iterrows():
-        r = row.to_dict()
-        
-        if r['SRC'] != 'BANKING':
-            result.append(r)
-            continue
-        
-        bnmcode = r['BNMCODE']
-        bic = r['BIC']
-        custno = r['CUSTNO']
-        custcd = r.get('CUSTCD', '00')
-        sme_tag = r.get('SME_TAG', '')
-        toticbal = r.get('TOTICBAL', 0)
-        toticeqbal = r.get('TOTICEQBAL', 0)
-        totdpbal = toticbal + toticeqbal
-        
-        # Reclassify retail to SME if total deposits < 5M
-        if (custno not in special_custnos and bnmcode[5:7] == '29') or custcd in ['72', '73', '74']:
-            if totdpbal < 5000000:
-                r['BNMCODE'] = bic + '19' + bnmcode[7:]
-                r['CMMCODE'] = bic + '19' + r.get('CMMCODE', '')[7:]
-                r['NSFCODE'] = bic + '19' + r.get('NSFCODE', '')[7:]
-        
-        # Reclassify SME to retail if total deposits >= 5M and not SME tagged
-        elif bnmcode[5:7] == '19' and sme_tag == 'N':
-            if totdpbal >= 5000000:
-                r['BNMCODE'] = bic + '29' + bnmcode[7:]
-                r['CMMCODE'] = bic + '29' + r.get('CMMCODE', '')[7:]
-                r['NSFCODE'] = bic + '29' + r.get('NSFCODE', '')[7:]
-        
-        # Apply TAG for 08/19 categories
-        if r['BNMCODE'][5:7] in ['08', '19']:
-            trx = r.get('TRX', 0)
-            sign = r.get('SIGN', '')
-            
-            if trx == 1:
-                tag = '01'
-            elif sign in ['R', 'R ']:
-                tag = '02'
-            else:
-                tag = '03'
-            
-            r['BNMCODE'] = r['BNMCODE'][:7] + tag + '0000Y'
-            r['NSFCODE'] = r['NSFCODE'][:7] + tag + '0000Y'
-        
-        # Apply ECP for CA accounts
-        ecp = r.get('ECP', '00')
-        if bic in ['95313', '96313']:
-            r['BNMCODE'] = r['BNMCODE'][:9] + ecp + '00Y'
-            r['CMMCODE'] = r['CMMCODE'][:9] + ecp + '00Y'
-            r['NSFCODE'] = r['NSFCODE'][:9] + ecp + '00Y'
-        
-        # Insurance split logic
-        if toticbal > 250000:
-            curbal = r['AMOUNT']
-            bnm = r['BNMCODE']
-            nsf = r['NSFCODE']
-            
-            # IF SUBSTR(BNMCODE,6,2) IN ('29','39') AND ECP NE '01' THEN DO;
-            if bnm[5:7] in ['29', '39'] and ecp != '01':
-                # Not fully covered
-                r['BNMCODE'] = bnm[:7] + '10' + bnm[10:]
-                r['NSFCODE'] = nsf[:7] + '10' + nsf[10:]
-                result.append(r)
-            else:
-                # Insured portion
-                insured_amt = (curbal / toticbal) * 250000
-                r1 = r.copy()
-                r1['AMOUNT'] = insured_amt
-                
-                # IF SUBSTR(BNMCODE,6,2) IN ('49') AND ECP NE '01' THEN NSFCODE = ...;
-                if bnm[5:7] in ['49'] and ecp != '01':
-                    r1['NSFCODE'] = nsf[:7] + '10' + nsf[10:]
-                
-                result.append(r1)
-                
-                # Uninsured portion
-                uninsured_amt = curbal - insured_amt
-                r2 = r.copy()
-                r2['AMOUNT'] = uninsured_amt
-                r2['BNMCODE'] = bnm[:7] + '10' + bnm[10:]
-                r2['NSFCODE'] = nsf[:7] + '10' + nsf[10:]
-                result.append(r2)
-        else:
-            result.append(r)
-    
-    df_result = pd.DataFrame(result)
-    print(f"  After reclassification/split: {len(df_result)} records")
-    return df_result
+   *15-1789;
+   IF CUSTNO IN ('AIM','PBL','PBLEUR','PBLNID','PBLUSD','PIVMYR','IPBB')
+      AND CUST='49' AND BIC IN ('95840','96840') THEN DO;
+      IF PUT(ORI30D,REMFMT.) > 5 AND PUT(REM30D,REMFMT.) > 1 THEN
+         BNMCODE = SUBSTR(BNMCODE,1,9)||'0200Y';
+   END;
+   FORMAT ICGRP $400.;
+   IF CUSTID NE '' THEN ICGRP = COMPRESS(CUSTID);
+   ELSE                 ICGRP = COMPRESS(ICNO);
+   KEEP BIC BNMCODE CMMCODE CURCODE AMOUNT DEALREF DEALTYPE CUSTFISS
+        CUSTNO CUSTNAME REM30D REMMTH ORI30D MATDT CUSTID ICNO ACCTNO
+        CISNO CISNAME ICGRP;
+RUN;
+PROC SORT DATA=ALLEQU; BY BNMCODE CURCODE; RUN;
 
-# =============================================================================
-# NSFR AND FD HOLD PROCESSING
-# =============================================================================
-def process_nsfr_fdhold(df):
-    """
-    Process NSFR codes and FD hold flags.
-    """
-    print("Processing NSFR and FD hold...")
-    
-    fdhold_records = []
-    all_records = []
-    
-    for _, row in df.iterrows():
-        r = row.to_dict()
-        bic = r['BIC']
-        
-        # Only process banking records with BIC 95315/95317
-        if bic in ['95315', '95317'] and r['SRC'] == 'BANKING':
-            rem30d = r.get('REM30D', 1)
-            remmth = r.get('REMMTH', 1)
-            fdhold = str(r.get('FDHOLD', 'N')).strip().upper()
-            
-            # NSFR processing
-            r['NSFCODE'] = r['NSFCODE'][:9] + format_mth_bucket_sas(remmth) + '00Y'
-            
-            if fdhold == 'Y':
-                r['NSFCODE'] = r['NSFCODE'][:7] + '20' + r['NSFCODE'][10:]
-            
-            # LCR processing
-            if rem30d <= 1:
-                r['BNMCODE'] = r['BNMCODE'][:9] + '0100Y'
-            else:
-                r['BNMCODE'] = r['BNMCODE'][:9] + '0200Y'
-            
-            # FDHOLD extraction
-            if fdhold == 'Y':
-                fdhold_records.append({
-                    'BNMCODE': r['BNMCODE'],
-                    'CURCODE': r['CURCODE'],
-                    'AMOUNT': r['AMOUNT'],
-                    'BIC': bic
-                })
-                r['BNMCODE'] = r['BNMCODE'][:7] + '20' + r['BNMCODE'][10:]
-        
-        all_records.append(r)
-    
-    # Process FDHOLD records
-    fdhold_processed = []
-    if fdhold_records:
-        fdhold_df = pd.DataFrame(fdhold_records)
-        fdhold_grouped = fdhold_df.groupby(['BNMCODE', 'CURCODE', 'BIC'])['AMOUNT'].sum().reset_index()
-        
-        for _, row in fdhold_grouped.iterrows():
-            bnmcode = row['BNMCODE']
-            item_raw = lcrcdmni_fmt(bnmcode[5:9])
-            item = item_raw.strip() if item_raw else ''
-            
-            if item:
-                bic = row['BIC']
-                amount = row['AMOUNT']
-                
-                if len(bnmcode) >= 11 and bnmcode[9:11] == '01':
-                    if bic == '95315':
-                        fdhold_processed.append({
-                            'ITEM': item, 'CURCODE': row['CURCODE'],
-                            'FDPLEDGE1': amount, 'FDPLEDGE2': 0,
-                            'TDPLEDGE1': 0, 'TDPLEDGE2': 0
-                        })
-                    else:
-                        fdhold_processed.append({
-                            'ITEM': item, 'CURCODE': row['CURCODE'],
-                            'FDPLEDGE1': 0, 'FDPLEDGE2': 0,
-                            'TDPLEDGE1': amount, 'TDPLEDGE2': 0
-                        })
-                else:
-                    if bic == '95315':
-                        fdhold_processed.append({
-                            'ITEM': item, 'CURCODE': row['CURCODE'],
-                            'FDPLEDGE1': 0, 'FDPLEDGE2': amount,
-                            'TDPLEDGE1': 0, 'TDPLEDGE2': 0
-                        })
-                    else:
-                        fdhold_processed.append({
-                            'ITEM': item, 'CURCODE': row['CURCODE'],
-                            'FDPLEDGE1': 0, 'FDPLEDGE2': 0,
-                            'TDPLEDGE1': 0, 'TDPLEDGE2': amount
-                        })
-    
-    return pd.DataFrame(all_records), fdhold_processed
+PROC SUMMARY DATA=ALLEQU NWAY;
+   BY BNMCODE CURCODE;
+   VAR AMOUNT;
+   OUTPUT OUT=EQUTOT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
 
-# =============================================================================
-# SHAREX FORMATTING
-# =============================================================================
-def apply_sharex_format(df):
-    """
-    Apply SHAREX macro logic.
-    """
-    print("Applying SHAREX format...")
-    
-    report_records = []
-    
-    for _, row in df.iterrows():
-        bic = row['BIC']
-        bnmcode = row['BNMCODE']
-        curcode = row['CURCODE']
-        amount = abs(round(row['AMOUNT'] / 1000, 2))
-        
-        if row['SRC'] == 'BANKING':
-            colname_raw = colid_fmt(bic)
-            colname = colname_raw.strip() if colname_raw else ''
-            
-            ecp = bnmcode[9:11] if len(bnmcode) > 11 else '00'
-            
-            if bic in ['95313', '96313'] and ecp == '01':
-                item_raw = lcrcdmniopr_fmt(bnmcode[5:9])
-            else:
-                item_raw = ''
-            
-            item = item_raw.strip() if item_raw else ''
-            
-            if not item:
-                item_raw = lcrcdmni_fmt(bnmcode[5:9])
-                item = item_raw.strip() if item_raw else ''
-            
-            remmth = bnmcode[9:11] if len(bnmcode) > 11 else '00'
-            
-        else:  # TREASURY
-            dltype = bnmcode[11:13] if len(bnmcode) > 12 else '00'
-            if dltype == '01':
-                colname = 'STQ95830'
-            else:
-                colname_raw = colid_fmt(bic)
-                colname = colname_raw.strip() if colname_raw else ''
-            
-            item_raw = lcrcdequ_fmt(bnmcode[5:7])
-            item = item_raw.strip() if item_raw else ''
-            
-            remmth = bnmcode[7:9] if len(bnmcode) > 9 else '00'
-            orimth = bnmcode[9:11] if len(bnmcode) > 10 else '00'
-            
-            if item == 'B3.30' and orimth == '02':
-                item = 'B6.30'
-        
-        if colname and item:
-            if colname[:2] == 'FD' or colname[:3] in ['STD', 'STQ']:
-                if remmth == '01':
-                    colname = colname + '1'
-                else:
-                    colname = colname + '2'
-            elif colname[:3] in ['NID', 'IBB']:
-                try:
-                    rem_idx = int(remmth)
-                    if 1 <= rem_idx <= 6:
-                        colname = colname + f'V{rem_idx}'
-                except:
-                    pass
-            
-            report_records.append({
-                'ITEM': item,
-                'CURCODE': curcode,
-                'COLNAME': colname,
-                'AMOUNT': amount
-            })
-    
-    return pd.DataFrame(report_records)
+PROC SORT DATA=ALLEQU; BY ICGRP; RUN;
 
-# =============================================================================
-# GL PROCESSING
-# =============================================================================
-def process_gl():
-    """
-    Process WALK.TXT for GL data.
-    """
-    print("Processing GL data (WALK.TXT)...")
-    
-    gl_file = f"{PATHS['TEMPLATE']}walk.txt"
-    if not os.path.exists(gl_file):
-        print(f"  WALK.TXT not found")
-        return pd.DataFrame()
-    
-    gl = read_walk_file(gl_file)
-    if gl.empty:
-        print("  No GL data")
-        return pd.DataFrame()
-    
-    gl['ITEM'] = gl['SET_ID'].apply(lambda x: lcrcdigl_fmt(x).strip())
-    gl['CURCODE'] = gl['SET_ID'].apply(lambda x: lcrcdiglccy_fmt(x).strip())
-    
-    mask = (gl['ITEM'] == '') & (gl['CURCODE'] != '')
-    gl.loc[mask, 'ITEM'] = gl.loc[mask, 'SET_ID'].apply(lambda x: lcrcdgloth_fmt(x).strip())
-    
-    mask_still = gl['ITEM'] == ''
-    gl.loc[mask_still, 'ITEM'] = gl.loc[mask_still, 'SET_ID'].apply(lambda x: lcrcdgl_fmt(x).strip())
-    
-    gl = gl[gl['ITEM'] != '']
-    gl = gl.drop_duplicates(subset=['SET_ID'], keep='first')
-    gl = gl.sort_values(['ITEM', 'CURCODE'])
-    
-    if not gl.empty:
-        gl_summary = gl.groupby(['ITEM', 'CURCODE'])['AMOUNT'].sum().reset_index()
-        gl_summary.rename(columns={'AMOUNT': 'OTHSOURCE'}, inplace=True)
-        print(f"  GL records: {len(gl_summary)}")
-        return gl_summary
-    
-    return pd.DataFrame()
+PROC SUMMARY DATA=ALLEQU NWAY;
+   WHERE SUBSTR(BIC,3,3) IN ('810','820','830','83X','840','850');
+   BY ICGRP;
+   VAR AMOUNT;
+   OUTPUT OUT=TOTEQU(DROP=_TYPE_ _FREQ_) SUM=TOTICEQBAL;
+RUN;
 
-# =============================================================================
-# REPORT GENERATION
-# =============================================================================
-def generate_reports(sharex_df, fdhold_data, gl_data, rep_date):
-    """
-    Generate LCR reports matching SAS %LCRPRINT macro.
-    """
-    print("Generating LCR reports...")
-    
-    if sharex_df.empty:
-        print("  No SHAREX data")
-        return
-    
-    deposit = sharex_df.groupby(['ITEM', 'CURCODE', 'COLNAME'])['AMOUNT'].sum().reset_index()
-    
-    deposit_wide = deposit.pivot_table(
-        index=['ITEM', 'CURCODE'],
-        columns='COLNAME',
-        values='AMOUNT',
-        aggfunc='sum',
-        fill_value=0
-    ).reset_index()
-    
-    if fdhold_data:
-        fdhold_df = pd.DataFrame(fdhold_data)
-        if not fdhold_df.empty:
-            fdhold_summary = fdhold_df.groupby(['ITEM', 'CURCODE']).sum().reset_index()
-            deposit_wide = deposit_wide.merge(fdhold_summary, on=['ITEM', 'CURCODE'], how='left')
-    
-    for col in ['FDPLEDGE1', 'FDPLEDGE2', 'TDPLEDGE1', 'TDPLEDGE2']:
-        if col not in deposit_wide.columns:
-            deposit_wide[col] = 0
-        deposit_wide[col] = deposit_wide[col].fillna(0)
-    
-    if not gl_data.empty:
-        deposit_wide = deposit_wide.merge(gl_data, on=['ITEM', 'CURCODE'], how='outer')
-    if 'OTHSOURCE' not in deposit_wide.columns:
-        deposit_wide['OTHSOURCE'] = 0
-    deposit_wide['OTHSOURCE'] = deposit_wide['OTHSOURCE'].fillna(0)
-    
-    configs = [
-        ('MTH', 'LCRMTH', None),
-        ('USD', 'LCRUSD', ['USD']),
-        ('SGD', 'LCRSGD', ['SGD']),
-        ('MYR', 'LCRMYR', ['MYR'])
-    ]
-    
-    for suffix, prefix, currencies in configs:
-        if currencies:
-            df_curr = deposit_wide[deposit_wide['CURCODE'].isin(currencies)].copy()
-        else:
-            df_curr = deposit_wide.copy()
-        
-        if suffix == 'MTH':
-            df_curr.loc[df_curr['CURCODE'].isin(['USD', 'SGD']), 'OTHSOURCE'] = 0
-        
-        write_report(df_curr, suffix, prefix, rep_date)
-    
-    print("  Reports generated successfully")
+*------------------------------------------------*
+*  CORE BANKING                                  *
+*------------------------------------------------*;
+DATA ALLMNI;
+   SET LCR.FD&REPTDAY(RENAME=(CUSTCD=CUSTCDX) IN=FD)
+       LCR.SA&REPTDAY
+       LCR.CA&REPTDAY
+       LCR.FCYCA&REPTDAY;
+   IF FD THEN CUSTCD = PUT(CUSTCDX,Z2.);
+   IF      CUSTCD IN (76,77,78,95,96)             THEN CUST='08';
+   ELSE IF CUSTCD IN (41,42,43,44,46,47,48,49,51,
+                      52,53,54,65,66,67,68,69)    THEN CUST='19';
+   ELSE IF CUSTCD IN (00,45,57,59,60,61,62,63,64,
+                      75,79,85,86,87,88,89,98,99) THEN CUST='29';
+   ELSE IF CUSTCD IN (01,71,72,73,74,90,91,92)    THEN CUST='39';
+   ELSE IF CUSTCD IN (02,03,07,12,81,82,83,84)    THEN CUST='49';
+   ELSE IF CUSTCD IN (04,05,06,13,20,30:40,17)    THEN CUST='59';
+   ELSE                                                CUST='29';
 
-def write_report(df_data, suffix, prefix, rep_date):
-    """Write tab-delimited report file matching SAS %LCRPRINT output"""
-    
-    output_file = f"{PATHS['OUTPUT']}{prefix}{rep_date['mon']}.txt"
-    
-    template_file = f"{PATHS['TEMPLATE']}templ.txt"
-    template_items = []
-    try:
-        with open(template_file, 'r') as f:
-            for line in f:
-                if len(line) >= 8:
-                    item = line[0:5].strip()
-                    idesc = line[7:127].strip() if len(line) > 7 else ''
-                    template_items.append({'ITEM': item, 'IDESC': idesc})
-    except:
-        print(f"  Template not found: {template_file}")
-        template_items = []
-    
-    columns = [
-        'FD95315RM1', 'FD95315RM2', 'FD95315RM',
-        'FD95317RM1', 'FD95317RM2', 'FD95317RM',
-        None, None, None,
-        'SA95312RM', 'CA95313RM', 'CA96313FX',
-        'STD95830V1', 'STD95830V2', 'STD95830',
-        'STQ95830V1', 'STQ95830V2', 'STQ95830',
-        'NID95840V1', 'NID95840V2', 'NID95840V3', 'NID95840V4', 'NID95840V5', 'NID95840V6', 'NID95840',
-        'IBB9X810V1', 'IBB9X810V2', 'IBB9X810V3', 'IBB9X810V4', 'IBB9X810V5', 'IBB9X810V6', 'IBB9X810',
-        None, None, None, None, None, None, None,
-        None, None, None, None, None, None, None,
-        'OTHSOURCE', 'TOTALV1', 'TOTALDP',
-        'FDPLEDGE1', 'FDPLEDGE2', 'TDPLEDGE1', 'TDPLEDGE2'
-    ]
-    
-    delim = '\t'
-    
-    with open(output_file, 'w') as f:
-        f.write(f'PUBLIC ISLAMIC BANK BERHAD\n')
-        f.write(f'LIQUIDITY COVERAGE RATIO (LCR) AS AT {rep_date["rdate"]}\n')
-        
-        for template_row in template_items:
-            item = template_row['ITEM']
-            idesc = template_row['IDESC']
-            
-            if idesc.upper().startswith('B)'):
-                f.write('\n')
-            
-            item_data = df_data[df_data['ITEM'] == item]
-            
-            values = []
-            for col in columns:
-                if col is None:
-                    values.append('')
-                elif col in df_data.columns and not item_data.empty:
-                    val = item_data[col].sum()
-                    if col == 'OTHSOURCE':
-                        val = abs(round(val / 1000, 2))
-                    if pd.notna(val) and val != 0:
-                        values.append(f'{val:,.2f}')
-                    else:
-                        values.append('')
-                else:
-                    values.append('')
-            
-            f.write(f'{idesc}{delim}')
-            f.write(delim.join(values))
-            f.write('\n')
-    
-    print(f"  Generated: {output_file}")
+   IF REM30D = . THEN REM30D = REMMTH;
+   IF REM30D > 1 AND REMMTH > 1 THEN REM30D = REMMTH; *15-2370;
+RUN;
+PROC SORT DATA=ALLMNI; BY ACCTNO; RUN;
 
-# =============================================================================
-# MAIN
-# =============================================================================
-def main():
-    print("=" * 70)
-    print("EIIMLCRM - BNM LCR Reporting (Islamic Banking)")
-    print("Python conversion of SAS EIIMLCRM program")
-    print("=" * 70)
-    
-    rep_date = get_report_date()
-    print(f"\nReport Date: {rep_date['date'].strftime('%d/%m/%Y')}")
-    print(f"Week of Month: {rep_date['nowk']}")
-    print(f"Month: {rep_date['mon']}")
-    print(f"Year: {rep_date['year']}")
-    
-    treasury_df = process_treasury(rep_date)
-    banking_df = process_banking(rep_date)
-    
-    if treasury_df.empty and banking_df.empty:
-        print("\nNo data found!")
-        return
-    
-    all_data = pd.concat([treasury_df, banking_df], ignore_index=True)
-    print(f"\nTotal combined records: {len(all_data):,}")
-    
-    all_data = apply_sme_reclassification_and_insurance(all_data)
-    
-    all_data, fdhold_data = process_nsfr_fdhold(all_data)
-    
-    sharex_df = apply_sharex_format(all_data)
-    
-    gl_data = process_gl()
-    
-    generate_reports(sharex_df, fdhold_data, gl_data, rep_date)
-    
-    print("\n" + "=" * 70)
-    print("PROCESSING SUMMARY")
-    print("=" * 70)
-    
-    total = all_data['AMOUNT'].sum() / 1000
-    print(f"\nTotal Amount (RM'000): {total:,.2f}")
-    
-    by_src = all_data.groupby('SRC')['AMOUNT'].sum()
-    print("\nBy Source:")
-    for src, amt in by_src.items():
-        print(f"  {src}: RM {amt/1000:,.2f}K")
-    
-    by_cur = all_data.groupby('CURCODE')['AMOUNT'].sum()
-    print("\nBy Currency:")
-    for cur, amt in by_cur.items():
-        print(f"  {cur}: RM {amt/1000:,.2f}K")
-    
-    print("\n" + "=" * 70)
-    print("EIIMLCRM Complete")
-    print("=" * 70)
+DATA CISINFO;
+   SET CISDP.DEPOSIT(KEEP=ACCTNO CUSTNO SECCUST NEWIC OLDIC CUSTNAME)
+       CISCA.DEPOSIT(KEEP=ACCTNO CUSTNO SECCUST NEWIC OLDIC CUSTNAME);
+   WHERE SECCUST='901';
+RUN;
+PROC SORT DATA=CISINFO OUT=LCR.CISINFO; BY ACCTNO; RUN;
 
-if __name__ == "__main__":
-    main()
+PROC SORT DATA=LIST.LCR_ECP OUT=LCR.ECP NODUPKEY; BY ACCTNO; RUN;
+
+DATA ALLMNI;
+   MERGE ALLMNI(IN=A) LCR.CISINFO LCRM.TRNSCISIC LCR.ECP LCRM.SME;
+   BY ACCTNO;
+   IF A;
+   IF ECP = '' THEN ECP = '00';
+   IF ECP = '01' THEN DO;
+      IF INTRATE < OPRRATE THEN ECP = '01';        *OPERATIONAL;
+      ELSE IF INTRATE >= OPRRATE THEN ECP = '00';  *NON-OPERATIONAL;
+   END;
+   IF BILLERIND = 'Y' OR PBMERCH = 'Y' THEN
+      ECP = '01'; *16-2778/4738/17-754/17-2026;
+   IF PRODUCT IN (106,151,158,97,164,201,215) OR
+      INTPLAN IN (400:419,600:658,720:740,864:890,941:967) OR
+     (SOURCE NE 'PGD' AND
+      DTSIGNED > 0 AND YRDIF(DTSIGNED,&TDATE,'ACT/ACT') >= 1) THEN
+      SIGN= 'R '; *17-2949/4521;
+   IF CUSTNO IN ( 4391161, 2115999,12579649,13468207,14300254,
+                 14675929,15327497,17104931,12677444, 3703533,
+                  5978659,16185090,2558344,10819745) THEN CUST='39';
+   FORMAT BIC $5. CMMCODE $14.;
+   BIC = SUBSTR(BNMCODE,1,5);
+   BNMCODE = BIC||CUST||'02'||'0000Y';
+   CMMCODE = BIC||CUST||PUT(REMMTH,CMMFMT.)||'0000Y';
+   IF CURCODE = 'XAU' THEN DO;
+      BIC = '9531X'; /* GOLD */
+      BNMCODE = BIC||CUST||'10'||'0000Y';
+      CMMCODE = BIC||CUST||PUT(REMMTH,CMMFMT.)||'0000Y';
+      AMOUNT  = AMOUNT*PUT(CURCODE,$FORATE.);
+   END;
+RUN;
+PROC SORT DATA=ALLMNI; BY ICGRP; RUN;
+
+PROC SUMMARY DATA=ALLMNI NWAY;
+   BY ICGRP;
+   VAR AMOUNT;
+   OUTPUT OUT=TOTMNI(DROP=_TYPE_ _FREQ_) SUM=TOTICBAL;
+RUN;
+
+DATA ALLMNI
+     LCR.CMM&REPTDAY(KEEP=BIC BNMCODE CMMCODE BRANCH ACCTNO CUSTCD
+                          PRODUCT CURCODE AMOUNT CUSTNO NEWIC OLDIC
+                          CUSTNAME REM30D REMMTH ECP CDNO MATDT
+                          BILLERIND TOTDPBAL TOTICBAL TOTICEQBAL
+                          SME_TAG PBMERCH INTPLAN);
+   MERGE ALLMNI(IN=A) TOTMNI TOTEQU;
+   BY ICGRP;
+   IF A;
+   IF (CUSTNO NOT IN (14094942,16557696,3728510,11335374,16265490,
+                      3523050,11880426,16771972,15241330,16500538) AND
+      SUBSTR(BNMCODE,6,2) = '29') OR CUSTCD IN (72,73,74) THEN DO;
+      TOTDPBAL = SUM(TOTICBAL,TOTICEQBAL); *16-3319;
+      IF TOTDPBAL < 5000000 THEN DO; *15-1076;
+         BNMCODE = BIC||'19'||SUBSTR(BNMCODE,8,7);
+         CMMCODE = BIC||'19'||SUBSTR(CMMCODE,8,7);
+      END;
+   END;
+   *16-4512;
+   ELSE IF SUBSTR(BNMCODE,6,2) = '19' AND SME_TAG = 'N' THEN DO;
+      TOTDPBAL = SUM(TOTICBAL,TOTICEQBAL);
+      IF TOTDPBAL => 5000000 THEN DO;
+         BNMCODE = BIC||'29'||SUBSTR(BNMCODE,8,7);
+         CMMCODE = BIC||'29'||SUBSTR(CMMCODE,8,7);
+      END;
+   END;
+   IF SUBSTR(BNMCODE,6,2) IN ('08','19') AND BIC NE '9531X' THEN DO;
+      IF      TRX  IN (1)        THEN TAG = '01';
+      ELSE IF SIGN IN ('R','R ') THEN TAG = '02';
+      ELSE                            TAG = '03';
+      BNMCODE = SUBSTR(BNMCODE,1,7)||TAG||'0000Y';
+   END;
+   /* OPERATIONAL DEPOSIT - LCR_ECP UNDER EGS_FD */
+   IF BIC IN ('95313','96313') THEN DO;
+      BNMCODE = SUBSTR(BNMCODE,1,9)||ECP||'00Y';
+      CMMCODE = SUBSTR(CMMCODE,1,9)||ECP||'00Y';
+   END;
+   IF TOTICBAL > 250000 THEN DO; /* PROPORTION INSURED/UNINSURED */
+      IF SUBSTR(BNMCODE,6,2) IN ('29','39') AND ECP NE '01' THEN DO;
+         BNMCODE = SUBSTR(BNMCODE,1,7)||'10'||SUBSTR(BNMCODE,10,5);
+         OUTPUT;                    /* NOT FULLY COVERED */
+      END;
+      ELSE DO;
+         CURBAL  = AMOUNT;
+         AMOUNT  = (CURBAL/TOTICBAL)*250000;
+         OUTPUT;                    /* INSURED   */
+         AMOUNT  = SUM(CURBAL,-1*AMOUNT);
+         BNMCODE = SUBSTR(BNMCODE,1,7)||'10'||SUBSTR(BNMCODE,10,5);
+         OUTPUT;                    /* UNINSURED */
+      END;
+   END;
+   ELSE
+      OUTPUT;                    /* INSURED   */
+RUN;
+
+DATA ALLMNI FDHOLD(KEEP=BNMCODE CURCODE AMOUNT);
+   SET ALLMNI;
+   IF BIC IN ('95311','96311') THEN DO;
+      IF REM30D <= 1 THEN BNMCODE = SUBSTR(BNMCODE,1,9)||'0100Y';
+      ELSE                BNMCODE = SUBSTR(BNMCODE,1,9)||'0200Y';
+      IF FDHOLD = 'Y' THEN DO;
+         OUTPUT FDHOLD;
+         BNMCODE = SUBSTR(BNMCODE,1,7)||'20'||SUBSTR(BNMCODE,10,5);
+      END;
+   END;
+   OUTPUT ALLMNI;
+RUN;
+PROC SORT DATA=ALLMNI; BY BNMCODE CURCODE; RUN;
+
+PROC SUMMARY DATA=ALLMNI NWAY;
+   BY BNMCODE CURCODE;
+   VAR AMOUNT;
+   OUTPUT OUT=MNITOT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+*------------------------------------------------*
+*  FD PLEDGED                                    *
+*------------------------------------------------*;
+PROC SORT DATA=FDHOLD; BY BNMCODE CURCODE; RUN;
+PROC SUMMARY DATA=FDHOLD NWAY;
+   BY BNMCODE CURCODE;
+   VAR AMOUNT;
+   OUTPUT OUT=FDHOLD(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA FDHOLD;
+   SET FDHOLD;
+   ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNI.);
+   IF ITEM NE '';
+   IF SUBSTR(BNMCODE,10,2) = '01' THEN  /*REM30D<=1*/
+      IF CURCODE = 'MYR' THEN FDPLEDGE1 = AMOUNT;
+      ELSE                    FXPLEDGE1 = AMOUNT;
+   ELSE
+      IF CURCODE = 'MYR' THEN FDPLEDGE2 = AMOUNT;
+      ELSE                    FXPLEDGE2 = AMOUNT;
+RUN;
+PROC SORT DATA=FDHOLD OUT=LCR.FDHOLD; BY ITEM; RUN;
+
+PROC SUMMARY DATA=LCR.FDHOLD NWAY;
+   BY ITEM;
+   VAR FDPLEDGE1 FDPLEDGE2 FXPLEDGE1 FXPLEDGE2;
+   OUTPUT OUT=FDHOLD(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+*------------------------------------------------*
+*  SUMMARISE AND CONSOLIDATE                     *
+*------------------------------------------------*;
+DATA LCR.ALLSRC;
+   SET MNITOT(IN=A) EQUTOT;
+   FORMAT COLNAME $15.;
+   BIC     = SUBSTR(BNMCODE,1,5);
+   COLNAME = PUT(BIC,$COLID.);
+   ECP     = SUBSTR(BNMCODE,10,2);
+   IF A THEN DO;
+      IF BIC IN ('95313','96313') AND ECP = '01' THEN
+         ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNIOPR.);
+      IF ITEM = '' THEN
+         ITEM = PUT(SUBSTR(BNMCODE,6,4),$LCRCDMNI.);
+      REMMTH = SUBSTR(BNMCODE,10,2);
+   END;
+   ELSE      DO;
+      ITEM   = PUT(SUBSTR(BNMCODE,6,2),$LCRCDEQU.);
+      IF BIC IN ('95820') THEN ITEM = 'C1.11'; *16-250;
+      REMMTH = SUBSTR(BNMCODE,8,2);
+      ORIMTH = SUBSTR(BNMCODE,10,2); *15-1789;
+      IF ITEM = 'B3.30' AND ORIMTH = '02' THEN ITEM = 'B6.30';
+   END;
+   IF COLNAME NE '' AND ITEM NE ''; *CONTROLLER;
+
+   AMOUNT = ABS(ROUND(AMOUNT/1000,.01));
+   IF SUBSTR(COLNAME,1,2)= 'FD' OR SUBSTR(COLNAME,1,3) IN ('STD') THEN
+         IF REMMTH=1 THEN COLNAME = COMPRESS(COLNAME||'1');
+         ELSE             COLNAME = COMPRESS(COLNAME||'2');
+   ELSE IF SUBSTR(COLNAME,1,3) IN ('NID','DCI','IBB','IBR','BAP') THEN
+      DO I = 1 TO 6;
+         IF REMMTH=I THEN COLNAME = COMPRESS(COLNAME||'V'||I);
+      END;
+   DROP I;
+RUN;
+PROC SORT DATA=LCR.ALLSRC OUT=DEPOSIT; BY ITEM COLNAME; RUN;
+
+PROC SUMMARY DATA=DEPOSIT NWAY;
+   BY ITEM COLNAME;
+   VAR AMOUNT;
+   OUTPUT OUT=DEPOSIT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+PROC TRANSPOSE DATA=DEPOSIT OUT=DEPOSIT(DROP=_NAME_ _LABEL_);
+   BY ITEM;
+   ID COLNAME;
+   VAR AMOUNT;
+RUN;
+
+*------------------------------------------------*
+*  WALKER GL                                     *
+*------------------------------------------------*;
+DATA LCR.GL&REPTDAY;
+   INFILE WALK;
+   INPUT @002 SET_ID         $19.
+         @042 AMOUNT     COMMA20.2
+         @062 SIGN            $1.
+         ;
+   FORMAT ITEM $5.;
+   IF SIGN = '' THEN AMOUNT = -1*AMOUNT;
+   ITEM    = PUT(SET_ID,$LCRCDGL.);
+RUN;
+PROC SORT DATA=LCR.GL&REPTDAY OUT=GL NODUPKEY; BY SET_ID; RUN;
+
+DATA GL;
+  SET GL;
+  OUTPUT;
+   /* SPECIAL MAPPING - SAME SET_ID MAP TO MULTIPLE ITEMS */
+   IF SET_ID = 'F142699OPE' THEN DO;
+      ITEM = 'B3.30';
+      IF SIGN = '-' THEN AMOUNT = -1*AMOUNT;
+      OUTPUT;
+   END;
+RUN;
+
+PROC SORT DATA=GL; BY ITEM; WHERE ITEM NE ''; RUN;
+
+PROC SUMMARY DATA=GL NWAY;
+   BY ITEM;
+   VAR AMOUNT;
+   OUTPUT OUT=GL SUM=OTHSOURCE;
+RUN;
+
+*------------------------------------------------*
+*  LCR REPORTING                                 *
+*------------------------------------------------*;
+DATA REPORT;
+   MERGE DEPOSIT FDHOLD GL;
+   BY ITEM;
+   PART=SUBSTR(ITEM,1,1);
+   FDPLEDGE1 = ABS(ROUND(FDPLEDGE1/1000,.01));
+   FDPLEDGE2 = ABS(ROUND(FDPLEDGE2/1000,.01));
+   FXPLEDGE1 = ABS(ROUND(FXPLEDGE1/1000,.01));
+   FXPLEDGE2 = ABS(ROUND(FXPLEDGE2/1000,.01));
+   OTHSOURCE = ABS(ROUND(OTHSOURCE/1000,.01));
+RUN;
+PROC SORT DATA=REPORT OUT=SREPORT; BY PART; RUN;
+
+PROC SUMMARY DATA=SREPORT NWAY;
+   BY PART;
+   VAR _NUMERIC_;
+   OUTPUT OUT=SREPORT(DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
+
+DATA SREPORT;
+   SET SREPORT;
+   IF PART = 'A'      THEN ITEM = 'A9.01';
+   ELSE IF PART = 'B' THEN ITEM = 'B9.01';
+   ELSE IF PART = 'C' THEN ITEM = 'C9.01';
+RUN;
+PROC SORT DATA=SREPORT; BY ITEM; RUN;
+
+DATA LCR.LCR&REPTDAY;
+   MERGE TEMPLATE(IN=A) REPORT SREPORT;
+   BY ITEM;
+   IF A;
+   DLM='05'X;
+   FILE LCROUT;
+   IF _N_=1 THEN DO;
+      PUT @001 'PUBLIC BANK BERHAD'
+          /    "LIQUIDITY COVERAGE RATIO (LCR) AS AT &RDATE"
+          /
+           ;
+      PUT @125                                              DLM
+                                                            DLM
+                                                            DLM
+                'FD (P)'                                    DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'SA (Q)'                                    DLM
+                'CA (R)'                                    DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'SHORT TERM DEPOSIT'                        DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'GOLD (U)'                                  DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'RM&FX NID ISSUED **'                       DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'RM&FX INTERBANK BORROWINGS (IBB) **'       DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'DUAL CURRENCY INVESTMENTS (DCI) **'        DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'RM&FX INTERBANK REPOS **'                  DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'RM&FX BAS PAYABLE **'                      DLM
+                                                            DLM
+                                                            DLM
+                                                            DLM
+                'OTHER SOURCE'                              DLM
+                'TOTAL'                                     DLM
+                'TOTAL'                                     DLM
+                'FD PLEDGED'                                DLM
+                ;
+      PUT @125                                              DLM
+                '<= 30 DAYS (O1)'                           DLM
+                ' > 30 DAYS (O2)'                           DLM
+                'TOTAL (RM) (O)=(O1+O2)'                    DLM
+                '<= 30 DAYS (P1)'                           DLM
+                ' > 30 DAYS (P2)'                           DLM
+                'TOTAL (FX) (P)=(P1+P2)'                    DLM
+                                                            DLM
+                'RM'                                        DLM
+                'FX'                                        DLM
+                '<= 30 DAYS (S1)'                           DLM
+                ' > 30 DAYS (S2)'                           DLM
+                'TOTAL (RM) (S)=(S1+S2)'                    DLM
+                '<= 30 DAYS (T1)'                           DLM
+                ' > 30 DAYS (T2)'                           DLM
+                'TOTAL (FX) (T)=(T1+T2)'                    DLM
+                                                            DLM
+                '<= 30 DAYS (V1)'                           DLM
+                '> 30 DAYS-3 MTHS (V2)'                     DLM
+                '> 3-6 MTHS (V3)'                           DLM
+                '> 6-9 MTHS (V4)'                           DLM
+                '> 9-12 MTHS (V5)'                          DLM
+                '> 1 YEAR (V6)'                             DLM
+                'TOTAL (V)'                                 DLM
+                '<= 30 DAYS (W1)'                           DLM
+                '> 30 DAYS-3 MTHS (W2)'                     DLM
+                '> 3-6 MTHS (W3)'                           DLM
+                '> 6-9 MTHS (W4)'                           DLM
+                '> 9-12 MTHS (W5)'                          DLM
+                '> 1 YEAR (W6)'                             DLM
+                'TOTAL (W)'                                 DLM
+                '<= 30 DAYS (X1)'                           DLM
+                '> 30 DAYS-3 MTHS (X2)'                     DLM
+                '> 3-6 MTHS (X3)'                           DLM
+                '> 6-9 MTHS (X4)'                           DLM
+                '> 9-12 MTHS (X5)'                          DLM
+                '> 1 YEAR (X6)'                             DLM
+                'TOTAL (X)'                                 DLM
+                '<= 30 DAYS (Y1)'                           DLM
+                '> 30 DAYS-3 MTHS (Y2)'                     DLM
+                '> 3-6 MTHS (Y3)'                           DLM
+                '> 6-9 MTHS (Y4)'                           DLM
+                '> 9-12 MTHS (Y5)'                          DLM
+                '> 1 YEAR (Y6)'                             DLM
+                'TOTAL (Y)'                                 DLM
+                '<= 30 DAYS (Z1)'                           DLM
+                '> 30 DAYS-3 MTHS (Z2)'                     DLM
+                '> 3-6 MTHS (Z3)'                           DLM
+                '> 6-9 MTHS (Z4)'                           DLM
+                '> 9-12 MTHS (Z5)'                          DLM
+                '> 1 YEAR (Z6)'                             DLM
+                'TOTAL (Z)'                                 DLM
+                '(GL)'                                      DLM
+                '(O1+P1+Q+R+S+T1+U+V+W1+X1+Y1+Z+GL)'        DLM
+                '(O+P+Q+R+S+T+U+V+W+X+Y+Z+GL)'              DLM
+                '<= 30 DAYS (RM)'                           DLM
+                ' > 30 DAYS (RM)'                           DLM
+                '<= 30 DAYS (FX)'                           DLM
+                ' > 30 DAYS (FX)'                           DLM
+          ;
+   END;
+   FORMAT FD95311RM1 FD95311RM2 FD95311RM  FD96311FX1 FD96311FX2
+          FD96311FX  SA95312RM  CA95313RM  CA96313FX  STD95830V1
+          STD95830V2 STD95830   STD95830Q1 STD95830Q2 STD95830Q
+          GLD9531X   NID95840V1 NID95840V2 NID95840V3 NID95840V4
+          NID95840V5 NID95840V6 NID95840   IBB9X810V1 IBB9X810V2
+          IBB9X810V3 IBB9X810V4 IBB9X810V5 IBB9X810V6 IBB9X810
+          DCI9X329V1 DCI9X329V2 DCI9X329V3 DCI9X329V4 DCI9X329V5
+          DCI9X329V6 DCI9X329   IBR95820V1 IBR95820V2 IBR95820V3
+          IBR95820V4 IBR95820V5 IBR95820V6 IBR95820   BAP95850V1
+          BAP95850V2 BAP95850V3 BAP95850V4 BAP95850V5 BAP95850V6
+          BAP95850   OTHSOURCE  TOTALV1    TOTALDP    FDPLEDGE1
+          FDPLEDGE2  FXPLEDGE1 FXPLEDGE2 COMMA20.2;
+
+   FD95311RM = SUM(FD95311RM1,FD95311RM2);  *SUM(OF FD95311RM:);
+   FD96311FX = SUM(FD96311FX1,FD96311FX2);  *SUM(OF FD96311FX:);
+   STD95830  = SUM(OF STD95830V:);
+   STD95830Q = SUM(OF STD95830Q:);
+   NID95840  = SUM(OF NID95840V:);
+   IBB9X810  = SUM(OF IBB9X810V:);
+   DCI9X329  = SUM(OF DCI9X329V:);
+   IBR95820  = SUM(OF IBR95820V:);
+   BAP95850  = SUM(OF BAP95850V:);
+   TOTALV1   = SUM(FD95311RM1,FD96311FX1,SA95312RM,CA95313RM,CA96313FX,
+                   STD95830  ,STD95830Q1,GLD9531X ,NID95840 ,IBB9X810V1,
+                   DCI9X329V1,IBR95820V1,BAP95850 ,OTHSOURCE);
+   TOTALDP   = SUM(FD95311RM ,FD96311FX ,SA95312RM,CA95313RM,CA96313FX,
+                   STD95830  ,STD95830Q ,GLD9531X ,NID95840 ,IBB9X810,
+                   DCI9X329  ,IBR95820  ,BAP95850 ,OTHSOURCE);
+   IF SUBSTR(UPCASE(IDESC),1,2)='B)' THEN PUT ;
+   PUT @001  IDESC        $CHAR120.          DLM
+       @125  FD95311RM1                      DLM
+             FD95311RM2                      DLM
+             FD95311RM                       DLM
+             FD96311FX1                      DLM
+             FD96311FX2                      DLM
+             FD96311FX                       DLM
+             SA95312RM                       DLM
+             CA95313RM                       DLM
+             CA96313FX                       DLM
+             STD95830V1                      DLM
+             STD95830V2                      DLM
+             STD95830                        DLM
+             STD95830Q1                      DLM
+             STD95830Q2                      DLM
+             STD95830Q                       DLM
+             GLD9531X                        DLM
+             NID95840V1                      DLM
+             NID95840V2                      DLM
+             NID95840V3                      DLM
+             NID95840V4                      DLM
+             NID95840V5                      DLM
+             NID95840V6                      DLM
+             NID95840                        DLM
+             IBB9X810V1                      DLM
+             IBB9X810V2                      DLM
+             IBB9X810V3                      DLM
+             IBB9X810V4                      DLM
+             IBB9X810V5                      DLM
+             IBB9X810V6                      DLM
+             IBB9X810                        DLM
+             DCI9X329V1                      DLM
+             DCI9X329V2                      DLM
+             DCI9X329V3                      DLM
+             DCI9X329V4                      DLM
+             DCI9X329V5                      DLM
+             DCI9X329V6                      DLM
+             DCI9X329                        DLM
+             IBR95820V1                      DLM
+             IBR95820V2                      DLM
+             IBR95820V3                      DLM
+             IBR95820V4                      DLM
+             IBR95820V5                      DLM
+             IBR95820V6                      DLM
+             IBR95820                        DLM
+             BAP95850V1                      DLM
+             BAP95850V2                      DLM
+             BAP95850V3                      DLM
+             BAP95850V4                      DLM
+             BAP95850V5                      DLM
+             BAP95850V6                      DLM
+             BAP95850                        DLM
+             OTHSOURCE                       DLM
+             TOTALV1                         DLM
+             TOTALDP                         DLM
+             FDPLEDGE1                       DLM
+             FDPLEDGE2                       DLM
+             FXPLEDGE1                       DLM
+             FXPLEDGE2                       DLM
+       ;
+RUN;
+
+
+this is the original sas code for ur reference. does the fofmt and ktblall count as inputs?
