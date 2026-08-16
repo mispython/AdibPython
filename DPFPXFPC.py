@@ -21,224 +21,97 @@ BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
 # Contains: $LIAB, $NSRSLIAB, $RVRSE, $LOCUSTCD, $INDSECT, etc.
 
 # Facility/Product Code Mappings ($LIAB format)
-# Maps LIABCODE to standardized facility codes
 LIAB_FORMAT = {
     # Trade Finance Facilities
-    'BAE': '34471',  # Bills Receivable - Export
-    'BEI': '34471',  # Bills Receivable - Import
-    'BAI': '34472',  # Bills Payable - Import
-    'BII': '34472',  # Bills Payable - Import
-    'BAP': '34475',  # Bills Payable
-    'BAS': '34475',  # Bills Payable
-    'BPI': '34475',  # Bills Payable
-    'BSI': '34475',  # Bills Payable
+    'BAE': '34471', 'BEI': '34471',
+    'BAI': '34472', 'BII': '34472',
+    'BAP': '34475', 'BAS': '34475',
+    'BPI': '34475', 'BSI': '34475',
     
     # Islamic Facilities
-    'MUR': '34411',  # Murabahah
-    'IST': '34412',  # Istisna
-    'IJA': '34421',  # Ijarah
-    'MUS': '34422',  # Musharakah
-    'MUD': '34440',  # Mudharabah
-    'QAR': '34470',  # Qard
-    'TAW': '34480',  # Tawarruq
-    'BAI': '34490',  # Bai Bithaman Ajil
+    'MUR': '34411', 'IST': '34412',
+    'IJA': '34421', 'MUS': '34422',
+    'MUD': '34440', 'QAR': '34470',
+    'TAW': '34480', 'BAI': '34490',
     
     # Conventional Facilities
-    'OD': '34710',   # Overdraft
-    'TL': '34720',   # Term Loan
-    'RL': '34730',   # Revolving Loan
-    'HL': '34740',   # Housing Loan
-    'CL': '34750',   # Commercial Loan
-    'PL': '34760',   # Personal Loan
-    'AL': '34770',   # Auto Loan
+    'OD': '34710', 'TL': '34720',
+    'RL': '34730', 'HL': '34740',
+    'CL': '34750', 'PL': '34760',
+    'AL': '34770',
     
     # Special Facilities
-    'POS': '34810',  # POS Financing
-    'DAU': '34831',  # DAU Financing
-    'DDU': '34832',  # DDU Financing
-    'FFS': '34840',  # Fund for Small
-    'FFU': '34850',  # Fund for Micro
-    'FFL': '34860',  # Fund for Large
-    
-    # Add more mappings based on your actual SAS format catalog
+    'POS': '34810', 'DAU': '34831',
+    'DDU': '34832', 'FFS': '34840',
+    'FFU': '34850', 'FFL': '34860',
 }
 
-# NSRSLIAB Format (NPL/Rescheduled/Recovered)
+# NSRSLIAB Format
 NSRSLIAB_FORMAT = {
-    '34411': '34411',
-    '34412': '34412',
-    '34421': '34421',
-    '34422': '34422',
-    '34440': '34440',
-    '34470': '34470',
-    '34480': '34480',
-    '34490': '34490',
-    # Add NPL-specific codes
-    'NPL1': '34471',
-    'NPL2': '34472',
-    # Add more mappings
+    '34411': '34411', '34412': '34412',
+    '34421': '34421', '34422': '34422',
+    '34440': '34440', '34470': '34470',
+    '34480': '34480', '34490': '34490',
 }
 
 # Sector Reverse Format ($RVRSE)
 SECTOR_REVERSE_FORMAT = {
-    '01': 'AGRICULTURE',
-    '02': 'MINING',
-    '03': 'MANUFACTURING',
-    '04': 'CONSTRUCTION',
-    '05': 'UTILITIES',
-    '06': 'WHOLESALE',
-    '07': 'RETAIL',
-    '08': 'TRANSPORT',
-    '09': 'FINANCE',
-    '10': 'SERVICES',
-    '11': 'GOVERNMENT',
-    '12': 'HOUSEHOLD',
-    '13': 'OTHER',
-    '14': 'EDUCATION',
-    '15': 'HEALTH',
-    '16': 'ICT',
-    '17': 'PROFESSIONAL',
-    '18': 'ADMINISTRATIVE',
-    '19': 'ARTS',
-    '20': 'ACCOMMODATION',
-    '21': 'FOOD',
-    '22': 'REAL_ESTATE',
-    '23': 'INSURANCE',
-    # Add actual sector codes
+    '01': '01', '02': '02', '03': '03', '04': '04', '05': '05',
+    '06': '06', '07': '07', '08': '08', '09': '09', '10': '10',
+    '11': '11', '12': '12', '13': '13', '14': '14', '15': '15',
+    '16': '16', '17': '17', '18': '18', '19': '19', '20': '20',
+    '21': '21', '22': '22', '23': '23', '24': '24', '25': '25',
+    '99': '99', '9999': '9999'
 }
 
 # Customer Code Format ($LOCUSTCD)
 CUSTCODE_FORMAT = {
-    1: '01',  # Individual
-    2: '02',  # Sole Proprietorship
-    3: '03',  # Partnership
-    4: '04',  # Private Limited
-    5: '05',  # Public Limited
-    6: '06',  # Government
-    7: '07',  # Statutory Body
-    8: '08',  # Cooperative
-    9: '09',  # Association
-    10: '10',  # Trust
-    11: '11',  # Foreign Company
-    12: '12',  # Foreign Individual
-    13: '13',  # Foreign Government
-    14: '14',  # International Organization
-    15: '15',  # Financial Institution
-    16: '16',  # Insurance Company
-    17: '17',  # Fund Manager
-    18: '18',  # Stock Broker
-    19: '19',  # Unit Trust
-    20: '20',  # Other
-    99: '99',  # Unknown
-    # Add actual customer type codes
+    1: '01', 2: '02', 3: '03', 4: '04', 5: '05',
+    6: '06', 7: '07', 8: '08', 9: '09', 10: '10',
+    11: '11', 12: '12', 13: '13', 14: '14', 15: '15',
+    16: '16', 17: '17', 18: '18', 19: '19', 20: '20',
+    99: '99'
 }
 
 # Industrial Sector Format ($INDSECT)
 INDSECT_FORMAT = {
-    '01111': 'AGRICULTURE',
-    '01112': 'LIVESTOCK',
-    '01113': 'FORESTRY',
-    '01114': 'FISHING',
-    '02111': 'COAL',
-    '02112': 'OIL_GAS',
-    '02113': 'METAL_ORE',
-    '03111': 'FOOD_PROCESSING',
-    '03112': 'TEXTILE',
-    '03113': 'WOOD_PRODUCTS',
-    '03114': 'CHEMICALS',
-    '03115': 'ELECTRONICS',
-    '04111': 'CONSTRUCTION',
-    '05111': 'ELECTRICITY',
-    '05112': 'WATER',
-    '05113': 'GAS',
-    # Add 5-digit industrial sector codes
+    '01111': '01', '01112': '01', '01113': '01', '01114': '01',
+    '02111': '02', '02112': '02', '02113': '02',
+    '03111': '03', '03112': '03', '03113': '03', '03114': '03', '03115': '03',
+    '04111': '04',
+    '05111': '05', '05112': '05', '05113': '05',
 }
 
 # Price Type Format for SFS ($PRCTYPESFS)
 PRCTYPESFS_FORMAT = {
-    'BAE': '71',  # Bills - Export
-    'BEI': '71',
-    'BAI': '72',  # Bills - Import
-    'BII': '72',
-    'BAP': '75',  # Bills - Other
-    'BAS': '75',
-    'BPI': '75',
-    'BSI': '75',
-    # Add SFS-specific price types
+    'BAE': '71', 'BEI': '71',
+    'BAI': '72', 'BII': '72',
+    'BAP': '75', 'BAS': '75',
+    'BPI': '75', 'BSI': '75',
 }
 
 # Regular Price Type Format ($PRCTYPE)
 PRCTYPE_FORMAT = {
-    'MUR': '11',
-    'IST': '12',
-    'IJA': '21',
-    'MUS': '22',
-    'MUD': '40',
-    'QAR': '70',
-    'TAW': '80',
-    'BAI': '90',
-    'OD': '71',
-    'TL': '72',
-    'RL': '73',
-    'HL': '74',
-    'CL': '75',
-    'PL': '76',
+    'MUR': '11', 'IST': '12',
+    'IJA': '21', 'MUS': '22',
+    'MUD': '40', 'QAR': '70',
+    'TAW': '80', 'BAI': '90',
+    'OD': '71', 'TL': '72',
+    'RL': '73', 'HL': '74',
+    'CL': '75', 'PL': '76',
     'AL': '77',
-    # Add price type mappings
 }
 
 # BTF Concept Format ($BTFCEPT)
 BTFCONCEPT_FORMAT = {
-    '34411': 11,  # Murabahah
-    '34412': 12,  # Istisna
-    '34421': 21,  # Ijarah
-    '34422': 22,  # Musharakah
-    '34440': 40,  # Mudharabah
-    '34470': 70,  # Qard
-    '34480': 80,  # Tawarruq
-    '34490': 90,  # BBA
-    '34710': 10,  # Overdraft
-    '34720': 20,  # Term Loan
-    '34730': 30,  # Revolving
-    '34740': 40,  # Housing
-    '34750': 50,  # Commercial
-    '34760': 60,  # Personal
-    '34770': 70,  # Auto
-    # Add BTF concept mappings
-}
-
-# PBBBTFMT - BTF Format Catalog
-# Contains: Special format mappings for BTF reporting
-
-# Facility to BTF Facility Code mapping
-BTF_FACILITY_FORMAT = {
-    '34411': '34411',
-    '34412': '34412',
-    '34421': '34421',
-    '34422': '34422',
-    '34440': '34440',
-    '34470': '34470',
-    '34471': '34471',
-    '34472': '34472',
-    '34475': '34475',
-    '34480': '34480',
-    '34490': '34490',
-    '34810': '34810',
-    '34831': '34831',
-    '34832': '34832',
-    '34840': '34840',
-    '34850': '34850',
-    '34860': '34860',
-    # Add BTF-specific facility mappings
-}
-
-# Classification mapping for provisions
-CLASSIFY_FORMAT = {
-    'D': 'D',  # Doubtful
-    'B': 'B',  # Bad
-    'P': 'P',  # Performing
-    'F': 'D',  # Fully provided
-    # Add classification mappings
+    '34411': 11, '34412': 12,
+    '34421': 21, '34422': 22,
+    '34440': 40, '34470': 70,
+    '34480': 80, '34490': 90,
+    '34710': 10, '34720': 20,
+    '34730': 30, '34740': 40,
+    '34750': 50, '34760': 60,
+    '34770': 70,
 }
 
 # =========================================================
@@ -285,15 +158,12 @@ def read_sas(file_path):
         print(f"Error reading {file_path}: {e}")
         return None
 
-def apply_format_mapping(series, format_dict, default=None):
-    """Apply format mapping to a Polars series"""
-    if default is None:
-        return series.map_dict(format_dict)
-    else:
-        return series.map_dict(format_dict, default=default)
-
 def write_fixed_width(df, filepath, columns_spec):
     """Write DataFrame as fixed-width text file"""
+    if df is None or df.is_empty():
+        print(f"Warning: No data to write for {filepath}")
+        return
+    
     with open(filepath, 'w') as f:
         for row in df.iter_rows(named=True):
             line = ""
@@ -306,7 +176,7 @@ def write_fixed_width(df, filepath, columns_spec):
                     else:
                         try:
                             line += f"{int(float(value)):0{width}d}"
-                        except:
+                        except (ValueError, TypeError):
                             line += '0' * width
                 
                 elif format_type == 'S':  # String (left-justified)
@@ -320,7 +190,7 @@ def write_fixed_width(df, filepath, columns_spec):
                     else:
                         try:
                             line += f"{float(value):{width}.2f}"
-                        except:
+                        except (ValueError, TypeError):
                             line += ' ' * width
                 
                 elif format_type == 'I':  # Integer
@@ -329,7 +199,7 @@ def write_fixed_width(df, filepath, columns_spec):
                     else:
                         try:
                             line += f"{int(float(value)):{width}d}"
-                        except:
+                        except (ValueError, TypeError):
                             line += ' ' * width
                 
                 else:  # Default to string
@@ -373,7 +243,8 @@ for key, file_path in input_files.items():
 # =========================================================
 print("\nProcessing MAST...")
 
-if data['imast'] is not None:
+mast = None
+if data.get('imast') is not None:
     mast = data['imast'].filter(
         (pl.col("ACCTNO") > 2500000000)
     ).with_columns([
@@ -393,7 +264,7 @@ if data['imast'] is not None:
           .alias("CUSTCODE"),
         
         # Apply CUSTFISS mapping
-        pl.col("CUSTCODE").map_dict(CUSTCODE_FORMAT, default="99").alias("CUSTFISS"),
+        pl.col("CUSTCODE").cast(pl.Int32).map_dict(CUSTCODE_FORMAT, default="99").alias("CUSTFISS"),
         
         # Apply SECTOR format from PBBLNFMT
         pl.when(pl.col("SECTOR").is_null() | (pl.col("SECTOR") == ""))
@@ -407,8 +278,7 @@ if data['imast'] is not None:
         # Apply industrial sector mapping if available
         pl.when(
             (pl.col("INDUSTRIAL_SECTOR_CD").is_not_null()) & 
-            (pl.col("INDUSTRIAL_SECTOR_CD").str.len_chars() == 5) &
-            (pl.col("INDUSTRIAL_SECTOR_CD").cast(pl.Int32, strict=False) > 0)
+            (pl.col("INDUSTRIAL_SECTOR_CD").str.len_chars() == 5)
         ).then(
             pl.col("INDUSTRIAL_SECTOR_CD").map_dict(INDSECT_FORMAT, default=None)
         ).otherwise(pl.col("SECTFISS")).alias("SECTFISS"),
@@ -425,13 +295,18 @@ if data['imast'] is not None:
           .otherwise(pl.col("SM_DATE").dt.strftime("%d%m%Y"))
           .alias("SM_DATESTR")
     ]).unique(subset=["ACCTNO"], keep="first")
+    
+    print(f"MAST processed: {mast.height} rows")
 
 # =========================================================
 # 7. PROCESS MAST2
 # =========================================================
 print("Processing MAST2...")
 
-if data['imast2'] is not None:
+mast2_agg = None
+mast2c = None
+
+if data.get('imast2') is not None:
     # Filter valid AANO
     mast2_filtered = data['imast2'].filter(
         (pl.col("AANO").str.slice(0, 1) != "") &
@@ -439,10 +314,11 @@ if data['imast2'] is not None:
     ).sort("ACCTNO")
     
     # Aggregate for ALLREFNO
-    mast2_agg = mast2_filtered.group_by("ACCTNO").agg([
-        pl.col("AANO").str.concat("|").alias("ALLREFNO"),
-        pl.col("APVDATE").filter(pl.col("APVDATE") > 0).min().alias("FIRSTDISBDT")
-    ])
+    if not mast2_filtered.is_empty():
+        mast2_agg = mast2_filtered.group_by("ACCTNO").agg([
+            pl.col("AANO").str.concat("|").alias("ALLREFNO"),
+            pl.col("APVDATE").filter(pl.col("APVDATE") > 0).min().alias("FIRSTDISBDT")
+        ])
     
     # MAST2C for CCPT
     mast2c = data['imast2'].select([
@@ -456,7 +332,8 @@ if data['imast2'] is not None:
 # =========================================================
 print("Processing CRED...")
 
-if data['icred'] is not None:
+cred = None
+if data.get('icred') is not None:
     cred = data['icred'].filter(
         (pl.col("ACCTNO") > 2500000000) &
         (pl.col("ACCTNO") != 2501900811) &
@@ -498,13 +375,15 @@ if data['icred'] is not None:
         # Backup OUTSTAND
         pl.col("OUTSTAND").alias("OUTSTANDX")
     ]).unique(subset=["ACCTNO", "TRANSREF"])
+    
+    print(f"CRED processed: {cred.height} rows")
 
 # =========================================================
 # 9. PROCESS BNM TRADE DATA (with BTF mappings)
 # =========================================================
 print("Processing BNM Trade data...")
 
-if data['ibtrd'] is not None:
+if data.get('ibtrd') is not None and cred is not None:
     # BTRAD - Balance data
     btrad = data['ibtrd'].filter(
         pl.col("BALANCE") > 0
@@ -518,12 +397,6 @@ if data['ibtrd'] is not None:
         pl.col("UTRDF")
     ]).sort(["ACCTNO", "TRANSREX"])
     
-    # Apply BTF facility mapping
-    if 'LIABCODE' in btrad.columns:
-        btrad = btrad.with_columns([
-            pl.col("LIABCODE").map_dict(BTF_FACILITY_FORMAT, default=None).alias("BTF_FACILITY")
-        ])
-    
     # BTRAX - Repaid/Disburse data
     btrax = data['ibtrd'].select([
         pl.col("ACCTNOX").alias("ACCTNO"),
@@ -535,7 +408,7 @@ if data['ibtrd'] is not None:
     ]).sort(["ACCTNO", "TRANSREX"])
     
     # INTRT - Interest rates
-    if data['ibtdtl'] is not None:
+    if data.get('ibtdtl') is not None:
         intrt = data['ibtdtl'].select([
             pl.col("ACCTNOX").alias("ACCTNO"),
             pl.col("TRANSREF").alias("TRANSREX"),
@@ -553,28 +426,31 @@ if data['ibtrd'] is not None:
         btrax = btrax.join(intrt, on=["ACCTNO", "TRANSREX"], how="left")
     
     # Merge with CRED
-    if 'cred' in locals():
-        cred = cred.join(btrad, on=["ACCTNO", "TRANSREX"], how="left")
-        cred = cred.join(btrax, on=["ACCTNO", "TRANSREX"], how="left")
-        
-        # Update OUTSTAND and other fields
-        cred = cred.with_columns([
-            pl.when(
-                (pl.col("BALANCE").is_not_null()) & (pl.col("BALANCE") > 0)
-            ).then(pl.col("BALANCE")).otherwise(0).alias("OUTSTAND"),
-            pl.col("UNEARNED").fill_null(0),
-            pl.col("REPAID").fill_null(0),
-            pl.col("DISBURSE").fill_null(0),
-            pl.col("MTD_TAWIDH_AMT").fill_null(0),
-            pl.col("MTD_GHARAMAH_AMT").fill_null(0)
-        ])
+    cred = cred.join(btrad, on=["ACCTNO", "TRANSREX"], how="left")
+    cred = cred.join(btrax, on=["ACCTNO", "TRANSREX"], how="left")
+    
+    # Update OUTSTAND and other fields
+    cred = cred.with_columns([
+        pl.when(
+            (pl.col("BALANCE").is_not_null()) & (pl.col("BALANCE") > 0)
+        ).then(pl.col("BALANCE")).otherwise(0).alias("OUTSTAND"),
+        pl.col("UNEARNED").fill_null(0),
+        pl.col("REPAID").fill_null(0),
+        pl.col("DISBURSE").fill_null(0),
+        pl.col("MTD_TAWIDH_AMT").fill_null(0),
+        pl.col("MTD_GHARAMAH_AMT").fill_null(0)
+    ])
 
 # =========================================================
 # 10. PROCESS SUBA (with format mappings)
 # =========================================================
 print("Processing SUBA...")
 
-if data['isuba'] is not None:
+suba = None
+suba_main = None
+suba9 = None
+
+if data.get('isuba') is not None:
     suba = data['isuba'].filter(
         (pl.col("ACCTNO") > 2500000000) &
         (pl.col("ACCTNO") != 2501900811)
@@ -590,7 +466,7 @@ if data['isuba'] is not None:
         # Apply facility mapping
         pl.col("LIABCODE").map_dict(LIAB_FORMAT, default=None).alias("FACILITY"),
         
-        # Apply NSRSLIAB mapping for special cases
+        # Apply NSRSLIAB mapping
         pl.col("LIABCODE").map_dict(NSRSLIAB_FORMAT, default=None).alias("FACCODE"),
         
         # Apply price type mappings
@@ -605,29 +481,28 @@ if data['isuba'] is not None:
     suba9 = suba.filter(
         (pl.col("SUBACCT") == "OV") & 
         (pl.col("TRANSREF").str.strip_chars() == "")
-    ).select([
-        "ACCTNO", "LIMTCURM", "LIMTCURF", "ORI_AALIMIT", "CREATDS", 
-        "CURRENCY", "FACLINE", "LIABCODE", "SPECIALF", "SUBPROD",
-        "FACILITY", "FACCODE", "TYPEPRC", "FCONCEPT"
-    ])
+    )
     
     suba_main = suba.filter(
         pl.col("TRANSREF").str.strip_chars() != ""
     )
+    
+    print(f"SUBA processed: {suba.height} rows (SUBA9: {suba9.height}, SUBA_MAIN: {suba_main.height})")
 
 # =========================================================
-# 11. PROCESS ACCT (Account Level - with all mappings)
+# 11. PROCESS ACCT (Account Level)
 # =========================================================
 print("Processing ACCT...")
 
-if 'mast' in locals() and 'suba9' in locals():
+acct = None
+if mast is not None and suba9 is not None:
     # Merge SUBA9 with CCPT and MAST2C
-    if 'mast2c' in locals():
+    if mast2c is not None:
         suba9 = suba9.join(mast2c, on=["ACCTNO", "FACLINE"], how="left")
     
     acct = mast.join(suba9, on="ACCTNO", how="inner")
     
-    if 'mast2_agg' in locals():
+    if mast2_agg is not None:
         acct = acct.join(mast2_agg, on="ACCTNO", how="left")
     
     acct = acct.with_columns([
@@ -647,13 +522,19 @@ if 'mast' in locals() and 'suba9' in locals():
         pl.lit(0).alias("FXRATE"),
         pl.lit("     ").alias("CLIMATE_PRIN_TAXONOMY_CLASS")
     ])
+    
+    print(f"ACCT processed: {acct.height} rows")
 
 # =========================================================
-# 12. PROCESS BTR2 (with all format mappings)
+# 12. PROCESS BTR2
 # =========================================================
 print("Processing BTR2...")
 
-if 'cred' in locals() and 'suba_main' in locals():
+btr2 = None
+btr2x = None
+btr3a = None
+
+if cred is not None and suba_main is not None:
     # Merge CRED with SUBA
     btr2 = cred.join(suba_main, on=["ACCTNO", "TRANSREF"], how="inner")
     
@@ -700,87 +581,178 @@ if 'cred' in locals() and 'suba_main' in locals():
         pl.when(pl.col("PRODGRP") == 'BA')
           .then(pl.col("UNEARNED")).otherwise(None).alias("INTAMT_MYRX_BA")
     ])
+    
+    print(f"BTR2 processed: {btr2.height} rows")
+    
+    # Summarize BTR2
+    btr3a = btr2.group_by(["ACCTNO", "FACILITY", "FORCURR", "PDBIND"]).agg([
+        pl.col("OUTSTAND").sum().alias("OUTSTAND"),
+        pl.col("INSTALM").sum().alias("INSTALM"),
+        pl.col("UNEARNED").sum().alias("UNEARNED"),
+        pl.col("REPAID").sum().alias("REPAID"),
+        pl.col("DISBURSE").sum().alias("DISBURSE"),
+        pl.col("TFR02I").sum().alias("TFR02I"),
+        pl.col("MTD_TAWIDH_AMT").sum().alias("MTD_TAWIDH_AMT"),
+        pl.col("MTD_GHARAMAH_AMT").sum().alias("MTD_GHARAMAH_AMT"),
+        pl.col("PRINAMT_MYRX").sum().alias("PRINAMT_MYRX"),
+        pl.col("INTAMT_MYRX").sum().alias("INTAMT_MYRX"),
+        pl.col("OTH_CHARGEX").sum().alias("OTH_CHARGEX"),
+        pl.col("NODAYS").max().alias("NODAYS")
+    ])
+    
+    # Get unique BTR2 rows with max NODAYS
+    btr2x = btr2.sort(
+        ["ACCTNO", "FACILITY", "FORCURR", "PDBIND", "NODAYS"],
+        descending=[False, False, False, False, True]
+    ).unique(subset=["ACCTNO", "FACILITY", "FORCURR", "PDBIND"], keep="first")
 
 # =========================================================
-# 13. WRITE OUTPUT FILES (with complete column specs)
+# 13. PROCESS SUBCR
+# =========================================================
+print("Processing SUBCR...")
+
+subcr = None
+if btr2x is not None and btr3a is not None:
+    subcr = btr2x.join(btr3a, on=["ACCTNO", "FACILITY", "FORCURR", "PDBIND"], how="inner")
+    
+    # Apply transformations
+    subcr = subcr.with_columns([
+        (pl.col("OUTSTAND") * 100).alias("OUTSTAND"),
+        (pl.col("UNEARNED") * 100).alias("UNEARNED"),
+        (pl.col("REPAID") * 100).alias("REPAID"),
+        (pl.col("DISBURSE") * 100).alias("DISBURSE"),
+        (pl.col("PRINAMT_MYRX") * 100).alias("CURBAL"),
+        (pl.col("INTAMT_MYRX") * 100).alias("INTAMT"),
+        (pl.col("OTH_CHARGEX") * 100).alias("OTH_CHARGE"),
+        pl.when(pl.col("INSTALM").is_null()).then(0).otherwise(pl.col("INSTALM")).alias("INSTALM"),
+        pl.lit("    ").alias("NOTENO")
+    ])
+    
+    # Handle special facilities
+    subcr = subcr.with_columns([
+        pl.when(
+            pl.col("FACILITY").is_in(["34810", "34831", "34832", "34840", "34850", "34860"])
+        ).then(0).otherwise(pl.col("ARREARS")).alias("ARREARS"),
+        pl.when(
+            pl.col("FACILITY").is_in(["34810", "34831", "34832", "34840", "34850", "34860"])
+        ).then(0).otherwise(pl.col("INSTALM")).alias("INSTALM")
+    ])
+    
+    print(f"SUBCR processed: {subcr.height} rows")
+
+# =========================================================
+# 14. CREATE FINAL SUBA DATASET
+# =========================================================
+print("Creating final SUBA dataset...")
+
+suba_final = None
+if mast is not None and subcr is not None:
+    suba_final = mast.join(subcr, on="ACCTNO", how="inner")
+    
+    # Join with ACCT for APPRLIM2 and FIRSTDISBDT
+    if acct is not None:
+        acct_subset = acct.select(["ACCTNO", "APPRLIM2", "FIRSTDISBDT"]).unique()
+        suba_final = suba_final.join(acct_subset, on="ACCTNO", how="left")
+    
+    # Add calculated fields
+    suba_final = suba_final.with_columns([
+        pl.lit(" 00000000 00000000").alias("DATAXX"),
+        pl.lit(0).alias("ODXSAMT"),
+        pl.lit(0).alias("BILTOT"),
+        pl.when(pl.col("APPRLIM2").is_null()).then(0).otherwise(pl.col("APPRLIM2")).alias("APPRLIM2"),
+        pl.lit(12).alias("NOTETERM"),
+        pl.lit(0).alias("FCONCEPT"),
+        pl.when(pl.col("SYNDICAT").is_null() | (pl.col("SYNDICAT") == ""))
+          .then("N").otherwise(pl.col("SYNDICAT")).alias("SYNDICAT"),
+        pl.when(pl.col("SPECIALF").is_null() | (pl.col("SPECIALF") == "") | (pl.col("SPECIALF") == "N"))
+          .then("00").otherwise(pl.col("SPECIALF")).alias("SPECIALF"),
+        pl.when(pl.col("PURPOSES").is_null() | (pl.col("PURPOSES") == "") | (pl.col("PURPOSES") == "0000"))
+          .then("5300").otherwise(pl.col("PURPOSES")).alias("PURPOSES"),
+        pl.when(pl.col("PAYFREQC").is_null() | (pl.col("PAYFREQC") == ""))
+          .then("19").otherwise(pl.col("PAYFREQC")).alias("PAYFREQC"),
+        pl.when(pl.col("FIRSTDISBDT") > 0)
+          .then(pl.col("FIRSTDISBDT").dt.strftime("%d%m%Y"))
+          .otherwise("00000000").alias("FDISBDT"),
+        pl.lit("N").alias("SM_STATUS1"),
+        pl.lit("00000000").alias("SM_DAT1"),
+        pl.lit("000000000000000").alias("RMSBBA")
+    ])
+    
+    # Calculate UNDRAWN
+    subq = suba_final.group_by("ACCTNO").agg([
+        pl.col("OUTSTAND").sum().alias("OUTX")
+    ])
+    
+    suba_final = suba_final.join(subq, on="ACCTNO", how="left")
+    suba_final = suba_final.with_columns([
+        (pl.col("APPRLIM2") - pl.col("OUTX")).alias("UNDRAWN")
+    ])
+    
+    # Add FACILITY2 as copy of FACILITY
+    suba_final = suba_final.with_columns([
+        pl.col("FACILITY").alias("FACILITY2")
+    ])
+    
+    print(f"Final SUBA processed: {suba_final.height} rows")
+
+# =========================================================
+# 15. WRITE OUTPUT FILES
 # =========================================================
 print("\nWriting output files...")
 
 output_suffix = f"{REPTYEAR}{REPTMON}{REPTDAY}"
 
-# ACCTCRED Output (from PROVD KEEP list)
-if 'acct' in locals():
+# ACCTCRED Output
+if acct is not None:
     acctcred_spec = [
         ("FICODY", 5, 'S'),
         ("FICODE", 4, 'Z'),
         ("APCODE", 3, 'Z'),
         ("ACCTNO", 10, 'Z'),
-        ("FACILITY", 5, 'S'),
-        ("REPTDAY", 2, 'S'),
-        ("REPTMON", 2, 'S'),
-        ("REPTYEAR", 4, 'S'),
-        ("CLASSIFY", 1, 'S'),
-        ("ARREARS", 3, 'Z'),
-        ("CURBAL", 17, 'Z'),
-        ("INTAMT", 17, 'Z'),
-        ("FEEAMT", 17, 'Z'),
-        ("REALISVL", 17, 'Z'),
-        ("IISOPBAL", 17, 'Z'),
-        ("TOTIIS", 17, 'Z'),
-        ("TOTIISR", 17, 'Z'),
-        ("TOTWOF", 17, 'Z'),
-        ("IISDANAH", 17, 'Z'),
-        ("IISTRANS", 17, 'Z'),
-        ("SPOPBAL", 17, 'Z'),
-        ("SPCHARGE", 17, 'Z'),
-        ("SPWBAMT", 17, 'Z'),
-        ("SPWOAMT", 17, 'Z'),
-        ("SPDANAH", 17, 'Z'),
-        ("SPTRANS", 17, 'Z'),
-        ("GP3IND", 1, 'S'),
+        ("CURRENCY", 3, 'S'),
+        ("APPRLIMT", 24, 'Z'),
+        ("APPRLIM2", 16, 'Z'),
+        ("ISSUEDD", 2, 'Z'),
+        ("ISSUEMM", 2, 'Z'),
+        ("ISSUEYA", 2, 'Z'),
+        ("ISSUEYY", 2, 'Z'),
         ("OLDBRH", 5, 'Z'),
-        ("FACCODE", 5, 'Z')
+        ("LMTAMT", 16, 'Z'),
+        ("AALIMIT", 24, 'Z'),
+        ("ALLREFNO", 200, 'S'),
+        ("LEGAL_ACTION_CD", 2, 'Z'),
+        ("LADTDD", 2, 'Z'),
+        ("LADTMM", 2, 'Z'),
+        ("LADTYY", 4, 'Z'),
+        ("FXRATE", 8, 'Z'),
+        ("CLIMATE_PRIN_TAXONOMY_CLASS", 5, 'S')
     ]
-    
-    # Add required date fields
-    acct = acct.with_columns([
-        pl.lit(REPTDAY).alias("REPTDAY"),
-        pl.lit(REPTMON).alias("REPTMON"),
-        pl.lit(REPTYEAR).alias("REPTYEAR"),
-        pl.lit(" ").alias("CLASSIFY"),
-        pl.lit(0).alias("FEEAMT"),
-        pl.lit(0).alias("REALISVL"),
-        pl.lit(0).alias("IISOPBAL"),
-        pl.lit(0).alias("TOTIIS"),
-        pl.lit(0).alias("TOTIISR"),
-        pl.lit(0).alias("TOTWOF"),
-        pl.lit(0).alias("IISDANAH"),
-        pl.lit(0).alias("IISTRANS"),
-        pl.lit(0).alias("SPOPBAL"),
-        pl.lit(0).alias("SPCHARGE"),
-        pl.lit(0).alias("SPWBAMT"),
-        pl.lit(0).alias("SPWOAMT"),
-        pl.lit(0).alias("SPDANAH"),
-        pl.lit(0).alias("SPTRANS"),
-        pl.lit(" ").alias("GP3IND")
-    ])
     
     write_fixed_width(acct, BASE_OUTPUT / f"ACCTCRED_{output_suffix}.txt", acctcred_spec)
     print(f"ACCTCRED written: {acct.height} records")
 
-# CREDITPO Output (from CREDD KEEP list)
-if 'suba_final' in locals():
+# CREDITPO Output
+if suba_final is not None:
+    # Add REPTDAY, REPTMON, REPTYEAR as constants
+    suba_final = suba_final.with_columns([
+        pl.lit(REPTDAY).alias("REPTDAY"),
+        pl.lit(REPTMON).alias("REPTMON"),
+        pl.lit(REPTYEAR).alias("REPTYEAR"),
+        pl.lit("O").alias("ACCTSTAT")  # Default account status
+    ])
+    
     creditpo_spec = [
         ("FICODY", 5, 'S'),
         ("FICODE", 4, 'Z'),
         ("APCODE", 3, 'Z'),
         ("ACCTNO", 10, 'Z'),
-        ("FACILITY", 5, 'S'),
         ("NOTENO", 5, 'S'),
+        ("FACILITY", 5, 'S'),
+        ("REPTDAY", 2, 'S'),
         ("REPTMON", 2, 'S'),
         ("REPTYEAR", 4, 'S'),
-        ("ARREARS", 3, 'Z'),
         ("OUTSTAND", 16, 'Z'),
+        ("ARREARS", 3, 'Z'),
         ("INSTALM", 3, 'Z'),
         ("UNDRAWN", 17, 'Z'),
         ("ACCTSTAT", 1, 'S'),
@@ -788,14 +760,25 @@ if 'suba_final' in locals():
         ("OLDBRH", 5, 'Z'),
         ("BILTOT", 17, 'Z'),
         ("ODXSAMT", 17, 'Z'),
-        ("FACCODE", 5, 'Z')
+        ("CURBAL", 17, 'Z'),
+        ("INTAMT", 17, 'Z'),
+        ("OTH_CHARGE", 17, 'Z'),
+        ("REPAID", 15, 'Z'),
+        ("DISBURSE", 15, 'Z'),
+        ("FACCODE", 5, 'Z'),
+        ("FORCURR", 3, 'S'),
+        ("PDBIND", 1, 'S'),
+        ("MTD_TAWIDH_AMT", 15, 'D'),
+        ("MTD_GHARAMAH_AMT", 15, 'D'),
+        ("REPAY_SOURCE", 4, 'S'),
+        ("REPAY_TYPE_CD", 2, 'S')
     ]
     
     write_fixed_width(suba_final, BASE_OUTPUT / f"CREDITPO_{output_suffix}.txt", creditpo_spec)
     print(f"CREDITPO written: {suba_final.height} records")
 
-# SUBACRED Output (full detail)
-if 'suba_final' in locals():
+# SUBACRED Output
+if suba_final is not None:
     subacred_spec = [
         ("FICODY", 5, 'S'),
         ("FICODE", 4, 'Z'),
@@ -847,9 +830,31 @@ if 'suba_final' in locals():
         ("LU_COUNTRY_CD", 2, 'S')
     ]
     
+    # Add missing fields with defaults
+    suba_final = suba_final.with_columns([
+        pl.lit("     ").alias("SCORE1"),
+        pl.lit("     ").alias("SCORE2"),
+        pl.lit("N").alias("DNBFISME"),
+        pl.lit("     ").alias("INDUSTRIAL_SECTOR_CD"),
+        pl.lit("").alias("LU_ADD1"),
+        pl.lit("").alias("LU_ADD2"),
+        pl.lit("").alias("LU_ADD3"),
+        pl.lit("").alias("LU_ADD4"),
+        pl.lit("").alias("LU_TOWN_CITY"),
+        pl.lit("").alias("LU_POSTCODE"),
+        pl.lit("").alias("LU_STATE_CD"),
+        pl.lit("").alias("LU_COUNTRY_CD"),
+        pl.lit("").alias("IA_LRU"),
+        pl.lit("").alias("SM_STATUS"),
+        pl.lit("").alias("SM_DATESTR")
+    ])
+    
     write_fixed_width(suba_final, BASE_OUTPUT / f"SUBACRED_{output_suffix}.txt", subacred_spec)
     print(f"SUBACRED written: {suba_final.height} records")
 
+# =========================================================
+# 16. PRINT SUMMARY
+# =========================================================
 print("\n" + "="*50)
 print("PROCESSING COMPLETE")
 print("="*50)
