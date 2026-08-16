@@ -584,23 +584,16 @@ def write_report_matching_sas():
             
             branch_count += 1
             
-            # Build the line with exact positioning matching SAS output
-            # Format from SAS output:
-            # "        2  JSS     2000057323  30016       248  CHEONG PEK YIM"
-            # Position 1-7: BRANCH (right-aligned, 7 chars)
-            # Position 9-11: BRCH (left-aligned, 3 chars)
-            # Position 13-22: ACCTNO (right-aligned, 10 chars)
-            # Position 24-28: NOTENO (right-aligned, 5 chars)
-            # Position 30-37: PRODUCT (right-aligned, 8 chars)
-            # Position 39-78: NAME (left-aligned, 40 chars)
-            # Position 80-81: MAILCODE (right-aligned, 2 chars)
-            
+            # Build the line with modified spacing:
+            # - Added 2 spaces for branch (now 4 spaces after branch code)
+            # - Added 4 spaces for A/C NO (now 6 spaces after BRCH)
+            # - Minus 1 space for product code (now 1 space after NOTENO)
             line = (
                 f"{branch_display}"           # 7 chars for branch
-                f"  {brch:<3}"                 # 2 spaces + 3 chars for BRCH
-                f"  {acctno:>10d}"             # 2 spaces + 10 chars for ACCTNO
+                f"    {brch:<3}"               # 4 spaces + 3 chars for BRCH (added 2)
+                f"      {acctno:>10d}"         # 6 spaces + 10 chars for ACCTNO (added 4)
                 f"  {noteno:>5d}"              # 2 spaces + 5 chars for NOTENO
-                f"  {product:>8d}"             # 2 spaces + 8 chars for PRODUCT
+                f" {product:>8d}"              # 1 space + 8 chars for PRODUCT (minus 1)
                 f"  {nameln1:<40}"             # 2 spaces + 40 chars for NAME
                 f"  {mailcode:>2}"             # 2 spaces + 2 chars for MAILCODE
                 f"\n"
