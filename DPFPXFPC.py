@@ -5,12 +5,11 @@ Report ID: EIQPROM2
 Automailing Listing for Reinstatement of Loan
 """
 
-import duckdb
+import pyreadstat
 import polars as pl
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
-import hashlib
-import base64
+import pandas as pd
 
 
 # ============================================================================
@@ -44,12 +43,10 @@ Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS").mkdir(paren
 # ============================================================================
 
 def calculate_report_dates():
-    """Calculate report dates similar to SAS REPTDATE logic"""
-    today = date.today()
-    # Get first day of current month, then subtract 1 day to get last day of previous month
-    first_of_month = today.replace(day=1)
-    reptdate = first_of_month - timedelta(days=1)
-
+    """Calculate report dates based on today's date minus 1 day"""
+    today = datetime.now()
+    reptdate = today - timedelta(days=1)
+    
     reptdt = reptdate.strftime('%d%m%y')  # DDMMYY6
     indxdt = reptdate.strftime('%Y%m%d')  # YYMMDDN8
     rdate = reptdate.strftime('%d/%m/%y')  # DDMMYY8 with slashes
@@ -78,26 +75,65 @@ MTHNAM = dates['mthnam']
 
 
 # ============================================================================
-# ENCRYPTION FUNCTIONS (ID MASKING)
+# SAS-LIKE FUNCTIONS
 # ============================================================================
 
-def encrypt_id(id_value):
+def validate_id(ar_guar, valid_chars):
     """
-    Encrypt ID similar to %ENCR_ID macro
-    Returns masked ID string (24 characters)
+    VALIDATE_ID macro equivalent
+    Validates AR_GUAR field and removes invalid characters
     """
-    if not id_value or str(id_value).strip() == '':
-        return ' ' * 24
+    if ar_guar is None or pd.isna(ar_guar):
+        return ' '
+    
+    ar_guar = str(ar_guar)
+    
+    # Find invalid characters
+    invalid_chars = [c for c in ar_guar if c not in valid_chars]
+    
+    # Check if there are any invalid characters
+    if invalid_chars:
+        # Translate: replace invalid chars with space
+        translation_table = str.maketrans({c: ' ' for c in invalid_chars})
+        id_value = ar_guar.translate(translation_table)
+        return id_value
+    else:
+        return ar_guar
 
-    # Create a hash of the ID
-    id_str = str(id_value).strip()
-    hash_obj = hashlib.sha256(id_str.encode())
-    hash_digest = hash_obj.digest()
 
-    # Encode to base64 and take first 24 characters
-    encoded = base64.b64encode(hash_digest).decode('ascii')[:24]
-
-    return encoded
+def encr_id(id_value):
+    """
+    ENCR_ID macro equivalent
+    Encrypts ID field using character substitution
+    """
+    if not id_value or pd.isna(id_value) or str(id_value).strip() == '':
+        return ' ' * 40
+    
+    ids = str(id_value).upper()
+    mask_ids = ""
+    
+    # Translation table for encryption
+    translation_map = {
+        '0': 'B', '1': 'C', '2': 'A', '3': 'D', '4': 'X',
+        '5': '9', '6': 'G', '7': 'E', '8': 'H', '9': 'I'
+    }
+    
+    for char in ids:
+        # Get ASCII value
+        ascii_val = ord(char)
+        ch_x = str(ascii_val)
+        
+        # Translate digits to letters
+        mask = ""
+        for digit in ch_x:
+            if digit in translation_map:
+                mask += translation_map[digit]
+            else:
+                mask += digit
+        
+        mask_ids = mask_ids.strip() + mask
+    
+    return mask_ids[:40]
 
 
 # ============================================================================
@@ -112,12 +148,15 @@ print(f"Report Month: {REPTMON}")
 print("\nStep 1: Loading and filtering PROMOTE.LOAN data...")
 promote_path = PROMOTE_LOAN_PATH.format(month=REPTMON)
 
-rlslist = duckdb.query(f"""
-    SELECT *
-    FROM read_parquet('{promote_path}')
-    WHERE REPAID > 100000
-    ORDER BY GUAREND, REPAID DESC
-""").pl()
+# Read SAS file using pyreadstat
+loan_df, loan_meta = pyreadstat.read_sas7bdat(promote_path)
+loan_pl = pl.from_pandas(loan_df)
+
+# Filter records where REPAID > 100000
+rlslist = loan_pl.filter(pl.col('REPAID') > 100000)
+
+# Sort by GUAREND, REPAID DESC
+rlslist = rlslist.sort(['GUAREND', 'REPAID'], descending=[False, True])
 
 # Remove duplicates keeping first record per GUAREND
 rlslist = rlslist.unique(subset=['GUAREND'], keep='first')
@@ -134,23 +173,26 @@ print(f"  Records in RLSLIST: {len(rlslist)}")
 
 print("\nStep 2: Processing PBB data...")
 
-# Load LN.LNNAME and merge with RLSLIST
-pbbname = duckdb.query(f"""
-    SELECT a.*
-    FROM read_parquet('{LN_LNNAME_PATH}') a
-    INNER JOIN rlslist b ON a.ACCTNO = b.ACCTNO
-    ORDER BY a.ACCTNO
-""").pl()
+# Load LN.LNNAME
+lnname_df, lnname_meta = pyreadstat.read_sas7bdat(LN_LNNAME_PATH)
+lnname_pl = pl.from_pandas(lnname_df)
+
+# Merge with RLSLIST
+pbbname = lnname_pl.join(rlslist.select(['ACCTNO']), on='ACCTNO', how='inner')
+pbbname = pbbname.sort('ACCTNO')
 
 print(f"  Records in PBBNAME after merge: {len(pbbname)}")
 
-# Add encrypted ID and split into PBBNAME and MAILPBB
+# Define valid characters for ID validation (alphanumeric and space)
+VALID_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '
+
+# Add validated and encrypted ID
 pbbname = pbbname.with_columns([
-    pl.col('NEWIC').str.strip_chars().alias('ID')
+    pl.col('NEWIC').map_elements(lambda x: validate_id(x, VALID_CHARS), return_dtype=pl.Utf8).alias('ID')
 ])
 
 pbbname = pbbname.with_columns([
-    pl.col('ID').map_elements(encrypt_id, return_dtype=pl.Utf8).alias('MASK_IDS')
+    pl.col('ID').map_elements(encr_id, return_dtype=pl.Utf8).alias('MASK_IDS')
 ])
 
 # Split based on MAILCODE and EMAILADD
@@ -204,7 +246,7 @@ if len(mailpbb) > 0:
     print("\n  Processing MAILPBB email statements...")
 
     mailpbb = mailpbb.with_columns([
-        pl.lit(pl.arange(1, len(mailpbb) + 1)).alias('ROWCNT')
+        pl.Series(name='ROWCNT', values=range(1, len(mailpbb) + 1))
     ])
 
     mailpbb = mailpbb.with_columns([
@@ -272,23 +314,23 @@ if len(mailpbb) > 0:
 
 print("\nStep 3: Processing PIB data...")
 
-# Load LNI.LNNAME and merge with RLSLIST
-pibname = duckdb.query(f"""
-    SELECT a.*
-    FROM read_parquet('{LNI_LNNAME_PATH}') a
-    INNER JOIN rlslist b ON a.ACCTNO = b.ACCTNO
-    ORDER BY a.ACCTNO
-""").pl()
+# Load LNI.LNNAME
+lni_df, lni_meta = pyreadstat.read_sas7bdat(LNI_LNNAME_PATH)
+lni_pl = pl.from_pandas(lni_df)
+
+# Merge with RLSLIST
+pibname = lni_pl.join(rlslist.select(['ACCTNO']), on='ACCTNO', how='inner')
+pibname = pibname.sort('ACCTNO')
 
 print(f"  Records in PIBNAME after merge: {len(pibname)}")
 
-# Add encrypted ID and split into PIBNAME and MAILPIB
+# Add validated and encrypted ID
 pibname = pibname.with_columns([
-    pl.col('NEWIC').str.strip_chars().alias('ID')
+    pl.col('NEWIC').map_elements(lambda x: validate_id(x, VALID_CHARS), return_dtype=pl.Utf8).alias('ID')
 ])
 
 pibname = pibname.with_columns([
-    pl.col('ID').map_elements(encrypt_id, return_dtype=pl.Utf8).alias('MASK_IDS')
+    pl.col('ID').map_elements(encr_id, return_dtype=pl.Utf8).alias('MASK_IDS')
 ])
 
 # Split based on MAILCODE and EMAILADD
@@ -342,7 +384,7 @@ if len(mailpib) > 0:
     print("\n  Processing MAILPIB email statements...")
 
     mailpib = mailpib.with_columns([
-        pl.lit(pl.arange(1, len(mailpib) + 1)).alias('ROWCNT')
+        pl.Series(name='ROWCNT', values=range(1, len(mailpib) + 1))
     ])
 
     mailpib = mailpib.with_columns([
@@ -509,39 +551,3 @@ write_report_with_asa()
 print("\n" + "=" * 70)
 print("EIEMCRLS processing completed successfully!")
 print("=" * 70)
-
-
-LNENCRID program in sas (just convert directly in python in the same program to use it):
-
-%MACRO VALIDATE_ID(AR_GUAR,ID);                                                
-    /* ---------------------------------------------- */                        
-    /* VALIDATE AR_GUAR FIELD                         */                        
-    /* ---------------------------------------------- */                        
-    INVALID = COMPRESS(AR_GUAR,&VALID,'D');                                     
-    IF VERIFY(AR_GUAR,&VALID) > 0 THEN                                          
-       ID = COMPRESS(TRANSLATE(AR_GUAR,' ',INVALID));                           
-    ELSE                                                                        
-       ID = AR_GUAR;                                                            
- %MEND  VALIDATE_ID;                                                            
-                                                                                
- %MACRO ENCR_ID(ID,MASK_IDS);                                                   
-    LENGTH IDS       $20;                                                       
-    LENGTH CH_X       $2;                                                       
-    LENGTH MASK_IDS  $40;                                                       
-    IDS = UPCASE(ID);                                                           
-    /* ---------------------------------------------- */                        
-    /* ENCRYPT AR_GUAR FIELD                          */                        
-    /* ---------------------------------------------- */                        
-    DO I=1 TO LENGTH(IDS);                                                      
-       CH   = CHAR(IDS,I);                                                      
-       CH_X = RANK(PUT(CH,$ASCII.));                                            
-       MASK = TRANSLATE(CH_X,'BCADX9GEHI','0123456789');                        
-       MASK_IDS = STRIP(MASK_IDS)|| MASK;                                       
-    END;                                                                        
- %MEND  ENCR_ID;                                                                
-
-
-all inputs are in sas7bdat sas dataset. 
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in text files.
