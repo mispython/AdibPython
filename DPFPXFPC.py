@@ -575,18 +575,30 @@ def write_report_matching_sas():
             
             # GROUP behavior - show branch only on first occurrence
             if current_branch is None:
-                # First occurrence - show branch code (3 chars right-aligned)
+                # First occurrence - show branch code
                 branch_display = f"{branch:>3d}"
                 current_branch = branch
             else:
-                # Subsequent occurrences - blank (3 spaces)
+                # Subsequent occurrences - blank
                 branch_display = "   "
             
             branch_count += 1
             
-            # Format detail line matching SAS PROC REPORT exactly
-            # Using exact column widths from SAS DEFINE statements
-            line = f" {branch_display} {brch:<3} {acctno:>10d} {noteno:>5d} {product:<8} {nameln1:<40} {mailcode:>2}\n"
+            # Build the line with exact positioning matching SAS headers
+            # Header positions:
+            # "     CODE  BRANCH      A/C NO     NO      CODE  NAME OF BORROWER/CUSTOMER                 DE"
+            # Pos: 1-3 BRANCH, 6-8 BRCH, 12-21 ACCTNO, 25-29 NOTENO, 35-42 PRODUCT, 45-84 NAME, 88-89 MAILCODE
+            
+            line = (
+                f" {branch_display}"          # position 2-4 (with leading space)
+                f"  {brch:<3}"                 # position 6-8 (2 spaces + 3 chars)
+                f"  {acctno:>10d}"             # position 12-21 (3 spaces + 10 chars)
+                f"  {noteno:>5d}"              # position 25-29 (3 spaces + 5 chars)
+                f"  {product:<8}"              # position 35-42 (5 spaces + 8 chars)
+                f"  {nameln1:<40}"             # position 45-84 (2 spaces + 40 chars)
+                f"  {mailcode:>2}"             # position 88-89 (3 spaces + 2 chars)
+                f"\n"
+            )
             f.write(line)
         
         # Final branch summary
