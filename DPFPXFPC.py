@@ -1,730 +1,703 @@
-%INC PGM(PBBBTFMT,PBBLNFMT);
+import pyreadstat
+import polars as pl
+from pathlib import Path
+from datetime import datetime, timedelta
+import numpy as np
 
-%LET PROVD=(KEEP=FICODY FICODE APCODE ACCTNO FACILITY REPTDAY REPTMON
-                 REPTYEAR CLASSIFY ARREARS   CURBAL INTAMT FEEAMT
-                 REALISVL IISOPBAL TOTIIS    TOTIISR TOTWOF IISDANAH
-                 IISTRANS SPOPBAL SPCHARGE   SPWBAMT SPWOAMT
-                 SPDANAH  SPTRANS  GP3IND    OLDBRH  FACCODE);
+# =========================================================
+# 1. CONFIGURATION
+# =========================================================
+BASE_INPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIWBTCR")
+BASE_OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIWBTCR")
+BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
 
-%LET CREDD=(KEEP=FICODY FICODE APCODE ACCTNO FACILITY NOTENO REPTMON
-                 REPTYEAR /*CLASSIFY*/ ARREARS OUTSTAND INSTALM UNDRAWN
-                 ACCTSTAT NODAYS OLDBRH BILTOT ODXSAMT FACCODE);
-*;
-DATA REPTDATE;
-   SET LOAN.REPTDATE;
-   SELECT(DAY(REPTDATE));
-    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
-    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
-    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
-    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3'; END;
-   END;
-   MM=MONTH(REPTDATE);
-   MM1=MM;
-   IF WK='1' THEN DO;
-      MM1=MM-1;
-      IF MM1=0 THEN MM1=12;
-   END;
-   CALL SYMPUT('NOWK',PUT(WK,$1.));
-   CALL SYMPUT('NOWK1',PUT(WK1,$1.));
-   CALL SYMPUT('REPTMON',PUT(MM,Z2.));
-   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-   CALL SYMPUT('REPTYEA2',PUT(REPTDATE,YEAR2.));
-   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-   CALL SYMPUT('RDATE',PUT(REPTDATE,Z5.));
-   CALL SYMPUT('RDATE2',PUT(TODAY()-1,YYMMDD6.));
-*;
+# =========================================================
+# 2. DATE LOGIC (Based on business rules)
+# =========================================================
+TDATE = datetime.now() - timedelta(days=1)
+day_val = TDATE.day
+month_val = TDATE.month
+year_val = TDATE.year
 
-DATA MAST;
-   SET BTRSA.IMAST&REPTDAY&REPTMON;
-   IF  ACCTNO > 2500000000;
-   BRANCH=FICODE;
-   APCODE=000;
-   IF RETAILID='C'  THEN APCODE  =999;
-   IF CUSTCODE=.    THEN CUSTCODE=99;
-   IF SECTOR  ='  ' THEN SECTOR  ='9999';
-   SECTFISS   = PUT(SECTOR,$RVRSE.);
-   IF SECTFISS='  ' THEN SECTFISS= SECTOR;
-   CUSTFISS   = PUT(CUSTCODE, LOCUSTCD.);
-   IF INDUSTRIAL_SECTOR_CD NE '' & LENGTH(INDUSTRIAL_SECTOR_CD)=5 &
-      INDUSTRIAL_SECTOR_CD > 0 THEN
-      SECTFISS = PUT(INDUSTRIAL_SECTOR_CD,$INDSECT.); *18-2715;
-   IF CUSTFISS IN ('77','78','95','96') THEN SECTFISS = '9700';
-   OLDBRH=0;
-   FICODY='     ';
-   SM_DATESTR = PUT(SM_DATE,DDMMYYN8.);
-   IF SM_DATE = . THEN SM_DATESTR = '';
-*;
-PROC SORT DATA=MAST NODUPKEY; BY ACCTNO;
-*;
-PROC SORT DATA=BTRSA.IMAST2&REPTDAY&REPTMON OUT=MAST2; BY ACCTNO;
-   WHERE SUBSTR(AANO,1,1) NE '' AND LENGTH(AANO)=13; RUN;
-DATA MAST2(KEEP=ACCTNO ALLREFNO FIRSTDISBDT);
-   SET MAST2;
-   BY ACCTNO;
-   RETAIN ALLREFNO FIRSTDISBDT;
-   FORMAT ALLREFNO $200.;
-   IF FIRST.ACCTNO THEN DO;
-      ALLREFNO    = AANO;
-      FIRSTDISBDT = APVDATE;
-   END;
-   ELSE DO;
-      ALLREFNO = COMPRESS(ALLREFNO||'|'||AANO);
-      IF FIRSTDISBDT IN (.,0) THEN FIRSTDISBDT = APVDATE;
-      IF APVDATE<FIRSTDISBDT & APVDATE>0 THEN FIRSTDISBDT = APVDATE;
-   END;
-   IF LAST.ACCTNO THEN OUTPUT;
-RUN;
-DATA MAST2C;
-  SET BTRSA.IMAST2&REPTDAY&REPTMON;
-  FACLINE = PUT(FACNO,Z3.);
-  KEEP ACCTNO FACLINE CCPT_LTST_REVIEW_DT;
-RUN;
-PROC SORT DATA=MAST2C NODUPKEY; BY ACCTNO FACLINE; RUN;
-DATA CRED;
-  KEEP ACCTNO TRANSREF OUTSTAND MATUREDS NODAYS ARREARS INSTALM;
-  FORMAT TYY TMM TDD Z2.;
-  SET  BTRSA.ICRED&REPTDAY&REPTMON;
-  IF   ACCTNO GT 2500000000;
-  IF   ACCTNO EQ 2501900811   THEN DELETE;
-  IF   TRANSREF NE '   ' AND OUTSTAND GE 0;
-  NODAYS=0; ARREARS=0;
-  IF   MATUREDX='000000'      OR
-       MATUREDX='      '      THEN MATUREDS=99999;
-  ELSE DO;
-       TYY=SUBSTR(MATUREDX,1,2);
-       TMM=SUBSTR(MATUREDX,3,2);
-       TDD=SUBSTR(MATUREDX,5,2);
-       MATUREDS=MDY(TMM,TDD,TYY);
-  END;
-  IF  MATUREDS > 0 AND (&RDATE >= MATUREDS)  THEN DO;
-      NODAYS=&RDATE-MATUREDS;
-      NODAYS=NODAYS+1;
-      IF NODAYS > 0    THEN DO;
-         ARREARS = FLOOR(NODAYS/30.00050); *22-5723;
-      END;
-      ELSE DO; NODAYS=0; ARREARS=0; END;
-  END;
-  INSTALM=0;
-  IF NODAYS > 0 THEN INSTALM=1;
-*;
-PROC SORT DATA=CRED NODUPKEY; BY ACCTNO TRANSREF;
-DATA CRED;
-   SET CRED;
-   TRANSREX = SUBSTR(TRANSREF,1,7);
-   OUTSTANDX = OUTSTAND;
-RUN;
-PROC SORT; BY ACCTNO TRANSREX;
-PROC SORT DATA=BNM.IBTRAD&REPTMON&NOWK
-   OUT=BTRAD(KEEP=ACCTNOX TRANSREF BALANCE INTRECV UNEARNED LIABCODE
-                  UTRDF
-             RENAME=(TRANSREF=TRANSREX ACCTNOX=ACCTNO));
-   BY ACCTNOX TRANSREX;
-   WHERE BALANCE > 0;
-RUN;
-PROC SORT; BY ACCTNO TRANSREX;
-PROC SORT DATA=BNM.IBTRAD&REPTMON&NOWK
-   OUT=BTRAX(KEEP=ACCTNOX TRANSREF REPAID DISBURSE MTD_TAWIDH_AMT
-                  MTD_GHARAMAH_AMT
-             RENAME=(TRANSREF=TRANSREX ACCTNOX=ACCTNO));
-   BY ACCTNOX TRANSREX;
-RUN;
-PROC SORT; BY ACCTNO TRANSREX;
-PROC SORT DATA=BNMD.IBTDTL&REPTYEA2&REPTMON&REPTDAY
-   OUT=INTRT(KEEP=ACCTNOX TRANSREF INTRATE COMMRATE DISCRATE COMBRATE
-                  PRINAMT_MYRX INTAMT_MYRX OTH_CHARGEX PRODGRP
-             RENAME=(TRANSREF=TRANSREX ACCTNOX=ACCTNO));
-   BY ACCTNOX TRANSREX;
-RUN;
-PROC SORT; BY ACCTNO TRANSREX;
-DATA BTRAX;
- MERGE BTRAX INTRT;
- BY ACCTNO TRANSREX;
-RUN;
-DATA CRED;
-   MERGE CRED(IN=A) BTRAD(IN=B) BTRAX;
-   BY ACCTNO TRANSREX;
-   IF A;
-   IF A & B AND BALANCE > 0 THEN OUTSTAND = BALANCE;
-   ELSE OUTSTAND = 0;
-   IF OUTSTAND = . THEN OUTSTAND = 0;
-   IF UNEARNED = . THEN UNEARNED = 0;
-   IF REPAID = . THEN REPAID = 0;
-   IF DISBURSE = . THEN DISBURSE = 0;
-   IF MTD_TAWIDH_AMT   = . THEN MTD_TAWIDH_AMT   = 0;
-   IF MTD_GHARAMAH_AMT = . THEN MTD_GHARAMAH_AMT = 0;
-RUN;
-*;
-DATA SUBA
-     SUBA9(KEEP=ACCTNO LIMTCURM LIMTCURF ORI_AALIMIT CREATDS CURRENCY
-                FACLINE);
-  SET BTRSA.ISUBA&REPTDAY&REPTMON;
-  IF LIABCODE NOT IN ('FFS','FFU','FCS','FCU','FFL','FTI','FTL') THEN
-  FORCURR='MYR';
-  AANO = SUBSTR(TFDESC01,1,13);
-  IF  ACCTNO > 2500000000;
-  IF  ACCTNO=2501900811                        THEN DELETE;
-  IF  SUBACCT EQ 'OV'     AND TRANSREF='   '   THEN OUTPUT SUBA9;
-  IF  TRANSREF NE '   '                        THEN OUTPUT SUBA;
-*;
-PROC SORT DATA=SUBA;  BY AANO; RUN;
-PROC SORT DATA=BNMSUM.SUMM1&RDATE2
-   OUT=SUMM1(KEEP=AANO LU_:);
-   BY AANO STAGE;
-   WHERE DATE <= &RDATE;
-RUN;
-PROC SORT DATA=SUMM1 NODUPKEY; BY AANO; RUN;
+if day_val == 8:
+    SDD, WK, WK1 = 1, '1', '4'
+elif day_val == 15:
+    SDD, WK, WK1 = 9, '2', '1'
+elif day_val == 22:
+    SDD, WK, WK1 = 16, '3', '2'
+else:
+    SDD, WK, WK1 = 23, '4', '3'
 
-DATA SUBA;
-   MERGE SUBA(IN=A) SUMM1;
-   BY AANO;
-   IF A;
-RUN;
-PROC SORT DATA=SUBA NODUPKEY;  BY ACCTNO TRANSREF;
-PROC SORT DATA=BTRSA.ISUBA&REPTDAY&REPTMON
-          OUT=CCPT(KEEP=ACCTNO FACLINE CLIMATE_PRIN_TAXONOMY_CLASS)
-          NODUPKEY; BY ACCTNO FACLINE; RUN;
-PROC SORT DATA=SUBA9 NODUPKEY; BY ACCTNO FACLINE; RUN;
-DATA SUBA9;
-   MERGE SUBA9(IN=A) CCPT MAST2C;
-   BY ACCTNO FACLINE;
-   IF A;
-   ISSUEDTE = INPUT(PUT(CREATDS,Z6.),YYMMDD6.);
-   IF CCPT_LTST_REVIEW_DT <= 0 OR CCPT_LTST_REVIEW_DT < ISSUEDTE THEN
-      CCPT_DAYS = 0;
-   ELSE
-      CCPT_DAYS = SUM(CCPT_LTST_REVIEW_DT,-ISSUEDTE);
-   CCPT_SEQ = IFN(CCPT_DAYS>0,0,1);
-RUN;
-PROC SORT DATA=SUBA9;
-  BY ACCTNO CCPT_SEQ DESCENDING ISSUEDTE DESCENDING CCPT_LTST_REVIEW_DT;
-RUN;
-PROC SORT DATA=SUBA9 NODUPKEY; BY ACCTNO;
-*;
-PROC FORMAT LIB=FORATE CNTLOUT=FOFMT;RUN;
-PROC FORMAT CNTLIN=FOFMT;RUN;
+MM = month_val
+MM1 = MM
+if WK == '1':
+    MM1 = MM - 1
+    if MM1 == 0:
+        MM1 = 12
 
-DATA ACCT;
-   MERGE MAST(IN=A) SUBA9(IN=B) MAST2;
-   BY ACCTNO;
-   IF A AND B;
-   IF CURRENCY = '' THEN CURRENCY = 'MYR';
-   IF CURRENCY NE 'MYR' THEN DO;
-      FORATE = PUT(CURRENCY,$FORATE.);
-      FXRATE = FORATE*100000;
-   END;
-   APPRLIMT=LIMTCURM*100;
-   APPRLIM2=LIMTCURF*100;
-   AALIMIT =ORI_AALIMIT*100; *16-3978;
-   IF  ACCTNO=2500000002 THEN DO;
-       CURRENCY='USD';
-       APPRLIM2=LIMTCURM*100;
-       APPRLIMT=LIMTCURF*100;
-   END;
-   ISSUEYA=20;
-   ISSUEYY=0;
-   ISSUEMM=0;
-   ISSUEDD=0;
-   IF CREATDS > 0       THEN DO;
-      ISSUEYY=SUBSTR(PUT(CREATDS,Z6.),1,2);
-      ISSUEMM=SUBSTR(PUT(CREATDS,Z6.),3,2);
-      ISSUEDD=SUBSTR(PUT(CREATDS,Z6.),5,2);
-   END;
-   LMTAMT=0;
+REPTMON = f"{MM:02d}"
+REPTMON1 = f"{MM1:02d}"
+REPTYEAR = str(year_val)
+REPTYEA2 = str(year_val)[2:]
+REPTDAY = f"{day_val:02d}"
+RDATE = TDATE.strftime("%d%m%y")
+RDATE2 = (TDATE - timedelta(days=1)).strftime("%y%m%d")
 
-   LADTYY=0;
-   LADTMM=0;
-   LADTDD=0;
-   IF LEGAL_ACTION_DT GT 0 THEN DO;
-      LADTDD = PUT(DAY(LEGAL_ACTION_DT),Z2.);
-      LADTMM = PUT(MONTH(LEGAL_ACTION_DT),Z2.);
-      LADTYY = PUT(YEAR(LEGAL_ACTION_DT),Z4.);
-   END;
+# =========================================================
+# 3. FORMAT MAPPINGS (Need to be updated with actual values)
+# =========================================================
+# Facility code mappings (LIABCODE to FACILITY)
+LIAB_FORMAT = {
+    '34411': '34411', '34412': '34412', '34421': '34421', '34422': '34422',
+    '34440': '34440', '34470': '34470', '34480': '34480', '34490': '34490',
+    'BAE': '34471', 'BEI': '34471',
+    'BAI': '34472', 'BII': '34472',
+    'BAP': '34475', 'BAS': '34475',
+    'BPI': '34475', 'BSI': '34475',
+    # Add more mappings as needed
+}
 
-   FILE ACCTCRED;
-     PUT @0001 FICODY     $5.
-         @0006 FICODE      4.
-         @0010 APCODE     Z3.
-         @0013 ACCTNO     10.
-         @0043 CURRENCY   $3.
-         @0046 APPRLIMT  Z24.
-         @0070 APPRLIM2  Z16.
-         @0086 ISSUEDD    Z2.
-         @0088 ISSUEMM    Z2.
-         @0090 ISSUEYA    Z2.
-         @0092 ISSUEYY    Z2.
-         @0094 OLDBRH     Z5.
-         @0099 LMTAMT    Z16.
-         @0115 AALIMIT   Z24.
-         @0140 ALLREFNO $200.
-         @0341 LEGAL_ACTION_CD Z2.
-         @0356 LADTDD     Z2.
-         @0358 LADTMM     Z2.
-         @0360 LADTYY     Z4.
-         @0365 FXRATE     Z8.
-         @0380 CLIMATE_PRIN_TAXONOMY_CLASS $5.
-         ;
-*;
-DATA BTR2
-     BTR2Y(KEEP=ACCTNO FACILITY FORCURR PDBIND REPAY_TYPE_CD
-                REPAY_SOURCE CREATDS SEQTF)
-     SUBR(KEEP=ACCTNO FACILITY TFR02I);
-  MERGE CRED(IN=A) SUBA(IN=B); BY ACCTNO TRANSREF;
-  IF  A AND B;
-  IF TFINDR02=5 THEN TFR02I=1; ELSE TFR02I=0;
-  FACILITY=PUT(LIABCODE,$LIAB.);
-  FACCODE =PUT(LIABCODE,$NSRSLIAB.);
-  IF UTRDF = 'R' THEN DO;
-     SELECT(LIABCODE);
-        WHEN('BAE','BEI') FACCODE = '34471';
-        WHEN('BAI','BII') FACCODE = '34472';
-        WHEN('BAP','BAS') FACCODE = '34475';
-        WHEN('BPI','BSI') FACCODE = '34475';
-        OTHERWISE;
-     END;
-  END;
-  IF  SUBSTR(FACILITY,1,2)='34';
-  TRANSREX=SUBSTR(TRANSREF,1,7);
-  NODAYX=NODAYS;
-  IF  NODAYS > 0 AND OUTSTAND < 1 THEN DO;
-      ARREARS=0; INSTALM=0; NODAYS=0;
-  END;
-  IF FACILITY NOT IN ('34411','34412','34421','34422','34440','34470',
-                      '34480','34490') AND OUTSTAND IN (0,.)
-     THEN OUTSTAND = OUTSTANDX;
-  IF PRODGRP= 'BA' THEN DO;
-     PRINAMT_MYRX = BALANCE;
-     INTAMT_MYRX = UNEARNED;
-     BALANCE = SUM(BALANCE,UNEARNED);
-     OUTSTAND = BALANCE;
-  END;
-  IF LIABCODE IN ('POS','DAU','DDU')
-     THEN OUTSTAND = SUM(PRINAMT_MYRX,INTAMT_MYRX);
+# Sector reverse mapping
+SECTOR_REVERSE = {
+    '01': '01', '02': '02', '03': '03', '04': '04', '05': '05',
+    '06': '06', '07': '07', '08': '08', '09': '09', '10': '10',
+    # Add actual mappings
+}
 
-  IF SPECIALF IN ('20','25','30') THEN DO; *2025-1526;
-     SFS     = 1;
-     TYPEPRC = PUT(LIABCODE,$PRCTYPESFS.); *2017-3808;
-  END;
-  ELSE DO;
-     NONSFS  = 1;
-     TYPEPRC = PUT(LIABCODE,$PRCTYPE.); *2016-3347;
-  END;
-  IF FACILITY = '34470' THEN FACILITY = FACCODE; *2016-171;
-  IF SUBPROD = 'PDB-I' THEN PDBIND = 'Y';
-  ELSE                      PDBIND = 'N';
-  SEQTF1=0; SEQTF2=0;
-  IF REPAY_TYPE_CD NE '' THEN SEQTF1 = -1;
-  IF REPAY_SOURCE  NE '' THEN SEQTF2 = -1;
-  SEQTF = SUM(SEQTF1,SEQTF2);
-*;
-PROC SORT DATA=BTR2; BY ACCTNO FACILITY DESCENDING SPECIALF; RUN;
+# Customer code mapping
+CUSTCODE_FORMAT = {
+    1: '01', 2: '02', 3: '03', 4: '04', 5: '05',
+    # Add actual mappings
+}
 
-PROC   SUMMARY DATA=BTR2 NWAY;
-CLASS  ACCTNO FACILITY FORCURR PDBIND;
-VAR OUTSTAND INSTALM UNEARNED REPAID DISBURSE TFR02I MTD_TAWIDH_AMT
-    MTD_GHARAMAH_AMT PRINAMT_MYRX INTAMT_MYRX OTH_CHARGEX SFS NONSFS;
-OUTPUT OUT=BTR3A (DROP=_TYPE_ _FREQ_) SUM=;
-*;
-PROC SORT DATA=BTR2;BY ACCTNO FACILITY FORCURR PDBIND DESCENDING NODAYS;
-PROC SORT DATA=BTR2  OUT=BTR2X NODUPKEY;
-   BY ACCTNO FACILITY FORCURR PDBIND;
-*;
-PROC SORT DATA=BTR2 OUT=BTRPAY;
-   BY ACCTNO FACILITY FORCURR PDBIND REPAY_SOURCE REPAY_TYPE_CD;
-   WHERE REPAID > 0;
-RUN;
-PROC SUMMARY DATA=BTRPAY NWAY;
-   BY ACCTNO FACILITY FORCURR PDBIND REPAY_SOURCE REPAY_TYPE_CD;
-   VAR REPAID;
-   OUTPUT OUT=BTRPAY(DROP=_TYPE_ _FREQ_) SUM=REPAID_AMT;
-RUN;
-DATA _NULL_;
-   MERGE BTR2X BTRPAY(IN=A) BTR3A;
-   BY ACCTNO FACILITY FORCURR PDBIND;
-   IF A;
-   IF SUBSTR(FACILITY,1,4) = '3447' THEN FACILITY = '34470'; *FOR-BA;
-   FILE REPAID7B;
-   PUT @001 FICODE           4.
-       @006 ACCTNO         Z11.
-       @019 "&REPTDAY"
-       @021 "&REPTMON"
-       @023 "&REPTYEAR"
-       @028 REPAY_SOURCE    $4.
-       @033 REPAY_TYPE_CD   $2.
-       @036 REPAID_AMT      16.2
-       @053 FACILITY        $5.
-       @059 FORCURR         $3.
-       @063 PDBIND          $1.
-       @065 FACCODE         $5.
-       @071 REPAID          16.2
-       ;
-RUN;
+# =========================================================
+# 4. HELPER FUNCTIONS
+# =========================================================
+def read_sas(file_path):
+    """Read SAS7BDAT file and convert to Polars DataFrame"""
+    try:
+        df, meta = pyreadstat.read_sas7bdat(str(file_path))
+        return pl.from_pandas(df)
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return None
 
-PROC SORT DATA=BTR2Y;BY ACCTNO FACILITY FORCURR PDBIND SEQTF CREATDS;*;
-PROC SORT DATA=BTR2Y NODUPKEY;
-   BY ACCTNO FACILITY FORCURR PDBIND;
-*;
-PROC SORT DATA=BTR2 OUT=MULTIPRC NODUPKEY;
-   BY ACCTNO FACILITY FORCURR PDBIND TYPEPRC;
-RUN;
-PROC SUMMARY DATA=MULTIPRC NWAY;
-   BY ACCTNO FACILITY FORCURR PDBIND;
-   OUTPUT OUT=BTR2Z (DROP=_TYPE_ RENAME=(_FREQ_=MULTIPRC));
-RUN;
+def write_fixed_width(df, filepath, columns_spec):
+    """Write DataFrame as fixed-width text file"""
+    with open(filepath, 'w') as f:
+        for row in df.iter_rows(named=True):
+            line = ""
+            for col_name, width, format_type in columns_spec:
+                value = row.get(col_name, "")
+                
+                if format_type == 'Z':  # Zero-padded integer
+                    if value is None or value == '':
+                        line += '0' * width
+                    else:
+                        line += f"{int(float(value)):0{width}d}"
+                
+                elif format_type == 'S':  # String (left-justified)
+                    if value is None:
+                        value = ''
+                    line += f"{str(value):<{width}}"
+                
+                elif format_type == 'D':  # Decimal with 2 decimal places
+                    if value is None or value == '':
+                        line += ' ' * width
+                    else:
+                        line += f"{float(value):{width}.2f}"
+                
+                elif format_type == 'I':  # Integer
+                    if value is None or value == '':
+                        line += ' ' * width
+                    else:
+                        line += f"{int(float(value)):{width}d}"
+                
+                else:  # Default to string
+                    if value is None:
+                        value = ''
+                    line += f"{str(value):<{width}}"
+            
+            f.write(line + "\n")
 
-%MACRO LOOP(FNM,OUTNM);
-PROC SORT DATA=BTR2 OUT=CRED NODUPKEY;
-   BY ACCTNO FACILITY FORCURR PDBIND &FNM;
-RUN;
+# =========================================================
+# 5. READ INPUT FILES
+# =========================================================
+print("Reading input files...")
 
-PROC SUMMARY DATA=CRED NWAY;
-   WHERE &FNM > 0;
-   BY ACCTNO FACILITY FORCURR PDBIND;
-   VAR &FNM;
-   OUTPUT OUT=&OUTNM(DROP=_TYPE_ RENAME=(_FREQ_=_FREQ_&FNM)) SUM=;
-RUN;
-%MEND LOOP;
-%LOOP(INTRATE ,BTR3B);
-%LOOP(COMMRATE,BTR3C);
-%LOOP(DISCRATE,BTR3D);
-%LOOP(COMBRATE,BTR3E);
+# Construct file names based on date
+imast_file = BASE_INPUT / f"IMAST{REPTDAY}{REPTMON}.sas7bdat"
+imast2_file = BASE_INPUT / f"IMAST2{REPTDAY}{REPTMON}.sas7bdat"
+icred_file = BASE_INPUT / f"ICRED{REPTDAY}{REPTMON}.sas7bdat"
+isuba_file = BASE_INPUT / f"ISUBA{REPTDAY}{REPTMON}.sas7bdat"
+iprova_file = BASE_INPUT / f"IPROV{REPTDAY}{REPTMON}.sas7bdat"
+iamsubacc_file = BASE_INPUT / f"IAMSUBACC{REPTDAY}{REPTMON}.sas7bdat"
 
-DATA BTR3A;
- MERGE BTR3A(IN=A) BTR3B BTR3C BTR3D BTR3E;
- BY ACCTNO FACILITY FORCURR PDBIND;
- IF A;
- FORMAT INTRATEX COMMRATEX DISCRATEX COMBRATEX 5.2;
- INTRATEX  = INTRATE  / _FREQ_INTRATE;
- COMMRATEX = COMMRATE / _FREQ_COMMRATE;
- DISCRATEX = DISCRATE / _FREQ_DISCRATE;
- COMBRATEX = COMBRATE / _FREQ_COMBRATE;
- IF INTRATEX = . THEN INTRATEX  = 0;
- IF COMMRATEX = . THEN COMMRATEX = 0;
- IF DISCRATEX = . THEN DISCRATEX = 0;
- IF COMBRATEX = . THEN COMBRATEX = 0;
- DROP INTRATE _FREQ_INTRATE COMMRATE _FREQ_COMMRATE DISCRATE
-      _FREQ_DISCRATE COMBRATE _FREQ_COMBRATE;
-RUN;
-*;
-PROC SORT DATA=BTR3A; BY ACCTNO FACILITY FORCURR PDBIND; RUN;
+# Additional BNM files
+ibtrd_file = BASE_INPUT / f"IBTRAD{REPTMON}{WK}.sas7bdat"
+ibtdtl_file = BASE_INPUT / f"IBTDTL{REPTYEA2}{REPTMON}{REPTDAY}.sas7bdat"
+lnacct_file = BASE_INPUT / f"LNACCT.sas7bdat"
 
-DATA AMSUBACC;
-   SET BTRSA.IAMSUBACC&REPTDAY&REPTMON;
-   IF NODAYS > 0    THEN DO;
-      ARREARSX = FLOOR(NODAYS/30.00050); *22-5723;
-   END;
-   RENAME NODAYS = NODAYSX
-          INSTALM= INSTALMX;
-RUN;
-PROC SORT; BY ACCTNO FACILITY; RUN;
+# Read files
+mast_raw = read_sas(imast_file)
+mast2_raw = read_sas(imast2_file)
+cred_raw = read_sas(icred_file)
+suba_raw = read_sas(isuba_file)
+provi_raw = read_sas(iprova_file)
+amsubacc_raw = read_sas(iamsubacc_file)
 
-DATA SUBCR;
-   MERGE BTR2X(IN=A) BTR3A(IN=B) BTR2Y BTR2Z;
-   BY ACCTNO FACILITY FORCURR PDBIND;
-   IF A OR B;
-   IF TFR02I>0 THEN TFR02I=5; ELSE TFR02I=0;
-   IF SFS>0 & NONSFS>0 & MULTIPRC> 1 THEN TYPEPRC='79'; *2025-1526;
-RUN;
-DATA SUBCR;
-   MERGE SUBCR(IN=A) AMSUBACC;
-   BY ACCTNO FACILITY;
-   IF A;
-   IF DTACCTSTS NOT IN (.,0) THEN DO;
-      NODAYS = NODAYSX;
-      ARREARS= ARREARSX;
-      INSTALM= INSTALMX;
-   END;
-   OUTSTAND=OUTSTAND*100;
-   UNEARNED=UNEARNED*100;
-   REPAID = REPAID * 100;
-   DISBURSE = DISBURSE * 100;
-   INTRATEX   = INTRATEX  * 100;
-   COMMRATEX  = COMMRATEX * 100;
-   DISCRATEX  = DISCRATEX * 100;
-   COMBRATEX  = COMBRATEX * 100;
-   CURBAL=PRINAMT_MYRX * 100;
-   INTAMT=INTAMT_MYRX * 100;
-   OTH_CHARGE = OTH_CHARGEX * 100;
-   IF INSTALM=.  THEN INSTALM=0;
-   NOTENO='    ';
-   IF FACILITY IN ('34810','34831','34832','34840',
-                   '34850','34860')  THEN DO;
-      ARREARS=0; INSTALM=0;
-   END;
-*;
-DATA SUBA;
-   MERGE MAST(IN=A) SUBCR(IN=B) ACCT(KEEP=ACCTNO APPRLIM2 FIRSTDISBDT);
-   BY ACCTNO;
-   IF A AND B;
-   DATAXX=' 00000000 00000000';
-   ODXSAMT=0; BILTOT=0;
-   IF APPRLIM2 = . THEN APPRLIM2 = 0;
-   IF ACCTSTAT='' THEN DO;
-      ACCTSTAT='O';
-      IF SETTLED='S' THEN ACCTSTAT='S';
-   END;
-   NOTETERM=12;
-   FCONCEPT=00;
-   IF  SYNDICAT=' '               THEN SYNDICAT='N';
-   IF  SPECIALF='N'               THEN SPECIALF='00';
-   IF  SPECIALF=' '               THEN SPECIALF='00';
-   IF  PURPOSES IN ('   ','0000') THEN PURPOSES='5300';
-   IF  FCONCEPT=00                THEN FCONCEPT= 99;
-   IF  FCONCEPT=.                 THEN FCONCEPT= 99;
-   IF  PAYFREQC='  '              THEN PAYFREQC='19';
-   FCONCEPT = PUT(LIABCODE,$BTFCEPT.);
+# Optional BNM files
+ibtrd_raw = read_sas(ibtrd_file) if ibtrd_file.exists() else None
+ibtdtl_raw = read_sas(ibtdtl_file) if ibtdtl_file.exists() else None
+lnacct_raw = read_sas(lnacct_file) if lnacct_file.exists() else None
 
-   FDISBDT='00000000';
-   IF FIRSTDISBDT > 0 THEN FDISBDT=PUT(FIRSTDISBDT,DDMMYYN8.);
-*;
-DATA BTRSM;
-   SET LOAN.LNACCT;
-   WHERE (2500000000<=ACCTNO<=2599999999);
-   KEEP ACCTNO SM_STATUS1 SM_DAT1;
-   IF SM_DATE GT 0 THEN DO;
-      DD = PUT(DAY(SM_DATE),Z2.);
-      MM = PUT(MONTH(SM_DATE),Z2.);
-      YY = PUT(YEAR(SM_DATE),Z4.);
-      SM_DAT1 = KSTRCAT(DD,MM,YY);
-   END;
-   ELSE DO;
-      SM_DAT1 = '00000000';
-   END;
-   IF SM_STATUS NE 'Y' THEN SM_STATUS = 'N';
-   SM_STATUS1 = SM_STATUS;
-RUN;
-*;
-PROC SUMMARY DATA=SUBA NWAY;
-CLASS ACCTNO; VAR OUTSTAND;
-OUTPUT OUT=SUBQ(DROP=_TYPE_ _FREQ_) SUM=OUTX;
-RUN;
-PROC SORT DATA=SUBQ; BY ACCTNO; RUN;
-DATA SUBA;
- MERGE SUBA(IN=A) SUBQ;
- BY ACCTNO;
- IF A;
- UNDRAWN = APPRLIM2 - OUTX;
-RUN;
-DATA SUBA;
-   MERGE SUBA(IN=A) BTRSM(IN=B);
-   BY ACCTNO;
-   IF A AND NOT B THEN DO;
-      SM_DAT1 = '00000000';
-      SM_STATUS1 = 'N';
-   END;
-   IF A;
-   RMSBBA= '000000000000000';
-   IF SUBSTR(FACILITY,1,4) = '3447' THEN FACILITY = '34470'; *FOR-BA;
-RUN;
+# =========================================================
+# 6. PROCESS MAST
+# =========================================================
+print("Processing MAST...")
 
-DATA CRED&REPTMON&NOWK &CREDD;
-  SET SUBA;
-  REPTMON  = &REPTMON;
-  REPTYEAR = &REPTYEAR;
-  OUTPUT CRED&REPTMON&NOWK;
-  FILE CREDITPO;
-     PUT @0001 FICODY     $5.
-         @0006 FICODE      4.
-         @0010 APCODE     Z3.
-         @0013 ACCTNO     10.
-         @0043 NOTENO     $5.
-         @0043 FACILITY   $5.
-         @0073 "&REPTDAY"
-         @0075 "&REPTMON"
-         @0077 "&REPTYEAR"
-         @0081 OUTSTAND  Z16.
-         @0097 ARREARS    Z3.
-         @0100 INSTALM    Z3.
-         @0103 UNDRAWN   Z17.
-         @0120 ACCTSTAT   $1.
-         @0121 NODAYS     Z5.
-         @0126 OLDBRH      5.
-         @0131 BILTOT    Z17.
-         @0148 ODXSAMT   Z17.
-         @0210 CURBAL    Z17.
-         @0227 INTAMT    Z17.
-         @0244 OTH_CHARGE  Z17.
-         @0261 REPAID    Z15.
-         @0276 DISBURSE  Z15.
-         @0292 FACCODE     5.
-         @0298 FORCURR    $3.
-         @0302 PDBIND     $1.
-         @0303 MTD_TAWIDH_AMT   15.2
-         @0318 MTD_GHARAMAH_AMT 15.2
-         @0333 REPAY_SOURCE     $4.
-         @0337 REPAY_TYPE_CD    $2.
-         ;
-*;
-DATA SUBA&REPTMON&NOWK;
-   SET SUBA;
-   OUTPUT SUBA&REPTMON&NOWK;
-   FILE SUBACRED;
-     PUT @0001 FICODY     $5.
-         @0006 FICODE      4.
-         @0010 APCODE     Z3.
-         @0013 ACCTNO     10.
-         @0043 NOTENO     $5.
-         @0048 FACILITY   $5.
-         @0073 FACILITY   $5.
-         @0078 SYNDICAT   $1.
-         @0079 SPECIALF   $2.
-         @0081 PURPOSES   $4.
-         @0085 FCONCEPT   Z2.
-         @0087 NOTETERM   Z3.
-         @0090 PAYFREQC   $2.
-         @0092 DATAXX     $18.
-         @0110 CUSTCODE   2.
-         @0112 SECTOR     $4.
-         @0116 OLDBRH      5.
-         @0121 UNEARNED   Z17.
-         @0138 SM_STATUS1 $1.
-         @0139 SM_DAT1    $8.
-         @0183 RMSBBA     $15.
-         @0198 INTRATEX   5.
-         @0203 TYPEPRC    $2.
-         @0206 FACCODE     5.
-         @0212 SECTFISS   $4.
-         @0217 CUSTFISS   $2.
-         @0220 FORCURR    $3.
-         @0224 TFR02I      1.
-         @0226 COMMRATEX   5.
-         @0232 DISCRATEX   5.
-         @0238 COMBRATEX   5.
-         @0244 SM_STATUS  $1.
-         @0246 SM_DATESTR $8.
-         @0255 IA_LRU     $1.
-         @0257 PDBIND     $1.
-         @0258 FDISBDT    $8.
-         @0266 SCORE1     $5. /* LATEST CRR RATING  */
-         @0271 SCORE2     $5. /* ORIGINAL CRR RATING */
-         @0276 DNBFISME   $1.
-         @0277 INDUSTRIAL_SECTOR_CD $5.
-         @0290 LU_ADD1             $40.
-         @0330 LU_ADD2             $40.
-         @0370 LU_ADD3             $40.
-         @0410 LU_ADD4             $40.
-         @0450 LU_TOWN_CITY        $20.
-         @0470 LU_POSTCODE          $5.
-         @0475 LU_STATE_CD          $2.
-         @0477 LU_COUNTRY_CD        $2.
-         ;
-*;
-PROC SORT DATA=BTR2; BY ACCTNO TRANSREX;
-*;
-DATA PROVI;
-    SET BTRSA.IPROV&REPTDAY&REPTMON;
-PROC SORT DATA=PROVI OUT=PROVI NODUPKEY; BY ACCTNO TRANSREX;
-*;
-DATA PROVI;
-    MERGE BTR2(IN=A) PROVI(IN=B); BY ACCTNO TRANSREX;
-    IF A AND B;
-    NODAYS=NODAYX;
-    IF NODAYS > 89 OR NPLIND IN ('P','F');
-    IF NPLIND IN ('P','F') THEN MATUREDS = 0;
-    IF NPLIND IN ('P','F') THEN NODAYS   = 0;
-    IF OUTSTAND < 1        THEN NODAYS   = 0;
-RUN;
-*;
-PROC  SUMMARY DATA=PROVI NWAY;
-CLASS ACCTNO FACILITY;
-VAR   PRINAMT_MYR INTAMT_MYR TENOR_INT OTH_CHARGE
-      IISAMT TOTIISR WRITOFF;
-OUTPUT OUT=PROVIS (DROP=_FREQ_ _TYPE_) SUM=;
-*;
-PROC SORT DATA=PROVI; BY ACCTNO FACILITY DESCENDING NODAYS;
-PROC SORT DATA=PROVI NODUPKEY; BY ACCTNO FACILITY;
-*;
-DATA PROVI;
-  MERGE PROVI PROVIS; BY ACCTNO FACILITY;
-  TOTWOF=WRITOFF*100;
-  TOTIISR=TOTIISR*(-100);
-  IF (90<=NODAYS<=182 OR NPLIND='F')  THEN CLASSIFY='D';  ELSE
-  IF (    NODAYS> 182)                THEN CLASSIFY='B';
-  IF NPLIND = 'P'                     THEN CLASSIFY='P';
-  IF OUTSTAND < 1                     THEN CLASSIFY='P';
+mast = mast_raw.filter(
+    (pl.col("ACCTNO") > 2500000000)
+).with_columns([
+    pl.col("FICODE").alias("BRANCH"),
+    pl.lit(0).cast(pl.Int32).alias("APCODE"),
+    pl.when(pl.col("RETAILID") == 'C')
+      .then(999)
+      .otherwise(0)
+      .cast(pl.Int32)
+      .alias("APCODE"),
+    pl.when(pl.col("CUSTCODE").is_null())
+      .then(99)
+      .otherwise(pl.col("CUSTCODE"))
+      .cast(pl.Int32)
+      .alias("CUSTCODE"),
+    pl.when(pl.col("SECTOR").is_null() | (pl.col("SECTOR") == ""))
+      .then("9999")
+      .otherwise(pl.col("SECTOR"))
+      .alias("SECTOR"),
+    pl.lit(0).alias("OLDBRH"),
+    pl.lit("     ").alias("FICODY"),
+    pl.when(pl.col("SM_DATE").is_null())
+      .then("")
+      .otherwise(pl.col("SM_DATE").dt.strftime("%d%m%Y"))
+      .alias("SM_DATESTR")
+]).unique(subset=["ACCTNO"], keep="first")
 
-  IF   (NODAYS => 90 OR NPLIND='F')   THEN IMPAIRED='Y';
-  ELSE                                     IMPAIRED='N';
-RUN;
+# =========================================================
+# 7. PROCESS MAST2
+# =========================================================
+print("Processing MAST2...")
 
-DATA PROVI;
-  MERGE PROVI(IN=A) AMSUBACC;
-  BY ACCTNO FACILITY;
-  IF A;
-  IF WRITOFFM = . THEN WRITOFFM = 0;
+if mast2_raw is not None:
+    # Filter valid AANO
+    mast2_filtered = mast2_raw.filter(
+        (pl.col("AANO").str.slice(0, 1) != "") &
+        (pl.col("AANO").str.len_chars() == 13)
+    ).sort("ACCTNO")
+    
+    # Aggregate for ALLREFNO and FIRSTDISBDT
+    mast2_agg = mast2_filtered.group_by("ACCTNO").agg([
+        pl.col("AANO").str.concat("|").alias("ALLREFNO"),
+        pl.col("APVDATE").filter(pl.col("APVDATE") > 0).min().alias("FIRSTDISBDT")
+    ])
+    
+    # MAST2C for CCPT
+    mast2c = mast2_raw.select([
+        pl.col("ACCTNO"),
+        pl.col("FACNO").cast(pl.Utf8).str.zfill(3).alias("FACLINE"),
+        pl.col("CCPT_LTST_REVIEW_DT")
+    ]).unique(subset=["ACCTNO", "FACLINE"])
 
-  REPTDAY=&REPTDAY;
-  REPTMON=&REPTMON;
-  REPTYEAR=&REPTYEAR;
-  GP3IND=' ';
-  CURBAL  =PRINAMT_MYR*100;
-  INTAMT  =INTAMT_MYR*100;
-  TENOR_INT = TENOR_INT*100;
-  OTH_CHARGE = OTH_CHARGE*100;
-  TOTIIS  =IISAMT*100;
-  TOTILM  =WRITOFFM*100;
-  IISOPBAL=0;
-  OLDBRH  =0;
-  REALISVL=0;
-  IISDANAH=0;  FEEAMT=0;
-  OLDBRH=0;    SPTRANS=0;  SPDANAH=0;
-  IISTRANS=0;  SPOPBAL=0;  SPCHARGE=0;
-  SPWOAMT=0;   SPWBAMT=0;
-*;
-PROC SORT; BY ACCTNO;
-*;
-DATA PROVI;
-     MERGE PROVI(IN=A) MAST(IN=B); BY ACCTNO;
-     IF A AND B;
-*;
-DATA PROV&REPTMON&NOWK &PROVD;
-  SET PROVI;
-  FICODY='     ';
-  APCODE=000;
-  IF RETAILID='C'                  THEN APCODE=999;
-  IF SUBSTR(FACILITY,1,4) = '3447' THEN FACILITY = '34470'; *FOR-BA;
-  /*
-  IF ACCTNO=2500258834             THEN FACILITY='34810';
-  */
-  IF FACILITY IN ('34810','34831','34832','34840',
-                  '34850','34860') THEN ARREARS=0;
+# =========================================================
+# 8. PROCESS CRED
+# =========================================================
+print("Processing CRED...")
 
-  OUTPUT PROV&REPTMON&NOWK;
-  FILE PROVISIO;
-       PUT  @0001 FICODY     $5.
-            @0006 FICODE      4.
-            @0010 APCODE     Z3.
-            @0013 ACCTNO     10.
-            @0043 FACILITY   $5.
-            @0073 "&REPTDAY"
-            @0075 "&REPTMON"
-            @0077 "&REPTYEAR"
-            @0081 CLASSIFY   $1.
-            @0082 ARREARS    Z3.
-            @0085 CURBAL    Z17.
-            @0102 TENOR_INT Z17.
-            @0119 OTH_CHARGE Z16.
-            @0135 REALISVL  Z17.
-            @0152 IISOPBAL  Z17.
-            @0169 TOTIIS    Z17.
-            @0186 TOTIISR   Z17.
-            @0203 TOTWOF    Z17.
-            @0220 IISDANAH  Z17.
-            @0237 IISTRANS  Z17.
-            @0254 SPOPBAL   Z17.
-            @0271 SPCHARGE  Z17.
-            @0288 SPWBAMT   Z17.
-            @0305 SPWOAMT   Z17.
-            @0322 SPDANAH   Z17.
-            @0339 SPTRANS   Z17.
-            @0356 GP3IND    $1.
-            @0357 OLDBRH     5.
-            @0363 FACCODE    5.
-            @0369 IMPAIRED  $1.
-            @0371 FORCURR   $3.
-            @0375 TOTILM    Z17.
-            @0393 PDBIND     $1.
-            ;
-*;
+cred = cred_raw.filter(
+    (pl.col("ACCTNO") > 2500000000) &
+    (pl.col("ACCTNO") != 2501900811) &
+    (pl.col("TRANSREF").str.strip_chars() != "") &
+    (pl.col("OUTSTAND") >= 0)
+).with_columns([
+    # Calculate MATUREDS
+    pl.when(
+        (pl.col("MATUREDX") == "000000") | 
+        (pl.col("MATUREDX").str.strip_chars() == "")
+    ).then(99999).otherwise(
+        pl.col("MATUREDX").str.strptime(pl.Date, "%y%m%d").cast(pl.Int64)
+    ).alias("MATUREDS"),
+    
+    # Calculate NODAYS
+    pl.when(
+        (pl.col("MATUREDS") > 0) & (pl.col("MATUREDS") <= int(RDATE))
+    ).then(
+        int(RDATE) - pl.col("MATUREDS") + 1
+    ).otherwise(0).alias("NODAYS"),
+    
+    # Calculate ARREARS
+    pl.when(
+        (pl.col("MATUREDS") > 0) & 
+        (pl.col("MATUREDS") <= int(RDATE)) &
+        ((int(RDATE) - pl.col("MATUREDS") + 1) > 0)
+    ).then(
+        ((int(RDATE) - pl.col("MATUREDS") + 1) / 30.00050).floor().cast(pl.Int32)
+    ).otherwise(0).alias("ARREARS"),
+    
+    # Calculate INSTALM
+    pl.when(
+        pl.col("NODAYS") > 0
+    ).then(1).otherwise(0).alias("INSTALM"),
+    
+    # TRANSREX (first 7 chars of TRANSREF)
+    pl.col("TRANSREF").str.slice(0, 7).alias("TRANSREX"),
+    
+    # Backup OUTSTAND
+    pl.col("OUTSTAND").alias("OUTSTANDX")
+]).unique(subset=["ACCTNO", "TRANSREF"])
 
+# =========================================================
+# 9. PROCESS BNM TRADE DATA
+# =========================================================
+print("Processing BNM Trade data...")
 
-this is the original sas code. is the python version following the same exact logic? just iggnore the reptdate.
+if ibtrd_raw is not None:
+    # BTRAD - Balance data
+    btrad = ibtrd_raw.filter(
+        pl.col("BALANCE") > 0
+    ).select([
+        pl.col("ACCTNOX").alias("ACCTNO"),
+        pl.col("TRANSREF").alias("TRANSREX"),
+        pl.col("BALANCE"),
+        pl.col("INTRECV"),
+        pl.col("UNEARNED"),
+        pl.col("LIABCODE"),
+        pl.col("UTRDF")
+    ]).sort(["ACCTNO", "TRANSREX"])
+    
+    # BTRAX - Repaid/Disburse data
+    btrax = ibtrd_raw.select([
+        pl.col("ACCTNOX").alias("ACCTNO"),
+        pl.col("TRANSREF").alias("TRANSREX"),
+        pl.col("REPAID"),
+        pl.col("DISBURSE"),
+        pl.col("MTD_TAWIDH_AMT"),
+        pl.col("MTD_GHARAMAH_AMT")
+    ]).sort(["ACCTNO", "TRANSREX"])
+    
+    # INTRT - Interest rates
+    if ibtdtl_raw is not None:
+        intrt = ibtdtl_raw.select([
+            pl.col("ACCTNOX").alias("ACCTNO"),
+            pl.col("TRANSREF").alias("TRANSREX"),
+            pl.col("INTRATE"),
+            pl.col("COMMRATE"),
+            pl.col("DISCRATE"),
+            pl.col("COMBRATE"),
+            pl.col("PRINAMT_MYRX"),
+            pl.col("INTAMT_MYRX"),
+            pl.col("OTH_CHARGEX"),
+            pl.col("PRODGRP")
+        ]).sort(["ACCTNO", "TRANSREX"])
+        
+        # Merge BTRAX with INTRT
+        btrax = btrax.join(intrt, on=["ACCTNO", "TRANSREX"], how="left")
+    
+    # Merge CRED with BTRAD and BTRAX
+    cred = cred.join(btrad, on=["ACCTNO", "TRANSREX"], how="left")
+    cred = cred.join(btrax, on=["ACCTNO", "TRANSREX"], how="left")
+    
+    # Update OUTSTAND and other fields
+    cred = cred.with_columns([
+        pl.when(
+            (pl.col("BALANCE").is_not_null()) & (pl.col("BALANCE") > 0)
+        ).then(pl.col("BALANCE")).otherwise(0).alias("OUTSTAND"),
+        pl.col("UNEARNED").fill_null(0),
+        pl.col("REPAID").fill_null(0),
+        pl.col("DISBURSE").fill_null(0),
+        pl.col("MTD_TAWIDH_AMT").fill_null(0),
+        pl.col("MTD_GHARAMAH_AMT").fill_null(0)
+    ])
+
+# =========================================================
+# 10. PROCESS SUBA
+# =========================================================
+print("Processing SUBA...")
+
+suba = suba_raw.filter(
+    (pl.col("ACCTNO") > 2500000000) &
+    (pl.col("ACCTNO") != 2501900811)
+).with_columns([
+    pl.when(
+        ~pl.col("LIABCODE").is_in(["FFS", "FFU", "FCS", "FCU", "FFL", "FTI", "FTL"])
+    ).then("MYR").otherwise(None).alias("FORCURR"),
+    pl.col("TFDESC01").str.slice(0, 13).alias("AANO")
+])
+
+# Split into SUBA9 and SUBA main
+suba9 = suba.filter(
+    (pl.col("SUBACCT") == "OV") & 
+    (pl.col("TRANSREF").str.strip_chars() == "")
+).select([
+    "ACCTNO", "LIMTCURM", "LIMTCURF", "ORI_AALIMIT", "CREATDS", 
+    "CURRENCY", "FACLINE", "LIABCODE", "SPECIALF", "SUBPROD"
+])
+
+suba_main = suba.filter(
+    pl.col("TRANSREF").str.strip_chars() != ""
+)
+
+# =========================================================
+# 11. PROCESS ACCT (Account Level)
+# =========================================================
+print("Processing ACCT...")
+
+# Merge SUBA9 with CCPT and MAST2C
+if mast2c is not None:
+    suba9 = suba9.join(mast2c, on=["ACCTNO", "FACLINE"], how="left")
+
+acct = mast.join(suba9, on="ACCTNO", how="inner")
+
+if 'mast2_agg' in locals():
+    acct = acct.join(mast2_agg, on="ACCTNO", how="left")
+
+acct = acct.with_columns([
+    pl.when(pl.col("CURRENCY").is_null() | (pl.col("CURRENCY") == ""))
+      .then("MYR").otherwise(pl.col("CURRENCY")).alias("CURRENCY"),
+    (pl.col("LIMTCURM") * 100).alias("APPRLIMT"),
+    (pl.col("LIMTCURF") * 100).alias("APPRLIM2"),
+    (pl.col("ORI_AALIMIT") * 100).alias("AALIMIT"),
+    pl.lit(20).alias("ISSUEYA"),
+    pl.lit(0).alias("ISSUEYY"),
+    pl.lit(0).alias("ISSUEMM"),
+    pl.lit(0).alias("ISSUEDD"),
+    pl.lit(0).alias("LMTAMT"),
+    pl.lit(0).alias("LADTYY"),
+    pl.lit(0).alias("LADTMM"),
+    pl.lit(0).alias("LADTDD")
+])
+
+# Process CREATDS date
+acct = acct.with_columns([
+    pl.when(pl.col("CREATDS") > 0)
+      .then(pl.col("CREATDS").cast(pl.Utf8).str.slice(0, 2))
+      .otherwise("0").alias("ISSUEYY"),
+    pl.when(pl.col("CREATDS") > 0)
+      .then(pl.col("CREATDS").cast(pl.Utf8).str.slice(2, 2))
+      .otherwise("0").alias("ISSUEMM"),
+    pl.when(pl.col("CREATDS") > 0)
+      .then(pl.col("CREATDS").cast(pl.Utf8).str.slice(4, 2))
+      .otherwise("0").alias("ISSUEDD")
+])
+
+# =========================================================
+# 12. PROCESS BTR2 (Transaction Level)
+# =========================================================
+print("Processing BTR2...")
+
+# Merge CRED with SUBA
+btr2 = cred.join(suba_main, on=["ACCTNO", "TRANSREF"], how="inner")
+
+btr2 = btr2.with_columns([
+    # Facility mapping
+    pl.col("LIABCODE").map_dict(LIAB_FORMAT, default=pl.col("LIABCODE")).alias("FACILITY"),
+    
+    # TFR02I flag
+    pl.when(pl.col("TFINDR02") == 5).then(1).otherwise(0).alias("TFR02I"),
+    
+    # PDBIND flag
+    pl.when(pl.col("SUBPROD") == "PDB-I").then("Y").otherwise("N").alias("PDBIND"),
+    
+    # Reset NODAYS if OUTSTAND is 0
+    pl.when(
+        (pl.col("NODAYS") > 0) & (pl.col("OUTSTAND") < 1)
+    ).then(0).otherwise(pl.col("NODAYS")).alias("NODAYS"),
+    
+    pl.when(
+        (pl.col("NODAYS") > 0) & (pl.col("OUTSTAND") < 1)
+    ).then(0).otherwise(pl.col("ARREARS")).alias("ARREARS"),
+    
+    pl.when(
+        (pl.col("NODAYS") > 0) & (pl.col("OUTSTAND") < 1)
+    ).then(0).otherwise(pl.col("INSTALM")).alias("INSTALM"),
+    
+    # Handle PRODGRP = 'BA'
+    pl.when(pl.col("PRODGRP") == 'BA')
+      .then(pl.col("BALANCE")).otherwise(None).alias("PRINAMT_MYRX_BA"),
+    pl.when(pl.col("PRODGRP") == 'BA')
+      .then(pl.col("UNEARNED")).otherwise(None).alias("INTAMT_MYRX_BA")
+])
+
+# =========================================================
+# 13. SUMMARIZE BTR2
+# =========================================================
+print("Summarizing BTR2...")
+
+btr3a = btr2.group_by(["ACCTNO", "FACILITY", "FORCURR", "PDBIND"]).agg([
+    pl.col("OUTSTAND").sum().alias("OUTSTAND"),
+    pl.col("INSTALM").sum().alias("INSTALM"),
+    pl.col("UNEARNED").sum().alias("UNEARNED"),
+    pl.col("REPAID").sum().alias("REPAID"),
+    pl.col("DISBURSE").sum().alias("DISBURSE"),
+    pl.col("TFR02I").sum().alias("TFR02I"),
+    pl.col("MTD_TAWIDH_AMT").sum().alias("MTD_TAWIDH_AMT"),
+    pl.col("MTD_GHARAMAH_AMT").sum().alias("MTD_GHARAMAH_AMT"),
+    pl.col("PRINAMT_MYRX").sum().alias("PRINAMT_MYRX"),
+    pl.col("INTAMT_MYRX").sum().alias("INTAMT_MYRX"),
+    pl.col("OTH_CHARGEX").sum().alias("OTH_CHARGEX"),
+    pl.col("SPECIALF").max().alias("SPECIALF")
+])
+
+# Get max NODAYS
+btr2x = btr2.sort(["ACCTNO", "FACILITY", "FORCURR", "PDBIND", "NODAYS"], 
+                  descending=[False, False, False, False, True])
+btr2x = btr2x.unique(subset=["ACCTNO", "FACILITY", "FORCURR", "PDBIND"], keep="first")
+
+# =========================================================
+# 14. PROCESS SUBCR (Sub-account Credit)
+# =========================================================
+print("Processing SUBCR...")
+
+subcr = btr2x.join(btr3a, on=["ACCTNO", "FACILITY", "FORCURR", "PDBIND"], how="inner")
+
+# Apply transformations
+subcr = subcr.with_columns([
+    (pl.col("OUTSTAND") * 100).alias("OUTSTAND"),
+    (pl.col("UNEARNED") * 100).alias("UNEARNED"),
+    (pl.col("REPAID") * 100).alias("REPAID"),
+    (pl.col("DISBURSE") * 100).alias("DISBURSE"),
+    (pl.col("PRINAMT_MYRX") * 100).alias("CURBAL"),
+    (pl.col("INTAMT_MYRX") * 100).alias("INTAMT"),
+    (pl.col("OTH_CHARGEX") * 100).alias("OTH_CHARGE"),
+    pl.when(pl.col("INSTALM").is_null()).then(0).otherwise(pl.col("INSTALM")).alias("INSTALM"),
+    pl.lit("    ").alias("NOTENO")
+])
+
+# Handle special facilities
+subcr = subcr.with_columns([
+    pl.when(
+        pl.col("FACILITY").is_in(["34810", "34831", "34832", "34840", "34850", "34860"])
+    ).then(0).otherwise(pl.col("ARREARS")).alias("ARREARS"),
+    pl.when(
+        pl.col("FACILITY").is_in(["34810", "34831", "34832", "34840", "34850", "34860"])
+    ).then(0).otherwise(pl.col("INSTALM")).alias("INSTALM")
+])
+
+# =========================================================
+# 15. CREATE FINAL SUBA DATASET
+# =========================================================
+print("Creating final SUBA dataset...")
+
+suba_final = mast.join(subcr, on="ACCTNO", how="inner")
+
+# Join with ACCT for APPRLIM2 and FIRSTDISBDT
+if 'acct' in locals():
+    acct_subset = acct.select(["ACCTNO", "APPRLIM2", "FIRSTDISBDT"]).unique()
+    suba_final = suba_final.join(acct_subset, on="ACCTNO", how="left")
+
+# Add calculated fields
+suba_final = suba_final.with_columns([
+    pl.lit(" 00000000 00000000").alias("DATAXX"),
+    pl.lit(0).alias("ODXSAMT"),
+    pl.lit(0).alias("BILTOT"),
+    pl.when(pl.col("APPRLIM2").is_null()).then(0).otherwise(pl.col("APPRLIM2")).alias("APPRLIM2"),
+    pl.lit(12).alias("NOTETERM"),
+    pl.lit(0).alias("FCONCEPT"),
+    pl.when(pl.col("SYNDICAT").is_null() | (pl.col("SYNDICAT") == ""))
+      .then("N").otherwise(pl.col("SYNDICAT")).alias("SYNDICAT"),
+    pl.when(pl.col("SPECIALF").is_null() | (pl.col("SPECIALF") == "") | (pl.col("SPECIALF") == "N"))
+      .then("00").otherwise(pl.col("SPECIALF")).alias("SPECIALF"),
+    pl.when(pl.col("PURPOSES").is_null() | (pl.col("PURPOSES") == "") | (pl.col("PURPOSES") == "0000"))
+      .then("5300").otherwise(pl.col("PURPOSES")).alias("PURPOSES"),
+    pl.when(pl.col("PAYFREQC").is_null() | (pl.col("PAYFREQC") == ""))
+      .then("19").otherwise(pl.col("PAYFREQC")).alias("PAYFREQC"),
+    pl.when(pl.col("FIRSTDISBDT") > 0)
+      .then(pl.col("FIRSTDISBDT").dt.strftime("%d%m%Y"))
+      .otherwise("00000000").alias("FDISBDT")
+])
+
+# =========================================================
+# 16. CALCULATE UNDRAWN
+# =========================================================
+print("Calculating UNDRAWN...")
+
+subq = suba_final.group_by("ACCTNO").agg([
+    pl.col("OUTSTAND").sum().alias("OUTX")
+])
+
+suba_final = suba_final.join(subq, on="ACCTNO", how="left")
+suba_final = suba_final.with_columns([
+    (pl.col("APPRLIM2") - pl.col("OUTX")).alias("UNDRAWN")
+])
+
+# =========================================================
+# 17. PROCESS LNACCT (Loan Account Status)
+# =========================================================
+print("Processing LNACCT...")
+
+if lnacct_raw is not None:
+    btrsm = lnacct_raw.filter(
+        (pl.col("ACCTNO") >= 2500000000) & (pl.col("ACCTNO") <= 2599999999)
+    ).select(["ACCTNO", "SM_STATUS", "SM_DATE"])
+    
+    btrsm = btrsm.with_columns([
+        pl.when(pl.col("SM_DATE") > 0)
+          .then(pl.col("SM_DATE").dt.strftime("%d%m%Y"))
+          .otherwise("00000000").alias("SM_DAT1"),
+        pl.when(pl.col("SM_STATUS") == "Y")
+          .then("Y").otherwise("N").alias("SM_STATUS1")
+    ])
+    
+    # Merge with SUBA
+    suba_final = suba_final.join(btrsm, on="ACCTNO", how="left")
+    
+    # Fill missing values
+    suba_final = suba_final.with_columns([
+        pl.col("SM_DAT1").fill_null("00000000"),
+        pl.col("SM_STATUS1").fill_null("N")
+    ])
+
+# =========================================================
+# 18. WRITE OUTPUT FILES
+# =========================================================
+print("Writing output files...")
+
+output_suffix = f"{REPTYEAR}{REPTMON}{REPTDAY}"
+
+# ACCTCRED Output
+acctcred_spec = [
+    ("FICODY", 5, 'S'),
+    ("FICODE", 4, 'Z'),
+    ("APCODE", 3, 'Z'),
+    ("ACCTNO", 10, 'Z'),
+    ("CURRENCY", 3, 'S'),
+    ("APPRLIMT", 24, 'Z'),
+    ("APPRLIM2", 16, 'Z'),
+    ("ISSUEDD", 2, 'Z'),
+    ("ISSUEMM", 2, 'Z'),
+    ("ISSUEYA", 2, 'Z'),
+    ("ISSUEYY", 2, 'Z'),
+    ("OLDBRH", 5, 'Z'),
+    ("LMTAMT", 16, 'Z'),
+    ("AALIMIT", 24, 'Z'),
+    ("ALLREFNO", 200, 'S'),
+    ("LEGAL_ACTION_CD", 2, 'Z'),
+    ("LADTDD", 2, 'Z'),
+    ("LADTMM", 2, 'Z'),
+    ("LADTYY", 4, 'Z'),
+    ("FXRATE", 8, 'Z'),
+    ("CLIMATE_PRIN_TAXONOMY_CLASS", 5, 'S')
+]
+write_fixed_width(acct, BASE_OUTPUT / f"ACCTCRED_{output_suffix}.txt", acctcred_spec)
+
+# CREDITPO Output
+creditpo_spec = [
+    ("FICODY", 5, 'S'),
+    ("FICODE", 4, 'Z'),
+    ("APCODE", 3, 'Z'),
+    ("ACCTNO", 10, 'Z'),
+    ("NOTENO", 5, 'S'),
+    ("FACILITY", 5, 'S'),
+    ("REPTDAY", 2, 'S'),
+    ("REPTMON", 2, 'S'),
+    ("REPTYEAR", 4, 'S'),
+    ("OUTSTAND", 16, 'Z'),
+    ("ARREARS", 3, 'Z'),
+    ("INSTALM", 3, 'Z'),
+    ("UNDRAWN", 17, 'Z'),
+    ("ACCTSTAT", 1, 'S'),
+    ("NODAYS", 5, 'Z'),
+    ("OLDBRH", 5, 'Z'),
+    ("BILTOT", 17, 'Z'),
+    ("ODXSAMT", 17, 'Z'),
+    ("CURBAL", 17, 'Z'),
+    ("INTAMT", 17, 'Z'),
+    ("OTH_CHARGE", 17, 'Z'),
+    ("REPAID", 15, 'Z'),
+    ("DISBURSE", 15, 'Z'),
+    ("FACCODE", 5, 'Z'),
+    ("FORCURR", 3, 'S'),
+    ("PDBIND", 1, 'S'),
+    ("MTD_TAWIDH_AMT", 15, 'D'),
+    ("MTD_GHARAMAH_AMT", 15, 'D'),
+    ("REPAY_SOURCE", 4, 'S'),
+    ("REPAY_TYPE_CD", 2, 'S')
+]
+
+# Add REPTDAY, REPTMON, REPTYEAR as constants to suba_final
+suba_final = suba_final.with_columns([
+    pl.lit(REPTDAY).alias("REPTDAY"),
+    pl.lit(REPTMON).alias("REPTMON"),
+    pl.lit(REPTYEAR).alias("REPTYEAR")
+])
+write_fixed_width(suba_final, BASE_OUTPUT / f"CREDITPO_{output_suffix}.txt", creditpo_spec)
+
+# SUBACRED Output
+subacred_spec = [
+    ("FICODY", 5, 'S'),
+    ("FICODE", 4, 'Z'),
+    ("APCODE", 3, 'Z'),
+    ("ACCTNO", 10, 'Z'),
+    ("NOTENO", 5, 'S'),
+    ("FACILITY", 5, 'S'),
+    ("FACILITY2", 5, 'S'),
+    ("SYNDICAT", 1, 'S'),
+    ("SPECIALF", 2, 'S'),
+    ("PURPOSES", 4, 'S'),
+    ("FCONCEPT", 2, 'Z'),
+    ("NOTETERM", 3, 'Z'),
+    ("PAYFREQC", 2, 'S'),
+    ("DATAXX", 18, 'S'),
+    ("CUSTCODE", 2, 'Z'),
+    ("SECTOR", 4, 'S'),
+    ("OLDBRH", 5, 'Z'),
+    ("UNEARNED", 17, 'Z'),
+    ("SM_STATUS1", 1, 'S'),
+    ("SM_DAT1", 8, 'S'),
+    ("RMSBBA", 15, 'S'),
+    ("INTRATEX", 5, 'Z'),
+    ("TYPEPRC", 2, 'S'),
+    ("FACCODE", 5, 'Z'),
+    ("SECTFISS", 4, 'S'),
+    ("CUSTFISS", 2, 'S'),
+    ("FORCURR", 3, 'S'),
+    ("TFR02I", 1, 'Z'),
+    ("COMMRATEX", 5, 'Z'),
+    ("DISCRATEX", 5, 'Z'),
+    ("COMBRATEX", 5, 'Z'),
+    ("SM_STATUS", 1, 'S'),
+    ("SM_DATESTR", 8, 'S'),
+    ("IA_LRU", 1, 'S'),
+    ("PDBIND", 1, 'S'),
+    ("FDISBDT", 8, 'S'),
+    ("SCORE1", 5, 'S'),
+    ("SCORE2", 5, 'S'),
+    ("DNBFISME", 1, 'S'),
+    ("INDUSTRIAL_SECTOR_CD", 5, 'S'),
+    ("LU_ADD1", 40, 'S'),
+    ("LU_ADD2", 40, 'S'),
+    ("LU_ADD3", 40, 'S'),
+    ("LU_ADD4", 40, 'S'),
+    ("LU_TOWN_CITY", 20, 'S'),
+    ("LU_POSTCODE", 5, 'S'),
+    ("LU_STATE_CD", 2, 'S'),
+    ("LU_COUNTRY_CD", 2, 'S')
+]
+
+# Add FACILITY2 as copy of FACILITY
+suba_final = suba_final.with_columns([
+    pl.col("FACILITY").alias("FACILITY2")
+])
+write_fixed_width(suba_final, BASE_OUTPUT / f"SUBACRED_{output_suffix}.txt", subacred_spec)
+
+# =========================================================
+# 19. PRINT SUMMARY
+# =========================================================
+print("\n" + "="*50)
+print("PROCESSING SUMMARY")
+print("="*50)
+print(f"Processing Date: {TDATE.strftime('%Y-%m-%d')}")
+print(f"ACCTCRED records: {acct.height}")
+print(f"SUBACRED records: {suba_final.height}")
+print(f"CREDITPO records: {suba_final.height}")
+print(f"\nOutput files written to: {BASE_OUTPUT}")
+print("="*50)
