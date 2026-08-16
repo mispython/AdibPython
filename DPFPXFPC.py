@@ -1,257 +1,282 @@
-============================================================
-EIBDLCRM - BNM LCR Reporting (Conventional Banking)
-============================================================
+DATA K1TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT GWCCY
+                 GWSHN GWC2R GWDLP GWDLR);
+   SET BNMK.K1TBL&REPTMON&NOWK (RENAME=(GWMDT=MATDT GWBALC=AMOUNT
+                                        GWSDT=ISSDT));
+   IF GWMVT = 'P';
+   IF GWOCY='XAU' THEN DELETE;
+   IF GWCCY='XAU' THEN DELETE;
+   IF GWOCY='XAT' THEN DELETE;
+   IF GWCCY='XAT' THEN DELETE;
+   IF GWCCY  = 'MYR' THEN DO;
+      PART = '95';
+      AMTUSD = 0;
+      AMTSGD = 0;
+      IF GWMVTS = 'M' THEN DO;
+         IF GWDLP IN ('BCD','BCI','BCS','BCQ','BCT','BCW','BQD')
+         THEN DO;
+            ITEM = '830'; OUTPUT;
+         END;
+         IF SUBSTR(GWCTP,1,1) = 'B' THEN
+            SELECT (GWDLP);
+               WHEN ('LO','LC','LF','LS','LOI','LSI','LSC','LSW',
+                     'FDA','FDB','FDS','FDL','LOC','LOW') DO;
+                  ITEM = '610'; OUTPUT;
+               END;
+               WHEN ('BO','BF','BOI','BFI','BSC','BSW','BOC','BOW') DO;
+                  ITEM = '810'; OUTPUT;
+               END;
+               OTHERWISE;
+            END;
+         SELECT (SUBSTR(GWDLP,2,2));
+            WHEN ('MI','MT') DO;
+               ITEM = '820';
+               OUTPUT;
+            END;
+            WHEN ('XI','XT') DO;
+               ITEM = '620'; OUTPUT;
+            END;
+            OTHERWISE;
+         END;
+      END;
+      /*
+      ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
+         'FF1','FF2') THEN DO;
+         IF GWMVTS = 'P' THEN ITEM = '711';
+         ELSE IF GWMVTS = 'S' THEN ITEM = '911';
+         OUTPUT;
+      END;
+      */
+   END;
+*;
+   ELSE DO;
+      PART = '96';
+      IF GWCCY = 'USD' THEN AMTUSD = AMOUNT;
+      ELSE AMTUSD = 0;
+      IF GWCCY = 'SGD' THEN AMTSGD = AMOUNT;
+      ELSE AMTSGD = 0;
+      IF GWMVTS = 'M' THEN DO;
+         IF SUBSTR(GWCTP,1,1) = 'B' AND GWCTP ^= 'BW' THEN
+            SELECT (GWDLP);
+               WHEN ('LO','LC','LS','LF','LOI','LSI','LSC','LOC',
+                    'FDA','FDB','FDS','FDL','LOW','LSW') DO;
+                  ITEM = '610'; OUTPUT;
+               END;
+               WHEN ('BC','BF','BO','BSC','BOW','BSW') DO;
+                  IF SUBSTR(GWSHN,1,6) ^= 'FCY-FD' THEN DO;
+                     ITEM = '810'; OUTPUT;
+                  END;
+               END;
+               WHEN ('BOC') DO;
+                     ITEM = '810'; OUTPUT;
+                  END;
+               OTHERWISE;
+            END;
+      END;
+      /*
+      ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
+         'FF1','FF2') AND GWACT NOT IN ('RV','RW') THEN DO;
+         IF GWMVTS = 'P' THEN ITEM = '711';
+         ELSE IF GWMVTS = 'S' THEN ITEM = '911';
+         OUTPUT;
+      END;
+      */
+   END;
+*;
+*;
+%INC PGM(KAMLIQX);
+*;
+DATA K3TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT UTCCY
+                 UTCUS UTCTP UTSTY UTDLR UTDLP);
+   RETAIN PART '95';
+   SET BNMK.K3TBL&REPTMON&NOWK;
+   AMOUNT = UTAMOC - UTDPF;
+   IF UTSTY='IDC' THEN AMOUNT=UTAMOC + UTDPF;
+   IF &INST='PBB' THEN DO;
+      IF UTCCY = 'USD' THEN AMTUSD = AMOUNT;
+      ELSE AMTUSD = 0;
+      IF UTCCY = 'SGD' THEN AMTSGD = AMOUNT;
+      ELSE AMTSGD = 0;
+   END;
+   ELSE DO;
+      AMTUSD = 0;
+      AMTSGD = 0;
+   END;
+*  IF UTREF IN ('INV','TRD','TAP') THEN DO;
+   IF UTREF IN ('INV','DRI','DLG','AFSLIQ','AFSBOND','IAFSLIQ','AFS',
+                'IAFS') THEN DO;
+      SELECT (UTSTY);
+         WHEN ('CB1','CB2','CF1','CF2','CNT','MGS','MTB','BNB','BNN',
+               'ITB','SAC','BMN','BMC','BMF','SCD','SCM',
+               'CMB','MGI','SMC') DO;
+            ITEM = '631';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = AMOUNT + UTAICT;
+            END;
+            OUTPUT;
+         END;
 
-NOTE: KALMLIQ logic integrated directly
-      - Reading from BNMK.K1TBL{mon}{week} and BNMK.K3TBL{mon}{week}
-      - Using hardcoded FX rates
-      - Column names normalized to lowercase on read (fix applied)
-============================================================
+         WHEN ('SDC') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = (UTAMOC*(UTPCP/100))+UTDPEY+UTDPE;
+            END;
+            OUTPUT;
+         END;
+         WHEN ('LDC') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = AMOUNT + UTAICT;
+            END;
+            OUTPUT;
+         END;
 
-Report Date: 31/07/2026
-Week: 4, Month: 07
-Expected K1/K3 files: k1tbl074.sas7bdat
-Expected UTSAS files: utms260731.sas7bdat, utfx260731.sas7bdat, utrp260731.sas7bdat
+         WHEN ('SLD','SSD') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = (UTAMOC*(UTPCP/100))+UTAICY+UTAIT;
+            END;
+            OUTPUT;
+         END;
 
-============================================================
-LOADING INPUTS
-============================================================
+         WHEN ('SFD','SZD') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = AMOUNT + UTAICT;
+            END;
+            OUTPUT;
+         END;
 
-1. FX Rates (HARDCODED)...
-  Loaded 10 currencies: ['MYR', 'USD', 'SGD', 'HKD', 'AUD', 'JPY', 'XAU', 'GBP', 'EUR', 'CNY']
+         WHEN ('SBA') DO;
+            IF UTDLP NOT IN ('MOS','MSS') THEN DO;
+               ITEM = '633'; OUTPUT;
+            END;
+         END;
+         WHEN ('ISB','DHB','KHA','PNB') DO;
+            ITEM = '636'; OUTPUT;
+         END;
+         WHEN ('IDS') DO;
+            ITEM = '635'; OUTPUT;
+         END;
+         WHEN ('DBD') DO;
+            ITEM = '634'; OUTPUT;
+         END;
+         WHEN ('DMB','DBD','GRL','MTL','RUL') DO;
+            ITEM = '635'; OUTPUT;
+         END;
+         WHEN ('PBA') DO;
+            IF UTDLP IN ('MOS','MSS') THEN DO;
+               ITEM = '850'; OUTPUT;
+            END;
+         END;
+         OTHERWISE;
+      END;
+   END;
+   ELSE IF UTREF IN ('PFD','PLD','PSD','PZD','PDC') THEN DO;
+      IF UTSTY IN ('IFD','ILD','ISD','IZD','IDC','IDP','IZP') THEN DO;
+         ITEM = '840'; OUTPUT;
+      END;
+   END;
+*  ELSE IF UTREF IN ('IINV','ITRD','ITAP') THEN DO;
+   ELSE IF UTREF IN ('IINV','IDRI','IDLG') THEN DO;
+      IF UTSTY IN ('SBA') AND UTDLP IN ('IOP') THEN DO;
+         ITEM = '633'; OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('SDC','LDC') THEN DO;
+         ITEM  = '632'; OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('CB1','CB2','CF1','CF2','CNT','MGI',
+                        'ITB','SAC','BMN','BMC','BMF','SCD','SCM',
+                        'MGS','MTB','BNB','BNN','CMB','SMC') THEN DO;
+         ITEM = '631';
+         IF &INST='PBB' THEN DO;
+            AMOUNT = AMOUNT + UTAICT;
+         END;
+         OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('ISB','IDS','IBZ','ICN') THEN DO;
+              IF UTMM1 = 'GGB' THEN ITEM = '636';
+              ELSE IF UTMM1 = 'NGB' THEN ITEM = '635';
+              AMOUNT = AMOUNT + UTAICT;
+              OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('DHB','KHA') THEN DO;
+         ITEM = '636'; OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('DBD') THEN DO;
+         ITEM = '634'; OUTPUT;
+      END;
+   END;
+   IF UTSTY IN ('SIP') THEN DO;
+      ITEM='610'; OUTPUT;
+   END;
+*;
+%INC PGM(KALMLIQ4);
+*;
 
-2. Loading WALK.TXT and TEMPL.TXT...
-    Read 63 records from walk.txt
-    NOTE: LCRCDGL format lookup not populated - 'item' will be blank for all WALK records until ITEM_LOOKUP is filled in.
-    Read 70 records from templ.txt
-  WALK: 63 records
-  TEMPL: 70 records
+DATA KTBL (KEEP=BNMCODE AMOUNT AMTUSD AMTSGD) KTBLALL;
+   %DCLVAR
+   SET K1TBL(IN=A) K3TBL(IN=B) K1TBX;
+   IF      A THEN TBL = '1';
+   ELSE IF B THEN TBL = '3';
+   IF _N_ = 1 THEN DO;
+      SET REPTDATE;
+      RPYR  = YEAR(REPTDATE);
+      RPMTH = MONTH(REPTDATE);
+      RPDAY = DAY(REPTDATE);
+      IF MOD(RPYR,4) = 0 THEN RD2 = 29;
+   END;
+   IF ITEM ^= ' ';
+   IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1;
+   ELSE DO;
+      %REMMTH
+   END;
+   IF MATDT - ISSDT    < 8 THEN ORI30D = 0.1;
+   ELSE                         ORI30D = (MATDT-ISSDT)/30;
+   BNMCODE = PART||ITEM||'00'||PUT(REMMTH,REMFMT.)||'0000Y';
+   OUTPUT;
+   *------------------------------------------------*
+   *  DUPLICATE ANOTHER SET FOR PART 1              *
+   *  95 = PART 2-RM, 96 = PART 2-FX                *
+   *  93 = PART 1-RM, 94 = PART 1-FX                *
+   *------------------------------------------------*;
+   IF PART = '95' THEN SUBSTR(BNMCODE,1,2) = '93';
+   ELSE SUBSTR(BNMCODE,1,2) = '94';
+   OUTPUT;
+RUN;
 
-3. Processing KALMLIQ (K1TBL and K3TBL)...
-  Looking for K1TBL file...
-    Base path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/
-    Month: 07, Week: 4
-    Looking for exact matches:
-      k1tbl074.sas7bdat: ✓ Found
-  Using K1TBL file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/k1tbl074.sas7bdat
-    Successfully read: k1tbl074.sas7bdat (7199 rows, 61 columns)
-  Processing K1TBL with 7199 rows...
-    Columns (61): ['reptdate', 'gwab', 'gwan', 'gwas', 'gwapp', 'gwacs', 'gwbala', 'gwbalc', 'gwpaia', 'gwpaic', 'gwshn', 'gwctp', 'gwact', 'gwacd', 'gwsac', 'gwnanc', 'gwcnal', 'gwccy', 'gwcnar', 'gwcnap', 'gwdiaa', 'gwdiac', 'gwciaa', 'gwciac', 'gwratd', 'gwratc', 'gwdipa', 'gwdipc', 'gwcipa', 'gwcipc', 'gwpl1d', 'gwpl2d', 'gwpl1c', 'gwpl2c', 'gwpala', 'gwpalc', 'gwdlp', 'gwdlr', 'gwsdt', 'gwrdt', 'gwrrt', 'gwpdt', 'gwprt', 'gwpcm', 'gwmotc', 'gwmrtc', 'gwmrt', 'gwmdt', 'gwmcm', 'gwmwm', 'gwmvt', 'gwmvts', 'gwsrc', 'gwuc1', 'gwuc2', 'gwc2r', 'gwamap', 'gwexr', 'gwopt', 'gwocy', 'gwcbd']
-    !! WARNING [K1TBL]: expected columns not found after normalization: ['gwmpts', 'gwhsn']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
-    Unique values in GWMVT: ['P', '']
-    Rows with GWMVT = 'P': 7198
-    Sample rows (first 3):
-      Row 1:
-        gwmvt: 
-        gwccy: 
-        gwocy: 
-        gwctp: 
-        gwdlp: 
-        gwmdt: None
-        gwbalc: None
-      Row 2:
-        gwmvt: P
-        gwccy: USD
-        gwocy: MYR
-        gwctp: CD
-        gwdlp: FXS
-        gwmdt: 24321.0
-        gwbalc: 408600.0
-      Row 3:
-        gwmvt: P
-        gwccy: USD
-        gwocy: CNY
-        gwctp: BA
-        gwdlp: FXS
-        gwmdt: 24321.0
-        gwbalc: -4086000.0
-  K1TBL processing stats:
-    Total rows: 7199
-    Filtered out (GWMVT != 'P'): 1
-    Passed GWMVT = 'P': 7198
-    Excluded (XAU/XAT currency): 14
-    Records with item assigned: 0
-  K1TBL records: 0
-  Looking for K3TBL file...
-    Base path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/
-    Month: 07, Week: 4
-    Looking for exact matches:
-      k3tbl074.sas7bdat: ✓ Found
-  Using K3TBL file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/k3tbl074.sas7bdat
-    Successfully read: k3tbl074.sas7bdat (20171 rows, 39 columns)
-  Processing K3TBL with 20171 rows...
-    Columns (39): ['reptdate', 'utsty', 'utref', 'utdlp', 'utdlr', 'utsmn', 'utcus', 'utclc', 'utctp', 'utfcv', 'utidt', 'utlcd', 'utncd', 'utmdt', 'utcbd', 'utcpr', 'utqds', 'utpcp', 'utamoc', 'utdpf', 'utaict', 'utaicy', 'utait', 'utdpet', 'utdpey', 'utdpe', 'utasn', 'utosd', 'utca2', 'utsac', 'utcnap', 'utcnar', 'utcnal', 'utccy', 'utamts', 'matdt', 'issdt', 'ddate', 'xdate']
-    !! WARNING [K3TBL]: expected columns not found after normalization: ['utmat', 'utmm1']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
-    Unique values in UTREF: ['DLG', 'ISV', 'PSD', 'DRI', 'AFS', 'AFSLIQ', '', 'INV']
-    Unique values in UTSTY: ['MTB', 'MGI', 'ISD', 'MGS', 'ITB', 'PBA', 'CB1', 'LDC', '', 'DIC', 'ISB', 'DIM', 'DBD']
-    Sample rows (first 3):
-      Row 1:
-        utref: 
-        utsty: 
-        utdlp: 
-        utcus: 
-        utctp: 
-        utamoc: None
-        utdpf: None
-      Row 2:
-        utref: AFS
-        utsty: CB1
-        utdlp: MSP
-        utcus: OSKIBB
-        utctp: BM
-        utamoc: 80000000.0
-        utdpf: 0.0
-      Row 3:
-        utref: AFS
-        utsty: CB1
-        utdlp: MSP
-        utcus: OSKIBB
-        utctp: BM
-        utamoc: 100000000.0
-        utdpf: 0.0
-  K3TBL warning: unsupported operand type(s) for -: 'NoneType' and 'NoneType'
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDLCRM.py", line 712, in process_k3tbl
-    amount = utamoc - utdpf
-TypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'
-  K3TBL records: 0
-  Total treasury records: 0
 
-4. Processing DCIWH.DCID...
-  Using DCI file: dcid0731.sas7bdat
-    Successfully read: dcid0731.sas7bdat (230 rows, 33 columns)
-    Columns (33): ['ticketno', 'custname', 'newic', 'salesid', 'custcode', 'invcurrac', 'altcurrac', 'accint', 'rollover', 'convertind', 'dealerid', 'managerid', 'custicketno', 'branch', 'product', 'invcurr', 'altcurr', 'invamt', 'altamt', 'tenor', 'strikert', 'spotrt', 'dcirt', 'mmrt', 'premrec', 'prempaid', 'unwindcost', 'newdeal', 'tradedt', 'startdt', 'fixingdt', 'matdt', 'statusind']
-    Sample rows (first 3):
-      Row 1:
-        matdt: 24321.0
-        startdt: 24314.0
-        invamt: 50000.0
-        invcurr: MYR
-        custcode: 78.0
-        product: DCI
-        ticketno: Z30575
-      Row 2:
-        matdt: 24331.0
-        startdt: 24300.0
-        invamt: 100000.0
-        invcurr: MYR
-        custcode: 78.0
-        product: DCI
-        ticketno: Z30173
-      Row 3:
-        matdt: 24335.0
-        startdt: 24303.0
-        invamt: 100000.0
-        invcurr: MYR
-        custcode: 78.0
-        product: DCI
-        ticketno: Z30285
-  DCI warning: '>' not supported between instances of 'float' and 'datetime.date'
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDLCRM.py", line 1074, in process_dci
-    if matdt and startdt and matdt > rep_date['date'] and startdt <= rep_date['date']:
-TypeError: '>' not supported between instances of 'float' and 'datetime.date'
-  DCI records: 0
-
-5. Processing CIS.CUSTDLY (parquet)...
-  Using CIS file: CIS_CUST_DAILY.parquet
-    Successfully read: CIS_CUST_DAILY.parquet (33049519 rows, 99 columns)
-    !! WARNING [CIS_CUST_DAILY]: expected columns not found after normalization: ['newic']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
-    CIS equity rows after filter: 0
-  CIS records: 0
-
-6. Processing EQUA.UTMS/UTFX/UTRP...
-  Looking for UTSAS files in: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/equa/
-    RPTDT format: 260731 (260731)
-    Total files in directory: 3
-    First 20 files:
-      - utfx260731.sas7bdat
-      - utms260731.sas7bdat
-      - utrp260731.sas7bdat
-
-    Looking for utms files...
-      Pattern 'utms260731.sas7bdat' matched 1 file(s):
-        - utms260731.sas7bdat
-      Using: utms260731.sas7bdat
-    Successfully read: utms260731.sas7bdat (20096 rows, 99 columns)
-      Columns in utms260731.sas7bdat (99): ['branch', 'dealref', 'dealtype', 'portref', 'depotid', 'depotfd', 'custno', 'custloc', 'custname', 'custeqno', 'custeqtp', 'custacc', 'custid', 'custfiss', 'secno', 'currency', 'sectype', 'secdesc', 'secissr', 'issrloc', 'issrname', 'issracpn', 'issreqtp', 'issracc', 'issrid', 'issrtp2', 'couponrt', 'capvalue', 'dealdesc', 'faltvalu', 'facevalu', 'capprice', 'discquot', 'saledp', 'tranno', 'trantype', 'qtyldmat', 'custanal', 'custsana', 'custresc', 'custprtc', 'custrskc', 'issrprat', 'issrarat', 'dealrcd', 'brokrcd', 'brokamt', 'sundref', 'intacr', 'acprft', 'acprftys', 'amtacrin', 'camtowne', 'amtowned', 'bookvalu', 'discprm', 'mrktvalu', 'discpltd', 'discprtd', 'undiscpr', 'discprmn', 'discprpf', 'orgdisc', 'yieldmat', 'porttype', 'baserate', 'capflat', 'coupfreq', 'couprate', 'coupspre', 'issrsund', 'issrresc', 'issrprtc', 'issracpt', 'intbear', 'issprice', 'isssize', 'priceind', 'seclegcd', 'secorgcd', 'mrktmkr1', 'stdsecdc', 'race', 'busdate', 'trddate', 'valudate', 'matdate', 'issdate', 'lstcpndt', 'nxtcpndt', 'cstlc', 'cltlc', 'deal_folder', 'reval_accrued_amt', 'type_of_deal', 'fo_deal_id', 'unrealise_profit_loss', 'exp_credit_loss', 'capital_instrument_type']
-      Added 20096 records from utms260731.sas7bdat
-
-    Looking for utfx files...
-      Pattern 'utfx260731.sas7bdat' matched 1 file(s):
-        - utfx260731.sas7bdat
-      Using: utfx260731.sas7bdat
-    Successfully read: utfx260731.sas7bdat (6061 rows, 39 columns)
-      Columns in utfx260731.sas7bdat (39): ['branch', 'dealtype', 'dealref', 'applcode', 'basictyp', 'custno', 'custloc', 'custname', 'custeqno', 'custeqtp', 'custacc', 'custid', 'custfiss', 'movetype', 'movesub', 'purchcur', 'salescur', 'amtpay', 'mmpriamt', 'amtrecei', 'exchrate', 'custanal', 'custsana', 'custresc', 'custprtc', 'custrskc', 'custgrp', 'dealcode', 'brokrcd', 'brokamt', 'intlsnbd', 'totint', 'optdeal', 'custpart', 'race', 'mayeqamt', 'busdate', 'strtdate', 'matdate']
-      Added 6061 records from utfx260731.sas7bdat
-
-    Looking for utrp files...
-      Pattern 'utrp260731.sas7bdat' matched 1 file(s):
-        - utrp260731.sas7bdat
-      Using: utrp260731.sas7bdat
-    Successfully read: utrp260731.sas7bdat (66 rows, 79 columns)
-      Columns in utrp260731.sas7bdat (79): ['branch', 'dealtype', 'dealref', 'portref', 'depotid', 'custno', 'custloc', 'custname', 'custeqno', 'custeqtp', 'custacc', 'custid', 'custfiss', 'secno', 'currency', 'sectype', 'secdesc', 'secissr', 'issrloc', 'issrname', 'issracpn', 'issreqtp', 'issracc', 'issrid', 'issrtp2', 'pchpric', 'salepric', 'cernvalu', 'certpchp', 'cersalep', 'trantype', 'facevalu', 'tpchproc', 'tsalproc', 'rpintrat', 'custanal', 'custsana', 'custresc', 'custprtc', 'custrskc', 'brokrcd', 'brokamt', 'porttype', 'origport', 'baserate', 'capflat', 'coupfreq', 'couprate', 'coupspre', 'issranal', 'issrsund', 'issrresc', 'issrprtc', 'issracpt', 'issprice', 'seclegcd', 'secorgcd', 'stdpoors', 'mrktmkr1', 'rrepref', 'rrbrpamt', 'rrsosamt', 'curowamt', 'curboamt', 'intacrdt', 'custpart', 'custfutu', 'indprc', 'indyld', 'busdate', 'reposrtd', 'repomatd', 'dealdate', 'issdate', 'matdate', 'nxtcpndt', 'lstcpndt', 'tpchproc_fcy', 'tsalproc_fcy']
-      Added 66 records from utrp260731.sas7bdat
-
-    Total UTSAS records: 26,223
-  UTSAS records: 26,200
-
-7. Processing LCR.FD/SA/CA/FCYCA...
-    Successfully read: fdhold.sas7bdat (57 rows, 8 columns)
-    [fd] Columns (8): ['bnmcode', 'curcode', 'amount', 'item', 'fdpledge1', 'fxpledge1', 'fdpledge2', 'fxpledge2']
-    !! WARNING [core_banking:fd]: expected columns not found after normalization: ['custcd', 'custcdx', 'acctno', 'custno', 'rem30d', 'remmth']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
-    Successfully read: fd30.sas7bdat (2656534 rows, 11 columns)
-    [fd] Columns (11): ['branch', 'acctno', 'custcd', 'amount', 'product', 'intplan', 'curcode', 'fdhold', 'remmth', 'rem30d', 'bnmcode']
-    !! WARNING [core_banking:fd]: expected columns not found after normalization: ['custcdx', 'custno']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
-    Successfully read: sa30.sas7bdat (4238423 rows, 7 columns)
-    [sa] Columns (7): ['custcd', 'branch', 'acctno', 'product', 'amount', 'curcode', 'bnmcode']
-    !! WARNING [core_banking:sa]: expected columns not found after normalization: ['custcdx', 'custno', 'rem30d', 'remmth']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
-    Successfully read: ca30.sas7bdat (825297 rows, 9 columns)
-    [ca] Columns (9): ['custcd', 'branch', 'acctno', 'product', 'amount', 'curcode', 'intrate', 'billerind', 'bnmcode']
-    !! WARNING [core_banking:ca]: expected columns not found after normalization: ['custcdx', 'custno', 'rem30d', 'remmth']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
-    Successfully read: fcyca30.sas7bdat (71165 rows, 9 columns)
-    [fcyca] Columns (9): ['branch', 'acctno', 'product', 'amount', 'curcode', 'intrate', 'billerind', 'custcd', 'bnmcode']
-    !! WARNING [core_banking:fcyca]: expected columns not found after normalization: ['custcdx', 'custno', 'rem30d', 'remmth']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
-  Banking records: 7,791,476
-
-8. Processing CISDP/CISCA.DEPOSIT...
-  CIS info records: 0
-
-9. Processing LIST.LCR_ECP...
-    Successfully read: lcr_ecp.sas7bdat (92893 rows, 8 columns)
-  ECP records: 92,893
-
-============================================================
-PROCESSING DATA
-============================================================
-
-Combined treasury + DCI: 0 records
-Enhanced treasury: 0 records
-Enhanced banking: 7,791,476 records
-
-Applying insurance split...
-Banking after insurance split: 7,791,476 records
-
-Total records before consolidation: 7,791,476
-
-Consolidating...
-  Consolidated to 30 BNM code x currency combinations
-
-Generating LCR report (text format)...
-  ✓ lcr31.txt: 2 items x 5 columns
-
-============================================================
-SUMMARY
-============================================================
-
-Total: RM 285,363,833K
-
-By Source:
-  banking_fd: RM 187,846,660K
-  banking_ca: RM 59,320,765K
-  banking_sa: RM 35,274,335K
-  banking_fcyca: RM 2,922,072K
-
-============================================================
-✓ EIBDLCRM Complete
-============================================================
+*----------------------------------------------------------------*
+*  DISTRIBUTION PROFILE OF CUSTOMER DEPOSITS (PART 3)            *
+*----------------------------------------------------------------*;
+*------------------------------------------------*
+*  NON-INTERBANK REPOS                           *
+*------------------------------------------------*;
+DATA K1TBL;
+   KEEP CAT NAME AMOUNT;
+   LENGTH CAT $20 NAME $24;
+   SET BNMK.K1TBL&REPTMON&NOWK (RENAME=(GWBALC=AMOUNT GWSHN=NAME));
+   IF GWCCY = 'MYR' AND GWMVT = 'P' AND GWMVTS = 'M';
+   IF SUBSTR(GWCTP,1,1) ^= 'B' AND SUBSTR(GWDLP,2,2) IN ('MI','MT');
+   CAT = 'NON-INTERBANK REPOS';
+*;
+*------------------------------------------------*
+*  NON-INTERBANK NIDS                            *
+*------------------------------------------------*;
+DATA K3TBL;
+   KEEP CAT NAME AMOUNT;
+   LENGTH CAT $20 NAME $24;
+   SET BNMK.K3TBL&REPTMON&NOWK;
+   IF SUBSTR(UTCTP,1,1) ^= 'B' AND
+      UTREF IN ('PFD','PLD','PSD','PZD','PDC') AND
+      UTSTY IN ('IFD','ILD','ISD','IZD','IDC','IDP','IZP');
+   AMOUNT = UTAMOC - UTDPF;
+   NAME = UTCUS || UTCLC;
+   CAT = 'NON-INTERBANK NIDS';
+*;
+PROC APPEND BASE=K1TBL DATA=K3TBL;
+*;
+PROC SUMMARY DATA=K1TBL NWAY;
+   CLASS CAT NAME;
+   VAR AMOUNT;
+   OUTPUT OUT=K1TBL (DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
