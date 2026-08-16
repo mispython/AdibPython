@@ -1,592 +1,644 @@
-Using report date: 31/03/26
-Report month: 03-2026
-Starting EIQPROM2 processing...
-Report Date: 31/03/26
-Report Month: 03
+#!/usr/bin/env python3
+"""
+File Name: EIEMCRLS.py
+Report ID: EIQPROM2
+Automailing Listing for Reinstatement of Loan
+"""
 
-Step 1: Loading and filtering PROMOTE.LOAN data...
-Loading file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIEMCRLS/loan03.sas7bdat
-Total records in LOAN file: 180643
-REPAID column type: Float64
-REPAID min: -1681335.0300019996
-REPAID max: 15003207.6379664
-Records after REPAID > 100000 filter: 62203
-Records after deduplication by GUAREND: 54276
-Unique GUAREND values: 54276
-Total records: 54276
-Duplicate GUARENDs remaining: 0
-Final records in RLSLIST: 54276
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIEMCRLS.py:209: DeprecationWarning: `pl.count()` is deprecated. Please use `pl.len()` instead.
-(Deprecated in version 0.20.5)
-  branch_counts = rlslist.group_by('BRANCH').agg(pl.count().alias('count'))
-Branch distribution in RLSLIST:
-  Branch 237.0: 55 records
-  Branch 24.0: 422 records
-  Branch 29.0: 158 records
-  Branch 46.0: 208 records
-  Branch 77.0: 131 records
-  Branch 48.0: 161 records
-  Branch 702.0: 9 records
-  Branch 56.0: 156 records
-  Branch 248.0: 65 records
-  Branch 197.0: 186 records
-  Branch 86.0: 54 records
-  Branch 70.0: 27 records
-  Branch 5.0: 314 records
-  Branch 113.0: 107 records
-  Branch 139.0: 58 records
-  Branch 249.0: 281 records
-  Branch 252.0: 71 records
-  Branch 228.0: 217 records
-  Branch 141.0: 80 records
-  Branch 202.0: 173 records
-  Branch 121.0: 326 records
-  Branch 168.0: 187 records
-  Branch 274.0: 205 records
-  Branch 89.0: 377 records
-  Branch 111.0: 311 records
-  Branch 156.0: 370 records
-  Branch 269.0: 207 records
-  Branch 179.0: 152 records
-  Branch 103.0: 164 records
-  Branch 242.0: 157 records
-  Branch 92.0: 219 records
-  Branch 50.0: 293 records
-  Branch 247.0: 192 records
-  Branch 273.0: 296 records
-  Branch 257.0: 134 records
-  Branch 41.0: 141 records
-  Branch 165.0: 220 records
-  Branch 138.0: 83 records
-  Branch 266.0: 113 records
-  Branch 108.0: 124 records
-  Branch 124.0: 185 records
-  Branch 6.0: 346 records
-  Branch 7.0: 1066 records
-  Branch 176.0: 540 records
-  Branch 185.0: 188 records
-  Branch 267.0: 131 records
-  Branch 177.0: 417 records
-  Branch 153.0: 194 records
-  Branch 62.0: 281 records
-  Branch 35.0: 148 records
-  Branch 292.0: 20 records
-  Branch 15.0: 244 records
-  Branch 125.0: 90 records
-  Branch 260.0: 57 records
-  Branch 51.0: 125 records
-  Branch 192.0: 20 records
-  Branch 285.0: 92 records
-  Branch 161.0: 232 records
-  Branch 217.0: 586 records
-  Branch 144.0: 216 records
-  Branch 127.0: 226 records
-  Branch 147.0: 161 records
-  Branch 178.0: 81 records
-  Branch 291.0: 46 records
-  Branch 76.0: 158 records
-  Branch 205.0: 141 records
-  Branch 175.0: 66 records
-  Branch 239.0: 74 records
-  Branch 40.0: 141 records
-  Branch 150.0: 400 records
-  Branch 184.0: 226 records
-  Branch 80.0: 145 records
-  Branch 140.0: 188 records
-  Branch 74.0: 20 records
-  Branch 276.0: 80 records
-  Branch 191.0: 46 records
-  Branch 158.0: 176 records
-  Branch 72.0: 124 records
-  Branch 174.0: 360 records
-  Branch 63.0: 70 records
-  Branch 19.0: 184 records
-  Branch 258.0: 143 records
-  Branch 96.0: 108 records
-  Branch 270.0: 143 records
-  Branch 278.0: 82 records
-  Branch 232.0: 116 records
-  Branch 105.0: 351 records
-  Branch 173.0: 143 records
-  Branch 66.0: 125 records
-  Branch 64.0: 263 records
-  Branch 58.0: 506 records
-  Branch 68.0: 546 records
-  Branch 32.0: 197 records
-  Branch 226.0: 85 records
-  Branch 123.0: 321 records
-  Branch 244.0: 111 records
-  Branch 264.0: 209 records
-  Branch 65.0: 256 records
-  Branch 172.0: 381 records
-  Branch 283.0: 167 records
-  Branch 9.0: 229 records
-  Branch 43.0: 505 records
-  Branch 259.0: 99 records
-  Branch 703.0: 21 records
-  Branch 95.0: 310 records
-  Branch 114.0: 185 records
-  Branch 117.0: 79 records
-  Branch 79.0: 377 records
-  Branch 39.0: 68 records
-  Branch 234.0: 245 records
-  Branch 4.0: 502 records
-  Branch 13.0: 386 records
-  Branch 201.0: 444 records
-  Branch 59.0: 407 records
-  Branch 295.0: 34 records
-  Branch 289.0: 59 records
-  Branch 265.0: 99 records
-  Branch 78.0: 205 records
-  Branch 44.0: 260 records
-  Branch 207.0: 333 records
-  Branch 186.0: 222 records
-  Branch 294.0: 31 records
-  Branch 81.0: 155 records
-  Branch 91.0: 621 records
-  Branch 152.0: 226 records
-  Branch 198.0: 173 records
-  Branch 263.0: 65 records
-  Branch 69.0: 128 records
-  Branch 90.0: 334 records
-  Branch 163.0: 122 records
-  Branch 704.0: 132 records
-  Branch 73.0: 162 records
-  Branch 164.0: 202 records
-  Branch 203.0: 335 records
-  Branch 288.0: 49 records
-  Branch 110.0: 850 records
-  Branch 145.0: 160 records
-  Branch 701.0: 15 records
-  Branch 87.0: 99 records
-  Branch 106.0: 159 records
-  Branch 251.0: 115 records
-  Branch 159.0: 186 records
-  Branch 261.0: 85 records
-  Branch 211.0: 168 records
-  Branch 130.0: 354 records
-  Branch 222.0: 683 records
-  Branch 122.0: 223 records
-  Branch 148.0: 162 records
-  Branch 55.0: 165 records
-  Branch 281.0: 271 records
-  Branch 17.0: 229 records
-  Branch 209.0: 303 records
-  Branch 190.0: 78 records
-  Branch 3.0: 172 records
-  Branch 30.0: 116 records
-  Branch 231.0: 196 records
-  Branch 170.0: 145 records
-  Branch 136.0: 140 records
-  Branch 104.0: 64 records
-  Branch 34.0: 215 records
-  Branch 115.0: 91 records
-  Branch 241.0: 128 records
-  Branch 36.0: 275 records
-  Branch 107.0: 269 records
-  Branch 160.0: 152 records
-  Branch 85.0: 166 records
-  Branch 284.0: 64 records
-  Branch 154.0: 239 records
-  Branch 57.0: 443 records
-  Branch 129.0: 175 records
-  Branch 20.0: 197 records
-  Branch 167.0: 31 records
-  Branch 37.0: 489 records
-  Branch 220.0: 30 records
-  Branch 290.0: 202 records
-  Branch 225.0: 170 records
-  Branch 16.0: 141 records
-  Branch 112.0: 226 records
-  Branch 25.0: 77 records
-  Branch 189.0: 79 records
-  Branch 118.0: 148 records
-  Branch 128.0: 133 records
-  Branch 42.0: 577 records
-  Branch 49.0: 114 records
-  Branch 22.0: 125 records
-  Branch 256.0: 105 records
-  Branch 26.0: 186 records
-  Branch 14.0: 94 records
-  Branch 287.0: 678 records
-  Branch 83.0: 149 records
-  Branch 18.0: 223 records
-  Branch 2.0: 168 records
-  Branch 33.0: 301 records
-  Branch 245.0: 98 records
-  Branch 221.0: 341 records
-  Branch 67.0: 167 records
-  Branch 196.0: 127 records
-  Branch 21.0: 838 records
-  Branch 224.0: 671 records
-  Branch 60.0: 343 records
-  Branch 206.0: 256 records
-  Branch 296.0: 29 records
-  Branch 230.0: 155 records
-  Branch 61.0: 616 records
-  Branch 54.0: 244 records
-  Branch 146.0: 161 records
-  Branch 183.0: 306 records
-  Branch 204.0: 265 records
-  Branch 195.0: 140 records
-  Branch 23.0: 191 records
-  Branch 38.0: 203 records
-  Branch 171.0: 137 records
-  Branch 31.0: 250 records
-  Branch 28.0: 485 records
-  Branch 155.0: 100 records
-  Branch 47.0: 583 records
-  Branch 135.0: 141 records
-  Branch 71.0: 143 records
-  Branch 93.0: 109 records
-  Branch 194.0: 151 records
-  Branch 240.0: 162 records
-  Branch 157.0: 197 records
-  Branch 88.0: 220 records
-  Branch 262.0: 133 records
-  Branch 10.0: 493 records
-  Branch 109.0: 104 records
-  Branch 282.0: 53 records
-  Branch 210.0: 124 records
-  Branch 254.0: 57 records
-  Branch 268.0: 310 records
-  Branch 142.0: 59 records
-  Branch 11.0: 126 records
-  Branch 149.0: 78 records
-  Branch 286.0: 292 records
-  Branch 151.0: 187 records
-  Branch 169.0: 145 records
-  Branch 293.0: 49 records
-  Branch 75.0: 67 records
-  Branch 143.0: 90 records
-  Branch 133.0: 106 records
-  Branch 116.0: 212 records
-  Branch 126.0: 222 records
-  Branch 137.0: 123 records
-  Branch 233.0: 129 records
-  Branch 162.0: 152 records
-  Branch 94.0: 169 records
-  Branch 208.0: 265 records
-  Branch 8.0: 246 records
-  Branch 275.0: 135 records
-  Branch 180.0: 151 records
-  Branch 97.0: 101 records
-  Branch 102.0: 108 records
-  Branch 120.0: 182 records
-  Branch 45.0: 592 records
-  Branch 235.0: 123 records
-  Branch 280.0: 105 records
-  Branch 193.0: 65 records
-  Branch 243.0: 78 records
-  Branch 27.0: 211 records
-  Branch 199.0: 328 records
-  Branch 52.0: 315 records
-  Branch 131.0: 183 records
-  Branch 53.0: 229 records
+import pyreadstat
+import polars as pl
+from datetime import datetime, timedelta
+from pathlib import Path
+import pandas as pd
+import sys
 
-Step 2: Processing PBB data...
-Total records in LN.LNNAME: 5534955
-LN.LNNAME columns: ['NAMELN1', 'NAMELN2', 'NAMELN3', 'NAMELN4', 'NAMELN5', 'ACCTNO', 'SECPHONE', 'PRIPHONE']
-Records in PBBNAME after merge: 48954
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIEMCRLS.py:240: DeprecationWarning: `pl.count()` is deprecated. Please use `pl.len()` instead.
-(Deprecated in version 0.20.5)
-  brch_counts = pbbname.group_by('BRCH').agg(pl.count().alias('count'))
-BRCH distribution in PBBNAME:
-  MKH: 56 records
-  BDR: 93 records
-  BBT: 301 records
-  BCG: 131 records
-  BAM: 331 records
-  KDA: 88 records
-  JJG: 146 records
-  TMH: 83 records
-  JTZ: 215 records
-  SS2: 256 records
-  JLT: 228 records
-  PJN: 212 records
-  TEE: 44 records
-  KKR: 49 records
-  PLT: 251 records
-  MRD: 17 records
-  SPK: 160 records
-  PRA: 316 records
-  JTS: 60 records
-  DUA: 165 records
-  PPG: 298 records
-  SMY: 101 records
-  KLG: 198 records
-  SDK: 225 records
-  RAU: 124 records
-  JIH: 130 records
-  KBG: 113 records
-  JAH: 568 records
-  SCA: 137 records
-  JAS: 55 records
-  STL: 73 records
-  TMM: 112 records
-  KKL: 41 records
-  TIH: 163 records
-  INN: 188 records
-  PSG: 150 records
-  JPN: 218 records
-  JPR: 79 records
-  SEA: 138 records
-  KKI: 61 records
-  TMA: 71 records
-  SPL: 161 records
-  KDN: 44 records
-  JLP: 90 records
-  BWK: 118 records
-  BPR: 179 records
-  HSL: 94 records
-  CPE: 164 records
-  KPR: 99 records
-  TCL: 186 records
-  LMM: 361 records
-  BSL: 42 records
-  TSK: 315 records
-  KHG: 189 records
-  TMJ: 341 records
-  KBS: 187 records
-  TML: 100 records
-  BIH: 283 records
-  GHS: 23 records
-  CTD: 137 records
-  MTK: 154 records
-  LDU: 79 records
-  SKC: 202 records
-  JTH: 255 records
-  CAH: 54 records
-  WMU: 75 records
-  CLN: 44 records
-  BPT: 738 records
-  BJL: 19 records
-  TSA: 473 records
-  JSI: 250 records
-  KGR: 167 records
-  KMT: 180 records
-  BSA: 44 records
-  BHU: 231 records
-  SBU: 497 records
-  SRM: 211 records
-  SPT: 45 records
-  SJM: 321 records
-  TMR: 315 records
-  GMS: 58 records
-  KLC: 167 records
-  KTI: 323 records
-  TTJ: 80 records
-  BBB: 176 records
-  TCS: 129 records
-  JAI: 83 records
-  GRN: 113 records
-  TNM: 165 records
-  SKN: 201 records
-  BCM: 299 records
-  PIH: 165 records
-  JDK: 91 records
-  TMD: 108 records
-  TPN: 223 records
-  PNS: 157 records
-  SST: 157 records
-  TPD: 161 records
-  S14: 170 records
-  TMW: 104 records
-  TMB: 544 records
-  MSL: 127 records
-  LBN: 162 records
-  NTL: 204 records
-  JSB: 118 records
-  BSY: 130 records
-  TDI: 112 records
-  TIN: 283 records
-  JPI: 72 records
-  MLK: 458 records
-  TCT: 124 records
-  TDC: 664 records
-  BTA: 60 records
-  DJA: 124 records
-  IMO: 272 records
-  BSD: 125 records
-  TMG: 172 records
-  BSJ: 225 records
-  BBM: 163 records
-  SMG: 110 records
-  JTA: 124 records
-  SIK: 16 records
-  CMR: 148 records
-  SRB: 530 records
-  BSP: 62 records
-  OUG: 145 records
-  SPG: 182 records
-  KTN: 234 records
-  PDA: 428 records
-  BSI: 108 records
-  PPR: 111 records
-  TAI: 270 records
-  JCL: 294 records
-  KMY: 72 records
-  SLY: 177 records
-  TSM: 199 records
-  TPI: 358 records
-  KUM: 211 records
-  BKR: 25 records
-  JBU: 1036 records
-  KAP: 155 records
-  RSH: 359 records
-  APG: 198 records
-  KKM: 28 records
-  ATR: 169 records
-  KJG: 147 records
-  STW: 257 records
-  PRS: 94 records
-  DGG: 210 records
-  KPT: 40 records
-  BKI: 126 records
-  JMR: 103 records
-  PLI: 112 records
-  MSI: 358 records
-  PDG: 341 records
-  TDA: 144 records
-  PSA: 18 records
-  MIN: 77 records
-  AKH: 272 records
-  PBR: 94 records
-  PKG: 94 records
-  MRI: 264 records
-  TBM: 246 records
-  SAT: 527 records
-  GRT: 105 records
-  PSE: 152 records
-  LBG: 54 records
-  PTT: 39 records
-  EDU: 103 records
-  BBG: 23 records
-  BMC: 63 records
-  STP: 149 records
-  KSR: 93 records
-  KLS: 53 records
-  TPG: 518 records
-  BBA: 158 records
-  MTH: 139 records
-  USJ: 168 records
-  STG: 191 records
-  TRI: 203 records
-  JKL: 193 records
-  ASR: 399 records
-  SSA: 139 records
-  TMI: 218 records
-  WSS: 192 records
-  BEN: 127 records
-  PJA: 135 records
-  BFT: 67 records
-  BNH: 55 records
-  NLI: 136 records
-  JRT: 56 records
-  JBH: 191 records
-  TKK: 148 records
-  KBD: 42 records
-  TDY: 187 records
-  BPJ: 166 records
-  SAM: 58 records
-  UTM: 222 records
-  KLI: 587 records
-  KUG: 602 records
-  SGK: 99 records
-  SJA: 191 records
-  TWU: 208 records
-  SGM: 536 records
-  CKI: 138 records
-  SBH: 131 records
-  IGN: 298 records
-  BTL: 328 records
-  KBU: 345 records
-  KJA: 79 records
-  KKG: 64 records
-  JHL: 105 records
-  TKA: 167 records
-  JRC: 157 records
-  LHA: 276 records
-  SUA: 642 records
-  JYK: 204 records
-  KTU: 76 records
-  BSR: 164 records
-  KNG: 67 records
-  JSS: 156 records
-  KCY: 173 records
-  PRJ: 84 records
-  MUA: 455 records
-  GMG: 82 records
-  SRK: 144 records
-  BPI: 131 records
-  BBP: 295 records
-  MLB: 134 records
-  JPP: 98 records
-  SSH: 145 records
-  MKA: 194 records
-  BTW: 252 records
-  BDA: 114 records
-  BTG: 427 records
-  JKA: 116 records
-  IWS: 1 records
-  PTS: 159 records
-  RWG: 155 records
-  KPH: 48 records
-  MSG: 91 records
-  SAN: 94 records
-  PDN: 251 records
-  SBM: 120 records
-  LDO: 189 records
-  JRU: 406 records
-  BMM: 548 records
-  BMJ: 13 records
-  JRL: 128 records
-  PJO: 156 records
-  SNG: 125 records
-  JBB: 133 records
-  SGB: 118 records
-  TJJ: 818 records
-  PKL: 403 records
-  BTR: 69 records
-  KPG: 238 records
-  SPI: 396 records
-  KKU: 272 records
-  RLU: 163 records
-Records in PBBNAME (non-email): 38764
-Records in MAILPBB (email): 10190
 
-Writing EMCPBB file...
-EMCPBB records written: 38764
+# ============================================================================
+# CONFIGURATION AND PATHS
+# ============================================================================
 
-Processing MAILPBB email statements...
-Writing EMLPBB file...
-EMLPBB records written: 10190
-Writing EMXPBB index file...
-EMXPBB records written: 10190
+# Input paths
+PROMOTE_LOAN_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIEMCRLS/loan{month}.sas7bdat"
+LN_LNNAME_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIEMCRLS/ln/lnname.sas7bdat"
+LNI_LNNAME_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIEMCRLS/lni/lnname.sas7bdat"
 
-Step 3: Processing PIB data...
-Total records in LNI.LNNAME: 1661817
-Records in PIBNAME after merge: 5323
-Records in PIBNAME (non-email): 4242
-Records in MAILPIB (email): 1081
+# Output paths
+EMCPBB_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emcpbb.txt"
+EMCPBBS_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emcpbbs.txt"
+EMLPBB_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emlpbb.txt"
+EMLPBBS_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emlpbbs.txt"
+EMXPBB_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emxpbb.txt"
+EMCPIB_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emcpib.txt"
+EMCPIBS_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emcpibs.txt"
+EMLPIB_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emlpib.txt"
+EMLPIBS_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emlpibs.txt"
+EMXPIB_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/emxpib.txt"
+REPORT_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/eiqprom2_report.txt"
 
-Writing EMCPIB file...
-EMCPIB records written: 4242
+# Create output directory if it doesn't exist
+Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS").mkdir(parents=True, exist_ok=True)
 
-Processing MAILPIB email statements...
-Writing EMLPIB file...
-EMLPIB records written: 1081
-Writing EMXPIB index file...
-EMXPIB records written: 1081
 
-Step 4: Generating report...
-Total records for report: 43006
-Report written to: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/eiqprom2_report.txt
+# ============================================================================
+# DATE CALCULATIONS
+# ============================================================================
 
-======================================================================
-EIEMCRLS processing completed successfully!
-======================================================================
-Report Date: 31/03/26
-Data Month: 03-2026
-Total non-email records (PBB + PIB): 43006
-======================================================================
+def calculate_report_dates(run_date=None):
+    """
+    Calculate report dates matching SAS logic:
+    REPTDATE = TODAY() - DAY(TODAY())
+    This gives the last day of the previous month
+    """
+    if run_date is None:
+        today = datetime.now()
+    else:
+        today = run_date
+    
+    reptdate = today - timedelta(days=today.day)
+    
+    reptdt = reptdate.strftime('%d%m%y')
+    indxdt = reptdate.strftime('%Y%m%d')
+    rdate = reptdate.strftime('%d/%m/%y')
+    reptmon = f"{reptdate.month:02d}"
+    reptyr = str(reptdate.year)
+    mthnam = reptdate.strftime('%b').upper()
+
+    return {
+        'reptdate': reptdate,
+        'reptdt': reptdt,
+        'indxdt': indxdt,
+        'rdate': rdate,
+        'reptmon': reptmon,
+        'reptyr': reptyr,
+        'mthnam': mthnam
+    }
+
+
+# Check for command line date argument
+if len(sys.argv) > 1:
+    try:
+        run_date_str = sys.argv[1]
+        run_date = datetime.strptime(run_date_str, '%Y-%m-%d')
+        print(f"Using specified run date: {run_date_str}")
+        dates = calculate_report_dates(run_date)
+    except ValueError:
+        print(f"Invalid date format: {sys.argv[1]}. Using today's date.")
+        dates = calculate_report_dates()
+else:
+    dates = calculate_report_dates()
+
+REPTDT = dates['reptdt']
+INDXDT = dates['indxdt']
+RDATE = dates['rdate']
+REPTMON = dates['reptmon']
+REPTYR = dates['reptyr']
+MTHNAM = dates['mthnam']
+
+print(f"Using report date: {RDATE}")
+print(f"Report month: {REPTMON}-{REPTYR}")
+
+
+# ============================================================================
+# SAS-LIKE FUNCTIONS
+# ============================================================================
+
+def encr_id(id_value):
+    """
+    ENCR_ID macro equivalent
+    SAS: ID = COMPRESS(NEWIC); %ENCR_ID;
+    """
+    if not id_value or pd.isna(id_value) or str(id_value).strip() == '':
+        return ' ' * 40
+    
+    # IDS = UPCASE(ID) - SAS converts to uppercase
+    ids = str(id_value).upper()
+    
+    mask_ids = ""
+    
+    # Translation table for encryption
+    translation_map = {
+        '0': 'B', '1': 'C', '2': 'A', '3': 'D', '4': 'X',
+        '5': '9', '6': 'G', '7': 'E', '8': 'H', '9': 'I'
+    }
+    
+    # Encrypt each character
+    for char in ids:
+        # CH_X = RANK(PUT(CH,$ASCII.)) - get ASCII value
+        ascii_val = ord(char)
+        ch_x = str(ascii_val)
+        
+        # MASK = TRANSLATE(CH_X,'BCADX9GEHI','0123456789')
+        mask = ""
+        for digit in ch_x:
+            if digit in translation_map:
+                mask += translation_map[digit]
+            else:
+                mask += digit
+        
+        # MASK_IDS = STRIP(MASK_IDS)|| MASK
+        mask_ids = mask_ids.strip() + mask
+    
+    return mask_ids[:40]
+
+
+def safe_int(value, default=0):
+    """Safely convert value to integer"""
+    if value is None or pd.isna(value) or value == '':
+        return default
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_str(value, default=''):
+    """Safely convert value to string"""
+    if value is None or pd.isna(value):
+        return default
+    return str(value)
+
+
+# ============================================================================
+# DATA PROCESSING
+# ============================================================================
+
+print("\n" + "="*70)
+print("Starting EIQPROM2 processing...")
+print(f"Report Date: {RDATE}")
+print(f"Report Month: {REPTMON}")
+print("="*70)
+
+# Step 1: Load and filter PROMOTE.LOAN data
+print("\nStep 1: Loading and filtering PROMOTE.LOAN data...")
+promote_path = PROMOTE_LOAN_PATH.format(month=REPTMON)
+print(f"Loading file: {promote_path}")
+
+# Read SAS file
+loan_df, loan_meta = pyreadstat.read_sas7bdat(promote_path)
+loan_pl = pl.from_pandas(loan_df)
+
+print(f"Total records in LOAN file: {len(loan_pl)}")
+
+# Check REPAID column
+print(f"\nREPAID statistics:")
+print(f"  Type: {loan_pl['REPAID'].dtype}")
+print(f"  Min: {loan_pl['REPAID'].min()}")
+print(f"  Max: {loan_pl['REPAID'].max()}")
+print(f"  Count > 100000: {loan_pl.filter(pl.col('REPAID') > 100000).height}")
+
+# Check GUAREND column
+print(f"\nGUAREND statistics:")
+print(f"  Null count: {loan_pl.filter(pl.col('GUAREND').is_null()).height}")
+print(f"  Empty string count: {loan_pl.filter(pl.col('GUAREND').cast(pl.Utf8).str.strip_chars() == '').height}")
+print(f"  Unique values: {loan_pl['GUAREND'].n_unique()}")
+
+# Filter records where REPAID > 100000
+rlslist = loan_pl.filter(pl.col('REPAID') > 100000)
+print(f"\nRecords after REPAID > 100000 filter: {len(rlslist)}")
+
+# Sort by GUAREND ascending, REPAID descending
+rlslist = rlslist.sort(['GUAREND', 'REPAID'], descending=[False, True])
+
+# Remove duplicates keeping first record per GUAREND
+rlslist = rlslist.unique(subset=['GUAREND'], keep='first')
+print(f"Records after deduplication by GUAREND: {len(rlslist)}")
+
+# Sort by ACCTNO for merge
+rlslist = rlslist.sort('ACCTNO')
+
+print(f"Final records in RLSLIST: {len(rlslist)}")
+
+# Check date columns that might need filtering
+date_columns = [col for col in loan_pl.columns if 'DT' in col.upper() or 'DATE' in col.upper()]
+print(f"\nDate columns in LOAN file: {date_columns}")
+
+# Check if there's a date field that might indicate loan status
+for col in ['EXPRDATE', 'ISSDTE', 'BLDAT', 'BLPDDAT', 'EXPDT', 'HOLDEXPD']:
+    if col in loan_pl.columns:
+        print(f"\n{col} statistics:")
+        print(f"  Min: {loan_pl[col].min()}")
+        print(f"  Max: {loan_pl[col].max()}")
+        print(f"  Null count: {loan_pl.filter(pl.col(col).is_null()).height}")
+
+
+# ============================================================================
+# PBB PROCESSING
+# ============================================================================
+
+print("\n" + "="*70)
+print("Step 2: Processing PBB data...")
+print("="*70)
+
+# Load LN.LNNAME
+lnname_df, lnname_meta = pyreadstat.read_sas7bdat(LN_LNNAME_PATH)
+lnname_pl = pl.from_pandas(lnname_df)
+
+print(f"Total records in LN.LNNAME: {len(lnname_pl)}")
+print(f"Unique ACCTNO in LN.LNNAME: {lnname_pl['ACCTNO'].n_unique()}")
+
+# Check ACCTNO type in both datasets
+print(f"\nACCTNO type in RLSLIST: {rlslist['ACCTNO'].dtype}")
+print(f"ACCTNO type in LNNAME: {lnname_pl['ACCTNO'].dtype}")
+
+# Check for overlapping ACCTNO
+rlslist_acctnos = set(rlslist['ACCTNO'].to_list())
+lnname_acctnos = set(lnname_pl['ACCTNO'].to_list())
+overlap = rlslist_acctnos.intersection(lnname_acctnos)
+print(f"Overlapping ACCTNO between RLSLIST and LNNAME: {len(overlap)}")
+
+# Merge with RLSLIST
+pbbname = lnname_pl.join(
+    rlslist.select(['ACCTNO', 'NEWIC', 'MAILCODE', 'EMAILADD', 'BRANCH', 'BRCH', 'NOTENO', 'PRODUCT']), 
+    on='ACCTNO', 
+    how='inner'
+)
+pbbname = pbbname.sort('ACCTNO')
+
+print(f"\nRecords in PBBNAME after merge: {len(pbbname)}")
+
+# Add encrypted ID using NEWIC
+# SAS: ID = COMPRESS(NEWIC); %ENCR_ID;
+pbbname = pbbname.with_columns([
+    pl.col('NEWIC').map_elements(
+        lambda x: encr_id(str(x).replace(' ', '') if pd.notna(x) else ' '), 
+        return_dtype=pl.Utf8
+    ).alias('MASK_IDS')
+])
+
+# Split based on MAILCODE and EMAILADD
+# SAS: IF MAILCODE IN (' ','13','14') AND EMAILADD NE '' THEN OUTPUT MAILPBB;
+mailpbb = pbbname.filter(
+    (pl.col('MAILCODE').cast(pl.Utf8).is_in([' ', '13', '14', '13.0', '14.0'])) &
+    (pl.col('EMAILADD').cast(pl.Utf8).str.strip_chars() != '')
+)
+
+pbbname = pbbname.filter(
+    ~((pl.col('MAILCODE').cast(pl.Utf8).is_in([' ', '13', '14', '13.0', '14.0'])) &
+      (pl.col('EMAILADD').cast(pl.Utf8).str.strip_chars() != ''))
+)
+
+print(f"Records in PBBNAME (non-email): {len(pbbname)}")
+print(f"Records in MAILPBB (email): {len(mailpbb)}")
+
+# Write EMCPBB file
+print("\nWriting EMCPBB file...")
+with open(EMCPBB_PATH, 'w') as f:
+    rowcnt = 0
+    for row in pbbname.iter_rows(named=True):
+        rowcnt += 1
+        branch = safe_int(row.get('BRANCH'))
+        acctno = safe_int(row.get('ACCTNO'))
+        
+        line = (
+            f"B"
+            f"{REPTDT}"
+            f"{safe_str(row.get('NAMELN1')):<40.40}"
+            f"{safe_str(row.get('NAMELN2')):<40.40}"
+            f"{safe_str(row.get('NAMELN3')):<40.40}"
+            f"{safe_str(row.get('NAMELN4')):<40.40}"
+            f"{safe_str(row.get('NAMELN5')):<40.40}"
+            f"{branch:07d}"
+            f"{acctno:011d}"
+            f"{safe_str(row.get('MASK_IDS')):<24.24}"
+        )
+        f.write(line + '\n')
+
+# Write EMCPBBS summary file
+with open(EMCPBBS_PATH, 'w') as f:
+    line = (
+        f"LNRIHLCP"
+        f"{' ' * 22}"
+        f"{REPTDT}"
+        f"{rowcnt:016d}"
+    )
+    f.write(line + '\n')
+
+print(f"EMCPBB records written: {rowcnt}")
+
+# Process MAILPBB
+if len(mailpbb) > 0:
+    print("\nProcessing MAILPBB email statements...")
+
+    mailpbb = mailpbb.with_columns([
+        pl.Series(name='ROWCNT', values=range(1, len(mailpbb) + 1))
+    ])
+
+    mailpbb = mailpbb.with_columns([
+        (pl.lit("PBB_EMAIL_STMT_RIL_C") +
+         pl.col('ROWCNT').cast(pl.Utf8).str.zfill(10) +
+         pl.lit("_") +
+         pl.lit(INDXDT)).alias('VAR_ID'),
+        (pl.lit(MTHNAM) + pl.lit(REPTYR)).alias('STATE_DTE')
+    ])
+
+    # Write EMLPBB file
+    print("Writing EMLPBB file...")
+    with open(EMLPBB_PATH, 'w') as f:
+        rowcnt = 0
+        for row in mailpbb.iter_rows(named=True):
+            rowcnt += 1
+            branch = safe_int(row.get('BRANCH'))
+            acctno = safe_int(row.get('ACCTNO'))
+            
+            line = (
+                f"B"
+                f"{REPTDT}"
+                f"{safe_str(row.get('NAMELN1')):<40.40}"
+                f"{safe_str(row.get('NAMELN2')):<40.40}"
+                f"{safe_str(row.get('NAMELN3')):<40.40}"
+                f"{safe_str(row.get('NAMELN4')):<40.40}"
+                f"{safe_str(row.get('NAMELN5')):<40.40}"
+                f"{branch:07d}"
+                f"{acctno:011d}"
+                f"{' '}"
+                f"{safe_str(row.get('VAR_ID')):<40.40}"
+                f"{' '}"
+                f"{safe_str(row.get('MASK_IDS')):<24.24}"
+            )
+            f.write(line + '\n')
+
+    # Write EMLPBBS summary file
+    with open(EMLPBBS_PATH, 'w') as f:
+        line = (
+            f"LNRIHLCE"
+            f"{' ' * 22}"
+            f"{REPTDT}"
+            f"{rowcnt:016d}"
+        )
+        f.write(line + '\n')
+
+    print(f"EMLPBB records written: {rowcnt}")
+
+    # Write EMXPBB index file
+    print("Writing EMXPBB index file...")
+    with open(EMXPBB_PATH, 'w') as f:
+        for row in mailpbb.iter_rows(named=True):
+            line = (
+                f"{safe_str(row.get('VAR_ID')):<40.40}"
+                f"{safe_str(row.get('EMAILADD')):<60.60}"
+                f"{safe_str(row.get('STATE_DTE')):<7.7}"
+                f"{safe_str(row.get('NAMELN1')):<40.40}"
+                f"{safe_str(row.get('NEWIC')):<17.17}"
+            )
+            f.write(line + '\n')
+
+    print(f"EMXPBB records written: {len(mailpbb)}")
+
+
+# ============================================================================
+# PIB PROCESSING
+# ============================================================================
+
+print("\n" + "="*70)
+print("Step 3: Processing PIB data...")
+print("="*70)
+
+# Load LNI.LNNAME
+lni_df, lni_meta = pyreadstat.read_sas7bdat(LNI_LNNAME_PATH)
+lni_pl = pl.from_pandas(lni_df)
+
+print(f"Total records in LNI.LNNAME: {len(lni_pl)}")
+print(f"Unique ACCTNO in LNI.LNNAME: {lni_pl['ACCTNO'].n_unique()}")
+
+# Merge with RLSLIST
+pibname = lni_pl.join(
+    rlslist.select(['ACCTNO', 'NEWIC', 'MAILCODE', 'EMAILADD', 'BRANCH', 'BRCH', 'NOTENO', 'PRODUCT']), 
+    on='ACCTNO', 
+    how='inner'
+)
+pibname = pibname.sort('ACCTNO')
+
+print(f"Records in PIBNAME after merge: {len(pibname)}")
+
+# Add encrypted ID
+pibname = pibname.with_columns([
+    pl.col('NEWIC').map_elements(
+        lambda x: encr_id(str(x).replace(' ', '') if pd.notna(x) else ' '), 
+        return_dtype=pl.Utf8
+    ).alias('MASK_IDS')
+])
+
+# Split based on MAILCODE and EMAILADD
+mailpib = pibname.filter(
+    (pl.col('MAILCODE').cast(pl.Utf8).is_in([' ', '13', '14', '13.0', '14.0'])) &
+    (pl.col('EMAILADD').cast(pl.Utf8).str.strip_chars() != '')
+)
+
+pibname = pibname.filter(
+    ~((pl.col('MAILCODE').cast(pl.Utf8).is_in([' ', '13', '14', '13.0', '14.0'])) &
+      (pl.col('EMAILADD').cast(pl.Utf8).str.strip_chars() != ''))
+)
+
+print(f"Records in PIBNAME (non-email): {len(pibname)}")
+print(f"Records in MAILPIB (email): {len(mailpib)}")
+
+# Write EMCPIB file
+print("\nWriting EMCPIB file...")
+with open(EMCPIB_PATH, 'w') as f:
+    rowcnt = 0
+    for row in pibname.iter_rows(named=True):
+        rowcnt += 1
+        branch = safe_int(row.get('BRANCH'))
+        acctno = safe_int(row.get('ACCTNO'))
+        
+        line = (
+            f"B"
+            f"{REPTDT}"
+            f"{safe_str(row.get('NAMELN1')):<40.40}"
+            f"{safe_str(row.get('NAMELN2')):<40.40}"
+            f"{safe_str(row.get('NAMELN3')):<40.40}"
+            f"{safe_str(row.get('NAMELN4')):<40.40}"
+            f"{safe_str(row.get('NAMELN5')):<40.40}"
+            f"{branch:07d}"
+            f"{acctno:011d}"
+            f"{safe_str(row.get('MASK_IDS')):<24.24}"
+        )
+        f.write(line + '\n')
+
+# Write EMCPIBS summary file
+with open(EMCPIBS_PATH, 'w') as f:
+    line = (
+        f"LNRIHLIP"
+        f"{' ' * 22}"
+        f"{REPTDT}"
+        f"{rowcnt:016d}"
+    )
+    f.write(line + '\n')
+
+print(f"EMCPIB records written: {rowcnt}")
+
+# Process MAILPIB
+if len(mailpib) > 0:
+    print("\nProcessing MAILPIB email statements...")
+
+    mailpib = mailpib.with_columns([
+        pl.Series(name='ROWCNT', values=range(1, len(mailpib) + 1))
+    ])
+
+    mailpib = mailpib.with_columns([
+        (pl.lit("PIB_EMAIL_STMT_RIL_C") +
+         pl.col('ROWCNT').cast(pl.Utf8).str.zfill(10) +
+         pl.lit("_") +
+         pl.lit(INDXDT)).alias('VAR_ID'),
+        (pl.lit(MTHNAM) + pl.lit(REPTYR)).alias('STATE_DTE')
+    ])
+
+    # Write EMLPIB file
+    print("Writing EMLPIB file...")
+    with open(EMLPIB_PATH, 'w') as f:
+        rowcnt = 0
+        for row in mailpib.iter_rows(named=True):
+            rowcnt += 1
+            branch = safe_int(row.get('BRANCH'))
+            acctno = safe_int(row.get('ACCTNO'))
+            
+            line = (
+                f"B"
+                f"{REPTDT}"
+                f"{safe_str(row.get('NAMELN1')):<40.40}"
+                f"{safe_str(row.get('NAMELN2')):<40.40}"
+                f"{safe_str(row.get('NAMELN3')):<40.40}"
+                f"{safe_str(row.get('NAMELN4')):<40.40}"
+                f"{safe_str(row.get('NAMELN5')):<40.40}"
+                f"{branch:07d}"
+                f"{acctno:011d}"
+                f"{' '}"
+                f"{safe_str(row.get('VAR_ID')):<40.40}"
+                f"{' '}"
+                f"{safe_str(row.get('MASK_IDS')):<24.24}"
+            )
+            f.write(line + '\n')
+
+    # Write EMLPIBS summary file
+    with open(EMLPIBS_PATH, 'w') as f:
+        line = (
+            f"LNRIHLIPE"
+            f"{' ' * 21}"
+            f"{REPTDT}"
+            f"{rowcnt:016d}"
+        )
+        f.write(line + '\n')
+
+    print(f"EMLPIB records written: {rowcnt}")
+
+    # Write EMXPIB index file
+    print("Writing EMXPIB index file...")
+    with open(EMXPIB_PATH, 'w') as f:
+        for row in mailpib.iter_rows(named=True):
+            line = (
+                f"{safe_str(row.get('VAR_ID')):<40.40}"
+                f"{safe_str(row.get('EMAILADD')):<60.60}"
+                f"{safe_str(row.get('STATE_DTE')):<7.7}"
+                f"{safe_str(row.get('NAMELN1')):<40.40}"
+                f"{safe_str(row.get('NEWIC')):<17.17}"
+            )
+            f.write(line + '\n')
+
+    print(f"EMXPIB records written: {len(mailpib)}")
+
+
+# ============================================================================
+# REPORT GENERATION
+# ============================================================================
+
+print("\n" + "="*70)
+print("Step 4: Generating report...")
+print("="*70)
+
+# Combine PBBNAME and PIBNAME
+rlslist_report = pl.concat([pbbname, pibname])
+rlslist_report = rlslist_report.with_columns([
+    pl.lit(1).alias('NOEMC')
+])
+rlslist_report = rlslist_report.sort(['BRANCH', 'ACCTNO', 'NOTENO'])
+
+print(f"Total records for report: {len(rlslist_report)}")
+
+
+def write_report_matching_sas():
+    """Generate report matching SAS PROC REPORT output"""
+    
+    with open(REPORT_PATH, 'w') as f:
+        
+        # Write title lines
+        f.write(f"REPORT ID : EIQPROM2\n")
+        f.write(f"AUTOMAILING LISTING FOR REINSTATEMENT OF LOAN AS AT {RDATE}\n")
+        f.write(f"\n")
+        
+        # Write header lines
+        f.write(f"                                                                                          MA\n")
+        f.write(f"                                                                                          IL\n")
+        f.write(f"   BRANCH                       NOTE   PRODUCT                                            CO\n")
+        f.write(f"     CODE  BRANCH      A/C NO     NO      CODE  NAME OF BORROWER/CUSTOMER                 DE\n")
+        f.write(f"                                                                                          \n")
+        f.write(f"\n")
+        
+        current_branch = None
+        branch_count = 0
+        
+        for row in rlslist_report.iter_rows(named=True):
+            branch = safe_int(row.get('BRANCH'))
+            acctno = safe_int(row.get('ACCTNO'))
+            noteno = safe_int(row.get('NOTENO'))
+            product = safe_int(row.get('PRODUCT'))
+            nameln1 = safe_str(row.get('NAMELN1'))
+            
+            # Get MAILCODE
+            mailcode_raw = row.get('MAILCODE')
+            if mailcode_raw is None or pd.isna(mailcode_raw):
+                mailcode = ''
+            else:
+                mailcode = str(mailcode_raw).strip()
+                if '.' in mailcode:
+                    mailcode = mailcode.rstrip('0').rstrip('.')
+                if mailcode == '0':
+                    mailcode = ''
+            
+            # Get BRCH field
+            brch = row.get('BRCH')
+            if brch is None or pd.isna(brch):
+                brch = ''
+            else:
+                brch = str(brch).strip()
+            
+            # Check for branch break
+            if current_branch is not None and branch != current_branch:
+                f.write(f"\n")
+                f.write(f"    " + "-"*123 + "\n")
+                f.write(f"    NO OF BORROWER/CUSTOMER :{branch_count:>8,}\n")
+                f.write(f"\n")
+                branch_count = 0
+                current_branch = None
+            
+            # Show branch code only on first occurrence
+            if current_branch is None:
+                branch_display = f"{branch:>7d}"
+                current_branch = branch
+            else:
+                branch_display = " " * 7
+            
+            branch_count += 1
+            
+            # Format detail line
+            line = f" {branch_display}  {brch:<5} {acctno:>10d} {noteno:>5d} {product:>8d} {nameln1:<40} {mailcode:>2}\n"
+            f.write(line)
+        
+        # Write final branch summary
+        if branch_count > 0:
+            f.write(f"\n")
+            f.write(f"    " + "-"*123 + "\n")
+            f.write(f"    NO OF BORROWER/CUSTOMER :{branch_count:>8,}\n")
+    
+    print(f"Report written to: {REPORT_PATH}")
+
+
+write_report_matching_sas()
+
+print("\n" + "="*70)
+print("EIEMCRLS processing completed successfully!")
+print("="*70)
+print(f"Report Date: {RDATE}")
+print(f"Data Month: {REPTMON}-{REPTYR}")
+print(f"Total non-email records (PBB + PIB): {len(pbbname) + len(pibname)}")
+print(f"Total email records (PBB + PIB): {len(mailpbb) + len(mailpib)}")
+print("="*70)
