@@ -529,7 +529,6 @@ def write_report_matching_sas():
         f.write(f"\n")
         
         # Column headers matching PROC REPORT with split 'MAIL CODE' vertically
-        # Using exact positions from SAS output
         f.write(f"                                                                                          MA\n")
         f.write(f"                                                                                          IL\n")
         f.write(f"   BRANCH                       NOTE   PRODUCT                                            CO\n")
@@ -576,16 +575,18 @@ def write_report_matching_sas():
             
             # GROUP behavior - show branch only on first occurrence
             if current_branch is None:
-                branch_display = f"{branch:>7d}"
+                # First occurrence - show branch code (3 chars right-aligned)
+                branch_display = f"{branch:>3d}"
                 current_branch = branch
             else:
-                branch_display = "       "  # 7 spaces for branch code
+                # Subsequent occurrences - blank (3 spaces)
+                branch_display = "   "
             
             branch_count += 1
             
-            # Format detail line with exact column positions
-            # Position: 1-7 BRANCH, 9-13 BRCH, 15-24 ACCTNO, 26-30 NOTENO, 32-39 PRODUCT, 41-80 NAME, 82-83 MAILCODE
-            line = f" {branch_display} {brch:<5} {acctno:>10d} {noteno:>5d} {product:>8d} {nameln1:<40} {mailcode:>2}\n"
+            # Format detail line matching SAS PROC REPORT exactly
+            # Using exact column widths from SAS DEFINE statements
+            line = f" {branch_display} {brch:<3} {acctno:>10d} {noteno:>5d} {product:<8} {nameln1:<40} {mailcode:>2}\n"
             f.write(line)
         
         # Final branch summary
