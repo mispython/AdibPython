@@ -3,6 +3,7 @@
 File Name: EIEMCRLS.py
 Report ID: EIQPROM2
 Automailing Listing for Reinstatement of Loan
+Exact SAS logic translation
 """
 
 import pyreadstat
@@ -44,7 +45,9 @@ Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS").mkdir(paren
 # ============================================================================
 
 def calculate_report_dates(run_date=None):
-    """Calculate report dates matching SAS logic"""
+    """
+    SAS: REPTDATE = TODAY()-DAY(TODAY());
+    """
     if run_date is None:
         today = datetime.now()
     else:
@@ -99,27 +102,39 @@ print(f"Report month: {REPTMON}-{REPTYR}")
 # ============================================================================
 
 def encr_id(id_value):
-    """ENCR_ID macro equivalent"""
+    """
+    SAS: %ENCR_ID macro
+    ID = COMPRESS(NEWIC); then encrypt
+    """
     if not id_value or pd.isna(id_value) or str(id_value).strip() == '':
         return ' ' * 40
     
+    # SAS: IDS = UPCASE(ID)
     ids = str(id_value).upper()
+    
     mask_ids = ""
     
+    # SAS: TRANSLATE(CH_X,'BCADX9GEHI','0123456789')
     translation_map = {
         '0': 'B', '1': 'C', '2': 'A', '3': 'D', '4': 'X',
         '5': '9', '6': 'G', '7': 'E', '8': 'H', '9': 'I'
     }
     
+    # SAS: DO I=1 TO LENGTH(IDS)
     for char in ids:
+        # SAS: CH_X = RANK(PUT(CH,$ASCII.))
         ascii_val = ord(char)
         ch_x = str(ascii_val)
+        
+        # SAS: MASK = TRANSLATE(CH_X,'BCADX9GEHI','0123456789')
         mask = ""
         for digit in ch_x:
             if digit in translation_map:
                 mask += translation_map[digit]
             else:
                 mask += digit
+        
+        # SAS: MASK_IDS = STRIP(MASK_IDS)|| MASK
         mask_ids = mask_ids.strip() + mask
     
     return mask_ids[:40]
@@ -143,7 +158,7 @@ def safe_str(value, default=''):
 
 
 # ============================================================================
-# DATA PROCESSING
+# DATA PROCESSING - EXACT SAS LOGIC
 # ============================================================================
 
 print("\n" + "="*70)
@@ -152,7 +167,9 @@ print(f"Report Date: {RDATE}")
 print(f"Report Month: {REPTMON}")
 print("="*70)
 
-# Step 1: Load and filter PROMOTE.LOAN data
+# Step 1: PROC SORT DATA=PROMOTE.LOAN&REPTMON OUT=RLSLIST;
+#         BY GUAREND DESCENDING REPAID;
+#         WHERE REPAID > 100000;
 print("\nStep 1: Loading and filtering PROMOTE.LOAN data...")
 promote_path = PROMOTE_LOAN_PATH.format(month=REPTMON)
 print(f"Loading file: {promote_path}")
@@ -163,141 +180,46 @@ loan_pl = pl.from_pandas(loan_df)
 
 print(f"Total records in LOAN file: {len(loan_pl)}")
 
-# Filter records where REPAID > 100000
-rlslist_base = loan_pl.filter(pl.col('REPAID') > 100000)
-print(f"\nRecords after REPAID > 100000: {len(rlslist_base)}")
+# WHERE REPAID > 100000
+rlslist = loan_pl.filter(pl.col('REPAID') > 100000)
+print(f"Records after WHERE REPAID > 100000: {len(rlslist)}")
 
-# ============================================================================
-# DIAGNOSTIC ANALYSIS
-# ============================================================================
-
-print("\n" + "="*70)
-print("DIAGNOSTIC ANALYSIS - Identifying correct filters")
-print("="*70)
-
-# Analyze NOTENO distribution
-print("\nNOTENO distribution (top 30):")
-noteno_counts = rlslist_base.group_by('NOTENO').agg(pl.len().alias('count')).sort('count', descending=True).head(30)
-for row in noteno_counts.iter_rows(named=True):
-    print(f"  NOTENO={row['NOTENO']}: {row['count']} records")
-
-# Analyze PRODUCT distribution
-print("\nPRODUCT distribution (top 30):")
-product_counts = rlslist_base.group_by('PRODUCT').agg(pl.len().alias('count')).sort('count', descending=True).head(30)
-for row in product_counts.iter_rows(named=True):
-    print(f"  PRODUCT={row['PRODUCT']}: {row['count']} records")
-
-# Analyze MAILCODE distribution
-print("\nMAILCODE distribution:")
-mailcode_counts = rlslist_base.group_by('MAILCODE').agg(pl.len().alias('count')).sort('count', descending=True)
-for row in mailcode_counts.iter_rows(named=True):
-    print(f"  MAILCODE='{row['MAILCODE']}': {row['count']} records")
-
-# Test different filter combinations
-print("\n" + "="*70)
-print("Testing filter combinations")
-print("="*70)
-
-# Test 1: NOTENO >= 20000 (based on production showing 20010, 30016, etc.)
-test1 = rlslist_base.filter(pl.col('NOTENO') >= 20000)
-print(f"\nTest 1 - NOTENO >= 20000: {len(test1)} records")
-
-# Test 2: Specific NOTENO values from production
-noteno_prod = [20010, 20011, 20012, 30010, 30011, 30012, 30016]
-test2 = rlslist_base.filter(pl.col('NOTENO').is_in(noteno_prod))
-print(f"Test 2 - Specific NOTENO values: {len(test2)} records")
-
-# Test 3: NOTENO between 20000-39999 (reinstatement notes)
-test3 = rlslist_base.filter((pl.col('NOTENO') >= 20000) & (pl.col('NOTENO') < 40000))
-print(f"Test 3 - NOTENO 20000-39999: {len(test3)} records")
-
-# Test 4: Check if there's a specific range
-test4 = rlslist_base.filter(pl.col('NOTENO') >= 10000)
-print(f"Test 4 - NOTENO >= 10000: {len(test4)} records")
-
-# Test 5: NOTENO < 20000 but specific values
-test5 = rlslist_base.filter(pl.col('NOTENO') < 20000)
-print(f"Test 5 - NOTENO < 20000: {len(test5)} records")
-
-# Check MODELLDES field which might indicate reinstatement
-if 'MODELDES' in rlslist_base.columns:
-    print("\nMODELDES distribution:")
-    modeldes_counts = rlslist_base.group_by('MODELDES').agg(pl.len().alias('count')).sort('count', descending=True).head(10)
-    for row in modeldes_counts.iter_rows(named=True):
-        print(f"  MODELDES='{row['MODELDES']}': {row['count']} records")
-
-# Check COLLMAKE which might indicate reinstatement
-if 'COLLMAKE' in rlslist_base.columns:
-    print("\nCOLLMAKE distribution (top 10):")
-    collmake_counts = rlslist_base.group_by('COLLMAKE').agg(pl.len().alias('count')).sort('count', descending=True).head(10)
-    for row in collmake_counts.iter_rows(named=True):
-        print(f"  COLLMAKE='{row['COLLMAKE']}': {row['count']} records")
-
-# Check DELQCD
-if 'DELQCD' in rlslist_base.columns:
-    print("\nDELQCD distribution:")
-    delqcd_counts = rlslist_base.group_by('DELQCD').agg(pl.len().alias('count')).sort('count', descending=True)
-    for row in delqcd_counts.iter_rows(named=True):
-        print(f"  DELQCD='{row['DELQCD']}': {row['count']} records")
-
-# The key insight: Production shows NOTENO values like 30016, 20010, 30010
-# These are likely reinstatement note numbers
-# Let's use the filter that gets closest to production count
-print("\n" + "="*70)
-print("Applying best filter based on analysis")
-print("="*70)
-
-# Based on production showing NOTENO >= 20000, apply this filter
-# Also apply REINPROD filter
-rlslist = rlslist_base.filter(
-    (pl.col('NOTENO') >= 20000) &
-    (pl.col('REINPROD').is_not_null()) &
-    (pl.col('REINPROD').cast(pl.Utf8).str.strip_chars() != '')
-)
-print(f"Records after NOTENO >= 20000 AND REINPROD filter: {len(rlslist)}")
-
-# Remove empty GUAREND
-rlslist = rlslist.filter(pl.col('GUAREND').cast(pl.Utf8).str.strip_chars() != '')
-print(f"Records after removing empty GUAREND: {len(rlslist)}")
-
-# Sort by GUAREND ascending, REPAID descending
+# BY GUAREND DESCENDING REPAID
 rlslist = rlslist.sort(['GUAREND', 'REPAID'], descending=[False, True])
 
-# Remove duplicates keeping first record per GUAREND
+# PROC SORT DATA=RLSLIST NODUPKEY; BY GUAREND;
 rlslist = rlslist.unique(subset=['GUAREND'], keep='first')
-print(f"Records after deduplication by GUAREND: {len(rlslist)}")
+print(f"Records after NODUPKEY BY GUAREND: {len(rlslist)}")
 
-# Sort by ACCTNO for merge
+# PROC SORT DATA=RLSLIST; BY ACCTNO;
 rlslist = rlslist.sort('ACCTNO')
-
-print(f"\nFinal records in RLSLIST: {len(rlslist)}")
+print(f"Final RLSLIST records: {len(rlslist)}")
 
 
 # ============================================================================
-# PBB PROCESSING
+# Step 2: PBB PROCESSING
 # ============================================================================
 
 print("\n" + "="*70)
-print("Step 2: Processing PBB data...")
+print("Step 2: Processing PBB data (LN.LNNAME)")
 print("="*70)
 
-# Load LN.LNNAME
+# PROC SORT DATA=LN.LNNAME OUT=PBBNAME; BY ACCTNO;
 lnname_df, lnname_meta = pyreadstat.read_sas7bdat(LN_LNNAME_PATH)
 lnname_pl = pl.from_pandas(lnname_df)
-
 print(f"Total records in LN.LNNAME: {len(lnname_pl)}")
 
-# Merge with RLSLIST
+# DATA PBBNAME; MERGE PBBNAME(IN=A) RLSLIST(IN=B); BY ACCTNO; IF A AND B;
 pbbname = lnname_pl.join(
-    rlslist.select(['ACCTNO', 'NEWIC', 'MAILCODE', 'EMAILADD', 'BRANCH', 'BRCH', 'NOTENO', 'PRODUCT']), 
+    rlslist,  # Merge all columns from RLSLIST
     on='ACCTNO', 
     how='inner'
 )
-pbbname = pbbname.sort('ACCTNO')
+print(f"Records after MERGE (A AND B): {len(pbbname)}")
 
-print(f"Records in PBBNAME after merge: {len(pbbname)}")
-
-# Add encrypted ID using NEWIC
+# DATA PBBNAME MAILPBB; SET PBBNAME;
+# ID = COMPRESS(NEWIC);
+# %ENCR_ID;
 pbbname = pbbname.with_columns([
     pl.col('NEWIC').map_elements(
         lambda x: encr_id(str(x).replace(' ', '') if pd.notna(x) else ' '), 
@@ -305,21 +227,22 @@ pbbname = pbbname.with_columns([
     ).alias('MASK_IDS')
 ])
 
-# Split based on MAILCODE and EMAILADD
+# IF MAILCODE IN (' ','13','14') AND EMAILADD NE '' THEN OUTPUT MAILPBB;
+# ELSE OUTPUT PBBNAME;
 mailpbb = pbbname.filter(
-    (pl.col('MAILCODE').cast(pl.Utf8).is_in([' ', '13', '14', '13.0', '14.0'])) &
+    (pl.col('MAILCODE').cast(pl.Utf8).str.strip_chars().is_in(['', '13', '14'])) &
     (pl.col('EMAILADD').cast(pl.Utf8).str.strip_chars() != '')
 )
 
 pbbname = pbbname.filter(
-    ~((pl.col('MAILCODE').cast(pl.Utf8).is_in([' ', '13', '14', '13.0', '14.0'])) &
+    ~((pl.col('MAILCODE').cast(pl.Utf8).str.strip_chars().is_in(['', '13', '14'])) &
       (pl.col('EMAILADD').cast(pl.Utf8).str.strip_chars() != ''))
 )
 
-print(f"Records in PBBNAME (non-email): {len(pbbname)}")
-print(f"Records in MAILPBB (email): {len(mailpbb)}")
+print(f"PBBNAME (non-email): {len(pbbname)}")
+print(f"MAILPBB (email): {len(mailpbb)}")
 
-# Write EMCPBB file
+# Write EMCPBB - DATA _NULL_; SET PBBNAME; FILE EMCPBB;
 print("\nWriting EMCPBB file...")
 with open(EMCPBB_PATH, 'w') as f:
     rowcnt = 0
@@ -342,7 +265,7 @@ with open(EMCPBB_PATH, 'w') as f:
         )
         f.write(line + '\n')
 
-# Write EMCPBBS summary file
+# Write EMCPBBS summary
 with open(EMCPBBS_PATH, 'w') as f:
     line = (
         f"LNRIHLCP"
@@ -358,10 +281,12 @@ print(f"EMCPBB records written: {rowcnt}")
 if len(mailpbb) > 0:
     print("\nProcessing MAILPBB email statements...")
 
+    # DATA MAILPBB; SET MAILPBB; ROWCNT+1;
     mailpbb = mailpbb.with_columns([
         pl.Series(name='ROWCNT', values=range(1, len(mailpbb) + 1))
     ])
 
+    # VAR_ID = COMPRESS("PBB_EMAIL_STMT_RIL_C"||PUT(ROWCNT,Z10.)||"_&INDXDT");
     mailpbb = mailpbb.with_columns([
         (pl.lit("PBB_EMAIL_STMT_RIL_C") +
          pl.col('ROWCNT').cast(pl.Utf8).str.zfill(10) +
@@ -370,7 +295,7 @@ if len(mailpbb) > 0:
         (pl.lit(MTHNAM) + pl.lit(REPTYR)).alias('STATE_DTE')
     ])
 
-    # Write EMLPBB file
+    # Write EMLPBB
     print("Writing EMLPBB file...")
     with open(EMLPBB_PATH, 'w') as f:
         rowcnt = 0
@@ -396,7 +321,7 @@ if len(mailpbb) > 0:
             )
             f.write(line + '\n')
 
-    # Write EMLPBBS summary file
+    # Write EMLPBBS summary
     with open(EMLPBBS_PATH, 'w') as f:
         line = (
             f"LNRIHLCE"
@@ -408,7 +333,7 @@ if len(mailpbb) > 0:
 
     print(f"EMLPBB records written: {rowcnt}")
 
-    # Write EMXPBB index file
+    # Write EMXPBB index
     print("Writing EMXPBB index file...")
     with open(EMXPBB_PATH, 'w') as f:
         for row in mailpbb.iter_rows(named=True):
@@ -425,28 +350,25 @@ if len(mailpbb) > 0:
 
 
 # ============================================================================
-# PIB PROCESSING
+# Step 3: PIB PROCESSING
 # ============================================================================
 
 print("\n" + "="*70)
-print("Step 3: Processing PIB data...")
+print("Step 3: Processing PIB data (LNI.LNNAME)")
 print("="*70)
 
 # Load LNI.LNNAME
 lni_df, lni_meta = pyreadstat.read_sas7bdat(LNI_LNNAME_PATH)
 lni_pl = pl.from_pandas(lni_df)
-
 print(f"Total records in LNI.LNNAME: {len(lni_pl)}")
 
 # Merge with RLSLIST
 pibname = lni_pl.join(
-    rlslist.select(['ACCTNO', 'NEWIC', 'MAILCODE', 'EMAILADD', 'BRANCH', 'BRCH', 'NOTENO', 'PRODUCT']), 
+    rlslist,
     on='ACCTNO', 
     how='inner'
 )
-pibname = pibname.sort('ACCTNO')
-
-print(f"Records in PIBNAME after merge: {len(pibname)}")
+print(f"Records after MERGE: {len(pibname)}")
 
 # Add encrypted ID
 pibname = pibname.with_columns([
@@ -458,19 +380,19 @@ pibname = pibname.with_columns([
 
 # Split based on MAILCODE and EMAILADD
 mailpib = pibname.filter(
-    (pl.col('MAILCODE').cast(pl.Utf8).is_in([' ', '13', '14', '13.0', '14.0'])) &
+    (pl.col('MAILCODE').cast(pl.Utf8).str.strip_chars().is_in(['', '13', '14'])) &
     (pl.col('EMAILADD').cast(pl.Utf8).str.strip_chars() != '')
 )
 
 pibname = pibname.filter(
-    ~((pl.col('MAILCODE').cast(pl.Utf8).is_in([' ', '13', '14', '13.0', '14.0'])) &
+    ~((pl.col('MAILCODE').cast(pl.Utf8).str.strip_chars().is_in(['', '13', '14'])) &
       (pl.col('EMAILADD').cast(pl.Utf8).str.strip_chars() != ''))
 )
 
-print(f"Records in PIBNAME (non-email): {len(pibname)}")
-print(f"Records in MAILPIB (email): {len(mailpib)}")
+print(f"PIBNAME (non-email): {len(pibname)}")
+print(f"MAILPIB (email): {len(mailpib)}")
 
-# Write EMCPIB file
+# Write EMCPIB
 print("\nWriting EMCPIB file...")
 with open(EMCPIB_PATH, 'w') as f:
     rowcnt = 0
@@ -493,7 +415,7 @@ with open(EMCPIB_PATH, 'w') as f:
         )
         f.write(line + '\n')
 
-# Write EMCPIBS summary file
+# Write EMCPIBS summary
 with open(EMCPIBS_PATH, 'w') as f:
     line = (
         f"LNRIHLIP"
@@ -521,7 +443,7 @@ if len(mailpib) > 0:
         (pl.lit(MTHNAM) + pl.lit(REPTYR)).alias('STATE_DTE')
     ])
 
-    # Write EMLPIB file
+    # Write EMLPIB
     print("Writing EMLPIB file...")
     with open(EMLPIB_PATH, 'w') as f:
         rowcnt = 0
@@ -547,7 +469,7 @@ if len(mailpib) > 0:
             )
             f.write(line + '\n')
 
-    # Write EMLPIBS summary file
+    # Write EMLPIBS summary
     with open(EMLPIBS_PATH, 'w') as f:
         line = (
             f"LNRIHLIPE"
@@ -559,7 +481,7 @@ if len(mailpib) > 0:
 
     print(f"EMLPIB records written: {rowcnt}")
 
-    # Write EMXPIB index file
+    # Write EMXPIB index
     print("Writing EMXPIB index file...")
     with open(EMXPIB_PATH, 'w') as f:
         for row in mailpib.iter_rows(named=True):
@@ -576,18 +498,20 @@ if len(mailpib) > 0:
 
 
 # ============================================================================
-# REPORT GENERATION
+# Step 4: REPORT GENERATION
 # ============================================================================
 
 print("\n" + "="*70)
 print("Step 4: Generating report...")
 print("="*70)
 
-# Combine PBBNAME and PIBNAME
+# DATA RLSLIST; SET PBBNAME PIBNAME; NOEMC = 1;
 rlslist_report = pl.concat([pbbname, pibname])
 rlslist_report = rlslist_report.with_columns([
     pl.lit(1).alias('NOEMC')
 ])
+
+# PROC SORT DATA=RLSLIST; BY BRANCH ACCTNO NOTENO;
 rlslist_report = rlslist_report.sort(['BRANCH', 'ACCTNO', 'NOTENO'])
 
 print(f"Total records for report: {len(rlslist_report)}")
@@ -598,12 +522,13 @@ def write_report_matching_sas():
     
     with open(REPORT_PATH, 'w') as f:
         
-        # Write title lines
+        # TITLE "REPORT ID : EIQPROM2";
+        # TITLE2 "AUTOMAILING LISTING FOR REINSTATEMENT OF LOAN AS AT &RDATE";
         f.write(f"REPORT ID : EIQPROM2\n")
         f.write(f"AUTOMAILING LISTING FOR REINSTATEMENT OF LOAN AS AT {RDATE}\n")
         f.write(f"\n")
         
-        # Write header lines
+        # Column headers matching PROC REPORT with split
         f.write(f"                                                                                          MA\n")
         f.write(f"                                                                                          IL\n")
         f.write(f"   BRANCH                       NOTE   PRODUCT                                            CO\n")
@@ -621,7 +546,7 @@ def write_report_matching_sas():
             product = safe_int(row.get('PRODUCT'))
             nameln1 = safe_str(row.get('NAMELN1'))
             
-            # Get MAILCODE
+            # MAILCODE formatting
             mailcode_raw = row.get('MAILCODE')
             if mailcode_raw is None or pd.isna(mailcode_raw):
                 mailcode = ''
@@ -632,14 +557,14 @@ def write_report_matching_sas():
                 if mailcode == '0':
                     mailcode = ''
             
-            # Get BRCH field
+            # BRCH field
             brch = row.get('BRCH')
             if brch is None or pd.isna(brch):
                 brch = ''
             else:
                 brch = str(brch).strip()
             
-            # Check for branch break
+            # BREAK AFTER BRANCH
             if current_branch is not None and branch != current_branch:
                 f.write(f"\n")
                 f.write(f"    " + "-"*123 + "\n")
@@ -648,7 +573,7 @@ def write_report_matching_sas():
                 branch_count = 0
                 current_branch = None
             
-            # Show branch code only on first occurrence
+            # GROUP behavior - show branch only on first occurrence
             if current_branch is None:
                 branch_display = f"{branch:>7d}"
                 current_branch = branch
@@ -657,11 +582,11 @@ def write_report_matching_sas():
             
             branch_count += 1
             
-            # Format detail line
+            # Detail line
             line = f" {branch_display}  {brch:<5} {acctno:>10d} {noteno:>5d} {product:>8d} {nameln1:<40} {mailcode:>2}\n"
             f.write(line)
         
-        # Write final branch summary
+        # Final branch summary
         if branch_count > 0:
             f.write(f"\n")
             f.write(f"    " + "-"*123 + "\n")
