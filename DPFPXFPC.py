@@ -1,43 +1,219 @@
-Starting EIQPROM2 processing...
-Report Date: 31/07/26
-Report Month: 07
+%INC PGM(LNENCRID);
 
-Step 1: Loading and filtering PROMOTE.LOAN data...
-  Records in RLSLIST: 55773
+DATA REPTDATE;
+   REPTDATE = TODAY()-DAY(TODAY());
+   CALL SYMPUT('REPTDT',PUT(REPTDATE,DDMMYYN6.));
+   CALL SYMPUT('INDXDT',PUT(REPTDATE,YYMMDDN8.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTYR',PUT(REPTDATE,YEAR4.));
+   CALL SYMPUT('MTHNAM',UPCASE(PUT(REPTDATE,MONNAME3.)));
+RUN;
 
-Step 2: Processing PBB data...
-  Records in PBBNAME after merge: 50173
-  Records in PBBNAME (non-email): 39011
-  Records in MAILPBB (email): 11162
+PROC SORT DATA=PROMOTE.LOAN&REPTMON OUT=RLSLIST;
+   BY GUAREND DESCENDING REPAID;
+   WHERE REPAID > 100000;
+RUN;
+PROC SORT DATA=RLSLIST NODUPKEY; BY GUAREND; RUN;
+PROC SORT DATA=RLSLIST; BY ACCTNO; RUN;
 
-  Writing EMCPBB file...
-  EMCPBB records written: 39011
+PROC SORT DATA=LN.LNNAME OUT=PBBNAME; BY ACCTNO; RUN;
+DATA PBBNAME;
+   MERGE PBBNAME(IN=A) RLSLIST(IN=B);
+   BY ACCTNO;
+   IF A AND B;
+RUN;
 
-  Processing MAILPBB email statements...
-  Writing EMLPBB file...
-  EMLPBB records written: 11162
-  Writing EMXPBB index file...
-  EMXPBB records written: 11162
+*SMR2021-1836;
+DATA PBBNAME MAILPBB;
+   SET PBBNAME;
+   ID = COMPRESS(NEWIC);
+   %ENCR_ID;
+   IF MAILCODE IN (' ','13','14') AND EMAILADD NE ''
+               THEN OUTPUT MAILPBB;
+   ELSE OUTPUT PBBNAME;
+RUN;
 
-Step 3: Processing PIB data...
-  Records in PIBNAME after merge: 5601
-  Records in PIBNAME (non-email): 4371
-  Records in MAILPIB (email): 1230
+DATA _NULL_;
+   SET PBBNAME END=LAST;
+   ROWCNT+1;
+   FILE EMCPBB;
+   PUT @001 'B'
+       @002 "&REPTDT"
+       @008 NAMELN1     $40.
+       @048 NAMELN2     $40.
+       @088 NAMELN3     $40.
+       @128 NAMELN4     $40.
+       @168 NAMELN5     $40.
+       @208 BRANCH       Z7.
+       @215 ACCTNO      Z11.
+       @226 MASK_IDS    $24.
+       ;
+   IF LAST THEN DO;
+      FILE EMCPBBS;
+      PUT @001 'LNRIHLCP'
+          @031 "&REPTDT"
+          @038 ROWCNT   Z16.
+          ;
+   END;
+RUN;
 
-  Writing EMCPIB file...
-  EMCPIB records written: 4371
+*SMR2021-1836;
+DATA MAILPBB;
+   SET MAILPBB;
+   ROWCNT+1;
+   VAR_ID = COMPRESS("PBB_EMAIL_STMT_RIL_C"||
+                     PUT(ROWCNT,Z10.)||"_&INDXDT");
+   STATE_DTE = COMPRESS("&MTHNAM"||"&REPTYR");
+RUN;
 
-  Processing MAILPIB email statements...
-  Writing EMLPIB file...
-  EMLPIB records written: 1230
-  Writing EMXPIB index file...
-  EMXPIB records written: 1230
+DATA _NULL_;
+   SET MAILPBB END=LAST;
+   FILE EMLPBB;
+   PUT @001 'B'
+       @002 "&REPTDT"
+       @008 NAMELN1     $40.
+       @048 NAMELN2     $40.
+       @088 NAMELN3     $40.
+       @128 NAMELN4     $40.
+       @168 NAMELN5     $40.
+       @208 BRANCH       Z7.
+       @215 ACCTNO      Z11.
+       @227 VAR_ID      $40.
+       @268 MASK_IDS    $24.
+       ;
+   IF LAST THEN DO;
+      FILE EMLPBBS;
+      PUT @001 'LNRIHLCE'
+          @031 "&REPTDT"
+          @038 ROWCNT   Z16.
+      ;
+   END;
+RUN;
 
-Step 4: Generating report...
-  Total records for report: 43382
-  Report written to: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIEMCRLS/eiqprom2_report.txt
-  Total pages: 943
+*PBB INDEX FILE;
+DATA _NULL_;
+   SET MAILPBB;
+   FILE EMXPBB;
+   PUT @001 VAR_ID      $40.
+       @041 EMAILADD    $60.
+       @101 STATE_DTE
+       @108 NAMELN1     $40.
+       @148 NEWIC       $17.
+       ;
+RUN;
 
-======================================================================
-EIEMCRLS processing completed successfully!
-======================================================================
+PROC SORT DATA=LNI.LNNAME OUT=PIBNAME; BY ACCTNO; RUN;
+DATA PIBNAME;
+   MERGE PIBNAME(IN=A) RLSLIST(IN=B);
+   BY ACCTNO;
+   IF A AND B;
+RUN;
+
+*SMR2021-1836;
+DATA PIBNAME MAILPIB;
+   SET PIBNAME;
+   ID = COMPRESS(NEWIC);
+   %ENCR_ID;
+   IF MAILCODE IN (' ','13','14') AND EMAILADD NE ''
+               THEN OUTPUT MAILPIB;
+   ELSE OUTPUT PIBNAME;
+RUN;
+
+DATA _NULL_;
+   SET PIBNAME END=LAST;
+   ROWCNT+1;
+   FILE EMCPIB;
+   PUT @001 'B'
+       @002 "&REPTDT"
+       @008 NAMELN1     $40.
+       @048 NAMELN2     $40.
+       @088 NAMELN3     $40.
+       @128 NAMELN4     $40.
+       @168 NAMELN5     $40.
+       @208 BRANCH       Z7.
+       @215 ACCTNO      Z11.
+       @226 MASK_IDS    $24.
+       ;
+   IF LAST THEN DO;
+      FILE EMCPIBS;
+      PUT @001 'LNRIHLIP'
+          @031 "&REPTDT"
+          @038 ROWCNT   Z16.
+          ;
+   END;
+RUN;
+
+*SMR2021-1836;
+DATA MAILPIB;
+   SET MAILPIB;
+   ROWCNT+1;
+   VAR_ID = COMPRESS("PIB_EMAIL_STMT_RIL_C"||
+                     PUT(ROWCNT,Z10.)||"_&INDXDT");
+   STATE_DTE = COMPRESS("&MTHNAM"||"&REPTYR");
+RUN;
+
+DATA _NULL_;
+   SET MAILPIB END=LAST;
+   FILE EMLPIB;
+   PUT @001 'B'
+       @002 "&REPTDT"
+       @008 NAMELN1     $40.
+       @048 NAMELN2     $40.
+       @088 NAMELN3     $40.
+       @128 NAMELN4     $40.
+       @168 NAMELN5     $40.
+       @208 BRANCH       Z7.
+       @215 ACCTNO      Z11.
+       @227 VAR_ID      $40.
+       @268 MASK_IDS    $24.
+       ;
+   IF LAST THEN DO;
+      FILE EMLPIBS;
+      PUT @001 'LNRIHLIPE'
+          @031 "&REPTDT"
+          @038 ROWCNT   Z16.
+          ;
+   END;
+RUN;
+
+*PIBB INDEX FILE;
+DATA _NULL_;
+   SET MAILPIB;
+   FILE EMXPIB;
+   PUT @001 VAR_ID      $40.
+       @041 EMAILADD    $60.
+       @101 STATE_DTE
+       @108 NAMELN1     $40.
+       @148 NEWIC       $17.
+       ;
+RUN;
+
+
+DATA RLSLIST;
+   SET PBBNAME PIBNAME;
+   NOEMC = 1;
+RUN;
+PROC SORT DATA=RLSLIST; BY BRANCH ACCTNO NOTENO; RUN;
+PROC REPORT DATA=RLSLIST NOCENTER SPLIT='*' NOWINDOWS HEADSKIP;
+   TITLE  "REPORT ID : EIQPROM2";
+   TITLE2 "AUTOMAILING LISTING FOR REINSTATEMENT OF LOAN AS AT &RDATE";
+   COLUMN BRANCH BRCH ACCTNO NOTENO PRODUCT NAMELN1 MAILCODE NOEMC;
+   DEFINE BRANCH   /GROUP   WIDTH=7 FORMAT=3. 'BRANCH*CODE';
+   DEFINE BRCH     /DISPLAY WIDTH=6 FORMAT=$3. 'BRANCH';
+   DEFINE ACCTNO   /DISPLAY FORMAT=10. 'A/C NO';
+   DEFINE NOTENO   /DISPLAY FORMAT=5. 'NOTE*NO';
+   DEFINE PRODUCT  /DISPLAY WIDTH=8 'PRODUCT*CODE';
+   DEFINE NAMELN1  /DISPLAY WIDTH=40 'NAME OF BORROWER/CUSTOMER';
+   DEFINE MAILCODE /DISPLAY WIDTH=2 'MAIL CODE';
+   DEFINE NOEMC    /SUM NOPRINT;
+   BREAK AFTER BRANCH /SKIP;
+   COMPUTE AFTER BRANCH;
+      LINE @004 123*'-';
+      LINE @004 'NO OF BORROWER/CUSTOMER :'
+           @029 NOEMC.SUM COMMA8.;
+   ENDCOMP;
+RUN;
+
+
+this is the original sas code. is it using august or july datasets for loan(promote)?
