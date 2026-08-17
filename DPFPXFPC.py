@@ -1,973 +1,485 @@
-"""
-EIBDLCRM.py - BNM LCR (Liquidity Coverage Ratio) Reporting for Conventional Banking
-
-Structure mirrors the original SAS program:
-  - config.py   ~ macro variables / PROC FORMAT setup at the top of the SAS program
-  - common.py   ~ %MACRO DCLVAR / %MACRO REMMTH / shared format logic
-  - kalmliq.py  ~ %INC PGM(KALMLIQ)  (treasury: K1TBL/K3TBL -> KTBLALL)
-  - this file   ~ everything else in the main SAS program (DCI, CIS, UTSAS,
-                  core banking, insurance split, consolidation, reporting)
-
-Run with:  python3 EIBDLCRM.py
-"""
-
-import os
-import glob
-from pathlib import Path
-from datetime import date, timedelta
-
+import pyreadstat
 import polars as pl
+import pandas as pd
+from pathlib import Path
+from datetime import datetime, timedelta
+import numpy as np
 
-from config import PATHS, inst, cust_map, special_cust, FX_RATES
-from common import (
-    read_sas_file,
-    read_parquet_file,
-    warn_missing_columns,
-    debug_directory,
-    get_report_date,
-    sas_date_to_pydate,
-    calculate_remaining_months,
-    format_mth_bucket,
-    format_day_bucket,
-    get_customer_category,
-)
-from kalmliq import process_k1tbl, process_k3tbl, build_ktblall
+# =========================================================
+# 1. CONFIGURATION
+# =========================================================
+BASE_INPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIWBTCR")
+BASE_OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIWBTCR")
+BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
 
+# =========================================================
+# 2. FORMAT DEFINITIONS (PBBBTFMT and PBBLNFMT)
+# =========================================================
+# Facility/Product Code Mappings ($LIAB format)
+LIAB_FORMAT = {
+    'BAE': '34471', 'BEI': '34471',
+    'BAI': '34472', 'BII': '34472',
+    'BAP': '34475', 'BAS': '34475',
+    'BPI': '34475', 'BSI': '34475',
+    'MUR': '34411', 'IST': '34412',
+    'IJA': '34421', 'MUS': '34422',
+    'MUD': '34440', 'QAR': '34470',
+    'TAW': '34480', 'BAI': '34490',
+    'OD': '34710', 'TL': '34720',
+    'RL': '34730', 'HL': '34740',
+    'CL': '34750', 'PL': '34760',
+    'AL': '34770',
+    'POS': '34810', 'DAU': '34831',
+    'DDU': '34832', 'FFS': '34840',
+    'FFU': '34850', 'FFL': '34860',
+}
 
-# =============================================================================
-# WALK.TXT / TEMPL.TXT
-# =============================================================================
-def read_walk_file(filepath):
-    """
-    Read WALK.TXT fixed-width file.
+# NSRSLIAB Format
+NSRSLIAB_FORMAT = {
+    '34411': '34411', '34412': '34412',
+    '34421': '34421', '34422': '34422',
+    '34440': '34440', '34470': '34470',
+    '34480': '34480', '34490': '34490',
+}
 
-    SAS layout (from the main EIBDLCRM.sas program):
-        INFILE WALK;
-        INPUT @002 SET_ID  $19.
-              @042 AMOUNT  COMMA20.2
-              @062 SIGN    $1.
-        IF SIGN = '' THEN AMOUNT = -1*AMOUNT;
-        ITEM = PUT(SET_ID,$LCRCDGL.);
+# Sector Reverse Format ($RVRSE)
+SECTOR_REVERSE_FORMAT = {
+    '1': '01', '2': '02', '3': '03', '4': '04', '5': '05',
+    '6': '06', '7': '07', '8': '08', '9': '09', '10': '10',
+    '11': '11', '12': '12', '13': '13', '14': '14', '15': '15',
+    '16': '16', '17': '17', '18': '18', '19': '19', '20': '20',
+    '21': '21', '22': '22', '23': '23', '24': '24', '25': '25',
+    '99': '99', '9999': '9999',
+    '01': '01', '02': '02', '03': '03', '04': '04', '05': '05',
+    '06': '06', '07': '07', '08': '08', '09': '09'
+}
 
-    SAS column positions are 1-indexed; @002 means "start at column 2"
-    which is index 1 in a 0-indexed python string.
+# Customer Code Format ($LOCUSTCD)
+CUSTCODE_FORMAT = {
+    '1': '01', '2': '02', '3': '03', '4': '04', '5': '05',
+    '6': '06', '7': '07', '8': '08', '9': '09', '10': '10',
+    '11': '11', '12': '12', '13': '13', '14': '14', '15': '15',
+    '16': '16', '17': '17', '18': '18', '19': '19', '20': '20',
+    '77': '77', '78': '78', '95': '95', '96': '96',
+    '99': '99'
+}
 
-    NOTE: ITEM = PUT(SET_ID,$LCRCDGL.) applies a SAS format (a lookup
-    table named LCRCDGL) mapping SET_ID -> report ITEM code. That format
-    table hasn't been provided, so `item` is left blank here; if you can
-    get the $LCRCDGL PROC FORMAT definitions (fmtname/start/label), plug
-    them into ITEM_LOOKUP below and this will produce real ITEM values.
-    """
-    records = []
-    ITEM_LOOKUP = {}  # TODO: populate from $LCRCDGL format if available
+# =========================================================
+# 3. DATE LOGIC
+# =========================================================
+TDATE = datetime.now() - timedelta(days=1)
+day_val = TDATE.day
+month_val = TDATE.month
+year_val = TDATE.year
 
+if day_val == 8:
+    SDD, WK, WK1 = 1, '1', '4'
+elif day_val == 15:
+    SDD, WK, WK1 = 9, '2', '1'
+elif day_val == 22:
+    SDD, WK, WK1 = 16, '3', '2'
+else:
+    SDD, WK, WK1 = 23, '4', '3'
+
+MM = month_val
+MM1 = MM
+if WK == '1':
+    MM1 = MM - 1
+    if MM1 == 0:
+        MM1 = 12
+
+REPTMON = f"{MM:02d}"
+REPTMON1 = f"{MM1:02d}"
+REPTYEAR = str(year_val)
+REPTYEA2 = str(year_val)[2:]
+REPTDAY = f"{day_val:02d}"
+RDATE = TDATE.strftime("%d%m%y")
+RDATE2 = (TDATE - timedelta(days=1)).strftime("%y%m%d")
+
+# =========================================================
+# 4. HELPER FUNCTIONS
+# =========================================================
+def read_sas(file_path):
+    """Read SAS7BDAT file and convert to Polars DataFrame"""
     try:
-        with open(filepath, 'r', errors='replace') as f:
-            for line in f:
-                if len(line) < 62:
-                    continue
-                set_id = line[1:20].strip()          # @002, $19.
-                amount_raw = line[41:61].strip()      # @042, COMMA20.2
-                sign = line[61:62].strip()            # @062, $1.
-
-                if not set_id:
-                    continue
-
-                try:
-                    amount = float(amount_raw.replace(',', '')) if amount_raw else 0.0
-                except ValueError:
-                    amount = 0.0
-
-                if sign == '':
-                    amount = -1 * amount
-
-                item = ITEM_LOOKUP.get(set_id, '')
-
-                records.append({
-                    'set_id': set_id,
-                    'amount': amount,
-                    'sign': sign,
-                    'item': item
-                })
-        print(f"    Read {len(records)} records from {os.path.basename(filepath)}")
-        if not ITEM_LOOKUP:
-            print("    NOTE: LCRCDGL format lookup not populated - 'item' will be blank "
-                  "for all WALK records until ITEM_LOOKUP is filled in.")
+        df, meta = pyreadstat.read_sas7bdat(str(file_path))
+        # Convert all column names to lowercase
+        df.columns = [col.lower() for col in df.columns]
+        # Convert all object columns to string to avoid type issues
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                df[col] = df[col].astype(str).replace('nan', '')
+                df[col] = df[col].replace('None', '')
+        return pl.from_pandas(df)
     except Exception as e:
-        print(f"    Warning: Could not read {filepath}: {e}")
-    return records
-
-
-def read_templ_file(filepath):
-    """Read TEMPL.TXT file (fixed width format)"""
-    records = []
-    try:
-        with open(filepath, 'r') as f:
-            for line in f:
-                if len(line) >= 14:
-                    records.append({
-                        'tag': line[0:2].strip(),
-                        'desc': line[2:14].strip()
-                    })
-        print(f"    Read {len(records)} records from {os.path.basename(filepath)}")
-    except Exception as e:
-        print(f"    Warning: Could not read {filepath}: {e}")
-    return records
-
-
-def read_walk_and_templ():
-    """Read WALK.TXT and TEMPL.TXT files"""
-    walk_records = []
-    templ_records = []
-
-    walk_files = glob.glob(f"{PATHS['list']}walk*.txt")
-    if walk_files:
-        walk_records = read_walk_file(walk_files[0])
-    else:
-        print(f"  No WALK.TXT files found in {PATHS['list']}")
-
-    templ_files = glob.glob(f"{PATHS['list']}templ*.txt")
-    if templ_files:
-        templ_records = read_templ_file(templ_files[0])
-    else:
-        print(f"  No TEMPL.TXT files found in {PATHS['list']}")
-
-    return walk_records, templ_records
-
-
-# =============================================================================
-# DCI PROCESSING
-# =============================================================================
-def process_dci(rep_date):
-    """Process DCI (Dual Currency Investments) from DCIWH.DCID"""
-    records = []
-
-    try:
-        dci_pattern = f"{PATHS['dciwh']}dcid*.sas7bdat"
-        dci_files = glob.glob(dci_pattern)
-        if not dci_files:
-            print(f"  No DCI files found")
-            return records
-
-        dci_file = max(dci_files)
-        print(f"  Using DCI file: {os.path.basename(dci_file)}")
-        df = read_sas_file(dci_file)  # columns normalized to lowercase
-
-        if df is None:
-            return records
-
-        print(f"    Columns ({len(df.columns)}): {df.columns}")
-
-        # DCI file's real columns confirmed: matdt, startdt, invamt,
-        # invcurr, custcode, product, ticketno all present directly.
-        col_aliases = {
-            'matdt': ['matdt'],
-            'startdt': ['startdt'],
-            'invamt': ['invamt'],
-            'invcurr': ['invcurr', 'invcurrac'],
-            'custcode': ['custcode'],
-            'product': ['product'],
-            'ticketno': ['ticketno'],
-        }
-
-        def resolve(name):
-            for cand in col_aliases.get(name, [name]):
-                if cand in df.columns:
-                    return cand
-            return None
-
-        matdt_col = resolve('matdt')
-        startdt_col = resolve('startdt')
-        invamt_col = resolve('invamt')
-        invcurr_col = resolve('invcurr')
-
-        missing = [n for n, c in [('matdt', matdt_col), ('startdt', startdt_col),
-                                   ('invamt', invamt_col), ('invcurr', invcurr_col)] if c is None]
-        if missing:
-            print(f"    !! WARNING [DCI]: could not resolve columns for {missing}. "
-                  f"All DCI records will be skipped until these are mapped correctly. "
-                  f"Real columns available: {df.columns}")
-            return records
-
-        print(f"    Sample rows (first 3):")
-        sample_rows = df.head(3).rows(named=True)
-        for i, row in enumerate(sample_rows):
-            print(f"      Row {i+1}:")
-            for key in [matdt_col, startdt_col, invamt_col, invcurr_col, 'custcode', 'product', 'ticketno']:
-                if key and key in df.columns:
-                    print(f"        {key}: {row.get(key, 'N/A')}")
-
-        for row in df.iter_rows(named=True):
-            # FIX: these come back as raw SAS date-serial floats
-            # (e.g. 24321.0), not python dates - convert before comparing.
-            matdt = sas_date_to_pydate(row.get(matdt_col))
-            startdt = sas_date_to_pydate(row.get(startdt_col))
-
-            if matdt and startdt and matdt > rep_date['date'] and startdt <= rep_date['date']:
-                if (matdt - rep_date['date']).days < 8:
-                    remmth = 0.1
-                    rem30d = 0
-                else:
-                    remmth, rem30d = calculate_remaining_months(
-                        matdt, rep_date['date'], rep_date['days_in_month']
-                    )
-
-                invamt = row.get(invamt_col, 0) or 0
-                invccy = str(row.get(invcurr_col, 'MYR') or 'MYR').upper()
-                spotrt = FX_RATES.get(invccy, 1.0)
-
-                if invccy == 'JPY':
-                    invamt = round(invamt)
-                else:
-                    invamt = round(invamt, 2)
-
-                amount = invamt * spotrt
-                remth_bucket = format_mth_bucket(remmth)
-
-                if invccy == 'MYR':
-                    bnmcode = f"9532900{remth_bucket}0000Y"
-                else:
-                    bnmcode = f"9632900{remth_bucket}0000Y"
-
-                records.append({
-                    'src': 'dci', 'bnmcode': bnmcode, 'cur': invccy, 'amt': amount,
-                    'custfiss': f"{int(row.get('custcode', 0) or 0):02d}" if 'custcode' in df.columns else '00',
-                    'dealtype': row.get('product', '') if 'product' in df.columns else '',
-                    'dealref': row.get('ticketno', '') if 'ticketno' in df.columns else '',
-                    'remmth': remmth, 'rem30d': rem30d, 'ori30d': 0
-                })
-    except Exception as e:
-        print(f"  DCI warning: {e}")
-        import traceback
-        traceback.print_exc()
-
-    return records
-
-
-# =============================================================================
-# UTSAS PROCESSING (EQUA.UTMS/UTFX/UTRP)
-# =============================================================================
-def process_utsas(rep_date):
-    """Process UTSAS from EQUA tables"""
-    records = []
-    utvar = ['dealref', 'dealtype', 'custfiss', 'custno', 'custname', 'custeqno', 'custid']
-
-    try:
-        print(f"  Looking for UTSAS files in: {PATHS['equa']}")
-        print(f"    RPTDT format: {rep_date['rptdt']} ({rep_date['date'].strftime('%y%m%d')})")
-
-        if not os.path.exists(PATHS['equa']):
-            print(f"    ERROR: Directory does not exist: {PATHS['equa']}")
-            return records
-
-        all_files = sorted(os.listdir(PATHS['equa']))
-        print(f"    Total files in directory: {len(all_files)}")
-
-        print(f"    First 20 files:")
-        for f in all_files[:20]:
-            print(f"      - {f}")
-
-        for prefix in ['utms', 'utfx', 'utrp']:
-            print(f"\n    Looking for {prefix} files...")
-
-            patterns = [
-                f"{prefix}{rep_date['rptdt']}.sas7bdat",
-                f"{prefix}{rep_date['mon']}{rep_date['day']}.sas7bdat",
-                f"{prefix}*.sas7bdat",
-                f"{prefix}*",
-            ]
-
-            found = False
-            for pattern in patterns:
-                full_pattern = os.path.join(PATHS['equa'], pattern)
-                matches = glob.glob(full_pattern)
-                if matches:
-                    print(f"      Pattern '{pattern}' matched {len(matches)} file(s):")
-                    for m in matches[:5]:
-                        print(f"        - {os.path.basename(m)}")
-
-                    filepath = matches[0]
-                    print(f"      Using: {os.path.basename(filepath)}")
-
-                    df = read_sas_file(filepath)  # columns normalized to lowercase
-                    if df is not None:
-                        print(f"      Columns in {os.path.basename(filepath)} ({len(df.columns)}): {df.columns}")
-
-                        keep_cols = [c for c in utvar if c in df.columns]
-                        missing_cols = [c for c in utvar if c not in df.columns]
-                        if missing_cols:
-                            print(f"      NOTE: {prefix} is missing expected columns {missing_cols} "
-                                  f"(will just be skipped for this file)")
-                        if keep_cols:
-                            df = df.select(keep_cols)
-                            if 'custeqno' in df.columns:
-                                df = df.rename({'custeqno': 'acctno'})
-                            records.extend(df.rows(named=True))
-                            print(f"      Added {len(df)} records from {os.path.basename(filepath)}")
-                        else:
-                            print(f"      !! No matching columns found in {os.path.basename(filepath)}, "
-                                  f"0 records added from this file")
-                    found = True
-                    break
-
-            if not found:
-                print(f"      No {prefix} files found")
-
-        print(f"\n    Total UTSAS records: {len(records):,}")
-
-    except Exception as e:
-        print(f"  UTSAS warning: {e}")
-        import traceback
-        traceback.print_exc()
-
-    return records
-
-
-# =============================================================================
-# CIS EQUITY PROCESSING (CIS.CUSTDLY, parquet)
-# =============================================================================
-def process_cis_equity():
-    """Process CIS equity data from parquet file"""
-    records = []
-
-    try:
-        cis_pattern = f"{PATHS['cis']}CIS_CUST_DAILY*.parquet"
-        cis_files = glob.glob(cis_pattern)
-        if not cis_files:
-            print(f"  No CIS parquet files found")
-            return records
-
-        cis_file = max(cis_files)
-        print(f"  Using CIS file: {os.path.basename(cis_file)}")
-        df = read_parquet_file(cis_file)  # columns normalized to lowercase
-
-        if df is None:
-            return records
-
-        warn_missing_columns(df, ['acctcode', 'prisec', 'aliaskey',
-                                   'custno', 'alias', 'custname', 'acctno'], 'CIS_CUST_DAILY')
-        # NOTE: 'newic' genuinely does not exist in this CIS_CUST_DAILY
-        # extract (confirmed against the full column list) - handled as
-        # always-blank below rather than treated as an error.
-        has_newic = 'newic' in df.columns
-
-        if 'acctcode' not in df.columns or 'prisec' not in df.columns:
-            print(f"    !! Cannot filter CIS equity - missing acctcode/prisec. "
-                  f"Available columns: {df.columns}")
-            return records
-
-        # FIX: prisec is numeric (e.g. 901.0). Casting a float straight to
-        # Utf8 gives "901.0", which never equals the string "901" - that
-        # silently zeroed out the filter. Cast through Float64 -> Int64
-        # instead so 901.0, 901, and "901" all normalize the same way.
-        df = df.with_columns([
-            pl.col('acctcode').cast(pl.Utf8).str.strip_chars(),
-            pl.col('prisec').cast(pl.Float64, strict=False).cast(pl.Int64, strict=False)
-        ])
-        df = df.filter((pl.col('acctcode') == 'EQC') & (pl.col('prisec') == 901))
-
-        print(f"    CIS equity rows after filter: {len(df)}")
-
-        for row in df.iter_rows(named=True):
-            newic = row.get('newic', '') if has_newic else ''
-            if not newic or (len(str(newic)) >= 5 and str(newic)[:5] == '99999'):
-                icno = f"{row.get('aliaskey', '')}{row.get('custno', 0)}".replace(' ', '')
-            else:
-                icno = f"{row.get('aliaskey', '')}{row.get('alias', '')}".replace(' ', '')
-
-            records.append({
-                'acctno': row.get('acctno'),
-                'custno': row.get('custno'),
-                'cisno': row.get('custno'),
-                'cisname': row.get('custname'),
-                'icno': icno
-            })
-    except Exception as e:
-        print(f"  CIS equity warning: {e}")
-        import traceback
-        traceback.print_exc()
-
-    return records
-
-
-# =============================================================================
-# CORE BANKING PROCESSING (LCR.FD/SA/CA/FCYCA)
-# =============================================================================
-def process_core_banking(rep_date):
-    """Process core banking data: FD, SA, CA, FCYCA"""
-    records = []
-
-    # FIX: 'fd*.sas7bdat' was matching BOTH fd30.sas7bdat (real per-account
-    # FD data) AND fdhold.sas7bdat (a separate, already-aggregated pledge
-    # summary with a completely different schema - bnmcode/curcode/amount/
-    # item/fdpledge*/fxpledge* - corresponding to the SAS's LCR.FDHOLD,
-    # used later for the "FD PLEDGED" report columns, not core banking at
-    # all). Excluded explicitly below.
-    EXCLUDE_SUBSTRINGS = {'fd': ['hold']}
-
-    try:
-        for tbl in ['fd', 'sa', 'ca', 'fcyca']:
-            file_pattern = f"{PATHS['lcr']}{tbl}*.sas7bdat"
-            files = glob.glob(file_pattern)
-            excludes = EXCLUDE_SUBSTRINGS.get(tbl, [])
-            files = [f for f in files if not any(x in os.path.basename(f).lower() for x in excludes)]
-
-            for filepath in files:
-                df = read_sas_file(filepath)  # columns normalized to lowercase
-                if df is None:
-                    continue
-
-                print(f"    [{tbl}] Columns ({len(df.columns)}): {df.columns}")
-                warn_missing_columns(
-                    df,
-                    ['bnmcode', 'amount', 'curcode', 'custcd', 'acctno',
-                     'custno', 'rem30d', 'remmth'],
-                    f'core_banking:{tbl}'
-                )
-
-                for row in df.iter_rows(named=True):
-                    # FIX: 'custcdx' was only a thing inside the original
-                    # SAS's stacked SET statement (RENAME=(CUSTCD=CUSTCDX)
-                    # to disambiguate FD's custcd from the other tables'
-                    # during one combined SET). Since each file is read
-                    # separately here, fd30.sas7bdat's field is just
-                    # 'custcd' - fall back to custcdx only if it's really
-                    # there (e.g. if someone pre-renamed the file).
-                    custcd = row.get('custcd')
-                    if custcd is None:
-                        custcd = row.get('custcdx', 0)
-
-                    cust = get_customer_category(custcd, cust_map)
-
-                    rem30d = row.get('rem30d', row.get('remmth', 1))
-                    remmth = row.get('remmth', 1)
-
-                    if rem30d is None:
-                        rem30d = remmth
-
-                    bic = row['bnmcode'][:5] if row.get('bnmcode') else '95311'
-
-                    records.append({
-                        'src': f'banking_{tbl}',
-                        'bic': bic,
-                        'bnmcode': f"{bic}{cust}020000Y",
-                        'cmmcode': f"{bic}{cust}{format_mth_bucket(remmth)}0000Y",
-                        'cur': row.get('curcode', 'MYR'),
-                        'amt': row.get('amount', 0),
-                        'acctno': row.get('acctno', 0),
-                        'custno': row.get('custno', 0),
-                        'custcd': custcd,
-                        'cust': cust,
-                        'rem30d': rem30d,
-                        'remmth': remmth,
-                        'ecp': '00',
-                        'product': row.get('product', 0),
-                        'billerind': row.get('billerind', 'N'),
-                        'pbmerch': row.get('pbmerch', 'N'),
-                        'intrate': row.get('intrate', 0),
-                        'oprrate': row.get('oprrate', 0),
-                        'source': row.get('source', ''),
-                        'dtsigned': row.get('dtsigned'),
-                        'intplan': row.get('intplan', 0),
-                        'sme_tag': row.get('sme_tag', ''),
-                        'fdhold': row.get('fdhold', 'N'),
-                        'trx': row.get('trx', 0),
-                        'sign': ''
-                    })
-    except Exception as e:
-        print(f"  Core banking warning: {e}")
-        import traceback
-        traceback.print_exc()
-
-    return records
-
-
-def process_cis_info():
-    """Process CIS info from CISDP.DEPOSIT and CISCA.DEPOSIT"""
-    records = {}
-    try:
-        for deptype in ['cisdp', 'cisca']:
-            file_pattern = f"{PATHS[deptype]}deposit*.sas7bdat"
-            files = glob.glob(file_pattern)
-            if not files:
-                print(f"    No files matching 'deposit*.sas7bdat' found in {PATHS[deptype]}")
-                debug_directory(PATHS[deptype])
-                continue
-            for filepath in files:
-                df = read_sas_file(filepath, ['acctno', 'custno', 'seccust', 'newic', 'oldic', 'custname'])
-                if df is not None:
-                    if 'seccust' not in df.columns:
-                        print(f"    !! WARNING [{deptype}]: 'seccust' column not found - "
-                              f"columns: {df.columns}. Skipping filter for this file.")
-                        continue
-                    # FIX: seccust may be numeric (e.g. 901.0, which would
-                    # break a direct '901' string-cast comparison the same
-                    # way prisec did) OR genuinely character per the
-                    # original SAS (WHERE SECCUST='901'). Branch on the
-                    # actual dtype instead of assuming either.
-                    if df['seccust'].dtype in (pl.Utf8, pl.String):
-                        df = df.with_columns(pl.col('seccust').str.strip_chars())
-                        df = df.filter(pl.col('seccust') == '901')
-                    else:
-                        df = df.with_columns(
-                            pl.col('seccust').cast(pl.Float64, strict=False).cast(pl.Int64, strict=False)
-                        )
-                        df = df.filter(pl.col('seccust') == 901)
-                    for row in df.rows(named=True):
-                        if row.get('acctno'):
-                            records[row['acctno']] = row
-    except Exception as e:
-        print(f"  CIS info warning: {e}")
-        import traceback
-        traceback.print_exc()
-
-    return records
-
-
-def process_ecp():
-    """Process LCR_ECP from LIST.LCR_ECP"""
-    records = {}
-    try:
-        file_pattern = f"{PATHS['list']}lcr_ecp*.sas7bdat"
-        files = glob.glob(file_pattern)
-        for filepath in files:
-            df = read_sas_file(filepath)  # columns normalized to lowercase
-            if df is not None:
-                for row in df.rows(named=True):
-                    if row.get('acctno'):
-                        records[row['acctno']] = row.get('ecp', '00')
-    except Exception as e:
-        print(f"  ECP warning: {e}")
-        import traceback
-        traceback.print_exc()
-
-    return records
-
-
-# =============================================================================
-# INSURED/UNINSURED SPLIT
-# =============================================================================
-def apply_insurance_split(records, walk_records, templ_records):
-    """Split insured/uninsured portions for amounts > 250K"""
-    result = []
-
-    icgrp_totals = {}
-    for r in records:
-        icgrp = r.get('icgrp', '')
-        if icgrp:
-            icgrp_totals[icgrp] = icgrp_totals.get(icgrp, 0) + r['amt']
-
-    for r in records:
-        icgrp = r.get('icgrp', '')
-        toticbal = icgrp_totals.get(icgrp, 0)
-
-        if toticbal > 250000 and r.get('bic') not in ['9531X']:
-            curbal = r['amt']
-            insured_amt = (curbal / toticbal) * 250000
-            uninsured_amt = curbal - insured_amt
-
-            if r['bnmcode'][5:7] in ['29', '39'] and r.get('ecp') != '01':
-                r1 = r.copy()
-                r1['amt'] = curbal
-                r1['bnmcode'] = r['bnmcode'][:7] + '10' + r['bnmcode'][10:15]
-                result.append(r1)
-            else:
-                r1 = r.copy()
-                r1['amt'] = insured_amt
-                result.append(r1)
-
-                r2 = r.copy()
-                r2['amt'] = uninsured_amt
-                r2['bnmcode'] = r['bnmcode'][:7] + '10' + r['bnmcode'][10:15]
-                result.append(r2)
-        else:
-            result.append(r)
-
-    return result
-
-
-# =============================================================================
-# CONSOLIDATION AND REPORTING
-# =============================================================================
-def consolidate_data(all_records):
-    """Consolidate all records into summary by BNMCODE"""
-    if not all_records:
-        return pl.DataFrame()
-
-    df = pl.DataFrame(all_records)
-    df = df.with_columns([
-        (pl.col('amt') / 1000).round(2).alias('amt_k')
-    ])
-
-    summary = df.group_by(['bnmcode', 'cur']).agg([
-        pl.col('amt_k').sum()
-    ])
-
-    return summary
-
-
-def apply_column_mapping(row, is_banking):
-    """Apply column mapping logic"""
-    bnmcode = row['bnmcode']
-    bic = bnmcode[:5]
-
-    col_map = {
-        '95311': 'fd95311rm',
-        '95312': 'sa95312rm',
-        '95313': 'ca95313rm',
-        '95830': 'std95830',
-        '95840': 'nid95840',
-        '9x810': 'ibb9x810',
-        '9x329': 'dci9x329',
-        '95820': 'ibr95820',
-        '95850': 'bap95850',
-        '9531x': 'gld9531x'
-    }
-    colname = col_map.get(bic[:5].lower(), '')
-
-    if is_banking:
-        item = bnmcode[5:9]
-        remmth = bnmcode[9:11]
-    else:
-        item = bnmcode[5:7]
-        if bic == '95820':
-            item = 'C1.11'
-        remmth = bnmcode[7:9]
-        orimth = bnmcode[9:11]
-        if item == 'B3.30' and orimth == '02':
-            item = 'B6.30'
-
-    if colname[:3].lower() in ['fd9', 'std']:
-        colname = f"{colname}{'1' if remmth == '1' else '2'}"
-    elif colname[:3].lower() in ['nid', 'dci', 'ibb', 'ibr', 'bap']:
-        for i in range(1, 7):
-            if str(i) == remmth:
-                colname = f"{colname}v{i}"
-                break
-
-    return item, colname, row['amt_k']
-
-
-def write_text_report(report_data, rep_date):
-    """Write report to text files"""
-    if not report_data:
-        print("  No report data to write")
+        print(f"Error reading {file_path}: {e}")
+        return None
+
+def write_fixed_width(df, filepath, columns_spec):
+    """Write DataFrame as fixed-width text file"""
+    if df is None or df.is_empty():
+        print(f"Warning: No data to write for {filepath}")
         return
-
-    output_dir = PATHS['output']
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-    report_df = pl.DataFrame(report_data)
-    final = report_df.group_by(['item', 'colname']).agg([
-        pl.col('amount').sum()
-    ])
-
-    items = sorted(final['item'].unique().to_list())
-    columns = sorted(final['colname'].unique().to_list())
-
-    filename = f"lcr{rep_date['day']}.txt"
-    filepath = f"{output_dir}{filename}"
-
+    
     with open(filepath, 'w') as f:
-        f.write("item\t" + "\t".join(columns) + "\n")
-        for item in items:
-            row_data = [item]
-            for col in columns:
-                mask = (final['item'] == item) & (final['colname'] == col)
-                if mask.any():
-                    amount = final.filter(mask)['amount'].sum()
-                    row_data.append(f"{amount:.2f}")
-                else:
-                    row_data.append("0.00")
-            f.write("\t".join(row_data) + "\n")
+        for row in df.iter_rows(named=True):
+            line = ""
+            for col_name, width, format_type in columns_spec:
+                value = row.get(col_name, "")
+                
+                if format_type == 'Z':  # Zero-padded integer
+                    if value is None or value == '' or pd.isna(value):
+                        line += '0' * width
+                    else:
+                        try:
+                            line += f"{int(float(value)):0{width}d}"
+                        except (ValueError, TypeError):
+                            line += '0' * width
+                
+                elif format_type == 'S':  # String (left-justified)
+                    if value is None or pd.isna(value):
+                        value = ''
+                    line += f"{str(value):<{width}}"
+                
+                elif format_type == 'D':  # Decimal with 2 decimal places
+                    if value is None or value == '' or pd.isna(value):
+                        line += ' ' * width
+                    else:
+                        try:
+                            line += f"{float(value):{width}.2f}"
+                        except (ValueError, TypeError):
+                            line += ' ' * width
+                
+                elif format_type == 'I':  # Integer
+                    if value is None or value == '' or pd.isna(value):
+                        line += ' ' * width
+                    else:
+                        try:
+                            line += f"{int(float(value)):{width}d}"
+                        except (ValueError, TypeError):
+                            line += ' ' * width
+                
+                else:  # Default to string
+                    if value is None or pd.isna(value):
+                        value = ''
+                    line += f"{str(value):<{width}}"
+            
+            f.write(line + "\n")
 
-    print(f"  ✓ {filename}: {len(items)} items x {len(columns)} columns")
+# =========================================================
+# 5. READ INPUT FILES (lowercase filenames)
+# =========================================================
+print("Reading input files...")
 
+# Construct file names based on date (all lowercase)
+input_files = {
+    'imast': BASE_INPUT / f"imast{REPTDAY}{REPTMON}.sas7bdat",
+    'imast2': BASE_INPUT / f"imast2{REPTDAY}{REPTMON}.sas7bdat",
+    'icred': BASE_INPUT / f"icred{REPTDAY}{REPTMON}.sas7bdat",
+    'isuba': BASE_INPUT / f"isuba{REPTDAY}{REPTMON}.sas7bdat",
+    'iprov': BASE_INPUT / f"iprov{REPTDAY}{REPTMON}.sas7bdat",
+    'iamsubacc': BASE_INPUT / f"iamsubacc{REPTDAY}{REPTMON}.sas7bdat",
+    'ibtrad': BASE_INPUT / f"ibtrad{REPTMON}{WK}.sas7bdat",
+    'ibtdtl': BASE_INPUT / f"ibtdtl{REPTYEA2}{REPTMON}{REPTDAY}.sas7bdat",
+    'lnacct': BASE_INPUT / "lnacct.sas7bdat"
+}
 
-# =============================================================================
-# MAIN
-# =============================================================================
-def main():
-    print("=" * 60)
-    print("EIBDLCRM - BNM LCR Reporting (Conventional Banking)")
-    print("=" * 60)
-    print("\nNOTE: KALMLIQ logic now in its own module (kalmliq.py)")
-    print("      - Reading from BNMK.K1TBL{mon}{week} and BNMK.K3TBL{mon}{week}")
-    print("      - Using hardcoded FX rates")
-    print("      - Column names normalized to lowercase on read")
-    print("=" * 60)
-
-    rep_date = get_report_date()
-    print(f"\nReport Date: {rep_date['date'].strftime('%d/%m/%Y')}")
-    print(f"Week: {rep_date['nowk']}, Month: {rep_date['mon']}")
-    print(f"Expected K1/K3 files: k1tbl{rep_date['mon']}{rep_date['nowk']}.sas7bdat")
-    print(f"Expected UTSAS files: utms{rep_date['rptdt']}.sas7bdat, utfx{rep_date['rptdt']}.sas7bdat, utrp{rep_date['rptdt']}.sas7bdat")
-
-    print("\n" + "=" * 60)
-    print("LOADING INPUTS")
-    print("=" * 60)
-
-    print("\n1. FX Rates (HARDCODED)...")
-    print(f"  Loaded {len(FX_RATES)} currencies: {list(FX_RATES.keys())}")
-
-    print("\n2. Loading WALK.TXT and TEMPL.TXT...")
-    walk_records, templ_records = read_walk_and_templ()
-    print(f"  WALK: {len(walk_records)} records")
-    print(f"  TEMPL: {len(templ_records)} records")
-
-    print("\n3. Processing KALMLIQ (K1TBL and K3TBL)...")
-    k1_records = process_k1tbl(rep_date)
-    print(f"  K1TBL records: {len(k1_records):,}")
-    k3_records = process_k3tbl(rep_date)
-    print(f"  K3TBL records: {len(k3_records):,}")
-
-    treasury_records = build_ktblall(k1_records, k3_records, rep_date)
-    print(f"  Total treasury records: {len(treasury_records):,}")
-    print(f"  NOTE: K1TBX (a third source stacked in by the original SAS) "
-          f"is not available and is not included above - see kalmliq.py docstring.")
-
-    print("\n4. Processing DCIWH.DCID...")
-    dci_records = process_dci(rep_date)
-    print(f"  DCI records: {len(dci_records):,}")
-
-    print("\n5. Processing CIS.CUSTDLY (parquet)...")
-    cis_records = process_cis_equity()
-    cis_dict = {r['acctno']: r for r in cis_records if r.get('acctno')}
-    print(f"  CIS records: {len(cis_dict):,}")
-
-    print("\n6. Processing EQUA.UTMS/UTFX/UTRP...")
-    utsas_records = process_utsas(rep_date)
-    utsas_dict = {r['dealref']: r for r in utsas_records if r.get('dealref')}
-    print(f"  UTSAS records: {len(utsas_dict):,}")
-
-    print("\n7. Processing LCR.FD/SA/CA/FCYCA...")
-    banking_records = process_core_banking(rep_date)
-    print(f"  Banking records: {len(banking_records):,}")
-
-    print("\n8. Processing CISDP/CISCA.DEPOSIT...")
-    cis_info_dict = process_cis_info()
-    print(f"  CIS info records: {len(cis_info_dict):,}")
-
-    print("\n9. Processing LIST.LCR_ECP...")
-    ecp_dict = process_ecp()
-    print(f"  ECP records: {len(ecp_dict):,}")
-
-    print("\n" + "=" * 60)
-    print("PROCESSING DATA")
-    print("=" * 60)
-
-    all_treasury = treasury_records + dci_records
-    print(f"\nCombined treasury + DCI: {len(all_treasury):,} records")
-
-    enhanced_treasury = []
-    for r in all_treasury:
-        dealref = r.get('dealref')
-        if dealref and dealref in utsas_dict:
-            ut = utsas_dict[dealref]
-            r.update(ut)
-
-        acctno = r.get('acctno') or r.get('custeqno')
-        if acctno and acctno in cis_dict:
-            ci = cis_dict[acctno]
-            r['cisno'] = ci.get('cisno')
-            r['cisname'] = ci.get('cisname')
-            r['icno'] = ci.get('icno')
-
-        custfiss = r.get('custfiss', 0)
-        if custfiss:
-            try:
-                custfiss = int(custfiss)
-            except (ValueError, TypeError):
-                custfiss = 0
-
-        custno = r.get('custno', '')
-        cust = get_customer_category(custfiss, cust_map, special_cust,
-                                      is_custno=(custno in special_cust.get('39', [])))
-
-        bic = r['bnmcode'][:5]
-        if bic == '95830' and r.get('dealtype') in ['BCQ', 'BCT', 'BCW']:
-            bic = '9583X'
-
-        rem30d = r.get('rem30d', r.get('remmth', 1))
-        remmth = r.get('remmth', 1)
-
-        if rem30d is None:
-            rem30d = remmth
-
-        bnmcode = f"{bic}{cust}{format_day_bucket(rem30d)}0000Y"
-        cmmcode = f"{bic}{cust}{format_mth_bucket(remmth)}0000Y"
-
-        if custno in special_cust.get('49', []) and cust == '49' and bic in ['95840', '96840']:
-            ori30d = r.get('ori30d', 0)
-            if format_day_bucket(ori30d) > '05' and format_day_bucket(rem30d) > '01':
-                bnmcode = bnmcode[:9] + '0200Y'
-
-        icgrp_src = r.get('custid', r.get('icno', ''))
-        icgrp = icgrp_src.replace(' ', '') if isinstance(icgrp_src, str) else ''
-
-        enhanced_treasury.append({
-            'src': r['src'],
-            'bic': bic,
-            'bnmcode': bnmcode,
-            'cmmcode': cmmcode,
-            'cur': r.get('cur', 'MYR'),
-            'amt': r.get('amt', 0),
-            'dealref': dealref,
-            'custno': custno,
-            'icgrp': icgrp,
-            'rem30d': rem30d,
-            'remmth': remmth,
-            'acctno': acctno,
-            'ori30d': r.get('ori30d', 0)
-        })
-
-    print(f"Enhanced treasury: {len(enhanced_treasury):,} records")
-
-    enhanced_banking = []
-    for r in banking_records:
-        acctno = r['acctno']
-
-        if acctno in cis_info_dict:
-            ci = cis_info_dict[acctno]
-            r['newic'] = ci.get('newic')
-            r['oldic'] = ci.get('oldic')
-            r['custname'] = ci.get('custname')
-
-        if acctno in ecp_dict:
-            r['ecp'] = ecp_dict[acctno]
-
-        if r['ecp'] == '':
-            r['ecp'] = '00'
-        if r['ecp'] == '01':
-            if r['intrate'] < r['oprrate']:
-                r['ecp'] = '01'
-            else:
-                r['ecp'] = '00'
-        if r['billerind'] == 'Y' or r['pbmerch'] == 'Y':
-            r['ecp'] = '01'
-
-        product_list = [106, 151, 158, 97, 164, 201, 215]
-        intplan_ranges = list(range(400, 420)) + list(range(600, 659)) + \
-                          list(range(720, 741)) + list(range(864, 891)) + \
-                          list(range(941, 968))
-
-        if (r['product'] in product_list or
-                r['intplan'] in intplan_ranges or
-                (r['source'] != 'PGD' and r['dtsigned'] and
-                 r['dtsigned'] > 0 and
-                 (rep_date['date'] - r['dtsigned']).days >= 365)):
-            r['sign'] = 'R '
-
-        special_39 = [4391161, 2115999, 12579649, 13468207, 14300254,
-                      14675929, 15327497, 17104931, 12677444, 3703533,
-                      5978659, 16185090, 2558344, 10819745]
-
-        # 'cust' defaults to the category already computed in
-        # process_core_banking() (r['cust']); overridden only for the
-        # 14 special customer numbers.
-        if r['custno'] in special_39:
-            r['cust'] = '39'
-
-        if r['cur'] == 'XAU':
-            r['bic'] = '9531X'
-            r['bnmcode'] = f"9531X{r['cust']}100000Y"
-            r['cmmcode'] = f"9531X{r['cust']}{format_mth_bucket(r['remmth'])}0000Y"
-            r['amt'] = r['amt'] * FX_RATES.get('XAU', 200.0)
-            r['cur'] = 'MYR'
-
-        enhanced_banking.append(r)
-
-    print(f"Enhanced banking: {len(enhanced_banking):,} records")
-
-    icgrp_totals = {}
-    for r in enhanced_banking:
-        newic = r.get('newic') or ''
-        oldic = r.get('oldic') or ''
-        raw_icgrp = newic or oldic
-        icgrp = raw_icgrp.replace(' ', '') if isinstance(raw_icgrp, str) else ''
-        r['icgrp'] = icgrp
-        icgrp_totals[icgrp] = icgrp_totals.get(icgrp, 0) + r['amt']
-
-    exclude_cust = [14094942, 16557696, 3728510, 11335374, 16265490,
-                     3523050, 11880426, 16771972, 15241330, 16500538]
-
-    for r in enhanced_banking:
-        icgrp = r['icgrp']
-        toticbal = icgrp_totals.get(icgrp, 0)
-        r['toticbal'] = toticbal
-
-        if (r['custno'] not in exclude_cust and r['bnmcode'][5:7] == '29') or r['custcd'] in [72, 73, 74]:
-            totdpbal = toticbal + 0
-            if totdpbal < 5000000:
-                r['bnmcode'] = f"{r['bic']}19{r['bnmcode'][7:]}"
-                r['cmmcode'] = f"{r['bic']}19{r['cmmcode'][7:]}"
-        elif r['bnmcode'][5:7] == '19' and r.get('sme_tag') == 'N':
-            totdpbal = toticbal + 0
-            if totdpbal >= 5000000:
-                r['bnmcode'] = f"{r['bic']}29{r['bnmcode'][7:]}"
-                r['cmmcode'] = f"{r['bic']}29{r['cmmcode'][7:]}"
-
-        if r['bnmcode'][5:7] in ['08', '19'] and r['bic'] != '9531X':
-            if r.get('trx') == 1:
-                tag = '01'
-            elif r.get('sign') in ['R', 'R ']:
-                tag = '02'
-            else:
-                tag = '03'
-            r['bnmcode'] = r['bnmcode'][:7] + tag + '0000Y'
-
-        if r['bic'] in ['95313', '96313']:
-            r['bnmcode'] = r['bnmcode'][:9] + r['ecp'] + '00Y'
-            r['cmmcode'] = r['cmmcode'][:9] + r['ecp'] + '00Y'
-
-    print("\nApplying insurance split...")
-    banking_split = apply_insurance_split(enhanced_banking, walk_records, templ_records)
-    print(f"Banking after insurance split: {len(banking_split):,} records")
-
-    all_data = enhanced_treasury + banking_split
-    print(f"\nTotal records before consolidation: {len(all_data):,}")
-
-    print("\nConsolidating...")
-    summary = consolidate_data(all_data)
-    print(f"  Consolidated to {len(summary):,} BNM code x currency combinations")
-
-    print("\nGenerating LCR report (text format)...")
-    report_data = []
-    for row in summary.rows(named=True):
-        is_banking = row['bnmcode'][5] != '9'
-        item, colname, amount = apply_column_mapping(row, is_banking)
-        report_data.append({
-            'item': item,
-            'colname': colname,
-            'amount': amount,
-            'cur': row['cur']
-        })
-
-    if report_data:
-        write_text_report(report_data, rep_date)
+# Read files
+data = {}
+for key, file_path in input_files.items():
+    if file_path.exists():
+        data[key] = read_sas(file_path)
+        if data[key] is not None:
+            print(f"  Read {key}: {data[key].height} rows")
     else:
-        print("  No report data to write")
+        print(f"  Missing {key}: {file_path}")
+        data[key] = None
 
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
+# =========================================================
+# 6. PROCESS MAST
+# =========================================================
+print("\nProcessing MAST...")
 
-    if all_data:
-        df_all = pl.DataFrame(all_data)
-        total = df_all['amt'].sum() / 1000
-        by_src = df_all.group_by('src').agg([(pl.col('amt').sum() / 1000).alias('amt_k')])
+mast = None
+if data.get('imast') is not None:
+    # Get the dataframe
+    mast = data['imast']
+    
+    # Step 1: Filter data (using acctnox string column)
+    mast = mast.filter(
+        pl.col("acctnox").cast(pl.Float64, strict=False) > 2500000000
+    )
+    
+    # Step 2: Add basic columns
+    mast = mast.with_columns([
+        pl.col("ficode").alias("branch"),
+        pl.lit(0).cast(pl.Int64).alias("apcode"),
+        pl.lit(0).cast(pl.Int64).alias("oldbrh"),
+        pl.lit("     ").alias("ficody")
+    ])
+    
+    # Step 3: Create CUSTFISS (from custcodx which is string)
+    mast = mast.with_columns([
+        pl.when(
+            (pl.col("custcodx").is_null()) | (pl.col("custcodx") == "") | (pl.col("custcodx") == "nan")
+        )
+        .then(pl.lit("99"))
+        .otherwise(pl.col("custcodx"))
+        .alias("custcode_clean")
+    ])
+    
+    mast = mast.with_columns([
+        pl.col("custcode_clean").replace_strict(
+            CUSTCODE_FORMAT, 
+            default="99"
+        ).alias("custfiss")
+    ])
+    
+    # Step 4: Create SECTFISS (from sector which is string)
+    mast = mast.with_columns([
+        pl.when(
+            (pl.col("sector").is_null()) | (pl.col("sector") == "") | (pl.col("sector") == "nan")
+        )
+        .then(pl.lit("9999"))
+        .otherwise(pl.col("sector"))
+        .alias("sector_clean")
+    ])
+    
+    mast = mast.with_columns([
+        pl.col("sector_clean").replace_strict(
+            SECTOR_REVERSE_FORMAT, 
+            default="9999"
+        ).alias("sectfiss")
+    ])
+    
+    # Step 5: Apply special sector override
+    mast = mast.with_columns([
+        pl.when(
+            pl.col("custfiss").is_in(['77', '78', '95', '96'])
+        ).then(pl.lit("9700")).otherwise(pl.col("sectfiss")).alias("sectfiss")
+    ])
+    
+    # Step 6: Remove duplicates
+    mast = mast.unique(subset=["acctnox"], keep="first")
+    
+    print(f"MAST processed: {mast.height} rows")
 
-        print(f"\nTotal: RM {total:,.0f}K")
-        print(f"\nBy Source:")
-        for row in by_src.sort('amt_k', descending=True).iter_rows():
-            print(f"  {row[0]}: RM {row[1]:,.0f}K")
-    else:
-        print("\n  No data processed!")
+# =========================================================
+# 7. PROCESS MAST2
+# =========================================================
+print("\nProcessing MAST2...")
 
-    print("\n" + "=" * 60)
-    print("✓ EIBDLCRM Complete")
-    print("=" * 60)
+mast2_agg = None
+mast2c = None
 
+if data.get('imast2') is not None:
+    # Get the dataframe
+    mast2_df = data['imast2']
+    
+    # Filter valid AANO (handle potential non-string columns)
+    if 'aano' in mast2_df.columns:
+        mast2_filtered = mast2_df.filter(
+            (pl.col("aano").cast(pl.Utf8).str.slice(0, 1) != "") &
+            (pl.col("aano").cast(pl.Utf8).str.len_chars() == 13)
+        )
+        
+        # Aggregate for ALLREFNO
+        if not mast2_filtered.is_empty():
+            mast2_agg = mast2_filtered.group_by("acctnox").agg([
+                pl.col("aano").cast(pl.Utf8).str.join("|").alias("allrefno"),
+                pl.col("apvdate").filter(pl.col("apvdate") > 0).min().alias("firstdisbdt")
+            ])
+    
+    # MAST2C for CCPT
+    if 'facno' in mast2_df.columns and 'ccpt_ltst_review_dt' in mast2_df.columns:
+        mast2c = mast2_df.select([
+            pl.col("acctnox"),
+            pl.col("facno").cast(pl.Utf8).str.zfill(3).alias("facline"),
+            pl.col("ccpt_ltst_review_dt")
+        ]).unique(subset=["acctnox", "facline"])
+    
+    print(f"MAST2 processed")
 
-if __name__ == "__main__":
-    main()
+# =========================================================
+# 8. PROCESS CRED
+# =========================================================
+print("\nProcessing CRED...")
+
+cred = None
+if data.get('icred') is not None:
+    # Get the dataframe
+    cred = data['icred']
+    
+    # Step 1: Filter data
+    cred = cred.filter(
+        (pl.col("acctnox").cast(pl.Float64, strict=False) > 2500000000) &
+        (pl.col("acctnox").cast(pl.Float64, strict=False) != 2501900811) &
+        (pl.col("transref").cast(pl.Utf8).str.strip_chars() != "") &
+        (pl.col("outstand").cast(pl.Float64, strict=False) >= 0)
+    )
+    
+    # Step 2: Add calculated fields
+    cred = cred.with_columns([
+        pl.col("transref").cast(pl.Utf8).str.slice(0, 7).alias("transrex"),
+        pl.lit(0).cast(pl.Int64).alias("nodays"),
+        pl.lit(0).cast(pl.Int64).alias("arrears"),
+        pl.lit(0).cast(pl.Int64).alias("instalm")
+    ])
+    
+    # Step 3: Remove duplicates
+    cred = cred.unique(subset=["acctnox", "transref"])
+    
+    print(f"CRED processed: {cred.height} rows")
+
+# =========================================================
+# 9. PROCESS SUBA
+# =========================================================
+print("\nProcessing SUBA...")
+
+suba = None
+suba_main = None
+suba9 = None
+
+if data.get('isuba') is not None:
+    # Get the dataframe
+    suba = data['isuba']
+    
+    # Step 1: Filter data
+    suba = suba.filter(
+        (pl.col("acctnox").cast(pl.Float64, strict=False) > 2500000000) &
+        (pl.col("acctnox").cast(pl.Float64, strict=False) != 2501900811)
+    )
+    
+    # Step 2: Add calculated fields
+    suba = suba.with_columns([
+        pl.when(
+            ~pl.col("liabcode").cast(pl.Utf8).is_in(["FFS", "FFU", "FCS", "FCU", "FFL", "FTI", "FTL"])
+        ).then(pl.lit("MYR")).otherwise(pl.lit(None)).alias("forcurr"),
+        
+        pl.col("tfdesc01").cast(pl.Utf8).str.slice(0, 13).alias("aano"),
+        
+        # Apply facility mappings
+        pl.col("liabcode").cast(pl.Utf8).replace_strict(LIAB_FORMAT, default=None).alias("facility"),
+        pl.col("liabcode").cast(pl.Utf8).replace_strict(NSRSLIAB_FORMAT, default=None).alias("faccode")
+    ])
+    
+    # Step 3: Split into SUBA9 and SUBA main
+    suba9 = suba.filter(
+        (pl.col("subacct").cast(pl.Utf8) == "OV") & 
+        (pl.col("transref").cast(pl.Utf8).str.strip_chars() == "")
+    )
+    
+    suba_main = suba.filter(
+        pl.col("transref").cast(pl.Utf8).str.strip_chars() != ""
+    )
+    
+    # Step 4: Ensure SUBA9 has unique ACCTNO
+    suba9 = suba9.unique(subset=["acctnox"], keep="first")
+    
+    print(f"SUBA processed: {suba.height} rows (SUBA9: {suba9.height}, SUBA_MAIN: {suba_main.height})")
+
+# =========================================================
+# 10. PROCESS ACCT (Account Level)
+# =========================================================
+print("\nProcessing ACCT...")
+
+acct = None
+if mast is not None and suba9 is not None:
+    # Merge SUBA9 with MAST2C
+    if mast2c is not None:
+        suba9 = suba9.join(mast2c, on="acctnox", how="left")
+    
+    # Merge MAST with SUBA9 (now 1:1 on acctnox)
+    acct = mast.join(suba9, on="acctnox", how="inner")
+    
+    # Merge with MAST2_AGG
+    if mast2_agg is not None:
+        acct = acct.join(mast2_agg, on="acctnox", how="left")
+    
+    # Add calculated fields
+    acct = acct.with_columns([
+        pl.lit(20).cast(pl.Int64).alias("issueya"),
+        pl.lit(0).cast(pl.Int64).alias("issueyy"),
+        pl.lit(0).cast(pl.Int64).alias("issuemm"),
+        pl.lit(0).cast(pl.Int64).alias("issuedd"),
+        pl.lit(0).cast(pl.Int64).alias("lmtamt"),
+        pl.lit(0).cast(pl.Int64).alias("ladtyy"),
+        pl.lit(0).cast(pl.Int64).alias("ladtmm"),
+        pl.lit(0).cast(pl.Int64).alias("ladtdd"),
+        pl.lit(0).cast(pl.Int64).alias("fxrate"),
+        pl.lit("     ").alias("climate_prin_taxonomy_class")
+    ])
+    
+    print(f"ACCT processed: {acct.height} rows")
+
+# =========================================================
+# 11. WRITE OUTPUT FILES
+# =========================================================
+print("\nWriting output files...")
+
+output_suffix = f"{REPTYEAR}{REPTMON}{REPTDAY}"
+
+# ACCTCRED Output
+if acct is not None:
+    # Prepare ACCTCRED output
+    acctcred_output = acct.select([
+        pl.col("ficody").alias("FICODY"),
+        pl.col("ficode").cast(pl.Int64).alias("FICODE"),
+        pl.col("apcode").cast(pl.Int64).alias("APCODE"),
+        pl.col("acctnox").cast(pl.Int64).alias("ACCTNO"),
+        pl.lit("MYR").alias("CURRENCY"),
+        pl.lit(0).cast(pl.Int64).alias("APPRLIMT"),
+        pl.lit(0).cast(pl.Int64).alias("APPRLIM2"),
+        pl.col("issuedd").cast(pl.Int64).alias("ISSUEDD"),
+        pl.col("issuemm").cast(pl.Int64).alias("ISSUEMM"),
+        pl.col("issueya").cast(pl.Int64).alias("ISSUEYA"),
+        pl.col("issueyy").cast(pl.Int64).alias("ISSUEYY"),
+        pl.col("oldbrh").cast(pl.Int64).alias("OLDBRH"),
+        pl.col("lmtamt").cast(pl.Int64).alias("LMTAMT"),
+        pl.lit(0).cast(pl.Int64).alias("AALIMIT"),
+        pl.col("allrefno").fill_null("").alias("ALLREFNO"),
+        pl.lit(0).cast(pl.Int64).alias("LEGAL_ACTION_CD"),
+        pl.col("ladtdd").cast(pl.Int64).alias("LADTDD"),
+        pl.col("ladtmm").cast(pl.Int64).alias("LADTMM"),
+        pl.col("ladtyy").cast(pl.Int64).alias("LADTYY"),
+        pl.col("fxrate").cast(pl.Int64).alias("FXRATE"),
+        pl.col("climate_prin_taxonomy_class").alias("CLIMATE_PRIN_TAXONOMY_CLASS")
+    ])
+    
+    acctcred_spec = [
+        ("FICODY", 5, 'S'),
+        ("FICODE", 4, 'Z'),
+        ("APCODE", 3, 'Z'),
+        ("ACCTNO", 10, 'Z'),
+        ("CURRENCY", 3, 'S'),
+        ("APPRLIMT", 24, 'Z'),
+        ("APPRLIM2", 16, 'Z'),
+        ("ISSUEDD", 2, 'Z'),
+        ("ISSUEMM", 2, 'Z'),
+        ("ISSUEYA", 2, 'Z'),
+        ("ISSUEYY", 2, 'Z'),
+        ("OLDBRH", 5, 'Z'),
+        ("LMTAMT", 16, 'Z'),
+        ("AALIMIT", 24, 'Z'),
+        ("ALLREFNO", 200, 'S'),
+        ("LEGAL_ACTION_CD", 2, 'Z'),
+        ("LADTDD", 2, 'Z'),
+        ("LADTMM", 2, 'Z'),
+        ("LADTYY", 4, 'Z'),
+        ("FXRATE", 8, 'Z'),
+        ("CLIMATE_PRIN_TAXONOMY_CLASS", 5, 'S')
+    ]
+    
+    write_fixed_width(acctcred_output, BASE_OUTPUT / f"ACCTCRED_{output_suffix}.txt", acctcred_spec)
+    print(f"ACCTCRED written: {acctcred_output.height} records")
+
+print("\n" + "="*50)
+print("PROCESSING COMPLETE")
+print("="*50)
+print(f"Processing Date: {TDATE.strftime('%Y-%m-%d')}")
+print(f"MAST rows: {mast.height if mast is not None else 0}")
+print(f"CRED rows: {cred.height if cred is not None else 0}")
+print(f"SUBA rows: {suba.height if suba is not None else 0}")
+print(f"ACCT rows: {acct.height if acct is not None else 0}")
+print(f"Output files written to: {BASE_OUTPUT}")
+print("="*50)
