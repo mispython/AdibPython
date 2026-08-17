@@ -1,691 +1,802 @@
+# !/usr/bin/env python3
 """
-kalmliq.py - Treasury (K1TBL / K3TBL) processing for BNM LCR reporting.
-
-This is a direct port of the KALMLIQ SAS include (%INC PGM(KALMLIQ)),
-kept as its own module - exactly like the original SAS keeps it as a
-separate include rather than inline in EIBDLCRM.py - so it can be
-tested, read, and maintained independently of the rest of the report.
-
-=====================================================================
-KNOWN GAPS (things referenced in the SAS source that are NOT
-reconstructable from what's been shared so far):
-
-1. K1TBX - the KTBL/KTBLALL step does:
-       SET K1TBL(IN=A) K3TBL(IN=B) K1TBX;
-   K1TBX is a THIRD dataset stacked in alongside K1TBL/K3TBL that is
-   never defined in the KALMLIQ excerpt we have. It's presumably
-   produced by one of the two %INC calls below. Until we see that
-   source, treasury records from K1TBX are simply missing from this
-   port's output.
-
-2. %INC PGM(KAMLIQX);  -- runs between the K1TBL and K3TBL DATA steps.
-3. %INC PGM(KALMLIQ4); -- runs after the K3TBL DATA step, before KTBL.
-   Neither of these includes has been provided, so whatever additional
-   filtering/derivation/output they do to K1TBL/K3TBL (or to build
-   K1TBX) is not reflected here.
-
-4. The later "DISTRIBUTION PROFILE OF CUSTOMER DEPOSITS (PART 3)"
-   block (NON-INTERBANK REPOS / NON-INTERBANK NIDS, re-reading
-   BNMK.K1TBL/K3TBL into a CAT/NAME/AMOUNT summary) is a separate
-   report section that does NOT feed into KTBLALL/the main LCR figures.
-   It is not implemented here since it's a distinct output, not part of
-   the treasury amount that flows into the LCR consolidation. Let me
-   know if you need it and I'll add it as its own function.
-
-If you can get hold of KAMLIQX / KALMLIQ4 / the K1TBX source, send them
-over and I'll fold them in properly instead of leaving this gap.
-=====================================================================
+PROGRAM         : KALMLIQ
+DATE            : 22.07.98
+REPORT          : NEW LIQUIDITY FRAMEWORK (KAPITI ITEMS)
+DATE MODIFIED   : 07-02-2002 (WBL)
+SMR/OTHERS      : JS
+CHANGES MADE    : INCLUDE NEW MARKETABLE SECURITIES PRODUCT :
+                  'PNB' (9363600XX0000Y, 9563600XX0000Y)
 """
 
-import os
-import glob
+import duckdb
+import polars as pl
+from datetime import date, timedelta
+import math
 
-from common import (
-    read_sas_file,
-    warn_missing_columns,
-    debug_directory,
-    sas_date_to_pydate,
-    calculate_remaining_months,
-    format_mth_bucket,
+# ---------------------------------------------------------------------------
+# Path configuration
+# ---------------------------------------------------------------------------
+INPUT_K1TBL_PARQUET = "data/K1TBL_{REPTMON}{NOWK}.parquet"   # resolved at runtime
+INPUT_K3TBL_PARQUET = "data/K3TBL_{REPTMON}{NOWK}.parquet"   # resolved at runtime
+REPTDATE_PARQUET    = "data/REPTDATE.parquet"                  # REPTDATE lookup table
+
+OUTPUT_K1TBL_FILE   = "output/K1TBL.txt"
+OUTPUT_K3TBL_FILE   = "output/K3TBL.txt"
+OUTPUT_KTBL_FILE    = "output/KTBL.txt"
+OUTPUT_KTBLALL_FILE = "output/KTBLALL.txt"
+
+# Part 3 outputs
+OUTPUT_K1TBL_PART3_FILE = "output/K1TBL_PART3.txt"
+
+# ---------------------------------------------------------------------------
+# Runtime parameters
+# ---------------------------------------------------------------------------
+REPTMON  = "202401"       # e.g. '202401'
+NOWK     = "1"            # e.g. '1'
+INST     = "PBB"          # e.g. 'PBB' or other institution code
+REPTDATE = date(2024, 1, 31)  # reporting date
+
+# ---------------------------------------------------------------------------
+# Resolve actual input paths
+# ---------------------------------------------------------------------------
+input_k1tbl_path = INPUT_K1TBL_PARQUET.format(REPTMON=REPTMON, NOWK=NOWK)
+input_k3tbl_path = INPUT_K3TBL_PARQUET.format(REPTMON=REPTMON, NOWK=NOWK)
+
+# ---------------------------------------------------------------------------
+# REMMTH macro equivalent:
+# Computes remaining months from REPTDATE to MATDT.
+# ---------------------------------------------------------------------------
+def compute_remmth(matdt: date, reptdate: date) -> float:
+    """
+    Python equivalent of the %REMMTH SAS macro.
+    Computes the remaining maturity bucket as a float label used in REMFMT format.
+    Mirrors the SAS logic: difference in days bucketed into month bands.
+    """
+    diff_days = (matdt - reptdate).days
+
+    if diff_days < 8:
+        return 0.1
+
+    rpyr  = reptdate.year
+    rpmth = reptdate.month
+    rpday = reptdate.day
+
+    # RD2 logic (days in February for leap year check)
+    rd2 = 29 if (rpyr % 4 == 0) else 28
+
+    # Compute remaining months using SAS %REMMTH macro approximation
+    # Standard SAS REMMTH logic: fractional months
+    diff_months = diff_days / 30.0
+
+    # Bucket to standard bands matching REMFMT. format
+    if diff_months <= 1:
+        return 1
+    elif diff_months <= 2:
+        return 2
+    elif diff_months <= 3:
+        return 3
+    elif diff_months <= 6:
+        return 6
+    elif diff_months <= 12:
+        return 12
+    elif diff_months <= 24:
+        return 24
+    elif diff_months <= 36:
+        return 36
+    elif diff_months <= 60:
+        return 60
+    else:
+        return 99
+
+
+def format_remmth(remmth: float) -> str:
+    """
+    Equivalent of PUT(REMMTH, REMFMT.) in SAS.
+    Returns a zero-padded 2-char string for use in BNMCODE construction.
+    """
+    mapping = {
+        0.1: "00",
+        1:   "01",
+        2:   "02",
+        3:   "03",
+        6:   "06",
+        12:  "12",
+        24:  "24",
+        36:  "36",
+        60:  "60",
+        99:  "99",
+    }
+    return mapping.get(remmth, "99")
+
+
+# ===========================================================================
+# PART 2: BREAKDOWN BY PURE CONTRACTUAL MATURITY PROFILE
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Load K1TBL source data via DuckDB
+# ---------------------------------------------------------------------------
+con = duckdb.connect()
+
+k1tbl_raw = con.execute(f"""
+    SELECT *,
+           GWMDT  AS MATDT,
+           GWBALC AS AMOUNT,
+           GWSDT  AS ISSDT
+    FROM read_parquet('{input_k1tbl_path}')
+    WHERE GWMVT = 'P'
+      AND GWOCY <> 'XAU'
+      AND GWCCY <> 'XAU'
+      AND GWOCY <> 'XAT'
+      AND GWCCY <> 'XAT'
+""").pl()
+
+k3tbl_raw = con.execute(f"""
+    SELECT *
+    FROM read_parquet('{input_k3tbl_path}')
+""").pl()
+
+con.close()
+
+# ---------------------------------------------------------------------------
+# Build K1TBL (PART 2) — rows are emitted conditionally with ITEM assignment
+# ---------------------------------------------------------------------------
+KEEP_K1TBL = ["PART", "ITEM", "MATDT", "AMOUNT", "AMTUSD", "AMTSGD",
+               "ISSDT", "GWCCY", "GWSHN", "GWC2R", "GWDLP", "GWDLR"]
+
+output_k1tbl_rows = []
+
+for row in k1tbl_raw.iter_rows(named=True):
+    gwccy  = row["GWCCY"]
+    gwmvts = row["GWMVTS"]
+    gwdlp  = row["GWDLP"]
+    gwctp  = row["GWCTP"] or ""
+    gwshn  = row["GWSHN"] or ""
+    amount = row["AMOUNT"]
+    matdt  = row["MATDT"]
+    issdt  = row["ISSDT"]
+    gwc2r  = row.get("GWC2R", "")
+    gwdlr  = row.get("GWDLR", "")
+
+    base = dict(
+        MATDT=matdt,
+        AMOUNT=amount,
+        ISSDT=issdt,
+        GWCCY=gwccy,
+        GWSHN=gwshn,
+        GWC2R=gwc2r,
+        GWDLP=gwdlp,
+        GWDLR=gwdlr,
+        ITEM=None,
+        PART=None,
+        AMTUSD=0.0,
+        AMTSGD=0.0,
+    )
+
+    if gwccy == "MYR":
+        base["PART"]   = "95"
+        base["AMTUSD"] = 0.0
+        base["AMTSGD"] = 0.0
+
+        if gwmvts == "M":
+            # BCD/BCI/BCS/BCQ/BCT/BCW/BQD -> ITEM='830'
+            if gwdlp in ("BCD", "BCI", "BCS", "BCQ", "BCT", "BCW", "BQD"):
+                output_k1tbl_rows.append({**base, "ITEM": "830"})
+
+            # B-class CTP: LO/LC/LF/LS/... -> ITEM='610'
+            if gwctp[:1] == "B":
+                if gwdlp in ("LO", "LC", "LF", "LS", "LOI", "LSI", "LSC", "LSW",
+                             "FDA", "FDB", "FDS", "FDL", "LOC", "LOW"):
+                    output_k1tbl_rows.append({**base, "ITEM": "610"})
+                elif gwdlp in ("BO", "BF", "BOI", "BFI", "BSC", "BSW", "BOC", "BOW"):
+                    output_k1tbl_rows.append({**base, "ITEM": "810"})
+
+            # SUBSTR(GWDLP,2,2) logic (SAS 1-based index 2, length 2 -> Python [1:3])
+            dlp_mid = gwdlp[1:3]
+            if dlp_mid in ("MI", "MT"):
+                output_k1tbl_rows.append({**base, "ITEM": "820"})
+            elif dlp_mid in ("XI", "XT"):
+                output_k1tbl_rows.append({**base, "ITEM": "620"})
+
+        '''
+        ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
+           'FF1','FF2') THEN DO;
+           IF GWMVTS = 'P' THEN ITEM = '711';
+           ELSE IF GWMVTS = 'S' THEN ITEM = '911';
+           OUTPUT;
+        END;
+        '''
+
+    else:
+        # PART 96 — FCY
+        base["PART"]   = "96"
+        base["AMTUSD"] = amount if gwccy == "USD" else 0.0
+        base["AMTSGD"] = amount if gwccy == "SGD" else 0.0
+
+        if gwmvts == "M":
+            if gwctp[:1] == "B" and gwctp != "BW":
+                if gwdlp in ("LO", "LC", "LS", "LF", "LOI", "LSI", "LSC", "LOC",
+                             "FDA", "FDB", "FDS", "FDL", "LOW", "LSW"):
+                    output_k1tbl_rows.append({**base, "ITEM": "610"})
+                elif gwdlp in ("BC", "BF", "BO", "BSC", "BOW", "BSW"):
+                    if gwshn[:6] != "FCY-FD":
+                        output_k1tbl_rows.append({**base, "ITEM": "810"})
+                elif gwdlp == "BOC":
+                    output_k1tbl_rows.append({**base, "ITEM": "810"})
+
+        '''
+        ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
+           'FF1','FF2') AND GWACT NOT IN ('RV','RW') THEN DO;
+           IF GWMVTS = 'P' THEN ITEM = '711';
+           ELSE IF GWMVTS = 'S' THEN ITEM = '911';
+           OUTPUT;
+        END;
+        '''
+
+# ---------------------------------------------------------------------------
+# %INC PGM(KAMLIQX) — inline logic from KAMLIQX.py
+# Produces K1TBX rows (BNMCODE 57100, 57400, 57600) appended later.
+# ---------------------------------------------------------------------------
+# Reference: KAMLIQX.py — builds k1tbx_final (final_df) with PART/ITEM/AMOUNT
+# The logic below replicates KAMLIQX inline.
+
+VALID_GWDLP_X = ('FXS', 'FXO', 'FXF', 'SF1', 'SF2', 'TS1', 'TS2',
+                 'FBP', 'FF1', 'FF2')
+
+con2 = duckdb.connect()
+k1tbx_base = con2.execute(f"""
+    SELECT * RENAME (GWMDT AS MATDT)
+    FROM read_parquet('{input_k1tbl_path}')
+    WHERE GWMVT  = 'P'
+      AND GWOCY <> 'XAU'
+      AND GWCCY <> 'XAU'
+      AND GWDLP IN {VALID_GWDLP_X}
+""").pl().with_columns(
+    pl.lit(" ").alias("BNMCODE"),
+    (pl.col("GWBALA") * pl.col("GWEXR")).alias("AMOUNT"),
 )
-from config import PATHS, inst
-
-
-# =============================================================================
-# FILE DISCOVERY
-# =============================================================================
-def find_k1tbl_file(rep_date):
-    """Find K1TBL file (BNMK.K1TBL&REPTMON&NOWK) with debugging."""
-    base_path = PATHS['bnmk']
-    month = rep_date['mon']
-    week = rep_date['nowk']
-
-    print(f"  Looking for K1TBL file...")
-    print(f"    Base path: {base_path}")
-    print(f"    Month: {month}, Week: {week}")
-
-    if not os.path.exists(base_path):
-        print(f"    ERROR: Directory does not exist: {base_path}")
-        return None
-
-    possible_names = [
-        f"k1tbl{month}{week}.sas7bdat",
-        f"K1TBL{month}{week}.sas7bdat",
-        f"k1tbl{month}0{week}.sas7bdat",
-        f"K1TBL{month}0{week}.sas7bdat",
-        f"k1tbl{month}.sas7bdat",
-        f"K1TBL{month}.sas7bdat",
-    ]
-
-    print(f"    Looking for exact matches:")
-    for name in possible_names:
-        full_path = os.path.join(base_path, name)
-        exists = os.path.exists(full_path)
-        print(f"      {name}: {'✓ Found' if exists else '✗ Not found'}")
-        if exists:
-            return full_path
-
-    print(f"    Searching with wildcards:")
-    wildcards = [
-        f"*k1tbl*{month}*.sas7bdat",
-        f"*K1TBL*{month}*.sas7bdat",
-        f"*k1tbl*.sas7bdat",
-        f"*K1TBL*.sas7bdat",
-    ]
-
-    for wildcard in wildcards:
-        pattern = os.path.join(base_path, wildcard)
-        matches = glob.glob(pattern)
-        if matches:
-            print(f"      {wildcard}: Found {len(matches)} file(s)")
-            for m in matches[:5]:
-                print(f"        - {os.path.basename(m)}")
-            return matches[0]
-
-    print(f"    No K1TBL files found. Listing directory contents:")
-    debug_directory(base_path, pattern="k1")
-
-    return None
-
-
-def find_k3tbl_file(rep_date):
-    """Find K3TBL file (BNMK.K3TBL&REPTMON&NOWK) with debugging."""
-    base_path = PATHS['bnmk']
-    month = rep_date['mon']
-    week = rep_date['nowk']
-
-    print(f"  Looking for K3TBL file...")
-    print(f"    Base path: {base_path}")
-    print(f"    Month: {month}, Week: {week}")
-
-    if not os.path.exists(base_path):
-        print(f"    ERROR: Directory does not exist: {base_path}")
-        return None
-
-    possible_names = [
-        f"k3tbl{month}{week}.sas7bdat",
-        f"K3TBL{month}{week}.sas7bdat",
-        f"k3tbl{month}0{week}.sas7bdat",
-        f"K3TBL{month}0{week}.sas7bdat",
-        f"k3tbl{month}.sas7bdat",
-        f"K3TBL{month}.sas7bdat",
-    ]
-
-    print(f"    Looking for exact matches:")
-    for name in possible_names:
-        full_path = os.path.join(base_path, name)
-        exists = os.path.exists(full_path)
-        print(f"      {name}: {'✓ Found' if exists else '✗ Not found'}")
-        if exists:
-            return full_path
-
-    print(f"    Searching with wildcards:")
-    wildcards = [
-        f"*k3tbl*{month}*.sas7bdat",
-        f"*K3TBL*{month}*.sas7bdat",
-        f"*k3tbl*.sas7bdat",
-        f"*K3TBL*.sas7bdat",
-    ]
-
-    for wildcard in wildcards:
-        pattern = os.path.join(base_path, wildcard)
-        matches = glob.glob(pattern)
-        if matches:
-            print(f"      {wildcard}: Found {len(matches)} file(s)")
-            for m in matches[:5]:
-                print(f"        - {os.path.basename(m)}")
-            return matches[0]
-
-    print(f"    No K3TBL files found. Listing directory contents:")
-    debug_directory(base_path, pattern="k3")
-
-    return None
-
-
-# =============================================================================
-# K1TBL - direct port of:
-#   DATA K1TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT GWCCY
-#                    GWSHN GWC2R GWDLP GWDLR);
-#      SET BNMK.K1TBL&REPTMON&NOWK (RENAME=(GWMDT=MATDT GWBALC=AMOUNT
-#                                           GWSDT=ISSDT));
-#      IF GWMVT = 'P';
-#      IF GWOCY IN ('XAU','XAT') OR GWCCY IN ('XAU','XAT') THEN DELETE;
-#      ... (see kalmliq.sas for full logic)
-# =============================================================================
-def process_k1tbl(rep_date):
-    """Process K1TBL from BNMK.K1TBL{REPTMON}{NOWK}"""
-    records = []
-
-    try:
-        k1_filepath = find_k1tbl_file(rep_date)
-
-        if k1_filepath is None:
-            print(f"  No K1TBL file found")
-            return records
-
-        print(f"  Using K1TBL file: {k1_filepath}")
-        df = read_sas_file(k1_filepath)  # columns normalized to lowercase
-
-        if df is None:
-            return records
-
-        print(f"  Processing K1TBL with {len(df)} rows...")
-        print(f"    Columns ({len(df.columns)}): {df.columns}")
-
-        warn_missing_columns(
-            df,
-            ['gwmvt', 'gwccy', 'gwocy', 'gwmvts', 'gwctp', 'gwdlp', 'gwmdt',
-             'gwsdt', 'gwbalc', 'gwshn', 'gwc2r', 'gwdlr'],
-            'K1TBL'
-        )
-
-        gwmvt_col = 'gwmvt' if 'gwmvt' in df.columns else None
-        if gwmvt_col is None:
-            print(f"    Column 'gwmvt' not found! Available columns: {df.columns}")
-            return records
-
-        unique_gwmvt = df[gwmvt_col].unique().to_list()
-        print(f"    Unique values in GWMVT: {unique_gwmvt}")
-
-        gwmvt_values = df[gwmvt_col].to_list()
-        p_count = sum(1 for v in gwmvt_values if str(v).upper() == 'P')
-        print(f"    Rows with GWMVT = 'P': {p_count}")
-
-        if p_count == 0:
-            print(f"    No rows with GWMVT = 'P'. Sample values: {gwmvt_values[:10]}")
-            return records
-
-        print(f"    Sample rows (first 3):")
-        sample_rows = df.head(3).rows(named=True)
-        for i, row in enumerate(sample_rows):
-            print(f"      Row {i+1}:")
-            for key in ['gwmvt', 'gwccy', 'gwocy', 'gwmvts', 'gwctp', 'gwdlp', 'gwmdt', 'gwbalc']:
-                if key in df.columns:
-                    print(f"        {key}: {row.get(key, 'N/A')}")
-
-        total_rows = 0
-        filtered_out = 0
-        gwmvt_p = 0
-        excluded_currency = 0
-        item_assigned = 0
-
-        for row in df.iter_rows(named=True):
-            total_rows += 1
-
-            gwmvt = str(row.get(gwmvt_col, '') or '').upper()
-
-            # IF GWMVT = 'P';
-            if gwmvt != 'P':
-                filtered_out += 1
-                continue
-            gwmvt_p += 1
-
-            gwccy = str(row.get('gwccy', '') or '').upper() if 'gwccy' in df.columns else ''
-            gwocy = str(row.get('gwocy', '') or '').upper() if 'gwocy' in df.columns else ''
-
-            # IF GWOCY='XAU' THEN DELETE; IF GWCCY='XAU' THEN DELETE;
-            # IF GWOCY='XAT' THEN DELETE; IF GWCCY='XAT' THEN DELETE;
-            if gwocy in ['XAU', 'XAT'] or gwccy in ['XAU', 'XAT']:
-                excluded_currency += 1
-                continue
-
-            gwmvts = str(row.get('gwmvts', '') or '').upper() if 'gwmvts' in df.columns else ''
-            gwctp = str(row.get('gwctp', '') or '').upper() if 'gwctp' in df.columns else ''
-            gwdlp = str(row.get('gwdlp', '') or '').upper() if 'gwdlp' in df.columns else ''
-
-            # RENAME=(GWMDT=MATDT GWBALC=AMOUNT GWSDT=ISSDT)
-            matdt = sas_date_to_pydate(row.get('gwmdt')) if 'gwmdt' in df.columns else None
-            issdt = sas_date_to_pydate(row.get('gwsdt')) if 'gwsdt' in df.columns else None
-            amount = (row.get('gwbalc', 0) or 0) if 'gwbalc' in df.columns else 0
-            gwshn = (row.get('gwshn', '') or '') if 'gwshn' in df.columns else ''
-            gwc2r = (row.get('gwc2r', 0) or 0) if 'gwc2r' in df.columns else 0
-            gwdlr = (row.get('gwdlr', '') or '') if 'gwdlr' in df.columns else ''
-
-            if gwccy == 'MYR':
-                # ----- PART = '95' branch -----
-                part = '95'
-                amtusd = 0
-                amtsgd = 0
-
-                if gwmvts == 'M':
-                    # IF GWDLP IN ('BCD','BCI','BCS','BCQ','BCT','BCW','BQD') THEN ITEM='830'
-                    if gwdlp in ['BCD', 'BCI', 'BCS', 'BCQ', 'BCT', 'BCW', 'BQD']:
-                        item_assigned += 1
-                        records.append({
-                            'part': part, 'item': '830', 'matdt': matdt, 'issdt': issdt,
-                            'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
-                            'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
-                            'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
-                        })
-
-                    # IF SUBSTR(GWCTP,1,1) = 'B' THEN SELECT (GWDLP) ...
-                    if gwctp[:1] == 'B':
-                        if gwdlp in ['LO', 'LC', 'LF', 'LS', 'LOI', 'LSI', 'LSC', 'LSW',
-                                     'FDA', 'FDB', 'FDS', 'FDL', 'LOC', 'LOW']:
-                            item_assigned += 1
-                            records.append({
-                                'part': part, 'item': '610', 'matdt': matdt, 'issdt': issdt,
-                                'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
-                                'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
-                                'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
-                            })
-                        elif gwdlp in ['BO', 'BF', 'BOI', 'BFI', 'BSC', 'BSW', 'BOC', 'BOW']:
-                            item_assigned += 1
-                            records.append({
-                                'part': part, 'item': '810', 'matdt': matdt, 'issdt': issdt,
-                                'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
-                                'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
-                                'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
-                            })
-                        # OTHERWISE; -> no output
-
-                    # SELECT (SUBSTR(GWDLP,2,2)) - independent of the GWCTP check above
-                    dlp23 = gwdlp[1:3] if len(gwdlp) >= 2 else ''
-                    if dlp23 in ['MI', 'MT']:
-                        item_assigned += 1
-                        records.append({
-                            'part': part, 'item': '820', 'matdt': matdt, 'issdt': issdt,
-                            'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
-                            'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
-                            'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
-                        })
-                    elif dlp23 in ['XI', 'XT']:
-                        item_assigned += 1
-                        records.append({
-                            'part': part, 'item': '620', 'matdt': matdt, 'issdt': issdt,
-                            'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
-                            'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
-                            'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
-                        })
-                # (the FXS/FXO/... block is commented out in the SAS source - not ported)
-
-            else:
-                # ----- PART = '96' branch (foreign currency) -----
-                part = '96'
-                amtusd = amount if gwccy == 'USD' else 0
-                amtsgd = amount if gwccy == 'SGD' else 0
-
-                if gwmvts == 'M':
-                    if gwctp[:1] == 'B' and gwctp != 'BW':
-                        if gwdlp in ['LO', 'LC', 'LS', 'LF', 'LOI', 'LSI', 'LSC', 'LOC',
-                                     'FDA', 'FDB', 'FDS', 'FDL', 'LOW', 'LSW']:
-                            item_assigned += 1
-                            records.append({
-                                'part': part, 'item': '610', 'matdt': matdt, 'issdt': issdt,
-                                'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
-                                'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
-                                'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
-                            })
-                        elif gwdlp in ['BC', 'BF', 'BO', 'BSC', 'BOW', 'BSW']:
-                            # IF SUBSTR(GWSHN,1,6) ^= 'FCY-FD' THEN ITEM='810'
-                            if gwshn[:6] != 'FCY-FD':
-                                item_assigned += 1
-                                records.append({
-                                    'part': part, 'item': '810', 'matdt': matdt, 'issdt': issdt,
-                                    'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
-                                    'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
-                                    'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
-                                })
-                        elif gwdlp == 'BOC':
-                            item_assigned += 1
-                            records.append({
-                                'part': part, 'item': '810', 'matdt': matdt, 'issdt': issdt,
-                                'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
-                                'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
-                                'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
-                            })
-                        # OTHERWISE; -> no output
-                # (the FXS/FXO/... block is commented out in the SAS source - not ported)
-
-        print(f"  K1TBL processing stats:")
-        print(f"    Total rows: {total_rows}")
-        print(f"    Filtered out (GWMVT != 'P'): {filtered_out}")
-        print(f"    Passed GWMVT = 'P': {gwmvt_p}")
-        print(f"    Excluded (XAU/XAT currency): {excluded_currency}")
-        print(f"    Records with item assigned: {item_assigned}")
-
-    except Exception as e:
-        print(f"  K1TBL warning: {e}")
-        import traceback
-        traceback.print_exc()
-
-    return records
-
-
-# =============================================================================
-# K3TBL - direct port of:
-#   DATA K3TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT UTCCY
-#                    UTCUS UTCTP UTSTY UTDLR UTDLP);
-#      RETAIN PART '95';
-#      SET BNMK.K3TBL&REPTMON&NOWK;
-#      ... (see kalmliq.sas for full logic)
-#
-# NOTE: unlike K1TBL, K3TBL's source table already has native MATDT/ISSDT
-# columns (no RENAME needed) - confirmed against the real file's column
-# dump ('matdt', 'issdt' present directly).
-# =============================================================================
-def process_k3tbl(rep_date):
-    """Process K3TBL from BNMK.K3TBL{REPTMON}{NOWK}"""
-    records = []
-
-    try:
-        k3_filepath = find_k3tbl_file(rep_date)
-
-        if k3_filepath is None:
-            print(f"  No K3TBL file found")
-            return records
-
-        print(f"  Using K3TBL file: {k3_filepath}")
-        df = read_sas_file(k3_filepath)  # columns normalized to lowercase
-
-        if df is None:
-            return records
-
-        print(f"  Processing K3TBL with {len(df)} rows...")
-        print(f"    Columns ({len(df.columns)}): {df.columns}")
-
-        warn_missing_columns(
-            df,
-            ['utref', 'utsty', 'utdlp', 'utcus', 'utclc', 'utctp', 'matdt',
-             'issdt', 'utamoc', 'utdpf', 'utccy', 'utdlr', 'utaict', 'utpcp',
-             'utdpey', 'utdpe', 'utaicy', 'utait', 'utmm1'],
-            'K3TBL'
-        )
-
-        utref_col = 'utref' if 'utref' in df.columns else None
-        if utref_col:
-            unique_utref = df[utref_col].unique().to_list()
-            print(f"    Unique values in UTREF: {unique_utref[:20]}")
-        else:
-            print(f"    Column 'utref' not found!")
-
-        utsty_col = 'utsty' if 'utsty' in df.columns else None
-        if utsty_col:
-            unique_utsty = df[utsty_col].unique().to_list()
-            print(f"    Unique values in UTSTY: {unique_utsty[:20]}")
-
-        matdt_col = 'matdt' if 'matdt' in df.columns else None
-        issdt_col = 'issdt' if 'issdt' in df.columns else None
-        if matdt_col is None:
-            print("    !! WARNING [K3TBL]: no maturity date column found - "
-                  "all K3TBL records will be dropped in build_ktblall().")
-
-        print(f"    Sample rows (first 3):")
-        sample_rows = df.head(3).rows(named=True)
-        for i, row in enumerate(sample_rows):
-            print(f"      Row {i+1}:")
-            for key in ['utref', 'utsty', 'utdlp', 'utcus', 'utctp', 'matdt', 'utamoc', 'utdpf']:
-                if key in df.columns:
-                    print(f"        {key}: {row.get(key, 'N/A')}")
-
-        total_rows = 0
-        utref_match = 0
-        item_assigned = 0
-        matdt_missing = 0
-
-        for row in df.iter_rows(named=True):
-            total_rows += 1
-
-            # AMOUNT = UTAMOC - UTDPF; IF UTSTY='IDC' THEN AMOUNT=UTAMOC + UTDPF;
-            utamoc = (row.get('utamoc', 0) or 0) if 'utamoc' in df.columns else 0
-            utdpf = (row.get('utdpf', 0) or 0) if 'utdpf' in df.columns else 0
-            utsty = str(row.get(utsty_col, '') or '').upper() if utsty_col else ''
-            amount = (utamoc + utdpf) if utsty == 'IDC' else (utamoc - utdpf)
-
-            # IF &INST='PBB' THEN ... (inst is always 'PBB' here per config.py)
-            utccy = str(row.get('utccy', 'MYR') or 'MYR').upper() if 'utccy' in df.columns else 'MYR'
-            amtusd = amount if (inst == 'PBB' and utccy == 'USD') else 0
-            amtsgd = amount if (inst == 'PBB' and utccy == 'SGD') else 0
-
-            utcus = row.get('utcus', '') if 'utcus' in df.columns else ''
-            utctp = row.get('utctp', 0) if 'utctp' in df.columns else 0
-            utdlr = (row.get('utdlr', '') or '') if 'utdlr' in df.columns else ''
-            utdlp = str(row.get('utdlp', '') or '').upper() if 'utdlp' in df.columns else ''
-            utref = str(row.get(utref_col, '') or '').upper() if utref_col else ''
-            utaict = (row.get('utaict', 0) or 0) if 'utaict' in df.columns else 0
-            utpcp = (row.get('utpcp', 0) or 0) if 'utpcp' in df.columns else 0
-            utdpey = (row.get('utdpey', 0) or 0) if 'utdpey' in df.columns else 0
-            utdpe = (row.get('utdpe', 0) or 0) if 'utdpe' in df.columns else 0
-            utaicy = (row.get('utaicy', 0) or 0) if 'utaicy' in df.columns else 0
-            utait = (row.get('utait', 0) or 0) if 'utait' in df.columns else 0
-            utmm1 = str(row.get('utmm1', '') or '').upper() if 'utmm1' in df.columns else ''
-
-            matdt = sas_date_to_pydate(row.get(matdt_col)) if matdt_col else None
-            # FIX vs previous port: ISSDT was never extracted for K3TBL,
-            # so ORI30D was hardcoded to 0 downstream. The SAS KEEP list
-            # includes ISSDT and KTBLALL computes ORI30D for K3TBL exactly
-            # like it does for K1TBL (MATDT - ISSDT).
-            issdt = sas_date_to_pydate(row.get(issdt_col)) if issdt_col else None
-            if matdt is None:
-                matdt_missing += 1
-
-            part = '95'  # RETAIN PART '95';
-            item = None
-
-            def emit(it, amt):
-                records.append({
-                    'part': part, 'item': it, 'matdt': matdt, 'issdt': issdt,
-                    'amount': amt, 'amtusd': amtusd, 'amtsgd': amtsgd,
-                    'utccy': utccy, 'utcus': utcus, 'utctp': utctp,
-                    'utdlr': utdlr, 'utdlp': utdlp, 'src': 'k3tbl'
+con2.close()
+
+
+def _assign_bnmcode_57100(df: pl.DataFrame) -> pl.DataFrame:
+    dlp_fxs_fbp  = pl.col("GWDLP").is_in(["FXS", "FBP"])
+    dlp_fxo_fxf  = pl.col("GWDLP").is_in(["FXO", "FXF"])
+    dlp_futures  = pl.col("GWDLP").is_in(["SF1", "SF2", "TS1", "TS2", "FF1", "FF2"])
+    ccy_ne_myr   = pl.col("GWCCY") != "MYR"
+    ctp_direct   = pl.col("GWCTP").is_in(["BC", "BB", "BI", "BM", "BA", "BE"])
+    ctp_not_ba_bz = ~((pl.col("GWCTP") >= "BA") & (pl.col("GWCTP") <= "BZ"))
+    otherwise_res = (
+        (ctp_not_ba_bz & (pl.col("GWCNAL") == "MY") & (pl.col("GWSAC") != "UF")) |
+        (pl.col("GWSAC") == "UF")
+    )
+    eligible_ctp = ctp_direct | otherwise_res
+    condition_base = (
+        (pl.col("GWOCY") == "MYR") &
+        (pl.col("GWMVT") == "P") &
+        (pl.col("GWMVTS") == "P") &
+        ccy_ne_myr & eligible_ctp
+    )
+    condition_fbp = (
+        (pl.col("GWOCY") == "MYR") &
+        (pl.col("GWMVT") == "P") &
+        (pl.col("GWMVTS") == "P") &
+        (pl.col("GWDLP") == "FBP") & ccy_ne_myr
+    )
+    mask = (
+        ((dlp_fxs_fbp & ~(pl.col("GWDLP") == "FBP")) | dlp_fxo_fxf | dlp_futures)
+        & condition_base
+    ) | (pl.col("GWDLP") == "FBP") & condition_fbp
+
+    return df.with_columns(
+        pl.when(mask).then(pl.lit("57100")).otherwise(pl.col("BNMCODE")).alias("BNMCODE")
+    )
+
+
+def _assign_bnmcode_57400(df: pl.DataFrame) -> pl.DataFrame:
+    dlp_fxs      = pl.col("GWDLP") == "FXS"
+    dlp_fxo_fxf  = pl.col("GWDLP").is_in(["FXO", "FXF"])
+    dlp_futures  = pl.col("GWDLP").is_in(["SF1", "SF2", "TS1", "TS2", "FF1", "FF2"])
+    ccy_ne_myr   = pl.col("GWCCY") != "MYR"
+    ctp_direct_fxs = pl.col("GWCTP").is_in(["BC", "BB", "BI", "BM", "BA", "BE", "CE"])
+    ctp_direct_std = pl.col("GWCTP").is_in(["BC", "BB", "BI", "BM", "BA", "BE"])
+    ctp_not_ba_bz  = ~((pl.col("GWCTP") >= "BA") & (pl.col("GWCTP") <= "BZ"))
+    otherwise_base = (
+        (ctp_not_ba_bz & (pl.col("GWCNAL") == "MY") & (pl.col("GWSAC") != "UF")) |
+        (pl.col("GWSAC") == "UF")
+    )
+    otherwise_fxo = otherwise_base | (pl.col("GWCTP") == "CE")
+    base_cond = (
+        (pl.col("GWOCY") == "MYR") &
+        (pl.col("GWMVT") == "P") &
+        (pl.col("GWMVTS") == "S") &
+        ccy_ne_myr
+    )
+    mask = (
+        (base_cond & dlp_fxs     & (ctp_direct_fxs | otherwise_base)) |
+        (base_cond & dlp_fxo_fxf & (ctp_direct_std | otherwise_fxo))  |
+        (base_cond & dlp_futures  & (ctp_direct_std | otherwise_base))
+    )
+    return df.with_columns(
+        pl.when(mask).then(pl.lit("57400")).otherwise(pl.col("BNMCODE")).alias("BNMCODE")
+    )
+
+
+# Build K1TBX1
+k1tbx1 = k1tbx_base.filter(
+    (pl.col("GWOCY") != "XAT") & (pl.col("GWCCY") != "XAT")
+)
+k1tbx1 = _assign_bnmcode_57100(k1tbx1)
+k1tbx1 = _assign_bnmcode_57400(k1tbx1)
+k1tbx1 = k1tbx1.filter(pl.col("BNMCODE") != " ")
+
+# Build K1TBX2
+k1tbx2 = (
+    k1tbx_base
+    .with_columns(pl.col("GWBALC").alias("AMOUNT"))
+    .with_columns(pl.lit(" ").alias("BNMCODE"))
+)
+dlp_57600 = pl.col("GWDLP").is_in(
+    ["FXS", "FXO", "FXF", "SF2", "FF1", "FF2", "SF1", "TS1", "TS2"]
+)
+mask_57600 = (
+    (pl.col("GWCCY")  != "MYR") &
+    (pl.col("GWOCY")  != "MYR") &
+    (pl.col("GWMVT")  == "P") &
+    (pl.col("GWMVTS") == "P") &
+    (pl.col("GWCTP")  != "BW") &
+    dlp_57600
+)
+k1tbx2 = k1tbx2.with_columns(
+    pl.when(mask_57600).then(pl.lit("57600")).otherwise(pl.col("BNMCODE")).alias("BNMCODE")
+).filter(pl.col("BNMCODE") != " ")
+
+# Expand K1TBX rows per BNMCODE
+combined_x = pl.concat(
+    [
+        k1tbx1.select([c for c in k1tbx1.columns
+                       if c in ["GWCCY", "GWOCY", "BNMCODE", "AMOUNT", "MATDT", "GWSDT"]]),
+        k1tbx2.select([c for c in k1tbx2.columns
+                       if c in ["GWCCY", "GWOCY", "BNMCODE", "AMOUNT", "MATDT", "GWSDT"]]),
+    ],
+    how="diagonal"
+)
+
+k1tbx_output_rows = []
+for row in combined_x.iter_rows(named=True):
+    amount  = abs(row["AMOUNT"]) if row["AMOUNT"] < 0 else row["AMOUNT"]
+    gwccy   = row["GWCCY"]
+    gwocy   = row["GWOCY"]
+    bnmcode = row["BNMCODE"]
+    matdt   = row["MATDT"]
+    issdt   = row.get("GWSDT", None)
+
+    amtusd = amount if gwccy == "USD" else 0.0
+    amtsgd = amount if gwccy == "SGD" else 0.0
+
+    base_x = dict(AMOUNT=amount, MATDT=matdt, ISSDT=issdt,
+                  GWCCY=gwccy, GWSHN="", GWC2R="", GWDLP="", GWDLR="")
+
+    if bnmcode == "57100":
+        k1tbx_output_rows.append({**base_x, "PART": "96", "ITEM": "711",
+                                   "AMTUSD": amtusd, "AMTSGD": amtsgd})
+        k1tbx_output_rows.append({**base_x, "PART": "95", "ITEM": "911",
+                                   "AMTUSD": 0.0,   "AMTSGD": 0.0})
+    elif bnmcode == "57400":
+        k1tbx_output_rows.append({**base_x, "PART": "96", "ITEM": "911",
+                                   "AMTUSD": amtusd, "AMTSGD": amtsgd})
+        k1tbx_output_rows.append({**base_x, "PART": "95", "ITEM": "711",
+                                   "AMTUSD": 0.0,   "AMTSGD": 0.0})
+    elif bnmcode == "57600":
+        k1tbx_output_rows.append({**base_x, "PART": "96", "ITEM": "711",
+                                   "AMTUSD": amtusd, "AMTSGD": amtsgd})
+        amtusd2 = amount if gwocy == "USD" else 0.0
+        amtsgd2 = amount if gwocy == "SGD" else 0.0
+        k1tbx_output_rows.append({**base_x, "PART": "96", "ITEM": "911",
+                                   "AMTUSD": amtusd2, "AMTSGD": amtsgd2})
+
+# ---------------------------------------------------------------------------
+# Build K3TBL (PART 2) — rows emitted conditionally with ITEM assignment
+# ---------------------------------------------------------------------------
+# Reference: KALMLIQ4.py — builds K3TBL3 rows with CTYPE lookup
+# The K3TBL DATA step logic below replicates KALMLIQ inline.
+
+# Load CTYPE format lookup
+con3 = duckdb.connect()
+ctype_df = con3.execute("SELECT START AS UTCTP, LABEL AS CUST FROM read_parquet('data/CTYPE_FORMAT.parquet')").pl()
+con3.close()
+
+k3tbl_raw = k3tbl_raw.join(ctype_df, on="UTCTP", how="left")
+k3tbl_raw = k3tbl_raw.with_columns(pl.col("CUST").fill_null("").alias("CUST"))
+
+KEEP_K3TBL = ["PART", "ITEM", "MATDT", "AMOUNT", "AMTUSD", "AMTSGD",
+               "ISSDT", "UTCCY", "UTCUS", "UTCTP", "UTSTY", "UTDLR", "UTDLP"]
+
+output_k3tbl_rows = []
+
+for row in k3tbl_raw.iter_rows(named=True):
+    utccy  = row.get("UTCCY", "")  or ""
+    utctp  = row.get("UTCTP", "")  or ""
+    utsty  = row.get("UTSTY", "")  or ""
+    utref  = row.get("UTREF", "")  or ""
+    utdlp  = row.get("UTDLP", "")  or ""
+    utcus  = row.get("UTCUS", "")  or ""
+    utclc  = row.get("UTCLC", "")  or ""
+    utdlr  = row.get("UTDLR", "")  or ""
+    utmm1  = row.get("UTMM1", "")  or ""
+    utamoc = row.get("UTAMOC", 0.0) or 0.0
+    utdpf  = row.get("UTDPF",  0.0) or 0.0
+    utaict = row.get("UTAICT", 0.0) or 0.0
+    utpcp  = row.get("UTPCP",  0.0) or 0.0
+    utdpey = row.get("UTDPEY", 0.0) or 0.0
+    utdpe  = row.get("UTDPE",  0.0) or 0.0
+    utaicy = row.get("UTAICY", 0.0) or 0.0
+    utait  = row.get("UTAIT",  0.0) or 0.0
+    matdt  = row.get("MATDT",  None)
+    issdt  = row.get("ISSDT",  None)
+
+    # AMOUNT = UTAMOC - UTDPF
+    amount = utamoc - utdpf
+    # IF UTSTY='IDC' THEN AMOUNT=UTAMOC + UTDPF
+    if utsty == "IDC":
+        amount = utamoc + utdpf
+
+    if INST == "PBB":
+        amtusd = amount if utccy == "USD" else 0.0
+        amtsgd = amount if utccy == "SGD" else 0.0
+    else:
+        amtusd = 0.0
+        amtsgd = 0.0
+
+    base = dict(
+        PART="95",
+        MATDT=matdt,
+        AMOUNT=amount,
+        AMTUSD=amtusd,
+        AMTSGD=amtsgd,
+        ISSDT=issdt,
+        UTCCY=utccy,
+        UTCUS=utcus,
+        UTCTP=utctp,
+        UTSTY=utsty,
+        UTDLR=utdlr,
+        UTDLP=utdlp,
+        ITEM=None,
+    )
+
+    #  IF UTREF IN ('INV','DRI','DLG','AFSLIQ','AFSBOND','IAFSLIQ','AFS','IAFS')
+    if utref in ("INV", "DRI", "DLG", "AFSLIQ", "AFSBOND", "IAFSLIQ", "AFS", "IAFS"):
+        if utsty in ("CB1", "CB2", "CF1", "CF2", "CNT", "MGS", "MTB", "BNB", "BNN",
+                     "ITB", "SAC", "BMN", "BMC", "BMF", "SCD", "SCM",
+                     "CMB", "MGI", "SMC"):
+            amt = amount
+            if INST == "PBB":
+                amt = amount + utaict
+            output_k3tbl_rows.append({**base, "ITEM": "631", "AMOUNT": amt,
+                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
+                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
+
+        elif utsty == "SDC":
+            amt = amount
+            if INST == "PBB":
+                amt = (utamoc * (utpcp / 100)) + utdpey + utdpe
+            output_k3tbl_rows.append({**base, "ITEM": "632", "AMOUNT": amt,
+                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
+                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
+
+        elif utsty == "LDC":
+            amt = amount
+            if INST == "PBB":
+                amt = amount + utaict
+            output_k3tbl_rows.append({**base, "ITEM": "632", "AMOUNT": amt,
+                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
+                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
+
+        elif utsty in ("SLD", "SSD"):
+            amt = amount
+            if INST == "PBB":
+                amt = (utamoc * (utpcp / 100)) + utaicy + utait
+            output_k3tbl_rows.append({**base, "ITEM": "632", "AMOUNT": amt,
+                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
+                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
+
+        elif utsty in ("SFD", "SZD"):
+            amt = amount
+            if INST == "PBB":
+                amt = amount + utaict
+            output_k3tbl_rows.append({**base, "ITEM": "632", "AMOUNT": amt,
+                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
+                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
+
+        elif utsty == "SBA":
+            if utdlp not in ("MOS", "MSS"):
+                output_k3tbl_rows.append({**base, "ITEM": "633"})
+
+        elif utsty in ("ISB", "DHB", "KHA", "PNB"):
+            output_k3tbl_rows.append({**base, "ITEM": "636"})
+
+        elif utsty == "IDS":
+            output_k3tbl_rows.append({**base, "ITEM": "635"})
+
+        elif utsty == "DBD":
+            output_k3tbl_rows.append({**base, "ITEM": "634"})
+
+        elif utsty in ("DMB", "DBD", "GRL", "MTL", "RUL"):
+            output_k3tbl_rows.append({**base, "ITEM": "635"})
+
+        elif utsty == "PBA":
+            if utdlp in ("MOS", "MSS"):
+                output_k3tbl_rows.append({**base, "ITEM": "850"})
+
+    elif utref in ("PFD", "PLD", "PSD", "PZD", "PDC"):
+        if utsty in ("IFD", "ILD", "ISD", "IZD", "IDC", "IDP", "IZP"):
+            output_k3tbl_rows.append({**base, "ITEM": "840"})
+
+    #  ELSE IF UTREF IN ('IINV','IDRI','IDLG')
+    elif utref in ("IINV", "IDRI", "IDLG"):
+        if utsty == "SBA" and utdlp == "IOP":
+            output_k3tbl_rows.append({**base, "ITEM": "633"})
+        elif utsty in ("SDC", "LDC"):
+            output_k3tbl_rows.append({**base, "ITEM": "632"})
+        elif utsty in ("CB1", "CB2", "CF1", "CF2", "CNT", "MGI",
+                       "ITB", "SAC", "BMN", "BMC", "BMF", "SCD", "SCM",
+                       "MGS", "MTB", "BNB", "BNN", "CMB", "SMC"):
+            amt = amount
+            if INST == "PBB":
+                amt = amount + utaict
+            output_k3tbl_rows.append({**base, "ITEM": "631", "AMOUNT": amt,
+                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
+                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
+        elif utsty in ("ISB", "IDS", "IBZ", "ICN"):
+            item = "636" if utmm1 == "GGB" else ("635" if utmm1 == "NGB" else None)
+            amt  = amount + utaict
+            if item:
+                output_k3tbl_rows.append({**base, "ITEM": item, "AMOUNT": amt,
+                                           "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
+                                           "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
+        elif utsty in ("DHB", "KHA"):
+            output_k3tbl_rows.append({**base, "ITEM": "636"})
+        elif utsty == "DBD":
+            output_k3tbl_rows.append({**base, "ITEM": "634"})
+
+    # IF UTSTY IN ('SIP') THEN DO; (runs regardless of above UTREF branches)
+    if utsty == "SIP":
+        output_k3tbl_rows.append({**base, "ITEM": "610"})
+
+    # ---------------------------------------------------------------------------
+    # %INC PGM(KALMLIQ4) — inline logic from KALMLIQ4.py (K3TBL3 rows)
+    # Reference: X_KALMLIQ4.py — filters UTREF='RRS', UTSTY='MGS', UTDLP='MSS'
+    # and assigns ITEM 820/830 based on CTYPE lookup.
+    # ---------------------------------------------------------------------------
+    if utref == "RRS" and utsty == "MGS" and utdlp == "MSS":
+        issdt_val = row.get("ISSDT", None)
+        if issdt_val is not None and issdt_val <= REPTDATE:
+            # AMOUNT = (UTPCP * UTFCV) * 0.01 + UTAICT
+            utfcv  = row.get("UTFCV", 0.0) or 0.0
+            amt_liq = (utpcp * utfcv) * 0.01 + utaict
+
+            cust = row.get("CUST", "") or ""
+            # Derive MATDT from UTIDT
+            utidt = row.get("UTIDT", "") or ""
+            matdt_liq = None
+            if utidt.strip():
+                try:
+                    from datetime import datetime
+                    matdt_liq = datetime.strptime(utidt.strip(), "%Y-%m-%d").date()
+                except ValueError:
+                    matdt_liq = None
+
+            NREP = ("13", "17", "20", "60", "71", "72", "74", "76", "79", "85")
+            IREP = ("01", "02", "11", "12", "81")
+
+            item_liq = None
+            if cust in NREP:
+                item_liq = "830"
+            elif cust in IREP:
+                item_liq = "820"
+
+            if cust.strip() and item_liq:
+                output_k3tbl_rows.append({
+                    "PART": "95", "ITEM": item_liq,
+                    "MATDT": matdt_liq, "AMOUNT": amt_liq,
+                    "AMTUSD": 0.0, "AMTSGD": 0.0,
+                    "ISSDT": issdt_val,
+                    "UTCCY": utccy, "UTCUS": utcus,
+                    "UTCTP": utctp, "UTSTY": utsty,
+                    "UTDLR": utdlr, "UTDLP": utdlp,
                 })
 
-            # IF UTREF IN ('INV','DRI','DLG','AFSLIQ','AFSBOND','IAFSLIQ','AFS','IAFS') THEN DO;
-            if utref in ['INV', 'DRI', 'DLG', 'AFSLIQ', 'AFSBOND', 'IAFSLIQ', 'AFS', 'IAFS']:
-                utref_match += 1
-                if utsty in ['CB1', 'CB2', 'CF1', 'CF2', 'CNT', 'MGS', 'MTB', 'BNB', 'BNN',
-                             'ITB', 'SAC', 'BMN', 'BMC', 'BMF', 'SCD', 'SCM', 'CMB', 'MGI', 'SMC']:
-                    amt = amount + utaict if inst == 'PBB' else amount
-                    item_assigned += 1
-                    emit('631', amt)
-                elif utsty == 'SDC':
-                    amt = (utamoc * (utpcp / 100)) + utdpey + utdpe if inst == 'PBB' else amount
-                    item_assigned += 1
-                    emit('632', amt)
-                elif utsty == 'LDC':
-                    amt = amount + utaict if inst == 'PBB' else amount
-                    item_assigned += 1
-                    emit('632', amt)
-                elif utsty in ['SLD', 'SSD']:
-                    amt = (utamoc * (utpcp / 100)) + utaicy + utait if inst == 'PBB' else amount
-                    item_assigned += 1
-                    emit('632', amt)
-                elif utsty in ['SFD', 'SZD']:
-                    amt = amount + utaict if inst == 'PBB' else amount
-                    item_assigned += 1
-                    emit('632', amt)
-                elif utsty == 'SBA':
-                    if utdlp not in ['MOS', 'MSS']:
-                        item_assigned += 1
-                        emit('633', amount)
-                elif utsty in ['ISB', 'DHB', 'KHA', 'PNB']:
-                    item_assigned += 1
-                    emit('636', amount)
-                elif utsty == 'IDS':
-                    item_assigned += 1
-                    emit('635', amount)
-                elif utsty == 'DBD':
-                    # NOTE: SAS has WHEN('DBD')->'634' listed BEFORE
-                    # WHEN('DMB','DBD','GRL','MTL','RUL')->'635'. SELECT/WHEN
-                    # stops at the first match, so DBD always resolves to
-                    # '634' here; the second WHEN's 'DBD' is unreachable.
-                    item_assigned += 1
-                    emit('634', amount)
-                elif utsty in ['DMB', 'GRL', 'MTL', 'RUL']:
-                    item_assigned += 1
-                    emit('635', amount)
-                elif utsty == 'PBA':
-                    if utdlp in ['MOS', 'MSS']:
-                        item_assigned += 1
-                        emit('850', amount)
-                # OTHERWISE; -> no output
 
-            # ELSE IF UTREF IN ('PFD','PLD','PSD','PZD','PDC') THEN DO;
-            elif utref in ['PFD', 'PLD', 'PSD', 'PZD', 'PDC']:
-                utref_match += 1
-                if utsty in ['IFD', 'ILD', 'ISD', 'IZD', 'IDC', 'IDP', 'IZP']:
-                    item_assigned += 1
-                    emit('840', amount)
+# ---------------------------------------------------------------------------
+# Materialise DataFrames for K1TBL, K3TBL, K1TBX
+# ---------------------------------------------------------------------------
+schema_k1tbl = {
+    "PART":   pl.Utf8,  "ITEM":   pl.Utf8,
+    "MATDT":  pl.Date,  "AMOUNT": pl.Float64,
+    "AMTUSD": pl.Float64, "AMTSGD": pl.Float64,
+    "ISSDT":  pl.Date,  "GWCCY":  pl.Utf8,
+    "GWSHN":  pl.Utf8,  "GWC2R":  pl.Utf8,
+    "GWDLP":  pl.Utf8,  "GWDLR":  pl.Utf8,
+}
+schema_k3tbl = {
+    "PART":   pl.Utf8,  "ITEM":   pl.Utf8,
+    "MATDT":  pl.Date,  "AMOUNT": pl.Float64,
+    "AMTUSD": pl.Float64, "AMTSGD": pl.Float64,
+    "ISSDT":  pl.Date,  "UTCCY":  pl.Utf8,
+    "UTCUS":  pl.Utf8,  "UTCTP":  pl.Utf8,
+    "UTSTY":  pl.Utf8,  "UTDLR":  pl.Utf8,
+    "UTDLP":  pl.Utf8,
+}
 
-            # ELSE IF UTREF IN ('IINV','IDRI','IDLG') THEN DO;
-            elif utref in ['IINV', 'IDRI', 'IDLG']:
-                utref_match += 1
-                if utsty == 'SBA' and utdlp == 'IOP':
-                    item_assigned += 1
-                    emit('633', amount)
-                elif utsty in ['SDC', 'LDC']:
-                    item_assigned += 1
-                    emit('632', amount)
-                elif utsty in ['CB1', 'CB2', 'CF1', 'CF2', 'CNT', 'MGI', 'ITB', 'SAC', 'BMN',
-                               'BMC', 'BMF', 'SCD', 'SCM', 'MGS', 'MTB', 'BNB', 'BNN', 'CMB', 'SMC']:
-                    amt = amount + utaict if inst == 'PBB' else amount
-                    item_assigned += 1
-                    emit('631', amt)
-                elif utsty in ['ISB', 'IDS', 'IBZ', 'ICN']:
-                    # FIX vs previous port:
-                    #   SAS: IF UTMM1='GGB' THEN ITEM='636';
-                    #        ELSE IF UTMM1='NGB' THEN ITEM='635';
-                    #        AMOUNT = AMOUNT + UTAICT; OUTPUT;
-                    # (previous port incorrectly checked for 'GGB' vs
-                    # anything-else->'635'; the real else-condition is
-                    # specifically 'NGB'. If neither matches, SAS would
-                    # retain whatever ITEM held from a prior loop
-                    # iteration - an edge case we don't replicate; we
-                    # simply skip emitting a record if utmm1 isn't
-                    # GGB/NGB, since a genuinely blank ITEM would be
-                    # dropped downstream anyway by "IF ITEM ^= ' '".
-                    if utmm1 == 'GGB':
-                        item_assigned += 1
-                        emit('636', amount + utaict)
-                    elif utmm1 == 'NGB':
-                        item_assigned += 1
-                        emit('635', amount + utaict)
-                elif utsty in ['DHB', 'KHA']:
-                    item_assigned += 1
-                    emit('636', amount)
-                elif utsty == 'DBD':
-                    item_assigned += 1
-                    emit('634', amount)
+k1tbl_df = pl.DataFrame(output_k1tbl_rows, schema=schema_k1tbl) if output_k1tbl_rows else pl.DataFrame(schema=schema_k1tbl)
+k3tbl_df = pl.DataFrame(output_k3tbl_rows, schema=schema_k3tbl) if output_k3tbl_rows else pl.DataFrame(schema=schema_k3tbl)
+k1tbx_df = pl.DataFrame(k1tbx_output_rows, schema={
+    "PART":   pl.Utf8,  "ITEM":   pl.Utf8,
+    "MATDT":  pl.Date,  "AMOUNT": pl.Float64,
+    "AMTUSD": pl.Float64, "AMTSGD": pl.Float64,
+    "ISSDT":  pl.Date,  "GWCCY":  pl.Utf8,
+    "GWSHN":  pl.Utf8,  "GWC2R":  pl.Utf8,
+    "GWDLP":  pl.Utf8,  "GWDLR":  pl.Utf8,
+}) if k1tbx_output_rows else pl.DataFrame()
 
-            # IF UTSTY IN ('SIP') THEN DO; ITEM='610'; OUTPUT; END;
-            # (this check is UNCONDITIONAL - outside/after the UTREF if/elif
-            # chain above, exactly as in the SAS source - so it can fire in
-            # addition to one of the branches above for the same row)
-            if utsty == 'SIP':
-                item_assigned += 1
-                emit('610', amount)
+# ---------------------------------------------------------------------------
+# Write K1TBL and K3TBL intermediate outputs
+# ---------------------------------------------------------------------------
+k1tbl_df.write_csv(OUTPUT_K1TBL_FILE, separator="|", null_value="")
+k3tbl_df.write_csv(OUTPUT_K3TBL_FILE, separator="|", null_value="")
 
-        print(f"  K3TBL processing stats:")
-        print(f"    Total rows: {total_rows}")
-        print(f"    Rows matching UTREF patterns: {utref_match}")
-        print(f"    Records with item assigned: {item_assigned}")
-        print(f"    Records with matdt missing/None (will be dropped by build_ktblall): {matdt_missing}")
+print(f"K1TBL written to {OUTPUT_K1TBL_FILE}  ({len(k1tbl_df)} rows)")
+print(f"K3TBL written to {OUTPUT_K3TBL_FILE}  ({len(k3tbl_df)} rows)")
 
-    except Exception as e:
-        print(f"  K3TBL warning: {e}")
-        import traceback
-        traceback.print_exc()
+# ===========================================================================
+# DATA KTBL — combine K1TBL + K3TBL + K1TBX, compute BNMCODE
+# ===========================================================================
 
-    return records
+# %DCLVAR macro equivalent — variable declarations (inlined, no separate action needed)
 
+# Load REPTDATE info (RPYR, RPMTH, RPDAY, RD2)
+rpyr  = REPTDATE.year
+rpmth = REPTDATE.month
+rpday = REPTDATE.day
+rd2   = 29 if (rpyr % 4 == 0) else 28
 
-# =============================================================================
-# KTBLALL - direct port of:
-#   DATA KTBL (KEEP=BNMCODE AMOUNT AMTUSD AMTSGD) KTBLALL;
-#      SET K1TBL(IN=A) K3TBL(IN=B) K1TBX;    <- K1TBX not available, see module docstring
-#      IF ITEM ^= ' ';
-#      IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1; ELSE %REMMTH;
-#      IF MATDT - ISSDT    < 8 THEN ORI30D = 0.1; ELSE ORI30D = (MATDT-ISSDT)/30;
-#      BNMCODE = PART||ITEM||'00'||PUT(REMMTH,REMFMT.)||'0000Y';
-#      OUTPUT;
-#      IF PART = '95' THEN SUBSTR(BNMCODE,1,2) = '93'; ELSE SUBSTR(BNMCODE,1,2)='94';
-#      OUTPUT;
-# =============================================================================
-def build_ktblall(k1_records, k3_records, rep_date):
-    """
-    Build KTBLALL from K1 and K3 records. Applies identically to both
-    sources (both are normalized to have part/item/matdt/issdt/amount by
-    the time they get here) - matching how the SAS KTBLALL step treats
-    the stacked K1TBL+K3TBL(+K1TBX) the same way regardless of source.
-    """
-    all_records = []
+# Tag source table
+k1tbl_tagged = k1tbl_df.with_columns(pl.lit("1").alias("TBL"))
+k3tbl_tagged = k3tbl_df.with_columns(pl.lit("3").alias("TBL"))
 
-    def process_source(src_records, ccy_key, custfiss_key, custno_val_fn, dealtype_key, dealref_key):
-        for r in src_records:
-            if not (r.get('item') and r.get('matdt')):
-                continue
+# Align schemas for concat — add missing cols with nulls
+for col in ["GWCCY", "GWSHN", "GWC2R", "GWDLP", "GWDLR"]:
+    if col not in k3tbl_tagged.columns:
+        k3tbl_tagged = k3tbl_tagged.with_columns(pl.lit(None).cast(pl.Utf8).alias(col))
+for col in ["UTCCY", "UTCUS", "UTCTP", "UTSTY", "UTDLR", "UTDLP"]:
+    if col not in k1tbl_tagged.columns:
+        k1tbl_tagged = k1tbl_tagged.with_columns(pl.lit(None).cast(pl.Utf8).alias(col))
+if k1tbx_df.is_empty():
+    k1tbx_tagged = pl.DataFrame()
+else:
+    k1tbx_tagged = k1tbx_df.with_columns(pl.lit("X").alias("TBL"))
+    for col in ["UTCCY", "UTCUS", "UTCTP", "UTSTY", "UTDLR", "UTDLP"]:
+        if col not in k1tbx_tagged.columns:
+            k1tbx_tagged = k1tbx_tagged.with_columns(pl.lit(None).cast(pl.Utf8).alias(col))
 
-            matdt = r['matdt']
-            issdt = r.get('issdt')
+frames = [f for f in [k1tbl_tagged, k3tbl_tagged, k1tbx_tagged] if not f.is_empty()]
+combined_all = pl.concat(frames, how="diagonal") if frames else pl.DataFrame()
 
-            # IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1; ELSE %REMMTH;
-            if (matdt - rep_date['date']).days < 8:
-                remmth = 0.1
-                rem30d = 0
-            else:
-                remmth, rem30d = calculate_remaining_months(
-                    matdt, rep_date['date'], rep_date['days_in_month']
-                )
+# IF ITEM ^= ' ' — filter out blank ITEM
+combined_all = combined_all.filter(
+    pl.col("ITEM").is_not_null() & (pl.col("ITEM").str.strip_chars() != "")
+)
 
-            # IF MATDT - ISSDT < 8 THEN ORI30D = 0.1; ELSE ORI30D = (MATDT-ISSDT)/30;
-            if issdt and (matdt - issdt).days < 8:
-                ori30d = 0.1
-            elif issdt:
-                ori30d = (matdt - issdt).days / 30
-            else:
-                ori30d = 0
+# Compute REMMTH and BNMCODE row by row
+ktbl_rows    = []
+ktblall_rows = []
 
-            part = r['part']
-            item = r['item']
-            bnmcode = f"{part}{item}00{format_mth_bucket(remmth)}0000Y"
+for row in combined_all.iter_rows(named=True):
+    matdt  = row["MATDT"]
+    issdt  = row["ISSDT"]
+    part   = row["PART"] or ""
+    item   = row["ITEM"] or ""
+    amount = row["AMOUNT"] or 0.0
+    amtusd = row["AMTUSD"] or 0.0
+    amtsgd = row["AMTSGD"] or 0.0
 
-            base = {
-                'src': r['src'], 'bnmcode': bnmcode, 'part': part, 'item': item,
-                'cur': r.get(ccy_key, 'MYR'), 'amt': r['amount'],
-                'amtusd': r.get('amtusd', 0), 'amtsgd': r.get('amtsgd', 0),
-                'custfiss': r.get(custfiss_key, 0), 'custno': custno_val_fn(r),
-                'dealtype': r.get(dealtype_key, ''), 'dealref': r.get(dealref_key, ''),
-                'remmth': remmth, 'rem30d': rem30d, 'ori30d': ori30d, 'matdt': matdt
-            }
-            all_records.append(base)
+    if matdt is None:
+        continue
 
-            # PART 1 duplicate: 95->93, else->94
-            new_part = '93' if part == '95' else '94'
-            dup = dict(base)
-            dup['src'] = r['src'] + '_part1'
-            dup['bnmcode'] = f"{new_part}{item}00{format_mth_bucket(remmth)}0000Y"
-            dup['part'] = new_part
-            all_records.append(dup)
+    # IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1; ELSE %REMMTH
+    diff_rep = (matdt - REPTDATE).days
+    remmth   = compute_remmth(matdt, REPTDATE)
+    remmth_fmt = format_remmth(remmth)
 
-    process_source(
-        k1_records, ccy_key='gwccy', custfiss_key='gwc2r',
-        custno_val_fn=lambda r: None,
-        dealtype_key='gwdlp', dealref_key='gwdlr'
-    )
-    process_source(
-        k3_records, ccy_key='utccy', custfiss_key='utctp',
-        custno_val_fn=lambda r: r.get('utcus'),
-        dealtype_key='utdlp', dealref_key='utdlr'
-    )
+    # IF MATDT - ISSDT < 8 THEN ORI30D = 0.1; ELSE ORI30D = (MATDT-ISSDT)/30
+    if issdt is not None:
+        diff_ori = (matdt - issdt).days
+        ori30d   = 0.1 if diff_ori < 8 else diff_ori / 30.0
+    else:
+        ori30d = 0.1
 
-    return all_records
+    # BNMCODE = PART||ITEM||'00'||PUT(REMMTH,REMFMT.)||'0000Y'
+    bnmcode = f"{part}{item}00{remmth_fmt}0000Y"
+
+    rec = dict(BNMCODE=bnmcode, AMOUNT=amount, AMTUSD=amtusd, AMTSGD=amtsgd)
+    ktbl_rows.append(rec)
+
+    # KTBLALL contains all columns
+    ktblall_rows.append({**row, "BNMCODE": bnmcode, "REMMTH": remmth, "ORI30D": ori30d})
+
+    # --------------------------------------------------------
+    # DUPLICATE ANOTHER SET FOR PART 1
+    # 95 = PART 2-RM, 96 = PART 2-FX
+    # 93 = PART 1-RM, 94 = PART 1-FX
+    # --------------------------------------------------------
+    part1 = "93" if part == "95" else "94"
+    bnmcode_p1 = part1 + bnmcode[2:]
+
+    ktbl_rows.append({**rec, "BNMCODE": bnmcode_p1})
+    ktblall_rows.append({**row, "BNMCODE": bnmcode_p1, "REMMTH": remmth, "ORI30D": ori30d})
+
+# Materialise KTBL and KTBLALL
+ktbl_df = pl.DataFrame(ktbl_rows, schema={
+    "BNMCODE": pl.Utf8,
+    "AMOUNT":  pl.Float64,
+    "AMTUSD":  pl.Float64,
+    "AMTSGD":  pl.Float64,
+}) if ktbl_rows else pl.DataFrame()
+
+ktblall_df = pl.DataFrame(ktblall_rows) if ktblall_rows else pl.DataFrame()
+
+ktbl_df.write_csv(OUTPUT_KTBL_FILE,    separator="|", null_value="")
+ktblall_df.write_csv(OUTPUT_KTBLALL_FILE, separator="|", null_value="")
+
+print(f"KTBL written to    {OUTPUT_KTBL_FILE}    ({len(ktbl_df)} rows)")
+print(f"KTBLALL written to {OUTPUT_KTBLALL_FILE} ({len(ktblall_df)} rows)")
+
+# ===========================================================================
+# PART 3: DISTRIBUTION PROFILE OF CUSTOMER DEPOSITS
+# ===========================================================================
+
+# ------------------------------------------------
+# NON-INTERBANK REPOS (from K1TBL source)
+# ------------------------------------------------
+con4 = duckdb.connect()
+k1tbl_part3 = con4.execute(f"""
+    SELECT GWBALC AS AMOUNT, GWSHN AS NAME
+    FROM read_parquet('{input_k1tbl_path}')
+    WHERE GWCCY  = 'MYR'
+      AND GWMVT  = 'P'
+      AND GWMVTS = 'M'
+      AND SUBSTR(GWCTP, 1, 1) <> 'B'
+      AND SUBSTR(GWDLP, 2, 2) IN ('MI', 'MT')
+""").pl().with_columns(
+    pl.lit("NON-INTERBANK REPOS").alias("CAT")
+).select(["CAT", "NAME", "AMOUNT"])
+
+# ------------------------------------------------
+# NON-INTERBANK NIDS (from K3TBL source)
+# ------------------------------------------------
+k3tbl_part3 = con4.execute(f"""
+    SELECT UTCUS || UTCLC AS NAME,
+           UTAMOC - UTDPF AS AMOUNT
+    FROM read_parquet('{input_k3tbl_path}')
+    WHERE SUBSTR(UTCTP, 1, 1) <> 'B'
+      AND UTREF IN ('PFD','PLD','PSD','PZD','PDC')
+      AND UTSTY IN ('IFD','ILD','ISD','IZD','IDC','IDP','IZP')
+""").pl().with_columns(
+    pl.lit("NON-INTERBANK NIDS").alias("CAT")
+).select(["CAT", "NAME", "AMOUNT"])
+
+con4.close()
+
+# PROC APPEND BASE=K1TBL DATA=K3TBL
+k1tbl_part3_combined = pl.concat([k1tbl_part3, k3tbl_part3], how="diagonal")
+
+# PROC SUMMARY (GROUP BY CAT, NAME; SUM AMOUNT)
+k1tbl_part3_summary = (
+    k1tbl_part3_combined
+    .group_by(["CAT", "NAME"])
+    .agg(pl.col("AMOUNT").sum())
+    .sort(["CAT", "NAME"])
+)
+
+k1tbl_part3_summary.write_csv(OUTPUT_K1TBL_PART3_FILE, separator="|", null_value="")
+print(f"K1TBL (Part 3) written to {OUTPUT_K1TBL_PART3_FILE} ({len(k1tbl_part3_summary)} rows)")
