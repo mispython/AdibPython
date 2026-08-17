@@ -1,802 +1,973 @@
-# !/usr/bin/env python3
 """
-PROGRAM         : KALMLIQ
-DATE            : 22.07.98
-REPORT          : NEW LIQUIDITY FRAMEWORK (KAPITI ITEMS)
-DATE MODIFIED   : 07-02-2002 (WBL)
-SMR/OTHERS      : JS
-CHANGES MADE    : INCLUDE NEW MARKETABLE SECURITIES PRODUCT :
-                  'PNB' (9363600XX0000Y, 9563600XX0000Y)
+EIBDLCRM.py - BNM LCR (Liquidity Coverage Ratio) Reporting for Conventional Banking
+
+Structure mirrors the original SAS program:
+  - config.py   ~ macro variables / PROC FORMAT setup at the top of the SAS program
+  - common.py   ~ %MACRO DCLVAR / %MACRO REMMTH / shared format logic
+  - kalmliq.py  ~ %INC PGM(KALMLIQ)  (treasury: K1TBL/K3TBL -> KTBLALL)
+  - this file   ~ everything else in the main SAS program (DCI, CIS, UTSAS,
+                  core banking, insurance split, consolidation, reporting)
+
+Run with:  python3 EIBDLCRM.py
 """
 
-import duckdb
-import polars as pl
+import os
+import glob
+from pathlib import Path
 from datetime import date, timedelta
-import math
 
-# ---------------------------------------------------------------------------
-# Path configuration
-# ---------------------------------------------------------------------------
-INPUT_K1TBL_PARQUET = "data/K1TBL_{REPTMON}{NOWK}.parquet"   # resolved at runtime
-INPUT_K3TBL_PARQUET = "data/K3TBL_{REPTMON}{NOWK}.parquet"   # resolved at runtime
-REPTDATE_PARQUET    = "data/REPTDATE.parquet"                  # REPTDATE lookup table
+import polars as pl
 
-OUTPUT_K1TBL_FILE   = "output/K1TBL.txt"
-OUTPUT_K3TBL_FILE   = "output/K3TBL.txt"
-OUTPUT_KTBL_FILE    = "output/KTBL.txt"
-OUTPUT_KTBLALL_FILE = "output/KTBLALL.txt"
+from config import PATHS, inst, cust_map, special_cust, FX_RATES
+from common import (
+    read_sas_file,
+    read_parquet_file,
+    warn_missing_columns,
+    debug_directory,
+    get_report_date,
+    sas_date_to_pydate,
+    calculate_remaining_months,
+    format_mth_bucket,
+    format_day_bucket,
+    get_customer_category,
+)
+from kalmliq import process_k1tbl, process_k3tbl, build_ktblall
 
-# Part 3 outputs
-OUTPUT_K1TBL_PART3_FILE = "output/K1TBL_PART3.txt"
 
-# ---------------------------------------------------------------------------
-# Runtime parameters
-# ---------------------------------------------------------------------------
-REPTMON  = "202401"       # e.g. '202401'
-NOWK     = "1"            # e.g. '1'
-INST     = "PBB"          # e.g. 'PBB' or other institution code
-REPTDATE = date(2024, 1, 31)  # reporting date
-
-# ---------------------------------------------------------------------------
-# Resolve actual input paths
-# ---------------------------------------------------------------------------
-input_k1tbl_path = INPUT_K1TBL_PARQUET.format(REPTMON=REPTMON, NOWK=NOWK)
-input_k3tbl_path = INPUT_K3TBL_PARQUET.format(REPTMON=REPTMON, NOWK=NOWK)
-
-# ---------------------------------------------------------------------------
-# REMMTH macro equivalent:
-# Computes remaining months from REPTDATE to MATDT.
-# ---------------------------------------------------------------------------
-def compute_remmth(matdt: date, reptdate: date) -> float:
+# =============================================================================
+# WALK.TXT / TEMPL.TXT
+# =============================================================================
+def read_walk_file(filepath):
     """
-    Python equivalent of the %REMMTH SAS macro.
-    Computes the remaining maturity bucket as a float label used in REMFMT format.
-    Mirrors the SAS logic: difference in days bucketed into month bands.
+    Read WALK.TXT fixed-width file.
+
+    SAS layout (from the main EIBDLCRM.sas program):
+        INFILE WALK;
+        INPUT @002 SET_ID  $19.
+              @042 AMOUNT  COMMA20.2
+              @062 SIGN    $1.
+        IF SIGN = '' THEN AMOUNT = -1*AMOUNT;
+        ITEM = PUT(SET_ID,$LCRCDGL.);
+
+    SAS column positions are 1-indexed; @002 means "start at column 2"
+    which is index 1 in a 0-indexed python string.
+
+    NOTE: ITEM = PUT(SET_ID,$LCRCDGL.) applies a SAS format (a lookup
+    table named LCRCDGL) mapping SET_ID -> report ITEM code. That format
+    table hasn't been provided, so `item` is left blank here; if you can
+    get the $LCRCDGL PROC FORMAT definitions (fmtname/start/label), plug
+    them into ITEM_LOOKUP below and this will produce real ITEM values.
     """
-    diff_days = (matdt - reptdate).days
+    records = []
+    ITEM_LOOKUP = {}  # TODO: populate from $LCRCDGL format if available
+
+    try:
+        with open(filepath, 'r', errors='replace') as f:
+            for line in f:
+                if len(line) < 62:
+                    continue
+                set_id = line[1:20].strip()          # @002, $19.
+                amount_raw = line[41:61].strip()      # @042, COMMA20.2
+                sign = line[61:62].strip()            # @062, $1.
+
+                if not set_id:
+                    continue
 
-    if diff_days < 8:
-        return 0.1
-
-    rpyr  = reptdate.year
-    rpmth = reptdate.month
-    rpday = reptdate.day
-
-    # RD2 logic (days in February for leap year check)
-    rd2 = 29 if (rpyr % 4 == 0) else 28
-
-    # Compute remaining months using SAS %REMMTH macro approximation
-    # Standard SAS REMMTH logic: fractional months
-    diff_months = diff_days / 30.0
-
-    # Bucket to standard bands matching REMFMT. format
-    if diff_months <= 1:
-        return 1
-    elif diff_months <= 2:
-        return 2
-    elif diff_months <= 3:
-        return 3
-    elif diff_months <= 6:
-        return 6
-    elif diff_months <= 12:
-        return 12
-    elif diff_months <= 24:
-        return 24
-    elif diff_months <= 36:
-        return 36
-    elif diff_months <= 60:
-        return 60
-    else:
-        return 99
-
-
-def format_remmth(remmth: float) -> str:
-    """
-    Equivalent of PUT(REMMTH, REMFMT.) in SAS.
-    Returns a zero-padded 2-char string for use in BNMCODE construction.
-    """
-    mapping = {
-        0.1: "00",
-        1:   "01",
-        2:   "02",
-        3:   "03",
-        6:   "06",
-        12:  "12",
-        24:  "24",
-        36:  "36",
-        60:  "60",
-        99:  "99",
-    }
-    return mapping.get(remmth, "99")
-
-
-# ===========================================================================
-# PART 2: BREAKDOWN BY PURE CONTRACTUAL MATURITY PROFILE
-# ===========================================================================
-
-# ---------------------------------------------------------------------------
-# Load K1TBL source data via DuckDB
-# ---------------------------------------------------------------------------
-con = duckdb.connect()
-
-k1tbl_raw = con.execute(f"""
-    SELECT *,
-           GWMDT  AS MATDT,
-           GWBALC AS AMOUNT,
-           GWSDT  AS ISSDT
-    FROM read_parquet('{input_k1tbl_path}')
-    WHERE GWMVT = 'P'
-      AND GWOCY <> 'XAU'
-      AND GWCCY <> 'XAU'
-      AND GWOCY <> 'XAT'
-      AND GWCCY <> 'XAT'
-""").pl()
-
-k3tbl_raw = con.execute(f"""
-    SELECT *
-    FROM read_parquet('{input_k3tbl_path}')
-""").pl()
-
-con.close()
-
-# ---------------------------------------------------------------------------
-# Build K1TBL (PART 2) — rows are emitted conditionally with ITEM assignment
-# ---------------------------------------------------------------------------
-KEEP_K1TBL = ["PART", "ITEM", "MATDT", "AMOUNT", "AMTUSD", "AMTSGD",
-               "ISSDT", "GWCCY", "GWSHN", "GWC2R", "GWDLP", "GWDLR"]
-
-output_k1tbl_rows = []
-
-for row in k1tbl_raw.iter_rows(named=True):
-    gwccy  = row["GWCCY"]
-    gwmvts = row["GWMVTS"]
-    gwdlp  = row["GWDLP"]
-    gwctp  = row["GWCTP"] or ""
-    gwshn  = row["GWSHN"] or ""
-    amount = row["AMOUNT"]
-    matdt  = row["MATDT"]
-    issdt  = row["ISSDT"]
-    gwc2r  = row.get("GWC2R", "")
-    gwdlr  = row.get("GWDLR", "")
-
-    base = dict(
-        MATDT=matdt,
-        AMOUNT=amount,
-        ISSDT=issdt,
-        GWCCY=gwccy,
-        GWSHN=gwshn,
-        GWC2R=gwc2r,
-        GWDLP=gwdlp,
-        GWDLR=gwdlr,
-        ITEM=None,
-        PART=None,
-        AMTUSD=0.0,
-        AMTSGD=0.0,
-    )
-
-    if gwccy == "MYR":
-        base["PART"]   = "95"
-        base["AMTUSD"] = 0.0
-        base["AMTSGD"] = 0.0
-
-        if gwmvts == "M":
-            # BCD/BCI/BCS/BCQ/BCT/BCW/BQD -> ITEM='830'
-            if gwdlp in ("BCD", "BCI", "BCS", "BCQ", "BCT", "BCW", "BQD"):
-                output_k1tbl_rows.append({**base, "ITEM": "830"})
-
-            # B-class CTP: LO/LC/LF/LS/... -> ITEM='610'
-            if gwctp[:1] == "B":
-                if gwdlp in ("LO", "LC", "LF", "LS", "LOI", "LSI", "LSC", "LSW",
-                             "FDA", "FDB", "FDS", "FDL", "LOC", "LOW"):
-                    output_k1tbl_rows.append({**base, "ITEM": "610"})
-                elif gwdlp in ("BO", "BF", "BOI", "BFI", "BSC", "BSW", "BOC", "BOW"):
-                    output_k1tbl_rows.append({**base, "ITEM": "810"})
-
-            # SUBSTR(GWDLP,2,2) logic (SAS 1-based index 2, length 2 -> Python [1:3])
-            dlp_mid = gwdlp[1:3]
-            if dlp_mid in ("MI", "MT"):
-                output_k1tbl_rows.append({**base, "ITEM": "820"})
-            elif dlp_mid in ("XI", "XT"):
-                output_k1tbl_rows.append({**base, "ITEM": "620"})
-
-        '''
-        ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
-           'FF1','FF2') THEN DO;
-           IF GWMVTS = 'P' THEN ITEM = '711';
-           ELSE IF GWMVTS = 'S' THEN ITEM = '911';
-           OUTPUT;
-        END;
-        '''
-
-    else:
-        # PART 96 — FCY
-        base["PART"]   = "96"
-        base["AMTUSD"] = amount if gwccy == "USD" else 0.0
-        base["AMTSGD"] = amount if gwccy == "SGD" else 0.0
-
-        if gwmvts == "M":
-            if gwctp[:1] == "B" and gwctp != "BW":
-                if gwdlp in ("LO", "LC", "LS", "LF", "LOI", "LSI", "LSC", "LOC",
-                             "FDA", "FDB", "FDS", "FDL", "LOW", "LSW"):
-                    output_k1tbl_rows.append({**base, "ITEM": "610"})
-                elif gwdlp in ("BC", "BF", "BO", "BSC", "BOW", "BSW"):
-                    if gwshn[:6] != "FCY-FD":
-                        output_k1tbl_rows.append({**base, "ITEM": "810"})
-                elif gwdlp == "BOC":
-                    output_k1tbl_rows.append({**base, "ITEM": "810"})
-
-        '''
-        ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
-           'FF1','FF2') AND GWACT NOT IN ('RV','RW') THEN DO;
-           IF GWMVTS = 'P' THEN ITEM = '711';
-           ELSE IF GWMVTS = 'S' THEN ITEM = '911';
-           OUTPUT;
-        END;
-        '''
-
-# ---------------------------------------------------------------------------
-# %INC PGM(KAMLIQX) — inline logic from KAMLIQX.py
-# Produces K1TBX rows (BNMCODE 57100, 57400, 57600) appended later.
-# ---------------------------------------------------------------------------
-# Reference: KAMLIQX.py — builds k1tbx_final (final_df) with PART/ITEM/AMOUNT
-# The logic below replicates KAMLIQX inline.
-
-VALID_GWDLP_X = ('FXS', 'FXO', 'FXF', 'SF1', 'SF2', 'TS1', 'TS2',
-                 'FBP', 'FF1', 'FF2')
-
-con2 = duckdb.connect()
-k1tbx_base = con2.execute(f"""
-    SELECT * RENAME (GWMDT AS MATDT)
-    FROM read_parquet('{input_k1tbl_path}')
-    WHERE GWMVT  = 'P'
-      AND GWOCY <> 'XAU'
-      AND GWCCY <> 'XAU'
-      AND GWDLP IN {VALID_GWDLP_X}
-""").pl().with_columns(
-    pl.lit(" ").alias("BNMCODE"),
-    (pl.col("GWBALA") * pl.col("GWEXR")).alias("AMOUNT"),
-)
-con2.close()
-
-
-def _assign_bnmcode_57100(df: pl.DataFrame) -> pl.DataFrame:
-    dlp_fxs_fbp  = pl.col("GWDLP").is_in(["FXS", "FBP"])
-    dlp_fxo_fxf  = pl.col("GWDLP").is_in(["FXO", "FXF"])
-    dlp_futures  = pl.col("GWDLP").is_in(["SF1", "SF2", "TS1", "TS2", "FF1", "FF2"])
-    ccy_ne_myr   = pl.col("GWCCY") != "MYR"
-    ctp_direct   = pl.col("GWCTP").is_in(["BC", "BB", "BI", "BM", "BA", "BE"])
-    ctp_not_ba_bz = ~((pl.col("GWCTP") >= "BA") & (pl.col("GWCTP") <= "BZ"))
-    otherwise_res = (
-        (ctp_not_ba_bz & (pl.col("GWCNAL") == "MY") & (pl.col("GWSAC") != "UF")) |
-        (pl.col("GWSAC") == "UF")
-    )
-    eligible_ctp = ctp_direct | otherwise_res
-    condition_base = (
-        (pl.col("GWOCY") == "MYR") &
-        (pl.col("GWMVT") == "P") &
-        (pl.col("GWMVTS") == "P") &
-        ccy_ne_myr & eligible_ctp
-    )
-    condition_fbp = (
-        (pl.col("GWOCY") == "MYR") &
-        (pl.col("GWMVT") == "P") &
-        (pl.col("GWMVTS") == "P") &
-        (pl.col("GWDLP") == "FBP") & ccy_ne_myr
-    )
-    mask = (
-        ((dlp_fxs_fbp & ~(pl.col("GWDLP") == "FBP")) | dlp_fxo_fxf | dlp_futures)
-        & condition_base
-    ) | (pl.col("GWDLP") == "FBP") & condition_fbp
-
-    return df.with_columns(
-        pl.when(mask).then(pl.lit("57100")).otherwise(pl.col("BNMCODE")).alias("BNMCODE")
-    )
-
-
-def _assign_bnmcode_57400(df: pl.DataFrame) -> pl.DataFrame:
-    dlp_fxs      = pl.col("GWDLP") == "FXS"
-    dlp_fxo_fxf  = pl.col("GWDLP").is_in(["FXO", "FXF"])
-    dlp_futures  = pl.col("GWDLP").is_in(["SF1", "SF2", "TS1", "TS2", "FF1", "FF2"])
-    ccy_ne_myr   = pl.col("GWCCY") != "MYR"
-    ctp_direct_fxs = pl.col("GWCTP").is_in(["BC", "BB", "BI", "BM", "BA", "BE", "CE"])
-    ctp_direct_std = pl.col("GWCTP").is_in(["BC", "BB", "BI", "BM", "BA", "BE"])
-    ctp_not_ba_bz  = ~((pl.col("GWCTP") >= "BA") & (pl.col("GWCTP") <= "BZ"))
-    otherwise_base = (
-        (ctp_not_ba_bz & (pl.col("GWCNAL") == "MY") & (pl.col("GWSAC") != "UF")) |
-        (pl.col("GWSAC") == "UF")
-    )
-    otherwise_fxo = otherwise_base | (pl.col("GWCTP") == "CE")
-    base_cond = (
-        (pl.col("GWOCY") == "MYR") &
-        (pl.col("GWMVT") == "P") &
-        (pl.col("GWMVTS") == "S") &
-        ccy_ne_myr
-    )
-    mask = (
-        (base_cond & dlp_fxs     & (ctp_direct_fxs | otherwise_base)) |
-        (base_cond & dlp_fxo_fxf & (ctp_direct_std | otherwise_fxo))  |
-        (base_cond & dlp_futures  & (ctp_direct_std | otherwise_base))
-    )
-    return df.with_columns(
-        pl.when(mask).then(pl.lit("57400")).otherwise(pl.col("BNMCODE")).alias("BNMCODE")
-    )
-
-
-# Build K1TBX1
-k1tbx1 = k1tbx_base.filter(
-    (pl.col("GWOCY") != "XAT") & (pl.col("GWCCY") != "XAT")
-)
-k1tbx1 = _assign_bnmcode_57100(k1tbx1)
-k1tbx1 = _assign_bnmcode_57400(k1tbx1)
-k1tbx1 = k1tbx1.filter(pl.col("BNMCODE") != " ")
-
-# Build K1TBX2
-k1tbx2 = (
-    k1tbx_base
-    .with_columns(pl.col("GWBALC").alias("AMOUNT"))
-    .with_columns(pl.lit(" ").alias("BNMCODE"))
-)
-dlp_57600 = pl.col("GWDLP").is_in(
-    ["FXS", "FXO", "FXF", "SF2", "FF1", "FF2", "SF1", "TS1", "TS2"]
-)
-mask_57600 = (
-    (pl.col("GWCCY")  != "MYR") &
-    (pl.col("GWOCY")  != "MYR") &
-    (pl.col("GWMVT")  == "P") &
-    (pl.col("GWMVTS") == "P") &
-    (pl.col("GWCTP")  != "BW") &
-    dlp_57600
-)
-k1tbx2 = k1tbx2.with_columns(
-    pl.when(mask_57600).then(pl.lit("57600")).otherwise(pl.col("BNMCODE")).alias("BNMCODE")
-).filter(pl.col("BNMCODE") != " ")
-
-# Expand K1TBX rows per BNMCODE
-combined_x = pl.concat(
-    [
-        k1tbx1.select([c for c in k1tbx1.columns
-                       if c in ["GWCCY", "GWOCY", "BNMCODE", "AMOUNT", "MATDT", "GWSDT"]]),
-        k1tbx2.select([c for c in k1tbx2.columns
-                       if c in ["GWCCY", "GWOCY", "BNMCODE", "AMOUNT", "MATDT", "GWSDT"]]),
-    ],
-    how="diagonal"
-)
-
-k1tbx_output_rows = []
-for row in combined_x.iter_rows(named=True):
-    amount  = abs(row["AMOUNT"]) if row["AMOUNT"] < 0 else row["AMOUNT"]
-    gwccy   = row["GWCCY"]
-    gwocy   = row["GWOCY"]
-    bnmcode = row["BNMCODE"]
-    matdt   = row["MATDT"]
-    issdt   = row.get("GWSDT", None)
-
-    amtusd = amount if gwccy == "USD" else 0.0
-    amtsgd = amount if gwccy == "SGD" else 0.0
-
-    base_x = dict(AMOUNT=amount, MATDT=matdt, ISSDT=issdt,
-                  GWCCY=gwccy, GWSHN="", GWC2R="", GWDLP="", GWDLR="")
-
-    if bnmcode == "57100":
-        k1tbx_output_rows.append({**base_x, "PART": "96", "ITEM": "711",
-                                   "AMTUSD": amtusd, "AMTSGD": amtsgd})
-        k1tbx_output_rows.append({**base_x, "PART": "95", "ITEM": "911",
-                                   "AMTUSD": 0.0,   "AMTSGD": 0.0})
-    elif bnmcode == "57400":
-        k1tbx_output_rows.append({**base_x, "PART": "96", "ITEM": "911",
-                                   "AMTUSD": amtusd, "AMTSGD": amtsgd})
-        k1tbx_output_rows.append({**base_x, "PART": "95", "ITEM": "711",
-                                   "AMTUSD": 0.0,   "AMTSGD": 0.0})
-    elif bnmcode == "57600":
-        k1tbx_output_rows.append({**base_x, "PART": "96", "ITEM": "711",
-                                   "AMTUSD": amtusd, "AMTSGD": amtsgd})
-        amtusd2 = amount if gwocy == "USD" else 0.0
-        amtsgd2 = amount if gwocy == "SGD" else 0.0
-        k1tbx_output_rows.append({**base_x, "PART": "96", "ITEM": "911",
-                                   "AMTUSD": amtusd2, "AMTSGD": amtsgd2})
-
-# ---------------------------------------------------------------------------
-# Build K3TBL (PART 2) — rows emitted conditionally with ITEM assignment
-# ---------------------------------------------------------------------------
-# Reference: KALMLIQ4.py — builds K3TBL3 rows with CTYPE lookup
-# The K3TBL DATA step logic below replicates KALMLIQ inline.
-
-# Load CTYPE format lookup
-con3 = duckdb.connect()
-ctype_df = con3.execute("SELECT START AS UTCTP, LABEL AS CUST FROM read_parquet('data/CTYPE_FORMAT.parquet')").pl()
-con3.close()
-
-k3tbl_raw = k3tbl_raw.join(ctype_df, on="UTCTP", how="left")
-k3tbl_raw = k3tbl_raw.with_columns(pl.col("CUST").fill_null("").alias("CUST"))
-
-KEEP_K3TBL = ["PART", "ITEM", "MATDT", "AMOUNT", "AMTUSD", "AMTSGD",
-               "ISSDT", "UTCCY", "UTCUS", "UTCTP", "UTSTY", "UTDLR", "UTDLP"]
-
-output_k3tbl_rows = []
-
-for row in k3tbl_raw.iter_rows(named=True):
-    utccy  = row.get("UTCCY", "")  or ""
-    utctp  = row.get("UTCTP", "")  or ""
-    utsty  = row.get("UTSTY", "")  or ""
-    utref  = row.get("UTREF", "")  or ""
-    utdlp  = row.get("UTDLP", "")  or ""
-    utcus  = row.get("UTCUS", "")  or ""
-    utclc  = row.get("UTCLC", "")  or ""
-    utdlr  = row.get("UTDLR", "")  or ""
-    utmm1  = row.get("UTMM1", "")  or ""
-    utamoc = row.get("UTAMOC", 0.0) or 0.0
-    utdpf  = row.get("UTDPF",  0.0) or 0.0
-    utaict = row.get("UTAICT", 0.0) or 0.0
-    utpcp  = row.get("UTPCP",  0.0) or 0.0
-    utdpey = row.get("UTDPEY", 0.0) or 0.0
-    utdpe  = row.get("UTDPE",  0.0) or 0.0
-    utaicy = row.get("UTAICY", 0.0) or 0.0
-    utait  = row.get("UTAIT",  0.0) or 0.0
-    matdt  = row.get("MATDT",  None)
-    issdt  = row.get("ISSDT",  None)
-
-    # AMOUNT = UTAMOC - UTDPF
-    amount = utamoc - utdpf
-    # IF UTSTY='IDC' THEN AMOUNT=UTAMOC + UTDPF
-    if utsty == "IDC":
-        amount = utamoc + utdpf
-
-    if INST == "PBB":
-        amtusd = amount if utccy == "USD" else 0.0
-        amtsgd = amount if utccy == "SGD" else 0.0
-    else:
-        amtusd = 0.0
-        amtsgd = 0.0
-
-    base = dict(
-        PART="95",
-        MATDT=matdt,
-        AMOUNT=amount,
-        AMTUSD=amtusd,
-        AMTSGD=amtsgd,
-        ISSDT=issdt,
-        UTCCY=utccy,
-        UTCUS=utcus,
-        UTCTP=utctp,
-        UTSTY=utsty,
-        UTDLR=utdlr,
-        UTDLP=utdlp,
-        ITEM=None,
-    )
-
-    #  IF UTREF IN ('INV','DRI','DLG','AFSLIQ','AFSBOND','IAFSLIQ','AFS','IAFS')
-    if utref in ("INV", "DRI", "DLG", "AFSLIQ", "AFSBOND", "IAFSLIQ", "AFS", "IAFS"):
-        if utsty in ("CB1", "CB2", "CF1", "CF2", "CNT", "MGS", "MTB", "BNB", "BNN",
-                     "ITB", "SAC", "BMN", "BMC", "BMF", "SCD", "SCM",
-                     "CMB", "MGI", "SMC"):
-            amt = amount
-            if INST == "PBB":
-                amt = amount + utaict
-            output_k3tbl_rows.append({**base, "ITEM": "631", "AMOUNT": amt,
-                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
-                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
-
-        elif utsty == "SDC":
-            amt = amount
-            if INST == "PBB":
-                amt = (utamoc * (utpcp / 100)) + utdpey + utdpe
-            output_k3tbl_rows.append({**base, "ITEM": "632", "AMOUNT": amt,
-                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
-                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
-
-        elif utsty == "LDC":
-            amt = amount
-            if INST == "PBB":
-                amt = amount + utaict
-            output_k3tbl_rows.append({**base, "ITEM": "632", "AMOUNT": amt,
-                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
-                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
-
-        elif utsty in ("SLD", "SSD"):
-            amt = amount
-            if INST == "PBB":
-                amt = (utamoc * (utpcp / 100)) + utaicy + utait
-            output_k3tbl_rows.append({**base, "ITEM": "632", "AMOUNT": amt,
-                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
-                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
-
-        elif utsty in ("SFD", "SZD"):
-            amt = amount
-            if INST == "PBB":
-                amt = amount + utaict
-            output_k3tbl_rows.append({**base, "ITEM": "632", "AMOUNT": amt,
-                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
-                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
-
-        elif utsty == "SBA":
-            if utdlp not in ("MOS", "MSS"):
-                output_k3tbl_rows.append({**base, "ITEM": "633"})
-
-        elif utsty in ("ISB", "DHB", "KHA", "PNB"):
-            output_k3tbl_rows.append({**base, "ITEM": "636"})
-
-        elif utsty == "IDS":
-            output_k3tbl_rows.append({**base, "ITEM": "635"})
-
-        elif utsty == "DBD":
-            output_k3tbl_rows.append({**base, "ITEM": "634"})
-
-        elif utsty in ("DMB", "DBD", "GRL", "MTL", "RUL"):
-            output_k3tbl_rows.append({**base, "ITEM": "635"})
-
-        elif utsty == "PBA":
-            if utdlp in ("MOS", "MSS"):
-                output_k3tbl_rows.append({**base, "ITEM": "850"})
-
-    elif utref in ("PFD", "PLD", "PSD", "PZD", "PDC"):
-        if utsty in ("IFD", "ILD", "ISD", "IZD", "IDC", "IDP", "IZP"):
-            output_k3tbl_rows.append({**base, "ITEM": "840"})
-
-    #  ELSE IF UTREF IN ('IINV','IDRI','IDLG')
-    elif utref in ("IINV", "IDRI", "IDLG"):
-        if utsty == "SBA" and utdlp == "IOP":
-            output_k3tbl_rows.append({**base, "ITEM": "633"})
-        elif utsty in ("SDC", "LDC"):
-            output_k3tbl_rows.append({**base, "ITEM": "632"})
-        elif utsty in ("CB1", "CB2", "CF1", "CF2", "CNT", "MGI",
-                       "ITB", "SAC", "BMN", "BMC", "BMF", "SCD", "SCM",
-                       "MGS", "MTB", "BNB", "BNN", "CMB", "SMC"):
-            amt = amount
-            if INST == "PBB":
-                amt = amount + utaict
-            output_k3tbl_rows.append({**base, "ITEM": "631", "AMOUNT": amt,
-                                       "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
-                                       "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
-        elif utsty in ("ISB", "IDS", "IBZ", "ICN"):
-            item = "636" if utmm1 == "GGB" else ("635" if utmm1 == "NGB" else None)
-            amt  = amount + utaict
-            if item:
-                output_k3tbl_rows.append({**base, "ITEM": item, "AMOUNT": amt,
-                                           "AMTUSD": (amt if utccy == "USD" else 0.0) if INST == "PBB" else 0.0,
-                                           "AMTSGD": (amt if utccy == "SGD" else 0.0) if INST == "PBB" else 0.0})
-        elif utsty in ("DHB", "KHA"):
-            output_k3tbl_rows.append({**base, "ITEM": "636"})
-        elif utsty == "DBD":
-            output_k3tbl_rows.append({**base, "ITEM": "634"})
-
-    # IF UTSTY IN ('SIP') THEN DO; (runs regardless of above UTREF branches)
-    if utsty == "SIP":
-        output_k3tbl_rows.append({**base, "ITEM": "610"})
-
-    # ---------------------------------------------------------------------------
-    # %INC PGM(KALMLIQ4) — inline logic from KALMLIQ4.py (K3TBL3 rows)
-    # Reference: X_KALMLIQ4.py — filters UTREF='RRS', UTSTY='MGS', UTDLP='MSS'
-    # and assigns ITEM 820/830 based on CTYPE lookup.
-    # ---------------------------------------------------------------------------
-    if utref == "RRS" and utsty == "MGS" and utdlp == "MSS":
-        issdt_val = row.get("ISSDT", None)
-        if issdt_val is not None and issdt_val <= REPTDATE:
-            # AMOUNT = (UTPCP * UTFCV) * 0.01 + UTAICT
-            utfcv  = row.get("UTFCV", 0.0) or 0.0
-            amt_liq = (utpcp * utfcv) * 0.01 + utaict
-
-            cust = row.get("CUST", "") or ""
-            # Derive MATDT from UTIDT
-            utidt = row.get("UTIDT", "") or ""
-            matdt_liq = None
-            if utidt.strip():
                 try:
-                    from datetime import datetime
-                    matdt_liq = datetime.strptime(utidt.strip(), "%Y-%m-%d").date()
+                    amount = float(amount_raw.replace(',', '')) if amount_raw else 0.0
                 except ValueError:
-                    matdt_liq = None
+                    amount = 0.0
 
-            NREP = ("13", "17", "20", "60", "71", "72", "74", "76", "79", "85")
-            IREP = ("01", "02", "11", "12", "81")
+                if sign == '':
+                    amount = -1 * amount
 
-            item_liq = None
-            if cust in NREP:
-                item_liq = "830"
-            elif cust in IREP:
-                item_liq = "820"
+                item = ITEM_LOOKUP.get(set_id, '')
 
-            if cust.strip() and item_liq:
-                output_k3tbl_rows.append({
-                    "PART": "95", "ITEM": item_liq,
-                    "MATDT": matdt_liq, "AMOUNT": amt_liq,
-                    "AMTUSD": 0.0, "AMTSGD": 0.0,
-                    "ISSDT": issdt_val,
-                    "UTCCY": utccy, "UTCUS": utcus,
-                    "UTCTP": utctp, "UTSTY": utsty,
-                    "UTDLR": utdlr, "UTDLP": utdlp,
+                records.append({
+                    'set_id': set_id,
+                    'amount': amount,
+                    'sign': sign,
+                    'item': item
                 })
+        print(f"    Read {len(records)} records from {os.path.basename(filepath)}")
+        if not ITEM_LOOKUP:
+            print("    NOTE: LCRCDGL format lookup not populated - 'item' will be blank "
+                  "for all WALK records until ITEM_LOOKUP is filled in.")
+    except Exception as e:
+        print(f"    Warning: Could not read {filepath}: {e}")
+    return records
 
 
-# ---------------------------------------------------------------------------
-# Materialise DataFrames for K1TBL, K3TBL, K1TBX
-# ---------------------------------------------------------------------------
-schema_k1tbl = {
-    "PART":   pl.Utf8,  "ITEM":   pl.Utf8,
-    "MATDT":  pl.Date,  "AMOUNT": pl.Float64,
-    "AMTUSD": pl.Float64, "AMTSGD": pl.Float64,
-    "ISSDT":  pl.Date,  "GWCCY":  pl.Utf8,
-    "GWSHN":  pl.Utf8,  "GWC2R":  pl.Utf8,
-    "GWDLP":  pl.Utf8,  "GWDLR":  pl.Utf8,
-}
-schema_k3tbl = {
-    "PART":   pl.Utf8,  "ITEM":   pl.Utf8,
-    "MATDT":  pl.Date,  "AMOUNT": pl.Float64,
-    "AMTUSD": pl.Float64, "AMTSGD": pl.Float64,
-    "ISSDT":  pl.Date,  "UTCCY":  pl.Utf8,
-    "UTCUS":  pl.Utf8,  "UTCTP":  pl.Utf8,
-    "UTSTY":  pl.Utf8,  "UTDLR":  pl.Utf8,
-    "UTDLP":  pl.Utf8,
-}
+def read_templ_file(filepath):
+    """Read TEMPL.TXT file (fixed width format)"""
+    records = []
+    try:
+        with open(filepath, 'r') as f:
+            for line in f:
+                if len(line) >= 14:
+                    records.append({
+                        'tag': line[0:2].strip(),
+                        'desc': line[2:14].strip()
+                    })
+        print(f"    Read {len(records)} records from {os.path.basename(filepath)}")
+    except Exception as e:
+        print(f"    Warning: Could not read {filepath}: {e}")
+    return records
 
-k1tbl_df = pl.DataFrame(output_k1tbl_rows, schema=schema_k1tbl) if output_k1tbl_rows else pl.DataFrame(schema=schema_k1tbl)
-k3tbl_df = pl.DataFrame(output_k3tbl_rows, schema=schema_k3tbl) if output_k3tbl_rows else pl.DataFrame(schema=schema_k3tbl)
-k1tbx_df = pl.DataFrame(k1tbx_output_rows, schema={
-    "PART":   pl.Utf8,  "ITEM":   pl.Utf8,
-    "MATDT":  pl.Date,  "AMOUNT": pl.Float64,
-    "AMTUSD": pl.Float64, "AMTSGD": pl.Float64,
-    "ISSDT":  pl.Date,  "GWCCY":  pl.Utf8,
-    "GWSHN":  pl.Utf8,  "GWC2R":  pl.Utf8,
-    "GWDLP":  pl.Utf8,  "GWDLR":  pl.Utf8,
-}) if k1tbx_output_rows else pl.DataFrame()
 
-# ---------------------------------------------------------------------------
-# Write K1TBL and K3TBL intermediate outputs
-# ---------------------------------------------------------------------------
-k1tbl_df.write_csv(OUTPUT_K1TBL_FILE, separator="|", null_value="")
-k3tbl_df.write_csv(OUTPUT_K3TBL_FILE, separator="|", null_value="")
+def read_walk_and_templ():
+    """Read WALK.TXT and TEMPL.TXT files"""
+    walk_records = []
+    templ_records = []
 
-print(f"K1TBL written to {OUTPUT_K1TBL_FILE}  ({len(k1tbl_df)} rows)")
-print(f"K3TBL written to {OUTPUT_K3TBL_FILE}  ({len(k3tbl_df)} rows)")
-
-# ===========================================================================
-# DATA KTBL — combine K1TBL + K3TBL + K1TBX, compute BNMCODE
-# ===========================================================================
-
-# %DCLVAR macro equivalent — variable declarations (inlined, no separate action needed)
-
-# Load REPTDATE info (RPYR, RPMTH, RPDAY, RD2)
-rpyr  = REPTDATE.year
-rpmth = REPTDATE.month
-rpday = REPTDATE.day
-rd2   = 29 if (rpyr % 4 == 0) else 28
-
-# Tag source table
-k1tbl_tagged = k1tbl_df.with_columns(pl.lit("1").alias("TBL"))
-k3tbl_tagged = k3tbl_df.with_columns(pl.lit("3").alias("TBL"))
-
-# Align schemas for concat — add missing cols with nulls
-for col in ["GWCCY", "GWSHN", "GWC2R", "GWDLP", "GWDLR"]:
-    if col not in k3tbl_tagged.columns:
-        k3tbl_tagged = k3tbl_tagged.with_columns(pl.lit(None).cast(pl.Utf8).alias(col))
-for col in ["UTCCY", "UTCUS", "UTCTP", "UTSTY", "UTDLR", "UTDLP"]:
-    if col not in k1tbl_tagged.columns:
-        k1tbl_tagged = k1tbl_tagged.with_columns(pl.lit(None).cast(pl.Utf8).alias(col))
-if k1tbx_df.is_empty():
-    k1tbx_tagged = pl.DataFrame()
-else:
-    k1tbx_tagged = k1tbx_df.with_columns(pl.lit("X").alias("TBL"))
-    for col in ["UTCCY", "UTCUS", "UTCTP", "UTSTY", "UTDLR", "UTDLP"]:
-        if col not in k1tbx_tagged.columns:
-            k1tbx_tagged = k1tbx_tagged.with_columns(pl.lit(None).cast(pl.Utf8).alias(col))
-
-frames = [f for f in [k1tbl_tagged, k3tbl_tagged, k1tbx_tagged] if not f.is_empty()]
-combined_all = pl.concat(frames, how="diagonal") if frames else pl.DataFrame()
-
-# IF ITEM ^= ' ' — filter out blank ITEM
-combined_all = combined_all.filter(
-    pl.col("ITEM").is_not_null() & (pl.col("ITEM").str.strip_chars() != "")
-)
-
-# Compute REMMTH and BNMCODE row by row
-ktbl_rows    = []
-ktblall_rows = []
-
-for row in combined_all.iter_rows(named=True):
-    matdt  = row["MATDT"]
-    issdt  = row["ISSDT"]
-    part   = row["PART"] or ""
-    item   = row["ITEM"] or ""
-    amount = row["AMOUNT"] or 0.0
-    amtusd = row["AMTUSD"] or 0.0
-    amtsgd = row["AMTSGD"] or 0.0
-
-    if matdt is None:
-        continue
-
-    # IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1; ELSE %REMMTH
-    diff_rep = (matdt - REPTDATE).days
-    remmth   = compute_remmth(matdt, REPTDATE)
-    remmth_fmt = format_remmth(remmth)
-
-    # IF MATDT - ISSDT < 8 THEN ORI30D = 0.1; ELSE ORI30D = (MATDT-ISSDT)/30
-    if issdt is not None:
-        diff_ori = (matdt - issdt).days
-        ori30d   = 0.1 if diff_ori < 8 else diff_ori / 30.0
+    walk_files = glob.glob(f"{PATHS['list']}walk*.txt")
+    if walk_files:
+        walk_records = read_walk_file(walk_files[0])
     else:
-        ori30d = 0.1
+        print(f"  No WALK.TXT files found in {PATHS['list']}")
 
-    # BNMCODE = PART||ITEM||'00'||PUT(REMMTH,REMFMT.)||'0000Y'
-    bnmcode = f"{part}{item}00{remmth_fmt}0000Y"
+    templ_files = glob.glob(f"{PATHS['list']}templ*.txt")
+    if templ_files:
+        templ_records = read_templ_file(templ_files[0])
+    else:
+        print(f"  No TEMPL.TXT files found in {PATHS['list']}")
 
-    rec = dict(BNMCODE=bnmcode, AMOUNT=amount, AMTUSD=amtusd, AMTSGD=amtsgd)
-    ktbl_rows.append(rec)
+    return walk_records, templ_records
 
-    # KTBLALL contains all columns
-    ktblall_rows.append({**row, "BNMCODE": bnmcode, "REMMTH": remmth, "ORI30D": ori30d})
 
-    # --------------------------------------------------------
-    # DUPLICATE ANOTHER SET FOR PART 1
-    # 95 = PART 2-RM, 96 = PART 2-FX
-    # 93 = PART 1-RM, 94 = PART 1-FX
-    # --------------------------------------------------------
-    part1 = "93" if part == "95" else "94"
-    bnmcode_p1 = part1 + bnmcode[2:]
+# =============================================================================
+# DCI PROCESSING
+# =============================================================================
+def process_dci(rep_date):
+    """Process DCI (Dual Currency Investments) from DCIWH.DCID"""
+    records = []
 
-    ktbl_rows.append({**rec, "BNMCODE": bnmcode_p1})
-    ktblall_rows.append({**row, "BNMCODE": bnmcode_p1, "REMMTH": remmth, "ORI30D": ori30d})
+    try:
+        dci_pattern = f"{PATHS['dciwh']}dcid*.sas7bdat"
+        dci_files = glob.glob(dci_pattern)
+        if not dci_files:
+            print(f"  No DCI files found")
+            return records
 
-# Materialise KTBL and KTBLALL
-ktbl_df = pl.DataFrame(ktbl_rows, schema={
-    "BNMCODE": pl.Utf8,
-    "AMOUNT":  pl.Float64,
-    "AMTUSD":  pl.Float64,
-    "AMTSGD":  pl.Float64,
-}) if ktbl_rows else pl.DataFrame()
+        dci_file = max(dci_files)
+        print(f"  Using DCI file: {os.path.basename(dci_file)}")
+        df = read_sas_file(dci_file)  # columns normalized to lowercase
 
-ktblall_df = pl.DataFrame(ktblall_rows) if ktblall_rows else pl.DataFrame()
+        if df is None:
+            return records
 
-ktbl_df.write_csv(OUTPUT_KTBL_FILE,    separator="|", null_value="")
-ktblall_df.write_csv(OUTPUT_KTBLALL_FILE, separator="|", null_value="")
+        print(f"    Columns ({len(df.columns)}): {df.columns}")
 
-print(f"KTBL written to    {OUTPUT_KTBL_FILE}    ({len(ktbl_df)} rows)")
-print(f"KTBLALL written to {OUTPUT_KTBLALL_FILE} ({len(ktblall_df)} rows)")
+        # DCI file's real columns confirmed: matdt, startdt, invamt,
+        # invcurr, custcode, product, ticketno all present directly.
+        col_aliases = {
+            'matdt': ['matdt'],
+            'startdt': ['startdt'],
+            'invamt': ['invamt'],
+            'invcurr': ['invcurr', 'invcurrac'],
+            'custcode': ['custcode'],
+            'product': ['product'],
+            'ticketno': ['ticketno'],
+        }
 
-# ===========================================================================
-# PART 3: DISTRIBUTION PROFILE OF CUSTOMER DEPOSITS
-# ===========================================================================
+        def resolve(name):
+            for cand in col_aliases.get(name, [name]):
+                if cand in df.columns:
+                    return cand
+            return None
 
-# ------------------------------------------------
-# NON-INTERBANK REPOS (from K1TBL source)
-# ------------------------------------------------
-con4 = duckdb.connect()
-k1tbl_part3 = con4.execute(f"""
-    SELECT GWBALC AS AMOUNT, GWSHN AS NAME
-    FROM read_parquet('{input_k1tbl_path}')
-    WHERE GWCCY  = 'MYR'
-      AND GWMVT  = 'P'
-      AND GWMVTS = 'M'
-      AND SUBSTR(GWCTP, 1, 1) <> 'B'
-      AND SUBSTR(GWDLP, 2, 2) IN ('MI', 'MT')
-""").pl().with_columns(
-    pl.lit("NON-INTERBANK REPOS").alias("CAT")
-).select(["CAT", "NAME", "AMOUNT"])
+        matdt_col = resolve('matdt')
+        startdt_col = resolve('startdt')
+        invamt_col = resolve('invamt')
+        invcurr_col = resolve('invcurr')
 
-# ------------------------------------------------
-# NON-INTERBANK NIDS (from K3TBL source)
-# ------------------------------------------------
-k3tbl_part3 = con4.execute(f"""
-    SELECT UTCUS || UTCLC AS NAME,
-           UTAMOC - UTDPF AS AMOUNT
-    FROM read_parquet('{input_k3tbl_path}')
-    WHERE SUBSTR(UTCTP, 1, 1) <> 'B'
-      AND UTREF IN ('PFD','PLD','PSD','PZD','PDC')
-      AND UTSTY IN ('IFD','ILD','ISD','IZD','IDC','IDP','IZP')
-""").pl().with_columns(
-    pl.lit("NON-INTERBANK NIDS").alias("CAT")
-).select(["CAT", "NAME", "AMOUNT"])
+        missing = [n for n, c in [('matdt', matdt_col), ('startdt', startdt_col),
+                                   ('invamt', invamt_col), ('invcurr', invcurr_col)] if c is None]
+        if missing:
+            print(f"    !! WARNING [DCI]: could not resolve columns for {missing}. "
+                  f"All DCI records will be skipped until these are mapped correctly. "
+                  f"Real columns available: {df.columns}")
+            return records
 
-con4.close()
+        print(f"    Sample rows (first 3):")
+        sample_rows = df.head(3).rows(named=True)
+        for i, row in enumerate(sample_rows):
+            print(f"      Row {i+1}:")
+            for key in [matdt_col, startdt_col, invamt_col, invcurr_col, 'custcode', 'product', 'ticketno']:
+                if key and key in df.columns:
+                    print(f"        {key}: {row.get(key, 'N/A')}")
 
-# PROC APPEND BASE=K1TBL DATA=K3TBL
-k1tbl_part3_combined = pl.concat([k1tbl_part3, k3tbl_part3], how="diagonal")
+        for row in df.iter_rows(named=True):
+            # FIX: these come back as raw SAS date-serial floats
+            # (e.g. 24321.0), not python dates - convert before comparing.
+            matdt = sas_date_to_pydate(row.get(matdt_col))
+            startdt = sas_date_to_pydate(row.get(startdt_col))
 
-# PROC SUMMARY (GROUP BY CAT, NAME; SUM AMOUNT)
-k1tbl_part3_summary = (
-    k1tbl_part3_combined
-    .group_by(["CAT", "NAME"])
-    .agg(pl.col("AMOUNT").sum())
-    .sort(["CAT", "NAME"])
-)
+            if matdt and startdt and matdt > rep_date['date'] and startdt <= rep_date['date']:
+                if (matdt - rep_date['date']).days < 8:
+                    remmth = 0.1
+                    rem30d = 0
+                else:
+                    remmth, rem30d = calculate_remaining_months(
+                        matdt, rep_date['date'], rep_date['days_in_month']
+                    )
 
-k1tbl_part3_summary.write_csv(OUTPUT_K1TBL_PART3_FILE, separator="|", null_value="")
-print(f"K1TBL (Part 3) written to {OUTPUT_K1TBL_PART3_FILE} ({len(k1tbl_part3_summary)} rows)")
+                invamt = row.get(invamt_col, 0) or 0
+                invccy = str(row.get(invcurr_col, 'MYR') or 'MYR').upper()
+                spotrt = FX_RATES.get(invccy, 1.0)
+
+                if invccy == 'JPY':
+                    invamt = round(invamt)
+                else:
+                    invamt = round(invamt, 2)
+
+                amount = invamt * spotrt
+                remth_bucket = format_mth_bucket(remmth)
+
+                if invccy == 'MYR':
+                    bnmcode = f"9532900{remth_bucket}0000Y"
+                else:
+                    bnmcode = f"9632900{remth_bucket}0000Y"
+
+                records.append({
+                    'src': 'dci', 'bnmcode': bnmcode, 'cur': invccy, 'amt': amount,
+                    'custfiss': f"{int(row.get('custcode', 0) or 0):02d}" if 'custcode' in df.columns else '00',
+                    'dealtype': row.get('product', '') if 'product' in df.columns else '',
+                    'dealref': row.get('ticketno', '') if 'ticketno' in df.columns else '',
+                    'remmth': remmth, 'rem30d': rem30d, 'ori30d': 0
+                })
+    except Exception as e:
+        print(f"  DCI warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+# =============================================================================
+# UTSAS PROCESSING (EQUA.UTMS/UTFX/UTRP)
+# =============================================================================
+def process_utsas(rep_date):
+    """Process UTSAS from EQUA tables"""
+    records = []
+    utvar = ['dealref', 'dealtype', 'custfiss', 'custno', 'custname', 'custeqno', 'custid']
+
+    try:
+        print(f"  Looking for UTSAS files in: {PATHS['equa']}")
+        print(f"    RPTDT format: {rep_date['rptdt']} ({rep_date['date'].strftime('%y%m%d')})")
+
+        if not os.path.exists(PATHS['equa']):
+            print(f"    ERROR: Directory does not exist: {PATHS['equa']}")
+            return records
+
+        all_files = sorted(os.listdir(PATHS['equa']))
+        print(f"    Total files in directory: {len(all_files)}")
+
+        print(f"    First 20 files:")
+        for f in all_files[:20]:
+            print(f"      - {f}")
+
+        for prefix in ['utms', 'utfx', 'utrp']:
+            print(f"\n    Looking for {prefix} files...")
+
+            patterns = [
+                f"{prefix}{rep_date['rptdt']}.sas7bdat",
+                f"{prefix}{rep_date['mon']}{rep_date['day']}.sas7bdat",
+                f"{prefix}*.sas7bdat",
+                f"{prefix}*",
+            ]
+
+            found = False
+            for pattern in patterns:
+                full_pattern = os.path.join(PATHS['equa'], pattern)
+                matches = glob.glob(full_pattern)
+                if matches:
+                    print(f"      Pattern '{pattern}' matched {len(matches)} file(s):")
+                    for m in matches[:5]:
+                        print(f"        - {os.path.basename(m)}")
+
+                    filepath = matches[0]
+                    print(f"      Using: {os.path.basename(filepath)}")
+
+                    df = read_sas_file(filepath)  # columns normalized to lowercase
+                    if df is not None:
+                        print(f"      Columns in {os.path.basename(filepath)} ({len(df.columns)}): {df.columns}")
+
+                        keep_cols = [c for c in utvar if c in df.columns]
+                        missing_cols = [c for c in utvar if c not in df.columns]
+                        if missing_cols:
+                            print(f"      NOTE: {prefix} is missing expected columns {missing_cols} "
+                                  f"(will just be skipped for this file)")
+                        if keep_cols:
+                            df = df.select(keep_cols)
+                            if 'custeqno' in df.columns:
+                                df = df.rename({'custeqno': 'acctno'})
+                            records.extend(df.rows(named=True))
+                            print(f"      Added {len(df)} records from {os.path.basename(filepath)}")
+                        else:
+                            print(f"      !! No matching columns found in {os.path.basename(filepath)}, "
+                                  f"0 records added from this file")
+                    found = True
+                    break
+
+            if not found:
+                print(f"      No {prefix} files found")
+
+        print(f"\n    Total UTSAS records: {len(records):,}")
+
+    except Exception as e:
+        print(f"  UTSAS warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+# =============================================================================
+# CIS EQUITY PROCESSING (CIS.CUSTDLY, parquet)
+# =============================================================================
+def process_cis_equity():
+    """Process CIS equity data from parquet file"""
+    records = []
+
+    try:
+        cis_pattern = f"{PATHS['cis']}CIS_CUST_DAILY*.parquet"
+        cis_files = glob.glob(cis_pattern)
+        if not cis_files:
+            print(f"  No CIS parquet files found")
+            return records
+
+        cis_file = max(cis_files)
+        print(f"  Using CIS file: {os.path.basename(cis_file)}")
+        df = read_parquet_file(cis_file)  # columns normalized to lowercase
+
+        if df is None:
+            return records
+
+        warn_missing_columns(df, ['acctcode', 'prisec', 'aliaskey',
+                                   'custno', 'alias', 'custname', 'acctno'], 'CIS_CUST_DAILY')
+        # NOTE: 'newic' genuinely does not exist in this CIS_CUST_DAILY
+        # extract (confirmed against the full column list) - handled as
+        # always-blank below rather than treated as an error.
+        has_newic = 'newic' in df.columns
+
+        if 'acctcode' not in df.columns or 'prisec' not in df.columns:
+            print(f"    !! Cannot filter CIS equity - missing acctcode/prisec. "
+                  f"Available columns: {df.columns}")
+            return records
+
+        # FIX: prisec is numeric (e.g. 901.0). Casting a float straight to
+        # Utf8 gives "901.0", which never equals the string "901" - that
+        # silently zeroed out the filter. Cast through Float64 -> Int64
+        # instead so 901.0, 901, and "901" all normalize the same way.
+        df = df.with_columns([
+            pl.col('acctcode').cast(pl.Utf8).str.strip_chars(),
+            pl.col('prisec').cast(pl.Float64, strict=False).cast(pl.Int64, strict=False)
+        ])
+        df = df.filter((pl.col('acctcode') == 'EQC') & (pl.col('prisec') == 901))
+
+        print(f"    CIS equity rows after filter: {len(df)}")
+
+        for row in df.iter_rows(named=True):
+            newic = row.get('newic', '') if has_newic else ''
+            if not newic or (len(str(newic)) >= 5 and str(newic)[:5] == '99999'):
+                icno = f"{row.get('aliaskey', '')}{row.get('custno', 0)}".replace(' ', '')
+            else:
+                icno = f"{row.get('aliaskey', '')}{row.get('alias', '')}".replace(' ', '')
+
+            records.append({
+                'acctno': row.get('acctno'),
+                'custno': row.get('custno'),
+                'cisno': row.get('custno'),
+                'cisname': row.get('custname'),
+                'icno': icno
+            })
+    except Exception as e:
+        print(f"  CIS equity warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+# =============================================================================
+# CORE BANKING PROCESSING (LCR.FD/SA/CA/FCYCA)
+# =============================================================================
+def process_core_banking(rep_date):
+    """Process core banking data: FD, SA, CA, FCYCA"""
+    records = []
+
+    # FIX: 'fd*.sas7bdat' was matching BOTH fd30.sas7bdat (real per-account
+    # FD data) AND fdhold.sas7bdat (a separate, already-aggregated pledge
+    # summary with a completely different schema - bnmcode/curcode/amount/
+    # item/fdpledge*/fxpledge* - corresponding to the SAS's LCR.FDHOLD,
+    # used later for the "FD PLEDGED" report columns, not core banking at
+    # all). Excluded explicitly below.
+    EXCLUDE_SUBSTRINGS = {'fd': ['hold']}
+
+    try:
+        for tbl in ['fd', 'sa', 'ca', 'fcyca']:
+            file_pattern = f"{PATHS['lcr']}{tbl}*.sas7bdat"
+            files = glob.glob(file_pattern)
+            excludes = EXCLUDE_SUBSTRINGS.get(tbl, [])
+            files = [f for f in files if not any(x in os.path.basename(f).lower() for x in excludes)]
+
+            for filepath in files:
+                df = read_sas_file(filepath)  # columns normalized to lowercase
+                if df is None:
+                    continue
+
+                print(f"    [{tbl}] Columns ({len(df.columns)}): {df.columns}")
+                warn_missing_columns(
+                    df,
+                    ['bnmcode', 'amount', 'curcode', 'custcd', 'acctno',
+                     'custno', 'rem30d', 'remmth'],
+                    f'core_banking:{tbl}'
+                )
+
+                for row in df.iter_rows(named=True):
+                    # FIX: 'custcdx' was only a thing inside the original
+                    # SAS's stacked SET statement (RENAME=(CUSTCD=CUSTCDX)
+                    # to disambiguate FD's custcd from the other tables'
+                    # during one combined SET). Since each file is read
+                    # separately here, fd30.sas7bdat's field is just
+                    # 'custcd' - fall back to custcdx only if it's really
+                    # there (e.g. if someone pre-renamed the file).
+                    custcd = row.get('custcd')
+                    if custcd is None:
+                        custcd = row.get('custcdx', 0)
+
+                    cust = get_customer_category(custcd, cust_map)
+
+                    rem30d = row.get('rem30d', row.get('remmth', 1))
+                    remmth = row.get('remmth', 1)
+
+                    if rem30d is None:
+                        rem30d = remmth
+
+                    bic = row['bnmcode'][:5] if row.get('bnmcode') else '95311'
+
+                    records.append({
+                        'src': f'banking_{tbl}',
+                        'bic': bic,
+                        'bnmcode': f"{bic}{cust}020000Y",
+                        'cmmcode': f"{bic}{cust}{format_mth_bucket(remmth)}0000Y",
+                        'cur': row.get('curcode', 'MYR'),
+                        'amt': row.get('amount', 0),
+                        'acctno': row.get('acctno', 0),
+                        'custno': row.get('custno', 0),
+                        'custcd': custcd,
+                        'cust': cust,
+                        'rem30d': rem30d,
+                        'remmth': remmth,
+                        'ecp': '00',
+                        'product': row.get('product', 0),
+                        'billerind': row.get('billerind', 'N'),
+                        'pbmerch': row.get('pbmerch', 'N'),
+                        'intrate': row.get('intrate', 0),
+                        'oprrate': row.get('oprrate', 0),
+                        'source': row.get('source', ''),
+                        'dtsigned': row.get('dtsigned'),
+                        'intplan': row.get('intplan', 0),
+                        'sme_tag': row.get('sme_tag', ''),
+                        'fdhold': row.get('fdhold', 'N'),
+                        'trx': row.get('trx', 0),
+                        'sign': ''
+                    })
+    except Exception as e:
+        print(f"  Core banking warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+def process_cis_info():
+    """Process CIS info from CISDP.DEPOSIT and CISCA.DEPOSIT"""
+    records = {}
+    try:
+        for deptype in ['cisdp', 'cisca']:
+            file_pattern = f"{PATHS[deptype]}deposit*.sas7bdat"
+            files = glob.glob(file_pattern)
+            if not files:
+                print(f"    No files matching 'deposit*.sas7bdat' found in {PATHS[deptype]}")
+                debug_directory(PATHS[deptype])
+                continue
+            for filepath in files:
+                df = read_sas_file(filepath, ['acctno', 'custno', 'seccust', 'newic', 'oldic', 'custname'])
+                if df is not None:
+                    if 'seccust' not in df.columns:
+                        print(f"    !! WARNING [{deptype}]: 'seccust' column not found - "
+                              f"columns: {df.columns}. Skipping filter for this file.")
+                        continue
+                    # FIX: seccust may be numeric (e.g. 901.0, which would
+                    # break a direct '901' string-cast comparison the same
+                    # way prisec did) OR genuinely character per the
+                    # original SAS (WHERE SECCUST='901'). Branch on the
+                    # actual dtype instead of assuming either.
+                    if df['seccust'].dtype in (pl.Utf8, pl.String):
+                        df = df.with_columns(pl.col('seccust').str.strip_chars())
+                        df = df.filter(pl.col('seccust') == '901')
+                    else:
+                        df = df.with_columns(
+                            pl.col('seccust').cast(pl.Float64, strict=False).cast(pl.Int64, strict=False)
+                        )
+                        df = df.filter(pl.col('seccust') == 901)
+                    for row in df.rows(named=True):
+                        if row.get('acctno'):
+                            records[row['acctno']] = row
+    except Exception as e:
+        print(f"  CIS info warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+def process_ecp():
+    """Process LCR_ECP from LIST.LCR_ECP"""
+    records = {}
+    try:
+        file_pattern = f"{PATHS['list']}lcr_ecp*.sas7bdat"
+        files = glob.glob(file_pattern)
+        for filepath in files:
+            df = read_sas_file(filepath)  # columns normalized to lowercase
+            if df is not None:
+                for row in df.rows(named=True):
+                    if row.get('acctno'):
+                        records[row['acctno']] = row.get('ecp', '00')
+    except Exception as e:
+        print(f"  ECP warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+# =============================================================================
+# INSURED/UNINSURED SPLIT
+# =============================================================================
+def apply_insurance_split(records, walk_records, templ_records):
+    """Split insured/uninsured portions for amounts > 250K"""
+    result = []
+
+    icgrp_totals = {}
+    for r in records:
+        icgrp = r.get('icgrp', '')
+        if icgrp:
+            icgrp_totals[icgrp] = icgrp_totals.get(icgrp, 0) + r['amt']
+
+    for r in records:
+        icgrp = r.get('icgrp', '')
+        toticbal = icgrp_totals.get(icgrp, 0)
+
+        if toticbal > 250000 and r.get('bic') not in ['9531X']:
+            curbal = r['amt']
+            insured_amt = (curbal / toticbal) * 250000
+            uninsured_amt = curbal - insured_amt
+
+            if r['bnmcode'][5:7] in ['29', '39'] and r.get('ecp') != '01':
+                r1 = r.copy()
+                r1['amt'] = curbal
+                r1['bnmcode'] = r['bnmcode'][:7] + '10' + r['bnmcode'][10:15]
+                result.append(r1)
+            else:
+                r1 = r.copy()
+                r1['amt'] = insured_amt
+                result.append(r1)
+
+                r2 = r.copy()
+                r2['amt'] = uninsured_amt
+                r2['bnmcode'] = r['bnmcode'][:7] + '10' + r['bnmcode'][10:15]
+                result.append(r2)
+        else:
+            result.append(r)
+
+    return result
+
+
+# =============================================================================
+# CONSOLIDATION AND REPORTING
+# =============================================================================
+def consolidate_data(all_records):
+    """Consolidate all records into summary by BNMCODE"""
+    if not all_records:
+        return pl.DataFrame()
+
+    df = pl.DataFrame(all_records)
+    df = df.with_columns([
+        (pl.col('amt') / 1000).round(2).alias('amt_k')
+    ])
+
+    summary = df.group_by(['bnmcode', 'cur']).agg([
+        pl.col('amt_k').sum()
+    ])
+
+    return summary
+
+
+def apply_column_mapping(row, is_banking):
+    """Apply column mapping logic"""
+    bnmcode = row['bnmcode']
+    bic = bnmcode[:5]
+
+    col_map = {
+        '95311': 'fd95311rm',
+        '95312': 'sa95312rm',
+        '95313': 'ca95313rm',
+        '95830': 'std95830',
+        '95840': 'nid95840',
+        '9x810': 'ibb9x810',
+        '9x329': 'dci9x329',
+        '95820': 'ibr95820',
+        '95850': 'bap95850',
+        '9531x': 'gld9531x'
+    }
+    colname = col_map.get(bic[:5].lower(), '')
+
+    if is_banking:
+        item = bnmcode[5:9]
+        remmth = bnmcode[9:11]
+    else:
+        item = bnmcode[5:7]
+        if bic == '95820':
+            item = 'C1.11'
+        remmth = bnmcode[7:9]
+        orimth = bnmcode[9:11]
+        if item == 'B3.30' and orimth == '02':
+            item = 'B6.30'
+
+    if colname[:3].lower() in ['fd9', 'std']:
+        colname = f"{colname}{'1' if remmth == '1' else '2'}"
+    elif colname[:3].lower() in ['nid', 'dci', 'ibb', 'ibr', 'bap']:
+        for i in range(1, 7):
+            if str(i) == remmth:
+                colname = f"{colname}v{i}"
+                break
+
+    return item, colname, row['amt_k']
+
+
+def write_text_report(report_data, rep_date):
+    """Write report to text files"""
+    if not report_data:
+        print("  No report data to write")
+        return
+
+    output_dir = PATHS['output']
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    report_df = pl.DataFrame(report_data)
+    final = report_df.group_by(['item', 'colname']).agg([
+        pl.col('amount').sum()
+    ])
+
+    items = sorted(final['item'].unique().to_list())
+    columns = sorted(final['colname'].unique().to_list())
+
+    filename = f"lcr{rep_date['day']}.txt"
+    filepath = f"{output_dir}{filename}"
+
+    with open(filepath, 'w') as f:
+        f.write("item\t" + "\t".join(columns) + "\n")
+        for item in items:
+            row_data = [item]
+            for col in columns:
+                mask = (final['item'] == item) & (final['colname'] == col)
+                if mask.any():
+                    amount = final.filter(mask)['amount'].sum()
+                    row_data.append(f"{amount:.2f}")
+                else:
+                    row_data.append("0.00")
+            f.write("\t".join(row_data) + "\n")
+
+    print(f"  ✓ {filename}: {len(items)} items x {len(columns)} columns")
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+def main():
+    print("=" * 60)
+    print("EIBDLCRM - BNM LCR Reporting (Conventional Banking)")
+    print("=" * 60)
+    print("\nNOTE: KALMLIQ logic now in its own module (kalmliq.py)")
+    print("      - Reading from BNMK.K1TBL{mon}{week} and BNMK.K3TBL{mon}{week}")
+    print("      - Using hardcoded FX rates")
+    print("      - Column names normalized to lowercase on read")
+    print("=" * 60)
+
+    rep_date = get_report_date()
+    print(f"\nReport Date: {rep_date['date'].strftime('%d/%m/%Y')}")
+    print(f"Week: {rep_date['nowk']}, Month: {rep_date['mon']}")
+    print(f"Expected K1/K3 files: k1tbl{rep_date['mon']}{rep_date['nowk']}.sas7bdat")
+    print(f"Expected UTSAS files: utms{rep_date['rptdt']}.sas7bdat, utfx{rep_date['rptdt']}.sas7bdat, utrp{rep_date['rptdt']}.sas7bdat")
+
+    print("\n" + "=" * 60)
+    print("LOADING INPUTS")
+    print("=" * 60)
+
+    print("\n1. FX Rates (HARDCODED)...")
+    print(f"  Loaded {len(FX_RATES)} currencies: {list(FX_RATES.keys())}")
+
+    print("\n2. Loading WALK.TXT and TEMPL.TXT...")
+    walk_records, templ_records = read_walk_and_templ()
+    print(f"  WALK: {len(walk_records)} records")
+    print(f"  TEMPL: {len(templ_records)} records")
+
+    print("\n3. Processing KALMLIQ (K1TBL and K3TBL)...")
+    k1_records = process_k1tbl(rep_date)
+    print(f"  K1TBL records: {len(k1_records):,}")
+    k3_records = process_k3tbl(rep_date)
+    print(f"  K3TBL records: {len(k3_records):,}")
+
+    treasury_records = build_ktblall(k1_records, k3_records, rep_date)
+    print(f"  Total treasury records: {len(treasury_records):,}")
+    print(f"  NOTE: K1TBX (a third source stacked in by the original SAS) "
+          f"is not available and is not included above - see kalmliq.py docstring.")
+
+    print("\n4. Processing DCIWH.DCID...")
+    dci_records = process_dci(rep_date)
+    print(f"  DCI records: {len(dci_records):,}")
+
+    print("\n5. Processing CIS.CUSTDLY (parquet)...")
+    cis_records = process_cis_equity()
+    cis_dict = {r['acctno']: r for r in cis_records if r.get('acctno')}
+    print(f"  CIS records: {len(cis_dict):,}")
+
+    print("\n6. Processing EQUA.UTMS/UTFX/UTRP...")
+    utsas_records = process_utsas(rep_date)
+    utsas_dict = {r['dealref']: r for r in utsas_records if r.get('dealref')}
+    print(f"  UTSAS records: {len(utsas_dict):,}")
+
+    print("\n7. Processing LCR.FD/SA/CA/FCYCA...")
+    banking_records = process_core_banking(rep_date)
+    print(f"  Banking records: {len(banking_records):,}")
+
+    print("\n8. Processing CISDP/CISCA.DEPOSIT...")
+    cis_info_dict = process_cis_info()
+    print(f"  CIS info records: {len(cis_info_dict):,}")
+
+    print("\n9. Processing LIST.LCR_ECP...")
+    ecp_dict = process_ecp()
+    print(f"  ECP records: {len(ecp_dict):,}")
+
+    print("\n" + "=" * 60)
+    print("PROCESSING DATA")
+    print("=" * 60)
+
+    all_treasury = treasury_records + dci_records
+    print(f"\nCombined treasury + DCI: {len(all_treasury):,} records")
+
+    enhanced_treasury = []
+    for r in all_treasury:
+        dealref = r.get('dealref')
+        if dealref and dealref in utsas_dict:
+            ut = utsas_dict[dealref]
+            r.update(ut)
+
+        acctno = r.get('acctno') or r.get('custeqno')
+        if acctno and acctno in cis_dict:
+            ci = cis_dict[acctno]
+            r['cisno'] = ci.get('cisno')
+            r['cisname'] = ci.get('cisname')
+            r['icno'] = ci.get('icno')
+
+        custfiss = r.get('custfiss', 0)
+        if custfiss:
+            try:
+                custfiss = int(custfiss)
+            except (ValueError, TypeError):
+                custfiss = 0
+
+        custno = r.get('custno', '')
+        cust = get_customer_category(custfiss, cust_map, special_cust,
+                                      is_custno=(custno in special_cust.get('39', [])))
+
+        bic = r['bnmcode'][:5]
+        if bic == '95830' and r.get('dealtype') in ['BCQ', 'BCT', 'BCW']:
+            bic = '9583X'
+
+        rem30d = r.get('rem30d', r.get('remmth', 1))
+        remmth = r.get('remmth', 1)
+
+        if rem30d is None:
+            rem30d = remmth
+
+        bnmcode = f"{bic}{cust}{format_day_bucket(rem30d)}0000Y"
+        cmmcode = f"{bic}{cust}{format_mth_bucket(remmth)}0000Y"
+
+        if custno in special_cust.get('49', []) and cust == '49' and bic in ['95840', '96840']:
+            ori30d = r.get('ori30d', 0)
+            if format_day_bucket(ori30d) > '05' and format_day_bucket(rem30d) > '01':
+                bnmcode = bnmcode[:9] + '0200Y'
+
+        icgrp_src = r.get('custid', r.get('icno', ''))
+        icgrp = icgrp_src.replace(' ', '') if isinstance(icgrp_src, str) else ''
+
+        enhanced_treasury.append({
+            'src': r['src'],
+            'bic': bic,
+            'bnmcode': bnmcode,
+            'cmmcode': cmmcode,
+            'cur': r.get('cur', 'MYR'),
+            'amt': r.get('amt', 0),
+            'dealref': dealref,
+            'custno': custno,
+            'icgrp': icgrp,
+            'rem30d': rem30d,
+            'remmth': remmth,
+            'acctno': acctno,
+            'ori30d': r.get('ori30d', 0)
+        })
+
+    print(f"Enhanced treasury: {len(enhanced_treasury):,} records")
+
+    enhanced_banking = []
+    for r in banking_records:
+        acctno = r['acctno']
+
+        if acctno in cis_info_dict:
+            ci = cis_info_dict[acctno]
+            r['newic'] = ci.get('newic')
+            r['oldic'] = ci.get('oldic')
+            r['custname'] = ci.get('custname')
+
+        if acctno in ecp_dict:
+            r['ecp'] = ecp_dict[acctno]
+
+        if r['ecp'] == '':
+            r['ecp'] = '00'
+        if r['ecp'] == '01':
+            if r['intrate'] < r['oprrate']:
+                r['ecp'] = '01'
+            else:
+                r['ecp'] = '00'
+        if r['billerind'] == 'Y' or r['pbmerch'] == 'Y':
+            r['ecp'] = '01'
+
+        product_list = [106, 151, 158, 97, 164, 201, 215]
+        intplan_ranges = list(range(400, 420)) + list(range(600, 659)) + \
+                          list(range(720, 741)) + list(range(864, 891)) + \
+                          list(range(941, 968))
+
+        if (r['product'] in product_list or
+                r['intplan'] in intplan_ranges or
+                (r['source'] != 'PGD' and r['dtsigned'] and
+                 r['dtsigned'] > 0 and
+                 (rep_date['date'] - r['dtsigned']).days >= 365)):
+            r['sign'] = 'R '
+
+        special_39 = [4391161, 2115999, 12579649, 13468207, 14300254,
+                      14675929, 15327497, 17104931, 12677444, 3703533,
+                      5978659, 16185090, 2558344, 10819745]
+
+        # 'cust' defaults to the category already computed in
+        # process_core_banking() (r['cust']); overridden only for the
+        # 14 special customer numbers.
+        if r['custno'] in special_39:
+            r['cust'] = '39'
+
+        if r['cur'] == 'XAU':
+            r['bic'] = '9531X'
+            r['bnmcode'] = f"9531X{r['cust']}100000Y"
+            r['cmmcode'] = f"9531X{r['cust']}{format_mth_bucket(r['remmth'])}0000Y"
+            r['amt'] = r['amt'] * FX_RATES.get('XAU', 200.0)
+            r['cur'] = 'MYR'
+
+        enhanced_banking.append(r)
+
+    print(f"Enhanced banking: {len(enhanced_banking):,} records")
+
+    icgrp_totals = {}
+    for r in enhanced_banking:
+        newic = r.get('newic') or ''
+        oldic = r.get('oldic') or ''
+        raw_icgrp = newic or oldic
+        icgrp = raw_icgrp.replace(' ', '') if isinstance(raw_icgrp, str) else ''
+        r['icgrp'] = icgrp
+        icgrp_totals[icgrp] = icgrp_totals.get(icgrp, 0) + r['amt']
+
+    exclude_cust = [14094942, 16557696, 3728510, 11335374, 16265490,
+                     3523050, 11880426, 16771972, 15241330, 16500538]
+
+    for r in enhanced_banking:
+        icgrp = r['icgrp']
+        toticbal = icgrp_totals.get(icgrp, 0)
+        r['toticbal'] = toticbal
+
+        if (r['custno'] not in exclude_cust and r['bnmcode'][5:7] == '29') or r['custcd'] in [72, 73, 74]:
+            totdpbal = toticbal + 0
+            if totdpbal < 5000000:
+                r['bnmcode'] = f"{r['bic']}19{r['bnmcode'][7:]}"
+                r['cmmcode'] = f"{r['bic']}19{r['cmmcode'][7:]}"
+        elif r['bnmcode'][5:7] == '19' and r.get('sme_tag') == 'N':
+            totdpbal = toticbal + 0
+            if totdpbal >= 5000000:
+                r['bnmcode'] = f"{r['bic']}29{r['bnmcode'][7:]}"
+                r['cmmcode'] = f"{r['bic']}29{r['cmmcode'][7:]}"
+
+        if r['bnmcode'][5:7] in ['08', '19'] and r['bic'] != '9531X':
+            if r.get('trx') == 1:
+                tag = '01'
+            elif r.get('sign') in ['R', 'R ']:
+                tag = '02'
+            else:
+                tag = '03'
+            r['bnmcode'] = r['bnmcode'][:7] + tag + '0000Y'
+
+        if r['bic'] in ['95313', '96313']:
+            r['bnmcode'] = r['bnmcode'][:9] + r['ecp'] + '00Y'
+            r['cmmcode'] = r['cmmcode'][:9] + r['ecp'] + '00Y'
+
+    print("\nApplying insurance split...")
+    banking_split = apply_insurance_split(enhanced_banking, walk_records, templ_records)
+    print(f"Banking after insurance split: {len(banking_split):,} records")
+
+    all_data = enhanced_treasury + banking_split
+    print(f"\nTotal records before consolidation: {len(all_data):,}")
+
+    print("\nConsolidating...")
+    summary = consolidate_data(all_data)
+    print(f"  Consolidated to {len(summary):,} BNM code x currency combinations")
+
+    print("\nGenerating LCR report (text format)...")
+    report_data = []
+    for row in summary.rows(named=True):
+        is_banking = row['bnmcode'][5] != '9'
+        item, colname, amount = apply_column_mapping(row, is_banking)
+        report_data.append({
+            'item': item,
+            'colname': colname,
+            'amount': amount,
+            'cur': row['cur']
+        })
+
+    if report_data:
+        write_text_report(report_data, rep_date)
+    else:
+        print("  No report data to write")
+
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+
+    if all_data:
+        df_all = pl.DataFrame(all_data)
+        total = df_all['amt'].sum() / 1000
+        by_src = df_all.group_by('src').agg([(pl.col('amt').sum() / 1000).alias('amt_k')])
+
+        print(f"\nTotal: RM {total:,.0f}K")
+        print(f"\nBy Source:")
+        for row in by_src.sort('amt_k', descending=True).iter_rows():
+            print(f"  {row[0]}: RM {row[1]:,.0f}K")
+    else:
+        print("\n  No data processed!")
+
+    print("\n" + "=" * 60)
+    print("✓ EIBDLCRM Complete")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
