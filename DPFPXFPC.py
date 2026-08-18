@@ -1,60 +1,71 @@
-Reading input files...
-  Read imast: 1697 rows
-  Read imast2: 2246 rows
-  Read icred: 10414 rows
-  Read isuba: 61339 rows
-  Read iprov: 87 rows
-  Read iamsubacc: 0 rows
-  Read ibtrad: 3418 rows
-  Read ibtdtl: 3418 rows
-  Read lnacct: 1205962 rows
-
-Processing MAST...
-MAST processed: 1697 rows
-
-Processing MAST2...
-MAST2 processed
-
-Processing CRED...
-CRED processed: 3419 rows
-
-Processing BNM Trade data...
-BNM Trade data processed
-
-Processing SUBA...
-SUBA processed: 61339 rows (SUBA9: 1184, SUBA_MAIN: 10411)
-
-Processing ACCT...
-ACCT processed: 1644 rows
-
-Processing BTR2...
-BTR2 processed: 10411 rows
-
-Processing SUBCR...
-SUBCR processed: 895 rows
-
-Creating final SUBA...
-Final SUBA processed: 895 rows
-
-Processing PROVISIONS...
-PROVISIONS processed: 87 rows
-
-Processing REPAID7B...
-REPAID7B processed: 0 rows
-
-Writing output files...
-ACCTCRED written: 1644 records
-SUBACRED written: 895 records
-CREDITPO written: 895 records
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIWBTCR_ISLAMIC_WEEKLY_BANKTRADE_CCR.py", line 929, in <module>
+# PROVISIO
+if provi is not None:
+    # Add missing columns with defaults
+    provi = provi.with_columns([
+        pl.lit(0).cast(pl.Int64).alias("apcode"),
+        pl.lit(0).cast(pl.Int64).alias("oldbrh"),
+        pl.col("ficode").cast(pl.Utf8).fill_null("").alias("ficode_str"),
+        pl.lit("     ").alias("ficody"),
+        pl.lit("MYR").alias("forcurr"),
+        pl.lit("N").alias("pdbind"),
+        pl.col("faccode").fill_null("").alias("faccode") if 'faccode' in provi.columns else pl.lit("").alias("faccode"),
+        pl.lit(0).cast(pl.Int64).alias("curbal"),
+        pl.lit(0).cast(pl.Int64).alias("tenor_int"),
+        pl.lit(0).cast(pl.Int64).alias("oth_charge"),
+        pl.lit(0).cast(pl.Int64).alias("iisamt"),
+        pl.lit(0).cast(pl.Int64).alias("totiisr"),
+        pl.lit(0).cast(pl.Int64).alias("writeoff")
+    ])
+    
     provisio_output = provi.select([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10148, in select
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ColumnNotFoundError: unable to find column "apcode"; valid columns: ["rectype", "subacct", "transrex", "creattyp", "ficode", "applcode", "acctnox", "ccrisfac", "posidate", "prinamt", "intamt", "iisamt", "totiisr", "writoff", "nplind", "prodcode", "fixflt", "calbasp", "intamt_myr", "prinamt_myr", "tenor_int", "oth_charge", "acctno", "nodays", "outstand", "facility", "arrears", "classify", "impaired"]
+        pl.col("ficody").alias("FICODY"),
+        pl.col("ficode").cast(pl.Int64, strict=False).fill_null(0).alias("FICODE"),
+        pl.col("apcode").cast(pl.Int64).alias("APCODE"),
+        pl.col("acctnox").cast(pl.Int64, strict=False).fill_null(0).alias("ACCTNO"),
+        pl.col("facility").fill_null("").alias("FACILITY"),
+        pl.lit(REPTDAY).alias("REPTDAY"),
+        pl.lit(REPTMON).alias("REPTMON"),
+        pl.lit(REPTYEAR).alias("REPTYEAR"),
+        pl.col("classify").fill_null("P").alias("CLASSIFY"),
+        pl.col("arrears").cast(pl.Int64, strict=False).fill_null(0).alias("ARREARS"),
+        pl.col("curbal").cast(pl.Int64).alias("CURBAL"),
+        pl.col("tenor_int").cast(pl.Int64).alias("TENOR_INT"),
+        pl.col("oth_charge").cast(pl.Int64).alias("OTH_CHARGE"),
+        pl.lit(0).cast(pl.Int64).alias("REALISVL"),
+        pl.lit(0).cast(pl.Int64).alias("IISOPBAL"),
+        pl.col("iisamt").cast(pl.Int64).alias("TOTIIS"),
+        pl.col("totiisr").cast(pl.Int64).alias("TOTIISR"),
+        pl.col("writeoff").cast(pl.Int64).alias("TOTWOF"),
+        pl.lit(0).cast(pl.Int64).alias("IISDANAH"),
+        pl.lit(0).cast(pl.Int64).alias("IISTRANS"),
+        pl.lit(0).cast(pl.Int64).alias("SPOPBAL"),
+        pl.lit(0).cast(pl.Int64).alias("SPCHARGE"),
+        pl.lit(0).cast(pl.Int64).alias("SPWBAMT"),
+        pl.lit(0).cast(pl.Int64).alias("SPWOAMT"),
+        pl.lit(0).cast(pl.Int64).alias("SPDANAH"),
+        pl.lit(0).cast(pl.Int64).alias("SPTRANS"),
+        pl.lit(" ").alias("GP3IND"),
+        pl.col("oldbrh").cast(pl.Int64).alias("OLDBRH"),
+        pl.col("faccode").fill_null("").alias("FACCODE"),
+        pl.col("impaired").fill_null("N").alias("IMPAIRED"),
+        pl.col("forcurr").fill_null("MYR").alias("FORCURR"),
+        pl.lit(0).cast(pl.Int64).alias("TOTILM"),
+        pl.col("pdbind").alias("PDBIND")
+    ])
+    
+    provisio_spec = [
+        ("FICODY", 5, 'S'), ("FICODE", 4, 'Z'), ("APCODE", 3, 'Z'),
+        ("ACCTNO", 10, 'Z'), ("FACILITY", 5, 'S'), ("REPTDAY", 2, 'S'),
+        ("REPTMON", 2, 'S'), ("REPTYEAR", 4, 'S'), ("CLASSIFY", 1, 'S'),
+        ("ARREARS", 3, 'Z'), ("CURBAL", 17, 'Z'), ("TENOR_INT", 17, 'Z'),
+        ("OTH_CHARGE", 16, 'Z'), ("REALISVL", 17, 'Z'), ("IISOPBAL", 17, 'Z'),
+        ("TOTIIS", 17, 'Z'), ("TOTIISR", 17, 'Z'), ("TOTWOF", 17, 'Z'),
+        ("IISDANAH", 17, 'Z'), ("IISTRANS", 17, 'Z'), ("SPOPBAL", 17, 'Z'),
+        ("SPCHARGE", 17, 'Z'), ("SPWBAMT", 17, 'Z'), ("SPWOAMT", 17, 'Z'),
+        ("SPDANAH", 17, 'Z'), ("SPTRANS", 17, 'Z'), ("GP3IND", 1, 'S'),
+        ("OLDBRH", 5, 'Z'), ("FACCODE", 5, 'Z'), ("IMPAIRED", 1, 'S'),
+        ("FORCURR", 3, 'S'), ("TOTILM", 17, 'Z'), ("PDBIND", 1, 'S')
+    ]
+    
+    write_fixed_width(provisio_output, BASE_OUTPUT / f"PROVISIO_{output_suffix}.txt", provisio_spec)
+    print(f"PROVISIO written: {provisio_output.height} records")
