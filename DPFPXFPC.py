@@ -1,6 +1,8 @@
 import polars as pl
 from datetime import datetime, timedelta
 import struct
+import pyreadstat
+import saspy
 
 DPTRBL = 'data/dptrbl.dat'
 RAW = 'data/raw.dat'
@@ -19,24 +21,18 @@ FORATE_RATES = {
     'HKD': 0.49
 }
 
-with open(DPTRBL, 'rb') as f:
-    first_record = f.read(924)
-
-tbdate_bytes = first_record[105:111]
-tbdate = struct.unpack('>q', b'\x00\x00' + tbdate_bytes)[0]
-tbdate_str = str(tbdate).zfill(11)[:8]
-reptdate = datetime.strptime(tbdate_str, '%m%d%Y').date()
-
-reptmon = reptdate.strftime('%m')
-reptyear = reptdate.strftime('%y')
+# Get report date as yesterday
+reptdt = datetime.now().date() - timedelta(days=1)
+reptmon = reptdt.strftime('%m')
+reptyear = reptdt.strftime('%y')
 nowk = '4'
-reptdt = reptdate
-reptday = reptdate.strftime('%d')
-rdate = reptdate.strftime('%d%m%y')
+reptday = reptdt.strftime('%d')
+rdate = reptdt.strftime('%d%m%y')
 
-dayone = datetime(reptdate.year, reptdate.month, 1).date()
+dayone = datetime(reptdt.year, reptdt.month, 1).date()
 
 def read_dptrbl():
+    """Read flat file DPTRBL and return Polars DataFrame"""
     records = []
     with open(DPTRBL, 'rb') as f:
         while True:
@@ -55,7 +51,7 @@ def read_dptrbl():
                 acctno_bytes = record[109:115]
                 acctno = struct.unpack('>q', b'\x00\x00' + acctno_bytes)[0]
                 
-                name = record[115:130].decode('ascii', errors='ignore').strip()
+                name = record[115:130].decode('ascii', errors='ignore').strip().lower()
                 
                 closedt_bytes = record[157:163]
                 closedt = struct.unpack('>q', b'\x00\x00' + closedt_bytes)[0]
@@ -69,19 +65,19 @@ def read_dptrbl():
                 product_bytes = record[396:398]
                 product = struct.unpack('>H', product_bytes)[0]
                 
-                deptype = chr(record[430])
+                deptype = chr(record[430]).lower()
                 
                 curbal_bytes = record[465:472]
                 curbal = struct.unpack('>q', curbal_bytes)[0] / 100.0
                 
-                curcode = record[587:590].decode('ascii', errors='ignore').strip()
+                curcode = record[587:590].decode('ascii', errors='ignore').strip().lower()
                 
                 if (400 <= product <= 411) or product == 413 or (420 <= product <= 434):
                     forbal = curbal
                     forate = 1.0
                     
-                    if curcode != 'MYR':
-                        forate = FORATE_RATES.get(curcode, 1.0)
+                    if curcode != 'myr':
+                        forate = FORATE_RATES.get(curcode.upper(), 1.0)
                         curbal = curbal * forate
                     
                     curbalus = curbal / FORATE_RATES.get('USD', 3.80)
@@ -111,34 +107,38 @@ def read_dptrbl():
                         if closedat > first_of_month - timedelta(days=1):
                             should_output = True
                     else:
-                        if deptype in ('D', 'N'):
+                        if deptype in ('d', 'n'):
                             should_output = True
                     
                     if should_output:
                         records.append({
-                            'REPTDATE': reptdate,
-                            'BRANCH': branch,
-                            'ACCTNO': acctno,
-                            'NAME': name,
-                            'CUSTCODE': custcode,
-                            'CUSTCD': custcd,
-                            'SECTOR': sector,
-                            'PRODUCT': product,
-                            'CURCODE': curcode,
-                            'CURBAL': curbal,
-                            'FORBAL': forbal,
-                            'CURBALUS': curbalus,
-                            'FORATE': forate,
-                            'PURPOSE': purpose,
-                            'PURPOSEM': purpose,
-                            'SECTORX': sectorx
+                            'reptdate': reptdt,
+                            'branch': branch,
+                            'acctno': acctno,
+                            'name': name,
+                            'custcode': custcode,
+                            'custcd': custcd,
+                            'sector': sector,
+                            'product': product,
+                            'curcode': curcode,
+                            'curbal': curbal,
+                            'forbal': forbal,
+                            'curbalus': curbalus,
+                            'forate': forate,
+                            'purpose': purpose,
+                            'purposem': purpose,
+                            'sectorx': sectorx
                         })
     
     return pl.DataFrame(records) if records else pl.DataFrame()
 
+# Read input files
+print("Reading DPTRBL file...")
 df_fcy = read_dptrbl()
 
-df_averbal = pl.read_parquet(f'{MIS_DIR}FCY{reptmon}.parquet')
+print("Reading FCY SAS dataset...")
+df_averbal, meta = pyreadstat.read_sas7bdat(f'{MIS_DIR}FCY{reptmon}.sas7bdat')
+df_averbal = pl.from_pandas(df_averbal)
 df_averbal = df_averbal.filter(
     (pl.col('REPTDATE') >= dayone) & 
     (pl.col('REPTDATE') <= reptdt)
@@ -148,15 +148,20 @@ df_averbal = df_averbal.group_by('ACCTNO').agg([
     pl.col('TOTMTBAL').sum()
 ])
 
-df_cisdp = pl.read_parquet(f'{CISDP_DIR}CISR1CA{reptmon}{nowk}{reptyear}.parquet')
+print("Reading CISDP SAS dataset...")
+df_cisdp_pd, meta = pyreadstat.read_sas7bdat(f'{CISDP_DIR}CISR1CA{reptmon}{nowk}{reptyear}.sas7bdat')
+df_cisdp = pl.from_pandas(df_cisdp_pd)
 df_cisdp = df_cisdp.filter(pl.col('SECCUST') == '901').select(['ACCTNO', 'CUSTNO'])
 
+print("Reading RAW file...")
 df_limit = pl.read_csv(RAW, separator=' ', has_header=False, 
                        new_columns=['CUSTNO', 'PERLIMT', 'KEYWORD', 'PURPOSE'])
 df_limit = df_limit.with_columns([
     pl.col('PURPOSE').alias('PURPOSEC')
 ]).unique(subset=['CUSTNO', 'PURPOSE'], keep='first')
 
+# Process data
+print("Processing data...")
 df_average = df_fcy.join(df_cisdp, on='ACCTNO', how='left')
 
 df_average = df_average.sort(['CUSTNO', 'PURPOSE']).join(
@@ -261,8 +266,19 @@ df_current = df_current.with_columns([
       .alias('PERLIMT')
 ])
 
+# Save outputs
+print("Saving outputs...")
+
+# Save as Parquet
 df_current.write_parquet(f'{MIS_DIR}FCYCA.parquet')
 
+# Save as SAS7BDAT using saspy
+sas = saspy.SASsession(results='TEXT')
+sas.dataframe2sasdata(df=df_current.to_pandas(), table='FCYCA', libref='WORK')
+sas.sasdata2safe(data=sas.sasdata('FCYCA', 'WORK'), path=f'{MIS_DIR}FCYCA.sas7bdat')
+sas.endsas()
+
+# Prepare reports
 df_resident = df_current.filter(pl.col('RESIDIND') == 'M').sort(['BRANCH', 'CUSTNO'])
 df_nonresident = df_current.filter(pl.col('RESIDIND') == 'N').sort(['BRANCH', 'CUSTNO'])
 
@@ -298,12 +314,4 @@ df_nonresident_summary = df_nonresident_report.group_by(['CATEGORY', 'KEYWORD'])
 print(f"\nREPORT ON FOREIGN CURRENCY A/C BALANCES OF NON-RESIDENT {rdate}")
 print(df_nonresident_summary)
 
-print(f"\nData saved to {MIS_DIR}FCYCA.parquet")
-
-
-
-all inputs are in sas7bdat sas dataset except for DPTRBL and RAW (both in falt files). all inputs need to be in lowercase.
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in sas7bdat and parquet files. 
-write out using saspy for sas7bdat
+print(f"\nData saved to {MIS_DIR}FCYCA.parquet and {MIS_DIR}FCYCA.sas7bdat")
