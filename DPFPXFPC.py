@@ -1,111 +1,117 @@
-# =========================================================
-# 8. PROCESS BNM TRADE DATA (with debugging)
-# =========================================================
-print("\nProcessing BNM Trade data...")
+Reading input files...
+  Read imast: 1697 rows
+  Read imast2: 2246 rows
+  Read icred: 10414 rows
+  Read isuba: 61339 rows
+  Read iprov: 87 rows
+  Read iamsubacc: 0 rows
+  Read ibtrad: 3418 rows
+  Read ibtdtl: 3418 rows
+  Read lnacct: 1205962 rows
 
-if data.get('ibtrad') is not None and cred is not None:
-    # Determine correct column names for IBTrad
-    transref_col = 'transrex' if 'transrex' in data['ibtrad'].columns else 'transref'
-    acctno_col = 'acctnox' if 'acctnox' in data['ibtrad'].columns else 'acctno'
-    
-    print(f"Using columns: transref={transref_col}, acctno={acctno_col}")
-    
-    # BTRAX - Repaid/Disburse (fix acctnox and transrex format)
-    btrax = data['ibtrad'].select([
-        # Convert acctnox: Float -> Int64 -> String (removes .0)
-        pl.col(acctno_col).cast(pl.Float64, strict=False)
-          .cast(pl.Int64, strict=False)
-          .cast(pl.Utf8)
-          .alias("acctnox"),
-        # Take first 7 chars of transrex to match CRED
-        pl.col(transref_col).cast(pl.Utf8).str.slice(0, 7).alias("transrex"),
-        pl.col("repaid").cast(pl.Float64, strict=False),
-        pl.col("disburse").cast(pl.Float64, strict=False),
-        pl.col("mtd_tawidh_amt").cast(pl.Float64, strict=False),
-        pl.col("mtd_gharamah_amt").cast(pl.Float64, strict=False)
-    ])
-    
-    # Debug: Check BTRAX after fix
-    print(f"\nBTRAX sample after fix:")
-    print(btrax.head(3))
-    print(f"CRED sample:")
-    print(cred.select(['acctnox', 'transrex']).head(3))
-    
-    # Check matching
-    matching_count = cred.join(btrax.select(["acctnox", "transrex"]).unique(), 
-                               on=["acctnox", "transrex"], 
-                               how="inner").height
-    print(f"Matching records between CRED and BTRAX: {matching_count}")
-    
-    # BTRAD - Balance data (fix acctnox and transrex format)
-    btrad = data['ibtrad'].filter(
-        pl.col("balance").cast(pl.Float64, strict=False) > 0
-    ).select([
-        pl.col(acctno_col).cast(pl.Float64, strict=False)
-          .cast(pl.Int64, strict=False)
-          .cast(pl.Utf8)
-          .alias("acctnox"),
-        pl.col(transref_col).cast(pl.Utf8).str.slice(0, 7).alias("transrex"),
-        pl.col("balance").cast(pl.Float64, strict=False),
-        pl.col("intrecv").cast(pl.Float64, strict=False),
-        pl.col("unearned").cast(pl.Float64, strict=False),
-        pl.col("liabcode"),
-        pl.col("utrdf")
-    ])
-    
-    # INTRT - Interest rates (fix acctnox and transrex format)
-    if data.get('ibtdtl') is not None:
-        ibtdtl_transref_col = 'transrex' if 'transrex' in data['ibtdtl'].columns else 'transref'
-        ibtdtl_acctno_col = 'acctnox' if 'acctnox' in data['ibtdtl'].columns else 'acctno'
-        
-        intrt = data['ibtdtl'].select([
-            pl.col(ibtdtl_acctno_col).cast(pl.Float64, strict=False)
-              .cast(pl.Int64, strict=False)
-              .cast(pl.Utf8)
-              .alias("acctnox"),
-            pl.col(ibtdtl_transref_col).cast(pl.Utf8).str.slice(0, 7).alias("transrex"),
-            pl.col("intrate").cast(pl.Float64, strict=False),
-            pl.col("commrate").cast(pl.Float64, strict=False),
-            pl.col("discrate").cast(pl.Float64, strict=False),
-            pl.col("combrate").cast(pl.Float64, strict=False),
-            pl.col("prinamt_myrx").cast(pl.Float64, strict=False),
-            pl.col("intamt_myrx").cast(pl.Float64, strict=False),
-            pl.col("oth_chargex").cast(pl.Float64, strict=False),
-            pl.col("prodgrp")
-        ])
-        btrax = btrax.join(intrt, on=["acctnox", "transrex"], how="left")
-    
-    # Merge with CRED
-    cred = cred.join(btrad, on=["acctnox", "transrex"], how="left", suffix="_btrad")
-    cred = cred.join(btrax, on=["acctnox", "transrex"], how="left", suffix="_btrax")
-    
-    # Debug: Check repaid after join
-    if 'repaid' in cred.columns:
-        cred_repaid_stats = cred.select([
-            pl.col("repaid").cast(pl.Float64, strict=False).sum().alias("total_repaid"),
-            pl.col("repaid").cast(pl.Float64, strict=False).max().alias("max_repaid"),
-            (pl.col("repaid").cast(pl.Float64, strict=False) > 0).sum().alias("count_repaid_gt_0")
-        ])
-        print(f"\nCRED REPAID after join: {cred_repaid_stats.to_dicts()}")
-    
-    # Update OUTSTAND and other fields
-    cred = cred.with_columns([
-        pl.when(
-            (pl.col("balance").is_not_null()) & (pl.col("balance") > 0)
-        ).then(pl.col("balance")).otherwise(0).alias("outstand"),
-        pl.col("unearned").fill_null(0),
-        pl.col("repaid").fill_null(0),
-        pl.col("disburse").fill_null(0),
-        pl.col("mtd_tawidh_amt").fill_null(0),
-        pl.col("mtd_gharamah_amt").fill_null(0)
-    ])
-    
-    # Debug: Final repaid stats
-    cred_final_repaid = cred.select([
-        pl.col("repaid").cast(pl.Float64, strict=False).sum().alias("total_repaid"),
-        pl.col("repaid").cast(pl.Float64, strict=False).max().alias("max_repaid"),
-        (pl.col("repaid").cast(pl.Float64, strict=False) > 0).sum().alias("count_repaid_gt_0")
-    ])
-    print(f"Final CRED REPAID stats: {cred_final_repaid.to_dicts()}")
-    
-    print(f"BNM Trade data processed")
+Processing MAST...
+MAST processed: 1697 rows
+
+Processing MAST2...
+MAST2 processed
+
+Processing CRED...
+CRED processed: 3419 rows
+
+Processing BNM Trade data...
+Using columns: transref=transrex, acctno=acctnox
+
+BTRAX sample after fix:
+shape: (3, 6)
+┌────────────┬──────────┬─────────┬──────────┬────────────────┬──────────────────┐
+│ acctnox    ┆ transrex ┆ repaid  ┆ disburse ┆ mtd_tawidh_amt ┆ mtd_gharamah_amt │
+│ ---        ┆ ---      ┆ ---     ┆ ---      ┆ ---            ┆ ---              │
+│ str        ┆ str      ┆ f64     ┆ f64      ┆ f64            ┆ f64              │
+╞════════════╪══════════╪═════════╪══════════╪════════════════╪══════════════════╡
+│ 2850000632 ┆ B622013  ┆ 86000.0 ┆ null     ┆ 0.0            ┆ 0.0              │
+│ 2850000632 ┆ B626884  ┆ null    ┆ null     ┆ 0.0            ┆ 0.0              │
+│ 2850000632 ┆ B633311  ┆ null    ┆ null     ┆ 0.0            ┆ 0.0              │
+└────────────┴──────────┴─────────┴──────────┴────────────────┴──────────────────┘
+CRED sample:
+shape: (3, 2)
+┌────────────┬──────────┐
+│ acctnox    ┆ transrex │
+│ ---        ┆ ---      │
+│ str        ┆ str      │
+╞════════════╪══════════╡
+│ 2850151812 ┆ G408623  │
+│ 2850026916 ┆ B624514  │
+│ 2850290002 ┆ B627689  │
+└────────────┴──────────┘
+Matching records between CRED and BTRAX: 3418
+
+CRED REPAID after join: [{'total_repaid': 41300059.14000001, 'max_repaid': 2154000.0, 'count_repaid_gt_0': 233}]
+Final CRED REPAID stats: [{'total_repaid': 41300059.14000001, 'max_repaid': 2154000.0, 'count_repaid_gt_0': 233}]
+BNM Trade data processed
+
+Processing SUBA...
+SUBA processed: 61339 rows (SUBA9: 1184, SUBA_MAIN: 10411)
+
+Processing ACCT...
+ACCT processed: 1644 rows
+
+Processing BTR2...
+
+BTR2 REPAID stats: [{'total_repaid': 124958556.22, 'max_repaid': 2154000.0, 'count_repaid_gt_0': 705}]
+BTR2 processed: 10429 rows
+
+Processing SUBCR...
+SUBCR processed: 895 rows
+
+Creating final SUBA...
+Final SUBA processed: 895 rows
+
+Processing PROVISIONS...
+PROVISIONS processed: 87 rows
+
+Processing REPAID7B...
+
+--- DEBUG: REPAID7B Processing ---
+BTR2 columns available: ['repaid', 'repay_source', 'repay_type_cd']
+BTR2 REPAID stats: [{'total_repaid': 124958556.22, 'max_repaid': 2154000.0, 'min_repaid': 0.0, 'count_repaid_gt_0': 705}]
+REPAY_SOURCE values: ['', '1200']
+REPAY_TYPE_CD values: ['', '10']
+BTR2 records with repaid > 0: 705
+Sample REPAID7B records:
+shape: (5, 5)
+┌────────────┬──────────┬──────────┬──────────────┬───────────────┐
+│ acctnox    ┆ facility ┆ repaid   ┆ repay_source ┆ repay_type_cd │
+│ ---        ┆ ---      ┆ ---      ┆ ---          ┆ ---           │
+│ str        ┆ str      ┆ f64      ┆ str          ┆ str           │
+╞════════════╪══════════╪══════════╪══════════════╪═══════════════╡
+│ 2850000632 ┆ 34470    ┆ 86000.0  ┆ 1200         ┆ 10            │
+│ 2850000632 ┆ 34470    ┆ 86000.0  ┆ 1200         ┆ 10            │
+│ 2850000632 ┆ 34470    ┆ 86000.0  ┆ 1200         ┆ 10            │
+│ 2850010916 ┆ 34470    ┆ 130000.0 ┆ 1200         ┆ 10            │
+│ 2850010916 ┆ 34470    ┆ 130000.0 ┆ 1200         ┆ 10            │
+└────────────┴──────────┴──────────┴──────────────┴───────────────┘
+REPAID7B aggregated: 149 rows
+
+Writing output files...
+ACCTCRED written: 1644 records
+SUBACRED written: 895 records
+CREDITPO written: 895 records
+PROVISIO written: 87 records
+REPAID7B written: 149 records
+
+==================================================
+PROCESSING COMPLETE
+==================================================
+Processing Date: 2026-08-15
+MAST rows: 1697
+CRED rows: 3425
+SUBA rows: 61339
+ACCT rows: 1644
+BTR2 rows: 10429
+SUBCR rows: 895
+Final SUBA rows: 895
+PROVI rows: 87
+BTRPAY rows: 149
+
+Output files written to: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIWBTCR
+==================================================
