@@ -3,315 +3,467 @@ from datetime import datetime, timedelta
 import struct
 import pyreadstat
 import saspy
+import os
 
-DPTRBL = 'data/dptrbl.dat'
-RAW = 'data/raw.dat'
-MIS_DIR = 'data/mis/'
-CISDP_DIR = 'data/cisdp/'
+# Initialize SAS session
+sas = saspy.SASsession(cfgname='default')  # Adjust cfgname as needed
+
+# Paths for SAS datasets
+MIS_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMFCFD/mis/'
+MISB_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMFCFD/misb/'
+CISDP_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMFCFD/cisdp/'
+MNITB_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMFCFD/mnitb/'
+MNIFD_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMFCFD/mnifd/'
+
+# Flat file paths
+DPTRBL = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMFCFD/dptrbl.dat'
+RAW = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMFCFD/raw.dat'
+
+# Output directories
+OUTPUT_MIS_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/prod/EIBMFCFD/mis/'
+OUTPUT_MISB_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/prod/EIBMFCFD/misb/'
+
+# Create output directories if they don't exist
+os.makedirs(OUTPUT_MIS_DIR, exist_ok=True)
+os.makedirs(OUTPUT_MISB_DIR, exist_ok=True)
+
+FCY_PRODUCTS = [400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 413, 
+                420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434]
+
 FORATE_RATES = {
-    'USD': 3.80,
-    'EUR': 4.50,
-    'GBP': 5.20,
-    'JPY': 0.035,
-    'SGD': 2.85,
-    'AUD': 2.60,
-    'CAD': 2.90,
-    'CHF': 4.10,
-    'NZD': 2.40,
-    'HKD': 0.49
+    'USD': 3.80, 'EUR': 4.50, 'GBP': 5.20, 'JPY': 0.035, 'SGD': 2.85,
+    'AUD': 2.60, 'CAD': 2.90, 'CHF': 4.10, 'NZD': 2.40, 'HKD': 0.49, 'MYR': 1.0
 }
 
-# Get report date as yesterday
-reptdt = datetime.now().date() - timedelta(days=1)
-reptmon = reptdt.strftime('%m')
-reptyear = reptdt.strftime('%y')
+# Read first record from DPTRBL to get report date
+with open(DPTRBL, 'rb') as f:
+    first_record = f.read(1752)
+
+tbdate_bytes = first_record[105:111]
+tbdate = struct.unpack('>q', b'\x00\x00' + tbdate_bytes)[0]
+tbdate_str = str(tbdate).zfill(11)[:8]
+reptdate = datetime.strptime(tbdate_str, '%m%d%Y').date()
+reptdatx = reptdate + timedelta(days=1)
+
+# Use datetime - 1 day for previous day
+prevdate = reptdate - timedelta(days=1)
+
+reptmon = reptdate.strftime('%m')
+reptyear = reptdate.strftime('%y')
 nowk = '4'
-reptday = reptdt.strftime('%d')
-rdate = reptdt.strftime('%d%m%y')
+reptdt = reptdate
+reptday = reptdate.strftime('%d')
+rdate = reptdate.strftime('%d%m%y')
+xdate = int(reptdatx.strftime('%y%j'))
 
-dayone = datetime(reptdt.year, reptdt.month, 1).date()
+dayone = datetime(reptdate.year, reptdate.month, 1).date()
 
-def read_dptrbl():
-    """Read flat file DPTRBL and return Polars DataFrame"""
+# Read SAS datasets using pyreadstat
+# FCYFD dataset from MIS directory
+df_averbal, meta_averbal = pyreadstat.read_sas7bdat(f'{MIS_DIR}fcyfd{reptmon}.sas7bdat')
+df_averbal = pl.from_pandas(df_averbal)
+df_averbal = df_averbal.filter(
+    (pl.col('reptdate') >= dayone) & 
+    (pl.col('reptdate') <= reptdt)
+).rename({'curbalus': 'totmtbal'}).select(['acctno', 'cdno', 'totmtbal'])
+
+df_averbal = df_averbal.group_by(['acctno', 'cdno']).agg([
+    pl.col('totmtbal').sum()
+])
+
+def read_dptrbl_fd():
     records = []
     with open(DPTRBL, 'rb') as f:
         while True:
-            record = f.read(924)
-            if len(record) < 924:
+            record = f.read(1752)
+            if len(record) < 1752:
                 break
             
             bankno = struct.unpack('>H', record[2:4])[0]
             reptno = struct.unpack('>I', b'\x00' + record[23:26])[0]
             fmtcode = struct.unpack('>H', record[26:28])[0]
             
-            if bankno == 33 and reptno == 1001 and fmtcode == 22:
-                branch_bytes = record[105:109]
-                branch = struct.unpack('>I', branch_bytes)[0]
+            if bankno == 33 and reptno == 4001 and fmtcode == 2:
+                branch = struct.unpack('>I', record[105:109])[0]
+                acctno = struct.unpack('>q', b'\x00\x00' + record[109:115])[0]
+                name = record[133:148].decode('ascii', errors='ignore').strip()
+                custcode = struct.unpack('>I', b'\x00' + record[123:126])[0]
+                cdno = struct.unpack('>q', b'\x00\x00' + record[148:154])[0]
+                openind = chr(record[154])
+                curbal = struct.unpack('>q', b'\x00\x00' + record[155:161])[0] / 100.0
+                orgdate = struct.unpack('>I', b'\x00\x00\x00' + record[173:176])[0]
+                matdate = struct.unpack('>I', b'\x00\x00\x00' + record[178:181])[0]
+                product = struct.unpack('>H', record[202:204])[0]
+                term = struct.unpack('>H', record[204:206])[0]
+                intplan = struct.unpack('>H', record[207:209])[0]
+                renewal = chr(record[210])
+                lastactv = struct.unpack('>I', b'\x00\x00\x00' + record[239:242])[0]
+                curcode = record[348:351].decode('ascii', errors='ignore').strip()
+                prinbal = struct.unpack('>q', b'\x00\x00' + record[373:379])[0] / 100.0
+                lmatdate = struct.unpack('>q', b'\x00\x00' + record[391:397])[0]
                 
-                acctno_bytes = record[109:115]
-                acctno = struct.unpack('>q', b'\x00\x00' + acctno_bytes)[0]
-                
-                name = record[115:130].decode('ascii', errors='ignore').strip().lower()
-                
-                closedt_bytes = record[157:163]
-                closedt = struct.unpack('>q', b'\x00\x00' + closedt_bytes)[0]
-                
-                custcode_bytes = record[175:178]
-                custcode = struct.unpack('>I', b'\x00' + custcode_bytes)[0]
-                
-                sector_bytes = record[311:314]
-                sector = struct.unpack('>I', b'\x00' + sector_bytes)[0]
-                
-                product_bytes = record[396:398]
-                product = struct.unpack('>H', product_bytes)[0]
-                
-                deptype = chr(record[430]).lower()
-                
-                curbal_bytes = record[465:472]
-                curbal = struct.unpack('>q', curbal_bytes)[0] / 100.0
-                
-                curcode = record[587:590].decode('ascii', errors='ignore').strip().lower()
-                
-                if (400 <= product <= 411) or product == 413 or (420 <= product <= 434):
-                    forbal = curbal
-                    forate = 1.0
-                    
-                    if curcode != 'myr':
-                        forate = FORATE_RATES.get(curcode.upper(), 1.0)
-                        curbal = curbal * forate
-                    
-                    curbalus = curbal / FORATE_RATES.get('USD', 3.80)
-                    
-                    custcd_map = {1: '77', 2: '78', 95: '95', 96: '96'}
-                    custcd = custcd_map.get(custcode, str(custcode))
-                    
-                    sectorx = None
-                    if custcd in ('77', '78', '95', '96'):
-                        if sector in (4, 5) or (40 <= sector <= 59):
-                            sectorx = 1
-                        elif not (10 <= sector <= 59) or sector not in (1, 2, 3, 4, 5):
-                            sectorx = 1
-                    else:
-                        if sector in (1, 2, 3) or (10 <= sector <= 39):
-                            sectorx = 4
-                        elif not (10 <= sector <= 59) or sector not in (1, 2, 3, 4, 5):
-                            sectorx = 4
-                    
-                    purpose = sector
-                    
-                    should_output = False
-                    if closedt != 0:
-                        closedt_str = str(closedt).zfill(11)[:8]
-                        closedat = datetime.strptime(closedt_str, '%m%d%Y').date()
-                        first_of_month = datetime(datetime.now().year, datetime.now().month, 1).date()
-                        if closedat > first_of_month - timedelta(days=1):
-                            should_output = True
-                    else:
-                        if deptype in ('d', 'n'):
-                            should_output = True
-                    
-                    if should_output:
-                        records.append({
-                            'reptdate': reptdt,
-                            'branch': branch,
-                            'acctno': acctno,
-                            'name': name,
-                            'custcode': custcode,
-                            'custcd': custcd,
-                            'sector': sector,
-                            'product': product,
-                            'curcode': curcode,
-                            'curbal': curbal,
-                            'forbal': forbal,
-                            'curbalus': curbalus,
-                            'forate': forate,
-                            'purpose': purpose,
-                            'purposem': purpose,
-                            'sectorx': sectorx
-                        })
+                records.append({
+                    'branch': branch,
+                    'acctno': acctno,
+                    'name': name,
+                    'custcode': custcode,
+                    'cdno': cdno,
+                    'openind': openind,
+                    'curbal': curbal,
+                    'orgdate': orgdate,
+                    'matdate': matdate,
+                    'product': product,
+                    'term': term,
+                    'intplan': intplan,
+                    'renewal': renewal,
+                    'lastactv': lastactv,
+                    'curcode': curcode,
+                    'prinbal': prinbal,
+                    'lmatdate': lmatdate
+                })
     
     return pl.DataFrame(records) if records else pl.DataFrame()
 
-# Read input files
-print("Reading DPTRBL file...")
-df_fcy = read_dptrbl()
+df_fcyfd = read_dptrbl_fd()
 
-print("Reading FCY SAS dataset...")
-df_averbal, meta = pyreadstat.read_sas7bdat(f'{MIS_DIR}FCY{reptmon}.sas7bdat')
-df_averbal = pl.from_pandas(df_averbal)
-df_averbal = df_averbal.filter(
-    (pl.col('REPTDATE') >= dayone) & 
-    (pl.col('REPTDATE') <= reptdt)
-).rename({'CURBALUS': 'TOTMTBAL'})
-
-df_averbal = df_averbal.group_by('ACCTNO').agg([
-    pl.col('TOTMTBAL').sum()
+df_fcyfd = df_fcyfd.with_columns([
+    pl.when(pl.col('lmatdate') > 0)
+      .then(
+          pl.col('lmatdate').cast(pl.Utf8).str.zfill(11).str.slice(0, 8).map_elements(
+              lambda x: datetime.strptime(x, '%m%d%Y').date(),
+              return_dtype=pl.Date
+          )
+      )
+      .otherwise(pl.lit(None))
+      .alias('lmdates')
 ])
 
-print("Reading CISDP SAS dataset...")
-df_cisdp_pd, meta = pyreadstat.read_sas7bdat(f'{CISDP_DIR}CISR1CA{reptmon}{nowk}{reptyear}.sas7bdat')
-df_cisdp = pl.from_pandas(df_cisdp_pd)
-df_cisdp = df_cisdp.filter(pl.col('SECCUST') == '901').select(['ACCTNO', 'CUSTNO'])
+df_fcyfd = df_fcyfd.with_columns([
+    pl.when(
+        (pl.col('renewal') == 'N') & 
+        (pl.col('lmdates') == reptdatx) &
+        (pl.col('lmatdate') > 0)
+    )
+    .then(
+        pl.col('lmdates').dt.strftime('%Y%m%d').cast(pl.Int64)
+    )
+    .otherwise(pl.col('matdate'))
+    .alias('matdate')
+])
 
-print("Reading RAW file...")
-df_limit = pl.read_csv(RAW, separator=' ', has_header=False, 
-                       new_columns=['CUSTNO', 'PERLIMT', 'KEYWORD', 'PURPOSE'])
-df_limit = df_limit.with_columns([
-    pl.col('PURPOSE').alias('PURPOSEC')
-]).unique(subset=['CUSTNO', 'PURPOSE'], keep='first')
+# Read MNITB dataset
+df_mnitbfd, meta_mnitbfd = pyreadstat.read_sas7bdat(f'{MNITB_DIR}fd.sas7bdat')
+df_mnitbfd = pl.from_pandas(df_mnitbfd)
+df_mnitbfd = df_mnitbfd.select(['acctno', 'sector', 'purpose'])
 
-# Process data
-print("Processing data...")
-df_average = df_fcy.join(df_cisdp, on='ACCTNO', how='left')
+df_fcyfd = df_fcyfd.join(df_mnitbfd, on='acctno', how='left')
 
-df_average = df_average.sort(['CUSTNO', 'PURPOSE']).join(
-    df_limit, on=['CUSTNO', 'PURPOSE'], how='left'
-).sort('ACCTNO')
+df_fcyfd = df_fcyfd.filter(pl.col('product').is_in(FCY_PRODUCTS))
 
-df_current = df_average.join(df_averbal, on='ACCTNO', how='left')
+df_fcyfd = df_fcyfd.with_columns([
+    pl.col('curbal').alias('forbal'),
+    pl.col('sector').alias('purpose1'),
+    pl.col('matdate').cast(pl.Utf8).str.zfill(8).map_elements(
+        lambda x: datetime.strptime(x, '%Y%m%d').date() if len(x) == 8 else None,
+        return_dtype=pl.Date
+    ).alias('maturedt'),
+    pl.col('orgdate').cast(pl.Utf8).str.zfill(9).str.slice(0, 6).map_elements(
+        lambda x: datetime.strptime(x, '%m%d%y').date() if len(x) == 6 else None,
+        return_dtype=pl.Date
+    ).alias('startdat')
+])
+
+df_fcyfd = df_fcyfd.with_columns([
+    pl.when(pl.col('curcode') != 'MYR')
+      .then(pl.col('curcode').map_elements(lambda x: FORATE_RATES.get(x, 1.0), return_dtype=pl.Float64))
+      .otherwise(pl.lit(1.0))
+      .alias('forate')
+])
+
+df_fcyfd = df_fcyfd.with_columns([
+    (pl.col('curbal') * pl.col('forate')).round(2).alias('curbal'),
+    (pl.col('curbal') / FORATE_RATES['USD']).alias('curbalus')
+])
+
+custcd_map = {1: '77', 2: '78', 95: '95', 96: '96'}
+df_fcyfd = df_fcyfd.with_columns([
+    pl.col('custcode').map_elements(lambda x: custcd_map.get(x, str(x)), return_dtype=pl.Utf8).alias('custcd')
+])
+
+df_fcyfd = df_fcyfd.with_columns([
+    pl.when(
+        pl.col('custcd').is_in(['77','78','95','96']) &
+        ((pl.col('sector').is_in([4,5])) | ((pl.col('sector') >= 40) & (pl.col('sector') <= 59)))
+    )
+    .then(pl.lit(1))
+    .when(
+        pl.col('custcd').is_in(['77','78','95','96']) &
+        (~((pl.col('sector') >= 10) & (pl.col('sector') <= 59)) | (~pl.col('sector').is_in([1,2,3,4,5])))
+    )
+    .then(pl.lit(1))
+    .when(
+        ~pl.col('custcd').is_in(['77','78','95','96']) &
+        ((pl.col('sector').is_in([4,5])) | ((pl.col('sector') >= 40) & (pl.col('sector') <= 59)))
+    )
+    .then(pl.lit(1))
+    .when(
+        ~pl.col('custcd').is_in(['77','78','95','96']) &
+        (~((pl.col('sector') >= 10) & (pl.col('sector') <= 59)) | (~pl.col('sector').is_in([1,2,3,4,5])))
+    )
+    .then(pl.lit(1))
+    .otherwise(pl.lit(None))
+    .alias('sectorx')
+])
+
+df_fcyfd = df_fcyfd.filter(
+    ~pl.col('openind').is_in(['B','C','P']) |
+    (
+        pl.col('openind').is_in(['B','C','P']) &
+        (pl.col('lastactv').cast(pl.Utf8).str.zfill(9).str.slice(0, 6).map_elements(
+            lambda x: datetime.strptime(x, '%m%d%y').date() > 
+                     datetime(prevdate.year, prevdate.month, 1).date() - timedelta(days=1)
+                     if len(x) == 6 else False,
+            return_dtype=pl.Boolean
+        ))
+    )
+)
+
+# Read CISDP dataset
+df_cisdp, meta_cisdp = pyreadstat.read_sas7bdat(f'{CISDP_DIR}cisr1fd{reptmon}{nowk}{reptyear}.sas7bdat')
+df_cisdp = pl.from_pandas(df_cisdp)
+df_cisdp = df_cisdp.filter(pl.col('seccust') == '901').select(['acctno', 'custno'])
+
+# Read RAW flat file
+df_limitkey = pl.read_csv(RAW, separator=' ', has_header=False,
+                          new_columns=['custno', 'perlimt', 'keyword', 'purpose1'])
+df_limitkey = df_limitkey.with_columns([
+    pl.col('purpose1').alias('purposec')
+])
+
+df_average = df_fcyfd.join(df_cisdp, on='acctno', how='left')
+df_average = df_average.with_columns([
+    pl.col('purpose1').alias('purposem')
+])
+
+df_average = df_average.sort(['custno', 'purpose1']).join(
+    df_limitkey.sort(['custno', 'purpose1']),
+    on=['custno', 'purpose1'],
+    how='left'
+).sort(['acctno', 'cdno'])
+
+df_current = df_average.join(df_averbal, on=['acctno', 'cdno'], how='left')
 
 days = (reptdt - dayone).days + 1
 df_current = df_current.with_columns([
-    (pl.col('TOTMTBAL') / days).alias('AVERBAL'),
-    pl.col('CURBAL').alias('CURBALRM')
+    (pl.col('totmtbal') / days).alias('averbal'),
+    pl.col('curbal').alias('curbalrm'),
+    pl.col('purpose').alias('classifi')
 ])
 
 df_current = df_current.with_columns([
-    pl.when(pl.col('CUSTCD').is_in(['80','81','82','83','84','85','86','90','91','92','95','96','98','99']))
+    pl.when(pl.col('custcd').is_in(['80','81','82','83','84','85','86','90','91','92','95','96','98','99']))
       .then(pl.lit('N'))
-      .otherwise(pl.lit('M'))
-      .alias('RESIDIND')
+      .otherwise(pl.lit('R'))
+      .alias('residind')
 ])
 
 df_current = df_current.with_columns([
-    pl.when(pl.col('RESIDIND') != 'N')
+    pl.when(pl.col('residind') != 'N')
       .then(
           pl.when(
-              ((pl.col('SECTOR').is_in([1,2,3])) | 
-               ((pl.col('SECTOR') >= 10) & (pl.col('SECTOR') <= 39)) | 
-               (pl.col('SECTORX') == 1)) &
-              pl.col('CUSTCD').is_in(['77','78'])
+              ((pl.col('sector').is_in([1,2,3])) | 
+               ((pl.col('sector') >= 10) & (pl.col('sector') <= 39)) | 
+               (pl.col('sectorx') == 1)) &
+              pl.col('custcd').is_in(['77','78'])
           )
           .then(pl.lit('INDIVIDUAL'))
           .when(
-              ((pl.col('SECTOR').is_in([4,5])) | 
-               ((pl.col('SECTOR') >= 40) & (pl.col('SECTOR') <= 59)) | 
-               (pl.col('SECTORX') == 4)) &
-              ~pl.col('CUSTCD').is_in(['77','78'])
+              ((pl.col('sector').is_in([4,5])) | 
+               ((pl.col('sector') >= 40) & (pl.col('sector') <= 59)) | 
+               (pl.col('sectorx') == 4)) &
+              ~pl.col('custcd').is_in(['77','78'])
           )
           .then(pl.lit('COMPANIES '))
           .otherwise(pl.lit(None))
       )
       .otherwise(
           pl.when(
-              ((pl.col('SECTOR').is_in([1,2,3])) | 
-               ((pl.col('SECTOR') >= 10) & (pl.col('SECTOR') <= 39)) | 
-               (pl.col('SECTORX') == 1)) &
-              pl.col('CUSTCD').is_in(['95','96'])
+              ((pl.col('sector').is_in([1,2,3])) | 
+               ((pl.col('sector') >= 10) & (pl.col('sector') <= 39)) | 
+               (pl.col('sectorx') == 1)) &
+              pl.col('custcd').is_in(['95','96'])
           )
           .then(pl.lit('INDIVIDUAL'))
           .when(
-              ((pl.col('SECTOR').is_in([4,5])) | 
-               ((pl.col('SECTOR') >= 40) & (pl.col('SECTOR') <= 59)) | 
-               (pl.col('SECTORX') == 4)) &
-              ~pl.col('CUSTCD').is_in(['95','96'])
+              ((pl.col('sector').is_in([4,5])) | 
+               ((pl.col('sector') >= 40) & (pl.col('sector') <= 59)) | 
+               (pl.col('sectorx') == 4)) &
+              ~pl.col('custcd').is_in(['95','96'])
           )
           .then(pl.lit('COMPANIES '))
           .otherwise(pl.lit(None))
       )
-      .alias('CATEGORY')
+      .alias('category')
 ])
 
-df_limit_valid = df_current.filter(pl.col('PERLIMT') > 0).select(['CUSTNO', 'PURPOSE', 'PERLIMT'])
+df_limit = df_current.filter(pl.col('perlimt') > 0).select(['custno', 'purpose1', 'perlimt']).sort(['custno', 'purpose1'])
 
-df_alm1_summary = df_current.filter(pl.col('CUSTNO').is_not_null()).group_by(['CUSTNO', 'PURPOSE']).agg([
-    pl.col('AVERBAL').sum()
-])
-
-df_alm1 = df_alm1_summary.join(
-    df_current.drop(['PERLIMT', 'AVERBAL']).unique(subset=['CUSTNO', 'PURPOSE'], keep='first'),
-    on=['CUSTNO', 'PURPOSE'],
-    how='left'
-).join(df_limit_valid, on=['CUSTNO', 'PURPOSE'], how='left')
+df_alm1 = df_current.filter(pl.col('custno').is_not_null()).sort(['custno', 'purpose1'])
+df_alm1 = df_alm1.join(df_limit, on=['custno', 'purpose1'], how='left', suffix='_limit')
 
 df_alm1 = df_alm1.with_columns([
-    pl.when((pl.col('AVERBAL') > pl.col('PERLIMT')) & pl.col('PERLIMT').is_not_null())
+    pl.when((pl.col('averbal') > pl.col('perlimt_limit')) & pl.col('perlimt_limit').is_not_null())
       .then(pl.lit('Y'))
       .otherwise(pl.lit(None))
-      .alias('FLAG')
+      .alias('flag')
 ])
 
-df_alm2 = df_current.filter(pl.col('CUSTNO').is_null())
+df_alm1 = df_alm1.with_columns([
+    pl.when((pl.col('custno') != pl.col('custno').shift(1)) | 
+            (pl.col('purpose1') != pl.col('purpose1').shift(1)))
+      .then(pl.col('perlimt_limit'))
+      .otherwise(pl.lit(0))
+      .alias('perlimt')
+]).drop('perlimt_limit')
+
+df_alm1 = df_alm1.unique(subset=['acctno', 'cdno', 'purpose1'], keep='first')
+
+df_alm2 = df_current.filter(pl.col('custno').is_null())
 
 df_alm = pl.concat([df_alm1, df_alm2])
+df_alm = df_alm.with_columns([
+    (pl.col('branch').cast(pl.Utf8) + ' ' + pl.col('branch').cast(pl.Utf8).str.zfill(3)).alias('branch1')
+]).sort(['custno', 'purpose1'])
 
 df_alm = df_alm.with_columns([
-    (pl.col('BRANCH').cast(pl.Utf8) + ' ' + pl.col('BRANCH').cast(pl.Utf8).str.zfill(3)).alias('BRANCH1')
-])
-
-df_current = df_current.sort(['CUSTNO', 'PURPOSE'])
-
-df_current = df_current.with_columns([
-    pl.when((pl.col('CUSTNO') != pl.col('CUSTNO').shift(1)) | 
-            (pl.col('PURPOSE') != pl.col('PURPOSE').shift(1)))
+    pl.when((pl.col('custno') != pl.col('custno').shift(1)) | 
+            (pl.col('purpose1') != pl.col('purpose1').shift(1)))
       .then(pl.lit(1))
       .otherwise(pl.lit(0))
-      .alias('NOACCT')
+      .alias('noacct')
+]).sort(['acctno', 'cdno'])
+
+# Read MNIFD dataset
+df_fd, meta_fd = pyreadstat.read_sas7bdat(f'{MNIFD_DIR}fd.sas7bdat')
+df_fd = pl.from_pandas(df_fd)
+if 'custcd' in df_fd.columns:
+    df_fd = df_fd.drop('custcd')
+
+df_fdcd = df_alm.join(df_fd, on=['acctno', 'cdno'], how='left')
+
+df_fdcd = df_fdcd.with_columns([
+    pl.col('statec').alias('state')
 ])
 
-df_current = df_current.with_columns([
-    pl.when(pl.col('NOACCT') == 0)
-      .then(pl.lit(0))
-      .otherwise(pl.col('PERLIMT'))
-      .alias('PERLIMT')
-])
+# Prepare final output
+final_columns = [
+    'acctno', 'branch', 'cdno', 'curcode', 'custcd', 'classifi',
+    'purposem', 'purposec', 'curbalrm', 'forbal', 'averbal', 'perlimt',
+    'startdat', 'matdate', 'curbalus', 'intplan', 'openind', 'orgdate',
+    'renewal', 'state', 'term', 'custno', 'forate', 'name', 'product', 'keyword'
+]
 
-# Save outputs
-print("Saving outputs...")
+df_output = df_fdcd.select(final_columns)
 
-# Save as Parquet
-df_current.write_parquet(f'{MIS_DIR}FCYCA.parquet')
+# Write output to parquet
+df_output.write_parquet(f'{OUTPUT_MIS_DIR}fdcd{reptmon}.parquet')
 
-# Save as SAS7BDAT using saspy
-sas = saspy.SASsession(results='TEXT')
-sas.dataframe2sasdata(df=df_current.to_pandas(), table='FCYCA', libref='WORK')
-sas.sasdata2safe(data=sas.sasdata('FCYCA', 'WORK'), path=f'{MIS_DIR}FCYCA.sas7bdat')
-sas.endsas()
+# Write output to SAS7BDAT using saspy
+# Convert Polars DataFrame to pandas first
+df_output_pandas = df_output.to_pandas()
 
-# Prepare reports
-df_resident = df_current.filter(pl.col('RESIDIND') == 'M').sort(['BRANCH', 'CUSTNO'])
-df_nonresident = df_current.filter(pl.col('RESIDIND') == 'N').sort(['BRANCH', 'CUSTNO'])
+# Upload to SAS
+sas_df = sas.df2sd(df_output_pandas, 'work_fdcd')
 
-print(f"\nFOREIGN CURRENCY RESIDENT A/C AS AT {rdate}")
-print("ATTN : MS.LIM")
-print("\nResident Accounts Summary:")
-print(df_resident.select(['BRANCH', 'CUSTNO', 'ACCTNO', 'NAME', 'CURCODE', 'CUSTCD', 
-                          'PURPOSEM', 'CURBALRM', 'FORBAL', 'AVERBAL', 'FORATE', 'PERLIMT']))
+# Save as SAS7BDAT
+sas.submit(f'''
+    LIBNAME outdir '{OUTPUT_MIS_DIR}';
+    DATA outdir.fdcd{reptmon};
+        SET work_fdcd;
+    RUN;
+''')
+
+df_resident = df_alm.filter(pl.col('residind') == 'R').sort(['branch', 'purpose1'])
+df_nonresident = df_alm.filter(pl.col('residind') == 'N').sort(['branch', 'purpose1'])
+
+print(f"\nFOREIGN CURRENCY FIXED DEPOSIT DETAIL LISTING AS AT {rdate}")
+print("ATTN : MR.TAI GUAN ONG")
+print("\nResident FD Summary:")
+print(df_resident.select(['branch', 'custno', 'acctno', 'cdno', 'name', 'curcode', 
+                          'custcd', 'purposem', 'curbalrm', 'forbal', 'averbal', 
+                          'forate', 'perlimt', 'startdat', 'maturedt']))
 
 print(f"\nFOREIGN CURRENCY NON-RESIDENT A/C AS AT {rdate}")
-print("ATTN : MS.LIM")
-print("\nNon-Resident Accounts Summary:")
-print(df_nonresident.select(['BRANCH', 'CUSTNO', 'ACCTNO', 'NAME', 'CURCODE', 'CUSTCD', 
-                             'PURPOSEM', 'CURBALRM', 'FORBAL', 'AVERBAL', 'FORATE', 'PERLIMT']))
+print("ATTN : MR.TAI GUAN ONG")
+print("\nNon-Resident FD Summary:")
+print(df_nonresident.select(['branch', 'custno', 'acctno', 'cdno', 'name', 'curcode',
+                             'custcd', 'purposem', 'curbalrm', 'forbal', 'averbal',
+                             'forate', 'perlimt', 'startdat', 'maturedt']))
 
-df_resident_report = df_current.filter(pl.col('RESIDIND') == 'M')
-df_resident_summary = df_resident_report.group_by(['CATEGORY', 'KEYWORD']).agg([
-    pl.col('PERLIMT').sum().alias('PERMITTED_LIMIT'),
-    pl.col('AVERBAL').sum().alias('AVERAGE_BALANCE'),
-    pl.col('NOACCT').sum().alias('NO_OF_ACCOUNTS')
+def calculate_remmth(matdate_val, reptdate_val):
+    if matdate_val is None:
+        return 0
+    
+    md_year = matdate_val.year
+    md_month = matdate_val.month
+    md_day = matdate_val.day
+    
+    rp_year = reptdate_val.year
+    rp_month = reptdate_val.month
+    rp_day = reptdate_val.day
+    
+    days_in_rp_month = (datetime(rp_year, rp_month % 12 + 1, 1) - datetime(rp_year, rp_month, 1)).days
+    
+    if md_day > rp_day:
+        md_day = rp_day
+    
+    remy = md_year - rp_year
+    remm = md_month - rp_month
+    remd = md_day - rp_day
+    
+    return remy * 12 + remm + remd / days_in_rp_month
+
+df_alm = df_alm.with_columns([
+    pl.struct(['maturedt']).map_elements(
+        lambda x: calculate_remmth(x['maturedt'], reptdate),
+        return_dtype=pl.Float64
+    ).alias('remmth')
 ])
 
-print(f"\nREPORT ON FOREIGN CURRENCY A/C BALANCES OF RESIDENT {rdate}")
-print(df_resident_summary)
-
-df_nonresident_report = df_current.filter(pl.col('RESIDIND') == 'N')
-df_nonresident_summary = df_nonresident_report.group_by(['CATEGORY', 'KEYWORD']).agg([
-    pl.col('PERLIMT').sum().alias('PERMITTED_LIMIT'),
-    pl.col('AVERBAL').sum().alias('AVERAGE_BALANCE'),
-    pl.col('NOACCT').sum().alias('NO_OF_ACCOUNTS')
+df_bodrm = df_alm.group_by('remmth').agg([
+    pl.col('curbalrm').sum().alias('amount')
 ])
 
-print(f"\nREPORT ON FOREIGN CURRENCY A/C BALANCES OF NON-RESIDENT {rdate}")
-print(df_nonresident_summary)
+# Write BODRM to parquet
+df_bodrm.write_parquet(f'{OUTPUT_MISB_DIR}bodrm{reptmon}.parquet')
 
-print(f"\nData saved to {MIS_DIR}FCYCA.parquet and {MIS_DIR}FCYCA.sas7bdat")
+# Write BODRM to SAS7BDAT
+df_bodrm_pandas = df_bodrm.to_pandas()
+sas_df_bodrm = sas.df2sd(df_bodrm_pandas, 'work_bodrm')
+
+sas.submit(f'''
+    LIBNAME outdir '{OUTPUT_MISB_DIR}';
+    DATA outdir.bodrm{reptmon};
+        SET work_bodrm;
+    RUN;
+''')
+
+print(f"\nBOD PAPERS (REMAINING MATURITY) {rdate}")
+print(df_bodrm)
+
+df_bodstat = df_alm.group_by(['curcode', 'residind']).agg([
+    pl.col('prinbal').sum(),
+    pl.col('forbal').sum()
+])
+
+print(f"\nSTATEMENT F REPORTING AS AT {rdate}")
+print(df_bodstat.select(['curcode', 'residind', 'forbal']))
+
+print(f"\nData saved:")
+print(f"  {OUTPUT_MIS_DIR}fdcd{reptmon}.parquet")
+print(f"  {OUTPUT_MIS_DIR}fdcd{reptmon}.sas7bdat")
+print(f"  {OUTPUT_MISB_DIR}bodrm{reptmon}.parquet")
+print(f"  {OUTPUT_MISB_DIR}bodrm{reptmon}.sas7bdat")
+
+# Close SAS session
+sas.endsas()
