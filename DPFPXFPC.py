@@ -1,1185 +1,1160 @@
-import pyreadstat
+"""
+kalmliq.py - Treasury (K1TBL / K3TBL) processing for BNM LCR reporting.
+
+Self-contained module - mirrors the original SAS structure where KALMLIQ
+is its own include (%INC PGM(KALMLIQ)) separate from the main program.
+It has no dependency on any other project file: it takes the BNMK folder
+path and institution code as plain arguments from EIBDLCRM.py, rather
+than importing a shared config/common module.
+
+=====================================================================
+RESOLVED (previously listed as gaps, now implemented from the real
+KAMLIQX / KALMLIQ4 source):
+
+- K1TBX is now implemented in process_k1tbx() below, ported from
+  KAMLIQX.sas. Its output should be merged into the K1TBL record list
+  before calling build_ktblall() - see EIBDLCRM.py's main().
+
+- K3TBL3 is now implemented in process_k3tbl3() below, ported from
+  KALMLIQ4.sas. Its output should be merged into the K3TBL record list
+  before calling build_ktblall() - see EIBDLCRM.py's main().
+
+REMAINING KNOWN GAPS:
+
+1. Exactly how K3TBL3 gets combined with K3TBL is not shown in what
+   we've been given - the KTBLALL SET statement we've seen only lists
+   K1TBL(IN=A) K3TBL(IN=B) K1TBX, not K3TBL3. Since KALMLIQ4 runs
+   immediately after the K3TBL DATA step, and K3TBL3 shares the same
+   PART/ITEM/MATDT/AMOUNT/AMTUSD/AMTSGD shape as K3TBL, the working
+   assumption here is a PROC APPEND BASE=K3TBL DATA=K3TBL3 that wasn't
+   in the excerpt (this codebase uses that exact append pattern
+   elsewhere, e.g. "PROC APPEND BASE=K1TBL DATA=K3TBL" in the
+   DISTRIBUTION PROFILE section). If that assumption is wrong, let me
+   know and I'll adjust.
+
+2. process_k3tbl3() needs the $CTYPE. SAS format (CUST=PUT(UTCTP,
+   $CTYPE.)) to classify UTCTP into the 2-digit codes checked against
+   IREP/NREP. That format hasn't been provided (same kind of gap as
+   $LCRCDGL for WALK.TXT) - pass a populated `ctype_lookup` dict to
+   process_k3tbl3() once you have the real PROC FORMAT definitions;
+   until then it will correctly produce 0 records (matching what the
+   SAS source itself would do with an unresolved format - the source's
+   own "IF CUST NE '  '" filter drops everything when CUST is blank).
+
+3. The later "DISTRIBUTION PROFILE OF CUSTOMER DEPOSITS (PART 3)"
+   block (NON-INTERBANK REPOS / NON-INTERBANK NIDS, re-reading
+   BNMK.K1TBL/K3TBL into a CAT/NAME/AMOUNT summary) is a separate
+   report section that does NOT feed into KTBLALL/the main LCR figures.
+   Not implemented here since it's a distinct output. Let me know if
+   you need it and I'll add it as its own function.
+=====================================================================
+"""
+
+import os
+import glob
+from datetime import date, datetime, timedelta
+
 import polars as pl
-import pandas as pd
-from pathlib import Path
-from datetime import datetime, timedelta
-import numpy as np
-import sys
+import pyreadstat
 
-# Import PBBBTFMT functions
-sys.path.append('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS')
-from PBBBTFMT import (
-    dayr_format, 
-    dirct_format, 
-    liab_format, 
-    btfcept_format, 
-    prctype_format, 
-    prctypesfs_format, 
-    nsrsliab_format
-)
 
-# Import PBBLNFMT functions
-from PBBLNFMT import (
-    put,
-    informat,
-    apply_format,
-    available_formats
-)
+# =============================================================================
+# SELF-CONTAINED UTILITIES
+# (small, deliberately duplicated here rather than imported from a shared
+#  module, so this file has zero dependency on the rest of the project)
+# =============================================================================
+SAS_EPOCH = date(1960, 1, 1)
 
-# =========================================================
-# 1. CONFIGURATION
-# =========================================================
-BASE_INPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIWBTCR")
-BASE_OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIWBTCR")
-BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
 
-# =========================================================
-# 2. DATE LOGIC
-# =========================================================
-TDATE = datetime.now() - timedelta(days=1)
-day_val = TDATE.day
-month_val = TDATE.month
-year_val = TDATE.year
+def sas_date_to_pydate(val):
+    """
+    Convert a SAS date value to a python date.
 
-if day_val == 8:
-    SDD, WK, WK1 = 1, '1', '4'
-elif day_val == 15:
-    SDD, WK, WK1 = 9, '2', '1'
-elif day_val == 22:
-    SDD, WK, WK1 = 16, '3', '2'
-else:
-    SDD, WK, WK1 = 23, '4', '3'
+    pyreadstat does not always auto-convert SAS date-formatted numeric
+    columns to python date/datetime - in practice it comes back as a raw
+    float (days since 1960-01-01, e.g. 24321.0). This handles all the
+    shapes we might get: already-a-date, already-a-datetime, or a raw
+    SAS numeric serial.
+    """
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    if isinstance(val, (int, float)):
+        try:
+            return SAS_EPOCH + timedelta(days=int(val))
+        except (ValueError, OverflowError):
+            return None
+    return None
 
-MM = month_val
-MM1 = MM
-if WK == '1':
-    MM1 = MM - 1
-    if MM1 == 0:
-        MM1 = 12
 
-REPTMON = f"{MM:02d}"
-REPTMON1 = f"{MM1:02d}"
-REPTYEAR = str(year_val)
-REPTYEA2 = str(year_val)[2:]
-REPTDAY = f"{day_val:02d}"
-RDATE = int(TDATE.strftime("%d%m%y"))
-RDATE2 = (TDATE - timedelta(days=1)).strftime("%y%m%d")
+def _normalize_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    SAS variable names come back UPPERCASE from pyreadstat. Downstream
+    code here is written assuming lowercase column names, so normalize
+    immediately on read - otherwise every 'col_name' in df.columns /
+    row.get('col_name') check silently fails and returns default values
+    (0 / '' / None) instead of the real data.
+    """
+    if df is None:
+        return df
+    rename_map = {c: c.lower() for c in df.columns if c != c.lower()}
+    if rename_map:
+        df = df.rename(rename_map)
+    return df
 
-# =========================================================
-# 3. HELPER FUNCTIONS
-# =========================================================
-def read_sas(file_path):
-    """Read SAS7BDAT file and convert to Polars DataFrame"""
+
+def warn_missing_columns(df, expected, context):
+    """Loudly flag expected fields that are missing after normalization,
+    instead of letting them silently default to 0/''/None."""
+    if df is None:
+        return
+    missing = [c for c in expected if c not in df.columns]
+    if missing:
+        print(f"    !! WARNING [{context}]: expected columns not found after "
+              f"normalization: {missing}. These will default to 0/''/None "
+              f"and likely cause dropped/zeroed records. Check real column "
+              f"names below.")
+
+
+def read_sas_file(filepath, columns=None):
+    """Read SAS dataset using pyreadstat and return polars DataFrame
+    with columns normalized to lowercase."""
     try:
-        df, meta = pyreadstat.read_sas7bdat(str(file_path))
-        df.columns = [col.lower() for col in df.columns]
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                df[col] = df[col].astype(str).replace('nan', '')
-                df[col] = df[col].replace('None', '')
-        return pl.from_pandas(df)
+        if columns:
+            usecols = [c.upper() for c in columns]
+            df, meta = pyreadstat.read_sas7bdat(filepath, usecols=usecols)
+        else:
+            df, meta = pyreadstat.read_sas7bdat(filepath)
+        print(f"    Successfully read: {os.path.basename(filepath)} ({len(df)} rows, {len(df.columns)} columns)")
+        pdf = pl.from_pandas(df)
+        pdf = _normalize_columns(pdf)
+        return pdf
     except Exception as e:
-        print(f"Error reading {file_path}: {e}")
+        print(f"    Warning: Could not read {filepath}: {e}")
         return None
 
-def write_fixed_width_positioned(df, filepath, columns_spec):
-    """Write DataFrame as fixed-width text file with SAS positioning"""
-    if df is None or df.is_empty():
-        print(f"Warning: No data to write for {filepath}")
-        return
-    
-    with open(filepath, 'w') as f:
-        for row in df.iter_rows(named=True):
-            max_pos = max(spec[1] + spec[2] for spec in columns_spec)
-            line = [' '] * (max_pos + 10)
-            
-            for col_name, start_pos, width, format_type in columns_spec:
-                value = row.get(col_name, "")
-                
-                if format_type == 'Z':  # Zero-padded integer (SAS Z format)
-                    if value is None or value == '' or pd.isna(value):
-                        formatted = '0' * width
-                    else:
-                        try:
-                            formatted = f"{int(float(value)):0{width}d}"
-                        except:
-                            formatted = '0' * width
-                elif format_type == 'I':  # Right-justified integer (SAS numeric format)
-                    if value is None or value == '' or pd.isna(value):
-                        formatted = ' ' * width
-                    else:
-                        try:
-                            formatted = f"{int(float(value)):{width}d}"
-                        except:
-                            formatted = ' ' * width
-                elif format_type == 'S':  # Left-justified string (SAS $ format)
-                    if value is None or pd.isna(value):
-                        formatted = ''
-                    else:
-                        formatted = str(value)[:width].ljust(width)
-                elif format_type == 'D':  # Decimal (SAS numeric with decimal)
-                    if value is None or value == '' or pd.isna(value):
-                        formatted = ' ' * width
-                    else:
-                        try:
-                            formatted = f"{float(value):{width}.2f}"
-                        except:
-                            formatted = ' ' * width
-                else:
-                    if value is None or pd.isna(value):
-                        formatted = ''
-                    else:
-                        formatted = str(value)[:width].ljust(width)
-                
-                for i, char in enumerate(formatted):
-                    pos = start_pos + i
-                    if pos < len(line):
-                        line[pos] = char
-            
-            f.write(''.join(line).rstrip() + "\n")
 
-# =========================================================
-# 4. READ INPUT FILES
-# =========================================================
-print("Reading input files...")
+def debug_directory(path, pattern=None, max_files=50):
+    """Debug function to list files in a directory"""
+    print(f"  Debug: Directory: {path}")
 
-input_files = {
-    'imast': BASE_INPUT / f"imast{REPTDAY}{REPTMON}.sas7bdat",
-    'imast2': BASE_INPUT / f"imast2{REPTDAY}{REPTMON}.sas7bdat",
-    'icred': BASE_INPUT / f"icred{REPTDAY}{REPTMON}.sas7bdat",
-    'isuba': BASE_INPUT / f"isuba{REPTDAY}{REPTMON}.sas7bdat",
-    'iprov': BASE_INPUT / f"iprov{REPTDAY}{REPTMON}.sas7bdat",
-    'iamsubacc': BASE_INPUT / f"iamsubacc{REPTDAY}{REPTMON}.sas7bdat",
-    'ibtrad': BASE_INPUT / f"ibtrad{REPTMON}{WK}.sas7bdat",
-    'ibtdtl': BASE_INPUT / f"ibtdtl{REPTYEA2}{REPTMON}{REPTDAY}.sas7bdat",
-    'lnacct': BASE_INPUT / "lnacct.sas7bdat"
-}
+    if not os.path.exists(path):
+        print(f"    Directory does not exist!")
+        return []
 
-data = {}
-for key, file_path in input_files.items():
-    if file_path.exists():
-        data[key] = read_sas(file_path)
-        if data[key] is not None:
-            print(f"  Read {key}: {data[key].height} rows")
-    else:
-        print(f"  Missing {key}: {file_path}")
-        data[key] = None
+    try:
+        all_files = os.listdir(path)
+        print(f"    Total files: {len(all_files)}")
 
-# =========================================================
-# 5. PROCESS MAST
-# =========================================================
-print("\nProcessing MAST...")
+        if pattern:
+            filtered = [f for f in all_files if pattern.lower() in f.lower()]
+            print(f"    Files matching '{pattern}': {len(filtered)}")
+            for f in filtered[:max_files]:
+                print(f"      - {f}")
+            return filtered
+        else:
+            print(f"    First {min(max_files, len(all_files))} files:")
+            for f in sorted(all_files)[:max_files]:
+                print(f"      - {f}")
+            return all_files
+    except Exception as e:
+        print(f"    Error listing directory: {e}")
+        return []
 
-mast = None
-if data.get('imast') is not None:
-    mast = data['imast'].filter(
-        pl.col("acctnox").cast(pl.Float64, strict=False) > 2500000000
-    )
-    
-    mast = mast.with_columns([
-        pl.col("ficode").alias("branch"),
-        pl.lit(0).cast(pl.Int64).alias("oldbrh"),
-        pl.lit("     ").alias("ficody")
-    ])
-    
-    mast = mast.with_columns([
-        pl.when(pl.col("retailid") == 'C')
-          .then(999)
-          .otherwise(0)
-          .cast(pl.Int64)
-          .alias("apcode")
-    ])
-    
-    mast = mast.with_columns([
-        pl.when(
-            (pl.col("custcodx").is_null()) | (pl.col("custcodx") == "") | (pl.col("custcodx") == "nan")
-        ).then(pl.lit("99")).otherwise(pl.col("custcodx")).alias("custcode_clean")
-    ])
-    
-    mast = mast.with_columns([
-        pl.col("custcode_clean").cast(pl.Float64, strict=False).map_elements(
-            lambda x: put(x, "LOCUSTCD", "99"), return_dtype=pl.Utf8
-        ).alias("custfiss")
-    ])
-    
-    mast = mast.with_columns([
-        pl.when(
-            (pl.col("sector").is_null()) | (pl.col("sector") == "") | (pl.col("sector") == "nan")
-        ).then(pl.lit("9999")).otherwise(pl.col("sector")).alias("sector_clean")
-    ])
-    
-    mast = mast.with_columns([
-        pl.col("sector_clean").map_elements(
-            lambda x: put(x, "RVRSE", "9999"), return_dtype=pl.Utf8
-        ).alias("sectfiss")
-    ])
-    
-    if 'industrial_sector_cd' in mast.columns:
-        mast = mast.with_columns([
-            pl.when(
-                (pl.col("industrial_sector_cd").is_not_null()) & 
-                (pl.col("industrial_sector_cd").str.len_chars() == 5) &
-                (pl.col("industrial_sector_cd") != "")
-            ).then(
-                pl.col("industrial_sector_cd").map_elements(
-                    lambda x: put(x, "INDSECT", None), return_dtype=pl.Utf8
-                )
-            ).otherwise(pl.col("sectfiss")).alias("sectfiss")
-        ])
-    
-    mast = mast.with_columns([
-        pl.when(
-            pl.col("custfiss").is_in(['77', '78', '95', '96'])
-        ).then(pl.lit("9700")).otherwise(pl.col("sectfiss")).alias("sectfiss")
-    ])
-    
-    mast = mast.with_columns([
-        pl.col("acctnox").cast(pl.Float64, strict=False)
-          .cast(pl.Int64, strict=False)
-          .cast(pl.Utf8)
-          .alias("acctnox")
-    ])
-    
-    mast = mast.unique(subset=["acctnox"], keep="first")
-    print(f"MAST processed: {mast.height} rows")
 
-# =========================================================
-# 6. PROCESS MAST2
-# =========================================================
-print("\nProcessing MAST2...")
+def calculate_remaining_months(matdt, reptdate, days_in_month):
+    """Calculate REMMTH and REM30D (equivalent to the %REMMTH macro)."""
+    if matdt <= reptdate:
+        return 0.1, 0
 
-mast2_agg = None
-mast2c = None
+    rp_year = reptdate.year
+    rp_month = reptdate.month
+    rp_day = reptdate.day
 
-if data.get('imast2') is not None:
-    mast2_df = data['imast2']
-    
-    if 'aano' in mast2_df.columns:
-        mast2_filtered = mast2_df.filter(
-            (pl.col("aano").cast(pl.Utf8).str.slice(0, 1) != "") &
-            (pl.col("aano").cast(pl.Utf8).str.len_chars() == 13)
+    md_year = matdt.year
+    md_month = matdt.month
+    md_day = matdt.day
+
+    days_in_target_month = days_in_month[md_month - 1]
+    if md_day > days_in_target_month:
+        md_day = days_in_target_month
+
+    rem_years = md_year - rp_year
+    rem_months = md_month - rp_month
+    rem_days = md_day - rp_day
+
+    remmth = rem_years * 12 + rem_months + rem_days / days_in_month[rp_month - 1]
+    rem30d = (matdt - reptdate).days / 30
+
+    return remmth, rem30d
+
+
+def format_mth_bucket(months):
+    """Format months into bucket (01-10). Approximates PUT(REMMTH, REMFMT.)."""
+    if months <= 1: return '01'
+    if months <= 3: return '02'
+    if months <= 6: return '03'
+    if months <= 9: return '04'
+    if months <= 12: return '05'
+    if months <= 24: return '06'
+    if months <= 36: return '07'
+    if months <= 60: return '08'
+    if months <= 120: return '09'
+    return '10'
+
+
+# =============================================================================
+# FILE DISCOVERY
+# =============================================================================
+def find_k1tbl_file(rep_date, bnmk_path):
+    """Find K1TBL file (BNMK.K1TBL&REPTMON&NOWK) with debugging."""
+    base_path = bnmk_path
+    month = rep_date['mon']
+    week = rep_date['nowk']
+
+    print(f"  Looking for K1TBL file...")
+    print(f"    Base path: {base_path}")
+    print(f"    Month: {month}, Week: {week}")
+
+    if not os.path.exists(base_path):
+        print(f"    ERROR: Directory does not exist: {base_path}")
+        return None
+
+    possible_names = [
+        f"k1tbl{month}{week}.sas7bdat",
+        f"K1TBL{month}{week}.sas7bdat",
+        f"k1tbl{month}0{week}.sas7bdat",
+        f"K1TBL{month}0{week}.sas7bdat",
+        f"k1tbl{month}.sas7bdat",
+        f"K1TBL{month}.sas7bdat",
+    ]
+
+    print(f"    Looking for exact matches:")
+    for name in possible_names:
+        full_path = os.path.join(base_path, name)
+        exists = os.path.exists(full_path)
+        print(f"      {name}: {'✓ Found' if exists else '✗ Not found'}")
+        if exists:
+            return full_path
+
+    print(f"    Searching with wildcards:")
+    wildcards = [
+        f"*k1tbl*{month}*.sas7bdat",
+        f"*K1TBL*{month}*.sas7bdat",
+        f"*k1tbl*.sas7bdat",
+        f"*K1TBL*.sas7bdat",
+    ]
+
+    for wildcard in wildcards:
+        pattern = os.path.join(base_path, wildcard)
+        matches = glob.glob(pattern)
+        if matches:
+            print(f"      {wildcard}: Found {len(matches)} file(s)")
+            for m in matches[:5]:
+                print(f"        - {os.path.basename(m)}")
+            return matches[0]
+
+    print(f"    No K1TBL files found. Listing directory contents:")
+    debug_directory(base_path, pattern="k1")
+
+    return None
+
+
+def find_k3tbl_file(rep_date, bnmk_path):
+    """Find K3TBL file (BNMK.K3TBL&REPTMON&NOWK) with debugging."""
+    base_path = bnmk_path
+    month = rep_date['mon']
+    week = rep_date['nowk']
+
+    print(f"  Looking for K3TBL file...")
+    print(f"    Base path: {base_path}")
+    print(f"    Month: {month}, Week: {week}")
+
+    if not os.path.exists(base_path):
+        print(f"    ERROR: Directory does not exist: {base_path}")
+        return None
+
+    possible_names = [
+        f"k3tbl{month}{week}.sas7bdat",
+        f"K3TBL{month}{week}.sas7bdat",
+        f"k3tbl{month}0{week}.sas7bdat",
+        f"K3TBL{month}0{week}.sas7bdat",
+        f"k3tbl{month}.sas7bdat",
+        f"K3TBL{month}.sas7bdat",
+    ]
+
+    print(f"    Looking for exact matches:")
+    for name in possible_names:
+        full_path = os.path.join(base_path, name)
+        exists = os.path.exists(full_path)
+        print(f"      {name}: {'✓ Found' if exists else '✗ Not found'}")
+        if exists:
+            return full_path
+
+    print(f"    Searching with wildcards:")
+    wildcards = [
+        f"*k3tbl*{month}*.sas7bdat",
+        f"*K3TBL*{month}*.sas7bdat",
+        f"*k3tbl*.sas7bdat",
+        f"*K3TBL*.sas7bdat",
+    ]
+
+    for wildcard in wildcards:
+        pattern = os.path.join(base_path, wildcard)
+        matches = glob.glob(pattern)
+        if matches:
+            print(f"      {wildcard}: Found {len(matches)} file(s)")
+            for m in matches[:5]:
+                print(f"        - {os.path.basename(m)}")
+            return matches[0]
+
+    print(f"    No K3TBL files found. Listing directory contents:")
+    debug_directory(base_path, pattern="k3")
+
+    return None
+
+
+# =============================================================================
+# K1TBL - direct port of:
+#   DATA K1TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT GWCCY
+#                    GWSHN GWC2R GWDLP GWDLR);
+#      SET BNMK.K1TBL&REPTMON&NOWK (RENAME=(GWMDT=MATDT GWBALC=AMOUNT
+#                                           GWSDT=ISSDT));
+#      IF GWMVT = 'P';
+#      IF GWOCY IN ('XAU','XAT') OR GWCCY IN ('XAU','XAT') THEN DELETE;
+#      ... (see kalmliq.sas for full logic)
+# =============================================================================
+def process_k1tbl(rep_date, bnmk_path):
+    """Process K1TBL from BNMK.K1TBL{REPTMON}{NOWK}"""
+    records = []
+
+    try:
+        k1_filepath = find_k1tbl_file(rep_date, bnmk_path)
+
+        if k1_filepath is None:
+            print(f"  No K1TBL file found")
+            return records
+
+        print(f"  Using K1TBL file: {k1_filepath}")
+        df = read_sas_file(k1_filepath)  # columns normalized to lowercase
+
+        if df is None:
+            return records
+
+        print(f"  Processing K1TBL with {len(df)} rows...")
+        print(f"    Columns ({len(df.columns)}): {df.columns}")
+
+        warn_missing_columns(
+            df,
+            ['gwmvt', 'gwccy', 'gwocy', 'gwmvts', 'gwctp', 'gwdlp', 'gwmdt',
+             'gwsdt', 'gwbalc', 'gwshn', 'gwc2r', 'gwdlr'],
+            'K1TBL'
         )
-        
-        if not mast2_filtered.is_empty():
-            mast2_agg = mast2_filtered.with_columns([
-                pl.col("acctnox").cast(pl.Float64, strict=False)
-                  .cast(pl.Int64, strict=False)
-                  .cast(pl.Utf8)
-                  .alias("acctnox")
-            ]).group_by("acctnox").agg([
-                pl.col("aano").cast(pl.Utf8).str.join("|").alias("allrefno"),
-                pl.col("apvdate").filter(pl.col("apvdate") > 0).min().alias("firstdisbdt")
-            ])
-    
-    if 'facno' in mast2_df.columns and 'ccpt_ltst_review_dt' in mast2_df.columns:
-        mast2c = mast2_df.select([
-            pl.col("acctnox").cast(pl.Float64, strict=False)
-              .cast(pl.Int64, strict=False)
-              .cast(pl.Utf8)
-              .alias("acctnox"),
-            pl.col("facno").cast(pl.Utf8).str.zfill(3).alias("facline"),
-            pl.col("ccpt_ltst_review_dt")
-        ]).unique(subset=["acctnox", "facline"])
-    
-    print(f"MAST2 processed")
 
-# =========================================================
-# 7. PROCESS CRED
-# =========================================================
-print("\nProcessing CRED...")
+        gwmvt_col = 'gwmvt' if 'gwmvt' in df.columns else None
+        if gwmvt_col is None:
+            print(f"    Column 'gwmvt' not found! Available columns: {df.columns}")
+            return records
 
-cred = None
-if data.get('icred') is not None:
-    cred = data['icred'].filter(
-        (pl.col("acctnox").cast(pl.Float64, strict=False) > 2500000000) &
-        (pl.col("acctnox").cast(pl.Float64, strict=False) != 2501900811) &
-        (pl.col("transref").cast(pl.Utf8).str.strip_chars() != "") &
-        (pl.col("outstand").cast(pl.Float64, strict=False) >= 0)
+        unique_gwmvt = df[gwmvt_col].unique().to_list()
+        print(f"    Unique values in GWMVT: {unique_gwmvt}")
+
+        gwmvt_values = df[gwmvt_col].to_list()
+        p_count = sum(1 for v in gwmvt_values if str(v).upper() == 'P')
+        print(f"    Rows with GWMVT = 'P': {p_count}")
+
+        if p_count == 0:
+            print(f"    No rows with GWMVT = 'P'. Sample values: {gwmvt_values[:10]}")
+            return records
+
+        print(f"    Sample rows (first 3):")
+        sample_rows = df.head(3).rows(named=True)
+        for i, row in enumerate(sample_rows):
+            print(f"      Row {i+1}:")
+            for key in ['gwmvt', 'gwccy', 'gwocy', 'gwmvts', 'gwctp', 'gwdlp', 'gwmdt', 'gwbalc']:
+                if key in df.columns:
+                    print(f"        {key}: {row.get(key, 'N/A')}")
+
+        total_rows = 0
+        filtered_out = 0
+        gwmvt_p = 0
+        excluded_currency = 0
+        item_assigned = 0
+
+        for row in df.iter_rows(named=True):
+            total_rows += 1
+
+            gwmvt = str(row.get(gwmvt_col, '') or '').upper()
+
+            # IF GWMVT = 'P';
+            if gwmvt != 'P':
+                filtered_out += 1
+                continue
+            gwmvt_p += 1
+
+            gwccy = str(row.get('gwccy', '') or '').upper() if 'gwccy' in df.columns else ''
+            gwocy = str(row.get('gwocy', '') or '').upper() if 'gwocy' in df.columns else ''
+
+            # IF GWOCY='XAU' THEN DELETE; IF GWCCY='XAU' THEN DELETE;
+            # IF GWOCY='XAT' THEN DELETE; IF GWCCY='XAT' THEN DELETE;
+            if gwocy in ['XAU', 'XAT'] or gwccy in ['XAU', 'XAT']:
+                excluded_currency += 1
+                continue
+
+            gwmvts = str(row.get('gwmvts', '') or '').upper() if 'gwmvts' in df.columns else ''
+            gwctp = str(row.get('gwctp', '') or '').upper() if 'gwctp' in df.columns else ''
+            gwdlp = str(row.get('gwdlp', '') or '').upper() if 'gwdlp' in df.columns else ''
+
+            # RENAME=(GWMDT=MATDT GWBALC=AMOUNT GWSDT=ISSDT)
+            matdt = sas_date_to_pydate(row.get('gwmdt')) if 'gwmdt' in df.columns else None
+            issdt = sas_date_to_pydate(row.get('gwsdt')) if 'gwsdt' in df.columns else None
+            amount = (row.get('gwbalc', 0) or 0) if 'gwbalc' in df.columns else 0
+            gwshn = (row.get('gwshn', '') or '') if 'gwshn' in df.columns else ''
+            gwc2r = (row.get('gwc2r', 0) or 0) if 'gwc2r' in df.columns else 0
+            gwdlr = (row.get('gwdlr', '') or '') if 'gwdlr' in df.columns else ''
+
+            if gwccy == 'MYR':
+                # ----- PART = '95' branch -----
+                part = '95'
+                amtusd = 0
+                amtsgd = 0
+
+                if gwmvts == 'M':
+                    # IF GWDLP IN ('BCD','BCI','BCS','BCQ','BCT','BCW','BQD') THEN ITEM='830'
+                    if gwdlp in ['BCD', 'BCI', 'BCS', 'BCQ', 'BCT', 'BCW', 'BQD']:
+                        item_assigned += 1
+                        records.append({
+                            'part': part, 'item': '830', 'matdt': matdt, 'issdt': issdt,
+                            'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
+                            'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
+                            'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
+                        })
+
+                    # IF SUBSTR(GWCTP,1,1) = 'B' THEN SELECT (GWDLP) ...
+                    if gwctp[:1] == 'B':
+                        if gwdlp in ['LO', 'LC', 'LF', 'LS', 'LOI', 'LSI', 'LSC', 'LSW',
+                                     'FDA', 'FDB', 'FDS', 'FDL', 'LOC', 'LOW']:
+                            item_assigned += 1
+                            records.append({
+                                'part': part, 'item': '610', 'matdt': matdt, 'issdt': issdt,
+                                'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
+                                'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
+                                'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
+                            })
+                        elif gwdlp in ['BO', 'BF', 'BOI', 'BFI', 'BSC', 'BSW', 'BOC', 'BOW']:
+                            item_assigned += 1
+                            records.append({
+                                'part': part, 'item': '810', 'matdt': matdt, 'issdt': issdt,
+                                'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
+                                'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
+                                'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
+                            })
+                        # OTHERWISE; -> no output
+
+                    # SELECT (SUBSTR(GWDLP,2,2)) - independent of the GWCTP check above
+                    dlp23 = gwdlp[1:3] if len(gwdlp) >= 2 else ''
+                    if dlp23 in ['MI', 'MT']:
+                        item_assigned += 1
+                        records.append({
+                            'part': part, 'item': '820', 'matdt': matdt, 'issdt': issdt,
+                            'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
+                            'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
+                            'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
+                        })
+                    elif dlp23 in ['XI', 'XT']:
+                        item_assigned += 1
+                        records.append({
+                            'part': part, 'item': '620', 'matdt': matdt, 'issdt': issdt,
+                            'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
+                            'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
+                            'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
+                        })
+                # (the FXS/FXO/... block is commented out in the SAS source - not ported)
+
+            else:
+                # ----- PART = '96' branch (foreign currency) -----
+                part = '96'
+                amtusd = amount if gwccy == 'USD' else 0
+                amtsgd = amount if gwccy == 'SGD' else 0
+
+                if gwmvts == 'M':
+                    if gwctp[:1] == 'B' and gwctp != 'BW':
+                        if gwdlp in ['LO', 'LC', 'LS', 'LF', 'LOI', 'LSI', 'LSC', 'LOC',
+                                     'FDA', 'FDB', 'FDS', 'FDL', 'LOW', 'LSW']:
+                            item_assigned += 1
+                            records.append({
+                                'part': part, 'item': '610', 'matdt': matdt, 'issdt': issdt,
+                                'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
+                                'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
+                                'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
+                            })
+                        elif gwdlp in ['BC', 'BF', 'BO', 'BSC', 'BOW', 'BSW']:
+                            # IF SUBSTR(GWSHN,1,6) ^= 'FCY-FD' THEN ITEM='810'
+                            if gwshn[:6] != 'FCY-FD':
+                                item_assigned += 1
+                                records.append({
+                                    'part': part, 'item': '810', 'matdt': matdt, 'issdt': issdt,
+                                    'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
+                                    'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
+                                    'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
+                                })
+                        elif gwdlp == 'BOC':
+                            item_assigned += 1
+                            records.append({
+                                'part': part, 'item': '810', 'matdt': matdt, 'issdt': issdt,
+                                'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
+                                'gwccy': gwccy, 'gwshn': gwshn, 'gwc2r': gwc2r,
+                                'gwdlp': gwdlp, 'gwdlr': gwdlr, 'src': 'k1tbl'
+                            })
+                        # OTHERWISE; -> no output
+                # (the FXS/FXO/... block is commented out in the SAS source - not ported)
+
+        print(f"  K1TBL processing stats:")
+        print(f"    Total rows: {total_rows}")
+        print(f"    Filtered out (GWMVT != 'P'): {filtered_out}")
+        print(f"    Passed GWMVT = 'P': {gwmvt_p}")
+        print(f"    Excluded (XAU/XAT currency): {excluded_currency}")
+        print(f"    Records with item assigned: {item_assigned}")
+
+    except Exception as e:
+        print(f"  K1TBL warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+# =============================================================================
+# K3TBL - direct port of:
+#   DATA K3TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT UTCCY
+#                    UTCUS UTCTP UTSTY UTDLR UTDLP);
+#      RETAIN PART '95';
+#      SET BNMK.K3TBL&REPTMON&NOWK;
+#      ... (see kalmliq.sas for full logic)
+#
+# NOTE: unlike K1TBL, K3TBL's source table already has native MATDT/ISSDT
+# columns (no RENAME needed) - confirmed against the real file's column
+# dump ('matdt', 'issdt' present directly).
+# =============================================================================
+def process_k3tbl(rep_date, bnmk_path, inst='PBB'):
+    """Process K3TBL from BNMK.K3TBL{REPTMON}{NOWK}"""
+    records = []
+
+    try:
+        k3_filepath = find_k3tbl_file(rep_date, bnmk_path)
+
+        if k3_filepath is None:
+            print(f"  No K3TBL file found")
+            return records
+
+        print(f"  Using K3TBL file: {k3_filepath}")
+        df = read_sas_file(k3_filepath)  # columns normalized to lowercase
+
+        if df is None:
+            return records
+
+        print(f"  Processing K3TBL with {len(df)} rows...")
+        print(f"    Columns ({len(df.columns)}): {df.columns}")
+
+        warn_missing_columns(
+            df,
+            ['utref', 'utsty', 'utdlp', 'utcus', 'utclc', 'utctp', 'matdt',
+             'issdt', 'utamoc', 'utdpf', 'utccy', 'utdlr', 'utaict', 'utpcp',
+             'utdpey', 'utdpe', 'utaicy', 'utait', 'utmm1'],
+            'K3TBL'
+        )
+
+        utref_col = 'utref' if 'utref' in df.columns else None
+        if utref_col:
+            unique_utref = df[utref_col].unique().to_list()
+            print(f"    Unique values in UTREF: {unique_utref[:20]}")
+        else:
+            print(f"    Column 'utref' not found!")
+
+        utsty_col = 'utsty' if 'utsty' in df.columns else None
+        if utsty_col:
+            unique_utsty = df[utsty_col].unique().to_list()
+            print(f"    Unique values in UTSTY: {unique_utsty[:20]}")
+
+        matdt_col = 'matdt' if 'matdt' in df.columns else None
+        issdt_col = 'issdt' if 'issdt' in df.columns else None
+        if matdt_col is None:
+            print("    !! WARNING [K3TBL]: no maturity date column found - "
+                  "all K3TBL records will be dropped in build_ktblall().")
+
+        print(f"    Sample rows (first 3):")
+        sample_rows = df.head(3).rows(named=True)
+        for i, row in enumerate(sample_rows):
+            print(f"      Row {i+1}:")
+            for key in ['utref', 'utsty', 'utdlp', 'utcus', 'utctp', 'matdt', 'utamoc', 'utdpf']:
+                if key in df.columns:
+                    print(f"        {key}: {row.get(key, 'N/A')}")
+
+        total_rows = 0
+        utref_match = 0
+        item_assigned = 0
+        matdt_missing = 0
+
+        for row in df.iter_rows(named=True):
+            total_rows += 1
+
+            # AMOUNT = UTAMOC - UTDPF; IF UTSTY='IDC' THEN AMOUNT=UTAMOC + UTDPF;
+            utamoc = (row.get('utamoc', 0) or 0) if 'utamoc' in df.columns else 0
+            utdpf = (row.get('utdpf', 0) or 0) if 'utdpf' in df.columns else 0
+            utsty = str(row.get(utsty_col, '') or '').upper() if utsty_col else ''
+            amount = (utamoc + utdpf) if utsty == 'IDC' else (utamoc - utdpf)
+
+            # IF &INST='PBB' THEN ...
+            utccy = str(row.get('utccy', 'MYR') or 'MYR').upper() if 'utccy' in df.columns else 'MYR'
+            amtusd = amount if (inst == 'PBB' and utccy == 'USD') else 0
+            amtsgd = amount if (inst == 'PBB' and utccy == 'SGD') else 0
+
+            utcus = row.get('utcus', '') if 'utcus' in df.columns else ''
+            utctp = row.get('utctp', 0) if 'utctp' in df.columns else 0
+            utdlr = (row.get('utdlr', '') or '') if 'utdlr' in df.columns else ''
+            utdlp = str(row.get('utdlp', '') or '').upper() if 'utdlp' in df.columns else ''
+            utref = str(row.get(utref_col, '') or '').upper() if utref_col else ''
+            utaict = (row.get('utaict', 0) or 0) if 'utaict' in df.columns else 0
+            utpcp = (row.get('utpcp', 0) or 0) if 'utpcp' in df.columns else 0
+            utdpey = (row.get('utdpey', 0) or 0) if 'utdpey' in df.columns else 0
+            utdpe = (row.get('utdpe', 0) or 0) if 'utdpe' in df.columns else 0
+            utaicy = (row.get('utaicy', 0) or 0) if 'utaicy' in df.columns else 0
+            utait = (row.get('utait', 0) or 0) if 'utait' in df.columns else 0
+            utmm1 = str(row.get('utmm1', '') or '').upper() if 'utmm1' in df.columns else ''
+
+            matdt = sas_date_to_pydate(row.get(matdt_col)) if matdt_col else None
+            # ISSDT is extracted here (used by build_ktblall for ORI30D)
+            # since K3TBL's KEEP list includes it, exactly like K1TBL.
+            issdt = sas_date_to_pydate(row.get(issdt_col)) if issdt_col else None
+            if matdt is None:
+                matdt_missing += 1
+
+            part = '95'  # RETAIN PART '95';
+
+            def emit(it, amt):
+                records.append({
+                    'part': part, 'item': it, 'matdt': matdt, 'issdt': issdt,
+                    'amount': amt, 'amtusd': amtusd, 'amtsgd': amtsgd,
+                    'utccy': utccy, 'utcus': utcus, 'utctp': utctp,
+                    'utdlr': utdlr, 'utdlp': utdlp, 'src': 'k3tbl'
+                })
+
+            # IF UTREF IN ('INV','DRI','DLG','AFSLIQ','AFSBOND','IAFSLIQ','AFS','IAFS') THEN DO;
+            if utref in ['INV', 'DRI', 'DLG', 'AFSLIQ', 'AFSBOND', 'IAFSLIQ', 'AFS', 'IAFS']:
+                utref_match += 1
+                if utsty in ['CB1', 'CB2', 'CF1', 'CF2', 'CNT', 'MGS', 'MTB', 'BNB', 'BNN',
+                             'ITB', 'SAC', 'BMN', 'BMC', 'BMF', 'SCD', 'SCM', 'CMB', 'MGI', 'SMC']:
+                    amt = amount + utaict if inst == 'PBB' else amount
+                    item_assigned += 1
+                    emit('631', amt)
+                elif utsty == 'SDC':
+                    amt = (utamoc * (utpcp / 100)) + utdpey + utdpe if inst == 'PBB' else amount
+                    item_assigned += 1
+                    emit('632', amt)
+                elif utsty == 'LDC':
+                    amt = amount + utaict if inst == 'PBB' else amount
+                    item_assigned += 1
+                    emit('632', amt)
+                elif utsty in ['SLD', 'SSD']:
+                    amt = (utamoc * (utpcp / 100)) + utaicy + utait if inst == 'PBB' else amount
+                    item_assigned += 1
+                    emit('632', amt)
+                elif utsty in ['SFD', 'SZD']:
+                    amt = amount + utaict if inst == 'PBB' else amount
+                    item_assigned += 1
+                    emit('632', amt)
+                elif utsty == 'SBA':
+                    if utdlp not in ['MOS', 'MSS']:
+                        item_assigned += 1
+                        emit('633', amount)
+                elif utsty in ['ISB', 'DHB', 'KHA', 'PNB']:
+                    item_assigned += 1
+                    emit('636', amount)
+                elif utsty == 'IDS':
+                    item_assigned += 1
+                    emit('635', amount)
+                elif utsty == 'DBD':
+                    # NOTE: SAS has WHEN('DBD')->'634' listed BEFORE
+                    # WHEN('DMB','DBD','GRL','MTL','RUL')->'635'. SELECT/WHEN
+                    # stops at the first match, so DBD always resolves to
+                    # '634' here; the second WHEN's 'DBD' is unreachable.
+                    item_assigned += 1
+                    emit('634', amount)
+                elif utsty in ['DMB', 'GRL', 'MTL', 'RUL']:
+                    item_assigned += 1
+                    emit('635', amount)
+                elif utsty == 'PBA':
+                    if utdlp in ['MOS', 'MSS']:
+                        item_assigned += 1
+                        emit('850', amount)
+                # OTHERWISE; -> no output
+
+            # ELSE IF UTREF IN ('PFD','PLD','PSD','PZD','PDC') THEN DO;
+            elif utref in ['PFD', 'PLD', 'PSD', 'PZD', 'PDC']:
+                utref_match += 1
+                if utsty in ['IFD', 'ILD', 'ISD', 'IZD', 'IDC', 'IDP', 'IZP']:
+                    item_assigned += 1
+                    emit('840', amount)
+
+            # ELSE IF UTREF IN ('IINV','IDRI','IDLG') THEN DO;
+            elif utref in ['IINV', 'IDRI', 'IDLG']:
+                utref_match += 1
+                if utsty == 'SBA' and utdlp == 'IOP':
+                    item_assigned += 1
+                    emit('633', amount)
+                elif utsty in ['SDC', 'LDC']:
+                    item_assigned += 1
+                    emit('632', amount)
+                elif utsty in ['CB1', 'CB2', 'CF1', 'CF2', 'CNT', 'MGI', 'ITB', 'SAC', 'BMN',
+                               'BMC', 'BMF', 'SCD', 'SCM', 'MGS', 'MTB', 'BNB', 'BNN', 'CMB', 'SMC']:
+                    amt = amount + utaict if inst == 'PBB' else amount
+                    item_assigned += 1
+                    emit('631', amt)
+                elif utsty in ['ISB', 'IDS', 'IBZ', 'ICN']:
+                    # SAS: IF UTMM1='GGB' THEN ITEM='636';
+                    #      ELSE IF UTMM1='NGB' THEN ITEM='635';
+                    #      AMOUNT = AMOUNT + UTAICT; OUTPUT;
+                    # If neither GGB nor NGB, SAS would retain whatever ITEM
+                    # held from a prior loop iteration (an edge case we
+                    # don't replicate) - we simply skip emitting a record,
+                    # since a genuinely blank ITEM is dropped downstream
+                    # anyway by build_ktblall's "IF ITEM ^= ' '" filter.
+                    if utmm1 == 'GGB':
+                        item_assigned += 1
+                        emit('636', amount + utaict)
+                    elif utmm1 == 'NGB':
+                        item_assigned += 1
+                        emit('635', amount + utaict)
+                elif utsty in ['DHB', 'KHA']:
+                    item_assigned += 1
+                    emit('636', amount)
+                elif utsty == 'DBD':
+                    item_assigned += 1
+                    emit('634', amount)
+
+            # IF UTSTY IN ('SIP') THEN DO; ITEM='610'; OUTPUT; END;
+            # (unconditional - outside/after the UTREF if/elif chain above,
+            # exactly as in the SAS source, so it can fire in addition to
+            # one of the branches above for the same row)
+            if utsty == 'SIP':
+                item_assigned += 1
+                emit('610', amount)
+
+        print(f"  K3TBL processing stats:")
+        print(f"    Total rows: {total_rows}")
+        print(f"    Rows matching UTREF patterns: {utref_match}")
+        print(f"    Records with item assigned: {item_assigned}")
+        print(f"    Records with matdt missing/None (will be dropped by build_ktblall): {matdt_missing}")
+
+    except Exception as e:
+        print(f"  K3TBL warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+# =============================================================================
+# K1TBX - direct port of KAMLIQX.sas (K1TBX / K1TBX1 / K1TBX2 / final K1TBX).
+#
+# Produces FX-swap-related BNM items (711/911) that get stacked into
+# KTBLALL alongside K1TBL/K3TBL - this is the 'K1TBX' dataset referenced
+# in "SET K1TBL(IN=A) K3TBL(IN=B) K1TBX;".
+#
+# Re-reads the same BNMK.K1TBL{REPTMON}{NOWK} file as process_k1tbl(),
+# since that's what the SAS source does - a second SET of the same table
+# with a different RENAME/filter/derivation than the main K1TBL step.
+# =============================================================================
+def _k1tbx_select_gwctp(gwctp, code, gwcnal, gwsac, has_ce_when=False, otherwise_extra_ce=False):
+    """
+    Port of the repeated:
+        SELECT(GWCTP);
+          WHEN('BC') BNMCODE=code;
+          WHEN('BB') BNMCODE=code;
+          WHEN('BI') BNMCODE=code;
+          WHEN('BM') BNMCODE=code;
+          [WHEN('CE') BNMCODE=code;]                    <- only if has_ce_when
+          WHEN('BA','BW','BE') BNMCODE=code;
+          OTHERWISE DO;
+            IF NOT('BA' <= GWCTP <= 'BZ') AND GWCNAL EQ 'MY' AND GWSAC NE 'UF' THEN BNMCODE=code;
+            [IF GWCTP='CE' THEN BNMCODE=code;]           <- only if otherwise_extra_ce
+            IF GWSAC EQ 'UF' THEN BNMCODE=code;
+          END;
+        END;
+    block used across the FXS / FXO,FXF / SF1,SF2,TS1,TS2,FF1,FF2
+    branches. The two boolean flags capture the small differences
+    between branches (see call sites below for exactly which branch
+    uses which flag combination - verified line-by-line against the
+    KAMLIQX source).
+    """
+    if gwctp in ('BC', 'BB', 'BI', 'BM'):
+        return code
+    if has_ce_when and gwctp == 'CE':
+        return code
+    if gwctp in ('BA', 'BW', 'BE'):
+        return code
+    # OTHERWISE
+    if not ('BA' <= gwctp <= 'BZ') and gwcnal == 'MY' and gwsac != 'UF':
+        return code
+    if otherwise_extra_ce and gwctp == 'CE':
+        return code
+    if gwsac == 'UF':
+        return code
+    return None
+
+
+def process_k1tbx(rep_date, bnmk_path):
+    """Process K1TBX (FX swap items) from BNMK.K1TBL{REPTMON}{NOWK}."""
+    records = []
+
+    try:
+        k1_filepath = find_k1tbl_file(rep_date, bnmk_path)
+        if k1_filepath is None:
+            print("  No K1TBL file found (needed for K1TBX)")
+            return records
+
+        print(f"  Using K1TBL file for K1TBX: {k1_filepath}")
+        df = read_sas_file(k1_filepath)
+        if df is None:
+            return records
+
+        warn_missing_columns(
+            df,
+            ['gwmvt', 'gwocy', 'gwccy', 'gwmdt', 'gwbalc', 'gwdlp', 'gwmvts',
+             'gwctp', 'gwcnal', 'gwsac'],
+            'K1TBX'
+        )
+
+        # ----- DATA K1TBX; (base filter, shared by K1TBX1 and K1TBX2) -----
+        base_rows = []
+        for row in df.iter_rows(named=True):
+            gwmvt = str(row.get('gwmvt', '') or '').upper()
+            # IF GWMVT = 'P';
+            if gwmvt != 'P':
+                continue
+
+            gwocy = str(row.get('gwocy', '') or '').upper()
+            gwccy = str(row.get('gwccy', '') or '').upper()
+            # IF GWOCY='XAU' THEN DELETE; IF GWCCY='XAU' THEN DELETE;
+            # (NOTE: unlike process_k1tbl, XAT is NOT excluded here -
+            # faithful to KAMLIQX, which only excludes XAU, not XAT)
+            if gwocy == 'XAU' or gwccy == 'XAU':
+                continue
+
+            gwdlp = str(row.get('gwdlp', '') or '').upper()
+            # IF GWDLP IN ('FXS','FXO','FXF','SF1','SF2','TS1','TS2','FBP','FF1','FF2');
+            if gwdlp not in ['FXS', 'FXO', 'FXF', 'SF1', 'SF2', 'TS1', 'TS2', 'FBP', 'FF1', 'FF2']:
+                continue
+
+            matdt = sas_date_to_pydate(row.get('gwmdt'))  # RENAME=(GWMDT=MATDT)
+            amount = row.get('gwbalc', 0) or 0            # RENAME=(GWBALC=AMOUNT)
+            amtusd = amount if gwccy == 'USD' else 0.0
+            amtsgd = amount if gwccy == 'SGD' else 0.0
+
+            base_rows.append({
+                'gwmvt': gwmvt, 'gwocy': gwocy, 'gwccy': gwccy, 'gwdlp': gwdlp,
+                'gwmvts': str(row.get('gwmvts', '') or '').upper(),
+                'gwctp': str(row.get('gwctp', '') or '').upper(),
+                'gwcnal': str(row.get('gwcnal', '') or '').upper(),
+                'gwsac': str(row.get('gwsac', '') or '').upper(),
+                'matdt': matdt, 'amount': amount, 'amtusd': amtusd, 'amtsgd': amtsgd,
+            })
+
+        print(f"  K1TBX base rows (GWMVT='P', not XAU, GWDLP in swap set): {len(base_rows):,}")
+
+        # ----- DATA K1TBX1; (domestic-leg swap classification) -----
+        k1tbx1 = []
+        for r in base_rows:
+            bnmcode = None
+            gwdlp = r['gwdlp']
+            gwctp, gwcnal, gwsac = r['gwctp'], r['gwcnal'], r['gwsac']
+
+            # IF GWOCY EQ 'MYR' AND GWMVT EQ 'P' AND GWMVTS EQ 'P' THEN ... (-> '57100')
+            if r['gwocy'] == 'MYR' and r['gwmvt'] == 'P' and r['gwmvts'] == 'P':
+                if gwdlp == 'FXS' and r['gwccy'] != 'MYR':
+                    bnmcode = _k1tbx_select_gwctp(gwctp, '57100', gwcnal, gwsac, has_ce_when=True)
+                elif gwdlp == 'FBP' and r['gwccy'] != 'MYR':
+                    bnmcode = '57100'
+                elif gwdlp in ('FXO', 'FXF') and r['gwccy'] != 'MYR':
+                    bnmcode = _k1tbx_select_gwctp(gwctp, '57100', gwcnal, gwsac)
+                elif gwdlp in ('SF1', 'SF2', 'TS1', 'TS2', 'FF1', 'FF2') and r['gwccy'] != 'MYR':
+                    bnmcode = _k1tbx_select_gwctp(gwctp, '57100', gwcnal, gwsac)
+
+            # IF GWOCY EQ 'MYR' AND GWMVT EQ 'P' AND GWMVTS EQ 'S' THEN ... (-> '57400')
+            # (note: no FBP branch in this block - asymmetric vs the 'P' block above,
+            # faithful to the source)
+            if r['gwocy'] == 'MYR' and r['gwmvt'] == 'P' and r['gwmvts'] == 'S':
+                if gwdlp == 'FXS' and r['gwccy'] != 'MYR':
+                    bnmcode = _k1tbx_select_gwctp(gwctp, '57400', gwcnal, gwsac, has_ce_when=True)
+                elif gwdlp in ('FXO', 'FXF') and r['gwccy'] != 'MYR':
+                    bnmcode = _k1tbx_select_gwctp(gwctp, '57400', gwcnal, gwsac, otherwise_extra_ce=True)
+                elif gwdlp in ('SF1', 'SF2', 'TS1', 'TS2', 'FF1', 'FF2') and r['gwccy'] != 'MYR':
+                    bnmcode = _k1tbx_select_gwctp(gwctp, '57400', gwcnal, gwsac)
+
+            if bnmcode:
+                k1tbx1.append({**r, 'bnmcode': bnmcode})
+
+        # ----- DATA K1TBX2; (both legs foreign currency -> '57600') -----
+        k1tbx2 = []
+        for r in base_rows:
+            if (r['gwccy'] != 'MYR' and r['gwocy'] != 'MYR' and
+                    r['gwmvt'] == 'P' and r['gwmvts'] == 'P' and
+                    r['gwdlp'] in ('FXS', 'FXO', 'FXF', 'SF2', 'FF1', 'FF2', 'SF1', 'TS1', 'TS2')):
+                k1tbx2.append({**r, 'bnmcode': '57600'})
+
+        print(f"  K1TBX1 (domestic-leg matches): {len(k1tbx1):,}, K1TBX2 (both-foreign matches): {len(k1tbx2):,}")
+
+        # ----- final DATA K1TBX; (expand each match into PART/ITEM pairs) -----
+        for r in k1tbx1 + k1tbx2:
+            amt = abs(r['amount']) if r['amount'] < 0 else r['amount']
+            bnmcode = r['bnmcode']
+            matdt = r['matdt']
+
+            if bnmcode == '57100':
+                records.append({'part': '95', 'item': '911', 'matdt': matdt,
+                                 'amount': amt, 'amtusd': 0.0, 'amtsgd': 0.0, 'src': 'k1tbx'})
+                records.append({'part': '96', 'item': '711', 'matdt': matdt,
+                                 'amount': amt, 'amtusd': 0.0, 'amtsgd': 0.0, 'src': 'k1tbx'})
+            elif bnmcode == '57400':
+                records.append({'part': '95', 'item': '711', 'matdt': matdt,
+                                 'amount': amt, 'amtusd': 0.0, 'amtsgd': 0.0, 'src': 'k1tbx'})
+                records.append({'part': '96', 'item': '911', 'matdt': matdt,
+                                 'amount': amt, 'amtusd': 0.0, 'amtsgd': 0.0, 'src': 'k1tbx'})
+            elif bnmcode == '57600':
+                records.append({'part': '96', 'item': '711', 'matdt': matdt,
+                                 'amount': amt, 'amtusd': r['amtusd'], 'amtsgd': r['amtsgd'], 'src': 'k1tbx'})
+                records.append({'part': '96', 'item': '911', 'matdt': matdt,
+                                 'amount': amt, 'amtusd': r['amtusd'], 'amtsgd': r['amtsgd'], 'src': 'k1tbx'})
+
+        print(f"  K1TBX final records (each match expands to 2 PART/ITEM rows): {len(records):,}")
+
+    except Exception as e:
+        print(f"  K1TBX warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+# =============================================================================
+# K3TBL3 - direct port of KALMLIQ4.sas.
+#
+# Produces additional repo-related treasury records (BNM items 820/830)
+# from BNMK.K3TBL{REPTMON}{NOWK}, filtered to UTREF='RRS'/UTSTY='MGS'/
+# UTDLP='MSS' (repo sales of MGS securities).
+#
+# See the "REMAINING KNOWN GAPS" note at the top of this file re: how
+# this merges with K3TBL, and the $CTYPE. format dependency.
+# =============================================================================
+IREP_CODES = {'01', '02', '11', '12', '81'}
+NREP_CODES = {'13', '17', '20', '60', '71', '72', '74', '76', '79', '85'}
+
+
+def process_k3tbl3(rep_date, bnmk_path, ctype_lookup=None):
+    """
+    Process K3TBL3 (repo item 820/830 records) from BNMK.K3TBL{REPTMON}{NOWK}.
+
+    ctype_lookup: dict mapping raw UTCTP values -> 2-digit CUST codes,
+    equivalent to the $CTYPE. SAS format. Pass the real mapping once you
+    have the PROC FORMAT definitions; until then this returns 0 records
+    (matching what the SAS source itself does with CUST unresolved).
+    """
+    records = []
+    ctype_lookup = ctype_lookup or {}
+
+    try:
+        k3_filepath = find_k3tbl_file(rep_date, bnmk_path)
+        if k3_filepath is None:
+            print("  No K3TBL file found (needed for K3TBL3)")
+            return records
+
+        print(f"  Using K3TBL file for K3TBL3: {k3_filepath}")
+        df = read_sas_file(k3_filepath)
+        if df is None:
+            return records
+
+        warn_missing_columns(
+            df,
+            ['utref', 'utsty', 'utdlp', 'issdt', 'utpcp', 'utfcv', 'utaict',
+             'utctp', 'utidt', 'utccy', 'utcus', 'utdlr', 'matdt'],
+            'K3TBL3'
+        )
+
+        if not ctype_lookup:
+            print("    NOTE [K3TBL3]: $CTYPE. format lookup not populated - "
+                  "'cust' will be blank for every row, so K3TBL3 will produce "
+                  "0 records until ctype_lookup is filled in with the real "
+                  "PROC FORMAT mapping.")
+
+        total_rows = 0
+        matched = 0
+        item_assigned = 0
+
+        for row in df.iter_rows(named=True):
+            total_rows += 1
+
+            utref = str(row.get('utref', '') or '').upper()
+            utsty = str(row.get('utsty', '') or '').upper()
+            utdlp = str(row.get('utdlp', '') or '').upper()
+
+            # IF UTREF='RRS' AND UTSTY='MGS' AND UTDLP='MSS';
+            if not (utref == 'RRS' and utsty == 'MGS' and utdlp == 'MSS'):
+                continue
+            matched += 1
+
+            issdt = sas_date_to_pydate(row.get('issdt'))
+            # IF ISSDT > REPTDATE THEN DELETE;
+            if issdt and issdt > rep_date['date']:
+                continue
+
+            utpcp = row.get('utpcp', 0) or 0
+            utfcv = row.get('utfcv', 0) or 0
+            utaict = row.get('utaict', 0) or 0
+            # AMOUNT=(UTPCP*UTFCV)*0.01; AMOUNT=SUM(AMOUNT,UTAICT); /* SALES PROCEEDS */
+            amount = (utpcp * utfcv) * 0.01
+            amount = amount + utaict
+
+            # CUST=PUT(UTCTP,$CTYPE.);
+            utctp_raw = row.get('utctp', '')
+            cust = ctype_lookup.get(utctp_raw, '')
+
+            matdt = sas_date_to_pydate(row.get('matdt'))
+            utidt_raw = row.get('utidt')
+            # IF UTIDT NE ' ' THEN MATDT=INPUT(UTIDT,YYMMDD10.);
+            if utidt_raw not in (None, '', ' '):
+                parsed = None
+                if isinstance(utidt_raw, str):
+                    try:
+                        parsed = datetime.strptime(utidt_raw.strip(), '%Y-%m-%d').date()
+                    except ValueError:
+                        parsed = None
+                else:
+                    parsed = sas_date_to_pydate(utidt_raw)
+                if parsed is not None:
+                    matdt = parsed
+
+            # IF CUST IN &NREP THEN ITEM='830'; ELSE IF CUST IN &IREP THEN ITEM='820';
+            item = None
+            if cust in NREP_CODES:
+                item = '830'
+            elif cust in IREP_CODES:
+                item = '820'
+
+            # IF CUST NE '  '; (drop rows with blank CUST - includes the
+            # unresolved-format case where cust defaults to '')
+            if not cust or not cust.strip():
+                continue
+
+            if item is None:
+                # CUST resolved but isn't in either list. SAS would still
+                # output the row with ITEM blank; build_ktblall's own
+                # "IF ITEM ^= ' '" filter would drop it downstream anyway,
+                # so we just don't emit it here.
+                continue
+
+            item_assigned += 1
+            records.append({
+                'part': '95', 'item': item, 'matdt': matdt, 'issdt': issdt,
+                'amount': amount, 'amtusd': 0, 'amtsgd': 0,
+                'utccy': row.get('utccy', 'MYR'), 'utcus': row.get('utcus', ''),
+                'utctp': row.get('utctp', 0),
+                'utdlr': row.get('utdlr', ''), 'utdlp': utdlp,
+                'src': 'k3tbl3'
+            })
+
+        print(f"  K3TBL3 processing stats:")
+        print(f"    Total rows: {total_rows}")
+        print(f"    Rows matching UTREF=RRS/UTSTY=MGS/UTDLP=MSS: {matched}")
+        print(f"    Records with item assigned: {item_assigned}")
+
+    except Exception as e:
+        print(f"  K3TBL3 warning: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return records
+
+
+# =============================================================================
+# KTBLALL - direct port of:
+#   DATA KTBL (KEEP=BNMCODE AMOUNT AMTUSD AMTSGD) KTBLALL;
+#      SET K1TBL(IN=A) K3TBL(IN=B) K1TBX;    <- K1TBX not available, see module docstring
+#      IF ITEM ^= ' ';
+#      IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1; ELSE %REMMTH;
+#      IF MATDT - ISSDT    < 8 THEN ORI30D = 0.1; ELSE ORI30D = (MATDT-ISSDT)/30;
+#      BNMCODE = PART||ITEM||'00'||PUT(REMMTH,REMFMT.)||'0000Y';
+#      OUTPUT;
+#      IF PART = '95' THEN SUBSTR(BNMCODE,1,2) = '93'; ELSE SUBSTR(BNMCODE,1,2)='94';
+#      OUTPUT;
+# =============================================================================
+def build_ktblall(k1_records, k3_records, rep_date):
+    """
+    Build KTBLALL from K1 and K3 records. Applies identically to both
+    sources (both are normalized to have part/item/matdt/issdt/amount by
+    the time they get here) - matching how the SAS KTBLALL step treats
+    the stacked K1TBL+K3TBL(+K1TBX) the same way regardless of source.
+    """
+    all_records = []
+
+    def process_source(src_records, ccy_key, custfiss_key, custno_val_fn, dealtype_key, dealref_key):
+        for r in src_records:
+            if not (r.get('item') and r.get('matdt')):
+                continue
+
+            matdt = r['matdt']
+            issdt = r.get('issdt')
+
+            # IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1; ELSE %REMMTH;
+            if (matdt - rep_date['date']).days < 8:
+                remmth = 0.1
+                rem30d = 0
+            else:
+                remmth, rem30d = calculate_remaining_months(
+                    matdt, rep_date['date'], rep_date['days_in_month']
+                )
+
+            # IF MATDT - ISSDT < 8 THEN ORI30D = 0.1; ELSE ORI30D = (MATDT-ISSDT)/30;
+            if issdt and (matdt - issdt).days < 8:
+                ori30d = 0.1
+            elif issdt:
+                ori30d = (matdt - issdt).days / 30
+            else:
+                ori30d = 0
+
+            part = r['part']
+            item = r['item']
+            bnmcode = f"{part}{item}00{format_mth_bucket(remmth)}0000Y"
+
+            base = {
+                'src': r['src'], 'bnmcode': bnmcode, 'part': part, 'item': item,
+                'cur': r.get(ccy_key, 'MYR'), 'amt': r['amount'],
+                'amtusd': r.get('amtusd', 0), 'amtsgd': r.get('amtsgd', 0),
+                'custfiss': r.get(custfiss_key, 0), 'custno': custno_val_fn(r),
+                'dealtype': r.get(dealtype_key, ''), 'dealref': r.get(dealref_key, ''),
+                'remmth': remmth, 'rem30d': rem30d, 'ori30d': ori30d, 'matdt': matdt
+            }
+            all_records.append(base)
+
+            # PART 1 duplicate: 95->93, else->94
+            new_part = '93' if part == '95' else '94'
+            dup = dict(base)
+            dup['src'] = r['src'] + '_part1'
+            dup['bnmcode'] = f"{new_part}{item}00{format_mth_bucket(remmth)}0000Y"
+            dup['part'] = new_part
+            all_records.append(dup)
+
+    process_source(
+        k1_records, ccy_key='gwccy', custfiss_key='gwc2r',
+        custno_val_fn=lambda r: None,
+        dealtype_key='gwdlp', dealref_key='gwdlr'
     )
-    
-    cred = cred.with_columns([
-        pl.when(
-            (pl.col("maturedx").cast(pl.Utf8) == "000000") | 
-            (pl.col("maturedx").cast(pl.Utf8).str.strip_chars() == "")
-        ).then(pl.lit(99999)).otherwise(
-            pl.col("maturedx").cast(pl.Utf8).str.strptime(pl.Date, "%y%m%d").cast(pl.Int64)
-        ).alias("matureds")
-    ])
-    
-    cred = cred.with_columns([
-        pl.when(
-            (pl.col("matureds") > 0) & (pl.col("matureds") <= RDATE)
-        ).then(
-            pl.lit(RDATE) - pl.col("matureds") + 1
-        ).otherwise(pl.lit(0)).alias("nodays")
-    ])
-    
-    cred = cred.with_columns([
-        pl.when(
-            (pl.col("matureds") > 0) & 
-            (pl.col("matureds") <= RDATE) &
-            ((pl.lit(RDATE) - pl.col("matureds") + 1) > 0)
-        ).then(
-            pl.col("nodays").map_elements(
-                lambda x: dayr_format(x), return_dtype=pl.Int64
-            )
-        ).otherwise(pl.lit(0)).alias("arrears"),
-        
-        pl.when(pl.col("nodays") > 0).then(1).otherwise(0).alias("instalm"),
-        
-        pl.col("transref").cast(pl.Utf8).str.slice(0, 7).alias("transrex"),
-        pl.col("outstand").cast(pl.Float64, strict=False).alias("outstandx")
-    ])
-    
-    cred = cred.with_columns([
-        pl.col("acctnox").cast(pl.Float64, strict=False)
-          .cast(pl.Int64, strict=False)
-          .cast(pl.Utf8)
-          .alias("acctnox")
-    ])
-    
-    cred = cred.unique(subset=["acctnox", "transref"])
-    print(f"CRED processed: {cred.height} rows")
-
-# =========================================================
-# 8. PROCESS BNM TRADE DATA
-# =========================================================
-print("\nProcessing BNM Trade data...")
-
-if data.get('ibtrad') is not None and cred is not None:
-    transref_col = 'transrex' if 'transrex' in data['ibtrad'].columns else 'transref'
-    acctno_col = 'acctnox' if 'acctnox' in data['ibtrad'].columns else 'acctno'
-    
-    btrax = data['ibtrad'].select([
-        pl.col(acctno_col).cast(pl.Float64, strict=False)
-          .cast(pl.Int64, strict=False)
-          .cast(pl.Utf8)
-          .alias("acctnox"),
-        pl.col(transref_col).cast(pl.Utf8).str.slice(0, 7).alias("transrex"),
-        pl.col("repaid").cast(pl.Float64, strict=False),
-        pl.col("disburse").cast(pl.Float64, strict=False),
-        pl.col("mtd_tawidh_amt").cast(pl.Float64, strict=False),
-        pl.col("mtd_gharamah_amt").cast(pl.Float64, strict=False)
-    ])
-    
-    btrad = data['ibtrad'].filter(
-        pl.col("balance").cast(pl.Float64, strict=False) > 0
-    ).select([
-        pl.col(acctno_col).cast(pl.Float64, strict=False)
-          .cast(pl.Int64, strict=False)
-          .cast(pl.Utf8)
-          .alias("acctnox"),
-        pl.col(transref_col).cast(pl.Utf8).str.slice(0, 7).alias("transrex"),
-        pl.col("balance").cast(pl.Float64, strict=False),
-        pl.col("intrecv").cast(pl.Float64, strict=False),
-        pl.col("unearned").cast(pl.Float64, strict=False),
-        pl.col("liabcode"),
-        pl.col("utrdf")
-    ])
-    
-    if data.get('ibtdtl') is not None:
-        ibtdtl_transref_col = 'transrex' if 'transrex' in data['ibtdtl'].columns else 'transref'
-        ibtdtl_acctno_col = 'acctnox' if 'acctnox' in data['ibtdtl'].columns else 'acctno'
-        
-        intrt = data['ibtdtl'].select([
-            pl.col(ibtdtl_acctno_col).cast(pl.Float64, strict=False)
-              .cast(pl.Int64, strict=False)
-              .cast(pl.Utf8)
-              .alias("acctnox"),
-            pl.col(ibtdtl_transref_col).cast(pl.Utf8).str.slice(0, 7).alias("transrex"),
-            pl.col("intrate").cast(pl.Float64, strict=False),
-            pl.col("commrate").cast(pl.Float64, strict=False),
-            pl.col("discrate").cast(pl.Float64, strict=False),
-            pl.col("combrate").cast(pl.Float64, strict=False),
-            pl.col("prinamt_myrx").cast(pl.Float64, strict=False),
-            pl.col("intamt_myrx").cast(pl.Float64, strict=False),
-            pl.col("oth_chargex").cast(pl.Float64, strict=False),
-            pl.col("prodgrp")
-        ])
-        btrax = btrax.join(intrt, on=["acctnox", "transrex"], how="left")
-    
-    cred = cred.join(btrad, on=["acctnox", "transrex"], how="left", suffix="_btrad")
-    cred = cred.join(btrax, on=["acctnox", "transrex"], how="left", suffix="_btrax")
-    
-    cred = cred.with_columns([
-        pl.when(
-            (pl.col("balance").is_not_null()) & (pl.col("balance") > 0)
-        ).then(pl.col("balance")).otherwise(0).alias("outstand"),
-        pl.col("unearned").fill_null(0),
-        pl.col("repaid").fill_null(0),
-        pl.col("disburse").fill_null(0),
-        pl.col("mtd_tawidh_amt").fill_null(0),
-        pl.col("mtd_gharamah_amt").fill_null(0)
-    ])
-    
-    print(f"BNM Trade data processed")
-
-# =========================================================
-# 9. PROCESS SUBA
-# =========================================================
-print("\nProcessing SUBA...")
-
-suba = None
-suba_main = None
-suba9 = None
-
-if data.get('isuba') is not None:
-    suba = data['isuba'].filter(
-        (pl.col("acctnox").cast(pl.Float64, strict=False) > 2500000000) &
-        (pl.col("acctnox").cast(pl.Float64, strict=False) != 2501900811)
+    process_source(
+        k3_records, ccy_key='utccy', custfiss_key='utctp',
+        custno_val_fn=lambda r: r.get('utcus'),
+        dealtype_key='utdlp', dealref_key='utdlr'
     )
-    
-    suba = suba.with_columns([
-        pl.col("acctnox").cast(pl.Float64, strict=False)
-          .cast(pl.Int64, strict=False)
-          .cast(pl.Utf8)
-          .alias("acctnox")
-    ])
-    
-    suba = suba.with_columns([
-        pl.when(
-            ~pl.col("liabcode").cast(pl.Utf8).is_in(["FFS", "FFU", "FCS", "FCU", "FFL", "FTI", "FTL"])
-        ).then(pl.lit("MYR")).otherwise(pl.lit(None)).alias("forcurr"),
-        
-        pl.col("tfdesc01").cast(pl.Utf8).str.slice(0, 13).alias("aano"),
-        
-        pl.col("liabcode").cast(pl.Utf8).map_elements(
-            lambda x: liab_format(x), return_dtype=pl.Utf8
-        ).alias("facility"),
-        
-        pl.col("liabcode").cast(pl.Utf8).map_elements(
-            lambda x: nsrsliab_format(x), return_dtype=pl.Utf8
-        ).alias("faccode"),
-        
-        pl.col("liabcode").cast(pl.Utf8).map_elements(
-            lambda x: prctype_format(x), return_dtype=pl.Utf8
-        ).alias("typeprc"),
-        
-        pl.col("liabcode").cast(pl.Utf8).map_elements(
-            lambda x: prctypesfs_format(x), return_dtype=pl.Utf8
-        ).alias("typeprc_sfs"),
-        
-        pl.col("liabcode").cast(pl.Utf8).map_elements(
-            lambda x: btfcept_format(x), return_dtype=pl.Utf8
-        ).alias("fconcept")
-    ])
-    
-    suba9 = suba.filter(
-        (pl.col("subacct").cast(pl.Utf8) == "OV") & 
-        (pl.col("transref").cast(pl.Utf8).str.strip_chars() == "")
-    ).unique(subset=["acctnox"], keep="first")
-    
-    suba_main = suba.filter(
-        pl.col("transref").cast(pl.Utf8).str.strip_chars() != ""
-    )
-    
-    print(f"SUBA processed: {suba.height} rows (SUBA9: {suba9.height}, SUBA_MAIN: {suba_main.height})")
 
-# =========================================================
-# 10. PROCESS ACCT
-# =========================================================
-print("\nProcessing ACCT...")
-
-acct = None
-if mast is not None and suba9 is not None:
-    if mast2c is not None:
-        suba9 = suba9.join(mast2c, on="acctnox", how="left")
-    
-    acct = mast.join(suba9, on="acctnox", how="inner")
-    
-    if mast2_agg is not None:
-        acct = acct.join(mast2_agg, on="acctnox", how="left")
-    
-    acct = acct.with_columns([
-        pl.lit(20).cast(pl.Int64).alias("issueya"),
-        pl.lit(0).cast(pl.Int64).alias("issueyy"),
-        pl.lit(0).cast(pl.Int64).alias("issuemm"),
-        pl.lit(0).cast(pl.Int64).alias("issuedd"),
-        pl.lit(0).cast(pl.Int64).alias("lmtamt"),
-        pl.lit(0).cast(pl.Int64).alias("ladtyy"),
-        pl.lit(0).cast(pl.Int64).alias("ladtmm"),
-        pl.lit(0).cast(pl.Int64).alias("ladtdd"),
-        pl.lit(0).cast(pl.Int64).alias("fxrate"),
-        pl.lit("     ").alias("climate_prin_taxonomy_class"),
-        pl.lit(0).cast(pl.Int64).alias("legal_action_cd")
-    ])
-    
-    acct = acct.unique(subset=["acctnox"], keep="first")
-    print(f"ACCT processed: {acct.height} rows")
-
-# =========================================================
-# 11. PROCESS BTR2
-# =========================================================
-print("\nProcessing BTR2...")
-
-btr2 = None
-btr2x = None
-btr3a = None
-
-if cred is not None and suba_main is not None:
-    btr2 = cred.join(suba_main, on=["acctnox", "transref"], how="inner")
-    
-    btr2 = btr2.with_columns([
-        pl.when(
-            (pl.col("utrdf").cast(pl.Utf8) == 'R') & 
-            (pl.col("liabcode").cast(pl.Utf8).is_in(['BAE', 'BEI']))
-        ).then(pl.lit("34471"))
-        .when(
-            (pl.col("utrdf").cast(pl.Utf8) == 'R') & 
-            (pl.col("liabcode").cast(pl.Utf8).is_in(['BAI', 'BII']))
-        ).then(pl.lit("34472"))
-        .when(
-            (pl.col("utrdf").cast(pl.Utf8) == 'R') & 
-            (pl.col("liabcode").cast(pl.Utf8).is_in(['BAP', 'BAS', 'BPI', 'BSI']))
-        ).then(pl.lit("34475"))
-        .otherwise(pl.col("facility"))
-        .alias("facility"),
-        
-        pl.when(pl.col("tfindr02").cast(pl.Utf8) == "5").then(1).otherwise(0).alias("tfr02i"),
-        
-        pl.when(pl.col("subprod").cast(pl.Utf8) == "PDB-I")
-          .then(pl.lit("Y"))
-          .otherwise(pl.lit("N"))
-          .alias("pdbind"),
-        
-        pl.when(pl.col("specialf").cast(pl.Utf8).is_in(['20', '25', '30']))
-          .then(1)
-          .otherwise(0)
-          .alias("sfs"),
-        pl.when(pl.col("specialf").cast(pl.Utf8).is_in(['20', '25', '30']))
-          .then(0)
-          .otherwise(1)
-          .alias("nonsfs"),
-        
-        pl.when(
-            (pl.col("nodays") > 0) & (pl.col("outstand").cast(pl.Float64, strict=False) < 1)
-        ).then(0).otherwise(pl.col("nodays")).alias("nodays"),
-        pl.when(
-            (pl.col("nodays") > 0) & (pl.col("outstand").cast(pl.Float64, strict=False) < 1)
-        ).then(0).otherwise(pl.col("arrears")).alias("arrears"),
-        pl.when(
-            (pl.col("nodays") > 0) & (pl.col("outstand").cast(pl.Float64, strict=False) < 1)
-        ).then(0).otherwise(pl.col("instalm")).alias("instalm")
-    ])
-    
-    prodgrp_col = 'prodgrp' if 'prodgrp' in btr2.columns else 'prodgrp_right'
-    if prodgrp_col in btr2.columns:
-        btr2 = btr2.with_columns([
-            pl.when(pl.col(prodgrp_col).cast(pl.Utf8) == 'BA')
-              .then(pl.col("balance"))
-              .otherwise(pl.lit(None))
-              .alias("prinamt_myrx_ba"),
-            pl.when(pl.col(prodgrp_col).cast(pl.Utf8) == 'BA')
-              .then(pl.col("unearned"))
-              .otherwise(pl.lit(None))
-              .alias("intamt_myrx_ba")
-        ])
-    
-    btr3a = btr2.group_by(["acctnox", "facility", "forcurr", "pdbind"]).agg([
-        pl.col("outstand").sum().alias("outstand"),
-        pl.col("instalm").sum().alias("instalm"),
-        pl.col("unearned").sum().alias("unearned"),
-        pl.col("repaid").sum().alias("repaid"),
-        pl.col("disburse").sum().alias("disburse"),
-        pl.col("tfr02i").sum().alias("tfr02i"),
-        pl.col("mtd_tawidh_amt").sum().alias("mtd_tawidh_amt"),
-        pl.col("mtd_gharamah_amt").sum().alias("mtd_gharamah_amt"),
-        pl.col("prinamt_myrx").sum().alias("prinamt_myrx"),
-        pl.col("intamt_myrx").sum().alias("intamt_myrx"),
-        pl.col("oth_chargex").sum().alias("oth_chargex"),
-        pl.col("nodays").max().alias("nodays")
-    ])
-    
-    btr2x = btr2.sort(
-        ["acctnox", "facility", "forcurr", "pdbind", "nodays"],
-        descending=[False, False, False, False, True]
-    ).unique(subset=["acctnox", "facility", "forcurr", "pdbind"], keep="first")
-    
-    print(f"BTR2 processed: {btr2.height} rows")
-
-# =========================================================
-# 12. PROCESS SUBCR
-# =========================================================
-print("\nProcessing SUBCR...")
-
-subcr = None
-if btr2x is not None and btr3a is not None:
-    btr3a_renamed = btr3a.rename({
-        "outstand": "outstand_sum",
-        "instalm": "instalm_sum",
-        "unearned": "unearned_sum",
-        "repaid": "repaid_sum",
-        "disburse": "disburse_sum",
-        "tfr02i": "tfr02i_sum",
-        "mtd_tawidh_amt": "mtd_tawidh_amt_sum",
-        "mtd_gharamah_amt": "mtd_gharamah_amt_sum",
-        "prinamt_myrx": "prinamt_myrx_sum",
-        "intamt_myrx": "intamt_myrx_sum",
-        "oth_chargex": "oth_chargex_sum",
-        "nodays": "nodays_max"
-    })
-    
-    subcr = btr2x.join(btr3a_renamed, on=["acctnox", "facility", "forcurr", "pdbind"], how="inner")
-    
-    subcr = subcr.with_columns([
-        (pl.col("outstand_sum").cast(pl.Float64, strict=False) * 100).cast(pl.Int64).alias("outstand"),
-        (pl.col("unearned_sum").cast(pl.Float64, strict=False) * 100).cast(pl.Int64).alias("unearned"),
-        (pl.col("repaid_sum").cast(pl.Float64, strict=False) * 100).cast(pl.Int64).alias("repaid"),
-        (pl.col("disburse_sum").cast(pl.Float64, strict=False) * 100).cast(pl.Int64).alias("disburse"),
-        (pl.col("prinamt_myrx_sum").cast(pl.Float64, strict=False) * 100).cast(pl.Int64).alias("curbal"),
-        (pl.col("intamt_myrx_sum").cast(pl.Float64, strict=False) * 100).cast(pl.Int64).alias("intamt"),
-        (pl.col("oth_chargex_sum").cast(pl.Float64, strict=False) * 100).cast(pl.Int64).alias("oth_charge"),
-        pl.lit("    ").alias("noteno"),
-        pl.when(pl.col("instalm_sum").is_null()).then(0).otherwise(pl.col("instalm_sum")).alias("instalm"),
-        pl.col("nodays_max").alias("nodays"),
-        pl.col("tfr02i_sum").alias("tfr02i"),
-        pl.col("mtd_tawidh_amt_sum").alias("mtd_tawidh_amt"),
-        pl.col("mtd_gharamah_amt_sum").alias("mtd_gharamah_amt")
-    ])
-    
-    subcr = subcr.with_columns([
-        pl.when(
-            pl.col("facility").is_in(["34810", "34831", "34832", "34840", "34850", "34860"])
-        ).then(0).otherwise(pl.col("arrears")).alias("arrears"),
-        pl.when(
-            pl.col("facility").is_in(["34810", "34831", "34832", "34840", "34850", "34860"])
-        ).then(0).otherwise(pl.col("instalm")).alias("instalm")
-    ])
-    
-    print(f"SUBCR processed: {subcr.height} rows")
-
-# =========================================================
-# 13. CREATE FINAL SUBA
-# =========================================================
-print("\nCreating final SUBA...")
-
-suba_final = None
-if mast is not None and subcr is not None:
-    subcr_for_join = subcr.select([
-        "acctnox", "facility", "faccode", "forcurr", "pdbind",
-        "outstand", "unearned", "repaid", "disburse", "curbal", 
-        "intamt", "oth_charge", "noteno", "instalm", "nodays",
-        "arrears", "tfr02i", "mtd_tawidh_amt", "mtd_gharamah_amt",
-        "typeprc", "fconcept"
-    ])
-    
-    mast_for_join = mast.select([
-        "acctnox", "ficody", "ficode", "apcode", "branch", "oldbrh",
-        "custcode_clean", "custfiss", "sector_clean", "sectfiss"
-    ])
-    
-    suba_final = mast_for_join.join(subcr_for_join, on="acctnox", how="inner")
-    
-    if acct is not None:
-        acct_subset = acct.select([
-            "acctnox",
-            pl.when(pl.col("limtcurf").is_not_null())
-              .then(pl.col("limtcurf") * 100)
-              .otherwise(0)
-              .alias("apprlim2"),
-            pl.col("firstdisbdt").fill_null(0).alias("firstdisbdt")
-        ]).unique(subset=["acctnox"])
-        suba_final = suba_final.join(acct_subset, on="acctnox", how="left")
-    else:
-        suba_final = suba_final.with_columns([
-            pl.lit(0).cast(pl.Int64).alias("apprlim2"),
-            pl.lit(0).cast(pl.Int64).alias("firstdisbdt")
-        ])
-    
-    suba_final = suba_final.with_columns([
-        pl.lit(" 00000000 00000000").alias("dataxx"),
-        pl.lit(0).cast(pl.Int64).alias("odxsamt"),
-        pl.lit(0).cast(pl.Int64).alias("biltot"),
-        pl.when(pl.col("apprlim2").is_null()).then(0).otherwise(pl.col("apprlim2")).alias("apprlim2"),
-        pl.lit(12).cast(pl.Int64).alias("noteterm"),
-        pl.lit("N").alias("syndicat"),
-        pl.lit("00").alias("specialf"),
-        pl.lit("5300").alias("purposes"),
-        pl.lit("19").alias("payfreqc"),
-        pl.when(pl.col("firstdisbdt") > 0)
-          .then(pl.col("firstdisbdt").cast(pl.Int64).cast(pl.Utf8).str.zfill(8))
-          .otherwise(pl.lit("00000000"))
-          .alias("fdisbdt"),
-        pl.lit("N").alias("sm_status1"),
-        pl.lit("00000000").alias("sm_dat1"),
-        pl.lit("000000000000000").alias("rmsbba"),
-        pl.lit("     ").alias("score1"),
-        pl.lit("     ").alias("score2"),
-        pl.lit("N").alias("dnbfisme"),
-        pl.lit("").alias("lu_add1"),
-        pl.lit("").alias("lu_add2"),
-        pl.lit("").alias("lu_add3"),
-        pl.lit("").alias("lu_add4"),
-        pl.lit("").alias("lu_town_city"),
-        pl.lit("").alias("lu_postcode"),
-        pl.lit("").alias("lu_state_cd"),
-        pl.lit("").alias("lu_country_cd"),
-        pl.lit("").alias("ia_lru"),
-        pl.lit("").alias("sm_status"),
-        pl.lit("").alias("sm_datestr"),
-        pl.lit(0).cast(pl.Int64).alias("intratex"),
-        pl.lit(0).cast(pl.Int64).alias("commratex"),
-        pl.lit(0).cast(pl.Int64).alias("discratex"),
-        pl.lit(0).cast(pl.Int64).alias("combratex"),
-        pl.lit("").alias("industrial_sector_cd")
-    ])
-    
-    subq = suba_final.group_by("acctnox").agg([
-        pl.col("outstand").sum().alias("outx")
-    ])
-    suba_final = suba_final.join(subq, on="acctnox", how="left")
-    suba_final = suba_final.with_columns([
-        (pl.col("apprlim2").cast(pl.Float64, strict=False) - pl.col("outx").cast(pl.Float64, strict=False)).cast(pl.Int64).alias("undrawn")
-    ])
-    
-    print(f"Final SUBA processed: {suba_final.height} rows")
-
-# =========================================================
-# 14. PROCESS PROVISIONS
-# =========================================================
-print("\nProcessing PROVISIONS...")
-
-provi = None
-if data.get('iprov') is not None and btr2 is not None:
-    provi = data['iprov'].join(
-        btr2.select(["acctnox", "transrex", "nodays", "outstand", "facility", "arrears"]).unique(),
-        on=["acctnox", "transrex"],
-        how="inner"
-    )
-    
-    provi = provi.with_columns([
-        pl.when(
-            (pl.col("nodays") >= 90) & (pl.col("nodays") <= 182)
-        ).then(pl.lit("D"))
-        .when(pl.col("nodays") > 182).then(pl.lit("B"))
-        .when(pl.col("nplind").cast(pl.Utf8) == "P").then(pl.lit("P"))
-        .otherwise(pl.lit("P"))
-        .alias("classify"),
-        
-        pl.when(
-            (pl.col("nodays") >= 90) | (pl.col("nplind").cast(pl.Utf8) == "F")
-        ).then(pl.lit("Y")).otherwise(pl.lit("N")).alias("impaired")
-    ])
-    
-    print(f"PROVISIONS processed: {provi.height} rows")
-
-# =========================================================
-# 15. PROCESS REPAID7B
-# =========================================================
-print("\nProcessing REPAID7B...")
-
-btrpay = None
-if btr2 is not None:
-    btrpay = btr2.filter(
-        pl.col("repaid").cast(pl.Float64, strict=False) > 0
-    ).sort(["acctnox", "facility", "forcurr", "pdbind", "repay_source", "repay_type_cd"])
-    
-    if not btrpay.is_empty():
-        btrpay = btrpay.group_by([
-            "acctnox", "facility", "forcurr", "pdbind", "repay_source", "repay_type_cd", "faccode", "ficode"
-        ]).agg([
-            pl.col("repaid").sum().alias("repaid_amt")
-        ])
-    
-    print(f"REPAID7B processed: {btrpay.height if btrpay is not None else 0} rows")
-
-# =========================================================
-# 16. WRITE OUTPUT FILES
-# =========================================================
-print("\nWriting output files...")
-
-output_suffix = f"{REPTYEAR}{REPTMON}{REPTDAY}"
-
-# ACCTCRED - with SAS positions
-if acct is not None:
-    acctcred_output = acct.select([
-        pl.col("ficody").alias("FICODY"),
-        pl.col("ficode").cast(pl.Int64, strict=False).fill_null(0).alias("FICODE"),
-        pl.col("apcode").cast(pl.Int64).alias("APCODE"),
-        pl.col("acctnox").cast(pl.Int64).alias("ACCTNO"),
-        pl.lit("MYR").alias("CURRENCY"),
-        pl.lit(0).cast(pl.Int64).alias("APPRLIMT"),
-        pl.lit(0).cast(pl.Int64).alias("APPRLIM2"),
-        pl.col("issuedd").cast(pl.Int64).alias("ISSUEDD"),
-        pl.col("issuemm").cast(pl.Int64).alias("ISSUEMM"),
-        pl.col("issueya").cast(pl.Int64).alias("ISSUEYA"),
-        pl.col("issueyy").cast(pl.Int64).alias("ISSUEYY"),
-        pl.col("oldbrh").cast(pl.Int64).alias("OLDBRH"),
-        pl.col("lmtamt").cast(pl.Int64).alias("LMTAMT"),
-        pl.lit(0).cast(pl.Int64).alias("AALIMIT"),
-        pl.col("allrefno").fill_null("").alias("ALLREFNO"),
-        pl.col("legal_action_cd").cast(pl.Int64).alias("LEGAL_ACTION_CD"),
-        pl.col("ladtdd").cast(pl.Int64).alias("LADTDD"),
-        pl.col("ladtmm").cast(pl.Int64).alias("LADTMM"),
-        pl.col("ladtyy").cast(pl.Int64).alias("LADTYY"),
-        pl.col("fxrate").cast(pl.Int64).alias("FXRATE"),
-        pl.col("climate_prin_taxonomy_class").fill_null("").alias("CLIMATE_PRIN_TAXONOMY_CLASS")
-    ])
-    
-    acctcred_spec = [
-        ("FICODY", 0, 5, 'S'),
-        ("FICODE", 5, 4, 'I'),
-        ("APCODE", 9, 3, 'Z'),
-        ("ACCTNO", 12, 10, 'Z'),
-        ("CURRENCY", 42, 3, 'S'),
-        ("APPRLIMT", 45, 24, 'Z'),
-        ("APPRLIM2", 69, 16, 'Z'),
-        ("ISSUEDD", 85, 2, 'Z'),
-        ("ISSUEMM", 87, 2, 'Z'),
-        ("ISSUEYA", 89, 2, 'Z'),
-        ("ISSUEYY", 91, 2, 'Z'),
-        ("OLDBRH", 93, 5, 'Z'),
-        ("LMTAMT", 98, 16, 'Z'),
-        ("AALIMIT", 114, 24, 'Z'),
-        ("ALLREFNO", 139, 200, 'S'),
-        ("LEGAL_ACTION_CD", 340, 2, 'Z'),
-        ("LADTDD", 355, 2, 'Z'),
-        ("LADTMM", 357, 2, 'Z'),
-        ("LADTYY", 359, 4, 'Z'),
-        ("FXRATE", 364, 8, 'Z'),
-        ("CLIMATE_PRIN_TAXONOMY_CLASS", 379, 5, 'S')
-    ]
-    
-    write_fixed_width_positioned(acctcred_output, BASE_OUTPUT / f"ACCTCRED_{output_suffix}.txt", acctcred_spec)
-    print(f"ACCTCRED written: {acctcred_output.height} records")
-
-# SUBACRED - with SAS positions
-if suba_final is not None:
-    subacred_output = suba_final.select([
-        pl.col("ficody").alias("FICODY"),
-        pl.col("ficode").cast(pl.Int64).alias("FICODE"),
-        pl.col("apcode").cast(pl.Int64).alias("APCODE"),
-        pl.col("acctnox").cast(pl.Int64).alias("ACCTNO"),
-        pl.col("noteno").alias("NOTENO"),
-        pl.col("facility").fill_null("").alias("FACILITY"),
-        pl.col("facility").fill_null("").alias("FACILITY2"),
-        pl.col("syndicat").alias("SYNDICAT"),
-        pl.col("specialf").alias("SPECIALF"),
-        pl.col("purposes").alias("PURPOSES"),
-        pl.col("fconcept").cast(pl.Int64).alias("FCONCEPT"),
-        pl.col("noteterm").cast(pl.Int64).alias("NOTETERM"),
-        pl.col("payfreqc").alias("PAYFREQC"),
-        pl.col("dataxx").alias("DATAXX"),
-        pl.col("custcode_clean").cast(pl.Int64, strict=False).fill_null(0).alias("CUSTCODE"),
-        pl.col("sector_clean").fill_null("").alias("SECTOR"),
-        pl.col("oldbrh").cast(pl.Int64).alias("OLDBRH"),
-        pl.col("unearned").cast(pl.Int64).alias("UNEARNED"),
-        pl.col("sm_status1").alias("SM_STATUS1"),
-        pl.col("sm_dat1").alias("SM_DAT1"),
-        pl.col("rmsbba").alias("RMSBBA"),
-        pl.col("intratex").cast(pl.Int64).alias("INTRATEX"),
-        pl.col("typeprc").fill_null("99").alias("TYPEPRC"),
-        pl.col("faccode").fill_null("").alias("FACCODE"),
-        pl.col("sectfiss").alias("SECTFISS"),
-        pl.col("custfiss").alias("CUSTFISS"),
-        pl.col("forcurr").fill_null("MYR").alias("FORCURR"),
-        pl.col("tfr02i").cast(pl.Int64).alias("TFR02I"),
-        pl.col("commratex").cast(pl.Int64).alias("COMMRATEX"),
-        pl.col("discratex").cast(pl.Int64).alias("DISCRATEX"),
-        pl.col("combratex").cast(pl.Int64).alias("COMBRATEX"),
-        pl.col("sm_status").alias("SM_STATUS"),
-        pl.col("sm_datestr").alias("SM_DATESTR"),
-        pl.col("ia_lru").alias("IA_LRU"),
-        pl.col("pdbind").alias("PDBIND"),
-        pl.col("fdisbdt").alias("FDISBDT"),
-        pl.col("score1").alias("SCORE1"),
-        pl.col("score2").alias("SCORE2"),
-        pl.col("dnbfisme").alias("DNBFISME"),
-        pl.col("industrial_sector_cd").alias("INDUSTRIAL_SECTOR_CD"),
-        pl.col("lu_add1").alias("LU_ADD1"),
-        pl.col("lu_add2").alias("LU_ADD2"),
-        pl.col("lu_add3").alias("LU_ADD3"),
-        pl.col("lu_add4").alias("LU_ADD4"),
-        pl.col("lu_town_city").alias("LU_TOWN_CITY"),
-        pl.col("lu_postcode").alias("LU_POSTCODE"),
-        pl.col("lu_state_cd").alias("LU_STATE_CD"),
-        pl.col("lu_country_cd").alias("LU_COUNTRY_CD")
-    ])
-    
-    subacred_spec = [
-        ("FICODY", 0, 5, 'S'),
-        ("FICODE", 5, 4, 'I'),
-        ("APCODE", 9, 3, 'Z'),
-        ("ACCTNO", 12, 10, 'Z'),
-        ("NOTENO", 42, 5, 'S'),
-        ("FACILITY", 47, 5, 'S'),
-        ("FACILITY2", 72, 5, 'S'),
-        ("SYNDICAT", 77, 1, 'S'),
-        ("SPECIALF", 78, 2, 'S'),
-        ("PURPOSES", 80, 4, 'S'),
-        ("FCONCEPT", 84, 2, 'Z'),
-        ("NOTETERM", 86, 3, 'Z'),
-        ("PAYFREQC", 89, 2, 'S'),
-        ("DATAXX", 91, 18, 'S'),
-        ("CUSTCODE", 109, 2, 'Z'),
-        ("SECTOR", 111, 4, 'S'),
-        ("OLDBRH", 115, 5, 'Z'),
-        ("UNEARNED", 120, 17, 'Z'),
-        ("SM_STATUS1", 137, 1, 'S'),
-        ("SM_DAT1", 138, 8, 'S'),
-        ("RMSBBA", 182, 15, 'S'),
-        ("INTRATEX", 197, 5, 'Z'),
-        ("TYPEPRC", 202, 2, 'S'),
-        ("FACCODE", 205, 5, 'Z'),
-        ("SECTFISS", 211, 4, 'S'),
-        ("CUSTFISS", 216, 2, 'S'),
-        ("FORCURR", 219, 3, 'S'),
-        ("TFR02I", 223, 1, 'Z'),
-        ("COMMRATEX", 225, 5, 'Z'),
-        ("DISCRATEX", 231, 5, 'Z'),
-        ("COMBRATEX", 237, 5, 'Z'),
-        ("SM_STATUS", 243, 1, 'S'),
-        ("SM_DATESTR", 245, 8, 'S'),
-        ("IA_LRU", 254, 1, 'S'),
-        ("PDBIND", 256, 1, 'S'),
-        ("FDISBDT", 257, 8, 'S'),
-        ("SCORE1", 265, 5, 'S'),
-        ("SCORE2", 270, 5, 'S'),
-        ("DNBFISME", 275, 1, 'S'),
-        ("INDUSTRIAL_SECTOR_CD", 276, 5, 'S'),
-        ("LU_ADD1", 289, 40, 'S'),
-        ("LU_ADD2", 329, 40, 'S'),
-        ("LU_ADD3", 369, 40, 'S'),
-        ("LU_ADD4", 409, 40, 'S'),
-        ("LU_TOWN_CITY", 449, 20, 'S'),
-        ("LU_POSTCODE", 469, 5, 'S'),
-        ("LU_STATE_CD", 474, 2, 'S'),
-        ("LU_COUNTRY_CD", 476, 2, 'S')
-    ]
-    
-    write_fixed_width_positioned(subacred_output, BASE_OUTPUT / f"SUBACRED_{output_suffix}.txt", subacred_spec)
-    print(f"SUBACRED written: {subacred_output.height} records")
-
-# CREDITPO - with SAS positions
-if suba_final is not None:
-    creditpo_output = suba_final.select([
-        pl.col("ficody").alias("FICODY"),
-        pl.col("ficode").cast(pl.Int64).alias("FICODE"),
-        pl.col("apcode").cast(pl.Int64).alias("APCODE"),
-        pl.col("acctnox").cast(pl.Int64).alias("ACCTNO"),
-        pl.col("noteno").alias("NOTENO"),
-        pl.col("facility").fill_null("").alias("FACILITY"),
-        pl.lit(REPTDAY).alias("REPTDAY"),
-        pl.lit(REPTMON).alias("REPTMON"),
-        pl.lit(REPTYEAR).alias("REPTYEAR"),
-        pl.col("outstand").cast(pl.Int64).alias("OUTSTAND"),
-        pl.col("arrears").cast(pl.Int64).alias("ARREARS"),
-        pl.col("instalm").cast(pl.Int64).alias("INSTALM"),
-        pl.col("undrawn").cast(pl.Int64).alias("UNDRAWN"),
-        pl.lit("O").alias("ACCTSTAT"),
-        pl.col("nodays").cast(pl.Int64).alias("NODAYS"),
-        pl.col("oldbrh").cast(pl.Int64).alias("OLDBRH"),
-        pl.col("biltot").cast(pl.Int64).alias("BILTOT"),
-        pl.col("odxsamt").cast(pl.Int64).alias("ODXSAMT"),
-        pl.col("curbal").cast(pl.Int64).alias("CURBAL"),
-        pl.col("intamt").cast(pl.Int64).alias("INTAMT"),
-        pl.col("oth_charge").cast(pl.Int64).alias("OTH_CHARGE"),
-        pl.col("repaid").cast(pl.Int64).alias("REPAID"),
-        pl.col("disburse").cast(pl.Int64).alias("DISBURSE"),
-        pl.col("faccode").fill_null("").alias("FACCODE"),
-        pl.col("forcurr").fill_null("MYR").alias("FORCURR"),
-        pl.col("pdbind").alias("PDBIND"),
-        pl.col("mtd_tawidh_amt").cast(pl.Int64).alias("MTD_TAWIDH_AMT"),
-        pl.col("mtd_gharamah_amt").cast(pl.Int64).alias("MTD_GHARAMAH_AMT"),
-        pl.lit("").alias("REPAY_SOURCE"),
-        pl.lit("").alias("REPAY_TYPE_CD")
-    ])
-    
-    creditpo_spec = [
-        ("FICODY", 0, 5, 'S'),
-        ("FICODE", 5, 4, 'I'),
-        ("APCODE", 9, 3, 'Z'),
-        ("ACCTNO", 12, 10, 'Z'),
-        ("NOTENO", 42, 5, 'S'),
-        ("FACILITY", 42, 5, 'S'),
-        ("REPTDAY", 72, 2, 'S'),
-        ("REPTMON", 74, 2, 'S'),
-        ("REPTYEAR", 76, 4, 'S'),
-        ("OUTSTAND", 80, 16, 'Z'),
-        ("ARREARS", 96, 3, 'Z'),
-        ("INSTALM", 99, 3, 'Z'),
-        ("UNDRAWN", 102, 17, 'Z'),
-        ("ACCTSTAT", 119, 1, 'S'),
-        ("NODAYS", 120, 5, 'Z'),
-        ("OLDBRH", 125, 5, 'I'),
-        ("BILTOT", 130, 17, 'Z'),
-        ("ODXSAMT", 147, 17, 'Z'),
-        ("CURBAL", 209, 17, 'Z'),
-        ("INTAMT", 226, 17, 'Z'),
-        ("OTH_CHARGE", 243, 17, 'Z'),
-        ("REPAID", 260, 15, 'Z'),
-        ("DISBURSE", 275, 15, 'Z'),
-        ("FACCODE", 291, 5, 'I'),
-        ("FORCURR", 297, 3, 'S'),
-        ("PDBIND", 301, 1, 'S'),
-        ("MTD_TAWIDH_AMT", 302, 15, 'D'),
-        ("MTD_GHARAMAH_AMT", 317, 15, 'D'),
-        ("REPAY_SOURCE", 332, 4, 'S'),
-        ("REPAY_TYPE_CD", 336, 2, 'S')
-    ]
-    
-    write_fixed_width_positioned(creditpo_output, BASE_OUTPUT / f"CREDITPO_{output_suffix}.txt", creditpo_spec)
-    print(f"CREDITPO written: {creditpo_output.height} records")
-
-# PROVISIO - with SAS positions
-if provi is not None:
-    provi = provi.with_columns([
-        pl.lit(0).cast(pl.Int64).alias("apcode"),
-        pl.lit(0).cast(pl.Int64).alias("oldbrh"),
-        pl.lit("     ").alias("ficody"),
-        pl.lit("MYR").alias("forcurr"),
-        pl.lit("N").alias("pdbind"),
-        pl.lit("").alias("faccode"),
-        pl.lit(0).cast(pl.Int64).alias("curbal"),
-        pl.lit(0).cast(pl.Int64).alias("tenor_int"),
-        pl.lit(0).cast(pl.Int64).alias("oth_charge"),
-        pl.lit(0).cast(pl.Int64).alias("iisamt"),
-        pl.lit(0).cast(pl.Int64).alias("totiisr"),
-        pl.lit(0).cast(pl.Int64).alias("writeoff")
-    ])
-    
-    provisio_output = provi.select([
-        pl.col("ficody").alias("FICODY"),
-        pl.col("ficode").cast(pl.Int64, strict=False).fill_null(0).alias("FICODE"),
-        pl.col("apcode").cast(pl.Int64).alias("APCODE"),
-        pl.col("acctnox").cast(pl.Int64, strict=False).fill_null(0).alias("ACCTNO"),
-        pl.col("facility").fill_null("").alias("FACILITY"),
-        pl.lit(REPTDAY).alias("REPTDAY"),
-        pl.lit(REPTMON).alias("REPTMON"),
-        pl.lit(REPTYEAR).alias("REPTYEAR"),
-        pl.col("classify").fill_null("P").alias("CLASSIFY"),
-        pl.col("arrears").cast(pl.Int64, strict=False).fill_null(0).alias("ARREARS"),
-        pl.col("curbal").cast(pl.Int64).alias("CURBAL"),
-        pl.col("tenor_int").cast(pl.Int64).alias("TENOR_INT"),
-        pl.col("oth_charge").cast(pl.Int64).alias("OTH_CHARGE"),
-        pl.lit(0).cast(pl.Int64).alias("REALISVL"),
-        pl.lit(0).cast(pl.Int64).alias("IISOPBAL"),
-        pl.col("iisamt").cast(pl.Int64).alias("TOTIIS"),
-        pl.col("totiisr").cast(pl.Int64).alias("TOTIISR"),
-        pl.col("writeoff").cast(pl.Int64).alias("TOTWOF"),
-        pl.lit(0).cast(pl.Int64).alias("IISDANAH"),
-        pl.lit(0).cast(pl.Int64).alias("IISTRANS"),
-        pl.lit(0).cast(pl.Int64).alias("SPOPBAL"),
-        pl.lit(0).cast(pl.Int64).alias("SPCHARGE"),
-        pl.lit(0).cast(pl.Int64).alias("SPWBAMT"),
-        pl.lit(0).cast(pl.Int64).alias("SPWOAMT"),
-        pl.lit(0).cast(pl.Int64).alias("SPDANAH"),
-        pl.lit(0).cast(pl.Int64).alias("SPTRANS"),
-        pl.lit(" ").alias("GP3IND"),
-        pl.col("oldbrh").cast(pl.Int64).alias("OLDBRH"),
-        pl.col("faccode").fill_null("").alias("FACCODE"),
-        pl.col("impaired").fill_null("N").alias("IMPAIRED"),
-        pl.col("forcurr").fill_null("MYR").alias("FORCURR"),
-        pl.lit(0).cast(pl.Int64).alias("TOTILM"),
-        pl.col("pdbind").alias("PDBIND")
-    ])
-    
-    provisio_spec = [
-        ("FICODY", 0, 5, 'S'),
-        ("FICODE", 5, 4, 'I'),
-        ("APCODE", 9, 3, 'Z'),
-        ("ACCTNO", 12, 10, 'Z'),
-        ("FACILITY", 42, 5, 'S'),
-        ("REPTDAY", 72, 2, 'S'),
-        ("REPTMON", 74, 2, 'S'),
-        ("REPTYEAR", 76, 4, 'S'),
-        ("CLASSIFY", 80, 1, 'S'),
-        ("ARREARS", 81, 3, 'Z'),
-        ("CURBAL", 84, 17, 'Z'),
-        ("TENOR_INT", 101, 17, 'Z'),
-        ("OTH_CHARGE", 118, 16, 'Z'),
-        ("REALISVL", 134, 17, 'Z'),
-        ("IISOPBAL", 151, 17, 'Z'),
-        ("TOTIIS", 168, 17, 'Z'),
-        ("TOTIISR", 185, 17, 'Z'),
-        ("TOTWOF", 202, 17, 'Z'),
-        ("IISDANAH", 219, 17, 'Z'),
-        ("IISTRANS", 236, 17, 'Z'),
-        ("SPOPBAL", 253, 17, 'Z'),
-        ("SPCHARGE", 270, 17, 'Z'),
-        ("SPWBAMT", 287, 17, 'Z'),
-        ("SPWOAMT", 304, 17, 'Z'),
-        ("SPDANAH", 321, 17, 'Z'),
-        ("SPTRANS", 338, 17, 'Z'),
-        ("GP3IND", 355, 1, 'S'),
-        ("OLDBRH", 356, 5, 'I'),
-        ("FACCODE", 362, 5, 'I'),
-        ("IMPAIRED", 368, 1, 'S'),
-        ("FORCURR", 370, 3, 'S'),
-        ("TOTILM", 374, 17, 'Z'),
-        ("PDBIND", 392, 1, 'S')
-    ]
-    
-    write_fixed_width_positioned(provisio_output, BASE_OUTPUT / f"PROVISIO_{output_suffix}.txt", provisio_spec)
-    print(f"PROVISIO written: {provisio_output.height} records")
-
-# REPAID7B - with SAS positions
-if btrpay is not None and not btrpay.is_empty():
-    btrpay = btrpay.with_columns([
-        pl.col("ficode").cast(pl.Int64, strict=False).fill_null(0).alias("ficode"),
-        pl.col("repay_source").fill_null("").alias("repay_source"),
-        pl.col("repay_type_cd").fill_null("").alias("repay_type_cd"),
-        pl.col("facility").fill_null("").alias("facility"),
-        pl.col("forcurr").fill_null("MYR").alias("forcurr"),
-        pl.col("pdbind").fill_null("N").alias("pdbind"),
-        pl.col("faccode").fill_null("").alias("faccode")
-    ])
-    
-    repaid7b_output = btrpay.select([
-        pl.col("ficode").cast(pl.Int64).alias("FICODE"),
-        pl.col("acctnox").cast(pl.Int64, strict=False).fill_null(0).alias("ACCTNO"),
-        pl.lit(REPTDAY).alias("REPTDAY"),
-        pl.lit(REPTMON).alias("REPTMON"),
-        pl.lit(REPTYEAR).alias("REPTYEAR"),
-        pl.col("repay_source").alias("REPAY_SOURCE"),
-        pl.col("repay_type_cd").alias("REPAY_TYPE_CD"),
-        pl.col("repaid_amt").cast(pl.Float64).alias("REPAID_AMT"),
-        pl.col("facility").alias("FACILITY"),
-        pl.col("forcurr").alias("FORCURR"),
-        pl.col("pdbind").alias("PDBIND"),
-        pl.col("faccode").alias("FACCODE"),
-        pl.col("repaid_amt").cast(pl.Float64).alias("REPAID")
-    ])
-    
-    repaid7b_spec = [
-        ("FICODE", 0, 4, 'I'),
-        ("ACCTNO", 5, 11, 'Z'),
-        ("REPTDAY", 18, 2, 'S'),
-        ("REPTMON", 20, 2, 'S'),
-        ("REPTYEAR", 22, 4, 'S'),
-        ("REPAY_SOURCE", 27, 4, 'S'),
-        ("REPAY_TYPE_CD", 32, 2, 'S'),
-        ("REPAID_AMT", 35, 16, 'D'),
-        ("FACILITY", 52, 5, 'S'),
-        ("FORCURR", 58, 3, 'S'),
-        ("PDBIND", 62, 1, 'S'),
-        ("FACCODE", 64, 5, 'S'),
-        ("REPAID", 70, 16, 'D')
-    ]
-    
-    write_fixed_width_positioned(repaid7b_output, BASE_OUTPUT / f"REPAID7B_{output_suffix}.txt", repaid7b_spec)
-    print(f"REPAID7B written: {repaid7b_output.height} records")
-else:
-    print(f"REPAID7B: No data to write")
-    with open(BASE_OUTPUT / f"REPAID7B_{output_suffix}.txt", 'w') as f:
-        f.write("")
-    print(f"REPAID7B: Empty file created")
-
-# =========================================================
-# 17. PRINT SUMMARY
-# =========================================================
-print("\n" + "="*50)
-print("PROCESSING COMPLETE")
-print("="*50)
-print(f"Processing Date: {TDATE.strftime('%Y-%m-%d')}")
-print(f"MAST rows: {mast.height if mast is not None else 0}")
-print(f"CRED rows: {cred.height if cred is not None else 0}")
-print(f"SUBA rows: {suba.height if suba is not None else 0}")
-print(f"ACCT rows: {acct.height if acct is not None else 0}")
-print(f"BTR2 rows: {btr2.height if btr2 is not None else 0}")
-print(f"SUBCR rows: {subcr.height if subcr is not None else 0}")
-print(f"Final SUBA rows: {suba_final.height if suba_final is not None else 0}")
-print(f"PROVI rows: {provi.height if provi is not None else 0}")
-print(f"BTRPAY rows: {btrpay.height if btrpay is not None else 0}")
-print(f"\nOutput files written to: {BASE_OUTPUT}")
-print("="*50)
+    return all_records
