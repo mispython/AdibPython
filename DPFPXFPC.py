@@ -1,42 +1,80 @@
-Reading input files...
-  Read imast: 1697 rows
-  Read imast2: 2246 rows
-  Read icred: 10414 rows
-  Read isuba: 61339 rows
-  Read iprov: 87 rows
-  Read iamsubacc: 0 rows
-  Read ibtrad: 3418 rows
-  Read ibtdtl: 3418 rows
-  Read lnacct: 1205962 rows
+# =========================================================
+# 11. PROCESS BTR2
+# =========================================================
+print("\nProcessing BTR2...")
 
-Processing MAST...
-MAST processed: 1697 rows
+btr2 = None
+btr2x = None
+btr3a = None
 
-Processing MAST2...
-MAST2 processed
-
-Processing CRED...
-CRED processed: 3419 rows
-
-Processing BNM Trade data...
-BNM Trade data processed
-
-Processing SUBA...
-SUBA processed: 61339 rows (SUBA9: 1184, SUBA_MAIN: 10411)
-
-Processing ACCT...
-ACCT processed: 1644 rows
-
-Processing BTR2...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIWBTCR_ISLAMIC_WEEKLY_BANKTRADE_CCR.py", line 516, in <module>
+if cred is not None and suba_main is not None:
+    btr2 = cred.join(suba_main, on=["acctnox", "transref"], how="inner")
+    
+    # Fix column names and add calculated fields
     btr2 = btr2.with_columns([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ColumnNotFoundError: unable to find column "Y"; valid columns: ["rectype", "transref", "syscode", "transtyp", "creattyp", "ficode", "applcode", "acctnox", "ccrisfac", "subacct", "posidate", "outstand", "maturedx", "prodcode", "prinamt_myrx", "intamt_myrx", "oth_chargex", "acctno", "matureds", "nodays", "arrears", "instalm", "transrex", "outstandx", "balance", "intrecv", "unearned", "liabcode", "utrdf", "repaid", "disburse", "mtd_tawidh_amt", "mtd_gharamah_amt", "intrate", "commrate", "discrate", "combrate", "prinamt_myrx_right", "intamt_myrx_right", "oth_chargex_right", "prodgrp", "rectype_right", "syscode_right", "transtyp_right", "creattyp_right", "ficode_right", "applcode_right", "ccrisfac_right", "subacct_right", "revolvg", "creatds", "expirds", "syndicat", "specialf", "purposes", "fconcept", "aanumber", "intrate_right", "spread", "infundrt", "discntb", "discntf", "tranxmt", "exchrte", "forcurr", "liabcode_right", "btrel", "relfrom", "currency", "limtcurm", "limtcurf", "offapind", "workerid", "reimbrid", "tfdesc01", "tfdesc02", "tfdesc03", "tfdesc04", "tfcntr01", "tfcntr02", "tfcntr03", "tfcntr04", "tfcntr05", "tfcntr06", "tfcntr07", "tfcntr08", "tfcntr09", "tfcntr10", "tfcntr11", "tfcntr12", "tfindr01", "tfindr02", "tfindr03", "tfindr04", "tfindr05", "tfindr06", "tfindr07", "tfindr08", "tfindr09", "tfindr10", "tfindr11", "tfindr12", "sindicat", "batype", "accptcom", "sublimit", "subprod", "facline", "prodgrp_right", "intrecv_right", "icurbal", "dcurbal", "dbalance", "dirctind", "transrel", "commrate_right", "discrate_right", "intbase", "plusminus", "numdays", "bacom", "ori_aalimit", "discount_proceed", "mtd_tawidh_amt_right", "mtd_gharamah_amt_right", "repay_source", "repay_type_cd", "prop_develop_fin_ind", "climate_prin_taxonomy_class", "climate_mitigate_gp1_flg", "climate_adapt_gp2_flg", "climate_environmt_gp3_flg", "climate_transition_gp4_flg", "climate_prohibit_gp5_flg", "source_income_currency_cd", "aadate", "referral_branch", "appl_commercial_tag", "combrate_right", "acctno_right", "expysdt", "aa_approved_dt", "aano", "facility", "faccode", "typeprc", "typeprc_sfs"]
+        # Apply special facility mapping for UTRDF='R'
+        pl.when(
+            (pl.col("utrdf") == 'R') & (pl.col("liabcode").is_in(['BAE', 'BEI']))
+        ).then(pl.lit("34471"))
+        .when(
+            (pl.col("utrdf") == 'R') & (pl.col("liabcode").is_in(['BAI', 'BII']))
+        ).then(pl.lit("34472"))
+        .when(
+            (pl.col("utrdf") == 'R') & (pl.col("liabcode").is_in(['BAP', 'BAS', 'BPI', 'BSI']))
+        ).then(pl.lit("34475"))
+        .otherwise(pl.col("facility"))
+        .alias("facility"),
+        
+        # TFR02I flag (check if tfindr02 exists)
+        pl.when(pl.col("tfindr02") == 5).then(1).otherwise(0).alias("tfr02i"),
+        
+        # PDBIND flag (check if subprod exists)
+        pl.when(pl.col("subprod") == "PDB-I").then(pl.lit("Y")).otherwise(pl.lit("N")).alias("pdbind"),
+        
+        # SPECIALF handling (use specialf from SUBA)
+        pl.when(pl.col("specialf").cast(pl.Utf8).is_in(['20', '25', '30'])).then(1).otherwise(0).alias("sfs"),
+        pl.when(pl.col("specialf").cast(pl.Utf8).is_in(['20', '25', '30'])).then(0).otherwise(1).alias("nonsfs"),
+        
+        # Reset NODAYS if OUTSTAND is 0
+        pl.when(
+            (pl.col("nodays") > 0) & (pl.col("outstand") < 1)
+        ).then(0).otherwise(pl.col("nodays")).alias("nodays"),
+        pl.when(
+            (pl.col("nodays") > 0) & (pl.col("outstand") < 1)
+        ).then(0).otherwise(pl.col("arrears")).alias("arrears"),
+        pl.when(
+            (pl.col("nodays") > 0) & (pl.col("outstand") < 1)
+        ).then(0).otherwise(pl.col("instalm")).alias("instalm")
+    ])
+    
+    # Handle PRODGRP = 'BA' separately (prodgrp might have _right suffix)
+    prodgrp_col = 'prodgrp' if 'prodgrp' in btr2.columns else 'prodgrp_right'
+    if prodgrp_col in btr2.columns:
+        btr2 = btr2.with_columns([
+            pl.when(pl.col(prodgrp_col) == 'BA').then(pl.col("balance")).otherwise(None).alias("prinamt_myrx_ba"),
+            pl.when(pl.col(prodgrp_col) == 'BA').then(pl.col("unearned")).otherwise(None).alias("intamt_myrx_ba")
+        ])
+    
+    # Summarize BTR2
+    btr3a = btr2.group_by(["acctnox", "facility", "forcurr", "pdbind"]).agg([
+        pl.col("outstand").sum().alias("outstand"),
+        pl.col("instalm").sum().alias("instalm"),
+        pl.col("unearned").sum().alias("unearned"),
+        pl.col("repaid").sum().alias("repaid"),
+        pl.col("disburse").sum().alias("disburse"),
+        pl.col("tfr02i").sum().alias("tfr02i"),
+        pl.col("mtd_tawidh_amt").sum().alias("mtd_tawidh_amt"),
+        pl.col("mtd_gharamah_amt").sum().alias("mtd_gharamah_amt"),
+        pl.col("prinamt_myrx").sum().alias("prinamt_myrx"),
+        pl.col("intamt_myrx").sum().alias("intamt_myrx"),
+        pl.col("oth_chargex").sum().alias("oth_chargex"),
+        pl.col("nodays").max().alias("nodays")
+    ])
+    
+    # Get max NODAYS per account
+    btr2x = btr2.sort(
+        ["acctnox", "facility", "forcurr", "pdbind", "nodays"],
+        descending=[False, False, False, False, True]
+    ).unique(subset=["acctnox", "facility", "forcurr", "pdbind"], keep="first")
+    
+    print(f"BTR2 processed: {btr2.height} rows")
