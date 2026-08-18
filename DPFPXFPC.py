@@ -1,49 +1,87 @@
-Reading input files...
-  Read imast: 1697 rows
-  Read imast2: 2246 rows
-  Read icred: 10414 rows
-  Read isuba: 61339 rows
-  Read iprov: 87 rows
-  Read iamsubacc: 0 rows
-  Read ibtrad: 3418 rows
-  Read ibtdtl: 3418 rows
-  Read lnacct: 1205962 rows
+# =========================================================
+# 13. CREATE FINAL SUBA
+# =========================================================
+print("\nCreating final SUBA...")
 
-Processing MAST...
-MAST processed: 1697 rows
-
-Processing MAST2...
-MAST2 processed
-
-Processing CRED...
-CRED processed: 3419 rows
-
-Processing BNM Trade data...
-BNM Trade data processed
-
-Processing SUBA...
-SUBA processed: 61339 rows (SUBA9: 1184, SUBA_MAIN: 10411)
-
-Processing ACCT...
-ACCT processed: 1644 rows
-
-Processing BTR2...
-BTR2 processed: 10411 rows
-
-Processing SUBCR...
-SUBCR processed: 895 rows
-
-Creating final SUBA...
-SUBCR columns: ['rectype', 'transref', 'syscode', 'transtyp', 'creattyp', 'ficode', 'applcode', 'acctnox', 'ccrisfac', 'subacct', 'posidate', 'outstand', 'maturedx', 'prodcode', 'prinamt_myrx', 'intamt_myrx', 'oth_chargex', 'acctno', 'matureds', 'nodays', 'arrears', 'instalm', 'transrex', 'outstandx', 'balance', 'intrecv', 'unearned', 'liabcode', 'utrdf', 'repaid', 'disburse', 'mtd_tawidh_amt', 'mtd_gharamah_amt', 'intrate', 'commrate', 'discrate', 'combrate', 'prinamt_myrx_right', 'intamt_myrx_right', 'oth_chargex_right', 'prodgrp', 'rectype_right', 'syscode_right', 'transtyp_right', 'creattyp_right', 'ficode_right', 'applcode_right', 'ccrisfac_right', 'subacct_right', 'revolvg', 'creatds', 'expirds', 'syndicat', 'specialf', 'purposes', 'fconcept', 'aanumber', 'intrate_right', 'spread', 'infundrt', 'discntb', 'discntf', 'tranxmt', 'exchrte', 'forcurr', 'liabcode_right', 'btrel', 'relfrom', 'currency', 'limtcurm', 'limtcurf', 'offapind', 'workerid', 'reimbrid', 'tfdesc01', 'tfdesc02', 'tfdesc03', 'tfdesc04', 'tfcntr01', 'tfcntr02', 'tfcntr03', 'tfcntr04', 'tfcntr05', 'tfcntr06', 'tfcntr07', 'tfcntr08', 'tfcntr09', 'tfcntr10', 'tfcntr11', 'tfcntr12', 'tfindr01', 'tfindr02', 'tfindr03', 'tfindr04', 'tfindr05', 'tfindr06', 'tfindr07', 'tfindr08', 'tfindr09', 'tfindr10', 'tfindr11', 'tfindr12', 'sindicat', 'batype', 'accptcom', 'sublimit', 'subprod', 'facline', 'prodgrp_right', 'intrecv_right', 'icurbal', 'dcurbal', 'dbalance', 'dirctind', 'transrel', 'commrate_right', 'discrate_right', 'intbase', 'plusminus', 'numdays', 'bacom', 'ori_aalimit', 'discount_proceed', 'mtd_tawidh_amt_right', 'mtd_gharamah_amt_right', 'repay_source', 'repay_type_cd', 'prop_develop_fin_ind', 'climate_prin_taxonomy_class', 'climate_mitigate_gp1_flg', 'climate_adapt_gp2_flg', 'climate_environmt_gp3_flg', 'climate_transition_gp4_flg', 'climate_prohibit_gp5_flg', 'source_income_currency_cd', 'aadate', 'referral_branch', 'appl_commercial_tag', 'combrate_right', 'acctno_right', 'expysdt', 'aa_approved_dt', 'aano', 'facility', 'faccode', 'typeprc', 'typeprc_sfs', 'tfr02i', 'pdbind', 'sfs', 'nonsfs', 'prinamt_myrx_ba', 'intamt_myrx_ba','outstand_sum', 'instalm_sum', 'unearned_sum', 'repaid_sum', 'disburse_sum', 'tfr02i_sum', 'mtd_tawidh_amt_sum', 'mtd_gharamah_amt_sum', 'prinamt_myrx_sum', 'intamt_myrx_sum', 'oth_chargex_sum', 'nodays_max', 'curbal', 'intamt', 'oth_charge', 'noteno']
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIWBTCR_ISLAMIC_WEEKLY_BANKTRADE_CCR.py", line 687, in <module>
-    acct_subset = acct.select([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10148, in select
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ColumnNotFoundError: unable to find column "apprlim2"; valid columns: ["ficode", "facils", "applcode", "acctnox", "name", "name2", "name3", "name4", "name5", "name6", "postcode", "tfid", "custcodx", "retailid", "state", "score1", "score2", "busregn", "birthdtx", "sector", "settled", "sm_status", "ia_lru", "sm_date", "review_dt", "acct_block_ind", "acct_block_reason", "ascore_ltst", "ascore_perm", "apvdate", "industrial_sector_cd", "legal_action_cd", "legal_action_dt", "e_invoice_ind", "ccpt_ltst_review_dt", "fdb_tag", "fdb_tag_dt", "fdb_scoring_dt", "acct_write_off_status", "acctno", "custcode", "dnbfisme", "birthdt", "branch", "oldbrh", "ficody", "apcode", "custcode_clean", "custfiss", "sector_clean", "sectfiss", "rectype", "transref", "syscode", "transtyp", "creattyp", "ficode_right", "applcode_right", "ccrisfac", "subacct", "revolvg", "creatds", "expirds", "syndicat", "specialf", "purposes", "fconcept", "aanumber", "intrate", "spread", "infundrt", "discntb", "discntf", "tranxmt", "exchrte", "forcurr", "liabcode", "btrel", "relfrom","currency", "limtcurm", "limtcurf", "offapind", "workerid", "reimbrid", "tfdesc01", "tfdesc02", "tfdesc03", "tfdesc04", "tfcntr01", "tfcntr02", "tfcntr03", "tfcntr04", "tfcntr05", "tfcntr06", "tfcntr07", "tfcntr08", "tfcntr09", "tfcntr10", "tfcntr11", "tfcntr12", "tfindr01", "tfindr02", "tfindr03", "tfindr04", "tfindr05", "tfindr06", "tfindr07", "tfindr08", "tfindr09", "tfindr10", "tfindr11", "tfindr12", "sindicat", "batype", "accptcom", "sublimit", "subprod", "facline", "prodgrp", "intrecv", "icurbal", "dcurbal", "dbalance", "dirctind", "transrel", "commrate", "discrate", "intbase", "plusminus", "numdays", "bacom", "ori_aalimit", "discount_proceed", "mtd_tawidh_amt", "mtd_gharamah_amt", "repay_source", "repay_type_cd", "prop_develop_fin_ind", "climate_prin_taxonomy_class", "climate_mitigate_gp1_flg", "climate_adapt_gp2_flg", "climate_environmt_gp3_flg", "climate_transition_gp4_flg", "climate_prohibit_gp5_flg", "source_income_currency_cd", "aadate", "referral_branch", "appl_commercial_tag", "combrate", "acctno_right", "expysdt", "aa_approved_dt", "aano", "facility", "faccode", "typeprc", "typeprc_sfs", "facline_right", "ccpt_ltst_review_dt_right", "allrefno", "firstdisbdt", "issueya", "issueyy", "issuemm", "issuedd", "lmtamt", "ladtyy", "ladtmm", "ladtdd", "fxrate"]
+suba_final = None
+if mast is not None and subcr is not None:
+    # Select only needed columns from subcr to avoid duplicates
+    subcr_for_join = subcr.select([
+        "acctnox", "facility", "faccode", "forcurr", "pdbind",
+        "outstand", "unearned", "repaid", "disburse", "curbal", 
+        "intamt", "oth_charge", "noteno", "instalm", "nodays",
+        "arrears", "tfr02i", "mtd_tawidh_amt", "mtd_gharamah_amt"
+    ])
+    
+    # Select only needed columns from mast to avoid duplicates
+    mast_for_join = mast.select([
+        "acctnox", "ficody", "ficode", "apcode", "branch", "oldbrh",
+        "custcode_clean", "custfiss", "sector_clean", "sectfiss"
+    ])
+    
+    # Join mast with subcr
+    suba_final = mast_for_join.join(subcr_for_join, on="acctnox", how="inner")
+    
+    # Join with ACCT for APPRLIM2 and FIRSTDISBDT
+    if acct is not None:
+        # Calculate APPRLIM2 from limtcurf if it exists, otherwise use 0
+        acct_subset = acct.select([
+            "acctnox",
+            pl.when(pl.col("limtcurf").is_not_null())
+              .then(pl.col("limtcurf") * 100)
+              .otherwise(0)
+              .alias("apprlim2"),
+            pl.col("firstdisbdt").fill_null(0).alias("firstdisbdt")
+        ]).unique(subset=["acctnox"])
+        suba_final = suba_final.join(acct_subset, on="acctnox", how="left")
+    else:
+        # If ACCT is not available, add default values
+        suba_final = suba_final.with_columns([
+            pl.lit(0).cast(pl.Int64).alias("apprlim2"),
+            pl.lit(0).cast(pl.Int64).alias("firstdisbdt")
+        ])
+    
+    # Add calculated fields
+    suba_final = suba_final.with_columns([
+        pl.lit(" 00000000 00000000").alias("dataxx"),
+        pl.lit(0).cast(pl.Int64).alias("odxsamt"),
+        pl.lit(0).cast(pl.Int64).alias("biltot"),
+        pl.when(pl.col("apprlim2").is_null()).then(0).otherwise(pl.col("apprlim2")).alias("apprlim2"),
+        pl.lit(12).cast(pl.Int64).alias("noteterm"),
+        pl.lit("N").alias("syndicat"),
+        pl.lit("00").alias("specialf"),
+        pl.lit("5300").alias("purposes"),
+        pl.lit("19").alias("payfreqc"),
+        pl.when(pl.col("firstdisbdt") > 0)
+          .then(pl.col("firstdisbdt").dt.strftime("%d%m%Y"))
+          .otherwise(pl.lit("00000000"))
+          .alias("fdisbdt"),
+        pl.lit("N").alias("sm_status1"),
+        pl.lit("00000000").alias("sm_dat1"),
+        pl.lit("000000000000000").alias("rmsbba"),
+        pl.lit("     ").alias("score1"),
+        pl.lit("     ").alias("score2"),
+        pl.lit("N").alias("dnbfisme"),
+        pl.lit("").alias("lu_add1"),
+        pl.lit("").alias("lu_add2"),
+        pl.lit("").alias("lu_add3"),
+        pl.lit("").alias("lu_add4"),
+        pl.lit("").alias("lu_town_city"),
+        pl.lit("").alias("lu_postcode"),
+        pl.lit("").alias("lu_state_cd"),
+        pl.lit("").alias("lu_country_cd"),
+        pl.lit("").alias("ia_lru"),
+        pl.lit("").alias("sm_status"),
+        pl.lit("").alias("sm_datestr")
+    ])
+    
+    # Calculate UNDRAWN
+    subq = suba_final.group_by("acctnox").agg([
+        pl.col("outstand").sum().alias("outx")
+    ])
+    suba_final = suba_final.join(subq, on="acctnox", how="left")
+    suba_final = suba_final.with_columns([
+        (pl.col("apprlim2").cast(pl.Float64, strict=False) - pl.col("outx").cast(pl.Float64, strict=False)).cast(pl.Int64).alias("undrawn")
+    ])
+    
+    print(f"Final SUBA processed: {suba_final.height} rows")
