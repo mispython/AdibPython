@@ -1,114 +1,164 @@
-============================================================
-EIIQINST - Islamic Trustee and Client Account Reporting
-============================================================
+def load_client():
+    """
+    Load CLIENT file - either from SAS dataset (already processed) or from text file
+    """
+    try:
+        # First try to read as SAS dataset (already processed)
+        client_sas = f"{PATHS['DEPOSIT']}client.sas7bdat"
+        if Path(client_sas).exists():
+            df = read_sas_file(client_sas)
+            if not df.empty:
+                print(f"  Found CLIENT as SAS dataset: {client_sas}")
+                df = standardize_acctno(df)
+                
+                # Check if it already has the processed columns
+                if 'avbal' in df.columns and 'avbaltt' in df.columns:
+                    print(f"  CLIENT SAS file appears to be pre-processed")
+                    print(f"  CLIENT columns: {df.columns.tolist()}")
+                    
+                    # The file already has all the data we need
+                    # Just need to ensure we have the right columns for output
+                    return df
+                else:
+                    # It's a raw client file, need to process
+                    if 'name' in df.columns:
+                        df['key'] = df['name'].str[:10]
+                    return df
+        
+        # If no SAS file, try text file
+        file_paths = [
+            f"{PATHS['DEPOSIT']}client.txt",
+            f"{PATHS['DEPOSIT']}CLIENT.txt",
+            f"{PATHS['DEPOSIT']}client.dat",
+            f"{PATHS['DEPOSIT']}CLIENT.dat",
+            f"{PATHS['DEPOSIT']}client",
+            f"{PATHS['DEPOSIT']}CLIENT",
+        ]
+        
+        filepath = None
+        for fp in file_paths:
+            if Path(fp).exists():
+                filepath = fp
+                print(f"  Found CLIENT file: {filepath}")
+                break
+        
+        if filepath is None:
+            print(f"  Warning: CLIENT file not found")
+            return pd.DataFrame()
+        
+        # Read as text file
+        data = []
+        with open(filepath, 'r', errors='ignore') as f:
+            lines = f.readlines()
+        
+        print(f"  Read {len(lines)} lines from CLIENT file")
+        
+        for line in lines:
+            if len(line) >= 60:
+                acct_str = line[1:11].strip()
+                if acct_str and acct_str.replace(' ', '').isdigit():
+                    try:
+                        acctno = str(int(float(acct_str)))
+                        name = line[20:60].strip()
+                        if name:
+                            data.append({
+                                'acctno': acctno,
+                                'name': name,
+                                'key': name[:10]
+                            })
+                    except ValueError:
+                        continue
+        
+        df = pd.DataFrame(data)
+        
+        if not df.empty and 'acctno' in df.columns:
+            df = standardize_acctno(df)
+            df = df.drop_duplicates(subset=['acctno'])
+        
+        return df
+    except Exception as e:
+        print(f"  Error reading CLIENT file: {e}")
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame()
 
-Report Period: 12/2025 (Week: 4)
-SDESC: PUBLIC BANK BERHAD
 
-============================================================
-INPUT FILES
-============================================================
 
-PIDMS directory (/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQINST/):
-  - IBGPIDM.txt
-  - client.sas7bdat
-  - curn124.sas7bdat
-  - current.sas7bdat
-  - fd.sas7bdat
-  - fdmthly.sas7bdat
-  - float.sas7bdat
-  - ibgpidm.sas7bdat
-  - remit.sas7bdat
-  - savg124.sas7bdat
-  - saving.sas7bdat
-  - si.sas7bdat
-  - uma.sas7bdat
-  - unclaim2025.sas7bdat
 
-SACA directory (/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQINST/):
-  - IBGPIDM.txt
-  - client.sas7bdat
-  - curn124.sas7bdat
-  - current.sas7bdat
-  - fd.sas7bdat
-  - fdmthly.sas7bdat
-  - float.sas7bdat
-  - ibgpidm.sas7bdat
-  - remit.sas7bdat
-  - savg124.sas7bdat
-  - saving.sas7bdat
-  - si.sas7bdat
-  - uma.sas7bdat
-  - unclaim2025.sas7bdat
 
-DEPOSIT directory (/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQINST/):
-  - IBGPIDM.txt
-  - client.sas7bdat
-  - curn124.sas7bdat
-  - current.sas7bdat
-  - fd.sas7bdat
-  - fdmthly.sas7bdat
-  - float.sas7bdat
-  - ibgpidm.sas7bdat
-  - remit.sas7bdat
-  - savg124.sas7bdat
-  - saving.sas7bdat
-  - si.sas7bdat
-  - uma.sas7bdat
-  - unclaim2025.sas7bdat
-
-UNCLAIM directory (/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQINST/):
-  - IBGPIDM.txt
-  - client.sas7bdat
-  - curn124.sas7bdat
-  - current.sas7bdat
-  - fd.sas7bdat
-  - fdmthly.sas7bdat
-  - float.sas7bdat
-  - ibgpidm.sas7bdat
-  - remit.sas7bdat
-  - savg124.sas7bdat
-  - saving.sas7bdat
-  - si.sas7bdat
-  - uma.sas7bdat
-  - unclaim2025.sas7bdat
-
-Processing Trustee Accounts...
-  FLOAT: 18927 rows
-  IBGPIDM: 7609 rows
-  REMIT: 6385 rows
-  SA/CA/FD: 9 rows
-  Trustee >60k: 0 accounts
-  Trustee <=60k: 1 accounts
-  Output written to: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQINST/islamic_trustee_low.txt
-
-TRUSTEE <=60000 by Branch:
-  Branch 161.0: RM 18,305.23
-
-Processing Client Accounts...
-  Found CLIENT file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIQINST/client.sas7bdat
-  CLIENT master: 617 rows
-  CLIENT columns: ['acctno', 'name', 'branch', 'product', 'curbal', 'intpaybl', 'float', 'avbal', 'avbaltt', 'prodcd', 'amtind', '_type_', '_freq_', 'plusbal', 'unclaim', 'cheqno', 'issbranch', 'status', 'issdte', 'category', 'si', 'ibgamt', 'key']
-  SASA: 1 rows
-  Deposit (from saca) columns: ['branch', 'acctno', 'name', 'purpose', 'product', 'curbal', 'intpaybl']
-  Deposit after FLOAT merge columns: ['branch', 'acctno', 'name', 'purpose', 'product', 'curbal', 'intpaybl', 'float']
-  Deposit after AVBAL calculation columns: ['branch', 'acctno', 'name', 'purpose', 'product', 'curbal', 'intpaybl', 'float', 'avbal', 'avbaltt']
-  Client after merge with deposit: 0 rows
-  Client columns after merge: ['acctno', 'name', 'branch', 'product', 'curbal', 'intpaybl', 'float', 'avbal', 'avbaltt', 'prodcd', 'amtind', '_type_', '_freq_', 'plusbal', 'unclaim', 'cheqno', 'issbranch', 'status', 'issdte', 'category', 'si', 'ibgamt', 'key', 'branch_deposit', 'name_deposit', 'purpose', 'product_deposit', 'curbal_deposit', 'intpaybl_deposit', 'float_deposit', 'avbal_deposit', 'avbaltt_deposit']
-  Final client columns: ['acctno', 'name', 'branch', 'product', 'curbal', 'intpaybl', 'float', 'avbal', 'avbaltt', 'prodcd', 'amtind_x', '_type_', '_freq_', 'plusbal_x', 'unclaim_x', 'cheqno', 'issbranch', 'status', 'issdte', 'category', 'si', 'ibgamt_x', 'key', 'branch_deposit', 'purpose', 'product_deposit', 'curbal_deposit', 'intpaybl_deposit', 'float_deposit', 'avbal_deposit', 'avbaltt_deposit', 'amtind_y', 'plusbal_y', 'unclaim_y', 'plusbal', 'unclaim', 'ibgamt_y', 'ibgamt']
-  Client >60k: 0 accounts
-  Client <=60k: 0 accounts
-
-Checking for duplicate accounts...
-
-============================================================
-SUMMARY
-============================================================
-
-Trustee Accounts:
-  Total: RM 18,305.23
-  >60k: RM 0.00 (0 accounts)
-  <=60k: RM 18,305.23 (1 accounts)
-
-============================================================
-✓ EIIQINST Complete
+    # ========== PART 2: CLIENT ACCOUNTS ==========
+    print("\nProcessing Client Accounts...")
+    
+    client_df = load_client()
+    print(f"  CLIENT master: {len(client_df)} rows")
+    
+    # Check if client_df is already processed (has avbal and avbaltt columns)
+    is_preprocessed = 'avbal' in client_df.columns and 'avbaltt' in client_df.columns
+    
+    if is_preprocessed:
+        print(f"  Client data appears to be pre-processed")
+        print(f"  Using pre-processed client data directly")
+        
+        # The client data already has all the necessary columns
+        # Just need to split by threshold and output
+        client = client_df.copy()
+        
+        # Ensure we have all necessary columns for output
+        for col in ['si', 'ibgamt', 'plusbal', 'unclaim', 'amtind', 'purpose']:
+            if col not in client.columns:
+                client[col] = 0 if col in ['si', 'ibgamt', 'plusbal', 'unclaim'] else ''
+        
+        # Split by threshold
+        if 'avbaltt' in client.columns:
+            client_high = client[client['avbaltt'] > 60000]
+            client_low = client[client['avbaltt'] <= 60000]
+        else:
+            client_high = pd.DataFrame()
+            client_low = pd.DataFrame()
+        
+        print(f"  Client >60k: {len(client_high)} accounts")
+        print(f"  Client <=60k: {len(client_low)} accounts")
+        
+        # Write TEXT outputs
+        def write_client_txt(df, title, filename):
+            if df.empty:
+                return
+            lines = []
+            lines.append(" ")
+            lines.append(title)
+            lines.append(" ")
+            header = "BRANCH;ACCTNO;NAME;PURPOSE;AVBAL;INTPAYBL;PRODUCT;AMTIND;PLUSBAL;UNCLAIM;SI;IBGAMT;AVBALTT;"
+            lines.append(header)
+            
+            for _, r in df.iterrows():
+                line = (
+                    f"{r.get('branch', '')};{r.get('acctno', '')};{r.get('name', '')};{r.get('purpose', '')};"
+                    f"{r.get('avbal', 0):.2f};{r.get('intpaybl', 0):.2f};{r.get('product', '')};{r.get('amtind', '')};"
+                    f"{r.get('plusbal', 0):.2f};{r.get('unclaim', 0):.2f};{r.get('si', 0):.2f};"
+                    f"{r.get('ibgamt', 0):.2f};{r.get('avbaltt', 0):.2f};"
+                )
+                lines.append(line)
+            
+            output_path = Path(f"{PATHS['OUTPUT']}{filename}")
+            output_path.write_text('\n'.join(lines))
+            print(f"  Output written to: {output_path}")
+        
+        write_client_txt(client_high, "CLIENT >60000", "islamic_client_high.txt")
+        write_client_txt(client_low, "CLIENT <=60000", "islamic_client_low.txt")
+        
+        # Print reports
+        if not client_high.empty and 'branch' in client_high.columns:
+            print("\nCLIENT >60000 by Branch:")
+            branch_summary = client_high.groupby('branch')['avbaltt'].sum().sort_index()
+            for branch, total in branch_summary.items():
+                print(f"  Branch {branch}: RM {total:,.2f}")
+        
+        if not client_low.empty and 'branch' in client_low.columns:
+            print("\nCLIENT <=60000 by Branch:")
+            branch_summary = client_low.groupby('branch')['avbaltt'].sum().sort_index()
+            for branch, total in branch_summary.items():
+                print(f"  Branch {branch}: RM {total:,.2f}")
+    else:
+        # Process client data from scratch (original logic)
+        print(f"  Processing client data from raw source")
+        # ... rest of the original processing logic ...
