@@ -1,4 +1,3 @@
-PBBDPFMT imported successfully
 ============================================================
 EIBQINST - Trustee and Client Account Quarterly Reporting
 ============================================================
@@ -275,17 +274,14 @@ CLIENT <=60000 by Branch:
 ============================================================
 Checking for duplicate accounts...
 ============================================================
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBQINST.py:949: DeprecationWarning: `pl.count()` is deprecated. Please use `pl.len()` instead.
-(Deprecated in version 0.20.5)
-  pl.count().alias('count')
 
 Found 6 duplicate accounts:
+  Account 1120702022.0 appears in: TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE
+  Account 1375054827.0 appears in: TRUSTEE, TRUSTEE, TRUSTEE
+  Account 1371928624.0 appears in: TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE
   Account 1347898536.0 appears in: TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE
   Account 1194869701.0 appears in: TRUSTEE, TRUSTEE
-  Account 1375054827.0 appears in: TRUSTEE, TRUSTEE, TRUSTEE
   Account 1286513018.0 appears in: TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE
-  Account 1120702022.0 appears in: TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE
-  Account 1371928624.0 appears in: TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE, TRUSTEE
 
 ============================================================
 SUMMARY
