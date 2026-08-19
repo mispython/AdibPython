@@ -1,497 +1,474 @@
-============================================================
-EIIQINST - Islamic Trustee and Client Account Reporting
-============================================================
+"""
+EIIQINST - Islamic Trustee and Client Account Quarterly Reporting
+Processes Islamic trustee and client accounts with balance thresholds (>60k/<=60k)
+Includes PBBDPFMT format mappings for product codes (Islamic version)
+"""
 
-Report Period: 12/2025 (Week: 4)
-SDESC: PUBLIC BANK BERHAD
+import pyreadstat
+import pandas as pd
+from datetime import datetime, timedelta
+from pathlib import Path
+from PBBDPFMT import *
 
-Loading data...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIQINST.py:73: FutureWarning: Setting an item of incompatible dtype is deprecated and will raise in a future error of pandas. Value '['3060028907.0' '3060030515.0' '3060038803.0' ... '6993910507.0'
- '6994577632.0' '6996865105.0']' has dtype incompatible with float64, please explicitly cast to a compatible dtype first.
-  df.loc[:, 'acctno'] = df['acctno'].astype(str).str.strip()
-  FLOAT: 18927 rows
-  IBGPIDM: 7609 rows
-  REMIT: 6385 rows
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIQINST.py:73: FutureWarning: Setting an item of incompatible dtype is deprecated and will raise in a future error of pandas. Value '['4023062721.0' '4571611204.0' '4578339725.0' ... '7991288729.0'
- '7991453231.0' '7992132912.0']' has dtype incompatible with float64, please explicitly cast to a compatible dtype first.
-  df.loc[:, 'acctno'] = df['acctno'].astype(str).str.strip()
-  DEP: 3325593 rows
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIQINST.py:73: FutureWarning: Setting an item of incompatible dtype is deprecated and will raise in a future error of pandas. Value '['1801964021.0' '1990005520.0' '3989439317.0' '3813502125.0'
- '3980008222.0' '3992771818.0' '3819162026.0' '3989296931.0'
- '3814027710.0' '3814029834.0' '3817774431.0' '3820495311.0'
- '3822928301.0' '3980017317.0' '3985957116.0' '3990039022.0'
- '3992780003.0' '3992781520.0' '3816187317.0' '1824532314.0'
- '3810718627.0' '3812514606.0' '3813648615.0' '3815122517.0'
- '3815123027.0' '3818250724.0' '3819047317.0' '3819049210.0'
- '3820730308.0' '3820733427.0' '3980026121.0' '3991865322.0'
- '3991871820.0' '3991871917.0' '3813594223.0' '3816252024.0'
- '3816252218.0' '3817486507.0' '3818502910.0' '3824883015.0'
- '3825244114.0' '3988198035.0' '3814907505.0' '3815741419.0'
- '3990087034.0' '3810417434.0' '3811305934.0' '3980042418.0'
- '3988852210.0' '3988856906.0' '3992803421.0' '3992804804.0'
- '1838764728.0' '3814760811.0' '3814764015.0' '3814764828.0'
- '3815616426.0' '3817528625.0' '3818366422.0' '3818369504.0'
- '3818664630.0' '3820487017.0' '3822140207.0' '3822142719.0'
- '3822144030.0' '3824850402.0' '3824851009.0' '3981389226.0'
- '3984568609.0' '3984751010.0' '3989611931.0' '3995583202.0'
- '3812451410.0' '3815594234.0' '3816065509.0' '3817061128.0'
- '3817062936.0' '3817660432.0' '3820685430.0' '3989316805.0'
- '3822909929.0' '3992827618.0' '1832824227.0' '3820116515.0'
- '1833333521.0' '1812347735.0' '3813407633.0' '3815111529.0'
- '3817904518.0' '3980089429.0' '3988715525.0' '3818767604.0'
- '3987477131.0' '3815093123.0' '3816998328.0' '3822031317.0'
- '3987524715.0' '3989400115.0' '3989401401.0' '3990232811.0'
- '3810210611.0' '3811101320.0' '3811102412.0' '3812518004.0'
- '3814174716.0' '3816016830.0' '3816019233.0' '3818607911.0'
- '3820926009.0' '3989688921.0' '3812116506.0' '3812118824.0'
- '3813964528.0' '3816315026.0' '3816316312.0' '3816810421.0'
- '3816814401.0' '3817310523.0' '3818758509.0' '3820631933.0'
- '3814058527.0' '3983261131.0' '3813554505.0' '3819142816.0'
- '3995690818.0' '3992900000.0' '1993778100.0' '3810504602.0'
- '3811595013.0' '3812737107.0' '3816586800.0' '3822754904.0'
- '3822755026.0' '3823044610.0' '3980142504.0' '3986475311.0'
- '3986701832.0' '3986880807.0' '3987273621.0' '3988023725.0'
- '3989003920.0' '3991896102.0' '3814406334.0' '3995149632.0'
- '3987144417.0' '3810398906.0' '3813539434.0' '3814483621.0'
- '3817084330.0' '3988137530.0' '3988139908.0' '1995755722.0'
- '1837215618.0' '3821652513.0' '3992933523.0' '1835026811.0'
- '3819387621.0' '3980178915.0' '1835916405.0' '3810522307.0'
- '3820417417.0' '1832519921.0' '3810542718.0' '3812326902.0'
- '3812329402.0' '3988012118.0' '3983221122.0' '1839691429.0'
- '3816219017.0' '3823587235.0' '3823587817.0' '3986607619.0'
- '3812047916.0' '3813505110.0' '3822658507.0' '3823863721.0'
- '3986175926.0' '1834882825.0' '3811935205.0' '3985908728.0'
- '3820033236.0' '1840250033.0' '3988965020.0' '3825721222.0'
- '3813362336.0' '3816553411.0' '1835046409.0' '3810374127.0'
- '3822082508.0' '3986131900.0' '1806583610.0' '3822357411.0'
- '3823147524.0' '3986089716.0' '3988723334.0' '3812376031.0'
- '3821389333.0' '1839699001.0' '3986600520.0' '1806921521.0'
- '3810546735.0' '3811056502.0' '3811998610.0' '3812999823.0'
- '3815528226.0' '3815528711.0' '3821925001.0' '3984630622.0'
- '3821167014.0' '3810440217.0' '3810442632.0' '3821153720.0'
- '3811222036.0' '3822541911.0' '1834322132.0' '3810491736.0'
- '3822380619.0' '3987913526.0' '3989406122.0' '3985797207.0'
- '3818882932.0' '3818883636.0' '3822500810.0' '3989839407.0'
- '3994021733.0' '3810007508.0' '3819438603.0' '3984825619.0'
- '3824193630.0' '3993202114.0' '3825061622.0' '3980449413.0'
- '3812643131.0' '3816660117.0' '3985549508.0' '3993226505.0'
- '3986120002.0' '3818482223.0' '3820355604.0' '3822838633.0'
- '3823517635.0' '3989718922.0' '3810089225.0' '3813542619.0'
- '3814536205.0' '3810160333.0' '3816837215.0' '3823477932.0'
- '3823308719.0' '3981617312.0' '3820120732.0' '3992646728.0'
- '3813192300.0' '3988728503.0' '3825644010.0' '3986835101.0'
- '3986835429.0' '3991166805.0' '3814940415.0' '3817726322.0'
- '3820693821.0' '3821799804.0' '3811601205.0' '3815484700.0'
- '3987924611.0' '3988228036.0' '3988229128.0' '1995645800.0'
- '3815716318.0' '3982439006.0' '3987819701.0' '3988514321.0'
- '3811146401.0' '3823666400.0' '3987516712.0' '3815992916.0'
- '3820821105.0' '3982929614.0' '3987868223.0' '1835663709.0'
- '3811157329.0' '3822894029.0' '3822894223.0' '3822895024.0'
- '3818477205.0' '1835505230.0' '1836174933.0' '3814069127.0'
- '3814069806.0' '3818781232.0' '3820747922.0' '3821458505.0'
- '3822940230.0' '3810749832.0' '3988671902.0' '3811175131.0'
- '3980627027.0' '3991410934.0' '3811009328.0' '3820861830.0'
- '3820864002.0' '3825151133.0' '3988912906.0' '3810923817.0'
- '3820709321.0' '3984115010.0' '3810107534.0' '3820002904.0'
- '3820398307.0' '3820977006.0' '3991460705.0' '3815721336.0'
- '3816370531.0' '3816372036.0' '3988568012.0' '3814109509.0'
- '3824552813.0' '3988340536.0' '3991492032.0' '3996866617.0'
- '1813603215.0' '3810816917.0' '3811437407.0' '3812189807.0'
- '3812189904.0' '3813942224.0' '3987620433.0' '3988616203.0'
- '1826917016.0' '3814879434.0' '3820140912.0' '3821430000.0'
- '3824180421.0' '3986154908.0' '3815676227.0' '3815678217.0'
- '3984219307.0' '3984219404.0' '3815797100.0' '3814310003.0'
- '3985730307.0' '3982003318.0' '3994313115.0' '3814387903.0'
- '3818124736.0' '3986651808.0' '3993483530.0' '3996718616.0'
- '3996509834.0' '3996788835.0' '3987743818.0' '3987744134.0'
- '3813679529.0' '3816330619.0' '3818054920.0' '1805624806.0'
- '3810968413.0' '3813595412.0' '3820699925.0' '3982147818.0'
- '3984303624.0' '3989092802.0' '3989095302.0' '3986809721.0'
- '3821723227.0' '3980772819.0' '3820239415.0' '3821749026.0'
- '3822290235.0' '3823068128.0' '3980776217.0' '3810181605.0'
- '3996667209.0' '3813239818.0' '3980787108.0' '3991753835.0'
- '3819615319.0' '3819618013.0' '1834438606.0' '3811419120.0'
- '3817800900.0' '3818741223.0' '3810991330.0' '3812230511.0'
- '3812233108.0' '3814122202.0' '3814123913.0' '3816944928.0'
- '3820006630.0' '3825506524.0' '3988018125.0' '3988019702.0'
- '3995157501.0' '3995159916.0' '3816322325.0' '3820168835.0'
- '3820587200.0' '3821101303.0' '3823869922.0' '3811465918.0'
- '3811469025.0' '3813062004.0' '3815186007.0' '3816691322.0'
- '3992412232.0' '3988507932.0' '3817658727.0' '3810689815.0'
- '3812169821.0' '3821393513.0' '1838634529.0' '3815060935.0'
- '3987766729.0' '3810805213.0' '3817136404.0' '3984372132.0'
- '3985522617.0' '3987939519.0' '3814031114.0' '3815577330.0'
- '3816792015.0' '3817721116.0' '3817721213.0' '3820466036.0'
- '3989044014.0' '3989047133.0' '3815848313.0' '3821586908.0'
- '3982392301.0' '3982393818.0' '3982395032.0' '3987776431.0'
- '3989423511.0' '3995091223.0' '3811397607.0' '3816666609.0'
- '3816443004.0' '3821446910.0' '3984630525.0' '3994805034.0'
- '1835164006.0' '3810410917.0' '3812957205.0' '3813344206.0'
- '3813766734.0' '3815714716.0' '3816738221.0' '3817121630.0'
- '3985502109.0' '3985809734.0' '3811883616.0' '3819362429.0'
- '3811003418.0' '3812827625.0' '3822147500.0' '3980945706.0'
- '3987863405.0' '3987864012.0' '3817030505.0' '3823889229.0'
- '3985268010.0' '3821754917.0' '3825087421.0' '3825496509.0'
- '1824643910.0' '1834944407.0' '3810221636.0' '3815632335.0'
- '3994864228.0' '3994864810.0' '1826967600.0' '3818897900.0'
- '3825182204.0' '3813208613.0' '3819170417.0' '3822693116.0'
- '3822694536.0' '3823740627.0' '3824919217.0' '3982312417.0'
- '1838236101.0' '1838236720.0' '1838237424.0' '3818419625.0'
- '3810653404.0' '3823377227.0' '3823377906.0' '3815570425.0'
- '3818217620.0' '1801236326.0' '3819686205.0' '3984272434.0'
- '3984277118.0' '3996309334.0' '3996314606.0' '3812236906.0'
- '1828930108.0' '3810729421.0' '3823675532.0' '3986654927.0'
- '1833411303.0' '3823683535.0' '3825362233.0' '1994691313.0'
- '3813477002.0' '3981274814.0' '3811652724.0' '3823156716.0'
- '3823156910.0' '3989495004.0' '3818067025.0' '3982924311.0'
- '3810629529.0' '3822634019.0' '3824343703.0' '3810053918.0'
- '3820043035.0' '3814572622.0' '3810142725.0' '3812074134.0'
- '3820555000.0' '3985589517.0' '3985591222.0' '3986008934.0'
- '3812590316.0' '3823177503.0' '3824013101.0' '3824013720.0'
- '3825517318.0' '3986273403.0' '3986850306.0' '1838811827.0'
- '1838812009.0' '3811063122.0' '3816821700.0' '3821283300.0'
- '3986887906.0' '3821832214.0' '3821833731.0' '3987067205.0'
- '3987067727.0' '3987067824.0' '3811050823.0' '3811054221.0'
- '3987262827.0' '3988361226.0' '3988576500.0' '3817331019.0'
- '3823432426.0' '3810136227.0' '3810138217.0' '3813773608.0'
- '3823197817.0' '3824763428.0' '3981328818.0' '3812677515.0'
- '3820535536.0' '1822604303.0' '3817230617.0' '3817929613.0'
- '3819744523.0' '3816515429.0' '1834521018.0' '3816145803.0'
- '3818556735.0' '3820908923.0' '3822551904.0' '3820522133.0'
- '3992780719.0' '3818682432.0' '3819700400.0' '3820314503.0'
- '3820314600.0' '3821093606.0' '3816163411.0' '3816163508.0'
- '3816532333.0' '3811544829.0' '3813381230.0' '3816490700.0'
- '3819525905.0' '3820325200.0' '3820327324.0' '3822995401.0'
- '3824527809.0' '3982107906.0' '3988161502.0' '3988161636.0'
- '3812349910.0' '3810732800.0' '3810733310.0' '3813589921.0'
- '3814691505.0' '3815161531.0' '3817321414.0' '3817323732.0'
- '3817672609.0' '3987077101.0' '3988222029.0' '3810575525.0'
- '3810576423.0' '3810577321.0' '3810577418.0' '3810578316.0'
- '3812690111.0' '3812691919.0' '3812692817.0' '3813759920.0'
- '3814604710.0' '3816524002.0' '3818003401.0' '3818004433.0'
- '3819357933.0' '3820430110.0' '3821333033.0' '3981156210.0'
- '3981156732.0']' has dtype incompatible with float64, please explicitly cast to a compatible dtype first.
-  df.loc[:, 'acctno'] = df['acctno'].astype(str).str.strip()
-  CLIENT: 617 rows
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+BASE_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS'
+INPUT_PATH = f'{BASE_PATH}/input/prod/EIIQINST'
+OUTPUT_PATH = f'{BASE_PATH}/output/EIIQINST'
 
-Processing Trustee Accounts...
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIIQINST.py:73: FutureWarning: Setting an item of incompatible dtype is deprecated and will raise in a future error of pandas. Value '['4808244026.0' '3811465202.0' '3814160706.0' '3816420809.0'
- '3816420906.0' '3816421319.0' '3816423928.0' '3986421135.0'
- '3988639405.0']' has dtype incompatible with float64, please explicitly cast to a compatible dtype first.
-  df.loc[:, 'acctno'] = df['acctno'].astype(str).str.strip()
-  SA/CA/FD: 9 rows
-  Trustee >60k: 0 accounts
-  Trustee <=60k: 1 accounts
-  Output: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQINST/islamic_trustee_low.txt
+Path(OUTPUT_PATH).mkdir(parents=True, exist_ok=True)
 
-TRUSTEE <=60000 by Branch:
-  Branch 161: RM 18,305.23
+PROD_CODES = [
+    '42110', '42310', '42120', '42320', '42130', '42133', '42132', '42180',
+    '42610', '42630', '34180', '42199', '42699'
+]
 
-Processing Client Accounts...
-  CLIENT master: 617 rows
-  Client >60k: 281 accounts
-  Client <=60k: 336 accounts
-  Output: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQINST/islamic_client_high.txt
-  Output: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIQINST/islamic_client_low.txt
+# =============================================================================
+# DATE PROCESSING
+# =============================================================================
+def get_dates():
+    """Calculate report dates matching SAS logic"""
+    today = datetime.now()
+    first_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    reptdate = first_of_month - timedelta(days=1)
+    
+    day = reptdate.day
+    if day == 8:
+        sdd, wk = 1, '1'
+    elif day == 15:
+        sdd, wk = 9, '2'
+    elif day == 22:
+        sdd, wk = 16, '3'
+    else:
+        sdd, wk = 23, '4'
+    
+    mm = reptdate.month
+    
+    return {
+        'nowk': wk,
+        'reptmon': f"{mm:02d}",
+        'reptyear': str(reptdate.year),
+        'sdate': datetime(reptdate.year, mm, sdd),
+        'sdesc': 'PUBLIC BANK BERHAD'
+    }
 
-CLIENT >60000 by Branch:
-  Branch 3: RM 8,207,789.80
-  Branch 4: RM 1,078,211.83
-  Branch 5: RM 1,966,217.34
-  Branch 7: RM 6,459,150.50
-  Branch 8: RM 992,382.74
-  Branch 9: RM 414,943.31
-  Branch 10: RM 1,238,427.88
-  Branch 13: RM 13,145,660.67
-  Branch 14: RM 436,423.90
-  Branch 15: RM 790,267.05
-  Branch 16: RM 254,044.39
-  Branch 18: RM 60,369.56
-  Branch 19: RM 5,980,710.57
-  Branch 21: RM 225,418.11
-  Branch 22: RM 1,255,073.40
-  Branch 23: RM 2,538,210.47
-  Branch 24: RM 3,391,424.41
-  Branch 26: RM 197,360.49
-  Branch 28: RM 605,546.17
-  Branch 29: RM 88,393.06
-  Branch 30: RM 2,404,392.63
-  Branch 32: RM 712,489.92
-  Branch 34: RM 5,675,759.35
-  Branch 35: RM 450,838.36
-  Branch 36: RM 15,616,458.39
-  Branch 37: RM 313,251.35
-  Branch 38: RM 80,517.39
-  Branch 39: RM 200,058.59
-  Branch 41: RM 420,981.29
-  Branch 42: RM 800,162.97
-  Branch 44: RM 390,950.61
-  Branch 45: RM 4,330,679.47
-  Branch 46: RM 1,108,597.87
-  Branch 47: RM 720,851.17
-  Branch 50: RM 280,408.08
-  Branch 51: RM 167,436.16
-  Branch 53: RM 845,177.19
-  Branch 56: RM 2,883,903.41
-  Branch 57: RM 509,208.56
-  Branch 61: RM 10,376,725.07
-  Branch 64: RM 1,792,812.54
-  Branch 66: RM 3,952,838.37
-  Branch 67: RM 103,978.00
-  Branch 74: RM 2,119,720.73
-  Branch 77: RM 1,067,679.83
-  Branch 79: RM 152,079.92
-  Branch 83: RM 96,120.99
-  Branch 87: RM 1,441,694.81
-  Branch 88: RM 217,730.59
-  Branch 90: RM 703,914.24
-  Branch 91: RM 74,653.14
-  Branch 94: RM 162,310.68
-  Branch 95: RM 275,423.02
-  Branch 96: RM 243,045.82
-  Branch 104: RM 169,893.68
-  Branch 106: RM 457,522.05
-  Branch 107: RM 250,251.97
-  Branch 109: RM 548,714.17
-  Branch 110: RM 2,740,133.93
-  Branch 111: RM 2,293,154.56
-  Branch 112: RM 365,409.69
-  Branch 113: RM 558,641.78
-  Branch 117: RM 615,613.83
-  Branch 123: RM 1,526,054.55
-  Branch 125: RM 81,699.00
-  Branch 126: RM 16,453,250.84
-  Branch 127: RM 200,977.79
-  Branch 129: RM 570,826.01
-  Branch 130: RM 517,582.42
-  Branch 131: RM 1,043,915.39
-  Branch 136: RM 4,577,991.38
-  Branch 137: RM 1,027,054.04
-  Branch 139: RM 1,114,343.90
-  Branch 140: RM 1,997,844.15
-  Branch 141: RM 803,817.84
-  Branch 143: RM 160,145.49
-  Branch 145: RM 488,337.66
-  Branch 147: RM 1,227,600.68
-  Branch 148: RM 1,806,427.18
-  Branch 150: RM 492,724.44
-  Branch 151: RM 176,828.03
-  Branch 154: RM 481,948.77
-  Branch 158: RM 144,008.82
-  Branch 159: RM 62,731.36
-  Branch 160: RM 1,085,118.09
-  Branch 161: RM 4,402,553.47
-  Branch 163: RM 190,317.68
-  Branch 164: RM 2,251,377.95
-  Branch 165: RM 1,080,028.56
-  Branch 168: RM 1,769,157.27
-  Branch 172: RM 890,609.72
-  Branch 174: RM 351,106.99
-  Branch 176: RM 3,202,523.62
-  Branch 177: RM 1,117,915.21
-  Branch 178: RM 245,166.90
-  Branch 179: RM 2,818,839.01
-  Branch 180: RM 743,220.03
-  Branch 185: RM 27,050,149.22
-  Branch 190: RM 103,161.06
-  Branch 194: RM 114,955.53
-  Branch 196: RM 4,027,265.79
-  Branch 198: RM 3,264,706.29
-  Branch 199: RM 151,842.01
-  Branch 202: RM 104,541.17
-  Branch 204: RM 5,306,841.19
-  Branch 207: RM 6,339,394.29
-  Branch 208: RM 983,679.33
-  Branch 209: RM 847,526.56
-  Branch 217: RM 5,973,280.40
-  Branch 222: RM 6,255,622.01
-  Branch 224: RM 851,718.38
-  Branch 231: RM 1,877,428.45
-  Branch 232: RM 86,522.65
-  Branch 237: RM 3,834,388.96
-  Branch 241: RM 72,069.71
-  Branch 244: RM 113,625.94
-  Branch 254: RM 4,241,280.04
-  Branch 256: RM 6,672,624.31
-  Branch 258: RM 1,015,700.68
-  Branch 260: RM 2,051,214.32
-  Branch 269: RM 3,596,849.68
-  Branch 270: RM 1,987,678.30
-  Branch 273: RM 549,921.56
-  Branch 274: RM 5,165,865.90
-  Branch 275: RM 715,297.56
-  Branch 278: RM 427,902.41
-  Branch 281: RM 488,015.01
-  Branch 282: RM 777,721.49
-  Branch 284: RM 596,679.99
-  Branch 288: RM 3,570,841.58
-  Branch 290: RM 220,675.79
-  Branch 293: RM 1,255,452.67
-  Branch 294: RM 193,449.94
-  Branch 295: RM 534,352.20
-  Branch 296: RM 352,758.50
-  Branch 701: RM 2,312,064.20
-  Branch 703: RM 458,460.31
-  Branch 704: RM 6,036,920.66
+# =============================================================================
+# DATA LOADING UTILITIES
+# =============================================================================
+def read_sas_file(filepath):
+    """Read SAS file and convert column names to lowercase"""
+    try:
+        df, _ = pyreadstat.read_sas7bdat(filepath)
+        df.columns = [col.lower() for col in df.columns]
+        return df
+    except Exception as e:
+        print(f"  Warning: Could not read {filepath}: {e}")
+        return pd.DataFrame()
 
-CLIENT <=60000 by Branch:
-  Branch 2: RM 61,712.14
-  Branch 3: RM 3,979.60
-  Branch 4: RM 247.42
-  Branch 5: RM 57,966.67
-  Branch 6: RM 172.73
-  Branch 7: RM 107,974.28
-  Branch 8: RM 46,352.19
-  Branch 9: RM 2,425.65
-  Branch 10: RM 3,013.27
-  Branch 13: RM 114,032.03
-  Branch 14: RM 1,320.22
-  Branch 16: RM 1,532.50
-  Branch 19: RM 4,511.98
-  Branch 22: RM 220.00
-  Branch 23: RM 55,475.42
-  Branch 24: RM 27,306.84
-  Branch 25: RM 22,058.03
-  Branch 28: RM 210.00
-  Branch 30: RM 100,054.69
-  Branch 31: RM 0.10
-  Branch 33: RM 249.11
-  Branch 34: RM 52,735.88
-  Branch 36: RM 955.09
-  Branch 37: RM 10,725.58
-  Branch 42: RM 25,050.92
-  Branch 45: RM 1,010.00
-  Branch 46: RM 37,347.92
-  Branch 47: RM 50,171.95
-  Branch 49: RM 331.11
-  Branch 50: RM 1,709.81
-  Branch 52: RM 12,089.81
-  Branch 53: RM 9,172.33
-  Branch 57: RM 53,924.49
-  Branch 58: RM 1,140.20
-  Branch 61: RM 16,747.20
-  Branch 66: RM 7,798.07
-  Branch 70: RM 9,412.15
-  Branch 72: RM 62.81
-  Branch 77: RM 7,281.51
-  Branch 79: RM 342.60
-  Branch 81: RM 6,874.42
-  Branch 83: RM 5,309.97
-  Branch 88: RM 49,406.17
-  Branch 91: RM 634.16
-  Branch 94: RM 38,583.00
-  Branch 96: RM 4,232.00
-  Branch 97: RM 760.27
-  Branch 102: RM 30,742.19
-  Branch 104: RM 236.05
-  Branch 106: RM 25,342.00
-  Branch 107: RM 22,119.25
-  Branch 108: RM 3,882.63
-  Branch 109: RM 2,873.32
-  Branch 110: RM 12,225.75
-  Branch 111: RM 6,494.50
-  Branch 112: RM 79,816.07
-  Branch 113: RM 33,294.19
-  Branch 114: RM 6.00
-  Branch 118: RM 78,235.86
-  Branch 123: RM 26,797.23
-  Branch 126: RM 7,322.31
-  Branch 128: RM 8,961.94
-  Branch 129: RM 4,310.53
-  Branch 130: RM 11,236.61
-  Branch 131: RM 451.82
-  Branch 136: RM 92,357.74
-  Branch 137: RM 3,772.51
-  Branch 139: RM 34,006.73
-  Branch 140: RM 14,313.03
-  Branch 141: RM 5,908.78
-  Branch 142: RM 3.00
-  Branch 143: RM 108,637.29
-  Branch 146: RM 6,755.43
-  Branch 147: RM 177.84
-  Branch 148: RM 14.50
-  Branch 150: RM 11,817.80
-  Branch 151: RM 983.35
-  Branch 153: RM 5,712.27
-  Branch 154: RM 99,362.06
-  Branch 156: RM 18,220.11
-  Branch 158: RM 822.15
-  Branch 159: RM 73,031.01
-  Branch 161: RM 947.41
-  Branch 162: RM 11,663.33
-  Branch 163: RM 6,755.06
-  Branch 164: RM 108,054.83
-  Branch 165: RM 477.00
-  Branch 168: RM 5,192.10
-  Branch 171: RM 53,983.56
-  Branch 173: RM 19,438.15
-  Branch 174: RM 4,792.50
-  Branch 176: RM 44,076.82
-  Branch 177: RM 59,414.24
-  Branch 179: RM 66,912.07
-  Branch 180: RM 23,256.11
-  Branch 185: RM 87,054.94
-  Branch 195: RM 32.00
-  Branch 196: RM 2,261.80
-  Branch 198: RM 39,436.19
-  Branch 202: RM 427.25
-  Branch 204: RM 4,721.29
-  Branch 205: RM 10,668.50
-  Branch 206: RM 50,372.20
-  Branch 207: RM 18,113.05
-  Branch 208: RM 49,372.58
-  Branch 209: RM 879.40
-  Branch 217: RM 1,447.98
-  Branch 224: RM 3,115.50
-  Branch 225: RM 8,111.20
-  Branch 228: RM 0.00
-  Branch 231: RM 3,701.37
-  Branch 235: RM 4,364.06
-  Branch 241: RM 56.15
-  Branch 243: RM 156.54
-  Branch 244: RM 50,372.00
-  Branch 245: RM 2,106.29
-  Branch 248: RM 27,355.15
-  Branch 251: RM 1,837.68
-  Branch 254: RM 21,024.98
-  Branch 258: RM 31,534.75
-  Branch 264: RM 4,700.00
-  Branch 266: RM 50,111.61
-  Branch 269: RM 20,513.21
-  Branch 270: RM 12,649.81
-  Branch 274: RM 37,656.37
-  Branch 275: RM -302,168.50
-  Branch 278: RM 59,149.88
-  Branch 283: RM 4,950.00
-  Branch 284: RM 16,619.57
-  Branch 285: RM 3,030.50
-  Branch 287: RM 24,192.50
-  Branch 288: RM 4,910.00
-  Branch 293: RM 1,544.31
-  Branch 294: RM 3,030.00
-  Branch 295: RM 101,074.56
-  Branch 296: RM 40,038.29
-  Branch 701: RM 43,377.65
-  Branch 702: RM 304.62
-  Branch 703: RM 70,047.75
-  Branch 704: RM 106,589.15
+def standardize_acctno(df):
+    """Standardize ACCTNO column to string type for consistent merging"""
+    if 'acctno' in df.columns:
+        df = df.copy()
+        # Handle potential NaN values and convert to proper string format
+        df['acctno'] = df['acctno'].fillna(0).astype('int64').astype(str).str.strip()
+    return df
 
-Checking for duplicate accounts...
-  No duplicate accounts found
+def load_float():
+    """Load FLOAT data from PIDMS"""
+    df = read_sas_file(f"{INPUT_PATH}/float.sas7bdat")
+    if not df.empty and 'acctno' in df.columns and 'float' in df.columns:
+        return standardize_acctno(df.groupby('acctno')['float'].sum().reset_index())
+    return pd.DataFrame()
 
-============================================================
-SUMMARY
-============================================================
+def load_ibgpidm():
+    """Load IBGPIDM data from text file"""
+    filepath = f"{INPUT_PATH}/IBGPIDM.txt"
+    if not Path(filepath).exists():
+        print(f"  Warning: IBGPIDM text file not found")
+        return pd.DataFrame()
+    
+    try:
+        data = []
+        with open(filepath, 'r') as f:
+            for line in f:
+                if len(line) >= 28:
+                    acct_str = line[0:10].strip()
+                    ibgamt_str = line[11:27].strip()
+                    if acct_str and ibgamt_str:
+                        try:
+                            data.append({
+                                'acctno': str(int(float(acct_str))),
+                                'ibgamt': float(ibgamt_str)
+                            })
+                        except ValueError:
+                            continue
+        
+        df = pd.DataFrame(data)
+        if not df.empty:
+            return standardize_acctno(df.groupby('acctno')['ibgamt'].sum().reset_index())
+    except Exception as e:
+        print(f"  Error reading IBGPIDM: {e}")
+    
+    return pd.DataFrame()
 
-Trustee Accounts:
-  Total: RM 18,305.23
-  >60k: RM 0.00 (0 accounts)
-  <=60k: RM 18,305.23 (1 accounts)
+def load_remit(d):
+    """Load REMIT and UNCLAIM data"""
+    remit = read_sas_file(f"{INPUT_PATH}/remit.sas7bdat")
+    unclaim = read_sas_file(f"{INPUT_PATH}/unclaim{d['reptyear']}.sas7bdat")
+    
+    if remit.empty:
+        return pd.DataFrame()
+    
+    if not unclaim.empty and 'ledgbal' in unclaim.columns:
+        unclaim = unclaim.rename(columns={'ledgbal': 'unclaimx'})
+    
+    combined = pd.concat([remit, unclaim], ignore_index=True) if not unclaim.empty else remit.copy()
+    if 'unclaimx' not in combined.columns:
+        combined['unclaimx'] = 0
+    
+    if 'paymode' in combined.columns:
+        summary = combined.groupby('paymode').agg({
+            'ledgbal': 'sum',
+            'unclaimx': 'sum'
+        }).reset_index()
+        summary.columns = ['paymode', 'plusbal', 'unclaim']
+        
+        orig = remit.drop_duplicates(subset=['paymode'])
+        result = summary.merge(orig, on='paymode', how='left')
+        result['acctno'] = result['paymode'].astype(str).str.strip()
+        result = result.drop(columns=['paymode', 'ledgbal', 'unclaimx'], errors='ignore')
+        return standardize_acctno(result)
+    
+    return pd.DataFrame()
 
-Client Accounts:
-  Total: RM 286,673,377.55
-  >60k: RM 283,702,702.10 (281 accounts)
-  <=60k: RM 2,970,675.45 (336 accounts)
+def load_account_data():
+    """Load SA/CA/FD accounts with purpose 5/6"""
+    dfs = []
+    
+    # SAVING
+    saving = read_sas_file(f"{INPUT_PATH}/saving.sas7bdat")
+    if not saving.empty and 'purpose' in saving.columns:
+        saving = saving[saving['purpose'].astype(str).isin(['5', '6'])].copy()
+        cols = ['branch', 'acctno', 'name', 'purpose', 'product', 'curbal', 'intpaybl']
+        saving = saving[[c for c in cols if c in saving.columns]]
+        dfs.append(saving)
+    
+    # CURRENT
+    current = read_sas_file(f"{INPUT_PATH}/current.sas7bdat")
+    if not current.empty and 'purpose' in current.columns:
+        current = current[current['purpose'].astype(str).isin(['5', '6'])].copy()
+        if 'acctno' in current.columns and 'curbal' in current.columns:
+            current = current.sort_values(['acctno', 'curbal'], ascending=[True, False])
+            current = current.drop_duplicates(subset=['acctno'], keep='first')
+        if all(col in current.columns for col in ['curcode', 'intpaybl', 'forate']):
+            current.loc[:, 'intpaybl'] = current.apply(
+                lambda x: round(x['intpaybl'] * x['forate'], 2) if x['curcode'] != 'MYR' else x['intpaybl'],
+                axis=1
+            )
+        cols = ['branch', 'acctno', 'name', 'purpose', 'product', 'curbal', 'intpaybl']
+        current = current[[c for c in cols if c in current.columns]]
+        dfs.append(current)
+    
+    # FD
+    fd = read_sas_file(f"{INPUT_PATH}/fd.sas7bdat")
+    if not fd.empty and 'purpose' in fd.columns:
+        fd = fd[fd['purpose'].astype(str).isin(['5', '6'])].copy()
+        if all(col in fd.columns for col in ['curcode', 'intpaybl', 'forate']):
+            fd.loc[:, 'intpaybl'] = fd.apply(
+                lambda x: round(x['intpaybl'] * x['forate'], 2) if x['curcode'] != 'MYR' else x['intpaybl'],
+                axis=1
+            )
+        cols = ['branch', 'acctno', 'name', 'product', 'purpose', 'curbal', 'intpaybl']
+        fd = fd[[c for c in cols if c in fd.columns]]
+        dfs.append(fd)
+    
+    if dfs:
+        return standardize_acctno(pd.concat(dfs, ignore_index=True))
+    return pd.DataFrame()
 
-============================================================
-✓ EIIQINST Complete
+def load_dep(d):
+    """Load DEP data from monthly files"""
+    dfs = []
+    
+    # SAVG
+    savg_path = f"{INPUT_PATH}/savg{d['reptmon']}{d['nowk']}.sas7bdat"
+    if Path(savg_path).exists():
+        df = read_sas_file(savg_path)
+        if not df.empty:
+            cols = [c for c in ['acctno', 'amtind', 'prodcd', 'product'] if c in df.columns]
+            if cols:
+                dfs.append(df[cols])
+    
+    # CURN
+    curn_path = f"{INPUT_PATH}/curn{d['reptmon']}{d['nowk']}.sas7bdat"
+    if Path(curn_path).exists():
+        df = read_sas_file(curn_path)
+        if not df.empty:
+            cols = [c for c in ['acctno', 'amtind', 'prodcd', 'product'] if c in df.columns]
+            if cols:
+                dfs.append(df[cols])
+    
+    # FDMTHLY
+    fdmthly_path = f"{INPUT_PATH}/fdmthly.sas7bdat"
+    if Path(fdmthly_path).exists():
+        df = read_sas_file(fdmthly_path)
+        if not df.empty:
+            df = df.rename(columns={'bic': 'prodcd', 'accttype': 'product'})
+            cols = [c for c in ['acctno', 'amtind', 'prodcd', 'product'] if c in df.columns]
+            if cols:
+                dfs.append(df[cols])
+    
+    if not dfs:
+        return pd.DataFrame()
+    
+    combined = pd.concat(dfs, ignore_index=True)
+    
+    if 'prodcd' in combined.columns:
+        combined = combined.copy()
+        combined['prodcd'] = combined['prodcd'].astype(str)
+        combined = combined[combined['prodcd'].isin(PROD_CODES)]
+        
+        if 'product' in combined.columns:
+            mask = ~((combined['prodcd'].isin(['42199', '42699'])) & 
+                     (~combined['product'].astype(str).isin(['72', '413'])))
+            combined = combined[mask]
+    
+    if 'acctno' in combined.columns:
+        return standardize_acctno(combined.drop_duplicates(subset=['acctno']))
+    return pd.DataFrame()
+
+def load_client():
+    """Load CLIENT file from SAS dataset"""
+    filepath = f"{INPUT_PATH}/client.sas7bdat"
+    if not Path(filepath).exists():
+        print(f"  Warning: CLIENT file not found")
+        return pd.DataFrame()
+    
+    df = read_sas_file(filepath)
+    if not df.empty:
+        return standardize_acctno(df)
+    return pd.DataFrame()
+
+# =============================================================================
+# OUTPUT UTILITIES
+# =============================================================================
+def write_text_output(df, title, filename):
+    """Write DataFrame to text file in SAS format"""
+    if df.empty:
+        return
+    
+    lines = [" ", title, " "]
+    header = "BRANCH;ACCTNO;NAME;PURPOSE;AVBAL;INTPAYBL;PRODUCT;AMTIND;PLUSBAL;UNCLAIM;SI;IBGAMT;AVBALTT;"
+    lines.append(header)
+    
+    for _, r in df.iterrows():
+        line = (
+            f"{r.get('branch', '')};{r.get('acctno', '')};{r.get('name', '')};{r.get('purpose', '')};"
+            f"{r.get('avbal', 0):.2f};{r.get('intpaybl', 0):.2f};{r.get('product', '')};{r.get('amtind', '')};"
+            f"{r.get('plusbal', 0):.2f};{r.get('unclaim', 0):.2f};{r.get('si', 0):.2f};"
+            f"{r.get('ibgamt', 0):.2f};{r.get('avbaltt', 0):.2f};"
+        )
+        lines.append(line)
+    
+    output_path = Path(f"{OUTPUT_PATH}/{filename}")
+    output_path.write_text('\n'.join(lines))
+    print(f"  Output: {output_path}")
+
+def print_branch_summary(df, title):
+    """Print branch summary"""
+    if not df.empty and 'branch' in df.columns:
+        print(f"\n{title} by Branch:")
+        for branch, total in df.groupby('branch')['avbaltt'].sum().sort_index().items():
+            # Convert branch to int if possible to remove decimals
+            branch_display = int(branch) if float(branch).is_integer() else branch
+            print(f"  Branch {branch_display}: RM {total:,.2f}")
+
+# =============================================================================
+# MAIN PROCESSING
+# =============================================================================
+def process_trustee_accounts(d, float_df, ibg_df, remit_df, dep):
+    """Process trustee accounts"""
+    print("\nProcessing Trustee Accounts...")
+    
+    saca = load_account_data()
+    print(f"  SA/CA/FD: {len(saca)} rows")
+    
+    if saca.empty:
+        return None
+    
+    # Merge with FLOAT
+    trustee = saca.merge(float_df, on='acctno', how='left') if not float_df.empty else saca.copy()
+    if 'float' not in trustee.columns:
+        trustee['float'] = 0
+    
+    # Calculate AVBAL and AVBALTT
+    trustee = trustee.copy()
+    trustee['float'] = trustee['float'].fillna(0)
+    trustee['curbal'] = trustee['curbal'].fillna(0)
+    trustee['intpaybl'] = trustee['intpaybl'].fillna(0)
+    trustee['avbal'] = trustee['curbal'] - trustee['float']
+    trustee['avbaltt'] = trustee['avbal'] + trustee['intpaybl']
+    
+    # Merge with DEP
+    if not dep.empty:
+        trustee = trustee.merge(dep, on='acctno', how='inner')
+    
+    # Merge with REMIT
+    if not remit_df.empty:
+        remit_cols = [c for c in ['acctno', 'plusbal', 'unclaim'] if c in remit_df.columns]
+        if remit_cols:
+            trustee = trustee.merge(remit_df[remit_cols], on='acctno', how='left')
+    if 'plusbal' not in trustee.columns:
+        trustee['plusbal'] = 0
+    if 'unclaim' not in trustee.columns:
+        trustee['unclaim'] = 0
+    
+    trustee = trustee.copy()
+    trustee['plusbal'] = trustee['plusbal'].fillna(0)
+    trustee['unclaim'] = trustee['unclaim'].fillna(0)
+    trustee['avbaltt'] = trustee['avbal'] + trustee['plusbal'] + trustee['unclaim'] + trustee['intpaybl']
+    
+    # Add SI
+    trustee['si'] = 0
+    trustee['avbaltt'] += trustee['si']
+    
+    # Merge with IBGPIDM
+    if not ibg_df.empty:
+        trustee = trustee.merge(ibg_df, on='acctno', how='left')
+    if 'ibgamt' not in trustee.columns:
+        trustee['ibgamt'] = 0
+    trustee = trustee.copy()
+    trustee['ibgamt'] = trustee['ibgamt'].fillna(0)
+    trustee['avbaltt'] += trustee['ibgamt']
+    
+    # Split by threshold
+    high = trustee[trustee['avbaltt'] > 60000]
+    low = trustee[trustee['avbaltt'] <= 60000]
+    
+    print(f"  Trustee >60k: {len(high)} accounts")
+    print(f"  Trustee <=60k: {len(low)} accounts")
+    
+    write_text_output(high, "TRUSTEE >60000", "islamic_trustee_high.txt")
+    write_text_output(low, "TRUSTEE <=60000", "islamic_trustee_low.txt")
+    
+    print_branch_summary(high, "TRUSTEE >60000")
+    print_branch_summary(low, "TRUSTEE <=60000")
+    
+    return trustee, high, low
+
+def process_client_accounts(client_df):
+    """Process client accounts from pre-processed data"""
+    print("\nProcessing Client Accounts...")
+    print(f"  CLIENT master: {len(client_df)} rows")
+    
+    if client_df.empty:
+        return None
+    
+    # Ensure required columns exist
+    client_df = client_df.copy()
+    for col, default in [('si', 0), ('ibgamt', 0), ('plusbal', 0), ('unclaim', 0),
+                          ('amtind', ''), ('purpose', '')]:
+        if col not in client_df.columns:
+            client_df[col] = default
+    
+    # Split by threshold
+    high = client_df[client_df['avbaltt'] > 60000]
+    low = client_df[client_df['avbaltt'] <= 60000]
+    
+    print(f"  Client >60k: {len(high)} accounts")
+    print(f"  Client <=60k: {len(low)} accounts")
+    
+    write_text_output(high, "CLIENT >60000", "islamic_client_high.txt")
+    write_text_output(low, "CLIENT <=60000", "islamic_client_low.txt")
+    
+    print_branch_summary(high, "CLIENT >60000")
+    print_branch_summary(low, "CLIENT <=60000")
+    
+    return client_df, high, low
+
+def check_duplicates(trustee, client):
+    """Check for duplicate accounts between trustee and client"""
+    print("\nChecking for duplicate accounts...")
+    
+    if trustee is None or client is None or trustee.empty or client.empty:
+        print("  No data to check")
+        return
+    
+    trustee_src = trustee[['acctno']].copy()
+    trustee_src['src'] = 'TRUSTEE'
+    client_src = client[['acctno']].copy()
+    client_src['src'] = 'CLIENT'
+    
+    all_acc = pd.concat([trustee_src, client_src])
+    dup = all_acc[all_acc.duplicated(subset=['acctno'], keep=False)]
+    
+    if not dup.empty:
+        print(f"  Found {len(dup)} duplicate accounts:")
+        for acctno, row in dup.groupby('acctno')['src'].apply(list).items():
+            print(f"    {acctno} appears in: {', '.join(row)}")
+    else:
+        print("  No duplicate accounts found")
+
+def print_summary(trustee_data, client_data):
+    """Print final summary"""
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    
+    if trustee_data:
+        trustee, high, low = trustee_data
+        print(f"\nTrustee Accounts:")
+        print(f"  Total: RM {trustee['avbaltt'].sum():,.2f}")
+        print(f"  >60k: RM {high['avbaltt'].sum():,.2f} ({len(high)} accounts)")
+        print(f"  <=60k: RM {low['avbaltt'].sum():,.2f} ({len(low)} accounts)")
+    
+    if client_data:
+        client, high, low = client_data
+        print(f"\nClient Accounts:")
+        print(f"  Total: RM {client['avbaltt'].sum():,.2f}")
+        print(f"  >60k: RM {high['avbaltt'].sum():,.2f} ({len(high)} accounts)")
+        print(f"  <=60k: RM {low['avbaltt'].sum():,.2f} ({len(low)} accounts)")
+
+def main():
+    print("=" * 60)
+    print("EIIQINST - Islamic Trustee and Client Account Reporting")
+    print("=" * 60)
+    
+    d = get_dates()
+    print(f"\nReport Period: {d['reptmon']}/{d['reptyear']} (Week: {d['nowk']})")
+    print(f"SDESC: {d['sdesc']}")
+    
+    # Load data
+    print("\nLoading data...")
+    float_df = load_float()
+    print(f"  FLOAT: {len(float_df)} rows")
+    
+    ibg_df = load_ibgpidm()
+    print(f"  IBGPIDM: {len(ibg_df)} rows")
+    
+    remit_df = load_remit(d)
+    print(f"  REMIT: {len(remit_df)} rows")
+    
+    dep = load_dep(d)
+    print(f"  DEP: {len(dep)} rows")
+    
+    client_df = load_client()
+    print(f"  CLIENT: {len(client_df)} rows")
+    
+    # Process accounts
+    trustee_data = process_trustee_accounts(d, float_df, ibg_df, remit_df, dep)
+    client_data = process_client_accounts(client_df)
+    
+    # Check duplicates
+    if trustee_data and client_data:
+        check_duplicates(trustee_data[0], client_data[0])
+    
+    # Print summary
+    print_summary(trustee_data, client_data)
+    
+    print("\n" + "=" * 60)
+    print("✓ EIIQINST Complete")
+
+if __name__ == "__main__":
+    main()
