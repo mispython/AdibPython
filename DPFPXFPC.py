@@ -1,522 +1,291 @@
-"""
-EIIQINST - Islamic Trustee and Client Account Quarterly Reporting
-Processes Islamic trustee and client accounts with balance thresholds (>60k/<=60k)
-Includes PBBDPFMT format mappings for product codes (Islamic version)
-"""
+============================================================
+EIBDLCRM - BNM LCR Reporting (Conventional Banking)
+============================================================
 
-import pyreadstat
-import pandas as pd
-from datetime import datetime, timedelta
-from pathlib import Path
-from PBBDPFMT import *
+NOTE: KALMLIQ logic lives in kalmliq.py (separate module,
+      mirrors the original %INC PGM(KALMLIQ) SAS structure)
+      - Reading from BNMK.K1TBL{mon}{week} and BNMK.K3TBL{mon}{week}
+      - Using hardcoded FX rates
+      - Column names normalized to lowercase on read
+============================================================
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-BASE_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS'
-INPUT_PATH = f'{BASE_PATH}/input/prod/EIIQINST'
-OUTPUT_PATH = f'{BASE_PATH}/output/EIIQINST'
+Report Date: 31/07/2026
+Week: 4, Month: 07
+Expected K1/K3 files: k1tbl074.sas7bdat
+Expected UTSAS files: utms260731.sas7bdat, utfx260731.sas7bdat, utrp260731.sas7bdat
 
-Path(OUTPUT_PATH).mkdir(parents=True, exist_ok=True)
+============================================================
+LOADING INPUTS
+============================================================
 
-PROD_CODES = [
-    '42110', '42310', '42120', '42320', '42130', '42133', '42132', '42180',
-    '42610', '42630', '34180', '42199', '42699'
-]
+1. FX Rates (HARDCODED)...
+  Loaded 10 currencies: ['MYR', 'USD', 'SGD', 'HKD', 'AUD', 'JPY', 'XAU', 'GBP', 'EUR', 'CNY']
 
-# =============================================================================
-# DATE PROCESSING
-# =============================================================================
-def get_dates():
-    """Calculate report dates matching SAS logic"""
-    today = datetime.now()
-    first_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    reptdate = first_of_month - timedelta(days=1)
-    
-    day = reptdate.day
-    if day == 8:
-        sdd, wk = 1, '1'
-    elif day == 15:
-        sdd, wk = 9, '2'
-    elif day == 22:
-        sdd, wk = 16, '3'
-    else:
-        sdd, wk = 23, '4'
-    
-    mm = reptdate.month
-    
-    return {
-        'nowk': wk,
-        'reptmon': f"{mm:02d}",
-        'reptyear': str(reptdate.year),
-        'sdate': datetime(reptdate.year, mm, sdd),
-        'sdesc': 'PUBLIC BANK BERHAD'
-    }
+2. Loading WALK.TXT and TEMPL.TXT...
+    Read 63 records from walk.txt
+    NOTE: LCRCDGL format lookup not populated - 'item' will be blank for all WALK records until ITEM_LOOKUP is filled in.
+    Read 70 records from templ.txt
+  WALK: 63 records
+  TEMPL: 70 records
 
-# =============================================================================
-# DATA LOADING UTILITIES
-# =============================================================================
-def read_sas_file(filepath):
-    """Read SAS file and convert column names to lowercase"""
-    try:
-        df, _ = pyreadstat.read_sas7bdat(filepath)
-        df.columns = [col.lower() for col in df.columns]
-        return df
-    except Exception as e:
-        print(f"  Warning: Could not read {filepath}: {e}")
-        return pd.DataFrame()
+3. Processing KALMLIQ (K1TBL and K3TBL)...
+  Looking for K1TBL file...
+    Base path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/
+    Month: 07, Week: 4
+    Looking for exact matches:
+      k1tbl074.sas7bdat: ✓ Found
+  Using K1TBL file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/k1tbl074.sas7bdat
+    Successfully read: k1tbl074.sas7bdat (7199 rows, 61 columns)
+  Processing K1TBL with 7199 rows...
+    Columns (61): ['reptdate', 'gwab', 'gwan', 'gwas', 'gwapp', 'gwacs', 'gwbala', 'gwbalc', 'gwpaia', 'gwpaic', 'gwshn', 'gwctp', 'gwact', 'gwacd', 'gwsac', 'gwnanc', 'gwcnal', 'gwccy', 'gwcnar', 'gwcnap', 'gwdiaa', 'gwdiac', 'gwciaa', 'gwciac', 'gwratd', 'gwratc', 'gwdipa', 'gwdipc', 'gwcipa', 'gwcipc', 'gwpl1d', 'gwpl2d', 'gwpl1c', 'gwpl2c', 'gwpala', 'gwpalc', 'gwdlp', 'gwdlr', 'gwsdt', 'gwrdt', 'gwrrt', 'gwpdt', 'gwprt', 'gwpcm', 'gwmotc', 'gwmrtc', 'gwmrt', 'gwmdt', 'gwmcm', 'gwmwm', 'gwmvt', 'gwmvts', 'gwsrc', 'gwuc1', 'gwuc2', 'gwc2r', 'gwamap', 'gwexr', 'gwopt', 'gwocy', 'gwcbd']
+    Unique values in GWMVT: ['P', '']
+    Rows with GWMVT = 'P': 7198
+    Sample rows (first 3):
+      Row 1:
+        gwmvt: 
+        gwccy: 
+        gwocy: 
+        gwmvts: 
+        gwctp: 
+        gwdlp: 
+        gwmdt: None
+        gwbalc: None
+      Row 2:
+        gwmvt: P
+        gwccy: USD
+        gwocy: MYR
+        gwmvts: S
+        gwctp: CD
+        gwdlp: FXS
+        gwmdt: 24321.0
+        gwbalc: 408600.0
+      Row 3:
+        gwmvt: P
+        gwccy: USD
+        gwocy: CNY
+        gwmvts: P
+        gwctp: BA
+        gwdlp: FXS
+        gwmdt: 24321.0
+        gwbalc: -4086000.0
+  K1TBL processing stats:
+    Total rows: 7199
+    Filtered out (GWMVT != 'P'): 1
+    Passed GWMVT = 'P': 7198
+    Excluded (XAU/XAT currency): 14
+    Records with item assigned: 4785
+  K1TBL records: 4,785
+  Looking for K3TBL file...
+    Base path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/
+    Month: 07, Week: 4
+    Looking for exact matches:
+      k3tbl074.sas7bdat: ✓ Found
+  Using K3TBL file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/k3tbl074.sas7bdat
+    Successfully read: k3tbl074.sas7bdat (20171 rows, 39 columns)
+  Processing K3TBL with 20171 rows...
+    Columns (39): ['reptdate', 'utsty', 'utref', 'utdlp', 'utdlr', 'utsmn', 'utcus', 'utclc', 'utctp', 'utfcv', 'utidt', 'utlcd', 'utncd', 'utmdt', 'utcbd', 'utcpr', 'utqds', 'utpcp', 'utamoc', 'utdpf', 'utaict', 'utaicy', 'utait', 'utdpet', 'utdpey', 'utdpe', 'utasn', 'utosd', 'utca2', 'utsac', 'utcnap', 'utcnar', 'utcnal', 'utccy', 'utamts', 'matdt', 'issdt', 'ddate', 'xdate']
+    !! WARNING [K3TBL]: expected columns not found after normalization: ['utmm1']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
+    Unique values in UTREF: ['AFS', 'ISV', 'PSD', 'INV', 'DLG', '', 'AFSLIQ', 'DRI']
+    Unique values in UTSTY: ['ITB', 'DIM', 'ISD', 'MGS', 'DBD', 'CB1', 'ISB', 'DIC', 'MGI', 'PBA', '', 'MTB', 'LDC']
+    Sample rows (first 3):
+      Row 1:
+        utref: 
+        utsty: 
+        utdlp: 
+        utcus: 
+        utctp: 
+        matdt: None
+        utamoc: None
+        utdpf: None
+      Row 2:
+        utref: AFS
+        utsty: CB1
+        utdlp: MSP
+        utcus: OSKIBB
+        utctp: BM
+        matdt: 26509.0
+        utamoc: 80000000.0
+        utdpf: 0.0
+      Row 3:
+        utref: AFS
+        utsty: CB1
+        utdlp: MSP
+        utcus: OSKIBB
+        utctp: BM
+        matdt: 25056.0
+        utamoc: 100000000.0
+        utdpf: 0.0
+  K3TBL processing stats:
+    Total rows: 20171
+    Rows matching UTREF patterns: 20148
+    Records with item assigned: 1498
+    Records with matdt missing/None (will be dropped by build_ktblall): 1
+  K3TBL records: 1,498
 
-def standardize_acctno(df):
-    """Standardize ACCTNO column to string type for consistent merging"""
-    if 'acctno' in df.columns:
-        df = df.copy()
-        # Handle potential NaN values and convert to proper string format
-        df['acctno'] = df['acctno'].fillna(0).astype('int64').astype(str).str.strip()
-    return df
+3b. Processing K1TBX (from KAMLIQX - FX swap items 711/911)...
+  Looking for K1TBL file...
+    Base path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/
+    Month: 07, Week: 4
+    Looking for exact matches:
+      k1tbl074.sas7bdat: ✓ Found
+  Using K1TBL file for K1TBX: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/k1tbl074.sas7bdat
+    Successfully read: k1tbl074.sas7bdat (7199 rows, 61 columns)
+  K1TBX base rows (GWMVT='P', not XAU, GWDLP in swap set): 2,218
+  K1TBX1 (domestic-leg matches): 840, K1TBX2 (both-foreign matches): 269
+  K1TBX final records (each match expands to 2 PART/ITEM rows): 2,218
+  K1TBX records: 2,218
 
-def load_float():
-    """Load FLOAT data from PIDMS"""
-    df = read_sas_file(f"{INPUT_PATH}/float.sas7bdat")
-    if not df.empty and 'acctno' in df.columns and 'float' in df.columns:
-        return standardize_acctno(df.groupby('acctno')['float'].sum().reset_index())
-    return pd.DataFrame()
+3c. Processing K3TBL3 (from KALMLIQ4 - repo items 820/830)...
+  Looking for K3TBL file...
+    Base path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/
+    Month: 07, Week: 4
+    Looking for exact matches:
+      k3tbl074.sas7bdat: ✓ Found
+  Using K3TBL file for K3TBL3: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/bnmk/k3tbl074.sas7bdat
+    Successfully read: k3tbl074.sas7bdat (20171 rows, 39 columns)
+    NOTE [K3TBL3]: $CTYPE. format lookup not populated - 'cust' will be blank for every row, so K3TBL3 will produce 0 records until ctype_lookup is filled in with the real PROC FORMAT mapping.
+  K3TBL3 processing stats:
+    Total rows: 20171
+    Rows matching UTREF=RRS/UTSTY=MGS/UTDLP=MSS: 0
+    Records with item assigned: 0
+  K3TBL3 records: 0
+  Total treasury records: 17,002
 
-def load_ibgpidm():
-    """Load IBGPIDM data from text file"""
-    filepath = f"{INPUT_PATH}/IBGPIDM.txt"
-    if not Path(filepath).exists():
-        print(f"  Warning: IBGPIDM text file not found")
-        return pd.DataFrame()
-    
-    try:
-        data = []
-        with open(filepath, 'r') as f:
-            for line in f:
-                if len(line) >= 28:
-                    acct_str = line[0:10].strip()
-                    ibgamt_str = line[11:27].strip()
-                    if acct_str and ibgamt_str:
-                        try:
-                            data.append({
-                                'acctno': str(int(float(acct_str))),
-                                'ibgamt': float(ibgamt_str)
-                            })
-                        except ValueError:
-                            continue
-        
-        df = pd.DataFrame(data)
-        if not df.empty:
-            return standardize_acctno(df.groupby('acctno')['ibgamt'].sum().reset_index())
-    except Exception as e:
-        print(f"  Error reading IBGPIDM: {e}")
-    
-    return pd.DataFrame()
+4. Processing DCIWH.DCID...
+  Using DCI file: dcid0731.sas7bdat
+    Successfully read: dcid0731.sas7bdat (230 rows, 33 columns)
+    Columns (33): ['ticketno', 'custname', 'newic', 'salesid', 'custcode', 'invcurrac', 'altcurrac', 'accint', 'rollover', 'convertind', 'dealerid', 'managerid', 'custicketno', 'branch', 'product', 'invcurr', 'altcurr', 'invamt', 'altamt', 'tenor', 'strikert', 'spotrt', 'dcirt', 'mmrt', 'premrec', 'prempaid', 'unwindcost', 'newdeal', 'tradedt', 'startdt', 'fixingdt', 'matdt', 'statusind']
+    Sample rows (first 3):
+      Row 1:
+        matdt: 24321.0
+        startdt: 24314.0
+        invamt: 50000.0
+        invcurr: MYR
+        custcode: 78.0
+        product: DCI
+        ticketno: Z30575
+      Row 2:
+        matdt: 24331.0
+        startdt: 24300.0
+        invamt: 100000.0
+        invcurr: MYR
+        custcode: 78.0
+        product: DCI
+        ticketno: Z30173
+      Row 3:
+        matdt: 24335.0
+        startdt: 24303.0
+        invamt: 100000.0
+        invcurr: MYR
+        custcode: 78.0
+        product: DCI
+        ticketno: Z30285
+  DCI records: 172
 
-def load_remit(d):
-    """Load REMIT and UNCLAIM data"""
-    remit = read_sas_file(f"{INPUT_PATH}/remit.sas7bdat")
-    unclaim = read_sas_file(f"{INPUT_PATH}/unclaim{d['reptyear']}.sas7bdat")
-    
-    if remit.empty:
-        return pd.DataFrame()
-    
-    if not unclaim.empty and 'ledgbal' in unclaim.columns:
-        unclaim = unclaim.rename(columns={'ledgbal': 'unclaimx'})
-    
-    combined = pd.concat([remit, unclaim], ignore_index=True) if not unclaim.empty else remit.copy()
-    if 'unclaimx' not in combined.columns:
-        combined['unclaimx'] = 0
-    
-    if 'paymode' in combined.columns:
-        summary = combined.groupby('paymode').agg({
-            'ledgbal': 'sum',
-            'unclaimx': 'sum'
-        }).reset_index()
-        summary.columns = ['paymode', 'plusbal', 'unclaim']
-        
-        orig = remit.drop_duplicates(subset=['paymode'])
-        result = summary.merge(orig, on='paymode', how='left')
-        result['acctno'] = result['paymode'].astype(str).str.strip()
-        result = result.drop(columns=['paymode', 'ledgbal', 'unclaimx'], errors='ignore')
-        return standardize_acctno(result)
-    
-    return pd.DataFrame()
+5. Processing CIS.CUSTDLY (parquet)...
+  Using CIS file: CIS_CUST_DAILY.parquet
+    Successfully read: CIS_CUST_DAILY.parquet (33049519 rows, 99 columns)
+    CIS equity rows after filter: 17625
+  CIS records: 17,611
 
-def load_account_data():
-    """Load SA/CA/FD accounts with purpose 5/6"""
-    dfs = []
-    
-    # SAVING
-    saving = read_sas_file(f"{INPUT_PATH}/saving.sas7bdat")
-    if not saving.empty and 'purpose' in saving.columns:
-        saving = saving[saving['purpose'].astype(str).isin(['5', '6'])].copy()
-        cols = ['branch', 'acctno', 'name', 'purpose', 'product', 'curbal', 'intpaybl']
-        saving = saving[[c for c in cols if c in saving.columns]]
-        dfs.append(saving)
-    
-    # CURRENT
-    current = read_sas_file(f"{INPUT_PATH}/current.sas7bdat")
-    if not current.empty and 'purpose' in current.columns:
-        current = current[current['purpose'].astype(str).isin(['5', '6'])].copy()
-        if 'acctno' in current.columns and 'curbal' in current.columns:
-            current = current.sort_values(['acctno', 'curbal'], ascending=[True, False])
-            current = current.drop_duplicates(subset=['acctno'], keep='first')
-        if all(col in current.columns for col in ['curcode', 'intpaybl', 'forate']):
-            current.loc[:, 'intpaybl'] = current.apply(
-                lambda x: round(x['intpaybl'] * x['forate'], 2) if x['curcode'] != 'MYR' else x['intpaybl'],
-                axis=1
-            )
-        cols = ['branch', 'acctno', 'name', 'purpose', 'product', 'curbal', 'intpaybl']
-        current = current[[c for c in cols if c in current.columns]]
-        dfs.append(current)
-    
-    # FD
-    fd = read_sas_file(f"{INPUT_PATH}/fd.sas7bdat")
-    if not fd.empty and 'purpose' in fd.columns:
-        fd = fd[fd['purpose'].astype(str).isin(['5', '6'])].copy()
-        if all(col in fd.columns for col in ['curcode', 'intpaybl', 'forate']):
-            fd.loc[:, 'intpaybl'] = fd.apply(
-                lambda x: round(x['intpaybl'] * x['forate'], 2) if x['curcode'] != 'MYR' else x['intpaybl'],
-                axis=1
-            )
-        cols = ['branch', 'acctno', 'name', 'product', 'purpose', 'curbal', 'intpaybl']
-        fd = fd[[c for c in cols if c in fd.columns]]
-        dfs.append(fd)
-    
-    if dfs:
-        return standardize_acctno(pd.concat(dfs, ignore_index=True))
-    return pd.DataFrame()
+6. Processing EQUA.UTMS/UTFX/UTRP...
+  Looking for UTSAS files in: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/equa/
+    RPTDT format: 260731 (260731)
+    Total files in directory: 3
+    First 20 files:
+      - utfx260731.sas7bdat
+      - utms260731.sas7bdat
+      - utrp260731.sas7bdat
 
-def load_dep(d):
-    """Load DEP data from monthly files"""
-    dfs = []
-    
-    # SAVG
-    savg_path = f"{INPUT_PATH}/savg{d['reptmon']}{d['nowk']}.sas7bdat"
-    if Path(savg_path).exists():
-        df = read_sas_file(savg_path)
-        if not df.empty:
-            cols = [c for c in ['acctno', 'amtind', 'prodcd', 'product'] if c in df.columns]
-            if cols:
-                dfs.append(df[cols])
-    
-    # CURN
-    curn_path = f"{INPUT_PATH}/curn{d['reptmon']}{d['nowk']}.sas7bdat"
-    if Path(curn_path).exists():
-        df = read_sas_file(curn_path)
-        if not df.empty:
-            cols = [c for c in ['acctno', 'amtind', 'prodcd', 'product'] if c in df.columns]
-            if cols:
-                dfs.append(df[cols])
-    
-    # FDMTHLY
-    fdmthly_path = f"{INPUT_PATH}/fdmthly.sas7bdat"
-    if Path(fdmthly_path).exists():
-        df = read_sas_file(fdmthly_path)
-        if not df.empty:
-            df = df.rename(columns={'bic': 'prodcd', 'accttype': 'product'})
-            cols = [c for c in ['acctno', 'amtind', 'prodcd', 'product'] if c in df.columns]
-            if cols:
-                dfs.append(df[cols])
-    
-    if not dfs:
-        return pd.DataFrame()
-    
-    combined = pd.concat(dfs, ignore_index=True)
-    
-    if 'prodcd' in combined.columns:
-        combined = combined.copy()
-        combined['prodcd'] = combined['prodcd'].astype(str)
-        combined = combined[combined['prodcd'].isin(PROD_CODES)]
-        
-        if 'product' in combined.columns:
-            mask = ~((combined['prodcd'].isin(['42199', '42699'])) & 
-                     (~combined['product'].astype(str).isin(['72', '413'])))
-            combined = combined[mask]
-    
-    if 'acctno' in combined.columns:
-        return standardize_acctno(combined.drop_duplicates(subset=['acctno']))
-    return pd.DataFrame()
+    Looking for utms files...
+      Pattern 'utms260731.sas7bdat' matched 1 file(s):
+        - utms260731.sas7bdat
+      Using: utms260731.sas7bdat
+    Successfully read: utms260731.sas7bdat (20096 rows, 99 columns)
+      Columns in utms260731.sas7bdat (99): ['branch', 'dealref', 'dealtype', 'portref', 'depotid', 'depotfd', 'custno', 'custloc', 'custname', 'custeqno', 'custeqtp', 'custacc', 'custid', 'custfiss', 'secno', 'currency', 'sectype', 'secdesc', 'secissr', 'issrloc', 'issrname', 'issracpn', 'issreqtp', 'issracc', 'issrid', 'issrtp2', 'couponrt', 'capvalue', 'dealdesc', 'faltvalu', 'facevalu', 'capprice', 'discquot', 'saledp', 'tranno', 'trantype', 'qtyldmat', 'custanal', 'custsana', 'custresc', 'custprtc', 'custrskc', 'issrprat', 'issrarat', 'dealrcd', 'brokrcd', 'brokamt', 'sundref', 'intacr', 'acprft', 'acprftys', 'amtacrin', 'camtowne', 'amtowned', 'bookvalu', 'discprm', 'mrktvalu', 'discpltd', 'discprtd', 'undiscpr', 'discprmn', 'discprpf', 'orgdisc', 'yieldmat', 'porttype', 'baserate', 'capflat', 'coupfreq', 'couprate', 'coupspre', 'issrsund', 'issrresc', 'issrprtc', 'issracpt', 'intbear', 'issprice', 'isssize', 'priceind', 'seclegcd', 'secorgcd', 'mrktmkr1', 'stdsecdc', 'race', 'busdate', 'trddate', 'valudate', 'matdate', 'issdate', 'lstcpndt', 'nxtcpndt', 'cstlc', 'cltlc', 'deal_folder', 'reval_accrued_amt', 'type_of_deal', 'fo_deal_id', 'unrealise_profit_loss', 'exp_credit_loss', 'capital_instrument_type']
+      Added 20096 records from utms260731.sas7bdat
 
-def load_client():
-    """Load CLIENT file from SAS dataset"""
-    filepath = f"{INPUT_PATH}/client.sas7bdat"
-    if not Path(filepath).exists():
-        print(f"  Warning: CLIENT file not found")
-        return pd.DataFrame()
-    
-    df = read_sas_file(filepath)
-    if not df.empty:
-        return standardize_acctno(df)
-    return pd.DataFrame()
+    Looking for utfx files...
+      Pattern 'utfx260731.sas7bdat' matched 1 file(s):
+        - utfx260731.sas7bdat
+      Using: utfx260731.sas7bdat
+    Successfully read: utfx260731.sas7bdat (6061 rows, 39 columns)
+      Columns in utfx260731.sas7bdat (39): ['branch', 'dealtype', 'dealref', 'applcode', 'basictyp', 'custno', 'custloc', 'custname', 'custeqno', 'custeqtp', 'custacc', 'custid', 'custfiss', 'movetype', 'movesub', 'purchcur', 'salescur', 'amtpay', 'mmpriamt', 'amtrecei', 'exchrate', 'custanal', 'custsana', 'custresc', 'custprtc', 'custrskc', 'custgrp', 'dealcode', 'brokrcd', 'brokamt', 'intlsnbd', 'totint', 'optdeal', 'custpart', 'race', 'mayeqamt', 'busdate', 'strtdate', 'matdate']
+      Added 6061 records from utfx260731.sas7bdat
 
-# =============================================================================
-# OUTPUT UTILITIES
-# =============================================================================
-def format_data_lines(df):
-    """Format DataFrame rows for text output matching production format"""
-    lines = []
-    header = "BRANCH;ACCTNO;NAME;PURPOSE;AVBAL;INTPAYBL;PRODUCT;AMTIND;PLUSBAL;UNCLAIM;SI;IBGAMT;AVBALTT;"
-    lines.append(header)
-    
-    for _, r in df.iterrows():
-        # Format branch as integer (remove decimals)
-        branch = str(int(r.get('branch', 0))) if pd.notna(r.get('branch')) else ''
-        
-        # Format values matching production output
-        # Production shows empty for SI, IBGAMT when 0 or NaN
-        # Shows '.' for PLUSBAL, UNCLAIM when NaN
-        si_val = '' if pd.isna(r.get('si')) or r.get('si', 0) == 0 else f"{r.get('si', 0):.2f}"
-        ibgamt_val = '' if pd.isna(r.get('ibgamt')) or r.get('ibgamt', 0) == 0 else f"{r.get('ibgamt', 0):.2f}"
-        plusbal_val = '.' if pd.isna(r.get('plusbal')) else f"{r.get('plusbal', 0):.2f}"
-        unclaim_val = '.' if pd.isna(r.get('unclaim')) else f"{r.get('unclaim', 0):.2f}"
-        
-        line = (
-            f"{branch} ;{r.get('acctno', '')} ;{r.get('name', '')} ;{r.get('purpose', '')} ;"
-            f"{r.get('avbal', 0):.2f} ;{r.get('intpaybl', 0):.2f} ;{r.get('product', '')} ;{r.get('amtind', '')} ;"
-            f"{plusbal_val} ;{unclaim_val} ;{si_val} ;{ibgamt_val} ;{r.get('avbaltt', 0):.2f}"
-        )
-        lines.append(line)
-    
-    return lines
+    Looking for utrp files...
+      Pattern 'utrp260731.sas7bdat' matched 1 file(s):
+        - utrp260731.sas7bdat
+      Using: utrp260731.sas7bdat
+    Successfully read: utrp260731.sas7bdat (66 rows, 79 columns)
+      Columns in utrp260731.sas7bdat (79): ['branch', 'dealtype', 'dealref', 'portref', 'depotid', 'custno', 'custloc', 'custname', 'custeqno', 'custeqtp', 'custacc', 'custid', 'custfiss', 'secno', 'currency', 'sectype', 'secdesc', 'secissr', 'issrloc', 'issrname', 'issracpn', 'issreqtp', 'issracc', 'issrid', 'issrtp2', 'pchpric', 'salepric', 'cernvalu', 'certpchp', 'cersalep', 'trantype', 'facevalu', 'tpchproc', 'tsalproc', 'rpintrat', 'custanal', 'custsana', 'custresc', 'custprtc', 'custrskc', 'brokrcd', 'brokamt', 'porttype', 'origport', 'baserate', 'capflat', 'coupfreq', 'couprate', 'coupspre', 'issranal', 'issrsund', 'issrresc', 'issrprtc', 'issracpt', 'issprice', 'seclegcd', 'secorgcd', 'stdpoors', 'mrktmkr1', 'rrepref', 'rrbrpamt', 'rrsosamt', 'curowamt', 'curboamt', 'intacrdt', 'custpart', 'custfutu', 'indprc', 'indyld', 'busdate', 'reposrtd', 'repomatd', 'dealdate', 'issdate', 'matdate', 'nxtcpndt', 'lstcpndt', 'tpchproc_fcy', 'tsalproc_fcy']
+      Added 66 records from utrp260731.sas7bdat
 
-def write_combined_output(trustee_high, trustee_low, client_high, client_low, filename="islamic_report.txt"):
-    """Write all outputs to a single text file"""
-    lines = []
-    
-    # Trustee > 60000
-    lines.append(" ")
-    lines.append("TRUSTEE >60000")
-    lines.append(" ")
-    if not trustee_high.empty:
-        lines.extend(format_data_lines(trustee_high))
-    
-    # Trustee <= 60000
-    lines.append(" ")
-    lines.append("TRUSTEE <= 60000")
-    lines.append(" ")
-    if not trustee_low.empty:
-        lines.extend(format_data_lines(trustee_low))
-    
-    # Client > 60000
-    lines.append(" ")
-    lines.append("CLIENT >60000")
-    lines.append(" ")
-    if not client_high.empty:
-        lines.extend(format_data_lines(client_high))
-    
-    # Client <= 60000
-    lines.append(" ")
-    lines.append("CLIENT <= 60000")
-    lines.append(" ")
-    if not client_low.empty:
-        lines.extend(format_data_lines(client_low))
-    
-    # Write to file
-    output_path = Path(f"{OUTPUT_PATH}/{filename}")
-    output_path.write_text('\n'.join(lines))
-    print(f"\n  Combined output written to: {output_path}")
+    Total UTSAS records: 26,223
+  UTSAS records: 26,200
 
-def print_branch_summary(df, title):
-    """Print branch summary"""
-    if not df.empty and 'branch' in df.columns:
-        print(f"\n{title} by Branch:")
-        for branch, total in df.groupby('branch')['avbaltt'].sum().sort_index().items():
-            # Convert branch to int if possible to remove decimals
-            branch_display = int(branch) if float(branch).is_integer() else branch
-            print(f"  Branch {branch_display}: RM {total:,.2f}")
+7. Processing LCR.FD/SA/CA/FCYCA...
+    Successfully read: fd30.sas7bdat (2656534 rows, 11 columns)
+    [fd] Columns (11): ['branch', 'acctno', 'custcd', 'amount', 'product', 'intplan', 'curcode', 'fdhold', 'remmth', 'rem30d', 'bnmcode']
+    !! WARNING [core_banking:fd]: expected columns not found after normalization: ['custno']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
+    Successfully read: sa30.sas7bdat (4238423 rows, 7 columns)
+    [sa] Columns (7): ['custcd', 'branch', 'acctno', 'product', 'amount', 'curcode', 'bnmcode']
+    !! WARNING [core_banking:sa]: expected columns not found after normalization: ['custno', 'rem30d', 'remmth']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
+    Successfully read: ca30.sas7bdat (825297 rows, 9 columns)
+    [ca] Columns (9): ['custcd', 'branch', 'acctno', 'product', 'amount', 'curcode', 'intrate', 'billerind', 'bnmcode']
+    !! WARNING [core_banking:ca]: expected columns not found after normalization: ['custno', 'rem30d', 'remmth']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
+    Successfully read: fcyca30.sas7bdat (71165 rows, 9 columns)
+    [fcyca] Columns (9): ['branch', 'acctno', 'product', 'amount', 'curcode', 'intrate', 'billerind', 'custcd', 'bnmcode']
+    !! WARNING [core_banking:fcyca]: expected columns not found after normalization: ['custno', 'rem30d', 'remmth']. These will default to 0/''/None and likely cause dropped/zeroed records. Check real column names below.
+  Banking records: 7,791,419
 
-# =============================================================================
-# MAIN PROCESSING
-# =============================================================================
-def process_trustee_accounts(d, float_df, ibg_df, remit_df, dep):
-    """Process trustee accounts"""
-    print("\nProcessing Trustee Accounts...")
-    
-    saca = load_account_data()
-    print(f"  SA/CA/FD: {len(saca)} rows")
-    
-    if saca.empty:
-        return None, pd.DataFrame(), pd.DataFrame()
-    
-    # Merge with FLOAT
-    trustee = saca.merge(float_df, on='acctno', how='left') if not float_df.empty else saca.copy()
-    if 'float' not in trustee.columns:
-        trustee['float'] = 0
-    
-    # Calculate AVBAL and AVBALTT
-    trustee = trustee.copy()
-    trustee['float'] = trustee['float'].fillna(0)
-    trustee['curbal'] = trustee['curbal'].fillna(0)
-    trustee['intpaybl'] = trustee['intpaybl'].fillna(0)
-    trustee['avbal'] = trustee['curbal'] - trustee['float']
-    trustee['avbaltt'] = trustee['avbal'] + trustee['intpaybl']
-    
-    # Merge with DEP
-    if not dep.empty:
-        trustee = trustee.merge(dep, on='acctno', how='inner')
-    
-    # Merge with REMIT
-    if not remit_df.empty:
-        remit_cols = [c for c in ['acctno', 'plusbal', 'unclaim'] if c in remit_df.columns]
-        if remit_cols:
-            trustee = trustee.merge(remit_df[remit_cols], on='acctno', how='left')
-    if 'plusbal' not in trustee.columns:
-        trustee['plusbal'] = 0
-    if 'unclaim' not in trustee.columns:
-        trustee['unclaim'] = 0
-    
-    trustee = trustee.copy()
-    trustee['plusbal'] = trustee['plusbal'].fillna(0)
-    trustee['unclaim'] = trustee['unclaim'].fillna(0)
-    trustee['avbaltt'] = trustee['avbal'] + trustee['plusbal'] + trustee['unclaim'] + trustee['intpaybl']
-    
-    # Add SI
-    trustee['si'] = 0
-    trustee['avbaltt'] += trustee['si']
-    
-    # Merge with IBGPIDM
-    if not ibg_df.empty:
-        trustee = trustee.merge(ibg_df, on='acctno', how='left')
-    if 'ibgamt' not in trustee.columns:
-        trustee['ibgamt'] = 0
-    trustee = trustee.copy()
-    trustee['ibgamt'] = trustee['ibgamt'].fillna(0)
-    trustee['avbaltt'] += trustee['ibgamt']
-    
-    # Split by threshold
-    high = trustee[trustee['avbaltt'] > 60000]
-    low = trustee[trustee['avbaltt'] <= 60000]
-    
-    print(f"  Trustee >60k: {len(high)} accounts")
-    print(f"  Trustee <=60k: {len(low)} accounts")
-    
-    print_branch_summary(high, "TRUSTEE >60000")
-    print_branch_summary(low, "TRUSTEE <=60000")
-    
-    return trustee, high, low
+8. Processing CISDP/CISCA.DEPOSIT...
+    Successfully read: deposit.sas7bdat (10935758 rows, 6 columns)
+    Successfully read: deposit.sas7bdat (1239129 rows, 6 columns)
+  CIS info records: 9,793,303
 
-def process_client_accounts(client_df):
-    """Process client accounts from pre-processed data"""
-    print("\nProcessing Client Accounts...")
-    print(f"  CLIENT master: {len(client_df)} rows")
-    
-    if client_df.empty:
-        return None, pd.DataFrame(), pd.DataFrame()
-    
-    # Ensure required columns exist
-    client_df = client_df.copy()
-    for col, default in [('si', 0), ('ibgamt', 0), ('plusbal', 0), ('unclaim', 0),
-                          ('amtind', ''), ('purpose', '')]:
-        if col not in client_df.columns:
-            client_df[col] = default
-    
-    # Split by threshold
-    high = client_df[client_df['avbaltt'] > 60000]
-    low = client_df[client_df['avbaltt'] <= 60000]
-    
-    print(f"  Client >60k: {len(high)} accounts")
-    print(f"  Client <=60k: {len(low)} accounts")
-    
-    print_branch_summary(high, "CLIENT >60000")
-    print_branch_summary(low, "CLIENT <=60000")
-    
-    return client_df, high, low
+9. Processing LIST.LCR_ECP...
+    Successfully read: lcr_ecp.sas7bdat (92893 rows, 8 columns)
+  ECP records: 92,893
 
-def check_duplicates(trustee, client):
-    """Check for duplicate accounts between trustee and client"""
-    print("\nChecking for duplicate accounts...")
-    
-    if trustee is None or client is None or trustee.empty or client.empty:
-        print("  No data to check")
-        return
-    
-    trustee_src = trustee[['acctno']].copy()
-    trustee_src['src'] = 'TRUSTEE'
-    client_src = client[['acctno']].copy()
-    client_src['src'] = 'CLIENT'
-    
-    all_acc = pd.concat([trustee_src, client_src])
-    dup = all_acc[all_acc.duplicated(subset=['acctno'], keep=False)]
-    
-    if not dup.empty:
-        print(f"  Found {len(dup)} duplicate accounts:")
-        for acctno, row in dup.groupby('acctno')['src'].apply(list).items():
-            print(f"    {acctno} appears in: {', '.join(row)}")
-    else:
-        print("  No duplicate accounts found")
+============================================================
+PROCESSING DATA
+============================================================
 
-def print_summary(trustee_data, client_data):
-    """Print final summary"""
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    
-    if trustee_data and trustee_data[0] is not None:
-        trustee, high, low = trustee_data
-        print(f"\nTrustee Accounts:")
-        print(f"  Total: RM {trustee['avbaltt'].sum():,.2f}")
-        print(f"  >60k: RM {high['avbaltt'].sum():,.2f} ({len(high)} accounts)")
-        print(f"  <=60k: RM {low['avbaltt'].sum():,.2f} ({len(low)} accounts)")
-    
-    if client_data and client_data[0] is not None:
-        client, high, low = client_data
-        print(f"\nClient Accounts:")
-        print(f"  Total: RM {client['avbaltt'].sum():,.2f}")
-        print(f"  >60k: RM {high['avbaltt'].sum():,.2f} ({len(high)} accounts)")
-        print(f"  <=60k: RM {low['avbaltt'].sum():,.2f} ({len(low)} accounts)")
+Combined treasury + DCI: 17,174 records
+Enhanced treasury: 17,174 records
+Enhanced banking: 7,791,419 records
 
-def main():
-    print("=" * 60)
-    print("EIIQINST - Islamic Trustee and Client Account Reporting")
-    print("=" * 60)
-    
-    d = get_dates()
-    print(f"\nReport Period: {d['reptmon']}/{d['reptyear']} (Week: {d['nowk']})")
-    print(f"SDESC: {d['sdesc']}")
-    
-    # Load data
-    print("\nLoading data...")
-    float_df = load_float()
-    print(f"  FLOAT: {len(float_df)} rows")
-    
-    ibg_df = load_ibgpidm()
-    print(f"  IBGPIDM: {len(ibg_df)} rows")
-    
-    remit_df = load_remit(d)
-    print(f"  REMIT: {len(remit_df)} rows")
-    
-    dep = load_dep(d)
-    print(f"  DEP: {len(dep)} rows")
-    
-    client_df = load_client()
-    print(f"  CLIENT: {len(client_df)} rows")
-    
-    # Process accounts
-    trustee_data = process_trustee_accounts(d, float_df, ibg_df, remit_df, dep)
-    client_data = process_client_accounts(client_df)
-    
-    # Check duplicates
-    if trustee_data[0] is not None and client_data[0] is not None:
-        check_duplicates(trustee_data[0], client_data[0])
-    
-    # Print summary
-    print_summary(trustee_data, client_data)
-    
-    # Write combined output file
-    print("\n" + "=" * 60)
-    print("OUTPUT")
-    print("=" * 60)
-    
-    trustee_high = trustee_data[1] if trustee_data[0] is not None else pd.DataFrame()
-    trustee_low = trustee_data[2] if trustee_data[0] is not None else pd.DataFrame()
-    client_high = client_data[1] if client_data[0] is not None else pd.DataFrame()
-    client_low = client_data[2] if client_data[0] is not None else pd.DataFrame()
-    
-    write_combined_output(trustee_high, trustee_low, client_high, client_low)
-    
-    print("\n" + "=" * 60)
-    print("✓ EIIQINST Complete")
+Applying insurance split...
+Banking after insurance split: 9,267,786 records
 
-if __name__ == "__main__":
-    main()
+Total records before consolidation: 9,284,960
+
+Consolidating...
+  Consolidated to 284 BNM code x currency combinations
+
+Generating LCR report (text format)...
+  ✓ lcr31.txt: 20 items x 8 columns
+
+============================================================
+SUMMARY
+============================================================
+
+Total: RM 735,963,399K
+
+By Source:
+  banking_fd: RM 182,170,252K
+  k1tbx: RM 96,622,218K
+  k1tbx_part1: RM 96,622,218K
+  k1tbl_part1: RM 66,199,262K
+  k1tbl: RM 66,199,262K
+  k3tbl_part1: RM 65,291,719K
+  k3tbl: RM 65,291,719K
+  banking_ca: RM 59,320,765K
+  banking_sa: RM 35,274,335K
+  banking_fcyca: RM 2,922,072K
+  dci: RM 49,577K
+
+============================================================
+✓ EIBDLCRM Complete
+============================================================
