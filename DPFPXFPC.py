@@ -1,216 +1,322 @@
-DATA REPTDATE;
-  REPTDATE = TODAY()-1;
-  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
-RUN;
+import polars as pl
+import pyreadstat
+import datetime as dt
+import os
 
-DATA TXTADATE(DROP=DD MM YY);
-  INFILE DPFL OBS=1;
-  INPUT @001 YY          4.
-        @006 MM          2.
-        @009 DD          2.;
-  DPDATE = MDY(MM,DD,YY);
-RUN;
-PROC PRINT; FORMAT DPDATE DATE8. ;RUN;
+# -------------------------
+# CONFIG
+# -------------------------
+dpfl_file = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDDCIA/dpfl.txt"
+eqfl_file = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDDCIA/eqfl.txt"
 
-DATA _NULL_;
-  SET TXTADATE;
-  CALL SYMPUT('DPDATE', PUT(DPDATE, DDMMYY8.));
-RUN;
+ca_file   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDDCIA/ca{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat"
+sa_file   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDDCIA/sa{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat"
+fcy_file  = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDDCIA/fcy{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat"
 
-DATA TXTBDATE(DROP=DD MM YY);
-  INFILE EQFL OBS=1;
-  INPUT @020 DD          2.
-        @022 MM          2.
-        @024 YY          4.;
-  EQDATE = MDY(MM,DD,YY);
-RUN;
-PROC PRINT; FORMAT EQDATE DATE8. ;RUN;
+out_dir   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDDCIA"
 
-DATA _NULL_;
-  SET TXTBDATE;
-  CALL SYMPUT('EQDATE', PUT(EQDATE, DDMMYY8.));
-RUN;
+# -------------------------
+# STEP 1: Report Date (yesterday)
+# -------------------------
+reptdate = dt.date.today() - dt.timedelta(days=1)
+RDATE = reptdate.strftime("%d%m%y")
+REPTYEAR = reptdate.strftime("%y")
+REPTMON  = reptdate.strftime("%m")
+REPTDAY  = reptdate.strftime("%d")
 
-%LET DPVAR=(KEEP=TICKETNO NEWIC SALESID CUSTCODE INVCURRAC ALTCURRAC
-                 ROLLOVER CONVERTIND DEALERID MANAGERID CUSTNAME
-                 ACCINT);
+print(f"Report Date: {RDATE} ({REPTDAY}-{REPTMON}-{REPTYEAR})")
 
-%LET EQVAR=(KEEP=TICKETNO BRANCH PRODUCT INVCURR ALTCURR CUSTICKETNO
-                 INVAMT ALTAMT TRADEDT STARTDT FIXINGDT MATDT TENOR
-                 STRIKERT SPOTRT DCIRT MMRT PREMREC PREMPAID
-                 UNWINDCOST NEWDEAL STATUSIND STOPDT);
+# Output file naming
+out_file = f"{out_dir}/dcid{REPTMON}{REPTDAY}"
 
-%MACRO PROCESS;
-  %IF "&DPDATE"="&RDATE" %THEN %DO;
+# -------------------------
+# STEP 2: Read header dates from text files
+# -------------------------
+# Read DPFL header (first line)
+with open(dpfl_file) as f:
+    hdr = f.readline()
+    yy = int(hdr[0:4])
+    mm = int(hdr[5:7])
+    dd = int(hdr[8:10])
+    DPDATE = dt.date(yy, mm, dd)
 
-    DATA DPST (DROP=TRYY TRMM TRDD STYY STMM STDD
-                    FIYY FIMM FIDD MTYY MTMM MTDD);
-      INFILE DPFL FIRSTOBS=2;
-      INPUT @0001 TICKETNO    $7.  /* TICKET NUMBER               */
-            @0008 BRANCH      $5.  /* BRANCH CODE                 */
-            @0013 CUSTNAME   $26.  /* CUSTOMER NAME               */
-            @0039 NEWIC      $20.  /* CUSTOMER IC                 */
-            @0059 SALESID     $8.  /* SALES PERSONNEL ID/CODE     */
-            @0067 CUSTCODE     5.  /* FISS CUSTOMER TYPE          */
-            @0072 INVCURRAC   11.  /* INVESTMENT CURRENCY A/C NO  */
-            @0083 ALTCURRAC   11.  /* ALTERNATE CURRENCY A/C NO   */
-            @0094 INVCURR     $3.  /* INVESTMENT CURRENCY         */
-            @0097 ALTCURR     $3.  /* ALTERNATE CURRENCY          */
-            @0100 INVAMT      13.2 /* INVESTMENT AMOUNT           */
-            @0113 TRYY        $4.  /* TRADE DATE                  */
-            @0118 TRMM        $2.
-            @0121 TRDD        $2.
-            @0123 STYY        $4.  /* START DATE                  */
-            @0128 STMM        $2.
-            @0131 STDD        $2.
-            @0133 FIYY        $4.  /* FIXING DATE                 */
-            @0138 FIMM        $2.
-            @0141 FIDD        $2.
-            @0143 MTYY        $4.  /* MATURITY DATE               */
-            @0148 MTMM        $2.
-            @0151 MTDD        $2.
-            @0153 TENOR        3.  /* TENOR (DAY)                 */
-            @0156 STRIKERT    13.7 /* STRIKE RATE                 */
-            @0169 DCIRT        9.6 /* DCI RATE                    */
-            @0178 ACCINT      15.6 /* DCI INTEREST AMOUNT (ACCRUAL) */
-            @0193 ROLLOVER    $1.  /* ROLLOVER INDICATOR          */
-            @0194 CONVERTIND  $1.  /* CONVERT INDICATOR           */
-            @0195 DEALERID    $8.  /* STAFF ID DEALER (MAKER)     */
-            @0203 MANAGERID   $8.  /* STAFF ID MANAGER (CHECKER)  */
-            ;
+# Read EQFL header (first line)
+with open(eqfl_file) as f:
+    hdr = f.readline()
+    dd = int(hdr[19:21])
+    mm = int(hdr[21:23])
+    yy = int(hdr[23:27])
+    EQDATE = dt.date(yy, mm, dd)
 
-  IF (0<CUSTCD<=99) THEN DO;
-       CUSTCD = CUSTCD;
-  END;
-  ELSE IF (100<=CUSTCD<=999) THEN DO;
-       CUSTCD=INPUT(SUBSTR(PUT(CUSTCD,3.),2,2),2.);
-  END;
-  ELSE IF (1000<=CUSTCD<=9999) THEN DO;
-       CUSTCD=INPUT(SUBSTR(PUT(CUSTCD,4.),3,2),2.);
-  END;
-  ELSE IF (10000<=CUSTCD<=99999) THEN DO;
-       CUSTCD=INPUT(SUBSTR(PUT(CUSTCD,5.),4,2),2.);
-  END;
+print("DPDATE:", DPDATE.strftime("%d%m%y"), "EQDATE:", EQDATE.strftime("%d%m%y"))
 
-      TRADEDT  = MDY(TRMM,TRDD,TRYY);
-      STARTDT  = MDY(STMM,STDD,STYY);
-      FIXINGDT = MDY(FIMM,FIDD,FIYY);
-      MATDT    = MDY(MTMM,MTDD,MTYY);
+# -------------------------
+# Only run if dates match
+# -------------------------
+if DPDATE.strftime("%d%m%y") != RDATE:
+    raise SystemExit(f"❌ DPDATE {DPDATE.strftime('%d%m%y')} does not match RDATE {RDATE}")
 
-    RUN;
-    PROC SORT DATA=DPST &DPVAR; BY TICKETNO; RUN;
+# -------------------------
+# STEP 3: Parse DPFL fixed-width file → DPST
+# -------------------------
+# Define schema for DPFL file (positions are 1-based in SAS, 0-based in Python)
+dp_schema = [
+    ("TICKETNO", (0, 7), "str"),      # 1-7
+    ("BRANCH", (7, 12), "str"),       # 8-12
+    ("CUSTNAME", (12, 38), "str"),    # 13-38
+    ("NEWIC", (38, 58), "str"),       # 39-58
+    ("SALESID", (58, 66), "str"),     # 59-66
+    ("CUSTCODE", (66, 71), "int"),    # 67-71
+    ("INVCURRAC", (71, 82), "str"),   # 72-82
+    ("ALTCURRAC", (82, 93), "str"),   # 83-93
+    ("INVCURR", (93, 96), "str"),     # 94-96
+    ("ALTCURR", (96, 99), "str"),     # 97-99
+    ("INVAMT", (99, 112), "float"),   # 100-112
+    ("TRYY", (112, 116), "str"),      # 113-116
+    ("TRMM", (117, 119), "str"),      # 118-119
+    ("TRDD", (120, 122), "str"),      # 121-122
+    ("STYY", (122, 126), "str"),      # 123-126
+    ("STMM", (127, 129), "str"),      # 128-129
+    ("STDD", (130, 132), "str"),      # 131-132
+    ("FIYY", (132, 136), "str"),      # 133-136
+    ("FIMM", (137, 139), "str"),      # 138-139
+    ("FIDD", (140, 142), "str"),      # 141-142
+    ("MTYY", (142, 146), "str"),      # 143-146
+    ("MTMM", (147, 149), "str"),      # 148-149
+    ("MTDD", (150, 152), "str"),      # 151-152
+    ("TENOR", (152, 155), "int"),     # 153-155
+    ("STRIKERT", (155, 168), "float"), # 156-168
+    ("DCIRT", (168, 177), "float"),   # 169-177
+    ("ACCINT", (177, 192), "float"),  # 178-192
+    ("ROLLOVER", (192, 193), "str"),  # 193
+    ("CONVERTIND", (193, 194), "str"), # 194
+    ("DEALERID", (194, 202), "str"),  # 195-202
+    ("MANAGERID", (202, 210), "str")  # 203-210
+]
 
-    DATA EQTN;
-      INFILE EQFL FIRSTOBS=2  DELIMITER = '|' DSD MISSOVER;
-      INPUT CUSTICKETNO        :   $13.
-            TICKETNO           :   $7.
-            BRANCH             :   $3.
-            CUSTNAME           :   $35.
-            DEALID             :   $10.
-            CUSTYPE            :   $2.
-            RESIDENCE_COUNTRY  :   $2.
-            CUSTOMER_MNEMONIC  :   $6.
-            CUSTOMER_LOC       :   $3.
-            CUSTOMER_TYPE      :   $3.
-            PRODUCT            :   $3.
-            INVCURR            :   $3.
-            ALTCURR            :   $3.
-            INVAMT             :    8.
-            INVAMTRM           :   8.
-            ALTAMT             :    8.
-            TRADEDTX           :   $10.
-            STARTDTX           :   $10.
-            FIXDTX             :   $10.
-            MATDTX             :   $10.
-            STOPDTX            :   $10.
-            TENOR              :    8.
-            STRIKERT           :    8.
-            SPOTRT             :    8.
-            DCIRT              :    8.
-            DCI_DAILY_INT      :    8.
-            DCI_INT_ACCRUED    :    8.
-            ACCINTEQ           :    8.
-            MMRT               :    8.
-            RPTSPOTRT          :    8.
-            PREMREC            :    8.
-            PREMPAID           :    8.
-            PROFIT             :    8.
-            PROFITMYR          :    8.
-            UNWINDCOST         :    8.
-            STATIND            :  $20.
-            NEWDEAL            :   $1.
-            TRAN_TYPE          :   $1.
-            ;
+rows = []
+with open(dpfl_file) as f:
+    next(f)  # skip header (FIRSTOBS=2)
+    for line in f:
+        if not line.strip():  # Skip empty lines
+            continue
+            
+        row = {}
+        # Parse fixed-width fields
+        for col, (start, end, typ) in dp_schema:
+            raw = line[start:end].strip()
+            if typ == "int":
+                row[col] = int(raw) if raw else None
+            elif typ == "float":
+                row[col] = float(raw) if raw else None
+            else:
+                row[col] = raw
+        
+        # Create date fields (SAS MDY function)
+        try:
+            row["TRADEDT"] = dt.date(int(row["TRYY"]), int(row["TRMM"]), int(row["TRDD"]))
+            row["STARTDT"] = dt.date(int(row["STYY"]), int(row["STMM"]), int(row["STDD"]))
+            row["FIXINGDT"] = dt.date(int(row["FIYY"]), int(row["FIMM"]), int(row["FIDD"]))
+            row["MATDT"] = dt.date(int(row["MTYY"]), int(row["MTMM"]), int(row["MTDD"]))
+        except (ValueError, TypeError):
+            row["TRADEDT"] = row["STARTDT"] = row["FIXINGDT"] = row["MATDT"] = None
+        
+        # Apply CUSTCODE transformation (SAS logic)
+        if row["CUSTCODE"] is not None:
+            custcode = row["CUSTCODE"]
+            if 0 <= custcode <= 99:
+                pass  # Keep as is
+            elif 100 <= custcode <= 999:
+                row["CUSTCODE"] = int(str(custcode)[1:3])  # SUBSTR(PUT(CUSTCD,3.),2,2)
+            elif 1000 <= custcode <= 9999:
+                row["CUSTCODE"] = int(str(custcode)[2:4])  # SUBSTR(PUT(CUSTCD,4.),3,2)
+            elif 10000 <= custcode <= 99999:
+                row["CUSTCODE"] = int(str(custcode)[3:5])  # SUBSTR(PUT(CUSTCD,5.),4,2)
+        
+        rows.append(row)
 
-      TRADEDT  = INPUT(TRADEDTX,YYMMDD10.);
-      STARTDT  = INPUT(STARTDTX,YYMMDD10.);
-      FIXINGDT = INPUT(FIXDTX,YYMMDD10.);
-      MATDT    = INPUT(MATDTX,YYMMDD10.);
-      STOPDT   = INPUT(STOPDTX,YYMMDD10.);
+# Create DPST DataFrame with selected columns
+dpst = pl.DataFrame(rows).select([
+    "TICKETNO", "NEWIC", "SALESID", "CUSTCODE", "INVCURRAC", "ALTCURRAC",
+    "ROLLOVER", "CONVERTIND", "DEALERID", "MANAGERID", "CUSTNAME", "ACCINT"
+])
 
-      IF ACCINTAMT < 0 THEN ACCINTAMT = ACCINTAMT * (-1);
-      IF TOTINTAMT < 0 THEN TOTINTAMT = TOTINTAMT * (-1);
-      IF PREMPAID  < 0 THEN PREMPAID  = PREMPAID  * (-1);
+print(f"DPST records: {len(dpst)}")
 
-      SELECT(STATIND);
-         WHEN ('New')         STATUSIND = 'N ';
-         WHEN ('Outstanding') STATUSIND = 'OS';
-         WHEN ('Mature')      STATUSIND = 'M';
-         WHEN ('Premature')   STATUSIND = 'P';
-         WHEN ('Cancelled')   STATUSIND = 'C';
-         OTHERWISE;
-      END;
+# -------------------------
+# STEP 4: Parse EQFL (pipe-delimited)
+# -------------------------
+# Read EQFL file
+eq_columns = [
+    "CUSTICKETNO", "TICKETNO", "BRANCH", "CUSTNAME", "DEALID", "CUSTYPE",
+    "RESIDENCE_COUNTRY", "CUSTOMER_MNEMONIC", "CUSTOMER_LOC", "CUSTOMER_TYPE",
+    "PRODUCT", "INVCURR", "ALTCURR", "INVAMT", "INVAMTRM", "ALTAMT",
+    "TRADEDTX", "STARTDTX", "FIXDTX", "MATDTX", "STOPDTX", "TENOR",
+    "STRIKERT", "SPOTRT", "DCIRT", "DCI_DAILY_INT", "DCI_INT_ACCRUED",
+    "ACCINTEQ", "MMRT", "RPTSPOTRT", "PREMREC", "PREMPAID", "PROFIT",
+    "PROFITMYR", "UNWINDCOST", "STATIND", "NEWDEAL", "TRAN_TYPE"
+]
 
-    RUN;
-    PROC SORT DATA=EQTN &EQVAR; BY TICKETNO; RUN;
+# Read pipe-delimited file
+eqtn_raw = pl.read_csv(
+    eqfl_file, 
+    separator="|", 
+    has_header=False,
+    skip_rows=1,  # FIRSTOBS=2
+    new_columns=eq_columns
+)
 
-    DATA DCI.DCID&REPTMON&REPTDAY (DROP=STOPDT);
-      MERGE DPST(IN=A) EQTN(IN=B);
-      BY TICKETNO;
-      IF A AND B;
-      IF NEWDEAL IN ('O','N') THEN
-         OUTPUT DCI.DCID&REPTMON&REPTDAY;
-    RUN;
+# Parse dates (SAS INPUT with YYMMDD10. format)
+def parse_sas_date(date_str):
+    """Parse date in YYMMDD10. format (e.g., 2024-01-15 or 24-01-15)"""
+    if not date_str or date_str.strip() == "":
+        return None
+    try:
+        return dt.datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        try:
+            return dt.datetime.strptime(date_str.strip(), "%y-%m-%d").date()
+        except ValueError:
+            return None
 
-    DATA CA(KEEP=ACCTNO CUSTCODE2 RENAME=(ACCTNO=INVCURRAC2));
-      SET CA.CA&REPTYEAR&REPTMON&REPTDAY;
-      CUSTCODE2 = INPUT(CUSTFISS,2.);
-    RUN;
+eqtn = eqtn_raw.with_columns([
+    pl.col("TRADEDTX").map_elements(parse_sas_date).alias("TRADEDT"),
+    pl.col("STARTDTX").map_elements(parse_sas_date).alias("STARTDT"),
+    pl.col("FIXDTX").map_elements(parse_sas_date).alias("FIXINGDT"),
+    pl.col("MATDTX").map_elements(parse_sas_date).alias("MATDT"),
+    pl.col("STOPDTX").map_elements(parse_sas_date).alias("STOPDT"),
+])
 
-    DATA SA(KEEP=ACCTNO CUSTCODE2 RENAME=(ACCTNO=INVCURRAC2));
-      SET SA.SA&REPTYEAR&REPTMON&REPTDAY;
-      CUSTCODE2 = CUSTCODE;
-    RUN;
+# Apply absolute value transformations
+eqtn = eqtn.with_columns([
+    pl.when(pl.col("ACCINTEQ") < 0).then(-pl.col("ACCINTEQ")).otherwise(pl.col("ACCINTEQ")).alias("ACCINTEQ"),
+    pl.when(pl.col("DCI_INT_ACCRUED") < 0).then(-pl.col("DCI_INT_ACCRUED")).otherwise(pl.col("DCI_INT_ACCRUED")).alias("DCI_INT_ACCRUED"),
+    pl.when(pl.col("PREMPAID") < 0).then(-pl.col("PREMPAID")).otherwise(pl.col("PREMPAID")).alias("PREMPAID"),
+])
 
-    DATA FCY(KEEP=ACCTNO CUSTCODE2 RENAME=(ACCTNO=INVCURRAC2));
-      SET FCY.FCY&REPTYEAR&REPTMON&REPTDAY;
-      CUSTCODE2 = INPUT(CUSTCD,2.);
-    RUN;
+# Map STATIND to STATUSIND
+status_map = {
+    "New": "N ",
+    "Outstanding": "OS",
+    "Mature": "M",
+    "Premature": "P",
+    "Cancelled": "C"
+}
+eqtn = eqtn.with_columns(
+    pl.col("STATIND").map_elements(lambda x: status_map.get(x.strip(), "")).alias("STATUSIND")
+)
 
-    DATA DPDATA;
-      SET SA CA FCY;
-    RUN;
-    PROC SORT DATA=DPDATA; BY INVCURRAC2; RUN;
-    PROC SORT DATA=DCI.DCID&REPTMON&REPTDAY OUT=DCID; BY INVCURRAC; RUN;
+# Select needed columns for EQTN
+eqtn = eqtn.select([
+    "TICKETNO", "BRANCH", "PRODUCT", "INVCURR", "ALTCURR", "CUSTICKETNO",
+    "INVAMT", "ALTAMT", "TRADEDT", "STARTDT", "FIXINGDT", "MATDT", "TENOR",
+    "STRIKERT", "SPOTRT", "DCIRT", "MMRT", "PREMREC", "PREMPAID",
+    "UNWINDCOST", "NEWDEAL", "STATUSIND", "STOPDT"
+])
 
-    PROC SQL;
-      CREATE TABLE DCID2 AS
-      SELECT *
-      FROM DCID A LEFT JOIN DPDATA B ON
-          A.INVCURRAC = B.INVCURRAC2;
-    QUIT;
+print(f"EQTN records: {len(eqtn)}")
 
-    DATA DCI.DCID&REPTMON&REPTDAY(DROP=INVCURRAC2 CUSTCODE2);
-      SET DCID2;
-      IF CUSTCODE2 NE ' ' THEN CUSTCODE = CUSTCODE2;
-    RUN;
+# -------------------------
+# STEP 5: Merge DPST & EQTN by TICKETNO
+# -------------------------
+dcid = dpst.join(eqtn, on="TICKETNO", how="inner")
+dcid = dcid.filter(pl.col("NEWDEAL").is_in(["O", "N"])).drop("STOPDT")
 
-    DATA TEMP.DCID&REPTYEAR&REPTMON&REPTDAY;
-      SET DCI.DCID&REPTMON&REPTDAY;
-    RUN;
+print(f"DCID records after merge and filter: {len(dcid)}")
 
+# -------------------------
+# STEP 6: Join CA / SA / FCY reference tables
+# -------------------------
+# Read SAS files with pyreadstat
+print("Reading CA file...")
+ca_df, ca_meta = pyreadstat.read_sas7bdat(
+    ca_file.format(REPTYEAR=REPTYEAR, REPTMON=REPTMON, REPTDAY=REPTDAY)
+)
+ca = pl.from_pandas(ca_df).select(["ACCTNO", "CUSTFISS"]).with_columns(
+    pl.col("CUSTFISS").cast(pl.Utf8).str.slice(0, 2).cast(pl.Int32).alias("CUSTCODE2")
+).select(["ACCTNO", "CUSTCODE2"]).rename({"ACCTNO": "INVCURRAC2"})
 
-this is the original sas program. output it and naming it as dcid
+print("Reading SA file...")
+sa_df, sa_meta = pyreadstat.read_sas7bdat(
+    sa_file.format(REPTYEAR=REPTYEAR, REPTMON=REPTMON, REPTDAY=REPTDAY)
+)
+sa = pl.from_pandas(sa_df).select(["ACCTNO", "CUSTCODE"]).with_columns(
+    pl.col("CUSTCODE").alias("CUSTCODE2")
+).select(["ACCTNO", "CUSTCODE2"]).rename({"ACCTNO": "INVCURRAC2"})
+
+print("Reading FCY file...")
+fcy_df, fcy_meta = pyreadstat.read_sas7bdat(
+    fcy_file.format(REPTYEAR=REPTYEAR, REPTMON=REPTMON, REPTDAY=REPTDAY)
+)
+fcy = pl.from_pandas(fcy_df).select(["ACCTNO", "CUSTCD"]).with_columns(
+    pl.col("CUSTCD").cast(pl.Int32).alias("CUSTCODE2")
+).select(["ACCTNO", "CUSTCODE2"]).rename({"ACCTNO": "INVCURRAC2"})
+
+# Combine all reference data
+dpdata = pl.concat([sa, ca, fcy])
+
+print(f"Reference data records: {len(dpdata)}")
+
+# Join with main data
+dcid2 = dcid.join(dpdata, left_on="INVCURRAC", right_on="INVCURRAC2", how="left")
+
+# Update CUSTCODE if found in reference tables
+dcid2 = dcid2.with_columns(
+    pl.when(pl.col("CUSTCODE2").is_not_null())
+      .then(pl.col("CUSTCODE2"))
+      .otherwise(pl.col("CUSTCODE"))
+      .alias("CUSTCODE")
+).drop(["INVCURRAC2", "CUSTCODE2"])
+
+print(f"Final records: {len(dcid2)}")
+
+# -------------------------
+# STEP 7: Save results
+# -------------------------
+# Save as Parquet
+parquet_file = f"{out_file}.parquet"
+dcid2.write_parquet(parquet_file)
+print(f"Saved Parquet: {parquet_file}")
+
+# Save as SAS7BDAT using saspy
+try:
+    import saspy
+    import pandas as pd
+    
+    # Initialize SAS session
+    sas = saspy.SASsession()
+    
+    # Convert Polars DataFrame to pandas for SAS
+    dcid2_pd = dcid2.to_pandas()
+    
+    # Upload to SAS
+    sas_df = sas.df2sd(dcid2_pd, f"dcid{REPTMON}{REPTDAY}")
+    
+    # Save as SAS7BDAT in DCI library
+    sas.submit(f"""
+        DATA DCI.DCID{REPTMON}{REPTDAY};
+            SET dcid{REPTMON}{REPTDAY};
+        RUN;
+    """)
+    
+    # Also save to TEMP library
+    sas.submit(f"""
+        DATA TEMP.DCID{REPTYEAR}{REPTMON}{REPTDAY};
+            SET dcid{REPTMON}{REPTDAY};
+        RUN;
+    """)
+    
+    # Close SAS session
+    sas.endsas()
+    print(f"Saved SAS datasets: DCI.DCID{REPTMON}{REPTDAY} and TEMP.DCID{REPTYEAR}{REPTMON}{REPTDAY}")
+    
+except ImportError:
+    print("saspy not available. Only Parquet file created.")
+    print("To save as SAS7BDAT, install saspy and configure SAS connection.")
+except Exception as e:
+    print(f"Error saving SAS file: {e}")
+    print("Only Parquet file created.")
+
+print("\nProcessing complete!")
+print(f"Output files:")
+print(f"  - {parquet_file}")
