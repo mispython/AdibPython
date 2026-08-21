@@ -391,3 +391,11 @@ print(f"  - STORE.BEHAVENOTE: All products")
 print(f"  - STORE.DEPRMP1/DEPFXP1: RM/FX splits")
 print(f"  - STORE.REPORT: Final report")
 print(f"  - BASE.DEPOSIT: Combined (with GL)")
+
+
+
+all inputs are in sas7bdat sas dataset and need to be in all lowercase.
+use pyreadstat to read.
+remove reptdate, use datetime timedelta - 1 instead. 
+output in sas7bdat and parquet files. and could be 1 text file.
+write out using saspy
