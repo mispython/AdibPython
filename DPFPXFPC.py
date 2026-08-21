@@ -5,203 +5,219 @@ Key Difference from EIBMNLFE:
 - Merges GL (Walker GL) data into FX deposits
 - GLRMFXP2 merge adds WEEK1, LAST1, BALANCE1 to FX products
 
-10 Product Categories (same as EIBMNLFE):
+10 Product Categories:
 - INDRMDD/NONRMDD/INDRMFD/NONRMFD/INDRMSA/NONRMSA (RM)
 - INDFXCA/NONFXCA/INDFXFD/NONFXFD (FX)
 
 GL Merge:
-- Source: STOREGL.GLRMFXP2{YEAR}{MON}{DAY}
-- Target: STORE.DEPFXP2 (FX products only)
+- Source: storegl/glrmfxp2_{year}{mon}{day}.sas7bdat
+- Target: store/depfxp2 (FX products only)
 - Fields: WEEK, LAST, BALANCE (add GL amounts)
 
 Process: Same as EIBMNLFE with GL merge
 Insert Days: 8, 15, 22, and last day of month (if today <8)
 """
 
+import pyreadstat
+import pandas as pd
 import polars as pl
 from datetime import datetime, timedelta
 import os
+import saspy
+from pathlib import Path
 
-# Directories
-DEPOSIT_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNLFE/'
-STORE_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNLFE/store/'
-STORE1_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNLFE/store1/'
-STOREGL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNLFE/storegl/'
-BASE_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNLFE/base/'
-FINAL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNLFE/final/'
+# Initialize SAS session
+sas = saspy.SASsession(cfgname='default')
+print("SAS session initialized")
 
-for d in [STORE_DIR, BASE_DIR, FINAL_DIR]:
-    os.makedirs(d, exist_ok=True)
+# Directories (all lowercase)
+DEPOSIT_DIR = '/sas/python/virt_edw/data_warehouse/mis/xmis/input/prod/eibdnlfe/'
+STORE_DIR = '/sas/python/virt_edw/data_warehouse/mis/xmis/input/prod/eibdnlfe/store/'
+STORE1_DIR = '/sas/python/virt_edw/data_warehouse/mis/xmis/input/prod/eibdnlfe/store1/'
+STOREGL_DIR = '/sas/python/virt_edw/data_warehouse/mis/xmis/input/prod/eibdnlfe/storegl/'
+BASE_DIR = '/sas/python/virt_edw/data_warehouse/mis/xmis/input/prod/eibdnlfe/base/'
+FINAL_DIR = '/sas/python/virt_edw/data_warehouse/mis/xmis/input/prod/eibdnlfe/final/'
+
+# Create directories
+for d in [STORE_DIR, STORE1_DIR, STOREGL_DIR, BASE_DIR, FINAL_DIR]:
+    Path(d).mkdir(parents=True, exist_ok=True)
 
 print("EIBDNLFE - BNM Behavioral Analysis with GL Merge")
 print("=" * 60)
 
-# Read REPTDATE
-print("\nReading REPTDATE...")
-try:
-    df_reptdate = pl.read_parquet(f'{DEPOSIT_DIR}REPTDATE.parquet')
-    reptdate = df_reptdate['REPTDATE'][0]
-    
-    first_of_month = datetime(datetime.today().year, datetime.today().month, 1)
-    last_day_prev_month = (first_of_month - timedelta(days=1)).day
-    
-    reptday = reptdate.day
-    reptmon = f'{reptdate.month:02d}'
-    reptyear = reptdate.year
-    rdate = reptdate.strftime('%d%m%y')
-    datex = reptdate.strftime('%d%m%y')
-    
-    # Determine INSERT
-    insert = 'N'
-    if reptday in [8, 15, 22]:
-        insert = 'Y'
-    elif reptday == last_day_prev_month and datetime.today().day < 8:
-        insert = 'Y'
-    
-    print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
-    print(f"Insert: {insert}")
-except Exception as e:
-    print(f"Error: {e}")
-    import sys
-    sys.exit(1)
+# Get report date (previous day)
+report_date = datetime.now() - timedelta(days=1)
+reptday = report_date.day
+reptmon = f'{report_date.month:02d}'
+reptyear = report_date.year
+rdate = report_date.strftime('%d%m%y')
+datex = report_date.strftime('%d%m%y')
 
+# Determine last day of previous month
+first_of_month = datetime(report_date.year, report_date.month, 1)
+last_day_prev_month = (first_of_month - timedelta(days=1)).day
+
+# Determine INSERT
+insert = 'N'
+if reptday in [8, 15, 22]:
+    insert = 'Y'
+elif reptday == last_day_prev_month and datetime.now().day < 8:
+    insert = 'Y'
+
+print(f"Report Date: {report_date.strftime('%d/%m/%Y')}")
+print(f"Insert: {insert}")
 print("=" * 60)
 
 # Product definitions (10 products)
 PRODUCTS = [
-    'INDRMDD', 'INDRMFD', 'INDRMSA',
-    'NONRMDD', 'NONRMFD', 'NONRMSA',
-    'INDFXCA', 'INDFXFD',
-    'NONFXCA', 'NONFXFD'
+    'indrmdd', 'indrmfd', 'indrmsa',
+    'nonrmdd', 'nonrmfd', 'nonrmsa',
+    'indfxca', 'indfxfd',
+    'nonfxca', 'nonfxfd'
 ]
 
 # BNM code mappings
 BNMCODE_MAP = {
-    '9531108': 'INDRMFD', '9531109': 'NONRMFD',
-    '9531208': 'INDRMSA', '9531209': 'NONRMSA',
-    '9531308': 'INDRMDD', '9531309': 'NONRMDD',
-    '9631108': 'INDFXFD', '9631109': 'NONFXFD',
-    '9631308': 'INDFXCA', '9631309': 'NONFXCA'
+    '9531108': 'indrmfd', '9531109': 'nonrmfd',
+    '9531208': 'indrmsa', '9531209': 'nonrmsa',
+    '9531308': 'indrmdd', '9531309': 'nonrmdd',
+    '9631108': 'indfxfd', '9631109': 'nonfxfd',
+    '9631308': 'indfxca', '9631309': 'nonfxca'
 }
 
 ITEM_MAP = {
-    'INDRMFD': 'A1.15', 'NONRMFD': 'A1.12',
-    'INDRMSA': 'A1.16', 'NONRMSA': 'A1.13',
-    'INDRMDD': 'A1.17', 'NONRMDD': 'A1.14',
-    'INDFXFD': 'B1.15', 'NONFXFD': 'B1.12',
-    'INDFXCA': 'B1.17', 'NONFXCA': 'B1.14'
+    'indrmfd': 'A1.15', 'nonrmfd': 'A1.12',
+    'indrmsa': 'A1.16', 'nonrmsa': 'A1.13',
+    'indrmdd': 'A1.17', 'nonrmdd': 'A1.14',
+    'indfxfd': 'B1.15', 'nonfxfd': 'B1.12',
+    'indfxca': 'B1.17', 'nonfxca': 'B1.14'
 }
 
-# Read NOTE file
+# Read NOTE file using pyreadstat
 print("\nReading NOTE file...")
 try:
-    note_file = f'{STORE_DIR}NOTE{reptyear}{reptmon}{reptday:02d}.parquet'
-    df_note = pl.read_parquet(note_file)
+    note_file = f'{STORE_DIR}note_{reptyear}{reptmon}{reptday:02d}.sas7bdat'
+    df_note_pd, meta = pyreadstat.read_sas7bdat(note_file)
+    df_note = pl.from_pandas(df_note_pd)
+    
+    # Convert column names to lowercase
+    df_note = df_note.rename({col: col.lower() for col in df_note.columns})
     
     # Parse BNMCODE
     df_deposit = df_note.with_columns([
-        pl.col('BNMCODE').str.slice(0, 7).alias('PROD'),
-        pl.col('BNMCODE').str.slice(5, 2).alias('INDNON'),
-        (pl.col('AMOUNT').round(0) / 1000).alias('AMOUNT')
+        pl.col('bnmcode').str.slice(0, 7).alias('prod'),
+        pl.col('bnmcode').str.slice(5, 2).alias('indnon'),
+        (pl.col('amount').round(0) / 1000).alias('amount')
     ])
     
     # Add DESC
     df_deposit = df_deposit.with_columns([
-        pl.col('PROD').replace(BNMCODE_MAP, default=None).alias('DESC')
+        pl.col('prod').replace(BNMCODE_MAP, default=None).alias('desc')
     ])
     
-    df_deposit = df_deposit.filter(pl.col('DESC').is_not_null())
+    df_deposit = df_deposit.filter(pl.col('desc').is_not_null())
     
     print(f"  Deposits: {len(df_deposit):,} records")
     
     # Transpose (simplified)
-    df_transpose = df_deposit.group_by(['PROD', 'DESC']).agg([
-        pl.col('AMOUNT').sum().alias('WEEK'),
-        pl.lit(0).alias('MONTH'),
-        pl.lit(0).alias('QTR'),
-        pl.lit(0).alias('HALFYR'),
-        pl.lit(0).alias('YEAR'),
-        pl.lit(0).alias('LAST')
+    df_transpose = df_deposit.group_by(['prod', 'desc']).agg([
+        pl.col('amount').sum().alias('week'),
+        pl.lit(0).alias('month'),
+        pl.lit(0).alias('qtr'),
+        pl.lit(0).alias('halfyr'),
+        pl.lit(0).alias('year'),
+        pl.lit(0).alias('last')
     ])
     
 except Exception as e:
-    print(f"  âš  NOTE file: {e}")
+    print(f"  ⚠ NOTE file: {e}")
     df_transpose = pl.DataFrame([])
 
 # Split RM vs FX
 print("\nProcessing deposits...")
 
-df_deprmp2 = df_transpose.filter(pl.col('PROD').str.starts_with('953'))
-df_depfxp2 = df_transpose.filter(pl.col('PROD').str.starts_with('963'))
+df_deprmp2 = df_transpose.filter(pl.col('prod').str.starts_with('953'))
+df_depfxp2 = df_transpose.filter(pl.col('prod').str.starts_with('963'))
 
 # Add metadata to both
 for df in [df_deprmp2, df_depfxp2]:
     if len(df) > 0:
         df = df.with_columns([
-            (pl.col('WEEK') + pl.col('MONTH') + pl.col('QTR') + 
-             pl.col('HALFYR') + pl.col('YEAR') + pl.col('LAST')).alias('BALANCE'),
-            pl.col('PROD').str.slice(5, 2).alias('INDNON'),
-            pl.lit(datex).alias('DATEX'),
-            pl.lit(reptdate).alias('DATE')
+            (pl.col('week') + pl.col('month') + pl.col('qtr') + 
+             pl.col('halfyr') + pl.col('year') + pl.col('last')).alias('balance'),
+            pl.col('prod').str.slice(5, 2).alias('indnon'),
+            pl.lit(datex).alias('datex'),
+            pl.lit(report_date).alias('date')
         ])
         
         # Negate (liabilities)
         df = df.with_columns([
-            (pl.col('WEEK') * -1).alias('WEEK'),
-            (pl.col('MONTH') * -1).alias('MONTH'),
-            (pl.col('QTR') * -1).alias('QTR'),
-            (pl.col('HALFYR') * -1).alias('HALFYR'),
-            (pl.col('YEAR') * -1).alias('YEAR'),
-            (pl.col('LAST') * -1).alias('LAST'),
-            (pl.col('BALANCE') * -1).alias('BALANCE')
+            (pl.col('week') * -1).alias('week'),
+            (pl.col('month') * -1).alias('month'),
+            (pl.col('qtr') * -1).alias('qtr'),
+            (pl.col('halfyr') * -1).alias('halfyr'),
+            (pl.col('year') * -1).alias('year'),
+            (pl.col('last') * -1).alias('last'),
+            (pl.col('balance') * -1).alias('balance')
         ])
         
         # Add ITEM
         df = df.with_columns([
-            pl.col('DESC').replace(ITEM_MAP, default='').alias('ITEM')
+            pl.col('desc').replace(ITEM_MAP, default='').alias('item')
         ])
 
 # Save RM
 if len(df_deprmp2) > 0:
-    df_deprmp2.write_parquet(f'{STORE_DIR}DEPRMP2.parquet')
+    df_deprmp2.write_parquet(f'{STORE_DIR}deprmp2.parquet')
+    # Also save as SAS dataset
+    df_deprmp2_pd = df_deprmp2.to_pandas()
+    sas.df2sd(df_deprmp2_pd, table='deprmp2', libref='store')
     print(f"  DEPRMP2 (RM): {len(df_deprmp2):,} products")
 
 # GL Merge for FX products
 print("\nMerging GL data...")
 if len(df_depfxp2) > 0:
     try:
-        gl_file = f'{STOREGL_DIR}GLRMFXP2{reptyear}{reptmon}{reptday:02d}.parquet'
-        df_gl = pl.read_parquet(gl_file)
+        gl_file = f'{STOREGL_DIR}glrmfxp2_{reptyear}{reptmon}{reptday:02d}.sas7bdat'
+        df_gl_pd, meta = pyreadstat.read_sas7bdat(gl_file)
+        df_gl = pl.from_pandas(df_gl_pd)
+        
+        # Convert column names to lowercase
+        df_gl = df_gl.rename({col: col.lower() for col in df_gl.columns})
         
         print(f"  GL data: {len(df_gl):,} records")
         
         # Merge GL by ITEM
-        df_depfxp2 = df_depfxp2.join(df_gl, on='ITEM', how='left')
+        df_depfxp2 = df_depfxp2.join(df_gl, on='item', how='left')
         
-        # Add GL amounts (WEEK1, LAST1, BALANCE1)
+        # Add GL amounts (week1, last1, balance1)
         df_depfxp2 = df_depfxp2.with_columns([
-            (pl.col('WEEK') + pl.col('WEEK1').fill_null(0)).alias('WEEK'),
-            (pl.col('LAST') + pl.col('LAST1').fill_null(0)).alias('LAST'),
-            (pl.col('BALANCE') + pl.col('BALANCE1').fill_null(0)).alias('BALANCE')
+            (pl.col('week') + pl.col('week1').fill_null(0)).alias('week'),
+            (pl.col('last') + pl.col('last1').fill_null(0)).alias('last'),
+            (pl.col('balance') + pl.col('balance1').fill_null(0)).alias('balance')
         ])
         
         # Drop GL columns
-        df_depfxp2 = df_depfxp2.drop(['WEEK1', 'LAST1', 'BALANCE1'])
+        df_depfxp2 = df_depfxp2.drop(['week1', 'last1', 'balance1'])
         
-        print(f"  âœ“ GL merged into FX deposits")
+        print(f"  ✓ GL merged into FX deposits")
     
     except Exception as e:
-        print(f"  âš  GL merge: {e}")
+        print(f"  ⚠ GL merge: {e}")
     
-    df_depfxp2.write_parquet(f'{STORE_DIR}DEPFXP2.parquet')
+    df_depfxp2.write_parquet(f'{STORE_DIR}depfxp2.parquet')
+    df_depfxp2_pd = df_depfxp2.to_pandas()
+    sas.df2sd(df_depfxp2_pd, table='depfxp2', libref='store')
     print(f"  DEPFXP2 (FX): {len(df_depfxp2):,} products")
 
 # Combine for BASE.DEPOSIT
 df_base_deposit = pl.concat([df_deprmp2, df_depfxp2]) if len(df_deprmp2) > 0 or len(df_depfxp2) > 0 else pl.DataFrame([])
 
 if len(df_base_deposit) > 0:
-    df_base_deposit = df_base_deposit.sort('INDNON', descending=True)
-    df_base_deposit.write_parquet(f'{BASE_DIR}DEPOSIT.parquet')
+    df_base_deposit = df_base_deposit.sort('indnon', descending=True)
+    df_base_deposit.write_parquet(f'{BASE_DIR}deposit.parquet')
+    df_base_deposit_pd = df_base_deposit.to_pandas()
+    sas.df2sd(df_base_deposit_pd, table='deposit', libref='base')
     print(f"  BASE.DEPOSIT: {len(df_base_deposit):,} records")
 
 # Process each product (same logic as EIBMNLFE)
@@ -211,18 +227,18 @@ for prod in PRODUCTS:
     print(f"\n  {prod}:")
     
     try:
-        df_prod = df_base_deposit.filter(pl.col('DESC') == prod)
+        df_prod = df_base_deposit.filter(pl.col('desc') == prod)
         
         if len(df_prod) == 0:
-            print(f"    âš  No data")
+            print(f"    ⚠ No data")
             continue
         
         # Append logic (same as EIBMNLFE)
         if insert == 'Y':
             try:
                 df_base = pl.read_parquet(f'{BASE_DIR}{prod}.parquet')
-                df_base = df_base.filter(pl.col('DATE') != reptdate)
-                df_combined = pl.concat([df_base, df_prod]).sort('DATE')
+                df_base = df_base.filter(pl.col('date') != report_date)
+                df_combined = pl.concat([df_base, df_prod]).sort('date')
                 df_combined.write_parquet(f'{BASE_DIR}{prod}.parquet')
             except:
                 df_prod.write_parquet(f'{BASE_DIR}{prod}.parquet')
@@ -232,7 +248,7 @@ for prod in PRODUCTS:
             try:
                 df_base = pl.read_parquet(f'{BASE_DIR}{prod}.parquet')
                 df_combined = pl.concat([df_base, df_prod])
-                df_combined = df_combined.filter(pl.col('DATE') <= reptdate).sort('DATE')
+                df_combined = df_combined.filter(pl.col('date') <= report_date).sort('date')
                 df_combined.write_parquet(f'{STORE_DIR}{prod}.parquet')
             except:
                 df_prod.write_parquet(f'{STORE_DIR}{prod}.parquet')
@@ -240,7 +256,7 @@ for prod in PRODUCTS:
         # Calculate behavioral volatility (simplified)
         try:
             df_historical = pl.read_parquet(f'{STORE_DIR}{prod}.parquet')
-            outstanding = df_historical.tail(1)['BALANCE'][0] if len(df_historical) > 0 else 0
+            outstanding = df_historical.tail(1)['balance'][0] if len(df_historical) > 0 else 0
             
             # Simplified volatility %
             week_pct = 10.0
@@ -269,25 +285,25 @@ for prod in PRODUCTS:
             
             # Create MAXMIN
             df_maxmin = pl.DataFrame([{
-                'DESC': prod,
-                'WEEK': week_amt,
-                'MONTH': month_amt,
-                'QTR': qtr_amt,
-                'HALFYR': halfyr_amt,
-                'YEAR': year_amt,
-                'LAST': last_amt,
-                'TOTAL': outstanding
+                'desc': prod,
+                'week': week_amt,
+                'month': month_amt,
+                'qtr': qtr_amt,
+                'halfyr': halfyr_amt,
+                'year': year_amt,
+                'last': last_amt,
+                'total': outstanding
             }])
             
-            df_maxmin.write_parquet(f'{FINAL_DIR}MAXMIN{prod}.parquet')
+            df_maxmin.write_parquet(f'{FINAL_DIR}maxmin_{prod}.parquet')
             
-            print(f"    âœ“ Outstanding: {outstanding:,.0f}")
+            print(f"    ✓ Outstanding: {outstanding:,.0f}")
         
         except Exception as e:
-            print(f"    âš  Volatility: {e}")
+            print(f"    ⚠ Volatility: {e}")
     
     except Exception as e:
-        print(f"    âš  Error: {e}")
+        print(f"    ⚠ Error: {e}")
 
 # Consolidate behavioral results
 print("\nConsolidating behavioral results...")
@@ -295,7 +311,7 @@ print("\nConsolidating behavioral results...")
 maxmin_files = []
 for prod in PRODUCTS:
     try:
-        df = pl.read_parquet(f'{FINAL_DIR}MAXMIN{prod}.parquet')
+        df = pl.read_parquet(f'{FINAL_DIR}maxmin_{prod}.parquet')
         maxmin_files.append(df)
     except:
         pass
@@ -305,97 +321,131 @@ if maxmin_files:
     
     # Add PROD codes
     prod_code_map = {
-        'INDRMFD': '9331108', 'NONRMFD': '9331109',
-        'INDRMSA': '9331208', 'NONRMSA': '9331209',
-        'INDRMDD': '9331308', 'NONRMDD': '9331309',
-        'INDFXFD': '9631108', 'NONFXFD': '9631109',
-        'INDFXCA': '9631308', 'NONFXCA': '9631309'
+        'indrmfd': '9331108', 'nonrmfd': '9331109',
+        'indrmsa': '9331208', 'nonrmsa': '9331209',
+        'indrmdd': '9331308', 'nonrmdd': '9331309',
+        'indfxfd': '9631108', 'nonfxfd': '9631109',
+        'indfxca': '9631308', 'nonfxca': '9631309'
     }
     
     df_behavenote = df_behavenote.with_columns([
-        pl.col('DESC').replace(prod_code_map, default='').alias('PROD')
+        pl.col('desc').replace(prod_code_map, default='').alias('prod')
     ])
     
     # Add ITEM
     df_behavenote = df_behavenote.with_columns([
-        pl.col('DESC').replace(ITEM_MAP, default='').alias('ITEM')
+        pl.col('desc').replace(ITEM_MAP, default='').alias('item')
     ])
     
     # Calculate BALANCE
     df_behavenote = df_behavenote.with_columns([
-        (pl.col('WEEK') + pl.col('MONTH') + pl.col('QTR') + 
-         pl.col('HALFYR') + pl.col('YEAR') + pl.col('LAST')).alias('BALANCE')
+        (pl.col('week') + pl.col('month') + pl.col('qtr') + 
+         pl.col('halfyr') + pl.col('year') + pl.col('last')).alias('balance')
     ])
     
     # Add INDNON
     df_behavenote = df_behavenote.with_columns([
-        pl.col('PROD').str.slice(5, 2).alias('INDNON')
+        pl.col('prod').str.slice(5, 2).alias('indnon')
     ])
     
     # Negate (liabilities)
     df_behavenote = df_behavenote.with_columns([
-        (pl.col('WEEK') * -1).alias('WEEK'),
-        (pl.col('MONTH') * -1).alias('MONTH'),
-        (pl.col('QTR') * -1).alias('QTR'),
-        (pl.col('HALFYR') * -1).alias('HALFYR'),
-        (pl.col('YEAR') * -1).alias('YEAR'),
-        (pl.col('LAST') * -1).alias('LAST'),
-        (pl.col('BALANCE') * -1).alias('BALANCE')
+        (pl.col('week') * -1).alias('week'),
+        (pl.col('month') * -1).alias('month'),
+        (pl.col('qtr') * -1).alias('qtr'),
+        (pl.col('halfyr') * -1).alias('halfyr'),
+        (pl.col('year') * -1).alias('year'),
+        (pl.col('last') * -1).alias('last'),
+        (pl.col('balance') * -1).alias('balance')
     ])
     
-    df_behavenote.write_parquet(f'{STORE_DIR}BEHAVENOTE.parquet')
+    # Save as parquet
+    df_behavenote.write_parquet(f'{STORE_DIR}behavenote.parquet')
+    
+    # Save as SAS dataset
+    df_behavenote_pd = df_behavenote.to_pandas()
+    sas.df2sd(df_behavenote_pd, table='behavenote', libref='store')
     
     # Split RM vs FX
-    df_rm = df_behavenote.filter(pl.col('PROD').str.starts_with('933'))
-    df_fx = df_behavenote.filter(pl.col('PROD').str.starts_with('963'))
+    df_rm = df_behavenote.filter(pl.col('prod').str.starts_with('933'))
+    df_fx = df_behavenote.filter(pl.col('prod').str.starts_with('963'))
     
-    df_rm = df_rm.sort('INDNON', descending=True)
-    df_fx = df_fx.sort('INDNON', descending=True)
+    df_rm = df_rm.sort('indnon', descending=True)
+    df_fx = df_fx.sort('indnon', descending=True)
     
-    df_rm.write_parquet(f'{STORE_DIR}DEPRMP1.parquet')
-    df_fx.write_parquet(f'{STORE_DIR}DEPFXP1.parquet')
+    # Save parquet
+    df_rm.write_parquet(f'{STORE_DIR}deprmp1.parquet')
+    df_fx.write_parquet(f'{STORE_DIR}depfxp1.parquet')
+    
+    # Save as SAS datasets
+    df_rm_pd = df_rm.to_pandas()
+    df_fx_pd = df_fx.to_pandas()
+    sas.df2sd(df_rm_pd, table='deprmp1', libref='store')
+    sas.df2sd(df_fx_pd, table='depfxp1', libref='store')
     
     # Create final report
     df_report = df_rm.with_columns([
-        pl.lit('DEPOSIT :').alias('ITEM2'),
-        pl.when(pl.col('INDNON') == '08')
+        pl.lit('DEPOSIT :').alias('item2'),
+        pl.when(pl.col('indnon') == '08')
           .then(pl.lit('INDIVIDUALS    '))
           .otherwise(pl.lit('NON-INDIVUDUALS'))
-          .alias('ITEM3'),
-        (pl.col('BALANCE') * -1).alias('BALANCE'),
-        (pl.col('WEEK') * -1).alias('WEEK'),
-        (pl.col('MONTH') * -1).alias('MONTH'),
-        (pl.col('QTR') * -1).alias('QTR'),
-        (pl.col('HALFYR') * -1).alias('HALFYR'),
-        (pl.col('YEAR') * -1).alias('YEAR'),
-        (pl.col('LAST') * -1).alias('LAST')
+          .alias('item3'),
+        (pl.col('balance') * -1).alias('balance'),
+        (pl.col('week') * -1).alias('week'),
+        (pl.col('month') * -1).alias('month'),
+        (pl.col('qtr') * -1).alias('qtr'),
+        (pl.col('halfyr') * -1).alias('halfyr'),
+        (pl.col('year') * -1).alias('year'),
+        (pl.col('last') * -1).alias('last')
     ])
     
-    df_report.write_parquet(f'{STORE_DIR}REPORT.parquet')
+    # Save report as parquet
+    df_report.write_parquet(f'{STORE_DIR}report.parquet')
     
-    print(f"  âœ“ BEHAVENOTE: {len(df_behavenote):,} products")
-    print(f"  âœ“ Report: {len(df_report):,} records")
+    # Save report as SAS dataset
+    df_report_pd = df_report.to_pandas()
+    sas.df2sd(df_report_pd, table='report', libref='store')
+    
+    # Create text file report
+    report_file = f'{FINAL_DIR}eibdnlfe_report_{rdate}.txt'
+    with open(report_file, 'w') as f:
+        f.write("EIBDNLFE - BNM Behavioral Analysis with GL Merge\n")
+        f.write("=" * 60 + "\n")
+        f.write(f"Report Date: {report_date.strftime('%d/%m/%Y')}\n")
+        f.write(f"Insert: {insert}\n")
+        f.write("=" * 60 + "\n\n")
+        f.write("DEPOSIT BEHAVIORAL ANALYSIS\n")
+        f.write("-" * 40 + "\n")
+        f.write(f"{'Item':<10} {'Balance':>15} {'Week':>10} {'Month':>10} {'Qtr':>10} {'HalfYr':>10} {'Year':>10} {'Last':>10}\n")
+        f.write("-" * 100 + "\n")
+        
+        for row in df_report.iter_rows(named=True):
+            f.write(f"{row['item']:<10} {row['balance']:>15,.0f} {row['week']:>10,.0f} {row['month']:>10,.0f} "
+                   f"{row['qtr']:>10,.0f} {row['halfyr']:>10,.0f} {row['year']:>10,.0f} {row['last']:>10,.0f}\n")
+        
+        f.write("\n" + "=" * 60 + "\n")
+        f.write("End of Report\n")
+    
+    print(f"  ✓ BEHAVENOTE: {len(df_behavenote):,} products")
+    print(f"  ✓ Report: {len(df_report):,} records")
+    print(f"  ✓ Text file: {report_file}")
+
+# Terminate SAS session
+sas.endsas()
 
 print(f"\n{'='*60}")
-print(f"âœ“ EIBDNLFE Complete!")
+print(f"✓ EIBDNLFE Complete!")
 print(f"{'='*60}")
 print(f"\nKey Feature: GL Merge")
-print(f"  Source: STOREGL.GLRMFXP2{{YEAR}}{{MON}}{{DAY}}")
-print(f"  Target: FX deposits (DEPFXP2)")
+print(f"  Source: storegl/glrmfxp2_{{year}}{{mon}}{{day}}.sas7bdat")
+print(f"  Target: FX deposits (depfxp2)")
 print(f"  Fields: WEEK, LAST, BALANCE (add GL amounts)")
 print(f"\n10 Product Categories:")
-print(f"  - INDRMDD/NONRMDD/INDRMFD/NONRMFD/INDRMSA/NONRMSA (RM)")
-print(f"  - INDFXCA/NONFXCA/INDFXFD/NONFXFD (FX + GL)")
+print(f"  - indrmdd/nonrmdd/indrmfd/nonrmfd/indrmsa/nonrmsa (RM)")
+print(f"  - indfxca/nonfxca/indfxfd/nonfxfd (FX + GL)")
 print(f"\nOutputs:")
-print(f"  - STORE.BEHAVENOTE: All products")
-print(f"  - STORE.DEPRMP1/DEPFXP1: RM/FX splits")
-print(f"  - STORE.REPORT: Final report")
-print(f"  - BASE.DEPOSIT: Combined (with GL)")
-
-
-
-all inputs are in sas7bdat sas dataset and need to be in all lowercase.
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in sas7bdat and parquet files. and could be 1 text file.
-write out using saspy
+print(f"  - store/behavenote.sas7bdat & .parquet: All products")
+print(f"  - store/deprmp1 & depfxp1: RM/FX splits")
+print(f"  - store/report: Final report")
+print(f"  - base/deposit: Combined (with GL)")
+print(f"  - final/eibdnlfe_report_{rdate}.txt: Text report")
