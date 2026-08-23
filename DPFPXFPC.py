@@ -2,292 +2,283 @@ import polars as pl
 import pyreadstat
 from pathlib import Path
 from datetime import datetime, timedelta
-import pandas as pd
 import saspy
-import numpy as np
-from NPGSRPT import npgs_report
-import os
 
-def eibrp159():
-    npgs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRP159")
-    output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBRP159")
+def eibrtlio():
+    input_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRTLIO")
+    output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBRTLIO")
     
     # Create output directory if it doesn't exist
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Step 1: Get date (using timedelta to get July data)
+    # Calculate date using datetime timedelta
     current_date = datetime.now()
-    prev_date = current_date - timedelta(days=23)  # Changed to get July data
-    reptdate = prev_date.date()
+    previous_date = current_date - timedelta(days=1)
     
-    mm = reptdate.month
+    mm = previous_date.month
     mm1 = mm - 1 if mm > 1 else 12
     
-    # SAS CALL SYMPUT equivalents
     reptmon = f"{mm:02d}"
     reptmon1 = f"{mm1:02d}"
-    reptyear = str(reptdate.year)
-    reptday = f"{reptdate.day:02d}"
-    rdate = reptdate.strftime("%d%m%y")
-    ndate = f"{reptdate.day:02d}{reptdate.month:02d}"
+    reptyear = str(previous_date.year)
+    reptday = f"{previous_date.day:02d}"
+    rdate = previous_date.strftime("%d%m%y")
+    ndate = f"{previous_date.day:02d}{previous_date.month:02d}"
     
-    print(f"Processing date: {reptdate}")
-    print(f"REPTMON: {reptmon}, REPTMON1: {reptmon1}")
-    print(f"RDATE: {rdate}, NDATE: {ndate}")
-    print(f"Output directory: {output_path}")
+    print(f"REPTMON: {reptmon}, RDATE: {rdate}")
+    print(f"Input path: {input_path}")
+    print(f"Output path: {output_path}")
     
-    # Step 2: NPGS data - read SAS7BDAT files with pyreadstat
-    dp_df = pl.DataFrame()
-    ln_df = pl.DataFrame()
+    # Read both datasets from sas7bdat files (all lowercase)
+    try:
+        dp_df, dp_meta = pyreadstat.read_sas7bdat(
+            input_path / f"dpnpgs{reptmon}.sas7bdat"
+        )
+        dp_df = pl.from_pandas(dp_df)
+        # Convert all column names to lowercase
+        dp_df = dp_df.rename({col: col.lower() for col in dp_df.columns})
+        print(f"DP columns: {dp_df.columns}")
+        print(f"DP shape: {dp_df.shape}")
+    except FileNotFoundError:
+        dp_df = pl.DataFrame()
+        print(f"File not found: dpnpgs{reptmon}.sas7bdat")
+    except Exception as e:
+        dp_df = pl.DataFrame()
+        print(f"Error reading dpnpgs{reptmon}.sas7bdat: {e}")
     
-    dp_file = npgs_path / f"dpipgs{reptmon}.sas7bdat"
-    ln_file = npgs_path / f"lnipgs{reptmon}.sas7bdat"
+    try:
+        ln_df, ln_meta = pyreadstat.read_sas7bdat(
+            input_path / f"lnipgs{reptmon}.sas7bdat"
+        )
+        ln_df = pl.from_pandas(ln_df)
+        # Convert all column names to lowercase
+        ln_df = ln_df.rename({col: col.lower() for col in ln_df.columns})
+        print(f"LN columns: {ln_df.columns}")
+        print(f"LN shape: {ln_df.shape}")
+    except FileNotFoundError:
+        ln_df = pl.DataFrame()
+        print(f"File not found: lnipgs{reptmon}.sas7bdat")
+    except Exception as e:
+        ln_df = pl.DataFrame()
+        print(f"Error reading lnipgs{reptmon}.sas7bdat: {e}")
     
-    print(f"\nLooking for input files:")
-    print(f"DP file: {dp_file}")
-    print(f"LN file: {ln_file}")
-    print(f"DP file exists: {dp_file.exists()}")
-    print(f"LN file exists: {ln_file.exists()}")
-    
-    # Check if the directory exists
-    if not npgs_path.exists():
-        print(f"\nERROR: Directory {npgs_path} does not exist!")
-        print("Please check the path and permissions.")
+    # Check if both dataframes are empty
+    if dp_df.is_empty() and ln_df.is_empty():
+        print("No data found in DPNPGS or LNIPGS")
         return
     
-    if dp_file.exists():
-        try:
-            print(f"\nReading DP file: {dp_file}")
-            dp_df, dp_meta = pyreadstat.read_sas7bdat(str(dp_file))
-            print(f"DP file read successfully. Rows: {len(dp_df)}, Columns: {len(dp_df.columns)}")
-            dp_df = pl.from_pandas(dp_df)
-            # Convert column names to lowercase
-            dp_df.columns = [col.lower() for col in dp_df.columns]
-        except Exception as e:
-            print(f"Error reading DP file: {e}")
-    
-    if ln_file.exists():
-        try:
-            print(f"\nReading LN file: {ln_file}")
-            ln_df, ln_meta = pyreadstat.read_sas7bdat(str(ln_file))
-            print(f"LN file read successfully. Rows: {len(ln_df)}, Columns: {len(ln_df.columns)}")
-            ln_df = pl.from_pandas(ln_df)
-            # Convert column names to lowercase
-            ln_df.columns = [col.lower() for col in ln_df.columns]
-        except Exception as e:
-            print(f"Error reading LN file: {e}")
-    
-    # Handle column mismatches between DP and LN files
-    if len(dp_df) > 0 and len(ln_df) > 0:
-        # Get all unique columns
-        all_columns = list(set(dp_df.columns) | set(ln_df.columns))
-        
-        # Align columns - add missing columns with None values
-        for col in all_columns:
-            if col not in dp_df.columns:
-                dp_df = dp_df.with_columns(pl.lit(None).alias(col))
-            if col not in ln_df.columns:
-                ln_df = ln_df.with_columns(pl.lit(None).alias(col))
-        
-        # Ensure same column order
-        ln_df = ln_df.select(dp_df.columns)
-        
-        # Now concatenate
-        npgs_df = pl.concat([dp_df, ln_df], how="vertical")
-        print(f"\nConcatenated DP and LN: {len(npgs_df)} rows")
-    elif len(dp_df) > 0:
-        npgs_df = dp_df
-        print(f"\nOnly DP data available: {len(npgs_df)} rows")
-    elif len(ln_df) > 0:
-        npgs_df = ln_df
-        print(f"\nOnly LN data available: {len(npgs_df)} rows")
+    # If one is empty, use the other
+    if dp_df.is_empty():
+        print("DP is empty, using only LN data")
+        combined_df = ln_df
+    elif ln_df.is_empty():
+        print("LN is empty, using only DP data")
+        combined_df = dp_df
     else:
-        npgs_df = pl.DataFrame()
-        print(f"\nNo data available from either file")
+        # Check if columns match
+        dp_cols = set(dp_df.columns)
+        ln_cols = set(ln_df.columns)
+        
+        if dp_cols != ln_cols:
+            print(f"Column mismatch detected!")
+            print(f"DP only columns: {dp_cols - ln_cols}")
+            print(f"LN only columns: {ln_cols - ln_cols}")
+            print(f"Common columns: {dp_cols & ln_cols}")
+            
+            # Option 1: Use only common columns
+            common_cols = list(dp_cols & ln_cols)
+            if common_cols:
+                print(f"Using only common columns: {common_cols}")
+                dp_df = dp_df.select(common_cols)
+                ln_df = ln_df.select(common_cols)
+            else:
+                print("No common columns found!")
+                return
+        else:
+            # Ensure same column order
+            ln_df = ln_df.select(dp_df.columns)
+        
+        # Combine datasets
+        combined_df = pl.concat([dp_df, ln_df])
     
-    # Add CVARXX column with 10 spaces if not exists
-    if len(npgs_df) > 0 and 'cvarxx' not in npgs_df.columns:
-        npgs_df = npgs_df.with_columns(
-            pl.lit("          ").alias("cvarxx")  # 10 spaces
+    print(f"Combined shape: {combined_df.shape}")
+    print(f"Combined columns: {combined_df.columns}")
+    
+    if combined_df.is_empty():
+        print("No data after combining")
+        return
+    
+    # Create TL dataset
+    if 'cvar13' in combined_df.columns:
+        tl_df = combined_df.filter(pl.col("cvar13").str.strip_chars() != "")
+        tl_df = tl_df.with_columns(
+            pl.col("cvar13").alias("ndate"),
+            pl.col("cvar12").alias("status")
+        ).select(["cvar01", "cvar06", "status", "ndate"])
+    else:
+        print("Column 'cvar13' not found in combined data")
+        tl_df = pl.DataFrame()
+    
+    # Write TL as parquet to output directory
+    if not tl_df.is_empty():
+        tl_df.write_parquet(output_path / "tl.parquet")
+        
+        # Write TL as sas7bdat using saspy to output directory
+        sas = saspy.SASsession()
+        tl_pandas = tl_df.to_pandas()
+        sas.df2sd(tl_pandas, table='tl', libref='work')
+        sas.submit(f"PROC EXPORT DATA=work.tl OUTFILE='{output_path}/tl.sas7bdat' DBMS=SAS7BDAT REPLACE; RUN;")
+    
+    # Process NPGS data
+    npgs_df = combined_df.with_columns(
+        pl.when(pl.col("cvar12") == "npl").then(pl.lit("np")).otherwise(pl.lit("ap")).alias("cvar12a")
+    )
+    
+    # Filter for natguar='06' AND cinstcl='18'
+    if 'natguar' in npgs_df.columns and 'cinstcl' in npgs_df.columns:
+        npgs3_df = npgs_df.filter(
+            (pl.col("natguar") == "06") &
+            (pl.col("cinstcl") == "18")
         )
+    else:
+        print("Warning: 'natguar' or 'cinstcl' columns not found")
+        print(f"Available columns: {npgs_df.columns}")
+        npgs3_df = npgs_df  # Use all data if filter columns not found
     
-    # Step 3: Write MEFT.txt file to output directory
-    meft_path = output_path / "MEFT.txt"
-    with open(meft_path, 'w') as f:
-        if len(npgs_df) > 0:
-            print(f"\nWriting MEFT.txt to: {meft_path}")
-            for idx, row in enumerate(npgs_df.iter_rows(named=True)):
-                # Format each field exactly as SAS PUT statements
-                cvar01 = f"{row.get('cvar01', 0):10.0f}" if row.get('cvar01') is not None else " " * 10
-                cvar02 = f"{str(row.get('cvar02', '')):2s}" if row.get('cvar02') is not None else "  "
-                cvar03 = f"{str(row.get('cvar03', '')):15s}" if row.get('cvar03') is not None else " " * 15
-                cvar04 = f"{str(row.get('cvar04', '')):50s}" if row.get('cvar04') is not None else " " * 50
-                
-                # CVAR05: DDMMYY10. format
-                cvar05 = "          "  # 10 spaces
-                if 'cvar05' in row and row['cvar05'] is not None:
-                    try:
-                        # Handle date
-                        if isinstance(row['cvar05'], (datetime, pl.Date, pl.Datetime)):
-                            cvar05 = row['cvar05'].strftime("%d/%m/%Y")
-                        elif isinstance(row['cvar05'], str):
-                            # Try to parse string date
-                            try:
-                                parsed_date = datetime.strptime(row['cvar05'], "%Y-%m-%d")
-                                cvar05 = parsed_date.strftime("%d/%m/%Y")
-                            except:
-                                cvar05 = str(row['cvar05']).rjust(10)
-                        else:
-                            # Numeric date - assume it's a datetime value
-                            base_date = datetime(1960, 1, 1)
-                            actual_date = base_date + timedelta(days=int(row['cvar05']))
-                            cvar05 = actual_date.strftime("%d/%m/%Y")
-                    except:
-                        cvar05 = "          "
-                
-                cvarxx = "          "  # 10 spaces
-                cvar06 = f"{row.get('cvar06', 0):10.0f}" if row.get('cvar06') is not None else " " * 10
-                cvar07 = f"{str(row.get('cvar07', '')):2s}" if row.get('cvar07') is not None else "  "
-                cvar08 = f"{row.get('cvar08', 0):10.2f}" if row.get('cvar08') is not None else " " * 10
-                cvar09 = f"{row.get('cvar09', 0):10.2f}" if row.get('cvar09') is not None else " " * 10
-                cvar10 = f"{row.get('cvar10', 0):10.2f}" if row.get('cvar10') is not None else " " * 10
-                cvar11 = f"{row.get('cvar11', 0):5.0f}" if row.get('cvar11') is not None else " " * 5
-                cvar12 = f"{str(row.get('cvar12', '')):3s}" if row.get('cvar12') is not None else " " * 3
-                cvar13 = f"{str(row.get('cvar13', '')):10s}" if row.get('cvar13') is not None else " " * 10
-                cvar14 = f"{str(row.get('cvar14', '')):4s}" if row.get('cvar14') is not None else " " * 4
-                cvar15 = f"{str(row.get('cvar15', '')):5s}" if row.get('cvar15') is not None else " " * 5
-                
-                # Write with exact @ positions and semicolons
-                line = f"{cvar01};{cvar02};{cvar03};{cvar04};{cvar05};{cvarxx};" \
-                       f"{cvar06};{cvar07};{cvar08};{cvar09};{cvar10};{cvar11};" \
-                       f"{cvar12};{cvar13};{cvar14};{cvar15};"
-                f.write(line + "\n")
+    npgs3_df = npgs3_df.with_columns(pl.lit(" " * 10).alias("cvarxx"))
+    npgs3_df = npgs3_df.sort(["cvar01", "cvar06"])
     
-    # Step 4: Generate report using NPGSRPT module
-    print("\n" + "=" * 60)
-    print("PUBLIC BANK BERHAD")
-    print(f"DETAIL OF ACCTS (MEF PRODUCTS) FOR SUBMISSION TO CGC @ {rdate}")
+    # Write SC167T text file to output directory
+    with open(output_path / "sc167t.txt", 'w') as f:
+        for row in npgs3_df.iter_rows(named=True):
+            cvar01 = f"{row.get('cvar01', 0):10.0f}"
+            cvar02 = f"{row.get('cvar02', ''):2s}"
+            cvar03 = f"{row.get('cvar03', ''):15s}"
+            cvar04 = f"{row.get('cvar04', ''):50s}"
+            
+            # cvar05 date handling
+            cvar05 = " " * 10
+            if 'cvar05' in row and row['cvar05']:
+                try:
+                    if hasattr(row['cvar05'], 'strftime'):
+                        cvar05 = row['cvar05'].strftime("%d/%m/%Y")
+                    else:
+                        cvar05 = str(row['cvar05']).rjust(10)
+                except:
+                    cvar05 = " " * 10
+            
+            cvar06 = f"{row.get('cvar06', 0):10.0f}"
+            cvar07 = f"{row.get('cvar07', ''):2s}"
+            cvar08 = f"{row.get('cvar08', 0):10.2f}"
+            cvar09 = f"{row.get('cvar09', 0):10.2f}"
+            cvar10 = f"{row.get('cvar10', 0):10.2f}"
+            cvar11 = f"{row.get('cvar11', 0):5.0f}"
+            cvar12a = f"{row.get('cvar12a', ''):4s}"
+            cvar13 = f"{row.get('cvar13', ''):10s}"
+            cvar14 = f"{row.get('cvar14', ''):4s}"
+            cvar15 = f"{row.get('cvar15', ''):5s}"
+            
+            line = f"{cvar01};{cvar02};{cvar03};{cvar04};{cvar05};{cvar06};" \
+                   f"{cvar07};{cvar08};{cvar09};{cvar10};{cvar11};{cvar12a};" \
+                   f"{cvar13};{cvar14};{cvar15};"
+            f.write(line + "\n")
+    
+    # Write NPGS3 as parquet to output directory
+    npgs3_df.write_parquet(output_path / "npgs3.parquet")
+    
+    # Write NPGS3 as sas7bdat using saspy to output directory
+    npgs3_pandas = npgs3_df.to_pandas()
+    sas.df2sd(npgs3_pandas, table='npgs3', libref='work')
+    sas.submit(f"PROC EXPORT DATA=work.npgs3 OUTFILE='{output_path}/npgs3.sas7bdat' DBMS=SAS7BDAT REPLACE; RUN;")
+    
+    # Generate report to output directory
+    generate_simple_report(npgs3_df, rdate, output_path / "sc167r.txt")
+    
+    print(f"Processing complete. Output files written to: {output_path}")
+    print(f"Files: tl.parquet, tl.sas7bdat, sc167t.txt, npgs3.parquet, npgs3.sas7bdat, sc167r.txt")
+    
+    # Close SAS session
+    sas.endsas()
+
+def generate_simple_report(df, rdate, output_file):
+    """Simple report for Islamic bank"""
+    if df.is_empty():
+        return
+    
+    with open(output_file, 'w') as f:
+        f.write("=" * 60 + "\n")
+        f.write("PUBLIC ISLAMIC BANK BERHAD\n")
+        f.write(f"DETAIL OF ACCTS FOR SUBMISSION TO CGC @ {rdate}\n")
+        f.write("=" * 60 + "\n\n")
+        
+        f.write(f"Total accounts: {len(df)}\n\n")
+        
+        # Show summary by cvar02 (scheme)
+        if 'cvar02' in df.columns:
+            summary = df.group_by("cvar02").agg(pl.count().alias("count"))
+            f.write("Accounts by scheme:\n")
+            for row in summary.iter_rows(named=True):
+                f.write(f"  Scheme {row['cvar02']}: {row['count']} accounts\n")
+        
+        f.write("\nFirst 10 records:\n")
+        
+        # Display first few records
+        cols_to_show = ['cvar01', 'cvar02', 'cvar03', 'cvar06', 'cvar08', 'cvar09', 'cvar12a']
+        display_cols = [c for c in cols_to_show if c in df.columns]
+        
+        if display_cols:
+            display_df = df.select(display_cols).head(10)
+            
+            # Rename for readability
+            rename_map = {
+                'cvar01': 'ref_no', 'cvar02': 'sch', 'cvar03': 'ic_no',
+                'cvar06': 'acct_no', 'cvar08': 'loan_amt', 'cvar09': 'os_bal',
+                'cvar12a': 'status'
+            }
+            rename_available = {k:v for k,v in rename_map.items() if k in display_df.columns}
+            if rename_available:
+                display_df = display_df.rename(rename_available)
+            
+            f.write(str(display_df))
+    
+    print(f"Report saved to {output_file}")
+
+# For CGCRPT module (if needed separately)
+def cgcrpt(df, rdate, output_file=None):
+    """CGCRPT report generator"""
+    if df.is_empty():
+        return df
+    
+    print("=" * 60)
+    print("PUBLIC ISLAMIC BANK BERHAD")
+    print(f"DETAIL OF ACCTS FOR SUBMISSION TO CGC @ {rdate}")
     print("=" * 60)
     
-    # Call NPGSRPT module to generate report
-    if len(npgs_df) > 0:
-        mefr_path = output_path / "MEFR.txt"
-        title1 = "PUBLIC BANK BERHAD"
-        title2 = f"DETAIL OF ACCTS (MEF PRODUCTS) FOR SUBMISSION TO CGC @ {rdate}"
-        
-        try:
-            # Call the npgs_report function from NPGSRPT module
-            npgs_report(
-                df=npgs_df,
-                report_path=str(mefr_path),
-                title1=title1,
-                title2=title2
-            )
-            print(f"Report saved to: {mefr_path}")
-            
-        except Exception as e:
-            print(f"Error generating report with NPGSRPT: {e}")
-            # Fallback to simple report
-            with open(mefr_path, 'w') as f:
-                f.write(f"MEF Report - Date: {rdate}\n")
-                f.write("=" * 60 + "\n")
-                f.write(f"Total records processed: {len(npgs_df)}\n")
-                
-                # Simple summary by cvar02
-                if 'cvar02' in npgs_df.columns:
-                    summary = npgs_df.group_by("cvar02").agg(pl.len().alias("count"))
-                    for row in summary.iter_rows(named=True):
-                        f.write(f"cvar02={row['cvar02']}: {row['count']} records\n")
-            print(f"Report saved to: {mefr_path} (fallback format)")
+    # Simple display
+    cols = ['cvar01','cvar02','cvar03','cvar04','cvar06',
+            'cvar08','cvar09','cvar10','cvar11','cvar12a',
+            'cvar13','cvar14','cvar15']
     
-    # Step 5: Output to SAS7BDAT and Parquet files
-    if len(npgs_df) > 0:
-        output_parquet_path = output_path / "eibrp159_output.parquet"
-        output_sas7bdat_path = output_path / "eibrp159_output.sas7bdat"
-        
-        # Save as Parquet
-        npgs_df.write_parquet(output_parquet_path)
-        print(f"\nParquet output saved to: {output_parquet_path}")
-        
-        # Save as SAS7BDAT using saspy with PROC IMPORT from CSV
-        try:
-            print("\nCreating SAS7BDAT file using saspy...")
-            
-            # Initialize SAS session
-            sas = saspy.SASsession()
-            
-            # Convert polars DataFrame to pandas and save as temporary CSV
-            pd_df = npgs_df.to_pandas()
-            temp_csv = output_path / "temp_sas_data.csv"
-            
-            # Handle None/NaN values for CSV
-            pd_df = pd_df.fillna('')
-            pd_df.to_csv(temp_csv, index=False, quoting=1)  # QUOTE_ALL
-            
-            # Use PROC IMPORT to read CSV with proper handling
-            output_dir = str(output_sas7bdat_path.parent.absolute())
-            output_name = output_sas7bdat_path.stem
-            
-            sas_code = f"""
-            PROC IMPORT DATAFILE="{temp_csv}"
-                OUT=work.npgs_output
-                DBMS=CSV
-                REPLACE;
-                GETNAMES=YES;
-                GUESSINGROWS=MAX;
-            RUN;
-            
-            libname outlib "{output_dir}";
-            data outlib.{output_name};
-                set work.npgs_output;
-            run;
-            
-            proc datasets lib=work nolist;
-                delete npgs_output;
-            run;
-            """
-            
-            # Submit the SAS code
-            log = sas.submit(sas_code, results='TEXT')
-            
-            # Check for actual errors (not false positives from PROC IMPORT)
-            log_text = str(log)
-            actual_errors = False
-            
-            # Check for real ERROR lines (not the _EFIERR_ macro)
-            for line in log_text.split('\n'):
-                if 'ERROR:' in line and '_EFIERR_' not in line and 'error detection' not in line.lower():
-                    actual_errors = True
-                    print(f"ERROR: {line}")
-            
-            if actual_errors:
-                print("SAS processing completed with errors")
-            else:
-                print(f"SAS7BDAT output saved to: {output_sas7bdat_path}")
-                print(f"Created dataset with {len(pd_df)} observations")
-            
-            # Clean up temp file
-            if temp_csv.exists():
-                temp_csv.unlink()
-                print(f"Temporary file {temp_csv} removed")
-            
-            # Close SAS session
-            sas.endsas()
-            
-        except Exception as e:
-            print(f"Error creating SAS7BDAT file: {e}")
-            print("Please check SAS configuration and permissions")
-            # Clean up temp file if it exists
-            if 'temp_csv' in locals() and temp_csv.exists():
-                temp_csv.unlink()
+    display_df = df.select([c for c in cols if c in df.columns])
+    rename_map = {
+        'cvar01': 'ref_no', 'cvar02': 'sch', 'cvar03': 'ic_no',
+        'cvar04': 'customer', 'cvar06': 'acct_no', 'cvar08': 'loan_amt',
+        'cvar09': 'os_balance', 'cvar10': 'interest', 'cvar11': 'arrears',
+        'cvar12a': 'status', 'cvar13': 'npl_date', 'cvar14': 'npl_notify',
+        'cvar15': 'npl_reason'
+    }
     
-    print(f"\nSummary:")
-    print(f"Input directory: {npgs_path}")
-    print(f"Output directory: {output_path}")
-    print(f"MEFT.txt file created with {len(npgs_df)} records")
-    print(f"Report saved to MEFR.txt")
-    print(f"Parquet file created: {output_parquet_path}")
-    print(f"SAS7BDAT file created with {len(npgs_df)} observations")
+    rename_available = {k:v for k,v in rename_map.items() if k in display_df.columns}
+    if rename_available:
+        display_df = display_df.rename(rename_available)
+    
+    print(display_df)
+    print(f"\nTotal: {len(df)} records")
+    
+    if output_file:
+        df.write_csv(output_file)
+    
+    return df
 
 if __name__ == "__main__":
-    eibrp159()
+    eibrtlio()
