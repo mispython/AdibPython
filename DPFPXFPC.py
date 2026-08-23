@@ -5,7 +5,11 @@ from datetime import datetime, timedelta
 import saspy
 
 def eibrtlio():
-    npgs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRTLIO")
+    input_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRTLIO")
+    output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBRTLIO")
+    
+    # Create output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
     
     # Calculate date using datetime timedelta
     current_date = datetime.now()
@@ -22,11 +26,13 @@ def eibrtlio():
     ndate = f"{previous_date.day:02d}{previous_date.month:02d}"
     
     print(f"REPTMON: {reptmon}, RDATE: {rdate}")
+    print(f"Input path: {input_path}")
+    print(f"Output path: {output_path}")
     
     # Read both datasets from sas7bdat files (all lowercase)
     try:
         dp_df, dp_meta = pyreadstat.read_sas7bdat(
-            npgs_path / f"dpnpgs{reptmon}.sas7bdat"
+            input_path / f"dpnpgs{reptmon}.sas7bdat"
         )
         dp_df = pl.from_pandas(dp_df)
     except FileNotFoundError:
@@ -35,7 +41,7 @@ def eibrtlio():
     
     try:
         ln_df, ln_meta = pyreadstat.read_sas7bdat(
-            npgs_path / f"lnipgs{reptmon}.sas7bdat"
+            input_path / f"lnipgs{reptmon}.sas7bdat"
         )
         ln_df = pl.from_pandas(ln_df)
     except FileNotFoundError:
@@ -56,14 +62,14 @@ def eibrtlio():
         pl.col("cvar12").alias("status")
     ).select(["cvar01", "cvar06", "status", "ndate"])
     
-    # Write TL as parquet
-    tl_df.write_parquet(npgs_path / "tl.parquet")
+    # Write TL as parquet to output directory
+    tl_df.write_parquet(output_path / "tl.parquet")
     
-    # Write TL as sas7bdat using saspy
+    # Write TL as sas7bdat using saspy to output directory
     sas = saspy.SASsession()
     tl_pandas = tl_df.to_pandas()
     sas.df2sd(tl_pandas, table='tl', libref='work')
-    sas.submit(f"PROC EXPORT DATA=work.tl OUTFILE='{npgs_path}/tl.sas7bdat' DBMS=SAS7BDAT REPLACE; RUN;")
+    sas.submit(f"PROC EXPORT DATA=work.tl OUTFILE='{output_path}/tl.sas7bdat' DBMS=SAS7BDAT REPLACE; RUN;")
     
     # Process NPGS data
     npgs_df = combined_df.with_columns(
@@ -79,8 +85,8 @@ def eibrtlio():
     npgs3_df = npgs3_df.with_columns(pl.lit(" " * 10).alias("cvarxx"))
     npgs3_df = npgs3_df.sort(["cvar01", "cvar06"])
     
-    # Write SC167T text file
-    with open(npgs_path / "sc167t.txt", 'w') as f:
+    # Write SC167T text file to output directory
+    with open(output_path / "sc167t.txt", 'w') as f:
         for row in npgs3_df.iter_rows(named=True):
             cvar01 = f"{row.get('cvar01', 0):10.0f}"
             cvar02 = f"{row.get('cvar02', ''):2s}"
@@ -114,18 +120,19 @@ def eibrtlio():
                    f"{cvar13};{cvar14};{cvar15};"
             f.write(line + "\n")
     
-    # Write NPGS3 as parquet
-    npgs3_df.write_parquet(npgs_path / "npgs3.parquet")
+    # Write NPGS3 as parquet to output directory
+    npgs3_df.write_parquet(output_path / "npgs3.parquet")
     
-    # Write NPGS3 as sas7bdat using saspy
+    # Write NPGS3 as sas7bdat using saspy to output directory
     npgs3_pandas = npgs3_df.to_pandas()
     sas.df2sd(npgs3_pandas, table='npgs3', libref='work')
-    sas.submit(f"PROC EXPORT DATA=work.npgs3 OUTFILE='{npgs_path}/npgs3.sas7bdat' DBMS=SAS7BDAT REPLACE; RUN;")
+    sas.submit(f"PROC EXPORT DATA=work.npgs3 OUTFILE='{output_path}/npgs3.sas7bdat' DBMS=SAS7BDAT REPLACE; RUN;")
     
-    # Generate report
-    generate_simple_report(npgs3_df, rdate, npgs_path / "sc167r.txt")
+    # Generate report to output directory
+    generate_simple_report(npgs3_df, rdate, output_path / "sc167r.txt")
     
-    print(f"Processing complete. Files: tl.parquet, tl.sas7bdat, sc167t.txt, npgs3.parquet, npgs3.sas7bdat, sc167r.txt")
+    print(f"Processing complete. Output files written to: {output_path}")
+    print(f"Files: tl.parquet, tl.sas7bdat, sc167t.txt, npgs3.parquet, npgs3.sas7bdat, sc167r.txt")
     
     # Close SAS session
     sas.endsas()
