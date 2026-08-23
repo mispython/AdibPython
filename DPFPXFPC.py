@@ -5,8 +5,7 @@ from datetime import datetime, timedelta
 import saspy
 
 def eibrp159():
-    base = Path.cwd()
-    npgs_path = base / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBRP159"
+    npgs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRP159")
     
     # Step 1: Get previous day's date (replacing REPTDATE)
     current_date = datetime.now()
@@ -58,7 +57,7 @@ def eibrp159():
         )
     
     # Step 3: Write MEFT.txt file with exact SAS fixed positions
-    meft_path = base / "MEFT.txt"
+    meft_path = Path("MEFT.txt")
     with open(meft_path, 'w') as f:
         if len(npgs_df) > 0:
             for row in npgs_df.iter_rows(named=True):
@@ -116,7 +115,7 @@ def eibrp159():
     print("=" * 60)
     
     # Create MEFR.txt report
-    mefr_path = base / "MEFR.txt"
+    mefr_path = Path("MEFR.txt")
     with open(mefr_path, 'w') as f:
         f.write(f"MEF Report - Date: {rdate}\n")
         f.write("=" * 60 + "\n")
@@ -129,8 +128,8 @@ def eibrp159():
                 f.write(f"cvar02={row['cvar02']}: {row['count']} records\n")
     
     # Step 5: Output to SAS7BDAT and Parquet files
-    output_parquet_path = base / "eibrp159_output.parquet"
-    output_sas7bdat_path = base / "eibrp159_output.sas7bdat"
+    output_parquet_path = Path("eibrp159_output.parquet")
+    output_sas7bdat_path = Path("eibrp159_output.sas7bdat")
     
     if len(npgs_df) > 0:
         # Save as Parquet
@@ -162,7 +161,7 @@ def eibrp159():
             print(f"SAS7BDAT output saved to: {output_sas7bdat_path}")
             
         except Exception as e:
-            print(f"Warning: Could not create SAS7BDAT file: {e}")
+            print(f"Warning: Could not create SAS7BDAT file with saspy: {e}")
             print("Using alternative method with pyreadstat...")
             
             try:
