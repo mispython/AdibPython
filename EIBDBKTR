@@ -1,399 +1,116 @@
-from __future__ import annotations
-
-from pathlib import Path
-from datetime import datetime, timedelta
-import pyarrow as pa
-import pyarrow.parquet as pq
-import pyarrow.ipc as ipc
 import polars as pl
-import pandas as pd
-import pyreadstat
-import importlib.util
-import sys
+from pathlib import Path
+from datetime import datetime
 
-# ============================================
-# LIBRARY MAPPINGS (adjust to your environment)
-# ============================================
-ROOT = Path(".")
-SACA   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/conv/" 
-ISACA  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/islamic" 
-FDLIB  = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/fd"  
-IFDLIB = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/ifd"
-PGM    = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/"  # PBBDPFMT.py location
-HOST   = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMTRUT"
-CLIENT_RPT = ROOT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMTRUT/" / "CLIENT.txt"
-
-HOST.mkdir(parents=True, exist_ok=True)
-
-
-# ==================================================
-# Helper to read SAS7BDAT files using pyreadstat
-# ==================================================
-def read_sas7bdat(filepath: Path) -> pl.DataFrame:
-    """Read SAS7BDAT file and convert to Polars DataFrame using pyreadstat"""
-    sas_path = filepath if filepath.suffix == '.sas7bdat' else filepath.with_suffix('.sas7bdat')
-    if not sas_path.exists():
-        raise FileNotFoundError(f"SAS7BDAT file not found: {sas_path}")
+def eibrp159():
+    base = Path.cwd()
+    npgs_path = base / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRP159"
     
-    # Read SAS file with metadata
-    df, meta = pyreadstat.read_sas7bdat(str(sas_path))
+    # Step 1: REPTDATE processing
+    reptdate_df = pl.read_parquet(mniln_path / "REPTDATE.parquet")
+    reptdate = reptdate_df["REPTDATE"][0]
     
-    # Convert to Polars DataFrame
-    return pl.from_pandas(df)
-
-
-# ==================================================
-# Helper to write SAS7BDAT files using pyreadstat
-# ==================================================
-def write_sas7bdat(df: pl.DataFrame, filepath: Path):
-    """Write DataFrame to SAS7BDAT format using pyreadstat"""
-    sas_path = filepath if filepath.suffix == '.sas7bdat' else filepath.with_suffix('.sas7bdat')
-    # Convert to pandas for pyreadstat writing
-    pd_df = df.to_pandas()
-    pyreadstat.write_sas7bdat(pd_df, str(sas_path))
-
-
-# ==================================================
-# Import PBBDPFMT.py and inspect available formats
-# ==================================================
-def load_pbbdpfmt():
-    """Load format dictionaries from PBBDPFMT.py"""
-    pgm_path = PGM / "PBBDPFMT.py"
-    if not pgm_path.exists():
-        raise FileNotFoundError(f"PBBDPFMT.py not found: {pgm_path}")
+    mm = reptdate.month
+    mm1 = mm - 1 if mm > 1 else 12
     
-    # Import the module
-    spec = importlib.util.spec_from_file_location("PBBDPFMT", pgm_path)
-    pbbdpfmt = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(pbbdpfmt)
+    # SAS CALL SYMPUT equivalents
+    reptmon = f"{mm:02d}"
+    reptmon1 = f"{mm1:02d}"
+    reptyear = str(reptdate.year)
+    reptday = f"{reptdate.day:02d}"
+    rdate = reptdate.strftime("%d%m%y")
+    ndate = f"{reptdate.day:02d}{reptdate.month:02d}"
     
-    # Print available attributes to debug
-    print("Available attributes in PBBDPFMT:")
-    for attr in dir(pbbdpfmt):
-        if not attr.startswith('_'):
-            obj = getattr(pbbdpfmt, attr)
-            if isinstance(obj, dict):
-                print(f"  {attr}: dict with {len(obj)} items")
-            elif callable(obj):
-                print(f"  {attr}: function")
-            else:
-                print(f"  {attr}: {type(obj).__name__}")
+    print(f"REPTMON: {reptmon}, RDATE: {rdate}")
     
-    return pbbdpfmt
-
-# Load formats once
-pbbdpfmt = load_pbbdpfmt()
-
-
-def apply_sas_format(df: pl.DataFrame, source_col: str, format_dict, out_col: str) -> pl.DataFrame:
-    """
-    Apply SAS format using dictionary mapping.
-    Handles both direct dictionaries and callable format functions.
-    """
-    # If format_dict is a function/callable, apply it directly
-    if callable(format_dict):
-        # Apply the format function to each value
-        return df.with_columns(
-            pl.col(source_col).map_elements(
-                lambda x: format_dict(x) if x is not None else None,
-                return_dtype=pl.Utf8
-            ).alias(out_col)
-        )
+    # Step 2: NPGS data
+    try:
+        dp_df = pl.read_parquet(npgs_path / f"DPIPGS{reptmon}.parquet")
+    except:
+        dp_df = pl.DataFrame()
     
-    # If it's a dictionary, use lookup
-    if isinstance(format_dict, dict):
-        # Convert format dict to DataFrame for joining
-        fmt_items = list(format_dict.items())
-        fmt_df = pl.DataFrame({
-            "key": [str(k) for k, v in fmt_items],
-            "value": [str(v) for k, v in fmt_items]
-        })
-        
-        # Convert source column to string for matching
-        df = df.with_columns(pl.col(source_col).cast(pl.Utf8).alias(f"_{source_col}_str"))
-        
-        # Perform left join
-        result = df.join(
-            fmt_df,
-            left_on=f"_{source_col}_str",
-            right_on="key",
-            how="left"
-        ).drop(["key", f"_{source_col}_str"])
-        
-        # Rename value column to out_col
-        result = result.rename({"value": out_col})
-        
-        return result
+    try:
+        ln_df = pl.read_parquet(npgs_path / f"LNIPGS{reptmon}.parquet")
+    except:
+        ln_df = pl.DataFrame()
     
-    raise ValueError(f"Unsupported format type: {type(format_dict)}")
-
-
-# Look for format dictionaries - they might be nested or named differently
-# Based on the output we saw, try to find the format mappings
-def find_format_dict(module, format_name):
-    """Find a format dictionary in the module, checking various possibilities"""
-    # Check direct attribute
-    if hasattr(module, format_name):
-        return getattr(module, format_name)
-    
-    # Check if there's a formats dictionary
-    if hasattr(module, 'formats') and isinstance(module.formats, dict):
-        if format_name in module.formats:
-            return module.formats[format_name]
-    
-    # Check if there's a get_format function
-    if hasattr(module, 'get_format') and callable(module.get_format):
-        try:
-            return module.get_format(format_name)
-        except:
-            pass
-    
-    # Check if apply_format function exists with different signature
-    if hasattr(module, 'apply_format') and callable(module.apply_format):
-        # Try to use apply_format directly
-        return module.apply_format
-    
-    # Print all dict attributes for debugging
-    print(f"\nCould not find {format_name}. Available dict attributes:")
-    for attr in dir(module):
-        if not attr.startswith('_'):
-            obj = getattr(module, attr)
-            if isinstance(obj, dict):
-                print(f"  {attr}: {list(obj.keys())[:5]}...")
-    
-    return None
-
-
-# Try to get format dictionaries - adapt based on what's available
-SAPROD = find_format_dict(pbbdpfmt, 'SAPROD')
-CAPROD = find_format_dict(pbbdpfmt, 'CAPROD')
-FDPROD = find_format_dict(pbbdpfmt, 'FDPROD')
-
-# If formats are callable (functions), we'll use them directly
-# If they're dictionaries, we'll use the lookup method
-
-# =========================
-# 1) REPTDATE - Use current date minus 1 day
-# =========================
-REPTDATE = datetime.now() - timedelta(days=1)
-REPTYEAR = f"{REPTDATE.year:04d}"
-REPTMON  = f"{REPTDATE.month:02d}"
-
-print(f"\nProcessing for month: {REPTMON} (Report Date: {REPTDATE.strftime('%Y-%m-%d')})")
-print(f"Report Date based on: current date minus 1 day")
-
-# =========================
-# 2) SA - Saving accounts with SAPROD format
-# =========================
-saving_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
-SA = (
-    pl.concat([
-        read_sas7bdat(SACA / "saving.sas7bdat").select(saving_cols),
-        read_sas7bdat(ISACA / "saving.sas7bdat").select(saving_cols),
-    ], how="vertical_relaxed")
-    .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
-)
-
-# Apply SAPROD format
-if SAPROD is not None:
-    SA = apply_sas_format(SA, source_col="PRODUCT", format_dict=SAPROD, out_col="PRODCD")
-else:
-    print("WARNING: SAPROD format not found, creating PRODCD as empty string")
-    SA = SA.with_columns(pl.lit("").alias("PRODCD"))
-
-SA = SA.select(["ACCTNO","PRODCD","PURPOSE","PRODUCT"])
-
-# =========================
-# 3) CA - Current accounts with CAPROD format
-# =========================
-current_cols = ["ACCTNO","OPENIND","PURPOSE","PRODUCT"]
-CA = (
-    pl.concat([
-        read_sas7bdat(SACA / "current.sas7bdat").select(current_cols),
-        read_sas7bdat(ISACA / "current.sas7bdat").select(current_cols),
-    ], how="vertical_relaxed")
-    .filter(~pl.col("OPENIND").is_in(["B","C","P"]))
-)
-
-# Apply CAPROD format
-if CAPROD is not None:
-    CA = apply_sas_format(CA, source_col="PRODUCT", format_dict=CAPROD, out_col="PRODCD")
-else:
-    print("WARNING: CAPROD format not found, creating PRODCD as empty string")
-    CA = CA.with_columns(pl.lit("").alias("PRODCD"))
-
-CA = CA.select(["ACCTNO","PRODCD","PURPOSE","PRODUCT"])
-
-# =========================
-# 4) FD - Fixed Deposit base
-# =========================
-fd_base_cols = ["ACCTNO","PURPOSE","PRODUCT"]
-FD_base = (
-    pl.concat([
-        read_sas7bdat(SACA / "fd.sas7bdat").select(fd_base_cols),
-        read_sas7bdat(ISACA / "fd.sas7bdat").select(fd_base_cols),
-    ], how="vertical_relaxed")
-    .sort("ACCTNO")
-)
-
-# =========================
-# 5) FDCD - Fixed Deposit product codes
-# =========================
-fdcd_cols = ["ACCTNO","ACCTTYPE","OPENIND","INTPLAN"]
-FDCD_union = pl.concat([
-    read_sas7bdat(FDLIB / "fd.sas7bdat").select(fdcd_cols),
-    read_sas7bdat(IFDLIB / "fd.sas7bdat").select(fdcd_cols),
-], how="vertical_relaxed")
-
-FDCD = (
-    FDCD_union
-    .filter(~pl.col("ACCTTYPE").is_in([397,398]) & pl.col("OPENIND").is_in(["D","O"]))
-)
-
-# Apply FDPROD format
-if FDPROD is not None:
-    FDCD = apply_sas_format(FDCD, source_col="INTPLAN", format_dict=FDPROD, out_col="PRODCD")
-else:
-    print("WARNING: FDPROD format not found, creating PRODCD as empty string")
-    FDCD = FDCD.with_columns(pl.lit("").alias("PRODCD"))
-
-# Apply overrides (matching SAS IF/ELSE logic)
-FDCD = FDCD.with_columns(
-    pl.when(pl.col("ACCTTYPE").is_in([315,394]))
-    .then(pl.lit("42132"))
-    .when(pl.col("ACCTTYPE").is_in([397,398]))
-    .then(pl.lit("42199"))
-    .otherwise(pl.col("PRODCD"))
-    .alias("PRODCD")
-)
-
-# PROC SORT DATA=FDCD NODUPKEYS; BY ACCTNO;RUN;
-FDCD = (
-    FDCD.sort(["ACCTNO"])
-    .unique(subset=["ACCTNO"], keep="first")
-    .select(["ACCTNO","PRODCD"])
-)
-
-# =========================
-# 6) FD - Merge base with product codes
-# =========================
-FD = FD_base.join(FDCD, on="ACCTNO", how="inner")
-
-# =========================
-# 7) DEP - Combined deposits with filters
-# =========================
-DEP = pl.concat([SA, CA, FD], how="vertical_relaxed")
-
-valid_prodcd = ['42110','42310','42120','42320','42130',
-                '42133','42132','42180','42610','42630','34180',
-                '42199','42699']
-DEP = DEP.filter(pl.col("PRODCD").is_in(valid_prodcd))
-
-DEP = DEP.filter(
-    ~(
-        pl.col("PRODCD").is_in(["42199","42699"])
-        & ~pl.col("PRODUCT").is_in([72,413])
+    npgs_df = pl.concat([dp_df, ln_df])
+    npgs_df = npgs_df.with_columns(
+        pl.lit(" " * 10).alias("CVARXX")  # 10 spaces
     )
-)
-
-# PROC SORT DATA=DEP; BY ACCTNO;RUN;
-DEP = DEP.sort("ACCTNO")
-
-# =========================
-# 8) MERGEX - Deposits with PURPOSE in ('5','6')
-# =========================
-MERGEX = DEP.filter(pl.col("PURPOSE").is_in(["5","6"]))
-
-# =========================
-# 9) CLIENT - Parse fixed-width text file
-# =========================
-def parse_client_fixed_width(path: Path) -> pl.DataFrame:
-    rows = []
-    with path.open("r", encoding="latin1", errors="ignore") as f:
-        for line in f:
-            # @002 ACCTNO 10. (positions 2-11, 1-based)
-            acct_str = line[1:11] if len(line) >= 11 else ""
-            acct_str = acct_str.strip()
-            
-            # IF COMPRESS(ACCTNO, "1234567890") = ' ' - check if all digits
-            if acct_str and all(c in "0123456789" for c in acct_str):
-                # @021 NAME $40. (positions 21-60, 1-based)
-                name_str = line[20:60] if len(line) >= 60 else ""
-                name_str = name_str.rstrip()
-                # KEY = SUBSTR(NAME,1,10)
-                key = name_str[:10] if name_str else ""
-                rows.append({
-                    "ACCTNO": int(acct_str),
-                    "NAME": name_str,
-                    "KEY": key
-                })
     
-    if not rows:
-        return pl.DataFrame({
-            "ACCTNO": pl.Series([], dtype=pl.Int64),
-            "NAME": pl.Series([], dtype=pl.Utf8),
-            "KEY": pl.Series([], dtype=pl.Utf8)
-        })
-    return pl.DataFrame(rows)
+    # Step 3: Write MEFT file with exact SAS fixed positions
+    with open(base / "MEFT.csv", 'w') as f:
+        for row in npgs_df.iter_rows(named=True):
+            # Format each field exactly as SAS PUT statements
+            cvar01 = f"{row['CVAR01']:10.0f}" if 'CVAR01' in row else " " * 10
+            cvar02 = f"{row.get('CVAR02', ''):2s}"
+            cvar03 = f"{row.get('CVAR03', ''):15s}"
+            cvar04 = f"{row.get('CVAR04', ''):50s}"
+            
+            # CVAR05: DDMMYY10. format
+            cvar05 = " " * 10
+            if 'CVAR05' in row and row['CVAR05']:
+                try:
+                    # Handle date - assuming it's already a date type
+                    if isinstance(row['CVAR05'], (datetime, pl.Date)):
+                        cvar05 = row['CVAR05'].strftime("%d/%m/%Y")
+                    else:
+                        # Try to parse if it's string/numeric
+                        cvar05 = str(row['CVAR05']).rjust(10)
+                except:
+                    cvar05 = " " * 10
+            
+            cvarxx = " " * 10
+            cvar06 = f"{row.get('CVAR06', 0):10.0f}"
+            cvar07 = f"{row.get('CVAR07', ''):2s}"
+            cvar08 = f"{row.get('CVAR08', 0):10.2f}"
+            cvar09 = f"{row.get('CVAR09', 0):10.2f}"
+            cvar10 = f"{row.get('CVAR10', 0):10.2f}"
+            cvar11 = f"{row.get('CVAR11', 0):5.0f}"
+            cvar12 = f"{row.get('CVAR12', ''):3s}"
+            cvar13 = f"{row.get('CVAR13', ''):10s}"
+            cvar14 = f"{row.get('CVAR14', ''):4s}"
+            cvar15 = f"{row.get('CVAR15', ''):5s}"
+            
+            # Write with exact @ positions and semicolons
+            line = f"{cvar01};{cvar02};{cvar03};{cvar04};{cvar05};{cvarxx};" \
+                   f"{cvar06};{cvar07};{cvar08};{cvar09};{cvar10};{cvar11};" \
+                   f"{cvar12};{cvar13};{cvar14};{cvar15};"
+            f.write(line + "\n")
+    
+    # Step 4: Generate report header and call external program
+    print("=" * 60)
+    print("PUBLIC BANK BERHAD")
+    print(f"DETAIL OF ACCTS (MEF PRODUCTS) FOR SUBMISSION TO CGC @ {rdate}")
+    print("=" * 60)
+    
+    # Execute NPGSRPT (external program)
+    try:
+        from NPGSRPT import npgsrpt
+        npgsrpt(npgs_df, base / "MEFR.txt", rdate)
+    except ImportError:
+        # Create simple report if module doesn't exist
+        with open(base / "MEFR.txt", 'w') as f:
+            f.write(f"MEF Report - Date: {rdate}\n")
+            f.write("=" * 60 + "\n")
+            f.write(f"Total records processed: {len(npgs_df)}\n")
+            
+            # Simple summary by CVAR02
+            if len(npgs_df) > 0 and 'CVAR02' in npgs_df.columns:
+                summary = npgs_df.group_by("CVAR02").agg(pl.count().alias("count"))
+                for row in summary.iter_rows(named=True):
+                    f.write(f"CVAR02={row['CVAR02']}: {row['count']} records\n")
+    
+    print(f"MEFT file created with {len(npgs_df)} records")
+    print(f"Report saved to MEFR.txt")
 
-CLIENT = parse_client_fixed_width(CLIENT_RPT)
+if __name__ == "__main__":
+    eibrp159()
 
-# PROC SORT DATA=CLIENT NODUPKEYS; BY ACCTNO;
-CLIENT = CLIENT.sort("ACCTNO").unique(subset=["ACCTNO"], keep="first")
 
-# DATA CLIENT;
-#    MERGE CLIENT(IN=A) DEP (IN=B KEEP=ACCTNO);
-#    BY ACCTNO;
-#    IF A & B;
-# RUN;
-CLIENT = CLIENT.join(DEP.select("ACCTNO").unique(), on="ACCTNO", how="inner")
-
-# =========================
-# 10) HOST.TRUST&REPTMON - Trust accounts
-# =========================
-TRUST = pl.concat([
-    MERGEX.select(["ACCTNO"]),
-    CLIENT.select(["ACCTNO"])
-], how="vertical_relaxed")
-
-# =========================
-# 11) HOST.FDCD&REPTMON - FD entity mapping
-# =========================
-FD_PBB  = read_sas7bdat(FDLIB / "fd.sas7bdat").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PBB "))
-FD_PIBB = read_sas7bdat(IFDLIB / "fd.sas7bdat").select(["ACCTNO"]).with_columns(ENTITY=pl.lit("PIBB "))
-FDCD_MONTH = pl.concat([FD_PBB, FD_PIBB], how="vertical_relaxed").select(["ACCTNO","ENTITY"])
-
-# =========================
-# 12) Write outputs in both SAS7BDAT and Parquet formats
-# =========================
-
-# Write TRUST dataset
-trust_path = HOST / f"TRUST{REPTMON}"
-TRUST.write_parquet(trust_path.with_suffix('.parquet'))
-write_sas7bdat(TRUST, trust_path.with_suffix('.sas7bdat'))
-
-# Write FDCD_MONTH dataset
-fdcd_path = HOST / f"FDCD{REPTMON}"
-FDCD_MONTH.write_parquet(fdcd_path.with_suffix('.parquet'))
-write_sas7bdat(FDCD_MONTH, fdcd_path.with_suffix('.sas7bdat'))
-
-# Build Arrow IPC transport file (mirror of PROC CPORT)
-tables = {
-    f"TRUST{REPTMON}": TRUST.to_arrow(),
-    f"FDCD{REPTMON}": FDCD_MONTH.to_arrow(),
-}
-
-ipc_path = HOST / f"TRUST_FDCD_{REPTMON}.arrow"
-with pa.ipc.new_file(ipc_path, tables[f"TRUST{REPTMON}"].schema) as writer:
-    for name, table in tables.items():
-        writer.write_table(table, name)
-
-print(f"\nOutput files:")
-print(f"  {trust_path}.parquet")
-print(f"  {trust_path}.sas7bdat")
-print(f"  {fdcd_path}.parquet")
-print(f"  {fdcd_path}.sas7bdat")
-print(f"  {ipc_path}")
-print(f"\nReport Date (current date - 1 day): {REPTDATE.strftime('%Y-%m-%d')}")
-print(f"Report Month: {REPTMON}")
-print(f"Report Year: {REPTYEAR}")
+all inputs are in sas7bdat sas dataset and need to be in all lowercase.
+use pyreadstat to read.
+remove reptdate, use datetime timedelta - 1 instead. 
+output in sas7bdat and parquet files. 
+write out using saspy
