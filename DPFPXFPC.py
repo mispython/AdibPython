@@ -1,277 +1,39 @@
-import polars as pl
-import pyreadstat
-from pathlib import Path
-from datetime import datetime, timedelta
-import pandas as pd
-import saspy
-import numpy as np
-from NPGSRPT import npgs_report
+Processing date: 2026-07-31
+REPTMON: 07, REPTMON1: 06
+RDATE: 310726, NDATE: 3107
 
-def eibrp159():
-    npgs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRP159")
-    
-    # Step 1: Get date (using timedelta to get July data)
-    current_date = datetime.now()
-    prev_date = current_date - timedelta(days=23)  # Changed to get July data
-    reptdate = prev_date.date()
-    
-    mm = reptdate.month
-    mm1 = mm - 1 if mm > 1 else 12
-    
-    # SAS CALL SYMPUT equivalents
-    reptmon = f"{mm:02d}"
-    reptmon1 = f"{mm1:02d}"
-    reptyear = str(reptdate.year)
-    reptday = f"{reptdate.day:02d}"
-    rdate = reptdate.strftime("%d%m%y")
-    ndate = f"{reptdate.day:02d}{reptdate.month:02d}"
-    
-    print(f"Processing date: {reptdate}")
-    print(f"REPTMON: {reptmon}, REPTMON1: {reptmon1}")
-    print(f"RDATE: {rdate}, NDATE: {ndate}")
-    
-    # Step 2: NPGS data - read SAS7BDAT files with pyreadstat
-    dp_df = pl.DataFrame()
-    ln_df = pl.DataFrame()
-    
-    dp_file = npgs_path / f"dpipgs{reptmon}.sas7bdat"
-    ln_file = npgs_path / f"lnipgs{reptmon}.sas7bdat"
-    
-    print(f"\nLooking for input files:")
-    print(f"DP file: {dp_file}")
-    print(f"LN file: {ln_file}")
-    print(f"DP file exists: {dp_file.exists()}")
-    print(f"LN file exists: {ln_file.exists()}")
-    
-    # Check if the directory exists
-    if not npgs_path.exists():
-        print(f"\nERROR: Directory {npgs_path} does not exist!")
-        print("Please check the path and permissions.")
-        return
-    
-    if dp_file.exists():
-        try:
-            print(f"\nReading DP file: {dp_file}")
-            dp_df, dp_meta = pyreadstat.read_sas7bdat(str(dp_file))
-            print(f"DP file read successfully. Rows: {len(dp_df)}, Columns: {len(dp_df.columns)}")
-            dp_df = pl.from_pandas(dp_df)
-            # Convert column names to lowercase
-            dp_df.columns = [col.lower() for col in dp_df.columns]
-        except Exception as e:
-            print(f"Error reading DP file: {e}")
-    
-    if ln_file.exists():
-        try:
-            print(f"\nReading LN file: {ln_file}")
-            ln_df, ln_meta = pyreadstat.read_sas7bdat(str(ln_file))
-            print(f"LN file read successfully. Rows: {len(ln_df)}, Columns: {len(ln_df.columns)}")
-            ln_df = pl.from_pandas(ln_df)
-            # Convert column names to lowercase
-            ln_df.columns = [col.lower() for col in ln_df.columns]
-        except Exception as e:
-            print(f"Error reading LN file: {e}")
-    
-    # Handle column mismatches between DP and LN files
-    if len(dp_df) > 0 and len(ln_df) > 0:
-        # Get all unique columns
-        all_columns = list(set(dp_df.columns) | set(ln_df.columns))
-        
-        # Align columns - add missing columns with None values
-        for col in all_columns:
-            if col not in dp_df.columns:
-                dp_df = dp_df.with_columns(pl.lit(None).alias(col))
-            if col not in ln_df.columns:
-                ln_df = ln_df.with_columns(pl.lit(None).alias(col))
-        
-        # Ensure same column order
-        ln_df = ln_df.select(dp_df.columns)
-        
-        # Now concatenate
-        npgs_df = pl.concat([dp_df, ln_df], how="vertical")
-        print(f"\nConcatenated DP and LN: {len(npgs_df)} rows")
-    elif len(dp_df) > 0:
-        npgs_df = dp_df
-        print(f"\nOnly DP data available: {len(npgs_df)} rows")
-    elif len(ln_df) > 0:
-        npgs_df = ln_df
-        print(f"\nOnly LN data available: {len(npgs_df)} rows")
-    else:
-        npgs_df = pl.DataFrame()
-        print(f"\nNo data available from either file")
-    
-    # Add CVARXX column with 10 spaces if not exists
-    if len(npgs_df) > 0 and 'cvarxx' not in npgs_df.columns:
-        npgs_df = npgs_df.with_columns(
-            pl.lit("          ").alias("cvarxx")  # 10 spaces
-        )
-    
-    # Step 3: Write MEFT.txt file with exact SAS fixed positions
-    meft_path = Path("MEFT.txt")
-    with open(meft_path, 'w') as f:
-        if len(npgs_df) > 0:
-            print(f"\nWriting MEFT.txt...")
-            for idx, row in enumerate(npgs_df.iter_rows(named=True)):
-                # Format each field exactly as SAS PUT statements
-                cvar01 = f"{row.get('cvar01', 0):10.0f}" if row.get('cvar01') is not None else " " * 10
-                cvar02 = f"{str(row.get('cvar02', '')):2s}" if row.get('cvar02') is not None else "  "
-                cvar03 = f"{str(row.get('cvar03', '')):15s}" if row.get('cvar03') is not None else " " * 15
-                cvar04 = f"{str(row.get('cvar04', '')):50s}" if row.get('cvar04') is not None else " " * 50
-                
-                # CVAR05: DDMMYY10. format
-                cvar05 = "          "  # 10 spaces
-                if 'cvar05' in row and row['cvar05'] is not None:
-                    try:
-                        # Handle date
-                        if isinstance(row['cvar05'], (datetime, pl.Date, pl.Datetime)):
-                            cvar05 = row['cvar05'].strftime("%d/%m/%Y")
-                        elif isinstance(row['cvar05'], str):
-                            # Try to parse string date
-                            try:
-                                parsed_date = datetime.strptime(row['cvar05'], "%Y-%m-%d")
-                                cvar05 = parsed_date.strftime("%d/%m/%Y")
-                            except:
-                                cvar05 = str(row['cvar05']).rjust(10)
-                        else:
-                            # Numeric date - assume it's a datetime value
-                            base_date = datetime(1960, 1, 1)
-                            actual_date = base_date + timedelta(days=int(row['cvar05']))
-                            cvar05 = actual_date.strftime("%d/%m/%Y")
-                    except:
-                        cvar05 = "          "
-                
-                cvarxx = "          "  # 10 spaces
-                cvar06 = f"{row.get('cvar06', 0):10.0f}" if row.get('cvar06') is not None else " " * 10
-                cvar07 = f"{str(row.get('cvar07', '')):2s}" if row.get('cvar07') is not None else "  "
-                cvar08 = f"{row.get('cvar08', 0):10.2f}" if row.get('cvar08') is not None else " " * 10
-                cvar09 = f"{row.get('cvar09', 0):10.2f}" if row.get('cvar09') is not None else " " * 10
-                cvar10 = f"{row.get('cvar10', 0):10.2f}" if row.get('cvar10') is not None else " " * 10
-                cvar11 = f"{row.get('cvar11', 0):5.0f}" if row.get('cvar11') is not None else " " * 5
-                cvar12 = f"{str(row.get('cvar12', '')):3s}" if row.get('cvar12') is not None else " " * 3
-                cvar13 = f"{str(row.get('cvar13', '')):10s}" if row.get('cvar13') is not None else " " * 10
-                cvar14 = f"{str(row.get('cvar14', '')):4s}" if row.get('cvar14') is not None else " " * 4
-                cvar15 = f"{str(row.get('cvar15', '')):5s}" if row.get('cvar15') is not None else " " * 5
-                
-                # Write with exact @ positions and semicolons
-                line = f"{cvar01};{cvar02};{cvar03};{cvar04};{cvar05};{cvarxx};" \
-                       f"{cvar06};{cvar07};{cvar08};{cvar09};{cvar10};{cvar11};" \
-                       f"{cvar12};{cvar13};{cvar14};{cvar15};"
-                f.write(line + "\n")
-    
-    # Step 4: Generate report using NPGSRPT module
-    print("\n" + "=" * 60)
-    print("PUBLIC BANK BERHAD")
-    print(f"DETAIL OF ACCTS (MEF PRODUCTS) FOR SUBMISSION TO CGC @ {rdate}")
-    print("=" * 60)
-    
-    # Call NPGSRPT module to generate report
-    if len(npgs_df) > 0:
-        mefr_path = Path("MEFR.txt")
-        title1 = "PUBLIC BANK BERHAD"
-        title2 = f"DETAIL OF ACCTS (MEF PRODUCTS) FOR SUBMISSION TO CGC @ {rdate}"
-        
-        try:
-            # Call the npgs_report function from NPGSRPT module
-            npgs_report(
-                df=npgs_df,
-                report_path=str(mefr_path),
-                title1=title1,
-                title2=title2
-            )
-            print(f"Report saved to MEFR.txt using NPGSRPT module")
-            
-        except Exception as e:
-            print(f"Error generating report with NPGSRPT: {e}")
-            # Fallback to simple report
-            with open(mefr_path, 'w') as f:
-                f.write(f"MEF Report - Date: {rdate}\n")
-                f.write("=" * 60 + "\n")
-                f.write(f"Total records processed: {len(npgs_df)}\n")
-                
-                # Simple summary by cvar02
-                if 'cvar02' in npgs_df.columns:
-                    summary = npgs_df.group_by("cvar02").agg(pl.len().alias("count"))
-                    for row in summary.iter_rows(named=True):
-                        f.write(f"cvar02={row['cvar02']}: {row['count']} records\n")
-            print(f"Report saved to MEFR.txt (fallback format)")
-    
-    # Step 5: Output to SAS7BDAT and Parquet files
-    if len(npgs_df) > 0:
-        output_parquet_path = Path("eibrp159_output.parquet")
-        output_sas7bdat_path = Path("eibrp159_output.sas7bdat")
-        
-        # Save as Parquet
-        npgs_df.write_parquet(output_parquet_path)
-        print(f"\nParquet output saved to: {output_parquet_path}")
-        
-        # Save as SAS7BDAT using saspy with PROC IMPORT from CSV
-        try:
-            print("\nCreating SAS7BDAT file using saspy...")
-            
-            # Initialize SAS session
-            sas = saspy.SASsession()
-            
-            # Convert polars DataFrame to pandas and save as temporary CSV
-            pd_df = npgs_df.to_pandas()
-            temp_csv = Path("temp_sas_data.csv")
-            
-            # Handle None/NaN values for CSV
-            pd_df = pd_df.fillna('')
-            pd_df.to_csv(temp_csv, index=False, quoting=1)  # QUOTE_ALL
-            
-            # Use PROC IMPORT to read CSV with proper handling
-            output_dir = str(output_sas7bdat_path.parent.absolute())
-            output_name = output_sas7bdat_path.stem
-            
-            sas_code = f"""
-            PROC IMPORT DATAFILE="{temp_csv}"
-                OUT=work.npgs_output
-                DBMS=CSV
-                REPLACE;
-                GETNAMES=YES;
-                GUESSINGROWS=MAX;
-            RUN;
-            
-            libname outlib "{output_dir}";
-            data outlib.{output_name};
-                set work.npgs_output;
-            run;
-            
-            proc datasets lib=work nolist;
-                delete npgs_output;
-            run;
-            """
-            
-            # Submit the SAS code
-            log = sas.submit(sas_code, results='TEXT')
-            
-            # Check for errors
-            if 'ERROR' in str(log):
-                print("SAS log contains errors:")
-                # Print only relevant error lines
-                log_text = str(log)
-                for line in log_text.split('\n'):
-                    if 'ERROR' in line or 'NOTE: The data set' in line:
-                        print(line)
-            else:
-                print(f"SAS7BDAT output saved to: {output_sas7bdat_path}")
-            
-            # Clean up temp file
-            if temp_csv.exists():
-                temp_csv.unlink()
-            
-            # Close SAS session
-            sas.endsas()
-            
-        except Exception as e:
-            print(f"Error creating SAS7BDAT file: {e}")
-            print("Please check SAS configuration and permissions")
-            # Clean up temp file if it exists
-            if 'temp_csv' in locals() and temp_csv.exists():
-                temp_csv.unlink()
-    
-    print(f"\nSummary:")
-    print(f"MEFT.txt file created with {len(npgs_df)} records")
-    print(f"Report saved to MEFR.txt")
+Looking for input files:
+DP file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRP159/dpipgs07.sas7bdat
+LN file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRP159/lnipgs07.sas7bdat
+DP file exists: True
+LN file exists: True
 
-if __name__ == "__main__":
-    eibrp159()
+Reading DP file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRP159/dpipgs07.sas7bdat
+DP file read successfully. Rows: 0, Columns: 20
+
+Reading LN file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRP159/lnipgs07.sas7bdat
+LN file read successfully. Rows: 10, Columns: 20
+
+Only LN data available: 10 rows
+
+Writing MEFT.txt...
+
+============================================================
+PUBLIC BANK BERHAD
+DETAIL OF ACCTS (MEF PRODUCTS) FOR SUBMISSION TO CGC @ 310726
+============================================================
+Report saved to MEFR.txt using NPGSRPT module
+
+Parquet output saved to: eibrp159_output.parquet
+
+Creating SAS7BDAT file using saspy...
+Using SAS Config named: default
+SAS Connection established. Subprocess id is 3015175
+
+SAS log contains errors:
+{'LOG': '\n21   \n22   \n23               PROC IMPORT DATAFILE="temp_sas_data.csv"\n24                   OUT=work.npgs_output\n25                   DBMS=CSV\n26                   REPLACE;\n27                   GETNAMES=YES;\n28                   GUESSINGROWS=MAX;\n29               RUN;\nNOTE: Unable to open parameter catalog: SASUSER.PARMS.PARMS.SLIST in update mode. Temporary parameter values will be saved to \nWORK.PARMS.PARMS.SLIST.\nNOTE: Unable to open SASUSER.PROFILE. WORK.PROFILE will be opened instead.\nNOTE: All profile changes will be lost at the end of the session.\n30    /**********************************************************************\n31    *   PRODUCT:   SAS\n32    *   VERSION:   9.4\n33    *   CREATOR:   External File Interface\n34    *   DATE:      23AUG26\n35    *   DESC:      Generated SAS Datastep Code\n36    *   TEMPLATE SOURCE:  (None Specified.)\n37    ***********************************************************************/\n38       data WORK.NPGS_OUTPUT    ;\n39       %let _EFIERR_ = 0; /* set the ERROR detection macro variable */\n40       infile \'temp_sas_data.csv\' delimiter = \',\' MISSOVER DSD lrecl=32767 firstobs=2 ;\n41          informat product $7. ;\n42          informat censust $5. ;\n43          informat cinstcl $4. ;\n44          informat natguar $4. ;\n45          informat cvar01 $14. ;\n46          informat cvar06 $14. ;\n47          informat cvar03 $12. ;\n48          informat cvar04 $29. ;\n49          informat cvar14 $6. ;\n50          informat cvar13 $2. ;\n51          informat cvar08 $10. ;\n52          informat cvar09 $23. ;\n53          informat cvar10 $5. ;\n54          informat cvar11 $5. ;\n55          informat cvar02 $2. ;\n56         informat cvar05 $9. ;\n57          informat cvar07 $4. ;\n58          informat cvar12 $2. ;\n59          informat cvar15 $7. ;\n60          informat branch $7. ;\n61          informat cvarxx $12. ;\n62      format product $7. ;\n63          format censust $5. ;\n64          format cinstcl $4. ;\n65          format natguar $4. ;\n66          format cvar01 $14. ;\n67          format cvar06 $14. ;\n68          format cvar03 $12. ;\n69          format cvar04 $29. ;\n70          format cvar14 $6. ;\n71          format cvar13 $2. ;\n72          format cvar08 $10. ;\n73          format cvar09 $23. ;\n74          format cvar10 $5. ;\n75          format cvar11 $5. ;\n76          format cvar02 $2. ;\n77          format cvar05 $9. ;\n78          format cvar07 $4. ;\n79          format cvar12 $2. ;\n80          format cvar15 $7. ;\n81 format branch $7. ;\n82          format cvarxx $12. ;\n83       input\n84                   product  $\n85                   censust  $\n86                   cinstcl  $\n87                   natguar  $\n88           cvar01  $\n89                   cvar06  $\n90                   cvar03  $\n91                   cvar04  $\n92                   cvar14  $\n93                   cvar13  $\n94                   cvar08  $\n95                   cvar09  $\n96                   cvar10  $\n97                   cvar11  $\n98                   cvar02  $\n99                   cvar05  $\n100                  cvar07  $\n101                  cvar12  $\n102                  cvar15  $\n103                  branch  $\n104                  cvarxx  $\n105      ;\n106      if _ERROR_ then call symputx(\'_EFIERR_\',1);  /* set ERROR detection macro variable */\n107      run;\nNOTE: The infile \'temp_sas_data.csv\' is:\n      Filename=/sas/python/virt_edw/Data_Warehouse/MIS/temp_sas_data.csv,\n      Owner Name=sas_edw_dev,\n      Group Name=sas_edw_dev_grp,\n      Access Permission=-rw-rw-r--,\n      Last Modified=23Aug2026:18:43:28,\n      File Size (bytes)=1960\n\nNOTE: 10 records were read from the infile \'temp_sas_data.csv\'.\n      The minimum record length was 166.\n      The maximum record length was 184.\nNOTE: The data set WORK.NPGS_OUTPUT has 10 observations and 21 variables.\nNOTE: DATA statement used (Total process time):\n      real time           0.00 seconds\n      cpu time           0.00 seconds\n      \n10 rows created in WORK.NPGS_OUTPUT from temp_sas_data.csv.\n  \n  \n  \nNOTE: WORK.NPGS_OUTPUT data set was successfully created.\nNOTE: The data set WORK.NPGS_OUTPUT has 10 observations and 21 variables.\nNOTE: PROCEDURE IMPORT used (Total process time):\n      real time           0.40 seconds\n      cpu time            0.06 seconds\n      \n108  \n109              libname outlib "/sas/python/virt_edw/Data_Warehouse/MIS";\nNOTE: Libref OUTLIB was successfully assigned as follows: \n      Engine:        V9 \n      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS\n110              data outlib.eibrp159_output;\n111                  set work.npgs_output;\n112              run;\nNOTE: There were 10 observations read from the data set WORK.NPGS_OUTPUT.\nNOTE: The data set OUTLIB.EIBRP159_OUTPUT has 10 observations and 21 variables.\nNOTE: DATA statement used (Total process time):\n      real time           0.00 seconds\n      cpu time            0.00 seconds\n      \n113  \n114              proc datasets lib=work nolist;\n115                  delete npgs_output;\n116              run;\nNOTE: Deleting WORK.NPGS_OUTPUT (memtype=DATA).\n117  \n118  ', 'LST': ''}
+SAS Connection terminated. Subprocess id was 3015175
+
+Summary:
+MEFT.txt file created with 10 records
+Report saved to MEFR.txt
