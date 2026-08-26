@@ -1,14 +1,14 @@
 # !/usr/bin/env python3
 """
-Program Name : NPGS3RPT
-Purpose      : Public Bank Berhad - NPGS3 Report Template
-               Reusable PROC REPORT equivalent called via %INC PGM(NPGS3RPT)
+Program Name : NPGS4RPT
+Purpose      : Public Bank Berhad - NPGS4 Report Template
+               Reusable PROC REPORT equivalent called via %INC PGM(NPGS4RPT)
                from its calling driver program for each schedule code.
                Generates ASA carriage-control detail listing report for
-               NPGS3 submissions.
+               NPGS4 submissions.
 
 Original SAS:
-  PROC   REPORT DATA=NPGS3 NOWD HEADSKIP HEADLINE SPLIT='*';
+  PROC   REPORT DATA=NPGS4 NOWD HEADSKIP HEADLINE SPLIT='*';
   COLUMN CVAR02  CVAR03 CVAR04 CVARX1 CVAR06 CVAR08 CVAR09 CURBAL
          ACCRUAL CVAR11 CVAR12A CVAR13 CVARX2 CVARX3 CVAR01 TRANCHE;
   DEFINE CVAR02  / DISPLAY FORMAT=$3.       'SCH';
@@ -146,20 +146,20 @@ def _format_cell(col_name: str, val, width: int, align: str) -> str:
 # PUBLIC INTERFACE
 # =============================================================================
 
-def npgs3_report(
+def npgs4_report(
     df:          pl.DataFrame,
     report_path: str,
     title1:      str,
     title2:      str,
 ) -> None:
     """
-    Generate an ASA carriage-control NPGS3 detail listing report.
+    Generate an ASA carriage-control NPGS4 detail listing report.
 
     Equivalent to the SAS block:
         PROC PRINTTO PRINT=<output>;
         TITLE1 '<title1>';
         TITLE2 '<title2>';
-        %INC PGM(NPGS3RPT);
+        %INC PGM(NPGS4RPT);
 
     ASA carriage-control characters (first byte of each line):
         '1'  — page eject (new page)
@@ -167,11 +167,11 @@ def npgs3_report(
 
     Parameters
     ----------
-    df          : Polars DataFrame — already filtered / derived as NPGS3,
+    df          : Polars DataFrame — already filtered / derived as NPGS4,
                   and sorted as required by the caller.
     report_path : Destination file path for the ASA report.
     title1      : TITLE1 text  (e.g. 'PUBLIC BANK BERHAD')
-    title2      : TITLE2 text  (e.g. 'NPGS3 DETAIL OF ACCTS ...')
+    title2      : TITLE2 text  (e.g. 'NPGS4 DETAIL OF ACCTS ...')
     """
     headline     = '-' * _TOTAL_WIDTH
     header_lines = _build_header_lines()
