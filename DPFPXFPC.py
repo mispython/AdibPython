@@ -3,7 +3,6 @@ import pandas as pd
 import pyreadstat
 from pathlib import Path
 from datetime import datetime, timedelta
-from NPGSRPT import generate_report
 
 def eibrsrgf():
     # Paths
@@ -59,9 +58,6 @@ def eibrsrgf():
     
     print(f"Filtered data: {len(cgcs_df)} rows after CVAR02 filter")
     
-    # Commented out section in SAS (NPL processing)
-    # Skipped as per SAS comments
-    
     # Write CGCSF text file (matching SAS PUT statement format)
     text_output_file = output_path / f"cgcsf_{reptmon}.txt"
     
@@ -81,7 +77,6 @@ def eibrsrgf():
                         cvar05 = row['cvar05'].strftime("%d/%m/%Y")
                     elif isinstance(row['cvar05'], (int, float)) and not pd.isna(row['cvar05']):
                         # Handle SAS date format (days since 1960-01-01)
-                        from datetime import timedelta
                         sas_epoch = datetime(1960, 1, 1)
                         actual_date = sas_epoch + timedelta(days=int(row['cvar05']))
                         cvar05 = actual_date.strftime("%d/%m/%Y")
@@ -110,34 +105,16 @@ def eibrsrgf():
     
     print(f"Text file written: {text_output_file}")
     
-    # Write Parquet file for archival (optional, not in original SAS)
+    # Optionally write Parquet for archival
     parquet_output_file = output_path / f"cgcs_{reptmon}.parquet"
     cgcs_df.write_parquet(parquet_output_file)
     print(f"Parquet file written: {parquet_output_file}")
     
-    # Generate report using shared module
-    print("=" * 60)
-    print("PUBLIC BANK BERHAD")
-    print(f"ACCOUNT DETAILS (SCHEME: SRGF) FOR CGC @ {rdate}")
-    print("=" * 60)
-    
-    # Use the shared report module
-    report_df = cgcs_df.clone()
-    if 'branch' not in report_df.columns:
-        # Add dummy BRANCH if missing (SAS report expects it)
-        report_df = report_df.with_columns(pl.lit(0).alias("branch"))
-    
-    # Generate report
-    report_output_file = output_path / f"srgf_report_{reptmon}.txt"
-    generate_report(report_df, "SRGF", rdate, output_file=str(report_output_file))
-    
-    print(f"Report file written: {report_output_file}")
     print(f"Processing complete.")
     
     return {
         'text_file': str(text_output_file),
         'parquet_file': str(parquet_output_file),
-        'report_file': str(report_output_file),
         'rows_processed': len(cgcs_df)
     }
 
@@ -149,4 +126,3 @@ if __name__ == "__main__":
         print(f"Output files:")
         print(f"  - Text: {result['text_file']}")
         print(f"  - Parquet: {result['parquet_file']}")
-        print(f"  - Report: {result['report_file']}")
