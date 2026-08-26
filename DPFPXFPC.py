@@ -1,226 +1,382 @@
-# !/usr/bin/env python3
-"""
-Program Name : NPGS5RPT
-Purpose      : Public Bank Berhad - NPGS5 Report Template
-               Reusable PROC REPORT equivalent called via %INC PGM(NPGS5RPT)
-               from its calling driver program for each schedule code.
-               Generates ASA carriage-control detail listing report for
-               NPGS5 submissions.
-
-Original SAS:
-  PROC   REPORT DATA=NPGS5 NOWD HEADSKIP HEADLINE SPLIT='*';
-  COLUMN CVAR02 CVAR03 CVAR04 CVARX1 CVAR06 CVARX5 CVAR16 CVAR08
-         CVAR09 CVAR17 ACCRUALX CVAR10 CVAR11 CVAR12A CVAR13
-         CVARX2 CVARX3 CVAR01;
-  DEFINE CVAR02   / DISPLAY FORMAT=$3.       'SCH';
-  DEFINE CVAR03   / DISPLAY FORMAT=$15.      'IC /BUSS. NUM.';
-  DEFINE CVAR04   / DISPLAY FORMAT=$100.     'NAME OF CUSTOMER';
-  DEFINE CVARX1   / DISPLAY FORMAT=$10.      '              ';
-  DEFINE CVAR06   / DISPLAY FORMAT=10.       'ACCOUNT NUMBER';
-  DEFINE CVARX5   / DISPLAY FORMAT=$10.      'DISBURSE*DATE';
-  DEFINE CVAR16   / DISPLAY FORMAT=$8.       'FACILITY*TYPE';
-  DEFINE CVAR08   / DISPLAY FORMAT=10.2      'LOAN AMOUNT';
-  DEFINE CVAR09   / DISPLAY FORMAT=10.2      'O/S BALANCE';
-  DEFINE CVAR17   / DISPLAY FORMAT=10.2      'PRINCIPAL*BALANCE';
-  DEFINE ACCRUALX / DISPLAY FORMAT=10.2      'INTEREST*BALANCE';
-  DEFINE CVAR10   / DISPLAY FORMAT=10.2      'CREDIT*BALANCE';
-  DEFINE CVAR11   / DISPLAY FORMAT=7.        'ARREARS';
-  DEFINE CVAR12A  / DISPLAY FORMAT=$3.       'ST ';
-  DEFINE CVAR13   / DISPLAY FORMAT=$10.      'NPL DATE';
-  DEFINE CVARX2   / DISPLAY FORMAT=$10.      'NPL*NOTIFICATN*DATE';
-  DEFINE CVARX3   / DISPLAY FORMAT=$6.       'NPL*REASON';
-  DEFINE CVAR01   / DISPLAY FORMAT=10.       'APPLICATN*NUMBER';
-  *;
-"""
-
-import os
-
 import polars as pl
+import pyreadstat
+from pathlib import Path
+from datetime import datetime, timedelta
+import pandas as pd
+from NPGS5RPT import npgs5_report  # Use shared report module
+import saspy
 
-# =============================================================================
-# CONSTANTS
-# =============================================================================
+def read_sas7bdat(file_path):
+    """Read SAS dataset and convert to Polars DataFrame with lowercase column names"""
+    df, meta = pyreadstat.read_sas7bdat(str(file_path))
+    # Convert to Polars and lowercase column names
+    pl_df = pl.from_pandas(df)
+    pl_df = pl_df.rename({col: col.lower() for col in pl_df.columns})
+    return pl_df
 
-PAGE_LENGTH = 60    # lines per page
-COL_SEP     = ' '   # single space between columns (PROC REPORT default)
+def write_sas7bdat(df, output_path):
+    """Write Polars DataFrame to SAS7BDAT format using saspy"""
+    try:
+        # Convert Polars to Pandas for saspy
+        pdf = df.to_pandas()
+        # Ensure column names are valid SAS names (uppercase for SAS convention)
+        pdf.columns = [col.upper() for col in pdf.columns]
+        
+        # Use saspy to write SAS dataset
+        sas = saspy.SASsession(cfgname='default')
+        
+        # Create a temporary pandas dataframe in SAS
+        sas.df2sd(pdf, table='_temp_table', libpath=str(output_path.parent))
+        
+        # Copy to final name
+        sas.submit(f"""
+            libname mylib '{output_path.parent}';
+            
+            DATA mylib.{output_path.stem.lower()};
+                SET work._temp_table;
+            RUN;
+            
+            PROC DATASETS LIB=work NOLIST;
+                DELETE _temp_table;
+            RUN;
+            QUIT;
+        """)
+        
+        sas.endsas()
+        print(f"  SAS dataset written: {output_path}")
+    except Exception as e:
+        print(f"  Warning: Could not write SAS dataset: {e}")
+        print(f"  Continuing with other output formats...")
 
-# =============================================================================
-# COLUMN DEFINITIONS
-# (col_name, header_label, display_width, alignment)
-# SPLIT='*' in label means '*' creates a line break within the header cell.
-#
-# NOTE vs NPGS3RPT/NPGS4RPT:
-#   - No TRANCHE column
-#   - Adds CVARX5 (DISBURSE DATE — note: SAS format is $10. character, NOT
-#     DDMMYY10., so it is treated as a plain pre-formatted string, not
-#     converted from a SAS date value)
-#   - Adds CVAR16 (FACILITY TYPE), CVAR17 (renamed PRINCIPAL BALANCE, was
-#     CURBAL in NPGS3/4), ACCRUALX (renamed INTEREST BALANCE, was ACCRUAL),
-#     CVAR10 (CREDIT BALANCE — not present in NPGS3/4)
-#   - CVARX3 (NPL REASON) is FORMAT=$6. here, vs $4. in NPGS3RPT/NPGS4RPT
-# =============================================================================
+def eibrtrrf():
+    npgs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRTRRF")
+    output = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBRTRRF")
+    
+    # Create output directory if it doesn't exist
+    output.mkdir(parents=True, exist_ok=True)
+    
+    # Get previous day's date
+    reptdate = datetime.now() - timedelta(days=1)
+    
+    mm = reptdate.month
+    mm1 = mm - 1 if mm > 1 else 12
+    
+    reptmon = f"{mm:02d}"
+    reptmon1 = f"{mm1:02d}"
+    reptyear = str(reptdate.year)
+    reptday = f"{reptdate.day:02d}"
+    rdate = reptdate.strftime("%d%m%y")
+    ndate = f"{reptdate.day:02d}{reptdate.month:02d}"
+    
+    print(f"REPTMON: {reptmon}, RDATE: {rdate}")
+    
+    # Read LNTRRF data from SAS7BDAT
+    try:
+        lntrrf_file = npgs_path / f"lntrrf{reptmon.lower()}.sas7bdat"
+        ln_df = read_sas7bdat(lntrrf_file)
+        print(f"Read {len(ln_df)} records from {lntrrf_file.name}")
+        print(f"Available columns: {ln_df.columns}")
+    except Exception as e:
+        print(f"File not found or error: {lntrrf_file}")
+        print(f"Error: {e}")
+        return
+    
+    # Create TRRF dataset
+    trrf_df = ln_df.filter(pl.col("cvar13").str.strip_chars() != "")
+    trrf_df = trrf_df.with_columns(
+        pl.col("cvar13").alias("ndate"),
+        pl.col("cvar12").alias("status")
+    ).select(["cvar01", "cvar06", "status", "ndate"])
+    
+    # Write TRRF in multiple formats
+    trrf_df.write_parquet(npgs_path / "trrf.parquet")
+    trrf_df.write_csv(npgs_path / "trrf.txt", separator=";")
+    trrf_df.to_pandas().to_csv(npgs_path / "trrf.csv", index=False)
+    
+    print(f"TRRF dataset created with {len(trrf_df)} records")
+    
+    # Process NPGS data
+    npgs_df = ln_df.with_columns(
+        pl.lit(" " * 10).alias("cvarx1"),
+        pl.lit(" " * 10).alias("cvarx2"),
+        pl.lit(" " * 4).alias("cvarx3"),
+        # Fix: Use proper string comparison for cvar12
+        pl.when(pl.col("cvar12").str.strip_chars() == "NPL")
+        .then(pl.lit("NP"))
+        .otherwise(pl.lit("AP"))
+        .alias("cvar12a")
+    )
+    
+    print(f"NPGS dataset processed with {len(npgs_df)} records")
+    
+    # Process SCH=7Q and SCH=8Q separately
+    process_scheme(npgs_df, "7q", rdate, output)
+    process_scheme(npgs_df, "8q", rdate, output)
+    
+    print(f"Processing complete for SCH=7Q and SCH=8Q")
 
-REPORT_COLS: list[tuple[str, str, int, str]] = [
-    ('cvar02',   'SCH',              3, 'left'),
-    ('cvar03',   'IC /BUSS. NUM.',  15, 'left'),
-    ('cvar04',   'NAME OF CUSTOMER', 100, 'left'),
-    ('cvarx1',   '              ',  10, 'left'),
-    ('cvar06',   'ACCOUNT NUMBER',  10, 'right'),
-    ('cvarx5',   'DISBURSE*DATE',   10, 'left'),
-    ('cvar16',   'FACILITY*TYPE',    8, 'left'),
-    ('cvar08',   'LOAN AMOUNT',     10, 'right'),
-    ('cvar09',   'O/S BALANCE',     10, 'right'),
-    ('cvar17',   'PRINCIPAL*BALANCE', 10, 'right'),
-    ('accrualx', 'INTEREST*BALANCE', 10, 'right'),
-    ('cvar10',   'CREDIT*BALANCE',  10, 'right'),
-    ('cvar11',   'ARREARS',          7, 'right'),
-    ('cvar12a',  'ST ',              3, 'left'),
-    ('cvar13',   'NPL DATE',        10, 'left'),
-    ('cvarx2',   'NPL*NOTIFICATN*DATE', 10, 'left'),
-    ('cvarx3',   'NPL*REASON',       6, 'left'),
-    ('cvar01',   'APPLICATN*NUMBER', 10, 'right'),
-]
+def process_scheme(npgs_df, scheme, rdate, base):
+    """Process a specific scheme (7Q or 8Q)"""
+    # Filter for specific scheme
+    npgs5_df = npgs_df.filter(
+        (pl.col("cvar02").str.strip_chars().str.to_lowercase() == scheme.lower()) &
+        (pl.col("natguar").str.strip_chars() == "06") &
+        (pl.col("cinstcl").str.strip_chars() == "18")
+    )
+    
+    if npgs5_df.is_empty():
+        print(f"No data for SCH={scheme}")
+        return
+    
+    print(f"Processing {len(npgs5_df)} records for SCH={scheme}")
+    
+    # Calculate CVARX2 (NPL notification date)
+    def calculate_npl_date(cvar13):
+        if cvar13 and str(cvar13).strip():
+            try:
+                # Try different date formats
+                date_str = str(cvar13).strip()
+                date_formats = ["%d/%m/%Y", "%d-%m-%Y", "%d%m%Y", "%Y-%m-%d", "%d/%m/%y"]
+                npl_date = None
+                for fmt in date_formats:
+                    try:
+                        npl_date = datetime.strptime(date_str, fmt)
+                        break
+                    except:
+                        continue
+                
+                if npl_date:
+                    # Beginning of next month + 6 days
+                    next_month = (npl_date.replace(day=1) + timedelta(days=32)).replace(day=1)
+                    return (next_month + timedelta(days=6)).strftime("%d/%m/%Y")
+            except:
+                return " " * 10
+        return " " * 10
+    
+    # Apply transformations
+    npgs5_df = npgs5_df.with_columns(
+        # Fix: Proper string comparison for cvar12
+        pl.when(pl.col("cvar12").str.strip_chars() == "NPL")
+        .then(pl.col("cvar13").map_elements(calculate_npl_date, return_dtype=pl.Utf8))
+        .otherwise(pl.lit(" " * 10))
+        .alias("cvarx2"),
+        
+        # Fix: Proper string comparison for cvar12
+        pl.when(pl.col("cvar12").str.strip_chars() == "NPL")
+        .then(pl.lit("CFBS"))
+        .otherwise(pl.lit(" " * 4))
+        .alias("cvarx3"),
+        
+        # CVARX5: disbursement date
+        pl.when((pl.col("cvar05") != 0) & (pl.col("cvar05").is_not_null()))
+        .then(pl.col("cvar05").cast(pl.Int64).cast(pl.Utf8).str.zfill(10))
+        .otherwise(pl.lit(" " * 10))
+        .alias("cvarx5"),
+        
+        # Handle missing values - directly replace cvar17
+        pl.when(pl.col("cvar17").is_null()).then(0.0).otherwise(pl.col("cvar17")).alias("cvar17"),
+        pl.when(pl.col("accrual").is_null()).then(0.0).otherwise(pl.col("accrual")).alias("accrualx")
+    )
+    
+    npgs5_df = npgs5_df.sort(["cvar01", "cvar06"])
+    
+    # Select columns in exact order
+    output_cols = ['cvar02', 'cvar03', 'cvar04', 'cvar06', 'cvarx5',
+                   'cvar08', 'cvar16', 'cvar09', 'cvar17', 'accrualx',
+                   'cvar11', 'cvar12a', 'cvar13', 'cvarx2', 'cvarx3', 'cvar01']
+    
+    # Ensure all output columns exist
+    existing_cols = [c for c in output_cols if c in npgs5_df.columns]
+    output_df = npgs5_df.select(existing_cols)
+    
+    # Generate output files in multiple formats
+    scheme_short = scheme.replace('q', '')
+    
+    # Write CSV (text) file
+    output_file = base / f"sc{scheme_short}t.csv"
+    output_df.write_csv(output_file, separator=";")
+    print(f"  CSV written: {output_file}")
+    
+    # Write text file
+    text_file = base / f"sc{scheme_short}t.txt"
+    output_df.to_pandas().to_csv(text_file, sep=';', index=False)
+    print(f"  Text file written: {text_file}")
+    
+    # Write Parquet file
+    parquet_file = base / f"sc{scheme_short}t.parquet"
+    output_df.write_parquet(parquet_file)
+    print(f"  Parquet written: {parquet_file}")
+    
+    # Write SAS7BDAT file (optional, wrapped in try/except)
+    try:
+        sas_file = base / f"sc{scheme_short}t.sas7bdat"
+        write_sas7bdat(output_df, sas_file)
+    except Exception as e:
+        print(f"  Warning: Could not write SAS dataset: {e}")
+    
+    # Generate report using shared NPGS5RPT module
+    print("=" * 60)
+    print("PUBLIC BANK BERHAD")
+    print(f"DETAIL OF ACCTS (SCH={scheme.upper()}) FOR SUBMISSION TO CGC @ {rdate}")
+    print("=" * 60)
+    
+    # Use the shared report module with correct function signature
+    report_file = base / f"sc{scheme_short}r.txt"
+    
+    # Correct function call based on npgs5_report signature:
+    # npgs5_report(df, report_path, title1, title2)
+    title1 = "PUBLIC BANK BERHAD"
+    title2 = f"DETAIL OF ACCTS (SCH={scheme.upper()}) FOR SUBMISSION TO CGC @ {rdate}"
+    
+    try:
+        npgs5_report(npgs5_df, str(report_file), title1, title2)
+        print(f"  Report generated: {report_file}")
+    except Exception as e:
+        print(f"  Warning: Could not generate report: {e}")
+        # Create a simple text report as fallback
+        with open(report_file, 'w') as f:
+            f.write("=" * 60 + "\n")
+            f.write(title1 + "\n")
+            f.write(title2 + "\n")
+            f.write("=" * 60 + "\n")
+            f.write(f"Total records: {len(npgs5_df)}\n")
+            f.write("\nSample data:\n")
+            f.write(npgs5_df.head(10).to_pandas().to_string())
+        print(f"  Simple report created: {report_file}")
+    
+    print(f"  SCH={scheme.upper()}: {len(npgs5_df)} records")
+    print(f"    Output files: {output_file.name}, {text_file.name}, {parquet_file.name}")
+    if 'sas_file' in locals():
+        print(f"    SAS file: {sas_file.name}")
+    print(f"    Report: {report_file.name}")
 
-# Columns rendered via numeric FORMAT=n. or FORMAT=n.d in the SAS DEFINE
-_NUMERIC_2DP = {'cvar08', 'cvar09', 'cvar17', 'accrualx', 'cvar10'}  # FORMAT=10.2
-_NUMERIC_0DP = {'cvar06', 'cvar11', 'cvar01'}                        # FORMAT=10. / 7.
+def process_all_schemes():
+    """Process both 7Q and 8Q together"""
+    base = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBRTRRF")
+    npgs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRTRRF")
+    
+    # Create output directory if it doesn't exist
+    base.mkdir(parents=True, exist_ok=True)
+    
+    # Get previous day's date
+    reptdate = datetime.now() - timedelta(days=1)
+    reptmon = f"{reptdate.month:02d}"
+    rdate = reptdate.strftime("%d%m%y")
+    
+    # Read data from SAS7BDAT
+    lntrrf_file = npgs_path / f"lntrrf{reptmon.lower()}.sas7bdat"
+    ln_df = read_sas7bdat(lntrrf_file)
+    
+    # Process NPGS data once
+    npgs_df = ln_df.with_columns(
+        pl.lit(" " * 10).alias("cvarx1"),
+        pl.lit(" " * 10).alias("cvarx2"),
+        pl.lit(" " * 4).alias("cvarx3"),
+        # Fix: Proper string comparison
+        pl.when(pl.col("cvar12").str.strip_chars() == "NPL")
+        .then(pl.lit("NP"))
+        .otherwise(pl.lit("AP"))
+        .alias("cvar12a")
+    )
+    
+    # Process each scheme
+    for scheme in ["7q", "8q"]:
+        scheme_df = npgs_df.filter(
+            (pl.col("cvar02").str.strip_chars().str.to_lowercase() == scheme.lower()) &
+            (pl.col("natguar").str.strip_chars() == "06") &
+            (pl.col("cinstcl").str.strip_chars() == "18")
+        )
+        
+        if not scheme_df.is_empty():
+            # Apply transformations
+            scheme_df = apply_npl_logic(scheme_df)
+            
+            # Select columns and save outputs
+            output_cols = ['cvar02','cvar03','cvar04','cvar06','cvarx5',
+                          'cvar08','cvar16','cvar09','cvar17','accrualx',
+                          'cvar11','cvar12a','cvar13','cvarx2','cvarx3','cvar01']
+            existing_cols = [c for c in output_cols if c in scheme_df.columns]
+            output_df = scheme_df.select(existing_cols)
+            
+            scheme_short = scheme.replace('q', '')
+            
+            # Write multiple formats
+            output_df.write_csv(base / f"sc{scheme_short}t.csv", separator=";")
+            output_df.to_pandas().to_csv(base / f"sc{scheme_short}t.txt", sep=';', index=False)
+            output_df.write_parquet(base / f"sc{scheme_short}t.parquet")
+            
+            # Write SAS7BDAT with error handling
+            try:
+                write_sas7bdat(output_df, base / f"sc{scheme_short}t.sas7bdat")
+            except Exception as e:
+                print(f"Warning: Could not write SAS dataset for {scheme}: {e}")
+            
+            # Generate report with correct function signature
+            report_file = base / f"sc{scheme_short}r.txt"
+            title1 = "PUBLIC BANK BERHAD"
+            title2 = f"DETAIL OF ACCTS (SCH={scheme.upper()}) FOR SUBMISSION TO CGC @ {rdate}"
+            
+            try:
+                npgs5_report(scheme_df, str(report_file), title1, title2)
+                print(f"Report generated: {report_file}")
+            except Exception as e:
+                print(f"Warning: Could not generate report: {e}")
+                # Create a simple text report as fallback
+                with open(report_file, 'w') as f:
+                    f.write("=" * 60 + "\n")
+                    f.write(title1 + "\n")
+                    f.write(title2 + "\n")
+                    f.write("=" * 60 + "\n")
+                    f.write(f"Total records: {len(scheme_df)}\n")
+            
+            print(f"\nSCH={scheme.upper()} Report:")
+            print(f"Report written to: {report_file}")
 
-# Total width of one report body line
-_TOTAL_WIDTH: int = (
-    sum(w for _, _, w, _ in REPORT_COLS)
-    + len(COL_SEP) * (len(REPORT_COLS) - 1)
-)
+def apply_npl_logic(df):
+    """Apply NPL date calculations"""
+    def calculate_npl_date(cvar13):
+        if cvar13 and str(cvar13).strip():
+            try:
+                # Try multiple date formats
+                date_str = str(cvar13).strip()
+                date_formats = ["%d/%m/%Y", "%d-%m-%Y", "%d%m%Y", "%Y-%m-%d", "%d/%m/%y"]
+                npl_date = None
+                for fmt in date_formats:
+                    try:
+                        npl_date = datetime.strptime(date_str, fmt)
+                        break
+                    except:
+                        continue
+                
+                if npl_date:
+                    next_month = (npl_date.replace(day=1) + timedelta(days=32)).replace(day=1)
+                    return (next_month + timedelta(days=6)).strftime("%d/%m/%Y")
+            except:
+                return " " * 10
+        return " " * 10
+    
+    return df.with_columns(
+        # Fix: Proper string comparison
+        pl.when(pl.col("cvar12").str.strip_chars() == "NPL")
+        .then(pl.col("cvar13").map_elements(calculate_npl_date, return_dtype=pl.Utf8))
+        .otherwise(pl.lit(" " * 10))
+        .alias("cvarx2"),
+        
+        # Fix: Proper string comparison
+        pl.when(pl.col("cvar12").str.strip_chars() == "NPL")
+        .then(pl.lit("CFBS"))
+        .otherwise(pl.lit(" " * 4))
+        .alias("cvarx3"),
+        
+        pl.when((pl.col("cvar05") != 0) & (pl.col("cvar05").is_not_null()))
+        .then(pl.col("cvar05").cast(pl.Utf8).str.zfill(10))
+        .otherwise(pl.lit(" " * 10))
+        .alias("cvarx5"),
+        
+        # Fix: Direct replacement without creating duplicate
+        pl.when(pl.col("cvar17").is_null()).then(0.0).otherwise(pl.col("cvar17")).alias("cvar17"),
+        pl.when(pl.col("accrual").is_null()).then(0.0).otherwise(pl.col("accrual")).alias("accrualx")
+    ).sort(["cvar01", "cvar06"])
 
-# =============================================================================
-# INTERNAL HELPERS
-# =============================================================================
-
-def _fmt_numeric(val, width: int, decimals: int) -> str:
-    """
-    Right-justify numeric value to <width> characters with <decimals> places.
-    Missing/NaN values render as spaces (SAS missing value behaviour).
-    """
-    if val is None or (isinstance(val, float) and val != val):
-        return ' ' * width
-    v = float(val)
-    s = f"{v:{width}.{decimals}f}" if decimals > 0 else f"{int(round(v)):{width}d}"
-    # Truncate from left if overflow (SAS renders asterisks; preserve rightmost digits)
-    return s[-width:] if len(s) > width else s
-
-
-def _coalesce_s(val, default: str = '') -> str:
-    """Return stripped string or default when None."""
-    return str(val).strip() if val is not None else default
-
-
-def _build_header_lines() -> list[str]:
-    """
-    Build column header rows, respecting SPLIT='*' multi-line header labels.
-    Each '*' in a label splits it across additional header lines (top-aligned).
-    Returns a list of fully formatted header line strings (no ASA prefix).
-    """
-    split_labels = [label.split('*') for _, label, _, _ in REPORT_COLS]
-    max_lines    = max(len(parts) for parts in split_labels)
-
-    padded: list[tuple[list[str], int, str]] = []
-    for (_, _, width, align), parts in zip(REPORT_COLS, split_labels):
-        while len(parts) < max_lines:
-            parts.insert(0, '')
-        padded.append((parts, width, align))
-
-    header_rows: list[str] = []
-    for line_idx in range(max_lines):
-        cells = []
-        for parts, width, align in padded:
-            raw  = parts[line_idx][:width]
-            cell = raw.ljust(width) if align == 'left' else raw.rjust(width)
-            cells.append(cell)
-        header_rows.append(COL_SEP.join(cells))
-
-    return header_rows
-
-
-def _format_cell(col_name: str, val, width: int, align: str) -> str:
-    """Format one data cell according to its DEFINE specification."""
-    if col_name in _NUMERIC_2DP:
-        s = _fmt_numeric(val, width, 2)
-    elif col_name in _NUMERIC_0DP:
-        s = _fmt_numeric(val, width, 0)
-    else:
-        # FORMAT=$n.  — character, left-pad/truncate to width
-        # (includes cvarx5 'DISBURSE DATE', which is $10. character in the
-        # original SAS — NOT converted from a SAS numeric date value)
-        s = _coalesce_s(val)[:width]
-
-    return s.rjust(width) if align == 'right' else s.ljust(width)
-
-# =============================================================================
-# PUBLIC INTERFACE
-# =============================================================================
-
-def npgs5_report(
-    df:          pl.DataFrame,
-    report_path: str,
-    title1:      str,
-    title2:      str,
-) -> None:
-    """
-    Generate an ASA carriage-control NPGS5 detail listing report.
-
-    Equivalent to the SAS block:
-        PROC PRINTTO PRINT=<output>;
-        TITLE1 '<title1>';
-        TITLE2 '<title2>';
-        %INC PGM(NPGS5RPT);
-
-    ASA carriage-control characters (first byte of each line):
-        '1'  — page eject (new page)
-        ' '  — single space (normal print)
-
-    Parameters
-    ----------
-    df          : Polars DataFrame — already filtered / derived as NPGS5,
-                  and sorted as required by the caller.
-    report_path : Destination file path for the ASA report.
-    title1      : TITLE1 text  (e.g. 'PUBLIC BANK BERHAD')
-    title2      : TITLE2 text  (e.g. 'NPGS5 DETAIL OF ACCTS ...')
-    """
-    headline     = '-' * _TOTAL_WIDTH
-    header_lines = _build_header_lines()
-
-    _page_overhead = 3 + len(header_lines) + 1
-
-    output_lines: list[str] = []
-    line_cnt:     int       = PAGE_LENGTH + 1   # force first page immediately
-
-    def _new_page() -> None:
-        nonlocal line_cnt
-        output_lines.append('1' + title1)       # '1' = ASA page eject
-        output_lines.append(' ' + title2)       # ' ' = ASA normal single space
-        output_lines.append(' ')                # HEADSKIP — one blank line
-        for hdr in header_lines:
-            output_lines.append(' ' + hdr)
-        output_lines.append(' ' + headline)     # HEADLINE — underline rule
-        line_cnt = _page_overhead
-
-    _new_page()
-
-    if not df.is_empty():
-        for row in df.iter_rows(named=True):
-            if line_cnt >= PAGE_LENGTH:
-                _new_page()
-
-            cells = [
-                _format_cell(col_name, row.get(col_name), width, align)
-                for col_name, _, width, align in REPORT_COLS
-            ]
-            output_lines.append(' ' + COL_SEP.join(cells))
-            line_cnt += 1
-
-    out_dir = os.path.dirname(report_path)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-
-    with open(report_path, 'w', encoding='utf-8', newline='\n') as fh:
-        for ln in output_lines:
-            fh.write(ln + '\n')
+if __name__ == "__main__":
+    eibrtrrf()
