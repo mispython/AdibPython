@@ -1,37 +1,39 @@
 # !/usr/bin/env python3
 """
-Program Name : NPGS4RPT
-Purpose      : Public Bank Berhad - NPGS4 Report Template
-               Reusable PROC REPORT equivalent called via %INC PGM(NPGS4RPT)
+Program Name : NPGS5RPT
+Purpose      : Public Bank Berhad - NPGS5 Report Template
+               Reusable PROC REPORT equivalent called via %INC PGM(NPGS5RPT)
                from its calling driver program for each schedule code.
                Generates ASA carriage-control detail listing report for
-               NPGS4 submissions.
+               NPGS5 submissions.
 
 Original SAS:
-  PROC   REPORT DATA=NPGS4 NOWD HEADSKIP HEADLINE SPLIT='*';
-  COLUMN CVAR02  CVAR03 CVAR04 CVARX1 CVAR06 CVAR08 CVAR09 CURBAL
-         ACCRUAL CVAR11 CVAR12A CVAR13 CVARX2 CVARX3 CVAR01 TRANCHE;
-  DEFINE CVAR02  / DISPLAY FORMAT=$3.       'SCH';
-  DEFINE CVAR03  / DISPLAY FORMAT=$15.      'IC /BUSS. NUM.';
-  DEFINE CVAR04  / DISPLAY FORMAT=$100.     'NAME OF CUSTOMER';
-  DEFINE CVARX1  / DISPLAY FORMAT=$10.      '              ';
-  DEFINE CVAR06  / DISPLAY FORMAT=10.       'ACCOUNT NUMBER';
-  DEFINE CVAR08  / DISPLAY FORMAT=10.2      'LOAN AMOUNT';
-  DEFINE CVAR09  / DISPLAY FORMAT=10.2      'O/S BALANCE';
-  DEFINE CURBAL  / DISPLAY FORMAT=10.2      'PRINCIPAL*BALANCE';
-  DEFINE ACCRUAL / DISPLAY FORMAT=10.2      'INTEREST*BALANCE';
-  DEFINE CVAR11  / DISPLAY FORMAT=7.        'ARREARS';
-  DEFINE CVAR12A / DISPLAY FORMAT=$3.       'ST ';
-  DEFINE CVAR13  / DISPLAY FORMAT=$10.      'NPL DATE';
-  DEFINE CVARX2  / DISPLAY FORMAT=$10.      'NPL*NOTIFICATN*DATE';
-  DEFINE CVARX3  / DISPLAY FORMAT=$4.       'NPL*REASON';
-  DEFINE CVAR01  / DISPLAY FORMAT=10.       'APPLICATN*NUMBER';
-  DEFINE TRANCHE / DISPLAY FORMAT=$8.       'TRANCHE*NUMBER';
+  PROC   REPORT DATA=NPGS5 NOWD HEADSKIP HEADLINE SPLIT='*';
+  COLUMN CVAR02 CVAR03 CVAR04 CVARX1 CVAR06 CVARX5 CVAR16 CVAR08
+         CVAR09 CVAR17 ACCRUALX CVAR10 CVAR11 CVAR12A CVAR13
+         CVARX2 CVARX3 CVAR01;
+  DEFINE CVAR02   / DISPLAY FORMAT=$3.       'SCH';
+  DEFINE CVAR03   / DISPLAY FORMAT=$15.      'IC /BUSS. NUM.';
+  DEFINE CVAR04   / DISPLAY FORMAT=$100.     'NAME OF CUSTOMER';
+  DEFINE CVARX1   / DISPLAY FORMAT=$10.      '              ';
+  DEFINE CVAR06   / DISPLAY FORMAT=10.       'ACCOUNT NUMBER';
+  DEFINE CVARX5   / DISPLAY FORMAT=$10.      'DISBURSE*DATE';
+  DEFINE CVAR16   / DISPLAY FORMAT=$8.       'FACILITY*TYPE';
+  DEFINE CVAR08   / DISPLAY FORMAT=10.2      'LOAN AMOUNT';
+  DEFINE CVAR09   / DISPLAY FORMAT=10.2      'O/S BALANCE';
+  DEFINE CVAR17   / DISPLAY FORMAT=10.2      'PRINCIPAL*BALANCE';
+  DEFINE ACCRUALX / DISPLAY FORMAT=10.2      'INTEREST*BALANCE';
+  DEFINE CVAR10   / DISPLAY FORMAT=10.2      'CREDIT*BALANCE';
+  DEFINE CVAR11   / DISPLAY FORMAT=7.        'ARREARS';
+  DEFINE CVAR12A  / DISPLAY FORMAT=$3.       'ST ';
+  DEFINE CVAR13   / DISPLAY FORMAT=$10.      'NPL DATE';
+  DEFINE CVARX2   / DISPLAY FORMAT=$10.      'NPL*NOTIFICATN*DATE';
+  DEFINE CVARX3   / DISPLAY FORMAT=$6.       'NPL*REASON';
+  DEFINE CVAR01   / DISPLAY FORMAT=10.       'APPLICATN*NUMBER';
   *;
 """
 
 import os
-from typing import Optional
 
 import polars as pl
 
@@ -47,33 +49,41 @@ COL_SEP     = ' '   # single space between columns (PROC REPORT default)
 # (col_name, header_label, display_width, alignment)
 # SPLIT='*' in label means '*' creates a line break within the header cell.
 #
-# NOTE: CVARX5 does not appear in this report. CVAR08/CVAR09/CURBAL/ACCRUAL
-# use FORMAT=10.2 (not 13.2 as in NPGSRPT/CGCRPT) — width and decimals follow
-# the SAS DEFINE exactly.
+# NOTE vs NPGS3RPT/NPGS4RPT:
+#   - No TRANCHE column
+#   - Adds CVARX5 (DISBURSE DATE — note: SAS format is $10. character, NOT
+#     DDMMYY10., so it is treated as a plain pre-formatted string, not
+#     converted from a SAS date value)
+#   - Adds CVAR16 (FACILITY TYPE), CVAR17 (renamed PRINCIPAL BALANCE, was
+#     CURBAL in NPGS3/4), ACCRUALX (renamed INTEREST BALANCE, was ACCRUAL),
+#     CVAR10 (CREDIT BALANCE — not present in NPGS3/4)
+#   - CVARX3 (NPL REASON) is FORMAT=$6. here, vs $4. in NPGS3RPT/NPGS4RPT
 # =============================================================================
 
 REPORT_COLS: list[tuple[str, str, int, str]] = [
-    ('cvar02',  'SCH',              3, 'left'),
-    ('cvar03',  'IC /BUSS. NUM.',  15, 'left'),
-    ('cvar04',  'NAME OF CUSTOMER', 100, 'left'),
-    ('cvarx1',  '              ',  10, 'left'),
-    ('cvar06',  'ACCOUNT NUMBER',  10, 'right'),
-    ('cvar08',  'LOAN AMOUNT',     10, 'right'),
-    ('cvar09',  'O/S BALANCE',     10, 'right'),
-    ('curbal',  'PRINCIPAL*BALANCE', 10, 'right'),
-    ('accrual', 'INTEREST*BALANCE', 10, 'right'),
-    ('cvar11',  'ARREARS',          7, 'right'),
-    ('cvar12a', 'ST ',              3, 'left'),
-    ('cvar13',  'NPL DATE',        10, 'left'),
-    ('cvarx2',  'NPL*NOTIFICATN*DATE', 10, 'left'),
-    ('cvarx3',  'NPL*REASON',       4, 'left'),
-    ('cvar01',  'APPLICATN*NUMBER', 10, 'right'),
-    ('tranche', 'TRANCHE*NUMBER',   8, 'left'),
+    ('cvar02',   'SCH',              3, 'left'),
+    ('cvar03',   'IC /BUSS. NUM.',  15, 'left'),
+    ('cvar04',   'NAME OF CUSTOMER', 100, 'left'),
+    ('cvarx1',   '              ',  10, 'left'),
+    ('cvar06',   'ACCOUNT NUMBER',  10, 'right'),
+    ('cvarx5',   'DISBURSE*DATE',   10, 'left'),
+    ('cvar16',   'FACILITY*TYPE',    8, 'left'),
+    ('cvar08',   'LOAN AMOUNT',     10, 'right'),
+    ('cvar09',   'O/S BALANCE',     10, 'right'),
+    ('cvar17',   'PRINCIPAL*BALANCE', 10, 'right'),
+    ('accrualx', 'INTEREST*BALANCE', 10, 'right'),
+    ('cvar10',   'CREDIT*BALANCE',  10, 'right'),
+    ('cvar11',   'ARREARS',          7, 'right'),
+    ('cvar12a',  'ST ',              3, 'left'),
+    ('cvar13',   'NPL DATE',        10, 'left'),
+    ('cvarx2',   'NPL*NOTIFICATN*DATE', 10, 'left'),
+    ('cvarx3',   'NPL*REASON',       6, 'left'),
+    ('cvar01',   'APPLICATN*NUMBER', 10, 'right'),
 ]
 
 # Columns rendered via numeric FORMAT=n. or FORMAT=n.d in the SAS DEFINE
-_NUMERIC_2DP = {'cvar08', 'cvar09', 'curbal', 'accrual'}   # FORMAT=10.2
-_NUMERIC_0DP = {'cvar06', 'cvar11', 'cvar01'}              # FORMAT=10. / 7.
+_NUMERIC_2DP = {'cvar08', 'cvar09', 'cvar17', 'accrualx', 'cvar10'}  # FORMAT=10.2
+_NUMERIC_0DP = {'cvar06', 'cvar11', 'cvar01'}                        # FORMAT=10. / 7.
 
 # Total width of one report body line
 _TOTAL_WIDTH: int = (
@@ -138,6 +148,8 @@ def _format_cell(col_name: str, val, width: int, align: str) -> str:
         s = _fmt_numeric(val, width, 0)
     else:
         # FORMAT=$n.  — character, left-pad/truncate to width
+        # (includes cvarx5 'DISBURSE DATE', which is $10. character in the
+        # original SAS — NOT converted from a SAS numeric date value)
         s = _coalesce_s(val)[:width]
 
     return s.rjust(width) if align == 'right' else s.ljust(width)
@@ -146,20 +158,20 @@ def _format_cell(col_name: str, val, width: int, align: str) -> str:
 # PUBLIC INTERFACE
 # =============================================================================
 
-def npgs4_report(
+def npgs5_report(
     df:          pl.DataFrame,
     report_path: str,
     title1:      str,
     title2:      str,
 ) -> None:
     """
-    Generate an ASA carriage-control NPGS4 detail listing report.
+    Generate an ASA carriage-control NPGS5 detail listing report.
 
     Equivalent to the SAS block:
         PROC PRINTTO PRINT=<output>;
         TITLE1 '<title1>';
         TITLE2 '<title2>';
-        %INC PGM(NPGS4RPT);
+        %INC PGM(NPGS5RPT);
 
     ASA carriage-control characters (first byte of each line):
         '1'  — page eject (new page)
@@ -167,11 +179,11 @@ def npgs4_report(
 
     Parameters
     ----------
-    df          : Polars DataFrame — already filtered / derived as NPGS4,
+    df          : Polars DataFrame — already filtered / derived as NPGS5,
                   and sorted as required by the caller.
     report_path : Destination file path for the ASA report.
     title1      : TITLE1 text  (e.g. 'PUBLIC BANK BERHAD')
-    title2      : TITLE2 text  (e.g. 'NPGS4 DETAIL OF ACCTS ...')
+    title2      : TITLE2 text  (e.g. 'NPGS5 DETAIL OF ACCTS ...')
     """
     headline     = '-' * _TOTAL_WIDTH
     header_lines = _build_header_lines()
