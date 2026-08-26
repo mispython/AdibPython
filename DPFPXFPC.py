@@ -1,103 +1,86 @@
-import polars as pl
-from pathlib import Path
-from NPGSRPT import generate_report
+OPTIONS YEARCUTOFF=1940 SORTDEV=3390
+        NONUMBER NODATE NOCENTER;
+*;
+DATA REPTDATE (KEEP=REPTDATE);
+  SET MNILN.REPTDATE;
+  MM =MONTH(REPTDATE);
+  MM1=MM - 1;
+  IF MM1 = 0 THEN MM1 = 12;
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('NDATE',PUT(REPTDATE,Z5.));
+RUN;
+*;
+DATA CGCS;
+  SET CGCS.LNNPGS&REPTMON;
+  IF  CVAR02 IN ('10','63');
+  CVARXX='          ';
+PROC SORT; BY CVAR01 CVAR06;
+*;
+  /*
+DATA CGCSP;
+  KEEP CVAR01 CVAR06 CVAR12P;
+  SET CGCS.DPCGCS&REPTMON1
+      CGCS.LNCGCS&REPTMON1
+      CGCS.BTCGCS&REPTMON1;
+  IF  CVAR12='NPL';
+  CVAR12P=CVAR12;
+PROC SORT; BY CVAR01 CVAR06;
 
-def eibrsrgf():
-    cgcs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRSRGF")
-    output = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBRSRGF")
-    
-    # REPTDATE processing (same as others)
-    reptdate_df = pl.read_parquet(mniln_path / "REPTDATE.parquet")
-    reptdate = reptdate_df["REPTDATE"][0]
-    
-    mm = reptdate.month
-    mm1 = mm - 1 if mm > 1 else 12
-    
-    reptmon = f"{mm:02d}"
-    reptmon1 = f"{mm1:02d}"
-    reptyear = str(reptdate.year)
-    reptday = f"{reptdate.day:02d}"
-    rdate = reptdate.strftime("%d%m%y")
-    ndate = f"{reptdate.day:02d}{reptdate.month:02d}"
-    
-    print(f"REPTMON: {reptmon}, RDATE: {rdate}")
-    
-    # Read CGCS data
-    try:
-        cgcs_df = pl.read_parquet(cgcs_path / f"LNNPGS{reptmon}.parquet")
-    except:
-        print(f"File not found: CGCS/LNNPGS{reptmon}.parquet")
-        return
-    
-    # Filter for CVAR02 IN ('10','63')
-    cgcs_df = cgcs_df.filter(pl.col("CVAR02").is_in(["10", "63"]))
-    cgcs_df = cgcs_df.with_columns(pl.lit(" " * 10).alias("CVARXX"))
-    cgcs_df = cgcs_df.sort(["CVAR01", "CVAR06"])
-    
-    # Commented out section in SAS (NPL processing)
-    # Skipped as per SAS comments
-    
-    # Write CGCSF file
-    with open(base / "CGCSF.csv", 'w') as f:
-        for row in cgcs_df.iter_rows(named=True):
-            cvar01 = f"{row.get('CVAR01', 0):10.0f}"
-            cvar02 = f"{row.get('CVAR02', ''):2s}"
-            cvar03 = f"{row.get('CVAR03', ''):15s}"
-            cvar04 = f"{row.get('CVAR04', ''):50s}"
-            
-            # CVAR05 date
-            cvar05 = " " * 10
-            if 'CVAR05' in row and row['CVAR05']:
-                try:
-                    if hasattr(row['CVAR05'], 'strftime'):
-                        cvar05 = row['CVAR05'].strftime("%d/%m/%Y")
-                    else:
-                        cvar05 = str(row['CVAR05']).rjust(10)
-                except:
-                    cvar05 = " " * 10
-            
-            cvarxx = " " * 10
-            cvar06 = f"{row.get('CVAR06', 0):10.0f}"
-            cvar07 = f"{row.get('CVAR07', ''):2s}"
-            cvar08 = f"{row.get('CVAR08', 0):10.2f}"
-            cvar09 = f"{row.get('CVAR09', 0):10.2f}"
-            cvar10 = f"{row.get('CVAR10', 0):10.2f}"
-            cvar11 = f"{row.get('CVAR11', 0):5.0f}"
-            cvar12 = f"{row.get('CVAR12', ''):3s}"
-            cvar13 = f"{row.get('CVAR13', ''):10s}"
-            cvar14 = f"{row.get('CVAR14', ''):4s}"
-            cvar15 = f"{row.get('CVAR15', ''):5s}"
-            
-            line = f"{cvar01};{cvar02};{cvar03};{cvar04};{cvar05};{cvarxx};" \
-                   f"{cvar06};{cvar07};{cvar08};{cvar09};{cvar10};{cvar11};" \
-                   f"{cvar12};{cvar13};{cvar14};{cvar15};"
-            f.write(line + "\n")
-    
-    # Generate report using shared module
-    print("=" * 60)
-    print("PUBLIC BANK BERHAD")
-    print(f"ACCOUNT DETAILS (SCHEME: SRGF) FOR CGC @ {rdate}")
-    print("=" * 60)
-    
-    # Use the shared report module - SRGF uses similar format to MEF
-    # Add 'SRGF' to column names mapping for clarity
-    report_df = cgcs_df.clone()
-    if 'BRANCH' not in report_df.columns:
-        # Add dummy BRANCH if missing (SAS report expects it)
-        report_df = report_df.with_columns(pl.lit(0).alias("BRANCH"))
-    
-    # Use shared module with custom title
-    generate_report(report_df, "SRGF", rdate, output_file=None)
-    
-    print(f"Processing complete. File: CGCSF.csv")
-
-if __name__ == "__main__":
-    eibrsrgf()
+DATA CGCS;
+  MERGE CGCS(IN=A) CGCSP; BY CVAR01 CVAR06;
+  IF A;
+  IF CVAR12P='NPL' AND CVAR12='   ' THEN CVAR13=&NDATE;
+  */
+*;
+DATA CGCS;
+  SET CGCS;
+  FILE CGCSF;
+  PUT  @001 CVAR01   10.       ';'
+       @012 CVAR02   $2.       ';'
+       @015 CVAR03   $15.      ';'
+       @031 CVAR04   $50.      ';'
+       @082 CVAR05   DDMMYY10. ';'
+       @093 CVARXX   $10.      ';'
+       @103 CVAR06   10.       ';'
+       @114 CVAR07   $2.       ';'
+       @117 CVAR08   10.2      ';'
+       @128 CVAR09   10.2      ';'
+       @139 CVAR10   10.2      ';'
+       @150 CVAR11     5.      ';'
+       @156 CVAR12    $3.      ';'
+       @160 CVAR13   $10.      ';'
+       @171 CVAR14    $4.      ';'
+       @176 CVAR15    $5.      ';'
+       ;
+*;
+TITLE1 'PUBLIC BANK BERHAD';
+TITLE2 'ACCOUNT DETAILS (SCHEME: SRGF) FOR CGC @' &RDATE;
+PROC   REPORT DATA=CGCS NOWD HEADSKIP HEADLINE SPLIT='*';
+COLUMN CVAR01 CVAR02 CVAR03 CVAR04 CVAR05 CVAR06 CVAR07 CVAR08
+       CVARXX
+       CVAR09 CVAR10 CVAR11 CVAR12 CVAR13 CVAR14 CVAR15 BRANCH;
+DEFINE CVAR01  / DISPLAY FORMAT=10.       'REFER.NUM ';
+DEFINE CVAR02  / DISPLAY FORMAT=$3.       'SCH';
+DEFINE CVAR03  / DISPLAY FORMAT=$15.      'IC /BUSS. NUM.';
+DEFINE CVAR04  / DISPLAY FORMAT=$50.      'NAME OF CUSTOMER';
+DEFINE CVAR05  / DISPLAY FORMAT=DDMMYY10. 'DISBURSE';
+DEFINE CVARXX  / DISPLAY FORMAT=$10.      '              ';
+DEFINE CVAR06  / DISPLAY FORMAT=10.       'ACCOUNT NUMBER';
+DEFINE CVAR07  / DISPLAY FORMAT=$2.       'TY';
+DEFINE CVAR08  / DISPLAY FORMAT=12.2      'APPROVE LIMIT';
+DEFINE CVAR09  / DISPLAY FORMAT=12.2      'CREDIT BALANCE';
+DEFINE CVAR10  / DISPLAY FORMAT=12.2      'DEBIT BALANCE';
+DEFINE CVAR11  / DISPLAY FORMAT=7.        'ARREARS';
+DEFINE CVAR12  / DISPLAY FORMAT=$3.       'ST ';
+DEFINE CVAR13  / DISPLAY FORMAT=$10.      'NPL DATE';
+DEFINE CVAR14  / DISPLAY FORMAT=$4.       'FI  CODE';
+DEFINE CVAR15  / DISPLAY FORMAT=$5.       'MICR CODE';
+DEFINE BRANCH  / DISPLAY FORMAT=3.        'BRH';
 
 
 
-all inputs are in sas7bdat sas dataset and need to be in all lowercase.
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in text files, sas7bdat and parquet files. 
-write out using saspy
+this is the original sas code, does it output into sas7bdat? if not then remove it. only text file
