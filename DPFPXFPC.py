@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 import polars as pl
 import pyreadstat
 import saspy
@@ -20,7 +20,7 @@ BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
 MNITB_CURRENT  = BASE_INPUT / "intg_dp_acct_current_m{reptmon}.sas7bdat"    # SAS: MNITB.CURRENT
 MNILN_LNNOTE   = BASE_INPUT / "enrh_ln_note_m{reptmon}.sas7bdat"     # SAS: MNILN.LNNOTE
 
-CRFTABL        = BASE_INPUT / "crftabl.sas7bdat"   # SAS: SAP.PBB.BTRADE.CRFTABL
+CRFTABL        = BASE_INPUT / "crftabl.txt"   # Text file: SAP.PBB.BTRADE.CRFTABL
 
 # ---- Output ----
 OUT_DIR  = BASE_OUTPUT / "excp"
@@ -41,6 +41,25 @@ def read_sas7bdat(file_path: Path) -> pl.DataFrame:
     pl_df = pl.from_pandas(df)
     pl_df = pl_df.rename({col: col.lower() for col in pl_df.columns})
     return pl_df
+
+
+def read_text_file(file_path: Path) -> pl.DataFrame:
+    """Read text file (space or tab delimited) and convert to Polars DataFrame with lowercase columns."""
+    if not file_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    
+    # Try to read as CSV with whitespace delimiter
+    # You may need to adjust delimiter based on your file format
+    try:
+        # Try space-delimited first
+        df = pl.read_csv(file_path, separator=" ", has_header=True)
+    except:
+        # Fall back to tab-delimited
+        df = pl.read_csv(file_path, separator="\t", has_header=True)
+    
+    # Lowercase all column names
+    df = df.rename({col: col.lower() for col in df.columns})
+    return df
 
 
 def read_flat_file_to_temp_parquet(file_path: Path, temp_dir: str) -> Path:
@@ -85,15 +104,15 @@ MNILN_LNNOTE = Path(str(MNILN_LNNOTE).format(reptmon=REPTMON))
 # BTRSA.MAST&REPTDAY&REPTMON dataset
 MAST_FILE = BASE_INPUT / f"btmast{REPTMON}{REPTDAY}{REPTYEAR2}.sas7bdat"
 
-# LCCRISEX files
+# LCCRISEX files (binary flat files)
 COLL_FILE = BASE_INPUT / f"lccrisex_{REPTDATE.year}{REPTMON}{REPTDAY}"
 DESC_FILE = BASE_INPUT / f"lccrisex.desc_{REPTDATE.year}{REPTMON}{REPTDAY}"
 
 
 # =========================
-# 2) CRFT from CRFTABL, filter & map SCH, keep SCH=='   '
+# 2) CRFT from CRFTABL.TXT (text file), filter & map SCH, keep SCH=='   '
 # =========================
-crft = read_sas7bdat(CRFTABL)
+crft = read_text_file(CRFTABL)
 
 # SAS INPUT fields expected: rectyp1, tfid, subacct, preind, censust, acctno
 crft = (
@@ -139,7 +158,7 @@ crft = crft.select(["acctno", "censust", "product", "noteno"])
 
 
 # =========================
-# 3) CA from MNITB.CURRENT (map→SCH; keep SCH=='   ')
+# 3) CA from MNITB.CURRENT (SAS7BDAT) (map→SCH; keep SCH=='   ')
 # =========================
 ca = read_sas7bdat(MNITB_CURRENT)
 
@@ -164,7 +183,7 @@ ca = (
 
 
 # =========================
-# 4) LN from MNILN.LNNOTE (map→SCH; keep SCH=='   ')
+# 4) LN from MNILN.LNNOTE (SAS7BDAT) (map→SCH; keep SCH=='   ')
 # =========================
 ln = read_sas7bdat(MNILN_LNNOTE)
 
@@ -192,7 +211,7 @@ ln = (
 
 
 # =========================
-# 5) COLL/DESC merge, filter DESC census range, then BY acctno
+# 5) COLL/DESC merge (binary flat files), filter DESC census range, then BY acctno
 # =========================
 # Create temporary directory for binary file conversion
 with tempfile.TemporaryDirectory() as temp_dir:
