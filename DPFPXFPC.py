@@ -2,7 +2,6 @@
 """
 Program Name: EIBMHPFS.py
 Purpose: HP FISS - Disbursement, Repayment, Approval reporting for BNM
-         - Reads LOAN.REPTDATE for report period variables
          - Identifies newly issued / settled HP accounts from LOAN.LNNOTE
          - Merges with BNM.LOAN<MM><WK> for current balances
          - Builds RDAL fixed-width output file (LRECL=80) with BNM codes
@@ -25,6 +24,7 @@ ESMR: 06-1485, 06-1762
 from PBBLNFMT import format_newsect, format_validse, HP_ALL
 
 import os
+import pyreadstat
 from datetime import date, timedelta
 from typing import Optional
 
@@ -35,7 +35,7 @@ import polars as pl
 # PATH CONFIGURATION
 # =============================================================================
 
-LOAN_LNNOTE_PARQUET    = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBAABBA/lnnote.sas7bdat"
+LOAN_LNNOTE_SAS7BDAT   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBAABBA/lnnote.sas7bdat"
 BNM_LOAN_PREFIX        = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMHPFS/loan{REPTMON}{NOWK}.sas7bdat"    
 
 OUTPUT_DIR             = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMHPFS"
@@ -139,22 +139,10 @@ def fmt_comma15_2(val) -> str:
 
 def get_report_vars() -> dict:
     """
-    DATA REPTDATE: SET LOAN.REPTDATE;
-    SELECT(DAY(REPTDATE)):
-      WHEN(8)  WK='1' WK1='4'
-      WHEN(15) WK='2' WK1='1'
-      WHEN(22) WK='3' WK1='2'
-      OTHERWISE WK='4' WK1='3'
-    MM = MONTH; MM1 = MM-1; YY1 adjusted if MM1=0;
-    SDATE = MDY(MM,1,YEAR); PSDATE = MDY(MM1,1,YY1)
+    Using datetime.timedelta(days=1) to get previous day as report date
     """
-    con  = duckdb.connect()
-    row  = con.execute(
-        f"SELECT reptdate FROM read_parquet('{LOAN_REPTDATE_PARQUET}') LIMIT 1"
-    ).fetchone()
-    con.close()
-
-    reptdate = sas_date_to_pydate(row[0])
+    # Get yesterday's date
+    reptdate = date.today() - timedelta(days=1)
     day      = reptdate.day
 
     if day == 8:
@@ -202,17 +190,33 @@ def get_report_vars() -> dict:
     }
 
 # =============================================================================
+# LOAD SAS7BDAT FILES
+# =============================================================================
+
+def load_sas7bdat_lowercase(path: str) -> pl.DataFrame:
+    """
+    Read SAS7BDAT file using pyreadstat and convert column names to lowercase
+    """
+    if not os.path.exists(path):
+        print(f"Warning: File not found: {path}")
+        return pl.DataFrame()
+    
+    try:
+        df, meta = pyreadstat.read_sas7bdat(path)
+        # Convert column names to lowercase
+        df.columns = [col.lower() for col in df.columns]
+        return pl.from_pandas(df)
+    except Exception as e:
+        print(f"Error reading {path}: {e}")
+        return pl.DataFrame()
+
+# =============================================================================
 # LOAD BNM LOAN
 # =============================================================================
 
 def load_bnm_loan(rv: dict) -> pl.DataFrame:
-    path = f"{BNM_LOAN_PREFIX}{rv['reptmon']}{rv['nowk']}.parquet"
-    if not os.path.exists(path):
-        return pl.DataFrame()
-    con = duckdb.connect()
-    df  = con.execute(f"SELECT * FROM read_parquet('{path}')").pl()
-    con.close()
-    return df
+    path = BNM_LOAN_PREFIX.replace('{REPTMON}', rv['reptmon']).replace('{NOWK}', rv['nowk'])
+    return load_sas7bdat_lowercase(path)
 
 # =============================================================================
 # BUILD HPSETTLE — settled HP accounts from LOAN.LNNOTE
@@ -230,19 +234,15 @@ def build_hpsettle(rv: dict) -> pl.DataFrame:
     HPD_SET covers both &HPD (HP_ALL from PBBLNFMT) and the extra
     codes (15,20,63,71,72) merged into a single set above.
     """
-    con  = duckdb.connect()
-    raw  = con.execute(
-        f"SELECT * FROM read_parquet('{LOAN_LNNOTE_PARQUET}')"
-    ).pl()
-    con.close()
+    df = load_sas7bdat_lowercase(LOAN_LNNOTE_SAS7BDAT)
 
-    if raw.is_empty():
+    if df.is_empty():
         return pl.DataFrame()
 
     keep = ['acctno','noteno','custcode','sector','loantype',
             'netproc','crispurp','lasttran','issuedt','paidind']
-    avail = [c for c in keep if c in raw.columns]
-    df    = raw.select(avail)
+    avail = [c for c in keep if c in df.columns]
+    df    = df.select(avail)
 
     rows     = df.to_dicts()
     out_rows = []
@@ -1157,9 +1157,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-all inputs are in sas7bdat sas dataset and need to be in all lowercase.
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in text files.
