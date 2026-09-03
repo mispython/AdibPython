@@ -174,12 +174,15 @@ REPTMON   = f"{REPTDATE.month:02d}"         # PUT(MM, Z2.)
 REPTYEAR2 = f"{REPTDATE.year % 100:02d}"    # PUT(REPTDATE, YEAR2.)
 REPTDAY   = f"{REPTDATE.day:02d}"           # PUT(DAY(REPTDATE), Z2.)
 
+# Calculate week number (NOWK) - ISO week number
+NOWK = f"{REPTDATE.isocalendar()[1]:02d}"   # PUT(WEEK(REPTDATE), Z2.)
+
 # Update file paths with date variables
 MNITB_CURRENT = Path(str(MNITB_CURRENT).format(reptmon=REPTMON))
 MNILN_LNNOTE = Path(str(MNILN_LNNOTE).format(reptmon=REPTMON))
 
-# BTRSA.MAST&REPTDAY&REPTMON dataset
-MAST_FILE = BASE_INPUT / f"btmast{REPTMON}{REPTDAY}{REPTYEAR2}.sas7bdat"
+# BTRSA.MAST&NOWK&REPTMON dataset (using week number instead of day)
+MAST_FILE = BASE_INPUT / f"btmast{REPTMON}{NOWK}{REPTYEAR2}.sas7bdat"
 
 # LCCRISEX files (binary flat files)
 COLL_FILE = BASE_INPUT / f"lccrisex_{REPTDATE.year}{REPTMON}{REPTDAY}"
@@ -215,7 +218,7 @@ crft = (
 # NODUPKEY BY acctno censust subacct
 crft = crft.unique(subset=["acctno", "censust", "subacct"], keep="first")
 
-# Merge with MAST (BTRSA.MAST&REPTDAY&REPTMON) by acctno; IF A AND B
+# Merge with MAST (BTRSA.MAST&NOWK&REPTMON) by acctno; IF A AND B
 if not MAST_FILE.exists():
     raise FileNotFoundError(f"Expected MAST file not found: {MAST_FILE}")
 
