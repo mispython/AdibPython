@@ -203,21 +203,20 @@ REPTDAY   = f"{REPTDATE.day:02d}"           # PUT(DAY(REPTDATE), Z2.)
 # Week 2: days 9-15
 # Week 3: days 16-22
 # Week 4: days 23-end of month
-NOWK = calculate_week_of_month(REPTDATE)
-NOWK_STR = f"{NOWK:02d}"
+NOWK = calculate_week_of_month(REPTDATE)  # Single digit: 1, 2, 3, or 4
 
 print(f"REPTDATE: {REPTDATE}")
 print(f"REPTMON: {REPTMON}")
 print(f"REPTYEAR2: {REPTYEAR2}")
 print(f"REPTDAY: {REPTDAY}")
-print(f"NOWK: {NOWK_STR}")
+print(f"NOWK: {NOWK}")
 
 # Update file paths with date variables
 MNITB_CURRENT = Path(str(MNITB_CURRENT).format(reptmon=REPTMON))
 MNILN_LNNOTE = Path(str(MNILN_LNNOTE).format(reptmon=REPTMON))
 
-# BTRSA.MAST&NOWK&REPTMON dataset (using week number)
-MAST_FILE = BASE_INPUT / f"btmast{REPTMON}{NOWK_STR}{REPTYEAR2}.sas7bdat"
+# BTRSA.MAST&NOWK&REPTMON dataset (using week number as single digit)
+MAST_FILE = BASE_INPUT / f"btmast{REPTMON}{NOWK}{REPTYEAR2}.sas7bdat"
 
 # LCCRISEX files
 COLL_FILE = BASE_INPUT / f"lccrisex_{REPTDATE.year}{REPTMON}{REPTDAY}"
