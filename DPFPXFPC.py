@@ -1,366 +1,99 @@
-from __future__ import annotations
+this is the original sas code
 
-from pathlib import Path
-from datetime import datetime, timedelta
-import polars as pl
-import pyreadstat
-import saspy
-import tempfile
-import os
-
-
-# =========================
-# Paths
-# =========================
-BASE_INPUT  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
-BASE_OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBRCGCS")
-BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
-
-# ---- Inputs (SAS7BDAT) mirroring SAS libs/members ----
-MNITB_CURRENT  = BASE_INPUT / "intg_dp_acct_current_m{reptmon}.sas7bdat"    # SAS: MNITB.CURRENT
-MNILN_LNNOTE   = BASE_INPUT / "enrh_ln_note_m{reptmon}.sas7bdat"     # SAS: MNILN.LNNOTE
-
-CRFTABL        = BASE_INPUT / "crftabl.txt"   # Text file: SAP.PBB.BTRADE.CRFTABL
-
-# ---- Output ----
-OUT_DIR  = BASE_OUTPUT / "excp"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-OUT_FILE = OUT_DIR / "npgsexcp.sas7bdat"
-
-
-# =========================
-# Helper(s)
-# =========================
-def read_sas7bdat(file_path: Path) -> pl.DataFrame:
-    """Read SAS7BDAT file and convert to Polars DataFrame with lowercase columns."""
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    
-    df, meta = pyreadstat.read_sas7bdat(str(file_path))
-    # Convert to Polars and lowercase all column names
-    pl_df = pl.from_pandas(df)
-    pl_df = pl_df.rename({col: col.lower() for col in pl_df.columns})
-    return pl_df
-
-
-def read_crftabl_fixed_width(file_path: Path) -> pl.DataFrame:
-    """Read CRFTABL fixed-width text file and parse into proper columns."""
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    
-    # Read the file as text lines
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
-    
-    # Parse the fixed-width file
-    # Based on the data shown, we need to determine the column positions
-    # The first line appears to be a header with date "1BKT20260831"
-    # Following lines start with "PBF" which might be RECTYP1
-    
-    # Let's inspect the first few lines to understand structure
-    print("First 5 lines of CRFTABL:")
-    for i, line in enumerate(lines[:5]):
-        print(f"Line {i}: {line.rstrip()}")
-    
-    # Based on typical SAS INPUT for such files, common fixed-width layouts:
-    # We need to know the actual column positions from the SAS code
-    # For now, let's try a common layout for CRFTABL
-    
-    # Skip the first line if it's a header
-    data_lines = []
-    for line in lines:
-        # Skip empty lines and the header line
-        if line.strip() and not line.startswith('1BKT'):
-            data_lines.append(line.rstrip('\n'))
-    
-    # Parse fixed-width data
-    # You'll need to adjust these positions based on your actual file format
-    # Common positions might be:
-    # RECTYP1: positions 1-1 or 1-3
-    # TFID: next 10 characters
-    # SUBACCT: next 10 characters
-    # PREIND: next 1 character
-    # CENSUST: next 3 characters
-    # ACCTNO: remaining characters
-    
-    # Based on the data showing "PBF" at the start, let's try:
-    # RECTYP1 = 3 chars (PBF)
-    # Then need to figure out the rest based on the total line length
-    
-    if len(data_lines) > 0:
-        line_length = len(data_lines[0])
-        print(f"Line length: {line_length}")
-        print(f"Sample line: {data_lines[0]}")
-        
-        # Create a list to store parsed data
-        parsed_data = []
-        
-        for line in data_lines:
-            # Adjust these positions based on your actual file format
-            # This is a guess - you'll need to verify with your actual SAS code
-            rectyp1 = line[0:3].strip() if len(line) >= 3 else ""
-            
-            # For now, let's parse based on common layout
-            # You'll need to adjust these based on your actual file format
-            remaining = line[3:] if len(line) > 3 else ""
-            
-            # Try to parse the remaining fields
-            # This is a placeholder - you need to provide the actual column positions
-            tfid = ""
-            subacct = ""
-            preind = ""
-            censust = 0
-            acctno = 0
-            
-            # TODO: Parse the remaining fields based on your fixed-width layout
-            # You need to know the exact positions from your SAS INPUT statement
-            
-            parsed_data.append({
-                'rectyp1': rectyp1,
-                'tfid': tfid,
-                'subacct': subacct,
-                'preind': preind,
-                'censust': censust,
-                'acctno': acctno
-            })
-        
-        # Convert to Polars DataFrame
-        df = pl.DataFrame(parsed_data)
-        return df
-    else:
-        # Return empty DataFrame with expected columns
-        return pl.DataFrame({
-            'rectyp1': pl.Series([], dtype=pl.Utf8),
-            'tfid': pl.Series([], dtype=pl.Utf8),
-            'subacct': pl.Series([], dtype=pl.Utf8),
-            'preind': pl.Series([], dtype=pl.Utf8),
-            'censust': pl.Series([], dtype=pl.Int64),
-            'acctno': pl.Series([], dtype=pl.Int64)
-        })
-
-
-def read_flat_file_to_temp_parquet(file_path: Path, temp_dir: str) -> Path:
-    """Read binary flat file and convert to temporary parquet for processing."""
-    # This is a placeholder - you'll need to specify the actual binary format
-    # Based on your description, these files might be in a specific binary format
-    # You might need to use numpy.fromfile or struct module to read them
-    
-    # Example using pandas/numpy to read binary data
-    import numpy as np
-    
-    # Create temporary parquet file
-    temp_parquet = Path(temp_dir) / f"{file_path.stem}_temp.parquet"
-    
-    # TODO: Implement actual binary file reading logic here
-    # This will depend on the specific binary format of your files
-    # You might need something like:
-    # data = np.fromfile(file_path, dtype=np.float64)  # or appropriate dtype
-    # Then reshape and create DataFrame
-    
-    # Placeholder - replace with actual implementation
-    print(f"Warning: Using placeholder for binary file reading: {file_path}")
-    temp_df = pl.DataFrame()  # Empty DataFrame as placeholder
-    
-    temp_df.write_parquet(temp_parquet)
-    return temp_parquet
-
-
-# =========================
-# 1) Calculate REPTDATE as yesterday
-# =========================
-REPTDATE = datetime.now() - timedelta(days=1)
-
-REPTMON   = f"{REPTDATE.month:02d}"         # PUT(MM, Z2.)
-REPTYEAR2 = f"{REPTDATE.year % 100:02d}"    # PUT(REPTDATE, YEAR2.)
-REPTDAY   = f"{REPTDATE.day:02d}"           # PUT(DAY(REPTDATE), Z2.)
-
-# Calculate week number (NOWK) - ISO week number
-NOWK = f"{REPTDATE.isocalendar()[1]:02d}"   # PUT(WEEK(REPTDATE), Z2.)
-
-# Update file paths with date variables
-MNITB_CURRENT = Path(str(MNITB_CURRENT).format(reptmon=REPTMON))
-MNILN_LNNOTE = Path(str(MNILN_LNNOTE).format(reptmon=REPTMON))
-
-# BTRSA.MAST&NOWK&REPTMON dataset (using week number instead of day)
-MAST_FILE = BASE_INPUT / f"btmast{REPTMON}{NOWK}{REPTYEAR2}.sas7bdat"
-
-# LCCRISEX files (binary flat files)
-COLL_FILE = BASE_INPUT / f"lccrisex_{REPTDATE.year}{REPTMON}{REPTDAY}"
-DESC_FILE = BASE_INPUT / f"lccrisex.desc_{REPTDATE.year}{REPTMON}{REPTDAY}"
-
-
-# =========================
-# 2) CRFT from CRFTABL.TXT (fixed-width text file), filter & map SCH, keep SCH=='   '
-# =========================
-crft = read_crftabl_fixed_width(CRFTABL)
-
-# SAS INPUT fields expected: rectyp1, tfid, subacct, preind, censust, acctno
-# After we have proper columns, we can proceed with the transformations
-crft = (
-    crft.filter(pl.col("rectyp1") != "1")  # IF RECTYP1='1' THEN DELETE
-    .select([
-        "tfid", "subacct", "preind", "censust", "acctno"
-    ])
-    .with_columns([
-        pl.lit("   ").alias("sch")
-    ])
-    .with_columns([
-        pl.when(pl.col("censust") == 3).then(pl.lit("P51"))
-         .when(pl.col("censust") == 4).then(pl.lit("P72"))
-         .when(pl.col("censust") == 5).then(pl.lit("P65"))
-         .otherwise(pl.col("sch"))
-         .alias("sch")
-    ])
-    # Keep only unmapped ('   ') as in SAS: "IF SCH EQ '   ';"
-    .filter(pl.col("sch") == "   ")
-)
-
-# NODUPKEY BY acctno censust subacct
-crft = crft.unique(subset=["acctno", "censust", "subacct"], keep="first")
-
-# Merge with MAST (BTRSA.MAST&NOWK&REPTMON) by acctno; IF A AND B
-if not MAST_FILE.exists():
-    raise FileNotFoundError(f"Expected MAST file not found: {MAST_FILE}")
-
-mast = read_sas7bdat(MAST_FILE)
-mast = mast.select(["acctno"]).unique(subset=["acctno"], keep="first")
-
-crft = crft.join(mast, on="acctno", how="inner")
-crft = crft.filter(pl.col("acctno") > 0).with_columns([
-    pl.lit(0).alias("noteno"),
-    pl.lit(0).alias("product"),
-])
-
-# NODUPKEY BY acctno subacct
-crft = crft.unique(subset=["acctno", "subacct"], keep="first")
-
-# KEEP acctno censust product noteno
-crft = crft.select(["acctno", "censust", "product", "noteno"])
-
-
-# =========================
-# 3) CA from MNITB.CURRENT (SAS7BDAT) (map→SCH; keep SCH=='   ')
-# =========================
-ca = read_sas7bdat(MNITB_CURRENT)
-
-ca = (
-    ca.select(["acctno", "censust", "product"])
-    .with_columns([
-        pl.lit(0).alias("noteno"),
-        pl.lit("   ").alias("sch")
-    ])
-    .with_columns([
-        pl.when((pl.col("product") == 112) & (pl.col("censust") == 301)).then(pl.lit("P70"))
-         .when((pl.col("product") == 112) & (pl.col("censust") == 300)).then(pl.lit("P51"))
-         .when((pl.col("product") == 112) & (pl.col("censust") == 302)).then(pl.lit("P72"))
-         .when((pl.col("product") == 114) & (pl.col("censust") == 303)).then(pl.lit("P72"))
-         .when((pl.col("product") == 108) & (pl.col("censust") == 304)).then(pl.lit("P75"))
-         .otherwise(pl.col("sch"))
-         .alias("sch")
-    ])
-    .filter(pl.col("sch") == "   ")  # keep only unmapped
-    .select(["acctno", "censust", "product", "noteno"])
-)
-
-
-# =========================
-# 4) LN from MNILN.LNNOTE (SAS7BDAT) (map→SCH; keep SCH=='   ')
-# =========================
-ln = read_sas7bdat(MNILN_LNNOTE)
-
-ln = (
-    ln.select(["acctno", "noteno", "loantype", "census"])
-    .with_columns([
-        pl.col("loantype").alias("product"),
-        pl.col("census").alias("censust"),
-        pl.lit("   ").alias("sch"),
-    ])
-    .with_columns([
-        pl.when((pl.col("loantype") == 510) & (pl.col("census").is_in([5.12, 5.13]))).then(pl.lit("P70"))
-         .when((pl.col("loantype") == 532) & (pl.col("census") == 3.00)).then(pl.lit("P51"))
-         .when((pl.col("loantype") == 524) & (pl.col("census") == 5.16)).then(pl.lit("P72"))
-         .when((pl.col("loantype") == 527) & (pl.col("census") == 5.17)).then(pl.lit("P72"))
-         .when((pl.col("loantype") == 531) & (pl.col("census") == 5.00)).then(pl.lit("P63"))
-         .when((pl.col("loantype") == 533) & (pl.col("census") == 533.01)).then(pl.lit("P64"))
-         .when((pl.col("loantype") == 533) & (pl.col("census") == 533.00)).then(pl.lit("P65"))
-         .otherwise(pl.col("sch"))
-         .alias("sch")
-    ])
-    .filter(pl.col("sch") == "   ")  # keep only unmapped
-    .select(["acctno", "noteno", "product", "censust"])
-)
-
-
-# =========================
-# 5) COLL/DESC merge (binary flat files), filter DESC census range, then BY acctno
-# =========================
-# Create temporary directory for binary file conversion
-with tempfile.TemporaryDirectory() as temp_dir:
-    # Convert binary flat files to temporary parquet
-    coll_temp = read_flat_file_to_temp_parquet(COLL_FILE, temp_dir)
-    desc_temp = read_flat_file_to_temp_parquet(DESC_FILE, temp_dir)
-    
-    # Read the temporary parquet files
-    coll = pl.read_parquet(coll_temp)
-    desc = pl.read_parquet(desc_temp)
-    
-    # Lowercase column names
-    coll = coll.rename({col: col.lower() for col in coll.columns})
-    desc = desc.rename({col: col.lower() for col in desc.columns})
-
-# Select and filter
-coll = coll.select(["ccollno", "acctno"])
-desc = desc.select(["ccollno", "cinstcl", "natguar", "census"])
-
-# Filter DESC census range: (51000000 <= census <= 1099999999)
-desc = desc.filter((pl.col("census") >= 51000000) & (pl.col("census") <= 1099999999))
-
-# IF A AND B -> inner join on ccollno
-coll = coll.join(desc, on="ccollno", how="inner")
-
-
-# =========================
-# 6) AAA = SET CA LN CRFT; sort BY acctno
-# =========================
-aaa = pl.concat(
-    [
-        ca.select(["acctno", "censust", "product", "noteno"]),
-        ln.select(["acctno", "censust", "product", "noteno"]),
-        crft.select(["acctno", "censust", "product", "noteno"]),
-    ],
-    how="vertical",
-    rechunk=True
-).sort(by=["acctno"])
-
-
-# =========================
-# 7) EXCP.NPGSEXCP = MERGE AAA(IN=A) COLL(IN=B) BY acctno; IF A AND B
-# =========================
-excp = aaa.join(coll, on="acctno", how="inner")
-
-# =========================
-# 8) Write output using SASpy
-# =========================
-# Initialize SAS session
-sas = saspy.SASsession(cfgname='default')  # You may need to configure this
-
-# Convert Polars DataFrame to pandas for SASpy
-excp_pandas = excp.to_pandas()
-
-# Upload the DataFrame to SAS
-sas_df = sas.df2sd(excp_pandas, 'work_excp')
-
-# Save as SAS7BDAT
-sas_code = f"""
-libname outlib "{OUT_DIR}";
-data outlib.npgsexcp;
-    set work_excp;
-run;
-"""
-
-sas.submit(sas_code)
-
-print(f"Wrote {OUT_FILE}")
-
-# Close SAS session
-sas.endsas()
+OPTIONS YEARCUTOFF=1940 SORTDEV=3390
+        NONUMBER NODATE NOCENTER;
+*;
+DATA REPTDATE;
+  SET MNILN.REPTDATE;
+  MM = MONTH(REPTDATE);
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+RUN;
+*;
+DATA CRFT;
+  INFILE CRFTABL;
+  INPUT  @001  RECTYP1 $1. @;
+  IF RECTYP1='1' THEN DELETE;    ELSE
+  INPUT  @004 TFID        $8.
+         @012 SUBACCT     $5.
+         @365 PREIND      $1.  /* IF > 0 THEN DELETE RECORD? */
+         @368 CENSUST      1.
+         @377 ACCTNO      10.;
+  SCH='   ';
+  IF  CENSUST=3  THEN SCH='P51'; ELSE
+  IF  CENSUST=4  THEN SCH='P72'; ELSE
+  IF  CENSUST=5  THEN SCH='P65';
+  IF  SCH EQ '   ';
+*;
+PROC SORT DATA=CRFT OUT=CRFT NODUPKEY; BY ACCTNO CENSUST SUBACCT;
+PROC SORT DATA=BTRSA.MAST&REPTDAY&REPTMON OUT=MAST NODUPKEY; BY ACCTNO;
+*;
+DATA CRFT;
+  MERGE CRFT(IN=A) MAST(IN=B); BY ACCTNO;
+  IF A AND B;
+  IF  ACCTNO > 0;
+  NOTENO=0;
+  PRODUCT=0;
+PROC SORT DATA=CRFT OUT=CRFT NODUPKEY; BY ACCTNO SUBACCT;
+*;
+DATA CRFT;
+  SET CRFT;
+  KEEP ACCTNO CENSUST PRODUCT NOTENO;
+*;
+*;
+DATA CA;
+   KEEP ACCTNO CENSUST PRODUCT NOTENO;
+   SET MNITB.CURRENT;
+   NOTENO=0;
+   SCH='   ';
+   IF  PRODUCT=112 AND CENSUST=301 THEN  SCH='P70'; ELSE
+   IF  PRODUCT=112 AND CENSUST=300 THEN  SCH='P51'; ELSE
+   IF  PRODUCT=112 AND CENSUST=302 THEN  SCH='P72'; ELSE
+   IF  PRODUCT=114 AND CENSUST=303 THEN  SCH='P72'; ELSE
+   IF  PRODUCT=108 AND CENSUST=304 THEN  SCH='P75';
+   IF  SCH EQ '   ';
+*;
+DATA LN;
+  KEEP ACCTNO NOTENO PRODUCT CENSUST;
+  SET MNILN.LNNOTE;
+  PRODUCT=LOANTYPE;
+  CENSUST=CENSUS;
+  SCH='   ';
+  IF LOANTYPE=510 AND CENSUS IN (5.12,5.13) THEN SCH='P70'; ELSE
+  IF LOANTYPE=532 AND CENSUS=3.00           THEN SCH='P51'; ELSE
+  IF LOANTYPE=524 AND CENSUS=5.16           THEN SCH='P72'; ELSE
+  IF LOANTYPE=527 AND CENSUS=5.17           THEN SCH='P72'; ELSE
+  IF LOANTYPE=531 AND CENSUS=5.00           THEN SCH='P63'; ELSE
+  IF LOANTYPE=533 AND CENSUS=533.01         THEN SCH='P64'; ELSE
+  IF LOANTYPE=533 AND CENSUS=533.00         THEN SCH='P65';
+  IF SCH EQ '   ';
+*;
+DATA COLL;
+   INFILE COLL;
+   INPUT @004  CCOLLNO  PD6.
+         @146  ACCTNO   PD6.;
+PROC SORT; BY CCOLLNO;
+*;
+DATA DESC;
+   INFILE DESC;
+   INPUT @001 CCOLLNO   11.
+         @051 CINSTCL   $2.
+         @055 NATGUAR   $2.
+         @211 CENSUS    10.;
+   IF (51000000<=CENSUS<=1099999999);
+PROC SORT; BY CCOLLNO;
+*;
+DATA COLL;
+  MERGE COLL(IN=A) DESC(IN=B); BY CCOLLNO;
+  IF A AND B;
+PROC SORT; BY ACCTNO;
+*;
+DATA AAA;
+  SET CA LN CRFT;
+PROC SORT; BY ACCTNO;
+*;
+DATA EXCP.NPGSEXCP;
+  MERGE AAA(IN=A) COLL(IN=B); BY ACCTNO;
+  IF A AND B;
+*;
