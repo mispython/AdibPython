@@ -28,6 +28,9 @@ OUT_DIR  = BASE_OUTPUT / "excp"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT_FILE = OUT_DIR / "npgsexcp.sas7bdat"
 
+# ---- Testing configuration ----
+MAX_ROWS = 50000  # Limit rows for testing
+
 
 # =========================
 # Helper(s)
@@ -52,12 +55,19 @@ def calculate_week_of_month(date_obj):
         return 4
 
 
-def read_sas7bdat(file_path: Path) -> pl.DataFrame:
+def read_sas7bdat(file_path: Path, max_rows: int = None) -> pl.DataFrame:
     """Read SAS7BDAT file and convert to Polars DataFrame with lowercase columns."""
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
     
-    df, meta = pyreadstat.read_sas7bdat(str(file_path))
+    # Read with row limit if specified
+    if max_rows:
+        df, meta = pyreadstat.read_sas7bdat(str(file_path), row_limit=max_rows)
+        print(f"Read {len(df)} rows from {file_path.name} (limited to {max_rows})")
+    else:
+        df, meta = pyreadstat.read_sas7bdat(str(file_path))
+        print(f"Read {len(df)} rows from {file_path.name}")
+    
     # Convert to Polars and lowercase all column names
     pl_df = pl.from_pandas(df)
     pl_df = pl_df.rename({col: col.lower() for col in pl_df.columns})
@@ -80,7 +90,7 @@ def read_sas7bdat(file_path: Path) -> pl.DataFrame:
     return pl_df
 
 
-def read_crftabl_fixed_width(file_path: Path) -> pl.DataFrame:
+def read_crftabl_fixed_width(file_path: Path, max_rows: int = None) -> pl.DataFrame:
     """Read CRFTABL fixed-width text file based on SAS INPUT positions."""
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -99,8 +109,13 @@ def read_crftabl_fixed_width(file_path: Path) -> pl.DataFrame:
     
     # Parse fixed-width data
     parsed_data = []
+    row_count = 0
     
     for line in lines:
+        # Check if we've reached the row limit
+        if max_rows and row_count >= max_rows:
+            break
+            
         # Skip empty lines
         if not line.strip():
             continue
@@ -137,10 +152,13 @@ def read_crftabl_fixed_width(file_path: Path) -> pl.DataFrame:
             'censust': censust,
             'acctno': acctno
         })
+        
+        row_count += 1
     
     # Convert to Polars DataFrame
     if parsed_data:
         df = pl.DataFrame(parsed_data)
+        print(f"Read {len(df)} rows from {file_path.name} (limited to {max_rows if max_rows else 'all'})")
     else:
         # Return empty DataFrame with expected columns
         df = pl.DataFrame({
@@ -151,11 +169,12 @@ def read_crftabl_fixed_width(file_path: Path) -> pl.DataFrame:
             'censust': pl.Series([], dtype=pl.Int64),
             'acctno': pl.Series([], dtype=pl.Int64)
         })
+        print(f"Read 0 rows from {file_path.name}")
     
     return df
 
 
-def read_coll_binary(file_path: Path, temp_dir: str) -> pl.DataFrame:
+def read_coll_binary(file_path: Path, temp_dir: str, max_rows: int = None) -> pl.DataFrame:
     """Read COLL binary file based on SAS INPUT positions."""
     import numpy as np
     
@@ -178,7 +197,7 @@ def read_coll_binary(file_path: Path, temp_dir: str) -> pl.DataFrame:
     })
 
 
-def read_desc_binary(file_path: Path, temp_dir: str) -> pl.DataFrame:
+def read_desc_binary(file_path: Path, temp_dir: str, max_rows: int = None) -> pl.DataFrame:
     """Read DESC binary file based on SAS INPUT positions."""
     import numpy as np
     
@@ -226,6 +245,7 @@ print(f"REPTMON: {REPTMON}")
 print(f"REPTYEAR2: {REPTYEAR2}")
 print(f"REPTDAY: {REPTDAY}")
 print(f"NOWK: {NOWK}")
+print(f"TESTING MODE: Reading max {MAX_ROWS} rows per file")
 
 # Update file paths with date variables
 MNITB_CURRENT = Path(str(MNITB_CURRENT).format(reptmon=REPTMON))
@@ -243,7 +263,7 @@ DESC_FILE = BASE_INPUT / f"lccrisex.desc_{REPTDATE.year}{REPTMON}{REPTDAY}"
 # 2) CRFT from CRFTABL.TXT (fixed-width text file)
 # =========================
 print("\nReading CRFTABL...")
-crft = read_crftabl_fixed_width(CRFTABL)
+crft = read_crftabl_fixed_width(CRFTABL, max_rows=MAX_ROWS)
 print(f"CRFT records after filter: {crft.height}")
 
 # Apply SCH mapping
@@ -270,10 +290,11 @@ crft = crft.unique(subset=["acctno", "censust", "subacct"], keep="first")
 if not MAST_FILE.exists():
     raise FileNotFoundError(f"Expected MAST file not found: {MAST_FILE}")
 
-print(f"Reading MAST file: {MAST_FILE}")
-mast = read_sas7bdat(MAST_FILE)
+print(f"\nReading MAST file: {MAST_FILE}")
+mast = read_sas7bdat(MAST_FILE, max_rows=MAX_ROWS)
 print(f"MAST columns: {mast.columns}")
-print(f"MAST acctno dtype: {mast['acctno'].dtype if 'acctno' in mast.columns else 'NOT FOUND'}")
+if 'acctno' in mast.columns:
+    print(f"MAST acctno dtype: {mast['acctno'].dtype}")
 print(f"CRFT acctno dtype: {crft['acctno'].dtype}")
 
 # Ensure both acctno columns are the same type (Int64)
@@ -290,9 +311,12 @@ crft = crft.with_columns([
 
 # Select only acctno and deduplicate
 mast = mast.select(["acctno"]).unique(subset=["acctno"], keep="first")
+print(f"MAST unique acctno records: {mast.height}")
 
 # Now perform the join
 crft = crft.join(mast, on="acctno", how="inner")
+print(f"CRFT records after MAST join: {crft.height}")
+
 crft = crft.filter(pl.col("acctno") > 0).with_columns([
     pl.lit(0).alias("noteno"),
     pl.lit(0).alias("product"),
@@ -310,7 +334,7 @@ print(f"CRFT final records: {crft.height}")
 # 3) CA from MNITB.CURRENT (SAS7BDAT)
 # =========================
 print(f"\nReading MNITB.CURRENT: {MNITB_CURRENT}")
-ca = read_sas7bdat(MNITB_CURRENT)
+ca = read_sas7bdat(MNITB_CURRENT, max_rows=MAX_ROWS)
 
 # Ensure acctno is Int64
 if 'acctno' in ca.columns:
@@ -343,7 +367,7 @@ print(f"CA records: {ca.height}")
 # 4) LN from MNILN.LNNOTE (SAS7BDAT)
 # =========================
 print(f"\nReading MNILN.LNNOTE: {MNILN_LNNOTE}")
-ln = read_sas7bdat(MNILN_LNNOTE)
+ln = read_sas7bdat(MNILN_LNNOTE, max_rows=MAX_ROWS)
 
 # Ensure acctno is Int64
 if 'acctno' in ln.columns:
@@ -381,9 +405,9 @@ print(f"LN records: {ln.height}")
 print("\nReading COLL and DESC files...")
 # Create temporary directory for file conversion
 with tempfile.TemporaryDirectory() as temp_dir:
-    # Read COLL and DESC files
-    coll = read_coll_binary(COLL_FILE, temp_dir)
-    desc = read_desc_binary(DESC_FILE, temp_dir)
+    # Read COLL and DESC files (with row limit)
+    coll = read_coll_binary(COLL_FILE, temp_dir, max_rows=MAX_ROWS)
+    desc = read_desc_binary(DESC_FILE, temp_dir, max_rows=MAX_ROWS)
 
 # Ensure acctno is Int64 in coll
 if 'acctno' in coll.columns:
