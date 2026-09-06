@@ -10,13 +10,12 @@ from PBBLNFMT import put, informat, apply_format, available_formats
 import duckdb  # noqa: F401
 import pyarrow as pa  # noqa: F401
 import pyarrow.parquet as pq  # noqa: F401
-import re
 
 
 # =========================
 # Paths (adjust to your env)
 # =========================
-BASE_OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBLSMEZ")
+BASE_OUTPUT = Path("sas_output")
 BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
 
 # ---- Input SAS datasets (all in sas7bdat format) ----
@@ -124,51 +123,80 @@ def read_sas7bdat(filepath: Path) -> pl.DataFrame:
     return pl.from_pandas(df)
 
 
-def read_fixed_width_file(filepath: Path, col_specs: list, encoding: str = 'cp037') -> pl.DataFrame:
+def read_ebcdic_fixed_records(filepath: Path, record_length: int, col_specs: list) -> pl.DataFrame:
     """
-    Read fixed-width file with specified column specifications
-    col_specs: list of tuples (column_name, start_position, end_position, column_type)
-    encoding: 'cp037' for EBCDIC, 'utf-8' or 'ascii' for text files
+    Read EBCDIC file with fixed-length records
+    For packed decimal (PD), we need to read the raw bytes and decode them properly
     """
-    # Read the file
-    with open(filepath, 'rb') as f:
-        raw_data = f.read()
-    
-    # Decode if EBCDIC
-    if encoding == 'cp037':
-        try:
-            decoded_data = raw_data.decode('cp037')
-        except:
-            # Try alternative EBCDIC codecs
-            try:
-                decoded_data = raw_data.decode('cp500')
-            except:
-                decoded_data = raw_data.decode('latin-1')
-    else:
-        decoded_data = raw_data.decode(encoding)
-    
     rows = []
-    lines = decoded_data.split('\n')
+    records_read = 0
     
-    for line in lines:
-        if line.strip():  # Skip empty lines
+    with open(filepath, 'rb') as f:
+        while True:
+            # Read one fixed-length record
+            record = f.read(record_length)
+            if not record or len(record) < record_length:
+                break
+                
             row = {}
             for col_name, start, end, col_type in col_specs:
-                # SAS uses 1-based positions
-                value = line[start-1:end].strip() if len(line) >= end else ""
+                # SAS uses 1-based positions, convert to 0-based
+                start_idx = start - 1
+                end_idx = end
                 
-                if col_type == 'numeric':
+                if col_type == 'pd':
+                    # Packed decimal - read raw bytes
+                    raw_bytes = record[start_idx:end_idx]
+                    
+                    # Decode packed decimal
                     try:
-                        row[col_name.lower()] = float(value) if value else None
+                        # Convert bytes to hex string
+                        hex_str = raw_bytes.hex()
+                        
+                        # Remove the sign nibble (last character)
+                        digits = hex_str[:-1]
+                        
+                        # Check sign nibble
+                        sign_nibble = hex_str[-1].upper()
+                        
+                        # Parse the digits
+                        if digits and all(c in '0123456789ABCDEF' for c in digits):
+                            value = int(digits, 16)
+                            # Apply sign
+                            if sign_nibble in ('D', 'B'):  # Negative in EBCDIC
+                                value = -value
+                            row[col_name.lower()] = float(value)
+                        else:
+                            row[col_name.lower()] = None
                     except:
                         row[col_name.lower()] = None
-                elif col_type == 'pd':
-                    # Packed decimal - needs special handling
-                    # For now, try to extract as string
-                    row[col_name.lower()] = value
-                else:
-                    row[col_name.lower()] = value
+                        
+                elif col_type == 'numeric':
+                    # Regular numeric field - decode as EBCDIC then convert to float
+                    try:
+                        raw_bytes = record[start_idx:end_idx]
+                        decoded = raw_bytes.decode('cp037').strip()
+                        # Remove any non-numeric characters
+                        decoded_clean = ''.join(c for c in decoded if c.isdigit() or c in '.-')
+                        row[col_name.lower()] = float(decoded_clean) if decoded_clean else None
+                    except:
+                        row[col_name.lower()] = None
+                        
+                else:  # character
+                    # Character field - decode as EBCDIC
+                    try:
+                        raw_bytes = record[start_idx:end_idx]
+                        decoded = raw_bytes.decode('cp037').strip()
+                        row[col_name.lower()] = decoded
+                    except:
+                        row[col_name.lower()] = ""
+            
             rows.append(row)
+            records_read += 1
+            
+            # Safety check
+            if records_read > 70000:  # Don't read more than expected
+                break
     
     return pl.DataFrame(rows)
 
@@ -215,7 +243,7 @@ def format_date_ddmmyyyy(d: date | None) -> str:
 # =========================
 # Calculate REPTDATE as today - 1 day (mimicking LOAN.REPTDATE)
 # =========================
-REPTDATE = date.today() - timedelta(days=6)
+REPTDATE = date.today() - timedelta(days=1)
 REPTMON  = f"{REPTDATE.month:02d}"
 REPTDAY  = f"{REPTDATE.day:02d}"
 REPTYEAR = f"{REPTDATE.year:04d}"
@@ -552,14 +580,6 @@ print(f"DESC file size: {desc_file_size} bytes")
 print(f"Expected DESC records: {expected_desc_records}")
 print(f"Calculated DESC record length: {DESC_RECORD_LENGTH}")
 
-# Verify the record length divides evenly
-if desc_file_size % DESC_RECORD_LENGTH == 0:
-    actual_records = desc_file_size // DESC_RECORD_LENGTH
-    print(f"Record length {DESC_RECORD_LENGTH} -> {actual_records} records")
-else:
-    print(f"Warning: Record length {DESC_RECORD_LENGTH} does not divide evenly")
-    print(f"Remainder: {desc_file_size % DESC_RECORD_LENGTH}")
-
 try:
     # Read COLL
     print("\nReading COLL file...")
@@ -570,6 +590,47 @@ try:
     print("Reading DESC file...")
     desc = read_ebcdic_fixed_records(DESC_FILE, DESC_RECORD_LENGTH, desc_specs)
     print(f"DESC rows: {desc.height}")
+    
+    # ==========================================
+    # DIAGNOSTIC CODE - ANALYZE DESC RECORD STRUCTURE
+    # ==========================================
+    print("\n=== DESC Record Analysis ===")
+    
+    # Read the first record and decode it as EBCDIC
+    with open(DESC_FILE, 'rb') as f:
+        first_record = f.read(DESC_RECORD_LENGTH)
+    
+    print(f"Record length: {len(first_record)}")
+    
+    # Decode the entire record as EBCDIC
+    decoded_record = first_record.decode('cp037', errors='ignore')
+    
+    # Look for '18' and '06' in the decoded record
+    positions_18 = []
+    positions_06 = []
+    for i in range(len(decoded_record) - 1):
+        if decoded_record[i:i+2] == '18':
+            positions_18.append(i+1)  # 1-based position
+        if decoded_record[i:i+2] == '06':
+            positions_06.append(i+1)  # 1-based position
+    
+    print(f"Positions with '18': {positions_18[:20]}")
+    print(f"Positions with '06': {positions_06[:20]}")
+    
+    # Check positions 51-52 and 55-56 specifically
+    print(f"\nPosition 51-52: '{decoded_record[50:52]}'")
+    print(f"Position 55-56: '{decoded_record[54:56]}'")
+    
+    # Print first 300 characters of the record for visual inspection
+    print(f"\n=== First 300 characters of first DESC record ===")
+    for i in range(0, 300, 50):
+        chunk = decoded_record[i:i+50]
+        print(f"Pos {i+1:3d}-{i+50:3d}: [{chunk}]")
+    
+    print("\n=== End Diagnostic ===")
+    # ==========================================
+    # END DIAGNOSTIC CODE
+    # ==========================================
     
     # Print sample data
     print("\n=== COLL Data Sample (first 3 rows) ===")
@@ -623,7 +684,6 @@ except Exception as e:
     coll = pl.DataFrame(schema={"ccollno": pl.Float64, "acctno": pl.Float64, "noteno": pl.Float64, 
                                 "cinstcl": pl.Utf8, "natguar": pl.Utf8, "census": pl.Float64, "tranche": pl.Utf8})
 
-# Continue with the rest of the processing...
 print(f"\nFinal COLL rows: {coll.height}")
 
 # =========================
@@ -654,9 +714,34 @@ micr_specs = [
     ("micrcd", 40, 44, "character") # @040 MICRCD $5.
 ]
 
+def read_fixed_width_text(filepath: Path, col_specs: list, encoding: str = 'ascii') -> pl.DataFrame:
+    """Read fixed-width text file"""
+    rows = []
+    
+    with open(filepath, 'r', encoding=encoding) as f:
+        for line in f:
+            if line.strip():  # Skip empty lines
+                row = {}
+                for col_name, start, end, col_type in col_specs:
+                    if len(line) >= end:
+                        value = line[start-1:end].strip()
+                        if col_type == 'numeric':
+                            try:
+                                row[col_name.lower()] = float(value) if value else None
+                            except:
+                                row[col_name.lower()] = None
+                        else:
+                            row[col_name.lower()] = value
+                    else:
+                        row[col_name.lower()] = None if col_type == 'numeric' else ""
+                rows.append(row)
+    
+    return pl.DataFrame(rows)
+
 try:
-    micr = read_fixed_width_file(MICR_FILE, micr_specs, encoding='ascii')
+    micr = read_fixed_width_text(MICR_FILE, micr_specs, encoding='ascii')
     micr = micr.sort(by="pendbrh")
+    print(f"  MICR rows: {micr.height}")
 except Exception as e:
     print(f"Warning: Error reading MICR file: {e}")
     # Fallback: create empty DataFrame
@@ -855,7 +940,7 @@ sas = saspy.SASsession(results='TEXT')
 
 # Create the output library
 sas.submit(f"""
-    libname npgs "{BASE_OUTPUT}";
+    libname npgs "{BASE_OUTPUT}/NPGS";
     options nofmterr;
 """)
 
@@ -903,89 +988,7 @@ sas.submit(f"""
     run;
 """)
 
-print(f"Successfully wrote NPGS.LNSMEZ{REPTMON} to {BASE_OUTPUT}")
+print(f"Successfully wrote NPGS.LNSMEZ{REPTMON} to {BASE_OUTPUT}/NPGS")
 
 # Close SAS session
 sas.endsas()
-
-
-OUTPUT:
-
-Report Date: 2026-08-31
-Normalization Date: 31/08/2026
-Reading LOAN/LNNOTE datasets in chunks...
-Reading Islamic LNNOTE (ENTITY_CD = 'PIBB')...
-  Islamic LNNOTE rows: 6
-Reading Conventional LNNOTE (ENTITY_CD != 'PIBB')...
-  Conventional LNNOTE rows: 99994
-Combining LNNOTE datasets...
-  LOAN0 rows: 6
-  LOAN1 rows: 0
-Reading COMM datasets in chunks...
-Reading Islamic LNCOMM (ENTITY_CD = 'PIBB')...
-  Islamic LNCOMM rows: 1066036
-Reading Conventional LNCOMM (ENTITY_CD != 'PIBB')...
-  Conventional LNCOMM rows: 1066036
-Warning: INTAMT column not found. Using CORGAMT as NETPROC.
-Total LOAN rows after merge: 6
-Calculating ISSUED, NODAYS, ARREARS, NPLDATE...
-Applying NDAYS format...
-LOAN rows after deduplication: 6
-Processing CISLN in chunks...
-  CISLN rows after filter: 63752
-Processing COLL and DESC files...
-DESC file size: 4962984400 bytes
-Expected DESC records: 58604
-Calculated DESC record length: 84686
-Warning: Record length 84686 does not divide evenly
-Remainder: 46056
-
-Reading COLL file...
-COLL rows: 70001
-Reading DESC file...
-DESC rows: 58604
-
-=== COLL Data Sample (first 3 rows) ===
-shape: (3, 3)
-┌─────────┬───────────┬───────────┐
-│ ccollno ┆ acctno    ┆ noteno    │
-│ ---     ┆ ---       ┆ ---       │
-│ f64     ┆ f64       ┆ f64       │
-╞═════════╪═══════════╪═══════════╡
-│ 307.0   ┆ 2.0818e11 ┆ 2.0818e11 │
-│ null    ┆ null      ┆ null      │
-│ 0.0     ┆ null      ┆ null      │
-└─────────┴───────────┴───────────┘
-
-=== DESC Data Sample (first 3 rows) ===
-shape: (3, 5)
-┌─────────┬─────────┬─────────┬────────┬─────────┐
-│ ccollno ┆ cinstcl ┆ natguar ┆ census ┆ tranche │
-│ ---     ┆ ---     ┆ ---     ┆ ---    ┆ ---     │
-│ f64     ┆ str     ┆ str     ┆ f64    ┆ str     │
-╞═════════╪═════════╪═════════╪════════╪═════════╡
-│ 133.0   ┆ 29      ┆         ┆ null   ┆         │
-│ null    ┆         ┆         ┆ null   ┆         │
-│ null    ┆         ┆         ┆ null   ┆         │
-└─────────┴─────────┴─────────┴────────┴─────────┘
-
-Unique CINSTCL values (first 20): [',2', 'JO', 'DI', '08', 'W/', '9P', ',5', 'S.', 'BU', 'SO', '8K', 'MS', '1Y', 'W1', 'J2', 'AU', '/\x00', 'IB', 'L2', '9K']
-Unique NATGUAR values (first 20): ['31', 'KG', '42', 'OJ', 'W', 'NO', '(S', 'R', '\x90&', '40', 'MM', '\x9cg', '2-', '4/', 'N.', 'S', 'FU', 'KB', '\x00\x9c', '04']
-Rows with CINSTCL='18': 17
-Rows with NATGUAR='06': 16
-
-COLL rows after join: 8332090
-COLL rows after filter: 0
-
-Final COLL rows: 0
-NPGS rows after COLL merge: 0
-Processing MICR file...
-Creating CVAR fields...
-Writing NPGS.LNSMEZ08...
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 135179
-
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
-  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-Successfully wrote NPGS.LNSMEZ08 to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBLSMEZ
-SAS Connection terminated. Subprocess id was 135179
