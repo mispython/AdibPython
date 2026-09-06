@@ -40,6 +40,9 @@ class Config:
     DESC_CENSUS_MIN = 51000000
     DESC_CENSUS_MAX = 1099999999
     
+    # Filters
+    EXCLUDE_ENTITY_CD = 'PIBB'  # Exclude Islamic banking data
+    
     # SAS
     SAS_CONFIG = 'default'
     SAS_OUTPUT_LIB = 'outlib'
@@ -180,10 +183,19 @@ def read_sas7bdat(file_path: Path) -> pl.DataFrame:
         raise
 
 
-def read_sas7bdat_filtered(file_path: Path, acctno_filter: Set[int]) -> pl.DataFrame:
-    """Read SAS7BDAT file in chunks and filter for specific account numbers."""
+def read_sas7bdat_filtered(file_path: Path, acctno_filter: Set[int], exclude_entity_cd: Optional[str] = None) -> pl.DataFrame:
+    """
+    Read SAS7BDAT file in chunks and filter for specific account numbers.
+    
+    Args:
+        file_path: Path to SAS7BDAT file
+        acctno_filter: Set of account numbers to filter for
+        exclude_entity_cd: Entity code to exclude (e.g., 'PIBB' for Islamic banking)
+    """
     try:
         logger.info(f"Reading {file_path.name} with filter ({len(acctno_filter)} accounts)...")
+        if exclude_entity_cd:
+            logger.info(f"Excluding ENTITY_CD = '{exclude_entity_cd}'")
         start_time = time.time()
         
         # Get metadata
@@ -194,6 +206,8 @@ def read_sas7bdat_filtered(file_path: Path, acctno_filter: Set[int]) -> pl.DataF
         chunks = []
         offset = 0
         chunk_size = Config.CHUNK_SIZE
+        total_matched = 0
+        total_excluded = 0
         
         while offset < total_rows:
             df_chunk, _ = pyreadstat.read_sas7bdat(
@@ -205,6 +219,13 @@ def read_sas7bdat_filtered(file_path: Path, acctno_filter: Set[int]) -> pl.DataF
             pl_chunk = pl.from_pandas(df_chunk)
             pl_chunk = pl_chunk.rename({col: col.lower() for col in pl_chunk.columns})
             
+            # Apply entity filter first if column exists
+            if exclude_entity_cd and 'entity_cd' in pl_chunk.columns:
+                before_count = pl_chunk.height
+                pl_chunk = pl_chunk.filter(pl.col('entity_cd') != exclude_entity_cd)
+                total_excluded += (before_count - pl_chunk.height)
+            
+            # Then filter for target accounts
             if 'acctno' in pl_chunk.columns:
                 pl_chunk = pl_chunk.with_columns([
                     pl.col('acctno').cast(pl.Int64, strict=False).alias('acctno')
@@ -212,6 +233,7 @@ def read_sas7bdat_filtered(file_path: Path, acctno_filter: Set[int]) -> pl.DataF
                 pl_chunk = pl_chunk.filter(pl.col('acctno').is_in(acctno_filter))
                 
                 if pl_chunk.height > 0:
+                    total_matched += pl_chunk.height
                     chunks.append(pl_chunk)
             
             offset += chunk_size
@@ -226,6 +248,8 @@ def read_sas7bdat_filtered(file_path: Path, acctno_filter: Set[int]) -> pl.DataF
         
         elapsed = time.time() - start_time
         logger.info(f"Read {result.height} matching rows from {file_path.name} in {elapsed:.2f}s")
+        if exclude_entity_cd:
+            logger.info(f"Excluded {total_excluded} rows with ENTITY_CD = '{exclude_entity_cd}'")
         
         return result
     
@@ -423,6 +447,7 @@ def main():
         logger.info(f"REPTYEAR2: {reptyear2}")
         logger.info(f"REPTDAY: {reptday}")
         logger.info(f"NOWK: {nowk}")
+        logger.info(f"Excluding ENTITY_CD: '{Config.EXCLUDE_ENTITY_CD}'")
         
         # Build file paths
         mnitb_current = Config.BASE_INPUT / Config.MNITB_CURRENT_PATTERN.format(reptmon=reptmon)
@@ -534,11 +559,20 @@ def main():
         
         logger.info(f"CA matching records: {ca.height}")
         
-        # Step 4: Process MNILN.LNNOTE
+        # Step 4: Process MNILN.LNNOTE with entity filter
         logger.info("Step 4: Processing MNILN.LNNOTE...")
-        ln = read_sas7bdat_filtered(mniln_lnnote, target_set)
+        logger.info(f"Filtering out ENTITY_CD = '{Config.EXCLUDE_ENTITY_CD}'")
+        ln = read_sas7bdat_filtered(
+            mniln_lnnote, 
+            target_set, 
+            exclude_entity_cd=Config.EXCLUDE_ENTITY_CD
+        )
         
         if ln.height > 0:
+            # Check if entity_cd column exists and verify filter
+            if 'entity_cd' in ln.columns:
+                logger.info(f"ENTITY_CD values in filtered data: {ln['entity_cd'].unique().to_list()}")
+            
             ln = ln.with_columns([
                 pl.col('loantype').alias('product'),
                 pl.col('census').alias('censust'),
