@@ -28,11 +28,10 @@ OUT_DIR  = BASE_OUTPUT / "excp"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT_FILE = OUT_DIR / "npgsexcp.sas7bdat"
 
-# ---- Testing configuration ----
-# Set to None to read all data, or set to a large number for partial testing
+# ---- Configuration ----
+# Read all rows from smaller files, but limit large files
 MAX_ROWS_SAS = None  # Read ALL rows from SAS files
 MAX_ROWS_TEXT = None  # Read ALL rows from text file
-# For quick testing with a subset, you can set these to a large number like 500000
 
 
 # EBCDIC to ASCII translation table
@@ -295,24 +294,9 @@ def read_desc_ebcdic_efficient(file_path: Path, max_rows: int = None) -> pl.Data
     print(f"File size: {file_size / (1024**3):.2f} GB")
     
     record_length = 220
-    
-    if file_size % record_length == 0:
-        total_records = file_size // record_length
-        print(f"Record length: {record_length}")
-        print(f"Total records: {total_records}")
-    else:
-        for length in [221, 224, 240, 250, 256, 300, 320, 400, 500, 512]:
-            if file_size % length == 0:
-                record_length = length
-                total_records = file_size // length
-                print(f"Using record length: {record_length}")
-                print(f"Total records: {total_records}")
-                break
-        else:
-            record_length = 220
-            total_records = file_size // record_length
-            print(f"Using default record length: {record_length}")
-            print(f"Total records (approx): {total_records}")
+    total_records = file_size // record_length
+    print(f"Record length: {record_length}")
+    print(f"Total records: {total_records}")
     
     chunk_size = 100000
     all_data = []
@@ -388,10 +372,7 @@ print(f"REPTMON: {REPTMON}")
 print(f"REPTYEAR2: {REPTYEAR2}")
 print(f"REPTDAY: {REPTDAY}")
 print(f"NOWK: {NOWK}")
-print(f"CONFIGURATION:")
-print(f"  - MAX_ROWS_SAS: {MAX_ROWS_SAS if MAX_ROWS_SAS else 'ALL'}")
-print(f"  - MAX_ROWS_TEXT: {MAX_ROWS_TEXT if MAX_ROWS_TEXT else 'ALL'}")
-print(f"  - COLL/DESC files: reading ALL rows")
+print(f"CONFIGURATION: Reading ALL rows")
 
 # Update file paths
 MNITB_CURRENT = Path(str(MNITB_CURRENT).format(reptmon=REPTMON))
@@ -402,12 +383,41 @@ DESC_FILE = BASE_INPUT / f"LCCRISEX_DESC_{REPTDATE.year}{REPTMON}{REPTDAY}"
 
 
 # =========================
-# 2) CRFT from CRFTABL.TXT
+# Step 1: First, get the account numbers from COLL/DESC (smaller result set)
 # =========================
 print("\n" + "="*60)
-print("Processing CRFTABL...")
+print("STEP 1: Reading COLL and DESC to get target accounts...")
 print("="*60)
-crft = read_crftabl_fixed_width(CRFTABL, max_rows=MAX_ROWS_TEXT)
+
+# Read COLL and DESC files
+coll = read_coll_binary_efficient(COLL_FILE, max_rows=None)
+desc = read_desc_ebcdic_efficient(DESC_FILE, max_rows=None)
+
+# Join COLL with DESC to get filtered accounts
+if coll.height > 0 and desc.height > 0:
+    coll_filtered = coll.join(desc, on="ccollno", how="inner")
+    print(f"COLL records after merge with DESC: {coll_filtered.height}")
+    
+    # Get unique account numbers from COLL
+    target_acctnos = coll_filtered.select(["acctno"]).unique(subset=["acctno"], keep="first")
+    print(f"Target account numbers from COLL: {target_acctnos.height}")
+else:
+    print("COLL or DESC is empty")
+    target_acctnos = pl.DataFrame({'acctno': pl.Series([], dtype=pl.Int64)})
+
+# Free up memory
+del coll, desc, coll_filtered
+import gc
+gc.collect()
+
+
+# =========================
+# Step 2: Process CRFTABL (text file, manageable size)
+# =========================
+print("\n" + "="*60)
+print("STEP 2: Processing CRFTABL...")
+print("="*60)
+crft = read_crftabl_fixed_width(CRFTABL, max_rows=None)
 print(f"CRFT records after filter: {crft.height}")
 
 crft = (
@@ -425,11 +435,12 @@ crft = (
 
 crft = crft.unique(subset=["acctno", "censust", "subacct"], keep="first")
 
+# Merge with MAST
 if not MAST_FILE.exists():
     raise FileNotFoundError(f"Expected MAST file not found: {MAST_FILE}")
 
 print(f"\nReading MAST file: {MAST_FILE}")
-mast = read_sas7bdat(MAST_FILE, max_rows=MAX_ROWS_SAS)
+mast = read_sas7bdat(MAST_FILE, max_rows=None)
 
 if 'acctno' in mast.columns:
     mast = mast.with_columns([pl.col('acctno').cast(pl.Int64).alias('acctno')])
@@ -448,16 +459,24 @@ crft = crft.filter(pl.col("acctno") > 0).with_columns([
 
 crft = crft.unique(subset=["acctno", "subacct"], keep="first")
 crft = crft.select(["acctno", "censust", "product", "noteno"])
-print(f"CRFT final records: {crft.height}")
+
+# Filter CRFT to only include target accounts from COLL
+if target_acctnos.height > 0:
+    crft = crft.join(target_acctnos, on="acctno", how="inner")
+    print(f"CRFT records matching COLL accounts: {crft.height}")
+
+# Free up memory
+del mast
+gc.collect()
 
 
 # =========================
-# 3) CA from MNITB.CURRENT
+# Step 3: Process MNITB.CURRENT
 # =========================
 print("\n" + "="*60)
-print("Processing MNITB.CURRENT...")
+print("STEP 3: Processing MNITB.CURRENT...")
 print("="*60)
-ca = read_sas7bdat(MNITB_CURRENT, max_rows=MAX_ROWS_SAS)
+ca = read_sas7bdat(MNITB_CURRENT, max_rows=None)
 
 ca = ca.select(["acctno", "censust", "product"]).with_columns([
     pl.col('acctno').cast(pl.Int64).alias('acctno'),
@@ -481,79 +500,130 @@ ca = (
     .filter(pl.col("sch") == "   ")
     .select(["acctno", "censust", "product", "noteno"])
 )
-print(f"CA records: {ca.height}")
+
+# Filter CA to only include target accounts from COLL
+if target_acctnos.height > 0:
+    ca = ca.join(target_acctnos, on="acctno", how="inner")
+    print(f"CA records matching COLL accounts: {ca.height}")
 
 
 # =========================
-# 4) LN from MNILN.LNNOTE
-# =========================
-print("\n" + "="*60)
-print("Processing MNILN.LNNOTE...")
-print("="*60)
-ln = read_sas7bdat(MNILN_LNNOTE, max_rows=MAX_ROWS_SAS)
-
-ln = ln.select(["acctno", "noteno", "loantype", "census"]).with_columns([
-    pl.col('acctno').cast(pl.Int64).alias('acctno'),
-    pl.col('noteno').cast(pl.Int64).alias('noteno'),
-    pl.col('loantype').cast(pl.Int64).alias('loantype'),
-    pl.col('census').cast(pl.Float64).alias('census'),
-    pl.lit("   ").alias("sch"),
-])
-
-ln = (
-    ln
-    .with_columns([
-        pl.when((pl.col("loantype") == 510) & (pl.col("census").is_in([5.12, 5.13]))).then(pl.lit("P70"))
-         .when((pl.col("loantype") == 532) & (pl.col("census") == 3.00)).then(pl.lit("P51"))
-         .when((pl.col("loantype") == 524) & (pl.col("census") == 5.16)).then(pl.lit("P72"))
-         .when((pl.col("loantype") == 527) & (pl.col("census") == 5.17)).then(pl.lit("P72"))
-         .when((pl.col("loantype") == 531) & (pl.col("census") == 5.00)).then(pl.lit("P63"))
-         .when((pl.col("loantype") == 533) & (pl.col("census") == 533.01)).then(pl.lit("P64"))
-         .when((pl.col("loantype") == 533) & (pl.col("census") == 533.00)).then(pl.lit("P65"))
-         .otherwise(pl.col("sch"))
-         .alias("sch")
-    ])
-    .filter(pl.col("sch") == "   ")
-    .select(["acctno", "noteno", "loantype", "census"])
-    .rename({"loantype": "product", "census": "censust"})
-    .with_columns([
-        pl.col('product').cast(pl.Int64),
-        pl.col('censust').cast(pl.Int64)
-    ])
-)
-print(f"LN records: {ln.height}")
-
-
-# =========================
-# 5) COLL/DESC merge
+# Step 4: Process MNILN.LNNOTE (large file - filter during read)
 # =========================
 print("\n" + "="*60)
-print("Processing COLL and DESC files...")
+print("STEP 4: Processing MNILN.LNNOTE...")
 print("="*60)
 
-# Read COLL and DESC files
-coll = read_coll_binary_efficient(COLL_FILE, max_rows=None)
-desc = read_desc_ebcdic_efficient(DESC_FILE, max_rows=None)
-
-# Join COLL with DESC
-if coll.height > 0 and desc.height > 0:
-    coll = coll.join(desc, on="ccollno", how="inner")
-    print(f"COLL records after merge with DESC: {coll.height}")
+# For large files, read in chunks and filter on the fly
+if target_acctnos.height > 0:
+    # Convert target acctnos to a set for fast lookup
+    target_set = set(target_acctnos['acctno'].to_list())
+    print(f"Target accounts to filter: {len(target_set)}")
     
-    coll_acctno = coll.select(["acctno"]).unique(subset=["acctno"], keep="first")
-    print(f"COLL unique acctno records: {coll_acctno.height}")
+    # Read LNNOTE in chunks using pyreadstat
+    chunk_size = 100000
+    all_ln_data = []
+    offset = 0
+    
+    print(f"Reading {MNILN_LNNOTE} in chunks...")
+    
+    # First, get total number of rows
+    df_meta, meta = pyreadstat.read_sas7bdat(str(MNILN_LNNOTE), row_limit=0, metadataonly=True)
+    total_rows = meta.number_rows
+    print(f"Total rows in LNNOTE: {total_rows}")
+    
+    while offset < total_rows:
+        df_chunk, meta = pyreadstat.read_sas7bdat(
+            str(MNILN_LNNOTE), 
+            row_offset=offset, 
+            row_limit=min(chunk_size, total_rows - offset)
+        )
+        
+        # Convert to Polars and filter
+        pl_chunk = pl.from_pandas(df_chunk)
+        pl_chunk = pl_chunk.rename({col: col.lower() for col in pl_chunk.columns})
+        
+        # Filter for target accounts and required columns
+        if 'acctno' in pl_chunk.columns:
+            pl_chunk = pl_chunk.with_columns([
+                pl.col('acctno').cast(pl.Int64).alias('acctno')
+            ])
+            
+            # Filter for target accounts
+            pl_chunk = pl_chunk.filter(pl.col('acctno').is_in(target_set))
+            
+            if pl_chunk.height > 0:
+                # Keep only needed columns
+                needed_cols = ['acctno', 'noteno', 'loantype', 'census']
+                available_cols = [c for c in needed_cols if c in pl_chunk.columns]
+                pl_chunk = pl_chunk.select(available_cols)
+                all_ln_data.append(pl_chunk)
+        
+        offset += chunk_size
+        
+        if offset % 1000000 == 0:
+            print(f"Processed {offset} rows from LNNOTE...")
+    
+    # Combine all chunks
+    if all_ln_data:
+        ln = pl.concat(all_ln_data, how="vertical")
+        print(f"LN records matching COLL accounts: {ln.height}")
+    else:
+        ln = pl.DataFrame({
+            'acctno': pl.Series([], dtype=pl.Int64),
+            'noteno': pl.Series([], dtype=pl.Int64),
+            'loantype': pl.Series([], dtype=pl.Int64),
+            'census': pl.Series([], dtype=pl.Float64)
+        })
+        print(f"LN records matching COLL accounts: 0")
 else:
-    print("COLL or DESC is empty")
-    coll_acctno = pl.DataFrame({'acctno': pl.Series([], dtype=pl.Int64)})
+    ln = pl.DataFrame({
+        'acctno': pl.Series([], dtype=pl.Int64),
+        'noteno': pl.Series([], dtype=pl.Int64),
+        'loantype': pl.Series([], dtype=pl.Int64),
+        'census': pl.Series([], dtype=pl.Float64)
+    })
+    print(f"LN records matching COLL accounts: 0")
+
+# Process LN data
+if ln.height > 0:
+    ln = ln.with_columns([
+        pl.col('loantype').alias('product'),
+        pl.col('census').alias('censust'),
+        pl.lit("   ").alias("sch"),
+    ])
+    
+    ln = (
+        ln
+        .with_columns([
+            pl.when((pl.col("loantype") == 510) & (pl.col("census").is_in([5.12, 5.13]))).then(pl.lit("P70"))
+             .when((pl.col("loantype") == 532) & (pl.col("census") == 3.00)).then(pl.lit("P51"))
+             .when((pl.col("loantype") == 524) & (pl.col("census") == 5.16)).then(pl.lit("P72"))
+             .when((pl.col("loantype") == 527) & (pl.col("census") == 5.17)).then(pl.lit("P72"))
+             .when((pl.col("loantype") == 531) & (pl.col("census") == 5.00)).then(pl.lit("P63"))
+             .when((pl.col("loantype") == 533) & (pl.col("census") == 533.01)).then(pl.lit("P64"))
+             .when((pl.col("loantype") == 533) & (pl.col("census") == 533.00)).then(pl.lit("P65"))
+             .otherwise(pl.col("sch"))
+             .alias("sch")
+        ])
+        .filter(pl.col("sch") == "   ")
+        .select(["acctno", "noteno", "product", "censust"])
+        .with_columns([
+            pl.col('product').cast(pl.Int64),
+            pl.col('censust').cast(pl.Int64)
+        ])
+    )
+    print(f"LN final records: {ln.height}")
 
 
 # =========================
-# 6) AAA = SET CA LN CRFT
+# Step 5: Combine all data
 # =========================
 print("\n" + "="*60)
-print("Combining CA, LN, CRFT...")
+print("STEP 5: Combining all data...")
 print("="*60)
 
+# Ensure consistent types
 ca_final = ca.select(["acctno", "censust", "product", "noteno"]).with_columns([
     pl.col('acctno').cast(pl.Int64),
     pl.col('censust').cast(pl.Int64),
@@ -561,12 +631,20 @@ ca_final = ca.select(["acctno", "censust", "product", "noteno"]).with_columns([
     pl.col('noteno').cast(pl.Int64)
 ])
 
-ln_final = ln.select(["acctno", "censust", "product", "noteno"]).with_columns([
-    pl.col('acctno').cast(pl.Int64),
-    pl.col('censust').cast(pl.Int64),
-    pl.col('product').cast(pl.Int64),
-    pl.col('noteno').cast(pl.Int64)
-])
+if ln.height > 0:
+    ln_final = ln.select(["acctno", "censust", "product", "noteno"]).with_columns([
+        pl.col('acctno').cast(pl.Int64),
+        pl.col('censust').cast(pl.Int64),
+        pl.col('product').cast(pl.Int64),
+        pl.col('noteno').cast(pl.Int64)
+    ])
+else:
+    ln_final = pl.DataFrame({
+        'acctno': pl.Series([], dtype=pl.Int64),
+        'censust': pl.Series([], dtype=pl.Int64),
+        'product': pl.Series([], dtype=pl.Int64),
+        'noteno': pl.Series([], dtype=pl.Int64)
+    })
 
 crft_final = crft.select(["acctno", "censust", "product", "noteno"]).with_columns([
     pl.col('acctno').cast(pl.Int64),
@@ -580,33 +658,19 @@ print(f"AAA total records: {aaa.height}")
 
 
 # =========================
-# 7) EXCP.NPGSEXCP = MERGE AAA with COLL
+# Step 6: Final output
 # =========================
 print("\n" + "="*60)
-print("Merging AAA with COLL...")
+print("STEP 6: Final output...")
 print("="*60)
 
-if coll_acctno.height > 0:
-    excp = aaa.join(coll_acctno, on="acctno", how="inner")
-    print(f"EXCP final records: {excp.height}")
-else:
-    print("COLL is empty, creating empty EXCP")
-    excp = pl.DataFrame({
-        'acctno': pl.Series([], dtype=pl.Int64),
-        'censust': pl.Series([], dtype=pl.Int64),
-        'product': pl.Series([], dtype=pl.Int64),
-        'noteno': pl.Series([], dtype=pl.Int64)
-    })
-    print(f"EXCP final records: {excp.height}")
+excp = aaa  # Since we already filtered for target accounts
 
+print(f"EXCP final records: {excp.height}")
 
-# =========================
-# 8) Write output using SASpy
-# =========================
+# Write output
 if excp.height > 0:
-    print("\n" + "="*60)
-    print("Writing output using SASpy...")
-    print("="*60)
+    print("\nWriting output using SASpy...")
     
     sas = saspy.SASsession(cfgname='default')
     excp_pandas = excp.to_pandas()
