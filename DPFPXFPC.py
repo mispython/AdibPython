@@ -1,78 +1,173 @@
-Report Date: 2026-08-31
-Normalization Date: 31/08/2026
-Reading LOAN/LNNOTE datasets in chunks...
-Reading Islamic LNNOTE (ENTITY_CD = 'PIBB')...
-  Islamic LNNOTE rows: 6
-Reading Conventional LNNOTE (ENTITY_CD != 'PIBB')...
-  Conventional LNNOTE rows: 99994
-Combining LNNOTE datasets...
-  LOAN0 rows: 6
-  LOAN1 rows: 0
-Reading COMM datasets in chunks...
-Reading Islamic LNCOMM (ENTITY_CD = 'PIBB')...
-  Islamic LNCOMM rows: 1066036
-Reading Conventional LNCOMM (ENTITY_CD != 'PIBB')...
-  Conventional LNCOMM rows: 1066036
-Warning: INTAMT column not found. Using CORGAMT as NETPROC.
-Total LOAN rows after merge: 6
-Calculating ISSUED, NODAYS, ARREARS, NPLDATE...
-Applying NDAYS format...
-LOAN rows after deduplication: 6
-Processing CISLN in chunks...
-  CISLN rows after filter: 63752
-Processing COLL and DESC files...
+# =========================
+# COLL file processing (EBCDIC with packed decimal)
+# =========================
+print("Processing COLL and DESC files...")
 
-=== COLL Data Sample (first 5 rows) ===
-shape: (5, 3)
-┌─────────┬────────┬────────┐
-│ ccollno ┆ acctno ┆ noteno │
-│ ---     ┆ ---    ┆ ---    │
-│ str     ┆ str    ┆ str    │
-╞═════════╪════════╪════════╡
-│   ┆        ┆        │
-│ X       ┆        ┆        │
-│     ┆        ┆        │
-│  %  ┆        ┆        │
-│    ┆  ┆  │
-└─────────┴────────┴────────┘
+# For EBCDIC files with packed decimal, we need special handling
+# The SAS code shows:
+# COLL: @004 CCOLLNO PD6. @146 ACCTNO PD6. @153 NOTENO PD6.
+# DESC: @001 CCOLLNO 11. @051 CINSTCL $2. @055 NATGUAR $2. @211 CENSUS 10. @291 TRANCHE $8.
 
-COLL columns: ['ccollno', 'acctno', 'noteno']
-COLL dtypes: [String, String, String]
+def read_ebcdic_packed_decimal(filepath: Path, col_specs: list) -> pl.DataFrame:
+    """
+    Read EBCDIC file with packed decimal fields
+    For packed decimal (PD), we need to read the raw bytes and decode them properly
+    """
+    import struct
+    
+    rows = []
+    
+    with open(filepath, 'rb') as f:
+        for line_bytes in f:
+            if len(line_bytes.strip()) == 0:
+                continue
+                
+            row = {}
+            for col_name, start, end, col_type in col_specs:
+                # SAS uses 1-based positions, convert to 0-based
+                start_idx = start - 1
+                end_idx = end
+                
+                if col_type == 'pd':
+                    # Packed decimal - read raw bytes
+                    # PD6 means 6 bytes of packed decimal
+                    raw_bytes = line_bytes[start_idx:end_idx]
+                    
+                    # Decode packed decimal
+                    # Each byte contains two nibbles (4 bits each)
+                    # The last nibble contains the sign
+                    try:
+                        # Convert bytes to hex string
+                        hex_str = raw_bytes.hex()
+                        
+                        # Remove the sign nibble (last character)
+                        digits = hex_str[:-1]
+                        
+                        # Check sign nibble
+                        sign_nibble = hex_str[-1].upper()
+                        
+                        # Parse the digits
+                        if digits:
+                            value = int(digits)
+                            # Apply sign
+                            if sign_nibble in ('D', 'B'):  # Negative in EBCDIC
+                                value = -value
+                            row[col_name.lower()] = float(value)
+                        else:
+                            row[col_name.lower()] = None
+                    except:
+                        row[col_name.lower()] = None
+                        
+                elif col_type == 'numeric':
+                    # Regular numeric field - decode as EBCDIC then convert to float
+                    try:
+                        raw_bytes = line_bytes[start_idx:end_idx]
+                        decoded = raw_bytes.decode('cp037').strip()
+                        row[col_name.lower()] = float(decoded) if decoded else None
+                    except:
+                        row[col_name.lower()] = None
+                        
+                else:  # character
+                    # Character field - decode as EBCDIC
+                    try:
+                        raw_bytes = line_bytes[start_idx:end_idx]
+                        decoded = raw_bytes.decode('cp037').strip()
+                        row[col_name.lower()] = decoded
+                    except:
+                        row[col_name.lower()] = ""
+            
+            rows.append(row)
+    
+    return pl.DataFrame(rows)
 
-=== DESC Data Sample (first 5 rows) ===
-shape: (5, 5)
-┌─────────┬─────────┬─────────┬────────┬─────────┐
-│ ccollno ┆ cinstcl ┆ natguar ┆ census ┆ tranche │
-│ ---     ┆ ---     ┆ ---     ┆ ---    ┆ ---     │
-│ f64     ┆ str     ┆ str     ┆ f64    ┆ str     │
-╞═════════╪═════════╪═════════╪════════╪═════════╡
-│ 133.0   ┆ 29      ┆         ┆ null   ┆         │
-│ null    ┆         ┆         ┆ null   ┆         │
-│ null    ┆ 15      ┆         ┆ null   ┆ 37634   │
-│ null    ┆         ┆         ┆ null   ┆         │
-│ null    ┆         ┆         ┆ 1.0    ┆         │
-└─────────┴─────────┴─────────┴────────┴─────────┘
 
-DESC columns: ['ccollno', 'cinstcl', 'natguar', 'census', 'tranche']
-DESC dtypes: [Float64, String, String, Float64, String]
+# Read COLL file with packed decimal parsing
+coll_specs = [
+    ("ccollno", 4, 9, "pd"),    # @004 CCOLLNO PD6.
+    ("acctno", 146, 151, "pd"),  # @146 ACCTNO PD6.
+    ("noteno", 153, 158, "pd")   # @153 NOTENO PD6.
+]
 
-Unique CINSTCL values: ['RH', '0C', 'JE', 'QB', 'LO', '58', 'TA', '81', '-,', '@K', 'T', 'NC', '6B', 'OM', 'RD', '93', 'PA', 'AH', 'GH', 'GL']
+# Read DESC file with correct column positions
+desc_specs = [
+    ("ccollno", 1, 11, "numeric"),    # @001 CCOLLNO 11.
+    ("cinstcl", 51, 52, "character"),  # @051 CINSTCL $2.
+    ("natguar", 55, 56, "character"),  # @055 NATGUAR $2.
+    ("census", 211, 220, "numeric"),   # @211 CENSUS 10.
+    ("tranche", 291, 298, "character") # @291 TRANCHE $8.
+]
 
-Unique NATGUAR values: ['NJ', 'SW', '@K', 'DU', 'PA', 'M)', 'OW', ',2', 'IB', 'MF', '2,', 'NY', '1D', 'HO', '4F', ':', '-0', '10', '90', 'J']
+try:
+    # Read COLL with packed decimal parsing
+    coll = read_ebcdic_packed_decimal(COLL_FILE, coll_specs)
+    print(f"  COLL rows: {coll.height}")
+    
+    # Read DESC with regular EBCDIC parsing
+    desc = read_ebcdic_packed_decimal(DESC_FILE, desc_specs)
+    print(f"  DESC rows: {desc.height}")
+    
+    # Print sample data for debugging
+    print("\n=== COLL Data Sample (first 5 rows) ===")
+    print(coll.head(5))
+    
+    print("\n=== DESC Data Sample (first 5 rows) ===")
+    print(desc.head(5))
+    
+    # Check unique values in DESC for CINSTCL and NATGUAR
+    if 'cinstcl' in desc.columns:
+        unique_cinstcl = desc['cinstcl'].unique().to_list()
+        print(f"\nUnique CINSTCL values: {unique_cinstcl[:20]}")
+    if 'natguar' in desc.columns:
+        unique_natguar = desc['natguar'].unique().to_list()
+        print(f"\nUnique NATGUAR values: {unique_natguar[:20]}")
+    
+    # Convert ccollno to consistent type (float64) for joining
+    coll = coll.with_columns(pl.col("ccollno").cast(pl.Float64).alias("ccollno"))
+    desc = desc.with_columns(pl.col("ccollno").cast(pl.Float64).alias("ccollno"))
+    
+    # Convert acctno and noteno to float64
+    coll = coll.with_columns([
+        pl.col("acctno").cast(pl.Float64).alias("acctno"),
+        pl.col("noteno").cast(pl.Float64).alias("noteno")
+    ])
+    
+except Exception as e:
+    print(f"Warning: Error reading EBCDIC files: {e}")
+    import traceback
+    traceback.print_exc()
+    print("Creating empty DataFrames as placeholder")
+    coll = pl.DataFrame(schema={"ccollno": pl.Float64, "acctno": pl.Float64, "noteno": pl.Float64})
+    desc = pl.DataFrame(schema={"ccollno": pl.Float64, "cinstcl": pl.Utf8, "natguar": pl.Utf8, 
+                                "census": pl.Float64, "tranche": pl.Utf8})
 
-  COLL rows: 1913966
-  DESC rows: 58604
-  COLL rows after join with DESC: 0
+print(f"\n  COLL rows: {coll.height}")
+print(f"  DESC rows: {desc.height}")
 
-  COLL rows after filter: 0
-NPGS rows after COLL merge: 0
-Processing MICR file...
-Creating CVAR fields...
-Writing NPGS.LNSMEZ08...
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 132862
+# PROC SORT; BY CCOLLNO; (for both COLL and DESC)
+coll = coll.sort(by="ccollno")
+desc = desc.sort(by="ccollno")
 
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
-  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-Successfully wrote NPGS.LNSMEZ08 to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBLSMEZ
-SAS Connection terminated. Subprocess id was 132862
+# DATA COLL; MERGE COLL(IN=A) DESC(IN=B); BY CCOLLNO; IF A AND B;
+coll = coll.join(desc, on="ccollno", how="inner")
+print(f"  COLL rows after join with DESC: {coll.height}")
+
+# Print sample after join
+if coll.height > 0:
+    print("\n=== COLL after join (first 5 rows) ===")
+    print(coll.head(5))
+    
+    # Check values for filtering
+    if 'cinstcl' in coll.columns:
+        unique_cinstcl = coll['cinstcl'].unique().to_list()
+        print(f"\nUnique CINSTCL values after join: {unique_cinstcl[:20]}")
+    if 'natguar' in coll.columns:
+        unique_natguar = coll['natguar'].unique().to_list()
+        print(f"Unique NATGUAR values after join: {unique_natguar[:20]}")
+
+# IF CINSTCL='18' AND NATGUAR='06';
+coll = coll.filter((pl.col("cinstcl") == "18") & (pl.col("natguar") == "06"))
+
+# PROC SORT; BY ACCTNO NOTENO;
+coll = coll.sort(by=["acctno", "noteno"])
+
+print(f"\n  COLL rows after filter: {coll.height}")
