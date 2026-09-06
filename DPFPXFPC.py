@@ -1,672 +1,396 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime
 import polars as pl
-import pyreadstat
-import saspy
-import os
-import gc
-import logging
-import sys
-from typing import Optional, Set
-import time
+import duckdb  # noqa: F401 (explicit import as requested)
+import pyarrow as pa  # noqa: F401
+import pyarrow.parquet as pq  # noqa: F401
 
 
 # =========================
-# Configuration
+# Paths (adjust to your env)
 # =========================
-class Config:
-    """Configuration settings for the ETL process."""
-    
-    # Paths
-    BASE_INPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
-    BASE_OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBRCGCS")
-    
-    # File names
-    MNITB_CURRENT_PATTERN = "intg_dp_acct_current_m{reptmon}.sas7bdat"
-    MNILN_LNNOTE_PATTERN = "enrh_ln_note_m{reptmon}.sas7bdat"
-    CRFTABL_NAME = "crftabl.txt"
-    MAST_PATTERN = "btmast{reptmon}{nowk}{reptyear2}.sas7bdat"
-    COLL_PATTERN = "LCCRISEX_{year}{month}{day}"
-    DESC_PATTERN = "LCCRISEX_DESC_{year}{month}{day}"
-    
-    # Record lengths
-    COLL_RECORD_LENGTHS = [151, 152, 160, 200, 256, 320, 400, 512, 1024]
-    DESC_RECORD_LENGTH = 220
-    
-    # Processing
-    CHUNK_SIZE = 100000
-    DESC_CENSUS_MIN = 51000000
-    DESC_CENSUS_MAX = 1099999999
-    
-    # Filters
-    EXCLUDE_ENTITY_CD = 'PIBB'  # Exclude Islamic banking data
-    
-    # SAS
-    SAS_CONFIG = 'default'
-    SAS_OUTPUT_LIB = 'outlib'
-    SAS_OUTPUT_DATASET = 'npgsexcp'
-    
-    # Logging
-    LOG_LEVEL = logging.INFO
-    LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+BASE_INPUT  = Path("parquet_input")
+BASE_OUTPUT = Path("parquet_output")
+BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
+
+# ---- Input parquet tables (mirror SAS libs/members) ----
+# LOAN / LOANI libraries
+        # SAS: LOAN.REPTDATE (SAP.PBB.MNILN)
+LOAN_LNNOTE   = BASE_INPUT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m08.sas7bdat"            # SAS: LOAN.LNNOTE
+LOAN_LNCOMM   = BASE_INPUT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m08.sas7bdat"            # SAS: LOAN.LNCOMM
+
+LOANI_LNNOTE  = BASE_INPUT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m08.sas7bdat"       # SAS: LOANI.LNNOTE (SAP.PIBB.MNILN)
+LOANI_LNCOMM  = BASE_INPUT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m08.sas7bdat"       # SAS: LOANI.LNCOMM
+
+# CISLN
+CISLN_LOAN    = BASE_INPUT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/loan.sas7bdat"         # SAS: CISLN.LOAN -> (ACCTNO, NEWIC, CUSTNAME, SECCUST, NAME?)
+
+# COLL / DESC (from fixed-width)
+COLL_PARQUET  = BASE_INPUT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_20260831"       # CCOLLNO, ACCTNO, NOTENO
+DESC_PARQUET  = BASE_INPUT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_20260831"  # CCOLLNO, CINSTCL, NATGUAR, CENSUS, TRANCHE
+
+# MICR (different source than earlier jobs)
+MICR_PARQUET  = BASE_INPUT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/BOPESS.txt"    # PENDBRH, MICRCD
+
+# Historical NPL status file referenced as NPGS.SMEZ
+NPGS_SMEZ     = BASE_INPUT / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/smez.sas7bdat"                      # expects CVAR06, CVAR01, STATUS, NDATE
+
+
 
 
 # =========================
-# Logging Setup
+# Helper functions
 # =========================
-def setup_logging():
-    """Configure logging for the ETL process."""
-    logging.basicConfig(
-        level=Config.LOG_LEVEL,
-        format=Config.LOG_FORMAT,
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler('eibrcgcs_etl.log')
-        ]
-    )
-    return logging.getLogger(__name__)
+def sas_days_to_date(days: int) -> date:
+    origin = date(1960, 1, 1)
+    return origin.fromordinal(origin.toordinal() + int(days))
 
 
-logger = setup_logging()
+def ddmmyy8_string(d: date) -> str:
+    # SAS DDMMYY8. => dd/mm/yy
+    return d.strftime("%d/%m/%y")
 
 
-# =========================
-# EBCDIC Translation
-# =========================
-EBCDIC_TO_ASCII = {
-    0xF0: '0', 0xF1: '1', 0xF2: '2', 0xF3: '3', 0xF4: '4',
-    0xF5: '5', 0xF6: '6', 0xF7: '7', 0xF8: '8', 0xF9: '9',
-    0xC1: 'A', 0xC2: 'B', 0xC3: 'C', 0xC4: 'D', 0xC5: 'E',
-    0xC6: 'F', 0xC7: 'G', 0xC8: 'H', 0xC9: 'I', 0xD1: 'J',
-    0xD2: 'K', 0xD3: 'L', 0xD4: 'M', 0xD5: 'N', 0xD6: 'O',
-    0xD7: 'P', 0xD8: 'Q', 0xD9: 'R', 0xE2: 'S', 0xE3: 'T',
-    0xE4: 'U', 0xE5: 'V', 0xE6: 'W', 0xE7: 'X', 0xE8: 'Y',
-    0xE9: 'Z', 0x40: ' ', 0x4B: '.', 0x6B: ',', 0x5A: '!',
-    0x7A: ':', 0x7B: '#', 0x7C: '@', 0x6D: '_', 0x4E: '+',
-    0x60: '-', 0x61: '/', 0x6C: '%', 0x5C: '*', 0x7D: "'",
-    0x7E: '=', 0x4A: '[', 0x5B: ']', 0x6A: '|', 0x7F: '"',
-}
-
-
-# =========================
-# Helper Functions
-# =========================
-def calculate_week_of_month(date_obj: datetime) -> int:
+def parse_mmddyy8_from_z11_prefix_to_date(x) -> date | None:
     """
-    Calculate week of month:
-    Week 1: days 1-8, Week 2: days 9-15, Week 3: days 16-22, Week 4: days 23-end
+    Emulate: INPUT(SUBSTR(PUT(x, Z11.), 1, 8), MMDDYY8.)
+    Returns python date or None if invalid/zero.
     """
-    day = date_obj.day
-    if day <= 8:
-        return 1
-    elif day <= 15:
-        return 2
-    elif day <= 22:
-        return 3
-    else:
-        return 4
-
-
-def ebcdic_to_ascii(byte_data: bytes) -> str:
-    """Convert EBCDIC bytes to ASCII string."""
-    result = []
-    for byte in byte_data:
-        result.append(EBCDIC_TO_ASCII.get(byte, ' '))
-    return ''.join(result).strip()
-
-
-def ebcdic_bytes_to_int(byte_data: bytes) -> int:
-    """Convert EBCDIC numeric bytes to integer."""
-    ascii_str = ebcdic_to_ascii(byte_data)
+    if x is None:
+        return None
     try:
-        return int(ascii_str) if ascii_str else 0
-    except ValueError:
-        return 0
-
-
-def unpack_packed_decimal(data: bytes, scale: int = 0) -> int:
-    """Unpack a packed decimal (COMP-3) field."""
-    if not data:
-        return 0
-    
-    hex_str = data.hex().upper()
-    nibbles = list(hex_str)
-    sign_nibble = nibbles[-1] if nibbles else 'F'
-    digit_nibbles = nibbles[:-1]
-    
-    if digit_nibbles:
+        xi = int(x)
+        if xi <= 0:
+            return None
+        s = f"{xi:011d}"[:8]  # first 8 chars
+        # Prefer MMDDYYYY. If that fails, try MMDDYY.
         try:
-            value = int(''.join(digit_nibbles))
-        except ValueError:
-            value = 0
+            return datetime.strptime(s, "%m%d%Y").date()
+        except Exception:
+            return datetime.strptime(s, "%m%d%y").date()
+    except Exception:
+        return None
+
+
+def month_end_of(d: date) -> date:
+    # SAS rule in this job (leap if mod 4 == 0)
+    if d.month in (1, 3, 5, 7, 8, 10, 12):
+        last = 31
+    elif d.month in (4, 6, 9, 11):
+        last = 30
     else:
-        value = 0
-    
-    if sign_nibble in ['D', 'B']:
-        value = -value
-    
-    if scale > 0:
-        value = value / (10 ** scale)
-    
-    return value
+        last = 29 if (d.year % 4 == 0) else 28
+    return date(d.year, d.month, last)
+
+
+def month_end_str(d: date | None) -> str:
+    if d is None:
+        return "          "  # 10 spaces
+    e = month_end_of(d)
+    return f"{e.day:02d}/{e.month:02d}/{e.year:04d}"
 
 
 # =========================
-# File Readers
+# Macro-like vars from LOAN.REPTDATE
 # =========================
-def read_sas7bdat(file_path: Path) -> pl.DataFrame:
-    """Read SAS7BDAT file with error handling."""
-    try:
-        logger.info(f"Reading {file_path.name}...")
-        start_time = time.time()
-        
-        df, meta = pyreadstat.read_sas7bdat(str(file_path))
-        
-        pl_df = pl.from_pandas(df)
-        pl_df = pl_df.rename({col: col.lower() for col in pl_df.columns})
-        
-        # Convert acctno to Int64
-        if 'acctno' in pl_df.columns:
-            pl_df = pl_df.with_columns([
-                pl.col('acctno').cast(pl.Int64, strict=False).alias('acctno')
-            ])
-        
-        elapsed = time.time() - start_time
-        logger.info(f"Read {pl_df.height} rows from {file_path.name} in {elapsed:.2f}s")
-        
-        return pl_df
-    
-    except Exception as e:
-        logger.error(f"Error reading {file_path}: {e}")
-        raise
+rept = pl.read_parquet(LOAN_REPTDATE)
+if rept.height != 1:
+    raise ValueError("MNILN.REPTDATE must have exactly one row.")
 
+val = rept.item(0, "REPTDATE")
+if isinstance(val, date):
+    REPTDATE = val
+elif isinstance(val, (int, float)):
+    REPTDATE = sas_days_to_date(int(val))
+else:
+    REPTDATE = date.fromisoformat(str(val))
 
-def read_sas7bdat_filtered(file_path: Path, acctno_filter: Set[int], exclude_entity_cd: Optional[str] = None) -> pl.DataFrame:
-    """
-    Read SAS7BDAT file in chunks and filter for specific account numbers.
-    
-    Args:
-        file_path: Path to SAS7BDAT file
-        acctno_filter: Set of account numbers to filter for
-        exclude_entity_cd: Entity code to exclude (e.g., 'PIBB' for Islamic banking)
-    """
-    try:
-        logger.info(f"Reading {file_path.name} with filter ({len(acctno_filter)} accounts)...")
-        if exclude_entity_cd:
-            logger.info(f"Excluding ENTITY_CD = '{exclude_entity_cd}'")
-        start_time = time.time()
-        
-        # Get metadata
-        _, meta = pyreadstat.read_sas7bdat(str(file_path), metadataonly=True)
-        total_rows = meta.number_rows
-        logger.info(f"Total rows in {file_path.name}: {total_rows}")
-        
-        chunks = []
-        offset = 0
-        chunk_size = Config.CHUNK_SIZE
-        total_matched = 0
-        total_excluded = 0
-        
-        while offset < total_rows:
-            df_chunk, _ = pyreadstat.read_sas7bdat(
-                str(file_path),
-                row_offset=offset,
-                row_limit=min(chunk_size, total_rows - offset)
-            )
-            
-            pl_chunk = pl.from_pandas(df_chunk)
-            pl_chunk = pl_chunk.rename({col: col.lower() for col in pl_chunk.columns})
-            
-            # Apply entity filter first if column exists
-            if exclude_entity_cd and 'entity_cd' in pl_chunk.columns:
-                before_count = pl_chunk.height
-                pl_chunk = pl_chunk.filter(pl.col('entity_cd') != exclude_entity_cd)
-                total_excluded += (before_count - pl_chunk.height)
-            
-            # Then filter for target accounts
-            if 'acctno' in pl_chunk.columns:
-                pl_chunk = pl_chunk.with_columns([
-                    pl.col('acctno').cast(pl.Int64, strict=False).alias('acctno')
-                ])
-                pl_chunk = pl_chunk.filter(pl.col('acctno').is_in(acctno_filter))
-                
-                if pl_chunk.height > 0:
-                    total_matched += pl_chunk.height
-                    chunks.append(pl_chunk)
-            
-            offset += chunk_size
-            
-            if offset % 1000000 == 0:
-                logger.info(f"Processed {offset}/{total_rows} rows...")
-        
-        if chunks:
-            result = pl.concat(chunks, how="vertical")
-        else:
-            result = pl.DataFrame()
-        
-        elapsed = time.time() - start_time
-        logger.info(f"Read {result.height} matching rows from {file_path.name} in {elapsed:.2f}s")
-        if exclude_entity_cd:
-            logger.info(f"Excluded {total_excluded} rows with ENTITY_CD = '{exclude_entity_cd}'")
-        
-        return result
-    
-    except Exception as e:
-        logger.error(f"Error reading {file_path}: {e}")
-        raise
-
-
-def read_crftabl(file_path: Path) -> pl.DataFrame:
-    """Read CRFTABL fixed-width text file."""
-    try:
-        logger.info(f"Reading {file_path.name}...")
-        start_time = time.time()
-        
-        with open(file_path, 'r') as f:
-            lines = f.readlines()
-        
-        parsed_data = []
-        for line in lines:
-            if not line.strip():
-                continue
-            if len(line) < 386:
-                line = line.rstrip('\n').ljust(386)
-            
-            rectyp1 = line[0:1].strip()
-            if rectyp1 == '1':
-                continue
-            
-            parsed_data.append({
-                'tfid': line[3:11].strip(),
-                'subacct': line[11:16].strip(),
-                'preind': line[364:365].strip(),
-                'censust': int(line[367:368].strip() or 0),
-                'acctno': int(line[376:386].strip() or 0)
-            })
-        
-        df = pl.DataFrame(parsed_data)
-        
-        elapsed = time.time() - start_time
-        logger.info(f"Read {df.height} rows from {file_path.name} in {elapsed:.2f}s")
-        
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error reading {file_path}: {e}")
-        raise
-
-
-def read_coll_binary(file_path: Path) -> pl.DataFrame:
-    """Read COLL binary file with packed decimal fields."""
-    try:
-        logger.info(f"Reading {file_path.name}...")
-        start_time = time.time()
-        
-        file_size = os.path.getsize(file_path)
-        logger.info(f"File size: {file_size / (1024**3):.2f} GB")
-        
-        # Detect record length
-        record_length = None
-        for length in Config.COLL_RECORD_LENGTHS:
-            if file_size % length == 0:
-                record_length = length
-                break
-        
-        if record_length is None:
-            record_length = 151
-            logger.warning(f"Using minimum record length: {record_length}")
-        
-        total_records = file_size // record_length
-        logger.info(f"Record length: {record_length}, Total records: {total_records}")
-        
-        all_data = []
-        
-        with open(file_path, 'rb') as f:
-            for chunk_start in range(0, total_records, Config.CHUNK_SIZE):
-                chunk_end = min(chunk_start + Config.CHUNK_SIZE, total_records)
-                records_to_read = chunk_end - chunk_start
-                bytes_to_read = records_to_read * record_length
-                chunk_data = f.read(bytes_to_read)
-                
-                for i in range(records_to_read):
-                    record_start = i * record_length
-                    record = chunk_data[record_start:record_start + record_length]
-                    
-                    if len(record) < 151:
-                        continue
-                    
-                    ccollno = unpack_packed_decimal(record[3:9])
-                    acctno = unpack_packed_decimal(record[145:151])
-                    
-                    if ccollno > 0 and acctno > 0:
-                        all_data.append({'ccollno': ccollno, 'acctno': acctno})
-                
-                if chunk_start % 1000000 == 0 and chunk_start > 0:
-                    logger.info(f"Processed {chunk_start} records...")
-        
-        df = pl.DataFrame(all_data) if all_data else pl.DataFrame({
-            'ccollno': pl.Series([], dtype=pl.Int64),
-            'acctno': pl.Series([], dtype=pl.Int64)
-        })
-        
-        elapsed = time.time() - start_time
-        logger.info(f"Read {df.height} valid records from COLL in {elapsed:.2f}s")
-        
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error reading {file_path}: {e}")
-        raise
-
-
-def read_desc_ebcdic(file_path: Path) -> pl.DataFrame:
-    """Read DESC file as EBCDIC fixed-width format."""
-    try:
-        logger.info(f"Reading {file_path.name}...")
-        start_time = time.time()
-        
-        file_size = os.path.getsize(file_path)
-        logger.info(f"File size: {file_size / (1024**3):.2f} GB")
-        
-        record_length = Config.DESC_RECORD_LENGTH
-        total_records = file_size // record_length
-        logger.info(f"Record length: {record_length}, Total records: {total_records}")
-        
-        all_data = []
-        processed = 0
-        
-        with open(file_path, 'rb') as f:
-            for chunk_start in range(0, total_records, Config.CHUNK_SIZE):
-                chunk_end = min(chunk_start + Config.CHUNK_SIZE, total_records)
-                records_to_read = chunk_end - chunk_start
-                bytes_to_read = records_to_read * record_length
-                chunk_data = f.read(bytes_to_read)
-                
-                for i in range(records_to_read):
-                    record_start = i * record_length
-                    record = chunk_data[record_start:record_start + record_length]
-                    
-                    if len(record) < 220:
-                        continue
-                    
-                    ccollno = ebcdic_bytes_to_int(record[0:11])
-                    census = ebcdic_bytes_to_int(record[210:220])
-                    
-                    if ccollno > 0 and Config.DESC_CENSUS_MIN <= census <= Config.DESC_CENSUS_MAX:
-                        all_data.append({
-                            'ccollno': ccollno,
-                            'cinstcl': ebcdic_to_ascii(record[50:52]),
-                            'natguar': ebcdic_to_ascii(record[54:56]),
-                            'census': census
-                        })
-                    
-                    processed += 1
-                
-                if processed % 1000000 == 0:
-                    logger.info(f"Processed {processed} records, found {len(all_data)} valid...")
-        
-        df = pl.DataFrame(all_data) if all_data else pl.DataFrame({
-            'ccollno': pl.Series([], dtype=pl.Int64),
-            'cinstcl': pl.Series([], dtype=pl.Utf8),
-            'natguar': pl.Series([], dtype=pl.Utf8),
-            'census': pl.Series([], dtype=pl.Int64)
-        })
-        
-        elapsed = time.time() - start_time
-        logger.info(f"Read {df.height} valid records from DESC in {elapsed:.2f}s")
-        
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error reading {file_path}: {e}")
-        raise
+REPTMON  = f"{REPTDATE.month:02d}"
+REPTDAY  = f"{REPTDATE.day:02d}"
+REPTYEAR = f"{REPTDATE.year:04d}"
+SDATE_INT = (REPTDATE - date(1960, 1, 1)).days
+SDATE     = f"{SDATE_INT:05d}"  # if you need the Z5 string elsewhere
 
 
 # =========================
-# Main ETL Process
+# Build LOAN0 / LOAN1 from LOANI.LNNOTE ∪ LOAN.LNNOTE
 # =========================
-def main():
-    """Main ETL process."""
-    start_time = time.time()
-    logger.info("=" * 60)
-    logger.info("Starting EIBRCGCS ETL Process")
-    logger.info("=" * 60)
-    
-    try:
-        # Calculate dates
-        reptdate = datetime.now() - timedelta(days=1)
-        reptmon = f"{reptdate.month:02d}"
-        reptyear2 = f"{reptdate.year % 100:02d}"
-        reptday = f"{reptdate.day:02d}"
-        nowk = calculate_week_of_month(reptdate)
-        
-        logger.info(f"REPTDATE: {reptdate}")
-        logger.info(f"REPTMON: {reptmon}")
-        logger.info(f"REPTYEAR2: {reptyear2}")
-        logger.info(f"REPTDAY: {reptday}")
-        logger.info(f"NOWK: {nowk}")
-        logger.info(f"Excluding ENTITY_CD: '{Config.EXCLUDE_ENTITY_CD}'")
-        
-        # Build file paths
-        mnitb_current = Config.BASE_INPUT / Config.MNITB_CURRENT_PATTERN.format(reptmon=reptmon)
-        mniln_lnnote = Config.BASE_INPUT / Config.MNILN_LNNOTE_PATTERN.format(reptmon=reptmon)
-        crftabl = Config.BASE_INPUT / Config.CRFTABL_NAME
-        mast_file = Config.BASE_INPUT / Config.MAST_PATTERN.format(
-            reptmon=reptmon, nowk=nowk, reptyear2=reptyear2
+loani_ln = pl.read_parquet(LOANI_LNNOTE)
+loan_ln  = pl.read_parquet(LOAN_LNNOTE)
+
+loan_base = (
+    pl.concat([loani_ln, loan_ln], how="vertical", rechunk=True)
+    .with_columns([
+        pl.col("LOANTYPE").alias("PRODUCT"),
+        pl.col("CENSUS").alias("CENSUST"),
+        # SCH init and mapping logic
+        pl.lit("    ").alias("SCH")
+    ])
+)
+
+# Apply SCH mapping rules
+loan_base = loan_base.with_columns([
+    pl.when(pl.col("LOANTYPE") == 163).then("P94")
+     .when((pl.col("LOANTYPE") == 512) & (pl.col("CENSUS") == 512.01)).then("P93")
+     .when((pl.col("LOANTYPE") == 574) & (pl.col("CENSUS") == 574.02)).then("P93")
+     .when((pl.col("LOANTYPE") == 512) & (pl.col("CENSUS") == 512.00)).then("P101")
+     .otherwise(pl.col("SCH"))
+     .alias("SCH")
+])
+
+# Keep only rows where SCH != '    '
+loan_base = loan_base.filter(pl.col("SCH") != "    ")
+
+# Split by COMMNO
+loan1 = loan_base.filter(pl.col("COMMNO") > 0)
+loan0 = loan_base.filter(~(pl.col("COMMNO") > 0))
+
+# =========================
+# COMM from both libs; compute NETPROC = CORGAMT - INTAMT
+# =========================
+loani_comm = pl.read_parquet(LOANI_LNCOMM)
+loan_comm  = pl.read_parquet(LOAN_LNCOMM)
+
+comm = (
+    pl.concat([loani_comm, loan_comm], how="vertical", rechunk=True)
+    .with_columns([
+        pl.when(pl.col("CORGAMT").is_null()).then(0.00).otherwise(pl.col("CORGAMT")).alias("CORGAMT"),
+        pl.when(pl.col("INTAMT").is_null()).then(0.00).otherwise(pl.col("INTAMT")).alias("INTAMT"),
+    ])
+    .with_columns([
+        (pl.col("CORGAMT") - pl.col("INTAMT")).alias("NETPROC")
+    ])
+    .select("ACCTNO", "COMMNO", "NETPROC")
+)
+
+# Merge LOAN1 with COMM on ACCTNO, COMMNO (inner)
+loan1 = loan1.join(comm, on=["ACCTNO", "COMMNO"], how="inner")
+
+# Union back
+loan = pl.concat([loan0, loan1], how="vertical", rechunk=True)
+
+# =========================
+# Derive ISSUED, NODAYS, ARREARS, NPLDATE
+# =========================
+# ISSUED: from ISSUEDT via Z11 prefix -> MMDDYY8.
+loan = loan.with_columns([
+    pl.when(pl.col("ISSUEDT").is_not_null() & (pl.col("ISSUEDT") > 0))
+      .then(pl.col("ISSUEDT").cast(pl.Int64)
+            .map_elements(parse_mmddyy8_from_z11_prefix_to_date, return_dtype=pl.Date))
+      .otherwise(pl.lit(None, dtype=pl.Date))
+      .alias("ISSUED")
+])
+
+# NODAYS: if BLDATE > 0 and SDATE > BLDATE then SDATE - BLDATE, else 0
+loan = loan.with_columns([
+    pl.when((pl.col("BLDATE") > 0) & (pl.lit(SDATE_INT) > pl.col("BLDATE")))
+      .then(pl.lit(SDATE_INT) - pl.col("BLDATE"))
+      .otherwise(0)
+      .alias("NODAYS")
+])
+
+# ARREARS via NDAYS. informat (non-equi mapping)
+cntl = pl.read_parquet(PBBLNFMT_CNTLOUT)
+ndays_map = (
+    cntl.filter(pl.col("FMTNAME").str.to_uppercase() == "NDAYS")
+        .select(
+            pl.col("START").cast(pl.Int64).alias("START"),
+            pl.col("END").cast(pl.Int64).alias("END"),
+            pl.col("LABEL").cast(pl.Int64).alias("LABEL")
         )
-        coll_file = Config.BASE_INPUT / Config.COLL_PATTERN.format(
-            year=reptdate.year, month=reptmon, day=reptday
-        )
-        desc_file = Config.BASE_INPUT / Config.DESC_PATTERN.format(
-            year=reptdate.year, month=reptmon, day=reptday
-        )
-        
-        # Validate files exist
-        for file_path, name in [
-            (mnitb_current, "MNITB.CURRENT"),
-            (mniln_lnnote, "MNILN.LNNOTE"),
-            (crftabl, "CRFTABL"),
-            (mast_file, "MAST"),
-            (coll_file, "COLL"),
-            (desc_file, "DESC")
-        ]:
-            if not file_path.exists():
-                raise FileNotFoundError(f"{name} file not found: {file_path}")
-        
-        # Step 1: Get target accounts from COLL/DESC
-        logger.info("Step 1: Getting target accounts from COLL/DESC...")
-        coll = read_coll_binary(coll_file)
-        desc = read_desc_ebcdic(desc_file)
-        
-        if coll.height > 0 and desc.height > 0:
-            coll_filtered = coll.join(desc, on="ccollno", how="inner")
-            target_acctnos = coll_filtered.select(["acctno"]).unique()
-            target_set = set(target_acctnos['acctno'].to_list())
-            logger.info(f"Target accounts: {len(target_set)}")
-        else:
-            target_set = set()
-            logger.warning("No target accounts found from COLL/DESC")
-        
-        del coll, desc
-        gc.collect()
-        
-        if not target_set:
-            logger.warning("No target accounts. Exiting.")
-            return
-        
-        # Step 2: Process CRFTABL
-        logger.info("Step 2: Processing CRFTABL...")
-        crft = read_crftabl(crftabl)
-        crft = crft.with_columns([
-            pl.when(pl.col("censust") == 3).then(pl.lit("P51"))
-             .when(pl.col("censust") == 4).then(pl.lit("P72"))
-             .when(pl.col("censust") == 5).then(pl.lit("P65"))
-             .otherwise(pl.lit("   "))
-             .alias("sch")
-        ])
-        crft = crft.filter(pl.col("sch") == "   ")
-        crft = crft.unique(subset=["acctno", "censust", "subacct"], keep="first")
-        
-        # Merge with MAST
-        mast = read_sas7bdat(mast_file)
-        mast = mast.select(["acctno"]).unique()
-        crft = crft.join(mast, on="acctno", how="inner")
-        crft = crft.filter(pl.col("acctno") > 0)
-        crft = crft.with_columns([
-            pl.lit(0).cast(pl.Int64).alias("noteno"),
-            pl.lit(0).cast(pl.Int64).alias("product"),
-        ])
-        crft = crft.unique(subset=["acctno", "subacct"], keep="first")
-        crft = crft.select(["acctno", "censust", "product", "noteno"])
-        crft = crft.filter(pl.col("acctno").is_in(target_set))
-        logger.info(f"CRFT matching records: {crft.height}")
-        
-        del mast
-        gc.collect()
-        
-        # Step 3: Process MNITB.CURRENT
-        logger.info("Step 3: Processing MNITB.CURRENT...")
-        ca = read_sas7bdat_filtered(mnitb_current, target_set)
-        
-        if ca.height > 0:
-            ca = ca.select(["acctno", "censust", "product"]).with_columns([
-                pl.col('acctno').cast(pl.Int64),
-                pl.col('censust').cast(pl.Int64),
-                pl.col('product').cast(pl.Int64),
-                pl.lit(0).cast(pl.Int64).alias("noteno"),
-                pl.lit("   ").alias("sch")
-            ])
-            ca = ca.with_columns([
-                pl.when((pl.col("product") == 112) & (pl.col("censust") == 301)).then(pl.lit("P70"))
-                 .when((pl.col("product") == 112) & (pl.col("censust") == 300)).then(pl.lit("P51"))
-                 .when((pl.col("product") == 112) & (pl.col("censust") == 302)).then(pl.lit("P72"))
-                 .when((pl.col("product") == 114) & (pl.col("censust") == 303)).then(pl.lit("P72"))
-                 .when((pl.col("product") == 108) & (pl.col("censust") == 304)).then(pl.lit("P75"))
-                 .otherwise(pl.col("sch"))
-                 .alias("sch")
-            ])
-            ca = ca.filter(pl.col("sch") == "   ")
-            ca = ca.select(["acctno", "censust", "product", "noteno"])
-        else:
-            ca = pl.DataFrame({
-                'acctno': pl.Series([], dtype=pl.Int64),
-                'censust': pl.Series([], dtype=pl.Int64),
-                'product': pl.Series([], dtype=pl.Int64),
-                'noteno': pl.Series([], dtype=pl.Int64)
-            })
-        
-        logger.info(f"CA matching records: {ca.height}")
-        
-        # Step 4: Process MNILN.LNNOTE with entity filter
-        logger.info("Step 4: Processing MNILN.LNNOTE...")
-        logger.info(f"Filtering out ENTITY_CD = '{Config.EXCLUDE_ENTITY_CD}'")
-        ln = read_sas7bdat_filtered(
-            mniln_lnnote, 
-            target_set, 
-            exclude_entity_cd=Config.EXCLUDE_ENTITY_CD
-        )
-        
-        if ln.height > 0:
-            # Check if entity_cd column exists and verify filter
-            if 'entity_cd' in ln.columns:
-                logger.info(f"ENTITY_CD values in filtered data: {ln['entity_cd'].unique().to_list()}")
-            
-            ln = ln.with_columns([
-                pl.col('loantype').alias('product'),
-                pl.col('census').alias('censust'),
-                pl.lit("   ").alias("sch"),
-            ])
-            ln = ln.with_columns([
-                pl.when((pl.col("loantype") == 510) & (pl.col("census").is_in([5.12, 5.13]))).then(pl.lit("P70"))
-                 .when((pl.col("loantype") == 532) & (pl.col("census") == 3.00)).then(pl.lit("P51"))
-                 .when((pl.col("loantype") == 524) & (pl.col("census") == 5.16)).then(pl.lit("P72"))
-                 .when((pl.col("loantype") == 527) & (pl.col("census") == 5.17)).then(pl.lit("P72"))
-                 .when((pl.col("loantype") == 531) & (pl.col("census") == 5.00)).then(pl.lit("P63"))
-                 .when((pl.col("loantype") == 533) & (pl.col("census") == 533.01)).then(pl.lit("P64"))
-                 .when((pl.col("loantype") == 533) & (pl.col("census") == 533.00)).then(pl.lit("P65"))
-                 .otherwise(pl.col("sch"))
-                 .alias("sch")
-            ])
-            ln = ln.filter(pl.col("sch") == "   ")
-            ln = ln.select(["acctno", "noteno", "product", "censust"])
-            ln = ln.with_columns([
-                pl.col('product').cast(pl.Int64),
-                pl.col('censust').cast(pl.Int64)
-            ])
-        else:
-            ln = pl.DataFrame({
-                'acctno': pl.Series([], dtype=pl.Int64),
-                'noteno': pl.Series([], dtype=pl.Int64),
-                'product': pl.Series([], dtype=pl.Int64),
-                'censust': pl.Series([], dtype=pl.Int64)
-            })
-        
-        logger.info(f"LN matching records: {ln.height}")
-        
-        # Step 5: Combine all data
-        logger.info("Step 5: Combining all data...")
-        
-        # Ensure consistent schemas
-        ca_final = ca.select(["acctno", "censust", "product", "noteno"]).with_columns([
-            pl.col('acctno').cast(pl.Int64),
-            pl.col('censust').cast(pl.Int64),
-            pl.col('product').cast(pl.Int64),
-            pl.col('noteno').cast(pl.Int64)
-        ])
-        
-        ln_final = ln.select(["acctno", "censust", "product", "noteno"]).with_columns([
-            pl.col('acctno').cast(pl.Int64),
-            pl.col('censust').cast(pl.Int64),
-            pl.col('product').cast(pl.Int64),
-            pl.col('noteno').cast(pl.Int64)
-        ])
-        
-        crft_final = crft.select(["acctno", "censust", "product", "noteno"]).with_columns([
-            pl.col('acctno').cast(pl.Int64),
-            pl.col('censust').cast(pl.Int64),
-            pl.col('product').cast(pl.Int64),
-            pl.col('noteno').cast(pl.Int64)
-        ])
-        
-        excp = pl.concat([ca_final, ln_final, crft_final], how="vertical").sort(by=["acctno"])
-        logger.info(f"Final EXCP records: {excp.height}")
-        
-        # Step 6: Write output
-        if excp.height > 0:
-            logger.info("Step 6: Writing output...")
-            
-            # Create output directory
-            out_dir = Config.BASE_OUTPUT / "excp"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Write using SASpy
-            sas = saspy.SASsession(cfgname=Config.SAS_CONFIG)
-            excp_pandas = excp.to_pandas()
-            sas.df2sd(excp_pandas, 'work_excp')
-            
-            sas_code = f"""
-            libname {Config.SAS_OUTPUT_LIB} "{out_dir}";
-            data {Config.SAS_OUTPUT_LIB}.{Config.SAS_OUTPUT_DATASET};
-                set work_excp;
-            run;
-            """
-            
-            sas.submit(sas_code)
-            sas.endsas()
-            
-            logger.info(f"Output written to {out_dir / (Config.SAS_OUTPUT_DATASET + '.sas7bdat')}")
-        else:
-            logger.warning("No records to write.")
-        
-        elapsed = time.time() - start_time
-        logger.info(f"ETL process completed in {elapsed:.2f}s")
-        
-    except Exception as e:
-        logger.error(f"ETL process failed: {e}", exc_info=True)
-        raise
+)
+
+def ndays_informat(nodays: int) -> int:
+    if nodays is None:
+        return 0
+    m = ndays_map.filter(
+        (pl.lit(nodays) >= pl.col("START")) & (pl.lit(nodays) <= pl.col("END"))
+    )
+    return int(m.item(0, "LABEL")) if m.height > 0 else 0
+
+loan = loan.with_columns([
+    pl.col("NODAYS").map_elements(lambda x: ndays_informat(int(x) if x is not None else 0), return_dtype=pl.Int64).alias("ARREARS")
+])
+
+# Special case ARREARS==24 -> ROUND((NODAYS/365)*12)
+loan = loan.with_columns([
+    pl.when(pl.col("ARREARS") == 24)
+      .then((pl.col("NODAYS").cast(pl.Float64) / 365.0 * 12.0).round(0).cast(pl.Int64))
+      .otherwise(pl.col("ARREARS"))
+      .alias("ARREARS")
+])
+
+# NPLDATE when NODAYS > 89 -> set to month-end of (BLDATE+90)
+loan = loan.with_columns([
+    pl.when(pl.col("NODAYS") > 89)
+      .then(pl.col("BLDATE").cast(pl.Int64)
+            .map_elements(lambda d: month_end_of(sas_days_to_date(int(d) + 90)) if d is not None else None,
+                          return_dtype=pl.Date))
+      .otherwise(pl.lit(None, dtype=pl.Date))
+      .alias("NPLDATE")
+])
+
+# Deduplicate LOAN by ACCTNO, NOTENO (NODUPKEY)
+loan = loan.unique(subset=["ACCTNO", "NOTENO"], keep="first")
+
+# =========================
+# Merge CISLN (SECCUST = '901')
+# =========================
+cisln = (
+    pl.read_parquet(CISLN_LOAN)
+      .filter(pl.col("SECCUST") == "901")
+      .select(["ACCTNO", "NEWIC", "CUSTNAME", *([c for c in ["NAME"] if c in pl.read_parquet(CISLN_LOAN).columns])])
+      .unique(subset=["ACCTNO"], keep="first")
+)
+loan = loan.join(cisln, on="ACCTNO", how="left")
+
+# =========================
+# COLL/DESC merge with filter (CINSTCL='18' AND NATGUAR='06')
+# =========================
+coll = pl.read_parquet(COLL_PARQUET).select(["CCOLLNO", "ACCTNO", "NOTENO"])
+desc = pl.read_parquet(DESC_PARQUET).select(["CCOLLNO", "CINSTCL", "NATGUAR", "CENSUS", "TRANCHE"])
+coll = coll.join(desc, on="CCOLLNO", how="inner")
+coll = coll.filter((pl.col("CINSTCL") == "18") & (pl.col("NATGUAR") == "06"))
+
+# BY ACCTNO NOTENO inner merge to NPGS
+npgs = loan.join(coll, on=["ACCTNO", "NOTENO"], how="inner")
+
+# =========================
+# MICR merge by PENDBRH (MICR file has PENDBRH,MICRCD)
+# =========================
+micr = pl.read_parquet(MICR_PARQUET).select(["PENDBRH", "MICRCD"])
+npgs = npgs.join(micr, on="PENDBRH", how="left")
+
+# =========================
+# CVAR02 mapping from SCH, then filter non-blank
+# =========================
+npgs = npgs.with_columns([
+    pl.lit("   ").alias("CVAR02")
+]).with_columns([
+    pl.when(pl.col("SCH") == "P93").then("93")
+     .when(pl.col("SCH") == "P94").then("94")
+     .when(pl.col("SCH") == "P101").then("101")
+     .otherwise(pl.col("CVAR02"))
+     .alias("CVAR02")
+])
+
+# Keep only rows with CVAR02 != '   '
+npgs = npgs.filter(pl.col("CVAR02") != "   ")
+
+# =========================
+# Final CVAR fields + NORMDT and NPL flags
+# =========================
+npgs = npgs.with_columns([
+    pl.col("CENSUS").alias("CVAR01"),
+    pl.col("NEWIC").alias("CVAR03"),
+    # CVAR04 fallback: if '  ' then NAME
+    pl.when(pl.col("CUSTNAME") == "  ").then(pl.col("NAME")).otherwise(pl.col("CUSTNAME")).alias("CVAR04"),
+    pl.col("ISSUED").alias("CVAR05"),
+    pl.col("ACCTNO").alias("CVAR06"),
+    pl.lit("FL").alias("CVAR07"),
+    pl.col("NETPROC").alias("CVAR08"),
+    pl.col("BALANCE").alias("CVAR09"),
+    pl.lit(0.00).alias("CVAR10"),
+    pl.col("ARREARS").alias("CVAR11"),
+    pl.lit("   ").alias("CVAR12"),
+    pl.col("NPLDATE").map_elements(lambda d: f"{d.day:02d}/{d.month:02d}/{d.year:04d}" if d is not None else "          ",
+                                   return_dtype=pl.Utf8).alias("CVAR13"),
+    pl.lit("0233").alias("CVAR14"),
+    pl.col("MICRCD").alias("CVAR15"),
+    pl.col("PENDBRH").alias("BRANCH"),
+    pl.lit("TL").alias("CVAR16"),
+    pl.col("CURBAL").alias("CVAR17"),
+])
+
+# NORMDT = REPTDAY/REPTMON/REPTYEAR
+NORMDT = f"{REPTDAY}/{REPTMON}/{REPTYEAR}"
+npgs = npgs.with_columns([pl.lit(NORMDT).alias("NORMDT")])
+
+# IF ARREARS GE 3 AND NPLDATE > 0 THEN CVAR12='NPL'
+npgs = npgs.with_columns([
+    pl.when((pl.col("ARREARS") >= 3) & pl.col("NPLDATE").is_not_null())
+      .then(pl.lit("NPL"))
+      .otherwise(pl.col("CVAR12"))
+      .alias("CVAR12")
+])
+
+# =========================
+# Merge with NPGS.SMEZ (NPLA) by CVAR06, CVAR01 for final CVAR13 adjustments
+# =========================
+# Sort like SAS prior to merge (not necessary for join correctness, but kept for parity)
+npgs = npgs.sort(by=["CVAR06", "CVAR01"])
+
+if NPGS_SMEZ.exists():
+    npla = pl.read_parquet(NPGS_SMEZ).sort(by=["CVAR06", "CVAR01"])
+    # Expect fields: CVAR06, CVAR01, STATUS, NDATE
+    npgs = npgs.join(npla.select(["CVAR06", "CVAR01", "STATUS", "NDATE"]), on=["CVAR06", "CVAR01"], how="left")
+else:
+    # If historical file not available, create empty columns to preserve logic
+    npgs = npgs.with_columns([
+        pl.lit(None).alias("STATUS"),
+        pl.lit("          ").alias("NDATE")
+    ])
+
+# Now apply SAS logic to adjust CVAR13 using STATUS/NDATE and NORMDT
+def adjust_cvar13(row):
+    c12   = row.get("CVAR12") or "   "
+    stat  = row.get("STATUS") or "   "
+    ndate = row.get("NDATE")  or "          "
+    c13   = row.get("CVAR13") or "          "
+    normdt= row.get("NORMDT") or "          "
+
+    if c12 == "NPL":
+        if stat == "NPL":
+            return ndate
+        return c13
+    else:
+        if stat == "NPL":
+            return normdt
+        if stat == "   " and ndate != "          ":
+            return ndate
+        return c13
+
+npgs = npgs.with_columns([
+    pl.struct(["CVAR12", "STATUS", "NDATE", "CVAR13", "NORMDT"]).map_elements(adjust_cvar13, return_dtype=pl.Utf8).alias("CVAR13")
+])
+
+# =========================
+# Final sort & KEEP list
+# =========================
+npgs = npgs.sort(by=["CVAR01"])
+
+# Ensure passthrough columns exist (if absent upstream, create as nulls)
+for c in ["COSTCTR", "BALANCE", "CURBAL", "ACCRUAL", "TRANCHE", "SCH"]:
+    if c not in npgs.columns:
+        npgs = npgs.with_columns(pl.lit(None).alias(c))
+
+keep_cols = [
+    "CVAR01","CVAR02","CVAR03","CVAR04","CVAR05","CVAR06","CVAR07",
+    "CVAR08","CVAR09","CVAR10","CVAR11","CVAR12","CVAR13","CVAR14",
+    "COSTCTR","BALANCE","CURBAL","ACCRUAL","TRANCHE",
+    "BRANCH","CVAR15","CENSUST","PRODUCT","NATGUAR","CINSTCL","SCH",
+    "CVAR16","CVAR17"
+]
+
+out = npgs.select(keep_cols)
+
+# =========================
+# Output: NPGS.LNSMEZ&REPTMON (Parquet)
+# =========================
+out_dir = BASE_OUTPUT / "NPGS"
+out_dir.mkdir(parents=True, exist_ok=True)
+out_file = out_dir / f"LNSMEZ{REPTMON}.parquet"
+out.write_parquet(out_file, use_pyarrow=True)
+print(f"Wrote {out_file}")
 
 
-if __name__ == "__main__":
-    main()
+remove the base input as every datasets from differnet path
+for loan, need to add filter "WHERE ENTITY_CD != 'PIBB'" (conventional)
+for iloan, need to add filter of "WHERE ENTITY_CD = 'PIBB'" (islamic)
+all inputs are in sas7bdat sas dataset and need to be in all lowercase.
+use pyreadstat to read.
+remove reptdate, use datetime timedelta - 1 instead. 
+output in sas7bdat. 
+write out using saspy
