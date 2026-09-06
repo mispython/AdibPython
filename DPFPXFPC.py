@@ -59,10 +59,12 @@ def date_to_sas_days(d: date) -> int:
 
 
 def read_sas7bdat_filtered(filepath: Path, entity_filter: str = None, 
-                           chunk_size: int = CHUNK_SIZE) -> pl.DataFrame:
+                           chunk_size: int = CHUNK_SIZE,
+                           column_filter: dict = None) -> pl.DataFrame:
     """
     Read SAS dataset with entity filtering done during chunk processing
     entity_filter: 'PIBB' for islamic, 'NON_PIBB' for conventional, None for all
+    column_filter: dict with column name as key and value to filter (e.g., {'seccust': '901'})
     """
     chunks = []
     offset = 0
@@ -87,6 +89,12 @@ def read_sas7bdat_filtered(filepath: Path, entity_filter: str = None,
                     df = df[df['entity_cd'] == 'PIBB']
                 elif entity_filter == 'NON_PIBB':
                     df = df[df['entity_cd'] != 'PIBB']
+            
+            # Apply column filter
+            if column_filter:
+                for col_name, col_value in column_filter.items():
+                    if col_name in df.columns:
+                        df = df[df[col_name] == col_value]
             
             if not df.empty:
                 chunks.append(pl.from_pandas(df))
@@ -397,15 +405,21 @@ print(f"LOAN rows after deduplication: {loan.height}")
 # =========================
 # DATA CISLN; KEEP ACCTNO NEWIC CUSTNAME; SET CISLN.LOAN; IF SECCUST='901';
 # =========================
-print("Processing CISLN...")
-cisln_raw = read_sas7bdat(CISLN_LOAN)
+print("Processing CISLN in chunks...")
+# Read CISLN with filtering for SECCUST='901' during chunk processing
+cisln = read_sas7bdat_filtered(
+    CISLN_LOAN, 
+    column_filter={'seccust': '901'},
+    chunk_size=CHUNK_SIZE
+)
 
+# Select only needed columns and deduplicate
 cisln = (
-    cisln_raw
-      .filter(pl.col("seccust") == "901")
+    cisln
       .select(["acctno", "newic", "custname"])
       .unique(subset=["acctno"], keep="first")  # PROC SORT NODUPKEY
 )
+print(f"  CISLN rows after filter: {cisln.height}")
 
 # DATA LOAN; MERGE LOAN(IN=A) CISLN; BY ACCTNO; IF A;
 loan = loan.join(cisln, on="acctno", how="left")
