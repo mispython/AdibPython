@@ -1,104 +1,78 @@
-# =========================
-# COLL file processing (EBCDIC with packed decimal)
-# =========================
-print("Processing COLL and DESC files...")
+Report Date: 2026-08-31
+Normalization Date: 31/08/2026
+Reading LOAN/LNNOTE datasets in chunks...
+Reading Islamic LNNOTE (ENTITY_CD = 'PIBB')...
+  Islamic LNNOTE rows: 6
+Reading Conventional LNNOTE (ENTITY_CD != 'PIBB')...
+  Conventional LNNOTE rows: 99994
+Combining LNNOTE datasets...
+  LOAN0 rows: 6
+  LOAN1 rows: 0
+Reading COMM datasets in chunks...
+Reading Islamic LNCOMM (ENTITY_CD = 'PIBB')...
+  Islamic LNCOMM rows: 1066036
+Reading Conventional LNCOMM (ENTITY_CD != 'PIBB')...
+  Conventional LNCOMM rows: 1066036
+Warning: INTAMT column not found. Using CORGAMT as NETPROC.
+Total LOAN rows after merge: 6
+Calculating ISSUED, NODAYS, ARREARS, NPLDATE...
+Applying NDAYS format...
+LOAN rows after deduplication: 6
+Processing CISLN in chunks...
+  CISLN rows after filter: 63752
+Processing COLL and DESC files...
 
-# DATA COLL; INFILE COLL; INPUT @004 CCOLLNO PD6. @146 ACCTNO PD6. @153 NOTENO PD6.;
-coll_specs = [
-    ("ccollno", 4, 9, "pd"),    # @004 PD6.
-    ("acctno", 146, 151, "pd"),  # @146 PD6.
-    ("noteno", 153, 158, "pd")   # @153 PD6.
-]
+=== COLL Data Sample (first 5 rows) ===
+shape: (5, 3)
+┌─────────┬────────┬────────┐
+│ ccollno ┆ acctno ┆ noteno │
+│ ---     ┆ ---    ┆ ---    │
+│ str     ┆ str    ┆ str    │
+╞═════════╪════════╪════════╡
+│   ┆        ┆        │
+│ X       ┆        ┆        │
+│     ┆        ┆        │
+│  %  ┆        ┆        │
+│    ┆  ┆  │
+└─────────┴────────┴────────┘
 
-# DATA DESC; INFILE DESC; INPUT @001 CCOLLNO 11. @051 CINSTCL $2. @055 NATGUAR $2. @211 CENSUS 10. @291 TRANCHE $8.;
-desc_specs = [
-    ("ccollno", 1, 11, "numeric"),   # @001 11.
-    ("cinstcl", 51, 52, "character"), # @051 $2.
-    ("natguar", 55, 56, "character"), # @055 $2.
-    ("census", 211, 220, "numeric"),  # @211 10.
-    ("tranche", 291, 298, "character") # @291 $8.
-]
+COLL columns: ['ccollno', 'acctno', 'noteno']
+COLL dtypes: [String, String, String]
 
-# Read the files
-try:
-    coll = read_fixed_width_file(COLL_FILE, coll_specs, encoding='cp037')
-    desc = read_fixed_width_file(DESC_FILE, desc_specs, encoding='cp037')
-    
-    # Print sample data for debugging
-    print("\n=== COLL Data Sample (first 5 rows) ===")
-    print(coll.head(5))
-    print(f"\nCOLL columns: {coll.columns}")
-    print(f"COLL dtypes: {coll.dtypes}")
-    
-    print("\n=== DESC Data Sample (first 5 rows) ===")
-    print(desc.head(5))
-    print(f"\nDESC columns: {desc.columns}")
-    print(f"DESC dtypes: {desc.dtypes}")
-    
-    # Check unique values in DESC for CINSTCL and NATGUAR
-    if 'cinstcl' in desc.columns:
-        print(f"\nUnique CINSTCL values: {desc['cinstcl'].unique().to_list()[:20]}")
-    if 'natguar' in desc.columns:
-        print(f"\nUnique NATGUAR values: {desc['natguar'].unique().to_list()[:20]}")
-    
-    # Ensure ccollno has the same data type in both DataFrames
-    coll = coll.with_columns(pl.col("ccollno").cast(pl.Utf8).alias("ccollno"))
-    desc = desc.with_columns(pl.col("ccollno").cast(pl.Utf8).alias("ccollno"))
-    
-    # Convert acctno and noteno to float64 to match LOAN dataframe
-    coll = coll.with_columns([
-        pl.col("acctno").cast(pl.Utf8).str.strip_chars().cast(pl.Float64, strict=False).alias("acctno"),
-        pl.col("noteno").cast(pl.Utf8).str.strip_chars().cast(pl.Float64, strict=False).alias("noteno")
-    ])
-    
-except Exception as e:
-    print(f"Warning: Error reading EBCDIC files: {e}")
-    print("Creating empty DataFrames as placeholder")
-    coll = pl.DataFrame(schema={"ccollno": pl.Utf8, "acctno": pl.Float64, "noteno": pl.Float64})
-    desc = pl.DataFrame(schema={"ccollno": pl.Utf8, "cinstcl": pl.Utf8, "natguar": pl.Utf8, 
-                                "census": pl.Float64, "tranche": pl.Utf8})
+=== DESC Data Sample (first 5 rows) ===
+shape: (5, 5)
+┌─────────┬─────────┬─────────┬────────┬─────────┐
+│ ccollno ┆ cinstcl ┆ natguar ┆ census ┆ tranche │
+│ ---     ┆ ---     ┆ ---     ┆ ---    ┆ ---     │
+│ f64     ┆ str     ┆ str     ┆ f64    ┆ str     │
+╞═════════╪═════════╪═════════╪════════╪═════════╡
+│ 133.0   ┆ 29      ┆         ┆ null   ┆         │
+│ null    ┆         ┆         ┆ null   ┆         │
+│ null    ┆ 15      ┆         ┆ null   ┆ 37634   │
+│ null    ┆         ┆         ┆ null   ┆         │
+│ null    ┆         ┆         ┆ 1.0    ┆         │
+└─────────┴─────────┴─────────┴────────┴─────────┘
 
-print(f"\n  COLL rows: {coll.height}")
-print(f"  DESC rows: {desc.height}")
+DESC columns: ['ccollno', 'cinstcl', 'natguar', 'census', 'tranche']
+DESC dtypes: [Float64, String, String, Float64, String]
 
-# PROC SORT; BY CCOLLNO; (for both COLL and DESC)
-coll = coll.sort(by="ccollno")
-desc = desc.sort(by="ccollno")
+Unique CINSTCL values: ['RH', '0C', 'JE', 'QB', 'LO', '58', 'TA', '81', '-,', '@K', 'T', 'NC', '6B', 'OM', 'RD', '93', 'PA', 'AH', 'GH', 'GL']
 
-# DATA COLL; MERGE COLL(IN=A) DESC(IN=B); BY CCOLLNO; IF A AND B;
-coll = coll.join(desc, on="ccollno", how="inner")
-print(f"  COLL rows after join with DESC: {coll.height}")
+Unique NATGUAR values: ['NJ', 'SW', '@K', 'DU', 'PA', 'M)', 'OW', ',2', 'IB', 'MF', '2,', 'NY', '1D', 'HO', '4F', ':', '-0', '10', '90', 'J']
 
-# Print sample after join
-if coll.height > 0:
-    print("\n=== COLL after join (first 5 rows) ===")
-    print(coll.head(5))
+  COLL rows: 1913966
+  DESC rows: 58604
+  COLL rows after join with DESC: 0
 
-# IF CINSTCL='18' AND NATGUAR='06';
-# Try different variations of the filter to see if data exists
-if coll.height > 0:
-    # Check what values actually exist
-    if 'cinstcl' in coll.columns:
-        unique_cinstcl = coll['cinstcl'].unique().to_list()
-        print(f"\nUnique CINSTCL values after join: {unique_cinstcl[:20]}")
-    if 'natguar' in coll.columns:
-        unique_natguar = coll['natguar'].unique().to_list()
-        print(f"Unique NATGUAR values after join: {unique_natguar[:20]}")
-    
-    # Try different filter conditions
-    filter_18 = coll.filter(pl.col("cinstcl") == "18")
-    print(f"\nRows with CINSTCL='18': {filter_18.height}")
-    
-    filter_06 = coll.filter(pl.col("natguar") == "06")
-    print(f"Rows with NATGUAR='06': {filter_06.height}")
-    
-    filter_both = coll.filter((pl.col("cinstcl") == "18") & (pl.col("natguar") == "06"))
-    print(f"Rows with CINSTCL='18' AND NATGUAR='06': {filter_both.height}")
+  COLL rows after filter: 0
+NPGS rows after COLL merge: 0
+Processing MICR file...
+Creating CVAR fields...
+Writing NPGS.LNSMEZ08...
+Using SAS Config named: default
+SAS Connection established. Subprocess id is 132862
 
-# Apply the actual filter
-coll = coll.filter((pl.col("cinstcl") == "18") & (pl.col("natguar") == "06"))
-
-# PROC SORT; BY ACCTNO NOTENO;
-coll = coll.sort(by=["acctno", "noteno"])
-
-print(f"\n  COLL rows after filter: {coll.height}")
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+Successfully wrote NPGS.LNSMEZ08 to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBLSMEZ
+SAS Connection terminated. Subprocess id was 132862
