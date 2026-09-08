@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import pyreadstat
 import saspy
+import codecs
 
 # =========================
 # CONFIG (SAS7BDAT INPUTS)
@@ -119,21 +120,69 @@ cisdp = cisdp.drop_duplicates()
 ca = ca.merge(cisdp, on='ACCTNO', how='left')
 
 # =========================
-# STEP 4D: COLL + DESC
+# STEP 4D: COLL + DESC (EBCDIC FILES)
 # =========================
-coll = pd.read_fwf(
+def read_ebcdic_fwf(file_path, colspecs, names):
+    """Read fixed-width EBCDIC file and convert to ASCII"""
+    # Read the file in binary mode
+    with open(file_path, 'rb') as f:
+        raw_data = f.read()
+    
+    # Decode EBCDIC to string (cp037 is common EBCDIC encoding for mainframes)
+    # Alternative encodings: cp500 (International), cp1047 (Latin-1)
+    decoded_data = raw_data.decode('cp037', errors='replace')
+    
+    # Write to temporary file for pd.read_fwf
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp:
+        tmp.write(decoded_data)
+        tmp_path = tmp.name
+    
+    # Read the decoded file
+    df = pd.read_fwf(
+        tmp_path,
+        colspecs=colspecs,
+        names=names
+    )
+    
+    # Clean up temp file
+    import os
+    os.unlink(tmp_path)
+    
+    return df
+
+print("Reading COLL file (EBCDIC)...")
+coll = read_ebcdic_fwf(
     COLL_FILE,
     colspecs=[(3,9),(145,151)],
     names=['CCOLLNO','ACCTNO']
 )
 
-desc = pd.read_fwf(
+print("Reading DESC file (EBCDIC)...")
+desc = read_ebcdic_fwf(
     DESC_FILE,
     colspecs=[(0,11),(50,52),(54,56),(210,220)],
     names=['CCOLLNO','CINSTCL','NATGUAR','CENSUS']
 )
 
+# Clean up EBCDIC artifacts (remove non-printable characters)
+def clean_ebcdic_strings(df):
+    """Clean EBCDIC artifacts from string columns"""
+    for col in df.select_dtypes(include=['object']).columns:
+        df[col] = df[col].apply(lambda x: ''.join(
+            char for char in str(x) if char.isprintable() or char.isspace()
+        ).strip() if pd.notna(x) else x)
+    return df
+
+coll = clean_ebcdic_strings(coll)
+desc = clean_ebcdic_strings(desc)
+
+# Convert CENSUS to numeric, handling EBCDIC numeric fields
+desc['CENSUS'] = pd.to_numeric(desc['CENSUS'], errors='coerce')
+
 def map_cr(census):
+    if pd.isna(census):
+        return None
     if 51000000 <= census <= 51999999: return '51'
     if 63000000 <= census <= 63999999: return '63'
     if 70000000 <= census <= 70999999: return '70'
