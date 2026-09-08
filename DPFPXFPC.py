@@ -24,6 +24,9 @@ MICR_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLTRRF/BO
 OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNPGS")
 OUTPUT_FILE = f"DPNPGS_{datetime.now().strftime('%m')}.sas7bdat"
 
+# Chunk size for processing large files
+CHUNK_SIZE = 100000  # Adjust based on your memory constraints
+
 # =========================
 # STEP 1: REPORT DATE
 # =========================
@@ -62,13 +65,67 @@ if 'ENTITY_CD' in limit_df.columns:
 else:
     print("Warning: ENTITY_CD column not found in LIMIT dataset")
 
-# Read CISDP dataset
-cisdp_df, cisdp_meta = pyreadstat.read_sas7bdat(CISDP_DF)
-print(f"CISDP dataset: {cisdp_df.shape[0]} rows")
-
 # Read NPLA dataset
 npla_df, npla_meta = pyreadstat.read_sas7bdat(NPLA_DF)
 print(f"NPLA dataset: {npla_df.shape[0]} rows")
+
+# =========================
+# STEP 2B: READ CISDP IN CHUNKS (LARGE FILE)
+# =========================
+print("Reading CISDP dataset in chunks...")
+
+# First, read only the header to get column names
+cisdp_header, _ = pyreadstat.read_sas7bdat(CISDP_DF, row_limit=1)
+print(f"CISDP columns: {list(cisdp_header.columns)}")
+
+# Initialize empty list to store filtered chunks
+cisdp_chunks = []
+
+# Read in chunks using pyreadstat's row_offset and row_limit
+row_offset = 0
+chunk_count = 0
+
+while True:
+    try:
+        # Read a chunk of data
+        chunk, _ = pyreadstat.read_sas7bdat(
+            CISDP_DF, 
+            row_offset=row_offset, 
+            row_limit=CHUNK_SIZE
+        )
+        
+        if len(chunk) == 0:
+            break
+            
+        chunk_count += 1
+        
+        # Filter only needed columns and rows
+        if 'SECCUST' in chunk.columns:
+            filtered_chunk = chunk[chunk['SECCUST'] == '901'][['ACCTNO', 'NEWIC', 'CUSTNAME']]
+            if len(filtered_chunk) > 0:
+                cisdp_chunks.append(filtered_chunk)
+        
+        print(f"Processed chunk {chunk_count}: {len(chunk)} rows, kept {len(filtered_chunk) if 'filtered_chunk' in locals() else 0} rows")
+        
+        # Update offset
+        row_offset += CHUNK_SIZE
+        
+        # Break if we've read all data
+        if len(chunk) < CHUNK_SIZE:
+            break
+            
+    except Exception as e:
+        print(f"Error reading chunk at offset {row_offset}: {e}")
+        break
+
+# Combine all chunks
+if cisdp_chunks:
+    cisdp_df = pd.concat(cisdp_chunks, ignore_index=True)
+    cisdp_df = cisdp_df.drop_duplicates()
+    print(f"CISDP dataset: {cisdp_df.shape[0]} rows after filtering (SECCUST == '901')")
+else:
+    cisdp_df = pd.DataFrame(columns=['ACCTNO', 'NEWIC', 'CUSTNAME'])
+    print("Warning: No CISDP data found for SECCUST == '901'")
 
 # =========================
 # STEP 3: CURRENT → CA
@@ -121,12 +178,9 @@ gp3['NPLDATE'] = pd.to_datetime(
 ca = ca.merge(gp3[['ACCTNO','NPLDATE']], on='ACCTNO', how='left')
 
 # =========================
-# STEP 4C: CISDP
+# STEP 4C: CISDP MERGE
 # =========================
-cisdp = cisdp_df[cisdp_df['SECCUST'] == '901'][['ACCTNO','NEWIC','CUSTNAME']]
-cisdp = cisdp.drop_duplicates()
-
-ca = ca.merge(cisdp, on='ACCTNO', how='left')
+ca = ca.merge(cisdp_df, on='ACCTNO', how='left')
 
 # =========================
 # STEP 4D: COLL + DESC (EBCDIC FILES)
