@@ -1,10 +1,12 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+import pyreadstat
+import saspy
 
 # =========================
-# CONFIG (PARQUET INPUTS)
+# CONFIG (SAS7BDAT INPUTS)
 # =========================
 CURRENT_DF  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/intg_dp_acct_current_m08.sas7bdat")
 LIMIT_DF    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/intg_dp_acct_overdft_m08.sas7bdat")
@@ -18,11 +20,13 @@ DESC_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LC
 MICR_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLTRRF/BOPESS.txt"
 
 OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNPGS")
+OUTPUT_FILE = f"DPNPGS_{datetime.now().strftime('%m')}.sas7bdat"
 
 # =========================
 # STEP 1: REPORT DATE
 # =========================
-reptdate = pd.to_datetime(REPTDATE_DF['REPTDATE'].iloc[0])
+# Use yesterday's date as report date
+reptdate = datetime.now() - timedelta(days=1)
 
 REPTDAY  = reptdate.day
 REPTMON  = reptdate.month
@@ -30,9 +34,36 @@ REPTYEAR = reptdate.year
 SDATE    = reptdate.toordinal()
 
 # =========================
-# STEP 2: CURRENT → CA
+# STEP 2: READ SAS DATASETS
 # =========================
-ca = CURRENT_DF.copy()
+print("Reading SAS datasets...")
+
+# Read CURRENT dataset with entity filter
+current_df, current_meta = pyreadstat.read_sas7bdat(
+    CURRENT_DF,
+    row_filter=lambda row: row['ENTITY_CD'] != 'PIBB'
+)
+print(f"CURRENT dataset: {current_df.shape[0]} rows after filtering")
+
+# Read LIMIT dataset with entity filter
+limit_df, limit_meta = pyreadstat.read_sas7bdat(
+    LIMIT_DF,
+    row_filter=lambda row: row['ENTITY_CD'] != 'PIBB'
+)
+print(f"LIMIT dataset: {limit_df.shape[0]} rows after filtering")
+
+# Read CISDP dataset
+cisdp_df, cisdp_meta = pyreadstat.read_sas7bdat(CISDP_DF)
+print(f"CISDP dataset: {cisdp_df.shape[0]} rows")
+
+# Read NPLA dataset
+npla_df, npla_meta = pyreadstat.read_sas7bdat(NPLA_DF)
+print(f"NPLA dataset: {npla_df.shape[0]} rows")
+
+# =========================
+# STEP 3: CURRENT → CA
+# =========================
+ca = current_df.copy()
 
 def map_sch(row):
     if row.PRODUCT == 108 and row.CENSUST == 305: return 'P85'
@@ -46,9 +77,10 @@ def map_sch(row):
 
 ca['SCH'] = ca.apply(map_sch, axis=1)
 ca = ca[ca['SCH'].notna()].copy()
+print(f"CA after SCH mapping: {ca.shape[0]} rows")
 
 # =========================
-# STEP 3A: LIMIT
+# STEP 4A: LIMIT
 # =========================
 def convert_lmtstart(x):
     if pd.isna(x) or x <= 0:
@@ -56,14 +88,14 @@ def convert_lmtstart(x):
     s = str(int(x)).zfill(11)[:8]
     return datetime.strptime(s, "%m%d%Y")
 
-limit_df = LIMIT_DF.copy()
-limit_df['LMTSTART'] = limit_df['LMTSTART'].apply(convert_lmtstart)
-limit_df = limit_df[['ACCTNO','LMTSTART']].drop_duplicates()
+limit_processed = limit_df.copy()
+limit_processed['LMTSTART'] = limit_processed['LMTSTART'].apply(convert_lmtstart)
+limit_processed = limit_processed[['ACCTNO','LMTSTART']].drop_duplicates()
 
-ca = ca.merge(limit_df, on='ACCTNO', how='left')
+ca = ca.merge(limit_processed, on='ACCTNO', how='left')
 
 # =========================
-# STEP 3B: GP3 (FIXED WIDTH)
+# STEP 4B: GP3 (FIXED WIDTH)
 # =========================
 gp3 = pd.read_fwf(
     GP3_FILE,
@@ -79,15 +111,15 @@ gp3['NPLDATE'] = pd.to_datetime(
 ca = ca.merge(gp3[['ACCTNO','NPLDATE']], on='ACCTNO', how='left')
 
 # =========================
-# STEP 3C: CISDP
+# STEP 4C: CISDP
 # =========================
-cisdp = CISDP_DF[CISDP_DF['SECCUST'] == '901'][['ACCTNO','NEWIC','CUSTNAME']]
+cisdp = cisdp_df[cisdp_df['SECCUST'] == '901'][['ACCTNO','NEWIC','CUSTNAME']]
 cisdp = cisdp.drop_duplicates()
 
 ca = ca.merge(cisdp, on='ACCTNO', how='left')
 
 # =========================
-# STEP 3D: COLL + DESC
+# STEP 4D: COLL + DESC
 # =========================
 coll = pd.read_fwf(
     COLL_FILE,
@@ -119,7 +151,7 @@ coll = coll[(coll['CINSTCL']=='18') & (coll['NATGUAR']=='06')]
 dep = ca.merge(coll, on='ACCTNO')
 
 # =========================
-# STEP 3E: MICR
+# STEP 4E: MICR
 # =========================
 micr = pd.read_fwf(
     MICR_FILE,
@@ -130,7 +162,7 @@ micr = pd.read_fwf(
 dep = dep.merge(micr, on='BRANCH', how='left')
 
 # =========================
-# STEP 4: ARREARS + NPL
+# STEP 5: ARREARS + NPL
 # =========================
 def calc_arrears(row):
     if row.get('CURBAL', 0) >= 0:
@@ -166,7 +198,7 @@ dep[['ARREARS','NPLDATE_CALC']] = dep.apply(
 dep['NPLDATE'] = dep['NPLDATE_CALC'].combine_first(dep['NPLDATE'])
 
 # =========================
-# STEP 5: CVAR02
+# STEP 6: CVAR02
 # =========================
 def map_cvar02(row):
     if row.SCH=='P51' and row.CR in ['10','51']: return '51'
@@ -183,7 +215,7 @@ dep['CVAR02'] = dep.apply(map_cvar02, axis=1)
 dep = dep[dep['CVAR02'].notna()]
 
 # =========================
-# STEP 6: OUTPUT STRUCTURE
+# STEP 7: OUTPUT STRUCTURE
 # =========================
 dep['CVAR01'] = dep['CENSUS']
 dep['CVAR03'] = dep['NEWIC']
@@ -204,9 +236,9 @@ dep['CVAR14'] = '0233'
 dep['CVAR15'] = dep['MICRCD']
 
 # =========================
-# STEP 7: HISTORY MERGE
+# STEP 8: HISTORY MERGE
 # =========================
-npgs = dep.merge(NPLA_DF, on=['CVAR06','CVAR01'], how='left')
+npgs = dep.merge(npla_df, on=['CVAR06','CVAR01'], how='left')
 
 npgs.loc[
     (npgs['CVAR12']=='NPL') & (npgs['STATUS']=='NPL'),
@@ -214,17 +246,28 @@ npgs.loc[
 ] = npgs['NDATE']
 
 # =========================
-# OUTPUT (PARQUET)
+# STEP 9: OUTPUT (SAS7BDAT)
 # =========================
-output_file = f"DPNPGS_{REPTMON:02d}.parquet"
-npgs.to_parquet(output_file, index=False)
+print(f"Writing output to {OUTPUT_FILE}...")
 
-print(f"Output written: {output_file}")
+# Initialize SAS session
+sas = saspy.SASsession(cfgname='default')  # You may need to adjust the configuration name
 
+# Convert pandas DataFrame to SAS dataset
+sas.df2sd(npgs, table='npgs_output', libref='WORK')
 
-for CURRENT nad OVERDRAFT dataset, need to add filter "WHERE ENTITY_CD != 'PIBB'" (conventional) in order to read the dataset
-all inputs are in sas7bdat sas dataset.
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in sas7bdat. 
-write out using saspy
+# Write SAS dataset to sas7bdat file
+sas_code = f"""
+PROC EXPORT DATA=WORK.npgs_output 
+    OUTFILE="{OUTPUT / OUTPUT_FILE}" 
+    DBMS=SAS7BDAT REPLACE;
+RUN;
+"""
+
+sas.submit(sas_code)
+
+# Close SAS session
+sas.endsas()
+
+print(f"Output written: {OUTPUT / OUTPUT_FILE}")
+print(f"Total records: {len(npgs)}")
