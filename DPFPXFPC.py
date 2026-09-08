@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import polars as pl
+import pyreadstat
 import duckdb  # noqa: F401
 import pyarrow as pa  # noqa: F401
 import pyarrow.parquet as pq  # noqa: F401
+import saspy
 
 
 # =========================
@@ -35,6 +37,35 @@ OUT_FILE = None  # set after REPTMON known
 # =========================
 # Helpers
 # =========================
+def read_sas7bdat(file_path):
+    """Read SAS7BDAT file using pyreadstat"""
+    df, meta = pyreadstat.read_sas7bdat(str(file_path))
+    return pl.from_pandas(df)
+
+
+def write_sas7bdat(df, file_path, sas_session=None):
+    """Write DataFrame to SAS7BDAT format using SASPy"""
+    if sas_session is None:
+        sas_session = saspy.SASsession()
+    
+    # Convert polars DataFrame to pandas
+    pandas_df = df.to_pandas()
+    
+    # Upload to SAS
+    sas_df = sas_session.df2sd(pandas_df, 'temp_df')
+    
+    # Write to SAS7BDAT
+    output_path = str(file_path).replace('.parquet', '.sas7bdat')
+    sas_session.submit(f"""
+        PROC EXPORT DATA=temp_df 
+            OUTFILE="{output_path}" 
+            DBMS=SAS7BDAT REPLACE;
+        RUN;
+    """)
+    
+    return output_path
+
+
 def sas_days_to_date(days: int) -> date:
     origin = date(1960, 1, 1)
     return origin.fromordinal(origin.toordinal() + int(days))
@@ -76,31 +107,25 @@ def month_end_str(d: date | None) -> str:
 
 
 # =========================
-# Macro-like vars from LOAN.REPTDATE
+# REPTDATE using datetime timedelta (current date - 1 day)
 # =========================
-rept = pl.read_parquet(LOAN_REPTDATE)
-if rept.height != 1:
-    raise ValueError("MNILN.REPTDATE must have exactly one row.")
-
-val = rept.item(0, "REPTDATE")
-if isinstance(val, date):
-    REPTDATE = val
-elif isinstance(val, (int, float)):
-    REPTDATE = sas_days_to_date(int(val))
-else:
-    REPTDATE = date.fromisoformat(str(val))
-
+REPTDATE = datetime.now().date() - timedelta(days=1)
 REPTMON  = f"{REPTDATE.month:02d}"
 REPTDAY  = f"{REPTDATE.day:02d}"
 REPTYEAR = f"{REPTDATE.year:04d}"
 SDATE_INT = (REPTDATE - date(1960, 1, 1)).days
-OUT_FILE  = OUT_DIR / f"LNTRRF{REPTMON}.parquet"
+OUT_FILE  = OUT_DIR / f"LNTRRF{REPTMON}.sas7bdat"
 
 
 # =========================
 # LOAN0 / LOAN1 from LNNOTE; keep LOANTYPE=575 & CENSUS=575.09
+# Add filter for ENTITY_CD != 'PIBB'
 # =========================
-lnnote = pl.read_parquet(LOAN_LNNOTE)
+lnnote = read_sas7bdat(LOAN_LNNOTE)
+
+# Add filter for conventional loans
+lnnote = lnnote.filter(pl.col("ENTITY_CD") != "PIBB")
+
 loan_base = (
     lnnote
     .with_columns([
@@ -114,7 +139,11 @@ loan1 = loan_base.filter(pl.col("COMMNO") > 0)
 loan0 = loan_base.filter(~(pl.col("COMMNO") > 0))
 
 # COMM: NETPROC = CORGAMT - INTAMT
-lncomm = pl.read_parquet(LOAN_LNCOMM)
+lncomm = read_sas7bdat(LOAN_LNCOMM)
+
+# Add filter for conventional loans
+lncomm = lncomm.filter(pl.col("ENTITY_CD") != "PIBB")
+
 comm = (
     lncomm
     .with_columns([
@@ -148,8 +177,11 @@ loan = loan.with_columns([
       .alias("NODAYS")
 ])
 
-# NDAYS. mapping from CNTLOUT
-cntl = pl.read_parquet(PBBLNFMT_CNTLOUT)
+# NDAYS. mapping from CNTLOUT - assuming it's in a SAS7BDAT file
+# You'll need to adjust this path
+CNTLOUT_FILE = Path("/path/to/cntlout.sas7bdat")  # Adjust this path
+cntl = read_sas7bdat(CNTLOUT_FILE)
+
 ndays_map = (
     cntl.filter(pl.col("FMTNAME").str.to_uppercase() == "NDAYS")
         .select(
@@ -191,10 +223,11 @@ loan = loan.unique(subset=["ACCTNO", "NOTENO"], keep="first").sort(by=["ACCTNO",
 # =========================
 # CISLN (SECCUST='901') merge by ACCTNO, NODUPKEY
 # =========================
+cisln_df = read_sas7bdat(CISLN_LOAN)
 cisln = (
-    pl.read_parquet(CISLN_LOAN)
+    cisln_df
       .filter(pl.col("SECCUST") == "901")
-      .select(["ACCTNO", "NEWIC", "CUSTNAME", *([c for c in ["NAME"] if c in pl.read_parquet(CISLN_LOAN).columns])])
+      .select(["ACCTNO", "NEWIC", "CUSTNAME", *([c for c in ["NAME"] if c in cisln_df.columns])])
       .unique(subset=["ACCTNO"], keep="first")
 )
 loan = loan.join(cisln, on="ACCTNO", how="left")
@@ -203,9 +236,16 @@ loan = loan.join(cisln, on="ACCTNO", how="left")
 # =========================
 # COLL/DESC with CGCGUR filter and SCH mapping (080→7Q, 090→8Q)
 # =========================
-coll = pl.read_parquet(COLL_PARQUET).select(["CCOLLNO", "ACCTNO", "NOTENO"])
+# Assuming these might also be SAS7BDAT files
+COLL_PARQUET = COLL_FILE  # These might be .sas7bdat files
+DESC_PARQUET = DESC_FILE
+
+coll_df = read_sas7bdat(COLL_PARQUET) if COLL_PARQUET.suffix == '.sas7bdat' else pl.read_csv(COLL_PARQUET)
+desc_df = read_sas7bdat(DESC_PARQUET) if DESC_PARQUET.suffix == '.sas7bdat' else pl.read_csv(DESC_PARQUET)
+
+coll = coll_df.select(["CCOLLNO", "ACCTNO", "NOTENO"])
 desc = (
-    pl.read_parquet(DESC_PARQUET)
+    desc_df
       .select(["CCOLLNO", "CINSTCL", "NATGUAR", "CGCGUR", "CENSUS", "TRANCHE"])
       .filter(pl.col("CGCGUR").is_in(["080", "090"]))
       .with_columns([
@@ -228,7 +268,8 @@ npgs = loan.join(coll, on=["ACCTNO", "NOTENO"], how="inner")
 # =========================
 # MICR by PENDBRH
 # =========================
-micr = pl.read_parquet(MICR_PARQUET).select(["PENDBRH", "MICRCD"])
+micr_df = pl.read_csv(MICR_FILE) if MICR_FILE.suffix == '.txt' else read_sas7bdat(MICR_FILE)
+micr = micr_df.select(["PENDBRH", "MICRCD"])
 npgs = npgs.join(micr, on="PENDBRH", how="left")
 
 # =========================
@@ -285,7 +326,7 @@ npgs = npgs.sort(by=["CVAR06", "CVAR01"])
 
 # Read prior NPGS.TRRF as NPLA (if present) and merge by CVAR06,CVAR01
 if NPGS_TRRF_IN.exists():
-    npla = pl.read_parquet(NPGS_TRRF_IN).sort(by=["CVAR06", "CVAR01"])
+    npla = read_sas7bdat(NPGS_TRRF_IN).sort(by=["CVAR06", "CVAR01"])
     # Only keep the columns we need from NPLA for the subsequent logic (STATUS, NDATE)
     keep_npla = [c for c in ["CVAR06", "CVAR01", "STATUS", "NDATE"] if c in npla.columns]
     npla = npla.select(keep_npla) if keep_npla else npla
@@ -341,15 +382,15 @@ keep_cols = [
 out = npgs.select(keep_cols)
 
 # =========================
-# Output: NPGS.LNTRRF&REPTMON
+# Output: NPGS.LNTRRF&REPTMON (as SAS7BDAT)
 # =========================
-out.write_parquet(OUT_FILE, use_pyarrow=True)
-print(f"Wrote {OUT_FILE}")
+# Start SAS session
+sas = saspy.SASsession()
 
+# Write output as SAS7BDAT
+output_sas_path = write_sas7bdat(out, OUT_FILE, sas)
 
-for loannote and loancomm, need to add filter "WHERE ENTITY_CD != 'PIBB'" (conventional)
-all inputs are in sas7bdat sas dataset.
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in sas7bdat. 
-write out using saspy
+print(f"Wrote {output_sas_path}")
+
+# End SAS session
+sas.endsas()
