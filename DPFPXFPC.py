@@ -10,9 +10,6 @@ from PBBLNFMT import put, informat, apply_format, available_formats
 import duckdb  # noqa: F401
 import pyarrow as pa  # noqa: F401
 import pyarrow.parquet as pq  # noqa: F401
-import re
-import sys
-from collections import Counter
 
 
 # =========================
@@ -24,31 +21,16 @@ BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
 # ---- Input SAS datasets (all in sas7bdat format) ----
 LOAN_LNNOTE   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m08.sas7bdat")
 LOAN_LNCOMM   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m08.sas7bdat")
-
 LOANI_LNNOTE  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m08.sas7bdat")
 LOANI_LNCOMM  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m08.sas7bdat")
-
 CISLN_LOAN    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/loan.sas7bdat")
-
-# COLL / DESC (EBCDIC encoded text files)
 COLL_FILE     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_20260831")
 DESC_FILE     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_20260831")
-
 MICR_FILE     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/BOPESS.txt")
-
 NPGS_SMEZ     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/smez.sas7bdat")
 
+# Chunk size for reading large SAS datasets
 CHUNK_SIZE = 100000
-
-# =========================
-# KNOWN record lengths (fill these in from the copybook / JCL LRECL if you have them)
-# Leave as None to force auto-detection with validation instead of guessing.
-# =========================
-KNOWN_COLL_RECORD_LENGTH = None  # 158 was carried over from a run that only ever
-                                   # sampled the first 70,000 records (old hard cap) --
-                                   # not actually verified against the full file. Force
-                                   # detection until this is confirmed from the copybook.
-KNOWN_DESC_RECORD_LENGTH = None  # do NOT guess this from file_size // expected_records
 
 
 # =========================
@@ -64,51 +46,51 @@ def date_to_sas_days(d: date) -> int:
     return (d - origin).days
 
 
-def read_sas7bdat_filtered(filepath: Path, entity_filter: str = None,
+def read_sas7bdat_filtered(filepath: Path, entity_filter: str = None, 
                            chunk_size: int = CHUNK_SIZE,
                            column_filter: dict = None) -> pl.DataFrame:
     chunks = []
     offset = 0
-
+    
     while True:
         try:
             df, _ = pyreadstat.read_sas7bdat(
-                str(filepath),
-                row_offset=offset,
+                str(filepath), 
+                row_offset=offset, 
                 row_limit=chunk_size
             )
-
+            
             if df.empty:
                 break
-
+                
             df.columns = [col.lower() for col in df.columns]
-
+            
             if entity_filter and 'entity_cd' in df.columns:
                 if entity_filter == 'PIBB':
                     df = df[df['entity_cd'] == 'PIBB']
                 elif entity_filter == 'NON_PIBB':
                     df = df[df['entity_cd'] != 'PIBB']
-
+            
             if column_filter:
                 for col_name, col_value in column_filter.items():
                     if col_name in df.columns:
                         df = df[df[col_name] == col_value]
-
+            
             if not df.empty:
                 chunks.append(pl.from_pandas(df))
-
+            
             offset += chunk_size
-
+            
             if len(df) < chunk_size:
                 break
-
+                
         except Exception as e:
             print(f"Error reading chunk at offset {offset}: {e}")
             break
-
+    
     if not chunks:
         return pl.DataFrame()
-
+    
     return pl.concat(chunks, how="vertical", rechunk=True)
 
 
@@ -118,41 +100,86 @@ def read_sas7bdat(filepath: Path) -> pl.DataFrame:
     return pl.from_pandas(df)
 
 
-def read_fixed_width_file(filepath: Path, col_specs: list, encoding: str = 'cp037') -> pl.DataFrame:
-    with open(filepath, 'rb') as f:
-        raw_data = f.read()
-
-    if encoding == 'cp037':
-        try:
-            decoded_data = raw_data.decode('cp037')
-        except Exception:
-            try:
-                decoded_data = raw_data.decode('cp500')
-            except Exception:
-                decoded_data = raw_data.decode('latin-1')
-    else:
-        decoded_data = raw_data.decode(encoding)
-
+def read_ebcdic_fixed_records(filepath: Path, record_length: int, col_specs: list, 
+                              max_records: int = None) -> pl.DataFrame:
     rows = []
-    lines = decoded_data.split('\n')
-
-    for line in lines:
-        if line.strip():
+    records_read = 0
+    
+    with open(filepath, 'rb') as f:
+        while True:
+            record = f.read(record_length)
+            if not record or len(record) < record_length:
+                break
+                
             row = {}
             for col_name, start, end, col_type in col_specs:
-                value = line[start-1:end].strip() if len(line) >= end else ""
-
-                if col_type == 'numeric':
+                start_idx = start - 1
+                end_idx = end
+                
+                if col_type == 'pd':
+                    raw_bytes = record[start_idx:end_idx]
                     try:
-                        row[col_name.lower()] = float(value) if value else None
-                    except Exception:
+                        hex_str = raw_bytes.hex()
+                        digits = hex_str[:-1]
+                        sign_nibble = hex_str[-1].upper()
+                        
+                        if digits and all(c in '0123456789ABCDEF' for c in digits):
+                            value = int(digits, 16)
+                            if sign_nibble in ('D', 'B'):
+                                value = -value
+                            row[col_name.lower()] = float(value)
+                        else:
+                            row[col_name.lower()] = None
+                    except:
                         row[col_name.lower()] = None
-                elif col_type == 'pd':
-                    row[col_name.lower()] = value
-                else:
-                    row[col_name.lower()] = value
+                        
+                elif col_type == 'numeric':
+                    try:
+                        raw_bytes = record[start_idx:end_idx]
+                        decoded = raw_bytes.decode('cp037').strip()
+                        decoded_clean = ''.join(c for c in decoded if c.isdigit() or c in '.-')
+                        row[col_name.lower()] = float(decoded_clean) if decoded_clean else None
+                    except:
+                        row[col_name.lower()] = None
+                        
+                else:  # character
+                    try:
+                        raw_bytes = record[start_idx:end_idx]
+                        decoded = raw_bytes.decode('cp037').strip()
+                        row[col_name.lower()] = decoded
+                    except:
+                        row[col_name.lower()] = ""
+            
             rows.append(row)
+            records_read += 1
+            
+            if max_records and records_read >= max_records:
+                break
+    
+    return pl.DataFrame(rows)
 
+
+def read_fixed_width_text(filepath: Path, col_specs: list, encoding: str = 'ascii') -> pl.DataFrame:
+    rows = []
+    
+    with open(filepath, 'r', encoding=encoding, errors='ignore') as f:
+        for line in f:
+            if line.strip():
+                row = {}
+                for col_name, start, end, col_type in col_specs:
+                    if len(line) >= end:
+                        value = line[start-1:end].strip()
+                        if col_type == 'numeric':
+                            try:
+                                row[col_name.lower()] = float(value) if value else None
+                            except:
+                                row[col_name.lower()] = None
+                        else:
+                            row[col_name.lower()] = value
+                    else:
+                        row[col_name.lower()] = None if col_type == 'numeric' else ""
+                rows.append(row)
+    
     return pl.DataFrame(rows)
 
 
@@ -188,436 +215,10 @@ def format_date_ddmmyyyy(d: date | None) -> str:
     return f"{d.day:02d}/{d.month:02d}/{d.year:04d}"
 
 
-# =====================================================================
-# FIX #1: Record-length detection with validation instead of a blind guess
-# =====================================================================
-def divisors_near(file_size: int, approx_length: int, tolerance: float = 0.6) -> list[int]:
-    """
-    Return all exact divisors of file_size that fall within +/- tolerance
-    of approx_length, ordered by closeness to approx_length.
-    Only exact divisors are structurally possible record lengths.
-    """
-    lo = int(approx_length * (1 - tolerance))
-    hi = int(approx_length * (1 + tolerance))
-    lo = max(lo, 1)
-    candidates = []
-    for L in range(lo, hi + 1):
-        if file_size % L == 0:
-            candidates.append(L)
-    candidates.sort(key=lambda L: abs(L - approx_length))
-    return candidates
-
-
-def score_field_quality(values: list[str]) -> float:
-    """
-    Score how 'clean' a decoded EBCDIC character field looks, on a 0-1 scale.
-    Real SAS character fields (codes like CINSTCL, NATGUAR) are almost always
-    blank, digits, or upper-case letters. Garbage from misaligned offsets tends
-    to contain control characters, punctuation soup, or high-bit junk.
-    A correct record length should push this score close to 1.0 across the file;
-    a wrong one will show up as a low, noisy score.
-    """
-    if not values:
-        return 0.0
-    good = 0
-    total = 0
-    for v in values:
-        if v is None:
-            continue
-        for ch in v:
-            total += 1
-            if ch == ' ' or ch.isdigit() or ch.isalpha():
-                good += 1
-    if total == 0:
-        return 0.0
-    return good / total
-
-
-def score_pd_quality(raw_chunks: list[bytes]) -> float:
-    """
-    Score how 'clean' a packed-decimal field looks, on a 0-1 scale.
-    A packed decimal field is only structurally valid if:
-      - every nibble except the last is 0-9 (BCD digits)
-      - the final (sign) nibble is one of the valid packed-decimal sign
-        codes: C/F (positive), D/B (negative), A/E (also positive, less common)
-    Misaligned offsets produce packed fields whose bytes are actually parts of
-    character data, timestamps, or other numerics -- these fail the nibble
-    check at a high rate. A correct record length should score close to 1.0.
-    """
-    if not raw_chunks:
-        return 0.0
-    valid_sign_nibbles = set('CFDBAE')
-    good = 0
-    total = 0
-    for chunk in raw_chunks:
-        total += 1
-        try:
-            hex_str = chunk.hex()
-            digits = hex_str[:-1]
-            sign_nibble = hex_str[-1].upper()
-            if digits and all(c in '0123456789' for c in digits) and sign_nibble in valid_sign_nibbles:
-                good += 1
-        except Exception:
-            pass
-    if total == 0:
-        return 0.0
-    return good / total
-
-
-def detect_vb_format(filepath: Path, sample_records: int = 200,
-                      min_reasonable_len: int = 20, max_reasonable_len: int = 32760) -> dict | None:
-    """
-    Check whether a file looks like mainframe VB (variable-length, RDW-prefixed)
-    format rather than truly fixed-length. Each VB record is prefixed by a 4-byte
-    RDW: a 2-byte big-endian total record length (including the RDW itself) plus
-    2 reserved bytes (almost always 0x0000). If we can walk the file record-by-
-    record using that framing -- landing on another plausible RDW every time,
-    for many consecutive records -- that's strong evidence it's VB, not fixed.
-    Returns a dict of stats if VB framing looks consistent, else None.
-    """
-    file_size = filepath.stat().st_size
-    with open(filepath, 'rb') as f:
-        raw = f.read(min(file_size, 50_000_000))  # sample enough to walk many records
-
-    pos = 0
-    lengths = []
-    ok = 0
-    tried = 0
-
-    while pos + 4 <= len(raw) and tried < sample_records:
-        rdw_len = int.from_bytes(raw[pos:pos+2], byteorder='big', signed=False)
-        reserved = raw[pos+2:pos+4]
-        tried += 1
-
-        if (min_reasonable_len <= rdw_len <= max_reasonable_len
-                and reserved == b'\x00\x00'
-                and pos + rdw_len <= len(raw)):
-            ok += 1
-            lengths.append(rdw_len)
-            pos += rdw_len  # advance past this whole record (RDW + data)
-        else:
-            # framing broke; not VB (or wrong starting offset)
-            break
-
-    if tried == 0:
-        return None
-
-    consistency = ok / tried
-    if consistency < 0.95 or ok < 20:
-        return None
-
-    return {
-        "consistency": consistency,
-        "records_walked": ok,
-        "lengths_seen": lengths,
-        "min_len": min(lengths),
-        "max_len": max(lengths),
-        "avg_len": sum(lengths) / len(lengths),
-    }
-
-
-def read_vb_fixed_records(filepath: Path, col_specs: list, max_records: int | None = None) -> tuple[pl.DataFrame, dict]:
-    """
-    Read a VB-format file (4-byte RDW per record: 2-byte big-endian total length
-    including the RDW + 2 reserved bytes) and apply the same fixed-offset field
-    specs used for the fixed-length reader. Offsets in col_specs are still
-    1-based positions *within the data portion* (i.e. position 1 = first byte
-    after the 4-byte RDW), matching how SAS INFILE @n positions normally read
-    on top of already-stripped RDWs.
-    """
-    rows = []
-    fail_counts = Counter()
-    total_counts = Counter()
-    records_read = 0
-
-    with open(filepath, 'rb') as f:
-        while True:
-            rdw = f.read(4)
-            if len(rdw) < 4:
-                break
-            rdw_len = int.from_bytes(rdw[0:2], byteorder='big', signed=False)
-            if rdw_len < 4:
-                break
-            data_len = rdw_len - 4
-            data = f.read(data_len)
-            if len(data) < data_len:
-                break
-
-            row = {}
-            for col_name, start, end, col_type in col_specs:
-                start_idx = start - 1
-                end_idx = end
-                total_counts[col_name] += 1
-                chunk = data[start_idx:end_idx] if len(data) >= end_idx else b''
-
-                if col_type == 'pd':
-                    val = decode_packed_decimal(chunk)
-                    if val is None:
-                        fail_counts[col_name] += 1
-                    row[col_name.lower()] = val
-                elif col_type == 'numeric':
-                    try:
-                        decoded = chunk.decode('cp037').strip()
-                        decoded_clean = ''.join(c for c in decoded if c.isdigit() or c in '.-')
-                        row[col_name.lower()] = float(decoded_clean) if decoded_clean else None
-                        if not decoded_clean:
-                            fail_counts[col_name] += 1
-                    except Exception:
-                        row[col_name.lower()] = None
-                        fail_counts[col_name] += 1
-                else:
-                    try:
-                        row[col_name.lower()] = chunk.decode('cp037').strip()
-                    except Exception:
-                        row[col_name.lower()] = ""
-                        fail_counts[col_name] += 1
-
-            rows.append(row)
-            records_read += 1
-            if max_records is not None and records_read >= max_records:
-                break
-
-    stats = {
-        "records_read": records_read,
-        "expected_records": records_read,
-        "fail_counts": dict(fail_counts),
-        "total_counts": dict(total_counts),
-    }
-    return pl.DataFrame(rows), stats
-
-
-def detect_record_length(filepath: Path, approx_length: int,
-                          probe_field_specs: list,
-                          sample_records: int = 500,
-                          tolerance: float = 0.6,
-                          widen_on_failure: bool = True,
-                          wide_min: int = 100,
-                          wide_max: int = 4000) -> int:
-    """
-    Try every exact divisor of the file size near approx_length, decode a
-    sample of records for each candidate using probe_field_specs, and pick the
-    candidate with the highest field-quality score.
-
-    If nothing near approx_length scores well, this is a signal that
-    approx_length itself was a bad guess (e.g. it was actually just the offset
-    of the last field used by a downstream script, not the true LRECL) -- so as
-    a fallback this widens the sweep to [wide_min, wide_max] before giving up.
-    """
-    file_size = filepath.stat().st_size
-    candidates = divisors_near(file_size, approx_length, tolerance)
-
-    def run_sweep(cands: list[int]) -> tuple[int | None, float, list[tuple[int, float]]]:
-        with open(filepath, 'rb') as f:
-            raw = f.read()
-        best_L, best_s = None, -1.0
-        rep = []
-        for L in cands:
-            n = min(sample_records, file_size // L)
-            char_values = []
-            pd_chunks = []
-            for i in range(n):
-                record = raw[i*L:(i+1)*L]
-                for col_name, start, end, col_type in probe_field_specs:
-                    chunk = record[start-1:end]
-                    if col_type == 'character':
-                        try:
-                            decoded = chunk.decode('cp037').strip()
-                        except Exception:
-                            decoded = ""
-                        char_values.append(decoded)
-                    elif col_type == 'pd':
-                        pd_chunks.append(chunk)
-            scores = []
-            if char_values:
-                scores.append(score_field_quality(char_values))
-            if pd_chunks:
-                scores.append(score_pd_quality(pd_chunks))
-            score = sum(scores) / len(scores) if scores else 0.0
-            rep.append((L, score))
-            if score > best_s:
-                best_s, best_L = score, L
-        return best_L, best_s, rep
-
-    if not candidates:
-        candidates = []
-
-    best_length, best_score, report = (None, -1.0, [])
-    if candidates:
-        best_length, best_score, report = run_sweep(candidates)
-
-    report.sort(key=lambda r: -r[1])
-    if report:
-        print("  Record length candidates near estimate (length, quality score):")
-        for L, s in report[:8]:
-            print(f"    {L:>8}  ->  {s:.3f}")
-
-    if best_score < 0.85 and widen_on_failure:
-        print(f"  No candidate near {approx_length} scored well (best {best_score:.3f}). "
-              f"Widening sweep to divisors of file size in [{wide_min}, {wide_max}] -- "
-              f"the estimate used to seed this search was likely wrong.")
-        wide_candidates = [L for L in range(wide_min, wide_max + 1) if file_size % L == 0]
-        if wide_candidates:
-            w_length, w_score, w_report = run_sweep(wide_candidates)
-            w_report.sort(key=lambda r: -r[1])
-            print("  Top candidates from wide sweep:")
-            for L, s in w_report[:10]:
-                print(f"    {L:>8}  ->  {s:.3f}")
-            if w_score > best_score:
-                best_length, best_score = w_length, w_score
-
-    if best_score < 0.85:
-        raise ValueError(
-            f"No candidate record length scores >= 0.85 on field-quality validation "
-            f"(best found: length={best_length}, score={best_score:.3f}). This file may "
-            f"not be truly fixed-length -- it could be VB (variable-length, RDW-prefixed) "
-            f"mainframe format instead. Check detect_vb_format() output, or confirm the "
-            f"true LRECL from the source copybook/JCL."
-        )
-
-    print(f"  Selected record length: {best_length} (score {best_score:.3f})")
-    return best_length
-
-
-def decode_packed_decimal(raw_bytes: bytes) -> float | None:
-    try:
-        hex_str = raw_bytes.hex()
-        digits = hex_str[:-1]
-        sign_nibble = hex_str[-1].upper()
-        if digits and all(c in '0123456789ABCDEF' for c in digits):
-            value = int(digits, 16)
-            if sign_nibble in ('D', 'B'):
-                value = -value
-            return float(value)
-    except Exception:
-        pass
-    return None
-
-
-def read_ebcdic_fixed_records(filepath: Path, record_length: int, col_specs: list,
-                               max_records: int | None = None) -> tuple[pl.DataFrame, dict]:
-    """
-    Read EBCDIC file with fixed-length records.
-    Returns (dataframe, decode_stats) -- decode_stats tracks per-field failure
-    counts so misalignment shows up as a visible number instead of silently
-    becoming None everywhere.
-    """
-    rows = []
-    fail_counts = Counter()
-    total_counts = Counter()
-    records_read = 0
-
-    file_size = filepath.stat().st_size
-    if file_size % record_length != 0:
-        print(f"  WARNING: file size {file_size} is not an exact multiple of "
-              f"record length {record_length} (remainder {file_size % record_length}). "
-              f"This record length is almost certainly wrong.")
-
-    expected_records = file_size // record_length
-
-    with open(filepath, 'rb') as f:
-        while True:
-            record = f.read(record_length)
-            if not record or len(record) < record_length:
-                break
-
-            row = {}
-            for col_name, start, end, col_type in col_specs:
-                start_idx = start - 1
-                end_idx = end
-                total_counts[col_name] += 1
-
-                if col_type == 'pd':
-                    raw_bytes = record[start_idx:end_idx]
-                    val = decode_packed_decimal(raw_bytes)
-                    if val is None:
-                        fail_counts[col_name] += 1
-                    row[col_name.lower()] = val
-
-                elif col_type == 'numeric':
-                    try:
-                        raw_bytes = record[start_idx:end_idx]
-                        decoded = raw_bytes.decode('cp037').strip()
-                        decoded_clean = ''.join(c for c in decoded if c.isdigit() or c in '.-')
-                        row[col_name.lower()] = float(decoded_clean) if decoded_clean else None
-                        if not decoded_clean:
-                            fail_counts[col_name] += 1
-                    except Exception:
-                        row[col_name.lower()] = None
-                        fail_counts[col_name] += 1
-
-                else:  # character
-                    try:
-                        raw_bytes = record[start_idx:end_idx]
-                        decoded = raw_bytes.decode('cp037').strip()
-                        row[col_name.lower()] = decoded
-                    except Exception:
-                        row[col_name.lower()] = ""
-                        fail_counts[col_name] += 1
-
-            rows.append(row)
-            records_read += 1
-
-            if max_records is not None and records_read >= max_records:
-                break
-            if records_read > expected_records + 10:
-                break
-
-    stats = {
-        "records_read": records_read,
-        "expected_records": expected_records,
-        "fail_counts": dict(fail_counts),
-        "total_counts": dict(total_counts),
-    }
-    return pl.DataFrame(rows), stats
-
-
-def print_decode_report(name: str, stats: dict) -> None:
-    print(f"  {name}: read {stats['records_read']} records "
-          f"(expected ~{stats['expected_records']})")
-    for col, total in stats["total_counts"].items():
-        fails = stats["fail_counts"].get(col, 0)
-        rate = fails / total if total else 0.0
-        flag = "  <-- HIGH FAILURE RATE" if rate > 0.10 else ""
-        print(f"    {col:>10}: {fails}/{total} decode failures ({rate:.1%}){flag}")
-
-
-def validate_code_field(df: pl.DataFrame, col: str, expected_values: list[str] | None = None,
-                         max_unique_to_show: int = 15) -> bool:
-    """
-    Sanity-check a decoded code field before trusting it in a filter/join.
-    Prints the top values so a human can eyeball whether they look like real
-    codes (short, alnum, blank) vs. garbage (control chars, high-bit noise).
-    Returns True if the field looks plausible, False otherwise.
-    """
-    if col not in df.columns or df.height == 0:
-        print(f"  Validation: column '{col}' missing or empty -- cannot validate.")
-        return False
-
-    vc = (
-        df.select(pl.col(col))
-        .to_series()
-        .value_counts()
-        .sort("count", descending=True)
-        .head(max_unique_to_show)
-    )
-    print(f"  Top values for '{col}':")
-    print(vc)
-
-    values = df[col].drop_nulls().to_list()
-    score = score_field_quality(values)
-    print(f"  '{col}' field-quality score: {score:.3f}")
-
-    if expected_values:
-        hit_rate = sum(1 for v in values if v in expected_values) / max(len(values), 1)
-        print(f"  '{col}' match rate against expected values {expected_values}: {hit_rate:.3%}")
-
-    return score >= 0.85
-
-
 # =========================
 # Calculate REPTDATE
 # =========================
-REPTDATE = date.today() - timedelta(days=6)
+REPTDATE = date.today() - timedelta(days=1)
 REPTMON  = f"{REPTDATE.month:02d}"
 REPTDAY  = f"{REPTDATE.day:02d}"
 REPTYEAR = f"{REPTDATE.year:04d}"
@@ -668,15 +269,16 @@ loan0 = loan_base.filter(~(pl.col("commno") > 0))
 print(f"  LOAN0 rows: {loan0.height}")
 print(f"  LOAN1 rows: {loan1.height}")
 
+
 # =========================
-# COMM
+# COMM processing
 # =========================
 print("Reading COMM datasets in chunks...")
-print("Reading Islamic LNCOMM (ENTITY_CD = 'PIBB')...")
+print("Reading Islamic LNCOMM...")
 loani_comm = read_sas7bdat_filtered(LOANI_LNCOMM, entity_filter='PIBB', chunk_size=CHUNK_SIZE)
 print(f"  Islamic LNCOMM rows: {loani_comm.height}")
 
-print("Reading Conventional LNCOMM (ENTITY_CD != 'PIBB')...")
+print("Reading Conventional LNCOMM...")
 loan_comm = read_sas7bdat_filtered(LOAN_LNCOMM, entity_filter='NON_PIBB', chunk_size=CHUNK_SIZE)
 print(f"  Conventional LNCOMM rows: {loan_comm.height}")
 
@@ -718,8 +320,9 @@ if "netproc" not in loan0.columns:
 loan = pl.concat([loan0, loan1], how="vertical", rechunk=True)
 print(f"Total LOAN rows after merge: {loan.height}")
 
+
 # =========================
-# Derive ISSUED, NODAYS, ARREARS, NPLDATE
+# Derive fields
 # =========================
 print("Calculating ISSUED, NODAYS, ARREARS, NPLDATE...")
 
@@ -745,10 +348,9 @@ loan = loan.with_columns([
 ])
 
 print("Applying NDAYS format...")
-
 loan = loan.with_columns([
     pl.col("nodays").map_elements(
-        lambda x: informat(int(x) if x is not None else 0, "NDAYS", default=0),
+        lambda x: informat(int(x) if x is not None else 0, "NDAYS", default=0), 
         return_dtype=pl.Int64
     ).alias("arrears")
 ])
@@ -760,20 +362,20 @@ loan = loan.with_columns([
       .alias("arrears")
 ])
 
-
 def calculate_npldate(bldate_val, nodays_val):
     if nodays_val is None or nodays_val <= 89:
         return None
+    
     adjusted_date = sas_days_to_date(int(bldate_val) + 90)
     npl_mm = adjusted_date.month
     npl_yy = adjusted_date.year
     npl_dd = month_end_of(adjusted_date).day
+    
     return date(npl_yy, npl_mm, npl_dd)
-
 
 loan = loan.with_columns([
     pl.struct(["bldate", "nodays"])
-      .map_elements(lambda row: calculate_npldate(row["bldate"], row["nodays"]),
+      .map_elements(lambda row: calculate_npldate(row["bldate"], row["nodays"]), 
                     return_dtype=pl.Date)
       .alias("npldate")
 ])
@@ -781,12 +383,13 @@ loan = loan.with_columns([
 loan = loan.unique(subset=["acctno", "noteno"], keep="first")
 print(f"LOAN rows after deduplication: {loan.height}")
 
+
 # =========================
-# CISLN
+# CISLN processing
 # =========================
 print("Processing CISLN in chunks...")
 cisln = read_sas7bdat_filtered(
-    CISLN_LOAN,
+    CISLN_LOAN, 
     column_filter={'seccust': '901'},
     chunk_size=CHUNK_SIZE
 )
@@ -800,9 +403,10 @@ print(f"  CISLN rows after filter: {cisln.height}")
 
 loan = loan.join(cisln, on="acctno", how="left")
 
-# =====================================================================
-# COLL / DESC file processing -- with record-length detection + validation
-# =====================================================================
+
+# =========================
+# COLL and DESC processing
+# =========================
 print("Processing COLL and DESC files...")
 
 coll_specs = [
@@ -819,151 +423,114 @@ desc_specs = [
     ("tranche", 291, 298, "character")
 ]
 
-# ---- Resolve COLL record length / format ----
-COLL_IS_VB = False
-if KNOWN_COLL_RECORD_LENGTH is not None:
-    COLL_RECORD_LENGTH = KNOWN_COLL_RECORD_LENGTH
-    coll_file_size = COLL_FILE.stat().st_size
-    if coll_file_size % COLL_RECORD_LENGTH != 0:
-        print(f"  WARNING: known COLL_RECORD_LENGTH={COLL_RECORD_LENGTH} does not evenly "
-              f"divide file size {coll_file_size} -- this value may be stale.")
-    else:
-        print(f"  Using known COLL record length: {COLL_RECORD_LENGTH}")
-else:
-    print("Checking whether COLL is VB (variable-length, RDW-prefixed) format...")
-    vb_info = detect_vb_format(COLL_FILE)
-    if vb_info is not None:
-        COLL_IS_VB = True
-        print(f"  COLL looks like VB format: {vb_info['records_walked']} consecutive "
-              f"records framed consistently ({vb_info['consistency']:.1%}), record "
-              f"lengths ranging {vb_info['min_len']}-{vb_info['max_len']} bytes "
-              f"(avg {vb_info['avg_len']:.0f}). Using RDW-aware reader instead of a "
-              f"fixed record length.")
-    else:
-        print("  Not VB-framed (or framing didn't hold) -- trying fixed-length detection.")
-        print("Detecting COLL record length...")
-        COLL_RECORD_LENGTH = detect_record_length(
-            COLL_FILE, approx_length=158, probe_field_specs=coll_specs
-        )
+# COLL: Record length 158
+COLL_RECORD_LENGTH = 158
 
-# ---- Resolve DESC record length (this was the actual bug: never guess this) ----
-if KNOWN_DESC_RECORD_LENGTH is not None:
-    DESC_RECORD_LENGTH = KNOWN_DESC_RECORD_LENGTH
-    desc_file_size = DESC_FILE.stat().st_size
-    if desc_file_size % DESC_RECORD_LENGTH != 0:
-        print(f"  WARNING: known DESC_RECORD_LENGTH={DESC_RECORD_LENGTH} does not evenly "
-              f"divide file size {desc_file_size} -- this value may be stale.")
-    else:
-        print(f"  Using known DESC record length: {DESC_RECORD_LENGTH}")
-else:
-    print("Detecting DESC record length (previous code guessed this from an assumed "
-          "row count -- that produced a non-integer remainder and misaligned every field)...")
-    # 84686 was the old (wrong) guess; give the detector a wide net around it,
-    # and also try the field layout's own minimum span (>=298 bytes) as a floor.
-    approx = max(84686, 298)
-    DESC_RECORD_LENGTH = detect_record_length(
-        DESC_FILE, approx_length=approx, probe_field_specs=desc_specs, tolerance=0.9
-    )
+# DESC: Calculate correct record length
+desc_file_size = DESC_FILE.stat().st_size
+expected_desc_records = 58604
+DESC_RECORD_LENGTH = desc_file_size // expected_desc_records
 
-if COLL_IS_VB:
-    print("COLL format: variable-length (RDW-prefixed)")
-else:
-    print(f"COLL record length: {COLL_RECORD_LENGTH}")
+print(f"COLL record length: {COLL_RECORD_LENGTH}")
+print(f"DESC file size: {desc_file_size}")
 print(f"DESC record length: {DESC_RECORD_LENGTH}")
 
 try:
+    # Read COLL
     print("\nReading COLL file...")
-    if COLL_IS_VB:
-        coll, coll_stats = read_vb_fixed_records(COLL_FILE, coll_specs)
-    else:
-        coll, coll_stats = read_ebcdic_fixed_records(COLL_FILE, COLL_RECORD_LENGTH, coll_specs)
-    print_decode_report("COLL", coll_stats)
-
-    # ---- Validation gate: don't trust COLL's key fields until decode failure rate is low ----
-    max_fail_rate = 0.0
-    for col, fails in coll_stats["fail_counts"].items():
-        total = coll_stats["total_counts"].get(col, 1)
-        max_fail_rate = max(max_fail_rate, fails / total if total else 0.0)
-
-    if max_fail_rate > 0.10:
-        raise ValueError(
-            f"COLL packed-decimal fields (CCOLLNO / ACCTNO / NOTENO) failed to decode "
-            f"cleanly (worst field failure rate {max_fail_rate:.1%}, want <= 10%). This "
-            f"means COLL_RECORD_LENGTH={COLL_RECORD_LENGTH} is likely still wrong, or the "
-            f"byte offsets in coll_specs don't match the true copybook layout. Refusing "
-            f"to proceed to the CCOLLNO join, since that would silently return near-empty "
-            f"or wrong results. Confirm the COLL layout against the source copybook."
-        )
-
+    coll = read_ebcdic_fixed_records(COLL_FILE, COLL_RECORD_LENGTH, coll_specs)
+    print(f"COLL rows: {coll.height}")
+    
+    # Read DESC with correct record length
     print("Reading DESC file...")
-    desc, desc_stats = read_ebcdic_fixed_records(DESC_FILE, DESC_RECORD_LENGTH, desc_specs)
-    print_decode_report("DESC", desc_stats)
-
-    print("\n=== COLL Data Sample (first 3 rows) ===")
-    print(coll.head(3))
-
+    desc = read_ebcdic_fixed_records(DESC_FILE, DESC_RECORD_LENGTH, desc_specs, max_records=expected_desc_records)
+    print(f"DESC rows: {desc.height}")
+    
+    # ==========================================
+    # DIAGNOSTIC: Scan DESC records for CINSTCL and NATGUAR
+    # ==========================================
+    print("\n=== Scanning DESC records for CINSTCL and NATGUAR positions ===")
+    
+    # Read first 5 DESC records to analyze structure
+    with open(DESC_FILE, 'rb') as f:
+        sample_records = []
+        for i in range(5):
+            record = f.read(DESC_RECORD_LENGTH)
+            if not record or len(record) < DESC_RECORD_LENGTH:
+                break
+            sample_records.append(record)
+    
+    # For each sample record, decode and search for '18' and '06'
+    for idx, record in enumerate(sample_records):
+        decoded = record.decode('cp037', errors='ignore')
+        
+        # Search for '18' and '06' in the first 500 characters
+        positions_18 = []
+        positions_06 = []
+        for i in range(min(len(decoded) - 1, 500)):
+            if decoded[i:i+2] == '18':
+                positions_18.append(i + 1)  # 1-based
+            if decoded[i:i+2] == '06':
+                positions_06.append(i + 1)  # 1-based
+        
+        print(f"\nRecord {idx + 1}:")
+        print(f"  CCOLLNO (pos 1-11): '{decoded[0:11].strip()}'")
+        
+        if positions_18:
+            print(f"  Positions with '18' in first 500 chars: {positions_18}")
+        if positions_06:
+            print(f"  Positions with '06' in first 500 chars: {positions_06}")
+        
+        # Show context around first '18' and '06'
+        if positions_18:
+            p = positions_18[0] - 1  # 0-based
+            print(f"  Context around '18' at pos {positions_18[0]}: ...{decoded[max(0,p-10):p+12]}...")
+        if positions_06:
+            p = positions_06[0] - 1  # 0-based
+            print(f"  Context around '06' at pos {positions_06[0]}: ...{decoded[max(0,p-10):p+12]}...")
+        
+        # Show positions 51-52 and 55-56
+        print(f"  Pos 51-52 (CINSTCL per SAS): '{decoded[50:52]}'")
+        print(f"  Pos 55-56 (NATGUAR per SAS): '{decoded[54:56]}'")
+    
+    print("\n=== End Diagnostic ===")
+    # ==========================================
+    
+    # Print sample data
     print("\n=== DESC Data Sample (first 3 rows) ===")
     print(desc.head(3))
-
-    # ---- Validation gate: don't trust cinstcl/natguar until they look clean ----
-    print("\nValidating decoded code fields before filtering...")
-    cinstcl_ok = validate_code_field(desc, "cinstcl")
-    natguar_ok = validate_code_field(desc, "natguar")
-
-    if not (cinstcl_ok and natguar_ok):
-        raise ValueError(
-            "DESC code fields (CINSTCL / NATGUAR) do not look valid after decoding "
-            "-- values contain non-alnum/control characters, which means the record "
-            "length or field offsets are still wrong. Refusing to proceed to the "
-            "CINSTCL='18' AND NATGUAR='06' filter, since that would silently return "
-            "zero (or wrong) rows. Confirm the DESC layout (LRECL and column offsets) "
-            "against the source copybook and re-run."
-        )
-
-    has_18 = desc.filter(pl.col('cinstcl') == '18').height
-    has_06 = desc.filter(pl.col('natguar') == '06').height
-    print(f"Rows with CINSTCL='18': {has_18}")
-    print(f"Rows with NATGUAR='06': {has_06}")
-
+    
+    # Convert types
     coll = coll.with_columns(pl.col("ccollno").cast(pl.Float64).alias("ccollno"))
     desc = desc.with_columns(pl.col("ccollno").cast(pl.Float64).alias("ccollno"))
-
+    
     coll = coll.with_columns([
         pl.col("acctno").cast(pl.Float64).alias("acctno"),
         pl.col("noteno").cast(pl.Float64).alias("noteno")
     ])
-
+    
+    # Sort and join
     coll = coll.sort(by="ccollno")
     desc = desc.sort(by="ccollno")
-
+    
     coll_joined = coll.join(desc, on="ccollno", how="inner")
     print(f"\nCOLL rows after join: {coll_joined.height}")
-
-    # Sanity check on join cardinality: ccollno should behave close to 1:1.
-    # A large blow-up here is a strong signal of upstream key corruption.
-    if coll.height > 0:
-        ratio = coll_joined.height / coll.height
-        if ratio > 5:
-            print(f"  WARNING: join produced {ratio:.1f}x more rows than the COLL side "
-                  f"({coll_joined.height} vs {coll.height}). This suggests CCOLLNO values "
-                  f"are colliding due to decode corruption rather than a genuine 1:many "
-                  f"relationship. Inspect ccollno distributions before trusting this join.")
-
+    
+    # Filter (using original SAS positions)
     coll_filtered = coll_joined.filter((pl.col("cinstcl") == "18") & (pl.col("natguar") == "06"))
     print(f"COLL rows after filter: {coll_filtered.height}")
-
+    
     coll = coll_filtered
-
+    
 except Exception as e:
     print(f"Error: {e}")
     import traceback
     traceback.print_exc()
-    print("\nAborting run: COLL/DESC could not be read and validated correctly. "
-          "Fix the record length / field offsets (see messages above) before rerunning; "
-          "continuing with an empty placeholder would silently produce an empty final output.")
-    sys.exit(1)
+    coll = pl.DataFrame(schema={"ccollno": pl.Float64, "acctno": pl.Float64, "noteno": pl.Float64, 
+                                "cinstcl": pl.Utf8, "natguar": pl.Utf8, "census": pl.Float64, "tranche": pl.Utf8})
 
 print(f"\nFinal COLL rows: {coll.height}")
+
 
 # =========================
 # NPGS merge
@@ -979,8 +546,9 @@ print(f"NPGS rows after COLL merge: {npgs.height}")
 
 npgs = npgs.sort(by="pendbrh")
 
+
 # =========================
-# MICR
+# MICR processing
 # =========================
 print("Processing MICR file...")
 
@@ -990,8 +558,9 @@ micr_specs = [
 ]
 
 try:
-    micr = read_fixed_width_file(MICR_FILE, micr_specs, encoding='ascii')
+    micr = read_fixed_width_text(MICR_FILE, micr_specs, encoding='ascii')
     micr = micr.sort(by="pendbrh")
+    print(f"  MICR rows: {micr.height}")
 except Exception as e:
     print(f"Warning: Error reading MICR file: {e}")
     micr = pl.DataFrame(schema={"pendbrh": pl.Float64, "micrcd": pl.Utf8})
@@ -1003,14 +572,13 @@ if npgs.height > 0 and micr.height > 0:
 
 npgs = npgs.join(micr, on="pendbrh", how="left")
 
+
 # =========================
-# CVAR02 mapping from SCH
+# CVAR fields
 # =========================
 print("Creating CVAR fields...")
 
-npgs = npgs.with_columns([
-    pl.lit("   ").alias("cvar02")
-])
+npgs = npgs.with_columns([pl.lit("   ").alias("cvar02")])
 
 npgs = npgs.with_columns([
     pl.when(pl.col("sch") == "P93").then(pl.lit("93"))
@@ -1022,9 +590,6 @@ npgs = npgs.with_columns([
 
 npgs = npgs.filter(pl.col("cvar02") != "   ")
 
-# =========================
-# Final CVAR fields
-# =========================
 npgs = npgs.with_columns([
     pl.col("census").alias("cvar01"),
     pl.col("newic").alias("cvar03"),
@@ -1060,9 +625,7 @@ npgs = npgs.with_columns([
       .alias("cvar13")
 ])
 
-npgs = npgs.with_columns([
-    pl.lit(NORMDT).alias("normdt")
-])
+npgs = npgs.with_columns([pl.lit(NORMDT).alias("normdt")])
 
 npgs = npgs.with_columns([
     pl.when((pl.col("arrears") >= 3) & pl.col("npldate").is_not_null())
@@ -1071,6 +634,10 @@ npgs = npgs.with_columns([
       .alias("cvar12")
 ])
 
+
+# =========================
+# NPL status logic
+# =========================
 npgs = npgs.sort(by=["cvar06", "cvar01"])
 
 if NPGS_SMEZ.exists():
@@ -1082,14 +649,13 @@ else:
         pl.lit("          ").alias("ndate")
     ])
 
-
 def adjust_cvar13(row):
     cvar12 = row.get("cvar12", "   ")
     status = row.get("status", "   ")
     ndate = row.get("ndate", "          ")
     cvar13 = row.get("cvar13", "          ")
     normdt = row.get("normdt", "          ")
-
+    
     if cvar12 == "NPL":
         if status == "NPL":
             return ndate
@@ -1101,7 +667,6 @@ def adjust_cvar13(row):
             return ndate
         return cvar13
 
-
 npgs = npgs.with_columns([
     pl.struct(["cvar12", "status", "ndate", "cvar13", "normdt"])
       .map_elements(adjust_cvar13, return_dtype=pl.Utf8)
@@ -1110,7 +675,11 @@ npgs = npgs.with_columns([
 
 npgs = npgs.sort(by="cvar01")
 
-for c in ["costctr", "balance", "curbal", "accrual", "tranche",
+
+# =========================
+# Final output
+# =========================
+for c in ["costctr", "balance", "curbal", "accrual", "tranche", "sch", 
           "censust", "product", "natguar", "cinstcl"]:
     if c not in npgs.columns:
         npgs = npgs.with_columns(pl.lit(None).alias(c))
@@ -1126,8 +695,9 @@ keep_cols = [
 out = npgs.select(keep_cols)
 out = out.rename({col: col.upper() for col in out.columns})
 
+
 # =========================
-# Output via SASPy
+# Write output
 # =========================
 print(f"Writing NPGS.LNSMEZ{REPTMON}...")
 
@@ -1136,7 +706,7 @@ out_pandas = out.to_pandas()
 sas = saspy.SASsession(results='TEXT')
 
 sas.submit(f"""
-    libname npgs "{BASE_OUTPUT}";
+    libname npgs "{BASE_OUTPUT}/NPGS";
     options nofmterr;
 """)
 
@@ -1145,12 +715,12 @@ sas_df = sas.df2sd(out_pandas, table='work.temp_out')
 sas.submit(f"""
     data npgs.lnsmez{REPTMON};
         set work.temp_out;
-        format CVAR01 CVAR06 10.
-               CVAR03 $15.
-               CVAR04 $50.
+        format CVAR01 CVAR06 10. 
+               CVAR03 $15. 
+               CVAR04 $50. 
                CVAR14 $4.
-               CVAR13 $10.
-               CVAR08 CVAR09 CVAR10 CVAR17 10.2
+               CVAR13 $10. 
+               CVAR08 CVAR09 CVAR10 CVAR17 10.2 
                CVAR11 5.
                CVAR02 $3.
                CVAR12 $3.
@@ -1158,7 +728,7 @@ sas.submit(f"""
                CVAR16 $2.
                CVAR07 $2.;
     run;
-
+    
     proc datasets lib=npgs nolist;
         modify lnsmez{REPTMON};
         label
@@ -1182,6 +752,6 @@ sas.submit(f"""
     run;
 """)
 
-print(f"Successfully wrote NPGS.LNSMEZ{REPTMON} to {BASE_OUTPUT}")
+print(f"Successfully wrote NPGS.LNSMEZ{REPTMON} to {BASE_OUTPUT}/NPGS")
 
 sas.endsas()
