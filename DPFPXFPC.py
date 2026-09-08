@@ -1,471 +1,528 @@
-                                                           309                                                                             5CHANG CHUNG VUI                         681212125443                            MILE 4 JALAN PENAMPANG                  SABAH                                   MALAYSIA                                ICHOUSE NO 4 BLOCK I TAMAN DELIMA         88300 KOTA KINABALU                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       0 
-           
-                                    00000152231050 16IC    1Y
-                                                                     2013          TAN TUAN WEE                            410420135473                                                                                                                                                                                              000000 YL31122069        28021994371 M2802199420052005N       E26FF12461562KCGI                                                                               LOT 1014 BLK 11                         MUARA TEBAS LAND DISTRICT                                                                                                              372 0131082027
-                                                                                                                                                                                                                   MN                                                                                                          93100        
-                                                                                                     MY      
-                                                                                                                    000000001008200400000000                       1014                                    TABUAN JAYA                             KUCHING                                                                         11SARAWAK       QK1KUCHING             PHENRY BUTCHER MALAYSIA (S) SDN BHD                                                                                                                                                                      TAN TUAN WEE                            410420135473                            TABUAN JAYA SHOPPING CENTRE             SARAWAK                                 MALAYSIA                                ICLOT 1335 NO.869                         93350 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             0 
-                                                                                                                                                                                                          
-                                                                                                                                                                                                                                   00000152314035 16ICIC  1N
-                             3017          HO KOK THIN                             551027715251                            LIM YEI NA                              570112135546                                                                                                              000000 YL09052804        080119971012F0801199820042004N       F0656927FI      I                                                                               LOT 35 BLK 53                           KUCHING TOWN LAND DISTRICT              M/S CHONG BROTHERS ADV                  WSL-STM/96/218/DCHR/HHB C/L38                              0819022027
-                                                                                                                                                                            N                                                                                                          93100  Y      Ø
-                                                               MY      
-                                                                               0000000022122025U06122005                       35        OFFICE @ JALAN DESHON         JALAN DESHON                            SEKSYEN 53                              93100 KUCHING SARAWAK                   11SARAWAK       QK1KUCHING             PIVPS SDN BHD                                                                                                                                                    SCRUBBED                                5HO KOK THIN                             551027715251                            93100 KUCHING SARAWAK                                                           -                                       IC4 JLN DESHON                            93100 KUCHING                           BLIM YEI NA                              570112135546                            93100 KUCHING SARAWAK                                                           -                                       IC4 DESHON ROAD                           93100 KUCHING                           B                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            N        00 
-                                                                                                                                                                       
-                                                                                                                                                                       SCRUBBED                 00000152348035 16ICIC  1N
-                                                                                                                                                                                                                                 3017          HO KOK THIN                             551027715251                            LIM VEI NA                              570112135546                                                                                                              000000 YL09052804        080119971012F0801199720042004N       F0656896FI      I                                                                               LOT 36 BLK 53                           KUCHING TOWN LAND DISTRICT              M/S CHONG BROTHERS ADV                  WSL-STM/96/218/DCHR/HHB C/L38                              0819022027
-                                                                                                                                         N                                                                                                          93100  Y      Ø
-                            MY      
-                                            0000000022122025U06122005                       36        OFFICE @ JALAN DESHON         JALAN DESHON                                                                    93100 KUCHING, SARAWAK                  11SARAWAK       QK1KUCHING             PIVPS SDN BHD                                                                                                                                                    SCRUBBED                                5HO KOK THIN                             551027715251                            93100 KUCHING SARAWAK                                                           -                                       IC4 JLN DESHON                            93100 KUCHING                           BLIM VEI NA                              570112135546                            93100 KUCHING SARAWAK                                                           -                                       IC4 DESHON ROAD                           93100 KUCHING                           B                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            N        00 
-                                                                                                                                    
-                                                                                                                                    SCRUBBED                 00000153387050 16IC    1Y 
-                                                                                                                                                                                               2046          HO WEE KEONG                            581021045119                                                                                                                                                                                              000000 YF                        4000F        20092009N       M25FB11827588MLKI                                                                               GERAN 6643                              BANDAR XXXVII/MLK TGH                                                                                                                  56440121092026
-                                                                                                      FN                                                                                                          75050  Y      ê
-                                                                                                                                                                                                                                 MY      
-  I       0000000029112024N30112022                       465                                     LORONG SATU                             UJONG PASIR                             75050 MELAKA                            04MELAKA        M08MELAKA              PYAP LING CHIH                                                                                                                                                                                           5HO WEE KEONG                            581021045119                            75000 MELAKA MELAKA                     MELAKA                                  -                                       IC320A JLN MELAKA RAYA 1 TMN MELAKA RAYA  75000 MELAKA                            B                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       N        00 
-                                                                                                  
-                                                                                                                           00000153395000 18RI01MY101020001115031968    
-                                                                                                                                                                                '
-  Length: 197676
-  Positions 0-11: '
-                    FN     '
-  Positions 50-52: 'N '
-  Positions 54-56: 'M '
-  Positions 210-220: '115       '
-Line 6: '
-                   PATRICIA LIAW NYUK LIN                  680315135148                                                                    WIFE                                                                                                                                            
-                                                            
-                                                                                             
-                                                                                                     
-                                                                                                             
-                                                                                                                     
-                                                                                                                             
-                                                                                                                                     
-                                                                                                                                                                                             
-                                                                                                                                                                                                     
-                                                                                                                                                                                                                         
-                                                                                                                                                                                                                                 
-                                                                                                                                                                                                                                         
-          
-                  00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000153510050 16ICRIRI1N&
-                                                                                         2012          LING MING CHUAN                         720919135513                                                                                                                                                                                              000000 YF                190120111152F2701201120112011Y       E25FB11353979MIRI                                                                               LOT 190 BLOCK 10                        PANDARUAN LAND DISTRICT                 TIONG & CO ADVOCATES                    MT/C/PBB-LMC/5064(PJ)                                  388 0108122026Ø
-                                                                                                                                                                                                                                       MN                                                                                                          98700         b
-                                                                                                                           MY      
-                                                                                                                                   C       0000000029112024N30112022190       BLK 10 PLD                    SEBUKANG ROAD                                                                   98700 LIMBANG SARAWAK                   11SARAWAK       Q20LIMBANG             SALEXANDER DONALD                                                                                                        29/11/19-REFERS TO APPROVED REVIEW DATE WITH NO CHANGE IN CMV OF RP IN 2019     5LING MING CHUAN                         720919135513                            98707 LIMBANG SARAWAK                   SARAWAK                                 MALAYSIA                                ICPO BOX 281                              98707 LIMBANG                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             0 
-                                                                                                                                                                                                            
-                                                                                                                                                                                                            WITH NO CHANGE IN CMV OF 00000153627036 10ICIC  1N&
-                                2015          NASRUDDIN BIN MASDI                     620626085753                            AZIZAH BINTI MAJID                      651223715054                                                                                                            00000000 YF                2008200157  M        20012001Y       P23FF12954454PNGM                                       TEAM FOUR SDN BHD                       HS (D) 741                              MK 16/ SPT                              CHEONG WAI MENG & VAN BUERLE            C/FR/MB2/1252/2001/N                                       0131102024
-                                                                                                                                                                                  NTEAM FOUR SDN BHD                       BANDAR MACHANG BUBOK - PHASE 2                                    13700         ç
-                                                                     MY      
-                                                                                    0000000030112022N30102015                       A-02-14   BDR MACHANG BUBOK FLAT                                                BANDAR MACHANG BUBOK                                                            07PULAU PINANG  P14PERAI               PCHAN TIEK WOH                                                                                                                                                                                           5NASRUDDIN BIN MASDI                     620626085753                            14020 BKT MERTAJAM PULAU PINANG         PULAU PINANG                            MALAYSIA                                ICBLOCK E TKT 1 NO 4 LRG MACHANG BUBUK 34 14020 BKT MERTAJAM                       AZIZAH BINTI MAJID                      651223715054                            14000 BUKIT MERTAJAM PENANG             PULAU PINANG                            MALAYSIA                                IC887 PADANG LALANG                       14000 BUKIT MERTAJAM                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           0 
-                                                                                                                                                                            
-                                                                                                                                                                                                     00000153999050 16IC    1N&
-                                                                                                                                                                                                                                       2013          HOW GEE HONG                            510404045337                                                                                                                                                                                              000000 YF                191220004500F3112200020042004N       M26FB11870101MLKI                                                                               GERAN 18348                             BUKIT KATIL/MLK TGH                     NORDIN & PHUA                           NP/PSL/HIW/1360/00                                     458 0131082027Ø
-                                                                                                                                               MN                                                                                                          75450          
-                                   MY      
-                                                  0000000022122025C28112023                       16                                      JALAN PUNCAK 6                          TAMAN PUNCAK BUKIT KATIL                75450 MELAKA                            04MELAKA        M01AIR KEROH           PMS YAP LING CHIH                                                                                                        22/11/21-REFERS TO APPROVED REVIEW DATE WITH NO CHANGE IN CMV OF RP IN 2021     5HOW GEE HONG                            510404045337                            75450 MELAKA MELAKA                     MELAKA                                  MALAYSIA                                IC16 PUNCAK 6 TMN PUNCAK BKT KATIL        75450 MELAKA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              0 
-                                                                                                                                          
-                                                                                                                                          WITH NO CHANGE IN CMV OF 00000154054000 18RI02MY11102000          1114041956    
-                                                                                                                                                                                                                                  
-                                                                                                                                                                                                                                                  ONG SOOK LIAN                           560414106434                                                                    DIRECTOR                                                                                                                                        
-                                                    
-                                                                                     
-                                                                                             
-                                                                                                     
-                                                                                                             
-                                                                                                                     
-                                                                                                                             
-                                                                                                                                                                                     
-                                                                                                                                                                                             
-                                                                                                                                                                                                                 
-                                                                                                                                                                                                                         
-                                                                                                                                                                                                                                 
-                                                                                                                                                                                                                                         
-          00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000154161000 18RI02MY111020001131031955    
-                                                                                                    
-                                                                                                              CHIA CHOONG SIANG                       550331106093                                                                    DIRECTOR                                                                                                                                        
-                                                                                                                                                       
-                                                                                                                                                                                        
-                                                                                                                                                                                                
-                                                                                                                                                                                                        
-                                                                                                                                                                                                                
-                                                                                                                                                                                                                        
-                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                                                                        
-                                                         
-                                                                             
-                                                                                     
-                                                                                             
-                                                                                                     
-                                                                                                             00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000154294050 16ICICIC1Y
-                                                                                                                                                                                   2041          LEE LIAN FAH                            471128135002                            TAI NYIK FUI                            740311135003                            TAI NYIK HOW                            760602135933                              000000 YL31122038        010320071800F        20092009Y       E26FB11450833KCGI                                                                               LOT 2283 BLK 195                        KUCHING NORTH LD                        SIA ALVIN WONG ADV                                                                             564 0128022027
-                                                                                          MN                                                                                                          93400  N      
-                                                                                                                                                                                                                    MY      
-                                                                                                                                                                                                                                   0000000029112024C30112022                       2168                                    JALAN PENRISSEN                         KUCHING                                                                         11SARAWAK       QK1KUCHING             PCHEE TECK KHIAN, SIMON                                                                                                                                                                                  5CHIN FAH                                590818135263                            JLN PENRISSEN                           SARAWAK                                 MALAYSIA                                IC31 BATU 4                               93250 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             0 
-                                                                                    
-                                                                                                             00000154633050 16ICIC  1N
-                                                                                                                                      MY      
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from pathlib import Path
+import pyreadstat
+import saspy
+import os
+import tempfile
+import re
 
-                                                                                                                                                      0000000024042026C19102017                       2465                                    JALAN PISANG WEST                       ULU SUNGAI KUDEI                        KUCHING                                 11SARAWAK       QK1KUCHING             PCHEE TECK KHIAN, SIMON                                                                                                                                                                                  5FAM CHAW CHING                          501118135484                            JLN PISANG BARAT                        SARAWAK                                 MALAYSIA                                IC407E LRG 11A1                           93150 KUCHING                            KONG YOUNG SAN                          720107135323                            JLN PISANG WEST                         SARAWAK                                 MALAYSIA                                IC407E LRG 11A1                           93150 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  0 
-                                                                                                                                                                                                                                              
-                                00000154823051 16ICIC  1Y
-                                                                 3016          ANG YAN HUAT                            431103135229                            ANG SOK HUANG                           690530135334                                                                                                              000000YL3112203707092000        20072007N       E26FF12445400KCGI                                                                               LOT 1041 BLOCK 207                      KNLD                                                                                                                                   197 0131122026°
-                                                                                                                                                                                                  MN                                                                                                          93150 C       -
-                                                                                      MY      
-                                                                                                      0000000026022024R20022023                       28                                      JALAN SUNGAI MAONG TENGAH               POH KWONG PARK                          93150 KUCHING SARAWAK                   11SARAWAK       QK1KUCHING             PLIEW SZE SZE                            LIEW SZE SZE                                                                                                            SCRUBBED                                3ANG YAN HUAT                            431103135229                            JALAN SG MAONG TENGAH                   SARAWAK                                 MALAYSIA                                IC28 POH KWONG PARK SHOP                  93150 KUCHING                            ANG SOK HUANG                           690530135334                            93100 KUCHING SARAWAK                   SARAWAK                                 MALAYSIA                                IC28 POH KWONG PARK BAZAAR                93100 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  0 
-                                                                                                                                                                                              
-                                                                                                                                                                                              SCRUBBED                 00000154922050 16IC    1N-
-                  2013          BOON KIM THEEN                          520402135194                                                                                                                                                                                              000000 YF                03012006128 M0903200620052005N       E26FB11462891KCGI                                                                               LOT 3197 BLK 11                         MUARA TEBAS LAND DISTRICT               SIM & YEE ADV                           SY                                                     324 0131082027Ã
-                                                                                                                                                                 MN                                                                                                          93350         nk
-                                                      MY      
-                                                                     0000000024042026N31122009                       304                                     LORONG 16 JALAN KEDANDI                 TABUAN DUSUN                            93350 KUCHING SARAWAK                   11SARAWAK       QK1KUCHING             PCHEE TECK KHIAN, SIMON                                                                                                                                                                                  5BOON KIM THEEN                          520402135194                            JLN KEDANDI TABUAN DUSUN                SARAWAK                                 MALAYSIA                                IC304 LRG 16                              93350 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             0 
-                                                                                                                                                             
-                                                                                                                                                                                      00000154971050 16IC    1YécØ
-                                                                                                                                                                                                                          2041          TING CHIN DING                          660624135581                                                                                                                                                                                              000000 YL16042057        21121999270 M0102200020052004Y       E26FB11462898KCGI                                                                               LOT 8498 BLOCK 16                       KUCHING CENTRAL LAND DISTRICT           S K LING & TAN ADVOCATES (KUCHING)      PBB/194/19/KII                                         338 0131082027        n
-                                                                                                                                          MN                                                                                                          93350  Y      gà
-                               MY      
-                                               0000000029112024N30112022                       159       LOT 8498                      LORONG 6                                JALAN KEMPAS                                                                    11SARAWAK       QK1KUCHING             PCHEE TECK KHIAN, SIMON                                                                                                                                          SDC PDG/346/19                          5TING CHIN DING                          660624135581                            LRG 6 JLN KEMPAS                        SARAWAK                                 -                                       IC159 LOT 8498                            93350 KUCHING                           B                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       N        00 
-                                                                                                                                       
-                                                                                                                                       SDC PDG/346/19           00000155176034 16CI    1Y
-                                                                                                                                                                                                 1010          HOCK SENG LEE RESORT SDN BHD            369544W                                                                                                                                                                                                   000000YF        060219980602199820052005N       I                                                                               LOT 283 BLK 1                           KUCHING NORTH LAND DISTRICT                                                                                                            304           
-                                                                          MN                                                                                                          94500         À
-                                                                                                                                                                                                     MY      
-                                                                                                                                                                                                                     0000000007042014C25092004                       116                                                                             BLOCK 1                                 KPG PUGU                                11SARAWAK       Q24LUNDU               RMARKET KNOWLEDGE - CROSS REF VPC                                                                                                                                                                         HOCK SENG LEE RESORT SB                 369544W                                                                         N/A                                                                             CI                                        99999                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     0 
-                                                                      
-                                                                                               00000155887050 10IC    1Y
-                                                                                                                                2013          WONG CHIEW TUNG                         691114135049                                                                                                                                                                                              000000 YL06042071        14082013428 M2208201320132013Y       E18FB00277503KCGI                                                                               LOT 4656 BLK 207                        KUCHING NORTH LAND DISTRICT             M/S LOMING & CO ADV                     LFM/H/6620/99/W                                        168 0131082019
-                                       MN                                                                                                          93250         
-                                                                                                                                                                 MY      
-                                                                                                                                                                                000000000108201120042005                       6                                       JALAN STAPOK                                                                    93250 KUCHING SARAWAK                   11SARAWAK       QK1KUCHING             PCHEE TECK KHIAN, SIMON                                                                                                                                                                                  WONG CHIEW TUNG                         691114135049                            31/3 MILE JLN PENRISSEN                 SARAWAK                                 -                                       ICNO 542 HONG HONG GARDEN                 93250 KUCHING                           B                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 0 
-                               
-                                                        00000156174051 16CI    1Y
-                                                                                         4079          HPG MARKETING (M) SDN BHD               471851U                                                                                                                                                                                                   000000 YF                        150 M        20082008Y       W25FF12835002KULI                                                                               HS(D) 27921 PT 34164                    BATU/ GOMBAK                            M/S RAJAH LAU & ASSOCIATES              EKC/PBB/HPG/01.0029(LLY)                               186 9602112026
-                                                                                                                                                                                                                                       MN                                                                                                          68100  Y      
-                                                                                                                          MY      
-                                                                                                                                  I       0000000022122025C01032023                       14                                      JALAN TIB 3/3                           TAMAN INDUSTRI BOLTON                   68100 BATU CAVES, SELANGOR              12SELANGOR      B09BATU CAVES          PMR JOSHUA GEORGE KHOO ENG KONG                                                                                                                                                                          5HPG MARKETING (M) SDN BHD               471851U                                 TMN INDUSTRI BOLTON                                                             -                                       CI14 & 16 JLN TIB 3/3                     68100 BATU CAVES                        B                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       N        00 
-                                                                                                                                                                                                                                  
-                                                                                                                                                                                                                                                           00000156240051 16CI    1Y
-                                                     4079          HPG MARKETING (M) SDN BHD               471851U                                                                                                                                                                                                   000000 YF                        150 M        20082008N       W25FF12835003KULI                                                                               HS(D) 24922 PT 34165                    BATU/ GOMBAK                            M/S RAJAH LAU & ASSOCIATES              EKC/PBB/HPG/01.0029(LLY)                               186 9602112026
-                                                                                                                                                                                                   MN                                                                                                          68100  Y      
-                                                                                      MY      
-                                                                                              I       0000000022122025C01032023                       16                                      JALAN TIB 3/3                           TAMAN INDUSTRI BOLTON                   68100 BATU CAVES, SELANGOR              12SELANGOR      B09BATU CAVES          PMR JOSHUA GEORGE KHOO ENG KONG                                                                                                                                                                          5HPG MARKETING (M) SDN BHD               471851U                                 TMN INDUSTRI BOLTON                                                             -                                       CI14 & 16 JLN TIB 3/3                     68100 BATU CAVES                        B                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       N        00 
-                                                                                                                                                                                              
-                                                                                                                                                                                                                       00000156331000 18RI02MY                  1110091976    
-                                               
-                                                       00      SOH HAI WEI                             760910145623                                                                    DIRECTOR                                                                                                                                        
-                                                                                                        
-                                                                                                                                         
-                                                                                                                                                 
-                                                                                                                                                         
-                                                                                                                                                                 
-                                                                                                                                                                         
-                                                                                                                                                                                 
-                                                                                                                                                                                                                                         
-          
-                              
-                                      
-                                              
-                                                      
-                                                              00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000156380000 18RI02MY                  1122101951    
-                                                                                                                                                                  
-                                                                                                                                                                          00      LU GOON ENG                             511022106098                                                                    DIRECTOR                                                                                                                                        
-                                                                                                                                                                                                                           
-                                                                                                                                                                                                                                                            
-                             
-                                     
-                                             
-                                                     
-                                                             
-                                                                                                                     
-                                                                                                                             
-                                                                                                                                                 
-                                                                                                                                                         
-                                                                                                                                                                 
-                                                                                                                                                                         
-                                                                                                                                                                                 00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000156398000 18RI02MY                  1113031973    
-                                              
-                                                      00      TAN KONG GUAN                           730313145273                                                                    DIRECTOR                                                                                                                                        
-                                                                                                       
-                                                                                                                                        
-                                                                                                                                                
-                                                                                                                                                        
-                                                                                                                                                                
-                                                                                                                                                                        
-                                                                                                                                                                                
-                                                                                                                                                                                                                                        
-         
-                             
-                                     
-                                             
-                                                     
-                                                             00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000156430000 18RI02MY                  1129071972    
-                                                                                                                                                                 
-                                                                                                                                                                         00      SOH HAI LEONG                           720729105209                                                                    DIRECTOR                                                                                                                                        
-                                                                                                                                                                                                                          
-                                                                                                                                                                                                                                                           
-                            
-                                    
-                                            
-                                                    
-                                                            
-                                                                                                                    
-                                                                                                                            
-                                                                                                                                                
-                                                                                                                                                        
-                                                                                                                                                                
-                                                                                                                                                                        
-                                                                                                                                                                                00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000156463000 18RI02MY                  1103011962    
-                                             
-                                                     00      TAN SHAVE FEN                           620103105882                                                                    DIRECTOR                                                                                                                                        
-                                                                                                      
-                                                                                                                                       
-                                                                                                                                               
-                                                                                                                                                       
-                                                                                                                                                               
-                                                                                                                                                                       
-                                                                                                                                                                               
-                                                                                                                                                                                                                                       
-                                                                                                                                                                                                                                              
-                           
-                                   
-                                           
-                                                   
-                                                           00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000156653050 16IC    1NØ
-                                                                                                                                  2046          DIANA LEONG MU LAN                      670605135972                                                                                                                                                                                              000000 YL22022111        070519972486F2810199720052005Y       E26FB11462904KCGI                                                                               LOT 1387 BLOCK 218                      KUCHING NORTH LAND DISTRICT             REDDI & CO                              DS                                                     973 0131082027
-                                         MN                                                                                                          93250  Y      í
-                                                                                                                                                                    MY      
-                                                                                                                                                                                    0000000022122025N28112023                       LOT 1387                                NO. 3 LORONG 2A,JALAN BATU KAWA         EVERBRIGHT ESTATE                                                               11SARAWAK       QK1KUCHING             PMR CHEE TECK KHIAN, SIMON                                                                                               22/11/21-REFERS TO APPROVED REVIEW DATE WITH NO CHANGE IN CMV OF RP IN 2021     5DIANA LEONG MU LAN                      670605135972                            EVERBRIGHT ESTATE JLN BATU KAWA         SARAWAK                                 MALAYSIA                                ICLORONG 2A NO 3                          93250 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   N         0 
-                                     
-                                     WITH NO CHANGE IN CMV OF 00000156778000 18RI02MY                  1130111965    
-                                                                                                                             -
-                                                                                                                                              AZIDAH BT YUSOF                         651130015382                                                                    DIRECTOR                                                                                                                                        
-                                                                                                                                                                                       
-                                                                                                                                                                                                                        
-                                                                                                                                                                                                                                
-                                                                                                                                                                                                                                        
-         
-                 
-                         
-                                                                                 
-                                                                                         
-                                                                                                             
-                                                                                                                     
-                                                                                                                             
-                                                                                                                                     
-                                                                                                                                             00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000156802000 18RI02MY                  1105061963    
-          -
-                           MOHD ZAHIDI BIN HAJI AHMAD              630605107553                                                                    DIRECTOR                                                                                                                                        
-                                                                    
-                                                                                                     
-                                                                                                             
-                                                                                                                     
-                                                                                                                             
-                                                                                                                                     
-                                                                                                                                             
-                                                                                                                                                                                                     
-                                                                                                                                                                                                             
-                                                                                                                                                                                                                                 
-                                                                                                                                                                                                                                         
-          
-                  
-                          00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000156810000 18RI02MY                  1125071971    
-                                                                                                                              -
-                                                                                                                                               HAMINAH BT AB LAH                       710725035056                                                                    DIRECTOR                                                                                                                                        
-                                                                                                                                                                                        
-                                                                                                                                                                                                                         
-                                                                                                                                                                                                                                 
-                                                                                                                                                                                                                                         
-          
-                  
-                          
-                                                                                  
-                                                                                          
-                                                                                                              
-                                                                                                                      
-                                                                                                                              
-                                                                                                                                      
-                                                                                                                                              00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000156844000 18RI02MY1108071960    
-                                                                                                                                                                                                                                -
-                                                                                                                                                                                                                                           CHEAH WENG HIN                          600708085951                                                                    GUARANTOR                                                                                                                                       
-                                             
-                                                                              
-                                                                                      
-                                                                                              
-                                                                                                      
-                                                                                                              
-                                                                                                                      
-                                                                                                                                                                              
-                                                                                                                                                                                      
-                                                                                                                                                                                                          
-                                                                                                                                                                                                                  
-                                                                                                                                                                                                                          
-                                                                                                                                                                                                                                  
-                                                                                                                                                                                                                                          00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000156851050 10ICIC  1Nh
-                                                                          2012          HO CHAI LI                              710612085540                            HO CHING SHYAN                          721115085551                                                                                                              000000 YL05012086                0   F        20082008Y       W17FB00771394KULI                                                                               12567 PT 18063                          AMPANG                                  TUCK-JEONG & LEE                                                                               11009623102017
-                                                                                                                                                                                                                        FNPERKUAT KUARI SDN BHD                   TMN BUKIT PERMAI CHERAS                                           56100         
-                                                                                                           MY      h
-                                                                                                                            0000000019102017C05012002                       55                                      JALAN BUKIT PERMAI                      TAMAN BUKIT PERMAI                      56100 CHERAS KUALA LUMPUR               14WP KUALA LUMPUW01KUALA LUMPUR        PHOH CHUN MENG                                                                                                                                                                                           5HO CHAI LI                              710612085540                            LRG BUKIT PERMAI 5 TMN BUKIT PERMAI     WP KUALA LUMPUR                         MALAYSIA                                IC3                                       56100 CHERAS KUALA LUMPUR                HO CHING SHYAN                          721115085551                            31300 KG KEPAYANG PERAK MALAYSIA        PERAK                                   MALAYSIA                                IC331 SIMPANG PULAI                       31300 KG KEPAYANG                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              0 
-                                                                                                                                                                                                                    
-                                                                                                                                                                                                                                             00000156968050 16IC    1Yì
-                                        2013          ABDUL KARIM B. AYUB                     581106135463                                                                                                                                                                                              000000 YL25112048        18081995377 M1011199520052005N       E26FB11449118KCGI                                                                               LOT 3313 SECTION 65                     KUCHING TOWN LAND DISTRICT              LOMING & CO ADV                         CLF/(P)5777/97/A                                       377 0101022027
-                                                                                                                                                                                      MN                                                                                                          76400        î
-                                                                         MY      
-                                                                                        000000001910201731122004                       31                                      JALAN TANJUNG KLING 1                   TAMAN TANJUNG KLING                                                             04MELAKA        M12TANJONG KLING       SLEE KEE CHUAN                                                                                                           2016715531                                                                      5ASMAWI BIN ABU ZARIM                    710714045283                            BACHANG                                 MELAKA                                  MALAYSIA                                ICBT 2 3/4 LRG HJ YANG                    75350 MELAKA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              0 
-                                                                                                                                                                               
-                                                                                                                                                                                                        00000157123036 10IC    1Në
-                                                                                                                                                                                                                                          2015          TAN CHAI HUAT                           670705045413                                                                                                                                                                                              000000 YL27092092220320052303199980  M3112200020082008Y       FMPF0091169BPAGYM                                       PLEASANT VILLE DEVELOPMENT SDN BHD      HS(D)23950,PT NO 344                    BERTAM/MLK TENGAH                       HOCK & ASSOCIATES                       HAM/TCR(G)/PVSB/41/1630/98              134286K            3008032019
-                                                                                                                                                  NPLEASANT-VILLE DEVELOPMENT SDN BHD      TAMAN CHENG RIA PHASE III - CHENG                                 75250  Y      î
-                                     MY      
-                                             I       0000000019102017C31012005                       P   G-5   BLOCK G                       LEVEL 1                                 TAMAN CHENG RIA PHASE III, CHENG                                                04MELAKA        M08MELAKA              PHO WENG LOKE                                                                                                                                                                                            5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  N        00 
-                                                                                                                                             
-                                                                                                                                                                      00000157214050 16IC    1Nâ
-                                                                                                                                                                                                        2012          PHILIP A/L S RETNAM                     741125045527                                                                                                                                                                                            000000000YF                22041999278 M3112200020072007Y       M25FB11825124MLKI                                                                               GERAN NO PEND. 17285, LOT NO 1210       REMBIA / ALOR GAJAH                     HS LEE & RAKAN-RAKAN                    MLHS/M/010/99/PSR/ML                                   278 0131082026°
-                                                                                                                MN                                                                                                          78000         mÀ
-     MY      
-                    0000000029112024N30112022                       RM 271                                                                          TAMAN BUKIT REMBIA                      78000 ALOR GAJAH, MELAKA                04MELAKA        M02ALOR GAJAH          SNG KOK CHIN                                                                                                             2016717715                                                                      5PHILIP A/L S RETNAM                     741125045527                            78000 MELAKA MALAYSIA                   MELAKA                                  MALAYSIA                                ICRM 77 JLN KPG BARU REMBIA ALOR GAJAH    78000 MELAKA MALAYSIA                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     0 
-                                                                                                            
-                                                                                                                                     00000157289050 10ICIC  1Y
-                                                                                                                                                                      2046          TAN YOKE LAN                            611105055378                            YAW KO TING @ YEO KO TING               560616105771                                                                                                              000000 IF                        6700F        20002006Y       B25FB11103025KJGI                                                                               HS(M) 04688 PT 8002                     SEMENYIH/ULU LANGAT                     KONG KIM LENG                                                                                  372 9631082026
-                                                                             MNBANDAR TASIK SEMENYIH SDN BHD           TAMAN TASIK SEMENYIH                                              43500  Y      Ø
-                                                                                                                                                                                                        MY      
-                                                                                                                                                                                                                I       0000000015032024P03022017                       16                                      JALAN TTS 5/4                           TAMAN TASIK SEMENYIH                    43500 SEMENYIH                          12SELANGOR      B34SEMENYIH            SJB JURUNILAI BERSEKUTU (KAJANG) SDN BHD                                                                                                                                                                 2TAN YOKE LAN                            611105055378                            43500 SEMENYIH SELANGOR                 SELANGOR                                MALAYSIA                                ICNO 16 JLN TTS5/4 TMN TASIK SEMENYIH     43500 SEMENYIH                           YAW KO TING @ YEO KO TING               560616105771                            SEMINYIH                                SELANGOR                                MALAYSIA                                IC35 TMN PERMAI                           43500 SEMENYIH                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 0 
-                                                                         
-                                                                                                  00000157321050 16ICIC  1Y
-                                                                                                                                        2041          GOH SOON YONG                           680730135815                            NANCY CYNTHIA HO                        700103135264                                                                                                              000000 YL22032049        29121995269 M0805199620092009Y       E25FB11443874KCGI                                                                               LOT 3117 BLOCK 16                       KUCHING CENTRAL LAND DISTRICT                                                                                                          384 0119112026  -
-                                                  MN                                                                                                          93350  Y      à
-                                                                                                                                                                             MY      
-                                                                                                                                                                                             0000000029112024N30112022                       160                                     JALAN KEMPAS                            EVERBRIGHT JAYA STAMPIN                                                         11SARAWAK       QK1KUCHING             PWEE KIM HUA                                                                                                                                                     SCRUBBED                                5GOH SOON YONG                           680730135815                            JLN KEMPAS                              SARAWAK                                 MALAYSIA                                ICLOT 3117 NO 160 EVERBRIGHT JAYA         93350 KUCHING                            NANCY CYNTHIA HO                        700103135264                            93300 KUCHING SARAWAK                   SARAWAK                                 MALAYSIA                                IC575 KENYALANG PARK                      93300 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        N         0 
-                                              
-                                              SCRUBBED                 00000157610050 16IC    1N
-                                                                                                        2012          DAVID BAY BOON LEONG                    640427135699                                                                                                                                                                                              000000YL24082047160720000609200020052005N       E25FB11441883KCGI                                                                               LOT 1052 BLK 43                         MUARA TEBAS LAND DISTRICT               SIM & YEE                               P236/99                                                490 0120102026
-                                                                                                                                                                                                                                       MN                                                                                                          93250         î
-                                                                                                                           MY      
-                                                                                                                                           0000000029112024N30112022                       1052                                    9 1/2 MILE PENRISSEN ROAD               TAMAN EMAS                                                                      11SARAWAK       QK1KUCHING             PCHEE TECK KHIAN, SIMON                                                                                                                                          SCRUBBED                                5DAVID BAY BOON LEONG                    640427135699                            JLN PENRISSEN BATU 9 1/2 TMN EMAS       SARAWAK                                 MALAYSIA                                ICLOT 1052  LORONG 4B                     93250 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             0 
-                                                                                                                                                                                                                                   
-                                                                                                                                                                                                                                   SCRUBBED                 00000157693050 16ICIC  1Y 
-                                                       2014          LEE TET SOON                            650309086485                            LIM YEN LAI                             681123085662                                                                                                              000000 YL30072095        22122000300 M        20002009N       A26FB11120135IPHI                                                                               52081 PT 139576                         HULU KINTA                                                                                                                             300 0131082027
-                                                                                                                                                                                                     MN                                                                                                          30200         êç
-                                                                                          MY      
-                                                                                                         0000000029112024N30112022                       27                                      LEBUH TASEK TIMUR 6                     TAMAN INDAH SAKTI                       30200 IPOH                              08PERAK         A21IPOH                PLAW TSUEY TSUEY                                                                                                                                                                                         5LEE TET SOON                            650309086485                            31400 IPOH PERAK                        PERAK                                   MALAYSIA                                IC2 LEBOH TASEK TIMUR 4 TMN MEWAH BERCHAM 31400 IPOH                               LIM YEN LAI                             681123085662                            SIMEE                                   PERAK                                   MALAYSIA                                IC273 LEBUH RAYA 4                        31400 IPOH                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     0 
-                                                                                                                                                                                                 
-                                                                                                                                                                                                                          00000158022036 10IC    1N
-                    2015          MOHD ZAKI BIN ABU KASIM                 630309045335                                                                                                                                                                                            00000000 YF                        76  M        20002006Y       HOF102FR18106155I                                                                               PT 33342                                KAJANG                                  M/S MAKIMAN                                                                                        4030092019
-                                                                                                                                                                   NPERBADANAN KERAJAAN NEGERI SELANGOR     BANDAR BARU BANGI                                                 43650         i-
-                                                       MY      
-                                                                       0000000019102017C31122001                       504       5                             JALAN 2/4F                              SEKSYEN 2 BANDAR BARU BANGI             43650 BANDAR BARU BANGI                 12SELANGOR      B02BANDAR BARU BANGI   SCHIN POH CHING                                                                                                          824                                                                             5MOHD ZAKI BIN ABU KASIM                 630309045335                                                                                                                                                    IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  0 
-                                                                                                                                                               
-                                                                                                                                                                                        00000158139050 16ICIC  1N&
-                                                                                                                                                                                                                          2026          LIM SEK KUI                             610409135401                            LAW YEE CHIEH                           631120135526                                                                                                              000000 YF                071120061765F        20062006Y       E26FB11462890KCGI                                                                               LOT 7046 BLK 11                         MUARA TEBAS LAND DISTRICT               AWANG CHUA VOON TING RONALD & CO ADV    RON/IVY/06/LSK.LYC/352/C.575                           164 0131082027
-                                                                                                                                N                                                                                                          93350  Y      Ìa-
-                     MY      
-                             I       0000000030112022N28022019                       7046                                    JALAN SONG                              TABUAN HEIGHTS                          93350 KUCHING, SARAWAK                  11SARAWAK       QK1KUCHING             PCHEE TECK KHIAN, SIMON                                                                                                                                                                                  5LIM SEK KUI                             610409135401                            93300 KUCHING SARAWAK                   SARAWAK                                 MY  MALAYSIA                            IC1274 KENYALANG PARK                     93300 KUCHING                           BLAW YEE CHIEH                           631120135526                            93300 KUCHING SARAWAK                   SARAWAK                                 MY  MALAYSIA                            IC1274 KENYALANG PARK                     93300 KUCHING                           B                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            N        00 
-                                                                                                                             
-                                                                                                                                                      00000158576050 16IC    1Y'
-  Length: 79298
-  Positions 0-11: '
-                           2'
-  Positions 50-52: '  '
-  Positions 54-56: '  '
-  Positions 210-220: '          '
-Line 8: '
-                 2012          YAP CHEE SEN                            680301086429                                                                                                                                                                                              000000 YF                16051996220 M3105199620052005N       E26FB11462909KCGI                                                                               LOT 7785 BLOCK 11                       MUARA TEBAS LAND DISTRICT               CHEW JUGAH WAN ULLOK & CO               CJC                                                    220 0131082027Ø
-                                                                                                                                                                MN                                                                                                          93350         lê
-                                                     MY      
-                                                                    0000000029112024N30112022                       851                                     JALAN SONG                              TABUAN HEIGHTS                          93350 KUCHING SARAWAK                   11SARAWAK       QK1KUCHING             PCHEE TECK KHIAN, SIMON                                                                                                                                                                                  5YAP CHEE SEN                            680301086429                            JLN SONG TABUAN HEIGHTS PHASE II        SARAWAK                                 MALAYSIA                                IC851 LOT 7785                            93350 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             0 
-                                                                                                                                                            
-                                                                                                                                                                                     00000158584050 16ICIC  1N&
-                                                                                                                                                                                                                       2013          WANG FOCK HENG                          740110135509                            TIO TYE AY                              710803135256                                                                                                              000000 YL08012058        23101999311 M1304200020052005Y       E26FB11463433KCGI                                                                               LOT 2895 BLOCK 10                       KUCHING CENTRAL LAND DISTRICT           TANG & PARTNERS ADVOCATES                                                                      311 0108092027&
-                                                                                                                               MN                                                                                                          93250         ãÀ
-                    MY      
-                                   0000000029112024N30112022                       83                                      KENNY HILL ROAD                         KENNY HEIGHTS                           93250 KUCHING, SARAWAK                  11SARAWAK       QK1KUCHING             PCHEE TECK KHIAN, SIMON                                                                                                                                          SCRUBBED                                5WANG FOCK HENG                          740110135509                            93350 KUCHING SARAWAK                   SARAWAK                                 MALAYSIA                                ICNO 83 KENNY HEIGHTS KENNY HILL ROAD     93350 KUCHING                            TIO TYE AY                              710803135256                            JLN KENNY HILL                          SARAWAK                                 MALAYSIA                                IC83 KENNY HEIGHTS                        93350 KUCHING                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  0 
-                                                                                                                           
-                                                                                                                           SCRUBBED                 00000158642000 18RI01MY240919961110121966    
-                                                                                                                                                                                                         '
-  Length: 6145
-  Positions 0-11: '
-                           '
-  Positions 50-52: '  '
-  Positions 54-56: '  '
-  Positions 210-220: '          '
-Line 9: '
-                   WEE KOK SIANG                           661210135607                                                                                                                                                                                                                    
-                                                            
-                                                                                             
-                                                                                                     
-                                                                                                             
-                                                                                                                     
-                                                                                                                             
-                                                                                                                                     
-                                                                                                                                                                                             
-                                                                                                                                                                                                     
-                                                                                                                                                                                                                         
-                                                                                                                                                                                                                                 
-                                                                                                                                                                                                                                         
-          
-                  00000000IC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 00000159533051 16ICIC  1Y
-                                                                                        3016          SU YIN TONG                             680202135035                            SU YIN KHOUNG                           690930135149                                                                                                              000000 YL15102116        24032005925 M1308200520052005N       E25FF12439042KCGI                                                                               LOT 1334 SECTION 64                     KUCHING TOWN LAND DISTRICT              SIA ALVIN WONG & PARTNERS               AW/PBB/YAAW 63/05                                      931 0130092026'
-  Length: 3622
-  Positions 0-11: '
-                           '
-  Positions 50-52: '  '
-  Positions 54-56: '  '
-  Positions 210-220: '          '
-Successfully decoded /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_20260831 with cp037
-DESC file parsed: 58427 rows
-DESC sample data (first 20):
-        CCOLLNO CINSTCL NATGUAR     CENSUS
-0   00000000133      29                   
-1            FN                           
-2            MY      15                   
-3            MY                           
-4             I                          1
-5            FN       N       M        115
-6                                         
-7             2                           
-8                                         
-9                                         
-10           MN                           
-11                                        
-12                                        
-13                                        
-14        NTEAM      AR      AC  -05   BDR
-15         -
-            MY      16                   
-16           MY       3                   
-17           MY      16               OHOR
-18           MY      16              JOHOR
-19           HN                         45
+# =========================
+# CONFIG (SAS7BDAT INPUTS)
+# =========================
+CURRENT_DF  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/intg_dp_acct_current_m08.sas7bdat")
+LIMIT_DF    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/intg_dp_acct_overdft_m08.sas7bdat")
+CISDP_DF    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/cisdp/deposit.sas7bdat")
+NPLA_DF     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/npla.sas7bdat")
 
-=== DESC DATA QUALITY ===
-DESC rows: 58427
-DESC with valid CCOLLNO: 44718
-DESC with valid CINSTCL: 20322
-DESC with valid NATGUAR: 10607
-DESC with valid CENSUS: 9782
-DESC valid records: 9736
-DESC with CR mapping: 0 rows
-WARNING: No valid DESC or COLL records to merge
-DEP after MICR merge: 67 rows
-/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDNPGS.py:510: FutureWarning: The behavior of array concatenation with empty entries is deprecated. In a future version, this will no longer exclude empty items when determining the result dtype. To retain the old behavior, exclude the empty entries before the concat operation.
-  dep['NPLDATE'] = dep['NPLDATE_CALC'].combine_first(dep['NPLDATE'])
-DEP after CVAR02 mapping: 0 rows
-WARNING: No records after CVAR02 mapping. Using all records with default CVAR02...
-Traceback (most recent call last):
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/indexes/base.py", line 3805, in get_loc
-    return self._engine.get_loc(casted_key)
-  File "index.pyx", line 167, in pandas._libs.index.IndexEngine.get_loc
-  File "index.pyx", line 196, in pandas._libs.index.IndexEngine.get_loc
-  File "pandas/_libs/hashtable_class_helper.pxi", line 7081, in pandas._libs.hashtable.PyObjectHashTable.get_item
-  File "pandas/_libs/hashtable_class_helper.pxi", line 7089, in pandas._libs.hashtable.PyObjectHashTable.get_item
-KeyError: 'CENSUS'
+# TEXT FILES (UNCHANGED)
+GP3_FILE  = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/GP3.txt"
+COLL_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_20260831"
+DESC_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_20260831"
+MICR_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLTRRF/BOPESS.txt"
 
-The above exception was the direct cause of the following exception:
+OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNPGS")
+OUTPUT_FILE = f"DPNPGS_{datetime.now().strftime('%m')}.sas7bdat"
 
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDNPGS.py", line 539, in <module>
-    dep_filtered['CVAR01'] = dep_filtered['CENSUS'].astype(str)  # Convert to string for consistency
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4102, in __getitem__
-    indexer = self.columns.get_loc(key)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/indexes/base.py", line 3812, in get_loc
-    raise KeyError(key) from err
-KeyError: 'CENSUS'
+# Chunk size for processing large files
+CHUNK_SIZE = 100000
+
+# =========================
+# STEP 1: REPORT DATE
+# =========================
+reptdate = datetime.now() - timedelta(days=1)
+REPTDAY  = reptdate.day
+REPTMON  = reptdate.month
+REPTYEAR = reptdate.year
+SDATE    = reptdate.toordinal()
+
+# =========================
+# STEP 2: READ SAS DATASETS
+# =========================
+print("Reading SAS datasets...")
+
+# Read CURRENT dataset
+current_df, current_meta = pyreadstat.read_sas7bdat(CURRENT_DF)
+print(f"CURRENT dataset: {current_df.shape[0]} rows before filtering")
+
+if 'ENTITY_CD' in current_df.columns:
+    current_df = current_df[current_df['ENTITY_CD'] != 'PIBB'].copy()
+    print(f"CURRENT dataset: {current_df.shape[0]} rows after filtering")
+
+# Read LIMIT dataset
+limit_df, limit_meta = pyreadstat.read_sas7bdat(LIMIT_DF)
+print(f"LIMIT dataset: {limit_df.shape[0]} rows before filtering")
+
+if 'ENTITY_CD' in limit_df.columns:
+    limit_df = limit_df[limit_df['ENTITY_CD'] != 'PIBB'].copy()
+    print(f"LIMIT dataset: {limit_df.shape[0]} rows after filtering")
+
+# Read NPLA dataset
+npla_df, npla_meta = pyreadstat.read_sas7bdat(NPLA_DF)
+print(f"NPLA dataset: {npla_df.shape[0]} rows")
+
+# =========================
+# STEP 2B: READ CISDP IN CHUNKS
+# =========================
+print("Reading CISDP dataset in chunks...")
+
+cisdp_header, _ = pyreadstat.read_sas7bdat(CISDP_DF, row_limit=1)
+required_cols = ['ACCTNO']
+if 'NEWIC' in cisdp_header.columns:
+    required_cols.append('NEWIC')
+if 'CUSTNAME' in cisdp_header.columns:
+    required_cols.append('CUSTNAME')
+
+cisdp_chunks = []
+row_offset = 0
+chunk_count = 0
+
+while True:
+    try:
+        chunk, _ = pyreadstat.read_sas7bdat(
+            CISDP_DF, 
+            row_offset=row_offset, 
+            row_limit=CHUNK_SIZE
+        )
+        
+        if len(chunk) == 0:
+            break
+            
+        chunk_count += 1
+        
+        if 'SECCUST' in chunk.columns:
+            filtered_chunk = chunk[chunk['SECCUST'] == '901'][required_cols].copy()
+            if len(filtered_chunk) > 0:
+                cisdp_chunks.append(filtered_chunk)
+        
+        if chunk_count % 10 == 0:
+            print(f"Processed {chunk_count} chunks, {row_offset + len(chunk)} rows total")
+        
+        row_offset += CHUNK_SIZE
+        
+        if len(chunk) < CHUNK_SIZE:
+            break
+            
+    except Exception as e:
+        print(f"Error reading chunk at offset {row_offset}: {e}")
+        break
+
+if cisdp_chunks:
+    cisdp_df = pd.concat(cisdp_chunks, ignore_index=True)
+    cisdp_df = cisdp_df.drop_duplicates()
+    print(f"CISDP dataset: {cisdp_df.shape[0]} rows after filtering")
+    del cisdp_chunks
+else:
+    cisdp_df = pd.DataFrame(columns=required_cols)
+    print("Warning: No CISDP data found")
+
+# =========================
+# STEP 3: CURRENT → CA
+# =========================
+ca = current_df.copy()
+
+def map_sch(row):
+    if row.PRODUCT == 108 and row.CENSUST == 305: return 'P85'
+    if row.PRODUCT == 112 and row.CENSUST == 301: return 'P70'
+    if row.PRODUCT == 112 and row.CENSUST == 300: return 'P51'
+    if row.PRODUCT == 112 and row.CENSUST == 302: return 'P72'
+    if row.PRODUCT == 112 and row.CENSUST == 306: return 'P53'
+    if row.PRODUCT == 114 and row.CENSUST == 303: return 'P72'
+    if row.PRODUCT == 108 and row.CENSUST == 304: return 'P65'
+    return None
+
+ca['SCH'] = ca.apply(map_sch, axis=1)
+ca = ca[ca['SCH'].notna()].copy()
+print(f"CA after SCH mapping: {ca.shape[0]} rows")
+
+# =========================
+# STEP 4A: LIMIT
+# =========================
+def convert_lmtstart(x):
+    if pd.isna(x):
+        return pd.NaT
+    
+    try:
+        if isinstance(x, (int, float)):
+            if x <= 0:
+                return pd.NaT
+            x_str = str(int(x)).zfill(8)
+        else:
+            x_str = str(x).strip().zfill(8)
+        
+        formats_to_try = ["%m%d%Y", "%d%m%Y", "%Y%m%d", "%Y%d%m"]
+        
+        for fmt in formats_to_try:
+            try:
+                return datetime.strptime(x_str[:8], fmt)
+            except ValueError:
+                continue
+        
+        try:
+            year = int(x_str[0:2])
+            month = int(x_str[2:4])
+            day = int(x_str[4:6])
+            
+            if year < 50:
+                year += 2000
+            else:
+                year += 1900
+            
+            return datetime(year, month, day)
+        except:
+            return pd.NaT
+            
+    except Exception:
+        return pd.NaT
+
+print("Processing LIMIT data...")
+limit_processed = limit_df.copy()
+limit_processed['LMTSTART'] = limit_processed['LMTSTART'].apply(convert_lmtstart)
+limit_processed = limit_processed[['ACCTNO','LMTSTART']].drop_duplicates()
+print(f"LIMIT processed: {limit_processed.shape[0]} unique records")
+
+ca = ca.merge(limit_processed, on='ACCTNO', how='left')
+print(f"CA after LIMIT merge: {ca.shape[0]} rows")
+
+# =========================
+# STEP 4B: GP3
+# =========================
+gp3 = pd.read_fwf(
+    GP3_FILE,
+    colspecs=[(3,13),(18,20),(20,22),(22,26)],
+    names=['ACCTNO','RPTDAY','RPTMON','RPTYEAR']
+)
+
+gp3['NPLDATE'] = pd.to_datetime(
+    dict(year=gp3.RPTYEAR, month=gp3.RPTMON, day=gp3.RPTDAY),
+    errors='coerce'
+)
+
+ca = ca.merge(gp3[['ACCTNO','NPLDATE']], on='ACCTNO', how='left')
+print(f"CA after GP3 merge: {ca.shape[0]} rows")
+
+# =========================
+# STEP 4C: CISDP MERGE
+# =========================
+ca = ca.merge(cisdp_df, on='ACCTNO', how='left')
+print(f"CA after CISDP merge: {ca.shape[0]} rows")
+
+# =========================
+# STEP 4D: COLL + DESC (EBCDIC FILES)
+# =========================
+def read_ebcdic_file(file_path):
+    """Read EBCDIC file and return decoded string"""
+    with open(file_path, 'rb') as f:
+        raw_data = f.read()
+    
+    encodings = ['cp037', 'cp500', 'cp1047', 'cp1140']
+    
+    for encoding in encodings:
+        try:
+            decoded_data = raw_data.decode(encoding)
+            print(f"Successfully decoded {os.path.basename(file_path)} with {encoding}")
+            return decoded_data
+        except:
+            continue
+    
+    decoded_data = raw_data.decode('cp037', errors='replace')
+    print(f"Warning: Using cp037 with error replacement for {os.path.basename(file_path)}")
+    return decoded_data
+
+print("\nReading COLL file (EBCDIC)...")
+coll_raw = read_ebcdic_file(COLL_FILE)
+coll_lines = coll_raw.split('\n')
+print(f"COLL file: {len(coll_lines)} lines")
+
+# Parse COLL file - extract account numbers and collateral numbers
+coll_data = []
+for line in coll_lines:
+    if len(line) >= 151:
+        # Extract based on observed patterns
+        # Look for patterns like '00000156331000' (collateral number)
+        # and account numbers (typically 10-13 digits)
+        
+        # Extract collateral number (positions 3-9 as per original spec)
+        coll_no = line[3:9].strip()
+        
+        # Extract account number - look for patterns in the line
+        # Account numbers appear to be 10-13 digit numbers
+        acct_match = re.search(r'(\d{10,13})', line[145:151] if len(line) > 145 else '')
+        
+        if coll_no and acct_match:
+            coll_data.append({
+                'CCOLLNO': coll_no,
+                'ACCTNO': acct_match.group(1)
+            })
+
+coll = pd.DataFrame(coll_data)
+print(f"COLL parsed: {coll.shape[0]} rows")
+if not coll.empty:
+    print("COLL sample:")
+    print(coll.head())
+
+print("\nReading DESC file (EBCDIC)...")
+desc_raw = read_ebcdic_file(DESC_FILE)
+desc_lines = desc_raw.split('\n')
+print(f"DESC file: {len(desc_lines)} lines")
+
+# Parse DESC file - look for patterns like '18RI' and '16IC'
+desc_data = []
+current_record = {}
+
+for line in desc_lines:
+    # Look for collateral number pattern (11 digits followed by record type)
+    # Pattern: '00000156331000 18RI02MY' - collateral number, record type, state code
+    coll_match = re.search(r'(\d{11})\d{3}\s+(\d{2})([A-Z]{2})(\d{2})([A-Z]{2})', line)
+    
+    if coll_match:
+        if current_record:
+            desc_data.append(current_record)
+        
+        current_record = {
+            'CCOLLNO': coll_match.group(1),
+            'CINSTCL': coll_match.group(2),  # Institution class (18)
+            'NATGUAR': coll_match.group(3),  # Nature of guarantee (RI)
+            'STATE': coll_match.group(4),     # State code (02)
+            'COUNTRY': coll_match.group(5)    # Country code (MY)
+        }
+    elif '18RI' in line:
+        # Individual record with RI (Relationship/Individual)
+        ri_match = re.search(r'(\d{11})\d{3}\s+18RI', line)
+        if ri_match:
+            if current_record:
+                desc_data.append(current_record)
+            current_record = {
+                'CCOLLNO': ri_match.group(1),
+                'CINSTCL': '18',
+                'NATGUAR': 'RI'
+            }
+    elif '16IC' in line:
+        # IC record
+        ic_match = re.search(r'(\d{11})\d{3}\s+16IC', line)
+        if ic_match:
+            if current_record:
+                desc_data.append(current_record)
+            current_record = {
+                'CCOLLNO': ic_match.group(1),
+                'CINSTCL': '16',
+                'NATGUAR': 'IC'
+            }
+
+# Add last record
+if current_record:
+    desc_data.append(current_record)
+
+desc = pd.DataFrame(desc_data)
+print(f"DESC parsed: {desc.shape[0]} rows")
+if not desc.empty:
+    print("DESC sample:")
+    print(desc.head())
+    print("\nCINSTCL values:", desc['CINSTCL'].value_counts().head(10))
+    print("NATGUAR values:", desc['NATGUAR'].value_counts().head(10))
+
+# Merge COLL with DESC
+if not coll.empty and not desc.empty:
+    # Clean collateral numbers for matching
+    coll['CCOLLNO_CLEAN'] = coll['CCOLLNO'].str.lstrip('0')
+    desc['CCOLLNO_CLEAN'] = desc['CCOLLNO'].str.lstrip('0')
+    
+    # Merge
+    coll_merged = coll.merge(
+        desc[['CCOLLNO_CLEAN', 'CINSTCL', 'NATGUAR']],
+        on='CCOLLNO_CLEAN',
+        how='inner'
+    )
+    print(f"COLL merged with DESC: {coll_merged.shape[0]} rows")
+    
+    # Filter for individual records (RI = Relationship/Individual)
+    coll_filtered = coll_merged[coll_merged['NATGUAR'] == 'RI']
+    print(f"COLL filtered (NATGUAR=RI): {coll_filtered.shape[0]} rows")
+    
+    # Merge with CA
+    if not coll_filtered.empty:
+        # Add CR column (will be populated later)
+        coll_filtered['CR'] = None
+        
+        dep = ca.merge(
+            coll_filtered[['ACCTNO', 'CR']].drop_duplicates(),
+            on='ACCTNO',
+            how='left'
+        )
+        print(f"DEP after COLL merge: {dep.shape[0]} rows")
+    else:
+        print("WARNING: No records after COLL filtering")
+        dep = ca.copy()
+        dep['CR'] = None
+else:
+    print("WARNING: No valid COLL or DESC records")
+    dep = ca.copy()
+    dep['CR'] = None
+
+# =========================
+# STEP 4E: MICR
+# =========================
+micr = pd.read_fwf(
+    MICR_FILE,
+    colspecs=[(0,3),(39,44)],
+    names=['BRANCH','MICRCD']
+)
+
+dep = dep.merge(micr, on='BRANCH', how='left')
+print(f"DEP after MICR merge: {dep.shape[0]} rows")
+
+# =========================
+# STEP 5: ARREARS + NPL
+# =========================
+def calc_arrears(row):
+    if row.get('CURBAL', 0) >= 0:
+        return 0, pd.NaT
+
+    dates = []
+
+    for col in ['EXODDATE','TEMPODDT']:
+        val = row.get(col, 0)
+        if pd.notna(val) and val > 0:
+            try:
+                if isinstance(val, (int, float)):
+                    d = datetime.strptime(str(int(val)).zfill(8)[:8], "%m%d%Y")
+                else:
+                    d = datetime.strptime(str(val).strip()[:8], "%m%d%Y")
+                dates.append(d)
+            except:
+                continue
+
+    if not dates:
+        return 0, pd.NaT
+
+    oddays = min(dates)
+    nodays = (reptdate - oddays).days + 1
+
+    arrears = nodays // 30
+
+    npldate = pd.NaT
+    if arrears >= 3:
+        npldate = oddays + pd.DateOffset(days=90)
+        npldate = npldate + pd.offsets.MonthEnd(0)
+
+    return arrears, npldate
+
+if not dep.empty:
+    dep[['ARREARS','NPLDATE_CALC']] = dep.apply(
+        lambda x: pd.Series(calc_arrears(x)), axis=1
+    )
+    dep['NPLDATE'] = dep['NPLDATE_CALC'].combine_first(dep['NPLDATE'])
+
+# =========================
+# STEP 6: CVAR02
+# =========================
+def map_cvar02(row):
+    if row.SCH=='P51': return '51'
+    if row.SCH=='P65': return '65'
+    if row.SCH=='P53': return '53'
+    if row.SCH=='P85': return '85'
+    if row.SCH=='P70': return '70'
+    if row.SCH=='P72': return '72'
+    return None
+
+if not dep.empty:
+    dep['CVAR02'] = dep.apply(map_cvar02, axis=1)
+    dep_filtered = dep[dep['CVAR02'].notna()]
+    print(f"DEP after CVAR02 mapping: {dep_filtered.shape[0]} rows")
+    
+    if dep_filtered.empty:
+        print("WARNING: No records after CVAR02 mapping. Using all records...")
+        dep['CVAR02'] = 'XX'
+        dep_filtered = dep.copy()
+else:
+    dep_filtered = dep.copy()
+    dep_filtered['CVAR02'] = 'XX'
+
+# =========================
+# STEP 7: OUTPUT STRUCTURE
+# =========================
+# Use ACCTNO as CVAR01 if CENSUS is not available
+if 'CENSUS' not in dep_filtered.columns:
+    dep_filtered['CENSUS'] = dep_filtered['ACCTNO']  # Temporary fallback
+
+dep_filtered['CVAR01'] = dep_filtered['CENSUS'].astype(str)
+dep_filtered['CVAR03'] = dep_filtered['NEWIC'] if 'NEWIC' in dep_filtered.columns else ''
+dep_filtered['CVAR04'] = dep_filtered['CUSTNAME'] if 'CUSTNAME' in dep_filtered.columns else ''
+dep_filtered['CVAR05'] = dep_filtered['LMTSTART'] if 'LMTSTART' in dep_filtered.columns else pd.NaT
+dep_filtered['CVAR06'] = dep_filtered['ACCTNO'].astype(str)
+dep_filtered['CVAR07'] = 'OD'
+dep_filtered['CVAR08'] = dep_filtered['APPRLIMT'].fillna(0) if 'APPRLIMT' in dep_filtered.columns else 0
+
+dep_filtered['CVAR09'] = np.where(dep_filtered['LEDGBAL'] < 0, -dep_filtered['LEDGBAL'], 0) if 'LEDGBAL' in dep_filtered.columns else 0
+dep_filtered['CVAR10'] = np.where(dep_filtered['LEDGBAL'] >= 0, dep_filtered['LEDGBAL'], 0) if 'LEDGBAL' in dep_filtered.columns else 0
+
+dep_filtered['CVAR11'] = dep_filtered['ARREARS'] if 'ARREARS' in dep_filtered.columns else 0
+dep_filtered['CVAR12'] = np.where(dep_filtered['ARREARS'] >= 3, 'NPL', '   ') if 'ARREARS' in dep_filtered.columns else '   '
+dep_filtered['CVAR13'] = dep_filtered['NPLDATE'].dt.strftime('%d/%m/%Y') if 'NPLDATE' in dep_filtered.columns else ''
+
+dep_filtered['CVAR14'] = '0233'
+dep_filtered['CVAR15'] = dep_filtered['MICRCD'] if 'MICRCD' in dep_filtered.columns else ''
+
+# =========================
+# STEP 8: HISTORY MERGE
+# =========================
+# Convert keys to string for consistent merging
+dep_filtered['CVAR06'] = dep_filtered['CVAR06'].astype(str)
+dep_filtered['CVAR01'] = dep_filtered['CVAR01'].astype(str)
+
+if not npla_df.empty:
+    if 'CVAR06' in npla_df.columns:
+        npla_df['CVAR06'] = npla_df['CVAR06'].astype(str)
+    if 'CVAR01' in npla_df.columns:
+        npla_df['CVAR01'] = npla_df['CVAR01'].astype(str)
+    
+    npgs = dep_filtered.merge(npla_df, on=['CVAR06','CVAR01'], how='left')
+    
+    if 'STATUS' in npgs.columns and 'NDATE' in npgs.columns:
+        npgs.loc[
+            (npgs['CVAR12']=='NPL') & (npgs['STATUS']=='NPL'),
+            'CVAR13'
+        ] = npgs['NDATE']
+else:
+    npgs = dep_filtered.copy()
+
+# =========================
+# STEP 9: OUTPUT (SAS7BDAT)
+# =========================
+print(f"\nWriting output to {OUTPUT_FILE}...")
+print(f"Final dataset: {npgs.shape[0]} rows")
+
+# Select only the required columns for output
+output_columns = ['CVAR01', 'CVAR02', 'CVAR03', 'CVAR04', 'CVAR05', 
+                  'CVAR06', 'CVAR07', 'CVAR08', 'CVAR09', 'CVAR10',
+                  'CVAR11', 'CVAR12', 'CVAR13', 'CVAR14', 'CVAR15']
+
+# Ensure all required columns exist
+for col in output_columns:
+    if col not in npgs.columns:
+        npgs[col] = ''
+
+npgs_output = npgs[output_columns].copy()
+
+# Initialize SAS session
+sas = saspy.SASsession(cfgname='default')
+
+# Convert pandas DataFrame to SAS dataset
+sas.df2sd(npgs_output, table='npgs_output', libref='WORK')
+
+# Write SAS dataset to sas7bdat file
+sas_code = f"""
+PROC EXPORT DATA=WORK.npgs_output 
+    OUTFILE="{OUTPUT / OUTPUT_FILE}" 
+    DBMS=SAS7BDAT REPLACE;
+RUN;
+"""
+
+sas.submit(sas_code)
+
+# Close SAS session
+sas.endsas()
+
+print(f"Output written: {OUTPUT / OUTPUT_FILE}")
+print(f"Total records: {len(npgs_output)}")
