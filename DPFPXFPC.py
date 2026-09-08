@@ -1,88 +1,110 @@
-Report Date: 2026-08-31
-Normalization Date: 31/08/2026
-Reading LOAN/LNNOTE datasets in chunks...
-Reading Islamic LNNOTE (ENTITY_CD = 'PIBB')...
-  Islamic LNNOTE rows: 6
-Reading Conventional LNNOTE (ENTITY_CD != 'PIBB')...
-  Conventional LNNOTE rows: 99994
-Combining LNNOTE datasets...
-  LOAN0 rows: 6
-  LOAN1 rows: 0
-Reading COMM datasets in chunks...
-Reading Islamic LNCOMM...
-  Islamic LNCOMM rows: 1066036
-Reading Conventional LNCOMM...
-  Conventional LNCOMM rows: 1066036
-Warning: INTAMT column not found. Using CORGAMT as NETPROC.
-Total LOAN rows after merge: 6
-Calculating ISSUED, NODAYS, ARREARS, NPLDATE...
-Applying NDAYS format...
-LOAN rows after deduplication: 6
-Processing CISLN in chunks...
-  CISLN rows after filter: 63752
-Processing COLL and DESC files...
-COLL record length: 158
-DESC file size: 4962984400
-DESC record length: 84686
+# =========================
+# COLL and DESC processing - ENHANCED DIAGNOSTIC
+# =========================
+print("Processing COLL and DESC files...")
 
-Reading COLL file...
-COLL rows: 5394860
-Reading DESC file...
-DESC rows: 58604
+coll_specs = [
+    ("ccollno", 4, 9, "pd"),
+    ("acctno", 146, 151, "pd"),
+    ("noteno", 153, 158, "pd")
+]
 
-=== Scanning DESC records for CINSTCL and NATGUAR positions ===
+desc_specs = [
+    ("ccollno", 1, 11, "numeric"),
+    ("cinstcl", 51, 52, "character"),
+    ("natguar", 55, 56, "character"),
+    ("census", 211, 220, "numeric"),
+    ("tranche", 291, 298, "character")
+]
 
-Record 1:
-  CCOLLNO (pos 1-11): '00000000133'
-  Pos 51-52 (CINSTCL per SAS): '29'
-  Pos 55-56 (NATGUAR per SAS): '  '
+COLL_RECORD_LENGTH = 158
+desc_file_size = DESC_FILE.stat().st_size
+expected_desc_records = 58604
+DESC_RECORD_LENGTH = desc_file_size // expected_desc_records
 
-Record 2:
-  CCOLLNO (pos 1-11): ''
-  Pos 51-52 (CINSTCL per SAS): '  '
-  Pos 55-56 (NATGUAR per SAS): '  '
+print(f"COLL record length: {COLL_RECORD_LENGTH}")
+print(f"DESC record length: {DESC_RECORD_LENGTH}")
 
-Record 3:
-  CCOLLNO (pos 1-11): ''
-  Pos 51-52 (CINSTCL per SAS): '  '
-  Pos 55-56 (NATGUAR per SAS): '  '
+# ==========================================
+# ENHANCED DIAGNOSTIC: Scan DESC file for non-empty records
+# ==========================================
+print("\n=== Scanning DESC file for non-empty records ===")
 
-Record 4:
-  CCOLLNO (pos 1-11): ''
-  Pos 51-52 (CINSTCL per SAS): '  '
-  Pos 55-56 (NATGUAR per SAS): '  '
+# Scan the first 10,000 records to find non-empty ones
+non_empty_records = []
+total_scanned = 10000
 
-Record 5:
-  CCOLLNO (pos 1-11): ''
-  Pos 51-52 (CINSTCL per SAS): '  '
-  Pos 55-56 (NATGUAR per SAS): '  '
+with open(DESC_FILE, 'rb') as f:
+    for i in range(total_scanned):
+        record = f.read(DESC_RECORD_LENGTH)
+        if not record or len(record) < DESC_RECORD_LENGTH:
+            break
+        
+        # Check if record has non-space data
+        decoded = record.decode('cp037', errors='ignore')
+        # Check if the record has any non-space characters
+        has_data = any(c not in (' ', '\x00', '\x40') for c in decoded[:200])
+        
+        if has_data:
+            non_empty_records.append((i, decoded))
+            
+            # Show first 200 chars of first 5 non-empty records
+            if len(non_empty_records) <= 5:
+                print(f"\nRecord {i} (0-based index):")
+                print(f"  First 200 chars: [{decoded[:200]}]")
+                
+                # Look for '18' and '06' in first 500 chars
+                positions_18 = [j+1 for j in range(min(len(decoded)-1, 500)) if decoded[j:j+2] == '18']
+                positions_06 = [j+1 for j in range(min(len(decoded)-1, 500)) if decoded[j:j+2] == '06']
+                
+                if positions_18:
+                    print(f"  '18' found at positions: {positions_18[:10]}")
+                if positions_06:
+                    print(f"  '06' found at positions: {positions_06[:10]}")
+                
+                # Show CCOLLNO
+                print(f"  CCOLLNO: '{decoded[0:11].strip()}'")
+                
+                # Show positions 51-52 and 55-56
+                print(f"  Pos 51-52: '{decoded[50:52]}'")
+                print(f"  Pos 55-56: '{decoded[54:56]}'")
 
-=== End Diagnostic ===
+print(f"\nTotal non-empty records found in first {total_scanned} records: {len(non_empty_records)}")
 
-=== DESC Data Sample (first 3 rows) ===
-shape: (3, 5)
-┌─────────┬─────────┬─────────┬────────┬─────────┐
-│ ccollno ┆ cinstcl ┆ natguar ┆ census ┆ tranche │
-│ ---     ┆ ---     ┆ ---     ┆ ---    ┆ ---     │
-│ f64     ┆ str     ┆ str     ┆ f64    ┆ str     │
-╞═════════╪═════════╪═════════╪════════╪═════════╡
-│ 133.0   ┆ 29      ┆         ┆ null   ┆         │
-│ null    ┆         ┆         ┆ null   ┆         │
-│ null    ┆         ┆         ┆ null   ┆         │
-└─────────┴─────────┴─────────┴────────┴─────────┘
+# Now check if the DESC file might be line-delimited instead
+print("\n=== Checking if DESC is line-delimited ===")
+with open(DESC_FILE, 'rb') as f:
+    # Read first 1000 bytes
+    first_chunk = f.read(1000)
 
-COLL rows after join: 593672197
-COLL rows after filter: 0
+# Check for newline characters
+newline_positions = [i for i, b in enumerate(first_chunk) if b == 0x0A or b == 0x0D]
+if newline_positions:
+    print(f"Found newline characters at positions: {newline_positions[:20]}")
+else:
+    print("No newline characters found in first 1000 bytes")
 
-Final COLL rows: 0
-NPGS rows after COLL merge: 0
-Processing MICR file...
-  MICR rows: 300
-Creating CVAR fields...
-Writing NPGS.LNSMEZ08...
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 416763
+# Check if DESC might have a much smaller record length
+# Try record length 298 (from SAS code)
+print("\n=== Checking record length 298 ===")
+with open(DESC_FILE, 'rb') as f:
+    record_298 = f.read(298)
+    decoded_298 = record_298.decode('cp037', errors='ignore')
+    print(f"First 298 chars: [{decoded_298}]")
 
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
-  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-Successfully wrote NPGS.LNSMEZ08 to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBLSMEZ
+# Try reading DESC as line-delimited text
+print("\n=== Reading DESC as line-delimited ===")
+try:
+    with open(DESC_FILE, 'r', encoding='cp037', errors='ignore') as f:
+        lines = []
+        for i, line in enumerate(f):
+            if i >= 10:
+                break
+            lines.append(line.rstrip('\n\r'))
+            if line.strip():
+                print(f"Line {i}: [{line[:200]}]")
+except Exception as e:
+    print(f"Error reading as text: {e}")
+
+print("\n=== End Enhanced Diagnostic ===")
+# ==========================================
