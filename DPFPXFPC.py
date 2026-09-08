@@ -1,23 +1,985 @@
-============================================================
-Processing date: 2026-08-31 (SAS date: 24349)
-============================================================
+from __future__ import annotations
 
-============================================================
-STEP 1: Reading LNNOTE
-============================================================
-LNNOTE columns: ['ACCTNO', 'NAME', 'TAXNO', 'ORGTYPE', 'GUAREND', 'BANKNO', 'APPCODE', 'ACCBRCH', 'CUSTCODE', 'PURPOSE', 'FOREIGN', 'BKRPTIND', 'NOTENO', 'REVERSED', 'LOANTYPE', 'NTBRCH', 'PENDBRH', 'ISSUEDT', 'NOTEMAT', 'ASSMDATE', 'LASTTRAN', 'LSTTRNCD', 'CURBAL', 'INTAMT', 'PRINBNP', 'APPVALUE', 'NOTETERM', 'COLLDESC', 'FLAG3', 'SYNDIND', 'FLAG5', 'COMMNO', 'CORPCODE', 'COSTCTR', 'PCOSTCTR', 'SECTOR', 'CENSUS', 'BILLTYPE', 'GRANTDT', 'PAIDIND', 'ORGBAL', 'NETPROC', 'FEEDUE', 'INTRATE', 'SPREAD', 'NTINT', 'INTMAINT', 'REBATE', 'INTEARN', 'ACCRUAL', 'RISKRATE', 'SECURE', 'LIABCODE', 'FLAG1', 'MORTGIND', 'REFINANC', 'SBA', 'LOANSTAT', 'NONACCR', 'DEALERNO', 'MATUREDT', 'BORSTAT', 'MARKETVL', 'COLLMAKE', 'EARNTERM', 'USURYIDX', 'STATE', 'INTEARN2', 'INTEARN3', 'INTEARN4', 'PAYAMT', 'PAYFREQ', 'FEETOTAL', 'FEETOT2', 'FEEAMTO', 'FEEAMT2', 'FEEAMT3', 'NXDUEDT', 'BILDUE', 'BILTOT', 'BILPAY', 'BILPRIN', 'HSTOTAMT', 'PAYTYPE', 'HSTOTPAY', 'DISPYIND', 'FEEAMT4', 'REBIND', 'APPRDATE', 'POSTNTRN', 'LSTTRNAM', 'INTBNP', 'NTAPR', 'ORIGRATE', 'VINNO', 'RESTIND', 'TOTPDEOP', 'USER2', 'USER3', 'USER4', 'POSTCODE', 'INTPDYTD', 'ACCRUYTD', 'ACCRUEOP', 'BIRTHDT', 'NTINDEX', 'MTDINT', 'SCORE1', 'REBATEI', 'ACCTYIND', 'ACCOSTCT', 'INTINYTD', 'BILLCNT', 'PREVBRNO', 'SCORE2', 'HSTPRIN', 'CRISPURP', 'USER1', 'ACCTPBRH', 'HSTINT', 'PAIDOFF', 'FEEDUEMS', 'NFEEAMT5', 'NFEEAMT6', 'NFEEAMT7', 'NOOFPAY', 'NDHISSDT', 'NDPAYIND', 'NDHEXPDT', 'ROPAYIND', 'PAIDTODT', 'FEEYTD', 'FEEPDYTD', 'RSRVTERM', 'BILPDYTD', 'FEEYTDX', 'FEPDYTDX', 'FEEAMT8', 'FEEAMT9', 'MINIFEE', 'FEEAMT13', 'PZIPCODE', 'FEEAMT10', 'FEEAMT11', 'FEEAMT12', 'FEEAMT14', 'FEEAMT15', 'FEEAMT16', 'FEEEARN1', 'FEEEARN2', 'COLLYEAR', 'DISBIND1', 'PRINPAID', 'INTPAID', 'HTOTAMT2', 'HTOTPAY2', 'PRINYTD', 'OSTDAMT', 'PAYNUM', 'RSRVREBI', 'TERMIDAT', 'TMLATE15', 'TMLATE30', 'TMLATE60', 'TMLATE90', 'BONUSANO', 'DELQCD', 'FEEPLAN', 'FEERATE', 'WORDTYP', 'HISPTDT', 'STAFFNO', 'PAYEFFDT', 'AANUMBR', 'APPORMT', 'ECSRRSRV', 'COSTFUND', 'POFFICER', 'NPLCRR', 'CUSTCDX', 'FORM2', 'FORM1', 'STATUSDT', 'INTBUYPD', 'MODELDES', 'YTDEARNS', 'ESCRACCT', 'RESTBALC', 'INTRATE2', 'RATELMT2', 'PRMOFFHP', 'POINTAMT', 'CEILINGO', 'CEILINGU', 'MAILCODE', 'PAYIND', 'SITYPE', 'SIACCTNO', 'OLDUNPAID', 'VARSTDTE', 'USER5', 'SENDNBL', 'FRELEAS', 'USMARGIN', 'USEDIT', 'FEECOMBIND', 'CURCODE', 'STOPDEBIT', 'TAXEQIND', 'SM_STATUS', 'CASHPRICE', 'REACCRUAL', 'LATENOTICE', 'GUARNOTICE', 'INTBASIS', 'MEMOACC', 'EXCESSPAY', 'BILLEADDAY', 'DEATHDATE', 'INTSTDTE', 'AUTNACCR', 'CFINDEX', 'EXRATIO', 'CONTRTYPE', 'BILDUEMIG', 'NPLCRRBPA', 'FDACCTNO_', 'FDCERTNO', 'FCLOSUREDT', 'RRCYCLE', 'VB', 'CPNSTDTE', 'INSOLVENCY_IND', 'CURRILDTE', 'FIRSILDTE', 'NUMCPNS', 'RSN', 'PTMNATE', 'ASCORE_PERM', 'ASCORE_LTST', 'OLDRR', 'EARLY_SETTLE_FEE_CHARGE_FLG', 'ACCTREVDT', 'MNIAPLMT', 'ABM_HL', 'IA_LRU', 'COMMNO_OLD', 'TIMES_RENEWED', 'MARKED_PAYMENT_IND', 'CCRIS_INSTLAMT', 'NURS_TAG', 'NUR_STARTDT', 'NURS_TAGDT', 'NURS_ENDDT', 'NURS_COUNTER', 'WRIOFF_DT', 'WRIOFF_AMT', 'CUM_WRIOFF', 'RECOVER_COST', 'ASCORE_COMM', 'REPOSDTE', 'VALUEDTE', 'DISPOSED_AMT', 'DSR', 'REPAY_SOURCE', 'REPAY_TYPE_CD', 'MTD_REPAID_AMT', 'MTD_TAWIDH_AMT', 'MTD_GHARAMAH_AMT', 'INDUSTRIAL_SECTOR_CD', 'PROMPT_PAY_TRACKER', 'MAN_REV_RATE', 'MAN_REV_DATE', 'SYS_REV_RATE', 'SYS_REV_DATE', 'REFINANC_LN', 'OLD_FI', 'OLD_MACC_NO', 'OLD_SUBACC_NO', 'TIA_TAG_DATE', 'TIA_UTAG_DATE', 'REPO_ORDER_ISSUE_DT', 'NUM_REPO_ORDER_ISSUE', 'COURT_ORDER_APPLY_DT', 'COURT_ORDER_OBTAIN_DT', 'AUTO_REPRICE_DIFF_INSTL_AMT', 'RISK_GRADE_CLASS', 'REPAY_PROPOSAL_CD', 'LTST_MGB_SCORE', 'LMO_TAG', 'LMO_MAINT_DT', 'AKPK_STATUS', 'DIGITAL_RR_STATUS_CD', 'TAKAFUL_AMT', 'TAKAFUL_OPERAT', 'TAKAFUL_COLLECT_ACCTNO', 'TFA_NURS_TAG', 'TFA_NURS_TAG_DT', 'TFA_NURS_START_DT', 'TFA_NURS_END_DT', 'TFA_NURS_COUNTER', 'TFA_DIG_STATUS_CD', 'TFA_DIG_STATUS_DT', 'REPAY_PROPOSAL_DT', 'MANUAL_RR_TAG', 'MANUAL_RR_DT', 'AUTO_EXT_TAG', 'AUTO_EXT_TAG_DT', 'AUTO_REPRICE_INSTL_AMT', 'BULLET_REPAY_IND', 'BALLOON_REPAY_IND', 'PROP_DEVELOP_FIN_IND', 'DIA_PAST01_MTH', 'DIA_PAST02_MTH', 'DIA_PAST03_MTH', 'DIA_PAST04_MTH', 'DIA_PAST05_MTH', 'DIA_PAST06_MTH', 'DIA_PAST07_MTH', 'DIA_PAST08_MTH', 'DIA_PAST09_MTH', 'DIA_PAST10_MTH', 'DIA_PAST11_MTH', 'DIA_PAST12_MTH', 'DIA_PAST13_MTH', 'DIA_PAST14_MTH', 'DIA_PAST15_MTH', 'DIA_PAST16_MTH', 'DIA_PAST17_MTH', 'DIA_PAST18_MTH', 'DIA_PAST19_MTH', 'DIA_PAST20_MTH', 'DIA_PAST21_MTH', 'DIA_PAST22_MTH', 'DIA_PAST23_MTH', 'DIA_PAST24_MTH', 'ORIG_RESTIND', 'RESTIND_END_DT', 'COM_FEE_NOTICE_IND', 'NUM_MORA', 'AKPK_RA_TAG', 'AKPK_RA_TAG_DT', 'AKPK_RA_DIG_STATUS_CD', 'AKPK_RA_DIG_STATUS_DT', 'AKPK_RA_START_DT', 'AKPK_RA_END_DT', 'AKPK_RA_ORIG_SPREAD', 'TRA_EFF_DT', 'DIGITAL_RR_STATUS_DT', 'LMOENDDATE', 'LMOSTDATE', 'BANK_EQUITY_RATIO', 'FDACCTNO', 'NACOSPADT', 'LOCK_IN_END_DT', 'FDB', 'CP', 'SM_DATE', 'STAFF_FREE_INT_IND', 'STAFF_FREE_INT_LOAN_AMT', 'OMNIBUS_FACILITY_IND', 'MARKED_PAYMENT_AMT', 'INTPYTD1', 'CUSTCDR', 'DNBFISME', 'SYNRATIO', 'RESTRUCT', 'FEEAMTA', 'FEEAMTB', 'FEEAMTC', 'CJFEE', 'DAYARR_MO', 'MO_INSTL_ARR', 'FEEAMT', 'MNIAPDTE', 'NXTBIL', 'BLDATE', 'DLVDATE', 'BALANCE', 'FEEAMT5', 'NFEEAMT8', 'NFEEAM10', 'NFEEAM11', 'NFEEAM12', 'CURRATE', 'USLIMIT', 'OLDNOTEAPPVALUE', 'OLDNOTELASTTRAN', 'OLDNOTEBLDATE', 'OLDNOTEISSUEDT', 'OLDNOTEDAYARR', 'MO_TAG', 'MOSTDTE', 'MOENDDTE', 'MO_MAIN_DT', 'SPOTRATE', 'WRITE_DOWN_BAL', 'ORICODE', 'AKPK_RA_DLY_INT_ACCRUAL', 'AKPK_RA_MTD_INT_ACCRUAL', 'AKPK_RA_MTH_INT_WAIVER_AMT', 'AKPK_RA_CUMM_INT_WAIVER_AMT', 'AKPK_RA_MTH_INT_CAP_AMT', 'AKPK_RA_CUMM_INT_CAP_AMT', 'AKPK_RA_ORIG_CEILING_RT', 'NUM_PAY_BIL_INSTL', 'SCHBIL_INSTL_DT', 'SCHBIL_INT_DT', 'NUM_PAY_BIL_INT', 'LASTBIL_INSTL_DT', 'LASTBIL_INT_DT', 'MORA_BENCHMARK_AMT', 'TRA_RR_IND', 'TRA_RR_ACCEPT_DT', 'MORDAYARR', 'NUM_RR', 'ENTITY_CD', 'INFEE', 'DAYARR_MORA', 'SPA_AMT', 'HI_TAG', 'HI_TAG_DT', 'HI_DIG_STATUS_CD', 'HI_DIG_STATUS_DT', 'REPO_ORDER_EXPIRY_DT', 'FLOOD_MO_TAG', 'FLOOD_MO_DT', 'IMPAIRED_HP_TAG', 'REPAY_MODE', 'RR_EREQUEST_NUM', 'RR_TYPE', 'RR_APPR_DATE', 'INDEX_PRICING', 'SCH_REPAY_TERM', 'LEGAL_NOTICE_INSTRUCT_DT', 'LEGAL_NOTICE_ISSUE_DT', 'PARAS_TAG', 'PARAS_TAG_DT', 'JUDGE_AMT', 'JUDGE_DT', 'JUDGE_MAINT_DT', 'PRE_BKRUPT_NOTICE_DT', 'PCT_INDEX_INTRATE', 'RR_APPL_DATE', 'HP_STAGE_TRSF_IND', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'CUMM_PAID_BILL_AMT', 'CUMM_PAID_BILL_PCT', 'AKPK_MATRIX_TYPE', 'AKPK_MATRIX_DATE', 'DEVIATION_CD', 'COURT_ORDER_PERPETUAL_IND', 'FLOOD_MO_PACKAGE_CD', 'E_INVOICE_IND', 'INT_ADVICE_IND', 'LEGAL_MATURITY_DT', 'RR_IL_RECLASS_DT', 'FDB_SCORING_DT', 'FDB_TAG', 'FDB_TAG_DT', 'CLIMATE_MITIGATE_GP1_FLG', 'CLIMATE_ADAPT_GP2_FLG', 'CLIMATE_ENVIRONMT_GP3_FLG', 'CLIMATE_TRANSITION_GP4_FLG', 'CLIMATE_PROHIBIT_GP5_FLG', 'WOS_RECEIVED_DT', 'WOS_SETTLED_DT', 'WOS_TAG', 'FRAUD_TAG', 'FRAUD_TAG_DT', 'REMAIN_TERM_MATURITY', 'COURT_ORDER_UPDATE_DT', 'SOURCE_INCOME_CURRENCY_CD', 'VEHI_MAKE_CATEGORY', 'INT_JAN_TO_JUN_AMT', 'INT_JUL_TO_DEC_AMT', 'WRIOFF_CLOSE_FILE_TAG', 'WRIOFF_CLOSE_FILE_TAG_DT', 'RR_UNTAG_DATE', 'RR_UNTAG_REPAY_CNT', 'EARMARK_NOTICE_DT', 'EARMARK_AMT', 'MAILING_ADD_IND', 'BILLING_ADD_IND', 'PROP_ADD_IND', 'FLOOR_RT_UNDER', 'FLOOR_RT_OVER', 'STMT_GEN_IND', 'MULTI_CURRENCY_TAG', 'RRSTG1', 'AGING_FAST_TRACKER', 'GOODWILL_IND', 'GOODWILL_CURR_RATE', 'GOODWILL_CURR_AMT']
-  File: enrh_ln_note_m08.sas7bdat
-  Total columns: 494
-  Columns: ['ACCTNO', 'NAME', 'TAXNO', 'ORGTYPE', 'GUAREND', 'BANKNO', 'APPCODE', 'ACCBRCH', 'CUSTCODE', 'PURPOSE', 'FOREIGN', 'BKRPTIND', 'NOTENO', 'REVERSED', 'LOANTYPE', 'NTBRCH', 'PENDBRH', 'ISSUEDT', 'NOTEMAT', 'ASSMDATE', 'LASTTRAN', 'LSTTRNCD', 'CURBAL', 'INTAMT', 'PRINBNP', 'APPVALUE', 'NOTETERM', 'COLLDESC', 'FLAG3', 'SYNDIND', 'FLAG5', 'COMMNO', 'CORPCODE', 'COSTCTR', 'PCOSTCTR', 'SECTOR', 'CENSUS', 'BILLTYPE', 'GRANTDT', 'PAIDIND', 'ORGBAL', 'NETPROC', 'FEEDUE', 'INTRATE', 'SPREAD', 'NTINT', 'INTMAINT', 'REBATE', 'INTEARN', 'ACCRUAL', 'RISKRATE', 'SECURE', 'LIABCODE', 'FLAG1', 'MORTGIND', 'REFINANC', 'SBA', 'LOANSTAT', 'NONACCR', 'DEALERNO', 'MATUREDT', 'BORSTAT', 'MARKETVL', 'COLLMAKE', 'EARNTERM', 'USURYIDX', 'STATE', 'INTEARN2', 'INTEARN3', 'INTEARN4', 'PAYAMT', 'PAYFREQ', 'FEETOTAL', 'FEETOT2', 'FEEAMTO', 'FEEAMT2', 'FEEAMT3', 'NXDUEDT', 'BILDUE', 'BILTOT', 'BILPAY', 'BILPRIN', 'HSTOTAMT', 'PAYTYPE', 'HSTOTPAY', 'DISPYIND', 'FEEAMT4', 'REBIND', 'APPRDATE', 'POSTNTRN', 'LSTTRNAM', 'INTBNP', 'NTAPR', 'ORIGRATE', 'VINNO', 'RESTIND', 'TOTPDEOP', 'USER2', 'USER3', 'USER4', 'POSTCODE', 'INTPDYTD', 'ACCRUYTD', 'ACCRUEOP', 'BIRTHDT', 'NTINDEX', 'MTDINT', 'SCORE1', 'REBATEI', 'ACCTYIND', 'ACCOSTCT', 'INTINYTD', 'BILLCNT', 'PREVBRNO', 'SCORE2', 'HSTPRIN', 'CRISPURP', 'USER1', 'ACCTPBRH', 'HSTINT', 'PAIDOFF', 'FEEDUEMS', 'NFEEAMT5', 'NFEEAMT6', 'NFEEAMT7', 'NOOFPAY', 'NDHISSDT', 'NDPAYIND', 'NDHEXPDT', 'ROPAYIND', 'PAIDTODT', 'FEEYTD', 'FEEPDYTD', 'RSRVTERM', 'BILPDYTD', 'FEEYTDX', 'FEPDYTDX', 'FEEAMT8', 'FEEAMT9', 'MINIFEE', 'FEEAMT13', 'PZIPCODE', 'FEEAMT10', 'FEEAMT11', 'FEEAMT12', 'FEEAMT14', 'FEEAMT15', 'FEEAMT16', 'FEEEARN1', 'FEEEARN2', 'COLLYEAR', 'DISBIND1', 'PRINPAID', 'INTPAID', 'HTOTAMT2', 'HTOTPAY2', 'PRINYTD', 'OSTDAMT', 'PAYNUM', 'RSRVREBI', 'TERMIDAT', 'TMLATE15', 'TMLATE30', 'TMLATE60', 'TMLATE90', 'BONUSANO', 'DELQCD', 'FEEPLAN', 'FEERATE', 'WORDTYP', 'HISPTDT', 'STAFFNO', 'PAYEFFDT', 'AANUMBR', 'APPORMT', 'ECSRRSRV', 'COSTFUND', 'POFFICER', 'NPLCRR', 'CUSTCDX', 'FORM2', 'FORM1', 'STATUSDT', 'INTBUYPD', 'MODELDES', 'YTDEARNS', 'ESCRACCT', 'RESTBALC', 'INTRATE2', 'RATELMT2', 'PRMOFFHP', 'POINTAMT', 'CEILINGO', 'CEILINGU', 'MAILCODE', 'PAYIND', 'SITYPE', 'SIACCTNO', 'OLDUNPAID', 'VARSTDTE', 'USER5', 'SENDNBL', 'FRELEAS', 'USMARGIN', 'USEDIT', 'FEECOMBIND', 'CURCODE', 'STOPDEBIT', 'TAXEQIND', 'SM_STATUS', 'CASHPRICE', 'REACCRUAL', 'LATENOTICE', 'GUARNOTICE', 'INTBASIS', 'MEMOACC', 'EXCESSPAY', 'BILLEADDAY', 'DEATHDATE', 'INTSTDTE', 'AUTNACCR', 'CFINDEX', 'EXRATIO', 'CONTRTYPE', 'BILDUEMIG', 'NPLCRRBPA', 'FDACCTNO_', 'FDCERTNO', 'FCLOSUREDT', 'RRCYCLE', 'VB', 'CPNSTDTE', 'INSOLVENCY_IND', 'CURRILDTE', 'FIRSILDTE', 'NUMCPNS', 'RSN', 'PTMNATE', 'ASCORE_PERM', 'ASCORE_LTST', 'OLDRR', 'EARLY_SETTLE_FEE_CHARGE_FLG', 'ACCTREVDT', 'MNIAPLMT', 'ABM_HL', 'IA_LRU', 'COMMNO_OLD', 'TIMES_RENEWED', 'MARKED_PAYMENT_IND', 'CCRIS_INSTLAMT', 'NURS_TAG', 'NUR_STARTDT', 'NURS_TAGDT', 'NURS_ENDDT', 'NURS_COUNTER', 'WRIOFF_DT', 'WRIOFF_AMT', 'CUM_WRIOFF', 'RECOVER_COST', 'ASCORE_COMM', 'REPOSDTE', 'VALUEDTE', 'DISPOSED_AMT', 'DSR', 'REPAY_SOURCE', 'REPAY_TYPE_CD', 'MTD_REPAID_AMT', 'MTD_TAWIDH_AMT', 'MTD_GHARAMAH_AMT', 'INDUSTRIAL_SECTOR_CD', 'PROMPT_PAY_TRACKER', 'MAN_REV_RATE', 'MAN_REV_DATE', 'SYS_REV_RATE', 'SYS_REV_DATE', 'REFINANC_LN', 'OLD_FI', 'OLD_MACC_NO', 'OLD_SUBACC_NO', 'TIA_TAG_DATE', 'TIA_UTAG_DATE', 'REPO_ORDER_ISSUE_DT', 'NUM_REPO_ORDER_ISSUE', 'COURT_ORDER_APPLY_DT', 'COURT_ORDER_OBTAIN_DT', 'AUTO_REPRICE_DIFF_INSTL_AMT', 'RISK_GRADE_CLASS', 'REPAY_PROPOSAL_CD', 'LTST_MGB_SCORE', 'LMO_TAG', 'LMO_MAINT_DT', 'AKPK_STATUS', 'DIGITAL_RR_STATUS_CD', 'TAKAFUL_AMT', 'TAKAFUL_OPERAT', 'TAKAFUL_COLLECT_ACCTNO', 'TFA_NURS_TAG', 'TFA_NURS_TAG_DT', 'TFA_NURS_START_DT', 'TFA_NURS_END_DT', 'TFA_NURS_COUNTER', 'TFA_DIG_STATUS_CD', 'TFA_DIG_STATUS_DT', 'REPAY_PROPOSAL_DT', 'MANUAL_RR_TAG', 'MANUAL_RR_DT', 'AUTO_EXT_TAG', 'AUTO_EXT_TAG_DT', 'AUTO_REPRICE_INSTL_AMT', 'BULLET_REPAY_IND', 'BALLOON_REPAY_IND', 'PROP_DEVELOP_FIN_IND', 'DIA_PAST01_MTH', 'DIA_PAST02_MTH', 'DIA_PAST03_MTH', 'DIA_PAST04_MTH', 'DIA_PAST05_MTH', 'DIA_PAST06_MTH', 'DIA_PAST07_MTH', 'DIA_PAST08_MTH', 'DIA_PAST09_MTH', 'DIA_PAST10_MTH', 'DIA_PAST11_MTH', 'DIA_PAST12_MTH', 'DIA_PAST13_MTH', 'DIA_PAST14_MTH', 'DIA_PAST15_MTH', 'DIA_PAST16_MTH', 'DIA_PAST17_MTH', 'DIA_PAST18_MTH', 'DIA_PAST19_MTH', 'DIA_PAST20_MTH', 'DIA_PAST21_MTH', 'DIA_PAST22_MTH', 'DIA_PAST23_MTH', 'DIA_PAST24_MTH', 'ORIG_RESTIND', 'RESTIND_END_DT', 'COM_FEE_NOTICE_IND', 'NUM_MORA', 'AKPK_RA_TAG', 'AKPK_RA_TAG_DT', 'AKPK_RA_DIG_STATUS_CD', 'AKPK_RA_DIG_STATUS_DT', 'AKPK_RA_START_DT', 'AKPK_RA_END_DT', 'AKPK_RA_ORIG_SPREAD', 'TRA_EFF_DT', 'DIGITAL_RR_STATUS_DT', 'LMOENDDATE', 'LMOSTDATE', 'BANK_EQUITY_RATIO', 'FDACCTNO', 'NACOSPADT', 'LOCK_IN_END_DT', 'FDB', 'CP', 'SM_DATE', 'STAFF_FREE_INT_IND', 'STAFF_FREE_INT_LOAN_AMT', 'OMNIBUS_FACILITY_IND', 'MARKED_PAYMENT_AMT', 'INTPYTD1', 'CUSTCDR', 'DNBFISME', 'SYNRATIO', 'RESTRUCT', 'FEEAMTA', 'FEEAMTB', 'FEEAMTC', 'CJFEE', 'DAYARR_MO', 'MO_INSTL_ARR', 'FEEAMT', 'MNIAPDTE', 'NXTBIL', 'BLDATE', 'DLVDATE', 'BALANCE', 'FEEAMT5', 'NFEEAMT8', 'NFEEAM10', 'NFEEAM11', 'NFEEAM12', 'CURRATE', 'USLIMIT', 'OLDNOTEAPPVALUE', 'OLDNOTELASTTRAN', 'OLDNOTEBLDATE', 'OLDNOTEISSUEDT', 'OLDNOTEDAYARR', 'MO_TAG', 'MOSTDTE', 'MOENDDTE', 'MO_MAIN_DT', 'SPOTRATE', 'WRITE_DOWN_BAL', 'ORICODE', 'AKPK_RA_DLY_INT_ACCRUAL', 'AKPK_RA_MTD_INT_ACCRUAL', 'AKPK_RA_MTH_INT_WAIVER_AMT', 'AKPK_RA_CUMM_INT_WAIVER_AMT', 'AKPK_RA_MTH_INT_CAP_AMT', 'AKPK_RA_CUMM_INT_CAP_AMT', 'AKPK_RA_ORIG_CEILING_RT', 'NUM_PAY_BIL_INSTL', 'SCHBIL_INSTL_DT', 'SCHBIL_INT_DT', 'NUM_PAY_BIL_INT', 'LASTBIL_INSTL_DT', 'LASTBIL_INT_DT', 'MORA_BENCHMARK_AMT', 'TRA_RR_IND', 'TRA_RR_ACCEPT_DT', 'MORDAYARR', 'NUM_RR', 'ENTITY_CD', 'INFEE', 'DAYARR_MORA', 'SPA_AMT', 'HI_TAG', 'HI_TAG_DT', 'HI_DIG_STATUS_CD', 'HI_DIG_STATUS_DT', 'REPO_ORDER_EXPIRY_DT', 'FLOOD_MO_TAG', 'FLOOD_MO_DT', 'IMPAIRED_HP_TAG', 'REPAY_MODE', 'RR_EREQUEST_NUM', 'RR_TYPE', 'RR_APPR_DATE', 'INDEX_PRICING', 'SCH_REPAY_TERM', 'LEGAL_NOTICE_INSTRUCT_DT', 'LEGAL_NOTICE_ISSUE_DT', 'PARAS_TAG', 'PARAS_TAG_DT', 'JUDGE_AMT', 'JUDGE_DT', 'JUDGE_MAINT_DT', 'PRE_BKRUPT_NOTICE_DT', 'PCT_INDEX_INTRATE', 'RR_APPL_DATE', 'HP_STAGE_TRSF_IND', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'CUMM_PAID_BILL_AMT', 'CUMM_PAID_BILL_PCT', 'AKPK_MATRIX_TYPE', 'AKPK_MATRIX_DATE', 'DEVIATION_CD', 'COURT_ORDER_PERPETUAL_IND', 'FLOOD_MO_PACKAGE_CD', 'E_INVOICE_IND', 'INT_ADVICE_IND', 'LEGAL_MATURITY_DT', 'RR_IL_RECLASS_DT', 'FDB_SCORING_DT', 'FDB_TAG', 'FDB_TAG_DT', 'CLIMATE_MITIGATE_GP1_FLG', 'CLIMATE_ADAPT_GP2_FLG', 'CLIMATE_ENVIRONMT_GP3_FLG', 'CLIMATE_TRANSITION_GP4_FLG', 'CLIMATE_PROHIBIT_GP5_FLG', 'WOS_RECEIVED_DT', 'WOS_SETTLED_DT', 'WOS_TAG', 'FRAUD_TAG', 'FRAUD_TAG_DT', 'REMAIN_TERM_MATURITY', 'COURT_ORDER_UPDATE_DT', 'SOURCE_INCOME_CURRENCY_CD', 'VEHI_MAKE_CATEGORY', 'INT_JAN_TO_JUN_AMT', 'INT_JUL_TO_DEC_AMT', 'WRIOFF_CLOSE_FILE_TAG', 'WRIOFF_CLOSE_FILE_TAG_DT', 'RR_UNTAG_DATE', 'RR_UNTAG_REPAY_CNT', 'EARMARK_NOTICE_DT', 'EARMARK_AMT', 'MAILING_ADD_IND', 'BILLING_ADD_IND', 'PROP_ADD_IND', 'FLOOR_RT_UNDER', 'FLOOR_RT_OVER', 'STMT_GEN_IND', 'MULTI_CURRENCY_TAG', 'RRSTG1', 'AGING_FAST_TRACKER', 'GOODWILL_IND', 'GOODWILL_CURR_RATE', 'GOODWILL_CURR_AMT']
-
-Filtered LNNOTE rows: 0
-WARNING: No data in LNNOTE after filtering!
-Debugging: Reading unfiltered sample...
-  File: enrh_ln_note_m08.sas7bdat
-  Total columns: 494
-  Columns: ['ACCTNO', 'NAME', 'TAXNO', 'ORGTYPE', 'GUAREND', 'BANKNO', 'APPCODE', 'ACCBRCH', 'CUSTCODE', 'PURPOSE', 'FOREIGN', 'BKRPTIND', 'NOTENO', 'REVERSED', 'LOANTYPE', 'NTBRCH', 'PENDBRH', 'ISSUEDT', 'NOTEMAT', 'ASSMDATE', 'LASTTRAN', 'LSTTRNCD', 'CURBAL', 'INTAMT', 'PRINBNP', 'APPVALUE', 'NOTETERM', 'COLLDESC', 'FLAG3', 'SYNDIND', 'FLAG5', 'COMMNO', 'CORPCODE', 'COSTCTR', 'PCOSTCTR', 'SECTOR', 'CENSUS', 'BILLTYPE', 'GRANTDT', 'PAIDIND', 'ORGBAL', 'NETPROC', 'FEEDUE', 'INTRATE', 'SPREAD', 'NTINT', 'INTMAINT', 'REBATE', 'INTEARN', 'ACCRUAL', 'RISKRATE', 'SECURE', 'LIABCODE', 'FLAG1', 'MORTGIND', 'REFINANC', 'SBA', 'LOANSTAT', 'NONACCR', 'DEALERNO', 'MATUREDT', 'BORSTAT', 'MARKETVL', 'COLLMAKE', 'EARNTERM', 'USURYIDX', 'STATE', 'INTEARN2', 'INTEARN3', 'INTEARN4', 'PAYAMT', 'PAYFREQ', 'FEETOTAL', 'FEETOT2', 'FEEAMTO', 'FEEAMT2', 'FEEAMT3', 'NXDUEDT', 'BILDUE', 'BILTOT', 'BILPAY', 'BILPRIN', 'HSTOTAMT', 'PAYTYPE', 'HSTOTPAY', 'DISPYIND', 'FEEAMT4', 'REBIND', 'APPRDATE', 'POSTNTRN', 'LSTTRNAM', 'INTBNP', 'NTAPR', 'ORIGRATE', 'VINNO', 'RESTIND', 'TOTPDEOP', 'USER2', 'USER3', 'USER4', 'POSTCODE', 'INTPDYTD', 'ACCRUYTD', 'ACCRUEOP', 'BIRTHDT', 'NTINDEX', 'MTDINT', 'SCORE1', 'REBATEI', 'ACCTYIND', 'ACCOSTCT', 'INTINYTD', 'BILLCNT', 'PREVBRNO', 'SCORE2', 'HSTPRIN', 'CRISPURP', 'USER1', 'ACCTPBRH', 'HSTINT', 'PAIDOFF', 'FEEDUEMS', 'NFEEAMT5', 'NFEEAMT6', 'NFEEAMT7', 'NOOFPAY', 'NDHISSDT', 'NDPAYIND', 'NDHEXPDT', 'ROPAYIND', 'PAIDTODT', 'FEEYTD', 'FEEPDYTD', 'RSRVTERM', 'BILPDYTD', 'FEEYTDX', 'FEPDYTDX', 'FEEAMT8', 'FEEAMT9', 'MINIFEE', 'FEEAMT13', 'PZIPCODE', 'FEEAMT10', 'FEEAMT11', 'FEEAMT12', 'FEEAMT14', 'FEEAMT15', 'FEEAMT16', 'FEEEARN1', 'FEEEARN2', 'COLLYEAR', 'DISBIND1', 'PRINPAID', 'INTPAID', 'HTOTAMT2', 'HTOTPAY2', 'PRINYTD', 'OSTDAMT', 'PAYNUM', 'RSRVREBI', 'TERMIDAT', 'TMLATE15', 'TMLATE30', 'TMLATE60', 'TMLATE90', 'BONUSANO', 'DELQCD', 'FEEPLAN', 'FEERATE', 'WORDTYP', 'HISPTDT', 'STAFFNO', 'PAYEFFDT', 'AANUMBR', 'APPORMT', 'ECSRRSRV', 'COSTFUND', 'POFFICER', 'NPLCRR', 'CUSTCDX', 'FORM2', 'FORM1', 'STATUSDT', 'INTBUYPD', 'MODELDES', 'YTDEARNS', 'ESCRACCT', 'RESTBALC', 'INTRATE2', 'RATELMT2', 'PRMOFFHP', 'POINTAMT', 'CEILINGO', 'CEILINGU', 'MAILCODE', 'PAYIND', 'SITYPE', 'SIACCTNO', 'OLDUNPAID', 'VARSTDTE', 'USER5', 'SENDNBL', 'FRELEAS', 'USMARGIN', 'USEDIT', 'FEECOMBIND', 'CURCODE', 'STOPDEBIT', 'TAXEQIND', 'SM_STATUS', 'CASHPRICE', 'REACCRUAL', 'LATENOTICE', 'GUARNOTICE', 'INTBASIS', 'MEMOACC', 'EXCESSPAY', 'BILLEADDAY', 'DEATHDATE', 'INTSTDTE', 'AUTNACCR', 'CFINDEX', 'EXRATIO', 'CONTRTYPE', 'BILDUEMIG', 'NPLCRRBPA', 'FDACCTNO_', 'FDCERTNO', 'FCLOSUREDT', 'RRCYCLE', 'VB', 'CPNSTDTE', 'INSOLVENCY_IND', 'CURRILDTE', 'FIRSILDTE', 'NUMCPNS', 'RSN', 'PTMNATE', 'ASCORE_PERM', 'ASCORE_LTST', 'OLDRR', 'EARLY_SETTLE_FEE_CHARGE_FLG', 'ACCTREVDT', 'MNIAPLMT', 'ABM_HL', 'IA_LRU', 'COMMNO_OLD', 'TIMES_RENEWED', 'MARKED_PAYMENT_IND', 'CCRIS_INSTLAMT', 'NURS_TAG', 'NUR_STARTDT', 'NURS_TAGDT', 'NURS_ENDDT', 'NURS_COUNTER', 'WRIOFF_DT', 'WRIOFF_AMT', 'CUM_WRIOFF', 'RECOVER_COST', 'ASCORE_COMM', 'REPOSDTE', 'VALUEDTE', 'DISPOSED_AMT', 'DSR', 'REPAY_SOURCE', 'REPAY_TYPE_CD', 'MTD_REPAID_AMT', 'MTD_TAWIDH_AMT', 'MTD_GHARAMAH_AMT', 'INDUSTRIAL_SECTOR_CD', 'PROMPT_PAY_TRACKER', 'MAN_REV_RATE', 'MAN_REV_DATE', 'SYS_REV_RATE', 'SYS_REV_DATE', 'REFINANC_LN', 'OLD_FI', 'OLD_MACC_NO', 'OLD_SUBACC_NO', 'TIA_TAG_DATE', 'TIA_UTAG_DATE', 'REPO_ORDER_ISSUE_DT', 'NUM_REPO_ORDER_ISSUE', 'COURT_ORDER_APPLY_DT', 'COURT_ORDER_OBTAIN_DT', 'AUTO_REPRICE_DIFF_INSTL_AMT', 'RISK_GRADE_CLASS', 'REPAY_PROPOSAL_CD', 'LTST_MGB_SCORE', 'LMO_TAG', 'LMO_MAINT_DT', 'AKPK_STATUS', 'DIGITAL_RR_STATUS_CD', 'TAKAFUL_AMT', 'TAKAFUL_OPERAT', 'TAKAFUL_COLLECT_ACCTNO', 'TFA_NURS_TAG', 'TFA_NURS_TAG_DT', 'TFA_NURS_START_DT', 'TFA_NURS_END_DT', 'TFA_NURS_COUNTER', 'TFA_DIG_STATUS_CD', 'TFA_DIG_STATUS_DT', 'REPAY_PROPOSAL_DT', 'MANUAL_RR_TAG', 'MANUAL_RR_DT', 'AUTO_EXT_TAG', 'AUTO_EXT_TAG_DT', 'AUTO_REPRICE_INSTL_AMT', 'BULLET_REPAY_IND', 'BALLOON_REPAY_IND', 'PROP_DEVELOP_FIN_IND', 'DIA_PAST01_MTH', 'DIA_PAST02_MTH', 'DIA_PAST03_MTH', 'DIA_PAST04_MTH', 'DIA_PAST05_MTH', 'DIA_PAST06_MTH', 'DIA_PAST07_MTH', 'DIA_PAST08_MTH', 'DIA_PAST09_MTH', 'DIA_PAST10_MTH', 'DIA_PAST11_MTH', 'DIA_PAST12_MTH', 'DIA_PAST13_MTH', 'DIA_PAST14_MTH', 'DIA_PAST15_MTH', 'DIA_PAST16_MTH', 'DIA_PAST17_MTH', 'DIA_PAST18_MTH', 'DIA_PAST19_MTH', 'DIA_PAST20_MTH', 'DIA_PAST21_MTH', 'DIA_PAST22_MTH', 'DIA_PAST23_MTH', 'DIA_PAST24_MTH', 'ORIG_RESTIND', 'RESTIND_END_DT', 'COM_FEE_NOTICE_IND', 'NUM_MORA', 'AKPK_RA_TAG', 'AKPK_RA_TAG_DT', 'AKPK_RA_DIG_STATUS_CD', 'AKPK_RA_DIG_STATUS_DT', 'AKPK_RA_START_DT', 'AKPK_RA_END_DT', 'AKPK_RA_ORIG_SPREAD', 'TRA_EFF_DT', 'DIGITAL_RR_STATUS_DT', 'LMOENDDATE', 'LMOSTDATE', 'BANK_EQUITY_RATIO', 'FDACCTNO', 'NACOSPADT', 'LOCK_IN_END_DT', 'FDB', 'CP', 'SM_DATE', 'STAFF_FREE_INT_IND', 'STAFF_FREE_INT_LOAN_AMT', 'OMNIBUS_FACILITY_IND', 'MARKED_PAYMENT_AMT', 'INTPYTD1', 'CUSTCDR', 'DNBFISME', 'SYNRATIO', 'RESTRUCT', 'FEEAMTA', 'FEEAMTB', 'FEEAMTC', 'CJFEE', 'DAYARR_MO', 'MO_INSTL_ARR', 'FEEAMT', 'MNIAPDTE', 'NXTBIL', 'BLDATE', 'DLVDATE', 'BALANCE', 'FEEAMT5', 'NFEEAMT8', 'NFEEAM10', 'NFEEAM11', 'NFEEAM12', 'CURRATE', 'USLIMIT', 'OLDNOTEAPPVALUE', 'OLDNOTELASTTRAN', 'OLDNOTEBLDATE', 'OLDNOTEISSUEDT', 'OLDNOTEDAYARR', 'MO_TAG', 'MOSTDTE', 'MOENDDTE', 'MO_MAIN_DT', 'SPOTRATE', 'WRITE_DOWN_BAL', 'ORICODE', 'AKPK_RA_DLY_INT_ACCRUAL', 'AKPK_RA_MTD_INT_ACCRUAL', 'AKPK_RA_MTH_INT_WAIVER_AMT', 'AKPK_RA_CUMM_INT_WAIVER_AMT', 'AKPK_RA_MTH_INT_CAP_AMT', 'AKPK_RA_CUMM_INT_CAP_AMT', 'AKPK_RA_ORIG_CEILING_RT', 'NUM_PAY_BIL_INSTL', 'SCHBIL_INSTL_DT', 'SCHBIL_INT_DT', 'NUM_PAY_BIL_INT', 'LASTBIL_INSTL_DT', 'LASTBIL_INT_DT', 'MORA_BENCHMARK_AMT', 'TRA_RR_IND', 'TRA_RR_ACCEPT_DT', 'MORDAYARR', 'NUM_RR', 'ENTITY_CD', 'INFEE', 'DAYARR_MORA', 'SPA_AMT', 'HI_TAG', 'HI_TAG_DT', 'HI_DIG_STATUS_CD', 'HI_DIG_STATUS_DT', 'REPO_ORDER_EXPIRY_DT', 'FLOOD_MO_TAG', 'FLOOD_MO_DT', 'IMPAIRED_HP_TAG', 'REPAY_MODE', 'RR_EREQUEST_NUM', 'RR_TYPE', 'RR_APPR_DATE', 'INDEX_PRICING', 'SCH_REPAY_TERM', 'LEGAL_NOTICE_INSTRUCT_DT', 'LEGAL_NOTICE_ISSUE_DT', 'PARAS_TAG', 'PARAS_TAG_DT', 'JUDGE_AMT', 'JUDGE_DT', 'JUDGE_MAINT_DT', 'PRE_BKRUPT_NOTICE_DT', 'PCT_INDEX_INTRATE', 'RR_APPL_DATE', 'HP_STAGE_TRSF_IND', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'CUMM_PAID_BILL_AMT', 'CUMM_PAID_BILL_PCT', 'AKPK_MATRIX_TYPE', 'AKPK_MATRIX_DATE', 'DEVIATION_CD', 'COURT_ORDER_PERPETUAL_IND', 'FLOOD_MO_PACKAGE_CD', 'E_INVOICE_IND', 'INT_ADVICE_IND', 'LEGAL_MATURITY_DT', 'RR_IL_RECLASS_DT', 'FDB_SCORING_DT', 'FDB_TAG', 'FDB_TAG_DT', 'CLIMATE_MITIGATE_GP1_FLG', 'CLIMATE_ADAPT_GP2_FLG', 'CLIMATE_ENVIRONMT_GP3_FLG', 'CLIMATE_TRANSITION_GP4_FLG', 'CLIMATE_PROHIBIT_GP5_FLG', 'WOS_RECEIVED_DT', 'WOS_SETTLED_DT', 'WOS_TAG', 'FRAUD_TAG', 'FRAUD_TAG_DT', 'REMAIN_TERM_MATURITY', 'COURT_ORDER_UPDATE_DT', 'SOURCE_INCOME_CURRENCY_CD', 'VEHI_MAKE_CATEGORY', 'INT_JAN_TO_JUN_AMT', 'INT_JUL_TO_DEC_AMT', 'WRIOFF_CLOSE_FILE_TAG', 'WRIOFF_CLOSE_FILE_TAG_DT', 'RR_UNTAG_DATE', 'RR_UNTAG_REPAY_CNT', 'EARMARK_NOTICE_DT', 'EARMARK_AMT', 'MAILING_ADD_IND', 'BILLING_ADD_IND', 'PROP_ADD_IND', 'FLOOR_RT_UNDER', 'FLOOR_RT_OVER', 'STMT_GEN_IND', 'MULTI_CURRENCY_TAG', 'RRSTG1', 'AGING_FAST_TRACKER', 'GOODWILL_IND', 'GOODWILL_CURR_RATE', 'GOODWILL_CURR_AMT']
+from pathlib import Path
+from datetime import date, datetime, timedelta
+import polars as pl
+import pyreadstat
+import saspy
+import numpy as np
+import gc
+import sys
 
 
+# =========================
+# Paths (adjust as needed)
+# =========================
+BASE_OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBLTRRF")
+BASE_OUTPUT.mkdir(parents=True, exist_ok=True)
+
+# Inputs
+LOAN_LNNOTE   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m08.sas7bdat")
+LOAN_LNCOMM   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m08.sas7bdat")
+
+CISLN_LOAN    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/loan.sas7bdat")
+
+COLL_FILE     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_20260831")
+DESC_FILE     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_20260831")
+MICR_FILE     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLTRRF/BOPESS.txt")
+
+NPGS_TRRF_IN  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLTRRF/trrf.sas7bdat")
+
+# Output
+OUT_DIR  = BASE_OUTPUT
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+OUT_FILE = None
+
+# Chunk size for reading large files
+CHUNK_SIZE = 50000
 
 
-then it stucks for quitew some times.
+# =========================
+# Helpers
+# =========================
+def get_sas7bdat_metadata(file_path):
+    """Get metadata about SAS7BDAT file without reading all data"""
+    try:
+        df_meta, meta = pyreadstat.read_sas7bdat(str(file_path), metadataonly=True)
+        return meta
+    except Exception as e:
+        print(f"Error reading metadata: {e}")
+        return None
+
+
+def read_sas7bdat_in_chunks(file_path, chunk_size=CHUNK_SIZE, filter_func=None, keep_columns=None, max_rows=None):
+    """
+    Read SAS7BDAT file in chunks and optionally filter/select columns
+    
+    Args:
+        max_rows: Maximum number of rows to read (None for all)
+    """
+    chunks = []
+    row_offset = 0
+    file_path_str = str(file_path)
+    schema_columns = None
+    total_rows_read = 0
+    
+    # Get metadata (suppress output)
+    meta = get_sas7bdat_metadata(file_path)
+    if meta:
+        all_columns = meta.column_names
+    else:
+        all_columns = None
+    
+    while True:
+        try:
+            # Check if we've reached max_rows
+            if max_rows is not None and total_rows_read >= max_rows:
+                break
+            
+            # Calculate chunk size for this iteration
+            current_chunk_size = chunk_size
+            if max_rows is not None:
+                current_chunk_size = min(chunk_size, max_rows - total_rows_read)
+            
+            # Read a chunk
+            df_chunk, meta_chunk = pyreadstat.read_sas7bdat(
+                file_path_str, 
+                row_offset=row_offset,
+                row_limit=current_chunk_size
+            )
+            
+            if df_chunk is None or len(df_chunk) == 0:
+                break
+            
+            total_rows_read += len(df_chunk)
+            
+            # Convert to polars
+            pl_chunk = pl.from_pandas(df_chunk)
+            
+            # Store schema from first chunk
+            if schema_columns is None:
+                schema_columns = pl_chunk.columns
+            
+            # Apply column selection if specified
+            if keep_columns:
+                existing_cols = [c for c in keep_columns if c in pl_chunk.columns]
+                if existing_cols:
+                    pl_chunk = pl_chunk.select(existing_cols)
+                else:
+                    row_offset += len(df_chunk)
+                    del df_chunk
+                    gc.collect()
+                    continue
+            
+            # Apply filter function if specified
+            if filter_func:
+                pl_chunk = filter_func(pl_chunk)
+                
+            # Only keep non-empty chunks
+            if pl_chunk.height > 0:
+                chunks.append(pl_chunk)
+            
+            # Move to next chunk
+            row_offset += len(df_chunk)
+            
+            # Clear memory
+            del df_chunk
+            gc.collect()
+            
+            # Break if we got less than chunk_size (end of file)
+            if len(pl_chunk) < current_chunk_size:
+                break
+                
+        except Exception as e:
+            print(f"Error reading chunk at offset {row_offset}: {e}")
+            import traceback
+            traceback.print_exc()
+            break
+    
+    # Concatenate all chunks
+    if chunks:
+        result = pl.concat(chunks, how="vertical", rechunk=True)
+        del chunks
+        gc.collect()
+        return result
+    else:
+        # Return empty DataFrame with proper schema
+        if schema_columns:
+            empty_df = pl.DataFrame({col: [] for col in schema_columns})
+            return empty_df
+        elif all_columns:
+            empty_df = pl.DataFrame({col: [] for col in all_columns})
+            return empty_df
+        else:
+            return pl.DataFrame()
+
+
+def write_sas7bdat_in_chunks(df, file_path, sas_session=None, chunk_size=CHUNK_SIZE):
+    """Write DataFrame to SAS7BDAT format using SASPy"""
+    if sas_session is None:
+        sas_session = saspy.SASsession()
+    
+    output_path = str(file_path)
+    total_rows = df.height
+    print(f"Writing {total_rows} rows to {output_path}")
+    
+    if total_rows == 0:
+        print("Warning: No data to write!")
+        return output_path
+    
+    # First chunk
+    first_chunk = df.slice(0, min(chunk_size, total_rows))
+    pandas_chunk = first_chunk.to_pandas()
+    sas_df = sas_session.df2sd(pandas_chunk, 'temp_df')
+    
+    sas_session.submit(f"""
+        PROC EXPORT DATA=temp_df 
+            OUTFILE="{output_path}" 
+            DBMS=SAS7BDAT REPLACE;
+        RUN;
+    """)
+    
+    # Write remaining chunks
+    offset = chunk_size
+    chunk_num = 1
+    while offset < total_rows:
+        end = min(offset + chunk_size, total_rows)
+        chunk = df.slice(offset, end - offset)
+        
+        if chunk.height > 0:
+            pandas_chunk = chunk.to_pandas()
+            sas_df = sas_session.df2sd(pandas_chunk, f'temp_df_{chunk_num}')
+            
+            sas_session.submit(f"""
+                PROC APPEND BASE=temp_df DATA=temp_df_{chunk_num} FORCE;
+                RUN;
+                
+                PROC DATASETS LIBRARY=WORK NOLIST;
+                    DELETE temp_df_{chunk_num};
+                RUN;
+            """)
+            
+            chunk_num += 1
+        
+        offset = end
+        del chunk, pandas_chunk
+        gc.collect()
+    
+    # Final export
+    sas_session.submit(f"""
+        PROC EXPORT DATA=temp_df 
+            OUTFILE="{output_path}" 
+            DBMS=SAS7BDAT REPLACE;
+        RUN;
+    """)
+    
+    return output_path
+
+
+def sas_days_to_date(days: int) -> date:
+    """Convert SAS date to Python date"""
+    origin = date(1960, 1, 1)
+    return origin.fromordinal(origin.toordinal() + int(days))
+
+
+def date_to_sas_days(d: date) -> int:
+    """Convert Python date to SAS date"""
+    origin = date(1960, 1, 1)
+    return (d - origin).days
+
+
+def parse_mmddyy8_from_z11_prefix_to_date(x) -> date | None:
+    """Emulates INPUT(SUBSTR(PUT(x,Z11.),1,8),MMDDYY8.)"""
+    if x is None:
+        return None
+    try:
+        xi = int(x)
+        if xi <= 0:
+            return None
+        s = f"{xi:011d}"[:8]
+        try:
+            return datetime.strptime(s, "%m%d%Y").date()
+        except Exception:
+            return datetime.strptime(s, "%m%d%y").date()
+    except Exception:
+        return None
+
+
+def month_end_of(d: date) -> date:
+    """SAS-style month-end calculation"""
+    if d.month in (1, 3, 5, 7, 8, 10, 12):
+        last = 31
+    elif d.month in (4, 6, 9, 11):
+        last = 30
+    else:
+        last = 29 if (d.year % 4 == 0) else 28
+    return date(d.year, d.month, last)
+
+
+# =========================
+# PBBLNFMT - NDAYS format definition
+# =========================
+def create_ndays_format():
+    """Create NDAYS format mapping"""
+    ndays_ranges = [
+        (0, 29, 0), (30, 59, 1), (60, 89, 2), (90, 119, 3),
+        (120, 149, 4), (150, 179, 5), (180, 209, 6), (210, 239, 7),
+        (240, 269, 8), (270, 299, 9), (300, 329, 10), (330, 359, 11),
+        (360, 389, 12), (390, 419, 13), (420, 449, 14), (450, 479, 15),
+        (480, 509, 16), (510, 539, 17), (540, 569, 18), (570, 599, 19),
+        (600, 629, 20), (630, 659, 21), (660, 689, 22), (690, 719, 23),
+        (720, 9999, 24)
+    ]
+    
+    return pl.DataFrame({
+        'START': [r[0] for r in ndays_ranges],
+        'END': [r[1] for r in ndays_ranges],
+        'LABEL': [r[2] for r in ndays_ranges]
+    })
+
+
+def ndays_informat(n: int, ndays_map: pl.DataFrame) -> int:
+    """Apply NDAYS informat mapping"""
+    if n is None:
+        return 0
+    n = int(n)
+    m = ndays_map.filter((pl.lit(n) >= pl.col("START")) & (pl.lit(n) <= pl.col("END")))
+    return int(m.item(0, "LABEL")) if m.height > 0 else 0
+
+
+# =========================
+# REPTDATE - Using datetime timedelta - 1 day
+# =========================
+REPTDATE = datetime.now().date() - timedelta(days=1)
+REPTMON  = f"{REPTDATE.month:02d}"
+REPTDAY  = f"{REPTDATE.day:02d}"
+REPTYEAR = f"{REPTDATE.year:04d}"
+SDATE = date_to_sas_days(REPTDATE)
+OUT_FILE  = OUT_DIR / f"LNTRRF{REPTMON}.sas7bdat"
+
+print("="*60)
+print(f"Processing date: {REPTDATE} (SAS date: {SDATE})")
+print("="*60)
+
+
+# =========================
+# LOAN0 / LOAN1 from LNNOTE
+# =========================
+print("\n" + "="*60)
+print("STEP 1: Reading LNNOTE")
+print("="*60)
+
+# Get metadata first (just column names, not data)
+meta = get_sas7bdat_metadata(LOAN_LNNOTE)
+if meta:
+    # Print only essential columns we need
+    essential_cols = ['ACCTNO', 'NOTENO', 'LOANTYPE', 'CENSUS', 'COMMNO', 'ENTITY_CD', 
+                      'ISSUEDT', 'BLDATE', 'BALANCE', 'CURBAL', 'NAME']
+    available_essential = [c for c in essential_cols if c in meta.column_names]
+    print(f"Essential columns available: {available_essential}")
+    print(f"Total columns in file: {len(meta.column_names)}")
+
+# Define filter function
+def filter_lnnote(chunk):
+    """Filter LNNOTE chunks"""
+    if chunk.height == 0:
+        return chunk
+    
+    # Filter ENTITY_CD != 'PIBB' if column exists
+    if "ENTITY_CD" in chunk.columns:
+        chunk = chunk.filter(pl.col("ENTITY_CD") != "PIBB")
+    
+    # Filter for LOANTYPE=575 & CENSUS=575.09
+    if "LOANTYPE" in chunk.columns and "CENSUS" in chunk.columns:
+        chunk = chunk.filter((pl.col("LOANTYPE") == 575) & (pl.col("CENSUS") == 575.09))
+    
+    # Add derived columns
+    if chunk.height > 0:
+        chunk = chunk.with_columns([
+            pl.col("LOANTYPE").alias("PRODUCT") if "LOANTYPE" in chunk.columns else pl.lit(None).alias("PRODUCT"),
+            pl.col("CENSUS").alias("CENSUST") if "CENSUS" in chunk.columns else pl.lit(None).alias("CENSUST"),
+        ])
+    
+    return chunk
+
+# Read only essential columns from LNNOTE
+essential_cols = ['ACCTNO', 'NAME', 'NOTENO', 'LOANTYPE', 'CENSUS', 'COMMNO', 'ENTITY_CD',
+                  'ISSUEDT', 'BLDATE', 'BALANCE', 'CURBAL', 'PENDBRH', 'NETPROC']
+
+print("Reading LNNOTE with essential columns only...")
+loan_base = read_sas7bdat_in_chunks(
+    LOAN_LNNOTE, 
+    chunk_size=CHUNK_SIZE,
+    filter_func=filter_lnnote,
+    keep_columns=essential_cols
+)
+
+print(f"Filtered LNNOTE rows: {loan_base.height}")
+
+if loan_base.height > 0 and "COMMNO" in loan_base.columns:
+    loan1 = loan_base.filter(pl.col("COMMNO") > 0)
+    loan0 = loan_base.filter(~(pl.col("COMMNO") > 0))
+    print(f"LOAN0: {loan0.height} rows, LOAN1: {loan1.height} rows")
+else:
+    print("WARNING: No data in LNNOTE after filtering!")
+    print("This might be because:")
+    print("  1. The file has no records with LOANTYPE=575 and CENSUS=575.09")
+    print("  2. All records have ENTITY_CD='PIBB'")
+    print("  3. The data types are different (e.g., LOANTYPE stored as string)")
+    
+    # Quick check with a very small sample (just 100 rows)
+    print("\nChecking first 100 rows for LOANTYPE and CENSUS values...")
+    sample = read_sas7bdat_in_chunks(
+        LOAN_LNNOTE, 
+        chunk_size=100,
+        filter_func=None,
+        keep_columns=['LOANTYPE', 'CENSUS', 'ENTITY_CD', 'COMMNO'],
+        max_rows=100
+    )
+    
+    if sample.height > 0:
+        if "LOANTYPE" in sample.columns:
+            loantype_vals = sample['LOANTYPE'].unique().to_list()
+            print(f"LOANTYPE values in sample: {loantype_vals[:10]}")
+        if "CENSUS" in sample.columns:
+            census_vals = sample['CENSUS'].unique().to_list()
+            print(f"CENSUS values in sample: {census_vals[:10]}")
+        if "ENTITY_CD" in sample.columns:
+            entity_vals = sample['ENTITY_CD'].unique().to_list()
+            print(f"ENTITY_CD values in sample: {entity_vals[:10]}")
+    
+    del sample
+    gc.collect()
+    
+    loan0 = pl.DataFrame()
+    loan1 = pl.DataFrame()
+
+del loan_base
+gc.collect()
+
+# If no data, exit gracefully
+if loan0.height == 0 and loan1.height == 0:
+    print("\n" + "="*60)
+    print("No data to process. Exiting.")
+    print("="*60)
+    sys.exit(0)
+
+
+# =========================
+# COMM from LNCOMM
+# =========================
+print("\n" + "="*60)
+print("STEP 2: Reading LNCOMM")
+print("="*60)
+
+meta_lncomm = get_sas7bdat_metadata(LOAN_LNCOMM)
+if meta_lncomm:
+    essential_lncomm = ['ACCTNO', 'COMMNO', 'CORGAMT', 'INTAMT', 'ENTITY_CD']
+    available_lncomm = [c for c in essential_lncomm if c in meta_lncomm.column_names]
+    print(f"LNCOMM essential columns available: {available_lncomm}")
+
+def filter_lncomm(chunk):
+    """Filter LNCOMM chunks"""
+    if chunk.height == 0:
+        return chunk
+    if "ENTITY_CD" in chunk.columns:
+        chunk = chunk.filter(pl.col("ENTITY_CD") != "PIBB")
+    return chunk
+
+# Read LNCOMM with essential columns
+print("Reading LNCOMM with essential columns only...")
+lncomm = read_sas7bdat_in_chunks(
+    LOAN_LNCOMM, 
+    chunk_size=CHUNK_SIZE,
+    filter_func=filter_lncomm,
+    keep_columns=['ACCTNO', 'COMMNO', 'CORGAMT', 'INTAMT', 'ENTITY_CD']
+)
+
+print(f"LNCOMM rows after filter: {lncomm.height}")
+
+# Process COMM
+if lncomm.height > 0:
+    # Handle CORGAMT
+    if "CORGAMT" in lncomm.columns:
+        lncomm = lncomm.with_columns([
+            pl.when(pl.col("CORGAMT").is_null()).then(0.00).otherwise(pl.col("CORGAMT")).alias("CORGAMT_CLEAN")
+        ])
+    else:
+        print("WARNING: CORGAMT column not found, using 0")
+        lncomm = lncomm.with_columns(pl.lit(0.00).alias("CORGAMT_CLEAN"))
+    
+    # Handle INTAMT
+    if "INTAMT" in lncomm.columns:
+        lncomm = lncomm.with_columns([
+            pl.when(pl.col("INTAMT").is_null()).then(0.00).otherwise(pl.col("INTAMT")).alias("INTAMT_CLEAN")
+        ])
+    else:
+        print("WARNING: INTAMT column not found, using 0")
+        lncomm = lncomm.with_columns(pl.lit(0.00).alias("INTAMT_CLEAN"))
+    
+    # Calculate NETPROC
+    lncomm = lncomm.with_columns([
+        (pl.col("CORGAMT_CLEAN") - pl.col("INTAMT_CLEAN")).alias("NETPROC")
+    ])
+    
+    # Select final columns
+    select_cols = []
+    if "ACCTNO" in lncomm.columns:
+        select_cols.append("ACCTNO")
+    if "COMMNO" in lncomm.columns:
+        select_cols.append("COMMNO")
+    select_cols.append("NETPROC")
+    
+    if len(select_cols) > 1:
+        comm = lncomm.select(select_cols)
+        if "ACCTNO" in lncomm.columns and "COMMNO" in lncomm.columns:
+            comm = comm.sort(by=["ACCTNO", "COMMNO"])
+    else:
+        comm = pl.DataFrame()
+        print("ERROR: No valid columns for COMM")
+else:
+    print("WARNING: No data in LNCOMM after filtering!")
+    comm = pl.DataFrame()
+
+del lncomm
+gc.collect()
+
+
+# =========================
+# Merge LOAN1 with COMM
+# =========================
+print("\n" + "="*60)
+print("STEP 3: Merging LOAN1 with COMM")
+print("="*60)
+
+if loan1.height > 0 and comm.height > 0 and "COMMNO" in loan1.columns and "COMMNO" in comm.columns:
+    loan1 = loan1.join(comm, on=["ACCTNO", "COMMNO"], how="inner")
+    loan = pl.concat([loan0, loan1], how="vertical", rechunk=True)
+elif loan1.height > 0:
+    print("WARNING: Cannot merge LOAN1 with COMM - missing required columns")
+    loan = loan0
+elif loan0.height > 0:
+    loan = loan0
+else:
+    loan = pl.DataFrame()
+
+print(f"Total LOAN rows: {loan.height}")
+
+if 'loan0' in locals():
+    del loan0
+if 'loan1' in locals():
+    del loan1
+if 'comm' in locals():
+    del comm
+gc.collect()
+
+
+# =========================
+# Derive fields
+# =========================
+if loan.height > 0:
+    print("\n" + "="*60)
+    print("STEP 4: Deriving fields")
+    print("="*60)
+    
+    # ISSUED date
+    if "ISSUEDT" in loan.columns:
+        loan = loan.with_columns([
+            pl.when(pl.col("ISSUEDT").is_not_null() & (pl.col("ISSUEDT") > 0))
+              .then(pl.col("ISSUEDT").cast(pl.Int64)
+                    .map_elements(parse_mmddyy8_from_z11_prefix_to_date, return_dtype=pl.Date))
+              .otherwise(pl.lit(None, dtype=pl.Date))
+              .alias("ISSUED")
+        ])
+    else:
+        loan = loan.with_columns(pl.lit(None, dtype=pl.Date).alias("ISSUED"))
+    
+    # NODAYS
+    if "BLDATE" in loan.columns:
+        loan = loan.with_columns([
+            pl.when((pl.col("BLDATE") > 0) & (pl.lit(SDATE) > pl.col("BLDATE")))
+              .then(pl.lit(SDATE) - pl.col("BLDATE"))
+              .otherwise(0)
+              .alias("NODAYS")
+        ])
+    else:
+        loan = loan.with_columns(pl.lit(0).alias("NODAYS"))
+    
+    loan = loan.with_columns(pl.lit(None, dtype=pl.Date).alias("NPLDATE"))
+    
+    # ARREARS
+    ndays_map = create_ndays_format()
+    loan = loan.with_columns([
+        pl.col("NODAYS").map_elements(
+            lambda x: ndays_informat(x, ndays_map), 
+            return_dtype=pl.Int64
+        ).alias("ARREARS")
+    ])
+    
+    # Recalculate ARREARS=24
+    loan = loan.with_columns([
+        pl.when(pl.col("ARREARS") == 24)
+          .then((pl.col("NODAYS").cast(pl.Float64) / 365.0 * 12.0).round(0).cast(pl.Int64))
+          .otherwise(pl.col("ARREARS"))
+          .alias("ARREARS")
+    ])
+    
+    # NPLDATE
+    if "BLDATE" in loan.columns:
+        loan = loan.with_columns([
+            pl.when(pl.col("NODAYS") > 89)
+              .then(pl.col("BLDATE").cast(pl.Int64)
+                    .map_elements(lambda d: month_end_of(sas_days_to_date(int(d) + 90)) if d is not None else None,
+                                  return_dtype=pl.Date))
+              .otherwise(pl.lit(None, dtype=pl.Date))
+              .alias("NPLDATE")
+        ])
+    
+    # Deduplicate
+    if "ACCTNO" in loan.columns and "NOTENO" in loan.columns:
+        loan = loan.unique(subset=["ACCTNO", "NOTENO"], keep="first").sort(by=["ACCTNO", "NOTENO"])
+    
+    print(f"LOAN rows after dedup: {loan.height}")
+
+
+    # =========================
+    # CISLN
+    # =========================
+    print("\n" + "="*60)
+    print("STEP 5: Reading CISLN")
+    print("="*60)
+    
+    meta_cisln = get_sas7bdat_metadata(CISLN_LOAN)
+    if meta_cisln:
+        essential_cisln = ['ACCTNO', 'NEWIC', 'CUSTNAME', 'SECCUST']
+        available_cisln = [c for c in essential_cisln if c in meta_cisln.column_names]
+        print(f"CISLN essential columns available: {available_cisln}")
+    
+    def filter_cisln(chunk):
+        """Filter CISLN chunks"""
+        if chunk.height == 0:
+            return chunk
+        if "SECCUST" in chunk.columns:
+            chunk = chunk.filter(pl.col("SECCUST") == "901")
+        return chunk
+    
+    print("Reading CISLN with essential columns only...")
+    cisln = read_sas7bdat_in_chunks(
+        CISLN_LOAN, 
+        chunk_size=CHUNK_SIZE,
+        filter_func=filter_cisln,
+        keep_columns=['ACCTNO', 'NEWIC', 'CUSTNAME', 'SECCUST']
+    )
+    
+    if cisln.height > 0 and "ACCTNO" in cisln.columns:
+        cisln = cisln.unique(subset=["ACCTNO"], keep="first")
+    
+    print(f"CISLN rows: {cisln.height}")
+    
+    if cisln.height > 0 and "ACCTNO" in cisln.columns:
+        loan = loan.join(cisln, on="ACCTNO", how="left")
+    
+    print(f"LOAN rows after CISLN merge: {loan.height}")
+    
+    del cisln
+    gc.collect()
+
+
+    # =========================
+    # COLL file
+    # =========================
+    print("\n" + "="*60)
+    print("STEP 6: Reading COLL file")
+    print("="*60)
+    
+    coll_data = []
+    with open(COLL_FILE, 'rb') as f:
+        chunk = []
+        for line in f:
+            try:
+                ccollno_bytes = line[3:9]
+                acctno_bytes = line[145:151]
+                noteno_bytes = line[152:158]
+                
+                def unpack_packed_decimal(b):
+                    if len(b) == 0:
+                        return 0
+                    digits = []
+                    for i in range(len(b) - 1):
+                        digits.append((b[i] >> 4) & 0x0F)
+                        digits.append(b[i] & 0x0F)
+                    digits.append((b[-1] >> 4) & 0x0F)
+                    sign = b[-1] & 0x0F
+                    
+                    value = 0
+                    for digit in digits:
+                        value = value * 10 + digit
+                    
+                    if sign == 0x0D:
+                        value = -value
+                    
+                    return value
+                
+                ccollno = unpack_packed_decimal(ccollno_bytes)
+                acctno = unpack_packed_decimal(acctno_bytes)
+                noteno = unpack_packed_decimal(noteno_bytes)
+                
+                chunk.append({
+                    'CCOLLNO': ccollno,
+                    'ACCTNO': acctno,
+                    'NOTENO': noteno
+                })
+                
+                if len(chunk) >= CHUNK_SIZE:
+                    coll_data.extend(chunk)
+                    chunk = []
+                    gc.collect()
+                    
+            except Exception as e:
+                continue
+        
+        if chunk:
+            coll_data.extend(chunk)
+    
+    coll = pl.DataFrame(coll_data).sort(by=["CCOLLNO"])
+    print(f"COLL rows: {coll.height}")
+    
+    del coll_data
+    gc.collect()
+
+
+    # =========================
+    # DESC file
+    # =========================
+    print("\n" + "="*60)
+    print("STEP 7: Reading DESC file")
+    print("="*60)
+    
+    desc_data = []
+    with open(DESC_FILE, 'rb') as f:
+        chunk = []
+        for line in f:
+            try:
+                line_str = line.decode('latin-1')
+                
+                ccollno = float(line_str[0:11].strip()) if line_str[0:11].strip() else 0.0
+                cinstcl = line_str[50:52].strip()
+                natguar = line_str[54:56].strip()
+                cgcgur = line_str[127:130].strip()
+                census = float(line_str[210:220].strip()) if line_str[210:220].strip() else 0.0
+                tranche = line_str[290:298].strip()
+                
+                if cgcgur in ('080', '090'):
+                    sch = '7Q' if cgcgur == '080' else '8Q'
+                    
+                    chunk.append({
+                        'CCOLLNO': ccollno,
+                        'CINSTCL': cinstcl,
+                        'NATGUAR': natguar,
+                        'CGCGUR': cgcgur,
+                        'CENSUS': census,
+                        'TRANCHE': tranche,
+                        'SCH': sch
+                    })
+                    
+                if len(chunk) >= CHUNK_SIZE:
+                    desc_data.extend(chunk)
+                    chunk = []
+                    gc.collect()
+                    
+            except Exception as e:
+                continue
+        
+        if chunk:
+            desc_data.extend(chunk)
+    
+    desc = pl.DataFrame(desc_data).sort(by=["CCOLLNO"])
+    print(f"DESC rows: {desc.height}")
+    
+    del desc_data
+    gc.collect()
+
+
+    # =========================
+    # Merge COLL and DESC
+    # =========================
+    print("\n" + "="*60)
+    print("STEP 8: Merging COLL and DESC")
+    print("="*60)
+    
+    if coll.height > 0 and desc.height > 0:
+        coll = coll.join(desc, on="CCOLLNO", how="inner")
+        coll = coll.filter((pl.col("CINSTCL") == "18") & (pl.col("NATGUAR") == "06"))
+        coll = coll.sort(by=["ACCTNO", "NOTENO"])
+    
+    print(f"COLL rows after merge: {coll.height}")
+    
+    del desc
+    gc.collect()
+
+
+    # =========================
+    # NPGS merge
+    # =========================
+    print("\n" + "="*60)
+    print("STEP 9: Creating NPGS")
+    print("="*60)
+    
+    if loan.height > 0 and coll.height > 0:
+        npgs = loan.join(coll, on=["ACCTNO", "NOTENO"], how="inner")
+    else:
+        npgs = pl.DataFrame()
+    
+    print(f"NPGS rows: {npgs.height}")
+    
+    del loan, coll
+    gc.collect()
+
+
+    # Continue with remaining steps only if NPGS has data
+    if npgs.height > 0:
+        # =========================
+        # MICR file
+        # =========================
+        print("\n" + "="*60)
+        print("STEP 10: Reading MICR file")
+        print("="*60)
+        
+        micr_data = []
+        with open(MICR_FILE, 'r') as f:
+            for line in f:
+                try:
+                    pendbrh = int(line[0:3].strip()) if line[0:3].strip() else 0
+                    micrcd = line[39:44].strip()
+                    
+                    micr_data.append({
+                        'PENDBRH': pendbrh,
+                        'MICRCD': micrcd
+                    })
+                except Exception as e:
+                    continue
+        
+        micr = pl.DataFrame(micr_data).sort(by=["PENDBRH"])
+        
+        if "PENDBRH" in npgs.columns and "PENDBRH" in micr.columns:
+            npgs = npgs.join(micr, on="PENDBRH", how="left")
+        
+        print(f"NPGS rows after MICR merge: {npgs.height}")
+        
+        del micr, micr_data
+        gc.collect()
+
+
+        # =========================
+        # CVAR02
+        # =========================
+        print("\n" + "="*60)
+        print("STEP 11: Creating CVAR fields")
+        print("="*60)
+        
+        npgs = npgs.with_columns([
+            pl.lit("   ").alias("CVAR02")
+        ]).with_columns([
+            pl.when(pl.col("SCH") == "7Q").then(pl.lit("7Q"))
+             .when(pl.col("SCH") == "8Q").then(pl.lit("8Q"))
+             .otherwise(pl.col("CVAR02"))
+             .alias("CVAR02")
+        ])
+        
+        npgs = npgs.filter(pl.col("CVAR02") != "   ")
+        
+        # Create final fields
+        NORMDT = f"{REPTDAY}/{REPTMON}/{REPTYEAR}"
+        
+        npgs = npgs.with_columns([
+            pl.col("CENSUS").cast(pl.Float64).alias("CVAR01"),
+            pl.col("NEWIC").cast(pl.Utf8).alias("CVAR03") if "NEWIC" in npgs.columns else pl.lit("").alias("CVAR03"),
+            pl.when((pl.col("CUSTNAME").is_null()) | (pl.col("CUSTNAME") == "  "))
+              .then(pl.col("NAME"))
+              .otherwise(pl.col("CUSTNAME"))
+              .cast(pl.Utf8)
+              .alias("CVAR04") if "CUSTNAME" in npgs.columns else pl.lit("").alias("CVAR04"),
+            pl.col("ISSUED").alias("CVAR05") if "ISSUED" in npgs.columns else pl.lit(None, dtype=pl.Date).alias("CVAR05"),
+            pl.col("ACCTNO").cast(pl.Float64).alias("CVAR06") if "ACCTNO" in npgs.columns else pl.lit(0.0).alias("CVAR06"),
+            pl.lit("FL").alias("CVAR07"),
+            pl.col("NETPROC").cast(pl.Float64).alias("CVAR08") if "NETPROC" in npgs.columns else pl.lit(0.0).alias("CVAR08"),
+            pl.col("BALANCE").cast(pl.Float64).alias("CVAR09") if "BALANCE" in npgs.columns else pl.lit(0.0).alias("CVAR09"),
+            pl.lit(0.00).alias("CVAR10"),
+            pl.col("ARREARS").cast(pl.Int64).alias("CVAR11") if "ARREARS" in npgs.columns else pl.lit(0).alias("CVAR11"),
+            pl.lit("   ").alias("CVAR12"),
+            pl.col("NPLDATE").map_elements(
+                lambda d: f"{d.day:02d}/{d.month:02d}/{d.year:04d}" if d is not None else "          ",
+                return_dtype=pl.Utf8
+            ).alias("CVAR13") if "NPLDATE" in npgs.columns else pl.lit("          ").alias("CVAR13"),
+            pl.lit("0233").alias("CVAR14"),
+            pl.col("MICRCD").cast(pl.Utf8).alias("CVAR15") if "MICRCD" in npgs.columns else pl.lit("").alias("CVAR15"),
+            pl.col("PENDBRH").cast(pl.Int64).alias("BRANCH") if "PENDBRH" in npgs.columns else pl.lit(0).alias("BRANCH"),
+            pl.lit("TL").alias("CVAR16"),
+            pl.col("CURBAL").cast(pl.Float64).alias("CVAR17") if "CURBAL" in npgs.columns else pl.lit(0.0).alias("CVAR17"),
+            pl.lit(NORMDT).alias("NORMDT"),
+        ])
+        
+        # IF ARREARS GE 3 AND NPLDATE > 0 THEN CVAR12='NPL'
+        npgs = npgs.with_columns([
+            pl.when((pl.col("ARREARS") >= 3) & pl.col("NPLDATE").is_not_null())
+              .then(pl.lit("NPL"))
+              .otherwise(pl.col("CVAR12"))
+              .alias("CVAR12")
+        ])
+        
+        # Sort
+        npgs = npgs.sort(by=["CVAR06", "CVAR01"])
+
+
+        # =========================
+        # Prior TRRF
+        # =========================
+        print("\n" + "="*60)
+        print("STEP 12: Reading prior NPGS.TRRF")
+        print("="*60)
+        
+        if NPGS_TRRF_IN.exists():
+            npla = read_sas7bdat_in_chunks(
+                NPGS_TRRF_IN,
+                chunk_size=CHUNK_SIZE,
+                keep_columns=["CVAR06", "CVAR01", "STATUS", "NDATE"]
+            )
+            if npla.height > 0:
+                npla = npla.sort(by=["CVAR06", "CVAR01"])
+                npgs = npgs.join(npla, on=["CVAR06", "CVAR01"], how="left")
+            
+            del npla
+            gc.collect()
+        else:
+            for c in ["STATUS", "NDATE"]:
+                if c not in npgs.columns:
+                    npgs = npgs.with_columns(pl.lit(None).alias(c))
+        
+        # Apply CVAR13 logic
+        def cvar13_update(row):
+            cv12 = row.get("CVAR12")
+            status_val = row.get("STATUS")
+            status = str(status_val).strip() if status_val is not None else ""
+            ndate = row.get("NDATE") or "          "
+            normdt = row.get("NORMDT") or "          "
+            cur13 = row.get("CVAR13") or "          "
+
+            if cv12 == "NPL":
+                if status == "NPL":
+                    return ndate
+                return cur13
+            else:
+                if status == "NPL":
+                    return normdt
+                if (status == "   " or status == "") and ndate != "          ":
+                    return ndate
+                return cur13
+        
+        npgs = npgs.with_columns([
+            pl.struct(["CVAR12", "STATUS", "NDATE", "NORMDT", "CVAR13"]).map_elements(
+                cvar13_update, return_dtype=pl.Utf8
+            ).alias("CVAR13")
+        ])
+        
+        # Final sort
+        npgs = npgs.sort(by=["CVAR01"])
+
+
+        # =========================
+        # Prepare output
+        # =========================
+        print("\n" + "="*60)
+        print("STEP 13: Preparing output")
+        print("="*60)
+        
+        for c in ["COSTCTR", "BALANCE", "CURBAL", "ACCRUAL", "TRANCHE", "CGCGUR",
+                  "CENSUST", "PRODUCT", "NATGUAR", "CINSTCL", "SCH"]:
+            if c not in npgs.columns:
+                npgs = npgs.with_columns(pl.lit(None).alias(c))
+        
+        keep_cols = [
+            "CVAR01","CVAR02","CVAR03","CVAR04","CVAR05","CVAR06","CVAR07",
+            "CVAR08","CVAR09","CVAR10","CVAR11","CVAR12","CVAR13","CVAR14",
+            "COSTCTR","BALANCE","CURBAL","ACCRUAL","TRANCHE","CGCGUR",
+            "BRANCH","CVAR15","CENSUST","PRODUCT","NATGUAR","CINSTCL","SCH",
+            "CVAR16","CVAR17"
+        ]
+        
+        existing_keep_cols = [c for c in keep_cols if c in npgs.columns]
+        out = npgs.select(existing_keep_cols)
+        
+        del npgs
+        gc.collect()
+        
+        print(f"Final output rows: {out.height}")
+
+
+        # =========================
+        # Write output
+        # =========================
+        if out.height > 0:
+            print("\n" + "="*60)
+            print("STEP 14: Writing output")
+            print("="*60)
+            
+            print(f"Writing to {OUT_FILE}...")
+            
+            try:
+                sas = saspy.SASsession()
+                output_sas_path = write_sas7bdat_in_chunks(out, OUT_FILE, sas, chunk_size=CHUNK_SIZE)
+                print(f"Successfully wrote {output_sas_path}")
+                sas.endsas()
+            except Exception as e:
+                print(f"Error writing SAS output: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("No data to write to output!")
+    else:
+        print("\nNo NPGS data to process!")
+else:
+    print("\nERROR: No LOAN data to process!")
+
+print("\n" + "="*60)
+print("Processing complete!")
+print("="*60)
