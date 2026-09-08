@@ -1,141 +1,459 @@
-Reading SAS datasets...
-CURRENT dataset: 1132084 rows before filtering
-CURRENT dataset: 967521 rows after filtering (ENTITY_CD != 'PIBB')
-LIMIT dataset: 1093140 rows before filtering
-LIMIT dataset: 937196 rows after filtering (ENTITY_CD != 'PIBB')
-NPLA dataset: 28 rows
-Reading CISDP dataset in chunks...
-CISDP columns: ['ACCTNO', 'INDORG', 'CUSTNO', 'GENDER', 'CACCCODE', 'SECCUST', 'CITIZEN', 'OCCUPAT', 'HOBBIES', 'RELIGION', 'EDUCATN', 'INCOME', 'MARITAL', 'BIRTHDAT', 'OPENDAT', 'RACE', 'CUSTCONSENT', 'BGC', 'FILLER', 'CONSENT_OLD', 'CISCUSTCD1', 'CISCUSTCD2', 'CISCUSTCD3', 'CISCUSTCD4', 'CISCUSTCD5', 'CISCUSTCD6', 'CISCUSTCD7', 'CISCUSTCD8', 'CISCUSTCD9', 'CISCUSTCD10', 'CISCUSTCD11', 'CISCUSTCD12', 'CISCUSTCD13', 'CISCUSTCD14', 'CISCUSTCD15', 'CONSDD', 'CONSMM', 'CONSCC', 'CONSYY', 'SECTOR_CODE', 'INSTSECT', 'RESTATUS', 'SIC_ISS', 'OCCUPAT_MASCO_CD', 'CUST_CODE', 'CONSENTEFFDT', 'OLDIC', 'NEWICIND', 'NEWIC', 'BUSSIND', 'BUSSREG', 'BRANCH', 'RHOLD_IND', 'CUSTNAME', 'ADDREF', 'PRIPHONE', 'SECPHONE', 'CUSTNAM1', 'MOBIPHON', 'LONGNAME', 'EMAILADD', 'UPD_DT_SALE', 'TURNOVER2', 'TURNOVER', 'UPD_DT_EMPLOYEE', 'NOEMPLO2', 'NOEMPLO', 'NEW_BUSS_REG_ID_TYPE', 'NEW_BUSS_REG_ID', 'LARGECO', 'LARGECO_IND', 'LARGE_CORP_FLG', 'MMTOH', 'MM2H_FLG', 'ADDRLN1', 'ADDRLN2', 'ADDRLN3', 'ADDRLN4', 'ADDRLN5', 'MAILCODE', 'MAILSTAT']
-Processed chunk 1: 100000 rows, kept 74611 rows
-Processed chunk 2: 100000 rows, kept 71825 rows
-Processed chunk 3: 100000 rows, kept 71351 rows
-Processed chunk 4: 100000 rows, kept 70069 rows
-Processed chunk 5: 100000 rows, kept 71469 rows
-Processed chunk 6: 100000 rows, kept 71453 rows
-Processed chunk 7: 100000 rows, kept 72337 rows
-Processed chunk 8: 100000 rows, kept 73994 rows
-Processed chunk 9: 100000 rows, kept 76011 rows
-Processed chunk 10: 100000 rows, kept 72241 rows
-Processed chunk 11: 100000 rows, kept 74468 rows
-Processed chunk 12: 100000 rows, kept 72873 rows
-Processed chunk 13: 100000 rows, kept 73601 rows
-Processed chunk 14: 100000 rows, kept 72749 rows
-Processed chunk 15: 100000 rows, kept 73192 rows
-Processed chunk 16: 100000 rows, kept 71139 rows
-Processed chunk 17: 100000 rows, kept 72430 rows
-Processed chunk 18: 100000 rows, kept 73273 rows
-Processed chunk 19: 100000 rows, kept 72956 rows
-Processed chunk 20: 100000 rows, kept 74398 rows
-Processed chunk 21: 100000 rows, kept 73616 rows
-Processed chunk 22: 100000 rows, kept 74348 rows
-Processed chunk 23: 100000 rows, kept 74341 rows
-Processed chunk 24: 100000 rows, kept 74414 rows
-Processed chunk 25: 100000 rows, kept 75535 rows
-Processed chunk 26: 100000 rows, kept 75455 rows
-Processed chunk 27: 100000 rows, kept 76387 rows
-Processed chunk 28: 100000 rows, kept 76691 rows
-Processed chunk 29: 100000 rows, kept 77073 rows
-Processed chunk 30: 100000 rows, kept 76302 rows
-Processed chunk 31: 100000 rows, kept 77448 rows
-Processed chunk 32: 100000 rows, kept 79045 rows
-Processed chunk 33: 100000 rows, kept 78901 rows
-Processed chunk 34: 100000 rows, kept 78991 rows
-Processed chunk 35: 100000 rows, kept 79740 rows
-Processed chunk 36: 100000 rows, kept 79522 rows
-Processed chunk 37: 100000 rows, kept 80163 rows
-Processed chunk 38: 100000 rows, kept 80225 rows
-Processed chunk 39: 100000 rows, kept 81435 rows
-Processed chunk 40: 100000 rows, kept 80737 rows
-Processed chunk 41: 100000 rows, kept 80293 rows
-Processed chunk 42: 100000 rows, kept 80722 rows
-Processed chunk 43: 100000 rows, kept 81128 rows
-Processed chunk 44: 100000 rows, kept 82469 rows
-Processed chunk 45: 100000 rows, kept 81749 rows
-Processed chunk 46: 100000 rows, kept 81370 rows
-Processed chunk 47: 100000 rows, kept 82658 rows
-Processed chunk 48: 100000 rows, kept 82381 rows
-Processed chunk 49: 100000 rows, kept 81553 rows
-Processed chunk 50: 100000 rows, kept 80617 rows
-Processed chunk 51: 100000 rows, kept 79602 rows
-Processed chunk 52: 100000 rows, kept 78767 rows
-Processed chunk 53: 100000 rows, kept 80171 rows
-Processed chunk 54: 100000 rows, kept 81642 rows
-Processed chunk 55: 100000 rows, kept 80039 rows
-Processed chunk 56: 100000 rows, kept 78366 rows
-Processed chunk 57: 100000 rows, kept 80324 rows
-Processed chunk 58: 100000 rows, kept 81818 rows
-Processed chunk 59: 100000 rows, kept 80405 rows
-Processed chunk 60: 100000 rows, kept 79320 rows
-Processed chunk 61: 100000 rows, kept 80073 rows
-Processed chunk 62: 100000 rows, kept 80512 rows
-Processed chunk 63: 100000 rows, kept 84032 rows
-Processed chunk 64: 100000 rows, kept 82910 rows
-Processed chunk 65: 100000 rows, kept 82918 rows
-Processed chunk 66: 100000 rows, kept 83429 rows
-Processed chunk 67: 100000 rows, kept 82613 rows
-Processed chunk 68: 100000 rows, kept 84623 rows
-Processed chunk 69: 100000 rows, kept 83026 rows
-Processed chunk 70: 100000 rows, kept 82512 rows
-Processed chunk 71: 100000 rows, kept 82652 rows
-Processed chunk 72: 100000 rows, kept 82627 rows
-Processed chunk 73: 100000 rows, kept 82110 rows
-Processed chunk 74: 100000 rows, kept 82312 rows
-Processed chunk 75: 100000 rows, kept 82649 rows
-Processed chunk 76: 100000 rows, kept 82537 rows
-Processed chunk 77: 100000 rows, kept 82529 rows
-Processed chunk 78: 100000 rows, kept 82831 rows
-Processed chunk 79: 100000 rows, kept 81600 rows
-Processed chunk 80: 100000 rows, kept 81261 rows
-Processed chunk 81: 100000 rows, kept 81066 rows
-Processed chunk 82: 100000 rows, kept 81307 rows
-Processed chunk 83: 100000 rows, kept 81398 rows
-Processed chunk 84: 100000 rows, kept 81400 rows
-Processed chunk 85: 100000 rows, kept 81354 rows
-Processed chunk 86: 100000 rows, kept 81954 rows
-Processed chunk 87: 100000 rows, kept 81387 rows
-Processed chunk 88: 100000 rows, kept 81694 rows
-Processed chunk 89: 100000 rows, kept 81537 rows
-Processed chunk 90: 100000 rows, kept 81960 rows
-Processed chunk 91: 100000 rows, kept 82098 rows
-Processed chunk 92: 100000 rows, kept 82216 rows
-Processed chunk 93: 100000 rows, kept 81961 rows
-Processed chunk 94: 100000 rows, kept 83012 rows
-Processed chunk 95: 100000 rows, kept 82024 rows
-Processed chunk 96: 100000 rows, kept 82425 rows
-Processed chunk 97: 100000 rows, kept 82528 rows
-Processed chunk 98: 100000 rows, kept 82028 rows
-Processed chunk 99: 100000 rows, kept 81586 rows
-Processed chunk 100: 100000 rows, kept 81563 rows
-Processed chunk 101: 100000 rows, kept 81493 rows
-Processed chunk 102: 100000 rows, kept 80967 rows
-Processed chunk 103: 100000 rows, kept 81102 rows
-Processed chunk 104: 100000 rows, kept 81159 rows
-Processed chunk 105: 100000 rows, kept 81419 rows
-Processed chunk 106: 100000 rows, kept 80780 rows
-Processed chunk 107: 100000 rows, kept 81599 rows
-Processed chunk 108: 100000 rows, kept 80575 rows
-Processed chunk 109: 100000 rows, kept 80200 rows
-Processed chunk 110: 35758 rows, kept 28731 rows
-CISDP dataset: 8666482 rows after filtering (SECCUST == '901')
-CA after SCH mapping: 65 rows
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDNPGS.py", line 159, in <module>
-    limit_processed['LMTSTART'] = limit_processed['LMTSTART'].apply(convert_lmtstart)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/series.py", line 4917, in apply
-    return SeriesApply(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/apply.py", line 1427, in apply
-    return self.apply_standard()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/apply.py", line 1507, in apply_standard
-    mapped = obj._map_values(
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/base.py", line 921, in _map_values
-    return algorithms.map_array(arr, mapper, na_action=na_action, convert=convert)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/algorithms.py", line 1743, in map_array
-    return lib.map_infer(values, mapper, convert=convert)
-  File "lib.pyx", line 2972, in pandas._libs.lib.map_infer
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDNPGS.py", line 156, in convert_lmtstart
-    return datetime.strptime(s, "%m%d%Y")
-  File "/usr/lib64/python3.9/_strptime.py", line 568, in _strptime_datetime
-    tt, fraction, gmtoff_fraction = _strptime(data_string, format)
-  File "/usr/lib64/python3.9/_strptime.py", line 349, in _strptime
-    raise ValueError("time data %r does not match format %r" %
-ValueError: time data '00000017' does not match format '%m%d%Y'
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from pathlib import Path
+import pyreadstat
+import saspy
+import os
+import tempfile
+
+# =========================
+# CONFIG (SAS7BDAT INPUTS)
+# =========================
+CURRENT_DF  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/intg_dp_acct_current_m08.sas7bdat")
+LIMIT_DF    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/intg_dp_acct_overdft_m08.sas7bdat")
+CISDP_DF    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/cisdp/deposit.sas7bdat")
+NPLA_DF     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/npla.sas7bdat")
+
+# TEXT FILES (UNCHANGED)
+GP3_FILE  = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/GP3.txt"
+COLL_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_20260831"
+DESC_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_20260831"
+MICR_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLTRRF/BOPESS.txt"
+
+OUTPUT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDNPGS")
+OUTPUT_FILE = f"DPNPGS_{datetime.now().strftime('%m')}.sas7bdat"
+
+# Chunk size for processing large files
+CHUNK_SIZE = 100000  # Adjust based on your memory constraints
+
+# =========================
+# STEP 1: REPORT DATE
+# =========================
+# Use yesterday's date as report date
+reptdate = datetime.now() - timedelta(days=1)
+
+REPTDAY  = reptdate.day
+REPTMON  = reptdate.month
+REPTYEAR = reptdate.year
+SDATE    = reptdate.toordinal()
+
+# =========================
+# STEP 2: READ SAS DATASETS
+# =========================
+print("Reading SAS datasets...")
+
+# Read CURRENT dataset
+current_df, current_meta = pyreadstat.read_sas7bdat(CURRENT_DF)
+print(f"CURRENT dataset: {current_df.shape[0]} rows before filtering")
+
+# Apply entity filter
+if 'ENTITY_CD' in current_df.columns:
+    current_df = current_df[current_df['ENTITY_CD'] != 'PIBB'].copy()
+    print(f"CURRENT dataset: {current_df.shape[0]} rows after filtering (ENTITY_CD != 'PIBB')")
+else:
+    print("Warning: ENTITY_CD column not found in CURRENT dataset")
+
+# Read LIMIT dataset
+limit_df, limit_meta = pyreadstat.read_sas7bdat(LIMIT_DF)
+print(f"LIMIT dataset: {limit_df.shape[0]} rows before filtering")
+
+# Apply entity filter
+if 'ENTITY_CD' in limit_df.columns:
+    limit_df = limit_df[limit_df['ENTITY_CD'] != 'PIBB'].copy()
+    print(f"LIMIT dataset: {limit_df.shape[0]} rows after filtering (ENTITY_CD != 'PIBB')")
+else:
+    print("Warning: ENTITY_CD column not found in LIMIT dataset")
+
+# Read NPLA dataset
+npla_df, npla_meta = pyreadstat.read_sas7bdat(NPLA_DF)
+print(f"NPLA dataset: {npla_df.shape[0]} rows")
+
+# =========================
+# STEP 2B: READ CISDP IN CHUNKS (LARGE FILE)
+# =========================
+print("Reading CISDP dataset in chunks...")
+
+# First, read only the header to get column names
+cisdp_header, _ = pyreadstat.read_sas7bdat(CISDP_DF, row_limit=1)
+print(f"CISDP columns: {list(cisdp_header.columns)}")
+
+# Check if NEWIC and CUSTNAME columns exist
+required_cols = ['ACCTNO']
+if 'NEWIC' in cisdp_header.columns:
+    required_cols.append('NEWIC')
+else:
+    print("Warning: NEWIC column not found in CISDP dataset")
+
+if 'CUSTNAME' in cisdp_header.columns:
+    required_cols.append('CUSTNAME')
+else:
+    print("Warning: CUSTNAME column not found in CISDP dataset")
+
+# Initialize empty list to store filtered chunks
+cisdp_chunks = []
+
+# Read in chunks using pyreadstat's row_offset and row_limit
+row_offset = 0
+chunk_count = 0
+
+while True:
+    try:
+        # Read a chunk of data
+        chunk, _ = pyreadstat.read_sas7bdat(
+            CISDP_DF, 
+            row_offset=row_offset, 
+            row_limit=CHUNK_SIZE
+        )
+        
+        if len(chunk) == 0:
+            break
+            
+        chunk_count += 1
+        
+        # Filter only needed columns and rows
+        if 'SECCUST' in chunk.columns:
+            filtered_chunk = chunk[chunk['SECCUST'] == '901'][required_cols].copy()
+            if len(filtered_chunk) > 0:
+                cisdp_chunks.append(filtered_chunk)
+        
+        if chunk_count % 10 == 0:  # Print progress every 10 chunks
+            print(f"Processed {chunk_count} chunks, {row_offset + len(chunk)} rows total")
+        
+        # Update offset
+        row_offset += CHUNK_SIZE
+        
+        # Break if we've read all data
+        if len(chunk) < CHUNK_SIZE:
+            break
+            
+    except Exception as e:
+        print(f"Error reading chunk at offset {row_offset}: {e}")
+        break
+
+# Combine all chunks
+if cisdp_chunks:
+    cisdp_df = pd.concat(cisdp_chunks, ignore_index=True)
+    cisdp_df = cisdp_df.drop_duplicates()
+    print(f"CISDP dataset: {cisdp_df.shape[0]} rows after filtering (SECCUST == '901')")
+    
+    # Free memory
+    del cisdp_chunks
+else:
+    cisdp_df = pd.DataFrame(columns=required_cols)
+    print("Warning: No CISDP data found for SECCUST == '901'")
+
+# =========================
+# STEP 3: CURRENT → CA
+# =========================
+ca = current_df.copy()
+
+def map_sch(row):
+    if row.PRODUCT == 108 and row.CENSUST == 305: return 'P85'
+    if row.PRODUCT == 112 and row.CENSUST == 301: return 'P70'
+    if row.PRODUCT == 112 and row.CENSUST == 300: return 'P51'
+    if row.PRODUCT == 112 and row.CENSUST == 302: return 'P72'
+    if row.PRODUCT == 112 and row.CENSUST == 306: return 'P53'
+    if row.PRODUCT == 114 and row.CENSUST == 303: return 'P72'
+    if row.PRODUCT == 108 and row.CENSUST == 304: return 'P65'
+    return None
+
+ca['SCH'] = ca.apply(map_sch, axis=1)
+ca = ca[ca['SCH'].notna()].copy()
+print(f"CA after SCH mapping: {ca.shape[0]} rows")
+
+# =========================
+# STEP 4A: LIMIT
+# =========================
+def convert_lmtstart(x):
+    """Convert LMTSTART to datetime with robust error handling"""
+    if pd.isna(x):
+        return pd.NaT
+    
+    try:
+        # Handle different numeric formats
+        if isinstance(x, (int, float)):
+            if x <= 0:
+                return pd.NaT
+            
+            # Convert to string and pad
+            x_str = str(int(x)).zfill(8)
+        else:
+            x_str = str(x).strip().zfill(8)
+        
+        # Try different date formats
+        formats_to_try = [
+            "%m%d%Y",    # MMDDYYYY
+            "%d%m%Y",    # DDMMYYYY
+            "%Y%m%d",    # YYYYMMDD
+            "%Y%d%m",    # YYYYDDMM
+        ]
+        
+        for fmt in formats_to_try:
+            try:
+                return datetime.strptime(x_str[:8], fmt)
+            except ValueError:
+                continue
+        
+        # If all formats fail, try to handle YYMMDD format
+        try:
+            year = int(x_str[0:2])
+            month = int(x_str[2:4])
+            day = int(x_str[4:6])
+            
+            # Assume 20xx for years less than 50, 19xx for 50+
+            if year < 50:
+                year += 2000
+            else:
+                year += 1900
+            
+            return datetime(year, month, day)
+        except:
+            return pd.NaT
+            
+    except Exception as e:
+        print(f"Warning: Could not convert LMTSTART value {x}: {e}")
+        return pd.NaT
+
+print("Processing LIMIT data...")
+limit_processed = limit_df.copy()
+
+# Check LMTSTART data type and sample values
+print(f"LMTSTART dtype: {limit_processed['LMTSTART'].dtype}")
+print(f"LMTSTART sample values: {limit_processed['LMTSTART'].head(10).tolist()}")
+print(f"LMTSTART null count: {limit_processed['LMTSTART'].isna().sum()}")
+
+# Apply conversion with progress tracking
+limit_processed['LMTSTART'] = limit_processed['LMTSTART'].apply(convert_lmtstart)
+limit_processed = limit_processed[['ACCTNO','LMTSTART']].drop_duplicates()
+
+print(f"LIMIT processed: {limit_processed.shape[0]} unique records")
+
+ca = ca.merge(limit_processed, on='ACCTNO', how='left')
+
+# =========================
+# STEP 4B: GP3 (FIXED WIDTH)
+# =========================
+gp3 = pd.read_fwf(
+    GP3_FILE,
+    colspecs=[(3,13),(18,20),(20,22),(22,26)],
+    names=['ACCTNO','RPTDAY','RPTMON','RPTYEAR']
+)
+
+gp3['NPLDATE'] = pd.to_datetime(
+    dict(year=gp3.RPTYEAR, month=gp3.RPTMON, day=gp3.RPTDAY),
+    errors='coerce'
+)
+
+ca = ca.merge(gp3[['ACCTNO','NPLDATE']], on='ACCTNO', how='left')
+
+# =========================
+# STEP 4C: CISDP MERGE
+# =========================
+ca = ca.merge(cisdp_df, on='ACCTNO', how='left')
+
+# =========================
+# STEP 4D: COLL + DESC (EBCDIC FILES)
+# =========================
+def read_ebcdic_fwf(file_path, colspecs, names):
+    """Read fixed-width EBCDIC file and convert to ASCII"""
+    # Read the file in binary mode
+    with open(file_path, 'rb') as f:
+        raw_data = f.read()
+    
+    # Decode EBCDIC to string (cp037 is common EBCDIC encoding for mainframes)
+    # Alternative encodings: cp500 (International), cp1047 (Latin-1)
+    decoded_data = raw_data.decode('cp037', errors='replace')
+    
+    # Write to temporary file for pd.read_fwf
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp:
+        tmp.write(decoded_data)
+        tmp_path = tmp.name
+    
+    # Read the decoded file
+    df = pd.read_fwf(
+        tmp_path,
+        colspecs=colspecs,
+        names=names
+    )
+    
+    # Clean up temp file
+    os.unlink(tmp_path)
+    
+    return df
+
+def clean_ebcdic_strings(df):
+    """Clean EBCDIC artifacts from string columns"""
+    for col in df.select_dtypes(include=['object']).columns:
+        df[col] = df[col].apply(lambda x: ''.join(
+            char for char in str(x) if char.isprintable() or char.isspace()
+        ).strip() if pd.notna(x) else x)
+    return df
+
+print("Reading COLL file (EBCDIC)...")
+coll = read_ebcdic_fwf(
+    COLL_FILE,
+    colspecs=[(3,9),(145,151)],
+    names=['CCOLLNO','ACCTNO']
+)
+
+print("Reading DESC file (EBCDIC)...")
+desc = read_ebcdic_fwf(
+    DESC_FILE,
+    colspecs=[(0,11),(50,52),(54,56),(210,220)],
+    names=['CCOLLNO','CINSTCL','NATGUAR','CENSUS']
+)
+
+# Clean up EBCDIC artifacts
+coll = clean_ebcdic_strings(coll)
+desc = clean_ebcdic_strings(desc)
+
+# Convert CENSUS to numeric, handling EBCDIC numeric fields
+desc['CENSUS'] = pd.to_numeric(desc['CENSUS'], errors='coerce')
+
+def map_cr(census):
+    if pd.isna(census):
+        return None
+    if 51000000 <= census <= 51999999: return '51'
+    if 63000000 <= census <= 63999999: return '63'
+    if 70000000 <= census <= 70999999: return '70'
+    if 71000000 <= census <= 71999999: return '71'
+    if 72000000 <= census <= 72999999: return '72'
+    if 1000000000 <= census <= 1099999999: return '10'
+    return None
+
+desc['CR'] = desc['CENSUS'].apply(map_cr)
+desc = desc[desc['CR'].notna()]
+
+coll = coll.merge(desc, on='CCOLLNO')
+coll = coll[(coll['CINSTCL']=='18') & (coll['NATGUAR']=='06')]
+
+dep = ca.merge(coll, on='ACCTNO')
+
+# =========================
+# STEP 4E: MICR
+# =========================
+micr = pd.read_fwf(
+    MICR_FILE,
+    colspecs=[(0,3),(39,44)],
+    names=['BRANCH','MICRCD']
+)
+
+dep = dep.merge(micr, on='BRANCH', how='left')
+
+# =========================
+# STEP 5: ARREARS + NPL
+# =========================
+def calc_arrears(row):
+    if row.get('CURBAL', 0) >= 0:
+        return 0, pd.NaT
+
+    dates = []
+
+    for col in ['EXODDATE','TEMPODDT']:
+        val = row.get(col, 0)
+        if pd.notna(val) and val > 0:
+            try:
+                if isinstance(val, (int, float)):
+                    d = datetime.strptime(str(int(val)).zfill(8)[:8], "%m%d%Y")
+                else:
+                    d = datetime.strptime(str(val).strip()[:8], "%m%d%Y")
+                dates.append(d)
+            except:
+                continue
+
+    if not dates:
+        return 0, pd.NaT
+
+    oddays = min(dates)
+    nodays = (reptdate - oddays).days + 1
+
+    arrears = nodays // 30
+
+    npldate = pd.NaT
+    if arrears >= 3:
+        npldate = oddays + pd.DateOffset(days=90)
+        npldate = npldate + pd.offsets.MonthEnd(0)
+
+    return arrears, npldate
+
+dep[['ARREARS','NPLDATE_CALC']] = dep.apply(
+    lambda x: pd.Series(calc_arrears(x)), axis=1
+)
+
+dep['NPLDATE'] = dep['NPLDATE_CALC'].combine_first(dep['NPLDATE'])
+
+# =========================
+# STEP 6: CVAR02
+# =========================
+def map_cvar02(row):
+    if row.SCH=='P51' and row.CR in ['10','51']: return '51'
+    if row.SCH=='P65' and row.CR=='10': return '65'
+    if row.SCH=='P53' and row.CR=='10': return '53'
+    if row.SCH=='P85' and row.CR=='10': return '85'
+    if row.SCH=='P70' and row.CR=='70': return '70'
+    if row.SCH=='P70' and row.CR=='71': return '71'
+    if row.SCH=='P72' and row.CR in ['10','72']: return '72'
+    if row.SCH=='P70' and row.CR=='10': return 'XX'
+    return None
+
+dep['CVAR02'] = dep.apply(map_cvar02, axis=1)
+dep = dep[dep['CVAR02'].notna()]
+
+# =========================
+# STEP 7: OUTPUT STRUCTURE
+# =========================
+dep['CVAR01'] = dep['CENSUS']
+dep['CVAR03'] = dep['NEWIC']
+dep['CVAR04'] = dep['CUSTNAME']
+dep['CVAR05'] = dep['LMTSTART']
+dep['CVAR06'] = dep['ACCTNO']
+dep['CVAR07'] = 'OD'
+dep['CVAR08'] = dep['APPRLIMT'].fillna(0)
+
+dep['CVAR09'] = np.where(dep['LEDGBAL'] < 0, -dep['LEDGBAL'], 0)
+dep['CVAR10'] = np.where(dep['LEDGBAL'] >= 0, dep['LEDGBAL'], 0)
+
+dep['CVAR11'] = dep['ARREARS']
+dep['CVAR12'] = np.where(dep['ARREARS'] >= 3, 'NPL', '   ')
+dep['CVAR13'] = dep['NPLDATE'].dt.strftime('%d/%m/%Y')
+
+dep['CVAR14'] = '0233'
+dep['CVAR15'] = dep['MICRCD']
+
+# =========================
+# STEP 8: HISTORY MERGE
+# =========================
+npgs = dep.merge(npla_df, on=['CVAR06','CVAR01'], how='left')
+
+npgs.loc[
+    (npgs['CVAR12']=='NPL') & (npgs['STATUS']=='NPL'),
+    'CVAR13'
+] = npgs['NDATE']
+
+# =========================
+# STEP 9: OUTPUT (SAS7BDAT)
+# =========================
+print(f"Writing output to {OUTPUT_FILE}...")
+
+# Initialize SAS session
+sas = saspy.SASsession(cfgname='default')  # You may need to adjust the configuration name
+
+# Convert pandas DataFrame to SAS dataset
+sas.df2sd(npgs, table='npgs_output', libref='WORK')
+
+# Write SAS dataset to sas7bdat file
+sas_code = f"""
+PROC EXPORT DATA=WORK.npgs_output 
+    OUTFILE="{OUTPUT / OUTPUT_FILE}" 
+    DBMS=SAS7BDAT REPLACE;
+RUN;
+"""
+
+sas.submit(sas_code)
+
+# Close SAS session
+sas.endsas()
+
+print(f"Output written: {OUTPUT / OUTPUT_FILE}")
+print(f"Total records: {len(npgs)}")
