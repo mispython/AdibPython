@@ -1,396 +1,349 @@
-PTIONS YEARCUTOFF=1940 SORTDEV=3390 NONUMBER NODATE NOCENTER;
-*;
-DATA REPTDATE (KEEP=REPTDATE);
-  SET MNILN.REPTDATE;
-  MM =MONTH(REPTDATE);
-  MM1=MM - 1;
-  IF MM1 = 0 THEN MM1 = 12;
-  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
-  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-  CALL SYMPUT('NDATE',PUT(REPTDATE,Z5.));
-RUN;
-*;
- /********** SC53 **********/
-DATA SC53;
-   SET NPGS.BTNPGS&REPTMON
-       NPGS.LNNPGS&REPTMON
-       NPGS.DPNPGS&REPTMON;
-   IF  CVAR02='53';
-   IF  NATGUAR='06' AND CINSTCL='18';
-   CVARXX='          ';
-   IF  CVAR11 < 3  THEN CVAR12='   ';
-   CVAR02='E1';
-RUN;
-PROC SORT; BY CVAR01 CVAR06; RUN;
-
- /********** SCEI **********/
-DATA SCEI;
-   SET NPGSI.DPNPGS&REPTMON
-       NPGSI.LNIPGS&REPTMON;
-   IF CVAR12='NPL'  THEN CVAR12='NP';
-   ELSE                  CVAR12='AP';
-   IF  NATGUAR='06' AND CINSTCL='18';
-   CVARXX='          ';
-   CVAR02='E2';
-RUN;
-PROC SORT; BY CVAR01 CVAR06; RUN;
-
- /********** OTH **********/
-DATA OTH;
-   SET NPGS.LNNPGS&REPTMON;
-   IF  CVAR02 IN ('81','2Z','4Z','H4','H5','H6','H7',
-                  'F5','F6','1Z','3Z','5S','6S','1H',
-                  '2H','3H','4H','E6','5Z','5H','6H');
-
-   IF  NATGUAR='06' AND CINSTCL='18';
-   CVARXX='          ';
-
-   IF CVAR02 = '81' THEN DO;
-      IF  CVAR11 < 3  THEN CVAR12='   ';
-      CVAR02='G1';
-   END;
-   ELSE IF CVAR02 IN ('2Z','4Z','F6') THEN DO;
-      CVAR07 = 'TF';
-      IF  CVAR11 < 3   THEN CVAR12='   ';
-      ELSE                  CVAR12= 'NPF';
-   END;
-   ELSE IF CVAR02 = 'H4' THEN DO;
-      CVAR07 = 'TL';
-      IF  CVAR11 < 3   THEN CVAR12='   ';
-      IF  CVAR12 = ' ' THEN CVAR12='AP';
-   END;
-   ELSE IF CVAR02 = 'H4' THEN DO;
-      CVAR07 = 'TF';
-      IF  CVAR11 < 3   THEN CVAR12='   ';
-      IF  CVAR12 = ' ' THEN CVAR12='AP';
-   END;
-   ELSE IF CVAR02 = 'H6' THEN DO;
-      CVAR07 = 'FL';
-      IF  CVAR11 < 3   THEN CVAR12='   ';
-      IF CVAR12='   '  THEN CVAR13='          ';
-   END;
-   ELSE IF CVAR02 = 'H7' THEN DO;
-      CVAR07 = 'TF';
-      IF  CVAR11 < 3   THEN CVAR12='   ';
-      IF  CVAR12='   ' THEN CVAR13='          ';
-   END;
-   ELSE IF CVAR02 = 'F5' THEN DO;
-      CVAR07 = 'FL';
-      IF  CVAR11 < 3   THEN CVAR12='   ';
-   END;
-   ELSE IF CVAR02 IN ('1Z','3Z','5S','1H','3H') THEN DO;
-      CVAR07 = 'FL';
-      IF  CVAR11 < 3   THEN CVAR12='   ';
-      ELSE       CVAR12= 'NPL';
-   END;
-   ELSE IF CVAR02 = '6S' THEN DO;
-      CVAR07 = 'TF';
-      IF  CVAR11 < 3   THEN CVAR12='   ';
-      ELSE       CVAR12= 'NPL';
-   END;
-   ELSE IF CVAR02 IN ('2H','4H') THEN DO;
-      CVAR07 = 'TL';
-      IF  CVAR11 < 3   THEN CVAR12='   ';
-      ELSE       CVAR12= 'NPF';
-   END;
-   ELSE IF CVAR02 IN ('E6','5Z','5H','6H') THEN DO;
-      IF CVAR11 < 3    THEN CVAR12='   ';
-      IF CVAR12='   '  THEN CVAR13='          ';
-   END;
-RUN;
-PROC SORT DATA=OTH; BY CVAR01 CVAR06; RUN;
-
-DATA NPGS;
-   SET SC53 SCEI OTH;
-RUN;
-PROC SORT DATA=NPGS; BY CVAR02 CVAR01 CVAR06; RUN;
-
-DATA COMB;
-   SET NPGS;
-   LASTCOL = '';
-   FORMAT CVAR05 DDMMYY10. CVAR08 CVAR09 CVAR10 20.2;
-   FILE COMBT DSD DLM=';';
-   PUT  @1 CVAR01
-           CVAR02
-           CVAR03
-           CVAR04
-           CVAR05
-           CVAR06
-           CVAR07
-           CVAR08
-           CVAR09
-           CVAR10
-           CVAR11
-           CVAR12
-           CVAR13
-           CVAR14
-           CVAR15
-           LASTCOL
-           ;
-RUN;
-
-PROC    PRINTTO PRINT=COMBR;
-TITLE1 'PUBLIC BANK BERHAD';
-TITLE2 'DETAIL OF ACCTS NON-PG FOR SUBMISSION TO CGC @' &RDATE;
-%INC PGM(NPGSRPT);
-
-
-this is the sas orignal code, include the NPGSRPT.py as per SAS code above
-
-
-
-below is the NPGSRPT.py:
-
-# !/usr/bin/env python3
-"""
-Program Name : NPGSRPT
-Purpose      : Public Bank Berhad - NPGS CGC Report Template
-               Reusable PROC REPORT equivalent called via %INC PGM(NPGSRPT) from EIBRNPGS for each schedule code.
-               Generates ASA carriage-control detail listing report for
-                NPGS (National Programmes Guarantee Scheme) CGC submissions.
-
-Original SAS:
-  PROC REPORT DATA=NPGS NOWD HEADSKIP HEADLINE SPLIT='*';
-  COLUMN CVAR01 CVAR02 CVAR03 CVAR04 CVAR05 CVAR06 CVAR07 CVAR08
-         CVARXX CVAR09 CVAR10 CVAR11 CVAR12 CVAR13 CVAR14 CVAR15 BRANCH;
-  DEFINE CVAR01  / DISPLAY FORMAT=10.        'REFER.NUM ';
-  DEFINE CVAR02  / DISPLAY FORMAT=$3.        'SCH';
-  DEFINE CVAR03  / DISPLAY FORMAT=$15.       'IC /BUSS. NUM.';
-  DEFINE CVAR04  / DISPLAY FORMAT=$50.       'NAME OF CUSTOMER';
-  DEFINE CVAR05  / DISPLAY FORMAT=DDMMYY10.  'DISBURSE';
-  DEFINE CVARXX  / DISPLAY FORMAT=$10.       '              ';
-  DEFINE CVAR06  / DISPLAY FORMAT=10.        'ACCOUNT NUMBER';
-  DEFINE CVAR07  / DISPLAY FORMAT=$2.        'TY';
-  DEFINE CVAR08  / DISPLAY FORMAT=13.2       'APPROVE LIMIT';
-  DEFINE CVAR09  / DISPLAY FORMAT=13.2       'DEBIT  BALANCE';
-  DEFINE CVAR10  / DISPLAY FORMAT=13.2       'CREDIT BALANCE';
-  DEFINE CVAR11  / DISPLAY FORMAT=7.         'ARREARS';
-  DEFINE CVAR12  / DISPLAY FORMAT=$3.        'ST ';
-  DEFINE CVAR13  / DISPLAY FORMAT=$10.       'NPL DATE';
-  DEFINE CVAR14  / DISPLAY FORMAT=$4.        'FI  CODE';
-  DEFINE CVAR15  / DISPLAY FORMAT=$5.        'MICR CODE';
-  DEFINE BRANCH  / DISPLAY FORMAT=3.         'BRH';
-  *;
-"""
-
-import os
-from datetime import date, timedelta
-from typing import Optional
-
 import polars as pl
+from pathlib import Path
+from datetime import datetime, timedelta
+import pyreadstat
+from NPGSRPT import npgs_report
 
-# =============================================================================
-# CONSTANTS
-# =============================================================================
+def read_sas_dataset(file_path):
+    """Read SAS dataset and convert to Polars DataFrame with lowercase column names"""
+    try:
+        df, meta = pyreadstat.read_sas7bdat(str(file_path))
+        pl_df = pl.from_pandas(df)
+        # Convert column names to lowercase
+        pl_df = pl_df.rename({col: col.lower() for col in pl_df.columns})
+        return pl_df
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return pl.DataFrame()
 
-PAGE_LENGTH = 60    # lines per page
-COL_SEP     = ' '   # single space between columns (PROC REPORT default)
-
-# =============================================================================
-# COLUMN DEFINITIONS
-# (col_name, header_label, display_width, alignment)
-# SPLIT='*' in label means '*' creates a line break within the header cell.
-# =============================================================================
-
-REPORT_COLS: list[tuple[str, str, int, str]] = [
-    ('cvar01', 'REFER.NUM ',      10, 'right'),
-    ('cvar02', 'SCH',              3, 'left'),
-    ('cvar03', 'IC /BUSS. NUM.',  15, 'left'),
-    ('cvar04', 'NAME OF CUSTOMER', 50, 'left'),
-    ('cvar05', 'DISBURSE',        10, 'left'),
-    ('cvarxx', '              ',  10, 'left'),
-    ('cvar06', 'ACCOUNT NUMBER',  10, 'right'),
-    ('cvar07', 'TY',               2, 'left'),
-    ('cvar08', 'APPROVE LIMIT',   13, 'right'),
-    ('cvar09', 'DEBIT  BALANCE',  13, 'right'),
-    ('cvar10', 'CREDIT BALANCE',  13, 'right'),
-    ('cvar11', 'ARREARS',          7, 'right'),
-    ('cvar12', 'ST ',              3, 'left'),
-    ('cvar13', 'NPL DATE',        10, 'left'),
-    ('cvar14', 'FI  CODE',         4, 'left'),
-    ('cvar15', 'MICR CODE',        5, 'left'),
-    ('branch', 'BRH',              3, 'right'),
-]
-
-# Total width of one report body line
-_TOTAL_WIDTH: int = (
-    sum(w for _, _, w, _ in REPORT_COLS)
-    + len(COL_SEP) * (len(REPORT_COLS) - 1)
-)
-
-# =============================================================================
-# INTERNAL HELPERS
-# =============================================================================
-
-def _sas_date_to_pydate(val) -> Optional[date]:
-    """Convert SAS date integer (days since 1960-01-01) to Python date."""
-    if val is None or (isinstance(val, float) and val != val):
-        return None
-    if isinstance(val, (int, float)):
-        return date(1960, 1, 1) + timedelta(days=int(val))
-    if isinstance(val, date):
-        return val
-    return None
-
-
-def _fmt_ddmmyy10(val) -> str:
-    """Format date value as DD/MM/YYYY (SAS DDMMYY10. format)."""
-    if val is None:
-        return '          '
-    if isinstance(val, (int, float)):
-        val = _sas_date_to_pydate(val)
-    if val is None:
-        return '          '
-    return val.strftime('%d/%m/%Y')
-
-
-def _fmt_numeric(val, width: int, decimals: int) -> str:
-    """
-    Right-justify numeric value to <width> characters with <decimals> places.
-    Missing/NaN values render as spaces (SAS missing value behaviour).
-    """
-    if val is None or (isinstance(val, float) and val != val):
-        return ' ' * width
-    v = float(val)
-    s = f"{v:{width}.{decimals}f}" if decimals > 0 else f"{int(round(v)):{width}d}"
-    # Truncate from left if overflow (SAS renders asterisks; preserve rightmost digits)
-    return s[-width:] if len(s) > width else s
-
-
-def _coalesce_s(val, default: str = '') -> str:
-    """Return stripped string or default when None."""
-    return str(val).strip() if val is not None else default
-
-
-def _build_header_lines() -> list[str]:
-    """
-    Build column header rows, respecting SPLIT='*' multi-line header labels.
-    Each '*' in a label splits it across additional header lines (top-aligned).
-    Returns a list of fully formatted header line strings (no ASA prefix).
-    """
-    split_labels = [label.split('*') for _, label, _, _ in REPORT_COLS]
-    max_lines    = max(len(parts) for parts in split_labels)
-
-    # Pad every column to max_lines lines — prepend blanks (top-align)
-    padded: list[tuple[list[str], int, str]] = []
-    for (_, _, width, align), parts in zip(REPORT_COLS, split_labels):
-        while len(parts) < max_lines:
-            parts.insert(0, '')
-        padded.append((parts, width, align))
-
-    header_rows: list[str] = []
-    for line_idx in range(max_lines):
-        cells = []
-        for parts, width, align in padded:
-            raw  = parts[line_idx][:width]
-            cell = raw.ljust(width) if align == 'left' else raw.rjust(width)
-            cells.append(cell)
-        header_rows.append(COL_SEP.join(cells))
-
-    return header_rows
-
-
-def _format_cell(col_name: str, val, width: int, align: str) -> str:
-    """Format one data cell according to its DEFINE specification."""
-    if col_name == 'cvar05':
-        # FORMAT=DDMMYY10.
-        s = _fmt_ddmmyy10(val)
-    elif col_name in ('cvar08', 'cvar09', 'cvar10'):
-        # FORMAT=13.2
-        s = _fmt_numeric(val, 13, 2)
-    elif col_name == 'cvar11':
-        # FORMAT=7.
-        s = _fmt_numeric(val, 7, 0)
-    elif col_name in ('cvar01', 'cvar06'):
-        # FORMAT=10.
-        s = _fmt_numeric(val, width, 0)
-    elif col_name == 'branch':
-        # FORMAT=3.
-        s = _fmt_numeric(val, 3, 0)
+def eibsnpgs():
+    base = Path.cwd()
+    npgs_path = base / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBSNPGS" / "NGPS"
+    npgsi_path = base / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBSNPGS" / "NGPSI"
+    
+    # Calculate report date (yesterday)
+    reptdate = datetime.now() - timedelta(days=1)
+    
+    mm = reptdate.month
+    mm1 = mm - 1 if mm > 1 else 12
+    
+    reptmon = f"{mm:02d}"
+    reptmon1 = f"{mm1:02d}"
+    reptyear = str(reptdate.year)
+    reptday = f"{reptdate.day:02d}"
+    rdate = reptdate.strftime("%d%m%y")
+    ndate = f"{reptdate.day:02d}{reptdate.month:02d}"
+    
+    print(f"REPTMON: {reptmon}, RDATE: {rdate}")
+    print(f"NPGS Path: {npgs_path}")
+    print(f"NPGSI Path: {npgsi_path}")
+    
+    # Helper function to read datasets
+    def read_dataset(path, file_name):
+        file_path = path / file_name
+        if file_path.exists():
+            df = read_sas_dataset(file_path)
+            if not df.is_empty():
+                print(f"Read {file_name}: {len(df)} records")
+            return df
+        else:
+            print(f"File not found: {file_path}")
+            return pl.DataFrame()
+    
+    # 1. SC53: BTNPGS + LNNPGS + DPNPGS
+    print("\nProcessing SC53 datasets...")
+    bt_df = read_dataset(npgs_path, f"btnpgs{reptmon}.sas7bdat")
+    ln_df = read_dataset(npgs_path, f"lnnpgs{reptmon}.sas7bdat")
+    dp_df = read_dataset(npgs_path, f"dpnpgs{reptmon}.sas7bdat")
+    
+    sc53_df = pl.concat([df for df in [bt_df, ln_df, dp_df] if not df.is_empty()])
+    if not sc53_df.is_empty():
+        sc53_df = sc53_df.filter(
+            (pl.col("cvar02") == "53") &
+            (pl.col("natguar") == "06") &
+            (pl.col("cinstcl") == "18")
+        )
+        sc53_df = sc53_df.with_columns([
+            pl.lit(" " * 10).alias("cvarxx"),
+            pl.when(pl.col("cvar11") < 3).then(pl.lit("   ")).otherwise(pl.col("cvar12")).alias("cvar12"),
+            pl.lit("E1").alias("cvar02")
+        ])
+        sc53_df = sc53_df.sort(["cvar01", "cvar06"])
+        print(f"SC53 records: {len(sc53_df)}")
     else:
-        # FORMAT=$n.  — character, left-pad/truncate to width
-        s = _coalesce_s(val)[:width]
+        sc53_df = pl.DataFrame()
+        print("SC53: No data")
+    
+    # 2. SCEI: DPNPGS + LNIPGS (Islamic)
+    print("\nProcessing SCEI datasets...")
+    dp_i_df = read_dataset(npgsi_path, f"dpnpgs{reptmon}.sas7bdat")
+    ln_i_df = read_dataset(npgsi_path, f"lnipgs{reptmon}.sas7bdat")
+    
+    scei_df = pl.concat([df for df in [dp_i_df, ln_i_df] if not df.is_empty()])
+    if not scei_df.is_empty():
+        scei_df = scei_df.filter(
+            (pl.col("natguar") == "06") &
+            (pl.col("cinstcl") == "18")
+        )
+        scei_df = scei_df.with_columns([
+            pl.when(pl.col("cvar12") == "NPL").then(pl.lit("NP")).otherwise(pl.lit("AP")).alias("cvar12"),
+            pl.lit(" " * 10).alias("cvarxx"),
+            pl.lit("E2").alias("cvar02")
+        ])
+        scei_df = scei_df.sort(["cvar01", "cvar06"])
+        print(f"SCEI records: {len(scei_df)}")
+    else:
+        scei_df = pl.DataFrame()
+        print("SCEI: No data")
+    
+    # 3. OTH: LNNPGS with complex conditional logic
+    print("\nProcessing OTH datasets...")
+    oth_df = read_dataset(npgs_path, f"lnnpgs{reptmon}.sas7bdat")
+    if not oth_df.is_empty():
+        oth_df = oth_df.filter(
+            pl.col("cvar02").is_in(['81','2Z','4Z','H4','H5','H6','H7','F5','F6',
+                                   '1Z','3Z','5S','6S','1H','2H','3H','4H','E6',
+                                   '5Z','5H','6H']) &
+            (pl.col("natguar") == "06") &
+            (pl.col("cinstcl") == "18")
+        )
+        oth_df = oth_df.with_columns(pl.lit(" " * 10).alias("cvarxx"))
+        
+        # Apply conditional logic exactly as SAS code
+        # IF CVAR02 = '81'
+        oth_df = oth_df.with_columns([
+            # cvar02 = 'G1' for '81'
+            pl.when(pl.col("cvar02") == "81")
+            .then(pl.lit("G1"))
+            .otherwise(pl.col("cvar02"))
+            .alias("cvar02"),
+            # IF CVAR11 < 3 THEN CVAR12='   '
+            pl.when((pl.col("cvar02") == "81") & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12")
+        ])
+        
+        # ELSE IF CVAR02 IN ('2Z','4Z','F6')
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02").is_in(['2Z','4Z','F6']))
+            .then(pl.lit("TF"))
+            .otherwise(pl.col("cvar07"))
+            .alias("cvar07"),
+            pl.when(pl.col("cvar02").is_in(['2Z','4Z','F6']) & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .when(pl.col("cvar02").is_in(['2Z','4Z','F6']))
+            .then(pl.lit("NPF"))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12")
+        ])
+        
+        # ELSE IF CVAR02 = 'H4' (first condition)
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02") == "H4")
+            .then(pl.lit("TL"))
+            .otherwise(pl.col("cvar07"))
+            .alias("cvar07"),
+            pl.when((pl.col("cvar02") == "H4") & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .when((pl.col("cvar02") == "H4") & (pl.col("cvar12") == " "))
+            .then(pl.lit("AP"))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12")
+        ])
+        
+        # ELSE IF CVAR02 = 'H5'
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02") == "H5")
+            .then(pl.lit("TF"))
+            .otherwise(pl.col("cvar07"))
+            .alias("cvar07"),
+            pl.when((pl.col("cvar02") == "H5") & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .when((pl.col("cvar02") == "H5") & (pl.col("cvar12") == " "))
+            .then(pl.lit("AP"))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12")
+        ])
+        
+        # ELSE IF CVAR02 = 'H6'
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02") == "H6")
+            .then(pl.lit("FL"))
+            .otherwise(pl.col("cvar07"))
+            .alias("cvar07"),
+            pl.when((pl.col("cvar02") == "H6") & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12"),
+            pl.when((pl.col("cvar02") == "H6") & (pl.col("cvar12") == "   "))
+            .then(pl.lit("          "))
+            .otherwise(pl.col("cvar13"))
+            .alias("cvar13")
+        ])
+        
+        # ELSE IF CVAR02 = 'H7'
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02") == "H7")
+            .then(pl.lit("TF"))
+            .otherwise(pl.col("cvar07"))
+            .alias("cvar07"),
+            pl.when((pl.col("cvar02") == "H7") & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12"),
+            pl.when((pl.col("cvar02") == "H7") & (pl.col("cvar12") == "   "))
+            .then(pl.lit("          "))
+            .otherwise(pl.col("cvar13"))
+            .alias("cvar13")
+        ])
+        
+        # ELSE IF CVAR02 = 'F5'
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02") == "F5")
+            .then(pl.lit("FL"))
+            .otherwise(pl.col("cvar07"))
+            .alias("cvar07"),
+            pl.when((pl.col("cvar02") == "F5") & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12")
+        ])
+        
+        # ELSE IF CVAR02 IN ('1Z','3Z','5S','1H','3H')
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02").is_in(['1Z','3Z','5S','1H','3H']))
+            .then(pl.lit("FL"))
+            .otherwise(pl.col("cvar07"))
+            .alias("cvar07"),
+            pl.when(pl.col("cvar02").is_in(['1Z','3Z','5S','1H','3H']) & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .when(pl.col("cvar02").is_in(['1Z','3Z','5S','1H','3H']))
+            .then(pl.lit("NPL"))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12")
+        ])
+        
+        # ELSE IF CVAR02 = '6S'
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02") == "6S")
+            .then(pl.lit("TF"))
+            .otherwise(pl.col("cvar07"))
+            .alias("cvar07"),
+            pl.when((pl.col("cvar02") == "6S") & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .when(pl.col("cvar02") == "6S")
+            .then(pl.lit("NPL"))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12")
+        ])
+        
+        # ELSE IF CVAR02 IN ('2H','4H')
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02").is_in(['2H','4H']))
+            .then(pl.lit("TL"))
+            .otherwise(pl.col("cvar07"))
+            .alias("cvar07"),
+            pl.when(pl.col("cvar02").is_in(['2H','4H']) & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .when(pl.col("cvar02").is_in(['2H','4H']))
+            .then(pl.lit("NPF"))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12")
+        ])
+        
+        # ELSE IF CVAR02 IN ('E6','5Z','5H','6H')
+        oth_df = oth_df.with_columns([
+            pl.when(pl.col("cvar02").is_in(['E6','5Z','5H','6H']) & (pl.col("cvar11") < 3))
+            .then(pl.lit("   "))
+            .otherwise(pl.col("cvar12"))
+            .alias("cvar12"),
+            pl.when(pl.col("cvar02").is_in(['E6','5Z','5H','6H']) & (pl.col("cvar12") == "   "))
+            .then(pl.lit("          "))
+            .otherwise(pl.col("cvar13"))
+            .alias("cvar13")
+        ])
+        
+        oth_df = oth_df.sort(["cvar01", "cvar06"])
+        print(f"OTH records: {len(oth_df)}")
+    else:
+        oth_df = pl.DataFrame()
+        print("OTH: No data")
+    
+    # 4. Combine all datasets (SC53 SCEI OTH)
+    print("\nCombining all datasets...")
+    all_dfs = []
+    for df_name, df in [("SC53", sc53_df), ("SCEI", scei_df), ("OTH", oth_df)]:
+        if not df.is_empty():
+            all_dfs.append(df)
+    
+    if not all_dfs:
+        print("No data found in any source")
+        return
+    
+    npgs_df = pl.concat(all_dfs)
+    npgs_df = npgs_df.sort(["cvar02", "cvar01", "cvar06"])
+    print(f"Total NPGS records: {len(npgs_df)}")
+    
+    # 5. Write COMBT file (DSD DLM=';')
+    output_cols = ['cvar01','cvar02','cvar03','cvar04','cvar05','cvar06',
+                  'cvar07','cvar08','cvar09','cvar10','cvar11','cvar12',
+                  'cvar13','cvar14','cvar15']
+    
+    # Ensure all columns exist
+    for col in output_cols + ['lastcol']:
+        if col not in npgs_df.columns:
+            npgs_df = npgs_df.with_columns(pl.lit("").alias(col))
+    
+    # Add LASTCOL
+    npgs_df = npgs_df.with_columns(pl.lit("").alias("lastcol"))
+    
+    # Write to text file with ';' delimiter
+    print("\nWriting COMBT.txt...")
+    with open(base / "COMBT.txt", "w") as f:
+        for row in npgs_df.iter_rows(named=True):
+            values = []
+            for col in output_cols + ['lastcol']:
+                val = row[col]
+                if val is None:
+                    values.append("")
+                elif isinstance(val, (int, float)):
+                    if col == 'cvar05':  # Date field
+                        if val > 0:
+                            date_val = datetime(1960, 1, 1) + timedelta(days=int(val))
+                            values.append(date_val.strftime("%d/%m/%Y"))
+                        else:
+                            values.append("")
+                    else:
+                        values.append(str(val))
+                else:
+                    values.append(str(val).strip())
+            f.write(";".join(values) + "\n")
+    
+    # 6. Generate report using NPGSRPT module
+    print("\n" + "=" * 60)
+    print("PUBLIC BANK BERHAD")
+    print(f"DETAIL OF ACCTS NON-PG FOR SUBMISSION TO CGC @ {rdate}")
+    print("=" * 60)
+    
+    # Use shared report module
+    title1 = "PUBLIC BANK BERHAD"
+    title2 = f"DETAIL OF ACCTS NON-PG FOR SUBMISSION TO CGC @ {rdate}"
+    
+    npgs_report(
+        df=npgs_df,
+        report_path=str(base / "COMBR.txt"),
+        title1=title1,
+        title2=title2
+    )
+    
+    print(f"\nProcessing complete. Files: COMBT.txt, COMBR.txt")
+    print(f"Total records: {len(npgs_df)}")
+    if 'cvar02' in npgs_df.columns:
+        counts = npgs_df.group_by("cvar02").agg(pl.count().alias("records"))
+        print("\nRecords by CVAR02:")
+        for row in counts.iter_rows(named=True):
+            print(f"  {row['cvar02']}: {row['records']}")
 
-    return s.rjust(width) if align == 'right' else s.ljust(width)
-
-# =============================================================================
-# PUBLIC INTERFACE
-# =============================================================================
-
-def npgs_report(
-    df:          pl.DataFrame,
-    report_path: str,
-    title1:      str,
-    title2:      str,
-) -> None:
-    """
-    Generate an ASA carriage-control NPGS CGC detail listing report.
-
-    Equivalent to the SAS block:
-        PROC PRINTTO PRINT=<output>;
-        TITLE1 '<title1>';
-        TITLE2 '<title2>';
-        %INC PGM(NPGSRPT);
-
-    ASA carriage-control characters (first byte of each line):
-        '1'  — page eject (new page)
-        ' '  — single space (normal print)
-
-    Parameters
-    ----------
-    df          : Polars DataFrame — already filtered, CVAR07 overridden,
-                  and sorted BY CVAR01 CVAR06 by the caller (EIBRNPGS).
-    report_path : Destination file path for the ASA report.
-    title1      : TITLE1 text  (e.g. 'PUBLIC BANK BERHAD')
-    title2      : TITLE2 text  (e.g. 'DETAIL OF ACCTS (SCH=70) ...')
-    """
-    headline     = '-' * _TOTAL_WIDTH
-    header_lines = _build_header_lines()
-
-    # Number of fixed overhead lines written per new page:
-    #   TITLE1 + TITLE2 + HEADSKIP blank + header row(s) + HEADLINE rule
-    _page_overhead = 3 + len(header_lines) + 1
-
-    output_lines: list[str] = []
-    line_cnt:     int       = PAGE_LENGTH + 1   # force first page immediately
-
-    def _new_page() -> None:
-        nonlocal line_cnt
-        # '1' = ASA page eject
-        output_lines.append('1' + title1)
-        # ' ' = ASA normal single space
-        output_lines.append(' ' + title2)
-        output_lines.append(' ')                       # HEADSKIP — one blank line
-        for hdr in header_lines:
-            output_lines.append(' ' + hdr)
-        output_lines.append(' ' + headline)            # HEADLINE — underline rule
-        line_cnt = _page_overhead
-
-    # Always open with at least one page (handles empty input gracefully)
-    _new_page()
-
-    if not df.is_empty():
-        for row in df.iter_rows(named=True):
-            if line_cnt >= PAGE_LENGTH:
-                _new_page()
-
-            cells = [
-                _format_cell(col_name, row.get(col_name), width, align)
-                for col_name, _, width, align in REPORT_COLS
-            ]
-            output_lines.append(' ' + COL_SEP.join(cells))
-            line_cnt += 1
-
-    # Ensure output directory exists
-    out_dir = os.path.dirname(report_path)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-
-    with open(report_path, 'w', encoding='utf-8', newline='\n') as fh:
-        for ln in output_lines:
-            fh.write(ln + '\n')
-
-
+if __name__ == "__main__":
+    eibsnpgs()
