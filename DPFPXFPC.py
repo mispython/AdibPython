@@ -1,5 +1,3 @@
-[USE BELOW UPDATED CODE]
-
 import polars as pl
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -18,12 +16,28 @@ def read_sas_dataset(file_path):
         print(f"Error reading {file_path}: {e}")
         return pl.DataFrame()
 
+def ensure_common_columns(dfs, required_columns):
+    """Ensure all DataFrames have the required columns"""
+    result_dfs = []
+    for df in dfs:
+        if df.is_empty():
+            continue
+        # Add missing columns with None
+        for col in required_columns:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None).alias(col))
+        # Select only required columns
+        df = df.select(required_columns)
+        result_dfs.append(df)
+    return result_dfs
+
 def eibsnpgs():
+    base = Path.cwd()
     npgs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGS")
     npgsi_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGSI")
     
     # Calculate report date (yesterday)
-    reptdate = datetime.now() - timedelta(days=9)
+    reptdate = datetime.now() - timedelta(days=1)
     
     mm = reptdate.month
     mm1 = mm - 1 if mm > 1 else 12
@@ -39,13 +53,18 @@ def eibsnpgs():
     print(f"NPGS Path: {npgs_path}")
     print(f"NPGSI Path: {npgsi_path}")
     
+    # Define required columns for output
+    required_cols = ['cvar01','cvar02','cvar03','cvar04','cvar05','cvar06',
+                    'cvar07','cvar08','cvar09','cvar10','cvar11','cvar12',
+                    'cvar13','cvar14','cvar15','cvarxx','natguar','cinstcl']
+    
     # Helper function to read datasets
     def read_dataset(path, file_name):
         file_path = path / file_name
         if file_path.exists():
             df = read_sas_dataset(file_path)
             if not df.is_empty():
-                print(f"Read {file_name}: {len(df)} records")
+                print(f"Read {file_name}: {len(df)} records, columns: {df.columns}")
             return df
         else:
             print(f"File not found: {file_path}")
@@ -57,8 +76,11 @@ def eibsnpgs():
     ln_df = read_dataset(npgs_path, f"lnnpgs{reptmon}.sas7bdat")
     dp_df = read_dataset(npgs_path, f"dpnpgs{reptmon}.sas7bdat")
     
-    sc53_df = pl.concat([df for df in [bt_df, ln_df, dp_df] if not df.is_empty()])
-    if not sc53_df.is_empty():
+    # Ensure common columns before concatenation
+    sc53_dfs = ensure_common_columns([bt_df, ln_df, dp_df], required_cols)
+    
+    if sc53_dfs:
+        sc53_df = pl.concat(sc53_dfs)
         sc53_df = sc53_df.filter(
             (pl.col("cvar02") == "53") &
             (pl.col("natguar") == "06") &
@@ -80,8 +102,11 @@ def eibsnpgs():
     dp_i_df = read_dataset(npgsi_path, f"dpnpgs{reptmon}.sas7bdat")
     ln_i_df = read_dataset(npgsi_path, f"lnipgs{reptmon}.sas7bdat")
     
-    scei_df = pl.concat([df for df in [dp_i_df, ln_i_df] if not df.is_empty()])
-    if not scei_df.is_empty():
+    # Ensure common columns before concatenation
+    scei_dfs = ensure_common_columns([dp_i_df, ln_i_df], required_cols)
+    
+    if scei_dfs:
+        scei_df = pl.concat(scei_dfs)
         scei_df = scei_df.filter(
             (pl.col("natguar") == "06") &
             (pl.col("cinstcl") == "18")
@@ -101,6 +126,11 @@ def eibsnpgs():
     print("\nProcessing OTH datasets...")
     oth_df = read_dataset(npgs_path, f"lnnpgs{reptmon}.sas7bdat")
     if not oth_df.is_empty():
+        # Ensure required columns exist
+        for col in required_cols:
+            if col not in oth_df.columns:
+                oth_df = oth_df.with_columns(pl.lit(None).alias(col))
+        
         oth_df = oth_df.filter(
             pl.col("cvar02").is_in(['81','2Z','4Z','H4','H5','H6','H7','F5','F6',
                                    '1Z','3Z','5S','6S','1H','2H','3H','4H','E6',
@@ -109,6 +139,9 @@ def eibsnpgs():
             (pl.col("cinstcl") == "18")
         )
         oth_df = oth_df.with_columns(pl.lit(" " * 10).alias("cvarxx"))
+        
+        # Store original cvar02 for conditional logic
+        oth_df = oth_df.with_columns(pl.col("cvar02").alias("orig_cvar02"))
         
         # Apply conditional logic exactly as SAS code
         # IF CVAR02 = '81'
@@ -119,7 +152,7 @@ def eibsnpgs():
             .otherwise(pl.col("cvar02"))
             .alias("cvar02"),
             # IF CVAR11 < 3 THEN CVAR12='   '
-            pl.when((pl.col("cvar02") == "81") & (pl.col("cvar11") < 3))
+            pl.when((pl.col("orig_cvar02") == "81") & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12")
@@ -127,13 +160,13 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 IN ('2Z','4Z','F6')
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02").is_in(['2Z','4Z','F6']))
+            pl.when(pl.col("orig_cvar02").is_in(['2Z','4Z','F6']))
             .then(pl.lit("TF"))
             .otherwise(pl.col("cvar07"))
             .alias("cvar07"),
-            pl.when(pl.col("cvar02").is_in(['2Z','4Z','F6']) & (pl.col("cvar11") < 3))
+            pl.when(pl.col("orig_cvar02").is_in(['2Z','4Z','F6']) & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
-            .when(pl.col("cvar02").is_in(['2Z','4Z','F6']))
+            .when(pl.col("orig_cvar02").is_in(['2Z','4Z','F6']))
             .then(pl.lit("NPF"))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12")
@@ -141,13 +174,13 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 = 'H4' (first condition)
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02") == "H4")
+            pl.when(pl.col("orig_cvar02") == "H4")
             .then(pl.lit("TL"))
             .otherwise(pl.col("cvar07"))
             .alias("cvar07"),
-            pl.when((pl.col("cvar02") == "H4") & (pl.col("cvar11") < 3))
+            pl.when((pl.col("orig_cvar02") == "H4") & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
-            .when((pl.col("cvar02") == "H4") & (pl.col("cvar12") == " "))
+            .when((pl.col("orig_cvar02") == "H4") & (pl.col("cvar12") == " "))
             .then(pl.lit("AP"))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12")
@@ -155,13 +188,13 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 = 'H5'
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02") == "H5")
+            pl.when(pl.col("orig_cvar02") == "H5")
             .then(pl.lit("TF"))
             .otherwise(pl.col("cvar07"))
             .alias("cvar07"),
-            pl.when((pl.col("cvar02") == "H5") & (pl.col("cvar11") < 3))
+            pl.when((pl.col("orig_cvar02") == "H5") & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
-            .when((pl.col("cvar02") == "H5") & (pl.col("cvar12") == " "))
+            .when((pl.col("orig_cvar02") == "H5") & (pl.col("cvar12") == " "))
             .then(pl.lit("AP"))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12")
@@ -169,15 +202,15 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 = 'H6'
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02") == "H6")
+            pl.when(pl.col("orig_cvar02") == "H6")
             .then(pl.lit("FL"))
             .otherwise(pl.col("cvar07"))
             .alias("cvar07"),
-            pl.when((pl.col("cvar02") == "H6") & (pl.col("cvar11") < 3))
+            pl.when((pl.col("orig_cvar02") == "H6") & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12"),
-            pl.when((pl.col("cvar02") == "H6") & (pl.col("cvar12") == "   "))
+            pl.when((pl.col("orig_cvar02") == "H6") & (pl.col("cvar12") == "   "))
             .then(pl.lit("          "))
             .otherwise(pl.col("cvar13"))
             .alias("cvar13")
@@ -185,15 +218,15 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 = 'H7'
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02") == "H7")
+            pl.when(pl.col("orig_cvar02") == "H7")
             .then(pl.lit("TF"))
             .otherwise(pl.col("cvar07"))
             .alias("cvar07"),
-            pl.when((pl.col("cvar02") == "H7") & (pl.col("cvar11") < 3))
+            pl.when((pl.col("orig_cvar02") == "H7") & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12"),
-            pl.when((pl.col("cvar02") == "H7") & (pl.col("cvar12") == "   "))
+            pl.when((pl.col("orig_cvar02") == "H7") & (pl.col("cvar12") == "   "))
             .then(pl.lit("          "))
             .otherwise(pl.col("cvar13"))
             .alias("cvar13")
@@ -201,11 +234,11 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 = 'F5'
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02") == "F5")
+            pl.when(pl.col("orig_cvar02") == "F5")
             .then(pl.lit("FL"))
             .otherwise(pl.col("cvar07"))
             .alias("cvar07"),
-            pl.when((pl.col("cvar02") == "F5") & (pl.col("cvar11") < 3))
+            pl.when((pl.col("orig_cvar02") == "F5") & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12")
@@ -213,13 +246,13 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 IN ('1Z','3Z','5S','1H','3H')
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02").is_in(['1Z','3Z','5S','1H','3H']))
+            pl.when(pl.col("orig_cvar02").is_in(['1Z','3Z','5S','1H','3H']))
             .then(pl.lit("FL"))
             .otherwise(pl.col("cvar07"))
             .alias("cvar07"),
-            pl.when(pl.col("cvar02").is_in(['1Z','3Z','5S','1H','3H']) & (pl.col("cvar11") < 3))
+            pl.when(pl.col("orig_cvar02").is_in(['1Z','3Z','5S','1H','3H']) & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
-            .when(pl.col("cvar02").is_in(['1Z','3Z','5S','1H','3H']))
+            .when(pl.col("orig_cvar02").is_in(['1Z','3Z','5S','1H','3H']))
             .then(pl.lit("NPL"))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12")
@@ -227,13 +260,13 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 = '6S'
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02") == "6S")
+            pl.when(pl.col("orig_cvar02") == "6S")
             .then(pl.lit("TF"))
             .otherwise(pl.col("cvar07"))
             .alias("cvar07"),
-            pl.when((pl.col("cvar02") == "6S") & (pl.col("cvar11") < 3))
+            pl.when((pl.col("orig_cvar02") == "6S") & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
-            .when(pl.col("cvar02") == "6S")
+            .when(pl.col("orig_cvar02") == "6S")
             .then(pl.lit("NPL"))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12")
@@ -241,13 +274,13 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 IN ('2H','4H')
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02").is_in(['2H','4H']))
+            pl.when(pl.col("orig_cvar02").is_in(['2H','4H']))
             .then(pl.lit("TL"))
             .otherwise(pl.col("cvar07"))
             .alias("cvar07"),
-            pl.when(pl.col("cvar02").is_in(['2H','4H']) & (pl.col("cvar11") < 3))
+            pl.when(pl.col("orig_cvar02").is_in(['2H','4H']) & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
-            .when(pl.col("cvar02").is_in(['2H','4H']))
+            .when(pl.col("orig_cvar02").is_in(['2H','4H']))
             .then(pl.lit("NPF"))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12")
@@ -255,16 +288,18 @@ def eibsnpgs():
         
         # ELSE IF CVAR02 IN ('E6','5Z','5H','6H')
         oth_df = oth_df.with_columns([
-            pl.when(pl.col("cvar02").is_in(['E6','5Z','5H','6H']) & (pl.col("cvar11") < 3))
+            pl.when(pl.col("orig_cvar02").is_in(['E6','5Z','5H','6H']) & (pl.col("cvar11") < 3))
             .then(pl.lit("   "))
             .otherwise(pl.col("cvar12"))
             .alias("cvar12"),
-            pl.when(pl.col("cvar02").is_in(['E6','5Z','5H','6H']) & (pl.col("cvar12") == "   "))
+            pl.when(pl.col("orig_cvar02").is_in(['E6','5Z','5H','6H']) & (pl.col("cvar12") == "   "))
             .then(pl.lit("          "))
             .otherwise(pl.col("cvar13"))
             .alias("cvar13")
         ])
         
+        # Drop the temporary column
+        oth_df = oth_df.drop("orig_cvar02")
         oth_df = oth_df.sort(["cvar01", "cvar06"])
         print(f"OTH records: {len(oth_df)}")
     else:
@@ -273,10 +308,23 @@ def eibsnpgs():
     
     # 4. Combine all datasets (SC53 SCEI OTH)
     print("\nCombining all datasets...")
+    
+    # Define final output columns
+    final_cols = ['cvar01','cvar02','cvar03','cvar04','cvar05','cvar06',
+                 'cvar07','cvar08','cvar09','cvar10','cvar11','cvar12',
+                 'cvar13','cvar14','cvar15','cvarxx']
+    
     all_dfs = []
     for df_name, df in [("SC53", sc53_df), ("SCEI", scei_df), ("OTH", oth_df)]:
         if not df.is_empty():
+            # Ensure all final columns exist
+            for col in final_cols:
+                if col not in df.columns:
+                    df = df.with_columns(pl.lit(None).alias(col))
+            # Select only final columns
+            df = df.select(final_cols)
             all_dfs.append(df)
+            print(f"{df_name}: {len(df)} records")
     
     if not all_dfs:
         print("No data found in any source")
@@ -287,25 +335,17 @@ def eibsnpgs():
     print(f"Total NPGS records: {len(npgs_df)}")
     
     # 5. Write COMBT file (DSD DLM=';')
-    output_cols = ['cvar01','cvar02','cvar03','cvar04','cvar05','cvar06',
-                  'cvar07','cvar08','cvar09','cvar10','cvar11','cvar12',
-                  'cvar13','cvar14','cvar15']
-    
-    # Ensure all columns exist
-    for col in output_cols + ['lastcol']:
-        if col not in npgs_df.columns:
-            npgs_df = npgs_df.with_columns(pl.lit("").alias(col))
-    
     # Add LASTCOL
     npgs_df = npgs_df.with_columns(pl.lit("").alias("lastcol"))
     
-    # Write to text file with ';' delimiter
+    output_cols = final_cols + ['lastcol']
+    
     print("\nWriting COMBT.txt...")
     with open(base / "COMBT.txt", "w") as f:
         for row in npgs_df.iter_rows(named=True):
             values = []
-            for col in output_cols + ['lastcol']:
-                val = row[col]
+            for col in output_cols:
+                val = row.get(col)
                 if val is None:
                     values.append("")
                 elif isinstance(val, (int, float)):
@@ -348,24 +388,3 @@ def eibsnpgs():
 
 if __name__ == "__main__":
     eibsnpgs()
-
-
-
-OUTPUT:
-
-REPTMON: 08, RDATE: 310826
-NPGS Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGS
-NPGSI Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGSI
-
-Processing SC53 datasets...
-Read btnpgs08.sas7bdat: 14 records
-Read lnnpgs08.sas7bdat: 1287 records
-Read dpnpgs08.sas7bdat: 8 records
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBSNPGS.py", line 348, in <module>
-    eibsnpgs()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBSNPGS.py", line 58, in eibsnpgs
-    sc53_df = pl.concat([df for df in [bt_df, ln_df, dp_df] if not df.is_empty()])
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/functions/eager.py", line 234, in concat
-    out = wrap_df(plr.concat_df(elems))
-polars.exceptions.ShapeError: unable to vstack, column names don't match: "cvar01" and "product"
