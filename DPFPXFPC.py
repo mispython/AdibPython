@@ -6,35 +6,33 @@ Non-Performing Government Scheme Trade Finance Processing
 
 import duckdb
 import polars as pl
+import pyreadstat
 from datetime import datetime, timedelta
 from pathlib import Path
 import calendar
+import saspy
 
 
 # ============================================================================
 # PATH CONFIGURATION
 # ============================================================================
-# INPUT_DIR = Path("/mnt/user-data/uploads")
-# OUTPUT_DIR = Path("/mnt/user-data/outputs")
-
 BASE_DIR = Path(__file__).resolve().parent
+INPUT_DIR = BASE_DIR / "input" / "prod" / "eibtnpgs"
+OUTPUT_DIR = BASE_DIR / "output"
 
-OUTPUT_DIR = BASE_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBTNPGS"
+# Input files (all lowercase, sas7bdat format)
+CRFTABL_FILE = INPUT_DIR / "eibrcgcs" / "crftabl.sas7bdat"
+BTRSA_MAST_FILE = INPUT_DIR / "mast{reptday}{reptmon}.sas7bdat"
+BTRSA_CRED_FILE = INPUT_DIR / "cred{reptday}{reptmon}.sas7bdat"
+BTRSA_PROV_FILE = INPUT_DIR / "prov{reptday}{reptmon}.sas7bdat"
+BTRSA_SUBA_FILE = INPUT_DIR / "suba{reptday}{reptmon}.sas7bdat"
+COLL_FILE = INPUT_DIR / "eibrcgcs" / "lccrisex_{reptyear}{reptmon}{reptday}.sas7bdat"
+DESC_FILE = INPUT_DIR / "eibrcgcs" / "lccrisex_desc_{reptyear}{reptmon}{reptday}.sas7bdat"
+MICR_FILE = INPUT_DIR / "bopess.sas7bdat"
+NPLA_FILE = INPUT_DIR / "npla.sas7bdat"
 
-# Input files
-
-CRFTABL_FILE = INPUT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/crftabl.txt"
-BTRSA_MAST_FILE = INPUT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/mast{reptday}{reptmon}.sas7bdat"
-BTRSA_CRED_FILE = INPUT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/cred{reptday}{reptmon}.sas7bdat"
-BTRSA_PROV_FILE = INPUT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/prov{reptday}{reptmon}.sas7bdat"
-BTRSA_SUBA_FILE = INPUT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/suba{reptday}{reptmon}.sas7bdat"
-COLL_FILE = INPUT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_{reptyear}{reptmon}{reptday}"
-DESC_FILE = INPUT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_{reptyear}{reptmon}{reptday}"
-MICR_FILE = INPUT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/BOPESS.txt"
-NPLA_FILE = INPUT_DIR / "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/npla.sas7bdat"
-
-# Output file - will be determined based on report month
-OUTPUT_FILE = None  # Set after reading REPTDATE
+# Output file - will be determined based on report date
+OUTPUT_FILE = None  # Set after determining report date
 
 
 # ============================================================================
@@ -44,17 +42,12 @@ con = duckdb.connect()
 
 
 # ============================================================================
-# STEP 1: READ REPTDATE AND SET MACRO VARIABLES
+# STEP 1: SET REPORT DATE (using yesterday's date)
 # ============================================================================
-print("Step 1: Reading report date...")
+print("Step 1: Setting report date...")
 
-print("BASE_DIR:", BASE_DIR)
-print("INPUT_DIR:", INPUT_DIR)
-print("MNILN_FILE:", MNILN_FILE)
-print("Exists?", MNILN_FILE.exists(), "\n")
-
-reptdate_df = pl.read_parquet(MNILN_FILE).select(['REPTDATE']).head(1)
-reptdate = reptdate_df['REPTDATE'][0]
+# Use yesterday's date as the report date
+reptdate = datetime.now() - timedelta(days=1)
 
 REPTMON = f"{reptdate.month:02d}"
 REPTDAY = f"{reptdate.day:02d}"
@@ -64,13 +57,13 @@ RDATE = (reptdate - datetime(1960, 1, 1)).days  # SAS date value
 print(f"Report Date: {reptdate}, RDATE: {RDATE}")
 
 # Set output file name
-OUTPUT_FILE = OUTPUT_DIR / f"btnpgs{REPTMON}.parquet"
+OUTPUT_FILE = OUTPUT_DIR / f"btnpgs{REPTMON}.sas7bdat"
 
 # Update BTRSA file paths with date suffix
-BTRSA_MAST_FILE = INPUT_DIR / f"sap_pbb_btrade_sasdata_mast{REPTDAY}{REPTMON}.parquet"
-BTRSA_CRED_FILE = INPUT_DIR / f"sap_pbb_btrade_sasdata_cred{REPTDAY}{REPTMON}.parquet"
-BTRSA_PROV_FILE = INPUT_DIR / f"sap_pbb_btrade_sasdata_prov{REPTDAY}{REPTMON}.parquet"
-BTRSA_SUBA_FILE = INPUT_DIR / f"sap_pbb_btrade_sasdata_suba{REPTDAY}{REPTMON}.parquet"
+BTRSA_MAST_FILE = INPUT_DIR / f"mast{REPTDAY}{REPTMON}.sas7bdat"
+BTRSA_CRED_FILE = INPUT_DIR / f"cred{REPTDAY}{REPTMON}.sas7bdat"
+BTRSA_PROV_FILE = INPUT_DIR / f"prov{REPTDAY}{REPTMON}.sas7bdat"
+BTRSA_SUBA_FILE = INPUT_DIR / f"suba{REPTDAY}{REPTMON}.sas7bdat"
 
 
 # ============================================================================
@@ -78,7 +71,9 @@ BTRSA_SUBA_FILE = INPUT_DIR / f"sap_pbb_btrade_sasdata_suba{REPTDAY}{REPTMON}.pa
 # ============================================================================
 print("Step 2: Processing credit facility table...")
 
-crft_data = pl.read_parquet(CRFTABL_FILE).select([
+# Read sas7bdat file
+crft_df, crft_meta = pyreadstat.read_sas7bdat(CRFTABL_FILE)
+crft_data = pl.from_pandas(crft_df).select([
     'RECTYP1', 'TFID', 'SUBACCT', 'PREIND', 'CENSUST', 'ACCTNO'
 ])
 
@@ -122,7 +117,9 @@ crft_data = crft_data.unique(subset=['ACCTNO', 'CENSUST', 'SUBACCT'], keep='firs
 # ============================================================================
 print("Step 3: Merging with master account data...")
 
-mast_data = pl.read_parquet(BTRSA_MAST_FILE).select([
+# Read sas7bdat file
+mast_df, mast_meta = pyreadstat.read_sas7bdat(BTRSA_MAST_FILE)
+mast_data = pl.from_pandas(mast_df).select([
     'ACCTNO', 'FICODE', 'NAME', 'BUSREGN'
 ]).unique(subset=['ACCTNO'], keep='first')
 
@@ -154,7 +151,9 @@ crft1_data = crft_merged.with_columns([
 # ============================================================================
 print("Step 4: Processing credit data...")
 
-cred_data = pl.read_parquet(BTRSA_CRED_FILE)
+# Read sas7bdat file
+cred_df, cred_meta = pyreadstat.read_sas7bdat(BTRSA_CRED_FILE)
+cred_data = pl.from_pandas(cred_df)
 
 # Merge with CRFT
 cred_data = cred_data.join(crft_final, on=['ACCTNO', 'SUBACCT'], how='inner')
@@ -191,7 +190,9 @@ cred1_data = cred_data.filter(
 # ============================================================================
 print("Step 6: Processing provision data...")
 
-prov_data = pl.read_parquet(BTRSA_PROV_FILE).filter(
+# Read sas7bdat file
+prov_df, prov_meta = pyreadstat.read_sas7bdat(BTRSA_PROV_FILE)
+prov_data = pl.from_pandas(prov_df).filter(
     ~pl.col('NPLIND').is_in(['P', 'F'])
 )
 
@@ -257,7 +258,9 @@ cred2_final = cred2_data.select(['ACCTNO', 'ARREARS', 'MATUREDS', 'NODAYS'])
 # ============================================================================
 print("Step 7: Processing subaccount data...")
 
-suba_data = pl.read_parquet(BTRSA_SUBA_FILE)
+# Read sas7bdat file
+suba_df, suba_meta = pyreadstat.read_sas7bdat(BTRSA_SUBA_FILE)
+suba_data = pl.from_pandas(suba_df)
 
 # Merge with CRFT1
 suba_data = suba_data.join(crft1_data, on=['ACCTNO', 'SUBACCT'], how='inner')
@@ -355,8 +358,12 @@ suba_final = suba_issue.select(['ACCTNO', 'ISSUEDT', 'MATURED1'])
 # ============================================================================
 print("Step 8: Processing collateral data...")
 
-coll_data = pl.read_parquet(COLL_FILE).select(['CCOLLNO', 'ACCTNO'])
-desc_data = pl.read_parquet(DESC_FILE).select(['CCOLLNO', 'CINSTCL', 'NATGUAR', 'CENSUS'])
+# Read sas7bdat files
+coll_df, coll_meta = pyreadstat.read_sas7bdat(COLL_FILE)
+coll_data = pl.from_pandas(coll_df).select(['CCOLLNO', 'ACCTNO'])
+
+desc_df, desc_meta = pyreadstat.read_sas7bdat(DESC_FILE)
+desc_data = pl.from_pandas(desc_df).select(['CCOLLNO', 'CINSTCL', 'NATGUAR', 'CENSUS'])
 
 
 # Assign CR based on CENSUS
@@ -410,7 +417,9 @@ mast_final = mast_final.unique(subset=['ACCTNO', 'CENSUS'], keep='first')
 # ============================================================================
 print("Step 10: Merging MICR codes...")
 
-micr_data = pl.read_parquet(MICR_FILE).select(['BRANCH', 'MICRCD'])
+# Read sas7bdat file
+micr_df, micr_meta = pyreadstat.read_sas7bdat(MICR_FILE)
+micr_data = pl.from_pandas(micr_df).select(['BRANCH', 'MICRCD'])
 
 mast_final = mast_final.join(micr_data, on='BRANCH', how='left')
 
@@ -561,7 +570,8 @@ npgs_data = npgs_data.filter(pl.col('OUTSTAND').is_not_null())
 print("Step 14: Merging with NPLA...")
 
 try:
-    npla_data = pl.read_parquet(NPLA_FILE).select(['CVAR06', 'CVAR01', 'STATUS', 'NDATE'])
+    npla_df, npla_meta = pyreadstat.read_sas7bdat(NPLA_FILE)
+    npla_data = pl.from_pandas(npla_df).select(['CVAR06', 'CVAR01', 'STATUS', 'NDATE'])
     npgs_data = npgs_data.join(npla_data, on=['CVAR06', 'CVAR01'], how='left')
 
     # Update CVAR13 based on NPL status
@@ -596,8 +606,30 @@ output_data = npgs_data.select([col for col in final_columns if col in npgs_data
 # Sort by CVAR01
 output_data = output_data.sort('CVAR01')
 
-# Write output
-output_data.write_parquet(OUTPUT_FILE)
+# Write output using saspy
+print("Writing SAS output...")
+
+# Initialize SAS session
+sas = saspy.SASsession(cfgname='default')  # Adjust cfgname as needed
+
+# Convert polars DataFrame to pandas for saspy
+output_pd = output_data.to_pandas()
+
+# Upload dataframe to SAS
+sas_df = sas.df2sd(output_pd, 'npgs_output')
+
+# Write to sas7bdat
+sas_code = f"""
+    LIBNAME outlib "{OUTPUT_DIR}";
+    DATA outlib.btnpgs{REPTMON};
+        SET npgs_output;
+    RUN;
+"""
+
+sas.submit(sas_code)
+
+# Close SAS session
+sas.endsas()
 
 print(f"Output written to: {OUTPUT_FILE}")
 print(f"Total records: {len(output_data)}")
@@ -605,12 +637,3 @@ print("\nProcessing complete!")
 
 # Close DuckDB connection
 con.close()
-
-
-
-remove the INPUT_DIR
-all inputs are in sas7bdat sas dataset and need to be in all lowercase.
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in sas7bdat. 
-write out using saspy
