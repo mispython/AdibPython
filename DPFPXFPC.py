@@ -17,16 +17,16 @@ import saspy
 # PATH CONFIGURATION
 # ============================================================================
 # Define each file path independently using Path()
-CRFTABL_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibrcgcs/crftabl.sas7bdat")
-BTRSA_MAST_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/mast{reptday}{reptmon}.sas7bdat")
-BTRSA_CRED_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/cred{reptday}{reptmon}.sas7bdat")
-BTRSA_PROV_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/prov{reptday}{reptmon}.sas7bdat")
-BTRSA_SUBA_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/suba{reptday}{reptmon}.sas7bdat")
-COLL_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibrcgcs/lccrisex_{reptyear}{reptmon}{reptday}.sas7bdat")
-DESC_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibrcgcs/lccrisex_desc_{reptyear}{reptmon}{reptday}.sas7bdat")
-MICR_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/bopess.sas7bdat")
-NPLA_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/npla.sas7bdat")
-OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/eibtnpgs")
+CRFTABL_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/crftabl.txt")
+BTRSA_MAST_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/mast{reptday}{reptmon}.sas7bdat")
+BTRSA_CRED_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/cred{reptday}{reptmon}.sas7bdat")
+BTRSA_PROV_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/prov{reptday}{reptmon}.sas7bdat")
+BTRSA_SUBA_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/suba{reptday}{reptmon}.sas7bdat")
+COLL_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/lccrisex_{reptyear}{reptmon}{reptday}.sas7bdat")
+DESC_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/lccrisex_desc_{reptyear}{reptmon}{reptday}.sas7bdat")
+MICR_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/bopess.sas7bdat")
+NPLA_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/npla.sas7bdat")
+OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBTNPGS")
 
 # Output file - will be determined based on report date
 OUTPUT_FILE = None  # Set after determining report date
@@ -57,14 +57,14 @@ print(f"Report Date: {reptdate}, RDATE: {RDATE}")
 OUTPUT_FILE = OUTPUT_DIR / f"btnpgs{REPTMON}.sas7bdat"
 
 # Update BTRSA file paths with date suffix
-BTRSA_MAST_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/mast{REPTDAY}{REPTMON}.sas7bdat")
-BTRSA_CRED_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/cred{REPTDAY}{REPTMON}.sas7bdat")
-BTRSA_PROV_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/prov{REPTDAY}{REPTMON}.sas7bdat")
-BTRSA_SUBA_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibtnpgs/suba{REPTDAY}{REPTMON}.sas7bdat")
+BTRSA_MAST_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/mast{REPTDAY}{REPTMON}.sas7bdat")
+BTRSA_CRED_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/cred{REPTDAY}{REPTMON}.sas7bdat")
+BTRSA_PROV_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/prov{REPTDAY}{REPTMON}.sas7bdat")
+BTRSA_SUBA_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/suba{REPTDAY}{REPTMON}.sas7bdat")
 
 # Update COLL and DESC files with date
-COLL_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibrcgcs/lccrisex_{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat")
-DESC_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibrcgcs/lccrisex_desc_{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat")
+COLL_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/lccrisex_{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat")
+DESC_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/lccrisex_desc_{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat")
 
 
 # ============================================================================
@@ -72,11 +72,15 @@ DESC_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/eibrc
 # ============================================================================
 print("Step 2: Processing credit facility table...")
 
-# Read sas7bdat file
-crft_df, crft_meta = pyreadstat.read_sas7bdat(CRFTABL_FILE)
-crft_data = pl.from_pandas(crft_df).select([
+# Read text file (tab-delimited or fixed-width, adjust as needed)
+# Assuming it's a delimited file - adjust delimiter as needed
+crft_data = pl.read_csv(CRFTABL_FILE, separator='\t', has_header=True).select([
     'RECTYP1', 'TFID', 'SUBACCT', 'PREIND', 'CENSUST', 'ACCTNO'
 ])
+
+# If it's fixed-width, use read_fwf instead:
+# crft_data = pl.read_csv(CRFTABL_FILE, has_header=False, separator='\t')
+# crft_data.columns = ['RECTYP1', 'TFID', 'SUBACCT', 'PREIND', 'CENSUST', 'ACCTNO']
 
 # Filter out records where RECTYP1='1'
 crft_data = crft_data.filter(pl.col('RECTYP1') != '1')
