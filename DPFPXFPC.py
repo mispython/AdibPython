@@ -1,54 +1,13 @@
-REPTMON: 08, RDATE: 310826
-NPGS Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGS
-NPGSI Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGSI
-Output Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBSNPGS
+samples of python output:
 
-Processing SC53 datasets...
-Read btnpgs08.sas7bdat: 14 records, columns: ['cvar01', 'cvar06', 'cvar03', 'cvar04', 'cvar14', 'cvar13', 'cvar08', 'cvar09', 'cvar10', 'cvar11', 'censust', 'sch', 'branch', 'cinstcl', 'natguar', 'cr', 'cvar02', 'product', 'cvar05', 'cvar07', 'cvar12', 'cvar15']
-Read lnnpgs08.sas7bdat: 1287 records, columns: ['product', 'censust', 'sch', 'cinstcl', 'natguar', 'cr', 'cvar02', 'cvar01', 'cvar06', 'cvar03', 'cvar04', 'cvar14', 'cvar13', 'cvar08', 'cvar09', 'cvar10', 'cvar11', 'cvar05', 'cvar07', 'cvar12', 'cvar15', 'branch']
-Read dpnpgs08.sas7bdat: 8 records, columns: ['cvar13', 'cvar04', 'cvar08', 'cvar06', 'cvar01', 'branch', 'product', 'censust', 'sch', 'cinstcl', 'natguar', 'cr', 'cvar02', 'cvar03', 'cvar05', 'cvar07', 'cvar10', 'cvar09', 'cvar11', 'cvar12', 'cvar14', 'cvar15']
-SC53 records: 39
+1000539082.0;E1;795669K;INCOMM MARKETING SDN. BHD.;04/06/2010;2067213729.0;FL;150000.0;0.00037799999999999997;0.0;0.0;;;0233;01155;;
+1000539970.0;E1;571370V;BENGKEL MENGIMPAL KERETA KK SDN. BHD.;29/06/2010;2057778213.0;FL;200000.0;0.00013279999999999998;0.0;0.0;;;0233;01155;;
 
-Processing SCEI datasets...
-Read lnipgs08.sas7bdat: 2135 records, columns: ['product', 'censust', 'sch', 'cinstcl', 'natguar', 'cvar02', 'cvar01', 'cvar06', 'cvar03', 'cvar04', 'cvar14', 'cvar13', 'cvar08', 'cvar09', 'cvar10', 'cvar11', 'cvar05', 'cvar07', 'cvar12', 'cvar15', 'branch']
-SCEI records: 1
 
-Processing OTH datasets...
-Read lnnpgs08.sas7bdat: 1287 records, columns: ['product', 'censust', 'sch', 'cinstcl', 'natguar', 'cr', 'cvar02', 'cvar01', 'cvar06', 'cvar03', 'cvar04', 'cvar14', 'cvar13', 'cvar08', 'cvar09', 'cvar10', 'cvar11', 'cvar05', 'cvar07', 'cvar12', 'cvar15', 'branch']
-OTH records: 1269
+samples of production output:
 
-Combining all datasets...
-SC53: 39 records
-SCEI: 1 records
-OTH: 1269 records
-Total NPGS records: 1309
+1000539082;E1;795669K;INCOMM MARKETING SDN. BHD.;04/06/2010;2067213729;FL;150000.00;0.00;0.00;0;;;0233;01155;
+1000539970;E1;571370V;BENGKEL MENGIMPAL KERETA KK SDN. BHD.;29/06/2010;2057778213;FL;200000.00;0.00;0.00;0;;;0233;01155;
 
-Writing COMBT.txt...
 
-============================================================
-PUBLIC BANK BERHAD
-DETAIL OF ACCTS NON-PG FOR SUBMISSION TO CGC @ 310826
-============================================================
-
-Processing complete. Files: COMBT.txt, COMBR.txt
-Output directory: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBSNPGS
-Total records: 1309
-
-Records by CVAR02:
-  1H: 64
-  1Z: 497
-  2H: 1
-  2Z: 32
-  3H: 3
-  3Z: 171
-  4Z: 8
-  5H: 4
-  5S: 4
-  5Z: 1
-  6H: 1
-  E1: 39
-  E2: 1
-  E6: 3
-  F5: 175
-  G1: 2
-  H6: 303
+theres quite difference there. fix it
