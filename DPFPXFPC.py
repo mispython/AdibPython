@@ -83,7 +83,7 @@ def eibsnpgs():
     print(f"NPGSI Path: {npgsi_path}")
     print(f"Output Path: {output_path}")
     
-    # Define required columns for output
+    # Define required columns for processing (includes cvarxx and filter columns)
     required_cols = ['cvar01','cvar02','cvar03','cvar04','cvar05','cvar06',
                     'cvar07','cvar08','cvar09','cvar10','cvar11','cvar12',
                     'cvar13','cvar14','cvar15','cvarxx','natguar','cinstcl']
@@ -339,20 +339,23 @@ def eibsnpgs():
     # 4. Combine all datasets (SC53 SCEI OTH)
     print("\nCombining all datasets...")
     
-    # Define final output columns
+    # Define final output columns for COMBT.txt (WITHOUT cvarxx)
     final_cols = ['cvar01','cvar02','cvar03','cvar04','cvar05','cvar06',
                  'cvar07','cvar08','cvar09','cvar10','cvar11','cvar12',
-                 'cvar13','cvar14','cvar15','cvarxx']
+                 'cvar13','cvar14','cvar15']
+    
+    # Define columns for report (WITH cvarxx)
+    report_cols = final_cols + ['cvarxx']
     
     all_dfs = []
     for df_name, df in [("SC53", sc53_df), ("SCEI", scei_df), ("OTH", oth_df)]:
         if not df.is_empty():
-            # Ensure all final columns exist
-            for col in final_cols:
+            # Ensure all report columns exist
+            for col in report_cols:
                 if col not in df.columns:
                     df = df.with_columns(pl.lit(None).alias(col))
-            # Select only final columns
-            df = df.select(final_cols)
+            # Select only report columns
+            df = df.select(report_cols)
             all_dfs.append(df)
             print(f"{df_name}: {len(df)} records")
     
@@ -368,6 +371,7 @@ def eibsnpgs():
     # Add LASTCOL
     npgs_df = npgs_df.with_columns(pl.lit("").alias("lastcol"))
     
+    # Output columns for COMBT.txt (final_cols + lastcol, WITHOUT cvarxx)
     output_cols = final_cols + ['lastcol']
     
     print("\nWriting COMBT.txt...")
@@ -387,9 +391,6 @@ def eibsnpgs():
                 elif col == 'cvar05':
                     # Date column
                     values.append(format_date_sas(val))
-                elif col == 'cvarxx':
-                    # Empty column (10 spaces)
-                    values.append("")
                 else:
                     # Character columns
                     if val is None:
