@@ -23,56 +23,50 @@ CHUNK_SIZE = 100000
 
 
 # =========================
-# Calculate REPTDATE
-# =========================
-REPTDATE = date.today() - timedelta(days=1)
-REPTMON  = f"{REPTDATE.month:02d}"
-REPTDAY  = f"{REPTDATE.day:02d}"
-REPTYEAR = f"{REPTDATE.year:04d}"
-SDATE_INT = date_to_sas_days(REPTDATE)
-SDATE     = f"{SDATE_INT:05d}"
-NORMDT = f"{REPTDAY}/{REPTMON}/{REPTYEAR}"
-
-print(f"Report Date: {REPTDATE}")
-print(f"Normalization Date: {NORMDT}")
-
-# ---- Input SAS datasets (dynamic naming based on REPTDATE) ----
-LOAN_LNNOTE   = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m{REPTMON}.sas7bdat")
-LOAN_LNCOMM   = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m{REPTMON}.sas7bdat")
-LOANI_LNNOTE  = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m{REPTMON}.sas7bdat")
-LOANI_LNCOMM  = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m{REPTMON}.sas7bdat")
-
-CISLN_LOAN    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/loan.sas7bdat")
-
-COLL_FILE     = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_{REPTYEAR}{REPTMON}{REPTDAY}")
-DESC_FILE     = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_{REPTYEAR}{REPTMON}{REPTDAY}")
-
-MICR_FILE     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/BOPESS.txt")
-NPGS_SMEZ     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/smez.sas7bdat")
-
-print(f"Input files:")
-print(f"  LOAN_LNNOTE: {LOAN_LNNOTE}")
-print(f"  LOAN_LNCOMM: {LOAN_LNCOMM}")
-print(f"  LOANI_LNNOTE: {LOANI_LNNOTE}")
-print(f"  LOANI_LNCOMM: {LOANI_LNCOMM}")
-print(f"  CISLN_LOAN: {CISLN_LOAN}")
-print(f"  COLL_FILE: {COLL_FILE}")
-print(f"  DESC_FILE: {DESC_FILE}")
-print(f"  MICR_FILE: {MICR_FILE}")
-print(f"  NPGS_SMEZ: {NPGS_SMEZ}")
-
-
-# =========================
-# Helper functions
+# Helper functions (defined BEFORE use)
 # =========================
 def sas_days_to_date(days: int) -> date:
+    """Convert SAS date (days since 1960-01-01) to Python date"""
     origin = date(1960, 1, 1)
     return origin + timedelta(days=int(days))
 
 
 def date_to_sas_days(d: date) -> int:
+    """Convert Python date to SAS date (days since 1960-01-01)"""
     origin = date(1960, 1, 1)
     return (d - origin).days
+
+
+def parse_mmddyy8_from_z11_prefix_to_date(x) -> date | None:
+    if x is None:
+        return None
+    try:
+        xi = int(x)
+        if xi <= 0:
+            return None
+        s = f"{xi:011d}"[:8]
+        try:
+            return datetime.strptime(s, "%m%d%Y").date()
+        except Exception:
+            return datetime.strptime(s, "%m%d%y").date()
+    except Exception:
+        return None
+
+
+def month_end_of(d: date) -> date:
+    if d.month in (1, 3, 5, 7, 8, 10, 12):
+        last = 31
+    elif d.month in (4, 6, 9, 11):
+        last = 30
+    else:
+        last = 29 if (d.year % 4 == 0) else 28
+    return date(d.year, d.month, last)
+
+
+def format_date_ddmmyyyy(d: date | None) -> str:
+    if d is None:
+        return "          "
+    return f"{d.day:02d}/{d.month:02d}/{d.year:04d}"
 
 
 def read_sas7bdat_filtered(filepath: Path, entity_filter: str = None, 
@@ -212,36 +206,44 @@ def read_fixed_width_text(filepath: Path, col_specs: list, encoding: str = 'asci
     return pl.DataFrame(rows)
 
 
-def parse_mmddyy8_from_z11_prefix_to_date(x) -> date | None:
-    if x is None:
-        return None
-    try:
-        xi = int(x)
-        if xi <= 0:
-            return None
-        s = f"{xi:011d}"[:8]
-        try:
-            return datetime.strptime(s, "%m%d%Y").date()
-        except Exception:
-            return datetime.strptime(s, "%m%d%y").date()
-    except Exception:
-        return None
+# =========================
+# Calculate REPTDATE (now AFTER function definitions)
+# =========================
+REPTDATE = date.today() - timedelta(days=1)
+REPTMON  = f"{REPTDATE.month:02d}"
+REPTDAY  = f"{REPTDATE.day:02d}"
+REPTYEAR = f"{REPTDATE.year:04d}"
+SDATE_INT = date_to_sas_days(REPTDATE)
+SDATE     = f"{SDATE_INT:05d}"
+NORMDT = f"{REPTDAY}/{REPTMON}/{REPTYEAR}"
 
+print(f"Report Date: {REPTDATE}")
+print(f"Normalization Date: {NORMDT}")
 
-def month_end_of(d: date) -> date:
-    if d.month in (1, 3, 5, 7, 8, 10, 12):
-        last = 31
-    elif d.month in (4, 6, 9, 11):
-        last = 30
-    else:
-        last = 29 if (d.year % 4 == 0) else 28
-    return date(d.year, d.month, last)
+# ---- Input SAS datasets (dynamic naming based on REPTDATE) ----
+LOAN_LNNOTE   = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m{REPTMON}.sas7bdat")
+LOAN_LNCOMM   = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m{REPTMON}.sas7bdat")
+LOANI_LNNOTE  = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m{REPTMON}.sas7bdat")
+LOANI_LNCOMM  = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m{REPTMON}.sas7bdat")
 
+CISLN_LOAN    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMHPTOP/loan.sas7bdat")
 
-def format_date_ddmmyyyy(d: date | None) -> str:
-    if d is None:
-        return "          "
-    return f"{d.day:02d}/{d.month:02d}/{d.year:04d}"
+COLL_FILE     = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_{REPTYEAR}{REPTMON}{REPTDAY}")
+DESC_FILE     = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_{REPTYEAR}{REPTMON}{REPTDAY}")
+
+MICR_FILE     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/BOPESS.txt")
+NPGS_SMEZ     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/smez.sas7bdat")
+
+print(f"\nInput files:")
+print(f"  LOAN_LNNOTE: {LOAN_LNNOTE}")
+print(f"  LOAN_LNCOMM: {LOAN_LNCOMM}")
+print(f"  LOANI_LNNOTE: {LOANI_LNNOTE}")
+print(f"  LOANI_LNCOMM: {LOANI_LNCOMM}")
+print(f"  CISLN_LOAN: {CISLN_LOAN}")
+print(f"  COLL_FILE: {COLL_FILE}")
+print(f"  DESC_FILE: {DESC_FILE}")
+print(f"  MICR_FILE: {MICR_FILE}")
+print(f"  NPGS_SMEZ: {NPGS_SMEZ}")
 
 
 # =========================
