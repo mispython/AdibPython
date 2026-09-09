@@ -2,6 +2,24 @@
 """
 File Name: EIBTNPGS
 Non-Performing Government Scheme Trade Finance Processing
+
+Corrected version:
+  - Step 2 (CRFT) and Step 10 (MICR) now use fixed-column parsing
+    (str.slice) to mirror SAS's column-based INFILE/INPUT statements,
+    instead of whitespace-splitting which misaligns fields whenever
+    padding between values varies from line to line.
+  - All ACCTNO / CENSUS / CVAR01 / CVAR06 / BRANCH columns coming out
+    of pyreadstat (which always returns SAS numerics as float64) are
+    explicitly rounded and cast to Int64 immediately after each read,
+    so every downstream join has matching key dtypes.
+  - String join keys sourced from .sas7bdat files (SUBACCT, TRANSREF,
+    TRANSREX, BRANCH-as-text where relevant) are stripped of the
+    trailing padding SAS stores them with, so they compare equal to
+    the stripped values produced from the fixed-width text parses.
+  - The SUBA1/SUBA2 -> SUBALMT merge uses how='full' with
+    coalesce=True (polars' current name for a two-sided SAS MERGE),
+    since 'outer' is deprecated and previously left duplicate
+    ACCTNO/ACCTNO_right columns behind.
 """
 
 import duckdb
@@ -11,26 +29,45 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import calendar
 import saspy
-import os
 
 
 # ============================================================================
 # PATH CONFIGURATION
 # ============================================================================
-# Define each file path independently using Path()
 CRFTABL_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/crftabl.txt")
 BTRSA_MAST_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/mast{reptday}{reptmon}.sas7bdat")
 BTRSA_CRED_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/cred{reptday}{reptmon}.sas7bdat")
 BTRSA_PROV_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/prov{reptday}{reptmon}.sas7bdat")
 BTRSA_SUBA_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/suba{reptday}{reptmon}.sas7bdat")
-COLL_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_{reptyear}{reptmon}{reptday}")
-DESC_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_{reptyear}{reptmon}{reptday}")
+COLL_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/lccrisex_{reptyear}{reptmon}{reptday}.sas7bdat")
+DESC_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/lccrisex_desc_{reptyear}{reptmon}{reptday}.sas7bdat")
 MICR_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/BOPESS.txt")
 NPLA_FILE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/npla.sas7bdat")
 OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBTNPGS")
 
-# Output file - will be determined based on report date
 OUTPUT_FILE = None  # Set after determining report date
+
+
+# ============================================================================
+# HELPERS
+# ============================================================================
+def sas_int(col: str) -> pl.Expr:
+    """
+    pyreadstat returns every SAS numeric as float64. Round (to absorb
+    floating point noise) and cast to Int64 so these columns can be
+    safely used as join keys against integers parsed elsewhere.
+    """
+    return pl.col(col).round(0).cast(pl.Int64, strict=False)
+
+
+def strip_str(col: str) -> pl.Expr:
+    """
+    SAS character variables are fixed-width and space padded.
+    pyreadstat preserves that padding, so strip it before using the
+    column as a join key or comparing it to a value parsed from a
+    stripped, fixed-column text extraction.
+    """
+    return pl.col(col).cast(pl.Utf8).str.strip_chars()
 
 
 # ============================================================================
@@ -44,7 +81,6 @@ con = duckdb.connect()
 # ============================================================================
 print("Step 1: Setting report date...")
 
-# Use yesterday's date as the report date
 reptdate = datetime.now() - timedelta(days=1)
 
 REPTMON = f"{reptdate.month:02d}"
@@ -54,61 +90,55 @@ RDATE = (reptdate - datetime(1960, 1, 1)).days  # SAS date value
 
 print(f"Report Date: {reptdate}, RDATE: {RDATE}")
 
-# Set output file name
 OUTPUT_FILE = OUTPUT_DIR / f"btnpgs{REPTMON}.sas7bdat"
 
-# Update BTRSA file paths with date suffix
 BTRSA_MAST_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/mast{REPTDAY}{REPTMON}.sas7bdat")
 BTRSA_CRED_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/cred{REPTDAY}{REPTMON}.sas7bdat")
 BTRSA_PROV_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/prov{REPTDAY}{REPTMON}.sas7bdat")
 BTRSA_SUBA_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/suba{REPTDAY}{REPTMON}.sas7bdat")
 
-# Update COLL and DESC files with date (EBCDIC files, uppercase names)
-COLL_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_{REPTYEAR}{REPTMON}{REPTDAY}")
-DESC_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_{REPTYEAR}{REPTMON}{REPTDAY}")
-
-# Print file paths for debugging
-print(f"COLL_FILE: {COLL_FILE}")
-print(f"DESC_FILE: {DESC_FILE}")
-print(f"COLL_FILE exists: {COLL_FILE.exists()}")
-print(f"DESC_FILE exists: {DESC_FILE.exists()}")
+COLL_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/lccrisex_{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat")
+DESC_FILE = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/lccrisex_desc_{REPTYEAR}{REPTMON}{REPTDAY}.sas7bdat")
 
 
 # ============================================================================
-# STEP 2: PROCESS CRFTABL (Credit Facility Table)
+# STEP 2: PROCESS CRFTABL (Credit Facility Table) - FIXED-COLUMN PARSING
 # ============================================================================
 print("Step 2: Processing credit facility table...")
 
-# Read text file - fixed width format
-crft_data = pl.read_csv(
-    CRFTABL_FILE, 
-    has_header=False, 
-    new_columns=['data']
-)
+# SAS:
+#   INPUT @001  RECTYP1 $1. @;
+#   IF RECTYP1='1' THEN DELETE;    ELSE
+#   INPUT  @004 TFID        $8.
+#          @012 SUBACCT     $5.
+#          @365 PREIND      $1.
+#          @368 CENSUST      1.
+#          @377 ACCTNO      10.;
+# SAS column N is 1-indexed; Python str.slice offsets are 0-indexed,
+# so offset = N - 1.
 
-# Parse the fixed-width data based on observed format
+with open(CRFTABL_FILE, 'r') as f:
+    lines = f.readlines()
+
+print("First few lines of crftabl.txt:")
+for i, line in enumerate(lines[:5]):
+    print(f"Line {i}: '{line.rstrip()}'")
+
+crft_data = pl.DataFrame({'data': [line.rstrip('\n') for line in lines]})
+
 crft_data = crft_data.with_columns([
-    pl.col('data').str.slice(0, 1).alias('RECTYP1'),
-    pl.col('data').str.slice(1, 4).alias('BRANCH_TEMP'),
-    pl.col('data').str.slice(12, 17).alias('SUBACCT'),
-    pl.col('data').str.slice(23, 35).alias('TFID'),
-    pl.col('data').str.slice(221, 231).str.strip_chars().cast(pl.Int64, strict=False).alias('ACCTNO')
-]).select(['RECTYP1', 'TFID', 'SUBACCT', 'ACCTNO'])
+    pl.col('data').str.slice(0, 1).alias('RECTYP1'),                                     # @001 $1.
+    pl.col('data').str.slice(3, 8).str.strip_chars().alias('TFID'),                       # @004 $8.
+    pl.col('data').str.slice(11, 5).str.strip_chars().alias('SUBACCT'),                   # @012 $5.
+    pl.col('data').str.slice(364, 1).alias('PREIND'),                                     # @365 $1.
+    pl.col('data').str.slice(367, 1).cast(pl.Int64, strict=False).alias('CENSUST'),       # @368 1.
+    pl.col('data').str.slice(376, 10).str.strip_chars().cast(pl.Int64, strict=False).alias('ACCTNO'),  # @377 10.
+]).select(['RECTYP1', 'TFID', 'SUBACCT', 'PREIND', 'CENSUST', 'ACCTNO'])
 
-# Add placeholder columns that will be filled later
-crft_data = crft_data.with_columns([
-    pl.lit('').alias('PREIND'),
-    pl.lit(0).cast(pl.Int64).alias('CENSUST')
-])
+# Filter out header/record-type '1' rows
+crft_data = crft_data.filter(pl.col('RECTYP1') != '1')
 
-# Filter out header record and records where RECTYP1='1'
-crft_data = crft_data.filter(
-    (pl.col('RECTYP1') != '1') & 
-    (pl.col('ACCTNO').is_not_null()) &
-    (pl.col('ACCTNO') > 0)
-)
 
-# Assign SCH based on CENSUST (default to blank for now)
 def assign_sch(censust):
     """Assign scheme code based on census type"""
     if censust == 3:
@@ -124,6 +154,7 @@ def assign_sch(censust):
     else:
         return '   '
 
+
 crft_data = crft_data.with_columns([
     pl.struct(['CENSUST']).map_elements(
         lambda x: assign_sch(x['CENSUST']),
@@ -131,8 +162,8 @@ crft_data = crft_data.with_columns([
     ).alias('SCH')
 ])
 
-# For now, keep all records with blank SCH (will need to get CENSUST from another source)
-# Remove duplicates
+crft_data = crft_data.filter(pl.col('SCH') != '   ')
+
 crft_data = crft_data.unique(subset=['ACCTNO', 'CENSUST', 'SUBACCT'], keep='first')
 
 
@@ -141,48 +172,33 @@ crft_data = crft_data.unique(subset=['ACCTNO', 'CENSUST', 'SUBACCT'], keep='firs
 # ============================================================================
 print("Step 3: Merging with master account data...")
 
-# Read sas7bdat file
 mast_df, mast_meta = pyreadstat.read_sas7bdat(BTRSA_MAST_FILE)
-mast_data = pl.from_pandas(mast_df).select([
-    'ACCTNO', 'FICODE', 'NAME', 'BUSREGN'
-]).unique(subset=['ACCTNO'], keep='first')
+mast_data = pl.from_pandas(mast_df).select(['ACCTNO', 'FICODE', 'NAME', 'BUSREGN'])
 
-# Convert ACCTNO to Int64 to match crft_data
 mast_data = mast_data.with_columns([
-    pl.col('ACCTNO').cast(pl.Int64).alias('ACCTNO')
-])
+    sas_int('ACCTNO'),
+    sas_int('FICODE'),
+    strip_str('NAME').alias('NAME'),
+    strip_str('BUSREGN').alias('BUSREGN'),
+]).unique(subset=['ACCTNO'], keep='first')
 
 crft_merged = crft_data.join(mast_data, on='ACCTNO', how='inner')
 
-# Rename FICODE to BRANCH
 crft_merged = crft_merged.with_columns([
-    pl.col('FICODE').cast(pl.Utf8).alias('BRANCH')  # Cast to string
+    pl.col('FICODE').alias('BRANCH')
 ])
 
-# Filter where ACCTNO > 0
 crft_merged = crft_merged.filter(pl.col('ACCTNO') > 0)
 
-# Select columns for CRFT
 crft_final = crft_merged.select([
     'BRANCH', 'ACCTNO', 'SUBACCT', 'NAME', 'BUSREGN', 'CENSUST', 'TFID', 'SCH'
 ]).unique(subset=['ACCTNO', 'SUBACCT'], keep='first')
 
-# Ensure ACCTNO is Int64 in crft_final
-crft_final = crft_final.with_columns([
-    pl.col('ACCTNO').cast(pl.Int64).alias('ACCTNO')
-])
-
-# Create CRFT1 with modified SUBACCT
 crft1_data = crft_merged.with_columns([
     (pl.lit('FAC') + pl.col('SUBACCT').str.slice(0, 1)).alias('SUBACCT')
 ]).select([
     'BRANCH', 'ACCTNO', 'SUBACCT', 'NAME', 'BUSREGN', 'CENSUST', 'TFID', 'SCH'
 ]).unique(subset=['ACCTNO', 'SUBACCT'], keep='first')
-
-# Ensure ACCTNO is Int64 in crft1_data
-crft1_data = crft1_data.with_columns([
-    pl.col('ACCTNO').cast(pl.Int64).alias('ACCTNO')
-])
 
 
 # ============================================================================
@@ -190,30 +206,27 @@ crft1_data = crft1_data.with_columns([
 # ============================================================================
 print("Step 4: Processing credit data...")
 
-# Read sas7bdat file
 cred_df, cred_meta = pyreadstat.read_sas7bdat(BTRSA_CRED_FILE)
 cred_data = pl.from_pandas(cred_df)
 
-# Convert ACCTNO to Int64 in cred_data
 cred_data = cred_data.with_columns([
-    pl.col('ACCTNO').cast(pl.Int64).alias('ACCTNO')
+    sas_int('ACCTNO'),
+    strip_str('SUBACCT').alias('SUBACCT'),
+    strip_str('TRANSREF').alias('TRANSREF'),
 ])
 
-# Merge with CRFT
 cred_data = cred_data.join(crft_final, on=['ACCTNO', 'SUBACCT'], how='inner')
 
-# Filter conditions
+# SAS compares TRANSREF to two literal blanks - i.e. "not blank" once stripped
 cred_data = cred_data.filter(
     (pl.col('SUBACCT').str.slice(0, 3) != 'FAC') &
-    (pl.col('TRANSREF') != '  ')
+    (pl.col('TRANSREF') != '')
 )
 
-# Create TRANSREX
 cred_data = cred_data.with_columns([
     pl.col('TRANSREF').str.slice(0, 7).alias('TRANSREX')
 ])
 
-# Remove duplicates
 cred_data = cred_data.unique(subset=['ACCTNO', 'TRANSREF'], keep='first')
 
 
@@ -234,39 +247,159 @@ cred1_data = cred_data.filter(
 # ============================================================================
 print("Step 6: Processing provision data...")
 
-# Read sas7bdat file
 prov_df, prov_meta = pyreadstat.read_sas7bdat(BTRSA_PROV_FILE)
-prov_data = pl.from_pandas(prov_df).filter(
-    ~pl.col('NPLIND').is_in(['P', 'F'])
-)
+prov_data = pl.from_pandas(prov_df)
 
-# Convert ACCTNO to Int64 in prov_data
+# ----------------------------------------------------------------------
+# ASSUMPTION - NOT CONFIRMED AGAINST SOURCE DOCUMENTATION
+# ----------------------------------------------------------------------
+# The original SAS program's PROV dataset carried a MATUREDS column
+# directly. The current PROV source (CCRIS-derived layout: RECTYPE,
+# CCRISFAC, ACCTNOX, POSIDATE, TENOR_INT, CALBASP, ...) has no
+# MATUREDS column at all.
+#
+# Working assumption, pending confirmation from the data owner:
+#   MATUREDS = POSIDATE (as a SAS date) + TENOR_INT, with TENOR_INT
+#              interpreted as a day count.
+#
+# Basis for this guess:
+#   - POSIDATE (YYMMDD) matches the report/position date in every
+#     sample row seen so far - consistent with it being an
+#     origination/position date, not a maturity date on its own.
+#   - TENOR_INT = 0 in every sample row seen so far, and all of those
+#     rows are FAC/OV subaccounts - which STEP 6 already excludes via
+#     SUBSTR(SUBACCT,1,3) IN ('OV ','FAC'). Zero tenor on non-maturing
+#     facility/overdraft lines is consistent with this being a real
+#     tenor field rather than a broken one.
+#   - No sample row with a non-zero TENOR_INT has been seen, so the
+#     UNIT (days vs. months) is UNCONFIRMED. If TENOR_INT is actually
+#     months, every derived MATUREDS below will be wrong by ~30x.
+#
+# This directly drives NODAYS -> ARREARS -> CVAR11/CVAR12 (NPL
+# classification). Treat every NPL-status output as provisional until
+# this is verified against the real source system / data dictionary.
 prov_data = prov_data.with_columns([
-    pl.col('ACCTNO').cast(pl.Int64).alias('ACCTNO')
+    sas_int('ACCTNO'),
+    strip_str('TRANSREX').alias('TRANSREX'),
+    strip_str('NPLIND').alias('NPLIND'),
+    sas_int('TENOR_INT').alias('TENOR_INT'),
+]).filter(~pl.col('NPLIND').is_in(['P', 'F']))
+
+
+def posidate_to_sas_date(posidate):
+    """Convert a YYMMDD numeric POSIDATE into a SAS date value (days since 1960-01-01)."""
+    if posidate is None or posidate <= 0:
+        return None
+    date_str = str(int(posidate)).zfill(6)
+    try:
+        year = int(date_str[0:2])
+        month = int(date_str[2:4])
+        day = int(date_str[4:6])
+        year += 1900 if year >= 40 else 2000
+        d = datetime(year, month, day)
+        return (d - datetime(1960, 1, 1)).days
+    except Exception:
+        return None
+
+
+prov_data = prov_data.with_columns([
+    pl.col('POSIDATE').map_elements(posidate_to_sas_date, return_dtype=pl.Int64).alias('_POSIDATE_SAS')
 ])
 
-# Merge PROV with CRED data to get TRANSREX, SUBACCT, and OUTSTAND
+prov_data = prov_data.with_columns([
+    pl.when(pl.col('_POSIDATE_SAS').is_not_null())
+    .then(pl.col('_POSIDATE_SAS') + pl.col('TENOR_INT').fill_null(0))
+    .otherwise(None)
+    .alias('MATUREDS')
+]).drop('_POSIDATE_SAS')
+
 cred2_data = prov_data.join(
     cred_data.select(['ACCTNO', 'TRANSREX', 'SUBACCT', 'OUTSTAND']),
-    on=['ACCTNO'],
+    on=['ACCTNO', 'TRANSREX'],
     how='inner'
 )
 
-# Filter out FAC and OV subaccounts
 cred2_data = cred2_data.filter(
     ~pl.col('SUBACCT').str.slice(0, 3).is_in(['OV ', 'FAC'])
 )
 
-# Since MATUREDS doesn't exist in provision data, use a placeholder
-# We'll set NODAYS to 0 and ARREARS to 0 for now
+cred2_data = cred2_data.sort(['ACCTNO', 'MATUREDS']).unique(
+    subset=['ACCTNO'], keep='first'
+)
+
+
+# SAS: ARREARS = INPUT(NODAYS, NDAYS.)
+# NDAYS. is a custom informat defined in PBBLNFMT (PROC FORMAT/INVALUE),
+# confirmed contents below. It is NOT a simple 30/60/90/120/150/180/365
+# ladder - it's a ~monthly (30-31 day) ladder from bucket 0 (<=30 days)
+# up through bucket 24 (>=730 days), with SAS ranges being INCLUSIVE on
+# both ends (SAS INVALUE '-' ranges are inclusive).
+_NDAYS_TABLE = [
+    (None, 30, 0),
+    (31, 59, 1),
+    (60, 89, 2),
+    (90, 121, 3),
+    (122, 151, 4),
+    (152, 182, 5),
+    (183, 213, 6),
+    (214, 243, 7),
+    (244, 273, 8),
+    (274, 303, 9),
+    (304, 333, 10),
+    (334, 364, 11),
+    (365, 394, 12),
+    (395, 424, 13),
+    (425, 456, 14),
+    (457, 486, 15),
+    (487, 516, 16),
+    (517, 547, 17),
+    (548, 577, 18),
+    (578, 608, 19),
+    (609, 638, 20),
+    (639, 668, 21),
+    (669, 698, 22),
+    (699, 729, 23),
+    (730, None, 24),
+]
+
+
+def calculate_arrears(nodays):
+    """
+    Translate NODAYS into an arrears bucket using the verified NDAYS.
+    informat table from PBBLNFMT (LOW-30=0 ... 730-HIGH=24).
+    """
+    for low, high, result in _NDAYS_TABLE:
+        lo_ok = (low is None) or (nodays >= low)
+        hi_ok = (high is None) or (nodays <= high)
+        if lo_ok and hi_ok:
+            return result
+    return 24  # fall back to the open-ended top bucket, defensive only
+
+
 cred2_data = cred2_data.with_columns([
-    pl.lit(0).cast(pl.Int64).alias('NODAYS'),
-    pl.lit(0).cast(pl.Int64).alias('ARREARS'),
-    pl.lit(None).cast(pl.Float64).alias('MATUREDS')
+    pl.when((pl.col('MATUREDS').is_not_null()) & (pl.col('MATUREDS') > 0) & (pl.lit(RDATE) > pl.col('MATUREDS')))
+    .then((pl.lit(RDATE) - pl.col('MATUREDS')) + 1)
+    .otherwise(0).alias('NODAYS')
 ])
 
-# Keep first record per ACCTNO
-cred2_data = cred2_data.unique(subset=['ACCTNO'], keep='first')
+cred2_data = cred2_data.with_columns([
+    pl.when(pl.col('NODAYS') > 0)
+    .then(pl.struct(['NODAYS']).map_elements(
+        lambda x: calculate_arrears(x['NODAYS']),
+        return_dtype=pl.Int64
+    ))
+    .otherwise(0).alias('ARREARS')
+])
+
+# SAS: IF ARREARS=24 THEN ARREARS=ROUND(NODAYS/30);
+# The top NDAYS. bucket (730+ days) is open-ended, so once a record
+# lands in bucket 24 the SAS code recomputes ARREARS as an actual
+# month count instead of leaving it pinned at 24.
+cred2_data = cred2_data.with_columns([
+    pl.when(pl.col('ARREARS') == 24)
+    .then((pl.col('NODAYS') / 30).round(0).cast(pl.Int64))
+    .otherwise(pl.col('ARREARS')).alias('ARREARS')
+])
 
 cred2_final = cred2_data.select(['ACCTNO', 'ARREARS', 'MATUREDS', 'NODAYS'])
 
@@ -276,66 +409,51 @@ cred2_final = cred2_data.select(['ACCTNO', 'ARREARS', 'MATUREDS', 'NODAYS'])
 # ============================================================================
 print("Step 7: Processing subaccount data...")
 
-# Read sas7bdat file
 suba_df, suba_meta = pyreadstat.read_sas7bdat(BTRSA_SUBA_FILE)
 suba_data = pl.from_pandas(suba_df)
 
-# Convert ACCTNO to Int64 in suba_data
 suba_data = suba_data.with_columns([
-    pl.col('ACCTNO').cast(pl.Int64).alias('ACCTNO')
+    sas_int('ACCTNO'),
+    strip_str('SUBACCT').alias('SUBACCT'),
+    strip_str('TRANSREF').alias('TRANSREF'),
 ])
 
-# Merge with CRFT1
 suba_data = suba_data.join(crft1_data, on=['ACCTNO', 'SUBACCT'], how='inner')
 
-# Create SUBA1 (FAC subaccounts)
 suba1_data = suba_data.filter(
     pl.col('SUBACCT').str.slice(0, 3) == 'FAC'
 ).unique(subset=['ACCTNO', 'SUBACCT'], keep='first')
 
-# Summarize LIMTCURM for SUBA1
-if 'LIMTCURM' in suba1_data.columns:
-    suba1_summary = suba1_data.group_by('ACCTNO').agg([
-        pl.col('LIMTCURM').sum().alias('LIMTCURM')
-    ])
-else:
-    # If LIMTCURM doesn't exist, use a placeholder
-    print("Warning: LIMTCURM column not found in SUBA1")
-    suba1_summary = suba1_data.group_by('ACCTNO').agg([
-        pl.lit(0.0).cast(pl.Float64).first().alias('LIMTCURM')
-    ])
+suba1_summary = suba1_data.group_by('ACCTNO').agg([
+    pl.col('LIMTCURM').sum().alias('LIMTCURM')
+])
 
-# Create SUBA2 (non-FAC, non-SGL subaccounts with no TRANSREF)
+# SAS compares TRANSREF to two literal blanks here too
 suba2_data = suba_data.filter(
-    (pl.col('TRANSREF') == '  ') &
+    (pl.col('TRANSREF') == '') &
     (pl.col('SUBACCT').str.slice(0, 3) != 'FAC') &
     (pl.col('SUBACCT').str.slice(1, 3) != 'SGL')
 ).unique(subset=['ACCTNO', 'SUBACCT'], keep='first')
 
-# Summarize LIMITS for SUBA2
-if 'LIMTCURM' in suba2_data.columns:
-    suba2_summary = suba2_data.group_by('ACCTNO').agg([
-        pl.col('LIMTCURM').sum().alias('LIMITS')
-    ])
-else:
-    # If LIMTCURM doesn't exist, use placeholder
-    print("Warning: LIMTCURM column not found in SUBA2")
-    suba2_summary = suba2_data.group_by('ACCTNO').agg([
-        pl.lit(0.0).cast(pl.Float64).first().alias('LIMITS')
-    ])
+suba2_summary = suba2_data.group_by('ACCTNO').agg([
+    pl.col('LIMTCURM').sum().alias('LIMITS')
+])
 
-# Merge SUBA1 and SUBA2 summaries
-subalmt_data = suba1_summary.join(suba2_summary, on='ACCTNO', how='full')  # Changed from 'outer' to 'full'
+# SAS "MERGE SUBA1 SUBA2; BY ACCTNO;" is a two-way merge (outer join).
+# 'outer' is deprecated in current polars; use 'full' with coalesce=True
+# so a single ACCTNO column comes out instead of ACCTNO/ACCTNO_right.
+subalmt_data = suba1_summary.join(
+    suba2_summary, on='ACCTNO', how='full', coalesce=True
+)
 
-# Use LIMITS if LIMTCURM is null
 subalmt_data = subalmt_data.with_columns([
     pl.when(pl.col('LIMTCURM').is_null())
     .then(pl.col('LIMITS'))
     .otherwise(pl.col('LIMTCURM')).alias('LIMTCURM')
 ])
 
-# Process SUBA for issue dates
-suba_issue = suba_data.filter(pl.col('TRANSREF') != '   ')
+# SAS: IF TRANSREF NE '   ' (three literal blanks) -> "not blank" once stripped
+suba_issue = suba_data.filter(pl.col('TRANSREF') != '')
 
 
 def calculate_issue_date(creatds, transref):
@@ -343,14 +461,12 @@ def calculate_issue_date(creatds, transref):
     if creatds is None or creatds <= 0:
         return None, 99999
 
-    # Convert CREATDS (YYMMDD) to date
     date_str = str(int(creatds)).zfill(6)
     try:
         year = int(date_str[:2])
         month = int(date_str[2:4])
         day = int(date_str[4:6])
 
-        # Handle 2-digit year (cutoff 1940)
         if year >= 40:
             year += 1900
         else:
@@ -359,39 +475,28 @@ def calculate_issue_date(creatds, transref):
         issue_date = datetime(year, month, day).date()
         issue_sas = (datetime.combine(issue_date, datetime.min.time()) - datetime(1960, 1, 1)).days
 
-        # If TRANSREF starts with 'Y', set MATURED1 to ISSUEDT
         if transref and len(transref) > 0 and transref[0] == 'Y':
             matured1 = issue_sas
         else:
             matured1 = 99999
 
         return issue_sas, matured1
-    except:
+    except Exception:
         return None, 99999
 
 
-# Check if CREATDS exists in suba_data, if not use a different column
-if 'CREATDS' in suba_data.columns:
-    suba_issue = suba_issue.with_columns([
-        pl.struct(['CREATDS', 'TRANSREF']).map_elements(
-            lambda x: calculate_issue_date(x['CREATDS'], x['TRANSREF']),
-            return_dtype=pl.Struct([pl.Field('ISSUEDT', pl.Int64), pl.Field('MATURED1', pl.Int64)])
-        ).alias('_dates')
-    ])
-    
-    suba_issue = suba_issue.with_columns([
-        pl.col('_dates').struct.field('ISSUEDT').alias('ISSUEDT'),
-        pl.col('_dates').struct.field('MATURED1').alias('MATURED1')
-    ]).drop('_dates')
-else:
-    # If CREATDS doesn't exist, use POSIDATE or another date column
-    print("Warning: CREATDS column not found, using alternative date column")
-    suba_issue = suba_issue.with_columns([
-        pl.lit(None).cast(pl.Int64).alias('ISSUEDT'),
-        pl.lit(99999).cast(pl.Int64).alias('MATURED1')
-    ])
+suba_issue = suba_issue.with_columns([
+    pl.struct(['CREATDS', 'TRANSREF']).map_elements(
+        lambda x: calculate_issue_date(x['CREATDS'], x['TRANSREF']),
+        return_dtype=pl.Struct([pl.Field('ISSUEDT', pl.Int64), pl.Field('MATURED1', pl.Int64)])
+    ).alias('_dates')
+])
 
-# Sort and keep first per ACCTNO
+suba_issue = suba_issue.with_columns([
+    pl.col('_dates').struct.field('ISSUEDT').alias('ISSUEDT'),
+    pl.col('_dates').struct.field('MATURED1').alias('MATURED1')
+]).drop('_dates')
+
 suba_issue = suba_issue.sort(['ACCTNO', 'ISSUEDT']).unique(
     subset=['ACCTNO'], keep='first'
 )
@@ -400,102 +505,55 @@ suba_final = suba_issue.select(['ACCTNO', 'ISSUEDT', 'MATURED1'])
 
 
 # ============================================================================
-# STEP 8: PROCESS COLLATERAL DATA (EBCDIC files)
+# STEP 8: PROCESS COLLATERAL DATA
 # ============================================================================
 print("Step 8: Processing collateral data...")
 
-# Read EBCDIC files
-def read_ebcdic_file(file_path, column_specs):
-    """Read EBCDIC file with fixed-width column specifications"""
-    try:
-        with open(file_path, 'rb') as f:
-            raw_data = f.read()
-        
-        # Decode EBCDIC to ASCII
-        decoded_data = raw_data.decode('cp500')  # IBM EBCDIC
-        
-        # Split into lines (assuming fixed record length)
-        # You may need to adjust the record length
-        record_length = 230  # Adjust based on actual record length
-        lines = [decoded_data[i:i+record_length] for i in range(0, len(decoded_data), record_length)]
-        
-        # Create DataFrame
-        data_dict = {}
-        for col_name, (start, end) in column_specs.items():
-            data_dict[col_name] = [line[start:end].strip() for line in lines]
-        
-        return pl.DataFrame(data_dict)
-    except Exception as e:
-        print(f"Error reading EBCDIC file {file_path}: {e}")
-        raise
+coll_df, coll_meta = pyreadstat.read_sas7bdat(COLL_FILE)
+coll_data = pl.from_pandas(coll_df).select(['CCOLLNO', 'ACCTNO'])
+coll_data = coll_data.with_columns([
+    sas_int('CCOLLNO'),
+    sas_int('ACCTNO'),
+])
 
-# Define column specifications for COLL_FILE (adjust positions as needed)
-coll_column_specs = {
-    'CCOLLNO': (0, 15),   # Adjust positions
-    'ACCTNO': (15, 25)    # Adjust positions
-}
+desc_df, desc_meta = pyreadstat.read_sas7bdat(DESC_FILE)
+desc_data = pl.from_pandas(desc_df).select(['CCOLLNO', 'CINSTCL', 'NATGUAR', 'CENSUS'])
+desc_data = desc_data.with_columns([
+    sas_int('CCOLLNO'),
+    strip_str('CINSTCL').alias('CINSTCL'),
+    strip_str('NATGUAR').alias('NATGUAR'),
+])
 
-# Define column specifications for DESC_FILE (adjust positions as needed)
-desc_column_specs = {
-    'CCOLLNO': (0, 15),   # Adjust positions
-    'CINSTCL': (15, 17),  # Adjust positions
-    'NATGUAR': (17, 19),  # Adjust positions
-    'CENSUS': (19, 28)    # Adjust positions
-}
 
-try:
-    # Read EBCDIC files
-    coll_data = read_ebcdic_file(COLL_FILE, coll_column_specs)
-    coll_data = coll_data.with_columns([
-        pl.col('ACCTNO').cast(pl.Int64, strict=False).alias('ACCTNO')
-    ])
-    
-    desc_data = read_ebcdic_file(DESC_FILE, desc_column_specs)
-    
-    # Assign CR based on CENSUS
-    def assign_cr(census):
-        """Assign CR code based on census value"""
-        if census is None or census == '':
-            return '  '
-        try:
-            census_int = int(census)
-            if 51000000 <= census_int <= 51999999:
-                return '51'
-            elif 72000000 <= census_int <= 72999999:
-                return '72'
-            elif 1000000000 <= census_int <= 1099999999:
-                return '10'
-            else:
-                return '  '
-        except:
-            return '  '
-    
-    desc_data = desc_data.with_columns([
-        pl.struct(['CENSUS']).map_elements(
-            lambda x: assign_cr(x['CENSUS']),
-            return_dtype=pl.Utf8
-        ).alias('CR')
-    ])
-    
-    # Filter for specific CR codes
-    desc_data = desc_data.filter(pl.col('CR') != '  ')
-    
-    # Merge collateral data
-    coll_combined = coll_data.join(desc_data, on='CCOLLNO', how='inner')
-    
-    # Filter for specific collateral types
-    coll_combined = coll_combined.filter(
-        (pl.col('CINSTCL') == '18') & (pl.col('NATGUAR') == '06')
-    )
-    
-except Exception as e:
-    print(f"Warning: Could not read EBCDIC files: {e}")
-    # Create empty placeholder with required columns
-    coll_combined = pl.DataFrame({
-        'ACCTNO': pl.Series([], dtype=pl.Int64),
-        'CENSUS': pl.Series([], dtype=pl.Utf8),
-        'CR': pl.Series([], dtype=pl.Utf8)
-    })
+def assign_cr(census):
+    """Assign CR code based on census value"""
+    if census is None:
+        return '  '
+    census_int = int(census)
+    if 51000000 <= census_int <= 51999999:
+        return '51'
+    elif 72000000 <= census_int <= 72999999:
+        return '72'
+    elif 1000000000 <= census_int <= 1099999999:
+        return '10'
+    else:
+        return '  '
+
+
+desc_data = desc_data.with_columns([
+    pl.struct(['CENSUS']).map_elements(
+        lambda x: assign_cr(x['CENSUS']),
+        return_dtype=pl.Utf8
+    ).alias('CR')
+])
+
+desc_data = desc_data.filter(pl.col('CR') != '  ')
+
+coll_combined = coll_data.join(desc_data, on='CCOLLNO', how='inner')
+
+coll_combined = coll_combined.filter(
+    (pl.col('CINSTCL') == '18') & (pl.col('NATGUAR') == '06')
+)
 
 
 # ============================================================================
@@ -503,56 +561,31 @@ except Exception as e:
 # ============================================================================
 print("Step 9: Merging master with collateral...")
 
-# Add CR column to crft_final if not present
-if 'CR' not in crft_final.columns:
-    crft_final = crft_final.with_columns([
-        pl.lit('  ').alias('CR')
-    ])
-
 mast_final = crft_final.join(coll_combined, on='ACCTNO', how='inner')
 
-# If mast_final is empty, use crft_final with placeholder CR
-if len(mast_final) == 0:
-    print("Warning: No matching collateral data, using crft_final with placeholder CR")
-    mast_final = crft_final.with_columns([
-        pl.lit('  ').alias('CR'),
-        pl.lit(None).cast(pl.Utf8).alias('CENSUS')
-    ])
-
-# Remove duplicates
 mast_final = mast_final.unique(subset=['ACCTNO', 'CENSUS'], keep='first')
 
 
 # ============================================================================
-# STEP 10: MERGE WITH MICR DATA
+# STEP 10: MERGE WITH MICR DATA - FIXED-COLUMN PARSING
 # ============================================================================
 print("Step 10: Merging MICR codes...")
 
-# Read BOPESS.txt file
-try:
-    with open(MICR_FILE, 'r') as f:
-        micr_lines = f.readlines()
-    
-    # Create DataFrame with raw data (skip header if present)
-    micr_data = pl.DataFrame({'data': [line.rstrip('\n') for line in micr_lines if line.strip()]})
-    
-    # Parse based on actual format - adjust positions as needed
-    micr_data = micr_data.with_columns([
-        pl.col('data').str.slice(0, 5).cast(pl.Utf8).alias('BRANCH'),  # Cast to string
-        pl.col('data').str.slice(5, 11).alias('MICRCD')
-    ]).select(['BRANCH', 'MICRCD'])
-    
-    # Ensure BRANCH is string type in mast_final
-    mast_final = mast_final.with_columns([
-        pl.col('BRANCH').cast(pl.Utf8).alias('BRANCH')
-    ])
-    
-    mast_final = mast_final.join(micr_data, on='BRANCH', how='left')
-except Exception as e:
-    print(f"Warning: Could not read BOPESS.txt: {e}")
-    mast_final = mast_final.with_columns([
-        pl.lit(None).cast(pl.Utf8).alias('MICRCD')
-    ])
+# SAS:
+#   INPUT @001 BRANCH     3.     (numeric, 3-digit)
+#         @040 MICRCD    $5.     (character, 5 chars)
+
+with open(MICR_FILE, 'r') as f:
+    micr_lines = f.readlines()
+
+micr_data = pl.DataFrame({'data': [line.rstrip('\n') for line in micr_lines]})
+
+micr_data = micr_data.with_columns([
+    pl.col('data').str.slice(0, 3).str.strip_chars().cast(pl.Int64, strict=False).alias('BRANCH'),  # @001 3.
+    pl.col('data').str.slice(39, 5).str.strip_chars().alias('MICRCD'),                                # @040 $5.
+]).select(['BRANCH', 'MICRCD'])
+
+mast_final = mast_final.join(micr_data, on='BRANCH', how='left')
 
 
 # ============================================================================
@@ -588,12 +621,6 @@ def assign_cvar02(sch, cr):
         return '  '
 
 
-# Ensure CR column exists
-if 'CR' not in npgs_data.columns:
-    npgs_data = npgs_data.with_columns([
-        pl.lit('  ').alias('CR')
-    ])
-
 npgs_data = npgs_data.with_columns([
     pl.struct(['SCH', 'CR']).map_elements(
         lambda x: assign_cvar02(x['SCH'], x['CR']),
@@ -601,7 +628,6 @@ npgs_data = npgs_data.with_columns([
     ).alias('CVAR02')
 ])
 
-# Filter where CVAR02 is not blank
 npgs_data = npgs_data.filter(pl.col('CVAR02') != '  ')
 
 
@@ -615,7 +641,6 @@ def format_date(date_obj):
     """Format date as DD/MM/YYYY"""
     if date_obj is None:
         return '          '
-    # Convert SAS date to Python date if needed
     if isinstance(date_obj, (int, float)):
         base_date = datetime(1960, 1, 1).date()
         date_obj = base_date + timedelta(days=int(date_obj))
@@ -624,15 +649,6 @@ def format_date(date_obj):
 
 normdt = f"{REPTDAY}/{REPTMON}/{REPTYEAR}"
 
-# Ensure required columns exist
-if 'MATURED1' not in npgs_data.columns:
-    npgs_data = npgs_data.with_columns([pl.lit(None).cast(pl.Float64).alias('MATURED1')])
-if 'MATUREDS' not in npgs_data.columns:
-    npgs_data = npgs_data.with_columns([pl.lit(None).cast(pl.Float64).alias('MATUREDS')])
-if 'ARREARS' not in npgs_data.columns:
-    npgs_data = npgs_data.with_columns([pl.lit(0).cast(pl.Int64).alias('ARREARS')])
-
-# Handle MATURED1 vs MATUREDS
 npgs_data = npgs_data.with_columns([
     pl.when((pl.col('MATURED1').is_not_null()) & (pl.col('MATUREDS').is_not_null()) & (
                 pl.col('MATURED1') < pl.col('MATUREDS')))
@@ -644,27 +660,20 @@ npgs_data = npgs_data.with_columns([
 ])
 
 
-# Calculate NPL date and status
 def calculate_npl_info(matureds, nodays, rdate):
     """Calculate NPL date and return formatted string"""
     if nodays is None or nodays <= 89:
         return None, '   '
 
-    # Add 89 days to MATUREDS
     if matureds is None or matureds <= 0:
         return None, '   '
 
-    # Convert SAS date to Python date
     base_date = datetime(1960, 1, 1).date()
     mature_date = base_date + timedelta(days=int(matureds))
     npl_date = mature_date + timedelta(days=89)
 
     return npl_date, 'NPL'
 
-
-# Ensure NODAYS exists
-if 'NODAYS' not in npgs_data.columns:
-    npgs_data = npgs_data.with_columns([pl.lit(0).cast(pl.Int64).alias('NODAYS')])
 
 npgs_data = npgs_data.with_columns([
     pl.struct(['MATUREDS', 'NODAYS']).map_elements(
@@ -678,10 +687,9 @@ npgs_data = npgs_data.with_columns([
     pl.col('_npl_info').struct.field('NPL_STATUS').alias('NPL_STATUS')
 ]).drop('_npl_info')
 
-# Create final columns
 npgs_data = npgs_data.with_columns([
     pl.lit(0).alias('PRODUCT'),
-    pl.col('CENSUS').cast(pl.Int64, strict=False).alias('CVAR01'),
+    pl.col('CENSUS').cast(pl.Int64).alias('CVAR01'),
     pl.col('BUSREGN').cast(pl.Utf8).alias('CVAR03'),
     pl.col('NAME').cast(pl.Utf8).alias('CVAR04'),
     pl.col('ISSUEDT').alias('CVAR05'),
@@ -702,14 +710,12 @@ npgs_data = npgs_data.with_columns([
     pl.col('MICRCD').alias('CVAR15')
 ])
 
-# Fill CVAR12 default
 npgs_data = npgs_data.with_columns([
     pl.when(pl.col('CVAR12').is_null())
     .then(pl.lit('   '))
     .otherwise(pl.col('CVAR12')).alias('CVAR12')
 ])
 
-# Filter out null OUTSTAND
 npgs_data = npgs_data.filter(pl.col('OUTSTAND').is_not_null())
 
 
@@ -721,23 +727,22 @@ print("Step 14: Merging with NPLA...")
 try:
     npla_df, npla_meta = pyreadstat.read_sas7bdat(NPLA_FILE)
     npla_data = pl.from_pandas(npla_df).select(['CVAR06', 'CVAR01', 'STATUS', 'NDATE'])
-    
-    # Convert CVAR06 and CVAR01 to Int64
     npla_data = npla_data.with_columns([
-        pl.col('CVAR06').cast(pl.Int64).alias('CVAR06'),
-        pl.col('CVAR01').cast(pl.Int64).alias('CVAR01')
+        sas_int('CVAR06'),
+        sas_int('CVAR01'),
+        strip_str('STATUS').alias('STATUS'),
+        strip_str('NDATE').alias('NDATE'),
     ])
-    
+
     npgs_data = npgs_data.join(npla_data, on=['CVAR06', 'CVAR01'], how='left')
 
-    # Update CVAR13 based on NPL status
     npgs_data = npgs_data.with_columns([
         pl.when((pl.col('CVAR12') == 'NPL') & (pl.col('STATUS') == 'NPL'))
         .then(pl.col('NDATE'))
         .when((pl.col('CVAR12') == '   ') & (pl.col('STATUS') == 'NPL'))
         .then(pl.lit(normdt))
         .when((pl.col('CVAR12') == '   ') & (pl.col('STATUS') != 'NPL') & (pl.col('NDATE').is_not_null()) & (
-                    pl.col('NDATE') != '          '))
+                    pl.col('NDATE') != ''))
         .then(pl.col('NDATE'))
         .otherwise(pl.col('CVAR13')).alias('CVAR13')
     ])
@@ -750,7 +755,6 @@ except Exception as e:
 # ============================================================================
 print("Step 15: Writing output...")
 
-# Select and order final columns
 final_columns = [
     'CVAR01', 'CVAR02', 'CVAR03', 'CVAR04', 'CVAR05', 'CVAR06', 'CVAR07',
     'CVAR08', 'CVAR09', 'CVAR10', 'CVAR11', 'CVAR12', 'CVAR13', 'CVAR14',
@@ -759,47 +763,29 @@ final_columns = [
 
 output_data = npgs_data.select([col for col in final_columns if col in npgs_data.columns])
 
-# Sort by CVAR01
 output_data = output_data.sort('CVAR01')
 
-# Print summary for debugging
-print(f"Output data shape: {output_data.shape}")
-print(f"Output columns: {output_data.columns}")
-
-# Write output using saspy
 print("Writing SAS output...")
 
-# Initialize SAS session
-try:
-    sas = saspy.SASsession(cfgname='default')  # Adjust cfgname as needed
-    
-    # Convert polars DataFrame to pandas for saspy
-    output_pd = output_data.to_pandas()
-    
-    # Upload dataframe to SAS
-    sas_df = sas.df2sd(output_pd, 'npgs_output')
-    
-    # Write to sas7bdat
-    sas_code = f"""
-        LIBNAME outlib "{OUTPUT_DIR}";
-        DATA outlib.btnpgs{REPTMON};
-            SET npgs_output;
-        RUN;
-    """
-    
-    sas.submit(sas_code)
-    
-    # Close SAS session
-    sas.endsas()
-except Exception as e:
-    print(f"Warning: SAS session error: {e}")
-    # If saspy fails, write as parquet as fallback
-    output_data.write_parquet(OUTPUT_DIR / f"btnpgs{REPTMON}.parquet")
-    print(f"Fallback: Output written as parquet: {OUTPUT_DIR / f'btnpgs{REPTMON}.parquet'}")
+sas = saspy.SASsession(cfgname='default')  # Adjust cfgname as needed
+
+output_pd = output_data.to_pandas()
+
+sas_df = sas.df2sd(output_pd, 'npgs_output')
+
+sas_code = f"""
+    LIBNAME outlib "{OUTPUT_DIR}";
+    DATA outlib.btnpgs{REPTMON};
+        SET npgs_output;
+    RUN;
+"""
+
+sas.submit(sas_code)
+
+sas.endsas()
 
 print(f"Output written to: {OUTPUT_FILE}")
 print(f"Total records: {len(output_data)}")
 print("\nProcessing complete!")
 
-# Close DuckDB connection
 con.close()
