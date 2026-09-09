@@ -1,3 +1,5 @@
+[USE BELOW UPDATED CODE]
+
 import polars as pl
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -17,12 +19,11 @@ def read_sas_dataset(file_path):
         return pl.DataFrame()
 
 def eibsnpgs():
-    base = Path.cwd()
-    npgs_path = base / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBSNPGS" / "NGPS"
-    npgsi_path = base / "sas" / "python" / "virt_edw" / "Data_Warehouse" / "MIS" / "XMIS" / "input" / "prod" / "EIBSNPGS" / "NGPSI"
+    npgs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGS")
+    npgsi_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGSI")
     
     # Calculate report date (yesterday)
-    reptdate = datetime.now() - timedelta(days=1)
+    reptdate = datetime.now() - timedelta(days=9)
     
     mm = reptdate.month
     mm1 = mm - 1 if mm > 1 else 12
@@ -347,3 +348,24 @@ def eibsnpgs():
 
 if __name__ == "__main__":
     eibsnpgs()
+
+
+
+OUTPUT:
+
+REPTMON: 08, RDATE: 310826
+NPGS Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGS
+NPGSI Path: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGSI
+
+Processing SC53 datasets...
+Read btnpgs08.sas7bdat: 14 records
+Read lnnpgs08.sas7bdat: 1287 records
+Read dpnpgs08.sas7bdat: 8 records
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBSNPGS.py", line 348, in <module>
+    eibsnpgs()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBSNPGS.py", line 58, in eibsnpgs
+    sc53_df = pl.concat([df for df in [bt_df, ln_df, dp_df] if not df.is_empty()])
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/functions/eager.py", line 234, in concat
+    out = wrap_df(plr.concat_df(elems))
+polars.exceptions.ShapeError: unable to vstack, column names don't match: "cvar01" and "product"
