@@ -32,9 +32,12 @@ def ensure_common_columns(dfs, required_columns):
     return result_dfs
 
 def eibsnpgs():
-    base = Path.cwd()
     npgs_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGS")
     npgsi_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBSNPGS/NPGSI")
+    output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBSNPGS")
+    
+    # Create output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
     
     # Calculate report date (yesterday)
     reptdate = datetime.now() - timedelta(days=1)
@@ -52,6 +55,7 @@ def eibsnpgs():
     print(f"REPTMON: {reptmon}, RDATE: {rdate}")
     print(f"NPGS Path: {npgs_path}")
     print(f"NPGSI Path: {npgsi_path}")
+    print(f"Output Path: {output_path}")
     
     # Define required columns for output
     required_cols = ['cvar01','cvar02','cvar03','cvar04','cvar05','cvar06',
@@ -341,7 +345,7 @@ def eibsnpgs():
     output_cols = final_cols + ['lastcol']
     
     print("\nWriting COMBT.txt...")
-    with open(base / "COMBT.txt", "w") as f:
+    with open(output_path / "COMBT.txt", "w") as f:
         for row in npgs_df.iter_rows(named=True):
             values = []
             for col in output_cols:
@@ -373,12 +377,13 @@ def eibsnpgs():
     
     npgs_report(
         df=npgs_df,
-        report_path=str(base / "COMBR.txt"),
+        report_path=str(output_path / "COMBR.txt"),
         title1=title1,
         title2=title2
     )
     
     print(f"\nProcessing complete. Files: COMBT.txt, COMBR.txt")
+    print(f"Output directory: {output_path}")
     print(f"Total records: {len(npgs_df)}")
     if 'cvar02' in npgs_df.columns:
         counts = npgs_df.group_by("cvar02").agg(pl.count().alias("records"))
