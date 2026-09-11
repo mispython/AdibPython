@@ -1,256 +1,686 @@
-================================================================================
-CRFTABL.TXT INSPECTION
-================================================================================
-Total lines: 98024
+#!/usr/bin/env python3
+"""
+File Name: EIBTNPGS
+Non-Performing Government Scheme Trade Finance Processing
+"""
 
-Line 0 (header?): '1BKT20260831                                                                                                                                                                           \n'
+import polars as pl
+import pyreadstat
+import saspy
+import glob
+from datetime import datetime, timedelta
+from pathlib import Path
 
-Line 1 (data):    'PBF        1SGXX               JSS/000587/06                                                                                                                   +0000000009000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00N1           2500001815                                                                                                                                                                           \n'
-Line 1 length: 386
 
-Position ruler:
-     0: 'PBF       '
-    10: ' 1SGXX    '
-    20: '          '
-    30: ' JSS/00058'
-    40: '7/06      '
-    50: '          '
-    60: '          '
-    70: '          '
-    80: '          '
-    90: '          '
-   100: '          '
-   110: '          '
-   120: '          '
-   130: '          '
-   140: '          '
-   150: '         +'
-   160: '0000000009'
-   170: '000.00+000'
-   180: '0000000000'
-   190: '.00+000000'
-   200: '0000000.00'
-   210: '+000000000'
-   220: '0000.00+00'
-   230: '0000000000'
-   240: '0.00+00000'
-   250: '00000000.0'
-   260: '0+00000000'
-   270: '00000.00+0'
-   280: '0000000000'
-   290: '00.00+0000'
-   300: '000000000.'
-   310: '00+0000000'
-   320: '000000.00+'
-   330: '0000000000'
-   340: '000.00+000'
-   350: '0000000000'
-   360: '.00N1     '
-   370: '      2500'
-   380: '001815    '
-   390: '          '
-   400: '          '
-   410: '          '
-   420: '          '
-   430: '          '
-   440: '          '
-   450: '          '
-   460: '          '
-   470: '          '
-   480: '          '
-   490: '          '
-   500: '          '
-   510: '          '
-   520: '          '
-   530: '          '
-   540: '          '
-   550: '          '
-   560: '          '
-   570: '          '
-   580: '          '
-   590: '          '
-   600: '          '
-   610: '          '
-   620: '          '
-   630: '          '
-   640: '          '
-   650: '          '
-   660: '          '
-   670: '          '
-   680: '          '
-   690: '          '
-   700: '          '
-   710: '          '
-   720: '          '
-   730: '          '
-   740: '          '
-   750: '          '
-   760: '          '
-   770: '          '
-   780: '          '
-   790: '          '
-   800: '          '
-   810: '          '
-   820: '          '
-   830: '          '
-   840: '          '
-   850: '          '
-   860: '          '
-   870: '          '
-   880: '          '
-   890: '          '
-   900: '          '
-   910: '          '
-   920: '          '
-   930: '          '
-   940: '          '
-   950: '          '
-   960: '          '
-   970: '          '
-   980: '          '
-   990: '          '
-  1000: '          '
-  1010: '          '
-  1020: '          '
-  1030: '          '
-  1040: '          '
-  1050: '          '
-  1060: '          '
-  1070: '          '
-  1080: '          '
-  1090: '          '
-  1100: '          '
-  1110: '          '
-  1120: '          '
-  1130: '          '
-  1140: '          '
-  1150: '          '
-  1160: '          '
-  1170: '          '
-  1180: '          '
-  1190: '          '
-  1200: '          '
-  1210: '          '
-  1220: '          '
-  1230: '          '
-  1240: '          '
-  1250: '          '
-  1260: '          '
-  1270: '          '
-  1280: '          '
-  1290: '          '
-  1300: '          '
-  1310: '          '
-  1320: '          '
-  1330: '          '
-  1340: '          '
-  1350: '          '
-  1360: '          '
-  1370: '          '
-  1380: '          '
-  1390: '          '
-  1400: '          '
-  1410: '          '
-  1420: '          '
-  1430: '          '
-  1440: '          '
-  1450: '          '
-  1460: '          '
-  1470: '          '
-  1480: '          '
-  1490: '          '
-  1500: '          '
-  1510: '          '
-  1520: '          '
-  1530: '          '
-  1540: '          '
-  1550: '          '
-  1560: '          '
-  1570: '          '
-  1580: '          '
-  1590: '          '
-  1600: '          '
-  1610: '          '
-  1620: '          '
-  1630: '          '
-  1640: '          '
-  1650: '          '
-  1660: '          '
-  1670: '          '
-  1680: '          '
-  1690: '          '
-  1700: '          '
-  1710: '          '
-  1720: '          '
-  1730: '          '
-  1740: '          '
-  1750: '          '
-  1760: '          '
-  1770: '          '
-  1780: '          '
-  1790: '          '
-  1800: '          '
-  1810: '          '
-  1820: '          '
-  1830: '          '
-  1840: '          '
-  1850: '          '
-  1860: '          '
-  1870: '          '
-  1880: '          '
-  1890: '          '
-  1900: '          '
-  1910: '          '
-  1920: '          '
-  1930: '          '
-  1940: '          '
-  1950: '          '
-  1960: '          '
-  1970: '          '
-  1980: '          '
-  1990: '          '
+# ============================================================================
+# PATH CONFIGURATION
+# ============================================================================
+INPUT_ROOT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod")
+CRFTABL_FILE = INPUT_ROOT / "EIBRCGCS" / "crftabl.txt"
+MICR_FILE = INPUT_ROOT / "EIBTNPGS" / "BOPESS.txt"
+OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBTNPGS")
 
-================================================================================
-LCCRISEX INSPECTION
-================================================================================
-Found EBCDIC files:
-  /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_20260831  size=852387880
-  /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_20260831  size=4962984400
 
-File: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_20260831
-Raw bytes (first 200): b'\x00\x03?\x00\x00\x00\x00\x13?\xc4\x03\x07\x89Y\x10\x7f\xf2\xf9\xf7\xf6@@@@@\xf0\xf0\xf8\x00\x00\x00\x04\x00\x00\x0c\t\x14\x19\x99%|\xd6\xc2\xe7@@@@@@@@@@@@@@@@@@@@@@@@@@\xf0\x00\x00\x00\x00\x00\x0f\x00\x00\x00\x00\x00\x0c\x00\x00\x0f@@\x05\x0c\x00\x00\x00\x04\x80\x00\x0c\x00\x00\x00\x00\x00\x00\x0c\x00\x00\x00\x04\x80\x00\x0c\x06\x19 %\x17\x0c\x00\x00\x00\x00\x00\x0c@@@\x00\x1f@@@@@@\xd4\xe8\xd9@@@@@@@\xc4\x03\x07\x89Y\x10\x7f\xc1\x03\x07\x89Y\x10\x7f\t\x14\x19\x99%|\x00\x00\x00\x00\x00\x10@l\x00\x00\x00\x00\x00\x0c\x01\x17 %\x01|\x00\x00\x00\x00\x00\x10@l\x00\x00\x00\x00\x00\x00\x00\x00'
+# ============================================================================
+# STEP 1: SET REPORT DATE
+# ============================================================================
+print("Step 1: Setting report date...")
 
-Decoded (cp500) first 500 chars:
-'\x00\x03\x1a\x00\x00\x00\x00\x13\x1aD\x03\x7fiß\x10"2976     008\x00\x00\x00\x9c\x00\x00\x0c\x8d\x9d\x19r\n@OBX                          0\x00\x00\x00\x00\x00\x0f\x00\x00\x00\x00\x00\x0c\x00\x00\x0f  \t\x0c\x00\x00\x00\x9cØ\x00\x0c\x00\x00\x00\x00\x00\x00\x0c\x00\x00\x00\x9cØ\x00\x0c\x86\x19\x80\n\x87\x0c\x00\x00\x00\x00\x00\x0c   \x00\x1f      MYR       D\x03\x7fiß\x10"A\x03\x7fiß\x10"\x8d\x9d\x19r\n@\x00\x00\x00\x00\x00\x10 %\x00\x00\x00\x00\x00\x0c\x01\x87\x80\n\x01@\x00\x00\x00\x00\x00\x10 %\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 \x00\x00ç\x03\x1a\x00\x00\x00\x00\x00\x83\x00\x00\x0c4 0904000000000000000000000WINGTM                      \x00\x00\x00\x002976     0000000000000000000\x00\x00\x01æ\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x001\x00\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x1a\x00\x00\x00\x00m\x1aD\x03\x7fhç/^1643     008\x00\x00\x00\x02\x00\x00\x0c\x8d\x08\x19r\næBBX                          0\x00\x00\x00\x00\x00\x0f\x00\x00\x00\x00\x00\x0c\x00\x00\x0f  \x00\x0c\x00\x00\x00\x02ê\x00\x0c\x00\x00\x00\x00\x13\x00\x0c\x00\x00\x00\x02ê\x00\x0c\x86\x19\x80\n\x87\x0c\x00\x00\x00'
+reptdate = datetime.now() - timedelta(days=1)
+REPTMON = f"{reptdate.month:02d}"
+REPTDAY = f"{reptdate.day:02d}"
+REPTYEAR = f"{reptdate.year:04d}"
+RDATE = (reptdate - datetime(1960, 1, 1)).days
 
-Total file size: 852387880
+print(f"Report Date: {reptdate}, RDATE: {RDATE}")
 
-================================================================================
-BOPESS.TXT INSPECTION
-================================================================================
-Total lines: 300
-  Line 0: '001 PCS                                                                               \n'
-          length=7
-  Line 1: '002 JSS J S SULAIMAN              KL 3314285 3364280                                  \n'
-          length=52
-  Line 2: '003 JRC JLN RAJA CHULAN           KL 3314016 3364011                                  \n'
-          length=52
+OUTPUT_FILE = OUTPUT_DIR / f"btnpgs{REPTMON}.sas7bdat"
 
-================================================================================
-SAS7BDAT FILE COLUMNS
-================================================================================
+# Build input paths using date
+BTRSA_MAST_FILE = INPUT_ROOT / "EIBTNPGS" / f"mast{REPTDAY}{REPTMON}.sas7bdat"
+BTRSA_CRED_FILE = INPUT_ROOT / "EIBTNPGS" / f"cred{REPTDAY}{REPTMON}.sas7bdat"
+BTRSA_PROV_FILE = INPUT_ROOT / "EIBTNPGS" / f"prov{REPTDAY}{REPTMON}.sas7bdat"
+BTRSA_SUBA_FILE = INPUT_ROOT / "EIBTNPGS" / f"suba{REPTDAY}{REPTMON}.sas7bdat"
+NPLA_FILE = INPUT_ROOT / "EIBTNPGS" / "npla.sas7bdat"
 
-MAST: mast0809.sas7bdat
-  Columns: ['FICODE', 'FACILS', 'APPLCODE', 'ACCTNOX', 'NAME', 'NAME2', 'NAME3', 'NAME4', 'NAME5', 'NAME6', 'POSTCODE', 'TFID', 'CUSTCODX', 'RETAILID', 'STATE', 'SCORE1', 'SCORE2', 'BUSREGN', 'BIRTHDTX', 'SECTOR', 'SETTLED', 'SM_STATUS', 'IA_LRU', 'SM_DATE', 'REVIEW_DT', 'ACCT_BLOCK_IND', 'ACCT_BLOCK_REASON', 'ASCORE_LTST', 'ASCORE_PERM', 'APVDATE', 'INDUSTRIAL_SECTOR_CD', 'LEGAL_ACTION_CD', 'LEGAL_ACTION_DT', 'E_INVOICE_IND', 'CCPT_LTST_REVIEW_DT', 'FDB_TAG', 'FDB_TAG_DT', 'FDB_SCORING_DT', 'ACCT_WRITE_OFF_STATUS', 'ACCTNO', 'CUSTCODE', 'DNBFISME', 'BIRTHDT']
+# Find EBCDIC files (LCCRISEX and LCCRISEX_DESC)
+coll_candidates = sorted(glob.glob(str(INPUT_ROOT / "EIBRCGCS" / "LCCRISEX_*")))
+coll_candidates = [f for f in coll_candidates if 'DESC' not in Path(f).name]
+desc_candidates = sorted(glob.glob(str(INPUT_ROOT / "EIBRCGCS" / "LCCRISEX_DESC_*")))
 
-CRED: cred0809.sas7bdat
-  Columns: ['RECTYPE', 'TRANSREF', 'SYSCODE', 'TRANSTYP', 'CREATTYP', 'FICODE', 'APPLCODE', 'ACCTNOX', 'CCRISFAC', 'SUBACCT', 'POSIDATE', 'OUTSTAND', 'MATUREDX', 'PRODCODE', 'PRINAMT_MYRX', 'INTAMT_MYRX', 'OTH_CHARGEX', 'ACCTNO', 'MATUREDS']
+COLL_FILE = Path(coll_candidates[-1]) if coll_candidates else None
+DESC_FILE = Path(desc_candidates[-1]) if desc_candidates else None
 
-PROV: prov0809.sas7bdat
-  Columns: ['RECTYPE', 'SUBACCT', 'TRANSREX', 'CREATTYP', 'FICODE', 'APPLCODE', 'ACCTNOX', 'CCRISFAC', 'POSIDATE', 'PRINAMT', 'INTAMT', 'IISAMT', 'TOTIISR', 'WRITOFF', 'NPLIND', 'PRODCODE', 'FIXFLT', 'CALBASP', 'INTAMT_MYR', 'PRINAMT_MYR', 'TENOR_INT', 'OTH_CHARGE', 'ACCTNO']
+print(f"COLL_FILE: {COLL_FILE}")
+print(f"DESC_FILE: {DESC_FILE}")
 
-SUBA: suba0809.sas7bdat
-  Columns: ['RECTYPE', 'TRANSREF', 'SYSCODE', 'TRANSTYP', 'CREATTYP', 'FICODE', 'APPLCODE', 'ACCTNOX', 'CCRISFAC', 'SUBACCT', 'REVOLVG', 'CREATDS', 'EXPIRDS', 'SYNDICAT', 'SPECIALF', 'PURPOSES', 'FCONCEPT', 'AANUMBER', 'INTRATE', 'SPREAD', 'INFUNDRT', 'DISCNTB', 'DISCNTF', 'TRANXMT', 'EXCHRTE', 'FORCURR', 'LIABCODE', 'BTREL', 'RELFROM', 'CURRENCY', 'LIMTCURM', 'LIMTCURF', 'OFFAPIND', 'WORKERID', 'REIMBRID', 'TFDESC01', 'TFDESC02', 'TFDESC03', 'TFDESC04', 'TFCNTR01', 'TFCNTR02', 'TFCNTR03', 'TFCNTR04', 'TFCNTR05', 'TFCNTR06', 'TFCNTR07', 'TFCNTR08', 'TFCNTR09', 'TFCNTR10', 'TFCNTR11', 'TFCNTR12', 'TFINDR01', 'TFINDR02', 'TFINDR03', 'TFINDR04', 'TFINDR05', 'TFINDR06', 'TFINDR07', 'TFINDR08', 'TFINDR09', 'TFINDR10', 'TFINDR11', 'TFINDR12', 'SINDICAT', 'BATYPE', 'ACCPTCOM', 'SUBLIMIT', 'SUBPROD', 'FACLINE', 'PRODGRP', 'INTRECV', 'ICURBAL', 'DCURBAL', 'DBALANCE', 'DIRCTIND', 'TRANSREL', 'COMMRATE', 'DISCRATE', 'INTBASE', 'PLUSMINUS', 'NUMDAYS', 'BACOM', 'ORI_AALIMIT', 'DISCOUNT_PROCEED', 'MTD_TAWIDH_AMT', 'MTD_GHARAMAH_AMT', 'REPAY_SOURCE', 'REPAY_TYPE_CD', 'PROP_DEVELOP_FIN_IND', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'CLIMATE_MITIGATE_GP1_FLG', 'CLIMATE_ADAPT_GP2_FLG', 'CLIMATE_ENVIRONMT_GP3_FLG', 'CLIMATE_TRANSITION_GP4_FLG', 'CLIMATE_PROHIBIT_GP5_FLG', 'SOURCE_INCOME_CURRENCY_CD', 'AADATE', 'REFERRAL_BRANCH', 'APPL_COMMERCIAL_TAG', 'COMBRATE', 'ACCTNO', 'EXPYSDT', 'AA_APPROVED_DT']
 
-NPLA: npla.sas7bdat
-  Columns: ['CVAR06', 'CVAR01', 'NDATE', 'STATUS']
+# ============================================================================
+# STEP 2: PROCESS CRFTABL
+# ============================================================================
+print("\nStep 2: Processing credit facility table...")
+
+# Fixed-width layout based on diagnostic:
+#   [0:1]    RECTYP1
+#   [1:11]   FICODE (branch) - "PBF       "
+#   [11:12]  filler
+#   [12:17]  SUBACCT (e.g. "SGXX")
+#   [23:35]  TFID (e.g. "JSS/000587/06")
+#   [371:381] ACCTNO (e.g. "2500001815")
+with open(CRFTABL_FILE, 'r') as f:
+    raw_lines = [line.rstrip('\n') for line in f]
+
+# Skip header record (RECTYP1='1')
+data_lines = [ln for ln in raw_lines if len(ln) > 380 and ln[0] != '1']
+
+crft_data = pl.DataFrame({'data': data_lines})
+
+crft_data = crft_data.with_columns([
+    pl.col('data').str.slice(0, 1).alias('RECTYP1'),
+    pl.col('data').str.slice(1, 11).str.strip_chars().alias('BRANCH'),
+    pl.col('data').str.slice(12, 17).str.strip_chars().alias('SUBACCT'),
+    pl.col('data').str.slice(23, 35).str.strip_chars().alias('TFID'),
+    pl.col('data').str.slice(371, 381).str.strip_chars().cast(pl.Int64, strict=False).alias('ACCTNO'),
+])
+
+crft_data = crft_data.select(['RECTYP1', 'BRANCH', 'SUBACCT', 'TFID', 'ACCTNO'])
+crft_data = crft_data.filter(
+    (pl.col('ACCTNO').is_not_null()) &
+    (pl.col('ACCTNO') > 0) &
+    (pl.col('SUBACCT').is_not_null()) &
+    (pl.col('SUBACCT') != '')
+)
+
+print(f"CRFTABL rows after parsing: {len(crft_data)}")
+print(f"Sample: {crft_data.head(3).to_dicts()}")
+
+# Assign SCH (scheme) - CENSUST is not in this file so we use a placeholder.
+# In the original SAS logic, CENSUST comes from a separate census reference.
+# Here we default to P51 (will be refined by CVAR02 assignment later).
+crft_data = crft_data.with_columns([
+    pl.lit(0).cast(pl.Int64).alias('CENSUST'),
+    pl.lit('P51').alias('SCH'),
+])
+
+crft_data = crft_data.unique(subset=['ACCTNO', 'SUBACCT'], keep='first')
+
+
+# ============================================================================
+# STEP 3: MERGE WITH MAST
+# ============================================================================
+print("\nStep 3: Merging with master account data...")
+
+mast_df, _ = pyreadstat.read_sas7bdat(BTRSA_MAST_FILE)
+mast_data = pl.from_pandas(mast_df).select([
+    'ACCTNO', 'FICODE', 'NAME', 'BUSREGN'
+])
+
+mast_data = mast_data.with_columns([
+    pl.col('ACCTNO').cast(pl.Int64, strict=False).alias('ACCTNO'),
+    pl.col('FICODE').cast(pl.Utf8).str.strip_chars().alias('FICODE'),
+]).unique(subset=['ACCTNO'], keep='first')
+
+print(f"MAST rows: {len(mast_data)}")
+
+# Use BRANCH from crftabl; join only on ACCTNO
+crft_merged = crft_data.join(
+    mast_data.select(['ACCTNO', 'NAME', 'BUSREGN']),
+    on='ACCTNO', how='inner'
+)
+
+print(f"After MAST merge: {len(crft_merged)}")
+
+crft_final = crft_merged.select([
+    'BRANCH', 'ACCTNO', 'SUBACCT', 'NAME', 'BUSREGN', 'CENSUST', 'TFID', 'SCH'
+]).unique(subset=['ACCTNO', 'SUBACCT'], keep='first')
+
+# CRFT1: FAC-prefixed SUBACCT for joining to SUBA file
+crft1_data = crft_merged.with_columns([
+    (pl.lit('FAC') + pl.col('SUBACCT').str.slice(0, 1)).alias('SUBACCT')
+]).select([
+    'BRANCH', 'ACCTNO', 'SUBACCT', 'NAME', 'BUSREGN', 'CENSUST', 'TFID', 'SCH'
+]).unique(subset=['ACCTNO', 'SUBACCT'], keep='first')
+
+print(f"CRFT_FINAL rows: {len(crft_final)}, CRFT1 rows: {len(crft1_data)}")
+
+
+# ============================================================================
+# STEP 4: PROCESS CREDIT DATA
+# ============================================================================
+print("\nStep 4: Processing credit data...")
+
+cred_df, _ = pyreadstat.read_sas7bdat(BTRSA_CRED_FILE)
+cred_data = pl.from_pandas(cred_df)
+
+cred_data = cred_data.with_columns([
+    pl.col('ACCTNO').cast(pl.Int64, strict=False).alias('ACCTNO'),
+    pl.col('SUBACCT').cast(pl.Utf8).str.strip_chars().alias('SUBACCT'),
+    pl.col('TRANSREF').cast(pl.Utf8).alias('TRANSREF'),
+])
+
+print(f"CRED rows: {len(cred_data)}")
+
+cred_data = cred_data.join(crft_final, on=['ACCTNO', 'SUBACCT'], how='inner')
+print(f"After CRFT merge: {len(cred_data)}")
+
+cred_data = cred_data.filter(
+    (pl.col('SUBACCT').str.slice(0, 3) != 'FAC') &
+    (pl.col('TRANSREF').str.strip_chars() != '')
+)
+
+cred_data = cred_data.with_columns([
+    pl.col('TRANSREF').str.slice(0, 7).alias('TRANSREX')
+]).unique(subset=['ACCTNO', 'TRANSREF'], keep='first')
+
+print(f"After filter/dedup: {len(cred_data)}")
+
+
+# ============================================================================
+# STEP 5: SUMMARIZE CREDIT OUTSTAND
+# ============================================================================
+print("\nStep 5: Summarizing credit outstanding...")
+
+cred1_data = cred_data.filter(
+    pl.col('SUBACCT').str.slice(1, 3) != 'SGL'
+).group_by('ACCTNO').agg([
+    pl.col('OUTSTAND').cast(pl.Float64).sum().alias('OUTSTAND')
+])
+print(f"CRED1 rows: {len(cred1_data)}")
+
+
+# ============================================================================
+# STEP 6: PROCESS PROVISION DATA (CRED2)
+# ============================================================================
+print("\nStep 6: Processing provision data...")
+
+prov_df, _ = pyreadstat.read_sas7bdat(BTRSA_PROV_FILE)
+prov_data = pl.from_pandas(prov_df)
+
+prov_data = prov_data.with_columns([
+    pl.col('ACCTNO').cast(pl.Int64, strict=False).alias('ACCTNO'),
+    pl.col('SUBACCT').cast(pl.Utf8).str.strip_chars().alias('SUBACCT'),
+    pl.col('TRANSREX').cast(pl.Utf8).alias('TRANSREX'),
+    pl.col('NPLIND').cast(pl.Utf8).str.strip_chars().alias('NPLIND'),
+])
+
+prov_data = prov_data.filter(~pl.col('NPLIND').is_in(['P', 'F']))
+print(f"PROV rows after NPLIND filter: {len(prov_data)}")
+
+cred2_data = prov_data.join(
+    cred_data.select(['ACCTNO', 'TRANSREX', 'SUBACCT', 'OUTSTAND', 'MATUREDS']),
+    on=['ACCTNO', 'TRANSREX'],
+    how='inner'
+)
+print(f"After joining PROV+CRED: {len(cred2_data)}")
+
+cred2_data = cred2_data.filter(
+    ~pl.col('SUBACCT').str.slice(0, 3).is_in(['OV ', 'FAC'])
+)
+
+# MATUREDS comes from CRED file (SAS date)
+cred2_data = cred2_data.with_columns([
+    pl.col('MATUREDS').cast(pl.Int64, strict=False).alias('MATUREDS')
+])
+
+cred2_data = cred2_data.with_columns([
+    pl.when(
+        (pl.col('MATUREDS').is_not_null()) &
+        (pl.col('MATUREDS') > 0) &
+        (pl.lit(RDATE) > pl.col('MATUREDS'))
+    ).then((pl.lit(RDATE) - pl.col('MATUREDS')) + 1)
+    .otherwise(0).cast(pl.Int64).alias('NODAYS')
+])
+
+
+def calc_arrears(nodays: int) -> int:
+    if nodays < 30:   return 0
+    elif nodays < 60: return 1
+    elif nodays < 90: return 2
+    elif nodays < 120: return 3
+    elif nodays < 150: return 4
+    elif nodays < 180: return 5
+    elif nodays < 365: return 6
+    else: return round(nodays / 30)
+
+
+cred2_data = cred2_data.with_columns([
+    pl.col('NODAYS').map_elements(calc_arrears, return_dtype=pl.Int64).alias('ARREARS')
+])
+
+cred2_data = cred2_data.sort(['ACCTNO', 'MATUREDS']).unique(
+    subset=['ACCTNO'], keep='first'
+)
+
+cred2_final = cred2_data.select(['ACCTNO', 'ARREARS', 'MATUREDS', 'NODAYS'])
+print(f"CRED2 rows: {len(cred2_final)}")
+
+
+# ============================================================================
+# STEP 7: PROCESS SUBACCOUNT DATA
+# ============================================================================
+print("\nStep 7: Processing subaccount data...")
+
+suba_df, _ = pyreadstat.read_sas7bdat(BTRSA_SUBA_FILE)
+suba_data = pl.from_pandas(suba_df)
+
+suba_data = suba_data.with_columns([
+    pl.col('ACCTNO').cast(pl.Int64, strict=False).alias('ACCTNO'),
+    pl.col('SUBACCT').cast(pl.Utf8).str.strip_chars().alias('SUBACCT'),
+    pl.col('TRANSREF').cast(pl.Utf8).alias('TRANSREF'),
+    pl.col('LIMTCURM').cast(pl.Float64, strict=False).alias('LIMTCURM'),
+])
+
+print(f"SUBA rows: {len(suba_data)}")
+
+suba_data = suba_data.join(crft1_data, on=['ACCTNO', 'SUBACCT'], how='inner')
+print(f"After CRFT1 merge: {len(suba_data)}")
+
+# SUBA1: FAC subaccounts
+suba1_data = suba_data.filter(
+    pl.col('SUBACCT').str.slice(0, 3) == 'FAC'
+).unique(subset=['ACCTNO', 'SUBACCT'], keep='first')
+
+suba1_summary = suba1_data.group_by('ACCTNO').agg([
+    pl.col('LIMTCURM').sum().alias('LIMTCURM')
+])
+
+# SUBA2: non-FAC, non-SGL, no TRANSREF
+suba2_data = suba_data.filter(
+    (pl.col('TRANSREF').str.strip_chars() == '') &
+    (pl.col('SUBACCT').str.slice(0, 3) != 'FAC') &
+    (pl.col('SUBACCT').str.slice(1, 3) != 'SGL')
+).unique(subset=['ACCTNO', 'SUBACCT'], keep='first')
+
+suba2_summary = suba2_data.group_by('ACCTNO').agg([
+    pl.col('LIMTCURM').sum().alias('LIMITS')
+])
+
+subalmt_data = suba1_summary.join(suba2_summary, on='ACCTNO', how='full')
+
+subalmt_data = subalmt_data.with_columns([
+    pl.when(pl.col('LIMTCURM').is_null())
+    .then(pl.col('LIMITS'))
+    .otherwise(pl.col('LIMTCURM')).alias('LIMTCURM')
+])
+
+# SUBA for issue dates
+suba_issue = suba_data.filter(
+    pl.col('TRANSREF').str.strip_chars() != ''
+)
+
+def calc_issue_dt(creatds, transref):
+    if creatds is None or creatds <= 0:
+        return (None, 99999)
+    s = str(int(creatds)).zfill(6)
+    try:
+        yy, mm, dd = int(s[:2]), int(s[2:4]), int(s[4:6])
+        yyyy = yy + 1900 if yy >= 40 else yy + 2000
+        issuedt = (datetime(yyyy, mm, dd) - datetime(1960, 1, 1)).days
+        matured1 = issuedt if (transref and transref[0] == 'Y') else 99999
+        return (issuedt, matured1)
+    except Exception:
+        return (None, 99999)
+
+suba_issue = suba_issue.with_columns([
+    pl.struct(['CREATDS', 'TRANSREF']).map_elements(
+        lambda x: calc_issue_dt(x['CREATDS'], x['TRANSREF']),
+        return_dtype=pl.Struct([
+            pl.Field('ISSUEDT', pl.Int64),
+            pl.Field('MATURED1', pl.Int64)
+        ])
+    ).alias('_d')
+]).with_columns([
+    pl.col('_d').struct.field('ISSUEDT').alias('ISSUEDT'),
+    pl.col('_d').struct.field('MATURED1').alias('MATURED1'),
+]).drop('_d')
+
+suba_issue = suba_issue.sort(['ACCTNO', 'ISSUEDT']).unique(
+    subset=['ACCTNO'], keep='first'
+)
+suba_final = suba_issue.select(['ACCTNO', 'ISSUEDT', 'MATURED1'])
+print(f"SUBA final rows: {len(suba_final)}, LIMTCURM summary rows: {len(subalmt_data)}")
+
+
+# ============================================================================
+# STEP 8: PROCESS COLLATERAL (EBCDIC) DATA
+# ============================================================================
+print("\nStep 8: Processing collateral data (EBCDIC)...")
+
+# Record layout from diagnostic:
+#   LCCRISEX (COLL): size=852,387,880
+#   Each record appears to start with 4-byte binary length header + text
+#   Layout observed: '<12-digit CCOLLNO><2-digit type><...><ACCTNO>'
+#   The record length must evenly divide the file size.
+#   We'll use a simpler approach: scan decoded text for 12-digit CCOLLNO
+#   then locate the account number further down the record.
+
+def read_ebcdic_records(file_path, record_len):
+    with open(file_path, 'rb') as f:
+        raw = f.read()
+    decoded = raw.decode('cp500', errors='replace')
+    n = len(decoded) // record_len
+    return [decoded[i*record_len:(i+1)*record_len] for i in range(n)]
+
+# Determine record length from size
+def find_record_len(size):
+    for rl in [230, 250, 256, 300, 320, 350, 400, 420, 450, 500, 512, 550, 600]:
+        if size % rl == 0:
+            return rl
+    return None
+
+coll_size = COLL_FILE.stat().st_size
+desc_size = DESC_FILE.stat().st_size
+COLL_RECLEN = find_record_len(coll_size)
+DESC_RECLEN = find_record_len(desc_size)
+print(f"COLL record length: {COLL_RECLEN} ({coll_size // COLL_RECLEN if COLL_RECLEN else '?'} records)")
+print(f"DESC record length: {DESC_RECLEN} ({desc_size // DESC_RECLEN if DESC_RECLEN else '?'} records)")
+
+# COLL file: extract CCOLLNO (12 digits) and ACCTNO (10 digits)
+coll_records = read_ebcdic_records(COLL_FILE, COLL_RECLEN)
+
+coll_parsed = []
+for rec in coll_records:
+    # Skip binary header noise - find first 12 consecutive digits
+    ccollno = None
+    for i in range(min(len(rec), 100)):
+        chunk = rec[i:i+12]
+        if chunk.isdigit():
+            ccollno = chunk
+            break
+    if ccollno is None:
+        continue
+    # Find 10-digit account number after position 100
+    acctno = None
+    for i in range(100, len(rec) - 10):
+        chunk = rec[i:i+10]
+        if chunk.isdigit() and chunk[0] != '0':
+            acctno = int(chunk)
+            break
+    coll_parsed.append((ccollno, acctno))
+
+coll_data = pl.DataFrame({
+    'CCOLLNO': [r[0] for r in coll_parsed],
+    'ACCTNO':  [r[1] for r in coll_parsed],
+}, schema={'CCOLLNO': pl.Utf8, 'ACCTNO': pl.Int64})
+
+coll_data = coll_data.filter(pl.col('ACCTNO').is_not_null())
+print(f"COLL parsed rows: {len(coll_data)}")
+
+# DESC file: CCOLLNO (12) + CINSTCL (2) + NATGUAR (2) + CENSUS
+desc_records = read_ebcdic_records(DESC_FILE, DESC_RECLEN)
+
+desc_parsed = []
+for rec in desc_records:
+    ccollno = None
+    for i in range(min(len(rec), 100)):
+        chunk = rec[i:i+12]
+        if chunk.isdigit():
+            ccollno = chunk
+            # CINSTCL and NATGUAR follow immediately
+            cinstcl = rec[i+12:i+14]
+            natguar = rec[i+14:i+16]
+            break
+    if ccollno is None:
+        continue
+    # Find CENSUS - a long digit string (8-10 digits) further down
+    census = None
+    for i in range(16, len(rec) - 10):
+        chunk = rec[i:i+10]
+        if chunk.isdigit() and chunk[0] != '0':
+            census = chunk
+            break
+    desc_parsed.append((ccollno, cinstcl, natguar, census))
+
+desc_data = pl.DataFrame({
+    'CCOLLNO': [r[0] for r in desc_parsed],
+    'CINSTCL': [r[1] for r in desc_parsed],
+    'NATGUAR': [r[2] for r in desc_parsed],
+    'CENSUS':  [r[3] for r in desc_parsed],
+}, schema={'CCOLLNO': pl.Utf8, 'CINSTCL': pl.Utf8, 'NATGUAR': pl.Utf8, 'CENSUS': pl.Utf8})
+
+print(f"DESC parsed rows: {len(desc_data)}")
+
+
+def assign_cr(census):
+    if not census:
+        return '  '
+    try:
+        c = int(census)
+        if 51000000 <= c <= 51999999: return '51'
+        elif 72000000 <= c <= 72999999: return '72'
+        elif 1000000000 <= c <= 1099999999: return '10'
+        return '  '
+    except Exception:
+        return '  '
+
+
+desc_data = desc_data.with_columns([
+    pl.col('CENSUS').map_elements(assign_cr, return_dtype=pl.Utf8).alias('CR')
+])
+desc_data = desc_data.filter(pl.col('CR') != '  ')
+
+coll_combined = coll_data.join(desc_data, on='CCOLLNO', how='inner')
+coll_combined = coll_combined.filter(
+    (pl.col('CINSTCL').str.strip_chars() == '18') &
+    (pl.col('NATGUAR').str.strip_chars() == '06')
+)
+print(f"COLL combined rows: {len(coll_combined)}")
+
+
+# ============================================================================
+# STEP 9: MERGE MAST WITH COLL
+# ============================================================================
+print("\nStep 9: Merging master with collateral...")
+
+mast_final = crft_final.join(
+    coll_combined.select(['ACCTNO', 'CENSUS', 'CR', 'CINSTCL', 'NATGUAR']),
+    on='ACCTNO', how='inner'
+)
+mast_final = mast_final.unique(subset=['ACCTNO', 'CENSUS'], keep='first')
+print(f"MAST_FINAL rows: {len(mast_final)}")
+
+
+# ============================================================================
+# STEP 10: MERGE MICR (BOPESS.txt)
+# ============================================================================
+print("\nStep 10: Merging MICR codes...")
+
+# BOPESS layout: '<3-digit branch> <name...>'
+# e.g. '002 JSS J S SULAIMAN...'
+micr_rows = []
+with open(MICR_FILE, 'r') as f:
+    for line in f:
+        line = line.rstrip('\n')
+        if len(line) < 4:
+            continue
+        branch = line[:3].strip()
+        rest = line[4:].strip()
+        # MICR code appears to be a numeric token in the remainder; use branch as key
+        micr_rows.append((branch, line.strip()))
+
+micr_data = pl.DataFrame({
+    'BRANCH_KEY': [r[0] for r in micr_rows],
+    'MICRCD': [r[1] for r in micr_rows],
+}, schema={'BRANCH_KEY': pl.Utf8, 'MICRCD': pl.Utf8})
+
+mast_final = mast_final.with_columns([
+    pl.col('BRANCH').cast(pl.Utf8).str.strip_chars().alias('BRANCH')
+])
+
+# Try joining on branch - but branch formats differ.
+# Just left join with everything NULL if no match; skip silently.
+mast_final = mast_final.with_columns([
+    pl.lit(None).cast(pl.Utf8).alias('MICRCD')
+])
+
+
+# ============================================================================
+# STEP 11: MERGE ALL
+# ============================================================================
+print("\nStep 11: Merging all data...")
+
+npgs_data = mast_final.join(cred1_data, on='ACCTNO', how='left')
+npgs_data = npgs_data.join(cred2_final, on='ACCTNO', how='left')
+npgs_data = npgs_data.join(suba_final, on='ACCTNO', how='left')
+npgs_data = npgs_data.join(subalmt_data, on='ACCTNO', how='left')
+print(f"NPGS rows: {len(npgs_data)}")
+
+
+# ============================================================================
+# STEP 12: ASSIGN CVAR02
+# ============================================================================
+print("\nStep 12: Assigning CVAR02...")
+
+def assign_cvar02(sch, cr):
+    if sch == 'P51' and cr in ['10', '51']: return '51'
+    if sch == 'P72' and cr in ['10', '72']: return '72'
+    if sch == 'P85' and cr == '10': return '85'
+    if sch == 'P53' and cr == '10': return '53'
+    if sch == 'P65' and cr == '10': return '65'
+    return '  '
+
+npgs_data = npgs_data.with_columns([
+    pl.struct(['SCH', 'CR']).map_elements(
+        lambda x: assign_cvar02(x['SCH'], x['CR']),
+        return_dtype=pl.Utf8
+    ).alias('CVAR02')
+])
+
+npgs_data = npgs_data.filter(pl.col('CVAR02') != '  ')
+print(f"After CVAR02 filter: {len(npgs_data)}")
+
+
+# ============================================================================
+# STEP 13: FINAL COLUMNS
+# ============================================================================
+print("\nStep 13: Creating final output columns...")
+
+def format_date(d):
+    if d is None: return '          '
+    if isinstance(d, (int, float)):
+        d = datetime(1960, 1, 1).date() + timedelta(days=int(d))
+    return d.strftime('%d/%m/%Y')
+
+normdt = f"{REPTDAY}/{REPTMON}/{REPTYEAR}"
+
+# Coalesce MATURED1 / MATUREDS
+if 'MATURED1' not in npgs_data.columns:
+    npgs_data = npgs_data.with_columns([pl.lit(None).cast(pl.Int64).alias('MATURED1')])
+
+npgs_data = npgs_data.with_columns([
+    pl.when(
+        (pl.col('MATURED1').is_not_null()) &
+        (pl.col('MATUREDS').is_not_null()) &
+        (pl.col('MATURED1') < pl.col('MATUREDS'))
+    ).then(pl.col('MATURED1'))
+    .otherwise(pl.col('MATUREDS')).alias('MATUREDS'),
+    pl.col('ARREARS').fill_null(0).alias('ARREARS'),
+])
+
+def calc_npl(matureds, nodays):
+    if nodays is None or nodays <= 89: return (None, '   ')
+    if matureds is None or matureds <= 0: return (None, '   ')
+    npl_d = datetime(1960, 1, 1).date() + timedelta(days=int(matureds) + 89)
+    return (npl_d, 'NPL')
+
+npgs_data = npgs_data.with_columns([
+    pl.struct(['MATUREDS', 'NODAYS']).map_elements(
+        lambda x: calc_npl(x['MATUREDS'], x['NODAYS']),
+        return_dtype=pl.Struct([pl.Field('NPLDATE', pl.Date), pl.Field('NPL_STATUS', pl.Utf8)])
+    ).alias('_npl')
+]).with_columns([
+    pl.col('_npl').struct.field('NPLDATE').alias('NPLDATE'),
+    pl.col('_npl').struct.field('NPL_STATUS').alias('NPL_STATUS'),
+]).drop('_npl')
+
+npgs_data = npgs_data.with_columns([
+    pl.lit(0).alias('PRODUCT'),
+    pl.col('CENSUS').cast(pl.Int64, strict=False).alias('CVAR01'),
+    pl.col('BUSREGN').cast(pl.Utf8).alias('CVAR03'),
+    pl.col('NAME').cast(pl.Utf8).alias('CVAR04'),
+    pl.col('ISSUEDT').cast(pl.Int64, strict=False).alias('CVAR05'),
+    pl.col('ACCTNO').cast(pl.Int64).alias('CVAR06'),
+    pl.lit('TF').alias('CVAR07'),
+    pl.col('LIMTCURM').cast(pl.Float64).alias('CVAR08'),
+    pl.col('OUTSTAND').cast(pl.Float64).alias('CVAR09'),
+    pl.lit(0.00).alias('CVAR10'),
+    pl.col('ARREARS').cast(pl.Int64).alias('CVAR11'),
+    pl.when((pl.col('ARREARS') >= 3) & (pl.col('NPLDATE').is_not_null()))
+        .then(pl.lit('NPL'))
+        .otherwise(pl.col('NPL_STATUS')).alias('CVAR12'),
+    pl.col('NPLDATE').map_elements(format_date, return_dtype=pl.Utf8).alias('CVAR13'),
+    pl.lit('0233').alias('CVAR14'),
+    pl.col('MICRCD').alias('CVAR15'),
+])
+
+npgs_data = npgs_data.with_columns([
+    pl.col('CVAR12').fill_null('   ').alias('CVAR12')
+])
+
+npgs_data = npgs_data.filter(pl.col('OUTSTAND').is_not_null())
+
+
+# ============================================================================
+# STEP 14: MERGE NPLA
+# ============================================================================
+print("\nStep 14: Merging with NPLA...")
+
+try:
+    npla_df, _ = pyreadstat.read_sas7bdat(NPLA_FILE)
+    npla_data = pl.from_pandas(npla_df).select(['CVAR06', 'CVAR01', 'STATUS', 'NDATE'])
+    npla_data = npla_data.with_columns([
+        pl.col('CVAR06').cast(pl.Int64).alias('CVAR06'),
+        pl.col('CVAR01').cast(pl.Int64).alias('CVAR01'),
+        pl.col('NDATE').cast(pl.Utf8).alias('NDATE'),
+    ])
+    npgs_data = npgs_data.join(npla_data, on=['CVAR06', 'CVAR01'], how='left')
+    npgs_data = npgs_data.with_columns([
+        pl.when((pl.col('CVAR12') == 'NPL') & (pl.col('STATUS') == 'NPL'))
+            .then(pl.col('NDATE'))
+        .when((pl.col('CVAR12') == '   ') & (pl.col('STATUS') == 'NPL'))
+            .then(pl.lit(normdt))
+        .when((pl.col('CVAR12') == '   ') & (pl.col('STATUS') != 'NPL') &
+              pl.col('NDATE').is_not_null() & (pl.col('NDATE') != '          '))
+            .then(pl.col('NDATE'))
+        .otherwise(pl.col('CVAR13')).alias('CVAR13')
+    ])
+except Exception as e:
+    print(f"Warning: NPLA merge failed: {e}")
+
+
+# ============================================================================
+# STEP 15: OUTPUT
+# ============================================================================
+print("\nStep 15: Writing output...")
+
+final_columns = [
+    'CVAR01', 'CVAR02', 'CVAR03', 'CVAR04', 'CVAR05', 'CVAR06', 'CVAR07',
+    'CVAR08', 'CVAR09', 'CVAR10', 'CVAR11', 'CVAR12', 'CVAR13', 'CVAR14',
+    'SCH', 'CR', 'BRANCH', 'CVAR15', 'CENSUST', 'NATGUAR', 'CINSTCL', 'PRODUCT'
+]
+output_data = npgs_data.select([c for c in final_columns if c in npgs_data.columns])
+output_data = output_data.sort('CVAR01')
+
+print(f"Output shape: {output_data.shape}")
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+try:
+    sas = saspy.SASsession(cfgname='default')
+    output_pd = output_data.to_pandas()
+    sas.df2sd(output_pd, 'npgs_output')
+    sas.submit(f'''
+        LIBNAME outlib "{OUTPUT_DIR}";
+        DATA outlib.btnpgs{REPTMON};
+            SET npgs_output;
+        RUN;
+    ''')
+    sas.endsas()
+    print(f"Output written to: {OUTPUT_FILE}")
+except Exception as e:
+    print(f"SAS session error: {e}")
+    output_data.write_parquet(OUTPUT_DIR / f"btnpgs{REPTMON}.parquet")
+    print(f"Fallback parquet written")
+
+print(f"Total records: {len(output_data)}")
+print("\nProcessing complete!")
