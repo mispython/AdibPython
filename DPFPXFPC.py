@@ -1,105 +1,256 @@
-#!/usr/bin/env python3
-"""
-EIBTNPGS Diagnostic - Run this FIRST to determine file layouts
-"""
-from pathlib import Path
+================================================================================
+CRFTABL.TXT INSPECTION
+================================================================================
+Total lines: 98024
 
-# ============================================================================
-# CRFTABL.TXT - inspect fixed-width layout
-# ============================================================================
-print("=" * 80)
-print("CRFTABL.TXT INSPECTION")
-print("=" * 80)
+Line 0 (header?): '1BKT20260831                                                                                                                                                                           \n'
 
-crftabl = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/crftabl.txt")
-with open(crftabl, 'r') as f:
-    lines = f.readlines()
+Line 1 (data):    'PBF        1SGXX               JSS/000587/06                                                                                                                   +0000000009000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00+0000000000000.00N1           2500001815                                                                                                                                                                           \n'
+Line 1 length: 386
 
-print(f"Total lines: {len(lines)}")
-print(f"\nLine 0 (header?): {repr(lines[0])}")
-print(f"\nLine 1 (data):    {repr(lines[1])}")
-print(f"Line 1 length: {len(lines[1].rstrip())}")
+Position ruler:
+     0: 'PBF       '
+    10: ' 1SGXX    '
+    20: '          '
+    30: ' JSS/00058'
+    40: '7/06      '
+    50: '          '
+    60: '          '
+    70: '          '
+    80: '          '
+    90: '          '
+   100: '          '
+   110: '          '
+   120: '          '
+   130: '          '
+   140: '          '
+   150: '         +'
+   160: '0000000009'
+   170: '000.00+000'
+   180: '0000000000'
+   190: '.00+000000'
+   200: '0000000.00'
+   210: '+000000000'
+   220: '0000.00+00'
+   230: '0000000000'
+   240: '0.00+00000'
+   250: '00000000.0'
+   260: '0+00000000'
+   270: '00000.00+0'
+   280: '0000000000'
+   290: '00.00+0000'
+   300: '000000000.'
+   310: '00+0000000'
+   320: '000000.00+'
+   330: '0000000000'
+   340: '000.00+000'
+   350: '0000000000'
+   360: '.00N1     '
+   370: '      2500'
+   380: '001815    '
+   390: '          '
+   400: '          '
+   410: '          '
+   420: '          '
+   430: '          '
+   440: '          '
+   450: '          '
+   460: '          '
+   470: '          '
+   480: '          '
+   490: '          '
+   500: '          '
+   510: '          '
+   520: '          '
+   530: '          '
+   540: '          '
+   550: '          '
+   560: '          '
+   570: '          '
+   580: '          '
+   590: '          '
+   600: '          '
+   610: '          '
+   620: '          '
+   630: '          '
+   640: '          '
+   650: '          '
+   660: '          '
+   670: '          '
+   680: '          '
+   690: '          '
+   700: '          '
+   710: '          '
+   720: '          '
+   730: '          '
+   740: '          '
+   750: '          '
+   760: '          '
+   770: '          '
+   780: '          '
+   790: '          '
+   800: '          '
+   810: '          '
+   820: '          '
+   830: '          '
+   840: '          '
+   850: '          '
+   860: '          '
+   870: '          '
+   880: '          '
+   890: '          '
+   900: '          '
+   910: '          '
+   920: '          '
+   930: '          '
+   940: '          '
+   950: '          '
+   960: '          '
+   970: '          '
+   980: '          '
+   990: '          '
+  1000: '          '
+  1010: '          '
+  1020: '          '
+  1030: '          '
+  1040: '          '
+  1050: '          '
+  1060: '          '
+  1070: '          '
+  1080: '          '
+  1090: '          '
+  1100: '          '
+  1110: '          '
+  1120: '          '
+  1130: '          '
+  1140: '          '
+  1150: '          '
+  1160: '          '
+  1170: '          '
+  1180: '          '
+  1190: '          '
+  1200: '          '
+  1210: '          '
+  1220: '          '
+  1230: '          '
+  1240: '          '
+  1250: '          '
+  1260: '          '
+  1270: '          '
+  1280: '          '
+  1290: '          '
+  1300: '          '
+  1310: '          '
+  1320: '          '
+  1330: '          '
+  1340: '          '
+  1350: '          '
+  1360: '          '
+  1370: '          '
+  1380: '          '
+  1390: '          '
+  1400: '          '
+  1410: '          '
+  1420: '          '
+  1430: '          '
+  1440: '          '
+  1450: '          '
+  1460: '          '
+  1470: '          '
+  1480: '          '
+  1490: '          '
+  1500: '          '
+  1510: '          '
+  1520: '          '
+  1530: '          '
+  1540: '          '
+  1550: '          '
+  1560: '          '
+  1570: '          '
+  1580: '          '
+  1590: '          '
+  1600: '          '
+  1610: '          '
+  1620: '          '
+  1630: '          '
+  1640: '          '
+  1650: '          '
+  1660: '          '
+  1670: '          '
+  1680: '          '
+  1690: '          '
+  1700: '          '
+  1710: '          '
+  1720: '          '
+  1730: '          '
+  1740: '          '
+  1750: '          '
+  1760: '          '
+  1770: '          '
+  1780: '          '
+  1790: '          '
+  1800: '          '
+  1810: '          '
+  1820: '          '
+  1830: '          '
+  1840: '          '
+  1850: '          '
+  1860: '          '
+  1870: '          '
+  1880: '          '
+  1890: '          '
+  1900: '          '
+  1910: '          '
+  1920: '          '
+  1930: '          '
+  1940: '          '
+  1950: '          '
+  1960: '          '
+  1970: '          '
+  1980: '          '
+  1990: '          '
 
-# Show position ruler
-line1 = lines[1].rstrip('\n')
-print("\nPosition ruler:")
-for start in range(0, len(line1), 10):
-    print(f"  {start:4d}: {line1[start:start+10]!r}")
+================================================================================
+LCCRISEX INSPECTION
+================================================================================
+Found EBCDIC files:
+  /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_20260831  size=852387880
+  /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_20260831  size=4962984400
 
-# ============================================================================
-# LCCRISEX - inspect EBCDIC layout
-# ============================================================================
-print("\n" + "=" * 80)
-print("LCCRISEX INSPECTION")
-print("=" * 80)
+File: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_20260831
+Raw bytes (first 200): b'\x00\x03?\x00\x00\x00\x00\x13?\xc4\x03\x07\x89Y\x10\x7f\xf2\xf9\xf7\xf6@@@@@\xf0\xf0\xf8\x00\x00\x00\x04\x00\x00\x0c\t\x14\x19\x99%|\xd6\xc2\xe7@@@@@@@@@@@@@@@@@@@@@@@@@@\xf0\x00\x00\x00\x00\x00\x0f\x00\x00\x00\x00\x00\x0c\x00\x00\x0f@@\x05\x0c\x00\x00\x00\x04\x80\x00\x0c\x00\x00\x00\x00\x00\x00\x0c\x00\x00\x00\x04\x80\x00\x0c\x06\x19 %\x17\x0c\x00\x00\x00\x00\x00\x0c@@@\x00\x1f@@@@@@\xd4\xe8\xd9@@@@@@@\xc4\x03\x07\x89Y\x10\x7f\xc1\x03\x07\x89Y\x10\x7f\t\x14\x19\x99%|\x00\x00\x00\x00\x00\x10@l\x00\x00\x00\x00\x00\x0c\x01\x17 %\x01|\x00\x00\x00\x00\x00\x10@l\x00\x00\x00\x00\x00\x00\x00\x00'
 
-import glob
-ebcdic_files = sorted(glob.glob(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_*"
-))
-print("Found EBCDIC files:")
-for f in ebcdic_files:
-    print(f"  {f}  size={Path(f).stat().st_size}")
+Decoded (cp500) first 500 chars:
+'\x00\x03\x1a\x00\x00\x00\x00\x13\x1aD\x03\x7fiß\x10"2976     008\x00\x00\x00\x9c\x00\x00\x0c\x8d\x9d\x19r\n@OBX                          0\x00\x00\x00\x00\x00\x0f\x00\x00\x00\x00\x00\x0c\x00\x00\x0f  \t\x0c\x00\x00\x00\x9cØ\x00\x0c\x00\x00\x00\x00\x00\x00\x0c\x00\x00\x00\x9cØ\x00\x0c\x86\x19\x80\n\x87\x0c\x00\x00\x00\x00\x00\x0c   \x00\x1f      MYR       D\x03\x7fiß\x10"A\x03\x7fiß\x10"\x8d\x9d\x19r\n@\x00\x00\x00\x00\x00\x10 %\x00\x00\x00\x00\x00\x0c\x01\x87\x80\n\x01@\x00\x00\x00\x00\x00\x10 %\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 \x00\x00ç\x03\x1a\x00\x00\x00\x00\x00\x83\x00\x00\x0c4 0904000000000000000000000WINGTM                      \x00\x00\x00\x002976     0000000000000000000\x00\x00\x01æ\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x001\x00\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x1a\x00\x00\x00\x00m\x1aD\x03\x7fhç/^1643     008\x00\x00\x00\x02\x00\x00\x0c\x8d\x08\x19r\næBBX                          0\x00\x00\x00\x00\x00\x0f\x00\x00\x00\x00\x00\x0c\x00\x00\x0f  \x00\x0c\x00\x00\x00\x02ê\x00\x0c\x00\x00\x00\x00\x13\x00\x0c\x00\x00\x00\x02ê\x00\x0c\x86\x19\x80\n\x87\x0c\x00\x00\x00'
 
-# Pick first non-DESC file
-coll_file = [f for f in ebcdic_files if 'DESC' not in f]
-if coll_file:
-    with open(coll_file[0], 'rb') as f:
-        raw = f.read(2000)
-    print(f"\nFile: {coll_file[0]}")
-    print(f"Raw bytes (first 200): {raw[:200]!r}")
-    decoded = raw.decode('cp500', errors='replace')
-    print(f"\nDecoded (cp500) first 500 chars:")
-    print(repr(decoded[:500]))
+Total file size: 852387880
 
-    # Determine record length by looking for repeating pattern
-    print(f"\nTotal file size: {Path(coll_file[0]).stat().st_size}")
-    # Try common record lengths
-    size = Path(coll_file[0]).stat().st_size
-    for rl in [80, 100, 128, 150, 200, 250, 300, 350, 400, 500]:
-        if size % rl == 0:
-            print(f"  Possible record length: {rl} ({size // rl} records)")
+================================================================================
+BOPESS.TXT INSPECTION
+================================================================================
+Total lines: 300
+  Line 0: '001 PCS                                                                               \n'
+          length=7
+  Line 1: '002 JSS J S SULAIMAN              KL 3314285 3364280                                  \n'
+          length=52
+  Line 2: '003 JRC JLN RAJA CHULAN           KL 3314016 3364011                                  \n'
+          length=52
 
-# ============================================================================
-# BOPESS.TXT - inspect
-# ============================================================================
-print("\n" + "=" * 80)
-print("BOPESS.TXT INSPECTION")
-print("=" * 80)
+================================================================================
+SAS7BDAT FILE COLUMNS
+================================================================================
 
-bopess = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/BOPESS.txt")
-if bopess.exists():
-    with open(bopess, 'r') as f:
-        lines = f.readlines()
-    print(f"Total lines: {len(lines)}")
-    for i in range(min(3, len(lines))):
-        print(f"  Line {i}: {repr(lines[i])}")
-        print(f"          length={len(lines[i].rstrip())}")
-else:
-    print(f"NOT FOUND: {bopess}")
+MAST: mast0809.sas7bdat
+  Columns: ['FICODE', 'FACILS', 'APPLCODE', 'ACCTNOX', 'NAME', 'NAME2', 'NAME3', 'NAME4', 'NAME5', 'NAME6', 'POSTCODE', 'TFID', 'CUSTCODX', 'RETAILID', 'STATE', 'SCORE1', 'SCORE2', 'BUSREGN', 'BIRTHDTX', 'SECTOR', 'SETTLED', 'SM_STATUS', 'IA_LRU', 'SM_DATE', 'REVIEW_DT', 'ACCT_BLOCK_IND', 'ACCT_BLOCK_REASON', 'ASCORE_LTST', 'ASCORE_PERM', 'APVDATE', 'INDUSTRIAL_SECTOR_CD', 'LEGAL_ACTION_CD', 'LEGAL_ACTION_DT', 'E_INVOICE_IND', 'CCPT_LTST_REVIEW_DT', 'FDB_TAG', 'FDB_TAG_DT', 'FDB_SCORING_DT', 'ACCT_WRITE_OFF_STATUS', 'ACCTNO', 'CUSTCODE', 'DNBFISME', 'BIRTHDT']
 
-# ============================================================================
-# SAS7BDAT COLUMNS - inspect
-# ============================================================================
-print("\n" + "=" * 80)
-print("SAS7BDAT FILE COLUMNS")
-print("=" * 80)
+CRED: cred0809.sas7bdat
+  Columns: ['RECTYPE', 'TRANSREF', 'SYSCODE', 'TRANSTYP', 'CREATTYP', 'FICODE', 'APPLCODE', 'ACCTNOX', 'CCRISFAC', 'SUBACCT', 'POSIDATE', 'OUTSTAND', 'MATUREDX', 'PRODCODE', 'PRINAMT_MYRX', 'INTAMT_MYRX', 'OTH_CHARGEX', 'ACCTNO', 'MATUREDS']
 
-import pyreadstat
+PROV: prov0809.sas7bdat
+  Columns: ['RECTYPE', 'SUBACCT', 'TRANSREX', 'CREATTYP', 'FICODE', 'APPLCODE', 'ACCTNOX', 'CCRISFAC', 'POSIDATE', 'PRINAMT', 'INTAMT', 'IISAMT', 'TOTIISR', 'WRITOFF', 'NPLIND', 'PRODCODE', 'FIXFLT', 'CALBASP', 'INTAMT_MYR', 'PRINAMT_MYR', 'TENOR_INT', 'OTH_CHARGE', 'ACCTNO']
 
-sas_files = {
-    'MAST': "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/mast0809.sas7bdat",
-    'CRED': "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/cred0809.sas7bdat",
-    'PROV': "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/prov0809.sas7bdat",
-    'SUBA': "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/suba0809.sas7bdat",
-    'NPLA': "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBTNPGS/npla.sas7bdat",
-}
+SUBA: suba0809.sas7bdat
+  Columns: ['RECTYPE', 'TRANSREF', 'SYSCODE', 'TRANSTYP', 'CREATTYP', 'FICODE', 'APPLCODE', 'ACCTNOX', 'CCRISFAC', 'SUBACCT', 'REVOLVG', 'CREATDS', 'EXPIRDS', 'SYNDICAT', 'SPECIALF', 'PURPOSES', 'FCONCEPT', 'AANUMBER', 'INTRATE', 'SPREAD', 'INFUNDRT', 'DISCNTB', 'DISCNTF', 'TRANXMT', 'EXCHRTE', 'FORCURR', 'LIABCODE', 'BTREL', 'RELFROM', 'CURRENCY', 'LIMTCURM', 'LIMTCURF', 'OFFAPIND', 'WORKERID', 'REIMBRID', 'TFDESC01', 'TFDESC02', 'TFDESC03', 'TFDESC04', 'TFCNTR01', 'TFCNTR02', 'TFCNTR03', 'TFCNTR04', 'TFCNTR05', 'TFCNTR06', 'TFCNTR07', 'TFCNTR08', 'TFCNTR09', 'TFCNTR10', 'TFCNTR11', 'TFCNTR12', 'TFINDR01', 'TFINDR02', 'TFINDR03', 'TFINDR04', 'TFINDR05', 'TFINDR06', 'TFINDR07', 'TFINDR08', 'TFINDR09', 'TFINDR10', 'TFINDR11', 'TFINDR12', 'SINDICAT', 'BATYPE', 'ACCPTCOM', 'SUBLIMIT', 'SUBPROD', 'FACLINE', 'PRODGRP', 'INTRECV', 'ICURBAL', 'DCURBAL', 'DBALANCE', 'DIRCTIND', 'TRANSREL', 'COMMRATE', 'DISCRATE', 'INTBASE', 'PLUSMINUS', 'NUMDAYS', 'BACOM', 'ORI_AALIMIT', 'DISCOUNT_PROCEED', 'MTD_TAWIDH_AMT', 'MTD_GHARAMAH_AMT', 'REPAY_SOURCE', 'REPAY_TYPE_CD', 'PROP_DEVELOP_FIN_IND', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'CLIMATE_MITIGATE_GP1_FLG', 'CLIMATE_ADAPT_GP2_FLG', 'CLIMATE_ENVIRONMT_GP3_FLG', 'CLIMATE_TRANSITION_GP4_FLG', 'CLIMATE_PROHIBIT_GP5_FLG', 'SOURCE_INCOME_CURRENCY_CD', 'AADATE', 'REFERRAL_BRANCH', 'APPL_COMMERCIAL_TAG', 'COMBRATE', 'ACCTNO', 'EXPYSDT', 'AA_APPROVED_DT']
 
-for name, path in sas_files.items():
-    p = Path(path)
-    if p.exists():
-        df, meta = pyreadstat.read_sas7bdat(p, metadataonly=True)
-        print(f"\n{name}: {p.name}")
-        print(f"  Columns: {meta.column_names}")
-    else:
-        print(f"\n{name}: NOT FOUND at {p}")
+NPLA: npla.sas7bdat
+  Columns: ['CVAR06', 'CVAR01', 'NDATE', 'STATUS']
