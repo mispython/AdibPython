@@ -12,6 +12,13 @@ Outputs (in EIIDLOAN output dir):
   - lndly{DD}.parquet
   - mloan_<rdate>.csv, mcred_<rdate>.csv, mhp_<rdate>.csv
   - dmloan_<rdate>.csv, dmcred_<rdate>.csv, dmhp_<rdate>.csv
+
+Faithful to SAS logic:
+  REPTDATE = INPUT(SUBSTR(PUT(EXTDATE, Z11.), 1, 8), MMDDYY8.);
+  PREVDATE = REPTDATE - 1;
+  DLETDATE = REPTDATE - 3;
+  IF MONTH(REPTDATE)=1 AND DAY(REPTDATE)=1 THEN YY=YEAR(REPTDATE)-1;
+                                            ELSE YY=YEAR(REPTDATE);
 """
 
 import duckdb
@@ -37,9 +44,8 @@ con = duckdb.connect()
 # 1. Read DATEFILE (flat file)
 #    SAS: INFILE DATEFILE LRECL=80 OBS=1; INPUT @01 EXTDATE 11.;
 #    REPTDATE = INPUT(SUBSTR(PUT(EXTDATE, Z11.), 1, 8), MMDDYY8.);
-#
-#    Requirement: apply timedelta(days=1) to the parsed date to derive
-#    the reporting date.
+#    PREVDATE = REPTDATE - 1;
+#    DLETDATE = REPTDATE - 3;
 # ---------------------------------------------------------------------------
 print(f"Reading DATEFILE: {DATEFILE_PATH}")
 with open(DATEFILE_PATH, 'r') as f:
@@ -48,12 +54,8 @@ with open(DATEFILE_PATH, 'r') as f:
 extdate      = int(first_line[0:11].strip())
 extdate_z11  = f"{extdate:011d}"
 reptdate_str = extdate_z11[0:8]                          # MMDDYYYY
-parsed_date  = datetime.strptime(reptdate_str, '%m%d%Y')
+reptdate     = datetime.strptime(reptdate_str, '%m%d%Y') # no delta applied
 
-# Apply timedelta(days=1) to obtain the reporting date
-reptdate = parsed_date + timedelta(days=1)
-
-# Previous and delete dates
 prevdate = reptdate - timedelta(days=1)
 dletdate = reptdate - timedelta(days=3)
 
@@ -67,15 +69,17 @@ prevyear = yy
 reptmon  = reptdate.month
 rdate    = reptdate.strftime('%d/%m/%Y')
 
-# SAS numeric date representation (Z5. of SAS date: YYMMDD as int)
+# SAS numeric representation of the SAS date (Z5. of SAS date value)
+# SAS date value = days since 1960-01-01, Z5.-formatted as YYMMDD-like digits.
+# Here we preserve the original SUBSTR(PUT(EXTDATE,Z11.),1,8) => MMDDYYYY logic
 reptdate_num = int(reptdate.strftime('%y%m%d'))
 
 print(f"Islamic Daily Loan Movement - {rdate}")
-print(f"  PARSED   : {parsed_date.date()}")
+print(f"  EXTDATE  : {extdate}")
 print(f"  REPTDATE : {reptdate.date()}  (num: {reptdate_num})")
 print(f"  PREVDATE : {prevdate.date()}")
 print(f"  DLETDATE : {dletdate.date()}")
-print(f"  EXTDATE  : {extdate}")
+print(f"  REPTMON  : {reptmon:02d}")
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +98,7 @@ print(f"  Columns: {list(df_lnnote.columns)}")
 # 3. Build LOAN dataframe
 #    SAS: KEEP ACCTNO NOTENO NAME BALANCE LOANTYPE CURBAL REPTDATE EXTDATE;
 #         BRANCH = PENDBRH;
-#    NOTE: reptdate column is NOT kept (per requirement).
+#    NOTE: reptdate/extdate columns are NOT carried into output.
 # ---------------------------------------------------------------------------
 required = ['ACCTNO', 'NOTENO', 'NAME', 'BALANCE', 'LOANTYPE', 'CURBAL', 'PENDBRH']
 missing = [c for c in required if c not in df_lnnote.columns]
@@ -175,7 +179,7 @@ con.execute("""
 
 
 # ---------------------------------------------------------------------------
-# 7. Previous-day parquet (path via timedelta(days=1))
+# 7. Previous-day parquet (PREVDATE = REPTDATE - 1 day)
 # ---------------------------------------------------------------------------
 lndly_prev = OUTPUT_DIR / f"lndly{prevday:02d}.parquet"
 print(f"Reading previous day: {lndly_prev}")
