@@ -1,86 +1,342 @@
-====================================================================================================
-FILE: /host_pq/dwh/input/LOAN/NFEEFILE_20260912
-SIZE: 16,013,867,400 bytes (14.91 GB)
---- HEAD (first 256 bytes) ---
-HEX  : 02000000125c20010f600c0000002c0000002cd7d5d3c1001f40f0d5e8d5d5d3e3ff000000000000000c000000000000000c000000000000060c000000000
-000000c000000000000000c000000000000000c000000000000000c000000000000000c000000000000000c000000000000000c01242000024c12302002364c00000
-0000000000c000000000000000c000000000000060c000000000000000c000000000000000c000000000000000c000000000000000c000000000000000c000000000
-000000c000000000c000000000cf30000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-ASCII: .....\ ..`....,...,......@.........................................................................................$ ..L.0 .6
-L..................................................................................................................................
-EBCDIC digit ratio (0xF0-0xF9 / 0x40): 3 /256
-Non-printable bytes: 243 /256
-Newline count (\n): 0
-CR count       (\r): 0
---- TAIL (first 256 bytes) ---
-HEX  : 000c000000000000000c09182006261c09182006261c000000000000000c000000000000000c000000000000000c000000000000000c000000000000000c0
-00000000000000c000000000000000c000000000000000c000000000001200c000000000c003500000cf100000000000000000000000000000000000000000000000
-2                                                          The SAS System                           16:11 Sunday, September 13, 2026
+# -*- coding: utf-8 -*-
+"""
+EIBDLNS2 - Branch Daily Outstanding Loan Summary Report
+Reads SAS7BDAT inputs (NFEEFILE, ACCTFILE) + fixed-width ASCII (LKP_BRANCH)
+"""
 
-000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00008996992601c90010f983c0000822c0003822cd4d5d7c3029f40f0d5e8d5d5d4e2f7000000000000000c000000000000000c000000000030100c0000
-ASCII: ............ .&... .&....................................................................... .......5........................
-.........................................................................i.`.....<...,...,......@.............................0....
-EBCDIC digit ratio (0xF0-0xF9 / 0x40): 4 /256
-Non-printable bytes: 243 /256
-Newline count (\n): 0
-CR count       (\r): 0
-====================================================================================================
-FILE: /host_pq/dwh/input/LOAN/ACCTFILE_20260912
-SIZE: 32,412,068,000 bytes (30.19 GB)
---- HEAD (first 256 bytes) ---
-HEX  : 02000000125fd9d6e2c8c1e2c9c4c140c2c9d5e3c940c1d3c9c1e2404040c1f0f9f3f7f0f6f6404040d5f6f8f0f1f0f2f0f8f5f9f6f840404040404040400
-33fd30000002c00077cd74040404040404020010fd5600c0000002c0000002c01242000024c01242010024c00000000000c07062023187c658c000000000000000c0
-00000000000000c000000000000000c000000002500000c120cd5d6c2d3c540d9c9c7c8e3e2404dc6c2f160f1f3c15d4040404040404040404040404040404040404
-04040404040404040404040404040404040404040404040404040404040f0f0f0f100000000000c000fc90000002c0000002cf0f3f1f10021200cc30124
-ASCII: ....._.........@.....@.....@@@........@@@.............@@@@@@@@.?....,..|.@@@@@@@ ...`....,...,.$ ..L.$ ..L........ #.|e......
-.......................%..........@......@M...`...]@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@................,...,.....! ...$
-EBCDIC digit ratio (0xF0-0xF9 / 0x40): 103 /256
-Non-printable bytes: 156 /256
-Newline count (\n): 0
-CR count       (\r): 0
---- TAIL (first 256 bytes) ---
-HEX  : 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-000000000000000000000000000000000000000000000000000000000000000000008996997128fc1c2c4e4d340d9c1e2c8c9c440c2c9d540d6e3c8d4c1d54040404
-04040404040404040d5f8f3f0f7f1f3f0f9f5f0f3f14040404040404040033fd30000824c00077cd74040404040404090010fd5128c0000824c0000824c013020070
-30c01302013030c05302011150c04052013095c650c000000000000000c000000000514560c000000000000000c000000001770350c072cd7d9d6e3d6d5
-ASCII: ..................................................................................................i........@......@...@......
-@@@@@@@@@@@@.............@@@@@@@@.?....L..|.@@@@@@@.........L...L.0 ....0 ....0 ..... ..\e...............V..............p5..,......
-EBCDIC digit ratio (0xF0-0xF9 / 0x40): 42 /256
-Non-printable bytes: 207 /256
-Newline count (\n): 0
-CR count       (\r): 0
-====================================================================================================
-FILE: /sasdata/rawdata/lookup/LKP_BRANCH
-SIZE: 30,832 bytes (0.00 GB)
---- HEAD (first 256 bytes) ---
-HEX  : 423030312050435320202042414e4b2d41544d432020202020202020202020202020202020202020202020202020202020432020202020202020202020202
-020202020202020202020202020202020200d0a42303032204a53532020204a414c414e2053554c54414e2053554c41494d414e20202020202020202020202057202
-020204f2020202020202020202020202020202020202020202020202020202020200d0a42303033204a52432020204a414c414e2052414a41204348554c414e20202
-02020202020202020202020202057202020204f2020202020202020202020202020202020202020202020202020202020200d0a42303034204d4c4b2020
-ASCII: B001 PCS   BANK-ATMC                             C                              ..B002 JSS   JALAN SULTAN SULAIMAN           
- W    O                              ..B003 JRC   JALAN RAJA CHULAN                W    O                              ..B004 MLK  
-EBCDIC digit ratio (0xF0-0xF9 / 0x40): 0 /256
-Non-printable bytes: 6 /256
-Newline count (\n): 49
-CR count       (\r): 49
---- TAIL (first 256 bytes) ---
-HEX  : 2048323920202042414e44415220534554494120414c414d20485020485542202020202020202020532020202020202020202020202020202020202020202
-0202020202020202020202020200d0a42383434204834342020204b414e4741522048502048554220202020202020202020202020202020202020205220202020202
-020202020202020202020202020202020202020202020202020202020200d0a42383435204834352020204c414255414e20485020485542202020202020202020202
-02020202020202020204c20202020202020202020202020202020202020202020202020202020202020202020200d0a4238343620483436202020544157
-ASCII:  H29   BANDAR SETIA ALAM HP HUB         S                                   ..B844 H44   KANGAR HP HUB                    R  
-                                 ..B845 H45   LABUAN HP HUB                    L                                   ..B846 H46   TAW
-EBCDIC digit ratio (0xF0-0xF9 / 0x40): 0 /256
-Non-printable bytes: 6 /256
-Newline count (\n): 50
-CR count       (\r): 50
-3                                                          The SAS System                           16:11 Sunday, September 13, 2026
+import duckdb
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pyreadstat
+from datetime import timedelta
+from pathlib import Path
+import saspy
 
-NOTE: 51 records were read from the infile "cd /sas/python/virt_edw;source bin/activate;python 
-      /stgsrcsys/host/uat/python/EIBDLNS2.py".
-      The minimum record length was 21.
-      The maximum record length was 519.
-NOTE: DATA statement used (Total process time):
-      real time           1.29 seconds
-      cpu time            0.00 seconds
+OUTPUT_DIR = Path("stgsrcsys/host/holding")
+MIS_DIR    = Path("/host_pq/dwh/mis")
+
+DATEFILE = Path("/host_pq/dwh/input/LOAN/DATEFILE")
+FEEFILE  = "/host_pq/dwh/input/LOAN/NFEEFILE_{reptyear}{reptmon}{reptday}"
+ACCTFILE = "/host_pq/dwh/input/LOAN/ACCTFILE_{reptyear}{reptmon}{reptday}"
+BRANCHF  = Path("/sasdata/rawdata/lookup/LKP_BRANCH")
+
+con = duckdb.connect(":memory:")
+print("REPORT ID : EIBDLNSA")
+
+# ---------------------------------------------------------------------------
+# DATA REPTDATE
+# ---------------------------------------------------------------------------
+with open(DATEFILE, "r") as f:
+    first_line = f.readline()
+
+EXTDATE_str = first_line[0:11].strip().zfill(11)
+extdate_str = EXTDATE_str[:8]
+EXTDATE     = int(EXTDATE_str)
+
+REPTDATE = con.execute(
+    f"SELECT CAST(strptime('{extdate_str}', '%m%d%Y') AS DATE)"
+).fetchone()[0]
+
+PREVDATE = REPTDATE - timedelta(days=1)
+DLETDATE = REPTDATE - timedelta(days=3)
+REPTDAY  = REPTDATE.day
+PREVDAY  = PREVDATE.day
+DLETDAY  = DLETDATE.day
+YY = REPTDATE.year - 1 if (REPTDATE.month == 1 and REPTDATE.day == 1) else REPTDATE.year
+
+REPTYEAR     = str(REPTDATE.year)
+PREVYEAR     = str(YY).zfill(4)
+REPTMON      = str(REPTDATE.month).zfill(2)
+REPTDAY_STR  = str(REPTDAY).zfill(2)
+PREVDAY_STR  = str(PREVDAY).zfill(2)
+DLETDAY_STR  = str(DLETDAY).zfill(2)
+RDATE        = REPTDATE.strftime("%d%m%Y")
+REPTDATE_INT = int(REPTDATE.strftime("%y%m%d"))
+
+print(f"Report Date: {REPTDATE.strftime('%d/%m/%Y')}")
+
+feefile_path  = FEEFILE.format(reptyear=REPTYEAR, reptmon=REPTMON, reptday=REPTDAY_STR)
+acctfile_path = ACCTFILE.format(reptyear=REPTYEAR, reptmon=REPTMON, reptday=REPTDAY_STR)
+
+# ---------------------------------------------------------------------------
+# Read SAS7BDAT inputs with pyreadstat (column-pruned)
+# ---------------------------------------------------------------------------
+print("Reading NFEEFILE ...")
+fee_cols = ["ACCTNO","NOTENO","LOANTYPE","FEEPLN","FEEAMTA","FEEAMTC","FEEAMTB"]
+df_fee, _ = pyreadstat.read_sas7bdat(feefile_path, usecols=fee_cols)
+print(f"  {len(df_fee):,} rows")
+
+print("Reading ACCTFILE ...")
+acct_cols = [
+    "ACCTNO","NAME","BANKNO","ACCBRCH","NOTENO","REVERSED","LOANTYPE",
+    "NTBRCH","PENDBRH","LASTTRAN","CURBAL","INTAMT","PAIDIND","NTINT",
+    "INTEARN","ACCRUAL","INTEARN2","INTEARN3","INTEARN4",
+    "FEEAMT","FEEAMT2","FEEAMT4","NFEEAMT5","NFEEAMT6","NFEEAMT7",
+    "FEEAMT8","FEEAMT9","FEEAMT13","FEEAMT10","FEEAMT11","FEEAMT12",
+    "FEEAMT14","FEEAMT15","FEEAMT16",
+]
+df_acct, _ = pyreadstat.read_sas7bdat(acctfile_path, usecols=acct_cols)
+print(f"  {len(df_acct):,} rows")
+
+# Register as DuckDB views
+con.register("feplan_src", df_fee)
+con.register("loan_src",   df_acct)
+
+# ---------------------------------------------------------------------------
+# DATA FEPLAN
+# ---------------------------------------------------------------------------
+con.execute("""
+    CREATE OR REPLACE TABLE feplan AS
+    SELECT
+        CAST(ACCTNO   AS BIGINT)  AS acctno,
+        CAST(NOTENO   AS BIGINT)  AS noteno,
+        CAST(LOANTYPE AS INTEGER) AS loantype,
+        FEEPLN                    AS feepln,
+        CAST(FEEAMTA  AS DOUBLE)  AS feeamta,
+        CAST(FEEAMTC  AS DOUBLE)  AS feeamtc,
+        CAST(FEEAMTB  AS DOUBLE)  AS feeamtb
+    FROM feplan_src
+    WHERE ACCTNO < 3000000000
+      AND LOANTYPE IN (135, 136)
+      AND FEEPLN = 'PA'
+""")
+
+con.execute("""
+    CREATE OR REPLACE TABLE feepo AS
+    SELECT acctno, noteno,
+           SUM(feeamta) AS feeamta,
+           SUM(feeamtb) AS feeamtb,
+           SUM(feeamtc) AS feeamtc
+    FROM feplan
+    GROUP BY acctno, noteno
+""")
+
+# ---------------------------------------------------------------------------
+# DATA LOAN
+# ---------------------------------------------------------------------------
+con.execute(f"""
+    CREATE OR REPLACE TABLE loan_raw AS
+    SELECT
+        CAST(ACCTNO   AS BIGINT)  AS acctno,
+        NAME                      AS name,
+        CAST(BANKNO   AS INTEGER) AS bankno,
+        CAST(ACCBRCH  AS INTEGER) AS accbrch,
+        CAST(NOTENO   AS BIGINT)  AS noteno,
+        REVERSED                  AS reversed,
+        CAST(LOANTYPE AS INTEGER) AS loantype,
+        CAST(NTBRCH   AS INTEGER) AS ntbrch,
+        CAST(PENDBRH  AS INTEGER) AS pendbrh,
+        CAST(LASTTRAN AS BIGINT)  AS lasttran,
+        CAST(CURBAL   AS DOUBLE)  AS curbal,
+        CAST(INTAMT   AS DOUBLE)  AS intamt,
+        PAIDIND                   AS paidind,
+        NTINT                     AS ntint,
+        CAST(INTEARN  AS DOUBLE)  AS intearn,
+        CAST(ACCRUAL  AS DOUBLE)  AS accrual,
+        CAST(INTEARN2 AS DOUBLE)  AS intearn2,
+        CAST(INTEARN3 AS DOUBLE)  AS intearn3,
+        CAST(INTEARN4 AS DOUBLE)  AS intearn4,
+        CAST(FEEAMT   AS DOUBLE)  AS feeamt,
+        CAST(FEEAMT2  AS DOUBLE)  AS feeamt2,
+        CAST(FEEAMT4  AS DOUBLE)  AS feeamt4,
+        CAST(NFEEAMT5 AS DOUBLE)  AS nfeeamt5,
+        CAST(NFEEAMT6 AS DOUBLE)  AS nfeeamt6,
+        CAST(NFEEAMT7 AS DOUBLE)  AS nfeeamt7,
+        CAST(FEEAMT8  AS DOUBLE)  AS feeamt8,
+        CAST(FEEAMT9  AS DOUBLE)  AS feeamt9,
+        CAST(FEEAMT13 AS DOUBLE)  AS feeamt13,
+        CAST(FEEAMT10 AS DOUBLE)  AS feeamt10,
+        CAST(FEEAMT11 AS DOUBLE)  AS feeamt11,
+        CAST(FEEAMT12 AS DOUBLE)  AS feeamt12,
+        CAST(FEEAMT14 AS DOUBLE)  AS feeamt14,
+        CAST(FEEAMT15 AS DOUBLE)  AS feeamt15,
+        CAST(FEEAMT16 AS DOUBLE)  AS feeamt16,
+        CASE
+            WHEN COALESCE(PENDBRH,0) <> 0 THEN PENDBRH
+            WHEN COALESCE(NTBRCH, 0) <> 0 THEN NTBRCH
+            ELSE ACCBRCH
+        END AS branch
+    FROM loan_src
+    WHERE LOANTYPE IN (135, 136)
+      AND (
+            ( (REVERSED IS NULL OR REVERSED <> 'Y')
+              AND NOTENO IS NOT NULL
+              AND (PAIDIND IS NULL OR PAIDIND <> 'P') )
+            OR
+            ( PAIDIND = 'P' AND LASTTRAN = {REPTDATE_INT} )
+          )
+""")
+
+con.execute("""
+    CREATE OR REPLACE TABLE loan AS
+    SELECT
+        l.*,
+        COALESCE(f.feeamta, 0) AS feeamta_x,
+        COALESCE(f.feeamtb, 0) AS feeamtb_x,
+        COALESCE(f.feeamtc, 0) AS feeamtc_x,
+        CASE
+            WHEN l.acctno > 8000000000 AND l.loantype IN (720, 725)
+            THEN l.feeamt + COALESCE(f.feeamta, 0) + COALESCE(f.feeamtc, 0)
+            ELSE l.feeamt + COALESCE(f.feeamta, 0)
+        END AS feeamt_final,
+        CASE
+            WHEN l.ntint = 'A'
+            THEN l.curbal + l.intearn - l.intamt
+                 + CASE
+                     WHEN l.acctno > 8000000000 AND l.loantype IN (720,725)
+                     THEN l.feeamt + COALESCE(f.feeamta,0) + COALESCE(f.feeamtc,0)
+                     ELSE l.feeamt + COALESCE(f.feeamta,0)
+                   END
+            ELSE l.curbal + l.accrual
+                 + CASE
+                     WHEN l.acctno > 8000000000 AND l.loantype IN (720,725)
+                     THEN l.feeamt + COALESCE(f.feeamta,0) + COALESCE(f.feeamtc,0)
+                     ELSE l.feeamt + COALESCE(f.feeamta,0)
+                   END
+        END AS balance
+    FROM loan_raw l
+    LEFT JOIN feepo f ON l.acctno = f.acctno AND l.noteno = f.noteno
+""")
+
+# ---------------------------------------------------------------------------
+# PROC SUMMARY / MIS.LOAN
+# ---------------------------------------------------------------------------
+con.execute(f"""
+    CREATE OR REPLACE TABLE loan_summary AS
+    SELECT branch,
+           {EXTDATE} AS extdate,
+           COUNT(*)  AS noacct,
+           SUM(balance) AS brlnamt
+    FROM loan
+    GROUP BY branch, extdate
+    ORDER BY branch
+""")
+
+pq.write_table(
+    con.execute("SELECT * FROM loan_summary").arrow(),
+    MIS_DIR / f"LOAN{REPTDAY_STR}.parquet"
+)
+
+# ---------------------------------------------------------------------------
+# PREVLN / LOANS
+# ---------------------------------------------------------------------------
+prev_file = MIS_DIR / f"LOAN{PREVDAY_STR}.parquet"
+if prev_file.exists():
+    con.execute(f"""
+        CREATE OR REPLACE TABLE prevln AS
+        SELECT branch, brlnamt AS pbrlnamt
+        FROM read_parquet('{prev_file}')
+    """)
+else:
+    con.execute("""
+        CREATE OR REPLACE TABLE prevln AS
+        SELECT branch, CAST(0.0 AS DOUBLE) AS pbrlnamt
+        FROM loan_summary WHERE 1=0
+    """)
+
+con.execute("""
+    CREATE OR REPLACE TABLE loans AS
+    SELECT COALESCE(l.branch, p.branch) AS branch,
+           l.extdate, l.noacct, l.brlnamt,
+           COALESCE(p.pbrlnamt, 0) AS pbrlnamt
+    FROM loan_summary l
+    FULL OUTER JOIN prevln p ON l.branch = p.branch
+""")
+
+# ---------------------------------------------------------------------------
+# BRANCH - read ASCII fixed-width directly in Python
+# ---------------------------------------------------------------------------
+branch_rows = []
+with open(BRANCHF, "r", encoding="latin-1", newline="") as f:
+    for line in f:
+        line = line.rstrip("\r\n")
+        if not line or line.startswith("NOTE:") or "The SAS System" in line:
+            continue
+        bank   = line[0:1]
+        branch = line[1:4].strip()
+        abbrev = line[5:8]
+        name   = line[11:41].rstrip()
+        branch_rows.append({
+            "bank": bank,
+            "branch": int(branch) if branch.isdigit() else None,
+            "abbrev": abbrev,
+            "brchname": name,
+        })
+
+df_branch = pd.DataFrame(branch_rows)
+con.register("branch", df_branch)
+
+# ---------------------------------------------------------------------------
+# MLOAN
+# ---------------------------------------------------------------------------
+con.execute("""
+    CREATE OR REPLACE TABLE mloan AS
+    SELECT COALESCE(l.branch, b.branch) AS branch,
+           b.bank, b.abbrev, b.brchname,
+           l.extdate,
+           COALESCE(l.noacct, 0) AS noacct,
+           l.pbrlnamt, l.brlnamt,
+           l.brlnamt - l.pbrlnamt AS varianln
+    FROM loans l
+    LEFT JOIN branch b ON l.branch = b.branch
+""")
+
+# ---------------------------------------------------------------------------
+# Final report
+# ---------------------------------------------------------------------------
+report = con.execute("""
+    SELECT branch AS code, abbrev, brchname AS name,
+           noacct AS no_of_accounts,
+           pbrlnamt AS prev_amount,
+           brlnamt  AS curr_amount,
+           varianln AS variance
+    FROM mloan WHERE branch IS NOT NULL
+    UNION ALL
+    SELECT 999999, 'TOTAL', 'TOTAL',
+           SUM(noacct), SUM(pbrlnamt), SUM(brlnamt), SUM(varianln)
+    FROM mloan
+    ORDER BY code
+""").arrow()
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+output_base = f"EIBDLNS2_Branch_Loan_Summary_{REPTDATE.strftime('%Y%m%d')}"
+
+pq.write_table(report, OUTPUT_DIR / f"{output_base}.parquet")
+print(f"Parquet saved: {OUTPUT_DIR / (output_base + '.parquet')}")
+
+sas = saspy.SASsession(cfgname="default")
+sas.df2sd(report.to_pandas(), table="EIBDLNS2", libref="WORK")
+sas.submit(f"""
+    libname out "{OUTPUT_DIR}";
+    data out.{output_base};
+        set WORK.EIBDLNS2;
+    run;
+""")
+sas.endsas()
+print(f"SAS7BDAT saved: {OUTPUT_DIR / (output_base + '.sas7bdat')}")
+
+# ---------------------------------------------------------------------------
+# Display
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 130)
+print("PUBLIC BANK BERHAD")
+print("BRANCH SUMMARY ON DAILY OUTSTANDING(RM)-BAE PERSONAL")
+print(f"AS AT {RDATE}")
+print("=" * 130)
+
+for row in report.to_pylist():
+    code = row["code"]
+    if code == 999999:
+        print("-" * 130)
+    print(f"{code:<8} {row['abbrev'] or '':<8} {row['name'] or '':<35} "
+          f"{row['no_of_accounts']:>12,} "
+          f"{row['prev_amount']:>20,.2f} "
+          f"{row['curr_amount']:>20,.2f} "
+          f"{row['variance']:>20,.2f}")
+
+print("=" * 130)
+con.close()
+print("\nProcessing complete!")
