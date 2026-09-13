@@ -1,495 +1,510 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-EIIDLOAN - Islamic Daily Loan Movement Report
-Tracks daily changes in term loans, revolving credit, and HP accounts
+EIBDLNS2 - Branch Daily Outstanding Loan Summary Report
+Python version of SAS job EIBDLNS2
 
-Inputs:
-  - EIIDLOAN/DATEFILE     : flat file (no extension)
-  - EIIDLOAN/LKP_BRANCH   : flat file (no extension)
-  - EIBRCGCS/enrh_ln_note_m{REPTMON}.sas7bdat : SAS7BDAT (pyreadstat, chunked)
-
-Outputs (in EIIDLOAN output dir):
-  - lndly{DD}.parquet
-  - mloan_<rdate>.csv, mcred_<rdate>.csv, mhp_<rdate>.csv
-  - dmloan_<rdate>.csv, dmcred_<rdate>.csv, dmhp_<rdate>.csv
-
-SAS-faithful date logic:
-  REPTDATE = INPUT(SUBSTR(PUT(EXTDATE, Z11.), 1, 8), MMDDYY8.);
-  PREVDATE = REPTDATE - 1;
-  DLETDATE = REPTDATE - 3;
-  IF MONTH(REPTDATE)=1 AND DAY(REPTDATE)=1 THEN YY=YEAR(REPTDATE)-1;
-                                            ELSE YY=YEAR(REPTDATE);
-
-Behaviour if previous-day parquet is missing (weekend / holiday / first run):
-  - Branch summaries (MLOAN/MCRED/MHP) still emit, with previous-day amounts = 0.
-  - Per-customer movement reports (DMLOAN/DMCRED/DMHP) are skipped with a warning.
+Pipeline:
+  1. Read DATEFILE (single-line ASCII) -> derive report date
+  2. Decode NFEEFILE (RECFM=FB, LRECL=300, EBCDIC + COMP-3)  -> NFEEFILE.parquet
+  3. Decode ACCTFILE (RECFM=FB, LRECL=4000, EBCDIC + COMP-3) -> ACCTFILE.parquet
+  4. Read LKP_BRANCH (ASCII fixed-width)                     -> LKP_BRANCH.parquet
+  5. DuckDB: feplan -> feepo -> loan -> loan_summary
+  6. Cross-day: read MIS_DIR/LOAN{PREVDAY}.sas7bdat (or .parquet)
+                write MIS_DIR/LOAN{REPTDAY}.sas7bdat + .parquet
+  7. Merge with branch, compute variance, write final report
+  8. Output: Parquet + SAS7BDAT (via saspy)
 """
 
 import duckdb
-from pathlib import Path
-from datetime import datetime, timedelta
-import pyreadstat
 import pandas as pd
-import tempfile
-
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pyreadstat
+from datetime import timedelta
+from pathlib import Path
+import saspy
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-DATEFILE_PATH = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/DATEFILE')
-BRANCH_PATH   = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/LKP_BRANCH')
-LNNOTE_DIR    = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS')
-OUTPUT_DIR    = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN')
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR = Path("/stgsrcsys/host/holding")             # final report output
+MIS_DIR    = Path("/stgsrcsys/host/uat/python/loans/")   # cross-day MIS storage
 
-# Chunk size for streaming the SAS7BDAT file
-CHUNK_SIZE = 500_000
+DATEFILE = Path("/host_pq/dwh/input/LOAN/DATEFILE")
+FEEFILE  = "/host_pq/dwh/input/LOAN/NFEEFILE_{reptyear}{reptmon}{reptday}"
+ACCTFILE = "/host_pq/dwh/input/LOAN/ACCTFILE_{reptyear}{reptmon}{reptday}"
+BRANCHF  = Path("/sasdata/rawdata/lookup/LKP_BRANCH")
 
-# DuckDB temp directory (for spilling on large data)
-TMP_DB_DIR = Path(tempfile.gettempdir()) / 'eiidloan_duckdb'
-TMP_DB_DIR.mkdir(parents=True, exist_ok=True)
+FEE_LRECL  = 300
+ACCT_LRECL = 4000
 
-con = duckdb.connect()
-con.execute(f"SET temp_directory = '{TMP_DB_DIR}'")
-con.execute("SET preserve_insertion_order = false")
+# ---------------------------------------------------------------------------
+# DuckDB
+# ---------------------------------------------------------------------------
+con = duckdb.connect(":memory:")
+print("REPORT ID : EIBDLNSA")
+
+# ===========================================================================
+# STEP 1 - DATA REPTDATE
+# ===========================================================================
+with open(DATEFILE, "r") as f:
+    first_line = f.readline()
+
+EXTDATE_str = first_line[0:11].strip().zfill(11)
+extdate_str = EXTDATE_str[:8]                      # MMDDYYYY
+EXTDATE     = int(EXTDATE_str)
+
+REPTDATE = con.execute(
+    f"SELECT CAST(strptime('{extdate_str}', '%m%d%Y') AS DATE)"
+).fetchone()[0]
+
+PREVDATE = REPTDATE - timedelta(days=1)
+DLETDATE = REPTDATE - timedelta(days=3)
+REPTDAY  = REPTDATE.day
+PREVDAY  = PREVDATE.day
+DLETDAY  = DLETDATE.day
+YY = REPTDATE.year - 1 if (REPTDATE.month == 1 and REPTDATE.day == 1) else REPTDATE.year
+
+REPTYEAR     = str(REPTDATE.year)
+PREVYEAR     = str(YY).zfill(4)
+REPTMON      = str(REPTDATE.month).zfill(2)
+REPTDAY_STR  = str(REPTDAY).zfill(2)
+PREVDAY_STR  = str(PREVDAY).zfill(2)
+DLETDAY_STR  = str(DLETDAY).zfill(2)
+RDATE        = REPTDATE.strftime("%d%m%Y")
+REPTDATE_INT = int(REPTDATE.strftime("%y%m%d"))
+
+print(f"Report Date: {REPTDATE.strftime('%d/%m/%Y')}")
+print(f"Prev   Date: {PREVDATE.strftime('%d/%m/%Y')}")
+
+feefile_path  = FEEFILE.format(reptyear=REPTYEAR, reptmon=REPTMON, reptday=REPTDAY_STR)
+acctfile_path = ACCTFILE.format(reptyear=REPTYEAR, reptmon=REPTMON, reptday=REPTDAY_STR)
+
+
+# ===========================================================================
+# Fixed-block + COMP-3 + EBCDIC decoders
+# ===========================================================================
+def _unpack_pd(raw: bytes, decimals: int = 0) -> float:
+    """Unpack a COMP-3 packed-decimal byte string into a Python float."""
+    if not raw:
+        return 0.0
+    sign_nibble = raw[-1] & 0x0F
+    digits = []
+    for b in raw[:-1]:
+        digits.append((b >> 4) & 0x0F)
+        digits.append(b & 0x0F)
+    digits.append((raw[-1] >> 4) & 0x0F)
+    digit_str = "".join(str(d) for d in digits)
+    num = int(digit_str) if digit_str else 0
+    if sign_nibble in (0x0D, 0x0B):
+        num = -num
+    return num / (10 ** decimals) if decimals else float(num)
+
+
+def _decode_ebcdic(raw: bytes) -> str:
+    return raw.decode("cp037", errors="replace").rstrip()
+
+
+def _read_fb(path: Path, reclen: int):
+    """Yield fixed-length records from a RECFM=FB file."""
+    with open(path, "rb") as f:
+        while True:
+            rec = f.read(reclen)
+            if len(rec) < reclen:
+                if rec:
+                    yield rec
+                return
+            yield rec
 
 
 # ---------------------------------------------------------------------------
-# 1. Read DATEFILE (flat file)
+# STEP 2 - NFEEFILE -> Parquet
 # ---------------------------------------------------------------------------
-print(f"Reading DATEFILE: {DATEFILE_PATH}")
-with open(DATEFILE_PATH, 'r') as f:
-    first_line = f.readline().rstrip('\n')
+fee_parquet = OUTPUT_DIR / f"NFEEFILE_{REPTYEAR}{REPTMON}{REPTDAY_STR}.parquet"
 
-extdate      = int(first_line[0:11].strip())
-extdate_z11  = f"{extdate:011d}"
-reptdate_str = extdate_z11[0:8]                          # MMDDYYYY
-reptdate     = datetime.strptime(reptdate_str, '%m%d%Y') # no delta applied
+if fee_parquet.exists():
+    print(f"NFEEFILE parquet cached: {fee_parquet}")
+else:
+    print(f"Decoding NFEEFILE: {feefile_path}")
+    rows = []
+    n = 0
+    for rec in _read_fb(Path(feefile_path), FEE_LRECL):
+        n += 1
+        if n % 1_000_000 == 0:
+            print(f"  ... {n:,} records")
+        acctno   = _unpack_pd(rec[0:6],   0)
+        noteno   = _unpack_pd(rec[6:9],   0)
+        loantype = _unpack_pd(rec[9:11],  0)
+        feepln   = _decode_ebcdic(rec[21:23])
+        if acctno >= 3000000000:
+            continue
+        if loantype not in (135, 136):
+            continue
+        if feepln != "PA":
+            continue
+        rows.append((
+            int(acctno),
+            int(noteno),
+            int(loantype),
+            feepln,
+            _unpack_pd(rec[34:42], 2),
+            _unpack_pd(rec[66:74], 2),
+            _unpack_pd(rec[74:82], 2),
+        ))
 
-prevdate = reptdate - timedelta(days=1)
-dletdate = reptdate - timedelta(days=3)
-
-reptday = reptdate.day
-prevday = prevdate.day
-dletday = dletdate.day
-
-yy       = reptdate.year - 1 if (reptdate.month == 1 and reptdate.day == 1) else reptdate.year
-reptyear = reptdate.year
-prevyear = yy
-reptmon  = reptdate.month
-rdate    = reptdate.strftime('%d/%m/%Y')
-
-reptdate_num = int(reptdate.strftime('%y%m%d'))
-
-print(f"Islamic Daily Loan Movement - {rdate}")
-print(f"  EXTDATE  : {extdate}")
-print(f"  REPTDATE : {reptdate.date()}  (num: {reptdate_num})")
-print(f"  PREVDATE : {prevdate.date()}")
-print(f"  DLETDATE : {dletdate.date()}")
-print(f"  REPTMON  : {reptmon:02d}")
-
-
-# ---------------------------------------------------------------------------
-# 2. Read LNNOTE (SAS7BDAT) in CHUNKS via pyreadstat
-#    Stream each chunk into a DuckDB staging table (loan_raw).
-# ---------------------------------------------------------------------------
-lnnote_file = LNNOTE_DIR / f"enrh_ln_note_m{reptmon:02d}.sas7bdat"
-print(f"Reading LNNOTE (chunked, chunk_size={CHUNK_SIZE:,}): {lnnote_file}")
-
-if not lnnote_file.exists():
-    raise FileNotFoundError(f"LNNOTE file not found: {lnnote_file}")
-
-_, meta = pyreadstat.read_sas7bdat(str(lnnote_file), metadataonly=True)
-total_rows = meta.number_rows
-print(f"  Total rows in file: {total_rows:,}")
-
-REQUIRED_COLS = ['ACCTNO', 'NOTENO', 'NAME', 'BALANCE', 'LOANTYPE', 'CURBAL', 'PENDBRH']
-cols_upper = [c.upper() for c in meta.column_names]
-missing = [c for c in REQUIRED_COLS if c not in cols_upper]
-if missing:
-    raise ValueError(f"Missing required columns in LNNOTE: {missing}")
-
-con.execute("""
-    CREATE OR REPLACE TABLE loan_raw (
-        acctno   BIGINT,
-        noteno   BIGINT,
-        name     VARCHAR,
-        balance  DOUBLE,
-        loantype BIGINT,
-        curbal   DOUBLE,
-        branch   BIGINT
+    df_fee = pd.DataFrame(
+        rows,
+        columns=["acctno", "noteno", "loantype", "feepln",
+                 "feeamta", "feeamtc", "feeamtb"],
     )
-""")
+    print(f"  {len(df_fee):,} rows kept -> {fee_parquet}")
+    pq.write_table(pa.Table.from_pandas(df_fee), fee_parquet, compression="zstd")
 
-offset = 0
-chunk_idx = 0
-while offset < total_rows:
-    chunk_idx += 1
-    df_chunk, _ = pyreadstat.read_sas7bdat(
-        str(lnnote_file),
-        row_offset=offset,
-        row_limit=CHUNK_SIZE,
+
+# ---------------------------------------------------------------------------
+# STEP 3 - ACCTFILE -> Parquet
+# ---------------------------------------------------------------------------
+acct_parquet = OUTPUT_DIR / f"ACCTFILE_{REPTYEAR}{REPTMON}{REPTDAY_STR}.parquet"
+
+if acct_parquet.exists():
+    print(f"ACCTFILE parquet cached: {acct_parquet}")
+else:
+    print(f"Decoding ACCTFILE: {acctfile_path}")
+    rows = []
+    n = 0
+    for rec in _read_fb(Path(acctfile_path), ACCT_LRECL):
+        n += 1
+        if n % 500_000 == 0:
+            print(f"  ... {n:,} records")
+        acctno   = _unpack_pd(rec[0:6],   0)
+        loantype = _unpack_pd(rec[84:86], 0)
+        if loantype not in (135, 136):
+            continue
+        rows.append((
+            int(acctno),
+            _decode_ebcdic(rec[6:30]),         # NAME
+            int(_unpack_pd(rec[62:64], 0)),    # BANKNO
+            int(_unpack_pd(rec[65:69], 0)),    # ACCBRCH
+            int(_unpack_pd(rec[80:83], 0)),    # NOTENO
+            _decode_ebcdic(rec[83:84]),        # REVERSED
+            int(loantype),                     # LOANTYPE
+            int(_unpack_pd(rec[86:90], 0)),    # NTBRCH
+            int(_unpack_pd(rec[90:94], 0)),    # PENDBRH
+            int(_unpack_pd(rec[112:118], 0)),  # LASTTRAN
+            _unpack_pd(rec[120:128], 2),       # CURBAL
+            _unpack_pd(rec[128:136], 2),       # INTAMT
+            _decode_ebcdic(rec[260:261]),      # PAIDIND
+            _decode_ebcdic(rec[295:296]),      # NTINT
+            _unpack_pd(rec[310:318], 2),       # INTEARN
+            _unpack_pd(rec[318:326], 7),       # ACCRUAL
+            _unpack_pd(rec[399:407], 2),       # INTEARN2
+            _unpack_pd(rec[407:415], 2),       # INTEARN3
+            _unpack_pd(rec[415:423], 2),       # INTEARN4
+            _unpack_pd(rec[456:464], 2),       # FEEAMT
+            _unpack_pd(rec[464:472], 2),       # FEEAMT2
+            _unpack_pd(rec[553:561], 2),       # FEEAMT4
+            _unpack_pd(rec[763:771], 2),       # NFEEAMT5
+            _unpack_pd(rec[771:779], 2),       # NFEEAMT6
+            _unpack_pd(rec[779:787], 2),       # NFEEAMT7
+            _unpack_pd(rec[860:868], 2),       # FEEAMT8
+            _unpack_pd(rec[868:876], 2),       # FEEAMT9
+            _unpack_pd(rec[884:892], 2),       # FEEAMT13
+            _unpack_pd(rec[903:911], 2),       # FEEAMT10
+            _unpack_pd(rec[911:919], 2),       # FEEAMT11
+            _unpack_pd(rec[919:927], 2),       # FEEAMT12
+            _unpack_pd(rec[927:935], 2),       # FEEAMT14
+            _unpack_pd(rec[935:943], 2),       # FEEAMT15
+            _unpack_pd(rec[943:951], 2),       # FEEAMT16
+        ))
+
+    df_acct = pd.DataFrame(
+        rows,
+        columns=[
+            "acctno", "name", "bankno", "accbrch", "noteno", "reversed",
+            "loantype", "ntbrch", "pendbrh", "lasttran", "curbal", "intamt",
+            "paidind", "ntint", "intearn", "accrual",
+            "intearn2", "intearn3", "intearn4",
+            "feeamt", "feeamt2", "feeamt4",
+            "nfeeamt5", "nfeeamt6", "nfeeamt7",
+            "feeamt8", "feeamt9", "feeamt13",
+            "feeamt10", "feeamt11", "feeamt12",
+            "feeamt14", "feeamt15", "feeamt16",
+        ],
     )
-    df_chunk.columns = [c.upper() for c in df_chunk.columns]
-    df_chunk = df_chunk[REQUIRED_COLS].copy()
-    df_chunk = df_chunk.rename(columns={'PENDBRH': 'BRANCH'})
-
-    for c in ['ACCTNO', 'NOTENO', 'BALANCE', 'LOANTYPE', 'CURBAL', 'BRANCH']:
-        df_chunk[c] = pd.to_numeric(df_chunk[c], errors='coerce')
-
-    df_chunk['ACCTNO']   = df_chunk['ACCTNO'].astype('Int64')
-    df_chunk['NOTENO']   = df_chunk['NOTENO'].astype('Int64')
-    df_chunk['LOANTYPE'] = df_chunk['LOANTYPE'].astype('Int64')
-    df_chunk['BRANCH']   = df_chunk['BRANCH'].astype('Int64')
-    df_chunk['BALANCE']  = df_chunk['BALANCE'].astype('float64')
-    df_chunk['CURBAL']   = df_chunk['CURBAL'].astype('float64')
-
-    df_chunk = df_chunk.rename(columns={
-        'ACCTNO':   'acctno',
-        'NOTENO':   'noteno',
-        'NAME':     'name',
-        'BALANCE':  'balance',
-        'LOANTYPE': 'loantype',
-        'CURBAL':   'curbal',
-        'BRANCH':   'branch',
-    })
-
-    con.register(f'chunk_{chunk_idx}', df_chunk)
-    con.execute(f"INSERT INTO loan_raw SELECT * FROM chunk_{chunk_idx}")
-    con.unregister(f'chunk_{chunk_idx}')
-
-    offset += len(df_chunk)
-    print(f"  Ingested chunk {chunk_idx}: rows {offset:,} / {total_rows:,}")
-    del df_chunk
-
-print(f"  Finished ingesting {offset:,} rows into loan_raw")
+    print(f"  {len(df_acct):,} rows kept -> {acct_parquet}")
+    pq.write_table(pa.Table.from_pandas(df_acct), acct_parquet, compression="zstd")
 
 
 # ---------------------------------------------------------------------------
-# 3. Persist LNDLY{reptday}.parquet
+# STEP 4 - LKP_BRANCH -> Parquet
 # ---------------------------------------------------------------------------
-lndly_today = OUTPUT_DIR / f"lndly{reptday:02d}.parquet"
-con.execute(f"COPY loan_raw TO '{lndly_today}'")
-print(f"  Wrote {lndly_today}")
+branch_parquet = OUTPUT_DIR / "LKP_BRANCH.parquet"
+if branch_parquet.exists():
+    print(f"LKP_BRANCH parquet cached: {branch_parquet}")
+else:
+    branch_rows = []
+    with open(BRANCHF, "r", encoding="latin-1", newline="") as f:
+        for line in f:
+            line = line.rstrip("\r\n")
+            if not line:
+                continue
+            if line.startswith("NOTE:") or "The SAS System" in line:
+                continue
+            bank   = line[0:1]
+            branch = line[1:4].strip()
+            abbrev = line[5:8].rstrip()
+            name   = line[11:41].rstrip()
+            if not branch.isdigit():
+                continue
+            branch_rows.append({
+                "bank": bank,
+                "branch": int(branch),
+                "abbrev": abbrev,
+                "brchname": name,
+            })
+    df_branch = pd.DataFrame(branch_rows)
+    print(f"  {len(df_branch):,} branch rows -> {branch_parquet}")
+    pq.write_table(pa.Table.from_pandas(df_branch), branch_parquet)
 
-con.execute("CREATE OR REPLACE VIEW loan AS SELECT * FROM loan_raw")
 
+# ===========================================================================
+# STEP 5 - DuckDB processing
+# ===========================================================================
+con.execute(f"""
+    CREATE OR REPLACE TABLE feplan AS
+    SELECT acctno, noteno, loantype, feepln, feeamta, feeamtc, feeamtb
+    FROM read_parquet('{fee_parquet}')
+""")
 
-# ---------------------------------------------------------------------------
-# 4. Split into LNNOTE / REVCRE / HPLOAN
-# ---------------------------------------------------------------------------
-REVCRE_TYPES = (302, 350, 364, 365, 506, 902, 903, 910, 925, 951)
-HPLOAN_TYPES = (128, 130, 380, 381, 700, 705)
-revcre_in = ",".join(str(x) for x in REVCRE_TYPES)
-hploan_in = ",".join(str(x) for x in HPLOAN_TYPES)
+con.execute("""
+    CREATE OR REPLACE TABLE feepo AS
+    SELECT acctno, noteno,
+           SUM(feeamta) AS feeamta,
+           SUM(feeamtb) AS feeamtb,
+           SUM(feeamtc) AS feeamtc
+    FROM feplan
+    GROUP BY acctno, noteno
+""")
 
 con.execute(f"""
-    CREATE OR REPLACE TABLE lnnote AS
-    SELECT * FROM loan WHERE loantype NOT IN ({revcre_in}, {hploan_in})
+    CREATE OR REPLACE TABLE loan_raw AS
+    SELECT
+        *,
+        CASE
+            WHEN COALESCE(pendbrh, 0) <> 0 THEN pendbrh
+            WHEN COALESCE(ntbrch,  0) <> 0 THEN ntbrch
+            ELSE accbrch
+        END AS branch
+    FROM read_parquet('{acct_parquet}')
+    WHERE loantype IN (135, 136)
+      AND (
+            ( (reversed IS NULL OR reversed <> 'Y')
+              AND noteno IS NOT NULL
+              AND (paidind IS NULL OR paidind <> 'P') )
+            OR
+            ( paidind = 'P' AND lasttran = {REPTDATE_INT} )
+          )
 """)
+
+con.execute("""
+    CREATE OR REPLACE TABLE loan AS
+    SELECT
+        l.*,
+        COALESCE(f.feeamta, 0) AS feeamta_f,
+        COALESCE(f.feeamtb, 0) AS feeamtb_f,
+        COALESCE(f.feeamtc, 0) AS feeamtc_f,
+        CASE
+            WHEN l.acctno > 8000000000 AND l.loantype IN (720, 725)
+            THEN l.feeamt + COALESCE(f.feeamta, 0) + COALESCE(f.feeamtc, 0)
+            ELSE l.feeamt + COALESCE(f.feeamta, 0)
+        END AS feeamt_final,
+        CASE
+            WHEN l.ntint = 'A'
+            THEN l.curbal + l.intearn - l.intamt +
+                 CASE
+                     WHEN l.acctno > 8000000000 AND l.loantype IN (720, 725)
+                     THEN l.feeamt + COALESCE(f.feeamta,0) + COALESCE(f.feeamtc,0)
+                     ELSE l.feeamt + COALESCE(f.feeamta,0)
+                 END
+            ELSE l.curbal + l.accrual +
+                 CASE
+                     WHEN l.acctno > 8000000000 AND l.loantype IN (720, 725)
+                     THEN l.feeamt + COALESCE(f.feeamta,0) + COALESCE(f.feeamtc,0)
+                     ELSE l.feeamt + COALESCE(f.feeamta,0)
+                 END
+        END AS balance
+    FROM loan_raw l
+    LEFT JOIN feepo f
+      ON l.acctno = f.acctno AND l.noteno = f.noteno
+""")
+
 con.execute(f"""
-    CREATE OR REPLACE TABLE revcre AS
-    SELECT * FROM loan WHERE loantype IN ({revcre_in})
-""")
-con.execute(f"""
-    CREATE OR REPLACE TABLE hploan AS
-    SELECT * FROM loan WHERE loantype IN ({hploan_in})
-""")
-
-
-# ---------------------------------------------------------------------------
-# 5. Current-day branch summaries
-# ---------------------------------------------------------------------------
-con.execute("""
-    CREATE OR REPLACE TABLE loansum AS
-    SELECT branch, COUNT(*) AS noacct, SUM(balance) AS brlnamt
-    FROM lnnote GROUP BY branch
-""")
-con.execute("""
-    CREATE OR REPLACE TABLE revsumm AS
-    SELECT branch, COUNT(*) AS revacc, SUM(balance) AS brrvamt
-    FROM revcre GROUP BY branch
-""")
-con.execute("""
-    CREATE OR REPLACE TABLE hpsumm AS
-    SELECT branch, COUNT(*) AS hpacc, SUM(balance) AS brhpamt
-    FROM hploan GROUP BY branch
+    CREATE OR REPLACE TABLE loan_summary AS
+    SELECT branch,
+           {EXTDATE} AS extdate,
+           COUNT(*)  AS noacct,
+           SUM(balance) AS brlnamt
+    FROM loan
+    GROUP BY branch, extdate
+    ORDER BY branch
 """)
 
 
-# ---------------------------------------------------------------------------
-# 6. Previous-day parquet (PREVDATE = REPTDATE - 1 day)
-#    If missing (weekend / holiday / first run), skip movement reports.
-# ---------------------------------------------------------------------------
-lndly_prev = OUTPUT_DIR / f"lndly{prevday:02d}.parquet"
-print(f"Reading previous day: {lndly_prev}")
+# ===========================================================================
+# STEP 6 - Cross-day MIS storage
+#
+#   SAS:  DATA MIS.LOAN&REPTDAY; SET LOAN;       -> write today
+#         DATA PREVLN;         SET MIS.LOAN&PREVDAY;
+#                              RENAME BRLNAMT=PBRLNAMT;   -> read yesterday
+# ===========================================================================
 
-HAVE_PREV = lndly_prev.exists()
+# --- (A) Write today's summary: BOTH .sas7bdat and .parquet ---
+today_df  = con.execute("SELECT * FROM loan_summary").df()       # <-- FIXED
+today_sas = MIS_DIR / f"LOAN{REPTDAY_STR}.sas7bdat"
+today_pq  = MIS_DIR / f"LOAN{REPTDAY_STR}.parquet"
 
-if HAVE_PREV:
-    con.execute(f"""
-        CREATE OR REPLACE TABLE prev_loan AS
-        SELECT acctno, noteno, name, balance, loantype, curbal, branch
-        FROM read_parquet('{lndly_prev}')
-    """)
+sas = saspy.SASsession(cfgname="default")
+sas.df2sd(today_df, table="MISLOAN_TODAY", libref="WORK")
+sas.submit(f"""
+    libname misout "{MIS_DIR}";
+    data misout.LOAN{REPTDAY_STR};
+        set WORK.MISLOAN_TODAY;
+    run;
+""")
+print(f"MIS today SAS7BDAT saved: {today_sas}")
 
-    con.execute(f"""
-        CREATE OR REPLACE TABLE plnnote AS
-        SELECT * FROM prev_loan WHERE loantype NOT IN ({revcre_in}, {hploan_in})
-    """)
-    con.execute(f"""
-        CREATE OR REPLACE TABLE prevcre AS
-        SELECT * FROM prev_loan WHERE loantype IN ({revcre_in})
-    """)
-    con.execute(f"""
-        CREATE OR REPLACE TABLE phploan AS
-        SELECT * FROM prev_loan WHERE loantype IN ({hploan_in})
-    """)
+pq.write_table(pa.Table.from_pandas(today_df), today_pq, compression="zstd")
+print(f"MIS today Parquet  saved: {today_pq}")
 
+
+# --- (B) Read yesterday's summary: prefer .sas7bdat, fall back to .parquet ---
+prev_sas = MIS_DIR / f"LOAN{PREVDAY_STR}.sas7bdat"
+prev_pq  = MIS_DIR / f"LOAN{PREVDAY_STR}.parquet"
+
+if prev_sas.exists():
+    print(f"MIS prev SAS7BDAT found: {prev_sas}")
+    df_prev, meta = pyreadstat.read_sas7bdat(str(prev_sas))
+    df_prev.columns = [c.lower() for c in df_prev.columns]
+    con.register("prevln_src", df_prev)
     con.execute("""
-        CREATE OR REPLACE TABLE ploansum AS
-        SELECT branch, COUNT(*) AS pnoacct, SUM(balance) AS pbrlnamt
-        FROM plnnote GROUP BY branch
+        CREATE OR REPLACE TABLE prevln AS
+        SELECT branch, brlnamt AS pbrlnamt
+        FROM prevln_src
     """)
-    con.execute("""
-        CREATE OR REPLACE TABLE prevsumm AS
-        SELECT branch, COUNT(*) AS prevacc, SUM(balance) AS pbrrvamt
-        FROM prevcre GROUP BY branch
-    """)
-    con.execute("""
-        CREATE OR REPLACE TABLE phpsumm AS
-        SELECT branch, COUNT(*) AS phpacc, SUM(balance) AS pbrhpamt
-        FROM phploan GROUP BY branch
+elif prev_pq.exists():
+    print(f"MIS prev Parquet  found: {prev_pq}")
+    con.execute(f"""
+        CREATE OR REPLACE TABLE prevln AS
+        SELECT branch, brlnamt AS pbrlnamt
+        FROM read_parquet('{prev_pq}')
     """)
 else:
-    print(f"  WARNING: {lndly_prev} not found — previous-day tables will be empty.")
+    print(f"MIS prev NOT FOUND ({prev_sas} / {prev_pq}) -> using zeros")
     con.execute("""
-        CREATE OR REPLACE TABLE ploansum AS
-        SELECT NULL::BIGINT AS branch, 0::BIGINT AS pnoacct, 0::DOUBLE AS pbrlnamt
-        WHERE FALSE
-    """)
-    con.execute("""
-        CREATE OR REPLACE TABLE prevsumm AS
-        SELECT NULL::BIGINT AS branch, 0::BIGINT AS prevacc, 0::DOUBLE AS pbrrvamt
-        WHERE FALSE
-    """)
-    con.execute("""
-        CREATE OR REPLACE TABLE phpsumm AS
-        SELECT NULL::BIGINT AS branch, 0::BIGINT AS phpacc, 0::DOUBLE AS pbrhpamt
-        WHERE FALSE
+        CREATE OR REPLACE TABLE prevln AS
+        SELECT branch, CAST(0.0 AS DOUBLE) AS pbrlnamt
+        FROM loan_summary WHERE 1=0
     """)
 
-
-# ---------------------------------------------------------------------------
-# 7. Read LKP_BRANCH (flat file)
-# ---------------------------------------------------------------------------
-print(f"Reading LKP_BRANCH: {BRANCH_PATH}")
-
-branch_rows = []
-with open(BRANCH_PATH, 'r') as f:
-    for line in f:
-        line = line.rstrip('\n')
-        if not line.strip():
-            continue
-        branch_s = line[1:4].strip()
-        abbrev   = line[5:8].strip()
-        brchname = line[11:41].strip()
-        if not branch_s:
-            continue
-        try:
-            branch_val = int(branch_s)
-        except ValueError:
-            continue
-        branch_rows.append({
-            'branch':   branch_val,
-            'abbrev':   abbrev,
-            'brchname': brchname,
-        })
-
-branch_df = pd.DataFrame(branch_rows, columns=['branch', 'abbrev', 'brchname'])
-print(f"  Loaded {len(branch_df)} branch records")
-
-con.register('branch_df', branch_df)
+# DATA LOANS
 con.execute("""
-    CREATE OR REPLACE TABLE branch AS
-    SELECT branch, abbrev, brchname FROM branch_df
+    CREATE OR REPLACE TABLE loans AS
+    SELECT COALESCE(l.branch, p.branch) AS branch,
+           l.extdate, l.noacct, l.brlnamt,
+           COALESCE(p.pbrlnamt, 0) AS pbrlnamt
+    FROM loan_summary l
+    FULL OUTER JOIN prevln p ON l.branch = p.branch
 """)
 
 
-# ---------------------------------------------------------------------------
-# 8. MLOAN / MCRED / MHP
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# STEP 7 - DATA BRANCH + MLOAN
+# ===========================================================================
+con.execute(f"""
+    CREATE OR REPLACE TABLE branch AS
+    SELECT * FROM read_parquet('{branch_parquet}')
+""")
+
 con.execute("""
     CREATE OR REPLACE TABLE mloan AS
-    SELECT
-        l.branch,
-        b.abbrev,
-        b.brchname,
-        COALESCE(l.brlnamt,  0)                           AS brlnamt,
-        COALESCE(p.pbrlnamt, 0)                           AS pbrlnamt,
-        COALESCE(l.noacct,   0)                           AS noacct,
-        COALESCE(l.brlnamt,  0) - COALESCE(p.pbrlnamt, 0) AS varianln
-    FROM loansum l
-    LEFT JOIN ploansum p ON l.branch = p.branch
-    LEFT JOIN branch   b ON l.branch = b.branch
-""")
-con.execute("""
-    CREATE OR REPLACE TABLE mcred AS
-    SELECT
-        r.branch,
-        b.abbrev,
-        b.brchname,
-        COALESCE(r.brrvamt,  0)                           AS brrvamt,
-        COALESCE(p.pbrrvamt, 0)                           AS pbrrvamt,
-        COALESCE(r.revacc,   0)                           AS revacc,
-        COALESCE(r.brrvamt,  0) - COALESCE(p.pbrrvamt, 0) AS varianrv
-    FROM revsumm r
-    LEFT JOIN prevsumm p ON r.branch = p.branch
-    LEFT JOIN branch   b ON r.branch = b.branch
-""")
-con.execute("""
-    CREATE OR REPLACE TABLE mhp AS
-    SELECT
-        h.branch,
-        b.abbrev,
-        b.brchname,
-        COALESCE(h.brhpamt,  0)                           AS brhpamt,
-        COALESCE(p.pbrhpamt, 0)                           AS pbrhpamt,
-        COALESCE(h.hpacc,    0)                           AS hpacc,
-        COALESCE(h.brhpamt,  0) - COALESCE(p.pbrhpamt, 0) AS varianhp
-    FROM hpsumm h
-    LEFT JOIN phpsumm p ON h.branch = p.branch
-    LEFT JOIN branch  b ON h.branch = b.branch
+    SELECT COALESCE(l.branch, b.branch) AS branch,
+           b.bank, b.abbrev, b.brchname,
+           l.extdate,
+           COALESCE(l.noacct, 0) AS noacct,
+           l.pbrlnamt, l.brlnamt,
+           l.brlnamt - l.pbrlnamt AS varianln
+    FROM loans l
+    LEFT JOIN branch b ON l.branch = b.branch
 """)
 
-rdate_file = rdate.replace('/', '-')
-con.execute(f"COPY mloan TO '{OUTPUT_DIR}/mloan_{rdate_file}.csv' (HEADER, DELIMITER ',')")
-con.execute(f"COPY mcred TO '{OUTPUT_DIR}/mcred_{rdate_file}.csv' (HEADER, DELIMITER ',')")
-con.execute(f"COPY mhp   TO '{OUTPUT_DIR}/mhp_{rdate_file}.csv'   (HEADER, DELIMITER ',')")
-print(f"  Wrote mloan_{rdate_file}.csv, mcred_{rdate_file}.csv, mhp_{rdate_file}.csv")
+
+# ===========================================================================
+# STEP 8 - Final report
+# ===========================================================================
+report = con.execute("""
+    SELECT branch AS code, abbrev, brchname AS name,
+           noacct   AS no_of_accounts,
+           pbrlnamt AS prev_amount,
+           brlnamt  AS curr_amount,
+           varianln AS variance
+    FROM mloan
+    WHERE branch IS NOT NULL
+
+    UNION ALL
+
+    SELECT 999999, 'TOTAL', 'TOTAL',
+           SUM(noacct), SUM(pbrlnamt), SUM(brlnamt), SUM(varianln)
+    FROM mloan
+
+    ORDER BY code
+""").arrow()
 
 
-# ---------------------------------------------------------------------------
-# 9. Per-account movement reports (only if previous-day file existed)
-# ---------------------------------------------------------------------------
-if HAVE_PREV:
-    con.execute("""CREATE OR REPLACE TABLE dloan1 AS
-        SELECT acctno, SUM(balance) AS dltotol FROM lnnote GROUP BY acctno""")
-    con.execute("""CREATE OR REPLACE TABLE dcred1 AS
-        SELECT acctno, SUM(balance) AS drtotol FROM revcre GROUP BY acctno""")
-    con.execute("""CREATE OR REPLACE TABLE dhp1 AS
-        SELECT acctno, SUM(balance) AS dhptotol FROM hploan GROUP BY acctno""")
-    con.execute("""CREATE OR REPLACE TABLE pdloan1 AS
-        SELECT acctno, SUM(balance) AS pdltotol FROM plnnote GROUP BY acctno""")
-    con.execute("""CREATE OR REPLACE TABLE pdcred1 AS
-        SELECT acctno, SUM(balance) AS pdrtotol FROM prevcre GROUP BY acctno""")
-    con.execute("""CREATE OR REPLACE TABLE pdhp1 AS
-        SELECT acctno, SUM(balance) AS pdhptoto FROM phploan GROUP BY acctno""")
+# ===========================================================================
+# STEP 9 - Final output
+# ===========================================================================
+output_base = f"EIBDLNS2_Branch_Loan_Summary_{REPTDATE.strftime('%Y%m%d')}"
 
-    con.execute("""
-        CREATE OR REPLACE TABLE dmloan_check AS
-        SELECT
-            COALESCE(d.acctno, p.acctno) AS acctno,
-            COALESCE(d.dltotol, 0)       AS dltotol,
-            COALESCE(p.pdltotol, 0)      AS pdltotol
-        FROM dloan1 d
-        FULL OUTER JOIN pdloan1 p ON d.acctno = p.acctno
-        WHERE ABS(COALESCE(d.dltotol, 0) - COALESCE(p.pdltotol, 0)) >= 500000
-    """)
-    con.execute("""
-        CREATE OR REPLACE TABLE dmcred_check AS
-        SELECT
-            COALESCE(d.acctno, p.acctno) AS acctno,
-            COALESCE(d.drtotol, 0)       AS drtotol,
-            COALESCE(p.pdrtotol, 0)      AS pdrtotol
-        FROM dcred1 d
-        FULL OUTER JOIN pdcred1 p ON d.acctno = p.acctno
-        WHERE ABS(COALESCE(d.drtotol, 0) - COALESCE(p.pdrtotol, 0)) >= 500000
-    """)
-    con.execute("""
-        CREATE OR REPLACE TABLE dmhp_check AS
-        SELECT
-            COALESCE(d.acctno, p.acctno) AS acctno,
-            COALESCE(d.dhptotol, 0)      AS dhptotol,
-            COALESCE(p.pdhptoto, 0)      AS pdhptoto
-        FROM dhp1 d
-        FULL OUTER JOIN pdhp1 p ON d.acctno = p.acctno
-        WHERE ABS(COALESCE(d.dhptotol, 0) - COALESCE(p.pdhptoto, 0)) >= 500000
-    """)
+parquet_file = OUTPUT_DIR / f"{output_base}.parquet"
+pq.write_table(report, parquet_file)
+print(f"Final Parquet saved: {parquet_file}")
 
-    con.execute("""
-        CREATE OR REPLACE TABLE dmloan AS
-        SELECT DISTINCT ON (l.acctno)
-            l.acctno, l.name, l.branch, b.abbrev,
-            c.dltotol, c.pdltotol,
-            c.dltotol - c.pdltotol AS movement
-        FROM lnnote l
-        JOIN dmloan_check c ON l.acctno = c.acctno
-        LEFT JOIN branch  b ON l.branch = b.branch
-        ORDER BY l.acctno, l.noteno
-    """)
-    con.execute("""
-        CREATE OR REPLACE TABLE dmcred AS
-        SELECT DISTINCT ON (r.acctno)
-            r.acctno, r.name, r.branch, b.abbrev,
-            c.drtotol, c.pdrtotol,
-            c.drtotol - c.pdrtotol AS movement
-        FROM revcre r
-        JOIN dmcred_check c ON r.acctno = c.acctno
-        LEFT JOIN branch   b ON r.branch = b.branch
-        ORDER BY r.acctno, r.noteno
-    """)
-    con.execute("""
-        CREATE OR REPLACE TABLE dmhp AS
-        SELECT DISTINCT ON (h.acctno)
-            h.acctno, h.name, h.branch, b.abbrev,
-            c.dhptotol, c.pdhptoto,
-            c.dhptotol - c.pdhptoto AS movement
-        FROM hploan h
-        JOIN dmhp_check c ON h.acctno = c.acctno
-        LEFT JOIN branch  b ON h.branch = b.branch
-        ORDER BY h.acctno, h.noteno
-    """)
-
-    con.execute(f"COPY dmloan TO '{OUTPUT_DIR}/dmloan_{rdate_file}.csv' (HEADER, DELIMITER ',')")
-    con.execute(f"COPY dmcred TO '{OUTPUT_DIR}/dmcred_{rdate_file}.csv' (HEADER, DELIMITER ',')")
-    con.execute(f"COPY dmhp   TO '{OUTPUT_DIR}/dmhp_{rdate_file}.csv'   (HEADER, DELIMITER ',')")
-    print(f"  Wrote dmloan_{rdate_file}.csv, dmcred_{rdate_file}.csv, dmhp_{rdate_file}.csv")
-
-    loan_mvmt = con.execute("SELECT COUNT(*) FROM dmloan").fetchone()[0]
-    cred_mvmt = con.execute("SELECT COUNT(*) FROM dmcred").fetchone()[0]
-    hp_mvmt   = con.execute("SELECT COUNT(*) FROM dmhp").fetchone()[0]
-else:
-    print("  Skipping movement reports (no previous-day file).")
-    loan_mvmt = cred_mvmt = hp_mvmt = 0
-
-
-# ---------------------------------------------------------------------------
-# 10. Summary
-# ---------------------------------------------------------------------------
-print(f"""
-Islamic Daily Loan Movement Report Complete
-Date: {rdate}
-
-Branch Summaries:
-  1. MLOAN - Term Loan Outstanding by Branch
-  2. MCRED - Revolving Credit Outstanding by Branch
-  3. MHP   - HP Outstanding by Branch
-
-Customer Movements (>= RM 500K):
-  - Term Loans       : {loan_mvmt} accounts
-  - Revolving Credit : {cred_mvmt} accounts
-  - HP Loans         : {hp_mvmt} accounts
-
-Output Files:
-  - mloan_{rdate_file}.csv
-  - mcred_{rdate_file}.csv
-  - mhp_{rdate_file}.csv
-  - dmloan_{rdate_file}.csv   (emitted only if previous-day parquet present)
-  - dmcred_{rdate_file}.csv   (emitted only if previous-day parquet present)
-  - dmhp_{rdate_file}.csv     (emitted only if previous-day parquet present)
-  - lndly{reptday:02d}.parquet
+# SAS7BDAT via saspy (reuse the open SAS session)
+sas.df2sd(report.to_pandas(), table="EIBDLNS2", libref="WORK")
+sas.submit(f"""
+    libname out "{OUTPUT_DIR}";
+    data out.{output_base};
+        set WORK.EIBDLNS2;
+    run;
 """)
+sas.endsas()
+print(f"Final SAS7BDAT saved: {OUTPUT_DIR / (output_base + '.sas7bdat')}")
 
+
+# ===========================================================================
+# STEP 10 - Display report
+# ===========================================================================
+print("\n" + "=" * 130)
+print("PUBLIC BANK BERHAD")
+print("BRANCH SUMMARY ON DAILY OUTSTANDING(RM)-BAE PERSONAL")
+print(f"AS AT {RDATE}")
+print("=" * 130)
+print(f"{'BRANCH':<8} {'ABBREV':<8} {'NAME':<35} {'NO OF':>12} "
+      f"{'PREV.AMOUNT':>20} {'CURR.AMOUNT':>20} {'VARIANCE':>20}")
+print(f"{'CODE':<8} {'':<8} {'':<35} {'ACCOUNTS':>12} "
+      f"{'(RM)':>20} {'(RM)':>20} {'(RM)':>20}")
+print("-" * 130)
+
+for row in report.to_pylist():
+    code = row["code"]
+    if code == 999999:
+        print("-" * 130)
+    print(f"{code:<8} {row['abbrev'] or '':<8} {row['name'] or '':<35} "
+          f"{row['no_of_accounts']:>12,} "
+          f"{row['prev_amount']:>20,.2f} "
+          f"{row['curr_amount']:>20,.2f} "
+          f"{row['variance']:>20,.2f}")
+
+print("=" * 130)
 con.close()
-print(f"Completed: {OUTPUT_DIR}")
+print("\nProcessing complete!")
