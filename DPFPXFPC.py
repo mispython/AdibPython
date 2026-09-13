@@ -37,6 +37,9 @@ con = duckdb.connect()
 # 1. Read DATEFILE (flat file)
 #    SAS: INFILE DATEFILE LRECL=80 OBS=1; INPUT @01 EXTDATE 11.;
 #    REPTDATE = INPUT(SUBSTR(PUT(EXTDATE, Z11.), 1, 8), MMDDYY8.);
+#
+#    Requirement: apply timedelta(days=1) to the parsed date to derive
+#    the reporting date.
 # ---------------------------------------------------------------------------
 print(f"Reading DATEFILE: {DATEFILE_PATH}")
 with open(DATEFILE_PATH, 'r') as f:
@@ -44,10 +47,13 @@ with open(DATEFILE_PATH, 'r') as f:
 
 extdate      = int(first_line[0:11].strip())
 extdate_z11  = f"{extdate:011d}"
-reptdate_str = extdate_z11[0:8]                  # MMDDYYYY
-reptdate     = datetime.strptime(reptdate_str, '%m%d%Y')
+reptdate_str = extdate_z11[0:8]                          # MMDDYYYY
+parsed_date  = datetime.strptime(reptdate_str, '%m%d%Y')
 
-# Per requirement: use timedelta for prev/delete day
+# Apply timedelta(days=1) to obtain the reporting date
+reptdate = parsed_date + timedelta(days=1)
+
+# Previous and delete dates
 prevdate = reptdate - timedelta(days=1)
 dletdate = reptdate - timedelta(days=3)
 
@@ -65,6 +71,7 @@ rdate    = reptdate.strftime('%d/%m/%Y')
 reptdate_num = int(reptdate.strftime('%y%m%d'))
 
 print(f"Islamic Daily Loan Movement - {rdate}")
+print(f"  PARSED   : {parsed_date.date()}")
 print(f"  REPTDATE : {reptdate.date()}  (num: {reptdate_num})")
 print(f"  PREVDATE : {prevdate.date()}")
 print(f"  DLETDATE : {dletdate.date()}")
