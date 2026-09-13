@@ -1,15 +1,29 @@
-REPORT ID : EIBDLNSA
-Report Date: 12/09/2026
-Reading NFEEFILE ...
-Traceback (most recent call last):
-  File "/stgsrcsys/host/uat/python/EIBDLNS2.py", line 67, in <module>
-    df_fee, _ = pyreadstat.read_sas7bdat(feefile_path, usecols=fee_cols)
-  File "pyreadstat/pyreadstat.pyx", line 129, in pyreadstat.pyreadstat.read_sas7bdat
-  File "pyreadstat/_readstat_parser.pyx", line 1166, in pyreadstat._readstat_parser.run_conversion
-  File "pyreadstat/_readstat_parser.pyx", line 908, in pyreadstat._readstat_parser.run_readstat_parser
-  File "pyreadstat/_readstat_parser.pyx", line 830, in pyreadstat._readstat_parser.check_exit_status
-pyreadstat._readstat_parser.ReadstatError: Invalid file, or file has unsupported features
-NOTE: 11 records were read from the infile "cd /sas/python/virt_edw;source bin/activate;python 
-      /stgsrcsys/host/uat/python/EIBDLNS2.py".
-      The minimum record length was 20.
-      The maximum record length was 102.
+acctfile :
+
+Record format . . . : FB   
+Record length . . . : 4000 
+Block size  . . . . : 24000
+1st extent cylinders: 1500 
+Secondary cylinders : 500  
+
+
+nfeefile(0):
+
+Record format . . . : FB   
+Record length . . . : 300  
+Block size  . . . . : 27900
+1st extent cylinders: 300  
+Secondary cylinders : 300  
+
+
+and also please include below line in python version
+
+DATA MIS.LOAN&REPTDAY;
+     SET LOAN;
+*;
+DATA PREVLN;
+   SET MIS.LOAN&PREVDAY;
+   RENAME BRLNAMT=PBRLNAMT;
+*;
+
+or is it not used as inputs?
