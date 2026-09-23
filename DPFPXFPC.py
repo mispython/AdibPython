@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-EIBDLNS2 - Branch Daily Outstanding Loan Summary Report (optimised)
+EIBDLNS2 - Branch Daily Outstanding Loan Summary Report
+Fast multiprocessing version:
+  - np.memmap reads (no full-file copy)
+  - vectorised COMP-3 + EBCDIC decoding
+  - per-worker streaming ParquetWriter (snappy)
+  - RAM-aware worker & chunk sizing
+  - unused columns dropped
 """
 
+import os
+import sys
+import math
 import duckdb
 import numpy as np
 import pandas as pd
@@ -11,8 +20,12 @@ import pyarrow.parquet as pq
 import pyreadstat
 from datetime import timedelta
 from pathlib import Path
+from multiprocessing import Pool, cpu_count
 import saspy
 
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
 OUTPUT_DIR = Path("/stgsrcsys/host/holding")
 MIS_DIR    = Path("/stgsrcsys/host/uat/python/loans/")
 
@@ -24,10 +37,60 @@ BRANCHF  = Path("/sasdata/rawdata/lookup/LKP_BRANCH")
 FEE_LRECL  = 300
 ACCT_LRECL = 4000
 
-# chunk size in records (tune to available RAM; 200k * 4000B = 800 MB per chunk)
-FEE_CHUNK  = 500_000
-ACCT_CHUNK = 100_000
+# ---------------------------------------------------------------------------
+# Sizing — RAM-aware, safe defaults
+# ---------------------------------------------------------------------------
+MAX_WORKERS      = 8        # hard cap (change to taste)
+MAX_CHUNK_MB     = 512      # hard cap per worker, MB
+SAFETY_FACTOR    = 4        # numpy / arrow temporaries
+RAM_HEADROOM     = 0.50     # use at most 50% of free RAM
 
+
+def _free_ram_bytes() -> int:
+    """Best-effort free RAM in bytes."""
+    try:
+        import psutil
+        return psutil.virtual_memory().available
+    except Exception:
+        pass
+    try:
+        return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    except Exception:
+        # very conservative fallback: assume 8 GB free
+        return 8 * 1024 ** 3
+
+
+def plan_workers_and_chunk(record_len: int):
+    """Return (n_workers, chunk_records) sized to free RAM."""
+    free = _free_ram_bytes()
+    budget = int(free * RAM_HEADROOM)
+
+    n_workers = max(1, min(MAX_WORKERS, cpu_count()))
+    # per-worker budget
+    per_worker_bytes = budget // n_workers
+
+    # chunk size in records, clamped by MAX_CHUNK_MB
+    max_chunk_bytes = MAX_CHUNK_MB * 1024 * 1024
+    usable = min(per_worker_bytes, max_chunk_bytes)
+
+    chunk_records = max(10_000, usable // (record_len * SAFETY_FACTOR))
+    # round to nearest 10k for tidiness
+    chunk_records = int(chunk_records // 10_000 * 10_000)
+
+    return n_workers, chunk_records
+
+
+N_WORKERS_ACCT, ACCT_CHUNK = plan_workers_and_chunk(ACCT_LRECL)
+N_WORKERS_FEE,  FEE_CHUNK  = plan_workers_and_chunk(FEE_LRECL)
+
+print(f"Plan: ACCT workers={N_WORKERS_ACCT}, chunk={ACCT_CHUNK:,} records "
+      f"({ACCT_CHUNK*ACCT_LRECL/1024/1024:.0f} MB/chunk)")
+print(f"Plan: FEE  workers={N_WORKERS_FEE},  chunk={FEE_CHUNK:,} records "
+      f"({FEE_CHUNK*FEE_LRECL/1024/1024:.0f} MB/chunk)")
+
+# ---------------------------------------------------------------------------
+# DuckDB
+# ---------------------------------------------------------------------------
 con = duckdb.connect(":memory:")
 print("REPORT ID : EIBDLNSA")
 
@@ -50,7 +113,6 @@ REPTDAY, PREVDAY = REPTDATE.day, PREVDATE.day
 YY = REPTDATE.year - 1 if (REPTDATE.month == 1 and REPTDATE.day == 1) else REPTDATE.year
 
 REPTYEAR     = str(REPTDATE.year)
-PREVYEAR     = str(YY).zfill(4)
 REPTMON      = str(REPTDATE.month).zfill(2)
 REPTDAY_STR  = str(REPTDAY).zfill(2)
 PREVDAY_STR  = str(PREVDAY).zfill(2)
@@ -65,203 +127,252 @@ acctfile_path = ACCTFILE.format(reptyear=REPTYEAR, reptmon=REPTMON, reptday=REPT
 
 
 # ===========================================================================
-# Vectorised packed-decimal decoder
-#   pd_matrix: 2-D uint8 array of shape (n_records, field_len)
-#   Returns a 1-D float64 array of length n_records
+# EBCDIC -> ASCII translation table (built once, inherited by workers)
+# ===========================================================================
+def _build_ebc2ascii() -> np.ndarray:
+    tbl = bytearray(256)
+    for b in range(256):
+        try:
+            ch = bytes([b]).decode("cp037")
+            enc = ch.encode("ascii", "replace")
+            tbl[b] = enc[0] if len(enc) == 1 else 0x3F   # '?'
+        except Exception:
+            tbl[b] = 0x3F
+    return np.frombuffer(bytes(tbl), dtype=np.uint8)
+
+
+EBC2ASCII = _build_ebc2ascii()          # module-level, inherited via fork
+
+
+# ===========================================================================
+# Vectorised decoders
 # ===========================================================================
 def pd_decode(pd_bytes: np.ndarray, decimals: int = 0) -> np.ndarray:
-    """
-    pd_bytes: uint8 array shape (N, L) where L = packed length in bytes.
-    Each byte holds two BCD digits; the last nibble of the last byte is the
-    sign nibble (C/F positive, D/B negative).
-    """
-    # high nibble of every byte, low nibble of every byte
-    high = (pd_bytes >> 4) & 0x0F        # (N, L)
-    low  = pd_bytes & 0x0F               # (N, L)
-
-    # combine: for byte i, the digit order is high[i], low[i], so the full
-    # digit string is [high[:,0], low[:,0], high[:,1], low[:,1], ...,
-    #                  high[:,L-1]] with low[:,L-1] being the sign nibble.
-    # We exclude the last low nibble (sign) from the digits.
-    digits = np.empty((pd_bytes.shape[0], 2 * pd_bytes.shape[1] - 1),
-                      dtype=np.uint8)
+    """COMP-3 packed decimal -> float64 array."""
+    if pd_bytes.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    high = (pd_bytes >> 4) & 0x0F
+    low  = pd_bytes & 0x0F
+    n = pd_bytes.shape[0]
+    L = pd_bytes.shape[1]
+    digits = np.empty((n, 2 * L - 1), dtype=np.uint8)
     digits[:, 0::2] = high
-    digits[:, 1::2] = low[:, :-1]        # drop last low (sign)
-
-    # Convert BCD digits to number: value = sum(digit_i * 10^(k-1-i))
-    powers = 10 ** np.arange(digits.shape[1] - 1, -1, -1, dtype=np.int64)
+    digits[:, 1::2] = low[:, :-1]
+    powers = (10 ** np.arange(digits.shape[1] - 1, -1, -1, dtype=np.int64))
     values = (digits.astype(np.int64) * powers).sum(axis=1)
-
-    # apply sign from last low nibble
-    sign_nibble = low[:, -1]
-    negative = (sign_nibble == 0x0D) | (sign_nibble == 0x0B)
-    values = np.where(negative, -values, values)
-
+    sign = low[:, -1]
+    neg = (sign == 0x0D) | (sign == 0x0B)
+    values = np.where(neg, -values, values)
     if decimals:
         values = values / (10 ** decimals)
     return values.astype(np.float64)
 
 
-def ebcdic_decode(col: np.ndarray) -> list:
-    """col: uint8 array shape (N, L) -> list of N python strings."""
-    # decode the whole 2-D array as EBCDIC cp037 then rstrip per row
-    buf = col.tobytes()
-    text = buf.decode("cp037", errors="replace")
+def ebcdic_decode(col: np.ndarray) -> np.ndarray:
+    """(N, L) EBCDIC bytes -> numpy array of Python strings, rstrip'd."""
+    if col.size == 0:
+        return np.zeros(0, dtype=object)
     L = col.shape[1]
-    return [text[i*L:(i+1)*L].rstrip() for i in range(col.shape[0])]
+    ascii_bytes = EBC2ASCII[col]                # (N, L) uint8 of ASCII
+    packed = ascii_bytes.tobytes()
+    arr = np.frombuffer(packed, dtype=f"S{L}").astype(str)
+    # remove trailing spaces
+    return np.char.rstrip(arr)
 
 
 # ===========================================================================
-# STEP 2 - NFEEFILE -> Parquet  (chunked, vectorised)
+# Worker: decode one byte-range of a fixed-block file into a Parquet part
+# ===========================================================================
+def _decode_acct_part(args):
+    path, rec_start, n_records, part_path = args
+    ACCT_LRECL = 4000
+
+    # open read-only memmap (inherited per worker)
+    mm = np.memmap(path, dtype=np.uint8, mode="r")
+    start_byte = rec_start * ACCT_LRECL
+    nbytes = n_records * ACCT_LRECL
+    arr = mm[start_byte:start_byte + nbytes].reshape(n_records, ACCT_LRECL)
+
+    writer = None
+    CHUNK = 50_000     # records per internal write; keep small
+    for off in range(0, n_records, CHUNK):
+        chunk = arr[off:off + CHUNK]
+
+        acctno   = pd_decode(chunk[:, 0:6],   0).astype(np.int64)
+        loantype = pd_decode(chunk[:, 84:86], 0).astype(np.int32)
+        mask = (loantype == 135) | (loantype == 136)
+        if not mask.any():
+            continue
+
+        a = chunk[mask]
+        tbl = pa.table({
+            "acctno":   pa.array(acctno[mask],                   type=pa.int64()),
+            "name":     pa.array(ebcdic_decode(a[:, 6:30]),      type=pa.string()),
+            "bankno":   pa.array(pd_decode(a[:, 62:64], 0).astype(np.int32)),
+            "accbrch":  pa.array(pd_decode(a[:, 65:69], 0).astype(np.int32)),
+            "noteno":   pa.array(pd_decode(a[:, 80:83], 0).astype(np.int64)),
+            "reversed": pa.array(ebcdic_decode(a[:, 83:84]),     type=pa.string()),
+            "loantype": pa.array(loantype[mask],                 type=pa.int32()),
+            "ntbrch":   pa.array(pd_decode(a[:, 86:90], 0).astype(np.int32)),
+            "pendbrh":  pa.array(pd_decode(a[:, 90:94], 0).astype(np.int32)),
+            "lasttran": pa.array(pd_decode(a[:, 112:118], 0).astype(np.int64)),
+            "curbal":   pa.array(pd_decode(a[:, 120:128], 2)),
+            "intamt":   pa.array(pd_decode(a[:, 128:136], 2)),
+            "paidind":  pa.array(ebcdic_decode(a[:, 260:261]),   type=pa.string()),
+            "ntint":    pa.array(ebcdic_decode(a[:, 295:296]),   type=pa.string()),
+            "intearn":  pa.array(pd_decode(a[:, 310:318], 2)),
+            "accrual":  pa.array(pd_decode(a[:, 318:326], 7)),
+            "feeamt":   pa.array(pd_decode(a[:, 456:464], 2)),
+        })
+
+        if writer is None:
+            writer = pq.ParquetWriter(part_path, tbl.schema,
+                                      compression="snappy")
+        writer.write_table(tbl)
+
+    if writer is not None:
+        writer.close()
+    del mm
+    return part_path, n_records
+
+
+def _decode_fee_part(args):
+    path, rec_start, n_records, part_path = args
+    FEE_LRECL = 300
+
+    mm = np.memmap(path, dtype=np.uint8, mode="r")
+    start_byte = rec_start * FEE_LRECL
+    nbytes = n_records * FEE_LRECL
+    arr = mm[start_byte:start_byte + nbytes].reshape(n_records, FEE_LRECL)
+
+    writer = None
+    CHUNK = 200_000
+    for off in range(0, n_records, CHUNK):
+        chunk = arr[off:off + CHUNK]
+
+        acctno   = pd_decode(chunk[:, 0:6],  0).astype(np.int64)
+        loantype = pd_decode(chunk[:, 9:11], 0).astype(np.int32)
+        feepln   = ebcdic_decode(chunk[:, 21:23])
+
+        mask = (acctno < 3000000000) & \
+               ((loantype == 135) | (loantype == 136)) & \
+               (feepln == "PA")
+        if not mask.any():
+            continue
+
+        tbl = pa.table({
+            "acctno":   pa.array(acctno[mask],                    type=pa.int64()),
+            "noteno":   pa.array(pd_decode(chunk[mask][:, 6:9], 0).astype(np.int64)),
+            "loantype": pa.array(loantype[mask],                  type=pa.int32()),
+            "feepln":   pa.array(feepln[mask],                    type=pa.string()),
+            "feeamta":  pa.array(pd_decode(chunk[mask][:, 34:42], 2)),
+            "feeamtc":  pa.array(pd_decode(chunk[mask][:, 66:74], 2)),
+            "feeamtb":  pa.array(pd_decode(chunk[mask][:, 74:82], 2)),
+        })
+
+        if writer is None:
+            writer = pq.ParquetWriter(part_path, tbl.schema,
+                                      compression="snappy")
+        writer.write_table(tbl)
+
+    if writer is not None:
+        writer.close()
+    del mm
+    return part_path, n_records
+
+
+# ===========================================================================
+# Parallel driver for a fixed-block file
+# ===========================================================================
+def decode_fb_parallel(path: str, lrecl: int, out_parquet: Path,
+                       n_workers: int, chunk_records: int, worker_fn):
+    file_size = Path(path).stat().st_size
+    n_records_total = file_size // lrecl
+    print(f"  {path}")
+    print(f"    size = {file_size:,} bytes -> {n_records_total:,} records "
+          f"(lrecl={lrecl})")
+    print(f"    workers = {n_workers}, chunk = {chunk_records:,} records")
+
+    parts_dir = out_parquet.parent / (out_parquet.stem + "_parts")
+    parts_dir.mkdir(parents=True, exist_ok=True)
+
+    # build chunk jobs
+    jobs = []
+    rec = 0
+    idx = 0
+    while rec < n_records_total:
+        n = min(chunk_records, n_records_total - rec)
+        part = parts_dir / f"part_{idx:05d}.parquet"
+        jobs.append((path, rec, n, str(part)))
+        rec += n
+        idx += 1
+
+    print(f"    {len(jobs)} chunk(s) to process")
+
+    with Pool(processes=n_workers) as pool:
+        for i, (_, _) in enumerate(pool.imap_unordered(worker_fn, jobs), 1):
+            if i % 5 == 0 or i == len(jobs):
+                print(f"    ... {i}/{len(jobs)} chunks done")
+
+    # combine part files into one Parquet
+    print(f"    combining {len(jobs)} part files ...")
+    parts = sorted(parts_dir.glob("part_*.parquet"))
+    writer = None
+    for p in parts:
+        t = pq.read_table(p)
+        if writer is None:
+            writer = pq.ParquetWriter(out_parquet, t.schema,
+                                      compression="snappy")
+        writer.write_table(t)
+    if writer is not None:
+        writer.close()
+
+    # cleanup parts
+    for p in parts:
+        p.unlink()
+    parts_dir.rmdir()
+
+    print(f"    -> {out_parquet}")
+
+
+# ===========================================================================
+# STEP 2 - NFEEFILE
 # ===========================================================================
 fee_parquet = OUTPUT_DIR / f"NFEEFILE_{REPTYEAR}{REPTMON}{REPTDAY_STR}.parquet"
-
 if fee_parquet.exists():
     print(f"NFEEFILE parquet cached: {fee_parquet}")
 else:
     print(f"Decoding NFEEFILE: {feefile_path}")
-    writer = None
-    file_size = Path(feefile_path).stat().st_size
-    n_records_total = file_size // FEE_LRECL
-    print(f"  file size: {file_size:,} bytes  -> ~{n_records_total:,} records")
-
-    with open(feefile_path, "rb") as f:
-        processed = 0
-        while processed < n_records_total:
-            n_this = min(FEE_CHUNK, n_records_total - processed)
-            raw = f.read(n_this * FEE_LRECL)
-            if not raw:
-                break
-            n_this = len(raw) // FEE_LRECL
-            arr = np.frombuffer(raw, dtype=np.uint8).reshape(n_this, FEE_LRECL)
-
-            acctno   = pd_decode(arr[:, 0:6],  0).astype(np.int64)
-            noteno   = pd_decode(arr[:, 6:9],  0).astype(np.int64)
-            loantype = pd_decode(arr[:, 9:11], 0).astype(np.int32)
-            feepln   = np.array(ebcdic_decode(arr[:, 21:23]), dtype=object)
-            feeamta  = pd_decode(arr[:, 34:42], 2)
-            feeamtc  = pd_decode(arr[:, 66:74], 2)
-            feeamtb  = pd_decode(arr[:, 74:82], 2)
-
-            mask = (
-                (acctno < 3000000000) &
-                ((loantype == 135) | (loantype == 136)) &
-                (feepln == "PA")
-            )
-
-            tbl = pa.table({
-                "acctno":   pa.array(acctno[mask],   type=pa.int64()),
-                "noteno":   pa.array(noteno[mask],   type=pa.int64()),
-                "loantype": pa.array(loantype[mask], type=pa.int32()),
-                "feepln":   pa.array(feepln[mask],   type=pa.string()),
-                "feeamta":  pa.array(feeamta[mask],  type=pa.float64()),
-                "feeamtc":  pa.array(feeamtc[mask],  type=pa.float64()),
-                "feeamtb":  pa.array(feeamtb[mask],  type=pa.float64()),
-            })
-
-            if writer is None:
-                writer = pq.ParquetWriter(fee_parquet, tbl.schema,
-                                          compression="zstd")
-            writer.write_table(tbl)
-
-            processed += n_this
-            print(f"  ... {processed:,} / {n_records_total:,} records")
-
-    if writer is not None:
-        writer.close()
-    print(f"  NFEEFILE parquet written -> {fee_parquet}")
+    decode_fb_parallel(
+        path=feefile_path,
+        lrecl=FEE_LRECL,
+        out_parquet=fee_parquet,
+        n_workers=N_WORKERS_FEE,
+        chunk_records=FEE_CHUNK,
+        worker_fn=_decode_fee_part,
+    )
 
 
 # ===========================================================================
-# STEP 3 - ACCTFILE -> Parquet  (chunked, vectorised)
+# STEP 3 - ACCTFILE
 # ===========================================================================
 acct_parquet = OUTPUT_DIR / f"ACCTFILE_{REPTYEAR}{REPTMON}{REPTDAY_STR}.parquet"
-
 if acct_parquet.exists():
     print(f"ACCTFILE parquet cached: {acct_parquet}")
 else:
     print(f"Decoding ACCTFILE: {acctfile_path}")
-    writer = None
-    file_size = Path(acctfile_path).stat().st_size
-    n_records_total = file_size // ACCT_LRECL
-    print(f"  file size: {file_size:,} bytes  -> ~{n_records_total:,} records")
-
-    with open(acctfile_path, "rb") as f:
-        processed = 0
-        while processed < n_records_total:
-            n_this = min(ACCT_CHUNK, n_records_total - processed)
-            raw = f.read(n_this * ACCT_LRECL)
-            if not raw:
-                break
-            n_this = len(raw) // ACCT_LRECL
-            arr = np.frombuffer(raw, dtype=np.uint8).reshape(n_this, ACCT_LRECL)
-
-            acctno   = pd_decode(arr[:, 0:6],   0).astype(np.int64)
-            loantype = pd_decode(arr[:, 84:86], 0).astype(np.int32)
-            mask = (loantype == 135) | (loantype == 136)
-
-            # Early exit if chunk has no relevant rows
-            if not mask.any():
-                processed += n_this
-                print(f"  ... {processed:,} / {n_records_total:,} records")
-                continue
-
-            a = arr[mask]
-            n_kept = a.shape[0]
-
-            tbl = pa.table({
-                "acctno":   pa.array(acctno[mask], type=pa.int64()),
-                "name":     pa.array(ebcdic_decode(a[:, 6:30]),    type=pa.string()),
-                "bankno":   pa.array(pd_decode(a[:, 62:64], 0).astype(np.int32)),
-                "accbrch":  pa.array(pd_decode(a[:, 65:69], 0).astype(np.int32)),
-                "noteno":   pa.array(pd_decode(a[:, 80:83], 0).astype(np.int64)),
-                "reversed": pa.array(ebcdic_decode(a[:, 83:84]),   type=pa.string()),
-                "loantype": pa.array(loantype[mask],               type=pa.int32()),
-                "ntbrch":   pa.array(pd_decode(a[:, 86:90], 0).astype(np.int32)),
-                "pendbrh":  pa.array(pd_decode(a[:, 90:94], 0).astype(np.int32)),
-                "lasttran": pa.array(pd_decode(a[:, 112:118], 0).astype(np.int64)),
-                "curbal":   pa.array(pd_decode(a[:, 120:128], 2)),
-                "intamt":   pa.array(pd_decode(a[:, 128:136], 2)),
-                "paidind":  pa.array(ebcdic_decode(a[:, 260:261]), type=pa.string()),
-                "ntint":    pa.array(ebcdic_decode(a[:, 295:296]), type=pa.string()),
-                "intearn":  pa.array(pd_decode(a[:, 310:318], 2)),
-                "accrual":  pa.array(pd_decode(a[:, 318:326], 7)),
-                "intearn2": pa.array(pd_decode(a[:, 399:407], 2)),
-                "intearn3": pa.array(pd_decode(a[:, 407:415], 2)),
-                "intearn4": pa.array(pd_decode(a[:, 415:423], 2)),
-                "feeamt":   pa.array(pd_decode(a[:, 456:464], 2)),
-                "feeamt2":  pa.array(pd_decode(a[:, 464:472], 2)),
-                "feeamt4":  pa.array(pd_decode(a[:, 553:561], 2)),
-                "nfeeamt5": pa.array(pd_decode(a[:, 763:771], 2)),
-                "nfeeamt6": pa.array(pd_decode(a[:, 771:779], 2)),
-                "nfeeamt7": pa.array(pd_decode(a[:, 779:787], 2)),
-                "feeamt8":  pa.array(pd_decode(a[:, 860:868], 2)),
-                "feeamt9":  pa.array(pd_decode(a[:, 868:876], 2)),
-                "feeamt13": pa.array(pd_decode(a[:, 884:892], 2)),
-                "feeamt10": pa.array(pd_decode(a[:, 903:911], 2)),
-                "feeamt11": pa.array(pd_decode(a[:, 911:919], 2)),
-                "feeamt12": pa.array(pd_decode(a[:, 919:927], 2)),
-                "feeamt14": pa.array(pd_decode(a[:, 927:935], 2)),
-                "feeamt15": pa.array(pd_decode(a[:, 935:943], 2)),
-                "feeamt16": pa.array(pd_decode(a[:, 943:951], 2)),
-            })
-
-            if writer is None:
-                writer = pq.ParquetWriter(acct_parquet, tbl.schema,
-                                          compression="zstd")
-            writer.write_table(tbl)
-
-            processed += n_this
-            print(f"  ... {processed:,} / {n_records_total:,} records "
-                  f"(kept this chunk: {n_kept:,})")
-
-    if writer is not None:
-        writer.close()
-    print(f"  ACCTFILE parquet written -> {acct_parquet}")
+    decode_fb_parallel(
+        path=acctfile_path,
+        lrecl=ACCT_LRECL,
+        out_parquet=acct_parquet,
+        n_workers=N_WORKERS_ACCT,
+        chunk_records=ACCT_CHUNK,
+        worker_fn=_decode_acct_part,
+    )
 
 
 # ===========================================================================
-# STEP 4 - LKP_BRANCH -> Parquet  (unchanged, tiny file)
+# STEP 4 - LKP_BRANCH
 # ===========================================================================
 branch_parquet = OUTPUT_DIR / "LKP_BRANCH.parquet"
 if branch_parquet.exists():
@@ -279,17 +390,15 @@ else:
             name   = line[11:41].rstrip()
             if not branch.isdigit():
                 continue
-            branch_rows.append({
-                "bank": bank, "branch": int(branch),
-                "abbrev": abbrev, "brchname": name,
-            })
+            branch_rows.append({"bank": bank, "branch": int(branch),
+                                "abbrev": abbrev, "brchname": name})
     df_branch = pd.DataFrame(branch_rows)
     print(f"  {len(df_branch):,} branch rows -> {branch_parquet}")
     pq.write_table(pa.Table.from_pandas(df_branch), branch_parquet)
 
 
 # ===========================================================================
-# STEP 5 - DuckDB processing (unchanged)
+# STEP 5 - DuckDB processing
 # ===========================================================================
 con.execute(f"""
     CREATE OR REPLACE TABLE feplan AS
@@ -386,7 +495,7 @@ sas.submit(f"""
 """)
 print(f"MIS today SAS7BDAT saved: {today_sas}")
 
-pq.write_table(pa.Table.from_pandas(today_df), today_pq, compression="zstd")
+pq.write_table(pa.Table.from_pandas(today_df), today_pq, compression="snappy")
 print(f"MIS today Parquet  saved: {today_pq}")
 
 prev_sas = MIS_DIR / f"LOAN{PREVDAY_STR}.sas7bdat"
@@ -394,7 +503,7 @@ prev_pq  = MIS_DIR / f"LOAN{PREVDAY_STR}.parquet"
 
 if prev_sas.exists():
     print(f"MIS prev SAS7BDAT found: {prev_sas}")
-    df_prev, meta = pyreadstat.read_sas7bdat(str(prev_sas))
+    df_prev, _ = pyreadstat.read_sas7bdat(str(prev_sas))
     df_prev.columns = [c.lower() for c in df_prev.columns]
     con.register("prevln_src", df_prev)
     con.execute("""
@@ -472,7 +581,7 @@ report = con.execute("""
 output_base = f"EIBDLNS2_Branch_Loan_Summary_{REPTDATE.strftime('%Y%m%d')}"
 
 parquet_file = OUTPUT_DIR / f"{output_base}.parquet"
-pq.write_table(report, parquet_file)
+pq.write_table(report, parquet_file, compression="snappy")
 print(f"Final Parquet saved: {parquet_file}")
 
 sas.df2sd(report.to_pandas(), table="EIBDLNS2", libref="WORK")
@@ -494,11 +603,6 @@ print("PUBLIC BANK BERHAD")
 print("BRANCH SUMMARY ON DAILY OUTSTANDING(RM)-BAE PERSONAL")
 print(f"AS AT {RDATE}")
 print("=" * 130)
-print(f"{'BRANCH':<8} {'ABBREV':<8} {'NAME':<35} {'NO OF':>12} "
-      f"{'PREV.AMOUNT':>20} {'CURR.AMOUNT':>20} {'VARIANCE':>20}")
-print(f"{'CODE':<8} {'':<8} {'':<35} {'ACCOUNTS':>12} "
-      f"{'(RM)':>20} {'(RM)':>20} {'(RM)':>20}")
-print("-" * 130)
 
 for row in report.to_pylist():
     code = row["code"]
