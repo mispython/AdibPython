@@ -1,115 +1,195 @@
-import duckdb
-import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
-from datetime import datetime
-
-# -----------------------------
-# CONFIGURATION
-# -----------------------------
-input_deposit = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFALE"
-input_dyibu = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFALE"
-output = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDFALE"
-run_date = datetime.now()
-
-# Connect DuckDB
-con = duckdb.connect()
-
-# -----------------------------
-# STEP 1: Read from Parquet
-# -----------------------------
-query = """
-SELECT 
-    BANKNO,
-    REPTNO,
-    FMTCODE,
-    BRANCH,
-    ACCTNO,
-    OPENIND,
-    CURBAL,
-    INTPLAN,
-    LMATDATE
-FROM read_parquet(?)
-"""
-df = con.execute(query, [input_parquet]).arrow()
-pl_fd = pl.from_arrow(df)
-
-# -----------------------------
-# STEP 2: Filter valid deposits (same logic as SAS)
-# -----------------------------
-pl_fd = pl_fd.filter(
-    (pl.col("BANKNO") == 33) &
-    (pl.col("REPTNO") == 4001) &
-    (pl.col("FMTCODE").is_in([1, 2])) &
-    (pl.col("OPENIND").is_in(["D", "O"])) &
-    (
-        ((pl.col("INTPLAN") >= 340) & (pl.col("INTPLAN") <= 359)) |
-        ((pl.col("INTPLAN") >= 448) & (pl.col("INTPLAN") <= 459)) |
-        ((pl.col("INTPLAN") >= 461) & (pl.col("INTPLAN") <= 469)) |
-        ((pl.col("INTPLAN") >= 580) & (pl.col("INTPLAN") <= 599)) |
-        ((pl.col("INTPLAN") >= 660) & (pl.col("INTPLAN") <= 740))
-    )
-)
-
-# Convert LMATDATE (numeric YYYYMMDD or 0) to datetime
-def parse_lmatdate(val):
-    try:
-        s = str(int(val)).zfill(8)
-        return datetime.strptime(s[:8], "%Y%m%d")
-    except Exception:
-        return None
-
-pl_fd = pl_fd.with_columns([
-    pl.col("LMATDATE").map_elements(parse_lmatdate, return_dtype=pl.Datetime).alias("LMATDT")
-])
-
-# -----------------------------
-# STEP 3: Helper - Summarize by period
-# -----------------------------
-def summarise_period(df, label, condition):
-    subset = df.filter(condition)
-    grouped = (
-        subset
-        .groupby(["BRANCH", "INTPLAN"])
-        .agg([
-            pl.count("ACCTNO").alias("FDINO"),
-            pl.sum("CURBAL").alias("FDI")
-        ])
-        .with_columns(pl.lit(run_date).alias("REPTDATE"))
-    )
-    print(f"{label}: {len(grouped)} rows summarized.")
-    return grouped
-
-# -----------------------------
-# STEP 4: Period definitions
-# -----------------------------
-DYIBUF = summarise_period(pl_fd, "DYIBUF", pl.col("LMATDT").is_not_null())
-DYIBUB = summarise_period(pl_fd, "DYIBUB", pl.col("LMATDT") < datetime(2004, 9, 4))
-DYIBUA = summarise_period(pl_fd, "DYIBUA", (pl.col("LMATDT") >= datetime(2004, 9, 4)) & (pl.col("LMATDT") <= datetime(2006, 4, 15)))
-DYIBUN = summarise_period(pl_fd, "DYIBUN", (pl.col("LMATDT") >= datetime(2006, 4, 16)) & (pl.col("LMATDT") <= datetime(2008, 9, 15)))
-DYIBUY = summarise_period(pl_fd, "DYIBUY", pl.col("LMATDT") >= datetime(2008, 9, 16))
-
-# -----------------------------
-# STEP 5: Export results (both CSV + Parquet)
-# -----------------------------
-def save_outputs(df: pl.DataFrame, name: str):
-    csv_path = f"{output_dir}{name}.csv"
-    parquet_path = f"{output_dir}{name}.parquet"
-
-    # Save to CSV
-    df.write_csv(csv_path)
-
-    # Convert to Arrow + save to Parquet
-    pq.write_table(df.to_arrow(), parquet_path)
-    print(f" Saved {name} â†’ CSV + Parquet")
-
-for name, data in {
-    "DYIBUF": DYIBUF,
-    "DYIBUB": DYIBUB,
-    "DYIBUA": DYIBUA,
-    "DYIBUN": DYIBUN,
-    "DYIBUY": DYIBUY
-}.items():
-    save_outputs(data, name)
-
-print(" All summaries successfully exported.")
+*;
+DATA REPTDATE;
+   KEEP REPTDATE;
+   INFILE DEPOSIT LRECL=1693 OBS=1;
+   INPUT @106 TBDATE PD6.;
+   REPTDATE=INPUT(SUBSTR(PUT(TBDATE,Z11.),1,8),MMDDYY8.);
+   CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+   CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+   CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+   CALL SYMPUT('RDATE',PUT(REPTDATE,8.));
+RUN;
+*;
+LIBNAME MIS "SAP.PBB.MIS.D&REPTYEAR" DISP=OLD;
+*;
+DATA FD;
+   KEEP BRANCH ACCTNO CURBAL INTPLAN LMATDT;
+   INFILE DEPOSIT LRECL=1693;
+   INPUT @3 BANKNO PD2. @24 REPTNO PD3. @27 FMTCODE PD2. @;
+   IF BANKNO = 33 AND REPTNO = 4001 AND FMTCODE IN (1,2);
+   INPUT @106 BRANCH  PD4.
+         @110 ACCTNO  PD6.
+         @155 OPENIND $1.
+         @156 CURBAL  PD6.2
+         @208 INTPLAN PD2.
+         @392 LMATDATE PD6.;
+   IF OPENIND IN ('D','O')       AND
+      ((340 <= INTPLAN <= 359)   OR
+       (448 <= INTPLAN <= 459)   OR
+       (461 <= INTPLAN <= 469)   OR
+       (580 <= INTPLAN <= 599)   OR
+       (660 <= INTPLAN <= 740));
+   IF LMATDATE NE (0) THEN DO;
+      LMDATES = INPUT(SUBSTR(PUT(LMATDATE,Z11.),1,8),MMDDYY8.);
+      LMATDT  = LMDATES;
+   END;
+   ELSE LMATDT = 0;
+*;
+*------------------------------------------------*
+*  SUMMARISE BY BRANCH, INTPLAN BEFORE STORING   *
+*------------------------------------------------*;
+PROC SORT DATA=FD OUT=AC NODUPKEYS;
+   BY BRANCH INTPLAN ACCTNO;
+*;
+PROC SUMMARY NWAY;
+   CLASS BRANCH INTPLAN;
+   OUTPUT OUT=AC1(DROP=_TYPE_ RENAME=_FREQ_=FDINO);
+*;
+PROC SUMMARY DATA=FD NWAY;
+   CLASS BRANCH INTPLAN;
+   VAR CURBAL;
+   OUTPUT OUT=FD1(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;
+*;
+DATA DYIBUF;
+   MERGE AC1 FD1;
+   BY BRANCH INTPLAN;
+   IF _N_ = 1 THEN SET REPTDATE;
+*;
+*----------------------------------------------------*
+*  SUMMARISE BY BRANCH, INTPLAN BEFORE PRIVATISATION *
+*----------------------------------------------------*;
+PROC SORT DATA=FD OUT=BAC NODUPKEYS;
+   BY BRANCH INTPLAN ACCTNO;
+   WHERE LMATDT < '04SEP04'D AND LMATDT NE 0;
+PROC SUMMARY NWAY;
+   CLASS BRANCH INTPLAN;
+   OUTPUT OUT=BAC(DROP=_TYPE_ RENAME=_FREQ_=FDINO);
+*;
+PROC SUMMARY DATA=FD NWAY;
+   WHERE LMATDT < '04SEP04'D AND LMATDT NE 0;
+   CLASS BRANCH INTPLAN;
+   VAR CURBAL;
+   OUTPUT OUT=BFD(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;
+*;
+DATA DYIBUB;
+   MERGE BAC BFD;
+   BY BRANCH INTPLAN;
+   IF _N_ = 1 THEN SET REPTDATE;
+*;
+*---------------------------------------------------*
+*  SUMMARISE BY BRANCH, INTPLAN AFTER PRIVATISATION *
+*  04SEP04 UNTIL 15APR06.                           *
+*---------------------------------------------------*;
+PROC SORT DATA=FD OUT=AAC NODUPKEYS;
+   BY BRANCH INTPLAN ACCTNO;
+   WHERE LMATDT >= '04SEP04'D AND LMATDT <= '15APR06'D;
+*;
+PROC SUMMARY NWAY;
+   CLASS BRANCH INTPLAN;
+   OUTPUT OUT=AAC(DROP=_TYPE_ RENAME=_FREQ_=FDINO);
+*;
+PROC SUMMARY DATA=FD NWAY;
+   WHERE LMATDT >= '04SEP04'D AND LMATDT <= '15APR06'D;
+   CLASS BRANCH INTPLAN;
+   VAR CURBAL;
+   OUTPUT OUT=AFD(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;
+*;
+DATA DYIBUA;
+   MERGE AAC AFD;
+   BY BRANCH INTPLAN;
+   IF _N_ = 1 THEN SET REPTDATE;
+*;
+*---------------------------------------------------*
+*  SUMMARISE BY BRANCH  INTPLAN AFTER PRIVATISATION *
+*  16SEP04 UNTIL 15SEP08.                           *
+*---------------------------------------------------*;
+PROC SORT DATA=FD OUT=NAC NODUPKEYS;
+   BY BRANCH INTPLAN ACCTNO;
+   WHERE LMATDT >= '16APR06'D AND LMATDT <= '15SEP08'D;
+*;
+PROC SUMMARY NWAY;
+   CLASS BRANCH INTPLAN;
+   OUTPUT OUT=NAC(DROP=_TYPE_ RENAME=_FREQ_=FDINO);
+*;
+PROC SUMMARY DATA=FD NWAY;
+   WHERE LMATDT >= '16APR06'D AND LMATDT <= '15SEP08'D;
+   CLASS BRANCH INTPLAN;
+   VAR CURBAL;
+   OUTPUT OUT=NFD(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;
+*;
+DATA DYIBUN;
+   MERGE NAC NFD;
+   BY BRANCH INTPLAN;
+   IF _N_ = 1 THEN SET REPTDATE;
+*;
+*---------------------------------------------------*
+*  SUMMARISE BY BRANCH INTPLAN AFTER PRIVATISATION  *
+*  16SEP04 UNTIL 15SEP08.                           *
+*---------------------------------------------------*;
+PROC SORT DATA=FD OUT=YAC NODUPKEYS;
+   BY BRANCH INTPLAN ACCTNO;
+   WHERE LMATDT >= '16SEP08'D;
+*;
+PROC SUMMARY NWAY;
+   CLASS BRANCH INTPLAN;
+   OUTPUT OUT=YAC(DROP=_TYPE_ RENAME=_FREQ_=FDINO);
+*;
+PROC SUMMARY DATA=FD NWAY;
+   WHERE LMATDT >= '16SEP08'D;
+   CLASS BRANCH INTPLAN;
+   VAR CURBAL;
+   OUTPUT OUT=YFD(DROP=_TYPE_ RENAME=_FREQ_=FDINO2) SUM=FDI;
+*;
+DATA DYIBUY;
+   MERGE YAC YFD;
+   BY BRANCH INTPLAN;
+   IF _N_ = 1 THEN SET REPTDATE;
+*;
+%MACRO MISAPPD;
+   %IF "&REPTDAY" EQ "01"  %THEN %DO;
+      PROC DATASETS LIB=MIS NOLIST;
+         DELETE DYIBUF&REPTMON;
+      RUN;
+      PROC DATASETS LIB=MIS NOLIST;
+         DELETE DYIBUB&REPTMON;
+      RUN;
+      PROC DATASETS LIB=MIS NOLIST;
+         DELETE DYIBUA&REPTMON;
+      RUN;
+      PROC DATASETS LIB=MIS NOLIST;
+         DELETE DYIBUN&REPTMON;
+      RUN;
+      PROC DATASETS LIB=MIS NOLIST;
+         DELETE DYIBUY&REPTMON;
+      RUN;
+   %END;
+   %ELSE %DO;
+      DATA MIS.DYIBUY&REPTMON;
+         SET MIS.DYIBUY&REPTMON;
+         IF REPTDATE EQ &RDATE THEN DELETE;
+      RUN;
+      DATA MIS.DYIBUF&REPTMON;
+         SET MIS.DYIBUF&REPTMON;
+         IF REPTDATE EQ &RDATE THEN DELETE;
+      RUN;
+      DATA MIS.DYIBUB&REPTMON;
+         SET MIS.DYIBUB&REPTMON;
+         IF REPTDATE EQ &RDATE THEN DELETE;
+      RUN;
+      DATA MIS.DYIBUA&REPTMON;
+         SET MIS.DYIBUA&REPTMON;
+         IF REPTDATE EQ &RDATE THEN DELETE;
+      RUN;
+      DATA MIS.DYIBUN&REPTMON;
+         SET MIS.DYIBUN&REPTMON;
+         IF REPTDATE EQ &RDATE THEN DELETE;
+      RUN;
+   %END;
+   PROC APPEND DATA=DYIBUF BASE=MIS.DYIBUF&REPTMON; RUN;
+   PROC APPEND DATA=DYIBUB BASE=MIS.DYIBUB&REPTMON; RUN;
+   PROC APPEND DATA=DYIBUA BASE=MIS.DYIBUA&REPTMON; RUN;
+   PROC APPEND DATA=DYIBUN BASE=MIS.DYIBUN&REPTMON; RUN;
+   PROC APPEND DATA=DYIBUY BASE=MIS.DYIBUY&REPTMON; RUN;
+%MEND MISAPPD;
+%MISAPPD
+/*
