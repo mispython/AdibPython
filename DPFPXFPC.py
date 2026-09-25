@@ -11,9 +11,9 @@ from pathlib import Path
 # -----------------------------
 # CONFIGURATION
 # -----------------------------
-input_deposit = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFALE"
-input_dyibu   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFALE"
-output_dir    = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDFALE"
+input_deposit = "/host_pq/dwh/input/DEPOSIT"
+input_dyibu   = "/stgsrcsys/host/uat/maa/python/input"
+output_dir    = "/stgsrcsys/host/uat/maa/python/output"
 
 # REPTDATE = yesterday
 run_date = datetime.now() - timedelta(days=1)
@@ -166,3 +166,9 @@ for name, data in {
     save_sas7bdat(data, name)
 
 print("All summaries successfully exported as SAS7BDAT.")
+
+
+
+
+the deposit file name is DPDARPGS_FB_{reptyear}{reptmon}{reptday}
+and it is a flat file where it is appended input file
