@@ -1,225 +1,806 @@
-# -*- coding: utf-8 -*-
-"""
-Combined diagnostic for the deposit flat file and Parquet output.
-Prints a full report so we can pinpoint the bug.
-"""
-import os
-import numpy as np
-import pyarrow.parquet as pq
-
-# ---------- CONFIG ----------
-FLAT_FILE   = "/host_pq/dwh/input/DEPOSIT/DPDARPGS_FB_20260924"
-PARQUET     = "/stgsrcsys/host/holding/DPDARPGS_FB_20260924.parquet"
-RECORD_LEN  = 1693
-SAMPLE_MB   = 200
-
-FIELDS = {
-    "BANKNO":   (2,   4),
-    "REPTNO":   (23,  26),
-    "FMTCODE":  (26,  28),
-    "BRANCH":   (105, 109),
-    "ACCTNO":   (109, 115),
-    "OPENIND":  (154, 155),
-    "CURBAL":   (155, 161),
-    "INTPLAN":  (207, 209),
-    "LMATDATE": (391, 397),
-}
-
-EBCDIC_TO_CHAR = np.array([bytes([i]).decode("cp037") for i in range(256)])
-
-# ---------- DECODERS ----------
-def decode_packed_2d(raw, scale=0):
-    high = (raw >> 4) & 0x0F
-    low  = raw & 0x0F
-    n_rows, n_bytes = raw.shape
-    vals = np.zeros(n_rows, dtype=np.int64)
-    for i in range(n_bytes - 1):
-        vals = vals * 100 + high[:, i] * 10 + low[:, i]
-    vals = vals * 10 + high[:, -1]
-    sign = low[:, -1]
-    vals[(sign == 0x0D) | (sign == 0x0B)] *= -1
-    if scale:
-        return vals.astype(np.float64) / (10 ** scale)
-    return vals
-
-# ---------- SECTION 1 ----------
-def section_file_basics():
-    print("=" * 78)
-    print("SECTION 1: FILE BASICS")
-    print("=" * 78)
-
-    size = os.path.getsize(FLAT_FILE)
-    print(f"Flat file size         : {size:,} bytes ({size/1e9:.2f} GB)")
-    print(f"Expected records @1693 : {size // RECORD_LEN:,}")
-
-    with open(FLAT_FILE, "rb") as f:
-        sample = f.read(SAMPLE_MB * 1024 * 1024)
-    newlines_sample = sample.count(b"\n")
-    ratio = size / len(sample)
-    print(f"Newlines in first {SAMPLE_MB} MB : {newlines_sample:,}")
-    print(f"  extrapolated total lines    : {int(newlines_sample * ratio):,}")
-    print(f"  bytes per newline (avg)     : {len(sample) / max(newlines_sample, 1):,.0f}")
-
-    if os.path.exists(PARQUET):
-        pf = pq.ParquetFile(PARQUET)
-        print(f"\nParquet size           : {os.path.getsize(PARQUET):,} bytes")
-        print(f"Parquet rows           : {pf.metadata.num_rows:,}")
-        print(f"Parquet row groups     : {pf.num_row_groups}")
-        print(f"Parquet schema         :")
-        for f_ in pf.schema_arrow:
-            print(f"    {f_.name:12s} {f_.type}")
-    else:
-        print(f"\nParquet not found: {PARQUET}")
-    print()
-
-# ---------- SECTION 2 ----------
-def section_hex_dump():
-    print("=" * 78)
-    print("SECTION 2: HEX DUMPS (first 3 records)")
-    print("=" * 78)
-
-    with open(FLAT_FILE, "rb") as f:
-        data = f.read(RECORD_LEN * 3)
-
-    for i in range(3):
-        rec = data[i * RECORD_LEN : (i + 1) * RECORD_LEN]
-        if len(rec) < RECORD_LEN:
-            break
-        print(f"\nRecord {i} (bytes {i * RECORD_LEN}..{(i + 1) * RECORD_LEN}):")
-        print(f"  bytes   0- 10 : {rec[  0: 10].hex()}")
-        print(f"  bytes  23- 28 : {rec[ 23: 28].hex()}")
-        print(f"  bytes 105-115 : {rec[105:115].hex()}")
-        print(f"  bytes 154-161 : {rec[154:161].hex()}")
-        print(f"  bytes 207-209 : {rec[207:209].hex()}")
-        print(f"  bytes 391-397 : {rec[391:397].hex()}")
-        print(f"  tail (1685-1693): {rec[-8:].hex()}  ({rec[-8:]!r})")
-    print()
-
-# ---------- SECTION 3 ----------
-def section_decode_and_filter():
-    print("=" * 78)
-    print(f"SECTION 3: SAMPLE DECODE & FILTER FUNNEL (first {SAMPLE_MB} MB)")
-    print("=" * 78)
-
-    with open(FLAT_FILE, "rb") as f:
-        buf = f.read(SAMPLE_MB * 1024 * 1024)
-    n = len(buf) // RECORD_LEN
-    arr = np.frombuffer(buf[: n * RECORD_LEN], dtype=np.uint8).reshape(n, RECORD_LEN)
-
-    print(f"Sample records         : {n:,}")
-
-    bankno  = decode_packed_2d(arr[:, 2:4])
-    reptno  = decode_packed_2d(arr[:, 23:26])
-    fmtcode = decode_packed_2d(arr[:, 26:28])
-    branch  = decode_packed_2d(arr[:, 105:109])
-    acctno  = decode_packed_2d(arr[:, 109:115])
-    openind = EBCDIC_TO_CHAR[arr[:, 154]]
-    curbal  = decode_packed_2d(arr[:, 155:161], scale=2)
-    intplan = decode_packed_2d(arr[:, 207:209])
-    lmat    = decode_packed_2d(arr[:, 391:397])
-
-    def stats(name, vals, is_char=False):
-        print(f"\n{name}")
-        if is_char:
-            u, c = np.unique(vals, return_counts=True)
-            pairs = sorted(zip(u.tolist(), c.tolist()), key=lambda x: -x[1])[:10]
-            print("  top 10 values (count):")
-            for ch, cnt in pairs:
-                print(f"      {ch!r} : {cnt:,}")
-        else:
-            u = np.unique(vals)
-            print(f"  unique count   : {len(u)}")
-            print(f"  min / max      : {vals.min():,} / {vals.max():,}")
-            print(f"  first 10 uniq  : {u[:10].tolist()}")
-            print(f"  first 10 vals  : {vals[:10].tolist()}")
-
-    stats("BANKNO", bankno)
-    stats("REPTNO", reptno)
-    stats("FMTCODE", fmtcode)
-    stats("BRANCH", branch)
-    stats("ACCTNO", acctno)
-    stats("OPENIND", openind, is_char=True)
-    stats("CURBAL", curbal)
-    stats("INTPLAN", intplan)
-    stats("LMATDATE", lmat)
-
-    print("\n--- FILTER FUNNEL ---")
-    m_bankno  = (bankno == 33)
-    m_reptno  = (reptno == 4001)
-    m_fmtcode = np.isin(fmtcode, [1, 2])
-    m_openind = np.isin(openind, ["D", "O"])
-    m_intplan = (
-        ((intplan >= 340) & (intplan <= 359)) |
-        ((intplan >= 448) & (intplan <= 459)) |
-        ((intplan >= 461) & (intplan <= 469)) |
-        ((intplan >= 580) & (intplan <= 599)) |
-        ((intplan >= 660) & (intplan <= 740))
-    )
-
-    print(f"  total records              : {n:,}")
-    print(f"  BANKNO == 33               : {m_bankno.sum():,}  ({m_bankno.sum()/n:.2%})")
-    print(f"  REPTNO == 4001             : {m_reptno.sum():,}  ({m_reptno.sum()/n:.2%})")
-    print(f"  FMTCODE in (1,2)           : {m_fmtcode.sum():,}  ({m_fmtcode.sum()/n:.2%})")
-    print(f"  OPENIND in (D,O)           : {m_openind.sum():,}  ({m_openind.sum()/n:.2%})")
-    print(f"  INTPLAN in ranges          : {m_intplan.sum():,}  ({m_intplan.sum()/n:.2%})")
-
-    m_step1 = m_bankno
-    m_step2 = m_step1 & m_reptno
-    m_step3 = m_step2 & m_fmtcode
-    m_step4 = m_step3 & m_openind
-    m_step5 = m_step4 & m_intplan
-    print(f"\n  cumulative funnel:")
-    print(f"    after BANKNO             : {m_step1.sum():,}")
-    print(f"    after +REPTNO            : {m_step2.sum():,}")
-    print(f"    after +FMTCODE           : {m_step3.sum():,}")
-    print(f"    after +OPENIND           : {m_step4.sum():,}")
-    print(f"    after +INTPLAN           : {m_step5.sum():,}")
-
-    ratio = os.path.getsize(FLAT_FILE) / len(buf)
-    print(f"\n  extrapolated to full file:")
-    print(f"    expected total records   : {int(n * ratio):,}")
-    print(f"    expected passing records : {int(m_step5.sum() * ratio):,}")
-    print()
-
-# ---------- SECTION 4 ----------
-def section_parquet_peek():
-    print("=" * 78)
-    print("SECTION 4: PARQUET CONTENT")
-    print("=" * 78)
-
-    if not os.path.exists(PARQUET):
-        print(f"Parquet not found: {PARQUET}")
-        return
-
-    try:
-        import polars as pl
-    except ImportError:
-        print("polars not installed - skipping content peek")
-        return
-
-    df = pl.read_parquet(PARQUET)
-    print(f"Rows         : {len(df):,}")
-    print(f"Columns      : {df.columns}")
-    print(f"Head:")
-    print(df.head(5))
-
-    print(f"\nNull counts:")
-    print(df.null_count())
-
-    print(f"\nDescribe:")
-    print(df.describe())
-    print()
-
-# ---------- MAIN ----------
-def main():
-    section_file_basics()
-    section_hex_dump()
-    section_decode_and_filter()
-    section_parquet_peek()
-
-    print("=" * 78)
-    print("DONE - paste this entire output back for diagnosis.")
-    print("=" * 78)
-
-if __name__ == "__main__":
-    main()
+%INC PGM(PBBLNFMT);                                                     00322002
+                                                                        00323002
+%LET ODCORP=(50,51,52,53,54,55,56,57,58,59,                             00324002
+             60,61,62,63,64,65,31);                                     00325002
+%LET ODRTLA=(68,69,85,86,87,88,89,90,91,100,101,102,103,106,108,109,    00326002
+             110,111,112,113,114,115,116,117,118,119,120,121,122,123,   00327002
+             124,125,135,137,138,150,151,152,153,154,155,156,157,158,   00328002
+             159,170,174,175,176,179,180,181,189,191,192,193,194,195,   00329002
+             196,197,198,190,30,34,81,82,83,84,77,78);                  00329102
+%LET ODRTLB=(177,178,34,133,134,77,78);                                 00329202
+%LET ODFISS=(0311,0312,0313,0314,0315,0316);                            00329302
+%LET OTRTLA=(303,306,307,325,330,340,354,355,391,610,611,               00329404
+             308,311,367,313,369);                                      00329502
+%LET OTRTLB=(4,5,6,7,15,20,25,26,27,28,29,30,31,32,33,34,               00329602
+             60,61,62,63,70,71,72,73,74,75,76,77,78,79);                00329702
+%LET FLCORP=(180,181,182,183,193,800,801,802,803,804,818,               00329806
+             900,901,902,903,904,905,906,907,908,912,922,               00329902
+             184,909,910,914,915,916,918,919,920,925,950,951,           00330002
+             631,632,633,634,635,636,637,639,640,641,816,817,           00330105
+             805,806,807,808,809,810,811,812,813,814,913,917);          00330202
+%LET HLCORP=(638,911);                                                  00330302
+                                                                        00330402
+DATA REPTDATE (KEEP=REPTDATE);                                          00330502
+  REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||                       00330602
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;                   00330702
+  SELECT(DAY(REPTDATE));                                                00330802
+    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;                   00330902
+    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;                   00331002
+    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;                   00331102
+    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3';                        00331202
+                            WK2= '2'; WK3 = '1'; END;                   00331302
+  END;                                                                  00331402
+  MM = MONTH(REPTDATE);                                                 00331502
+  IF WK = '1' THEN DO;                                                  00331602
+     MM1 = MM - 1;                                                      00331702
+     IF MM1 = 0 THEN MM1 = 12;                                          00331802
+  END;                                                                  00331902
+  ELSE MM1 = MM;                                                        00332002
+  MM2 = MM - 1;                                                         00332102
+  IF MM2 = 0 THEN MM2 = 12;                                             00332202
+  SDATE = MDY(MM,SDD,YEAR(REPTDATE));                                   00332302
+  CALL SYMPUT('NOWK',PUT(WK,$1.));                                      00332402
+  CALL SYMPUT('NOWK1',PUT(WK1,$1.));                                    00332502
+  CALL SYMPUT('NOWK2',PUT(WK2,$1.));                                    00332602
+  CALL SYMPUT('NOWK3',PUT(WK3,$1.));                                    00332702
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                   00332802
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));                                 00332902
+  CALL SYMPUT('REPTMON2',PUT(MM2,Z2.));                                 00333002
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR2.));                         00333102
+  CALL SYMPUT('RYEAR',PUT(REPTDATE,YEAR4.));                            00333202
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));                        00333302
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                          00333402
+  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));                             00333502
+  CALL SYMPUT('MDATE',PUT(REPTDATE,Z5.));                               00333602
+RUN;                                                                    00333702
+                                                                        00333802
+ **********************************************************             00333902
+ ** ALL LOAN - DISBURSEMENT, REPAYMENT, O/S              **             00334002
+ **********************************************************;            00334102
+PROC SORT DATA=SASD.LOAN&REPTMON OUT=DLOAN;BY ACCTNO NOTENO;RUN;        00334202
+PROC SORT DATA=BNM.LOAN&REPTMON&NOWK OUT=MLOAN;BY ACCTNO NOTENO;RUN;    00334702
+PROC SORT DATA=BNM.LNWOF&REPTMON&NOWK OUT=LNWOF;BY ACCTNO NOTENO;RUN;   00334802
+PROC SORT DATA=BNM.LNWOD&REPTMON&NOWK OUT=LNWOD;BY ACCTNO NOTENO;RUN;   00334902
+PROC SORT DATA=BNM.LNWOF&REPTMON2&NOWK OUT=PLNWOF;BY ACCTNO NOTENO;RUN; 00335004
+PROC SORT DATA=BNM.LNWOD&REPTMON2&NOWK OUT=PLNWOD;BY ACCTNO NOTENO;RUN; 00335104
+                                                                        00335404
+DATA LOANDM;                                                            00335504
+   MERGE DLOAN(IN=A) MLOAN(IN=B);BY ACCTNO NOTENO;                      00335604
+   IF A AND NOT B;                                                      00335704
+RUN;                                                                    00335804
+                                                                        00335904
+DATA LOAN&REPTMON&NOWK;                                                 00336004
+   MERGE PLNWOF PLNWOD LOANDM BNM.LOAN&REPTMON2&NOWK MLOAN LNWOF LNWOD; 00336104
+   BY ACCTNO NOTENO;                                                    00336204
+  * IF ACCTYPE='OD' AND PRODUCT IN (150,151,152,181) THEN DELETE;       00336304
+RUN;                                                                    00336404
+                                                                        00336504
+DATA DISPAY;                                                            00336604
+   SET DISPAY.DISPAYMTH&REPTMON;                                        00336704
+   DISBURSE=ROUND(DISBURSE,0.01);                                       00336804
+   REPAID=ROUND(REPAID,0.01);                                           00336904
+   WHERE DISBURSE > 0 OR REPAID > 0;                                    00337004
+RUN;                                                                    00337104
+PROC SORT DATA=DISPAY; BY ACCTNO NOTENO;                                00337204
+RUN;                                                                    00337304
+DATA DISPAY;                                                            00337404
+   MERGE LOAN&REPTMON&NOWK(IN=A) DISPAY(IN=B);                          00337504
+   BY ACCTNO NOTENO;                                                    00337604
+   IF A & B;                                                            00337704
+RUN;                                                                    00337804
+ /**********************************************************/           00337904
+ /** DISBURSEMENT, REPAYMENT, APPROVAL - BY PURPOSE CODE  **/           00338004
+ /**********************************************************/           00338104
+PROC SORT DATA=FEE.LNFEE&REPTMON&NOWK                                   00338204
+   OUT=M_FEE(KEEP=ACCTNO NOTENO DUETOTAL FEEPLAN);                      00338304
+   BY ACCTNO NOTENO; RUN;                                               00338404
+                                                                        00338504
+PROC SUMMARY DATA=M_FEE NWAY;                                           00338604
+   BY ACCTNO NOTENO;                                                    00338704
+   VAR DUETOTAL;                                                        00338804
+   WHERE FEEPLAN='CL' AND DUETOTAL>0;                                   00338904
+   OUTPUT OUT=CL_FEE SUM=; RUN;                                         00339004
+                                                                        00339104
+PROC SORT DATA=BNM.LOAN&REPTMON&NOWK                                    00339204
+   OUT=LOAN;                                                            00339304
+   BY ACCTNO NOTENO;                                                    00339404
+RUN;                                                                    00339504
+                                                                        00339604
+DATA LOAN;                                                              00339704
+MERGE LOAN(IN=A) CL_FEE(IN=B);                                          00339804
+BY ACCTNO NOTENO;                                                       00339904
+IF A;                                                                   00340004
+CLFEE    = DUETOTAL*FORATE;                                             00340104
+DROP _TYPE_ _FREQ_;                                                     00340204
+RUN;                                                                    00340304
+                                                                        00340404
+PROC SORT DATA=LOAN;                                                    00340504
+   BY ACCTNO COMMNO;                                                    00340604
+RUN;                                                                    00340704
+                                                                        00340804
+PROC SORT DATA=LOAN.LNCOMM                                              00340904
+   OUT=LNCOMM(KEEP=ACCTNO COMMNO CUSEDAMT);                             00341004
+   BY ACCTNO COMMNO;                                                    00341104
+RUN;                                                                    00341204
+                                                                        00341304
+DATA ALM ALMBT;                                                         00341404
+ KEEP ACCTNO NOTENO FISSPURP PRODUCT NOTETERM EARNTERM BALANCE PAIDIND  00341504
+      APPRDATE APPRLIM2 PRODCD CUSTCD AMTIND SECTORCD ACCTYPE BRANCH    00341604
+      CJFEE ORIBAL DNBFISME NOACCT COMMNO;                              00341704
+ MERGE LOAN(IN=A RENAME=(BALANCE=ORIBAL BAL_AFT_EIR=BALANCE))           00341804
+       LNCOMM(IN=B);                                                    00341904
+   BY ACCTNO COMMNO;                                                    00342004
+   IF A;                                                                00342104
+   IF PAIDIND NOT IN ('P','C') OR EIR_ADJ NE .;                         00342204
+   FORMAT BALX 14.2;                                                    00342304
+   XIND=' ';                                                            00342404
+   IF ORIBAL=-.00 THEN XIND='Y';                                        00342504
+   BALX=ROUND(ORIBAL,.01);                                              00342604
+   IF BALX IN (0.00,-0.00)  THEN XIND='Y';                              00342704
+   * IF PAIDIND='P' OR XIND='Y' THEN DELETE;                            00342804
+   IF XIND='Y' THEN DELETE;                                             00342904
+   IF SUBSTR(PRODCD, 1, 2) EQ '34' OR PRODCD EQ '54120';                00343004
+  * IF PRODUCT IN (150,151,152,181) THEN DELETE;                        00343104
+   IF ACCTYPE='LN' THEN DO;                                             00343204
+   /* ONLY AFFECT NOACCT, OTHERS REMAIN */                              00343304
+      IF (RLEASAMT^=0.00 AND PAIDIND NOT IN ('P','C') AND               00343404
+          ORIBAL>0 AND CJFEE^=ORIBAL) OR                                00343504
+         (RLEASAMT =0.00 AND PAIDIND NOT IN ('P','C') AND               00343604
+          ORIBAL>0 AND PRODUCT IN (600:699)) OR                         00343704
+         (RLEASAMT =0.00 AND PAIDIND NOT IN ('P','C') AND               00343804
+          ORIBAL>0 AND COMMNO>0 AND CUSEDAMT>0) THEN /* NOTHING */;     00343904
+      ELSE NOACCT=0;                                                    00344004
+      IF RLEASAMT^=0 AND ORIBAL=CLFEE THEN NOACCT=0;                    00344104
+   END;                                                                 00344204
+   IF PAIDIND NOT IN ('P','C') & CJFEE NE ORIBAL AND NOACCT^=0 AND      00344304
+      ROUND(ORIBAL,.01) NOT IN (0.00,-0.00) THEN NOACCT= 1;             00344404
+   IF (2500000000<=ACCTNO<=2599999999 AND 40000<=NOTENO<=49999) OR      00344504
+       PRODUCT = 321                                                    00344604
+   THEN OUTPUT ALMBT; ELSE OUTPUT ALM;                                  00344704
+RUN;                                                                    00344804
+                                                                        00344904
+DATA ALM;                                                               00345004
+   SET ALM;                                                             00345104
+   BY ACCTNO COMMNO;                                                    00345204
+   IF FIRST.ACCTNO OR FIRST.COMMNO THEN UNQ = 0;                        00345304
+   IF PRODCD IN ('34170','34190','34690') THEN DO;                      00345404
+      UNQ+NOACCT; *17-513;                                              00345504
+      IF UNQ>1 THEN NOACCT=0;                                           00345604
+   END;                                                                 00345704
+RUN;                                                                    00345804
+                                                                        00345904
+DATA ALMBT;                                                             00346004
+   SET ALMBT;                                                           00346104
+   BY ACCTNO;                                                           00346204
+   IF FIRST.ACCTNO THEN NOACCT=1;ELSE NOACCT=0;                         00346304
+RUN;                                                                    00346404
+                                                                        00346504
+DATA ALM;                                                               00346604
+   SET ALM ALMBT;                                                       00346704
+RUN;                                                                    00346804
+                                                                        00346904
+PROC SORT DATA=DISPAY                                                   00347004
+     (KEEP=ACCTNO NOTENO FISSPURP PRODUCT DNBFISME                      00347104
+      PRODCD CUSTCD AMTIND SECTORCD DISBURSE REPAID BRANCH ACCTYPE);    00347204
+   BY ACCTNO NOTENO CUSTCD FISSPURP SECTORCD;                           00347304
+   WHERE SUBSTR(PRODCD,1,2) = '34' OR PRODUCT IN (678,679,993,996);     00347404
+RUN;                                                                    00347504
+                                                                        00347604
+PROC SORT DATA=ALM;                                                     00347704
+   BY ACCTNO NOTENO;                                                    00347804
+RUN;                                                                    00347904
+                                                                        00348004
+DATA ALM;                                                               00348104
+   MERGE ALM(IN=B) DISPAY(IN=A);                                        00348204
+   BY ACCTNO NOTENO;                                                    00348304
+   IF REPAID > 0 THEN REPAYNO = 1;                                      00348404
+   IF DISBURSE >  0 THEN DISBNO = 1;                                    00348504
+   FORMAT DISBURSE REPAID BALANCE 16.2;                                 00348604
+RUN;                                                                    00348704
+DATA ALM;                                                               00348804
+   SET ALM;                                                             00348904
+   FORMAT PRODESC $35.;                                                 00349004
+   IF ACCTYPE = 'LN' AND PRODCD IN ('34111') OR                         00349104
+      PRODUCT IN (678,679,993,996) THEN                                 00349204
+      PRODESC = 'HIRE PURCHASE';                                        00349304
+   IF ACCTYPE = 'LN' AND PRODCD IN ('34120') THEN DO;                   00349404
+      PRODESC = 'RETAIL HOUSING LOANS';                                 00349504
+      IF PRODUCT IN &HLCORP THEN                                        00349604
+         PRODESC = 'CORP. BANKING HOUSING LOANS';                       00349704
+   END;                                                                 00349804
+   IF ACCTYPE = 'OD' AND PRODCD IN ('34180','34240') AND                00349904
+                 PRODUCT IN &ODCORP THEN                                00350004
+      PRODESC = 'OD CORPORATE';                                         00350104
+   IF ACCTYPE = 'OD' AND PRODCD IN ('34180','34240') AND                00350204
+                 PRODUCT NOT IN &ODCORP THEN                            00350304
+      PRODESC = 'OD RETAIL';                                            00350404
+   IF ACCTYPE = 'LN' AND PRODCD NOT IN ('34111','34120','N','M') AND    00350504
+                 PRODUCT IN &FLCORP THEN                                00350604
+      PRODESC = 'CORP. BANKING LOANS';                                  00350704
+   IF ACCTYPE = 'LN' AND PRODCD NOT IN ('34111','34120','N','M') AND    00350804
+                 PRODUCT NOT IN &FLCORP THEN                            00350904
+      PRODESC = 'OTHERS RETAIL';                                        00351004
+   IF ACCTYPE = 'LN' AND PRODCD IN ('34170') THEN                       00351104
+      PRODESC = 'FLOOR STOCKING LOANS';                                 00351204
+RUN;                                                                    00351304
+                                                                        00351404
+  /***********************/                                             00351504
+  /*   FACTORING LOANS   */                                             00351604
+  /***********************/                                             00351704
+%INC PGM(RDL2PBIF);                                                     00351804
+                                                                        00351904
+DATA PBIF;                                                              00352004
+   SET PBIF;                                                            00352104
+   FORMAT PRODESC $35.;                                                 00352204
+   PRODESC = 'FACTORING';                                               00352304
+   IF REPAID > 0 THEN REPAYNO = 1;                                      00352404
+   IF DISBURSE >  0 THEN DISBNO = 1;                                    00352504
+   IF BALANCE > 0 AND NOACCT^=0 THEN NOACCT=1;                          00352604
+RUN;                                                                    00352704
+                                                                        00352804
+DATA ALMNEW;                                                            00352904
+   SET ALM PBIF;                                                        00353004
+RUN;                                                                    00353104
+                                                                        00353204
+PROC SUMMARY DATA=ALMNEW NWAY MISSING;                                  00353304
+   CLASS PRODESC;                                                       00353404
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00353504
+   OUTPUT OUT=ALMLOAN (DROP=_TYPE_  _FREQ_) SUM=;                       00353604
+RUN;                                                                    00353704
+PROC PRINT DATA=ALMLOAN;                                                00353804
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00353904
+   TITLE1 'ALL LOANS AS AT '&REPTMON'/'&RYEAR;                          00354004
+   TITLE2 'REPORT ID : EIMBNM01';                                       00354104
+RUN;                                                                    00354204
+                                                                        00354304
+DATA ALM2 COM3;                                                         00354404
+   SET ALM;                                                             00354504
+   WHERE PRODESC IN ('OD RETAIL','OTHERS RETAIL',                       00354604
+                     'FLOOR STOCKING LOANS');                           00354704
+   IF PRODESC = 'OD RETAIL' THEN DO;                                    00354804
+      IF PRODUCT IN &ODRTLA AND FISSPURP IN &ODFISS THEN                00354904
+         PRODESC = 'PURCHASE OF RESIDENTIAL PROPERTY';                  00355004
+      ELSE IF PRODUCT IN &ODRTLB THEN                                   00355104
+         PRODESC = 'SHARE MARGIN FINANCING';                            00355204
+      ELSE                                                              00355304
+         PRODESC = 'TOTAL COMMERCIAL RETAILS';                          00355404
+         TYCODE=1;                                                      00355504
+   END;                                                                 00355604
+   IF PRODESC = 'OTHERS RETAIL' THEN DO;                                00355704
+      IF PRODUCT IN &OTRTLA THEN                                        00355804
+         PRODESC = 'PERSONAL LOAN';                                     00355904
+      ELSE IF PRODUCT IN &OTRTLB THEN                                   00356004
+         PRODESC = 'STAFF LOAN';                                        00356104
+      ELSE                                                              00356204
+         PRODESC = 'TOTAL COMMERCIAL RETAILS';                          00356304
+         TYCODE=2;                                                      00356404
+   END;                                                                 00356504
+   IF PRODESC = 'FLOOR STOCKING LOANS' THEN DO;                         00356604
+      PRODESC = 'TOTAL COMMERCIAL RETAILS';                             00356704
+         TYCODE=3;                                                      00356804
+   END;                                                                 00356904
+RUN;                                                                    00357004
+                                                                        00357104
+DATA PBIF1;                                                             00357204
+   SET PBIF;                                                            00357304
+   IF PRODESC='FACTORING' THEN DO;                                      00357404
+      PRODESC='TOTAL COMMERCIAL RETAILS';                               00357504
+   END;                                                                 00357604
+RUN;                                                                    00357704
+                                                                        00357804
+DATA ALM2NEW ALM2CRL MFRS.ALM_CR(KEEP=ACCTNO NOTENO PRODESC NOACCT);    00357904
+   SET ALM2 PBIF1;                                                      00358004
+   OUTPUT ALM2NEW;                                                      00358104
+   OUTPUT MFRS.ALM_CR;                                                  00358204
+   IF PRODESC = 'TOTAL COMMERCIAL RETAILS' THEN DO;                     00358304
+      IF CUSTCD IN (77,78,95,96) THEN                                   00358404
+         PRODESC = 'COMMERCIAL RETAIL - IND';                           00358504
+      ELSE                                                              00358604
+         PRODESC = 'COMMERCIAL RETAIL - NON IND';                       00358704
+      OUTPUT ALM2CRL;                                                   00358804
+   END;                                                                 00358904
+RUN;                                                                    00359004
+                                                                        00359104
+PROC SUMMARY DATA=ALM2NEW NWAY MISSING;                                 00359204
+   CLASS PRODESC;                                                       00359304
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00359404
+   OUTPUT OUT=ALMLOAN2 (DROP=_TYPE_  _FREQ_) SUM=;                      00359504
+RUN;                                                                    00359604
+PROC PRINT DATA=ALMLOAN2;                                               00359704
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00359804
+   TITLE1 'RETAILS LOANS AS AT '&REPTMON'/'&RYEAR;                      00359904
+   TITLE2 'REPORT ID : EIMBNM01';                                       00360004
+RUN;                                                                    00360104
+                                                                        00360204
+PROC SUMMARY DATA=ALM2CRL NWAY MISSING;                                 00360304
+   CLASS PRODESC;                                                       00360404
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00360504
+   OUTPUT OUT=ALM2CRL (DROP=_TYPE_  _FREQ_) SUM=;                       00360604
+RUN;                                                                    00360704
+                                                                        00360804
+PROC PRINT DATA=ALM2CRL;                                                00360904
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00361004
+   TITLE1 'COMMERCIAL RETAIL LOANS AS AT '&REPTMON'/'&RYEAR;            00361104
+   TITLE2 'REPORT ID : EIMBNM01';                                       00361204
+RUN;                                                                    00361304
+                                                                        00361404
+DATA ALMSME;                                                            00361504
+   SET ALM;                                                             00361604
+   IF CUSTCD IN ('41','42','43','44','46','47','48','49','51'           00361704
+            '52','53','54','87','88','89') OR                           00361804
+            DNBFISME IN ('1','2','3');                                  00361904
+RUN;                                                                    00362004
+                                                                        00362104
+DATA SMEFAC;                                                            00362204
+   SET PBIF;                                                            00362304
+   IF CUSTCX IN ('41','42','43','44','46','47','48','49','51','52',     00362404
+            '53','54','87','88','89');                                  00362504
+RUN;                                                                    00362604
+                                                                        00362704
+DATA ALMSME DBE FBE DNBFI;                                              00362804
+   SET ALMSME SMEFAC;                                                   00362904
+   OUTPUT ALMSME;                                                       00363004
+   IF CUSTCD IN ('41','42','43','44','46','47','48','49','51','52',     00363104
+                 '53','54') OR                                          00363204
+      CUSTCX IN ('41','42','43','44','46','47','48','49','51',          00363304
+                 '52','53','54') THEN DO;                               00363404
+     OUTPUT DBE;                                                        00363504
+   END;                                                                 00363604
+   ELSE IF CUSTCD IN ('87','88','89') THEN DO;                          00363704
+           OUTPUT FBE;                                                  00363804
+   END;                                                                 00363904
+   ELSE IF DNBFISME IN ('1','2','3') THEN DO;                           00364004
+      OUTPUT DNBFI;                                                     00364104
+   END;                                                                 00364204
+RUN;                                                                    00364304
+                                                                        00364404
+PROC SUMMARY DATA=ALMSME NWAY MISSING;                                  00364504
+   CLASS PRODESC;                                                       00364604
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00364704
+   OUTPUT OUT=ALMLOAN (DROP=_TYPE_  _FREQ_) SUM=;                       00364804
+RUN;                                                                    00364904
+PROC PRINT DATA=ALMLOAN;                                                00365004
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00365104
+   TITLE1 'SME LOANS AS AT '&REPTMON'/'&RYEAR;                          00365204
+   TITLE2 'REPORT ID : EIMBNM01';                                       00365304
+RUN;                                                                    00365404
+                                                                        00365504
+DATA ALMSME2 DBE2 FBE2 DNBFI2;                                          00365604
+   SET ALM2NEW;                                                         00365704
+                                                                        00365804
+   IF CUSTCD IN ('41','42','43','44','46','47','48','49','51','52',     00365904
+                 '53','54') OR                                          00366004
+      CUSTCX IN ('41','42','43','44','46','47','48','49','51',          00366104
+                 '52','53','54') THEN DO;                               00366204
+        OUTPUT DBE2;                                                    00366304
+        OUTPUT ALMSME2;                                                 00366404
+   END;                                                                 00366504
+   ELSE IF CUSTCD IN ('87','88','89') THEN DO;                          00366604
+        OUTPUT FBE2;                                                    00366704
+        OUTPUT ALMSME2;                                                 00366804
+   END;                                                                 00366904
+   ELSE IF DNBFISME IN ('1','2','3') THEN DO;                           00367004
+        OUTPUT DNBFI2;                                                  00367104
+        OUTPUT ALMSME2;                                                 00367204
+   END;                                                                 00367304
+RUN;                                                                    00367404
+                                                                        00367504
+PROC SUMMARY DATA=ALMSME2 NWAY MISSING;                                 00367604
+   CLASS PRODESC;                                                       00367704
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00367804
+   OUTPUT OUT=ALMLOAN2 (DROP=_TYPE_  _FREQ_) SUM=;                      00367904
+RUN;                                                                    00368004
+PROC PRINT DATA=ALMLOAN2;                                               00368104
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00368204
+   TITLE1 'RETAILS SME LOANS AS AT '&REPTMON'/'&RYEAR;                  00368304
+   TITLE2 'REPORT ID : EIMBNM01';                                       00368404
+RUN;                                                                    00368504
+                                                                        00368604
+PROC SUMMARY DATA=DBE NWAY MISSING;                                     00368704
+   CLASS PRODESC;                                                       00368804
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00368904
+   OUTPUT OUT=DBE (DROP=_TYPE_  _FREQ_) SUM=;                           00369004
+RUN;                                                                    00369104
+PROC PRINT DATA=DBE;                                                    00369204
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00369304
+   TITLE1 'OF WHICH : SME DBE LOANS AS AT '&REPTMON'/'&RYEAR;           00369404
+   TITLE2 'REPORT ID : EIMBNM01';                                       00369504
+RUN;                                                                    00369604
+                                                                        00369704
+PROC SUMMARY DATA=DBE2 NWAY MISSING;                                    00369804
+   CLASS PRODESC;                                                       00369904
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00370004
+   OUTPUT OUT=DBE2 (DROP=_TYPE_  _FREQ_) SUM=;                          00370104
+RUN;                                                                    00370204
+PROC PRINT DATA=DBE2;                                                   00370304
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00370404
+   TITLE1 'OF WHICH : RETAILS SME DBE LOANS AS AT '&REPTMON'/'&RYEAR;   00370504
+   TITLE2 'REPORT ID : EIMBNM01';                                       00370604
+RUN;                                                                    00370704
+                                                                        00370804
+PROC SUMMARY DATA=DNBFI NWAY MISSING;                                   00370904
+   CLASS PRODESC;                                                       00371004
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00371104
+   OUTPUT OUT=DNBFI (DROP=_TYPE_  _FREQ_) SUM=;                         00371204
+RUN;                                                                    00371304
+PROC PRINT DATA=DNBFI;                                                  00371404
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00371504
+   TITLE1 'OF WHICH : SME DNBFI LOANS AS AT '&REPTMON'/'&RYEAR;         00371604
+   TITLE2 'REPORT ID : EIMBNM01';                                       00371704
+RUN;                                                                    00371804
+                                                                        00371904
+PROC SUMMARY DATA=DNBFI2 NWAY MISSING;                                  00372004
+   CLASS PRODESC;                                                       00372104
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00372204
+   OUTPUT OUT=DNBFI2 (DROP=_TYPE_  _FREQ_) SUM=;                        00372304
+RUN;                                                                    00372404
+PROC PRINT DATA=DNBFI2;                                                 00372504
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00372604
+   TITLE1 'OF WHICH : RETAILS SME DNBFI LOANS AS AT '&REPTMON'/'&RYEAR; 00372704
+   TITLE2 'REPORT ID : EIMBNM01';                                       00372804
+RUN;                                                                    00372904
+                                                                        00373004
+PROC SUMMARY DATA=FBE NWAY MISSING;                                     00373104
+   CLASS PRODESC;                                                       00373204
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00373304
+   OUTPUT OUT=FBE (DROP=_TYPE_  _FREQ_) SUM=;                           00373404
+RUN;                                                                    00373504
+PROC PRINT DATA=FBE;                                                    00373604
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00373704
+   TITLE1 'OF WHICH : SME FE LOANS AS AT '&REPTMON'/'&RYEAR;            00373804
+   TITLE2 'REPORT ID : EIMBNM01';                                       00373904
+RUN;                                                                    00374004
+                                                                        00374104
+PROC SUMMARY DATA=FBE2 NWAY MISSING;                                    00374204
+   CLASS PRODESC;                                                       00374304
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00374404
+   OUTPUT OUT=FBE2 (DROP=_TYPE_  _FREQ_) SUM=;                          00374504
+RUN;                                                                    00374604
+PROC PRINT DATA=FBE2;                                                   00374704
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00374804
+   TITLE1 'OF WHICH : RETAILS SME FE LOANS AS AT '&REPTMON'/'&RYEAR;    00374904
+   TITLE2 'REPORT ID : EIMBNM01';                                       00375004
+RUN;                                                                    00375104
+                                                                        00375204
+ **********************************************************             00375304
+ ** BTRADE - DISBURSEMENT, REPAYMENT & O/S               **             00375404
+ **********************************************************             00375504
+                                                                        00375604
+      *** CURRENT MTH ***;                                              00375704
+PROC SORT DATA=BTBNM.BTRAD&REPTMON&NOWK OUT=BTRAD1;                     00375804
+BY ACCTNO DESCENDING APPRLIMT;                                          00375904
+WHERE DIRCTIND = 'D' AND CUSTCD NE ' ';                                 00376004
+PROC SORT DATA=BTRAD1;                                                  00376104
+BY ACCTNO CUSTCD RETAILID;                                              00376204
+PROC SUMMARY DATA=BTRAD1 NWAY;                                          00376304
+CLASS ACCTNO CUSTCD RETAILID SECTORCD DNBFISME;                         00376404
+VAR DISBURSE REPAID;                                                    00376504
+OUTPUT OUT=BTRAD2 SUM=;                                                 00376604
+RUN;                                                                    00376704
+PROC SUMMARY DATA=BTRAD1 NWAY;                                          00376804
+WHERE APPRLIMT > 0;                                                     00376904
+CLASS ACCTNO CUSTCD RETAILID SECTORCD;                                  00377004
+VAR BALANCE;                                                            00377104
+OUTPUT OUT=BTRAD1 SUM=;                                                 00377204
+RUN;                                                                    00377304
+*;                                                                      00377404
+DATA OVC   (KEEP=ACCTNO RETAILID)                                       00377504
+     MAST  (KEEP=ACCTNO CUSTCD BALANCE RETAILID DISBNO REPAYNO NOACCT   00377604
+            SECTORCD DNBFISME);                                         00377704
+     MERGE BTRAD1(IN=A) BTRAD2(IN=B);                                   00377804
+     BY ACCTNO CUSTCD RETAILID SECTORCD;                                00377904
+     IF B;                                                              00378004
+     IF DISBURSE > 0 THEN DISBNO = 1;                                   00378104
+     IF REPAID   > 0 THEN REPAYNO = 1;                                  00378204
+     IF A AND ROUND(BALANCE,0.01) NOT IN (.,0) AND ACCTNO^=0            00378304
+     THEN NOACCT = 1;                                                   00378404
+     OUTPUT OVC;                                                        00378504
+     OUTPUT MAST;                                                       00378604
+                                                                        00378704
+PROC SORT DATA=OVC;  BY ACCTNO;                                         00378804
+PROC SORT DATA=MAST; BY ACCTNO;                                         00378904
+                                                                        00379004
+PROC SORT DATA=BTBNM.BTRAD&REPTMON&NOWK OUT=ALM                         00379104
+   (KEEP=ACCTNO SUBACCT FISSPURP PRODUCT NOTETERM BALANCE               00379204
+         APPRLIM2 PRODCD CUSTCD AMTIND TRANSREF SECTORCD DISBURSE       00379304
+         REPAID DNBFISME);                                              00379404
+   BY ACCTNO SUBACCT TRANSREF CUSTCD FISSPURP SECTORCD;                 00379504
+   WHERE SUBSTR(PRODCD, 1, 2) EQ '34';                                  00379604
+RUN;                                                                    00379704
+DATA ALM;                                                               00379804
+   MERGE OVC ALM(IN=A); BY ACCTNO;                                      00379904
+   IF A;                                                                00380004
+RUN;                                                                    00380104
+                                                                        00380204
+PROC SUMMARY DATA=ALM NWAY MISSING;                                     00380304
+CLASS ACCTNO TRANSREF CUSTCD FISSPURP SECTORCD;                         00380404
+VAR BALANCE;                                                            00380504
+OUTPUT OUT=ALMX                                                         00380604
+       SUM=BALANCE;                                                     00380704
+RUN;                                                                    00380804
+                                                                        00380904
+PROC SORT DATA=ALM NODUPKEYS;                                           00381004
+    BY ACCTNO TRANSREF CUSTCD FISSPURP SECTORCD;                        00381104
+DATA ALM;                                                               00381204
+    MERGE ALM ALMX;                                                     00381304
+    BY ACCTNO TRANSREF CUSTCD FISSPURP SECTORCD;                        00381404
+    FORMAT DISBURSE REPAID BALANCE 16.2;                                00381504
+RUN;                                                                    00381604
+                                                                        00381704
+    *** SUMMARY ***;                                                    00381804
+DATA ALM;                                                               00381904
+   FORMAT PRODESC $35.;                                                 00382004
+   KEEP FISSPURP DISBURSE REPAID APPRLIM2 BALANCE RETAILID              00382104
+        AMTIND CUSTCD PRODCD SECTORCD PRODUCT PRODESC DNBFISME;         00382204
+                                                                        00382304
+   SET ALM(IN=B);                                                       00382404
+   IF RETAILID = 'C' THEN PRODESC = 'BILLS CORPORATE';                  00382504
+   ELSE PRODESC = 'BILLS RETAIL';                                       00382604
+RUN;                                                                    00382704
+                                                                        00382804
+     *** NO OF A/C ***;                                                 00382904
+DATA MAST(KEEP=PRODESC CUSTCD DISBNO REPAYNO NOACCT RETAILID            00383004
+          DNBFISME SECTORCD)                                            00383104
+     MFRS.MAST_BR(KEEP=ACCTNO PRODESC NOACCT);                          00383204
+                                                                        00383304
+   SET MAST(IN=B RENAME=(ACCTNO=ACCTNO1));                              00383404
+   IF RETAILID = 'C' THEN PRODESC = 'BILLS CORPORATE';                  00383504
+   ELSE PRODESC = 'BILLS RETAIL';                                       00383604
+   ACCTNO = INPUT(ACCTNO1,10.);                                         00383704
+RUN;                                                                    00383804
+                                                                        00383904
+PROC SUMMARY DATA=ALM NWAY MISSING;                                     00384004
+   CLASS PRODESC;                                                       00384104
+   VAR DISBURSE REPAID BALANCE;                                         00384204
+   OUTPUT OUT=ALMLOAN (DROP=_TYPE_  _FREQ_) SUM=;                       00384304
+RUN;                                                                    00384404
+PROC SUMMARY DATA=MAST NWAY MISSING;                                    00384504
+   CLASS PRODESC;                                                       00384604
+   VAR DISBNO REPAYNO NOACCT;                                           00384704
+   OUTPUT OUT=MASTLOAN (DROP=_TYPE_  _FREQ_) SUM=;                      00384804
+RUN;                                                                    00384904
+DATA ALMLOAN;                                                           00385004
+   MERGE ALMLOAN MASTLOAN;                                              00385104
+   BY PRODESC;                                                          00385204
+RUN;                                                                    00385304
+                                                                        00385404
+PROC PRINT DATA=ALMLOAN;                                                00385504
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00385604
+   TITLE1 'BANK TRADE AS AT '&REPTMON'/'&RYEAR;                         00385704
+   TITLE2 'REPORT ID : EIMBNM01';                                       00385804
+RUN;                                                                    00385904
+                                                                        00386004
+DATA ALMSME;                                                            00386104
+   SET ALM;                                                             00386204
+   IF CUSTCD IN ('41','42','43','44','46','47','48','49','51'           00386304
+                 '52','53','54','87','88','89') OR                      00386404
+                 DNBFISME IN ('1','2','3');                             00386504
+RUN;                                                                    00386604
+DATA MASTSME;                                                           00386704
+   SET MAST;                                                            00386804
+   IF CUSTCD IN ('41','42','43','44','46','47','48','49','51'           00386904
+                 '52','53','54','87','88','89') OR                      00387004
+                 DNBFISME IN ('1','2','3');                             00387104
+RUN;                                                                    00387204
+                                                                        00387304
+PROC SUMMARY DATA=ALMSME NWAY MISSING;                                  00387404
+   CLASS PRODESC CUSTCD DNBFISME;                                       00387504
+   VAR DISBURSE REPAID BALANCE;                                         00387604
+   OUTPUT OUT=ALMSME (DROP=_TYPE_  _FREQ_) SUM=;                        00387704
+RUN;                                                                    00387804
+PROC SUMMARY DATA=MASTSME NWAY MISSING;                                 00387904
+   CLASS PRODESC CUSTCD DNBFISME;                                       00388004
+   VAR DISBNO REPAYNO NOACCT;                                           00388104
+   OUTPUT OUT=MASTSME (DROP=_TYPE_  _FREQ_) SUM=;                       00388204
+RUN;                                                                    00388304
+DATA ALMLOAN DBEBT DNBFIBT FBEBT;                                       00388404
+   MERGE ALMSME MASTSME;                                                00388504
+   BY PRODESC CUSTCD DNBFISME;                                          00388604
+   OUTPUT ALMLOAN;                                                      00388704
+   IF CUSTCD IN ('41','42','43','44','46','47','48','49','51',          00388804
+                 '52','53','54') THEN OUTPUT DBEBT;                     00388904
+                                                                        00389004
+   IF DNBFISME IN ('1','2','3') THEN OUTPUT DNBFIBT;                    00389104
+                                                                        00389204
+   IF CUSTCD IN ('87','88','89') THEN OUTPUT FBEBT;                     00389304
+RUN;                                                                    00389404
+                                                                        00389504
+PROC SUMMARY DATA=ALMLOAN NWAY MISSING;                                 00389604
+   CLASS PRODESC;                                                       00389704
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00389804
+   OUTPUT OUT=ALMLOAN (DROP=_TYPE_  _FREQ_) SUM=;                       00389904
+RUN;                                                                    00390004
+                                                                        00390104
+PROC PRINT DATA=ALMLOAN;                                                00390204
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00390304
+   TITLE1 'SME BANK TRADE AS AT '&REPTMON'/'&RYEAR;                     00390404
+   TITLE2 'REPORT ID : EIMBNM01';                                       00390504
+RUN;                                                                    00390604
+                                                                        00390704
+PROC SUMMARY DATA=DBEBT NWAY MISSING;                                   00390804
+   CLASS PRODESC;                                                       00390904
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00391004
+   OUTPUT OUT=DBEBT (DROP=_TYPE_  _FREQ_) SUM=;                         00391104
+RUN;                                                                    00391204
+                                                                        00391304
+PROC PRINT DATA=DBEBT;                                                  00391404
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00391504
+   TITLE1 "OF WHICH : SME DBE BANK TRADE AS AT &REPTMON/&REPTYEAR";     00391604
+   TITLE2 'REPORT ID : EIMBNM01';                                       00391704
+RUN;                                                                    00391804
+                                                                        00391904
+PROC SUMMARY DATA=DNBFIBT NWAY MISSING;                                 00392004
+   CLASS PRODESC;                                                       00392104
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00392204
+   OUTPUT OUT=DNBFIBT (DROP=_TYPE_  _FREQ_) SUM=;                       00392304
+RUN;                                                                    00392404
+                                                                        00392504
+PROC PRINT DATA=DNBFIBT;                                                00392604
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00392704
+   TITLE1 "OF WHICH : SME DNBFI BANK TRADE AS AT &REPTMON/&REPTYEAR";   00392804
+   TITLE2 'REPORT ID : EIMBNM01';                                       00392904
+RUN;                                                                    00393004
+                                                                        00393104
+PROC SUMMARY DATA=FBEBT NWAY MISSING;                                   00393204
+   CLASS PRODESC;                                                       00393304
+   VAR DISBURSE REPAID BALANCE DISBNO REPAYNO NOACCT;                   00393404
+   OUTPUT OUT=FBEBT (DROP=_TYPE_  _FREQ_) SUM=;                         00393504
+RUN;                                                                    00393604
+                                                                        00393704
+PROC PRINT DATA=FBEBT;                                                  00393804
+   SUM DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT;                   00393904
+   TITLE1 "OF WHICH : SME FE BANK TRADE AS AT &REPTMON/&REPTYEAR";      00394004
+   TITLE2 'REPORT ID : EIMBNM01';                                       00394104
+RUN;                                                                    00394204
+                                                                        00394304
+  /******************************************************/              00394404
+  /*   FACTORING DATA SECTORS & SUB-SECTORS BREAKDOWN   */              00394504
+  /******************************************************/              00394604
+DATA PBIFSEC;                                                           00394704
+   SET PBIF;                                                            00394804
+   SECTYPE= PUT(SECTORCD, $FISSTYPE.);                                  00394904
+   SECGROUP= PUT(SECTORCD, $FISSGROUP.);                                00395004
+RUN;                                                                    00395104
+                                                                        00395204
+PROC TABULATE DATA=PBIFSEC FORMCHAR='|-+++++++++';                      00395304
+  CLASS SECGROUP SECTYPE;                                               00395404
+  VAR BALANCE NOACCT;                                                   00395504
+  TABLE SECGROUP=' '*(SECTYPE=' ' ALL='SUB-TOTAL') ALL='GRAND TOTAL',   00395604
+           SUM=' '*(BALANCE='AMOUNT' NOACCT='NO. OF ACCT'*F=10.)        00395704
+           / BOX='SECTFISS' RTS=25; *PRINTMISS CONDENSE;                00395804
+  TITLE1 'REPORT ID : EIMBNM01';                                        00395904
+ TITLE2 'OUTSTANDING FACTORING LOANS BY SECTORS AND SUB-SECTORS AS AT'  00396004
+&REPTMON&RYEAR;                                                         00396104
+RUN;                                                                    00396204
+                                                                        00396304
+ /*******************************************************************/  00396404
+ /* M&I COMMERCIAL RETAIL LOANS BY SECTORS & SUB-SECTORS BREAKDOWN  */  00396504
+ /*******************************************************************/  00396604
+                                                                        00396704
+DATA COMSEC;                                                            00396804
+   SET ALM2;                                                            00396904
+   SECTYPE= PUT(SECTORCD, $FISSTYPE.);                                  00397004
+   SECGROUP= PUT(SECTORCD, $FISSGROUP.);                                00397104
+   IF PRODESC = 'TOTAL COMMERCIAL RETAILS' THEN OUTPUT;                 00397204
+RUN;                                                                    00397304
+                                                                        00397404
+PROC TABULATE DATA=COMSEC FORMCHAR='|-+++++++++';                       00397504
+  CLASS SECGROUP SECTYPE;                                               00397604
+  VAR BALANCE NOACCT;                                                   00397704
+  TABLE SECGROUP=' '*(SECTYPE=' ' ALL='SUB-TOTAL') ALL='GRAND TOTAL',   00397804
+           SUM=' '*(BALANCE='AMOUNT' NOACCT='NO. OF ACCT'*F=10.)        00397904
+           / BOX='SECTFISS' RTS=25; *PRINTMISS CONDENSE;                00398004
+  TITLE1 'REPORT ID : EIMBNM01';                                        00398104
+ TITLE2 'OUTSTANDING M&I COMMERCIAL RETAIL LOANS BY SECTORS AND'        00398204
+        ' SUB-SECTORS AS AT' &REPTMON&RYEAR;                            00398304
+RUN;                                                                    00398404
+                                                                        00398504
+ /*******************************************************/              00398604
+ /*  RETAIL BILLS BY SECTORS AND SUB-SECTORS BREAKDOWN  */              00398704
+ /*******************************************************/              00398804
+DATA MAST1;                                                             00398904
+   SET MAST;                                                            00399004
+   SECTYPE= PUT(SECTORCD, $FISSTYPE.);                                  00399104
+   SECGROUP= PUT(SECTORCD, $FISSGROUP.);                                00399204
+   IF PRODESC= 'BILLS RETAIL' THEN OUTPUT;                              00399304
+RUN;                                                                    00399404
+                                                                        00399504
+DATA ALMBT;                                                             00399604
+   SET ALM;                                                             00399704
+   SECTYPE= PUT(SECTORCD, $FISSTYPE.);                                  00399804
+   SECGROUP= PUT(SECTORCD, $FISSGROUP.);                                00399904
+   IF PRODESC= 'BILLS RETAIL' THEN OUTPUT;                              00400004
+RUN;                                                                    00400104
+                                                                        00400204
+PROC SUMMARY DATA=MAST1 NWAY;                                           00400304
+   CLASS SECGROUP SECTYPE;VAR NOACCT;                                   00400404
+  OUTPUT OUT=MAST1 SUM=;                                                00400504
+RUN;                                                                    00400604
+                                                                        00400704
+PROC SUMMARY DATA=ALMBT NWAY;                                           00400804
+   CLASS SECGROUP SECTYPE;VAR BALANCE;                                  00400904
+   OUTPUT OUT=ALMBT SUM=;                                               00401004
+RUN;                                                                    00401104
+                                                                        00401204
+PROC SORT DATA=MAST1;BY SECGROUP SECTYPE;RUN;                           00401304
+PROC SORT DATA=ALMBT;BY SECGROUP SECTYPE;RUN;                           00401404
+                                                                        00401504
+DATA REBSEC;                                                            00401604
+   MERGE MAST1(IN=A) ALMBT(IN=B); BY SECGROUP SECTYPE;                  00401704
+   IF A;                                                                00401804
+RUN;                                                                    00401904
+                                                                        00402004
+PROC TABULATE DATA=REBSEC FORMCHAR='|-+++++++++';                       00402104
+  CLASS SECGROUP SECTYPE;                                               00402204
+  VAR BALANCE NOACCT;                                                   00402304
+  TABLE SECGROUP=' '*(SECTYPE=' ' ALL='SUB-TOTAL') ALL='GRAND TOTAL',   00402404
+           SUM=' '*(BALANCE='AMOUNT' NOACCT='NO. OF ACCT'*F=10.)        00402504
+           / BOX='SECTFISS' RTS=25; *PRINTMISS CONDENSE;                00402604
+  TITLE1 'REPORT ID : EIMBNM01';                                        00402704
+ TITLE2 'OUTSTANDING RETAIL BILLS BY SECTORS AND SUB-SECTORS'           00402804
+      ' AS AT' &REPTMON&RYEAR;                                          00402904
+RUN;                                                                    00403004
+                                                                        00403104
+  /****************************************************************/    00403204
+  /*  COMBINE FACTORING,M&I AND BANK TRADE FOR SECTORS BREAKDOWN  */    00403304
+  /****************************************************************/    00403404
+DATA COMBYSEC;                                                          00403504
+   SET PBIFSEC REBSEC COMSEC;                                           00403604
+RUN;                                                                    00403704
+                                                                        00403804
+PROC TABULATE DATA=COMBYSEC FORMCHAR='|-+++++++++';                     00403904
+  CLASS SECGROUP SECTYPE;                                               00404004
+  VAR BALANCE NOACCT;                                                   00404104
+  TABLE SECGROUP=' '*(SECTYPE=' ' ALL='SUB-TOTAL') ALL='GRAND TOTAL',   00404204
+           SUM=' '*(BALANCE='AMOUNT' NOACCT='NO. OF ACCT'*F=10.)        00404304
+           / BOX='SECTFISS' RTS=25; *PRINTMISS CONDENSE;                00404404
+  TITLE1 'REPORT ID : EIMBNM01';                                        00404504
+ TITLE2 'TOTAL COMMERCIAL RETAIL LOANS BY SECTORS AND SUB-SECTORS'      00404604
+ ' AS AT' &REPTMON&RYEAR;                                               00404704
+RUN;                                                                    00404804
+                                                                        00404904
+  /************************************************/                    00405004
+  /*  EXTRACT TOTAL COMMERCIAL RETAIL BY PRODUCT  */                    00405104
+  /************************************************/                    00405204
+                                                                        00405304
+DATA COM1;                                                              00405404
+   SET PBIFSEC;                                                         00405504
+   LENGTH TYPE $14.;                                                    00405604
+      TYPE='FIXED LOANS';                                               00405704
+RUN;                                                                    00405804
+                                                                        00405904
+DATA COM2;                                                              00406004
+   SET REBSEC;                                                          00406104
+   LENGTH TYPE $14.;                                                    00406204
+   TYPE='BANKTRADE';                                                    00406304
+RUN;                                                                    00406404
+                                                                        00406504
+DATA COM3;                                                              00406604
+   SET COM3;                                                            00406704
+   WHERE PRODESC = 'TOTAL COMMERCIAL RETAILS';                          00406804
+   LENGTH TYPE $14.;                                                    00406904
+   IF TYCODE=1 THEN DO;                                                 00407004
+      TYPE='OD';                                                        00407104
+   END;                                                                 00407204
+   IF TYCODE=2 THEN DO;                                                 00407304
+      TYPE='FIXED LOANS';                                               00407404
+   END;                                                                 00407504
+   IF TYCODE=3 THEN DO;                                                 00407604
+      TYPE='FLOOR STOCKING';                                            00407704
+   END;                                                                 00407804
+RUN;                                                                    00407904
+                                                                        00408004
+DATA COMBYPROD;                                                         00408104
+   SET COM1 COM2 COM3;                                                  00408204
+RUN;                                                                    00408304
+                                                                        00408404
+PROC TABULATE DATA=COMBYPROD FORMCHAR='|-+++++++++';                    00408504
+  CLASS TYPE;                                                           00408604
+  VAR BALANCE NOACCT;                                                   00408704
+  TABLE TYPE='',                                                        00408804
+        SUM=' '*(BALANCE='AMOUNT' NOACCT='NO. OF ACCT'*F=10.)           00408904
+        / BOX='FACILITY' RTS=25; *PRINTMISS CONDENSE;                   00409004
+  TITLE1 'REPORT ID : EIMBNM01';                                        00409104
+ TITLE2 'TOTAL COMMERCIAL RETAIL LOANS BY TYPE OF PRODUCT'              00409204
+ ' AS AT' &REPTMON&RYEAR;                                               00409304
+RUN;                                                                    00410002
