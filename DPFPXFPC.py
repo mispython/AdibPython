@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Convert the 70 GB fixed-width, packed-decimal deposit flat file
-to a columnar Parquet file. Streaming, bounded memory (~1 GB peak).
+to a columnar Parquet file.
+
+- Input : {input_dir}/DPDARPGS_FB_{YYYY}{MM}{DD}
+- Output: {parquet_out_dir}/DPDARPGS_FB_{YYYY}{MM}{DD}.parquet
+
+Streaming, bounded memory (~1 GB peak).
 """
 import numpy as np
 import pyarrow as pa
@@ -10,14 +15,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 # ---------- CONFIG ----------
-input_dir   = "/host_pq/dwh/input"
-run_date    = datetime.now() - timedelta(days=1)
-reptyear    = run_date.strftime("%Y")
-reptmon     = run_date.strftime("%m")
-reptday     = run_date.strftime("%d")
+input_dir       = "/host_pq/dwh/input"
+parquet_out_dir = "/host_pq/dwh/parquet/DEPOSIT"
+
+run_date = datetime.now() - timedelta(days=1)
+reptyear = run_date.strftime("%Y")
+reptmon  = run_date.strftime("%m")
+reptday  = run_date.strftime("%d")
 
 flat_file   = f"{input_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}"
-parquet_out = f"{input_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}.parquet"
+parquet_out = f"{parquet_out_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}.parquet"
 
 RECORD_LEN  = 1693
 CHUNK_BYTES = 500 * 1024 * 1024   # 500 MB per read
@@ -60,7 +67,6 @@ def decode_chunk(arr: np.ndarray) -> pa.Table:
     cols = {}
     for name, (a, b, scale) in FIELDS.items():
         if scale == -1:
-            # single-byte character
             cols[name] = arr[:, a].view("S1").astype("U1")
         else:
             cols[name] = decode_packed_2d(arr[:, a:b], scale=scale)
@@ -68,6 +74,9 @@ def decode_chunk(arr: np.ndarray) -> pa.Table:
 
 # ---------- MAIN ----------
 def main():
+    # Ensure output directory exists
+    Path(parquet_out_dir).mkdir(parents=True, exist_ok=True)
+
     print(f"Reading  : {flat_file}")
     print(f"Writing  : {parquet_out}")
 
