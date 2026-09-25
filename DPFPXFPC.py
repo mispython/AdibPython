@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+import os
+# Use all CPU cores for Polars (set BEFORE importing polars)
+os.environ.setdefault("POLARS_MAX_THREADS", str(os.cpu_count() or 4))
+
 import polars as pl
 import pyreadstat
 import saspy
@@ -21,6 +25,9 @@ rdate    = run_date.strftime("%Y-%m-%d")
 
 # Deposit Parquet: DPDARPGS_FB_{YYYY}{MM}{DD}.parquet
 parquet_file = f"{parquet_in_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}.parquet"
+
+if not Path(parquet_file).exists():
+    raise SystemExit(f"ERROR: Parquet file not found: {parquet_file}. Run flatfile_to_parquet.py first.")
 
 # SAS session for writing SAS7BDAT
 sas = saspy.SASsession()
@@ -47,24 +54,14 @@ for name in dyibu_names:
 # -----------------------------
 # STEP 1: Lazy-scan the deposit Parquet
 # -----------------------------
-# The Parquet file written by flatfile_to_parquet.py already contains:
+# The Parquet file already contains:
 #   BANKNO, REPTNO, FMTCODE, BRANCH, ACCTNO, OPENIND, CURBAL, INTPLAN, LMATDATE
+# No need for COMP-3 or EBCDIC decoding here.
 print(f"Reading deposit parquet: {parquet_file}")
 lf = pl.scan_parquet(parquet_file)
 
-# Parse LMATDATE (YYYYMMDD int or 0) into a date column, lazily
-lf = lf.with_columns(
-    pl.when(pl.col("LMATDATE") > 0)
-      .then(
-          pl.col("LMATDATE").cast(pl.Utf8).str.zfill(8)
-            .str.strptime(pl.Date, "%Y%m%d", strict=False)
-      )
-      .otherwise(None)
-      .alias("LMATDT")
-)
-
 # -----------------------------
-# STEP 2: Filter valid deposits (same logic as SAS)
+# STEP 2: Base filter (same logic as SAS)
 # -----------------------------
 lf = lf.filter(
     (pl.col("BANKNO") == 33) &
@@ -81,42 +78,69 @@ lf = lf.filter(
 )
 
 # -----------------------------
-# STEP 3: Helper - summarize by period (streaming collect)
+# STEP 3: Period boundaries as integers (YYYYMMDD)
 # -----------------------------
-def summarise_period(lf: pl.LazyFrame, label: str, condition) -> pl.DataFrame:
-    df = (
-        lf.filter(condition)
-          .group_by(["BRANCH", "INTPLAN"])
-          .agg([
-              pl.len().alias("FDINO"),
-              pl.sum("CURBAL").alias("FDI"),
-          ])
+# Avoid date parsing entirely - integer comparisons are ~10x faster.
+P_2004_09_04 = 20040904
+P_2006_04_15 = 20060415
+P_2006_04_16 = 20060416
+P_2008_09_15 = 20080915
+P_2008_09_16 = 20080916
+
+# Common filtering on LMATDATE > 0 (valid maturity date)
+lf_valid = lf.filter(pl.col("LMATDATE") > 0)
+
+# -----------------------------
+# STEP 4: Two-pass aggregation (specific periods, then DYIBUF)
+# -----------------------------
+
+# --- Pass 1: DYIBUB, DYIBUA, DYIBUN, DYIBUY (specific periods) ---
+lf_tagged = lf_valid.with_columns(
+    pl.when(pl.col("LMATDATE") < P_2004_09_04).then(pl.lit("DYIBUB"))
+      .when(pl.col("LMATDATE") <= P_2006_04_15).then(pl.lit("DYIBUA"))
+      .when(pl.col("LMATDATE") <= P_2008_09_15).then(pl.lit("DYIBUN"))
+      .otherwise(pl.lit("DYIBUY"))
+      .alias("PERIOD")
+)
+
+agg_specific = (
+    lf_tagged
+      .group_by(["PERIOD", "BRANCH", "INTPLAN"])
+      .agg([
+          pl.len().alias("FDINO"),
+          pl.sum("CURBAL").alias("FDI"),
+      ])
+      .collect(streaming=True)
+)
+print(f"Specific periods aggregate: {len(agg_specific)} rows")
+
+# --- Pass 2: DYIBUF (all rows with LMATDATE > 0) ---
+agg_all = (
+    lf_valid
+      .group_by(["BRANCH", "INTPLAN"])
+      .agg([
+          pl.len().alias("FDINO"),
+          pl.sum("CURBAL").alias("FDI"),
+      ])
+      .collect(streaming=True)
+)
+print(f"DYIBUF aggregate: {len(agg_all)} rows")
+
+# -----------------------------
+# STEP 5: Split into named DataFrames
+# -----------------------------
+def split_period(df: pl.DataFrame, name: str) -> pl.DataFrame:
+    return (
+        df.filter(pl.col("PERIOD") == name)
+          .drop("PERIOD")
           .with_columns(pl.lit(run_date).alias("REPTDATE"))
-          .collect(streaming=True)          # <- key: bounded memory
     )
-    print(f"{label}: {len(df)} rows summarized.")
-    return df
 
-# -----------------------------
-# STEP 4: Period definitions
-# -----------------------------
-D_2004_09_04 = datetime(2004, 9, 4).date()
-D_2006_04_15 = datetime(2006, 4, 15).date()
-D_2006_04_16 = datetime(2006, 4, 16).date()
-D_2008_09_15 = datetime(2008, 9, 15).date()
-D_2008_09_16 = datetime(2008, 9, 16).date()
-
-DYIBUF = summarise_period(lf, "DYIBUF", pl.col("LMATDT").is_not_null())
-DYIBUB = summarise_period(lf, "DYIBUB", pl.col("LMATDT") < D_2004_09_04)
-DYIBUA = summarise_period(
-    lf, "DYIBUA",
-    (pl.col("LMATDT") >= D_2004_09_04) & (pl.col("LMATDT") <= D_2006_04_15)
-)
-DYIBUN = summarise_period(
-    lf, "DYIBUN",
-    (pl.col("LMATDT") >= D_2006_04_16) & (pl.col("LMATDT") <= D_2008_09_15)
-)
-DYIBUY = summarise_period(lf, "DYIBUY", pl.col("LMATDT") >= D_2008_09_16)
+DYIBUF = agg_all.with_columns(pl.lit(run_date).alias("REPTDATE"))
+DYIBUB = split_period(agg_specific, "DYIBUB")
+DYIBUA = split_period(agg_specific, "DYIBUA")
+DYIBUN = split_period(agg_specific, "DYIBUN")
+DYIBUY = split_period(agg_specific, "DYIBUY")
 
 new_results = {
     "DYIBUF": DYIBUF,
@@ -125,9 +149,11 @@ new_results = {
     "DYIBUN": DYIBUN,
     "DYIBUY": DYIBUY,
 }
+for k, v in new_results.items():
+    print(f"{k}: {len(v)} rows")
 
 # -----------------------------
-# STEP 5: Merge with existing + write SAS7BDAT via saspy
+# STEP 6: Merge with existing + write SAS7BDAT via saspy
 # -----------------------------
 def save_via_saspy(df: pl.DataFrame, name: str):
     """Write a polars DataFrame to a SAS dataset via saspy with lowercase columns."""
@@ -146,11 +172,9 @@ for name, new_df in new_results.items():
 
     if existing is not None and len(existing) > 0:
         if reptday == "01":
-            # SAS logic: on the 1st, delete ALL existing and replace
             combined = new_df
             print(f"{name}: REPTDAY=01 - replacing all existing rows.")
         else:
-            # SAS logic: delete rows with the same REPTDATE, then append
             if "reptdate" in existing.columns:
                 existing = existing.filter(
                     pl.col("reptdate").cast(pl.Utf8) != rdate
