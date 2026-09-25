@@ -8,8 +8,8 @@ from pathlib import Path
 # -----------------------------
 # CONFIGURATION
 # -----------------------------
-input_deposit_dir = "/stgsrcsys/host/holding"                    # dir containing DPDARPGS_FB_*
-input_dyibu_dir   = "/stgsrcsys/host/uat/maa/python/input"  # dir containing dyibu*{mon}.sas7bdat
+parquet_in_dir    = "/stgsrcsys/host/holding"                 # dir containing DPDARPGS_FB_*.parquet
+input_dyibu_dir   = "/stgsrcsys/host/uat/maa/python/input"    # dir containing dyibu*{mon}.sas7bdat
 output_dir        = "/stgsrcsys/host/uat/maa/python/output"
 
 # REPTDATE = yesterday
@@ -19,8 +19,8 @@ reptmon  = run_date.strftime("%m")
 reptday  = run_date.strftime("%d")
 rdate    = run_date.strftime("%Y-%m-%d")
 
-# Deposit flat file: DPDARPGS_FB_{YYYY}{MM}{DD}
-deposit_file = f"{input_deposit_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}"
+# Deposit Parquet: DPDARPGS_FB_{YYYY}{MM}{DD}.parquet
+parquet_file = f"{parquet_in_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}.parquet"
 
 # SAS session for writing SAS7BDAT
 sas = saspy.SASsession()
@@ -32,7 +32,6 @@ dyibu_names = ["DYIBUF", "DYIBUB", "DYIBUA", "DYIBUN", "DYIBUY"]
 
 existing_dyibu = {}
 for name in dyibu_names:
-    # file name: dyibu{f,b,a,n,y}{mon}.sas7bdat  -> e.g. dyibuf09.sas7bdat
     fname = f"{name.lower()}{reptmon}.sas7bdat"
     path = Path(input_dyibu_dir) / fname
 
@@ -46,63 +45,28 @@ for name in dyibu_names:
         print(f"No existing {name} at {path} - will create new.")
 
 # -----------------------------
-# STEP 1: Read deposit flat file (fixed-width, packed decimals)
+# STEP 1: Lazy-scan the deposit Parquet
 # -----------------------------
-# SAS: LRECL=1693
-# Positions (1-based SAS -> 0-based Python):
-#   @3   BANKNO   PD2.   -> bytes 2:4
-#   @24  REPTNO   PD3.   -> bytes 23:26
-#   @27  FMTCODE  PD2.   -> bytes 26:28
-#   @106 BRANCH   PD4.   -> bytes 105:109
-#   @110 ACCTNO   PD6.   -> bytes 109:115
-#   @155 OPENIND  $1.    -> byte  154:155
-#   @156 CURBAL   PD6.2  -> bytes 155:161
-#   @208 INTPLAN  PD2.   -> bytes 207:209
-#   @392 LMATDATE PD6.   -> bytes 391:397
+# The Parquet file written by flatfile_to_parquet.py already contains:
+#   BANKNO, REPTNO, FMTCODE, BRANCH, ACCTNO, OPENIND, CURBAL, INTPLAN, LMATDATE
+print(f"Reading deposit parquet: {parquet_file}")
+lf = pl.scan_parquet(parquet_file)
 
-def read_packed_decimal(raw: bytes, scale: int = 0) -> float:
-    """Decode a packed decimal (COMP-3) field."""
-    digits = ""
-    sign = 0x0C  # default positive
-    for i, b in enumerate(raw):
-        high = (b >> 4) & 0x0F
-        low  = b & 0x0F
-        if i == len(raw) - 1:
-            digits += str(high)
-            sign = low
-        else:
-            digits += str(high) + str(low)
-    val = int(digits) if digits else 0
-    if sign in (0x0D, 0x0B):
-        val = -val
-    return val / (10 ** scale)
-
-def read_flat_file(path: str) -> pl.DataFrame:
-    records = []
-    with open(path, "rb") as f:
-        for line in f:
-            if len(line) < 397:
-                continue
-            records.append({
-                "BANKNO":   read_packed_decimal(line[2:4]),
-                "REPTNO":   read_packed_decimal(line[23:26]),
-                "FMTCODE":  read_packed_decimal(line[26:28]),
-                "BRANCH":   read_packed_decimal(line[105:109]),
-                "ACCTNO":   read_packed_decimal(line[109:115]),
-                "OPENIND":  line[154:155].decode("ascii", errors="ignore"),
-                "CURBAL":   read_packed_decimal(line[155:161], scale=2),
-                "INTPLAN":  read_packed_decimal(line[207:209]),
-                "LMATDATE": read_packed_decimal(line[391:397]),
-            })
-    return pl.DataFrame(records)
-
-print(f"Reading deposit file: {deposit_file}")
-pl_fd = read_flat_file(deposit_file)
+# Parse LMATDATE (YYYYMMDD int or 0) into a date column, lazily
+lf = lf.with_columns(
+    pl.when(pl.col("LMATDATE") > 0)
+      .then(
+          pl.col("LMATDATE").cast(pl.Utf8).str.zfill(8)
+            .str.strptime(pl.Date, "%Y%m%d", strict=False)
+      )
+      .otherwise(None)
+      .alias("LMATDT")
+)
 
 # -----------------------------
 # STEP 2: Filter valid deposits (same logic as SAS)
 # -----------------------------
-pl_fd = pl_fd.filter(
+lf = lf.filter(
     (pl.col("BANKNO") == 33) &
     (pl.col("REPTNO") == 4001) &
     (pl.col("FMTCODE").is_in([1, 2])) &
@@ -116,55 +80,43 @@ pl_fd = pl_fd.filter(
     )
 )
 
-# Convert LMATDATE (numeric YYYYMMDD or 0) to datetime
-def parse_lmatdate(val):
-    try:
-        if val is None or val == 0:
-            return None
-        s = str(int(val)).zfill(8)
-        return datetime.strptime(s[:8], "%Y%m%d")
-    except Exception:
-        return None
-
-pl_fd = pl_fd.with_columns([
-    pl.col("LMATDATE")
-      .map_elements(parse_lmatdate, return_dtype=pl.Datetime)
-      .alias("LMATDT")
-])
-
 # -----------------------------
-# STEP 3: Helper - summarize by period
+# STEP 3: Helper - summarize by period (streaming collect)
 # -----------------------------
-def summarise_period(df: pl.DataFrame, label: str, condition) -> pl.DataFrame:
-    subset = df.filter(condition)
-    grouped = (
-        subset
-        .group_by(["BRANCH", "INTPLAN"])
-        .agg([
-            pl.len().alias("FDINO"),          # count of accounts
-            pl.sum("CURBAL").alias("FDI")     # sum of current balance
-        ])
-        .with_columns(pl.lit(run_date).alias("REPTDATE"))
+def summarise_period(lf: pl.LazyFrame, label: str, condition) -> pl.DataFrame:
+    df = (
+        lf.filter(condition)
+          .group_by(["BRANCH", "INTPLAN"])
+          .agg([
+              pl.len().alias("FDINO"),
+              pl.sum("CURBAL").alias("FDI"),
+          ])
+          .with_columns(pl.lit(run_date).alias("REPTDATE"))
+          .collect(streaming=True)          # <- key: bounded memory
     )
-    print(f"{label}: {len(grouped)} rows summarized.")
-    return grouped
+    print(f"{label}: {len(df)} rows summarized.")
+    return df
 
 # -----------------------------
 # STEP 4: Period definitions
 # -----------------------------
-DYIBUF = summarise_period(pl_fd, "DYIBUF", pl.col("LMATDT").is_not_null())
-DYIBUB = summarise_period(pl_fd, "DYIBUB", pl.col("LMATDT") < datetime(2004, 9, 4))
+D_2004_09_04 = datetime(2004, 9, 4).date()
+D_2006_04_15 = datetime(2006, 4, 15).date()
+D_2006_04_16 = datetime(2006, 4, 16).date()
+D_2008_09_15 = datetime(2008, 9, 15).date()
+D_2008_09_16 = datetime(2008, 9, 16).date()
+
+DYIBUF = summarise_period(lf, "DYIBUF", pl.col("LMATDT").is_not_null())
+DYIBUB = summarise_period(lf, "DYIBUB", pl.col("LMATDT") < D_2004_09_04)
 DYIBUA = summarise_period(
-    pl_fd, "DYIBUA",
-    (pl.col("LMATDT") >= datetime(2004, 9, 4)) &
-    (pl.col("LMATDT") <= datetime(2006, 4, 15))
+    lf, "DYIBUA",
+    (pl.col("LMATDT") >= D_2004_09_04) & (pl.col("LMATDT") <= D_2006_04_15)
 )
 DYIBUN = summarise_period(
-    pl_fd, "DYIBUN",
-    (pl.col("LMATDT") >= datetime(2006, 4, 16)) &
-    (pl.col("LMATDT") <= datetime(2008, 9, 15))
+    lf, "DYIBUN",
+    (pl.col("LMATDT") >= D_2006_04_16) & (pl.col("LMATDT") <= D_2008_09_15)
 )
-DYIBUY = summarise_period(pl_fd, "DYIBUY", pl.col("LMATDT") >= datetime(2008, 9, 16))
+DYIBUY = summarise_period(lf, "DYIBUY", pl.col("LMATDT") >= D_2008_09_16)
 
 new_results = {
     "DYIBUF": DYIBUF,
