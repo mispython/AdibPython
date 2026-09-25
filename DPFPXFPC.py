@@ -1,7 +1,11 @@
-python -c "
-import pyarrow.parquet as pq
-pf = pq.ParquetFile('/stgsrcsys/host/holding/DPDARPGS_FB_20260924.parquet')
-print('rows       :', pf.metadata.num_rows)
-print('row groups :', pf.num_row_groups)
-print('schema     :', pf.schema_arrow)
-"
+rows       : 309679
+row groups : 1
+schema     : BANKNO: int64
+REPTNO: int64
+FMTCODE: int64
+BRANCH: int64
+ACCTNO: int64
+OPENIND: string
+CURBAL: double
+INTPLAN: int64
+LMATDATE: int64
