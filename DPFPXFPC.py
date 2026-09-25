@@ -1,18 +1,14 @@
-import duckdb
 import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pyreadstat
 import saspy
-import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 
 # -----------------------------
 # CONFIGURATION
 # -----------------------------
-input_deposit_dir = "/host_pq/dwh/input"                  # directory containing DPDARPGS_FB_*
-input_dyibu_dir   = "/stgsrcsys/host/uat/maa/python/input"  # dir with dyibu*.sas7bdat
+input_deposit_dir = "/host_pq/dwh/input"                    # dir containing DPDARPGS_FB_*
+input_dyibu_dir   = "/stgsrcsys/host/uat/maa/python/input"  # dir containing dyibu*{mon}.sas7bdat
 output_dir        = "/stgsrcsys/host/uat/maa/python/output"
 
 # REPTDATE = yesterday
@@ -20,48 +16,39 @@ run_date = datetime.now() - timedelta(days=1)
 reptyear = run_date.strftime("%Y")
 reptmon  = run_date.strftime("%m")
 reptday  = run_date.strftime("%d")
-rdate    = run_date.strftime("%Y-%m-%d")   # SAS &RDATE is numeric date; adapt as needed
+rdate    = run_date.strftime("%Y-%m-%d")
 
-# Deposit flat file name: DPDARPGS_FB_{reptyear}{reptmon}{reptday}
+# Deposit flat file: DPDARPGS_FB_{YYYY}{MM}{DD}
 deposit_file = f"{input_deposit_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}"
 
 # SAS session for writing SAS7BDAT
 sas = saspy.SASsession()
 
 # -----------------------------
-# STEP 0: Read dyibu* SAS7BDAT inputs (lowercase columns)
+# STEP 0: Read existing dyibu*{reptmon}.sas7bdat inputs (lowercase columns)
 # -----------------------------
-# Adjust the file names below to match your actual SAS7BDAT files.
-# Example: dyibuf.sas7bdat, dyibub.sas7bdat, ...
-dyibu_input_files = {
-    "DYIBUF": f"{input_dyibu_dir}/dyibuf.sas7bdat",
-    "DYIBUB": f"{input_dyibu_dir}/dyibub.sas7bdat",
-    "DYIBUA": f"{input_dyibu_dir}/dyibua.sas7bdat",
-    "DYIBUN": f"{input_dyibu_dir}/dyibun.sas7bdat",
-    "DYIBUY": f"{input_dyibu_dir}/dyibuy.sas7bdat",
-}
-
-def read_dyibu_sas7bdat(path: str) -> pl.DataFrame:
-    """Read SAS7BDAT, lowercase all column names."""
-    pdf, meta = pyreadstat.read_sas7bdat(path)
-    pdf.columns = [c.lower() for c in pdf.columns]
-    return pl.from_pandas(pdf)
+dyibu_names = ["DYIBUF", "DYIBUB", "DYIBUA", "DYIBUN", "DYIBUY"]
 
 existing_dyibu = {}
-for name, path in dyibu_input_files.items():
-    p = Path(path)
-    if p.exists():
-        existing_dyibu[name] = read_dyibu_sas7bdat(path)
-        print(f"Loaded existing {name}: {len(existing_dyibu[name])} rows")
+for name in dyibu_names:
+    # file name: dyibu{f,b,a,n,y}{mon}.sas7bdat  -> e.g. dyibuf09.sas7bdat
+    fname = f"{name.lower()}{reptmon}.sas7bdat"
+    path = Path(input_dyibu_dir) / fname
+
+    if path.exists():
+        pdf, meta = pyreadstat.read_sas7bdat(str(path))
+        pdf.columns = [c.lower() for c in pdf.columns]
+        existing_dyibu[name] = pl.from_pandas(pdf)
+        print(f"Loaded {name} from {path.name}: {len(existing_dyibu[name])} rows")
     else:
         existing_dyibu[name] = None
-        print(f"No existing {name} found at {path} — will create new.")
+        print(f"No existing {name} at {path} — will create new.")
 
 # -----------------------------
 # STEP 1: Read deposit flat file (fixed-width, packed decimals)
 # -----------------------------
 # SAS: LRECL=1693
-# Positions (1-based in SAS, 0-based in Python):
+# Positions (1-based SAS -> 0-based Python):
 #   @3   BANKNO   PD2.   -> bytes 2:4
 #   @24  REPTNO   PD3.   -> bytes 23:26
 #   @27  FMTCODE  PD2.   -> bytes 26:28
@@ -95,19 +82,16 @@ def read_flat_file(path: str) -> pl.DataFrame:
         for line in f:
             if len(line) < 397:
                 continue
-            bankno   = read_packed_decimal(line[2:4])
-            reptno   = read_packed_decimal(line[23:26])
-            fmtcode  = read_packed_decimal(line[26:28])
-            branch   = read_packed_decimal(line[105:109])
-            acctno   = read_packed_decimal(line[109:115])
-            openind  = line[154:155].decode("ascii", errors="ignore")
-            curbal   = read_packed_decimal(line[155:161], scale=2)
-            intplan  = read_packed_decimal(line[207:209])
-            lmatdate = read_packed_decimal(line[391:397])
             records.append({
-                "BANKNO": bankno, "REPTNO": reptno, "FMTCODE": fmtcode,
-                "BRANCH": branch, "ACCTNO": acctno, "OPENIND": openind,
-                "CURBAL": curbal, "INTPLAN": intplan, "LMATDATE": lmatdate,
+                "BANKNO":   read_packed_decimal(line[2:4]),
+                "REPTNO":   read_packed_decimal(line[23:26]),
+                "FMTCODE":  read_packed_decimal(line[26:28]),
+                "BRANCH":   read_packed_decimal(line[105:109]),
+                "ACCTNO":   read_packed_decimal(line[109:115]),
+                "OPENIND":  line[154:155].decode("ascii", errors="ignore"),
+                "CURBAL":   read_packed_decimal(line[155:161], scale=2),
+                "INTPLAN":  read_packed_decimal(line[207:209]),
+                "LMATDATE": read_packed_decimal(line[391:397]),
             })
     return pl.DataFrame(records)
 
@@ -142,11 +126,13 @@ def parse_lmatdate(val):
         return None
 
 pl_fd = pl_fd.with_columns([
-    pl.col("LMATDATE").map_elements(parse_lmatdate, return_dtype=pl.Datetime).alias("LMATDT")
+    pl.col("LMATDATE")
+      .map_elements(parse_lmatdate, return_dtype=pl.Datetime)
+      .alias("LMATDT")
 ])
 
 # -----------------------------
-# STEP 3: Helper - Summarize by period
+# STEP 3: Helper — summarize by period
 # -----------------------------
 def summarise_period(df: pl.DataFrame, label: str, condition) -> pl.DataFrame:
     subset = df.filter(condition)
@@ -154,8 +140,8 @@ def summarise_period(df: pl.DataFrame, label: str, condition) -> pl.DataFrame:
         subset
         .group_by(["BRANCH", "INTPLAN"])
         .agg([
-            pl.count("ACCTNO").alias("FDINO"),
-            pl.sum("CURBAL").alias("FDI")
+            pl.len().alias("FDINO"),          # count of accounts
+            pl.sum("CURBAL").alias("FDI")     # sum of current balance
         ])
         .with_columns(pl.lit(run_date).alias("REPTDATE"))
     )
@@ -167,12 +153,16 @@ def summarise_period(df: pl.DataFrame, label: str, condition) -> pl.DataFrame:
 # -----------------------------
 DYIBUF = summarise_period(pl_fd, "DYIBUF", pl.col("LMATDT").is_not_null())
 DYIBUB = summarise_period(pl_fd, "DYIBUB", pl.col("LMATDT") < datetime(2004, 9, 4))
-DYIBUA = summarise_period(pl_fd, "DYIBUA",
-                          (pl.col("LMATDT") >= datetime(2004, 9, 4)) &
-                          (pl.col("LMATDT") <= datetime(2006, 4, 15)))
-DYIBUN = summarise_period(pl_fd, "DYIBUN",
-                          (pl.col("LMATDT") >= datetime(2006, 4, 16)) &
-                          (pl.col("LMATDT") <= datetime(2008, 9, 15)))
+DYIBUA = summarise_period(
+    pl_fd, "DYIBUA",
+    (pl.col("LMATDT") >= datetime(2004, 9, 4)) &
+    (pl.col("LMATDT") <= datetime(2006, 4, 15))
+)
+DYIBUN = summarise_period(
+    pl_fd, "DYIBUN",
+    (pl.col("LMATDT") >= datetime(2006, 4, 16)) &
+    (pl.col("LMATDT") <= datetime(2008, 9, 15))
+)
 DYIBUY = summarise_period(pl_fd, "DYIBUY", pl.col("LMATDT") >= datetime(2008, 9, 16))
 
 new_results = {
@@ -186,44 +176,37 @@ new_results = {
 # -----------------------------
 # STEP 5: Merge with existing + write SAS7BDAT via saspy
 # -----------------------------
-def save_via_saspy(df: pl.DataFrame, name: str, append: bool = False):
-    """Write/append a polars DataFrame to a SAS7BDAT dataset via saspy."""
+def save_via_saspy(df: pl.DataFrame, name: str):
+    """Write a polars DataFrame to a SAS dataset via saspy with lowercase columns."""
     pdf = df.to_pandas()
-    # Lowercase all column names
     pdf.columns = [c.lower() for c in pdf.columns]
 
-    # Convert REPTDATE to string for SAS compatibility if needed
+    # Convert REPTDATE to SAS-friendly date string
     if "reptdate" in pdf.columns:
-        pdf["reptdate"] = pdf["reptdate"].astype(str)
+        pdf["reptdate"] = pdf["reptdate"].dt.strftime("%Y-%m-%d")
 
-    if append:
-        # Append mode: use sas.df2sd with append=True
-        sas.df2sd(pdf, table=name, libref="WORK", append=True)
-    else:
-        sas.df2sd(pdf, table=name, libref="WORK")
-
-    print(f"Wrote {name} -> SAS WORK.{name} ({len(pdf)} rows)")
+    sas.df2sd(pdf, table=name, libref="WORK")
+    print(f"Wrote {name} -> WORK.{name} ({len(pdf)} rows)")
 
 for name, new_df in new_results.items():
     existing = existing_dyibu.get(name)
 
     if existing is not None and len(existing) > 0:
-        # SAS logic: if REPTDAY = 01, delete all; else delete only rows with current REPTDATE
         if reptday == "01":
+            # SAS logic: on the 1st, delete ALL existing and replace
             combined = new_df
             print(f"{name}: REPTDAY=01 → replacing all existing rows.")
         else:
-            # Remove existing rows matching current run_date, then append new
+            # SAS logic: delete rows with the same REPTDATE, then append
             if "reptdate" in existing.columns:
                 existing = existing.filter(
                     pl.col("reptdate").cast(pl.Utf8) != rdate
                 )
             combined = pl.concat([existing, new_df], how="diagonal_relaxed")
-            print(f"{name}: appending {len(new_df)} rows to {len(existing)} existing rows.")
+            print(f"{name}: appended {len(new_df)} rows to {len(existing)} retained rows.")
 
-        save_via_saspy(combined, name, append=False)
+        save_via_saspy(combined, name)
     else:
-        # No existing data — create fresh
-        save_via_saspy(new_df, name, append=False)
+        save_via_saspy(new_df, name)
 
 print("All summaries successfully exported as SAS7BDAT via saspy.")
