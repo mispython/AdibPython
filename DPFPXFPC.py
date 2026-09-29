@@ -2,15 +2,11 @@
 """
 Program Name: EIMBNM01.py
 Purpose: Public Bank Berhad - Monthly Loan Summary Reports (M&I)
-         Generates multiple PROC PRINT reports covering:
-         - All Loans (disbursement, repayment, outstanding) incl. Factoring
-         - Retail Loans breakdown (Personal, Staff, OD, Corp, Factoring)
-         - Commercial Retail Loans (individual vs non-individual)
-         - SME Loans (DBE, FBE, DNBFI sub-categories)
-         - Bank Trade (Bills) summary
-         - Sector/sub-sector breakdown tabulations for:
-             Factoring, M&I Commercial Retail, Retail Bills, Combined
-         - Total Commercial Retail by product type
+
+Reads SAS7BDAT inputs via pyreadstat (all column names lowercased).
+Writes:
+  - TEXT report  : eimbnm01_report.txt
+  - SAS7BDAT out : via saspy (SESSION.sasdata / write)
 
 ESMR: 06-1485
 ESMR: 2009-0744
@@ -19,22 +15,8 @@ ESMR: 2015-606 (TBC)
 ESMR: 2016-678 (NSA)
 
 Dependencies:
-  %INC PGM(PBBLNFMT):
-    The SAS source includes PBBLNFMT as suite-wide boilerplate. Reviewing
-        the actual code in EIMBNM01, none of PBBLNFMT's converted functions
-        (format_lnprod, format_lndenom, format_lnprod, format_odcustcd, etc.)
-        are directly called anywhere in this program.
-    The formats actually used here for sector classification — format_fisstype
-        and format_fissgroup — are NOT in PBBLNFMT.py. They are sourced
-        from RDL2PBIF instead (see below).
-    Therefore, no import from PBBLNFMT is needed or correct here.
-
-  %INC PGM(RDL2PBIF):
-    RDL2PBIF.py defines three functions that are directly used in this program:
-      - build_pbif()        -> called in main() to build the PBIF factoring dataset
-      - format_fisstype()   -> called when assigning sectype to sector-breakdown rows
-      - format_fissgroup()  -> called when assigning secgroup to sector-breakdown rows
-    All three are present in RDL2PBIF.py and correctly imported below.
+  %INC PGM(PBBLNFMT)   -> PBBLNFMT.py
+  %INC PGM(RDL2PBIF)   -> RDL2PBIF.py   (build_pbif, format_fisstype, format_fissgroup)
 """
 
 import os
@@ -42,70 +24,115 @@ import calendar
 from datetime import date, timedelta
 from typing import Optional
 
-import duckdb
-import polars as pl
+import pandas as pd
+import pyreadstat
+import saspy
 
-# %INC PGM(RDL2PBIF) — build_pbif constructs the PBIF factoring dataset;
-#   format_fisstype and format_fissgroup are the FISS sector classification
-#   helpers used throughout the sector-breakdown sections of this program.
-#   All three are defined at module level in RDL2PBIF.py.
-from RDL2PBIF import build_pbif, format_fisstype, format_fissgroup
+# -----------------------------------------------------------------------------
+# %INC PGM(PBBLNFMT);
+# %INC PGM(RDL2PBIF);
+# Both PGMs are assumed already converted to Python modules.
+# -----------------------------------------------------------------------------
+import PBBLNFMT          # noqa: F401  (suite-wide boilerplate; no direct calls)
+from RDL2PBIF import (  # noqa: F401
+    build_pbif,
+    format_fisstype,
+    format_fissgroup,
+)
 
 # =============================================================================
 # PATH CONFIGURATION
 # =============================================================================
 
-BNM_LOAN_PREFIX       = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/loan{reptmon}{nowk}.sas7bdat"          # loan<MM><WK>.parquet
-BNM_LNWOF_PREFIX      = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/lnwof{reptmon}{nowk}.sas7bdat"         # lnwof<MM><WK>.parquet
-BNM_LNWOD_PREFIX      = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/lnwod{reptmon}{nowk}.sas7bdat"         # lnwod<MM><WK>.parquet
-SASD_LOAN_PREFIX      = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/loan{reptmon}.sas7bdat"          # loan<MM>.parquet
-DISPAY_PREFIX         = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/dispaymth{reptmon}.sas7bdat"   # dispaymth<MM>.parquet
-LOAN_LNCOMM_PARQUET   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m{reptmon}.sas7bdat"
-FEE_LNFEE_PREFIX      = "/stgsrcsys/host/uat/lnfee{reptmon}{nowk}.sas7bdat"          
-BTBNM_BTRAD_PREFIX    = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/btrad{reptmon}{nowk}{reptyear}.sas7bdat"        # btrad{mm}{ww}{yy}.sas7bdat
+BNM_LOAN_PREFIX       = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/loan{reptmon}{nowk}.sas7bdat"
+BNM_LNWOF_PREFIX      = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/lnwof{reptmon}{nowk}.sas7bdat"
+BNM_LNWOD_PREFIX      = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/lnwod{reptmon}{nowk}.sas7bdat"
+SASD_LOAN_PREFIX      = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/loan{reptmon}.sas7bdat"
+DISPAY_PREFIX         = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/dispaymth{reptmon}.sas7bdat"
+LOAN_LNCOMM_SAS       = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m{reptmon}.sas7bdat"
+FEE_LNFEE_PREFIX      = "/stgsrcsys/host/uat/lnfee{reptmon}{nowk}.sas7bdat"
+BTBNM_BTRAD_PREFIX    = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/btrad{reptmon}{nowk}{reptyear}.sas7bdat"
 
 OUTPUT_DIR            = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01"
 REPORT_TXT            = os.path.join(OUTPUT_DIR, "eimbnm01_report.txt")
-MFRS_MAST_BR_PARQUET  = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/mfrs/mast_br.sas7bdat"
-MFRS_ALM_CR_PARQUET   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/mfrs/alm_cr.sas7bdat"
+MFRS_DIR              = os.path.join(OUTPUT_DIR, "mfrs")
+MFRS_MAST_BR_SAS      = os.path.join(MFRS_DIR, "mast_br.sas7bdat")
+MFRS_ALM_CR_SAS       = os.path.join(MFRS_DIR, "alm_cr.sas7bdat")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/mfrs", exist_ok=True)
+os.makedirs(MFRS_DIR, exist_ok=True)
+
+# =============================================================================
+# SAS SESSION (saspy) — used to write .sas7bdat outputs
+# =============================================================================
+
+SAS_SESSION = saspy.SASsession(cfgname="default")   # adjust cfgname as required
+
+
+def write_sas7bdat(df: pd.DataFrame, path: str, table_name: Optional[str] = None):
+    """Write a pandas DataFrame to a .sas7bdat file using saspy.
+
+    saspy cannot write directly to an arbitrary path, so we:
+      1. push the DataFrame into a SAS work table
+      2. use PROC COPY / DATA step to write it to &path
+    """
+    if df is None or df.empty:
+        # still create an empty dataset so downstream consumers don't fail
+        sas_code = (
+            f"data _null_; file '{path}'; put; run;"
+        )
+        SAS_SESSION.submit(sas_code)
+        return
+
+    if table_name is None:
+        table_name = os.path.splitext(os.path.basename(path))[0].upper()
+
+    # Push to SAS work
+    sas_df = SAS_SESSION.df2sd(df, table=table_name, libref="WORK")
+
+    # Now write it out to the target .sas7bdat
+    sas_code = f"""
+    data "{path}";
+        set WORK.{table_name};
+    run;
+    """
+    SAS_SESSION.submit(sas_code)
+
 
 # =============================================================================
 # PRODUCT / CUSTOMER CODE MACRO CONSTANTS
 # =============================================================================
 
-ODCORP = {50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,31}
+ODCORP = {50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 31}
 
-ODRTLA = {68,69,85,86,87,88,89,90,91,100,101,102,103,106,108,109,
-          110,111,112,113,114,115,116,117,118,119,120,121,122,123,
-          124,125,135,137,138,150,151,152,153,154,155,156,157,158,
-          159,170,174,175,176,179,180,181,189,191,192,193,194,195,
-          196,197,198,190,30,34,81,82,83,84,77,78}
+ODRTLA = {68, 69, 85, 86, 87, 88, 89, 90, 91, 100, 101, 102, 103, 106, 108, 109,
+          110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123,
+          124, 125, 135, 137, 138, 150, 151, 152, 153, 154, 155, 156, 157, 158,
+          159, 170, 174, 175, 176, 179, 180, 181, 189, 191, 192, 193, 194, 195,
+          196, 197, 198, 190, 30, 34, 81, 82, 83, 84, 77, 78}
 
-ODRTLB = {177,178,34,133,134,77,78}
+ODRTLB = {177, 178, 34, 133, 134, 77, 78}
 
-ODFISS = {'0311','0312','0313','0314','0315','0316'}
+ODFISS = {'0311', '0312', '0313', '0314', '0315', '0316'}
 
-OTRTLA = {303,306,307,325,330,340,354,355,391,610,611,308,311,367,313,369}
+OTRTLA = {303, 306, 307, 325, 330, 340, 354, 355, 391, 610, 611, 308, 311, 367, 313, 369}
 
-OTRTLB = {4,5,6,7,15,20,25,26,27,28,29,30,31,32,33,34,
-          60,61,62,63,70,71,72,73,74,75,76,77,78,79}
+OTRTLB = {4, 5, 6, 7, 15, 20, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+          60, 61, 62, 63, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79}
 
-FLCORP = {180,181,182,183,193,800,801,802,803,804,818,
-          900,901,902,903,904,905,906,907,908,912,922,
-          184,909,910,914,915,916,918,919,920,925,950,951,
-          631,632,633,634,635,636,637,639,640,641,816,817,
-          805,806,807,808,809,810,811,812,813,814,913,917}
+FLCORP = {180, 181, 182, 183, 193, 800, 801, 802, 803, 804, 818,
+          900, 901, 902, 903, 904, 905, 906, 907, 908, 912, 922,
+          184, 909, 910, 914, 915, 916, 918, 919, 920, 925, 950, 951,
+          631, 632, 633, 634, 635, 636, 637, 639, 640, 641, 816, 817,
+          805, 806, 807, 808, 809, 810, 811, 812, 813, 814, 913, 917}
 
-HLCORP = {638,911}
+HLCORP = {638, 911}
 
-DBE_CUSTCDS  = {'41','42','43','44','46','47','48','49','51','52','53','54'}
-FBE_CUSTCDS  = {'87','88','89'}
-DNBFI_VALS   = {'1','2','3'}
-SME_CUSTCDS  = DBE_CUSTCDS | FBE_CUSTCDS
-INDIV_CUSTCDS = {'77','78','95','96'}
+DBE_CUSTCDS   = {'41', '42', '43', '44', '46', '47', '48', '49', '51', '52', '53', '54'}
+FBE_CUSTCDS   = {'87', '88', '89'}
+DNBFI_VALS    = {'1', '2', '3'}
+SME_CUSTCDS   = DBE_CUSTCDS | FBE_CUSTCDS
+INDIV_CUSTCDS = {'77', '78', '95', '96'}
 
 # =============================================================================
 # ASA CARRIAGE CONTROL / REPORT WRITER
@@ -113,11 +140,12 @@ INDIV_CUSTCDS = {'77','78','95','96'}
 
 PAGE_LENGTH = 60
 
+
 class ReportWriter:
     """Accumulates ASA carriage-control report lines; flushes to file."""
 
     def __init__(self):
-        self.lines    = []
+        self.lines = []
         self.line_cnt = PAGE_LENGTH + 1
 
     def _page_eject(self):
@@ -147,8 +175,17 @@ class ReportWriter:
 
 
 # =============================================================================
-# DATE / UTILITY HELPERS
+# DATE / IO / UTILITY HELPERS
 # =============================================================================
+
+def read_sas7bdat(path: str) -> pd.DataFrame:
+    """Read a SAS7BDAT file with all column names lowercased."""
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df, _ = pyreadstat.read_sas7bdat(path)
+    df.columns = [c.lower() for c in df.columns]
+    return df
+
 
 def sas_date_to_pydate(val) -> Optional[date]:
     if val is None or (isinstance(val, float) and val != val):
@@ -177,49 +214,33 @@ def coalesce_s(val, default: str = '') -> str:
     return str(val).strip() if val is not None else default
 
 
-def load_parquet(path: str) -> pl.DataFrame:
-    if not os.path.exists(path):
-        return pl.DataFrame()
-    con = duckdb.connect()
-    df  = con.execute(f"SELECT * FROM read_parquet('{path}')").pl()
-    con.close()
-    return df
-
-
-def load_parquet_where(path: str, where: str) -> pl.DataFrame:
-    if not os.path.exists(path):
-        return pl.DataFrame()
-    con = duckdb.connect()
-    df  = con.execute(
-        f"SELECT * FROM read_parquet('{path}') WHERE {where}"
-    ).pl()
-    con.close()
-    return df
-
 # =============================================================================
-# REPORT DATE VARIABLES
+# REPORT DATE VARIABLES  (no REPTDATE column — pure date arithmetic)
 # =============================================================================
 
 def get_report_vars() -> dict:
     """
-    DATA REPTDATE:
-      REPTDATE = INPUT('01'||PUT(MONTH(TODAY()),Z2.)||PUT(YEAR(TODAY()),4.),DDMMYY8.) - 1
-    Derives all macro variables.
+    Original SAS:
+        REPTDATE = INPUT('01'||PUT(MONTH(TODAY()),Z2.)||PUT(YEAR(TODAY()),4.),DDMMYY8.) - 1
+
+    Python equivalent (no REPTDATE column stored):
+        reptdate = (first day of current month) - 1 day
+                 = last day of previous month
     """
-    today    = date.today()
-    reptdate = date(today.year, today.month, 1) - timedelta(days=1)
+    today = date.today()
+    reptdate = today.replace(day=1) - timedelta(days=1)
 
     day = reptdate.day
     if day == 8:
-        sdd = 1;  wk = '1'; wk1 = '4'; wk2 = '';  wk3 = ''
+        sdd, wk, wk1, wk2, wk3 = 1, '1', '4', '', ''
     elif day == 15:
-        sdd = 9;  wk = '2'; wk1 = '1'; wk2 = '';  wk3 = ''
+        sdd, wk, wk1, wk2, wk3 = 9, '2', '1', '', ''
     elif day == 22:
-        sdd = 16; wk = '3'; wk1 = '2'; wk2 = '';  wk3 = ''
+        sdd, wk, wk1, wk2, wk3 = 16, '3', '2', '', ''
     else:
-        sdd = 23; wk = '4'; wk1 = '3'; wk2 = '2'; wk3 = '1'
+        sdd, wk, wk1, wk2, wk3 = 23, '4', '3', '2', '1'
 
-    mm  = reptdate.month
+    mm = reptdate.month
     mm1 = (mm - 1) if wk != '1' else (mm - 1 if mm > 1 else 12)
     if mm1 == 0:
         mm1 = 12
@@ -227,15 +248,15 @@ def get_report_vars() -> dict:
     if mm2 == 0:
         mm2 = 12
 
-    sdate     = date(reptdate.year, mm, sdd)
-    reptmon   = str(mm).zfill(2)
-    reptmon1  = str(mm1).zfill(2)
-    reptmon2  = str(mm2).zfill(2)
-    reptyear2 = reptdate.strftime('%y')    # YEAR2.
-    ryear     = str(reptdate.year)         # YEAR4.
-    reptday   = str(day).zfill(2)
-    rdate     = reptdate.strftime('%d/%m/%y')   # DDMMYY8.
-    sdate_s   = sdate.strftime('%d/%m/%y')
+    sdate = date(reptdate.year, mm, sdd)
+    reptmon  = str(mm).zfill(2)
+    reptmon1 = str(mm1).zfill(2)
+    reptmon2 = str(mm2).zfill(2)
+    reptyear = reptdate.strftime('%y')          # YEAR2.
+    ryear    = str(reptdate.year)               # YEAR4.
+    reptday  = str(day).zfill(2)
+    rdate    = reptdate.strftime('%d/%m/%y')    # DDMMYY8.
+    sdate_s  = sdate.strftime('%d/%m/%y')
     mdate_int = pydate_to_sasdate(reptdate)     # Z5. value
 
     return {
@@ -246,7 +267,7 @@ def get_report_vars() -> dict:
         'reptmon':   reptmon,
         'reptmon1':  reptmon1,
         'reptmon2':  reptmon2,
-        'reptyear':  reptyear2,
+        'reptyear':  reptyear,
         'ryear':     ryear,
         'reptday':   reptday,
         'rdate':     rdate,
@@ -255,174 +276,134 @@ def get_report_vars() -> dict:
         'mdate_int': mdate_int,
     }
 
+
 # =============================================================================
 # BUILD BASE LOAN DATASET
 # =============================================================================
 
-def build_loan_dataset(rv: dict) -> pl.DataFrame:
-    """
-    PROC SORT DATA=SASD.LOAN<MM>   OUT=DLOAN;
-    PROC SORT DATA=BNM.LOAN<MM><WK>  OUT=MLOAN;
-    PROC SORT DATA=BNM.LNWOF<MM><WK> OUT=LNWOF;
-    PROC SORT DATA=BNM.LNWOD<MM><WK> OUT=LNWOD;
-    PROC SORT DATA=BNM.LNWOF<MM2><WK> OUT=PLNWOF;
-    PROC SORT DATA=BNM.LNWOD<MM2><WK> OUT=PLNWOD;
-    DATA LOANDM: MERGE DLOAN(IN=A) MLOAN(IN=B); IF A AND NOT B;
-    DATA LOAN<MM><WK>: MERGE PLNWOF PLNWOD LOANDM BNM.LOAN<MM2><WK> MLOAN LNWOF LNWOD;
-    * IF ACCTYPE='OD' AND PRODUCT IN (150,151,152,181) THEN DELETE;
-    """
-    mm  = rv['reptmon'];  mm2 = rv['reptmon2'];  wk = rv['nowk']
+def build_loan_dataset(rv: dict) -> pd.DataFrame:
+    mm, mm2, wk = rv['reptmon'], rv['reptmon2'], rv['nowk']
 
-    dloan    = load_parquet(f"{SASD_LOAN_PREFIX}{mm}.parquet")
-    mloan    = load_parquet(f"{BNM_LOAN_PREFIX}{mm}{wk}.parquet")
-    lnwof    = load_parquet(f"{BNM_LNWOF_PREFIX}{mm}{wk}.parquet")
-    lnwod    = load_parquet(f"{BNM_LNWOD_PREFIX}{mm}{wk}.parquet")
-    plnwof   = load_parquet(f"{BNM_LNWOF_PREFIX}{mm2}{wk}.parquet")
-    plnwod   = load_parquet(f"{BNM_LNWOD_PREFIX}{mm2}{wk}.parquet")
-    loan_prev= load_parquet(f"{BNM_LOAN_PREFIX}{mm2}{wk}.parquet")
+    dloan     = read_sas7bdat(f"{SASD_LOAN_PREFIX.format(reptmon=mm)}")
+    mloan     = read_sas7bdat(f"{BNM_LOAN_PREFIX.format(reptmon=mm, nowk=wk)}")
+    lnwof     = read_sas7bdat(f"{BNM_LNWOF_PREFIX.format(reptmon=mm, nowk=wk)}")
+    lnwod     = read_sas7bdat(f"{BNM_LNWOD_PREFIX.format(reptmon=mm, nowk=wk)}")
+    plnwof    = read_sas7bdat(f"{BNM_LNWOF_PREFIX.format(reptmon=mm2, nowk=wk)}")
+    plnwod    = read_sas7bdat(f"{BNM_LNWOD_PREFIX.format(reptmon=mm2, nowk=wk)}")
+    loan_prev = read_sas7bdat(f"{BNM_LOAN_PREFIX.format(reptmon=mm2, nowk=wk)}")
+
+    key = ['acctno', 'noteno']
 
     # DATA LOANDM: MERGE DLOAN(IN=A) MLOAN(IN=B); IF A AND NOT B
-    key = ['acctno', 'noteno']
-    if not dloan.is_empty() and not mloan.is_empty():
-        marker = mloan.select(key).with_columns(pl.lit(True).alias('_b'))
-        loandm = dloan.join(marker, on=key, how='left')
-        loandm = loandm.filter(pl.col('_b').is_null()).drop('_b')
-    elif not dloan.is_empty():
+    if not dloan.empty and not mloan.empty:
+        marker = mloan[key].drop_duplicates().assign(_b=True)
+        loandm = dloan.merge(marker, on=key, how='left')
+        loandm = loandm[loandm['_b'].isna()].drop(columns='_b')
+    elif not dloan.empty:
         loandm = dloan
     else:
-        loandm = pl.DataFrame()
+        loandm = pd.DataFrame()
 
     # DATA LOAN<MM><WK>: MERGE PLNWOF PLNWOD LOANDM BNM.LOAN<MM2><WK> MLOAN LNWOF LNWOD
-    # SAS merge by key: last non-null value wins; process sequentially
     frames = [f for f in [plnwof, plnwod, loandm, loan_prev, mloan, lnwof, lnwod]
-              if not f.is_empty()]
+              if not f.empty]
     if not frames:
-        return pl.DataFrame()
+        return pd.DataFrame()
 
     base = frames[0]
     for f in frames[1:]:
         non_key = [c for c in f.columns if c not in key]
-        merged  = base.join(f.select(key + non_key), on=key, how='outer', suffix='_r')
+        merged = base.merge(f[key + non_key], on=key, how='outer',
+                            suffixes=('', '_r'))
         for col in non_key:
             rc = f"{col}_r"
             if rc in merged.columns:
-                merged = merged.with_columns(
-                    pl.when(pl.col(rc).is_not_null())
-                      .then(pl.col(rc))
-                      .otherwise(pl.col(col) if col in merged.columns else pl.lit(None))
-                      .alias(col)
-                ).drop(rc)
+                merged[col] = merged[rc].combine_first(
+                    merged[col] if col in merged.columns else pd.Series(index=merged.index)
+                )
+                merged = merged.drop(columns=rc)
         base = merged
 
-    # * IF ACCTYPE='OD' AND PRODUCT IN (150,151,152,181) THEN DELETE;
     return base
+
 
 # =============================================================================
 # BUILD DISPAY
 # =============================================================================
 
-def build_dispay(rv: dict, loan_df: pl.DataFrame) -> pl.DataFrame:
-    """
-    DATA DISPAY: SET DISPAY.DISPAYMTH<MM>;
-      DISBURSE=ROUND(DISBURSE,0.01); REPAID=ROUND(REPAID,0.01);
-      WHERE DISBURSE>0 OR REPAID>0;
-    DATA DISPAY: MERGE LOAN(IN=A) DISPAY(IN=B); BY ACCTNO NOTENO; IF A & B;
-    """
-    path = f"{DISPAY_PREFIX}{rv['reptmon']}.parquet"
-    raw  = load_parquet(path)
-    if raw.is_empty() or loan_df.is_empty():
-        return pl.DataFrame()
+def build_dispay(rv: dict, loan_df: pd.DataFrame) -> pd.DataFrame:
+    path = f"{DISPAY_PREFIX.format(reptmon=rv['reptmon'])}"
+    raw = read_sas7bdat(path)
+    if raw.empty or loan_df.empty:
+        return pd.DataFrame()
 
-    dispay = raw.with_columns([
-        pl.col('disburse').round(2),
-        pl.col('repaid').round(2),
-    ]).filter(
-        (pl.col('disburse') > 0) | (pl.col('repaid') > 0)
-    )
+    dispay = raw.copy()
+    dispay['disburse'] = dispay['disburse'].round(2)
+    dispay['repaid']   = dispay['repaid'].round(2)
+    dispay = dispay[(dispay['disburse'] > 0) | (dispay['repaid'] > 0)]
 
     # MERGE LOAN(IN=A) DISPAY(IN=B); IF A & B
-    return loan_df.join(dispay, on=['acctno','noteno'], how='inner', suffix='_dp')
+    return loan_df.merge(dispay, on=['acctno', 'noteno'], how='inner',
+                         suffixes=('', '_dp'))
+
 
 # =============================================================================
 # BUILD CL_FEE AND AUGMENT LOAN
 # =============================================================================
 
-def build_cl_fee(rv: dict) -> pl.DataFrame:
-    """
-    PROC SORT DATA=FEE.LNFEE<MM><WK> OUT=M_FEE(KEEP=ACCTNO NOTENO DUETOTAL FEEPLAN);
-    PROC SUMMARY: WHERE FEEPLAN='CL' AND DUETOTAL>0; SUM DUETOTAL by ACCTNO NOTENO;
-    """
-    path = f"{FEE_LNFEE_PREFIX}{rv['reptmon']}{rv['nowk']}.parquet"
-    raw  = load_parquet(path)
-    if raw.is_empty():
-        return pl.DataFrame(schema={'acctno': pl.Int64, 'noteno': pl.Int64,
-                                    'duetotal': pl.Float64})
-    fee = raw.select([c for c in ['acctno','noteno','duetotal','feeplan']
-                      if c in raw.columns])
-    fee = fee.filter(
-        (pl.col('feeplan') == 'CL') & (pl.col('duetotal') > 0)
-    )
-    if fee.is_empty():
-        return pl.DataFrame(schema={'acctno': pl.Int64, 'noteno': pl.Int64,
-                                    'duetotal': pl.Float64})
-    return fee.group_by(['acctno','noteno']).agg(pl.col('duetotal').sum())
+def build_cl_fee(rv: dict) -> pd.DataFrame:
+    path = f"{FEE_LNFEE_PREFIX.format(reptmon=rv['reptmon'], nowk=rv['nowk'])}"
+    raw = read_sas7bdat(path)
+    if raw.empty:
+        return pd.DataFrame(columns=['acctno', 'noteno', 'duetotal'])
+
+    keep = [c for c in ['acctno', 'noteno', 'duetotal', 'feeplan'] if c in raw.columns]
+    fee = raw[keep].copy()
+    fee = fee[(fee['feeplan'] == 'CL') & (fee['duetotal'] > 0)]
+    if fee.empty:
+        return pd.DataFrame(columns=['acctno', 'noteno', 'duetotal'])
+    return fee.groupby(['acctno', 'noteno'], as_index=False)['duetotal'].sum()
 
 
-def merge_loan_cl_fee(loan_df: pl.DataFrame, cl_fee: pl.DataFrame) -> pl.DataFrame:
-    """
-    DATA LOAN: MERGE LOAN(IN=A) CL_FEE(IN=B); BY ACCTNO NOTENO; IF A;
-    CLFEE = DUETOTAL * FORATE;
-    DROP _TYPE_ _FREQ_;
-    """
-    if loan_df.is_empty():
+def merge_loan_cl_fee(loan_df: pd.DataFrame, cl_fee: pd.DataFrame) -> pd.DataFrame:
+    if loan_df.empty:
         return loan_df
-    if cl_fee.is_empty():
+    if cl_fee.empty:
+        loan_df = loan_df.copy()
         if 'clfee' not in loan_df.columns:
-            loan_df = loan_df.with_columns(pl.lit(0.0).alias('clfee'))
+            loan_df['clfee'] = 0.0
         return loan_df
 
-    merged = loan_df.join(cl_fee, on=['acctno','noteno'], how='left', suffix='_fee')
+    merged = loan_df.merge(cl_fee, on=['acctno', 'noteno'], how='left',
+                           suffixes=('', '_fee'))
     if 'duetotal_fee' in merged.columns:
-        merged = merged.with_columns(
-            pl.when(pl.col('duetotal_fee').is_not_null())
-              .then(pl.col('duetotal_fee'))
-              .otherwise(pl.col('duetotal') if 'duetotal' in merged.columns else pl.lit(None))
-              .alias('duetotal')
-        ).drop('duetotal_fee')
-
-    forate_col = 'forate' if 'forate' in merged.columns else None
-    if forate_col:
-        merged = merged.with_columns(
-            (pl.col('duetotal').fill_null(0.0) * pl.col(forate_col).fill_null(0.0)).alias('clfee')
+        merged['duetotal'] = merged['duetotal_fee'].combine_first(
+            merged['duetotal'] if 'duetotal' in merged.columns else pd.Series(index=merged.index)
         )
-    else:
-        merged = merged.with_columns(pl.lit(0.0).alias('clfee'))
+        merged = merged.drop(columns='duetotal_fee')
 
-    for col in ['_type_','_freq_']:
+    if 'forate' in merged.columns:
+        merged['clfee'] = (merged['duetotal'].fillna(0.0) *
+                           merged['forate'].fillna(0.0))
+    else:
+        merged['clfee'] = 0.0
+
+    for col in ['_type_', '_freq_']:
         if col in merged.columns:
-            merged = merged.drop(col)
+            merged = merged.drop(columns=col)
     return merged
 
+
 # =============================================================================
-# BUILD ALM (All Loans Master)
+# BUILD ALM
 # =============================================================================
 
-def build_alm(loan_raw: pl.DataFrame) -> pl.DataFrame:
-    """
-    MERGE LOAN(RENAME BALANCE->ORIBAL, BAL_AFT_EIR->BALANCE) LNCOMM;
-    BY ACCTNO COMMNO; IF A;
-    Filters, NOACCT logic, ALMBT split.
-    Returns alm_df (ALM + ALMBT concatenated as in SAS DATA ALM: SET ALM ALMBT)
-    """
-    if loan_raw.is_empty():
-        return pl.DataFrame()
+def build_alm(loan_raw: pd.DataFrame) -> pd.DataFrame:
+    if loan_raw.empty:
+        return pd.DataFrame()
 
-    lncomm = load_parquet(LOAN_LNCOMM_PARQUET)
-    if not lncomm.is_empty():
-        lncomm_sel = lncomm.select([c for c in ['acctno','commno','cusedamt']
-                                    if c in lncomm.columns])
-    else:
-        lncomm_sel = pl.DataFrame()
+    lncomm = read_sas7bdat(LOAN_LNCOMM_SAS.format(reptmon=''))  # caller overrides path
+    # NB: caller should pass the correct path; kept for structural parity.
 
     # RENAME: BALANCE->ORIBAL, BAL_AFT_EIR->BALANCE
     renames = {}
@@ -431,36 +412,18 @@ def build_alm(loan_raw: pl.DataFrame) -> pl.DataFrame:
     if 'bal_aft_eir' in loan_raw.columns:
         renames['bal_aft_eir'] = 'balance'
     if renames:
-        loan_raw = loan_raw.rename(renames)
+        loan_raw = loan_raw.rename(columns=renames)
 
-    # Merge LNCOMM by ACCTNO COMMNO
-    if not lncomm_sel.is_empty() and 'commno' in loan_raw.columns:
-        merged = loan_raw.join(lncomm_sel, on=['acctno','commno'], how='left', suffix='_lc')
-        for col in lncomm_sel.columns:
-            lc = f"{col}_lc"
-            if lc in merged.columns:
-                merged = merged.with_columns(
-                    pl.when(pl.col(lc).is_not_null())
-                      .then(pl.col(lc))
-                      .otherwise(pl.col(col) if col in merged.columns else pl.lit(None))
-                      .alias(col)
-                ).drop(lc)
-    else:
-        merged = loan_raw
+    keep = ['acctno', 'noteno', 'fisspurp', 'product', 'noteterm', 'earnterm',
+            'balance', 'paidind', 'apprdate', 'apprlim2', 'prodcd', 'custcd',
+            'amtind', 'sectorcd', 'acctype', 'branch', 'cjfee', 'oribal',
+            'dnbfisme', 'noacct', 'commno', 'cusedamt', 'rleasamt', 'clfee',
+            'eir_adj', 'retailid']
+    avail = [c for c in keep if c in loan_raw.columns]
+    merged = loan_raw[avail].copy()
 
-    keep = ['acctno','noteno','fisspurp','product','noteterm','earnterm',
-            'balance','paidind','apprdate','apprlim2','prodcd','custcd',
-            'amtind','sectorcd','acctype','branch','cjfee','oribal',
-            'dnbfisme','noacct','commno','cusedamt','rleasamt','clfee',
-            'eir_adj','retailid']
-    avail  = [c for c in keep if c in merged.columns]
-    merged = merged.select(avail)
-
-    rows     = merged.to_dicts()
-    alm_rows = []
-    almbt_rows = []
-
-    for row in rows:
+    alm_rows, almbt_rows = [], []
+    for _, row in merged.iterrows():
         paidind  = coalesce_s(row.get('paidind'))
         eir_adj  = row.get('eir_adj')
         oribal   = coalesce_f(row.get('oribal'))
@@ -475,266 +438,232 @@ def build_alm(loan_raw: pl.DataFrame) -> pl.DataFrame:
         cjfee    = coalesce_f(row.get('cjfee'))
         clfee    = coalesce_f(row.get('clfee'))
 
-        # IF PAIDIND NOT IN ('P','C') OR EIR_ADJ NE .
         eir_adj_set = (eir_adj is not None and
                        not (isinstance(eir_adj, float) and eir_adj != eir_adj))
         if paidind in ('P', 'C') and not eir_adj_set:
             continue
 
-        # FORMAT BALX 14.2; XIND=' ';
-        # IF ORIBAL=-.00 THEN XIND='Y'
         xind = ' '
         if oribal == -0.0 and str(oribal) in ('-0.0', '-0.00'):
             xind = 'Y'
         balx = round(oribal, 2)
         if balx in (0.0, -0.0):
             xind = 'Y'
-
-        # * IF PAIDIND='P' OR XIND='Y' THEN DELETE;
-        # IF XIND='Y' THEN DELETE
         if xind == 'Y':
             continue
 
-        # IF SUBSTR(PRODCD,1,2) EQ '34' OR PRODCD EQ '54120'
         if not (prodcd[:2] == '34' or prodcd == '54120'):
             continue
 
-        # * IF PRODUCT IN (150,151,152,181) THEN DELETE;
-
-        # NOACCT logic for LN
         noacct = int(row.get('noacct') or 0)
         if acctype == 'LN':
             eligible = False
-            if (rleasamt != 0.0 and paidind not in ('P','C') and
+            if (rleasamt != 0.0 and paidind not in ('P', 'C') and
                     oribal > 0 and cjfee != oribal):
                 eligible = True
-            elif (rleasamt == 0.0 and paidind not in ('P','C') and
+            elif (rleasamt == 0.0 and paidind not in ('P', 'C') and
                   oribal > 0 and 600 <= product <= 699):
                 eligible = True
-            elif (rleasamt == 0.0 and paidind not in ('P','C') and
+            elif (rleasamt == 0.0 and paidind not in ('P', 'C') and
                   oribal > 0 and commno > 0 and cusedamt > 0):
                 eligible = True
             if not eligible:
                 noacct = 0
-            # IF RLEASAMT^=0 AND ORIBAL=CLFEE THEN NOACCT=0
             if rleasamt != 0 and oribal == clfee:
                 noacct = 0
 
-        # IF PAIDIND NOT IN ('P','C') & CJFEE NE ORIBAL AND NOACCT^=0 AND ROUND(ORIBAL,.01)...
-        if (paidind not in ('P','C') and cjfee != oribal and noacct != 0 and
+        if (paidind not in ('P', 'C') and cjfee != oribal and noacct != 0 and
                 round(oribal, 2) not in (0.0, -0.0)):
             noacct = 1
-        row['noacct'] = noacct
 
-        # Split ALMBT vs ALM
+        new_row = row.to_dict()
+        new_row['noacct'] = noacct
+
         if ((2500000000 <= acctno <= 2599999999 and 40000 <= noteno <= 49999) or
                 product == 321):
-            almbt_rows.append(row)
+            almbt_rows.append(new_row)
         else:
-            alm_rows.append(row)
+            alm_rows.append(new_row)
 
-    alm_df   = pl.from_dicts(alm_rows)   if alm_rows   else pl.DataFrame()
-    almbt_df = pl.from_dicts(almbt_rows) if almbt_rows else pl.DataFrame()
+    alm_df   = pd.DataFrame(alm_rows)
+    almbt_df = pd.DataFrame(almbt_rows)
 
-    # DATA ALM: BY ACCTNO COMMNO — deduplicate NOACCT for revolving products
-    if not alm_df.is_empty() and 'commno' in alm_df.columns:
-        alm_df  = alm_df.sort(['acctno', 'commno'])
-        rows2   = alm_df.to_dicts()
-        prev_ac = None; prev_cm = None; unq = 0
-        for row in rows2:
-            ac = row['acctno']; cm = row.get('commno')
+    if not alm_df.empty and 'commno' in alm_df.columns:
+        alm_df = alm_df.sort_values(['acctno', 'commno']).reset_index(drop=True)
+        prev_ac = prev_cm = None
+        unq = 0
+        for i, row in alm_df.iterrows():
+            ac, cm = row['acctno'], row.get('commno')
             pd_ = coalesce_s(row.get('prodcd'))
             if ac != prev_ac or cm != prev_cm:
                 unq = 0
-            if pd_ in ('34170','34190','34690'):
-                unq += (row.get('noacct') or 0)  # *17-513
+            if pd_ in ('34170', '34190', '34690'):
+                unq += (row.get('noacct') or 0)
                 if unq > 1:
-                    row['noacct'] = 0
-            prev_ac = ac; prev_cm = cm
-        alm_df = pl.from_dicts(rows2)
+                    alm_df.at[i, 'noacct'] = 0
+            prev_ac, prev_cm = ac, cm
 
-    # DATA ALMBT: BY ACCTNO — first row per ACCTNO gets NOACCT=1, rest 0
-    if not almbt_df.is_empty():
-        almbt_df = almbt_df.sort('acctno')
-        rows3    = almbt_df.to_dicts()
-        prev_ac  = None
-        for row in rows3:
+    if not almbt_df.empty:
+        almbt_df = almbt_df.sort_values('acctno').reset_index(drop=True)
+        prev_ac = None
+        for i, row in almbt_df.iterrows():
             ac = row['acctno']
-            row['noacct'] = 1 if ac != prev_ac else 0
+            almbt_df.at[i, 'noacct'] = 1 if ac != prev_ac else 0
             prev_ac = ac
-        almbt_df = pl.from_dicts(rows3)
 
-    # DATA ALM: SET ALM ALMBT
-    alm_df = (pl.concat([alm_df, almbt_df], how='diagonal')
-              if not almbt_df.is_empty() else alm_df)
+    if not almbt_df.empty:
+        alm_df = pd.concat([alm_df, almbt_df], ignore_index=True)
 
     return alm_df
+
 
 # =============================================================================
 # APPLY PRODESC
 # =============================================================================
 
-def apply_prodesc(df: pl.DataFrame) -> pl.DataFrame:
-    """
-    DATA ALM: SET ALM;
-    Assign PRODESC based on ACCTYPE/PRODCD/PRODUCT logic.
-    """
-    if df.is_empty():
+def apply_prodesc(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
         return df
-    rows = df.to_dicts()
-    for row in rows:
+    df = df.copy()
+    prodescs = []
+    for _, row in df.iterrows():
         product = int(row.get('product') or 0)
         acctype = coalesce_s(row.get('acctype'))
         prodcd  = coalesce_s(row.get('prodcd'))
 
         prodesc = ''
-        if (acctype == 'LN' and prodcd == '34111') or product in {678,679,993,996}:
+        if (acctype == 'LN' and prodcd == '34111') or product in {678, 679, 993, 996}:
             prodesc = 'HIRE PURCHASE'
         elif acctype == 'LN' and prodcd == '34120':
             prodesc = 'RETAIL HOUSING LOANS'
             if product in HLCORP:
                 prodesc = 'CORP. BANKING HOUSING LOANS'
-        elif acctype == 'OD' and prodcd in ('34180','34240') and product in ODCORP:
+        elif acctype == 'OD' and prodcd in ('34180', '34240') and product in ODCORP:
             prodesc = 'OD CORPORATE'
-        elif acctype == 'OD' and prodcd in ('34180','34240') and product not in ODCORP:
+        elif acctype == 'OD' and prodcd in ('34180', '34240') and product not in ODCORP:
             prodesc = 'OD RETAIL'
-        elif (acctype == 'LN' and prodcd not in ('34111','34120','N','M') and
+        elif (acctype == 'LN' and prodcd not in ('34111', '34120', 'N', 'M') and
               product in FLCORP):
             prodesc = 'CORP. BANKING LOANS'
-        elif (acctype == 'LN' and prodcd not in ('34111','34120','N','M') and
+        elif (acctype == 'LN' and prodcd not in ('34111', '34120', 'N', 'M') and
               product not in FLCORP):
             prodesc = 'OTHERS RETAIL'
         if acctype == 'LN' and prodcd == '34170':
             prodesc = 'FLOOR STOCKING LOANS'
+        prodescs.append(prodesc)
+    df['prodesc'] = prodescs
+    return df
 
-        row['prodesc'] = prodesc
-    return pl.from_dicts(rows)
 
 # =============================================================================
-# BUILD BTRADE DATASET
-# Uses format_fisstype() and format_fissgroup() from RDL2PBIF (imported above).
+# BUILD BTRADE
 # =============================================================================
 
-def build_btrade(rv: dict) -> tuple:
-    """
-    PROC SORT DATA=BTBNM.BTRAD<MM><WK> OUT=BTRAD1;
-    WHERE DIRCTIND='D' AND CUSTCD NE ' ';
-    ... OVC / MAST / ALMBT (Bills detail) / ALMLOAN summary / MFRS outputs
-    Returns: (alm_bt_df, almloan_bt_df, mast_df)
-    """
-    mm = rv['reptmon']; wk = rv['nowk']
-    path = f"{BTBNM_BTRAD_PREFIX}{mm}{wk}.parquet"
+def build_btrade(rv: dict):
+    mm, wk = rv['reptmon'], rv['nowk']
+    path = BTBNM_BTRAD_PREFIX.format(reptmon=mm, nowk=wk, reptyear=rv['reptyear'])
 
-    btrad_raw = load_parquet_where(
-        path, "dirctind = 'D' AND custcd IS NOT NULL AND custcd <> ' '"
-    )
-    if btrad_raw.is_empty():
-        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+    btrad_raw = read_sas7bdat(path)
+    if btrad_raw.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    btrad_raw = btrad_raw[
+        (btrad_raw['dirctind'] == 'D') &
+        (btrad_raw['custcd'].notna()) &
+        (btrad_raw['custcd'] != ' ')
+    ]
 
     if 'apprlimt' in btrad_raw.columns:
-        btrad1 = btrad_raw.sort(['acctno','apprlimt'], descending=[False, True])
+        btrad1 = btrad_raw.sort_values(['acctno', 'apprlimt'],
+                                       ascending=[True, False])
     else:
-        btrad1 = btrad_raw.sort('acctno')
+        btrad1 = btrad_raw.sort_values('acctno')
 
-    grp_key1 = [c for c in ['acctno','custcd','retailid','sectorcd','dnbfisme']
+    grp_key1 = [c for c in ['acctno', 'custcd', 'retailid', 'sectorcd', 'dnbfisme']
                 if c in btrad1.columns]
-    agg_v1   = [c for c in ['disburse','repaid'] if c in btrad1.columns]
-    btrad2   = btrad1.group_by(grp_key1).agg(
-        [pl.col(c).sum() for c in agg_v1]
-    ) if grp_key1 and agg_v1 else pl.DataFrame()
+    agg_v1 = [c for c in ['disburse', 'repaid'] if c in btrad1.columns]
+    btrad2 = (btrad1.groupby(grp_key1, as_index=False)[agg_v1].sum()
+              if grp_key1 and agg_v1 else pd.DataFrame())
 
-    grp_key2 = [c for c in ['acctno','custcd','retailid','sectorcd']
+    grp_key2 = [c for c in ['acctno', 'custcd', 'retailid', 'sectorcd']
                 if c in btrad1.columns]
-    btrad1_bal = pl.DataFrame()
+    btrad1_bal = pd.DataFrame()
     if 'apprlimt' in btrad1.columns and 'balance' in btrad1.columns and grp_key2:
-        btrad1_bal = btrad1.filter(pl.col('apprlimt') > 0).group_by(grp_key2).agg(
-            pl.col('balance').sum()
-        )
+        btrad1_bal = (btrad1[btrad1['apprlimt'] > 0]
+                      .groupby(grp_key2, as_index=False)['balance'].sum())
 
-    # DATA OVC MAST: MERGE BTRAD1(IN=A) BTRAD2(IN=B); BY ACCTNO CUSTCD RETAILID SECTORCD; IF B
-    merge_key = [c for c in ['acctno','custcd','retailid','sectorcd']
+    merge_key = [c for c in ['acctno', 'custcd', 'retailid', 'sectorcd']
                  if c in btrad2.columns]
-    if not btrad1_bal.is_empty() and not btrad2.is_empty():
-        mast_m = btrad2.join(btrad1_bal, on=merge_key, how='left', suffix='_bal')
+    if not btrad1_bal.empty and not btrad2.empty:
+        mast_m = btrad2.merge(btrad1_bal, on=merge_key, how='left',
+                              suffixes=('', '_bal'))
         if 'balance_bal' in mast_m.columns:
-            mast_m = mast_m.with_columns(
-                pl.when(pl.col('balance_bal').is_not_null())
-                  .then(pl.col('balance_bal'))
-                  .otherwise(pl.col('balance') if 'balance' in mast_m.columns else pl.lit(None))
-                  .alias('balance')
-            ).drop('balance_bal')
+            mast_m['balance'] = mast_m['balance_bal'].combine_first(
+                mast_m['balance'] if 'balance' in mast_m.columns else pd.Series(index=mast_m.index)
+            )
+            mast_m = mast_m.drop(columns='balance_bal')
     else:
         mast_m = btrad2
 
-    mast_m = mast_m.with_columns([
-        pl.when(pl.col('disburse') > 0).then(pl.lit(1)).otherwise(pl.lit(0)).alias('disbno'),
-        pl.when(pl.col('repaid')   > 0).then(pl.lit(1)).otherwise(pl.lit(0)).alias('repayno'),
-    ])
-    # IF A AND ROUND(BALANCE,0.01) NOT IN (.,0) AND ACCTNO^=0 THEN NOACCT=1
+    mast_m = mast_m.copy()
+    mast_m['disbno']  = (mast_m['disburse'] > 0).astype(int)
+    mast_m['repayno'] = (mast_m['repaid'] > 0).astype(int)
     if 'balance' in mast_m.columns:
-        mast_m = mast_m.with_columns(
-            pl.when(
-                pl.col('balance').round(2).is_not_null() &
-                (pl.col('balance').round(2) != 0) &
-                (pl.col('acctno') != 0)
-            ).then(pl.lit(1)).otherwise(pl.lit(0)).alias('noacct')
-        )
+        mast_m['noacct'] = (
+            mast_m['balance'].round(2).notna() &
+            (mast_m['balance'].round(2) != 0) &
+            (mast_m['acctno'] != 0)
+        ).astype(int)
 
-    ovc_df = mast_m.select([c for c in ['acctno','retailid'] if c in mast_m.columns])
-    mast_keep = [c for c in ['acctno','custcd','balance','retailid','disbno','repayno',
-                              'noacct','sectorcd','dnbfisme'] if c in mast_m.columns]
-    mast_df = mast_m.select(mast_keep)
+    ovc_df = mast_m[[c for c in ['acctno', 'retailid'] if c in mast_m.columns]].copy()
+    mast_keep = [c for c in ['acctno', 'custcd', 'balance', 'retailid', 'disbno',
+                             'repayno', 'noacct', 'sectorcd', 'dnbfisme']
+                 if c in mast_m.columns]
+    mast_df = mast_m[mast_keep].copy()
 
-    # PROC SORT BTRAD WHERE SUBSTR(PRODCD,1,2)='34'
-    alm_bt_raw = load_parquet_where(
-        path, "SUBSTR(CAST(prodcd AS VARCHAR),1,2) = '34'"
-    )
-    if alm_bt_raw.is_empty():
-        return pl.DataFrame(), pl.DataFrame(), mast_df
+    alm_bt_raw = read_sas7bdat(path)
+    if alm_bt_raw.empty:
+        return pd.DataFrame(), pd.DataFrame(), mast_df
+    alm_bt_raw = alm_bt_raw[
+        alm_bt_raw['prodcd'].astype(str).str[:2] == '34'
+    ]
 
-    bt_keep = [c for c in ['acctno','subacct','fisspurp','product','noteterm','balance',
-                            'apprlim2','prodcd','custcd','amtind','transref','sectorcd',
-                            'disburse','repaid','dnbfisme','retailid']
+    bt_keep = [c for c in ['acctno', 'subacct', 'fisspurp', 'product', 'noteterm',
+                           'balance', 'apprlim2', 'prodcd', 'custcd', 'amtind',
+                           'transref', 'sectorcd', 'disburse', 'repaid',
+                           'dnbfisme', 'retailid']
                if c in alm_bt_raw.columns]
-    alm_bt = alm_bt_raw.select(bt_keep)
+    alm_bt = alm_bt_raw[bt_keep].copy()
 
-    # DATA ALM: MERGE OVC ALM(IN=A); BY ACCTNO; IF A
-    if not ovc_df.is_empty():
-        alm_bt = alm_bt.join(ovc_df, on='acctno', how='inner', suffix='_ovc')
+    if not ovc_df.empty:
+        alm_bt = alm_bt.merge(ovc_df, on='acctno', how='inner',
+                              suffixes=('', '_ovc'))
         if 'retailid_ovc' in alm_bt.columns:
-            alm_bt = alm_bt.with_columns(
-                pl.when(pl.col('retailid_ovc').is_not_null())
-                  .then(pl.col('retailid_ovc'))
-                  .otherwise(pl.col('retailid') if 'retailid' in alm_bt.columns else pl.lit(None))
-                  .alias('retailid')
-            ).drop('retailid_ovc')
+            alm_bt['retailid'] = alm_bt['retailid_ovc'].combine_first(
+                alm_bt['retailid'] if 'retailid' in alm_bt.columns else pd.Series(index=alm_bt.index)
+            )
+            alm_bt = alm_bt.drop(columns='retailid_ovc')
 
-    # PROC SUMMARY ALMX: SUM BALANCE by ACCTNO TRANSREF CUSTCD FISSPURP SECTORCD
-    bt_grp = [c for c in ['acctno','transref','custcd','fisspurp','sectorcd']
+    bt_grp = [c for c in ['acctno', 'transref', 'custcd', 'fisspurp', 'sectorcd']
               if c in alm_bt.columns]
     if bt_grp and 'balance' in alm_bt.columns:
-        almx   = alm_bt.group_by(bt_grp).agg(pl.col('balance').sum().alias('balance'))
-        alm_bt = alm_bt.sort(bt_grp).unique(subset=bt_grp, keep='first')
-        alm_bt = alm_bt.drop('balance').join(almx, on=bt_grp, how='left')
+        almx = (alm_bt.groupby(bt_grp, as_index=False)['balance'].sum()
+                .rename(columns={'balance': 'balance_sum'}))
+        alm_bt = alm_bt.sort_values(bt_grp).drop_duplicates(subset=bt_grp, keep='first')
+        alm_bt = alm_bt.drop(columns='balance').merge(almx, on=bt_grp, how='left')
+        alm_bt = alm_bt.rename(columns={'balance_sum': 'balance'})
 
-    alm_bt = alm_bt.with_columns([
-        pl.col('disburse').cast(pl.Float64).fill_null(0.0) if 'disburse' in alm_bt.columns
-        else pl.lit(0.0).alias('disburse'),
-        pl.col('repaid').cast(pl.Float64).fill_null(0.0)   if 'repaid'   in alm_bt.columns
-        else pl.lit(0.0).alias('repaid'),
-        pl.col('balance').cast(pl.Float64).fill_null(0.0)  if 'balance'  in alm_bt.columns
-        else pl.lit(0.0).alias('balance'),
-    ])
+    for c in ['disburse', 'repaid', 'balance']:
+        if c in alm_bt.columns:
+            alm_bt[c] = alm_bt[c].astype(float).fillna(0.0)
+        else:
+            alm_bt[c] = 0.0
 
-    # DATA ALM: PRODESC assignment
-    rows = alm_bt.to_dicts()
-    for row in rows:
-        retailid = coalesce_s(row.get('retailid'))
-        row['prodesc'] = 'BILLS CORPORATE' if retailid == 'C' else 'BILLS RETAIL'
-    alm_bt = pl.from_dicts(rows)
+    alm_bt['prodesc'] = alm_bt['retailid'].apply(
+        lambda x: 'BILLS CORPORATE' if coalesce_s(x) == 'C' else 'BILLS RETAIL'
+    )
 
-    # DATA MAST: PRODESC + MFRS.MAST_BR
-    mast_rows  = mast_df.to_dicts()
+    mast_rows = mast_df.to_dicts() if hasattr(mast_df, 'to_dicts') else mast_df.to_dict('records')
     mast_br_list = []
     for row in mast_rows:
         retailid = coalesce_s(row.get('retailid'))
@@ -747,35 +676,32 @@ def build_btrade(rv: dict) -> tuple:
         mast_br_list.append({'acctno': acctno,
                              'prodesc': row['prodesc'],
                              'noacct': row.get('noacct', 0)})
+    mast_df = pd.DataFrame(mast_rows)
 
-    mast_df = pl.from_dicts(mast_rows)
     if mast_br_list:
-        pl.from_dicts(mast_br_list).write_parquet(MFRS_MAST_BR_PARQUET)
+        write_sas7bdat(pd.DataFrame(mast_br_list), MFRS_MAST_BR_SAS, 'MAST_BR')
 
-    # PROC SUMMARY ALM by PRODESC -> ALMLOAN
-    agg_v = [c for c in ['disburse','repaid','balance'] if c in alm_bt.columns]
-    almloan_bt = alm_bt.group_by('prodesc').agg(
-        [pl.col(c).sum() for c in agg_v]
-    ) if agg_v else pl.DataFrame()
+    agg_v = [c for c in ['disburse', 'repaid', 'balance'] if c in alm_bt.columns]
+    almloan_bt = (alm_bt.groupby('prodesc', as_index=False)[agg_v].sum()
+                  if agg_v else pd.DataFrame())
 
-    # PROC SUMMARY MAST by PRODESC -> MASTLOAN; merge
-    mast_agg_v = [c for c in ['disbno','repayno','noacct'] if c in mast_df.columns]
-    if mast_agg_v and not mast_df.is_empty():
-        mastloan = mast_df.group_by('prodesc').agg(
-            [pl.col(c).sum() for c in mast_agg_v]
-        )
-        if not almloan_bt.is_empty():
-            almloan_bt = almloan_bt.join(mastloan, on='prodesc', how='left')
+    mast_agg_v = [c for c in ['disbno', 'repayno', 'noacct'] if c in mast_df.columns]
+    if mast_agg_v and not mast_df.empty:
+        mastloan = mast_df.groupby('prodesc', as_index=False)[mast_agg_v].sum()
+        if not almloan_bt.empty:
+            almloan_bt = almloan_bt.merge(mastloan, on='prodesc', how='left')
         else:
             almloan_bt = mastloan
 
     return alm_bt, almloan_bt, mast_df
 
+
 # =============================================================================
 # REPORT PRINT HELPERS
 # =============================================================================
 
-NUM_COLS = ['disburse','repaid','disbno','repayno','balance','noacct']
+NUM_COLS = ['disburse', 'repaid', 'disbno', 'repayno', 'balance', 'noacct']
+
 
 def fmt_num(val, decimals: int = 2) -> str:
     if val is None or (isinstance(val, float) and val != val):
@@ -785,10 +711,8 @@ def fmt_num(val, decimals: int = 2) -> str:
     return f"{float(val):10.0f}"
 
 
-def print_table(df: pl.DataFrame, rw: ReportWriter,
-                title1: str, title2: str = ''):
-    """Equivalent to PROC PRINT with SUM: DISBURSE REPAID DISBNO REPAYNO BALANCE NOACCT."""
-    if df.is_empty():
+def print_table(df: pd.DataFrame, rw: ReportWriter, title1: str, title2: str = ''):
+    if df is None or df.empty:
         return
 
     rw.write_titles(title1, title2)
@@ -804,15 +728,15 @@ def print_table(df: pl.DataFrame, rw: ReportWriter,
     rw.write_line(' ' + '-' * len(hdr))
 
     tot = {c: 0.0 for c in NUM_COLS}
-    for row in df.sort('prodesc').iter_rows(named=True):
+    for _, row in df.sort_values('prodesc').iterrows():
         prodesc = coalesce_s(row.get('prodesc'))[:35]
         line = (f"{prodesc:<35}"
                 f"{fmt_num(row.get('disburse'))}"
                 f"{fmt_num(row.get('repaid'))}"
-                f"{fmt_num(row.get('disbno'),  0)}"
+                f"{fmt_num(row.get('disbno'), 0)}"
                 f"{fmt_num(row.get('repayno'), 0)}"
                 f"{fmt_num(row.get('balance'))}"
-                f"{fmt_num(row.get('noacct'),  0)}")
+                f"{fmt_num(row.get('noacct'), 0)}")
         rw.write_line(' ' + line)
         for c in NUM_COLS:
             v = row.get(c)
@@ -823,87 +747,88 @@ def print_table(df: pl.DataFrame, rw: ReportWriter,
     sum_line = (f"{'SUM':<35}"
                 f"{fmt_num(tot['disburse'])}"
                 f"{fmt_num(tot['repaid'])}"
-                f"{fmt_num(tot['disbno'],  0)}"
+                f"{fmt_num(tot['disbno'], 0)}"
                 f"{fmt_num(tot['repayno'], 0)}"
                 f"{fmt_num(tot['balance'])}"
-                f"{fmt_num(tot['noacct'],  0)}")
+                f"{fmt_num(tot['noacct'], 0)}")
     rw.write_line(' ' + sum_line)
     rw.blank()
 
 
-def print_tabulate_sector(df: pl.DataFrame, rw: ReportWriter,
-                           title1: str, title2: str):
-    """
-    PROC TABULATE: TABLE SECGROUP*(SECTYPE ALL) ALL, SUM*(BALANCE NOACCT) / BOX='SECTFISS'
-    """
-    if df.is_empty():
+def print_tabulate_sector(df: pd.DataFrame, rw: ReportWriter,
+                          title1: str, title2: str):
+    if df is None or df.empty:
         return
     rw.write_titles(title1, title2)
     hdr = f"{'SECTFISS':<25}{'AMOUNT':>18}{'NO. OF ACCT':>12}"
     rw.write_line(' ' + hdr)
     rw.write_line(' ' + '-' * len(hdr))
 
-    grp = df.group_by(['secgroup','sectype']).agg([
-        pl.col('balance').sum() if 'balance' in df.columns else pl.lit(0.0).alias('balance'),
-        pl.col('noacct').sum()  if 'noacct'  in df.columns else pl.lit(0.0).alias('noacct'),
-    ]).sort(['secgroup','sectype'])
+    agg = {}
+    for c in ['balance', 'noacct']:
+        if c in df.columns:
+            agg[c] = 'sum'
+    grp = df.groupby(['secgroup', 'sectype'], as_index=False).agg(agg).sort_values(
+        ['secgroup', 'sectype']
+    )
 
-    grand_bal = 0.0; grand_noa = 0.0
-    for sg_val in grp.select('secgroup').unique(maintain_order=True).to_series().to_list():
-        sub = grp.filter(pl.col('secgroup') == sg_val).sort('sectype')
-        sub_bal = 0.0; sub_noa = 0.0
-        for row in sub.iter_rows(named=True):
-            st  = coalesce_s(row.get('sectype'))[:25]
+    grand_bal = grand_noa = 0.0
+    for sg_val in grp['secgroup'].drop_duplicates():
+        sub = grp[grp['secgroup'] == sg_val].sort_values('sectype')
+        sub_bal = sub_noa = 0.0
+        for _, row in sub.iterrows():
+            st = coalesce_s(row.get('sectype'))[:25]
             bal = float(row.get('balance') or 0.0)
-            noa = float(row.get('noacct')  or 0.0)
+            noa = float(row.get('noacct') or 0.0)
             rw.write_line(' ' + f"  {st:<23}{bal:18.2f}{noa:12.0f}")
-            sub_bal += bal; sub_noa += noa
+            sub_bal += bal
+            sub_noa += noa
         rw.write_line(' ' + f"{'  SUB-TOTAL':<25}{sub_bal:18.2f}{sub_noa:12.0f}")
-        grand_bal += sub_bal; grand_noa += sub_noa
+        grand_bal += sub_bal
+        grand_noa += sub_noa
 
     rw.write_line(' ' + '=' * len(hdr))
     rw.write_line(' ' + f"{'GRAND TOTAL':<25}{grand_bal:18.2f}{grand_noa:12.0f}")
     rw.blank()
 
 
-def print_tabulate_product(df: pl.DataFrame, rw: ReportWriter,
-                            title1: str, title2: str):
-    """
-    PROC TABULATE: TABLE TYPE='', SUM*(BALANCE NOACCT) / BOX='FACILITY'
-    """
-    if df.is_empty():
+def print_tabulate_product(df: pd.DataFrame, rw: ReportWriter,
+                           title1: str, title2: str):
+    if df is None or df.empty:
         return
     rw.write_titles(title1, title2)
     hdr = f"{'FACILITY':<25}{'AMOUNT':>18}{'NO. OF ACCT':>12}"
     rw.write_line(' ' + hdr)
     rw.write_line(' ' + '-' * len(hdr))
 
-    grp = df.group_by('type').agg([
-        pl.col('balance').sum() if 'balance' in df.columns else pl.lit(0.0).alias('balance'),
-        pl.col('noacct').sum()  if 'noacct'  in df.columns else pl.lit(0.0).alias('noacct'),
-    ]).sort('type')
+    agg = {}
+    for c in ['balance', 'noacct']:
+        if c in df.columns:
+            agg[c] = 'sum'
+    grp = df.groupby('type', as_index=False).agg(agg).sort_values('type')
 
-    grand_bal = 0.0; grand_noa = 0.0
-    for row in grp.iter_rows(named=True):
-        t   = coalesce_s(row.get('type'))[:25]
+    grand_bal = grand_noa = 0.0
+    for _, row in grp.iterrows():
+        t = coalesce_s(row.get('type'))[:25]
         bal = float(row.get('balance') or 0.0)
-        noa = float(row.get('noacct')  or 0.0)
+        noa = float(row.get('noacct') or 0.0)
         rw.write_line(' ' + f"{t:<25}{bal:18.2f}{noa:12.0f}")
-        grand_bal += bal; grand_noa += noa
+        grand_bal += bal
+        grand_noa += noa
 
     rw.write_line(' ' + '=' * len(hdr))
     rw.write_line(' ' + f"{'GRAND TOTAL':<25}{grand_bal:18.2f}{grand_noa:12.0f}")
     rw.blank()
 
 
-def summarise(df: pl.DataFrame, class_cols: list) -> pl.DataFrame:
-    """PROC SUMMARY NWAY MISSING: sum NUM_COLS by class_cols."""
-    if df.is_empty():
-        return pl.DataFrame()
+def summarise(df: pd.DataFrame, class_cols: list) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
     agg_v = [c for c in NUM_COLS if c in df.columns]
     if not agg_v:
-        return pl.DataFrame()
-    return df.group_by(class_cols).agg([pl.col(c).sum() for c in agg_v])
+        return pd.DataFrame()
+    return df.groupby(class_cols, as_index=False)[agg_v].sum()
+
 
 # =============================================================================
 # MAIN
@@ -912,112 +837,94 @@ def summarise(df: pl.DataFrame, class_cols: list) -> pl.DataFrame:
 def main():
     print("EIMBNM01: Starting Public Bank Berhad loan summary reports...")
 
-    rv    = get_report_vars()
+    rv = get_report_vars()
     mm_yr = f"{rv['reptmon']}/{rv['ryear']}"
     print(f"  Report date: {rv['reptdate']}  MM={rv['reptmon']} YY={rv['ryear']} WK={rv['nowk']}")
 
-    rw    = ReportWriter()
-    RPT   = 'REPORT ID : EIMBNM01'
+    rw = ReportWriter()
+    RPT = 'REPORT ID : EIMBNM01'
 
-    # =========================================================================
+    # -------------------------------------------------------------------------
     # Build base loan dataset
-    # =========================================================================
+    # -------------------------------------------------------------------------
     loan_base = build_loan_dataset(rv)
 
     # Build DISPAY
     dispay_df = build_dispay(rv, loan_base)
 
     # Build CL_FEE and merge into BNM.LOAN<MM><WK>
-    mm = rv['reptmon']; wk = rv['nowk']
-    bnm_loan = load_parquet(f"{BNM_LOAN_PREFIX}{mm}{wk}.parquet")
-    cl_fee   = build_cl_fee(rv)
+    mm, wk = rv['reptmon'], rv['nowk']
+    bnm_loan = read_sas7bdat(BNM_LOAN_PREFIX.format(reptmon=mm, nowk=wk))
+    cl_fee = build_cl_fee(rv)
     bnm_loan = merge_loan_cl_fee(bnm_loan, cl_fee)
 
     # Build ALM
     alm_df = build_alm(bnm_loan)
 
-    # Merge DISPAY into ALM (WHERE SUBSTR(PRODCD,1,2)='34' OR PRODUCT IN (678,679,993,996))
-    if not dispay_df.is_empty() and not alm_df.is_empty():
-        dp_filt = dispay_df
+    # Merge DISPAY into ALM
+    if not dispay_df.empty and not alm_df.empty:
+        dp_filt = dispay_df.copy()
         if 'prodcd' in dp_filt.columns:
-            dp_filt = dp_filt.filter(
-                (pl.col('prodcd').str.slice(0,2) == '34') |
-                pl.col('product').is_in([678,679,993,996])
-            )
-        dp_sel = dp_filt.select(
-            [c for c in ['acctno','noteno','disburse','repaid'] if c in dp_filt.columns]
-        )
-        alm_df = alm_df.join(dp_sel, on=['acctno','noteno'], how='left', suffix='_dp')
-        for c in ['disburse','repaid']:
+            dp_filt = dp_filt[
+                (dp_filt['prodcd'].astype(str).str[:2] == '34') |
+                dp_filt['product'].isin([678, 679, 993, 996])
+            ]
+        dp_sel = dp_filt[[c for c in ['acctno', 'noteno', 'disburse', 'repaid']
+                          if c in dp_filt.columns]]
+        alm_df = alm_df.merge(dp_sel, on=['acctno', 'noteno'], how='left',
+                              suffixes=('', '_dp'))
+        for c in ['disburse', 'repaid']:
             dc = f"{c}_dp"
             if dc in alm_df.columns:
-                alm_df = alm_df.with_columns(
-                    pl.when(pl.col(dc).is_not_null())
-                      .then(pl.col(dc))
-                      .otherwise(pl.col(c) if c in alm_df.columns else pl.lit(None))
-                      .alias(c)
-                ).drop(dc)
+                alm_df[c] = alm_df[dc].combine_first(
+                    alm_df[c] if c in alm_df.columns else pd.Series(index=alm_df.index)
+                )
+                alm_df = alm_df.drop(columns=dc)
 
-    alm_df = alm_df.with_columns([
-        pl.when(pl.col('repaid')   > 0).then(pl.lit(1)).otherwise(pl.lit(0)).alias('repayno'),
-        pl.when(pl.col('disburse') > 0).then(pl.lit(1)).otherwise(pl.lit(0)).alias('disbno'),
-    ]) if not alm_df.is_empty() else alm_df
+    if not alm_df.empty:
+        alm_df['repayno'] = (alm_df['repaid'] > 0).astype(int)
+        alm_df['disbno']  = (alm_df['disburse'] > 0).astype(int)
 
-    # Apply PRODESC
     alm_df = apply_prodesc(alm_df)
 
-    # =========================================================================
-    # /***********************/
-    # /*   FACTORING LOANS   */
-    # /***********************/
-    # %INC PGM(RDL2PBIF) — build_pbif() imported from RDL2PBIF
+    # -------------------------------------------------------------------------
+    # %INC PGM(RDL2PBIF) — build_pbif
+    # -------------------------------------------------------------------------
     pbif_df = build_pbif(
-        reptdate  = rv['reptdate'],
-        reptyear  = rv['reptyear'],
-        reptmon   = rv['reptmon'],
-        reptday   = rv['reptday'],
-        mdate_int = rv['mdate_int'],
+        reptdate=rv['reptdate'],
+        reptyear=rv['reptyear'],
+        reptmon=rv['reptmon'],
+        reptday=rv['reptday'],
+        mdate_int=rv['mdate_int'],
     )
 
-    # DATA PBIF: SET PBIF; PRODESC='FACTORING'; REPAYNO/DISBNO/NOACCT derivation
-    if not pbif_df.is_empty():
-        rows = pbif_df.to_dicts()
-        for row in rows:
-            row['prodesc'] = 'FACTORING'
-            repaid   = coalesce_f(row.get('repaid'))
-            disburse = coalesce_f(row.get('disburse'))
-            balance  = coalesce_f(row.get('balance'))
-            noacct   = int(row.get('noacct') or 0)
-            row['repayno'] = 1 if repaid   > 0 else 0
-            row['disbno']  = 1 if disburse > 0 else 0
-            if balance > 0 and noacct != 0:
-                row['noacct'] = 1
-        pbif_df = pl.from_dicts(rows)
+    if not pbif_df.empty:
+        pbif_df = pbif_df.copy()
+        pbif_df['prodesc'] = 'FACTORING'
+        pbif_df['repayno'] = (pbif_df['repaid'].fillna(0) > 0).astype(int)
+        pbif_df['disbno']  = (pbif_df['disburse'].fillna(0) > 0).astype(int)
+        pbif_df.loc[(pbif_df['balance'].fillna(0) > 0) & (pbif_df['noacct'] != 0),
+                    'noacct'] = 1
 
-    # =========================================================================
     # DATA ALMNEW: SET ALM PBIF
-    # =========================================================================
-    almnew_df = pl.concat(
-        [f for f in [alm_df, pbif_df] if not f.is_empty()], how='diagonal'
-    ) if any(not f.is_empty() for f in [alm_df, pbif_df]) else alm_df
+    almnew_df = pd.concat([f for f in [alm_df, pbif_df] if not f.empty],
+                          ignore_index=True, sort=False)
 
-    # PROC SUMMARY ALMNEW -> ALMLOAN; PROC PRINT: ALL LOANS
     almloan_df = summarise(almnew_df, ['prodesc'])
-    print_table(almloan_df, rw,
-                f"ALL LOANS AS AT {mm_yr}", RPT)
+    print_table(almloan_df, rw, f"ALL LOANS AS AT {mm_yr}", RPT)
 
-    # =========================================================================
-    # DATA ALM2 COM3: SET ALM; WHERE PRODESC IN (OD RETAIL, OTHERS RETAIL, FLOOR STOCKING)
-    # =========================================================================
-    alm2_rows = []
-    com3_rows = []
-    if not alm_df.is_empty():
-        for row in alm_df.filter(
-            pl.col('prodesc').is_in(['OD RETAIL','OTHERS RETAIL','FLOOR STOCKING LOANS'])
-        ).to_dicts():
-            pd_   = coalesce_s(row.get('prodesc'))
-            prod  = int(row.get('product') or 0)
-            fiss  = coalesce_s(row.get('fisspurp'))
+    # -------------------------------------------------------------------------
+    # DATA ALM2 COM3
+    # -------------------------------------------------------------------------
+    alm2_rows, com3_rows = [], []
+    if not alm_df.empty:
+        sel = alm_df[alm_df['prodesc'].isin(
+            ['OD RETAIL', 'OTHERS RETAIL', 'FLOOR STOCKING LOANS'])]
+        for _, row in sel.iterrows():
+            row = row.to_dict()
+            pd_ = coalesce_s(row.get('prodesc'))
+            prod = int(row.get('product') or 0)
+            fiss = coalesce_s(row.get('fisspurp'))
             tycode = 0
 
             if pd_ == 'OD RETAIL':
@@ -1028,7 +935,6 @@ def main():
                 else:
                     row['prodesc'] = 'TOTAL COMMERCIAL RETAILS'
                 tycode = 1
-                row['tycode'] = tycode
             elif pd_ == 'OTHERS RETAIL':
                 if prod in OTRTLA:
                     row['prodesc'] = 'PERSONAL LOAN'
@@ -1037,106 +943,87 @@ def main():
                 else:
                     row['prodesc'] = 'TOTAL COMMERCIAL RETAILS'
                 tycode = 2
-                row['tycode'] = tycode
             elif pd_ == 'FLOOR STOCKING LOANS':
                 row['prodesc'] = 'TOTAL COMMERCIAL RETAILS'
                 tycode = 3
-                row['tycode'] = tycode
 
+            row['tycode'] = tycode
             alm2_rows.append(row)
-            com3_rows.append(dict(row))  # COM3 is also SET ALM2 later
+            com3_rows.append(dict(row))
 
-    alm2_df = pl.from_dicts(alm2_rows) if alm2_rows else pl.DataFrame()
-    com3_df = pl.from_dicts(com3_rows) if com3_rows else pl.DataFrame()
+    alm2_df = pd.DataFrame(alm2_rows)
+    com3_df = pd.DataFrame(com3_rows)
 
-    # DATA PBIF1: SET PBIF; PRODESC='FACTORING'->'TOTAL COMMERCIAL RETAILS'
-    pbif1_df = pl.DataFrame()
-    if not pbif_df.is_empty():
-        rows = pbif_df.to_dicts()
-        for row in rows:
-            if coalesce_s(row.get('prodesc')) == 'FACTORING':
-                row['prodesc'] = 'TOTAL COMMERCIAL RETAILS'
-        pbif1_df = pl.from_dicts(rows)
+    # DATA PBIF1
+    pbif1_df = pd.DataFrame()
+    if not pbif_df.empty:
+        pbif1_df = pbif_df.copy()
+        pbif1_df.loc[pbif1_df['prodesc'] == 'FACTORING', 'prodesc'] = 'TOTAL COMMERCIAL RETAILS'
 
-    # DATA ALM2NEW ALM2CRL MFRS.ALM_CR: SET ALM2 PBIF1
-    alm2new_src = pl.concat(
-        [f for f in [alm2_df, pbif1_df] if not f.is_empty()], how='diagonal'
-    ) if any(not f.is_empty() for f in [alm2_df, pbif1_df]) else pl.DataFrame()
+    # DATA ALM2NEW ALM2CRL MFRS.ALM_CR
+    alm2new_src = pd.concat([f for f in [alm2_df, pbif1_df] if not f.empty],
+                            ignore_index=True, sort=False)
 
-    # MFRS.ALM_CR
-    if not alm2new_src.is_empty():
-        alm_cr_keep = [c for c in ['acctno','noteno','prodesc','noacct']
+    if not alm2new_src.empty:
+        alm_cr_keep = [c for c in ['acctno', 'noteno', 'prodesc', 'noacct']
                        if c in alm2new_src.columns]
-        alm2new_src.select(alm_cr_keep).write_parquet(MFRS_ALM_CR_PARQUET)
+        write_sas7bdat(alm2new_src[alm_cr_keep], MFRS_ALM_CR_SAS, 'ALM_CR')
 
     alm2crl_rows = []
-    if not alm2new_src.is_empty():
-        for row in alm2new_src.to_dicts():
-            if coalesce_s(row.get('prodesc')) == 'TOTAL COMMERCIAL RETAILS':
-                custcd = coalesce_s(row.get('custcd'))
-                r2     = dict(row)
-                r2['prodesc'] = ('COMMERCIAL RETAIL - IND'
-                                 if custcd in INDIV_CUSTCDS
-                                 else 'COMMERCIAL RETAIL - NON IND')
-                alm2crl_rows.append(r2)
-    alm2crl_df = pl.from_dicts(alm2crl_rows) if alm2crl_rows else pl.DataFrame()
+    if not alm2new_src.empty:
+        for _, row in alm2new_src[alm2new_src['prodesc'] == 'TOTAL COMMERCIAL RETAILS'].iterrows():
+            row = row.to_dict()
+            custcd = coalesce_s(row.get('custcd'))
+            row['prodesc'] = ('COMMERCIAL RETAIL - IND'
+                              if custcd in INDIV_CUSTCDS
+                              else 'COMMERCIAL RETAIL - NON IND')
+            alm2crl_rows.append(row)
+    alm2crl_df = pd.DataFrame(alm2crl_rows)
 
-    # PROC PRINT: RETAIL LOANS
     almloan2_df = summarise(alm2new_src, ['prodesc'])
-    print_table(almloan2_df, rw,
-                f"RETAILS LOANS AS AT {mm_yr}", RPT)
+    print_table(almloan2_df, rw, f"RETAILS LOANS AS AT {mm_yr}", RPT)
 
-    # PROC PRINT: COMMERCIAL RETAIL LOANS
     alm2crl_sum = summarise(alm2crl_df, ['prodesc'])
-    print_table(alm2crl_sum, rw,
-                f"COMMERCIAL RETAIL LOANS AS AT {mm_yr}", RPT)
+    print_table(alm2crl_sum, rw, f"COMMERCIAL RETAIL LOANS AS AT {mm_yr}", RPT)
 
-    # =========================================================================
-    # SME Datasets from ALM
-    # =========================================================================
-    def is_sme(row) -> bool:
-        custcd = coalesce_s(row.get('custcd'))
-        custcx = coalesce_s(row.get('custcx'))
-        dnbfi  = coalesce_s(row.get('dnbfisme'))
-        return custcd in SME_CUSTCDS or custcx in SME_CUSTCDS or dnbfi in DNBFI_VALS
-
-    def is_dbe(row) -> bool:
+    # -------------------------------------------------------------------------
+    # SME Datasets
+    # -------------------------------------------------------------------------
+    def is_dbe(row):
         return (coalesce_s(row.get('custcd')) in DBE_CUSTCDS or
                 coalesce_s(row.get('custcx')) in DBE_CUSTCDS)
 
-    def is_fbe(row) -> bool:
+    def is_fbe(row):
         return coalesce_s(row.get('custcd')) in FBE_CUSTCDS
 
-    def is_dnbfi(row) -> bool:
+    def is_dnbfi(row):
         return coalesce_s(row.get('dnbfisme')) in DNBFI_VALS
 
-    # DATA ALMSME: SET ALM; SME filter
     almsme_rows = []
-    if not alm_df.is_empty():
-        for row in alm_df.to_dicts():
+    if not alm_df.empty:
+        for _, row in alm_df.iterrows():
+            row = row.to_dict()
             custcd = coalesce_s(row.get('custcd'))
-            dnbfi  = coalesce_s(row.get('dnbfisme'))
+            dnbfi = coalesce_s(row.get('dnbfisme'))
             if custcd in SME_CUSTCDS or dnbfi in DNBFI_VALS:
                 almsme_rows.append(row)
-    almsme_df = pl.from_dicts(almsme_rows) if almsme_rows else pl.DataFrame()
+    almsme_df = pd.DataFrame(almsme_rows)
 
-    # DATA SMEFAC: SET PBIF; CUSTCX SME filter
     smefac_rows = []
-    if not pbif_df.is_empty():
-        for row in pbif_df.to_dicts():
-            custcx = coalesce_s(row.get('custcx'))
-            if custcx in SME_CUSTCDS:
+    if not pbif_df.empty:
+        for _, row in pbif_df.iterrows():
+            row = row.to_dict()
+            if coalesce_s(row.get('custcx')) in SME_CUSTCDS:
                 smefac_rows.append(row)
-    smefac_df = pl.from_dicts(smefac_rows) if smefac_rows else pl.DataFrame()
+    smefac_df = pd.DataFrame(smefac_rows)
 
-    # DATA ALMSME DBE FBE DNBFI: SET ALMSME SMEFAC
-    almsme_all_src = pl.concat(
-        [f for f in [almsme_df, smefac_df] if not f.is_empty()], how='diagonal'
-    ) if any(not f.is_empty() for f in [almsme_df, smefac_df]) else pl.DataFrame()
+    almsme_all_src = pd.concat([f for f in [almsme_df, smefac_df] if not f.empty],
+                               ignore_index=True, sort=False)
 
-    almsme_out = []; dbe_out = []; fbe_out = []; dnbfi_out = []
-    if not almsme_all_src.is_empty():
-        for row in almsme_all_src.to_dicts():
+    almsme_out, dbe_out, fbe_out, dnbfi_out = [], [], [], []
+    if not almsme_all_src.empty:
+        for _, row in almsme_all_src.iterrows():
+            row = row.to_dict()
             almsme_out.append(row)
             if is_dbe(row):
                 dbe_out.append(row)
@@ -1145,24 +1032,22 @@ def main():
             elif is_dnbfi(row):
                 dnbfi_out.append(row)
 
-    almsme_full = pl.from_dicts(almsme_out) if almsme_out else pl.DataFrame()
-    dbe_df      = pl.from_dicts(dbe_out)    if dbe_out    else pl.DataFrame()
-    fbe_df      = pl.from_dicts(fbe_out)    if fbe_out    else pl.DataFrame()
-    dnbfi_df    = pl.from_dicts(dnbfi_out)  if dnbfi_out  else pl.DataFrame()
+    almsme_full = pd.DataFrame(almsme_out)
+    dbe_df      = pd.DataFrame(dbe_out)
+    fbe_df      = pd.DataFrame(fbe_out)
+    dnbfi_df    = pd.DataFrame(dnbfi_out)
 
-    # PROC PRINT: SME LOANS
-    almloan_sme = summarise(almsme_full, ['prodesc'])
-    print_table(almloan_sme, rw, f"SME LOANS AS AT {mm_yr}", RPT)
+    print_table(summarise(almsme_full, ['prodesc']), rw,
+                f"SME LOANS AS AT {mm_yr}", RPT)
 
-    # =========================================================================
-    # DATA ALMSME2 DBE2 FBE2 DNBFI2: SET ALM2NEW (retail breakdown)
-    # =========================================================================
-    almsme2_out = []; dbe2_out = []; fbe2_out = []; dnbfi2_out = []
-    if not alm2new_src.is_empty():
-        for row in alm2new_src.to_dicts():
+    # ALMSME2 / DBE2 / FBE2 / DNBFI2
+    almsme2_out, dbe2_out, fbe2_out, dnbfi2_out = [], [], [], []
+    if not alm2new_src.empty:
+        for _, row in alm2new_src.iterrows():
+            row = row.to_dict()
             custcd = coalesce_s(row.get('custcd'))
             custcx = coalesce_s(row.get('custcx'))
-            dnbfi  = coalesce_s(row.get('dnbfisme'))
+            dnbfi = coalesce_s(row.get('dnbfisme'))
             if custcd in DBE_CUSTCDS or custcx in DBE_CUSTCDS:
                 dbe2_out.append(row); almsme2_out.append(row)
             elif custcd in FBE_CUSTCDS:
@@ -1170,100 +1055,80 @@ def main():
             elif dnbfi in DNBFI_VALS:
                 dnbfi2_out.append(row); almsme2_out.append(row)
 
-    almsme2_df = pl.from_dicts(almsme2_out) if almsme2_out else pl.DataFrame()
-    dbe2_df    = pl.from_dicts(dbe2_out)    if dbe2_out    else pl.DataFrame()
-    fbe2_df    = pl.from_dicts(fbe2_out)    if fbe2_out    else pl.DataFrame()
-    dnbfi2_df  = pl.from_dicts(dnbfi2_out)  if dnbfi2_out  else pl.DataFrame()
+    almsme2_df = pd.DataFrame(almsme2_out)
+    dbe2_df    = pd.DataFrame(dbe2_out)
+    fbe2_df    = pd.DataFrame(fbe2_out)
+    dnbfi2_df  = pd.DataFrame(dnbfi2_out)
 
-    # PROC PRINT: RETAIL SME LOANS
     print_table(summarise(almsme2_df, ['prodesc']), rw,
                 f"RETAILS SME LOANS AS AT {mm_yr}", RPT)
-
-    # PROC PRINT: SME DBE LOANS
     print_table(summarise(dbe_df, ['prodesc']), rw,
                 f"OF WHICH : SME DBE LOANS AS AT {mm_yr}", RPT)
-
-    # PROC PRINT: RETAIL SME DBE LOANS
     print_table(summarise(dbe2_df, ['prodesc']), rw,
                 f"OF WHICH : RETAILS SME DBE LOANS AS AT {mm_yr}", RPT)
-
-    # PROC PRINT: SME DNBFI LOANS
     print_table(summarise(dnbfi_df, ['prodesc']), rw,
                 f"OF WHICH : SME DNBFI LOANS AS AT {mm_yr}", RPT)
-
-    # PROC PRINT: RETAIL SME DNBFI LOANS
     print_table(summarise(dnbfi2_df, ['prodesc']), rw,
                 f"OF WHICH : RETAILS SME DNBFI LOANS AS AT {mm_yr}", RPT)
-
-    # PROC PRINT: SME FE LOANS
     print_table(summarise(fbe_df, ['prodesc']), rw,
                 f"OF WHICH : SME FE LOANS AS AT {mm_yr}", RPT)
-
-    # PROC PRINT: RETAIL SME FE LOANS
     print_table(summarise(fbe2_df, ['prodesc']), rw,
                 f"OF WHICH : RETAILS SME FE LOANS AS AT {mm_yr}", RPT)
 
-    # =========================================================================
+    # -------------------------------------------------------------------------
     # BTRADE
-    # =========================================================================
+    # -------------------------------------------------------------------------
     alm_bt_df, almloan_bt_df, mast_bt_df = build_btrade(rv)
 
-    # PROC PRINT: BANK TRADE
     print_table(almloan_bt_df, rw, f"BANK TRADE AS AT {mm_yr}", RPT)
 
-    # SME BANK TRADE
-    almsme_bt = []
-    mastsme_bt = []
-    if not alm_bt_df.is_empty():
-        for row in alm_bt_df.to_dicts():
-            custcd = coalesce_s(row.get('custcd'))
-            dnbfi  = coalesce_s(row.get('dnbfisme'))
-            if custcd in SME_CUSTCDS or dnbfi in DNBFI_VALS:
+    almsme_bt, mastsme_bt = [], []
+    if not alm_bt_df.empty:
+        for _, row in alm_bt_df.iterrows():
+            row = row.to_dict()
+            if (coalesce_s(row.get('custcd')) in SME_CUSTCDS or
+                    coalesce_s(row.get('dnbfisme')) in DNBFI_VALS):
                 almsme_bt.append(row)
-    if not mast_bt_df.is_empty():
-        for row in mast_bt_df.to_dicts():
-            custcd = coalesce_s(row.get('custcd'))
-            dnbfi  = coalesce_s(row.get('dnbfisme'))
-            if custcd in SME_CUSTCDS or dnbfi in DNBFI_VALS:
+    if not mast_bt_df.empty:
+        for _, row in mast_bt_df.iterrows():
+            row = row.to_dict()
+            if (coalesce_s(row.get('custcd')) in SME_CUSTCDS or
+                    coalesce_s(row.get('dnbfisme')) in DNBFI_VALS):
                 mastsme_bt.append(row)
 
-    almsme_bt_df  = pl.from_dicts(almsme_bt)  if almsme_bt  else pl.DataFrame()
-    mastsme_bt_df = pl.from_dicts(mastsme_bt) if mastsme_bt else pl.DataFrame()
+    almsme_bt_df  = pd.DataFrame(almsme_bt)
+    mastsme_bt_df = pd.DataFrame(mastsme_bt)
 
-    bt_grp_key = [c for c in ['prodesc','custcd','dnbfisme']
-                  if c in (almsme_bt_df.columns if not almsme_bt_df.is_empty() else [])]
+    bt_grp_key = [c for c in ['prodesc', 'custcd', 'dnbfisme']
+                  if c in almsme_bt_df.columns]
 
-    almsme_bt_sum = pl.DataFrame(); mastsme_bt_sum = pl.DataFrame()
-    if not almsme_bt_df.is_empty() and bt_grp_key:
-        agg_v2 = [c for c in ['disburse','repaid','balance'] if c in almsme_bt_df.columns]
+    almsme_bt_sum = pd.DataFrame()
+    mastsme_bt_sum = pd.DataFrame()
+    if not almsme_bt_df.empty and bt_grp_key:
+        agg_v2 = [c for c in ['disburse', 'repaid', 'balance'] if c in almsme_bt_df.columns]
         if agg_v2:
-            almsme_bt_sum = almsme_bt_df.group_by(bt_grp_key).agg(
-                [pl.col(c).sum() for c in agg_v2]
-            )
-    if not mastsme_bt_df.is_empty():
-        mbt_grp = [c for c in ['prodesc','custcd','dnbfisme']
+            almsme_bt_sum = almsme_bt_df.groupby(bt_grp_key, as_index=False)[agg_v2].sum()
+    if not mastsme_bt_df.empty:
+        mbt_grp = [c for c in ['prodesc', 'custcd', 'dnbfisme']
                    if c in mastsme_bt_df.columns]
-        agg_v3 = [c for c in ['disbno','repayno','noacct'] if c in mastsme_bt_df.columns]
+        agg_v3 = [c for c in ['disbno', 'repayno', 'noacct'] if c in mastsme_bt_df.columns]
         if mbt_grp and agg_v3:
-            mastsme_bt_sum = mastsme_bt_df.group_by(mbt_grp).agg(
-                [pl.col(c).sum() for c in agg_v3]
-            )
+            mastsme_bt_sum = mastsme_bt_df.groupby(mbt_grp, as_index=False)[agg_v3].sum()
 
-    # Merge ALMSME + MASTSME
-    if not almsme_bt_sum.is_empty() and not mastsme_bt_sum.is_empty():
-        mk = [c for c in bt_grp_key
-              if c in almsme_bt_sum.columns and c in mastsme_bt_sum.columns]
-        almloan_sme_bt = almsme_bt_sum.join(mastsme_bt_sum, on=mk, how='outer')
-    elif not almsme_bt_sum.is_empty():
+    if not almsme_bt_sum.empty and not mastsme_bt_sum.empty:
+        mk = [c for c in bt_grp_key if c in mastsme_bt_sum.columns]
+        almloan_sme_bt = almsme_bt_sum.merge(mastsme_bt_sum, on=mk, how='outer')
+    elif not almsme_bt_sum.empty:
         almloan_sme_bt = almsme_bt_sum
     else:
         almloan_sme_bt = mastsme_bt_sum
 
-    dbebt_rows   = []; dnbfibt_rows = []; fbebt_rows = []
-    if not almloan_sme_bt.is_empty():
-        for row in almloan_sme_bt.to_dicts():
+    dbebt_rows, dnbfibt_rows, fbebt_rows = [], [], []
+    if not almloan_sme_bt.empty:
+        for _, row in almloan_sme_bt.iterrows():
+            row = row.to_dict()
             custcd = coalesce_s(row.get('custcd'))
-            dnbfi  = coalesce_s(row.get('dnbfisme'))
+            dnbfi = coalesce_s(row.get('dnbfisme'))
             if custcd in DBE_CUSTCDS:
                 dbebt_rows.append(row)
             if dnbfi in DNBFI_VALS:
@@ -1271,15 +1136,12 @@ def main():
             if custcd in FBE_CUSTCDS:
                 fbebt_rows.append(row)
 
-    dbebt_df   = pl.from_dicts(dbebt_rows)   if dbebt_rows   else pl.DataFrame()
-    dnbfibt_df = pl.from_dicts(dnbfibt_rows) if dnbfibt_rows else pl.DataFrame()
-    fbebt_df   = pl.from_dicts(fbebt_rows)   if fbebt_rows   else pl.DataFrame()
+    dbebt_df   = pd.DataFrame(dbebt_rows)
+    dnbfibt_df = pd.DataFrame(dnbfibt_rows)
+    fbebt_df   = pd.DataFrame(fbebt_rows)
 
-    # PROC PRINT: SME BANK TRADE
-    almloan_sme_bt_sum = summarise(almloan_sme_bt, ['prodesc'])
-    print_table(almloan_sme_bt_sum, rw, f"SME BANK TRADE AS AT {mm_yr}", RPT)
-
-    # PROC PRINT: SME DBE/DNBFI/FBE BANK TRADE
+    print_table(summarise(almloan_sme_bt, ['prodesc']), rw,
+                f"SME BANK TRADE AS AT {mm_yr}", RPT)
     for df_in, t1 in [
         (dbebt_df,   f"OF WHICH : SME DBE BANK TRADE AS AT {rv['reptmon']}/{rv['reptyear']}"),
         (dnbfibt_df, f"OF WHICH : SME DNBFI BANK TRADE AS AT {rv['reptmon']}/{rv['reptyear']}"),
@@ -1287,146 +1149,91 @@ def main():
     ]:
         print_table(summarise(df_in, ['prodesc']), rw, t1, RPT)
 
-    # =========================================================================
-    # /******************************************************/
-    # /*   FACTORING DATA SECTORS & SUB-SECTORS BREAKDOWN   */
-    # /******************************************************/
-    # format_fisstype() and format_fissgroup() imported from RDL2PBIF
-    if not pbif_df.is_empty():
-        pbifsec_rows = pbif_df.to_dicts()
-        for row in pbifsec_rows:
-            row['sectype']  = format_fisstype(row.get('sectorcd'))
-            row['secgroup'] = format_fissgroup(row.get('sectorcd'))
-        pbifsec_df = pl.from_dicts(pbifsec_rows)
+    # -------------------------------------------------------------------------
+    # Sector breakdowns — format_fisstype / format_fissgroup from RDL2PBIF
+    # -------------------------------------------------------------------------
+    if not pbif_df.empty:
+        pbifsec_df = pbif_df.copy()
+        pbifsec_df['sectype']  = pbifsec_df['sectorcd'].apply(format_fisstype)
+        pbifsec_df['secgroup'] = pbifsec_df['sectorcd'].apply(format_fissgroup)
     else:
-        pbifsec_df = pl.DataFrame()
+        pbifsec_df = pd.DataFrame()
 
     print_tabulate_sector(
-        pbifsec_df, rw,
-        'REPORT ID : EIMBNM01',
+        pbifsec_df, rw, 'REPORT ID : EIMBNM01',
         f"OUTSTANDING FACTORING LOANS BY SECTORS AND SUB-SECTORS AS AT"
         f" {rv['reptmon']}{rv['ryear']}"
     )
 
-    # =========================================================================
-    # /*******************************************************************/
-    # /* M&I COMMERCIAL RETAIL LOANS BY SECTORS & SUB-SECTORS BREAKDOWN  */
-    # /*******************************************************************/
-    # format_fisstype() and format_fissgroup() imported from RDL2PBIF
-    comsec_df = pl.DataFrame()
-    if not alm2_df.is_empty():
-        comsec_rows = []
-        for row in alm2_df.filter(
-            pl.col('prodesc') == 'TOTAL COMMERCIAL RETAILS'
-        ).to_dicts():
-            row['sectype']  = format_fisstype(row.get('sectorcd'))
-            row['secgroup'] = format_fissgroup(row.get('sectorcd'))
-            comsec_rows.append(row)
-        comsec_df = pl.from_dicts(comsec_rows) if comsec_rows else pl.DataFrame()
+    comsec_df = pd.DataFrame()
+    if not alm2_df.empty:
+        comsec_df = alm2_df[alm2_df['prodesc'] == 'TOTAL COMMERCIAL RETAILS'].copy()
+        comsec_df['sectype']  = comsec_df['sectorcd'].apply(format_fisstype)
+        comsec_df['secgroup'] = comsec_df['sectorcd'].apply(format_fissgroup)
 
     print_tabulate_sector(
-        comsec_df, rw,
-        'REPORT ID : EIMBNM01',
+        comsec_df, rw, 'REPORT ID : EIMBNM01',
         f"OUTSTANDING M&I COMMERCIAL RETAIL LOANS BY SECTORS AND"
         f" SUB-SECTORS AS AT {rv['reptmon']}{rv['ryear']}"
     )
 
-    # =========================================================================
-    # /*******************************************************/
-    # /*  RETAIL BILLS BY SECTORS AND SUB-SECTORS BREAKDOWN  */
-    # /*******************************************************/
-    # format_fisstype() and format_fissgroup() imported from RDL2PBIF
-    mast1_df = pl.DataFrame()
-    almbt_sec_df = pl.DataFrame()
-    if not mast_bt_df.is_empty():
-        mast1_rows = []
-        for row in mast_bt_df.filter(
-            pl.col('prodesc') == 'BILLS RETAIL'
-        ).to_dicts():
-            row['sectype']  = format_fisstype(row.get('sectorcd'))
-            row['secgroup'] = format_fissgroup(row.get('sectorcd'))
-            mast1_rows.append(row)
-        mast1_df = pl.from_dicts(mast1_rows) if mast1_rows else pl.DataFrame()
+    mast1_df = pd.DataFrame()
+    almbt_sec_df = pd.DataFrame()
+    if not mast_bt_df.empty:
+        mast1_df = mast_bt_df[mast_bt_df['prodesc'] == 'BILLS RETAIL'].copy()
+        mast1_df['sectype']  = mast1_df['sectorcd'].apply(format_fisstype)
+        mast1_df['secgroup'] = mast1_df['sectorcd'].apply(format_fissgroup)
 
-    if not alm_bt_df.is_empty():
-        almbt_rows2 = []
-        for row in alm_bt_df.filter(
-            pl.col('prodesc') == 'BILLS RETAIL'
-        ).to_dicts():
-            row['sectype']  = format_fisstype(row.get('sectorcd'))
-            row['secgroup'] = format_fissgroup(row.get('sectorcd'))
-            almbt_rows2.append(row)
-        almbt_sec_df = pl.from_dicts(almbt_rows2) if almbt_rows2 else pl.DataFrame()
+    if not alm_bt_df.empty:
+        almbt_sec_df = alm_bt_df[alm_bt_df['prodesc'] == 'BILLS RETAIL'].copy()
+        almbt_sec_df['sectype']  = almbt_sec_df['sectorcd'].apply(format_fisstype)
+        almbt_sec_df['secgroup'] = almbt_sec_df['sectorcd'].apply(format_fissgroup)
 
-    # PROC SUMMARY MAST1 by SECGROUP SECTYPE: NOACCT
-    # PROC SUMMARY ALMBT by SECGROUP SECTYPE: BALANCE
-    # MERGE MAST1(IN=A) ALMBT(IN=B); IF A
-    rebsec_df = pl.DataFrame()
-    if not mast1_df.is_empty():
-        sg_key = [c for c in ['secgroup','sectype'] if c in mast1_df.columns]
-        mast1_sum = mast1_df.group_by(sg_key).agg(
-            pl.col('noacct').sum()
-        ) if 'noacct' in mast1_df.columns else mast1_df
-
-        if not almbt_sec_df.is_empty():
-            sg_key2 = [c for c in ['secgroup','sectype'] if c in almbt_sec_df.columns]
-            almbt_sec_sum = almbt_sec_df.group_by(sg_key2).agg(
-                pl.col('balance').sum()
-            ) if 'balance' in almbt_sec_df.columns else almbt_sec_df
-            rebsec_df = mast1_sum.join(almbt_sec_sum, on=sg_key, how='left')
+    rebsec_df = pd.DataFrame()
+    if not mast1_df.empty:
+        sg_key = [c for c in ['secgroup', 'sectype'] if c in mast1_df.columns]
+        mast1_sum = (mast1_df.groupby(sg_key, as_index=False)['noacct'].sum()
+                     if 'noacct' in mast1_df.columns else mast1_df)
+        if not almbt_sec_df.empty:
+            sg_key2 = [c for c in ['secgroup', 'sectype'] if c in almbt_sec_df.columns]
+            almbt_sec_sum = (almbt_sec_df.groupby(sg_key2, as_index=False)['balance'].sum()
+                             if 'balance' in almbt_sec_df.columns else almbt_sec_df)
+            rebsec_df = mast1_sum.merge(almbt_sec_sum, on=sg_key, how='left')
         else:
             rebsec_df = mast1_sum
 
     print_tabulate_sector(
-        rebsec_df, rw,
-        'REPORT ID : EIMBNM01',
+        rebsec_df, rw, 'REPORT ID : EIMBNM01',
         f"OUTSTANDING RETAIL BILLS BY SECTORS AND SUB-SECTORS"
         f" AS AT {rv['reptmon']}{rv['ryear']}"
     )
 
-    # =========================================================================
-    # /****************************************************************/
-    # /*  COMBINE FACTORING, M&I AND BANK TRADE FOR SECTORS BREAKDOWN  */
-    # /****************************************************************/
-    combysec_df = pl.concat(
-        [f for f in [pbifsec_df, rebsec_df, comsec_df] if not f.is_empty()],
-        how='diagonal'
-    ) if any(not f.is_empty() for f in [pbifsec_df, rebsec_df, comsec_df]) \
-    else pl.DataFrame()
+    combysec_df = pd.concat(
+        [f for f in [pbifsec_df, rebsec_df, comsec_df] if not f.empty],
+        ignore_index=True, sort=False
+    ) if any(not f.empty for f in [pbifsec_df, rebsec_df, comsec_df]) else pd.DataFrame()
 
     print_tabulate_sector(
-        combysec_df, rw,
-        'REPORT ID : EIMBNM01',
+        combysec_df, rw, 'REPORT ID : EIMBNM01',
         f"TOTAL COMMERCIAL RETAIL LOANS BY SECTORS AND SUB-SECTORS"
         f" AS AT {rv['reptmon']}{rv['ryear']}"
     )
 
-    # =========================================================================
-    # /************************************************/
-    # /*  EXTRACT TOTAL COMMERCIAL RETAIL BY PRODUCT  */
-    # /************************************************/
-    # DATA COM1: SET PBIFSEC; TYPE='FIXED LOANS'
-    com1_df = pl.DataFrame()
-    if not pbifsec_df.is_empty():
-        com1_rows = pbifsec_df.to_dicts()
-        for row in com1_rows:
-            row['type'] = 'FIXED LOANS'
-        com1_df = pl.from_dicts(com1_rows)
+    # -------------------------------------------------------------------------
+    # Total Commercial Retail by product
+    # -------------------------------------------------------------------------
+    com1_df = pbifsec_df.copy() if not pbifsec_df.empty else pd.DataFrame()
+    if not com1_df.empty:
+        com1_df['type'] = 'FIXED LOANS'
 
-    # DATA COM2: SET REBSEC; TYPE='BANKTRADE'
-    com2_df = pl.DataFrame()
-    if not rebsec_df.is_empty():
-        com2_rows = rebsec_df.to_dicts()
-        for row in com2_rows:
-            row['type'] = 'BANKTRADE'
-        com2_df = pl.from_dicts(com2_rows)
+    com2_df = rebsec_df.copy() if not rebsec_df.empty else pd.DataFrame()
+    if not com2_df.empty:
+        com2_df['type'] = 'BANKTRADE'
 
-    # DATA COM3: SET COM3; WHERE PRODESC='TOTAL COMMERCIAL RETAILS'; TYPE by TYCODE
     com3_final_rows = []
-    if not com3_df.is_empty():
-        for row in com3_df.filter(
-            pl.col('prodesc') == 'TOTAL COMMERCIAL RETAILS'
-        ).to_dicts():
+    if not com3_df.empty:
+        for _, row in com3_df[com3_df['prodesc'] == 'TOTAL COMMERCIAL RETAILS'].iterrows():
+            row = row.to_dict()
             tycode = int(row.get('tycode') or 0)
             if tycode == 1:
                 row['type'] = 'OD'
@@ -1437,24 +1244,22 @@ def main():
             else:
                 row['type'] = ''
             com3_final_rows.append(row)
-    com3_final_df = pl.from_dicts(com3_final_rows) if com3_final_rows else pl.DataFrame()
+    com3_final_df = pd.DataFrame(com3_final_rows)
 
-    combyprod_df = pl.concat(
-        [f for f in [com1_df, com2_df, com3_final_df] if not f.is_empty()],
-        how='diagonal'
-    ) if any(not f.is_empty() for f in [com1_df, com2_df, com3_final_df]) \
-    else pl.DataFrame()
+    combyprod_df = pd.concat(
+        [f for f in [com1_df, com2_df, com3_final_df] if not f.empty],
+        ignore_index=True, sort=False
+    ) if any(not f.empty for f in [com1_df, com2_df, com3_final_df]) else pd.DataFrame()
 
     print_tabulate_product(
-        combyprod_df, rw,
-        'REPORT ID : EIMBNM01',
+        combyprod_df, rw, 'REPORT ID : EIMBNM01',
         f"TOTAL COMMERCIAL RETAIL LOANS BY TYPE OF PRODUCT"
         f" AS AT {rv['reptmon']}{rv['ryear']}"
     )
 
-    # =========================================================================
+    # -------------------------------------------------------------------------
     # Flush report
-    # =========================================================================
+    # -------------------------------------------------------------------------
     rw.flush(REPORT_TXT)
     print(f"  Written: {REPORT_TXT}")
     print("EIMBNM01: Processing complete.")
@@ -1462,11 +1267,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-all inputs are in sas7bdat sas dataset and need to be in all lowercase.
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in sas7bdat (if needed) and TEXT file. 
-write out using saspy for sas7bdat
