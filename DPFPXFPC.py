@@ -1,31 +1,17 @@
-# =============================================================================
-# PATH CONFIGURATION
-#
-# Layout:
-#   - MFRS .sas7bdat outputs : /sas/.../XMIS/input/prod/EIMBNM01/mfrs/
-#   - TEXT report            : /sas/.../XMIS/output/EIMBNM01/eimbnm01_report.txt
-#   - Inputs (loan, lnwof, lnwod, dispay, btrad, lncomm, lnfee): unchanged.
-# =============================================================================
+SAS Connection established. Subprocess id is 3022090
 
-# --- Inputs (unchanged) -----------------------------------------------------
-BNM_LOAN_PREFIX       = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/loan{reptmon}{nowk}.sas7bdat"
-BNM_LNWOF_PREFIX      = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/lnwof{reptmon}{nowk}.sas7bdat"
-BNM_LNWOD_PREFIX      = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/lnwod{reptmon}{nowk}.sas7bdat"
-SASD_LOAN_PREFIX      = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/loan{reptmon}.sas7bdat"
-DISPAY_PREFIX         = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/dispaymth{reptmon}.sas7bdat"
-LOAN_LNCOMM_SAS       = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m{reptmon}.sas7bdat"
-FEE_LNFEE_PREFIX      = "/stgsrcsys/host/uat/lnfee{reptmon}{nowk}.sas7bdat"
-BTBNM_BTRAD_PREFIX    = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/btrad{reptmon}{nowk}{reptyear}.sas7bdat"
-
-# --- MFRS .sas7bdat outputs (under input/prod) ------------------------------
-MFRS_DIR              = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/mfrs"
-MFRS_MAST_BR_SAS      = os.path.join(MFRS_DIR, "mast_br.sas7bdat")
-MFRS_ALM_CR_SAS       = os.path.join(MFRS_DIR, "alm_cr.sas7bdat")
-
-# --- TEXT report (under output) ---------------------------------------------
-REPORT_OUTPUT_DIR     = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01"
-REPORT_TXT            = os.path.join(REPORT_OUTPUT_DIR, "eimbnm01_report.txt")
-
-# --- Ensure both output directories exist -----------------------------------
-os.makedirs(MFRS_DIR, exist_ok=True)
-os.makedirs(REPORT_OUTPUT_DIR, exist_ok=True)
+EIMBNM01: Starting Public Bank Berhad loan summary reports...
+  Report date: 2026-08-31  MM=08 YY=2026 WK=4
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMBNM01.py", line 1288, in <module>
+    main()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMBNM01.py", line 932, in main
+    almnew_df = pd.concat([f for f in [alm_df, pbif_df] if not f.empty],
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/reshape/concat.py", line 382, in concat
+    op = _Concatenator(
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/reshape/concat.py", line 445, in __init__
+    objs, keys = self._clean_keys_and_objs(objs, keys)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/reshape/concat.py", line 507, in _clean_keys_and_objs
+    raise ValueError("No objects to concatenate")
+ValueError: No objects to concatenate
+SAS Connection terminated. Subprocess id was 3022090
