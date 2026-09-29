@@ -1,8 +1,4 @@
-    pbif_pl = build_pbif(rv['reptdate'])
-
-    # Convert Polars -> Pandas (and normalise column case + a few dtypes)
-    if pbif_pl is None or pbif_pl.is_empty():
-        pbif_df = pd.DataFrame()
-    else:
-        pbif_df = pbif_pl.to_pandas()
-        pbif_df.columns = [c.lower() for c in pbif_df.columns]
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIMBNM01.py", line 68, in <module>
+    REPORT_TXT            = os.path.join(input/OUTPUT_DIR, "eimbnm01_report.txt")
+TypeError: unsupported operand type(s) for /: 'builtin_function_or_method' and 'str'
