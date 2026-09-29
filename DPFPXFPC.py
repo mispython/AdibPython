@@ -45,3 +45,41 @@ SAS Connection established. Subprocess id is 3092900
   [+  186.4s] STAGE 3: read BNM_LOAN + build_cl_fee + merge
   [+  241.9s] bnm_loan raw rows: 2,022,747
   [+  241.9s]   reading LNFEE ...
+  [+  988.4s]   LNFEE raw: 40,019,853 rows
+  [+  994.9s]   LNFEE CL aggregated:          9 rows
+  [+ 1001.9s]   CL_FEE merged:  2,022,747 rows, clfee sum = 497,836.90
+  [+ 1002.0s] bnm_loan rows: 2,022,747
+  [+ 1002.0s] STAGE 4: build_alm
+  [+ 1002.0s]   reading LNCOMM ...
+  [+ 1008.1s]   LNCOMM raw:  1,066,036 rows
+  [+ 1011.9s]   ALM pre-filter:  2,022,747 rows
+  [+ 1013.9s]   ALM post-base mask:  2,002,471 rows
+  [+ 1018.1s]   ALM main:  2,002,471  ALMBT:          0
+  [+ 1020.3s] alm_df rows: 2,002,471
+  [+ 1020.3s] STAGE 5: merge DISPAY into ALM
+  [+ 1028.5s] alm_df rows after DISPAY merge: 2,002,471
+  [+ 1028.5s] STAGE 6: apply_prodesc
+  [+ 1035.6s] alm_df rows after prodesc: 2,002,471
+  [+ 1035.6s] STAGE 7: build_pbif (RDL2PBIF)
+  [+ 1035.7s] pbif_df rows: 0
+  [+ 1035.7s] STAGE 8: ALL LOANS summary
+  [+ 1035.7s] almnew_df rows: 2,002,471
+  [+ 1035.9s] STAGE 9: ALM2 / COM3 / ALM2NEW
+  [+ 1036.5s] alm2new_src rows: 238,021
+  [+ 1036.5s]   writing MFRS.ALM_CR ...
+  [+ 1037.8s]   MFRS.ALM_CR written: 238,021 rows
+  [+ 1038.1s] STAGE 10: SME subsets
+  [+ 1042.9s] STAGE 11: build_btrade
+  [+ 1042.9s]   reading BTRAD ...
+  [+ 1044.8s]   BTRAD raw:     46,739 rows
+  [+ 1044.8s]   BTRAD after DIRCTIND filter:     23,851
+  [+ 1044.9s]   BTRAD (prodcd 34*):     23,851
+  [+ 1045.2s]   writing MFRS.MAST_BR ...
+  [+ 1045.3s]   MFRS.MAST_BR written:      3,796 rows
+  [+ 1045.3s] alm_bt_df rows: 23,851  mast_bt_df rows: 3,796
+  [+ 1045.4s] STAGE 12: sector breakdowns
+  [+ 1046.3s] STAGE 13: Total Commercial Retail by product
+  [+ 1046.6s] STAGE 14: flush report
+  [+ 1046.6s] Written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/eimbnm01_report.txt
+  [+ 1046.6s] EIMBNM01: Processing complete.
+SAS Connection terminated. Subprocess id was 3092900
