@@ -1,85 +1,414 @@
-SAS Connection established. Subprocess id is 3092900
+some of the production output for sectfiss:
 
-  [+    0.0s] EIMBNM01: Starting Public Bank Berhad loan summary reports...
-  [+    0.0s] Report date: 2026-08-31  MM=08 YY=2026 WK=4  MM2=07
-  [+    0.0s] input check: SASD_LOAN       exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/loan08.sas7bdat
-  [+    0.0s] input check: BNM_LOAN        exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/loan084.sas7bdat
-  [+    0.0s] input check: BNM_LNWOF       exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/lnwof084.sas7bdat
-  [+    0.0s] input check: BNM_LNWOD       exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/lnwod084.sas7bdat
-  [+    0.0s] input check: BNM_LNWOF_PREV  exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/lnwof074.sas7bdat
-  [+    0.0s] input check: BNM_LNWOD_PREV  exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/lnwod074.sas7bdat
-  [+    0.0s] input check: BNM_LOAN_PREV   exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/loan074.sas7bdat
-  [+    0.0s] input check: DISPAY          exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/dispaymth08.sas7bdat
-  [+    0.0s] input check: BTRAD           exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/btrad08426.sas7bdat
-  [+    0.0s] input check: LNCOMM          exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBLSMEZ/enrh_ln_comm_m08.sas7bdat
-  [+    0.0s] input check: LNFEE           exists=True   /stgsrcsys/host/uat/maa/lnfee084.sas7bdat
-  [+    0.0s] input check: MFRS_DIR        exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMBNM01/mfrs
-  [+    0.0s] input check: REPORT_DIR      exists=True   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01
-  [+    0.0s] STAGE 1: build_loan_dataset
-  [+    0.0s]   reading SASD_LOAN ...
-  [+    7.1s]   SASD_LOAN:  2,034,697 rows
-  [+    7.1s]   reading BNM_LOAN ...
-  [+   57.8s]   BNM_LOAN:  2,022,747 rows
-  [+   57.8s]   reading BNM_LNWOF ...
-  [+   60.4s]   BNM_LNWOF:     74,269 rows
-  [+   60.4s]   reading BNM_LNWOD ...
-  [+   60.4s]   BNM_LNWOD:          0 rows
-  [+   60.4s]   reading BNM_LNWOF (prev) ...
-  [+   62.9s]   BNM_LNWOF(prev):     74,377 rows
-  [+   62.9s]   reading BNM_LNWOD (prev) ...
-  [+   62.9s]   BNM_LNWOD(prev):          0 rows
-  [+   62.9s]   reading BNM_LOAN (prev) ...
-  [+  116.4s]   BNM_LOAN(prev):  2,018,558 rows
-  [+  118.0s]   merging 5 frames (SAS MERGE emulation) ...
-  [+  118.4s]   merge step 2/5:     86,327 rows
-  [+  135.8s]   merge step 3/5:  2,097,327 rows
-  [+  157.0s]   merge step 4/5:  2,124,042 rows
-  [+  172.2s]   merge step 5/5:  2,124,042 rows
-  [+  173.1s] loan_base rows: 2,124,042
-  [+  173.1s] STAGE 2: build_dispay
-  [+  173.1s]   reading DISPAY ...
-  [+  182.8s]   DISPAY raw:  1,821,574 rows
-  [+  183.3s]   DISPAY filtered:  1,821,388 rows
-  [+  186.3s]   DISPAY merged:  1,821,388 rows
-  [+  186.4s] dispay_df rows: 1,821,388
-  [+  186.4s] STAGE 3: read BNM_LOAN + build_cl_fee + merge
-  [+  241.9s] bnm_loan raw rows: 2,022,747
-  [+  241.9s]   reading LNFEE ...
-  [+  988.4s]   LNFEE raw: 40,019,853 rows
-  [+  994.9s]   LNFEE CL aggregated:          9 rows
-  [+ 1001.9s]   CL_FEE merged:  2,022,747 rows, clfee sum = 497,836.90
-  [+ 1002.0s] bnm_loan rows: 2,022,747
-  [+ 1002.0s] STAGE 4: build_alm
-  [+ 1002.0s]   reading LNCOMM ...
-  [+ 1008.1s]   LNCOMM raw:  1,066,036 rows
-  [+ 1011.9s]   ALM pre-filter:  2,022,747 rows
-  [+ 1013.9s]   ALM post-base mask:  2,002,471 rows
-  [+ 1018.1s]   ALM main:  2,002,471  ALMBT:          0
-  [+ 1020.3s] alm_df rows: 2,002,471
-  [+ 1020.3s] STAGE 5: merge DISPAY into ALM
-  [+ 1028.5s] alm_df rows after DISPAY merge: 2,002,471
-  [+ 1028.5s] STAGE 6: apply_prodesc
-  [+ 1035.6s] alm_df rows after prodesc: 2,002,471
-  [+ 1035.6s] STAGE 7: build_pbif (RDL2PBIF)
-  [+ 1035.7s] pbif_df rows: 0
-  [+ 1035.7s] STAGE 8: ALL LOANS summary
-  [+ 1035.7s] almnew_df rows: 2,002,471
-  [+ 1035.9s] STAGE 9: ALM2 / COM3 / ALM2NEW
-  [+ 1036.5s] alm2new_src rows: 238,021
-  [+ 1036.5s]   writing MFRS.ALM_CR ...
-  [+ 1037.8s]   MFRS.ALM_CR written: 238,021 rows
-  [+ 1038.1s] STAGE 10: SME subsets
-  [+ 1042.9s] STAGE 11: build_btrade
-  [+ 1042.9s]   reading BTRAD ...
-  [+ 1044.8s]   BTRAD raw:     46,739 rows
-  [+ 1044.8s]   BTRAD after DIRCTIND filter:     23,851
-  [+ 1044.9s]   BTRAD (prodcd 34*):     23,851
-  [+ 1045.2s]   writing MFRS.MAST_BR ...
-  [+ 1045.3s]   MFRS.MAST_BR written:      3,796 rows
-  [+ 1045.3s] alm_bt_df rows: 23,851  mast_bt_df rows: 3,796
-  [+ 1045.4s] STAGE 12: sector breakdowns
-  [+ 1046.3s] STAGE 13: Total Commercial Retail by product
-  [+ 1046.6s] STAGE 14: flush report
-  [+ 1046.6s] Written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMBNM01/eimbnm01_report.txt
-  [+ 1046.6s] EIMBNM01: Processing complete.
-SAS Connection terminated. Subprocess id was 3092900
+REPORT ID : EIMBNM01                                                                          22:01 Wednesday, September 2, 2026  13 
+OUTSTANDING M&I COMMERCIAL RETAIL LOANS BY SECTORS AND SUB-SECTORS AS AT 082026                                                      
+                                                                                                                                     
++-----------------------+------------+----------+                                                                                    
+|SECTFISS               |            |  NO. OF  |                                                                                    
+|                       |   AMOUNT   |   ACCT   |                                                                                    
++-----------+-----------+------------+----------+                                                                                    
+|1000       |1100       |774044358.60|      1522|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |1200       | 63986978.60|       134|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |1300       | 71304179.65|       177|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |1400       | 15962215.98|        35|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |SUB-TOTAL  |925297732.84|      1868|                                                                                    
++-----------+-----------+------------+----------+                                                                                    
+|2000       |2100       |   612713.79|         2|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |2200       | 12137325.88|        20|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |2300       |  2199511.47|         7|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |2900       | 70540467.00|       151|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |SUB-TOTAL  | 85490018.13|       180|                                                                                    
++-----------+-----------+------------+----------+                                                                                    
+|3000       |3100       |981347366.10|      1201|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3120       |  1452946.96|         3|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3210       | 74979456.47|       123|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3220       | 69108853.37|       135|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3230       | 16869471.09|        38|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3240       |141788704.60|       263|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3250       |314177798.90|       336|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3260       |389309544.56|       545|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3310       |491092037.94|       438|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3430       | 18140295.54|        19|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3550       |908890045.99|       971|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3610       |254810439.06|       475|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3700       |464891293.15|       561|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3800       |893978949.20|       953|                                                                                    
+|           +-----------+------------+----------+                                                                                    
+|           |3825       |  5215443.67|         5|                                                                                    
++-----------+-----------+------------+----------+                                                                                    
+                                                                                                                                     
+(Continued)
+
+
+
+while python output:
+
+1REPORT ID : EIMBNM01
+ OUTSTANDING M&I COMMERCIAL RETAIL LOANS BY SECTORS AND SUB-SECTORS AS AT 082026
+ 
+  SECTFISS                             AMOUNT NO. OF ACCT
+  -------------------------------------------------------
+    1111                           7419747.21           0
+    SUB-TOTAL                      7419747.21           0
+    1112                           1176644.96           0
+    SUB-TOTAL                      1176644.96           0
+    1113                         449027928.94           0
+    SUB-TOTAL                    449027928.94           0
+    1114                           1443080.76           0
+    SUB-TOTAL                      1443080.76           0
+    1115                           2123214.72           0
+    SUB-TOTAL                      2123214.72           0
+    1116                            190410.30           0
+    SUB-TOTAL                       190410.30           0
+    1117                         123775647.73           0
+    SUB-TOTAL                    123775647.73           0
+    1119                          16436366.52           0
+    SUB-TOTAL                     16436366.52           0
+    1120                         133073347.24           0
+    SUB-TOTAL                    133073347.24           0
+    1130                          39377970.23           0
+    SUB-TOTAL                     39377970.23           0
+    1200                          63986978.60           0
+    SUB-TOTAL                     63986978.60           0
+    1300                          71304179.65           0
+    SUB-TOTAL                     71304179.65           0
+    1400                          15962215.98           0
+    SUB-TOTAL                     15962215.98           0
+    2100                            612713.79           0
+    SUB-TOTAL                       612713.79           0
+    2210                           1627100.77           0
+    SUB-TOTAL                      1627100.77           0
+    2220                          10510225.11           0
+    SUB-TOTAL                     10510225.11           0
+    2302                           1390170.68           0
+    SUB-TOTAL                      1390170.68           0
+    2303                            809340.79           0
+    SUB-TOTAL                       809340.79           0
+    2900                          70540467.00           0
+    SUB-TOTAL                     70540467.00           0
+    3110                         146891429.44           0
+    SUB-TOTAL                    146891429.44           0
+    3111                          14029560.13           0
+    SUB-TOTAL                     14029560.13           0
+    3112                          76507329.01           0
+    SUB-TOTAL                     76507329.01           0
+    3113                         100429675.13           0
+    SUB-TOTAL                    100429675.13           0
+    3114                         641099863.60           0
+    SUB-TOTAL                    641099863.60           0
+    3115                           2389508.79           0
+    SUB-TOTAL                      2389508.79           0
+    3120                           1452946.96           0
+    SUB-TOTAL                      1452946.96           0
+    3211                          33242088.98           0
+    SUB-TOTAL                     33242088.98           0
+    3212                           3320827.41           0
+    SUB-TOTAL                      3320827.41           0
+    3219                          38416540.08           0
+    SUB-TOTAL                     38416540.08           0
+    3221                          69108853.37           0
+    SUB-TOTAL                     69108853.37           0
+    3231                           4611081.17           0
+    SUB-TOTAL                      4611081.17           0
+    3232                          12258389.92           0
+    SUB-TOTAL                     12258389.92           0
+    3241                          60838502.73           0
+    SUB-TOTAL                     60838502.73           0
+    3242                          80950201.87           0
+    SUB-TOTAL                     80950201.87           0
+    3250                         314177798.90           0
+    SUB-TOTAL                    314177798.90           0
+    3271                          29442132.30           0
+    SUB-TOTAL                     29442132.30           0
+    3272                           1189910.63           0
+    SUB-TOTAL                      1189910.63           0
+    3273                          12385388.37           0
+    SUB-TOTAL                     12385388.37           0
+    3280                         346292113.27           0
+    SUB-TOTAL                    346292113.27           0
+    3311                         104138712.00           0
+    SUB-TOTAL                    104138712.00           0
+    3312                          30758013.81           0
+    SUB-TOTAL                     30758013.81           0
+    3313                         356195312.14           0
+    SUB-TOTAL                    356195312.14           0
+    3431                           3649415.50           0
+    SUB-TOTAL                      3649415.50           0
+    3432                          14490880.04           0
+    SUB-TOTAL                     14490880.04           0
+    3551                         118391547.03           0
+    SUB-TOTAL                    118391547.03           0
+    3552                         790498498.96           0
+    SUB-TOTAL                    790498498.96           0
+    3611                          60543540.07           0
+    SUB-TOTAL                     60543540.07           0
+    3619                         194266898.98           0
+    SUB-TOTAL                    194266898.98           0
+    3710                         291107782.11           0
+    SUB-TOTAL                    291107782.11           0
+    3720                         142727987.81           0
+    SUB-TOTAL                    142727987.81           0
+    3731                          24786353.20           0
+    SUB-TOTAL                     24786353.20           0
+    3732                           6269170.04           0
+    SUB-TOTAL                      6269170.04           0
+    3811                         146122225.27           0
+    SUB-TOTAL                    146122225.27           0
+    3813                         173575094.20           0
+    SUB-TOTAL                    173575094.20           0
+    3814                          98451991.60           0
+    SUB-TOTAL                     98451991.60           0
+    3819                         475829638.13           0
+    SUB-TOTAL                    475829638.13           0
+    3825                           5215443.67           0
+    SUB-TOTAL                      5215443.67           0
+    3832                         145115018.27           0
+    SUB-TOTAL                    145115018.27           0
+    3833                          69415075.86           0
+    SUB-TOTAL                     69415075.86           0
+    3834                         280147784.23           0
+    SUB-TOTAL                    280147784.23           0
+    3835                           9227371.19           0
+    SUB-TOTAL                      9227371.19           0
+    3842                          83087955.79           0
+    SUB-TOTAL                     83087955.79           0
+    3843                           1122466.55           0
+    SUB-TOTAL                      1122466.55           0
+    3844                           1840343.90           0
+    SUB-TOTAL                      1840343.90           0
+    3851                          64019638.12           0
+    SUB-TOTAL                     64019638.12           0
+    3852                           8094399.52           0
+    SUB-TOTAL                      8094399.52           0
+    3861                          35309654.88           0
+    SUB-TOTAL                     35309654.88           0
+    3862                          32524253.84           0
+    SUB-TOTAL                     32524253.84           0
+    3863                          26969775.01           0
+    SUB-TOTAL                     26969775.01           0
+    3864                             19033.68           0
+    SUB-TOTAL                        19033.68           0
+    3865                          30980490.25           0
+    SUB-TOTAL                     30980490.25           0
+    3866                          63062216.47           0
+    SUB-TOTAL                     63062216.47           0
+    3871                           5419345.57           0
+    SUB-TOTAL                      5419345.57           0
+    3872                          32818572.57           0
+    SUB-TOTAL                     32818572.57           0
+    3873                         183632178.64           0
+    SUB-TOTAL                    183632178.64           0
+    3891                          23609079.74           0
+    SUB-TOTAL                     23609079.74           0
+    3894                          22030856.53           0
+    SUB-TOTAL                     22030856.53           0
+    3911                         413421303.13           0
+    SUB-TOTAL                    413421303.13           0
+    3919                         323511915.20           0
+    SUB-TOTAL                    323511915.20           0
+    3953                           2774666.33           0
+    SUB-TOTAL                      2774666.33           0
+    3956                          26442452.25           0
+    SUB-TOTAL                     26442452.25           0
+    3957                          13332209.93           0
+    SUB-TOTAL                     13332209.93           0
+    3960                           3179604.92           0
+    SUB-TOTAL                      3179604.92           0
+    4010                          10853136.66           0
+    SUB-TOTAL                     10853136.66           0
+    4020                           5390447.74           0
+    SUB-TOTAL                      5390447.74           0
+    4030                           1660686.05           0
+    SUB-TOTAL                      1660686.05           0
+    5001                        2229396768.45           0
+    SUB-TOTAL                   2229396768.45           0
+    5002                           3452017.98           0
+    SUB-TOTAL                      3452017.98           0
+    5003                         162415103.15           0
+    SUB-TOTAL                    162415103.15           0
+    5004                          92168163.29           0
+    SUB-TOTAL                     92168163.29           0
+    5006                         639053175.92           0
+    SUB-TOTAL                    639053175.92           0
+    5008                         949912262.55           0
+    SUB-TOTAL                    949912262.55           0
+    5020                          46506793.95           0
+    SUB-TOTAL                     46506793.95           0
+    5030                        1003608262.09           0
+    SUB-TOTAL                   1003608262.09           0
+    5040                         671461540.27           0
+    SUB-TOTAL                    671461540.27           0
+    5050                         101351879.00           0
+    SUB-TOTAL                    101351879.00           0
+    5999                         406089615.00           0
+    SUB-TOTAL                    406089615.00           0
+    6110                        4970374186.90           0
+    SUB-TOTAL                   4970374186.90           0
+    6120                        9983961983.82           0
+    SUB-TOTAL                   9983961983.82           0
+    6130                        5305186635.28           0
+    SUB-TOTAL                   5305186635.28           0
+    6310                         931984597.68           0
+    SUB-TOTAL                    931984597.68           0
+    6320                         694068212.16           0
+    SUB-TOTAL                    694068212.16           0
+    7111                           2232867.62           0
+    SUB-TOTAL                      2232867.62           0
+    7112                          13183459.72           0
+    SUB-TOTAL                     13183459.72           0
+    7113                          30676445.46           0
+    SUB-TOTAL                     30676445.46           0
+    7114                           5851980.35           0
+    SUB-TOTAL                      5851980.35           0
+    7115                          20453801.60           0
+    SUB-TOTAL                     20453801.60           0
+    7116                         412825585.75           0
+    SUB-TOTAL                    412825585.75           0
+    7117                            512878.19           0
+    SUB-TOTAL                       512878.19           0
+    7121                           5309495.66           0
+    SUB-TOTAL                      5309495.66           0
+    7122                          27958020.77           0
+    SUB-TOTAL                     27958020.77           0
+    7123                            529320.16           0
+    SUB-TOTAL                       529320.16           0
+    7124                           2765542.06           0
+    SUB-TOTAL                      2765542.06           0
+    7132                            390948.94           0
+    SUB-TOTAL                       390948.94           0
+    7133                           1459771.88           0
+    SUB-TOTAL                      1459771.88           0
+    7134                           3125363.64           0
+    SUB-TOTAL                      3125363.64           0
+    7191                         294944775.81           0
+    SUB-TOTAL                    294944775.81           0
+    7192                         129594548.88           0
+    SUB-TOTAL                    129594548.88           0
+    7193                          18327234.89           0
+    SUB-TOTAL                     18327234.89           0
+    7199                         254524487.06           0
+    SUB-TOTAL                    254524487.06           0
+    7210                          31679834.23           0
+    SUB-TOTAL                     31679834.23           0
+    7220                          65570555.92           0
+    SUB-TOTAL                     65570555.92           0
+    8110                         282258855.21           0
+    SUB-TOTAL                    282258855.21           0
+    8120                          29934308.64           0
+    SUB-TOTAL                     29934308.64           0
+    8130                          51888765.40           0
+    SUB-TOTAL                     51888765.40           0
+    8310                       12663919951.07           0
+    SUB-TOTAL                  12663919951.07           0
+    8320                           8380091.59           0
+    SUB-TOTAL                      8380091.59           0
+    8321                           7156059.19           0
+    SUB-TOTAL                      7156059.19           0
+    8331                          19764419.20           0
+    SUB-TOTAL                     19764419.20           0
+    8332                         155710006.84           0
+    SUB-TOTAL                    155710006.84           0
+    8333                          13606072.91           0
+    SUB-TOTAL                     13606072.91           0
+    8340                         155445938.53           0
+    SUB-TOTAL                    155445938.53           0
+    8411                           1839038.67           0
+    SUB-TOTAL                      1839038.67           0
+    8412                           5534648.85           0
+    SUB-TOTAL                      5534648.85           0
+    8413                           6374464.91           0
+    SUB-TOTAL                      6374464.91           0
+    8414                            609574.62           0
+    SUB-TOTAL                       609574.62           0
+    8415                             31288.40           0
+    SUB-TOTAL                        31288.40           0
+    8416                            149592.11           0
+    SUB-TOTAL                       149592.11           0
+    8910                         128202056.74           0
+    SUB-TOTAL                    128202056.74           0
+    8911                           4769754.64           0
+    SUB-TOTAL                      4769754.64           0
+    8912                         210246901.89           0
+    SUB-TOTAL                    210246901.89           0
+    8913                            251238.71           0
+    SUB-TOTAL                       251238.71           0
+    8914                         166413938.82           0
+    SUB-TOTAL                    166413938.82           0
+    8921                          25082923.12           0
+    SUB-TOTAL                     25082923.12           0
+    8922                         508190665.16           0
+    SUB-TOTAL                    508190665.16           0
+    8931                            874228.00           0
+    SUB-TOTAL                       874228.00           0
+    8932                          96567932.49           0
+    SUB-TOTAL                     96567932.49           0
+    8991                          19151696.86           0
+    SUB-TOTAL                     19151696.86           0
+    8999                         602885651.98           0
+    SUB-TOTAL                    602885651.98           0
+    9101                          16024618.08           0
+    SUB-TOTAL                     16024618.08           0
+    9201                         413478683.43           0
+    SUB-TOTAL                    413478683.43           0
+    9202                          13315968.04           0
+    SUB-TOTAL                     13315968.04           0
+    9203                          14418011.76           0
+    SUB-TOTAL                     14418011.76           0
+    9311                          23527372.72           0
+    SUB-TOTAL                     23527372.72           0
+    9312                          17832609.10           0
+    SUB-TOTAL                     17832609.10           0
+    9313                          31377021.98           0
+    SUB-TOTAL                     31377021.98           0
+    9314                         144922986.66           0
+    SUB-TOTAL                    144922986.66           0
+    9410                         188582751.66           0
+    SUB-TOTAL                    188582751.66           0
+    9420                          21184075.31           0
+    SUB-TOTAL                     21184075.31           0
+    9430                            344153.60           0
+    SUB-TOTAL                       344153.60           0
+    9431                          42819398.13           0
+    SUB-TOTAL                     42819398.13           0
+    9433                            482959.97           0
+    SUB-TOTAL                       482959.97           0
+    9435                           7308657.96           0
+    SUB-TOTAL                      7308657.96           0
+    9440                          11618371.17           0
+    SUB-TOTAL                     11618371.17           0
+    9450                          40652424.06           0
+    SUB-TOTAL                     40652424.06           0
+    9499                         369455063.03           0
+    SUB-TOTAL                    369455063.03           0
+    9500                            445224.54           0
+    SUB-TOTAL                       445224.54           0
+    9700                       34930656733.52           0
+    SUB-TOTAL                  34930656733.52           0
+    9999                          40843921.91           0
+    SUB-TOTAL                     40843921.91           0
+  =======================================================
+  GRAND TOTAL                  88963291517.67           0
+
+
+just different in formatting
