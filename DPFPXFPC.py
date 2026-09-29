@@ -7,12 +7,17 @@ Purpose:      Process PBIF (Public Bank Invoice Financing) factoring loan data.
               - Computes FIU balance, DISBURSE, REPAID, UNDRAWN
               - Derives MATDTE (next billing date) via NXTBLDT logic
               - Outputs deduplicated PBIF dataset (by CLIENTNO MATDTE)
+              - Provides format_fisstype() and format_fissgroup() which are
+                the $FISSTYPE / $FISSGROUP sector classification helpers used
+                by EIMBNM01 for the sector/sub-sector tabulations.
 
 Changes applied
 ---------------
 - Input read via pyreadstat.read_sas7bdat (replaces duckdb/parquet).
-- REPTDATE dataset dependency removed; report date = today - 1 day.
+- REPTDATE dataset dependency removed; report date = last day of previous month
+  (aligned with EIMBNM01 so the two programs agree on the reporting period).
 - Output written as .sas7bdat (via saspy, with pyreadstat fallback).
+- Output columns lowercased so callers (EIMBNM01) can consume them uniformly.
 
 Dependency notes
 ----------------
@@ -26,7 +31,6 @@ No import from PBBLNFMT is therefore required or added here.
 """
 
 import os
-import tempfile
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -51,15 +55,17 @@ PBIF_OUTPUT_NAME  = "pbif_output.sas7bdat"
 
 
 # =============================================================================
-# REPORT DATE  (replaces the REPTDATE dataset read)
+# REPORT DATE  (aligned with EIMBNM01)
 # =============================================================================
 
 def get_report_date() -> date:
     """
-    Report date = yesterday (today - 1 day).
+    Report date = last day of previous month.
+    Matches EIMBNM01.get_report_vars()['reptdate'].
     Replaces the SAS 'SET REPTDATE;' one-row lookup dataset.
     """
-    return (datetime.today() - timedelta(days=1)).date()
+    today = date.today()
+    return today.replace(day=1) - timedelta(days=1)
 
 
 def report_date_parts(d: date) -> dict:
@@ -93,14 +99,6 @@ def pydate_to_sasdate(d: date) -> int:
 
 # =============================================================================
 # %MACRO DCLVAR — day arrays
-#
-# SAS:
-#   RETAIN D1-D12 31 D4 D6 D9 D11 30
-#          RD1-RD12 MD1-MD12 31 RD2 MD2 28 ...
-#   ARRAY LDAY D1-D12;
-#
-# Defaults: all months=31, then Apr/Jun/Sep/Nov overridden to 30, Feb=28.
-# Leap-year check uses MOD(YY,4)=0 (SAS simple 4-year rule).
 # =============================================================================
 
 def make_lday(year: int) -> list:
@@ -137,6 +135,78 @@ def nxtbldt(matdte: date, freq: int, lday: list) -> date:
 
 
 # =============================================================================
+# SAS FORMAT PORTS — $FISSTYPE / $FISSGROUP
+#
+# These functions reproduce the SAS PROC FORMAT entries that EIMBNM01 uses
+# in its PROC TABULATE statements:
+#
+#     SECTYPE  = PUT(SECTORCD, $FISSTYPE.);
+#     SECGROUP = PUT(SECTORCD, $FISSGROUP.);
+#
+# NOTE
+# ----
+# The mappings below are PLACEHOLDERS.  Replace them with the real
+# $FISSTYPE / $FISSGROUP entries from your SAS PROC FORMAT catalog
+# (typically found in a PGM or FORMATS catalog sourced at session start,
+# or in the SAS format source .sas file).  Until the real mappings are
+# filled in, sector/sub-sector tabulations in EIMBNM01 will be incorrect.
+# =============================================================================
+
+# --- $FISSTYPE: SECTORCD -> sub-sector label -------------------------------
+# Replace with the actual SAS $FISSTYPE values.
+_FISSTYPE_MAP = {
+    # '01': 'AGRICULTURE',
+    # '02': 'MINING AND QUARRYING',
+    # '03': 'MANUFACTURING',
+    # ... fill in from PROC FORMAT $FISSTYPE ...
+}
+
+# --- $FISSGROUP: SECTORCD -> sector group label ----------------------------
+# Replace with the actual SAS $FISSGROUP values.
+_FISSGROUP_MAP = {
+    # '01': 'PRIMARY',
+    # '02': 'SECONDARY',
+    # '03': 'TERTIARY',
+    # ... fill in from PROC FORMAT $FISSGROUP ...
+}
+
+
+def format_fisstype(sectorcd) -> str:
+    """
+    Port of SAS format $FISSTYPE.
+    Falls back to the raw SECTORCD (zero-padded to the width used by the
+    format) when no mapping is present.
+    """
+    s = str(sectorcd or '').strip()
+    if not s:
+        return ''
+    # SAS $FISSTYPE typically maps 4-char codes like '0470'.
+    # If your SECTORCD arrives as an int/float, zero-pad to 4 chars.
+    if s.replace('.', '', 1).isdigit():
+        try:
+            s = f"{int(float(s)):04d}"
+        except (ValueError, TypeError):
+            pass
+    return _FISSTYPE_MAP.get(s, s)
+
+
+def format_fissgroup(sectorcd) -> str:
+    """
+    Port of SAS format $FISSGROUP.
+    Falls back to the raw SECTORCD when no mapping is present.
+    """
+    s = str(sectorcd or '').strip()
+    if not s:
+        return ''
+    if s.replace('.', '', 1).isdigit():
+        try:
+            s = f"{int(float(s)):04d}"
+        except (ValueError, TypeError):
+            pass
+    return _FISSGROUP_MAP.get(s, s)
+
+
+# =============================================================================
 # LOAD PBIF.CLIEN<YYYY><MM><DD>  via pyreadstat  (SAS7BDAT input)
 # =============================================================================
 
@@ -155,10 +225,8 @@ def load_clien(clien_path: str) -> pl.DataFrame:
     if df is None or df.empty:
         return pl.DataFrame()
 
-    # Normalise column names to upper case to match SAS variable names
     df.columns = [c.upper() for c in df.columns]
 
-    # Filter: IF ENTITY='PBBH'
     if 'ENTITY' in df.columns:
         df = df[df['ENTITY'].astype(str).str.strip() == 'PBBH']
 
@@ -193,8 +261,8 @@ def _parse_informat_12_2(raw: str) -> float:
 def _parse_yymmdd8(s: str) -> Optional[date]:
     """
     Parse an 8-character YYMMDD8. field using SAS YEARCUTOFF=1950.
-      50-99 → 1950-1999
-      00-49 → 2000-2049
+      50-99 -> 1950-1999
+      00-49 -> 2000-2049
     Returns None if the string is blank or malformed.
     """
     s = s.strip()
@@ -214,8 +282,6 @@ def load_mechrg(mdate_int: int) -> pl.DataFrame:
     """
     Read MECHRG fixed-width text file, filter to PDATE == &MDATE, then
     PROC SUMMARY (SUM INTVAL BY CLIENTNO).
-
-    &MDATE = the SAS date integer of the report date.
     """
     empty = pl.DataFrame(schema={'CLIENTNO': pl.Utf8, 'INTVAL': pl.Float64})
 
@@ -284,14 +350,17 @@ def reclassify_custfiss(custfiss: str) -> str:
 def build_pbif(reptdate: Optional[date] = None) -> pl.DataFrame:
     """
     Full RDL2PBIF logic:
-      1. Report date = today - 1 (REPTDATE dataset removed)
+      1. Report date = last day of previous month (aligned with EIMBNM01)
       2. Load PBIF.CLIEN<YYYY><MM><DD> via pyreadstat, filter ENTITY='PBBH'
       3. Assign fixed fields, reclassify CUSTFISS
       4. Load & summarise MECHRG, merge into PBIF
       5. Compute FIU, BALANCE, DISBURSE, REPAID, UNDRAWN
       6. Compute MATDTE via %NXTBLDT loop
       7. PROC SORT NODUPKEY BY CLIENTNO MATDTE
-    Returns the final PBIF DataFrame.
+      8. Return with lowercased column names (for EIMBNM01 consumption)
+
+    NOTE: callers (e.g. EIMBNM01) may pass reptdate; if omitted, the
+    module-level get_report_date() is used.
     """
     if reptdate is None:
         reptdate = get_report_date()
@@ -444,11 +513,16 @@ def build_pbif(reptdate: Optional[date] = None) -> pl.DataFrame:
         .unique(subset=['CLIENTNO', 'MATDTE'], keep='first')
     )
 
+    # -------------------------------------------------------------------------
+    # Step 7 — Lowercase all column names so EIMBNM01 can consume them.
+    # -------------------------------------------------------------------------
+    pbif = pbif.rename({c: c.lower() for c in pbif.columns})
+
     return pbif
 
 
 # =============================================================================
-# OUTPUT — write .sas7bdat via saspy
+# OUTPUT — write .sas7bdat via saspy (with pyreadstat fallback)
 # =============================================================================
 
 def write_pbif_via_saspy(
@@ -458,15 +532,6 @@ def write_pbif_via_saspy(
 ) -> str:
     """
     Write the final PBIF DataFrame to a .sas7bdat file using saspy.
-
-    Strategy:
-      1. Materialise the polars DataFrame to a pandas DataFrame.
-      2. Convert SAS-date integer columns back to real dates so saspy
-         writes them as proper SAS date values.
-      3. Use SASsession.df2sd to push the DataFrame into a SAS WORK table,
-         then use a SAS DATA step to write it out to the .sas7bdat path.
-
-    Returns the output path written.
     """
     if saspy is None:
         raise RuntimeError(
@@ -475,33 +540,27 @@ def write_pbif_via_saspy(
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-    # -- Materialise to pandas ------------------------------------------------
     pdf = df.to_pandas()
 
-    # -- Convert SAS-date integer columns to real dates -----------------------
-    # These are the columns the SAS program treats as SAS date values.
-    sas_date_cols = ['STDATES', 'MATDTE']
+    # These SAS date columns should be written as proper SAS date values.
+    sas_date_cols = ['stdates', 'matdte', 'STDATES', 'MATDTE']
     for col in sas_date_cols:
         if col in pdf.columns:
             pdf[col] = pdf[col].apply(
                 lambda v: sas_date_to_pydate(v) if v is not None else None
             )
 
-    # -- Connect to SAS and push ---------------------------------------------
     sas = saspy.SASsession(cfgname=sas_cfgname)
 
-    # df2sd pushes the DataFrame into a SAS WORK table named by `table`
     work_tbl = 'PBIF_OUT'
     sas.df2sd(pdf, table=work_tbl, libref='WORK')
 
-    # Now write the WORK table out to .sas7bdat at out_path via a DATA step.
-    # SAS needs the directory to exist and the path uses forward slashes.
     out_dir  = os.path.dirname(out_path).replace('\\', '/')
-    out_file = os.path.basename(out_path)
+    out_file = os.path.basename(out_path).replace('.sas7bdat', '')
 
     sas_code = f"""
     libname pbifout "{out_dir}";
-    data pbifout.{out_file.replace('.sas7bdat', '')};
+    data pbifout.{out_file};
         set WORK.{work_tbl};
     run;
     """
@@ -514,15 +573,12 @@ def write_pbif_via_saspy(
 def write_pbif_via_pyreadstat(df: pl.DataFrame, out_path: str) -> str:
     """
     Fallback writer: use pyreadstat.write_sas7bdat directly.
-    Used when saspy is unavailable or when running outside a SAS environment.
     """
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     pdf = df.to_pandas()
 
-    # Convert SAS-date integer columns to real dates so pyreadstat writes
-    # them as proper SAS date values.
-    for col in ['STDATES', 'MATDTE']:
+    for col in ['stdates', 'matdte', 'STDATES', 'MATDTE']:
         if col in pdf.columns:
             pdf[col] = pdf[col].apply(
                 lambda v: sas_date_to_pydate(v) if v is not None else None
@@ -537,7 +593,6 @@ def write_pbif_via_pyreadstat(df: pl.DataFrame, out_path: str) -> str:
 # =============================================================================
 
 def main():
-    # Report date = yesterday (REPTDATE dataset removed)
     reptdate = get_report_date()
 
     pbif = build_pbif(reptdate=reptdate)
@@ -548,7 +603,6 @@ def main():
 
     out_path = os.path.join(PBIF_OUTPUT_DIR, PBIF_OUTPUT_NAME)
 
-    # Prefer saspy; fall back to pyreadstat if saspy is not available.
     if saspy is not None:
         written = write_pbif_via_saspy(pbif, out_path)
     else:
