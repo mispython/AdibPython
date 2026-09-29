@@ -1,414 +1,423 @@
-some of the production output for sectfiss:
+#!/usr/bin/env python3
+"""
+Program Name: RDL2PBIF.py
+Purpose:      Process PBIF (Public Bank Invoice Financing) factoring loan data.
 
-REPORT ID : EIMBNM01                                                                          22:01 Wednesday, September 2, 2026  13 
-OUTSTANDING M&I COMMERCIAL RETAIL LOANS BY SECTORS AND SUB-SECTORS AS AT 082026                                                      
-                                                                                                                                     
-+-----------------------+------------+----------+                                                                                    
-|SECTFISS               |            |  NO. OF  |                                                                                    
-|                       |   AMOUNT   |   ACCT   |                                                                                    
-+-----------+-----------+------------+----------+                                                                                    
-|1000       |1100       |774044358.60|      1522|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |1200       | 63986978.60|       134|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |1300       | 71304179.65|       177|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |1400       | 15962215.98|        35|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |SUB-TOTAL  |925297732.84|      1868|                                                                                    
-+-----------+-----------+------------+----------+                                                                                    
-|2000       |2100       |   612713.79|         2|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |2200       | 12137325.88|        20|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |2300       |  2199511.47|         7|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |2900       | 70540467.00|       151|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |SUB-TOTAL  | 85490018.13|       180|                                                                                    
-+-----------+-----------+------------+----------+                                                                                    
-|3000       |3100       |981347366.10|      1201|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3120       |  1452946.96|         3|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3210       | 74979456.47|       123|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3220       | 69108853.37|       135|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3230       | 16869471.09|        38|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3240       |141788704.60|       263|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3250       |314177798.90|       336|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3260       |389309544.56|       545|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3310       |491092037.94|       438|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3430       | 18140295.54|        19|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3550       |908890045.99|       971|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3610       |254810439.06|       475|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3700       |464891293.15|       561|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3800       |893978949.20|       953|                                                                                    
-|           +-----------+------------+----------+                                                                                    
-|           |3825       |  5215443.67|         5|                                                                                    
-+-----------+-----------+------------+----------+                                                                                    
-                                                                                                                                     
-(Continued)
+Dependencies / exports
+----------------------
+  build_pbif()        -> main builder
+  format_fisstype()   -> SAS $FISSTYPE port (SECTFISS sub-sector label)
+  format_fissgroup()  -> SAS $FISSGROUP port (SECTOR group label)
+"""
+
+import os
+from datetime import date, datetime, timedelta
+from typing import Optional
+
+import pyreadstat
+import polars as pl
+
+try:
+    import saspy
+except ImportError:
+    saspy = None
 
 
+# =============================================================================
+# PATH CONFIGURATION
+# =============================================================================
 
-while python output:
-
-1REPORT ID : EIMBNM01
- OUTSTANDING M&I COMMERCIAL RETAIL LOANS BY SECTORS AND SUB-SECTORS AS AT 082026
- 
-  SECTFISS                             AMOUNT NO. OF ACCT
-  -------------------------------------------------------
-    1111                           7419747.21           0
-    SUB-TOTAL                      7419747.21           0
-    1112                           1176644.96           0
-    SUB-TOTAL                      1176644.96           0
-    1113                         449027928.94           0
-    SUB-TOTAL                    449027928.94           0
-    1114                           1443080.76           0
-    SUB-TOTAL                      1443080.76           0
-    1115                           2123214.72           0
-    SUB-TOTAL                      2123214.72           0
-    1116                            190410.30           0
-    SUB-TOTAL                       190410.30           0
-    1117                         123775647.73           0
-    SUB-TOTAL                    123775647.73           0
-    1119                          16436366.52           0
-    SUB-TOTAL                     16436366.52           0
-    1120                         133073347.24           0
-    SUB-TOTAL                    133073347.24           0
-    1130                          39377970.23           0
-    SUB-TOTAL                     39377970.23           0
-    1200                          63986978.60           0
-    SUB-TOTAL                     63986978.60           0
-    1300                          71304179.65           0
-    SUB-TOTAL                     71304179.65           0
-    1400                          15962215.98           0
-    SUB-TOTAL                     15962215.98           0
-    2100                            612713.79           0
-    SUB-TOTAL                       612713.79           0
-    2210                           1627100.77           0
-    SUB-TOTAL                      1627100.77           0
-    2220                          10510225.11           0
-    SUB-TOTAL                     10510225.11           0
-    2302                           1390170.68           0
-    SUB-TOTAL                      1390170.68           0
-    2303                            809340.79           0
-    SUB-TOTAL                       809340.79           0
-    2900                          70540467.00           0
-    SUB-TOTAL                     70540467.00           0
-    3110                         146891429.44           0
-    SUB-TOTAL                    146891429.44           0
-    3111                          14029560.13           0
-    SUB-TOTAL                     14029560.13           0
-    3112                          76507329.01           0
-    SUB-TOTAL                     76507329.01           0
-    3113                         100429675.13           0
-    SUB-TOTAL                    100429675.13           0
-    3114                         641099863.60           0
-    SUB-TOTAL                    641099863.60           0
-    3115                           2389508.79           0
-    SUB-TOTAL                      2389508.79           0
-    3120                           1452946.96           0
-    SUB-TOTAL                      1452946.96           0
-    3211                          33242088.98           0
-    SUB-TOTAL                     33242088.98           0
-    3212                           3320827.41           0
-    SUB-TOTAL                      3320827.41           0
-    3219                          38416540.08           0
-    SUB-TOTAL                     38416540.08           0
-    3221                          69108853.37           0
-    SUB-TOTAL                     69108853.37           0
-    3231                           4611081.17           0
-    SUB-TOTAL                      4611081.17           0
-    3232                          12258389.92           0
-    SUB-TOTAL                     12258389.92           0
-    3241                          60838502.73           0
-    SUB-TOTAL                     60838502.73           0
-    3242                          80950201.87           0
-    SUB-TOTAL                     80950201.87           0
-    3250                         314177798.90           0
-    SUB-TOTAL                    314177798.90           0
-    3271                          29442132.30           0
-    SUB-TOTAL                     29442132.30           0
-    3272                           1189910.63           0
-    SUB-TOTAL                      1189910.63           0
-    3273                          12385388.37           0
-    SUB-TOTAL                     12385388.37           0
-    3280                         346292113.27           0
-    SUB-TOTAL                    346292113.27           0
-    3311                         104138712.00           0
-    SUB-TOTAL                    104138712.00           0
-    3312                          30758013.81           0
-    SUB-TOTAL                     30758013.81           0
-    3313                         356195312.14           0
-    SUB-TOTAL                    356195312.14           0
-    3431                           3649415.50           0
-    SUB-TOTAL                      3649415.50           0
-    3432                          14490880.04           0
-    SUB-TOTAL                     14490880.04           0
-    3551                         118391547.03           0
-    SUB-TOTAL                    118391547.03           0
-    3552                         790498498.96           0
-    SUB-TOTAL                    790498498.96           0
-    3611                          60543540.07           0
-    SUB-TOTAL                     60543540.07           0
-    3619                         194266898.98           0
-    SUB-TOTAL                    194266898.98           0
-    3710                         291107782.11           0
-    SUB-TOTAL                    291107782.11           0
-    3720                         142727987.81           0
-    SUB-TOTAL                    142727987.81           0
-    3731                          24786353.20           0
-    SUB-TOTAL                     24786353.20           0
-    3732                           6269170.04           0
-    SUB-TOTAL                      6269170.04           0
-    3811                         146122225.27           0
-    SUB-TOTAL                    146122225.27           0
-    3813                         173575094.20           0
-    SUB-TOTAL                    173575094.20           0
-    3814                          98451991.60           0
-    SUB-TOTAL                     98451991.60           0
-    3819                         475829638.13           0
-    SUB-TOTAL                    475829638.13           0
-    3825                           5215443.67           0
-    SUB-TOTAL                      5215443.67           0
-    3832                         145115018.27           0
-    SUB-TOTAL                    145115018.27           0
-    3833                          69415075.86           0
-    SUB-TOTAL                     69415075.86           0
-    3834                         280147784.23           0
-    SUB-TOTAL                    280147784.23           0
-    3835                           9227371.19           0
-    SUB-TOTAL                      9227371.19           0
-    3842                          83087955.79           0
-    SUB-TOTAL                     83087955.79           0
-    3843                           1122466.55           0
-    SUB-TOTAL                      1122466.55           0
-    3844                           1840343.90           0
-    SUB-TOTAL                      1840343.90           0
-    3851                          64019638.12           0
-    SUB-TOTAL                     64019638.12           0
-    3852                           8094399.52           0
-    SUB-TOTAL                      8094399.52           0
-    3861                          35309654.88           0
-    SUB-TOTAL                     35309654.88           0
-    3862                          32524253.84           0
-    SUB-TOTAL                     32524253.84           0
-    3863                          26969775.01           0
-    SUB-TOTAL                     26969775.01           0
-    3864                             19033.68           0
-    SUB-TOTAL                        19033.68           0
-    3865                          30980490.25           0
-    SUB-TOTAL                     30980490.25           0
-    3866                          63062216.47           0
-    SUB-TOTAL                     63062216.47           0
-    3871                           5419345.57           0
-    SUB-TOTAL                      5419345.57           0
-    3872                          32818572.57           0
-    SUB-TOTAL                     32818572.57           0
-    3873                         183632178.64           0
-    SUB-TOTAL                    183632178.64           0
-    3891                          23609079.74           0
-    SUB-TOTAL                     23609079.74           0
-    3894                          22030856.53           0
-    SUB-TOTAL                     22030856.53           0
-    3911                         413421303.13           0
-    SUB-TOTAL                    413421303.13           0
-    3919                         323511915.20           0
-    SUB-TOTAL                    323511915.20           0
-    3953                           2774666.33           0
-    SUB-TOTAL                      2774666.33           0
-    3956                          26442452.25           0
-    SUB-TOTAL                     26442452.25           0
-    3957                          13332209.93           0
-    SUB-TOTAL                     13332209.93           0
-    3960                           3179604.92           0
-    SUB-TOTAL                      3179604.92           0
-    4010                          10853136.66           0
-    SUB-TOTAL                     10853136.66           0
-    4020                           5390447.74           0
-    SUB-TOTAL                      5390447.74           0
-    4030                           1660686.05           0
-    SUB-TOTAL                      1660686.05           0
-    5001                        2229396768.45           0
-    SUB-TOTAL                   2229396768.45           0
-    5002                           3452017.98           0
-    SUB-TOTAL                      3452017.98           0
-    5003                         162415103.15           0
-    SUB-TOTAL                    162415103.15           0
-    5004                          92168163.29           0
-    SUB-TOTAL                     92168163.29           0
-    5006                         639053175.92           0
-    SUB-TOTAL                    639053175.92           0
-    5008                         949912262.55           0
-    SUB-TOTAL                    949912262.55           0
-    5020                          46506793.95           0
-    SUB-TOTAL                     46506793.95           0
-    5030                        1003608262.09           0
-    SUB-TOTAL                   1003608262.09           0
-    5040                         671461540.27           0
-    SUB-TOTAL                    671461540.27           0
-    5050                         101351879.00           0
-    SUB-TOTAL                    101351879.00           0
-    5999                         406089615.00           0
-    SUB-TOTAL                    406089615.00           0
-    6110                        4970374186.90           0
-    SUB-TOTAL                   4970374186.90           0
-    6120                        9983961983.82           0
-    SUB-TOTAL                   9983961983.82           0
-    6130                        5305186635.28           0
-    SUB-TOTAL                   5305186635.28           0
-    6310                         931984597.68           0
-    SUB-TOTAL                    931984597.68           0
-    6320                         694068212.16           0
-    SUB-TOTAL                    694068212.16           0
-    7111                           2232867.62           0
-    SUB-TOTAL                      2232867.62           0
-    7112                          13183459.72           0
-    SUB-TOTAL                     13183459.72           0
-    7113                          30676445.46           0
-    SUB-TOTAL                     30676445.46           0
-    7114                           5851980.35           0
-    SUB-TOTAL                      5851980.35           0
-    7115                          20453801.60           0
-    SUB-TOTAL                     20453801.60           0
-    7116                         412825585.75           0
-    SUB-TOTAL                    412825585.75           0
-    7117                            512878.19           0
-    SUB-TOTAL                       512878.19           0
-    7121                           5309495.66           0
-    SUB-TOTAL                      5309495.66           0
-    7122                          27958020.77           0
-    SUB-TOTAL                     27958020.77           0
-    7123                            529320.16           0
-    SUB-TOTAL                       529320.16           0
-    7124                           2765542.06           0
-    SUB-TOTAL                      2765542.06           0
-    7132                            390948.94           0
-    SUB-TOTAL                       390948.94           0
-    7133                           1459771.88           0
-    SUB-TOTAL                      1459771.88           0
-    7134                           3125363.64           0
-    SUB-TOTAL                      3125363.64           0
-    7191                         294944775.81           0
-    SUB-TOTAL                    294944775.81           0
-    7192                         129594548.88           0
-    SUB-TOTAL                    129594548.88           0
-    7193                          18327234.89           0
-    SUB-TOTAL                     18327234.89           0
-    7199                         254524487.06           0
-    SUB-TOTAL                    254524487.06           0
-    7210                          31679834.23           0
-    SUB-TOTAL                     31679834.23           0
-    7220                          65570555.92           0
-    SUB-TOTAL                     65570555.92           0
-    8110                         282258855.21           0
-    SUB-TOTAL                    282258855.21           0
-    8120                          29934308.64           0
-    SUB-TOTAL                     29934308.64           0
-    8130                          51888765.40           0
-    SUB-TOTAL                     51888765.40           0
-    8310                       12663919951.07           0
-    SUB-TOTAL                  12663919951.07           0
-    8320                           8380091.59           0
-    SUB-TOTAL                      8380091.59           0
-    8321                           7156059.19           0
-    SUB-TOTAL                      7156059.19           0
-    8331                          19764419.20           0
-    SUB-TOTAL                     19764419.20           0
-    8332                         155710006.84           0
-    SUB-TOTAL                    155710006.84           0
-    8333                          13606072.91           0
-    SUB-TOTAL                     13606072.91           0
-    8340                         155445938.53           0
-    SUB-TOTAL                    155445938.53           0
-    8411                           1839038.67           0
-    SUB-TOTAL                      1839038.67           0
-    8412                           5534648.85           0
-    SUB-TOTAL                      5534648.85           0
-    8413                           6374464.91           0
-    SUB-TOTAL                      6374464.91           0
-    8414                            609574.62           0
-    SUB-TOTAL                       609574.62           0
-    8415                             31288.40           0
-    SUB-TOTAL                        31288.40           0
-    8416                            149592.11           0
-    SUB-TOTAL                       149592.11           0
-    8910                         128202056.74           0
-    SUB-TOTAL                    128202056.74           0
-    8911                           4769754.64           0
-    SUB-TOTAL                      4769754.64           0
-    8912                         210246901.89           0
-    SUB-TOTAL                    210246901.89           0
-    8913                            251238.71           0
-    SUB-TOTAL                       251238.71           0
-    8914                         166413938.82           0
-    SUB-TOTAL                    166413938.82           0
-    8921                          25082923.12           0
-    SUB-TOTAL                     25082923.12           0
-    8922                         508190665.16           0
-    SUB-TOTAL                    508190665.16           0
-    8931                            874228.00           0
-    SUB-TOTAL                       874228.00           0
-    8932                          96567932.49           0
-    SUB-TOTAL                     96567932.49           0
-    8991                          19151696.86           0
-    SUB-TOTAL                     19151696.86           0
-    8999                         602885651.98           0
-    SUB-TOTAL                    602885651.98           0
-    9101                          16024618.08           0
-    SUB-TOTAL                     16024618.08           0
-    9201                         413478683.43           0
-    SUB-TOTAL                    413478683.43           0
-    9202                          13315968.04           0
-    SUB-TOTAL                     13315968.04           0
-    9203                          14418011.76           0
-    SUB-TOTAL                     14418011.76           0
-    9311                          23527372.72           0
-    SUB-TOTAL                     23527372.72           0
-    9312                          17832609.10           0
-    SUB-TOTAL                     17832609.10           0
-    9313                          31377021.98           0
-    SUB-TOTAL                     31377021.98           0
-    9314                         144922986.66           0
-    SUB-TOTAL                    144922986.66           0
-    9410                         188582751.66           0
-    SUB-TOTAL                    188582751.66           0
-    9420                          21184075.31           0
-    SUB-TOTAL                     21184075.31           0
-    9430                            344153.60           0
-    SUB-TOTAL                       344153.60           0
-    9431                          42819398.13           0
-    SUB-TOTAL                     42819398.13           0
-    9433                            482959.97           0
-    SUB-TOTAL                       482959.97           0
-    9435                           7308657.96           0
-    SUB-TOTAL                      7308657.96           0
-    9440                          11618371.17           0
-    SUB-TOTAL                     11618371.17           0
-    9450                          40652424.06           0
-    SUB-TOTAL                     40652424.06           0
-    9499                         369455063.03           0
-    SUB-TOTAL                    369455063.03           0
-    9500                            445224.54           0
-    SUB-TOTAL                       445224.54           0
-    9700                       34930656733.52           0
-    SUB-TOTAL                  34930656733.52           0
-    9999                          40843921.91           0
-    SUB-TOTAL                     40843921.91           0
-  =======================================================
-  GRAND TOTAL                  88963291517.67           0
+PBIF_CLIEN_DIR    = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/RDL2PBIF"
+MECHRG_TXT        = f"{PBIF_CLIEN_DIR}/mechrg.txt"
+PBIF_OUTPUT_DIR   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/RDL2PBIF"
+PBIF_OUTPUT_NAME  = "pbif_output.sas7bdat"
 
 
-just different in formatting
+# =============================================================================
+# SAS FORMAT PORTS
+# =============================================================================
+
+def format_fisstype(sectorcd) -> str:
+    """
+    SAS $FISSTYPE equivalent — the SECTFISS 4-digit sub-sector code.
+
+    The raw SECTORCD is already a 4-digit code like '1100', '1111', '3417',
+    so we just normalise the string form. If it arrives as a number
+    (e.g. 1100.0), strip the fractional part.
+    """
+    if sectorcd is None:
+        return ''
+    s = str(sectorcd).strip()
+    if not s:
+        return ''
+    try:
+        s = f"{int(float(s)):04d}"
+    except (ValueError, TypeError):
+        pass
+    return s
+
+
+def format_fissgroup(sectorcd) -> str:
+    """
+    SAS $FISSGROUP equivalent — the 4-digit SECTOR GROUP code.
+
+    The group is the first two digits of the sub-sector code followed by
+    '00'. Examples:
+        '1100'  -> '1000'
+        '1111'  -> '1000'
+        '1200'  -> '1000'
+        '2100'  -> '2000'
+        '3110'  -> '3000'
+        '34170' -> '34000'  (falls through as-is when >4 digits)
+    """
+    if sectorcd is None:
+        return ''
+    s = str(sectorcd).strip()
+    if not s:
+        return ''
+    try:
+        s = f"{int(float(s)):04d}"
+    except (ValueError, TypeError):
+        pass
+
+    if len(s) >= 4:
+        return s[:2] + '00'
+    s = s.zfill(4)
+    return s[:2] + '00'
+
+
+# =============================================================================
+# DATE HELPERS
+# =============================================================================
+
+def get_report_date() -> date:
+    """Last day of previous month — aligned with EIMBNM01."""
+    today = date.today()
+    return today.replace(day=1) - timedelta(days=1)
+
+
+def report_date_parts(d: date) -> dict:
+    return {
+        "reptyear": f"{d.year:04d}",
+        "reptmon":  f"{d.month:02d}",
+        "reptday":  f"{d.day:02d}",
+    }
+
+
+def sas_date_to_pydate(val) -> Optional[date]:
+    if val is None or (isinstance(val, float) and val != val):
+        return None
+    if isinstance(val, (int, float)):
+        return date(1960, 1, 1) + timedelta(days=int(val))
+    if isinstance(val, date):
+        return val
+    return None
+
+
+def pydate_to_sasdate(d: date) -> int:
+    return (d - date(1960, 1, 1)).days
+
+
+# =============================================================================
+# %MACRO DCLVAR / NXTBLDT
+# =============================================================================
+
+def make_lday(year: int) -> list:
+    lday = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    lday[2] = 29 if (year % 4 == 0) else 28
+    return lday
+
+
+def nxtbldt(matdte: date, freq: int, lday: list) -> date:
+    dd = matdte.day
+    mm = matdte.month + freq
+    yy = matdte.year
+    if mm > 12:
+        mm -= 12
+        yy += 1
+    lday_local = list(lday)
+    if mm == 2:
+        lday_local[2] = 29 if (yy % 4 == 0) else 28
+    if dd > lday_local[mm]:
+        dd = lday_local[mm]
+    return date(yy, mm, dd)
+
+
+# =============================================================================
+# LOAD CLIENT
+# =============================================================================
+
+def load_clien(clien_path: str) -> pl.DataFrame:
+    if not os.path.exists(clien_path):
+        return pl.DataFrame()
+
+    df, _meta = pyreadstat.read_sas7bdat(clien_path)
+    if df is None or df.empty:
+        return pl.DataFrame()
+
+    df.columns = [c.upper() for c in df.columns]
+
+    if 'ENTITY' in df.columns:
+        df = df[df['ENTITY'].astype(str).str.strip() == 'PBBH']
+
+    if df.empty:
+        return pl.DataFrame()
+
+    return pl.from_pandas(df)
+
+
+# =============================================================================
+# LOAD MECHRG
+# =============================================================================
+
+def _parse_informat_12_2(raw: str) -> float:
+    s = raw.strip()
+    if not s:
+        return 0.0
+    try:
+        if '.' in s:
+            return float(s)
+        return float(s) / 100.0
+    except ValueError:
+        return 0.0
+
+
+def _parse_yymmdd8(s: str) -> Optional[date]:
+    s = s.strip()
+    if len(s) < 6:
+        return None
+    try:
+        yy_ = int(s[0:2])
+        mm_ = int(s[2:4])
+        dd_ = int(s[4:6])
+        year_ = (2000 + yy_) if yy_ < 50 else (1900 + yy_)
+        return date(year_, mm_, dd_)
+    except (ValueError, IndexError):
+        return None
+
+
+def load_mechrg(mdate_int: int) -> pl.DataFrame:
+    empty = pl.DataFrame(schema={'CLIENTNO': pl.Utf8, 'INTVAL': pl.Float64})
+    if not os.path.exists(MECHRG_TXT):
+        return empty
+
+    rows = []
+    with open(MECHRG_TXT, 'r', encoding='latin-1') as f:
+        for line in f:
+            if len(line) < 48:
+                continue
+            try:
+                clientno  = line[0:9].strip()
+                pdate_str = line[9:17]
+                uval1_str = line[19:31]
+                uval2_str = line[33:45]
+                uval3_str = line[47:59]
+
+                pdate = _parse_yymmdd8(pdate_str)
+                if pdate is None:
+                    continue
+                if pydate_to_sasdate(pdate) != mdate_int:
+                    continue
+
+                intval = (_parse_informat_12_2(uval1_str) +
+                          _parse_informat_12_2(uval2_str) +
+                          _parse_informat_12_2(uval3_str))
+                rows.append({'CLIENTNO': clientno, 'INTVAL': intval})
+            except (ValueError, IndexError):
+                continue
+
+    if not rows:
+        return empty
+
+    df = pl.from_dicts(rows)
+    return df.group_by('CLIENTNO').agg(pl.col('INTVAL').sum())
+
+
+# =============================================================================
+# CUSTFISS RECLASSIFICATION
+# =============================================================================
+
+def reclassify_custfiss(custfiss: str) -> str:
+    if custfiss in ('41', '42', '43', '66'):
+        return '41'
+    if custfiss in ('44', '47', '67'):
+        return '44'
+    if custfiss == '46':
+        return '46'
+    if custfiss in ('48', '49', '51', '68'):
+        return '48'
+    if custfiss in ('52', '53', '54', '69'):
+        return '52'
+    return custfiss
+
+
+# =============================================================================
+# BUILD PBIF
+# =============================================================================
+
+def build_pbif(reptdate: Optional[date] = None) -> pl.DataFrame:
+    if reptdate is None:
+        reptdate = get_report_date()
+
+    parts    = report_date_parts(reptdate)
+    reptyear = parts["reptyear"]
+    reptmon  = parts["reptmon"]
+    reptday  = parts["reptday"]
+    mdate_int = pydate_to_sasdate(reptdate)
+
+    clien_path = os.path.join(
+        PBIF_CLIEN_DIR, f"clien{reptyear}{reptmon}{reptday}.sas7bdat"
+    )
+    pbif = load_clien(clien_path)
+    if pbif.is_empty():
+        return pl.DataFrame()
+
+    rows = pbif.to_dicts()
+    for row in rows:
+        custcd  = str(row.get('CUSTCD') or '').strip()
+        inlimit = float(row.get('INLIMIT') or 0.0)
+        row['APPRLIMX'] = inlimit
+        row['PRODCD']   = '30591'
+        row['FISSPURP'] = '0470'
+        row['AMTIND']   = 'D'
+        custfiss        = reclassify_custfiss(custcd)
+        row['CUSTFISS'] = custfiss
+        row['CUSTCX']   = custfiss
+    pbif = pl.from_dicts(rows).sort('CLIENTNO')
+
+    mechrg_df = load_mechrg(mdate_int)
+    if not mechrg_df.is_empty():
+        pbif = pbif.join(mechrg_df, on='CLIENTNO', how='left')
+    elif 'INTVAL' not in pbif.columns:
+        pbif = pbif.with_columns(pl.lit(None).cast(pl.Float64).alias('INTVAL'))
+
+    out_rows = []
+    for row in pbif.to_dicts():
+        fiu      = float(row.get('FIU')      or 0.0)
+        prmthfiu = float(row.get('PRMTHFIU') or 0.0)
+        if fiu == 0.0 and prmthfiu == 0.0:
+            continue
+        intval_raw = row.get('INTVAL')
+        intval = (0.0 if intval_raw is None or
+                  (isinstance(intval_raw, float) and intval_raw != intval_raw)
+                  else float(intval_raw))
+        row['INTVAL'] = intval
+        fiu = fiu + intval + prmthfiu
+
+        balance  = fiu
+        ufiu     = 0.0
+        disburse = 0.0
+        repaid   = 0.0
+        rollover = 0.0
+
+        if balance  < 0.0: balance  = 0.0
+        if fiu      < 0.0: ufiu     = fiu
+        if prmthfiu < 0.0: prmthfiu = 0.0
+
+        if balance >= 0.0:
+            if balance > prmthfiu:
+                disburse = balance - prmthfiu
+            else:
+                repaid = prmthfiu - balance
+
+        inlimit = float(row.get('INLIMIT') or 0.0)
+        undrawn = inlimit - balance
+
+        row.update({
+            'FIU': fiu, 'BALANCE': balance, 'UFIU': ufiu,
+            'DISBURSE': disburse, 'REPAID': repaid, 'ROLLOVER': rollover,
+            'UNDRAWN': undrawn, 'PRMTHFIU': prmthfiu,
+        })
+
+        if fiu == 0.0:
+            continue
+        out_rows.append(row)
+
+    if not out_rows:
+        return pl.DataFrame()
+
+    pbif = pl.from_dicts(out_rows)
+
+    lday = make_lday(reptdate.year)
+    out_rows = []
+    for row in pbif.to_dicts():
+        inlimit = float(row.get('INLIMIT') or 0.0)
+        freq    = 6 if inlimit >= 1000000.0 else 12
+        row['FREQ'] = freq
+
+        matdte = date(reptdate.year, reptdate.month, reptdate.day)
+        stdates_raw = row.get('STDATES')
+        stdates     = sas_date_to_pydate(stdates_raw) if stdates_raw is not None else None
+
+        if stdates is not None and stdates_raw > 0:
+            matdte = stdates
+            while matdte <= reptdate:
+                matdte = nxtbldt(matdte, freq, lday)
+
+        row['MATDTE'] = pydate_to_sasdate(matdte)
+        row.pop('CUSTCD', None)
+        out_rows.append(row)
+
+    if not out_rows:
+        return pl.DataFrame()
+
+    pbif = pl.from_dicts(out_rows)
+    pbif = (pbif.sort(['CLIENTNO', 'MATDTE'])
+                .unique(subset=['CLIENTNO', 'MATDTE'], keep='first'))
+    pbif = pbif.rename({c: c.lower() for c in pbif.columns})
+    return pbif
+
+
+# =============================================================================
+# OUTPUT
+# =============================================================================
+
+def write_pbif_via_saspy(df: pl.DataFrame, out_path: str,
+                         sas_cfgname: str = 'mysas') -> str:
+    if saspy is None:
+        raise RuntimeError("saspy not installed")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    pdf = df.to_pandas()
+    for col in ['stdates', 'matdte', 'STDATES', 'MATDTE']:
+        if col in pdf.columns:
+            pdf[col] = pdf[col].apply(
+                lambda v: sas_date_to_pydate(v) if v is not None else None)
+    sas = saspy.SASsession(cfgname=sas_cfgname)
+    sas.df2sd(pdf, table='PBIF_OUT', libref='WORK')
+    out_dir  = os.path.dirname(out_path).replace('\\', '/')
+    out_file = os.path.basename(out_path).replace('.sas7bdat', '')
+    sas.submit(f'''
+    libname pbifout "{out_dir}";
+    data pbifout.{out_file};
+        set WORK.PBIF_OUT;
+    run;
+    ''')
+    sas.endsas()
+    return out_path
+
+
+def write_pbif_via_pyreadstat(df: pl.DataFrame, out_path: str) -> str:
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    pdf = df.to_pandas()
+    for col in ['stdates', 'matdte', 'STDATES', 'MATDTE']:
+        if col in pdf.columns:
+            pdf[col] = pdf[col].apply(
+                lambda v: sas_date_to_pydate(v) if v is not None else None)
+    pyreadstat.write_sas7bdat(pdf, out_path)
+    return out_path
+
+
+def main():
+    reptdate = get_report_date()
+    pbif = build_pbif(reptdate=reptdate)
+    if pbif.is_empty():
+        print("RDL2PBIF: no output rows produced.")
+        return
+    out_path = os.path.join(PBIF_OUTPUT_DIR, PBIF_OUTPUT_NAME)
+    written = (write_pbif_via_saspy(pbif, out_path) if saspy is not None
+               else write_pbif_via_pyreadstat(pbif, out_path))
+    print(f"RDL2PBIF: wrote {pbif.height} rows to {written}")
+
+
+if __name__ == "__main__":
+    main()
