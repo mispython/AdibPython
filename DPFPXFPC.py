@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 """
-Program  : PBBWRDLF
-Purpose  : Weekly ITCODE reference list -> PBBRDAL.sas7bdat
+Program  : PBBMRDLF
+Purpose  : Monthly ITCODE reference list -> PBBRDAL.sas7bdat
            Importing this module executes the build at import time,
-           mirroring %INC PGM(PBBWRDLF).
+           mirroring %INC PGM(PBBMRDLF).
 """
 
 from pathlib import Path
@@ -20,25 +20,9 @@ OUTPUT_DIR  = Path(
 OUTPUT_BASE = "PBBRDAL"
 
 
+# Replace with the monthly SAS CARDS contents.
 ITCODE_DATA = [
-    "3313002000000Y",
-    "3313003000000Y",
-    "4017000000000Y",
-    "4019000000000Y",
-    "4216060000000Y",
-    "4261076000000Y",
-    "4261085000000Y",
-    "4263076000000Y",
-    "4263085000000Y",
-    "4269981000000Y",
-    "4313002000000Y",
-    "4313003000000Y",
-    "5422000000000Y",
-    "7200000008310Y",
-    "7300000003000Y",
-    "7300000006100Y",
-    "7300000008310Y",
-    "7300000008320Y",
+    # ... monthly ITCODEs ...
 ]
 
 
@@ -67,11 +51,10 @@ def build() -> Path:
     """)
     sas.endsas()
 
-    print(f"PBBWRDLF: wrote {sas7bdat_path} ({len(df)} records)")
+    print(f"PBBMRDLF: wrote {sas7bdat_path} ({len(df)} records)")
     return sas7bdat_path
 
 
-# Import triggers build (%INC behaviour)
 build()
 
 
