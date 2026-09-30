@@ -1,8 +1,2 @@
-import pyreadstat
-
-path = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/loan0904.sas7bdat"
-
-# metadata only — no data load
-df, meta = pyreadstat.read_sas7bdat(path, metadataonly=True)
-print("Columns:", [c.lower() for c in meta.column_names])
-print("Num rows:", meta.number_rows)
+Columns: ['acctno', 'noteno', 'eir_adj', 'sector', 'name', 'commno', 'custcd', 'origmt', 'prodcd', 'riskcd', 'collcd', 'origmx', 'remainmx', 'sectorcd', 'statecd', 'riskrte', 'amtind', 'cgcref', 'custcode', 'product', 'branch', 'assmdate', 'intamt', 'appvalue', 'noteterm', 'colldesc', 'flag3', 'costctr', 'census', 'billtype', 'netproc', 'intrate', 'spread', 'ntint', 'rebate', 'intearn', 'accrual', 'secure', 'liabcode', 'loanstat', 'borstat', 'marketvl', 'earnterm', 'usuryidx', 'intearn2', 'intearn3', 'intearn4', 'payamt', 'payfreq', 'biltot', 'bilpay', 'paytype', 'feeamt4', 'apprdate', 'totpdeop', 'intpdytd', 'accruytd', 'accrueop', 'ntindex', 'rebatei', 'acctyind', 'hstprin', 'costfund', 'restbalc', 'nxbildt', 'payind', 'feeamt', 'nxtbil', 'bldate', 'sectold', 'exprdate', 'closedte', 'issdte', 'sectorma', 'fisspurp', 'newsec', 'census4', 'custidno', 'rleasamt', 'apprlimt', 'undrawn', 'apprlmtacct', 'odplan', 'rate1', 'rate2', 'todrate', 'flatrate', 'baserate', 'odstat', 'orgcode', 'limit1', 'limit2', 'col1', 'col2', 'avgamt', 'odintacc', 'censust', 'acctype', 'ccricode', 'crispurp', 'sectorz', 'sectorzz', 'secvalid', 'fisspori', 'sectpori', 'seccust', 'newicind', 'bussind', 'custori', 'balmnim', 'curcode', 'bal_aft_eir', 'eirind', 'remmth', 'ccy', 'forate', 'fcybal', 'appr2fcy', 'cjfee', 'cfindex', 'write_down_bal', 'oribal_aft_eir', 'oribalance', 'oribalmni', 'oldnotebldate', 'oldnotedayarr', 'dnbfisme', 'dnbfi_ori', 'vb', 'freleas', 'escracct', 'siacctno', 'abm_hl', 'ia_lru', 'ascore_perm', 'ascore_ltst', 'unearned1', 'unearned2', 'unearned', 'fdcertno', 'fdacctno', 'ccris_instlamt', 'industrial_sector_cd', 'sectorcd_ori', 'invalid_loc', 'state', 'ascore_comm', 'apprlim2ori', 'paidind', 'remainmt', 'remainmh', 'curbal', 'balance', 'balmni', 'apprlim2']
+Num rows: 446114
