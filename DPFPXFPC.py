@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
-Program  : LALWP124
-Purpose  : Report on Domestic Assets and Liabilities - Part I (M&I Loan).
-           Filters L124/UL124 loan data (entity_cd = 'PIBB', Islamic),
-           summarises by customer code, approved limit, and Cagamas sold
-           loans, then appends results to BNM.LALW{REPTMON}{NOWK}.
+Program  : P124RDAL.py
+Purpose  : Report on Domestic Assets and Liabilities - Part I (Cagamas/L124).
+           - Loads BIC reference codes (weekly or monthly depending on NOWK).
+           - Merges with BNM.ALW summary data.
+           - Filters and appends Cagamas loan data (LOANTYPE 124/145).
+           - Splits result into AL (assets/loans), OB (off-balance), SP (special).
+           - Writes semicolon-delimited output text file RDAL with sections
+             AL, OB, SP each prefixed by section header and PHEAD on first line.
 
-Dependency: PBBLNFMT  - format/mapping functions (format_lnprod, etc.)
-            L124PBBD  - produces BNM.L124{REPTMON}{NOWK} and
-                        BNM.UL124{REPTMON}{NOWK} from BNM1 source data.
+Dependency: PBBLNFMT  - format/mapping functions
+            PBBWRDLF  - weekly  ITCODE reference list -> PBBRDAL
+            PBBMRDLF  - monthly ITCODE reference list -> PBBRDAL
 """
 
+import math
+import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -18,23 +23,16 @@ import pyreadstat
 import saspy
 
 # ---------------------------------------------------------------------------
-# Dependency: PBBLNFMT  (%INC PGM(PBBLNFMT))
-# Exposes the SAS format functions as module callables:
-#   PBBLNFMT.LNPROD(value), PBBLNFMT.LNCUSTCD(value),
-#   PBBLNFMT.LNDENOM(value), PBBLNFMT.APPRLIMT(value), etc.
+# Dependency: PBBLNFMT (%INC PGM(PBBLNFMT))
+# Exposes callables: PBBLNFMT.LNPROD(value), PBBLNFMT.LNDENOM(value), etc.
 # ---------------------------------------------------------------------------
 import PBBLNFMT
-
-# ---------------------------------------------------------------------------
-# Dependency: L124PBBD  (%INC PGM(L124PBBD))
-# ---------------------------------------------------------------------------
-from L124PBBD import main as run_l124pbbd, get_reptmon_nowk
 
 # ============================================================================
 # PATH CONFIGURATION (absolute paths, no BASE_DIR)
 # ============================================================================
 
-# BNM library - input (produced by L124PBBD) and output
+# BNM library
 BNM_PATH = Path(
     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm"
 )
@@ -49,49 +47,60 @@ BNMX_PATH = Path(
     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx"
 )
 
+# LOAN.LNNOTE (PIBB MNILN)
+LOAN_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/"
+    "enrh_ln_note_m{reptmon}.sas7bdat"
+)
 
-# ============================================================================
-# BNMCODE MAPPING LOGIC
-# ============================================================================
+# PBBRDAL reference output (produced by PBBWRDLF or PBBMRDLF at import time)
+PBBRDAL_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/"
+    "output/PBBRDAL.sas7bdat"
+)
 
-def get_bnmcodes_for_custcd(custcd: str) -> list:
-    """
-    Replicate SAS SELECT(CUSTCD) logic.
-    Returns a list of BNMCODE strings (one or two entries per custcd).
-    """
-    grp1 = {'02', '03', '11', '12', '71', '72', '73', '74', '79'}
-    grp2 = {'20', '13', '17', '30', '32', '33', '34', '35',
-            '36', '37', '38', '39', '40', '04', '05', '06'}
-    grp3 = {'41', '42', '43', '44', '46', '47', '48', '49', '51',
-            '52', '53', '54', '60', '61', '62', '63', '64', '65',
-            '59', '75', '57'}
-    grp4 = {'76', '77', '78'}
-    grp5 = {'81', '82', '83', '84'}
-    grp6 = {'85', '86', '90', '91', '92', '95', '96', '98', '99'}
-
-    codes = []
-
-    if custcd in grp1:
-        codes.append(f'34100{custcd}000000Y')
-    elif custcd in grp2:
-        codes.append('3410020000000Y')
-        if custcd in ('13', '17'):
-            codes.append(f'34100{custcd}000000Y')
-    elif custcd in grp3:
-        codes.append('3410060000000Y')
-    elif custcd in grp4:
-        codes.append('3410076000000Y')
-    elif custcd in grp5:
-        codes.append('3410081000000Y')
-    elif custcd in grp6:
-        codes.append('3410085000000Y')
-
-    return codes
+# RDAL output text file (semicolon-delimited)
+RDAL_OUTPUT_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWP124/rdal.txt"
+)
 
 
 # ============================================================================
-# HELPERS: Read / Append / Write via pyreadstat + saspy
+# GLOBAL MACRO VARIABLE EQUIVALENTS (derived from today - 1)
 # ============================================================================
+
+def get_rept_vars() -> dict:
+    """Derive REPTMON, NOWK, REPTDAY, REPTYEAR from (today - 1)."""
+    reptdate = datetime.date.today() - datetime.timedelta(days=1)
+    day = reptdate.day
+
+    if day == 8:
+        wk = '1'
+    elif day == 15:
+        wk = '2'
+    elif day == 22:
+        wk = '3'
+    else:
+        wk = '4'
+
+    return {
+        'REPTMON':  f"{reptdate.month:02d}",
+        'NOWK':     wk,
+        'REPTDAY':  f"{day:02d}",
+        'REPTYEAR': str(reptdate.year),
+    }
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def round_div1000(value) -> int:
+    """Equivalent to SAS ROUND(AMOUNT/1000)."""
+    if value is None:
+        return 0
+    return int(math.floor(float(value) / 1000.0 + 0.5))
+
 
 def read_sas7bdat(path: Path, where: str | None = None) -> pd.DataFrame:
     """Read .sas7bdat via pyreadstat, lowercase columns, optional filter."""
@@ -131,142 +140,264 @@ def write_sas_and_txt(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
     sas.endsas()
 
 
-def append_to_output(new_df: pd.DataFrame, target_base: Path) -> pd.DataFrame:
-    """
-    PROC APPEND DATA=new_df BASE=target_base equivalent.
-    """
-    target_sas = target_base.with_suffix('.sas7bdat')
+# ============================================================================
+# %MACRO MRGBIC
+# ============================================================================
 
-    if target_sas.exists():
-        existing_df = read_sas7bdat(target_sas)
-        combined_df = pd.concat([existing_df, new_df], ignore_index=True, sort=False)
-    else:
-        combined_df = new_df
+def macro_mrgbic(pbbrdal_df: pd.DataFrame, alw_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    %MACRO MRGBIC
+    """
+    pbbrdal_df = pbbrdal_df.copy()
+    alw_df = alw_df.copy()
+    pbbrdal_df.columns = [c.lower() for c in pbbrdal_df.columns]
+    alw_df.columns = [c.lower() for c in alw_df.columns]
 
-    return combined_df
+    # DATA PBBRDAL1
+    pbbrdal1 = pbbrdal_df.copy()
+    pbbrdal1['amtind'] = pbbrdal1['itcode'].str.slice(1, 2).apply(
+        lambda c: ' ' if c == '0' else 'D'
+    )
+    pbbrdal1['amount'] = 0.0
+
+    # MERGE ALW (AMOUNT->AMT1) PBBRDAL1 (AMOUNT->AMT2)
+    merged = pd.merge(
+        alw_df.rename(columns={'amount': 'amt1'}),
+        pbbrdal1.rename(columns={'amount': 'amt2'}),
+        on=['itcode', 'amtind'],
+        how='outer',
+    )
+
+    merged['amount'] = merged['amt1'].where(merged['amt1'].notna(), merged['amt2'])
+    merged = merged.drop(columns=[c for c in ('amt1', 'amt2') if c in merged.columns])
+
+    # Remove unwanted ITCODE ranges
+    it5 = merged['itcode'].str.slice(0, 5)
+    mask = ~(
+        ((it5 >= '30221') & (it5 <= '30228')) |
+        ((it5 >= '30231') & (it5 <= '30238')) |
+        ((it5 >= '30091') & (it5 <= '30098')) |
+        ((it5 >= '40151') & (it5 <= '40158')) |
+        (it5 == 'NSSTS')
+    )
+    rdal = merged[mask]
+
+    return rdal
 
 
 # ============================================================================
-# MAIN PROCESSING
+# MAIN
 # ============================================================================
 
 def main():
-    # -----------------------------------------------------------------------
-    # Derive REPTMON and NOWK
-    # -----------------------------------------------------------------------
-    reptmon, nowk = get_reptmon_nowk()
+    dvars    = get_rept_vars()
+    REPTMON  = dvars['REPTMON']
+    NOWK     = dvars['NOWK']
+    REPTDAY  = dvars['REPTDAY']
+    REPTYEAR = dvars['REPTYEAR']
 
     # -----------------------------------------------------------------------
-    # %INC PGM(L124PBBD)
+    # %GET_BICS
     # -----------------------------------------------------------------------
-    run_l124pbbd()
+    if NOWK == '4':
+        import PBBMRDLF  # noqa: F401
+    else:
+        import PBBWRDLF  # noqa: F401
+
+    pbbrdal_df = read_sas7bdat(PBBRDAL_PATH)
+
+    # Load BNM.ALW&REPTMON&NOWK
+    alw_path = BNM_PATH / f"alw{REPTMON}{NOWK}.sas7bdat"
+    alw_df   = read_sas7bdat(alw_path)
+
+    # %MRGBIC
+    rdal_df = macro_mrgbic(pbbrdal_df, alw_df)
 
     # -----------------------------------------------------------------------
-    # PROC DATASETS LIB=BNM NOLIST;
-    #   DELETE LALW&REPTMON&NOWK LALM&REPTMON&NOWK LALQ&REPTMON&NOWK;
+    # DATA CAG: SET LOAN.LNNOTE
+    # ENTITY_CD = 'PIBB' filter (Islamic).
     # -----------------------------------------------------------------------
-    lalw_base = BNM_PATH / f"lalw{reptmon}{nowk}"
-    lalm_path = BNM_PATH / f"lalm{reptmon}{nowk}.sas7bdat"
-    lalq_path = BNM_PATH / f"lalq{reptmon}{nowk}.sas7bdat"
+    loan_df = read_sas7bdat(
+        Path(str(LOAN_PATH).format(reptmon=REPTMON)),
+        where="entity_cd == 'PIBB'",
+    )
 
-    for p in (lalw_base.with_suffix('.sas7bdat'),
-              lalw_base.with_suffix('.txt'),
-              lalm_path, lalq_path):
-        if p.exists():
-            p.unlink()
+    pzipcode_list = [
+        2002, 2013, 3039, 3047, 800003098, 800003114,
+        800004016, 800004022, 800004029, 800040050,
+        800040053, 800050024, 800060024, 800060045,
+        800060081, 80060085,
+    ]
 
-    # -----------------------------------------------------------------------
-    # DATA LOAN&REPTMON&NOWK: SET BNM.L124&REPTMON&NOWK
-    # DATA ULOAN&REPTMON&NOWK: SET BNM.UL124&REPTMON&NOWK
-    # ENTITY_CD = 'PIBB' (Islamic) filter applied.
-    # -----------------------------------------------------------------------
-    l124_path  = BNM_PATH / f"l124{reptmon}{nowk}.sas7bdat"
-    ul124_path = BNM_PATH / f"ul124{reptmon}{nowk}.sas7bdat"
+    cag_df = loan_df[loan_df['loantype'].isin([124, 145])].copy()
+    cag_df['prodcd'] = '34120'
+    cag_df['amtind'] = 'I'
+    cag_df = cag_df[cag_df['pzipcode'].isin(pzipcode_list)].copy()
+    cag_df['itcode'] = '7511100000000Y'
 
-    loan_df  = read_sas7bdat(l124_path,  where="entity_cd == 'PIBB'")
-    uloan_df = read_sas7bdat(ul124_path, where="entity_cd == 'PIBB'")
-
-    # -----------------------------------------------------------------------
-    # SECTION 1: RM LOANS - BY CUSTOMER CODE
-    # -----------------------------------------------------------------------
-    alw1_df = (
-        loan_df[
-            loan_df['prodcd'].str.slice(0, 3).isin(['341', '342', '343', '344'])
-        ]
-        .groupby(['custcd', 'prodcd', 'amtind'], dropna=False, as_index=False)
+    cag_summary = (
+        cag_df
+        .groupby(['itcode', 'amtind'], dropna=False, as_index=False)
         .agg(amount=('balance', 'sum'))
     )
 
-    alwloan1_rows = []
-    for row in alw1_df.to_dict('records'):
-        custcd = str(row.get('custcd', '') or '').strip()
-        amtind = row.get('amtind')
-        amount = row.get('amount')
-        for bnmcode in get_bnmcodes_for_custcd(custcd):
-            alwloan1_rows.append({
-                'BNMCODE': bnmcode,
-                'AMTIND':  amtind,
-                'AMOUNT':  amount,
-            })
+    # DATA RDAL: SET RDAL CAG;
+    rdal_df = pd.concat([rdal_df, cag_summary], ignore_index=True, sort=False)
 
-    alwloan1_df = pd.DataFrame(
-        alwloan1_rows,
-        columns=['BNMCODE', 'AMTIND', 'AMOUNT'],
-    )
+    # IF SUBSTR(ITCODE,1,3) IN ('331','421','426','431') THEN DELETE;
+    it3 = rdal_df['itcode'].str.slice(0, 3)
+    rdal_df = rdal_df[~it3.isin(['331', '421', '426', '431'])]
 
-    BNM_PATH.mkdir(parents=True, exist_ok=True)
-    lalw_df = append_to_output(alwloan1_df, lalw_base)
+    # PROC SORT DATA=RDAL; BY ITCODE AMTIND
+    rdal_df = rdal_df.sort_values(['itcode', 'amtind']).reset_index(drop=True)
 
     # -----------------------------------------------------------------------
-    # SECTION 2: GROSS LOAN - BY APPROVED LIMIT
+    # DATA AL OB SP: SET RDAL
     # -----------------------------------------------------------------------
-    mask2 = (
-        (loan_df['prodcd'].str.slice(0, 2) == '34') |
-        (loan_df['prodcd'] == '54120')
-    )
-    alw2_df = (
-        loan_df[mask2]
-        .groupby(['prodcd', 'amtind'], dropna=False, as_index=False)
-        .agg(amount=('balance', 'sum'))
-    )
+    al_rows, ob_rows, sp_rows = [], [], []
 
-    alwloan2_df = pd.DataFrame({
-        'BNMCODE': '3051000000000Y',
-        'AMTIND':  alw2_df['amtind'],
-        'AMOUNT':  alw2_df['amount'],
-    })
+    for row in rdal_df.to_dict('records'):
+        itcode = str(row.get('itcode', '') or '')
+        amtind = str(row.get('amtind', '') or '')
 
-    lalw_df = append_to_output(alwloan2_df, lalw_base)
+        it1   = itcode[0:1]
+        it3   = itcode[0:3]
+        it4   = itcode[0:4]
+        it5   = itcode[0:5]
+        it2_1 = itcode[1:2]
+
+        if amtind != ' ':
+            if it3 == '307':
+                sp_rows.append(row)
+            elif it5 == '40190':
+                sp_rows.append(row)
+            elif it4 == 'SSTS':
+                new_row = dict(row)
+                new_row['itcode'] = '4017000000000Y'
+                sp_rows.append(new_row)
+            elif it1 != '5':
+                if it3 in ('685', '785'):
+                    sp_rows.append(row)
+                else:
+                    al_rows.append(row)
+            else:
+                ob_rows.append(row)
+        elif it2_1 == '0':
+            sp_rows.append(row)
+
+    al_df = pd.DataFrame(al_rows) if al_rows else pd.DataFrame(columns=rdal_df.columns)
+    ob_df = pd.DataFrame(ob_rows) if ob_rows else pd.DataFrame(columns=rdal_df.columns)
+    sp_df = pd.DataFrame(sp_rows) if sp_rows else pd.DataFrame(columns=rdal_df.columns)
+
+    # PROC SORT DATA=SP OUT=SP; BY ITCODE
+    sp_df = sp_df.sort_values('itcode').reset_index(drop=True)
 
     # -----------------------------------------------------------------------
-    # SECTION 3: LOANS SOLD TO CAGAMAS BERHAD WITH RECOURSE
+    # Write RDAL output text file
     # -----------------------------------------------------------------------
-    alw3_df = (
-        loan_df[loan_df['product'].isin([124, 145])]
-        .groupby(['prodcd', 'amtind'], dropna=False, as_index=False)
-        .agg(amount=('balance', 'sum'))
-    )
+    RDAL_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    alwloan3_df = pd.DataFrame({
-        'BNMCODE': '7511100000000Y',
-        'AMTIND':  alw3_df['amtind'],
-        'AMOUNT':  alw3_df['amount'],
-    })
+    phead = f"RDAL{REPTDAY}{REPTMON}{REPTYEAR}"
 
-    lalw_df = append_to_output(alwloan3_df, lalw_base)
+    with open(RDAL_OUTPUT_PATH, 'w', encoding='utf-8', newline='\n') as f:
 
-    # -----------------------------------------------------------------------
-    # FINAL CONSOLIDATION
-    # -----------------------------------------------------------------------
-    lalw_final = (
-        lalw_df
-        .groupby(['BNMCODE', 'AMTIND'], dropna=False, as_index=False)
-        .agg(AMOUNT=('AMOUNT', 'sum'))
-    )
+        # --- AL SECTION ---
+        al_sorted = al_df.sort_values(['itcode', 'amtind']).reset_index(drop=True)
+        first_al    = True
+        amountd     = 0
+        amounti     = 0
+        prev_itcode = None
 
-    write_sas_and_txt(lalw_final, BNM_PATH, f"lalw{reptmon}{nowk}")
-    print(f"LALW written to: {BNM_PATH / ('lalw' + reptmon + nowk + '.sas7bdat')}  "
-          f"({len(lalw_final)} rows)")
+        for row in al_sorted.to_dict('records'):
+            itcode = str(row.get('itcode', '') or '')
+            amtind = str(row.get('amtind', '') or '')
+            amount = float(row.get('amount', 0) or 0)
+
+            if first_al:
+                f.write(phead + '\n')
+                f.write('AL\n')
+                amountd  = 0
+                amounti  = 0
+                first_al = False
+
+            if prev_itcode is not None and itcode != prev_itcode:
+                amountd = amountd + amounti
+                f.write(f"{prev_itcode};{amountd};{amounti}\n")
+                amountd = 0
+                amounti = 0
+
+            amt_rounded = round_div1000(amount)
+            if amtind == 'D':
+                amountd += amt_rounded
+            elif amtind == 'I':
+                amounti += amt_rounded
+
+            prev_itcode = itcode
+
+        if prev_itcode is not None:
+            amountd = amountd + amounti
+            f.write(f"{prev_itcode};{amountd};{amounti}\n")
+
+        # --- OB SECTION ---
+        ob_sorted = ob_df.sort_values(['itcode', 'amtind']).reset_index(drop=True)
+        first_ob    = True
+        amountd     = 0
+        amounti     = 0
+        prev_itcode = None
+
+        for row in ob_sorted.to_dict('records'):
+            itcode = str(row.get('itcode', '') or '')
+            amtind = str(row.get('amtind', '') or '')
+            amount = float(row.get('amount', 0) or 0)
+
+            if first_ob:
+                f.write('OB\n')
+                amountd  = 0
+                amounti  = 0
+                first_ob = False
+
+            if prev_itcode is not None and itcode != prev_itcode:
+                amountd = amountd + amounti
+                f.write(f"{prev_itcode};{amountd};{amounti}\n")
+                amountd = 0
+                amounti = 0
+
+            if amtind == 'D':
+                amountd += round_div1000(amount)
+            elif amtind == 'I':
+                amounti += round_div1000(amount)
+
+            prev_itcode = itcode
+
+        if prev_itcode is not None:
+            amountd = amountd + amounti
+            f.write(f"{prev_itcode};{amountd};{amounti}\n")
+
+        # --- SP SECTION ---
+        first_sp    = True
+        amountd     = 0.0
+        prev_itcode = None
+
+        for row in sp_df.to_dict('records'):
+            itcode = str(row.get('itcode', '') or '')
+            amount = float(row.get('amount', 0) or 0)
+
+            if first_sp:
+                f.write('SP\n')
+                amountd  = 0.0
+                first_sp = False
+
+            if prev_itcode is not None and itcode != prev_itcode:
+                f.write(f"{prev_itcode};{round_div1000(amountd)}\n")
+                amountd = 0.0
+
+            amountd += amount
+            prev_itcode = itcode
+
+        if prev_itcode is not None:
+            f.write(f"{prev_itcode};{round_div1000(amountd)}\n")
+
+    print(f"RDAL output written to: {RDAL_OUTPUT_PATH}")
 
 
 # ============================================================================
