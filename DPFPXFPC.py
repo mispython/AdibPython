@@ -213,6 +213,49 @@ if __name__ == '__main__':
     main()
 
 
+BELOW IS SAS ORIGINAL CODE:
+
+OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER;
+
+DATA REPTDATE;
+  SET LOAN.REPTDATE;
+  SELECT(DAY(REPTDATE));
+    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
+    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
+    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
+    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3';
+                            WK2= '2'; WK3 = '1'; END;
+  END;
+  MM = MONTH(REPTDATE);
+  IF WK = '1' THEN DO;
+     MM1 = MM - 1;
+     IF MM1 = 0 THEN MM1 = 12;
+  END;
+  ELSE MM1 = MM;
+  MM2 = MM - 1;
+  IF MM2 = 0 THEN MM2 = 12;
+  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
+  CALL SYMPUT('NOWK',PUT(WK,$1.));
+  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
+  CALL SYMPUT('NOWK2',PUT(WK2,$1.));
+  CALL SYMPUT('NOWK3',PUT(WK3,$1.));
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
+  CALL SYMPUT('REPTMON2',PUT(MM2,Z2.));
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
+RUN;
+LIBNAME BNM1 "SAP.PIBB.SASDATA" DISP=SHR;
+LIBNAME BNMX "SAP.PIBB.D&REPTYEAR" DISP=SHR;
+RUN;
+   %INC PGM(LALWP124);
+   DATA BNM.ALW&REPTMON&NOWK;
+        SET BNMX.ALW&REPTMON&NOWK;
+   %INC PGM(P124RDAL);
+
+
 
 for LNNOTE, need to add filter of "WHERE ENTITY_CD = 'PIBB'" (islamic)
 all inputs are in sas7bdat sas dataset and need to be in all lowercase.
@@ -220,3 +263,5 @@ use pyreadstat to read.
 remove reptdate, use datetime timedelta - 1 instead. 
 output in sas7bdat and TEXT files. 
 write out using saspy
+make sure to include pgm files (already existed in .py)
+
