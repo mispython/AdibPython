@@ -2,86 +2,100 @@
 from __future__ import annotations
 
 """
-Program  : L124PBBD
-Purpose  : Filter BNM1.LOAN{MM}{WK} and BNM1.ULOAN{MM}{WK} for
-           PRODUCT IN (124,145), assign PRODCD='34120' and AMTIND='I',
-           then write out BNM.L124{MM}{WK} and BNM.UL124{MM}{WK}
-           as .sas7bdat (+ semicolon-delimited .txt) via saspy.
-
-           ENTITY_CD filter is NOT applied here — that is only for
-           enrh_ln_note (LNNOTE) in P124RDAL.
-
-Naming:
-    REPTMON : 'MM'  -> 2-digit zero-padded (e.g. '09')
-    NOWK    : '1'..'4' -> SINGLE digit (e.g. '4')
-    Combined suffix -> e.g. '0904'
+Program  : LALWP124
+Purpose  : Report on Domestic Assets and Liabilities - Part I (M&I Loan).
+           Reads BNM.L124{MM}{WK} and BNM.UL124{MM}{WK} (no ENTITY_CD
+           filter — the L124/UL124 datasets don't carry that column),
+           summarises by customer code / approved limit / Cagamas,
+           appends results to BNM.LALW{MM}{WK}.
 """
 
-import datetime
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import pyreadstat
 import saspy
+
+# %INC PGM(PBBLNFMT) — expose SAS format functions
+import PBBLNFMT  # noqa: F401
+
+# %INC PGM(L124PBBD)
+from L124PBBD import main as run_l124pbbd, get_reptmon_nowk
 
 
 # ============================================================================
 # PATH CONFIGURATION
 # ============================================================================
 
-BNM1_PATH = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1"
-)
 BNM_PATH = Path(
     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm"
 )
+BNM1_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1"
+)
+BNMX_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx"
+)
 
 
 # ============================================================================
-# DATE VARIABLES
+# BNMCODE MAPPING
 # ============================================================================
 
-def get_reptmon_nowk() -> tuple:
-    """
-    REPTMON -> '09' (2-digit)
-    NOWK    -> '4'  (single digit, NEVER zero-padded)
-    """
-    reptdate = datetime.date.today() - datetime.timedelta(days=1)
-    day = reptdate.day
+def get_bnmcodes_for_custcd(custcd: str) -> list:
+    grp1 = {'02', '03', '11', '12', '71', '72', '73', '74', '79'}
+    grp2 = {'20', '13', '17', '30', '32', '33', '34', '35',
+            '36', '37', '38', '39', '40', '04', '05', '06'}
+    grp3 = {'41', '42', '43', '44', '46', '47', '48', '49', '51',
+            '52', '53', '54', '60', '61', '62', '63', '64', '65',
+            '59', '75', '57'}
+    grp4 = {'76', '77', '78'}
+    grp5 = {'81', '82', '83', '84'}
+    grp6 = {'85', '86', '90', '91', '92', '95', '96', '98', '99'}
 
-    if day == 8:
-        wk = '1'
-    elif day == 15:
-        wk = '2'
-    elif day == 22:
-        wk = '3'
-    else:
-        wk = '4'
-
-    return f"{reptdate.month:02d}", wk
+    codes = []
+    if custcd in grp1:
+        codes.append(f'34100{custcd}000000Y')
+    elif custcd in grp2:
+        codes.append('3410020000000Y')
+        if custcd in ('13', '17'):
+            codes.append(f'34100{custcd}000000Y')
+    elif custcd in grp3:
+        codes.append('3410060000000Y')
+    elif custcd in grp4:
+        codes.append('3410076000000Y')
+    elif custcd in grp5:
+        codes.append('3410081000000Y')
+    elif custcd in grp6:
+        codes.append('3410085000000Y')
+    return codes
 
 
 # ============================================================================
 # HELPERS
 # ============================================================================
 
-def read_sas7bdat(path: Path) -> pd.DataFrame:
+def read_sas7bdat(path: Path, where: Optional[str] = None) -> pd.DataFrame:
     df, _meta = pyreadstat.read_sas7bdat(str(path))
     df.columns = [c.lower() for c in df.columns]
+    if where and not df.empty:
+        col = where.split()[0]
+        if col in df.columns:
+            df = df.query(where)
     return df
 
 
-def write_via_saspy(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
-    """Write .sas7bdat + .txt via saspy. Allows 0-row with schema."""
+def write_sas_and_txt(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
+    """Write .sas7bdat + semicolon-delimited .txt via saspy.
+    Allows 0-row with schema.
+    """
     if df is None or len(df.columns) == 0:
         raise ValueError(
             f"Refusing to write schema-less dataset '{base_name}'."
         )
     if df.empty:
-        print(
-            f"WARNING: '{base_name}' has 0 rows — writing empty dataset "
-            f"with {len(df.columns)} columns."
-        )
+        print(f"WARNING: '{base_name}' has 0 rows — writing empty dataset.")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     sas7bdat_path = out_dir / f"{base_name}.sas7bdat"
@@ -106,38 +120,13 @@ def write_via_saspy(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
     sas.endsas()
 
 
-def make_l124(src_path: Path) -> pd.DataFrame:
-    """
-    Mirrors:
-        SET BNM1.LOAN{MM}{WK};
-        IF PRODUCT IN (124,145);
-        PRODCD='34120'; AMTIND='I';
-    No ENTITY_CD filter here.
-    """
-    df = read_sas7bdat(src_path)
-
-    prod_col = next(
-        (c for c in ('product', 'prodcd', 'product_cd')
-         if c in df.columns),
-        None,
-    )
-    if prod_col is None:
-        raise KeyError(
-            f"No product column in {src_path.name}. "
-            f"Columns: {list(df.columns)[:20]}..."
-        )
-
-    vals = df[prod_col]
-    # Accept int or string representations of 124 / 145
-    if vals.dtype == object:
-        mask = vals.astype(str).isin(['124', '145'])
-    else:
-        mask = vals.isin([124, 145])
-
-    df = df[mask].copy()
-    df['prodcd'] = '34120'
-    df['amtind'] = 'I'
-    return df
+def append_to_output(new_df: pd.DataFrame, target_base: Path) -> pd.DataFrame:
+    """PROC APPEND equivalent."""
+    target_sas = target_base.with_suffix('.sas7bdat')
+    if target_sas.exists():
+        existing_df = read_sas7bdat(target_sas)
+        return pd.concat([existing_df, new_df], ignore_index=True, sort=False)
+    return new_df
 
 
 # ============================================================================
@@ -147,40 +136,124 @@ def make_l124(src_path: Path) -> pd.DataFrame:
 def main():
     reptmon, nowk = get_reptmon_nowk()
 
-    assert len(reptmon) == 2 and reptmon.isdigit(), (
-        f"REPTMON must be 2-digit, got {reptmon!r}"
+    # %INC PGM(L124PBBD)
+    run_l124pbbd()
+
+    # PROC DATASETS: DELETE LALW / LALM / LALQ
+    lalw_base = BNM_PATH / f"lalw{reptmon}{nowk}"
+    lalm_path = BNM_PATH / f"lalm{reptmon}{nowk}.sas7bdat"
+    lalq_path = BNM_PATH / f"lalq{reptmon}{nowk}.sas7bdat"
+
+    for p in (lalw_base.with_suffix('.sas7bdat'),
+              lalw_base.with_suffix('.txt'),
+              lalm_path, lalq_path):
+        if p.exists():
+            p.unlink()
+
+    # DATA LOAN / ULOAN — NO entity_cd filter here
+    l124_path  = BNM_PATH / f"l124{reptmon}{nowk}.sas7bdat"
+    ul124_path = BNM_PATH / f"ul124{reptmon}{nowk}.sas7bdat"
+
+    loan_df  = read_sas7bdat(l124_path)
+    uloan_df = read_sas7bdat(ul124_path)
+
+    # -----------------------------------------------------------------------
+    # SECTION 1: RM LOANS - BY CUSTOMER CODE
+    # -----------------------------------------------------------------------
+    if not loan_df.empty and 'prodcd' in loan_df.columns:
+        alw1_df = (
+            loan_df[
+                loan_df['prodcd'].astype(str).str.slice(0, 3)
+                    .isin(['341', '342', '343', '344'])
+            ]
+            .groupby(['custcd', 'prodcd', 'amtind'], dropna=False, as_index=False)
+            .agg(amount=('balance', 'sum'))
+        )
+    else:
+        alw1_df = pd.DataFrame(columns=['custcd', 'prodcd', 'amtind', 'amount'])
+
+    alwloan1_rows = []
+    for row in alw1_df.to_dict('records'):
+        custcd = str(row.get('custcd', '') or '').strip()
+        amtind = row.get('amtind')
+        amount = row.get('amount')
+        for bnmcode in get_bnmcodes_for_custcd(custcd):
+            alwloan1_rows.append({
+                'BNMCODE': bnmcode,
+                'AMTIND':  amtind,
+                'AMOUNT':  amount,
+            })
+
+    alwloan1_df = pd.DataFrame(
+        alwloan1_rows,
+        columns=['BNMCODE', 'AMTIND', 'AMOUNT'],
     )
-    assert nowk in {'1', '2', '3', '4'}, (
-        f"NOWK must be single-digit, got {nowk!r}"
-    )
 
-    loan_path  = BNM1_PATH / f"loan{reptmon}{nowk}.sas7bdat"
-    uloan_path = BNM1_PATH / f"uloan{reptmon}{nowk}.sas7bdat"
+    BNM_PATH.mkdir(parents=True, exist_ok=True)
+    lalw_df = append_to_output(alwloan1_df, lalw_base)
 
-    if not loan_path.exists():
-        raise FileNotFoundError(f"L124PBBD: input not found: {loan_path}")
-    if not uloan_path.exists():
-        raise FileNotFoundError(f"L124PBBD: input not found: {uloan_path}")
+    # -----------------------------------------------------------------------
+    # SECTION 2: GROSS LOAN - BY APPROVED LIMIT
+    # -----------------------------------------------------------------------
+    if not loan_df.empty and 'prodcd' in loan_df.columns:
+        mask2 = (
+            (loan_df['prodcd'].astype(str).str.slice(0, 2) == '34') |
+            (loan_df['prodcd'].astype(str) == '54120')
+        )
+        alw2_df = (
+            loan_df[mask2]
+            .groupby(['prodcd', 'amtind'], dropna=False, as_index=False)
+            .agg(amount=('balance', 'sum'))
+        )
+    else:
+        alw2_df = pd.DataFrame(columns=['prodcd', 'amtind', 'amount'])
 
-    # DATA BNM.L124{MM}{WK}
-    print(f"L124PBBD: reading {loan_path} ...")
-    l124_df = make_l124(loan_path)
-    l124_base = f"l124{reptmon}{nowk}"
-    write_via_saspy(l124_df, BNM_PATH, l124_base)
+    alwloan2_df = pd.DataFrame({
+        'BNMCODE': '3051000000000Y',
+        'AMTIND':  alw2_df['amtind'],
+        'AMOUNT':  alw2_df['amount'],
+    })
+
+    lalw_df = append_to_output(alwloan2_df, lalw_base)
+
+    # -----------------------------------------------------------------------
+    # SECTION 3: LOANS SOLD TO CAGAMAS
+    # -----------------------------------------------------------------------
+    if not loan_df.empty and 'product' in loan_df.columns:
+        alw3_df = (
+            loan_df[loan_df['product'].isin([124, 145])]
+            .groupby(['prodcd', 'amtind'], dropna=False, as_index=False)
+            .agg(amount=('balance', 'sum'))
+        )
+    else:
+        alw3_df = pd.DataFrame(columns=['prodcd', 'amtind', 'amount'])
+
+    alwloan3_df = pd.DataFrame({
+        'BNMCODE': '7511100000000Y',
+        'AMTIND':  alw3_df['amtind'],
+        'AMOUNT':  alw3_df['amount'],
+    })
+
+    lalw_df = append_to_output(alwloan3_df, lalw_base)
+
+    # -----------------------------------------------------------------------
+    # FINAL CONSOLIDATION
+    # -----------------------------------------------------------------------
+    if lalw_df.empty:
+        lalw_final = pd.DataFrame(
+            columns=['BNMCODE', 'AMTIND', 'AMOUNT']
+        )
+    else:
+        lalw_final = (
+            lalw_df
+            .groupby(['BNMCODE', 'AMTIND'], dropna=False, as_index=False)
+            .agg(AMOUNT=('AMOUNT', 'sum'))
+        )
+
+    write_sas_and_txt(lalw_final, BNM_PATH, f"lalw{reptmon}{nowk}")
     print(
-        f"L124 written: {BNM_PATH / (l124_base + '.sas7bdat')}  "
-        f"({len(l124_df)} rows)"
-    )
-    del l124_df
-
-    # DATA BNM.UL124{MM}{WK}
-    print(f"L124PBBD: reading {uloan_path} ...")
-    ul124_df = make_l124(uloan_path)
-    ul124_base = f"ul124{reptmon}{nowk}"
-    write_via_saspy(ul124_df, BNM_PATH, ul124_base)
-    print(
-        f"UL124 written: {BNM_PATH / (ul124_base + '.sas7bdat')}  "
-        f"({len(ul124_df)} rows)"
+        f"LALW written: {BNM_PATH / ('lalw' + reptmon + nowk + '.sas7bdat')}  "
+        f"({len(lalw_final)} rows)"
     )
 
 
