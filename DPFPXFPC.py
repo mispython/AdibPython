@@ -1,17 +1,220 @@
-Columns: ['acctno', 'noteno', 'eir_adj', 'sector', 'name', 'commno', 'custcd', 'origmt', 'prodcd', 'riskcd', 'collcd', 'origmx', 'remainmx', 'sectorcd', 'statecd', 'riskrte', 'amtind', 'cgcref', 'custcode', 'product', 'branch', 'assmdate', 'intamt', 'appvalue', 'noteterm', 'colldesc', 'flag3', 'costctr', 'census', 'billtype', 'netproc', 'intrate', 'spread', 'ntint', 'rebate', 'intearn', 'accrual', 'secure', 'liabcode', 'loanstat', 'borstat', 'marketvl', 'earnterm', 'usuryidx', 'intearn2', 'intearn3', 'intearn4', 'payamt', 'payfreq', 'biltot', 'bilpay', 'paytype', 'feeamt4', 'apprdate', 'totpdeop', 'intpdytd', 'accruytd', 'accrueop', 'ntindex', 'rebatei', 'acctyind', 'hstprin', 'costfund', 'restbalc', 'nxbildt', 'payind', 'feeamt', 'nxtbil', 'bldate', 'sectold', 'exprdate', 'closedte', 'issdte', 'sectorma', 'fisspurp', 'newsec', 'census4', 'custidno', 'rleasamt', 'apprlimt', 'undrawn', 'apprlmtacct', 'odplan', 'rate1', 'rate2', 'todrate', 'flatrate', 'baserate', 'odstat', 'orgcode', 'limit1', 'limit2', 'col1', 'col2', 'avgamt', 'odintacc', 'censust', 'acctype', 'ccricode', 'crispurp', 'sectorz', 'sectorzz', 'secvalid', 'fisspori', 'sectpori', 'seccust', 'newicind', 'bussind', 'custori', 'balmnim', 'curcode', 'bal_aft_eir', 'eirind', 'remmth', 'ccy', 'forate', 'fcybal', 'appr2fcy', 'cjfee', 'cfindex', 'write_down_bal', 'oribal_aft_eir', 'oribalance', 'oribalmni', 'oldnotebldate', 'oldnotedayarr', 'dnbfisme', 'dnbfi_ori', 'vb', 'freleas', 'escracct', 'siacctno', 'abm_hl', 'ia_lru', 'ascore_perm', 'ascore_ltst', 'unearned1', 'unearned2', 'unearned', 'fdcertno', 'fdacctno', 'ccris_instlamt', 'industrial_sector_cd', 'sectorcd_ori', 'invalid_loc', 'state', 'ascore_comm', 'apprlim2ori', 'paidind', 'remainmt', 'remainmh', 'curbal', 'balance', 'balmni', 'apprlim2']
-Num rows: 446114
-         acctno   noteno  eir_adj sector                      name  commno custcd origmt prodcd riskcd  ... state ascore_comm   apprlim2ori paidind remainmt  remainmh    curbal       balance        balmni      apprlim2
-0  2.000084e+09     14.0      NaN   9700     UMI SURAYA BT MAT ISA     0.0     77     31  34230         ...    12              43413.700886       M       62      34.0  43322.72  43413.700886  43413.700886  43413.700886
-1  2.002981e+09     13.0      NaN   9700  AHMAD FAIRUZ BIN ABU BAK     0.0     77     32  34230         ...    12              50767.408032       M       71      65.0  50767.81  50767.408032  50767.408032  50767.408032
-2  2.005611e+09     10.0      NaN   9700  WAN ZURINA BT.KHAIRUDDIN     0.0     77     32  34230         ...    14              81433.142739       M       71      88.0  81433.60  81433.142739  81433.142739  81433.142739
-3  2.006460e+09     18.0      NaN   9700  MOHAMAD FITRI B SHAMSUDI     0.0     77     32  34230         ...    02              31136.664466       M       71      67.0  31071.01  31136.664466  31136.664466  31136.664466
-4  2.006872e+09     11.0      NaN   9700       MARHANOM BINTI ROBI     0.0     77     31  34230         ...    05              72437.960835       M       71      61.0  72438.57  72437.960835  72437.960835  72437.960835
-5  2.008922e+09     10.0      NaN   9700   AZLINA BINTI MAT ARISB*     0.0     77     32  34230         ...    12              32384.359694       M       64      60.0  32384.64  32384.359694  32384.359694  32384.359694
-6  2.017150e+09     17.0      NaN   9700  MOHD HILMI BIN ABD HALIM     0.0     77     32  34230         ...    12              39741.880393       M       64      58.0  39658.16  39741.880393  39741.880393  39741.880393
-7  2.017191e+09     11.0      NaN   9700          TENGKU KHUZIYANI     0.0     77     31  34230         ...    14              30543.582427       M       62      27.0  30544.21  30543.582427  30543.582427  30543.582427
-8  2.041324e+09  90010.0      NaN   0000  NORHAYATI BTE AMAT ZAINI     0.0     77     31  34111         ...    12              37687.720000       M       71      63.0  42243.40  37687.820000  37687.820000  37687.720000
-9  2.059132e+09  90010.0      NaN   9700     ZAIDA BINTI ABU BAKAR     0.0     77     31  34230         ...    07              15034.137678       M       62      29.0  15035.54  15034.137678  15034.137678  15034.137678
+#!/usr/bin/env python3
+from __future__ import annotations
 
-[10 rows x 155 columns]
-Unique 'product': [103. 128.]
-Unique 'prodcd' : ['34230' '34111']
+"""
+Program  : EIBWP124
+Purpose  : Weekly run (after EIBWWKLY) for PIBB - Report on Domestic Assets
+           and Liabilities Part I (M&I Loan / Cagamas L124).
+           - Derives REPTDATE week/month variables from (today - 1).
+           - Runs LALWP124 to produce BNM.LALW{REPTMON}{NOWK}.
+           - Copies BNMX.ALW{REPTMON}{NOWK} to BNM.ALW{REPTMON}{NOWK}.
+           - Runs P124RDAL to produce the RDAL semicolon-delimited output.
+"""
+
+import datetime
+from pathlib import Path
+from typing import Optional
+
+import pandas as pd
+import pyreadstat
+import saspy
+
+# %INC PGM(LALWP124)
+from LALWP124 import main as run_lalwp124
+
+# %INC PGM(P124RDAL)
+from P124RDAL import main as run_p124rdal
+
+
+# ============================================================================
+# PATH CONFIGURATION (absolute paths, no BASE_DIR)
+# ============================================================================
+
+PIBB_LOAN_DIR = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS"
+)
+
+BNM_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm"
+)
+BNM1_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1"
+)
+BNMX_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx"
+)
+
+RDAL_OUTPUT_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWP124"
+)
+
+
+# ============================================================================
+# DATE VARIABLES (from today - 1)
+# ============================================================================
+
+def get_date_variables() -> dict:
+    """
+    SAS SELECT(DAY(REPTDATE)) logic, but REPTDATE = (today - 1).
+
+    REPTMON -> 2-digit zero-padded ('09')
+    NOWK    -> single digit ('1'..'4')
+    """
+    reptdate = datetime.date.today() - datetime.timedelta(days=1)
+
+    day  = reptdate.day
+    mm   = reptdate.month
+    yyyy = reptdate.year
+
+    if day == 8:
+        sdd = 1
+        wk, wk1 = '1', '4'
+        wk2, wk3 = None, None
+    elif day == 15:
+        sdd = 9
+        wk, wk1 = '2', '1'
+        wk2, wk3 = None, None
+    elif day == 22:
+        sdd = 16
+        wk, wk1 = '3', '2'
+        wk2, wk3 = None, None
+    else:
+        sdd = 23
+        wk, wk1 = '4', '3'
+        wk2, wk3 = '2', '1'
+
+    if wk == '1':
+        mm1 = mm - 1
+        if mm1 == 0:
+            mm1 = 12
+    else:
+        mm1 = mm
+
+    mm2 = mm - 1
+    if mm2 == 0:
+        mm2 = 12
+
+    sdate = datetime.date(yyyy, mm, sdd)
+
+    return {
+        'NOWK':     wk,
+        'NOWK1':    wk1,
+        'NOWK2':    wk2,
+        'NOWK3':    wk3,
+        'REPTMON':  f"{mm:02d}",
+        'REPTMON1': f"{mm1:02d}",
+        'REPTMON2': f"{mm2:02d}",
+        'REPTYEAR': str(yyyy),
+        'REPTDAY':  f"{day:02d}",
+        'RDATE':    reptdate.strftime('%d/%m/%y'),
+        'SDATE':    sdate.strftime('%d/%m/%y'),
+        '_reptdate_obj': reptdate,
+    }
+
+
+# ============================================================================
+# HELPERS
+# ============================================================================
+
+def read_sas7bdat(path: Path, where: Optional[str] = None) -> pd.DataFrame:
+    df, _meta = pyreadstat.read_sas7bdat(str(path))
+    df.columns = [c.lower() for c in df.columns]
+    if where and not df.empty:
+        col = where.split()[0]
+        if col in df.columns:
+            df = df.query(where)
+    return df
+
+
+def write_outputs(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
+    """Write .sas7bdat + semicolon-delimited .txt via saspy.
+    Allows 0-row writes (with schema); refuses schema-less writes.
+    """
+    if df is None or len(df.columns) == 0:
+        raise ValueError(
+            f"Refusing to write schema-less dataset '{base_name}'."
+        )
+    if df.empty:
+        print(f"WARNING: '{base_name}' has 0 rows — writing empty dataset.")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sas7bdat_path = out_dir / f"{base_name}.sas7bdat"
+    text_path     = out_dir / f"{base_name}.txt"
+
+    sas = saspy.SASsession(cfgname='default')
+    sas.df2sd(df, table=base_name, libref='WORK')
+
+    sas.submit(f"""
+        PROC EXPORT DATA=WORK.{base_name}
+            OUTFILE="{sas7bdat_path}"
+            DBMS=SAS7BDAT REPLACE;
+        RUN;
+    """)
+    sas.submit(f"""
+        PROC EXPORT DATA=WORK.{base_name}
+            OUTFILE="{text_path}"
+            DBMS=DLM REPLACE;
+            DELIMITER=';';
+        RUN;
+    """)
+    sas.endsas()
+
+    print(f"Wrote {sas7bdat_path} and {text_path} ({len(df)} rows)")
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+def main():
+    dvars    = get_date_variables()
+    nowk     = dvars['NOWK']
+    reptmon  = dvars['REPTMON']
+    reptyear = dvars['REPTYEAR']
+    rdate    = dvars['RDATE']
+    sdate    = dvars['SDATE']
+
+    assert len(reptmon) == 2 and reptmon.isdigit(), (
+        f"REPTMON must be 2-digit 'MM', got {reptmon!r}"
+    )
+    assert nowk in {'1', '2', '3', '4'}, (
+        f"NOWK must be single-digit '1'..'4', got {nowk!r}"
+    )
+
+    print(
+        f"REPTMON={reptmon}, NOWK={nowk}, REPTYEAR={reptyear}, "
+        f"RDATE={rdate}, SDATE={sdate}"
+    )
+
+    # Sanity: LNNOTE exists for this REPTMON
+    loan_file = PIBB_LOAN_DIR / f"enrh_ln_note_m{reptmon}.sas7bdat"
+    if not loan_file.exists():
+        raise FileNotFoundError(
+            f"PIBB LNNOTE monthly file not found for REPTMON={reptmon}: "
+            f"{loan_file}"
+        )
+
+    # %INC PGM(LALWP124)
+    run_lalwp124()
+
+    # DATA BNM.ALW{MM}{WK}; SET BNMX.ALW{MM}{WK};
+    bnmx_alw_path = BNMX_PATH / f"alw{reptmon}{nowk}.sas7bdat"
+    bnm_alw_base  = f"alw{reptmon}{nowk}"
+
+    if not bnmx_alw_path.exists():
+        raise FileNotFoundError(f"BNMX ALW not found: {bnmx_alw_path}")
+
+    alw_df = read_sas7bdat(bnmx_alw_path)
+    write_outputs(alw_df, BNM_PATH, bnm_alw_base)
+
+    print(
+        f"ALW copied from {bnmx_alw_path} to "
+        f"{BNM_PATH / (bnm_alw_base + '.sas7bdat')} ({len(alw_df)} rows)"
+    )
+
+    # %INC PGM(P124RDAL)
+    run_p124rdal()
+
+
+if __name__ == '__main__':
+    main()
