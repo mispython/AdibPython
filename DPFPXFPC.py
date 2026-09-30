@@ -1,89 +1,65 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
-File Name: PBBWRDLF
-Reads ITCODE values and creates PBBRDAL.parquet
+Program  : PBBMRDLF
+Purpose  : Monthly ITCODE reference list -> PBBRDAL.sas7bdat
 """
 
-import polars as pl
 from pathlib import Path
 
-# Setup paths
-# INPUT_DIR = Path("input")
-# OUTPUT_DIR = Path("output")
+import pandas as pd
+import saspy
 
-BASE_DIR = Path(__file__).resolve().parent
 
-INPUT_DIR = BASE_DIR / "data"
-OUTPUT_DIR = BASE_DIR / "output"
+OUTPUT_DIR  = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output"
+)
+OUTPUT_BASE = "PBBRDAL"
 
-# Create directories if they don't exist
-INPUT_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Define output file path
-OUTPUT_FILE = OUTPUT_DIR / "PBBRDAL.parquet"
-
-# ITCODE data from CARDS section
-itcode_data = [
-    "3313002000000Y",
-    "3313003000000Y",
-    "4017000000000Y",
-    "4019000000000Y",
-    "4216060000000Y",
-    "4261076000000Y",
-    "4261085000000Y",
-    "4263076000000Y",
-    "4263085000000Y",
-    "4269981000000Y",
-    "4313002000000Y",
-    "4313003000000Y",
-    "5422000000000Y",
-    "7200000008310Y",
-    "7300000003000Y",
-    "7300000006100Y",
-    "7300000008310Y",
-    "7300000008320Y",
+# Replace with the monthly SAS CARDS contents.
+ITCODE_DATA = [
+    # ... monthly ITCODEs here ...
 ]
 
-# Create Polars DataFrame
-df = pl.DataFrame({
-    "ITCODE": itcode_data
-})
 
-# Write to parquet
-df.write_parquet(OUTPUT_FILE)
+def build() -> Path:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-print(f"Successfully created {OUTPUT_FILE}")
-print(f"Total records: {len(df)}")
+    sas7bdat_path = OUTPUT_DIR / f"{OUTPUT_BASE}.sas7bdat"
+    text_path     = OUTPUT_DIR / f"{OUTPUT_BASE}.txt"
 
+    df = pd.DataFrame({"ITCODE": ITCODE_DATA})
 
+    sas = saspy.SASsession(cfgname='default')
+    sas.df2sd(df, table=OUTPUT_BASE, libref='WORK')
 
-SAS ORIGINAL CODE:
+    sas.submit(
+        f"""
+        PROC EXPORT DATA=WORK.{OUTPUT_BASE}
+            OUTFILE="{sas7bdat_path}"
+            DBMS=SAS7BDAT REPLACE;
+        RUN;
+        """
+    )
+    sas.submit(
+        f"""
+        PROC EXPORT DATA=WORK.{OUTPUT_BASE}
+            OUTFILE="{text_path}"
+            DBMS=DLM REPLACE;
+            DELIMITER=';';
+        RUN;
+        """
+    )
+    sas.endsas()
 
-DATA PBBRDAL;
-INPUT ITCODE $ 1-14;
-CARDS;
-3313002000000Y
-3313003000000Y
-4017000000000Y
-4019000000000Y
-4216060000000Y
-4261076000000Y
-4261085000000Y
-4263076000000Y
-4263085000000Y
-4269981000000Y
-4313002000000Y
-4313003000000Y
-5422000000000Y
-7200000008310Y
-7300000003000Y
-7300000006100Y
-7300000008310Y
-7300000008320Y
-;
-RUN;
+    print(f"PBBMRDLF: wrote {sas7bdat_path} ({len(df)} records)")
+    return sas7bdat_path
 
 
+build()
 
-does it need input and output directly?
+
+if __name__ == '__main__':
+    pass
