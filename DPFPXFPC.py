@@ -1,142 +1,85 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+REPTMON=09, NOWK=4, REPTYEAR=2026, RDATE=29/09/26, SDATE=23/09/26
+L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/loan094.sas7bdat ...
+SAS Connection established. Subprocess id is 3216093
 
-"""
-Program  : L124PBBD
-Purpose  : Filter LOAN and ULOAN datasets for PRODUCT IN (124, 145),
-           assign PRODCD='34120' and AMTIND='I', then write out
-           BNM.L124{REPTMON}{NOWK} and BNM.UL124{REPTMON}{NOWK}
-           as .sas7bdat (+ .txt) via saspy.
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
+  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3216093
+L124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/l124094.sas7bdat  (0 rows)
+L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/uloan094.sas7bdat ...
+SAS Connection established. Subprocess id is 3216141
 
-Public API:
-    get_reptmon_nowk() -> (reptmon, nowk)   # derived from today - 1
-    main()                                   # run the extraction
-"""
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
+  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3216141
+UL124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/ul124094.sas7bdat  (0 rows)
+Traceback (most recent call last):
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/scope.py", line 231, in resolve
+    return self.resolvers[key]
+  File "/usr/lib64/python3.9/collections/__init__.py", line 941, in __getitem__
+    return self.__missing__(key)            # support subclasses that define __missing__
+  File "/usr/lib64/python3.9/collections/__init__.py", line 933, in __missing__
+    raise KeyError(key)
+KeyError: 'entity_cd'
 
-import datetime
-from pathlib import Path
+During handling of the above exception, another exception occurred:
 
-import pandas as pd
-import pyreadstat
-import saspy
+Traceback (most recent call last):
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/scope.py", line 242, in resolve
+    return self.temps[key]
+KeyError: 'entity_cd'
 
+The above exception was the direct cause of the following exception:
 
-# ============================================================================
-# PATH CONFIGURATION (absolute paths, no BASE_DIR)
-# ============================================================================
-
-BNM1_PATH = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1"
-)
-BNM_PATH = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm"
-)
-
-
-# ============================================================================
-# DATE VARIABLES (from today - 1)
-# ============================================================================
-
-def get_reptmon_nowk() -> tuple:
-    reptdate = datetime.date.today() - datetime.timedelta(days=1)
-    day = reptdate.day
-
-    if day == 8:
-        wk = '1'
-    elif day == 15:
-        wk = '2'
-    elif day == 22:
-        wk = '3'
-    else:
-        wk = '4'
-
-    return f"{reptdate.month:02d}", wk
-
-
-# ============================================================================
-# HELPERS
-# ============================================================================
-
-def read_sas7bdat(path: Path) -> pd.DataFrame:
-    df, _meta = pyreadstat.read_sas7bdat(str(path))
-    df.columns = [c.lower() for c in df.columns]
-    return df
-
-
-def write_via_saspy(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    sas7bdat_path = out_dir / f"{base_name}.sas7bdat"
-    text_path     = out_dir / f"{base_name}.txt"
-
-    sas = saspy.SASsession(cfgname='default')
-    sas.df2sd(df, table=base_name, libref='WORK')
-
-    sas.submit(
-        f"""
-        PROC EXPORT DATA=WORK.{base_name}
-            OUTFILE="{sas7bdat_path}"
-            DBMS=SAS7BDAT REPLACE;
-        RUN;
-        """
-    )
-    sas.submit(
-        f"""
-        PROC EXPORT DATA=WORK.{base_name}
-            OUTFILE="{text_path}"
-            DBMS=DLM REPLACE;
-            DELIMITER=';';
-        RUN;
-        """
-    )
-    sas.endsas()
-
-
-def make_l124(src_path: Path) -> pd.DataFrame:
-    """
-    DATA ... ; SET ... ; IF PRODUCT IN (124,145) ;
-                 PRODCD='34120' ; AMTIND='I' ;
-    """
-    df = read_sas7bdat(src_path)
-    df = df[df['product'].isin([124, 145])].copy()
-    df['prodcd'] = '34120'
-    df['amtind'] = 'I'
-    return df
-
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
-def main():
-    reptmon, nowk = get_reptmon_nowk()
-
-    loan_path  = BNM1_PATH / f"loan{reptmon}{nowk}.sas7bdat"
-    uloan_path = BNM1_PATH / f"uloan{reptmon}{nowk}.sas7bdat"
-
-    if not loan_path.exists():
-        raise FileNotFoundError(f"L124PBBD: input not found: {loan_path}")
-    if not uloan_path.exists():
-        raise FileNotFoundError(f"L124PBBD: input not found: {uloan_path}")
-
-    # DATA BNM.L124{MM}{WK}
-    print(f"L124PBBD: reading {loan_path} ...")
-    l124_df = make_l124(loan_path)
-    write_via_saspy(l124_df, BNM_PATH, f"l124{reptmon}{nowk}")
-    print(f"L124 written: {BNM_PATH / ('l124' + reptmon + nowk + '.sas7bdat')}  "
-          f"({len(l124_df)} rows)")
-    del l124_df
-
-    # DATA BNM.UL124{MM}{WK}
-    print(f"L124PBBD: reading {uloan_path} ...")
-    ul124_df = make_l124(uloan_path)
-    write_via_saspy(ul124_df, BNM_PATH, f"ul124{reptmon}{nowk}")
-    print(f"UL124 written: {BNM_PATH / ('ul124' + reptmon + nowk + '.sas7bdat')}  "
-          f"({len(ul124_df)} rows)")
-
-
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
-
-if __name__ == '__main__':
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWP124.py", line 214, in <module>
     main()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWP124.py", line 188, in main
+    run_lalwp124()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/LALWP124.py", line 155, in main
+    loan_df  = read_sas7bdat(l124_path,  where="entity_cd == 'PIBB'")
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/LALWP124.py", line 89, in read_sas7bdat
+    df = df.query(where)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4823, in query
+    res = self.eval(expr, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/frame.py", line 4949, in eval
+    return _eval(expr, inplace=inplace, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/eval.py", line 336, in eval
+    parsed_expr = Expr(expr, engine=engine, parser=parser, env=env)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 805, in __init__
+    self.terms = self.parse()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 824, in parse
+    return self._visitor.visit(self.expr)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 417, in visit_Module
+    return self.visit(expr, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 420, in visit_Expr
+    return self.visit(node.value, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 715, in visit_Compare
+    return self.visit(binop)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 531, in visit_BinOp
+    op, op_class, left, right = self._maybe_transform_eq_ne(node)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 451, in _maybe_transform_eq_ne
+    left = self.visit(node.left, side="left")
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 411, in visit
+    return visitor(node, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/expr.py", line 541, in visit_Name
+    return self.term_type(node.id, self.env, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/ops.py", line 91, in __init__
+    self._value = self._resolve_name()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/ops.py", line 115, in _resolve_name
+    res = self.env.resolve(local_name, is_local=is_local)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/pandas/core/computation/scope.py", line 244, in resolve
+    raise UndefinedVariableError(key, is_local) from err
+pandas.errors.UndefinedVariableError: name 'entity_cd' is not defined
