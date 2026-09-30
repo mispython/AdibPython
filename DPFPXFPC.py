@@ -2,140 +2,86 @@
 from __future__ import annotations
 
 """
-Program  : EIBWP124
-Purpose  : Weekly run (after EIBWWKLY) for PIBB - Report on Domestic Assets
-           and Liabilities Part I (M&I Loan / Cagamas L124).
-           - Derives REPTDATE week/month variables from (today - 1).
-           - Runs LALWP124 to produce BNM.LALW{REPTMON}{NOWK}.
-           - Copies BNMX.ALW{REPTMON}{NOWK} to BNM.ALW{REPTMON}{NOWK}.
-           - Runs P124RDAL to produce the RDAL semicolon-delimited output.
+Program  : L124PBBD
+Purpose  : Filter BNM1.LOAN{MM}{WK} and BNM1.ULOAN{MM}{WK} for
+           PRODUCT IN (124,145), assign PRODCD='34120' and AMTIND='I',
+           then write out BNM.L124{MM}{WK} and BNM.UL124{MM}{WK}
+           as .sas7bdat (+ semicolon-delimited .txt) via saspy.
+
+           ENTITY_CD filter is NOT applied here — that is only for
+           enrh_ln_note (LNNOTE) in P124RDAL.
+
+Naming:
+    REPTMON : 'MM'  -> 2-digit zero-padded (e.g. '09')
+    NOWK    : '1'..'4' -> SINGLE digit (e.g. '4')
+    Combined suffix -> e.g. '0904'
 """
 
 import datetime
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 import pyreadstat
 import saspy
 
-# %INC PGM(LALWP124)
-from LALWP124 import main as run_lalwp124
-
-# %INC PGM(P124RDAL)
-from P124RDAL import main as run_p124rdal
-
 
 # ============================================================================
-# PATH CONFIGURATION (absolute paths, no BASE_DIR)
+# PATH CONFIGURATION
 # ============================================================================
 
-PIBB_LOAN_DIR = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS"
-)
-
-BNM_PATH = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm"
-)
 BNM1_PATH = Path(
     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1"
 )
-BNMX_PATH = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx"
-)
-
-RDAL_OUTPUT_PATH = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWP124"
+BNM_PATH = Path(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm"
 )
 
 
 # ============================================================================
-# DATE VARIABLES (from today - 1)
+# DATE VARIABLES
 # ============================================================================
 
-def get_date_variables() -> dict:
+def get_reptmon_nowk() -> tuple:
     """
-    SAS SELECT(DAY(REPTDATE)) logic, but REPTDATE = (today - 1).
-
-    REPTMON -> 2-digit zero-padded ('09')
-    NOWK    -> single digit ('1'..'4')
+    REPTMON -> '09' (2-digit)
+    NOWK    -> '4'  (single digit, NEVER zero-padded)
     """
     reptdate = datetime.date.today() - datetime.timedelta(days=1)
-
-    day  = reptdate.day
-    mm   = reptdate.month
-    yyyy = reptdate.year
+    day = reptdate.day
 
     if day == 8:
-        sdd = 1
-        wk, wk1 = '1', '4'
-        wk2, wk3 = None, None
+        wk = '1'
     elif day == 15:
-        sdd = 9
-        wk, wk1 = '2', '1'
-        wk2, wk3 = None, None
+        wk = '2'
     elif day == 22:
-        sdd = 16
-        wk, wk1 = '3', '2'
-        wk2, wk3 = None, None
+        wk = '3'
     else:
-        sdd = 23
-        wk, wk1 = '4', '3'
-        wk2, wk3 = '2', '1'
+        wk = '4'
 
-    if wk == '1':
-        mm1 = mm - 1
-        if mm1 == 0:
-            mm1 = 12
-    else:
-        mm1 = mm
-
-    mm2 = mm - 1
-    if mm2 == 0:
-        mm2 = 12
-
-    sdate = datetime.date(yyyy, mm, sdd)
-
-    return {
-        'NOWK':     wk,
-        'NOWK1':    wk1,
-        'NOWK2':    wk2,
-        'NOWK3':    wk3,
-        'REPTMON':  f"{mm:02d}",
-        'REPTMON1': f"{mm1:02d}",
-        'REPTMON2': f"{mm2:02d}",
-        'REPTYEAR': str(yyyy),
-        'REPTDAY':  f"{day:02d}",
-        'RDATE':    reptdate.strftime('%d/%m/%y'),
-        'SDATE':    sdate.strftime('%d/%m/%y'),
-        '_reptdate_obj': reptdate,
-    }
+    return f"{reptdate.month:02d}", wk
 
 
 # ============================================================================
 # HELPERS
 # ============================================================================
 
-def read_sas7bdat(path: Path, where: Optional[str] = None) -> pd.DataFrame:
+def read_sas7bdat(path: Path) -> pd.DataFrame:
     df, _meta = pyreadstat.read_sas7bdat(str(path))
     df.columns = [c.lower() for c in df.columns]
-    if where and not df.empty:
-        col = where.split()[0]
-        if col in df.columns:
-            df = df.query(where)
     return df
 
 
-def write_outputs(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
-    """Write .sas7bdat + semicolon-delimited .txt via saspy.
-    Allows 0-row writes (with schema); refuses schema-less writes.
-    """
+def write_via_saspy(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
+    """Write .sas7bdat + .txt via saspy. Allows 0-row with schema."""
     if df is None or len(df.columns) == 0:
         raise ValueError(
             f"Refusing to write schema-less dataset '{base_name}'."
         )
     if df.empty:
-        print(f"WARNING: '{base_name}' has 0 rows — writing empty dataset.")
+        print(
+            f"WARNING: '{base_name}' has 0 rows — writing empty dataset "
+            f"with {len(df.columns)} columns."
+        )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     sas7bdat_path = out_dir / f"{base_name}.sas7bdat"
@@ -159,7 +105,39 @@ def write_outputs(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
     """)
     sas.endsas()
 
-    print(f"Wrote {sas7bdat_path} and {text_path} ({len(df)} rows)")
+
+def make_l124(src_path: Path) -> pd.DataFrame:
+    """
+    Mirrors:
+        SET BNM1.LOAN{MM}{WK};
+        IF PRODUCT IN (124,145);
+        PRODCD='34120'; AMTIND='I';
+    No ENTITY_CD filter here.
+    """
+    df = read_sas7bdat(src_path)
+
+    prod_col = next(
+        (c for c in ('product', 'prodcd', 'product_cd')
+         if c in df.columns),
+        None,
+    )
+    if prod_col is None:
+        raise KeyError(
+            f"No product column in {src_path.name}. "
+            f"Columns: {list(df.columns)[:20]}..."
+        )
+
+    vals = df[prod_col]
+    # Accept int or string representations of 124 / 145
+    if vals.dtype == object:
+        mask = vals.astype(str).isin(['124', '145'])
+    else:
+        mask = vals.isin([124, 145])
+
+    df = df[mask].copy()
+    df['prodcd'] = '34120'
+    df['amtind'] = 'I'
+    return df
 
 
 # ============================================================================
@@ -167,53 +145,43 @@ def write_outputs(df: pd.DataFrame, out_dir: Path, base_name: str) -> None:
 # ============================================================================
 
 def main():
-    dvars    = get_date_variables()
-    nowk     = dvars['NOWK']
-    reptmon  = dvars['REPTMON']
-    reptyear = dvars['REPTYEAR']
-    rdate    = dvars['RDATE']
-    sdate    = dvars['SDATE']
+    reptmon, nowk = get_reptmon_nowk()
 
     assert len(reptmon) == 2 and reptmon.isdigit(), (
-        f"REPTMON must be 2-digit 'MM', got {reptmon!r}"
+        f"REPTMON must be 2-digit, got {reptmon!r}"
     )
     assert nowk in {'1', '2', '3', '4'}, (
-        f"NOWK must be single-digit '1'..'4', got {nowk!r}"
+        f"NOWK must be single-digit, got {nowk!r}"
     )
 
+    loan_path  = BNM1_PATH / f"loan{reptmon}{nowk}.sas7bdat"
+    uloan_path = BNM1_PATH / f"uloan{reptmon}{nowk}.sas7bdat"
+
+    if not loan_path.exists():
+        raise FileNotFoundError(f"L124PBBD: input not found: {loan_path}")
+    if not uloan_path.exists():
+        raise FileNotFoundError(f"L124PBBD: input not found: {uloan_path}")
+
+    # DATA BNM.L124{MM}{WK}
+    print(f"L124PBBD: reading {loan_path} ...")
+    l124_df = make_l124(loan_path)
+    l124_base = f"l124{reptmon}{nowk}"
+    write_via_saspy(l124_df, BNM_PATH, l124_base)
     print(
-        f"REPTMON={reptmon}, NOWK={nowk}, REPTYEAR={reptyear}, "
-        f"RDATE={rdate}, SDATE={sdate}"
+        f"L124 written: {BNM_PATH / (l124_base + '.sas7bdat')}  "
+        f"({len(l124_df)} rows)"
     )
+    del l124_df
 
-    # Sanity: LNNOTE exists for this REPTMON
-    loan_file = PIBB_LOAN_DIR / f"enrh_ln_note_m{reptmon}.sas7bdat"
-    if not loan_file.exists():
-        raise FileNotFoundError(
-            f"PIBB LNNOTE monthly file not found for REPTMON={reptmon}: "
-            f"{loan_file}"
-        )
-
-    # %INC PGM(LALWP124)
-    run_lalwp124()
-
-    # DATA BNM.ALW{MM}{WK}; SET BNMX.ALW{MM}{WK};
-    bnmx_alw_path = BNMX_PATH / f"alw{reptmon}{nowk}.sas7bdat"
-    bnm_alw_base  = f"alw{reptmon}{nowk}"
-
-    if not bnmx_alw_path.exists():
-        raise FileNotFoundError(f"BNMX ALW not found: {bnmx_alw_path}")
-
-    alw_df = read_sas7bdat(bnmx_alw_path)
-    write_outputs(alw_df, BNM_PATH, bnm_alw_base)
-
+    # DATA BNM.UL124{MM}{WK}
+    print(f"L124PBBD: reading {uloan_path} ...")
+    ul124_df = make_l124(uloan_path)
+    ul124_base = f"ul124{reptmon}{nowk}"
+    write_via_saspy(ul124_df, BNM_PATH, ul124_base)
     print(
-        f"ALW copied from {bnmx_alw_path} to "
-        f"{BNM_PATH / (bnm_alw_base + '.sas7bdat')} ({len(alw_df)} rows)"
+        f"UL124 written: {BNM_PATH / (ul124_base + '.sas7bdat')}  "
+        f"({len(ul124_df)} rows)"
     )
-
-    # %INC PGM(P124RDAL)
-    run_p124rdal()
 
 
 if __name__ == '__main__':
