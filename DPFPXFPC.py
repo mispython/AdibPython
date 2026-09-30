@@ -1,15 +1,17 @@
-import pyreadstat
+Columns: ['acctno', 'noteno', 'eir_adj', 'sector', 'name', 'commno', 'custcd', 'origmt', 'prodcd', 'riskcd', 'collcd', 'origmx', 'remainmx', 'sectorcd', 'statecd', 'riskrte', 'amtind', 'cgcref', 'custcode', 'product', 'branch', 'assmdate', 'intamt', 'appvalue', 'noteterm', 'colldesc', 'flag3', 'costctr', 'census', 'billtype', 'netproc', 'intrate', 'spread', 'ntint', 'rebate', 'intearn', 'accrual', 'secure', 'liabcode', 'loanstat', 'borstat', 'marketvl', 'earnterm', 'usuryidx', 'intearn2', 'intearn3', 'intearn4', 'payamt', 'payfreq', 'biltot', 'bilpay', 'paytype', 'feeamt4', 'apprdate', 'totpdeop', 'intpdytd', 'accruytd', 'accrueop', 'ntindex', 'rebatei', 'acctyind', 'hstprin', 'costfund', 'restbalc', 'nxbildt', 'payind', 'feeamt', 'nxtbil', 'bldate', 'sectold', 'exprdate', 'closedte', 'issdte', 'sectorma', 'fisspurp', 'newsec', 'census4', 'custidno', 'rleasamt', 'apprlimt', 'undrawn', 'apprlmtacct', 'odplan', 'rate1', 'rate2', 'todrate', 'flatrate', 'baserate', 'odstat', 'orgcode', 'limit1', 'limit2', 'col1', 'col2', 'avgamt', 'odintacc', 'censust', 'acctype', 'ccricode', 'crispurp', 'sectorz', 'sectorzz', 'secvalid', 'fisspori', 'sectpori', 'seccust', 'newicind', 'bussind', 'custori', 'balmnim', 'curcode', 'bal_aft_eir', 'eirind', 'remmth', 'ccy', 'forate', 'fcybal', 'appr2fcy', 'cjfee', 'cfindex', 'write_down_bal', 'oribal_aft_eir', 'oribalance', 'oribalmni', 'oldnotebldate', 'oldnotedayarr', 'dnbfisme', 'dnbfi_ori', 'vb', 'freleas', 'escracct', 'siacctno', 'abm_hl', 'ia_lru', 'ascore_perm', 'ascore_ltst', 'unearned1', 'unearned2', 'unearned', 'fdcertno', 'fdacctno', 'ccris_instlamt', 'industrial_sector_cd', 'sectorcd_ori', 'invalid_loc', 'state', 'ascore_comm', 'apprlim2ori', 'paidind', 'remainmt', 'remainmh', 'curbal', 'balance', 'balmni', 'apprlim2']
+Num rows: 446114
+         acctno   noteno  eir_adj sector                      name  commno custcd origmt prodcd riskcd  ... state ascore_comm   apprlim2ori paidind remainmt  remainmh    curbal       balance        balmni      apprlim2
+0  2.000084e+09     14.0      NaN   9700     UMI SURAYA BT MAT ISA     0.0     77     31  34230         ...    12              43413.700886       M       62      34.0  43322.72  43413.700886  43413.700886  43413.700886
+1  2.002981e+09     13.0      NaN   9700  AHMAD FAIRUZ BIN ABU BAK     0.0     77     32  34230         ...    12              50767.408032       M       71      65.0  50767.81  50767.408032  50767.408032  50767.408032
+2  2.005611e+09     10.0      NaN   9700  WAN ZURINA BT.KHAIRUDDIN     0.0     77     32  34230         ...    14              81433.142739       M       71      88.0  81433.60  81433.142739  81433.142739  81433.142739
+3  2.006460e+09     18.0      NaN   9700  MOHAMAD FITRI B SHAMSUDI     0.0     77     32  34230         ...    02              31136.664466       M       71      67.0  31071.01  31136.664466  31136.664466  31136.664466
+4  2.006872e+09     11.0      NaN   9700       MARHANOM BINTI ROBI     0.0     77     31  34230         ...    05              72437.960835       M       71      61.0  72438.57  72437.960835  72437.960835  72437.960835
+5  2.008922e+09     10.0      NaN   9700   AZLINA BINTI MAT ARISB*     0.0     77     32  34230         ...    12              32384.359694       M       64      60.0  32384.64  32384.359694  32384.359694  32384.359694
+6  2.017150e+09     17.0      NaN   9700  MOHD HILMI BIN ABD HALIM     0.0     77     32  34230         ...    12              39741.880393       M       64      58.0  39658.16  39741.880393  39741.880393  39741.880393
+7  2.017191e+09     11.0      NaN   9700          TENGKU KHUZIYANI     0.0     77     31  34230         ...    14              30543.582427       M       62      27.0  30544.21  30543.582427  30543.582427  30543.582427
+8  2.041324e+09  90010.0      NaN   0000  NORHAYATI BTE AMAT ZAINI     0.0     77     31  34111         ...    12              37687.720000       M       71      63.0  42243.40  37687.820000  37687.820000  37687.720000
+9  2.059132e+09  90010.0      NaN   9700     ZAIDA BINTI ABU BAKAR     0.0     77     31  34230         ...    07              15034.137678       M       62      29.0  15035.54  15034.137678  15034.137678  15034.137678
 
-path = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/loan0904.sas7bdat"
-
-# metadata only — no data load
-df, meta = pyreadstat.read_sas7bdat(path, metadataonly=True)
-print("Columns:", [c.lower() for c in meta.column_names])
-print("Num rows:", meta.number_rows)
-
-df, meta = pyreadstat.read_sas7bdat(path, row_limit=10)
-df.columns = [c.lower() for c in df.columns]
-print(df)
-print("Unique 'product':", df['product'].unique() if 'product' in df.columns else "n/a")
-print("Unique 'prodcd' :", df['prodcd'].unique()  if 'prodcd'  in df.columns else "n/a")
-
+[10 rows x 155 columns]
+Unique 'product': [103. 128.]
+Unique 'prodcd' : ['34230' '34111']
