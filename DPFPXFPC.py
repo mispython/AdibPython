@@ -1,30 +1,23 @@
-NOTE: The infile "cd /sas/python/virt_edw;source bin/activate;python /stgsrcsys/host/uat/python/EIBDFALE.py" is:
-      Pipe command="cd /sas/python/virt_edw;source bin/activate;python /stgsrcsys/host/uat/python/EIBDFALE.py"
+# read_all_pyarrow.py
+# -*- coding: utf-8 -*-
+import os, time
+from pathlib import Path
+import pyarrow.parquet as pq
 
-Step A: importing pyarrow
-  pyarrow imported in 0.0s
-Step B: opening ONE part file
-  opened in 0.0s
-  rows: 309679
-  row groups: 1
-Step C: reading metadata only
-  metadata in 0.0s
-Step D: reading ONE row group
-  read in 0.0s, 309679 rows
-Step E: importing polars
-  polars imported in 0.3s
-/stgsrcsys/host/uat/python/EIBDFALE.py:33: DeprecationWarning: `threadpool_size` was renamed; use `thread_pool_size` instead.
-  print(f"  threadpool: {pl.threadpool_size()}", flush=True)
-  threadpool: 80
-Step F: scan one part file
-  read in 0.2s, 309679 rows
-2                                                          The SAS System                              17:35 Friday, October 2, 2026
+PDIR = "/stgsrcsys/host/holding/DPDARPGS_FB_20261001.parquet.dir"
+parts = sorted(Path(PDIR).glob("part-*.parquet"))
+print(f"Found {len(parts)} part files", flush=True)
 
-DONE
-NOTE: 18 records were read from the infile "cd /sas/python/virt_edw;source bin/activate;python 
-      /stgsrcsys/host/uat/python/EIBDFALE.py".
-      The minimum record length was 4.
-      The maximum record length was 125.
-NOTE: DATA statement used (Total process time):
-      real time           1.94 seconds
-      cpu time            0.00 seconds
+total = 0
+t_start = time.time()
+for i, p in enumerate(parts):
+    t0 = time.time()
+    pf = pq.ParquetFile(p)
+    n = pf.metadata.num_rows
+    total += n
+    dt = time.time() - t0
+    if i < 5 or i % 20 == 0 or dt > 1.0:
+        print(f"  [{i:3d}/{len(parts)}] {p.name}: {n:,} rows in {dt:.3f}s", flush=True)
+
+dt = time.time() - t_start
+print(f"\nTotal {total:,} rows across {len(parts)} parts in {dt:.1f}s", flush=True)
