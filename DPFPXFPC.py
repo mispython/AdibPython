@@ -1,141 +1,150 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+REPTMON=09, NOWK=4, REPTYEAR=2026, RDATE=30/09/26, SDATE=23/09/26, SUFFIX=094
+L124PBBD DEBUG: reptmon='09' nowk='4' sfx='094'
+L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/loan094.sas7bdat ...
+WARNING: 'l124094' has 0 rows — writing empty dataset.
+SAS Connection established. Subprocess id is 3427937
 
-"""
-Program  : PBBMRDLF
-Purpose  : Monthly ITCODE reference list -> PBBRDAL.sas7bdat.
-           Import executes the build (%INC PGM(PBBMRDLF) behaviour).
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
+  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3427937
+L124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/l124094.sas7bdat  (0 rows)
+L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/uloan094.sas7bdat ...
+WARNING: 'ul124094' has 0 rows — writing empty dataset.
+SAS Connection established. Subprocess id is 3427985
 
-Writes columns itcode + amount (amount=0.0) so that
-P124RDAL.macro_mrgbic's MERGE (on itcode, amtind) works.
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
+  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3427985
+UL124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/ul124094.sas7bdat  (0 rows)
+SAS Connection established. Subprocess id is 3428015
 
-On any saspy failure, the SAS log is printed so the actual SAS error
-is visible.
-"""
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3428015
+LALW written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/lalw094.sas7bdat  (1 rows)
+SAS Connection established. Subprocess id is 3428053
 
-from pathlib import Path
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3428053
+Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.sas7bdat and /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.txt (302 rows)
+ALW copied from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx/alw094.sas7bdat to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.sas7bdat (302 rows)
+P124RDAL DEBUG: REPTMON='09' NOWK='4' sfx='094'
+SAS Connection established. Subprocess id is 3428088
 
-import pandas as pd
-import saspy
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+=== SAS log: PROC EXPORT sas7bdat ===
 
+70   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+70 ! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+71   
+72   
+73               PROC EXPORT DATA=WORK.PBBRDAL
+74                   OUTFILE="/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.sas7bdat"
+75                   DBMS=SAS7BDAT REPLACE;
+ERROR: DBMS type SAS7BDAT not valid for export.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE EXPORT used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+76               RUN;
+77   
+78   
+79   ods html5 (id=saspy_internal) close;ods listing;
 
-OUTPUT_DIR  = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output"
-)
-OUTPUT_BASE = "PBBRDAL"
+=== SAS log: PROC EXPORT txt ===
 
+81   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+81 ! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+82   
+83   
+84               PROC EXPORT DATA=WORK.PBBRDAL
+85                   OUTFILE="/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt"
+86                   DBMS=DLM REPLACE;
+87                   DELIMITER=';';
+88               RUN;
+NOTE: Unable to open parameter catalog: SASUSER.PARMS.PARMS.SLIST in update mode. Temporary parameter values will be saved to 
+WORK.PARMS.PARMS.SLIST.
+NOTE: Unable to open SASUSER.PROFILE. WORK.PROFILE will be opened instead.
+NOTE: All profile changes will be lost at the end of the session.
+89    /**********************************************************************
+90    *   PRODUCT:   SAS
+91    *   VERSION:   9.4
+92    *   CREATOR:   External File Interface
+93    *   DATE:      02OCT26
+94    *   DESC:      Generated SAS Datastep Code
+95    *   TEMPLATE SOURCE:  (None Specified.)
+96    ***********************************************************************/
+97       data _null_;
+98       %let _EFIERR_ = 0; /* set the ERROR detection macro variable */
+99       %let _EFIREC_ = 0;     /* clear export record count macro variable */
+100      file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt' delimiter=';' DSD DROPOVER
+100! lrecl=32767;
+101      if _n_ = 1 then        /* write column names or labels */
+102       do;
+103         put
+104            "itcode"
+105         ';'
+106            "amount"
+107         ;
+108       end;
+109     set  WORK.PBBRDAL   end=EFIEOD;
+110         format itcode $14. ;
+111         format amount best12. ;
+112       do;
+113         EFIOUT + 1;
+114         put itcode $ @;
+115         put amount ;
+116         ;
+117       end;
+118      if _ERROR_ then call symputx('_EFIERR_',1);  /* set ERROR detection macro variable */
+119      if EFIEOD then call symputx('_EFIREC_',EFIOUT);
+120      run;
+NOTE: The file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt' is:
+      Filename=/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt,
+      Owner Name=sas_edw_dev,
+      Group Name=sas_edw_dev_grp,
+      Access Permission=-rw-rw-r--,
+      Last Modified=02Oct2026:11:05:01
 
-# ============================================================================
-# Monthly ITCODE list (from SAS %MONTHLY CARDS block).
-# ============================================================================
-ITCODE_DATA = [
-    "3313002000000Y",
-    "3313003000000Y",
-    "4019000000000Y",
-    "4216060000000Y",
-    "4261076000000Y",
-    "4261085000000Y",
-    "4263076000000Y",
-    "4263085000000Y",
-    "4269981000000Y",
-    "4313002000000Y",
-    "4313003000000Y",
-    "7200000008310Y",
-    "7300000003000Y",
-    "7300000006100Y",
-    "7300000008310Y",
-    "7300000008320Y",
-    "5422000000000Y",
-    "4017000000000Y",
-    "3051577000000Y",
-    "3054077000000Y",
-    "3055060000000Y",
-    "3055061000000Y",
-    "3055076000000Y",
-    "3055077000000Y",
-    "3056000000000Y",
-    "3400010000310Y",
-    "3400010008100Y",
-    "3400020000100Y",
-    "3400020000110Y",
-    "3400000000132Y",
-    "3400077000420Y",
-    "3400078000132Y",
-    "3415100000000Y",
-    "3415200000000Y",
-    "3415900000000Y",
-    "3416000000000Y",
-    "3420000000420Y",
-    "7211500000000Y",
-    "7312000000000Y",
-    "7318000000000Y",
-    "7411000000000Y",
-    "7412000000000Y",
-    "7413000000000Y",
-    "7414000000000Y",
-]
+NOTE: 45 records were written to the file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt'.
+      The minimum record length was 13.
+      The maximum record length was 16.
+NOTE: There were 44 observations read from the data set WORK.PBBRDAL.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+44 records created in /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt from WORK.PBBRDAL.
+  
+  
+NOTE: "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt" file was successfully created.
+NOTE: PROCEDURE EXPORT used (Total process time):
+      real time           0.03 seconds
+      cpu time            0.02 seconds
+      
+121  
+122  
+123  ods html5 (id=saspy_internal) close;ods listing;
 
-
-def build() -> Path:
-    if not ITCODE_DATA:
-        raise ValueError(
-            "PBBMRDLF.ITCODE_DATA is empty. Populate it with the monthly "
-            "ITCODE list (SAS %MONTHLY CARDS) before running."
-        )
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    sas7bdat_path = OUTPUT_DIR / f"{OUTPUT_BASE}.sas7bdat"
-    text_path     = OUTPUT_DIR / f"{OUTPUT_BASE}.txt"
-
-    # Remove stale outputs so we can prove the new one was created
-    for p in (sas7bdat_path, text_path):
-        if p.exists():
-            p.unlink()
-
-    df = pd.DataFrame({
-        "itcode": ITCODE_DATA,
-        "amount": [0.0] * len(ITCODE_DATA),
-    })
-
-    sas = saspy.SASsession(cfgname='default')
-
-    try:
-        sas.df2sd(df, table=OUTPUT_BASE, libref='WORK')
-
-        log1 = sas.submit(f"""
-            PROC EXPORT DATA=WORK.{OUTPUT_BASE}
-                OUTFILE="{sas7bdat_path}"
-                DBMS=SAS7BDAT REPLACE;
-            RUN;
-        """)
-        print("=== SAS log: PROC EXPORT sas7bdat ===")
-        print(log1.get('LOG', ''))
-
-        log2 = sas.submit(f"""
-            PROC EXPORT DATA=WORK.{OUTPUT_BASE}
-                OUTFILE="{text_path}"
-                DBMS=DLM REPLACE;
-                DELIMITER=';';
-            RUN;
-        """)
-        print("=== SAS log: PROC EXPORT txt ===")
-        print(log2.get('LOG', ''))
-
-    finally:
-        sas.endsas()
-
-    if not sas7bdat_path.exists():
-        raise RuntimeError(
-            f"PBBMRDLF: PROC EXPORT did not create {sas7bdat_path}. "
-            f"See the SAS log printed above for the actual ERROR."
-        )
-
-    print(f"PBBMRDLF: wrote {sas7bdat_path} ({len(df)} records)")
-    return sas7bdat_path
-
-
-build()
-
-
-if __name__ == '__main__':
-    pass
+SAS Connection terminated. Subprocess id was 3428088
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWP124.py", line 223, in <module>
+    main()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWP124.py", line 219, in main
+    run_p124rdal()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/P124RDAL.py", line 260, in main
+    import PBBMRDLF  # noqa: F401
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/PBBMRDLF.py", line 137, in <module>
+    build()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/PBBMRDLF.py", line 128, in build
+    raise RuntimeError(
+RuntimeError: PBBMRDLF: PROC EXPORT did not create /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.sas7bdat. See the SAS log printed above for the actual ERROR.
