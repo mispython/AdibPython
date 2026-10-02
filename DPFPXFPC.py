@@ -1,127 +1,164 @@
-# -*- coding: utf-8 -*-
-"""
-Convert the deposit flat file to a PARTITIONED Parquet dataset.
-Writes one small Parquet file per read-chunk, into a directory.
-Reads in parallel across CPU cores when consumed by pl.scan_parquet(dir).
-"""
-import os
-import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
-from datetime import datetime, timedelta
-from pathlib import Path
+Reading  : /host_pq/dwh/input/DEPOSIT/DPDARPGS_FB_20261001
+Writing  : /stgsrcsys/host/holding/DPDARPGS_FB_20261001.parquet.dir/part-NNNNN.parquet
+  part-00000.parquet : 309,679 rows (total 309,679)
+  part-00001.parquet : 309,680 rows (total 619,359)
+  part-00002.parquet : 309,680 rows (total 929,039)
+  part-00003.parquet : 309,680 rows (total 1,238,719)
+  part-00004.parquet : 309,680 rows (total 1,548,399)
+  part-00005.parquet : 309,680 rows (total 1,858,079)
+  part-00006.parquet : 309,680 rows (total 2,167,759)
+  part-00007.parquet : 309,679 rows (total 2,477,438)
+  part-00008.parquet : 309,680 rows (total 2,787,118)
+  part-00009.parquet : 309,680 rows (total 3,096,798)
+  part-00010.parquet : 309,680 rows (total 3,406,478)
+  part-00011.parquet : 309,680 rows (total 3,716,158)
+  part-00012.parquet : 309,680 rows (total 4,025,838)
+  part-00013.parquet : 309,680 rows (total 4,335,518)
+  part-00014.parquet : 309,679 rows (total 4,645,197)
+2                                                          The SAS System                              15:47 Friday, October 2, 2026
 
-# ---------- CONFIG ----------
-input_dir       = "/host_pq/dwh/input/DEPOSIT"
-parquet_out_dir = "/stgsrcsys/host/holding"
+  part-00015.parquet : 309,680 rows (total 4,954,877)
+  part-00016.parquet : 309,680 rows (total 5,264,557)
+  part-00017.parquet : 309,680 rows (total 5,574,237)
+  part-00018.parquet : 309,680 rows (total 5,883,917)
+  part-00019.parquet : 309,680 rows (total 6,193,597)
+  part-00020.parquet : 309,680 rows (total 6,503,277)
+  part-00021.parquet : 309,679 rows (total 6,812,956)
+  part-00022.parquet : 309,680 rows (total 7,122,636)
+  part-00023.parquet : 309,680 rows (total 7,432,316)
+  part-00024.parquet : 309,680 rows (total 7,741,996)
+  part-00025.parquet : 309,680 rows (total 8,051,676)
+  part-00026.parquet : 309,680 rows (total 8,361,356)
+  part-00027.parquet : 309,680 rows (total 8,671,036)
+  part-00028.parquet : 309,679 rows (total 8,980,715)
+  part-00029.parquet : 309,680 rows (total 9,290,395)
+  part-00030.parquet : 309,680 rows (total 9,600,075)
+  part-00031.parquet : 309,680 rows (total 9,909,755)
+  part-00032.parquet : 309,680 rows (total 10,219,435)
+  part-00033.parquet : 309,680 rows (total 10,529,115)
+  part-00034.parquet : 309,680 rows (total 10,838,795)
+  part-00035.parquet : 309,679 rows (total 11,148,474)
+  part-00036.parquet : 309,680 rows (total 11,458,154)
+  part-00037.parquet : 309,680 rows (total 11,767,834)
+  part-00038.parquet : 309,680 rows (total 12,077,514)
+  part-00039.parquet : 309,680 rows (total 12,387,194)
+  part-00040.parquet : 309,680 rows (total 12,696,874)
+  part-00041.parquet : 309,680 rows (total 13,006,554)
+  part-00042.parquet : 309,679 rows (total 13,316,233)
+  part-00043.parquet : 309,680 rows (total 13,625,913)
+  part-00044.parquet : 309,680 rows (total 13,935,593)
+  part-00045.parquet : 309,680 rows (total 14,245,273)
+  part-00046.parquet : 309,680 rows (total 14,554,953)
+  part-00047.parquet : 309,680 rows (total 14,864,633)
+  part-00048.parquet : 309,680 rows (total 15,174,313)
+  part-00049.parquet : 309,679 rows (total 15,483,992)
+  part-00050.parquet : 309,680 rows (total 15,793,672)
+  part-00051.parquet : 309,680 rows (total 16,103,352)
+  part-00052.parquet : 309,680 rows (total 16,413,032)
+  part-00053.parquet : 309,680 rows (total 16,722,712)
+  part-00054.parquet : 309,680 rows (total 17,032,392)
+  part-00055.parquet : 309,680 rows (total 17,342,072)
+  part-00056.parquet : 309,679 rows (total 17,651,751)
+  part-00057.parquet : 309,680 rows (total 17,961,431)
+  part-00058.parquet : 309,680 rows (total 18,271,111)
+  part-00059.parquet : 309,680 rows (total 18,580,791)
+  part-00060.parquet : 309,680 rows (total 18,890,471)
+  part-00061.parquet : 309,680 rows (total 19,200,151)
+  part-00062.parquet : 309,680 rows (total 19,509,831)
+  part-00063.parquet : 309,679 rows (total 19,819,510)
+  part-00064.parquet : 309,680 rows (total 20,129,190)
+  part-00065.parquet : 309,680 rows (total 20,438,870)
+  part-00066.parquet : 309,680 rows (total 20,748,550)
+  part-00067.parquet : 309,680 rows (total 21,058,230)
+  part-00068.parquet : 309,680 rows (total 21,367,910)
+  part-00069.parquet : 309,680 rows (total 21,677,590)
+  part-00070.parquet : 309,679 rows (total 21,987,269)
+  part-00071.parquet : 309,680 rows (total 22,296,949)
+  part-00072.parquet : 309,680 rows (total 22,606,629)
+3                                                          The SAS System                              15:47 Friday, October 2, 2026
 
-run_date = datetime.now() - timedelta(days=1)
-reptyear = run_date.strftime("%Y")
-reptmon  = run_date.strftime("%m")
-reptday  = run_date.strftime("%d")
+  part-00073.parquet : 309,680 rows (total 22,916,309)
+  part-00074.parquet : 309,680 rows (total 23,225,989)
+  part-00075.parquet : 309,680 rows (total 23,535,669)
+  part-00076.parquet : 309,680 rows (total 23,845,349)
+  part-00077.parquet : 309,679 rows (total 24,155,028)
+  part-00078.parquet : 309,680 rows (total 24,464,708)
+  part-00079.parquet : 309,680 rows (total 24,774,388)
+  part-00080.parquet : 309,680 rows (total 25,084,068)
+  part-00081.parquet : 309,680 rows (total 25,393,748)
+  part-00082.parquet : 309,680 rows (total 25,703,428)
+  part-00083.parquet : 309,680 rows (total 26,013,108)
+  part-00084.parquet : 309,679 rows (total 26,322,787)
+  part-00085.parquet : 309,680 rows (total 26,632,467)
+  part-00086.parquet : 309,680 rows (total 26,942,147)
+  part-00087.parquet : 309,680 rows (total 27,251,827)
+  part-00088.parquet : 309,680 rows (total 27,561,507)
+  part-00089.parquet : 309,680 rows (total 27,871,187)
+  part-00090.parquet : 309,680 rows (total 28,180,867)
+  part-00091.parquet : 309,679 rows (total 28,490,546)
+  part-00092.parquet : 309,680 rows (total 28,800,226)
+  part-00093.parquet : 309,680 rows (total 29,109,906)
+  part-00094.parquet : 309,680 rows (total 29,419,586)
+  part-00095.parquet : 309,680 rows (total 29,729,266)
+  part-00096.parquet : 309,680 rows (total 30,038,946)
+  part-00097.parquet : 309,680 rows (total 30,348,626)
+  part-00098.parquet : 309,679 rows (total 30,658,305)
+  part-00099.parquet : 309,680 rows (total 30,967,985)
+  part-00100.parquet : 309,680 rows (total 31,277,665)
+  part-00101.parquet : 309,680 rows (total 31,587,345)
+  part-00102.parquet : 309,680 rows (total 31,897,025)
+  part-00103.parquet : 309,680 rows (total 32,206,705)
+  part-00104.parquet : 309,680 rows (total 32,516,385)
+  part-00105.parquet : 309,679 rows (total 32,826,064)
+  part-00106.parquet : 309,680 rows (total 33,135,744)
+  part-00107.parquet : 309,680 rows (total 33,445,424)
+  part-00108.parquet : 309,680 rows (total 33,755,104)
+  part-00109.parquet : 309,680 rows (total 34,064,784)
+  part-00110.parquet : 309,680 rows (total 34,374,464)
+  part-00111.parquet : 309,680 rows (total 34,684,144)
+  part-00112.parquet : 309,679 rows (total 34,993,823)
+  part-00113.parquet : 309,680 rows (total 35,303,503)
+  part-00114.parquet : 309,680 rows (total 35,613,183)
+  part-00115.parquet : 309,680 rows (total 35,922,863)
+  part-00116.parquet : 309,680 rows (total 36,232,543)
+  part-00117.parquet : 309,680 rows (total 36,542,223)
+  part-00118.parquet : 309,680 rows (total 36,851,903)
+  part-00119.parquet : 309,679 rows (total 37,161,582)
+  part-00120.parquet : 309,680 rows (total 37,471,262)
+  part-00121.parquet : 309,680 rows (total 37,780,942)
+  part-00122.parquet : 309,680 rows (total 38,090,622)
+  part-00123.parquet : 309,680 rows (total 38,400,302)
+  part-00124.parquet : 309,680 rows (total 38,709,982)
+  part-00125.parquet : 309,680 rows (total 39,019,662)
+  part-00126.parquet : 309,679 rows (total 39,329,341)
+  part-00127.parquet : 309,680 rows (total 39,639,021)
+  part-00128.parquet : 309,680 rows (total 39,948,701)
+  part-00129.parquet : 309,680 rows (total 40,258,381)
+  part-00130.parquet : 309,680 rows (total 40,568,061)
+4                                                          The SAS System                              15:47 Friday, October 2, 2026
 
-flat_file    = f"{input_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}"
-parquet_root = f"{parquet_out_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}.parquet.dir"
-
-RECORD_LEN  = 1693
-CHUNK_BYTES = 500 * 1024 * 1024   # 500 MB per read -> one part file per chunk
-
-FIELDS = {
-    "BANKNO":   (2,   4,   0),
-    "REPTNO":   (23,  26,  0),
-    "FMTCODE":  (26,  28,  0),
-    "BRANCH":   (105, 109, 0),
-    "ACCTNO":   (109, 115, 0),
-    "OPENIND":  (154, 155, -1),
-    "CURBAL":   (155, 161, 2),
-    "INTPLAN":  (207, 209, 0),
-    "LMATDATE": (391, 397, 0),
-}
-
-EBCDIC_TO_CHAR = np.array([bytes([i]).decode("cp037") for i in range(256)])
-
-# ---------- DECODERS ----------
-def decode_packed_2d(raw, scale=0):
-    high = (raw >> 4) & 0x0F
-    low  = raw & 0x0F
-    n_rows, n_bytes = raw.shape
-    vals = np.zeros(n_rows, dtype=np.int64)
-    for i in range(n_bytes - 1):
-        vals = vals * 100 + high[:, i] * 10 + low[:, i]
-    vals = vals * 10 + high[:, -1]
-    sign = low[:, -1]
-    vals[(sign == 0x0D) | (sign == 0x0B)] *= -1
-    if scale:
-        return vals.astype(np.float64) / (10 ** scale)
-    return vals
-
-def decode_chunk(arr: np.ndarray) -> pa.Table:
-    cols = {}
-    for name, (a, b, scale) in FIELDS.items():
-        if scale == -1:
-            cols[name] = EBCDIC_TO_CHAR[arr[:, a]]
-        else:
-            cols[name] = decode_packed_2d(arr[:, a:b], scale=scale)
-    return pa.table(cols)
-
-# ---------- MAIN ----------
-def main():
-    root = Path(parquet_root)
-    # Remove any stale files from a previous run
-    if root.exists():
-        for f in root.glob("part-*.parquet"):
-            f.unlink()
-    root.mkdir(parents=True, exist_ok=True)
-
-    # Pre-flight writability
-    test = root / ".writetest"
-    try:
-        test.write_bytes(b"")
-        test.unlink()
-    except PermissionError:
-        raise SystemExit(f"ERROR: Cannot write to {root}")
-
-    print(f"Reading  : {flat_file}")
-    print(f"Writing  : {parquet_root}/part-NNNNN.parquet")
-
-    total = 0
-    part  = 0
-    leftover = b""
-
-    with open(flat_file, "rb") as f:
-        while True:
-            buf = f.read(CHUNK_BYTES)
-            if not buf:
-                break
-            buf = leftover + buf
-            n_records = len(buf) // RECORD_LEN
-            if n_records == 0:
-                leftover = buf
-                continue
-            usable = n_records * RECORD_LEN
-            leftover = buf[usable:]
-
-            arr = np.frombuffer(buf[:usable], dtype=np.uint8).reshape(n_records, RECORD_LEN)
-            table = decode_chunk(arr)
-
-            part_path = root / f"part-{part:05d}.parquet"
-            pq.write_table(
-                table,
-                part_path,
-                compression="zstd",
-                use_dictionary=True,
-                row_group_size=1_000_000,
-            )
-
-            total += n_records
-            part  += 1
-            print(f"  part-{part - 1:05d}.parquet : {n_records:,} rows (total {total:,})",
-                  flush=True)
-
-    if leftover:
-        print(f"WARNING: {len(leftover)} unaligned trailing bytes ignored")
-
-    print(f"Done. {total:,} rows across {part} part files -> {parquet_root}")
-
-if __name__ == "__main__":
-    main()
+  part-00131.parquet : 309,680 rows (total 40,877,741)
+  part-00132.parquet : 309,680 rows (total 41,187,421)
+  part-00133.parquet : 309,680 rows (total 41,497,101)
+  part-00134.parquet : 309,679 rows (total 41,806,780)
+  part-00135.parquet : 309,680 rows (total 42,116,460)
+  part-00136.parquet : 309,680 rows (total 42,426,140)
+  part-00137.parquet : 309,680 rows (total 42,735,820)
+  part-00138.parquet : 309,680 rows (total 43,045,500)
+  part-00139.parquet : 309,680 rows (total 43,355,180)
+  part-00140.parquet : 309,680 rows (total 43,664,860)
+  part-00141.parquet : 309,679 rows (total 43,974,539)
+  part-00142.parquet : 309,680 rows (total 44,284,219)
+  part-00143.parquet : 309,680 rows (total 44,593,899)
+  part-00144.parquet : 309,680 rows (total 44,903,579)
+  part-00145.parquet : 309,680 rows (total 45,213,259)
+  part-00146.parquet : 234,689 rows (total 45,447,948)
+WARNING: 98 unaligned trailing bytes ignored
+Done. 45,447,948 rows across 147 part files -> /stgsrcsys/host/holding/DPDARPGS_FB_20261001.parquet.dir
+NOTE: 151 records were read from the infile "cd /sas/python/virt_edw;source bin/activate;python 
+      /stgsrcsys/host/uat/python/flatfile_to_parquet.py".
+      The minimum record length was 44.
+      The maximum record length was 103.
+NOTE: DATA statement used (Total process time):
+      real time           9:25.92
+      cpu time            0.01 seconds
