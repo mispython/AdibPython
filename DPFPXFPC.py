@@ -2,15 +2,8 @@
 from __future__ import annotations
 
 """
-Program  : PBBMRDLF
-Purpose  : Monthly ITCODE reference list -> PBBRDAL.sas7bdat (+ .txt).
-
-Builds in polars. Writes:
-  - PBBRDAL.sas7bdat via SAS LIBNAME + DATA.
-  - PBBRDAL.txt     via saspy PROC EXPORT DBMS=DLM.
-
-Resolves the output filename case-insensitively (SAS writes lowercase
-on this filesystem: 'pbbrdal.sas7bdat').
+Program  : PBBWRDLF
+Purpose  : Weekly ITCODE reference list -> PBBRDAL.sas7bdat (+ .txt).
 """
 
 import os
@@ -28,22 +21,15 @@ OUTPUT_BASE = "PBBRDAL"
 
 
 ITCODE_DATA = [
-    "3313002000000Y", "3313003000000Y", "4019000000000Y", "4216060000000Y",
-    "4261076000000Y", "4261085000000Y", "4263076000000Y", "4263085000000Y",
-    "4269981000000Y", "4313002000000Y", "4313003000000Y", "7200000008310Y",
-    "7300000003000Y", "7300000006100Y", "7300000008310Y", "7300000008320Y",
-    "5422000000000Y", "4017000000000Y", "3051577000000Y", "3054077000000Y",
-    "3055060000000Y", "3055061000000Y", "3055076000000Y", "3055077000000Y",
-    "3056000000000Y", "3400010000310Y", "3400010008100Y", "3400020000100Y",
-    "3400020000110Y", "3400000000132Y", "3400077000420Y", "3400078000132Y",
-    "3415100000000Y", "3415200000000Y", "3415900000000Y", "3416000000000Y",
-    "3420000000420Y", "7211500000000Y", "7312000000000Y", "7318000000000Y",
-    "7411000000000Y", "7412000000000Y", "7413000000000Y", "7414000000000Y",
+    "3313002000000Y", "3313003000000Y", "4017000000000Y", "4019000000000Y",
+    "4216060000000Y", "4261076000000Y", "4261085000000Y", "4263076000000Y",
+    "4263085000000Y", "4269981000000Y", "4313002000000Y", "4313003000000Y",
+    "5422000000000Y", "7200000008310Y", "7300000003000Y", "7300000006100Y",
+    "7300000008310Y", "7300000008320Y",
 ]
 
 
 def _resolve_ci(directory: Path, filename: str):
-    """Case-insensitive file lookup in `directory`. Returns Path or None."""
     target = filename.lower()
     try:
         for name in os.listdir(directory):
@@ -66,13 +52,12 @@ def _wait_for_file_ci(directory: Path, filename: str, timeout: float = 30.0):
 
 def build() -> Path:
     if not ITCODE_DATA:
-        raise ValueError("PBBMRDLF.ITCODE_DATA is empty.")
+        raise ValueError("PBBWRDLF.ITCODE_DATA is empty.")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    sas7bdat_name = f"{OUTPUT_BASE}.sas7bdat"   # desired name
+    sas7bdat_name = f"{OUTPUT_BASE}.sas7bdat"
     text_name     = f"{OUTPUT_BASE}.txt"
 
-    # Delete stale outputs (case-insensitive)
     for nm in (sas7bdat_name, text_name):
         p = _resolve_ci(OUTPUT_DIR, nm)
         if p is not None:
@@ -120,10 +105,10 @@ def build() -> Path:
         except OSError:
             pass
         raise RuntimeError(
-            f"PBBMRDLF: {sas7bdat_name} never appeared on disk."
+            f"PBBWRDLF: {sas7bdat_name} never appeared on disk."
         )
 
-    print(f"PBBMRDLF: wrote {sas7bdat_path} ({pl_df.height} records)")
+    print(f"PBBWRDLF: wrote {sas7bdat_path} ({pl_df.height} records)")
     return sas7bdat_path
 
 
