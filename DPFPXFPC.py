@@ -5,15 +5,18 @@ from __future__ import annotations
 Program  : PBBMRDLF
 Purpose  : Monthly ITCODE reference list -> PBBRDAL.sas7bdat (+ .txt).
 
-Writes PBBRDAL.sas7bdat via pandas.DataFrame.to_sas (which uses the
-bundled SAS7BDAT writer; no SAS session and no pyreadstat writer needed).
+Builds the DataFrame in polars. Writes:
+  - PBBRDAL.sas7bdat via SAS LIBNAME + DATA (confirmed working).
+  - PBBRDAL.txt     via saspy PROC EXPORT DBMS=DLM.
 
-The .txt file is written via saspy PROC EXPORT DBMS=DLM (confirmed working).
+Waits for the .sas7bdat to appear on disk (handles NFS sync delay).
 """
 
+import os
+import time
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 import saspy
 
 
@@ -41,6 +44,25 @@ ITCODE_DATA = [
 ]
 
 
+def _wait_for_file(path: Path, timeout: float = 30.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _list_dir(path: Path) -> None:
+    print(f"DEBUG: directory listing of {path}:")
+    try:
+        for name in sorted(os.listdir(path)):
+            if 'PBBRDAL' in name.upper() or name.lower().endswith('.sas7bdat'):
+                print(f"   {name}")
+    except OSError as e:
+        print(f"   (cannot list: {e})")
+
+
 def build() -> Path:
     if not ITCODE_DATA:
         raise ValueError("PBBMRDLF.ITCODE_DATA is empty.")
@@ -49,48 +71,55 @@ def build() -> Path:
     sas7bdat_path = OUTPUT_DIR / f"{OUTPUT_BASE}.sas7bdat"
     text_path     = OUTPUT_DIR / f"{OUTPUT_BASE}.txt"
 
-    # Delete stale outputs so we prove the new ones are created.
+    # Delete stale outputs
     for p in (sas7bdat_path, text_path):
         if p.exists():
             p.unlink()
 
-    df = pd.DataFrame({
+    # --- Build with polars ---
+    pl_df = pl.DataFrame({
         "itcode": ITCODE_DATA,
         "amount": [0.0] * len(ITCODE_DATA),
     })
 
-    # ------------------------------------------------------------------
-    # 1. Write .sas7bdat directly via pandas.to_sas
-    #    (no SAS session needed; uses bundled sas7bdat writer)
-    # ------------------------------------------------------------------
-    df.to_sas(str(sas7bdat_path), format='sas7bdat', index=False)
+    # Convert to pandas at the saspy boundary (df2sd expects pandas)
+    pd_df = pl_df.to_pandas()
 
-    if not sas7bdat_path.exists():
-        raise RuntimeError(
-            f"pandas.to_sas did not create {sas7bdat_path}."
-        )
-
-    print(f"PBBMRDLF: wrote {sas7bdat_path} ({len(df)} records)")
-
-    # ------------------------------------------------------------------
-    # 2. Write .txt via saspy PROC EXPORT DBMS=DLM (confirmed working)
-    # ------------------------------------------------------------------
     sas = saspy.SASsession(cfgname='default')
     try:
-        sas.df2sd(df, table=OUTPUT_BASE, libref='WORK')
-        sas.submit(f"""
+        sas.df2sd(pd_df, table=OUTPUT_BASE, libref='WORK')
+
+        log1 = sas.submit(f"""
+            LIBNAME _outlib "{OUTPUT_DIR}";
+            DATA _outlib.{OUTPUT_BASE};
+                SET WORK.{OUTPUT_BASE};
+            RUN;
+            LIBNAME _outlib CLEAR;
+        """)
+        print("=== SAS log: LIBNAME+DATA -> PBBRDAL.sas7bdat ===")
+        print(log1.get('LOG', ''))
+
+        log2 = sas.submit(f"""
             PROC EXPORT DATA=WORK.{OUTPUT_BASE}
                 OUTFILE="{text_path}"
                 DBMS=DLM REPLACE;
                 DELIMITER=';';
             RUN;
         """)
+        print("=== SAS log: PROC EXPORT txt -> PBBRDAL.txt ===")
+        print(log2.get('LOG', ''))
+
     finally:
         sas.endsas()
 
-    if not text_path.exists():
-        print(f"WARNING: {text_path} was not created — check SAS log.")
+    if not _wait_for_file(sas7bdat_path, timeout=30.0):
+        print(f"DEBUG: {sas7bdat_path} did not appear after 30s.")
+        _list_dir(OUTPUT_DIR)
+        raise RuntimeError(
+            f"PBBMRDLF: {sas7bdat_path} never appeared on disk."
+        )
 
+    print(f"PBBMRDLF: wrote {sas7bdat_path} ({pl_df.height} records)")
     return sas7bdat_path
 
 
