@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 """
-Program  : PBBMRDLF
-Purpose  : Monthly ITCODE reference list -> PBBRDAL.sas7bdat.
-           Import executes the build (%INC PGM(PBBMRDLF) behaviour).
+Program  : PBBWRDLF
+Purpose  : Weekly ITCODE reference list -> PBBRDAL.sas7bdat.
+           Import executes the build (%INC PGM(PBBWRDLF) behaviour).
 
 IMPORTANT:
-  - ITCODE_DATA must be populated with the monthly SAS CARDS list.
+  - ITCODE_DATA must be populated with the weekly SAS CARDS list.
     If empty, build() raises immediately to prevent P124RDAL from
     failing later with a cryptic FileNotFoundError.
   - Writes columns itcode + amount (amount=0.0) so that
@@ -27,20 +27,35 @@ OUTPUT_BASE = "PBBRDAL"
 
 
 # ============================================================================
-# Populate with the monthly ITCODE list (from SAS %MONTHLY CARDS block).
+# Weekly ITCODE list (from SAS %WEEKLY CARDS block).
 # ============================================================================
 ITCODE_DATA = [
-    # "3313002000000Y",
-    # "3313003000000Y",
-    # ... (paste the full monthly CARDS list here) ...
+    "3313002000000Y",
+    "3313003000000Y",
+    "4017000000000Y",
+    "4019000000000Y",
+    "4216060000000Y",
+    "4261076000000Y",
+    "4261085000000Y",
+    "4263076000000Y",
+    "4263085000000Y",
+    "4269981000000Y",
+    "4313002000000Y",
+    "4313003000000Y",
+    "5422000000000Y",
+    "7200000008310Y",
+    "7300000003000Y",
+    "7300000006100Y",
+    "7300000008310Y",
+    "7300000008320Y",
 ]
 
 
 def build() -> Path:
     if not ITCODE_DATA:
         raise ValueError(
-            "PBBMRDLF.ITCODE_DATA is empty. Populate it with the monthly "
-            "ITCODE list (SAS %MONTHLY CARDS) before running — otherwise "
+            "PBBWRDLF.ITCODE_DATA is empty. Populate it with the weekly "
+            "ITCODE list (SAS %WEEKLY CARDS) before running — otherwise "
             "PBBRDAL will not be written and P124RDAL will fail."
         )
 
@@ -74,11 +89,11 @@ def build() -> Path:
 
     if not sas7bdat_path.exists():
         raise RuntimeError(
-            f"PBBMRDLF: PROC EXPORT did not create {sas7bdat_path}. "
+            f"PBBWRDLF: PROC EXPORT did not create {sas7bdat_path}. "
             f"Check the SAS log for ERROR lines."
         )
 
-    print(f"PBBMRDLF: wrote {sas7bdat_path} ({len(df)} records)")
+    print(f"PBBWRDLF: wrote {sas7bdat_path} ({len(df)} records)")
     return sas7bdat_path
 
 
