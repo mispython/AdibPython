@@ -2,34 +2,42 @@
 from __future__ import annotations
 
 """
-Program  : PBBWRDLF
-Purpose  : Weekly ITCODE reference list -> PBBRDAL.sas7bdat (+ .txt).
+Program  : bnm_io
+Purpose  : Shared read/write helpers for the EIBWP124 pipeline.
+
+           read_sas7bdat        — read .sas7bdat via pyreadstat,
+                                  lowercased columns, optional filter.
+           resolve_ci           — case-insensitive file lookup in a directory.
+           read_sas7bdat_ci     — read with case-insensitive lookup.
+           write_sas_and_txt    — write DataFrame to .sas7bdat + .txt via
+                                  saspy using SAS LIBNAME + DATA (this SAS
+                                  install rejects DBMS=SAS7BDAT for PROC
+                                  EXPORT).
+
+Convention on this filesystem:
+    SAS writes member filenames in LOWERCASE (e.g. 'pbbrdal.sas7bdat',
+    'l124094.sas7bdat'). All reads go through case-insensitive lookup.
 """
 
 import os
 import time
 from pathlib import Path
+from typing import Optional
 
-import polars as pl
+import pandas as pd
+import pyreadstat
 import saspy
 
 
-OUTPUT_DIR  = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output"
-)
-OUTPUT_BASE = "PBBRDAL"
+# ============================================================================
+# CASE-INSENSITIVE FILE LOOKUP
+# ============================================================================
 
-
-ITCODE_DATA = [
-    "3313002000000Y", "3313003000000Y", "4017000000000Y", "4019000000000Y",
-    "4216060000000Y", "4261076000000Y", "4261085000000Y", "4263076000000Y",
-    "4263085000000Y", "4269981000000Y", "4313002000000Y", "4313003000000Y",
-    "5422000000000Y", "7200000008310Y", "7300000003000Y", "7300000006100Y",
-    "7300000008310Y", "7300000008320Y",
-]
-
-
-def _resolve_ci(directory: Path, filename: str):
+def resolve_ci(directory: Path, filename: str) -> Optional[Path]:
+    """
+    Return the actual Path in `directory` whose name matches `filename`
+    case-insensitively, or None if not found.
+    """
     target = filename.lower()
     try:
         for name in os.listdir(directory):
@@ -40,80 +48,144 @@ def _resolve_ci(directory: Path, filename: str):
     return None
 
 
-def _wait_for_file_ci(directory: Path, filename: str, timeout: float = 30.0):
+def wait_for_file_ci(
+    directory: Path,
+    filename: str,
+    timeout: float = 30.0,
+    interval: float = 0.5,
+) -> Optional[Path]:
+    """
+    Poll for a case-insensitive file match up to `timeout` seconds.
+    Returns the actual Path or None if not found in time.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        p = _resolve_ci(directory, filename)
+        p = resolve_ci(directory, filename)
         if p is not None:
             return p
-        time.sleep(0.5)
+        time.sleep(interval)
     return None
 
 
-def build() -> Path:
-    if not ITCODE_DATA:
-        raise ValueError("PBBWRDLF.ITCODE_DATA is empty.")
+# ============================================================================
+# READ HELPERS
+# ============================================================================
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    sas7bdat_name = f"{OUTPUT_BASE}.sas7bdat"
-    text_name     = f"{OUTPUT_BASE}.txt"
+def read_sas7bdat(path: Path, where: Optional[str] = None) -> pd.DataFrame:
+    """Read .sas7bdat via pyreadstat, lowercase columns, optional filter."""
+    df, _meta = pyreadstat.read_sas7bdat(str(path))
+    df.columns = [c.lower() for c in df.columns]
+    if where and not df.empty:
+        col = where.split()[0]
+        if col in df.columns:
+            df = df.query(where)
+    return df
 
+
+def read_sas7bdat_ci(
+    directory: Path,
+    filename: str,
+    where: Optional[str] = None,
+    required: bool = True,
+) -> Optional[pd.DataFrame]:
+    """
+    Case-insensitive read of directory/filename.
+
+    - If `required=True` and no match, raises FileNotFoundError.
+    - If `required=False` and no match, returns None.
+    """
+    actual = resolve_ci(directory, filename)
+    if actual is None:
+        if required:
+            raise FileNotFoundError(
+                f"No case-insensitive match for '{filename}' in {directory}"
+            )
+        return None
+    return read_sas7bdat(actual, where=where)
+
+
+# ============================================================================
+# WRITE HELPERS
+# ============================================================================
+
+def write_sas_and_txt(
+    df: pd.DataFrame,
+    out_dir: Path,
+    base_name: str,
+    *,
+    verbose: bool = False,
+) -> Path:
+    """
+    Write DataFrame to out_dir/base_name.sas7bdat and out_dir/base_name.txt
+    via saspy.
+
+    Uses SAS LIBNAME + DATA for the .sas7bdat (this SAS install does not
+    support DBMS=SAS7BDAT in PROC EXPORT), and PROC EXPORT DBMS=DLM for
+    the semicolon-delimited .txt.
+
+    Waits for the .sas7bdat to appear on disk (SAS writes filenames in
+    lowercase on this filesystem, and there may be an NFS sync delay).
+
+    Returns the actual on-disk path to the .sas7bdat.
+    """
+    if df is None or len(df.columns) == 0:
+        raise ValueError(
+            f"Refusing to write schema-less dataset '{base_name}'."
+        )
+    if df.empty:
+        print(f"WARNING: '{base_name}' has 0 rows — writing empty dataset.")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sas7bdat_name = f"{base_name}.sas7bdat"
+    text_name     = f"{base_name}.txt"
+    text_path     = out_dir / text_name
+
+    # Delete any existing (case-insensitively) outputs.
     for nm in (sas7bdat_name, text_name):
-        p = _resolve_ci(OUTPUT_DIR, nm)
+        p = resolve_ci(out_dir, nm)
         if p is not None:
             p.unlink()
 
-    pl_df = pl.DataFrame({
-        "itcode": ITCODE_DATA,
-        "amount": [0.0] * len(ITCODE_DATA),
-    })
-    pd_df = pl_df.to_pandas()
-
     sas = saspy.SASsession(cfgname='default')
     try:
-        sas.df2sd(pd_df, table=OUTPUT_BASE, libref='WORK')
+        sas.df2sd(df, table=base_name, libref='WORK')
 
         log1 = sas.submit(f"""
-            LIBNAME _outlib "{OUTPUT_DIR}";
-            DATA _outlib.{OUTPUT_BASE};
-                SET WORK.{OUTPUT_BASE};
+            LIBNAME _outlib "{out_dir}";
+            DATA _outlib.{base_name};
+                SET WORK.{base_name};
             RUN;
             LIBNAME _outlib CLEAR;
         """)
-        print("=== SAS log: LIBNAME+DATA -> PBBRDAL.sas7bdat ===")
-        print(log1.get('LOG', ''))
 
         log2 = sas.submit(f"""
-            PROC EXPORT DATA=WORK.{OUTPUT_BASE}
-                OUTFILE="{OUTPUT_DIR}/{text_name}"
+            PROC EXPORT DATA=WORK.{base_name}
+                OUTFILE="{text_path}"
                 DBMS=DLM REPLACE;
                 DELIMITER=';';
             RUN;
         """)
-        print("=== SAS log: PROC EXPORT txt -> PBBRDAL.txt ===")
-        print(log2.get('LOG', ''))
+
+        if verbose:
+            print(f"=== SAS log: LIBNAME+DATA -> {sas7bdat_name} ===")
+            print(log1.get('LOG', ''))
+            print(f"=== SAS log: PROC EXPORT txt -> {text_name} ===")
+            print(log2.get('LOG', ''))
 
     finally:
         sas.endsas()
 
-    sas7bdat_path = _wait_for_file_ci(OUTPUT_DIR, sas7bdat_name, timeout=30.0)
-    if sas7bdat_path is None:
-        print(f"DEBUG: no case-insensitive match for {sas7bdat_name} in {OUTPUT_DIR}")
+    actual = wait_for_file_ci(out_dir, sas7bdat_name, timeout=30.0)
+    if actual is None:
+        print(f"DEBUG: directory listing of {out_dir}:")
         try:
-            for name in sorted(os.listdir(OUTPUT_DIR)):
+            for name in sorted(os.listdir(out_dir)):
                 print(f"   {name}")
         except OSError:
             pass
         raise RuntimeError(
-            f"PBBWRDLF: {sas7bdat_name} never appeared on disk."
+            f"Failed to create {sas7bdat_name} in {out_dir}. "
+            f"See SAS log above."
         )
 
-    print(f"PBBWRDLF: wrote {sas7bdat_path} ({pl_df.height} records)")
-    return sas7bdat_path
-
-
-build()
-
-
-if __name__ == '__main__':
-    pass
+    return actual
