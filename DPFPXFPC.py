@@ -1,185 +1,139 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+REPTMON=09, NOWK=4, REPTYEAR=2026, RDATE=30/09/26, SDATE=23/09/26, SUFFIX=094
+L124PBBD DEBUG: reptmon='09' nowk='4' sfx='094'
+L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/loan094.sas7bdat ...
+WARNING: 'l124094' has 0 rows — writing empty dataset.
+SAS Connection established. Subprocess id is 3439408
 
-"""
-Program  : L124PBBD
-Purpose  : Produce BNM.L124{sfx} and BNM.UL124{sfx} from BNM1.LOAN{sfx}
-           and BNM1.ULOAN{sfx}, where sfx = f"0{int(reptmon)}{nowk}".
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
+  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
+SAS Connection terminated. Subprocess id was 3439408
+L124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/l124094.sas7bdat  (0 rows)
+L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/uloan094.sas7bdat ...
+WARNING: 'ul124094' has 0 rows — writing empty dataset.
+SAS Connection established. Subprocess id is 3439458
 
-           No ENTITY_CD filter here — that is LNNOTE-only (P124RDAL).
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
+  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
+SAS Connection terminated. Subprocess id was 3439458
+UL124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/ul124094.sas7bdat  (0 rows)
+WARNING: 'lalw094' has 0 rows — writing empty dataset.
+SAS Connection established. Subprocess id is 3439488
 
-Convention:
-    REPTMON = '09' (2-digit)
-    NOWK    = '4'  (single digit)
-    Suffix  = '094'
+SAS Connection terminated. Subprocess id was 3439488
+LALW written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/lalw094.sas7bdat  (0 rows)
+SAS Connection established. Subprocess id is 3439536
 
-reptmon/nowk may be passed by LALWP124 (single source of truth) or
-derived from (today - 1) when invoked standalone.
-"""
+SAS Connection terminated. Subprocess id was 3439536
+ALW copied: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx/alw094.sas7bdat -> /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.sas7bdat (302 rows)
+P124RDAL DEBUG: REPTMON='09' NOWK='4' sfx='094'
+SAS Connection established. Subprocess id is 3439570
 
-import datetime
-from pathlib import Path
-from typing import Optional
+=== SAS log: LIBNAME+DATA -> PBBRDAL.sas7bdat ===
 
-import pandas as pd
+70   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+70 ! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+71   
+72   
+73               LIBNAME _outlib "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output";
+NOTE: Libref _OUTLIB was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output
+74               DATA _outlib.PBBRDAL;
+75                   SET WORK.PBBRDAL;
+76               RUN;
+NOTE: There were 44 observations read from the data set WORK.PBBRDAL.
+NOTE: The data set _OUTLIB.PBBRDAL has 44 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+77               LIBNAME _outlib CLEAR;
+NOTE: Libref _OUTLIB has been deassigned.
+78   
+79   
+80   ods html5 (id=saspy_internal) close;ods listing;
 
-from bnm_io import (
-    read_sas7bdat,
-    read_sas7bdat_ci,
-    resolve_ci,
-    write_sas_and_txt,
-)
+=== SAS log: PROC EXPORT txt -> PBBRDAL.txt ===
 
+82   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+82 ! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+83   
+84   
+85               PROC EXPORT DATA=WORK.PBBRDAL
+86                   OUTFILE="/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt"
+87                   DBMS=DLM REPLACE;
+88                   DELIMITER=';';
+89               RUN;
+NOTE: Unable to open parameter catalog: SASUSER.PARMS.PARMS.SLIST in update mode. Temporary parameter values will be saved to 
+WORK.PARMS.PARMS.SLIST.
+NOTE: Unable to open SASUSER.PROFILE. WORK.PROFILE will be opened instead.
+NOTE: All profile changes will be lost at the end of the session.
+90    /**********************************************************************
+91    *   PRODUCT:   SAS
+92    *   VERSION:   9.4
+93    *   CREATOR:   External File Interface
+94    *   DATE:      02OCT26
+95    *   DESC:      Generated SAS Datastep Code
+96    *   TEMPLATE SOURCE:  (None Specified.)
+97    ***********************************************************************/
+98       data _null_;
+99       %let _EFIERR_ = 0; /* set the ERROR detection macro variable */
+100      %let _EFIREC_ = 0;     /* clear export record count macro variable */
+101      file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt' delimiter=';' DSD DROPOVER
+101! lrecl=32767;
+102      if _n_ = 1 then        /* write column names or labels */
+103       do;
+104         put
+105            "itcode"
+106         ';'
+107            "amount"
+108         ;
+109       end;
+110     set  WORK.PBBRDAL   end=EFIEOD;
+111         format itcode $14. ;
+112         format amount best12. ;
+113       do;
+114         EFIOUT + 1;
+115         put itcode $ @;
+116         put amount ;
+117         ;
+118       end;
+119      if _ERROR_ then call symputx('_EFIERR_',1);  /* set ERROR detection macro variable */
+120      if EFIEOD then call symputx('_EFIREC_',EFIOUT);
+121      run;
+NOTE: The file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt' is:
+      Filename=/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt,
+      Owner Name=sas_edw_dev,
+      Group Name=sas_edw_dev_grp,
+      Access Permission=-rw-rw-r--,
+      Last Modified=02Oct2026:12:11:24
 
-# ============================================================================
-# PATH CONFIGURATION
-# ============================================================================
+NOTE: 45 records were written to the file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt'.
+      The minimum record length was 13.
+      The maximum record length was 16.
+NOTE: There were 44 observations read from the data set WORK.PBBRDAL.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+44 records created in /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt from WORK.PBBRDAL.
+  
+  
+NOTE: "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt" file was successfully created.
+NOTE: PROCEDURE EXPORT used (Total process time):
+      real time           0.03 seconds
+      cpu time            0.02 seconds
+      
+122  
+123  
+124  ods html5 (id=saspy_internal) close;ods listing;
 
-BNM1_PATH = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1"
-)
-BNM_PATH = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm"
-)
-
-
-# ============================================================================
-# SUFFIX HELPER
-# ============================================================================
-
-def bnm_suffix(reptmon: str, nowk: str) -> str:
-    """'09' + '4' -> '094'."""
-    return f"0{int(reptmon)}{nowk}"
-
-
-# ============================================================================
-# DATE VARIABLES (fallback for standalone invocation)
-# ============================================================================
-
-def get_reptmon_nowk() -> tuple:
-    """
-    REPTMON -> '09' (2-digit)
-    NOWK    -> '4'  (single digit, NEVER '04')
-    """
-    reptdate = datetime.date.today() - datetime.timedelta(days=1)
-    day = reptdate.day
-
-    if day == 8:
-        wk = '1'
-    elif day == 15:
-        wk = '2'
-    elif day == 22:
-        wk = '3'
-    else:
-        wk = '4'
-
-    return f"{reptdate.month:02d}", wk
-
-
-# ============================================================================
-# L124/UL124 BUILDER
-# ============================================================================
-
-def make_l124(src_path: Path) -> pd.DataFrame:
-    """
-    Mirrors:
-        DATA BNM.L124{sfx};
-            SET BNM1.LOAN{sfx};
-            IF PRODUCT IN (124,145);
-            PRODCD='34120'; AMTIND='I';
-
-    No ENTITY_CD filter (that column only exists in LNNOTE).
-    """
-    df = read_sas7bdat(src_path)
-
-    prod_col = next(
-        (c for c in ('product', 'prodcd', 'product_cd') if c in df.columns),
-        None,
-    )
-    if prod_col is None:
-        raise KeyError(
-            f"No product column in {src_path.name}. "
-            f"Columns present: {list(df.columns)[:20]}..."
-        )
-
-    vals = df[prod_col]
-    if vals.dtype == object:
-        mask = vals.astype(str).isin(['124', '145'])
-    else:
-        mask = vals.isin([124, 145])
-
-    df = df[mask].copy()
-    df['prodcd'] = '34120'
-    df['amtind'] = 'I'
-    return df
-
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
-def main(
-    reptmon: Optional[str] = None,
-    nowk: Optional[str] = None,
-) -> None:
-    # Resolve date variables
-    if reptmon is None or nowk is None:
-        reptmon, nowk = get_reptmon_nowk()
-        print(
-            f"L124PBBD: no explicit date passed — derived "
-            f"reptmon={reptmon!r} nowk={nowk!r}"
-        )
-
-    assert len(reptmon) == 2 and reptmon.isdigit(), (
-        f"REPTMON must be 2-digit, got {reptmon!r}"
-    )
-    assert nowk in {'1', '2', '3', '4'}, (
-        f"NOWK must be single-digit, got {nowk!r}"
-    )
-
-    sfx = bnm_suffix(reptmon, nowk)
-    print(f"L124PBBD DEBUG: reptmon={reptmon!r} nowk={nowk!r} sfx={sfx!r}")
-
-    # Input paths (case-insensitive)
-    loan_path = resolve_ci(BNM1_PATH, f"loan{sfx}.sas7bdat")
-    uloan_path = resolve_ci(BNM1_PATH, f"uloan{sfx}.sas7bdat")
-
-    if loan_path is None:
-        raise FileNotFoundError(
-            f"L124PBBD: input not found (case-insensitive) for "
-            f"loan{sfx}.sas7bdat in {BNM1_PATH}"
-        )
-    if uloan_path is None:
-        raise FileNotFoundError(
-            f"L124PBBD: input not found (case-insensitive) for "
-            f"uloan{sfx}.sas7bdat in {BNM1_PATH}"
-        )
-
-    # -----------------------------------------------------------------------
-    # DATA BNM.L124{sfx}
-    # -----------------------------------------------------------------------
-    print(f"L124PBBD: reading {loan_path} ...")
-    l124_df = make_l124(loan_path)
-    l124_base = f"l124{sfx}"
-    write_sas_and_txt(l124_df, BNM_PATH, l124_base)
-    print(
-        f"L124 written: {BNM_PATH / (l124_base + '.sas7bdat')}  "
-        f"({len(l124_df)} rows)"
-    )
-    del l124_df
-
-    # -----------------------------------------------------------------------
-    # DATA BNM.UL124{sfx}
-    # -----------------------------------------------------------------------
-    print(f"L124PBBD: reading {uloan_path} ...")
-    ul124_df = make_l124(uloan_path)
-    ul124_base = f"ul124{sfx}"
-    write_sas_and_txt(ul124_df, BNM_PATH, ul124_base)
-    print(
-        f"UL124 written: {BNM_PATH / (ul124_base + '.sas7bdat')}  "
-        f"({len(ul124_df)} rows)"
-    )
-
-
-if __name__ == '__main__':
-    main()
+SAS Connection terminated. Subprocess id was 3439570
+PBBMRDLF: wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/pbbrdal.sas7bdat (44 records)
+Streaming LNNOTE: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m09.sas7bdat  (chunksize=1,000,000)
+Cagamas summary rows: 0
+/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/P124RDAL.py:329: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  rdal_df = pd.concat([rdal_df, cag_summary], ignore_index=True, sort=False)
+RDAL output written to: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWP124/rdal.txt
