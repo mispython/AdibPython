@@ -1,14 +1,13 @@
-# read_all_polars.py
+# read_all_polars_8threads.py
 # -*- coding: utf-8 -*-
 import os, time
-os.environ["POLARS_MAX_THREADS"] = "8"   # limit threads to avoid memory blowup
+os.environ["POLARS_MAX_THREADS"] = "8"   # <-- key change
 
 import polars as pl
-from pathlib import Path
 
 PDIR = "/stgsrcsys/host/holding/DPDARPGS_FB_20261001.parquet.dir"
 
 print(f"Threads: {pl.thread_pool_size()}", flush=True)
 t0 = time.time()
-df = pl.read_parquet(PDIR)
-print(f"Read {len(df):,} rows in {time.time()-t0:.1f}s", flush=True)
+n = pl.scan_parquet(PDIR).select(pl.len()).collect(streaming=True).item()
+print(f"Counted {n:,} rows in {time.time()-t0:.1f}s", flush=True)
