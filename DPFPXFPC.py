@@ -1,48 +1,79 @@
-REPTMON=09, NOWK=4, REPTYEAR=2026, RDATE=30/09/26, SDATE=23/09/26, SUFFIX=094
-L124PBBD DEBUG: reptmon='09' nowk='4' sfx='094'
-L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/loan094.sas7bdat ...
-WARNING: 'l124094' has 0 rows — writing empty dataset.
-SAS Connection established. Subprocess id is 3425848
+PBBMRDLF:
 
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
-  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
-  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-SAS Connection terminated. Subprocess id was 3425848
-L124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/l124094.sas7bdat  (0 rows)
-L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/uloan094.sas7bdat ...
-WARNING: 'ul124094' has 0 rows — writing empty dataset.
-SAS Connection established. Subprocess id is 3425915
+DATA PBBRDAL;
+INPUT ITCODE $ 1-14;
+CARDS;
+3313002000000Y
+3313003000000Y
+4019000000000Y
+4216060000000Y
+4261076000000Y
+4261085000000Y
+4263076000000Y
+4263085000000Y
+4269981000000Y
+4313002000000Y
+4313003000000Y
+7200000008310Y
+7300000003000Y
+7300000006100Y
+7300000008310Y
+7300000008320Y
+5422000000000Y
+4017000000000Y
+3051577000000Y
+3054077000000Y
+3055060000000Y
+3055061000000Y
+3055076000000Y
+3055077000000Y
+3056000000000Y
+3400010000310Y
+3400010008100Y
+3400020000100Y
+3400020000110Y
+3400000000132Y
+3400077000420Y
+3400078000132Y
+3415100000000Y
+3415200000000Y
+3415900000000Y
+3416000000000Y
+3420000000420Y
+7211500000000Y
+7312000000000Y
+7318000000000Y
+7411000000000Y
+7412000000000Y
+7413000000000Y
+7414000000000Y
+;
+RUN;
 
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
-  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
-  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-SAS Connection terminated. Subprocess id was 3425915
-UL124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/ul124094.sas7bdat  (0 rows)
-SAS Connection established. Subprocess id is 3425962
 
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
-  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-SAS Connection terminated. Subprocess id was 3425962
-LALW written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/lalw094.sas7bdat  (1 rows)
-SAS Connection established. Subprocess id is 3426007
+PBBWRDLF:
 
-/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
-  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-SAS Connection terminated. Subprocess id was 3426007
-Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.sas7bdat and /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.txt (302 rows)
-ALW copied from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx/alw094.sas7bdat to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.sas7bdat (302 rows)
-P124RDAL DEBUG: REPTMON='09' NOWK='4' sfx='094'
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWP124.py", line 223, in <module>
-    main()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWP124.py", line 219, in main
-    run_p124rdal()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/P124RDAL.py", line 260, in main
-    import PBBMRDLF  # noqa: F401
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/PBBMRDLF.py", line 85, in <module>
-    build()
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/PBBMRDLF.py", line 41, in build
-    raise ValueError(
-ValueError: PBBMRDLF.ITCODE_DATA is empty. Populate it with the monthly ITCODE list (SAS %MONTHLY CARDS) before running — otherwise PBBRDAL will not be written and P124RDAL will fail.
+DATA PBBRDAL;
+INPUT ITCODE $ 1-14;
+CARDS;
+3313002000000Y
+3313003000000Y
+4017000000000Y
+4019000000000Y
+4216060000000Y
+4261076000000Y
+4261085000000Y
+4263076000000Y
+4263085000000Y
+4269981000000Y
+4313002000000Y
+4313003000000Y
+5422000000000Y
+7200000008310Y
+7300000003000Y
+7300000006100Y
+7300000008310Y
+7300000008320Y
+;
+RUN;
+
