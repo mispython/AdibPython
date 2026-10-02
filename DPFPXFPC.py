@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 """
-Program  : PBBWRDLF
-Purpose  : Weekly ITCODE reference list -> PBBRDAL.sas7bdat
-           Import executes the build (%INC PGM(PBBWRDLF) behaviour).
+Program  : PBBMRDLF
+Purpose  : Monthly ITCODE reference list -> PBBRDAL.sas7bdat
+           Import executes the build (%INC PGM(PBBMRDLF) behaviour).
+
+IMPORTANT: ITCODE_DATA must be populated with the monthly SAS CARDS list.
+           If left empty, build() raises — preventing a silent no-op that
+           would leave PBBRDAL missing for P124RDAL.
 """
 
 from pathlib import Path
@@ -19,31 +23,23 @@ OUTPUT_DIR  = Path(
 OUTPUT_BASE = "PBBRDAL"
 
 
+# ============================================================================
+# Populate with the monthly ITCODE list (SAS %MONTHLY CARDS).
+# ============================================================================
 ITCODE_DATA = [
-    "3313002000000Y",
-    "3313003000000Y",
-    "4017000000000Y",
-    "4019000000000Y",
-    "4216060000000Y",
-    "4261076000000Y",
-    "4261085000000Y",
-    "4263076000000Y",
-    "4263085000000Y",
-    "4269981000000Y",
-    "4313002000000Y",
-    "4313003000000Y",
-    "5422000000000Y",
-    "7200000008310Y",
-    "7300000003000Y",
-    "7300000006100Y",
-    "7300000008310Y",
-    "7300000008320Y",
+    # "3313002000000Y",
+    # "3313003000000Y",
+    # ... (paste the full monthly CARDS list here) ...
 ]
 
 
 def build() -> Path:
     if not ITCODE_DATA:
-        raise ValueError("PBBWRDLF.ITCODE_DATA is empty.")
+        raise ValueError(
+            "PBBMRDLF.ITCODE_DATA is empty. Populate it with the monthly "
+            "ITCODE list before running — otherwise PBBRDAL will not be "
+            "written and P124RDAL will fail."
+        )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     sas7bdat_path = OUTPUT_DIR / f"{OUTPUT_BASE}.sas7bdat"
@@ -71,10 +67,10 @@ def build() -> Path:
 
     if not sas7bdat_path.exists():
         raise RuntimeError(
-            f"PBBWRDLF: PROC EXPORT did not create {sas7bdat_path}."
+            f"PBBMRDLF: PROC EXPORT did not create {sas7bdat_path}."
         )
 
-    print(f"PBBWRDLF: wrote {sas7bdat_path} ({len(df)} records)")
+    print(f"PBBMRDLF: wrote {sas7bdat_path} ({len(df)} records)")
     return sas7bdat_path
 
 
