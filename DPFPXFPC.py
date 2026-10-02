@@ -1,106 +1,4 @@
-369   *   TEMPLATE SOURCE:  (None Specified.)
-370   ***********************************************************************/
-371      data _null_;
-372      %let _EFIERR_ = 0; /* set the ERROR detection macro variable */
-373      %let _EFIREC_ = 0;     /* clear export record count macro variable */
-374      file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/l124094.txt' delimiter=';' DSD DROPOVER
-374! lrecl=32767;
-375      if _n_ = 1 then        /* write column names or labels */
-376       do;
-377         put
-378            "acctno"
-379         ';'
-380            "noteno"
-381         ';'
-382            "eir_adj"
-383         ';'
-384            "sector"
-385         ';'
-386            "name"
-387         ';'
-388            "commno"
-389         ';'
-390            "custcd"
-391         ';'
-392            "origmt"
-393         ';'
-394            "prodcd"
-395         ';'
-396            "riskcd"
-397         ';'
-398            "collcd"
-399         ';'
-400            "origmx"
-401         ';'
-402            "remainmx"
-403         ';'
-404            "sectorcd"
-405         ';'
-406            "statecd"
-407         ';'
-408            "riskrte"
-409         ';'
-410            "amtind"
-411         ';'
-412            "cgcref"
-413         ';'
-414            "custcode"
-415         ';'
-416            "product"
-417         ';'
-418            "branch"
-419         ';'
-420            "assmdate"
-421         ';'
-422            "intamt"
-423         ';'
-424            "appvalue"
-425         ';'
-426            "noteterm"
-427         ';'
-428            "colldesc"
-429         ';'
-430            "flag3"
-431         ';'
-432            "costctr"
-433         ';'
-434            "census"
-435         ';'
-436            "billtype"
-437         ';'
-438            "netproc"
-439         ';'
-440            "intrate"
-441         ';'
-442            "spread"
-443         ';'
-444            "ntint"
-445         ';'
-446            "rebate"
-447         ';'
-448            "intearn"
-449         ';'
-450            "accrual"
-451         ';'
-452            "secure"
-453         ';'
-454            "liabcode"
-455         ';'
-456            "loanstat"
-457         ';'
-458            "borstat"
-459         ';'
-460            "marketvl"
-461         ';'
-462            "earnterm"
-463         ';'
-464            "usuryidx"
-465         ';'
-466            "intearn2"
-467         ';'
-468            "intearn3"
-469         ';'
-470            "intearn4"
+       "intearn4"
 471         ';'
 472            "payamt"
 473         ';'
@@ -642,7 +540,7 @@ NOTE: The file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124
       Owner Name=sas_edw_dev,
       Group Name=sas_edw_dev_grp,
       Access Permission=-rw-rw-r--,
-      Last Modified=02Oct2026:11:15:39
+      Last Modified=02Oct2026:11:18:56
 
 NOTE: 1 record was written to the file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/l124094.txt'.
       The minimum record length was 1310.
@@ -658,17 +556,17 @@ NOTE: DATA statement used (Total process time):
 NOTE: "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/l124094.txt" file was successfully created.
 NOTE: PROCEDURE EXPORT used (Total process time):
       real time           0.04 seconds
-      cpu time            0.03 seconds
+      cpu time            0.04 seconds
       
 1007  
 1008  
 1009  ods html5 (id=saspy_internal) close;ods listing;
 
-SAS Connection terminated. Subprocess id was 3430006
+SAS Connection terminated. Subprocess id was 3430898
 L124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/l124094.sas7bdat  (0 rows)
 L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/uloan094.sas7bdat ...
 WARNING: 'ul124094' has 0 rows — writing empty dataset.
-SAS Connection established. Subprocess id is 3430055
+SAS Connection established. Subprocess id is 3430945
 
 /sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
   warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
@@ -858,7 +756,7 @@ NOTE: The file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124
       Owner Name=sas_edw_dev,
       Group Name=sas_edw_dev_grp,
       Access Permission=-rw-rw-r--,
-      Last Modified=02Oct2026:11:15:41
+      Last Modified=02Oct2026:11:18:59
 
 NOTE: 1 record was written to the file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/ul124094.txt'.
       The minimum record length was 239.
@@ -880,16 +778,16 @@ NOTE: PROCEDURE EXPORT used (Total process time):
 281  
 282  ods html5 (id=saspy_internal) close;ods listing;
 
-SAS Connection terminated. Subprocess id was 3430055
+SAS Connection terminated. Subprocess id was 3430945
 UL124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/ul124094.sas7bdat  (0 rows)
 WARNING: 'lalw094' has 0 rows — writing empty dataset.
-SAS Connection established. Subprocess id is 3430089
+SAS Connection established. Subprocess id is 3431021
 
 /sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
   warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
-SAS Connection terminated. Subprocess id was 3430089
+SAS Connection terminated. Subprocess id was 3431021
 LALW written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/lalw094.sas7bdat  (0 rows)
-SAS Connection established. Subprocess id is 3430127
+SAS Connection established. Subprocess id is 3431063
 
 === SAS log: LIBNAME+DATA -> alw094.sas7bdat ===
 
@@ -975,7 +873,7 @@ NOTE: The file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124
       Owner Name=sas_edw_dev,
       Group Name=sas_edw_dev_grp,
       Access Permission=-rw-rw-r--,
-      Last Modified=02Oct2026:11:15:46
+      Last Modified=02Oct2026:11:19:03
 
 NOTE: 303 records were written to the file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.txt'.
       The minimum record length was 17.
@@ -990,19 +888,121 @@ NOTE: DATA statement used (Total process time):
   
 NOTE: "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.txt" file was successfully created.
 NOTE: PROCEDURE EXPORT used (Total process time):
-      real time           0.03 seconds
-      cpu time            0.03 seconds
+      real time           0.02 seconds
+      cpu time            0.01 seconds
       
 129  
 130  
 131  ods html5 (id=saspy_internal) close;ods listing;
 
-SAS Connection terminated. Subprocess id was 3430127
+SAS Connection terminated. Subprocess id was 3431063
 ALW copied from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx/alw094.sas7bdat to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.sas7bdat (302 rows)
 P124RDAL DEBUG: REPTMON='09' NOWK='4' sfx='094'
-SAS Connection established. Subprocess id is 3430161
+SAS Connection established. Subprocess id is 3431097
 
-SAS Connection terminated. Subprocess id was 3430161
+=== SAS log: LIBNAME+DATA -> PBBRDAL.sas7bdat ===
+
+70   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+70 ! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+71   
+72   
+73               LIBNAME _outlib "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output";
+NOTE: Libref _OUTLIB was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output
+74               DATA _outlib.PBBRDAL;
+75                   SET WORK.PBBRDAL;
+76               RUN;
+NOTE: There were 44 observations read from the data set WORK.PBBRDAL.
+NOTE: The data set _OUTLIB.PBBRDAL has 44 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+77               LIBNAME _outlib CLEAR;
+NOTE: Libref _OUTLIB has been deassigned.
+78   
+79   
+80   ods html5 (id=saspy_internal) close;ods listing;
+
+=== SAS log: PROC EXPORT txt -> PBBRDAL.txt ===
+
+82   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
+82 ! graphics on / outputfmt=png;
+NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
+83   
+84   
+85               PROC EXPORT DATA=WORK.PBBRDAL
+86                   OUTFILE="/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt"
+87                   DBMS=DLM REPLACE;
+88                   DELIMITER=';';
+89               RUN;
+NOTE: Unable to open parameter catalog: SASUSER.PARMS.PARMS.SLIST in update mode. Temporary parameter values will be saved to 
+WORK.PARMS.PARMS.SLIST.
+NOTE: Unable to open SASUSER.PROFILE. WORK.PROFILE will be opened instead.
+NOTE: All profile changes will be lost at the end of the session.
+90    /**********************************************************************
+91    *   PRODUCT:   SAS
+92    *   VERSION:   9.4
+93    *   CREATOR:   External File Interface
+94    *   DATE:      02OCT26
+95    *   DESC:      Generated SAS Datastep Code
+96    *   TEMPLATE SOURCE:  (None Specified.)
+97    ***********************************************************************/
+98       data _null_;
+99       %let _EFIERR_ = 0; /* set the ERROR detection macro variable */
+100      %let _EFIREC_ = 0;     /* clear export record count macro variable */
+101      file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt' delimiter=';' DSD DROPOVER
+101! lrecl=32767;
+102      if _n_ = 1 then        /* write column names or labels */
+103       do;
+104         put
+105            "itcode"
+106         ';'
+107            "amount"
+108         ;
+109       end;
+110     set  WORK.PBBRDAL   end=EFIEOD;
+111         format itcode $14. ;
+112         format amount best12. ;
+113       do;
+114         EFIOUT + 1;
+115         put itcode $ @;
+116         put amount ;
+117         ;
+118       end;
+119      if _ERROR_ then call symputx('_EFIERR_',1);  /* set ERROR detection macro variable */
+120      if EFIEOD then call symputx('_EFIREC_',EFIOUT);
+121      run;
+NOTE: The file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt' is:
+      Filename=/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt,
+      Owner Name=sas_edw_dev,
+      Group Name=sas_edw_dev_grp,
+      Access Permission=-rw-rw-r--,
+      Last Modified=02Oct2026:11:19:05
+
+NOTE: 45 records were written to the file '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt'.
+      The minimum record length was 13.
+      The maximum record length was 16.
+NOTE: There were 44 observations read from the data set WORK.PBBRDAL.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+44 records created in /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt from WORK.PBBRDAL.
+  
+  
+NOTE: "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.txt" file was successfully created.
+NOTE: PROCEDURE EXPORT used (Total process time):
+      real time           0.02 seconds
+      cpu time            0.02 seconds
+      
+122  
+123  
+124  ods html5 (id=saspy_internal) close;ods listing;
+
+SAS Connection terminated. Subprocess id was 3431097
 Traceback (most recent call last):
   File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWP124.py", line 181, in <module>
     main()
@@ -1013,7 +1013,7 @@ Traceback (most recent call last):
   File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/PBBMRDLF.py", line 53, in <module>
     build()
   File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/PBBMRDLF.py", line 47, in build
-    write_sas_and_txt(df, OUTPUT_DIR, OUTPUT_BASE, verbose=False)
+    write_sas_and_txt(df, OUTPUT_DIR, OUTPUT_BASE, verbose=True)
   File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/bnm_io.py", line 94, in write_sas_and_txt
     raise RuntimeError(
 RuntimeError: Failed to create /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output/PBBRDAL.sas7bdat. See SAS log above.
