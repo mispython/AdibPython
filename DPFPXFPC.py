@@ -1,40 +1,30 @@
-# minimal_test.py
-# -*- coding: utf-8 -*-
-import os, time, sys
+NOTE: The infile "cd /sas/python/virt_edw;source bin/activate;python /stgsrcsys/host/uat/python/EIBDFALE.py" is:
+      Pipe command="cd /sas/python/virt_edw;source bin/activate;python /stgsrcsys/host/uat/python/EIBDFALE.py"
 
-print("Step A: importing pyarrow", flush=True)
-t0 = time.time()
-import pyarrow.parquet as pq
-print(f"  pyarrow imported in {time.time()-t0:.1f}s", flush=True)
+Step A: importing pyarrow
+  pyarrow imported in 0.0s
+Step B: opening ONE part file
+  opened in 0.0s
+  rows: 309679
+  row groups: 1
+Step C: reading metadata only
+  metadata in 0.0s
+Step D: reading ONE row group
+  read in 0.0s, 309679 rows
+Step E: importing polars
+  polars imported in 0.3s
+/stgsrcsys/host/uat/python/EIBDFALE.py:33: DeprecationWarning: `threadpool_size` was renamed; use `thread_pool_size` instead.
+  print(f"  threadpool: {pl.threadpool_size()}", flush=True)
+  threadpool: 80
+Step F: scan one part file
+  read in 0.2s, 309679 rows
+2                                                          The SAS System                              17:35 Friday, October 2, 2026
 
-print("Step B: opening ONE part file", flush=True)
-PART = "/stgsrcsys/host/holding/DPDARPGS_FB_20261001.parquet.dir/part-00000.parquet"
-
-t0 = time.time()
-pf = pq.ParquetFile(PART)
-print(f"  opened in {time.time()-t0:.1f}s", flush=True)
-print(f"  rows: {pf.metadata.num_rows}", flush=True)
-print(f"  row groups: {pf.num_row_groups}", flush=True)
-
-print("Step C: reading metadata only", flush=True)
-t0 = time.time()
-meta = pf.metadata
-print(f"  metadata in {time.time()-t0:.1f}s", flush=True)
-
-print("Step D: reading ONE row group", flush=True)
-t0 = time.time()
-table = pf.read_row_group(0)
-print(f"  read in {time.time()-t0:.1f}s, {table.num_rows} rows", flush=True)
-
-print("Step E: importing polars", flush=True)
-t0 = time.time()
-import polars as pl
-print(f"  polars imported in {time.time()-t0:.1f}s", flush=True)
-print(f"  threadpool: {pl.threadpool_size()}", flush=True)
-
-print("Step F: scan one part file", flush=True)
-t0 = time.time()
-df = pl.read_parquet(PART)
-print(f"  read in {time.time()-t0:.1f}s, {len(df)} rows", flush=True)
-
-print("DONE", flush=True)
+DONE
+NOTE: 18 records were read from the infile "cd /sas/python/virt_edw;source bin/activate;python 
+      /stgsrcsys/host/uat/python/EIBDFALE.py".
+      The minimum record length was 4.
+      The maximum record length was 125.
+NOTE: DATA statement used (Total process time):
+      real time           1.94 seconds
+      cpu time            0.00 seconds
