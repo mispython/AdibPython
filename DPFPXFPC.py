@@ -1,176 +1,199 @@
 # -*- coding: utf-8 -*-
+"""
+Runtime diagnostics for the deposit pipeline.
+Checks storage, CPU, memory, Polars threads, and does a minimal Parquet read.
+"""
 import os
-os.environ.setdefault("POLARS_MAX_THREADS", str(os.cpu_count() or 4))
-
+import sys
 import time
-import polars as pl
-import pyreadstat
-import saspy
-from datetime import datetime, timedelta
+import shutil
+import subprocess
 from pathlib import Path
 
-def tic():
-    return time.time()
+PARQUET_DIR = "/stgsrcsys/host/holding/DPDARPGS_FB_20261001.parquet.dir"
 
-def toc(label, t0):
-    dt = time.time() - t0
-    print(f"[TIMING] {label}: {dt:.1f}s", flush=True)
+def header(title):
+    print("=" * 78)
+    print(title)
+    print("=" * 78)
 
-# -----------------------------
-# CONFIGURATION
-# -----------------------------
-parquet_in_dir  = "/stgsrcsys/host/holding"
+# ---------------- 1. System basics ----------------
+header("1. SYSTEM BASICS")
+
+print(f"Python version : {sys.version.split()[0]}")
+print(f"CPU cores      : {os.cpu_count()}")
+print(f"cwd            : {os.getcwd()}")
+
+# Memory
+try:
+    meminfo = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            k, _, v = line.partition(":")
+            meminfo[k.strip()] = v.strip()
+    print(f"Mem total      : {meminfo.get('MemTotal', '?')}")
+    print(f"Mem free       : {meminfo.get('MemFree', '?')}")
+    print(f"Mem available  : {meminfo.get('MemAvailable', '?')}")
+except Exception as e:
+    print(f"Mem info failed: {e}")
+
+# Disk
+try:
+    usage = shutil.disk_usage(PARQUET_DIR)
+    print(f"Disk total     : {usage.total / 1e9:.1f} GB")
+    print(f"Disk used      : {usage.used / 1e9:.1f} GB")
+    print(f"Disk free      : {usage.free / 1e9:.1f} GB")
+except Exception as e:
+    print(f"Disk info failed: {e}")
+
+# Mount info
+try:
+    with open("/proc/mounts") as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 3 and Path(PARQUET_DIR).is_relative_to(parts[1]) if hasattr(Path, "is_relative_to") else False:
+                print(f"Mount          : {parts[0]} on {parts[1]} ({parts[2]})")
+except Exception:
+    # is_relative_to needs py3.9+, so fallback
+    pass
+
+# Manual mount lookup (works on py3.8+)
+with open("/proc/mounts") as f:
+    best = None
+    for line in f:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mnt = parts[1]
+        if PARQUET_DIR.startswith(mnt):
+            if best is None or len(mnt) > len(best[1]):
+                best = (parts[0], mnt, parts[2])
+    if best:
+        print(f"Mount          : {best[0]} on {best[1]} ({best[2]})")
+
+# ---------------- 2. Parquet directory ----------------
+header("2. PARQUET DIRECTORY")
+
+pdir = Path(PARQUET_DIR)
+if not pdir.is_dir():
+    print(f"NOT A DIRECTORY: {PARQUET_DIR}")
+    sys.exit(1)
+
+parts = sorted(pdir.glob("part-*.parquet"))
+print(f"Part files      : {len(parts)}")
+if parts:
+    sizes = [p.stat().st_size for p in parts]
+    print(f"Total size      : {sum(sizes) / 1e6:.1f} MB")
+    print(f"Avg part size   : {sum(sizes) / len(sizes) / 1e6:.2f} MB")
+    print(f"First part      : {parts[0].name} ({sizes[0]/1e6:.2f} MB)")
+    print(f"Last part       : {parts[-1].name} ({sizes[-1]/1e6:.2f} MB)")
+
+# ---------------- 3. Polars ----------------
+header("3. POLARS")
+
+# Force a thread count before importing polars
+os.environ.setdefault("POLARS_MAX_THREADS", str(os.cpu_count() or 4))
+
+import polars as pl
+
+print(f"Polars version  : {pl.__version__}")
+print(f"Thread pool     : {pl.threadpool_size()}")
+
+# ---------------- 4. Row count (pure I/O) ----------------
+header("4. ROW COUNT (pure scan)")
+
+t0 = time.time()
+n = (
+    pl.scan_parquet(PARQUET_DIR)
+      .select(pl.len())
+      .collect(streaming=True)
+      .item()
+)
+dt = time.time() - t0
+print(f"Total rows      : {n:,}")
+print(f"Elapsed         : {dt:.1f}s")
+print(f"Throughput      : {n/dt/1e6:.1f} M rows/s")
+
+# ---------------- 5. Simple filter ----------------
+header("5. SIMPLE FILTER (BANKNO==33)")
+
+t0 = time.time()
+m = (
+    pl.scan_parquet(PARQUET_DIR)
+      .select([pl.col("BANKNO")])
+      .filter(pl.col("BANKNO") == 33)
+      .select(pl.len())
+      .collect(streaming=True)
+      .item()
+)
+dt = time.time() - t0
+print(f"BANKNO==33 count: {m:,}")
+print(f"Elapsed         : {dt:.1f}s")
+
+# ---------------- 6. Full filter + group-by ----------------
+header("6. FULL FILTER + GROUP-BY")
+
+t0 = time.time()
+df = (
+    pl.scan_parquet(PARQUET_DIR)
+      .filter(
+          (pl.col("BANKNO") == 33) &
+          (pl.col("REPTNO") == 4001) &
+          (pl.col("FMTCODE").is_in([1, 2])) &
+          (pl.col("OPENIND").is_in(["D", "O"])) &
+          (
+              ((pl.col("INTPLAN") >= 340) & (pl.col("INTPLAN") <= 359)) |
+              ((pl.col("INTPLAN") >= 448) & (pl.col("INTPLAN") <= 459)) |
+              ((pl.col("INTPLAN") >= 461) & (pl.col("INTPLAN") <= 469)) |
+              ((pl.col("INTPLAN") >= 580) & (pl.col("INTPLAN") <= 599)) |
+              ((pl.col("INTPLAN") >= 660) & (pl.col("INTPLAN") <= 740))
+          )
+      )
+      .group_by(["BRANCH", "INTPLAN"])
+      .agg([
+          pl.len().alias("FDINO"),
+          pl.sum("CURBAL").alias("FDI"),
+      ])
+      .collect(streaming=True)
+)
+dt = time.time() - t0
+print(f"Groups          : {len(df)}")
+print(f"Elapsed         : {dt:.1f}s")
+
+# ---------------- 7. Existing dyibu* files ----------------
+header("7. EXISTING DYIBU* FILES")
+
+import pyreadstat
 input_dyibu_dir = "/stgsrcsys/host/uat/maa/python/input"
-output_dir      = "/stgsrcsys/host/uat/maa/python/output"
+reptmon = "10"   # adjust to current month
 
-run_date = datetime.now() - timedelta(days=1)
-reptyear = run_date.strftime("%Y")
-reptmon  = run_date.strftime("%m")
-reptday  = run_date.strftime("%d")
-rdate    = run_date.strftime("%Y-%m-%d")
-
-parquet_dir = f"{parquet_in_dir}/DPDARPGS_FB_{reptyear}{reptmon}{reptday}.parquet.dir"
-
-if not Path(parquet_dir).is_dir():
-    raise SystemExit(f"ERROR: Parquet dir not found: {parquet_dir}")
-
-parts = list(Path(parquet_dir).glob("part-*.parquet"))
-print(f"Found {len(parts)} part files in {parquet_dir}")
-print(f"Polars thread pool: {pl.threadpool_size()}", flush=True)
-
-# -----------------------------
-# STEP 0: Read existing dyibu*
-# -----------------------------
-t0 = tic()
-sas = saspy.SASsession()
-toc("saspy.SASsession init", t0)
-
-dyibu_names = ["DYIBUF", "DYIBUB", "DYIBUA", "DYIBUN", "DYIBUY"]
-
-existing_dyibu = {}
-for name in dyibu_names:
+for name in ["DYIBUF", "DYIBUB", "DYIBUA", "DYIBUN", "DYIBUY"]:
     fname = f"{name.lower()}{reptmon}.sas7bdat"
     path = Path(input_dyibu_dir) / fname
     if path.exists():
-        t0 = tic()
-        pdf, meta = pyreadstat.read_sas7bdat(str(path))
-        pdf.columns = [c.lower() for c in pdf.columns]
-        existing_dyibu[name] = pl.from_pandas(pdf)
-        toc(f"read {fname} ({len(existing_dyibu[name])} rows)", t0)
+        size_mb = path.stat().st_size / 1e6
+        t0 = time.time()
+        try:
+            pdf, meta = pyreadstat.read_sas7bdat(str(path))
+            dt = time.time() - t0
+            print(f"{fname:24s}  {size_mb:8.2f} MB  {len(pdf):>8,} rows  {dt:6.2f}s")
+        except Exception as e:
+            print(f"{fname:24s}  ERROR: {e}")
     else:
-        existing_dyibu[name] = None
-        print(f"No existing {name} at {path}", flush=True)
+        print(f"{fname:24s}  not found")
 
-# -----------------------------
-# STEP 1: Lazy-scan
-# -----------------------------
-t0 = tic()
-lf = pl.scan_parquet(parquet_dir)
-toc("scan_parquet (lazy, no data read)", t0)
+# ---------------- 8. saspy session ----------------
+header("8. SASPY SESSION")
 
-# -----------------------------
-# STEP 2: Base filter
-# -----------------------------
-lf = lf.filter(
-    (pl.col("BANKNO") == 33) &
-    (pl.col("REPTNO") == 4001) &
-    (pl.col("FMTCODE").is_in([1, 2])) &
-    (pl.col("OPENIND").is_in(["D", "O"])) &
-    (
-        ((pl.col("INTPLAN") >= 340) & (pl.col("INTPLAN") <= 359)) |
-        ((pl.col("INTPLAN") >= 448) & (pl.col("INTPLAN") <= 459)) |
-        ((pl.col("INTPLAN") >= 461) & (pl.col("INTPLAN") <= 469)) |
-        ((pl.col("INTPLAN") >= 580) & (pl.col("INTPLAN") <= 599)) |
-        ((pl.col("INTPLAN") >= 660) & (pl.col("INTPLAN") <= 740))
-    )
-)
+try:
+    t0 = time.time()
+    import saspy
+    sas = saspy.SASsession()
+    dt = time.time() - t0
+    print(f"saspy init      : {dt:.1f}s")
+except Exception as e:
+    print(f"saspy failed    : {e}")
 
-P_2004_09_04 = 20040904
-P_2006_04_15 = 20060415
-P_2006_04_16 = 20060416
-P_2008_09_15 = 20080915
-P_2008_09_16 = 20080916
-
-lf_valid = lf.filter(pl.col("LMATDATE") > 0)
-
-# -----------------------------
-# STEP 3: Aggregations
-# -----------------------------
-lf_tagged = lf_valid.with_columns(
-    pl.when(pl.col("LMATDATE") < P_2004_09_04).then(pl.lit("DYIBUB"))
-      .when(pl.col("LMATDATE") <= P_2006_04_15).then(pl.lit("DYIBUA"))
-      .when(pl.col("LMATDATE") <= P_2008_09_15).then(pl.lit("DYIBUN"))
-      .otherwise(pl.lit("DYIBUY"))
-      .alias("PERIOD")
-)
-
-t0 = tic()
-agg_specific = (
-    lf_tagged
-      .group_by(["PERIOD", "BRANCH", "INTPLAN"])
-      .agg([pl.len().alias("FDINO"), pl.sum("CURBAL").alias("FDI")])
-      .collect(streaming=True)
-)
-toc(f"agg_specific ({len(agg_specific)} rows)", t0)
-
-t0 = tic()
-agg_all = (
-    lf_valid
-      .group_by(["BRANCH", "INTPLAN"])
-      .agg([pl.len().alias("FDINO"), pl.sum("CURBAL").alias("FDI")])
-      .collect(streaming=True)
-)
-toc(f"agg_all ({len(agg_all)} rows)", t0)
-
-# -----------------------------
-# STEP 4: Split
-# -----------------------------
-def split_period(df, name):
-    return (
-        df.filter(pl.col("PERIOD") == name)
-          .drop("PERIOD")
-          .with_columns(pl.lit(run_date).alias("REPTDATE"))
-    )
-
-DYIBUF = agg_all.with_columns(pl.lit(run_date).alias("REPTDATE"))
-DYIBUB = split_period(agg_specific, "DYIBUB")
-DYIBUA = split_period(agg_specific, "DYIBUA")
-DYIBUN = split_period(agg_specific, "DYIBUN")
-DYIBUY = split_period(agg_specific, "DYIBUY")
-
-new_results = {
-    "DYIBUF": DYIBUF, "DYIBUB": DYIBUB, "DYIBUA": DYIBUA,
-    "DYIBUN": DYIBUN, "DYIBUY": DYIBUY,
-}
-for k, v in new_results.items():
-    print(f"{k}: {len(v)} rows", flush=True)
-
-# -----------------------------
-# STEP 5: Merge + saspy write
-# -----------------------------
-def save_via_saspy(df, name):
-    t0 = tic()
-    pdf = df.to_pandas()
-    pdf.columns = [c.lower() for c in pdf.columns]
-    if "reptdate" in pdf.columns:
-        pdf["reptdate"] = pdf["reptdate"].dt.strftime("%Y-%m-%d")
-    toc(f"  to_pandas for {name}", t0)
-
-    t0 = tic()
-    sas.df2sd(pdf, table=name, libref="WORK")
-    toc(f"  sas.df2sd for {name} ({len(pdf)} rows)", t0)
-
-for name, new_df in new_results.items():
-    existing = existing_dyibu.get(name)
-    if existing is not None and len(existing) > 0:
-        if reptday == "01":
-            combined = new_df
-        else:
-            if "reptdate" in existing.columns:
-                existing = existing.filter(pl.col("reptdate").cast(pl.Utf8) != rdate)
-            combined = pl.concat([existing, new_df], how="diagonal_relaxed")
-        save_via_saspy(combined, name)
-    else:
-        save_via_saspy(new_df, name)
-
-print("All summaries exported.", flush=True)
+# ---------------- 9. Summary ----------------
+header("9. SUMMARY")
+print("Paste the entire output of this script back for diagnosis.")
