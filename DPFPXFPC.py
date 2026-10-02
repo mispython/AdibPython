@@ -1,104 +1,48 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+REPTMON=09, NOWK=4, REPTYEAR=2026, RDATE=30/09/26, SDATE=23/09/26, SUFFIX=094
+L124PBBD DEBUG: reptmon='09' nowk='4' sfx='094'
+L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/loan094.sas7bdat ...
+WARNING: 'l124094' has 0 rows — writing empty dataset.
+SAS Connection established. Subprocess id is 3425848
 
-"""
-Program  : PBBWRDLF
-Purpose  : Weekly ITCODE reference list -> PBBRDAL.sas7bdat.
-           Import executes the build (%INC PGM(PBBWRDLF) behaviour).
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
+  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3425848
+L124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/l124094.sas7bdat  (0 rows)
+L124PBBD: reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm1/uloan094.sas7bdat ...
+WARNING: 'ul124094' has 0 rows — writing empty dataset.
+SAS Connection established. Subprocess id is 3425915
 
-IMPORTANT:
-  - ITCODE_DATA must be populated with the weekly SAS CARDS list.
-    If empty, build() raises immediately to prevent P124RDAL from
-    failing later with a cryptic FileNotFoundError.
-  - Writes columns itcode + amount (amount=0.0) so that
-    P124RDAL.macro_mrgbic's MERGE (on itcode, amtind) works.
-"""
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1839: UserWarning: Note that Indexes are not transferred over as columns. Only actual columns are transferred
+  warnings.warn("Note that Indexes are not transferred over as columns. Only actual columns are transferred")
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3425915
+UL124 written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/ul124094.sas7bdat  (0 rows)
+SAS Connection established. Subprocess id is 3425962
 
-from pathlib import Path
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3425962
+LALW written: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/lalw094.sas7bdat  (1 rows)
+SAS Connection established. Subprocess id is 3426007
 
-import pandas as pd
-import saspy
-
-
-OUTPUT_DIR  = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/output"
-)
-OUTPUT_BASE = "PBBRDAL"
-
-
-# ============================================================================
-# Weekly ITCODE list (from SAS %WEEKLY CARDS block).
-# ============================================================================
-ITCODE_DATA = [
-    "3313002000000Y",
-    "3313003000000Y",
-    "4017000000000Y",
-    "4019000000000Y",
-    "4216060000000Y",
-    "4261076000000Y",
-    "4261085000000Y",
-    "4263076000000Y",
-    "4263085000000Y",
-    "4269981000000Y",
-    "4313002000000Y",
-    "4313003000000Y",
-    "5422000000000Y",
-    "7200000008310Y",
-    "7300000003000Y",
-    "7300000006100Y",
-    "7300000008310Y",
-    "7300000008320Y",
-]
-
-
-def build() -> Path:
-    if not ITCODE_DATA:
-        raise ValueError(
-            "PBBWRDLF.ITCODE_DATA is empty. Populate it with the weekly "
-            "ITCODE list (SAS %WEEKLY CARDS) before running — otherwise "
-            "PBBRDAL will not be written and P124RDAL will fail."
-        )
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    sas7bdat_path = OUTPUT_DIR / f"{OUTPUT_BASE}.sas7bdat"
-    text_path     = OUTPUT_DIR / f"{OUTPUT_BASE}.txt"
-
-    # Match the schema P124RDAL expects: itcode + amount
-    df = pd.DataFrame({
-        "itcode": ITCODE_DATA,
-        "amount": [0.0] * len(ITCODE_DATA),
-    })
-
-    sas = saspy.SASsession(cfgname='default')
-    sas.df2sd(df, table=OUTPUT_BASE, libref='WORK')
-
-    sas.submit(f"""
-        PROC EXPORT DATA=WORK.{OUTPUT_BASE}
-            OUTFILE="{sas7bdat_path}"
-            DBMS=SAS7BDAT REPLACE;
-        RUN;
-    """)
-    sas.submit(f"""
-        PROC EXPORT DATA=WORK.{OUTPUT_BASE}
-            OUTFILE="{text_path}"
-            DBMS=DLM REPLACE;
-            DELIMITER=';';
-        RUN;
-    """)
-    sas.endsas()
-
-    if not sas7bdat_path.exists():
-        raise RuntimeError(
-            f"PBBWRDLF: PROC EXPORT did not create {sas7bdat_path}. "
-            f"Check the SAS log for ERROR lines."
-        )
-
-    print(f"PBBWRDLF: wrote {sas7bdat_path} ({len(df)} records)")
-    return sas7bdat_path
-
-
-build()
-
-
-if __name__ == '__main__':
-    pass
+/sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sasiostdio.py:1118: UserWarning: Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem
+  warnings.warn("Noticed 'ERROR:' in LOG, you ought to take a look and see if there was a problem")
+SAS Connection terminated. Subprocess id was 3426007
+Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.sas7bdat and /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.txt (302 rows)
+ALW copied from /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx/alw094.sas7bdat to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm/alw094.sas7bdat (302 rows)
+P124RDAL DEBUG: REPTMON='09' NOWK='4' sfx='094'
+Traceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWP124.py", line 223, in <module>
+    main()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBWP124.py", line 219, in main
+    run_p124rdal()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/P124RDAL.py", line 260, in main
+    import PBBMRDLF  # noqa: F401
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/PBBMRDLF.py", line 85, in <module>
+    build()
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/PBBMRDLF.py", line 41, in build
+    raise ValueError(
+ValueError: PBBMRDLF.ITCODE_DATA is empty. Populate it with the monthly ITCODE list (SAS %MONTHLY CARDS) before running — otherwise PBBRDAL will not be written and P124RDAL will fail.
