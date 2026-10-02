@@ -2,20 +2,26 @@
 from __future__ import annotations
 
 """
-Program  : EIBWP124
-Purpose  : Weekly run for PIBB - Report on Domestic Assets and Liabilities.
-           Single source of truth for REPTMON/NOWK — passes them to
-           LALWP124 and P124RDAL so they can't drift across midnight.
+Program  : LALWP124
+Purpose  : Report on Domestic Assets and Liabilities - Part I (M&I Loan).
+           Reads BNM.L124{sfx} and BNM.UL124{sfx}, summarises by customer
+           code / approved limit / Cagamas, appends to BNM.LALW{sfx}.
 
 Convention:
-    REPTMON = '09'  (2-digit, zero-padded)
-    NOWK    = '4'   (single digit — NEVER '04')
+    REPTMON = '09'  (2-digit)
+    NOWK    = '4'   (single digit)
     BNM/BNM1/BNMX suffix = '094' -> f"0{int(REPTMON)}{NOWK}"
-    LNNOTE filename uses REPTMON directly: enrh_ln_note_m09.sas7bdat
+
+reptmon/nowk may be passed by EIBWP124 (single source of truth) or
+derived from (today - 1) when invoked standalone.
 """
 
-import datetime
 from pathlib import Path
+from typing import Optional
+
+import pandas as pd
+
+import PBBLNFMT  # noqa: F401  %INC PGM(PBBLNFMT)
 
 from bnm_io import (
     read_sas7bdat_ci,
@@ -23,17 +29,13 @@ from bnm_io import (
     resolve_ci,
 )
 
-from LALWP124 import main as run_lalwp124
-from P124RDAL  import main as run_p124rdal
+from L124PBBD import main as run_l124pbbd, get_reptmon_nowk
 
 
 # ============================================================================
-# PATH CONFIGURATION (absolute, no BASE_DIR)
+# PATH CONFIGURATION
 # ============================================================================
 
-PIBB_LOAN_DIR = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS"
-)
 BNM_PATH = Path(
     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnm"
 )
@@ -43,9 +45,6 @@ BNM1_PATH = Path(
 BNMX_PATH = Path(
     "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWP124/bnmx"
 )
-RDAL_OUTPUT_PATH = Path(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWP124"
-)
 
 
 # ============================================================================
@@ -53,82 +52,79 @@ RDAL_OUTPUT_PATH = Path(
 # ============================================================================
 
 def bnm_suffix(reptmon: str, nowk: str) -> str:
-    """'09' + '4' -> '094'."""
     return f"0{int(reptmon)}{nowk}"
 
 
 # ============================================================================
-# DATE VARIABLES (from today - 1)
+# BNMCODE MAPPING
 # ============================================================================
 
-def get_date_variables() -> dict:
+def get_bnmcodes_for_custcd(custcd: str) -> list:
+    grp1 = {'02', '03', '11', '12', '71', '72', '73', '74', '79'}
+    grp2 = {'20', '13', '17', '30', '32', '33', '34', '35',
+            '36', '37', '38', '39', '40', '04', '05', '06'}
+    grp3 = {'41', '42', '43', '44', '46', '47', '48', '49', '51',
+            '52', '53', '54', '60', '61', '62', '63', '64', '65',
+            '59', '75', '57'}
+    grp4 = {'76', '77', '78'}
+    grp5 = {'81', '82', '83', '84'}
+    grp6 = {'85', '86', '90', '91', '92', '95', '96', '98', '99'}
+
+    codes = []
+    if custcd in grp1:
+        codes.append(f'34100{custcd}000000Y')
+    elif custcd in grp2:
+        codes.append('3410020000000Y')
+        if custcd in ('13', '17'):
+            codes.append(f'34100{custcd}000000Y')
+    elif custcd in grp3:
+        codes.append('3410060000000Y')
+    elif custcd in grp4:
+        codes.append('3410076000000Y')
+    elif custcd in grp5:
+        codes.append('3410081000000Y')
+    elif custcd in grp6:
+        codes.append('3410085000000Y')
+    return codes
+
+
+# ============================================================================
+# APPEND HELPER
+# ============================================================================
+
+def append_to_output(
+    new_df: pd.DataFrame,
+    target_dir: Path,
+    target_name: str,
+) -> pd.DataFrame:
     """
-    REPTMON -> '09' (2-digit, zero-padded)
-    NOWK    -> '4'  (single digit)
+    PROC APPEND equivalent.
+    Reads any existing target_dir/target_name (case-insensitive), concatenates
+    new_df, returns the combined DataFrame.
     """
-    reptdate = datetime.date.today() - datetime.timedelta(days=1)
-
-    day  = reptdate.day
-    mm   = reptdate.month
-    yyyy = reptdate.year
-
-    if day == 8:
-        sdd = 1
-        wk, wk1 = '1', '4'
-        wk2, wk3 = None, None
-    elif day == 15:
-        sdd = 9
-        wk, wk1 = '2', '1'
-        wk2, wk3 = None, None
-    elif day == 22:
-        sdd = 16
-        wk, wk1 = '3', '2'
-        wk2, wk3 = None, None
-    else:
-        sdd = 23
-        wk, wk1 = '4', '3'
-        wk2, wk3 = '2', '1'
-
-    if wk == '1':
-        mm1 = mm - 1
-        if mm1 == 0:
-            mm1 = 12
-    else:
-        mm1 = mm
-
-    mm2 = mm - 1
-    if mm2 == 0:
-        mm2 = 12
-
-    sdate = datetime.date(yyyy, mm, sdd)
-
-    return {
-        'NOWK':     wk,
-        'NOWK1':    wk1,
-        'NOWK2':    wk2,
-        'NOWK3':    wk3,
-        'REPTMON':  f"{mm:02d}",
-        'REPTMON1': f"{mm1:02d}",
-        'REPTMON2': f"{mm2:02d}",
-        'REPTYEAR': str(yyyy),
-        'REPTDAY':  f"{day:02d}",
-        'RDATE':    reptdate.strftime('%d/%m/%y'),
-        'SDATE':    sdate.strftime('%d/%m/%y'),
-        '_reptdate_obj': reptdate,
-    }
+    existing = resolve_ci(target_dir, target_name)
+    if existing is not None:
+        existing_df, _ = __import__('pyreadstat').read_sas7bdat(str(existing))
+        existing_df.columns = [c.lower() for c in existing_df.columns]
+        return pd.concat([existing_df, new_df], ignore_index=True, sort=False)
+    return new_df
 
 
 # ============================================================================
 # MAIN
 # ============================================================================
 
-def main() -> None:
-    dvars    = get_date_variables()
-    nowk     = dvars['NOWK']
-    reptmon  = dvars['REPTMON']
-    reptyear = dvars['REPTYEAR']
-    rdate    = dvars['RDATE']
-    sdate    = dvars['SDATE']
+def main(
+    reptmon: Optional[str] = None,
+    nowk: Optional[str] = None,
+) -> None:
+    # Resolve date variables
+    if reptmon is None or nowk is None:
+        reptmon, nowk = get_reptmon_nowk()
+        print(
+            f"LALWP124: no explicit date passed — derived "
+            f"reptmon={reptmon!r} nowk={nowk!r}"
+        )
 
     assert len(reptmon) == 2 and reptmon.isdigit(), (
         f"REPTMON must be 2-digit, got {reptmon!r}"
@@ -139,46 +135,127 @@ def main() -> None:
 
     sfx = bnm_suffix(reptmon, nowk)
 
-    print(
-        f"REPTMON={reptmon}, NOWK={nowk}, REPTYEAR={reptyear}, "
-        f"RDATE={rdate}, SDATE={sdate}, SUFFIX={sfx}"
-    )
+    # -----------------------------------------------------------------------
+    # %INC PGM(L124PBBD) — pass reptmon/nowk so it doesn't recompute
+    # -----------------------------------------------------------------------
+    run_l124pbbd(reptmon=reptmon, nowk=nowk)
 
     # -----------------------------------------------------------------------
-    # LNNOTE existence check (case-insensitive; SAS writes lowercase)
+    # PROC DATASETS: DELETE LALW / LALM / LALQ for this period
     # -----------------------------------------------------------------------
-    loan_file = resolve_ci(
-        PIBB_LOAN_DIR, f"enrh_ln_note_m{reptmon}.sas7bdat"
-    )
-    if loan_file is None:
-        raise FileNotFoundError(
-            f"PIBB LNNOTE not found for REPTMON={reptmon} in "
-            f"{PIBB_LOAN_DIR}"
+    lalw_name = f"lalw{sfx}.sas7bdat"
+    lalm_name = f"lalm{sfx}.sas7bdat"
+    lalq_name = f"lalq{sfx}.sas7bdat"
+
+    for nm in (lalw_name, f"lalw{sfx}.txt", lalm_name, lalq_name):
+        p = resolve_ci(BNM_PATH, nm)
+        if p is not None:
+            p.unlink()
+
+    # -----------------------------------------------------------------------
+    # DATA LOAN / ULOAN — no entity_cd filter (column isn't in L124/UL124)
+    # -----------------------------------------------------------------------
+    loan_df  = read_sas7bdat_ci(BNM_PATH, f"l124{sfx}.sas7bdat",  required=True)
+    uloan_df = read_sas7bdat_ci(BNM_PATH, f"ul124{sfx}.sas7bdat", required=True)
+
+    # -----------------------------------------------------------------------
+    # SECTION 1: RM LOANS - BY CUSTOMER CODE
+    # -----------------------------------------------------------------------
+    if not loan_df.empty and 'prodcd' in loan_df.columns:
+        alw1_df = (
+            loan_df[
+                loan_df['prodcd'].astype(str).str.slice(0, 3)
+                    .isin(['341', '342', '343', '344'])
+            ]
+            .groupby(['custcd', 'prodcd', 'amtind'], dropna=False, as_index=False)
+            .agg(amount=('balance', 'sum'))
+        )
+    else:
+        alw1_df = pd.DataFrame(
+            columns=['custcd', 'prodcd', 'amtind', 'amount']
         )
 
-    # -----------------------------------------------------------------------
-    # %INC PGM(LALWP124) — pass reptmon/nowk
-    # -----------------------------------------------------------------------
-    run_lalwp124(reptmon=reptmon, nowk=nowk)
+    alwloan1_rows = []
+    for row in alw1_df.to_dict('records'):
+        custcd = str(row.get('custcd', '') or '').strip()
+        amtind = row.get('amtind')
+        amount = row.get('amount')
+        for bnmcode in get_bnmcodes_for_custcd(custcd):
+            alwloan1_rows.append({
+                'BNMCODE': bnmcode,
+                'AMTIND':  amtind,
+                'AMOUNT':  amount,
+            })
 
-    # -----------------------------------------------------------------------
-    # ALW copy: BNMX.ALW{sfx} -> BNM.ALW{sfx}
-    # -----------------------------------------------------------------------
-    alw_df = read_sas7bdat_ci(
-        BNMX_PATH, f"alw{sfx}.sas7bdat", required=True
+    alwloan1_df = pd.DataFrame(
+        alwloan1_rows,
+        columns=['BNMCODE', 'AMTIND', 'AMOUNT'],
     )
 
-    write_sas_and_txt(alw_df, BNM_PATH, f"alw{sfx}")
+    BNM_PATH.mkdir(parents=True, exist_ok=True)
+    lalw_df = append_to_output(alwloan1_df, BNM_PATH, lalw_name)
 
+    # -----------------------------------------------------------------------
+    # SECTION 2: GROSS LOAN - BY APPROVED LIMIT
+    # -----------------------------------------------------------------------
+    if not loan_df.empty and 'prodcd' in loan_df.columns:
+        mask2 = (
+            (loan_df['prodcd'].astype(str).str.slice(0, 2) == '34') |
+            (loan_df['prodcd'].astype(str) == '54120')
+        )
+        alw2_df = (
+            loan_df[mask2]
+            .groupby(['prodcd', 'amtind'], dropna=False, as_index=False)
+            .agg(amount=('balance', 'sum'))
+        )
+    else:
+        alw2_df = pd.DataFrame(columns=['prodcd', 'amtind', 'amount'])
+
+    alwloan2_df = pd.DataFrame({
+        'BNMCODE': '3051000000000Y',
+        'AMTIND':  alw2_df['amtind'],
+        'AMOUNT':  alw2_df['amount'],
+    })
+
+    lalw_df = append_to_output(alwloan2_df, BNM_PATH, lalw_name)
+
+    # -----------------------------------------------------------------------
+    # SECTION 3: LOANS SOLD TO CAGAMAS
+    # -----------------------------------------------------------------------
+    if not loan_df.empty and 'product' in loan_df.columns:
+        alw3_df = (
+            loan_df[loan_df['product'].isin([124, 145])]
+            .groupby(['prodcd', 'amtind'], dropna=False, as_index=False)
+            .agg(amount=('balance', 'sum'))
+        )
+    else:
+        alw3_df = pd.DataFrame(columns=['prodcd', 'amtind', 'amount'])
+
+    alwloan3_df = pd.DataFrame({
+        'BNMCODE': '7511100000000Y',
+        'AMTIND':  alw3_df['amtind'],
+        'AMOUNT':  alw3_df['amount'],
+    })
+
+    lalw_df = append_to_output(alwloan3_df, BNM_PATH, lalw_name)
+
+    # -----------------------------------------------------------------------
+    # FINAL CONSOLIDATION
+    # -----------------------------------------------------------------------
+    if lalw_df.empty:
+        lalw_final = pd.DataFrame(columns=['BNMCODE', 'AMTIND', 'AMOUNT'])
+    else:
+        lalw_final = (
+            lalw_df
+            .groupby(['BNMCODE', 'AMTIND'], dropna=False, as_index=False)
+            .agg(AMOUNT=('AMOUNT', 'sum'))
+        )
+
+    write_sas_and_txt(lalw_final, BNM_PATH, f"lalw{sfx}")
     print(
-        f"ALW copied: {BNMX_PATH / ('alw' + sfx + '.sas7bdat')} -> "
-        f"{BNM_PATH / ('alw' + sfx + '.sas7bdat')} ({len(alw_df)} rows)"
+        f"LALW written: {BNM_PATH / ('lalw' + sfx + '.sas7bdat')}  "
+        f"({len(lalw_final)} rows)"
     )
-
-    # -----------------------------------------------------------------------
-    # %INC PGM(P124RDAL) — pass reptmon/nowk
-    # -----------------------------------------------------------------------
-    run_p124rdal(reptmon=reptmon, nowk=nowk)
 
 
 if __name__ == '__main__':
