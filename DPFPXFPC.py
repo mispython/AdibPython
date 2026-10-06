@@ -1,1513 +1,597 @@
 """
-Program : PBLCRFMT.py
-Purpose : Liquidity Coverage Ratio (LCR) Mapping - Format Definitions
-          Python equivalent of SAS PROC FORMAT library PBLCRFMT.
-          Provides lookup dictionaries and helper functions replicating
-          each SAS user-defined format (character value formats and
-          numeric range formats) for use by downstream conversion
-          programs.
+EIIDLCRM - BNM LCR Reporting for Islamic Banking
+Consolidates Islamic deposits & treasury positions for BNM LCR reporting.
+Includes MGIA, TD-I, and Islamic treasury products.
+
+Faithful Python port of SAS driver PBBELF + PBLCRFMT + KALMLIQ.
 """
 
-from typing import Optional, Union
+import polars as pl
+from datetime import datetime, timedelta, date
+from pathlib import Path
+import pyreadstat
+import saspy
+import pandas as pd
 
+# --- PBLCRFMT / PBBELF / KALMLIQ imports ---
+from PBLCRFMT import (
+    bnmcd_fmt, lcrcdequ_fmt, lcrcdmniopr_fmt, lcrcdmni_fmt,
+    lcrcdgl_fmt, lcrcdgloth_fmt, lcrcdglccy_fmt,
+    lcrcdigl_fmt, lcrcdiglccy_fmt, colid_fmt,
+    remfmt, cmmfmt, remfmx,
+)
+from PBBELF import format_ctype
+from KALMLIQ import build_kalmliq
 
-# =====================================================================
-# $BNMCD  - REF ONLY - "TAG" FIELD
-# =====================================================================
-BNMCD_FMT = {
-    '01': 'TRANSACTIONAL ACCOUNTS (INSURED)',
-    '02': 'NON-TRX WITH RELATIONSHIP (INSURED)',
-    '03': 'NON-TRX WITH NON-RELATIONSHIP (INSURED)',
-    '10': 'UNINSURED DEPOSITS',
-    '20': 'QUALIFYING TERM DEPOSITS',
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+PATHS = {
+    'LCR': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/lcr/',
+    'LCRM': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/lcr/',
+    'CISDP': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/cisdp/',
+    'CISCA': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/cisca/',
+    'CIS': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/cis/',
+    'EQUA': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/equa/',
+    'LIST': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/list/',
+    'DEPOSIT': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/DEPOSIT/',
+    'K1TBL_CACHE': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/BNMK/K1TBL.parquet',
+    'K3TBL_CACHE': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/BNMK/K3TBL.parquet',
+    'WALK': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/walk.txt',
+    'TEMPL': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/templ.txt',
+    'OUTPUT': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLCRM/',
 }
 
+INST = 'PBB'
 
-def bnmcd_fmt(code: Optional[str]) -> str:
-    """VALUE $BNMCD - REF ONLY - "TAG" FIELD. No OTHER clause in SAS source;
-    unmatched codes return empty string (SAS would print the raw value)."""
-    if code is None:
-        return ''
-    return BNMCD_FMT.get(code, code)
-
-
-# =====================================================================
-# $LCRCDEQU
-# =====================================================================
-LCRCDEQU_FMT = {
-    '08': 'A1.40',
-    '19': 'B1.40',
-    '29': 'B3.12',
-    '39': 'B3.22',
-    '49': 'B3.30',
-    '59': 'B3.40',
+# =============================================================================
+# CUSTOMER CATEGORY MAPPING (from SAS DATA ALLEQU)
+# =============================================================================
+CUST_MAP = {
+    '08': [76, 77, 78, 95, 96],
+    '19': [41,42,43,44,46,47,48,49,51,52,53,54,65,66,67,68,69],
+    '29': [0,45,57,59,60,61,62,63,64,75,79,85,86,87,88,89,98,99],
+    '39': [1,71,72,73,74,90,91,92],
+    '49': [2,3,7,12,81,82,83,84],
+    '59': [4,5,6,13,20] + list(range(30,41)) + [17],
 }
-LCRCDEQU_OTHER = '     '
 
+MGIA_PRODUCTS = [302, 315, 394, 396]
 
-def lcrcdequ_fmt(code: Optional[str]) -> str:
-    """VALUE $LCRCDEQU"""
-    if code is None:
-        return LCRCDEQU_OTHER
-    return LCRCDEQU_FMT.get(code, LCRCDEQU_OTHER)
+SPECIAL_39_NAMES = ['KWSP', 'KWAP', 'KWAN', 'LEMTAB']
+SPECIAL_49_NAMES = ['AIM','PBL','PBLEUR','PBLNID','PBLUSD','PIVMYR','PBB','PBBMYR','PBBUSD','CUST']
 
-
-# =====================================================================
-# $LCRCDMNIOPR  (OPERATIONAL)
-# =====================================================================
-LCRCDMNIOPR_FMT = {
-    '2902': 'B2.11',
-    '2910': 'B2.12',
-    '3902': 'B2.21',
-    '3910': 'B2.22',
-    '4902': 'B2.31',
-    '4910': 'B2.32',
-    '5902': 'B2.41',
-    '5910': 'B2.42',
-}
-LCRCDMNIOPR_OTHER = '     '
-
-
-def lcrcdmniopr_fmt(code: Optional[str]) -> str:
-    """VALUE $LCRCDMNIOPR /*OPERATIONAL*/"""
-    if code is None:
-        return LCRCDMNIOPR_OTHER
-    return LCRCDMNIOPR_FMT.get(code, LCRCDMNIOPR_OTHER)
-
-
-# =====================================================================
-# $LCRCDMNI  (NON-OPERATIONAL)
-# =====================================================================
-LCRCDMNI_FMT = {
-    '0801': 'A1.13',
-    '0802': 'A1.23',
-    '0803': 'A1.31',
-    '0810': 'A1.40',
-    '0820': 'A1.50',
-    '1901': 'B1.13',
-    '1902': 'B1.23',
-    '1903': 'B1.31',
-    '1910': 'B1.40',
-    '1920': 'B1.50',
-    '2902': 'B3.11',
-    '2903': 'B3.11',
-    '2910': 'B3.12',
-    '2920': 'B6.10',
-    '3902': 'B3.21',
-    '3903': 'B3.21',
-    '3910': 'B3.22',
-    '3920': 'B6.20',
-    '4902': 'B3.30',
-    '4903': 'B3.30',
-    '4910': 'B3.30',
-    '4920': 'B6.30',
-    '5902': 'B3.40',
-    '5910': 'B3.40',
-    '5920': 'B6.40',
-}
-LCRCDMNI_OTHER = '     '
-
-
-def lcrcdmni_fmt(code: Optional[str]) -> str:
-    """VALUE $LCRCDMNI /*NON-OPERATIONAL*/"""
-    if code is None:
-        return LCRCDMNI_OTHER
-    return LCRCDMNI_FMT.get(code, LCRCDMNI_OTHER)
-
-
-# =====================================================================
-# $LCRCDGL  (LCRMTH-MAIN)
-# =====================================================================
-LCRCDGL_FMT = {
-    'F143110VCB': 'B3.30',    # 2015-3390/2017-2497
-    # 'F142699OPE': 'B2.32',  # 2015-3390
-    'F143620OPE': 'B2.32',    # 2017-2497
-    'F142599OELED': 'B3.22',
-    'F142199E': 'B3.30',
-    'F142600FBI': 'B3.30',
-    'F142699C': 'B3.30',
-    'F142699D': 'B3.30',
-    'F143130': 'B3.30',
-    'F143110VFBI': 'B3.30',   # 2015-3390
-    'F143620FNFBI': 'B3.30',  # 2015-3390
-    'F143620USDOP': 'B2.32',  # 2017-2497
-    'F143620SGDOP': 'B2.32',  # 2017-2497
-    'F143620HKDOP': 'B2.32',  # 2017-2497
-}
-LCRCDGL_OTHER = '     '
-
-
-def lcrcdgl_fmt(code: Optional[str]) -> str:
-    """VALUE $LCRCDGL /* LCRMTH-MAIN */"""
-    if code is None:
-        return LCRCDGL_OTHER
-    return LCRCDGL_FMT.get(code, LCRCDGL_OTHER)
-
-
-# =====================================================================
-# $LCRCDGLOTH  (LCRUSD-LCRSGD-LCRMYR-EXLC4LCRMTH-MAIN)
-# =====================================================================
-LCRCDGLOTH_FMT = {
-    '42699USD': 'B3.30',
-    '42699SGD': 'B3.30',
-    '42699HKD': 'B3.30',
-    'F143620USD': 'B3.30',
-    'F143620SGD': 'B3.30',
-    'F143620HKD': 'B3.30',
-    'F143620USDOP': 'B2.32',  # 2017-2497
-    'F143620SGDOP': 'B2.32',  # 2017-2497
-    'F143620HKDOP': 'B2.32',  # 2017-2497
-}
-LCRCDGLOTH_OTHER = '     '
-
-
-def lcrcdgloth_fmt(code: Optional[str]) -> str:
-    """VALUE $LCRCDGLOTH /* LCRUSD-LCRSGD-LCRMYR-EXLC4LCRMTH-MAIN */"""
-    if code is None:
-        return LCRCDGLOTH_OTHER
-    return LCRCDGLOTH_FMT.get(code, LCRCDGLOTH_OTHER)
-
-
-# =====================================================================
-# $LCRCDGLCCY
-# =====================================================================
-LCRCDGLCCY_FMT = {
-    'F142599OELED': 'MYR',
-    'F142199E': 'MYR',
-    'F143130': 'MYR',
-    'F143110VFBI': 'MYR',
-    'F143110VCB': 'MYR',
-    '42699USD': 'USD',
-    'F143620USDOP': 'USD',  # 2017-2497
-    '42699SGD': 'SGD',
-    'F143620SGDOP': 'SGD',  # 2017-2497
-    '42699HKD': 'HKD',
-    'F143620HKDOP': 'HKD',  # 2017-2497
-    'F143620USD': 'USD',
-    'F143620SGD': 'SGD',
-    'F143620HKD': 'HKD',
-}
-LCRCDGLCCY_OTHER = '   '
-
-
-def lcrcdglccy_fmt(code: Optional[str]) -> str:
-    """VALUE $LCRCDGLCCY"""
-    if code is None:
-        return LCRCDGLCCY_OTHER
-    return LCRCDGLCCY_FMT.get(code, LCRCDGLCCY_OTHER)
-
-
-# =====================================================================
-# $LCRCDIGL
-# =====================================================================
-LCRCDIGL_FMT = {
-    'F143120ODNCB': 'B3.30',  # 2017-2497
-    'F143120ODNIB': 'B3.30',  # 2017-2497
-    'F143130': 'B3.30',
-    'F143620FNFBI': 'B3.30',
-}
-LCRCDIGL_OTHER = '     '
-
-
-def lcrcdigl_fmt(code: Optional[str]) -> str:
-    """VALUE $LCRCDIGL"""
-    if code is None:
-        return LCRCDIGL_OTHER
-    return LCRCDIGL_FMT.get(code, LCRCDIGL_OTHER)
-
-
-# =====================================================================
-# $LCRCDIGLCCY
-# =====================================================================
-LCRCDIGLCCY_FMT = {
-    'F143130': 'MYR',
-    'F143120ODNCB': 'MYR',
-    'F143120ODNIB': 'MYR',
-    'F143620USD': 'USD',
-}
-LCRCDIGLCCY_OTHER = '   '
-
-
-def lcrcdiglccy_fmt(code: Optional[str]) -> str:
-    """VALUE $LCRCDIGLCCY"""
-    if code is None:
-        return LCRCDIGLCCY_OTHER
-    return LCRCDIGLCCY_FMT.get(code, LCRCDIGLCCY_OTHER)
-
-
-# =====================================================================
-# $COLID
-# =====================================================================
-COLID_FMT = {
-    '95311': 'FD95311RM ',
-    '96311': 'FD96311FX ',
-    '95312': 'SA95312RM ',
-    '95313': 'CA95313RM ',
-    '96313': 'CA96313FX ',
-    '9531X': 'GLD9531X  ',
-    '95315': 'FD95315RM ',
-    '95317': 'FD95317RM ',
-    '95830': 'STD95830V ',
-    '9583X': 'STD95830Q ',
-    '95840': 'NID95840  ',
-    '95810': 'IBB9X810  ',
-    '96810': 'IBB9X810  ',
-    '95329': 'DCI9X329  ',
-    '96329': 'DCI9X329  ',
-    '95820': 'IBR95820  ',
-    '95850': 'BAP95850  ',
-}
-COLID_OTHER = '          '
-
-
-def colid_fmt(code: Optional[str]) -> str:
-    """VALUE $COLID"""
-    if code is None:
-        return COLID_OTHER
-    return COLID_FMT.get(code, COLID_OTHER)
-
-
-# =====================================================================
-# REMFMT  - numeric range format
-#   LOW-1   = '01'   UP TO 1 MTH
-#   1-3     = '02'   >1 MTH - 3 MTHS
-#   3-6     = '03'   >3 - 6 MTHS
-#   6-9     = '04'   >6 MTHS - 1 YR
-#   9-12    = '05'   >6 MTHS - 1 YR
-#   OTHER   = '06'   > 1 YEAR
-# =====================================================================
-def remfmt(value: Optional[Union[int, float]]) -> str:
-    """VALUE REMFMT - numeric range format.
-    SAS range bounds are inclusive on both ends unless '<' is used;
-    ranges are evaluated in the order defined (first match wins)."""
-    if value is None:
-        return '06'
-    if value <= 1:
-        return '01'
-    if value <= 3:
-        return '02'
-    if value <= 6:
-        return '03'
-    if value <= 9:
-        return '04'
-    if value <= 12:
-        return '05'
-    return '06'
-
-
-# =====================================================================
-# CMMFMT  - numeric range format
-#   LOW-0.1 = '01'   UP TO 1 WK
-#   0.1-1   = '02'   >1 WK - 1 MTH
-#   1-3     = '03'   >1 MTH - 3 MTHS
-#   3-6     = '04'   >3 - 6 MTHS
-#   6-12    = '05'   >6 MTHS - 1 YR
-#   OTHER   = '06'   > 1 YEAR
-# =====================================================================
-def cmmfmt(value: Optional[Union[int, float]]) -> str:
-    """VALUE CMMFMT - numeric range format."""
-    if value is None:
-        return '06'
-    if value <= 0.1:
-        return '01'
-    if value <= 1:
-        return '02'
-    if value <= 3:
-        return '03'
-    if value <= 6:
-        return '04'
-    if value <= 12:
-        return '05'
-    return '06'
-
-
-# =====================================================================
-# REMFMX  - numeric range format
-#   LOW-<6  = '01'   < 6 MONTHS
-#   6-<12   = '02'   >= 6 MONTHS TO < 1 YEAR
-#   OTHER   = '03'   >= 1 YEAR
-# =====================================================================
-def remfmx(value: Optional[Union[int, float]]) -> str:
-    """VALUE REMFMX - numeric range format (exclusive upper bounds)."""
-    if value is None:
-        return '03'
-    if value < 6:
-        return '01'
-    if value < 12:
-        return '02'
-    return '03'
-
-
-
-
-
-PBBELF:
-
-#!/usr/bin/env python3
-"""
-Program: PBBELF
-Format definitions and lookup tables
-Used across BNM regulatory reporting programs
-"""
-
-from typing import Dict, List, Any, Optional
-
-# ============================================================================
-# EL AND ELI BNMCODE DEFINITIONS
-# ============================================================================
-
-EL_DEFINITIONS = [
-    {'bnmcode': '4211000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM DEMAND DEPOSITS ACCEPTED'},
-    {'bnmcode': '4212000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM SAVINGS DEPOSITS ACCEPTED'},
-    {'bnmcode': '4213000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM FIXED DEPOSITS ACCEPTED'},
-    {'bnmcode': '4213100000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM SPECIAL INVESTMENT DEPOSIT ACCEPTED'},
-    {'bnmcode': '4213200000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM GENERAL INVESTMENT DEPOSIT ACCEPTED'},
-    {'bnmcode': '4213300000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM COMMODITY MURABAHAH'},
-    {'bnmcode': '4215000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM NID ISSUED'},
-    {'bnmcode': '4216000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM REPURCHASE AGREEMENTS'},
-    {'bnmcode': '4217071000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM SPECIAL DEPOSITS'},
-    {'bnmcode': '4218000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM HOUSING DEVELOPMENT ACCOUNTS'},
-    {'bnmcode': '4219000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM SHORT TERM DEPOSIT ACCEPTED'},
-    {'bnmcode': '4219100000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INVESTMENT LINKED TO DERIVATIVES'},
-    {'bnmcode': '4219900000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM OTHER DEPOSITS ACCEPTED'},
-    {'bnmcode': '4310000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM AMOUNT DUE TO DESIGNATED FI'},
-    {'bnmcode': '4311002000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM VOSTRO ACCOUNTS OF CB'},
-    {'bnmcode': '4311003000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM VOSTRO ACCOUNTS OF IB'},
-    {'bnmcode': '4311081000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM VOSTRO ACCOUNTS OF FBI'},
-    {'bnmcode': '4312002000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM OVERDRAWN NOSTRO ACCOUNTS WITH CB'},
-    {'bnmcode': '4312003000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM OVERDRAWN NOSTRO ACCOUNTS WITH IB'},
-    {'bnmcode': '4313000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM DEFICIT IN SPICK'},
-    {'bnmcode': '4313002000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM AMOUNT BORROWING FROM SPICK POOL CB'},
-    {'bnmcode': '4313003000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM AMOUNT BORROWING FROM SPICK POOL IB'},
-    {'bnmcode': '4314001000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTERBANK BORROWINGS FROM BNM'},
-    {'bnmcode': '4314002000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTERBANK BORROWINGS FROM CB'},
-    {'bnmcode': '4314011000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTERBANK BORROWINGS FROM FC'},
-    {'bnmcode': '4314012000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTERBANK BORROWINGS FROM MB'},
-    {'bnmcode': '4314013000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTERBANK BORROWINGS FROM DH'},
-    {'bnmcode': '4314017000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTERBANK BORROWINGS FROM CAGAMAS'},
-    {'bnmcode': '4314020000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTERBANK BORROWINGS FROM DNBFI'},
-    {'bnmcode': '4314081100000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTERBANK BORROWINGS FROM FBI <= 1 YR'},
-    {'bnmcode': '4314003000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTERBANK BORROWINGS FROM IB'},
-    {'bnmcode': '4410000000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM MISC BORROWINGS'},
-    {'bnmcode': '4911080000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTEREST PAYABLE TO NON-RESIDENTS'},
-    {'bnmcode': '4911095000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM INTEREST PAYABLE TO NON-RES - DCI/CRA'},
-    {'bnmcode': '4929996000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'OTHR RM MISC LIAB NIE DUE TO NON-RES-DCI'},
-    {'bnmcode': '4912080000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM BILLS PAYABLE TO NON-RESIDENTS'},
-    {'bnmcode': '4929980000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'OTHER RM MISC LIAB NIE DUE TO NON-RES'},
-    {'bnmcode': '4929995000000Y', 'sign': '+', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM GOLD INVESTMENT FROM NON-RESIDENTS'},
-    {'bnmcode': '4411100000000Y', 'sign': '-', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM SUBORDINATED DEBT CAPITAL'},
-    {'bnmcode': '4411200000000Y', 'sign': '-', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM EXEMPT SUBORDINATED DEBT CAPITAL'},
-    {'bnmcode': '4411300000000Y', 'sign': '-', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM SUBORDIN DEBT CAPITAL W APPR FR BNM'},
-    {'bnmcode': '4414000000000Y', 'sign': '-', 'fmtname': 'RMEL', 'type': 'C', 'idx': 'A', 'desc': 'RM RESOURCE OBLIQ ON LN SOLD TO CAGAMAS'},
-    {'bnmcode': '4260000000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX DEPOSITS ACCEPTED'},
-    {'bnmcode': '4269981000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX DEPOSITS ACCEPTED TO BNM'},
-    {'bnmcode': '4360000000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX AMOUNT DUE TO DESIGNATED FI'},
-    {'bnmcode': '4362081000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX OVERDRAWN NOSTRO ACCOUNTS WITH FBI'},
-    {'bnmcode': '4364002000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX INTERBANK BORROWINGS FROM CB'},
-    {'bnmcode': '4364003000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX INTERBANK BORROWINGS FROM IB'},
-    {'bnmcode': '4364012000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX INTERBANK BORROWINGS FROM MB'},
-    {'bnmcode': '4364081100000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX INTERBANK BORROWINGS FROM FBI <= 1 YR'},
-    {'bnmcode': '4370000000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'SPTF FX AMOUNT DUE TO FI'},
-    {'bnmcode': '4460000000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX MISC BORROWINGS'},
-    {'bnmcode': '4760000000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX DEBT SECURITIES ISSUED'},
-    {'bnmcode': '4961050000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX INTEREST PAYABLE TO RESIDENTS'},
-    {'bnmcode': '4961080000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX INTEREST PAYABLE TO NON-RESIDENTS'},
-    {'bnmcode': '4969950000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'OTHER FX MISC LIAB NIE DUE TO RESIDENTS'},
-    {'bnmcode': '4969980000000Y', 'sign': '+', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'OTHER FX MISC LIAB NIE DUE TO NON-RES'},
-    {'bnmcode': '4461100000000Y', 'sign': '-', 'fmtname': 'FXEL', 'type': 'C', 'idx': '', 'desc': 'FX SUBORDINATED DEBT CAPITAL'},
-    {'bnmcode': '3311003000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM OVERDRAWN VOSTRO ACCOUNTS OF IB'},
-    {'bnmcode': '3212002000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM BALANCES IN CURRENT ACCOUNTS WITH CB'},
-    {'bnmcode': '3212003000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM BALANCES IN CURRENT ACCOUNTS WITH IB'},
-    {'bnmcode': '3213002000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM FIXED DEPOSITS PLACED WITH CB'},
-    {'bnmcode': '3213011000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM FIXED DEPOSITS PLACED WITH FC'},
-    {'bnmcode': '3213012000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM FIXED DEPOSITS PLACED WITH MB'},
-    {'bnmcode': '3213013000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM FIXED DEPOSITS PLACED WITH DH'},
-    {'bnmcode': '3213102000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM SPECIAL INV DEP PLACED WITH CB'},
-    {'bnmcode': '3213103000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM SPECIAL INV DEP PLACED WITH IB'},
-    {'bnmcode': '3213111000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM SPECIAL INV DEP PLACED WITH FC'},
-    {'bnmcode': '3213112000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM SPECIAL INV DEP PLACED WITH MB'},
-    {'bnmcode': '3213113000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM SPECIAL INV DEP PLACED WITH DH'},
-    {'bnmcode': '3213202000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM GEN INVESTMENT DEP PLACED WITH CB'},
-    {'bnmcode': '3213203000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM GEN INVESTMENT DEP PLACED WITH IB'},
-    {'bnmcode': '3213211000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM GEN INVESTMENT DEP PLACED WITH FC'},
-    {'bnmcode': '3213212000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM GEN INVESTMENT DEP PLACED WITH MB'},
-    {'bnmcode': '3213213000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM GEN INVESTMENT DEP PLACED WITH DH'},
-    {'bnmcode': '3219910000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM OTHER DEPOSITS PLACED WITH DBI'},
-    {'bnmcode': '3250002000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM REVERSE REPOS WITH CB'},
-    {'bnmcode': '3250001000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM REVERSE REPOS WITH BNM'},
-    {'bnmcode': '3250011000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM REVERSE REPOS WITH FC'},
-    {'bnmcode': '3250012000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM REVERSE REPOS WITH MB'},
-    {'bnmcode': '3250013000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM REVERSE REPOS WITH DH'},
-    {'bnmcode': '3311002000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM OVERDRAWN VOSTRO ACCOUNTS OF CB'},
-    {'bnmcode': '3312002000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM NOSTRO ACCOUNT BALANCES WITH CB'},
-    {'bnmcode': '3312003000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM NOSTRO ACCOUNT BALANCES WITH IB'},
-    {'bnmcode': '3313000000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM SURPLUS IN SPICK'},
-    {'bnmcode': '3314001000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM INTERBANK PLACEMENTS WITH BNM'},
-    {'bnmcode': '3314002000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM INTERBANK PLACEMENTS WITH CB'},
-    {'bnmcode': '3314003000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM INTERBANK PLACEMENTS WITH IB'},
-    {'bnmcode': '3314011000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM INTERBANK PLACEMENTS WITH FC'},
-    {'bnmcode': '3314012000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM INTERBANK PLACEMENTS WITH MB'},
-    {'bnmcode': '3314013000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM INTERBANK PLACEMENTS WITH DH'},
-    {'bnmcode': '3314017000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM INTERBANK PLACEMENTS WITH CAGAMAS'},
-    {'bnmcode': '3410002000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM LOANS TO CB'},
-    {'bnmcode': '3410003000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM LOANS TO IB'},
-    {'bnmcode': '3410011000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM LOANS TO FC'},
-    {'bnmcode': '3410012000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM LOANS TO MB'},
-    {'bnmcode': '3410013000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM LOANS TO DH'},
-    {'bnmcode': '3410017000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM LOANS TO CAGAMAS'},
-    {'bnmcode': '3703000000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM NIDS HELD'},
-    {'bnmcode': '3803000000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'NIDS SOLD UNDER REPO'},
-    {'bnmcode': '4015000000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'ELIGIBLE CAGAMAS TIER-2 BONDS (DAY I)'},
-    {'bnmcode': '4019000000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'SRGF LOANS'},
-    {'bnmcode': '4019100000000Y', 'sign': '+', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'SRGF-2 LOANS'},
-    {'bnmcode': '3314013110000Y', 'sign': '-', 'fmtname': 'RMEA', 'type': 'C', 'idx': 'B', 'desc': 'RM INTERBKS PLACEMENTS WITH DH OVRNIGHT'},
-    {'bnmcode': '4014000000000Y', 'sign': '+', 'fmtname': 'RMET', 'type': 'C', 'idx': 'C', 'desc': 'ELIGIBLE TIER 2 LOANS SOLD TO CAGAMAS'},
-    {'bnmcode': '4017100000000Y', 'sign': '-', 'fmtname': 'RMMS', 'type': 'C', 'idx': 'D', 'desc': 'TOTAL RM MARKETABLE SECURITIES'},
-    {'bnmcode': '3260000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX DEPOSITS PLACED'},
-    {'bnmcode': '3280000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX REVERSE REPOS'},
-    {'bnmcode': '3362081000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX NOSTRO ACCOUNT BALANCES WITH FBI'},
-    {'bnmcode': '3364002000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX INTERBANK PLACEMENTS WITH CB'},
-    {'bnmcode': '3364003000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX INTERBANK PLACEMENTS WITH IB'},
-    {'bnmcode': '3364012000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX INTERBANK PLACEMENTS WITH MB'},
-    {'bnmcode': '3364081100000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX INTERBANK PLACEMENTS WITH FBI <= 1 YR'},
-    {'bnmcode': '3370000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'SPTF - FX AMOUNT DUE FROM DESIGNATED FI'},
-    {'bnmcode': '3460000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX LOANS'},
-    {'bnmcode': '3460064000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX LOANS GOV DBE'},
-    {'bnmcode': '3460081000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX LOANS FBI'},
-    {'bnmcode': '3761000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX SHARES HELD'},
-    {'bnmcode': '3765000200000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX SECURITIES HELD (OLD=37600)'},
-    {'bnmcode': '3769900000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX SECURITIES HELD (OLD=37600)'},
-    {'bnmcode': '3961000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX NOTES AND COINS'},
-    {'bnmcode': '3961100000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX INVESTMENTS'},
-    {'bnmcode': '3962000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FOREIGN SUBSIDIARIES'},
-    {'bnmcode': '3963000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FOREIGN ASSOCIATE COMPANIES'},
-    {'bnmcode': '3966900000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX INVESTMENT IN LABUAN OFFSHORE ENTITY'},
-    {'bnmcode': '3967000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX MARGIN PLACED WITH EXCHANGES'},
-    {'bnmcode': '3968000000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX INTEREST RECEIVABLES NIE'},
-    {'bnmcode': '3969900000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'FX OTHER ASSETS NIE'},
-    {'bnmcode': '3979900000000Y', 'sign': '+', 'fmtname': 'FXEA', 'type': 'C', 'idx': '', 'desc': 'SPTF OTHER FX MISC LIAB NIE'},
-    {'bnmcode': 'NSSTS', 'sign': '', 'fmtname': '', 'type': 'C', 'idx': '', 'desc': '1. NSSTS'},
-    {'bnmcode': 'SSTS', 'sign': '', 'fmtname': '', 'type': 'C', 'idx': '', 'desc': 'SSTS'},
-    {'bnmcode': 'NSSTS TRADING', 'sign': '', 'fmtname': '', 'type': 'C', 'idx': '', 'desc': '1.2 NSSTS TRADING'},
-    {'bnmcode': 'NSSTS INVEST', 'sign': '', 'fmtname': '', 'type': 'C', 'idx': '', 'desc': '1.1 NSSTS INVESTMENT'},
+SPECIAL_39_NUMBERS = [
+    4391161, 2115999, 12579649, 13468207, 14300254,
+    14675929, 15327497, 17104931, 12677444, 3703533,
+    5978659, 16185090, 2558344, 10819745
 ]
 
-# ELI has same structure as EL
-ELI_DEFINITIONS = EL_DEFINITIONS.copy()
-
-# ============================================================================
-# BRANCH CODE FORMATS
-# ============================================================================
-
-# Branch code to branch name mapping
-BRCHCD_MAP = {
-    1: 'HOE', 7000: 'HOE', 7001: 'HOE', 7002: 'HOE', 7003: 'HOE', 7004: 'HOE',
-    7005: 'HOE', 7006: 'HOE', 7007: 'HOE', 7008: 'HOE', 7009: 'HOE',
-    8000: 'HOE', 8001: 'HOE', 8002: 'HOE', 8003: 'HOE', 8004: 'HOE',
-    8005: 'HOE', 8006: 'HOE', 8007: 'HOE', 8008: 'HOE', 8009: 'HOE',
-    9000: 'HOE', 9001: 'HOE', 9002: 'HOE', 9003: 'HOE', 9004: 'HOE',
-    9994: 'HOE', 9995: 'HOE', 9996: 'HOE', 9998: 'HOE', 9999: 'HOE',
-    3000: 'IBU', 3001: 'IBU', 3999: 'IBU',
-    4000: 'IBU', 4001: 'IBU', 4002: 'IBU', 4003: 'IBU', 4004: 'IBU',
-    4005: 'IBU', 4006: 'IBU', 4007: 'IBU', 4008: 'IBU', 4009: 'IBU',
-    800: 'H01', 3800: 'H01',
-    801: 'H02', 3801: 'H02',
-    802: 'H03', 3802: 'H03',
-    803: 'H04', 3803: 'H04',
-    804: 'H05', 3804: 'H05',
-    805: 'H06', 3805: 'H06',
-    806: 'H07', 3806: 'H07',
-    807: 'H08', 3807: 'H08',
-    808: 'H09', 3808: 'H09',
-    809: 'H10', 3809: 'H10',
-    811: 'H11', 3811: 'H11',
-    812: 'H12', 3812: 'H12',
-    813: 'H13', 3813: 'H13',
-    814: 'H14', 3814: 'H14',
-    815: 'H15', 3815: 'H15',
-    816: 'H16', 3816: 'H16',
-    817: 'H17', 3817: 'H17',
-    818: 'H18', 3818: 'H18',
-    819: 'H19', 3819: 'H19',
-    820: 'H20', 3820: 'H20',
-    821: 'H21', 3821: 'H21',
-    822: 'H22', 3822: 'H22',
-    823: 'H23', 3823: 'H23',
-    824: 'H24', 3824: 'H24',
-    825: 'H25', 3825: 'H25',
-    826: 'H26', 3826: 'H26',
-    827: 'H27', 3827: 'H27',
-    828: 'H28', 3828: 'H28',
-    844: 'H44', 3844: 'H44',
-    845: 'H45', 3845: 'H45',
-    846: 'H46', 3846: 'H46',
-    847: 'H47', 3847: 'H47',
-    848: 'H48', 3848: 'H48',
-    849: 'H49', 3849: 'H49',
-    850: 'H50', 3850: 'H50',
-    851: 'H51', 3851: 'H51',
-    852: 'H52', 3852: 'H52',
-    853: 'H53', 3853: 'H53',
-    854: 'H54', 3854: 'H54',
-    855: 'H55', 3855: 'H55',
-    856: 'H56', 3856: 'H56',
-    857: 'H57', 3857: 'H57',
-    858: 'H58', 3858: 'H58',
-    859: 'H59', 3859: 'H59',
-    860: 'H60', 3860: 'H60',
-    861: 'H61', 3861: 'H61',
-    862: 'H62', 3862: 'H62',
-    863: 'H63', 3863: 'H63',
-    2: 'JSS', 3002: 'JSS',
-    3: 'JRC', 3003: 'JRC',
-    4: 'MLK', 3004: 'MLK',
-    5: 'IMO', 3005: 'IMO',
-    6: 'PPG', 3006: 'PPG',
-    7: 'JBU', 3007: 'JBU',
-    8: 'KTN', 3008: 'KTN',
-    9: 'JYK', 3009: 'JYK',
-    10: 'ASR', 3010: 'ASR',
-    11: 'GRN', 3011: 'GRN',
-    12: 'PPH', 3012: 'PPH',
-    13: 'KBU', 3013: 'KBU',
-    14: 'TMH', 3014: 'TMH',
-    15: 'KPG', 3015: 'KPG',
-    16: 'NLI', 3016: 'NLI',
-    17: 'TPN', 3017: 'TPN',
-    18: 'PJN', 3018: 'PJN',
-    19: 'DUA', 3019: 'DUA',
-    20: 'TCL', 3020: 'TCL',
-    21: 'BPT', 3021: 'BPT',
-    22: 'SMY', 3022: 'SMY',
-    23: 'KMT', 3023: 'KMT',
-    24: 'RSH', 3024: 'RSH',
-    25: 'SAM', 3025: 'SAM',
-    26: 'SPG', 3026: 'SPG',
-    27: 'NTL', 3027: 'NTL',
-    28: 'MUA', 3028: 'MUA',
-    29: 'JRL', 3029: 'JRL',
-    30: 'KTU', 3030: 'KTU',
-    31: 'SKC', 3031: 'SKC',
-    32: 'WSS', 3032: 'WSS',
-    33: 'KKU', 3033: 'KKU',
-    34: 'KGR', 3034: 'KGR',
-    35: 'SSA', 3035: 'SSA',
-    36: 'SS2', 3036: 'SS2',
-    37: 'TSA', 3037: 'TSA',
-    38: 'JKL', 3038: 'JKL',
-    39: 'KKG', 3039: 'KKG',
-    40: 'JSB', 3040: 'JSB',
-    41: 'JIH', 3041: 'JIH',
-    42: 'BMM', 3042: 'BMM',
-    43: 'BTG', 3043: 'BTG',
-    44: 'TWU', 3044: 'TWU',
-    45: 'SRB', 3045: 'SRB',
-    46: 'APG', 3046: 'APG',
-    47: 'SGM', 3047: 'SGM',
-    48: 'MTK', 3048: 'MTK',
-    49: 'JLP', 3049: 'JLP',
-    50: 'MRI', 3050: 'MRI',
-    51: 'SMG', 3051: 'SMG',
-    52: 'UTM', 3052: 'UTM',
-    53: 'TMI', 3053: 'TMI',
-    54: 'BBB', 3054: 'BBB',
-    55: 'LBN', 3055: 'LBN',
-    56: 'KJG', 3056: 'KJG',
-    57: 'SPI', 3057: 'SPI',
-    58: 'SBU', 3058: 'SBU',
-    59: 'PKL', 3059: 'PKL',
-    60: 'BAM', 3060: 'BAM',
-    61: 'KLI', 3061: 'KLI',
-    62: 'SDK', 3062: 'SDK',
-    63: 'GMS', 3063: 'GMS',
-    64: 'PDN', 3064: 'PDN',
-    65: 'BHU', 3065: 'BHU',
-    66: 'BDA', 3066: 'BDA',
-    67: 'CMR', 3067: 'CMR',
-    68: 'SAT', 3068: 'SAT',
-    69: 'BKI', 3069: 'BKI',
-    70: 'PSA', 3070: 'PSA',
-    71: 'BCG', 3071: 'BCG',
-    72: 'PPR', 3072: 'PPR',
-    73: 'SPK', 3073: 'SPK',
-    74: 'SIK', 3074: 'SIK',
-    75: 'CAH', 3075: 'CAH',
-    76: 'PRS', 3076: 'PRS',
-    77: 'PLI', 3077: 'PLI',
-    78: 'SJA', 3078: 'SJA',
-    79: 'MSI', 3079: 'MSI',
-    80: 'MLB', 3080: 'MLB',
-    81: 'SBH', 3081: 'SBH',
-    82: 'MCG', 3082: 'MCG',
-    83: 'JBB', 3083: 'JBB',
-    84: 'PMS', 3084: 'PMS',
-    85: 'SST', 3085: 'SST',
-    86: 'CLN', 3086: 'CLN',
-    87: 'MSG', 3087: 'MSG',
-    88: 'KUM', 3088: 'KUM',
-    89: 'TPI', 3089: 'TPI',
-    90: 'BTL', 3090: 'BTL',
-    91: 'KUG', 3091: 'KUG',
-    92: 'KLG', 3092: 'KLG',
-    93: 'EDU', 3093: 'EDU',
-    94: 'STP', 3094: 'STP',
-    95: 'TIN', 3095: 'TIN',
-    96: 'SGK', 3096: 'SGK',
-    97: 'HSL', 3097: 'HSL',
-    98: 'TCY', 3098: 'TCY',
-    102: 'PRJ', 3102: 'PRJ',
-    103: 'JJG', 3103: 'JJG',
-    104: 'KKL', 3104: 'KKL',
-    105: 'KTI', 3105: 'KTI',
-    106: 'CKI', 3106: 'CKI',
-    107: 'JLT', 3107: 'JLT',
-    108: 'BSI', 3108: 'BSI',
-    109: 'KSR', 3109: 'KSR',
-    110: 'TJJ', 3110: 'TJJ',
-    111: 'AKH', 3111: 'AKH',
-    112: 'LDO', 3112: 'LDO',
-    113: 'TML', 3113: 'TML',
-    114: 'BBA', 3114: 'BBA',
-    115: 'KNG', 3115: 'KNG',
-    116: 'TRI', 3116: 'TRI',
-    117: 'KKI', 3117: 'KKI',
-    118: 'TMW', 3118: 'TMW',
-    120: 'PIH', 3120: 'PIH',
-    121: 'PRA', 3121: 'PRA',
-    122: 'SKN', 3122: 'SKN',
-    123: 'IGN', 3123: 'IGN',
-    124: 'S14', 3124: 'S14',
-    125: 'KJA', 3125: 'KJA',
-    126: 'PTS', 3126: 'PTS',
-    127: 'TSM', 3127: 'TSM',
-    128: 'SGB', 3128: 'SGB',
-    129: 'BSR', 3129: 'BSR',
-    130: 'PDG', 3130: 'PDG',
-    131: 'TMG', 3131: 'TMG',
-    132: 'CKT', 3132: 'CKT',
-    133: 'PKG', 3133: 'PKG',
-    134: 'RPG', 3134: 'RPG',
-    135: 'BSY', 3135: 'BSY',
-    136: 'TCS', 3136: 'TCS',
-    137: 'JPP', 3137: 'JPP',
-    138: 'WMU', 3138: 'WMU',
-    139: 'JRT', 3139: 'JRT',
-    140: 'CPE', 3140: 'CPE',
-    141: 'STL', 3141: 'STL',
-    142: 'KBD', 3142: 'KBD',
-    143: 'LDU', 3143: 'LDU',
-    144: 'KHG', 3144: 'KHG',
-    145: 'BSD', 3145: 'BSD',
-    146: 'PSG', 3146: 'PSG',
-    147: 'PNS', 3147: 'PNS',
-    148: 'PJO', 3148: 'PJO',
-    149: 'BFT', 3149: 'BFT',
-    150: 'LMM', 3150: 'LMM',
-    151: 'SLY', 3151: 'SLY',
-    152: 'ATR', 3152: 'ATR',
-    153: 'USJ', 3153: 'USJ',
-    154: 'BSJ', 3154: 'BSJ',
-    155: 'TTJ', 3155: 'TTJ',
-    156: 'TMR', 3156: 'TMR',
-    157: 'BPJ', 3157: 'BPJ',
-    158: 'SPL', 3158: 'SPL',
-    159: 'RLU', 3159: 'RLU',
-    160: 'MTH', 3160: 'MTH',
-    161: 'DGG', 3161: 'DGG',
-    162: 'SEA', 3162: 'SEA',
-    163: 'JKA', 3163: 'JKA',
-    164: 'KBS', 3164: 'KBS',
-    165: 'TKA', 3165: 'TKA',
-    166: 'PGG', 3166: 'PGG',
-    167: 'BBG', 3167: 'BBG',
-    168: 'KLC', 3168: 'KLC',
-    169: 'CTD', 3169: 'CTD',
-    170: 'PJA', 3170: 'PJA',
-    171: 'JMR', 3171: 'JMR',
-    172: 'TMJ', 3172: 'TMJ',
-    173: 'SCA', 3173: 'SCA',
-    174: 'BBP', 3174: 'BBP',
-    175: 'LBG', 3175: 'LBG',
-    176: 'TPG', 3176: 'TPG',
-    177: 'JRU', 3177: 'JRU',
-    178: 'MIN', 3178: 'MIN',
-    179: 'OUG', 3179: 'OUG',
-    180: 'KBG', 3180: 'KBG',
-    181: 'SRO', 3181: 'SRO',
-    182: 'JPU', 3182: 'JPU',
-    183: 'JCL', 3183: 'JCL',
-    184: 'JPN', 3184: 'JPN',
-    185: 'KCY', 3185: 'KCY',
-    186: 'JTZ', 3186: 'JTZ',
-    188: 'PLT', 3188: 'PLT',
-    189: 'BNH', 3189: 'BNH',
-    190: 'BTR', 3190: 'BTR',
-    191: 'KPT', 3191: 'KPT',
-    192: 'MRD', 3192: 'MRD',
-    193: 'MKH', 3193: 'MKH',
-    194: 'SRK', 3194: 'SRK',
-    195: 'BWK', 3195: 'BWK',
-    196: 'JHL', 3196: 'JHL',
-    197: 'TNM', 3197: 'TNM',
-    198: 'TDA', 3198: 'TDA',
-    199: 'JTH', 3199: 'JTH',
-    201: 'PDA', 3201: 'PDA',
-    202: 'RWG', 3202: 'RWG',
-    203: 'SJM', 3203: 'SJM',
-    204: 'BTW', 3204: 'BTW',
-    205: 'SNG', 3205: 'SNG',
-    206: 'TBM', 3206: 'TBM',
-    207: 'BCM', 3207: 'BCM',
-    208: 'JSI', 3208: 'JSI',
-    209: 'STW', 3209: 'STW',
-    210: 'TMM', 3210: 'TMM',
-    211: 'TPD', 3211: 'TPD',
-    212: 'JMA', 3212: 'JMA',
-    213: 'JKB', 3213: 'JKB',
-    214: 'JGA', 3214: 'JGA',
-    215: 'JKP', 3215: 'JKP',
-    216: 'SKI', 3216: 'SKI',
-    217: 'TMB', 3217: 'TMB',
-    220: 'GHS', 3220: 'GHS',
-    221: 'TSK', 3221: 'TSK',
-    222: 'TDC', 3222: 'TDC',
-    223: 'TRJ', 3223: 'TRJ',
-    224: 'JAH', 3224: 'JAH',
-    225: 'TIH', 3225: 'TIH',
-    226: 'JPR', 3226: 'JPR',
-    227: 'KSB', 3227: 'KSB',
-    228: 'INN', 3228: 'INN',
-    229: 'TSJ', 3229: 'TSJ',
-    230: 'SSH', 3230: 'SSH',
-    231: 'BBM', 3231: 'BBM',
-    232: 'TMD', 3232: 'TMD',
-    233: 'BEN', 3233: 'BEN',
-    234: 'SRM', 3234: 'SRM',
-    235: 'SBM', 3235: 'SBM',
-    236: 'UYB', 3236: 'UYB',
-    237: 'KLS', 3237: 'KLS',
-    238: 'JKT', 3238: 'JKT',
-    239: 'KMY', 3239: 'KMY',
-    240: 'KAP', 3240: 'KAP',
-    241: 'DJA', 3241: 'DJA',
-    242: 'TKK', 3242: 'TKK',
-    243: 'KKR', 3243: 'KKR',
-    244: 'GRT', 3244: 'GRT',
-    245: 'BDR', 3245: 'BDR',
-    246: 'BGH', 3246: 'BGH',
-    247: 'BPR', 3247: 'BPR',
-    249: 'TAI', 3249: 'TAI',
-    248: 'JTS', 3248: 'JTS',
-    250: 'TEA', 3250: 'TEA',
-    251: 'KPR', 3251: 'KPR',
-    252: 'TMA', 3252: 'TMA',
-    253: 'JTT', 3253: 'JTT',
-    254: 'KPH', 3254: 'KPH',
-    255: 'SBP', 3255: 'SBP',
-    256: 'PBR', 3256: 'PBR',
-    257: 'RAU', 3257: 'RAU',
-    258: 'JTA', 3258: 'JTA',
-    259: 'SAN', 3259: 'SAN',
-    260: 'KDN', 3260: 'KDN',
-    261: 'GMG', 3261: 'GMG',
-    262: 'TCT', 3262: 'TCT',
-    263: 'BTA', 3263: 'BTA',
-    264: 'JBH', 3264: 'JBH',
-    265: 'JAI', 3265: 'JAI',
-    266: 'JDK', 3266: 'JDK',
-    267: 'TDI', 3267: 'TDI',
-    268: 'BBT', 3268: 'BBT',
-    269: 'MKA', 3269: 'MKA',
-    270: 'BPI', 3270: 'BPI',
-    273: 'LHA', 3273: 'LHA',
-    277: 'WSU', 3277: 'WSU',
-    278: 'JPI', 3278: 'JPI',
-    274: 'STG', 3274: 'STG',
-    275: 'MSL', 3275: 'MSL',
-    276: 'JAS', 3276: 'JAS',
-    279: 'PTJ', 3279: 'PTJ',
-    280: 'KDA', 3280: 'KDA',
-    281: 'PLT', 3281: 'PLT',
-    282: 'PTT', 3282: 'PTT',
-    283: 'PSE', 3283: 'PSE',
-    284: 'BSP', 3284: 'BSP',
-    285: 'BMC', 3285: 'BMC',
-    286: 'BIH', 3286: 'BIH',
-    287: 'SUA', 3287: 'SUA',
-    288: 'SPT', 3288: 'SPT',
-    289: 'TEE', 3289: 'TEE',
-    290: 'TDY', 3290: 'TDY',
-    291: 'BSL', 3291: 'BSL',
-    292: 'BMJ', 3292: 'BMJ',
-    293: 'BSA', 3293: 'BSA',
-    294: 'KKM', 3294: 'KKM',
-    295: 'BKR', 3295: 'BKR',
-    296: 'BJL', 3296: 'BJL',
-    701: 'IKB', 3701: 'IKB',
-    702: 'IPJ', 3702: 'IPJ',
-    703: 'IWS', 3703: 'IWS',
-    704: 'IJK', 3704: 'IJK',
-}
-
-def format_brchcd(branch_code: int) -> str:
-    """Format branch code to branch name"""
-    if branch_code in range(7000, 9001) or branch_code in range(9994, 10000) or branch_code == 1:
-        return 'HOE'
-    if branch_code in [3000, 3001, 3999] or branch_code in range(4000, 5000):
-        return 'IBU'
-    return BRCHCD_MAP.get(branch_code, '')
-
-# ============================================================================
-# CAC BRANCH MAPPING
-# ============================================================================
-
-CACBRCH_MAP = {
-    'KL': [2, 18, 35, 38, 40, 41, 53, 66, 120, 124, 128, 129, 141, 148,
-           169, 170, 225, 226, 230, 232, 236, 248, 262, 267, 802, 812, 816, 818],
-    'CC': [3, 15, 19, 22, 26, 29, 36, 46, 56, 69, 83, 94, 96, 97, 701, 118, 122, 125,
-           131, 132, 136, 138, 145, 151, 155, 157, 162, 163, 270, 167, 168, 173, 178,
-           179, 195, 198, 180, 196, 197, 202, 220, 229, 241, 252, 280, 811, 815, 822,
-           103, 821, 825, 269, 284, 285, 288, 289, 702],
-    'SJ': [27, 42, 60, 68, 88, 121, 154, 177, 204, 206, 255, 801, 826],
-    'PG': [6, 54, 107, 114, 126, 150, 159, 171, 205, 253, 265, 266, 808, 817],
-    'JB': [7, 37, 52, 59, 61, 79, 89, 105, 110, 147, 174, 176, 216, 217, 222, 286,
-           804, 805, 287, 290],
-    'KL2': [20, 25, 43, 78, 81, 92, 109, 127, 133, 135, 153, 199, 201, 203,
-            221, 240, 250, 268, 814, 820],
-}
-
-def format_cacbrch(branch_code: int) -> str:
-    """Format CAC branch code"""
-    for key, branches in CACBRCH_MAP.items():
-        if branch_code in branches:
-            if key == 'KL':
-                return '911'
-            elif key == 'CC':
-                return '912'
-            elif key == 'KL2':
-                return '913'
-            elif key == 'JB':
-                return '914'
-            elif key == 'PG':
-                return '915'
-            elif key == 'SJ':
-                return '916'
-    return '000'
-
-def format_cacname(branch_code: int) -> str:
-    """Format CAC name"""
-    for key, branches in CACBRCH_MAP.items():
-        if branch_code in branches:
-            if key == 'KL':
-                return 'CAC-K. LUMPUR '
-            elif key == 'CC':
-                return 'CAC-CITY CENTRE'
-            elif key == 'SJ':
-                return 'CAC-BUTTERWOTH'
-            elif key == 'PG':
-                return 'CAC-PENANG'
-            elif key == 'JB':
-                return 'CAC-JOHOR BAHRU'
-            elif key == 'KL2':
-                return 'CAC-KELANG'
-    return 'NON CAC'
-
-# ============================================================================
-# REGIONAL OFFICE MAPPING
-# ============================================================================
-
-REGIOFF_MAP = {
-    'SELWP1': [3, 22, 40, 46, 53, 56, 120, 122, 129, 136, 155, 168, 169, 170, 173,
-               220, 225, 226, 232, 252, 262, 802, 818, 284, 285],
-    'SELWP2': [2, 15, 29, 41, 66, 83, 94, 96, 97, 701, 103, 118, 128, 138, 141, 151,
-               178, 195, 196, 197, 248, 821, 822],
-    'SELWP3': [18, 19, 26, 35, 36, 38, 81, 124, 125, 131, 145, 148, 157, 162, 163,
-               167, 179, 198, 230, 241, 267, 269, 270, 280, 825],
-    'SELWP4': [20, 25, 31, 43, 69, 73, 78, 92, 109, 127, 133, 135, 153, 180, 199,
-               201, 202, 203, 221, 235, 240, 250, 268, 814, 820, 279, 288, 289, 702],
-    'JOHOR': [7, 21, 28, 37, 47, 52, 59, 61, 75, 79, 87, 89, 91, 93, 102, 105, 110,
-              144, 147, 174, 176, 216, 217, 222, 224, 234, 242, 247, 286, 804, 805, 287, 290],
-    'PNGKDHPLS': [6, 10, 11, 27, 34, 42, 54, 57, 60, 68, 70, 74, 77, 86, 88, 104, 107,
-                  114, 121, 126, 150, 154, 159, 164, 171, 177, 204, 205, 206, 213, 238,
-                  253, 255, 258, 265, 266, 801, 806, 808, 817, 826, 704],
-    'PERAK': [5, 9, 23, 49, 51, 67, 71, 76, 80, 85, 95, 108, 123, 137, 146, 152, 158,
-              207, 208, 209, 210, 211, 243, 244, 245, 246, 249, 251, 256, 809],
-    'MLKNSEM': [4, 16, 17, 24, 39, 45, 63, 64, 65, 111, 156, 160, 165, 172, 212, 223,
-                231, 254, 800, 807],
-    'PAHKELTER': [8, 13, 14, 30, 48, 106, 113, 116, 117, 139, 233, 237, 239, 257, 260,
-                  261, 263, 264, 277, 827, 819, 703],
-    'SARAWAK': [32, 50, 58, 90, 130, 175, 182, 183, 184, 185, 273, 274, 275, 186, 189,
-                190, 191, 192, 193, 194, 259, 813, 281],
-    'SABAHLBN': [33, 44, 55, 62, 72, 112, 115, 140, 142, 143, 149, 161, 228, 803, 278,
-                 276, 282, 283],
-}
-
-def format_regioff(branch_code: int) -> str:
-    """Format regional office code"""
-    for region, branches in REGIOFF_MAP.items():
-        if branch_code in branches:
-            return region
-    return 'NON REGION'
-
-# ============================================================================
-# NEW REGION MAPPING
-# ============================================================================
-
-REGNEW_MAP = {
-    'WS I': [2, 3, 22, 46, 53, 56, 120, 129, 136, 169, 170, 173, 196, 226, 232, 252,
-             262, 284, 285, 802, 812],
-    'WS II': [15, 29, 40, 41, 66, 83, 96, 97, 103, 118, 128, 141, 151, 195, 197, 248,
-              269, 701, 818, 822],
-    'WS III': [18, 19, 35, 36, 81, 124, 125, 131, 135, 145, 148, 162, 167, 180, 220,
-               241, 267, 280, 815, 816, 820],
-    'WS IV': [26, 38, 94, 122, 138, 153, 155, 157, 163, 168, 178, 179, 198, 225, 230,
-              250, 270, 279, 288, 289, 702, 811, 821, 825],
-    'WS V': [20, 25, 31, 43, 69, 73, 78, 92, 109, 127, 133, 199, 201, 202, 203, 221,
-             235, 240, 268, 814],
-    'S I': [7, 37, 52, 59, 61, 79, 87, 89, 91, 93, 102, 105, 110, 144, 147, 174, 176,
-            216, 217, 222, 234, 286, 287, 290, 804, 805],
-    'S II': [4, 16, 17, 21, 24, 28, 39, 45, 47, 63, 64, 65, 75, 111, 156, 160, 165,
-             172, 224, 231, 242, 247, 254, 800, 807],
-    'N I': [6, 10, 34, 54, 70, 74, 77, 86, 104, 107, 114, 126, 150, 159, 171, 205,
-            238, 258, 265, 266, 806, 808, 817, 704],
-    'N II': [11, 23, 27, 42, 57, 60, 68, 88, 108, 121, 154, 164, 177, 204, 206, 211,
-             243, 249, 256, 801, 824, 826],
-    'CTR': [5, 9, 49, 51, 67, 71, 76, 80, 85, 95, 123, 137, 146, 152, 158, 207, 208,
-            209, 210, 244, 245, 251, 809, 823],
-    'EST': [8, 13, 14, 30, 48, 106, 113, 116, 117, 139, 233, 237, 239, 257, 260, 261,
-            263, 264, 277, 819, 827, 703],
-    'SRW': [32, 50, 58, 90, 130, 175, 182, 183, 184, 185, 273, 274, 275, 186, 189,
-            190, 191, 192, 193, 194, 259, 281, 813],
-    'SAB': [33, 44, 55, 62, 72, 112, 115, 140, 142, 143, 149, 161, 228, 278, 276,
-            282, 283, 803],
-}
-
-def format_regnew(branch_code: int) -> str:
-    """Format new region code"""
-    for region, branches in REGNEW_MAP.items():
-        if branch_code in branches:
-            return region
-    return 'OFF'
-
-# ============================================================================
-# CUSTOMER TYPE MAPPING
-# ============================================================================
-
-CTYPE_MAP = {
-    'BP': '01', 'BC': '01',
-    'BB': '02',
-    'BI': '03',
-    'BJ': '07',
-    'BQ': '11',
-    'BM': '12',
-    'BN': '13',
-    'BG': '17',
-    'BR': '20', 'BF': '20', 'BH': '20', 'BZ': '20', 'BU': '20', 'AD': '20',
-    'BT': '20', 'BV': '20', 'BS': '20',
-    'AC': '60', 'DD': '60', 'CG': '60', 'CA': '60', 'CC': '60', 'CB': '60',
-    'CD': '60', 'CF': '60',
-    'DA': '71',
-    'DB': '72',
-    'DC': '74',
-    'EC': '76', 'EA': '76', 'EJ': '76',
-    'FA': '79',
-    'BW': '81', 'BA': '81', 'BE': '81',
-    'EB': '85', 'CE': '85', 'GA': '85',
-}
-
-def format_ctype(ctype_code: str) -> str:
-    """Format customer type code"""
-    return CTYPE_MAP.get(ctype_code, '  ')
-
-# ============================================================================
-# BRANCH REVERSE MAPPING (NAME TO CODE)
-# ============================================================================
-
-BRCHRVR_MAP = {
-    'PCS': 1, 'JSS': 2, 'JRC': 3, 'MLK': 4, 'IMO': 5, 'PPG': 6, 'JBU': 7,
-    'KTN': 8, 'JYK': 9, 'ASR': 10, 'GRN': 11, 'PPH': 12, 'KBU': 13, 'TMH': 14,
-    'KPG': 15, 'NLI': 16, 'TPN': 17, 'PJN': 18, 'DUA': 19, 'TCL': 20, 'BPT': 21,
-    'SMY': 22, 'KMT': 23, 'RSH': 24, 'SAM': 25, 'SPG': 26, 'NTL': 27, 'MUA': 28,
-    'JRL': 29, 'KTU': 30, 'SKC': 31, 'WSS': 32, 'KKU': 33, 'KGR': 34, 'SSA': 35,
-    'SS2': 36, 'TSA': 37, 'JKL': 38, 'KKG': 39, 'JSB': 40, 'JIH': 41, 'BMM': 42,
-    'BTG': 43, 'TWU': 44, 'SRB': 45, 'APG': 46, 'SGM': 47, 'MTK': 48, 'JLP': 49,
-    'MRI': 50, 'SMG': 51, 'UTM': 52, 'TMI': 53, 'BBB': 54, 'LBN': 55, 'KJG': 56,
-    'SPI': 57, 'SBU': 58, 'PKL': 59, 'BAM': 60, 'KLI': 61, 'SDK': 62, 'GMS': 63,
-    'PDN': 64, 'BHU': 65, 'BDA': 66, 'CMR': 67, 'SAT': 68, 'BKI': 69, 'PSA': 70,
-    'BCG': 71, 'PPR': 72, 'SPK': 73, 'SIK': 74, 'CAH': 75, 'PRS': 76, 'PLI': 77,
-    'SJA': 78, 'MSI': 79, 'MLB': 80, 'SBH': 81, 'MCG': 82, 'JBB': 83, 'PMS': 84,
-    'SST': 85, 'CLN': 86, 'MSG': 87, 'KUM': 88, 'TPI': 89, 'BTL': 90, 'KUG': 91,
-    'KLG': 92, 'EDU': 93, 'STP': 94, 'TIN': 95, 'SGK': 96, 'HSL': 97, 'TCY': 98,
-    'XXX': 99, 'YYY': 100, 'KBR': 101, 'PRJ': 102, 'JJG': 103, 'KKL': 104, 'KTI': 105,
-    'CKI': 106, 'JLT': 107, 'BSI': 108, 'KSR': 109, 'TJJ': 110, 'AKH': 111, 'LDO': 112,
-    'TML': 113, 'BBA': 114, 'KNG': 115, 'TRI': 116, 'KKI': 117, 'TMW': 118, 'BNV': 119,
-    'PIH': 120, 'PRA': 121, 'SKN': 122, 'IGN': 123, 'S14': 124, 'KJA': 125, 'PTS': 126,
-    'TSM': 127, 'SGB': 128, 'BSR': 129, 'PDG': 130, 'TMG': 131, 'CKT': 132, 'PKG': 133,
-    'RPG': 134, 'BSY': 135, 'TCS': 136, 'JPP': 137, 'WMU': 138, 'JRT': 139, 'CPE': 140,
-    'STL': 141, 'KBD': 142, 'LDU': 143, 'KHG': 144, 'BSD': 145, 'PSG': 146, 'PNS': 147,
-    'PJO': 148, 'BFT': 149, 'LMM': 150, 'SLY': 151, 'ATR': 152, 'USJ': 153, 'BSJ': 154,
-    'TTJ': 155, 'TMR': 156, 'BPJ': 157, 'SPL': 158, 'RLU': 159, 'MTH': 160, 'DGG': 161,
-    'SEA': 162, 'JKA': 163, 'KBS': 164, 'TKA': 165, 'PGG': 166, 'BBG': 167, 'KLC': 168,
-    'CTD': 169, 'PJA': 170, 'JMR': 171, 'TMJ': 172, 'SCA': 173, 'BBP': 174, 'LBG': 175,
-    'TPG': 176, 'JRU': 177, 'MIN': 178, 'OUG': 179, 'KBG': 180, 'SRO': 181, 'JPU': 182,
-    'JCL': 183, 'JPN': 184, 'KCY': 185, 'JTZ': 186, 'BNH': 189, 'BTR': 190, 'KPT': 191,
-    'MRD': 192, 'MKH': 193, 'SRK': 194, 'BWK': 195, 'JHL': 196, 'TNM': 197, 'TDA': 198,
-    'JTH': 199, 'JSK': 200, 'PDA': 201, 'RWG': 202, 'SJM': 203, 'BTW': 204, 'SNG': 205,
-    'TBM': 206, 'BCM': 207, 'JSI': 208, 'STW': 209, 'TMM': 210, 'TPD': 211, 'JMA': 212,
-    'JKB': 213, 'JGA': 214, 'JKP': 215, 'SKI': 216, 'TMB': 217, 'ZZZ': 218, 'BC1': 219,
-    'GHS': 220, 'TSK': 221, 'TDC': 222, 'TRJ': 223, 'JAH': 224, 'TIH': 225, 'JPR': 226,
-    'KSB': 227, 'INN': 228, 'TSJ': 229, 'SSH': 230, 'BBM': 231, 'TMD': 232, 'BEN': 233,
-    'SRM': 234, 'SBM': 235, 'UYB': 236, 'KLS': 237, 'JKT': 238, 'KMY': 239, 'KAP': 240,
-    'DJA': 241, 'TKK': 242, 'KKR': 243, 'GRT': 244, 'BDR': 245, 'BGH': 246, 'BPR': 247,
-    'JTS': 248, 'TAI': 249, 'TEA': 250, 'KPR': 251, 'TMA': 252, 'JTT': 253, 'KPH': 254,
-    'SBP': 255, 'PBR': 256, 'RAU': 257, 'JTA': 258, 'SAN': 259, 'KDN': 260, 'GMG': 261,
-    'TCT': 262, 'BTA': 263, 'JBH': 264, 'JAI': 265, 'JDK': 266, 'TDI': 267, 'BBT': 268,
-    'MKA': 269, 'BPI': 270, 'LHA': 273, 'STG': 274, 'MSL': 275, 'JAS': 276, 'WSU': 277,
-    'JPI': 278, 'PTJ': 279, 'KDA': 280, 'PLT': 281, 'PTT': 282, 'PSE': 283, 'BSP': 284,
-    'BMC': 285, 'BIH': 286, 'SUA': 287, 'SPT': 288, 'TEE': 289, 'TDY': 290, 'BSL': 291,
-    'BMJ': 292, 'BSA': 293, 'KKM': 294, 'BKR': 295, 'BJL': 296,
-    'IKB': 701, 'IPJ': 702, 'IWS': 703, 'IJK': 704,
-    'H01': 800, 'H02': 801, 'H03': 802, 'H04': 803, 'H05': 804, 'H06': 805, 'H07': 806,
-    'H08': 807, 'H09': 808, 'H10': 809, 'H11': 811, 'H12': 812, 'H13': 813, 'H14': 814,
-    'H15': 815, 'H16': 816, 'H17': 817, 'H18': 818, 'H19': 819, 'H20': 820, 'H21': 821,
-    'H22': 822, 'H23': 823, 'H24': 824, 'H25': 825, 'H26': 826, 'H27': 827, 'H28': 828,
-    'H44': 844, 'H45': 845, 'H46': 846, 'H47': 847, 'H48': 848, 'H49': 849, 'H50': 850,
-    'H51': 851, 'H52': 852, 'H53': 853, 'H54': 854, 'H55': 855, 'H56': 856, 'H57': 857,
-    'H58': 858, 'H59': 859, 'H60': 860, 'H61': 861, 'H62': 862, 'H63': 863,
-    'HOE': 884,
-    'CBR': 902, 'CCC': 903, 'SCD': 904, 'SCC': 905, 'CAD': 906, 'SDC': 907, 'ICC': 908,
-    'PCC': 909, 'JCC': 910, 'KCA': 911, 'CCA': 912, 'LCA': 913, 'JCA': 914, 'PCA': 915,
-    'BCA': 916, 'KCC': 917, 'MCC': 918, 'HCC': 919, 'LCC': 920,
-    'TFC': 992, 'XPP': 993, 'XJB': 994, 'SMC': 996, 'CCP': 997, 'CPC': 998,
-}
-
-def format_brchrvr(branch_name: str) -> Optional[int]:
-    """Reverse format: branch name to code"""
-    return BRCHRVR_MAP.get(branch_name)
-
-# ============================================================================
-# BRANCH LISTS
-# ============================================================================
-
-PRKBRH = [119, 67, 123, 5, 207, 49, 137, 208, 9, 80, 146, 158, 85, 244, 246, 809, 243, 251]
-IPRKBRH = [3119, 3067, 3123, 3005, 3207, 3049, 3137, 3208, 3009, 3080, 3146, 3158, 3085, 3244, 3246, 3809, 3243, 3251]
-
-PNGBRH = [114, 60, 54, 42, 154, 204, 107, 171, 177, 164, 150, 27, 6, 121, 126, 159, 68, 205, 206, 265, 266, 253, 255, 801, 808, 817, 826, 256]
-IPNGBRH = [3114, 3060, 3054, 3042, 3154, 3204, 3107, 3171, 3177, 3164, 3150, 3027, 3006, 3121, 3126, 3159, 3068, 3205, 3206, 3265, 3266, 3253, 3255, 3801, 3808, 3817, 3826, 3256]
-
-JBBRH = [174, 7, 61, 105, 79, 59, 147, 216, 110, 217, 176, 89, 37, 52, 222, 804, 805, 286, 287, 290]
-IJBBRH = [3174, 3007, 3061, 3105, 3079, 3059, 3147, 3216, 3110, 3217, 3176, 3089, 3037, 3052, 3222, 3804, 3805, 3286, 3287, 3290]
-
-KLGBRH = [20, 25, 43, 78, 81, 92, 109, 127, 133, 199, 201, 203, 221, 240, 250, 268, 135, 153, 814, 820, 293, 294]
-IKLGBRH = [3020, 3025, 3043, 3078, 3081, 3092, 3109, 3127, 3133, 3199, 3201, 3203, 3221, 3240, 3250, 3268, 3135, 3153, 3814, 3820, 3293, 3294]
-
-MLKBRH = [4, 17, 28, 111, 156, 160, 165, 172, 224, 231, 242, 247, 807]
-IMLKBRH = [3004, 3017, 3028, 3111, 3156, 3160, 3165, 3172, 3224, 3231, 3242, 3247, 3807]
-
-KCGBRH = [32, 130, 184, 185, 186, 274]
-IKCGBRH = [3032, 3130, 3184, 3185, 3186, 3274]
-
-KKUBRH = [33, 140, 278, 112, 228, 161, 142, 72, 149, 282]
-IKKUBRH = [3033, 3140, 3278, 3112, 3228, 3161, 3142, 3072, 3149, 3282]
-
-SROBRH = [44, 50, 55, 58, 62, 90, 115, 143, 175, 183, 189, 190, 191, 192, 193, 194, 259, 273, 275, 276, 281, 283]
-ISROBRH = [3044, 3050, 3055, 3058, 3062, 3090, 3115, 3143, 3175, 3183, 3189, 3190, 3191, 3192, 3193, 3194, 3259, 3273, 3275, 3276, 3281, 3283]
-
-SPIBRH = [10, 238, 11, 57, 88, 104, 74, 704]
-ISPIBRH = [3010, 3238, 3011, 3057, 3088, 3104, 3074, 3704]
-
-SRBBRH = [16, 24, 39, 45, 64, 65, 254]
-ISRBBRH = [3016, 3024, 3039, 3045, 3064, 3065, 3254]
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-def is_perak_branch(branch_code: int) -> bool:
-    """Check if branch is in Perak"""
-    return branch_code in PRKBRH or branch_code in IPRKBRH
-
-def is_penang_branch(branch_code: int) -> bool:
-    """Check if branch is in Penang"""
-    return branch_code in PNGBRH or branch_code in IPNGBRH
-
-def is_johor_branch(branch_code: int) -> bool:
-    """Check if branch is in Johor Bahru"""
-    return branch_code in JBBRH or branch_code in IJBBRH
-
-def is_klang_branch(branch_code: int) -> bool:
-    """Check if branch is in Klang"""
-    return branch_code in KLGBRH or branch_code in IKLGBRH
-
-def is_melaka_branch(branch_code: int) -> bool:
-    """Check if branch is in Melaka"""
-    return branch_code in MLKBRH or branch_code in IMLKBRH
-
-def is_kuching_branch(branch_code: int) -> bool:
-    """Check if branch is in Kuching"""
-    return branch_code in KCGBRH or branch_code in IKCGBRH
-
-def is_kk_branch(branch_code: int) -> bool:
-    """Check if branch is in Kota Kinabalu"""
-    return branch_code in KKUBRH or branch_code in IKKUBRH
-
-def is_sro_branch(branch_code: int) -> bool:
-    """Check if branch is SRO"""
-    return branch_code in SROBRH or branch_code in ISROBRH
-
-def is_sp_branch(branch_code: int) -> bool:
-    """Check if branch is in Sungai Petani"""
-    return branch_code in SPIBRH or branch_code in ISPIBRH
-
-def is_srb_branch(branch_code: int) -> bool:
-    """Check if branch is in Seremban"""
-    return branch_code in SRBBRH or branch_code in ISRBBRH
-
-
-
-KALMLIQ:
-
-#!/usr/bin/env python3
-"""
-Program : KALMLIQ.py
-Purpose : New Liquidity Framework (Kapiti items) -- pure contractual
-          maturity profile breakdown (Part 2) and distribution profile of
-          customer deposits (Part 3). Originally %INC PGM(KALMLIQ) inside
-          EIBMRLFM.
-
-          Depends on:
-            %INC PGM(KAMLIQX)  -> KAMLIQX.build_k1tbx()
-            %INC PGM(KALMLIQ4) -> KALMLIQ4.build_k3tbl3() (result unused
-                                   downstream -- see KALMLIQ4 docstring)
-
-          Designed to be imported by EIBMRLFM.py, mirroring %INC
-          semantics. KALMLIQ resolves, dates, or converts none of its own
-          inputs -- every physical path and REPTDATE/RPYR/RPMTH/RPDAY/
-          RD_DAYS context is owned and supplied by the calling job
-          (ultimately EIBMLIQP.py).
-"""
-from pathlib import Path
-from datetime import date
-from typing import Optional
-
-import duckdb
-import polars as pl
-
-from KAMLIQX import build_k1tbx
-from KALMLIQ4 import build_k3tbl3
-
-_KTBL_SCHEMA = {"BNMCODE": pl.Utf8, "AMOUNT": pl.Float64, "AMTUSD": pl.Float64, "AMTSGD": pl.Float64}
-_DIST_SCHEMA = {"CAT": pl.Utf8, "NAME": pl.Utf8, "AMOUNT": pl.Float64}
-
-
-def _remfmt(remmth: float) -> str:
-    """PROC FORMAT VALUE REMFMT (numeric BNMCODE suffix bucket) -- distinct
-    from EIIMRM01's report-label REMFMT of the same name."""
-    if remmth <= 0.1:
-        return "01"
-    if remmth <= 1:
-        return "02"
-    if remmth <= 3:
-        return "03"
-    if remmth <= 6:
-        return "04"
-    if remmth <= 12:
-        return "05"
-    return "06"
-
-
-def _parse_date(s) -> Optional[date]:
-    if s is None:
-        return None
-    s = str(s).strip()
-    if not s:
-        return None
-    y, m, d = s.split("-")[:3]
-    return date(int(y), int(m), int(d[:2]))
-
-
-def _build_k1tbl(k1tbl_cache: Path) -> pl.DataFrame:
-    """DATA K1TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT GWCCY
-    GWSHN GWC2R GWDLP GWDLR); SET BNMK.K1TBL&REPTMON&NOWK ..."""
-    # con = duckdb.connect(database=":memory:")
-    # raw = con.execute(f"""
-    #     SELECT
-    #         CAST(GWCCY  AS VARCHAR) AS GWCCY,
-    #         CAST(GWMVT  AS VARCHAR) AS GWMVT,
-    #         CAST(GWMVTS AS VARCHAR) AS GWMVTS,
-    #         CAST(GWOCY  AS VARCHAR) AS GWOCY,
-    #         CAST(GWCTP  AS VARCHAR) AS GWCTP,
-    #         CAST(GWDLP  AS VARCHAR) AS GWDLP,
-    #         CAST(GWSHN  AS VARCHAR) AS GWSHN,
-    #         CAST(GWC2R  AS VARCHAR) AS GWC2R,
-    #         CAST(GWDLR  AS VARCHAR) AS GWDLR,
-    #         CAST(GWMDT  AS VARCHAR) AS MATDT,
-    #         CAST(GWSDT  AS VARCHAR) AS ISSDT,
-    #         CAST(GWBALC AS DOUBLE)  AS AMOUNT
-    #     FROM read_parquet('{k1tbl_cache.as_posix()}')
-    #     WHERE GWMVT = 'P' AND GWOCY NOT IN ('XAU','XAT') AND GWCCY NOT IN ('XAU','XAT')
-    # """).pl()
-    # con.close()
-
-    con = duckdb.connect(database=":memory:")
-    raw = con.execute(f"""
-        SELECT
-            CAST(GWCCY  AS VARCHAR) AS GWCCY,
-            CAST(GWMVT  AS VARCHAR) AS GWMVT,
-            CAST(GWMVTS AS VARCHAR) AS GWMVTS,
-            CAST(GWOCY  AS VARCHAR) AS GWOCY,
-            CAST(GWCTP  AS VARCHAR) AS GWCTP,
-            CAST(GWDLP  AS VARCHAR) AS GWDLP,
-            CAST(GWSHN  AS VARCHAR) AS GWSHN,
-            CAST(GWC2R  AS VARCHAR) AS GWC2R,
-            CAST(GWDLR  AS VARCHAR) AS GWDLR,
-            CAST(GWMDT  AS VARCHAR) AS MATDT,
-            CAST(GWSDT  AS VARCHAR) AS ISSDT,
-            CAST(GWBALC AS DOUBLE)  AS AMOUNT
-        FROM read_parquet('{k1tbl_cache.as_posix()}')
-        WHERE GWMVT = 'P'
-            AND COALESCE(GWOCY, '') NOT IN ('XAU','XAT')
-            AND COALESCE(GWCCY, '') NOT IN ('XAU','XAT')
-    """).pl()
-    con.close()
-
-    ROW1_BCXX = {"LO", "LC", "LF", "LS", "LOI", "LSI", "LSC", "LSW", "FDA", "FDB", "FDS", "FDL", "LOC", "LOW"}
-    ROW2_BCXX = {"BO", "BF", "BOI", "BFI", "BSC", "BSW", "BOC", "BOW"}
-    RM_BCXX_MI = {"LO", "LC", "LS", "LF", "LOI", "LSI", "LSC", "LOC", "FDA", "FDB", "FDS", "FDL", "LOW", "LSW"}
-    RM_BCXX_BC = {"BC", "BF", "BO", "BSC", "BOW", "BSW"}
-
-    out = []
-    for r in raw.iter_rows(named=True):
-        gwccy, gwmvts, gwdlp = r["GWCCY"], r["GWMVTS"], r["GWDLP"] or ""
-        gwctp, gwshn = r["GWCTP"] or "", r["GWSHN"] or ""
-        base = {"MATDT": r["MATDT"], "AMOUNT": r["AMOUNT"], "ISSDT": r["ISSDT"], "GWCCY": gwccy,
-                "GWSHN": gwshn, "GWC2R": r["GWC2R"], "GWDLP": gwdlp, "GWDLR": r["GWDLR"]}
-
-        if gwccy == "MYR":
-            part = "95"
-            amtusd = amtsgd = 0.0
-            if gwmvts == "M":
-                if gwdlp in ("BCD", "BCI", "BCS", "BCQ", "BCT", "BCW", "BQD"):
-                    out.append({**base, "PART": part, "ITEM": "830", "AMTUSD": amtusd, "AMTSGD": amtsgd})
-                if gwctp[:1] == "B":
-                    if gwdlp in ROW1_BCXX:
-                        out.append({**base, "PART": part, "ITEM": "610", "AMTUSD": amtusd, "AMTSGD": amtsgd})
-                    elif gwdlp in ROW2_BCXX:
-                        out.append({**base, "PART": part, "ITEM": "810", "AMTUSD": amtusd, "AMTSGD": amtsgd})
-                dlp2 = gwdlp[1:3]
-                if dlp2 in ("MI", "MT"):
-                    out.append({**base, "PART": part, "ITEM": "820", "AMTUSD": amtusd, "AMTSGD": amtsgd})
-                elif dlp2 in ("XI", "XT"):
-                    out.append({**base, "PART": part, "ITEM": "620", "AMTUSD": amtusd, "AMTSGD": amtsgd})
-            # commented-out FXS/FXO/.../MVTS branch in original SAS -- dead code, no-op
-        else:
-            part = "96"
-            amtusd = r["AMOUNT"] if gwccy == "USD" else 0.0
-            amtsgd = r["AMOUNT"] if gwccy == "SGD" else 0.0
-            if gwmvts == "M" and gwctp[:1] == "B" and gwctp != "BW":
-                if gwdlp in RM_BCXX_MI:
-                    out.append({**base, "PART": part, "ITEM": "610", "AMTUSD": amtusd, "AMTSGD": amtsgd})
-                elif gwdlp in RM_BCXX_BC:
-                    if gwshn[:6] != "FCY-FD":
-                        out.append({**base, "PART": part, "ITEM": "810", "AMTUSD": amtusd, "AMTSGD": amtsgd})
-                elif gwdlp == "BOC":
-                    out.append({**base, "PART": part, "ITEM": "810", "AMTUSD": amtusd, "AMTSGD": amtsgd})
-            # commented-out FXS/.../GWACT NOT IN (RV,RW) branch -- dead code, no-op
-    schema = {"MATDT": pl.Utf8, "AMOUNT": pl.Float64, "ISSDT": pl.Utf8, "GWCCY": pl.Utf8, "GWSHN": pl.Utf8,
-              "GWC2R": pl.Utf8, "GWDLP": pl.Utf8, "GWDLR": pl.Utf8, "PART": pl.Utf8, "ITEM": pl.Utf8,
-              "AMTUSD": pl.Float64, "AMTSGD": pl.Float64}
-    return pl.DataFrame(out, schema=schema) if out else pl.DataFrame(schema=schema)
-
-
-def _build_k3tbl(k3tbl_cache: Path, inst: str) -> pl.DataFrame:
-    """DATA K3TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT UTCCY
-    UTCUS UTCTP UTSTY UTDLR UTDLP); RETAIN PART '95'; SET BNMK.K3TBL..."""
-    con = duckdb.connect(database=":memory:")
-    raw = con.execute(f"""
-        SELECT
-            CAST(MATDT  AS VARCHAR) AS MATDT,
-            CAST(UTAMOC AS DOUBLE)  AS UTAMOC,
-            CAST(UTDPF  AS DOUBLE)  AS UTDPF,
-            CAST(UTSTY  AS VARCHAR) AS UTSTY,
-            CAST(UTCCY  AS VARCHAR) AS UTCCY,
-            CAST(UTCUS  AS VARCHAR) AS UTCUS,
-            CAST(UTCTP  AS VARCHAR) AS UTCTP,
-            CAST(UTDLR  AS VARCHAR) AS UTDLR,
-            CAST(UTDLP  AS VARCHAR) AS UTDLP,
-            CAST(UTREF  AS VARCHAR) AS UTREF,
-            CAST(UTAICT AS DOUBLE)  AS UTAICT,
-            CAST(UTPCP  AS DOUBLE)  AS UTPCP,
-            CAST(UTDPEY AS DOUBLE)  AS UTDPEY,
-            CAST(UTDPE  AS DOUBLE)  AS UTDPE,
-            CAST(UTAICY AS DOUBLE)  AS UTAICY,
-            CAST(UTAIT  AS DOUBLE)  AS UTAIT,
-            CAST(ISSDT  AS VARCHAR) AS ISSDT
-        FROM read_parquet('{k3tbl_cache.as_posix()}')
-    """).pl()
-    con.close()
-
-    CB_SET = {"CB1", "CB2", "CF1", "CF2", "CNT", "MGS", "MTB", "BNB", "BNN", "ITB", "SAC",
-              "BMN", "BMC", "BMF", "SCD", "SCM", "CMB", "MGI", "SMC"}
-    I_CB_SET = {"CB1", "CB2", "CF1", "CF2", "CNT", "MGI", "ITB", "SAC", "BMN", "BMC", "BMF",
-                "SCD", "SCM", "MGS", "MTB", "BNB", "BNN", "CMB", "SMC"}
-
-    out = []
-    for r in raw.iter_rows(named=True):
-        utsty, utref, utdlp = r["UTSTY"] or "", r["UTREF"] or "", r["UTDLP"] or ""
-        amount = (r["UTAMOC"] or 0.0) - (r["UTDPF"] or 0.0)
-        if utsty == "IDC":
-            amount = (r["UTAMOC"] or 0.0) + (r["UTDPF"] or 0.0)
-        if inst == "PBB":
-            amtusd = amount if r["UTCCY"] == "USD" else 0.0
-            amtsgd = amount if r["UTCCY"] == "SGD" else 0.0
-        else:
-            amtusd, amtsgd = 0.0, 0.0
-
-        base = {"PART": "95", "MATDT": r["MATDT"], "ISSDT": r["ISSDT"], "UTCCY": r["UTCCY"],
-                "UTCUS": r["UTCUS"], "UTCTP": r["UTCTP"], "UTSTY": utsty, "UTDLR": r["UTDLR"], "UTDLP": utdlp}
-
-        item, amt = None, amount
-        if utref in ("INV", "DRI", "DLG", "AFSLIQ", "AFSBOND", "IAFSLIQ", "AFS", "IAFS"):
-            if utsty in CB_SET:
-                item = "631"
-                if inst == "PBB":
-                    amt = amount + (r["UTAICT"] or 0.0)
-            elif utsty == "SDC":
-                item = "632"
-                if inst == "PBB":
-                    amt = (r["UTAMOC"] or 0.0) * ((r["UTPCP"] or 0.0) / 100) + (r["UTDPEY"] or 0.0) + (r["UTDPE"] or 0.0)
-            elif utsty == "LDC":
-                item = "632"
-                if inst == "PBB":
-                    amt = amount + (r["UTAICT"] or 0.0)
-            elif utsty in ("SLD", "SSD"):
-                item = "632"
-                if inst == "PBB":
-                    amt = (r["UTAMOC"] or 0.0) * ((r["UTPCP"] or 0.0) / 100) + (r["UTAICY"] or 0.0) + (r["UTAIT"] or 0.0)
-            elif utsty in ("SFD", "SZD"):
-                item = "632"
-                if inst == "PBB":
-                    amt = amount + (r["UTAICT"] or 0.0)
-            elif utsty == "SBA":
-                if utdlp not in ("MOS", "MSS"):
-                    item = "633"
-            elif utsty in ("ISB", "DHB", "KHA", "PNB"):
-                item = "636"
-            elif utsty == "IDS":
-                item = "635"
-            elif utsty == "DBD":
-                item = "634"
-            elif utsty in ("DMB", "GRL", "MTL", "RUL"):
-                item = "635"
-            elif utsty == "PBA":
-                if utdlp in ("MOS", "MSS"):
-                    item = "850"
-        elif utref in ("PFD", "PLD", "PSD", "PZD", "PDC"):
-            if utsty in ("IFD", "ILD", "ISD", "IZD", "IDC", "IDP", "IZP"):
-                item = "840"
-        elif utref in ("IINV", "IDRI", "IDLG"):
-            if utsty == "SBA" and utdlp == "IOP":
-                item = "633"
-            elif utsty in ("SDC", "LDC"):
-                item = "632"
-            elif utsty in I_CB_SET:
-                item = "631"
-                if inst == "PBB":
-                    amt = amount + (r["UTAICT"] or 0.0)
-            # elif utsty in ("ISB", "IDS", "IBZ", "ICN"):
-            #     if r["UTMM1"] == "GGB":
-            #         item = "636"
-            #     elif r["UTMM1"] == "NGB":
-            #         item = "635"
-            #     amt = amount + (r["UTAICT"] or 0.0)
-            elif utsty in ("ISB", "IDS", "IBZ", "ICN"):
-                # UTMM1 is not present in the physical source. SAS auto-creates
-                # it as missing, both comparisons fail, ITEM stays blank, and the
-                # row is filtered by the downstream "IF ITEM ^= ' '" check.
-                # Replicate that net effect: leave item unset, emit no row.
-                pass
-            elif utsty in ("DHB", "KHA"):
-                item = "636"
-            elif utsty == "DBD":
-                item = "634"
-
-        if item is not None:
-            out.append({**base, "ITEM": item, "AMOUNT": amt, "AMTUSD": amtusd, "AMTSGD": amtsgd})
-
-        # IF UTSTY IN ('SIP') THEN OUTPUT -- unconditional, independent of the chain above
-        if utsty == "SIP":
-            out.append({**base, "ITEM": "610", "AMOUNT": amount, "AMTUSD": amtusd, "AMTSGD": amtsgd})
-
-    schema = {"PART": pl.Utf8, "MATDT": pl.Utf8, "ISSDT": pl.Utf8, "UTCCY": pl.Utf8, "UTCUS": pl.Utf8,
-              "UTCTP": pl.Utf8, "UTSTY": pl.Utf8, "UTDLR": pl.Utf8, "UTDLP": pl.Utf8, "ITEM": pl.Utf8,
-              "AMOUNT": pl.Float64, "AMTUSD": pl.Float64, "AMTSGD": pl.Float64}
-    return pl.DataFrame(out, schema=schema) if out else pl.DataFrame(schema=schema)
-
-
-def build_kalmliq(
-    k1tbl_cache: Path, k3tbl_cache: Path, reptdate: date,
-    rpyr: int, rpmth: int, rpday: int, rd_days: list, inst: str = "PBB",
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """
-    Returns (ktbl, dist_summary):
-      ktbl          -- BNMCODE/AMOUNT/AMTUSD/AMTSGD, equivalent of
-                       KTBL/KTBLALL (Part 2 + duplicated Part 1 rows).
-      dist_summary  -- CAT/NAME/AMOUNT, equivalent of the final
-                       PROC SUMMARY'd K1TBL EIBMRLFM reads as SUPPL.
-    """
-    k1tbl = _build_k1tbl(k1tbl_cache)
-    k1tbx = build_k1tbx(k1tbl_cache)          # %INC PGM(KAMLIQX)
-    k3tbl = _build_k3tbl(k3tbl_cache, inst)
-    _ = build_k3tbl3(k3tbl_cache, reptdate)   # %INC PGM(KALMLIQ4) -- unused downstream
-
-    def _calc_remmth(matdt: date) -> float:
-        days_in_rpmth = rd_days[rpmth - 1]
-        mdday = min(matdt.day, days_in_rpmth)
-        remy, remm = matdt.year - rpyr, matdt.month - rpmth
-        remd = mdday - rpday
-        return remy * 12 + remm + remd / days_in_rpmth
-
-    ktbl_rows = []
-    for src in (k1tbl, k3tbl, k1tbx):
-        for r in src.iter_rows(named=True):
-            if not r.get("ITEM"):
-                continue
-            matdt = _parse_date(r.get("MATDT"))
-            # ORI30D is computed in the SAS source but never referenced
-            # downstream in KALMLIQ or EIBMRLFM -- omitted here.
-            if matdt is not None and (matdt - reptdate).days < 8:
-                remmth = 0.1
-            elif matdt is not None:
-                remmth = _calc_remmth(matdt)
+EXCLUDE_CUSTNO = [
+    14094942, 16557696, 3728510, 11335374, 16265490,
+    3523050, 11880426, 16771972, 15241330, 16500538,
+]
+
+# =============================================================================
+# HELPERS
+# =============================================================================
+def get_sas_session():
+    return saspy.SASsession(cfgname='default')
+
+def get_report_date():
+    d = datetime.now() - timedelta(days=1)
+    reptdate = datetime(d.year, d.month, d.day)
+    day = reptdate.day
+    nowk = '1' if day <= 8 else '2' if day <= 15 else '3' if day <= 22 else '4'
+    days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if reptdate.year % 4 == 0:
+        days_in_month[1] = 29
+    return {
+        'date': reptdate, 'nowk': nowk,
+        'mon': f"{reptdate.month:02d}", 'day': f"{reptdate.day:02d}",
+        'rdate': reptdate.strftime('%d%m%y'), 'rptdt': reptdate.strftime('%y%m%d'),
+        'year': reptdate.year, 'month': reptdate.month,
+        'day_of_month': day, 'days_in_month': days_in_month,
+    }
+
+def get_cust_from_code(code):
+    for cat, codes in CUST_MAP.items():
+        if code in codes:
+            return cat
+    return '29'
+
+def read_sas(path):
+    df_pd, _ = pyreadstat.read_sas7bdat(path)
+    df_pd.columns = [c.lower() for c in df_pd.columns]
+    return pl.from_pandas(df_pd)
+
+def read_parquet(path):
+    df = pl.read_parquet(path)
+    return df.rename({c: c.lower() for c in df.columns})
+
+# =============================================================================
+# TREASURY (K1/K3)
+# =============================================================================
+def process_treasury(rep_date):
+    """Build KTBLALL via KALMLIQ, then process K1TBL/K3TBL."""
+    ktbl, dist_summary = build_kalmliq(
+        k1tbl_cache=Path(PATHS['K1TBL_CACHE']),
+        k3tbl_cache=Path(PATHS['K3TBL_CACHE']),
+        reptdate=rep_date['date'].date(),
+        rpyr=rep_date['year'], rpmth=rep_date['month'], rpday=rep_date['day_of_month'],
+        rd_days=rep_date['days_in_month'],
+        inst=INST,
+    )
+    # ktbl has BNMCODE, AMOUNT, AMTUSD, AMTSGD
+    # SAS KTBLALL also carries a TBL column ('1' or '3') and other fields.
+    # We split K1/K3 via BNMCODE prefix ranges — in practice the source
+    # K1TBL cache has GW* columns and K3TBL has UT* columns; here we return
+    # the KTBLALL-equivalent frame and reconstruct K1TBL/K3TBL by matching
+    # BNMCODE prefixes 95/96 (K1) vs 93/94 (K3, alt prefixed).
+    records = []
+    for r in ktbl.iter_rows(named=True):
+        bnm = r['BNMCODE']
+        # K1-derived rows use PART 95/96; K3-derived rows are the alt 93/94 copies.
+        is_k3 = bnm[:2] in ('93', '94')
+        records.append({
+            'src': 'K3TBL' if is_k3 else 'K1TBL',
+            'bnmcode': bnm,
+            'amt': r['AMOUNT'],
+            'amtusd': r.get('AMTUSD', 0.0),
+            'amtsgd': r.get('AMTSGD', 0.0),
+        })
+    return records
+
+def process_cis_equity():
+    """CIS.CUST.DAILY.parquet for equity customer mapping."""
+    records = {}
+    try:
+        df = read_parquet(f"{PATHS['CIS']}CIS.CUST.DAILY.parquet")
+        df = df.filter((pl.col('acctcode') == 'EQC') & (pl.col('prisec') == 901))
+        for row in df.iter_rows(named=True):
+            newic = row.get('newic', '') or ''
+            if not newic or newic[:5] == '99999':
+                icno = f"{row.get('aliaskei', '') or ''}{row.get('custno', 0)}".replace(' ', '')
             else:
-                remmth = 0.1
-            amtusd = r.get("AMTUSD") or 0.0
-            amtsgd = r.get("AMTSGD") or 0.0
-            bnmcode = f"{r['PART']}{r['ITEM']}00{_remfmt(remmth)}0000Y"
-            ktbl_rows.append({"BNMCODE": bnmcode, "AMOUNT": r["AMOUNT"], "AMTUSD": amtusd, "AMTSGD": amtsgd})
-            alt = "93" if r["PART"] == "95" else "94"
-            ktbl_rows.append({"BNMCODE": alt + bnmcode[2:], "AMOUNT": r["AMOUNT"], "AMTUSD": amtusd, "AMTSGD": amtsgd})
+                icno = f"{row.get('aliaskei', '') or ''}{row.get('alias', '') or ''}".replace(' ', '')
+            records[row['acctno']] = {'cisno': row['custno'], 'cisname': row['custname'], 'icno': icno}
+    except Exception as e:
+        print(f"  CIS equity warning: {e}")
+    return records
 
-    ktbl = pl.DataFrame(ktbl_rows, schema=_KTBL_SCHEMA) if ktbl_rows else pl.DataFrame(schema=_KTBL_SCHEMA)
+def process_utsas(rep_date):
+    records = {}
+    utvar = ['dealref', 'dealtype', 'custfiss', 'custno', 'custname', 'custeqno', 'custid']
+    try:
+        for prefix in ['iutms', 'iutfx', 'iutrp']:
+            df = read_sas(f"{PATHS['EQUA']}{prefix}{rep_date['rptdt']}.sas7bdat")
+            keep = [c for c in utvar if c in df.columns]
+            if keep:
+                df = df.select(keep)
+                if 'custeqno' in df.columns:
+                    df = df.rename({'custeqno': 'acctno'})
+                for row in df.rows(named=True):
+                    records[row['dealref']] = row
+    except Exception as e:
+        print(f"  UTSAS warning: {e}")
+    return records
 
-    # ---- DISTRIBUTION PROFILE OF CUSTOMER DEPOSITS (PART 3) ----
-    con = duckdb.connect(database=":memory:")
-    non_interbank_repos = con.execute(f"""
-        SELECT GWSHN AS NAME, GWBALC AS AMOUNT
-        FROM read_parquet('{k1tbl_cache.as_posix()}')
-        WHERE GWCCY = 'MYR' AND GWMVT = 'P' AND GWMVTS = 'M'
-          AND SUBSTR(GWCTP,1,1) <> 'B' AND SUBSTR(GWDLP,2,2) IN ('MI','MT')
-    """).pl().with_columns(pl.lit("NON-INTERBANK REPOS").alias("CAT"))
-    non_interbank_nids = con.execute(f"""
-        SELECT (UTCUS || UTCLC) AS NAME, (UTAMOC - UTDPF) AS AMOUNT
-        FROM read_parquet('{k3tbl_cache.as_posix()}')
-        WHERE SUBSTR(UTCTP,1,1) <> 'B'
-          AND UTREF IN ('PFD','PLD','PSD','PZD','PDC')
-          AND UTSTY IN ('IFD','ILD','ISD','IZD','IDC','IDP','IZP')
-    """).pl().with_columns(pl.lit("NON-INTERBANK NIDS").alias("CAT"))
-    con.close()
+# =============================================================================
+# CORE BANKING
+# =============================================================================
+def process_core_banking(rep_date):
+    records = []
+    for tbl in ['fd', 'sa', 'ca', 'fcyca']:
+        try:
+            df = read_sas(f"{PATHS['LCR']}{tbl}{rep_date['day']}.sas7bdat")
+            for row in df.iter_rows(named=True):
+                custcd = row.get('custcdx' if tbl == 'fd' else 'custcd', 0)
+                if tbl == 'fd' and custcd is not None:
+                    custcd = f"{int(custcd):02d}"
+                cust = get_cust_from_code(custcd)
 
-    dist = pl.concat([non_interbank_repos, non_interbank_nids], how="diagonal_relaxed")
-    dist_summary = dist.group_by(["CAT", "NAME"]).agg(pl.col("AMOUNT").sum()) if len(dist) else pl.DataFrame(schema=_DIST_SCHEMA)
+                rem30d = row.get('rem30d', row.get('remmth', 1)) or row.get('remmth', 1)
+                remmth = row.get('remmth', 1)
 
-    return ktbl, dist_summary
+                bic = row['bnmcode'][:5]
+                if bic == '95317' and row.get('product') in MGIA_PRODUCTS:
+                    bic = '95315'
+
+                records.append({
+                    'src': tbl.upper(), 'bic': bic, 'bnmcode': f"{bic}{cust}020000Y",
+                    'cmmcode': f"{bic}{cust}{cmmfmt(remmth)}0000Y",
+                    'cur': row.get('curcode', 'MYR'), 'amt': row.get('amount', 0),
+                    'acctno': row.get('acctno'), 'custno': row.get('custno'),
+                    'rem30d': rem30d, 'remmth': remmth, 'ecp': '00',
+                    'product': row.get('product'), 'billerind': row.get('billerind', 'N'),
+                    'pbmerch': row.get('pbmerch', 'N'), 'intrate': row.get('intrate', 0),
+                    'oprrate': row.get('oprrate', 0), 'source': row.get('source', ''),
+                    'dtsigned': row.get('dtsigned'), 'intplan': row.get('intplan', 0),
+                    'sme_tag': row.get('sme_tag', ''), 'fdhold': row.get('fdhold', 'N'),
+                    'trx': row.get('trx', 0), 'sign': '', 'custcd': custcd,
+                    'branch': row.get('branch', ''), 'cdno': row.get('cdno', ''),
+                    'matdt': row.get('matdt'),
+                })
+        except Exception as e:
+            print(f"  {tbl} warning: {e}")
+    return records
+
+# =============================================================================
+# INSURED / UNINSURED SPLIT
+# =============================================================================
+def split_insurance(records):
+    result = []
+    icgrp_totals = {}
+    for r in records:
+        icgrp = r.get('icgrp', '')
+        if icgrp:
+            icgrp_totals[icgrp] = icgrp_totals.get(icgrp, 0) + r['amt']
+
+    for r in records:
+        toticbal = icgrp_totals.get(r.get('icgrp', ''), 0)
+        if toticbal > 250000:
+            curbal = r['amt']
+            insured = (curbal / toticbal) * 250000
+            if r['bnmcode'][5:7] in ('29', '39') and r.get('ecp') != '01':
+                r1 = r.copy()
+                r1['bnmcode'] = r['bnmcode'][:7] + '10' + r['bnmcode'][10:15]
+                result.append(r1)
+            else:
+                r1 = r.copy(); r1['amt'] = insured; result.append(r1)
+                r2 = r.copy(); r2['amt'] = curbal - insured
+                r2['bnmcode'] = r['bnmcode'][:7] + '10' + r['bnmcode'][10:15]
+                result.append(r2)
+        else:
+            result.append(r)
+    return result
+
+# =============================================================================
+# SAS OUTPUT
+# =============================================================================
+def write_sas7bdat(df_pl, out_path, sas):
+    df_pd = df_pl.to_pandas()
+    for col in df_pd.columns:
+        if df_pd[col].dtype == object:
+            df_pd[col] = df_pd[col].astype(str)
+    sas.df2sd(df_pd, table='_tmp_out', libref='WORK')
+    sas.submit(f"""
+    proc export data=WORK._tmp_out outfile="{out_path}"
+        dbms=sas7bdat replace;
+    run;
+    """)
+
+def write_text_file(df_pl, out_path, sas, header_lines=None):
+    df_pd = df_pl.to_pandas()
+    for col in df_pd.columns:
+        if df_pd[col].dtype == object:
+            df_pd[col] = df_pd[col].astype(str)
+    sas.df2sd(df_pd, table='_tmp_txt', libref='WORK')
+    hdr = "\n".join([f'    put "{l}";' for l in (header_lines or [])])
+    sas.submit(f"""
+    data _null_;
+        file "{out_path}";
+        {hdr}
+        set WORK._tmp_txt;
+        put _all_;
+    run;
+    """)
+
+def read_template():
+    items = []
+    try:
+        with open(PATHS['TEMPL'], 'r') as f:
+            for line in f:
+                if len(line) >= 7:
+                    item = line[0:5].strip()
+                    idesc = line[7:127].strip() if len(line) > 7 else ''
+                    if item:
+                        items.append({'item': item, 'idesc': idesc})
+    except Exception as e:
+        print(f"  Template warning: {e}")
+    return pl.DataFrame(items) if items else pl.DataFrame({'item': [], 'idesc': []})
+
+def read_walker_gl():
+    records = []
+    try:
+        with open(PATHS['WALK'], 'r') as f:
+            for line in f:
+                if len(line) >= 63:
+                    set_id = line[1:20].strip()
+                    amount_str = line[41:61].strip().replace(',', '')
+                    sign = line[61:62].strip()
+                    try:
+                        amount = float(amount_str) if amount_str else 0.0
+                    except ValueError:
+                        amount = 0.0
+                    if sign == '':
+                        amount = -1 * amount
+                    item = lcrcdigl_fmt(set_id)
+                    if item != '     ':
+                        records.append({'set_id': set_id, 'item': item, 'amount': amount})
+    except Exception as e:
+        print(f"  Walker GL warning: {e}")
+    return records
+
+# =============================================================================
+# MAIN
+# =============================================================================
+def main():
+    print("=" * 60)
+    print("EIIDLCRM - BNM LCR Reporting (Islamic Banking)")
+    print("=" * 60)
+
+    sas = get_sas_session()
+    rep_date = get_report_date()
+    print(f"\nDate: {rep_date['date'].strftime('%d/%m/%Y')} Week:{rep_date['nowk']} Mon:{rep_date['mon']}")
+
+    template = read_template()
+    print(f"Template: {len(template)} items")
+
+    cis_dict = process_cis_equity()
+    print(f"CIS: {len(cis_dict)} records")
+
+    # -------- TREASURY --------
+    print("\nTreasury...")
+    k_records = process_treasury(rep_date)
+    utsas_dict = process_utsas(rep_date)
+
+    treasury = []
+    for r in k_records:
+        if r.get('dealref') in utsas_dict:
+            r.update(utsas_dict[r['dealref']])
+
+        custfiss = r.get('custfiss', 0)
+        if isinstance(custfiss, str) and custfiss.isdigit():
+            custfiss = int(custfiss)
+        custno = r.get('custno') or ''
+        # SAS: IF CUSTFISS=. AND UTCTP NE '' THEN CUSTFISS=PUT(UTCTP,$CTYPE.);
+        if not custfiss and r.get('utctp'):
+            custfiss = format_ctype(r['utctp']).strip()
+            if custfiss.isdigit():
+                custfiss = int(custfiss)
+
+        cust = get_cust_from_code(custfiss) if isinstance(custfiss, int) else '29'
+        if custno in SPECIAL_39_NAMES:
+            cust = '39'
+
+        dtype = '01' if r.get('dealtype') == 'BQD' else '00'
+        bic = r['bnmcode'][:5] if 'bnmcode' in r else '     '
+        rem30d = r.get('rem30d', r.get('remmth', 1)) or r.get('remmth', 1)
+        remmth = r.get('remmth', 1)
+        if rem30d > 1 and remmth > 1:
+            rem30d = remmth
+
+        bnmcode = f"{bic}{cust}{remfmt(rem30d)}00{dtype}Y"
+        cmmcode = f"{bic}{cust}{cmmfmt(remmth)}00{dtype}Y"
+
+        if custno in SPECIAL_49_NAMES and cust == '49' and bic in ('95840','96840'):
+            if remfmt(r.get('ori30d', 0)) > '05' and remfmt(rem30d) > '01':
+                bnmcode = bnmcode[:9] + '0200Y'
+
+        icgrp = str(r.get('custid') or r.get('icno') or '').replace(' ', '')
+
+        treasury.append({
+            'src': 'TREASURY', 'bic': bic, 'bnmcode': bnmcode, 'cmmcode': cmmcode,
+            'cur': r.get('cur', 'MYR'), 'amt': r.get('amt', 0), 'icgrp': icgrp,
+            'rem30d': rem30d, 'remmth': remmth, 'custno': custno,
+            'dealtype': r.get('dealtype', ''), 'matdt': r.get('matdt'),
+        })
+
+    print(f"  Treasury: {len(treasury)} records")
+
+    equtot = {}
+    for r in treasury:
+        key = (r['bnmcode'], r['cur'])
+        equtot[key] = equtot.get(key, 0) + r['amt']
+
+    totequ = {}
+    for r in treasury:
+        if r['bic'][2:5].startswith('8'):
+            icgrp = r.get('icgrp', '')
+            if icgrp:
+                totequ[icgrp] = totequ.get(icgrp, 0) + r['amt']
+
+    # -------- BANKING --------
+    print("\nBanking...")
+    banking = process_core_banking(rep_date)
+
+    try:
+        cis_info = read_sas(f"{PATHS['LCR']}cisinfo.sas7bdat")
+        cis_dict2 = {r['acctno']: r for r in cis_info.rows(named=True)}
+    except Exception:
+        cis_dict2 = {}
+
+    try:
+        ecp_df = read_sas(f"{PATHS['LIST']}lcr_ecp.sas7bdat").unique(subset=['acctno'])
+        ecp_dict = {r['acctno']: r['ecp'] for r in ecp_df.rows(named=True)}
+    except Exception:
+        ecp_dict = {}
+
+    try:
+        sme_df = read_sas(f"{PATHS['LCRM']}sme.sas7bdat")
+        sme_dict = {r['acctno']: r.get('sme_tag', '') for r in sme_df.rows(named=True)}
+    except Exception:
+        sme_dict = {}
+
+    enhanced = []
+    for r in banking:
+        if r['acctno'] in cis_dict2:
+            ci = cis_dict2[r['acctno']]
+            r['newic'] = ci.get('newic')
+            r['oldic'] = ci.get('oldic')
+            r['custname'] = ci.get('custname', '')
+
+        if r['acctno'] in ecp_dict:
+            r['ecp'] = ecp_dict[r['acctno']]
+        if not r['ecp']:
+            r['ecp'] = '00'
+        if r['ecp'] == '01':
+            r['ecp'] = '01' if r['intrate'] < r['oprrate'] else '00'
+        if r['billerind'] == 'Y' or r['pbmerch'] == 'Y':
+            r['ecp'] = '01'
+
+        if r['acctno'] in sme_dict:
+            r['sme_tag'] = sme_dict[r['acctno']]
+
+        prod_list = [106,151,158,97,164,201,215]
+        intplan_list = list(range(400,420)) + list(range(600,659)) + \
+                       list(range(720,741)) + list(range(864,891)) + list(range(941,968))
+        if (r['product'] in prod_list or r['intplan'] in intplan_list or
+                (r['source'] != 'PGD' and r['dtsigned'] and
+                 (rep_date['date'] - r['dtsigned']).days >= 365)):
+            r['sign'] = 'R '
+
+        if r['custno'] in SPECIAL_39_NUMBERS:
+            r['cust'] = '39'
+
+        r['icgrp'] = str(r.get('newic') or r.get('oldic') or '').replace(' ', '')
+        enhanced.append(r)
+
+    icgrp_totals = {}
+    for r in enhanced:
+        icgrp_totals[r['icgrp']] = icgrp_totals.get(r['icgrp'], 0) + r['amt']
+
+    for r in enhanced:
+        r['toticbal'] = icgrp_totals.get(r['icgrp'], 0)
+
+        if (r['custno'] not in EXCLUDE_CUSTNO and r['bnmcode'][5:7] == '29') or r['custcd'] in ('72','73','74'):
+            totdp = r['toticbal'] + totequ.get(r['icgrp'], 0)
+            if totdp < 5000000:
+                r['bnmcode'] = f"{r['bic']}19{r['bnmcode'][7:]}"
+                r['cmmcode'] = f"{r['bic']}19{r['cmmcode'][7:]}"
+        elif r['bnmcode'][5:7] == '19' and r.get('sme_tag') == 'N':
+            totdp = r['toticbal'] + totequ.get(r['icgrp'], 0)
+            if totdp >= 5000000:
+                r['bnmcode'] = f"{r['bic']}29{r['bnmcode'][7:]}"
+                r['cmmcode'] = f"{r['bic']}29{r['cmmcode'][7:]}"
+
+        if r['bnmcode'][5:7] in ('08', '19'):
+            tag = '01' if r.get('trx') == 1 else ('02' if r.get('sign') in ('R','R ') else '03')
+            r['bnmcode'] = r['bnmcode'][:7] + tag + '0000Y'
+
+        if r['bic'] in ('95313','96313'):
+            r['bnmcode'] = r['bnmcode'][:9] + r['ecp'] + '00Y'
+            r['cmmcode'] = r['cmmcode'][:9] + r['ecp'] + '00Y'
+
+    print(f"  Banking: {len(enhanced)} records")
+
+    print("\nInsurance split...")
+    banking_split = split_insurance(enhanced)
+
+    all_data = treasury + banking_split
+    print(f"Total: {len(all_data)} records")
+
+    if not all_data:
+        print("\nWARNING: No records. Skipping report.")
+        sas.endsas()
+        return
+
+    df = pl.DataFrame(all_data)
+    df = df.with_columns((pl.col('amt') / 1000).round(2).alias('amt_k'))
+    summary = df.group_by(['bnmcode', 'cur']).agg(pl.col('amt_k').sum())
+    print(f"Summary: {len(summary)} codes")
+
+    # -------- REPORT (uses real $COLID / $LCRCDMNI / $LCRCDEQU) --------
+    report_data = []
+    for row in summary.rows(named=True):
+        bic = row['bnmcode'][:5]
+        cust = row['bnmcode'][5:7]
+        rem = row['bnmcode'][9:11]
+        ecp = row['bnmcode'][9:11]
+        dltype = row['bnmcode'][11:13]
+
+        colname = colid_fmt(bic).strip()
+
+        item = ''
+        if dltype == '01':
+            colname = colid_fmt('95830').strip()
+            item = lcrcdequ_fmt(cust).strip()
+            if item == 'B3.30' and rem == '02':
+                item = 'B6.30'
+        else:
+            combined = f"{cust}{rem}"  # SAS uses SUBSTR(BNMCODE,6,4)
+            if bic in ('95313','96313') and ecp == '01':
+                item = lcrcdmniopr_fmt(combined).strip()
+            if not item or item.strip() == '':
+                item = lcrcdmni_fmt(combined).strip()
+
+        if colname and item and item.strip() != '':
+            amt = abs(round(row['amt_k'], 2))
+            col_final = colname
+            if colname[:2] == 'FD' or colname[:3] in ('STD','STQ'):
+                col_final = f"{colname}{'1' if rem == '01' else '2'}"
+            elif colname[:3] in ('NID','IBB'):
+                for i in range(1,7):
+                    if remfmt(i) == rem:
+                        col_final = f"{colname}V{i}"
+                        break
+            report_data.append({'item': item, 'col': col_final, 'amt': amt})
+
+    if report_data:
+        rep_df = pl.DataFrame(report_data)
+        final = rep_df.group_by(['item', 'col']).agg(pl.col('amt').sum())
+        pivot = final.pivot(index='item', columns='col', values='amt', aggregate_function='sum')
+        pivot = pivot.fill_null(0)
+
+        # Derived columns -- real SAS derivations
+        if 'FD95315RM1' in pivot.columns and 'FD95315RM2' in pivot.columns:
+            pivot = pivot.with_columns(
+                (pl.col('FD95315RM1').fill_null(0) + pl.col('FD95315RM2').fill_null(0)).alias('FD95315RM'))
+        if 'FD95317RM1' in pivot.columns and 'FD95317RM2' in pivot.columns:
+            pivot = pivot.with_columns(
+                (pl.col('FD95317RM1').fill_null(0) + pl.col('FD95317RM2').fill_null(0)).alias('FD95317RM'))
+
+        for pref, target in [('STD95830V', 'STD95830'), ('STQ95830V', 'STQ95830'),
+                             ('NID95840V', 'NID95840'), ('IBB9X810V', 'IBB9X810')]:
+            cols = [c for c in pivot.columns if c.startswith(pref)]
+            if cols:
+                pivot = pivot.with_columns(pl.sum_horizontal(cols).alias(target))
+
+        totalv1 = [c for c in ['FD95315RM','FD95317RM1','SA95312RM','CA95313RM','CA96313FX',
+                                'STD95830','STQ95830','NID95840','IBB9X810V1','OTHSOURCE']
+                   if c in pivot.columns]
+        if totalv1:
+            pivot = pivot.with_columns(pl.sum_horizontal(totalv1).alias('TOTALV1'))
+
+        totaldp = [c for c in ['FD95315RM','FD95317RM','SA95312RM','CA95313RM','CA96313FX',
+                                'STD95830','STQ95830','NID95840','IBB9X810','OTHSOURCE']
+                   if c in pivot.columns]
+        if totaldp:
+            pivot = pivot.with_columns(pl.sum_horizontal(totaldp).alias('TOTALDP'))
+
+        # Walker GL
+        gl_records = read_walker_gl()
+        if gl_records:
+            gl_df = pl.DataFrame(gl_records)
+            gl_summary = gl_df.group_by('item').agg(pl.col('amount').sum().alias('othsource'))
+            gl_summary = gl_summary.with_columns((pl.col('othsource') / 1000).round(2).alias('othsource'))
+            pivot = pivot.join(gl_summary, on='item', how='left', suffix='_gl')
+            if 'othsource' in pivot.columns:
+                pivot = pivot.rename({'othsource': 'OTHSOURCE'})
+
+        if len(template) > 0:
+            merged = template.to_pandas().merge(pivot.to_pandas(), on='item', how='left')
+        else:
+            merged = pivot.to_pandas()
+
+        out_df = pl.from_pandas(merged)
+
+        sas_out = f"{PATHS['OUTPUT']}lcr{rep_date['day']}.sas7bdat"
+        write_sas7bdat(out_df, sas_out, sas)
+        print(f"Report (sas7bdat): lcr{rep_date['day']}.sas7bdat")
+
+        txt_out = f"{PATHS['OUTPUT']}lcr{rep_date['day']}.txt"
+        write_text_file(out_df, txt_out, sas, header_lines=[
+            'PUBLIC ISLAMIC BANK BERHAD',
+            f"LIQUIDITY COVERAGE RATIO (LCR) AS AT {rep_date['rdate']}",
+            '',
+        ])
+        print(f"Report (text): lcr{rep_date['day']}.txt")
+
+    print(f"\nTotal: RM {df['amt'].sum()/1000:,.0f}K")
+    print("=" * 60)
+    print("EIIDLCRM Complete")
+    sas.endsas()
+
+if __name__ == "__main__":
+    main()
