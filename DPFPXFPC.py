@@ -5,9 +5,12 @@ Includes MGIA, TD-I, and Islamic treasury products.
 """
 
 import polars as pl
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import calendar
+import pyreadstat
+import saspy
+import pandas as pd
 
 # =============================================================================
 # CONFIGURATION
@@ -48,12 +51,19 @@ SPECIAL_CUST = {
 MGIA_PRODUCTS = [302, 315, 394, 396]  # Products that map to MGIA
 
 # =============================================================================
+# SAS HELPER
+# =============================================================================
+def get_sas_session():
+    """Create a SAS session via saspy"""
+    return saspy.SASsession(cfgname='default')
+
+# =============================================================================
 # DATE UTILITIES
 # =============================================================================
 def get_report_date():
-    """Read report date and set macro variables"""
-    df = pl.read_parquet(f"{PATHS['DEPOSIT']}REPTDATE.parquet")
-    reptdate = df['REPTDATE'][0]
+    """Set report date as yesterday (datetime timedelta - 1)"""
+    reptdate = datetime.now() - timedelta(days=1)
+    reptdate = datetime(reptdate.year, reptdate.month, reptdate.day)  # strip time
     
     day = reptdate.day
     nowk = '1' if day <= 8 else '2' if day <= 15 else '3' if day <= 22 else '4'
@@ -110,27 +120,42 @@ def get_cust(code, mapping, special=None, is_custno=False):
     return '29'
 
 # =============================================================================
+# SAS7BDAT READER (all lowercase)
+# =============================================================================
+def read_sas(path):
+    """Read a sas7bdat file into a polars DataFrame with all lowercase column names."""
+    df_pd, meta = pyreadstat.read_sas7bdat(path)
+    df_pd.columns = [c.lower() for c in df_pd.columns]
+    return pl.from_pandas(df_pd)
+
+def read_sas_dict(path):
+    """Read sas7bdat and return list of dicts with lowercase keys."""
+    df_pd, meta = pyreadstat.read_sas7bdat(path)
+    df_pd.columns = [c.lower() for c in df_pd.columns]
+    return df_pd.to_dict(orient='records')
+
+# =============================================================================
 # TREASURY PROCESSING (KAPITI)
 # =============================================================================
 def process_treasury_k1k3(rep_date):
     """Process K1TBL and K3TBL from KTBLALL"""
     records = []
     try:
-        df = pl.read_parquet(f"{PATHS['LCR']}KTBLALL.parquet")
+        df = read_sas(f"{PATHS['LCR']}ktblall.sas7bdat")
         
         for row in df.iter_rows(named=True):
-            tbl = row.get('TBL')
+            tbl = row.get('tbl')
             if tbl == '1':
                 records.append({
-                    'src': 'K1TBL', 'bnmcode': row['BNMCODE'], 'cur': row['GWCCY'],
-                    'amt': row['GWAMT'], 'dealtype': row['GWDLP'], 'dealref': row['GWDLR'],
-                    'custfiss': row['GWC2R'], 'custno': None
+                    'src': 'K1TBL', 'bnmcode': row['bnmcode'], 'cur': row['gwccy'],
+                    'amt': row['gwamt'], 'dealtype': row['gwdlp'], 'dealref': row['gwdlr'],
+                    'custfiss': row['gwc2r'], 'custno': None
                 })
             elif tbl == '3':
                 records.append({
-                    'src': 'K3TBL', 'bnmcode': row['BNMCODE'], 'cur': row['UTCCY'],
-                    'amt': row['UTAMT'], 'dealtype': row['UTSTY'], 'dealref': row['UTDLR'],
-                    'custfiss': None, 'custno': row['UTCUS']
+                    'src': 'K3TBL', 'bnmcode': row['bnmcode'], 'cur': row['utccy'],
+                    'amt': row['utamt'], 'dealtype': row['utsty'], 'dealref': row['utdlr'],
+                    'custfiss': None, 'custno': row['utcus']
                 })
     except Exception as e:
         print(f"  K1/K3 warning: {e}")
@@ -140,18 +165,18 @@ def process_cis_equity():
     """Process CIS equity data for customer mapping"""
     records = {}
     try:
-        df = pl.read_parquet(f"{PATHS['CIS']}CUSTDLY.parquet")
-        df = df.filter((pl.col('ACCTCODE') == 'EQC') & (pl.col('PRISEC') == 901))
+        df = read_sas(f"{PATHS['CIS']}custdly.sas7bdat")
+        df = df.filter((pl.col('acctcode') == 'EQC') & (pl.col('prisec') == 901))
         
         for row in df.iter_rows(named=True):
-            newic = row.get('NEWIC', '')
+            newic = row.get('newic', '')
             if not newic or (len(newic) >= 5 and newic[:5] == '99999'):
-                icno = f"{row.get('ALIASKEY', '')}{row.get('CUSTNO', 0)}".replace(' ', '')
+                icno = f"{row.get('aliaskei', '')}{row.get('custno', 0)}".replace(' ', '')
             else:
-                icno = f"{row.get('ALIASKEY', '')}{row.get('ALIAS', '')}".replace(' ', '')
+                icno = f"{row.get('aliaskei', '')}{row.get('alias', '')}".replace(' ', '')
             
-            records[row['ACCTNO']] = {
-                'cisno': row['CUSTNO'], 'cisname': row['CUSTNAME'], 'icno': icno
+            records[row['acctno']] = {
+                'cisno': row['custno'], 'cisname': row['custname'], 'icno': icno
             }
     except Exception as e:
         print(f"  CIS equity warning: {e}")
@@ -160,18 +185,18 @@ def process_cis_equity():
 def process_utsas(rep_date):
     """Process UTSAS from EQUA Islamic tables"""
     records = {}
-    utvar = ['DEALREF', 'DEALTYPE', 'CUSTFISS', 'CUSTNO', 'CUSTNAME', 'CUSTEQNO', 'CUSTID']
+    utvar = ['dealref', 'dealtype', 'custfiss', 'custno', 'custname', 'custeqno', 'custid']
     
     try:
-        for prefix in ['IUTMS', 'IUTFX', 'IUTRP']:
-            df = pl.read_parquet(f"{PATHS['EQUA']}{prefix}{rep_date['rptdt']}.parquet")
+        for prefix in ['iutms', 'iutfx', 'iutrp']:
+            df = read_sas(f"{PATHS['EQUA']}{prefix}{rep_date['rptdt']}.sas7bdat")
             keep = [c for c in utvar if c in df.columns]
             if keep:
                 df = df.select(keep)
-                if 'CUSTEQNO' in df.columns:
-                    df = df.rename({'CUSTEQNO': 'ACCTNO'})
+                if 'custeqno' in df.columns:
+                    df = df.rename({'custeqno': 'acctno'})
                 for row in df.rows(named=True):
-                    records[row['DEALREF']] = row
+                    records[row['dealref']] = row
     except Exception as e:
         print(f"  UTSAS warning: {e}")
     return records
@@ -183,33 +208,33 @@ def process_core_banking(rep_date):
     """Process Islamic core banking: FD, SA, CA, FCYCA"""
     records = []
     
-    for tbl in ['FD', 'SA', 'CA', 'FCYCA']:
+    for tbl in ['fd', 'sa', 'ca', 'fcyca']:
         try:
-            df = pl.read_parquet(f"{PATHS['LCR']}{tbl}{rep_date['day']}.parquet")
+            df = read_sas(f"{PATHS['LCR']}{tbl}{rep_date['day']}.sas7bdat")
             
             for row in df.iter_rows(named=True):
-                custcd = row.get('CUSTCDX' if tbl == 'FD' else 'CUSTCD', 0)
+                custcd = row.get('custcdx' if tbl == 'fd' else 'custcd', 0)
                 cust = get_cust(custcd, CUST_MAP)
                 
-                rem30d = row.get('REM30D', row.get('REMMTH', 1)) or row.get('REMMTH', 1)
-                remmth = row.get('REMMTH', 1)
+                rem30d = row.get('rem30d', row.get('remmth', 1)) or row.get('remmth', 1)
+                remmth = row.get('remmth', 1)
                 
-                bic = row['BNMCODE'][:5]
-                if bic == '95317' and row.get('PRODUCT') in MGIA_PRODUCTS:
+                bic = row['bnmcode'][:5]
+                if bic == '95317' and row.get('product') in MGIA_PRODUCTS:
                     bic = '95315'  # MGIA mapping
                 
                 records.append({
-                    'src': tbl, 'bic': bic, 'bnmcode': f"{bic}{cust}020000Y",
+                    'src': tbl.upper(), 'bic': bic, 'bnmcode': f"{bic}{cust}020000Y",
                     'cmmcode': f"{bic}{cust}{fmt_mth(remmth)}0000Y",
-                    'cur': row.get('CURCODE', 'MYR'), 'amt': row.get('AMOUNT', 0),
-                    'acctno': row.get('ACCTNO'), 'custno': row.get('CUSTNO'),
+                    'cur': row.get('curcode', 'MYR'), 'amt': row.get('amount', 0),
+                    'acctno': row.get('acctno'), 'custno': row.get('custno'),
                     'rem30d': rem30d, 'remmth': remmth, 'ecp': '00',
-                    'product': row.get('PRODUCT'), 'billerind': row.get('BILLERIND', 'N'),
-                    'pbmerch': row.get('PBMERCH', 'N'), 'intrate': row.get('INTRATE', 0),
-                    'oprrate': row.get('OPRRATE', 0), 'source': row.get('SOURCE', ''),
-                    'dtsigned': row.get('DTSIGNED'), 'intplan': row.get('INTPLAN', 0),
-                    'sme_tag': row.get('SME_TAG', ''), 'fdhold': row.get('FDHOLD', 'N'),
-                    'trx': row.get('TRX', 0), 'sign': '', 'custcd': custcd
+                    'product': row.get('product'), 'billerind': row.get('billerind', 'N'),
+                    'pbmerch': row.get('pbmerch', 'N'), 'intrate': row.get('intrate', 0),
+                    'oprrate': row.get('oprrate', 0), 'source': row.get('source', ''),
+                    'dtsigned': row.get('dtsigned'), 'intplan': row.get('intplan', 0),
+                    'sme_tag': row.get('sme_tag', ''), 'fdhold': row.get('fdhold', 'N'),
+                    'trx': row.get('trx', 0), 'sign': '', 'custcd': custcd
                 })
         except Exception as e:
             print(f"  {tbl} warning: {e}")
@@ -260,12 +285,72 @@ def split_insurance(records):
     return result
 
 # =============================================================================
+# SAS OUTPUT WRITERS
+# =============================================================================
+def write_sas7bdat(df_pl, out_path, sas):
+    """Write a polars DataFrame to sas7bdat via saspy."""
+    df_pd = df_pl.to_pandas()
+    # Convert any problematic types
+    for col in df_pd.columns:
+        if df_pd[col].dtype == object:
+            df_pd[col] = df_pd[col].astype(str)
+    sas.df2sd(df_pd, table='_tmp_out', libref='WORK')
+    sas.submit(f"""
+    data _null_;
+        file "{out_path}";
+        set WORK._tmp_out;
+        put _all_;
+    run;
+    """)
+    # Use PROC EXPORT to write sas7bdat
+    sas.submit(f"""
+    proc export data=WORK._tmp_out
+        outfile="{out_path}"
+        dbms=sas7bdat
+        replace;
+    run;
+    """)
+
+def write_sas7bdat_via_proc(df_pl, out_path, sas):
+    """Write a polars DataFrame to sas7bdat using saspy + PROC EXPORT."""
+    df_pd = df_pl.to_pandas()
+    for col in df_pd.columns:
+        if df_pd[col].dtype == object:
+            df_pd[col] = df_pd[col].astype(str)
+    sas.df2sd(df_pd, table='_tmp_out', libref='WORK')
+    sas.submit(f"""
+    proc export data=WORK._tmp_out
+        outfile="{out_path}"
+        dbms=sas7bdat
+        replace;
+    run;
+    """)
+
+def write_text_file(df_pl, out_path, sas):
+    """Write a polars DataFrame to a text file via saspy."""
+    df_pd = df_pl.to_pandas()
+    for col in df_pd.columns:
+        if df_pd[col].dtype == object:
+            df_pd[col] = df_pd[col].astype(str)
+    sas.df2sd(df_pd, table='_tmp_txt', libref='WORK')
+    sas.submit(f"""
+    data _null_;
+        file "{out_path}";
+        set WORK._tmp_txt;
+        put _all_;
+    run;
+    """)
+
+# =============================================================================
 # MAIN
 # =============================================================================
 def main():
     print("=" * 60)
     print("EIIDLCRM - BNM LCR Reporting (Islamic Banking)")
     print("=" * 60)
+    
+    # SAS session
+    sas = get_sas_session()
     
     # Report date
     rep_date = get_report_date()
@@ -328,10 +413,10 @@ def main():
     
     # Merge CIS and ECP
     try:
-        cis_info = pl.read_parquet(f"{PATHS['LCR']}CISINFO.parquet")
-        cis_dict2 = {r['ACCTNO']: r for r in cis_info.rows(named=True)}
-        ecp_df = pl.read_parquet(f"{PATHS['LIST']}LCR_ECP.parquet").unique(subset=['ACCTNO'])
-        ecp_dict = {r['ACCTNO']: r['ECP'] for r in ecp_df.rows(named=True)}
+        cis_info = read_sas(f"{PATHS['LCR']}cisinfo.sas7bdat")
+        cis_dict2 = {r['acctno']: r for r in cis_info.rows(named=True)}
+        ecp_df = read_sas(f"{PATHS['LIST']}lcr_ecp.sas7bdat").unique(subset=['acctno'])
+        ecp_dict = {r['acctno']: r['ecp'] for r in ecp_df.rows(named=True)}
     except:
         cis_dict2, ecp_dict = {}, {}
     
@@ -344,8 +429,8 @@ def main():
         # CIS
         if r['acctno'] in cis_dict2:
             ci = cis_dict2[r['acctno']]
-            r['newic'] = ci.get('NEWIC')
-            r['oldic'] = ci.get('OLDIC')
+            r['newic'] = ci.get('newic')
+            r['oldic'] = ci.get('oldic')
         
         # ECP
         if r['acctno'] in ecp_dict:
@@ -459,22 +544,24 @@ def main():
         rep_df = pl.DataFrame(report_data)
         final = rep_df.group_by(['item', 'col']).agg([pl.col('amt').sum()])
         pivot = final.pivot(index='item', columns='col', values='amt', aggregate_function='sum')
-        pivot.write_parquet(f"{PATHS['OUTPUT']}LCR{rep_date['day']}.parquet")
-        print(f"Report: LCR{rep_date['day']}.parquet")
+        
+        # Output sas7bdat
+        sas_out = f"{PATHS['OUTPUT']}lcr{rep_date['day']}.sas7bdat"
+        write_sas7bdat_via_proc(pivot, sas_out, sas)
+        print(f"Report (sas7bdat): lcr{rep_date['day']}.sas7bdat")
+        
+        # Output text
+        txt_out = f"{PATHS['OUTPUT']}lcr{rep_date['day']}.txt"
+        write_text_file(pivot, txt_out, sas)
+        print(f"Report (text): lcr{rep_date['day']}.txt")
     
     # Summary
     total = df['amt'].sum() / 1000
     print(f"\nTotal: RM {total:,.0f}K")
     print("=" * 60)
-    print("âœ“ EIIDLCRM Complete")
+    print("EIIDLCRM Complete")
+    
+    sas.endsas()
 
 if __name__ == "__main__":
     main()
-
-
-
-all inputs are in sas7bdat sas dataset (except for walk.txt and templ.txt) and need to be in all lowercase.
-use pyreadstat to read.
-remove reptdate, use datetime timedelta - 1 instead. 
-output in sas7bdat and text files. 
-write out using saspy
