@@ -1,118 +1,296 @@
-KALMLIQ loaded from: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/KALMLIQ.py
-============================================================
-EIIDLCRM - BNM LCR Reporting (Islamic Banking)
-============================================================
-SAS Connection established. Subprocess id is 3997317
+*+--------------------------------------------------------------+
+ |  PROGRAM : KALMLIQ                                           |
+ |  DATE    : 22.07.98                                          |
+ |  REPORT  : NEW LIQUIDITY FRAMEWORK (KAPITI ITEMS)            |
+ +--------------------------------------------------------------+
+ |  DATE MODIFIED : 07-02-2002 (WBL)                            |
+ |  SMR/OTHERS    : JS                                          |
+ |  CHANGES MADE  : INCLUDE NEW MARKETABLE SECURITIES PRODUCT : |
+ |                  'PNB' (9363600XX0000Y, 9563600XX0000Y)      |
+ +--------------------------------------------------------------+;
+*;
+*----------------------------------------------------------------*
+*  BREAKDOWN BY PURE CONTRACTUAL MATURITY PROFILE (PART 2)       *
+*----------------------------------------------------------------*;
+DATA K1TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT GWCCY
+                 GWSHN GWC2R GWDLP GWDLR);
+   SET BNMK.K1TBL&REPTMON&NOWK (RENAME=(GWMDT=MATDT GWBALC=AMOUNT
+                                        GWSDT=ISSDT));
+   IF GWMVT = 'P';
+   IF GWOCY='XAU' THEN DELETE;
+   IF GWCCY='XAU' THEN DELETE;
+   IF GWOCY='XAT' THEN DELETE;
+   IF GWCCY='XAT' THEN DELETE;
+   IF GWCCY  = 'MYR' THEN DO;
+      PART = '95';
+      AMTUSD = 0;
+      AMTSGD = 0;
+      IF GWMVTS = 'M' THEN DO;
+         IF GWDLP IN ('BCD','BCI','BCS','BCQ','BCT','BCW','BQD')
+         THEN DO;
+            ITEM = '830'; OUTPUT;
+         END;
+         IF SUBSTR(GWCTP,1,1) = 'B' THEN
+            SELECT (GWDLP);
+               WHEN ('LO','LC','LF','LS','LOI','LSI','LSC','LSW',
+                     'FDA','FDB','FDS','FDL','LOC','LOW') DO;
+                  ITEM = '610'; OUTPUT;
+               END;
+               WHEN ('BO','BF','BOI','BFI','BSC','BSW','BOC','BOW') DO;
+                  ITEM = '810'; OUTPUT;
+               END;
+               OTHERWISE;
+            END;
+         SELECT (SUBSTR(GWDLP,2,2));
+            WHEN ('MI','MT') DO;
+               ITEM = '820';
+               OUTPUT;
+            END;
+            WHEN ('XI','XT') DO;
+               ITEM = '620'; OUTPUT;
+            END;
+            OTHERWISE;
+         END;
+      END;
+      /*
+      ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
+         'FF1','FF2') THEN DO;
+         IF GWMVTS = 'P' THEN ITEM = '711';
+         ELSE IF GWMVTS = 'S' THEN ITEM = '911';
+         OUTPUT;
+      END;
+      */
+   END;
+*;
+   ELSE DO;
+      PART = '96';
+      IF GWCCY = 'USD' THEN AMTUSD = AMOUNT;
+      ELSE AMTUSD = 0;
+      IF GWCCY = 'SGD' THEN AMTSGD = AMOUNT;
+      ELSE AMTSGD = 0;
+      IF GWMVTS = 'M' THEN DO;
+         IF SUBSTR(GWCTP,1,1) = 'B' AND GWCTP ^= 'BW' THEN
+            SELECT (GWDLP);
+               WHEN ('LO','LC','LS','LF','LOI','LSI','LSC','LOC',
+                    'FDA','FDB','FDS','FDL','LOW','LSW') DO;
+                  ITEM = '610'; OUTPUT;
+               END;
+               WHEN ('BC','BF','BO','BSC','BOW','BSW') DO;
+                  IF SUBSTR(GWSHN,1,6) ^= 'FCY-FD' THEN DO;
+                     ITEM = '810'; OUTPUT;
+                  END;
+               END;
+               WHEN ('BOC') DO;
+                     ITEM = '810'; OUTPUT;
+                  END;
+               OTHERWISE;
+            END;
+      END;
+      /*
+      ELSE IF GWDLP IN ('FXS','FXO','FXF','TS1','TS2','SF1','SF2',
+         'FF1','FF2') AND GWACT NOT IN ('RV','RW') THEN DO;
+         IF GWMVTS = 'P' THEN ITEM = '711';
+         ELSE IF GWMVTS = 'S' THEN ITEM = '911';
+         OUTPUT;
+      END;
+      */
+   END;
+*;
+*;
+%INC PGM(KAMLIQX);
+*;
+DATA K3TBL (KEEP=PART ITEM MATDT AMOUNT AMTUSD AMTSGD ISSDT UTCCY
+                 UTCUS UTCTP UTSTY UTDLR UTDLP);
+   RETAIN PART '95';
+   SET BNMK.K3TBL&REPTMON&NOWK;
+   AMOUNT = UTAMOC - UTDPF;
+   IF UTSTY='IDC' THEN AMOUNT=UTAMOC + UTDPF;
+   IF &INST='PBB' THEN DO;
+      IF UTCCY = 'USD' THEN AMTUSD = AMOUNT;
+      ELSE AMTUSD = 0;
+      IF UTCCY = 'SGD' THEN AMTSGD = AMOUNT;
+      ELSE AMTSGD = 0;
+   END;
+   ELSE DO;
+      AMTUSD = 0;
+      AMTSGD = 0;
+   END;
+*  IF UTREF IN ('INV','TRD','TAP') THEN DO;
+   IF UTREF IN ('INV','DRI','DLG','AFSLIQ','AFSBOND','IAFSLIQ','AFS',
+                'IAFS') THEN DO;
+      SELECT (UTSTY);
+         WHEN ('CB1','CB2','CF1','CF2','CNT','MGS','MTB','BNB','BNN',
+               'ITB','SAC','BMN','BMC','BMF','SCD','SCM',
+               'CMB','MGI','SMC') DO;
+            ITEM = '631';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = AMOUNT + UTAICT;
+            END;
+            OUTPUT;
+         END;
+
+         WHEN ('SDC') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = (UTAMOC*(UTPCP/100))+UTDPEY+UTDPE;
+            END;
+            OUTPUT;
+         END;
+         WHEN ('LDC') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = AMOUNT + UTAICT;
+            END;
+            OUTPUT;
+         END;
+
+         WHEN ('SLD','SSD') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = (UTAMOC*(UTPCP/100))+UTAICY+UTAIT;
+            END;
+            OUTPUT;
+         END;
+
+         WHEN ('SFD','SZD') DO;
+            ITEM = '632';
+            IF &INST='PBB' THEN DO;
+               AMOUNT = AMOUNT + UTAICT;
+            END;
+            OUTPUT;
+         END;
+
+         WHEN ('SBA') DO;
+            IF UTDLP NOT IN ('MOS','MSS') THEN DO;
+               ITEM = '633'; OUTPUT;
+            END;
+         END;
+         WHEN ('ISB','DHB','KHA','PNB') DO;
+            ITEM = '636'; OUTPUT;
+         END;
+         WHEN ('IDS') DO;
+            ITEM = '635'; OUTPUT;
+         END;
+         WHEN ('DBD') DO;
+            ITEM = '634'; OUTPUT;
+         END;
+         WHEN ('DMB','DBD','GRL','MTL','RUL') DO;
+            ITEM = '635'; OUTPUT;
+         END;
+         WHEN ('PBA') DO;
+            IF UTDLP IN ('MOS','MSS') THEN DO;
+               ITEM = '850'; OUTPUT;
+            END;
+         END;
+         OTHERWISE;
+      END;
+   END;
+   ELSE IF UTREF IN ('PFD','PLD','PSD','PZD','PDC') THEN DO;
+      IF UTSTY IN ('IFD','ILD','ISD','IZD','IDC','IDP','IZP') THEN DO;
+         ITEM = '840'; OUTPUT;
+      END;
+   END;
+*  ELSE IF UTREF IN ('IINV','ITRD','ITAP') THEN DO;
+   ELSE IF UTREF IN ('IINV','IDRI','IDLG') THEN DO;
+      IF UTSTY IN ('SBA') AND UTDLP IN ('IOP') THEN DO;
+         ITEM = '633'; OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('SDC','LDC') THEN DO;
+         ITEM  = '632'; OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('CB1','CB2','CF1','CF2','CNT','MGI',
+                        'ITB','SAC','BMN','BMC','BMF','SCD','SCM',
+                        'MGS','MTB','BNB','BNN','CMB','SMC') THEN DO;
+         ITEM = '631';
+         IF &INST='PBB' THEN DO;
+            AMOUNT = AMOUNT + UTAICT;
+         END;
+         OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('ISB','IDS','IBZ','ICN') THEN DO;
+              IF UTMM1 = 'GGB' THEN ITEM = '636';
+              ELSE IF UTMM1 = 'NGB' THEN ITEM = '635';
+              AMOUNT = AMOUNT + UTAICT;
+              OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('DHB','KHA') THEN DO;
+         ITEM = '636'; OUTPUT;
+      END;
+      ELSE IF UTSTY IN ('DBD') THEN DO;
+         ITEM = '634'; OUTPUT;
+      END;
+   END;
+   IF UTSTY IN ('SIP') THEN DO;
+      ITEM='610'; OUTPUT;
+   END;
+*;
+%INC PGM(KALMLIQ4);
+*;
+
+DATA KTBL (KEEP=BNMCODE AMOUNT AMTUSD AMTSGD) KTBLALL;
+   %DCLVAR
+   SET K1TBL(IN=A) K3TBL(IN=B) K1TBX;
+   IF      A THEN TBL = '1';
+   ELSE IF B THEN TBL = '3';
+   IF _N_ = 1 THEN DO;
+      SET REPTDATE;
+      RPYR  = YEAR(REPTDATE);
+      RPMTH = MONTH(REPTDATE);
+      RPDAY = DAY(REPTDATE);
+      IF MOD(RPYR,4) = 0 THEN RD2 = 29;
+   END;
+   IF ITEM ^= ' ';
+   IF MATDT - REPTDATE < 8 THEN REMMTH = 0.1;
+   ELSE DO;
+      %REMMTH
+   END;
+   IF MATDT - ISSDT    < 8 THEN ORI30D = 0.1;
+   ELSE                         ORI30D = (MATDT-ISSDT)/30;
+   BNMCODE = PART||ITEM||'00'||PUT(REMMTH,REMFMT.)||'0000Y';
+   OUTPUT;
+   *------------------------------------------------*
+   *  DUPLICATE ANOTHER SET FOR PART 1              *
+   *  95 = PART 2-RM, 96 = PART 2-FX                *
+   *  93 = PART 1-RM, 94 = PART 1-FX                *
+   *------------------------------------------------*;
+   IF PART = '95' THEN SUBSTR(BNMCODE,1,2) = '93';
+   ELSE SUBSTR(BNMCODE,1,2) = '94';
+   OUTPUT;
+RUN;
 
 
-Date: 05/10/2026 Week:1 Mon:10
-Template: 70 items
-  CIS file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/cis/CIS_CUST_DAILY.parquet
-CIS: 17611 records
-
-Treasury...
-  k1tbl: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/bnmk/k1tbl101.sas7bdat
-  k3tbl: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/bnmk/k3tbl101.sas7bdat
-  k1tbl exists: True
-  k3tbl exists: True
-    [_build_k1tbl] reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/bnmk/k1tbl101.sas7bdat
-    [_build_k1tbl] columns: ['REPTDATE', 'GWAB', 'GWAN', 'GWAS', 'GWAPP', 'GWACS', 'GWBALA', 'GWBALC', 'GWPAIA', 'GWPAIC', 'GWSHN', 'GWCTP', 'GWACT', 'GWACD', 'GWSAC', 'GWNANC', 'GWCNAL', 'GWCCY', 'GWCNAR', 'GWCNAP', 'GWDIAA', 'GWDIAC', 'GWCIAA', 'GWCIAC', 'GWRATD', 'GWRATC', 'GWDIPA', 'GWDIPC', 'GWCIPA', 'GWCIPC', 'GWPL1D', 'GWPL2D', 'GWPL1C', 'GWPL2C', 'GWPALA', 'GWPALC', 'GWDLP', 'GWDLR', 'GWSDT', 'GWRDT', 'GWRRT', 'GWPDT', 'GWPRT', 'GWPCM', 'GWMOTC', 'GWMRTC', 'GWMRT', 'GWMDT', 'GWMCM', 'GWMWM', 'GWMVT', 'GWMVTS', 'GWSRC', 'GWUC1', 'GWUC2', 'GWC2R', 'GWAMAP', 'GWEXR', 'GWOPT', 'GWOCY', 'GWCBD']
-    [_build_k1tbl] rows: 753
-    [_build_k1tbl] GWMDT sample: [None, 24471.0, 24441.0]
-    [_build_k1tbl] GWMDT dtype: Float64
-    [_build_k1tbl] after filter GWMVT='P': 752
-    [_build_k1tbl] emitted rows: 741
-    [_build_k3tbl] reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/bnmk/k3tbl101.sas7bdat
-    [_build_k3tbl] columns: ['REPTDATE', 'UTSTY', 'UTREF', 'UTBRNM', 'UTDLP', 'UTDLR', 'UTSMN', 'UTCUS', 'UTCLC', 'UTCTP', 'UTFCV', 'UTIDT', 'UTLCD', 'UTNCD', 'UTMDT', 'UTCBD', 'UTCPR', 'UTQDS', 'UTPCP', 'UTAMOC', 'UTDPF', 'UTAICT', 'UTAICY', 'UTAIT', 'UTDPET', 'UTDPEY', 'UTDPE', 'UTASN', 'UTOSD', 'UTCA2', 'UTSAC', 'UTCNAP', 'UTCNAR', 'UTCNAL', 'UTCCY', 'UTAMTS', 'UTMM1', 'MATDT', 'ISSDT', 'DDATE', 'XDATE']
-    [_build_k3tbl] rows: 2297
-    [_build_k3tbl] MATDT sample: [None, 24997.0, 25056.0]
-    [_build_k3tbl] MATDT dtype: Float64
-    [_build_k3tbl] emitted rows: 501
-    [build_kalmliq] ktbl rows: 2484
-  Raw k_records: 2484
-  UTSAS records: 3003
-  Treasury: 2484 records
-
-Banking...
-  fd: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/lcr/fd05.sas7bdat
-  sa: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/lcr/sa05.sas7bdat
-  ca: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/lcr/ca05.sas7bdat
-  fcyca: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/lcr/fcyca05.sas7bdat
-  Banking: 2783004 records
-
-Insurance split...
-Total: 2991741 records
-Summary: 41 codes
-============================================================
-SAS LOG -- write_sas7bdat -> /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLCRM/lcr05.sas7bdat:
-
-76   ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
-76 ! graphics on / outputfmt=png;
-NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
-77   
-78   
-79           libname _outdir "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLCRM";
-NOTE: Libref _OUTDIR was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLCRM
-80   
-81           data _outdir.lcr05;
-82               set WORK._tmp_out;
-83           run;
-NOTE: There were 70 observations read from the data set WORK._TMP_OUT.
-NOTE: The data set _OUTDIR.LCR05 has 70 observations and 6 variables.
-NOTE: DATA statement used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
-84   
-85           libname _outdir clear;
-NOTE: Libref _OUTDIR has been deassigned.
-86   
-87   
-88   ods html5 (id=saspy_internal) close;ods listing;
-
-============================================================
-Report (sas7bdat): lcr05.sas7bdat
-============================================================
-SAS LOG -- write_text_file -> /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLCRM/lcr05.txt:
-
-145  ods listing close;ods html5 (id=saspy_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue; ods
-145! graphics on / outputfmt=png;
-NOTE: Writing HTML5(SASPY_INTERNAL) Body file: STDOUT
-146  
-147  
-148          data _null_;
-149              file "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLCRM/lcr05.txt";
-150                  put "PUBLIC ISLAMIC BANK BERHAD";
-151      put "LIQUIDITY COVERAGE RATIO (LCR) AS AT 051026";
-152      put "";
-153              set WORK._tmp_txt;
-154              put _all_;
-155          run;
-NOTE: The file "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLCRM/lcr05.txt" is:
-      Filename=/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLCRM/lcr05.txt,
-      Owner Name=sas_edw_dev,
-      Group Name=sas_edw_dev_grp,
-      Access Permission=-rw-rw-r--,
-      Last Modified=06Oct2026:18:43:16
-
-NOTE: 283 records were written to the file "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLCRM/lcr05.txt".
-      The minimum record length was 1.
-      The maximum record length was 194.
-NOTE: There were 70 observations read from the data set WORK._TMP_TXT.
-NOTE: DATA statement used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
-156  
-157  
-158  ods html5 (id=saspy_internal) close;ods listing;
-
-============================================================
-Report (text): lcr05.txt
-
-Total: RM 142,009,936K
-============================================================
-EIIDLCRM Complete
-SAS Connection terminated. Subprocess id was 3997317
+*----------------------------------------------------------------*
+*  DISTRIBUTION PROFILE OF CUSTOMER DEPOSITS (PART 3)            *
+*----------------------------------------------------------------*;
+*------------------------------------------------*
+*  NON-INTERBANK REPOS                           *
+*------------------------------------------------*;
+DATA K1TBL;
+   KEEP CAT NAME AMOUNT;
+   LENGTH CAT $20 NAME $24;
+   SET BNMK.K1TBL&REPTMON&NOWK (RENAME=(GWBALC=AMOUNT GWSHN=NAME));
+   IF GWCCY = 'MYR' AND GWMVT = 'P' AND GWMVTS = 'M';
+   IF SUBSTR(GWCTP,1,1) ^= 'B' AND SUBSTR(GWDLP,2,2) IN ('MI','MT');
+   CAT = 'NON-INTERBANK REPOS';
+*;
+*------------------------------------------------*
+*  NON-INTERBANK NIDS                            *
+*------------------------------------------------*;
+DATA K3TBL;
+   KEEP CAT NAME AMOUNT;
+   LENGTH CAT $20 NAME $24;
+   SET BNMK.K3TBL&REPTMON&NOWK;
+   IF SUBSTR(UTCTP,1,1) ^= 'B' AND
+      UTREF IN ('PFD','PLD','PSD','PZD','PDC') AND
+      UTSTY IN ('IFD','ILD','ISD','IZD','IDC','IDP','IZP');
+   AMOUNT = UTAMOC - UTDPF;
+   NAME = UTCUS || UTCLC;
+   CAT = 'NON-INTERBANK NIDS';
+*;
+PROC APPEND BASE=K1TBL DATA=K3TBL;
+*;
+PROC SUMMARY DATA=K1TBL NWAY;
+   CLASS CAT NAME;
+   VAR AMOUNT;
+   OUTPUT OUT=K1TBL (DROP=_TYPE_ _FREQ_) SUM=;
+RUN;
