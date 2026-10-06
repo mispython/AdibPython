@@ -2,7 +2,7 @@ KALMLIQ loaded from: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/KALMLIQ.py
 ============================================================
 EIIDLCRM - BNM LCR Reporting (Islamic Banking)
 ============================================================
-SAS Connection established. Subprocess id is 3938403
+SAS Connection established. Subprocess id is 3942624
 
 
 Date: 05/10/2026 Week:1 Mon:10
@@ -38,7 +38,6 @@ Banking...
   sa: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/lcr/sa05.sas7bdat
   ca: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/lcr/ca05.sas7bdat
   fcyca: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLCRM/lcr/fcyca05.sas7bdat
-  ecp warning: File /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIMLCRM/list/lcr_ecp.sas7bdat does not exist!
   Banking: 2783004 records
 
 Insurance split...
@@ -54,7 +53,4 @@ Report (text): lcr05.txt
 Total: RM 142,009,936K
 ============================================================
 EIIDLCRM Complete
-SAS Connection terminated. Subprocess id was 3938403
-
-
-note that i do have lcr_ecp dataset, just ignore that one
+SAS Connection terminated. Subprocess id was 3942624
