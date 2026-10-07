@@ -1,206 +1,111 @@
-"""
-diag.py — identify the correct columns and values for the
-          EIBDP169 / DPIPGS population filter.
-"""
+[   50.98s] read MNITB_CURRENT (1132084 rows, 149 cols)
 
-from __future__ import annotations
-from pathlib import Path
-from datetime import date, datetime, timedelta
-import time
-import polars as pl
-import pyreadstat
+========================================================================
+A. PIBB population count
+========================================================================
+rows with ENTITY_CD == 'PIBB': 164563
+total rows                     : 1132084
 
+========================================================================
+B. Which columns contain values in 16901..16908  (PIBB only)
+========================================================================
+  CREDIT                              hits=       2   sample distinct=[16901.5, 16908.059999999998]
+  LEDGBAL                             hits=       7   sample distinct=[16901.879999999997, 16902.629999999997, 16903.25, 16903.329999999998, 16903.399999999998, 16903.92, 16906.73]
+  AVGAMT                              hits=       4   sample distinct=[16902.0, 16907.0, 16908.0]
+  CURBAL                              hits=       7   sample distinct=[16901.879999999997, 16902.629999999997, 16903.25, 16903.329999999998, 16903.399999999998, 16903.92, 16906.73]
+  MTDLOWBA                            hits=       6   sample distinct=[16901.059999999998, 16903.25, 16903.92, 16905.649999999998, 16907.51, 16907.809999999998]
+  YTDAVAMT                            hits=       4   sample distinct=[16901.85, 16902.21, 16907.39, 16907.98]
+  BDATE                               hits=      65   sample distinct=[16901.0, 16903.0, 16904.0, 16905.0, 16906.0, 16907.0, 16908.0]
+  ODXSAMT                             hits=       8   sample distinct=[16901.879999999997, 16902.629999999997, 16903.25, 16903.329999999998, 16903.92, 16904.079999999998, 16906.73, 16906.829999999998]
+  EXODDATE                            hits=       1   sample distinct=[16903.0]
+  TEMPODDT                            hits=       1   sample distinct=[16903.0]
+  ACCPROF                             hits=       1   sample distinct=[16907.814694875]
+  MTDAVBAL                            hits=      10   sample distinct=[16901.850322580645, 16902.724838709677, 16903.25, 16903.265483870968, 16903.520322580644, 16903.92, 16904.24935483871, 16904.439677419352, 16905.620322580646, 16908.54806451613]
+  OPENDT                              hits=      69   sample distinct=[16901.0, 16903.0, 16904.0, 16905.0, 16907.0, 16908.0]
+  MTD_REPAID_AMT                      hits=       1   sample distinct=[16903.32]
+  MTD_DISBURSED_AMT                   hits=       1   sample distinct=[16901.8]
+  MTD_REPAY_TYPE10_AMT                hits=       1   sample distinct=[16903.32]
+  DPMTDBAL                            hits=       8   sample distinct=[16901.53, 16903.51, 16903.989999999998, 16905.0, 16905.539999999997, 16906.78, 16907.449999999997, 16908.949999999997]
+  CURBALUS                            hits=       5   sample distinct=[16901.8699136485, 16903.266447164064, 16904.78971236876, 16904.797167174005, 16907.82630303783]
+  L_DEP                               hits=       4   sample distinct=[16901.359999999997, 16905.0, 16906.0, 16908.649999999998]
 
-# =========================
-# Paths (same as main job)
-# =========================
-MNITB_CURRENT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/intg_dp_acct_current_m{reptmon}.sas7bdat")
-LIMIT_OVERDFT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/intg_dp_acct_overdft_m{reptmon}.sas7bdat")
+========================================================================
+C. Which columns contain the value 169  (PIBB only)
+========================================================================
+  BRANCH                              hits=     242
+  DEBIT                               hits=      15
+  CREDIT                              hits=      10
+  INTYTD                              hits=       5
+  LEDGBAL                             hits=      42
+  AVGAMT                              hits=      61
+  INTPD                               hits=       5
+  CURBAL                              hits=      42
+  MTDLOWBA                            hits=      61
+  ODINTCHR                            hits=       2
+  YTDAVAMT                            hits=      64
+  ODXSAMT                             hits=      42
+  AVGBAL                              hits=       3
+  ACCPROF                             hits=       2
+  INTRSTPD                            hits=       2
+  MTDAVBAL                            hits=      52
+  INTPDPYR                            hits=       4
+  DSR                                 hits=       1
+  DPMTDBAL                            hits=      30
+  CURBALUS                            hits=      77
+  L_DEP                               hits=      39
 
+========================================================================
+D. Distinct values of every plausible 'code' column  (PIBB only)
+========================================================================
+  PRODUCT                             n_unique_total=56  sample=[5.0, 13.0, 15.0, 20.0, 22.0, 23.0, 24.0, 25.0, 32.0, 64.0, 66.0, 67.0, 70.0, 73.0, 74.0, 80.0, 81.0, 92.0, 93.0, 94.0, 96.0, 97.0, 98.0, 126.0, 127.0, 128.0, 136.0, 139.0, 140.0, 141.0, 146.0, 149.0, 160.0, 161.0, 162.0, 163.0, 164.0, 166.0, 168.0, 171.0]
+  CENSUST                             n_unique_total=5  sample=[0.0, 302.0, 303.0, 306.0, 1000.0]
+  SECTOR                              n_unique_total=243  sample=[0.0, 10.0, 20.0, 30.0, 40.0, 41.0, 50.0, 111.0, 119.0, 121.0, 129.0, 211.0, 212.0, 220.0, 230.0, 315.0, 321.0, 322.0, 329.0, 410.0, 420.0, 430.0, 1079.0, 1111.0, 1112.0, 1113.0, 1114.0, 1115.0, 1116.0, 1117.0, 1119.0, 1120.0, 1130.0, 1140.0, 1150.0, 1200.0, 1300.0, 1400.0, 1811.0, 2100.0]
+  PURPOSE                             n_unique_total=22  sample=['', '1', '2', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'P']
+  DEPTYPE                             n_unique_total=2  sample=['D', 'N']
+  CUSTCODE                            n_unique_total=41  sample=[0.0, 1.0, 2.0, 3.0, 12.0, 30.0, 33.0, 35.0, 37.0, 38.0, 39.0, 40.0, 41.0, 42.0, 43.0, 44.0, 46.0, 47.0, 48.0, 49.0, 51.0, 59.0, 60.0, 61.0, 62.0, 63.0, 66.0, 67.0, 68.0, 71.0, 72.0, 73.0, 74.0, 75.0, 77.0, 78.0, 79.0, 86.0, 92.0, 95.0]
+  USER2                               n_unique_total=11  sample=['', '0', 'A', 'B', 'C', 'E', 'F', 'K', 'L', 'M', 'N']
+  USER3                               n_unique_total=15  sample=['', '0', '1', '2', '3', '4', '5', '6', '7', '8', 'A', 'C', 'E', 'G', 'S']
+  SERVICE                             n_unique_total=7  sample=[92.0, 100.0, 103.0, 107.0, 108.0, 196.0, 210.0]
+  ODSTAT                              n_unique_total=4  sample=['', 'AC', 'NI', 'RI']
+  TRACKCD                             n_unique_total=157780  sample=['', '0', '00', '00000', '000000', '0000000', '0000000000', '000000000522', '0000000079T', '0000000116T', '0000000918T', '000000096P', '0000002583C', '0000003703T', '0000005494T', '0000006348T', '0000010228T', '0000011356T', '0000011686T', '0000013705T', '0000013835T', '0000014419T', '0000014637T', '0000014869T', '00000149790T', '0000015284T', '0000023020', '0000023056T', '0000024718T', '0000025487T', '0000025872T', '0000026276T', '0000028880T', '0000028929T', '0000029403T', '0000029991T', '0000030039T', '0000032390T', '000003475D', '0000035561C']
+  ACCPROF                             n_unique_total=8670  sample=[0.0, 0.002173478, 0.004106848999999999, 0.009236142999999999, 0.009760273, 0.01047945, 0.015824656, 0.016646572, 0.016917797, 0.020980819999999997, 0.023586325999999998, 0.024143492, 0.024164377999999997, 0.027846563999999997, 0.028198626999999997, 0.037635818999999994, 0.038242551, 0.057860546, 0.06780205299999999, 0.069305724, 0.070502737, 0.079071226, 0.08676163599999999, 0.09100541799999999, 0.093260186, 0.100777779, 0.11444985199999999, 0.127188545, 0.12797821599999998, 0.128300063, 0.146204478, 0.173595846, 0.20288490299999998, 0.22767681599999998, 0.27146552399999996, 0.279167059, 0.308958886, 0.31242943999999995, 0.374768487, 0.39337533399999997]
+  RISKCODE                            n_unique_total=6  sample=['', '0', '1', '2', '3', '4']
+  ORGCODE                             n_unique_total=5  sample=['0', '000', '001', '002', '100']
+  ORGTYPE                             n_unique_total=11  sample=['', '0', '1', '2', '3', '4', '5', '6', '7', '8', 'A']
+  CURCODE                             n_unique_total=6  sample=['AUD', 'EUR', 'GBP', 'MYR', 'NZD', 'USD']
+  INTCYCODE                           n_unique_total=2  sample=['000', '030']
+  STATCD                              n_unique_total=201  sample=['B*********', 'B*****B***', 'B*****V***', 'B*****W***', 'B**H******', 'B**S******', 'B**S**W***', 'BA********', 'BC********', 'BT********', 'BTD*******', 'BTD***2***', 'BTD***O***', 'BTD***Q***', 'BTD***QV**', 'BTD***R***', 'BTD***RW**', 'BTD***V***', 'BTD***VW**', 'BTD***W***', 'BTDF******', 'BTDG******', 'BTDS**W***', 'BTN*******', 'C*********', 'C*****2***', 'C*****R***', 'C*****V***', 'C*****W***', 'C**F******', 'CA********', 'CC********', 'CT********', 'CX********', 'O*********', 'O*****2***', 'O*****A***', 'O*****AV**', 'O*****B***', 'O*****CU**']
+  INDUSTRIAL_SECTOR_CD                n_unique_total=897  sample=['', '0000', '01111', '01113', '01119', '01120', '01131', '01132', '01133', '01134', '01135', '01136', '01140', '01191', '01199', '01221', '01223', '01226', '01227','01228', '01229', '01251', '01252', '01259', '01261', '01262', '01263', '01273', '01281', '01282', '01291', '01292', '01293', '01294', '01299', '01301', '01304', '01411', '01412', '01441']
+  REPAY_TYPE_CD                       n_unique_total=3  sample=['', '00', '10']
+  STMT_CYCLE                          n_unique_total=11  sample=['1', '11', '15', '182', '200', '30', '4', '401', '6', '7', '90']
+  PB_ENTERPRISE_PACKAGE_CD            n_unique_total=6  sample=['', '1', '2', '4', '5', '6']
+  BONUTYPE                            n_unique_total=1  sample=[0.0]
 
-# =========================
-# Date macros (same as main job)
-# =========================
-repdate = datetime.today().date() - timedelta(days=1)
-REPTMON = f"{repdate.month:02d}"
-MNITB_CURRENT = Path(str(MNITB_CURRENT).format(reptmon=REPTMON))
-LIMIT_OVERDFT = Path(str(LIMIT_OVERDFT).format(reptmon=REPTMON))
+========================================================================
+E. Combined hits: CENSUST in range grouped by PRODUCT  (PIBB only)
+========================================================================
+shape: (5, 2)
+┌─────────┬────────┐
+│ CENSUST ┆ n      │
+│ ---     ┆ ---    │
+│ f64     ┆ u32    │
+╞═════════╪════════╡
+│ 0.0     ┆ 164552 │
+│ 302.0   ┆ 2      │
+│ 303.0   ┆ 1      │
+│ 306.0   ┆ 6      │
+│ 1000.0  ┆ 2      │
+└─────────┴────────┘
 
+========================================================================
+F. LIMIT.OVERDFT — ENTITY_CD and key columns
+========================================================================
+[   17.59s] read LIMIT_OVERDFT (1093140 rows)
+LIMIT.OVERDFT:  PIBB rows = 155944  /  total = 1093140
+LMTSTART distinct sample (PIBB): [None, 17685.0, 17749.0, 18520.0, 18633.0, 18717.0, 19081.0, 19082.0, 19106.0, 19203.0, 19279.0, 19304.0, 19361.0, 19437.0, 19451.0, 19555.0, 19576.0, 19585.0, 19691.0, 19780.0]
+LMTSTART > 0 rows: 7802
+LMTSTART > 0 that parse as valid MMDDYY8: 0
 
-# =========================
-# Helpers
-# =========================
-def _t0():  return time.perf_counter()
-def _stage(t, msg):  print(f"[{time.perf_counter()-t:8.2f}s] {msg}", flush=True)
-
-
-def read_sas7bdat(path: Path) -> pl.DataFrame:
-    df_pd, _meta = pyreadstat.read_sas7bdat(str(path))
-    return pl.from_pandas(df_pd)
-
-
-# =========================
-# 1. Load MNITB.CURRENT
-# =========================
-t = _t0()
-mnitb = read_sas7bdat(MNITB_CURRENT)
-_stage(t, f"read MNITB_CURRENT ({mnitb.height} rows, {len(mnitb.columns)} cols)")
-
-print()
-print("=" * 72)
-print("A. PIBB population count")
-print("=" * 72)
-
-# Normalise ENTITY_CD once
-if "ENTITY_CD" in mnitb.columns:
-    mnitb = mnitb.with_columns(
-        pl.col("ENTITY_CD").cast(pl.Utf8).str.strip_chars().alias("ENTITY_CD")
-    )
-
-pib = mnitb.filter(pl.col("ENTITY_CD") == "PIBB")
-print(f"rows with ENTITY_CD == 'PIBB': {pib.height}")
-print(f"total rows                     : {mnitb.height}")
-
-
-print()
-print("=" * 72)
-print("B. Which columns contain values in 16901..16908  (PIBB only)")
-print("=" * 72)
-
-CENSUS_LO, CENSUS_HI = 16901, 16908
-
-# Scan every column; try casting to Int64 and matching the range
-for c in mnitb.columns:
-    try:
-        s = pib.select(pl.col(c).cast(pl.Int64, strict=False)).to_series()
-        hits = ((s >= CENSUS_LO) & (s <= CENSUS_HI)).sum()
-        if hits and hits > 0:
-            # show a few distinct matching values
-            sample = (
-                pib.filter(pl.col(c).cast(pl.Int64, strict=False).is_between(CENSUS_LO, CENSUS_HI))
-                   .select(pl.col(c).unique().sort().head(20))
-                   .to_series().to_list()
-            )
-            print(f"  {c:35s} hits={hits:>8d}   sample distinct={sample}")
-    except Exception:
-        pass
-
-
-print()
-print("=" * 72)
-print("C. Which columns contain the value 169  (PIBB only)")
-print("=" * 72)
-
-for c in mnitb.columns:
-    # Only try numeric-friendly columns
-    try:
-        s = pib.select(pl.col(c).cast(pl.Int64, strict=False)).to_series()
-        hits = (s == 169).sum()
-        if hits and hits > 0:
-            print(f"  {c:35s} hits={hits:>8d}")
-    except Exception:
-        pass
-
-
-print()
-print("=" * 72)
-print("D. Distinct values of every plausible 'code' column  (PIBB only)")
-print("=" * 72)
-
-# Look at the usual suspects individually
-SUSPECTS = [
-    "PRODUCT", "CENSUST", "SECTOR", "PURPOSE", "DEPTYPE", "CUSTCODE",
-    "USER2", "USER3", "SERVICE", "ODSTAT", "TRACKCD", "ACCPROF",
-    "RISKCODE", "ORGCODE", "ORGTYPE", "CURCODE", "INTCYCODE",
-    "CURRCODE", "CUSTCODE", "STATCD", "DEPTYPE", "PRODUCT",
-    "INDUSTRIAL_SECTOR_CD", "REPAY_TYPE_CD", "STMT_CYCLE",
-    "PB_ENTERPRISE_PACKAGE_CD", "BONUTYPE", "TRACKCD",
-]
-
-seen = set()
-for c in SUSPECTS:
-    if c in mnitb.columns and c not in seen:
-        seen.add(c)
-        try:
-            uniq = (
-                pib.select(pl.col(c).unique().sort().head(40))
-                   .to_series().to_list()
-            )
-            print(f"  {c:35s} n_unique_total={pib.select(pl.col(c).n_unique()).item()}  sample={uniq}")
-        except Exception as e:
-            print(f"  {c:35s} <error: {e}>")
-
-
-print()
-print("=" * 72)
-print("E. Combined hits: CENSUST in range grouped by PRODUCT  (PIBB only)")
-print("=" * 72)
-
-# Even though CENSUST in the extract doesn't contain 16901..16908, this
-# shows what PRODUCT codes go with whatever CENSUST range DOES exist,
-# as a sanity check on the coding scheme.
-try:
-    grp = (
-        pib
-        .group_by("CENSUST")
-        .agg(pl.len().alias("n"))
-        .sort("CENSUST")
-    )
-    print(grp.head(50))
-except Exception as e:
-    print("  <error:", e, ">")
-
-
-print()
-print("=" * 72)
-print("F. LIMIT.OVERDFT — ENTITY_CD and key columns")
-print("=" * 72)
-
-t = _t0()
-odlmt = read_sas7bdat(LIMIT_OVERDFT)
-_stage(t, f"read LIMIT_OVERDFT ({odlmt.height} rows)")
-
-if "ENTITY_CD" in odlmt.columns:
-    odlmt = odlmt.with_columns(
-        pl.col("ENTITY_CD").cast(pl.Utf8).str.strip_chars().alias("ENTITY_CD")
-    )
-
-pib_o = odlmt.filter(pl.col("ENTITY_CD") == "PIBB")
-print(f"LIMIT.OVERDFT:  PIBB rows = {pib_o.height}  /  total = {odlmt.height}")
-
-if "LMTSTART" in odlmt.columns:
-    # Sample of LMTSTART to confirm the MMDDYY8 encoding
-    sample = (
-        pib_o.select(pl.col("LMTSTART").unique().sort().head(20))
-             .to_series().to_list()
-    )
-    print(f"LMTSTART distinct sample (PIBB): {sample}")
-
-    # How many rows have LMTSTART > 0?
-    gt0 = pib_o.filter(pl.col("LMTSTART") > 0).height
-    print(f"LMTSTART > 0 rows: {gt0}")
-
-    # How many parse as valid MMDDYY8?
-    from datetime import datetime as _dt
-    def _parse(x):
-        try:
-            xi = int(x)
-            if xi <= 0: return None
-            s = f"{xi:011d}"[:8]
-            try:
-                return _dt.strptime(s, "%m%d%Y").date()
-            except ValueError:
-                return _dt.strptime(s, "%m%d%y").date()
-        except Exception:
-            return None
-
-    ok = pib_o.filter(pl.col("LMTSTART") > 0).select(
-        pl.col("LMTSTART").map_elements(_parse, return_dtype=pl.Date).is_not_null().sum()
-    ).item()
-    print(f"LMTSTART > 0 that parse as valid MMDDYY8: {ok}")
-
-
-print()
-print("=" * 72)
-print("DONE")
-print("=" * 72)
+========================================================================
+DONE
+========================================================================
