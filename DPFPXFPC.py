@@ -1,111 +1,565 @@
-[   50.98s] read MNITB_CURRENT (1132084 rows, 149 cols)
+from __future__ import annotations
 
-========================================================================
-A. PIBB population count
-========================================================================
-rows with ENTITY_CD == 'PIBB': 164563
-total rows                     : 1132084
+from pathlib import Path
+from datetime import date, datetime, timedelta
+import time
+import polars as pl
+import pandas as pd
+import pyreadstat
+import duckdb  # noqa: F401
+import pyarrow as pa  # noqa: F401
+import pyarrow.parquet as pq  # noqa: F401
 
-========================================================================
-B. Which columns contain values in 16901..16908  (PIBB only)
-========================================================================
-  CREDIT                              hits=       2   sample distinct=[16901.5, 16908.059999999998]
-  LEDGBAL                             hits=       7   sample distinct=[16901.879999999997, 16902.629999999997, 16903.25, 16903.329999999998, 16903.399999999998, 16903.92, 16906.73]
-  AVGAMT                              hits=       4   sample distinct=[16902.0, 16907.0, 16908.0]
-  CURBAL                              hits=       7   sample distinct=[16901.879999999997, 16902.629999999997, 16903.25, 16903.329999999998, 16903.399999999998, 16903.92, 16906.73]
-  MTDLOWBA                            hits=       6   sample distinct=[16901.059999999998, 16903.25, 16903.92, 16905.649999999998, 16907.51, 16907.809999999998]
-  YTDAVAMT                            hits=       4   sample distinct=[16901.85, 16902.21, 16907.39, 16907.98]
-  BDATE                               hits=      65   sample distinct=[16901.0, 16903.0, 16904.0, 16905.0, 16906.0, 16907.0, 16908.0]
-  ODXSAMT                             hits=       8   sample distinct=[16901.879999999997, 16902.629999999997, 16903.25, 16903.329999999998, 16903.92, 16904.079999999998, 16906.73, 16906.829999999998]
-  EXODDATE                            hits=       1   sample distinct=[16903.0]
-  TEMPODDT                            hits=       1   sample distinct=[16903.0]
-  ACCPROF                             hits=       1   sample distinct=[16907.814694875]
-  MTDAVBAL                            hits=      10   sample distinct=[16901.850322580645, 16902.724838709677, 16903.25, 16903.265483870968, 16903.520322580644, 16903.92, 16904.24935483871, 16904.439677419352, 16905.620322580646, 16908.54806451613]
-  OPENDT                              hits=      69   sample distinct=[16901.0, 16903.0, 16904.0, 16905.0, 16907.0, 16908.0]
-  MTD_REPAID_AMT                      hits=       1   sample distinct=[16903.32]
-  MTD_DISBURSED_AMT                   hits=       1   sample distinct=[16901.8]
-  MTD_REPAY_TYPE10_AMT                hits=       1   sample distinct=[16903.32]
-  DPMTDBAL                            hits=       8   sample distinct=[16901.53, 16903.51, 16903.989999999998, 16905.0, 16905.539999999997, 16906.78, 16907.449999999997, 16908.949999999997]
-  CURBALUS                            hits=       5   sample distinct=[16901.8699136485, 16903.266447164064, 16904.78971236876, 16904.797167174005, 16907.82630303783]
-  L_DEP                               hits=       4   sample distinct=[16901.359999999997, 16905.0, 16906.0, 16908.649999999998]
+import PBBLNFMT
 
-========================================================================
-C. Which columns contain the value 169  (PIBB only)
-========================================================================
-  BRANCH                              hits=     242
-  DEBIT                               hits=      15
-  CREDIT                              hits=      10
-  INTYTD                              hits=       5
-  LEDGBAL                             hits=      42
-  AVGAMT                              hits=      61
-  INTPD                               hits=       5
-  CURBAL                              hits=      42
-  MTDLOWBA                            hits=      61
-  ODINTCHR                            hits=       2
-  YTDAVAMT                            hits=      64
-  ODXSAMT                             hits=      42
-  AVGBAL                              hits=       3
-  ACCPROF                             hits=       2
-  INTRSTPD                            hits=       2
-  MTDAVBAL                            hits=      52
-  INTPDPYR                            hits=       4
-  DSR                                 hits=       1
-  DPMTDBAL                            hits=      30
-  CURBALUS                            hits=      77
-  L_DEP                               hits=      39
 
-========================================================================
-D. Distinct values of every plausible 'code' column  (PIBB only)
-========================================================================
-  PRODUCT                             n_unique_total=56  sample=[5.0, 13.0, 15.0, 20.0, 22.0, 23.0, 24.0, 25.0, 32.0, 64.0, 66.0, 67.0, 70.0, 73.0, 74.0, 80.0, 81.0, 92.0, 93.0, 94.0, 96.0, 97.0, 98.0, 126.0, 127.0, 128.0, 136.0, 139.0, 140.0, 141.0, 146.0, 149.0, 160.0, 161.0, 162.0, 163.0, 164.0, 166.0, 168.0, 171.0]
-  CENSUST                             n_unique_total=5  sample=[0.0, 302.0, 303.0, 306.0, 1000.0]
-  SECTOR                              n_unique_total=243  sample=[0.0, 10.0, 20.0, 30.0, 40.0, 41.0, 50.0, 111.0, 119.0, 121.0, 129.0, 211.0, 212.0, 220.0, 230.0, 315.0, 321.0, 322.0, 329.0, 410.0, 420.0, 430.0, 1079.0, 1111.0, 1112.0, 1113.0, 1114.0, 1115.0, 1116.0, 1117.0, 1119.0, 1120.0, 1130.0, 1140.0, 1150.0, 1200.0, 1300.0, 1400.0, 1811.0, 2100.0]
-  PURPOSE                             n_unique_total=22  sample=['', '1', '2', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'P']
-  DEPTYPE                             n_unique_total=2  sample=['D', 'N']
-  CUSTCODE                            n_unique_total=41  sample=[0.0, 1.0, 2.0, 3.0, 12.0, 30.0, 33.0, 35.0, 37.0, 38.0, 39.0, 40.0, 41.0, 42.0, 43.0, 44.0, 46.0, 47.0, 48.0, 49.0, 51.0, 59.0, 60.0, 61.0, 62.0, 63.0, 66.0, 67.0, 68.0, 71.0, 72.0, 73.0, 74.0, 75.0, 77.0, 78.0, 79.0, 86.0, 92.0, 95.0]
-  USER2                               n_unique_total=11  sample=['', '0', 'A', 'B', 'C', 'E', 'F', 'K', 'L', 'M', 'N']
-  USER3                               n_unique_total=15  sample=['', '0', '1', '2', '3', '4', '5', '6', '7', '8', 'A', 'C', 'E', 'G', 'S']
-  SERVICE                             n_unique_total=7  sample=[92.0, 100.0, 103.0, 107.0, 108.0, 196.0, 210.0]
-  ODSTAT                              n_unique_total=4  sample=['', 'AC', 'NI', 'RI']
-  TRACKCD                             n_unique_total=157780  sample=['', '0', '00', '00000', '000000', '0000000', '0000000000', '000000000522', '0000000079T', '0000000116T', '0000000918T', '000000096P', '0000002583C', '0000003703T', '0000005494T', '0000006348T', '0000010228T', '0000011356T', '0000011686T', '0000013705T', '0000013835T', '0000014419T', '0000014637T', '0000014869T', '00000149790T', '0000015284T', '0000023020', '0000023056T', '0000024718T', '0000025487T', '0000025872T', '0000026276T', '0000028880T', '0000028929T', '0000029403T', '0000029991T', '0000030039T', '0000032390T', '000003475D', '0000035561C']
-  ACCPROF                             n_unique_total=8670  sample=[0.0, 0.002173478, 0.004106848999999999, 0.009236142999999999, 0.009760273, 0.01047945, 0.015824656, 0.016646572, 0.016917797, 0.020980819999999997, 0.023586325999999998, 0.024143492, 0.024164377999999997, 0.027846563999999997, 0.028198626999999997, 0.037635818999999994, 0.038242551, 0.057860546, 0.06780205299999999, 0.069305724, 0.070502737, 0.079071226, 0.08676163599999999, 0.09100541799999999, 0.093260186, 0.100777779, 0.11444985199999999, 0.127188545, 0.12797821599999998, 0.128300063, 0.146204478, 0.173595846, 0.20288490299999998, 0.22767681599999998, 0.27146552399999996, 0.279167059, 0.308958886, 0.31242943999999995, 0.374768487, 0.39337533399999997]
-  RISKCODE                            n_unique_total=6  sample=['', '0', '1', '2', '3', '4']
-  ORGCODE                             n_unique_total=5  sample=['0', '000', '001', '002', '100']
-  ORGTYPE                             n_unique_total=11  sample=['', '0', '1', '2', '3', '4', '5', '6', '7', '8', 'A']
-  CURCODE                             n_unique_total=6  sample=['AUD', 'EUR', 'GBP', 'MYR', 'NZD', 'USD']
-  INTCYCODE                           n_unique_total=2  sample=['000', '030']
-  STATCD                              n_unique_total=201  sample=['B*********', 'B*****B***', 'B*****V***', 'B*****W***', 'B**H******', 'B**S******', 'B**S**W***', 'BA********', 'BC********', 'BT********', 'BTD*******', 'BTD***2***', 'BTD***O***', 'BTD***Q***', 'BTD***QV**', 'BTD***R***', 'BTD***RW**', 'BTD***V***', 'BTD***VW**', 'BTD***W***', 'BTDF******', 'BTDG******', 'BTDS**W***', 'BTN*******', 'C*********', 'C*****2***', 'C*****R***', 'C*****V***', 'C*****W***', 'C**F******', 'CA********', 'CC********', 'CT********', 'CX********', 'O*********', 'O*****2***', 'O*****A***', 'O*****AV**', 'O*****B***', 'O*****CU**']
-  INDUSTRIAL_SECTOR_CD                n_unique_total=897  sample=['', '0000', '01111', '01113', '01119', '01120', '01131', '01132', '01133', '01134', '01135', '01136', '01140', '01191', '01199', '01221', '01223', '01226', '01227','01228', '01229', '01251', '01252', '01259', '01261', '01262', '01263', '01273', '01281', '01282', '01291', '01292', '01293', '01294', '01299', '01301', '01304', '01411', '01412', '01441']
-  REPAY_TYPE_CD                       n_unique_total=3  sample=['', '00', '10']
-  STMT_CYCLE                          n_unique_total=11  sample=['1', '11', '15', '182', '200', '30', '4', '401', '6', '7', '90']
-  PB_ENTERPRISE_PACKAGE_CD            n_unique_total=6  sample=['', '1', '2', '4', '5', '6']
-  BONUTYPE                            n_unique_total=1  sample=[0.0]
+# =========================
+# Diagnostics
+# =========================
+_T0 = time.perf_counter()
+def stage(msg: str) -> None:
+    global _T0
+    now = time.perf_counter()
+    print(f"[{now - _T0:8.2f}s] {msg}", flush=True)
+    _T0 = now
 
-========================================================================
-E. Combined hits: CENSUST in range grouped by PRODUCT  (PIBB only)
-========================================================================
-shape: (5, 2)
-┌─────────┬────────┐
-│ CENSUST ┆ n      │
-│ ---     ┆ ---    │
-│ f64     ┆ u32    │
-╞═════════╪════════╡
-│ 0.0     ┆ 164552 │
-│ 302.0   ┆ 2      │
-│ 303.0   ┆ 1      │
-│ 306.0   ┆ 6      │
-│ 1000.0  ┆ 2      │
-└─────────┴────────┘
 
-========================================================================
-F. LIMIT.OVERDFT — ENTITY_CD and key columns
-========================================================================
-[   17.59s] read LIMIT_OVERDFT (1093140 rows)
-LIMIT.OVERDFT:  PIBB rows = 155944  /  total = 1093140
-LMTSTART distinct sample (PIBB): [None, 17685.0, 17749.0, 18520.0, 18633.0, 18717.0, 19081.0, 19082.0, 19106.0, 19203.0, 19279.0, 19304.0, 19361.0, 19437.0, 19451.0, 19555.0, 19576.0, 19585.0, 19691.0, 19780.0]
-LMTSTART > 0 rows: 7802
-LMTSTART > 0 that parse as valid MMDDYY8: 0
+# =========================
+# Paths (adjust to your env)
+# =========================
+MNITB_CURRENT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/intg_dp_acct_current_m{reptmon}.sas7bdat")
+LIMIT_OVERDFT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/intg_dp_acct_overdft_m{reptmon}.sas7bdat")
+CISDP_DEPOSIT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/cisdp/deposit.sas7bdat")
 
-========================================================================
-DONE
-========================================================================
+GP3_KLUNION = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/GP3.txt")
+COLL_FILE   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_{yyyy}{mm}{dd}")
+DESC_FILE   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_{yyyy}{mm}{dd}")
+MICR_FILE   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDP169/PIBBMICR.txt")
+
+
+# =========================
+# Helpers
+# =========================
+def sas_days_to_date(days: int) -> date:
+    return date(1960, 1, 1).fromordinal(date(1960, 1, 1).toordinal() + int(days))
+
+
+def ddmmyy8_string(d: date) -> str:
+    return d.strftime("%d/%m/%y")
+
+
+def _parse_mmddyy8_str(s: str | None) -> int:
+    if not s:
+        return 0
+    try:
+        try:
+            d = datetime.strptime(s, "%m%d%Y").date()
+        except ValueError:
+            d = datetime.strptime(s, "%m%d%y").date()
+        return (d - date(1960, 1, 1)).days
+    except Exception:
+        return 0
+
+
+def parse_mmddyy8_z11_prefix_to_date(x) -> date | None:
+    """SAS: INPUT(SUBSTR(PUT(x, Z11.), 1, 8), MMDDYY8.)"""
+    if x is None:
+        return None
+    try:
+        xi = int(x)
+    except Exception:
+        return None
+    if xi <= 0:
+        return None
+    try:
+        s = f"{xi:011d}"[:8]
+        try:
+            return datetime.strptime(s, "%m%d%Y").date()
+        except ValueError:
+            return datetime.strptime(s, "%m%d%y").date()
+    except Exception:
+        return None
+
+
+def parse_sas_or_mmddyy_to_sas_days(x) -> int:
+    """
+    Decode a SAS date field that may be stored either as:
+      - a raw SAS day number (days since 1960-01-01), e.g. 17685
+      - an MMDDYY-encoded integer, e.g. 12252024 or 122524
+
+    Returns SAS days (int), or 0 if the value is invalid/zero.
+    Uses magnitude: SAS days are typically 0..40000 (1960..2070).
+    MMDDYY-encoded values are >= 1e5 (6-digit MMDDYY) or 1e7 (8-digit MMDDYYYY).
+    """
+    if x is None:
+        return 0
+    try:
+        xi = int(x)
+    except Exception:
+        return 0
+    if xi <= 0:
+        return 0
+    # Looks like an MMDDYY-encoded int?
+    if xi >= 100000:              # 6+ digits -> treat as MMDDYY / MMDDYYYY
+        return _parse_mmddyy8_str(f"{xi:011d}"[:8])
+    # Otherwise assume already SAS days
+    return xi
+
+
+def mdy_safe(m, d, y):
+    try:
+        return date(int(y), int(m), int(d))
+    except Exception:
+        return None
+
+
+def month_end_of_sas_days(days_int: int) -> date:
+    base = sas_days_to_date(days_int)
+    if base.month in (1, 3, 5, 7, 8, 10, 12):
+        last = 31
+    elif base.month in (4, 6, 9, 11):
+        last = 30
+    else:
+        last = 29 if (base.year % 4 == 0) else 28
+    return date(base.year, base.month, last)
+
+
+def month_end_str(d: date | None) -> str:
+    if d is None:
+        return "          "
+    if d.month in (1, 3, 5, 7, 8, 10, 12):
+        last = 31
+    elif d.month in (4, 6, 9, 11):
+        last = 30
+    else:
+        last = 29 if (d.year % 4 == 0) else 28
+    e = date(d.year, d.month, last)
+    return f"{e.day:02d}/{e.month:02d}/{e.year:04d}"
+
+
+def _month_end_from_sas_days(days: int | None) -> date | None:
+    if days is None or int(days) <= 0:
+        return None
+    return month_end_of_sas_days(int(days) + 90)
+
+
+def _ndays_lookup(n: int) -> int:
+    try:
+        return int(PBBLNFMT.NDAYS(n))
+    except Exception:
+        return 0
+
+
+def _norm_acctno(col: str):
+    return pl.col(col).cast(pl.Utf8).str.strip_chars()
+
+
+def _norm_branch(col: str):
+    return pl.col(col).cast(pl.Utf8).str.strip_chars()
+
+
+# =========================
+# Readers
+# =========================
+def read_sas7bdat(path: Path) -> pl.DataFrame:
+    df_pd, _meta = pyreadstat.read_sas7bdat(str(path))
+    return pl.from_pandas(df_pd)
+
+
+def read_fixed_width(path: Path,
+                     specs: list[tuple[str, int, int, pl.DataType]],
+                     encoding: str = "utf-8") -> pl.DataFrame:
+    """
+    Fixed-width reader: whole-file read + vectorised str.slice.
+    specs: (name, start_1based, width, dtype)
+    """
+    raw_bytes = path.read_bytes()
+    text = raw_bytes.decode(encoding, errors="replace")
+    lines = text.splitlines()
+
+    base = pl.DataFrame({"_line": lines})
+
+    exprs = []
+    for name, start1, width, dtype in specs:
+        start0 = start1 - 1
+        sl = pl.col("_line").cast(pl.Utf8).str.slice(start0, width).str.strip_chars()
+        if dtype == pl.Utf8:
+            exprs.append(sl.alias(name))
+        else:
+            exprs.append(
+                pl.when((sl == "") | sl.is_null())
+                  .then(None)
+                  .otherwise(sl)
+                  .cast(dtype, strict=False)
+                  .alias(name)
+            )
+
+    return base.select(exprs)
+
+
+# =========================
+# Derive macro-like vars from (today - 1)
+# =========================
+repdate = datetime.today().date() - timedelta(days=1)
+
+REPTMON   = f"{repdate.month:02d}"
+REPTMON1  = f"{(12 if repdate.month == 1 else repdate.month - 1):02d}"
+RDATE     = ddmmyy8_string(repdate)
+SDATE_INT = (repdate - date(1960, 1, 1)).days
+SDATE     = f"{SDATE_INT:05d}"
+
+MNITB_CURRENT = Path(str(MNITB_CURRENT).format(reptmon=REPTMON))
+LIMIT_OVERDFT = Path(str(LIMIT_OVERDFT).format(reptmon=REPTMON))
+
+yyyy = f"{repdate.year:04d}"
+mm   = f"{repdate.month:02d}"
+dd   = f"{repdate.day:02d}"
+COLL_FILE = Path(str(COLL_FILE).format(yyyy=yyyy, mm=mm, dd=dd))
+DESC_FILE = Path(str(DESC_FILE).format(yyyy=yyyy, mm=mm, dd=dd))
+
+stage("computed date macros")
+
+
+# =========================
+# CA = MNITB.CURRENT filter
+#   SAS: IF PRODUCT=169 AND (16901<=CENSUST<=16908);
+# =========================
+mnitb = read_sas7bdat(MNITB_CURRENT)
+stage(f"read MNITB_CURRENT ({mnitb.height} rows)")
+
+# Normalise ENTITY_CD / PRODUCT / CENSUST defensively
+if "ENTITY_CD" in mnitb.columns:
+    mnitb = mnitb.with_columns(
+        pl.col("ENTITY_CD").cast(pl.Utf8).str.strip_chars().alias("ENTITY_CD")
+    )
+if "PRODUCT" in mnitb.columns:
+    mnitb = mnitb.with_columns(
+        pl.col("PRODUCT").cast(pl.Int64, strict=False).alias("PRODUCT")
+    )
+if "CENSUST" in mnitb.columns:
+    mnitb = mnitb.with_columns(
+        pl.col("CENSUST").cast(pl.Int64, strict=False).alias("CENSUST")
+    )
+
+# SAS original filter — literal
+ca = (
+    mnitb
+    .filter(
+        (pl.col("PRODUCT") == 169) &
+        (pl.col("CENSUST").is_between(16901, 16908))
+    )
+)
+stage(f"filtered CA ({ca.height} rows)")
+
+if ca.height == 0:
+    # SAS semantics against the current raw extract yields 0 rows.
+    # Point MNITB_CURRENT at the MNITB.CURRENT *view's* output to fix this.
+    raise SystemExit(
+        "CA is empty. The SAS filter (PRODUCT=169 AND 16901<=CENSUST<=16908) "
+        "produces 0 rows in this raw extract — the view remaps these codes upstream. "
+        "Point MNITB_CURRENT at MNITB.CURRENT's output (or apply the view's SQL first)."
+    )
+
+
+# =========================
+# Merge LIMIT.OVERDFT (ODLMT) — filter ENTITY_CD='PIBB'
+#   SAS original:
+#     IF LMTSTART > 0 THEN LMTSTART = INPUT(SUBSTR(PUT(LMTSTART,Z11.),1,8),MMDDYY8.);
+#   NOTE: in the raw extract, LMTSTART is stored as SAS days (e.g. 17685),
+#         so the SAS PUT/SUBSTR/INPUT dance silently produces missing.
+#         We honour the intent by decoding SAS days here.
+# =========================
+odlmt = read_sas7bdat(LIMIT_OVERDFT)
+stage(f"read LIMIT_OVERDFT ({odlmt.height} rows)")
+
+if "ENTITY_CD" in odlmt.columns:
+    odlmt = odlmt.with_columns(
+        pl.col("ENTITY_CD").cast(pl.Utf8).str.strip_chars().alias("ENTITY_CD")
+    )
+
+odlmt = (
+    odlmt
+    .filter(pl.col("ENTITY_CD") == "PIBB")
+    .select(["ACCTNO", "LMTSTART"])
+)
+
+odlmt = odlmt.with_columns([
+    pl.when(pl.col("LMTSTART") > 0)
+      .then(
+          pl.col("LMTSTART")
+            .cast(pl.Int64)
+            .map_elements(sas_days_to_date, return_dtype=pl.Date)
+      )
+      .otherwise(None)
+      .alias("LMTSTART")
+]).unique(subset=["ACCTNO"], keep="first")
+stage(f"parsed ODLMT ({odlmt.height} rows)")
+
+ca = ca.with_columns(_norm_acctno("ACCTNO"))
+odlmt = odlmt.with_columns(_norm_acctno("ACCTNO"))
+ca = ca.join(odlmt, on="ACCTNO", how="left")
+stage(f"joined ODLMT ({ca.height} rows)")
+
+
+# =========================
+# GP3 fixed-width  (SAS: INPUT @004 ACCTNO 10. @019 RPTDAY 2. @021 RPTMON 2. @023 RPTYEAR 4.)
+# =========================
+gp3 = read_fixed_width(
+    GP3_KLUNION,
+    specs=[
+        ("ACCTNO",   4, 10, pl.Utf8),
+        ("RPTDAY",  19,  2, pl.Int64),
+        ("RPTMON",  21,  2, pl.Int64),
+        ("RPTYEAR", 23,  4, pl.Int64),
+    ],
+).with_columns(_norm_acctno("ACCTNO"))
+stage(f"read GP3 ({gp3.height} rows)")
+
+ca = ca.join(gp3, on="ACCTNO", how="left").with_columns([
+    pl.when((pl.col("RPTDAY") > 0) & (pl.col("RPTMON") > 0) & (pl.col("RPTYEAR") > 0))
+      .then(pl.struct(["RPTMON", "RPTDAY", "RPTYEAR"]).map_elements(
+            lambda s: mdy_safe(s["RPTMON"], s["RPTDAY"], s["RPTYEAR"]), return_dtype=pl.Date))
+      .otherwise(pl.lit(None, dtype=pl.Date))
+      .alias("NPLDATE")
+])
+stage(f"joined GP3 ({ca.height} rows)")
+
+
+# =========================
+# CISDP (SECCUST='901', NODUPKEY by ACCTNO)
+# =========================
+cis_raw = read_sas7bdat(CISDP_DEPOSIT)
+stage(f"read CISDP_DEPOSIT ({cis_raw.height} rows)")
+
+if "SECCUST" in cis_raw.columns:
+    cis_raw = cis_raw.with_columns(
+        pl.col("SECCUST").cast(pl.Utf8).str.strip_chars().alias("SECCUST")
+    )
+
+cis = (
+    cis_raw
+      .filter(pl.col("SECCUST") == "901")
+      .select(["ACCTNO", "NEWIC", "CUSTNAME"])
+      .with_columns(_norm_acctno("ACCTNO"))
+      .unique(subset=["ACCTNO"], keep="first")
+)
+stage(f"filtered CISDP ({cis.height} rows)")
+
+ca = ca.join(cis, on="ACCTNO", how="left")
+stage(f"joined CISDP ({ca.height} rows)")
+
+
+# =========================
+# COLL / DESC fixed-width
+#   COLL: INPUT @004 CCOLLNO PD6. @146 ACCTNO PD6.
+#   DESC: INPUT @001 CCOLLNO 11. @051 CINSTCL $2. @055 NATGUAR $2. @211 CENSUS 10.
+# =========================
+coll = read_fixed_width(
+    COLL_FILE,
+    specs=[
+        ("CCOLLNO",   4,  6, pl.Utf8),
+        ("ACCTNO",  146,  6, pl.Utf8),
+    ],
+).with_columns(
+    pl.col("CCOLLNO").cast(pl.Utf8).str.strip_chars().alias("CCOLLNO"),
+    _norm_acctno("ACCTNO"),
+)
+stage(f"read COLL ({coll.height} rows)")
+
+desc = read_fixed_width(
+    DESC_FILE,
+    specs=[
+        ("CCOLLNO",   1, 11, pl.Utf8),
+        ("CINSTCL",  51,  2, pl.Utf8),
+        ("NATGUAR",  55,  2, pl.Utf8),
+        ("CENSUS",  211, 10, pl.Int64),
+    ],
+).with_columns(
+    pl.col("CCOLLNO").cast(pl.Utf8).str.strip_chars().alias("CCOLLNO")
+)
+stage(f"read DESC ({desc.height} rows)")
+
+coll = coll.join(desc, on="CCOLLNO", how="inner")
+stage(f"joined COLL+DESC ({coll.height} rows)")
+
+dep = ca.join(coll, on="ACCTNO", how="inner")
+stage(f"joined CA+COLL ({dep.height} rows)")
+
+dep = dep.unique(subset=["ACCTNO"], keep="first")
+stage(f"unique by ACCTNO ({dep.height} rows)")
+
+
+# =========================
+# MICR fixed-width  (SAS: INPUT @002 BRANCH 3. @040 MICRCD $5.)
+# =========================
+micr = read_fixed_width(
+    MICR_FILE,
+    specs=[
+        ("BRANCH",  2, 3, pl.Utf8),
+        ("MICRCD", 40, 5, pl.Utf8),
+    ],
+)
+stage(f"read MICR ({micr.height} rows)")
+
+dep  = dep.with_columns(_norm_branch("BRANCH"))
+micr = micr.with_columns(_norm_branch("BRANCH"))
+dep  = dep.join(micr, on="BRANCH", how="left")
+stage(f"joined MICR ({dep.height} rows)")
+
+
+# =========================
+# Arrears/NPL logic — VECTORISED
+#   SAS: ARREARS=0; NODAYS=0; NPLDATE=0;
+#        IF (EXODDATE NE 0 OR TEMPODDT NE 0) AND (CURBAL LT 0) THEN DO; ... END;
+#   NOTE: EXODDATE / TEMPODDT appear to be SAS days in the raw extract,
+#         so we auto-detect (SAS days vs MMDDYY-encoded) per value.
+# =========================
+dep = dep.with_columns([
+    pl.lit("  ").alias("CVAR02"),
+    pl.lit(0, dtype=pl.Int64).alias("ARREARS"),
+    pl.lit(0, dtype=pl.Int64).alias("NODAYS"),
+])
+
+
+def _mmddyy8_or_sasdays_to_days_expr(col: str) -> pl.Expr:
+    """Return SAS days for a column that may be stored as SAS days or MMDDYY-encoded int."""
+    return (
+        pl.when(pl.col(col).is_not_null() & (pl.col(col) > 0))
+          .then(
+              pl.col(col)
+                .cast(pl.Int64)
+                .map_elements(parse_sas_or_mmddyy_to_sas_days, return_dtype=pl.Int64)
+          )
+          .otherwise(pl.lit(0, dtype=pl.Int64))
+          .alias(col + "_DAYS")
+    )
+
+
+dep = dep.with_columns([
+    _mmddyy8_or_sasdays_to_days_expr("EXODDATE"),
+    _mmddyy8_or_sasdays_to_days_expr("TEMPODDT"),
+])
+stage("decoded EXODDATE/TEMPODDT")
+
+enter = (
+    ((pl.col("EXODDATE_DAYS") != 0) | (pl.col("TEMPODDT_DAYS") != 0))
+    & pl.col("CURBAL").is_not_null()
+    & (pl.col("CURBAL") < 0)
+)
+
+ed = pl.col("EXODDATE_DAYS")
+td = pl.col("TEMPODDT_DAYS")
+o_days = (
+    pl.when((ed > 0) & (td > 0)).then(pl.min_horizontal(ed, td))
+      .when(ed > 0).then(ed)
+      .when(td > 0).then(td)
+      .otherwise(pl.lit(0, dtype=pl.Int64))
+)
+
+nodays = (
+    pl.when(o_days > 0)
+      .then(pl.lit(SDATE_INT, dtype=pl.Int64) - o_days + 1)
+      .otherwise(pl.lit(1, dtype=pl.Int64))
+)
+
+arrears_raw = (
+    pl.when(enter & (nodays > 0))
+      .then(nodays.map_elements(_ndays_lookup, return_dtype=pl.Int64))
+      .otherwise(pl.lit(0, dtype=pl.Int64))
+)
+
+arrears = (
+    pl.when(arrears_raw == 24)
+      .then((nodays.cast(pl.Float64) / 30.0).round().cast(pl.Int64))
+      .otherwise(arrears_raw)
+)
+
+npldate_new = (
+    pl.when(enter & (arrears >= 3) & (o_days > 0))
+      .then(o_days.map_elements(_month_end_from_sas_days, return_dtype=pl.Date))
+      .otherwise(pl.lit(None, dtype=pl.Date))
+)
+
+dep = dep.with_columns([
+    pl.when(enter).then(nodays).otherwise(pl.lit(0, dtype=pl.Int64)).alias("NODAYS"),
+    pl.when(enter).then(arrears).otherwise(pl.lit(0, dtype=pl.Int64)).alias("ARREARS"),
+    pl.when(npldate_new.is_not_null())
+      .then(npldate_new)
+      .otherwise(pl.col("NPLDATE"))
+      .alias("NPLDATE"),
+]).drop(["EXODDATE_DAYS", "TEMPODDT_DAYS"])
+stage("vectorised overdraft loop done")
+
+
+# =========================
+# Final CVARs
+# =========================
+dep = dep.with_columns([
+    pl.col("CENSUS").alias("CVAR01"),
+    pl.col("NEWIC").alias("CVAR03"),
+    pl.col("CUSTNAME").alias("CVAR04"),
+    pl.col("LMTSTART").alias("CVAR05"),
+    pl.col("ACCTNO").alias("CVAR06"),
+    pl.lit("ID").alias("CVAR07"),
+    pl.when(pl.col("APPRLIMT").is_null()).then(0.00).otherwise(pl.col("APPRLIMT")).alias("CVAR08"),
+
+    pl.when(pl.col("LEDGBAL") >= 0).then(0.00).otherwise((-1) * pl.col("LEDGBAL")).alias("CVAR09"),
+    pl.when(pl.col("LEDGBAL") >= 0).then(pl.col("LEDGBAL")).otherwise(0.00).alias("CVAR10"),
+
+    pl.col("ARREARS").alias("CVAR11"),
+    pl.lit("   ").alias("CVAR12"),
+    pl.col("NPLDATE").map_elements(month_end_str, return_dtype=pl.Utf8).alias("CVAR13"),
+    pl.lit("0351").alias("CVAR14"),
+    pl.col("MICRCD").alias("CVAR15"),
+])
+
+dep = dep.with_columns([
+    pl.when((pl.col("ARREARS") >= 3) & pl.col("NPLDATE").is_not_null())
+      .then(pl.lit("NPL"))
+      .otherwise(pl.col("CVAR12"))
+      .alias("CVAR12")
+])
+stage("final CVARs done")
+
+dep = dep.sort(by=["CVAR01"])
+
+keep_cols = [
+    "CVAR01","CVAR02","CVAR03","CVAR04","CVAR05","CVAR06","CVAR07",
+    "CVAR08","CVAR09","CVAR10","CVAR11","CVAR12","CVAR13","CVAR14","CR",
+    "BRANCH","CVAR15","CENSUST","PRODUCT","CINSTCL","NATGUAR","SCH"
+]
+for c in ["CR", "SCH"]:
+    if c not in dep.columns:
+        dep = dep.with_columns(pl.lit(None).alias(c))
+
+out = dep.select(keep_cols)
+stage(f"selected keep cols ({out.height} rows)")
+
+
+# =========================
+# Output: Parquet + SAS7BDAT
+# =========================
+out_dir = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDP169")
+out_dir.mkdir(parents=True, exist_ok=True)
+
+out_parquet = out_dir / f"DPIPGS{REPTMON}.parquet"
+out_sas     = out_dir / f"DPIPGS{REPTMON}.sas7bdat"
+
+out.write_parquet(out_parquet, use_pyarrow=True)
+stage(f"wrote parquet -> {out_parquet}")
+
+
+def _to_sas(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = (df[col] - pd.Timestamp("1960-01-01")).dt.days.astype("Int64")
+    return df
+
+
+pyreadstat.write_sas7bdat(
+    _to_sas(out.to_pandas()),
+    str(out_sas),
+    file_label=f"DPIPGS{REPTMON}",
+)
+stage(f"wrote sas7bdat -> {out_sas}")
