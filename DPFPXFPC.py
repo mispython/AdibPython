@@ -2,60 +2,60 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import date, datetime, timedelta
+import time
 import polars as pl
 import pandas as pd
 import pyreadstat
-import duckdb  # noqa: F401 (imported to satisfy "use duckdb" requirement)
+import duckdb  # noqa: F401
 import pyarrow as pa  # noqa: F401
 import pyarrow.parquet as pq  # noqa: F401
 
-# PBBLNFMT: in-memory SAS format/informat library (from PBBLNFMT.py)
 import PBBLNFMT
 
 
 # =========================
-# Paths (adjust to your env)
+# Diagnostics
 # =========================
+_T0 = time.perf_counter()
+def stage(msg: str) -> None:
+    global _T0
+    now = time.perf_counter()
+    print(f"[{now - _T0:8.2f}s] {msg}", flush=True)
+    _T0 = now
 
-# ---- Input sas7bdat tables (mirror SAS DD names / libs) ----
+
+# =========================
+# Paths
+# =========================
 MNITB_CURRENT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/intg_dp_acct_current_m{reptmon}.sas7bdat")
 LIMIT_OVERDFT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/intg_dp_acct_overdft_m{reptmon}.sas7bdat")
 CISDP_DEPOSIT = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDLCRM/cisdp/deposit.sas7bdat")
 
-# ---- Fixed-width / flat-file sources (NOT parquet) ----
-GP3_KLUNION  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/GP3.txt")
-COLL_FILE    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_{yyyy}{mm}{dd}")        # CCOLLNO, ACCTNO
-DESC_FILE    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_{yyyy}{mm}{dd}")   # CCOLLNO, CINSTCL, NATGUAR, CENSUS
-MICR_FILE    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDP169/PIBBMICR.txt")                    # BRANCH, MICRCD
+GP3_KLUNION = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDNPGS/GP3.txt")
+COLL_FILE   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_{yyyy}{mm}{dd}")
+DESC_FILE   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/LCCRISEX_DESC_{yyyy}{mm}{dd}")
+MICR_FILE   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDP169/PIBBMICR.txt")
 
 
 # =========================
-# Helper functions
+# Helpers
 # =========================
 def sas_days_to_date(days: int) -> date:
-    origin = date(1960, 1, 1)
-    return origin.fromordinal(origin.toordinal() + int(days))
+    return date(1960, 1, 1).fromordinal(date(1960, 1, 1).toordinal() + int(days))
 
 
 def ddmmyy8_string(d: date) -> str:
     return d.strftime("%d/%m/%y")
 
 
-def parse_mmddyy8_from_z11_prefix_to_days(x) -> int:
-    """
-    Emulate: INPUT(SUBSTR(PUT(x, Z11.), 1, 8), MMDDYY8.)
-    Returns SAS-days int (days since 1960) or 0 if invalid/zero.
-    """
-    if x is None:
+def _parse_mmddyy8_str(s: str | None) -> int:
+    """Return SAS-days int or 0. Mirrors INPUT(..., MMDDYY8.)."""
+    if not s:
         return 0
     try:
-        xi = int(x)
-        if xi <= 0:
-            return 0
-        s = f"{xi:011d}"[:8]
         try:
             d = datetime.strptime(s, "%m%d%Y").date()
-        except Exception:
+        except ValueError:
             d = datetime.strptime(s, "%m%d%y").date()
         return (d - date(1960, 1, 1)).days
     except Exception:
@@ -63,10 +63,6 @@ def parse_mmddyy8_from_z11_prefix_to_days(x) -> int:
 
 
 def parse_mmddyy8_z11_prefix_to_date(x) -> date | None:
-    """
-    Same as parse_mmddyy8_from_z11_prefix_to_days but returns a date (or None).
-    Mirrors SAS INPUT(..., MMDDYY8.) silently returning missing on invalid input.
-    """
     if x is None:
         return None
     try:
@@ -105,7 +101,7 @@ def month_end_of_sas_days(days_int: int) -> date:
 
 def month_end_str(d: date | None) -> str:
     if d is None:
-        return "          "  # 10 spaces
+        return "          "
     if d.month in (1, 3, 5, 7, 8, 10, 12):
         last = 31
     elif d.month in (4, 6, 9, 11):
@@ -116,11 +112,31 @@ def month_end_str(d: date | None) -> str:
     return f"{e.day:02d}/{e.month:02d}/{e.year:04d}"
 
 
+def _month_end_from_sas_days(days: int | None) -> date | None:
+    if days is None or int(days) <= 0:
+        return None
+    return month_end_of_sas_days(int(days) + 90)
+
+
+def _ndays_lookup(n: int) -> int:
+    try:
+        return int(PBBLNFMT.NDAYS(n))
+    except Exception:
+        return 0
+
+
+def _norm_acctno(col: str):
+    return pl.col(col).cast(pl.Utf8).str.strip_chars()
+
+
+def _norm_branch(col: str):
+    return pl.col(col).cast(pl.Utf8).str.strip_chars()
+
+
 # =========================
 # Readers
 # =========================
 def read_sas7bdat(path: Path) -> pl.DataFrame:
-    """Read a .sas7bdat file into a Polars DataFrame via pyreadstat."""
     df_pd, _meta = pyreadstat.read_sas7bdat(str(path))
     return pl.from_pandas(df_pd)
 
@@ -129,39 +145,31 @@ def read_fixed_width(path: Path,
                      specs: list[tuple[str, int, int, pl.DataType]],
                      encoding: str = "utf8-lossy") -> pl.DataFrame:
     """
-    Read a fixed-width text file.
-
-    specs: list of (name, start_1based, width, dtype).
-    SAS column pointers (@n) are 1-based; widths are in bytes.
-    Numeric fields that are blank become null.
+    Fast fixed-width reader: whole-file read + vectorised str.slice.
+    specs: (name, start_1based, width, dtype)
     """
-    raw = pl.read_csv(
-        path,
-        has_header=False,
-        separator="\x01",          # bogus sep -> one column per line
-        quote_char=None,
-        truncate_ragged_lines=True,
-        new_columns=["_line"],
-        encoding=encoding,
-        infer_schema_length=0,     # read everything as string first
-    )
+    raw_bytes = path.read_bytes()
+    text = raw_bytes.decode(encoding, errors="replace")
+    lines = text.splitlines()
+
+    s = pl.Series("_line", lines, dtype=pl.Utf8)
 
     exprs = []
     for name, start1, width, dtype in specs:
         start0 = start1 - 1
-        s = pl.col("_line").cast(pl.Utf8).str.slice(start0, width).str.strip_chars()
+        sl = s.str.slice(start0, width).str.strip_chars()
         if dtype == pl.Utf8:
-            exprs.append(s.alias(name))
+            exprs.append(sl.alias(name))
         else:
             exprs.append(
-                pl.when((s == "") | s.is_null())
+                pl.when((sl == "") | sl.is_null())
                   .then(None)
-                  .otherwise(s)
+                  .otherwise(sl)
                   .cast(dtype, strict=False)
                   .alias(name)
             )
 
-    return raw.select(exprs)
+    return pl.DataFrame(exprs)
 
 
 # =========================
@@ -175,7 +183,6 @@ RDATE     = ddmmyy8_string(repdate)
 SDATE_INT = (repdate - date(1960, 1, 1)).days
 SDATE     = f"{SDATE_INT:05d}"
 
-# Resolve placeholders in paths
 MNITB_CURRENT = Path(str(MNITB_CURRENT).format(reptmon=REPTMON))
 LIMIT_OVERDFT = Path(str(LIMIT_OVERDFT).format(reptmon=REPTMON))
 
@@ -185,22 +192,14 @@ dd   = f"{repdate.day:02d}"
 COLL_FILE = Path(str(COLL_FILE).format(yyyy=yyyy, mm=mm, dd=dd))
 DESC_FILE = Path(str(DESC_FILE).format(yyyy=yyyy, mm=mm, dd=dd))
 
-
-# =========================
-# Normalisation helpers
-# =========================
-def _norm_acctno(col: str):
-    return pl.col(col).cast(pl.Utf8).str.strip_chars()
-
-
-def _norm_branch(col: str):
-    return pl.col(col).cast(pl.Utf8).str.strip_chars()
+stage("computed date macros")
 
 
 # =========================
-# CA = MNITB.CURRENT filter (ENTITY_CD='PIBB'); merge ODLMT (LIMIT.OVERDFT)
+# CA = MNITB.CURRENT filter (ENTITY_CD='PIBB'); merge ODLMT
 # =========================
 mnitb = read_sas7bdat(MNITB_CURRENT)
+stage(f"read MNITB_CURRENT ({mnitb.height} rows)")
 
 if "ENTITY_CD" in mnitb.columns:
     mnitb = mnitb.with_columns(
@@ -215,8 +214,10 @@ ca = (
         (pl.col("CENSUST").is_between(16901, 16908))
     )
 )
+stage(f"filtered CA ({ca.height} rows)")
 
 odlmt = read_sas7bdat(LIMIT_OVERDFT)
+stage(f"read LIMIT_OVERDFT ({odlmt.height} rows)")
 
 if "ENTITY_CD" in odlmt.columns:
     odlmt = odlmt.with_columns(
@@ -229,7 +230,6 @@ odlmt = (
     .select(["ACCTNO", "LMTSTART"])
 )
 
-# LMTSTART > 0 -> parse MMDDYY8; invalid -> None (mirrors SAS INPUT(..., MMDDYY8.))
 odlmt = odlmt.with_columns([
     pl.when(pl.col("LMTSTART") > 0)
       .then(
@@ -240,16 +240,16 @@ odlmt = odlmt.with_columns([
       .otherwise(None)
       .alias("LMTSTART")
 ]).unique(subset=["ACCTNO"], keep="first")
+stage(f"parsed ODLMT ({odlmt.height} rows)")
 
 ca = ca.with_columns(_norm_acctno("ACCTNO"))
 odlmt = odlmt.with_columns(_norm_acctno("ACCTNO"))
 ca = ca.join(odlmt, on="ACCTNO", how="left")
+stage(f"joined ODLMT ({ca.height} rows)")
 
 
 # =========================
-# --- GP3 ---  fixed-width text, NOT parquet
-# SAS:
-#   INPUT @004 ACCTNO 10.  @019 RPTDAY 2.  @021 RPTMON 2.  @023 RPTYEAR 4.
+# GP3 fixed-width
 # =========================
 gp3 = read_fixed_width(
     GP3_KLUNION,
@@ -260,6 +260,7 @@ gp3 = read_fixed_width(
         ("RPTYEAR", 23,  4, pl.Int64),
     ],
 ).with_columns(_norm_acctno("ACCTNO"))
+stage(f"read GP3 ({gp3.height} rows)")
 
 ca = ca.join(gp3, on="ACCTNO", how="left").with_columns([
     pl.when((pl.col("RPTDAY") > 0) & (pl.col("RPTMON") > 0) & (pl.col("RPTYEAR") > 0))
@@ -268,12 +269,14 @@ ca = ca.join(gp3, on="ACCTNO", how="left").with_columns([
       .otherwise(pl.lit(None, dtype=pl.Date))
       .alias("NPLDATE")
 ])
+stage(f"joined GP3 ({ca.height} rows)")
 
 
 # =========================
-# Merge CISDP (SECCUST='901', NODUPKEY by ACCTNO)
+# CISDP
 # =========================
 cis_raw = read_sas7bdat(CISDP_DEPOSIT)
+stage(f"read CISDP_DEPOSIT ({cis_raw.height} rows)")
 
 if "SECCUST" in cis_raw.columns:
     cis_raw = cis_raw.with_columns(
@@ -287,14 +290,14 @@ cis = (
       .with_columns(_norm_acctno("ACCTNO"))
       .unique(subset=["ACCTNO"], keep="first")
 )
+stage(f"filtered CISDP ({cis.height} rows)")
+
 ca = ca.join(cis, on="ACCTNO", how="left")
+stage(f"joined CISDP ({ca.height} rows)")
 
 
 # =========================
-# --- COLL / DESC ---  fixed-width, NOT parquet
-# SAS:
-#   COLL: INPUT @004 CCOLLNO PD6.  @146 ACCTNO PD6.
-#   DESC: INPUT @001 CCOLLNO 11.   @051 CINSTCL $2.  @055 NATGUAR $2.  @211 CENSUS 10.
+# COLL / DESC fixed-width
 # =========================
 coll = read_fixed_width(
     COLL_FILE,
@@ -306,6 +309,7 @@ coll = read_fixed_width(
     pl.col("CCOLLNO").cast(pl.Utf8).str.strip_chars().alias("CCOLLNO"),
     _norm_acctno("ACCTNO"),
 )
+stage(f"read COLL ({coll.height} rows)")
 
 desc = read_fixed_width(
     DESC_FILE,
@@ -318,17 +322,20 @@ desc = read_fixed_width(
 ).with_columns(
     pl.col("CCOLLNO").cast(pl.Utf8).str.strip_chars().alias("CCOLLNO")
 )
+stage(f"read DESC ({desc.height} rows)")
 
-coll = coll.join(desc, on="CCOLLNO", how="inner")  # IF A AND B
+coll = coll.join(desc, on="CCOLLNO", how="inner")
+stage(f"joined COLL+DESC ({coll.height} rows)")
 
-dep = ca.join(coll, on="ACCTNO", how="inner")      # IF A AND B
-dep = dep.unique(subset=["ACCTNO"], keep="first")  # NODUPKEY BY ACCTNO
+dep = ca.join(coll, on="ACCTNO", how="inner")
+stage(f"joined CA+COLL ({dep.height} rows)")
+
+dep = dep.unique(subset=["ACCTNO"], keep="first")
+stage(f"unique by ACCTNO ({dep.height} rows)")
 
 
 # =========================
-# --- MICR ---  fixed-width, NOT parquet
-# SAS:
-#   INPUT @002 BRANCH 3.  @040 MICRCD $5.
+# MICR fixed-width
 # =========================
 micr = read_fixed_width(
     MICR_FILE,
@@ -337,95 +344,102 @@ micr = read_fixed_width(
         ("MICRCD", 40, 5, pl.Utf8),
     ],
 )
+stage(f"read MICR ({micr.height} rows)")
 
 dep  = dep.with_columns(_norm_branch("BRANCH"))
 micr = micr.with_columns(_norm_branch("BRANCH"))
-
 dep  = dep.join(micr, on="BRANCH", how="left")
+stage(f"joined MICR ({dep.height} rows)")
 
 
 # =========================
-# Arrears/NPL logic using PBBLNFMT NDAYS. informat
+# Arrears/NPL logic — VECTORISED
 # =========================
 dep = dep.with_columns([
     pl.lit("  ").alias("CVAR02"),
-    pl.lit(0).alias("ARREARS"),
-    pl.lit(0).alias("NODAYS"),
-    pl.lit(None, dtype=pl.Date).alias("NPLDATE"),  # reset before recompute
+    pl.lit(0, dtype=pl.Int64).alias("ARREARS"),
+    pl.lit(0, dtype=pl.Int64).alias("NODAYS"),
 ])
 
 
-def compute_overdraft_fields(row):
-    """
-    Emulates the SAS block:
-      - Determine ODDAYS from EXODDATE/TEMPODDT (earliest valid date), both encoded numeric -> MMDDYY8
-      - NODAYS = &SDATE - ODDAYS + 1
-      - ARREARS = INPUT(NODAYS, NDAYS.)          <-- via PBBLNFMT
-      - If ARREARS=24 then ARREARS=ROUND(NODAYS/30)
-      - If ARREARS>=3 then NPLDATE = month-end of (ODDAYS+90)
-    """
-    EXODDATE = row.get("EXODDATE")
-    TEMPODDT = row.get("TEMPODDT")
-    CURBAL   = row.get("CURBAL")
-
-    if (((EXODDATE or 0) != 0) or ((TEMPODDT or 0) != 0)) and (CURBAL is not None and CURBAL < 0):
-        if (EXODDATE or 0) == 0 and (TEMPODDT or 0) == 0:
-            o_days = 0
-        elif (EXODDATE or 0) > 0 and (TEMPODDT or 0) == 0:
-            o_days = parse_mmddyy8_from_z11_prefix_to_days(EXODDATE)
-        elif (EXODDATE or 0) == 0 and (TEMPODDT or 0) > 0:
-            o_days = parse_mmddyy8_from_z11_prefix_to_days(TEMPODDT)
-        else:
-            ed = parse_mmddyy8_from_z11_prefix_to_days(EXODDATE)
-            td = parse_mmddyy8_from_z11_prefix_to_days(TEMPODDT)
-            if ed > 0 and td > 0:
-                o_days = min(ed, td)
-            else:
-                o_days = ed or td
-
-        nodays = 0
-        if o_days > 0:
-            nodays = SDATE_INT - o_days
-        nodays = nodays + 1
-
-        arrears = 0
-        npldate = None
-        if nodays > 0:
-            try:
-                arrears = int(PBBLNFMT.NDAYS(nodays))
-            except Exception:
-                arrears = 0
-            if arrears == 24:
-                arrears = round(nodays / 30.0)
-            if arrears >= 3:
-                o_days_plus_90 = o_days + 90
-                npldate = month_end_of_sas_days(o_days_plus_90)
-        return (nodays, arrears, npldate)
-
-    return (0, 0, None)
+def _mmddyy8_to_days_expr(col: str) -> pl.Expr:
+    """Vectorised equivalent of parse_mmddyy8_from_z11_prefix_to_days."""
+    padded = (
+        pl.when(pl.col(col).is_not_null() & (pl.col(col) > 0))
+          .then(
+              pl.col(col).cast(pl.Int64).cast(pl.Utf8)
+                .str.zfill(11).str.slice(0, 8)
+          )
+          .otherwise(None)
+    )
+    return (
+        pl.when(padded.is_null())
+          .then(pl.lit(0, dtype=pl.Int64))
+          .otherwise(
+              padded.map_elements(_parse_mmddyy8_str, return_dtype=pl.Int64)
+          )
+          .alias(col + "_DAYS")
+    )
 
 
 dep = dep.with_columns([
-    pl.struct(dep.columns).map_elements(
-        lambda s: compute_overdraft_fields(s),
-        return_dtype=pl.Struct([
-            pl.Field("NODAYS2", pl.Int64),
-            pl.Field("ARREARS2", pl.Int64),
-            pl.Field("NPLDATE2", pl.Date),
-        ])
-    ).alias("_OD")
-]).with_columns([
-    pl.col("_OD").struct.field("NODAYS2").alias("NODAYS"),
-    pl.col("_OD").struct.field("ARREARS2").alias("ARREARS"),
-    pl.when(pl.col("_OD").struct.field("NPLDATE2").is_not_null())
-      .then(pl.col("_OD").struct.field("NPLDATE2"))
+    _mmddyy8_to_days_expr("EXODDATE"),
+    _mmddyy8_to_days_expr("TEMPODDT"),
+])
+stage("parsed EXODDATE/TEMPODDT to SAS days")
+
+enter = (
+    ((pl.col("EXODDATE_DAYS") != 0) | (pl.col("TEMPODDT_DAYS") != 0))
+    & pl.col("CURBAL").is_not_null()
+    & (pl.col("CURBAL") < 0)
+)
+
+ed = pl.col("EXODDATE_DAYS")
+td = pl.col("TEMPODDT_DAYS")
+o_days = (
+    pl.when((ed > 0) & (td > 0)).then(pl.min_horizontal(ed, td))
+      .when(ed > 0).then(ed)
+      .when(td > 0).then(td)
+      .otherwise(pl.lit(0, dtype=pl.Int64))
+)
+
+nodays = (
+    pl.when(o_days > 0)
+      .then(pl.lit(SDATE_INT, dtype=pl.Int64) - o_days + 1)
+      .otherwise(pl.lit(1, dtype=pl.Int64))
+)
+
+arrears_raw = (
+    pl.when(enter & (nodays > 0))
+      .then(nodays.map_elements(_ndays_lookup, return_dtype=pl.Int64))
+      .otherwise(pl.lit(0, dtype=pl.Int64))
+)
+
+arrears = (
+    pl.when(arrears_raw == 24)
+      .then((nodays.cast(pl.Float64) / 30.0).round().cast(pl.Int64))
+      .otherwise(arrears_raw)
+)
+
+npldate_new = (
+    pl.when(enter & (arrears >= 3) & (o_days > 0))
+      .then(o_days.map_elements(_month_end_from_sas_days, return_dtype=pl.Date))
+      .otherwise(pl.lit(None, dtype=pl.Date))
+)
+
+dep = dep.with_columns([
+    pl.when(enter).then(nodays).otherwise(pl.lit(0, dtype=pl.Int64)).alias("NODAYS"),
+    pl.when(enter).then(arrears).otherwise(pl.lit(0, dtype=pl.Int64)).alias("ARREARS"),
+    pl.when(npldate_new.is_not_null())
+      .then(npldate_new)
       .otherwise(pl.col("NPLDATE"))
-      .alias("NPLDATE")
-]).drop(["_OD"])
+      .alias("NPLDATE"),
+]).drop(["EXODDATE_DAYS", "TEMPODDT_DAYS"])
+stage("vectorised overdraft loop done")
 
 
 # =========================
-# Final CVAR fields & formatting
+# Final CVARs
 # =========================
 dep = dep.with_columns([
     pl.col("CENSUS").alias("CVAR01"),
@@ -446,15 +460,14 @@ dep = dep.with_columns([
     pl.col("MICRCD").alias("CVAR15"),
 ])
 
-# IF ARREARS GE 3 AND NPLDATE > 0 THEN CVAR12='NPL'
 dep = dep.with_columns([
     pl.when((pl.col("ARREARS") >= 3) & pl.col("NPLDATE").is_not_null())
       .then(pl.lit("NPL"))
       .otherwise(pl.col("CVAR12"))
       .alias("CVAR12")
 ])
+stage("final CVARs done")
 
-# Final ordering & KEEP (SAS: BY CVAR01)
 dep = dep.sort(by=["CVAR01"])
 
 keep_cols = [
@@ -467,10 +480,11 @@ for c in ["CR", "SCH"]:
         dep = dep.with_columns(pl.lit(None).alias(c))
 
 out = dep.select(keep_cols)
+stage(f"selected keep cols ({out.height} rows)")
 
 
 # =========================
-# Output: NPGS.DPIPGS&REPTMON (Parquet + SAS7BDAT)
+# Output
 # =========================
 out_dir = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDP169")
 out_dir.mkdir(parents=True, exist_ok=True)
@@ -478,13 +492,11 @@ out_dir.mkdir(parents=True, exist_ok=True)
 out_parquet = out_dir / f"DPIPGS{REPTMON}.parquet"
 out_sas     = out_dir / f"DPIPGS{REPTMON}.sas7bdat"
 
-# --- Parquet ---
 out.write_parquet(out_parquet, use_pyarrow=True)
+stage(f"wrote parquet -> {out_parquet}")
 
 
-# --- SAS7BDAT via pyreadstat (Polars -> pandas -> sas7bdat) ---
 def _to_sas(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert datetime64 columns to SAS day numbers (days since 1960-01-01)."""
     df = df.copy()
     for col in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[col]):
@@ -497,6 +509,4 @@ pyreadstat.write_sas7bdat(
     str(out_sas),
     file_label=f"DPIPGS{REPTMON}",
 )
-
-print(f"Wrote {out_parquet}")
-print(f"Wrote {out_sas}")
+stage(f"wrote sas7bdat -> {out_sas}")
