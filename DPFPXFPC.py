@@ -11,8 +11,10 @@ alongside this script, instead of re-defining the lookup tables inline.
 """
 
 import sys
+import posixpath
 import pyreadstat
 import pandas as pd
+import paramiko
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -180,7 +182,7 @@ def write_report(df: pd.DataFrame, out_path: Path, title: str, subtitle: str,
 # PROCESS CURRENT ACCOUNT MOVEMENTS (CAMV)
 # ============================================================================
 
-def process_camv():
+def process_camv() -> list:
     path = INPUT_DIR / f'camv{reptday}{reptmon}.sas7bdat'
     df = read_sas(path)
     df = standardize_columns(df, [
@@ -239,23 +241,27 @@ def process_camv():
                    'BY BRANCH (CORPORATE CUSTOMERS - CONVENTIONAL)', 58, False),
     }
 
+    written = []
     for cat, (title, subtitle, subcol, include_net_total) in specs.items():
         sub = df[df['CATEGORY'] == cat]
+        out_path = OUTPUT_DIR / f'{cat.lower()}.txt'
         write_report(
-            sub, OUTPUT_DIR / f'{cat.lower()}.txt',
+            sub, out_path,
             title, subtitle, subcol,
             header_net_label='NETBALC',
             net_field='NETBALC',
             include_net_total=include_net_total,
         )
+        written.append(out_path)
         print(f"{cat}: {len(sub)} records")
+    return written
 
 
 # ============================================================================
 # PROCESS FIXED DEPOSIT MOVEMENTS (FDMV)
 # ============================================================================
 
-def process_fdmv():
+def process_fdmv() -> list:
     path = INPUT_DIR / f'fdmv{reptday}{reptmon}.sas7bdat'
     df = read_sas(path)
     df = standardize_columns(df, [
@@ -294,18 +300,58 @@ def process_fdmv():
                    'BY BRANCH (CORPORATE CUSTOMERS - CONVENTIONAL)', 54, 'NETBALF'),
     }
 
+    written = []
     for cat, (title, subtitle, subcol, header_net_label) in specs.items():
         sub = df[df['CATEGORY'] == cat]
+        out_path = OUTPUT_DIR / f'{cat.lower()}.txt'
         write_report(
-            sub, OUTPUT_DIR / f'{cat.lower()}.txt',
+            sub, out_path,
             title, subtitle, subcol,
             header_net_label=header_net_label,
             net_field='NETBALF',
             include_net_total=False,
         )
+        written.append(out_path)
         print(f"{cat}: {len(sub)} records")
+    return written
 
-def sftp_upload(host_desc: str, remote_dir: str, local_file: Path, remote_name: str) -> None:
+
+# ============================================================================
+# SFTP UPLOAD
+# ============================================================================
+
+def get_sftp_info(host_desc: str):
+    """Return (sftp_id, sftp_pw, host_ip, host_key) for a given host description.
+
+    Mirrors EIWFRMCR: reads credentials from a control file. The expected
+    line format is:
+
+        HOST_DESC|SFTP_ID|SFTP_PW|HOST_IP|HOST_KEY
+
+    Adjust the CONTROL_FILE path and/or parsing below to match the real
+    control file layout in your environment.
+    """
+    CONTROL_FILE = BASE_DIR / '/exdwh/host/dp/cafd_sasdata/sftp_control.txt'
+
+    if CONTROL_FILE.exists():
+        with open(CONTROL_FILE) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = [p.strip() for p in line.split('|')]
+                if len(parts) >= 4 and parts[0] == host_desc:
+                    host_key = parts[4] if len(parts) > 4 else ''
+                    return parts[1], parts[2], parts[3], host_key
+
+    raise KeyError(
+        f"No SFTP control entry found for host_desc={host_desc!r} "
+        f"(looked in {CONTROL_FILE})"
+    )
+
+
+def sftp_upload(host_desc: str, remote_dir: str, local_file: Path,
+                remote_name: str) -> None:
     """Upload one file to the SFTP server identified by HOST_DESC."""
     sftp_id, sftp_pw, host_ip, _host_key = get_sftp_info(host_desc)
 
@@ -315,7 +361,13 @@ def sftp_upload(host_desc: str, remote_dir: str, local_file: Path, remote_name: 
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     print(f"  Connecting to {host_desc} ({host_ip}) as {sftp_id} ...")
-    ssh.connect(hostname=host_ip, username=sftp_id, password=sftp_pw)
+    try:
+        ssh.connect(hostname=host_ip, username=sftp_id, password=sftp_pw)
+    except Exception as exc:
+        raise ConnectionError(
+            f"Could not connect to {host_desc} ({host_ip}): {exc}"
+        ) from exc
+
     try:
         sftp = ssh.open_sftp()
         try:
@@ -325,7 +377,9 @@ def sftp_upload(host_desc: str, remote_dir: str, local_file: Path, remote_name: 
                 raise FileNotFoundError(
                     f"Remote folder '{remote_dir}' not found on {host_desc}"
                 ) from exc
-            print(f"  SFTP upload: {local_file.name} -> {remote_dir}/{remote_name}")
+
+            remote_path = posixpath.join(remote_dir, remote_name)
+            print(f"  SFTP upload: {local_file.name} -> {remote_path}")
             sftp.put(str(local_file), remote_name)
         finally:
             sftp.close()
@@ -333,23 +387,32 @@ def sftp_upload(host_desc: str, remote_dir: str, local_file: Path, remote_name: 
         ssh.close()
 
 
-def sftp_to_drr() -> None:
+def sftp_to_drr(local_files: list) -> None:
     """JCL step: FTP TO SAS DATAWAREHOUSE (DRR)."""
     print("\nUploading to DRR via SFTP...")
-    sftp_upload(DRR_HOST_DESC, DRR_REMOTE_DIR, OUTPUT_FILE, REMOTE_FILENAME)
+    for local_file in local_files:
+        sftp_upload(
+            DRR_HOST_DESC,
+            DRR_REMOTE_DIR,
+            local_file,
+            local_file.name,
+        )
     print("  DRR upload complete.")
+
 
 # ============================================================================
 # MAIN
 # ============================================================================
 
 if __name__ == '__main__':
-    process_camv()
-    process_fdmv()
-    print(f"\nCompleted: 12 text reports generated in {OUTPUT_DIR}")
+    camv_files = process_camv()
+    fdmv_files = process_fdmv()
+    all_files = camv_files + fdmv_files
 
+    print(f"\nCompleted: {len(all_files)} text reports generated in {OUTPUT_DIR}")
 
-please help adjust and modify the codes:
-
-i would like to add output to drr server. already add the functions, just need to make sure it aligns and workable
-add import paramiko
+    try:
+        sftp_to_drr(all_files)
+    except Exception as exc:
+        print(f"\nSFTP upload FAILED: {exc}", file=sys.stderr)
+        sys.exit(1)
