@@ -38,6 +38,8 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DRR_HOST_DESC       = "Data Report Repository (DRR)"
 DRR_REMOTE_DIR      = "WMTB-SA&S/DEP - SAS/MOVEMENT"
 
+SFTP_CONTROL_FILE   = Path("/sasdata/dwh/control/ctl_dwh_sftp_info.sas7bdat")
+
 ISLAMIC_CUSTCODES = {77, 78, 95, 96}
 
 # The literal exclusion list from the SAS source: "CUSTCD NOT IN
@@ -321,33 +323,45 @@ def process_fdmv() -> list:
 # ============================================================================
 
 def get_sftp_info(host_desc: str):
-    """Return (sftp_id, sftp_pw, host_ip, host_key) for a given host description.
+    """Return (SFTP_ID, SFTP_PW, HOST_IP, HOST_KEY) for the row matching HOST_DESC."""
+    if not SFTP_CONTROL_FILE.exists():
+        raise FileNotFoundError(f"SFTP control file not found: {SFTP_CONTROL_FILE}")
 
-    Mirrors EIWFRMCR: reads credentials from a control file. The expected
-    line format is:
+    ctl = pd.read_sas(SFTP_CONTROL_FILE, format="sas7bdat", encoding="utf-8")
+    ctl.columns = [str(c).upper().strip() for c in ctl.columns]
 
-        HOST_DESC|SFTP_ID|SFTP_PW|HOST_IP|HOST_KEY
+    required = {"HOST_DESC", "SFTP_ID", "SFTP_PW", "HOST_IP"}
+    missing_columns = sorted(required.difference(ctl.columns))
+    if missing_columns:
+        raise RuntimeError(
+            "SFTP control file is missing columns: " + ", ".join(missing_columns)
+        )
 
-    Adjust the SFTP_CONTROL_FILE path and/or parsing below to match the real
-    control file layout in your environment.
-    """
-    SFTP_CONTROL_FILE   = Path("/sasdata/dwh/control/ctl_dwh_sftp_info.sas7bdat")
+    descriptions = ctl["HOST_DESC"].fillna("").astype(str).str.strip()
+    rows = ctl[descriptions.eq(host_desc)]
+    if len(rows) != 1:
+        raise RuntimeError(
+            f"Expected exactly one SFTP row for '{host_desc}'; found {len(rows)}"
+        )
 
-    if SFTP_CONTROL_FILE.exists():
-        with open(SFTP_CONTROL_FILE) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = [p.strip() for p in line.split('|')]
-                if len(parts) >= 4 and parts[0] == host_desc:
-                    host_key = parts[4] if len(parts) > 4 else ''
-                    return parts[1], parts[2], parts[3], host_key
+    row = rows.iloc[0]
+    clean = lambda value: "".join(str(value).split()) if pd.notna(value) else ""
+    sftp_id  = clean(row["SFTP_ID"])
+    sftp_pw  = clean(row["SFTP_PW"])
+    host_ip  = clean(row["HOST_IP"])
+    host_key = clean(row["HOST_KEY"]) if "HOST_KEY" in ctl.columns else ""
 
-    raise KeyError(
-        f"No SFTP control entry found for host_desc={host_desc!r} "
-        f"(looked in {SFTP_CONTROL_FILE})"
-    )
+    empty_values = [
+        name for name, value in (
+            ("SFTP_ID", sftp_id), ("SFTP_PW", sftp_pw), ("HOST_IP", host_ip)
+        ) if not value
+    ]
+    if empty_values:
+        raise RuntimeError(
+            f"SFTP row for '{host_desc}' has blank values: {', '.join(empty_values)}"
+        )
+
+    return sftp_id, sftp_pw, host_ip, host_key
 
 
 def sftp_upload(host_desc: str, remote_dir: str, local_file: Path,
