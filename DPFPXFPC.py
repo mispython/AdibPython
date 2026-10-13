@@ -328,13 +328,13 @@ def get_sftp_info(host_desc: str):
 
         HOST_DESC|SFTP_ID|SFTP_PW|HOST_IP|HOST_KEY
 
-    Adjust the CONTROL_FILE path and/or parsing below to match the real
+    Adjust the SFTP_CONTROL_FILE path and/or parsing below to match the real
     control file layout in your environment.
     """
-    CONTROL_FILE = BASE_DIR / '/exdwh/host/dp/cafd_sasdata/sftp_control.txt'
+    SFTP_CONTROL_FILE   = Path("/sasdata/dwh/control/ctl_dwh_sftp_info.sas7bdat")
 
-    if CONTROL_FILE.exists():
-        with open(CONTROL_FILE) as fh:
+    if SFTP_CONTROL_FILE.exists():
+        with open(SFTP_CONTROL_FILE) as fh:
             for line in fh:
                 line = line.strip()
                 if not line or line.startswith('#'):
@@ -346,7 +346,7 @@ def get_sftp_info(host_desc: str):
 
     raise KeyError(
         f"No SFTP control entry found for host_desc={host_desc!r} "
-        f"(looked in {CONTROL_FILE})"
+        f"(looked in {SFTP_CONTROL_FILE})"
     )
 
 
