@@ -30,15 +30,14 @@ import PBBDPFMT     # PUT(CUSTCODE, DDCUSTCD.)
 # CONFIGURATION
 # ============================================================================
 
-BASE_DIR = Path('.')
-INPUT_DIR = BASE_DIR / '/exdwh/host/dp/cafd_sasdata'
-OUTPUT_DIR = BASE_DIR / '/dwh/ftp/drr'
+INPUT_DIR           = Path('/exdwh/host/dp/cafd_sasdata')
+OUTPUT_DIR          = Path('/dwh/ftp/drr')
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DRR_HOST_DESC       = "Data Report Repository (DRR)"
 DRR_REMOTE_DIR      = "WMTB-SA&S/DEP - SAS/MOVEMENT"
 
-SFTP_CONTROL_FILE   = Path("/sasdata/dwh/control/ctl_dwh_sftp_info.sas7bdat")
+SFTP_CONTROL_FILE   = Path('/sasdata/dwh/control/ctl_dwh_sftp_info.sas7bdat')
 
 ISLAMIC_CUSTCODES = {77, 78, 95, 96}
 
@@ -327,7 +326,7 @@ def get_sftp_info(host_desc: str):
     if not SFTP_CONTROL_FILE.exists():
         raise FileNotFoundError(f"SFTP control file not found: {SFTP_CONTROL_FILE}")
 
-    ctl = pd.read_sas(SFTP_CONTROL_FILE, format="sas7bdat", encoding="utf-8")
+    ctl, _meta = pyreadstat.read_sas7bdat(str(SFTP_CONTROL_FILE))
     ctl.columns = [str(c).upper().strip() for c in ctl.columns]
 
     required = {"HOST_DESC", "SFTP_ID", "SFTP_PW", "HOST_IP"}
@@ -345,7 +344,10 @@ def get_sftp_info(host_desc: str):
         )
 
     row = rows.iloc[0]
-    clean = lambda value: "".join(str(value).split()) if pd.notna(value) else ""
+
+    def clean(value):
+        return str(value).strip() if pd.notna(value) else ""
+
     sftp_id  = clean(row["SFTP_ID"])
     sftp_pw  = clean(row["SFTP_PW"])
     host_ip  = clean(row["HOST_IP"])
@@ -367,6 +369,9 @@ def get_sftp_info(host_desc: str):
 def sftp_upload(host_desc: str, remote_dir: str, local_file: Path,
                 remote_name: str) -> None:
     """Upload one file to the SFTP server identified by HOST_DESC."""
+    if not local_file.exists():
+        raise FileNotFoundError(f"Local report missing: {local_file}")
+
     sftp_id, sftp_pw, host_ip, _host_key = get_sftp_info(host_desc)
 
     ssh = paramiko.SSHClient()
