@@ -1,970 +1,658 @@
 #!/usr/bin/env python3
 """
-File Name: EIPWRDAL
-RDAL PBCS Data Processing
-Processes banking data and generates RDAL and NSRS output files
+File Name: EIBDLIBT
+BNM Liquidity Report for Trade Finance
+Processes BA (Banker's Acceptance) and TR (Trade) transactions
+Based on SAS original code
 """
 
-import polars as pl
 import pyreadstat
-from datetime import datetime, timedelta
+import polars as pl
+from datetime import datetime, timedelta, date
 from pathlib import Path
+import warnings
+import re
 import sys
-import logging
-import gc
-import os
+import calendar
+from typing import Optional
 
-# ============================================================================
-# PATH CONFIGURATION (defined early so PBBMRDLF import can use them)
-# ============================================================================
-
-# Input paths - using direct paths
-LOAN_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBAABBA")
-PBCS_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBAABBA")
-BNM_BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL")
-PBBMRDLF_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIPWRDAL")
-
-# Output paths
-OUTPUT_BASE_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIPWRDAL")
-RDAL_OUTPUT = OUTPUT_BASE_PATH / "rdal_pbcs.txt"
-NSRS_OUTPUT = OUTPUT_BASE_PATH / "nsrs_rdal_pbcs.txt"
-
-# Ensure output directory exists
-OUTPUT_BASE_PATH.mkdir(parents=True, exist_ok=True)
+# PBBLNFMT.py is left untouched. This program's CUST/ITEM logic (see
+# process_transaction below) matches the real SAS EIBDLIBT source directly
+# and does NOT use format_btcustcd/format_liqpfmt - those formats belong to
+# other BNM programs, not this one.
 
 
 # ============================================================================
-# IMPORT PBBMRDLF REFERENCE DATA
+# LOCAL FORMAT HELPERS (kept in EIBDLIBT.py so PBBLNFMT.py stays untouched)
 # ============================================================================
+def get_days_in_month(year: int, month: int) -> int:
+    """Return the number of days in the given year/month.
+    Equivalent to SAS RPDAYS(RPMTH) array lookup built via %DCLVAR."""
+    return calendar.monthrange(year, month)[1]
 
-PBBMRDLF = None
 
-# Try direct import from current directory
+def get_remfmt(remmth: Optional[float]) -> str:
+    """Format remaining months to maturity into a 2-char BNM REMFMT code.
+
+    Equivalent to SAS:
+        PROC FORMAT;
+           VALUE REMFMT
+              LOW-0.1 = '01'   /*  UP TO 1 WK       */
+              0.1-1   = '02'   /*  >1 WK - 1 MTH    */
+              1-3     = '03'   /*  >1 MTH - 3 MTHS  */
+              3-6     = '04'   /*  >3 - 6 MTHS      */
+              6-12    = '05'   /*  >6 MTHS - 1 YR   */
+                 .    = '07'   /*  MISSING          */
+              OTHER   = '06';  /*  > 1 YEAR         */
+
+    NOTE: SAS resolves the overlap at the 0.1 boundary in favor of the
+    earlier-declared range (LOW-0.1), so remmth == 0.1 maps to '01', not '02'.
+    """
+    if remmth is None:
+        return '07'   # MISSING
+    if remmth <= 0.1:
+        return '01'   # UP TO 1 WK
+    elif remmth <= 1:
+        return '02'   # >1 WK - 1 MTH
+    elif remmth <= 3:
+        return '03'   # >1 MTH - 3 MTHS
+    elif remmth <= 6:
+        return '04'   # >3 - 6 MTHS
+    elif remmth <= 12:
+        return '05'   # >6 MTHS - 1 YR
+    else:
+        return '06'   # > 1 YEAR
+
+
+# Import from PBBELF (macro functions)
 try:
-    from PBBMRDLF import df as PBBMRDLF_df
-    PBBMRDLF = PBBMRDLF_df
-    print(f"Successfully imported PBBMRDLF (direct) with {len(PBBMRDLF)} records")
-except ImportError:
-    pass
-
-# Try importing from file paths (multiple candidates)
-if PBBMRDLF is None:
-    candidate_paths = [
-        PBBMRDLF_PATH / "PBBMRDLF.py",
-        LOAN_PATH / "PBBMRDLF.py",
-        PBCS_PATH / "PBBMRDLF.py",
-        Path(__file__).parent / "PBBMRDLF.py",
-        Path(os.getcwd()) / "PBBMRDLF.py",
-    ]
-    
-    for pbbmrdlf_file in candidate_paths:
-        if pbbmrdlf_file.exists():
-            try:
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("PBBMRDLF", str(pbbmrdlf_file))
-                if spec and spec.loader:
-                    pbbmrdlf_module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(pbbmrdlf_module)
-                    PBBMRDLF = pbbmrdlf_module.df
-                    print(f"Successfully imported PBBMRDLF from {pbbmrdlf_file} with {len(PBBMRDLF)} records")
-                    break
-            except Exception as e:
-                print(f"Warning: Could not import PBBMRDLF from {pbbmrdlf_file}: {e}")
-
-if PBBMRDLF is None:
-    print("Warning: PBBMRDLF.py not found in any expected location. Creating empty reference data.")
-
-
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# DATE CALCULATIONS
-# ============================================================================
-
-def calculate_report_dates():
-    """
-    Calculate reporting dates based on current date
-    Mimics SAS REPTDATE logic
-    """
-    today = datetime.now()
-
-    # First day of current month
-    first_of_month = datetime(today.year, today.month, 1)
-
-    # Last day of previous month
-    reptdate = first_of_month - timedelta(days=1)
-
-    day = reptdate.day
-    month = reptdate.month
-    year = reptdate.year
-
-    # Determine week and start day based on day of month
-    if day == 8:
-        sdd = 1
-        wk = '1'
-        wk1 = '4'
-    elif day == 15:
-        sdd = 9
-        wk = '2'
-        wk1 = '1'
-    elif day == 22:
-        sdd = 16
-        wk = '3'
-        wk1 = '2'
-    else:
-        sdd = 23
-        wk = '4'
-        wk1 = '3'
-
-    mm = month
-    if wk == '1':
-        mm1 = mm - 1
-        if mm1 == 0:
-            mm1 = 12
-    else:
-        mm1 = mm
-
-    sdate = datetime(year, mm, sdd)
-
-    return {
-        'reptdate': reptdate,
-        'nowk': wk,
-        'nowk1': wk1,
-        'reptmon': f'{mm:02d}',
-        'reptmon1': f'{mm1:02d}',
-        'reptyear': str(year),
-        'reptday': f'{day:02d}',
-        'rdate': reptdate.strftime('%d%m%Y'),
-        'fdate': reptdate.strftime('%d%m%Y'),
-        'sdate': sdate.strftime('%d%m%Y'),
-        'sdesc': 'PUBLIC BANK BERHAD'
-    }
-
-
-# Calculate dates
-dates = calculate_report_dates()
-logger.info(f"Processing for date: {dates['rdate']}")
-logger.info(f"Report year: {dates['reptyear']}, Month: {dates['reptmon']}, Week: {dates['nowk']}")
-logger.info(f"LOAN_PATH: {LOAN_PATH}")
-logger.info(f"PBCS_PATH: {PBCS_PATH}")
-logger.info(f"BNM_BASE_PATH: {BNM_BASE_PATH}")
-
-
-# ============================================================================
-# DATA LOADING
-# ============================================================================
-
-def load_pbbrdal_data():
-    """
-    Load PBBRDAL reference data from PBBMRDLF
-    """
-    if PBBMRDLF is not None:
-        try:
-            logger.info("Loading PBBRDAL reference data from PBBMRDLF")
-            df_ref = PBBMRDLF
-            logger.info(f"PBBRDAL data loaded: {len(df_ref)} rows")
-            logger.info(f"PBBRDAL columns: {df_ref.columns}")
-            return df_ref
-        except Exception as e:
-            logger.error(f"Error loading PBBMRDLF: {e}")
-            return pl.DataFrame({
-                'ITCODE': pl.Series([], dtype=pl.Utf8),
-                'AMTIND': pl.Series([], dtype=pl.Utf8),
-                'AMOUNT': pl.Series([], dtype=pl.Float64)
-            })
-    else:
-        logger.warning("PBBMRDLF not available. Creating empty DataFrame.")
-        return pl.DataFrame({
-            'ITCODE': pl.Series([], dtype=pl.Utf8),
-            'AMTIND': pl.Series([], dtype=pl.Utf8),
-            'AMOUNT': pl.Series([], dtype=pl.Float64)
-        })
-
-
-def load_alw_data(dates):
-    """Load ALW data from BNM and PBCS sources"""
-    reptmon = dates['reptmon']
-    nowk = dates['nowk']
-    reptyear = dates['reptyear']
-
-    # Try different possible file name formats for BNM
-    bnm_paths = [
-        BNM_BASE_PATH / f"alw{reptmon}{nowk}.sas7bdat",
-        BNM_BASE_PATH / f"ALW{reptmon}{nowk}.sas7bdat",
-        BNM_BASE_PATH / f"D{reptyear}" / f"ALW{reptmon}{nowk}.sas7bdat",
-        BNM_BASE_PATH / f"D{reptyear}" / f"alw{reptmon}{nowk}.sas7bdat",
-    ]
-
-    # Try different possible file name formats for PBCS
-    pbcs_paths = [
-        PBCS_PATH / f"cclw{reptmon}{nowk}.sas7bdat",
-        PBCS_PATH / f"CCLW{reptmon}{nowk}.sas7bdat",
-    ]
-
-    dfs = []
-
-    # Try BNM files
-    bnm_found = False
-    for bnm_path in bnm_paths:
-        if bnm_path.exists():
-            logger.info(f"Loading BNM data from: {bnm_path}")
-            try:
-                df_bnm, meta_bnm = pyreadstat.read_sas7bdat(bnm_path)
-                df_bnm = pl.from_pandas(df_bnm)
-                logger.info(f"BNM data loaded: {len(df_bnm)} rows, columns: {df_bnm.columns}")
-                dfs.append(df_bnm)
-                bnm_found = True
-                break
-            except Exception as e:
-                logger.error(f"Error loading BNM file {bnm_path}: {e}")
-
-    if not bnm_found:
-        logger.warning(f"BNM file not found. Tried: {[str(p) for p in bnm_paths]}")
-
-    # Try PBCS files
-    pbcs_found = False
-    for pbcs_path in pbcs_paths:
-        if pbcs_path.exists():
-            logger.info(f"Loading PBCS data from: {pbcs_path}")
-            try:
-                df_pbcs, meta_pbcs = pyreadstat.read_sas7bdat(pbcs_path)
-                df_pbcs = pl.from_pandas(df_pbcs)
-                logger.info(f"PBCS data loaded: {len(df_pbcs)} rows, columns: {df_pbcs.columns}")
-                dfs.append(df_pbcs)
-                pbcs_found = True
-                break
-            except Exception as e:
-                logger.error(f"Error loading PBCS file {pbcs_path}: {e}")
-
-    if not pbcs_found:
-        logger.warning(f"PBCS file not found. Tried: {[str(p) for p in pbcs_paths]}")
-
-    if dfs:
-        # Standardize column names to uppercase
-        combined = pl.concat(dfs, how="vertical_relaxed")
-        # Rename lowercase columns to uppercase
-        rename_map = {}
-        for col in combined.columns:
-            if col.lower() == 'itcode':
-                rename_map[col] = 'ITCODE'
-            elif col.lower() == 'amtind':
-                rename_map[col] = 'AMTIND'
-            elif col.lower() == 'amount':
-                rename_map[col] = 'AMOUNT'
-        if rename_map:
-            combined = combined.rename(rename_map)
-        logger.info(f"Combined data: {len(combined)} rows")
-        return combined
-    else:
-        logger.error("No ALW data files found!")
-        return pl.DataFrame({
-            'ITCODE': pl.Series([], dtype=pl.Utf8),
-            'AMTIND': pl.Series([], dtype=pl.Utf8),
-            'AMOUNT': pl.Series([], dtype=pl.Float64)
-        })
-
-
-def load_loan_data_filtered(chunksize=50000):
-    """
-    Load only the records we need from loan data.
-
-    NOTE: pandas.read_sas() does NOT accept an `nrows` keyword argument.
-    Use `chunksize` (returns an iterator of DataFrames) and filter each
-    chunk as we go. This keeps memory bounded.
-    """
-    loan_paths = [
-        LOAN_PATH / "lnnote.sas7bdat",
-        LOAN_PATH / "LNNOTE.sas7bdat",
-    ]
-
-    # Target zip codes for filtering
-    cag_zipcodes = [2002, 2013, 3039, 3047, 800003098, 800003114,
-                    800004016, 800004022, 800004029, 800040050,
-                    800040053, 800050024, 800060024, 800060045,
-                    800060081, 80060085]
-
-    for loan_path in loan_paths:
-        if loan_path.exists():
-            logger.info(f"Loading loan data from: {loan_path}")
-            try:
-                import pandas as pd
-                logger.info(f"Reading in chunks of {chunksize} rows with pandas...")
-
-                zipcode_col = None
-                filtered_chunks = []
-                total_rows_scanned = 0
-
-                reader = pd.read_sas(loan_path, chunksize=chunksize)
-
-                for i, chunk_pd in enumerate(reader):
-                    df_chunk = pl.from_pandas(chunk_pd)
-                    total_rows_scanned += len(df_chunk)
-
-                    if i == 0:
-                        logger.info(f"Loan columns: {df_chunk.columns}")
-                        for col in df_chunk.columns:
-                            col_upper = col.upper()
-                            if col_upper in ('PZIPCODE', 'ZIPCODE'):
-                                zipcode_col = col
-
-                        if zipcode_col:
-                            logger.info(f"Found zipcode column: {zipcode_col}")
-                        else:
-                            logger.warning(f"PZIPCODE column not found. Available columns: {df_chunk.columns}")
-
-                    if zipcode_col:
-                        df_chunk = df_chunk.filter(pl.col(zipcode_col).is_in(cag_zipcodes))
-
-                    if len(df_chunk) > 0:
-                        filtered_chunks.append(df_chunk)
-
-                if filtered_chunks:
-                    df_loan = pl.concat(filtered_chunks, how="vertical_relaxed")
-                else:
-                    df_loan = pl.DataFrame()
-
-                logger.info(f"Scanned {total_rows_scanned} total rows")
-                logger.info(f"Filtered loan data: {len(df_loan)} rows matching target zip codes")
-                return df_loan
-
-            except Exception as e:
-                logger.error(f"Error loading loan file {loan_path} with chunked pandas read: {e}")
-                # Fallback to pyreadstat
-                try:
-                    logger.info("Trying pyreadstat without row limit...")
-                    df_loan, meta_loan = pyreadstat.read_sas7bdat(loan_path)
-                    df_loan = pl.from_pandas(df_loan)
-
-                    zipcode_col = None
-                    for col in df_loan.columns:
-                        if col.upper() in ('PZIPCODE', 'ZIPCODE'):
-                            zipcode_col = col
-                            break
-
-                    if zipcode_col:
-                        df_loan = df_loan.filter(pl.col(zipcode_col).is_in(cag_zipcodes))
-                        logger.info(f"Filtered loan data (pyreadstat fallback): {len(df_loan)} rows")
-                    else:
-                        logger.warning(f"PZIPCODE column not found. Available columns: {df_loan.columns}")
-
-                    return df_loan
-                except Exception as e2:
-                    logger.error(f"Error with pyreadstat: {e2}")
-
-    logger.warning(f"Loan file not found. Tried: {[str(p) for p in loan_paths]}")
-    return pl.DataFrame({
-        'PZIPCODE': pl.Series([], dtype=pl.Int64),
-        'LOANTYPE': pl.Series([], dtype=pl.Utf8),
-        'BALANCE': pl.Series([], dtype=pl.Float64)
-    })
-
-
-# ============================================================================
-# FORMAT MAPPINGS (from PBBLNFMT)
-# ============================================================================
-
-def apply_lnprod_format(loantype):
-    """
-    Apply LNPROD format - placeholder implementation.
-    Always returns a string to avoid SchemaError in Polars map_elements.
-    """
-    if loantype is None:
-        return None
-    if isinstance(loantype, float):
-        if loantype.is_integer():
-            return str(int(loantype))
-        return str(loantype)
-    return str(loantype)
-
-
-def apply_lndenom_format(loantype):
-    """Apply LNDENOM format - placeholder implementation"""
-    return 'D'
-
-
-# ============================================================================
-# DATA PROCESSING
-# ============================================================================
-
-# Load PBBRDAL reference data
-pbbrdal = load_pbbrdal_data()
-
-if len(pbbrdal) > 0:
-    logger.info(f"PBBRDAL data loaded: {len(pbbrdal)} rows")
-    logger.info(f"PBBRDAL sample:\n{pbbrdal.head(5)}")
-else:
-    logger.warning("PBBRDAL data is empty!")
-
-# Process PBBRDAL1 - set amount indicators and zero amounts
-if len(pbbrdal) > 0:
-    if 'ITCODE' in pbbrdal.columns:
-        if 'AMTIND' not in pbbrdal.columns:
-            pbbrdal = pbbrdal.with_columns([pl.lit('D').alias('AMTIND')])
-        if 'AMOUNT' not in pbbrdal.columns:
-            pbbrdal = pbbrdal.with_columns([pl.lit(0.0).alias('AMOUNT')])
-
-        pbbrdal1 = pbbrdal.with_columns([
-            pl.when(pl.col('ITCODE').str.slice(1, 1) == '0')
-            .then(pl.lit(' '))
-            .otherwise(pl.lit('D'))
-            .alias('AMTIND'),
-            pl.lit(0.0).alias('AMOUNT')
-        ])
-    else:
-        logger.error("PBBRDAL missing required column: ITCODE")
-        pbbrdal1 = pl.DataFrame({
-            'ITCODE': pl.Series([], dtype=pl.Utf8),
-            'AMTIND': pl.Series([], dtype=pl.Utf8),
-            'AMOUNT': pl.Series([], dtype=pl.Float64)
-        })
-else:
-    pbbrdal1 = pl.DataFrame({
-        'ITCODE': pl.Series([], dtype=pl.Utf8),
-        'AMTIND': pl.Series([], dtype=pl.Utf8),
-        'AMOUNT': pl.Series([], dtype=pl.Float64)
-    })
-
-# Load ALW data
-alw = load_alw_data(dates)
-
-if len(alw) > 0:
-    logger.info(f"ALW data loaded: {len(alw)} rows")
-    logger.info(f"ALW columns: {alw.columns}")
-    logger.info(f"ALW sample:\n{alw.head(5)}")
-else:
-    logger.warning("ALW data is empty!")
-
-# Merge ALW and PBBRDAL1
-if len(alw) > 0 and len(pbbrdal1) > 0:
-    logger.info("Merging ALW and PBBRDAL1 data")
-
-    # Ensure both have uppercase column names
-    alw_cols = alw.columns
-    pbbrdal_cols = pbbrdal1.columns
-
-    alw_rename = {}
-    for col in alw_cols:
-        if col.lower() in ('itcode', 'amtind', 'amount') and col != col.upper():
-            alw_rename[col] = col.upper()
-    if alw_rename:
-        alw = alw.rename(alw_rename)
-
-    pbbrdal_rename = {}
-    for col in pbbrdal_cols:
-        if col.lower() in ('itcode', 'amtind', 'amount') and col != col.upper():
-            pbbrdal_rename[col] = col.upper()
-    if pbbrdal_rename:
-        pbbrdal1 = pbbrdal1.rename(pbbrdal_rename)
-
-    rdal = alw.join(
-        pbbrdal1,
-        on=['ITCODE', 'AMTIND'],
-        how='full',
-        suffix='_pbb'
-    ).with_columns([
-        pl.coalesce(['AMOUNT', 'AMOUNT_pbb', pl.lit(0.0)]).alias('AMOUNT')
-    ]).select(['ITCODE', 'AMTIND', 'AMOUNT'])
-
-    logger.info(f"After merge: {len(rdal)} rows")
-elif len(alw) > 0:
-    logger.info("Using ALW data only")
-    rdal = alw
-elif len(pbbrdal1) > 0:
-    logger.info("Using PBBRDAL1 data only")
-    rdal = pbbrdal1
-else:
-    logger.error("No data available for RDAL processing!")
-    rdal = pl.DataFrame({
-        'ITCODE': pl.Series([], dtype=pl.Utf8),
-        'AMTIND': pl.Series([], dtype=pl.Utf8),
-        'AMOUNT': pl.Series([], dtype=pl.Float64)
-    })
-
-del alw, pbbrdal, pbbrdal1
-gc.collect()
-
-logger.info(f"RDAL before filtering: {len(rdal)} rows")
-
-# Remove unwanted items
-rdal = rdal.filter(
-    ~(
-        (pl.col('ITCODE').str.slice(0, 5).is_between(pl.lit('30221'), pl.lit('30228'))) |
-        (pl.col('ITCODE').str.slice(0, 5).is_between(pl.lit('30231'), pl.lit('30238'))) |
-        (pl.col('ITCODE').str.slice(0, 5).is_between(pl.lit('30091'), pl.lit('30098'))) |
-        (pl.col('ITCODE').str.slice(0, 5).is_between(pl.lit('40151'), pl.lit('40158'))) |
-        (pl.col('ITCODE').str.slice(0, 5) == 'NSSTS')
+    from PBBELF import (
+        calculate_next_bldate,
+        calculate_remmth,
     )
-)
-
-logger.info(f"RDAL after filtering unwanted: {len(rdal)} rows")
-
-
-# ============================================================================
-# CAG PROCESSING (Loan Data)
-# ============================================================================
-
-logger.info("Loading loan data with filtering...")
-loan_data = load_loan_data_filtered(chunksize=50000)
-
-if len(loan_data) > 0:
-    logger.info("Processing CAG loan data")
-    logger.info(f"Loan data columns: {loan_data.columns}")
-
-    zipcode_col = None
-    loantype_col = None
-    balance_col = None
-
-    for col in loan_data.columns:
-        col_upper = col.upper()
-        if col_upper == 'PZIPCODE' or col_upper == 'ZIPCODE':
-            zipcode_col = col
-        elif col_upper == 'LOANTYPE' or col_upper == 'LOAN_TYPE':
-            loantype_col = col
-        elif col_upper == 'BALANCE' or col_upper == 'BAL' or col_upper == 'AMOUNT':
-            balance_col = col
-
-    if zipcode_col and loantype_col and balance_col:
-        logger.info(f"Found columns - ZIP: {zipcode_col}, LOAN: {loantype_col}, BAL: {balance_col}")
-
-        loan_data = loan_data.rename({
-            zipcode_col: 'PZIPCODE',
-            loantype_col: 'LOANTYPE',
-            balance_col: 'BALANCE'
-        })
-
-        cag_zipcodes = [2002, 2013, 3039, 3047, 800003098, 800003114,
-                        800004016, 800004022, 800004029, 800040050,
-                        800040053, 800050024, 800060024, 800060045,
-                        800060081, 80060085]
-
-        cag = loan_data.filter(pl.col('PZIPCODE').is_in(cag_zipcodes))
-        logger.info(f"CAG filtered data: {len(cag)} rows")
-
-        if len(cag) > 0:
-            cag = cag.with_columns([
-                pl.col('LOANTYPE').map_elements(apply_lnprod_format, return_dtype=pl.Utf8).alias('PRODCD'),
-                pl.col('LOANTYPE').map_elements(apply_lndenom_format, return_dtype=pl.Utf8).alias('AMTIND'),
-                pl.lit('7511100000000Y').alias('ITCODE')
-            ])
-
-            cag_summary = cag.group_by(['ITCODE', 'AMTIND']).agg([
-                pl.col('BALANCE').sum().alias('AMOUNT')
-            ])
-
-            rdal = pl.concat([rdal, cag_summary], how="vertical_relaxed")
-            logger.info(f"RDAL after CAG processing: {len(rdal)} rows")
-
-            del cag, cag_summary, loan_data
-            gc.collect()
+except ImportError:
+    # Fallback definitions if PBBELF not available
+    def calculate_next_bldate(bldate, issdte, payfreq, freq):
+        """Calculate next billing date (NXTBLDT macro fallback)"""
+        if payfreq == '6':
+            # Fortnightly - add 14 days
+            dd, mm, yy = bldate.day + 14, bldate.month, bldate.year
+            dim = get_days_in_month(yy, mm)
+            if dd > dim:
+                dd, mm = dd - dim, mm + 1
+                if mm > 12:
+                    mm, yy = mm - 12, yy + 1
+            return date(yy, mm, dd)
         else:
-            logger.warning("No CAG records found for the specified zip codes")
-    else:
-        logger.warning(f"Loan data missing required columns. Found: {loan_data.columns}")
-else:
-    logger.info("No loan data available")
+            # Monthly/quarterly/etc.
+            dd, mm, yy = issdte.day, bldate.month + freq, bldate.year
+            if mm > 12:
+                mm, yy = mm - 12, yy + 1
+            dim = get_days_in_month(yy, mm)
+            return date(yy, mm, min(dd, dim))
 
-rdal = rdal.filter(pl.col('ITCODE') != '4364008110000Y')
+    def calculate_remmth(matdate, runoff_dt, rpyr, rpmth, rpday):
+        """Calculate remaining months to maturity (REMMTH macro fallback)"""
+        rpdays = get_days_in_month(rpyr, rpmth)
+        mdday = min(matdate.day, rpdays)
+        remy = matdate.year - rpyr
+        remm = matdate.month - rpmth
+        remd = mdday - rpday
+        return remy * 12 + remm + remd / rpdays
 
-rdal = rdal.with_columns([
-    pl.when(pl.col('ITCODE') != '3400061006120Y')
-    .then(pl.col('AMOUNT').abs())
-    .otherwise(pl.col('AMOUNT'))
-    .alias('AMOUNT')
-])
+# saspy is optional at import time so the rest of the pipeline still works
+# (parquet/csv output) even if saspy / a SAS session isn't available.
+try:
+    import saspy
+    SASPY_AVAILABLE = True
+except ImportError:
+    saspy = None
+    SASPY_AVAILABLE = False
 
-logger.info(f"RDAL final row count: {len(rdal)}")
+warnings.filterwarnings('ignore')
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+BASE_DIR = Path(__file__).resolve().parent
+INPUT_DIR = BASE_DIR / "/dwh/btrade_d/"
+OUTPUT_DIR = BASE_DIR / "host_pq/mis/output/BTRADE/"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Input SAS files (without date suffix - will be appended)
+BTDTL_BASE = INPUT_DIR / "btdtl"
+PBA01_BASE = INPUT_DIR / "pba01"
+
+# Output files
+OUTPUT_PARQUET = OUTPUT_DIR / "bt.parquet"
+OUTPUT_CSV = OUTPUT_DIR / "bt.csv"
+OUTPUT_SAS7BDAT = OUTPUT_DIR / "bt.sas7bdat"
+OUTPUT_LOG = Path("/host_pq/mis/output/BTRADE/logs/EIBDLIBT_processing.log")
+
+BASE_DATE = date(1960, 1, 1)
+USE_LATEST_FALLBACK = True
+
+# --- saspy configuration ---
+# Name of the SAS config entry defined in your sascfg_personal.py
+# (e.g. "default", "oda", "iomlinux" etc.). Override via --sas-cfg on CLI.
+SAS_CONFIG_NAME = "default"
+
+# Libref/dataset name to use for the SAS-side output dataset
+SAS_OUTPUT_LIBREF = "XMISOUT"
+SAS_OUTPUT_DSNAME = "bt"
+
+# Whether to attempt writing the .sas7bdat output by default
+WRITE_SAS7BDAT = True
 
 
 # ============================================================================
-# SPLIT DATA INTO AL, OB, SP
+# SAS FILE READERS WITH LATEST FILE DETECTION
 # ============================================================================
+def find_latest_file(base_path):
+    """Find the latest file matching pattern (YYYYMMDD)"""
+    parent = base_path.parent
+    stem = base_path.stem
 
-rdal_filtered = rdal.filter(
-    ~pl.col('ITCODE').str.slice(13, 1).is_in(['F', '#'])
-)
+    patterns = [
+        rf"{stem}(\d{{8}})\.sas7bdat$",
+        rf"{stem}_(\d{{8}})\.sas7bdat$",
+        rf"{stem}(\d{{6}})\.sas7bdat$",
+        rf"{stem}_(\d{{6}})\.sas7bdat$",
+    ]
 
-logger.info(f"RDAL filtered (no F/#): {len(rdal_filtered)} rows")
-
-if len(rdal_filtered) == 0:
-    logger.warning("No data after filtering! Check if ITCODE has proper length or data format.")
-    if len(rdal) > 0:
-        logger.info(f"RDAL ITCODE samples: {rdal['ITCODE'].head(10).to_list()}")
-        logger.info(f"RDAL ITCODE lengths: {rdal['ITCODE'].str.len_chars().head(10).to_list()}")
-
-al_data = rdal_filtered.filter(
-    (pl.col('AMTIND') != ' ') &
-    ~(pl.col('ITCODE').str.slice(0, 3) == '307') &
-    ~(pl.col('ITCODE').str.slice(0, 5) == '40190') &
-    ~(pl.col('ITCODE').str.slice(0, 5) == '40191') &
-    ~(pl.col('ITCODE').str.slice(0, 4) == 'SSTS') &
-    (pl.col('ITCODE').str.slice(0, 1) != '5') &
-    ~(pl.col('ITCODE').str.slice(0, 3).is_in(['685', '785']))
-)
-
-ob_data = rdal_filtered.filter(
-    (pl.col('AMTIND') != ' ') &
-    (pl.col('ITCODE').str.slice(0, 1) == '5')
-)
-
-sp_conditions = (
-        ((pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 3) == '307')) |
-        ((pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 5) == '40190')) |
-        ((pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 5) == '40191')) |
-        ((pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 3).is_in(['685', '785']))) |
-        (pl.col('ITCODE').str.slice(1, 1) == '0')
-)
-
-sp_data = rdal_filtered.filter(sp_conditions)
-
-ssts_data = rdal_filtered.filter(
-    (pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 4) == 'SSTS')
-).with_columns([
-    pl.lit('4017000000000Y').alias('ITCODE')
-])
-
-if len(ssts_data) > 0:
-    sp_data = pl.concat([sp_data, ssts_data], how="vertical_relaxed")
-
-logger.info(f"AL data rows: {len(al_data)}")
-logger.info(f"OB data rows: {len(ob_data)}")
-logger.info(f"SP data rows: {len(sp_data)}")
-
-
-# ============================================================================
-# WRITE RDAL OUTPUT FILE
-# ============================================================================
-
-def write_rdal_file(al_data, ob_data, sp_data, dates, output_path):
-    """Write RDAL output file with proper formatting"""
-
-    with open(output_path, 'w') as f:
-        phead = f"RDAL{dates['reptday']}{dates['reptmon']}{dates['reptyear']}"
-        f.write(f"{phead}\n")
-
-        # AL section
-        f.write("AL\n")
-
-        if len(al_data) > 0:
-            al_sorted = al_data.sort(['ITCODE', 'AMTIND'])
-
-            al_grouped = al_sorted.group_by('ITCODE', maintain_order=True).agg([
-                pl.when(pl.col('AMTIND') == 'D')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTD'),
-                pl.when(pl.col('AMTIND') == 'I')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTI'),
-                pl.when(pl.col('AMTIND') == 'F')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTF')
-            ])
-
-            for row in al_grouped.iter_rows(named=True):
-                itcode = row['ITCODE']
-
-                proceed = True
-                if dates['reptday'] in ['08', '22']:
-                    if itcode == '4003000000000Y' and itcode[0:2] in ['68', '78']:
-                        proceed = False
-                if itcode == '4966000000000F':
-                    proceed = False
-
-                if proceed:
-                    amountd = round(row['AMOUNTD'] / 1000)
-                    amounti = round(row['AMOUNTI'] / 1000)
-                    amountf = round(row['AMOUNTF'] / 1000)
-                    amountd_total = amountd + amounti + amountf
-
-                    f.write(f"{itcode};{amountd_total};{amounti};{amountf}\n")
-        else:
-            logger.warning("No AL data to write")
-
-        # OB section
-        f.write("OB\n")
-
-        if len(ob_data) > 0:
-            ob_sorted = ob_data.sort(['ITCODE', 'AMTIND'])
-
-            ob_grouped = ob_sorted.group_by('ITCODE', maintain_order=True).agg([
-                pl.when(pl.col('AMTIND') == 'D')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTD'),
-                pl.when(pl.col('AMTIND') == 'I')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTI'),
-                pl.when(pl.col('AMTIND') == 'F')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTF')
-            ])
-
-            for row in ob_grouped.iter_rows(named=True):
-                amountd = round(row['AMOUNTD'] / 1000)
-                amounti = round(row['AMOUNTI'] / 1000)
-                amountf = round(row['AMOUNTF'] / 1000)
-                amountd_total = amountd + amounti
-
-                f.write(f"{row['ITCODE']};{amountd_total};{amounti};{amountf}\n")
-        else:
-            logger.warning("No OB data to write")
-
-        # SP section
-        f.write("SP\n")
-
-        if len(sp_data) > 0:
-            sp_sorted = sp_data.sort('ITCODE')
-
-            sp_grouped = sp_sorted.group_by('ITCODE', maintain_order=True).agg([
-                pl.when(pl.col('AMTIND') == 'D')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTD'),
-                pl.when(pl.col('AMTIND') == 'F')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTF')
-            ])
-
-            for row in sp_grouped.iter_rows(named=True):
-                amountd = round(row['AMOUNTD'] / 1000)
-                amountf = round(row['AMOUNTF'] / 1000)
-                amountd_total = amountd + amountf
-
-                f.write(f"{row['ITCODE']};{amountd_total};{amountf}\n")
-        else:
-            logger.warning("No SP data to write")
-
-
-write_rdal_file(al_data, ob_data, sp_data, dates, RDAL_OUTPUT)
-logger.info(f"RDAL file written to: {RDAL_OUTPUT}")
-
-
-# ============================================================================
-# PROCESS DATA FOR NSRS (Second Processing)
-# ============================================================================
-
-rdal_processed = rdal.with_columns([
-    pl.when(pl.col('ITCODE').str.slice(13, 1) == '#')
-    .then(pl.col('ITCODE').str.slice(0, 13) + 'Y')
-    .otherwise(pl.col('ITCODE'))
-    .alias('ITCODE'),
-    pl.when(pl.col('ITCODE').str.slice(13, 1) == '#')
-    .then(pl.col('AMOUNT') * -1)
-    .otherwise(pl.col('AMOUNT'))
-    .alias('AMOUNT')
-])
-
-rdal_agg = rdal_processed.group_by(['ITCODE', 'AMTIND']).agg([
-    pl.col('AMOUNT').sum()
-])
-
-rdal_filtered2 = rdal_agg
-
-al_data2 = rdal_filtered2.filter(
-    (pl.col('AMTIND') != ' ') &
-    ~(pl.col('ITCODE').str.slice(0, 3) == '307') &
-    ~(pl.col('ITCODE').str.slice(0, 5) == '40190') &
-    ~(pl.col('ITCODE').str.slice(0, 5) == '40191') &
-    ~(pl.col('ITCODE').str.slice(0, 4) == 'SSTS') &
-    (pl.col('ITCODE').str.slice(0, 1) != '5') &
-    ~(pl.col('ITCODE').str.slice(0, 3).is_in(['685', '785']))
-)
-
-ob_data2 = rdal_filtered2.filter(
-    (pl.col('AMTIND') != ' ') &
-    (pl.col('ITCODE').str.slice(0, 1) == '5')
-)
-
-sp_conditions2 = (
-        ((pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 3) == '307')) |
-        ((pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 5) == '40190')) |
-        ((pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 5) == '40191')) |
-        ((pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 3).is_in(['685', '785']))) |
-        (pl.col('ITCODE').str.slice(1, 1) == '0')
-)
-
-sp_data2 = rdal_filtered2.filter(sp_conditions2)
-
-ssts_data2 = rdal_filtered2.filter(
-    (pl.col('AMTIND') != ' ') & (pl.col('ITCODE').str.slice(0, 4) == 'SSTS')
-).with_columns([
-    pl.lit('4017000000000Y').alias('ITCODE')
-])
-
-if len(ssts_data2) > 0:
-    sp_data2 = pl.concat([sp_data2, ssts_data2], how="vertical_relaxed")
-
-
-# ============================================================================
-# WRITE NSRS OUTPUT FILE
-# ============================================================================
-
-def write_nsrs_file(al_data, ob_data, sp_data, dates, output_path):
-    """Write NSRS output file with proper formatting"""
-
-    with open(output_path, 'w') as f:
-        phead = f"RDAL{dates['reptday']}{dates['reptmon']}{dates['reptyear']}"
-        f.write(f"{phead}\n")
-
-        # AL section
-        f.write("AL\n")
-
-        if len(al_data) > 0:
-            al_sorted = al_data.sort(['ITCODE', 'AMTIND'])
-
-            al_grouped = al_sorted.group_by('ITCODE', maintain_order=True).agg([
-                pl.when(pl.col('AMTIND') == 'D')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTD'),
-                pl.when(pl.col('AMTIND') == 'I')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTI'),
-                pl.when(pl.col('AMTIND') == 'F')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTF')
-            ])
-
-            for row in al_grouped.iter_rows(named=True):
-                itcode = row['ITCODE']
-
-                proceed = True
-                if dates['reptday'] in ['08', '22']:
-                    if itcode == '4003000000000Y' and itcode[0:2] in ['68', '78']:
-                        proceed = False
-
-                if proceed:
-                    amountd_raw = row['AMOUNTD']
-                    amounti_raw = row['AMOUNTI']
-                    amountf_raw = row['AMOUNTF']
-
-                    if itcode[0:2] == '80':
-                        amountd = round(amountd_raw / 1000)
-                        amounti = round(amounti_raw / 1000)
-                        amountf = round(amountf_raw / 1000)
+    latest_file, latest_date = None, None
+    for f in parent.glob(f"{stem}*"):
+        if not f.suffix == '.sas7bdat':
+            continue
+        for pattern in patterns:
+            match = re.search(pattern, str(f.name))
+            if match:
+                date_str = match.group(1)
+                try:
+                    if len(date_str) == 8:
+                        file_date = datetime.strptime(date_str, '%Y%m%d').date()
                     else:
-                        amountd = round(amountd_raw)
-                        amounti = round(amounti_raw)
-                        amountf = round(amountf_raw)
+                        year = 2000 + int(date_str[:2])
+                        file_date = datetime.strptime(f"{year}{date_str[2:]}", '%Y%m%d').date()
+                    if latest_date is None or file_date > latest_date:
+                        latest_date, latest_file = file_date, f
+                except:
+                    pass
+    return latest_file, latest_date
 
-                    amountd_total = amountd + amounti + amountf
 
-                    f.write(f"{itcode};{amountd_total};{amounti};{amountf}\n")
-        else:
-            logger.warning("No AL data for NSRS")
+def read_sas(filepath):
+    """Read SAS .sas7bdat file and return as Polars DataFrame"""
+    print(f"  Reading: {filepath.name}")
+    df, meta = pyreadstat.read_sas7bdat(str(filepath))
+    return pl.from_pandas(df)
 
-        # OB section
-        f.write("OB\n")
 
-        if len(ob_data) > 0:
-            ob_sorted = ob_data.sort(['ITCODE', 'AMTIND'])
+def get_sas_file(base_path, y, m, d):
+    """Get SAS file - exact match first, then latest if fallback enabled"""
+    y2, m2, d2 = f"{y%100:02d}", f"{m:02d}", f"{d:02d}"
+    y4 = f"{y:04d}"
 
-            ob_grouped = ob_sorted.group_by('ITCODE', maintain_order=True).agg([
-                pl.when(pl.col('AMTIND') == 'D')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTD'),
-                pl.when(pl.col('AMTIND') == 'I')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTI'),
-                pl.when(pl.col('AMTIND') == 'F')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTF')
-            ])
+    exact_patterns = [
+        base_path.parent / f"{base_path.stem}{y4}{m2}{d2}.sas7bdat",
+        base_path.parent / f"{base_path.stem}{y2}{m2}{d2}.sas7bdat",
+        base_path.parent / f"{base_path.stem}_{y4}{m2}{d2}.sas7bdat",
+        base_path.parent / f"{base_path.stem}_{y2}{m2}{d2}.sas7bdat",
+    ]
 
-            for row in ob_grouped.iter_rows(named=True):
-                itcode = row['ITCODE']
+    for filepath in exact_patterns:
+        if filepath.exists():
+            print(f"  Using exact file: {filepath.name}")
+            return read_sas(filepath)
 
-                amountd_raw = row['AMOUNTD']
-                amounti_raw = row['AMOUNTI']
-                amountf_raw = row['AMOUNTF']
+    if USE_LATEST_FALLBACK:
+        latest_file, latest_date = find_latest_file(base_path)
+        if latest_file:
+            print(f"  WARNING: Exact file not found. Using latest: {latest_file.name} (dated {latest_date})")
+            with open(OUTPUT_LOG, 'a') as log:
+                log.write(f"{datetime.now()}: Using {latest_file.name}\n")
+            return read_sas(latest_file)
 
-                if itcode[0:2] == '80':
-                    amountd = round(amountd_raw / 1000)
-                    amounti = round(amounti_raw / 1000)
-                    amountf = round(amountf_raw / 1000)
+    raise FileNotFoundError(f"No file found for date {y2}{m2}{d2} at {base_path}")
+
+
+# ============================================================================
+# RECORD PROCESSING FUNCTION
+# ============================================================================
+def add_record(records, prefix, item, cust, remmth, amount):
+    """Add a single BNM record"""
+    records.append({
+        'BNMCODE': f"{prefix}{item}{cust}{get_remfmt(remmth)}0000Y",
+        'AMOUNT': amount
+    })
+
+
+def process_transaction(records, row, is_ba, reptdate_sas, runoff_sas, runoff_dt, rpyr, rpmth, rpday):
+    """Process a single BA or TR transaction"""
+    if is_ba:
+        # BA: balance = FCVALUE - UNEARNED (SAS: BALANCE = FCVALUE - UNEARNED;)
+        # NOTE: SAS does not skip zero-balance rows - it still falls through
+        # to OUTPUT with AMOUNT = BALANCE (possibly 0). Matched exactly here.
+        amount_key = (row.get('FCVALUE', 0) or 0) - (row.get('UNEARNED', 0) or 0)
+    else:
+        # TR: use OUTSTAND (SAS reads OUTSTAND directly from BTDTL)
+        # Same note as above - SAS does not skip zero-OUTSTAND rows.
+        amount_key = row.get('OUTSTAND', 0) or 0
+
+    # --- CUST: matches SAS exactly -----------------------------------------
+    # SAS:  IF CUSTCD IN ('77','78','95','96') THEN CUST = '08';
+    #       ELSE CUST = '09';
+    # NOTE: this is a plain binary code - NOT a BTCUSTCD/PBBLNFMT lookup.
+    # Real BTDTL schema uses 'CUSTCODE' rather than 'CUSTCD'; fall back to
+    # 'CUSTCD' for compatibility with any table that still uses that name.
+    custcd_raw = row.get('CUSTCODE', row.get('CUSTCD', None))
+    custcd = str(custcd_raw).strip() if custcd_raw is not None else ''
+    is_individual_group = custcd in ('77', '78', '95', '96')
+    cust = '08' if is_individual_group else '09'
+
+    # --- ITEM: matches SAS exactly ------------------------------------------
+    # SAS:  PROD = 'BT';   -- hardcoded literal, NOT a LIQPFMT lookup
+    #       SELECT (PROD) WHEN ('HL'/'FL'/'RC') ... OTHERWISE ITEM = '219';
+    # Since PROD is always the literal 'BT', it never matches 'HL'/'FL'/'RC',
+    # so ITEM is always '219' regardless of the CUSTCD branch, UNLESS the
+    # PRODUCT = 100 override below applies.
+    # TODO: confirm the real column name that plays the role of SAS PRODUCT
+    # (used only for this ==100 override) - not present under this name in
+    # the BTDTL schema seen so far.
+    item = '219'
+
+    product = row.get('PRODUCT', None)
+
+    # Hardcode override for product 100 (SAS: IF PRODUCT = 100 THEN ITEM='212';)
+    if product == 100:
+        item = '212'
+
+    # Calculate days past due
+    days = 0
+    bldate = row.get('BLDATE', 0) or 0
+    if bldate > 0:
+        days = reptdate_sas - bldate
+
+    # Initialize variables
+    remmth = None
+    current_amount = amount_key
+    current_bldate = bldate
+    expr_sas = row.get('EXPRDATE', 0) or 0
+    payamt = row.get('PAYAMT', 0) or 0
+    issdte = row.get('ISSDTE', 0) or 0
+
+    record_count = 0
+
+    if expr_sas and expr_sas <= runoff_sas:
+        remmth = None
+    elif expr_sas and (expr_sas - runoff_sas) < 8:
+        remmth = 0.1
+    elif expr_sas:
+        # Payment frequency (hardcoded to '3' = 6 months)
+        payfreq = '3'
+        freq = 6  # For '3'
+
+        # Initialize bldate if needed
+        if current_bldate <= 0 and issdte > 0:
+            current_bldate = issdte
+            while current_bldate > 0 and current_bldate <= reptdate_sas:
+                bl_date = BASE_DATE + timedelta(days=int(current_bldate))
+                iss_date = BASE_DATE + timedelta(days=issdte) if issdte > 0 else bl_date
+                nxt = calculate_next_bldate(bl_date, iss_date, payfreq, freq)
+                current_bldate = (nxt - BASE_DATE).days if nxt else 0
+
+        if payamt < 0:
+            payamt = 0
+
+        if current_bldate > 0 and (current_bldate > expr_sas or current_amount <= payamt):
+            current_bldate = expr_sas
+
+        # Process payment schedule
+        while current_bldate > 0 and current_bldate <= expr_sas:
+            if current_bldate <= runoff_sas:
+                remmth = None
+            elif (current_bldate - runoff_sas) < 8:
+                remmth = 0.1
+            else:
+                mat_date = BASE_DATE + timedelta(days=int(current_bldate))
+                remmth = calculate_remmth(mat_date, runoff_dt, runoff_dt.year, runoff_dt.month, runoff_dt.day)
+
+            if (remmth and remmth > 1) or current_bldate == expr_sas:
+                break
+
+            if payamt > 0 and remmth is not None:
+                current_amount -= payamt
+                # Part 2-RM (95) - standard
+                add_record(records, '95', item, cust, remmth, payamt)
+                # Part 1-RM (93) - with NPL adjustment
+                if is_ba:
+                    npl_rem = 13 if days > 89 else remmth
                 else:
-                    amountd = round(amountd_raw)
-                    amounti = round(amounti_raw)
-                    amountf = round(amountf_raw)
+                    npl_rem = 0.1 if days > 89 else remmth
+                add_record(records, '93', item, cust, npl_rem, payamt)
+                record_count += 2
 
-                amountd_total = amountd + amounti
+            # Calculate next bldate
+            if current_bldate > 0:
+                bl_date = BASE_DATE + timedelta(days=int(current_bldate))
+                iss_date = BASE_DATE + timedelta(days=issdte) if issdte > 0 else bl_date
+                nxt = calculate_next_bldate(bl_date, iss_date, payfreq, freq)
+                current_bldate = (nxt - BASE_DATE).days if nxt else 0
 
-                f.write(f"{itcode};{amountd_total};{amounti};{amountf}\n")
+            if current_bldate > 0 and (current_bldate > expr_sas or current_amount <= payamt):
+                current_bldate = expr_sas
+
+        # Calculate final remmth for remaining balance
+        if current_bldate > 0:
+            if current_bldate <= runoff_sas:
+                remmth = None
+            elif (current_bldate - runoff_sas) < 8:
+                remmth = 0.1
+            else:
+                mat_date = BASE_DATE + timedelta(days=int(current_bldate))
+                remmth = calculate_remmth(mat_date, runoff_dt, runoff_dt.year, runoff_dt.month, runoff_dt.day)
+
+    # Output remaining balance
+    if current_amount != 0:
+        add_record(records, '95', item, cust, remmth, current_amount)
+        if is_ba:
+            npl_rem = 13 if days > 89 else remmth
         else:
-            logger.warning("No OB data for NSRS")
+            npl_rem = 0.1 if days > 89 else remmth
+        add_record(records, '93', item, cust, npl_rem, current_amount)
+        record_count += 2
 
-        # SP section
-        f.write("SP\n")
+    return record_count
 
-        if len(sp_data) > 0:
-            sp_sorted = sp_data.sort('ITCODE')
 
-            sp_grouped = sp_sorted.group_by('ITCODE', maintain_order=True).agg([
-                pl.when(pl.col('AMTIND') == 'D')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTD'),
-                pl.when(pl.col('AMTIND') == 'F')
-                .then(pl.col('AMOUNT'))
-                .otherwise(0.0)
-                .sum()
-                .alias('AMOUNTF')
-            ])
+# ============================================================================
+# SAS7BDAT OUTPUT VIA SASPY
+# ============================================================================
+def write_sas7bdat(result_df: pl.DataFrame, output_dir: Path, libref: str,
+                    dsname: str, cfgname: str, log_path: Path):
+    """
+    Write the final Polars result DataFrame out as a native .sas7bdat file
+    using saspy. This starts a SAS session, assigns a library pointing at
+    `output_dir`, uploads the data as a SAS dataset, then ends the session.
+    The library assignment (fileref pointing at output_dir) is what causes
+    SAS to physically write <dsname>.sas7bdat into that folder.
+    """
+    if not SASPY_AVAILABLE:
+        msg = "  WARNING: saspy is not installed - skipping .sas7bdat output."
+        print(msg)
+        with open(log_path, 'a') as log:
+            log.write(f"{datetime.now()}: {msg}\n")
+        return False
 
-            for row in sp_grouped.iter_rows(named=True):
-                itcode = row['ITCODE']
+    if len(result_df) == 0:
+        print("  No records to write - skipping .sas7bdat output.")
+        return False
 
-                amountd_raw = row['AMOUNTD']
-                amountf_raw = row['AMOUNTF']
+    sas = None
+    try:
+        print(f"\n  Starting SAS session (cfgname='{cfgname}')...")
+        sas = saspy.SASsession(cfgname=cfgname)
 
-                amountd_total = amountd_raw + amountf_raw
+        print(f"  Assigning library {libref} -> {output_dir}")
+        lib_rc = sas.saslib(libref, path=str(output_dir))
+        if lib_rc is not None and getattr(sas, "SYSERR", 0) not in (0, None):
+            print(f"  WARNING: libname assignment may have issues (SYSERR={sas.SYSERR})")
 
-                if itcode[0:2] == '80':
-                    amountd = round(amountd_total / 1000)
-                else:
-                    amountd = round(amountd_total)
+        # saspy works with pandas, so convert from Polars -> pandas
+        pdf = result_df.to_pandas()
 
-                amountf = round(amountf_raw)
+        print(f"  Uploading DataFrame to SAS dataset {libref}.{dsname} "
+              f"({len(pdf)} rows)...")
+        sas.df2sd(df=pdf, table=dsname, libref=libref)
 
-                f.write(f"{itcode};{amountd};{amountf}\n")
+        out_file = output_dir / f"{dsname}.sas7bdat"
+        if out_file.exists():
+            print(f"  SAS dataset written: {out_file}")
+            return True
         else:
-            logger.warning("No SP data for NSRS")
+            print(f"  WARNING: Expected output file not found at {out_file}")
+            return False
+
+    except Exception as e:
+        print(f"  SAS7BDAT Write Error: {e}")
+        import traceback
+        traceback.print_exc()
+        with open(log_path, 'a') as log:
+            log.write(f"{datetime.now()}: SAS7BDAT write failed: {e}\n")
+        return False
+
+    finally:
+        if sas is not None:
+            try:
+                sas.endsas()
+            except Exception:
+                pass
 
 
-write_nsrs_file(al_data2, ob_data2, sp_data2, dates, NSRS_OUTPUT)
-logger.info(f"NSRS file written to: {NSRS_OUTPUT}")
+# ============================================================================
+# MAIN PROCESSING
+# ============================================================================
+def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
+    global USE_LATEST_FALLBACK
 
-print("\n" + "=" * 70)
-print("Processing complete!")
-print("=" * 70)
-print(f"Output files:")
-print(f"  - RDAL: {RDAL_OUTPUT}")
-print(f"  - NSRS: {NSRS_OUTPUT}")
+    if write_sas7bdat_flag is None:
+        write_sas7bdat_flag = WRITE_SAS7BDAT
+    if sas_cfgname is None:
+        sas_cfgname = SAS_CONFIG_NAME
+
+    # Step 1: Set report date
+    # Source files (BTDTL/PBA01) are produced the day before processing runs,
+    # so the default report date is "yesterday", not today.
+    reptdate = reptdate or (date.today() - timedelta(days=1))
+    rpyr, rpmth, rpday = reptdate.year, reptdate.month, reptdate.day
+    reptdate_sas = (reptdate - BASE_DATE).days
+
+    print("\n" + "=" * 70)
+    print("BNM LIQUIDITY REPORT - TRADE FINANCE PROCESSING")
+    print("=" * 70)
+    print(f"\nReport Date: {reptdate.strftime('%d/%m/%Y')}")
+    print(f"Report Year: {rpyr}, Month: {rpmth:02d}, Day: {rpday:02d}")
+
+    # Step 2: Calculate runoff date (last day of month)
+    last_day = get_days_in_month(rpyr, rpmth)
+    runoff_dt = date(rpyr, rpmth, last_day)
+    runoff_sas = (runoff_dt - BASE_DATE).days
+    print(f"Runoff Date: {runoff_dt.strftime('%d/%m/%Y')}")
+
+    records = []
+
+    # Step 3-4: Process BA data
+    print("\n" + "-" * 50)
+    print("PROCESSING BA TRANSACTIONS (Banker's Acceptance)")
+    print("-" * 50)
+
+    try:
+        # Read BTDTL
+        print("\nReading BTDTL data...")
+        btdtl = get_sas_file(BTDTL_BASE, rpyr, rpmth, rpday)
+        btdtl = btdtl.filter((pl.col('ISSDTE') > 0) | (pl.col('EXPRDATE') > 0))
+
+        # PAYAMT is not present in every BTDTL extract. When missing, treat
+        # it as 0 for all rows (process_transaction already zeroes out any
+        # negative/absent PAYAMT), and log it instead of crashing the run.
+        if 'PAYAMT' not in btdtl.columns:
+            warn_msg = ("  WARNING: 'PAYAMT' column not found in BTDTL - "
+                        "defaulting to 0 for all rows.")
+            print(warn_msg)
+            with open(OUTPUT_LOG, 'a') as log:
+                log.write(f"{datetime.now()}: {warn_msg.strip()}\n")
+            btdtl = btdtl.with_columns(pl.lit(0).alias('PAYAMT'))
+
+        btdtl = btdtl.select(['TRANSREF', 'ISSDTE', 'EXPRDATE', 'PAYAMT'])
+        btdtl = btdtl.sort(['TRANSREF', 'ISSDTE'], descending=[False, True]).unique('TRANSREF', keep='first')
+        print(f"  BTDTL records after filtering: {len(btdtl)}")
+
+        # Read PBA01
+        print("\nReading PBA01 data...")
+        pba = get_sas_file(PBA01_BASE, rpyr, rpmth, rpday)
+        pba = pba.with_columns(pl.col('TRANSREF').cast(pl.Utf8).str.slice(1, 8).alias('TRANSREF'))
+
+        # Merge
+        ba_data = pba.join(btdtl, on='TRANSREF', how='left')
+        print(f"  BA records after merge: {len(ba_data)}")
+
+        # Process BA records
+        print("\nProcessing BA records...")
+        ba_count = 0
+        for row in ba_data.iter_rows(named=True):
+            ba_count += process_transaction(records, row, is_ba=True,
+                                           reptdate_sas=reptdate_sas,
+                                           runoff_sas=runoff_sas,
+                                           runoff_dt=runoff_dt,
+                                           rpyr=rpyr, rpmth=rpmth, rpday=rpday)
+
+        print(f"  BA records created: {ba_count}")
+
+    except Exception as e:
+        print(f"  BA Processing Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # Step 5: Process TR data
+    print("\n" + "-" * 50)
+    print("PROCESSING TR TRANSACTIONS (Trade)")
+    print("-" * 50)
+
+    try:
+        # Read BTDTL for TR
+        print("\nReading BTDTL data for TR...")
+        tr_full = get_sas_file(BTDTL_BASE, rpyr, rpmth, rpday)
+
+        # Filter for TR: LIABCODE not in BAI/BAP/BAS/BAE and DIRCTIND='D'
+        tr_data = tr_full.filter(
+            (~pl.col('LIABCODE').cast(pl.Utf8).is_in(['BAI', 'BAP', 'BAS', 'BAE'])) &
+            (pl.col('DIRCTIND').cast(pl.Utf8) == 'D')
+        )
+        print(f"  TR records before processing: {len(tr_data)}")
+
+        # Process TR records
+        print("\nProcessing TR records...")
+        tr_count = 0
+        for row in tr_data.iter_rows(named=True):
+            tr_count += process_transaction(records, row, is_ba=False,
+                                           reptdate_sas=reptdate_sas,
+                                           runoff_sas=runoff_sas,
+                                           runoff_dt=runoff_dt,
+                                           rpyr=rpyr, rpmth=rpmth, rpday=rpday)
+
+        print(f"  TR records created: {tr_count}")
+
+    except Exception as e:
+        print(f"  TR Processing Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # Step 6: Combine, filter, and output
+    print("\n" + "-" * 50)
+    print("FINAL OUTPUT")
+    print("-" * 50)
+
+    if records:
+        df = pl.DataFrame(records)
+
+        # Filter out records with missing remmth (code '07')
+        missing_df = df.filter(pl.col('BNMCODE').str.slice(7, 2) == '07')
+        if len(missing_df) > 0:
+            print(f"\n  Records with MISSING remmth (code '07'): {len(missing_df)}")
+            print(f"  Missing amount sum: {missing_df['AMOUNT'].sum():,.2f}")
+        else:
+            print("\n  Records with MISSING remmth (code '07'): 0")
+
+        # Keep only records without missing remmth
+        df_valid = df.filter(pl.col('BNMCODE').str.slice(7, 2) != '07')
+
+        # Summarize by BNMCODE
+        result = df_valid.group_by('BNMCODE').agg([
+            pl.col('AMOUNT').sum().alias('AMOUNT')
+        ]).sort('BNMCODE')
+
+        # Write output files
+        print(f"\n  Writing Parquet: {OUTPUT_PARQUET}")
+        result.write_parquet(OUTPUT_PARQUET)
+
+        print(f"  Writing CSV: {OUTPUT_CSV}")
+        result.write_csv(OUTPUT_CSV)
+
+        # Write native SAS dataset via saspy
+        sas7bdat_ok = False
+        if write_sas7bdat_flag:
+            print(f"\n  Writing SAS7BDAT via saspy: {OUTPUT_SAS7BDAT}")
+            sas7bdat_ok = write_sas7bdat(
+                result_df=result,
+                output_dir=OUTPUT_DIR,
+                libref=SAS_OUTPUT_LIBREF,
+                dsname=SAS_OUTPUT_DSNAME,
+                cfgname=sas_cfgname,
+                log_path=OUTPUT_LOG,
+            )
+        else:
+            print("\n  Skipping SAS7BDAT output (disabled).")
+
+        # Summary
+        total_amount = result['AMOUNT'].sum() if len(result) > 0 else 0
+
+        print("\n" + "=" * 70)
+        print("PROCESSING COMPLETE")
+        print("=" * 70)
+        print(f"\nOutput files:")
+        print(f"  Parquet:  {OUTPUT_PARQUET}")
+        print(f"  CSV:      {OUTPUT_CSV}")
+        if write_sas7bdat_flag:
+            status = "OK" if sas7bdat_ok else "FAILED/SKIPPED"
+            print(f"  SAS7BDAT: {OUTPUT_SAS7BDAT} [{status}]")
+        print(f"\nSummary:")
+        print(f"  Total BNM Codes: {len(result)}")
+        print(f"  Total Amount:    {total_amount:,.2f}")
+
+        if len(result) > 0 and len(result) <= 20:
+            print(f"\nBreakdown by BNMCODE:")
+            print("-" * 50)
+            for row in result.iter_rows(named=True):
+                print(f"  {row['BNMCODE']}: {row['AMOUNT']:>15,.2f}")
+    else:
+        print("\n  No records generated")
+
+
+# ============================================================================
+# COMMAND LINE INTERFACE
+# ============================================================================
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description='BNM Liquidity Report for Trade Finance')
+    parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format (default: yesterday)')
+    parser.add_argument('--exact', action='store_true', help='Require exact date match (no fallback)')
+    parser.add_argument('--latest', action='store_true', help='Use latest file if exact not found (default)')
+    parser.add_argument('--no-sas7bdat', action='store_true',
+                         help='Skip writing the .sas7bdat output via saspy')
+    parser.add_argument('--sas-cfg', default=SAS_CONFIG_NAME,
+                         help=f'saspy config name to use (default: {SAS_CONFIG_NAME})')
+
+    args = parser.parse_args()
+
+    # Set fallback behavior
+    if args.exact:
+        USE_LATEST_FALLBACK = False
+    else:
+        USE_LATEST_FALLBACK = True
+
+    # Parse date
+    reptdate = None
+    if args.date:
+        try:
+            reptdate = datetime.strptime(args.date, '%Y-%m-%d').date()
+        except ValueError:
+            print(f"Error: Invalid date format. Use YYYY-MM-DD")
+            sys.exit(1)
+
+    # Run main processing
+    main(
+        reptdate,
+        write_sas7bdat_flag=not args.no_sas7bdat,
+        sas_cfgname=args.sas_cfg,
+    )
