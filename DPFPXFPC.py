@@ -116,18 +116,20 @@ warnings.filterwarnings('ignore')
 # ============================================================================
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "/dwh/btrade_d/"
-OUTPUT_DIR = BASE_DIR / "host_pq/mis/output/BTRADE/"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Input SAS files (without date suffix - will be appended)
 BTDTL_BASE = INPUT_DIR / "btdtl"
 PBA01_BASE = INPUT_DIR / "pba01"
 
-# Output files
-OUTPUT_PARQUET = OUTPUT_DIR / "bt.parquet"
-OUTPUT_CSV = OUTPUT_DIR / "bt.csv"
-OUTPUT_SAS7BDAT = OUTPUT_DIR / "bt.sas7bdat"
+# Output files - use Path() directly
+OUTPUT_PARQUET = Path("/host_pq/mis/output/BTRADE/bt.parquet")
+OUTPUT_CSV = Path("/host_pq/mis/output/BTRADE/bt.csv")
+OUTPUT_SAS7BDAT = Path("/host_pq/mis/output/BTRADE/bt.sas7bdat")
 OUTPUT_LOG = Path("/host_pq/mis/output/BTRADE/logs/EIBDLIBT_processing.log")
+
+# Ensure parent directories exist for outputs and log
+OUTPUT_PARQUET.parent.mkdir(parents=True, exist_ok=True)
+OUTPUT_LOG.parent.mkdir(parents=True, exist_ok=True)
 
 BASE_DATE = date(1960, 1, 1)
 USE_LATEST_FALLBACK = True
@@ -584,7 +586,7 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
             print(f"\n  Writing SAS7BDAT via saspy: {OUTPUT_SAS7BDAT}")
             sas7bdat_ok = write_sas7bdat(
                 result_df=result,
-                output_dir=OUTPUT_DIR,
+                output_dir=OUTPUT_SAS7BDAT.parent,
                 libref=SAS_OUTPUT_LIBREF,
                 dsname=SAS_OUTPUT_DSNAME,
                 cfgname=sas_cfgname,
