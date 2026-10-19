@@ -101,7 +101,7 @@ except ImportError:
         return remy * 12 + remm + remd / rpdays
 
 # saspy is optional at import time so the rest of the pipeline still works
-# (parquet/csv output) even if saspy / a SAS session isn't available.
+# even if saspy / a SAS session isn't available.
 try:
     import saspy
     SASPY_AVAILABLE = True
@@ -121,15 +121,11 @@ INPUT_DIR = BASE_DIR / "/dwh/btrade_d/"
 BTDTL_BASE = INPUT_DIR / "btdtl"
 PBA01_BASE = INPUT_DIR / "pba01"
 
-# Output files - use Path() directly
-OUTPUT_PARQUET = Path("/host_pq/mis/output/BTRADE/bt.parquet")
-OUTPUT_CSV = Path("/host_pq/mis/output/BTRADE/bt.csv")
-OUTPUT_SAS7BDAT = Path("/host_pq/mis/output/BTRADE/bt.sas7bdat")
-OUTPUT_LOG = Path("/host_pq/mis/output/BTRADE/logs/EIBDLIBT_processing.log")
+# Output file - SAS7BDAT only
+OUTPUT_SAS7BDAT = Path("/dwh/dwh_m/tempsource/PBB_NLF/daily/bt.sas7bdat")
 
-# Ensure parent directories exist for outputs and log
-OUTPUT_PARQUET.parent.mkdir(parents=True, exist_ok=True)
-OUTPUT_LOG.parent.mkdir(parents=True, exist_ok=True)
+# Ensure parent directory exists for output
+OUTPUT_SAS7BDAT.parent.mkdir(parents=True, exist_ok=True)
 
 BASE_DATE = date(1960, 1, 1)
 USE_LATEST_FALLBACK = True
@@ -211,8 +207,6 @@ def get_sas_file(base_path, y, m, d):
         latest_file, latest_date = find_latest_file(base_path)
         if latest_file:
             print(f"  WARNING: Exact file not found. Using latest: {latest_file.name} (dated {latest_date})")
-            with open(OUTPUT_LOG, 'a') as log:
-                log.write(f"{datetime.now()}: Using {latest_file.name}\n")
             return read_sas(latest_file)
 
     raise FileNotFoundError(f"No file found for date {y2}{m2}{d2} at {base_path}")
@@ -258,9 +252,6 @@ def process_transaction(records, row, is_ba, reptdate_sas, runoff_sas, runoff_dt
     # Since PROD is always the literal 'BT', it never matches 'HL'/'FL'/'RC',
     # so ITEM is always '219' regardless of the CUSTCD branch, UNLESS the
     # PRODUCT = 100 override below applies.
-    # TODO: confirm the real column name that plays the role of SAS PRODUCT
-    # (used only for this ==100 override) - not present under this name in
-    # the BTDTL schema seen so far.
     item = '219'
 
     product = row.get('PRODUCT', None)
@@ -371,7 +362,7 @@ def process_transaction(records, row, is_ba, reptdate_sas, runoff_sas, runoff_dt
 # SAS7BDAT OUTPUT VIA SASPY
 # ============================================================================
 def write_sas7bdat(result_df: pl.DataFrame, output_dir: Path, libref: str,
-                    dsname: str, cfgname: str, log_path: Path):
+                    dsname: str, cfgname: str):
     """
     Write the final Polars result DataFrame out as a native .sas7bdat file
     using saspy. This starts a SAS session, assigns a library pointing at
@@ -380,10 +371,7 @@ def write_sas7bdat(result_df: pl.DataFrame, output_dir: Path, libref: str,
     SAS to physically write <dsname>.sas7bdat into that folder.
     """
     if not SASPY_AVAILABLE:
-        msg = "  WARNING: saspy is not installed - skipping .sas7bdat output."
-        print(msg)
-        with open(log_path, 'a') as log:
-            log.write(f"{datetime.now()}: {msg}\n")
+        print("  WARNING: saspy is not installed - skipping .sas7bdat output.")
         return False
 
     if len(result_df) == 0:
@@ -419,8 +407,6 @@ def write_sas7bdat(result_df: pl.DataFrame, output_dir: Path, libref: str,
         print(f"  SAS7BDAT Write Error: {e}")
         import traceback
         traceback.print_exc()
-        with open(log_path, 'a') as log:
-            log.write(f"{datetime.now()}: SAS7BDAT write failed: {e}\n")
         return False
 
     finally:
@@ -478,11 +464,8 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
         # it as 0 for all rows (process_transaction already zeroes out any
         # negative/absent PAYAMT), and log it instead of crashing the run.
         if 'PAYAMT' not in btdtl.columns:
-            warn_msg = ("  WARNING: 'PAYAMT' column not found in BTDTL - "
-                        "defaulting to 0 for all rows.")
-            print(warn_msg)
-            with open(OUTPUT_LOG, 'a') as log:
-                log.write(f"{datetime.now()}: {warn_msg.strip()}\n")
+            print("  WARNING: 'PAYAMT' column not found in BTDTL - "
+                  "defaulting to 0 for all rows.")
             btdtl = btdtl.with_columns(pl.lit(0).alias('PAYAMT'))
 
         btdtl = btdtl.select(['TRANSREF', 'ISSDTE', 'EXPRDATE', 'PAYAMT'])
@@ -573,14 +556,7 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
             pl.col('AMOUNT').sum().alias('AMOUNT')
         ]).sort('BNMCODE')
 
-        # Write output files
-        print(f"\n  Writing Parquet: {OUTPUT_PARQUET}")
-        result.write_parquet(OUTPUT_PARQUET)
-
-        print(f"  Writing CSV: {OUTPUT_CSV}")
-        result.write_csv(OUTPUT_CSV)
-
-        # Write native SAS dataset via saspy
+        # Write native SAS dataset via saspy (ONLY output)
         sas7bdat_ok = False
         if write_sas7bdat_flag:
             print(f"\n  Writing SAS7BDAT via saspy: {OUTPUT_SAS7BDAT}")
@@ -590,7 +566,6 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
                 libref=SAS_OUTPUT_LIBREF,
                 dsname=SAS_OUTPUT_DSNAME,
                 cfgname=sas_cfgname,
-                log_path=OUTPUT_LOG,
             )
         else:
             print("\n  Skipping SAS7BDAT output (disabled).")
@@ -601,9 +576,7 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
         print("\n" + "=" * 70)
         print("PROCESSING COMPLETE")
         print("=" * 70)
-        print(f"\nOutput files:")
-        print(f"  Parquet:  {OUTPUT_PARQUET}")
-        print(f"  CSV:      {OUTPUT_CSV}")
+        print(f"\nOutput file:")
         if write_sas7bdat_flag:
             status = "OK" if sas7bdat_ok else "FAILED/SKIPPED"
             print(f"  SAS7BDAT: {OUTPUT_SAS7BDAT} [{status}]")
@@ -658,8 +631,3 @@ if __name__ == "__main__":
         write_sas7bdat_flag=not args.no_sas7bdat,
         sas_cfgname=args.sas_cfg,
     )
-
-
-
-
-only for sas7bdat output, change to this path: /dwh/dwh_m/tempsource/PBB_NLF/daily
