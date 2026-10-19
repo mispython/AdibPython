@@ -75,6 +75,30 @@ def python_date_to_sas(py_date):
 
 
 # ============================================================================
+# REPORT DATE DERIVATION
+# ============================================================================
+
+def get_report_date(run_date: date) -> date:
+    """
+    Derive the actual reporting date from the run date.
+
+    Business rule:
+      - If run on the 1st of the month -> use last day of the previous month
+        (this is the month-end run, e.g. running on 1-Nov-2026 processes the
+        October month-end report using btrad10426.sas7bdat)
+      - Otherwise -> use the run date itself (mid-month runs on 8th/15th/22nd)
+
+    Example:
+      run_date = 2026-11-01  ->  report_date = 2026-10-31  -> btrad10426
+      run_date = 2026-11-08  ->  report_date = 2026-11-08  -> btrad11126
+    """
+    if run_date.day == 1:
+        # Month-end run: report date = last day of previous month
+        return run_date - timedelta(days=1)
+    return run_date
+
+
+# ============================================================================
 # FORMAT DEFINITIONS (from SAS PROC FORMAT)
 # ============================================================================
 
@@ -261,12 +285,17 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
     print("=" * 70)
 
     try:
-        # Step 1: Get report date - use today's date if not provided
+        # Step 1: Get report date - derive from today's date if not provided
         if reptdate is None:
-            reptdate = datetime.now().date()
-            print(f"\nUsing today's date: {reptdate.strftime('%d/%m/%Y')}")
+            run_date = datetime.now().date()
+            reptdate = get_report_date(run_date)
+            print(f"\nRun date:    {run_date.strftime('%d/%m/%Y')}")
+            print(f"Report date: {reptdate.strftime('%d/%m/%Y')} (derived)")
         elif isinstance(reptdate, datetime):
             reptdate = reptdate.date()
+            print(f"\nReport date: {reptdate.strftime('%d/%m/%Y')} (from CLI)")
+        else:
+            print(f"\nReport date: {reptdate.strftime('%d/%m/%Y')} (from CLI)")
         
         # Derive macro variables
         nowk = get_week_number(reptdate)
@@ -280,7 +309,6 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
         rpday = reptdate.day
         rpdays = get_days_in_month(rpyr, rpmth)
         
-        print(f"\nReport Date: {reptdate.strftime('%d/%m/%Y')}")
         print(f"Week Number: {nowk}")
         print(f"Report Month: {reptmon}")
         print(f"Report Year: {reptyear}")
@@ -564,9 +592,10 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(
         description='EIBMLIBT - Loan Maturity Profile Processor',
-        epilog='Example: python EIBMLIBT.py 2026-08-08'
+        epilog='Example: python EIBMLIBT.py 2026-11-08'
     )
-    parser.add_argument('date', nargs='?', help='Report date in YYYY-MM-DD format')
+    parser.add_argument('date', nargs='?',
+                         help='Report date in YYYY-MM-DD format (overrides auto-derivation)')
     parser.add_argument('--no-sas7bdat', action='store_true',
                          help='Skip writing the .sas7bdat output via saspy')
     parser.add_argument('--sas-cfg', default=SAS_CONFIG_NAME,
@@ -578,14 +607,12 @@ if __name__ == "__main__":
     if args.date:
         try:
             reptdate = datetime.strptime(args.date, '%Y-%m-%d').date()
-            print(f"Using command line date: {reptdate}")
+            print(f"Using command line report date: {reptdate}")
         except ValueError:
             print(f"Error: Invalid date format. Use YYYY-MM-DD")
             sys.exit(1)
     else:
-        # Use today's date when no date is provided
-        reptdate = datetime.now().date()
-        print(f"No date provided - using today's date: {reptdate.strftime('%Y-%m-%d')}")
+        print("No report date provided - will derive from today's run date")
     
     sys.exit(main(
         reptdate,
