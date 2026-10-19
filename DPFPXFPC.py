@@ -1,24 +1,34 @@
-import pyreadstat
-import pandas as pd
-import datacompy
+ BNMCODE: 9321909010000Y
+                        
+ AMOUNT:  213115507.92  
 
-# Load both files
-sas_df, _ = pyreadstat.read_sas7bdat("/path/to/production/bt.sas7bdat")
-py_df, _  = pyreadstat.read_sas7bdat("/path/to/python/bt.sas7bdat")
+BNMCODE: 9321909020000Y
+                       
+AMOUNT:  837778900.83  
 
-# Normalize the key
-for df in (sas_df, py_df):
-    df['BNMCODE'] = df['BNMCODE'].astype(str).str.strip()
+ BNMCODE: 9321909030000Y
+                        
+ AMOUNT:  1637028753.8  
 
-# Build comparison
-compare = datacompy.Compare(
-    sas_df,
-    py_df,
-    join_columns='BNMCODE',      # unique key
-    abs_tol=0.01,                # treat amounts within 1 cent as equal
-    rel_tol=1e-6,
-    df1_name='SAS_PROD',
-    df2_name='PYTHON',
-)
+BNMCODE: 9321909040000Y
+                       
+AMOUNT:  298224787.15  
 
-print(compare.report())
+BNMCODE: 9521909010000Y 
+                        
+AMOUNT:  213115507.92   
+
+
+BNMCODE: 9521909020000Y
+                       
+AMOUNT:  837778900.83  
+
+ BNMCODE: 9521909030000Y
+                        
+ AMOUNT:  1637028753.8  
+
+                        
+ BNMCODE: 9521909040000Y
+                        
+ AMOUNT:  298224787.15  
+                        
