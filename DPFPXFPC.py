@@ -4,7 +4,7 @@ File Name: EIBMLIBT
 Loan Maturity Profile Processor (BT)
 Processes BTRAD loan data for BNM reporting
 Based on original SAS code
-Outputs to SAS dataset (.sas7bdat), Parquet, and a text report
+Outputs to SAS dataset (.sas7bdat) only
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import polars as pl
 import pandas as pd
 
 # saspy is optional at import time so the rest of the pipeline still works
-# (Parquet/report output) even if saspy / a SAS session isn't available.
+# even if saspy / a SAS session isn't available.
 try:
     import saspy
     SASPY_AVAILABLE = True
@@ -37,16 +37,13 @@ warnings.filterwarnings('ignore')
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "/dwh/btrade"
 
-# Output files - using full paths
-BT_SAS_PATH = Path("/host_pq/mis/output/BTRADE/bt.sas7bdat")
-BT_PARQUET_PATH = Path("/host_pq/mis/output/BTRADE/EIBMLIBT_BT.parquet")
-BT_REPORT_PATH = Path("/host_pq/mis/output/BTRADE/EIBMLIBT_BT_REPORT.txt")
-BT_LOG_PATH = Path("/host_pq/mis/output/BTRADE/logs/EIBMLIBT_processing.log")
+# Output file - SAS7BDAT only
+BT_SAS_PATH = Path("/dwh/dwh_m/tempsource/PBB_NLF/month/BT.sas7bdat")
+BT_LOG_PATH = Path("/dwh/dwh_m/tempsource/PBB_NLF/month/logs/EIBMLIBT_processing.log")
 
 # Create output directories
 BT_SAS_PATH.parent.mkdir(parents=True, exist_ok=True)
-BT_PARQUET_PATH.parent.mkdir(parents=True, exist_ok=True)
-BT_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+BT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # --- saspy configuration ---
 # Name of the SAS config entry defined in your sascfg_personal.py
@@ -298,8 +295,7 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
         # Step 2: Build BTRAD filename: btrad{MM}{WK}{YY}.sas7bdat
         # Format: btrad{MM}{WK}{YY} where YY is last 2 digits of year
         year_suffix = reptyear[2:]  # Get last 2 digits of year
-        #btrad_filename = f"btrad{reptmon}{nowk}{year_suffix}.sas7bdat"
-        btrad_filename = f"btrad07426.sas7bdat"
+        btrad_filename = f"btrad{reptmon}{nowk}{year_suffix}.sas7bdat"
         btrad_path = INPUT_DIR / btrad_filename
         
         # Also try without year suffix for backward compatibility
@@ -529,7 +525,7 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
         for row in df_summary.iter_rows(named=True):
             print(f"    {row['BNMCODE']}: {row['AMOUNT']:,.2f}")
         
-        # Convert to pandas for SAS/report output
+        # Convert to pandas for SAS output
         df_pandas = df_summary.to_pandas()
         
         # Step 6: Write output to SAS dataset using saspy
@@ -547,39 +543,14 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
         else:
             print("\nSkipping SAS7BDAT output (disabled).")
         
-        # Step 7: Write output to Parquet
-        print(f"\nWriting Parquet file to: {BT_PARQUET_PATH}")
-        df_summary.write_parquet(BT_PARQUET_PATH)
-        print(f"  Parquet file written successfully")
-        
-        # Step 8: Generate report
-        print(f"\nWriting report to: {BT_REPORT_PATH}")
-        with open(BT_REPORT_PATH, 'w') as f:
-            f.write("1LOAN MATURITY PROFILE REPORT\n")
-            f.write(" " + "=" * 60 + "\n")
-            f.write(" " + f"{'BNMCODE':<20}{'AMOUNT':>20}\n")
-            f.write(" " + "-" * 60 + "\n")
-            
-            total = 0
-            for row in df_summary.iter_rows(named=True):
-                amount = float(row['AMOUNT'])
-                total += amount
-                f.write(" " + f"{row['BNMCODE']:<20}{amount:>20.2f}\n")
-            
-            f.write(" " + "-" * 60 + "\n")
-            f.write(" " + f"{'TOTAL':<20}{total:>20.2f}\n")
-            f.write(" " + "=" * 60 + "\n")
-        
         print("\n" + "=" * 70)
         print("PROCESSING COMPLETED SUCCESSFULLY")
         print("=" * 70)
         print(f"\nOutput SAS dataset: {BT_SAS_PATH} [{'OK' if sas7bdat_ok else 'FAILED/SKIPPED'}]")
-        print(f"Output Parquet file: {BT_PARQUET_PATH}")
-        print(f"Report file: {BT_REPORT_PATH}")
         print(f"Total BNM codes: {len(df_summary)}")
-        print(f"Total amount: {total:,.2f}")
+        print(f"Total amount: {df_summary['AMOUNT'].sum():,.2f}")
         
-        return 0
+        return 0 if sas7bdat_ok else 1
         
     except FileNotFoundError as e:
         print(f"\nFILE NOT FOUND ERROR: {e}", file=sys.stderr)
@@ -629,6 +600,3 @@ if __name__ == "__main__":
         write_sas7bdat_flag=not args.no_sas7bdat,
         sas_cfgname=args.sas_cfg,
     ))
-
-
-remove all output, except sas7bdat. and change the sas7bdat path to /dwh/dwh_m/tempsource/PBB_NLF/month
