@@ -37,13 +37,11 @@ warnings.filterwarnings('ignore')
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "/dwh/btrade"
 
-# Output file - SAS7BDAT only
-BT_SAS_PATH = Path("/dwh/dwh_m/tempsource/PBB_NLF/month/BT.sas7bdat")
-BT_LOG_PATH = Path("/dwh/dwh_m/tempsource/PBB_NLF/month/logs/EIBMLIBT_processing.log")
+# Output file - SAS7BDAT only (lowercase bt.sas7bdat)
+BT_SAS_PATH = Path("/dwh/dwh_m/tempsource/PBB_NLF/month/bt.sas7bdat")
 
-# Create output directories
+# Create output directory
 BT_SAS_PATH.parent.mkdir(parents=True, exist_ok=True)
-BT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # --- saspy configuration ---
 # Name of the SAS config entry defined in your sascfg_personal.py
@@ -52,7 +50,7 @@ SAS_CONFIG_NAME = "default"
 
 # Libref/dataset name to use for the SAS-side output dataset
 SAS_OUTPUT_LIBREF = "XMISOUT"
-SAS_OUTPUT_DSNAME = "BT"
+SAS_OUTPUT_DSNAME = "bt"
 
 # Whether to attempt writing the .sas7bdat output by default
 WRITE_SAS7BDAT = True
@@ -195,7 +193,7 @@ def get_week_number(reptdate):
 # SAS7BDAT OUTPUT VIA SASPY
 # ============================================================================
 def write_sas7bdat(result_pdf: pd.DataFrame, output_dir: Path, libref: str,
-                    dsname: str, cfgname: str, log_path: Path):
+                    dsname: str, cfgname: str):
     """
     Write the final pandas DataFrame out as a native .sas7bdat file using
     saspy. Starts a SAS session, assigns a library pointing at `output_dir`,
@@ -204,10 +202,7 @@ def write_sas7bdat(result_pdf: pd.DataFrame, output_dir: Path, libref: str,
     SAS to physically write <dsname>.sas7bdat into that folder.
     """
     if not SASPY_AVAILABLE:
-        msg = "  WARNING: saspy is not installed - skipping .sas7bdat output."
-        print(msg)
-        with open(log_path, 'a') as log:
-            log.write(f"{datetime.now()}: {msg}\n")
+        print("  WARNING: saspy is not installed - skipping .sas7bdat output.")
         return False
 
     if result_pdf is None or len(result_pdf) == 0:
@@ -240,8 +235,6 @@ def write_sas7bdat(result_pdf: pd.DataFrame, output_dir: Path, libref: str,
         print(f"  SAS7BDAT Write Error: {e}")
         import traceback
         traceback.print_exc()
-        with open(log_path, 'a') as log:
-            log.write(f"{datetime.now()}: SAS7BDAT write failed: {e}\n")
         return False
 
     finally:
@@ -538,7 +531,6 @@ def main(reptdate=None, write_sas7bdat_flag=None, sas_cfgname=None):
                 libref=SAS_OUTPUT_LIBREF,
                 dsname=SAS_OUTPUT_DSNAME,
                 cfgname=sas_cfgname,
-                log_path=BT_LOG_PATH,
             )
         else:
             print("\nSkipping SAS7BDAT output (disabled).")
