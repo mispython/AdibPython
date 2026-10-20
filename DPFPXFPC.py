@@ -12,8 +12,9 @@ from datetime import datetime, timedelta
 import pyreadstat
 
 # INITIALIZE PATHS
-INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR202")
-OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMIR202")
+LOANTEMP_PATH = Path("/dwh/dwh_m/tempsource")
+LKP_PATH = Path("/sasdata/rawdata/lookup")
+OUTPUT_DIR = Path("/host_pq/mis/output/report/EIMIR")
 
 # CREATE DIRECTORIES
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,7 +41,7 @@ print(f"RDATE: {RDATE}")
 # ============================================================================
 # READ BRANCH DATA (LKP_BRANCH - FLAT FILE)
 # ============================================================================
-BRANCH_FILE = INPUT_DIR / "LKP_BRANCH"
+BRANCH_FILE = LKP_PATH / "LKP_BRANCH"
 
 if not BRANCH_FILE.exists():
     print(f"ERROR: BRANCH FILE NOT FOUND: {BRANCH_FILE}")
@@ -73,7 +74,7 @@ print(f"BRANCH RECORDS: {branch_count:,}")
 # ============================================================================
 # READ LOAN DATA (LOANTEMP.sas7bdat)
 # ============================================================================
-LOANTEMP_FILE = INPUT_DIR / "loantemp.sas7bdat"
+LOANTEMP_FILE = LOANTEMP_PATH / "loantemp_iccd2.sas7bdat"
 
 if not LOANTEMP_FILE.exists():
     print(f"ERROR: LOANTEMP FILE NOT FOUND: {LOANTEMP_FILE}")
@@ -228,7 +229,7 @@ con.execute("""
 # ============================================================================
 print("\nGENERATING FORMATTED REPORT...")
 
-OUTPUT_TXT = OUTPUT_DIR / f"EIMAR202_{REPTYEAR}{REPTMON}{REPTDAY}.txt"
+OUTPUT_TXT = OUTPUT_DIR / f"CCDTXT3.txt"
 
 CATEGORIES = con.execute("SELECT DISTINCT CAT, TYPE FROM REPORT_DATA ORDER BY CAT").fetchall()
 
