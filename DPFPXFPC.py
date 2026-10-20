@@ -1,7 +1,7 @@
 EIMREPOI REPOTXT Parity Diagnostic
 ========================================================================
 LNNOTE:   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m09.sas7bdat
-LOANTEMP: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMRESHI/loantemp.sas7bdat
+LOANTEMP: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp.sas7bdat
 HP set (17): [128, 130, 131, 132, 380, 381, 700, 705, 720, 725, 983, 993, 996, 678, 679, 698, 699]
 
 ========================================================================
@@ -64,31 +64,31 @@ Reading LNNOTE...
   SECTION 3: Load LOANTEMP (iccd2)
 ========================================================================
 Reading LOANTEMP...
-  LOANTEMP total rows: 663,747
-  ARREAR >= 10:        48,360
+  LOANTEMP total rows: 672,908
+  ARREAR >= 10:        48,889
   product=700 count:   0
 
 --- LOANTEMP: ARREAR >= 10 by branch (top 20) ---
-    branch    802:  3,659
-    branch    820:  2,930
-    branch    821:  2,136
-    branch    806:  2,023
-    branch    801:  1,978
-    branch    805:  1,897
-    branch    826:  1,739
-    branch    808:  1,734
-    branch    824:  1,715
-    branch    811:  1,647
-    branch    814:  1,645
-    branch    809:  1,609
-    branch    827:  1,545
-    branch    804:  1,514
-    branch    818:  1,507
-    branch    816:  1,257
-    branch    862:  1,073
-    branch    812:    968
-    branch    822:    839
-    branch    844:    797
+    branch    802:  3,693
+    branch    820:  2,959
+    branch    821:  2,156
+    branch    806:  2,037
+    branch    801:  2,013
+    branch    805:  1,901
+    branch    826:  1,762
+    branch    808:  1,748
+    branch    824:  1,718
+    branch    811:  1,657
+    branch    814:  1,647
+    branch    809:  1,621
+    branch    827:  1,584
+    branch    818:  1,528
+    branch    804:  1,520
+    branch    816:  1,274
+    branch    862:  1,089
+    branch    812:    977
+    branch     34:    880
+    branch    822:    856
 
   KKI (branch 117) with ARREAR >= 10: 758
   KKI products with arrears:
@@ -106,40 +106,40 @@ Reading LOANTEMP...
   SECTION 4: Merge LNNOTE ↔ LOANTEMP on ACCTNO
 ========================================================================
   LNNOTE filtered unique acctnos: 1,729,838
-  LOANTEMP unique acctnos:        643,549
-  Overlap (matched):              394,422 (22.8% of LNNOTE)
+  LOANTEMP unique acctnos:        652,383
+  Overlap (matched):              407,719 (23.6% of LNNOTE)
 
-  After merge, ARREAR >= 10: 20,806
+  After merge, ARREAR >= 10: 21,047
 
 --- Merged ARREAR >= 10 — by LNNOTE loantype ---
-    LNNOTE loantype    983: 20,725
-    LNNOTE loantype    128:     81
+    LNNOTE loantype    983: 20,847
+    LNNOTE loantype    128:    200
 
 --- Merged ARREAR >= 10 — by LOANTEMP product ---
-    LOANTEMP product    983: 20,584
-    LOANTEMP product    128:    222
+    LOANTEMP product    983: 20,705
+    LOANTEMP product    128:    342
 
 --- Merged ARREAR >= 10 — by branch (top 20) ---
-    branch    802:  1,431
-    branch    820:  1,244
-    branch    827:  1,127
-    branch    821:    884
-    branch    806:    866
-    branch    824:    849
-    branch    805:    820
-    branch    804:    816
-    branch    826:    787
-    branch    801:    769
-    branch    862:    762
-    branch    814:    761
-    branch    808:    704
-    branch    811:    661
-    branch    809:    625
-    branch    818:    598
+    branch    802:  1,449
+    branch    820:  1,261
+    branch    827:  1,156
+    branch    821:    891
+    branch    806:    870
+    branch    824:    850
+    branch    805:    822
+    branch    804:    822
+    branch    826:    799
+    branch    801:    791
+    branch    862:    776
+    branch    814:    770
+    branch    808:    710
+    branch    811:    668
+    branch    809:    629
+    branch    818:    615
     branch    117:    488
-    branch    816:    440
-    branch    844:    401
-    branch    812:    384
+    branch    816:    448
+    branch     34:    407
+    branch    812:    387
 
 ========================================================================
   SECTION 5: Trace prod REGNOs missing from Python REPOTXT
@@ -217,17 +217,17 @@ Reading LOANTEMP...
     ACCTNO=8871689225  LOANTYPE=983.0  NTBRCH=34.0
       BALANCE=30678.400000000005  BORSTAT=''
       LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=844.0
+      LOANTEMP: product=983.0  arrear=16.0  branch=34.0
         → WOULD APPEAR in REPOTXT if ACCTNO joined
-      LOANTEMP: product=983.0  arrear=16.0  branch=844.0
+      LOANTEMP: product=983.0  arrear=16.0  branch=34.0
         → WOULD APPEAR in REPOTXT if ACCTNO joined
 
 ========================================================================
   VERDICT
 ========================================================================
-  Python REPOTXT expected rows: 20806
+  Python REPOTXT expected rows: 21047
   Prod  REPOTXT reported rows:  1000+ (per user)
-  Gap:                         -19806+
+  Gap:                         -20047+
 
   🔴 LOANTEMP.iccd2 has ZERO product=700 rows.
      If prod REPOTXT contains 700-type auto-HP, prod's LOANTEMP
