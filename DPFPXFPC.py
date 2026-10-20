@@ -1,293 +1,450 @@
-import polars as pl
-import pyreadstat
-from pathlib import Path
-import datetime
+# EIMREPOI_REPO_PROCESSOR.py
+"""
+EIMREPOI - Repossession Listing Report (PIBB - Islamic)
+
+Faithful Python port of the SAS job that produces:
+  - REPOTXT.txt   (all repossession accounts, ARREAR >= 10)
+  - REPOTXT1.txt  (subset: ARREAR >= 10 AND LOANTYPE IN 983, 993)
+
+SAS WHERE (LNNOTE):
+    WHERE LOANTYPE IN &HP
+      AND BALANCE GT 0
+      AND BORSTAT NOT IN ('F','I','R')
+      AND ENTITY_CD = 'PIBB'
+
+Formats/macros from PBBLNFMT and PBBELF.
+"""
+
 import sys
-import os
+from datetime import datetime, timedelta
+from pathlib import Path
 
-# TODO: adjust this path if PBBELF.py / PBBLNFMT.py live somewhere else
-sys.path.insert(0, "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS")
-import PBBELF
+import pandas as pd
+import pyreadstat
+
 import PBBLNFMT
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-input_pbb_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
-input_pibb_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
-brh_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP/LKP_BRANCH")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMBRAS")
-output_path.mkdir(parents=True, exist_ok=True)
-
-# Only pull the columns we actually use. ENTITY_CD is required for the
-# PIBB/conventional split, so it must be included.
-LNNOTE_COLUMNS = [
-    "ISSUEDT", "LOANTYPE", "PAIDIND", "BALANCE", "NTBRCH",
-    "COLLDESC", "ACCTNO", "NAME", "ENTITY_CD",
-]
-
-CHUNKSIZE = 500_000
-
-# ---------------------------------------------------------------------------
-# HPD codes
-# In the original SAS, &HPD was a macro variable resolved at compile time
-# from PBBLNFMT. The macro constant HPD = [128, 130, 131, 132, 380, 381,
-# 700, 705, 720, 725]. Note PBBLNFMT also defines a broader HP list; the
-# original driver used &HPD (not &HP) in this DATA step, so we use HPD.
-#
-# We allow an env-var override so callers can reproduce whatever SAS passed
-# in without editing this file, but fall back to the documented PBBLNFMT.HPD.
-# ---------------------------------------------------------------------------
-_hpd_raw = os.environ.get("HPD_CODES", "").strip()
-if _hpd_raw:
-    HPD_VALUES = [int(v.strip()) for v in _hpd_raw.split(",") if v.strip()]
-    print(f"HPD_CODES overridden from environment: {HPD_VALUES}")
-else:
-    HPD_VALUES = list(PBBLNFMT.HPD)
-    print(f"Using HPD from PBBLNFMT.HPD: {HPD_VALUES}")
-
-# ---------------------------------------------------------------------------
-# Reporting date parameters (same day-of-month bucketing as SAS REPTDATE)
-# ---------------------------------------------------------------------------
-reptdate = datetime.datetime.now() - datetime.timedelta(days=1)
-day, month, year = reptdate.day, reptdate.month, reptdate.year
-
-if day == 8:
-    sdd, wk, wk1 = 1, '1', '4'
-elif day == 15:
-    sdd, wk, wk1 = 9, '2', '1'
-elif day == 22:
-    sdd, wk, wk1 = 16, '3', '2'
-else:
-    sdd, wk, wk1 = 23, '4', '3'
-
-mm = month
-mm1 = (12 if month == 1 else month - 1) if wk == '1' else month
-sdate = datetime.datetime(year, month, sdd)
-
-global_vars = {
-    'NOWK': wk,
-    'NOWK1': wk1,
-    'REPTMON': f"{mm:02d}",
-    'REPTMON1': f"{mm1:02d}",
-    'REPTYEAR': str(year),
-    'REPTDAY': f"{day:02d}",
-    'RDATE': reptdate.strftime('%d%m%y'),
-    'SDATE': sdate.strftime('%d%m%y'),
-}
-
-print("Global variables:", global_vars)
+import PBBELF
 
 
-# ---------------------------------------------------------------------------
+# =====================================================================
+# Constants
+# =====================================================================
+HP_VALUES_INT     = list(PBBLNFMT.MACROS['HP'])          # 17 HP loan types
+HP_VALUES_STR     = [str(x) for x in HP_VALUES_INT]
+REPORT_LOANTYPES  = ('983', '993')                       # REPO1 subset
+ARREAR_THRESHOLD  = 10                                   # IF ARREAR GE 10
+REPORT_LINE_WIDTH = 167                                  # @164 $4. ends at 167
+ENTITY_FILTER     = 'PIBB'                               # Islamic entity
+
+EXPECTED_REPO_MIN = 500
+EXPECTED_REPO_MAX = 5000
+
+
+# =====================================================================
 # Helpers
-# ---------------------------------------------------------------------------
-def filter_lnnote_chunk(pdf, reptmon: int, reptyear: int, entity_filter: str) -> pl.DataFrame:
-    """Convert one pandas chunk to polars, apply ENTITY_CD split and the
-    same LOANTYPE/PAIDIND/BALANCE/ISSUE-month filters as the SAS step.
+# =====================================================================
+def normalize_code(series: pd.Series) -> pd.Series:
+    """Normalize numeric/string codes to clean int-string form."""
+    def _clean(x):
+        if pd.isna(x):
+            return None
+        if isinstance(x, bytes):
+            x = x.decode('utf-8', errors='ignore')
+        try:
+            return str(int(float(x)))
+        except (ValueError, TypeError):
+            return str(x).strip()
+    return series.apply(_clean)
 
-    entity_filter is one of:
-        "conventional" -> ENTITY_CD != 'PIBB'
-        "islamic"      -> ENTITY_CD =  'PIBB'
-    """
-    if pdf.empty:
-        return pl.DataFrame()
 
-    df = pl.from_pandas(pdf)
+def normalize_acctno(series: pd.Series) -> pd.Series:
+    """Normalize ACCTNO for merging (float 2900189623.0 -> '2900189623')."""
+    return normalize_code(series)
 
-    # ISSUEDT encoding: MDDYYYYDDD (10 digits) or MMDDYYYYDDD (11 digits).
-    # Left-pad to 11 then read MM/DD/YYYY at fixed positions.
-    df = df.with_columns(
-        pl.col('ISSUEDT').cast(pl.Int64).cast(pl.Utf8).alias('_raw')
-    ).with_columns(
-        pl.col('_raw').str.pad_start(11, '0').alias('_padded')
-    ).with_columns([
-        pl.col('_padded').str.slice(0, 2).cast(pl.Int32, strict=False).alias('ISSMTH'),
-        pl.col('_padded').str.slice(2, 2).cast(pl.Int32, strict=False).alias('ISSDAY'),
-        pl.col('_padded').str.slice(4, 4).cast(pl.Int32, strict=False).alias('ISSYR'),
-    ]).with_columns(
-        pl.date(pl.col('ISSYR'), pl.col('ISSMTH'), pl.col('ISSDAY')).alias('ISSDT')
-    ).drop(['_raw', '_padded', 'ISSDAY'])
 
-    # ENTITY_CD filter (SAS WHERE clause applied before the DATA step logic)
-    if entity_filter == "conventional":
-        df = df.filter(pl.col('ENTITY_CD') != 'PIBB')
-    elif entity_filter == "islamic":
-        df = df.filter(pl.col('ENTITY_CD') == 'PIBB')
+def normalize_entity(series: pd.Series) -> pd.Series:
+    """Normalize ENTITY_CD: strip whitespace, uppercase."""
+    return series.astype(str).str.strip().str.upper()
+
+
+def to_int_code(val):
+    """Convert a scalar to int for format lookups. Returns None on failure."""
+    if pd.isna(val):
+        return None
+    try:
+        return int(float(val))
+    except (ValueError, TypeError):
+        return None
+
+
+def put_field(buf: list, start_col: int, value, width: int) -> None:
+    """Place value at 1-indexed start_col, left-justified, padded to width."""
+    s = '' if value is None else str(value)
+    s = s[:width].ljust(width)
+    idx = start_col - 1
+    buf[idx:idx + width] = list(s)
+
+
+def build_report_line(record) -> str:
+    """Build a single 167-char REPOTXT line matching the SAS PUT statement."""
+    buf = [' '] * REPORT_LINE_WIDTH
+    put_field(buf,   1, record.get('brabbr',   ''),  3)
+    put_field(buf,   9, record.get('cac',      ''), 20)
+    put_field(buf,  29, record.get('regno',    ''), 13)
+    put_field(buf,  43, record.get('make',     ''), 16)
+    put_field(buf,  60, record.get('model',    ''), 21)
+    put_field(buf,  82, record.get('engine',   ''), 40)
+    put_field(buf, 123, record.get('chassis',  ''), 40)
+    put_field(buf, 164, record.get('collyear', ''),  4)
+    return ''.join(buf)
+
+
+# =====================================================================
+# Step 1: date / period
+# =====================================================================
+def compute_report_dates() -> dict:
+    """Derive REPTDATE = SYSDATE - 1 and all dependent macro variables."""
+    reptdate = datetime.now() - timedelta(days=1)
+    day, month, year = reptdate.day, reptdate.month, reptdate.year
+
+    if day == 8:
+        sdd, wk, wk1 = 1, '1', '4'
+    elif day == 15:
+        sdd, wk, wk1 = 9, '2', '1'
+    elif day == 22:
+        sdd, wk, wk1 = 16, '3', '2'
     else:
-        raise ValueError(f"Unknown entity_filter: {entity_filter}")
+        sdd, wk, wk1 = 23, '4', '3'
 
-    df = df.filter(
-        pl.col('LOANTYPE').cast(pl.Int64).is_in(HPD_VALUES)
-        & (pl.col('PAIDIND') != 'P')
-        & (pl.col('BALANCE') > 0)
-        & (pl.col('ISSMTH') == reptmon)
-        & (pl.col('ISSYR') == reptyear)
+    mm1 = (month - 1 or 12) if wk == '1' else month
+    sdate = datetime(year, month, sdd)
+
+    return {
+        'reptdate':  reptdate,
+        'sdate':     sdate,
+        'wk':        wk,
+        'wk1':       wk1,
+        'reptmon':   f"{month:02d}",
+        'reptmon1':  f"{mm1:02d}",
+        'reptyear':  str(year),
+        'reptday':   f"{day:02d}",
+        'rdate':     reptdate.strftime('%d/%m/%y'),
+        'sdate_str': sdate.strftime('%d/%m/%y'),
+    }
+
+
+# =====================================================================
+# Step 2-5: data loading
+# =====================================================================
+def read_lnnote_filtered(lnnote_path: Path) -> pd.DataFrame:
+    """
+    Read LNNOTE with column pruning + SAS WHERE filters:
+        LOANTYPE IN &HP
+        AND BALANCE > 0
+        AND BORSTAT NOT IN ('F','I','R')
+        AND ENTITY_CD = 'PIBB'
+    """
+    print("Reading LNNOTE.sas7bdat (only required columns)...")
+    df, _ = pyreadstat.read_sas7bdat(
+        str(lnnote_path),
+        usecols=['ACCTNO', 'LOANTYPE', 'NTBRCH', 'COLLDESC', 'COLLYEAR',
+                 'BALANCE', 'BORSTAT', 'ENTITY_CD'],
     )
+    df.columns = df.columns.str.lower()
+    print(f"  LNNOTE total records: {len(df):,}")
+
+    # Normalize entity before filtering
+    entity_norm = normalize_entity(df['entity_cd'])
+    entity_dist = entity_norm.value_counts().head(10)
+    print(f"  ENTITY_CD distribution (top 10):")
+    for e, cnt in entity_dist.items():
+        print(f"    {e!r:>10}: {cnt:>10,}")
+
+    lt_norm = normalize_code(df['loantype'])
+
+    mask_hp    = lt_norm.isin(HP_VALUES_STR)
+    mask_bal   = df['balance'] > 0
+    mask_bor   = ~df['borstat'].isin(['F', 'I', 'R'])
+    mask_ent   = entity_norm == ENTITY_FILTER
+
+    print(f"  LOANTYPE IN HP:           {mask_hp.sum():>12,}")
+    print(f"  BALANCE > 0:              {mask_bal.sum():>12,}")
+    print(f"  BORSTAT NOT IN F,I,R:     {mask_bor.sum():>12,}")
+    print(f"  ENTITY_CD = {ENTITY_FILTER!r}:     {mask_ent.sum():>12,}")
+    print(f"  ALL FOUR (filtered):      "
+          f"{(mask_hp & mask_bal & mask_bor & mask_ent).sum():>12,}")
+
+    df = df[mask_hp & mask_bal & mask_bor & mask_ent].copy()
+
+    df = df[['acctno', 'loantype', 'ntbrch', 'colldesc', 'collyear']]
+    print(f"  LNNOTE after filtering: {len(df):,}")
+
+    if len(df) == 0:
+        print(f"  ⚠  WARNING: zero LNNOTE rows survived filters. Check that")
+        print(f"     ENTITY_CD={ENTITY_FILTER!r} exists in the source file.")
+
     return df
 
 
-def read_lnnote(filepath: Path, reptmon: int, reptyear: int,
-                entity_filter: str, chunksize: int = CHUNKSIZE) -> pl.DataFrame:
-    """Stream a .sas7bdat file in chunks, filtering each chunk immediately
-    so the full file never sits in memory."""
-    if not filepath.exists():
-        print(f"File not found, skipping: {filepath}")
-        return pl.DataFrame()
-
-    filtered_chunks = []
-    reader = pyreadstat.read_file_in_chunks(
-        pyreadstat.read_sas7bdat,
-        str(filepath),
-        chunksize=chunksize,
-        usecols=LNNOTE_COLUMNS,
+def read_name8(name8_path: Path) -> pd.DataFrame:
+    """Read NAME8, keeping only acctno + engine (LINETHRE) + chassis (LINEFOUR)."""
+    print("Reading NAME8.sas7bdat (only required columns)...")
+    df, _ = pyreadstat.read_sas7bdat(
+        str(name8_path),
+        usecols=['ACCTNO', 'LINETHRE', 'LINEFOUR'],
     )
-
-    total_rows = 0
-    for pdf_chunk, _meta in reader:
-        total_rows += len(pdf_chunk)
-        filtered = filter_lnnote_chunk(pdf_chunk, reptmon, reptyear, entity_filter)
-        if filtered.height > 0:
-            filtered_chunks.append(filtered)
-
-    kept = sum(c.height for c in filtered_chunks)
-    print(f"{filepath.name} [{entity_filter}]: scanned {total_rows:,} rows, "
-          f"kept {kept:,} after filter")
-
-    if filtered_chunks:
-        return pl.concat(filtered_chunks, how="diagonal")
-    return pl.DataFrame()
+    df.columns = df.columns.str.lower()
+    df = df.rename(columns={'linethre': 'engine', 'linefour': 'chassis'})
+    print(f"  NAME8 records: {len(df):,}")
+    return df
 
 
-def read_brh_lookup(brh_path: Path) -> pl.DataFrame:
-    """Read LKP_BRANCH and reduce to the BRANCH / BRABBR pairs used in the
-    original BRHDATA step. If the lookup file is not present, fall back to
-    PBBELF.BRCHCD_MAP (same content the SAS BRHFILE provided)."""
-    if brh_path.exists():
-        try:
-            brh_df, _ = pyreadstat.read_sas7bdat(str(brh_path))
-            brh = pl.from_pandas(brh_df)
-            # Normalise column names (SAS often stores them upper case)
-            brh = brh.rename({c: c.upper() for c in brh.columns})
-            # Accept either BRABBR or BRCHNAME style names
-            if 'BRABBR' not in brh.columns:
-                for cand in ('BRCHNAME', 'BRANCH_NAME', 'BRNM'):
-                    if cand in brh.columns:
-                        brh = brh.rename({cand: 'BRABBR'})
-                        break
-            brh = brh.select([
-                pl.col('BRANCH').cast(pl.Int64),
-                pl.col('BRABBR').cast(pl.Utf8),
-            ])
-            print(f"Loaded branch lookup from {brh_path}: {brh.height} rows")
-            return brh
-        except Exception as exc:
-            print(f"WARNING: failed to read {brh_path} ({exc}); "
-                  f"falling back to PBBELF.BRCHCD_MAP")
-
-    brh_data = [{"BRANCH": k, "BRABBR": v} for k, v in PBBELF.BRCHCD_MAP.items()]
-    brh = pl.DataFrame(brh_data)
-    print(f"Using PBBELF.BRCHCD_MAP as branch lookup: {brh.height} rows")
-    return brh
-
-
-# ---------------------------------------------------------------------------
-# *** A/C RELEASED FOR THE MTH ***
-# Read + filter both LNNOTE sources.
-#   pbb  -> conventional only (ENTITY_CD != 'PIBB')
-#   pibb -> islamic only      (ENTITY_CD == 'PIBB')
-# ---------------------------------------------------------------------------
-reptmon_int = int(global_vars['REPTMON'])
-reptyear_int = int(global_vars['REPTYEAR'])
-
-lnnote_pbb = read_lnnote(input_pbb_path / "lnnote.sas7bdat",
-                         reptmon_int, reptyear_int, "conventional")
-lnnote_pibb = read_lnnote(input_pibb_path / "lnnote.sas7bdat",
-                          reptmon_int, reptyear_int, "islamic")
-
-lnnote_combined = pl.concat([lnnote_pbb, lnnote_pibb], how="diagonal")
-
-if not lnnote_combined.is_empty():
-    loan_df = lnnote_combined.with_columns([
-        # NEWSEC: SUBSTR(COLLDESC,38,1) IN ('N','R')  -> 'N', else 'S'
-        # SAS SUBSTR is 1-based, so position 38 = python index 37.
-        pl.when(pl.col('COLLDESC').str.slice(37, 1).is_in(['N', 'R']))
-        .then(pl.lit('N'))
-        .otherwise(pl.lit('S'))
-        .alias('NEWSEC'),
-        # BRABBR: PUT(NTBRCH, BRCHCD.) via PBBELF.format_brchcd
-        pl.col('NTBRCH').cast(pl.Int64)
-        .map_elements(PBBELF.format_brchcd, return_dtype=pl.Utf8)
-        .alias('BRABBR'),
-    ])
-
-    # *** AVERAGE PER BR BASE ON 30% OF TOTAL ***
-    brh_df = read_brh_lookup(brh_path / "lkp_branch.sas7bdat").filter(
-        (pl.col('BRANCH') < 900)
-        & (~pl.col('BRANCH').is_in([1, 99, 100, 218]))
-    )
-
-    nobr = brh_df.height
-    noacct = loan_df.height
-    noacrel = round(noacct * 0.3 / nobr) if nobr > 0 else 0
-    print(f"Number of branches: {nobr}")
-    print(f"Number of accounts: {noacct}")
-    print(f"Average accounts per branch: {noacrel}")
-
-    # *** COMPARE RELEASE PER BR AND AVERAGE PER BR ***
-    loan11_df = (
-        loan_df.group_by('BRABBR')
-        .agg(pl.len().alias('NOACCT'))
-        .with_columns(
-            pl.col('NOACCT').mul(0.3).round().cast(pl.Int64).alias('AVGNO_temp')
+def read_loantemp(loantemp_path: Path) -> pd.DataFrame:
+    """
+    Read LOANTEMP. Keeps ACCTNO, ARREAR, plus ARREAR2 and DELQCD when available
+    so we can auto-detect the correct arrears field if the SAS semantic differs
+    from the direct `ARREAR >= 10` interpretation.
+    """
+    print("Reading LOANTEMP.sas7bdat...")
+    try:
+        df, _ = pyreadstat.read_sas7bdat(
+            str(loantemp_path),
+            usecols=['ACCTNO', 'ARREAR', 'ARREAR2', 'DELQCD', 'PRODUCT', 'BRANCH'],
         )
-        .with_columns(
-            pl.when(pl.col('AVGNO_temp') < noacrel)
-            .then(pl.lit(noacrel))
-            .otherwise(pl.col('AVGNO_temp'))
-            .alias('AVGNO')
+    except Exception:
+        df, _ = pyreadstat.read_sas7bdat(
+            str(loantemp_path),
+            usecols=['ACCTNO', 'ARREAR'],
         )
-        .drop('AVGNO_temp')
-    )
+    df.columns = df.columns.str.lower()
+    print(f"  ARREAR records: {len(df):,}")
 
-    loan1_df = loan_df.join(loan11_df, on='BRABBR', how='left')
+    arrear_ge10 = (df['arrear'] >= ARREAR_THRESHOLD).sum() if 'arrear' in df.columns else 0
+    print(f"  ARREAR >= {ARREAR_THRESHOLD}: {arrear_ge10:,}")
+    if 'arrear2' in df.columns:
+        arrear2_ge10 = (df['arrear2'] >= ARREAR_THRESHOLD).sum()
+        print(f"  ARREAR2 >= {ARREAR_THRESHOLD}: {arrear2_ge10:,}")
 
-    # *** GENERATE TEXT FILE TO LOTUS NOTES SERVER ***
-    loan_sorted = loan1_df.sort('BRABBR')
+    return df
 
-    output_lines = []
-    current_brabb = None
-    avgacc = 0
 
-    for row in loan_sorted.iter_rows(named=True):
-        if row['BRABBR'] != current_brabb:
-            current_brabb = row['BRABBR']
-            avgacc = 0
+# =====================================================================
+# Step 6-7: merge + derive
+# =====================================================================
+def merge_datasets(lnnote: pd.DataFrame,
+                   name8: pd.DataFrame,
+                   arrear: pd.DataFrame) -> pd.DataFrame:
+    """LEFT JOIN LNNOTE with NAME8 and LOANTEMP on ACCTNO."""
+    print("Merging datasets...")
 
-        avgacc += 1
-        if avgacc <= row['AVGNO']:
-            issmth = f"{row['ISSMTH']:02d}"
-            issyr = f"{row['ISSYR']}"
-            acctno = str(row.get('ACCTNO', '')).ljust(10)[:10]
-            name = str(row.get('NAME', '')).ljust(30)[:30]
-            issdt = row['ISSDT'].strftime('%d%m%Y')
-            brabb = str(row.get('BRABBR', '')).ljust(3)[:3]
-            newsec = str(row.get('NEWSEC', ''))
+    lnnote  = lnnote.copy()
+    name8   = name8.copy()
+    arrear  = arrear.copy()
 
-            output_lines.append(
-                f"{issmth}{issyr}{acctno}{name}{issdt}{brabb}{newsec}"
-            )
+    lnnote['acctno']  = normalize_acctno(lnnote['acctno'])
+    name8['acctno']   = normalize_acctno(name8['acctno'])
+    arrear['acctno']  = normalize_acctno(arrear['acctno'])
 
-    with open(output_path / "BRTXT1.txt", "w") as f:
-        f.write("\n".join(output_lines))
-    print(f"Generated BRTXT1.txt with {len(output_lines)} records")
+    arrear_cols = ['acctno', 'arrear']
+    if 'arrear2' in arrear.columns:
+        arrear_cols.append('arrear2')
 
-    # Intermediate outputs for debugging
-    loan_df.write_csv(output_path / "LOAN.txt", separator="|")
-    loan11_df.write_csv(output_path / "LOAN11.txt", separator="|")
-    loan1_df.write_csv(output_path / "LOAN1.txt", separator="|")
+    merged = lnnote.merge(name8, on='acctno', how='left')
+    merged = merged.merge(arrear[arrear_cols], on='acctno', how='left')
+    print(f"  Merged REPO records: {len(merged):,}")
 
-else:
-    print("No LNNOTE data found after filtering")
+    n_lnnote  = lnnote['acctno'].nunique()
+    n_matched = merged['arrear'].notna().sum()
+    coverage  = 100.0 * n_matched / n_lnnote if n_lnnote else 0.0
+    print(f"  LOANTEMP coverage of LNNOTE acctnos: {n_matched:,} / {n_lnnote:,} "
+          f"({coverage:.1f}%)")
+    return merged
 
-print("Processing completed!")
+
+def derive_repo_fields(merged: pd.DataFrame) -> pd.DataFrame:
+    """Compute BRABBR/CAC via PBBELF formats, slice COLLDESC into fields."""
+    print("Processing REPO data (BRABBR/CAC via PBBELF formats)...")
+    records = []
+
+    for _, r in merged.iterrows():
+        ntbrch_int = to_int_code(r['ntbrch'])
+        if ntbrch_int is not None:
+            brabbr = PBBELF.format_brchcd(ntbrch_int) or '   '
+            cac    = PBBELF.format_cacname(ntbrch_int) or 'NON CAC'
+        else:
+            brabbr, cac = '   ', 'NON CAC'
+
+        coll_desc = str(r['colldesc']) if pd.notna(r['colldesc']) else ''
+        make  = coll_desc[0:16]  if len(coll_desc) >= 16 else coll_desc.ljust(16)
+        model = coll_desc[15:36] if len(coll_desc) >= 36 else coll_desc[15:] if len(coll_desc) > 15 else ''
+        regno = coll_desc[39:52] if len(coll_desc) >= 52 else coll_desc[39:] if len(coll_desc) > 39 else ''
+
+        engine   = str(r['engine'])   if pd.notna(r['engine'])   else ''
+        chassis  = str(r['chassis'])  if pd.notna(r['chassis'])  else ''
+        collyear = str(r['collyear'])[:4] if pd.notna(r['collyear']) else ''
+        arrear   = float(r['arrear']) if pd.notna(r['arrear']) else 0.0
+        arrear2  = float(r['arrear2']) if 'arrear2' in r and pd.notna(r['arrear2']) else None
+
+        records.append({
+            'acctno':   r['acctno'],
+            'loantype': r['loantype'],
+            'ntbrch':   ntbrch_int,
+            'brabbr':   str(brabbr)[:3],
+            'cac':      str(cac)[:20],
+            'make':     make[:16],
+            'model':    model[:21],
+            'regno':    regno[:13],
+            'engine':   engine[:40],
+            'chassis':  chassis[:40],
+            'collyear': collyear[:4],
+            'arrear':   arrear,
+            'arrear2':  arrear2,
+        })
+
+    REPO_COLUMNS = ['acctno', 'loantype', 'ntbrch', 'brabbr', 'cac', 'make',
+                    'model', 'regno', 'engine', 'chassis', 'collyear',
+                    'arrear', 'arrear2']
+    out = pd.DataFrame(records, columns=REPO_COLUMNS)
+    print(f"  Processed {len(out):,} records")
+    return out
+
+
+# =====================================================================
+# Step 8-9: split + sort
+# =====================================================================
+def split_and_sort(repo: pd.DataFrame):
+    """SAS: IF ARREAR GE 10; OUTPUT REPO; IF LOANTYPE IN (983,993) OUTPUT REPO1."""
+    print(f"Splitting into REPO and REPO1 (ARREAR >= {ARREAR_THRESHOLD})...")
+    repo_out = repo[repo['arrear'] >= ARREAR_THRESHOLD].copy()
+
+    lt_norm = normalize_code(repo_out['loantype'])
+    repo1_out = repo_out[lt_norm.isin(REPORT_LOANTYPES)].copy()
+
+    print(f"  REPO  (ARREAR >= {ARREAR_THRESHOLD}): {len(repo_out):,}")
+    print(f"  REPO1 (LOANTYPE {'/'.join(REPORT_LOANTYPES)}): {len(repo1_out):,}")
+
+    print("Sorting by REGNO...")
+    repo_out  = repo_out.sort_values('regno').reset_index(drop=True)
+    repo1_out = repo1_out.sort_values('regno').reset_index(drop=True)
+    print(f"  REPO sorted:  {len(repo_out):,}")
+    print(f"  REPO1 sorted: {len(repo1_out):,}")
+
+    if len(repo_out) > EXPECTED_REPO_MAX:
+        print(f"  ⚠  WARNING: REPO has {len(repo_out):,} records but expected "
+              f"{EXPECTED_REPO_MIN}–{EXPECTED_REPO_MAX}.")
+        print(f"     This likely means LOANTEMP.ARREAR uses coded/bucketed values,")
+        print(f"     and 'ARREAR >= 10' is over-inclusive. Check with SAS owner")
+        print(f"     whether the SAS filter is actually on ARREAR2 or DELQCD.")
+    elif len(repo_out) < EXPECTED_REPO_MIN:
+        print(f"  ⚠  WARNING: REPO has only {len(repo_out):,} records but expected "
+              f"{EXPECTED_REPO_MIN}–{EXPECTED_REPO_MAX}.")
+        print(f"     This likely means the LOANTEMP file does not cover the full")
+        print(f"     HP portfolio (e.g. iccd2 only has ACCTNOs starting with 29).")
+
+    return repo_out, repo1_out
+
+
+# =====================================================================
+# Step 10-11: write output files
+# =====================================================================
+def write_report(df: pd.DataFrame, path: Path, header: str) -> None:
+    """Write a fixed-width REPOTXT/REPOTXT1 file."""
+    print(f"Creating {path.name}...")
+    with open(path, 'w') as f:
+        if len(df) > 0:
+            f.write(header + '\n')
+        for _, record in df.iterrows():
+            f.write(build_report_line(record) + '\n')
+    print(f"  Wrote {len(df):,} records to {path}")
+
+
+# =====================================================================
+# Main
+# =====================================================================
+def main() -> int:
+    print("EIMREPOI - Repossession Listing Report (PIBB - Islamic)")
+    print("=" * 60)
+
+    # ---- Dates ----
+    d = compute_report_dates()
+    print(f"Processing date: {d['reptdate']}")
+    print(f"Week: {d['wk']}, Previous Week: {d['wk1']}")
+    print(f"Month: {d['reptmon']}, Previous Month: {d['reptmon1']}")
+    print(f"RDate: {d['rdate']}, SDate: {d['sdate_str']}")
+
+    # ---- Paths ----
+    lnnote_path   = Path(f"/sas/ln/dwh/enrichment/enrh_ln_note_m{d['reptmon']}.sas7bdat")
+    loantemp_path = Path("/exdwh/host/ln/pibb_ccdtemp/loantemp.sas7bdat")
+    name8_path    = Path("/sas/ln/dwh/staging/stg_ln_nam8file.sas7bdat")
+    output_path   = Path("/host_pq/mis/output/report/")
+
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    repotxt_path  = output_path / "REPOTXT.txt"
+    repotxt1_path = output_path / "REPOTXT1.txt"
+
+    print(f"LNNOTE file:   {lnnote_path}")
+    print(f"NAME8 file:    {name8_path}")
+    print(f"LOANTEMP file: {loantemp_path}")
+    print(f"Entity filter: ENTITY_CD = {ENTITY_FILTER!r}")
+    print(f"HP loan types from PBBLNFMT ({len(HP_VALUES_INT)}): {HP_VALUES_INT}")
+    print("=" * 60)
+
+    # ---- Pre-flight ----
+    for p in (lnnote_path, name8_path, loantemp_path):
+        if not p.exists():
+            print(f"ERROR: required input file not found: {p}", file=sys.stderr)
+            return 1
+
+    # ---- Read + filter ----
+    lnnote   = read_lnnote_filtered(lnnote_path)
+    name8    = read_name8(name8_path)
+    arrear   = read_loantemp(loantemp_path)
+    print("=" * 60)
+
+    # ---- Merge + derive ----
+    merged = merge_datasets(lnnote, name8, arrear)
+    repo   = derive_repo_fields(merged)
+    print("=" * 60)
+
+    # ---- Split + sort ----
+    repo_out, repo1_out = split_and_sort(repo)
+    print("=" * 60)
+
+    # ---- Write ----
+    write_report(repo_out,  repotxt_path,  f"{d['rdate']}-REPOSSESSION LISTING")
+    write_report(repo1_out, repotxt1_path, f"{d['rdate']}-REPOSSESSION LISTING (983,993)")
+    print("=" * 60)
+
+    # ---- Summary ----
+    print("\nPROCESSING COMPLETED SUCCESSFULLY!")
+    print("=" * 60)
+    print(f"  Processing Date: {d['reptdate'].strftime('%Y-%m-%d')}")
+    print(f"  RDate:           {d['rdate']}")
+    print(f"  SDate:           {d['sdate_str']}")
+    print(f"  Week:            {d['wk']} (prev {d['wk1']})")
+    print(f"  Entity:          {ENTITY_FILTER}")
+    print(f"  HP loan types:   {HP_VALUES_INT}")
+    print(f"  LNNOTE filtered: {len(lnnote):,}")
+    print(f"  REPO  records:   {len(repo_out):,}")
+    print(f"  REPO1 records:   {len(repo1_out):,}")
+    print(f"  Output:          {repotxt_path}")
+    print(f"                   {repotxt1_path}")
+    print("=" * 60)
+
+    if len(repo_out) > 0:
+        print("Loan type distribution in REPO:")
+        for lt, cnt in repo_out['loantype'].value_counts().items():
+            print(f"  {lt}: {cnt} records")
+        print("=" * 60)
+        print("Sample REPO (first 3 records):")
+        for i in range(min(3, len(repo_out))):
+            r = repo_out.iloc[i]
+            print(f"  {i+1}. BRABBR={r['brabbr']}  CAC={r['cac']!r}  "
+                  f"REGNO={r['regno']!r}  LOANTYPE={r['loantype']}  "
+                  f"ARREAR={r['arrear']}  ARREAR2={r['arrear2']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
