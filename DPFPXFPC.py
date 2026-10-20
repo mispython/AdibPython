@@ -1,306 +1,228 @@
-#!/usr/bin/env python3
-"""
-diagnose_repo_parity.py
+EIMREPOI REPOTXT Parity Diagnostic
+========================================================================
+LNNOTE:   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m09.sas7bdat
+LOANTEMP: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp_iccd2.sas7bdat
+HP set (17): [128, 130, 131, 132, 380, 381, 700, 705, 720, 725, 983, 993, 996, 678, 679, 698, 699]
 
-Standalone diagnostic to identify why Python REPOTXT has ~301 records
-but production SAS REPOTXT has 1000+.
+========================================================================
+  SECTION 1: Load LNNOTE (filtered to HP + BALANCE > 0 + BORSTAT)
+========================================================================
+Reading LNNOTE...
+  Total LNNOTE rows: 8,125,473
+  LOANTYPE IN HP:           5,485,086
+  BALANCE > 0:              3,420,376
+  BORSTAT NOT IN F,I,R:     8,033,991
+  ALL THREE (filtered):     1,729,861
+  Filtered LNNOTE retained: 1,729,861
 
-Traces the pipeline stage-by-stage and specifically tests:
-  1. KKI (branch 117) accounts in LNNOTE — do they survive all filters?
-  2. Sample prod REGNOs (AAM8888, ABF5555, etc.) — traced end-to-end
-  3. Whether the LNNOTE -> LOANTEMP ACCTNO join is dropping accounts
-  4. Whether prod's LOANTEMP might differ from iccd2
+--- Loan type distribution in filtered LNNOTE ---
+       128:    379,652
+       130:        355
+       131:     21,340
+       132:          6
+       380:          1
+       678:        105
+       700:  1,063,989
+       705:     50,490
+       720:    164,546
+       725:      1,585
+       983:     14,076
+       993:     33,716
 
-Reads:
-  - enrh_ln_note_m09.sas7bdat    (LNNOTE)
-  - loantemp_iccd2.sas7bdat      (LOANTEMP)
+========================================================================
+  SECTION 2: KKI branch (117) accounts — prod has these
+========================================================================
+  KKI accounts in raw LNNOTE: 10,646
 
-Prints a report. Does not modify any files.
-"""
+--- KKI loan type distribution (raw LNNOTE) ---
+       128:  5,393 <-- HP
+       983:    766 <-- HP
+       247:    677
+       135:    673
+       700:    371 <-- HP
+       359:    318
+       142:    230
+       175:    212
+       705:    204 <-- HP
+       234:    155
+       993:    150 <-- HP
+       152:    136
+       246:    102
+       301:     97
+       303:     93
 
-import sys
-from pathlib import Path
-import pandas as pd
-import pyreadstat
+  KKI after ALL filters:     680
 
-import PBBLNFMT
+--- KKI loan types after ALL filters ---
+       983:    399
+       128:    186
+       993:     75
+       700:     13
+       705:      7
 
+========================================================================
+  SECTION 3: Load LOANTEMP (iccd2)
+========================================================================
+Reading LOANTEMP...
+  LOANTEMP total rows: 631,802
+  ARREAR >= 10:        4,077
+  product=700 count:   0
 
-# =====================================================================
-# Configuration
-# =====================================================================
-INPUT_BASE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod")
+--- LOANTEMP: ARREAR >= 10 by branch (top 20) ---
+    branch    701:    160
+    branch     30:    123
+    branch     13:    107
+    branch     34:     90
+    branch    802:     81
+    branch    173:     68
+    branch    827:     66
+    branch     56:     62
+    branch      8:     60
+    branch     89:     59
+    branch     10:     53
+    branch    801:     53
+    branch    702:     51
+    branch      3:     48
+    branch    143:     48
+    branch    820:     42
+    branch     57:     42
+    branch    168:     41
+    branch    808:     40
+    branch     94:     40
 
-LNNOTE_PATH   = INPUT_BASE / "EIBRCGCS" / "enrh_ln_note_m09.sas7bdat"
-LOANTEMP_PATH = INPUT_BASE / "EIMREPOI" / "loantemp_iccd2.sas7bdat"
+  KKI (branch 117) with ARREAR >= 10: 13
+  KKI products with arrears:
+    product    651:      3
+    product    652:      3
+    product    666:      2
+    product    128:      2
+    product    664:      1
+    product    657:      1
+    product    655:      1
 
-HP_SET = list(PBBLNFMT.MACROS['HP'])   # 17 HP loan types
-HP_SET_INT = set(int(x) for x in HP_SET)
+========================================================================
+  SECTION 4: Merge LNNOTE ↔ LOANTEMP on ACCTNO
+========================================================================
+  LNNOTE filtered unique acctnos: 1,729,838
+  LOANTEMP unique acctnos:        629,380
+  Overlap (matched):              400,046 (23.1% of LNNOTE)
 
-# Prod REGNOs from your sample that Python is missing
-PROD_SAMPLE_REGNOS = ['AAM8888', 'ABF5555', 'ABT3993', 'ACN712',
-                      'ACV7557', 'ACW6576', 'ACA4798', 'ACM6676']
+  After merge, ARREAR >= 10: 301
 
-# KKI branch code
-KKI_BRANCH = 117
+--- Merged ARREAR >= 10 — by LNNOTE loantype ---
+    LNNOTE loantype    128:    300
+    LNNOTE loantype    983:      1
 
+--- Merged ARREAR >= 10 — by LOANTEMP product ---
+    LOANTEMP product    128:    300
+    LOANTEMP product    983:      1
 
-# =====================================================================
-# Helpers
-# =====================================================================
-def norm(x):
-    """Normalize ACCTNO/LOANTYPE to clean string form."""
-    if pd.isna(x):
-        return None
-    try:
-        return str(int(float(x)))
-    except (ValueError, TypeError):
-        return str(x).strip()
+--- Merged ARREAR >= 10 — by branch (top 20) ---
+    branch    827:     44
+    branch    801:     28
+    branch    862:     28
+    branch    802:     25
+    branch    819:     17
+    branch    818:     17
+    branch    822:     11
+    branch    826:     10
+    branch    814:     10
+    branch    820:      9
+    branch    809:      9
+    branch    806:      8
+    branch    821:      8
+    branch    811:      8
+    branch     34:      7
+    branch    800:      7
+    branch    816:      6
+    branch    857:      6
+    branch    808:      4
+    branch    825:      4
 
+========================================================================
+  SECTION 5: Trace prod REGNOs missing from Python REPOTXT
+========================================================================
 
-def section(title):
-    print("\n" + "=" * 72)
-    print(f"  {title}")
-    print("=" * 72)
+--- REGNO = AAM8888 ---
+  Found 2 row(s) in raw LNNOTE:
+    ACCTNO=8960559813  LOANTYPE=128.0  NTBRCH=209.0
+      BALANCE=-3199.709999999999  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: False  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8960559813
+    ACCTNO=8960559813  LOANTYPE=983.0  NTBRCH=857.0
+      BALANCE=80794.87  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8960559813
 
+--- REGNO = ABF5555 ---
+  Found 1 row(s) in raw LNNOTE:
+    ACCTNO=8826480007  LOANTYPE=983.0  NTBRCH=809.0
+      BALANCE=5173.67  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8826480007
 
-def subsection(title):
-    print(f"\n--- {title} ---")
+--- REGNO = ABT3993 ---
+  Found 1 row(s) in raw LNNOTE:
+    ACCTNO=8837931705  LOANTYPE=983.0  NTBRCH=801.0
+      BALANCE=34908.64  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8837931705
 
+--- REGNO = ACN712 ---
+  Found 1 row(s) in raw LNNOTE:
+    ACCTNO=8978533325  LOANTYPE=983.0  NTBRCH=857.0
+      BALANCE=14196.41  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8978533325
 
-# =====================================================================
-# Diagnostic
-# =====================================================================
-def main():
-    print("EIMREPOI REPOTXT Parity Diagnostic")
-    print("=" * 72)
-    print(f"LNNOTE:   {LNNOTE_PATH}")
-    print(f"LOANTEMP: {LOANTEMP_PATH}")
-    print(f"HP set ({len(HP_SET)}): {HP_SET}")
+--- REGNO = ACV7557 ---
+  Found 2 row(s) in raw LNNOTE:
+    ACCTNO=8151094605  LOANTYPE=700.0  NTBRCH=9.0
+      BALANCE=-1366.07  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: False  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8151094605
+    ACCTNO=8968201720  LOANTYPE=983.0  NTBRCH=809.0
+      BALANCE=30546.02  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8968201720
 
-    if not LNNOTE_PATH.exists():
-        print(f"\nFATAL: LNNOTE not found: {LNNOTE_PATH}")
-        return 1
-    if not LOANTEMP_PATH.exists():
-        print(f"\nFATAL: LOANTEMP not found: {LOANTEMP_PATH}")
-        return 1
+--- REGNO = ACW6576 ---
+  Found 1 row(s) in raw LNNOTE:
+    ACCTNO=8977552232  LOANTYPE=983.0  NTBRCH=857.0
+      BALANCE=28740.05  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8977552232
 
-    # =================================================================
-    # SECTION 1: Load LNNOTE
-    # =================================================================
-    section("SECTION 1: Load LNNOTE (filtered to HP + BALANCE > 0 + BORSTAT)")
+--- REGNO = ACA4798 ---
+  Found 1 row(s) in raw LNNOTE:
+    ACCTNO=8994108018  LOANTYPE=983.0  NTBRCH=828.0
+      BALANCE=12041.32  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8994108018
 
-    print("Reading LNNOTE...")
-    lnnote, _ = pyreadstat.read_sas7bdat(
-        str(LNNOTE_PATH),
-        usecols=['ACCTNO', 'LOANTYPE', 'NTBRCH', 'BALANCE',
-                 'BORSTAT', 'COLLDESC', 'COLLYEAR'],
-    )
-    lnnote.columns = lnnote.columns.str.lower()
-    lnnote['lt'] = pd.to_numeric(lnnote['loantype'], errors='coerce')
-    lnnote['acctno_s'] = lnnote['acctno'].apply(norm)
+--- REGNO = ACM6676 ---
+  Found 1 row(s) in raw LNNOTE:
+    ACCTNO=8871689225  LOANTYPE=983.0  NTBRCH=34.0
+      BALANCE=30678.400000000005  BORSTAT=''
+      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
+      LOANTEMP: ✗ NOT FOUND for acctno 8871689225
 
-    total = len(lnnote)
-    print(f"  Total LNNOTE rows: {total:,}")
+========================================================================
+  VERDICT
+========================================================================
+  Python REPOTXT expected rows: 301
+  Prod  REPOTXT reported rows:  1000+ (per user)
+  Gap:                         699+
 
-    # Stage-by-stage
-    m_hp    = lnnote['lt'].isin(HP_SET_INT)
-    m_bal   = lnnote['balance'] > 0
-    m_bor   = ~lnnote['borstat'].isin(['F', 'I', 'R'])
+  🔴 LOANTEMP.iccd2 has ZERO product=700 rows.
+     If prod REPOTXT contains 700-type auto-HP, prod's LOANTEMP
+     is DIFFERENT from iccd2.
 
-    print(f"  LOANTYPE IN HP:        {m_hp.sum():>12,}")
-    print(f"  BALANCE > 0:           {m_bal.sum():>12,}")
-    print(f"  BORSTAT NOT IN F,I,R:  {m_bor.sum():>12,}")
-    print(f"  ALL THREE (filtered):  {(m_hp & m_bal & m_bor).sum():>12,}")
+  ✅ 2 KKI records survive to merged ARREAR>=10.
 
-    lnnote_f = lnnote[m_hp & m_bal & m_bor].copy()
-    print(f"  Filtered LNNOTE retained: {len(lnnote_f):,}")
+  Next steps based on trace results above:
+  - If prod REGNOs found in LNNOTE but NOT in LOANTEMP: prod uses different LOANTEMP
+  - If found in LOANTEMP but ARREAR < 10: prod's ARREAR definition differs
+  - If found in both but not in merged output: ACCTNO format mismatch bug
 
-    # Loan type distribution after filter
-    subsection("Loan type distribution in filtered LNNOTE")
-    lt_dist = lnnote_f['lt'].value_counts().sort_index()
-    for lt, cnt in lt_dist.items():
-        print(f"    {int(lt):>6}: {cnt:>10,}")
-
-    # =================================================================
-    # SECTION 2: KKI (branch 117) analysis
-    # =================================================================
-    section(f"SECTION 2: KKI branch ({KKI_BRANCH}) accounts — prod has these")
-
-    kki_raw = lnnote[lnnote['ntbrch'] == KKI_BRANCH]
-    print(f"  KKI accounts in raw LNNOTE: {len(kki_raw):,}")
-
-    if len(kki_raw) > 0:
-        subsection("KKI loan type distribution (raw LNNOTE)")
-        for lt, cnt in kki_raw['lt'].value_counts().head(15).items():
-            marker = ' <-- HP' if int(lt) in HP_SET_INT else ''
-            print(f"    {int(lt):>6}: {cnt:>6,}{marker}")
-
-    # Apply filters
-    kki_filtered = lnnote_f[lnnote_f['ntbrch'] == KKI_BRANCH]
-    print(f"\n  KKI after ALL filters:     {len(kki_filtered):,}")
-
-    if len(kki_filtered) > 0:
-        subsection("KKI loan types after ALL filters")
-        for lt, cnt in kki_filtered['lt'].value_counts().items():
-            print(f"    {int(lt):>6}: {cnt:>6,}")
-    else:
-        print("  ⚠  NO KKI accounts survive LNNOTE filters")
-        print("     -> If prod REPOTXT has KKI records, prod's LNNOTE")
-        print("        or filters differ from yours.")
-
-    # =================================================================
-    # SECTION 3: Load LOANTEMP
-    # =================================================================
-    section("SECTION 3: Load LOANTEMP (iccd2)")
-
-    print("Reading LOANTEMP...")
-    lt, _ = pyreadstat.read_sas7bdat(
-        str(LOANTEMP_PATH),
-        usecols=['ACCTNO', 'PRODUCT', 'ARREAR', 'BRANCH'],
-    )
-    lt.columns = lt.columns.str.lower()
-    lt['acctno_s'] = lt['acctno'].apply(norm)
-
-    print(f"  LOANTEMP total rows: {len(lt):,}")
-    print(f"  ARREAR >= 10:        {(lt['arrear'] >= 10).sum():,}")
-    print(f"  product=700 count:   {(lt['product'] == 700).sum()}")
-
-    subsection("LOANTEMP: ARREAR >= 10 by branch (top 20)")
-    big = lt[lt['arrear'] >= 10]
-    for br, cnt in big['branch'].value_counts().head(20).items():
-        print(f"    branch {int(br):>6}: {cnt:>6,}")
-
-    # KKI (branch 117) in LOANTEMP
-    kki_lt = lt[(lt['branch'] == KKI_BRANCH) & (lt['arrear'] >= 10)]
-    print(f"\n  KKI (branch {KKI_BRANCH}) with ARREAR >= 10: {len(kki_lt):,}")
-    if len(kki_lt) > 0:
-        print("  KKI products with arrears:")
-        for p, cnt in kki_lt['product'].value_counts().items():
-            print(f"    product {int(p):>6}: {cnt:>6,}")
-
-    # =================================================================
-    # SECTION 4: Merge analysis (LNNOTE filtered + LOANTEMP)
-    # =================================================================
-    section("SECTION 4: Merge LNNOTE ↔ LOANTEMP on ACCTNO")
-
-    n_lnnote_acct = lnnote_f['acctno_s'].nunique()
-    n_lt_acct     = lt['acctno_s'].nunique()
-    overlap       = len(set(lnnote_f['acctno_s'].dropna()) &
-                        set(lt['acctno_s'].dropna()))
-
-    print(f"  LNNOTE filtered unique acctnos: {n_lnnote_acct:,}")
-    print(f"  LOANTEMP unique acctnos:        {n_lt_acct:,}")
-    print(f"  Overlap (matched):              {overlap:,} "
-          f"({100*overlap/max(n_lnnote_acct,1):.1f}% of LNNOTE)")
-
-    merged = lnnote_f.merge(
-        lt[['acctno_s', 'arrear', 'product', 'branch']],
-        on='acctno_s', how='left'
-    )
-    arr10 = merged[merged['arrear'] >= 10]
-    print(f"\n  After merge, ARREAR >= 10: {len(arr10):,}")
-
-    if len(arr10) > 0:
-        subsection("Merged ARREAR >= 10 — by LNNOTE loantype")
-        for lt_v, cnt in arr10['lt'].value_counts().items():
-            print(f"    LNNOTE loantype {int(lt_v):>6}: {cnt:>6,}")
-
-        subsection("Merged ARREAR >= 10 — by LOANTEMP product")
-        for p, cnt in arr10['product'].value_counts().head(20).items():
-            if pd.notna(p):
-                print(f"    LOANTEMP product {int(p):>6}: {cnt:>6,}")
-
-        subsection("Merged ARREAR >= 10 — by branch (top 20)")
-        for br, cnt in arr10['branch'].value_counts().head(20).items():
-            if pd.notna(br):
-                print(f"    branch {int(br):>6}: {cnt:>6,}")
-
-    # =================================================================
-    # SECTION 5: Trace specific prod REGNOs
-    # =================================================================
-    section("SECTION 5: Trace prod REGNOs missing from Python REPOTXT")
-
-    for regno in PROD_SAMPLE_REGNOS:
-        subsection(f"REGNO = {regno}")
-
-        # Find in raw LNNOTE by COLLDESC substring
-        match = lnnote[lnnote['colldesc'].astype(str).str.contains(regno, na=False)]
-
-        if len(match) == 0:
-            print(f"  ✗ NOT FOUND in raw LNNOTE (searched COLLDESC)")
-            continue
-
-        print(f"  Found {len(match)} row(s) in raw LNNOTE:")
-        for _, r in match.head(3).iterrows():
-            acctno = r['acctno_s']
-            lt_v = r['loantype']
-            br = r['ntbrch']
-            bal = r['balance']
-            bor = r['borstat']
-
-            # Apply LNNOTE filters
-            is_hp = int(float(lt_v)) in HP_SET_INT if pd.notna(lt_v) else False
-            bal_ok = bal > 0 if pd.notna(bal) else False
-            bor_ok = bor not in ('F', 'I', 'R') if pd.notna(bor) else True
-
-            print(f"    ACCTNO={acctno}  LOANTYPE={lt_v}  NTBRCH={br}")
-            print(f"      BALANCE={bal}  BORSTAT={bor!r}")
-            print(f"      LOANTYPE IN HP: {is_hp}  |  BALANCE>0: {bal_ok}  |  BORSTAT ok: {bor_ok}")
-
-            # Check LOANTEMP
-            if acctno:
-                hit = lt[lt['acctno_s'] == acctno]
-                if len(hit) == 0:
-                    print(f"      LOANTEMP: ✗ NOT FOUND for acctno {acctno}")
-                else:
-                    for _, h in hit.head(2).iterrows():
-                        print(f"      LOANTEMP: product={h['product']}  "
-                              f"arrear={h['arrear']}  branch={h['branch']}")
-                        if pd.notna(h['arrear']):
-                            if h['arrear'] >= 10:
-                                print(f"        → WOULD APPEAR in REPOTXT if ACCTNO joined")
-                            else:
-                                print(f"        → ARREAR < 10, correctly excluded")
-
-    # =================================================================
-    # SECTION 6: Verdict
-    # =================================================================
-    section("VERDICT")
-
-    n_final = len(arr10)
-    kki_in_final = (arr10['branch'] == KKI_BRANCH).sum() if len(arr10) > 0 else 0
-    n_700_in_lt = (lt['product'] == 700).sum()
-
-    print(f"  Python REPOTXT expected rows: {n_final}")
-    print(f"  Prod  REPOTXT reported rows:  1000+ (per user)")
-    print(f"  Gap:                         {1000 - n_final}+")
-
-    print()
-    if n_700_in_lt == 0:
-        print("  🔴 LOANTEMP.iccd2 has ZERO product=700 rows.")
-        print("     If prod REPOTXT contains 700-type auto-HP, prod's LOANTEMP")
-        print("     is DIFFERENT from iccd2.")
-    else:
-        print(f"  ✅ LOANTEMP has {n_700_in_lt:,} product=700 rows.")
-
-    print()
-    if kki_in_final == 0 and len(kki_lt) > 0:
-        print(f"  🔴 KKI (branch {KKI_BRANCH}) has {len(kki_lt):,} accounts with ARREAR>=10")
-        print(f"     in LOANTEMP, but ZERO survive to merged ARREAR>=10 set.")
-        print("     → Join or LNNOTE filter is dropping them.")
-    elif kki_in_final > 0:
-        print(f"  ✅ {kki_in_final} KKI records survive to merged ARREAR>=10.")
-
-    print()
-    print("  Next steps based on trace results above:")
-    print("  - If prod REGNOs found in LNNOTE but NOT in LOANTEMP: prod uses different LOANTEMP")
-    print("  - If found in LOANTEMP but ARREAR < 10: prod's ARREAR definition differs")
-    print("  - If found in both but not in merged output: ACCTNO format mismatch bug")
-
-    print("\nDiagnostic complete.")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+Diagnostic complete.
