@@ -216,40 +216,20 @@ def load_loan_data() -> pl.DataFrame:
     """Load loan data from SAS .sas7bdat file using pyreadstat"""
     loan_path = LOANTEMP_PATH / "loantemp_iccd2.sas7bdat"
     
-    if loan_path.exists():
-        try:
-            # Read SAS file with pyreadstat
-            df_pd, meta = pyreadstat.read_sas7bdat(loan_path)
-            df = pl.from_pandas(df_pd)
-            print(f"   Loaded {len(df)} loan records")
-            print(f"   Columns: {df.columns[:10]}...")
-            
-            # Ensure BRANCH is float64 for consistency
-            if "BRANCH" in df.columns:
-                df = df.with_columns(pl.col("BRANCH").cast(pl.Float64))
-            
-            return df
-        except Exception as e:
-            print(f"   Error reading loantemp.sas7bdat: {e}")
-            # Fallback to parquet if available
-            parquet_path = INPUT_PATH / "BNM/LOANTEMP.parquet"
-            if parquet_path.exists():
-                df = pl.read_parquet(parquet_path)
-                if "BRANCH" in df.columns:
-                    df = df.with_columns(pl.col("BRANCH").cast(pl.Float64))
-                return df
-            else:
-                raise FileNotFoundError(f"Could not find loantemp.sas7bdat or LOANTEMP.parquet")
-    else:
-        # Try parquet as fallback
-        parquet_path = INPUT_PATH / "BNM/LOANTEMP.parquet"
-        if parquet_path.exists():
-            df = pl.read_parquet(parquet_path)
-            if "BRANCH" in df.columns:
-                df = df.with_columns(pl.col("BRANCH").cast(pl.Float64))
-            return df
-        else:
-            raise FileNotFoundError(f"Could not find loantemp.sas7bdat or LOANTEMP.parquet")
+    if not loan_path.exists():
+        raise FileNotFoundError(f"Could not find loantemp.sas7bdat at {loan_path}")
+    
+    # Read SAS file with pyreadstat
+    df_pd, meta = pyreadstat.read_sas7bdat(loan_path)
+    df = pl.from_pandas(df_pd)
+    print(f"   Loaded {len(df)} loan records")
+    print(f"   Columns: {df.columns[:10]}...")
+    
+    # Ensure BRANCH is float64 for consistency
+    if "BRANCH" in df.columns:
+        df = df.with_columns(pl.col("BRANCH").cast(pl.Float64))
+    
+    return df
 
 def extract_census9(census_value: float) -> str:
     """Extract 7th character from formatted census (8.2 format)"""
@@ -351,7 +331,7 @@ def calculate_npl_summaries(loan_df: pl.DataFrame) -> Dict:
         pl.col("BRHCODE").first().alias("BRHCODE"),
         pl.col("TYPE").first().alias("TYPE"),
         pl.col("BALANCE").sum().alias("BRHAMT"),
-        pl.len().alias("NOACC")  # Updated from pl.count() to pl.len()
+        pl.len().alias("NOACC")
     ])
     
     # Filter ARREAR2 values 1-14 (but NPL focuses on >= 3 months)
