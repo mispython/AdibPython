@@ -76,10 +76,10 @@ def main():
     # Paths point directly at the .sas7bdat FILES (not directories).
     # loan_path uses the {reptmon} macro now that reptmon is known.
     # ------------------------------------------------------------------
-    lnnote_path   = Path(f"/sas/ln/dwh/enrichment/enrh_ln_note_m{reptmon}.sas7bdat")
-    loantemp_path = Path("/dwh/dwh_m/tempsource/loantemp_iccd2.sas7bdat")
-    name8_path    = Path("/sas/ln/dwh/staging/stg_ln_nam8file.sas7bdat")
-    output_path   = Path("/host_pq/mis/output/report/")
+    lnnote_path   = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS//enrh_ln_note_m{reptmon}.sas7bdat") #/sas/ln/dwh/enrichment/enrh_ln_note_m{reptmon}.sas7bdat
+    loantemp_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp_iccd2.sas7bdat") #/dwh/dwh_m/tempsource/loantemp_iccd2.sas7bdat
+    name8_path    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/stg_ln_nam8file.sas7bdat") #/sas/ln/dwh/staging/stg_ln_nam8file.sas7bdat
+    output_path   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOI") #/host_pq/mis/output/report/
 
     # Create output directory if it doesn't exist
     output_path.mkdir(parents=True, exist_ok=True)
