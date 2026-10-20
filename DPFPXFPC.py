@@ -31,9 +31,9 @@ RANDOM_SEED = 42
 # ============================================================
 # DIRECTORIES (templates - {reptmon} filled after date calc)
 # ============================================================
-LOAN_DIR_TEMPLATE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m{reptmon}.sas7bdat")
-CCDTEMP_PATH = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp_iccd2.sas7bdat")
-OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOI")
+LOAN_DIR_TEMPLATE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m{reptmon}.sas7bdat"
+CCDTEMP_PATH = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp_iccd2.sas7bdat"
+OUTPUT_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOI"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -74,7 +74,7 @@ reptyear = reptdate.year
 reptday = f'{day:02d}'
 rdate = reptdate.strftime('%d%m%y')
 
-# Resolve the actual LNNOTE file path for this month
+# Resolve the actual LNNOTE file path for this month (str, not Path)
 LOAN_PATH = LOAN_DIR_TEMPLATE.format(reptmon=reptmon)
 
 print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
@@ -121,9 +121,11 @@ def read_lnnote_filtered(path, usecols, hp_products, chunk_size,
     reservoir = []
     seen_matching = 0
     collected_frames = []
+    collected_count = 0
     total_scanned = 0
 
-    # pyreadstat >= 1.1 provides read_file_in_chunks
+    # Try chunked reader first; fall back if unavailable
+    chunk_iter = None
     try:
         chunk_iter = pyreadstat.read_file_in_chunks(
             pyreadstat.read_sas7bdat,
@@ -131,24 +133,48 @@ def read_lnnote_filtered(path, usecols, hp_products, chunk_size,
             chunksize=chunk_size,
             usecols=usecols,
         )
+        # Force creation of first chunk to catch any immediate errors
+        _first = next(chunk_iter)
+    except (AttributeError, TypeError, StopIteration) as e:
+        # AttributeError: pyreadstat too old (no read_file_in_chunks)
+        # TypeError: signature mismatch
+        # StopIteration: empty file
+        print(f"    [note] chunked reader unavailable ({type(e).__name__}: {e}); "
+              f"falling back to full read with usecols")
+        chunk_iter = None
+    else:
+        # We already pulled the first chunk — re-inject it
+        def _rechain(first, rest):
+            yield first
+            yield from rest
+        chunk_iter = _rechain(_first, chunk_iter)
+
+    if chunk_iter is not None:
+        # ---- Streamed path ----
         for chunk_df, _meta in chunk_iter:
             total_scanned += len(chunk_df)
-            chunk_pl = pl.from_pandas(chunk_df)
+            if len(chunk_df) == 0:
+                continue
 
+            chunk_pl = pl.from_pandas(chunk_df)
             chunk_pl = chunk_pl.filter(
                 (pl.col('LOANTYPE').is_in(hp_products)) &
                 (pl.col('BALANCE') > 0)
             )
             if len(chunk_pl) == 0:
+                print(f"    ...scanned {total_scanned:,} raw rows so far", end='\r')
                 continue
 
             if sample_mode is None:
                 collected_frames.append(chunk_pl)
+                collected_count += len(chunk_pl)
 
             elif sample_mode == "head":
                 collected_frames.append(chunk_pl)
-                have = sum(len(f) for f in collected_frames)
-                if have >= sample_size:
+                collected_count += len(chunk_pl)
+                if collected_count >= sample_size:
+                    print(f"    ...scanned {total_scanned:,} raw rows "
+                          f"(stopped early at {collected_count:,} matching)")
                     break
 
             elif sample_mode == "reservoir":
@@ -167,38 +193,35 @@ def read_lnnote_filtered(path, usecols, hp_products, chunk_size,
 
         print(f"    ...scanned {total_scanned:,} raw rows total          ")
 
-    except (AttributeError, TypeError) as e:
-        # Fallback: pyreadstat version doesn't support chunked reading.
-        # Read whole file with usecols (still much faster than full columns).
-        print(f"    [note] chunked reader unavailable ({e}); falling back to full read with usecols")
-        df, _ = pyreadstat.read_sas7bdat(path, usecols=usecols)
-        df_pl = pl.from_pandas(df)
-        total_scanned = len(df_pl)
-        df_pl = df_pl.filter(
-            (pl.col('LOANTYPE').is_in(hp_products)) &
-            (pl.col('BALANCE') > 0)
-        )
-        print(f"    ...scanned {total_scanned:,} raw rows (single read)")
+        if sample_mode == "reservoir":
+            if not reservoir:
+                return pl.DataFrame()
+            return pl.DataFrame(reservoir)
 
-        if sample_mode == "head" and len(df_pl) > sample_size:
-            return df_pl.head(sample_size)
-        if sample_mode == "reservoir" and len(df_pl) > sample_size:
-            indices = rng.sample(range(len(df_pl)), sample_size)
-            return df_pl[indices]
-        return df_pl
-
-    if sample_mode == "reservoir":
-        if not reservoir:
+        if not collected_frames:
             return pl.DataFrame()
-        return pl.DataFrame(reservoir)
 
-    if not collected_frames:
-        return pl.DataFrame()
+        result = pl.concat(collected_frames, how='vertical_relaxed')
+        if sample_mode == "head":
+            result = result.head(sample_size)
+        return result
 
-    result = pl.concat(collected_frames, how='vertical_relaxed')
-    if sample_mode == "head":
-        result = result.head(sample_size)
-    return result
+    # ---- Fallback path (full read) ----
+    df, _ = pyreadstat.read_sas7bdat(path, usecols=usecols)
+    df_pl = pl.from_pandas(df)
+    total_scanned = len(df_pl)
+    df_pl = df_pl.filter(
+        (pl.col('LOANTYPE').is_in(hp_products)) &
+        (pl.col('BALANCE') > 0)
+    )
+    print(f"    ...scanned {total_scanned:,} raw rows (single read)")
+
+    if sample_mode == "head" and len(df_pl) > sample_size:
+        return df_pl.head(sample_size)
+    if sample_mode == "reservoir" and len(df_pl) > sample_size:
+        indices = rng.sample(range(len(df_pl)), sample_size)
+        return df_pl[indices]
+    return df_pl
 
 
 # ============================================================
@@ -241,8 +264,10 @@ try:
         sys.exit(1)
 
     # ---- Diagnostics on join keys ----
-    print(f"  ACCTNO dtype  -> lnnote: {df_lnnote['ACCTNO'].dtype}, loantemp: {df_loantemp['ACCTNO'].dtype}")
-    print(f"  NOTENO dtype  -> lnnote: {df_lnnote['NOTENO'].dtype}, loantemp: {df_loantemp['NOTENO'].dtype}")
+    print(f"  ACCTNO dtype  -> lnnote: {df_lnnote['ACCTNO'].dtype}, "
+          f"loantemp: {df_loantemp['ACCTNO'].dtype}")
+    print(f"  NOTENO dtype  -> lnnote: {df_lnnote['NOTENO'].dtype}, "
+          f"loantemp: {df_loantemp['NOTENO'].dtype}")
     print(f"  ACCTNO sample -> lnnote: {df_lnnote['ACCTNO'].head(3).to_list()}, "
           f"loantemp: {df_loantemp['ACCTNO'].head(3).to_list()}")
 
@@ -250,8 +275,8 @@ try:
     # from chunked reads, causing silent zero-match joins.
     def normalize_keys(df):
         return df.with_columns([
-            pl.col('ACCTNO').cast(pl.Float64).round(0).cast(pl.Int64).alias('ACCTNO'),
-            pl.col('NOTENO').cast(pl.Float64).round(0).cast(pl.Int64).alias('NOTENO'),
+            pl.col('ACCTNO').cast(pl.Float64, strict=False).round(0).cast(pl.Int64, strict=False).alias('ACCTNO'),
+            pl.col('NOTENO').cast(pl.Float64, strict=False).round(0).cast(pl.Int64, strict=False).alias('NOTENO'),
         ])
 
     df_lnnote = normalize_keys(df_lnnote)
@@ -298,13 +323,13 @@ df_hploan = df_hploan.with_columns([
     # - SUBSTR(...,1,8) takes first 8 chars
     # - Because of left-padding, this drops the LAST 3 digits of the number.
     # - Then pad remainder to 8 digits and parse MMDDYYYY.
-    (pl.col('ISSUEDT').cast(pl.Float64).round(0).cast(pl.Int64) // 1000)
-      .cast(pl.Utf8).str.zfill(8)
+    (pl.col('ISSUEDT').cast(pl.Float64, strict=False).round(0).cast(pl.Int64, strict=False) // 1000)
+      .cast(pl.Utf8, strict=False).str.zfill(8)
       .str.to_datetime('%m%d%Y', strict=False)
       .alias('ISSDTE'),
 
     # CRRISK = SUBSTR(SCORE2,1,1)
-    pl.col('SCORE2').cast(pl.Utf8).str.slice(0, 1).alias('CRRISK'),
+    pl.col('SCORE2').cast(pl.Utf8, strict=False).str.slice(0, 1).alias('CRRISK'),
 
     # MARGINF
     pl.when(pl.col('APPVALUE') > 0)
@@ -313,14 +338,14 @@ df_hploan = df_hploan.with_columns([
       .alias('MARGINF'),
 
     # CENSUS9 = SUBSTR(PUT(CENSUS,7.2),1,7)
-    pl.col('CENSUS').cast(pl.Utf8).str.zfill(7).alias('CENSUS9'),
+    pl.col('CENSUS').cast(pl.Utf8, strict=False).str.zfill(7).alias('CENSUS9'),
 ])
 
 # Warn on unparsed dates
 _null_dates = df_hploan.filter(pl.col('ISSDTE').is_null()).height
 if _null_dates > 0:
     sample_raw = (df_hploan.filter(pl.col('ISSDTE').is_null())
-                  .select(pl.col('ISSUEDT').cast(pl.Utf8))
+                  .select(pl.col('ISSUEDT').cast(pl.Utf8, strict=False))
                   .head(5)['ISSUEDT'].to_list())
     print(f"  WARNING: {_null_dates:,} of {len(df_hploan):,} rows had ISSUEDT "
           f"that didn't parse as MMDDYYYY. Samples: {sample_raw}")
@@ -343,7 +368,8 @@ df_hploan = df_hploan.with_columns([
       .otherwise(pl.lit('G. 9 YRS'))
       .alias('TERMGRP'),
 
-    pl.col('STATE').cast(pl.Utf8).replace_strict(STATE_MAP, default='OTHERS').alias('STATENM'),
+    pl.col('STATE').cast(pl.Utf8, strict=False)
+      .replace_strict(STATE_MAP, default='OTHERS').alias('STATENM'),
 
     pl.col('CENSUS9').str.slice(0, 2).str.strip_chars()
       .replace_strict(MAKE_MAP, default='OTHERS')
@@ -416,7 +442,7 @@ df_hploan = df_hploan.with_columns([
       .otherwise(pl.lit(0))
       .alias('MTHARR'),
 
-    pl.col('BRANCH').cast(pl.Utf8).alias('BRABBR'),
+    pl.col('BRANCH').cast(pl.Utf8, strict=False).alias('BRABBR'),
 ])
 
 # BORSTAT = 'F' -> MTHARR = 999
@@ -506,10 +532,8 @@ def generate_summary_report(df, group_cols, title, subtitle, report_num):
         for row in df_pivot.iter_rows(named=True):
             parts = [str(row.get(c, '')) for c in group_cols]
             for bucket in bucket_order:
-                cnt_key = f'COUNT_{bucket}'
-                amt_key = f'AMOUNT_{bucket}'
-                cnt = row.get(cnt_key)
-                amt = row.get(amt_key)
+                cnt = row.get(f'COUNT_{bucket}')
+                amt = row.get(f'AMOUNT_{bucket}')
                 parts.append(str(cnt if cnt is not None else 0))
                 parts.append(f"{amt:,.2f}" if amt is not None else "0.00")
             parts.append(str(deficit_count_all))
@@ -519,7 +543,9 @@ def generate_summary_report(df, group_cols, title, subtitle, report_num):
             lines.append(';'.join(parts))
 
     filename = f"EIMRESHI_SUMMARY_{report_num:02d}_{title.replace(' ', '_')}.txt"
-    with open(f'{OUTPUT_DIR}{filename}', 'w') as f:
+    # Use os.path.join to avoid missing-separator bug
+    out_path = os.path.join(OUTPUT_DIR, filename)
+    with open(out_path, 'w') as f:
         f.write('\n'.join(lines))
     print(f"  Generated: {filename}")
 
@@ -555,6 +581,8 @@ print(f"  Generated {summary_count} summary reports")
 # ============================================================
 print("\nGenerating detail report...")
 
+detail_path = os.path.join(OUTPUT_DIR, 'EIMRESHI_DETAIL_NPL.txt')
+
 if len(df_hploan2) > 0:
     df_detail = df_hploan2.select([
         'ACCTNO', 'NOTENO', 'NAME', 'BRABBR', 'PRODUCT', 'BORSTAT',
@@ -586,14 +614,14 @@ if len(df_hploan2) > 0:
     tot_amt = df_detail['BALANCE'].sum()
     detail_lines.append(f"TOT NO OF A/C : ;{tot_acc};TOT NET BALANCE : ;{tot_amt:,.2f};")
 
-    with open(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.txt', 'w') as f:
+    with open(detail_path, 'w') as f:
         f.write('\n'.join(detail_lines))
 
     print(f"  Detail report: {tot_acc:,} NPL accounts")
     print(f"  Total balance: {tot_amt:,.2f}")
 else:
     print("  No NPL accounts found")
-    with open(f'{OUTPUT_DIR}EIMRESHI_DETAIL_NPL.txt', 'w') as f:
+    with open(detail_path, 'w') as f:
         f.write(f"No NPL accounts found for report date {reptdate.strftime('%d/%m/%Y')}")
 
 # ============================================================
