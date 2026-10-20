@@ -1,10 +1,23 @@
-ACCTNO=   2000000125.0  ISSUEDT=   14633  +1960=2000-01-24  +1960-9d=2000-01-15
-ACCTNO=   2000000319.0  ISSUEDT=   14435  +1960=1999-07-10  +1960-9d=1999-07-01
-ACCTNO=   2000000707.0  ISSUEDT=   14432  +1960=1999-07-07  +1960-9d=1999-06-28
-ACCTNO=   2000000901.0  ISSUEDT=   15578  +1960=2002-08-26  +1960-9d=2002-08-17
-ACCTNO=   2000000901.0  ISSUEDT=   16714  +1960=2005-10-05  +1960-9d=2005-09-26
-ACCTNO=   2000000901.0  ISSUEDT=   20328  +1960=2015-08-28  +1960-9d=2015-08-19
-ACCTNO=   2000000901.0  ISSUEDT=   15943  +1960=2003-08-26  +1960-9d=2003-08-17
-ACCTNO=   2000000901.0  ISSUEDT=   16532  +1960=2005-04-06  +1960-9d=2005-03-28
-ACCTNO=   2000001023.0  ISSUEDT=   15551  +1960=2002-07-30  +1960-9d=2002-07-21
-ACCTNO=   2000001023.0  ISSUEDT=   16938  +1960=2006-05-17  +1960-9d=2006-05-08
+import pyreadstat
+import pandas as pd
+
+# 1. What does a raw REPOTXT line look like byte-for-byte?
+with open('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/REPOTXT_sample.txt', 'rb') as f:
+    for i, line in enumerate(f):
+        stripped = line.rstrip(b'\r\n')
+        print(f"Line {i}: len={len(stripped)}  repr={line!r}")
+        if i >= 2:
+            break
+
+# 2. Check the production SAS source:
+#    grep for 'FILE REPOTXT' in the SAS .sas file and paste it here.
+
+# 3. What does NAME8 look like for a sample account?
+name8, _ = pyreadstat.read_sas7bdat(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/stg_ln_nam8file.sas7bdat",
+    usecols=['ACCTNO', 'LINETHRE', 'LINEFOUR'],
+)
+name8.columns = name8.columns.str.lower()
+print("\nNAME8 columns:", name8.columns.tolist())
+print("NAME8 sample rows:")
+print(name8.head(5))
