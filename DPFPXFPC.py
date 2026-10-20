@@ -1,486 +1,241 @@
-"""
-EIMIR104 SAS to Python conversion
-Processes NPL (Non-Performing Loan) reports with 17-bucket structure
-Combines EIMIR103 NPL logic with EIMIR102 17-bucket format
-Output: Text file matching CCDTXT2 format, appended to shared CCDTXT2.txt
-"""
-
+import duckdb
+import pandas as pd
+import pyreadstat
 from pathlib import Path
 from datetime import datetime, timedelta
-import pyreadstat
-import polars as pl
-from typing import Dict, List
 import numpy as np
+import os
 
-# Setup paths
-BASE_PATH = Path(".")
-LOANTEMP_PATH = BASE_PATH / "/dwh/dwh_m/tempsource"
-LKP_PATH = BASE_PATH / "/sasdata/rawdata/lookup"
-OUTPUT_PATH = BASE_PATH / "/host_pq/mis/output/report/EIMIR/EIMIR104"
-CCDTXT2_PATH = BASE_PATH / "/host_pq/mis/output/report/EIMIR"
+# Path configuration
+SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
+LOANTEMP_PATH = SCRIPT_DIR / "/dwh/dwh_m/tempsource" / "loantemp_iccd2.sas7bdat"
+LKP_PATH = SCRIPT_DIR / "/sasdata/rawdata/lookup" / "LKP_BRANCH"
+OUTPUT_PATH = SCRIPT_DIR / "/host_pq/mis/output/report/EIMIR/EIMIR201"
+CCDTXT3_PATH = SCRIPT_DIR / "/host_pq/mis/output/report/EIMIR"
 OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
-CCDTXT2_PATH.mkdir(parents=True, exist_ok=True)
 
-# ============================================================================
-# 1. REPTDATE Processing (using datetime - 1 day)
-# ============================================================================
 
-def process_repdate() -> Dict[str, str]:
-    """Process REPTDATE using current date minus 1 day"""
-    repdate = datetime.now() - timedelta(days=1)
-    
-    return {
-        'RDATE': repdate.strftime("%d%m%y"),  # DDMMYY8.
-        'REPTYEAR': str(repdate.year),        # YEAR4.
-        'REPTMON': f"{repdate.month:02d}",    # Z2.
-        'REPTDAY': f"{repdate.day:02d}",      # Z2.
-        'REPTDATE': repdate.strftime("%d/%m/%Y"),  # DD/MM/YYYY for display
-        'REPTDATE_DISPLAY': repdate.strftime("%d/%m/%Y")  # For header
-    }
 
-# ============================================================================
-# 2. Load and Process Data
-# ============================================================================
+# Output file - only date, no timestamp
+OUTPUT_FILE = OUTPUT_PATH / f"EIMIR201_REPORT_{datetime.now().strftime('%Y%m%d')}.txt"
 
-def load_branch_data() -> pl.DataFrame:
-    """Load branch header data from LKP_BRANCH flatfile"""
-    branch_path = LKP_PATH / "LKP_BRANCH"
-    
-    if not branch_path.exists():
-        print(f"   Warning: LKP_BRANCH not found at {branch_path}")
-        return pl.DataFrame(schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8})
-    
-    # Read fixed-width flatfile
-    # Format: BRANCH (first 3 chars), BRHCODE (next 3 chars)
-    branches = []
-    with open(branch_path, 'r') as f:
-        for line in f:
-            if len(line.strip()) >= 6:
-                branch_code = line[0:3].strip()
-                brhcode = line[3:6].strip()
-                if branch_code and brhcode:
-                    try:
-                        branches.append({
-                            "BRANCH": int(branch_code),
-                            "BRHCODE": brhcode
-                        })
-                    except ValueError:
-                        continue
-    
-    df = pl.DataFrame(branches) if branches else pl.DataFrame(
-        schema={"BRANCH": pl.Int64, "BRHCODE": pl.Utf8}
-    )
-    print(f"   Loaded {len(df)} branch records")
+def read_sas7bdat_with_pandas(filepath):
+    """Read SAS7BDAT file using pandas/pyreadstat"""
+    print(f"Reading SAS file: {filepath}")
+    if not filepath.exists():
+        raise FileNotFoundError(f"SAS file not found: {filepath}")
+    df, meta = pyreadstat.read_sas7bdat(str(filepath))
     return df
 
-def load_loan_data() -> pl.DataFrame:
-    """Load loan data from SAS .sas7bdat file using pyreadstat"""
-    loan_path = LOANTEMP_PATH / "loantemp_iccd2.sas7bdat"
-    
-    if not loan_path.exists():
-        raise FileNotFoundError(f"Could not find loantemp.sas7bdat at {loan_path}")
-    
-    df_pd, meta = pyreadstat.read_sas7bdat(loan_path)
-    df = pl.from_pandas(df_pd)
-    print(f"   Loaded {len(df)} loan records")
-    print(f"   Columns: {df.columns[:10]}...")
-    
-    # Ensure BRANCH is float64 for consistency
-    if "BRANCH" in df.columns:
-        df = df.with_columns(pl.col("BRANCH").cast(pl.Float64))
-    
-    return df
+def format_line1(branch, values):
+    """Format line 1: BRANCH + columns 1-5"""
+    return (f"{branch:>3}  {values[0]:>7,.0f} {values[1]:>16,.2f}  {values[2]:>7,.0f} {values[3]:>15,.2f}  "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}   {values[6]:>8,.0f} {values[7]:>17,.2f}  "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
 
-def extract_census9(census_value: float) -> str:
-    """Extract 7th character from formatted census (8.2 format)"""
-    if census_value is None or np.isnan(census_value):
-        return ' '
-    formatted = f"{census_value:8.2f}"  # 8.2 format with spaces
-    return formatted[6] if len(formatted) >= 7 else ' '
+def format_line2(brhcode, values):
+    """Format line 2: BRHCODE + columns 6-10"""
+    return (f"{brhcode:<3}  {values[0]:>7,.0f} {values[1]:>16,.2f}  {values[2]:>7,.0f} {values[3]:>15,.2f}  "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}   {values[6]:>8,.0f} {values[7]:>17,.2f}  "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
 
-def categorize_npl_loans_17bucket(loan_df: pl.DataFrame, hpd_list: List[str]) -> pl.DataFrame:
-    """Categorize NPL loans for 17-bucket report (uses ARREAR instead of ARREAR2)"""
-    
-    # Filter: BALANCE > 0 AND BORSTAT != 'Z'
-    filtered_df = loan_df.filter(
-        (pl.col("BALANCE") > 0) & (pl.col("BORSTAT") != "Z")
-    )
-    
-    # Add CENSUS9 column
-    filtered_df = filtered_df.with_columns(
-        pl.col("CENSUS").map_elements(extract_census9, return_dtype=pl.Utf8).alias("CENSUS9")
-    )
-    
-    # Main filter: ARREAR > 3 OR BORSTAT in R/I/F OR CENSUS9 = '9' OR USER5 = 'N'
-    npl_candidates = filtered_df.filter(
-        (pl.col("ARREAR") > 3) |
-        (pl.col("BORSTAT").is_in(["R", "I", "F"])) |
-        (pl.col("CENSUS9") == "9") |
-        (pl.col("USER5") == "N")
-    )
-    
-    categorized_rows = []
-    
-    # Helper function for NPL categories (same as EIMIR103)
-    def create_npl_category(df_condition, cat, type_name, product_list):
-        # Additional filter: BORSTAT in R/I/F OR ARREAR > 3 OR USER5 = 'N'
-        final_condition = df_condition & (
-            pl.col("BORSTAT").is_in(["R", "I", "F"]) |
-            (pl.col("ARREAR") > 3) |
-            (pl.col("USER5") == "N")
-        )
-        
-        cat_df = npl_candidates.filter(final_condition)
-        if len(cat_df) > 0:
-            return cat_df.with_columns([
-                pl.lit(cat).alias("CAT"),
-                pl.lit(type_name).alias("TYPE")
-            ])
-        return None
-    
-    # Category A: (HPD-C)
-    cat_a = create_npl_category(
-        pl.col("PRODUCT").is_in([380, 381, 700, 705, 720, 725]),
-        "A", "(HPD-C)", [380, 381, 700, 705, 720, 725]
-    )
-    if cat_a is not None:
-        categorized_rows.append(cat_a)
-    
-    # Category B: (HP 380/381)
-    cat_b = create_npl_category(
-        pl.col("PRODUCT").is_in([380, 381]),
-        "B", "(HP 380/381)", [380, 381]
-    )
-    if cat_b is not None:
-        categorized_rows.append(cat_b)
-    
-    # Category C: (AITAB)
-    cat_c = create_npl_category(
-        pl.col("PRODUCT").is_in([103, 104, 107, 108, 128, 130, 131, 132]),
-        "C", "(AITAB)", [103, 104, 107, 108, 128, 130, 131, 132]
-    )
-    if cat_c is not None:
-        categorized_rows.append(cat_c)
-    
-    # Category D: (-HPD-)
-    hpd_numbers = [int(x.strip("'")) for x in hpd_list]
-    cat_d = create_npl_category(
-        pl.col("PRODUCT").is_in(hpd_numbers),
-        "D", "(-HPD-)", hpd_numbers
-    )
-    if cat_d is not None:
-        categorized_rows.append(cat_d)
-    
-    # Combine all categories
-    if categorized_rows:
-        return pl.concat(categorized_rows, how="vertical").sort(["BRANCH"])
-    else:
-        return pl.DataFrame(schema=filtered_df.schema)
+def format_line3(values):
+    """Format line 3: columns 11-15"""
+    return (f"     {values[0]:>7,.0f} {values[1]:>16,.2f}  {values[2]:>7,.0f} {values[3]:>15,.2f}  "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}   {values[6]:>8,.0f} {values[7]:>17,.2f}  "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
 
-# ============================================================================
-# 3. Generate Text Report in CCDTXT2 Format
-# ============================================================================
-
-def generate_ccdtxt2_report(npl_df: pl.DataFrame, branch_df: pl.DataFrame, 
-                            category_type: str, report_date: str, 
-                            prog_id: str, output_file: Path):
-    """Generate report in CCDTXT2 format with 17-bucket structure"""
-    
-    # Merge with branch data (left join so unmatched branches still appear)
-    if branch_df.height > 0:
-        merged_df = npl_df.join(branch_df, on="BRANCH", how="left")
-    else:
-        merged_df = npl_df.with_columns(pl.lit("").alias("BRHCODE"))
-    
-    # Group by BRANCH and ARREAR bucket
-    bucket_data = merged_df.group_by(["BRANCH", "BRHCODE", "ARREAR"]).agg([
-        pl.len().alias("NOACC"),
-        pl.sum("BALANCE").alias("BALANCE")
-    ]).sort(["BRANCH", "ARREAR"])
-    
-    # Create branch-level summary with 17 buckets
-    branch_summaries = []
-    for branch in sorted(merged_df["BRANCH"].unique()):
-        branch_info = merged_df.filter(pl.col("BRANCH") == branch)
-        brhcode_series = branch_info["BRHCODE"].drop_nulls()
-        brhcode = brhcode_series.first() if len(brhcode_series) > 0 else str(branch)
-        
-        # Initialize buckets 1-17
-        buckets = {i: {"count": 0, "amount": 0.0} for i in range(1, 18)}
-        
-        # Fill bucket data
-        for row in bucket_data.filter(pl.col("BRANCH") == branch).iter_rows(named=True):
-            bucket = int(row["ARREAR"])
-            if 1 <= bucket <= 17:
-                buckets[bucket]["count"] = row["NOACC"]
-                buckets[bucket]["amount"] = row["BALANCE"] or 0.0
-        
-        # Calculate subtotals
-        sub_ge3_count = sum(buckets[i]["count"] for i in range(4, 18))  # >= 3 months
-        sub_ge3_amount = sum(buckets[i]["amount"] for i in range(4, 18))
-        sub_ge6_count = sum(buckets[i]["count"] for i in range(7, 18))  # >= 6 months  
-        sub_ge6_amount = sum(buckets[i]["amount"] for i in range(7, 18))
-        total_count = sum(buckets[i]["count"] for i in range(1, 18))
-        total_amount = sum(buckets[i]["amount"] for i in range(1, 18))
-        
-        branch_summaries.append({
-            "BRANCH": branch,
-            "BRHCODE": brhcode,
-            "buckets": buckets,
-            "sub_ge3_count": sub_ge3_count,
-            "sub_ge3_amount": sub_ge3_amount,
-            "sub_ge6_count": sub_ge6_count,
-            "sub_ge6_amount": sub_ge6_amount,
-            "total_count": total_count,
-            "total_amount": total_amount
-        })
-    
-    # Generate text output - append to existing CCDTXT2 file
-    with open(output_file, 'a') as f:
-        # Separator identifying this as EIMIR104 output
-        f.write("\n" + "=" * 80 + "\n")
-        f.write(f"Report Type: {prog_id}\n")
-        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write("=" * 80 + "\n")
-        
-        # Header page
-        _write_report_header(f, prog_id, category_type, report_date)
-        
-        # Detail lines
-        for branch_sum in branch_summaries:
-            _write_branch_detail(f, branch_sum)
-        
-        # Grand totals
-        _write_grand_totals(f, branch_summaries)
-        
-        f.write("\n" + "=" * 80 + "\n")
-        f.write("\f")  # Form feed for new page
-
-def _write_report_header(f, prog_id: str, category_type: str, report_date: str):
-    """Write CCDTXT2 format header"""
-    # Line 1: Program ID and title
-    title_line = f"1PROGRAM-ID : {prog_id:<20} P U B L I C   I S L A M I C   B A N K   B E R H A D"
-    f.write(f"{title_line:<120}PAGE NO.: 1\n")
-    
-    # Line 2: Report title and date
-    report_title = f"OUTSTANDING LOANS IN ARREARS ({category_type})"
-    date_part = report_date
-    padding = max(0, 60 - len(report_title))
-    f.write(f"{' ' * padding}{report_title}{' ' * 10}{date_part}\n")
-    
-    # Line 3: Bucket headers - Line 1
-    header_line1 = ("0BRH    NO          < 1 MTH      NO     1 TO < 2 MTH      NO     2 TO < 3 MTH       "
-                    "NO      3 TO < 4 MTH       NO      4 TO < 5 MTH")
-    f.write(f"{header_line1}\n")
-    
-    # Line 4: Bucket headers - Line 2
-    header_line2 = ("        NO     5 TO < 6 MTH      NO     6 TO < 7 MTH      NO     7 TO < 8 MTH       "
-                    "NO      8 TO < 9 MTH       NO     9 TO < 12 MTH")
-    f.write(f"{header_line2}\n")
-    
-    # Line 5: Bucket headers - Line 3
-    header_line3 = ("        NO   12 TO < 18 MTH      NO   18 TO < 24 MTH      NO   24 TO < 36 MTH       "
-                    "NO          > 36 MTH       NO   SUBTOTAL >=3MTH")
-    f.write(f"{header_line3}\n")
-    
-    # Line 6: Bucket headers - Line 4
-    header_line4 = ("                                                                                    "
-                    "NO   SUBTOTAL >=6MTH       NO             TOTAL")
-    f.write(f"{header_line4}\n")
-    
-    # Line 7: Separator
-    f.write(" " + "-" * 98 + "\n")
-
-def _write_branch_detail(f, branch_sum: Dict):
-    """Write branch detail lines in CCDTXT2 format"""
-    b = branch_sum["buckets"]
-    
-    def fmt_num(n):
-        return f"{n:>7}"
-    
-    def fmt_amt(a):
-        return f"{a:>12,.2f}"
-    
-    # Line 1: Branch code + buckets 1-5
-    line1 = (f" {branch_sum['BRANCH']:>3}   {fmt_num(b[1]['count'])}  {fmt_amt(b[1]['amount'])}   "
-             f"{fmt_num(b[2]['count'])}  {fmt_amt(b[2]['amount'])}   "
-             f"{fmt_num(b[3]['count'])}  {fmt_amt(b[3]['amount'])}    "
-             f"{fmt_num(b[4]['count'])}  {fmt_amt(b[4]['amount'])}        "
-             f"{fmt_num(b[5]['count'])}  {fmt_amt(b[5]['amount'])}")
-    f.write(f"{line1}\n")
-    
-    # Line 2: BRHCODE + buckets 6-10
-    line2 = (f" {str(branch_sum['BRHCODE']):<3}   {fmt_num(b[6]['count'])}  {fmt_amt(b[6]['amount'])}   "
-             f"{fmt_num(b[7]['count'])}  {fmt_amt(b[7]['amount'])}   "
-             f"{fmt_num(b[8]['count'])}  {fmt_amt(b[8]['amount'])}    "
-             f"{fmt_num(b[9]['count'])}  {fmt_amt(b[9]['amount'])}        "
-             f"{fmt_num(b[10]['count'])}  {fmt_amt(b[10]['amount'])}")
-    f.write(f"{line2}\n")
-    
-    # Line 3: Empty BRH + buckets 11-15
-    line3 = (f"            {fmt_num(b[11]['count'])}  {fmt_amt(b[11]['amount'])}   "
-             f"{fmt_num(b[12]['count'])}  {fmt_amt(b[12]['amount'])}   "
-             f"{fmt_num(b[13]['count'])}  {fmt_amt(b[13]['amount'])}    "
-             f"{fmt_num(b[14]['count'])}  {fmt_amt(b[14]['amount'])}        "
-             f"{fmt_num(b[15]['count'])}  {fmt_amt(b[15]['amount'])}")
-    f.write(f"{line3}\n")
-    
-    # Line 4: Buckets 16-17 + subtotals
-    line4 = (f"                                                                                   "
-             f"{fmt_num(b[16]['count'])}  {fmt_amt(b[16]['amount'])}   "
-             f"{fmt_num(b[17]['count'])}  {fmt_amt(b[17]['amount'])}")
-    f.write(f"{line4}\n")
-    
-    # Line 5: Subtotals continued + total
-    line5 = (f"                                                                                  "
-             f"{fmt_num(branch_sum['sub_ge3_count'])}  {fmt_amt(branch_sum['sub_ge3_amount'])}   "
-             f"{fmt_num(branch_sum['sub_ge6_count'])}  {fmt_amt(branch_sum['sub_ge6_amount'])}       "
-             f"{fmt_num(branch_sum['total_count'])}  {fmt_amt(branch_sum['total_amount'])}")
-    f.write(f"{line5}\n")
-
-def _write_grand_totals(f, branch_summaries: List[Dict]):
-    """Write grand totals in CCDTXT2 format"""
-    tot_buckets = {i: {"count": 0, "amount": 0.0} for i in range(1, 18)}
-    total_sub_ge3_count = 0
-    total_sub_ge3_amount = 0.0
-    total_sub_ge6_count = 0
-    total_sub_ge6_amount = 0.0
-    total_all_count = 0
-    total_all_amount = 0.0
-    
-    for branch_sum in branch_summaries:
-        for i in range(1, 18):
-            tot_buckets[i]["count"] += branch_sum["buckets"][i]["count"]
-            tot_buckets[i]["amount"] += branch_sum["buckets"][i]["amount"]
-        total_sub_ge3_count += branch_sum["sub_ge3_count"]
-        total_sub_ge3_amount += branch_sum["sub_ge3_amount"]
-        total_sub_ge6_count += branch_sum["sub_ge6_count"]
-        total_sub_ge6_amount += branch_sum["sub_ge6_amount"]
-        total_all_count += branch_sum["total_count"]
-        total_all_amount += branch_sum["total_amount"]
-    
-    # Separator line
-    f.write(" " + "-" * 98 + "\n")
-    
-    grand_sum = {
-        "BRANCH": "",
-        "BRHCODE": "",
-        "buckets": tot_buckets,
-        "sub_ge3_count": total_sub_ge3_count,
-        "sub_ge3_amount": total_sub_ge3_amount,
-        "sub_ge6_count": total_sub_ge6_count,
-        "sub_ge6_amount": total_sub_ge6_amount,
-        "total_count": total_all_count,
-        "total_amount": total_all_amount
-    }
-    
-    _write_branch_detail(f, grand_sum)
-
-# ============================================================================
-# 4. Main Execution
-# ============================================================================
+def format_line4(values):
+    """Format line 4: columns 16-17 + subtotals"""
+    return (f"     {values[0]:>7,.0f} {values[1]:>16,.2f}  {values[2]:>7,.0f} {values[3]:>15,.2f}  "
+            f"{values[4]:>7,.0f} {values[5]:>15,.2f}   {values[6]:>8,.0f} {values[7]:>17,.2f}  "
+            f"{values[8]:>8,.0f} {values[9]:>17,.2f}")
 
 def main():
-    """Main execution function"""
-    print("=" * 60)
-    print("EIMIR104 SAS to Python Conversion - 17-Bucket NPL Report")
-    print("CCDTXT2 Format Output (appended to shared CCDTXT2.txt)")
-    print("=" * 60)
+    # Use current date minus 1 day
+    current_date = datetime.now() - timedelta(days=1)
+    # Format as DD/MM/YY like SAS DDMMYY8 format
+    rdate = current_date.strftime('%d/%m/%y')
     
-    # HPD list (would come from macro variable &HPD)
-    HPD_LIST = ["110", "115", "700", "705"]
-    
-    # 1. Process REPTDATE (current date - 1 day)
-    print("\n1. Processing REPTDATE...")
-    variables = process_repdate()
-    print(f"   Report Date: {variables['RDATE']}")
-    
-    # 2. Load loan data from SAS file
-    print("\n2. Loading loan data from loantemp_iccd2.sas7bdat...")
-    try:
-        loan_df = load_loan_data()
-    except Exception as e:
-        print(f"   Error reading SAS file: {e}")
-        return
-    
-    # 3. Load branch data from flatfile
-    print("\n3. Loading branch data from LKP_BRANCH...")
-    branch_df = load_branch_data()
-    
-    # 4. Categorize NPL loans
-    print("\n4. Categorizing NPL loans (17-bucket)...")
-    npl_categorized = categorize_npl_loans_17bucket(loan_df, HPD_LIST)
-    print(f"   NPL candidates: {len(npl_categorized)}")
-    
-    if len(npl_categorized) == 0:
-        print("   No NPL loans found. Exiting.")
-        return
-    
-    # 5. Generate CCDTXT2 report - append to shared CCDTXT2.txt
-    print("\n5. Generating CCDTXT2 report and appending to shared CCDTXT2.txt...")
-    ccdtxt2_output = CCDTXT2_PATH / "CCDTXT2.txt"
-    
-    for cat in sorted(npl_categorized["CAT"].unique().to_list()):
-        cat_data = npl_categorized.filter(pl.col("CAT") == cat)
-        type_series = cat_data["TYPE"].drop_nulls()
-        cat_type = type_series.first() if len(type_series) > 0 else ""
-        
-        print(f"   Appending {cat_type} report to CCDTXT2.txt...")
-        generate_ccdtxt2_report(
-            npl_df=cat_data,
-            branch_df=branch_df,
-            category_type=cat_type,
-            report_date=variables['REPTDATE_DISPLAY'],
-            prog_id=f"EIMAR104-{cat}",
-            output_file=ccdtxt2_output
-        )
-    
-    print(f"   ✓ Report appended to: {ccdtxt2_output}")
-    
-    # 6. Also save individual category reports in EIMIR104 output for reference
-    print("\n6. Saving individual category reports for reference...")
-    for cat in sorted(npl_categorized["CAT"].unique().to_list()):
-        cat_data = npl_categorized.filter(pl.col("CAT") == cat)
-        type_series = cat_data["TYPE"].drop_nulls()
-        cat_type = type_series.first() if len(type_series) > 0 else ""
-        
-        output_file = OUTPUT_PATH / f"EIMIR104_{cat}_CCDTXT2.txt"
-        if output_file.exists():
-            output_file.unlink()
-        
-        generate_ccdtxt2_report(
-            npl_df=cat_data,
-            branch_df=branch_df,
-            category_type=cat_type,
-            report_date=variables['REPTDATE_DISPLAY'],
-            prog_id=f"EIMAR104-{cat}",
-            output_file=output_file
-        )
-        print(f"   ✓ Reference report saved: {output_file}")
-    
-    # 7. Save supporting data files
-    print("\n7. Saving supporting data files...")
-    if branch_df.height > 0:
-        merged_npl = npl_categorized.join(branch_df, on="BRANCH", how="left")
-    else:
-        merged_npl = npl_categorized.with_columns(pl.lit("").alias("BRHCODE"))
-    merged_npl.write_parquet(OUTPUT_PATH / "NPL_17BUCKET_CATEGORIZED.parquet")
-    
-    variables_df = pl.DataFrame([variables])
-    variables_df.write_parquet(OUTPUT_PATH / "EIMIR104_VARIABLES.parquet")
-    
-    print("\n" + "=" * 60)
-    print("CONVERSION COMPLETE")
-    print("=" * 60)
-    print(f"Total loans processed: {len(loan_df)}")
-    print(f"NPL accounts identified: {len(npl_categorized)}")
-    print(f"Categories: {npl_categorized['CAT'].n_unique()}")
-    print(f"Output appended to: {ccdtxt2_output}")
-    print(f"Reference reports saved to: {OUTPUT_PATH}")
+    print(f"Report date: {rdate}")
 
-# ============================================================================
-# 5. Run the conversion
-# ============================================================================
+    # Check and find BRHFILE
+    if not BRHFILE_FILE.exists():
+        alt_paths = [
+            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/LKP_BRANCH"),
+            Path("input/prod/EIMIR201/LKP_BRANCH"),
+            Path("../input/prod/EIMIR201/LKP_BRANCH"),
+        ]
+        for alt_path in alt_paths:
+            if alt_path.exists():
+                print(f"Found BRHFILE at: {alt_path}")
+                brhfile_final = alt_path
+                break
+        else:
+            raise FileNotFoundError(f"BRHFILE not found")
+    else:
+        brhfile_final = BRHFILE_FILE
+
+    # Read BRHFILE with correct column specifications
+    brhdata_df = pd.read_fwf(
+        brhfile_final,
+        colspecs=[(1, 4), (5, 8)],
+        names=['BRANCH', 'BRHCODE'],
+        dtype={'BRANCH': str, 'BRHCODE': str},
+        header=None
+    )
+    brhdata_df['BRANCH'] = brhdata_df['BRANCH'].str.strip()
+    brhdata_df['BRANCH_NUM'] = pd.to_numeric(brhdata_df['BRANCH'], errors='coerce').fillna(0).astype(int)
+    print(f"Read {len(brhdata_df)} branch records")
+
+    # Check and find LOANTEMP file
+    if not LOANTEMP_FILE.exists():
+        alt_loantemp_paths = [
+            Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
+            Path("input/prod/EIMIR201/bnm/loantemp.sas7bdat"),
+        ]
+        for alt_path in alt_loantemp_paths:
+            if alt_path.exists():
+                print(f"Found LOANTEMP at: {alt_path}")
+                loantemp_file_final = alt_path
+                break
+        else:
+            raise FileNotFoundError(f"LOANTEMP file not found")
+    else:
+        loantemp_file_final = LOANTEMP_FILE
+
+    # Read LOANTEMP
+    loantemp_df = read_sas7bdat_with_pandas(loantemp_file_final)
+    print(f"Read {len(loantemp_df)} loan records")
+
+    # Convert to DuckDB for processing
+    conn = duckdb.connect(':memory:')
+    conn.register('loantemp', loantemp_df)
+    conn.register('brhdata', brhdata_df)
+
+    # Create LOANTEM2 with proper CAT ordering
+    loantem2_query = """
+    WITH categorized AS (
+        SELECT 
+            *,
+            CASE 
+                WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN 'A'
+                WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN 'B'
+                WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN 'C'
+                WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN 'D'
+            END AS CAT,
+            CASE 
+                WHEN (PRODUCT IN (380, 381, 700, 705)) AND CHECKDT = 1 THEN '(HPD-C)'
+                WHEN (PRODUCT IN (380, 381)) AND CHECKDT = 1 THEN '(HP 380/381)'
+                WHEN (PRODUCT IN (128, 130)) AND CHECKDT = 1 THEN '(AITAB)'
+                WHEN (PRODUCT IN (128, 130, 380, 381, 700, 705)) AND CHECKDT = 1 THEN '(-HPD-)'
+            END AS TYPE
+        FROM loantemp
+        WHERE (PRODUCT IN (380, 381, 700, 705) AND CHECKDT = 1)
+           OR (PRODUCT IN (380, 381) AND CHECKDT = 1)
+           OR (PRODUCT IN (128, 130) AND CHECKDT = 1)
+           OR (PRODUCT IN (128, 130, 380, 381, 700, 705) AND CHECKDT = 1)
+    )
+    SELECT * FROM categorized
+    WHERE CAT IS NOT NULL
+    """
+    
+    loantem2_df = conn.execute(loantem2_query).fetchdf()
+    print(f"Filtered to {len(loantem2_df)} records for reporting")
+    
+    # Merge with BRHDATA
+    loantemp_final_df = loantem2_df.merge(brhdata_df, left_on='BRANCH', right_on='BRANCH_NUM', how='inner')
+    loantemp_final_df = loantemp_final_df.sort_values(['CAT', 'BRANCH_NUM'])
+    print(f"Merged data: {len(loantemp_final_df)} records")
+    
+    # Generate report
+    with open(OUTPUT_FILE, 'w') as f:
+        pagecnt = 0
+        
+        # Process each CAT group
+        for cat, cat_group in loantemp_final_df.groupby('CAT'):
+            if cat is None or pd.isna(cat):
+                continue
+                
+            # Initialize category-level arrays and totals
+            totamt = np.zeros(17)
+            totacc = np.zeros(17)
+            
+            first_branch_in_category = True
+            
+            for branch, branch_group in cat_group.groupby('BRANCH_NUM'):
+                brhamt = np.zeros(17)
+                noacc = np.zeros(17)
+                
+                # Process each row in branch
+                for _, row in branch_group.iterrows():
+                    if row['BALANCE'] > 0:
+                        arrears_idx = int(row['ARREAR']) - 1
+                        if 0 <= arrears_idx < 17:
+                            brhamt[arrears_idx] += row['BALANCE']
+                            noacc[arrears_idx] += 1
+                
+                # Calculate subtotals
+                subbrh = np.sum(brhamt[3:])
+                subbr2 = subbrh - brhamt[3] - brhamt[4] - brhamt[5]
+                subacc = np.sum(noacc[3:])
+                subac2 = subacc - noacc[3] - noacc[4] - noacc[5]
+                totbrh = subbrh + brhamt[0] + brhamt[1] + brhamt[2]
+                sotacc = subacc + noacc[0] + noacc[1] + noacc[2]
+                
+                # Update category totals
+                totamt += brhamt
+                totacc += noacc
+                
+                # Print page header if first branch in category
+                if first_branch_in_category:
+                    pagecnt += 1
+                    f.write(f"PROGRAM-ID : EIMAR201                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {pagecnt}\n")
+                    cat_type = branch_group['TYPE'].iloc[0] if len(branch_group) > 0 else '          '
+                    f.write(f"                                   OUTSTANDING LOANS IN ARREARS ISSUED FROM 01 JAN 1998  {cat_type}       {rdate}\n")
+                    f.write("\n")
+                    # Column headers with 2-3 spaces between columns
+                    f.write("BRH     NO          < 1 MTH       NO     1 TO < 2 MTH       NO     2 TO < 3 MTH        NO      3 TO < 4 MTH        NO      4 TO < 5 MTH\n")
+                    f.write("        NO     5 TO < 6 MTH       NO     6 TO < 7 MTH       NO     7 TO < 8 MTH        NO      8 TO < 9 MTH        NO     9 TO < 10 MTH\n")
+                    f.write("        NO   10 TO < 11 MTH       NO   11 TO < 12 MTH       NO   12 TO < 18 MTH        NO    18 TO < 24 MTH        NO    24 TO < 36 MTH\n")
+                    f.write("        NO         > 36 MTH       NO          DEFICIT       NO   SUBTOTAL >=3MTH       NO   SUBTOTAL >=6MTH        NO             TOTAL\n")
+                    f.write("-" * 134 + "\n")
+                    first_branch_in_category = False
+                
+                # Get BRHCODE
+                brhcode = branch_group['BRHCODE'].iloc[0] if len(branch_group) > 0 else '   '
+                
+                # Line 1: Branch number + columns 1-5
+                f.write(format_line1(branch, [noacc[0], brhamt[0], noacc[1], brhamt[1], noacc[2], brhamt[2], noacc[3], brhamt[3], noacc[4], brhamt[4]]) + "\n")
+                
+                # Line 2: BRHCODE + columns 6-10
+                f.write(format_line2(brhcode, [noacc[5], brhamt[5], noacc[6], brhamt[6], noacc[7], brhamt[7], noacc[8], brhamt[8], noacc[9], brhamt[9]]) + "\n")
+                
+                # Line 3: Columns 11-15
+                f.write(format_line3([noacc[10], brhamt[10], noacc[11], brhamt[11], noacc[12], brhamt[12], noacc[13], brhamt[13], noacc[14], brhamt[14]]) + "\n")
+                
+                # Line 4: Columns 16-17 + subtotals
+                f.write(format_line4([noacc[15], brhamt[15], noacc[16], brhamt[16], subacc, subbrh, subac2, subbr2, sotacc, totbrh]) + "\n")
+            
+            # Calculate grand totals for category
+            sgtotbrh = np.sum(totamt[3:])
+            sgtotbr2 = sgtotbrh - totamt[3] - totamt[4] - totamt[5]
+            sgtotacc = np.sum(totacc[3:])
+            sgtotac2 = sgtotacc - totacc[3] - totacc[4] - totacc[5]
+            gtotbrh = sgtotbrh + totamt[0] + totamt[1] + totamt[2]
+            gtotacc = sgtotacc + totacc[0] + totacc[1] + totacc[2]
+            
+            # Print category totals
+            f.write("-" * 134 + "\n")
+            f.write(format_line1("TOT", [totacc[0], totamt[0], totacc[1], totamt[1], totacc[2], totamt[2], totacc[3], totamt[3], totacc[4], totamt[4]]) + "\n")
+            f.write(format_line2("", [totacc[5], totamt[5], totacc[6], totamt[6], totacc[7], totamt[7], totacc[8], totamt[8], totacc[9], totamt[9]]) + "\n")
+            f.write(format_line3([totacc[10], totamt[10], totacc[11], totamt[11], totacc[12], totamt[12], totacc[13], totamt[13], totacc[14], totamt[14]]) + "\n")
+            f.write(format_line4([totacc[15], totamt[15], totacc[16], totamt[16], sgtotacc, sgtotbrh, sgtotac2, sgtotbr2, gtotacc, gtotbrh]) + "\n")
+            f.write("-" * 134 + "\n")
+            f.write("\n")
+    
+    print(f"Report generated: {OUTPUT_FILE}")
+    print(f"Report date (current date - 1 day): {rdate}")
 
 if __name__ == "__main__":
     main()
