@@ -1,243 +1,439 @@
-EIMREPOI REPOTXT Parity Diagnostic
-========================================================================
-LNNOTE:   /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m09.sas7bdat
-LOANTEMP: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp.sas7bdat
-HP set (17): [128, 130, 131, 132, 380, 381, 700, 705, 720, 725, 983, 993, 996, 678, 679, 698, 699]
+# EIMREPOI_REPO_PROCESSOR.py
+"""
+EIMREPOI - Repossession Listing Report
 
-========================================================================
-  SECTION 1: Load LNNOTE (filtered to HP + BALANCE > 0 + BORSTAT)
-========================================================================
-Reading LNNOTE...
-  Total LNNOTE rows: 8,125,473
-  LOANTYPE IN HP:           5,485,086
-  BALANCE > 0:              3,420,376
-  BORSTAT NOT IN F,I,R:     8,033,991
-  ALL THREE (filtered):     1,729,861
-  Filtered LNNOTE retained: 1,729,861
+Faithful Python port of the SAS job that produces:
+  - REPOTXT.txt   (all repossession accounts, ARREAR >= 10)
+  - REPOTXT1.txt  (subset: ARREAR >= 10 AND LOANTYPE IN 983, 993)
 
---- Loan type distribution in filtered LNNOTE ---
-       128:    379,652
-       130:        355
-       131:     21,340
-       132:          6
-       380:          1
-       678:        105
-       700:  1,063,989
-       705:     50,490
-       720:    164,546
-       725:      1,585
-       983:     14,076
-       993:     33,716
+Inputs:
+  - enrh_ln_note_mMM.sas7bdat   (LNNOTE - huge, chunked/col-pruned read)
+  - loantemp.sas7bdat           (LOANTEMP - arrears lookup from ARREAR lib)
+  - stg_ln_nam8file.sas7bdat    (NAME8 - engine / chassis)
 
-========================================================================
-  SECTION 2: KKI branch (117) accounts — prod has these
-========================================================================
-  KKI accounts in raw LNNOTE: 10,646
+Formats/macros from PBBLNFMT and PBBELF.
 
---- KKI loan type distribution (raw LNNOTE) ---
-       128:  5,393 <-- HP
-       983:    766 <-- HP
-       247:    677
-       135:    673
-       700:    371 <-- HP
-       359:    318
-       142:    230
-       175:    212
-       705:    204 <-- HP
-       234:    155
-       993:    150 <-- HP
-       152:    136
-       246:    102
-       301:     97
-       303:     93
+SAS reference logic:
+  PROC SORT DATA=LOAN.LNNOTE OUT=LNNOTE (KEEP=ACCTNO LOANTYPE NTBRCH COLLDESC COLLYEAR);
+       WHERE LOANTYPE IN &HP AND BALANCE GT 0 AND BORSTAT NOT IN ('F','I','R');
+  PROC SORT DATA=LOAN.NAME8 OUT=NAME8 (KEEP=ACCTNO LINETHRE LINEFOUR);
+  PROC SORT DATA=ARREAR.LOANTEMP OUT=ARREAR (KEEP=ACCTNO ARREAR);
+  DATA REPO; MERGE LNNOTE(IN=AA) NAME8(...) ARREAR; BY ACCTNO; IF AA;
+       BRABBR = PUT(NTBRCH, BRCHCD.);
+       CAC    = PUT(NTBRCH, CACNAME.);
+       MAKE   = SUBSTR(COLLDESC, 1, 16);
+       MODEL  = SUBSTR(COLLDESC, 16, 21);
+       REGNO  = SUBSTR(COLLDESC, 40, 13);
+  DATA REPO REPO1; SET REPO; IF ARREAR GE 10; OUTPUT REPO;
+       IF LOANTYPE IN (983,993) THEN OUTPUT REPO1;
+  PROC SORT DATA=REPO OUT=REPO; BY REGNO;
+  PROC SORT DATA=REPO1 OUT=REPO1; BY REGNO;
+  (then DATA _NULL_ fixed-width writes to REPOTXT / REPOTXT1)
+"""
 
-  KKI after ALL filters:     680
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
 
---- KKI loan types after ALL filters ---
-       983:    399
-       128:    186
-       993:     75
-       700:     13
-       705:      7
+import pandas as pd
+import pyreadstat
 
-========================================================================
-  SECTION 3: Load LOANTEMP (iccd2)
-========================================================================
-Reading LOANTEMP...
-  LOANTEMP total rows: 672,908
-  ARREAR >= 10:        48,889
-  product=700 count:   0
+import PBBLNFMT
+import PBBELF
 
---- LOANTEMP: ARREAR >= 10 by branch (top 20) ---
-    branch    802:  3,693
-    branch    820:  2,959
-    branch    821:  2,156
-    branch    806:  2,037
-    branch    801:  2,013
-    branch    805:  1,901
-    branch    826:  1,762
-    branch    808:  1,748
-    branch    824:  1,718
-    branch    811:  1,657
-    branch    814:  1,647
-    branch    809:  1,621
-    branch    827:  1,584
-    branch    818:  1,528
-    branch    804:  1,520
-    branch    816:  1,274
-    branch    862:  1,089
-    branch    812:    977
-    branch     34:    880
-    branch    822:    856
 
-  KKI (branch 117) with ARREAR >= 10: 758
-  KKI products with arrears:
-    product    983:    744
-    product    651:      3
-    product    652:      3
-    product    666:      2
-    product    128:      2
-    product    154:      1
-    product    664:      1
-    product    657:      1
-    product    655:      1
+# =====================================================================
+# Constants
+# =====================================================================
+HP_VALUES_INT   = list(PBBLNFMT.MACROS['HP'])            # 17 HP loan types
+HP_VALUES_STR   = [str(x) for x in HP_VALUES_INT]
+REPORT_LOANTYPES = ('983', '993')                        # REPO1 subset
+ARREAR_THRESHOLD = 10                                    # IF ARREAR GE 10
+REPORT_LINE_WIDTH = 167                                  # @164 $4. ends at 167
 
-========================================================================
-  SECTION 4: Merge LNNOTE ↔ LOANTEMP on ACCTNO
-========================================================================
-  LNNOTE filtered unique acctnos: 1,729,838
-  LOANTEMP unique acctnos:        652,383
-  Overlap (matched):              407,719 (23.6% of LNNOTE)
+# Expected record-count band for sanity checking (adjust as business requires)
+EXPECTED_REPO_MIN  = 500
+EXPECTED_REPO_MAX  = 5000
 
-  After merge, ARREAR >= 10: 21,047
+INPUT_BASE  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod")
+OUTPUT_BASE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOI")
 
---- Merged ARREAR >= 10 — by LNNOTE loantype ---
-    LNNOTE loantype    983: 20,847
-    LNNOTE loantype    128:    200
 
---- Merged ARREAR >= 10 — by LOANTEMP product ---
-    LOANTEMP product    983: 20,705
-    LOANTEMP product    128:    342
+# =====================================================================
+# Helpers
+# =====================================================================
+def normalize_code(series: pd.Series) -> pd.Series:
+    """Normalize numeric/string codes to clean int-string form."""
+    def _clean(x):
+        if pd.isna(x):
+            return None
+        if isinstance(x, bytes):
+            x = x.decode('utf-8', errors='ignore')
+        try:
+            return str(int(float(x)))
+        except (ValueError, TypeError):
+            return str(x).strip()
+    return series.apply(_clean)
 
---- Merged ARREAR >= 10 — by branch (top 20) ---
-    branch    802:  1,449
-    branch    820:  1,261
-    branch    827:  1,156
-    branch    821:    891
-    branch    806:    870
-    branch    824:    850
-    branch    805:    822
-    branch    804:    822
-    branch    826:    799
-    branch    801:    791
-    branch    862:    776
-    branch    814:    770
-    branch    808:    710
-    branch    811:    668
-    branch    809:    629
-    branch    818:    615
-    branch    117:    488
-    branch    816:    448
-    branch     34:    407
-    branch    812:    387
 
-========================================================================
-  SECTION 5: Trace prod REGNOs missing from Python REPOTXT
-========================================================================
+def normalize_acctno(series: pd.Series) -> pd.Series:
+    """Normalize ACCTNO for merging (float 2900189623.0 -> '2900189623')."""
+    return normalize_code(series)
 
---- REGNO = AAM8888 ---
-  Found 2 row(s) in raw LNNOTE:
-    ACCTNO=8960559813  LOANTYPE=128.0  NTBRCH=209.0
-      BALANCE=-3199.709999999999  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: False  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=857.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
-    ACCTNO=8960559813  LOANTYPE=983.0  NTBRCH=857.0
-      BALANCE=80794.87  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=857.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
 
---- REGNO = ABF5555 ---
-  Found 1 row(s) in raw LNNOTE:
-    ACCTNO=8826480007  LOANTYPE=983.0  NTBRCH=809.0
-      BALANCE=5173.67  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=809.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
-      LOANTEMP: product=983.0  arrear=16.0  branch=809.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
+def to_int_code(val):
+    """Convert a scalar to int for format lookups. Returns None on failure."""
+    if pd.isna(val):
+        return None
+    try:
+        return int(float(val))
+    except (ValueError, TypeError):
+        return None
 
---- REGNO = ABT3993 ---
-  Found 1 row(s) in raw LNNOTE:
-    ACCTNO=8837931705  LOANTYPE=983.0  NTBRCH=801.0
-      BALANCE=34908.64  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=801.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
 
---- REGNO = ACN712 ---
-  Found 1 row(s) in raw LNNOTE:
-    ACCTNO=8978533325  LOANTYPE=983.0  NTBRCH=857.0
-      BALANCE=14196.41  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=857.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
+def put_field(buf: list, start_col: int, value, width: int) -> None:
+    """Place value at 1-indexed start_col, left-justified, padded to width."""
+    s = '' if value is None else str(value)
+    s = s[:width].ljust(width)
+    idx = start_col - 1
+    buf[idx:idx + width] = list(s)
 
---- REGNO = ACV7557 ---
-  Found 2 row(s) in raw LNNOTE:
-    ACCTNO=8151094605  LOANTYPE=700.0  NTBRCH=9.0
-      BALANCE=-1366.07  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: False  |  BORSTAT ok: True
-      LOANTEMP: ✗ NOT FOUND for acctno 8151094605
-    ACCTNO=8968201720  LOANTYPE=983.0  NTBRCH=809.0
-      BALANCE=30546.02  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=809.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
 
---- REGNO = ACW6576 ---
-  Found 1 row(s) in raw LNNOTE:
-    ACCTNO=8977552232  LOANTYPE=983.0  NTBRCH=857.0
-      BALANCE=28740.05  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=857.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
+def build_report_line(record) -> str:
+    """Build a single 167-char REPOTXT line matching the SAS PUT statement."""
+    buf = [' '] * REPORT_LINE_WIDTH
+    put_field(buf,   1, record.get('brabbr',   ''),  3)
+    put_field(buf,   9, record.get('cac',      ''), 20)
+    put_field(buf,  29, record.get('regno',    ''), 13)
+    put_field(buf,  43, record.get('make',     ''), 16)
+    put_field(buf,  60, record.get('model',    ''), 21)
+    put_field(buf,  82, record.get('engine',   ''), 40)
+    put_field(buf, 123, record.get('chassis',  ''), 40)
+    put_field(buf, 164, record.get('collyear', ''),  4)
+    return ''.join(buf)
 
---- REGNO = ACA4798 ---
-  Found 1 row(s) in raw LNNOTE:
-    ACCTNO=8994108018  LOANTYPE=983.0  NTBRCH=828.0
-      BALANCE=12041.32  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=828.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
 
---- REGNO = ACM6676 ---
-  Found 1 row(s) in raw LNNOTE:
-    ACCTNO=8871689225  LOANTYPE=983.0  NTBRCH=34.0
-      BALANCE=30678.400000000005  BORSTAT=''
-      LOANTYPE IN HP: True  |  BALANCE>0: True  |  BORSTAT ok: True
-      LOANTEMP: product=983.0  arrear=16.0  branch=34.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
-      LOANTEMP: product=983.0  arrear=16.0  branch=34.0
-        → WOULD APPEAR in REPOTXT if ACCTNO joined
+# =====================================================================
+# Step 1: date / period
+# =====================================================================
+def compute_report_dates() -> dict:
+    """Derive REPTDATE = SYSDATE - 1 and all dependent macro variables."""
+    reptdate = datetime.now() - timedelta(days=1)
+    day, month, year = reptdate.day, reptdate.month, reptdate.year
 
-========================================================================
-  VERDICT
-========================================================================
-  Python REPOTXT expected rows: 21047
-  Prod  REPOTXT reported rows:  1000+ (per user)
-  Gap:                         -20047+
+    if day == 8:
+        sdd, wk, wk1 = 1, '1', '4'
+    elif day == 15:
+        sdd, wk, wk1 = 9, '2', '1'
+    elif day == 22:
+        sdd, wk, wk1 = 16, '3', '2'
+    else:
+        sdd, wk, wk1 = 23, '4', '3'
 
-  🔴 LOANTEMP.iccd2 has ZERO product=700 rows.
-     If prod REPOTXT contains 700-type auto-HP, prod's LOANTEMP
-     is DIFFERENT from iccd2.
+    mm1 = (month - 1 or 12) if wk == '1' else month
+    sdate = datetime(year, month, sdd)
 
-  ✅ 488 KKI records survive to merged ARREAR>=10.
+    return {
+        'reptdate':  reptdate,
+        'sdate':     sdate,
+        'wk':        wk,
+        'wk1':       wk1,
+        'reptmon':   f"{month:02d}",
+        'reptmon1':  f"{mm1:02d}",
+        'reptyear':  str(year),
+        'reptday':   f"{day:02d}",
+        # SAS PUT(REPTDATE, DDMMYY8.) -> 'dd/mm/yy'
+        'rdate':     reptdate.strftime('%d/%m/%y'),
+        'sdate_str': sdate.strftime('%d/%m/%y'),
+    }
 
-  Next steps based on trace results above:
-  - If prod REGNOs found in LNNOTE but NOT in LOANTEMP: prod uses different LOANTEMP
-  - If found in LOANTEMP but ARREAR < 10: prod's ARREAR definition differs
-  - If found in both but not in merged output: ACCTNO format mismatch bug
 
-Diagnostic complete.
+# =====================================================================
+# Step 2-5: data loading
+# =====================================================================
+def read_lnnote_filtered(lnnote_path: Path) -> pd.DataFrame:
+    """Read LNNOTE with column pruning + SAS WHERE filters."""
+    print("Reading LNNOTE.sas7bdat (only required columns)...")
+    df, _ = pyreadstat.read_sas7bdat(
+        str(lnnote_path),
+        usecols=['ACCTNO', 'LOANTYPE', 'NTBRCH', 'COLLDESC', 'COLLYEAR',
+                 'BALANCE', 'BORSTAT'],
+    )
+    df.columns = df.columns.str.lower()
+    print(f"  LNNOTE total records: {len(df):,}")
+
+    lt_norm = normalize_code(df['loantype'])
+    df = df[
+        lt_norm.isin(HP_VALUES_STR)
+        & (df['balance'] > 0)
+        & (~df['borstat'].isin(['F', 'I', 'R']))
+    ].copy()
+
+    df = df[['acctno', 'loantype', 'ntbrch', 'colldesc', 'collyear']]
+    print(f"  LNNOTE after filtering: {len(df):,}")
+    return df
+
+
+def read_name8(name8_path: Path) -> pd.DataFrame:
+    """Read NAME8, keeping only acctno + engine (LINETHRE) + chassis (LINEFOUR)."""
+    print("Reading NAME8.sas7bdat (only required columns)...")
+    df, _ = pyreadstat.read_sas7bdat(
+        str(name8_path),
+        usecols=['ACCTNO', 'LINETHRE', 'LINEFOUR'],
+    )
+    df.columns = df.columns.str.lower()
+    df = df.rename(columns={'linethre': 'engine', 'linefour': 'chassis'})
+    print(f"  NAME8 records: {len(df):,}")
+    return df
+
+
+def read_loantemp(loantemp_path: Path) -> pd.DataFrame:
+    """
+    Read LOANTEMP. Keeps ACCTNO, ARREAR, plus ARREAR2 and DELQCD when available
+    so we can auto-detect the correct arrears field if the SAS semantic differs
+    from the direct `ARREAR >= 10` interpretation.
+    """
+    print("Reading LOANTEMP.sas7bdat...")
+    # Try full column set first (for diagnostics); fall back to bare minimum
+    try:
+        df, meta = pyreadstat.read_sas7bdat(
+            str(loantemp_path),
+            usecols=['ACCTNO', 'ARREAR', 'ARREAR2', 'DELQCD', 'PRODUCT', 'BRANCH'],
+        )
+    except Exception:
+        df, meta = pyreadstat.read_sas7bdat(
+            str(loantemp_path),
+            usecols=['ACCTNO', 'ARREAR'],
+        )
+    df.columns = df.columns.str.lower()
+    print(f"  ARREAR records: {len(df):,}")
+
+    # Quick diagnostic — how many rows pass the straightforward filter?
+    arrear_ge10 = (df['arrear'] >= ARREAR_THRESHOLD).sum() if 'arrear' in df.columns else 0
+    print(f"  ARREAR >= {ARREAR_THRESHOLD}: {arrear_ge10:,}")
+    if 'arrear2' in df.columns:
+        arrear2_ge10 = (df['arrear2'] >= ARREAR_THRESHOLD).sum()
+        print(f"  ARREAR2 >= {ARREAR_THRESHOLD}: {arrear2_ge10:,}")
+
+    return df
+
+
+# =====================================================================
+# Step 6-7: merge + derive
+# =====================================================================
+def merge_datasets(lnnote: pd.DataFrame,
+                   name8: pd.DataFrame,
+                   arrear: pd.DataFrame) -> pd.DataFrame:
+    """LEFT JOIN LNNOTE with NAME8 and LOANTEMP on ACCTNO."""
+    print("Merging datasets...")
+
+    lnnote  = lnnote.copy()
+    name8   = name8.copy()
+    arrear  = arrear.copy()
+
+    lnnote['acctno']  = normalize_acctno(lnnote['acctno'])
+    name8['acctno']   = normalize_acctno(name8['acctno'])
+    arrear['acctno']  = normalize_acctno(arrear['acctno'])
+
+    # Keep only the columns we need from LOANTEMP for the join
+    arrear_cols = ['acctno', 'arrear']
+    if 'arrear2' in arrear.columns:
+        arrear_cols.append('arrear2')
+
+    merged = lnnote.merge(name8, on='acctno', how='left')
+    merged = merged.merge(arrear[arrear_cols], on='acctno', how='left')
+    print(f"  Merged REPO records: {len(merged):,}")
+
+    # Coverage diagnostic
+    n_lnnote  = lnnote['acctno'].nunique()
+    n_matched = merged['arrear'].notna().sum()
+    coverage  = 100.0 * n_matched / n_lnnote if n_lnnote else 0.0
+    print(f"  LOANTEMP coverage of LNNOTE acctnos: {n_matched:,} / {n_lnnote:,} "
+          f"({coverage:.1f}%)")
+    return merged
+
+
+def derive_repo_fields(merged: pd.DataFrame) -> pd.DataFrame:
+    """Compute BRABBR/CAC via PBBELF formats, slice COLLDESC into fields."""
+    print("Processing REPO data (BRABBR/CAC via PBBELF formats)...")
+    records = []
+
+    for _, r in merged.iterrows():
+        ntbrch_int = to_int_code(r['ntbrch'])
+        if ntbrch_int is not None:
+            brabbr = PBBELF.format_brchcd(ntbrch_int) or '   '
+            cac    = PBBELF.format_cacname(ntbrch_int) or 'NON CAC'
+        else:
+            brabbr, cac = '   ', 'NON CAC'
+
+        coll_desc = str(r['colldesc']) if pd.notna(r['colldesc']) else ''
+        make  = coll_desc[0:16]  if len(coll_desc) >= 16 else coll_desc.ljust(16)
+        model = coll_desc[15:36] if len(coll_desc) >= 36 else coll_desc[15:] if len(coll_desc) > 15 else ''
+        regno = coll_desc[39:52] if len(coll_desc) >= 52 else coll_desc[39:] if len(coll_desc) > 39 else ''
+
+        engine   = str(r['engine'])   if pd.notna(r['engine'])   else ''
+        chassis  = str(r['chassis'])  if pd.notna(r['chassis'])  else ''
+        collyear = str(r['collyear'])[:4] if pd.notna(r['collyear']) else ''
+        arrear   = float(r['arrear']) if pd.notna(r['arrear']) else 0.0
+        arrear2  = float(r['arrear2']) if 'arrear2' in r and pd.notna(r['arrear2']) else None
+
+        records.append({
+            'acctno':   r['acctno'],
+            'loantype': r['loantype'],
+            'ntbrch':   ntbrch_int,
+            'brabbr':   str(brabbr)[:3],
+            'cac':      str(cac)[:20],
+            'make':     make[:16],
+            'model':    model[:21],
+            'regno':    regno[:13],
+            'engine':   engine[:40],
+            'chassis':  chassis[:40],
+            'collyear': collyear[:4],
+            'arrear':   arrear,
+            'arrear2':  arrear2,
+        })
+
+    REPO_COLUMNS = ['acctno', 'loantype', 'ntbrch', 'brabbr', 'cac', 'make',
+                    'model', 'regno', 'engine', 'chassis', 'collyear',
+                    'arrear', 'arrear2']
+    out = pd.DataFrame(records, columns=REPO_COLUMNS)
+    print(f"  Processed {len(out):,} records")
+    return out
+
+
+# =====================================================================
+# Step 8-9: split + sort
+# =====================================================================
+def split_and_sort(repo: pd.DataFrame):
+    """SAS: IF ARREAR GE 10; OUTPUT REPO; IF LOANTYPE IN (983,993) OUTPUT REPO1."""
+    print(f"Splitting into REPO and REPO1 (ARREAR >= {ARREAR_THRESHOLD})...")
+    repo_out = repo[repo['arrear'] >= ARREAR_THRESHOLD].copy()
+
+    lt_norm = normalize_code(repo_out['loantype'])
+    repo1_out = repo_out[lt_norm.isin(REPORT_LOANTYPES)].copy()
+
+    print(f"  REPO  (ARREAR >= {ARREAR_THRESHOLD}): {len(repo_out):,}")
+    print(f"  REPO1 (LOANTYPE {'/'.join(REPORT_LOANTYPES)}): {len(repo1_out):,}")
+
+    print("Sorting by REGNO...")
+    repo_out  = repo_out.sort_values('regno').reset_index(drop=True)
+    repo1_out = repo1_out.sort_values('regno').reset_index(drop=True)
+    print(f"  REPO sorted:  {len(repo_out):,}")
+    print(f"  REPO1 sorted: {len(repo1_out):,}")
+
+    # Sanity check: if REPO count is way above expected, warn (data-semantic issue)
+    if len(repo_out) > EXPECTED_REPO_MAX:
+        print(f"  ⚠  WARNING: REPO has {len(repo_out):,} records but expected "
+              f"{EXPECTED_REPO_MIN}–{EXPECTED_REPO_MAX}.")
+        print(f"     This likely means LOANTEMP.ARREAR uses coded/bucketed values,")
+        print(f"     and 'ARREAR >= 10' is over-inclusive. Check with SAS owner")
+        print(f"     whether the SAS filter is actually on ARREAR2 or DELQCD.")
+    elif len(repo_out) < EXPECTED_REPO_MIN:
+        print(f"  ⚠  WARNING: REPO has only {len(repo_out):,} records but expected "
+              f"{EXPECTED_REPO_MIN}–{EXPECTED_REPO_MAX}.")
+        print(f"     This likely means the LOANTEMP file does not cover the full")
+        print(f"     HP portfolio (e.g. iccd2 only has ACCTNOs starting with 29).")
+
+    return repo_out, repo1_out
+
+
+# =====================================================================
+# Step 10-11: write output files
+# =====================================================================
+def write_report(df: pd.DataFrame, path: Path, header: str) -> None:
+    """Write a fixed-width REPOTXT/REPOTXT1 file."""
+    print(f"Creating {path.name}...")
+    with open(path, 'w') as f:
+        if len(df) > 0:
+            f.write(header + '\n')
+        for _, record in df.iterrows():
+            f.write(build_report_line(record) + '\n')
+    print(f"  Wrote {len(df):,} records to {path}")
+
+
+# =====================================================================
+# Main
+# =====================================================================
+def main() -> int:
+    print("EIMREPOI - Repossession Listing Report")
+    print("=" * 60)
+
+    # ---- Dates ----
+    d = compute_report_dates()
+    print(f"Processing date: {d['reptdate']}")
+    print(f"Week: {d['wk']}, Previous Week: {d['wk1']}")
+    print(f"Month: {d['reptmon']}, Previous Month: {d['reptmon1']}")
+    print(f"RDate: {d['rdate']}, SDate: {d['sdate_str']}")
+
+    # ---- Paths ----
+    lnnote_path   = INPUT_BASE / "EIBRCGCS" / f"enrh_ln_note_m{d['reptmon']}.sas7bdat"
+    name8_path    = INPUT_BASE / "EIMREPOI" / "stg_ln_nam8file.sas7bdat"
+    loantemp_path = INPUT_BASE / "EIMREPOI" / "loantemp.sas7bdat"
+    repotxt_path  = OUTPUT_BASE / "REPOTXT.txt"
+    repotxt1_path = OUTPUT_BASE / "REPOTXT1.txt"
+
+    OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
+
+    print(f"LNNOTE file:   {lnnote_path}")
+    print(f"NAME8 file:    {name8_path}")
+    print(f"LOANTEMP file: {loantemp_path}")
+    print(f"HP loan types from PBBLNFMT ({len(HP_VALUES_INT)}): {HP_VALUES_INT}")
+    print("=" * 60)
+
+    # ---- Pre-flight ----
+    for p in (lnnote_path, name8_path, loantemp_path):
+        if not p.exists():
+            print(f"ERROR: required input file not found: {p}", file=sys.stderr)
+            return 1
+
+    # ---- Read + filter ----
+    lnnote   = read_lnnote_filtered(lnnote_path)
+    name8    = read_name8(name8_path)
+    arrear   = read_loantemp(loantemp_path)
+    print("=" * 60)
+
+    # ---- Merge + derive ----
+    merged = merge_datasets(lnnote, name8, arrear)
+    repo   = derive_repo_fields(merged)
+    print("=" * 60)
+
+    # ---- Split + sort ----
+    repo_out, repo1_out = split_and_sort(repo)
+    print("=" * 60)
+
+    # ---- Write ----
+    write_report(repo_out,  repotxt_path,  f"{d['rdate']}-REPOSSESSION LISTING")
+    write_report(repo1_out, repotxt1_path, f"{d['rdate']}-REPOSSESSION LISTING (983,993)")
+    print("=" * 60)
+
+    # ---- Summary ----
+    print("\nPROCESSING COMPLETED SUCCESSFULLY!")
+    print("=" * 60)
+    print(f"  Processing Date: {d['reptdate'].strftime('%Y-%m-%d')}")
+    print(f"  RDate:           {d['rdate']}")
+    print(f"  SDate:           {d['sdate_str']}")
+    print(f"  Week:            {d['wk']} (prev {d['wk1']})")
+    print(f"  HP loan types:   {HP_VALUES_INT}")
+    print(f"  LNNOTE filtered: {len(lnnote):,}")
+    print(f"  REPO  records:   {len(repo_out):,}")
+    print(f"  REPO1 records:   {len(repo1_out):,}")
+    print(f"  Output:          {repotxt_path}")
+    print(f"                   {repotxt1_path}")
+    print("=" * 60)
+
+    if len(repo_out) > 0:
+        print("Loan type distribution in REPO:")
+        for lt, cnt in repo_out['loantype'].value_counts().items():
+            print(f"  {lt}: {cnt} records")
+        print("=" * 60)
+        print("Sample REPO (first 3 records):")
+        for i in range(min(3, len(repo_out))):
+            r = repo_out.iloc[i]
+            print(f"  {i+1}. BRABBR={r['brabbr']}  CAC={r['cac']!r}  "
+                  f"REGNO={r['regno']!r}  LOANTYPE={r['loantype']}  "
+                  f"ARREAR={r['arrear']}  ARREAR2={r['arrear2']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
