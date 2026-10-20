@@ -96,9 +96,20 @@ def main():
 
     # ------------------------------------------------------------------
     # Step 3: Read and process LNNOTE with filters (SAS PROC SORT + WHERE)
+    # OPTIMIZATION: usecols= so we only load the 7 columns we actually need
+    # from the (potentially 9 GB) file, instead of every column.
+    #   - 5 columns are kept in the output
+    #   - 2 columns (balance, borstat) are only needed for filtering and
+    #     are dropped immediately after.
     # ------------------------------------------------------------------
-    print("Reading LNNOTE.sas7bdat...")
-    lnnote_df, lnnote_meta = pyreadstat.read_sas7bdat(str(lnnote_path))
+    print("Reading LNNOTE.sas7bdat (only required columns)...")
+    lnnote_df, lnnote_meta = pyreadstat.read_sas7bdat(
+        str(lnnote_path),
+        usecols=[
+            'ACCTNO', 'LOANTYPE', 'NTBRCH', 'COLLDESC', 'COLLYEAR',  # output
+            'BALANCE', 'BORSTAT',                                     # filter only
+        ],
+    )
     print(f"LNNOTE total records: {len(lnnote_df):,}")
 
     # Convert column names to lowercase
@@ -107,7 +118,7 @@ def main():
     # HP loan types - these would come from &HP macro variable in SAS
     hp_values = ['983', '993', '984', '994']
 
-    # Filter on the FULL dataset first, and normalize loantype so
+    # Filter on the FULL dataset, and normalize loantype so
     # numeric-vs-string mismatches (e.g. 983.0) don't silently drop everything.
     loantype_norm = normalize_code(lnnote_df['loantype'])
 
@@ -120,6 +131,9 @@ def main():
     # Keep only needed columns (KEEP=ACCTNO LOANTYPE NTBRCH COLLDESC COLLYEAR)
     lnnote_filtered = lnnote_filtered[['acctno', 'loantype', 'ntbrch', 'colldesc', 'collyear']]
 
+    # Free the big raw dataframe ASAP
+    del lnnote_df
+
     print(f"LNNOTE records after filtering: {len(lnnote_filtered)}")
 
     # Optional: cap AFTER filtering for a smaller sample test run.
@@ -129,14 +143,16 @@ def main():
 
     # ------------------------------------------------------------------
     # Step 4: Read NAME8 (KEEP=ACCTNO LINETHRE LINEFOUR)
+    # usecols= to avoid loading extra columns.
     # ------------------------------------------------------------------
-    print("Reading NAME8.sas7bdat...")
-    name8_df, name8_meta = pyreadstat.read_sas7bdat(str(name8_path))
+    print("Reading NAME8.sas7bdat (only required columns)...")
+    name8_df, name8_meta = pyreadstat.read_sas7bdat(
+        str(name8_path),
+        usecols=['ACCTNO', 'LINETHRE', 'LINEFOUR'],
+    )
     name8_df.columns = name8_df.columns.str.lower()
     print(f"NAME8 total records: {len(name8_df):,}")
 
-    # Keep only needed columns
-    name8_df = name8_df[['acctno', 'linethre', 'linefour']]
     # Rename columns (SAS RENAME=(LINETHRE=ENGINE LINEFOUR=CHASSIS))
     name8_df = name8_df.rename(columns={'linethre': 'engine', 'linefour': 'chassis'})
 
@@ -145,14 +161,15 @@ def main():
 
     # ------------------------------------------------------------------
     # Step 5: Read ARREAR (KEEP=ACCTNO ARREAR)
+    # usecols= to avoid loading extra columns.
     # ------------------------------------------------------------------
-    print("Reading LOANTEMP.sas7bdat...")
-    arrear_df, arrear_meta = pyreadstat.read_sas7bdat(str(loantemp_path))
+    print("Reading LOANTEMP.sas7bdat (only required columns)...")
+    arrear_df, arrear_meta = pyreadstat.read_sas7bdat(
+        str(loantemp_path),
+        usecols=['ACCTNO', 'ARREAR'],
+    )
     arrear_df.columns = arrear_df.columns.str.lower()
     print(f"ARREAR total records: {len(arrear_df):,}")
-
-    # Keep only needed columns
-    arrear_df = arrear_df[['acctno', 'arrear']]
 
     print(f"ARREAR records kept: {len(arrear_df)}")
     print("=" * 60)
