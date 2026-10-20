@@ -1,548 +1,251 @@
-"""
-EIMRESHP - HP/Hire Purchase Loan Summary & Detail Report (Production Ready)
-
-Purpose:
-- Generate summary reports for HP loans (Conv & Aitab) by various groupings
-- Track NPL accounts (>=3 months in arrears or F/I/R status)
-- Monitor restructured accounts (NOTENO >= 98010)
-- Detail report for NPL accounts
-
-HP Products: 128, 130, 380, 381, 700, 705
-
-Report Categories:
-1. Credit Risk Score (CRRISK)
-2. Source of Business (Dealers vs Non-Dealers)
-3. Margin of Finance (<70%, 70-80%, 80-85%, 85-89%, 89%+)
-4. Loan Term (<=3yrs, 4yrs, 5yrs, 6yrs, 7yrs, 8yrs, 9yrs+)
-5. Amount Financed (<=30K, 30-50K, 50-100K, 100-250K, >250K)
-6. By State (14 states + Labuan, grouped East/West Malaysia)
-7. By Make of Vehicle (13 makes, National vs Non-National)
-8. Make = OTHERS (Schedule vs Unschedule)
-
-4 Account Groups:
-- HPLOAN1: All HP accounts
-- HPLOAN2: NPL (>=3 months OR F/I/R status)
-- HPLOAN3: Restructured (NOTENO >= 98010)
-- HPLOAN4: Restructured NPL
-
-Arrears Buckets (in report order):
-- <3 months, 3-6 months, 6-12 months, 12-24 months, 24-36 months, >36 months
-"""
-
-import os
-import sys
-from datetime import datetime, timedelta
-
 import polars as pl
 import pyreadstat
+from pathlib import Path
+import datetime
+import sys
+import os
+
+# TODO: adjust this path if PBBELF.py lives somewhere else relative to this script
+sys.path.insert(0, "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS")
+from PBBELF import BRCHCD_MAP, format_brchcd
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-LOAN_DIR    = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI'
-CCDTEMP_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOS'
-OUTPUT_DIR  = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMRESHP'
+input_pbb_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
+input_pibb_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS") 
+brh_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP/LKP_BRANCH")
+output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMBRAS")
+output_path.mkdir(parents=True, exist_ok=True)
 
-HP_PRODUCTS = [128, 130, 380, 381, 700, 705]
+# Only pull the columns we actually use - this alone cuts I/O dramatically
+# on the 20GB pbb file (reading fewer columns means fewer bytes off disk).
+LNNOTE_COLUMNS = ["ISSUEDT", "LOANTYPE", "PAIDIND", "BALANCE", "NTBRCH", "COLLDESC", "ACCTNO", "NAME"]
 
-MAKE_MAP = {
-    '1': 'PROTON', '2': 'PERODUA', '3': 'TOYOTA', '4': 'NISSAN',
-    '5': 'HONDA', '6': 'ISUZU', '7': 'DAIHATSU', '8': 'MITSUBISHI',
-    '9': 'FORD', '10': 'MERCEDES BENZ', '11': 'VOLVO', '13': 'BMW',
+# Rows per chunk when streaming the large pbb sas7bdat file. Tune this
+# based on available RAM - 500k rows x ~8 columns is a small, safe chunk.
+CHUNKSIZE = 500_000
+
+# In the original SAS, &HPD was never defined inside this DATA step - it was
+# a macro variable set externally by whatever job/driver invoked this program
+# (e.g. a %LET HPD = (...) elsewhere, or a parameter passed at submit time).
+# Mirror that here: read it from an environment variable instead of hardcoding
+# it in this script, so the caller supplies it the same way SAS expected.
+#
+#   Example (bash), before running this script:
+#       export HPD_CODES="4,5,6,15,20,25,26,30,31,32,34,61,70,71,72,73,78"
+#       python3 EIBMBRAS.py
+#
+_hpd_raw = os.environ.get("HPD_CODES", "")
+HPD_VALUES = [int(v.strip()) for v in _hpd_raw.split(",") if v.strip()]
+if not HPD_VALUES:
+    print("WARNING: HPD_CODES environment variable is not set (or empty) - "
+          "LOANTYPE filter will match 0 rows. Set HPD_CODES to a comma-separated "
+          "list of numeric loan-type codes before running this script, e.g.:\n"
+          '  export HPD_CODES="4,5,6,15,20,..."')
+
+
+# ---------------------------------------------------------------------------
+# Reporting date parameters
+# Previously read from a REPTDATE dataset - now derived directly as
+# "today minus 1 day", then run through the same day-of-month bucketing
+# logic the original SAS/polars code used.
+# ---------------------------------------------------------------------------
+reptdate = datetime.datetime.now() - datetime.timedelta(days=1)
+day, month, year = reptdate.day, reptdate.month, reptdate.year
+
+if day == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+elif day == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+elif day == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+else:
+    sdd, wk, wk1 = 23, '4', '3'
+
+mm = month
+mm1 = (12 if month == 1 else month - 1) if wk == '1' else month
+sdate = datetime.datetime(year, month, sdd)
+
+global_vars = {
+    'NOWK': wk,
+    'NOWK1': wk1,
+    'REPTMON': f"{mm:02d}",
+    'REPTMON1': f"{mm1:02d}",
+    'REPTYEAR': str(year),
+    'REPTDAY': f"{day:02d}",
+    'RDATE': reptdate.strftime('%d%m%y'),
+    'SDATE': sdate.strftime('%d%m%y'),
 }
 
-STATE_MAP = {
-    '1': 'JOHORE', '2': 'KEDAH', '3': 'KELANTAN', '4': 'MALACCA',
-    '5': 'N.SEMBILAN', '6': 'PAHANG', '7': 'PENANG', '8': 'PERAK',
-    '9': 'PERLIS', '10': 'SABAH', '11': 'SARAWAK', '12': 'SELANGOR',
-    '13': 'TRENGGANU', '14': 'W.PERSEKUTUAN', '15': 'LABUAN',
-}
-
-# Bucket definitions: (internal key, display label, lower, upper)
-BUCKETS = [
-    ('LT3',    '<3MTHS',     None, 3),
-    ('B3_6',   '3-6MTHS',    3,    6),
-    ('B6_12',  '6-12MTHS',   6,    12),
-    ('B12_24', '12-24MTHS',  12,   24),
-    ('B24_36', '24-36MTHS',  24,   36),
-    ('GT36',   '>36MTHS',    36,   None),
-]
-
-REPORT_DATE_FMT = '%d/%m/%Y'
-DETAIL_FMT = '%d/%m/%Y'
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+print("Global variables:", global_vars)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def read_sas(path: str, label: str) -> pl.DataFrame:
-    """Read a .sas7bdat file and convert to Polars; exit on failure."""
-    try:
-        df, _ = pyreadstat.read_sas7bdat(path)
-        df = pl.from_pandas(df)
-        print(f"  {label}: {len(df):,} rows loaded from {os.path.basename(path)}")
-        return df
-    except Exception as exc:
-        print(f"  ERROR reading {label} ({path}): {exc}")
-        sys.exit(1)
+def filter_lnnote_chunk(pdf, reptmon: int, reptyear: int) -> pl.DataFrame:
+    """Convert one pandas chunk (from pyreadstat) to polars and apply the
+    same filtering logic as the original step, as early as possible so we
+    only ever keep the small filtered subset in memory, not the raw chunk."""
+    if pdf.empty:
+        return pl.DataFrame()
+
+    df = pl.from_pandas(pdf)
+
+    # ISSUEDT has no SAS date/datetime format attached in the metadata - it
+    # comes back as a plain double. Confirmed encoding (from sample data):
+    #   MDDYYYYDDD  (10 digits, month is a single digit, e.g. 7101999191)
+    #   MMDDYYYYDDD (11 digits, month is two digits, e.g. 10052005278)
+    # where DDD at the end is the (redundant) Julian day-of-year - we
+    # ignore it and just read MM/DD/YYYY from fixed positions after
+    # left-padding 10-digit values with a leading zero.
+    df = df.with_columns(
+        pl.col('ISSUEDT').cast(pl.Int64).cast(pl.Utf8).alias('_raw')
+    ).with_columns(
+        pl.col('_raw').str.pad_start(11, '0').alias('_padded')
+    ).with_columns([
+        pl.col('_padded').str.slice(0, 2).cast(pl.Int32, strict=False).alias('ISSMTH'),
+        pl.col('_padded').str.slice(2, 2).cast(pl.Int32, strict=False).alias('ISSDAY'),
+        pl.col('_padded').str.slice(4, 4).cast(pl.Int32, strict=False).alias('ISSYR'),
+    ]).with_columns(
+        pl.date(pl.col('ISSYR'), pl.col('ISSMTH'), pl.col('ISSDAY')).alias('ISSDT')
+    ).drop(['_raw', '_padded', 'ISSDAY'])
+
+    df = df.filter(
+        (pl.col('LOANTYPE').cast(pl.Int64).is_in(HPD_VALUES)) &
+        (pl.col('PAIDIND') != 'P') &
+        (pl.col('BALANCE') > 0) &
+        (pl.col('ISSMTH') == reptmon) &
+        (pl.col('ISSYR') == reptyear)
+    )
+    return df
 
 
-def sas_date_to_datetime(col: pl.Expr) -> pl.Expr:
-    """Convert SAS date (days since 1960-01-01) to Polars Datetime."""
-    epoch = pl.lit(datetime(1960, 1, 1)).cast(pl.Datetime)
-    return epoch + pl.duration(days=col.cast(pl.Int64))
+def read_lnnote(filepath: Path, reptmon: int, reptyear: int, chunksize: int = CHUNKSIZE) -> pl.DataFrame:
+    """Stream a .sas7bdat file in chunks via pyreadstat, filtering each
+    chunk immediately. This means the full 6M-row / 20GB pbb file never
+    sits in memory at once - only the (much smaller) filtered rows
+    accumulate across chunks."""
+    if not filepath.exists():
+        print(f"File not found, skipping: {filepath}")
+        return pl.DataFrame()
 
+    filtered_chunks = []
+    reader = pyreadstat.read_file_in_chunks(
+        pyreadstat.read_sas7bdat,
+        str(filepath),
+        chunksize=chunksize,
+        usecols=LNNOTE_COLUMNS,
+    )
 
-def empty_bucket_columns() -> dict[str, pl.Expr]:
-    """Return default (zero) expressions for all bucket count/amount columns."""
-    out: dict[str, pl.Expr] = {}
-    for key, _label, _lo, _hi in BUCKETS:
-        out[f'{key}_CNT'] = pl.lit(0, dtype=pl.UInt32)
-        out[f'{key}_AMT'] = pl.lit(0.0, dtype=pl.Float64)
-    return out
+    total_rows = 0
+    for pdf_chunk, meta in reader:
+        total_rows += len(pdf_chunk)
+        filtered = filter_lnnote_chunk(pdf_chunk, reptmon, reptyear)
+        if filtered.height > 0:
+            filtered_chunks.append(filtered)
+
+    kept = sum(c.height for c in filtered_chunks)
+    print(f"{filepath.name}: scanned {total_rows:,} rows, kept {kept:,} after filter")
+
+    if filtered_chunks:
+        return pl.concat(filtered_chunks, how="diagonal")
+    return pl.DataFrame()
 
 
 # ---------------------------------------------------------------------------
-# Main pipeline
+# *** A/C RELEASED FOR THE MTH ***
+# Read + filter both LNNOTE sources (pbb is the big ~20GB / ~6M row file)
 # ---------------------------------------------------------------------------
-def main() -> None:
-    print("EIMRESHP - HP Loan Summary & Detail Report")
-    print("=" * 60)
+reptmon_int = int(global_vars['REPTMON'])
+reptyear_int = int(global_vars['REPTYEAR'])
 
-    # -----------------------------------------------------------------------
-    # 1. Report date / week
-    # -----------------------------------------------------------------------
-    reptdate = datetime.now() - timedelta(days=1)
-    day = reptdate.day
+lnnote_pbb = read_lnnote(input_pbb_path / "lnnote.sas7bdat", reptmon_int, reptyear_int)
+lnnote_pibb = read_lnnote(input_pibb_path / "lnnote.sas7bdat", reptmon_int, reptyear_int)
 
-    if   day <= 7:  sdd, wk, wk1 = 1,  '1', '4'
-    elif day <= 14: sdd, wk, wk1 = 9,  '2', '1'
-    elif day <= 21: sdd, wk, wk1 = 16, '3', '2'
-    else:           sdd, wk, wk1 = 23, '4', '3'
+lnnote_combined = pl.concat([lnnote_pbb, lnnote_pibb], how="diagonal")
 
-    mm = reptdate.month
-    mm1 = 12 if (wk == '1' and mm == 1) else (mm - 1 if wk == '1' else mm)
-    reptyear, reptmon, reptday = reptdate.year, f'{mm:02d}', f'{day:02d}'
+if not lnnote_combined.is_empty():
+    loan_df = lnnote_combined.with_columns([
+        pl.when(pl.col('COLLDESC').str.slice(37, 1).is_in(['N', 'R']))
+        .then(pl.lit('N'))
+        .otherwise(pl.lit('S'))
+        .alias('NEWSEC'),
+        # Real branch-code mapping: NTBRCH (numeric) -> 3-letter abbreviation,
+        # equivalent to SAS's PUT(NTBRCH, BRCHCD.), via PBBELF.format_brchcd.
+        pl.col('NTBRCH').cast(pl.Int64)
+        .map_elements(format_brchcd, return_dtype=pl.Utf8)
+        .alias('BRABBR'),
+    ])
 
-    print(f"\nReport Date: {reptdate.strftime(REPORT_DATE_FMT)}  |  Week: {wk}")
-    print("=" * 60)
-
-    # -----------------------------------------------------------------------
-    # 2. Load source files
-    # -----------------------------------------------------------------------
-    print("\nReading LOANTEMP.sas7bdat ...")
-    loantemp = read_sas(
-        os.path.join(CCDTEMP_DIR, 'loantemp.sas7bdat'),
-        'LOANTEMP',
-    ).filter(
-        pl.col('PRODUCT').is_in(HP_PRODUCTS) & (pl.col('BALANCE') > 0)
+    # *** AVERAGE PER BR BASE ON 30% OF TOTAL ***
+    # Derived from PBBELF.BRCHCD_MAP (approved substitute for the original
+    # BRHFILE INFILE step). Each (branch code, abbreviation) pair in the map
+    # is treated as one BRHFILE row; same filter as the original SAS:
+    # BRANCH < 900 and BRANCH not in (1, 99, 100, 218).
+    brh_data = [{"BRANCH": k, "BRABBR": v} for k, v in BRCHCD_MAP.items()]
+    brh_df = pl.DataFrame(brh_data).filter(
+        (pl.col('BRANCH') < 900) &
+        (~pl.col('BRANCH').is_in([1, 99, 100, 218]))
     )
-    print(f"  LOANTEMP filtered HP records: {len(loantemp):,}")
 
-    print("\nReading LNNOTE.sas7bdat ...")
-    lnnote = read_sas(
-        os.path.join(LOAN_DIR, f'enrh_ln_note_m{reptmon}.sas7bdat'),
-        'LNNOTE',
-    ).filter(
-        pl.col('LOANTYPE').is_in(HP_PRODUCTS) & (pl.col('BALANCE') > 0)
-    ).select([
-        'ACCTNO', 'NOTENO', 'LOANTYPE', 'NETPROC', 'APPVALUE',
-        'NOTETERM', 'STATE', 'DEALERNO', 'SCORE2', 'ORGBAL',
-        'CURBAL', 'PAYAMT', 'ISSUEDT', 'NTBRCH',
-    ]).rename({'NTBRCH': 'BRABBR'})
-    print(f"  LNNOTE filtered HP records: {len(lnnote):,}")
+    nobr = brh_df.height
+    noacct = loan_df.height
+    noacrel = round(noacct * 0.3 / nobr) if nobr > 0 else 0
+    print(f"Number of branches: {nobr}")
+    print(f"Number of accounts: {noacct}")
+    print(f"Average accounts per branch: {noacrel}")
 
-    # -----------------------------------------------------------------------
-    # 3. Merge — keep only columns actually needed downstream
-    # -----------------------------------------------------------------------
-    print("\nMerging ...")
-    loantemp_cols = [
-        'ACCTNO', 'NOTENO', 'NAME', 'CENSUS', 'BORSTAT',
-        'BALANCE', 'PRODUCT', 'DAYDIFF',
-    ]
-    merged = lnnote.join(
-        loantemp.select(loantemp_cols),
-        on=['ACCTNO', 'NOTENO'],
-        how='inner',
-    )
-    print(f"  Merged HP Loans: {len(merged):,} accounts")
-
-    # -----------------------------------------------------------------------
-    # 4. Derived fields
-    # -----------------------------------------------------------------------
-    print("\nDeriving fields ...")
-    df = merged.with_columns([
-        # Installments paid
-        ((pl.col('ORGBAL') - pl.col('CURBAL')) / pl.col('PAYAMT')).alias('ISTLPD'),
-
-        # Issue date (SAS date → datetime)
-        sas_date_to_datetime(pl.col('ISSUEDT')).alias('ISSDTE'),
-
-        # Credit risk = first character of SCORE2
-        pl.col('SCORE2').cast(pl.Utf8, strict=False).str.slice(0, 1).fill_null('N/A').alias('CRRISK'),
-
-        # Margin of finance
-        pl.when(pl.col('APPVALUE') > 0)
-          .then((pl.col('NETPROC') / pl.col('APPVALUE') * 100).round(1))
-          .otherwise(0.0)
-          .alias('MARGINF'),
-
-        # 7-digit census code
-        pl.col('CENSUS').cast(pl.Utf8, strict=False).str.zfill(7).alias('CENSUS9'),
-    ])
-
-    df = df.with_columns([
-        # Margin group
-        pl.when(pl.col('MARGINF') < 70).then(pl.lit('E. <70%'))
-          .when(pl.col('MARGINF') < 80).then(pl.lit('D. 70 TO <80%'))
-          .when(pl.col('MARGINF') < 85).then(pl.lit('C. 80 TO <85%'))
-          .when(pl.col('MARGINF') < 89).then(pl.lit('B. 85 TO <89%'))
-          .otherwise(pl.lit('A. 89% & ABV'))
-          .alias('MGINGRP'),
-
-        # Term group
-        pl.when(pl.col('NOTETERM') <= 36).then(pl.lit('A. <=3 YRS'))
-          .when(pl.col('NOTETERM') <= 48).then(pl.lit('B. 4 YRS'))
-          .when(pl.col('NOTETERM') <= 60).then(pl.lit('C. 5 YRS'))
-          .when(pl.col('NOTETERM') <= 72).then(pl.lit('D. 6 YRS'))
-          .when(pl.col('NOTETERM') <= 84).then(pl.lit('E. 7 YRS'))
-          .when(pl.col('NOTETERM') <= 96).then(pl.lit('F. 8 YRS'))
-          .otherwise(pl.lit('G. 9 YRS'))
-          .alias('TERMGRP'),
-
-        # State name
-        pl.col('STATE').cast(pl.Utf8, strict=False)
-          .replace_strict(STATE_MAP, default='OTHERS')
-          .alias('STATENM'),
-
-        # East / West Malaysia
-        pl.when(pl.col('STATE').cast(pl.Utf8, strict=False).is_in(['10', '11', '15']))
-          .then(pl.lit('EAST MALAYSIA'))
-          .otherwise(pl.lit('WEST MALAYSIA'))
-          .alias('NATIONAL'),
-
-        # Vehicle make
-        pl.col('CENSUS9').str.slice(0, 2).str.strip_chars()
-          .replace_strict(MAKE_MAP, default='OTHERS')
-          .alias('MAKE'),
-
-        # New / second-hand
-        pl.when(pl.col('CENSUS9').str.slice(3, 1).is_in(['1', '2']))
-          .then(pl.lit('NEW'))
-          .otherwise(pl.lit('SECONDHAND'))
-          .alias('NEWSEC'),
-
-        # Amount financed group
-        pl.when(pl.col('NETPROC') <= 30_000).then(pl.lit('A. RM30K & BELOW'))
-          .when(pl.col('NETPROC') <= 50_000).then(pl.lit('B. >RM30K TO 50K'))
-          .when(pl.col('NETPROC') <= 100_000).then(pl.lit('C. >RM50K TO 100K'))
-          .when(pl.col('NETPROC') <= 250_000).then(pl.lit('D. >RM100K TO 250K'))
-          .otherwise(pl.lit('E. >RM250K'))
-          .alias('FINGRP'),
-
-        # Source of business
-        pl.when(pl.col('DEALERNO') > 0)
-          .then(pl.lit('DEALERS'))
-          .otherwise(pl.lit('NON DEALERS'))
-          .alias('SOURCE'),
-    ])
-
-    df = df.with_columns([
-        # National / non-national
-        pl.when(pl.col('MAKE').is_in(['PROTON', 'PERODUA']))
-          .then(pl.lit('NATIONAL'))
-          .otherwise(pl.lit('NON NATIONAL'))
-          .alias('CARS'),
-
-        # Goods schedule / unschedule
-        pl.when((pl.col('MAKE') == 'OTHERS') & pl.col('PRODUCT').is_in([128, 700]))
-          .then(pl.lit('SCHEDULE'))
-          .when(pl.col('MAKE') == 'OTHERS')
-          .then(pl.lit('UNSCHEDULE'))
-          .otherwise(pl.lit(''))
-          .alias('GOODS'),
-    ])
-
-    # Months in arrears via day-diff lookup table (replaces long when-chain)
-    day_bounds = [
-        (729, None), (698, 23), (668, 22), (638, 21), (608, 20),
-        (577, 19), (547, 18), (516, 17), (486, 16), (456, 15),
-        (424, 14), (394, 13), (364, 12), (333, 11), (303, 10),
-        (273, 9), (243, 8), (213, 7), (182, 6), (151, 5),
-        (121, 4), (91, 3), (61, 2), (30, 1), (None, 0),
-    ]
-    mtharr_expr = None
-    for lower, value in day_bounds:
-        if lower is None:
-            cond = pl.lit(True)
-        elif value is None:  # beyond 24 months
-            cond = pl.col('DAYDIFF') > lower
-            mtharr_expr = pl.when(cond).then(
-                (pl.col('DAYDIFF') / 365 * 12).cast(pl.Int32)
-            )
-            continue
-        else:
-            cond = pl.col('DAYDIFF') > lower
-            mtharr_expr = mtharr_expr.when(cond).then(pl.lit(value))
-    # Add fallback 0
-    mtharr_expr = mtharr_expr.otherwise(pl.lit(0))
-
-    df = df.with_columns([
-        mtharr_expr.alias('MTHARR'),
+    # *** COMPARE RELEASE PER BR AND AVERAGE PER BR ***
+    loan11_df = loan_df.group_by('BRABBR').agg([
+        pl.len().alias('NOACCT')
     ]).with_columns([
-        # Deficit override
-        pl.when(pl.col('BORSTAT') == 'F')
-          .then(pl.lit(999, dtype=pl.Int32))
-          .otherwise(pl.col('MTHARR'))
-          .alias('MTHARR'),
-    ])
+        pl.col('NOACCT').mul(0.3).round().cast(pl.Int64).alias('AVGNO_temp')
+    ]).with_columns([
+        pl.when(pl.col('AVGNO_temp') < noacrel)
+        .then(pl.lit(noacrel))
+        .otherwise(pl.col('AVGNO_temp'))
+        .alias('AVGNO')
+    ]).drop('AVGNO_temp')
 
-    print(f"  Processed: {len(df):,} HP loans")
+    loan1_df = loan_df.join(loan11_df, on='BRABBR', how='left')
 
-    # -----------------------------------------------------------------------
-    # 5. Account groups
-    # -----------------------------------------------------------------------
-    print("\nCreating account groups ...")
-    is_npl = (pl.col('MTHARR') >= 3) | pl.col('BORSTAT').is_in(['F', 'I', 'R'])
-    is_restructured = pl.col('NOTENO') >= 98010
+    # *** GENERATE TEXT FILE TO LOTUS NOTES SERVER ***
+    loan_sorted = loan1_df.sort('BRABBR')
 
-    groups = {
-        'HPLOAN1 (All)':             df,
-        'HPLOAN2 (NPL)':             df.filter(is_npl),
-        'HPLOAN3 (Restructured)':    df.filter(is_restructured),
-        'HPLOAN4 (Restructured NPL)': df.filter(is_restructured & is_npl),
-    }
-    for label, gdf in groups.items():
-        print(f"  {label}: {len(gdf):,}")
+    output_lines = []
+    current_brabb = None
+    avgacc = 0
 
-    # -----------------------------------------------------------------------
-    # 6. Report generation
-    # -----------------------------------------------------------------------
-    def build_summary(frame: pl.DataFrame, group_cols: list[str]) -> pl.DataFrame:
-        """Aggregate counts/amounts per group × arrears bucket (dense)."""
-        bucketed = frame.with_columns([
-            pl.when(pl.col('MTHARR') < 3).then(pl.lit('LT3'))
-              .when(pl.col('MTHARR') < 6).then(pl.lit('B3_6'))
-              .when(pl.col('MTHARR') < 12).then(pl.lit('B6_12'))
-              .when(pl.col('MTHARR') < 24).then(pl.lit('B12_24'))
-              .when(pl.col('MTHARR') < 36).then(pl.lit('B24_36'))
-              .otherwise(pl.lit('GT36'))
-              .alias('BUCKET_KEY'),
-        ])
+    for row in loan_sorted.iter_rows(named=True):
+        if row['BRABBR'] != current_brabb:
+            current_brabb = row['BRABBR']
+            avgacc = 0
 
-        agg = bucketed.group_by(group_cols + ['BUCKET_KEY']).agg([
-            pl.len().alias('CNT'),
-            pl.col('BALANCE').sum().alias('AMT'),
-        ])
+        avgacc += 1
+        if avgacc <= row['AVGNO']:
+            issmth = f"{row['ISSMTH']:02d}"
+            issyr = f"{row['ISSYR']}"
+            acctno = str(row.get('ACCTNO', '')).ljust(10)[:10]
+            name = str(row.get('NAME', '')).ljust(30)[:30]
+            issdt = row['ISSDT'].strftime('%d%m%Y')
+            brabb = str(row.get('BRABBR', '')).ljust(3)[:3]
+            newsec = str(row.get('NEWSEC', ''))
 
-        # Pivot manually to guarantee bucket columns exist even if empty
-        pivoted = agg.pivot(
-            values=['CNT', 'AMT'],
-            index=group_cols,
-            on='BUCKET_KEY',
-        )
+            line = f"{issmth}{issyr}{acctno}{name}{issdt}{brabb}{newsec}"
+            output_lines.append(line)
 
-        # Backfill any missing bucket columns with zero
-        for key, _label, _lo, _hi in BUCKETS:
-            for suffix, dtype in [('CNT', pl.UInt32), ('AMT', pl.Float64)]:
-                col = f'{suffix}_{key}'
-                if col not in pivoted.columns:
-                    pivoted = pivoted.with_columns(pl.lit(0, dtype=dtype).alias(col))
+    with open(output_path / "BRTXT1.txt", "w") as f:
+        f.write("\n".join(output_lines))
+    print(f"Generated BRTXT1.txt with {len(output_lines)} records")
 
-        # Rename CNT_xxx → xxx_CNT, AMT_xxx → xxx_AMT and reorder
-        rename = {}
-        ordered = list(group_cols)
-        for key, _label, _lo, _hi in BUCKETS:
-            rename[f'CNT_{key}'] = f'{key}_CNT'
-            rename[f'AMT_{key}'] = f'{key}_AMT'
-            ordered += [f'{key}_CNT', f'{key}_AMT']
+    # Intermediate outputs as plain pipe-delimited text files
+    loan_df.write_csv(output_path / "LOAN.txt", separator="|")
+    loan11_df.write_csv(output_path / "LOAN11.txt", separator="|")
+    loan1_df.write_csv(output_path / "LOAN1.txt", separator="|")
 
-        pivoted = pivoted.rename(rename).select(ordered)
+else:
+    print("No LNNOTE data found after filtering")
 
-        # Add row totals
-        cnt_cols = [c for c in ordered if c.endswith('_CNT')]
-        amt_cols = [c for c in ordered if c.endswith('_AMT')]
-        pivoted = pivoted.with_columns([
-            pl.sum_horizontal(*[pl.col(c) for c in cnt_cols]).alias('TOTAL_CNT'),
-            pl.sum_horizontal(*[pl.col(c) for c in amt_cols]).alias('TOTAL_AMT'),
-        ])
-        pivoted = pivoted.sort(group_cols)
-        return pivoted
-
-    def write_summary(
-        summary: pl.DataFrame,
-        group_cols: list[str],
-        title: str,
-        subtitle: str,
-        filepath: str,
-    ) -> None:
-        display_cols = (group_cols +
-                        [f'{k}_{s}' for k, _, _, _ in BUCKETS for s in ('CNT', 'AMT')] +
-                        ['TOTAL_CNT', 'TOTAL_AMT'])
-
-        pdf = summary.select(display_cols).to_pandas()
-
-        # Pretty rename for output header
-        col_map = {f'{k}_CNT': f'{lbl}_CNT' for k, lbl, _, _ in BUCKETS}
-        col_map.update({f'{k}_AMT': f'{lbl}_AMT' for k, lbl, _, _ in BUCKETS})
-        col_map['TOTAL_CNT'] = 'TOTAL_CNT'
-        col_map['TOTAL_AMT'] = 'TOTAL_AMT'
-        pdf = pdf.rename(columns=col_map)
-
-        # Grand totals row
-        cnt_cols = [c for c in pdf.columns if c.endswith('_CNT')]
-        amt_cols = [c for c in pdf.columns if c.endswith('_AMT')]
-        totals = {c: pdf[c].sum() for c in cnt_cols + amt_cols}
-        if group_cols:
-            totals[group_cols[0]] = 'TOTAL'
-        pdf = __import__('pandas').concat(
-            [pdf, __import__('pandas').DataFrame([totals])],
-            ignore_index=True,
-        )
-
-        with open(filepath, 'w') as f:
-            f.write("=" * 160 + "\n")
-            f.write("EIMRESHP - HIRE PURCHASE LOAN SUMMARY REPORT\n")
-            f.write(f"REPORT TITLE: {title}\n")
-            f.write(f"SUB TITLE:   {subtitle}\n")
-            f.write(f"REPORT DATE: {reptdate.strftime(REPORT_DATE_FMT)}\n")
-            f.write("=" * 160 + "\n\n")
-            f.write(pdf.to_string(index=False, float_format=lambda x: f'{x:,.2f}'))
-            f.write("\n\n")
-            f.write("=" * 160 + "\n")
-            f.write(f"GRAND TOTAL ACCOUNTS: {int(totals.get('TOTAL_CNT', 0)):,}\n")
-            f.write(f"GRAND TOTAL AMOUNT  : RM {totals.get('TOTAL_AMT', 0.0):,.2f}\n")
-            f.write("END OF REPORT\n")
-
-    # Report catalogue: (frame_key, group columns, title, subtitle)
-    report_catalog = [
-        # 1. Credit risk
-        ('HPLOAN1 (All)',             ['CRRISK', 'BRABBR'],                       'CREDIT RISK SCORE', 'PRODUCT 128,130,380,381,700,705'),
-        ('HPLOAN2 (NPL)',             ['CRRISK', 'BRABBR'],                       'CREDIT RISK SCORE', 'NPL ACCOUNT'),
-        ('HPLOAN3 (Restructured)',    ['CRRISK', 'BRABBR'],                       'CREDIT RISK SCORE', 'RESTRUCTURE ACCOUNT'),
-        ('HPLOAN4 (Restructured NPL)',['CRRISK', 'BRABBR'],                       'CREDIT RISK SCORE', 'RESTRUCTURE NPL ACCOUNT'),
-        # 2. Source of business
-        ('HPLOAN1 (All)',             ['SOURCE', 'BRABBR'],                       'SOURCE OF BUSINESS', 'PRODUCT 128,130,380,381,700,705'),
-        ('HPLOAN2 (NPL)',             ['SOURCE', 'BRABBR'],                       'SOURCE OF BUSINESS', 'NPL ACCOUNT'),
-        ('HPLOAN3 (Restructured)',    ['SOURCE', 'BRABBR'],                       'SOURCE OF BUSINESS', 'RESTRUCTURE ACCOUNT'),
-        ('HPLOAN4 (Restructured NPL)',['SOURCE', 'BRABBR'],                       'SOURCE OF BUSINESS', 'RESTRUCTURE NPL ACCOUNT'),
-        # 3. Margin of finance
-        ('HPLOAN1 (All)',             ['MGINGRP', 'BRABBR'],                      'MARGIN OF FINANCE', 'PRODUCT 128,130,380,381,700,705'),
-        ('HPLOAN2 (NPL)',             ['MGINGRP', 'BRABBR'],                      'MARGIN OF FINANCE', 'NPL ACCOUNT'),
-        ('HPLOAN3 (Restructured)',    ['MGINGRP', 'BRABBR'],                      'MARGIN OF FINANCE', 'RESTRUCTURE ACCOUNT'),
-        ('HPLOAN4 (Restructured NPL)',['MGINGRP', 'BRABBR'],                      'MARGIN OF FINANCE', 'RESTRUCTURE NPL ACCOUNT'),
-        # 4. Loan term
-        ('HPLOAN1 (All)',             ['TERMGRP', 'BRABBR'],                      'LOAN TERM', 'PRODUCT 128,130,380,381,700,705'),
-        ('HPLOAN2 (NPL)',             ['TERMGRP', 'BRABBR'],                      'LOAN TERM', 'NPL ACCOUNT'),
-        ('HPLOAN3 (Restructured)',    ['TERMGRP', 'BRABBR'],                      'LOAN TERM', 'RESTRUCTURE ACCOUNT'),
-        ('HPLOAN4 (Restructured NPL)',['TERMGRP', 'BRABBR'],                      'LOAN TERM', 'RESTRUCTURE NPL ACCOUNT'),
-        # 5. Amount financed
-        ('HPLOAN1 (All)',             ['NEWSEC', 'FINGRP', 'BRABBR'],             'AMT FINANCE', 'PRODUCT 128,130,380,381,700,705'),
-        ('HPLOAN2 (NPL)',             ['NEWSEC', 'FINGRP', 'BRABBR'],             'AMT FINANCE', 'NPL ACCOUNT'),
-        ('HPLOAN3 (Restructured)',    ['NEWSEC', 'FINGRP', 'BRABBR'],             'AMT FINANCE', 'RESTRUCTURE ACCOUNT'),
-        ('HPLOAN4 (Restructured NPL)',['NEWSEC', 'FINGRP', 'BRABBR'],             'AMT FINANCE', 'RESTRUCTURE NPL ACCOUNT'),
-        # 6. State
-        ('HPLOAN1 (All)',             ['NATIONAL', 'STATENM', 'BRABBR'],          'BY STATE', 'PRODUCT 128,130,380,381,700,705'),
-        ('HPLOAN2 (NPL)',             ['NATIONAL', 'STATENM', 'BRABBR'],          'BY STATE', 'NPL ACCOUNT'),
-        ('HPLOAN3 (Restructured)',    ['NATIONAL', 'STATENM', 'BRABBR'],          'BY STATE', 'RESTRUCTURE ACCOUNT'),
-        ('HPLOAN4 (Restructured NPL)',['NATIONAL', 'STATENM', 'BRABBR'],          'BY STATE', 'RESTRUCTURE NPL ACCOUNT'),
-        # 7. Make of vehicle
-        ('HPLOAN1 (All)',             ['NEWSEC', 'CARS', 'MAKE', 'BRABBR'],       'BY MAKE OF VEHICLE', 'PRODUCT 128,130,380,381,700,705'),
-        ('HPLOAN2 (NPL)',             ['NEWSEC', 'CARS', 'MAKE', 'BRABBR'],       'BY MAKE OF VEHICLE', 'NPL ACCOUNT'),
-        ('HPLOAN3 (Restructured)',    ['NEWSEC', 'CARS', 'MAKE', 'BRABBR'],       'BY MAKE OF VEHICLE', 'RESTRUCTURE ACCOUNT'),
-        ('HPLOAN4 (Restructured NPL)',['NEWSEC', 'CARS', 'MAKE', 'BRABBR'],       'BY MAKE OF VEHICLE', 'RESTRUCTURE NPL ACCOUNT'),
-        # 8. Make = OTHERS
-        ('HPLOAN1 (All)',             ['NEWSEC', 'GOODS', 'BRABBR'],              'BY MAKE OF VEHICLE = OTHERS', 'PRODUCT 128,130,380,381,700,705'),
-        ('HPLOAN2 (NPL)',             ['NEWSEC', 'GOODS', 'BRABBR'],              'BY MAKE OF VEHICLE = OTHERS', 'NPL ACCOUNT'),
-        ('HPLOAN3 (Restructured)',    ['NEWSEC', 'GOODS', 'BRABBR'],              'BY MAKE OF VEHICLE = OTHERS', 'RESTRUCTURE ACCOUNT'),
-        ('HPLOAN4 (Restructured NPL)',['NEWSEC', 'GOODS', 'BRABBR'],              'BY MAKE OF VEHICLE = OTHERS', 'RESTRUCTURE NPL ACCOUNT'),
-    ]
-
-    print("\nGenerating summary reports ...")
-    summary_count = 0
-    for i, (group_key, cols, title, subtitle) in enumerate(report_catalog, start=1):
-        frame = groups[group_key]
-        if frame.is_empty():
-            print(f"  [{i:02d}/{len(report_catalog)}] SKIP  {title} – {subtitle} (no rows)")
-            continue
-        # Restrict MAKE='OTHERS' frame for the OTHERS reports
-        if 'OTHERS' in title:
-            frame = frame.filter(pl.col('MAKE') == 'OTHERS')
-            if frame.is_empty():
-                print(f"  [{i:02d}/{len(report_catalog)}] SKIP  {title} – {subtitle} (0 OTHERS)")
-                continue
-
-        try:
-            summary = build_summary(frame, cols)
-            filename = (
-                f"EIMRESHP_SUMMARY_{i:02d}_"
-                f"{title.replace(' ', '_').replace('=', '').replace('__', '_')}.txt"
-            )
-            write_summary(
-                summary, cols, title, subtitle,
-                os.path.join(OUTPUT_DIR, filename),
-            )
-            summary_count += 1
-            print(f"  [{i:02d}/{len(report_catalog)}] OK    {title} – {subtitle}")
-        except Exception as exc:
-            print(f"  [{i:02d}/{len(report_catalog)}] FAIL  {title} – {subtitle}: {exc}")
-            import traceback; traceback.print_exc()
-
-    print(f"\n  Generated {summary_count} summary reports")
-
-    # -----------------------------------------------------------------------
-    # 7. NPL detail report
-    # -----------------------------------------------------------------------
-    print("\nGenerating NPL detail report ...")
-    try:
-        detail = groups['HPLOAN2 (NPL)'].select([
-            'ACCTNO', 'NOTENO', 'NAME', 'BRABBR', 'PRODUCT', 'BORSTAT',
-            'NETPROC', 'BALANCE', 'MTHARR', 'MARGINF', 'NOTETERM',
-            'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE',
-        ]).sort(['ACCTNO', 'NOTENO'])
-
-        detail_pd = detail.to_pandas()
-        detail_pd['ISSDTE'] = detail_pd['ISSDTE'].dt.strftime(DETAIL_FMT).fillna('')
-
-        detail_file = os.path.join(OUTPUT_DIR, 'EIMRESHP_DETAIL_NPL.txt')
-        with open(detail_file, 'w') as f:
-            f.write("=" * 180 + "\n")
-            f.write("EIMRESHP - HIRE PURCHASE NPL DETAIL REPORT\n")
-            f.write(f"REPORT DATE: {reptdate.strftime(REPORT_DATE_FMT)}\n")
-            f.write(f"TOTAL NPL ACCOUNTS: {len(detail):,}\n")
-            f.write(f"TOTAL NPL BALANCE : RM {detail['BALANCE'].sum():,.2f}\n")
-            f.write("=" * 180 + "\n\n")
-            f.write(detail_pd.to_string(
-                index=False,
-                justify='left',
-                float_format=lambda x: f'{x:,.2f}',
-                na_rep='',
-            ))
-            f.write("\n\n" + "=" * 180 + "\n")
-            f.write("END OF REPORT\n")
-
-        print(f"  {len(detail):,} NPL accounts written "
-              f"(balance RM {detail['BALANCE'].sum():,.2f})")
-
-    except Exception as exc:
-        print(f"  ERROR generating detail report: {exc}")
-        import traceback; traceback.print_exc()
-
-    # -----------------------------------------------------------------------
-    # 8. Final summary
-    # -----------------------------------------------------------------------
-    print(f"\n{'='*60}")
-    print("EIMRESHP Complete!")
-    print(f"{'='*60}")
-    print(f"\nOutputs written to: {OUTPUT_DIR}")
-    print(f"  - {summary_count} summary reports")
-    print(f"  - 1 NPL detail report")
-    print(f"\nHP Products: {HP_PRODUCTS}")
-    for label, gdf in groups.items():
-        print(f"  {label}: {len(gdf):,}")
-
-
-if __name__ == '__main__':
-    main()
+print("Processing completed!")
