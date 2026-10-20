@@ -1,14 +1,23 @@
-ACCTNO:   2900189623   NOTENO:   10010                                
-CAP:      ____________________                                        
-NAME:     HO WEN WEN                            LSTTRNCD:          619
-CURBAL:      209385.61                                                
-COLLDESC: AffordApt@A-23-05 Res La                                    
-______                 CENSUS:            152   ORGBAL:       44385.61
-FEEDUE:           1.63 LOANSTAT:            1   BORSTAT:  _           
-PAYAMT:              0 BILDUE:    20260930273   BILTOT:         671.18
-BILPAY:         671.18 LSTTRNAM:       688.74   DELQCD:   __          
-USER5:    0            BLDATE:          24379   BALANCE:   210058.4244
-PRODUCT:           152 BRANCH:              2   ISSDTE:          23148
-NOISTLPD:            0 LASTRAN:         24349   MATURDT:         24622
-THISDATE:        24379 CHECKDT:             1   DAYDIFF:             0
-ARREAR2:             1 ARREAR:              1                         
+import pyreadstat
+import pandas as pd
+
+# LOANTEMP product distribution
+lt, _ = pyreadstat.read_sas7bdat(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp_iccd2.sas7bdat",
+    usecols=['ACCTNO', 'PRODUCT', 'ARREAR', 'BRANCH'],
+)
+lt.columns = lt.columns.str.lower()
+
+print("=== LOANTEMP PRODUCT distribution (all rows) ===")
+print(lt['product'].value_counts().sort_index().to_string())
+print(f"\nproduct=700 count: {(lt['product'] == 700).sum()}")
+
+print("\n=== LOANTEMP BRANCH distribution (all rows, top 20) ===")
+print(lt['branch'].value_counts().sort_index().head(20).to_string())
+print(f"\nbranch=117 (KKI) count: {(lt['branch'] == 117).sum()}")
+
+print("\n=== ARREAR >= 10 by product ===")
+print(lt[lt['arrear'] >= 10]['product'].value_counts().sort_index().to_string())
+
+print("\n=== ARREAR >= 10 by branch (top 20) ===")
+print(lt[lt['arrear'] >= 10]['branch'].value_counts().sort_index().head(20).to_string())
