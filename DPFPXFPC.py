@@ -6,29 +6,7 @@ Faithful Python port of the SAS job that produces:
   - REPOTXT.txt   (all repossession accounts, ARREAR >= 10)
   - REPOTXT1.txt  (subset: ARREAR >= 10 AND LOANTYPE IN 983, 993)
 
-Inputs:
-  - enrh_ln_note_mMM.sas7bdat   (LNNOTE - huge, chunked/col-pruned read)
-  - loantemp.sas7bdat           (LOANTEMP - arrears lookup from ARREAR lib)
-  - stg_ln_nam8file.sas7bdat    (NAME8 - engine / chassis)
-
 Formats/macros from PBBLNFMT and PBBELF.
-
-SAS reference logic:
-  PROC SORT DATA=LOAN.LNNOTE OUT=LNNOTE (KEEP=ACCTNO LOANTYPE NTBRCH COLLDESC COLLYEAR);
-       WHERE LOANTYPE IN &HP AND BALANCE GT 0 AND BORSTAT NOT IN ('F','I','R');
-  PROC SORT DATA=LOAN.NAME8 OUT=NAME8 (KEEP=ACCTNO LINETHRE LINEFOUR);
-  PROC SORT DATA=ARREAR.LOANTEMP OUT=ARREAR (KEEP=ACCTNO ARREAR);
-  DATA REPO; MERGE LNNOTE(IN=AA) NAME8(...) ARREAR; BY ACCTNO; IF AA;
-       BRABBR = PUT(NTBRCH, BRCHCD.);
-       CAC    = PUT(NTBRCH, CACNAME.);
-       MAKE   = SUBSTR(COLLDESC, 1, 16);
-       MODEL  = SUBSTR(COLLDESC, 16, 21);
-       REGNO  = SUBSTR(COLLDESC, 40, 13);
-  DATA REPO REPO1; SET REPO; IF ARREAR GE 10; OUTPUT REPO;
-       IF LOANTYPE IN (983,993) THEN OUTPUT REPO1;
-  PROC SORT DATA=REPO OUT=REPO; BY REGNO;
-  PROC SORT DATA=REPO1 OUT=REPO1; BY REGNO;
-  (then DATA _NULL_ fixed-width writes to REPOTXT / REPOTXT1)
 """
 
 import sys
@@ -45,18 +23,15 @@ import PBBELF
 # =====================================================================
 # Constants
 # =====================================================================
-HP_VALUES_INT   = list(PBBLNFMT.MACROS['HP'])            # 17 HP loan types
-HP_VALUES_STR   = [str(x) for x in HP_VALUES_INT]
-REPORT_LOANTYPES = ('983', '993')                        # REPO1 subset
-ARREAR_THRESHOLD = 10                                    # IF ARREAR GE 10
+HP_VALUES_INT     = list(PBBLNFMT.MACROS['HP'])          # 17 HP loan types
+HP_VALUES_STR     = [str(x) for x in HP_VALUES_INT]
+REPORT_LOANTYPES  = ('983', '993')                       # REPO1 subset
+ARREAR_THRESHOLD  = 10                                   # IF ARREAR GE 10
 REPORT_LINE_WIDTH = 167                                  # @164 $4. ends at 167
 
-# Expected record-count band for sanity checking (adjust as business requires)
-EXPECTED_REPO_MIN  = 500
-EXPECTED_REPO_MAX  = 5000
-
-INPUT_BASE  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod")
-OUTPUT_BASE = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOI")
+# Sanity band for REPO record count (helps catch semantic/data issues)
+EXPECTED_REPO_MIN = 500
+EXPECTED_REPO_MAX = 5000
 
 
 # =====================================================================
@@ -194,21 +169,19 @@ def read_loantemp(loantemp_path: Path) -> pd.DataFrame:
     from the direct `ARREAR >= 10` interpretation.
     """
     print("Reading LOANTEMP.sas7bdat...")
-    # Try full column set first (for diagnostics); fall back to bare minimum
     try:
-        df, meta = pyreadstat.read_sas7bdat(
+        df, _ = pyreadstat.read_sas7bdat(
             str(loantemp_path),
             usecols=['ACCTNO', 'ARREAR', 'ARREAR2', 'DELQCD', 'PRODUCT', 'BRANCH'],
         )
     except Exception:
-        df, meta = pyreadstat.read_sas7bdat(
+        df, _ = pyreadstat.read_sas7bdat(
             str(loantemp_path),
             usecols=['ACCTNO', 'ARREAR'],
         )
     df.columns = df.columns.str.lower()
     print(f"  ARREAR records: {len(df):,}")
 
-    # Quick diagnostic — how many rows pass the straightforward filter?
     arrear_ge10 = (df['arrear'] >= ARREAR_THRESHOLD).sum() if 'arrear' in df.columns else 0
     print(f"  ARREAR >= {ARREAR_THRESHOLD}: {arrear_ge10:,}")
     if 'arrear2' in df.columns:
@@ -235,7 +208,6 @@ def merge_datasets(lnnote: pd.DataFrame,
     name8['acctno']   = normalize_acctno(name8['acctno'])
     arrear['acctno']  = normalize_acctno(arrear['acctno'])
 
-    # Keep only the columns we need from LOANTEMP for the join
     arrear_cols = ['acctno', 'arrear']
     if 'arrear2' in arrear.columns:
         arrear_cols.append('arrear2')
@@ -244,7 +216,6 @@ def merge_datasets(lnnote: pd.DataFrame,
     merged = merged.merge(arrear[arrear_cols], on='acctno', how='left')
     print(f"  Merged REPO records: {len(merged):,}")
 
-    # Coverage diagnostic
     n_lnnote  = lnnote['acctno'].nunique()
     n_matched = merged['arrear'].notna().sum()
     coverage  = 100.0 * n_matched / n_lnnote if n_lnnote else 0.0
@@ -321,7 +292,6 @@ def split_and_sort(repo: pd.DataFrame):
     print(f"  REPO sorted:  {len(repo_out):,}")
     print(f"  REPO1 sorted: {len(repo1_out):,}")
 
-    # Sanity check: if REPO count is way above expected, warn (data-semantic issue)
     if len(repo_out) > EXPECTED_REPO_MAX:
         print(f"  ⚠  WARNING: REPO has {len(repo_out):,} records but expected "
               f"{EXPECTED_REPO_MIN}–{EXPECTED_REPO_MAX}.")
@@ -366,13 +336,16 @@ def main() -> int:
     print(f"RDate: {d['rdate']}, SDate: {d['sdate_str']}")
 
     # ---- Paths ----
-    lnnote_path   = INPUT_BASE / "EIBRCGCS" / f"enrh_ln_note_m{d['reptmon']}.sas7bdat"
-    name8_path    = INPUT_BASE / "EIMREPOI" / "stg_ln_nam8file.sas7bdat"
-    loantemp_path = INPUT_BASE / "EIMREPOI" / "loantemp.sas7bdat"
-    repotxt_path  = OUTPUT_BASE / "REPOTXT.txt"
-    repotxt1_path = OUTPUT_BASE / "REPOTXT1.txt"
+    lnnote_path   = Path(f"/sas/ln/dwh/enrichment/enrh_ln_note_m{d['reptmon']}.sas7bdat")
+    loantemp_path = Path("/exdwh/host/ln/pibb_ccdtemp/loantemp.sas7bdat")
+    name8_path    = Path("/sas/ln/dwh/staging/stg_ln_nam8file.sas7bdat")
+    output_path   = Path("/host_pq/mis/output/report/")
 
-    OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
+    # Create output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    repotxt_path  = output_path / "REPOTXT.txt"
+    repotxt1_path = output_path / "REPOTXT1.txt"
 
     print(f"LNNOTE file:   {lnnote_path}")
     print(f"NAME8 file:    {name8_path}")
