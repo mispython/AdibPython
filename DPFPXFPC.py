@@ -1,13 +1,10 @@
-import pyreadstat
-from datetime import date, timedelta
-
-df, _ = pyreadstat.read_sas7bdat(
-    '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m09.sas7bdat',
-    usecols=['ACCTNO', 'ISSUEDT'],
-    row_limit=10,
-)
-for _, r in df.iterrows():
-    n = int(r['ISSUEDT'])
-    print(f"ACCTNO={r['ACCTNO']:>15}  ISSUEDT={n:>8}  "
-          f"+1960={date(1960,1,1)+timedelta(days=n)}  "
-          f"+1960-9d={date(1960,1,1)+timedelta(days=n-9)}")
+ACCTNO=   2000000125.0  ISSUEDT=   14633  +1960=2000-01-24  +1960-9d=2000-01-15
+ACCTNO=   2000000319.0  ISSUEDT=   14435  +1960=1999-07-10  +1960-9d=1999-07-01
+ACCTNO=   2000000707.0  ISSUEDT=   14432  +1960=1999-07-07  +1960-9d=1999-06-28
+ACCTNO=   2000000901.0  ISSUEDT=   15578  +1960=2002-08-26  +1960-9d=2002-08-17
+ACCTNO=   2000000901.0  ISSUEDT=   16714  +1960=2005-10-05  +1960-9d=2005-09-26
+ACCTNO=   2000000901.0  ISSUEDT=   20328  +1960=2015-08-28  +1960-9d=2015-08-19
+ACCTNO=   2000000901.0  ISSUEDT=   15943  +1960=2003-08-26  +1960-9d=2003-08-17
+ACCTNO=   2000000901.0  ISSUEDT=   16532  +1960=2005-04-06  +1960-9d=2005-03-28
+ACCTNO=   2000001023.0  ISSUEDT=   15551  +1960=2002-07-30  +1960-9d=2002-07-21
+ACCTNO=   2000001023.0  ISSUEDT=   16938  +1960=2006-05-17  +1960-9d=2006-05-08
