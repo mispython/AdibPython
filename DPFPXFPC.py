@@ -76,10 +76,10 @@ def main():
     # Paths point directly at the .sas7bdat FILES (not directories).
     # loan_path uses the {reptmon} macro now that reptmon is known.
     # ------------------------------------------------------------------
-    lnnote_path   = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS//enrh_ln_note_m{reptmon}.sas7bdat") #/sas/ln/dwh/enrichment/enrh_ln_note_m{reptmon}.sas7bdat
-    loantemp_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp_iccd2.sas7bdat") #/dwh/dwh_m/tempsource/loantemp_iccd2.sas7bdat
-    name8_path    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/stg_ln_nam8file.sas7bdat") #/sas/ln/dwh/staging/stg_ln_nam8file.sas7bdat
-    output_path   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOI") #/host_pq/mis/output/report/
+    lnnote_path   = Path(f"/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m{reptmon}.sas7bdat")
+    loantemp_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp_iccd2.sas7bdat")
+    name8_path    = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/stg_ln_nam8file.sas7bdat")
+    output_path   = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMREPOI")
 
     # Create output directory if it doesn't exist
     output_path.mkdir(parents=True, exist_ok=True)
@@ -324,23 +324,6 @@ def main():
     print("=" * 60)
 
     # ------------------------------------------------------------------
-    # Step 12: Also save as Parquet and CSV for reference
-    # ------------------------------------------------------------------
-    print("Saving Parquet and CSV files...")
-    if len(repo_filtered) > 0:
-        repo_arrow = pa.Table.from_pandas(repo_filtered)
-        pq.write_table(repo_arrow, output_path / "REPO.parquet")
-        csv.write_csv(repo_arrow, output_path / "REPO.csv")
-        print("Saved REPO.parquet and REPO.csv")
-
-    if len(repo1_filtered) > 0:
-        repo1_arrow = pa.Table.from_pandas(repo1_filtered)
-        pq.write_table(repo1_arrow, output_path / "REPO1.parquet")
-        csv.write_csv(repo1_arrow, output_path / "REPO1.csv")
-        print("Saved REPO1.parquet and REPO1.csv")
-    print("=" * 60)
-
-    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     print(f"\n{'=' * 60}")
@@ -373,7 +356,9 @@ def main():
                   f"LOANTYPE: {record['loantype']}, ARREAR: {record['arrear']}")
 
     conn.close()
-    print(f"\nAll output files saved to: {output_path}")
+    print(f"\nOutput files saved to: {output_path}")
+    print(f"  - REPOTXT.txt")
+    print(f"  - REPOTXT1.txt")
 
 
 if __name__ == "__main__":
