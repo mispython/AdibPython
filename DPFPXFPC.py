@@ -2,12 +2,22 @@
 EIMAR301 SAS to Python conversion
 Multi-report system for HP Direct loan analysis with different criteria
 
-CHANGES / FIXES
----------------
-1. REPTDATE derived at runtime from today's date; PREPTDTE from timedelta.
-2. LOANTEMP read from loantemp.sas7bdat via pyreadstat.
-3. LKP_BRANCH read from flat text file (with whitespace fallback).
-4. All outputs written as plain .txt reports.
+SAS FORMAT DEPENDENCIES
+-----------------------
+The SAS source uses:
+    %INC PGM(PBBLNFMT,PBBELF);
+    ARREARS = PUT(ARREAR2, ARRCLASS.);
+    CACBR   = PUT(BRANCH,  CACBRCH.);
+    ... WHERE CACBR = '000';
+
+This Python port calls the equivalent Python modules directly:
+
+    PBBLNFMT.put(value, 'ARRCLASS')   -> ARREARS label
+    PBBELF.format_cacbrch(value)      -> CACBR code (911/912/913/
+                                          914/915/916/000)
+
+Both modules are MANDATORY. The script aborts at startup if either
+fails to import or does not expose the required entry point.
 
 LOGIC (matches SAS original)
 ----------------------------
@@ -16,28 +26,18 @@ A. Report A/B CAT assignment: emit one row PER matching
 B. BORSTAT='F' => ARREAR2_ADJ = 15, applied BEFORE PUT ARRCLASS,
    BEFORE sorting, BEFORE subtotaling.
 C. Sorts use ARREAR2_ADJ (Report A) / raw ARREAR2 (Report B).
-D. Report A listing filters WHERE CACBR='000' using the real CACBRCH
-   mapping (PBBELF.format_cacbrch) — not a <100 approximation.
+D. Report A listing filters WHERE CACBR='000' using PBBELF.format_cacbrch.
 E. ARREARS label comes from PBBLNFMT.put(ARREAR2_ADJ, 'ARRCLASS').
 F. The two "IF ... THEN OUTPUT" in DATA LOAN are concatenated without
    unique() to preserve SAS-legal duplicate rows.
 G. Report C and D use PROC TABULATE-style wide layout.
-
-FORMAT MODULES (SAS: %INC PGM(PBBLNFMT,PBBELF))
-----------------------------------------------
-Both are mandatory. The script aborts at startup if either fails to
-import or does not expose the required entry point:
-
-  - PBBLNFMT.put(value, 'ARRCLASS')   -> ARREARS label
-  - PBBELF.format_cacbrch(value)      -> CACBR (911/912/913/914/915/
-                                          916/000)
 """
 
 from pathlib import Path
 from datetime import date, timedelta
 import re
 import importlib
-from typing import Dict, List, Callable, Optional
+from typing import Dict, List, Callable
 
 import polars as pl
 import pandas as pd
