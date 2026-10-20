@@ -40,6 +40,8 @@ print(f"RDATE: {RDATE}")
 
 # ============================================================================
 # READ BRANCH DATA (LKP_BRANCH - FLAT FILE)
+# SAS: INPUT @2 BRANCH 3. @6 BRHCODE $3.;
+# Position 2-4 = BRANCH (3 chars), Position 6-8 = BRHCODE (3 chars)
 # ============================================================================
 BRANCH_FILE = LKP_PATH / "LKP_BRANCH"
 
@@ -52,11 +54,14 @@ with open(BRANCH_FILE, 'r') as f:
 
 branch_data = []
 for line in lines:
-    line = line.strip()
-    if line:
-        parts = line.split()
-        if len(parts) >= 2:
-            branch_data.append((str(parts[0]).strip(), str(parts[1]).strip()))
+    line = line.rstrip('\n').rstrip('\r')
+    if len(line) >= 8:
+        # SAS @2 BRANCH 3. -> 1-indexed pos 2-4, 0-indexed 1:4
+        branch = line[1:4].strip()
+        # SAS @6 BRHCODE $3. -> 1-indexed pos 6-8, 0-indexed 5:8
+        brhcode = line[5:8].strip()
+        if branch:
+            branch_data.append((branch, brhcode))
 
 con.execute("""
     CREATE OR REPLACE TABLE BRHDATA (
@@ -66,7 +71,10 @@ con.execute("""
 """)
 
 for branch, brhcode in branch_data:
-    con.execute(f"INSERT INTO BRHDATA VALUES ('{branch}', '{brhcode}')")
+    # Escape single quotes in branch/brhcode
+    b_esc = branch.replace("'", "''")
+    h_esc = brhcode.replace("'", "''")
+    con.execute(f"INSERT INTO BRHDATA VALUES ('{b_esc}', '{h_esc}')")
 
 branch_count = con.execute("SELECT COUNT(*) FROM BRHDATA").fetchone()[0]
 print(f"BRANCH RECORDS: {branch_count:,}")
@@ -87,6 +95,9 @@ print(f"LOANTEMP RECORDS: {con.execute('SELECT COUNT(*) FROM LOANTEMP').fetchone
 
 # ============================================================================
 # PROCESS LOAN DATA - CREATE CATEGORIES
+# Mirrors SAS DATA LOAN1 step:
+#   IF ARREAR > 6 OR BORSTAT = 'R' OR BORSTAT = 'I' OR BORSTAT = 'F'
+#   THEN IF (product conditions) AND CHECKDT = 1 THEN OUTPUT (multiple times)
 # ============================================================================
 print("\nPROCESSING LOAN DATA...")
 
@@ -108,9 +119,9 @@ con.execute("""
         END AS TYPE
     FROM LOANTEMP
     WHERE (ARREAR > 6 OR BORSTAT IN ('R', 'I', 'F'))
-        AND BALANCE > 0
 """)
 
+# Union all 4 categories (mimics the 4 OUTPUT statements in SAS DATA step)
 con.execute("""
     CREATE OR REPLACE TABLE LOAN1 AS
     SELECT * FROM LOAN1_BASE WHERE CAT = 'A'
@@ -126,6 +137,7 @@ con.execute("""
 LOAN_COUNT = con.execute("SELECT COUNT(*) FROM LOAN1").fetchone()[0]
 print(f"LOAN1 RECORDS: {LOAN_COUNT:,}")
 
+# Merge with BRHDATA (SAS: MERGE LOAN1 BRHDATA; BY BRANCH; IF PRESENT=1)
 con.execute("""
     CREATE OR REPLACE TABLE LOAN1_FINAL AS
     SELECT 
@@ -145,6 +157,7 @@ if unmatched > 0:
 
 # ============================================================================
 # AGGREGATE BY CATEGORY AND BRANCH WITH ARREARS BUCKETS
+# Mirrors SAS DATA TRY step: BY CAT BRANCH, ARRAY BRHAMT{17}, NOACC{17}
 # ============================================================================
 print("AGGREGATING BY ARREARS BUCKETS...")
 
@@ -155,6 +168,7 @@ con.execute("""
         COUNT(*) AS NOACC,
         SUM(BALANCE) AS BRHAMT
     FROM LOAN1_FINAL
+    WHERE BALANCE > 0
     GROUP BY CAT, TYPE, BRANCH, BRHCODE, ARREAR
     ORDER BY CAT, BRANCH, ARREAR
 """)
@@ -204,6 +218,9 @@ con.execute("""
 
 # ============================================================================
 # CALCULATE SUBTOTALS AND TOTALS
+# Mirrors SAS: SUBBRH = SUM(BRHAMT4..17), SUBBR2 = SUBBRH - 4 - 5 - 6,
+#              SUBACC = SUM(NOACC4..17),  SUBAC2 = SUBACC - 4 - 5 - 6,
+#              TOTBRH = SUM(SUBBRH, BRHAMT1-3), SOTACC = SUM(SUBACC, NOACC1-3)
 # ============================================================================
 con.execute("""
     CREATE OR REPLACE TABLE REPORT_DATA AS
@@ -234,36 +251,55 @@ OUTPUT_TXT = OUTPUT_DIR / f"CCDTXT3.txt"
 CATEGORIES = con.execute("SELECT DISTINCT CAT, TYPE FROM REPORT_DATA ORDER BY CAT").fetchall()
 
 # ----------------------------------------------------------------------------
-# FIXED-COLUMN LINE BUILDER
-# Mirrors the SAS `PUT @col value FORMAT.` absolute-column addressing so the
-# data lines land in EXACTLY the same columns as the header, regardless of
-# how many digits any individual number has.
-#
-# SAS column map (1-indexed) for every data line in a branch block:
-#   @1   -> BRANCH / BRHCODE   (width 3)
-#   @5   -> NOACC   (COMMA7.0  -> width 7,  0 decimals)
-#   @13  -> BRHAMT  (COMMA16.2 -> width 16, 2 decimals)
-#   @30  -> NOACC   (COMMA7.0  -> width 7,  0 decimals)
-#   @38  -> BRHAMT  (COMMA15.2 -> width 15, 2 decimals)
-#   @54  -> NOACC   (COMMA7.0  -> width 7,  0 decimals)
-#   @62  -> BRHAMT  (COMMA15.2 -> width 15, 2 decimals)
-#   @78  -> NOACC   (COMMA8.0  -> width 8,  0 decimals)
-#   @87  -> BRHAMT  (COMMA17.2 -> width 17, 2 decimals)
-#   @105 -> NOACC   (COMMA8.0  -> width 8,  0 decimals)
-#   @114 -> BRHAMT  (COMMA17.2 -> width 17, 2 decimals)
+# SAS COLUMN MAP (1-indexed positions from the PUT statements):
+#   @1   -> BRANCH / BRHCODE / TOT   (width 3)
+#   @5   -> NOACC   COMMA7.0  -> width 7,  0 decimals
+#   @13  -> BRHAMT  COMMA16.2 -> width 16, 2 decimals
+#   @30  -> NOACC   COMMA7.0  -> width 7,  0 decimals
+#   @38  -> BRHAMT  COMMA15.2 -> width 15, 2 decimals
+#   @54  -> NOACC   COMMA7.0  -> width 7,  0 decimals
+#   @62  -> BRHAMT  COMMA15.2 -> width 15, 2 decimals
+#   @78  -> NOACC   COMMA8.0  -> width 8,  0 decimals
+#   @87  -> BRHAMT  COMMA17.2 -> width 17, 2 decimals
+#   @105 -> NOACC   COMMA8.0  -> width 8,  0 decimals
+#   @114 -> BRHAMT  COMMA17.2 -> width 17, 2 decimals
+# Separator: @1'-'*40, @41'-'*40, @81'-'*40, @121'-'*10 => total width 130
 # ----------------------------------------------------------------------------
+LINE_WIDTH = 130
 
-LINE_WIDTH = 134
 FIELD_COLS    = [5,  13, 30, 38, 54, 62, 78, 87, 105, 114]
 FIELD_WIDTHS  = [7,  16,  7, 15,  7, 15,  8, 17,   8,  17]
 FIELD_DECIMALS = [0,  2,  0,  2,  0,  2,  0,  2,   0,   2]
 
 
-def text_line(segments, width=LINE_WIDTH):
-    """Place arbitrary text segments at fixed 1-indexed columns (mirrors SAS @N 'literal').
-    segments: list of (col, text) tuples."""
-    buf = [' '] * width
-    for col, text in segments:
+def fmt_num(val, width, decimals):
+    """Format number like SAS COMMA w.d — right-justified, comma-separated.
+    If it doesn't fit, SAS prints * for the field. We mimic that."""
+    if val is None:
+        val = 0
+    try:
+        if decimals == 0:
+            s = f"{int(round(float(val))):,}"
+        else:
+            s = f"{float(val):,.2f}"
+    except (ValueError, TypeError):
+        s = "0"
+    # SAS overflow behavior: if the formatted value is wider than the field,
+    # the field is filled with asterisks
+    if len(s) > width:
+        return "*" * width
+    return s.rjust(width)
+
+
+def build_line(lead_text, values):
+    """Build one fixed-column report line mirroring SAS PUT @col value FORMAT."""
+    buf = [' '] * LINE_WIDTH
+    if lead_text:
+        for i, ch in enumerate(lead_text):
+            if i < LINE_WIDTH:
+                buf[i] = ch
+    for col, width, dec, val in zip(FIELD_COLS, FIELD_WIDTHS, FIELD_DECIMALS, values):
+        text = fmt_num(val, width, dec)
         start = col - 1
         end = start + len(text)
         if end > len(buf):
@@ -272,27 +308,10 @@ def text_line(segments, width=LINE_WIDTH):
     return ''.join(buf).rstrip()
 
 
-def fmt_num(val, width, decimals):
-    if decimals == 0:
-        s = f"{int(round(val)):,}"
-    else:
-        s = f"{float(val):,.2f}"
-    return s.rjust(width)
-
-
-def build_line(lead_text, lead_col, values):
-    """Build one fixed-column report line.
-
-    lead_text: text for the leading @1 field (BRANCH/BRHCODE), or None/'' if blank
-    lead_col:  starting column for the leading field (always 1 here)
-    values:    list of 10 raw numbers matching FIELD_COLS/FIELD_WIDTHS/FIELD_DECIMALS
-    """
-    buf = [' '] * LINE_WIDTH
-    if lead_text:
-        start = lead_col - 1
-        buf[start:start + len(lead_text)] = list(lead_text)
-    for col, width, dec, val in zip(FIELD_COLS, FIELD_WIDTHS, FIELD_DECIMALS, values):
-        text = fmt_num(val, width, dec)
+def text_line(segments, width=LINE_WIDTH):
+    """Place literal text segments at fixed 1-indexed columns (SAS @N 'literal')."""
+    buf = [' '] * width
+    for col, text in segments:
         start = col - 1
         end = start + len(text)
         if end > len(buf):
@@ -304,7 +323,9 @@ def build_line(lead_text, lead_col, values):
 with open(OUTPUT_TXT, 'w') as f:
     for cat_idx, (CAT, TYPE) in enumerate(CATEGORIES):
         PAGE_NUM = cat_idx + 1
-        f.write(f"PROGRAM-ID : EIMAR202                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {PAGE_NUM:>2}\n")
+
+        # ---- SAS NEWPAGE header ----
+        f.write(f"PROGRAM-ID : EIMAR202                     P U B L I C   I S L A M I C   B A N K   B E R H A D                        PAGE NO.: {PAGE_NUM}\n")
         f.write(f"                                   OUTSTANDING LOANS CLASSIFIED AS NPL ISSUED FROM 1 JAN 1998        {TYPE:<13}       {RDATE}\n")
         f.write("\n")
         f.write(text_line([(1, "BRH     NO         < 1 MTH"), (34, "NO     1 TO < 2 MTH"),
@@ -319,6 +340,7 @@ with open(OUTPUT_TXT, 'w') as f:
         f.write(text_line([(1, "        NO        > 36 MTH"), (34, "NO          DEFICIT"),
                             (59, "NO   SUBTOTAL >=3MTH"), (84, "NO   SUBTOTAL >=6MTH"),
                             (111, "NO             TOTAL")]) + "\n")
+        # SAS separator: @1'-'*40, @41'-'*40, @81'-'*40, @121'-'*10
         f.write(text_line([(1, "-"*40), (41, "-"*40), (81, "-"*40), (121, "-"*10)]) + "\n")
 
         branches = con.execute(f"""
@@ -332,6 +354,8 @@ with open(OUTPUT_TXT, 'w') as f:
         for branch_row in branches:
             BRANCH = str(int(float(branch_row[2]))).zfill(3)
             BRHCODE = str(branch_row[3] or '').strip()
+            if not BRHCODE:
+                BRHCODE = '   '
 
             SUBACC = branch_row[38]
             SUBBRH = branch_row[39]
@@ -341,23 +365,32 @@ with open(OUTPUT_TXT, 'w') as f:
             TOTBRH = branch_row[43]
 
             # LINE 1: BRANCH + <1MTH, 1-2MTH, 2-3MTH, 3-4MTH, 4-5MTH
-            f.write(build_line(BRANCH, 1, [branch_row[4], branch_row[5], branch_row[6], branch_row[7],
-                                            branch_row[8], branch_row[9], branch_row[10], branch_row[11],
-                                            branch_row[12], branch_row[13]]) + "\n")
+            f.write(build_line(BRANCH, [branch_row[4],  branch_row[5],
+                                         branch_row[6],  branch_row[7],
+                                         branch_row[8],  branch_row[9],
+                                         branch_row[10], branch_row[11],
+                                         branch_row[12], branch_row[13]]) + "\n")
 
             # LINE 2: BRHCODE + 5-6MTH, 6-7MTH, 7-8MTH, 8-9MTH, 9-10MTH
-            f.write(build_line(BRHCODE, 1, [branch_row[14], branch_row[15], branch_row[16], branch_row[17],
-                                             branch_row[18], branch_row[19], branch_row[20], branch_row[21],
-                                             branch_row[22], branch_row[23]]) + "\n")
+            f.write(build_line(BRHCODE, [branch_row[14], branch_row[15],
+                                          branch_row[16], branch_row[17],
+                                          branch_row[18], branch_row[19],
+                                          branch_row[20], branch_row[21],
+                                          branch_row[22], branch_row[23]]) + "\n")
 
             # LINE 3: 10-11MTH, 11-12MTH, 12-18MTH, 18-24MTH, 24-36MTH
-            f.write(build_line(None, 1, [branch_row[24], branch_row[25], branch_row[26], branch_row[27],
-                                          branch_row[28], branch_row[29], branch_row[30], branch_row[31],
-                                          branch_row[32], branch_row[33]]) + "\n")
+            f.write(build_line('   ', [branch_row[24], branch_row[25],
+                                        branch_row[26], branch_row[27],
+                                        branch_row[28], branch_row[29],
+                                        branch_row[30], branch_row[31],
+                                        branch_row[32], branch_row[33]]) + "\n")
 
             # LINE 4: >36MTH, DEFICIT, SUBTOTAL>=3MTH, SUBTOTAL>=6MTH, TOTAL
-            f.write(build_line(None, 1, [branch_row[34], branch_row[35], branch_row[36], branch_row[37],
-                                          SUBACC, SUBBRH, SUBAC2, SUBBR2, SOTACC, TOTBRH]) + "\n")
+            f.write(build_line('   ', [branch_row[34], branch_row[35],
+                                        branch_row[36], branch_row[37],
+                                        SUBACC, SUBBRH,
+                                        SUBAC2, SUBBR2,
+                                        SOTACC, TOTBRH]) + "\n")
 
             for i in range(4, 38):
                 TOTALS[i - 4] += branch_row[i]
@@ -368,15 +401,77 @@ with open(OUTPUT_TXT, 'w') as f:
             TOTALS[38] += SOTACC
             TOTALS[39] += TOTBRH
 
-        # CATEGORY TOTALS
-        f.write("-" * LINE_WIDTH + "\n")
-        f.write(build_line("TOT", 1, TOTALS[0:10]) + "\n")
-        f.write(build_line(None, 1, TOTALS[10:20]) + "\n")
-        f.write(build_line(None, 1, TOTALS[20:30]) + "\n")
-        f.write(build_line(None, 1, TOTALS[30:40]) + "\n")
-        f.write("-" * LINE_WIDTH + "\n")
+        # ---- SAS LAST.CAT block: category totals ----
+        # NOTE: SAS computes SGTOTBRH etc. using TOTAMT1..17 / TOTACC1..17
+        # TOTALS layout: [0..16] = TOTACC1..17, [17..33] = TOTAMT1..17,
+        #                [34] = SGTOTACC, [35] = SGTOTBRH,
+        #                [36] = SGTOTAC2, [37] = SGTOTBR2,
+        #                [38] = GTOTACC,  [39] = GTOTBRH
+        # The per-branch loop above accumulates the raw NOACC/BRHAMT into
+        # positions 0..33 (interleaved as NOACC1,BRHAMT1,NOACC2,...). We need
+        # to re-derive the SAS-ordered sums here.
+        #
+        # Actually, to stay faithful: rebuild from raw arrays.
+        TOTACC_arr = [0]*17
+        TOTAMT_arr = [0]*17
+        # TOTALS was accumulated interleaved NOACC/BRHAMT — re-derive arrays:
+        for i in range(17):
+            TOTACC_arr[i] = TOTALS[i*2]
+            TOTAMT_arr[i] = TOTALS[i*2 + 1]
+
+        sgtotbrh = sum(TOTAMT_arr[3:17])
+        sgtotbr2 = sgtotbrh - TOTAMT_arr[3] - TOTAMT_arr[4] - TOTAMT_arr[5]
+        sgtotacc = sum(TOTACC_arr[3:17])
+        sgtotac2 = sgtotacc - TOTACC_arr[3] - TOTACC_arr[4] - TOTACC_arr[5]
+        gtotbrh  = sgtotbrh + TOTAMT_arr[0] + TOTAMT_arr[1] + TOTAMT_arr[2]
+        gtotacc  = sgtotacc + TOTACC_arr[0] + TOTACC_arr[1] + TOTACC_arr[2]
+
+        # SAS separator
+        f.write(text_line([(1, "-"*40), (41, "-"*40), (81, "-"*40), (121, "-"*10)]) + "\n")
+
+        # TOT line 1 (SAS order: TOTACC1,TOTAMT1,TOTACC2,TOTAMT2,...,TOTACC5,TOTAMT5)
+        f.write(build_line("TOT", [
+            TOTACC_arr[0], TOTAMT_arr[0],
+            TOTACC_arr[1], TOTAMT_arr[1],
+            TOTACC_arr[2], TOTAMT_arr[2],
+            TOTACC_arr[3], TOTAMT_arr[3],
+            TOTACC_arr[4], TOTAMT_arr[4],
+        ]) + "\n")
+
+        # TOT line 2
+        f.write(build_line('   ', [
+            TOTACC_arr[5], TOTAMT_arr[5],
+            TOTACC_arr[6], TOTAMT_arr[6],
+            TOTACC_arr[7], TOTAMT_arr[7],
+            TOTACC_arr[8], TOTAMT_arr[8],
+            TOTACC_arr[9], TOTAMT_arr[9],
+        ]) + "\n")
+
+        # TOT line 3
+        f.write(build_line('   ', [
+            TOTACC_arr[10], TOTAMT_arr[10],
+            TOTACC_arr[11], TOTAMT_arr[11],
+            TOTACC_arr[12], TOTAMT_arr[12],
+            TOTACC_arr[13], TOTAMT_arr[13],
+            TOTACC_arr[14], TOTAMT_arr[14],
+        ]) + "\n")
+
+        # TOT line 4 (with grand subtotals and grand totals)
+        f.write(build_line('   ', [
+            TOTACC_arr[15], TOTAMT_arr[15],
+            TOTACC_arr[16], TOTAMT_arr[16],
+            sgtotacc, sgtotbrh,
+            sgtotac2, sgtotbr2,
+            gtotacc, gtotbrh,
+        ]) + "\n")
+
+        # SAS separator
+        f.write(text_line([(1, "-"*40), (41, "-"*40), (81, "-"*40), (121, "-"*10)]) + "\n")
         f.write("\n")
 
+        # SAS resets PAGECNT=0 after LAST.CAT but HEADER=NEWPAGE handles
+        # the page break at FIRST.CAT of the next group. We insert a form-feed
+        # between categories to mimic a physical page break.
         if cat_idx < len(CATEGORIES) - 1:
             f.write("\f")
 
