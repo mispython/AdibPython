@@ -1,15 +1,14 @@
-HP portfolio breakdown:
-lt
-128.0    1183771
-130.0       2882
-131.0      21349
-132.0          6
-380.0       1815
-381.0        163
-678.0        272
-700.0    3707243
-705.0     246398
-720.0     174788
-725.0       1618
-983.0      41862
-993.0     102919
+import pyreadstat
+import pandas as pd
+
+lt, _ = pyreadstat.read_sas7bdat(
+    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOI/loantemp_iccd2.sas7bdat",
+)
+lt.columns = lt.columns.str.lower()
+print("LOANTEMP shape:", lt.shape)
+print("LOANTEMP columns:", lt.columns.tolist())
+print("\nFirst 5 ACCTNOs:", lt['acctno'].head().tolist())
+
+# Look for KKI-type accounts (branch 117)
+# These won't have a branch column in LOANTEMP — but we can check overlap
+# with LNNOTE accounts that ARE branch 117
