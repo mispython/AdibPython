@@ -9,8 +9,9 @@ from datetime import datetime, timedelta
 # CONFIGURATION
 # =====================================================
 
-# Input/Output paths (absolute)
-INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP03")
+# Input paths (separate for loan and uloan)
+LOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP03")
+ULOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP03")
 OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP03")
 
 JOB_NAME = "EIBWHP03"
@@ -38,9 +39,9 @@ else:
 # loan{reptmon}{nowk}.sas7bdat
 # uloan{reptmon}{nowk}{reptyear}.sas7bdat
 INPUT_DATASETS = {
-    "LOAN_CURRENT":  INPUT_DIR / f"loan{REPORT_MONTH}{REPORT_WEEK}.sas7bdat",
-    "LOAN_PREVIOUS": INPUT_DIR / f"loan{PREV_MONTH}{PREV_WEEK}.sas7bdat",
-    "ULOAN_CURRENT": INPUT_DIR / f"uloan{REPORT_MONTH}{REPORT_WEEK}{REPORT_YEAR}.sas7bdat",
+    "LOAN_CURRENT":  LOAN_DIR / f"loan{REPORT_MONTH}{REPORT_WEEK}.sas7bdat",
+    "LOAN_PREVIOUS": LOAN_DIR / f"loan{PREV_MONTH}{PREV_WEEK}.sas7bdat",
+    "ULOAN_CURRENT": ULOAN_DIR / f"uloan{REPORT_MONTH}{REPORT_WEEK}{REPORT_YEAR}.sas7bdat",
 }
 
 OUTPUT_FILE = OUTPUT_DIR / f"{JOB_NAME}_{REPORT_DATE.strftime('%Y%m%d')}.txt"
@@ -224,6 +225,8 @@ def execute_business_logic(output_file_path):
         spool_lines.append(f"Report Month: {REPORT_MONTH}")
         spool_lines.append(f"Report Week: {REPORT_WEEK}")
         spool_lines.append(f"Report Year (YY): {REPORT_YEAR}")
+        spool_lines.append(f"Loan Input Dir: {LOAN_DIR}")
+        spool_lines.append(f"ULoan Input Dir: {ULOAN_DIR}")
         spool_lines.append("-" * 80)
 
         # Process LOAN_CURRENT
@@ -305,6 +308,8 @@ def run_job():
     print(f"Report Month: {REPORT_MONTH}")
     print(f"Report Week: {REPORT_WEEK}")
     print(f"Report Year (YY): {REPORT_YEAR}")
+    print(f"Loan Input Dir: {LOAN_DIR}")
+    print(f"ULoan Input Dir: {ULOAN_DIR}")
     print(f"Python version: {sys.version}")
     print(f"Chunk size: {CHUNK_SIZE:,} records")
 
