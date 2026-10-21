@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
 EIBWHP01 - Products 131,132,720,725 Report (All & SMI)
+No-cache version: reads .sas7bdat directly via pyreadstat with column pruning
+and immediate dtype downcasting to keep memory low.
 """
 
-import os
 import sys
 import gc
+import duckdb
 import pandas as pd
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -20,13 +20,9 @@ from datetime import datetime, timedelta
 INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP01")
 LNNOTE_INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
 OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP01")
-CACHE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/cache/EIBWHP01")
-
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 OUTPUT_FILE = OUTPUT_DIR / "EIBWHP01.txt"
-CHUNK_ROWS = 200_000
 
 PRODUCT_FILTER = [131, 132, 720, 725]
 SMI_CUSTCD = ['66', '67', '68', '69']
@@ -35,26 +31,20 @@ SMI_CUSTCD = ['66', '67', '68', '69']
 # Load PBBLNFMT formats
 # ----------------------------------------------------------------------
 
-SECTCD = {}
-SECTA = {}
-SECTB = {}
-
+SECTCD, SECTA, SECTB = {}, {}, {}
 try:
     import PBBLNFMT
-    if hasattr(PBBLNFMT, 'SECTCD'):
-        SECTCD = PBBLNFMT.SECTCD
-    if hasattr(PBBLNFMT, 'SECTA'):
-        SECTA = PBBLNFMT.SECTA
-    if hasattr(PBBLNFMT, 'SECTB'):
-        SECTB = PBBLNFMT.SECTB
-    print(f"[FMT] Loaded SECTCD: {len(SECTCD)} entries")
+    SECTCD = getattr(PBBLNFMT, 'SECTCD', {})
+    SECTA = getattr(PBBLNFMT, 'SECTA', {})
+    SECTB = getattr(PBBLNFMT, 'SECTB', {})
+    print(f"[FMT] SECTCD={len(SECTCD)} SECTA={len(SECTA)} SECTB={len(SECTB)}")
 except ImportError:
     print("[WARN] PBBLNFMT not found")
 except Exception as e:
-    print(f"[WARN] Error loading PBBLNFMT: {e}")
+    print(f"[WARN] PBBLNFMT error: {e}")
 
 # ----------------------------------------------------------------------
-# Date logic (replicates SAS DATA REPTDATE)
+# Date logic
 # ----------------------------------------------------------------------
 
 def get_sas_macros(reptdate):
@@ -67,75 +57,39 @@ def get_sas_macros(reptdate):
         sdd, wk, wk1 = 16, '3', '2'
     else:
         sdd, wk, wk1 = 23, '4', '3'
-
     mm = reptdate.month
     mm1 = mm - 1 if wk == '1' else mm
     if mm1 == 0:
         mm1 = 12
-
     start = datetime(reptdate.year, mm, 1)
     sdate = start + timedelta(days=sdd - 1)
-
     return {
         'NOWK': wk, 'NOWK1': wk1,
         'REPTMON': f"{mm:02d}", 'REPTMON1': f"{mm1:02d}",
         'REPTDAY': f"{day:02d}",
         'REPTYEAR': f"{reptdate.year:04d}",
         'RDATE': reptdate.strftime("%d/%m/%y"),
-        'SDATE': sdate.strftime("%d/%m/%y")
+        'SDATE': sdate.strftime("%d/%m/%y"),
     }
 
 # ----------------------------------------------------------------------
-# Parquet caching helpers
+# Direct read: only needed columns, downcast dtypes
 # ----------------------------------------------------------------------
 
-def cache_fresh(sas_path, cache_path):
-    return cache_path.exists() and cache_path.stat().st_mtime >= sas_path.stat().st_mtime
-
-def sas_to_parquet(sas_path, cache_path, tag):
-    print(f"  [{tag}] Converting {sas_path.name} -> {cache_path.name} ...")
-    writer = None
-    schema = None
-    total = 0
-    rows_read = 0
-    try:
-        reader = pd.read_sas(sas_path, encoding="latin1", chunksize=CHUNK_ROWS)
-        for chunk in reader:
-            rows_read += len(chunk)
-            table = pa.Table.from_pandas(chunk, preserve_index=False)
-            if schema is None:
-                schema = table.schema
-                writer = pq.ParquetWriter(cache_path, schema, compression="snappy")
-            else:
-                cast_arrays = []
-                for i, field in enumerate(schema):
-                    col = table.column(field.name)
-                    if col.type != field.type:
-                        try:
-                            col = col.cast(field.type, safe=False)
-                        except:
-                            col = pa.nulls(len(col), type=field.type)
-                    cast_arrays.append(col)
-                table = pa.Table.from_arrays(cast_arrays, schema=schema)
-            writer.write_table(table)
-            total += len(chunk)
-            del chunk, table
-            gc.collect()
-        writer.close()
-        print(f"  [{tag}] Done – {total:,} rows.")
-    except Exception as e:
-        print(f"  [{tag}] ERROR: {e}")
-        if cache_path.exists():
-            cache_path.unlink()
-        raise
-
-def read_sas_cached(sas_path):
-    cache_path = CACHE_DIR / f"{sas_path.stem}.parquet"
-    if cache_fresh(sas_path, cache_path):
-        print(f"[READ] Using cache: {cache_path.name}")
-        return cache_path
-    sas_to_parquet(sas_path, cache_path, sas_path.stem.upper())
-    return cache_path
+def read_sas_columns(path, columns):
+    """Read only specific columns from .sas7bdat, downcast to save memory."""
+    import pyreadstat
+    df, _ = pyreadstat.read_sas7bdat(
+        str(path),
+        usecols=columns,
+        encoding="latin1",
+    )
+    for col in df.columns:
+        if df[col].dtype == np.float64:
+            df[col] = df[col].astype(np.float32)
+        elif df[col].dtype == np.int64:
+            df[col] = df[col].astype(np.int32)
+    return df
 
 # ----------------------------------------------------------------------
 # File resolution
@@ -146,248 +100,224 @@ def resolve_loan_file(reptmon, nowk, reptyear):
     p = INPUT_DIR / fname
     if p.exists():
         return p
-
     alt = INPUT_DIR / f"loan{reptmon}{nowk}.sas7bdat"
     if alt.exists():
         return alt
-
-    candidates = list(INPUT_DIR.glob(f"ln{reptmon}{nowk}*.sas7bdat"))
-    if candidates:
-        return candidates[0]
-
-    candidates = list(INPUT_DIR.glob("ln*.sas7bdat")) + list(INPUT_DIR.glob("loan*.sas7bdat"))
-    if candidates:
-        latest = max(candidates, key=lambda p: p.stat().st_mtime)
-        print(f"[WARN] Using latest loan file: {latest.name}")
+    cands = list(INPUT_DIR.glob(f"ln{reptmon}{nowk}*.sas7bdat"))
+    if cands:
+        return cands[0]
+    cands = list(INPUT_DIR.glob("ln*.sas7bdat")) + list(INPUT_DIR.glob("loan*.sas7bdat"))
+    if cands:
+        latest = max(cands, key=lambda p: p.stat().st_mtime)
+        print(f"[WARN] Using latest loan: {latest.name}")
         return latest
-
-    raise FileNotFoundError(f"No loan file found in {INPUT_DIR}")
-
+    raise FileNotFoundError(f"No loan file in {INPUT_DIR}")
 
 def resolve_lnnote_file(reptmon):
-    fname = f"enrh_ln_note_m{reptmon}.sas7bdat"
-    p = LNNOTE_INPUT_DIR / fname
+    p = LNNOTE_INPUT_DIR / f"enrh_ln_note_m{reptmon}.sas7bdat"
     if p.exists():
         return p
-
     alt = INPUT_DIR / "lnnote.sas7bdat"
     if alt.exists():
         return alt
-
-    raise FileNotFoundError(f"LNNOTE file not found: {p} or {alt}")
-
+    raise FileNotFoundError(f"LNNOTE not found: {p}")
 
 # ----------------------------------------------------------------------
-# EFFAPR calculation (exact SAS logic)
+# EFFAPR calculation (vectorised)
 # ----------------------------------------------------------------------
 
-def compute_effapr_row(row):
-    intamt = row.get('INTAMT', 0.0)
-    intrate = row.get('INTRATE', 0.0)
-    netproc = row.get('NETPROC', 0.0)
-    noteterm = row.get('NOTETERM', 0)
-    intearn2 = row.get('INTEARN2', 0.0)
+def compute_effapr(intamt, intrate, netproc, noteterm, intearn2):
+    """Vectorised EFFAPR — same formula as SAS."""
+    noteterm = noteterm.astype(float)
+    intamt = intamt.astype(float)
+    intrate = intrate.astype(float)
+    netproc = netproc.astype(float)
+    intearn2 = intearn2.astype(float)
 
-    if noteterm == 0:
-        return 0.0
+    intamt = np.where(intamt <= 0.01,
+                      (intrate * netproc * noteterm / 1200) - intearn2,
+                      intamt)
+    term = np.where(noteterm > 12, 12.0, noteterm)
 
-    if intamt <= 0.01:
-        intamt = (intrate * netproc * noteterm / 1200) - intearn2
+    with np.errstate(divide='ignore', invalid='ignore'):
+        efffact = (100 * term * intamt) / (noteterm * (netproc + intearn2))
+        denom = (noteterm * noteterm * efffact) + (150 * term * (noteterm + 1))
+        effapr = (noteterm * efffact * (300 * term + noteterm * efffact)) / denom
 
-    term = 12 if noteterm > 12 else noteterm
-
-    denom_eff = noteterm * (netproc + intearn2)
-    if denom_eff == 0:
-        return 0.0
-    efffact = (100 * term * intamt) / denom_eff
-
-    denom_apr = (noteterm * noteterm * efffact) + (150 * term * (noteterm + 1))
-    if denom_apr == 0:
-        return 0.0
-    effapr = (noteterm * efffact * (300 * term + noteterm * efffact)) / denom_apr
-    return effapr
+    effapr = np.where((noteterm == 0) | ~np.isfinite(effapr), 0.0, effapr)
+    return effapr.astype(np.float32)
 
 # ----------------------------------------------------------------------
 # Main processing
 # ----------------------------------------------------------------------
 
-def process_data(curr_path, prev_path, lnnote_path):
-    print("[PROCESS] Starting data processing...")
-
-    print("[READ] Reading parquet files...")
-    curr_df = pd.read_parquet(curr_path)
-    prev_df = pd.read_parquet(prev_path)
-    lnnote_df = pd.read_parquet(lnnote_path)
-
-    print(f"  Current BNM: {len(curr_df):,} rows")
-    print(f"  Previous BNM: {len(prev_df):,} rows")
-    print(f"  LNNOTE: {len(lnnote_df):,} rows")
-
-    print(f"\n[DEBUG] Current BNM columns: {list(curr_df.columns)}")
-    print(f"[DEBUG] Previous BNM columns: {list(prev_df.columns)}")
-    print(f"[DEBUG] LNNOTE columns: {list(lnnote_df.columns)}")
-
-    print("\n[PROCESS] Mapping SECTOR to SECTORCD...")
-    if SECTCD:
-        lnnote_df['SECTORCD'] = lnnote_df['SECTOR'].map(SECTCD)
-        lnnote_df = lnnote_df.dropna(subset=['SECTORCD']).copy()
-    else:
-        lnnote_df['SECTORCD'] = lnnote_df['SECTOR'].astype(str)
-    print(f"  LNNOTE after SECTOR mapping: {len(lnnote_df):,}")
-
-    print("[PROCESS] Computing EFFAPR for LNNOTE...")
-    lnnote_df['EFFAPR'] = lnnote_df.apply(compute_effapr_row, axis=1)
-    lnnote_df = lnnote_df[['ACCTNO', 'NOTENO', 'SECTORCD', 'EFFAPR']]
-    print(f"  LNNOTE processed: {len(lnnote_df):,}")
-
-    print("[PROCESS] Filtering BNM by PRODUCT...")
-    if 'PRODUCT' in curr_df.columns:
-        curr_df = curr_df[curr_df['PRODUCT'].isin(PRODUCT_FILTER)].copy()
-        prev_df = prev_df[prev_df['PRODUCT'].isin(PRODUCT_FILTER)].copy()
-        print(f"  Current BNM filtered: {len(curr_df):,}")
-        print(f"  Previous BNM filtered: {len(prev_df):,}")
-    else:
-        print("[WARN] PRODUCT column not found - skipping product filter")
-
-    print("[PROCESS] Merging current BNM with LNNOTE...")
-    curr_merged = curr_df.merge(
-        lnnote_df[['ACCTNO', 'NOTENO', 'SECTORCD', 'EFFAPR']],
-        on=['ACCTNO', 'NOTENO', 'SECTORCD'],
-        how='inner'
+def process(curr_path, prev_path, lnnote_path):
+    con = duckdb.connect(":memory:")
+    print("[PROCESS] Reading BNM (current) – pruned columns...")
+    curr = read_sas_columns(
+        curr_path,
+        ['ACCTNO', 'NOTENO', 'SECTORCD', 'PRODUCT', 'BALANCE', 'CUSTCD'],
     )
-    print(f"  Current merged: {len(curr_merged):,}")
+    curr = curr[curr['PRODUCT'].isin(PRODUCT_FILTER)].copy()
+    print(f"  Current after filter: {len(curr):,}")
 
-    prev_renamed = prev_df.rename(columns={
-        'BALANCE': 'LASTBAL',
-        'NOTETERM': 'LASTNOTE'
-    })
+    print("[PROCESS] Reading BNM (previous) – pruned columns...")
+    prev = read_sas_columns(
+        prev_path,
+        ['ACCTNO', 'NOTENO', 'SECTORCD', 'PRODUCT', 'BALANCE', 'CUSTCD'],
+    )
+    prev = prev[prev['PRODUCT'].isin(PRODUCT_FILTER)].copy()
+    prev = prev.rename(columns={'BALANCE': 'LASTBAL'})
+    print(f"  Previous after filter: {len(prev):,}")
 
-    print("[PROCESS] Merging previous and current periods...")
+    # Only keep the (acctno, noteno) keys that appear in BNM
+    keys = pd.concat([
+        curr[['ACCTNO', 'NOTENO', 'SECTORCD']],
+        prev[['ACCTNO', 'NOTENO', 'SECTORCD']],
+    ]).drop_duplicates()
+    print(f"  Distinct keys needing LNNOTE lookup: {len(keys):,}")
+
+    # Register keys in DuckDB
+    con.register('keys_df', keys)
+
+    print("[PROCESS] Reading LNNOTE – pruned columns, only matching keys...")
+    import pyreadstat
+    lnnote_parts = []
+    cols = ['ACCTNO', 'NOTENO', 'SECTOR', 'INTAMT', 'INTRATE',
+            'NETPROC', 'NOTETERM', 'INTEARN2']
+    with pyreadstat.read_file_in_chunks(
+        pyreadstat.read_sas7bdat, str(lnnote_path),
+        chunksize=500_000, encoding="latin1", usecols=cols,
+    ) as reader:
+        for i, (chunk, _) in enumerate(reader):
+            for c in chunk.columns:
+                if chunk[c].dtype == np.float64:
+                    chunk[c] = chunk[c].astype(np.float32)
+                elif chunk[c].dtype == np.int64:
+                    chunk[c] = chunk[c].astype(np.int32)
+            # Filter to matching keys via DuckDB join
+            con.register('chunk_df', chunk)
+            matched = con.execute("""
+                SELECT c.*
+                FROM chunk_df c
+                SEMI JOIN keys_df k
+                  ON c.ACCTNO = k.ACCTNO
+                 AND c.NOTENO = k.NOTENO
+            """).df()
+            con.unregister('chunk_df')
+            if len(matched) > 0:
+                lnnote_parts.append(matched)
+            if (i + 1) % 5 == 0:
+                print(f"    LNNOTE chunks read: {i+1}")
+            del chunk, matched
+            gc.collect()
+
+    lnnote = pd.concat(lnnote_parts, ignore_index=True) if lnnote_parts else pd.DataFrame(columns=cols)
+    del lnnote_parts
+    gc.collect()
+    print(f"  LNNOTE filtered: {len(lnnote):,}")
+
+    if SECTCD:
+        lnnote['SECTORCD'] = lnnote['SECTOR'].map(SECTCD)
+        lnnote = lnnote.dropna(subset=['SECTORCD'])
+    else:
+        lnnote['SECTORCD'] = lnnote['SECTOR'].astype(str)
+
+    print("[PROCESS] Computing EFFAPR...")
+    lnnote['EFFAPR'] = compute_effapr(
+        lnnote['INTAMT'].values, lnnote['INTRATE'].values,
+        lnnote['NETPROC'].values, lnnote['NOTETERM'].values,
+        lnnote['INTEARN2'].values,
+    )
+    lnnote = lnnote[['ACCTNO', 'NOTENO', 'SECTORCD', 'EFFAPR']]
+
+    # Merge BNM (current) with EFFAPR
+    curr_merged = curr.merge(lnnote, on=['ACCTNO', 'NOTENO', 'SECTORCD'], how='inner')
+    print(f"  Current merged with EFFAPR: {len(curr_merged):,}")
+
+    # Merge prev + current
     merged = pd.merge(
-        prev_renamed[['ACCTNO', 'NOTENO', 'SECTORCD', 'LASTBAL', 'CUSTCD']],
+        prev[['ACCTNO', 'NOTENO', 'SECTORCD', 'LASTBAL', 'CUSTCD']],
         curr_merged[['ACCTNO', 'NOTENO', 'SECTORCD', 'BALANCE', 'EFFAPR', 'CUSTCD']],
         on=['ACCTNO', 'NOTENO', 'SECTORCD'],
-        how='outer',
-        suffixes=('_prev', '_curr')
+        how='outer', suffixes=('_prev', '_curr'),
     )
-    print(f"  Merged rows: {len(merged):,}")
+    print(f"  Outer merged: {len(merged):,}")
 
-    print("[PROCESS] Computing DISBURSE/REPAID...")
-    merged['LASTBAL'] = merged['LASTBAL'].fillna(0)
-    merged['BALANCE'] = merged['BALANCE'].fillna(0)
-    merged['EFFAPR'] = merged['EFFAPR_curr'].fillna(merged['EFFAPR_prev']).fillna(0)
+    merged['LASTBAL'] = merged['LASTBAL'].fillna(0.0).astype(np.float64)
+    merged['BALANCE'] = merged['BALANCE'].fillna(0.0).astype(np.float64)
+    merged['EFFAPR'] = merged['EFFAPR_curr'].fillna(merged['EFFAPR_prev']).fillna(0.0)
     merged['CUSTCD'] = merged['CUSTCD_curr'].fillna(merged['CUSTCD_prev']).fillna('')
 
+    # DISBURSE / REPAID
+    both = (merged['LASTBAL'] > 0) & (merged['BALANCE'] > 0)
+    prev_only = (merged['LASTBAL'] > 0) & (merged['BALANCE'] == 0)
+    curr_only = (merged['LASTBAL'] == 0) & (merged['BALANCE'] > 0)
+
     merged['DISBURSE'] = 0.0
-    merged['REPAID'] = 0.0
-
-    mask_both = (merged['LASTBAL'] > 0) & (merged['BALANCE'] > 0)
-    merged.loc[mask_both, 'REPAID'] = np.where(
-        merged.loc[mask_both, 'LASTBAL'] > merged.loc[mask_both, 'BALANCE'],
-        merged.loc[mask_both, 'LASTBAL'] - merged.loc[mask_both, 'BALANCE'],
-        0.0
-    )
-    merged.loc[mask_both, 'DISBURSE'] = np.where(
-        merged.loc[mask_both, 'LASTBAL'] > merged.loc[mask_both, 'BALANCE'],
-        0.0,
-        merged.loc[mask_both, 'BALANCE'] - merged.loc[mask_both, 'LASTBAL']
-    )
-
-    mask_prev_only = (merged['LASTBAL'] > 0) & (merged['BALANCE'] == 0)
-    merged.loc[mask_prev_only, 'REPAID'] = merged.loc[mask_prev_only, 'LASTBAL']
-
-    mask_curr_only = (merged['LASTBAL'] == 0) & (merged['BALANCE'] > 0)
-    merged.loc[mask_curr_only, 'DISBURSE'] = merged.loc[mask_curr_only, 'BALANCE']
+    merged.loc[both, 'DISBURSE'] = np.where(
+        merged.loc[both, 'LASTBAL'] > merged.loc[both, 'BALANCE'], 0.0,
+        merged.loc[both, 'BALANCE'] - merged.loc[both, 'LASTBAL'])
+    merged.loc[curr_only, 'DISBURSE'] = merged.loc[curr_only, 'BALANCE']
 
     merged['PRODUCT'] = merged['DISBURSE'] * merged['EFFAPR']
-
-    print(f"  DISBURSE sum: {merged['DISBURSE'].sum():,.2f}")
-    print(f"  REPAID sum: {merged['REPAID'].sum():,.2f}")
-    print(f"  Records with DISBURSE > 0: {(merged['DISBURSE'] > 0).sum()}")
-
     merged = merged[merged['DISBURSE'] > 0].copy()
-    print(f"  After filtering DISBURSE > 0: {len(merged):,}")
+    print(f"  Records with DISBURSE > 0: {len(merged):,}")
 
     if len(merged) == 0:
-        print("[WARN] No records with DISBURSE > 0")
         return pd.DataFrame(columns=['SECTCD', 'DISBURSE', 'PRODUCT', 'CUSTCD'])
 
-    print("[PROCESS] Applying SECTA and SECTB formats...")
+    # Apply SECTA / SECTB
     rows = []
-    for _, row in merged.iterrows():
-        sectcd = row['SECTORCD']
-        if pd.isna(sectcd) or sectcd == '':
+    for _, r in merged.iterrows():
+        sc = r['SECTORCD']
+        if pd.isna(sc) or sc == '':
             continue
         if SECTA:
-            sect_a = SECTA.get(sectcd, '')
-            if sect_a and sect_a != ' ':
-                rows.append({
-                    'SECTCD': sect_a,
-                    'DISBURSE': row['DISBURSE'],
-                    'PRODUCT': row['PRODUCT'],
-                    'CUSTCD': row['CUSTCD']
-                })
+            a = SECTA.get(sc, '')
+            if a and a != ' ':
+                rows.append({'SECTCD': a, 'DISBURSE': r['DISBURSE'],
+                             'PRODUCT': r['PRODUCT'], 'CUSTCD': r['CUSTCD']})
         if SECTB:
-            sect_b = SECTB.get(sectcd, '')
-            if sect_b and sect_b != ' ':
-                rows.append({
-                    'SECTCD': sect_b,
-                    'DISBURSE': row['DISBURSE'],
-                    'PRODUCT': row['PRODUCT'],
-                    'CUSTCD': row['CUSTCD']
-                })
+            b = SECTB.get(sc, '')
+            if b and b != ' ':
+                rows.append({'SECTCD': b, 'DISBURSE': r['DISBURSE'],
+                             'PRODUCT': r['PRODUCT'], 'CUSTCD': r['CUSTCD']})
 
-    expanded = pd.DataFrame(rows)
-    print(f"  Expanded rows: {len(expanded):,}")
-    return expanded
+    con.close()
+    return pd.DataFrame(rows)
 
 # ----------------------------------------------------------------------
-# Summarise
+# Summarise + report
 # ----------------------------------------------------------------------
 
-def summarise(expanded, label, custcd_filter=None):
+def summarise(expanded, custcd_filter=None):
     if len(expanded) == 0:
         return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
-
     if custcd_filter is not None:
         expanded = expanded[expanded['CUSTCD'].astype(str).isin(custcd_filter)].copy()
         if len(expanded) == 0:
             return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
-
-    summary = expanded.groupby('SECTCD', as_index=False).agg({
-        'DISBURSE': 'sum',
-        'PRODUCT': 'sum'
-    })
-
-    summary = summary[summary['DISBURSE'] > 0].copy()
-    if len(summary) == 0:
+    s = expanded.groupby('SECTCD', as_index=False).agg(
+        DISBURSE=('DISBURSE', 'sum'), PRODUCT=('PRODUCT', 'sum'))
+    s = s[s['DISBURSE'] > 0].copy()
+    if len(s) == 0:
         return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
-
-    summary['WEIGHTED'] = summary['PRODUCT'] / summary['DISBURSE']
-    summary['WEIGHTED'] = summary['WEIGHTED'].fillna(0.0)
-    summary['BNMCODE'] = '673400000' + summary['SECTCD'].astype(str) + 'Y'
-    summary['AMOUNT'] = summary['DISBURSE']
-    summary = summary[['BNMCODE', 'AMOUNT', 'WEIGHTED']].sort_values('BNMCODE').reset_index(drop=True)
-    return summary
-
-# ----------------------------------------------------------------------
-# Report generation
-# ----------------------------------------------------------------------
+    s['WEIGHTED'] = s['PRODUCT'] / s['DISBURSE']
+    s['WEIGHTED'] = s['WEIGHTED'].fillna(0.0)
+    s['BNMCODE'] = '673400000' + s['SECTCD'].astype(str) + 'Y'
+    s['AMOUNT'] = s['DISBURSE']
+    return s[['BNMCODE', 'AMOUNT', 'WEIGHTED']].sort_values('BNMCODE').reset_index(drop=True)
 
 def write_report(df, title, rdate, fh):
-    fh.write(f"EIBWHP01: {title} AS AT {rdate}\n")
-    fh.write("\n")
-    fh.write("Obs    BNMCODE                         AMOUNT          WEIGHTED\n")
-    fh.write("\n")
-
+    fh.write(f"EIBWHP01: {title} AS AT {rdate}\n\n")
+    fh.write("Obs    BNMCODE                         AMOUNT          WEIGHTED\n\n")
     if len(df) == 0:
-        fh.write("  No records found\n\n")
-        return
-
-    for i, row in df.iterrows():
-        amt = f"{row['AMOUNT']:,.2f}"
-        wgt = f"{row['WEIGHTED']:.6f}" if row['WEIGHTED'] != 0 else "."
-        fh.write(f"{i+1:>4}  {row['BNMCODE']:<14}  {amt:>20}  {wgt:>12}\n")
+        fh.write("  No records found\n\n"); return
+    for i, r in df.iterrows():
+        amt = f"{r['AMOUNT']:,.2f}"
+        wgt = f"{r['WEIGHTED']:.6f}" if r['WEIGHTED'] != 0 else "."
+        fh.write(f"{i+1:>4}  {r['BNMCODE']:<14}  {amt:>20}  {wgt:>12}\n")
     fh.write("\n")
 
 # ----------------------------------------------------------------------
@@ -395,44 +325,30 @@ def write_report(df, title, rdate, fh):
 # ----------------------------------------------------------------------
 
 def main():
-    print(f"========== START JOB EIBWHP01 ==========")
-
+    print("========== START JOB EIBWHP01 ==========")
     reptdate = datetime.now() - timedelta(days=1)
-    macros = get_sas_macros(reptdate)
-    print(f"[DATE] Report: {macros['RDATE']}")
-    print(f"[DATE] REPTMON={macros['REPTMON']}, NOWK={macros['NOWK']}")
-    print(f"[DATE] REPTMON1={macros['REPTMON1']}, NOWK1={macros['NOWK1']}")
+    m = get_sas_macros(reptdate)
+    print(f"[DATE] {m['RDATE']}  REPTMON={m['REPTMON']} NOWK={m['NOWK']}")
 
-    curr_path = resolve_loan_file(macros['REPTMON'], macros['NOWK'], macros['REPTYEAR'])
-    prev_path = resolve_loan_file(macros['REPTMON1'], macros['NOWK1'], macros['REPTYEAR'])
-    lnnote_path = resolve_lnnote_file(macros['REPTMON'])
+    curr_path = resolve_loan_file(m['REPTMON'], m['NOWK'], m['REPTYEAR'])
+    prev_path = resolve_loan_file(m['REPTMON1'], m['NOWK1'], m['REPTYEAR'])
+    lnnote_path = resolve_lnnote_file(m['REPTMON'])
+    print(f"[INFO] Current : {curr_path.name}")
+    print(f"[INFO] Previous: {prev_path.name}")
+    print(f"[INFO] LNNOTE  : {lnnote_path.name}")
 
-    print(f"[INFO] Current BNM : {curr_path.name}")
-    print(f"[INFO] Previous BNM: {prev_path.name}")
-    print(f"[INFO] LNNOTE      : {lnnote_path.name}")
+    expanded = process(curr_path, prev_path, lnnote_path)
+    all_sum = summarise(expanded)
+    smi_sum = summarise(expanded, SMI_CUSTCD)
 
-    print("\n[READ] Loading files to parquet cache (if needed)...")
-    curr_parquet = read_sas_cached(curr_path)
-    prev_parquet = read_sas_cached(prev_path)
-    lnnote_parquet = read_sas_cached(lnnote_path)
-
-    expanded = process_data(curr_parquet, prev_parquet, lnnote_parquet)
-
-    print("\n[PROCESS] Summarising all customers...")
-    all_summary = summarise(expanded, "ALL")
-
-    print("[PROCESS] Summarising SMI (CUSTCD 66-69)...")
-    smi_summary = summarise(expanded, "SMI", custcd_filter=SMI_CUSTCD)
-
-    print(f"\n[OUTPUT] Writing report to {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(f"EIBWHP01 REPORT GENERATED {reptdate.strftime('%d-%m-%Y')}\n")
-        f.write(f"REPTMON: {macros['REPTMON']}, NOWK: {macros['NOWK']}\n")
+        f.write(f"REPTMON: {m['REPTMON']}, NOWK: {m['NOWK']}\n")
         f.write("=" * 80 + "\n\n")
-        write_report(all_summary, "REPORT ON PRODUCTS 131,132,720,725", macros['RDATE'], f)
-        write_report(smi_summary, "SMI ACCTS (CUSTCD 66,67,68,69)", macros['RDATE'], f)
+        write_report(all_sum, "REPORT ON PRODUCTS 131,132,720,725", m['RDATE'], f)
+        write_report(smi_sum, "SMI ACCTS (CUSTCD 66,67,68,69)", m['RDATE'], f)
 
-    print(f"  Output written: {OUTPUT_FILE}")
+    print(f"[DONE] {OUTPUT_FILE}")
     print("========== END JOB EIBWHP01 ==========")
 
 
@@ -441,6 +357,5 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"[JOB FAILED] {e}")
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         sys.exit(8)
