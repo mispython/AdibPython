@@ -6,7 +6,7 @@ the PBBLNFMT SAS format library. PBBLNFMT.py must sit next to this file
 (or be on PYTHONPATH).
 
 Note on REPTDATE: rather than reading the BNM.REPTDATE control dataset,
-this uses yesterday's date (datetime.now() - timedelta(days=1)), same as
+this uses a rolled date (datetime.now() - timedelta(days=6)), same as
 the original standalone Python script. See get_reptdate().
 
 Everything else follows the SAS DATA step / PROC SUMMARY logic line-for-line
@@ -30,7 +30,7 @@ from PBBLNFMT import SECTA as format_secta, SECTB as format_sectb
 # =====================================================
 
 LOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP01")
-ULOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP02/uloan09426.sas7bdat")
+ULOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP02")
 SPOOL_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP02")
 SPOOL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -60,9 +60,9 @@ EXCLUDED_SECTCD = "0210"
 #   68 = Non-resident-controlled SMI, 69 = Government-controlled SMI
 # The live data now stores CUSTCD under a NEWER scheme (confirmed against
 # actual loan/uloan data -- CUSTCD values are 41/42/43/44/46/47/48/49/51/...,
-# never 66-69). Per PBBLNFMT.CUSTCD_BASE_MAP / LNCUSTCD, those four old codes
-# map one-to-one onto the new codes below, preserving the original four-way
-# split with no further micro/small/medium subdivision:
+# never 66-69). Per PBBLNFMT.LNCUSTCD, those four old codes map one-to-one
+# onto the new codes below, preserving the original four-way split with no
+# further micro/small/medium subdivision:
 #   66->41, 67->44, 68->48, 69->52
 SMI_CUSTCD = ["41", "44", "48", "52"]
 
@@ -123,9 +123,9 @@ def compute_period_vars(reptdate: date) -> dict:
 
 def get_reptdate() -> date:
     """
-    Uses yesterday's date instead of reading the BNM.REPTDATE control
+    Uses a rolled date instead of reading the BNM.REPTDATE control
     dataset (matches the date logic from the original standalone Python
-    script: datetime.now() - timedelta(days=1)).
+    script: datetime.now() - timedelta(days=6)).
     """
     return (datetime.now() - timedelta(days=6)).date()
 
@@ -476,7 +476,7 @@ def run_job():
     # On disk these are loan{REPTMON}{NOWK}.sas7bdat / uloan{REPTMON}{NOWK}.sas7bdat.
     loan_prev_path = LOAN_DIR / f"loan{period['REPTMON1']}{period['NOWK1']}.sas7bdat"
     loan_curr_path = LOAN_DIR / f"loan{period['REPTMON']}{period['NOWK']}.sas7bdat"
-    uloan_curr_path = LOAN_DIR / f"uloan{period['REPTMON']}{period['NOWK']}.sas7bdat"
+    uloan_curr_path = ULOAN_DIR / f"uloan{period['REPTMON']}{period['NOWK']}.sas7bdat"
 
     for path in (loan_prev_path, loan_curr_path, uloan_curr_path):
         disp_shr(path)
