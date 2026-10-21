@@ -17,14 +17,12 @@ from datetime import datetime, timedelta
 # PATHS
 # ======================================================================
 
-BASE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS")
+INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP01")
+LNNOTE_INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
+OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP01")
+CACHE_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/cache/EIBWHP01")
 
-INPUT_DIR = BASE_DIR / "input/prod/EIBWHP01"
-LNNOTE_INPUT_DIR = BASE_DIR / "input/prod/EIBRCGCS"
-OUTPUT_DIR = BASE_DIR / "output/EIBWHP01"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-CACHE_DIR = BASE_DIR / "cache" / "EIBWHP01"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 OUTPUT_FILE = OUTPUT_DIR / "EIBWHP01.txt"
@@ -144,26 +142,19 @@ def read_sas_cached(sas_path):
 # ----------------------------------------------------------------------
 
 def resolve_loan_file(reptmon, nowk, reptyear):
-    """
-    Resolve loan file matching pattern: ln{reptmon}{nowk}{reptyear}.sas7bdat
-    Fallback to latest ln*.sas7bdat
-    """
     fname = f"ln{reptmon}{nowk}{reptyear}.sas7bdat"
     p = INPUT_DIR / fname
     if p.exists():
         return p
 
-    # Try with 'loan' prefix as fallback
     alt = INPUT_DIR / f"loan{reptmon}{nowk}.sas7bdat"
     if alt.exists():
         return alt
 
-    # Try glob for matching prefix
     candidates = list(INPUT_DIR.glob(f"ln{reptmon}{nowk}*.sas7bdat"))
     if candidates:
         return candidates[0]
 
-    # Latest any ln*/loan* file
     candidates = list(INPUT_DIR.glob("ln*.sas7bdat")) + list(INPUT_DIR.glob("loan*.sas7bdat"))
     if candidates:
         latest = max(candidates, key=lambda p: p.stat().st_mtime)
@@ -174,16 +165,11 @@ def resolve_loan_file(reptmon, nowk, reptyear):
 
 
 def resolve_lnnote_file(reptmon):
-    """
-    Resolve lnnote file matching pattern: enrh_ln_note_m{reptmon}.sas7bdat
-    Fallback to lnnote.sas7bdat
-    """
     fname = f"enrh_ln_note_m{reptmon}.sas7bdat"
     p = LNNOTE_INPUT_DIR / fname
     if p.exists():
         return p
 
-    # Fallback to lnnote in INPUT_DIR
     alt = INPUT_DIR / "lnnote.sas7bdat"
     if alt.exists():
         return alt
@@ -417,7 +403,6 @@ def main():
     print(f"[DATE] REPTMON={macros['REPTMON']}, NOWK={macros['NOWK']}")
     print(f"[DATE] REPTMON1={macros['REPTMON1']}, NOWK1={macros['NOWK1']}")
 
-    # Resolve input files
     curr_path = resolve_loan_file(macros['REPTMON'], macros['NOWK'], macros['REPTYEAR'])
     prev_path = resolve_loan_file(macros['REPTMON1'], macros['NOWK1'], macros['REPTYEAR'])
     lnnote_path = resolve_lnnote_file(macros['REPTMON'])
