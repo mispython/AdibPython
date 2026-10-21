@@ -19,47 +19,50 @@ OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP04"
 
 CHUNK_SIZE = 50000
 
-# Calculate REPTDATE
-CURRENT_DATE = datetime.now()
-if CURRENT_DATE.day <= 8:
-    REPTDATE = CURRENT_DATE.replace(day=8)
-elif CURRENT_DATE.day <= 15:
-    REPTDATE = CURRENT_DATE.replace(day=15)
-elif CURRENT_DATE.day <= 22:
-    REPTDATE = CURRENT_DATE.replace(day=22)
-else:
-    if CURRENT_DATE.month == 12:
-        REPTDATE = CURRENT_DATE.replace(year=CURRENT_DATE.year, month=12, day=31)
-    else:
-        next_month = CURRENT_DATE.replace(month=CURRENT_DATE.month + 1, day=1)
-        REPTDATE = next_month - timedelta(days=1)
+# =====================================================
+# REPORT DATE CALCULATION
+# =====================================================
+# Matches your pattern: yesterday, then derive MM / YY / WK from it.
+# SAS also needs REPTMON1 (previous month for WK1) and SDD (start day),
+# so we keep those derived values too.
 
-if REPTDATE.day == 8:
+REPORT_DATE = datetime.now() - timedelta(days=1)
+REPORT_MONTH = REPORT_DATE.strftime("%m")              # MM, e.g. "07"
+REPORT_YEAR  = REPORT_DATE.strftime("%y")              # YY, e.g. "26"
+REPORT_WEEK  = str((REPORT_DATE.day - 1) // 7 + 1)     # WK, e.g. "4"
+
+# SAS-original logic: SDD / WK / WK1 / MM1 derived from report day
+DAY = REPORT_DATE.day
+
+if DAY <= 8:
     SDD, WK, WK1 = 1, '1', '4'
-elif REPTDATE.day == 15:
+elif DAY <= 15:
     SDD, WK, WK1 = 9, '2', '1'
-elif REPTDATE.day == 22:
+elif DAY <= 22:
     SDD, WK, WK1 = 16, '3', '2'
 else:
     SDD, WK, WK1 = 23, '4', '3'
 
-MM = REPTDATE.month
+MM = int(REPORT_MONTH)                                 # month as int
 MM1 = MM - 1 if WK == '1' else MM
 if MM1 == 0:
     MM1 = 12
 
-REPTMON = f"{MM:02d}"
-REPTMON1 = f"{MM1:02d}"
-REPTYEAR = f"{REPTDATE.year % 100:02d}"  # YY format
+REPTMON  = f"{MM:02d}"                                 # e.g. "07"
+REPTMON1 = f"{MM1:02d}"                                # e.g. "06" or "07"
+REPTYEAR = REPORT_YEAR                                 # e.g. "26"
 
-# Input files
+# =====================================================
+# INPUT / OUTPUT PATHS
+# =====================================================
+
 INPUT_DATASETS = {
-    "LOAN_CURRENT": LOAN_DIR / f"loan{REPTMON}{WK}.sas7bdat",
-    "LOAN_PREVIOUS": LOAN_DIR / f"loan{REPTMON1}{WK1}.sas7bdat",
-    "ULOAN": ULOAN_DIR / f"uloan{REPTMON}{WK}{REPTYEAR}.sas7bdat",
+    "LOAN_CURRENT":  LOAN_DIR  / f"loan{REPTMON}{WK}.sas7bdat",
+    "LOAN_PREVIOUS": LOAN_DIR  / f"loan{REPTMON1}{WK1}.sas7bdat",
+    "ULOAN":         ULOAN_DIR / f"uloan{REPTMON}{WK}{REPTYEAR}.sas7bdat",
 }
 
-OUTPUT_DATASET = OUTPUT_DIR / f"EIBWHP04_{REPTDATE.strftime('%Y%m%d')}.txt"
+OUTPUT_DATASET = OUTPUT_DIR / f"EIBWHP04_{REPORT_DATE.strftime('%Y%m%d')}.txt"
 
 # =====================================================
 # IMPORT PBBLNFMT
@@ -76,7 +79,7 @@ except ImportError as e:
 
 def apply_sector_formats(sectorcd):
     """
-    Apply SECTA and SECTB formats — mirrors SAS:
+    SAS logic:
       SECTCD = PUT(SECTORCD, $SECTA.); IF SECTCD ^= ' ' THEN OUTPUT;
       SECTCD = PUT(SECTORCD, $SECTB.); IF SECTCD ^= ' ' THEN OUTPUT;
     """
@@ -87,7 +90,6 @@ def apply_sector_formats(sectorcd):
         return results
 
     if PBBLNFMT is None:
-        # Fallback: pass-through
         if sectorcd_str:
             results.append(sectorcd_str)
         return results
@@ -108,10 +110,9 @@ def apply_sector_formats(sectorcd):
 # =====================================================
 
 def read_sas_chunked(file_path, columns, chunk_size=CHUNK_SIZE):
-    file_str = str(file_path)
     reader = pyreadstat.read_file_in_chunks(
         pyreadstat.read_sas7bdat,
-        file_str,
+        str(file_path),
         usecols=columns,
         encoding='latin1',
         chunksize=chunk_size,
@@ -122,9 +123,8 @@ def read_sas_chunked(file_path, columns, chunk_size=CHUNK_SIZE):
 
 
 def read_sas_full(file_path, columns):
-    file_str = str(file_path)
     df, meta = pyreadstat.read_sas7bdat(
-        file_str,
+        str(file_path),
         usecols=columns,
         encoding='latin1',
         dates_as_pandas_datetime=True
@@ -140,11 +140,11 @@ def process_loan_data():
     valid_products = {131, 132, 720, 725}
 
     previous_columns = ['ACCTNO', 'NOTENO', 'SECTORCD', 'PRODUCT', 'BALANCE']
-    current_columns = ['ACCTNO', 'NOTENO', 'SECTORCD', 'PRODUCT', 'BALANCE',
-                       'APPRLIM2', 'AMTIND', 'CUSTCD']
-    uloan_columns = ['SECTORCD', 'DISBURSE', 'REPAID', 'APPRLIM2', 'AMTIND']
+    current_columns  = ['ACCTNO', 'NOTENO', 'SECTORCD', 'PRODUCT', 'BALANCE',
+                        'APPRLIM2', 'AMTIND', 'CUSTCD']
+    uloan_columns    = ['SECTORCD', 'DISBURSE', 'REPAID', 'APPRLIM2', 'AMTIND']
 
-    # ---- STEP 1: read previous period ----
+    # ---- STEP 1: previous period ----
     print("Reading previous period...")
     previous_df = read_sas_full(INPUT_DATASETS["LOAN_PREVIOUS"], columns=previous_columns)
     previous_df = previous_df[previous_df['PRODUCT'].isin(valid_products)].copy()
@@ -164,7 +164,7 @@ def process_loan_data():
     del previous_df
     gc.collect()
 
-    # ---- STEP 2: process current period ----
+    # ---- STEP 2: current period ----
     print("Processing current period...")
     previous_matched = set()
     alw_records = []
@@ -188,14 +188,11 @@ def process_loan_data():
 
                 if previous_balance is not None:
                     if previous_balance > current_balance:
-                        disburse = 0.0
-                        repaid = previous_balance - current_balance
+                        disburse, repaid = 0.0, previous_balance - current_balance
                     else:
-                        disburse = current_balance - previous_balance
-                        repaid = 0.0
+                        disburse, repaid = current_balance - previous_balance, 0.0
                 else:
-                    disburse = current_balance
-                    repaid = 0.0
+                    disburse, repaid = current_balance, 0.0
 
                 for sectcd in apply_sector_formats(str(row['SECTORCD'])):
                     if sectcd and sectcd.strip():
@@ -222,8 +219,7 @@ def process_loan_data():
         balance = previous_balances[key]
         if balance == 0.0:
             continue
-        sectorcd = key[2]
-        for sectcd in apply_sector_formats(sectorcd):
+        for sectcd in apply_sector_formats(key[2]):
             if sectcd and sectcd.strip():
                 alw_records.append({
                     'SECTCD': sectcd,
@@ -246,9 +242,9 @@ def process_loan_data():
         try:
             sectorcd = str(row['SECTORCD']) if pd.notna(row['SECTORCD']) else ''
             disburse = float(row['DISBURSE']) if pd.notna(row.get('DISBURSE')) else 0.0
-            repaid = float(row['REPAID']) if pd.notna(row.get('REPAID')) else 0.0
+            repaid   = float(row['REPAID'])   if pd.notna(row.get('REPAID'))   else 0.0
             apprlim2 = float(row['APPRLIM2']) if pd.notna(row.get('APPRLIM2')) else 0.0
-            amtind = str(row['AMTIND']).strip() if pd.notna(row.get('AMTIND')) else 'D'
+            amtind   = str(row['AMTIND']).strip() if pd.notna(row.get('AMTIND')) else 'D'
 
             for sectcd in apply_sector_formats(sectorcd):
                 if sectcd and sectcd.strip():
@@ -271,7 +267,7 @@ def process_loan_data():
     print(f"  Distinct SECTCD values: {len(distinct_sectcd)}")
     print(f"  Samples: {distinct_sectcd[:20]}")
 
-    # ---- STEP 5: aggregate ----
+    # ---- STEP 5: aggregate by SECTCD + AMTIND ----
     print("Aggregating...")
     summary = {}
     for rec in alw_records:
@@ -279,9 +275,9 @@ def process_loan_data():
         if key not in summary:
             summary[key] = {'DISBURSE': 0.0, 'REPAID': 0.0, 'APPRLIM2': 0.0, 'NOACCT': 0}
         summary[key]['DISBURSE'] += rec['DISBURSE']
-        summary[key]['REPAID'] += rec['REPAID']
+        summary[key]['REPAID']   += rec['REPAID']
         summary[key]['APPRLIM2'] += rec['APPRLIM2']
-        summary[key]['NOACCT'] += rec['NOACCT']
+        summary[key]['NOACCT']   += rec['NOACCT']
 
     del alw_records
     gc.collect()
@@ -311,7 +307,7 @@ def process_loan_data():
             'NOACCT': 0
         })
 
-    # ---- STEP 7: final aggregate ----
+    # ---- STEP 7: final aggregate by BNMCODE + AMTIND ----
     final_summary = {}
     for rec in bnm_records:
         key = (rec['BNMCODE'], rec['AMTIND'])
@@ -323,7 +319,7 @@ def process_loan_data():
     del summary, bnm_records
     gc.collect()
 
-    # ---- STEP 8: final format ----
+    # ---- STEP 8: DATA _NULL_ equivalent ----
     by_bnmcode = {}
     for (bnmcode, amtind), vals in final_summary.items():
         by_bnmcode.setdefault(bnmcode, {})[amtind] = vals
@@ -373,6 +369,10 @@ def write_output_file(path, records):
 
 def run_job():
     try:
+        print(f"REPORT_DATE: {REPORT_DATE.strftime('%Y-%m-%d')}  "
+              f"MM={REPORT_MONTH} YY={REPORT_YEAR} WK={REPORT_WEEK}  "
+              f"(SDD={SDD}, WK1={WK1}, REPTMON1={REPTMON1})")
+
         for name, path in INPUT_DATASETS.items():
             if not path.exists():
                 print(f"ERROR: Input file not found: {path}")
@@ -383,7 +383,6 @@ def run_job():
             OUTPUT_DATASET.unlink()
 
         records = process_loan_data()
-
         if not records:
             print("WARNING: No records generated!")
             return 4
@@ -405,5 +404,4 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    exit_code = run_job()
-    sys.exit(exit_code)
+    sys.exit(run_job())
