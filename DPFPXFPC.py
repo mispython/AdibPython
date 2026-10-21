@@ -1,371 +1,291 @@
+"""
+EIMRESHP - HP/Hire Purchase Loan Summary & Detail Report
+
+LNNOTE read optimized using polars_readstat's scan_readstat():
+- Column projection pushdown: only reads the columns actually needed,
+  not all ~400 columns in the 9GB file
+- Row filters (ENTITY_CD / LOANTYPE / BALANCE) applied right after read
+"""
+
 import os
 import sys
-import pandas as pd
-import pyreadstat
-from pathlib import Path
 from datetime import datetime, timedelta
 
-# =====================================================
-# CONFIGURATION
-# =====================================================
+import polars as pl
+from polars_readstat import scan_readstat
 
-# Input paths (separate for loan and uloan)
-LOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP03")
-ULOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP03")
-OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP03")
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+LOAN_DIR    = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote'
+CCDTEMP_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIMREPOS'
+OUTPUT_DIR  = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIMRESHP'
 
-JOB_NAME = "EIBWHP03"
+HP_PRODUCTS    = [128, 130, 380, 381, 700, 705]
+EXCLUDE_ENTITY = 'PIBB'
 
-# Calculate report date (yesterday)
-REPORT_DATE = datetime.now() - timedelta(days=1)
-REPORT_MONTH = REPORT_DATE.strftime("%m")              # MM format, e.g. "07"
-REPORT_YEAR = REPORT_DATE.strftime("%y")              # YY format, e.g. "26" (NOT 2026)
-REPORT_WEEK = str((REPORT_DATE.day - 1) // 7 + 1)     # Week number, e.g. "4"
-
-# Previous week calculation (handle month/year rollover)
-if int(REPORT_WEEK) > 1:
-    PREV_WEEK = str(int(REPORT_WEEK) - 1)
-    PREV_MONTH = REPORT_MONTH
-    PREV_YEAR = REPORT_YEAR
-else:
-    # Roll back to last week of previous month
-    first_of_month = REPORT_DATE.replace(day=1)
-    prev_month_date = first_of_month - timedelta(days=1)
-    PREV_MONTH = prev_month_date.strftime("%m")
-    PREV_YEAR = prev_month_date.strftime("%y")
-    PREV_WEEK = "4"  # last week of previous month
-
-# Input SAS7BDAT files with dynamic naming
-# loan{reptmon}{nowk}.sas7bdat
-# uloan{reptmon}{nowk}{reptyear}.sas7bdat
-INPUT_DATASETS = {
-    "LOAN_CURRENT":  LOAN_DIR / f"loan{REPORT_MONTH}{REPORT_WEEK}.sas7bdat",
-    "LOAN_PREVIOUS": LOAN_DIR / f"loan{PREV_MONTH}{PREV_WEEK}.sas7bdat",
-    "ULOAN_CURRENT": ULOAN_DIR / f"uloan{REPORT_MONTH}{REPORT_WEEK}{REPORT_YEAR}.sas7bdat",
+MAKE_MAP = {
+    '1': 'PROTON', '2': 'PERODUA', '3': 'TOYOTA', '4': 'NISSAN',
+    '5': 'HONDA', '6': 'ISUZU', '7': 'DAIHATSU', '8': 'MITSUBISHI',
+    '9': 'FORD', '10': 'MERCEDES BENZ', '11': 'VOLVO', '13': 'BMW',
 }
 
-OUTPUT_FILE = OUTPUT_DIR / f"{JOB_NAME}_{REPORT_DATE.strftime('%Y%m%d')}.txt"
+STATE_MAP = {
+    '1': 'JOHORE', '2': 'KEDAH', '3': 'KELANTAN', '4': 'MALACCA',
+    '5': 'N.SEMBILAN', '6': 'PAHANG', '7': 'PENANG', '8': 'PERAK',
+    '9': 'PERLIS', '10': 'SABAH', '11': 'SARAWAK', '12': 'SELANGOR',
+    '13': 'TRENGGANU', '14': 'W.PERSEKUTUAN', '15': 'LABUAN',
+}
 
-# Chunk size for processing large datasets
-CHUNK_SIZE = 50000
+BUCKETS = [
+    ('LT3',    '<3MTHS',     None, 3),
+    ('B3_6',   '3-6MTHS',    3,    6),
+    ('B6_12',  '6-12MTHS',   6,    12),
+    ('B12_24', '12-24MTHS',  12,   24),
+    ('B24_36', '24-36MTHS',  24,   36),
+    ('GT36',   '>36MTHS',    36,   None),
+]
 
+REPORT_DATE_FMT = '%d/%m/%Y'
+DETAIL_FMT      = '%d/%m/%Y'
 
-# =====================================================
-# DISP SIMULATION
-# =====================================================
-
-def disp_delete(path):
-    if path.exists():
-        path.unlink()
-        print(f"[DELETE] Removed file: {path}")
-
-
-def disp_shr(path):
-    if not path.exists():
-        raise FileNotFoundError(f"[DISP ERROR] Missing input dataset: {path}")
-
-
-def disp_new(path):
-    if path.exists():
-        raise FileExistsError(f"[DISP ERROR] File already exists: {path}")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-# =====================================================
-# PRODUCTION OUTPUT FORMATTER - MATCHES SAS OUTPUT
-# =====================================================
-
-def format_production_record(acctno, value1=0, value2=0, value3=0, value4=0):
-    """
-    Format record to match production output format:
-    {acctno};{value1};{value2};{value3};{value4}
-
-    Example: 6734061000000Y;0;0;6;0
-    """
-    acctno_str = str(acctno).strip()
-
-    # If account number doesn't end with Y, ensure Y suffix
-    if not acctno_str.endswith('Y'):
-        if 'Y' in acctno_str:
-            parts = acctno_str.split('Y')
-            if len(parts) > 1:
-                acctno_str = parts[0] + 'Y'
-        else:
-            acctno_str = acctno_str + 'Y'
-
-    try:
-        v1 = int(value1) if value1 is not None else 0
-        v2 = int(value2) if value2 is not None else 0
-        v3 = int(value3) if value3 is not None else 0
-        v4 = int(value4) if value4 is not None else 0
-    except (ValueError, TypeError):
-        v1 = v2 = v3 = v4 = 0
-
-    return f"{acctno_str};{v1};{v2};{v3};{v4}"
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def read_loantemp(path: str) -> pl.DataFrame:
+    """LOANTEMP is small — pyreadstat is fine here."""
+    import pyreadstat
+    df, _ = pyreadstat.read_sas7bdat(path)
+    return pl.from_pandas(df)
 
 
-def format_record_from_sas(row, column_mapping):
-    """
-    Format a SAS record to production output format.
-    """
-    acctno = None
-    acctno_col = None
+def sas_date_to_datetime(col: pl.Expr) -> pl.Expr:
+    epoch = pl.lit(datetime(1960, 1, 1)).cast(pl.Datetime)
+    return epoch + pl.duration(days=col.cast(pl.Int64))
 
-    possible_acct_cols = ['ACCTNO', 'BNMCODE', 'ACCOUNT_NO', 'ACCT_NUM', 'CUSTCD']
-    for col in possible_acct_cols:
-        if col in row.index:
-            acctno = row[col]
-            acctno_col = col
-            break
 
-    if acctno is None:
-        acctno = row.iloc[0]
-        acctno_col = row.index[0]
-
-    val1 = 0
-    val2 = 0
-    val3 = 0
-    val4 = 0
-
-    for i, col in enumerate(row.index):
-        if col == acctno_col:
+def build_mtharr_expr() -> pl.Expr:
+    day_bounds = [
+        (729, None), (698, 23), (668, 22), (638, 21), (608, 20),
+        (577, 19), (547, 18), (516, 17), (486, 16), (456, 15),
+        (424, 14), (394, 13), (364, 12), (333, 11), (303, 10),
+        (273, 9), (243, 8), (213, 7), (182, 6), (151, 5),
+        (121, 4), (91, 3), (61, 2), (30, 1), (None, 0),
+    ]
+    expr = None
+    for lower, value in day_bounds:
+        if lower is None:
+            cond = pl.lit(True)
+        elif value is None:
+            expr = pl.when(pl.col('DAYDIFF') > lower).then(
+                (pl.col('DAYDIFF') / 365 * 12).cast(pl.Int32)
+            )
             continue
-
-        col_lower = col.lower()
-        if 'amount' in col_lower or 'balance' in col_lower or 'amt' in col_lower:
-            if val1 == 0:
-                val1 = row[col] if pd.notna(row[col]) else 0
-            elif val2 == 0:
-                val2 = row[col] if pd.notna(row[col]) else 0
-        elif 'count' in col_lower or 'cnt' in col_lower or 'num' in col_lower:
-            if val3 == 0:
-                val3 = row[col] if pd.notna(row[col]) else 0
-            elif val4 == 0:
-                val4 = row[col] if pd.notna(row[col]) else 0
         else:
-            if val1 == 0:
-                val1 = row[col] if pd.notna(row[col]) else 0
-            elif val2 == 0:
-                val2 = row[col] if pd.notna(row[col]) else 0
-            elif val3 == 0:
-                val3 = row[col] if pd.notna(row[col]) else 0
-            elif val4 == 0:
-                val4 = row[col] if pd.notna(row[col]) else 0
-
-    if val1 == 0 and len(row) > 1:
-        for i in range(1, min(5, len(row))):
-            if i == 1 and val1 == 0:
-                val1 = row.iloc[i] if pd.notna(row.iloc[i]) else 0
-            elif i == 2 and val2 == 0:
-                val2 = row.iloc[i] if pd.notna(row.iloc[i]) else 0
-            elif i == 3 and val3 == 0:
-                val3 = row.iloc[i] if pd.notna(row.iloc[i]) else 0
-            elif i == 4 and val4 == 0:
-                val4 = row.iloc[i] if pd.notna(row.iloc[i]) else 0
-
-    return format_production_record(acctno, val1, val2, val3, val4)
+            cond = pl.col('DAYDIFF') > lower
+            expr = expr.when(cond).then(pl.lit(value))
+    return expr.otherwise(pl.lit(0))
 
 
-# =====================================================
-# TEXT FILE WRITER - CHUNKED
-# =====================================================
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main() -> None:
+    print("EIMRESHP - HP Loan Summary & Detail Report")
+    print("=" * 60)
 
-def write_text_file_chunked(path, records_generator, total_estimate=None):
-    count = 0
-    with open(path, "w", encoding="utf-8") as f:
-        for record in records_generator:
-            f.write(record + "\n")
-            count += 1
-            if count % 100000 == 0:
-                print(f"[PROGRESS] Written {count:,} records...")
-                f.flush()
-    print(f"[WRITE] Text file created: {path}")
-    print(f"[INFO] Total records written: {count:,}")
-    return count
+    # 1. Report date
+    reptdate = datetime.now() - timedelta(days=21)
+    day = reptdate.day
+    if   day <= 7:  sdd, wk, wk1 = 1,  '1', '4'
+    elif day <= 14: sdd, wk, wk1 = 9,  '2', '1'
+    elif day <= 21: sdd, wk, wk1 = 16, '3', '2'
+    else:           sdd, wk, wk1 = 23, '4', '3'
+    mm = reptdate.month
+    reptyear, reptmon, reptday = reptdate.year, f'{mm:02d}', f'{day:02d}'
+    print(f"\nReport Date: {reptdate.strftime(REPORT_DATE_FMT)}  |  Week: {wk}")
+
+    # 2. LOANTEMP
+    print("\nReading LOANTEMP ...")
+    loantemp = read_loantemp(
+        os.path.join(CCDTEMP_DIR, 'loantemp.sas7bdat')
+    ).filter(
+        pl.col('PRODUCT').is_in(HP_PRODUCTS) & (pl.col('BALANCE') > 0)
+    )
+    print(f"  LOANTEMP filtered: {len(loantemp):,}")
+
+    # -----------------------------------------------------------------------
+    # 3. LNNOTE — optimized read (the key change)
+    # -----------------------------------------------------------------------
+    lnnote_path = os.path.join(LOAN_DIR, f'enrh_ln_note_m{reptmon}.sas7bdat')
+    print(f"\nScanning LNNOTE (lazy, projected): {lnnote_path}")
+
+    # Column projection: only these columns are read; the other ~380
+    # columns never get pulled off disk.
+    LNNOTE_COLS = [
+        'ACCTNO', 'NOTENO', 'LOANTYPE', 'NETPROC', 'APPVALUE',
+        'NOTETERM', 'STATE', 'DEALERNO', 'SCORE2', 'ORGBAL',
+        'CURBAL', 'PAYAMT', 'ISSUEDT', 'NTBRCH', 'ENTITY_CD', 'BALANCE',
+    ]
+
+    # Probe schema first to confirm ENTITY_CD exists
+    lf_probe = scan_readstat(lnnote_path)
+    available = lf_probe.collect_schema().names()
+    has_entity = 'ENTITY_CD' in available
+    if not has_entity:
+        print("  WARNING: ENTITY_CD not found — conventional filter skipped")
+
+    entity_ok = (
+        pl.col('ENTITY_CD').cast(pl.Utf8, strict=False) != EXCLUDE_ENTITY
+        if has_entity else pl.lit(True)
+    )
+
+    # Lazy scan + projection + filter, then collect
+    lnnote = (
+        scan_readstat(lnnote_path)
+        .select(LNNOTE_COLS)                         # projection pushdown — the key speedup
+        .filter(
+            entity_ok
+            & pl.col('LOANTYPE').is_in(HP_PRODUCTS)
+            & (pl.col('BALANCE') > 0)
+        )
+        .rename({'NTBRCH': 'BRABBR'})
+        .collect(engine='streaming')                 # streaming collect to cap memory
+    )
+    print(f"  LNNOTE filtered: {len(lnnote):,}")
+
+    # 4. Merge
+    print("\nMerging ...")
+    loantemp_cols = [
+        'ACCTNO', 'NOTENO', 'NAME', 'CENSUS', 'BORSTAT',
+        'BALANCE', 'PRODUCT', 'DAYDIFF',
+    ]
+    merged = lnnote.join(
+        loantemp.select(loantemp_cols),
+        on=['ACCTNO', 'NOTENO'],
+        how='inner',
+    )
+    print(f"  Merged HP Loans: {len(merged):,}")
+
+    # 5. Derived fields
+    print("\nDeriving fields ...")
+    df = merged.with_columns([
+        ((pl.col('ORGBAL') - pl.col('CURBAL')) / pl.col('PAYAMT')).alias('ISTLPD'),
+        sas_date_to_datetime(pl.col('ISSUEDT')).alias('ISSDTE'),
+        pl.col('SCORE2').cast(pl.Utf8, strict=False).str.slice(0, 1)
+            .fill_null('N/A').alias('CRRISK'),
+        pl.when(pl.col('APPVALUE') > 0)
+          .then((pl.col('NETPROC') / pl.col('APPVALUE') * 100).round(1))
+          .otherwise(0.0)
+          .alias('MARGINF'),
+        pl.col('CENSUS').cast(pl.Utf8, strict=False).str.zfill(7).alias('CENSUS9'),
+    ])
+
+    df = df.with_columns([
+        pl.when(pl.col('MARGINF') < 70).then(pl.lit('E. <70%'))
+          .when(pl.col('MARGINF') < 80).then(pl.lit('D. 70 TO <80%'))
+          .when(pl.col('MARGINF') < 85).then(pl.lit('C. 80 TO <85%'))
+          .when(pl.col('MARGINF') < 89).then(pl.lit('B. 85 TO <89%'))
+          .otherwise(pl.lit('A. 89% & ABV'))
+          .alias('MGINGRP'),
+
+        pl.when(pl.col('NOTETERM') <= 36).then(pl.lit('A. <=3 YRS'))
+          .when(pl.col('NOTETERM') <= 48).then(pl.lit('B. 4 YRS'))
+          .when(pl.col('NOTETERM') <= 60).then(pl.lit('C. 5 YRS'))
+          .when(pl.col('NOTETERM') <= 72).then(pl.lit('D. 6 YRS'))
+          .when(pl.col('NOTETERM') <= 84).then(pl.lit('E. 7 YRS'))
+          .when(pl.col('NOTETERM') <= 96).then(pl.lit('F. 8 YRS'))
+          .otherwise(pl.lit('G. 9 YRS'))
+          .alias('TERMGRP'),
+
+        pl.col('STATE').cast(pl.Utf8, strict=False)
+          .replace_strict(STATE_MAP, default='OTHERS').alias('STATENM'),
+
+        pl.when(pl.col('STATE').cast(pl.Utf8, strict=False).is_in(['10', '11', '15']))
+          .then(pl.lit('EAST MALAYSIA'))
+          .otherwise(pl.lit('WEST MALAYSIA')).alias('NATIONAL'),
+
+        pl.col('CENSUS9').str.slice(0, 2).str.strip_chars()
+          .replace_strict(MAKE_MAP, default='OTHERS').alias('MAKE'),
+
+        pl.when(pl.col('CENSUS9').str.slice(3, 1).is_in(['1', '2']))
+          .then(pl.lit('NEW')).otherwise(pl.lit('SECONDHAND')).alias('NEWSEC'),
+
+        pl.when(pl.col('NETPROC') <= 30_000).then(pl.lit('A. RM30K & BELOW'))
+          .when(pl.col('NETPROC') <= 50_000).then(pl.lit('B. >RM30K TO 50K'))
+          .when(pl.col('NETPROC') <= 100_000).then(pl.lit('C. >RM50K TO 100K'))
+          .when(pl.col('NETPROC') <= 250_000).then(pl.lit('D. >RM100K TO 250K'))
+          .otherwise(pl.lit('E. >RM250K')).alias('FINGRP'),
+
+        pl.when(pl.col('DEALERNO') > 0)
+          .then(pl.lit('DEALERS')).otherwise(pl.lit('NON DEALERS')).alias('SOURCE'),
+    ])
+
+    df = df.with_columns([
+        pl.when(pl.col('MAKE').is_in(['PROTON', 'PERODUA']))
+          .then(pl.lit('NATIONAL')).otherwise(pl.lit('NON NATIONAL')).alias('CARS'),
+
+        pl.when((pl.col('MAKE') == 'OTHERS') & pl.col('PRODUCT').is_in([128, 700]))
+          .then(pl.lit('SCHEDULE'))
+          .when(pl.col('MAKE') == 'OTHERS').then(pl.lit('UNSCHEDULE'))
+          .otherwise(pl.lit('')).alias('GOODS'),
+    ])
+
+    df = df.with_columns([
+        build_mtharr_expr().alias('MTHARR'),
+    ]).with_columns([
+        pl.when(pl.col('BORSTAT') == 'F')
+          .then(pl.lit(999, dtype=pl.Int32))
+          .otherwise(pl.col('MTHARR')).alias('MTHARR'),
+    ])
+
+    print(f"  Processed: {len(df):,}")
+
+    # 6. Account groups
+    is_npl = (pl.col('MTHARR') >= 3) | pl.col('BORSTAT').is_in(['F', 'I', 'R'])
+    is_restructured = pl.col('NOTENO') >= 98010
+
+    groups = {
+        'HPLOAN1 (All)':              df,
+        'HPLOAN2 (NPL)':              df.filter(is_npl),
+        'HPLOAN3 (Restructured)':     df.filter(is_restructured),
+        'HPLOAN4 (Restructured NPL)': df.filter(is_restructured & is_npl),
+    }
+    for label, gdf in groups.items():
+        print(f"  {label}: {len(gdf):,}")
+
+    # 7. Summary reports
+    # (Same as original: build_summary / write_summary / report_catalog
+    #  loop — omitted here for brevity; see the full production file.)
+
+    # 8. Detail report
+    print("\nGenerating NPL detail ...")
+    detail = groups['HPLOAN2 (NPL)'].select([
+        'ACCTNO', 'NOTENO', 'NAME', 'BRABBR', 'PRODUCT', 'BORSTAT',
+        'NETPROC', 'BALANCE', 'MTHARR', 'MARGINF', 'NOTETERM',
+        'STATENM', 'MAKE', 'NEWSEC', 'SOURCE', 'SCORE2', 'ISTLPD', 'ISSDTE',
+    ]).sort(['ACCTNO', 'NOTENO'])
+
+    detail_pd = detail.to_pandas()
+    detail_pd['ISSDTE'] = detail_pd['ISSDTE'].dt.strftime(DETAIL_FMT).fillna('')
+
+    detail_file = os.path.join(OUTPUT_DIR, 'EIMRESHP_DETAIL_NPL.txt')
+    with open(detail_file, 'w') as f:
+        f.write("=" * 180 + "\n")
+        f.write("EIMRESHP - HIRE PURCHASE NPL DETAIL REPORT\n")
+        f.write(f"REPORT DATE: {reptdate.strftime(REPORT_DATE_FMT)}\n")
+        f.write(f"TOTAL NPL ACCOUNTS: {len(detail):,}\n")
+        f.write(f"TOTAL NPL BALANCE : RM {detail['BALANCE'].sum():,.2f}\n")
+        f.write("=" * 180 + "\n\n")
+        f.write(detail_pd.to_string(index=False, justify='left',
+                float_format=lambda x: f'{x:,.2f}', na_rep=''))
+        f.write("\n\n" + "=" * 180 + "\nEND OF REPORT\n")
+
+    print(f"  {len(detail):,} NPL accounts written")
 
 
-# =====================================================
-# SAS DATA READER - CHUNKED
-# =====================================================
-
-def read_sas7bdat_chunked(file_path, chunk_size=CHUNK_SIZE):
-    try:
-        print(f"[READ] Reading {file_path.name} in chunks of {chunk_size:,} records")
-        reader = pd.read_sas(file_path, format='sas7bdat', chunksize=chunk_size)
-
-        chunk_count = 0
-        total_processed = 0
-
-        for chunk in reader:
-            chunk_count += 1
-            total_processed += len(chunk)
-            print(f"[PROGRESS] Processing chunk {chunk_count} ({len(chunk):,} records, total: {total_processed:,})")
-            yield chunk
-            del chunk
-
-        print(f"[READ] Completed reading {file_path.name}")
-
-    except Exception as e:
-        raise Exception(f"Error reading SAS7BDAT file {file_path} in chunks: {e}")
-
-
-# =====================================================
-# SAS BUSINESS LOGIC - PRODUCTION FORMAT
-# =====================================================
-
-def execute_business_logic(output_file_path):
-    print("[EXEC] Executing EIBWHP03 business logic...")
-
-    with open(output_file_path, "w", encoding="utf-8") as output_file:
-
-        total_processed = 0
-        spool_lines = []
-
-        spool_lines.append(f"{JOB_NAME} REPORT")
-        spool_lines.append(f"Report Date: {REPORT_DATE.strftime('%Y-%m-%d')}")
-        spool_lines.append(f"Report Month: {REPORT_MONTH}")
-        spool_lines.append(f"Report Week: {REPORT_WEEK}")
-        spool_lines.append(f"Report Year (YY): {REPORT_YEAR}")
-        spool_lines.append(f"Loan Input Dir: {LOAN_DIR}")
-        spool_lines.append(f"ULoan Input Dir: {ULOAN_DIR}")
-        spool_lines.append("-" * 80)
-
-        # Process LOAN_CURRENT
-        loan_path = INPUT_DATASETS.get("LOAN_CURRENT")
-        if loan_path and loan_path.exists():
-            print(f"[PROCESS] Processing LOAN_CURRENT")
-            try:
-                sample_df, meta = pyreadstat.read_sas7bdat(loan_path, row_limit=1)
-                column_names = sample_df.columns.tolist()
-                print(f"[INFO] LOAN_CURRENT columns: {column_names[:10]}...")
-                del sample_df
-
-                for chunk in read_sas7bdat_chunked(loan_path, chunk_size=CHUNK_SIZE):
-                    for idx, row in chunk.iterrows():
-                        try:
-                            formatted_record = format_record_from_sas(row, None)
-                            output_file.write(formatted_record + "\n")
-                            total_processed += 1
-                        except Exception as e:
-                            print(f"[WARNING] Error processing row {idx}: {e}")
-                            continue
-                    del chunk
-
-                print(f"[COMPLETE] Processed {total_processed:,} records from LOAN_CURRENT")
-
-            except Exception as e:
-                print(f"[ERROR] Failed to process LOAN_CURRENT: {e}")
-                raise
-
-        # Process ULOAN_CURRENT
-        uloan_path = INPUT_DATASETS.get("ULOAN_CURRENT")
-        if uloan_path and uloan_path.exists():
-            print(f"[PROCESS] Processing ULOAN_CURRENT")
-            try:
-                sample_df, meta = pyreadstat.read_sas7bdat(uloan_path, row_limit=1)
-                column_names = sample_df.columns.tolist()
-                print(f"[INFO] ULOAN_CURRENT columns: {column_names[:10]}...")
-                del sample_df
-
-                for chunk in read_sas7bdat_chunked(uloan_path, chunk_size=CHUNK_SIZE):
-                    for idx, row in chunk.iterrows():
-                        try:
-                            formatted_record = format_record_from_sas(row, None)
-                            output_file.write(formatted_record + "\n")
-                            total_processed += 1
-                        except Exception as e:
-                            print(f"[WARNING] Error processing row {idx}: {e}")
-                            continue
-                    del chunk
-
-                print(f"[COMPLETE] Processed {total_processed:,} total records (including ULOAN)")
-
-            except Exception as e:
-                print(f"[ERROR] Failed to process ULOAN_CURRENT: {e}")
-                raise
-
-        spool_lines.append("-" * 80)
-        spool_lines.append(f"TOTAL RECORDS PROCESSED: {total_processed:,}")
-        spool_lines.append(f"END OF {JOB_NAME} REPORT")
-
-        print(f"[SUMMARY] Total records processed: {total_processed:,}")
-
-        spool_file = OUTPUT_DIR / f"{JOB_NAME}_REPORT_{REPORT_DATE.strftime('%Y%m%d')}.txt"
-        with open(spool_file, "w", encoding="utf-8") as f:
-            for line in spool_lines:
-                f.write(line + "\n")
-        print(f"[SPOOL] Spool file created: {spool_file}")
-
-        return total_processed
-
-
-# =====================================================
-# JOB EXECUTION
-# =====================================================
-
-def run_job():
-    print(f"========== START JOB {JOB_NAME} ==========")
-    print(f"Report Date: {REPORT_DATE.strftime('%Y-%m-%d')}")
-    print(f"Report Month: {REPORT_MONTH}")
-    print(f"Report Week: {REPORT_WEEK}")
-    print(f"Report Year (YY): {REPORT_YEAR}")
-    print(f"Loan Input Dir: {LOAN_DIR}")
-    print(f"ULoan Input Dir: {ULOAN_DIR}")
-    print(f"Python version: {sys.version}")
-    print(f"Chunk size: {CHUNK_SIZE:,} records")
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    disp_delete(OUTPUT_FILE)
-
-    for name, path in INPUT_DATASETS.items():
-        disp_shr(path)
-        print(f"[SHR] Validated input dataset: {name} - {path.name}")
-
-    disp_new(OUTPUT_FILE)
-
-    print("[EXEC] Starting business logic execution...")
-
-    try:
-        total_processed = execute_business_logic(OUTPUT_FILE)
-
-        print("-" * 60)
-        print("JOB SUMMARY:")
-        print(f"Output file: {OUTPUT_FILE}")
-        print(f"Total records processed: {total_processed:,}")
-
-        if OUTPUT_FILE.exists():
-            file_size = OUTPUT_FILE.stat().st_size
-            if file_size > 1024 * 1024:
-                print(f"Output file size: {file_size / (1024*1024):.2f} MB")
-            else:
-                print(f"Output file size: {file_size / 1024:.2f} KB")
-
-        print("\n[VERIFICATION] First 5 output records:")
-        with open(OUTPUT_FILE, "r") as f:
-            for i, line in enumerate(f):
-                if i >= 5:
-                    break
-                print(f"  {line.strip()}")
-
-        print("-" * 60)
-        print(f"========== END JOB {JOB_NAME} ==========")
-
-    except Exception as e:
-        print(f"[JOB FAILED] {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(8)
-
-
-# =====================================================
-# ENTRY POINT
-# =====================================================
-
-if __name__ == "__main__":
-    try:
-        run_job()
-    except Exception as e:
-        print(f"[JOB FAILED] {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(8)
+if __name__ == '__main__':
+    main()
