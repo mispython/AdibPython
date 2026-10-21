@@ -13,10 +13,10 @@ import PBBLNFMT
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-input_pbb_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
+input_pbb_path  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
 input_pibb_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
-brh_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP")
-output_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMBRAS")
+brh_dir         = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP")
+output_path     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMBRAS")
 output_path.mkdir(parents=True, exist_ok=True)
 
 # Only pull the columns we actually use. ENTITY_CD is required for the
@@ -32,8 +32,7 @@ CHUNKSIZE = 500_000
 # HPD codes
 # In the original SAS, &HPD was a macro variable resolved at compile time
 # from PBBLNFMT. The macro constant HPD = [128, 130, 131, 132, 380, 381,
-# 700, 705, 720, 725]. Note PBBLNFMT also defines a broader HP list; the
-# original driver used &HPD (not &HP) in this DATA step, so we use HPD.
+# 700, 705, 720, 725].
 #
 # We allow an env-var override so callers can reproduce whatever SAS passed
 # in without editing this file, but fall back to the documented PBBLNFMT.HPD.
@@ -48,8 +47,17 @@ else:
 
 # ---------------------------------------------------------------------------
 # Reporting date parameters (same day-of-month bucketing as SAS REPTDATE)
+#
+# NOTE: keep this aligned with the SAS MNILN.REPTDATE dataset. If you need to
+# test against a specific reporting date, override with REPTDATE_OVERRIDE
+# (format YYYY-MM-DD) rather than editing the offset below.
 # ---------------------------------------------------------------------------
-reptdate = datetime.datetime.now() - datetime.timedelta(days=20)
+_override = os.environ.get("REPTDATE_OVERRIDE", "").strip()
+if _override:
+    reptdate = datetime.datetime.strptime(_override, "%Y-%m-%d")
+else:
+    reptdate = datetime.datetime.now() - datetime.timedelta(days=1)
+
 day, month, year = reptdate.day, reptdate.month, reptdate.year
 
 if day == 8:
@@ -61,19 +69,19 @@ elif day == 22:
 else:
     sdd, wk, wk1 = 23, '4', '3'
 
-mm = month
+mm  = month
 mm1 = (12 if month == 1 else month - 1) if wk == '1' else month
 sdate = datetime.datetime(year, month, sdd)
 
 global_vars = {
-    'NOWK': wk,
-    'NOWK1': wk1,
-    'REPTMON': f"{mm:02d}",
+    'NOWK':     wk,
+    'NOWK1':    wk1,
+    'REPTMON':  f"{mm:02d}",
     'REPTMON1': f"{mm1:02d}",
     'REPTYEAR': str(year),
-    'REPTDAY': f"{day:02d}",
-    'RDATE': reptdate.strftime('%d%m%y'),
-    'SDATE': sdate.strftime('%d%m%y'),
+    'REPTDAY':  f"{day:02d}",
+    'RDATE':    reptdate.strftime('%d%m%y'),
+    'SDATE':    sdate.strftime('%d%m%y'),
 }
 
 print("Global variables:", global_vars)
@@ -159,17 +167,32 @@ def read_lnnote(filepath: Path, reptmon: int, reptyear: int,
     return pl.DataFrame()
 
 
-def read_brh_lookup(brh_path: Path) -> pl.DataFrame:
+def _resolve_lkp_branch_path(brh_dir: Path) -> Path | None:
+    """LKP_BRANCH may be a directory (containing a .sas7bdat) or a file.
+    Return the actual .sas7bdat file to read, or None if not found."""
+    candidates = [
+        brh_dir / "LKP_BRANCH",                    # exact name, no ext
+        brh_dir / "LKP_BRANCH.sas7bdat",           # exact name + ext
+        brh_dir / "LKP_BRANCH" / "lkp_branch.sas7bdat",
+        brh_dir / "LKP_BRANCH" / "LKP_BRANCH.sas7bdat",
+        brh_dir / "lkp_branch.sas7bdat",
+    ]
+    for c in candidates:
+        if c.exists() and c.is_file():
+            return c
+    return None
+
+
+def read_brh_lookup(brh_dir: Path) -> pl.DataFrame:
     """Read LKP_BRANCH and reduce to the BRANCH / BRABBR pairs used in the
-    original BRHDATA step. If the lookup file is not present, fall back to
-    PBBELF.BRCHCD_MAP (same content the SAS BRHFILE provided)."""
-    if brh_path.exists():
+    original BRHDATA step. Falls back to PBBELF.BRCHCD_MAP if not found."""
+    lkp_file = _resolve_lkp_branch_path(brh_dir)
+    if lkp_file is not None:
         try:
-            brh_df, _ = pyreadstat.read_sas7bdat(str(brh_path))
+            brh_df, _ = pyreadstat.read_sas7bdat(str(lkp_file))
             brh = pl.from_pandas(brh_df)
             # Normalise column names (SAS often stores them upper case)
             brh = brh.rename({c: c.upper() for c in brh.columns})
-            # Accept either BRABBR or BRCHNAME style names
             if 'BRABBR' not in brh.columns:
                 for cand in ('BRCHNAME', 'BRANCH_NAME', 'BRNM'):
                     if cand in brh.columns:
@@ -179,10 +202,10 @@ def read_brh_lookup(brh_path: Path) -> pl.DataFrame:
                 pl.col('BRANCH').cast(pl.Int64),
                 pl.col('BRABBR').cast(pl.Utf8),
             ])
-            print(f"Loaded branch lookup from {brh_path}: {brh.height} rows")
+            print(f"Loaded branch lookup from {lkp_file}: {brh.height} rows")
             return brh
         except Exception as exc:
-            print(f"WARNING: failed to read {brh_path} ({exc}); "
+            print(f"WARNING: failed to read {lkp_file} ({exc}); "
                   f"falling back to PBBELF.BRCHCD_MAP")
 
     brh_data = [{"BRANCH": k, "BRABBR": v} for k, v in PBBELF.BRCHCD_MAP.items()]
@@ -196,14 +219,24 @@ def read_brh_lookup(brh_path: Path) -> pl.DataFrame:
 # Read + filter both LNNOTE sources.
 #   pbb  -> conventional only (ENTITY_CD != 'PIBB')
 #   pibb -> islamic only      (ENTITY_CD == 'PIBB')
+#
+# Files are per-month: enrh_ln_note_m{REPTMON}.sas7bdat
 # ---------------------------------------------------------------------------
-reptmon_int = int(global_vars['REPTMON'])
+reptmon_str = global_vars['REPTMON']          # e.g. "08"
+reptmon_int = int(reptmon_str)
 reptyear_int = int(global_vars['REPTYEAR'])
 
-lnnote_pbb = read_lnnote(input_pbb_path / "enrh_ln_note_m{reptmon}.sas7bdat",
-                         reptmon_int, reptyear_int, "conventional")
-lnnote_pibb = read_lnnote(input_pibb_path / "enrh_ln_note_m{reptmon}.sas7bdat",
-                          reptmon_int, reptyear_int, "islamic")
+lnnote_filename = f"enrh_ln_note_m{reptmon_str}.sas7bdat"
+print(f"Reading LNNOTE file: {lnnote_filename}")
+
+lnnote_pbb = read_lnnote(
+    input_pbb_path / lnnote_filename,
+    reptmon_int, reptyear_int, "conventional",
+)
+lnnote_pibb = read_lnnote(
+    input_pibb_path / lnnote_filename,
+    reptmon_int, reptyear_int, "islamic",
+)
 
 lnnote_combined = pl.concat([lnnote_pbb, lnnote_pibb], how="diagonal")
 
@@ -222,13 +255,13 @@ if not lnnote_combined.is_empty():
     ])
 
     # *** AVERAGE PER BR BASE ON 30% OF TOTAL ***
-    brh_df = read_brh_lookup(brh_path / "LKP_BRANCH").filter(
+    brh_df = read_brh_lookup(brh_dir).filter(
         (pl.col('BRANCH') < 900)
         & (~pl.col('BRANCH').is_in([1, 99, 100, 218]))
     )
 
-    nobr = brh_df.height
-    noacct = loan_df.height
+    nobr    = brh_df.height
+    noacct  = loan_df.height
     noacrel = round(noacct * 0.3 / nobr) if nobr > 0 else 0
     print(f"Number of branches: {nobr}")
     print(f"Number of accounts: {noacct}")
@@ -267,11 +300,11 @@ if not lnnote_combined.is_empty():
         avgacc += 1
         if avgacc <= row['AVGNO']:
             issmth = f"{row['ISSMTH']:02d}"
-            issyr = f"{row['ISSYR']}"
+            issyr  = f"{row['ISSYR']}"
             acctno = str(row.get('ACCTNO', '')).ljust(10)[:10]
-            name = str(row.get('NAME', '')).ljust(30)[:30]
-            issdt = row['ISSDT'].strftime('%d%m%Y')
-            brabb = str(row.get('BRABBR', '')).ljust(3)[:3]
+            name   = str(row.get('NAME',   '')).ljust(30)[:30]
+            issdt  = row['ISSDT'].strftime('%d%m%Y')
+            brabb  = str(row.get('BRABBR', '')).ljust(3)[:3]
             newsec = str(row.get('NEWSEC', ''))
 
             output_lines.append(
@@ -283,9 +316,9 @@ if not lnnote_combined.is_empty():
     print(f"Generated BRTXT1.txt with {len(output_lines)} records")
 
     # Intermediate outputs for debugging
-    loan_df.write_csv(output_path / "LOAN.txt", separator="|")
+    loan_df.write_csv(output_path / "LOAN.txt",   separator="|")
     loan11_df.write_csv(output_path / "LOAN11.txt", separator="|")
-    loan1_df.write_csv(output_path / "LOAN1.txt", separator="|")
+    loan1_df.write_csv(output_path / "LOAN1.txt",  separator="|")
 
 else:
     print("No LNNOTE data found after filtering")
