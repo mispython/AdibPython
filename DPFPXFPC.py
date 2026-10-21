@@ -29,7 +29,8 @@ from PBBLNFMT import SECTA as format_secta, SECTB as format_sectb
 # CONFIGURATION
 # =====================================================
 
-LOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP02")
+LOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP01")
+ULOAN_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP02/uloan09426.sas7bdat")
 SPOOL_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP02")
 SPOOL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -126,7 +127,7 @@ def get_reptdate() -> date:
     dataset (matches the date logic from the original standalone Python
     script: datetime.now() - timedelta(days=1)).
     """
-    return (datetime.now() - timedelta(days=1)).date()
+    return (datetime.now() - timedelta(days=6)).date()
 
 # =====================================================
 # DISP SIMULATION
