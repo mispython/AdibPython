@@ -1,11 +1,35 @@
-========== START JOB EIBWHP02 ==========
-[INFO] REPTDATE=2026-10-15 -> {'NOWK': '2', 'NOWK1': '1', 'REPTMON': '10', 'REPTMON1': '10', 'REPTYEAR': '2026', 'REPTDAY': '15', 'RDATE': '15/10/26', 'SDATE': '09/10/26'}
-[SHR] Validated input dataset: loan101.sas7bdat
-[SHR] Validated input dataset: loan102.sas7bdat
-[SHR] Validated input dataset: uloan102.sas7bdat
-[READ] loan101.sas7bdat: 2658344 rows, 10 cols (usecols=['ACCTNO', 'NOTENO', 'SECTORCD', 'PRODUCT', 'NOTETERM', 'BALANCE', 'PRODCD', 'CUSTCD', 'AMTIND', 'BRANCH'], num_processes=4)
-[READ] loan102.sas7bdat: 2664794 rows, 13 cols (usecols=['ACCTNO', 'NOTENO', 'SECTORCD', 'PRODUCT', 'NOTETERM', 'EARNTERM', 'BALANCE', 'APPRDATE', 'APPRLIM2', 'PRODCD', 'CUSTCD', 'AMTIND', 'BRANCH'], num_processes=4)
-[READ] uloan102.sas7bdat: 24781 rows, 3 cols (usecols=['SECTORCD_ORI', 'CUSTCD', 'BRANCH'], num_processes=4)
-[SYSOUT] Report written to spool: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP02/EIBWHP02_20261021_190453.txt
-========== END JOB EIBWHP02 ==========
-You have mail in /var/spool/mail/sas_edw_dev
+def run_job():
+    from datetime import datetime as dt
+
+    print(f"========== START JOB {JOB_NAME} ==========")
+
+    reptdate = get_reptdate()
+    period = compute_period_vars(reptdate)
+    print(f"[INFO] REPTDATE={reptdate} -> {period}")
+
+    # SAS naming:
+    #   BNM.LOAN&REPTMON1&NOWK1  (prior period)
+    #   BNM.LOAN&REPTMON&NOWK    (current period)
+    #   BNM.ULOAN&REPTMON&NOWK   (current period)
+    # On disk:
+    #   loan{REPTMON}{NOWK}.sas7bdat
+    #   uloan{REPTMON}{NOWK}{REPTYEAR}.sas7bdat
+    loan_prev_path = LOAN_DIR / f"loan{period['REPTMON1']}{period['NOWK1']}.sas7bdat"
+    loan_curr_path = LOAN_DIR / f"loan{period['REPTMON']}{period['NOWK']}.sas7bdat"
+    uloan_curr_path = ULOAN_DIR / f"uloan{period['REPTMON']}{period['NOWK']}{period['REPTYEAR']}.sas7bdat"
+
+    for path in (loan_prev_path, loan_curr_path, uloan_curr_path):
+        disp_shr(path)
+        print(f"[SHR] Validated input dataset: {path.name}")
+
+    alw = build_alw(loan_prev_path, loan_curr_path)
+    ualw = build_ualw(uloan_curr_path)
+    combined = pd.concat([alw, ualw], ignore_index=True)
+
+    alwloan = summarize(combined)
+
+    spool_file = SPOOL_DIR / f"{JOB_NAME}_{dt.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    report = build_report(alwloan, period["RDATE"])
+    write_sysout(report, spool_file)
+
+    print(f"========== END JOB {JOB_NAME} ==========")
