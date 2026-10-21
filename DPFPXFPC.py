@@ -1,371 +1,474 @@
-#!/usr/bin/env python3
-"""
-EIBWHP01 - Products 131,132,720,725 Report (All & SMI)
-No-cache version: direct .sas7bdat reads via pyreadstat with column pruning.
-"""
-
-import sys
-import gc
-import duckdb
-import pandas as pd
-import numpy as np
+import polars as pl
+import pyreadstat
 from pathlib import Path
-from datetime import datetime, timedelta
+import datetime
+import sys
+import os
 
-# ======================================================================
-# PATHS
-# ======================================================================
+# TODO: adjust this path if PBBELF.py / PBBLNFMT.py live somewhere else
+sys.path.insert(0, "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS")
+import PBBELF
+import PBBLNFMT
 
-INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP01")
-LNNOTE_INPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
-OUTPUT_DIR = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBWHP01")
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+input_pbb_path  = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
+input_pibb_path = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS")
+brh_dir         = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIHPTOP")
+output_path     = Path("/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMBRAS")
+output_path.mkdir(parents=True, exist_ok=True)
 
-OUTPUT_FILE = OUTPUT_DIR / "EIBWHP01.txt"
+LNNOTE_COLUMNS = [
+    "ISSUEDT", "LOANTYPE", "PAIDIND", "BALANCE", "NTBRCH",
+    "COLLDESC", "ACCTNO", "NAME", "ENTITY_CD",
+]
 
-LOAN_FILE = INPUT_DIR / "intg_ln_loan.sas7bdat"
+CHUNKSIZE = 500_000
 
-PRODUCT_FILTER = [131, 132, 720, 725]
-SMI_CUSTCD = ['66', '67', '68', '69']
+# ---------------------------------------------------------------------------
+# HPD codes
+# ---------------------------------------------------------------------------
+_hpd_raw = os.environ.get("HPD_CODES", "").strip()
+if _hpd_raw:
+    HPD_VALUES = [int(v.strip()) for v in _hpd_raw.split(",") if v.strip()]
+    print(f"HPD_CODES overridden from environment: {HPD_VALUES}")
+else:
+    HPD_VALUES = list(PBBLNFMT.HPD)
+    print(f"Using HPD from PBBLNFMT.HPD: {HPD_VALUES}")
 
-# If the single loan file contains both current and previous snapshots,
-# set PERIOD_COL to the column that distinguishes them and PERIOD_CUR /
-# PERIOD_PRV to the values. Set PERIOD_COL = None if it's a single snapshot
-# (in which case current == previous and DISBURSE will be 0).
-PERIOD_COL = None          # e.g. 'REPTMON' or 'SNAPSHOT'
-PERIOD_CUR = None          # e.g. '09'
-PERIOD_PRV = None          # e.g. '08'
+# Also expose HP for reference during diagnostics
+HP_VALUES = list(getattr(PBBLNFMT, "HP", HPD_VALUES))
 
-# ----------------------------------------------------------------------
-# PBBLNFMT formats
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Reporting date parameters
+# ---------------------------------------------------------------------------
+_override = os.environ.get("REPTDATE_OVERRIDE", "").strip()
+if _override:
+    reptdate = datetime.datetime.strptime(_override, "%Y-%m-%d")
+else:
+    reptdate = datetime.datetime.now() - datetime.timedelta(days=1)
 
-def _fmt(maybe_callable):
-    if callable(maybe_callable):
+day, month, year = reptdate.day, reptdate.month, reptdate.year
+
+if day == 8:
+    sdd, wk, wk1 = 1, '1', '4'
+elif day == 15:
+    sdd, wk, wk1 = 9, '2', '1'
+elif day == 22:
+    sdd, wk, wk1 = 16, '3', '2'
+else:
+    sdd, wk, wk1 = 23, '4', '3'
+
+mm  = month
+mm1 = (12 if month == 1 else month - 1) if wk == '1' else month
+sdate = datetime.datetime(year, month, sdd)
+
+global_vars = {
+    'NOWK':     wk,
+    'NOWK1':    wk1,
+    'REPTMON':  f"{mm:02d}",
+    'REPTMON1': f"{mm1:02d}",
+    'REPTYEAR': str(year),
+    'REPTDAY':  f"{day:02d}",
+    'RDATE':    reptdate.strftime('%d%m%y'),
+    'SDATE':    sdate.strftime('%d%m%y'),
+}
+
+print("Global variables:", global_vars)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def parse_issuedt(df: pl.DataFrame) -> pl.DataFrame:
+    """Parse ISSUEDT defensively. Handles:
+      - numeric MDDYYYYDDD / MMDDYYYYDDD (Z11 style)
+      - real SAS date (stored as days since 1960) — detected by small value
+      - string 'YYYY-MM-DD' or 'MM/DD/YYYY'
+
+    Produces: ISSDT (pl.Date), ISSMTH (Int32), ISSYR (Int32)
+    """
+    src = df['ISSUEDT']
+
+    # Case A: it's already a pl.Date / pl.Datetime (pyreadstat converts these)
+    if src.dtype in (pl.Date, pl.Datetime):
+        return df.with_columns([
+            src.cast(pl.Date).alias('ISSDT'),
+            src.dt.month().cast(pl.Int32).alias('ISSMTH'),
+            src.dt.year().cast(pl.Int32).alias('ISSYR'),
+        ])
+
+    # Case B: string column — try ISO-ish parse first
+    if src.dtype == pl.Utf8:
+        # Try 'YYYY-MM-DD'
         try:
-            return maybe_callable()
-        except Exception as e:
-            print(f"[WARN] format call failed: {e}")
-            return {}
-    return maybe_callable or {}
+            d = pl.col('ISSUEDT').str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+            return df.with_columns([
+                d.alias('ISSDT'),
+                d.dt.month().cast(pl.Int32).alias('ISSMTH'),
+                d.dt.year().cast(pl.Int32).alias('ISSYR'),
+            ])
+        except Exception:
+            pass
+        # Fall through to Z11 numeric handling below
 
-SECTCD, SECTA, SECTB = {}, {}, {}
-try:
-    import PBBLNFMT
-    SECTCD = _fmt(getattr(PBBLNFMT, 'SECTCD', {}))
-    SECTA = _fmt(getattr(PBBLNFMT, 'SECTA', {}))
-    SECTB = _fmt(getattr(PBBLNFMT, 'SECTB', {}))
-    print(f"[FMT] SECTCD={len(SECTCD)} SECTA={len(SECTA)} SECTB={len(SECTB)}")
-except ImportError:
-    print("[WARN] PBBLNFMT not found")
-except Exception as e:
-    print(f"[WARN] PBBLNFMT error: {e}")
+    # Case C: numeric — could be Z11 encoded OR real SAS date (days since 1960)
+    numeric = pl.col('ISSUEDT').cast(pl.Int64, strict=False)
+    # SAS date offset: 1960-01-01 = day 0. A modern date (2026) ≈ 24xxx days.
+    # Z11 encoded values are ~10^9..10^10. So a threshold of 10^6 cleanly
+    # separates "real SAS date" from "Z11 string".
+    is_sas_date = numeric < 1_000_000
 
-# ----------------------------------------------------------------------
-# Date logic
-# ----------------------------------------------------------------------
-
-def get_sas_macros(reptdate):
-    day = reptdate.day
-    if day == 8:
-        sdd, wk, wk1 = 1, '1', '4'
-    elif day == 15:
-        sdd, wk, wk1 = 9, '2', '1'
-    elif day == 22:
-        sdd, wk, wk1 = 16, '3', '2'
-    else:
-        sdd, wk, wk1 = 23, '4', '3'
-    mm = reptdate.month
-    mm1 = mm - 1 if wk == '1' else mm
-    if mm1 == 0:
-        mm1 = 12
-    start = datetime(reptdate.year, mm, 1)
-    sdate = start + timedelta(days=sdd - 1)
-    return {
-        'NOWK': wk, 'NOWK1': wk1,
-        'REPTMON': f"{mm:02d}", 'REPTMON1': f"{mm1:02d}",
-        'REPTDAY': f"{day:02d}",
-        'REPTYEAR': f"{reptdate.year:04d}",
-        'RDATE': reptdate.strftime("%d/%m/%y"),
-        'SDATE': sdate.strftime("%d/%m/%y"),
-    }
-
-# ----------------------------------------------------------------------
-# Direct read helpers
-# ----------------------------------------------------------------------
-
-def read_sas_columns(path, columns):
-    import pyreadstat
-    df, _ = pyreadstat.read_sas7bdat(
-        str(path), usecols=columns, encoding="latin1",
+    # Build both possibilities and choose with when/then
+    # Z11 path
+    z11 = (
+        numeric.cast(pl.Utf8)
+        .str.pad_start(11, '0')
     )
-    for c in df.columns:
-        if df[c].dtype == np.float64:
-            df[c] = df[c].astype(np.float32)
-        elif df[c].dtype == np.int64:
-            df[c] = df[c].astype(np.int32)
+    z11_mm = z11.str.slice(0, 2).cast(pl.Int32, strict=False)
+    z11_dd = z11.str.slice(2, 2).cast(pl.Int32, strict=False)
+    z11_yy = z11.str.slice(4, 4).cast(pl.Int32, strict=False)
+    z11_date = pl.date(z11_yy, z11_mm, z11_dd)
+
+    # SAS-date path (days since 1960-01-01)
+    sas_date = pl.date(1960, 1, 1) + pl.duration(days=numeric)
+
+    is_sdt = (
+        pl.when(is_sas_date).then(sas_date).otherwise(z11_date)
+        .alias('ISSDT')
+    )
+
+    return df.with_columns([
+        is_sdt,
+    ]).with_columns([
+        pl.col('ISSDT').dt.month().cast(pl.Int32).alias('ISSMTH'),
+        pl.col('ISSDT').dt.year().cast(pl.Int32).alias('ISSYR'),
+    ])
+
+
+def diagnose_chunk(pdf, reptmon: int, reptyear: int, label: str):
+    """Print distribution stats for each filter column so we can see
+    exactly which filter is rejecting rows."""
+    print(f"\n{'='*70}")
+    print(f"DIAGNOSTIC [{label}]  — rows in chunk: {len(pdf):,}")
+    print(f"{'='*70}")
+    print(f"columns: {list(pdf.columns)}")
+
+    df = pl.from_pandas(pdf)
+
+    # --- LOANTYPE ---
+    print("\n--- LOANTYPE ---")
+    print(f"dtype: {df['LOANTYPE'].dtype}")
+    lt = df['LOANTYPE'].cast(pl.Int64, strict=False)
+    print(f"nulls: {lt.null_count()}")
+    uniq_lt = df.select(pl.col('LOANTYPE').cast(pl.Int64, strict=False).unique().sort())
+    print(f"distinct count: {uniq_lt.height}")
+    print(f"sample distinct (first 30): {uniq_lt.head(30).to_series().to_list()}")
+    print(f"  in HPD_VALUES {HPD_VALUES}: {lt.is_in(HPD_VALUES).sum()}")
+    print(f"  in HP_VALUES  {HP_VALUES}:  {lt.is_in(HP_VALUES).sum()}")
+
+    # --- PAIDIND ---
+    print("\n--- PAIDIND ---")
+    print(f"dtype: {df['PAIDIND'].dtype}")
+    print(f"value counts (top 10): "
+          f"{df.group_by('PAIDIND').len().sort('len', descending=True).head(10).to_dicts()}")
+    print(f"  != 'P' (raw): {df.filter(pl.col('PAIDIND') != 'P').height}")
+    print(f"  != 'P' (trim+upper): "
+          f"{df.filter(pl.col('PAIDIND').cast(pl.Utf8).str.strip_chars().str.to_uppercase() != 'P').height}")
+
+    # --- BALANCE ---
+    print("\n--- BALANCE ---")
+    print(f"dtype: {df['BALANCE'].dtype}")
+    b = df['BALANCE'].cast(pl.Float64, strict=False)
+    print(f"nulls: {b.null_count()}")
+    print(f"min: {b.min()}, max: {b.max()}")
+    print(f"  < 0: {b.lt(0).sum()}")
+    print(f"  == 0: {b.eq(0).sum()}")
+    print(f"  > 0: {b.gt(0).sum()}")
+
+    # --- ENTITY_CD ---
+    print("\n--- ENTITY_CD ---")
+    print(f"dtype: {df['ENTITY_CD'].dtype}")
+    print(f"value counts (top 10): "
+          f"{df.group_by('ENTITY_CD').len().sort('len', descending=True).head(10).to_dicts()}")
+    ec = df['ENTITY_CD'].cast(pl.Utf8)
+    print(f"  == 'PIBB' (exact):    {df.filter(ec == 'PIBB').height}")
+    print(f"  == 'PIBB' (trim):     {df.filter(ec.str.strip_chars() == 'PIBB').height}")
+    print(f"  != 'PIBB' (trim):     {df.filter(ec.str.strip_chars() != 'PIBB').height}")
+
+    # --- ISSUEDT ---
+    print("\n--- ISSUEDT ---")
+    print(f"dtype: {df['ISSUEDT'].dtype}")
+    print(f"sample raw (first 10): {df['ISSUEDT'].head(10).to_list()}")
+    try:
+        parsed = parse_issuedt(df)
+        print(f"parsed ISSDT  sample: {parsed['ISSDT'].head(5).to_list()}")
+        print(f"parsed ISSMTH sample: {parsed['ISSMTH'].head(10).to_list()}")
+        print(f"parsed ISSYR  sample: {parsed['ISSYR'].head(10).to_list()}")
+        print(f"  ISSMTH distribution: "
+              f"{parsed.group_by('ISSMTH').len().sort('ISSMTH').to_dicts()}")
+        print(f"  ISSYR  distribution: "
+              f"{parsed.group_by('ISSYR').len().sort('ISSYR').to_dicts()}")
+        print(f"  ISSMTH == {reptmon}: {parsed.filter(pl.col('ISSMTH') == reptmon).height}")
+        print(f"  ISSYR  == {reptyear}: {parsed.filter(pl.col('ISSYR') == reptyear).height}")
+        both = parsed.filter(
+            (pl.col('ISSMTH') == reptmon) & (pl.col('ISSYR') == reptyear)
+        ).height
+        print(f"  BOTH (ISSMTH=={reptmon} & ISSYR=={reptyear}): {both}")
+    except Exception as e:
+        print(f"  PARSE FAILED: {type(e).__name__}: {e}")
+
+    # --- Combined funnel ---
+    print("\n--- FILTER FUNNEL (conventional, i.e. ENTITY_CD != 'PIBB' trim) ---")
+    parsed = parse_issuedt(df)
+    ec_trim = pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars()
+    lt_i64  = pl.col('LOANTYPE').cast(pl.Int64, strict=False)
+    paid_s  = pl.col('PAIDIND').cast(pl.Utf8).str.strip_chars().str.to_uppercase()
+    bal_f   = pl.col('BALANCE').cast(pl.Float64, strict=False)
+
+    n0 = parsed.height
+    n1 = parsed.filter(ec_trim != 'PIBB').height
+    n2 = parsed.filter((ec_trim != 'PIBB') & lt_i64.is_in(HPD_VALUES)).height
+    n3 = parsed.filter((ec_trim != 'PIBB') & lt_i64.is_in(HPD_VALUES) & (paid_s != 'P')).height
+    n4 = parsed.filter((ec_trim != 'PIBB') & lt_i64.is_in(HPD_VALUES) & (paid_s != 'P') & (bal_f > 0)).height
+    n5 = parsed.filter(
+        (ec_trim != 'PIBB') & lt_i64.is_in(HPD_VALUES) & (paid_s != 'P') & (bal_f > 0)
+        & (pl.col('ISSMTH') == reptmon) & (pl.col('ISSYR') == reptyear)
+    ).height
+    print(f"  total rows:                              {n0:,}")
+    print(f"  after ENTITY_CD != 'PIBB':               {n1:,}")
+    print(f"  after LOANTYPE in HPD:                   {n2:,}")
+    print(f"  after PAIDIND != 'P':                    {n3:,}")
+    print(f"  after BALANCE > 0:                       {n4:,}")
+    print(f"  after ISSMTH=={reptmon} & ISSYR=={reptyear}:           {n5:,}")
+
+    print(f"{'='*70}\n")
+
+
+def filter_lnnote_chunk(pdf, reptmon: int, reptyear: int, entity_filter: str) -> pl.DataFrame:
+    """Apply ENTITY_CD split + LOANTYPE/PAIDIND/BALANCE/ISSUE-month filters."""
+    if pdf.empty:
+        return pl.DataFrame()
+
+    df = pl.from_pandas(pdf)
+    df = parse_issuedt(df)
+
+    # Defensive: trim entity code and normalise
+    ec = pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars()
+    lt = pl.col('LOANTYPE').cast(pl.Int64, strict=False)
+    paid = pl.col('PAIDIND').cast(pl.Utf8).str.strip_chars().str.to_uppercase()
+    bal = pl.col('BALANCE').cast(pl.Float64, strict=False)
+
+    if entity_filter == "conventional":
+        df = df.filter(ec != 'PIBB')
+    elif entity_filter == "islamic":
+        df = df.filter(ec == 'PIBB')
+    else:
+        raise ValueError(f"Unknown entity_filter: {entity_filter}")
+
+    df = df.filter(
+        lt.is_in(HPD_VALUES)
+        & (paid != 'P')
+        & (bal > 0)
+        & (pl.col('ISSMTH') == reptmon)
+        & (pl.col('ISSYR') == reptyear)
+    )
     return df
 
-# ----------------------------------------------------------------------
-# File resolution
-# ----------------------------------------------------------------------
 
-def resolve_loan_file():
-    if LOAN_FILE.exists():
-        return LOAN_FILE
-    raise FileNotFoundError(f"Loan file not found: {LOAN_FILE}")
+def read_lnnote(filepath: Path, reptmon: int, reptyear: int,
+                entity_filter: str, chunksize: int = CHUNKSIZE,
+                diagnose: bool = False) -> pl.DataFrame:
+    """Stream a .sas7bdat file in chunks, filter immediately, print
+    diagnostics on the first chunk."""
+    if not filepath.exists():
+        print(f"File not found, skipping: {filepath}")
+        return pl.DataFrame()
 
-
-def resolve_lnnote_file(reptmon):
-    p = LNNOTE_INPUT_DIR / f"enrh_ln_note_m{reptmon}.sas7bdat"
-    if p.exists():
-        return p
-    alt = INPUT_DIR / "lnnote.sas7bdat"
-    if alt.exists():
-        return alt
-    raise FileNotFoundError(f"LNNOTE not found: {p}")
-
-# ----------------------------------------------------------------------
-# EFFAPR (vectorised)
-# ----------------------------------------------------------------------
-
-def compute_effapr(intamt, intrate, netproc, noteterm, intearn2):
-    noteterm = noteterm.astype(float)
-    intamt = intamt.astype(float)
-    intrate = intrate.astype(float)
-    netproc = netproc.astype(float)
-    intearn2 = intearn2.astype(float)
-
-    intamt = np.where(intamt <= 0.01,
-                      (intrate * netproc * noteterm / 1200) - intearn2,
-                      intamt)
-    term = np.where(noteterm > 12, 12.0, noteterm)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        efffact = (100 * term * intamt) / (noteterm * (netproc + intearn2))
-        denom = (noteterm * noteterm * efffact) + (150 * term * (noteterm + 1))
-        effapr = (noteterm * efffact * (300 * term + noteterm * efffact)) / denom
-    effapr = np.where((noteterm == 0) | ~np.isfinite(effapr), 0.0, effapr)
-    return effapr.astype(np.float32)
-
-# ----------------------------------------------------------------------
-# Main processing
-# ----------------------------------------------------------------------
-
-def process(curr_path, lnnote_path):
-    import pyreadstat
-    con = duckdb.connect(":memory:")
-
-    print(f"[PROCESS] Reading loan file: {curr_path.name}")
-
-    # Columns for loan file. Include PERIOD_COL if it exists.
-    loan_cols = ['ACCTNO', 'NOTENO', 'PRODUCT', 'BALANCE', 'CUSTCD']
-    if PERIOD_COL:
-        loan_cols.append(PERIOD_COL)
-
-    loan = read_sas_columns(curr_path, loan_cols)
-    loan = loan[loan['PRODUCT'].isin(PRODUCT_FILTER)].copy()
-    print(f"  Loan after PRODUCT filter: {len(loan):,}")
-
-    # Split into current / previous snapshots
-    if PERIOD_COL:
-        curr = loan[loan[PERIOD_COL].astype(str) == str(PERIOD_CUR)].copy()
-        prev = loan[loan[PERIOD_COL].astype(str) == str(PERIOD_PRV)].copy()
-        print(f"  Current snapshot rows : {len(curr):,}")
-        print(f"  Previous snapshot rows: {len(prev):,}")
-    else:
-        curr = loan.copy()
-        prev = loan.copy()
-        print(f"  No PERIOD_COL — current and previous use the same snapshot "
-              f"({len(curr):,} rows each)")
-
-    # Prepare column names
-    curr = curr[['ACCTNO', 'NOTENO', 'BALANCE', 'CUSTCD']].copy()
-    prev = prev[['ACCTNO', 'NOTENO', 'BALANCE', 'CUSTCD']].copy()
-    prev = prev.rename(columns={'BALANCE': 'LASTBAL'})
-
-    # Keys for LNNOTE lookup
-    keys = pd.concat([
-        curr[['ACCTNO', 'NOTENO']],
-        prev[['ACCTNO', 'NOTENO']],
-    ]).drop_duplicates()
-    print(f"  Distinct (ACCTNO, NOTENO) keys needing LNNOTE: {len(keys):,}")
-    con.register('keys_df', keys)
-
-    # Stream LNNOTE, filter to matching keys only
-    print("[PROCESS] Reading LNNOTE – pruned columns, only matching keys...")
-    lnnote_parts = []
-    ln_cols = ['ACCTNO', 'NOTENO', 'SECTOR', 'INTAMT', 'INTRATE',
-               'NETPROC', 'NOTETERM', 'INTEARN2']
-    with pyreadstat.read_file_in_chunks(
-        pyreadstat.read_sas7bdat, str(lnnote_path),
-        chunksize=500_000, encoding="latin1", usecols=ln_cols,
-    ) as reader:
-        for i, (chunk, _) in enumerate(reader):
-            for c in chunk.columns:
-                if chunk[c].dtype == np.float64:
-                    chunk[c] = chunk[c].astype(np.float32)
-                elif chunk[c].dtype == np.int64:
-                    chunk[c] = chunk[c].astype(np.int32)
-            con.register('chunk_df', chunk)
-            matched = con.execute("""
-                SELECT c.*
-                FROM chunk_df c
-                SEMI JOIN keys_df k
-                  ON c.ACCTNO = k.ACCTNO
-                 AND c.NOTENO = k.NOTENO
-            """).df()
-            con.unregister('chunk_df')
-            if len(matched) > 0:
-                lnnote_parts.append(matched)
-            if (i + 1) % 5 == 0:
-                print(f"    LNNOTE chunks read: {i+1}")
-            del chunk, matched
-            gc.collect()
-
-    lnnote = (pd.concat(lnnote_parts, ignore_index=True)
-              if lnnote_parts else pd.DataFrame(columns=ln_cols))
-    del lnnote_parts
-    gc.collect()
-    print(f"  LNNOTE filtered: {len(lnnote):,}")
-
-    # Derive SECTORCD from SECTOR
-    if SECTCD:
-        lnnote['SECTORCD'] = lnnote['SECTOR'].map(SECTCD)
-        lnnote = lnnote.dropna(subset=['SECTORCD'])
-    else:
-        lnnote['SECTORCD'] = lnnote['SECTOR'].astype(str)
-
-    print("[PROCESS] Computing EFFAPR...")
-    lnnote['EFFAPR'] = compute_effapr(
-        lnnote['INTAMT'].values, lnnote['INTRATE'].values,
-        lnnote['NETPROC'].values, lnnote['NOTETERM'].values,
-        lnnote['INTEARN2'].values,
+    filtered_chunks = []
+    reader = pyreadstat.read_file_in_chunks(
+        pyreadstat.read_sas7bdat,
+        str(filepath),
+        chunksize=chunksize,
+        usecols=LNNOTE_COLUMNS,
     )
-    lnnote = lnnote[['ACCTNO', 'NOTENO', 'SECTORCD', 'EFFAPR']]
 
-    # Merge current with EFFAPR (INNER = SAS "IF A")
-    curr_merged = curr.merge(lnnote, on=['ACCTNO', 'NOTENO'], how='inner')
-    print(f"  Current merged with EFFAPR: {len(curr_merged):,}")
+    total_rows = 0
+    first = True
+    for pdf_chunk, _meta in reader:
+        total_rows += len(pdf_chunk)
+        if first and diagnose:
+            diagnose_chunk(pdf_chunk, reptmon, reptyear,
+                           label=f"{filepath.name} [{entity_filter}]")
+        first = False
+        filtered = filter_lnnote_chunk(pdf_chunk, reptmon, reptyear, entity_filter)
+        if filtered.height > 0:
+            filtered_chunks.append(filtered)
 
-    # Outer merge previous + current on ACCTNO, NOTENO
-    merged = pd.merge(
-        prev[['ACCTNO', 'NOTENO', 'LASTBAL', 'CUSTCD']],
-        curr_merged[['ACCTNO', 'NOTENO', 'SECTORCD', 'BALANCE', 'EFFAPR', 'CUSTCD']],
-        on=['ACCTNO', 'NOTENO'],
-        how='outer', suffixes=('_prev', '_curr'),
+    kept = sum(c.height for c in filtered_chunks)
+    print(f"{filepath.name} [{entity_filter}]: scanned {total_rows:,} rows, "
+          f"kept {kept:,} after filter")
+
+    if filtered_chunks:
+        return pl.concat(filtered_chunks, how="diagonal")
+    return pl.DataFrame()
+
+
+def _resolve_lkp_branch_path(brh_dir: Path):
+    """LKP_BRANCH may be a file or a directory containing a .sas7bdat."""
+    candidates = [
+        brh_dir / "LKP_BRANCH",
+        brh_dir / "LKP_BRANCH.sas7bdat",
+        brh_dir / "LKP_BRANCH" / "lkp_branch.sas7bdat",
+        brh_dir / "LKP_BRANCH" / "LKP_BRANCH.sas7bdat",
+        brh_dir / "lkp_branch.sas7bdat",
+    ]
+    for c in candidates:
+        if c.exists() and c.is_file():
+            return c
+    return None
+
+
+def read_brh_lookup(brh_dir: Path) -> pl.DataFrame:
+    """Read LKP_BRANCH; fall back to PBBELF.BRCHCD_MAP."""
+    lkp_file = _resolve_lkp_branch_path(brh_dir)
+    if lkp_file is not None:
+        try:
+            brh_df, _ = pyreadstat.read_sas7bdat(str(lkp_file))
+            brh = pl.from_pandas(brh_df)
+            brh = brh.rename({c: c.upper() for c in brh.columns})
+            if 'BRABBR' not in brh.columns:
+                for cand in ('BRCHNAME', 'BRANCH_NAME', 'BRNM'):
+                    if cand in brh.columns:
+                        brh = brh.rename({cand: 'BRABBR'})
+                        break
+            brh = brh.select([
+                pl.col('BRANCH').cast(pl.Int64),
+                pl.col('BRABBR').cast(pl.Utf8),
+            ])
+            print(f"Loaded branch lookup from {lkp_file}: {brh.height} rows")
+            return brh
+        except Exception as exc:
+            print(f"WARNING: failed to read {lkp_file} ({exc}); "
+                  f"falling back to PBBELF.BRCHCD_MAP")
+
+    brh_data = [{"BRANCH": k, "BRABBR": v} for k, v in PBBELF.BRCHCD_MAP.items()]
+    brh = pl.DataFrame(brh_data)
+    print(f"Using PBBELF.BRCHCD_MAP as branch lookup: {brh.height} rows")
+    return brh
+
+
+# ---------------------------------------------------------------------------
+# *** A/C RELEASED FOR THE MTH ***
+# ---------------------------------------------------------------------------
+reptmon_str  = global_vars['REPTMON']
+reptmon_int  = int(reptmon_str)
+reptyear_int = int(global_vars['REPTYEAR'])
+
+lnnote_filename = f"enrh_ln_note_m{reptmon_str}.sas7bdat"
+print(f"Reading LNNOTE file: {lnnote_filename}")
+
+# Set diagnose=True to see detailed breakdown on the first chunk.
+DIAGNOSE = os.environ.get("DIAGNOSE", "1") == "1"
+
+lnnote_pbb = read_lnnote(
+    input_pbb_path / lnnote_filename,
+    reptmon_int, reptyear_int, "conventional",
+    diagnose=DIAGNOSE,
+)
+lnnote_pibb = read_lnnote(
+    input_pibb_path / lnnote_filename,
+    reptmon_int, reptyear_int, "islamic",
+    diagnose=False,   # already diagnosed the file on the conventional pass
+)
+
+lnnote_combined = pl.concat([lnnote_pbb, lnnote_pibb], how="diagonal")
+
+if not lnnote_combined.is_empty():
+    loan_df = lnnote_combined.with_columns([
+        # NEWSEC from COLLDESC position 38 (SAS 1-based -> python idx 37)
+        pl.when(pl.col('COLLDESC').cast(pl.Utf8).str.slice(37, 1).is_in(['N', 'R']))
+        .then(pl.lit('N'))
+        .otherwise(pl.lit('S'))
+        .alias('NEWSEC'),
+        # BRABBR from NTBRCH via PBBELF.format_brchcd
+        pl.col('NTBRCH').cast(pl.Int64, strict=False)
+        .map_elements(PBBELF.format_brchcd, return_dtype=pl.Utf8)
+        .alias('BRABBR'),
+    ])
+
+    # *** AVERAGE PER BR BASE ON 30% OF TOTAL ***
+    brh_df = read_brh_lookup(brh_dir).filter(
+        (pl.col('BRANCH') < 900)
+        & (~pl.col('BRANCH').is_in([1, 99, 100, 218]))
     )
-    print(f"  Outer merged: {len(merged):,}")
 
-    merged['LASTBAL'] = merged['LASTBAL'].fillna(0.0).astype(np.float64)
-    merged['BALANCE'] = merged['BALANCE'].fillna(0.0).astype(np.float64)
-    merged['EFFAPR'] = merged['EFFAPR_curr'].fillna(merged['EFFAPR_prev']).fillna(0.0)
-    merged['CUSTCD'] = merged['CUSTCD_curr'].fillna(merged['CUSTCD_prev']).fillna('')
+    nobr    = brh_df.height
+    noacct  = loan_df.height
+    noacrel = round(noacct * 0.3 / nobr) if nobr > 0 else 0
+    print(f"Number of branches: {nobr}")
+    print(f"Number of accounts: {noacct}")
+    print(f"Average accounts per branch: {noacrel}")
 
-    both = (merged['LASTBAL'] > 0) & (merged['BALANCE'] > 0)
-    curr_only = (merged['LASTBAL'] == 0) & (merged['BALANCE'] > 0)
+    # *** COMPARE RELEASE PER BR AND AVERAGE PER BR ***
+    loan11_df = (
+        loan_df.group_by('BRABBR')
+        .agg(pl.len().alias('NOACCT'))
+        .with_columns(
+            pl.col('NOACCT').mul(0.3).round().cast(pl.Int64).alias('AVGNO_temp')
+        )
+        .with_columns(
+            pl.when(pl.col('AVGNO_temp') < noacrel)
+            .then(pl.lit(noacrel))
+            .otherwise(pl.col('AVGNO_temp'))
+            .alias('AVGNO')
+        )
+        .drop('AVGNO_temp')
+    )
 
-    merged['DISBURSE'] = 0.0
-    merged.loc[both, 'DISBURSE'] = np.where(
-        merged.loc[both, 'LASTBAL'] > merged.loc[both, 'BALANCE'], 0.0,
-        merged.loc[both, 'BALANCE'] - merged.loc[both, 'LASTBAL'])
-    merged.loc[curr_only, 'DISBURSE'] = merged.loc[curr_only, 'BALANCE']
+    loan1_df = loan_df.join(loan11_df, on='BRABBR', how='left')
 
-    merged['PRODUCT'] = merged['DISBURSE'] * merged['EFFAPR']
-    merged = merged[merged['DISBURSE'] > 0].copy()
-    print(f"  Records with DISBURSE > 0: {len(merged):,}")
+    # *** GENERATE TEXT FILE TO LOTUS NOTES SERVER ***
+    loan_sorted = loan1_df.sort('BRABBR')
 
-    if len(merged) == 0:
-        con.close()
-        return pd.DataFrame(columns=['SECTCD', 'DISBURSE', 'PRODUCT', 'CUSTCD'])
+    output_lines = []
+    current_brabb = None
+    avgacc = 0
 
-    rows = []
-    for _, r in merged.iterrows():
-        sc = r['SECTORCD']
-        if pd.isna(sc) or sc == '':
-            continue
-        if SECTA:
-            a = SECTA.get(sc, '')
-            if a and a != ' ':
-                rows.append({'SECTCD': a, 'DISBURSE': r['DISBURSE'],
-                             'PRODUCT': r['PRODUCT'], 'CUSTCD': r['CUSTCD']})
-        if SECTB:
-            b = SECTB.get(sc, '')
-            if b and b != ' ':
-                rows.append({'SECTCD': b, 'DISBURSE': r['DISBURSE'],
-                             'PRODUCT': r['PRODUCT'], 'CUSTCD': r['CUSTCD']})
+    for row in loan_sorted.iter_rows(named=True):
+        if row['BRABBR'] != current_brabb:
+            current_brabb = row['BRABBR']
+            avgacc = 0
 
-    con.close()
-    return pd.DataFrame(rows)
+        avgacc += 1
+        if avgacc <= row['AVGNO']:
+            issmth = f"{row['ISSMTH']:02d}"
+            issyr  = f"{row['ISSYR']}"
+            acctno = str(row.get('ACCTNO', '')).ljust(10)[:10]
+            name   = str(row.get('NAME',   '')).ljust(30)[:30]
+            issdt  = row['ISSDT'].strftime('%d%m%Y')
+            brabb  = str(row.get('BRABBR', '')).ljust(3)[:3]
+            newsec = str(row.get('NEWSEC', ''))
 
-# ----------------------------------------------------------------------
-# Summarise + report
-# ----------------------------------------------------------------------
+            output_lines.append(
+                f"{issmth}{issyr}{acctno}{name}{issdt}{brabb}{newsec}"
+            )
 
-def summarise(expanded, custcd_filter=None):
-    if len(expanded) == 0:
-        return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
-    if custcd_filter is not None:
-        expanded = expanded[expanded['CUSTCD'].astype(str).isin(custcd_filter)].copy()
-        if len(expanded) == 0:
-            return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
-    s = expanded.groupby('SECTCD', as_index=False).agg(
-        DISBURSE=('DISBURSE', 'sum'), PRODUCT=('PRODUCT', 'sum'))
-    s = s[s['DISBURSE'] > 0].copy()
-    if len(s) == 0:
-        return pd.DataFrame(columns=['BNMCODE', 'AMOUNT', 'WEIGHTED'])
-    s['WEIGHTED'] = s['PRODUCT'] / s['DISBURSE']
-    s['WEIGHTED'] = s['WEIGHTED'].fillna(0.0)
-    s['BNMCODE'] = '673400000' + s['SECTCD'].astype(str) + 'Y'
-    s['AMOUNT'] = s['DISBURSE']
-    return s[['BNMCODE', 'AMOUNT', 'WEIGHTED']].sort_values('BNMCODE').reset_index(drop=True)
+    with open(output_path / "BRTXT1.txt", "w") as f:
+        f.write("\n".join(output_lines))
+    print(f"Generated BRTXT1.txt with {len(output_lines)} records")
 
-def write_report(df, title, rdate, fh):
-    fh.write(f"EIBWHP01: {title} AS AT {rdate}\n\n")
-    fh.write("Obs    BNMCODE                         AMOUNT          WEIGHTED\n\n")
-    if len(df) == 0:
-        fh.write("  No records found\n\n")
-        return
-    for i, r in df.iterrows():
-        amt = f"{r['AMOUNT']:,.2f}"
-        wgt = f"{r['WEIGHTED']:.6f}" if r['WEIGHTED'] != 0 else "."
-        fh.write(f"{i+1:>4}  {r['BNMCODE']:<14}  {amt:>20}  {wgt:>12}\n")
-    fh.write("\n")
+    loan_df.write_csv(output_path / "LOAN.txt",   separator="|")
+    loan11_df.write_csv(output_path / "LOAN11.txt", separator="|")
+    loan1_df.write_csv(output_path / "LOAN1.txt",  separator="|")
 
-# ----------------------------------------------------------------------
-# Main
-# ----------------------------------------------------------------------
+else:
+    print("\n*** No LNNOTE data found after filtering ***")
+    print("Look at the DIAGNOSTIC block above to see which filter dropped the rows.")
+    print("Common fixes:")
+    print("  - REPTDAY/REPTMON: try REPTDATE_OVERRIDE=2026-08-31")
+    print("  - HPD_CODES: try HP_VALUES from PBBLNFMT instead of HPD")
+    print("  - ENTITY_CD: check whitespace/casing in the value counts")
 
-def main():
-    print("========== START JOB EIBWHP01 ==========")
-    reptdate = datetime.now() - timedelta(days=1)
-    m = get_sas_macros(reptdate)
-    print(f"[DATE] {m['RDATE']}  REPTMON={m['REPTMON']} NOWK={m['NOWK']}")
-
-    loan_path = resolve_loan_file()
-    lnnote_path = resolve_lnnote_file(m['REPTMON'])
-    print(f"[INFO] Loan   : {loan_path.name}")
-    print(f"[INFO] LNNOTE : {lnnote_path.name}")
-
-    expanded = process(loan_path, lnnote_path)
-    all_sum = summarise(expanded)
-    smi_sum = summarise(expanded, SMI_CUSTCD)
-
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(f"EIBWHP01 REPORT GENERATED {reptdate.strftime('%d-%m-%Y')}\n")
-        f.write(f"REPTMON: {m['REPTMON']}, NOWK: {m['NOWK']}\n")
-        f.write("=" * 80 + "\n\n")
-        write_report(all_sum, "REPORT ON PRODUCTS 131,132,720,725", m['RDATE'], f)
-        write_report(smi_sum, "SMI ACCTS (CUSTCD 66,67,68,69)", m['RDATE'], f)
-
-    print(f"[DONE] {OUTPUT_FILE}")
-    print("========== END JOB EIBWHP01 ==========")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"[JOB FAILED] {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(8)
+print("Processing completed!")
