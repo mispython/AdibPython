@@ -1,9 +1,8 @@
 # EIBDBT12_BANKTRADE_PM12.py
 # Production-Ready Conventional Version - Auto-determines everything
+# Text file output only (Parquet removed)
 
 import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
 from datetime import date, timedelta
 import pyreadstat
 import os
@@ -18,7 +17,6 @@ INPUT_BTFILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM12.
 INPUT_BTBASE_FILE_PATTERN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/btbase{PREVMON}.sas7bdat"
 
 OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.txt"
-OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.parquet"
 
 # --------------------------------------------------------------------
 # PRODUCTION CONFIGURATION - DO NOT HARDCODE DATES!
@@ -346,7 +344,7 @@ print(f"\nCalculations complete")
 print(f"  Records with OVERDUE > 0: {(combt['OVERDUE'] > 0).sum()}")
 
 # --------------------------------------------------------------------
-# Step 8: Write output
+# Step 8: Write output (TEXT FILE ONLY)
 # --------------------------------------------------------------------
 def write_fixed_width(df, filepath):
     """
@@ -434,15 +432,6 @@ def write_fixed_width(df, filepath):
     print(f"\nOutput written: {filepath} ({len(records)} records)")
 
 write_fixed_width(combt, OUTPUT_TEXT_FILE)
-
-# Save Parquet
-try:
-    os.makedirs(os.path.dirname(OUTPUT_PARQUET_FILE), exist_ok=True)
-    table = pa.Table.from_pandas(combt.to_pandas())
-    pq.write_table(table, OUTPUT_PARQUET_FILE)
-    print(f"Parquet saved: {OUTPUT_PARQUET_FILE}")
-except Exception as e:
-    print(f"Error writing Parquet: {e}")
 
 # --------------------------------------------------------------------
 # Validation against Production
