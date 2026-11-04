@@ -3,14 +3,14 @@ import pyreadstat
 from pathlib import Path
 from datetime import datetime, timedelta
 
-def eimhptop():
-    """Conventional bank version of EIMHPTOP - using SAS datasets directly"""
+def eiihptop():
+    """Islamic bank version of EIMHPTOP - using SAS datasets directly"""
     base = Path.cwd()
     loan_path = base / "/dwh/dwh_m/tempsource/ln"
     cis_path = base / "/dwh/rs_cis"
 
     # Define output path
-    output_path = base / "/host_pq/mis/output/report/EIMHPTOP/HPCOLD.txt"
+    output_path = base / "/host_pq/mis/output/report/EIMHPTOP/HPCOLD.txt/HPCOLD_ISLAMIC.txt"
     print(f"Output will be saved to: {output_path}")
 
     # Hardcode REPTDATE (current date - 1 day)
@@ -35,20 +35,18 @@ def eimhptop():
 
     reptmon = f"{mm:02d}"
     reptmon1 = f"{mm1:02d}"
-    reptyear = str(reptdate.year)
     rdate = reptdate.strftime("%d/%m/%y")
 
-    print(f"EIMHPTOP - Conventional Bank Top Accounts")
-    print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, REPTYEAR: {reptyear}, RDATE: {rdate}")
+    print(f"EIIHPTOP - Islamic Bank Top Accounts")
+    print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, RDATE: {rdate}")
 
     # HPD products
     hpd_products = [5.0, 15.0, 61.0, 70.0, 71.0, 200.0, 205.0, 210.0, 212.0, 216.0]
 
     # 1. CIS INFO - Read SAS dataset (no row limit for production)
-    cis_file_name = f"cisr1ln{reptmon}{wk}{reptyear}.sas7bdat"
     try:
         cis_df, meta = pyreadstat.read_sas7bdat(
-            str(cis_path / cis_file_name)
+            str(cis_path / "loan.sas7bdat")
         )
         cis_df = pl.from_pandas(cis_df)
 
@@ -63,10 +61,9 @@ def eimhptop():
             .alias("ICNO")
         ).select(["ACCTNO", "ICNO", "CUSTNAME"])
 
-        print(f"CIS file: {cis_file_name}")
         print(f"CIS sample size: {len(hpcis_df)} records")
     except Exception as e:
-        print(f"Error reading CIS ({cis_file_name}): {e}")
+        print(f"Error reading CIS: {e}")
         hpcis_df = pl.DataFrame({"ACCTNO": [], "ICNO": [], "CUSTNAME": []})
 
     # 2. EXTRACT HP A/C with MTHARR calculation (no row limit for production)
@@ -309,8 +306,8 @@ def eimhptop():
     hpacc1_df = hpacc1_df.sort(["BRANCH", "TOTBAL", "ICNO", "ACCTNO"],
                               descending=[False, True, False, False])
 
-    # 7. Generate conventional bank report with production formatting
-    generate_hp_report(hpacc1_df, rdate, output_path)
+    # 7. Generate Islamic bank report with production formatting
+    generate_islamic_hp_report(hpacc1_df, rdate, output_path)
 
     print(f"Processing complete. Top {len(hpacc1_df)} records identified.")
     print(f"Report saved to: {output_path}")
@@ -336,7 +333,7 @@ MTHARR_GAP = 5  # spaces after the MTHARR value, before the date
 DATE_W = 8      # columns 93-100
 
 
-def generate_hp_report(df, rdate, output_path):
+def generate_islamic_hp_report(df, rdate, output_path):
     """Generate formatted report matching production output exactly."""
     if df.is_empty():
         print("No data to report")
@@ -367,7 +364,7 @@ def generate_hp_report(df, rdate, output_path):
             f.write(pad("1") + "\n")
 
             # Page banner - exact spacing matched to production
-            line1 = " PUBLIC BANK BERHAD" + " " * 61 + f"{rdate}  PAGE NO : {page_num}"
+            line1 = " PUBLIC ISLAMIC BANK BERHAD" + " " * 53 + f"{rdate}  PAGE NO : {page_num}"
             f.write(pad(line1) + "\n")
 
             line2 = " TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) AS AT " + rdate
@@ -451,4 +448,4 @@ def generate_hp_report(df, rdate, output_path):
 
 
 if __name__ == "__main__":
-    eimhptop()
+    eiihptop()
