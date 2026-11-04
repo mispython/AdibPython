@@ -1,8 +1,9 @@
-# EIIDBT05_BANKTRADE_PM12.py
+# EIIDBT12_BANKTRADE_PM12.py
 # Production-Ready Islamic Version - Auto-determines everything
-# Text file output only (Parquet removed)
 
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 from datetime import date, timedelta
 import pyreadstat
 import os
@@ -11,12 +12,13 @@ import glob
 # --------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------
-INPUT_BTFILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM5.txt"
+INPUT_BTFILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM12.txt"
 
 # BASE file pattern - {PREVMON} will be auto-detected
 INPUT_IBTBASE_FILE_PATTERN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/ibtbase{PREVMON}.sas7bdat"
 
-OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT05/DAYBTRD_PM5.txt"
+OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT12/DAYBTRD_PM12.txt"
+OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT12/DAYBTRD_PM12.parquet"
 
 # --------------------------------------------------------------------
 # PRODUCTION CONFIGURATION - DO NOT HARDCODE DATES!
@@ -83,7 +85,7 @@ params = {
 }
 
 print("=" * 80)
-print("EIIDBT05 - Islamic Bank Trade Report (PRODUCTION)")
+print("EIIDBT12 - Islamic Bank Trade Report (PRODUCTION)")
 print("=" * 80)
 print(f"TODAY: {params['TODAY']}")
 print(f"REPTDATE: {params['REPTDATE']}")
@@ -130,6 +132,16 @@ print(f"\nUsing Islamic BASE file: {base_file}")
 # Step 3: Read BTDTL input
 # --------------------------------------------------------------------
 def read_btdtl_text(filepath):
+    """
+    DATA BTDTL(KEEP=BRANCH ACCTNO TRANSREF OUTSTAND MATDATE FACILITY);
+    INFILE BTFILE FIRSTOBS=2;
+    INPUT @002 BRANCH 4.
+          @006 ACCTNO $10.
+          @016 TRANSREF $7.
+          @023 OUTSTAND 15.2
+          @038 MATDT $6.
+          @043 LIABCODE $3.
+    """
     data = []
     
     with open(filepath, 'r') as f:
@@ -141,6 +153,7 @@ def read_btdtl_text(filepath):
                 continue
             
             try:
+                # SAS positions (1-based) -> Python (0-based)
                 branch_str = line[1:5].strip()
                 acctno_str = line[5:15].strip()
                 transref = line[15:22].strip()
@@ -157,9 +170,11 @@ def read_btdtl_text(filepath):
                 acctno = int(acctno_str)
                 outstanding = float(outstanding_str) if outstanding_str else 0.0
                 
-                month = int(matdt[2:4])
-                day = int(matdt[4:6])
-                year = 2000 + int(matdt[0:2])
+                # MATDATE = MDY(SUBSTR(MATDT,3,2), SUBSTR(MATDT,5,2), SUBSTR(MATDT,1,2))
+                # MATDT is DDMMYY, SAS interprets as MDY(MM, DD, YY)
+                month = int(matdt[2:4])    # MM
+                day = int(matdt[4:6])      # DD
+                year = 2000 + int(matdt[0:2])  # YY
                 
                 matdate = date(year, month, day)
                 matdate_sas = to_sas_date(matdate)
@@ -182,10 +197,12 @@ def read_btdtl_text(filepath):
 btdtl = read_btdtl_text(INPUT_BTFILE)
 
 if len(btdtl) == 0:
-    raise ValueError("No data loaded from BTPM5 file")
+    raise ValueError("No data loaded from BTPM12 file")
 
 # --------------------------------------------------------------------
-# Step 4: Apply ISLAMIC filter
+# Step 4: Apply ISLAMIC filter (OUTPUT/KEEP matching records)
+# IF BRANCH > 3000 AND (2850000000<=ACCTNO<=2859999999) THEN OUTPUT;
+# This means we KEEP records that match the condition
 # --------------------------------------------------------------------
 btdtl = btdtl.filter(
     (pl.col("BRANCH") > 3000) &
@@ -193,12 +210,20 @@ btdtl = btdtl.filter(
     (pl.col("ACCTNO") <= 2859999999)
 )
 
-print(f"BTDTL after Islamic filter: {len(btdtl)} records")
+print(f"BTDTL after Islamic filter (keeping qualifying records): {len(btdtl)} records")
+
+# Debug: Show MATDATE_SAS for key records
+print("\nBTDTL sample (checking MATDATE_SAS):")
+print(btdtl.select(['ACCTNO', 'TRANSREF', 'MATDATE_SAS']).head(10))
 
 # --------------------------------------------------------------------
-# Step 5: Read Islamic BASE dataset
+# Step 5: Read Islamic BASE dataset (IBTBASE&PREVMON)
 # --------------------------------------------------------------------
 def read_ibtbase_sas(filepath):
+    """
+    DATA BASE(KEEP=ACCTNO TRANSREF OUTSTAND PRODTYPE RENAME=(OUTSTAND=PREOUTSTD));
+    SET BASE.IBTBASE&PREVMON;
+    """
     print(f"\nReading Islamic BASE: {filepath}")
     df, meta = pyreadstat.read_sas7bdat(filepath)
     base = pl.from_pandas(df)
@@ -207,6 +232,15 @@ def read_ibtbase_sas(filepath):
     print(f"BASE records: {len(base)}")
     
     col_names = base.columns
+    
+    # Column mapping for IBTBASE (7 columns)
+    # Col 0: TRANSREX (ignored)
+    # Col 1: BRANCH (ignored)
+    # Col 2: ACCTNO
+    # Col 3: OUTSTAND -> PREOUTSTD
+    # Col 4: TRANSREF
+    # Col 5: PRODTYPE
+    # Col 6: DAYS
     
     base = base.select([
         pl.col(col_names[2]).alias("ACCTNO"),
@@ -225,7 +259,7 @@ def read_ibtbase_sas(filepath):
     ])
     
     print(f"BASE after mapping: {len(base)} records")
-    print("BASE sample:")
+    print("BASE sample (first 5):")
     print(base.head(5))
     
     return base
@@ -241,7 +275,7 @@ print(f"  BASE: {len(base)}")
 print(f"  BTDTL: {len(btdtl)}")
 
 # --------------------------------------------------------------------
-# Step 6: Sort to match SAS order
+# Step 6: Sort to match SAS order (PROC SORT)
 # --------------------------------------------------------------------
 base = base.sort(["ACCTNO", "TRANSREF"])
 btdtl = btdtl.sort(["ACCTNO", "TRANSREF"])
@@ -258,50 +292,69 @@ btdtl = btdtl.with_columns([
     pl.col("TRANSREF").cast(pl.Utf8)
 ])
 
+# MERGE BASE(IN=A) BTDTL(IN=B); BY ACCTNO TRANSREF; IF A;
 combt = base.join(btdtl, on=["ACCTNO", "TRANSREF"], how="left")
 
 print(f"\nAfter merge: {len(combt)} records")
 
+# Check unmatched records
 unmatched = combt.filter(pl.col("MATDATE_SAS").is_null())
-print(f"Unmatched BASE records: {len(unmatched)}")
+print(f"Unmatched BASE records (no BTDTL match): {len(unmatched)}")
 
+# Fill nulls
 combt = combt.with_columns([
     pl.col("OUTSTAND").fill_null(0),
     pl.col("DAYS").fill_null(0),
 ])
 
-sdate_sas = params["SDATE_SAS"]
-
-print(f"\nUsing SDATE_SAS: {sdate_sas}")
-
+# --------------------------------------------------------------------
+# IMPORTANT: EIIDBT12 uses DAYS + 1 for OVERDUE
+# This is the key difference from conventional version
+# --------------------------------------------------------------------
 combt = combt.with_columns([
-    # OVERDUE = (&SDATE+1)-MATDATE
-    pl.when(pl.col("MATDATE_SAS").is_not_null())
-    .then((sdate_sas + 1) - pl.col("MATDATE_SAS"))
-    .otherwise(pl.lit(None))
-    .alias("OVERDUE"),
+    # OVERDUE = DAYS + 1 (Islamic version uses DAYS from BASE)
+    (pl.col("DAYS") + 1).alias("OVERDUE"),
     
+    # RECOVAMT = PREOUTSTD-OUTSTAND
     (pl.col("PREOUTSTD") - pl.col("OUTSTAND")).alias("RECOVAMT"),
+    
+    # IF PRODTYPE = 000 THEN RETAILID='R'
     pl.when(pl.col("PRODTYPE") == 0)
     .then(pl.lit("R"))
     .otherwise(pl.lit(None))
     .alias("RETAILID"),
 ])
 
+# Fill nulls for output
 combt = combt.with_columns([
     pl.col("OVERDUE").fill_null(0).cast(pl.Int64),
     pl.col("RECOVAMT").fill_null(0),
 ])
 
+# Sort final output to match SAS order
 combt = combt.sort(["ACCTNO", "TRANSREF"])
 
 print(f"\nCalculations complete")
 print(f"  Records with OVERDUE > 0: {(combt['OVERDUE'] > 0).sum()}")
 
 # --------------------------------------------------------------------
-# Step 8: Write output (TEXT FILE ONLY)
+# Step 8: Write output
 # --------------------------------------------------------------------
 def write_fixed_width(df, filepath):
+    """
+    DATA _NULL_;
+    SET COMBT;
+    FILE DAYBTRD;
+    PUT @001 BRANCH 5.
+        @007 ACCTNO 10.
+        @018 TRANSREF 10.
+        @029 PRODTYPE Z3.
+        @033 PREOUTSTD 17.2
+        @051 OUTSTAND 17.2
+        @069 OVERDUE 10.
+        @080 RECOVAMT 17.2
+        @098 FACILITY $5.
+    """
     records = []
     
     for row in df.iter_rows(named=True):
@@ -318,35 +371,46 @@ def write_fixed_width(df, filepath):
             
             record = [' '] * 103
             
+            # @001 BRANCH 5. (positions 1-5)
             if branch is not None and branch != 0:
                 record[0:5] = f"{int(branch):5d}"
             else:
-                record[0:5] = '     '
+                record[0:5] = '     '  # Blank for missing (shows as '.' in SAS)
             
+            # @007 ACCTNO 10. (positions 7-16)
             record[6:16] = f"{int(acctno):10d}"
+            
+            # @018 TRANSREF 10. (positions 18-27)
             record[17:27] = f"{transref:<10}"
+            
+            # @029 PRODTYPE Z3. (positions 29-31)
             record[28:31] = f"{int(prodtype):03d}"
             
+            # @033 PREOUTSTD 17.2 (positions 33-49)
             if preoutstd != 0:
                 record[32:49] = f"{float(preoutstd):17.2f}"
             else:
                 record[32:49] = ' ' * 17
             
+            # @051 OUTSTAND 17.2 (positions 51-67)
             if outstanding != 0:
                 record[50:67] = f"{float(outstanding):17.2f}"
             else:
                 record[50:67] = ' ' * 17
             
+            # @069 OVERDUE 10. (positions 69-78)
             if overdue != 0:
                 record[68:78] = f"{int(overdue):10d}"
             else:
                 record[68:78] = ' ' * 10
             
+            # @080 RECOVAMT 17.2 (positions 80-96)
             if recovamt != 0:
                 record[79:96] = f"{float(recovamt):17.2f}"
             else:
                 record[79:96] = ' ' * 17
             
+            # @098 FACILITY $5. (positions 98-102)
             record[97:102] = f"{facility:<5}"
             
             records.append(''.join(record))
@@ -363,6 +427,70 @@ def write_fixed_width(df, filepath):
 
 write_fixed_width(combt, OUTPUT_TEXT_FILE)
 
+# Save Parquet
+try:
+    os.makedirs(os.path.dirname(OUTPUT_PARQUET_FILE), exist_ok=True)
+    table = pa.Table.from_pandas(combt.to_pandas())
+    pq.write_table(table, OUTPUT_PARQUET_FILE)
+    print(f"Parquet saved: {OUTPUT_PARQUET_FILE}")
+except Exception as e:
+    print(f"Error writing Parquet: {e}")
+
+# --------------------------------------------------------------------
+# Validation against Production
+# --------------------------------------------------------------------
+print("\n" + "=" * 80)
+print("VALIDATION AGAINST PRODUCTION")
+print("=" * 80)
+
+test_cases = [
+    {"ACCTNO": 2850228011, "TRANSREF": "Y090755", "EXP_OVERDUE": 67, "EXP_RECOVAMT": 25116.40},
+    {"ACCTNO": 2850331901, "TRANSREF": "Y090696", "EXP_OVERDUE": 70, "EXP_RECOVAMT": -112.80},
+    {"ACCTNO": 2850383833, "TRANSREF": "Y089246", "EXP_OVERDUE": 658, "EXP_RECOVAMT": -106.05},
+]
+
+print("\nComparing specific records:")
+matches = 0
+total = 0
+
+for test in test_cases:
+    match = combt.filter(
+        (pl.col("ACCTNO") == test["ACCTNO"]) & 
+        (pl.col("TRANSREF") == test["TRANSREF"])
+    )
+    
+    if len(match) > 0:
+        row = match.row(0, named=True)
+        total += 1
+        
+        overdue_match = row['OVERDUE'] == test["EXP_OVERDUE"]
+        recovamt_match = abs(row['RECOVAMT'] - test["EXP_RECOVAMT"]) < 0.01
+        
+        if overdue_match and recovamt_match:
+            matches += 1
+            status = "✓ PASS"
+        else:
+            status = "✗ FAIL"
+        
+        print(f"\n{status} ACCTNO: {test['ACCTNO']}, TRANSREF: {test['TRANSREF']}")
+        print(f"  OVERDUE:   Expected={test['EXP_OVERDUE']:>6d}, Got={row['OVERDUE']:>6d} {'✓' if overdue_match else '✗'}")
+        print(f"  RECOVAMT:  Expected={test['EXP_RECOVAMT']:>12.2f}, Got={row['RECOVAMT']:>12.2f} {'✓' if recovamt_match else '✗'}")
+        print(f"  DAYS from BASE: {row.get('DAYS', 'N/A')}")
+        
+        if not overdue_match:
+            print(f"     The Islamic version uses DAYS + 1 for OVERDUE")
+            print(f"     DAYS: {row.get('DAYS', 'N/A')} -> OVERDUE: {row['OVERDUE']}")
+    else:
+        print(f"\n✗ NOT FOUND: ACCTNO={test['ACCTNO']}, TRANSREF={test['TRANSREF']}")
+
+print(f"\nValidation Summary:")
+print(f"  Matches: {matches}/{total}")
+
+if matches == total:
+    print("  ✓ ALL TESTS PASSED!")
+else:
+    print("  ✗ SOME TESTS FAILED - Check the differences above")
+
 # --------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------
@@ -372,9 +500,9 @@ print("=" * 80)
 print(f"Run Date (TODAY): {params['TODAY']}")
 print(f"Report Date (REPTDATE): {params['REPTDATE']}")
 print(f"Previous Month (PREVMON): {params['PREVMON']}")
-print(f"SDATE_SAS: {params['SDATE_SAS']}")
-print(f"BASE File Used: {base_file}")
+print(f"Islamic BASE File Used: {base_file}")
 print(f"Total Records: {len(combt)}")
+print(f"SDATE (SAS): {params['SDATE_SAS']}")
 print("=" * 80)
 print("PROCESS COMPLETE")
 print("=" * 80)
