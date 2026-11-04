@@ -1,9 +1,8 @@
 # EIIDBT05_BANKTRADE_PM12.py
 # Production-Ready Islamic Version - Auto-determines everything
+# Text file output only (Parquet removed)
 
 import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
 from datetime import date, timedelta
 import pyreadstat
 import os
@@ -18,7 +17,6 @@ INPUT_BTFILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM5.t
 INPUT_IBTBASE_FILE_PATTERN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/ibtbase{PREVMON}.sas7bdat"
 
 OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT05/DAYBTRD_PM5.txt"
-OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIIDBT05/DAYBTRD_PM5.parquet"
 
 # --------------------------------------------------------------------
 # PRODUCTION CONFIGURATION - DO NOT HARDCODE DATES!
@@ -184,7 +182,7 @@ def read_btdtl_text(filepath):
 btdtl = read_btdtl_text(INPUT_BTFILE)
 
 if len(btdtl) == 0:
-    raise ValueError("No data loaded from BTPM12 file")
+    raise ValueError("No data loaded from BTPM5 file")
 
 # --------------------------------------------------------------------
 # Step 4: Apply ISLAMIC filter
@@ -301,7 +299,7 @@ print(f"\nCalculations complete")
 print(f"  Records with OVERDUE > 0: {(combt['OVERDUE'] > 0).sum()}")
 
 # --------------------------------------------------------------------
-# Step 8: Write output
+# Step 8: Write output (TEXT FILE ONLY)
 # --------------------------------------------------------------------
 def write_fixed_width(df, filepath):
     records = []
@@ -364,15 +362,6 @@ def write_fixed_width(df, filepath):
     print(f"\nOutput written: {filepath} ({len(records)} records)")
 
 write_fixed_width(combt, OUTPUT_TEXT_FILE)
-
-# Save Parquet
-try:
-    os.makedirs(os.path.dirname(OUTPUT_PARQUET_FILE), exist_ok=True)
-    table = pa.Table.from_pandas(combt.to_pandas())
-    pq.write_table(table, OUTPUT_PARQUET_FILE)
-    print(f"Parquet saved: {OUTPUT_PARQUET_FILE}")
-except Exception as e:
-    print(f"Error writing Parquet: {e}")
 
 # --------------------------------------------------------------------
 # Summary
