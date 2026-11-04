@@ -1,8 +1,9 @@
-# EIBDBT05_BANKTRADE_PM12.py
+# EIBDBT12_BANKTRADE_PM12.py
 # Production-Ready Conventional Version - Auto-determines everything
-# Text file output only (Parquet removed)
 
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 from datetime import date, timedelta
 import pyreadstat
 import os
@@ -11,12 +12,13 @@ import glob
 # --------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------
-INPUT_BTFILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM5.txt"
+INPUT_BTFILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/BTPM12.txt"
 
 # BASE file pattern - {PREVMON} will be auto-detected
 INPUT_BTBASE_FILE_PATTERN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/input/prod/btbase{PREVMON}.sas7bdat"
 
-OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT05/DAYBTRD_PM5.txt"
+OUTPUT_TEXT_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.txt"
+OUTPUT_PARQUET_FILE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS2/output/BTRADE/EIBDBT12/DAYBTRD_PM12.parquet"
 
 # --------------------------------------------------------------------
 # PRODUCTION CONFIGURATION - DO NOT HARDCODE DATES!
@@ -83,7 +85,7 @@ params = {
 }
 
 print("=" * 80)
-print("EIBDBT05 - Conventional Bank Trade Report (PRODUCTION)")
+print("EIBDBT12 - Conventional Bank Trade Report (PRODUCTION)")
 print("=" * 80)
 print(f"TODAY: {params['TODAY']}")
 print(f"REPTDATE: {params['REPTDATE']}")
@@ -195,7 +197,7 @@ def read_btdtl_text(filepath):
 btdtl = read_btdtl_text(INPUT_BTFILE)
 
 if len(btdtl) == 0:
-    raise ValueError("No data loaded from BTPM5 file")
+    raise ValueError("No data loaded from BTPM12 file")
 
 # --------------------------------------------------------------------
 # Step 4: Apply CONVENTIONAL filter (DELETE matching records)
@@ -344,7 +346,7 @@ print(f"\nCalculations complete")
 print(f"  Records with OVERDUE > 0: {(combt['OVERDUE'] > 0).sum()}")
 
 # --------------------------------------------------------------------
-# Step 8: Write output (TEXT FILE ONLY)
+# Step 8: Write output
 # --------------------------------------------------------------------
 def write_fixed_width(df, filepath):
     """
@@ -432,6 +434,15 @@ def write_fixed_width(df, filepath):
     print(f"\nOutput written: {filepath} ({len(records)} records)")
 
 write_fixed_width(combt, OUTPUT_TEXT_FILE)
+
+# Save Parquet
+try:
+    os.makedirs(os.path.dirname(OUTPUT_PARQUET_FILE), exist_ok=True)
+    table = pa.Table.from_pandas(combt.to_pandas())
+    pq.write_table(table, OUTPUT_PARQUET_FILE)
+    print(f"Parquet saved: {OUTPUT_PARQUET_FILE}")
+except Exception as e:
+    print(f"Error writing Parquet: {e}")
 
 # --------------------------------------------------------------------
 # Validation against Production
