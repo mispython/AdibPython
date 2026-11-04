@@ -35,18 +35,20 @@ def eimhptop():
 
     reptmon = f"{mm:02d}"
     reptmon1 = f"{mm1:02d}"
+    reptyear = str(reptdate.year)
     rdate = reptdate.strftime("%d/%m/%y")
 
     print(f"EIMHPTOP - Conventional Bank Top Accounts")
-    print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, RDATE: {rdate}")
+    print(f"NOWK: {wk}, NOWK1: {wk1}, REPTMON: {reptmon}, REPTYEAR: {reptyear}, RDATE: {rdate}")
 
     # HPD products
     hpd_products = [5.0, 15.0, 61.0, 70.0, 71.0, 200.0, 205.0, 210.0, 212.0, 216.0]
 
     # 1. CIS INFO - Read SAS dataset (no row limit for production)
+    cis_file_name = f"cisr1ln{reptmon}{wk}{reptyear}.sas7bdat"
     try:
         cis_df, meta = pyreadstat.read_sas7bdat(
-            str(cis_path / "loan.sas7bdat")
+            str(cis_path / cis_file_name)
         )
         cis_df = pl.from_pandas(cis_df)
 
@@ -61,9 +63,10 @@ def eimhptop():
             .alias("ICNO")
         ).select(["ACCTNO", "ICNO", "CUSTNAME"])
 
+        print(f"CIS file: {cis_file_name}")
         print(f"CIS sample size: {len(hpcis_df)} records")
     except Exception as e:
-        print(f"Error reading CIS: {e}")
+        print(f"Error reading CIS ({cis_file_name}): {e}")
         hpcis_df = pl.DataFrame({"ACCTNO": [], "ICNO": [], "CUSTNAME": []})
 
     # 2. EXTRACT HP A/C with MTHARR calculation (no row limit for production)
