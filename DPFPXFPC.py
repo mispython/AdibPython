@@ -1,291 +1,213 @@
-# ============================================================
-# JOB NAME : EIIMBTAT (Python version)
-# DESC     : Average Original Tenure for BA Primary Rediscounted (Islamic)
-# INPUT    : SAS7BDAT (SAS dataset)
-# OUTPUT   : Report (Text file only)
-# ============================================================
-
-import pandas as pd
-import pyreadstat  # Better SAS reader - no header length warning
+import polars as pl
+import pyreadstat
 from datetime import datetime, timedelta
-import os
-import sys
 
-# ============================================================
-# 0. DEFINE PATHS
-# ============================================================
+# Hardcode reptdate as yesterday
+reptdate = datetime.now().date() - timedelta(days=1)
 
-# Input paths - Islamic dataset 'ibtrad'
-BTRWH_BASE_PATH = "/dwh/ibtrade"
+# SAS dataset paths
+CISAFD_DEPOSIT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/enrh_cis_cust_info.sas7bdat' #/sas/cis/dwh/enrichment/enrh_cis_cust_info.sas7bdat
+FD_FD = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/enrh_dp_fd_cert_d{reptday}.sas7bdat' #/sas/deposit/dwh/enrichment/enrh_dp_fd_cert_d{reptday}.sas7bdat
+OVER1M = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDFD1M/over1m.txt'
 
-# Output paths
-OUTPUT_DIR = "/host/mis/output/report/ibtrade"
+# Read SAS datasets using pyreadstat - limit to 10000 rows for testing
+df_cisfd, meta_cisfd = pyreadstat.read_sas7bdat(CISAFD_DEPOSIT, row_limit=10000)
+df_cisfd = pl.from_pandas(df_cisfd)
+df_cisfd = df_cisfd.filter(pl.col('SECCUST') == '901').select([
+    'ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'
+]).sort('ACCTNO').rename({'CUSTNAME': 'NAME'})
 
-# ============================================================
-# 1. CALCULATE REPORT DATE (YESTERDAY'S DATE)
-# ============================================================
+df_fd, meta_fd = pyreadstat.read_sas7bdat(FD_FD, row_limit=10000)
+df_fd = pl.from_pandas(df_fd)
+df_fd = df_fd.filter(
+    (pl.col('CURBAL') > 0) & 
+    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
+    (pl.col('CURCODE') == 'MYR')
+)
 
-# Get yesterday's date
-yesterday = datetime.now() - timedelta(days=1)
-#yesterday = datetime(2026, 6, 8)
-REPTDATE = yesterday
+df_fd = df_fd.with_columns([
+    pl.lit(reptdate).alias('REPTDATE')
+])
 
-# Calculate NOWK based on DAY of REPTDATE (SAS logic)
-day = REPTDATE.day
-if day == 8:
-    NOWK = '1'
-elif day == 15:
-    NOWK = '2'
-elif day == 22:
-    NOWK = '3'
-else:
-    NOWK = '4'
+def parse_matdate(matdate_val):
+    matdate_str = str(int(matdate_val)).zfill(8)
+    year = int(matdate_str[0:4])
+    month = int(matdate_str[4:6])
+    day = int(matdate_str[6:8])
+    return datetime(year, month, day)
 
-REPTYEAR = REPTDATE.strftime("%y")  # YEAR2. format in SAS (2-digit year)
-REPTMON  = REPTDATE.strftime("%m")  # Z2. format (leading zero)
-RDATE    = REPTDATE.strftime("%d/%m/%Y")  # DDMMYY10. format
+df_fd = df_fd.with_columns([
+    pl.col('MATDATE').map_elements(parse_matdate, return_dtype=pl.Datetime).dt.date().alias('MATDT')
+])
 
-print(f"Report Date (Yesterday): {RDATE}")
-print(f"Original REPTDATE value: {REPTDATE.strftime('%Y-%m-%d')}")
-print(f"Day of month: {day} → Week number: {NOWK}")
-print(f"Period: {REPTMON}/{NOWK}/{REPTYEAR}")
-print("="*60)
+df_fd = df_fd.with_columns([
+    (pl.col('MATDT').cast(pl.Date) - pl.lit(reptdate).cast(pl.Date)).dt.total_days().alias('MATURITY')
+])
 
-# ============================================================
-# 2. LOAD IBTRAD DATASET (ISLAMIC - DYNAMIC NAME)
-# Using pyreadstat to avoid header length warning
-# ============================================================
-
-btrad_sas = f"{BTRWH_BASE_PATH}{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
-print(f"Looking for file: {btrad_sas}")
-
-if not os.path.exists(btrad_sas):
-    raise FileNotFoundError(f"IBTRAD input file not found: {btrad_sas}")
-
-def load_sas_pyreadstat(path):
-    """Load SAS .sas7bdat file using pyreadstat (handles large page sizes)"""
-    print(f"Loading: {path}")
+# Fix LMATDATE parsing - handle it as a numeric with possible decimal places
+def parse_lmatdate(val):
+    if val == 0 or val is None:
+        return None
+    # Convert to string and handle decimal places
+    val_str = str(val)
+    # If it has a decimal, split and take only the integer part
+    if '.' in val_str:
+        val_str = val_str.split('.')[0]
+    # Ensure we have exactly 8 characters (some might be missing leading zeros)
+    if len(val_str) < 8:
+        val_str = val_str.zfill(8)
+    # Take only the last 8 characters in case it's longer
+    if len(val_str) > 8:
+        val_str = val_str[:8]
     try:
-        # Read SAS file with pyreadstat
-        df, meta = pyreadstat.read_sas7bdat(path)
-        
-        # Print metadata for debugging
-        print(f"  - Rows loaded: {len(df):,}")
-        print(f"  - Columns loaded: {len(df.columns)}")
-        
-        # Try to get SAS version info if available
-        if hasattr(meta, 'table_metadata') and meta.table_metadata:
-            if 'SASRelease' in meta.table_metadata:
-                print(f"  - SAS Version: {meta.table_metadata['SASRelease']}")
-        
-        return df
-    except Exception as e:
-        print(f"Error with pyreadstat: {e}")
-        raise
+        # Format is MMDDYYYY (8 digits)
+        month = int(val_str[0:2])
+        day = int(val_str[2:4])
+        year = int(val_str[4:8])
+        return datetime(year, month, day).date()
+    except:
+        return None
 
-# Load the data
-btrad = load_sas_pyreadstat(btrad_sas)
-print(f"Original records in IBTRAD: {len(btrad):,}")
+df_fd = df_fd.with_columns([
+    pl.col('LMATDATE').map_elements(parse_lmatdate, return_dtype=pl.Date).alias('LASTMAT')
+])
 
-# Display first few rows and column names for debugging
-print(f"\nColumn names in dataset:")
-for col in btrad.columns[:20]:  # Show first 20 columns
-    print(f"  - {col}")
-print(f"  ... and {len(btrad.columns) - 20} more columns" if len(btrad.columns) > 20 else "")
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('LASTMAT') == reptdate)
+      .then(pl.lit(0))
+      .otherwise(pl.col('MATURITY'))
+      .alias('MATURITY'),
+    pl.when(pl.col('LASTMAT') == reptdate)
+      .then(pl.col('LASTMAT'))
+      .otherwise(pl.col('MATDT'))
+      .alias('MATDT')
+])
 
-# ============================================================
-# 3. FILTER DATA (SAS WHERE CLAUSE)
-# Islamic version uses different LIABCODE values!
-# ============================================================
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('MATURITY') == 0)
+      .then(pl.lit('(T)'))
+      .otherwise(pl.concat_str([
+          pl.lit('(T+'),
+          pl.col('MATURITY').cast(pl.Utf8),
+          pl.lit(')')
+      ]))
+      .alias('TMATURITY')
+])
 
-FACILITY_LIST = [
-    '34411', '34412', '34421', '34422', '34440', '34470',
-    '34470', '34480', '34490'  # Duplicate preserved from original
-]
+df_fd = df_fd.with_columns([
+    (pl.col('CURBAL') * pl.col('RATE')).alias('RATEBAL')
+])
 
-# Islamic LIABCODE values (different from conventional)
-LIABCODE_LIST = ['BPI', 'BII', 'BSI', 'BEI']
+df_fd = df_fd.drop('NAME')
 
-print(f"\nFiltering with LIABCODE values: {LIABCODE_LIST}")
-print(f"Unique LIABCODE values in dataset: {btrad['LIABCODE'].unique()}")
+df_fd = df_fd.join(df_cisfd, on='ACCTNO', how='inner')
 
-# Save original count for debugging
-original_count = len(btrad)
+df_fd = df_fd.with_columns([
+    pl.when(pl.col('BUSSREG').str.strip_chars() != '')
+      .then(pl.col('BUSSREG'))
+      .when(pl.col('NEWIC').str.strip_chars() != '')
+      .then(pl.col('NEWIC'))
+      .when(pl.col('OLDIC').str.strip_chars() != '')
+      .then(pl.col('OLDIC'))
+      .otherwise(pl.col('CUSTNO'))
+      .alias('CUSTID')
+])
 
-# Apply filters
-filtered = (
-    (btrad["FACILITY"].isin(FACILITY_LIST)) &
-    (btrad["LIABCODE"].isin(LIABCODE_LIST)) &
-    (btrad["UTRDF"] == "D") &
-    (btrad["BALANCE"] > 0)
+df_fd = df_fd.sort('MATDT')
+df_fd = df_fd.sort(['CUSTID', 'MATDT'])
+
+df_fdtotal = df_fd.group_by(['CUSTID', 'MATDT']).agg([
+    pl.col('CURBAL').sum().alias('TOTAL'),
+    pl.col('RATEBAL').sum().alias('TOTRATEBAL')
+])
+
+df_fd_unique = df_fd.unique(subset=['CUSTID', 'MATDT'], keep='first')
+
+df_fdtotal = df_fd_unique.join(df_fdtotal, on=['CUSTID', 'MATDT'], how='inner')
+
+df_fdtotal = df_fdtotal.select([
+    'NAME', 'TOTAL', 'MATDT', 'MATURITY', 'TMATURITY', 'REPTDATE', 'TOTRATEBAL'
+])
+
+df_fdtotal = df_fdtotal.with_columns([
+    (pl.col('TOTRATEBAL') / pl.col('TOTAL')).round(2).alias('AVGRATE')
+])
+
+# Read FD again for total calculation - limit to 10000 rows
+df_fd_all, meta_fd_all = pyreadstat.read_sas7bdat(FD_FD, row_limit=10000)
+df_fd_all = pl.from_pandas(df_fd_all)
+df_fd_all = df_fd_all.filter(
+    (pl.col('CURBAL') > 0) & 
+    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
+    (pl.col('CURCODE') == 'MYR')
 )
 
-btrad = btrad[filtered].copy()
+df_fd_all = df_fd_all.with_columns([
+    (pl.col('CURBAL') * pl.col('RATE')).alias('RATEBAL')
+])
 
-print(f"\nFilter results:")
-print(f"  - Original records: {original_count:,}")
-print(f"  - Records after filtering: {len(btrad):,}")
+df_totalfd = df_fd_all.select([
+    pl.col('CURBAL').sum(),
+    pl.col('RATEBAL').sum()
+])
 
-if len(btrad) == 0:
-    print("\nWARNING: No records after filtering. Debugging information:")
-    print(f"  - FACILITY filter matches: {(btrad['FACILITY'].isin(FACILITY_LIST)).sum()}")
-    print(f"  - LIABCODE filter matches: {(btrad['LIABCODE'].isin(LIABCODE_LIST)).sum()}")
-    print(f"  - UTRDF filter matches: {(btrad['UTRDF'] == 'D').sum()}")
-    print(f"  - BALANCE filter matches: {(btrad['BALANCE'] > 0).sum()}")
-    sys.exit(0)
+df_totalfd = df_totalfd.with_columns([
+    (pl.col('RATEBAL') / pl.col('CURBAL')).round(2).alias('AVGRATE')
+])
 
-# ============================================================
-# 4. CALCULATE TENURE & TOTAMT
-# SAS: TENURE = (MATDATE-ISSDTE)+1
-# ============================================================
+lines = []
+lines.append(' ')
+lines.append('TOTAL NON-INDI FD (MIL);AVERAGE RATE;')
 
-# Convert to datetime if they aren't already
-btrad["ISSDTE"] = pd.to_datetime(btrad["ISSDTE"])
-btrad["MATDATE"] = pd.to_datetime(btrad["MATDATE"])
+total_fd = df_totalfd.to_dicts()[0]
+curbal1 = round(total_fd['CURBAL'] / 1000000, 3)
+lines.append(f"{curbal1:.3f};{total_fd['AVGRATE']:.2f};")
 
-# Calculate tenure in days (difference + 1)
-btrad["TENURE"] = (btrad["MATDATE"] - btrad["ISSDTE"]).dt.days + 1
-btrad["TOTAMT"] = btrad["FCVALUE"] * btrad["TENURE"]
+df_mature = df_fdtotal.with_columns([
+    (pl.col('TOTAL') / 1000000).round(3).alias('TOTAL1'),
+    pl.concat_str([
+        pl.col('MATDT').dt.strftime('%d/%m/%Y'),
+        pl.col('TMATURITY')
+    ]).alias('REPTDATE1')
+])
 
-# Keep only necessary columns (matching SAS KEEP statement)
-btrad = btrad[
-    ["BRANCH", "ACCTNOX", "TRANSREF", "FCVALUE", 
-     "MATDATE", "ISSDTE", "TENURE", "TOTAMT"]
-]
+df_mature_summary = df_mature.filter(
+    (pl.col('MATURITY') >= 0) & (pl.col('MATURITY') < 8)
+).group_by('REPTDATE1').agg([
+    pl.col('TOTAL').sum()
+])
 
-print(f"\nAfter tenure calculation:")
-print(f"  - Records with TENURE > 0: {(btrad['TENURE'] > 0).sum():,}")
-print(f"  - Total FCVALUE: {btrad['FCVALUE'].sum():,.2f}")
-print(f"  - Total TOTAMT: {btrad['TOTAMT'].sum():,.2f}")
+lines.append(' ')
+lines.append('MATURITY DATE;TOTAL NON-INDI FD (MIL);')
 
-# ============================================================
-# 5. SORT BY BRANCH (equivalent to PROC SORT)
-# ============================================================
+for row in df_mature_summary.iter_rows(named=True):
+    curbal1 = round(row['TOTAL'] / 1000000, 3)
+    lines.append(f"{row['REPTDATE1']};{curbal1:.3f};")
 
-btrad = btrad.sort_values("BRANCH")
-
-# ============================================================
-# 6. PROC SUMMARY (BY BRANCH, SUM of FCVALUE and TOTAMT)
-# SAS: PROC SUMMARY DATA=IBTRAD NWAY; BY BRANCH; VAR FCVALUE TOTAMT;
-#      OUTPUT OUT=AVGTENURE(DROP=_FREQ_ _TYPE_) SUM=;
-# ============================================================
-
-avgt = (
-    btrad
-    .groupby("BRANCH", as_index=False)
-    .agg({
-        "FCVALUE": "sum",
-        "TOTAMT": "sum"
-    })
-)
-
-print(f"\nAggregation results:")
-print(f"  - Number of branches after aggregation: {len(avgt):,}")
-
-# ============================================================
-# 7. CALCULATE TENURE (SAS DATA step after PROC SUMMARY)
-# ============================================================
-
-avgt["TENURE"] = avgt["TOTAMT"] / avgt["FCVALUE"]
-
-# Format as 8. (SAS format 8. with 2 decimals default)
-avgt["TENURE"] = avgt["TENURE"].round(2)
-
-# ============================================================
-# 8. GENERATE PROC REPORT OUTPUT (Console/Text report)
-# ============================================================
-
-print("\n" + "="*86)
-print(" P U B L I C   I S L A M I C   B A N K   B E R H A D".center(86))
-print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
-print("="*86)
-print(f" REPORT ID    : EIIMBTAT".center(86))
-print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
-print(f" REPORT DATE  : {RDATE}".center(86))
-print("="*86)
-
-# Create the report dataframe with formatted columns
-report_df = avgt.copy()
-report_df["TOTAMT_FMT"] = report_df["TOTAMT"].apply(lambda x: f"{x:,.2f}")
-report_df["FCVALUE_FMT"] = report_df["FCVALUE"].apply(lambda x: f"{x:,.2f}")
-report_df["TENURE_FMT"] = report_df["TENURE"].apply(lambda x: f"{x:.2f}")
-
-# Print header
-print(f"{'BRANCH':<10} {'TOTAL AMOUNT (RM)':<30} {'BALANCE (RM)':<20} {'AVG TENURE (DAY)':<20}")
-print("-"*86)
-
-# Print each row
-for _, row in report_df.iterrows():
-    print(f"{row['BRANCH']:<10} {row['TOTAMT_FMT']:<30} {row['FCVALUE_FMT']:<20} {row['TENURE_FMT']:<20}")
-
-# Calculate totals and overall average
-total_totamt = avgt["TOTAMT"].sum()
-total_fcvalue = avgt["FCVALUE"].sum()
-overall_avg_tenure = total_totamt / total_fcvalue
-
-# Print footer (RBREAK AFTER)
-print("-"*86)
-print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':<10} {overall_avg_tenure:>9.2f}")
-print("="*86)
-
-# ============================================================
-# 9. SAVE REPORT AS TEXT FILE
-# ============================================================
-
-# Create output directory if it doesn't exist
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Output filename
-base_filename = f"EIIMBTAT_AVGTENURE_{REPTMON}{NOWK}{REPTYEAR}"
-
-try:
-    report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
-    with open(report_txt, 'w') as f:
-        # Redirect print output to file
-        original_stdout = sys.stdout
-        sys.stdout = f
-        
-        print("="*86)
-        print(" P U B L I C   I S L A M I C   B A N K   B E R H A D".center(86))
-        print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
-        print("="*86)
-        print(f" REPORT ID    : EIIMBTAT".center(86))
-        print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
-        print(f" REPORT DATE  : {RDATE}".center(86))
-        print("="*86)
-        print(f"{'BRANCH':<10} {'TOTAL AMOUNT (RM)':<30} {'BALANCE (RM)':<20} {'AVG TENURE (DAY)':<20}")
-        print("-"*86)
-        
-        for _, row in report_df.iterrows():
-            print(f"{row['BRANCH']:<10} {row['TOTAMT_FMT']:<30} {row['FCVALUE_FMT']:<20} {row['TENURE_FMT']:<20}")
-        
-        print("-"*86)
-        print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':<10} {overall_avg_tenure:>9.2f}")
-        print("="*86)
-        
-        sys.stdout = original_stdout
+for i in range(8):
+    df_mature_day = df_mature.filter(pl.col('MATURITY') == i)
     
-    print(f"\nReport saved to text file: {report_txt}")
-except Exception as e:
-    print(f"Error saving report text file: {e}")
+    if len(df_mature_day) > 0:
+        df_mature_day = df_mature_day.sort('TOTAL', descending=True)
+        
+        first_row = df_mature_day.to_dicts()[0]
+        tmat = first_row['TMATURITY']
+        date_str = first_row['MATDT'].strftime('%d/%m/%Y')
+        
+        lines.append(' ')
+        lines.append(' ')
+        lines.append(' ')
+        lines.append(f"RM NON-INDI FD DETAILS BY CUSTOMER MATURING {date_str} {tmat}")
+        lines.append(' ')
+        lines.append('CUSTOMER;SETTLEMENT AMOUNT(MIL.);MATURITY DATE;AVERAGE RATE;')
+        
+        for row in df_mature_day.iter_rows(named=True):
+            lines.append(
+                f"{row['NAME']};{row['TOTAL1']:.3f};{row['REPTDATE1']};{row['AVGRATE']:.2f};"
+            )
 
-# ============================================================
-# 10. DISPLAY EXECUTION SUMMARY
-# ============================================================
-print("\n" + "="*60)
-print("EIIMBTAT job completed successfully")
-print("="*60)
-print(f"Execution Date & Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-print(f"Report Date (Yesterday): {RDATE}")
-print(f"Input IBTRAD file: {btrad_sas}")
-print(f"Records processed: {len(btrad):,}")
-print(f"Branches summarized: {len(avgt):,}")
-print(f"Total Balance (FCVALUE): RM {total_fcvalue:,.2f}")
-print(f"Total Amount (TOTAMT): RM {total_totamt:,.2f}")
-print(f"Overall Average Tenure: {overall_avg_tenure:.2f} days")
-print(f"Output directory: {OUTPUT_DIR}")
-print("="*60)
+with open(OVER1M, 'w') as f:
+    for line in lines:
+        f.write(line + '\n')
 
-# ============================================================
-# END OF JOB
-# ============================================================
+print(f"Report generated: {OVER1M}")
