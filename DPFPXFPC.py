@@ -5,19 +5,22 @@ from datetime import datetime, timedelta
 # Hardcode reptdate as yesterday
 reptdate = datetime.now().date() - timedelta(days=1)
 
+# Format reptday for the dynamic filename (e.g. '07' for day 7)
+reptday = reptdate.strftime('%d')
+
 # SAS dataset paths
-CISAFD_DEPOSIT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/enrh_cis_cust_info.sas7bdat' #/sas/cis/dwh/enrichment/enrh_cis_cust_info.sas7bdat
-FD_FD = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/enrh_dp_fd_cert_d{reptday}.sas7bdat' #/sas/deposit/dwh/enrichment/enrh_dp_fd_cert_d{reptday}.sas7bdat
+CISAFD_DEPOSIT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/enrh_cis_cust_info.sas7bdat'
+FD_FD = f'/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/enrh_dp_fd_cert_d{reptday}.sas7bdat'
 OVER1M = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDFD1M/over1m.txt'
 
-# Read SAS datasets using pyreadstat - limit to 10000 rows for testing
-df_cisfd, meta_cisfd = pyreadstat.read_sas7bdat(CISAFD_DEPOSIT, row_limit=10000)
+# Read SAS datasets using pyreadstat
+df_cisfd, meta_cisfd = pyreadstat.read_sas7bdat(CISAFD_DEPOSIT)
 df_cisfd = pl.from_pandas(df_cisfd)
 df_cisfd = df_cisfd.filter(pl.col('SECCUST') == '901').select([
     'ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'
 ]).sort('ACCTNO').rename({'CUSTNAME': 'NAME'})
 
-df_fd, meta_fd = pyreadstat.read_sas7bdat(FD_FD, row_limit=10000)
+df_fd, meta_fd = pyreadstat.read_sas7bdat(FD_FD)
 df_fd = pl.from_pandas(df_fd)
 df_fd = df_fd.filter(
     (pl.col('CURBAL') > 0) & 
@@ -48,19 +51,14 @@ df_fd = df_fd.with_columns([
 def parse_lmatdate(val):
     if val == 0 or val is None:
         return None
-    # Convert to string and handle decimal places
     val_str = str(val)
-    # If it has a decimal, split and take only the integer part
     if '.' in val_str:
         val_str = val_str.split('.')[0]
-    # Ensure we have exactly 8 characters (some might be missing leading zeros)
     if len(val_str) < 8:
         val_str = val_str.zfill(8)
-    # Take only the last 8 characters in case it's longer
     if len(val_str) > 8:
         val_str = val_str[:8]
     try:
-        # Format is MMDDYYYY (8 digits)
         month = int(val_str[0:2])
         day = int(val_str[2:4])
         year = int(val_str[4:8])
@@ -133,8 +131,8 @@ df_fdtotal = df_fdtotal.with_columns([
     (pl.col('TOTRATEBAL') / pl.col('TOTAL')).round(2).alias('AVGRATE')
 ])
 
-# Read FD again for total calculation - limit to 10000 rows
-df_fd_all, meta_fd_all = pyreadstat.read_sas7bdat(FD_FD, row_limit=10000)
+# Read FD again for total calculation
+df_fd_all, meta_fd_all = pyreadstat.read_sas7bdat(FD_FD)
 df_fd_all = pl.from_pandas(df_fd_all)
 df_fd_all = df_fd_all.filter(
     (pl.col('CURBAL') > 0) & 
