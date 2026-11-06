@@ -94,14 +94,14 @@ def parse_matdate(matdate_val):
     return datetime(year, month, day)
 
 df_fd = df_fd.with_columns([
-    pl.col('MATDATE').map_elements(parse_matdate, return_dtype=pl.Datetime).dt.date().alias('MATDT')
+    pl.col('MATURE_DT').map_elements(parse_matdate, return_dtype=pl.Datetime).dt.date().alias('MATDT')
 ])
 
 df_fd = df_fd.with_columns([
     (pl.col('MATDT').cast(pl.Date) - pl.lit(reptdate).cast(pl.Date)).dt.total_days().alias('MATURITY')
 ])
 
-# Fix LMATDATE parsing - handle it as a numeric with possible decimal places
+# Fix LAST_MATURE_DT parsing - handle it as a numeric with possible decimal places
 def parse_lmatdate(val):
     if val == 0 or val is None:
         return None
@@ -121,7 +121,7 @@ def parse_lmatdate(val):
         return None
 
 df_fd = df_fd.with_columns([
-    pl.col('LMATDATE').map_elements(parse_lmatdate, return_dtype=pl.Date).alias('LASTMAT')
+    pl.col('LAST_MATURE_DT').map_elements(parse_lmatdate, return_dtype=pl.Date).alias('LASTMAT')
 ])
 
 df_fd = df_fd.with_columns([
@@ -147,7 +147,7 @@ df_fd = df_fd.with_columns([
 ])
 
 df_fd = df_fd.with_columns([
-    (pl.col('CURR_BAL') * pl.col('RATE')).alias('RATEBAL')
+    (pl.col('CURR_BAL') * pl.col('RT')).alias('RATEBAL')
 ])
 
 df_fd = df_fd.drop('NAME')
@@ -193,7 +193,7 @@ df_fd_all = df_fd_all.filter(
 )
 
 df_fd_all = df_fd_all.with_columns([
-    (pl.col('CURR_BAL') * pl.col('RATE')).alias('RATEBAL')
+    (pl.col('CURR_BAL') * pl.col('RT')).alias('RATEBAL')
 ])
 
 df_totalfd = df_fd_all.select([
@@ -261,19 +261,3 @@ with open(OVER1M, 'w') as f:
         f.write(line + '\n')
 
 print(f"Report generated: {OVER1M}")
-
-
-
-
-raceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDFD1M.py", line 96, in <module>
-    df_fd = df_fd.with_columns([
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
-    self.lazy()
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
-    return function(*args, **kwargs)
-  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
-    return wrap_df(ldf.collect(engine, callback))
-polars.exceptions.ColumnNotFoundError: unable to find column "MATDATE"; valid columns: ["BANK_NO", "REPT_NO", "FORMAT_CODE", "BRANCH_CD", "ACCT_NUM", "PURPOSE_CD", "CUSTOMER_CD", "DEPOSIT_DT", "CERT_NUM", "OPEN_IND", "CURR_BAL", "ORIG_AMT", "ORIG_DT", "MATURE_DT", "RT", "ACCOUNT_TYPE_CD", "TERM", "MATUREITY_TERM_CD", "INT_PLAN", "PAYMENT_IND", "RENEWAL_IND", "INT_PAID_YTD", "INT_PAYABLE", "INT_DT", "LAST_ACTIVE_DT", "INT_FREQ", "INT_FREQ_CD", "PENDING_INT", "CURRENCY_CD", "LAST_MATURE_DT", "PRO_RATIO", "CERT_HOLD_IND", "COST_CENTRE", "COLL_NUM", "INT_TRANSFER_ACCT_NUM", "NEW_RT", "OLD_RT", "EFFECTIVE_DT", "DEALERS_NAME", "USER_ID", "STATUS", "SPECIAL_RT_DTTM", "STATUS_DTTM", "CURR_DEALER_NAME_ID", "ENTITY_CD", "REPTDATE"]
