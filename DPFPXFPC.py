@@ -261,3 +261,19 @@ with open(OVER1M, 'w') as f:
         f.write(line + '\n')
 
 print(f"Report generated: {OVER1M}")
+
+
+
+
+raceback (most recent call last):
+  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBDFD1M.py", line 96, in <module>
+    df_fd = df_fd.with_columns([
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/dataframe/frame.py", line 10314, in with_columns
+    self.lazy()
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/opt_flags.py", line 328, in wrapper
+    return function(*args, **kwargs)
+  File "/sas/python/virt_edw_dev/lib64/python3.9/site-packages/polars/lazyframe/frame.py", line 2429, in collect
+    return wrap_df(ldf.collect(engine, callback))
+polars.exceptions.ColumnNotFoundError: unable to find column "MATDATE"; valid columns: ["BANK_NO", "REPT_NO", "FORMAT_CODE", "BRANCH_CD", "ACCT_NUM", "PURPOSE_CD", "CUSTOMER_CD", "DEPOSIT_DT", "CERT_NUM", "OPEN_IND", "CURR_BAL", "ORIG_AMT", "ORIG_DT", "MATURE_DT", "RT", "ACCOUNT_TYPE_CD", "TERM", "MATUREITY_TERM_CD", "INT_PLAN", "PAYMENT_IND", "RENEWAL_IND", "INT_PAID_YTD", "INT_PAYABLE", "INT_DT", "LAST_ACTIVE_DT", "INT_FREQ", "INT_FREQ_CD", "PENDING_INT", "CURRENCY_CD", "LAST_MATURE_DT", "PRO_RATIO", "CERT_HOLD_IND", "COST_CENTRE", "COLL_NUM", "INT_TRANSFER_ACCT_NUM", "NEW_RT", "OLD_RT", "EFFECTIVE_DT", "DEALERS_NAME", "USER_ID", "STATUS", "SPECIAL_RT_DTTM", "STATUS_DTTM", "CURR_DEALER_NAME_ID", "ENTITY_CD", "REPTDATE"]
