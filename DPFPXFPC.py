@@ -1,396 +1,328 @@
-EIMHPTOP
 
-%INC PGM(PBBLNFMT);                                                     00280002
-                                                                        00290002
-DATA REPTDATE;                                                          00300002
-   SET LOAN.REPTDATE;                                                   00320002
-   SELECT(DAY(REPTDATE));                                               00350002
-      WHEN (8)  DO; WK = '1'; WK1 = '4'; END;                           00360002
-      WHEN(15)  DO; WK = '2'; WK1 = '1'; END;                           00370002
-      WHEN(22)  DO; WK = '3'; WK1 = '2'; END;                           00380002
-      OTHERWISE DO; WK = '4'; WK1 = '3'; END;                           00390002
-   END;                                                                 00400002
-   MM = MONTH(REPTDATE);                                                00410002
-   IF WK = '1' THEN DO;                                                 00420002
-      MM1 = MM - 1;                                                     00430002
-      IF MM1 = 0 THEN MM1 = 12;                                         00440002
-   END;                                                                 00450002
-   ELSE MM1 = MM;                                                       00460002
-   CALL SYMPUT('NOWK',PUT(WK,$1.));                                     00470002
-   CALL SYMPUT('NOWK1',PUT(WK1,$1.));                                   00480002
-   CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                  00490002
-   CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));                                00500002
-   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                         00510002
-RUN;                                                                    00520002
-                                                                        00530002
-*** CIS INFO ***;                                                       00540002
-DATA HPCIS(KEEP=ACCTNO ICNO CUSTNAME);                                  00550002
-   SET CIS.LOAN;                                                        00560002
-   IF CACCCODE NOT IN ('017','021','028') AND SECCUST = '901';          00561002
-   IF NEWIC NE ' ' THEN ICNO = NEWIC;                                   00570002
-   ELSE ICNO = OLDIC;                                                   00580002
-RUN;                                                                    00590002
-                                                                        00600002
-*** EXTRACT HP A/C ***;                                                 00610002
-DATA HPACC(KEEP=ACCTNO NOTENO PRODUCT BORSTAT BALANCE BLDATE            00620002
-                ISSDTE MTHARR BRANCH);                                  00630002
-   SET LOAN.LOAN&REPTMON&NOWK;                                          00640002
-   IF PRODUCT IN &HPD AND                                               00650002
-      BALANCE GT 0;                                                     00660002
-   THISDATE = INPUT("&RDATE", DDMMYY8.);                                00670002
-   IF BLDATE > 0 THEN DAYDIFF = THISDATE - BLDATE;                      00680002
-   IF      (DAYDIFF>729) THEN MTHARR = INT((DAYDIFF/365)*12);           00690002
-   ELSE IF (DAYDIFF>698) THEN MTHARR = 23;                              00700002
-   ELSE IF (DAYDIFF>668) THEN MTHARR = 22;                              00710002
-   ELSE IF (DAYDIFF>638) THEN MTHARR = 21;                              00720002
-   ELSE IF (DAYDIFF>608) THEN MTHARR = 20;                              00730002
-   ELSE IF (DAYDIFF>577) THEN MTHARR = 19;                              00740002
-   ELSE IF (DAYDIFF>547) THEN MTHARR = 18;                              00750002
-   ELSE IF (DAYDIFF>516) THEN MTHARR = 17;                              00760002
-   ELSE IF (DAYDIFF>486) THEN MTHARR = 16;                              00770002
-   ELSE IF (DAYDIFF>456) THEN MTHARR = 15;                              00780002
-   ELSE IF (DAYDIFF>424) THEN MTHARR = 14;                              00790002
-   ELSE IF (DAYDIFF>394) THEN MTHARR = 13;                              00800002
-   ELSE IF (DAYDIFF>364) THEN MTHARR = 12;                              00810002
-   ELSE IF (DAYDIFF>333) THEN MTHARR = 11;                              00820002
-   ELSE IF (DAYDIFF>303) THEN MTHARR = 10;                              00830002
-   ELSE IF (DAYDIFF>273) THEN MTHARR = 9;                               00840002
-   ELSE IF (DAYDIFF>243) THEN MTHARR = 8;                               00850002
-   ELSE IF (DAYDIFF>213) THEN MTHARR = 7;                               00860002
-   ELSE IF (DAYDIFF>182) THEN MTHARR = 6;                               00870002
-   ELSE IF (DAYDIFF>151) THEN MTHARR = 5;                               00880002
-   ELSE IF (DAYDIFF>121) THEN MTHARR = 4;                               00890002
-   ELSE IF (DAYDIFF>91)  THEN MTHARR = 3;                               00900002
-   ELSE IF (DAYDIFF>61)  THEN MTHARR = 2;                               00910002
-   ELSE IF (DAYDIFF>30)  THEN MTHARR = 1;                               00920002
-   ELSE                       MTHARR = 0;                               00930002
-RUN;                                                                    00940002
-                                                                        00950002
-*** MERGE HP A/C WITH BRANCH ABBR ***;                                  00960002
-DATA BRHDATA;                                                           00970002
-  INFILE BRHFILE LRECL=80;                                              00980002
-  INPUT @2 BRANCH  3.                                                   00990002
-        @6 BRABBR  $3.;                                                 01000002
-RUN;                                                                    01010002
-                                                                        01020002
-PROC SORT DATA=HPACC; BY BRANCH; RUN;                                   01030002
-PROC SORT DATA=BRHDATA; BY BRANCH; RUN;                                 01040002
-DATA HPACC;                                                             01050002
-   MERGE HPACC(IN=A) BRHDATA;                                           01060002
-   BY BRANCH;                                                           01070002
-   IF A;                                                                01080002
-RUN;                                                                    01090002
-                                                                        01100002
-*** MERGE HP A/C WITH CIS ***;                                          01110002
-PROC SORT DATA=HPCIS; BY ACCTNO; RUN;                                   01120002
-PROC SORT DATA=HPACC; BY ACCTNO; RUN;                                   01130002
-DATA HPACC;                                                             01140002
-   MERGE HPACC(IN=A) HPCIS(IN=B);                                       01150002
-   BY ACCTNO;                                                           01160002
-   IF A AND B;                                                          01170002
-RUN;                                                                    01180002
-                                                                        01190002
-PROC SORT DATA=HPACC; BY BRANCH ICNO; RUN;                              01200002
-PROC MEANS DATA=HPACC NWAY NOPRINT;                                     01210004
-     BY      BRANCH ICNO;                                               01220002
-     VAR     BALANCE;                                                   01230002
-     OUTPUT  OUT=HPIC (DROP=_TYPE_ _FREQ_) SUM=;                        01240002
-RUN;                                                                    01250002
-                                                                        01260002
-*** EXTRACT TOP TEN CUSTOMER PER BRANCH ***;                            01261002
-PROC SORT DATA=HPIC; BY BRANCH DESCENDING BALANCE; RUN;                 01270002
-DATA HPIC;                                                              01280002
-   RETAIN N 0;                                                          01280102
-   SET HPIC; BY BRANCH;                                                 01281002
-   IF FIRST.BRANCH THEN N = 1;                                          01283002
-   ELSE N = N + 1;                                                      01284002
-   IF N <=10 THEN OUTPUT;                                               01290002
-RUN;                                                                    01330002
-                                                                        01340002
-PROC SORT DATA=HPIC OUT=HPIC(RENAME=BALANCE=TOTBAL);                    01350002
-   BY BRANCH ICNO; RUN;                                                 01351002
-PROC SORT DATA=HPACC; BY BRANCH ICNO; RUN;                              01360002
-DATA HPACC1;                                                            01370002
-   MERGE HPACC(IN=A) HPIC(IN=B);                                        01380002
-   BY BRANCH ICNO;                                                      01390002
-   IF A AND B;                                                          01400002
-RUN;                                                                    01410002
-                                                                        01430002
-PROC SORT DATA=HPACC1;                                                  01431002
-   BY BRANCH DESCENDING TOTBAL ICNO ACCTNO;                             01432002
-RUN;                                                                    01433002
-                                                                        01434002
-TITLE ' ';                                                              01440002
-OPTIONS NOCENTER NODATE NONUMBER;                                       01443102
-DATA _NULL_;                                                            01450002
-  SET HPACC1;                                                           01460002
-  BY BRANCH DESCENDING TOTBAL ICNO ACCTNO;                              01470002
-  FILE HPCOLD HEADER=NEWPAGE;                                           01501002
-                                                                        01510002
-  IF FIRST.BRANCH THEN DO;                                              01520002
-     BRAMT=0;                                                           01540002
-     PUT _PAGE_;                                                        01541002
-  END;                                                                  01560002
-                                                                        01570002
-  BRAMT+BALANCE;                                                        01620002
-  ICAMT+BALANCE;                                                        01630002
-  PUT @1   ACCTNO                                                       01650002
-      @13  NOTENO                                                       01660002
-      @20  CUSTNAME    $30.                                             01661002
-      @51  PRODUCT                                                      01662002
-      @59  BORSTAT                                                      01663002
-      @65  BALANCE COMMA16.2                                            01664002
-      @82  MTHARR COMMA6.                                               01665002
-      @92  ISSDTE DATE8.;                                               01666002
-      LINECNT +1;                                                       01700002
-                                                                        01710002
-  IF LAST.ICNO THEN DO;                                                 01760002
-     PUT @65 '----------------';                                        01780002
-     PUT @58 'TOTAL: '                                                  01800002
-         @65 ICAMT COMMA16.2;                                           01801002
-     PUT @65 '================';                                        01820002
-     ICAMT = 0;                                                         01830002
-     LINECNT +3;                                                        01840002
-  END;                                                                  01850002
-                                                                        01860002
-  IF LAST.BRANCH THEN DO;                                               01910002
-     PUT @65 '----------------';                                        01911002
-     PUT @51 'BRANCH TOTAL: '                                           01912002
-         @65 BRAMT COMMA16.2;                                           01913002
-     PUT @65 '================';                                        01914002
-     PAGECNT=0;                                                         01915002
-  END;                                                                  02000002
-  RETURN;                                                               02010002
-                                                                        02020002
-  NEWPAGE:                                                              02030002
-    PAGECNT+1;                                                          02040002
-    PUT @1   'PUBLIC BANK BERHAD'                                       02220002
-        @80  "&RDATE"                                                   02221002
-        @90  'PAGE NO : ' PAGECNT;                                      02230002
-    PUT @1   'TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) '   02240002
-        @55  'AS AT ' "&RDATE";                                         02250002
-    PUT @1   'REPORT ID: EIMHPTOP';                                     02260002
-    PUT @1   '     ';                                                   02270002
-    PUT @1   'BRANCH CODE= ' BRANCH Z3.;                                02280002
-    PUT @1   '     ';                                                   02290002
-    PUT @13  'NOTE'                                                     02300002
-        @50  'LOAN'                                                     02320002
-        @56  'BORROWER'                                                 02330002
-        @82  'MONTH'                                                    02350002
-        @93  'ISSUE';                                                   02360002
-    PUT @1   'MNI NO'                                                   02370002
-        @13  'NO'                                                       02380002
-        @20  'NAME'                                                     02390002
-        @50  'TYPE'                                                     02400002
-        @56  'STATUS'                                                   02410002
-        @70  'NET BALANCE'                                              02420002
-        @82  'PASS DUE'                                                 02430002
-        @93  'DATE';                                                    02440002
-    PUT @1   '------------------------------------------'               02500002
-        @43  '------------------------------------------'               02510002
-        @85  '--------------------';                                    02520002
-    LINECNT = 9;                                                        02560002
-  RETURN;                                                               02570002
-RUN;                                                                    02580002
-                                                                        02590002
-                                                                        02600002
+# ============================================================
+# JOB NAME : EIBMBTAT (Python version)
+# DESC     : Average Original Tenure for BA Primary Rediscounted
+# INPUT    : SAS7BDAT (SAS dataset)
+# OUTPUT   : Parquet + CSV + Report
+# ============================================================
 
+import pandas as pd
+import pyreadstat  # Better SAS reader - no header length warning
+from datetime import datetime, timedelta
+import os
+import sys
 
+# ============================================================
+# 0. DEFINE PATHS
+# ============================================================
 
+# Input paths
+BTRWH_BASE_PATH = "/dwh/btrade" 
 
-EIIHPTIOP
+# Output paths
+OUTPUT_DIR = "/host/mis/output/report/btrade" 
 
-%INC PGM(PBBLNFMT);                                                     00280002
-                                                                        00290002
-DATA REPTDATE;                                                          00300002
-   SET LOAN.REPTDATE;                                                   00320002
-   SELECT(DAY(REPTDATE));                                               00350002
-      WHEN (8)  DO; WK = '1'; WK1 = '4'; END;                           00360002
-      WHEN(15)  DO; WK = '2'; WK1 = '1'; END;                           00370002
-      WHEN(22)  DO; WK = '3'; WK1 = '2'; END;                           00380002
-      OTHERWISE DO; WK = '4'; WK1 = '3'; END;                           00390002
-   END;                                                                 00400002
-   MM = MONTH(REPTDATE);                                                00410002
-   IF WK = '1' THEN DO;                                                 00420002
-      MM1 = MM - 1;                                                     00430002
-      IF MM1 = 0 THEN MM1 = 12;                                         00440002
-   END;                                                                 00450002
-   ELSE MM1 = MM;                                                       00460002
-   CALL SYMPUT('NOWK',PUT(WK,$1.));                                     00470002
-   CALL SYMPUT('NOWK1',PUT(WK1,$1.));                                   00480002
-   CALL SYMPUT('REPTMON',PUT(MM,Z2.));                                  00490002
-   CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));                                00500002
-   CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));                         00510002
-RUN;                                                                    00520002
-                                                                        00530002
-*** CIS INFO ***;                                                       00540002
-DATA HPCIS(KEEP=ACCTNO ICNO CUSTNAME);                                  00550002
-   SET CIS.LOAN;                                                        00560002
-   IF CACCCODE NOT IN ('017','021','028') AND SECCUST = '901';          00561002
-   IF NEWIC NE ' ' THEN ICNO = NEWIC;                                   00570002
-   ELSE ICNO = OLDIC;                                                   00580002
-RUN;                                                                    00590002
-                                                                        00600002
-*** EXTRACT HP A/C ***;                                                 00610002
-DATA HPACC(KEEP=ACCTNO NOTENO PRODUCT BORSTAT BALANCE BLDATE            00620002
-                ISSDTE MTHARR BRANCH);                                  00630002
-   SET LOAN.LOAN&REPTMON&NOWK;                                          00640002
-   IF PRODUCT IN &HPD AND                                               00650002
-      BALANCE GT 0;                                                     00660002
-   THISDATE = INPUT("&RDATE", DDMMYY8.);                                00670002
-   IF BLDATE > 0 THEN DAYDIFF = THISDATE - BLDATE;                      00680002
-   IF      (DAYDIFF>729) THEN MTHARR = INT((DAYDIFF/365)*12);           00690002
-   ELSE IF (DAYDIFF>698) THEN MTHARR = 23;                              00700002
-   ELSE IF (DAYDIFF>668) THEN MTHARR = 22;                              00710002
-   ELSE IF (DAYDIFF>638) THEN MTHARR = 21;                              00720002
-   ELSE IF (DAYDIFF>608) THEN MTHARR = 20;                              00730002
-   ELSE IF (DAYDIFF>577) THEN MTHARR = 19;                              00740002
-   ELSE IF (DAYDIFF>547) THEN MTHARR = 18;                              00750002
-   ELSE IF (DAYDIFF>516) THEN MTHARR = 17;                              00760002
-   ELSE IF (DAYDIFF>486) THEN MTHARR = 16;                              00770002
-   ELSE IF (DAYDIFF>456) THEN MTHARR = 15;                              00780002
-   ELSE IF (DAYDIFF>424) THEN MTHARR = 14;                              00790002
-   ELSE IF (DAYDIFF>394) THEN MTHARR = 13;                              00800002
-   ELSE IF (DAYDIFF>364) THEN MTHARR = 12;                              00810002
-   ELSE IF (DAYDIFF>333) THEN MTHARR = 11;                              00820002
-   ELSE IF (DAYDIFF>303) THEN MTHARR = 10;                              00830002
-   ELSE IF (DAYDIFF>273) THEN MTHARR = 9;                               00840002
-   ELSE IF (DAYDIFF>243) THEN MTHARR = 8;                               00850002
-   ELSE IF (DAYDIFF>213) THEN MTHARR = 7;                               00860002
-   ELSE IF (DAYDIFF>182) THEN MTHARR = 6;                               00870002
-   ELSE IF (DAYDIFF>151) THEN MTHARR = 5;                               00880002
-   ELSE IF (DAYDIFF>121) THEN MTHARR = 4;                               00890002
-   ELSE IF (DAYDIFF>91)  THEN MTHARR = 3;                               00900002
-   ELSE IF (DAYDIFF>61)  THEN MTHARR = 2;                               00910002
-   ELSE IF (DAYDIFF>30)  THEN MTHARR = 1;                               00920002
-   ELSE                       MTHARR = 0;                               00930002
-RUN;                                                                    00940002
-                                                                        00950002
-*** MERGE HP A/C WITH BRANCH ABBR ***;                                  00960002
-DATA BRHDATA;                                                           00970002
-  INFILE BRHFILE LRECL=80;                                              00980002
-  INPUT @2 BRANCH  3.                                                   00990002
-        @6 BRABBR  $3.;                                                 01000002
-RUN;                                                                    01010002
-                                                                        01020002
-PROC SORT DATA=HPACC; BY BRANCH; RUN;                                   01030002
-PROC SORT DATA=BRHDATA; BY BRANCH; RUN;                                 01040002
-DATA HPACC;                                                             01050002
-   MERGE HPACC(IN=A) BRHDATA;                                           01060002
-   BY BRANCH;                                                           01070002
-   IF A;                                                                01080002
-RUN;                                                                    01090002
-                                                                        01100002
-*** MERGE HP A/C WITH CIS ***;                                          01110002
-PROC SORT DATA=HPCIS; BY ACCTNO; RUN;                                   01120002
-PROC SORT DATA=HPACC; BY ACCTNO; RUN;                                   01130002
-DATA HPACC;                                                             01140002
-   MERGE HPACC(IN=A) HPCIS(IN=B);                                       01150002
-   BY ACCTNO;                                                           01160002
-   IF A AND B;                                                          01170002
-RUN;                                                                    01180002
-                                                                        01190002
-PROC SORT DATA=HPACC; BY BRANCH ICNO; RUN;                              01200002
-PROC MEANS DATA=HPACC NWAY NOPRINT;                                     01210002
-     BY      BRANCH ICNO;                                               01220002
-     VAR     BALANCE;                                                   01230002
-     OUTPUT  OUT=HPIC (DROP=_TYPE_ _FREQ_) SUM=;                        01240002
-RUN;                                                                    01250002
-                                                                        01260002
-*** EXTRACT TOP TEN CUSTOMER PER BRANCH ***;                            01261002
-PROC SORT DATA=HPIC; BY BRANCH DESCENDING BALANCE; RUN;                 01270002
-DATA HPIC;                                                              01280002
-   RETAIN N 0;                                                          01280102
-   SET HPIC; BY BRANCH;                                                 01281002
-   IF FIRST.BRANCH THEN N = 1;                                          01283002
-   ELSE N = N + 1;                                                      01284002
-   IF N <=10 THEN OUTPUT;                                               01290002
-RUN;                                                                    01330002
-                                                                        01340002
-PROC SORT DATA=HPIC OUT=HPIC(RENAME=BALANCE=TOTBAL);                    01350002
-   BY BRANCH ICNO; RUN;                                                 01351002
-PROC SORT DATA=HPACC; BY BRANCH ICNO; RUN;                              01360002
-DATA HPACC1;                                                            01370002
-   MERGE HPACC(IN=A) HPIC(IN=B);                                        01380002
-   BY BRANCH ICNO;                                                      01390002
-   IF A AND B;                                                          01400002
-RUN;                                                                    01410002
-                                                                        01430002
-PROC SORT DATA=HPACC1;                                                  01431002
-   BY BRANCH DESCENDING TOTBAL ICNO ACCTNO;                             01432002
-RUN;                                                                    01433002
-                                                                        01434002
-TITLE ' ';                                                              01440002
-OPTIONS NOCENTER NODATE NONUMBER;                                       01443102
-DATA _NULL_;                                                            01450002
-  SET HPACC1;                                                           01460002
-  BY BRANCH DESCENDING TOTBAL ICNO ACCTNO;                              01470002
-  FILE HPCOLD HEADER=NEWPAGE;                                           01501002
-                                                                        01510002
-  IF FIRST.BRANCH THEN DO;                                              01520002
-     BRAMT=0;                                                           01540002
-     PUT _PAGE_;                                                        01541002
-  END;                                                                  01560002
-                                                                        01570002
-  BRAMT+BALANCE;                                                        01620002
-  ICAMT+BALANCE;                                                        01630002
-  PUT @1   ACCTNO                                                       01650002
-      @13  NOTENO                                                       01660002
-      @20  CUSTNAME    $30.                                             01661002
-      @51  PRODUCT                                                      01662002
-      @59  BORSTAT                                                      01663002
-      @65  BALANCE COMMA16.2                                            01664002
-      @82  MTHARR COMMA6.                                               01665002
-      @92  ISSDTE DATE8.;                                               01666002
-      LINECNT +1;                                                       01700002
-                                                                        01710002
-  IF LAST.ICNO THEN DO;                                                 01760002
-     PUT @65 '----------------';                                        01780002
-     PUT @58 'TOTAL: '                                                  01800002
-         @65 ICAMT COMMA16.2;                                           01801002
-     PUT @65 '================';                                        01820002
-     ICAMT = 0;                                                         01830002
-     LINECNT +3;                                                        01840002
-  END;                                                                  01850002
-                                                                        01860002
-  IF LAST.BRANCH THEN DO;                                               01910002
-     PUT @65 '----------------';                                        01911002
-     PUT @51 'BRANCH TOTAL: '                                           01912002
-         @65 BRAMT COMMA16.2;                                           01913002
-     PUT @65 '================';                                        01914002
-     PAGECNT=0;                                                         01915002
-  END;                                                                  02000002
-  RETURN;                                                               02010002
-                                                                        02020002
-  NEWPAGE:                                                              02030002
-    PAGECNT+1;                                                          02040002
-    PUT @1   'PUBLIC ISLAMIC BANK BERHAD'                               02220002
-        @80  "&RDATE"                                                   02221002
-        @90  'PAGE NO : ' PAGECNT;                                      02230002
-    PUT @1   'TOP TEN LARGE ACCOUNTS FOR HPD (CONVENTIONAL & AITAB) '   02240002
-        @55  'AS AT ' "&RDATE";                                         02250002
-    PUT @1   'REPORT ID: EIMHPTOP';                                     02260002
-    PUT @1   '     ';                                                   02270002
-    PUT @1   'BRANCH CODE= ' BRANCH Z3.;                                02280002
-    PUT @1   '     ';                                                   02290002
-    PUT @13  'NOTE'                                                     02300002
-        @50  'LOAN'                                                     02320002
-        @56  'BORROWER'                                                 02330002
-        @82  'MONTH'                                                    02350002
-        @93  'ISSUE';                                                   02360002
-    PUT @1   'MNI NO'                                                   02370002
-        @13  'NO'                                                       02380002
-        @20  'NAME'                                                     02390002
-        @50  'TYPE'                                                     02400002
-        @56  'STATUS'                                                   02410002
-        @70  'NET BALANCE'                                              02420002
-        @82  'PASS DUE'                                                 02430002
-        @93  'DATE';                                                    02440002
-    PUT @1   '------------------------------------------'               02500002
-        @43  '------------------------------------------'               02510002
-        @85  '--------------------';                                    02520002
-    LINECNT = 9;                                                        02560002
-  RETURN;                                                               02570002
-RUN;                                                                    02580002
-                                                                        02590002
-                                                                        02600002
+# ============================================================
+# 1. CALCULATE REPORT DATE (YESTERDAY'S DATE)
+# ============================================================
+
+# Get yesterday's date
+yesterday = datetime.now() - timedelta(days=1)
+#yesterday = datetime(2026, 6, 8)
+REPTDATE = yesterday
+
+# Calculate NOWK based on DAY of REPTDATE (SAS logic)
+day = REPTDATE.day
+if day == 8:
+    NOWK = '1'
+elif day == 15:
+    NOWK = '2'
+elif day == 22:
+    NOWK = '3'
+else:
+    NOWK = '4'
+
+REPTYEAR = REPTDATE.strftime("%y")  # YEAR2. format in SAS (2-digit year)
+REPTMON  = REPTDATE.strftime("%m")  # Z2. format (leading zero)
+RDATE    = REPTDATE.strftime("%d/%m/%Y")  # DDMMYY10. format
+
+print(f"Report Date (Yesterday): {RDATE}")
+print(f"Original REPTDATE value: {REPTDATE.strftime('%Y-%m-%d')}")
+print(f"Day of month: {day} → Week number: {NOWK}")
+print(f"Period: {REPTMON}/{NOWK}/{REPTYEAR}")
+print("="*60)
+
+# ============================================================
+# 2. LOAD BTRAD DATASET (DYNAMIC NAME)
+# Using pyreadstat to avoid header length warning
+# ============================================================
+
+btrad_sas = f"{BTRWH_BASE_PATH}{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
+print(f"Looking for file: {btrad_sas}")
+
+if not os.path.exists(btrad_sas):
+    raise FileNotFoundError(f"BTRAD input file not found: {btrad_sas}")
+
+def load_sas_pyreadstat(path):
+    """Load SAS .sas7bdat file using pyreadstat (handles large page sizes)"""
+    print(f"Loading: {path}")
+    try:
+        # Read SAS file with pyreadstat
+        df, meta = pyreadstat.read_sas7bdat(path)
+        
+        # Print metadata for debugging
+        print(f"  - Rows loaded: {len(df):,}")
+        print(f"  - Columns loaded: {len(df.columns)}")
+        
+        # Try to get SAS version info if available
+        if hasattr(meta, 'table_metadata') and meta.table_metadata:
+            if 'SASRelease' in meta.table_metadata:
+                print(f"  - SAS Version: {meta.table_metadata['SASRelease']}")
+        
+        return df
+    except Exception as e:
+        print(f"Error with pyreadstat: {e}")
+        raise
+
+btrad = load_sas_pyreadstat(btrad_sas)
+print(f"Original records in BTRAD: {len(btrad):,}")
+
+# Display column names for debugging (optional)
+print(f"\nFirst few column names:")
+for col in list(btrad.columns)[:10]:
+    print(f"  - {col}")
+print("  ...")
+
+# ============================================================
+# 3. FILTER DATA (SAS WHERE CLAUSE)
+# Note: Preserving duplicate '34470' as in original SAS
+# ============================================================
+
+FACILITY_LIST = [
+    '34411', '34412', '34421', '34422', '34440', '34470',
+    '34470', '34480', '34490'  # Duplicate preserved from original
+]
+
+LIABCODE_LIST = ['BAE', 'BAI', 'BAP', 'BAS']
+
+print(f"\nFiltering with LIABCODE values: {LIABCODE_LIST}")
+print(f"Unique LIABCODE values in dataset: {btrad['LIABCODE'].unique()}")
+
+# Save original count for debugging
+original_count = len(btrad)
+
+# Apply filters
+filtered = (
+    (btrad["FACILITY"].isin(FACILITY_LIST)) &
+    (btrad["LIABCODE"].isin(LIABCODE_LIST)) &
+    (btrad["UTRDF"] == "D") &
+    (btrad["BALANCE"] > 0)
+)
+
+btrad = btrad[filtered].copy()
+
+print(f"\nFilter results:")
+print(f"  - Original records: {original_count:,}")
+print(f"  - Records after filtering: {len(btrad):,}")
+
+if len(btrad) == 0:
+    print("\nWARNING: No records after filtering. Debugging information:")
+    print(f"  - FACILITY filter matches: {(btrad['FACILITY'].isin(FACILITY_LIST)).sum()}")
+    print(f"  - LIABCODE filter matches: {(btrad['LIABCODE'].isin(LIABCODE_LIST)).sum()}")
+    print(f"  - UTRDF filter matches: {(btrad['UTRDF'] == 'D').sum()}")
+    print(f"  - BALANCE filter matches: {(btrad['BALANCE'] > 0).sum()}")
+    sys.exit(0)
+
+# ============================================================
+# 4. CALCULATE TENURE & TOTAMT
+# SAS: TENURE = (MATDATE-ISSDTE)+1
+# ============================================================
+
+# Convert to datetime if they aren't already
+btrad["ISSDTE"]  = pd.to_datetime(btrad["ISSDTE"])
+btrad["MATDATE"] = pd.to_datetime(btrad["MATDATE"])
+
+# Calculate tenure in days (difference + 1)
+btrad["TENURE"] = (btrad["MATDATE"] - btrad["ISSDTE"]).dt.days + 1
+btrad["TOTAMT"] = btrad["FCVALUE"] * btrad["TENURE"]
+
+# Keep only necessary columns (matching SAS KEEP statement)
+btrad = btrad[
+    ["BRANCH", "ACCTNOX", "TRANSREF", "FCVALUE", 
+     "MATDATE", "ISSDTE", "TENURE", "TOTAMT"]
+]
+
+print(f"\nAfter tenure calculation:")
+print(f"  - Records with TENURE > 0: {(btrad['TENURE'] > 0).sum():,}")
+print(f"  - Total FCVALUE: {btrad['FCVALUE'].sum():,.2f}")
+print(f"  - Total TOTAMT: {btrad['TOTAMT'].sum():,.2f}")
+
+# ============================================================
+# 5. SORT BY BRANCH (equivalent to PROC SORT)
+# ============================================================
+
+btrad = btrad.sort_values("BRANCH")
+
+# ============================================================
+# 6. PROC SUMMARY (BY BRANCH, SUM of FCVALUE and TOTAMT)
+# SAS: PROC SUMMARY DATA=BTRAD NWAY; BY BRANCH; VAR FCVALUE TOTAMT;
+#      OUTPUT OUT=AVGTENURE(DROP=_FREQ_ _TYPE_) SUM=;
+# ============================================================
+
+avgt = (
+    btrad
+    .groupby("BRANCH", as_index=False)
+    .agg({
+        "FCVALUE": "sum",
+        "TOTAMT": "sum"
+    })
+)
+
+print(f"\nAggregation results:")
+print(f"  - Number of branches after aggregation: {len(avgt):,}")
+
+# ============================================================
+# 7. CALCULATE TENURE (SAS DATA step after PROC SUMMARY)
+# ============================================================
+
+avgt["TENURE"] = avgt["TOTAMT"] / avgt["FCVALUE"]
+
+# Format as 8. (SAS format 8. with 2 decimals default)
+avgt["TENURE"] = avgt["TENURE"].round(2)
+
+# ============================================================
+# 8. GENERATE PROC REPORT OUTPUT (Console/Text report)
+# ============================================================
+
+print("\n" + "="*86)
+print(" P U B L I C   B A N K   B E R H A D".center(86))
+print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
+print("="*86)
+print(f" REPORT ID    : EIBMBTAT".center(86))
+print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
+print(f" REPORT DATE  : {RDATE}".center(86))
+print("="*86)
+
+# Create the report dataframe with formatted columns
+report_df = avgt.copy()
+report_df["TOTAMT_FMT"] = report_df["TOTAMT"].apply(lambda x: f"{x:,.2f}")
+report_df["FCVALUE_FMT"] = report_df["FCVALUE"].apply(lambda x: f"{x:,.2f}")
+report_df["TENURE_FMT"] = report_df["TENURE"].apply(lambda x: f"{x:.2f}")
+
+# Print header
+print(f"{'BRANCH':<10} {'TOTAL AMOUNT (RM)':<30} {'BALANCE (RM)':<20} {'AVG TENURE (DAY)':<20}")
+print("-"*86)
+
+# Print each row
+for _, row in report_df.iterrows():
+    print(f"{row['BRANCH']:<10} {row['TOTAMT_FMT']:<30} {row['FCVALUE_FMT']:<20} {row['TENURE_FMT']:<20}")
+
+# Calculate totals and overall average
+total_totamt = avgt["TOTAMT"].sum()
+total_fcvalue = avgt["FCVALUE"].sum()
+overall_avg_tenure = total_totamt / total_fcvalue
+
+# Print footer (RBREAK AFTER)
+print("-"*86)
+print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':<10} {overall_avg_tenure:>9.2f}")
+print("="*86)
+
+# ============================================================
+# 9. SAVE OUTPUT DATASETS (Parquet and CSV)
+# ============================================================
+
+# Create output directory if it doesn't exist
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Output filenames
+base_filename = f"EIBMBTAT_AVGTENURE_{REPTMON}{NOWK}{REPTYEAR}"
+OUTPUT_PARQUET = os.path.join(OUTPUT_DIR, f"{base_filename}.parquet")
+OUTPUT_CSV = os.path.join(OUTPUT_DIR, f"{base_filename}.csv")
+
+# Save dataset (same as SAS dataset AVGTENURE)
+avgt_output = avgt[["BRANCH", "TOTAMT", "FCVALUE", "TENURE"]].copy()
+avgt_output["REPORT_DATE"] = RDATE
+avgt_output["REPTDATE_RAW"] = REPTDATE.strftime("%Y-%m-%d")
+avgt_output["REPTMON"] = REPTMON
+avgt_output["NOWK"] = NOWK
+avgt_output["REPTYEAR"] = REPTYEAR
+
+# Save as Parquet
+try:
+    avgt_output.to_parquet(
+        OUTPUT_PARQUET,
+        engine="pyarrow",
+        compression="snappy",
+        index=False
+    )
+    print(f"\nDataset saved to Parquet: {OUTPUT_PARQUET}")
+except Exception as e:
+    print(f"Error saving Parquet: {e}")
+    print("Falling back to CSV only...")
+
+# Save as CSV
+try:
+    avgt_output.to_csv(
+        OUTPUT_CSV,
+        index=False,
+        encoding='utf-8'
+    )
+    print(f"Dataset saved to CSV: {OUTPUT_CSV}")
+except Exception as e:
+    print(f"Error saving CSV: {e}")
+
+# ============================================================
+# 10. Save the report as text file
+# ============================================================
+
+try:
+    report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
+    with open(report_txt, 'w') as f:
+        # Redirect print output to file
+        original_stdout = sys.stdout
+        sys.stdout = f
+        
+        print("="*86)
+        print(" P U B L I C   B A N K   B E R H A D".center(86))
+        print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
+        print("="*86)
+        print(f" REPORT ID    : EIBMBTAT".center(86))
+        print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
+        print(f" REPORT DATE  : {RDATE}".center(86))
+        print("="*86)
+        print(f"{'BRANCH':<10} {'TOTAL AMOUNT (RM)':<30} {'BALANCE (RM)':<20} {'AVG TENURE (DAY)':<20}")
+        print("-"*86)
+        
+        for _, row in report_df.iterrows():
+            print(f"{row['BRANCH']:<10} {row['TOTAMT_FMT']:<30} {row['FCVALUE_FMT']:<20} {row['TENURE_FMT']:<20}")
+        
+        print("-"*86)
+        print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':<10} {overall_avg_tenure:>9.2f}")
+        print("="*86)
+        
+        sys.stdout = original_stdout
+    
+    print(f"Report saved to text file: {report_txt}")
+except Exception as e:
+    print(f"Error saving report text file: {e}")
+
+# ============================================================
+# 11. DISPLAY EXECUTION SUMMARY
+# ============================================================
+print("\n" + "="*60)
+print("EIBMBTAT job completed successfully")
+print("="*60)
+print(f"Execution Date & Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print(f"Report Date (Yesterday): {RDATE}")
+print(f"Input BTRAD file: {btrad_sas}")
+print(f"Records processed: {len(btrad):,}")
+print(f"Branches summarized: {len(avgt):,}")
+print(f"Total Balance (FCVALUE): RM {total_fcvalue:,.2f}")
+print(f"Total Amount (TOTAMT): RM {total_totamt:,.2f}")
+print(f"Overall Average Tenure: {overall_avg_tenure:.2f} days")
+print(f"Output directory: {OUTPUT_DIR}")
+print("="*60)
+
+# ============================================================
+# END OF JOB
+# ============================================================
