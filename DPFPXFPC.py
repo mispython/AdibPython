@@ -1,8 +1,9 @@
+
 # ============================================================
-# JOB NAME : EIBMBTAT (Python version)
-# DESC     : Average Original Tenure for BA Primary Rediscounted
+# JOB NAME : EIIMBTAT (Python version)
+# DESC     : Average Original Tenure for BA Primary Rediscounted (Islamic)
 # INPUT    : SAS7BDAT (SAS dataset)
-# OUTPUT   : Report (Text file only)
+# OUTPUT   : Parquet + CSV + Report
 # ============================================================
 
 import pandas as pd
@@ -15,11 +16,11 @@ import sys
 # 0. DEFINE PATHS
 # ============================================================
 
-# Input paths
-BTRWH_BASE_PATH = "/dwh/btrade" 
+# Input paths - Islamic dataset 'ibtrad'
+BTRWH_BASE_PATH = "/dwh/ibtrade"
 
 # Output paths
-OUTPUT_DIR = "/host/mis/output/report/btrade" 
+OUTPUT_DIR = "/host/mis/output/report/ibtrade"
 
 # ============================================================
 # 1. CALCULATE REPORT DATE (YESTERDAY'S DATE)
@@ -52,7 +53,7 @@ print(f"Period: {REPTMON}/{NOWK}/{REPTYEAR}")
 print("="*60)
 
 # ============================================================
-# 2. LOAD BTRAD DATASET (DYNAMIC NAME)
+# 2. LOAD IBTRAD DATASET (ISLAMIC - DYNAMIC NAME)
 # Using pyreadstat to avoid header length warning
 # ============================================================
 
@@ -60,7 +61,7 @@ btrad_sas = f"{BTRWH_BASE_PATH}{REPTMON}{NOWK}{REPTYEAR}.sas7bdat"
 print(f"Looking for file: {btrad_sas}")
 
 if not os.path.exists(btrad_sas):
-    raise FileNotFoundError(f"BTRAD input file not found: {btrad_sas}")
+    raise FileNotFoundError(f"IBTRAD input file not found: {btrad_sas}")
 
 def load_sas_pyreadstat(path):
     """Load SAS .sas7bdat file using pyreadstat (handles large page sizes)"""
@@ -83,18 +84,19 @@ def load_sas_pyreadstat(path):
         print(f"Error with pyreadstat: {e}")
         raise
 
+# Load the data
 btrad = load_sas_pyreadstat(btrad_sas)
-print(f"Original records in BTRAD: {len(btrad):,}")
+print(f"Original records in IBTRAD: {len(btrad):,}")
 
-# Display column names for debugging (optional)
-print(f"\nFirst few column names:")
-for col in list(btrad.columns)[:10]:
+# Display first few rows and column names for debugging
+print(f"\nColumn names in dataset:")
+for col in btrad.columns[:20]:  # Show first 20 columns
     print(f"  - {col}")
-print("  ...")
+print(f"  ... and {len(btrad.columns) - 20} more columns" if len(btrad.columns) > 20 else "")
 
 # ============================================================
 # 3. FILTER DATA (SAS WHERE CLAUSE)
-# Note: Preserving duplicate '34470' as in original SAS
+# Islamic version uses different LIABCODE values!
 # ============================================================
 
 FACILITY_LIST = [
@@ -102,7 +104,8 @@ FACILITY_LIST = [
     '34470', '34480', '34490'  # Duplicate preserved from original
 ]
 
-LIABCODE_LIST = ['BAE', 'BAI', 'BAP', 'BAS']
+# Islamic LIABCODE values (different from conventional)
+LIABCODE_LIST = ['BPI', 'BII', 'BSI', 'BEI']
 
 print(f"\nFiltering with LIABCODE values: {LIABCODE_LIST}")
 print(f"Unique LIABCODE values in dataset: {btrad['LIABCODE'].unique()}")
@@ -138,7 +141,7 @@ if len(btrad) == 0:
 # ============================================================
 
 # Convert to datetime if they aren't already
-btrad["ISSDTE"]  = pd.to_datetime(btrad["ISSDTE"])
+btrad["ISSDTE"] = pd.to_datetime(btrad["ISSDTE"])
 btrad["MATDATE"] = pd.to_datetime(btrad["MATDATE"])
 
 # Calculate tenure in days (difference + 1)
@@ -164,7 +167,7 @@ btrad = btrad.sort_values("BRANCH")
 
 # ============================================================
 # 6. PROC SUMMARY (BY BRANCH, SUM of FCVALUE and TOTAMT)
-# SAS: PROC SUMMARY DATA=BTRAD NWAY; BY BRANCH; VAR FCVALUE TOTAMT;
+# SAS: PROC SUMMARY DATA=IBTRAD NWAY; BY BRANCH; VAR FCVALUE TOTAMT;
 #      OUTPUT OUT=AVGTENURE(DROP=_FREQ_ _TYPE_) SUM=;
 # ============================================================
 
@@ -194,10 +197,10 @@ avgt["TENURE"] = avgt["TENURE"].round(2)
 # ============================================================
 
 print("\n" + "="*86)
-print(" P U B L I C   B A N K   B E R H A D".center(86))
+print(" P U B L I C   I S L A M I C   B A N K   B E R H A D".center(86))
 print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
 print("="*86)
-print(f" REPORT ID    : EIBMBTAT".center(86))
+print(f" REPORT ID    : EIIMBTAT".center(86))
 print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
 print(f" REPORT DATE  : {RDATE}".center(86))
 print("="*86)
@@ -227,14 +230,52 @@ print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':
 print("="*86)
 
 # ============================================================
-# 9. SAVE REPORT AS TEXT FILE
+# 9. SAVE OUTPUT DATASETS (Parquet and CSV)
 # ============================================================
 
 # Create output directory if it doesn't exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Output filename
-base_filename = f"EIBMBTAT_AVGTENURE_{REPTMON}{NOWK}{REPTYEAR}"
+# Output filenames
+base_filename = f"EIIMBTAT_AVGTENURE_{REPTMON}{NOWK}{REPTYEAR}"
+OUTPUT_PARQUET = os.path.join(OUTPUT_DIR, f"{base_filename}.parquet")
+OUTPUT_CSV = os.path.join(OUTPUT_DIR, f"{base_filename}.csv")
+
+# Save dataset (same as SAS dataset AVGTENURE)
+avgt_output = avgt[["BRANCH", "TOTAMT", "FCVALUE", "TENURE"]].copy()
+avgt_output["REPORT_DATE"] = RDATE
+avgt_output["REPTDATE_RAW"] = REPTDATE.strftime("%Y-%m-%d")
+avgt_output["REPTMON"] = REPTMON
+avgt_output["NOWK"] = NOWK
+avgt_output["REPTYEAR"] = REPTYEAR
+
+# Save as Parquet
+try:
+    avgt_output.to_parquet(
+        OUTPUT_PARQUET,
+        engine="pyarrow",
+        compression="snappy",
+        index=False
+    )
+    print(f"\nDataset saved to Parquet: {OUTPUT_PARQUET}")
+except Exception as e:
+    print(f"Error saving Parquet: {e}")
+    print("Falling back to CSV only...")
+
+# Save as CSV
+try:
+    avgt_output.to_csv(
+        OUTPUT_CSV,
+        index=False,
+        encoding='utf-8'
+    )
+    print(f"Dataset saved to CSV: {OUTPUT_CSV}")
+except Exception as e:
+    print(f"Error saving CSV: {e}")
+
+# ============================================================
+# 10. Save the report as text file
+# ============================================================
 
 try:
     report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
@@ -244,10 +285,10 @@ try:
         sys.stdout = f
         
         print("="*86)
-        print(" P U B L I C   B A N K   B E R H A D".center(86))
+        print(" P U B L I C   I S L A M I C   B A N K   B E R H A D".center(86))
         print(" MANAGEMENT ACCOUNTING, FINANCE DIVISION".center(86))
         print("="*86)
-        print(f" REPORT ID    : EIBMBTAT".center(86))
+        print(f" REPORT ID    : EIIMBTAT".center(86))
         print(f" REPORT TITLE : AVERAGE ORIGINAL TENURE FOR BA PRIMARY REDISCOUNTED".center(86))
         print(f" REPORT DATE  : {RDATE}".center(86))
         print("="*86)
@@ -263,19 +304,19 @@ try:
         
         sys.stdout = original_stdout
     
-    print(f"\nReport saved to text file: {report_txt}")
+    print(f"Report saved to text file: {report_txt}")
 except Exception as e:
     print(f"Error saving report text file: {e}")
 
 # ============================================================
-# 10. DISPLAY EXECUTION SUMMARY
+# 11. DISPLAY EXECUTION SUMMARY
 # ============================================================
 print("\n" + "="*60)
-print("EIBMBTAT job completed successfully")
+print("EIIMBTAT job completed successfully")
 print("="*60)
 print(f"Execution Date & Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print(f"Report Date (Yesterday): {RDATE}")
-print(f"Input BTRAD file: {btrad_sas}")
+print(f"Input IBTRAD file: {btrad_sas}")
 print(f"Records processed: {len(btrad):,}")
 print(f"Branches summarized: {len(avgt):,}")
 print(f"Total Balance (FCVALUE): RM {total_fcvalue:,.2f}")
