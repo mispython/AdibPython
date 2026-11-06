@@ -65,12 +65,12 @@ def read_sas_chunked(path, columns=None, row_limit=None, chunk_size=50000):
 # --- Customer info: read in chunks, only needed columns ---
 df_cisfd = read_sas_chunked(
     CISAFD_DEPOSIT,
-    columns=['ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'CUSTNO', 'SECCUST'],
+    columns=['ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'],
     row_limit=ROW_LIMIT,
     chunk_size=CHUNK_SIZE,
 )
 df_cisfd = df_cisfd.filter(pl.col('SECCUST') == '901').select([
-    'ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'CUSTNO', 'SECCUST'
+    'ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'
 ]).sort('ACCTNO').rename({'CUSTNAME': 'NAME'})
 
 # --- FD file ---
@@ -161,15 +161,15 @@ df_fd = df_fd.with_columns([
     (pl.col('CURR_BAL') * pl.col('RT')).alias('RATEBAL')
 ])
 
-# NOTE: no drop('NAME') here — df_fd has no NAME column at this point.
-#       NAME comes from df_cisfd after the join.
-
 # Rename FD account column before joining (FD uses ACCT_NUM, CIS uses ACCTNO)
 df_fd = df_fd.rename({'ACCT_NUM': 'ACCTNO'})
 df_fd = df_fd.join(df_cisfd, on='ACCTNO', how='inner')
 
+# CUSTID resolution: BUSSREG -> NEWIC -> OLDIC -> CUSTNO  (matches original SAS)
 df_fd = df_fd.with_columns([
-    pl.when(pl.col('NEWIC').str.strip_chars() != '')
+    pl.when(pl.col('BUSSREG').str.strip_chars() != '')
+      .then(pl.col('BUSSREG'))
+      .when(pl.col('NEWIC').str.strip_chars() != '')
       .then(pl.col('NEWIC'))
       .when(pl.col('OLDIC').str.strip_chars() != '')
       .then(pl.col('OLDIC'))
