@@ -9,7 +9,7 @@ reptdate = datetime.now().date() - timedelta(days=1)
 reptday = reptdate.strftime('%d')
 
 # SAS dataset paths
-CISAFD_DEPOSIT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/enrh_cis_cust_info.sas7bdat'
+CISAFD_DEPOSIT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/cisinfo.sas7bdat'
 FD_FD = f'/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/enrh_dp_fd_cert_d{reptday}.sas7bdat'
 OVER1M = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDFD1M/over1m.txt'
 
@@ -65,21 +65,21 @@ def read_sas_chunked(path, columns=None, row_limit=None, chunk_size=50000):
 # --- Customer info: read in chunks, only needed columns ---
 df_cisfd = read_sas_chunked(
     CISAFD_DEPOSIT,
-    columns=['ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'],
+    columns=['ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'CUSTNO', 'SECCUST'],
     row_limit=ROW_LIMIT,
     chunk_size=CHUNK_SIZE,
 )
 df_cisfd = df_cisfd.filter(pl.col('SECCUST') == '901').select([
-    'ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'
+    'ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'CUSTNO', 'SECCUST'
 ]).sort('ACCTNO').rename({'CUSTNAME': 'NAME'})
 
 # --- FD file ---
 df_fd, meta_fd = pyreadstat.read_sas7bdat(FD_FD, row_limit=ROW_LIMIT)
 df_fd = pl.from_pandas(df_fd)
 df_fd = df_fd.filter(
-    (pl.col('CURBAL') > 0) &
-    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) &
-    (pl.col('CURCODE') == 'MYR')
+    (pl.col('CURR_BAL') > 0) &
+    (~pl.col('CUSTOMER_CD').is_in([77, 78, 95, 96])) &
+    (pl.col('CURRENCY_CD') == 'MYR')
 )
 
 df_fd = df_fd.with_columns([
@@ -147,7 +147,7 @@ df_fd = df_fd.with_columns([
 ])
 
 df_fd = df_fd.with_columns([
-    (pl.col('CURBAL') * pl.col('RATE')).alias('RATEBAL')
+    (pl.col('CURR_BAL') * pl.col('RATE')).alias('RATEBAL')
 ])
 
 df_fd = df_fd.drop('NAME')
@@ -155,9 +155,7 @@ df_fd = df_fd.drop('NAME')
 df_fd = df_fd.join(df_cisfd, on='ACCTNO', how='inner')
 
 df_fd = df_fd.with_columns([
-    pl.when(pl.col('BUSSREG').str.strip_chars() != '')
-      .then(pl.col('BUSSREG'))
-      .when(pl.col('NEWIC').str.strip_chars() != '')
+    pl.when(pl.col('NEWIC').str.strip_chars() != '')
       .then(pl.col('NEWIC'))
       .when(pl.col('OLDIC').str.strip_chars() != '')
       .then(pl.col('OLDIC'))
@@ -169,7 +167,7 @@ df_fd = df_fd.sort('MATDT')
 df_fd = df_fd.sort(['CUSTID', 'MATDT'])
 
 df_fdtotal = df_fd.group_by(['CUSTID', 'MATDT']).agg([
-    pl.col('CURBAL').sum().alias('TOTAL'),
+    pl.col('CURR_BAL').sum().alias('TOTAL'),
     pl.col('RATEBAL').sum().alias('TOTRATEBAL')
 ])
 
@@ -189,22 +187,22 @@ df_fdtotal = df_fdtotal.with_columns([
 df_fd_all, meta_fd_all = pyreadstat.read_sas7bdat(FD_FD, row_limit=ROW_LIMIT)
 df_fd_all = pl.from_pandas(df_fd_all)
 df_fd_all = df_fd_all.filter(
-    (pl.col('CURBAL') > 0) &
-    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) &
-    (pl.col('CURCODE') == 'MYR')
+    (pl.col('CURR_BAL') > 0) &
+    (~pl.col('CUSTOMER_CD').is_in([77, 78, 95, 96])) &
+    (pl.col('CURRENCY_CD') == 'MYR')
 )
 
 df_fd_all = df_fd_all.with_columns([
-    (pl.col('CURBAL') * pl.col('RATE')).alias('RATEBAL')
+    (pl.col('CURR_BAL') * pl.col('RATE')).alias('RATEBAL')
 ])
 
 df_totalfd = df_fd_all.select([
-    pl.col('CURBAL').sum(),
+    pl.col('CURR_BAL').sum(),
     pl.col('RATEBAL').sum()
 ])
 
 df_totalfd = df_totalfd.with_columns([
-    (pl.col('RATEBAL') / pl.col('CURBAL')).round(2).alias('AVGRATE')
+    (pl.col('RATEBAL') / pl.col('CURR_BAL')).round(2).alias('AVGRATE')
 ])
 
 lines = []
@@ -212,7 +210,7 @@ lines.append(' ')
 lines.append('TOTAL NON-INDI FD (MIL);AVERAGE RATE;')
 
 total_fd = df_totalfd.to_dicts()[0]
-curbal1 = round(total_fd['CURBAL'] / 1000000, 3)
+curbal1 = round(total_fd['CURR_BAL'] / 1000000, 3)
 lines.append(f"{curbal1:.3f};{total_fd['AVGRATE']:.2f};")
 
 df_mature = df_fdtotal.with_columns([
