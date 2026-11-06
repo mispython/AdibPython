@@ -1,9 +1,8 @@
-
 # ============================================================
 # JOB NAME : EIIMBTAT (Python version)
 # DESC     : Average Original Tenure for BA Primary Rediscounted (Islamic)
 # INPUT    : SAS7BDAT (SAS dataset)
-# OUTPUT   : Parquet + CSV + Report
+# OUTPUT   : Report (Text file only)
 # ============================================================
 
 import pandas as pd
@@ -230,52 +229,14 @@ print(f"{'TOTAL :':<15} {total_totamt:>22,.2f} {total_fcvalue:>18,.2f} {'AVG :':
 print("="*86)
 
 # ============================================================
-# 9. SAVE OUTPUT DATASETS (Parquet and CSV)
+# 9. SAVE REPORT AS TEXT FILE
 # ============================================================
 
 # Create output directory if it doesn't exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Output filenames
+# Output filename
 base_filename = f"EIIMBTAT_AVGTENURE_{REPTMON}{NOWK}{REPTYEAR}"
-OUTPUT_PARQUET = os.path.join(OUTPUT_DIR, f"{base_filename}.parquet")
-OUTPUT_CSV = os.path.join(OUTPUT_DIR, f"{base_filename}.csv")
-
-# Save dataset (same as SAS dataset AVGTENURE)
-avgt_output = avgt[["BRANCH", "TOTAMT", "FCVALUE", "TENURE"]].copy()
-avgt_output["REPORT_DATE"] = RDATE
-avgt_output["REPTDATE_RAW"] = REPTDATE.strftime("%Y-%m-%d")
-avgt_output["REPTMON"] = REPTMON
-avgt_output["NOWK"] = NOWK
-avgt_output["REPTYEAR"] = REPTYEAR
-
-# Save as Parquet
-try:
-    avgt_output.to_parquet(
-        OUTPUT_PARQUET,
-        engine="pyarrow",
-        compression="snappy",
-        index=False
-    )
-    print(f"\nDataset saved to Parquet: {OUTPUT_PARQUET}")
-except Exception as e:
-    print(f"Error saving Parquet: {e}")
-    print("Falling back to CSV only...")
-
-# Save as CSV
-try:
-    avgt_output.to_csv(
-        OUTPUT_CSV,
-        index=False,
-        encoding='utf-8'
-    )
-    print(f"Dataset saved to CSV: {OUTPUT_CSV}")
-except Exception as e:
-    print(f"Error saving CSV: {e}")
-
-# ============================================================
-# 10. Save the report as text file
-# ============================================================
 
 try:
     report_txt = os.path.join(OUTPUT_DIR, f"{base_filename}_report.txt")
@@ -304,12 +265,12 @@ try:
         
         sys.stdout = original_stdout
     
-    print(f"Report saved to text file: {report_txt}")
+    print(f"\nReport saved to text file: {report_txt}")
 except Exception as e:
     print(f"Error saving report text file: {e}")
 
 # ============================================================
-# 11. DISPLAY EXECUTION SUMMARY
+# 10. DISPLAY EXECUTION SUMMARY
 # ============================================================
 print("\n" + "="*60)
 print("EIIMBTAT job completed successfully")
