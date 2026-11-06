@@ -13,18 +13,72 @@ CISAFD_DEPOSIT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD
 FD_FD = f'/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDFD1M/enrh_dp_fd_cert_d{reptday}.sas7bdat'
 OVER1M = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDFD1M/over1m.txt'
 
-# Read SAS datasets using pyreadstat
-df_cisfd, meta_cisfd = pyreadstat.read_sas7bdat(CISAFD_DEPOSIT)
-df_cisfd = pl.from_pandas(df_cisfd)
+# Testing row limit
+ROW_LIMIT = 100000
+
+# Chunk size for streaming the huge customer info file
+CHUNK_SIZE = 50000
+
+
+def read_sas_chunked(path, columns=None, row_limit=None, chunk_size=50000):
+    """Read a SAS7BDAT file in chunks and return a single Polars DataFrame."""
+    chunks = []
+    rows_read = 0
+    row_offset = 0
+
+    while True:
+        if row_limit is not None:
+            remaining = row_limit - rows_read
+            if remaining <= 0:
+                break
+            current_limit = min(chunk_size, remaining)
+        else:
+            current_limit = chunk_size
+
+        try:
+            df_chunk, _ = pyreadstat.read_sas7bdat(
+                path,
+                row_offset=row_offset,
+                row_limit=current_limit,
+                usecols=columns,
+            )
+        except Exception:
+            break
+
+        if df_chunk is None or len(df_chunk) == 0:
+            break
+
+        chunks.append(pl.from_pandas(df_chunk))
+        rows_read += len(df_chunk)
+        row_offset += len(df_chunk)
+
+        # If we got fewer rows than requested, we've hit EOF
+        if len(df_chunk) < current_limit:
+            break
+
+    if not chunks:
+        return pl.DataFrame()
+
+    return pl.concat(chunks, how="vertical_relaxed")
+
+
+# --- Customer info: read in chunks, only needed columns ---
+df_cisfd = read_sas_chunked(
+    CISAFD_DEPOSIT,
+    columns=['ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'],
+    row_limit=ROW_LIMIT,
+    chunk_size=CHUNK_SIZE,
+)
 df_cisfd = df_cisfd.filter(pl.col('SECCUST') == '901').select([
     'ACCTNO', 'CUSTNAME', 'NEWIC', 'OLDIC', 'BUSSREG', 'CUSTNO', 'SECCUST'
 ]).sort('ACCTNO').rename({'CUSTNAME': 'NAME'})
 
-df_fd, meta_fd = pyreadstat.read_sas7bdat(FD_FD)
+# --- FD file ---
+df_fd, meta_fd = pyreadstat.read_sas7bdat(FD_FD, row_limit=ROW_LIMIT)
 df_fd = pl.from_pandas(df_fd)
 df_fd = df_fd.filter(
-    (pl.col('CURBAL') > 0) & 
-    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
+    (pl.col('CURBAL') > 0) &
+    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) &
     (pl.col('CURCODE') == 'MYR')
 )
 
@@ -132,11 +186,11 @@ df_fdtotal = df_fdtotal.with_columns([
 ])
 
 # Read FD again for total calculation
-df_fd_all, meta_fd_all = pyreadstat.read_sas7bdat(FD_FD)
+df_fd_all, meta_fd_all = pyreadstat.read_sas7bdat(FD_FD, row_limit=ROW_LIMIT)
 df_fd_all = pl.from_pandas(df_fd_all)
 df_fd_all = df_fd_all.filter(
-    (pl.col('CURBAL') > 0) & 
-    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) & 
+    (pl.col('CURBAL') > 0) &
+    (~pl.col('CUSTCD').is_in([77, 78, 95, 96])) &
     (pl.col('CURCODE') == 'MYR')
 )
 
@@ -184,21 +238,21 @@ for row in df_mature_summary.iter_rows(named=True):
 
 for i in range(8):
     df_mature_day = df_mature.filter(pl.col('MATURITY') == i)
-    
+
     if len(df_mature_day) > 0:
         df_mature_day = df_mature_day.sort('TOTAL', descending=True)
-        
+
         first_row = df_mature_day.to_dicts()[0]
         tmat = first_row['TMATURITY']
         date_str = first_row['MATDT'].strftime('%d/%m/%Y')
-        
+
         lines.append(' ')
         lines.append(' ')
         lines.append(' ')
         lines.append(f"RM NON-INDI FD DETAILS BY CUSTOMER MATURING {date_str} {tmat}")
         lines.append(' ')
         lines.append('CUSTOMER;SETTLEMENT AMOUNT(MIL.);MATURITY DATE;AVERAGE RATE;')
-        
+
         for row in df_mature_day.iter_rows(named=True):
             lines.append(
                 f"{row['NAME']};{row['TOTAL1']:.3f};{row['REPTDATE1']};{row['AVGRATE']:.2f};"
